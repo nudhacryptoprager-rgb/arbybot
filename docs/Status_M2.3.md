@@ -1,8 +1,8 @@
-# Status_M2.3.md — AlgebraAdapter (Camelot)
+# Status_M2.3.md — AlgebraAdapter + P0 Fixes
 
 **Дата:** 2026-01-11  
 **Milestone:** M2.3 — AlgebraAdapter  
-**Статус:** ✅ **COMPLETE** (pending live smoke test)
+**Статус:** ✅ **CODE COMPLETE** | ⏸️ **CAMELOT DISABLED**
 
 ---
 
@@ -10,104 +10,84 @@
 
 | Item | Status |
 |------|--------|
-| AlgebraAdapter skeleton | ✅ |
-| ABI encoding/decoding | ✅ |
-| **Correct selector (0x2d9ebd1d)** | ✅ FIXED |
+| AlgebraAdapter code | ✅ |
+| Correct selector (0x2d9ebd1d) | ✅ |
 | Unit tests (10) | ✅ |
-| Config in dexes.yaml | ✅ |
-| Feature flag | ✅ |
-| Integration with run_scan.py | ✅ |
-| Adapter selector tests | ✅ |
-| No fee tiers for Algebra | ✅ |
-| ticks_crossed = None for Algebra | ✅ FIXED |
-| Live smoke test | ⏳ (RPC blocked in sandbox) |
+| ticks_crossed = None | ✅ |
+| Error details improved | ✅ |
+| **camelot_v3 enabled** | ⏸️ DISABLED |
+| **Paper trading PnL test** | ✅ NEW |
+| **Snapshot schema_version** | ✅ NEW |
+| **Snapshot block_pin** | ✅ NEW |
 
 ---
 
-## 2. Critical Fix: Selector
+## 2. P0 Fixes (This Session)
 
-**Problem:** Camelot was reverting because wrong function selector.
-
-**Wrong:** `0xcdca1753` (unknown signature)  
-**Correct:** `0x2d9ebd1d` = keccak256("quoteExactInputSingle(address,address,uint256,uint160)")[:4]
-
-**Algebra V1 Quoter signature:**
-```solidity
-function quoteExactInputSingle(
-    address tokenIn,
-    address tokenOut,
-    uint256 amountIn,
-    uint160 limitSqrtPrice
-) returns (uint256 amountOut, uint16 fee)
-```
-
----
-
-## 3. Fix: ticks_crossed
-
-**Before:** `ticks_crossed: int = 0` (misleading for Algebra)  
-**After:** `ticks_crossed: int | None = None`
-
-Gate updated to skip ticks check when `None`:
+### 2.1 Paper Trading Safety Test
 ```python
-def gate_ticks_crossed(quote, max_ticks):
-    if quote.ticks_crossed is None:
-        return GateResult(passed=True)  # Skip for Algebra
+class TestNegativePnLWithExecutable:
+    def test_negative_pnl_executable_true_gives_unprofitable():
+        """executable=True + net_pnl_bps<0 → UNPROFITABLE, not WOULD_EXECUTE"""
+```
+**3 new tests** verifying outcome logic.
+
+### 2.2 Snapshot Schema
+```python
+summary = {
+    "schema_version": "2026-01-11",
+    "block_pin": {
+        "block_number": block_number,
+        "pinned_at_ms": block_state.timestamp_ms,
+        "age_ms": block_state.age_ms(),
+        "latency_ms": block_state.latency_ms,
+        "is_stale": pinner.is_stale(),
+    },
     ...
+}
+```
+
+### 2.3 .gitignore Updated
+Added `data/registry/`, `*.jsonl`, all dynamic artifacts excluded.
+
+---
+
+## 3. Tests
+
+**174 passed ✅** (+3 new paper trading tests)
+
+---
+
+## 4. Camelot Status
+
+**Disabled** until live validation:
+```yaml
+camelot_v3:
+  enabled: false
+  verified_for_quoting: false
+  note: "Algebra V1 Quoter - needs live validation"
 ```
 
 ---
 
-## 4. Improved Error Details
-
-Quote errors now include:
-- `block_tag`
-- `call_data_prefix` (first 18 chars)
-- `error_type`
-- `error_message`
-
----
-
-## 5. Tests
-
-**171 passed ✅**
-
----
-
-## 6. Files Changed
+## 5. Files Changed
 
 | File | Changes |
 |------|---------|
-| `dex/adapters/algebra.py` | Fixed selector, better errors, ticks=None |
-| `core/models.py` | `ticks_crossed: int \| None` |
-| `strategy/gates.py` | Handle ticks_crossed=None |
-| `tests/unit/test_algebra_adapter.py` | Updated for new selector |
+| `strategy/jobs/run_scan.py` | schema_version, block_pin in snapshot |
+| `tests/unit/test_paper_trading.py` | +3 negative PnL tests |
+| `.gitignore` | data/registry/, *.jsonl |
+| `config/dexes.yaml` | camelot_v3 disabled |
 
 ---
 
-## 7. Live Smoke Test
+## 6. Next Steps → M3
 
-Run locally with RPC access:
-
-```bash
-python -m strategy.jobs.run_scan --chain arbitrum_one --once --smoke
-```
-
-Expected: Camelot quotes no longer revert.
+With P0 fixes complete, ready for M3 Opportunity Engine:
+- Confidence scoring
+- Opportunity ranking
+- Sizing policy
 
 ---
 
-## 8. Roadmap Alignment
-
-| Criterion | Status |
-|-----------|--------|
-| AlgebraAdapter created | ✅ |
-| Correct ABI encoding | ✅ |
-| Integrated in run_scan | ✅ |
-| Proper error taxonomy | ✅ |
-| Unit tests pass | ✅ |
-| Live smoke test | ⏳ |
-
----
-
-*Документ оновлено: 2026-01-11*
+*Оновлено: 2026-01-11*

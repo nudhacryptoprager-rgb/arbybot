@@ -56,6 +56,7 @@ arbitrum_one:
   
   # Camelot V3 (Algebra) - M2.3
   # Source: https://docs.camelot.exchange/contracts/arbitrum/one-mainnet
+  # DISABLED: Pending live smoke test validation
   camelot_v3:
     adapter_type: algebra
     name: "Camelot V3"
@@ -63,12 +64,12 @@ arbitrum_one:
     router: "0x1F721E2E82F6676FCE4eA07A5958cF098D339e18"
     quoter: "0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E"
     # Algebra has no fixed fee tiers - dynamic fees
-    enabled: true
-    verified_for_quoting: true
-    verified_for_execution: false  # Not yet verified for execution
+    enabled: false  # DISABLED until selector verified live
+    verified_for_quoting: false
+    verified_for_execution: false
     verified_at: "2026-01-11"
-    feature_flag: "algebra_adapter"  # Feature flag for gradual rollout
-    note: "Algebra V3 with dynamic fees"
+    feature_flag: "algebra_adapter"
+    note: "Algebra V1 Quoter - selector 0x2d9ebd1d - needs live validation"
 
 # =============================================================================
 # BASE (chain_id: 8453) - HIGH PRIORITY

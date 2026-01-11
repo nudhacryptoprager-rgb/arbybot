@@ -257,3 +257,54 @@ class TestUSDCCalculations:
             token_in_decimals=18,
         )
         assert pnl == 25.0
+
+
+class TestNegativePnLWithExecutable:
+    """Test that negative PnL trades are marked UNPROFITABLE, not WOULD_EXECUTE."""
+    
+    def test_negative_pnl_executable_true_gives_unprofitable(self, paper_session):
+        """
+        CRITICAL: executable=True should NOT result in WOULD_EXECUTE
+        when net_pnl_bps is negative.
+        """
+        # Create trade with executable=True but negative PnL (-2 bps)
+        trade = make_paper_trade(
+            spread_id="test_negative_pnl",
+            block_number=100,
+            net_pnl_bps=-2,  # Negative PnL
+            executable=True,  # Both DEXes verified
+        )
+        
+        paper_session.record_trade(trade)
+        
+        # Outcome MUST be UNPROFITABLE, not WOULD_EXECUTE
+        assert trade.outcome == TradeOutcome.UNPROFITABLE.value
+        assert paper_session.stats["unprofitable"] == 1
+        assert paper_session.stats["would_execute"] == 0
+    
+    def test_zero_pnl_gives_unprofitable(self, paper_session):
+        """Zero PnL should also be UNPROFITABLE."""
+        trade = make_paper_trade(
+            spread_id="test_zero_pnl",
+            block_number=100,
+            net_pnl_bps=0,  # Zero PnL
+            executable=True,
+        )
+        
+        paper_session.record_trade(trade)
+        
+        assert trade.outcome == TradeOutcome.UNPROFITABLE.value
+    
+    def test_positive_pnl_executable_gives_would_execute(self, paper_session):
+        """Positive PnL + executable should give WOULD_EXECUTE."""
+        trade = make_paper_trade(
+            spread_id="test_positive_pnl",
+            block_number=100,
+            net_pnl_bps=5,  # Positive PnL
+            executable=True,
+        )
+        
+        paper_session.record_trade(trade)
+        
+        assert trade.outcome == TradeOutcome.WOULD_EXECUTE.value
+        assert paper_session.stats["would_execute"] == 1
