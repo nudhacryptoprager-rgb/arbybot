@@ -268,19 +268,35 @@ def generate_truth_report(
         buy_leg = spread.get("buy_leg", {})
         sell_leg = spread.get("sell_leg", {})
         
-        # Calculate expected USDC (rough estimate)
+        # Calculate expected USDC using implied_price from spread
         amount_in = int(spread.get("amount_in", "0"))
         net_bps = spread.get("net_pnl_bps", 0)
-        # Assume 1 ETH = $2500 for now
-        amount_eth = amount_in / 10**18
-        expected_usdc = amount_eth * 2500 * (net_bps / 10000)
+        
+        # Get implied_price from buy leg (price in quote per base)
+        buy_price_str = buy_leg.get("price", "0")
+        try:
+            implied_price = float(buy_price_str) if buy_price_str else 0.0
+        except (ValueError, TypeError):
+            implied_price = 0.0
+        
+        # Calculate notional value and expected PnL
+        amount_base = amount_in / 10**18  # Assuming 18 decimals for base token
+        notional_usdc = amount_base * implied_price
+        expected_usdc = notional_usdc * (net_bps / 10000) if net_bps > 0 else 0.0
+        
+        # Get pair from spread (or derive from legs)
+        pair = spread.get("pair", "")
+        if not pair:
+            token_in = spread.get("token_in_symbol", buy_leg.get("token_in_symbol", ""))
+            token_out = spread.get("token_out_symbol", buy_leg.get("token_out_symbol", ""))
+            pair = f"{token_in}/{token_out}" if token_in and token_out else "UNKNOWN"
         
         top_opportunities.append(OpportunityRank(
             rank=i + 1,
             spread_id=spread.get("id", ""),
             buy_dex=buy_leg.get("dex", spread.get("buy_dex", "")),
             sell_dex=sell_leg.get("dex", spread.get("sell_dex", "")),
-            pair="WETH/USDC",  # TODO: Get from spread
+            pair=pair,
             fee=spread.get("fee", 0),
             amount_in=spread.get("amount_in", "0"),
             spread_bps=spread.get("spread_bps", 0),

@@ -106,7 +106,7 @@ class Quote:
     
     # Metadata for executability
     gas_estimate: int
-    ticks_crossed: int = 0  # V3 only
+    ticks_crossed: int | None = None  # V3 only, None for Algebra
     sqrt_price_x96_after: int | None = None  # V3 only
     
     # For debugging

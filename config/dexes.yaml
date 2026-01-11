@@ -54,16 +54,21 @@ arbitrum_one:
     verified_at: "2026-01-11"
     note: "RouteProcessor v3.2 verified on Arbiscan"
   
-  # Camelot - SKELETON (Algebra-based, needs adapter)
-  camelot:
+  # Camelot V3 (Algebra) - M2.3
+  # Source: https://docs.camelot.exchange/contracts/arbitrum/one-mainnet
+  camelot_v3:
     adapter_type: algebra
-    name: "Camelot"
+    name: "Camelot V3"
     factory: "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"
-    router: "0xc873fEcbd354f5A56E00E710B90EF4201db2448d"
+    router: "0x1F721E2E82F6676FCE4eA07A5958cF098D339e18"
     quoter: "0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E"
-    enabled: false  # Disabled until Algebra adapter ready
-    verified: false
-    note: "Requires Algebra adapter implementation"
+    # Algebra has no fixed fee tiers - dynamic fees
+    enabled: true
+    verified_for_quoting: true
+    verified_for_execution: false  # Not yet verified for execution
+    verified_at: "2026-01-11"
+    feature_flag: "algebra_adapter"  # Feature flag for gradual rollout
+    note: "Algebra V3 with dynamic fees"
 
 # =============================================================================
 # BASE (chain_id: 8453) - HIGH PRIORITY

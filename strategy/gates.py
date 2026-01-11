@@ -76,7 +76,11 @@ def gate_gas_estimate(quote: Quote, max_gas: int = MAX_GAS_ESTIMATE) -> GateResu
 
 
 def gate_ticks_crossed(quote: Quote, max_ticks: int = MAX_TICKS_CROSSED) -> GateResult:
-    """Reject if too many ticks crossed (V3 only)."""
+    """Reject if too many ticks crossed (V3 only, skip for Algebra)."""
+    # Algebra doesn't report ticks_crossed - skip this gate
+    if quote.ticks_crossed is None:
+        return GateResult(passed=True)
+    
     if quote.ticks_crossed > max_ticks:
         return GateResult(
             passed=False,

@@ -1,0 +1,86 @@
+{
+  "timestamp": "2026-01-11T17:33:26.822142+00:00",
+  "mode": "REGISTRY",
+  "health": {
+    "rpc_success_rate": 1.0,
+    "rpc_avg_latency_ms": 47,
+    "rpc_total_requests": 23,
+    "quote_fetch_rate": 1.0,
+    "quote_gate_pass_rate": 0.667,
+    "chains_active": 1,
+    "dexes_active": 2,
+    "pairs_covered": 1,
+    "pools_scanned": 7,
+    "top_reject_reasons": [
+      [
+        "QUOTE_INVALID_PARAMS",
+        5
+      ],
+      [
+        "QUOTE_GAS_TOO_HIGH",
+        2
+      ],
+      [
+        "TICKS_CROSSED_TOO_MANY",
+        2
+      ]
+    ]
+  },
+  "top_opportunities": [
+    {
+      "rank": 1,
+      "spread_id": "sushiswap_v3_uniswap_v3_500_1000000000000000000",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "pair": "WETH/USDC",
+      "fee": 500,
+      "amount_in": "1000000000000000000",
+      "spread_bps": 15,
+      "gas_cost_bps": 0,
+      "net_pnl_bps": 15,
+      "expected_pnl_usdc": 4.6813,
+      "executable": true,
+      "confidence": 1.0
+    },
+    {
+      "rank": 2,
+      "spread_id": "sushiswap_v3_uniswap_v3_500_100000000000000000",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "pair": "WETH/USDC",
+      "fee": 500,
+      "amount_in": "100000000000000000",
+      "spread_bps": 2,
+      "gas_cost_bps": 0,
+      "net_pnl_bps": 2,
+      "expected_pnl_usdc": 0.0625,
+      "executable": true,
+      "confidence": 1.0
+    },
+    {
+      "rank": 3,
+      "spread_id": "sushiswap_v3_uniswap_v3_500_10000000000000000",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "pair": "WETH/USDC",
+      "fee": 500,
+      "amount_in": "10000000000000000",
+      "spread_bps": 1,
+      "gas_cost_bps": 3,
+      "net_pnl_bps": -2,
+      "expected_pnl_usdc": 0.0,
+      "executable": true,
+      "confidence": 0.6
+    }
+  ],
+  "stats": {
+    "total_spreads": 3,
+    "profitable_spreads": 2,
+    "executable_spreads": 2,
+    "blocked_spreads": 0
+  },
+  "cumulative_pnl": {
+    "total_bps": 17,
+    "total_usdc": 4.7438
+  }
+}

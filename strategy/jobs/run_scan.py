@@ -36,6 +36,7 @@ from core.constants import DexType, PoolStatus
 from chains.providers import RPCProvider, register_provider, close_all_providers
 from chains.block import BlockPinner
 from dex.adapters.uniswap_v3 import UniswapV3Adapter
+from dex.adapters.algebra import AlgebraAdapter
 from dex.gating import DEXGate
 from strategy.gates import (
     apply_single_quote_gates,
@@ -191,6 +192,44 @@ def build_test_pools(
                 )
                 
                 pools.append((pool, weth, usdc, dex_key))
+        
+        elif adapter_type == "algebra" and quoter:
+            # Algebra has dynamic fees - no fixed fee tiers
+            # Use fee=0 as marker for dynamic fee
+            verified_for_execution = dex_config.get("verified_for_execution", False)
+            
+            # Check feature flag
+            feature_flag = dex_config.get("feature_flag")
+            if feature_flag and not dex_config.get("enabled", False):
+                logger.debug(f"Skipping {dex_key}: feature flag disabled")
+                continue
+            
+            passed_dexes.append(DEXQuotingConfig(
+                dex_key=dex_key,
+                quoter=quoter,
+                fee_tiers=[0],  # Single "tier" for dynamic fee
+                adapter_type=adapter_type,
+                verified_for_execution=verified_for_execution,
+            ))
+            
+            # Sort tokens by address for pool
+            if usdc.address.lower() < weth.address.lower():
+                token0, token1 = usdc, weth
+            else:
+                token0, token1 = weth, usdc
+            
+            pool = Pool(
+                chain_id=chain_id,
+                dex_id=dex_key,
+                dex_type=DexType.ALGEBRA,
+                pool_address="",  # Smoke harness - no real pool address
+                token0=token0,
+                token1=token1,
+                fee=0,  # Dynamic fee - will be returned by quoter
+                status=PoolStatus.ACTIVE,
+            )
+            
+            pools.append((pool, weth, usdc, dex_key))
     
     # Log DEXes that passed gating
     if passed_dexes:
@@ -606,6 +645,7 @@ async def run_scan_cycle(
             
             # Get DEX config
             dex_config = dex_configs.get(dex_key, {})
+            adapter_type = dex_config.get("adapter_type", "uniswap_v3")
             quoter_address = dex_config.get("quoter_v2") or dex_config.get("quoter")
             
             if not quoter_address:
@@ -613,8 +653,20 @@ async def run_scan_cycle(
                 quote_reject_reasons[ErrorCode.QUOTE_REVERT.value] += 1
                 continue
             
-            # Create adapter
-            adapter = UniswapV3Adapter(provider, quoter_address, dex_key)
+            # Check feature flag for Algebra
+            feature_flag = dex_config.get("feature_flag")
+            if feature_flag == "algebra_adapter" and adapter_type == "algebra":
+                # Feature flagged - check if enabled
+                if not dex_config.get("enabled", False):
+                    logger.debug(f"Algebra adapter disabled for {dex_key}")
+                    continue
+            
+            # Create adapter based on type
+            if adapter_type == "algebra":
+                adapter = AlgebraAdapter(provider, quoter_address, dex_key)
+            else:
+                # Default to UniswapV3Adapter (works for uniswap_v3, sushiswap_v3, etc)
+                adapter = UniswapV3Adapter(provider, quoter_address, dex_key)
             
             # Test sizes: 0.01 ETH, 0.1 ETH, 1 ETH
             test_amounts = [
@@ -725,6 +777,7 @@ async def run_scan_cycle(
                     
                 except QuoteError as e:
                     quote_reject_reasons[e.code.value] += 1
+                    quotes_rejected += 1
                     session.add_reject_sample(RejectSample(
                         dex=dex_key, fee=pool.fee, amount_in=amount_in,
                         gas_estimate=0, ticks_crossed=0, latency_ms=0,
@@ -741,15 +794,32 @@ async def run_scan_cycle(
                         }}
                     )
                 
+                except InfraError as e:
+                    quote_reject_reasons[e.code.value] += 1
+                    quotes_rejected += 1
+                    logger.warning(
+                        f"Infra error: {e.code.value} - {e.message}",
+                        extra={"context": {"dex": dex_key}},
+                    )
+                    
                 except (AttributeError, KeyError, ValueError, TypeError) as e:
-                    quote_reject_reasons[ErrorCode.QUOTE_INVALID_PARAMS.value] += 1
+                    # This is a code bug, not a quote error
+                    # Use specific code based on exception type
+                    if isinstance(e, (AttributeError, KeyError)):
+                        error_code = ErrorCode.INFRA_BAD_ABI
+                    elif isinstance(e, ValueError):
+                        error_code = ErrorCode.QUOTE_REVERT  # Bad data from RPC
+                    else:
+                        error_code = ErrorCode.VALIDATION_ERROR
+                    
+                    quote_reject_reasons[error_code.value] += 1
                     quotes_rejected += 1
                     
                     # Add detailed sample for debugging
                     session.add_reject_sample(RejectSample(
                         dex=dex_key, fee=pool.fee, amount_in=amount_in,
                         gas_estimate=0, ticks_crossed=0, latency_ms=0,
-                        error_code=ErrorCode.QUOTE_INVALID_PARAMS.value,
+                        error_code=error_code.value,
                         details={
                             "error_type": type(e).__name__,
                             "error_message": str(e),
@@ -765,7 +835,7 @@ async def run_scan_cycle(
                     ))
                     
                     logger.error(
-                        f"Validation error: {type(e).__name__}: {e}",
+                        f"Code error: {type(e).__name__}: {e}",
                         extra={"context": {
                             "dex": dex_key,
                             "fee": pool.fee,
@@ -778,8 +848,9 @@ async def run_scan_cycle(
                     
                 except Exception as e:
                     quote_reject_reasons[ErrorCode.INFRA_RPC_ERROR.value] += 1
+                    quotes_rejected += 1
                     logger.error(
-                        f"Infra error: {type(e).__name__}: {e}",
+                        f"Unexpected error: {type(e).__name__}: {e}",
                         extra={"context": {"dex": dex_key}},
                         exc_info=True,
                     )
@@ -850,9 +921,17 @@ async def run_scan_cycle(
                         sell_exec = execution_allowed.get(sell_dex, False)
                         executable = buy_exec and sell_exec
                         
+                        # Get token info from quote (same for both since same pair)
+                        token_in_symbol = buy_quote.token_in.symbol
+                        token_out_symbol = buy_quote.token_out.symbol
+                        pair = f"{token_in_symbol}/{token_out_symbol}"
+                        
                         # Extended spread schema with both legs
                         spread_data = {
                             "id": f"{buy_dex}_{sell_dex}_{fee}_{amount_in_str}",
+                            "pair": pair,
+                            "token_in_symbol": token_in_symbol,
+                            "token_out_symbol": token_out_symbol,
                             "buy_leg": {
                                 "dex": buy_dex,
                                 "price": str(buy_price),

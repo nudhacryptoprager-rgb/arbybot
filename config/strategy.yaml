@@ -5,8 +5,36 @@
 # These parameters can be tuned without code changes.
 # All monetary values in USD unless specified.
 #
-# Last updated: 2026-01-04
+# Last updated: 2026-01-11
 # =============================================================================
+
+# =============================================================================
+# GATE THRESHOLDS (per-chain overridable)
+# =============================================================================
+gate_defaults:
+  max_gas_estimate: 500000      # Maximum gas estimate per leg
+  max_ticks_crossed: 10         # V3: max ticks (liquidity depth)
+  max_price_deviation_bps: 1000 # 10% max deviation from anchor price
+  max_slippage_bps: 500         # 5% max slippage between sizes
+  max_quote_age_ms: 2000        # 2 seconds max quote age
+  max_block_age_ms: 15000       # 15 seconds max block age
+  min_net_pnl_bps: 0            # Minimum net profit (0 = any profit)
+
+gate_overrides:
+  # Arbitrum One - fast blocks, lower gas
+  arbitrum_one:
+    max_gas_estimate: 400000
+    max_quote_age_ms: 1000
+    max_block_age_ms: 5000
+  
+  # Base - similar to Arbitrum
+  base:
+    max_gas_estimate: 400000
+    max_quote_age_ms: 1000
+    max_block_age_ms: 5000
+
+# Anchor DEX for price sanity checks
+anchor_dex: uniswap_v3
 
 # =============================================================================
 # QUOTE CURVE SIZES
