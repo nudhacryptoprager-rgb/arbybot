@@ -7,7 +7,6 @@ name = "arby"
 version = "0.1.0"
 description = "DEX-DEX Arbitrage Engine with Truth Engine and Execution"
 readme = "README.md"
-<<<<<<< HEAD
 requires-python = ">=3.11,<3.14"  # 3.11 or 3.12 only, 3.14 is unstable
 
 license = {text = "MIT"}
