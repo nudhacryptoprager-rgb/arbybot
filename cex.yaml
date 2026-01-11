@@ -1,0 +1,79 @@
+# =============================================================================
+# config/cex.yaml - CEX Configuration
+# =============================================================================
+#
+# Configuration for centralized exchanges.
+# Used for CEX-DEX arbitrage (Milestone 6+).
+#
+# API credentials go in .env, NOT here!
+#
+# Last updated: 2026-01-04
+# =============================================================================
+
+# =============================================================================
+# BYBIT
+# =============================================================================
+bybit:
+  name: "Bybit"
+  enabled: false  # Enable when ready for CEX-DEX
+  
+  # API endpoints
+  api_url: "https://api.bybit.com"
+  ws_url: "wss://stream.bybit.com/v5/public/spot"
+  
+  # Rate limits (requests per second)
+  rate_limits:
+    public: 50
+    private: 20
+    order: 10
+  
+  # Symbol mapping (our symbol -> Bybit symbol)
+  # Bybit uses concatenated symbols without separator
+  symbol_format: "{base}{quote}"  # e.g., ETHUSDC
+  
+  # Supported quote currencies
+  quote_currencies:
+    - USDT
+    - USDC
+
+# =============================================================================
+# BINANCE
+# =============================================================================
+binance:
+  name: "Binance"
+  enabled: false
+  
+  api_url: "https://api.binance.com"
+  ws_url: "wss://stream.binance.com:9443/ws"
+  
+  rate_limits:
+    public: 20
+    private: 10
+    order: 5
+  
+  symbol_format: "{base}{quote}"
+  
+  quote_currencies:
+    - USDT
+    - USDC
+    - BUSD
+
+# =============================================================================
+# MEXC
+# =============================================================================
+mexc:
+  name: "MEXC"
+  enabled: false
+  
+  api_url: "https://api.mexc.com"
+  ws_url: "wss://wbs.mexc.com/ws"
+  
+  rate_limits:
+    public: 20
+    private: 10
+    order: 5
+  
+  symbol_format: "{base}{quote}"
+  
+  quote_currencies:
+    - USDT
