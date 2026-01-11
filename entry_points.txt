@@ -1,3 +1,0 @@
-[console_scripts]
-arby-paper = strategy.jobs.run_paper:main
-arby-scan = strategy.jobs.run_scan:main
