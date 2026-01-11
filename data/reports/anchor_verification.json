@@ -1,0 +1,233 @@
+[
+  {
+    "chain_key": "arbitrum_one",
+    "chain_id_config": 42161,
+    "chain_id_rpc": 42161,
+    "chain_id_match": true,
+    "rpc_reachable": true,
+    "rpc_used": "https://arb-mainnet.g.alchemy.com/v2/6cDFdYb-lqxV1uwTAstRN",
+    "dexes": {
+      "uniswap_v3": {
+        "dex_key": "uniswap_v3",
+        "name": "Uniswap V3",
+        "adapter_type": "uniswap_v3",
+        "factory": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+        "router": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
+        "quoter": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+        "factory_exists": true,
+        "factory_responds": true,
+        "router_exists": true,
+        "quoter_exists": true,
+        "sample_pool": "0xc6962004f452be9203591991d15f6b388e09e8d0",
+        "verified_for_quoting": true,
+        "verified_for_execution": true,
+        "status": "FULLY_VERIFIED",
+        "issues": []
+      },
+      "sushiswap_v3": {
+        "dex_key": "sushiswap_v3",
+        "name": "SushiSwap V3",
+        "adapter_type": "uniswap_v3",
+        "factory": "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e",
+        "router": "0x8A21F6768C1f8075791D08546D0294F4b9481E89",
+        "quoter": "0x0524E833cCD057e4d7A296e3aaAb9f7675964Ce1",
+        "factory_exists": true,
+        "factory_responds": true,
+        "router_exists": false,
+        "quoter_exists": true,
+        "sample_pool": "0xf3eb87c1f6020982173c908e7eb31aa66c1f0296",
+        "verified_for_quoting": true,
+        "verified_for_execution": false,
+        "status": "QUOTING_ONLY",
+        "issues": [
+          "Router not found - cannot execute trades"
+        ]
+      },
+      "camelot": {
+        "dex_key": "camelot",
+        "name": "Camelot",
+        "adapter_type": "algebra",
+        "factory": "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B",
+        "router": "0xc873fEcbd354f5A56E00E710B90EF4201db2448d",
+        "quoter": "0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E",
+        "factory_exists": true,
+        "factory_responds": true,
+        "router_exists": true,
+        "quoter_exists": true,
+        "sample_pool": null,
+        "verified_for_quoting": true,
+        "verified_for_execution": true,
+        "status": "FULLY_VERIFIED",
+        "issues": []
+      }
+    },
+    "summary": {
+      "total": 3,
+      "fully_verified": 2,
+      "quoting_only": 1,
+      "partial": 0,
+      "failed": 0
+    },
+    "status": "PARTIALLY_VERIFIED",
+    "recommendation": "Some DEXes missing router - execution limited"
+  },
+  {
+    "chain_key": "base",
+    "chain_id_config": 8453,
+    "chain_id_rpc": 8453,
+    "chain_id_match": true,
+    "rpc_reachable": true,
+    "rpc_used": "https://base-mainnet.g.alchemy.com/v2/6cDFdYb-lqxV1uwTAstRN",
+    "dexes": {
+      "uniswap_v3": {
+        "dex_key": "uniswap_v3",
+        "name": "Uniswap V3",
+        "adapter_type": "uniswap_v3",
+        "factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+        "router": "0x2626664c2603336E57B271c5C0b26F421741e481",
+        "quoter": "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
+        "factory_exists": true,
+        "factory_responds": true,
+        "router_exists": true,
+        "quoter_exists": true,
+        "sample_pool": "0xd0b53d9277642d899df5c87a3966a349a798f224",
+        "verified_for_quoting": true,
+        "verified_for_execution": true,
+        "status": "FULLY_VERIFIED",
+        "issues": []
+      },
+      "aerodrome": {
+        "dex_key": "aerodrome",
+        "name": "Aerodrome",
+        "adapter_type": "ve33",
+        "factory": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
+        "router": "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43",
+        "quoter": null,
+        "factory_exists": true,
+        "factory_responds": false,
+        "router_exists": true,
+        "quoter_exists": false,
+        "sample_pool": null,
+        "verified_for_quoting": false,
+        "verified_for_execution": false,
+        "status": "PARTIAL",
+        "issues": []
+      }
+    },
+    "summary": {
+      "total": 2,
+      "fully_verified": 1,
+      "quoting_only": 0,
+      "partial": 1,
+      "failed": 0
+    },
+    "status": "PARTIALLY_VERIFIED",
+    "recommendation": "Some DEXes missing router - execution limited"
+  },
+  {
+    "chain_key": "linea",
+    "chain_id_config": 59144,
+    "chain_id_rpc": 59144,
+    "chain_id_match": true,
+    "rpc_reachable": true,
+    "rpc_used": "https://linea-mainnet.g.alchemy.com/v2/6cDFdYb-lqxV1uwTAstRN",
+    "dexes": {
+      "pancakeswap_v3": {
+        "dex_key": "pancakeswap_v3",
+        "name": "PancakeSwap V3",
+        "adapter_type": "uniswap_v3",
+        "factory": "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+        "router": "0x678Aa4bF4E210cf2166753e054d5b7c31cc7fa86",
+        "quoter": "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997",
+        "factory_exists": true,
+        "factory_responds": true,
+        "router_exists": true,
+        "quoter_exists": true,
+        "sample_pool": "0xd5539d0360438a66661148c633a9f0965e482845",
+        "verified_for_quoting": true,
+        "verified_for_execution": true,
+        "status": "FULLY_VERIFIED",
+        "issues": []
+      },
+      "lynex": {
+        "dex_key": "lynex",
+        "name": "Lynex",
+        "adapter_type": "algebra",
+        "factory": "0x622b2c98123D303ae067DB4925CD6282B3A08D0F",
+        "router": "0x610D2f07b7EdC67565160F587F37636194C34E74",
+        "quoter": null,
+        "factory_exists": true,
+        "factory_responds": true,
+        "router_exists": true,
+        "quoter_exists": false,
+        "sample_pool": null,
+        "verified_for_quoting": true,
+        "verified_for_execution": true,
+        "status": "FULLY_VERIFIED",
+        "issues": []
+      }
+    },
+    "summary": {
+      "total": 2,
+      "fully_verified": 2,
+      "quoting_only": 0,
+      "partial": 0,
+      "failed": 0
+    },
+    "status": "FULLY_VERIFIED",
+    "recommendation": null
+  },
+  {
+    "chain_key": "zksync",
+    "chain_id_config": 324,
+    "chain_id_rpc": 324,
+    "chain_id_match": true,
+    "rpc_reachable": true,
+    "rpc_used": "https://zksync-mainnet.g.alchemy.com/v2/6cDFdYb-lqxV1uwTAstRN",
+    "dexes": {
+      "pancakeswap_v3": {
+        "dex_key": "pancakeswap_v3",
+        "name": "PancakeSwap V3",
+        "adapter_type": "uniswap_v3",
+        "factory": "0x1BB72E0CbbEA93c08f535fc7856E0338D7F7a8aB",
+        "router": "0xf8b59f3c3Ab33200ec80a8A58b2aA5F5D2a8944C",
+        "quoter": "0x3d146FcE6c1006857750cBe8aF44f76a28041CCc",
+        "factory_exists": true,
+        "factory_responds": true,
+        "router_exists": true,
+        "quoter_exists": true,
+        "sample_pool": "0xee53b979d0c4b2a40279287965b918bd2a4b760d",
+        "verified_for_quoting": true,
+        "verified_for_execution": true,
+        "status": "FULLY_VERIFIED",
+        "issues": []
+      },
+      "syncswap": {
+        "dex_key": "syncswap",
+        "name": "SyncSwap",
+        "adapter_type": "uniswap_v2",
+        "factory": "0xf2DAd89f2788a8CD54625C60b55cD3d2D0ACa7Cb",
+        "router": "0x2da10A1e27bF85cEdD8FFb1AbBe97e53391C0295",
+        "quoter": null,
+        "factory_exists": true,
+        "factory_responds": false,
+        "router_exists": true,
+        "quoter_exists": false,
+        "sample_pool": null,
+        "verified_for_quoting": false,
+        "verified_for_execution": false,
+        "status": "PARTIAL",
+        "issues": []
+      }
+    },
+    "summary": {
+      "total": 2,
+      "fully_verified": 1,
+      "quoting_only": 0,
+      "partial": 1,
+      "failed": 0
+    },
+    "status": "PARTIALLY_VERIFIED",
+    "recommendation": "Some DEXes missing router - execution limited"
+  }
+]

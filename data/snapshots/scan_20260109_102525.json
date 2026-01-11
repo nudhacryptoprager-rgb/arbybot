@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-01-09T10:25:25.218906+00:00",
+  "session_summary": {
+    "session_start": "2026-01-09T10:25:24.637161+00:00",
+    "session_end": "2026-01-09T10:25:25.218914+00:00",
+    "duration_seconds": 0,
+    "intent_file": "config\\intent.txt",
+    "total_cycles": 1,
+    "total_quotes_fetched": 0,
+    "total_opportunities_found": 0,
+    "total_opportunities_rejected": 1,
+    "reject_histogram": {
+      "INFRA_RPC_ERROR": 1
+    }
+  },
+  "cycle_summaries": [
+    {
+      "chain": "arbitrum_one",
+      "chain_id": 42161,
+      "cycle_start": "2026-01-09T10:25:24.638484+00:00",
+      "cycle_end": "2026-01-09T10:25:25.218480+00:00",
+      "duration_ms": 579,
+      "block_number": 419511752,
+      "pools_scanned": 1,
+      "quotes_fetched": 0,
+      "quotes": [],
+      "opportunities_found": 0,
+      "opportunities_rejected": 1,
+      "reject_reasons": {
+        "INFRA_RPC_ERROR": 1
+      },
+      "status": "NO_QUOTES"
+    }
+  ]
+}

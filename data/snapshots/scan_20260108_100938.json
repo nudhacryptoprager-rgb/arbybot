@@ -1,0 +1,39 @@
+{
+  "timestamp": "2026-01-08T10:09:38.144639+00:00",
+  "session_summary": {
+    "session_start": "2026-01-08T10:09:38.092865+00:00",
+    "session_end": "2026-01-08T10:09:38.144646+00:00",
+    "duration_seconds": 0,
+    "intent_file": "config/intent.txt",
+    "total_cycles": 1,
+    "total_quotes_fetched": 0,
+    "total_opportunities_found": 0,
+    "total_opportunities_rejected": 0,
+    "reject_histogram": {
+      "QUOTE_STALE_BLOCK": 0,
+      "SLIPPAGE_TOO_HIGH": 0,
+      "PNL_BELOW_THRESHOLD": 0,
+      "POOL_NO_LIQUIDITY": 0
+    }
+  },
+  "cycle_summaries": [
+    {
+      "chain": "arbitrum_one",
+      "cycle_start": "2026-01-08T10:09:38.093387+00:00",
+      "cycle_end": "2026-01-08T10:09:38.144427+00:00",
+      "duration_ms": 51,
+      "block_number": null,
+      "pools_scanned": 0,
+      "quotes_fetched": 0,
+      "opportunities_found": 0,
+      "opportunities_rejected": 0,
+      "reject_reasons": {
+        "QUOTE_STALE_BLOCK": 0,
+        "SLIPPAGE_TOO_HIGH": 0,
+        "PNL_BELOW_THRESHOLD": 0,
+        "POOL_NO_LIQUIDITY": 0
+      },
+      "status": "OK"
+    }
+  ]
+}

@@ -1,0 +1,534 @@
+{
+  "timestamp": "2026-01-11T11:23:22.705097+00:00",
+  "mode": "REGISTRY",
+  "session_summary": {
+    "session_start": "2026-01-11T11:23:20.874179+00:00",
+    "session_end": "2026-01-11T11:23:22.705117+00:00",
+    "duration_seconds": 1,
+    "intent_file": "config\\intent.txt",
+    "total_cycles": 1,
+    "total_quotes_attempted": 24,
+    "total_quotes_fetched": 24,
+    "total_quotes_passed_gates": 14,
+    "fetch_rate": 1.0,
+    "gate_pass_rate": 0.5833,
+    "quote_reject_histogram": {
+      "QUOTE_GAS_TOO_HIGH": 5,
+      "TICKS_CROSSED_TOO_MANY": 6,
+      "SLIPPAGE_TOO_HIGH": 1
+    }
+  },
+  "cycle_summaries": [
+    {
+      "chain": "arbitrum_one",
+      "chain_id": 42161,
+      "mode": "REGISTRY",
+      "cycle_start": "2026-01-11T11:23:20.926153+00:00",
+      "cycle_end": "2026-01-11T11:23:22.704316+00:00",
+      "duration_ms": 1778,
+      "block_number": 420215812,
+      "gas_price_gwei": 0.0202,
+      "planned_pools": 16,
+      "pools_scanned": 8,
+      "dexes_passed_gate": [
+        {
+          "dex_key": "uniswap_v3",
+          "quoter": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+          "fee_tiers": [
+            100,
+            500,
+            3000,
+            10000
+          ],
+          "verified_for_execution": true
+        },
+        {
+          "dex_key": "sushiswap_v3",
+          "quoter": "0x0524E833cCD057e4d7A296e3aaAb9f7675964Ce1",
+          "fee_tiers": [
+            100,
+            500,
+            3000,
+            10000
+          ],
+          "verified_for_execution": false
+        }
+      ],
+      "quotes_attempted": 24,
+      "quotes_fetched": 24,
+      "quotes_passed_gates": 14,
+      "fetch_rate": 1.0,
+      "gate_pass_rate": 0.5833,
+      "quotes": [
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 100,
+          "amount_in": "10000000000000000",
+          "amount_out": "31003870",
+          "implied_price": "3100.387",
+          "block_number": 420215812,
+          "gas_estimate": 92220,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4411702456694219810471520",
+          "latency_ms": 51
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 100,
+          "amount_in": "100000000000000000",
+          "amount_out": "309999572",
+          "implied_price": "3099.99572",
+          "block_number": 420215812,
+          "gas_estimate": 154473,
+          "ticks_crossed": 2,
+          "sqrt_price_x96_after": "4411145571326044662897813",
+          "latency_ms": 48
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "10000000000000000",
+          "amount_out": "30996763",
+          "implied_price": "3099.6763",
+          "block_number": 420215812,
+          "gas_estimate": 92293,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4412110178638681337046925",
+          "latency_ms": 58
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "100000000000000000",
+          "amount_out": "309967466",
+          "implied_price": "3099.67466",
+          "block_number": 420215812,
+          "gas_estimate": 92293,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4412107720629973711802713",
+          "latency_ms": 33
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "1000000000000000000",
+          "amount_out": "3099657399",
+          "implied_price": "3099.657399",
+          "block_number": 420215812,
+          "gas_estimate": 92267,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4412083140693527207790057",
+          "latency_ms": 49
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 3000,
+          "amount_in": "10000000000000000",
+          "amount_out": "30876205",
+          "implied_price": "3087.6205",
+          "block_number": 420215812,
+          "gas_estimate": 91276,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4409038352717162300121837",
+          "latency_ms": 33
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 3000,
+          "amount_in": "100000000000000000",
+          "amount_out": "308760880",
+          "implied_price": "3087.6088",
+          "block_number": 420215812,
+          "gas_estimate": 91276,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4409021521777762591831227",
+          "latency_ms": 46
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 3000,
+          "amount_in": "1000000000000000000",
+          "amount_out": "3087490941",
+          "implied_price": "3087.490941",
+          "block_number": 420215812,
+          "gas_estimate": 100943,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4408853219450990909403809",
+          "latency_ms": 33
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 10000,
+          "amount_in": "10000000000000000",
+          "amount_out": "30651223",
+          "implied_price": "3065.1223",
+          "block_number": 420215812,
+          "gas_estimate": 100909,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4408220226574937983674801",
+          "latency_ms": 62
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 10000,
+          "amount_in": "100000000000000000",
+          "amount_out": "306225234",
+          "implied_price": "3062.25234",
+          "block_number": 420215812,
+          "gas_estimate": 99883,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4404092556904630749543140",
+          "latency_ms": 54
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 10000,
+          "amount_in": "1000000000000000000",
+          "amount_out": "3019402444",
+          "implied_price": "3019.402444",
+          "block_number": 420215812,
+          "gas_estimate": 154509,
+          "ticks_crossed": 3,
+          "sqrt_price_x96_after": "4333460177973308921546592",
+          "latency_ms": 45
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "10000000000000000",
+          "amount_out": "30999866",
+          "implied_price": "3099.9866",
+          "block_number": 420215812,
+          "gas_estimate": 97517,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4412298918637151690702315",
+          "latency_ms": 46
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "100000000000000000",
+          "amount_out": "309957964",
+          "implied_price": "3099.57964",
+          "block_number": 420215812,
+          "gas_estimate": 106218,
+          "ticks_crossed": 1,
+          "sqrt_price_x96_after": "4411719649959025124089064",
+          "latency_ms": 54
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "1000000000000000000",
+          "amount_out": "3095519702",
+          "implied_price": "3095.519702",
+          "block_number": 420215812,
+          "gas_estimate": 184010,
+          "ticks_crossed": 4,
+          "sqrt_price_x96_after": "4405947422114354705641867",
+          "latency_ms": 34
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 3000,
+          "amount_in": "10000000000000000",
+          "amount_out": "26527020",
+          "implied_price": "2652.702",
+          "block_number": 420215812,
+          "gas_estimate": 157574,
+          "ticks_crossed": 2,
+          "sqrt_price_x96_after": "3793862706132268005387651",
+          "latency_ms": 35
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 10000,
+          "amount_in": "10000000000000000",
+          "amount_out": "504851",
+          "implied_price": "50.4851",
+          "block_number": 420215812,
+          "gas_estimate": 227281,
+          "ticks_crossed": 4,
+          "sqrt_price_x96_after": "5616599018542246984677",
+          "latency_ms": 38
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 10000,
+          "amount_in": "100000000000000000",
+          "amount_out": "504894",
+          "implied_price": "5.04894",
+          "block_number": 420215812,
+          "gas_estimate": 234683,
+          "ticks_crossed": 4,
+          "sqrt_price_x96_after": "552626484498866168654",
+          "latency_ms": 35
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 10000,
+          "amount_in": "1000000000000000000",
+          "amount_out": "504898",
+          "implied_price": "0.504898",
+          "block_number": 420215812,
+          "gas_estimate": 241064,
+          "ticks_crossed": 4,
+          "sqrt_price_x96_after": "55173909881681416404",
+          "latency_ms": 34
+        }
+      ],
+      "spreads": [
+        {
+          "id": "uniswap_v3_sushiswap_v3_500_10000000000000000",
+          "buy_leg": {
+            "dex": "uniswap_v3",
+            "price": "3099.6763",
+            "amount_out": "30996763",
+            "gas_estimate": 92293,
+            "ticks_crossed": 1,
+            "verified_for_execution": true
+          },
+          "sell_leg": {
+            "dex": "sushiswap_v3",
+            "price": "3099.9866",
+            "amount_out": "30999866",
+            "gas_estimate": 97517,
+            "ticks_crossed": 1,
+            "verified_for_execution": false
+          },
+          "fee": 500,
+          "amount_in": "10000000000000000",
+          "spread_bps": 1,
+          "gas_price_gwei": 0.0202,
+          "gas_cost_bps": 3,
+          "net_pnl_bps": -2,
+          "profitable": false,
+          "executable": false
+        },
+        {
+          "id": "sushiswap_v3_uniswap_v3_500_1000000000000000000",
+          "buy_leg": {
+            "dex": "sushiswap_v3",
+            "price": "3095.519702",
+            "amount_out": "3095519702",
+            "gas_estimate": 184010,
+            "ticks_crossed": 4,
+            "verified_for_execution": false
+          },
+          "sell_leg": {
+            "dex": "uniswap_v3",
+            "price": "3099.657399",
+            "amount_out": "3099657399",
+            "gas_estimate": 92267,
+            "ticks_crossed": 1,
+            "verified_for_execution": true
+          },
+          "fee": 500,
+          "amount_in": "1000000000000000000",
+          "spread_bps": 13,
+          "gas_price_gwei": 0.0202,
+          "gas_cost_bps": 0,
+          "net_pnl_bps": 13,
+          "profitable": true,
+          "executable": false
+        },
+        {
+          "id": "sushiswap_v3_uniswap_v3_3000_10000000000000000",
+          "buy_leg": {
+            "dex": "sushiswap_v3",
+            "price": "2652.702",
+            "amount_out": "26527020",
+            "gas_estimate": 157574,
+            "ticks_crossed": 2,
+            "verified_for_execution": false
+          },
+          "sell_leg": {
+            "dex": "uniswap_v3",
+            "price": "3087.6205",
+            "amount_out": "30876205",
+            "gas_estimate": 91276,
+            "ticks_crossed": 1,
+            "verified_for_execution": true
+          },
+          "fee": 3000,
+          "amount_in": "10000000000000000",
+          "spread_bps": 1639,
+          "gas_price_gwei": 0.0202,
+          "gas_cost_bps": 5,
+          "net_pnl_bps": 1634,
+          "profitable": true,
+          "executable": false
+        },
+        {
+          "id": "sushiswap_v3_uniswap_v3_10000_10000000000000000",
+          "buy_leg": {
+            "dex": "sushiswap_v3",
+            "price": "50.4851",
+            "amount_out": "504851",
+            "gas_estimate": 227281,
+            "ticks_crossed": 4,
+            "verified_for_execution": false
+          },
+          "sell_leg": {
+            "dex": "uniswap_v3",
+            "price": "3065.1223",
+            "amount_out": "30651223",
+            "gas_estimate": 100909,
+            "ticks_crossed": 1,
+            "verified_for_execution": true
+          },
+          "fee": 10000,
+          "amount_in": "10000000000000000",
+          "spread_bps": 597134,
+          "gas_price_gwei": 0.0202,
+          "gas_cost_bps": 6,
+          "net_pnl_bps": 597128,
+          "profitable": true,
+          "executable": false
+        },
+        {
+          "id": "sushiswap_v3_uniswap_v3_10000_100000000000000000",
+          "buy_leg": {
+            "dex": "sushiswap_v3",
+            "price": "5.04894",
+            "amount_out": "504894",
+            "gas_estimate": 234683,
+            "ticks_crossed": 4,
+            "verified_for_execution": false
+          },
+          "sell_leg": {
+            "dex": "uniswap_v3",
+            "price": "3062.25234",
+            "amount_out": "306225234",
+            "gas_estimate": 99883,
+            "ticks_crossed": 1,
+            "verified_for_execution": true
+          },
+          "fee": 10000,
+          "amount_in": "100000000000000000",
+          "spread_bps": 6055139,
+          "gas_price_gwei": 0.0202,
+          "gas_cost_bps": 0,
+          "net_pnl_bps": 6055139,
+          "profitable": true,
+          "executable": false
+        },
+        {
+          "id": "sushiswap_v3_uniswap_v3_10000_1000000000000000000",
+          "buy_leg": {
+            "dex": "sushiswap_v3",
+            "price": "0.504898",
+            "amount_out": "504898",
+            "gas_estimate": 241064,
+            "ticks_crossed": 4,
+            "verified_for_execution": false
+          },
+          "sell_leg": {
+            "dex": "uniswap_v3",
+            "price": "3019.402444",
+            "amount_out": "3019402444",
+            "gas_estimate": 154509,
+            "ticks_crossed": 3,
+            "verified_for_execution": true
+          },
+          "fee": 10000,
+          "amount_in": "1000000000000000000",
+          "spread_bps": 59792226,
+          "gas_price_gwei": 0.0202,
+          "gas_cost_bps": 0,
+          "net_pnl_bps": 59792226,
+          "profitable": true,
+          "executable": false
+        }
+      ],
+      "paper_trades": [
+        {
+          "spread_id": "uniswap_v3_sushiswap_v3_500_10000000000000000",
+          "outcome": "UNPROFITABLE",
+          "net_pnl_bps": -2,
+          "expected_pnl_usdc": -0.0062,
+          "recorded": true
+        },
+        {
+          "spread_id": "sushiswap_v3_uniswap_v3_500_1000000000000000000",
+          "outcome": "BLOCKED_EXEC",
+          "net_pnl_bps": 13,
+          "expected_pnl_usdc": 4.0242,
+          "recorded": true
+        },
+        {
+          "spread_id": "sushiswap_v3_uniswap_v3_3000_10000000000000000",
+          "outcome": "BLOCKED_EXEC",
+          "net_pnl_bps": 1634,
+          "expected_pnl_usdc": 4.3345,
+          "recorded": true
+        },
+        {
+          "spread_id": "sushiswap_v3_uniswap_v3_10000_10000000000000000",
+          "outcome": "BLOCKED_EXEC",
+          "net_pnl_bps": 597128,
+          "expected_pnl_usdc": 30.1461,
+          "recorded": true
+        },
+        {
+          "spread_id": "sushiswap_v3_uniswap_v3_10000_100000000000000000",
+          "outcome": "BLOCKED_EXEC",
+          "net_pnl_bps": 6055139,
+          "expected_pnl_usdc": 305.7203,
+          "recorded": true
+        },
+        {
+          "spread_id": "sushiswap_v3_uniswap_v3_10000_1000000000000000000",
+          "outcome": "BLOCKED_EXEC",
+          "net_pnl_bps": 59792226,
+          "expected_pnl_usdc": 3018.8975,
+          "recorded": true
+        }
+      ],
+      "rpc_stats": {
+        "https://arb-mainnet.g.alchemy.com/v2/6cDFdYb-lqxV1uwTAstRN": {
+          "total_requests": 26,
+          "success_rate": 1.0,
+          "avg_latency_ms": 48,
+          "last_error": null
+        },
+        "https://arbitrum.llamarpc.com": {
+          "total_requests": 0,
+          "success_rate": 0.0,
+          "avg_latency_ms": 0,
+          "last_error": null
+        },
+        "https://arb1.arbitrum.io/rpc": {
+          "total_requests": 0,
+          "success_rate": 0.0,
+          "avg_latency_ms": 0,
+          "last_error": null
+        }
+      },
+      "quote_reject_reasons": {
+        "QUOTE_GAS_TOO_HIGH": 5,
+        "TICKS_CROSSED_TOO_MANY": 6,
+        "SLIPPAGE_TOO_HIGH": 1
+      },
+      "status": "OK"
+    }
+  ]
+}

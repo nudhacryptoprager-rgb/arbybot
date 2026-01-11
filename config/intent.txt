@@ -1,0 +1,244 @@
+# intent.txt — Canonical trading universe (minimal pairs)
+# Format: <chain_key>:<BASE>/<QUOTE>
+# Notes:
+#  - This file is version-controlled and is the ONLY source of truth for the minimal pair universe.
+#  - Do NOT put token addresses here. Addresses are resolved via discovery + on-chain verification into data/registry.sqlite.
+#  - Any change requires a PR note explaining why, plus an updated truth_report artifact.
+
+# ============================================================
+# ARBY - Intent File (Source of Truth)
+# ============================================================
+#
+# Format: chain:TOKENA/TOKENB
+#
+# CRITICAL PAIRS for cross-chain and triangular:
+#   - WETH/USDC on every chain (for price reference)
+#   - TOKEN/USDC for triangular closing
+#   - TOKEN/WETH for DEX-DEX arbitrage
+#
+# Updated: 2024-12-23
+# - Removed non-working pairs (0 pools in discovery)
+# - Added high-potential pairs for arbitrage
+# ============================================================
+
+# ============================================================
+# ARBITRUM - PRIMARY TARGET (Best liquidity)
+# ============================================================
+
+# CRITICAL: Base pairs for price discovery
+arbitrum_one:WETH/USDC
+arbitrum_one:WETH/WBTC
+
+# Core DeFi pairs (PROVEN WORKING - high pool count)
+arbitrum_one:WETH/ARB
+arbitrum_one:WETH/GMX
+arbitrum_one:WETH/LINK
+arbitrum_one:WETH/UNI
+
+# TRIANGULAR: closing pairs (working)
+arbitrum_one:GMX/USDC
+arbitrum_one:LINK/USDC
+arbitrum_one:UNI/USDC
+
+# LST pairs (price lag = arbitrage opportunities)
+arbitrum_one:wstETH/WETH
+arbitrum_one:rETH/WETH
+arbitrum_one:wstETH/USDC
+
+# Other DeFi (working)
+arbitrum_one:ARB/DAI
+arbitrum_one:RDNT/WETH
+arbitrum_one:MAGIC/WETH
+arbitrum_one:WBTC/TBTC
+
+# NEW: DeFi governance (high volatility, price discrepancies)
+arbitrum_one:PENDLE/WETH
+arbitrum_one:PENDLE/USDC
+arbitrum_one:GNS/WETH
+arbitrum_one:GNS/USDC
+arbitrum_one:GRAIL/WETH
+arbitrum_one:JOE/WETH
+
+# NEW: Stablecoin arbitrage (peg deviations)
+arbitrum_one:USDE/USDC
+arbitrum_one:FRAX/USDC
+arbitrum_one:LUSD/USDC
+
+# NEW: Gaming/DeFi volatile tokens
+arbitrum_one:MAGIC/USDC
+arbitrum_one:DPX/WETH
+arbitrum_one:RDNT/USDC
+
+# ============================================================
+# LINEA - SECONDARY (All base pairs working well)
+# ============================================================
+
+# CRITICAL: Base pairs (ALL WORKING - high pool count)
+linea:WETH/USDC
+linea:WETH/USDT
+linea:USDC/USDT
+
+# Core pairs (working)
+linea:WETH/WBTC
+linea:wstETH/WETH
+linea:ezETH/WETH
+linea:LINEA/WETH
+linea:LINEA/USDC
+
+# Triangular closing
+linea:WBTC/USDC
+
+# NEW: LST (price lag opportunities)
+linea:STONE/WETH
+linea:weETH/WETH
+
+# NEW: Native ecosystem (different prices on different DEX)
+linea:LYNX/WETH
+linea:LYNX/USDC
+linea:NILE/WETH
+
+# NEW: Closing pairs for triangular
+linea:ezETH/USDC
+linea:WBTC/USDT
+linea:wstETH/USDC
+
+# ============================================================
+# SCROLL (Good liquidity on base pairs)
+# ============================================================
+
+# CRITICAL: Base pairs (ALL WORKING - high pool count)
+scroll:WETH/USDC
+scroll:WETH/USDT
+scroll:USDC/USDT
+
+# Core pairs (working)
+scroll:WETH/WBTC
+scroll:wstETH/WETH
+scroll:SCR/WETH
+scroll:SCR/USDC
+
+# NEW: LST (price discovery delays)
+scroll:STONE/WETH
+scroll:weETH/WETH
+
+# NEW: Native + Bridge tokens
+scroll:PAPER/WETH
+scroll:SYN/WETH
+
+# NEW: Closing pairs for triangular
+scroll:SCR/USDT
+scroll:WBTC/USDT
+scroll:wstETH/USDC
+
+# ============================================================
+# MANTLE (MNT-centric, unique ecosystem)
+# ============================================================
+
+# CRITICAL: Base pairs (working)
+mantle:WETH/USDC
+mantle:WETH/USDT
+mantle:USDC/USDT
+mantle:USDC/WMNT
+mantle:USDT/WMNT
+mantle:WETH/WMNT
+
+# Core pairs (working - METH ecosystem strong)
+mantle:mETH/WETH
+mantle:cmETH/mETH
+mantle:mETH/USDT
+mantle:USDC/mUSD
+
+# NEW: Meme + Native ecosystem (high volatility)
+mantle:PUFF/WMNT
+mantle:PUFF/WETH
+
+# NEW: Stablecoin variants (peg arbitrage)
+mantle:AUSD/USDT
+mantle:AUSD/USDC
+
+# NEW: Closing pairs for triangular
+mantle:mETH/USDC
+mantle:WMNT/mETH
+
+# ============================================================
+# ZKSYNC (ZK token ecosystem)
+# ============================================================
+
+# CRITICAL: Base pairs (working)
+zksync:WETH/USDC
+zksync:WETH/USDT
+zksync:USDC/USDT
+
+# Core pairs (working - ZK has 10 pools!)
+zksync:WETH/WBTC
+zksync:WETH/ZK
+zksync:ZK/USDC
+zksync:wstETH/WETH
+zksync:HOLD/WETH
+
+# Triangular closing
+zksync:WBTC/USDC
+
+# NEW: Meme coins (extreme volatility = arbitrage)
+zksync:CHEEMS/WETH
+zksync:CHEEMS/USDC
+
+# NEW: DEX governance tokens (different prices per DEX)
+zksync:MUTE/WETH
+zksync:SPACE/WETH
+
+# NEW: Closing pairs for ZK triangles
+zksync:ZK/USDT
+zksync:HOLD/USDC
+
+# ============================================================
+# BASE - HIGH PRIORITY (Most active L2 for meme trading!)
+# ============================================================
+
+# CRITICAL: Base pairs (EXCELLENT - 32 pools on WETH/USDC)
+base:WETH/USDC
+base:USDC/USDT
+
+# Coinbase ecosystem (unique to Base, high liquidity)
+base:cbETH/WETH
+base:WETH/cbBTC
+base:USDC/cbBTC
+
+# NEW: Aerodrome ecosystem (MUST HAVE - biggest DEX on Base)
+base:AERO/WETH
+base:AERO/USDC
+
+# NEW: Top meme coins (EXTREME arbitrage potential)
+base:BRETT/WETH
+base:DEGEN/WETH
+base:TOSHI/WETH
+
+# NEW: DeFi
+base:WELL/WETH
+base:WELL/USDC
+
+# NEW: AI tokens (hot sector = volatile)
+base:VIRTUAL/WETH
+
+# NEW: Closing pairs for triangular
+base:cbETH/USDC
+base:cbBTC/USDT
+base:AERO/USDT
+
+# ============================================================
+# CROSS-CHAIN ARBITRAGE SUMMARY
+# ============================================================
+# These tokens exist on multiple chains - ideal for cross-chain arb:
+#
+# TIER 1 (All chains):
+#   - WETH
+#   - USDC/USDT
+#
+# TIER 2 (Most L2s):
+#   - WBTC (Arbitrum, Linea, Scroll, zkSync)
+#   - wstETH (Arbitrum, Linea, Scroll, zkSync)
+#
+# TIER 3 (Specific chains):
+#   - Native tokens (ARB, ZK, SCR, LINEA, WMNT)
+#   - LST variants (mETH, ezETH, STONE)
+# ============================================================

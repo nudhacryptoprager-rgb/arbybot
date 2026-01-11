@@ -1,0 +1,141 @@
+{
+  "timestamp": "2026-01-10T09:58:40.308938+00:00",
+  "session_summary": {
+    "session_start": "2026-01-10T09:58:37.978857+00:00",
+    "session_end": "2026-01-10T09:58:40.308952+00:00",
+    "duration_seconds": 2,
+    "intent_file": "config\\intent.txt",
+    "total_cycles": 1,
+    "total_quotes_fetched": 12,
+    "total_opportunities_found": 0,
+    "total_opportunities_rejected": 0,
+    "reject_histogram": {}
+  },
+  "cycle_summaries": [
+    {
+      "chain": "arbitrum_one",
+      "chain_id": 42161,
+      "cycle_start": "2026-01-10T09:58:37.984927+00:00",
+      "cycle_end": "2026-01-10T09:58:40.292998+00:00",
+      "duration_ms": 2308,
+      "block_number": 419850900,
+      "planned_pools": 4,
+      "pools_scanned": 4,
+      "quotes_fetched": 12,
+      "quotes": [
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 100,
+          "amount_in": "10000000000000000",
+          "amount_out": "30918790",
+          "block_number": 419850900,
+          "gas_estimate": 92265
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 100,
+          "amount_in": "100000000000000000",
+          "amount_out": "309146338",
+          "block_number": 419850900,
+          "gas_estimate": 154527
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 100,
+          "amount_in": "1000000000000000000",
+          "amount_out": "3087315341",
+          "block_number": 419850900,
+          "gas_estimate": 675100
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "10000000000000000",
+          "amount_out": "30908073",
+          "block_number": 419850900,
+          "gas_estimate": 92254
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "100000000000000000",
+          "amount_out": "309080560",
+          "block_number": 419850900,
+          "gas_estimate": 92254
+        },
+        {
+          "dex": "uniswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "1000000000000000000",
+          "amount_out": "3090788186",
+          "block_number": 419850900,
+          "gas_estimate": 92254
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 100,
+          "amount_in": "10000000000000000",
+          "amount_out": "28771841",
+          "block_number": 419850900,
+          "gas_estimate": 481847
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 100,
+          "amount_in": "100000000000000000",
+          "amount_out": "178625301",
+          "block_number": 419850900,
+          "gas_estimate": 1395803
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 100,
+          "amount_in": "1000000000000000000",
+          "amount_out": "352418126",
+          "block_number": 419850900,
+          "gas_estimate": 2338177
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "10000000000000000",
+          "amount_out": "30905507",
+          "block_number": 419850900,
+          "gas_estimate": 106195
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "100000000000000000",
+          "amount_out": "309014568",
+          "block_number": 419850900,
+          "gas_estimate": 106169
+        },
+        {
+          "dex": "sushiswap_v3",
+          "pair": "WETH/USDC",
+          "fee": 500,
+          "amount_in": "1000000000000000000",
+          "amount_out": "3086101009",
+          "block_number": 419850900,
+          "gas_estimate": 182888
+        }
+      ],
+      "opportunities_found": 0,
+      "opportunities_rejected": 0,
+      "reject_reasons": {},
+      "status": "OK"
+    }
+  ]
+}

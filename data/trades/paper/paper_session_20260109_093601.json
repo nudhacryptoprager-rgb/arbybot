@@ -1,0 +1,19 @@
+{
+  "summary": {
+    "session_start": "2026-01-09T09:35:52.563525+00:00",
+    "session_end": "2026-01-09T09:36:01.128046+00:00",
+    "elapsed_seconds": 8,
+    "chains": [
+      "arbitrum_one"
+    ],
+    "opportunities_seen": 0,
+    "opportunities_rejected": 0,
+    "opportunities_executed": 0,
+    "total_pnl_cents": 0,
+    "total_pnl_usd": "0",
+    "wins": 0,
+    "losses": 0,
+    "win_rate_percent": 0
+  },
+  "trades": []
+}

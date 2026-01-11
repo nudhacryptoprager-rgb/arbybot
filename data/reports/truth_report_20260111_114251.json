@@ -1,0 +1,55 @@
+{
+  "timestamp": "2026-01-11T11:42:51.128699+00:00",
+  "mode": "REGISTRY",
+  "health": {
+    "rpc_success_rate": 0.333,
+    "rpc_avg_latency_ms": 15,
+    "quote_fetch_rate": 1.0,
+    "quote_gate_pass_rate": 0.583,
+    "chains_active": 1,
+    "dexes_active": 2,
+    "pairs_covered": 1,
+    "pools_scanned": 8,
+    "top_reject_reasons": [
+      [
+        "QUOTE_INVALID_PARAMS",
+        8
+      ],
+      [
+        "TICKS_CROSSED_TOO_MANY",
+        2
+      ],
+      [
+        "QUOTE_GAS_TOO_HIGH",
+        1
+      ]
+    ]
+  },
+  "top_opportunities": [
+    {
+      "rank": 1,
+      "spread_id": "sushiswap_v3_uniswap_v3_500_1000000000000000000",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "pair": "WETH/USDC",
+      "fee": 500,
+      "amount_in": "1000000000000000000",
+      "spread_bps": 14,
+      "gas_cost_bps": 0,
+      "net_pnl_bps": 14,
+      "expected_pnl_usdc": 3.5,
+      "executable": false,
+      "confidence": 0.5
+    }
+  ],
+  "stats": {
+    "total_spreads": 1,
+    "profitable_spreads": 1,
+    "executable_spreads": 0,
+    "blocked_spreads": 1
+  },
+  "cumulative_pnl": {
+    "total_bps": 0,
+    "total_usdc": 0.0
+  }
+}

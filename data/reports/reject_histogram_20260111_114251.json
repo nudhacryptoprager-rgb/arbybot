@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-01-11T11:42:51.126406+00:00",
+  "quote_rejects": {
+    "total": 0,
+    "histogram": {},
+    "sorted": {},
+    "top_samples": {
+      "QUOTE_GAS_TOO_HIGH": [
+        {
+          "dex": "uniswap_v3",
+          "fee": 100,
+          "amount_in": 1000000000000000000,
+          "gas_estimate": 604140,
+          "ticks_crossed": 21,
+          "latency_ms": 47,
+          "details": {
+            "gas_estimate": 604140,
+            "max_gas": 500000
+          }
+        }
+      ],
+      "TICKS_CROSSED_TOO_MANY": [
+        {
+          "dex": "uniswap_v3",
+          "fee": 100,
+          "amount_in": 1000000000000000000,
+          "gas_estimate": 604140,
+          "ticks_crossed": 21,
+          "latency_ms": 47,
+          "details": {
+            "ticks_crossed": 21,
+            "max_ticks": 10
+          }
+        },
+        {
+          "dex": "sushiswap_v3",
+          "fee": 100,
+          "amount_in": 10000000000000000,
+          "gas_estimate": 482801,
+          "ticks_crossed": 14,
+          "latency_ms": 32,
+          "details": {
+            "ticks_crossed": 14,
+            "max_ticks": 10
+          }
+        }
+      ]
+    }
+  }
+}
