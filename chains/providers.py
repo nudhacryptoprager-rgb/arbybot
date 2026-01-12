@@ -291,7 +291,16 @@ class ProviderRegistry:
         rpc_urls: list[str],
         timeout_seconds: int = 10,
     ) -> RPCProvider:
-        """Register a provider for a chain."""
+        """
+        Register a provider for a chain.
+        
+        If provider already exists for this chain, returns existing one
+        (to preserve stats between cycles).
+        """
+        if chain_id in self._providers:
+            # Return existing provider to preserve stats
+            return self._providers[chain_id]
+        
         provider = RPCProvider(chain_id, rpc_urls, timeout_seconds)
         self._providers[chain_id] = provider
         return provider

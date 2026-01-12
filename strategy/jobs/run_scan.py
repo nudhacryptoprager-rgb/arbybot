@@ -804,8 +804,9 @@ async def run_scan_cycle(
                     }
                     quotes_list.append(quote_data)
                     
-                    # Store for spread calculation: key = fee_amount_in
-                    spread_key = f"{pool.fee}_{amount_in}"
+                    # Store for spread calculation: key includes pair!
+                    pair_id = f"{token_in.symbol}/{token_out.symbol}"
+                    spread_key = f"{pair_id}_{pool.fee}_{amount_in}"
                     quotes_by_key[spread_key][dex_key] = quote
                     
                     logger.debug(
@@ -921,9 +922,7 @@ async def run_scan_cycle(
                         }}
                     )
                 
-                # If curve gates passed, count quotes as fully passed
-                if not curve_failures:
-                    quotes_passed_gates += len([q for q in quotes_list if q["dex"] == dex_key and q["fee"] == pool.fee])
+                # Note: quotes_passed_gates will be calculated at end from quotes_list
         
         # Calculate spreads between DEXes (raw opportunity detection)
         for spread_key, dex_quotes in quotes_by_key.items():
@@ -1098,21 +1097,67 @@ async def run_scan_cycle(
     cycle_end = datetime.now(timezone.utc)
     duration_ms = int((cycle_end - cycle_start).total_seconds() * 1000)
     
-    # Calculate rates and counts
+    # ==========================================================================
+    # METRICS CALCULATION FROM FACTS (not increments)
+    # ==========================================================================
+    # quotes_list contains ONLY quotes that passed single gates
+    # quotes_by_key contains quotes grouped for spread calculation
+    # quote_reject_reasons is histogram of rejection reasons
+    
+    # Recalculate from facts to ensure consistency
+    quotes_passed_gates = len(quotes_list)  # Only passed quotes in list
+    total_reject_reasons = sum(quote_reject_reasons.values())
+    quotes_fetch_failed = quotes_attempted - quotes_fetched
+    
+    # Validate invariants
+    invariant_errors = []
+    
+    # Invariant 1: attempted = fetched + fetch_failed
+    if quotes_attempted != quotes_fetched + quotes_fetch_failed:
+        invariant_errors.append(
+            f"attempted({quotes_attempted}) != fetched({quotes_fetched}) + failed({quotes_fetch_failed})"
+        )
+    
+    # Invariant 2: passed <= fetched
+    if quotes_passed_gates > quotes_fetched:
+        invariant_errors.append(
+            f"passed({quotes_passed_gates}) > fetched({quotes_fetched})"
+        )
+    
+    # Invariant 3: passed + rejected should relate to fetched
+    # Note: rejected counts unique quotes, histogram can have multiple reasons per quote
+    # So we check: passed + rejected <= fetched (some quotes may have multiple failures)
+    if quotes_passed_gates + quotes_rejected > quotes_fetched:
+        # This can happen if rejected is over-counted, log but don't fail
+        logger.warning(
+            f"Counter anomaly: passed({quotes_passed_gates}) + rejected({quotes_rejected}) "
+            f"> fetched({quotes_fetched})"
+        )
+    
+    # Calculate rates
     fetch_rate = quotes_fetched / quotes_attempted if quotes_attempted > 0 else 0.0
     gate_pass_rate = quotes_passed_gates / quotes_fetched if quotes_fetched > 0 else 0.0
     
-    # Unambiguous counts:
-    # - quotes_attempted: Total quote attempts
-    # - quotes_fetched: Successful RPC calls
-    # - quotes_rejected: Unique quotes that failed gates (counted once per quote)
-    # - quotes_passed_gates: Quotes that passed all gates
-    # - total_reject_reasons: Sum of histogram (can be > quotes_rejected if multiple reasons per quote)
-    quotes_fetch_failed = quotes_attempted - quotes_fetched  # RPC/decode errors
-    total_reject_reasons = sum(quote_reject_reasons.values())
+    # Sanity check gate_pass_rate
+    if gate_pass_rate > 1.0:
+        invariant_errors.append(f"gate_pass_rate({gate_pass_rate:.4f}) > 1.0")
+        gate_pass_rate = min(gate_pass_rate, 1.0)  # Cap at 1.0
+    
+    # Log invariant errors
+    if invariant_errors:
+        logger.error(
+            f"Counter invariant violations: {invariant_errors}",
+            extra={"context": {
+                "attempted": quotes_attempted,
+                "fetched": quotes_fetched,
+                "passed": quotes_passed_gates,
+                "rejected": quotes_rejected,
+                "histogram_sum": total_reject_reasons,
+            }}
+        )
     
     summary = {
-        "schema_version": "2026-01-12",  # Schema version for backwards compat
+        "schema_version": "2026-01-12b",  # b = counter fixes
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE

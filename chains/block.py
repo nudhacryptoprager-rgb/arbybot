@@ -87,7 +87,7 @@ class BlockPinner:
     def __init__(
         self,
         provider: RPCProvider,
-        max_block_age_ms: int = 2000,
+        max_block_age_ms: int = 10000,  # 10 seconds - L2 blocks ~2s, allow 5 blocks
     ):
         self.provider = provider
         self.max_block_age_ms = max_block_age_ms
