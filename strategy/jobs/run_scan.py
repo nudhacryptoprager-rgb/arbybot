@@ -981,9 +981,18 @@ async def run_scan_cycle(
                         token_out_symbol = buy_quote.token_out.symbol
                         pair = f"{token_in_symbol}/{token_out_symbol}"
                         
+                        # P0 FIX: spread_id MUST be unique across pairs
+                        # Include pair to prevent cooldown/tracking collisions
+                        spread_id = f"{pair}_{buy_dex}_{sell_dex}_{fee}_{amount_in_str}"
+                        
+                        # P0 FIX: executable must be false if unprofitable
+                        # executable = verified_for_execution AND profitable
+                        is_profitable = net_pnl_bps > 0
+                        executable_final = buy_exec and sell_exec and is_profitable
+                        
                         # Extended spread schema with both legs
                         spread_data = {
-                            "id": f"{buy_dex}_{sell_dex}_{fee}_{amount_in_str}",
+                            "id": spread_id,
                             "pair": pair,
                             "token_in_symbol": token_in_symbol,
                             "token_out_symbol": token_out_symbol,
@@ -1011,8 +1020,8 @@ async def run_scan_cycle(
                             "gas_cost_wei": gas_cost_wei,
                             "gas_cost_bps": gas_cost_bps,
                             "net_pnl_bps": net_pnl_bps,
-                            "profitable": net_pnl_bps > 0,
-                            "executable": executable,
+                            "profitable": is_profitable,
+                            "executable": executable_final,
                         }
                         spreads.append(spread_data)
                         
@@ -1157,7 +1166,7 @@ async def run_scan_cycle(
         )
     
     summary = {
-        "schema_version": "2026-01-12c",  # c = metric clarity
+        "schema_version": "2026-01-12d",  # d = P0 spread_id + executable fixes
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE
