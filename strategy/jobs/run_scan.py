@@ -580,7 +580,7 @@ async def run_scan_cycle(
     pools_skipped: Counter = Counter()  # Track why pools are skipped
     quotes_attempted = 0
     quotes_fetched = 0
-    quotes_rejected = 0  # Unique quotes that failed gates
+    quotes_rejected_by_gates = 0  # Fetched but failed gates
     quotes_passed_gates = 0
     quotes_list: list[dict] = []
     block_number = None
@@ -777,8 +777,8 @@ async def run_scan_cycle(
                     gate_failures = apply_single_quote_gates(quote, anchor_price, is_anchor_dex)
                     
                     if gate_failures:
-                        # Count this as one rejected quote (unique)
-                        quotes_rejected += 1
+                        # Count this as one rejected quote (unique) - it WAS fetched but failed gates
+                        quotes_rejected_by_gates += 1
                         
                         # Add each failure reason to histogram (may be > 1 per quote)
                         for failure in gate_failures:
@@ -833,7 +833,7 @@ async def run_scan_cycle(
                     
                 except QuoteError as e:
                     quote_reject_reasons[e.code.value] += 1
-                    quotes_rejected += 1
+                    # Note: NOT incrementing quotes_rejected_by_gates - this is a fetch error
                     session.add_reject_sample(RejectSample(
                         dex=dex_key, fee=pool.fee, amount_in=amount_in,
                         gas_estimate=0, ticks_crossed=0, latency_ms=0,
@@ -852,7 +852,7 @@ async def run_scan_cycle(
                 
                 except InfraError as e:
                     quote_reject_reasons[e.code.value] += 1
-                    quotes_rejected += 1
+                    # Note: NOT incrementing quotes_rejected_by_gates - this is a fetch error
                     logger.warning(
                         f"Infra error: {e.code.value} - {e.message}",
                         extra={"context": {"dex": dex_key}},
@@ -879,7 +879,7 @@ async def run_scan_cycle(
                         error_code = ErrorCode.VALIDATION_ERROR
                     
                     quote_reject_reasons[error_code.value] += 1
-                    quotes_rejected += 1
+                    # Note: NOT incrementing quotes_rejected_by_gates - this is a fetch error
                     
                     # Add detailed sample for debugging with traceback
                     session.add_reject_sample(RejectSample(
@@ -915,7 +915,7 @@ async def run_scan_cycle(
                     
                 except Exception as e:
                     quote_reject_reasons[ErrorCode.INFRA_RPC_ERROR.value] += 1
-                    quotes_rejected += 1
+                    # Note: NOT incrementing quotes_rejected_by_gates - this is a fetch error
                     logger.error(
                         f"Unexpected error: {type(e).__name__}: {e}",
                         extra={"context": {"dex": dex_key}},
@@ -1171,14 +1171,12 @@ async def run_scan_cycle(
             f"passed({quotes_passed_gates}) > fetched({quotes_fetched})"
         )
     
-    # Invariant 3: passed + rejected should relate to fetched
-    # Note: rejected counts unique quotes, histogram can have multiple reasons per quote
-    # So we check: passed + rejected <= fetched (some quotes may have multiple failures)
-    if quotes_passed_gates + quotes_rejected > quotes_fetched:
-        # This can happen if rejected is over-counted, log but don't fail
-        logger.warning(
-            f"Counter anomaly: passed({quotes_passed_gates}) + rejected({quotes_rejected}) "
-            f"> fetched({quotes_fetched})"
+    # Invariant 3: passed + rejected_by_gates = fetched
+    # This should be exact equality since rejected_by_gates only counts fetched quotes
+    if quotes_passed_gates + quotes_rejected_by_gates != quotes_fetched:
+        invariant_errors.append(
+            f"passed({quotes_passed_gates}) + rejected_by_gates({quotes_rejected_by_gates}) "
+            f"!= fetched({quotes_fetched})"
         )
     
     # Calculate rates
@@ -1198,13 +1196,14 @@ async def run_scan_cycle(
                 "attempted": quotes_attempted,
                 "fetched": quotes_fetched,
                 "passed": quotes_passed_gates,
-                "rejected": quotes_rejected,
+                "rejected_by_gates": quotes_rejected_by_gates,
+                "fetch_failed": quotes_fetch_failed,
                 "histogram_sum": total_reject_reasons,
             }}
         )
     
     summary = {
-        "schema_version": "2026-01-12f",  # f = M3 revalidation
+        "schema_version": "2026-01-12g",  # g = counter fix + --cycles
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE
@@ -1230,7 +1229,7 @@ async def run_scan_cycle(
         "quotes_attempted": quotes_attempted,
         "quotes_fetched": quotes_fetched,
         "quotes_fetch_failed": quotes_fetch_failed,  # = attempted - fetched (RPC/decode errors)
-        "quotes_rejected_by_gates": max(0, quotes_fetched - quotes_passed_gates),
+        "quotes_rejected_by_gates": quotes_rejected_by_gates,  # Fetched but failed gates
         "quotes_passed_gates": quotes_passed_gates,
         # Rates
         "fetch_rate": round(fetch_rate, 4),
@@ -1336,6 +1335,7 @@ async def scan_loop(
 @click.option("--chain", "-c", default="arbitrum_one", help="Chain to scan (or 'all')")
 @click.option("--interval", "-i", default=5000, help="Scan interval in milliseconds")
 @click.option("--once", is_flag=True, help="Run single scan cycle and exit")
+@click.option("--cycles", "-n", default=0, help="Run N cycles and exit (0 = infinite)")
 @click.option("--intent", type=click.Path(exists=True), default="config/intent.txt")
 @click.option("--output-dir", "-o", default="data/snapshots")
 @click.option("--trades-dir", "-t", default="data/trades")
@@ -1349,6 +1349,7 @@ def main(
     chain: str,
     interval: int,
     once: bool,
+    cycles: int,
     intent: str,
     output_dir: str,
     trades_dir: str,
@@ -1410,12 +1411,16 @@ def main(
         registry.save_snapshot(output_path.parent / "registry")
     
     mode = "REGISTRY" if use_registry else "SMOKE"
+    
+    # Determine run mode: once, cycles, or infinite
+    max_cycles = 1 if once else cycles  # --once is equivalent to --cycles 1
+    
     logger.info(
         f"Starting ARBY Scanner ({mode})",
         extra={"context": {
             "chains": [c[0] for c in chains],
             "mode": mode,
-            "once": once,
+            "max_cycles": max_cycles if max_cycles > 0 else "infinite",
             "paper_trading": paper_trading,
             "simulate_blocked": simulate_blocked,
             "cooldown_blocks": cooldown_blocks,
@@ -1424,25 +1429,35 @@ def main(
     
     async def run():
         try:
-            if once:
-                cycle_summaries = []
-                for chain_key, chain_config in chains:
-                    dex_configs = dexes_config.get(chain_key, {})
-                    token_configs = tokens_config.get(chain_key, {})
-                    
-                    summary = await run_scan_cycle(
-                        chain_key, chain_config, dex_configs, token_configs,
-                        session, paper_session, registry
-                    )
-                    cycle_summaries.append(summary)
+            if max_cycles > 0:
+                # Run finite number of cycles
+                all_cycle_summaries = []
                 
-                session.save_snapshot(cycle_summaries)
+                for cycle_num in range(max_cycles):
+                    cycle_summaries = []
+                    for chain_key, chain_config in chains:
+                        dex_configs = dexes_config.get(chain_key, {})
+                        token_configs = tokens_config.get(chain_key, {})
+                        
+                        summary = await run_scan_cycle(
+                            chain_key, chain_config, dex_configs, token_configs,
+                            session, paper_session, registry
+                        )
+                        cycle_summaries.append(summary)
+                    
+                    all_cycle_summaries.extend(cycle_summaries)
+                    
+                    # Wait between cycles (except after last)
+                    if cycle_num < max_cycles - 1:
+                        await asyncio.sleep(interval / 1000)
+                
+                session.save_snapshot(all_cycle_summaries)
                 session.save_reject_histogram()
                 
                 # Generate truth report
                 snapshot = {
                     "mode": mode,
-                    "cycle_summaries": cycle_summaries,
+                    "cycle_summaries": all_cycle_summaries,
                 }
                 paper_stats = paper_session.stats if paper_session else None
                 truth_report = generate_truth_report(snapshot, paper_stats)

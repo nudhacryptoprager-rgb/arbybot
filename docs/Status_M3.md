@@ -2,7 +2,7 @@
 
 **Дата:** 2026-01-12  
 **Milestone:** M3 — Opportunity Engine  
-**Статус:** 🚧 **IN PROGRESS**
+**Статус:** 🚧 **IN PROGRESS** | **Schema:** 2026-01-12g
 
 ---
 
@@ -11,115 +11,90 @@
 | Item | Status |
 |------|--------|
 | **Confidence scoring** | ✅ **COMPLETE** |
-| Revalidation in paper | ⏳ Next |
-| Provider health policy | ⏳ Later |
+| **Revalidation in paper** | ✅ **COMPLETE** |
+| **Counter invariant fix** | ✅ **COMPLETE** |
+| **--cycles CLI option** | ✅ **COMPLETE** |
+| **is_anchor_dex tests** | ✅ **COMPLETE** |
+| Provider health policy | ⏳ Next |
 | Adaptive sizing | ⏳ Later |
-| Pool quarantine | ⏳ Later |
 
 ---
 
-## 2. Confidence Score (COMPLETE)
+## 2. P0 Fixes (This Session)
 
-### Components (weighted average)
+### 2.1 Counter Invariant Fix
+**Problem:** `passed(0) + rejected(60) > fetched(54)` - anomaly because `rejected` included fetch errors.
 
-| Component | Weight | What it measures |
-|-----------|--------|------------------|
-| `freshness` | 15% | Quote latency + block age |
-| `ticks` | 15% | Ticks crossed penalty |
-| `verification` | 20% | Both DEXes verified |
-| `profitability` | 15% | net_pnl_bps quality |
-| `gas_efficiency` | 10% | gas_cost_bps / spread_bps |
-| `rpc_health` | 10% | Provider success rate |
-| `plausibility` | 15% | Economic sanity check |
+**Root cause:** `quotes_rejected` was incremented both for:
+- Gate failures (fetched quotes that failed gates) ✓
+- Fetch errors (exceptions, not actually fetched) ✗
 
-### Hard caps
-- `executable=false` → conf ≤ 0.5
-- `net_pnl_bps ≤ 0` → conf ≤ 0.3
-
-### Plausibility thresholds
-- spread ≤ 50 bps → 1.0 (normal arb)
-- spread ≤ 200 bps → 0.8 (elevated)
-- spread ≤ 500 bps → 0.5 (suspicious)
-- spread > 500 bps → 0.2 (likely bad data)
-
-### Ranking formula
+**Fix:**
 ```python
-score = confidence * net_pnl_bps
-ranked.sort(key=lambda x: x["score"], reverse=True)
+# Before: quotes_rejected (ambiguous)
+# After:
+quotes_rejected_by_gates  # Only fetched quotes that failed gates
+quotes_fetch_failed = attempted - fetched  # RPC/decode errors
 ```
 
+**Correct invariant:**
+```
+passed + rejected_by_gates == fetched
+```
+
+### 2.2 --cycles CLI Option
+Added `--cycles N` to run N cycles and exit:
+```bash
+# Single cycle (same as --once)
+python -m strategy.jobs.run_scan --cycles 1 --smoke
+
+# Multiple cycles with interval
+python -m strategy.jobs.run_scan --cycles 5 --smoke --interval 3000
+```
+
+### 2.3 is_anchor_dex Tests
+Added 3 tests for anchor DEX handling:
+- `test_anchor_dex_skips_price_sanity`
+- `test_non_anchor_without_anchor_price_rejected`
+- `test_apply_single_quote_gates_accepts_is_anchor_dex`
+
 ---
 
-## 3. New Tests (+8)
+## 3. Tests
 
-| Test | Purpose |
-|------|---------|
-| `test_confidence_has_breakdown` | Returns breakdown dict |
-| `test_high_ticks_lowers_confidence` | Ticks penalty |
-| `test_high_latency_lowers_confidence` | Freshness penalty |
-| `test_unverified_lowers_confidence` | Verification penalty |
-| `test_very_high_spread_suspicious` | Plausibility check |
-| `test_unprofitable_caps_confidence` | Hard cap |
-| `test_rpc_health_affects_confidence` | RPC factor |
-| `test_confidence_between_0_and_1` | Range validation |
+**207 passed ✅** (+3 from last)
 
 ---
 
-## 4. Tests
-
-**197 passed ✅** (+8 from M2.3)
-
----
-
-## 5. Files Changed
+## 4. Files Changed
 
 | File | Changes |
 |------|---------|
-| `monitoring/truth_report.py` | Full confidence rewrite with components |
-| `tests/unit/test_confidence.py` | +8 new tests |
+| `strategy/jobs/run_scan.py` | Counter fix, --cycles option |
+| `tests/unit/test_gates.py` | +3 is_anchor_dex tests |
 
 ---
 
-## 6. truth_report Output
+## 5. CLI Usage
 
-```
---- TOP OPPORTUNITIES ---
-  #1 [✓] WETH/ARB sushiswap_v3→uniswap_v3: 45 bps ($1.23) conf=78%
-       └─ fresh=100% ticks=90% verify=100% profit=80% plaus=100%
-  #2 [✗] WETH/LINK uniswap_v3→sushiswap_v3: 30 bps ($0.82) conf=45%
-       └─ fresh=95% ticks=60% verify=50% profit=60% plaus=100%
+```bash
+# Single cycle
+python -m strategy.jobs.run_scan --chain arbitrum_one --once --smoke
+
+# Multiple cycles
+python -m strategy.jobs.run_scan --chain arbitrum_one --cycles 5 --smoke --paper-trading
+
+# Infinite loop (default)
+python -m strategy.jobs.run_scan --chain arbitrum_one --smoke
 ```
 
 ---
 
-## 7. Next Steps
+## 6. Next Steps
 
-1. **Revalidation in paper_trading** - re-quote on +1 block
-2. **Provider health policy** - auto-disable bad endpoints
-3. **Adaptive sizing** - gas/ticks limits by amount_in
-4. **Pool quarantine** - track PRICE_SANITY_FAILED count
-
----
-
-## 8. Schema v2026-01-12e
-
-```json
-{
-  "top_opportunities": [{
-    "confidence": 0.78,
-    "confidence_breakdown": {
-      "freshness": 1.0,
-      "ticks": 0.9,
-      "verification": 1.0,
-      "profitability": 0.8,
-      "gas_efficiency": 0.8,
-      "rpc_health": 0.95,
-      "plausibility": 1.0,
-      "final": 0.78
-    }
-  }]
-}
-```
+1. **Provider health policy** - auto-disable bad endpoints after N failures
+2. **Adaptive sizing** - gas/ticks limits by amount_in
+3. **Pool quarantine** - track PRICE_SANITY_FAILED count per pool
 
 ---
 

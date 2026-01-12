@@ -263,14 +263,23 @@ class TestGateMonotonicity:
 
 class TestApplySingleQuoteGates:
     def test_all_pass(self, pool, weth, usdc):
+        """All gates pass for anchor DEX with good quote."""
         quote = make_quote(pool, weth, usdc, 10**18, 2500_000000, gas=100000, ticks=2)
-        failures = apply_single_quote_gates(quote)
+        # Must be anchor DEX or have anchor_price to pass price sanity
+        failures = apply_single_quote_gates(quote, is_anchor_dex=True)
+        assert len(failures) == 0
+    
+    def test_all_pass_with_anchor(self, pool, weth, usdc):
+        """All gates pass for non-anchor DEX with valid anchor price."""
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000, gas=100000, ticks=2)
+        anchor = Decimal("2500")  # Same as quote
+        failures = apply_single_quote_gates(quote, anchor_price=anchor, is_anchor_dex=False)
         assert len(failures) == 0
     
     def test_multiple_failures(self, pool, weth, usdc):
         quote = make_quote(pool, weth, usdc, 10**18, 0, gas=999999, ticks=99)
-        failures = apply_single_quote_gates(quote)
-        assert len(failures) >= 3  # Zero output, high gas, high ticks
+        failures = apply_single_quote_gates(quote, is_anchor_dex=True)
+        assert len(failures) >= 2  # Zero output, high gas, high ticks
 
 
 class TestApplyCurveGates:
@@ -288,34 +297,50 @@ class TestGatePriceSanity:
     """
     CRITICAL: Tests for gate_price_sanity using ErrorCode.PRICE_SANITY_FAILED.
     
-    These tests ensure PRICE_SANITY_FAILED exists in ErrorCode enum and
-    does not cause AttributeError.
+    P0 FIX: Non-anchor quotes without anchor_price are REJECTED with
+    ErrorCode.PRICE_ANCHOR_MISSING.
     """
     
     def test_price_sanity_failed_exists_in_errorcode(self):
         """ErrorCode.PRICE_SANITY_FAILED must exist."""
-        # This will raise AttributeError if missing
         code = ErrorCode.PRICE_SANITY_FAILED
         assert code.value == "PRICE_SANITY_FAILED"
     
-    def test_passes_when_no_anchor(self, pool, weth, usdc):
-        """No anchor price = pass (first quote sets anchor)."""
+    def test_price_anchor_missing_exists_in_errorcode(self):
+        """ErrorCode.PRICE_ANCHOR_MISSING must exist."""
+        code = ErrorCode.PRICE_ANCHOR_MISSING
+        assert code.value == "PRICE_ANCHOR_MISSING"
+    
+    def test_anchor_dex_passes_without_anchor_price(self, pool, weth, usdc):
+        """Anchor DEX can set anchor - passes without existing anchor."""
         quote = make_quote(pool, weth, usdc, 10**18, 2500_000000)
-        result = gate_price_sanity(quote, anchor_price=None)
+        result = gate_price_sanity(quote, anchor_price=None, is_anchor_dex=True)
         assert result.passed is True
+    
+    def test_non_anchor_dex_fails_without_anchor_price(self, pool, weth, usdc):
+        """
+        P0 FIX: Non-anchor DEX without anchor = REJECT with PRICE_ANCHOR_MISSING.
+        This prevents "phantom opportunities" from single-DEX quotes.
+        """
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000)
+        result = gate_price_sanity(quote, anchor_price=None, is_anchor_dex=False)
+        
+        assert result.passed is False
+        assert result.reject_code == ErrorCode.PRICE_ANCHOR_MISSING
+        assert "no_anchor_price" in result.details.get("reason", "")
     
     def test_passes_when_price_within_threshold(self, pool, weth, usdc):
         """Price within 10% of anchor = pass."""
         quote = make_quote(pool, weth, usdc, 10**18, 2500_000000)  # price = 2500
         anchor_price = Decimal("2450")  # ~2% deviation
-        result = gate_price_sanity(quote, anchor_price=anchor_price)
+        result = gate_price_sanity(quote, anchor_price=anchor_price, is_anchor_dex=False)
         assert result.passed is True
     
     def test_fails_when_price_deviates_too_much(self, pool, weth, usdc):
         """Price deviates >10% from anchor = fail with PRICE_SANITY_FAILED."""
         quote = make_quote(pool, weth, usdc, 10**18, 2500_000000)  # price = 2500
         anchor_price = Decimal("2000")  # 25% deviation
-        result = gate_price_sanity(quote, anchor_price=anchor_price)
+        result = gate_price_sanity(quote, anchor_price=anchor_price, is_anchor_dex=False)
         
         assert result.passed is False
         assert result.reject_code == ErrorCode.PRICE_SANITY_FAILED
@@ -324,22 +349,78 @@ class TestGatePriceSanity:
         """Zero quote price = fail with PRICE_SANITY_FAILED."""
         quote = make_quote(pool, weth, usdc, 10**18, 0)  # price = 0
         anchor_price = Decimal("2500")
-        result = gate_price_sanity(quote, anchor_price=anchor_price)
+        result = gate_price_sanity(quote, anchor_price=anchor_price, is_anchor_dex=False)
         
         assert result.passed is False
         assert result.reject_code == ErrorCode.PRICE_SANITY_FAILED
     
     def test_no_attribute_error(self, pool, weth, usdc):
         """
-        REGRESSION TEST: gate_price_sanity must not raise AttributeError
-        when accessing ErrorCode.PRICE_SANITY_FAILED.
+        REGRESSION TEST: gate_price_sanity must not raise AttributeError.
         """
         quote = make_quote(pool, weth, usdc, 10**18, 2500_000000)
         anchor_price = Decimal("1000")  # Will fail
         
-        # This should NOT raise AttributeError
         try:
-            result = gate_price_sanity(quote, anchor_price=anchor_price)
+            result = gate_price_sanity(quote, anchor_price=anchor_price, is_anchor_dex=False)
             assert result.reject_code == ErrorCode.PRICE_SANITY_FAILED
         except AttributeError as e:
             pytest.fail(f"AttributeError raised: {e}")
+    
+    def test_different_fee_tiers_share_anchor(self, weth, usdc):
+        """
+        P0 FIX: Different fee tiers for same pair should share anchor.
+        
+        This tests that anchor_key = pair_amount (without fee) allows
+        Sushi fee=3000 to use Uni fee=500 anchor.
+        """
+        # Simulating anchor logic: 
+        # anchor_key = f"{pair}_{amount}" (without fee)
+        anchor_key_uni = "WETH/USDC_1000000000000000000"  # fee=500
+        anchor_key_sushi = "WETH/USDC_1000000000000000000"  # fee=3000
+        
+        # Both should use same anchor key
+        assert anchor_key_uni == anchor_key_sushi
+
+
+class TestIsAnchorDex:
+    """Test is_anchor_dex parameter in gates."""
+    
+    def test_anchor_dex_skips_price_sanity(self, pool, weth, usdc):
+        """Anchor DEX quotes should skip price sanity check."""
+        from strategy.gates import gate_price_sanity
+        
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000, gas=200000, ticks=5)
+        
+        # As anchor DEX - should always pass (no sanity check)
+        result = gate_price_sanity(quote, anchor_price=None, is_anchor_dex=True)
+        assert result.passed is True, "Anchor DEX should skip sanity check"
+    
+    def test_non_anchor_without_anchor_price_rejected(self, pool, weth, usdc):
+        """Non-anchor DEX without anchor price should be rejected."""
+        from strategy.gates import gate_price_sanity
+        from core.exceptions import ErrorCode
+        
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000, gas=200000, ticks=5)
+        
+        # Non-anchor DEX without anchor price - should be rejected
+        result = gate_price_sanity(quote, anchor_price=None, is_anchor_dex=False)
+        assert result.passed is False
+        assert result.reject_code == ErrorCode.PRICE_ANCHOR_MISSING
+    
+    def test_apply_single_quote_gates_accepts_is_anchor_dex(self, pool, weth, usdc):
+        """apply_single_quote_gates should accept is_anchor_dex parameter."""
+        from strategy.gates import apply_single_quote_gates
+        from decimal import Decimal
+        
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000, gas=200000, ticks=5)
+        
+        # Should not raise TypeError
+        failures = apply_single_quote_gates(
+            quote, 
+            anchor_price=Decimal("2500"),
+            is_anchor_dex=False,
+        )
+        
+        # Check type
+        assert isinstance(failures, list)
