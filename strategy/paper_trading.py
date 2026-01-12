@@ -232,6 +232,98 @@ class PaperSession:
             "simulate_blocked": self.simulate_blocked,
             "stats": self.stats,
         }
+    
+    def get_pending_revalidation(self, current_block: int, min_blocks: int = 1) -> list[PaperTrade]:
+        """
+        Get trades pending revalidation.
+        
+        Returns trades that:
+        - Have outcome WOULD_EXECUTE
+        - Were not yet revalidated
+        - Are at least min_blocks old
+        
+        Args:
+            current_block: Current block number
+            min_blocks: Minimum blocks since trade (default 1)
+        
+        Returns:
+            List of trades needing revalidation
+        """
+        pending = []
+        trades = self.load_trades()
+        
+        for trade in trades:
+            if trade.outcome != TradeOutcome.WOULD_EXECUTE.value:
+                continue
+            if trade.revalidated:
+                continue
+            if current_block - trade.block_number < min_blocks:
+                continue
+            
+            pending.append(trade)
+        
+        return pending
+    
+    def mark_revalidated(
+        self,
+        spread_id: str,
+        original_block: int,
+        revalidation_block: int,
+        would_still_execute: bool,
+        new_net_pnl_bps: int | None = None,
+    ) -> bool:
+        """
+        Mark a trade as revalidated.
+        
+        Updates the trade in-place in the JSONL file.
+        
+        Args:
+            spread_id: Trade spread ID
+            original_block: Original trade block
+            revalidation_block: Block at which revalidation was done
+            would_still_execute: Whether trade would still be profitable/executable
+            new_net_pnl_bps: Optional updated net PnL
+        
+        Returns:
+            True if trade was found and updated
+        """
+        trades = self.load_trades()
+        found = False
+        
+        for trade in trades:
+            if trade.spread_id == spread_id and trade.block_number == original_block:
+                trade.revalidated = True
+                trade.revalidation_block = revalidation_block
+                trade.would_still_execute = would_still_execute
+                
+                # Update stats if trade would no longer execute
+                if not would_still_execute and trade.outcome == TradeOutcome.WOULD_EXECUTE.value:
+                    self.stats["would_execute"] -= 1
+                    trade.outcome = TradeOutcome.GATES_CHANGED.value
+                    trade.outcome_reason = {
+                        "reason": "revalidation_failed",
+                        "revalidation_block": revalidation_block,
+                        "new_net_pnl_bps": new_net_pnl_bps,
+                    }
+                
+                found = True
+                break
+        
+        if found:
+            # Rewrite entire file (simple but ok for paper trading volumes)
+            with open(self.trades_file, "w") as f:
+                for trade in trades:
+                    f.write(json.dumps(trade.to_dict()) + "\n")
+            
+            logger.info(
+                f"Revalidation: {spread_id} would_still_execute={would_still_execute}",
+                extra={"context": {
+                    "original_block": original_block,
+                    "revalidation_block": revalidation_block,
+                }}
+            )
+        
+        return found
 
 
 def calculate_usdc_value(

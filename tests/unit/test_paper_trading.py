@@ -308,3 +308,123 @@ class TestNegativePnLWithExecutable:
         
         assert trade.outcome == TradeOutcome.WOULD_EXECUTE.value
         assert paper_session.stats["would_execute"] == 1
+
+
+class TestRevalidation:
+    """Test paper trading revalidation logic."""
+    
+    def test_get_pending_revalidation_filters_correctly(self, tmp_path):
+        """get_pending_revalidation returns only eligible trades."""
+        from strategy.paper_trading import PaperSession, PaperTrade, TradeOutcome
+        
+        session = PaperSession(tmp_path, cooldown_blocks=5)
+        
+        # Trade 1: Should be pending (WOULD_EXECUTE, not revalidated)
+        trade1 = PaperTrade(
+            spread_id="spread_1", block_number=100, timestamp="2026-01-12T10:00:00Z",
+            chain_id=42161, buy_dex="uni", sell_dex="sushi", token_in="WETH",
+            token_out="USDC", fee=3000, amount_in_wei="1000000000000000000",
+            buy_price="2500", sell_price="2550", spread_bps=200, gas_cost_bps=10,
+            net_pnl_bps=190, gas_price_gwei=0.02,
+            executable=True, buy_verified=True, sell_verified=True,
+        )
+        session.record_trade(trade1)
+        
+        # Trade 2: Should NOT be pending (already revalidated)
+        trade2 = PaperTrade(
+            spread_id="spread_2", block_number=100, timestamp="2026-01-12T10:00:00Z",
+            chain_id=42161, buy_dex="uni", sell_dex="sushi", token_in="WETH",
+            token_out="USDC", fee=3000, amount_in_wei="1000000000000000000",
+            buy_price="2500", sell_price="2550", spread_bps=200, gas_cost_bps=10,
+            net_pnl_bps=190, gas_price_gwei=0.02,
+            executable=True, buy_verified=True, sell_verified=True,
+            revalidated=True,  # Already revalidated
+        )
+        session.record_trade(trade2)
+        
+        # Trade 3: Should NOT be pending (BLOCKED outcome, not verified)
+        trade3 = PaperTrade(
+            spread_id="spread_3", block_number=100, timestamp="2026-01-12T10:00:00Z",
+            chain_id=42161, buy_dex="uni", sell_dex="sushi", token_in="WETH",
+            token_out="USDC", fee=3000, amount_in_wei="1000000000000000000",
+            buy_price="2500", sell_price="2550", spread_bps=200, gas_cost_bps=10,
+            net_pnl_bps=190, gas_price_gwei=0.02,
+            executable=False, buy_verified=True, sell_verified=False,
+        )
+        session.record_trade(trade3)
+        
+        # Check pending at block 102 (2 blocks later)
+        pending = session.get_pending_revalidation(current_block=102, min_blocks=1)
+        
+        # Only trade1 should be pending (WOULD_EXECUTE, not revalidated)
+        assert len(pending) == 1
+        assert pending[0].spread_id == "spread_1"
+    
+    def test_mark_revalidated_updates_trade(self, tmp_path):
+        """mark_revalidated updates trade in file."""
+        from strategy.paper_trading import PaperSession, PaperTrade, TradeOutcome
+        
+        session = PaperSession(tmp_path, cooldown_blocks=5)
+        
+        trade = PaperTrade(
+            spread_id="spread_1", block_number=100, timestamp="2026-01-12T10:00:00Z",
+            chain_id=42161, buy_dex="uni", sell_dex="sushi", token_in="WETH",
+            token_out="USDC", fee=3000, amount_in_wei="1000000000000000000",
+            buy_price="2500", sell_price="2550", spread_bps=200, gas_cost_bps=10,
+            net_pnl_bps=190, gas_price_gwei=0.02,
+            outcome=TradeOutcome.WOULD_EXECUTE.value, revalidated=False,
+        )
+        session.record_trade(trade)
+        
+        # Mark as revalidated
+        success = session.mark_revalidated(
+            spread_id="spread_1",
+            original_block=100,
+            revalidation_block=105,
+            would_still_execute=True,
+            new_net_pnl_bps=180,
+        )
+        
+        assert success
+        
+        # Reload and check
+        trades = session.load_trades()
+        assert len(trades) == 1
+        assert trades[0].revalidated is True
+        assert trades[0].revalidation_block == 105
+        assert trades[0].would_still_execute is True
+    
+    def test_mark_revalidated_updates_stats_on_failure(self, tmp_path):
+        """When revalidation fails, stats are updated."""
+        from strategy.paper_trading import PaperSession, PaperTrade, TradeOutcome
+        
+        session = PaperSession(tmp_path, cooldown_blocks=5)
+        
+        trade = PaperTrade(
+            spread_id="spread_1", block_number=100, timestamp="2026-01-12T10:00:00Z",
+            chain_id=42161, buy_dex="uni", sell_dex="sushi", token_in="WETH",
+            token_out="USDC", fee=3000, amount_in_wei="1000000000000000000",
+            buy_price="2500", sell_price="2550", spread_bps=200, gas_cost_bps=10,
+            net_pnl_bps=190, gas_price_gwei=0.02,
+            outcome=TradeOutcome.WOULD_EXECUTE.value, revalidated=False,
+        )
+        session.record_trade(trade)
+        
+        # Stats should show 1 would_execute
+        assert session.stats["would_execute"] == 1
+        
+        # Mark as failed revalidation
+        session.mark_revalidated(
+            spread_id="spread_1",
+            original_block=100,
+            revalidation_block=105,
+            would_still_execute=False,  # Trade no longer works
+            new_net_pnl_bps=-10,
+        )
+        
+        # Stats should be updated
+        assert session.stats["would_execute"] == 0
+        
+        # Trade outcome should change
+        trades = session.load_trades()
+        assert trades[0].outcome == TradeOutcome.GATES_CHANGED.value
