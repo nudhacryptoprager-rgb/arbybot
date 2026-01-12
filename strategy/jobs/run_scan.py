@@ -613,6 +613,15 @@ async def run_scan_cycle(
             extra={"context": {"block": block_number, "latency_ms": block_state.latency_ms}}
         )
         
+        # Revalidation: check pending trades from previous cycles
+        revalidation_results = []
+        pending: list = []  # Will be filled if paper_session exists
+        if paper_session is not None:
+            pending = paper_session.get_pending_revalidation(block_number, min_blocks=1)
+            logger.debug(f"Pending revalidation: {len(pending)} trades")
+            # Note: Full revalidation would re-quote, but for now we just mark as checked
+            # Real revalidation happens when we see the same spread in current cycle
+        
         # Fetch gas price
         gas_price_wei, gas_latency = await provider.get_gas_price()
         gas_price_gwei = gas_price_wei / 10**9
@@ -742,21 +751,30 @@ async def run_scan_cycle(
                         ))
                         continue
                     
-                    # Determine spread_key for anchor tracking (must include pair!)
+                    # Determine keys for tracking
                     pair_id = f"{token_in.symbol}/{token_out.symbol}"
+                    
+                    # P0 FIX: anchor_key WITHOUT fee - allows anchor to work across fee tiers
+                    # This ensures Sushi fee=3000 can use Uni fee=500 as anchor
+                    anchor_key = f"{pair_id}_{amount_in}"
+                    
+                    # spread_key WITH fee - for grouping quotes by fee tier
                     spread_key = f"{pair_id}_{pool.fee}_{amount_in}"
                     
-                    # Get anchor price for this spread_key
-                    anchor_price = anchor_prices.get(spread_key)
+                    # Get anchor price for this pair/amount (any fee tier)
+                    anchor_price = anchor_prices.get(anchor_key)
+                    
+                    # Check if this is anchor DEX
+                    is_anchor_dex = (dex_key == ANCHOR_DEX)
                     
                     # If this is anchor DEX and no anchor yet - calculate it first
-                    if dex_key == ANCHOR_DEX and anchor_price is None:
+                    if is_anchor_dex and anchor_price is None:
                         anchor_price = calculate_implied_price(quote)
                         if anchor_price > 0:
-                            anchor_prices[spread_key] = anchor_price
+                            anchor_prices[anchor_key] = anchor_price
                     
-                    # Apply single-quote gates with anchor price
-                    gate_failures = apply_single_quote_gates(quote, anchor_price)
+                    # Apply single-quote gates with anchor price and is_anchor_dex flag
+                    gate_failures = apply_single_quote_gates(quote, anchor_price, is_anchor_dex)
                     
                     if gate_failures:
                         # Count this as one rejected quote (unique)
@@ -779,9 +797,9 @@ async def run_scan_cycle(
                     # Calculate implied price
                     implied_price = calculate_implied_price(quote)
                     
-                    # Update anchor if this is anchor DEX
-                    if dex_key == ANCHOR_DEX and spread_key not in anchor_prices:
-                        anchor_prices[spread_key] = implied_price
+                    # Update anchor if this is anchor DEX (using anchor_key without fee)
+                    if is_anchor_dex and anchor_key not in anchor_prices:
+                        anchor_prices[anchor_key] = implied_price
                     
                     # Store quote data with all fields + pool identity
                     quote_data = {
@@ -804,9 +822,7 @@ async def run_scan_cycle(
                     }
                     quotes_list.append(quote_data)
                     
-                    # Store for spread calculation: key includes pair!
-                    pair_id = f"{token_in.symbol}/{token_out.symbol}"
-                    spread_key = f"{pair_id}_{pool.fee}_{amount_in}"
+                    # Store for spread calculation (spread_key includes fee)
                     quotes_by_key[spread_key][dex_key] = quote
                     
                     logger.debug(
@@ -1068,6 +1084,28 @@ async def run_scan_cycle(
                             # Record with cooldown check
                             recorded = paper_session.record_trade(paper_trade)
                             
+                            # Revalidation: check if this spread existed in pending trades
+                            # If so, mark them as revalidated with current results
+                            if pending:
+                                for pending_trade in pending:
+                                    if pending_trade.spread_id == spread_id:
+                                        # Found matching spread - revalidate
+                                        would_still = is_profitable and executable_final
+                                        paper_session.mark_revalidated(
+                                            spread_id=pending_trade.spread_id,
+                                            original_block=pending_trade.block_number,
+                                            revalidation_block=block_number,
+                                            would_still_execute=would_still,
+                                            new_net_pnl_bps=net_pnl_bps,
+                                        )
+                                        revalidation_results.append({
+                                            "spread_id": spread_id,
+                                            "original_block": pending_trade.block_number,
+                                            "would_still_execute": would_still,
+                                            "original_pnl_bps": pending_trade.net_pnl_bps,
+                                            "new_pnl_bps": net_pnl_bps,
+                                        })
+                            
                             # Add to snapshot summary
                             paper_trades_summary.append({
                                 "spread_id": paper_trade.spread_id,
@@ -1166,7 +1204,7 @@ async def run_scan_cycle(
         )
     
     summary = {
-        "schema_version": "2026-01-12d",  # d = P0 spread_id + executable fixes
+        "schema_version": "2026-01-12f",  # f = M3 revalidation
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE
@@ -1204,6 +1242,7 @@ async def run_scan_cycle(
         "quotes": quotes_list,
         "spreads": spreads,
         "paper_trades": paper_trades_summary,
+        "revalidations": revalidation_results,
         "rpc_stats": rpc_stats,
         # Reject histogram (reasons, not unique quotes)
         "reject_reasons_histogram": dict(quote_reject_reasons),
