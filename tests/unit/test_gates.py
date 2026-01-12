@@ -14,6 +14,7 @@ from strategy.gates import (
     gate_gas_estimate,
     gate_ticks_crossed,
     gate_freshness,
+    gate_price_sanity,
     gate_slippage_curve,
     gate_monotonicity,
     calculate_implied_price,
@@ -70,7 +71,11 @@ def pool(weth, usdc):
 
 
 def make_quote(pool, weth, usdc, amount_in, amount_out, gas=100000, ticks=2, fresh=True):
-    """Helper to create test quotes."""
+    """Helper to create test quotes.
+    
+    Args:
+        ticks: Can be int or None (for Algebra quotes)
+    """
     import time
     ts = int(time.time() * 1000) if fresh else int(time.time() * 1000) - 10000
     return Quote(
@@ -135,6 +140,12 @@ class TestGateTicksCrossed:
         result = gate_ticks_crossed(quote)
         assert not result.passed
         assert result.reject_code == ErrorCode.TICKS_CROSSED_TOO_MANY
+    
+    def test_passes_with_none_ticks_algebra(self, pool, weth, usdc):
+        """Algebra quotes have ticks_crossed=None, gate should pass."""
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000, ticks=None)
+        result = gate_ticks_crossed(quote)
+        assert result.passed
 
 
 class TestGateFreshness:
@@ -271,3 +282,64 @@ class TestApplyCurveGates:
         ]
         failures = apply_curve_gates(quotes)
         assert len(failures) == 0
+
+
+class TestGatePriceSanity:
+    """
+    CRITICAL: Tests for gate_price_sanity using ErrorCode.PRICE_SANITY_FAILED.
+    
+    These tests ensure PRICE_SANITY_FAILED exists in ErrorCode enum and
+    does not cause AttributeError.
+    """
+    
+    def test_price_sanity_failed_exists_in_errorcode(self):
+        """ErrorCode.PRICE_SANITY_FAILED must exist."""
+        # This will raise AttributeError if missing
+        code = ErrorCode.PRICE_SANITY_FAILED
+        assert code.value == "PRICE_SANITY_FAILED"
+    
+    def test_passes_when_no_anchor(self, pool, weth, usdc):
+        """No anchor price = pass (first quote sets anchor)."""
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000)
+        result = gate_price_sanity(quote, anchor_price=None)
+        assert result.passed is True
+    
+    def test_passes_when_price_within_threshold(self, pool, weth, usdc):
+        """Price within 10% of anchor = pass."""
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000)  # price = 2500
+        anchor_price = Decimal("2450")  # ~2% deviation
+        result = gate_price_sanity(quote, anchor_price=anchor_price)
+        assert result.passed is True
+    
+    def test_fails_when_price_deviates_too_much(self, pool, weth, usdc):
+        """Price deviates >10% from anchor = fail with PRICE_SANITY_FAILED."""
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000)  # price = 2500
+        anchor_price = Decimal("2000")  # 25% deviation
+        result = gate_price_sanity(quote, anchor_price=anchor_price)
+        
+        assert result.passed is False
+        assert result.reject_code == ErrorCode.PRICE_SANITY_FAILED
+    
+    def test_fails_when_zero_quote_price(self, pool, weth, usdc):
+        """Zero quote price = fail with PRICE_SANITY_FAILED."""
+        quote = make_quote(pool, weth, usdc, 10**18, 0)  # price = 0
+        anchor_price = Decimal("2500")
+        result = gate_price_sanity(quote, anchor_price=anchor_price)
+        
+        assert result.passed is False
+        assert result.reject_code == ErrorCode.PRICE_SANITY_FAILED
+    
+    def test_no_attribute_error(self, pool, weth, usdc):
+        """
+        REGRESSION TEST: gate_price_sanity must not raise AttributeError
+        when accessing ErrorCode.PRICE_SANITY_FAILED.
+        """
+        quote = make_quote(pool, weth, usdc, 10**18, 2500_000000)
+        anchor_price = Decimal("1000")  # Will fail
+        
+        # This should NOT raise AttributeError
+        try:
+            result = gate_price_sanity(quote, anchor_price=anchor_price)
+            assert result.reject_code == ErrorCode.PRICE_SANITY_FAILED
+        except AttributeError as e:
+            pytest.fail(f"AttributeError raised: {e}")

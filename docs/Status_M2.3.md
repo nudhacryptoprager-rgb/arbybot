@@ -1,6 +1,6 @@
 # Status_M2.3.md — AlgebraAdapter + P0 Fixes
 
-**Дата:** 2026-01-11  
+**Дата:** 2026-01-12  
 **Milestone:** M2.3 — AlgebraAdapter  
 **Статус:** ✅ **CODE COMPLETE** | ⏸️ **CAMELOT DISABLED**
 
@@ -16,57 +16,62 @@
 | ticks_crossed = None | ✅ |
 | Error details improved | ✅ |
 | **camelot_v3 enabled** | ⏸️ DISABLED |
-| **Paper trading PnL test** | ✅ NEW |
-| **Snapshot schema_version** | ✅ NEW |
-| **Snapshot block_pin** | ✅ NEW |
+| **PRICE_SANITY_FAILED tests** | ✅ 6 tests |
+| **gate_price_sanity bug fixed** | ✅ quote.pool.dex_id |
+| **Paper trading PnL test** | ✅ 3 tests |
+| **Snapshot schema_version** | ✅ |
+| **Snapshot block_pin** | ✅ |
+| **RejectSample ticks_crossed** | ✅ Optional |
+| **fee_tiers reordered** | ✅ 100 last |
+| **Smoke harness expanded** | ✅ 5 pairs |
+| **Core tokens expanded** | ✅ wstETH, GMX |
 
 ---
 
-## 2. P0 Fixes (This Session)
+## 2. Critical Bug Fixes
 
-### 2.1 Paper Trading Safety Test
+### 2.1 gate_price_sanity AttributeError
+**Bug:** `quote.dex_id` → `AttributeError` (Quote has no dex_id)  
+**Fix:** Changed to `quote.pool.dex_id`
+
+### 2.2 RejectSample type error
+**Bug:** `ticks_crossed: int` but Algebra returns `None`  
+**Fix:** `ticks_crossed: int | None`
+
+### 2.3 fee=100 reordering
+**Issue:** fee=100 causes high ticks (15-16) and gas (462k-530k)  
+**Fix:** Moved 100 to end of fee_tiers list
+
+---
+
+## 3. Smoke Harness Expansion
+
+**Before:** WETH/USDC only  
+**After:** 5 core pairs:
 ```python
-class TestNegativePnLWithExecutable:
-    def test_negative_pnl_executable_true_gives_unprofitable():
-        """executable=True + net_pnl_bps<0 → UNPROFITABLE, not WOULD_EXECUTE"""
-```
-**3 new tests** verifying outcome logic.
-
-### 2.2 Snapshot Schema
-```python
-summary = {
-    "schema_version": "2026-01-11",
-    "block_pin": {
-        "block_number": block_number,
-        "pinned_at_ms": block_state.timestamp_ms,
-        "age_ms": block_state.age_ms(),
-        "latency_ms": block_state.latency_ms,
-        "is_stale": pinner.is_stale(),
-    },
-    ...
-}
+SMOKE_PAIRS = [
+    ("WETH", "USDC"),
+    ("WETH", "ARB"),
+    ("WETH", "LINK"),
+    ("wstETH", "WETH"),
+    ("WETH", "USDT"),
+]
 ```
 
-### 2.3 .gitignore Updated
-Added `data/registry/`, `*.jsonl`, all dynamic artifacts excluded.
+**Core tokens added:**
+- wstETH: 0x5979D7b546E38E414F7E9822514be443A4800529
+- GMX: 0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a
 
 ---
 
-## 3. Tests
+## 4. Tests
 
-**174 passed ✅** (+3 new paper trading tests)
+**181 passed ✅**
 
----
-
-## 4. Camelot Status
-
-**Disabled** until live validation:
-```yaml
-camelot_v3:
-  enabled: false
-  verified_for_quoting: false
-  note: "Algebra V1 Quoter - needs live validation"
-```
+New tests:
+- TestGatePriceSanity (6 tests)
+- TestNegativePnLWithExecutable (3 tests)
+- test_passes_with_none_ticks_algebra
 
 ---
 
@@ -74,20 +79,22 @@ camelot_v3:
 
 | File | Changes |
 |------|---------|
-| `strategy/jobs/run_scan.py` | schema_version, block_pin in snapshot |
-| `tests/unit/test_paper_trading.py` | +3 negative PnL tests |
-| `.gitignore` | data/registry/, *.jsonl |
-| `config/dexes.yaml` | camelot_v3 disabled |
+| `strategy/gates.py` | quote.pool.dex_id fix |
+| `strategy/jobs/run_scan.py` | 5 pair smoke, schema_version, block_pin |
+| `config/dexes.yaml` | fee_tiers reordered, camelot disabled |
+| `config/core_tokens.yaml` | +wstETH, +GMX |
+| `tests/unit/test_gates.py` | +7 tests |
+| `tests/unit/test_paper_trading.py` | +3 tests |
 
 ---
 
-## 6. Next Steps → M3
+## 6. Next Steps
 
-With P0 fixes complete, ready for M3 Opportunity Engine:
-- Confidence scoring
-- Opportunity ranking
-- Sizing policy
+1. ✅ INFRA_BAD_ABI root causes fixed
+2. Run 20 cycle smoke scan to verify histogram
+3. Verify 5 pairs produce diverse spreads
+4. M3: Opportunity ranking
 
 ---
 
-*Оновлено: 2026-01-11*
+*Оновлено: 2026-01-12*

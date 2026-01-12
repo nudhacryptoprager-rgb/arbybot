@@ -113,9 +113,16 @@ def build_test_pools(
     token_configs: dict,
 ) -> tuple[list[tuple[Pool, Token, Token, str]], list[DEXQuotingConfig]]:
     """
-    Build test pools for scanning (SMOKE HARNESS - WETH/USDC only).
+    Build test pools for scanning (SMOKE HARNESS - Core pairs only).
     
     NOTE: This is a smoke test harness. Real universe comes from intent/registry.
+    
+    Core pairs for smoke:
+    - WETH/USDC (base pair)
+    - WETH/ARB (native token) 
+    - WETH/LINK (DeFi)
+    - wstETH/WETH (LST)
+    - WETH/USDT (stablecoin)
     
     Returns:
         (pools_list, dexes_passed_gate)
@@ -123,31 +130,32 @@ def build_test_pools(
     pools = []
     passed_dexes: list[DEXQuotingConfig] = []
     
-    # Get core tokens
-    weth_config = token_configs.get("WETH", {})
-    usdc_config = token_configs.get("USDC", {})
+    # Define smoke pairs (token_a, token_b) - will try both directions
+    SMOKE_PAIRS = [
+        ("WETH", "USDC"),
+        ("WETH", "ARB"),
+        ("WETH", "LINK"),
+        ("wstETH", "WETH"),
+        ("WETH", "USDT"),
+    ]
     
-    if not weth_config.get("address") or not usdc_config.get("address"):
+    # Build token objects from config
+    tokens_by_symbol = {}
+    for symbol in ["WETH", "USDC", "ARB", "LINK", "wstETH", "USDT"]:
+        config = token_configs.get(symbol, {})
+        if config.get("address"):
+            tokens_by_symbol[symbol] = Token(
+                chain_id=chain_id,
+                address=config["address"],
+                symbol=symbol,
+                name=config.get("name", symbol),
+                decimals=config.get("decimals", 18),
+                is_core=True,
+            )
+    
+    if "WETH" not in tokens_by_symbol or "USDC" not in tokens_by_symbol:
         logger.warning(f"Missing WETH/USDC for {chain_key}")
         return pools, passed_dexes
-    
-    weth = Token(
-        chain_id=chain_id,
-        address=weth_config["address"],
-        symbol="WETH",
-        name="Wrapped Ether",
-        decimals=weth_config.get("decimals", 18),
-        is_core=True,
-    )
-    
-    usdc = Token(
-        chain_id=chain_id,
-        address=usdc_config["address"],
-        symbol="USDC",
-        name="USD Coin",
-        decimals=usdc_config.get("decimals", 6),
-        is_core=True,
-    )
     
     # Build pools for each DEX
     for dex_key, dex_config in dex_configs.items():
@@ -173,25 +181,33 @@ def build_test_pools(
                 verified_for_execution=verified_for_execution,
             ))
             
-            for fee in fee_tiers[:2]:  # Only first 2 fee tiers for smoke
-                # Sort tokens by address for pool
-                if usdc.address.lower() < weth.address.lower():
-                    token0, token1 = usdc, weth
-                else:
-                    token0, token1 = weth, usdc
+            # Build pools for each smoke pair
+            for token_a_sym, token_b_sym in SMOKE_PAIRS:
+                token_a = tokens_by_symbol.get(token_a_sym)
+                token_b = tokens_by_symbol.get(token_b_sym)
                 
-                pool = Pool(
-                    chain_id=chain_id,
-                    dex_id=dex_key,
-                    dex_type=DexType.UNISWAP_V3,
-                    pool_address="",  # Smoke harness - no real pool address
-                    token0=token0,
-                    token1=token1,
-                    fee=fee,
-                    status=PoolStatus.ACTIVE,
-                )
+                if not token_a or not token_b:
+                    continue  # Skip if token not configured for this chain
                 
-                pools.append((pool, weth, usdc, dex_key))
+                for fee in fee_tiers[:2]:  # Only first 2 fee tiers for smoke
+                    # Sort tokens by address for pool
+                    if token_b.address.lower() < token_a.address.lower():
+                        token0, token1 = token_b, token_a
+                    else:
+                        token0, token1 = token_a, token_b
+                    
+                    pool = Pool(
+                        chain_id=chain_id,
+                        dex_id=dex_key,
+                        dex_type=DexType.UNISWAP_V3,
+                        pool_address="",  # Smoke harness - no real pool address
+                        token0=token0,
+                        token1=token1,
+                        fee=fee,
+                        status=PoolStatus.ACTIVE,
+                    )
+                    
+                    pools.append((pool, token_a, token_b, dex_key))
         
         elif adapter_type == "algebra" and quoter:
             # Algebra has dynamic fees - no fixed fee tiers
@@ -212,24 +228,32 @@ def build_test_pools(
                 verified_for_execution=verified_for_execution,
             ))
             
-            # Sort tokens by address for pool
-            if usdc.address.lower() < weth.address.lower():
-                token0, token1 = usdc, weth
-            else:
-                token0, token1 = weth, usdc
-            
-            pool = Pool(
-                chain_id=chain_id,
-                dex_id=dex_key,
-                dex_type=DexType.ALGEBRA,
-                pool_address="",  # Smoke harness - no real pool address
-                token0=token0,
-                token1=token1,
-                fee=0,  # Dynamic fee - will be returned by quoter
-                status=PoolStatus.ACTIVE,
-            )
-            
-            pools.append((pool, weth, usdc, dex_key))
+            # Build pools for each smoke pair (Algebra: only WETH pairs for now)
+            for token_a_sym, token_b_sym in SMOKE_PAIRS:
+                token_a = tokens_by_symbol.get(token_a_sym)
+                token_b = tokens_by_symbol.get(token_b_sym)
+                
+                if not token_a or not token_b:
+                    continue
+                
+                # Sort tokens by address for pool
+                if token_b.address.lower() < token_a.address.lower():
+                    token0, token1 = token_b, token_a
+                else:
+                    token0, token1 = token_a, token_b
+                
+                pool = Pool(
+                    chain_id=chain_id,
+                    dex_id=dex_key,
+                    dex_type=DexType.ALGEBRA,
+                    pool_address="",  # Smoke harness - no real pool address
+                    token0=token0,
+                    token1=token1,
+                    fee=0,  # Dynamic fee - will be returned by quoter
+                    status=PoolStatus.ACTIVE,
+                )
+                
+                pools.append((pool, token_a, token_b, dex_key))
     
     # Log DEXes that passed gating
     if passed_dexes:
@@ -312,7 +336,7 @@ class RejectSample:
     fee: int
     amount_in: int
     gas_estimate: int
-    ticks_crossed: int
+    ticks_crossed: int | None  # None for Algebra
     latency_ms: int
     error_code: str
     details: dict | None = None
@@ -493,6 +517,11 @@ def calculate_gas_cost_bps(
     
     Returns:
         Gas cost in basis points of the trade value
+        
+    Note:
+        On L2s with low gas prices (0.02 gwei), gas cost can be < 1 bps
+        for large trades (1 ETH). This is correct - L2 gas is cheap.
+        For small trades (0.01 ETH), gas cost becomes significant (~40 bps).
     """
     # Total gas = both trades
     total_gas = gas_estimate_a + gas_estimate_b
@@ -1054,6 +1083,7 @@ async def run_scan_cycle(
     total_reject_reasons = sum(quote_reject_reasons.values())
     
     summary = {
+        "schema_version": "2026-01-11",  # Schema version for backwards compat
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE
@@ -1061,6 +1091,13 @@ async def run_scan_cycle(
         "cycle_end": cycle_end.isoformat(),
         "duration_ms": duration_ms,
         "block_number": block_number,
+        "block_pin": {
+            "block_number": block_number,
+            "pinned_at_ms": block_state.timestamp_ms if block_state else None,
+            "age_ms": block_state.age_ms() if block_state else None,
+            "latency_ms": block_state.latency_ms if block_state else None,
+            "is_stale": pinner.is_stale() if pinner else None,
+        },
         "gas_price_gwei": round(gas_price_gwei, 4),
         "planned_pools": planned_pools,
         "pools_scanned": pools_scanned,

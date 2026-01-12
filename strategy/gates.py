@@ -153,8 +153,8 @@ def gate_price_sanity(
                 "max_deviation_bps": max_deviation_bps,
                 "quote_price": str(quote_price),
                 "anchor_price": str(anchor_price),
-                "dex_id": quote.dex_id,
-                "fee": quote.fee,
+                "dex_id": quote.pool.dex_id,
+                "fee": quote.pool.fee,
             },
         )
     

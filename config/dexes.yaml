@@ -32,7 +32,9 @@ arbitrum_one:
     factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
     router: "0xE592427A0AEce92De3Edee1F18E0157C05861564"
     quoter_v2: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"
-    fee_tiers: [100, 500, 3000, 10000]
+    # fee_tiers ordered by usage: 500 (0.05%) and 3000 (0.3%) most common
+    # 100 (0.01%) causes high ticks/gas, moved to end
+    fee_tiers: [500, 3000, 10000, 100]
     enabled: true
     verified_for_quoting: true
     verified_for_execution: true
@@ -47,7 +49,7 @@ arbitrum_one:
     factory: "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e"
     router: "0x09bd2a33c47746ff03b86bce4e885d03c74a8e8c"  # RouteProcessor v3.2
     quoter_v2: "0x0524E833cCD057e4d7A296e3aaAb9f7675964Ce1"
-    fee_tiers: [100, 500, 3000]
+    fee_tiers: [500, 3000, 100]  # 100 last (high ticks/gas)
     enabled: true
     verified_for_quoting: true
     verified_for_execution: true  # Enabled for paper trading
