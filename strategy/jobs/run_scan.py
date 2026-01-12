@@ -1157,7 +1157,7 @@ async def run_scan_cycle(
         )
     
     summary = {
-        "schema_version": "2026-01-12b",  # b = counter fixes
+        "schema_version": "2026-01-12c",  # c = metric clarity
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE
@@ -1177,20 +1177,28 @@ async def run_scan_cycle(
         "pools_scanned": pools_scanned,
         "pools_skipped": dict(pools_skipped),
         "pairs_scanned": list(pairs_scanned),
+        "pairs_covered": len(pairs_scanned),
         "dexes_passed_gate": dexes_passed_gate,
+        # Quote counts (unambiguous)
         "quotes_attempted": quotes_attempted,
         "quotes_fetched": quotes_fetched,
-        "quotes_fetch_failed": quotes_fetch_failed,
-        "quotes_rejected": quotes_rejected,  # Unique quotes that failed gates
+        "quotes_fetch_failed": quotes_fetch_failed,  # = attempted - fetched (RPC/decode errors)
+        "quotes_rejected_by_gates": max(0, quotes_fetched - quotes_passed_gates),
         "quotes_passed_gates": quotes_passed_gates,
+        # Rates
         "fetch_rate": round(fetch_rate, 4),
         "gate_pass_rate": round(gate_pass_rate, 4),
+        # Invariant check
+        "invariants_ok": len(invariant_errors) == 0,
+        "invariant_errors": invariant_errors if invariant_errors else None,
+        # Data
         "quotes": quotes_list,
         "spreads": spreads,
         "paper_trades": paper_trades_summary,
         "rpc_stats": rpc_stats,
-        "reject_reasons_histogram": dict(quote_reject_reasons),  # Renamed for clarity
-        "total_reject_reasons": total_reject_reasons,  # Can be > quotes_rejected
+        # Reject histogram (reasons, not unique quotes)
+        "reject_reasons_histogram": dict(quote_reject_reasons),
+        "reject_reasons_total": total_reject_reasons,  # Sum of histogram
         "status": "OK" if quotes_passed_gates > 0 else "NO_QUOTES",
     }
     

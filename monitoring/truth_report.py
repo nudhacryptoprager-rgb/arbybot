@@ -261,6 +261,10 @@ def generate_truth_report(
     # Sort by score descending
     ranked.sort(key=lambda x: x["score"], reverse=True)
     
+    # Filter out noise: minimum net_pnl_bps threshold
+    MIN_NET_PNL_BPS = 5  # Ignore opportunities with < 5 bps
+    ranked = [r for r in ranked if r["spread"].get("net_pnl_bps", 0) >= MIN_NET_PNL_BPS]
+    
     # Build top opportunities
     top_opportunities = []
     for i, item in enumerate(ranked[:top_n]):
