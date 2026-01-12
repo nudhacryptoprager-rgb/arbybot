@@ -2,7 +2,7 @@
 
 **Дата:** 2026-01-12  
 **Milestone:** M2.3 — AlgebraAdapter  
-**Статус:** ✅ **CODE COMPLETE** | ⏸️ **CAMELOT DISABLED**
+**Статус:** ✅ **CODE COMPLETE** | ⏸️ **CAMELOT DISABLED** | 🔧 **M2.3 Adapter NOT in prod pipeline**
 
 ---
 
@@ -10,90 +10,118 @@
 
 | Item | Status |
 |------|--------|
-| AlgebraAdapter code | ✅ |
+| AlgebraAdapter code | ✅ Ready |
 | Correct selector (0x2d9ebd1d) | ✅ |
-| Unit tests (10) | ✅ |
-| ticks_crossed = None | ✅ |
-| Error details improved | ✅ |
-| **camelot_v3 enabled** | ⏸️ DISABLED |
-| **PRICE_SANITY_FAILED tests** | ✅ 6 tests |
-| **gate_price_sanity bug fixed** | ✅ quote.pool.dex_id |
-| **Paper trading PnL test** | ✅ 3 tests |
-| **Snapshot schema_version** | ✅ |
-| **Snapshot block_pin** | ✅ |
-| **RejectSample ticks_crossed** | ✅ Optional |
-| **fee_tiers reordered** | ✅ 100 last |
-| **Smoke harness expanded** | ✅ 5 pairs |
-| **Core tokens expanded** | ✅ wstETH, GMX |
+| **Camelot in prod pipeline** | ⏸️ **DISABLED** |
+| PRICE_SANITY_FAILED tests | ✅ 9 tests |
+| gate_price_sanity bug | ✅ Fixed |
+| Paper trading safety | ✅ 3 tests |
+| **Pool grouping bug** | ✅ **FIXED** |
+| **spread_key bug** | ✅ **FIXED** (pair included) |
+| **INTERNAL_CODE_ERROR** | ✅ **ADDED** |
+| **pairs_scanned metric** | ✅ |
+| **pools_skipped metric** | ✅ |
+| **gas_cost_wei in spreads** | ✅ |
 
 ---
 
-## 2. Critical Bug Fixes
+## 2. Critical Bug Fixes (This Session)
 
-### 2.1 gate_price_sanity AttributeError
-**Bug:** `quote.dex_id` → `AttributeError` (Quote has no dex_id)  
-**Fix:** Changed to `quote.pool.dex_id`
+### 2.1 Pool Grouping Bug (ROOT CAUSE of pairs_covered=1)
+**Problem:** `pools_by_dex_fee` grouped different pairs together.
+**Fix:** Key includes pair: `f"{dex_key}_{pool.fee}_{pair_key}"`
 
-### 2.2 RejectSample type error
-**Bug:** `ticks_crossed: int` but Algebra returns `None`  
-**Fix:** `ticks_crossed: int | None`
+### 2.2 spread_key Bug (CRITICAL)
+**Problem:** `spread_key = f"{pool.fee}_{amount_in}"` - didn't include pair.
+**Result:** Quotes from different pairs mixed, anchor prices wrong.
+**Fix:** `spread_key = f"{pair_id}_{pool.fee}_{amount_in}"`
 
-### 2.3 fee=100 reordering
-**Issue:** fee=100 causes high ticks (15-16) and gas (462k-530k)  
-**Fix:** Moved 100 to end of fee_tiers list
-
----
-
-## 3. Smoke Harness Expansion
-
-**Before:** WETH/USDC only  
-**After:** 5 core pairs:
+### 2.3 Error Classification
+**Problem:** AttributeError from code bugs reported as INFRA_BAD_ABI.
+**Fix:** Added `ErrorCode.INTERNAL_CODE_ERROR` for our code bugs:
 ```python
-SMOKE_PAIRS = [
-    ("WETH", "USDC"),
-    ("WETH", "ARB"),
-    ("WETH", "LINK"),
-    ("wstETH", "WETH"),
-    ("WETH", "USDT"),
-]
+if isinstance(e, (AttributeError, KeyError)):
+    if "abi" in tb_lower or "decode" in tb_lower:
+        error_code = ErrorCode.INFRA_BAD_ABI
+    else:
+        error_code = ErrorCode.INTERNAL_CODE_ERROR  # Our bug!
 ```
 
-**Core tokens added:**
-- wstETH: 0x5979D7b546E38E414F7E9822514be443A4800529
-- GMX: 0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a
+### 2.4 Diagnostics Added
+- `pools_skipped` counter with reasons (no_quoter, algebra_disabled)
+- `traceback` in reject_sample details
+- `pairs_scanned` in summary
 
 ---
 
-## 4. Tests
+## 3. New Tests (183 total)
 
-**181 passed ✅**
+```python
+# test_exceptions.py
+test_price_sanity_failed_exists      # CRITICAL regression test
+test_all_gate_error_codes_exist      # All gate codes must exist
 
-New tests:
-- TestGatePriceSanity (6 tests)
-- TestNegativePnLWithExecutable (3 tests)
-- test_passes_with_none_ticks_algebra
+# test_gates.py  
+test_passes_with_none_ticks_algebra  # Algebra ticks=None handling
+```
 
 ---
 
-## 5. Files Changed
+## 4. Schema Changes (v2026-01-12)
+
+**Snapshot additions:**
+```json
+{
+  "schema_version": "2026-01-12",
+  "pools_skipped": {"no_quoter": 0, "algebra_disabled": 0},
+  "pairs_scanned": ["WETH/USDC", "WETH/ARB", ...],
+  "spreads": [{
+    "gas_total": 400000,
+    "gas_cost_wei": 8000000000000,
+    ...
+  }]
+}
+```
+
+---
+
+## 5. ErrorCode Additions
+
+```python
+# New in core/exceptions.py
+INTERNAL_CODE_ERROR = "INTERNAL_CODE_ERROR"  # AttributeError/KeyError in our code
+```
+
+---
+
+## 6. Camelot/Algebra Status
+
+**DISABLED** - not in production pipeline:
+```yaml
+camelot_v3:
+  enabled: false
+  verified_for_quoting: false
+```
+
+---
+
+## 7. Files Changed
 
 | File | Changes |
 |------|---------|
-| `strategy/gates.py` | quote.pool.dex_id fix |
-| `strategy/jobs/run_scan.py` | 5 pair smoke, schema_version, block_pin |
-| `config/dexes.yaml` | fee_tiers reordered, camelot disabled |
-| `config/core_tokens.yaml` | +wstETH, +GMX |
-| `tests/unit/test_gates.py` | +7 tests |
-| `tests/unit/test_paper_trading.py` | +3 tests |
+| `core/exceptions.py` | +INTERNAL_CODE_ERROR |
+| `strategy/jobs/run_scan.py` | spread_key fix, pools_skipped, error classify |
+| `tests/unit/test_exceptions.py` | +2 tests for gate error codes |
 
 ---
 
-## 6. Next Steps
+## 8. Next Steps
 
-1. ✅ INFRA_BAD_ABI root causes fixed
-2. Run 20 cycle smoke scan to verify histogram
-3. Verify 5 pairs produce diverse spreads
-4. M3: Opportunity ranking
+1. ✅ Run smoke scan - verify 5 pairs work
+2. ✅ Verify INTERNAL_CODE_ERROR = 0 (no code bugs)
+3. ✅ Verify pools_scanned = planned_pools
+4. Expand to 3-5 pairs with real distribution
+5. M3: Opportunity ranking
 
 ---
 

@@ -576,6 +576,8 @@ async def run_scan_cycle(
     quote_reject_reasons: Counter = Counter()
     pools_scanned = 0
     planned_pools = 0
+    pairs_scanned: set[str] = set()
+    pools_skipped: Counter = Counter()  # Track why pools are skipped
     quotes_attempted = 0
     quotes_fetched = 0
     quotes_rejected = 0  # Unique quotes that failed gates
@@ -654,23 +656,28 @@ async def run_scan_cycle(
             quote_reject_reasons[ErrorCode.POOL_NOT_FOUND.value] += 1
             logger.warning(f"No test pools for {chain_key}")
         
-        # Group pools by DEX for curve analysis
-        pools_by_dex_fee: dict[str, list[tuple[Pool, Token, Token, str]]] = defaultdict(list)
+        # Group pools by DEX + fee + pair for proper scanning
+        # Each unique (dex, fee, pair) should be scanned separately
+        pools_by_key: dict[str, tuple[Pool, Token, Token, str]] = {}
         for pool, token_in, token_out, dex_key in test_pools:
-            key = f"{dex_key}_{pool.fee}"
-            pools_by_dex_fee[key].append((pool, token_in, token_out, dex_key))
+            # Unique key includes pair to prevent grouping different pairs together
+            pair_key = f"{token_in.symbol}/{token_out.symbol}"
+            key = f"{dex_key}_{pool.fee}_{pair_key}"
+            # Store first occurrence (all should be same anyway)
+            if key not in pools_by_key:
+                pools_by_key[key] = (pool, token_in, token_out, dex_key)
         
         # Sort keys so ANCHOR_DEX is processed first (sets anchor price before others)
         sorted_keys = sorted(
-            pools_by_dex_fee.keys(),
+            pools_by_key.keys(),
             key=lambda k: (0 if k.startswith(ANCHOR_DEX) else 1, k)
         )
         
-        # Process each DEX/fee combination (anchor DEX first!)
-        for dex_fee_key in sorted_keys:
-            pool_group = pools_by_dex_fee[dex_fee_key]
-            pool, token_in, token_out, dex_key = pool_group[0]
+        # Process each DEX/fee/pair combination (anchor DEX first!)
+        for pool_key in sorted_keys:
+            pool, token_in, token_out, dex_key = pools_by_key[pool_key]
             pools_scanned += 1
+            pairs_scanned.add(f"{token_in.symbol}/{token_out.symbol}")
             
             # Get DEX config
             dex_config = dex_configs.get(dex_key, {})
@@ -679,6 +686,7 @@ async def run_scan_cycle(
             
             if not quoter_address:
                 logger.warning(f"No quoter for {dex_key}")
+                pools_skipped["no_quoter"] += 1
                 quote_reject_reasons[ErrorCode.QUOTE_REVERT.value] += 1
                 continue
             
@@ -688,6 +696,7 @@ async def run_scan_cycle(
                 # Feature flagged - check if enabled
                 if not dex_config.get("enabled", False):
                     logger.debug(f"Algebra adapter disabled for {dex_key}")
+                    pools_skipped["algebra_disabled"] += 1
                     continue
             
             # Create adapter based on type
@@ -733,8 +742,9 @@ async def run_scan_cycle(
                         ))
                         continue
                     
-                    # Determine spread_key for anchor tracking
-                    spread_key = f"{pool.fee}_{amount_in}"
+                    # Determine spread_key for anchor tracking (must include pair!)
+                    pair_id = f"{token_in.symbol}/{token_out.symbol}"
+                    spread_key = f"{pair_id}_{pool.fee}_{amount_in}"
                     
                     # Get anchor price for this spread_key
                     anchor_price = anchor_prices.get(spread_key)
@@ -832,10 +842,20 @@ async def run_scan_cycle(
                     )
                     
                 except (AttributeError, KeyError, ValueError, TypeError) as e:
-                    # This is a code bug, not a quote error
-                    # Use specific code based on exception type
+                    # Classify error based on type and context
+                    import traceback
+                    tb = traceback.format_exc()
+                    
+                    # AttributeError/KeyError in our code = INTERNAL_CODE_ERROR (bug!)
+                    # ValueError = bad data from RPC
+                    # TypeError = validation issue
                     if isinstance(e, (AttributeError, KeyError)):
-                        error_code = ErrorCode.INFRA_BAD_ABI
+                        # Check if it's a real ABI issue or our code bug
+                        tb_lower = tb.lower()
+                        if "abi" in tb_lower or "decode" in tb_lower or "encode" in tb_lower:
+                            error_code = ErrorCode.INFRA_BAD_ABI
+                        else:
+                            error_code = ErrorCode.INTERNAL_CODE_ERROR  # Our code bug!
                     elif isinstance(e, ValueError):
                         error_code = ErrorCode.QUOTE_REVERT  # Bad data from RPC
                     else:
@@ -844,7 +864,7 @@ async def run_scan_cycle(
                     quote_reject_reasons[error_code.value] += 1
                     quotes_rejected += 1
                     
-                    # Add detailed sample for debugging
+                    # Add detailed sample for debugging with traceback
                     session.add_reject_sample(RejectSample(
                         dex=dex_key, fee=pool.fee, amount_in=amount_in,
                         gas_estimate=0, ticks_crossed=0, latency_ms=0,
@@ -852,6 +872,7 @@ async def run_scan_cycle(
                         details={
                             "error_type": type(e).__name__,
                             "error_message": str(e),
+                            "traceback": tb.split('\n')[-4:-1],  # Last 3 lines of traceback
                             "quoter": quoter_address,
                             "token_in": token_in.address,
                             "token_out": token_out.address,
@@ -921,10 +942,16 @@ async def run_scan_cycle(
                     spread_bps = calculate_spread_bps(price_a, price_b)
                     
                     if spread_bps > 0:
-                        fee, amount_in_str = spread_key.split("_")
+                        # Parse spread_key: "PAIR_FEE_AMOUNT"
+                        parts = spread_key.split("_")
+                        pair = parts[0]
+                        fee = parts[1]
+                        amount_in_str = parts[2]
                         amount_in = int(amount_in_str)
                         
                         # Calculate gas cost in bps with real gas price
+                        total_gas = quote_a.gas_estimate + quote_b.gas_estimate
+                        gas_cost_wei = total_gas * gas_price_wei
                         gas_cost_bps = calculate_gas_cost_bps(
                             gas_estimate_a=quote_a.gas_estimate,
                             gas_estimate_b=quote_b.gas_estimate,
@@ -981,6 +1008,8 @@ async def run_scan_cycle(
                             "amount_in": amount_in_str,
                             "spread_bps": spread_bps,
                             "gas_price_gwei": round(gas_price_gwei, 4),
+                            "gas_total": total_gas,
+                            "gas_cost_wei": gas_cost_wei,
                             "gas_cost_bps": gas_cost_bps,
                             "net_pnl_bps": net_pnl_bps,
                             "profitable": net_pnl_bps > 0,
@@ -1083,7 +1112,7 @@ async def run_scan_cycle(
     total_reject_reasons = sum(quote_reject_reasons.values())
     
     summary = {
-        "schema_version": "2026-01-11",  # Schema version for backwards compat
+        "schema_version": "2026-01-12",  # Schema version for backwards compat
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE
@@ -1101,6 +1130,8 @@ async def run_scan_cycle(
         "gas_price_gwei": round(gas_price_gwei, 4),
         "planned_pools": planned_pools,
         "pools_scanned": pools_scanned,
+        "pools_skipped": dict(pools_skipped),
+        "pairs_scanned": list(pairs_scanned),
         "dexes_passed_gate": dexes_passed_gate,
         "quotes_attempted": quotes_attempted,
         "quotes_fetched": quotes_fetched,

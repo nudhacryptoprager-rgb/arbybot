@@ -42,6 +42,7 @@ class ErrorCode(str, Enum):
     SLIPPAGE_TOO_HIGH = "SLIPPAGE_TOO_HIGH"
     PRICE_IMPACT_TOO_HIGH = "PRICE_IMPACT_TOO_HIGH"
     TICKS_CROSSED_TOO_MANY = "TICKS_CROSSED_TOO_MANY"
+    PRICE_SANITY_FAILED = "PRICE_SANITY_FAILED"  # Price deviates too much from anchor
     
     # Token errors
     TOKEN_NOT_FOUND = "TOKEN_NOT_FOUND"
@@ -66,8 +67,11 @@ class ErrorCode(str, Enum):
     INFRA_RPC_ERROR = "INFRA_RPC_ERROR"
     INFRA_RATE_LIMIT = "INFRA_RATE_LIMIT"
     INFRA_CONNECTION_ERROR = "INFRA_CONNECTION_ERROR"
-    INFRA_BAD_ABI = "INFRA_BAD_ABI"
+    INFRA_BAD_ABI = "INFRA_BAD_ABI"  # Real ABI encoding/decoding errors
     INFRA_BAD_ADDRESS = "INFRA_BAD_ADDRESS"
+    
+    # Internal code errors (bugs, not infrastructure)
+    INTERNAL_CODE_ERROR = "INTERNAL_CODE_ERROR"  # AttributeError/KeyError in our code
     
     # CEX errors
     CEX_DEPTH_LOW = "CEX_DEPTH_LOW"
