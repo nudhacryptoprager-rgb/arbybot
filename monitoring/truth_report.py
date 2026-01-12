@@ -37,6 +37,7 @@ class OpportunityRank:
     expected_pnl_usdc: float
     executable: bool
     confidence: float  # 0.0 - 1.0
+    confidence_breakdown: dict | None = None  # Component scores
 
 
 @dataclass
@@ -102,49 +103,173 @@ class TruthReport:
         }
 
 
-def calculate_confidence(spread: dict) -> float:
+def calculate_confidence(
+    spread: dict,
+    rpc_success_rate: float = 1.0,
+    block_age_ms: int = 0,
+) -> tuple[float, dict]:
     """
     Calculate confidence score for a spread (0.0 - 1.0).
     
-    Factors:
-    - Executability (both DEXes verified)
-    - Spread size (higher = more confident it's real)
-    - Gas cost ratio (if gas is small fraction of spread, more confident)
-    - Price sanity (if prices are close to anchor, more confident)
+    Returns:
+        Tuple of (confidence_score, breakdown_dict)
+    
+    Components:
+    - freshness: quote latency + block age
+    - ticks: penalty for high ticks_crossed
+    - verification: both DEXes verified for execution
+    - profitability: net_pnl_bps quality
+    - gas_efficiency: gas_cost_bps / spread_bps ratio
+    - rpc_health: provider reliability
+    - plausibility: economic sanity check
     """
-    score = 0.0
+    breakdown = {}
     
-    # Base: is it executable?
-    if spread.get("executable"):
-        score += 0.4
-    else:
-        score += 0.1  # Still has some value for analysis
-    
-    # Spread quality
+    # Get spread data
     spread_bps = spread.get("spread_bps", 0)
     gas_bps = spread.get("gas_cost_bps", 0)
     net_bps = spread.get("net_pnl_bps", 0)
-    
-    if net_bps > 0:
-        # Profitable
-        score += 0.2
-        
-        # Gas ratio (if gas is < 30% of spread, good)
-        if spread_bps > 0:
-            gas_ratio = gas_bps / spread_bps
-            if gas_ratio < 0.3:
-                score += 0.2
-            elif gas_ratio < 0.5:
-                score += 0.1
-    
-    # Both legs have verified execution
     buy_leg = spread.get("buy_leg", {})
     sell_leg = spread.get("sell_leg", {})
     
-    if buy_leg.get("verified_for_execution") and sell_leg.get("verified_for_execution"):
-        score += 0.2
+    # 1. FRESHNESS SCORE (0.0 - 1.0)
+    # Lower latency = better
+    buy_latency = buy_leg.get("latency_ms", 0) or 0
+    sell_latency = sell_leg.get("latency_ms", 0) or 0
+    avg_latency = (buy_latency + sell_latency) / 2 if buy_latency and sell_latency else max(buy_latency, sell_latency)
     
-    return min(score, 1.0)
+    # Latency scoring: <100ms = 1.0, >500ms = 0.5, >1000ms = 0.2
+    if avg_latency <= 100:
+        latency_score = 1.0
+    elif avg_latency <= 500:
+        latency_score = 1.0 - (avg_latency - 100) / 800  # Linear decay
+    else:
+        latency_score = max(0.2, 0.5 - (avg_latency - 500) / 1000)
+    
+    # Block age scoring: <5s = 1.0, >10s = 0.5
+    if block_age_ms <= 5000:
+        block_score = 1.0
+    elif block_age_ms <= 10000:
+        block_score = 1.0 - (block_age_ms - 5000) / 10000
+    else:
+        block_score = 0.5
+    
+    freshness_score = (latency_score * 0.6 + block_score * 0.4)
+    breakdown["freshness"] = round(freshness_score, 3)
+    
+    # 2. TICKS SCORE (0.0 - 1.0)
+    # Lower ticks = better (less slippage risk)
+    buy_ticks = buy_leg.get("ticks_crossed") or 0
+    sell_ticks = sell_leg.get("ticks_crossed") or 0
+    max_ticks = max(buy_ticks, sell_ticks)
+    
+    # Ticks scoring: 0-5 = 1.0, 5-10 = 0.8, 10-15 = 0.5, >15 = 0.2
+    if max_ticks <= 5:
+        ticks_score = 1.0
+    elif max_ticks <= 10:
+        ticks_score = 1.0 - (max_ticks - 5) * 0.04
+    elif max_ticks <= 15:
+        ticks_score = 0.8 - (max_ticks - 10) * 0.06
+    else:
+        ticks_score = max(0.2, 0.5 - (max_ticks - 15) * 0.02)
+    
+    breakdown["ticks"] = round(ticks_score, 3)
+    
+    # 3. VERIFICATION SCORE (0.0 - 1.0)
+    buy_verified = buy_leg.get("verified_for_execution", False)
+    sell_verified = sell_leg.get("verified_for_execution", False)
+    
+    if buy_verified and sell_verified:
+        verification_score = 1.0
+    elif buy_verified or sell_verified:
+        verification_score = 0.5
+    else:
+        verification_score = 0.2
+    
+    breakdown["verification"] = verification_score
+    
+    # 4. PROFITABILITY SCORE (0.0 - 1.0)
+    # Higher net_pnl_bps = better
+    if net_bps <= 0:
+        profit_score = 0.0
+    elif net_bps < 5:
+        profit_score = 0.3  # Marginal
+    elif net_bps < 20:
+        profit_score = 0.6  # Decent
+    elif net_bps < 50:
+        profit_score = 0.8  # Good
+    else:
+        profit_score = 1.0  # Excellent
+    
+    breakdown["profitability"] = profit_score
+    
+    # 5. GAS EFFICIENCY SCORE (0.0 - 1.0)
+    # Lower gas_ratio = better
+    if spread_bps > 0:
+        gas_ratio = gas_bps / spread_bps
+        if gas_ratio < 0.1:
+            gas_score = 1.0
+        elif gas_ratio < 0.3:
+            gas_score = 0.8
+        elif gas_ratio < 0.5:
+            gas_score = 0.5
+        else:
+            gas_score = 0.2
+    else:
+        gas_score = 0.0
+    
+    breakdown["gas_efficiency"] = gas_score
+    
+    # 6. RPC HEALTH SCORE (0.0 - 1.0)
+    # Direct from provider stats
+    rpc_score = min(1.0, max(0.0, rpc_success_rate))
+    breakdown["rpc_health"] = round(rpc_score, 3)
+    
+    # 7. PLAUSIBILITY SCORE (0.0 - 1.0)
+    # Very high spreads are suspicious
+    MAX_PLAUSIBLE_BPS = 500  # 5% spread is max believable
+    
+    if spread_bps <= 0:
+        plausibility_score = 0.0
+    elif spread_bps <= 50:
+        plausibility_score = 1.0  # Normal arb range
+    elif spread_bps <= 200:
+        plausibility_score = 0.8  # Elevated but possible
+    elif spread_bps <= MAX_PLAUSIBLE_BPS:
+        plausibility_score = 0.5  # Suspicious
+    else:
+        plausibility_score = 0.2  # Very suspicious - likely bad data
+    
+    breakdown["plausibility"] = plausibility_score
+    
+    # WEIGHTED AVERAGE
+    weights = {
+        "freshness": 0.15,
+        "ticks": 0.15,
+        "verification": 0.20,
+        "profitability": 0.15,
+        "gas_efficiency": 0.10,
+        "rpc_health": 0.10,
+        "plausibility": 0.15,
+    }
+    
+    total_score = sum(breakdown[k] * weights[k] for k in weights)
+    
+    # Hard caps: if not executable or not profitable, cap at 0.5
+    if not spread.get("executable"):
+        total_score = min(total_score, 0.5)
+    if net_bps <= 0:
+        total_score = min(total_score, 0.3)
+    
+    breakdown["final"] = round(total_score, 3)
+    
+    return round(total_score, 3), breakdown
+
+
+def calculate_confidence_simple(spread: dict) -> float:
+    """Simple wrapper for backwards compatibility."""
+    score, _ = calculate_confidence(spread)
+    return score
 
 
 def generate_truth_report(
@@ -242,19 +367,27 @@ def generate_truth_report(
     executable_spreads = [s for s in profitable_spreads if s.get("executable")]
     blocked_spreads = [s for s in profitable_spreads if not s.get("executable")]
     
+    # Get block age from last cycle
+    block_age_ms = 0
+    if cycle_summaries:
+        last_cycle = cycle_summaries[-1]
+        block_pin = last_cycle.get("block_pin", {})
+        block_age_ms = block_pin.get("age_ms", 0) or 0
+    
     # Rank opportunities by confidence × net_pnl
     ranked = []
     for spread in all_spreads:
-        confidence = calculate_confidence(spread)
+        confidence, breakdown = calculate_confidence(
+            spread,
+            rpc_success_rate=rpc_success_rate,
+            block_age_ms=block_age_ms,
+        )
         net_bps = spread.get("net_pnl_bps", 0)
-        
-        # Get pair from legs
-        buy_leg = spread.get("buy_leg", {})
-        pair = "UNKNOWN"  # TODO: Get from spread
         
         ranked.append({
             "spread": spread,
             "confidence": confidence,
+            "confidence_breakdown": breakdown,
             "score": confidence * net_bps,  # Combined score
         })
     
@@ -309,6 +442,7 @@ def generate_truth_report(
             expected_pnl_usdc=round(expected_usdc, 4),
             executable=spread.get("executable", False),
             confidence=round(item["confidence"], 3),
+            confidence_breakdown=item.get("confidence_breakdown"),
         ))
     
     # Cumulative PnL from paper session
@@ -381,9 +515,19 @@ def print_truth_report(report: TruthReport) -> None:
         for opp in report.top_opportunities:
             exec_mark = "✓" if opp.executable else "✗"
             print(
-                f"  #{opp.rank} [{exec_mark}] {opp.buy_dex}→{opp.sell_dex}: "
+                f"  #{opp.rank} [{exec_mark}] {opp.pair} {opp.buy_dex}→{opp.sell_dex}: "
                 f"{opp.net_pnl_bps} bps (${opp.expected_pnl_usdc:.2f}) "
                 f"conf={opp.confidence:.0%}"
             )
+            # Show confidence breakdown if available
+            if opp.confidence_breakdown:
+                b = opp.confidence_breakdown
+                print(
+                    f"       └─ fresh={b.get('freshness', 0):.0%} "
+                    f"ticks={b.get('ticks', 0):.0%} "
+                    f"verify={b.get('verification', 0):.0%} "
+                    f"profit={b.get('profitability', 0):.0%} "
+                    f"plaus={b.get('plausibility', 0):.0%}"
+                )
     
     print("=" * 60 + "\n")
