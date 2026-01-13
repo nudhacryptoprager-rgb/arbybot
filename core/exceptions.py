@@ -43,6 +43,7 @@ class ErrorCode(str, Enum):
     PRICE_IMPACT_TOO_HIGH = "PRICE_IMPACT_TOO_HIGH"
     TICKS_CROSSED_TOO_MANY = "TICKS_CROSSED_TOO_MANY"
     PRICE_SANITY_FAILED = "PRICE_SANITY_FAILED"  # Price deviates too much from anchor
+    PRICE_ANCHOR_MISSING = "PRICE_ANCHOR_MISSING"  # No anchor price to compare against
     
     # Token errors
     TOKEN_NOT_FOUND = "TOKEN_NOT_FOUND"

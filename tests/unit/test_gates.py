@@ -424,3 +424,28 @@ class TestIsAnchorDex:
         
         # Check type
         assert isinstance(failures, list)
+
+
+class TestErrorCodeContract:
+    """Test that all ErrorCodes used in gates exist."""
+    
+    def test_all_gate_error_codes_exist(self):
+        """All ErrorCodes returned by gates must exist in ErrorCode enum."""
+        from core.exceptions import ErrorCode
+        
+        # All codes used in gates.py (verified by grep)
+        expected_codes = [
+            "QUOTE_ZERO_OUTPUT",
+            "QUOTE_GAS_TOO_HIGH",
+            "TICKS_CROSSED_TOO_MANY",
+            "QUOTE_STALE_BLOCK",  # from gate_freshness
+            "PRICE_ANCHOR_MISSING",
+            "PRICE_SANITY_FAILED",
+            "SLIPPAGE_TOO_HIGH",
+            "QUOTE_INCONSISTENT",  # from slippage curve + monotonicity
+        ]
+        
+        for code in expected_codes:
+            assert hasattr(ErrorCode, code), f"ErrorCode.{code} does not exist"
+            # Verify it's a valid enum member
+            assert getattr(ErrorCode, code).value == code
