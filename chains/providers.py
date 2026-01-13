@@ -36,6 +36,8 @@ class RPCStats:
     total_latency_ms: int = 0
     last_error: str | None = None
     last_success_ts: int | None = None
+    quarantined: bool = False
+    quarantine_until_ts: int | None = None
     
     @property
     def avg_latency_ms(self) -> int:
@@ -48,6 +50,12 @@ class RPCStats:
         if self.total_requests == 0:
             return 0.0
         return self.successful_requests / self.total_requests
+
+
+# Quarantine settings
+MIN_REQUESTS_FOR_QUARANTINE = 5  # Need at least N requests before quarantine
+MIN_SUCCESS_RATE_FOR_ACTIVE = 0.1  # Below this = quarantine
+QUARANTINE_DURATION_MS = 60_000  # 1 minute quarantine
 
 
 @dataclass
@@ -144,9 +152,23 @@ class RPCProvider:
         
         client = await self._get_client()
         last_error: Exception | None = None
+        current_ts = int(time.time() * 1000)
         
         for url in self.rpc_urls:
             stats = self.stats[url]
+            
+            # Check quarantine status
+            if stats.quarantined:
+                if stats.quarantine_until_ts and current_ts < stats.quarantine_until_ts:
+                    # Still in quarantine, skip
+                    logger.debug(f"Skipping quarantined endpoint: {url}")
+                    continue
+                else:
+                    # Quarantine expired, give it another chance
+                    stats.quarantined = False
+                    stats.quarantine_until_ts = None
+                    logger.info(f"Endpoint released from quarantine: {url}")
+            
             stats.total_requests += 1
             
             payload = {
@@ -168,6 +190,7 @@ class RPCProvider:
                     error_msg = result["error"].get("message", str(result["error"]))
                     stats.failed_requests += 1
                     stats.last_error = error_msg
+                    self._check_quarantine(stats)
                     last_error = InfraError(
                         code=ErrorCode.INFRA_RPC_ERROR,
                         message=f"RPC error: {error_msg}",
@@ -191,6 +214,7 @@ class RPCProvider:
                 latency_ms = int(time.time() * 1000) - start_ms
                 stats.failed_requests += 1
                 stats.last_error = f"Timeout after {latency_ms}ms"
+                self._check_quarantine(stats)
                 last_error = e
                 logger.debug(f"RPC timeout for {url}: {latency_ms}ms")
                 continue
@@ -198,6 +222,7 @@ class RPCProvider:
             except Exception as e:
                 stats.failed_requests += 1
                 stats.last_error = str(e)
+                self._check_quarantine(stats)
                 last_error = e
                 logger.debug(f"RPC failed for {url}: {e}")
                 continue
@@ -212,6 +237,20 @@ class RPCProvider:
                 "last_error": str(last_error),
             },
         )
+    
+    def _check_quarantine(self, stats: RPCStats) -> None:
+        """Check if endpoint should be quarantined based on success rate."""
+        if stats.total_requests < MIN_REQUESTS_FOR_QUARANTINE:
+            return  # Not enough data yet
+        
+        if stats.success_rate < MIN_SUCCESS_RATE_FOR_ACTIVE:
+            if not stats.quarantined:
+                stats.quarantined = True
+                stats.quarantine_until_ts = int(time.time() * 1000) + QUARANTINE_DURATION_MS
+                logger.warning(
+                    f"Endpoint quarantined: {stats.url} "
+                    f"(success_rate={stats.success_rate:.1%}, requests={stats.total_requests})"
+                )
     
     async def get_chain_id(self) -> int:
         """Get chain ID from RPC."""
@@ -270,6 +309,7 @@ class RPCProvider:
                 "success_rate": round(s.success_rate, 3),
                 "avg_latency_ms": s.avg_latency_ms,
                 "last_error": s.last_error,
+                "quarantined": s.quarantined,
             }
             for url, s in self.stats.items()
         }

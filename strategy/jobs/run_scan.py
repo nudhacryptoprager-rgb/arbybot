@@ -1254,7 +1254,7 @@ async def run_scan_cycle(
         )
     
     summary = {
-        "schema_version": "2026-01-13a",  # a = confidence-gated executable
+        "schema_version": "2026-01-13b",  # b = adaptive gates, RPC quarantine, confidence-gated exec
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE

@@ -60,6 +60,9 @@ class HealthMetrics:
     
     # Rejects
     top_reject_reasons: list[tuple[str, int]]
+    
+    # Optional stats (with defaults)
+    rpc_endpoints_quarantined: int = 0
 
 
 @dataclass
@@ -339,6 +342,14 @@ def generate_truth_report(
                 rpc_latency_weighted += latency * requests
                 rpc_endpoint_count += 1
     
+    # Count quarantined endpoints
+    rpc_quarantined = 0
+    if cycle_summaries:
+        last_cycle = cycle_summaries[-1]
+        for url, stats in last_cycle.get("rpc_stats", {}).items():
+            if stats.get("quarantined", False):
+                rpc_quarantined += 1
+    
     # Calculate health metrics
     fetch_rate = total_fetched / total_attempted if total_attempted > 0 else 0.0
     gate_pass_rate = total_passed / total_fetched if total_fetched > 0 else 0.0
@@ -355,6 +366,7 @@ def generate_truth_report(
         rpc_success_rate=round(rpc_success_rate, 3),
         rpc_avg_latency_ms=rpc_avg_latency,
         rpc_total_requests=rpc_total_requests,
+        rpc_endpoints_quarantined=rpc_quarantined,
         quote_fetch_rate=round(fetch_rate, 3),
         quote_gate_pass_rate=round(gate_pass_rate, 3),
         chains_active=len(chains_seen),
@@ -493,7 +505,8 @@ def print_truth_report(report: TruthReport) -> None:
     
     print("\n--- HEALTH ---")
     h = report.health
-    print(f"RPC: {h.rpc_success_rate:.1%} success ({h.rpc_total_requests} requests), {h.rpc_avg_latency_ms}ms avg")
+    rpc_quarantine_info = f", {h.rpc_endpoints_quarantined} quarantined" if h.rpc_endpoints_quarantined > 0 else ""
+    print(f"RPC: {h.rpc_success_rate:.1%} success ({h.rpc_total_requests} requests){rpc_quarantine_info}, {h.rpc_avg_latency_ms}ms avg")
     print(f"Quotes: {h.quote_fetch_rate:.1%} fetch, {h.quote_gate_pass_rate:.1%} pass gates")
     print(f"Coverage: {h.chains_active} chains, {h.dexes_active} DEXes, {h.pairs_covered} pairs")
     print(f"Pools scanned: {h.pools_scanned}")
