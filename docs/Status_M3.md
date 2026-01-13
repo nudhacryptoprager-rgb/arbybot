@@ -2,7 +2,7 @@
 
 **Дата:** 2026-01-13  
 **Milestone:** M3 — Opportunity Engine  
-**Статус:** ✅ **STABLE** | **Schema:** 2026-01-12h
+**Статус:** ✅ **STABLE** | **Schema:** 2026-01-13a
 
 ---
 
@@ -19,89 +19,89 @@
 | **pairs_covered fix** | ✅ COMPLETE |
 | **CODE_ERROR status** | ✅ COMPLETE |
 | **ErrorCode contract test** | ✅ COMPLETE |
+| **Confidence-gated executable** | ✅ COMPLETE |
 | Provider health policy | ⏳ Next |
 
 ---
 
-## 2. Verified API Contract
+## 2. Confidence-Gated Executable (NEW)
 
-### apply_single_quote_gates
+### Problem
+Spreads with `plausibility=0.2` were still marked `executable=true`.
+
+### Solution
 ```python
-def apply_single_quote_gates(
-    quote: Quote,
-    anchor_price: Decimal | None = None,
-    is_anchor_dex: bool = False,    # ← 3rd argument
-) -> list[GateResult]:
+# executable = verified AND profitable AND plausible AND confident
+MIN_CONFIDENCE_FOR_EXEC = 0.5
+is_confident = confidence >= MIN_CONFIDENCE_FOR_EXEC
+executable_final = buy_exec and sell_exec and is_profitable and is_plausible and is_confident
 ```
 
-### ErrorCodes used by gates
-All verified to exist in `core/exceptions.py`:
-- QUOTE_ZERO_OUTPUT
-- QUOTE_GAS_TOO_HIGH  
-- TICKS_CROSSED_TOO_MANY
-- QUOTE_STALE_BLOCK
-- PRICE_ANCHOR_MISSING
-- PRICE_SANITY_FAILED
-- SLIPPAGE_TOO_HIGH
-- QUOTE_INCONSISTENT
+### Spread Schema
+```json
+{
+  "spread_bps": 45,
+  "net_pnl_bps": 32,
+  "profitable": true,
+  "plausible": true,
+  "confidence": 0.78,
+  "confidence_breakdown": {
+    "freshness": 1.0,
+    "ticks": 0.9,
+    "verification": 1.0,
+    "profitability": 0.6,
+    "gas_efficiency": 0.8,
+    "rpc_health": 0.95,
+    "plausibility": 1.0,
+    "final": 0.78
+  },
+  "executable": true
+}
+```
+
+### Execution Gates
+| Gate | Threshold | Effect |
+|------|-----------|--------|
+| `buy_exec` | DEX verified | Block |
+| `sell_exec` | DEX verified | Block |
+| `profitable` | net_pnl_bps > 0 | Block |
+| `plausible` | spread_bps ≤ 500 | Block |
+| `confident` | confidence ≥ 0.5 | Block |
 
 ---
 
-## 3. Invariant
+## 3. Tests
 
-```
-passed + rejected_by_gates + code_errors == fetched
-```
+**208 passed ✅**
 
 ---
 
-## 4. Tests
+## 4. Files Changed
 
-**208 passed ✅** (+1 ErrorCode contract test)
+| File | Changes |
+|------|---------|
+| `strategy/jobs/run_scan.py` | Confidence calculation per spread, confidence-gated executable |
 
 ---
 
 ## 5. CLI
 
 ```bash
-# Single cycle
-python -m strategy.jobs.run_scan --chain arbitrum_one --once --smoke
-
-# Multiple cycles  
-python -m strategy.jobs.run_scan --chain arbitrum_one --cycles 5 --smoke
-
-# With paper trading
+# Single cycle with paper trading
 python -m strategy.jobs.run_scan --once --smoke --paper-trading --no-json-logs
 ```
 
----
-
-## 6. Files (must be in sync)
-
-| File | Key Changes |
-|------|-------------|
-| `strategy/gates.py` | `apply_single_quote_gates(quote, anchor_price, is_anchor_dex)` |
-| `strategy/jobs/run_scan.py` | Call with 3 args, code_errors counter |
-| `core/exceptions.py` | PRICE_ANCHOR_MISSING, all gate ErrorCodes |
-| `monitoring/truth_report.py` | pairs_covered from pairs_scanned |
+**Expected:**
+- `executable=true` only if `confidence >= 0.5`
+- Low plausibility spreads blocked from execution
 
 ---
 
-## 7. Top Reject Reasons Analysis
-
-From latest scan:
-- **PRICE_SANITY_FAILED** (13) - deviation_too_high, mostly sushiswap_v3 vs uniswap_v3 anchor
-- **QUOTE_GAS_TOO_HIGH** (12) - gas > threshold  
-- **TICKS_CROSSED_TOO_MANY** (9) - illiquid pools
-- **QUOTE_REVERT** (6) - QuoterV2 call failures
-
----
-
-## 8. Next Steps
+## 6. Next Steps
 
 1. **RPC health routing** - quarantine bad endpoints
-2. **Adaptive gates** - gas/ticks limits by amount_in  
-3. **Pool quarantine** - track PRICE_SANITY_FAILED count
+2. **PRICE_SANITY_FAILED analysis** - deviation details in reports
+3. **Adaptive gates** - gas/ticks limits by amount_in
 
 ---
 

@@ -53,7 +53,7 @@ from strategy.paper_trading import (
     calculate_pnl_usdc,
 )
 from discovery.registry import PoolRegistry, load_registry, PoolCandidate
-from monitoring.truth_report import generate_truth_report, save_truth_report, print_truth_report
+from monitoring.truth_report import generate_truth_report, save_truth_report, print_truth_report, calculate_confidence
 
 logger = get_logger("arby.scan")
 
@@ -1005,9 +1005,52 @@ async def run_scan_cycle(
                         spread_id = f"{pair}_{buy_dex}_{sell_dex}_{fee}_{amount_in_str}"
                         
                         # P0 FIX: executable must be false if unprofitable
-                        # executable = verified_for_execution AND profitable
+                        # executable = verified_for_execution AND profitable AND plausible AND confident
                         is_profitable = net_pnl_bps > 0
-                        executable_final = buy_exec and sell_exec and is_profitable
+                        
+                        # Plausibility gate: very high spreads are suspicious
+                        # 500 bps (5%) is max believable for legitimate arb
+                        MAX_PLAUSIBLE_SPREAD_BPS = 500
+                        is_plausible = spread_bps <= MAX_PLAUSIBLE_SPREAD_BPS
+                        
+                        # Calculate confidence for this spread
+                        # Build minimal spread dict for confidence calculation
+                        spread_for_conf = {
+                            "spread_bps": spread_bps,
+                            "net_pnl_bps": net_pnl_bps,
+                            "gas_cost_bps": gas_cost_bps,
+                            "buy_leg": {
+                                "ticks_crossed": buy_quote.ticks_crossed,
+                                "latency_ms": buy_quote.latency_ms,
+                                "verified_for_execution": buy_exec,
+                            },
+                            "sell_leg": {
+                                "ticks_crossed": sell_quote.ticks_crossed,
+                                "latency_ms": sell_quote.latency_ms,
+                                "verified_for_execution": sell_exec,
+                            },
+                            "executable": True,  # Temp, will be recalculated
+                        }
+                        
+                        # Get RPC stats for confidence (use provider directly)
+                        try:
+                            current_rpc_stats = provider.get_stats_summary()
+                            total_requests = sum(s.get("total_requests", 0) for s in current_rpc_stats.values())
+                            successful_requests = sum(
+                                int(s.get("total_requests", 0) * s.get("success_rate", 0)) 
+                                for s in current_rpc_stats.values()
+                            )
+                            rpc_success = successful_requests / total_requests if total_requests > 0 else 1.0
+                        except Exception:
+                            rpc_success = 1.0  # Default if stats unavailable
+                        
+                        confidence, conf_breakdown = calculate_confidence(spread_for_conf, rpc_success_rate=rpc_success)
+                        
+                        # Confidence threshold for execution
+                        MIN_CONFIDENCE_FOR_EXEC = 0.5
+                        is_confident = confidence >= MIN_CONFIDENCE_FOR_EXEC
+                        
+                        executable_final = buy_exec and sell_exec and is_profitable and is_plausible and is_confident
                         
                         # Extended spread schema with both legs
                         spread_data = {
@@ -1040,6 +1083,9 @@ async def run_scan_cycle(
                             "gas_cost_bps": gas_cost_bps,
                             "net_pnl_bps": net_pnl_bps,
                             "profitable": is_profitable,
+                            "plausible": is_plausible,
+                            "confidence": round(confidence, 3),
+                            "confidence_breakdown": conf_breakdown,
                             "executable": executable_final,
                         }
                         spreads.append(spread_data)
@@ -1208,7 +1254,7 @@ async def run_scan_cycle(
         )
     
     summary = {
-        "schema_version": "2026-01-12h",  # h = code_errors counter, pairs_covered fix
+        "schema_version": "2026-01-13a",  # a = confidence-gated executable
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE
