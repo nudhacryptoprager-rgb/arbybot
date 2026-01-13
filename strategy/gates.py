@@ -107,24 +107,44 @@ def gate_freshness(quote: Quote) -> GateResult:
 def gate_price_sanity(
     quote: Quote,
     anchor_price: Decimal | None,
+    is_anchor_dex: bool = False,
     max_deviation_bps: int = MAX_PRICE_DEVIATION_BPS,
 ) -> GateResult:
     """
     Reject if price deviates too much from anchor.
     
+    P0 FIX: Non-anchor quotes WITHOUT anchor_price are REJECTED.
+    This prevents "phantom opportunities" where only one DEX quotes.
+    
     This catches:
     - Invalid pool/fee tier combos that return garbage prices
     - Quoter bugs
     - Pools with no real liquidity returning synthetic prices
+    - Single-DEX quotes that can't be validated
     
     Args:
         quote: Quote to validate
         anchor_price: Reference price from anchor DEX (e.g., Uniswap V3)
+        is_anchor_dex: True if this quote is from the anchor DEX
         max_deviation_bps: Maximum allowed deviation in basis points
     """
-    if anchor_price is None or anchor_price == 0:
-        # No anchor to compare - pass through (first quote sets anchor)
+    # If this IS the anchor DEX, it sets the anchor - always pass
+    if is_anchor_dex:
         return GateResult(passed=True)
+    
+    # P0 FIX: Non-anchor quote without anchor = REJECT
+    # This prevents "phantom" opportunities from single-DEX quotes
+    if anchor_price is None or anchor_price == 0:
+        return GateResult(
+            passed=False,
+            reject_code=ErrorCode.PRICE_ANCHOR_MISSING,
+            details={
+                "reason": "no_anchor_price",
+                "dex_id": quote.pool.dex_id,
+                "fee": quote.pool.fee,
+                "quote_price": str(calculate_implied_price(quote)),
+            },
+        )
     
     quote_price = calculate_implied_price(quote)
     
@@ -300,6 +320,7 @@ def gate_monotonicity(quotes: list[Quote]) -> GateResult:
 def apply_single_quote_gates(
     quote: Quote,
     anchor_price: Decimal | None = None,
+    is_anchor_dex: bool = False,
 ) -> list[GateResult]:
     """
     Apply all single-quote gates.
@@ -308,13 +329,14 @@ def apply_single_quote_gates(
     Args:
         quote: Quote to validate
         anchor_price: Reference price from anchor DEX (for sanity check)
+        is_anchor_dex: True if this quote is from the anchor DEX
     """
     gates = [
         gate_zero_output(quote),
         gate_gas_estimate(quote),
         gate_ticks_crossed(quote),
         gate_freshness(quote),
-        gate_price_sanity(quote, anchor_price),
+        gate_price_sanity(quote, anchor_price, is_anchor_dex),
     ]
     
     return [g for g in gates if not g.passed]

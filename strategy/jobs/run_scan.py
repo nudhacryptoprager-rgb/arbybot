@@ -581,6 +581,7 @@ async def run_scan_cycle(
     quotes_attempted = 0
     quotes_fetched = 0
     quotes_rejected_by_gates = 0  # Fetched but failed gates
+    quotes_code_errors = 0  # Fetched but caused TypeError/AttributeError during processing
     quotes_passed_gates = 0
     quotes_list: list[dict] = []
     block_number = None
@@ -879,7 +880,9 @@ async def run_scan_cycle(
                         error_code = ErrorCode.VALIDATION_ERROR
                     
                     quote_reject_reasons[error_code.value] += 1
-                    # Note: NOT incrementing quotes_rejected_by_gates - this is a fetch error
+                    # This error happened AFTER fetch (quote was received)
+                    # So count it as code_error, not as gate rejection
+                    quotes_code_errors += 1
                     
                     # Add detailed sample for debugging with traceback
                     session.add_reject_sample(RejectSample(
@@ -1171,12 +1174,13 @@ async def run_scan_cycle(
             f"passed({quotes_passed_gates}) > fetched({quotes_fetched})"
         )
     
-    # Invariant 3: passed + rejected_by_gates = fetched
-    # This should be exact equality since rejected_by_gates only counts fetched quotes
-    if quotes_passed_gates + quotes_rejected_by_gates != quotes_fetched:
+    # Invariant 3: passed + rejected_by_gates + code_errors = fetched
+    # All fetched quotes must end up in one of these buckets
+    total_processed = quotes_passed_gates + quotes_rejected_by_gates + quotes_code_errors
+    if total_processed != quotes_fetched:
         invariant_errors.append(
-            f"passed({quotes_passed_gates}) + rejected_by_gates({quotes_rejected_by_gates}) "
-            f"!= fetched({quotes_fetched})"
+            f"passed({quotes_passed_gates}) + rejected({quotes_rejected_by_gates}) + code_errors({quotes_code_errors}) "
+            f"= {total_processed} != fetched({quotes_fetched})"
         )
     
     # Calculate rates
@@ -1197,13 +1201,14 @@ async def run_scan_cycle(
                 "fetched": quotes_fetched,
                 "passed": quotes_passed_gates,
                 "rejected_by_gates": quotes_rejected_by_gates,
+                "code_errors": quotes_code_errors,
                 "fetch_failed": quotes_fetch_failed,
                 "histogram_sum": total_reject_reasons,
             }}
         )
     
     summary = {
-        "schema_version": "2026-01-12g",  # g = counter fix + --cycles
+        "schema_version": "2026-01-12h",  # h = code_errors counter, pairs_covered fix
         "chain": chain_key,
         "chain_id": chain_id,
         "mode": mode,  # REGISTRY or SMOKE
@@ -1230,6 +1235,7 @@ async def run_scan_cycle(
         "quotes_fetched": quotes_fetched,
         "quotes_fetch_failed": quotes_fetch_failed,  # = attempted - fetched (RPC/decode errors)
         "quotes_rejected_by_gates": quotes_rejected_by_gates,  # Fetched but failed gates
+        "quotes_code_errors": quotes_code_errors,  # Fetched but TypeError/AttributeError during processing
         "quotes_passed_gates": quotes_passed_gates,
         # Rates
         "fetch_rate": round(fetch_rate, 4),
@@ -1246,7 +1252,8 @@ async def run_scan_cycle(
         # Reject histogram (reasons, not unique quotes)
         "reject_reasons_histogram": dict(quote_reject_reasons),
         "reject_reasons_total": total_reject_reasons,  # Sum of histogram
-        "status": "OK" if quotes_passed_gates > 0 else "NO_QUOTES",
+        # Status: OK if quotes passed, CODE_ERROR if code bugs, NO_QUOTES otherwise
+        "status": "OK" if quotes_passed_gates > 0 else ("CODE_ERROR" if quotes_code_errors > 0 else "NO_QUOTES"),
     }
     
     session.record_cycle(summary)

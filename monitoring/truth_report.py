@@ -314,8 +314,10 @@ def generate_truth_report(
         for dex in cycle.get("dexes_passed_gate", []):
             dexes_seen.add(dex.get("dex_key"))
         
-        for quote in cycle.get("quotes", []):
-            pairs_seen.add(quote.get("pair"))
+        # Get pairs from cycle summary (not from quotes which may be empty)
+        for pair in cycle.get("pairs_scanned", []):
+            if pair:
+                pairs_seen.add(pair)
         
         # Spreads
         all_spreads.extend(cycle.get("spreads", []))
