@@ -45,6 +45,7 @@ ANCHOR_DEX = "uniswap_v3"
 
 # Gas limits by amount_in (wei) - smaller trades need tighter limits
 GAS_LIMITS_BY_SIZE = {
+    10**16: 200_000,   # 0.01 ETH - very tight (for retry smaller)
     10**17: 300_000,   # 0.1 ETH - tight
     10**18: 500_000,   # 1 ETH - standard
     10**19: 800_000,   # 10 ETH - larger trades allowed more gas
@@ -52,10 +53,64 @@ GAS_LIMITS_BY_SIZE = {
 
 # Ticks limits by amount_in (wei) - smaller trades should cross fewer ticks
 TICKS_LIMITS_BY_SIZE = {
+    10**16: 3,    # 0.01 ETH - ultra tight (for retry smaller)
     10**17: 5,    # 0.1 ETH - very tight
     10**18: 10,   # 1 ETH - standard
     10**19: 20,   # 10 ETH - more impact allowed for larger trades
 }
+
+
+# =============================================================================
+# ADAPTIVE AMOUNT SIZING
+# =============================================================================
+
+# Standard test amounts (wei)
+STANDARD_AMOUNTS = [
+    10**16,   # 0.01 ETH - micro
+    10**17,   # 0.1 ETH - small
+    10**18,   # 1 ETH - standard
+]
+
+
+def suggest_smaller_amount(
+    current_amount: int,
+    reject_reason: str,
+) -> int | None:
+    """
+    Suggest a smaller amount based on rejection reason.
+    
+    Team Lead directive:
+    "Gas gate: зробити адаптивний amount_in (менше amount → менше ticks → менше gas)
+    або separate bucket 'too expensive, retry smaller'."
+    
+    Returns:
+        Smaller amount to try, or None if already at minimum
+    """
+    # Find current bracket (largest std_amount <= current_amount)
+    bracket_idx = -1
+    for i, std_amount in enumerate(STANDARD_AMOUNTS):
+        if current_amount >= std_amount:
+            bracket_idx = i
+    
+    # If found a bracket and it's not the minimum, suggest one step down
+    if bracket_idx > 0:
+        return STANDARD_AMOUNTS[bracket_idx - 1]
+    
+    # Already at minimum or below
+    return None
+
+
+def get_retry_amounts(base_amount: int) -> list[int]:
+    """
+    Get list of amounts to try if base_amount fails gates.
+    
+    Returns amounts from base down to minimum, excluding base.
+    """
+    retry = []
+    for std_amount in reversed(STANDARD_AMOUNTS):
+        if std_amount < base_amount:
+            retry.append(std_amount)
+    return retry
 
 
 def get_adaptive_gas_limit(amount_in: int) -> int:

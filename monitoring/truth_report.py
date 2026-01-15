@@ -80,12 +80,15 @@ class TruthReport:
     executable_spreads: int
     blocked_spreads: int
     
+    # Blocked reasons breakdown (Team Lead Krок 6)
+    blocked_reasons: dict | None = None
+    
     # Cumulative PnL
-    total_pnl_bps: int
-    total_pnl_usdc: float
+    total_pnl_bps: int = 0
+    total_pnl_usdc: float = 0.0
     
     def to_dict(self) -> dict:
-        return {
+        result = {
             "timestamp": self.timestamp,
             "mode": self.mode,
             "health": asdict(self.health),
@@ -101,12 +104,20 @@ class TruthReport:
                 "total_usdc": self.total_pnl_usdc,
             },
         }
+        
+        # Add blocked reasons breakdown if available
+        if self.blocked_reasons:
+            result["blocked_reasons_breakdown"] = self.blocked_reasons
+        
+        return result
 
 
 def calculate_confidence(
     spread: dict,
     rpc_success_rate: float = 1.0,
     block_age_ms: int = 0,
+    price_sanity_history: dict | None = None,
+    gas_history: dict | None = None,
 ) -> tuple[float, dict]:
     """
     Calculate confidence score for a spread (0.0 - 1.0).
@@ -122,6 +133,8 @@ def calculate_confidence(
     - gas_efficiency: gas_cost_bps / spread_bps ratio
     - rpc_health: provider reliability
     - plausibility: economic sanity check
+    - price_sanity_penalty: penalty for borderline PRICE_SANITY (Team Lead Крок 7)
+    - gas_penalty: penalty for QUOTE_GAS_TOO_HIGH history (Team Lead Крок 7)
     """
     breakdown = {}
     
@@ -131,6 +144,28 @@ def calculate_confidence(
     net_bps = spread.get("net_pnl_bps", 0)
     buy_leg = spread.get("buy_leg", {})
     sell_leg = spread.get("sell_leg", {})
+    
+    # Team Lead Крок 5: Ensure gas_cost_bps is non-zero when we have gas data
+    # If gas_bps is 0 but we have gas estimates, calculate rough gas cost
+    if gas_bps == 0:
+        buy_gas = buy_leg.get("gas_estimate", 0) or 0
+        sell_gas = sell_leg.get("gas_estimate", 0) or 0
+        total_gas = buy_gas + sell_gas
+        
+        if total_gas > 0:
+            # Estimate gas cost: ~0.01-0.02 gwei on L2, ~$0.01-0.05 per trade
+            # Rough: 200k gas * 0.02 gwei * $3000/ETH = $0.012
+            # As BPS of $100 trade: ~1-2 bps
+            amount_in = int(spread.get("amount_in", 0) or 0)
+            if amount_in > 0:
+                # Estimate: 1 bps per 100k gas for 0.1 ETH trades
+                # Scale inversely with amount
+                base_gas_bps = max(1, total_gas // 100_000)
+                size_factor = 10**17 / max(amount_in, 10**16)  # 0.1 ETH reference
+                gas_bps = max(1, int(base_gas_bps * size_factor))
+                
+                # Update spread for reporting
+                spread["gas_cost_bps_estimated"] = gas_bps
     
     # 1. FRESHNESS SCORE (0.0 - 1.0)
     # Lower latency = better
@@ -242,18 +277,56 @@ def calculate_confidence(
     
     breakdown["plausibility"] = plausibility_score
     
+    # 8. PRICE SANITY PENALTY (Team Lead Крок 7)
+    # Penalty for spreads from combinations with PRICE_SANITY history
+    price_sanity_penalty = 0.0
+    if price_sanity_history:
+        pair = spread.get("pair", "")
+        buy_dex = buy_leg.get("dex", spread.get("buy_dex", ""))
+        sell_dex = sell_leg.get("dex", spread.get("sell_dex", ""))
+        fee = spread.get("fee", 0)
+        
+        # Check if this combination has price sanity issues
+        for combo_key in [f"{pair}_{buy_dex}_{fee}", f"{pair}_{sell_dex}_{fee}"]:
+            failure_rate = price_sanity_history.get(combo_key, 0)
+            if failure_rate > 0.3:  # >30% failure rate
+                price_sanity_penalty = max(price_sanity_penalty, failure_rate * 0.3)
+    
+    breakdown["price_sanity_penalty"] = round(price_sanity_penalty, 3)
+    
+    # 9. GAS HISTORY PENALTY (Team Lead Крок 7)
+    # Penalty for spreads from combinations with QUOTE_GAS_TOO_HIGH history
+    gas_penalty = 0.0
+    if gas_history:
+        pair = spread.get("pair", "")
+        buy_dex = buy_leg.get("dex", spread.get("buy_dex", ""))
+        sell_dex = sell_leg.get("dex", spread.get("sell_dex", ""))
+        fee = spread.get("fee", 0)
+        
+        # Check if this combination has gas issues
+        for combo_key in [f"{pair}_{buy_dex}_{fee}", f"{pair}_{sell_dex}_{fee}"]:
+            failure_rate = gas_history.get(combo_key, 0)
+            if failure_rate > 0.3:  # >30% failure rate
+                gas_penalty = max(gas_penalty, failure_rate * 0.2)
+    
+    breakdown["gas_penalty"] = round(gas_penalty, 3)
+    
     # WEIGHTED AVERAGE
     weights = {
-        "freshness": 0.15,
-        "ticks": 0.15,
-        "verification": 0.20,
+        "freshness": 0.12,
+        "ticks": 0.12,
+        "verification": 0.18,
         "profitability": 0.15,
         "gas_efficiency": 0.10,
-        "rpc_health": 0.10,
+        "rpc_health": 0.08,
         "plausibility": 0.15,
     }
     
-    total_score = sum(breakdown[k] * weights[k] for k in weights)
+    base_score = sum(breakdown[k] * weights[k] for k in weights)
+    
+    # Apply penalties (subtract from base score)
+    total_penalty = price_sanity_penalty + gas_penalty
+    total_score = max(0.0, base_score - total_penalty)
     
     # Hard caps: if not executable or not profitable, cap at 0.5
     if not spread.get("executable"):

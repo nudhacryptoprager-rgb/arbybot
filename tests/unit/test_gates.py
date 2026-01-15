@@ -21,10 +21,13 @@ from strategy.gates import (
     calculate_slippage_bps,
     apply_single_quote_gates,
     apply_curve_gates,
+    suggest_smaller_amount,
+    get_retry_amounts,
     GateResult,
     MAX_SLIPPAGE_BPS,
     MAX_GAS_ESTIMATE,
     MAX_TICKS_CROSSED,
+    STANDARD_AMOUNTS,
 )
 
 
@@ -523,3 +526,146 @@ class TestAdaptiveLimits:
         assert not result.passed
         assert result.reject_code == ErrorCode.TICKS_CROSSED_TOO_MANY
         assert result.details["max_ticks"] == 5
+
+
+# =============================================================================
+# ADAPTIVE AMOUNT SIZING TESTS (Team Lead Крок 4)
+# =============================================================================
+
+class TestAdaptiveAmountSizing:
+    """Tests for suggest_smaller_amount and get_retry_amounts."""
+    
+    def test_suggest_smaller_amount_from_1_eth(self):
+        """1 ETH → 0.1 ETH."""
+        smaller = suggest_smaller_amount(10**18, "QUOTE_GAS_TOO_HIGH")
+        assert smaller == 10**17
+    
+    def test_suggest_smaller_amount_from_0_1_eth(self):
+        """0.1 ETH → 0.01 ETH."""
+        smaller = suggest_smaller_amount(10**17, "TICKS_CROSSED_TOO_MANY")
+        assert smaller == 10**16
+    
+    def test_suggest_smaller_amount_at_minimum(self):
+        """0.01 ETH → None (already at minimum)."""
+        smaller = suggest_smaller_amount(10**16, "QUOTE_GAS_TOO_HIGH")
+        assert smaller is None
+    
+    def test_suggest_smaller_amount_very_small(self):
+        """Below minimum → None."""
+        smaller = suggest_smaller_amount(10**15, "QUOTE_GAS_TOO_HIGH")
+        assert smaller is None
+    
+    def test_get_retry_amounts_from_1_eth(self):
+        """1 ETH → [0.1, 0.01]."""
+        retries = get_retry_amounts(10**18)
+        assert retries == [10**17, 10**16]
+    
+    def test_get_retry_amounts_from_0_1_eth(self):
+        """0.1 ETH → [0.01]."""
+        retries = get_retry_amounts(10**17)
+        assert retries == [10**16]
+    
+    def test_get_retry_amounts_at_minimum(self):
+        """0.01 ETH → []."""
+        retries = get_retry_amounts(10**16)
+        assert retries == []
+    
+    def test_standard_amounts_order(self):
+        """STANDARD_AMOUNTS should be sorted ascending."""
+        assert STANDARD_AMOUNTS == sorted(STANDARD_AMOUNTS)
+
+
+# =============================================================================
+# QUARANTINE SYSTEM TESTS (Team Lead Крок 1)
+# =============================================================================
+
+class TestQuarantineSystem:
+    """Tests for quarantine manager."""
+    
+    def test_quarantine_import(self):
+        """Quarantine module should import."""
+        from discovery.quarantine import (
+            QuarantineManager,
+            is_excluded_combination,
+            EXCLUDED_COMBINATIONS,
+        )
+        assert QuarantineManager is not None
+    
+    def test_excluded_combination_wsteth_weth(self):
+        """wstETH/WETH on sushiswap_v3 fee=3000 should be excluded."""
+        from discovery.quarantine import is_excluded_combination
+        
+        assert is_excluded_combination("wstETH/WETH", "sushiswap_v3", 3000) is True
+        assert is_excluded_combination("WETH/wstETH", "sushiswap_v3", 3000) is True
+    
+    def test_non_excluded_combination(self):
+        """WETH/USDC on uniswap_v3 should NOT be excluded."""
+        from discovery.quarantine import is_excluded_combination
+        
+        assert is_excluded_combination("WETH/USDC", "uniswap_v3", 500) is False
+    
+    def test_quarantine_manager_singleton(self):
+        """Quarantine manager singleton should work."""
+        from discovery.quarantine import get_quarantine_manager, reset_quarantine_manager
+        
+        reset_quarantine_manager()
+        mgr1 = get_quarantine_manager()
+        mgr2 = get_quarantine_manager()
+        assert mgr1 is mgr2
+        reset_quarantine_manager()
+
+
+# =============================================================================
+# QUALITY KPI TESTS (Team Lead Крок 8)
+# =============================================================================
+
+class TestQualityKPIs:
+    """Tests for quality KPI tracking."""
+    
+    def test_kpi_import(self):
+        """Quality KPI module should import."""
+        from monitoring.quality_kpis import (
+            QualityKPITracker,
+            CycleMetrics,
+            KPIReport,
+            BASELINE_REJECTS,
+            REJECT_TARGETS,
+        )
+        assert QualityKPITracker is not None
+    
+    def test_baseline_rejects_defined(self):
+        """Baseline rejects should be defined from Team Lead analysis."""
+        from monitoring.quality_kpis import BASELINE_REJECTS
+        
+        assert "QUOTE_GAS_TOO_HIGH" in BASELINE_REJECTS
+        assert "PRICE_SANITY_FAILED" in BASELINE_REJECTS
+        assert BASELINE_REJECTS["QUOTE_GAS_TOO_HIGH"] == 260
+        assert BASELINE_REJECTS["PRICE_SANITY_FAILED"] == 240
+    
+    def test_reject_targets_calculated(self):
+        """Reject targets should be calculated from baseline."""
+        from monitoring.quality_kpis import REJECT_TARGETS
+        
+        gas_targets = REJECT_TARGETS["QUOTE_GAS_TOO_HIGH"]
+        assert gas_targets["baseline"] == 260
+        assert gas_targets["target_30"] == 182  # 260 * 0.7
+        assert gas_targets["target_50"] == 130  # 260 * 0.5
+    
+    def test_cycle_metrics_rates(self):
+        """CycleMetrics should calculate rates correctly."""
+        from monitoring.quality_kpis import CycleMetrics
+        
+        metrics = CycleMetrics(
+            cycle_number=1,
+            timestamp="2026-01-15T10:00:00Z",
+            quotes_attempted=100,
+            quotes_fetched=90,
+            quotes_passed_gates=72,
+            total_spreads=50,
+            executable_spreads=35,
+            blocked_spreads=15,
+        )
+        
+        assert metrics.fetch_rate == 0.9
+        assert metrics.gate_pass_rate == 0.8
+        assert metrics.execution_rate == 0.7
