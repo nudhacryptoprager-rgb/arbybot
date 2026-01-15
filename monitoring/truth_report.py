@@ -35,17 +35,16 @@ class OpportunityRank:
     gas_cost_bps: int
     net_pnl_bps: int
     expected_pnl_usdc: float
-    confidence: float  # 0.0 - 1.0
+    confidence: float = 0.0  # 0.0 - 1.0
     confidence_breakdown: dict | None = None  # Component scores
     
-    # Team Lead Крок 5: Розділити executable на 2 прапори
+    # КРИТИЧНО: executable має бути реальним полем для backward compatibility
+    # Team Lead: "executable: bool = False (або bool | None з дефолтом)"
+    executable: bool = False
+    
+    # Team Lead Крок 5: Розділити executable на 2 прапори (додаткові)
     paper_executable: bool = False   # Passes all gates on paper
     execution_ready: bool = False    # verified_for_execution + router ready
-    
-    # Legacy alias for backwards compatibility
-    @property
-    def executable(self) -> bool:
-        return self.paper_executable
 
 
 @dataclass
@@ -95,35 +94,22 @@ class TruthReport:
     # Blocked reasons breakdown
     blocked_reasons: dict | None = None
     
-    # Team Lead Крок 6: Separate signal PnL vs would_execute PnL
-    # signal_pnl = sum of all detected opportunities (inflated)
-    # would_execute_pnl = only from would_execute trades (realistic)
+    # КРИТИЧНО: total_pnl_bps/usdc мають бути реальними полями для backward compatibility
+    total_pnl_bps: int = 0
+    total_pnl_usdc: float = 0.0
+    
+    # Team Lead Крок 6: Separate signal PnL vs would_execute PnL (додаткові)
     signal_pnl_bps: int = 0
     signal_pnl_usdc: float = 0.0
     would_execute_pnl_bps: int = 0
     would_execute_pnl_usdc: float = 0.0
-    
-    # Legacy aliases for backwards compatibility
-    @property
-    def total_pnl_bps(self) -> int:
-        return self.would_execute_pnl_bps
-    
-    @property
-    def total_pnl_usdc(self) -> float:
-        return self.would_execute_pnl_usdc
     
     def to_dict(self) -> dict:
         result = {
             "timestamp": self.timestamp,
             "mode": self.mode,
             "health": asdict(self.health),
-            "top_opportunities": [
-                {
-                    **asdict(o),
-                    "executable": o.paper_executable,  # Legacy field
-                }
-                for o in self.top_opportunities
-            ],
+            "top_opportunities": [asdict(o) for o in self.top_opportunities],
             "stats": {
                 "total_spreads": self.total_spreads,
                 "profitable_spreads": self.profitable_spreads,
@@ -133,17 +119,17 @@ class TruthReport:
                 "paper_executable_count": self.paper_executable_count,
                 "execution_ready_count": self.execution_ready_count,
             },
+            # Legacy cumulative_pnl for backwards compatibility
+            "cumulative_pnl": {
+                "total_bps": self.total_pnl_bps,
+                "total_usdc": self.total_pnl_usdc,
+            },
             # Team Lead Крок 6: Separate PnL metrics
             "pnl": {
                 "signal_pnl_bps": self.signal_pnl_bps,
                 "signal_pnl_usdc": self.signal_pnl_usdc,
                 "would_execute_pnl_bps": self.would_execute_pnl_bps,
                 "would_execute_pnl_usdc": self.would_execute_pnl_usdc,
-            },
-            # Legacy cumulative_pnl for backwards compatibility
-            "cumulative_pnl": {
-                "total_bps": self.would_execute_pnl_bps,
-                "total_usdc": self.would_execute_pnl_usdc,
             },
         }
         

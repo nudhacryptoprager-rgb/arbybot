@@ -331,3 +331,171 @@ class TestGateRejectReasons:
         result = gate_ticks_crossed(quote)
         assert not result.passed
         assert result.reject_code == ErrorCode.TICKS_CROSSED_TOO_MANY
+
+
+# =============================================================================
+# TRUTH REPORT CONTRACT TESTS (Team Lead Крок 5-6)
+# =============================================================================
+
+class TestTruthReportContract:
+    """Test truth_report generation contract."""
+    
+    def test_opportunity_rank_accepts_executable_field(self):
+        """OpportunityRank should accept executable as keyword argument."""
+        from monitoring.truth_report import OpportunityRank
+        
+        # This should NOT raise TypeError
+        rank = OpportunityRank(
+            rank=1,
+            spread_id="test_123",
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            pair="WETH/USDC",
+            fee=500,
+            amount_in="1000000000000000000",
+            spread_bps=50,
+            gas_cost_bps=10,
+            net_pnl_bps=40,
+            expected_pnl_usdc=0.5,
+            executable=True,  # CRITICAL: this must work
+            confidence=0.85,
+        )
+        
+        assert rank.executable is True
+        assert rank.rank == 1
+        assert rank.confidence == 0.85
+    
+    def test_opportunity_rank_has_paper_executable_field(self):
+        """OpportunityRank should have paper_executable field."""
+        from monitoring.truth_report import OpportunityRank
+        
+        rank = OpportunityRank(
+            rank=1,
+            spread_id="test_123",
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            pair="WETH/USDC",
+            fee=500,
+            amount_in="1000000000000000000",
+            spread_bps=50,
+            gas_cost_bps=10,
+            net_pnl_bps=40,
+            expected_pnl_usdc=0.5,
+            executable=True,
+            paper_executable=True,
+            execution_ready=False,
+            confidence=0.85,
+        )
+        
+        assert rank.paper_executable is True
+        assert rank.execution_ready is False
+    
+    def test_truth_report_accepts_total_pnl_fields(self):
+        """TruthReport should accept total_pnl_bps and total_pnl_usdc."""
+        from monitoring.truth_report import TruthReport, HealthMetrics
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[("QUOTE_GAS_TOO_HIGH", 10)],
+        )
+        
+        # This should NOT raise TypeError
+        report = TruthReport(
+            timestamp="2026-01-15T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=[],
+            total_spreads=100,
+            profitable_spreads=50,
+            executable_spreads=30,
+            blocked_spreads=20,
+            total_pnl_bps=500,  # CRITICAL: this must work
+            total_pnl_usdc=5.0,  # CRITICAL: this must work
+        )
+        
+        assert report.total_pnl_bps == 500
+        assert report.total_pnl_usdc == 5.0
+    
+    def test_truth_report_to_dict_includes_executable(self):
+        """TruthReport.to_dict() should include executable in opportunities."""
+        from monitoring.truth_report import TruthReport, HealthMetrics, OpportunityRank
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[],
+        )
+        
+        opp = OpportunityRank(
+            rank=1,
+            spread_id="test_123",
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            pair="WETH/USDC",
+            fee=500,
+            amount_in="1000000000000000000",
+            spread_bps=50,
+            gas_cost_bps=10,
+            net_pnl_bps=40,
+            expected_pnl_usdc=0.5,
+            executable=True,
+            confidence=0.85,
+        )
+        
+        report = TruthReport(
+            timestamp="2026-01-15T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=[opp],
+            total_spreads=100,
+            profitable_spreads=50,
+            executable_spreads=30,
+            blocked_spreads=20,
+        )
+        
+        result = report.to_dict()
+        
+        # Check that executable is in the output
+        assert len(result["top_opportunities"]) == 1
+        assert result["top_opportunities"][0]["executable"] is True
+    
+    def test_opportunity_rank_default_values(self):
+        """OpportunityRank should have sensible defaults."""
+        from monitoring.truth_report import OpportunityRank
+        
+        # Create with minimal required fields
+        rank = OpportunityRank(
+            rank=1,
+            spread_id="test",
+            buy_dex="uni",
+            sell_dex="sushi",
+            pair="WETH/USDC",
+            fee=500,
+            amount_in="1000",
+            spread_bps=10,
+            gas_cost_bps=5,
+            net_pnl_bps=5,
+            expected_pnl_usdc=0.1,
+        )
+        
+        # Check defaults
+        assert rank.executable is False
+        assert rank.confidence == 0.0
+        assert rank.paper_executable is False
+        assert rank.execution_ready is False
+        assert rank.confidence_breakdown is None

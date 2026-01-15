@@ -1507,18 +1507,31 @@ def main(
                 session.save_snapshot(all_cycle_summaries)
                 session.save_reject_histogram()
                 
-                # Generate truth report
+                # Generate truth report with resilience (Team Lead: fallback if truth_report fails)
                 snapshot = {
                     "mode": mode,
                     "cycle_summaries": all_cycle_summaries,
                 }
                 paper_stats = paper_session.stats if paper_session else None
-                truth_report = generate_truth_report(snapshot, paper_stats)
                 
-                # Save and print
-                reports_dir = output_path.parent / "reports"
-                save_truth_report(truth_report, reports_dir)
-                print_truth_report(truth_report)
+                try:
+                    truth_report = generate_truth_report(snapshot, paper_stats)
+                    
+                    # Save and print
+                    reports_dir = output_path.parent / "reports"
+                    save_truth_report(truth_report, reports_dir)
+                    print_truth_report(truth_report)
+                except Exception as truth_err:
+                    # Team Lead: "якщо truth_report впав — log + continue"
+                    logger.error(
+                        f"Truth report generation failed: {truth_err}",
+                        exc_info=True,
+                        extra={"context": {
+                            "error": str(truth_err),
+                            "snapshot_cycles": len(all_cycle_summaries),
+                        }}
+                    )
+                    # snapshot/reject_histogram/paper_trades вже записані - продовжуємо
             else:
                 await scan_loop(
                     chains, dexes_config, tokens_config, interval,

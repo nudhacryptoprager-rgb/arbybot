@@ -2,7 +2,48 @@
 
 **Дата:** 2026-01-15  
 **Milestone:** M3 P2 Quality Cleanup v2  
-**Статус:** ✅ **IMPLEMENTED**
+**Статус:** ✅ **IMPLEMENTED + CONTRACT FIX**
+
+---
+
+## P0 FIX: OpportunityRank Contract (Team Lead Alert)
+
+**Проблема:** `OpportunityRank.__init__() got an unexpected keyword argument 'executable'`
+
+**Root Cause:** Зміна dataclass полів без backward compatibility (property замість field)
+
+**Рішення (Варіант А):**
+```python
+@dataclass
+class OpportunityRank:
+    # ... інші поля ...
+    executable: bool = False  # КРИТИЧНО: реальне поле, не property
+    paper_executable: bool = False
+    execution_ready: bool = False
+
+@dataclass  
+class TruthReport:
+    # ... інші поля ...
+    total_pnl_bps: int = 0  # КРИТИЧНО: реальне поле, не property
+    total_pnl_usdc: float = 0.0
+```
+
+**Resilience (run_scan.py):**
+```python
+try:
+    truth_report = generate_truth_report(snapshot, paper_stats)
+    save_truth_report(truth_report, reports_dir)
+except Exception as truth_err:
+    logger.error(f"Truth report generation failed: {truth_err}")
+    # snapshot/reject_histogram/paper_trades все одно записані
+```
+
+**Нові тести:**
+- `test_opportunity_rank_accepts_executable_field`
+- `test_opportunity_rank_has_paper_executable_field`
+- `test_truth_report_accepts_total_pnl_fields`
+- `test_truth_report_to_dict_includes_executable`
+- `test_opportunity_rank_default_values`
 
 ---
 
