@@ -3,6 +3,12 @@ strategy/gates.py - Quote validation gates.
 
 Gates validate quotes before they become opportunities.
 Each gate returns (passed: bool, reject_code: ErrorCode | None).
+
+Team Lead M3_P1 v2 directives:
+- Amount-ladder adaptive per pool fitness
+- Ticks thresholds by token type (volatile vs stable)
+- 2-level PRICE_SANITY check
+- Plausibility as function, not constant
 """
 
 from decimal import Decimal
@@ -29,18 +35,36 @@ MAX_GAS_ESTIMATE = 500_000
 MAX_TICKS_CROSSED = 10
 
 # Price sanity: max deviation from anchor (in basis points)
-MAX_PRICE_DEVIATION_BPS = 1500  # 15% for stable pairs
-MAX_PRICE_DEVIATION_BPS_VOLATILE = 2500  # 25% for volatile pairs
+# Level 1: coarse filter
+MAX_PRICE_DEVIATION_BPS_L1 = 2500       # 25% - Level 1 (soft reject)
+MAX_PRICE_DEVIATION_BPS_VOLATILE_L1 = 4000  # 40% for volatile - Level 1
 
-# Volatile pairs that need higher deviation tolerance
-HIGH_VOLATILITY_PAIRS = {"WETH/LINK", "WETH/UNI", "WETH/GMX", "WETH/ARB", "ARB/WETH", "LINK/WETH"}
+# Level 2: requires second anchor confirmation
+MAX_PRICE_DEVIATION_BPS_L2 = 1500       # 15% - Level 2 (hard reject if no 2nd anchor)
+MAX_PRICE_DEVIATION_BPS_VOLATILE_L2 = 2500  # 25% for volatile - Level 2
+
+# Legacy aliases for backwards compatibility
+MAX_PRICE_DEVIATION_BPS = MAX_PRICE_DEVIATION_BPS_L2
+MAX_PRICE_DEVIATION_BPS_VOLATILE = MAX_PRICE_DEVIATION_BPS_VOLATILE_L2
+
+# Token type classification
+HIGH_VOLATILITY_PAIRS = {
+    "WETH/LINK", "WETH/UNI", "WETH/GMX", "WETH/ARB", "WETH/MAGIC", "WETH/RDNT",
+    "WETH/PENDLE", "WETH/GNS", "WETH/GRAIL", "WETH/JOE", "WETH/DPX",
+    "ARB/WETH", "LINK/WETH", "UNI/WETH", "GMX/WETH",
+}
+
+STABLE_PAIRS = {
+    "USDC/USDT", "USDT/USDC", "USDC/DAI", "DAI/USDC", "USDT/DAI", "DAI/USDT",
+    "FRAX/USDC", "USDC/FRAX", "LUSD/USDC", "USDC/LUSD", "USDE/USDC", "USDC/USDE",
+}
 
 # Anchor DEX for price reference (most reliable quotes)
 ANCHOR_DEX = "uniswap_v3"
 
 
 # =============================================================================
-# ADAPTIVE LIMITS (by trade size)
+# ADAPTIVE LIMITS (by trade size AND token type) - Team Lead Крок 2, 3
 # =============================================================================
 
 # Gas limits by amount_in (wei) - smaller trades need tighter limits
@@ -51,7 +75,23 @@ GAS_LIMITS_BY_SIZE = {
     10**19: 800_000,   # 10 ETH - larger trades allowed more gas
 }
 
-# Ticks limits by amount_in (wei) - smaller trades should cross fewer ticks
+# Ticks limits by amount_in (wei) for VOLATILE pairs
+TICKS_LIMITS_VOLATILE = {
+    10**16: 5,     # 0.01 ETH - allow more for volatile
+    10**17: 8,     # 0.1 ETH
+    10**18: 15,    # 1 ETH
+    10**19: 25,    # 10 ETH
+}
+
+# Ticks limits by amount_in (wei) for STABLE pairs (tighter)
+TICKS_LIMITS_STABLE = {
+    10**16: 2,     # 0.01 ETH - very tight for stables
+    10**17: 3,     # 0.1 ETH
+    10**18: 5,     # 1 ETH
+    10**19: 10,    # 10 ETH
+}
+
+# Ticks limits by amount_in (wei) for NORMAL pairs
 TICKS_LIMITS_BY_SIZE = {
     10**16: 3,    # 0.01 ETH - ultra tight (for retry smaller)
     10**17: 5,    # 0.1 ETH - very tight
@@ -125,26 +165,197 @@ def get_adaptive_gas_limit(amount_in: int) -> int:
     return min(GAS_LIMITS_BY_SIZE.values())
 
 
-def get_adaptive_ticks_limit(amount_in: int) -> int:
+def get_pair_type(pair: str | None) -> str:
     """
-    Get ticks limit based on trade size.
-    Larger trades can tolerate more price impact.
+    Classify pair as 'volatile', 'stable', or 'normal'.
+    
+    Team Lead Крок 3: "max_ticks має залежати від типу токена (volatile vs stable)"
     """
-    for size_threshold, ticks_limit in sorted(TICKS_LIMITS_BY_SIZE.items(), reverse=True):
+    if not pair:
+        return "normal"
+    
+    # Normalize pair for lookup
+    pair_upper = pair.upper()
+    pair_reversed = "/".join(reversed(pair_upper.split("/")))
+    
+    if pair_upper in STABLE_PAIRS or pair_reversed in STABLE_PAIRS:
+        return "stable"
+    
+    if pair_upper in HIGH_VOLATILITY_PAIRS or pair_reversed in HIGH_VOLATILITY_PAIRS:
+        return "volatile"
+    
+    return "normal"
+
+
+def get_adaptive_ticks_limit(amount_in: int, pair: str | None = None) -> int:
+    """
+    Get ticks limit based on trade size AND pair type.
+    
+    Team Lead Крок 3:
+    "max_ticks має залежати від amount_in та типу токена (volatile vs stable),
+    інакше ти просто відсікаєш половину світу 'заради чистоти'."
+    
+    Args:
+        amount_in: Trade size in wei
+        pair: Pair string like "WETH/ARB" for type detection
+    
+    Returns:
+        Maximum allowed ticks crossed
+    """
+    pair_type = get_pair_type(pair)
+    
+    # Select appropriate limits table
+    if pair_type == "volatile":
+        limits = TICKS_LIMITS_VOLATILE
+    elif pair_type == "stable":
+        limits = TICKS_LIMITS_STABLE
+    else:
+        limits = TICKS_LIMITS_BY_SIZE
+    
+    for size_threshold, ticks_limit in sorted(limits.items(), reverse=True):
         if amount_in >= size_threshold:
             return ticks_limit
+    
     # Smallest trades get tightest limit
-    return min(TICKS_LIMITS_BY_SIZE.values())
+    return min(limits.values())
 
 
-def get_price_deviation_limit(pair: str | None = None) -> int:
+def get_price_deviation_limit(pair: str | None = None, level: int = 2) -> int:
     """
-    Get price deviation limit based on pair volatility.
-    Volatile pairs (like WETH/ARB) need higher tolerance.
+    Get price deviation limit based on pair volatility and check level.
+    
+    Team Lead Крок 4: 2-level price sanity check
+    - Level 1: coarse filter (25%/40%) - soft reject, flag for second anchor
+    - Level 2: hard filter (15%/25%) - reject if no second anchor confirms
+    
+    Args:
+        pair: Pair string for volatility detection
+        level: 1 or 2 (default 2 for backwards compatibility)
+    
+    Returns:
+        Maximum deviation in basis points
     """
-    if pair and pair in HIGH_VOLATILITY_PAIRS:
-        return MAX_PRICE_DEVIATION_BPS_VOLATILE
-    return MAX_PRICE_DEVIATION_BPS
+    pair_type = get_pair_type(pair)
+    is_volatile = pair_type == "volatile"
+    
+    if level == 1:
+        # Level 1: coarse filter
+        return MAX_PRICE_DEVIATION_BPS_VOLATILE_L1 if is_volatile else MAX_PRICE_DEVIATION_BPS_L1
+    else:
+        # Level 2: hard filter (default)
+        return MAX_PRICE_DEVIATION_BPS_VOLATILE_L2 if is_volatile else MAX_PRICE_DEVIATION_BPS_L2
+
+
+def get_price_deviation_limits(pair: str | None = None) -> tuple[int, int]:
+    """
+    Get both price deviation limits for 2-level checking.
+    
+    Returns:
+        Tuple of (level1_limit, level2_limit)
+    """
+    return (
+        get_price_deviation_limit(pair, level=1),
+        get_price_deviation_limit(pair, level=2),
+    )
+
+
+# =============================================================================
+# POOL FITNESS TRACKING (Team Lead Крок 2)
+# =============================================================================
+
+class PoolFitness:
+    """
+    Track pool fitness for adaptive amount selection.
+    
+    Team Lead Крок 2:
+    "якщо QUOTE_GAS_TOO_HIGH на малому amount — pool не годиться;
+    якщо тільки на великому — зменшувати max amount для цього pool/pair/fee"
+    """
+    
+    def __init__(self):
+        # pool_key -> max_working_amount (wei)
+        self._max_amounts: dict[str, int] = {}
+        # pool_key -> failure count at minimum amount
+        self._min_amount_failures: dict[str, int] = {}
+    
+    @staticmethod
+    def _make_key(pair: str, dex_id: str, fee: int) -> str:
+        return f"{pair}_{dex_id}_{fee}"
+    
+    def record_success(self, pair: str, dex_id: str, fee: int, amount: int) -> None:
+        """Record successful quote at given amount."""
+        key = self._make_key(pair, dex_id, fee)
+        current_max = self._max_amounts.get(key, 0)
+        if amount > current_max:
+            self._max_amounts[key] = amount
+    
+    def record_failure(
+        self,
+        pair: str,
+        dex_id: str,
+        fee: int,
+        amount: int,
+        reason: str,
+    ) -> None:
+        """
+        Record failure and adjust max amount if needed.
+        
+        If failure at minimum amount, track for pool exclusion.
+        If failure at larger amount, reduce max_amount for pool.
+        """
+        key = self._make_key(pair, dex_id, fee)
+        min_amount = min(STANDARD_AMOUNTS)
+        
+        if amount <= min_amount:
+            # Failure at minimum = pool may be unfit
+            self._min_amount_failures[key] = self._min_amount_failures.get(key, 0) + 1
+        else:
+            # Failure at larger amount = reduce max
+            current_max = self._max_amounts.get(key, amount)
+            if amount <= current_max:
+                # Find next smaller standard amount
+                for std in reversed(STANDARD_AMOUNTS):
+                    if std < amount:
+                        self._max_amounts[key] = std
+                        break
+    
+    def get_max_amount(self, pair: str, dex_id: str, fee: int) -> int | None:
+        """
+        Get maximum working amount for pool.
+        
+        Returns:
+            Max amount in wei, or None if pool appears unfit
+        """
+        key = self._make_key(pair, dex_id, fee)
+        
+        # Check if pool is marked as unfit
+        if self._min_amount_failures.get(key, 0) >= 3:
+            return None  # Pool is unfit, should be skipped
+        
+        return self._max_amounts.get(key)
+    
+    def is_pool_unfit(self, pair: str, dex_id: str, fee: int) -> bool:
+        """Check if pool is marked as unfit (too many min-amount failures)."""
+        key = self._make_key(pair, dex_id, fee)
+        return self._min_amount_failures.get(key, 0) >= 3
+
+
+# Singleton instance
+_pool_fitness: PoolFitness | None = None
+
+
+def get_pool_fitness() -> PoolFitness:
+    """Get singleton pool fitness tracker."""
+    global _pool_fitness
+    if _pool_fitness is None:
+        _pool_fitness = PoolFitness()
+    return _pool_fitness
+
+
+def reset_pool_fitness() -> None:
+    """Reset pool fitness tracker (for testing)."""
+    global _pool_fitness
+    _pool_fitness = None
 
 
 # =============================================================================
@@ -156,6 +367,8 @@ class GateResult(NamedTuple):
     passed: bool
     reject_code: ErrorCode | None = None
     details: dict | None = None
+    # Team Lead Крок 4: flag for second anchor requirement
+    requires_second_anchor: bool = False
 
 
 # =============================================================================
@@ -197,20 +410,33 @@ def gate_gas_estimate(quote: Quote, max_gas: int | None = None) -> GateResult:
     return GateResult(passed=True)
 
 
-def gate_ticks_crossed(quote: Quote, max_ticks: int | None = None) -> GateResult:
+def gate_ticks_crossed(
+    quote: Quote,
+    max_ticks: int | None = None,
+    pair: str | None = None,
+) -> GateResult:
     """
     Reject if too many ticks crossed (V3 only, skip for Algebra).
     
-    Uses adaptive limits based on amount_in if max_ticks not specified.
-    Larger trades can tolerate more price impact.
+    Team Lead Крок 3: Uses adaptive limits based on amount_in AND pair type.
+    Volatile pairs get more tolerance, stable pairs get less.
+    
+    Args:
+        quote: Quote to validate
+        max_ticks: Override limit (if not provided, uses adaptive)
+        pair: Pair string for type detection (e.g. "WETH/ARB")
     """
     # Algebra doesn't report ticks_crossed - skip this gate
     if quote.ticks_crossed is None:
         return GateResult(passed=True)
     
+    # Derive pair from quote if not provided
+    if pair is None:
+        pair = f"{quote.token_in.symbol}/{quote.token_out.symbol}"
+    
     # Use adaptive limit if not explicitly provided
     if max_ticks is None:
-        max_ticks = get_adaptive_ticks_limit(quote.amount_in)
+        max_ticks = get_adaptive_ticks_limit(quote.amount_in, pair)
     
     if quote.ticks_crossed > max_ticks:
         return GateResult(
@@ -220,6 +446,8 @@ def gate_ticks_crossed(quote: Quote, max_ticks: int | None = None) -> GateResult
                 "ticks_crossed": quote.ticks_crossed,
                 "max_ticks": max_ticks,
                 "amount_in": quote.amount_in,
+                "pair": pair,
+                "pair_type": get_pair_type(pair),
             },
         )
     return GateResult(passed=True)
@@ -242,27 +470,31 @@ def gate_price_sanity(
     is_anchor_dex: bool = False,
     max_deviation_bps: int | None = None,
     pair: str | None = None,
+    second_anchor_price: Decimal | None = None,
 ) -> GateResult:
     """
-    Reject if price deviates too much from anchor.
+    2-level price sanity check.
     
-    P0 FIX: Non-anchor quotes WITHOUT anchor_price are REJECTED.
-    This prevents "phantom opportunities" where only one DEX quotes.
+    Team Lead Крок 4:
+    "рівень 1: грубий фільтр (25% як у тебе),
+     рівень 2: якщо відхилення велике, але spread виглядає 'казково' — 
+     вимагати підтвердження другим anchor"
     
-    Uses adaptive deviation limits for volatile pairs (WETH/ARB, WETH/LINK, etc.)
+    Level 1: Coarse filter (25%/40% for volatile)
+    - If deviation > L1, always reject
     
-    This catches:
-    - Invalid pool/fee tier combos that return garbage prices
-    - Quoter bugs
-    - Pools with no real liquidity returning synthetic prices
-    - Single-DEX quotes that can't be validated
+    Level 2: Fine filter (15%/25% for volatile)
+    - If deviation > L2 but <= L1, flag requires_second_anchor
+    - If second_anchor_price provided and confirms, pass
+    - Otherwise soft-reject with requires_second_anchor=True
     
     Args:
         quote: Quote to validate
-        anchor_price: Reference price from anchor DEX (e.g., Uniswap V3)
+        anchor_price: Primary reference price from anchor DEX
         is_anchor_dex: True if this quote is from the anchor DEX
-        max_deviation_bps: Maximum allowed deviation in basis points (auto-detect if None)
-        pair: Pair string like "WETH/ARB" for volatility detection
+        max_deviation_bps: Override limit (uses adaptive if None)
+        pair: Pair string for volatility detection
+        second_anchor_price: Optional second anchor for confirmation
     """
     # If this IS the anchor DEX, it sets the anchor - always pass
     if is_anchor_dex:
@@ -272,12 +504,14 @@ def gate_price_sanity(
     if pair is None:
         pair = f"{quote.token_in.symbol}/{quote.token_out.symbol}"
     
-    # Use adaptive deviation limit based on pair volatility
-    if max_deviation_bps is None:
-        max_deviation_bps = get_price_deviation_limit(pair)
+    # Get 2-level limits
+    limit_l1, limit_l2 = get_price_deviation_limits(pair)
+    
+    # Override with explicit limit if provided (for backwards compatibility)
+    if max_deviation_bps is not None:
+        limit_l2 = max_deviation_bps
     
     # P0 FIX: Non-anchor quote without anchor = REJECT
-    # This prevents "phantom" opportunities from single-DEX quotes
     if anchor_price is None or anchor_price == 0:
         return GateResult(
             passed=False,
@@ -309,15 +543,17 @@ def gate_price_sanity(
     deviation = abs(quote_price - anchor_price) / anchor_price * 10000
     deviation_bps = int(deviation)
     
-    if deviation_bps > max_deviation_bps:
+    # LEVEL 1: Coarse filter - hard reject if beyond L1
+    if deviation_bps > limit_l1:
         return GateResult(
             passed=False,
             reject_code=ErrorCode.PRICE_SANITY_FAILED,
             details={
-                "reason": "deviation_too_high",
+                "reason": "deviation_too_high_L1",
                 "pair": pair,
                 "deviation_bps": deviation_bps,
-                "max_deviation_bps": max_deviation_bps,
+                "max_deviation_bps_L1": limit_l1,
+                "max_deviation_bps_L2": limit_l2,
                 "quote_price": str(quote_price),
                 "anchor_price": str(anchor_price),
                 "dex_id": quote.pool.dex_id,
@@ -326,7 +562,48 @@ def gate_price_sanity(
             },
         )
     
-    return GateResult(passed=True)
+    # LEVEL 2: Fine filter - check if within L2
+    if deviation_bps <= limit_l2:
+        # Within L2 tolerance - pass
+        return GateResult(passed=True)
+    
+    # Between L1 and L2: requires second anchor confirmation
+    if second_anchor_price is not None and second_anchor_price > 0:
+        # Check if quote is closer to second anchor
+        deviation_to_second = abs(quote_price - second_anchor_price) / second_anchor_price * 10000
+        deviation_to_second_bps = int(deviation_to_second)
+        
+        # If second anchor confirms (within L2), pass
+        if deviation_to_second_bps <= limit_l2:
+            return GateResult(
+                passed=True,
+                details={
+                    "confirmed_by_second_anchor": True,
+                    "deviation_to_primary": deviation_bps,
+                    "deviation_to_second": deviation_to_second_bps,
+                },
+            )
+    
+    # Between L1 and L2 without second anchor confirmation
+    # Return soft-reject with flag
+    return GateResult(
+        passed=False,
+        reject_code=ErrorCode.PRICE_SANITY_FAILED,
+        requires_second_anchor=True,
+        details={
+            "reason": "deviation_between_L1_L2",
+            "pair": pair,
+            "deviation_bps": deviation_bps,
+            "max_deviation_bps_L1": limit_l1,
+            "max_deviation_bps_L2": limit_l2,
+            "quote_price": str(quote_price),
+            "anchor_price": str(anchor_price),
+            "dex_id": quote.pool.dex_id,
+            "fee": quote.pool.fee,
+            "amount_in": quote.amount_in,
+            "needs_second_anchor": True,
+        },
+    )
 
 
 # =============================================================================

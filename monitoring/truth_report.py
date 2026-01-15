@@ -35,9 +35,17 @@ class OpportunityRank:
     gas_cost_bps: int
     net_pnl_bps: int
     expected_pnl_usdc: float
-    executable: bool
     confidence: float  # 0.0 - 1.0
     confidence_breakdown: dict | None = None  # Component scores
+    
+    # Team Lead Крок 5: Розділити executable на 2 прапори
+    paper_executable: bool = False   # Passes all gates on paper
+    execution_ready: bool = False    # verified_for_execution + router ready
+    
+    # Legacy alias for backwards compatibility
+    @property
+    def executable(self) -> bool:
+        return self.paper_executable
 
 
 @dataclass
@@ -80,28 +88,62 @@ class TruthReport:
     executable_spreads: int
     blocked_spreads: int
     
-    # Blocked reasons breakdown (Team Lead Krок 6)
+    # Team Lead Крок 5: Execution readiness breakdown
+    paper_executable_count: int = 0
+    execution_ready_count: int = 0
+    
+    # Blocked reasons breakdown
     blocked_reasons: dict | None = None
     
-    # Cumulative PnL
-    total_pnl_bps: int = 0
-    total_pnl_usdc: float = 0.0
+    # Team Lead Крок 6: Separate signal PnL vs would_execute PnL
+    # signal_pnl = sum of all detected opportunities (inflated)
+    # would_execute_pnl = only from would_execute trades (realistic)
+    signal_pnl_bps: int = 0
+    signal_pnl_usdc: float = 0.0
+    would_execute_pnl_bps: int = 0
+    would_execute_pnl_usdc: float = 0.0
+    
+    # Legacy aliases for backwards compatibility
+    @property
+    def total_pnl_bps(self) -> int:
+        return self.would_execute_pnl_bps
+    
+    @property
+    def total_pnl_usdc(self) -> float:
+        return self.would_execute_pnl_usdc
     
     def to_dict(self) -> dict:
         result = {
             "timestamp": self.timestamp,
             "mode": self.mode,
             "health": asdict(self.health),
-            "top_opportunities": [asdict(o) for o in self.top_opportunities],
+            "top_opportunities": [
+                {
+                    **asdict(o),
+                    "executable": o.paper_executable,  # Legacy field
+                }
+                for o in self.top_opportunities
+            ],
             "stats": {
                 "total_spreads": self.total_spreads,
                 "profitable_spreads": self.profitable_spreads,
                 "executable_spreads": self.executable_spreads,
                 "blocked_spreads": self.blocked_spreads,
+                # Team Lead Крок 5
+                "paper_executable_count": self.paper_executable_count,
+                "execution_ready_count": self.execution_ready_count,
             },
+            # Team Lead Крок 6: Separate PnL metrics
+            "pnl": {
+                "signal_pnl_bps": self.signal_pnl_bps,
+                "signal_pnl_usdc": self.signal_pnl_usdc,
+                "would_execute_pnl_bps": self.would_execute_pnl_bps,
+                "would_execute_pnl_usdc": self.would_execute_pnl_usdc,
+            },
+            # Legacy cumulative_pnl for backwards compatibility
             "cumulative_pnl": {
-                "total_bps": self.total_pnl_bps,
-                "total_usdc": self.total_pnl_usdc,
+                "total_bps": self.would_execute_pnl_bps,
+                "total_usdc": self.would_execute_pnl_usdc,
             },
         }
         
@@ -110,6 +152,100 @@ class TruthReport:
             result["blocked_reasons_breakdown"] = self.blocked_reasons
         
         return result
+
+
+def calculate_plausibility(
+    spread: dict,
+    spread_bps: int,
+    gas_bps: int,
+    buy_leg: dict,
+    sell_leg: dict,
+) -> float:
+    """
+    Calculate plausibility score as function of proximity to thresholds.
+    
+    Team Lead Крок 7:
+    "Confidence scoring: прибрати константи типу plausibility=0.8 як дефолт;
+    plausibility має бути функцією (напр. штраф за близькість до порогів sanity/ticks/gas)."
+    
+    Score is reduced by:
+    - Proximity to spread threshold (very high spreads are suspicious)
+    - Proximity to gas threshold (high gas = risky)
+    - Proximity to ticks threshold (many ticks = risky)
+    - Price deviation from anchor (if available)
+    
+    Returns:
+        Plausibility score 0.0 - 1.0
+    """
+    score = 1.0
+    
+    # 1. Spread threshold proximity
+    # Very high spreads are suspicious - likely bad data
+    MAX_PLAUSIBLE_BPS = 500
+    NORMAL_SPREAD_BPS = 50
+    
+    if spread_bps <= 0:
+        return 0.0
+    elif spread_bps <= NORMAL_SPREAD_BPS:
+        spread_penalty = 0.0  # Normal range
+    else:
+        # Gradual penalty as spread approaches threshold
+        proximity = min(1.0, (spread_bps - NORMAL_SPREAD_BPS) / (MAX_PLAUSIBLE_BPS - NORMAL_SPREAD_BPS))
+        spread_penalty = proximity * 0.4  # Max 40% penalty for spread
+        
+        if spread_bps > MAX_PLAUSIBLE_BPS:
+            spread_penalty = 0.6  # Above threshold = very suspicious
+    
+    score -= spread_penalty
+    
+    # 2. Gas threshold proximity
+    # High gas estimates relative to spread are risky
+    if spread_bps > 0 and gas_bps > 0:
+        gas_ratio = gas_bps / spread_bps
+        if gas_ratio > 0.5:  # Gas > 50% of spread
+            gas_penalty = min(0.3, (gas_ratio - 0.5) * 0.6)
+            score -= gas_penalty
+    
+    # 3. Ticks threshold proximity
+    MAX_TICKS_NORMAL = 10
+    MAX_TICKS_SUSPICIOUS = 20
+    
+    buy_ticks = buy_leg.get("ticks_crossed") or 0
+    sell_ticks = sell_leg.get("ticks_crossed") or 0
+    max_ticks = max(buy_ticks, sell_ticks)
+    
+    if max_ticks > MAX_TICKS_NORMAL:
+        if max_ticks > MAX_TICKS_SUSPICIOUS:
+            ticks_penalty = 0.3
+        else:
+            proximity = (max_ticks - MAX_TICKS_NORMAL) / (MAX_TICKS_SUSPICIOUS - MAX_TICKS_NORMAL)
+            ticks_penalty = proximity * 0.2
+        score -= ticks_penalty
+    
+    # 4. Price deviation proximity (if available in spread details)
+    deviation_bps = spread.get("price_deviation_bps", 0) or 0
+    MAX_DEVIATION_NORMAL = 1500  # 15%
+    MAX_DEVIATION_SUSPICIOUS = 2500  # 25%
+    
+    if deviation_bps > MAX_DEVIATION_NORMAL:
+        if deviation_bps > MAX_DEVIATION_SUSPICIOUS:
+            deviation_penalty = 0.3
+        else:
+            proximity = (deviation_bps - MAX_DEVIATION_NORMAL) / (MAX_DEVIATION_SUSPICIOUS - MAX_DEVIATION_NORMAL)
+            deviation_penalty = proximity * 0.2
+        score -= deviation_penalty
+    
+    # 5. Leg-specific issues
+    # Both legs should have similar latencies
+    buy_latency = buy_leg.get("latency_ms", 0) or 0
+    sell_latency = sell_leg.get("latency_ms", 0) or 0
+    
+    if buy_latency > 0 and sell_latency > 0:
+        latency_ratio = max(buy_latency, sell_latency) / min(buy_latency, sell_latency)
+        if latency_ratio > 3:  # One leg took 3x longer
+            score -= 0.1
+    
+    return max(0.0, min(1.0, score))
 
 
 def calculate_confidence(
@@ -260,22 +396,18 @@ def calculate_confidence(
     rpc_score = min(1.0, max(0.0, rpc_success_rate))
     breakdown["rpc_health"] = round(rpc_score, 3)
     
-    # 7. PLAUSIBILITY SCORE (0.0 - 1.0)
-    # Very high spreads are suspicious
-    MAX_PLAUSIBLE_BPS = 500  # 5% spread is max believable
+    # 7. PLAUSIBILITY SCORE - Team Lead Крок 7
+    # NOT a constant - calculated as function of proximity to thresholds
+    # Штраф за близькість до порогів sanity/ticks/gas
+    plausibility_score = calculate_plausibility(
+        spread=spread,
+        spread_bps=spread_bps,
+        gas_bps=gas_bps,
+        buy_leg=buy_leg,
+        sell_leg=sell_leg,
+    )
     
-    if spread_bps <= 0:
-        plausibility_score = 0.0
-    elif spread_bps <= 50:
-        plausibility_score = 1.0  # Normal arb range
-    elif spread_bps <= 200:
-        plausibility_score = 0.8  # Elevated but possible
-    elif spread_bps <= MAX_PLAUSIBLE_BPS:
-        plausibility_score = 0.5  # Suspicious
-    else:
-        plausibility_score = 0.2  # Very suspicious - likely bad data
-    
-    breakdown["plausibility"] = plausibility_score
+    breakdown["plausibility"] = round(plausibility_score, 3)
     
     # 8. PRICE SANITY PENALTY (Team Lead Крок 7)
     # Penalty for spreads from combinations with PRICE_SANITY history
@@ -328,8 +460,9 @@ def calculate_confidence(
     total_penalty = price_sanity_penalty + gas_penalty
     total_score = max(0.0, base_score - total_penalty)
     
-    # Hard caps: if not executable or not profitable, cap at 0.5
-    if not spread.get("executable"):
+    # Hard caps: Team Lead Крок 5 - use paper_executable
+    paper_executable = spread.get("paper_executable", spread.get("executable", False))
+    if not paper_executable:
         total_score = min(total_score, 0.5)
     if net_bps <= 0:
         total_score = min(total_score, 0.3)
