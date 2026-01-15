@@ -60,9 +60,6 @@ class HealthMetrics:
     
     # Rejects
     top_reject_reasons: list[tuple[str, int]]
-    
-    # Optional stats (with defaults)
-    rpc_endpoints_quarantined: int = 0
 
 
 @dataclass
@@ -342,14 +339,6 @@ def generate_truth_report(
                 rpc_latency_weighted += latency * requests
                 rpc_endpoint_count += 1
     
-    # Count quarantined endpoints
-    rpc_quarantined = 0
-    if cycle_summaries:
-        last_cycle = cycle_summaries[-1]
-        for url, stats in last_cycle.get("rpc_stats", {}).items():
-            if stats.get("quarantined", False):
-                rpc_quarantined += 1
-    
     # Calculate health metrics
     fetch_rate = total_fetched / total_attempted if total_attempted > 0 else 0.0
     gate_pass_rate = total_passed / total_fetched if total_fetched > 0 else 0.0
@@ -366,7 +355,6 @@ def generate_truth_report(
         rpc_success_rate=round(rpc_success_rate, 3),
         rpc_avg_latency_ms=rpc_avg_latency,
         rpc_total_requests=rpc_total_requests,
-        rpc_endpoints_quarantined=rpc_quarantined,
         quote_fetch_rate=round(fetch_rate, 3),
         quote_gate_pass_rate=round(gate_pass_rate, 3),
         chains_active=len(chains_seen),
@@ -388,9 +376,18 @@ def generate_truth_report(
         block_pin = last_cycle.get("block_pin", {})
         block_age_ms = block_pin.get("age_ms", 0) or 0
     
+    # Deduplicate spreads by spread_id (keep latest/last occurrence per id)
+    # This prevents duplicate entries in top_opportunities from multi-cycle runs
+    spreads_by_id: dict[str, dict] = {}
+    for spread in all_spreads:
+        spread_id = spread.get("id", "")
+        if spread_id:
+            spreads_by_id[spread_id] = spread  # Last wins (most recent)
+    unique_spreads = list(spreads_by_id.values())
+    
     # Rank opportunities by confidence × net_pnl
     ranked = []
-    for spread in all_spreads:
+    for spread in unique_spreads:
         confidence, breakdown = calculate_confidence(
             spread,
             rpc_success_rate=rpc_success_rate,
@@ -412,9 +409,13 @@ def generate_truth_report(
     MIN_NET_PNL_BPS = 5  # Ignore opportunities with < 5 bps
     ranked = [r for r in ranked if r["spread"].get("net_pnl_bps", 0) >= MIN_NET_PNL_BPS]
     
-    # Build top opportunities
+    # Filter for top opportunities: executable-only
+    # Non-executable spreads are blocked and cannot be acted upon
+    ranked_executable = [r for r in ranked if r["spread"].get("executable", False)]
+    
+    # Build top opportunities (executable-only)
     top_opportunities = []
-    for i, item in enumerate(ranked[:top_n]):
+    for i, item in enumerate(ranked_executable[:top_n]):
         spread = item["spread"]
         buy_leg = spread.get("buy_leg", {})
         sell_leg = spread.get("sell_leg", {})
@@ -505,8 +506,7 @@ def print_truth_report(report: TruthReport) -> None:
     
     print("\n--- HEALTH ---")
     h = report.health
-    rpc_quarantine_info = f", {h.rpc_endpoints_quarantined} quarantined" if h.rpc_endpoints_quarantined > 0 else ""
-    print(f"RPC: {h.rpc_success_rate:.1%} success ({h.rpc_total_requests} requests){rpc_quarantine_info}, {h.rpc_avg_latency_ms}ms avg")
+    print(f"RPC: {h.rpc_success_rate:.1%} success ({h.rpc_total_requests} requests), {h.rpc_avg_latency_ms}ms avg")
     print(f"Quotes: {h.quote_fetch_rate:.1%} fetch, {h.quote_gate_pass_rate:.1%} pass gates")
     print(f"Coverage: {h.chains_active} chains, {h.dexes_active} DEXes, {h.pairs_covered} pairs")
     print(f"Pools scanned: {h.pools_scanned}")

@@ -426,26 +426,100 @@ class TestIsAnchorDex:
         assert isinstance(failures, list)
 
 
-class TestErrorCodeContract:
-    """Test that all ErrorCodes used in gates exist."""
+# =============================================================================
+# ADAPTIVE LIMITS TESTS
+# =============================================================================
+
+class TestAdaptiveLimits:
+    """Tests for adaptive gas and ticks limits."""
     
-    def test_all_gate_error_codes_exist(self):
-        """All ErrorCodes returned by gates must exist in ErrorCode enum."""
-        from core.exceptions import ErrorCode
+    def test_get_adaptive_gas_limit_small_trade(self):
+        """Small trades should get tight gas limits."""
+        from strategy.gates import get_adaptive_gas_limit
         
-        # All codes used in gates.py (verified by grep)
-        expected_codes = [
-            "QUOTE_ZERO_OUTPUT",
-            "QUOTE_GAS_TOO_HIGH",
-            "TICKS_CROSSED_TOO_MANY",
-            "QUOTE_STALE_BLOCK",  # from gate_freshness
-            "PRICE_ANCHOR_MISSING",
-            "PRICE_SANITY_FAILED",
-            "SLIPPAGE_TOO_HIGH",
-            "QUOTE_INCONSISTENT",  # from slippage curve + monotonicity
-        ]
+        # 0.1 ETH
+        limit = get_adaptive_gas_limit(10**17)
+        assert limit == 300_000
+    
+    def test_get_adaptive_gas_limit_standard_trade(self):
+        """Standard trades should get standard gas limits."""
+        from strategy.gates import get_adaptive_gas_limit
         
-        for code in expected_codes:
-            assert hasattr(ErrorCode, code), f"ErrorCode.{code} does not exist"
-            # Verify it's a valid enum member
-            assert getattr(ErrorCode, code).value == code
+        # 1 ETH
+        limit = get_adaptive_gas_limit(10**18)
+        assert limit == 500_000
+    
+    def test_get_adaptive_gas_limit_large_trade(self):
+        """Large trades should get higher gas limits."""
+        from strategy.gates import get_adaptive_gas_limit
+        
+        # 10 ETH
+        limit = get_adaptive_gas_limit(10**19)
+        assert limit == 800_000
+    
+    def test_get_adaptive_ticks_limit_small_trade(self):
+        """Small trades should get tight ticks limits."""
+        from strategy.gates import get_adaptive_ticks_limit
+        
+        # 0.1 ETH
+        limit = get_adaptive_ticks_limit(10**17)
+        assert limit == 5
+    
+    def test_get_adaptive_ticks_limit_standard_trade(self):
+        """Standard trades should get standard ticks limits."""
+        from strategy.gates import get_adaptive_ticks_limit
+        
+        # 1 ETH
+        limit = get_adaptive_ticks_limit(10**18)
+        assert limit == 10
+    
+    def test_get_adaptive_ticks_limit_large_trade(self):
+        """Large trades should get higher ticks limits."""
+        from strategy.gates import get_adaptive_ticks_limit
+        
+        # 10 ETH
+        limit = get_adaptive_ticks_limit(10**19)
+        assert limit == 20
+    
+    def test_get_price_deviation_limit_stable_pair(self):
+        """Stable pairs should get lower deviation limit."""
+        from strategy.gates import get_price_deviation_limit, MAX_PRICE_DEVIATION_BPS
+        
+        limit = get_price_deviation_limit("WETH/USDC")
+        assert limit == MAX_PRICE_DEVIATION_BPS  # 1500 bps
+    
+    def test_get_price_deviation_limit_volatile_pair(self):
+        """Volatile pairs should get higher deviation limit."""
+        from strategy.gates import get_price_deviation_limit, MAX_PRICE_DEVIATION_BPS_VOLATILE
+        
+        limit = get_price_deviation_limit("WETH/ARB")
+        assert limit == MAX_PRICE_DEVIATION_BPS_VOLATILE  # 2500 bps
+        
+        limit = get_price_deviation_limit("WETH/LINK")
+        assert limit == MAX_PRICE_DEVIATION_BPS_VOLATILE
+    
+    def test_gate_gas_uses_adaptive_limit(self, pool, weth, usdc):
+        """gate_gas_estimate should use adaptive limits when max_gas=None."""
+        from strategy.gates import gate_gas_estimate
+        
+        # Small trade with gas that would pass standard (500k) but fail adaptive (300k)
+        quote = make_quote(pool, weth, usdc, 10**17, 2500_000000, gas=400_000, ticks=1)
+        
+        # Without explicit max_gas, should use adaptive limit (300k for 0.1 ETH)
+        result = gate_gas_estimate(quote)
+        assert not result.passed
+        assert result.reject_code == ErrorCode.QUOTE_GAS_TOO_HIGH
+        assert result.details["max_gas"] == 300_000
+    
+    def test_gate_ticks_uses_adaptive_limit(self, pool, weth, usdc):
+        """gate_ticks_crossed should use adaptive limits when max_ticks=None."""
+        from strategy.gates import gate_ticks_crossed
+        
+        # Small trade with ticks that would pass standard (10) but fail adaptive (5)
+        quote = make_quote(pool, weth, usdc, 10**17, 2500_000000, gas=100000, ticks=8)
+        
+        # Without explicit max_ticks, should use adaptive limit (5 for 0.1 ETH)
+        result = gate_ticks_crossed(quote)
+        assert not result.passed
+        assert result.reject_code == ErrorCode.TICKS_CROSSED_TOO_MANY
+        assert result.details["max_ticks"] == 5

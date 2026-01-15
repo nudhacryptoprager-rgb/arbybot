@@ -22,36 +22,74 @@ logger = get_logger(__name__)
 # Maximum slippage between sizes (in basis points)
 MAX_SLIPPAGE_BPS = 500  # 5%
 
-# Maximum gas estimate (base, can be adaptive)
+# Default maximum gas estimate (fallback)
 MAX_GAS_ESTIMATE = 500_000
 
-# Adaptive gas limits by amount_in tier (wei)
-GAS_LIMITS_BY_SIZE = {
-    10**17: 300_000,   # 0.1 ETH - tighter limit
-    10**18: 500_000,   # 1 ETH - standard
-    10**19: 800_000,   # 10 ETH - allow more for larger trades
-}
-
-# Maximum ticks crossed (V3) - base limit
+# Default maximum ticks crossed (V3)
 MAX_TICKS_CROSSED = 10
 
-# Adaptive ticks limits by amount_in tier
-TICKS_LIMITS_BY_SIZE = {
-    10**17: 5,    # 0.1 ETH - tight
-    10**18: 10,   # 1 ETH - standard  
-    10**19: 20,   # 10 ETH - allow more for large trades
-}
-
 # Price sanity: max deviation from anchor (in basis points)
-# Increased from 1000 to 1500 to reduce false positives on volatile pairs
-MAX_PRICE_DEVIATION_BPS = 1500  # 15% - anything beyond is suspicious
-
-# Pairs with known high volatility get wider threshold
-HIGH_VOLATILITY_PAIRS = {"WETH/LINK", "WETH/UNI", "WETH/GMX", "WETH/ARB"}
+MAX_PRICE_DEVIATION_BPS = 1500  # 15% for stable pairs
 MAX_PRICE_DEVIATION_BPS_VOLATILE = 2500  # 25% for volatile pairs
+
+# Volatile pairs that need higher deviation tolerance
+HIGH_VOLATILITY_PAIRS = {"WETH/LINK", "WETH/UNI", "WETH/GMX", "WETH/ARB", "ARB/WETH", "LINK/WETH"}
 
 # Anchor DEX for price reference (most reliable quotes)
 ANCHOR_DEX = "uniswap_v3"
+
+
+# =============================================================================
+# ADAPTIVE LIMITS (by trade size)
+# =============================================================================
+
+# Gas limits by amount_in (wei) - smaller trades need tighter limits
+GAS_LIMITS_BY_SIZE = {
+    10**17: 300_000,   # 0.1 ETH - tight
+    10**18: 500_000,   # 1 ETH - standard
+    10**19: 800_000,   # 10 ETH - larger trades allowed more gas
+}
+
+# Ticks limits by amount_in (wei) - smaller trades should cross fewer ticks
+TICKS_LIMITS_BY_SIZE = {
+    10**17: 5,    # 0.1 ETH - very tight
+    10**18: 10,   # 1 ETH - standard
+    10**19: 20,   # 10 ETH - more impact allowed for larger trades
+}
+
+
+def get_adaptive_gas_limit(amount_in: int) -> int:
+    """
+    Get gas limit based on trade size.
+    Larger trades can tolerate higher gas costs as a proportion of value.
+    """
+    for size_threshold, gas_limit in sorted(GAS_LIMITS_BY_SIZE.items(), reverse=True):
+        if amount_in >= size_threshold:
+            return gas_limit
+    # Smallest trades get tightest limit
+    return min(GAS_LIMITS_BY_SIZE.values())
+
+
+def get_adaptive_ticks_limit(amount_in: int) -> int:
+    """
+    Get ticks limit based on trade size.
+    Larger trades can tolerate more price impact.
+    """
+    for size_threshold, ticks_limit in sorted(TICKS_LIMITS_BY_SIZE.items(), reverse=True):
+        if amount_in >= size_threshold:
+            return ticks_limit
+    # Smallest trades get tightest limit
+    return min(TICKS_LIMITS_BY_SIZE.values())
+
+
+def get_price_deviation_limit(pair: str | None = None) -> int:
+    """
+    Get price deviation limit based on pair volatility.
+    Volatile pairs (like WETH/ARB) need higher tolerance.
+    """
+    if pair and pair in HIGH_VOLATILITY_PAIRS:
+        return MAX_PRICE_DEVIATION_BPS_VOLATILE
+    return MAX_PRICE_DEVIATION_BPS
 
 
 # =============================================================================
@@ -84,17 +122,12 @@ def gate_gas_estimate(quote: Quote, max_gas: int | None = None) -> GateResult:
     """
     Reject if gas estimate is too high.
     
-    Uses adaptive limits based on trade size if max_gas not specified.
+    Uses adaptive limits based on amount_in if max_gas not specified.
+    Larger trades can tolerate higher gas costs proportionally.
     """
+    # Use adaptive limit if not explicitly provided
     if max_gas is None:
-        # Find appropriate limit based on amount_in
-        amount_in = quote.amount_in
-        for threshold, limit in sorted(GAS_LIMITS_BY_SIZE.items(), reverse=True):
-            if amount_in >= threshold:
-                max_gas = limit
-                break
-        else:
-            max_gas = MAX_GAS_ESTIMATE  # Default
+        max_gas = get_adaptive_gas_limit(quote.amount_in)
     
     if quote.gas_estimate > max_gas:
         return GateResult(
@@ -113,21 +146,16 @@ def gate_ticks_crossed(quote: Quote, max_ticks: int | None = None) -> GateResult
     """
     Reject if too many ticks crossed (V3 only, skip for Algebra).
     
-    Uses adaptive limits based on trade size if max_ticks not specified.
+    Uses adaptive limits based on amount_in if max_ticks not specified.
+    Larger trades can tolerate more price impact.
     """
     # Algebra doesn't report ticks_crossed - skip this gate
     if quote.ticks_crossed is None:
         return GateResult(passed=True)
     
+    # Use adaptive limit if not explicitly provided
     if max_ticks is None:
-        # Find appropriate limit based on amount_in
-        amount_in = quote.amount_in
-        for threshold, limit in sorted(TICKS_LIMITS_BY_SIZE.items(), reverse=True):
-            if amount_in >= threshold:
-                max_ticks = limit
-                break
-        else:
-            max_ticks = MAX_TICKS_CROSSED  # Default
+        max_ticks = get_adaptive_ticks_limit(quote.amount_in)
     
     if quote.ticks_crossed > max_ticks:
         return GateResult(
@@ -158,6 +186,7 @@ def gate_price_sanity(
     anchor_price: Decimal | None,
     is_anchor_dex: bool = False,
     max_deviation_bps: int | None = None,
+    pair: str | None = None,
 ) -> GateResult:
     """
     Reject if price deviates too much from anchor.
@@ -165,7 +194,7 @@ def gate_price_sanity(
     P0 FIX: Non-anchor quotes WITHOUT anchor_price are REJECTED.
     This prevents "phantom opportunities" where only one DEX quotes.
     
-    Uses adaptive threshold for volatile pairs.
+    Uses adaptive deviation limits for volatile pairs (WETH/ARB, WETH/LINK, etc.)
     
     This catches:
     - Invalid pool/fee tier combos that return garbage prices
@@ -177,11 +206,20 @@ def gate_price_sanity(
         quote: Quote to validate
         anchor_price: Reference price from anchor DEX (e.g., Uniswap V3)
         is_anchor_dex: True if this quote is from the anchor DEX
-        max_deviation_bps: Maximum allowed deviation (auto-detected if None)
+        max_deviation_bps: Maximum allowed deviation in basis points (auto-detect if None)
+        pair: Pair string like "WETH/ARB" for volatility detection
     """
     # If this IS the anchor DEX, it sets the anchor - always pass
     if is_anchor_dex:
         return GateResult(passed=True)
+    
+    # Derive pair from quote if not provided
+    if pair is None:
+        pair = f"{quote.token_in.symbol}/{quote.token_out.symbol}"
+    
+    # Use adaptive deviation limit based on pair volatility
+    if max_deviation_bps is None:
+        max_deviation_bps = get_price_deviation_limit(pair)
     
     # P0 FIX: Non-anchor quote without anchor = REJECT
     # This prevents "phantom" opportunities from single-DEX quotes
@@ -191,6 +229,7 @@ def gate_price_sanity(
             reject_code=ErrorCode.PRICE_ANCHOR_MISSING,
             details={
                 "reason": "no_anchor_price",
+                "pair": pair,
                 "dex_id": quote.pool.dex_id,
                 "fee": quote.pool.fee,
                 "quote_price": str(calculate_implied_price(quote)),
@@ -205,18 +244,11 @@ def gate_price_sanity(
             reject_code=ErrorCode.PRICE_SANITY_FAILED,
             details={
                 "reason": "zero_price",
+                "pair": pair,
                 "quote_price": "0",
                 "anchor_price": str(anchor_price),
             },
         )
-    
-    # Determine max deviation based on pair volatility
-    if max_deviation_bps is None:
-        pair = quote.pool.pair_key
-        if pair in HIGH_VOLATILITY_PAIRS:
-            max_deviation_bps = MAX_PRICE_DEVIATION_BPS_VOLATILE
-        else:
-            max_deviation_bps = MAX_PRICE_DEVIATION_BPS
     
     # Calculate deviation: |quote - anchor| / anchor * 10000
     deviation = abs(quote_price - anchor_price) / anchor_price * 10000
@@ -228,7 +260,7 @@ def gate_price_sanity(
             reject_code=ErrorCode.PRICE_SANITY_FAILED,
             details={
                 "reason": "deviation_too_high",
-                "pair": quote.pool.pair_key,
+                "pair": pair,
                 "deviation_bps": deviation_bps,
                 "max_deviation_bps": max_deviation_bps,
                 "quote_price": str(quote_price),
