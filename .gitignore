@@ -25,6 +25,7 @@ wheels/
 *.egg
 .json
 
+
 # Virtual environments
 venv/
 ENV/
@@ -51,6 +52,9 @@ data/trades/*.json
 data/trades/*.jsonl
 data/reports/*.json
 data/reports/*.md
+# runtime artifacts
+data/
+data/**
 
 # Keep directory structure
 !data/snapshots/.gitkeep
