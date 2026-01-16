@@ -428,6 +428,79 @@ def gate_gas_estimate(quote: Quote, max_gas: int | None = None) -> GateResult:
     return GateResult(passed=True)
 
 
+# Team Lead Крок 5: Relative gas filter
+# "Газ-фільтр зроби 'відносним': не тільки threshold_usdc, а 
+#  min(net_pnl_usdc) / gas_cost_usdc > K. Для малих сайзів інакше ти завжди програєш."
+
+# Minimum profit-to-gas ratio
+MIN_PROFIT_TO_GAS_RATIO = 2.0  # net_pnl must be at least 2x gas cost
+
+def gate_gas_relative(
+    quote: Quote,
+    net_pnl_bps: int,
+    gas_price_gwei: float = 0.01,  # Conservative L2 estimate
+    eth_price_usdc: float = 3000.0,
+    min_ratio: float = MIN_PROFIT_TO_GAS_RATIO,
+) -> GateResult:
+    """
+    Relative gas filter: reject if net_pnl / gas_cost < min_ratio.
+    
+    Team Lead:
+    "Газ-фільтр зроби 'відносним': не тільки threshold_usdc, а 
+     min(net_pnl_usdc) / gas_cost_usdc > K. Для малих сайзів інакше ти завжди програєш."
+    
+    This ensures the trade is profitable RELATIVE to gas costs,
+    not just that gas is below an absolute threshold.
+    
+    Args:
+        quote: Quote to validate
+        net_pnl_bps: Expected net profit in basis points
+        gas_price_gwei: Gas price in gwei (default L2 estimate)
+        eth_price_usdc: ETH price in USDC
+        min_ratio: Minimum profit-to-gas ratio required
+    
+    Returns:
+        GateResult
+    """
+    # Calculate gas cost in USDC
+    gas_cost_eth = (quote.gas_estimate * gas_price_gwei) / 10**9
+    gas_cost_usdc = gas_cost_eth * eth_price_usdc
+    
+    # Calculate notional value and expected PnL
+    # Assume amount_in is in 18 decimals for ETH-based tokens
+    amount_eth = quote.amount_in / 10**18
+    notional_usdc = amount_eth * eth_price_usdc
+    net_pnl_usdc = notional_usdc * (net_pnl_bps / 10000)
+    
+    # Check ratio
+    if gas_cost_usdc > 0:
+        ratio = net_pnl_usdc / gas_cost_usdc
+    else:
+        ratio = float('inf')  # No gas cost = infinite ratio
+    
+    if ratio < min_ratio:
+        return GateResult(
+            passed=False,
+            reject_code=ErrorCode.QUOTE_GAS_TOO_HIGH,
+            details={
+                "reason": "profit_to_gas_ratio_too_low",
+                "gas_estimate": quote.gas_estimate,
+                "gas_cost_usdc": round(gas_cost_usdc, 6),
+                "net_pnl_bps": net_pnl_bps,
+                "net_pnl_usdc": round(net_pnl_usdc, 6),
+                "profit_to_gas_ratio": round(ratio, 3),
+                "min_ratio_required": min_ratio,
+                "amount_in": quote.amount_in,
+                "notional_usdc": round(notional_usdc, 2),
+                "dex_id": quote.pool.dex_id,
+                "fee": quote.pool.fee,
+                "pair": f"{quote.token_in.symbol}/{quote.token_out.symbol}",
+            },
+        )
+    
+    return GateResult(passed=True)
+
+
 def gate_ticks_crossed(
     quote: Quote,
     max_ticks: int | None = None,
@@ -489,6 +562,7 @@ def gate_price_sanity(
     max_deviation_bps: int | None = None,
     pair: str | None = None,
     second_anchor_price: Decimal | None = None,
+    anchor_source: dict | None = None,  # Team Lead Крок 4: anchor source info
 ) -> GateResult:
     """
     2-level price sanity check.
@@ -497,6 +571,10 @@ def gate_price_sanity(
     "рівень 1: грубий фільтр (25% як у тебе),
      рівень 2: якщо відхилення велике, але spread виглядає 'казково' — 
      вимагати підтвердження другим anchor"
+    
+    Team Lead Update (2026-01-16):
+    "PRICE_SANITY_FAILED: додай діагностику 'anchor source' у details: 
+     який exact anchor dex/pool/fee використано, і чи був anchor_price."
     
     Level 1: Coarse filter (25%/40% for volatile)
     - If deviation > L1, always reject
@@ -513,6 +591,11 @@ def gate_price_sanity(
         max_deviation_bps: Override limit (uses adaptive if None)
         pair: Pair string for volatility detection
         second_anchor_price: Optional second anchor for confirmation
+        anchor_source: Optional dict with anchor source info:
+            - anchor_dex: DEX id of anchor
+            - anchor_pool: Pool address
+            - anchor_fee: Fee tier
+            - anchor_block: Block number of anchor quote
     """
     # If this IS the anchor DEX, it sets the anchor - always pass
     if is_anchor_dex:
@@ -540,6 +623,8 @@ def gate_price_sanity(
                 "dex_id": quote.pool.dex_id,
                 "fee": quote.pool.fee,
                 "quote_price": str(calculate_implied_price(quote)),
+                # Team Lead Крок 4: anchor source info
+                "anchor_source": anchor_source or {"status": "missing"},
             },
         )
     
@@ -554,6 +639,7 @@ def gate_price_sanity(
                 "pair": pair,
                 "quote_price": "0",
                 "anchor_price": str(anchor_price),
+                "anchor_source": anchor_source or {},
             },
         )
     
@@ -561,22 +647,29 @@ def gate_price_sanity(
     deviation = abs(quote_price - anchor_price) / anchor_price * 10000
     deviation_bps = int(deviation)
     
+    # Build common details with anchor source
+    base_details = {
+        "pair": pair,
+        "deviation_bps": deviation_bps,
+        "max_deviation_bps_L1": limit_l1,
+        "max_deviation_bps_L2": limit_l2,
+        "quote_price": str(quote_price),
+        "anchor_price": str(anchor_price),
+        "dex_id": quote.pool.dex_id,
+        "fee": quote.pool.fee,
+        "amount_in": quote.amount_in,
+        # Team Lead Крок 4: anchor source info
+        "anchor_source": anchor_source or {},
+    }
+    
     # LEVEL 1: Coarse filter - hard reject if beyond L1
     if deviation_bps > limit_l1:
         return GateResult(
             passed=False,
             reject_code=ErrorCode.PRICE_SANITY_FAILED,
             details={
+                **base_details,
                 "reason": "deviation_too_high_L1",
-                "pair": pair,
-                "deviation_bps": deviation_bps,
-                "max_deviation_bps_L1": limit_l1,
-                "max_deviation_bps_L2": limit_l2,
-                "quote_price": str(quote_price),
-                "anchor_price": str(anchor_price),
-                "dex_id": quote.pool.dex_id,
-                "fee": quote.pool.fee,
-                "amount_in": quote.amount_in,
             },
         )
     
@@ -609,16 +702,8 @@ def gate_price_sanity(
         reject_code=ErrorCode.PRICE_SANITY_FAILED,
         requires_second_anchor=True,
         details={
+            **base_details,
             "reason": "deviation_between_L1_L2",
-            "pair": pair,
-            "deviation_bps": deviation_bps,
-            "max_deviation_bps_L1": limit_l1,
-            "max_deviation_bps_L2": limit_l2,
-            "quote_price": str(quote_price),
-            "anchor_price": str(anchor_price),
-            "dex_id": quote.pool.dex_id,
-            "fee": quote.pool.fee,
-            "amount_in": quote.amount_in,
             "needs_second_anchor": True,
         },
     )

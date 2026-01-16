@@ -5,8 +5,11 @@ Team Lead Крок 4:
 "Зменшити SMOKE навантаження: 1–2 пари, 2 DEX, 1 fee tier, 1 fixed amount_in.
 Поки не зникне GATES_CHANGED масово."
 
+Team Lead Update (2026-01-16):
+"Викинь/заміни wstETH/WETH зі smoke_minimal — вона генерує купу 'очікуваних' фейлів (ticks+gas)."
+
 This config provides:
-- Minimal pairs (2)
+- Minimal pairs (2) - NO wstETH/WETH (токсична пара для smoke)
 - Minimal DEXes (2)
 - Single fee tier (500 = 0.05%)
 - Fixed amount_in (0.1 ETH)
@@ -18,9 +21,16 @@ This config provides:
 
 SMOKE_MINIMAL = {
     # Pairs: only 2 well-understood pairs
+    # EXCLUDED: wstETH/WETH (generates expected fails: ticks+gas too high)
     "pairs": [
         "WETH/USDC",
         "WETH/ARB",
+    ],
+    
+    # Toxic pairs to exclude from smoke (generate expected fails)
+    "excluded_pairs": [
+        "wstETH/WETH",  # High ticks (16-20), high gas (500k-846k)
+        "WETH/wstETH",
     ],
     
     # DEXes: only 2 most reliable
@@ -48,6 +58,16 @@ SMOKE_MINIMAL = {
         "static_gas_price": True,  # Don't recalculate gas
         "same_anchor": True,       # Use same anchor from original quote
     },
+    
+    # Team Lead: Paper trading mode ignores verified_for_execution
+    "paper_trading": {
+        "ignore_verification": True,  # Allow execution_ready in paper mode
+        "log_blocked_reason": True,   # Log "blocked_by_verification" for real mode
+    },
+    
+    # Team Lead Крок 9: Notion capital for PnL normalization
+    # "прив'яжи до фіксованого notion-capital або перестань показувати cumulative у SMOKE"
+    "notion_capital_usdc": 10000.0,  # $10k notional for SMOKE mode
 }
 
 

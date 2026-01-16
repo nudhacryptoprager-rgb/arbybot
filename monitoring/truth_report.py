@@ -23,7 +23,18 @@ logger = get_logger(__name__)
 
 @dataclass
 class OpportunityRank:
-    """A ranked opportunity."""
+    """
+    A ranked opportunity.
+    
+    Team Lead Крок 7-8: Clarify executable vs paper_executable vs execution_ready
+    
+    executable = passes all gates in current mode (SMOKE/paper/live)
+    paper_executable = executable AND would_execute in paper mode (ignores verification)
+    execution_ready = executable && verified_for_execution && !cooldown && !blocked
+    
+    In SMOKE mode: paper_executable == executable (no verification requirement)
+    In live mode: execution_ready requires full verification chain
+    """
     rank: int
     spread_id: str
     buy_dex: str
@@ -38,13 +49,19 @@ class OpportunityRank:
     confidence: float = 0.0  # 0.0 - 1.0
     confidence_breakdown: dict | None = None  # Component scores
     
-    # КРИТИЧНО: executable має бути реальним полем для backward compatibility
-    # Team Lead: "executable: bool = False (або bool | None з дефолтом)"
-    executable: bool = False
+    # Gate status
+    executable: bool = False  # Passes all gates in current mode
     
-    # Team Lead Крок 5: Розділити executable на 2 прапори (додаткові)
-    paper_executable: bool = False   # Passes all gates on paper
-    execution_ready: bool = False    # verified_for_execution + router ready
+    # Team Lead Крок 7: paper_executable = executable in paper mode
+    # In SMOKE/paper mode, this should match executable
+    paper_executable: bool = False
+    
+    # Team Lead Крок 8: execution_ready = full verification chain
+    # execution_ready = (executable && verified_for_execution && !cooldown && !blocked)
+    execution_ready: bool = False
+    
+    # Team Lead: blocked_reason explains why execution_ready=False
+    blocked_reason: str | None = None
 
 
 @dataclass
@@ -149,6 +166,11 @@ class TruthReport:
     would_execute_pnl_bps: int = 0
     would_execute_pnl_usdc: float = 0.0
     
+    # Team Lead Крок 9: Notion capital for PnL normalization
+    # "прив'яжи до фіксованого notion-capital або перестань показувати cumulative у SMOKE"
+    notion_capital_usdc: float = 0.0  # 0 = not set (raw cumulative)
+    normalized_return_pct: float | None = None  # total_pnl_usdc / notion_capital * 100
+    
     def validate_invariants(self) -> list[str]:
         """
         Validate report invariants (Team Lead Крок 2).
@@ -225,14 +247,23 @@ class TruthReport:
             "cumulative_pnl": {
                 "total_bps": self.total_pnl_bps,
                 "total_usdc": self.total_pnl_usdc,
+                # Team Lead Крок 9: notion capital warning
+                "warning": "Raw cumulative - not normalized to capital" if self.notion_capital_usdc == 0 else None,
             },
             "pnl": {
                 "signal_pnl_bps": self.signal_pnl_bps,
                 "signal_pnl_usdc": self.signal_pnl_usdc,
                 "would_execute_pnl_bps": self.would_execute_pnl_bps,
                 "would_execute_pnl_usdc": self.would_execute_pnl_usdc,
+                # Team Lead Крок 9: normalized return if capital set
+                "notion_capital_usdc": self.notion_capital_usdc,
+                "normalized_return_pct": self.normalized_return_pct,
             },
         }
+        
+        # Clean up None values from PnL warning
+        if result["cumulative_pnl"].get("warning") is None:
+            del result["cumulative_pnl"]["warning"]
         
         # Add blocked reasons breakdown (Team Lead Крок 3)
         if self.blocked_reasons:
