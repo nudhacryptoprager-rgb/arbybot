@@ -1130,8 +1130,13 @@ async def run_scan_cycle(
                                     if not buy_exec or not sell_exec:
                                         blocked_reason_real = "EXEC_DISABLED_NOT_VERIFIED"
                                 
-                                # КРОК 1: Create PaperTrade with v4 contract fields (NOT legacy)
-                                # This ensures no crash from amount_in_usdc keyword mismatch
+                                # Roadmap 3.2: No float money - use Decimal strings
+                                from decimal import Decimal as D
+                                amount_in_numeraire_str = str(D(str(amount_in_usdc)).quantize(D("0.000001")))
+                                expected_pnl_numeraire_str = str(D(str(expected_pnl_usdc)).quantize(D("0.000001")))
+                                gas_price_gwei_str = str(D(str(gas_price_gwei)).quantize(D("0.0001")))
+                                
+                                # Create PaperTrade with v4 contract fields (Roadmap 3.2: no float)
                                 paper_trade = PaperTrade(
                                     spread_id=spread_data["id"],
                                     block_number=block_number,
@@ -1148,11 +1153,11 @@ async def run_scan_cycle(
                                     spread_bps=spread_bps,
                                     gas_cost_bps=gas_cost_bps,
                                     net_pnl_bps=net_pnl_bps,
-                                    gas_price_gwei=round(gas_price_gwei, 4),
-                                    # v4 CONTRACT FIELDS (source of truth)
+                                    gas_price_gwei=gas_price_gwei_str,  # Roadmap 3.2: str
+                                    # v4 CONTRACT FIELDS (Roadmap 3.2: Decimal-strings)
                                     numeraire="USDC",
-                                    amount_in_numeraire=round(amount_in_usdc, 2),
-                                    expected_pnl_numeraire=round(expected_pnl_usdc, 4),
+                                    amount_in_numeraire=amount_in_numeraire_str,
+                                    expected_pnl_numeraire=expected_pnl_numeraire_str,
                                     # Execution status - paper vs real
                                     economic_executable=economic_executable,
                                     paper_execution_ready=paper_execution_ready,
@@ -1164,7 +1169,7 @@ async def run_scan_cycle(
                                     sell_verified=sell_exec,
                                 )
                                 
-                                # Record with cooldown check
+                                # Record with cooldown check (dedup)
                                 recorded = paper_session.record_trade(paper_trade)
                                 
                                 # Revalidation: check if this spread existed in pending trades

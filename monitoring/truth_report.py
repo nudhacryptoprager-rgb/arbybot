@@ -13,6 +13,7 @@ Reports include:
 import json
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -217,18 +218,21 @@ class TruthReport:
     revalidation_passed: int = 0
     revalidation_gates_changed: int = 0
     
-    # PnL fields
+    # PnL fields (Roadmap 3.2: stored as str for no-float serialization)
     total_pnl_bps: int = 0
-    total_pnl_usdc: float = 0.0
+    total_pnl_usdc: str = "0.000000"  # Decimal-string
     signal_pnl_bps: int = 0
-    signal_pnl_usdc: float = 0.0
+    signal_pnl_usdc: str = "0.000000"  # Decimal-string
     would_execute_pnl_bps: int = 0
-    would_execute_pnl_usdc: float = 0.0
+    would_execute_pnl_usdc: str = "0.000000"  # Decimal-string
     
-    # Team Lead Крок 9: Notion capital for PnL normalization
-    # "прив'яжи до фіксованого notion-capital або перестань показувати cumulative у SMOKE"
-    notion_capital_usdc: float = 0.0  # 0 = not set (raw cumulative)
-    normalized_return_pct: float | None = None  # total_pnl_usdc / notion_capital * 100
+    # Team Lead Крок 9: Notion capital for PnL normalization (str for no-float)
+    notion_capital_usdc: str = "0.000000"  # Decimal-string
+    normalized_return_pct: str | None = None  # Decimal-string or None
+    
+    # Suppression flag (set when invariants violated)
+    pnl_suppressed: bool = False
+    pnl_suppressed_reason: str | None = None
     
     def validate_invariants(self) -> list[str]:
         """
@@ -267,16 +271,21 @@ class TruthReport:
             )
         
         # КРОК 4: PnL consistency invariant
+        # Parse Decimal from str for comparison
+        from decimal import Decimal
+        would_execute_pnl = Decimal(self.would_execute_pnl_usdc)
+        normalized_pct = Decimal(self.normalized_return_pct) if self.normalized_return_pct else Decimal("0")
+        
+        # КРОК 4: PnL consistency invariant
         # If would_execute_pnl is 0 but normalized_return_pct is high, something is wrong
-        if self.would_execute_pnl_usdc == 0 and self.normalized_return_pct is not None:
-            if self.normalized_return_pct > 1.0:  # More than 1% return with no trades
-                violations.append(
-                    f"PnL_INCONSISTENT: normalized_return_pct ({self.normalized_return_pct}%) "
-                    f"but would_execute_pnl_usdc=0"
-                )
+        if would_execute_pnl == Decimal("0") and normalized_pct > Decimal("1"):
+            violations.append(
+                f"PnL_INCONSISTENT: normalized_return_pct ({self.normalized_return_pct}%) "
+                f"but would_execute_pnl_usdc=0"
+            )
         
         # КРОК 4: Unrealistic return check (>50% in single SMOKE is suspicious)
-        if self.normalized_return_pct is not None and self.normalized_return_pct > 50.0:
+        if normalized_pct > Decimal("50"):
             violations.append(
                 f"PnL_UNREALISTIC: normalized_return_pct ({self.normalized_return_pct}%) > 50% "
                 f"(likely calculation error)"
@@ -344,27 +353,26 @@ class TruthReport:
                 "total": self.revalidation_total,
                 "passed": self.revalidation_passed,
                 "gates_changed": self.revalidation_gates_changed,
-                "gates_changed_pct": round(
-                    self.revalidation_gates_changed / max(1, self.revalidation_total) * 100, 1
-                ),
+                "gates_changed_pct": str(Decimal(str(
+                    self.revalidation_gates_changed / max(1, self.revalidation_total) * 100
+                )).quantize(Decimal("0.1"))),  # Roadmap 3.2: str
             },
-            # PnL - Team Lead v4: Raw cumulative is DEBUG, normalized is HEADLINE
+            # PnL - Roadmap 3.2: All money as str (no float)
             "cumulative_pnl": {
                 "total_bps": self.total_pnl_bps,
-                "total_usdc": self.total_pnl_usdc,
-                # Team Lead Крок 9: notion capital warning
-                "_warning": "RAW - use pnl_normalized for decisions" if self.notion_capital_usdc == 0 else None,
+                "total_usdc": self.total_pnl_usdc,  # Already str
+                "_warning": "RAW - use pnl_normalized for decisions" if Decimal(self.notion_capital_usdc) == 0 else None,
             },
             "pnl": {
                 "signal_pnl_bps": self.signal_pnl_bps,
-                "signal_pnl_usdc": self.signal_pnl_usdc,
+                "signal_pnl_usdc": self.signal_pnl_usdc,  # str
                 "would_execute_pnl_bps": self.would_execute_pnl_bps,
-                "would_execute_pnl_usdc": self.would_execute_pnl_usdc,
+                "would_execute_pnl_usdc": self.would_execute_pnl_usdc,  # str
             },
-            # Team Lead v4: Normalized PnL is the HEADLINE metric
+            # Team Lead v4: Normalized PnL is the HEADLINE metric (str, no float)
             "pnl_normalized": {
-                "notion_capital_numeraire": self.notion_capital_usdc,
-                "normalized_return_pct": self.normalized_return_pct,
+                "notion_capital_numeraire": self.notion_capital_usdc,  # str
+                "normalized_return_pct": self.normalized_return_pct,  # str or None
                 "numeraire": "USDC",
             },
         }
@@ -372,19 +380,24 @@ class TruthReport:
         # Clean up None values
         if result["cumulative_pnl"].get("_warning") is None:
             del result["cumulative_pnl"]["_warning"]
-        if result["pnl_normalized"]["notion_capital_numeraire"] == 0:
+        if Decimal(self.notion_capital_usdc) == 0:
             # If no notion capital, mark as invalid
             result["pnl_normalized"]["_status"] = "NOT_CONFIGURED"
+        
+        # Suppression: if invariants violated, suppress PnL values
+        if violations:
+            result["invariant_violations"] = violations
+            result["pnl_suppressed"] = True
+            result["pnl_suppressed_reason"] = violations[0]  # First violation
+            # Suppress headline PnL to prevent misleading metrics
+            result["pnl_normalized"]["normalized_return_pct"] = None
+            result["pnl_normalized"]["_status"] = "SUPPRESSED_INVARIANT_VIOLATION"
         
         # Add blocked reasons breakdown (Team Lead Крок 3)
         if self.blocked_reasons:
             result["blocked_reasons_breakdown"] = self.blocked_reasons
         if self.top_blocked_reasons:
             result["top_blocked_reasons"] = self.top_blocked_reasons
-        
-        # Add invariant violations if any
-        if violations:
-            result["invariant_violations"] = violations
         
         return result
 
@@ -993,32 +1006,37 @@ def generate_truth_report(
         # КРОК 4: Get would_execute count for PnL validation
         would_execute_count = paper_session_stats.get("would_execute", 0)
     
-    # КРОК 4: Calculate normalized return ONLY from would_execute trades
-    # This prevents misleading metrics like 83% return
-    normalized_return_pct = None
-    would_execute_pnl_usdc = 0.0
+    # Roadmap 3.2: No float money - use Decimal
+    from decimal import Decimal
+    normalized_return_pct = None  # str or None
+    would_execute_pnl_usdc = "0.000000"  # str
     would_execute_pnl_bps = 0
     
-    if paper_session_stats and notion_capital_numeraire > 0:
+    # Parse notion_capital as Decimal
+    notion_capital_decimal = Decimal(str(notion_capital_numeraire))
+    
+    if paper_session_stats and notion_capital_decimal > 0:
         would_execute_count = paper_session_stats.get("would_execute", 0)
         
         if would_execute_count > 0:
-            # Only count PnL from actual would_execute trades
-            would_execute_pnl_usdc = total_pnl_numeraire  # Already filtered in record_trade
+            # Parse total_pnl as Decimal (it's already str from paper_session)
+            total_pnl_decimal = Decimal(total_pnl_numeraire)
+            would_execute_pnl_usdc = total_pnl_numeraire  # str
             would_execute_pnl_bps = total_pnl_bps
             
-            # КРОК 4: normalized_return_pct from would_execute only
-            normalized_return_pct = round(
-                (would_execute_pnl_usdc / notion_capital_numeraire) * 100, 4
-            )
+            # Roadmap 3.2: normalized_return_pct as Decimal-string
+            normalized_pct_decimal = (total_pnl_decimal / notion_capital_decimal) * 100
+            normalized_return_pct = str(normalized_pct_decimal.quantize(Decimal("0.0001")))
             
-            # КРОК 4: Sanity check - cap at reasonable value
-            if normalized_return_pct > 50.0:
+            # Sanity check - flag if > 50%
+            if normalized_pct_decimal > Decimal("50"):
                 logger.warning(
                     f"Unrealistic normalized_return_pct: {normalized_return_pct}%, "
-                    f"capping at 50% and flagging as suspicious"
+                    f"will be flagged by invariant"
                 )
-                # Don't cap, but the invariant will flag it
+    
+    # Roadmap 3.2: All PnL values as str
+    notion_capital_str = str(notion_capital_decimal.quantize(Decimal("0.000001")))
     
     return TruthReport(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1043,13 +1061,13 @@ def generate_truth_report(
         revalidation_total=revalidation_total,
         revalidation_passed=revalidation_passed,
         revalidation_gates_changed=revalidation_gates_changed,
-        # КРОК 4: PnL - separate signal vs would_execute
+        # Roadmap 3.2: PnL as Decimal-strings
         total_pnl_bps=total_pnl_bps,
-        total_pnl_usdc=total_pnl_numeraire,
+        total_pnl_usdc=total_pnl_numeraire,  # str
         would_execute_pnl_bps=would_execute_pnl_bps,
-        would_execute_pnl_usdc=would_execute_pnl_usdc,
-        notion_capital_usdc=notion_capital_numeraire,
-        normalized_return_pct=normalized_return_pct,
+        would_execute_pnl_usdc=would_execute_pnl_usdc,  # str
+        notion_capital_usdc=notion_capital_str,  # str
+        normalized_return_pct=normalized_return_pct,  # str or None
     )
 
 
@@ -1094,15 +1112,18 @@ def print_truth_report(report: TruthReport) -> None:
     print(f"Blocked: {report.blocked_spreads}")
     
     print("\n--- CUMULATIVE PNL ---")
-    print(f"Total: {report.total_pnl_bps} bps (${report.total_pnl_usdc:.2f})")
+    # Roadmap 3.2: total_pnl_usdc is now str
+    print(f"Total: {report.total_pnl_bps} bps (${report.total_pnl_usdc})")
     
     if report.top_opportunities:
         print("\n--- TOP OPPORTUNITIES ---")
         for opp in report.top_opportunities:
             exec_mark = "✓" if opp.executable else "✗"
+            # Roadmap 3.2: expected_pnl_usdc may be str
+            pnl_str = opp.expected_pnl_usdc if isinstance(opp.expected_pnl_usdc, str) else f"{opp.expected_pnl_usdc:.2f}"
             print(
                 f"  #{opp.rank} [{exec_mark}] {opp.pair} {opp.buy_dex}→{opp.sell_dex}: "
-                f"{opp.net_pnl_bps} bps (${opp.expected_pnl_usdc:.2f}) "
+                f"{opp.net_pnl_bps} bps (${pnl_str}) "
                 f"conf={opp.confidence:.0%}"
             )
             # Show confidence breakdown if available

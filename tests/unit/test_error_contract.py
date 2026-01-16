@@ -1267,3 +1267,138 @@ class TestExecutableSemantics:
         
         # This should pass (1 <= 2)
         assert report.execution_ready_count <= report.paper_executable_count
+
+
+class TestNoFloatMoney:
+    """
+    Roadmap 3.2: No float money tests.
+    
+    Validates that all money fields are stored as strings (Decimal-strings)
+    or integers (bps), never as float.
+    """
+    
+    def test_paper_trade_no_float_in_serialization(self):
+        """PaperTrade.to_dict() must not contain float money values."""
+        import json
+        from strategy.paper_trading import PaperTrade
+        
+        trade = PaperTrade(
+            spread_id="WETH/USDC:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",
+            token_out="USDC",
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei="0.01",
+            numeraire="USDC",
+            amount_in_numeraire="300.000000",
+            expected_pnl_numeraire="0.840000",
+        )
+        
+        # Serialize to JSON
+        trade_dict = trade.to_dict()
+        json_str = json.dumps(trade_dict)
+        
+        # Money fields must be strings, not floats
+        assert isinstance(trade_dict["amount_in_numeraire"], str), "amount_in_numeraire must be str"
+        assert isinstance(trade_dict["expected_pnl_numeraire"], str), "expected_pnl_numeraire must be str"
+        assert isinstance(trade_dict["gas_price_gwei"], str), "gas_price_gwei must be str"
+        # Legacy aliases should also be strings
+        assert isinstance(trade_dict["amount_in_usdc"], str), "amount_in_usdc must be str"
+        assert isinstance(trade_dict["expected_pnl_usdc"], str), "expected_pnl_usdc must be str"
+    
+    def test_truth_report_no_float_pnl(self):
+        """TruthReport PnL fields must not be float."""
+        from monitoring.truth_report import TruthReport, HealthMetrics
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[],
+        )
+        
+        report = TruthReport(
+            timestamp="2026-01-16T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=[],
+            total_pnl_bps=100,
+            total_pnl_usdc="10.500000",  # Must be str
+            would_execute_pnl_usdc="10.500000",  # Must be str
+            notion_capital_usdc="10000.000000",  # Must be str
+            normalized_return_pct="0.1050",  # Must be str
+        )
+        
+        # Validate types
+        assert isinstance(report.total_pnl_usdc, str), "total_pnl_usdc must be str"
+        assert isinstance(report.would_execute_pnl_usdc, str), "would_execute_pnl_usdc must be str"
+        assert isinstance(report.notion_capital_usdc, str), "notion_capital_usdc must be str"
+        assert isinstance(report.normalized_return_pct, str), "normalized_return_pct must be str"
+        
+        # to_dict must not have float money
+        report_dict = report.to_dict()
+        pnl_norm = report_dict.get("pnl_normalized", {})
+        assert not isinstance(pnl_norm.get("notion_capital_numeraire"), float), "notion_capital in dict must not be float"
+    
+    def test_calculate_usdc_value_returns_decimal(self):
+        """calculate_usdc_value must return Decimal, not float."""
+        from decimal import Decimal
+        from strategy.paper_trading import calculate_usdc_value
+        
+        result = calculate_usdc_value(
+            amount_in_wei=10**17,  # 0.1 ETH
+            implied_price=Decimal("3000"),
+            token_in_decimals=18,
+        )
+        
+        assert isinstance(result, Decimal), f"Expected Decimal, got {type(result)}"
+        assert result == Decimal("300"), f"Expected 300, got {result}"
+    
+    def test_calculate_pnl_usdc_returns_decimal(self):
+        """calculate_pnl_usdc must return Decimal, not float."""
+        from decimal import Decimal
+        from strategy.paper_trading import calculate_pnl_usdc
+        
+        result = calculate_pnl_usdc(
+            amount_in_wei=10**17,  # 0.1 ETH
+            net_pnl_bps=100,  # 1%
+            implied_price=Decimal("3000"),
+            token_in_decimals=18,
+        )
+        
+        assert isinstance(result, Decimal), f"Expected Decimal, got {type(result)}"
+        # 300 USDC * 1% = 3 USDC
+        assert result == Decimal("3"), f"Expected 3, got {result}"
+    
+    def test_paper_session_stats_no_float(self):
+        """PaperSession.stats must not contain float money values."""
+        import tempfile
+        from pathlib import Path
+        from strategy.paper_trading import PaperSession
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            session = PaperSession(
+                trades_dir=Path(tmpdir),
+                cooldown_blocks=5,
+            )
+            
+            # total_pnl_numeraire must be str
+            assert isinstance(session.stats["total_pnl_numeraire"], str), \
+                "total_pnl_numeraire in stats must be str"
+            assert session.stats["total_pnl_numeraire"] == "0.000000"

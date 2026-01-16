@@ -55,11 +55,14 @@ class PaperTrade:
     """
     A single paper trade record.
     
-    CONTRACT (Dev Task v4 AC-4/AC-5):
+    CONTRACT (Roadmap 3.2 + Dev Task v4):
     - token_in/token_out must match spread_id/pair (real tokens)
     - numeraire is the currency for PnL (usually USDC)
-    - *_numeraire fields contain values in numeraire currency
-    - Legacy fields (amount_in_usdc, expected_pnl_usdc) are supported via aliases
+    - *_numeraire fields contain values as Decimal-strings (NO FLOAT!)
+    
+    Roadmap 3.2: No float money
+    - amount_in_numeraire: str (Decimal-string, e.g., "300.000000")
+    - expected_pnl_numeraire: str (Decimal-string, e.g., "0.840000")
     
     SEMANTICS (AC-4: Paper vs Real execution):
     - economic_executable: passes gates + PnL > 0 (economic truth)
@@ -84,20 +87,20 @@ class PaperTrade:
     fee: int
     amount_in_wei: str
     
-    # Prices
+    # Prices (as strings - no float)
     buy_price: str
     sell_price: str
     
-    # PnL in basis points (relative)
+    # PnL in basis points (relative) - int is OK
     spread_bps: int
     gas_cost_bps: int
     net_pnl_bps: int
-    gas_price_gwei: float
+    gas_price_gwei: str = "0.0"  # Roadmap 3.2: no float, use str
     
-    # NUMERAIRE for PnL calculations (AC-5: source of truth)
+    # NUMERAIRE for PnL calculations (Roadmap 3.2: Decimal-strings, NO FLOAT)
     numeraire: str = DEFAULT_NUMERAIRE  # Currency for PnL (usually "USDC")
-    amount_in_numeraire: float = 0.0    # Trade size in numeraire
-    expected_pnl_numeraire: float = 0.0 # Expected profit in numeraire
+    amount_in_numeraire: str = "0.000000"    # Trade size in numeraire (Decimal-string)
+    expected_pnl_numeraire: str = "0.000000" # Expected profit in numeraire (Decimal-string)
     
     # Outcome
     outcome: str = TradeOutcome.WOULD_EXECUTE.value
@@ -165,26 +168,33 @@ class PaperTrade:
         if self.would_still_execute is not None and self.would_still_paper_execute is None:
             self.would_still_paper_execute = self.would_still_execute
     
-    # Legacy property aliases for backward compatibility (AC-5)
+    # Decimal accessors (Roadmap 3.2: No float money)
+    def get_amount_in_numeraire_decimal(self) -> Decimal:
+        """Get amount_in_numeraire as Decimal for calculations."""
+        return Decimal(self.amount_in_numeraire)
+    
+    def get_expected_pnl_numeraire_decimal(self) -> Decimal:
+        """Get expected_pnl_numeraire as Decimal for calculations."""
+        return Decimal(self.expected_pnl_numeraire)
+    
+    # Legacy property aliases for backward compatibility (returns Decimal, not float)
     @property
-    def amount_in_usdc(self) -> float:
-        """Legacy alias for amount_in_numeraire (when numeraire is USDC)."""
-        if self.numeraire == "USDC":
-            return self.amount_in_numeraire
-        logger.warning(
-            f"amount_in_usdc accessed but numeraire is {self.numeraire}, not USDC"
-        )
-        return self.amount_in_numeraire
+    def amount_in_usdc(self) -> Decimal:
+        """Legacy alias for amount_in_numeraire (when numeraire is USDC). Returns Decimal."""
+        if self.numeraire != "USDC":
+            logger.warning(
+                f"amount_in_usdc accessed but numeraire is {self.numeraire}, not USDC"
+            )
+        return self.get_amount_in_numeraire_decimal()
     
     @property
-    def expected_pnl_usdc(self) -> float:
-        """Legacy alias for expected_pnl_numeraire (when numeraire is USDC)."""
-        if self.numeraire == "USDC":
-            return self.expected_pnl_numeraire
-        logger.warning(
-            f"expected_pnl_usdc accessed but numeraire is {self.numeraire}, not USDC"
-        )
-        return self.expected_pnl_numeraire
+    def expected_pnl_usdc(self) -> Decimal:
+        """Legacy alias for expected_pnl_numeraire (when numeraire is USDC). Returns Decimal."""
+        if self.numeraire != "USDC":
+            logger.warning(
+                f"expected_pnl_usdc accessed but numeraire is {self.numeraire}, not USDC"
+            )
+        return self.get_expected_pnl_numeraire_decimal()
     
     @classmethod
     def from_legacy_kwargs(cls, **kwargs) -> "PaperTrade":
@@ -204,13 +214,13 @@ class PaperTrade:
         """
         Convert to dictionary for JSON serialization.
         
+        Roadmap 3.2: No float money - all money fields are strings.
         AC-4: Includes both paper and real execution readiness.
-        AC-5: Includes legacy aliases for backward compatibility.
         """
         result = asdict(self)
-        # AC-5: Add legacy aliases for backward compatibility
-        result["amount_in_usdc"] = self.amount_in_usdc
-        result["expected_pnl_usdc"] = self.expected_pnl_usdc
+        # Roadmap 3.2: Legacy aliases as strings (no float in JSON)
+        result["amount_in_usdc"] = self.amount_in_numeraire  # Already str
+        result["expected_pnl_usdc"] = self.expected_pnl_numeraire  # Already str
         # AC-4: Ensure both paper and real readiness are explicit
         result["paper_execution_ready"] = self.paper_execution_ready
         result["real_execution_ready"] = self.real_execution_ready
@@ -324,7 +334,8 @@ class PaperSession:
         # In-memory tracking for cooldown
         self._last_trade_block: dict[str, int] = {}  # spread_id -> last_block
         
-        # Session stats
+        # Session stats (Roadmap 3.2: No float money - use Decimal)
+        self._total_pnl_numeraire = Decimal("0")  # Decimal for accumulation
         self.stats = {
             "total_signals": 0,
             "would_execute": 0,
@@ -332,9 +343,9 @@ class PaperSession:
             "unprofitable": 0,
             "cooldown_skipped": 0,
             "total_pnl_bps": 0,
-            # AC-5: Source of truth is numeraire, not USDC legacy
-            "total_pnl_numeraire": 0.0,
-            "numeraire": "USDC",  # Track which numeraire we're using
+            # Roadmap 3.2: Decimal-string (no float)
+            "total_pnl_numeraire": "0.000000",
+            "numeraire": "USDC",
         }
         
         logger.info(
@@ -359,15 +370,15 @@ class PaperSession:
         """
         Record a paper trade.
         
-        AC-5: Accumulates PnL via expected_pnl_numeraire (source of truth),
-        not legacy expected_pnl_usdc.
+        Roadmap 3.2: No float money - accumulates PnL via Decimal.
+        Dedup: Uses cooldown to prevent double-counting.
         
         Returns:
             True if trade was recorded, False if skipped (cooldown)
         """
         self.stats["total_signals"] += 1
         
-        # Check cooldown
+        # Dedup via cooldown - prevents double-counting
         if self.is_on_cooldown(trade.spread_id, trade.block_number):
             trade.outcome = TradeOutcome.COOLDOWN.value
             trade.outcome_reason = {
@@ -375,11 +386,10 @@ class PaperSession:
                 "cooldown_blocks": self.cooldown_blocks,
             }
             self.stats["cooldown_skipped"] += 1
-            logger.debug(f"Cooldown skip: {trade.spread_id}")
+            logger.debug(f"Cooldown skip (dedup): {trade.spread_id}")
             return False
         
         # AC-4: Determine outcome based on PAPER policy (not real execution)
-        # Paper policy: economic_executable is enough (ignores verification)
         if trade.net_pnl_bps <= 0:
             trade.outcome = TradeOutcome.UNPROFITABLE.value
             self.stats["unprofitable"] += 1
@@ -391,7 +401,6 @@ class PaperSession:
             }
             self.stats["blocked_exec"] += 1
             
-            # Skip if policy doesn't allow simulating blocked
             if not self.simulate_blocked:
                 logger.debug(f"Blocked skip (policy): {trade.spread_id}")
                 return False
@@ -399,13 +408,18 @@ class PaperSession:
             trade.outcome = TradeOutcome.WOULD_EXECUTE.value
             self.stats["would_execute"] += 1
         
-        # Update cooldown tracker
+        # Update cooldown tracker (dedup)
         self._last_trade_block[trade.spread_id] = trade.block_number
         
-        # AC-5: Accumulate PnL via numeraire (source of truth)
+        # Roadmap 3.2: Accumulate PnL via Decimal (no float)
         if trade.outcome == TradeOutcome.WOULD_EXECUTE.value:
             self.stats["total_pnl_bps"] += trade.net_pnl_bps
-            self.stats["total_pnl_numeraire"] += trade.expected_pnl_numeraire
+            # Add to Decimal accumulator
+            self._total_pnl_numeraire += trade.get_expected_pnl_numeraire_decimal()
+            # Update stats with Decimal-string
+            self.stats["total_pnl_numeraire"] = str(
+                self._total_pnl_numeraire.quantize(Decimal("0.000001"))
+            )
             # Track numeraire type
             if self.stats.get("numeraire") != trade.numeraire:
                 logger.warning(
@@ -579,15 +593,17 @@ def calculate_usdc_value(
     amount_in_wei: int,
     implied_price: Decimal,
     token_in_decimals: int = 18,
-) -> float:
+) -> Decimal:
     """
     Calculate USDC value of trade.
+    
+    Roadmap 3.2: No float money - returns Decimal.
     
     For ETH trades: amount_in * implied_price = USDC value
     implied_price is already in USDC/ETH terms.
     """
     amount_in = Decimal(amount_in_wei) / Decimal(10 ** token_in_decimals)
-    usdc_value = float(amount_in * implied_price)
+    usdc_value = amount_in * implied_price
     return usdc_value
 
 
@@ -596,12 +612,34 @@ def calculate_pnl_usdc(
     net_pnl_bps: int,
     implied_price: Decimal,
     token_in_decimals: int = 18,
-) -> float:
+) -> Decimal:
     """
     Calculate expected PnL in USDC.
+    
+    Roadmap 3.2: No float money - returns Decimal.
     
     PnL = trade_value_usdc * (net_pnl_bps / 10000)
     """
     trade_value_usdc = calculate_usdc_value(amount_in_wei, implied_price, token_in_decimals)
-    pnl_usdc = trade_value_usdc * (net_pnl_bps / 10000)
+    pnl_usdc = trade_value_usdc * Decimal(net_pnl_bps) / Decimal(10000)
     return pnl_usdc
+
+
+# =============================================================================
+# Decimal JSON serialization helper
+# =============================================================================
+
+def decimal_to_str(value: Decimal | float | int) -> str:
+    """
+    Convert numeric value to string for JSON serialization.
+    
+    Roadmap 3.2: No float money in serialized artifacts.
+    """
+    if isinstance(value, Decimal):
+        # Round to 6 decimal places (USDC precision)
+        return str(value.quantize(Decimal("0.000001")))
+    elif isinstance(value, float):
+        # Convert float to Decimal first, then to string
+        return str(Decimal(str(value)).quantize(Decimal("0.000001")))
+    else:
+        return str(value)
