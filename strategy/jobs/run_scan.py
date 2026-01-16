@@ -590,6 +590,7 @@ async def run_scan_cycle(
     dexes_passed_gate: list[dict] = []
     spreads: list[dict] = []
     paper_trades_summary: list[dict] = []  # Summary for snapshot
+    paper_errors: int = 0  # R4: Track paper trading errors
     rpc_stats: dict = {}
     
     # Quotes grouped by (fee, amount_in) for spread calculation
@@ -1105,64 +1106,97 @@ async def run_scan_cycle(
                                 token_in_decimals=18,
                             )
                             
-                            # Create PaperTrade object
-                            paper_trade = PaperTrade(
-                                spread_id=spread_data["id"],
-                                block_number=block_number,
-                                timestamp=datetime.now(timezone.utc).isoformat(),
-                                chain_id=chain_id,
-                                buy_dex=buy_dex,
-                                sell_dex=sell_dex,
-                                token_in="WETH",
-                                token_out="USDC",
-                                fee=int(fee),
-                                amount_in_wei=amount_in_str,
-                                buy_price=str(buy_price),
-                                sell_price=str(sell_price),
-                                spread_bps=spread_bps,
-                                gas_cost_bps=gas_cost_bps,
-                                net_pnl_bps=net_pnl_bps,
-                                gas_price_gwei=round(gas_price_gwei, 4),
-                                amount_in_usdc=round(amount_in_usdc, 2),
-                                expected_pnl_usdc=round(expected_pnl_usdc, 4),
-                                executable=executable,
-                                buy_verified=buy_exec,
-                                sell_verified=sell_exec,
-                            )
+                            # R2: Use actual token symbols from spread, not hardcoded
+                            actual_token_in = spread_data.get("token_in_symbol", token_in_symbol)
+                            actual_token_out = spread_data.get("token_out_symbol", token_out_symbol)
                             
-                            # Record with cooldown check
-                            recorded = paper_session.record_trade(paper_trade)
-                            
-                            # Revalidation: check if this spread existed in pending trades
-                            # If so, mark them as revalidated with current results
-                            if pending:
-                                for pending_trade in pending:
-                                    if pending_trade.spread_id == spread_id:
-                                        # Found matching spread - revalidate
-                                        would_still = is_profitable and executable_final
-                                        paper_session.mark_revalidated(
-                                            spread_id=pending_trade.spread_id,
-                                            original_block=pending_trade.block_number,
-                                            revalidation_block=block_number,
-                                            would_still_execute=would_still,
-                                            new_net_pnl_bps=net_pnl_bps,
-                                        )
-                                        revalidation_results.append({
-                                            "spread_id": spread_id,
-                                            "original_block": pending_trade.block_number,
-                                            "would_still_execute": would_still,
-                                            "original_pnl_bps": pending_trade.net_pnl_bps,
-                                            "new_pnl_bps": net_pnl_bps,
-                                        })
-                            
-                            # Add to snapshot summary
-                            paper_trades_summary.append({
-                                "spread_id": paper_trade.spread_id,
-                                "outcome": paper_trade.outcome,
-                                "net_pnl_bps": net_pnl_bps,
-                                "expected_pnl_usdc": paper_trade.expected_pnl_usdc,
-                                "recorded": recorded,
-                            })
+                            # R4: Wrap paper trade creation in try/except for robustness
+                            try:
+                                # R3: Determine economic vs execution status
+                                economic_executable = executable and net_pnl_bps > 0
+                                execution_ready = economic_executable and buy_exec and sell_exec
+                                blocked_reason = None
+                                if economic_executable and not execution_ready:
+                                    if not buy_exec or not sell_exec:
+                                        blocked_reason = "EXEC_DISABLED_NOT_VERIFIED"
+                                
+                                # Create PaperTrade object with correct contract
+                                paper_trade = PaperTrade.from_legacy_kwargs(
+                                    spread_id=spread_data["id"],
+                                    block_number=block_number,
+                                    timestamp=datetime.now(timezone.utc).isoformat(),
+                                    chain_id=chain_id,
+                                    buy_dex=buy_dex,
+                                    sell_dex=sell_dex,
+                                    token_in=actual_token_in,   # R2: Use actual token
+                                    token_out=actual_token_out, # R2: Use actual token
+                                    fee=int(fee),
+                                    amount_in_wei=amount_in_str,
+                                    buy_price=str(buy_price),
+                                    sell_price=str(sell_price),
+                                    spread_bps=spread_bps,
+                                    gas_cost_bps=gas_cost_bps,
+                                    net_pnl_bps=net_pnl_bps,
+                                    gas_price_gwei=round(gas_price_gwei, 4),
+                                    # R1: Use legacy kwargs (auto-normalized to numeraire)
+                                    amount_in_usdc=round(amount_in_usdc, 2),
+                                    expected_pnl_usdc=round(expected_pnl_usdc, 4),
+                                    # R3: Execution status
+                                    economic_executable=economic_executable,
+                                    executable=executable,
+                                    execution_ready=execution_ready,
+                                    blocked_reason=blocked_reason,
+                                    buy_verified=buy_exec,
+                                    sell_verified=sell_exec,
+                                )
+                                
+                                # Record with cooldown check
+                                recorded = paper_session.record_trade(paper_trade)
+                                
+                                # Revalidation: check if this spread existed in pending trades
+                                # If so, mark them as revalidated with current results
+                                if pending:
+                                    for pending_trade in pending:
+                                        if pending_trade.spread_id == spread_id:
+                                            # Found matching spread - revalidate
+                                            would_still = is_profitable and executable_final
+                                            paper_session.mark_revalidated(
+                                                spread_id=pending_trade.spread_id,
+                                                original_block=pending_trade.block_number,
+                                                revalidation_block=block_number,
+                                                would_still_execute=would_still,
+                                                new_net_pnl_bps=net_pnl_bps,
+                                            )
+                                            revalidation_results.append({
+                                                "spread_id": spread_id,
+                                                "original_block": pending_trade.block_number,
+                                                "would_still_execute": would_still,
+                                                "original_pnl_bps": pending_trade.net_pnl_bps,
+                                                "new_pnl_bps": net_pnl_bps,
+                                            })
+                                
+                                # Add to snapshot summary
+                                paper_trades_summary.append({
+                                    "spread_id": paper_trade.spread_id,
+                                    "outcome": paper_trade.outcome,
+                                    "net_pnl_bps": net_pnl_bps,
+                                    "expected_pnl_usdc": paper_trade.expected_pnl_usdc,
+                                    "economic_executable": economic_executable,
+                                    "execution_ready": execution_ready,
+                                    "blocked_reason": blocked_reason,
+                                    "recorded": recorded,
+                                })
+                                
+                            except Exception as paper_err:
+                                # R4: Paper trading error should not crash scan cycle
+                                logger.error(
+                                    "Paper trade creation failed",
+                                    spread_id=spread_id,
+                                    error=str(paper_err),
+                                    error_type=type(paper_err).__name__,
+                                )
+                                paper_errors += 1
+                                # Continue with next spread
                         
                         # Log spread
                         status = "EXECUTABLE" if executable and net_pnl_bps > 0 else (

@@ -737,7 +737,7 @@ class TestBlockedReasons:
 
 
 class TestPaperTradeContract:
-    """Test PaperTrade contract (Team Lead v4)."""
+    """Test PaperTrade contract (Dev Task R1-R3)."""
     
     def test_paper_trade_has_numeraire_fields(self):
         """PaperTrade should have numeraire fields."""
@@ -777,6 +777,42 @@ class TestPaperTradeContract:
         # Default numeraire is USDC
         assert DEFAULT_NUMERAIRE == "USDC"
     
+    def test_paper_trade_legacy_kwargs_support(self):
+        """AC3: PaperTrade should support legacy kwargs (amount_in_usdc, expected_pnl_usdc)."""
+        from strategy.paper_trading import PaperTrade
+        
+        # Create using LEGACY kwargs - this is what run_scan.py was using!
+        trade = PaperTrade.from_legacy_kwargs(
+            spread_id="WETH/USDC:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",
+            token_out="USDC",
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei=0.01,
+            # LEGACY KWARGS - must be auto-normalized to numeraire
+            amount_in_usdc=300.0,
+            expected_pnl_usdc=0.84,
+        )
+        
+        # Legacy kwargs should be mapped to numeraire fields
+        assert trade.amount_in_numeraire == 300.0
+        assert trade.expected_pnl_numeraire == 0.84
+        assert trade.numeraire == "USDC"  # Auto-set when legacy used
+        
+        # Legacy properties should still work
+        assert trade.amount_in_usdc == 300.0
+        assert trade.expected_pnl_usdc == 0.84
+    
     def test_paper_trade_legacy_compatibility(self):
         """PaperTrade should be compatible with old code using amount_in_usdc."""
         from strategy.paper_trading import PaperTrade
@@ -806,11 +842,14 @@ class TestPaperTradeContract:
         assert trade.amount_in_numeraire == 300.0
         assert trade.expected_pnl_numeraire == 0.84
         
-        # to_dict should include numeraire
+        # to_dict should include BOTH numeraire and legacy aliases
         trade_dict = trade.to_dict()
         assert "numeraire" in trade_dict
         assert "amount_in_numeraire" in trade_dict
         assert "expected_pnl_numeraire" in trade_dict
+        # Legacy aliases in dict for backward compat
+        assert "amount_in_usdc" in trade_dict
+        assert "expected_pnl_usdc" in trade_dict
     
     def test_paper_trade_tokens_must_match_pair(self):
         """Test that token_in/token_out should match spread_id pair."""
@@ -871,6 +910,61 @@ class TestPaperTradeContract:
         assert "token_out" in violations[0]
         assert "USDC" in violations[0]
         assert "ARB" in violations[0]
+    
+    def test_paper_trade_r3_economic_vs_execution(self):
+        """R3: Test economic_executable vs execution_ready separation."""
+        from strategy.paper_trading import PaperTrade
+        
+        # Case 1: Economically executable but NOT verified -> NOT execution_ready
+        trade = PaperTrade(
+            spread_id="WETH/USDC:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",
+            token_out="USDC",
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei=0.01,
+            economic_executable=True,
+            buy_verified=False,  # NOT verified!
+            sell_verified=True,
+        )
+        
+        # Should NOT be execution_ready because not verified
+        assert trade.economic_executable is True
+        assert trade.execution_ready is False
+        assert trade.blocked_reason == "EXEC_DISABLED_NOT_VERIFIED"
+    
+    def test_paper_trade_normalize_kwargs(self):
+        """Test normalize_paper_trade_kwargs helper."""
+        from strategy.paper_trading import normalize_paper_trade_kwargs
+        
+        # Legacy kwargs
+        legacy = {
+            "spread_id": "test",
+            "amount_in_usdc": 100.0,
+            "expected_pnl_usdc": 1.5,
+        }
+        
+        normalized = normalize_paper_trade_kwargs(legacy)
+        
+        # Should be normalized
+        assert "amount_in_numeraire" in normalized
+        assert "expected_pnl_numeraire" in normalized
+        assert normalized["amount_in_numeraire"] == 100.0
+        assert normalized["expected_pnl_numeraire"] == 1.5
+        assert normalized["numeraire"] == "USDC"
+        # Legacy removed
+        assert "amount_in_usdc" not in normalized
+        assert "expected_pnl_usdc" not in normalized
 
 
 class TestExecutableSemantics:
@@ -929,3 +1023,59 @@ class TestExecutableSemantics:
         # This invariant must hold
         if opp.execution_ready:
             assert opp.executable_economic is True
+    
+    def test_ac4_invariant_execution_ready_lte_paper_would_execute(self):
+        """AC4: execution_ready_count <= paper_would_execute_count."""
+        from monitoring.truth_report import TruthReport, HealthMetrics, OpportunityRank
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[],
+        )
+        
+        # Create opportunities with mixed execution status
+        opps = [
+            OpportunityRank(
+                rank=1, spread_id="test1", buy_dex="uni", sell_dex="sushi",
+                pair="WETH/USDC", fee=500, amount_in="1000",
+                spread_bps=50, gas_cost_bps=10, net_pnl_bps=40,
+                expected_pnl_usdc=1.0,
+                executable_economic=True,
+                paper_would_execute=True,  # Would execute in paper
+                execution_ready=True,       # Also ready for real
+            ),
+            OpportunityRank(
+                rank=2, spread_id="test2", buy_dex="uni", sell_dex="sushi",
+                pair="WETH/ARB", fee=500, amount_in="1000",
+                spread_bps=30, gas_cost_bps=5, net_pnl_bps=25,
+                expected_pnl_usdc=0.5,
+                executable_economic=True,
+                paper_would_execute=True,   # Would execute in paper
+                execution_ready=False,      # But NOT ready for real
+                blocked_reason="EXEC_DISABLED_NOT_VERIFIED",
+            ),
+        ]
+        
+        report = TruthReport(
+            timestamp="2026-01-16T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=opps,
+            paper_executable_count=2,   # 2 would execute in paper
+            execution_ready_count=1,    # Only 1 ready for real
+        )
+        
+        # AC4 invariant: execution_ready <= paper_would_execute
+        violations = report.validate_invariants()
+        assert "execution_ready_count" not in str(violations), f"Unexpected violation: {violations}"
+        
+        # This should pass (1 <= 2)
+        assert report.execution_ready_count <= report.paper_executable_count

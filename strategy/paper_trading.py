@@ -55,10 +55,16 @@ class PaperTrade:
     """
     A single paper trade record.
     
-    CONTRACT (Team Lead v4):
+    CONTRACT (Dev Task R1-R3):
     - token_in/token_out must match spread_id/pair (real tokens)
     - numeraire is the currency for PnL (usually USDC)
     - *_numeraire fields contain values in numeraire currency
+    - Legacy fields (amount_in_usdc, expected_pnl_usdc) are supported via aliases
+    
+    SEMANTICS (R3):
+    - economic_executable: passes gates + PnL > 0 (economic truth)
+    - execution_ready: economic_executable + verified + !blocked
+    - blocked_reason: WHY not execution_ready (if applicable)
     """
     # Identity
     spread_id: str
@@ -70,7 +76,7 @@ class PaperTrade:
     buy_dex: str
     sell_dex: str
     
-    # REAL TOKENS (must match pair in spread_id)
+    # REAL TOKENS (must match pair in spread_id) - R2
     token_in: str       # e.g., "WETH" for WETH/ARB spread
     token_out: str      # e.g., "ARB" for WETH/ARB spread
     
@@ -87,7 +93,7 @@ class PaperTrade:
     net_pnl_bps: int
     gas_price_gwei: float
     
-    # NUMERAIRE for PnL calculations (Team Lead Крок 1)
+    # NUMERAIRE for PnL calculations (R1)
     numeraire: str = DEFAULT_NUMERAIRE  # Currency for PnL (usually "USDC")
     amount_in_numeraire: float = 0.0    # Trade size in numeraire
     expected_pnl_numeraire: float = 0.0 # Expected profit in numeraire
@@ -96,7 +102,12 @@ class PaperTrade:
     outcome: str = TradeOutcome.WOULD_EXECUTE.value
     outcome_reason: dict = field(default_factory=dict)
     
-    # Execution status
+    # Execution status - R3: Separate economic vs execution ready
+    economic_executable: bool = True    # Passes gates + PnL > 0
+    execution_ready: bool = False       # economic_executable + verified + !blocked
+    blocked_reason: str | None = None   # WHY not execution_ready
+    
+    # Legacy field: executable maps to economic_executable
     executable: bool = True
     buy_verified: bool = True
     sell_verified: bool = True
@@ -106,9 +117,67 @@ class PaperTrade:
     revalidation_block: int | None = None
     would_still_execute: bool | None = None
     
+    def __post_init__(self):
+        """Sync legacy and new fields."""
+        # Sync executable with economic_executable
+        if self.executable and not self.economic_executable:
+            self.economic_executable = self.executable
+        elif self.economic_executable and not self.executable:
+            self.executable = self.economic_executable
+        
+        # Determine execution_ready if not explicitly set
+        if self.economic_executable and self.buy_verified and self.sell_verified:
+            if self.blocked_reason is None:
+                self.execution_ready = True
+        
+        # Set blocked_reason if not execution_ready but economic_executable
+        if self.economic_executable and not self.execution_ready:
+            if self.blocked_reason is None:
+                if not self.buy_verified or not self.sell_verified:
+                    self.blocked_reason = "EXEC_DISABLED_NOT_VERIFIED"
+    
+    # Legacy property aliases for backward compatibility (R1)
+    @property
+    def amount_in_usdc(self) -> float:
+        """Legacy alias for amount_in_numeraire (when numeraire is USDC)."""
+        if self.numeraire == "USDC":
+            return self.amount_in_numeraire
+        logger.warning(
+            f"amount_in_usdc accessed but numeraire is {self.numeraire}, not USDC"
+        )
+        return self.amount_in_numeraire
+    
+    @property
+    def expected_pnl_usdc(self) -> float:
+        """Legacy alias for expected_pnl_numeraire (when numeraire is USDC)."""
+        if self.numeraire == "USDC":
+            return self.expected_pnl_numeraire
+        logger.warning(
+            f"expected_pnl_usdc accessed but numeraire is {self.numeraire}, not USDC"
+        )
+        return self.expected_pnl_numeraire
+    
+    @classmethod
+    def from_legacy_kwargs(cls, **kwargs) -> "PaperTrade":
+        """
+        Create PaperTrade from legacy kwargs.
+        
+        Supports:
+        - amount_in_usdc -> amount_in_numeraire
+        - expected_pnl_usdc -> expected_pnl_numeraire
+        
+        This allows old code using amount_in_usdc to work without changes.
+        """
+        normalized = normalize_paper_trade_kwargs(kwargs)
+        return cls(**normalized)
+    
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
-        return asdict(self)
+        result = asdict(self)
+        # Add legacy aliases for backward compatibility
+        result["amount_in_usdc"] = self.amount_in_usdc
+        result["expected_pnl_usdc"] = self.expected_pnl_usdc
+        return result
     
     def validate_tokens_match_pair(self) -> list[str]:
         """
@@ -141,8 +210,46 @@ class PaperTrade:
     
     @classmethod
     def from_dict(cls, data: dict) -> "PaperTrade":
-        """Create from dictionary."""
-        return cls(**data)
+        """Create from dictionary with legacy support."""
+        normalized = normalize_paper_trade_kwargs(data)
+        return cls(**normalized)
+
+
+def normalize_paper_trade_kwargs(kwargs: dict) -> dict:
+    """
+    Normalize legacy kwargs to current contract.
+    
+    Mappings:
+    - amount_in_usdc -> amount_in_numeraire (+ numeraire="USDC")
+    - expected_pnl_usdc -> expected_pnl_numeraire (+ numeraire="USDC")
+    
+    This allows backward compatibility with old call sites.
+    """
+    result = dict(kwargs)
+    
+    # Handle amount_in_usdc -> amount_in_numeraire
+    if "amount_in_usdc" in result:
+        if "amount_in_numeraire" not in result:
+            result["amount_in_numeraire"] = result.pop("amount_in_usdc")
+        else:
+            # Both present, prefer numeraire, remove legacy
+            del result["amount_in_usdc"]
+        # Ensure numeraire is set
+        if "numeraire" not in result:
+            result["numeraire"] = "USDC"
+    
+    # Handle expected_pnl_usdc -> expected_pnl_numeraire
+    if "expected_pnl_usdc" in result:
+        if "expected_pnl_numeraire" not in result:
+            result["expected_pnl_numeraire"] = result.pop("expected_pnl_usdc")
+        else:
+            # Both present, prefer numeraire, remove legacy
+            del result["expected_pnl_usdc"]
+        # Ensure numeraire is set
+        if "numeraire" not in result:
+            result["numeraire"] = "USDC"
+    
+    return result
 
 
 class PaperSession:

@@ -80,23 +80,46 @@ class OpportunityRank:
 @dataclass
 class HealthMetrics:
     """System health metrics."""
-    # RPC
+    # RPC - required fields first
     rpc_success_rate: float
     rpc_avg_latency_ms: int
     rpc_total_requests: int
     
-    # Quotes
+    # Quotes - required fields
     quote_fetch_rate: float
     quote_gate_pass_rate: float
     
-    # Coverage
+    # Coverage - required fields
     chains_active: int
     dexes_active: int
     pairs_covered: int
     pools_scanned: int
     
-    # Rejects
+    # Rejects - required field
     top_reject_reasons: list[tuple[str, int]]
+    
+    # R5: Optional fields with defaults come LAST
+    rpc_failed_requests: int = 0  # R5: Track failed requests explicitly
+    
+    # R5: Validation - rpc_total_requests should not be 0 if INFRA_RPC_ERROR occurred
+    def validate_rpc_health(self) -> list[str]:
+        """Validate RPC health is not misleading."""
+        violations = []
+        
+        # Check for inconsistent state
+        if self.rpc_failed_requests > 0 and self.rpc_total_requests == 0:
+            violations.append(
+                f"rpc_total_requests=0 but rpc_failed_requests={self.rpc_failed_requests}"
+            )
+        
+        # Check for missing failed count
+        expected_failed = int(self.rpc_total_requests * (1 - self.rpc_success_rate))
+        if self.rpc_failed_requests == 0 and expected_failed > 0:
+            violations.append(
+                f"rpc_failed_requests=0 but success_rate implies {expected_failed} failures"
+            )
+        
+        return violations
 
 
 # =============================================================================
@@ -748,6 +771,8 @@ def generate_truth_report(
     # Weighted RPC stats
     rpc_success_rate = rpc_successful_requests / rpc_total_requests if rpc_total_requests > 0 else 0.0
     rpc_avg_latency = int(rpc_latency_weighted / rpc_total_requests) if rpc_total_requests > 0 else 0
+    # R5: Track failed requests explicitly
+    rpc_failed_requests = rpc_total_requests - rpc_successful_requests
     
     # Top reject reasons
     sorted_rejects = sorted(all_reject_reasons.items(), key=lambda x: x[1], reverse=True)
@@ -757,6 +782,7 @@ def generate_truth_report(
         rpc_success_rate=round(rpc_success_rate, 3),
         rpc_avg_latency_ms=rpc_avg_latency,
         rpc_total_requests=rpc_total_requests,
+        rpc_failed_requests=rpc_failed_requests,  # R5
         quote_fetch_rate=round(fetch_rate, 3),
         quote_gate_pass_rate=round(gate_pass_rate, 3),
         chains_active=len(chains_seen),
@@ -834,13 +860,20 @@ def generate_truth_report(
     MIN_NET_PNL_BPS = 5  # Ignore opportunities with < 5 bps
     ranked = [r for r in ranked if r["spread"].get("net_pnl_bps", 0) >= MIN_NET_PNL_BPS]
     
-    # Filter for top opportunities: executable-only
-    # Non-executable spreads are blocked and cannot be acted upon
-    ranked_executable = [r for r in ranked if r["spread"].get("executable", False)]
+    # R6: Do NOT filter by executable if that represents execution policy
+    # Ranking should be by economic signals (net_pnl_bps, confidence)
+    # Then display economic_executable, paper_would_execute, execution_ready, blocked_reason
+    # 
+    # For top opportunities, include ALL economically viable spreads,
+    # not just execution-policy-approved ones
+    ranked_economic = [
+        r for r in ranked 
+        if r["spread"].get("net_pnl_bps", 0) > 0  # Economic criterion: positive PnL
+    ]
     
-    # Build top opportunities (executable-only)
+    # Build top opportunities (by economic ranking, not execution policy)
     top_opportunities = []
-    for i, item in enumerate(ranked_executable[:top_n]):
+    for i, item in enumerate(ranked_economic[:top_n]):
         spread = item["spread"]
         buy_leg = spread.get("buy_leg", {})
         sell_leg = spread.get("sell_leg", {})
