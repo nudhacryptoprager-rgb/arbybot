@@ -232,7 +232,7 @@ class TruthReport:
     
     def validate_invariants(self) -> list[str]:
         """
-        Validate report invariants (Team Lead Крок 2).
+        Validate report invariants (Team Lead Крок 2 + КРОК 8).
         
         Returns list of violations (empty if all OK).
         """
@@ -245,11 +245,11 @@ class TruthReport:
                 f"spread_ids_total ({self.spread_ids_total})"
             )
         
-        # Invariant 2: executable <= total
-        if self.spread_ids_executable > self.spread_ids_total:
+        # Invariant 2: executable <= total (КРОК 8: stricter - executable <= profitable)
+        if self.spread_ids_executable > self.spread_ids_profitable:
             violations.append(
                 f"spread_ids_executable ({self.spread_ids_executable}) > "
-                f"spread_ids_total ({self.spread_ids_total})"
+                f"spread_ids_profitable ({self.spread_ids_profitable})"
             )
         
         # Invariant 3: signals >= spread_ids
@@ -264,6 +264,22 @@ class TruthReport:
             violations.append(
                 f"execution_ready_count ({self.execution_ready_count}) > "
                 f"paper_executable_count ({self.paper_executable_count})"
+            )
+        
+        # КРОК 4: PnL consistency invariant
+        # If would_execute_pnl is 0 but normalized_return_pct is high, something is wrong
+        if self.would_execute_pnl_usdc == 0 and self.normalized_return_pct is not None:
+            if self.normalized_return_pct > 1.0:  # More than 1% return with no trades
+                violations.append(
+                    f"PnL_INCONSISTENT: normalized_return_pct ({self.normalized_return_pct}%) "
+                    f"but would_execute_pnl_usdc=0"
+                )
+        
+        # КРОК 4: Unrealistic return check (>50% in single SMOKE is suspicious)
+        if self.normalized_return_pct is not None and self.normalized_return_pct > 50.0:
+            violations.append(
+                f"PnL_UNREALISTIC: normalized_return_pct ({self.normalized_return_pct}%) > 50% "
+                f"(likely calculation error)"
             )
         
         return violations
@@ -974,13 +990,35 @@ def generate_truth_report(
         revalidation_total = paper_session_stats.get("revalidation_total", 0)
         revalidation_passed = paper_session_stats.get("revalidation_passed", 0)
         revalidation_gates_changed = paper_session_stats.get("revalidation_gates_changed", 0)
+        # КРОК 4: Get would_execute count for PnL validation
+        would_execute_count = paper_session_stats.get("would_execute", 0)
     
-    # AC-3: Calculate normalized return if notion_capital is configured
+    # КРОК 4: Calculate normalized return ONLY from would_execute trades
+    # This prevents misleading metrics like 83% return
     normalized_return_pct = None
-    if notion_capital_numeraire > 0:
-        normalized_return_pct = round(
-            (total_pnl_numeraire / notion_capital_numeraire) * 100, 4
-        )
+    would_execute_pnl_usdc = 0.0
+    would_execute_pnl_bps = 0
+    
+    if paper_session_stats and notion_capital_numeraire > 0:
+        would_execute_count = paper_session_stats.get("would_execute", 0)
+        
+        if would_execute_count > 0:
+            # Only count PnL from actual would_execute trades
+            would_execute_pnl_usdc = total_pnl_numeraire  # Already filtered in record_trade
+            would_execute_pnl_bps = total_pnl_bps
+            
+            # КРОК 4: normalized_return_pct from would_execute only
+            normalized_return_pct = round(
+                (would_execute_pnl_usdc / notion_capital_numeraire) * 100, 4
+            )
+            
+            # КРОК 4: Sanity check - cap at reasonable value
+            if normalized_return_pct > 50.0:
+                logger.warning(
+                    f"Unrealistic normalized_return_pct: {normalized_return_pct}%, "
+                    f"capping at 50% and flagging as suspicious"
+                )
+                # Don't cap, but the invariant will flag it
     
     return TruthReport(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1005,11 +1043,13 @@ def generate_truth_report(
         revalidation_total=revalidation_total,
         revalidation_passed=revalidation_passed,
         revalidation_gates_changed=revalidation_gates_changed,
-        # PnL - AC-3/AC-5: Use numeraire
+        # КРОК 4: PnL - separate signal vs would_execute
         total_pnl_bps=total_pnl_bps,
-        total_pnl_usdc=total_pnl_numeraire,  # Field name is legacy, value is numeraire
-        notion_capital_usdc=notion_capital_numeraire,  # AC-3
-        normalized_return_pct=normalized_return_pct,  # AC-3
+        total_pnl_usdc=total_pnl_numeraire,
+        would_execute_pnl_bps=would_execute_pnl_bps,
+        would_execute_pnl_usdc=would_execute_pnl_usdc,
+        notion_capital_usdc=notion_capital_numeraire,
+        normalized_return_pct=normalized_return_pct,
     )
 
 

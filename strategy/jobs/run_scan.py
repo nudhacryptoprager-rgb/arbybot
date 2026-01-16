@@ -1041,11 +1041,18 @@ async def run_scan_cycle(
                                 int(s.get("total_requests", 0) * s.get("success_rate", 0)) 
                                 for s in current_rpc_stats.values()
                             )
-                            rpc_success = successful_requests / total_requests if total_requests > 0 else 1.0
+                            rpc_success = successful_requests / total_requests if total_requests > 0 else None
                         except Exception:
-                            rpc_success = 1.0  # Default if stats unavailable
+                            # КРОК 6: Don't default to 1.0 - this hides RPC problems
+                            rpc_success = None  # Will be treated as unknown/risky
                         
-                        confidence, conf_breakdown = calculate_confidence(spread_for_conf, rpc_success_rate=rpc_success)
+                        # КРОК 6: If RPC stats unavailable, use pessimistic default
+                        rpc_success_for_conf = rpc_success if rpc_success is not None else 0.5
+                        confidence, conf_breakdown = calculate_confidence(spread_for_conf, rpc_success_rate=rpc_success_for_conf)
+                        
+                        # Add RPC stats warning to breakdown
+                        if rpc_success is None:
+                            conf_breakdown["rpc_stats_available"] = False
                         
                         # Confidence threshold for execution
                         MIN_CONFIDENCE_FOR_EXEC = 0.5
@@ -1123,16 +1130,17 @@ async def run_scan_cycle(
                                     if not buy_exec or not sell_exec:
                                         blocked_reason_real = "EXEC_DISABLED_NOT_VERIFIED"
                                 
-                                # Create PaperTrade object with correct contract
-                                paper_trade = PaperTrade.from_legacy_kwargs(
+                                # КРОК 1: Create PaperTrade with v4 contract fields (NOT legacy)
+                                # This ensures no crash from amount_in_usdc keyword mismatch
+                                paper_trade = PaperTrade(
                                     spread_id=spread_data["id"],
                                     block_number=block_number,
                                     timestamp=datetime.now(timezone.utc).isoformat(),
                                     chain_id=chain_id,
                                     buy_dex=buy_dex,
                                     sell_dex=sell_dex,
-                                    token_in=actual_token_in,   # R2: Use actual token
-                                    token_out=actual_token_out, # R2: Use actual token
+                                    token_in=actual_token_in,
+                                    token_out=actual_token_out,
                                     fee=int(fee),
                                     amount_in_wei=amount_in_str,
                                     buy_price=str(buy_price),
@@ -1141,18 +1149,17 @@ async def run_scan_cycle(
                                     gas_cost_bps=gas_cost_bps,
                                     net_pnl_bps=net_pnl_bps,
                                     gas_price_gwei=round(gas_price_gwei, 4),
-                                    # R1: Use legacy kwargs (auto-normalized to numeraire)
-                                    amount_in_usdc=round(amount_in_usdc, 2),
-                                    expected_pnl_usdc=round(expected_pnl_usdc, 4),
-                                    # AC-4: Execution status - paper vs real
+                                    # v4 CONTRACT FIELDS (source of truth)
+                                    numeraire="USDC",
+                                    amount_in_numeraire=round(amount_in_usdc, 2),
+                                    expected_pnl_numeraire=round(expected_pnl_usdc, 4),
+                                    # Execution status - paper vs real
                                     economic_executable=economic_executable,
                                     paper_execution_ready=paper_execution_ready,
                                     real_execution_ready=real_execution_ready,
                                     blocked_reason_real=blocked_reason_real,
-                                    # Legacy fields
+                                    # Legacy fields (synced in __post_init__)
                                     executable=executable,
-                                    execution_ready=real_execution_ready,  # Legacy = real
-                                    blocked_reason=blocked_reason_real,     # Legacy = real
                                     buy_verified=buy_exec,
                                     sell_verified=sell_exec,
                                 )

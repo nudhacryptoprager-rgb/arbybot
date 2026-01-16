@@ -551,8 +551,8 @@ class TestTruthReportInvariants:
         assert len(violations) > 0
         assert "spread_ids_profitable" in violations[0]
     
-    def test_invariant_executable_lte_total(self):
-        """spread_ids_executable should be <= spread_ids_total."""
+    def test_invariant_executable_lte_profitable(self):
+        """КРОК 8: spread_ids_executable should be <= spread_ids_profitable."""
         from monitoring.truth_report import TruthReport, HealthMetrics
         
         health = HealthMetrics(
@@ -568,19 +568,21 @@ class TestTruthReportInvariants:
             top_reject_reasons=[],
         )
         
-        # Invalid: executable > total
+        # Invalid: executable > profitable
         report = TruthReport(
             timestamp="2026-01-15T12:00:00Z",
             mode="smoke",
             health=health,
             top_opportunities=[],
-            spread_ids_total=4,
-            spread_ids_executable=121,  # INVALID: 121 > 4
+            spread_ids_total=10,
+            spread_ids_profitable=5,
+            spread_ids_executable=8,  # INVALID: 8 > 5 (profitable)
         )
         
         violations = report.validate_invariants()
         assert len(violations) > 0
         assert "spread_ids_executable" in violations[0]
+        assert "spread_ids_profitable" in violations[0]
     
     def test_invariant_signals_gte_spread_ids(self):
         """signals_total should be >= spread_ids_total."""
@@ -965,6 +967,84 @@ class TestPaperTradeContract:
         # Legacy removed
         assert "amount_in_usdc" not in normalized
         assert "expected_pnl_usdc" not in normalized
+    
+    def test_paper_trade_direct_amount_in_usdc_raises_error(self):
+        """
+        КРОК 2: Test that passing amount_in_usdc directly to PaperTrade() raises TypeError.
+        
+        This is the ACTUAL BUG that was crashing SMOKE!
+        The fix is to use v4 contract fields (amount_in_numeraire) or from_legacy_kwargs().
+        """
+        import pytest
+        from strategy.paper_trading import PaperTrade
+        
+        # This should raise TypeError because amount_in_usdc is NOT a PaperTrade field
+        with pytest.raises(TypeError) as exc_info:
+            PaperTrade(
+                spread_id="WETH/USDC:uniswap_v3:sushiswap_v3:500",
+                block_number=12345,
+                timestamp="2026-01-16T12:00:00Z",
+                chain_id=42161,
+                buy_dex="uniswap_v3",
+                sell_dex="sushiswap_v3",
+                token_in="WETH",
+                token_out="USDC",
+                fee=500,
+                amount_in_wei="100000000000000000",
+                buy_price="3000.0",
+                sell_price="3010.0",
+                spread_bps=33,
+                gas_cost_bps=5,
+                net_pnl_bps=28,
+                gas_price_gwei=0.01,
+                # LEGACY KWARGS - this should FAIL!
+                amount_in_usdc=300.0,
+                expected_pnl_usdc=0.84,
+            )
+        
+        # Verify error message mentions the bad field
+        assert "amount_in_usdc" in str(exc_info.value)
+    
+    def test_paper_trade_correct_v4_contract(self):
+        """
+        КРОК 3: Test that v4 contract fields work correctly.
+        
+        This is how run_scan.py SHOULD create PaperTrade (after fix).
+        """
+        from strategy.paper_trading import PaperTrade
+        
+        # v4 contract: use numeraire fields
+        trade = PaperTrade(
+            spread_id="WETH/USDC:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",
+            token_out="USDC",
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei=0.01,
+            # v4 CONTRACT FIELDS (correct!)
+            numeraire="USDC",
+            amount_in_numeraire=300.0,
+            expected_pnl_numeraire=0.84,
+        )
+        
+        # Should work
+        assert trade.numeraire == "USDC"
+        assert trade.amount_in_numeraire == 300.0
+        assert trade.expected_pnl_numeraire == 0.84
+        
+        # Legacy aliases should also work (via @property)
+        assert trade.amount_in_usdc == 300.0
+        assert trade.expected_pnl_usdc == 0.84
     
     def test_paper_trade_from_dict_accepts_legacy(self):
         """AC-7: PaperTrade.from_dict() accepts legacy amount_in_usdc/expected_pnl_usdc."""
