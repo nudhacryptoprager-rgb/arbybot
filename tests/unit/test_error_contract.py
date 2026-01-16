@@ -357,16 +357,17 @@ class TestTruthReportContract:
             gas_cost_bps=10,
             net_pnl_bps=40,
             expected_pnl_usdc=0.5,
-            executable=True,  # CRITICAL: this must work
+            executable_economic=True,  # CRITICAL: this must work (new field)
             confidence=0.85,
         )
         
-        assert rank.executable is True
+        assert rank.executable_economic is True
+        assert rank.executable is True  # Legacy property
         assert rank.rank == 1
         assert rank.confidence == 0.85
     
     def test_opportunity_rank_has_paper_executable_field(self):
-        """OpportunityRank should have paper_executable field."""
+        """OpportunityRank should have paper_would_execute field."""
         from monitoring.truth_report import OpportunityRank
         
         rank = OpportunityRank(
@@ -381,14 +382,17 @@ class TestTruthReportContract:
             gas_cost_bps=10,
             net_pnl_bps=40,
             expected_pnl_usdc=0.5,
-            executable=True,
-            paper_executable=True,
+            executable_economic=True,
+            paper_would_execute=True,
             execution_ready=False,
+            blocked_reason="EXEC_DISABLED_NOT_VERIFIED",
             confidence=0.85,
         )
         
-        assert rank.paper_executable is True
+        assert rank.paper_would_execute is True
+        assert rank.paper_executable is True  # Legacy property
         assert rank.execution_ready is False
+        assert rank.blocked_reason == "EXEC_DISABLED_NOT_VERIFIED"
     
     def test_truth_report_accepts_total_pnl_fields(self):
         """TruthReport should accept total_pnl_bps and total_pnl_usdc."""
@@ -456,7 +460,7 @@ class TestTruthReportContract:
             gas_cost_bps=10,
             net_pnl_bps=40,
             expected_pnl_usdc=0.5,
-            executable=True,
+            executable_economic=True,  # New field
             confidence=0.85,
         )
         
@@ -473,9 +477,13 @@ class TestTruthReportContract:
         
         result = report.to_dict()
         
-        # Check that executable is in the output
+        # Check that schema_version is in the output
+        assert "schema_version" in result
+        
+        # Check that executable fields are in the output (both new and legacy)
         assert len(result["top_opportunities"]) == 1
-        assert result["top_opportunities"][0]["executable"] is True
+        assert result["top_opportunities"][0]["executable_economic"] is True
+        assert result["top_opportunities"][0]["executable"] is True  # Legacy
     
     def test_opportunity_rank_default_values(self):
         """OpportunityRank should have sensible defaults."""
@@ -496,12 +504,17 @@ class TestTruthReportContract:
             expected_pnl_usdc=0.1,
         )
         
-        # Check defaults
-        assert rank.executable is False
-        assert rank.confidence == 0.0
-        assert rank.paper_executable is False
+        # Check new field defaults
+        assert rank.executable_economic is False
+        assert rank.paper_would_execute is False
         assert rank.execution_ready is False
+        assert rank.blocked_reason is None
+        assert rank.confidence == 0.0
         assert rank.confidence_breakdown is None
+        
+        # Check legacy property defaults
+        assert rank.executable is False  # = executable_economic
+        assert rank.paper_executable is False  # = paper_would_execute
 
 
 class TestTruthReportInvariants:

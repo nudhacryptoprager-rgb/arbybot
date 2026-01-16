@@ -26,14 +26,17 @@ class OpportunityRank:
     """
     A ranked opportunity.
     
-    Team Lead Крок 7-8: Clarify executable vs paper_executable vs execution_ready
+    Team Lead Крок 3 (v4): Clear separation of metrics
     
-    executable = passes all gates in current mode (SMOKE/paper/live)
-    paper_executable = executable AND would_execute in paper mode (ignores verification)
-    execution_ready = executable && verified_for_execution && !cooldown && !blocked
+    METRICS:
+    - executable_economic: passes all gates, PnL > 0 (paper profitability truth)
+    - execution_ready: executable_economic && verified && !blocked (can actually execute)
+    - paper_would_execute: what paper trading would do (= executable_economic in paper mode)
     
-    In SMOKE mode: paper_executable == executable (no verification requirement)
-    In live mode: execution_ready requires full verification chain
+    NOTES:
+    - executable_economic is the "economic truth" - system thinks this would be profitable
+    - execution_ready adds policy/verification layer - system allows execution
+    - blocked_reason explains WHY execution_ready=False when executable_economic=True
     """
     rank: int
     spread_id: str
@@ -49,19 +52,29 @@ class OpportunityRank:
     confidence: float = 0.0  # 0.0 - 1.0
     confidence_breakdown: dict | None = None  # Component scores
     
-    # Gate status
-    executable: bool = False  # Passes all gates in current mode
+    # Team Lead Крок 3 (v4): Clear separation
+    # executable_economic = passes all gates AND net_pnl > 0 (economic truth)
+    executable_economic: bool = False
     
-    # Team Lead Крок 7: paper_executable = executable in paper mode
-    # In SMOKE/paper mode, this should match executable
-    paper_executable: bool = False
+    # paper_would_execute = what paper trading would do (= executable_economic in paper mode)
+    paper_would_execute: bool = False
     
-    # Team Lead Крок 8: execution_ready = full verification chain
-    # execution_ready = (executable && verified_for_execution && !cooldown && !blocked)
+    # execution_ready = executable_economic && verified && !blocked (actual execution permission)
     execution_ready: bool = False
     
-    # Team Lead: blocked_reason explains why execution_ready=False
+    # blocked_reason = explains why execution_ready=False (policy/verification)
     blocked_reason: str | None = None
+    
+    # Legacy aliases for backward compatibility
+    @property
+    def executable(self) -> bool:
+        """Legacy alias for executable_economic."""
+        return self.executable_economic
+    
+    @property
+    def paper_executable(self) -> bool:
+        """Legacy alias for paper_would_execute."""
+        return self.paper_would_execute
 
 
 @dataclass
@@ -87,6 +100,22 @@ class HealthMetrics:
 
 
 # =============================================================================
+# SCHEMA VERSION (Team Lead Крок 8)
+# =============================================================================
+
+TRUTH_REPORT_SCHEMA_VERSION = "3.0.0"
+"""
+Schema version history:
+- 1.0.0: Initial schema
+- 2.0.0: Added spread_ids vs signals terminology
+- 3.0.0: Added executable_economic, execution_ready separation
+         Added blocked_reason to OpportunityRank
+         Added notion_capital_usdc for PnL normalization
+         Added schema_version field
+"""
+
+
+# =============================================================================
 # BLOCKED REASONS (Team Lead Крок 3)
 # =============================================================================
 
@@ -106,20 +135,27 @@ class TruthReport:
     """
     Complete truth report.
     
+    Schema version: {TRUTH_REPORT_SCHEMA_VERSION}
+    
     TERMINOLOGY (Team Lead Крок 1):
     - spread_id: унікальний spread (pair + buy_dex + sell_dex + fee tiers + direction)
     - signal: spread_id × (size bucket або route variant)
     
+    METRICS (Team Lead Крок 3):
+    - executable_economic: passes all gates, PnL > 0 (paper profitability)
+    - execution_ready: executable_economic && verified && !blocked (can execute)
+    
     So: signals_total >= spread_ids_total always
     """
+    # Required fields (no defaults) - must come first
     timestamp: str
     mode: str
-    
-    # Health
     health: HealthMetrics
-    
-    # Top opportunities
     top_opportunities: list[OpportunityRank]
+    
+    # Optional fields (with defaults) - must come after required
+    # Schema version for backward compatibility
+    schema_version: str = TRUTH_REPORT_SCHEMA_VERSION
     
     # Stats - RENAMED for clarity (Team Lead Крок 1)
     # spread_ids = unique spreads (pair+dexes+fee+direction)
@@ -213,11 +249,41 @@ class TruthReport:
         # Validate before serializing
         violations = self.validate_invariants()
         
+        # Convert opportunities - handle properties that asdict can't serialize
+        opportunities_list = []
+        for o in self.top_opportunities:
+            opp_dict = {
+                "rank": o.rank,
+                "spread_id": o.spread_id,
+                "buy_dex": o.buy_dex,
+                "sell_dex": o.sell_dex,
+                "pair": o.pair,
+                "fee": o.fee,
+                "amount_in": o.amount_in,
+                "spread_bps": o.spread_bps,
+                "gas_cost_bps": o.gas_cost_bps,
+                "net_pnl_bps": o.net_pnl_bps,
+                "expected_pnl_usdc": o.expected_pnl_usdc,
+                "confidence": o.confidence,
+                "confidence_breakdown": o.confidence_breakdown,
+                # Team Lead Крок 3: Clear separation of metrics
+                "executable_economic": o.executable_economic,
+                "paper_would_execute": o.paper_would_execute,
+                "execution_ready": o.execution_ready,
+                "blocked_reason": o.blocked_reason,
+                # Legacy aliases
+                "executable": o.executable,  # = executable_economic
+                "paper_executable": o.paper_executable,  # = paper_would_execute
+            }
+            opportunities_list.append(opp_dict)
+        
         result = {
+            # Team Lead Крок 8: Schema version for backward compatibility
+            "schema_version": self.schema_version,
             "timestamp": self.timestamp,
             "mode": self.mode,
             "health": asdict(self.health),
-            "top_opportunities": [asdict(o) for o in self.top_opportunities],
+            "top_opportunities": opportunities_list,
             # Team Lead Крок 1: Clear terminology
             "stats": {
                 # Spread IDs (unique)
@@ -796,6 +862,27 @@ def generate_truth_report(
             token_out = spread.get("token_out_symbol", buy_leg.get("token_out_symbol", ""))
             pair = f"{token_in}/{token_out}" if token_in and token_out else "UNKNOWN"
         
+        # Team Lead Крок 3: Determine execution status
+        is_executable = spread.get("executable", False)
+        is_verified = spread.get("verified_for_execution", False)
+        blocked_reason = spread.get("blocked_reason")
+        
+        # executable_economic = passes all gates AND net_pnl > 0
+        executable_economic = is_executable and net_bps > 0
+        
+        # paper_would_execute = what paper trading would do
+        paper_would_execute = executable_economic  # In paper mode, ignore verification
+        
+        # execution_ready = executable_economic AND verified AND not blocked
+        execution_ready = executable_economic and is_verified and not blocked_reason
+        
+        # If not execution_ready but executable_economic, explain why
+        if executable_economic and not execution_ready:
+            if not is_verified:
+                blocked_reason = BlockedReason.EXEC_DISABLED_NOT_VERIFIED
+            elif blocked_reason is None:
+                blocked_reason = BlockedReason.EXEC_DISABLED_CONFIG
+        
         top_opportunities.append(OpportunityRank(
             rank=i + 1,
             spread_id=spread.get("id", ""),
@@ -808,7 +895,11 @@ def generate_truth_report(
             gas_cost_bps=spread.get("gas_cost_bps", 0),
             net_pnl_bps=net_bps,
             expected_pnl_usdc=round(expected_usdc, 4),
-            executable=spread.get("executable", False),
+            # Team Lead Крок 3: Clear separation
+            executable_economic=executable_economic,
+            paper_would_execute=paper_would_execute,
+            execution_ready=execution_ready,
+            blocked_reason=blocked_reason,
             confidence=round(item["confidence"], 3),
             confidence_breakdown=item.get("confidence_breakdown"),
         ))

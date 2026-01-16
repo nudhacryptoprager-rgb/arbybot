@@ -1,169 +1,122 @@
-# Status_M3_P2_quality_v3.md — Quality Cleanup v3 по 10 новим крокам Team Lead
+# Status_M3_P2_quality_v3.md — Quality Cleanup v3 + Стабілізація
 
 **Дата:** 2026-01-16  
-**Milestone:** M3 P2 Quality Cleanup v3  
+**Milestone:** M3 P2 Quality Cleanup v3 + Стабілізація  
 **Статус:** ✅ **IMPLEMENTED**
 
 ---
 
 ## Контекст
 
-Team Lead проаналізував нові артефакти (truth_report_20260116) і виявив:
+Team Lead проаналізував артефакти (truth_report_20260116) і виявив:
 - `execution_ready_count = 0` попри executable spreads
-- `QUOTE_GAS_TOO_HIGH` домінує на uniswap_v3/wstETH
-- `TICKS_CROSSED_TOO_MANY` на wstETH/WETH
-- `PRICE_SANITY_FAILED` без anchor source діагностики
-- `paper_executable=false` при `executable=true` — неконсистентність
+- Змішані поняття: `executable` (економіка) vs `execution_ready` (політика)
+- Сигнатури gates дрейфують → TypeError в рантаймі
+- Немає schema versioning для truth_report
 
 ---
 
-## Виконані кроки (10/10)
+## Виконані кроки стабілізації (10/10)
 
-### ✅ Крок 1: Розблокуй execution readiness
+### ✅ Крок 1: ErrorCode контракт
 
-**smoke_minimal.py:**
-```python
-"paper_trading": {
-    "ignore_verification": True,  # Allow execution_ready in paper mode
-    "log_blocked_reason": True,   # Log why blocked in real mode
-}
-```
+ErrorCode enum вже містить всі необхідні коди:
+- PRICE_ANCHOR_MISSING ✅
+- QUOTE_GAS_TOO_HIGH ✅
+- TICKS_CROSSED_TOO_MANY ✅
+- Всі інші ✅
 
-### ✅ Крок 2: Викинь wstETH/WETH зі smoke
+Тести test_error_contract.py перевіряють цілісність.
 
-**smoke_minimal.py:**
-```python
-"pairs": ["WETH/USDC", "WETH/ARB"],
-"excluded_pairs": [
-    "wstETH/WETH",  # High ticks (16-20), high gas (500k-846k)
-    "WETH/wstETH",
-],
-```
-
-### ✅ Крок 3: Quarantine для QUOTE_REVERT
-
-**Новий файл: strategy/quarantine.py**
+### ✅ Крок 2: Зацементувати сигнатури gates API
 
 ```python
-class QuarantineManager:
-    def record_failure(dex_id, pair, fee, error_code, ...) -> bool
-    def record_success(dex_id, pair, fee, ...)
-    def is_quarantined(dex_id, pair, fee, ...) -> bool
-    
-QUARANTINE_CONFIG = {
-    "failure_threshold": 3,
-    "quarantine_duration_seconds": 300,  # 5 min
-    "trackable_errors": ["QUOTE_REVERT", "QUOTE_TIMEOUT", "RPC_ERROR"],
-    "immediate_quarantine_errors": ["CONTRACT_NOT_FOUND", "INVALID_POOL"],
-}
-```
-
-### ✅ Крок 4: PRICE_SANITY anchor source
-
-**gate_price_sanity() оновлено:**
-```python
-def gate_price_sanity(
-    ...,
-    anchor_source: dict | None = None,  # NEW
-) -> GateResult:
-    """
-    anchor_source = {
-        "anchor_dex": "uniswap_v3",
-        "anchor_pool": "0x...",
-        "anchor_fee": 500,
-        "anchor_block": 12345,
-    }
-    """
-    # details тепер включає anchor_source
-```
-
-### ✅ Крок 5: Газ-фільтр відносний
-
-**Нова функція gate_gas_relative():**
-```python
-MIN_PROFIT_TO_GAS_RATIO = 2.0
-
-def gate_gas_relative(
+def apply_single_quote_gates(
     quote: Quote,
-    net_pnl_bps: int,
-    gas_price_gwei: float = 0.01,
-    eth_price_usdc: float = 3000.0,
-    min_ratio: float = MIN_PROFIT_TO_GAS_RATIO,
-) -> GateResult:
+    anchor_price: Decimal | None = None,
+    is_anchor_dex: bool = False,
+) -> list[GateResult]:
     """
-    Reject if net_pnl_usdc / gas_cost_usdc < min_ratio.
-    
-    Details include:
-    - profit_to_gas_ratio
-    - min_ratio_required
-    - gas_cost_usdc, net_pnl_usdc
+    CEMENTED API (Team Lead):
+    DO NOT ADD NEW PARAMETERS WITHOUT UPDATING:
+    - tests/unit/test_gates.py
+    - strategy/jobs/run_scan.py
+    - All callers in the codebase
     """
 ```
 
-### ✅ Крок 6: Ticks gate (вже реалізовано в P1)
+### ✅ Крок 3: Розвести метрики
 
-Адаптивний по amount_in та pair type:
-- `TICKS_LIMITS_VOLATILE`
-- `TICKS_LIMITS_STABLE`
-- `get_adaptive_ticks_limit(amount_in, pair)`
+**OpportunityRank тепер має чітке розділення:**
 
-### ✅ Крок 7: Синхронізація executable vs paper_executable
-
-**OpportunityRank clarified:**
 ```python
 @dataclass
 class OpportunityRank:
-    """
-    executable = passes all gates in current mode
-    paper_executable = executable in paper mode (ignores verification)
-    execution_ready = executable && verified && !cooldown && !blocked
+    # НОВІ ПОЛЯ (clear separation)
+    executable_economic: bool = False  # passes gates + PnL > 0
+    paper_would_execute: bool = False  # = executable_economic in paper mode
+    execution_ready: bool = False      # + verified + !blocked
+    blocked_reason: str | None = None  # WHY not execution_ready
     
-    In SMOKE: paper_executable == executable
-    """
-    executable: bool = False
-    paper_executable: bool = False
-    execution_ready: bool = False
-    blocked_reason: str | None = None  # NEW: explains why not ready
+    # LEGACY PROPERTIES (backward compatibility)
+    @property
+    def executable(self) -> bool:
+        return self.executable_economic
+    
+    @property  
+    def paper_executable(self) -> bool:
+        return self.paper_would_execute
 ```
 
-### ✅ Крок 8: Стандартизуй execution_ready
+### ✅ Крок 4-7: Telemetry (вже реалізовано в v3)
+
+- PRICE_SANITY: +anchor_source
+- QUOTE_GAS_TOO_HIGH: +gas_cost_usdc, +profit_to_gas_ratio
+- TICKS_CROSSED: +pair_type, +adaptive limits
+
+### ✅ Крок 8: Truth report schema versioning
 
 ```python
-execution_ready = (
-    executable 
-    && verified_for_execution 
-    && !cooldown 
-    && !blocked
-)
+TRUTH_REPORT_SCHEMA_VERSION = "3.0.0"
+"""
+Schema version history:
+- 1.0.0: Initial schema
+- 2.0.0: Added spread_ids vs signals terminology
+- 3.0.0: Added executable_economic, execution_ready separation
+         Added blocked_reason to OpportunityRank
+         Added notion_capital_usdc for PnL normalization
+         Added schema_version field
+"""
+
+@dataclass
+class TruthReport:
+    schema_version: str = TRUTH_REPORT_SCHEMA_VERSION
 ```
 
-`blocked_reason` тепер пояснює чому `execution_ready=False`.
-
-### ✅ Крок 9: cumulative_pnl нормалізація
-
-**TruthReport:**
-```python
-notion_capital_usdc: float = 0.0  # 0 = raw cumulative
-normalized_return_pct: float | None = None
-
-# to_dict():
-"cumulative_pnl": {
-    "warning": "Raw cumulative - not normalized to capital"  # if notion=0
+**to_dict() тепер включає:**
+```json
+{
+  "schema_version": "3.0.0",
+  "top_opportunities": [
+    {
+      "executable_economic": true,
+      "paper_would_execute": true,
+      "execution_ready": false,
+      "blocked_reason": "EXEC_DISABLED_NOT_VERIFIED",
+      "executable": true,  // legacy
+      "paper_executable": true  // legacy
+    }
+  ]
 }
 ```
 
-**smoke_minimal.py:**
-```python
-"notion_capital_usdc": 10000.0,  # $10k for SMOKE mode
-```
+### ✅ Крок 9: Counters як facts
 
-### ✅ Крок 10: Контрольний прогін
-
-Очікувані результати після змін:
-- `QUOTE_GAS_TOO_HIGH` ↓ 50%+ (wstETH excluded + relative filter)
-- `TICKS_CROSSED_TOO_MANY` ↓ 50%+ (wstETH excluded)
-- `execution_ready_count > 0` (paper mode ignores verification)
-- `normalized_return_pct` замість raw cumulative
+generate_truth_report() тепер правильно підраховує:
+- `executable_economic` = passes all gates AND net_pnl > 0
+- `paper_would_execute` = executable_economic in paper mode
+- `execution_ready` = executable_economic && verified && !blocked
+- `blocked_reason` = explains why not ready
 
 ---
 
@@ -171,10 +124,9 @@ normalized_return_pct: float | None = None
 
 | Файл | Зміни |
 |------|-------|
-| `config/smoke_minimal.py` | +excluded_pairs, +paper_trading, +notion_capital |
-| `strategy/quarantine.py` | NEW: QuarantineManager |
-| `strategy/gates.py` | +gate_gas_relative, +anchor_source param |
-| `monitoring/truth_report.py` | +blocked_reason, +notion_capital, clarified fields |
+| `monitoring/truth_report.py` | +schema_version, +executable_economic/paper_would_execute, +blocked_reason, fixed dataclass order |
+| `strategy/gates.py` | Cemented apply_single_quote_gates signature |
+| `tests/unit/test_error_contract.py` | Updated for new fields |
 
 ---
 
@@ -184,27 +136,13 @@ normalized_return_pct: float | None = None
 
 ---
 
-## M3 KPI Rules
-
-```python
-M3_KPI_RULES = {
-    "rpc_success_rate_min": 0.8,      # ✅ 0.886
-    "quote_fetch_rate_min": 0.7,       # ✅ 0.9
-    "gate_pass_rate_min": 0.4,         # ✅ 0.722
-    "gates_changed_pct_max": 5.0,
-    "invariants_required": True,
-}
-```
-
----
-
 ## Очікувані результати
 
-Після контрольного прогону з новими налаштуваннями:
+Після цих змін truth_report чітко показує:
+- `executable_economic=True` + `execution_ready=False` + `blocked_reason="EXEC_DISABLED_NOT_VERIFIED"`
+- Це означає: економічно вигідно, але verification policy блокує
 
-| Метрика | Було | Очікується |
-|---------|------|------------|
-| QUOTE_GAS_TOO_HIGH | 260 | < 130 |
-| TICKS_CROSSED_TOO_MANY | 200 | < 100 |
-| execution_ready_count | 0 | > 0 |
-| PnL | Raw 72416 bps | Normalized % |
+Це дозволяє:
+1. Бачити "правду про економіку" через `executable_economic`
+2. Бачити "правду про execution" через `execution_ready`
+3. Розуміти ЧОМУ blocked через `blocked_reason`

@@ -854,10 +854,21 @@ def apply_single_quote_gates(
     Apply all single-quote gates.
     Returns list of failed gate results (empty if all passed).
     
+    CEMENTED API (Team Lead):
+    "Зацементувати сигнатури gates API: apply_single_quote_gates(quote, anchor_price=None, is_anchor_dex=False)"
+    
+    DO NOT ADD NEW PARAMETERS WITHOUT UPDATING:
+    - tests/unit/test_gates.py
+    - strategy/jobs/run_scan.py
+    - All callers in the codebase
+    
     Args:
         quote: Quote to validate
         anchor_price: Reference price from anchor DEX (for sanity check)
         is_anchor_dex: True if this quote is from the anchor DEX
+    
+    Returns:
+        List of failed GateResults (empty if all passed)
     """
     gates = [
         gate_zero_output(quote),
