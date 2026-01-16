@@ -2,54 +2,171 @@
 
 **Дата:** 2026-01-15  
 **Milestone:** M3 P2 Quality Cleanup v2  
-**Статус:** ✅ **IMPLEMENTED + CONTRACT FIX**
+**Статус:** ✅ **IMPLEMENTED**
 
 ---
 
-## P0 FIX: OpportunityRank Contract (Team Lead Alert)
+## Виконані директиви (10/10)
 
-**Проблема:** `OpportunityRank.__init__() got an unexpected keyword argument 'executable'`
+### ✅ Крок 1: Визначити терміни в truth_report
 
-**Root Cause:** Зміна dataclass полів без backward compatibility (property замість field)
+**Термінологія:**
+- `spread_id` = унікальний spread (pair + buy_dex + sell_dex + fee tiers + direction)
+- `signal` = spread_id × (size bucket або route variant)
 
-**Рішення (Варіант А):**
+**Перейменування полів:**
 ```python
-@dataclass
-class OpportunityRank:
-    # ... інші поля ...
-    executable: bool = False  # КРИТИЧНО: реальне поле, не property
-    paper_executable: bool = False
-    execution_ready: bool = False
-
-@dataclass  
-class TruthReport:
-    # ... інші поля ...
-    total_pnl_bps: int = 0  # КРИТИЧНО: реальне поле, не property
-    total_pnl_usdc: float = 0.0
+# OLD                    # NEW
+total_spreads         → spread_ids_total
+profitable_spreads    → spread_ids_profitable
+executable_spreads    → spread_ids_executable
+# NEW ADDITIONS
+signals_total
+signals_profitable
+signals_executable
 ```
 
-**Resilience (run_scan.py):**
+### ✅ Крок 2: Виправити підрахунки та інваріанти
+
 ```python
-try:
-    truth_report = generate_truth_report(snapshot, paper_stats)
-    save_truth_report(truth_report, reports_dir)
-except Exception as truth_err:
-    logger.error(f"Truth report generation failed: {truth_err}")
-    # snapshot/reject_histogram/paper_trades все одно записані
+def validate_invariants(self) -> list[str]:
+    """
+    Invariant 1: spread_ids_profitable <= spread_ids_total
+    Invariant 2: spread_ids_executable <= spread_ids_total
+    Invariant 3: signals_total >= spread_ids_total
+    Invariant 4: execution_ready <= paper_executable
+    """
 ```
 
-**Нові тести:**
-- `test_opportunity_rank_accepts_executable_field`
-- `test_opportunity_rank_has_paper_executable_field`
-- `test_truth_report_accepts_total_pnl_fields`
-- `test_truth_report_to_dict_includes_executable`
-- `test_opportunity_rank_default_values`
+Violations тепер включаються в `to_dict()` output.
+
+### ✅ Крок 3: Blocked reasons як first-class
+
+```python
+class BlockedReason:
+    EXEC_DISABLED_NOT_VERIFIED = "EXEC_DISABLED_NOT_VERIFIED"
+    EXEC_DISABLED_CONFIG = "EXEC_DISABLED_CONFIG"
+    EXEC_DISABLED_QUARANTINE = "EXEC_DISABLED_QUARANTINE"
+    EXEC_DISABLED_RISK = "EXEC_DISABLED_RISK"
+    EXEC_DISABLED_REVALIDATION_FAILED = "EXEC_DISABLED_REVALIDATION_FAILED"
+    EXEC_DISABLED_GATES_CHANGED = "EXEC_DISABLED_GATES_CHANGED"
+    EXEC_DISABLED_COOLDOWN = "EXEC_DISABLED_COOLDOWN"
+```
+
+TruthReport тепер включає:
+- `blocked_reasons: dict` — підрахунок по причинах
+- `top_blocked_reasons: list[tuple]` — топ причин блокування
+
+### ✅ Крок 4: Зменшити SMOKE навантаження
+
+Створено `config/smoke_minimal.py`:
+- 2 пари: WETH/USDC, WETH/ARB
+- 2 DEX: uniswap_v3, sushiswap_v3
+- 1 fee tier: 500
+- Fixed amount: 0.1 ETH
+- Revalidation: same_block, static_gas, same_anchor
+
+### ✅ Крок 5: Stabilize revalidation
+
+TruthReport тепер включає:
+```python
+revalidation_total: int
+revalidation_passed: int
+revalidation_gates_changed: int
+# В to_dict():
+"revalidation": {
+    "total": ...,
+    "passed": ...,
+    "gates_changed": ...,
+    "gates_changed_pct": ...,  # Для KPI
+}
+```
+
+### ✅ Крок 6: PRICE_SANITY telemetry
+
+Деталі вже включають:
+- `implied_price`, `anchor_price`, `deviation_bps`
+- `dex_id`, `fee`, `amount_in`
+- `max_deviation_bps_L1`, `max_deviation_bps_L2`
+
+### ✅ Крок 7: QUOTE_GAS_TOO_HIGH telemetry
+
+Оновлено `gate_gas_estimate()`:
+```python
+details={
+    "gas_estimate": quote.gas_estimate,
+    "max_gas": max_gas,
+    "amount_in": quote.amount_in,
+    # NEW telemetry
+    "gas_price_gwei": 0.01,
+    "gas_cost_eth": ...,
+    "gas_cost_usdc": ...,
+    "threshold_usdc": ...,
+    "dex_id": ...,
+    "fee": ...,
+    "pair": ...,
+}
+```
+
+### ✅ Крок 8: TICKS_CROSSED adaptive sizing
+
+Вже реалізовано в P1:
+- `get_adaptive_ticks_limit(amount_in, pair)`
+- `TICKS_LIMITS_VOLATILE`, `TICKS_LIMITS_STABLE`
+- `get_pair_type()` для класифікації
+
+### ✅ Крок 9: Error contract тест
+
+28 тестів в `test_error_contract.py`:
+- `TestErrorCodeContract` — 8 тестів
+- `TestErrorCodeUsage` — 3 тести
+- `TestRejectHistogramContract` — 2 тести
+- `TestGateRejectReasons` — 3 тести
+- `TestTruthReportContract` — 5 тестів
+- `TestTruthReportInvariants` — 5 тестів
+- `TestBlockedReasons` — 2 тести
+
+### ✅ Крок 10: M3 KPI Rules
+
+`config/smoke_minimal.py` включає:
+```python
+M3_KPI_RULES = {
+    "rpc_success_rate_min": 0.8,
+    "quote_fetch_rate_min": 0.7,
+    "gate_pass_rate_min": 0.4,
+    "gates_changed_pct_max": 5.0,
+    "invariants_required": True,
+}
+
+def check_m3_kpi(truth_report_dict) -> dict:
+    """Returns {passed, violations, metrics}"""
+```
 
 ---
 
-## Контекст
+## Тести
 
-Team Lead проаналізував артефакти після M3_P1 і виявив, що quality cleanup потребує глибших змін. Цей документ описує реалізацію всіх 10 нових директив.
+**91 passed** ✅
+
+---
+
+## Файли
+
+| Файл | Зміни |
+|------|-------|
+| `monitoring/truth_report.py` | +BlockedReason, +invariants, renamed fields, +revalidation stats |
+| `strategy/gates.py` | +gas telemetry (gas_cost_usdc, threshold_usdc) |
+| `config/smoke_minimal.py` | NEW: SMOKE config, M3 KPI rules |
+| `tests/unit/test_error_contract.py` | +invariant tests, +BlockedReason tests |
+
+---
+
+## Наступні кроки
+
+1. Запустити SMOKE з `smoke_minimal.py` config
+2. Перевірити `gates_changed_pct < 5%`
+3. Переконатися що invariants не violated
+4. Рухатися далі в M3 тільки якщо KPI пройдені
 
 ---
 

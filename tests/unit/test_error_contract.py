@@ -407,15 +407,15 @@ class TestTruthReportContract:
             top_reject_reasons=[("QUOTE_GAS_TOO_HIGH", 10)],
         )
         
-        # This should NOT raise TypeError
+        # This should NOT raise TypeError - using new field names
         report = TruthReport(
             timestamp="2026-01-15T12:00:00Z",
             mode="smoke",
             health=health,
             top_opportunities=[],
-            total_spreads=100,
-            profitable_spreads=50,
-            executable_spreads=30,
+            spread_ids_total=100,
+            spread_ids_profitable=50,
+            spread_ids_executable=30,
             blocked_spreads=20,
             total_pnl_bps=500,  # CRITICAL: this must work
             total_pnl_usdc=5.0,  # CRITICAL: this must work
@@ -423,6 +423,9 @@ class TestTruthReportContract:
         
         assert report.total_pnl_bps == 500
         assert report.total_pnl_usdc == 5.0
+        # Test legacy aliases
+        assert report.total_spreads == 100
+        assert report.profitable_spreads == 50
     
     def test_truth_report_to_dict_includes_executable(self):
         """TruthReport.to_dict() should include executable in opportunities."""
@@ -462,9 +465,9 @@ class TestTruthReportContract:
             mode="smoke",
             health=health,
             top_opportunities=[opp],
-            total_spreads=100,
-            profitable_spreads=50,
-            executable_spreads=30,
+            spread_ids_total=100,
+            spread_ids_profitable=50,
+            spread_ids_executable=30,
             blocked_spreads=20,
         )
         
@@ -499,3 +502,222 @@ class TestTruthReportContract:
         assert rank.paper_executable is False
         assert rank.execution_ready is False
         assert rank.confidence_breakdown is None
+
+
+class TestTruthReportInvariants:
+    """Test TruthReport invariant validation (Team Lead Крок 2, 9)."""
+    
+    def test_invariant_profitable_lte_total(self):
+        """spread_ids_profitable should be <= spread_ids_total."""
+        from monitoring.truth_report import TruthReport, HealthMetrics
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[],
+        )
+        
+        # Invalid: profitable > total
+        report = TruthReport(
+            timestamp="2026-01-15T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=[],
+            spread_ids_total=4,
+            spread_ids_profitable=35,  # INVALID: 35 > 4
+        )
+        
+        violations = report.validate_invariants()
+        assert len(violations) > 0
+        assert "spread_ids_profitable" in violations[0]
+    
+    def test_invariant_executable_lte_total(self):
+        """spread_ids_executable should be <= spread_ids_total."""
+        from monitoring.truth_report import TruthReport, HealthMetrics
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[],
+        )
+        
+        # Invalid: executable > total
+        report = TruthReport(
+            timestamp="2026-01-15T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=[],
+            spread_ids_total=4,
+            spread_ids_executable=121,  # INVALID: 121 > 4
+        )
+        
+        violations = report.validate_invariants()
+        assert len(violations) > 0
+        assert "spread_ids_executable" in violations[0]
+    
+    def test_invariant_signals_gte_spread_ids(self):
+        """signals_total should be >= spread_ids_total."""
+        from monitoring.truth_report import TruthReport, HealthMetrics
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[],
+        )
+        
+        # Invalid: signals < spread_ids
+        report = TruthReport(
+            timestamp="2026-01-15T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=[],
+            spread_ids_total=100,
+            signals_total=50,  # INVALID: 50 < 100
+        )
+        
+        violations = report.validate_invariants()
+        assert len(violations) > 0
+        assert "signals_total" in violations[0]
+    
+    def test_valid_report_no_violations(self):
+        """Valid report should have no invariant violations."""
+        from monitoring.truth_report import TruthReport, HealthMetrics
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[],
+        )
+        
+        # Valid report
+        report = TruthReport(
+            timestamp="2026-01-15T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=[],
+            spread_ids_total=100,
+            spread_ids_profitable=50,
+            spread_ids_executable=30,
+            signals_total=200,  # signals >= spread_ids
+            signals_profitable=100,
+            signals_executable=60,
+        )
+        
+        violations = report.validate_invariants()
+        assert len(violations) == 0
+    
+    def test_to_dict_includes_violations(self):
+        """to_dict() should include violations if any."""
+        from monitoring.truth_report import TruthReport, HealthMetrics
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[],
+        )
+        
+        # Invalid report
+        report = TruthReport(
+            timestamp="2026-01-15T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=[],
+            spread_ids_total=4,
+            spread_ids_profitable=35,  # INVALID
+        )
+        
+        result = report.to_dict()
+        assert "invariant_violations" in result
+        assert len(result["invariant_violations"]) > 0
+
+
+class TestBlockedReasons:
+    """Test BlockedReason class (Team Lead Крок 3)."""
+    
+    def test_blocked_reasons_defined(self):
+        """All expected blocked reasons should be defined."""
+        from monitoring.truth_report import BlockedReason
+        
+        expected = [
+            "EXEC_DISABLED_NOT_VERIFIED",
+            "EXEC_DISABLED_CONFIG",
+            "EXEC_DISABLED_QUARANTINE",
+            "EXEC_DISABLED_RISK",
+            "EXEC_DISABLED_REVALIDATION_FAILED",
+            "EXEC_DISABLED_GATES_CHANGED",
+            "EXEC_DISABLED_COOLDOWN",
+        ]
+        
+        for reason in expected:
+            assert hasattr(BlockedReason, reason), f"Missing: {reason}"
+    
+    def test_truth_report_top_blocked_reasons(self):
+        """TruthReport should include top_blocked_reasons."""
+        from monitoring.truth_report import TruthReport, HealthMetrics, BlockedReason
+        
+        health = HealthMetrics(
+            rpc_success_rate=0.95,
+            rpc_avg_latency_ms=50,
+            rpc_total_requests=100,
+            quote_fetch_rate=0.9,
+            quote_gate_pass_rate=0.7,
+            chains_active=1,
+            dexes_active=2,
+            pairs_covered=5,
+            pools_scanned=100,
+            top_reject_reasons=[],
+        )
+        
+        report = TruthReport(
+            timestamp="2026-01-15T12:00:00Z",
+            mode="smoke",
+            health=health,
+            top_opportunities=[],
+            blocked_reasons={
+                BlockedReason.EXEC_DISABLED_NOT_VERIFIED: 10,
+                BlockedReason.EXEC_DISABLED_GATES_CHANGED: 5,
+            },
+            top_blocked_reasons=[
+                (BlockedReason.EXEC_DISABLED_NOT_VERIFIED, 10),
+                (BlockedReason.EXEC_DISABLED_GATES_CHANGED, 5),
+            ],
+        )
+        
+        result = report.to_dict()
+        assert "blocked_reasons_breakdown" in result
+        assert "top_blocked_reasons" in result

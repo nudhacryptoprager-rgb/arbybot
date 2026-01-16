@@ -69,9 +69,32 @@ class HealthMetrics:
     top_reject_reasons: list[tuple[str, int]]
 
 
+# =============================================================================
+# BLOCKED REASONS (Team Lead Крок 3)
+# =============================================================================
+
+class BlockedReason:
+    """First-class blocked reasons for execution."""
+    EXEC_DISABLED_NOT_VERIFIED = "EXEC_DISABLED_NOT_VERIFIED"
+    EXEC_DISABLED_CONFIG = "EXEC_DISABLED_CONFIG"
+    EXEC_DISABLED_QUARANTINE = "EXEC_DISABLED_QUARANTINE"
+    EXEC_DISABLED_RISK = "EXEC_DISABLED_RISK"
+    EXEC_DISABLED_REVALIDATION_FAILED = "EXEC_DISABLED_REVALIDATION_FAILED"
+    EXEC_DISABLED_GATES_CHANGED = "EXEC_DISABLED_GATES_CHANGED"
+    EXEC_DISABLED_COOLDOWN = "EXEC_DISABLED_COOLDOWN"
+
+
 @dataclass
 class TruthReport:
-    """Complete truth report."""
+    """
+    Complete truth report.
+    
+    TERMINOLOGY (Team Lead Крок 1):
+    - spread_id: унікальний spread (pair + buy_dex + sell_dex + fee tiers + direction)
+    - signal: spread_id × (size bucket або route variant)
+    
+    So: signals_total >= spread_ids_total always
+    """
     timestamp: str
     mode: str
     
@@ -81,50 +104,128 @@ class TruthReport:
     # Top opportunities
     top_opportunities: list[OpportunityRank]
     
-    # Stats
-    total_spreads: int
-    profitable_spreads: int
-    executable_spreads: int
-    blocked_spreads: int
+    # Stats - RENAMED for clarity (Team Lead Крок 1)
+    # spread_ids = unique spreads (pair+dexes+fee+direction)
+    # signals = spread_ids × size/route variants
+    spread_ids_total: int = 0
+    spread_ids_profitable: int = 0
+    spread_ids_executable: int = 0
+    signals_total: int = 0
+    signals_profitable: int = 0
+    signals_executable: int = 0
     
-    # Team Lead Крок 5: Execution readiness breakdown
+    # Legacy aliases for backwards compatibility
+    @property
+    def total_spreads(self) -> int:
+        return self.spread_ids_total
+    
+    @property
+    def profitable_spreads(self) -> int:
+        return self.spread_ids_profitable
+    
+    @property
+    def executable_spreads(self) -> int:
+        return self.spread_ids_executable
+    
+    # Blocked breakdown (Team Lead Крок 3)
+    blocked_spreads: int = 0
+    blocked_reasons: dict | None = None  # {BlockedReason: count}
+    top_blocked_reasons: list[tuple[str, int]] | None = None
+    
+    # Execution readiness
     paper_executable_count: int = 0
     execution_ready_count: int = 0
     
-    # Blocked reasons breakdown
-    blocked_reasons: dict | None = None
+    # Revalidation stats (Team Lead Крок 5)
+    revalidation_total: int = 0
+    revalidation_passed: int = 0
+    revalidation_gates_changed: int = 0
     
-    # КРИТИЧНО: total_pnl_bps/usdc мають бути реальними полями для backward compatibility
+    # PnL fields
     total_pnl_bps: int = 0
     total_pnl_usdc: float = 0.0
-    
-    # Team Lead Крок 6: Separate signal PnL vs would_execute PnL (додаткові)
     signal_pnl_bps: int = 0
     signal_pnl_usdc: float = 0.0
     would_execute_pnl_bps: int = 0
     would_execute_pnl_usdc: float = 0.0
     
+    def validate_invariants(self) -> list[str]:
+        """
+        Validate report invariants (Team Lead Крок 2).
+        
+        Returns list of violations (empty if all OK).
+        """
+        violations = []
+        
+        # Invariant 1: profitable <= total
+        if self.spread_ids_profitable > self.spread_ids_total:
+            violations.append(
+                f"spread_ids_profitable ({self.spread_ids_profitable}) > "
+                f"spread_ids_total ({self.spread_ids_total})"
+            )
+        
+        # Invariant 2: executable <= total
+        if self.spread_ids_executable > self.spread_ids_total:
+            violations.append(
+                f"spread_ids_executable ({self.spread_ids_executable}) > "
+                f"spread_ids_total ({self.spread_ids_total})"
+            )
+        
+        # Invariant 3: signals >= spread_ids
+        if self.signals_total < self.spread_ids_total:
+            violations.append(
+                f"signals_total ({self.signals_total}) < "
+                f"spread_ids_total ({self.spread_ids_total})"
+            )
+        
+        # Invariant 4: execution_ready <= paper_executable
+        if self.execution_ready_count > self.paper_executable_count:
+            violations.append(
+                f"execution_ready_count ({self.execution_ready_count}) > "
+                f"paper_executable_count ({self.paper_executable_count})"
+            )
+        
+        return violations
+    
     def to_dict(self) -> dict:
+        # Validate before serializing
+        violations = self.validate_invariants()
+        
         result = {
             "timestamp": self.timestamp,
             "mode": self.mode,
             "health": asdict(self.health),
             "top_opportunities": [asdict(o) for o in self.top_opportunities],
+            # Team Lead Крок 1: Clear terminology
             "stats": {
-                "total_spreads": self.total_spreads,
-                "profitable_spreads": self.profitable_spreads,
-                "executable_spreads": self.executable_spreads,
-                "blocked_spreads": self.blocked_spreads,
-                # Team Lead Крок 5
+                # Spread IDs (unique)
+                "spread_ids_total": self.spread_ids_total,
+                "spread_ids_profitable": self.spread_ids_profitable,
+                "spread_ids_executable": self.spread_ids_executable,
+                # Signals (spread × size variants)
+                "signals_total": self.signals_total,
+                "signals_profitable": self.signals_profitable,
+                "signals_executable": self.signals_executable,
+                # Execution
                 "paper_executable_count": self.paper_executable_count,
                 "execution_ready_count": self.execution_ready_count,
+                # Blocked
+                "blocked_spreads": self.blocked_spreads,
             },
-            # Legacy cumulative_pnl for backwards compatibility
+            # Revalidation stats (Team Lead Крок 5)
+            "revalidation": {
+                "total": self.revalidation_total,
+                "passed": self.revalidation_passed,
+                "gates_changed": self.revalidation_gates_changed,
+                "gates_changed_pct": round(
+                    self.revalidation_gates_changed / max(1, self.revalidation_total) * 100, 1
+                ),
+            },
+            # PnL
             "cumulative_pnl": {
                 "total_bps": self.total_pnl_bps,
                 "total_usdc": self.total_pnl_usdc,
             },
-            # Team Lead Крок 6: Separate PnL metrics
             "pnl": {
                 "signal_pnl_bps": self.signal_pnl_bps,
                 "signal_pnl_usdc": self.signal_pnl_usdc,
@@ -133,9 +234,15 @@ class TruthReport:
             },
         }
         
-        # Add blocked reasons breakdown if available
+        # Add blocked reasons breakdown (Team Lead Крок 3)
         if self.blocked_reasons:
             result["blocked_reasons_breakdown"] = self.blocked_reasons
+        if self.top_blocked_reasons:
+            result["top_blocked_reasons"] = self.top_blocked_reasons
+        
+        # Add invariant violations if any
+        if violations:
+            result["invariant_violations"] = violations
         
         return result
 
@@ -556,10 +663,42 @@ def generate_truth_report(
         top_reject_reasons=top_rejects,
     )
     
-    # Calculate spread stats
-    profitable_spreads = [s for s in all_spreads if s.get("net_pnl_bps", 0) > 0]
+    # Calculate spread stats - Team Lead Крок 1-2: Clear terminology
+    # all_spreads = all signals (spread × size variants)
+    # unique_spreads = unique spread_ids
+    
+    # First, deduplicate spreads by spread_id (keep latest/last occurrence per id)
+    spreads_by_id: dict[str, dict] = {}
+    for spread in all_spreads:
+        spread_id = spread.get("id", "")
+        if spread_id:
+            spreads_by_id[spread_id] = spread  # Last wins (most recent)
+    unique_spreads = list(spreads_by_id.values())
+    
+    # SIGNALS = all spreads (including duplicates/size variants)
+    signals_total = len(all_spreads)
+    signals_profitable = len([s for s in all_spreads if s.get("net_pnl_bps", 0) > 0])
+    signals_executable = len([s for s in all_spreads if s.get("executable")])
+    
+    # SPREAD_IDS = unique spreads only
+    spread_ids_total = len(unique_spreads)
+    spread_ids_profitable = len([s for s in unique_spreads if s.get("net_pnl_bps", 0) > 0])
+    spread_ids_executable = len([s for s in unique_spreads if s.get("executable")])
+    
+    # Blocked spreads (profitable but not executable)
+    profitable_spreads = [s for s in unique_spreads if s.get("net_pnl_bps", 0) > 0]
     executable_spreads = [s for s in profitable_spreads if s.get("executable")]
     blocked_spreads = [s for s in profitable_spreads if not s.get("executable")]
+    
+    # Blocked reasons breakdown (Team Lead Крок 3)
+    blocked_reasons_count: dict[str, int] = {}
+    for spread in blocked_spreads:
+        # Determine blocked reason
+        reason = spread.get("blocked_reason", BlockedReason.EXEC_DISABLED_NOT_VERIFIED)
+        blocked_reasons_count[reason] = blocked_reasons_count.get(reason, 0) + 1
+    
+    # Sort blocked reasons by count
+    top_blocked = sorted(blocked_reasons_count.items(), key=lambda x: x[1], reverse=True)
     
     # Get block age from last cycle
     block_age_ms = 0
@@ -567,15 +706,6 @@ def generate_truth_report(
         last_cycle = cycle_summaries[-1]
         block_pin = last_cycle.get("block_pin", {})
         block_age_ms = block_pin.get("age_ms", 0) or 0
-    
-    # Deduplicate spreads by spread_id (keep latest/last occurrence per id)
-    # This prevents duplicate entries in top_opportunities from multi-cycle runs
-    spreads_by_id: dict[str, dict] = {}
-    for spread in all_spreads:
-        spread_id = spread.get("id", "")
-        if spread_id:
-            spreads_by_id[spread_id] = spread  # Last wins (most recent)
-    unique_spreads = list(spreads_by_id.values())
     
     # Rank opportunities by confidence × net_pnl
     ranked = []
@@ -656,19 +786,42 @@ def generate_truth_report(
     total_pnl_bps = 0
     total_pnl_usdc = 0.0
     
+    # Revalidation stats from paper session
+    revalidation_total = 0
+    revalidation_passed = 0
+    revalidation_gates_changed = 0
+    
     if paper_session_stats:
         total_pnl_bps = paper_session_stats.get("total_pnl_bps", 0)
         total_pnl_usdc = paper_session_stats.get("total_pnl_usdc", 0.0)
+        revalidation_total = paper_session_stats.get("revalidation_total", 0)
+        revalidation_passed = paper_session_stats.get("revalidation_passed", 0)
+        revalidation_gates_changed = paper_session_stats.get("revalidation_gates_changed", 0)
     
     return TruthReport(
         timestamp=datetime.now(timezone.utc).isoformat(),
         mode=mode,
         health=health,
         top_opportunities=top_opportunities,
-        total_spreads=len(all_spreads),
-        profitable_spreads=len(profitable_spreads),
-        executable_spreads=len(executable_spreads),
+        # Team Lead Крок 1: Clear terminology
+        spread_ids_total=spread_ids_total,
+        spread_ids_profitable=spread_ids_profitable,
+        spread_ids_executable=spread_ids_executable,
+        signals_total=signals_total,
+        signals_profitable=signals_profitable,
+        signals_executable=signals_executable,
+        # Blocked
         blocked_spreads=len(blocked_spreads),
+        blocked_reasons=blocked_reasons_count if blocked_reasons_count else None,
+        top_blocked_reasons=top_blocked if top_blocked else None,
+        # Execution
+        paper_executable_count=spread_ids_executable,
+        execution_ready_count=0,  # TODO: implement real execution readiness check
+        # Revalidation
+        revalidation_total=revalidation_total,
+        revalidation_passed=revalidation_passed,
+        revalidation_gates_changed=revalidation_gates_changed,
+        # PnL
         total_pnl_bps=total_pnl_bps,
         total_pnl_usdc=total_pnl_usdc,
     )

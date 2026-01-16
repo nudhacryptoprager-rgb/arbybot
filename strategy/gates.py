@@ -398,6 +398,16 @@ def gate_gas_estimate(quote: Quote, max_gas: int | None = None) -> GateResult:
         max_gas = get_adaptive_gas_limit(quote.amount_in)
     
     if quote.gas_estimate > max_gas:
+        # Team Lead Крок 7: Better telemetry
+        # Calculate gas cost in approximate terms
+        # Using rough estimates: 0.01 gwei gas price on L2, ~$3000/ETH
+        gas_price_gwei = 0.01  # Conservative L2 estimate
+        gas_cost_eth = (quote.gas_estimate * gas_price_gwei) / 10**9
+        gas_cost_usdc = gas_cost_eth * 3000  # Rough ETH price
+        
+        max_gas_cost_eth = (max_gas * gas_price_gwei) / 10**9
+        threshold_usdc = max_gas_cost_eth * 3000
+        
         return GateResult(
             passed=False,
             reject_code=ErrorCode.QUOTE_GAS_TOO_HIGH,
@@ -405,6 +415,14 @@ def gate_gas_estimate(quote: Quote, max_gas: int | None = None) -> GateResult:
                 "gas_estimate": quote.gas_estimate,
                 "max_gas": max_gas,
                 "amount_in": quote.amount_in,
+                # Team Lead Крок 7: Additional telemetry
+                "gas_price_gwei": gas_price_gwei,
+                "gas_cost_eth": round(gas_cost_eth, 8),
+                "gas_cost_usdc": round(gas_cost_usdc, 4),
+                "threshold_usdc": round(threshold_usdc, 4),
+                "dex_id": quote.pool.dex_id,
+                "fee": quote.pool.fee,
+                "pair": f"{quote.token_in.symbol}/{quote.token_out.symbol}",
             },
         )
     return GateResult(passed=True)
