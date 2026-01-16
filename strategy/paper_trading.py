@@ -6,6 +6,20 @@ Features:
 - Cooldown/dedupe logic
 - PnL tracking in bps and USDC
 - Outcome categories: WOULD_EXECUTE, BLOCKED_EXEC, STALE, etc.
+
+CONTRACT (Team Lead v4):
+- token_in/token_out: REAL tokens of the trade (match spread_id/pair)
+- numeraire: the currency for PnL calculation (usually USDC)
+- amount_in_numeraire: trade size in numeraire
+- expected_pnl_numeraire: expected profit in numeraire
+
+EXAMPLE:
+  spread_id: "WETH/ARB:uniswap_v3:sushiswap_v3:500"
+  token_in: "WETH"
+  token_out: "ARB"
+  numeraire: "USDC"
+  amount_in_numeraire: 300.0  # $300 worth of WETH
+  expected_pnl_numeraire: 1.5  # $1.50 expected profit
 """
 
 import json
@@ -21,6 +35,10 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 
+# Default numeraire for PnL calculations
+DEFAULT_NUMERAIRE = "USDC"
+
+
 class TradeOutcome(str, Enum):
     """Paper trade outcome categories."""
     WOULD_EXECUTE = "WOULD_EXECUTE"           # executable=true, profitable=true
@@ -34,7 +52,14 @@ class TradeOutcome(str, Enum):
 
 @dataclass
 class PaperTrade:
-    """A single paper trade record."""
+    """
+    A single paper trade record.
+    
+    CONTRACT (Team Lead v4):
+    - token_in/token_out must match spread_id/pair (real tokens)
+    - numeraire is the currency for PnL (usually USDC)
+    - *_numeraire fields contain values in numeraire currency
+    """
     # Identity
     spread_id: str
     block_number: int
@@ -44,8 +69,11 @@ class PaperTrade:
     chain_id: int
     buy_dex: str
     sell_dex: str
-    token_in: str
-    token_out: str
+    
+    # REAL TOKENS (must match pair in spread_id)
+    token_in: str       # e.g., "WETH" for WETH/ARB spread
+    token_out: str      # e.g., "ARB" for WETH/ARB spread
+    
     fee: int
     amount_in_wei: str
     
@@ -53,15 +81,16 @@ class PaperTrade:
     buy_price: str
     sell_price: str
     
-    # PnL
+    # PnL in basis points (relative)
     spread_bps: int
     gas_cost_bps: int
     net_pnl_bps: int
     gas_price_gwei: float
     
-    # USDC estimate
-    amount_in_usdc: float = 0.0
-    expected_pnl_usdc: float = 0.0
+    # NUMERAIRE for PnL calculations (Team Lead Крок 1)
+    numeraire: str = DEFAULT_NUMERAIRE  # Currency for PnL (usually "USDC")
+    amount_in_numeraire: float = 0.0    # Trade size in numeraire
+    expected_pnl_numeraire: float = 0.0 # Expected profit in numeraire
     
     # Outcome
     outcome: str = TradeOutcome.WOULD_EXECUTE.value
@@ -80,6 +109,35 @@ class PaperTrade:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
+    
+    def validate_tokens_match_pair(self) -> list[str]:
+        """
+        Validate that token_in/token_out match spread_id pair.
+        
+        Returns list of violations (empty if valid).
+        """
+        violations = []
+        
+        # Extract pair from spread_id (format: "PAIR:buy_dex:sell_dex:fee")
+        parts = self.spread_id.split(":")
+        if len(parts) >= 1:
+            pair = parts[0]  # e.g., "WETH/ARB"
+            if "/" in pair:
+                base, quote = pair.split("/", 1)
+                
+                # Check token_in matches base
+                if self.token_in != base:
+                    violations.append(
+                        f"token_in ({self.token_in}) != pair base ({base})"
+                    )
+                
+                # Check token_out matches quote
+                if self.token_out != quote:
+                    violations.append(
+                        f"token_out ({self.token_out}) != pair quote ({quote})"
+                    )
+        
+        return violations
     
     @classmethod
     def from_dict(cls, data: dict) -> "PaperTrade":

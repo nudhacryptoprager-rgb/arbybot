@@ -309,27 +309,33 @@ class TruthReport:
                     self.revalidation_gates_changed / max(1, self.revalidation_total) * 100, 1
                 ),
             },
-            # PnL
+            # PnL - Team Lead v4: Raw cumulative is DEBUG, normalized is HEADLINE
             "cumulative_pnl": {
                 "total_bps": self.total_pnl_bps,
                 "total_usdc": self.total_pnl_usdc,
                 # Team Lead Крок 9: notion capital warning
-                "warning": "Raw cumulative - not normalized to capital" if self.notion_capital_usdc == 0 else None,
+                "_warning": "RAW - use pnl_normalized for decisions" if self.notion_capital_usdc == 0 else None,
             },
             "pnl": {
                 "signal_pnl_bps": self.signal_pnl_bps,
                 "signal_pnl_usdc": self.signal_pnl_usdc,
                 "would_execute_pnl_bps": self.would_execute_pnl_bps,
                 "would_execute_pnl_usdc": self.would_execute_pnl_usdc,
-                # Team Lead Крок 9: normalized return if capital set
-                "notion_capital_usdc": self.notion_capital_usdc,
+            },
+            # Team Lead v4: Normalized PnL is the HEADLINE metric
+            "pnl_normalized": {
+                "notion_capital_numeraire": self.notion_capital_usdc,
                 "normalized_return_pct": self.normalized_return_pct,
+                "numeraire": "USDC",
             },
         }
         
-        # Clean up None values from PnL warning
-        if result["cumulative_pnl"].get("warning") is None:
-            del result["cumulative_pnl"]["warning"]
+        # Clean up None values
+        if result["cumulative_pnl"].get("_warning") is None:
+            del result["cumulative_pnl"]["_warning"]
+        if result["pnl_normalized"]["notion_capital_numeraire"] == 0:
+            # If no notion capital, mark as invalid
+            result["pnl_normalized"]["_status"] = "NOT_CONFIGURED"
         
         # Add blocked reasons breakdown (Team Lead Крок 3)
         if self.blocked_reasons:
@@ -913,6 +919,14 @@ def generate_truth_report(
     revalidation_passed = 0
     revalidation_gates_changed = 0
     
+    # Team Lead Крок 3: Count execution_ready from opportunities
+    execution_ready_count = sum(
+        1 for opp in top_opportunities if opp.execution_ready
+    )
+    paper_executable_count = sum(
+        1 for opp in top_opportunities if opp.paper_would_execute
+    )
+    
     if paper_session_stats:
         total_pnl_bps = paper_session_stats.get("total_pnl_bps", 0)
         total_pnl_usdc = paper_session_stats.get("total_pnl_usdc", 0.0)
@@ -936,9 +950,9 @@ def generate_truth_report(
         blocked_spreads=len(blocked_spreads),
         blocked_reasons=blocked_reasons_count if blocked_reasons_count else None,
         top_blocked_reasons=top_blocked if top_blocked else None,
-        # Execution
-        paper_executable_count=spread_ids_executable,
-        execution_ready_count=0,  # TODO: implement real execution readiness check
+        # Execution - Team Lead Крок 3: Count from opportunities
+        paper_executable_count=paper_executable_count,
+        execution_ready_count=execution_ready_count,
         # Revalidation
         revalidation_total=revalidation_total,
         revalidation_passed=revalidation_passed,

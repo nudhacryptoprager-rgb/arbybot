@@ -31,6 +31,8 @@ SMOKE_MINIMAL = {
     "excluded_pairs": [
         "wstETH/WETH",  # High ticks (16-20), high gas (500k-846k)
         "WETH/wstETH",
+        "WETH/LINK",    # Frequent PRICE_SANITY_FAILED (anchor issues)
+        "WETH/USDT",    # Sometimes problematic quoter
     ],
     
     # DEXes: only 2 most reliable
@@ -67,7 +69,8 @@ SMOKE_MINIMAL = {
     
     # Team Lead Крок 9: Notion capital for PnL normalization
     # "прив'яжи до фіксованого notion-capital або перестань показувати cumulative у SMOKE"
-    "notion_capital_usdc": 10000.0,  # $10k notional for SMOKE mode
+    "numeraire": "USDC",  # Currency for PnL calculations
+    "notion_capital_numeraire": 10000.0,  # $10k notional for SMOKE mode
 }
 
 

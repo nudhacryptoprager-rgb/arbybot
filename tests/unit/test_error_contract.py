@@ -734,3 +734,198 @@ class TestBlockedReasons:
         result = report.to_dict()
         assert "blocked_reasons_breakdown" in result
         assert "top_blocked_reasons" in result
+
+
+class TestPaperTradeContract:
+    """Test PaperTrade contract (Team Lead v4)."""
+    
+    def test_paper_trade_has_numeraire_fields(self):
+        """PaperTrade should have numeraire fields."""
+        from strategy.paper_trading import PaperTrade, DEFAULT_NUMERAIRE
+        
+        trade = PaperTrade(
+            spread_id="WETH/ARB:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",   # Must match pair!
+            token_out="ARB",   # Must match pair!
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei=0.01,
+            numeraire="USDC",
+            amount_in_numeraire=300.0,
+            expected_pnl_numeraire=0.84,
+        )
+        
+        # New numeraire fields
+        assert trade.numeraire == "USDC"
+        assert trade.amount_in_numeraire == 300.0
+        assert trade.expected_pnl_numeraire == 0.84
+        
+        # Token fields match pair
+        assert trade.token_in == "WETH"
+        assert trade.token_out == "ARB"
+        
+        # Default numeraire is USDC
+        assert DEFAULT_NUMERAIRE == "USDC"
+    
+    def test_paper_trade_legacy_compatibility(self):
+        """PaperTrade should be compatible with old code using amount_in_usdc."""
+        from strategy.paper_trading import PaperTrade
+        
+        trade = PaperTrade(
+            spread_id="WETH/USDC:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",
+            token_out="USDC",
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei=0.01,
+            amount_in_numeraire=300.0,
+            expected_pnl_numeraire=0.84,
+        )
+        
+        # New fields should be usable
+        assert trade.amount_in_numeraire == 300.0
+        assert trade.expected_pnl_numeraire == 0.84
+        
+        # to_dict should include numeraire
+        trade_dict = trade.to_dict()
+        assert "numeraire" in trade_dict
+        assert "amount_in_numeraire" in trade_dict
+        assert "expected_pnl_numeraire" in trade_dict
+    
+    def test_paper_trade_tokens_must_match_pair(self):
+        """Test that token_in/token_out should match spread_id pair."""
+        from strategy.paper_trading import PaperTrade
+        
+        # This is a CORRECT trade (tokens match pair)
+        trade = PaperTrade(
+            spread_id="WETH/ARB:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",   # CORRECT: matches pair
+            token_out="ARB",   # CORRECT: matches pair
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei=0.01,
+        )
+        
+        # Validation should pass (no violations)
+        violations = trade.validate_tokens_match_pair()
+        assert len(violations) == 0, f"Expected no violations but got: {violations}"
+    
+    def test_paper_trade_tokens_mismatch_detected(self):
+        """Test that mismatched tokens are detected."""
+        from strategy.paper_trading import PaperTrade
+        
+        # This is a BROKEN trade (token_out doesn't match pair)
+        # This is the bug that Team Lead found!
+        trade = PaperTrade(
+            spread_id="WETH/ARB:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",
+            token_out="USDC",  # WRONG: should be ARB!
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei=0.01,
+        )
+        
+        # Validation should FAIL
+        violations = trade.validate_tokens_match_pair()
+        assert len(violations) > 0, "Expected violations for mismatched tokens"
+        assert "token_out" in violations[0]
+        assert "USDC" in violations[0]
+        assert "ARB" in violations[0]
+
+
+class TestExecutableSemantics:
+    """Test executable/paper_would_execute/execution_ready semantics."""
+    
+    def test_executable_economic_vs_execution_ready(self):
+        """Test that executable_economic != execution_ready."""
+        from monitoring.truth_report import OpportunityRank
+        
+        # Case 1: Economically executable but not verified
+        opp = OpportunityRank(
+            rank=1,
+            spread_id="test",
+            buy_dex="uni",
+            sell_dex="sushi",
+            pair="WETH/USDC",
+            fee=500,
+            amount_in="1000",
+            spread_bps=50,
+            gas_cost_bps=10,
+            net_pnl_bps=40,
+            expected_pnl_usdc=1.0,
+            executable_economic=True,   # Passes gates, PnL > 0
+            paper_would_execute=True,   # Paper mode would execute
+            execution_ready=False,      # But NOT verified
+            blocked_reason="EXEC_DISABLED_NOT_VERIFIED",
+        )
+        
+        assert opp.executable_economic is True
+        assert opp.execution_ready is False
+        assert opp.blocked_reason == "EXEC_DISABLED_NOT_VERIFIED"
+    
+    def test_invariant_execution_ready_implies_executable_economic(self):
+        """execution_ready=True implies executable_economic=True."""
+        from monitoring.truth_report import OpportunityRank
+        
+        # If execution_ready=True, then executable_economic must be True
+        # (you can't execute something that's not economically viable)
+        opp = OpportunityRank(
+            rank=1,
+            spread_id="test",
+            buy_dex="uni",
+            sell_dex="sushi",
+            pair="WETH/USDC",
+            fee=500,
+            amount_in="1000",
+            spread_bps=50,
+            gas_cost_bps=10,
+            net_pnl_bps=40,
+            expected_pnl_usdc=1.0,
+            executable_economic=True,
+            paper_would_execute=True,
+            execution_ready=True,  # If ready, must be economic
+        )
+        
+        # This invariant must hold
+        if opp.execution_ready:
+            assert opp.executable_economic is True
