@@ -1114,11 +1114,14 @@ async def run_scan_cycle(
                             try:
                                 # R3: Determine economic vs execution status
                                 economic_executable = executable and net_pnl_bps > 0
-                                execution_ready = economic_executable and buy_exec and sell_exec
-                                blocked_reason = None
-                                if economic_executable and not execution_ready:
+                                # AC-4: Paper policy ignores verification
+                                paper_execution_ready = economic_executable  
+                                # AC-4: Real policy requires verification
+                                real_execution_ready = economic_executable and buy_exec and sell_exec
+                                blocked_reason_real = None
+                                if economic_executable and not real_execution_ready:
                                     if not buy_exec or not sell_exec:
-                                        blocked_reason = "EXEC_DISABLED_NOT_VERIFIED"
+                                        blocked_reason_real = "EXEC_DISABLED_NOT_VERIFIED"
                                 
                                 # Create PaperTrade object with correct contract
                                 paper_trade = PaperTrade.from_legacy_kwargs(
@@ -1141,11 +1144,15 @@ async def run_scan_cycle(
                                     # R1: Use legacy kwargs (auto-normalized to numeraire)
                                     amount_in_usdc=round(amount_in_usdc, 2),
                                     expected_pnl_usdc=round(expected_pnl_usdc, 4),
-                                    # R3: Execution status
+                                    # AC-4: Execution status - paper vs real
                                     economic_executable=economic_executable,
+                                    paper_execution_ready=paper_execution_ready,
+                                    real_execution_ready=real_execution_ready,
+                                    blocked_reason_real=blocked_reason_real,
+                                    # Legacy fields
                                     executable=executable,
-                                    execution_ready=execution_ready,
-                                    blocked_reason=blocked_reason,
+                                    execution_ready=real_execution_ready,  # Legacy = real
+                                    blocked_reason=blocked_reason_real,     # Legacy = real
                                     buy_verified=buy_exec,
                                     sell_verified=sell_exec,
                                 )
@@ -1158,32 +1165,50 @@ async def run_scan_cycle(
                                 if pending:
                                     for pending_trade in pending:
                                         if pending_trade.spread_id == spread_id:
-                                            # Found matching spread - revalidate
-                                            would_still = is_profitable and executable_final
+                                            # AC-6: Separate paper vs real revalidation
+                                            would_still_paper = is_profitable and economic_executable
+                                            would_still_real = would_still_paper and buy_exec and sell_exec
+                                            # AC-6: Gates changed = PnL changed
+                                            gates_changed = (
+                                                pending_trade.net_pnl_bps != net_pnl_bps
+                                            )
                                             paper_session.mark_revalidated(
                                                 spread_id=pending_trade.spread_id,
                                                 original_block=pending_trade.block_number,
                                                 revalidation_block=block_number,
-                                                would_still_execute=would_still,
+                                                would_still_execute=would_still_paper,  # Legacy
+                                                would_still_paper_execute=would_still_paper,
+                                                would_still_real_execute=would_still_real,
+                                                gates_actually_changed=gates_changed,
                                                 new_net_pnl_bps=net_pnl_bps,
                                             )
                                             revalidation_results.append({
                                                 "spread_id": spread_id,
                                                 "original_block": pending_trade.block_number,
-                                                "would_still_execute": would_still,
+                                                "would_still_paper_execute": would_still_paper,
+                                                "would_still_real_execute": would_still_real,
+                                                "gates_actually_changed": gates_changed,
                                                 "original_pnl_bps": pending_trade.net_pnl_bps,
                                                 "new_pnl_bps": net_pnl_bps,
+                                                # Legacy
+                                                "would_still_execute": would_still_paper,
                                             })
                                 
-                                # Add to snapshot summary
+                                # Add to snapshot summary - AC-4: Include both readiness states
                                 paper_trades_summary.append({
                                     "spread_id": paper_trade.spread_id,
                                     "outcome": paper_trade.outcome,
                                     "net_pnl_bps": net_pnl_bps,
-                                    "expected_pnl_usdc": paper_trade.expected_pnl_usdc,
+                                    "expected_pnl_numeraire": paper_trade.expected_pnl_numeraire,
+                                    # AC-4: Both readiness states
                                     "economic_executable": economic_executable,
-                                    "execution_ready": execution_ready,
-                                    "blocked_reason": blocked_reason,
+                                    "paper_execution_ready": paper_execution_ready,
+                                    "real_execution_ready": real_execution_ready,
+                                    "blocked_reason_real": blocked_reason_real,
+                                    # Legacy
+                                    "expected_pnl_usdc": paper_trade.expected_pnl_usdc,
+                                    "execution_ready": real_execution_ready,
+                                    "blocked_reason": blocked_reason_real,
                                     "recorded": recorded,
                                 })
                                 
@@ -1446,6 +1471,7 @@ def main(
     simulate_blocked: bool,
     cooldown_blocks: int,
     use_registry: bool,
+    notion_capital_numeraire: float = 10000.0,  # AC-3: Notional capital for PnL normalization
 ) -> None:
     """ARBY Opportunity Scanner - Real quotes from DEXes with gates and spread detection."""
     setup_logging(level=log_level, json_output=json_logs)
@@ -1549,7 +1575,12 @@ def main(
                 paper_stats = paper_session.stats if paper_session else None
                 
                 try:
-                    truth_report = generate_truth_report(snapshot, paper_stats)
+                    # AC-3: Pass notion_capital_numeraire for PnL normalization
+                    truth_report = generate_truth_report(
+                        snapshot, 
+                        paper_stats,
+                        notion_capital_numeraire=notion_capital_numeraire,
+                    )
                     
                     # Save and print
                     reports_dir = output_path.parent / "reports"

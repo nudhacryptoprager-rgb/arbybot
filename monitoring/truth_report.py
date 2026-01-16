@@ -701,6 +701,7 @@ def generate_truth_report(
     snapshot: dict,
     paper_session_stats: dict | None = None,
     top_n: int = 10,
+    notion_capital_numeraire: float = 0.0,  # AC-3: Pass from SMOKE config
 ) -> TruthReport:
     """
     Generate truth report from scan snapshot.
@@ -709,6 +710,7 @@ def generate_truth_report(
         snapshot: Scan snapshot dict
         paper_session_stats: Optional cumulative paper trading stats
         top_n: Number of top opportunities to include
+        notion_capital_numeraire: Notional capital for PnL normalization (AC-3)
     """
     cycle_summaries = snapshot.get("cycle_summaries", [])
     mode = snapshot.get("mode", "UNKNOWN")
@@ -945,7 +947,8 @@ def generate_truth_report(
     
     # Cumulative PnL from paper session
     total_pnl_bps = 0
-    total_pnl_usdc = 0.0
+    total_pnl_numeraire = 0.0
+    numeraire = "USDC"
     
     # Revalidation stats from paper session
     revalidation_total = 0
@@ -962,10 +965,22 @@ def generate_truth_report(
     
     if paper_session_stats:
         total_pnl_bps = paper_session_stats.get("total_pnl_bps", 0)
-        total_pnl_usdc = paper_session_stats.get("total_pnl_usdc", 0.0)
+        # AC-5: Read from numeraire (source of truth), fallback to legacy
+        total_pnl_numeraire = paper_session_stats.get(
+            "total_pnl_numeraire", 
+            paper_session_stats.get("total_pnl_usdc", 0.0)  # Legacy fallback
+        )
+        numeraire = paper_session_stats.get("numeraire", "USDC")
         revalidation_total = paper_session_stats.get("revalidation_total", 0)
         revalidation_passed = paper_session_stats.get("revalidation_passed", 0)
         revalidation_gates_changed = paper_session_stats.get("revalidation_gates_changed", 0)
+    
+    # AC-3: Calculate normalized return if notion_capital is configured
+    normalized_return_pct = None
+    if notion_capital_numeraire > 0:
+        normalized_return_pct = round(
+            (total_pnl_numeraire / notion_capital_numeraire) * 100, 4
+        )
     
     return TruthReport(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -990,9 +1005,11 @@ def generate_truth_report(
         revalidation_total=revalidation_total,
         revalidation_passed=revalidation_passed,
         revalidation_gates_changed=revalidation_gates_changed,
-        # PnL
+        # PnL - AC-3/AC-5: Use numeraire
         total_pnl_bps=total_pnl_bps,
-        total_pnl_usdc=total_pnl_usdc,
+        total_pnl_usdc=total_pnl_numeraire,  # Field name is legacy, value is numeraire
+        notion_capital_usdc=notion_capital_numeraire,  # AC-3
+        normalized_return_pct=normalized_return_pct,  # AC-3
     )
 
 

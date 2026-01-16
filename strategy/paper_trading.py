@@ -55,16 +55,17 @@ class PaperTrade:
     """
     A single paper trade record.
     
-    CONTRACT (Dev Task R1-R3):
+    CONTRACT (Dev Task v4 AC-4/AC-5):
     - token_in/token_out must match spread_id/pair (real tokens)
     - numeraire is the currency for PnL (usually USDC)
     - *_numeraire fields contain values in numeraire currency
     - Legacy fields (amount_in_usdc, expected_pnl_usdc) are supported via aliases
     
-    SEMANTICS (R3):
+    SEMANTICS (AC-4: Paper vs Real execution):
     - economic_executable: passes gates + PnL > 0 (economic truth)
-    - execution_ready: economic_executable + verified + !blocked
-    - blocked_reason: WHY not execution_ready (if applicable)
+    - paper_execution_ready: economic + paper policy (ignores verification)
+    - real_execution_ready: economic + verified + !blocked
+    - blocked_reason_real: WHY not real_execution_ready
     """
     # Identity
     spread_id: str
@@ -76,7 +77,7 @@ class PaperTrade:
     buy_dex: str
     sell_dex: str
     
-    # REAL TOKENS (must match pair in spread_id) - R2
+    # REAL TOKENS (must match pair in spread_id) - AC-5
     token_in: str       # e.g., "WETH" for WETH/ARB spread
     token_out: str      # e.g., "ARB" for WETH/ARB spread
     
@@ -93,7 +94,7 @@ class PaperTrade:
     net_pnl_bps: int
     gas_price_gwei: float
     
-    # NUMERAIRE for PnL calculations (R1)
+    # NUMERAIRE for PnL calculations (AC-5: source of truth)
     numeraire: str = DEFAULT_NUMERAIRE  # Currency for PnL (usually "USDC")
     amount_in_numeraire: float = 0.0    # Trade size in numeraire
     expected_pnl_numeraire: float = 0.0 # Expected profit in numeraire
@@ -102,41 +103,69 @@ class PaperTrade:
     outcome: str = TradeOutcome.WOULD_EXECUTE.value
     outcome_reason: dict = field(default_factory=dict)
     
-    # Execution status - R3: Separate economic vs execution ready
-    economic_executable: bool = True    # Passes gates + PnL > 0
-    execution_ready: bool = False       # economic_executable + verified + !blocked
-    blocked_reason: str | None = None   # WHY not execution_ready
+    # AC-4: Separate paper vs real execution readiness
+    economic_executable: bool = True        # Passes gates + PnL > 0
+    paper_execution_ready: bool = True      # economic + paper policy (ignores verification)
+    real_execution_ready: bool = False      # economic + verified + !blocked
+    blocked_reason_real: str | None = None  # WHY not real_execution_ready
     
-    # Legacy field: executable maps to economic_executable
-    executable: bool = True
+    # Legacy aliases (mapped to new fields in __post_init__)
+    executable: bool = True                 # Legacy -> economic_executable
+    execution_ready: bool = False           # Legacy -> real_execution_ready
+    blocked_reason: str | None = None       # Legacy -> blocked_reason_real
     buy_verified: bool = True
     sell_verified: bool = True
     
-    # Revalidation (filled later if requote happens)
+    # AC-6: Revalidation with gates_changed semantics
     revalidated: bool = False
     revalidation_block: int | None = None
+    # Separate paper vs real for revalidation
+    would_still_paper_execute: bool | None = None
+    would_still_real_execute: bool | None = None
+    gates_actually_changed: bool = False    # True only if gates/quotes changed
+    # Legacy field (mapped in __post_init__)
     would_still_execute: bool | None = None
     
     def __post_init__(self):
-        """Sync legacy and new fields."""
+        """Sync legacy and new fields, ensure consistency."""
         # Sync executable with economic_executable
         if self.executable and not self.economic_executable:
             self.economic_executable = self.executable
         elif self.economic_executable and not self.executable:
             self.executable = self.economic_executable
         
-        # Determine execution_ready if not explicitly set
-        if self.economic_executable and self.buy_verified and self.sell_verified:
-            if self.blocked_reason is None:
-                self.execution_ready = True
+        # Sync execution_ready with real_execution_ready
+        if self.execution_ready and not self.real_execution_ready:
+            self.real_execution_ready = self.execution_ready
         
-        # Set blocked_reason if not execution_ready but economic_executable
-        if self.economic_executable and not self.execution_ready:
-            if self.blocked_reason is None:
+        # Sync blocked_reason with blocked_reason_real
+        if self.blocked_reason and not self.blocked_reason_real:
+            self.blocked_reason_real = self.blocked_reason
+        elif self.blocked_reason_real and not self.blocked_reason:
+            self.blocked_reason = self.blocked_reason_real
+        
+        # AC-4: Paper policy = economic_executable (ignores verification)
+        if self.economic_executable:
+            self.paper_execution_ready = True
+        
+        # AC-4: Real policy = economic + verified
+        if self.economic_executable and self.buy_verified and self.sell_verified:
+            if self.blocked_reason_real is None:
+                self.real_execution_ready = True
+                self.execution_ready = True  # Legacy sync
+        
+        # Set blocked_reason_real if not real_execution_ready but economic_executable
+        if self.economic_executable and not self.real_execution_ready:
+            if self.blocked_reason_real is None:
                 if not self.buy_verified or not self.sell_verified:
-                    self.blocked_reason = "EXEC_DISABLED_NOT_VERIFIED"
+                    self.blocked_reason_real = "EXEC_DISABLED_NOT_VERIFIED"
+                    self.blocked_reason = self.blocked_reason_real  # Legacy sync
+        
+        # Sync would_still_execute with would_still_paper_execute
+        if self.would_still_execute is not None and self.would_still_paper_execute is None:
+            self.would_still_paper_execute = self.would_still_execute
     
-    # Legacy property aliases for backward compatibility (R1)
+    # Legacy property aliases for backward compatibility (AC-5)
     @property
     def amount_in_usdc(self) -> float:
         """Legacy alias for amount_in_numeraire (when numeraire is USDC)."""
@@ -172,11 +201,24 @@ class PaperTrade:
         return cls(**normalized)
     
     def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
+        """
+        Convert to dictionary for JSON serialization.
+        
+        AC-4: Includes both paper and real execution readiness.
+        AC-5: Includes legacy aliases for backward compatibility.
+        """
         result = asdict(self)
-        # Add legacy aliases for backward compatibility
+        # AC-5: Add legacy aliases for backward compatibility
         result["amount_in_usdc"] = self.amount_in_usdc
         result["expected_pnl_usdc"] = self.expected_pnl_usdc
+        # AC-4: Ensure both paper and real readiness are explicit
+        result["paper_execution_ready"] = self.paper_execution_ready
+        result["real_execution_ready"] = self.real_execution_ready
+        result["blocked_reason_real"] = self.blocked_reason_real
+        # AC-6: Revalidation with gates_changed semantics
+        result["would_still_paper_execute"] = self.would_still_paper_execute
+        result["would_still_real_execute"] = self.would_still_real_execute
+        result["gates_actually_changed"] = self.gates_actually_changed
         return result
     
     def validate_tokens_match_pair(self) -> list[str]:
@@ -290,7 +332,9 @@ class PaperSession:
             "unprofitable": 0,
             "cooldown_skipped": 0,
             "total_pnl_bps": 0,
-            "total_pnl_usdc": 0.0,
+            # AC-5: Source of truth is numeraire, not USDC legacy
+            "total_pnl_numeraire": 0.0,
+            "numeraire": "USDC",  # Track which numeraire we're using
         }
         
         logger.info(
@@ -315,6 +359,9 @@ class PaperSession:
         """
         Record a paper trade.
         
+        AC-5: Accumulates PnL via expected_pnl_numeraire (source of truth),
+        not legacy expected_pnl_usdc.
+        
         Returns:
             True if trade was recorded, False if skipped (cooldown)
         """
@@ -331,15 +378,16 @@ class PaperSession:
             logger.debug(f"Cooldown skip: {trade.spread_id}")
             return False
         
-        # Determine outcome based on profitability and executability
+        # AC-4: Determine outcome based on PAPER policy (not real execution)
+        # Paper policy: economic_executable is enough (ignores verification)
         if trade.net_pnl_bps <= 0:
             trade.outcome = TradeOutcome.UNPROFITABLE.value
             self.stats["unprofitable"] += 1
-        elif not trade.executable:
+        elif not trade.economic_executable:
             trade.outcome = TradeOutcome.BLOCKED_EXEC.value
             trade.outcome_reason = {
-                "buy_verified": trade.buy_verified,
-                "sell_verified": trade.sell_verified,
+                "economic_executable": trade.economic_executable,
+                "blocked_reason": trade.blocked_reason,
             }
             self.stats["blocked_exec"] += 1
             
@@ -354,17 +402,23 @@ class PaperSession:
         # Update cooldown tracker
         self._last_trade_block[trade.spread_id] = trade.block_number
         
-        # Accumulate PnL (only for WOULD_EXECUTE)
+        # AC-5: Accumulate PnL via numeraire (source of truth)
         if trade.outcome == TradeOutcome.WOULD_EXECUTE.value:
             self.stats["total_pnl_bps"] += trade.net_pnl_bps
-            self.stats["total_pnl_usdc"] += trade.expected_pnl_usdc
+            self.stats["total_pnl_numeraire"] += trade.expected_pnl_numeraire
+            # Track numeraire type
+            if self.stats.get("numeraire") != trade.numeraire:
+                logger.warning(
+                    f"Numeraire mismatch: session={self.stats.get('numeraire')}, "
+                    f"trade={trade.numeraire}"
+                )
         
         # Persist to JSONL
         self._append_trade(trade)
         
         logger.info(
             f"Paper trade: {trade.outcome} {trade.spread_id} "
-            f"net={trade.net_pnl_bps}bps ${trade.expected_pnl_usdc:.2f}",
+            f"net={trade.net_pnl_bps}bps ${trade.expected_pnl_numeraire:.2f} {trade.numeraire}",
             extra={"context": trade.to_dict()}
         )
         
@@ -434,24 +488,38 @@ class PaperSession:
         spread_id: str,
         original_block: int,
         revalidation_block: int,
-        would_still_execute: bool,
+        would_still_execute: bool,  # Legacy (= paper)
         new_net_pnl_bps: int | None = None,
+        # AC-6: Separate paper vs real revalidation
+        would_still_paper_execute: bool | None = None,
+        would_still_real_execute: bool | None = None,
+        gates_actually_changed: bool = False,
     ) -> bool:
         """
         Mark a trade as revalidated.
         
-        Updates the trade in-place in the JSONL file.
+        AC-6: Properly tracks gates_actually_changed vs policy change.
+        GATES_CHANGED outcome is only set if gates_actually_changed=True.
         
         Args:
             spread_id: Trade spread ID
             original_block: Original trade block
             revalidation_block: Block at which revalidation was done
-            would_still_execute: Whether trade would still be profitable/executable
+            would_still_execute: Legacy (= paper policy)
             new_net_pnl_bps: Optional updated net PnL
+            would_still_paper_execute: AC-6: Paper policy result
+            would_still_real_execute: AC-6: Real policy result
+            gates_actually_changed: AC-6: True only if quotes/gates changed
         
         Returns:
             True if trade was found and updated
         """
+        # Default paper values from legacy if not provided
+        if would_still_paper_execute is None:
+            would_still_paper_execute = would_still_execute
+        if would_still_real_execute is None:
+            would_still_real_execute = would_still_execute
+        
         trades = self.load_trades()
         found = False
         
@@ -459,16 +527,31 @@ class PaperSession:
             if trade.spread_id == spread_id and trade.block_number == original_block:
                 trade.revalidated = True
                 trade.revalidation_block = revalidation_block
-                trade.would_still_execute = would_still_execute
+                # AC-6: Set both paper and real revalidation results
+                trade.would_still_execute = would_still_execute  # Legacy
+                trade.would_still_paper_execute = would_still_paper_execute
+                trade.would_still_real_execute = would_still_real_execute
+                trade.gates_actually_changed = gates_actually_changed
                 
-                # Update stats if trade would no longer execute
-                if not would_still_execute and trade.outcome == TradeOutcome.WOULD_EXECUTE.value:
-                    self.stats["would_execute"] -= 1
-                    trade.outcome = TradeOutcome.GATES_CHANGED.value
+                # AC-6: Update stats ONLY if gates actually changed
+                # Not just because policy/confidence changed
+                if gates_actually_changed and not would_still_paper_execute:
+                    if trade.outcome == TradeOutcome.WOULD_EXECUTE.value:
+                        self.stats["would_execute"] -= 1
+                        trade.outcome = TradeOutcome.GATES_CHANGED.value
+                        trade.outcome_reason = {
+                            "reason": "gates_actually_changed",
+                            "revalidation_block": revalidation_block,
+                            "new_net_pnl_bps": new_net_pnl_bps,
+                        }
+                elif not would_still_paper_execute and trade.outcome == TradeOutcome.WOULD_EXECUTE.value:
+                    # Policy changed but gates didn't - different outcome
+                    # Don't count as GATES_CHANGED for KPI
                     trade.outcome_reason = {
-                        "reason": "revalidation_failed",
+                        "reason": "policy_changed",  # Not gates
                         "revalidation_block": revalidation_block,
                         "new_net_pnl_bps": new_net_pnl_bps,
+                        "gates_actually_changed": False,
                     }
                 
                 found = True
@@ -481,7 +564,8 @@ class PaperSession:
                     f.write(json.dumps(trade.to_dict()) + "\n")
             
             logger.info(
-                f"Revalidation: {spread_id} would_still_execute={would_still_execute}",
+                f"Revalidation: {spread_id} paper={would_still_paper_execute} "
+                f"real={would_still_real_execute} gates_changed={gates_actually_changed}",
                 extra={"context": {
                     "original_block": original_block,
                     "revalidation_block": revalidation_block,

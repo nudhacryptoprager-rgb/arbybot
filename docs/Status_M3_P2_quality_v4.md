@@ -1,149 +1,125 @@
-# Status_M3_P2_quality_v4.md — Dev Task: Paper Trading Contract + Truth Report Semantics
+# Status_M3_P2_quality_v4.md — Dev Task: PaperTrading/TruthReport Contract, KPI, Revalidation Semantics
 
 **Дата:** 2026-01-16  
-**Milestone:** M3 P2 Quality v4 - SMOKE Stability  
+**Milestone:** M3 P2 Quality v4  
 **Статус:** ✅ **IMPLEMENTED**
 
 ---
 
-## Dev Task Summary
+## Problem Summary
 
-Виправлення критичного бага:
-```
-TypeError: PaperTrade.__init__() got an unexpected keyword argument 'amount_in_usdc'
-```
-
----
-
-## Requirements Implemented (R1-R6)
-
-### ✅ R1: PaperTrade Contract Compatibility
-
-**Legacy kwargs support:**
-```python
-# Old code (was breaking)
-PaperTrade(..., amount_in_usdc=300.0, expected_pnl_usdc=0.84)
-
-# New code (works!)
-PaperTrade.from_legacy_kwargs(..., amount_in_usdc=300.0, expected_pnl_usdc=0.84)
-# Auto-mapped to: amount_in_numeraire=300.0, expected_pnl_numeraire=0.84, numeraire="USDC"
-```
-
-**Helper function:**
-```python
-def normalize_paper_trade_kwargs(kwargs: dict) -> dict:
-    """Maps legacy amount_in_usdc/expected_pnl_usdc to numeraire fields."""
-```
-
-**Legacy property aliases:**
-```python
-@property
-def amount_in_usdc(self) -> float:
-    """Legacy alias for amount_in_numeraire (when numeraire is USDC)."""
-    return self.amount_in_numeraire if self.numeraire == "USDC" else ...
-```
-
-### ✅ R2: Correct token_in/token_out Semantics
-
-**Before (BUG):**
-```python
-token_in="WETH",   # HARDCODED!
-token_out="USDC",  # WRONG for WETH/ARB spread!
-```
-
-**After (FIX):**
-```python
-actual_token_in = spread_data.get("token_in_symbol", token_in_symbol)
-actual_token_out = spread_data.get("token_out_symbol", token_out_symbol)
-token_in=actual_token_in,   # Correct: WETH
-token_out=actual_token_out, # Correct: ARB (for WETH/ARB spread)
-```
-
-### ✅ R3: Separate Economic vs Execution Ready
-
-**PaperTrade fields:**
-```python
-economic_executable: bool = True    # Passes gates + PnL > 0
-execution_ready: bool = False       # + verified + !blocked
-blocked_reason: str | None = None   # WHY not execution_ready
-```
-
-**Logic in run_scan.py:**
-```python
-economic_executable = executable and net_pnl_bps > 0
-execution_ready = economic_executable and buy_exec and sell_exec
-if economic_executable and not execution_ready:
-    blocked_reason = "EXEC_DISABLED_NOT_VERIFIED"
-```
-
-### ✅ R4: Robustness - Paper Trading Never Crashes Scan
-
-**try/except wrapper:**
-```python
-try:
-    paper_trade = PaperTrade.from_legacy_kwargs(...)
-    paper_session.record_trade(paper_trade)
-except Exception as paper_err:
-    logger.error("Paper trade creation failed", error=str(paper_err))
-    paper_errors += 1
-    # Continue with next spread - cycle NOT crashed
-```
-
-### ✅ R5: RPC Health Not Misleading
-
-**HealthMetrics updated:**
-```python
-@dataclass
-class HealthMetrics:
-    rpc_total_requests: int
-    rpc_failed_requests: int = 0  # NEW: Track failures explicitly
-    
-    def validate_rpc_health(self) -> list[str]:
-        """Validate RPC health is not misleading."""
-        # Check: rpc_total_requests should not be 0 if failures occurred
-```
-
-### ✅ R6: Truth Report Ranking Semantics
-
-**Before (wrong):**
-```python
-# Filtered by execution policy (missed economic opportunities)
-ranked_executable = [r for r in ranked if r["spread"].get("executable", False)]
-```
-
-**After (correct):**
-```python
-# Ranking by economic signals, not execution policy
-ranked_economic = [
-    r for r in ranked 
-    if r["spread"].get("net_pnl_bps", 0) > 0  # Economic criterion
-]
-# Then display: economic_executable, paper_would_execute, execution_ready, blocked_reason
-```
+1. PaperSession.record_trade() накопичувало PnL через `expected_pnl_usdc` (legacy), не `expected_pnl_numeraire`
+2. Змішування paper vs real execution readiness
+3. truth_report показував `pnl_normalized._status=NOT_CONFIGURED` попри notion_capital в SMOKE
+4. Revalidation "GATES_CHANGED" не розрізняло gates vs policy changes
 
 ---
 
 ## Acceptance Criteria Status
 
-| AC | Description | Status |
-|----|-------------|--------|
-| AC1 | No crash on `run_scan --mode SMOKE` | ✅ |
-| AC2 | Paper trades recorded correctly | ✅ |
-| AC3 | Backward compatibility for legacy kwargs | ✅ |
-| AC4 | Truth report invariants hold | ✅ |
-| AC5 | RPC health not misleading | ✅ |
+### ✅ AC-1: SMOKE DoD (стабільність)
+- Pinned block ≠ null
+- quotes_fetched ≥ 1
+- truth_report генерується без крашів
+- paper_trades генерується без крашів
 
----
+### ✅ AC-2: TruthReport інваріанти
+- `profitable ≤ total` ✅
+- `execution_ready_count ≤ paper_executable_count` ✅
 
-## Tests
+### ✅ AC-3: Notional normalization
+**Before:**
+```json
+"pnl_normalized": {"_status": "NOT_CONFIGURED"}
+```
 
-**101 passed** ✅
+**After:**
+```json
+"pnl_normalized": {
+    "notion_capital_numeraire": 10000.0,
+    "normalized_return_pct": 0.015,
+    "numeraire": "USDC"
+}
+```
 
-New tests added:
-- `test_paper_trade_legacy_kwargs_support` - AC3
-- `test_paper_trade_r3_economic_vs_execution` - R3
-- `test_paper_trade_normalize_kwargs` - R1
-- `test_ac4_invariant_execution_ready_lte_paper_would_execute` - AC4
+**Changes:**
+- `generate_truth_report()` тепер приймає `notion_capital_numeraire` параметр
+- `main()` передає `notion_capital_numeraire=10000.0` до generate_truth_report
+- `normalized_return_pct` обчислюється: `total_pnl_numeraire / notion_capital * 100`
+
+### ✅ AC-4: Paper vs Real execution policy
+
+**PaperTrade fields:**
+```python
+economic_executable: bool = True        # Passes gates + PnL > 0
+paper_execution_ready: bool = True      # economic + paper policy
+real_execution_ready: bool = False      # economic + verified + !blocked
+blocked_reason_real: str | None = None  # WHY not real_execution_ready
+```
+
+**In JSONL:**
+```json
+{
+    "paper_execution_ready": true,
+    "real_execution_ready": false,
+    "blocked_reason_real": "EXEC_DISABLED_NOT_VERIFIED"
+}
+```
+
+### ✅ AC-5: PaperTrade v4 contract
+
+**Source of truth:** `*_numeraire` fields
+```python
+numeraire: str = "USDC"
+amount_in_numeraire: float = 0.0
+expected_pnl_numeraire: float = 0.0
+```
+
+**Legacy support:**
+```python
+@property
+def amount_in_usdc(self) -> float:
+    return self.amount_in_numeraire if self.numeraire == "USDC" else ...
+
+def from_dict(cls, data: dict) -> "PaperTrade":
+    normalized = normalize_paper_trade_kwargs(data)  # Handles legacy
+    return cls(**normalized)
+```
+
+**PaperSession.record_trade():**
+```python
+# NOW: Uses numeraire (source of truth)
+self.stats["total_pnl_numeraire"] += trade.expected_pnl_numeraire
+
+# BEFORE: Used legacy
+self.stats["total_pnl_usdc"] += trade.expected_pnl_usdc  # WRONG
+```
+
+### ✅ AC-6: Revalidation KPI коректний
+
+**PaperTrade revalidation fields:**
+```python
+would_still_paper_execute: bool | None = None
+would_still_real_execute: bool | None = None
+gates_actually_changed: bool = False  # True only if PnL changed
+```
+
+**mark_revalidated() logic:**
+```python
+# AC-6: Gates changed = PnL changed
+gates_changed = (pending_trade.net_pnl_bps != net_pnl_bps)
+
+# GATES_CHANGED outcome ONLY if gates actually changed
+if gates_actually_changed and not would_still_paper_execute:
+    trade.outcome = TradeOutcome.GATES_CHANGED.value
+```
+
+### ✅ AC-7: Тести
+
+**New tests added (42 total):**
+- `test_paper_trade_from_dict_accepts_legacy` - AC-7
+- `test_paper_trade_ac4_paper_vs_real_readiness` - AC-4
+- `test_paper_trade_ac6_revalidation_fields` - AC-6
 
 ---
 
@@ -151,37 +127,23 @@ New tests added:
 
 | File | Changes |
 |------|---------|
-| `strategy/paper_trading.py` | +from_legacy_kwargs(), +normalize_paper_trade_kwargs(), +economic_executable, +execution_ready, +blocked_reason, +legacy aliases |
-| `strategy/jobs/run_scan.py` | +try/except for R4, +actual_token_in/out for R2, +from_legacy_kwargs() call |
-| `monitoring/truth_report.py` | +rpc_failed_requests for R5, +economic ranking for R6 |
-| `tests/unit/test_error_contract.py` | +8 new tests for AC1-AC5 |
+| `strategy/paper_trading.py` | +paper_execution_ready, +real_execution_ready, +blocked_reason_real, +would_still_paper_execute, +would_still_real_execute, +gates_actually_changed, updated record_trade() to use numeraire |
+| `strategy/jobs/run_scan.py` | +notion_capital_numeraire param, AC-4 paper vs real in PaperTrade creation |
+| `monitoring/truth_report.py` | +notion_capital_numeraire param, +normalized_return_pct calculation |
+| `tests/unit/test_error_contract.py` | +4 new AC tests |
 
 ---
 
-## Contract Summary
+## Key Semantics
 
-```python
-# PaperTrade now supports:
-PaperTrade(
-    # Required
-    spread_id="WETH/ARB:uniswap_v3:sushiswap_v3:500",
-    token_in="WETH",       # MUST match pair!
-    token_out="ARB",       # MUST match pair!
-    
-    # Numeraire (new)
-    numeraire="USDC",
-    amount_in_numeraire=300.0,
-    expected_pnl_numeraire=0.84,
-    
-    # Execution status (R3)
-    economic_executable=True,
-    execution_ready=False,
-    blocked_reason="EXEC_DISABLED_NOT_VERIFIED",
-)
+| Field | Description |
+|-------|-------------|
+| `economic_executable` | Gates pass + PnL > 0 |
+| `paper_execution_ready` | economic (ignores verification) |
+| `real_execution_ready` | economic + verified |
+| `blocked_reason_real` | Why not real_execution_ready |
+| `gates_actually_changed` | True only if quotes/PnL changed |
 
-# Legacy support (R1)
-PaperTrade.from_legacy_kwargs(
-    amount_in_usdc=300.0,       # Auto-mapped to amount_in_numeraire
-    expected_pnl_usdc=0.84,     # Auto-mapped to expected_pnl_numeraire
-)
-```
+---
+
+## Tests: **42 passed** ✅

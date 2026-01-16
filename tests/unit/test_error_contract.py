@@ -965,6 +965,114 @@ class TestPaperTradeContract:
         # Legacy removed
         assert "amount_in_usdc" not in normalized
         assert "expected_pnl_usdc" not in normalized
+    
+    def test_paper_trade_from_dict_accepts_legacy(self):
+        """AC-7: PaperTrade.from_dict() accepts legacy amount_in_usdc/expected_pnl_usdc."""
+        from strategy.paper_trading import PaperTrade
+        
+        # Simulate legacy JSONL record
+        legacy_dict = {
+            "spread_id": "WETH/USDC:uniswap_v3:sushiswap_v3:500",
+            "block_number": 12345,
+            "timestamp": "2026-01-16T12:00:00Z",
+            "chain_id": 42161,
+            "buy_dex": "uniswap_v3",
+            "sell_dex": "sushiswap_v3",
+            "token_in": "WETH",
+            "token_out": "USDC",
+            "fee": 500,
+            "amount_in_wei": "100000000000000000",
+            "buy_price": "3000.0",
+            "sell_price": "3010.0",
+            "spread_bps": 33,
+            "gas_cost_bps": 5,
+            "net_pnl_bps": 28,
+            "gas_price_gwei": 0.01,
+            # LEGACY fields (not numeraire)
+            "amount_in_usdc": 300.0,
+            "expected_pnl_usdc": 0.84,
+        }
+        
+        # Should not raise
+        trade = PaperTrade.from_dict(legacy_dict)
+        
+        # Numeraire fields should be populated from legacy
+        assert trade.amount_in_numeraire == 300.0
+        assert trade.expected_pnl_numeraire == 0.84
+        assert trade.numeraire == "USDC"
+    
+    def test_paper_trade_ac4_paper_vs_real_readiness(self):
+        """AC-4: PaperTrade has separate paper_execution_ready and real_execution_ready."""
+        from strategy.paper_trading import PaperTrade
+        
+        # Create trade that's paper-ready but NOT real-ready
+        trade = PaperTrade(
+            spread_id="WETH/USDC:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",
+            token_out="USDC",
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei=0.01,
+            economic_executable=True,
+            buy_verified=False,  # NOT verified!
+            sell_verified=True,
+        )
+        
+        # Paper policy ignores verification
+        assert trade.paper_execution_ready is True
+        # Real policy requires verification
+        assert trade.real_execution_ready is False
+        assert trade.blocked_reason_real == "EXEC_DISABLED_NOT_VERIFIED"
+        
+        # to_dict should include both
+        trade_dict = trade.to_dict()
+        assert "paper_execution_ready" in trade_dict
+        assert "real_execution_ready" in trade_dict
+        assert "blocked_reason_real" in trade_dict
+    
+    def test_paper_trade_ac6_revalidation_fields(self):
+        """AC-6: PaperTrade has would_still_paper_execute, would_still_real_execute, gates_actually_changed."""
+        from strategy.paper_trading import PaperTrade
+        
+        trade = PaperTrade(
+            spread_id="WETH/USDC:uniswap_v3:sushiswap_v3:500",
+            block_number=12345,
+            timestamp="2026-01-16T12:00:00Z",
+            chain_id=42161,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            token_in="WETH",
+            token_out="USDC",
+            fee=500,
+            amount_in_wei="100000000000000000",
+            buy_price="3000.0",
+            sell_price="3010.0",
+            spread_bps=33,
+            gas_cost_bps=5,
+            net_pnl_bps=28,
+            gas_price_gwei=0.01,
+        )
+        
+        # AC-6 fields should exist
+        assert hasattr(trade, "would_still_paper_execute")
+        assert hasattr(trade, "would_still_real_execute")
+        assert hasattr(trade, "gates_actually_changed")
+        
+        # to_dict should include them
+        trade_dict = trade.to_dict()
+        assert "would_still_paper_execute" in trade_dict
+        assert "would_still_real_execute" in trade_dict
+        assert "gates_actually_changed" in trade_dict
 
 
 class TestExecutableSemantics:
