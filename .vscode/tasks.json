@@ -1,0 +1,19 @@
+﻿{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ARBY: SMOKE scan (once)",
+      "type": "shell",
+      "command": "python -m strategy.jobs.run_scan --chain arbitrum_one --once --no-json-logs",
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "ARBY: pytest (unit)",
+      "type": "shell",
+      "command": "pytest -q",
+      "problemMatcher": [],
+      "group": "test"
+    }
+  ]
+}
