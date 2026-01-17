@@ -2,18 +2,82 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "ARBY: SMOKE scan (once)",
+      "label": "ARBY: Install deps (venv)",
       "type": "shell",
-      "command": "python -m strategy.jobs.run_scan --chain arbitrum_one --once --no-json-logs",
-      "problemMatcher": [],
-      "group": "build"
+      "command": ".\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "pip", "install", "-U", "pip", "wheel", "setuptools"],
+      "problemMatcher": []
     },
     {
-      "label": "ARBY: pytest (unit)",
+      "label": "ARBY: Install project (editable)",
       "type": "shell",
-      "command": "pytest -q",
-      "problemMatcher": [],
-      "group": "test"
+      "command": ".\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "pip", "install", "-e", "."],
+      "problemMatcher": []
+    },
+    {
+      "label": "ARBY: New Run Folder",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "tools\\new_run.ps1",
+        "-RunId",
+        "${input:runId}"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ARBY: SMOKE Scan (log to run folder)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "& { $runDir='${input:runDir}'; New-Item -Force -ItemType Directory $runDir | Out-Null; .\\.venv\\Scripts\\python.exe -m strategy.jobs.run_scan --chain arbitrum_one --once --no-json-logs *>&1 | Tee-Object -FilePath (Join-Path $runDir 'scan.log.txt') }"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "ARBY: Copy Latest Artifacts to Run Folder",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "& { $runDir='${input:runDir}'; New-Item -Force -ItemType Directory $runDir | Out-Null; " +
+        "$latestScan = Get-ChildItem -Path data\\snapshots -Filter 'scan_*.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; " +
+        "$latestTruth = Get-ChildItem -Path data\\reports -Filter 'truth_report_*.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; " +
+        "$latestReject = Get-ChildItem -Path data\\reports -Filter 'reject_histogram_*.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; " +
+        "$latestPaper = Get-ChildItem -Path data\\reports -Filter 'paper_trades_*.jsonl' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; " +
+        "if ($latestScan) { Copy-Item $latestScan.FullName -Destination (Join-Path $runDir $latestScan.Name) -Force } else { Write-Host 'No scan_*.json found' } " +
+        "if ($latestTruth) { Copy-Item $latestTruth.FullName -Destination (Join-Path $runDir $latestTruth.Name) -Force } else { Write-Host 'No truth_report_*.json found' } " +
+        "if ($latestReject) { Copy-Item $latestReject.FullName -Destination (Join-Path $runDir $latestReject.Name) -Force } else { Write-Host 'No reject_histogram_*.json found' } " +
+        "if ($latestPaper) { Copy-Item $latestPaper.FullName -Destination (Join-Path $runDir $latestPaper.Name) -Force } else { Write-Host 'No paper_trades_*.jsonl found (ok if none)' } " +
+        "Write-Host ('Copied to: ' + $runDir) }"
+      ],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "runId",
+      "type": "promptString",
+      "description": "RunId (no spaces) e.g. smoke_1807_pnl_guard",
+      "default": "smoke_"
+    },
+    {
+      "id": "runDir",
+      "type": "promptString",
+      "description": "Run folder path (recommended: data\\runs\\YYYYMMDD\\<runId>)",
+      "default": "data\\runs\\"
     }
   ]
 }

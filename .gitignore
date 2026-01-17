@@ -2,20 +2,20 @@
 # ARBY .gitignore
 # =============================================================================
 
-# Python
+# -------------------------
+# Python / build artifacts
+# -------------------------
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 build/
-develop-eggs/
 dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+develop-eggs/
 parts/
 sdist/
 var/
@@ -23,70 +23,83 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.json
 
-
+# -------------------------
 # Virtual environments
+# -------------------------
+.venv/
 venv/
 ENV/
 env/
-.venv/
 
-# IDE
+# -------------------------
+# IDE / Editor
+# -------------------------
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
-# Environment
+# Allow repo-controlled VS Code tasks
+!.vscode/
+!.vscode/tasks.json
+
+# -------------------------
+# Environment / secrets
+# -------------------------
 .env
 .env.local
 .env.*.local
 
-# Data (dynamic, not tracked)
-data/registry/
-data/registry.sqlite
-data/snapshots/*.json
-data/trades/*.json
-data/trades/*.jsonl
-data/reports/*.json
-data/reports/*.md
-# runtime artifacts
-data/
-data/**
-
-# Keep directory structure
-!data/snapshots/.gitkeep
-!data/trades/.gitkeep
-!data/reports/.gitkeep
-!data/registry/.gitkeep
-
+# -------------------------
 # Logs
+# -------------------------
 logs/
 *.log
 
-# Testing
+# -------------------------
+# Testing / tooling caches
+# -------------------------
 .coverage
 htmlcov/
 .pytest_cache/
 .mypy_cache/
 
-# OS
+# -------------------------
+# OS junk
+# -------------------------
 .DS_Store
 Thumbs.db
 
+# -------------------------
 # Temporary files
+# -------------------------
 *.tmp
 *.bak
 
-!.vscode/
-!.vscode/tasks.json
+# -------------------------
+# Data (dynamic, not tracked by default)
+data/*
+
+# PR evidence (allowed)
+!data/runs/
+!data/runs/**
+
+# Keep directory structure (tracked placeholders)
+!data/snapshots/.gitkeep
+!data/trades/.gitkeep
+!data/reports/.gitkeep
+!data/registry/.gitkeep
+
+# -------------------------
+# Repo-controlled workflow files
+# -------------------------
 !.github/
 !.github/pull_request_template.md
 !.github/workflows/
 !.github/workflows/ci.yml
+
 !tools/
 !tools/new_run.ps1
 !docs/WORKFLOW.md
-

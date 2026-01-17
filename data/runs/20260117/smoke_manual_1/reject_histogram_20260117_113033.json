@@ -1,0 +1,249 @@
+{
+  "timestamp": "2026-01-17T11:30:33.081174+00:00",
+  "quote_rejects": {
+    "total": 179,
+    "histogram": {
+      "QUOTE_REVERT": 66,
+      "QUOTE_GAS_TOO_HIGH": 47,
+      "TICKS_CROSSED_TOO_MANY": 33,
+      "SLIPPAGE_TOO_HIGH": 7,
+      "PRICE_SANITY_FAILED": 25,
+      "INFRA_RPC_ERROR": 1
+    },
+    "sorted": {
+      "QUOTE_REVERT": 66,
+      "QUOTE_GAS_TOO_HIGH": 47,
+      "TICKS_CROSSED_TOO_MANY": 33,
+      "PRICE_SANITY_FAILED": 25,
+      "SLIPPAGE_TOO_HIGH": 7,
+      "INFRA_RPC_ERROR": 1
+    },
+    "top_samples": {
+      "QUOTE_REVERT": [
+        {
+          "dex": "uniswap_v3",
+          "fee": 10000,
+          "amount_in": 10000000000000000,
+          "gas_estimate": 0,
+          "ticks_crossed": 0,
+          "latency_ms": 0,
+          "details": {
+            "token_in": "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
+            "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+            "amount_in": 10000000000000000,
+            "fee": 10000,
+            "quoter": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+            "call_data_len": 330
+          }
+        },
+        {
+          "dex": "uniswap_v3",
+          "fee": 10000,
+          "amount_in": 100000000000000000,
+          "gas_estimate": 0,
+          "ticks_crossed": 0,
+          "latency_ms": 0,
+          "details": {
+            "token_in": "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
+            "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+            "amount_in": 100000000000000000,
+            "fee": 10000,
+            "quoter": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+            "call_data_len": 330
+          }
+        },
+        {
+          "dex": "uniswap_v3",
+          "fee": 10000,
+          "amount_in": 1000000000000000000,
+          "gas_estimate": 0,
+          "ticks_crossed": 0,
+          "latency_ms": 0,
+          "details": {
+            "token_in": "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
+            "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+            "amount_in": 1000000000000000000,
+            "fee": 10000,
+            "quoter": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+            "call_data_len": 330
+          }
+        }
+      ],
+      "QUOTE_GAS_TOO_HIGH": [
+        {
+          "dex": "uniswap_v3",
+          "fee": 10000,
+          "amount_in": 100000000000000000,
+          "gas_estimate": 1026444,
+          "ticks_crossed": 39,
+          "latency_ms": 44,
+          "details": {
+            "gas_estimate": 1026444,
+            "max_gas": 300000,
+            "amount_in": 100000000000000000,
+            "gas_price_gwei": 0.01,
+            "gas_cost_eth": 1.026e-05,
+            "gas_cost_usdc": 0.0308,
+            "threshold_usdc": 0.009,
+            "dex_id": "uniswap_v3",
+            "fee": 10000,
+            "pair": "WETH/LINK"
+          }
+        },
+        {
+          "dex": "uniswap_v3",
+          "fee": 10000,
+          "amount_in": 1000000000000000000,
+          "gas_estimate": 1075006,
+          "ticks_crossed": 41,
+          "latency_ms": 61,
+          "details": {
+            "gas_estimate": 1075006,
+            "max_gas": 500000,
+            "amount_in": 1000000000000000000,
+            "gas_price_gwei": 0.01,
+            "gas_cost_eth": 1.075e-05,
+            "gas_cost_usdc": 0.0323,
+            "threshold_usdc": 0.015,
+            "dex_id": "uniswap_v3",
+            "fee": 10000,
+            "pair": "WETH/LINK"
+          }
+        },
+        {
+          "dex": "uniswap_v3",
+          "fee": 100,
+          "amount_in": 10000000000000000,
+          "gas_estimate": 1408341,
+          "ticks_crossed": 1,
+          "latency_ms": 69,
+          "details": {
+            "gas_estimate": 1408341,
+            "max_gas": 200000,
+            "amount_in": 10000000000000000,
+            "gas_price_gwei": 0.01,
+            "gas_cost_eth": 1.408e-05,
+            "gas_cost_usdc": 0.0423,
+            "threshold_usdc": 0.006,
+            "dex_id": "uniswap_v3",
+            "fee": 100,
+            "pair": "LINK/USDC"
+          }
+        }
+      ],
+      "TICKS_CROSSED_TOO_MANY": [
+        {
+          "dex": "uniswap_v3",
+          "fee": 10000,
+          "amount_in": 100000000000000000,
+          "gas_estimate": 1026444,
+          "ticks_crossed": 39,
+          "latency_ms": 44,
+          "details": {
+            "ticks_crossed": 39,
+            "max_ticks": 8,
+            "amount_in": 100000000000000000,
+            "pair": "WETH/LINK",
+            "pair_type": "volatile"
+          }
+        },
+        {
+          "dex": "uniswap_v3",
+          "fee": 10000,
+          "amount_in": 1000000000000000000,
+          "gas_estimate": 1075006,
+          "ticks_crossed": 41,
+          "latency_ms": 61,
+          "details": {
+            "ticks_crossed": 41,
+            "max_ticks": 15,
+            "amount_in": 1000000000000000000,
+            "pair": "WETH/LINK",
+            "pair_type": "volatile"
+          }
+        },
+        {
+          "dex": "uniswap_v3",
+          "fee": 10000,
+          "amount_in": 10000000000000000,
+          "gas_estimate": 195410,
+          "ticks_crossed": 4,
+          "latency_ms": 45,
+          "details": {
+            "ticks_crossed": 4,
+            "max_ticks": 3,
+            "amount_in": 10000000000000000,
+            "pair": "wstETH/WETH",
+            "pair_type": "normal"
+          }
+        }
+      ],
+      "PRICE_SANITY_FAILED": [
+        {
+          "dex": "sushiswap_v3",
+          "fee": 100,
+          "amount_in": 10000000000000000,
+          "gas_estimate": 2266001,
+          "ticks_crossed": 64,
+          "latency_ms": 44,
+          "details": {
+            "pair": "WETH/ARB",
+            "deviation_bps": 8018,
+            "max_deviation_bps_L1": 4000,
+            "max_deviation_bps_L2": 2500,
+            "quote_price": "3018.9743207440871803",
+            "anchor_price": "15233.1192219912379079",
+            "dex_id": "sushiswap_v3",
+            "fee": 100,
+            "amount_in": 10000000000000000,
+            "anchor_source": {},
+            "reason": "deviation_too_high_L1"
+          }
+        },
+        {
+          "dex": "sushiswap_v3",
+          "fee": 100,
+          "amount_in": 100000000000000000,
+          "gas_estimate": 2273940,
+          "ticks_crossed": 64,
+          "latency_ms": 39,
+          "details": {
+            "pair": "WETH/ARB",
+            "deviation_bps": 8790,
+            "max_deviation_bps_L1": 4000,
+            "max_deviation_bps_L2": 2500,
+            "quote_price": "1839.87508763086809513",
+            "anchor_price": "15215.23309297640689643",
+            "dex_id": "sushiswap_v3",
+            "fee": 100,
+            "amount_in": 100000000000000000,
+            "anchor_source": {},
+            "reason": "deviation_too_high_L1"
+          }
+        },
+        {
+          "dex": "sushiswap_v3",
+          "fee": 100,
+          "amount_in": 1000000000000000000,
+          "gas_estimate": 5469886,
+          "ticks_crossed": 68,
+          "latency_ms": 61,
+          "details": {
+            "pair": "WETH/ARB",
+            "deviation_bps": 9785,
+            "max_deviation_bps_L1": 4000,
+            "max_deviation_bps_L2": 2500,
+            "quote_price": "322.710005182518468468",
+            "anchor_price": "15038.655347762311718351",
+            "dex_id": "sushiswap_v3",
+            "fee": 100,
+            "amount_in": 1000000000000000000,
+            "anchor_source": {},
+            "reason": "deviation_too_high_L1"
+          }
+        }
+      ]
+    }
+  },
+  "consistent": true
+}

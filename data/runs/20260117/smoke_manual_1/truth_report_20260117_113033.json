@@ -1,0 +1,105 @@
+{
+  "schema_version": "3.0.0",
+  "timestamp": "2026-01-17T11:30:33.081174+00:00",
+  "mode": "REGISTRY",
+  "health": {
+    "rpc_success_rate": 0.0,
+    "rpc_avg_latency_ms": 0,
+    "rpc_total_requests": 0,
+    "quote_fetch_rate": 0.686,
+    "quote_gate_pass_rate": 0.625,
+    "chains_active": 1,
+    "dexes_active": 2,
+    "pairs_covered": 10,
+    "pools_scanned": 70,
+    "top_reject_reasons": [
+      [
+        "QUOTE_REVERT",
+        66
+      ],
+      [
+        "QUOTE_GAS_TOO_HIGH",
+        47
+      ],
+      [
+        "TICKS_CROSSED_TOO_MANY",
+        33
+      ],
+      [
+        "PRICE_SANITY_FAILED",
+        25
+      ],
+      [
+        "SLIPPAGE_TOO_HIGH",
+        7
+      ]
+    ],
+    "rpc_failed_requests": 0
+  },
+  "top_opportunities": [
+    {
+      "rank": 1,
+      "spread_id": "WETH/ARB_sushiswap_v3_uniswap_v3_3000_10000000000000000",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "pair": "WETH/ARB",
+      "fee": 3000,
+      "amount_in": "10000000000000000",
+      "spread_bps": 19,
+      "gas_cost_bps": 4,
+      "net_pnl_bps": 15,
+      "expected_pnl_usdc": 0.2292,
+      "confidence": 0.716,
+      "confidence_breakdown": {
+        "freshness": 0.8,
+        "ticks": 1.0,
+        "verification": 1.0,
+        "profitability": 0.6,
+        "gas_efficiency": 0.8,
+        "rpc_health": 0.0,
+        "plausibility": 1.0,
+        "price_sanity_penalty": 0.0,
+        "gas_penalty": 0.0,
+        "final": 0.716
+      },
+      "executable_economic": true,
+      "paper_would_execute": true,
+      "execution_ready": false,
+      "blocked_reason": "EXEC_DISABLED_NOT_VERIFIED",
+      "executable": true,
+      "paper_executable": true
+    }
+  ],
+  "stats": {
+    "spread_ids_total": 1,
+    "spread_ids_profitable": 1,
+    "spread_ids_executable": 1,
+    "signals_total": 1,
+    "signals_profitable": 1,
+    "signals_executable": 1,
+    "paper_executable_count": 1,
+    "execution_ready_count": 0,
+    "blocked_spreads": 0
+  },
+  "revalidation": {
+    "total": 0,
+    "passed": 0,
+    "gates_changed": 0,
+    "gates_changed_pct": "0.0"
+  },
+  "cumulative_pnl": {
+    "total_bps": 15,
+    "total_usdc": "0.229242"
+  },
+  "pnl": {
+    "signal_pnl_bps": 0,
+    "signal_pnl_usdc": "0.000000",
+    "would_execute_pnl_bps": 15,
+    "would_execute_pnl_usdc": "0.229242"
+  },
+  "pnl_normalized": {
+    "notion_capital_numeraire": "10000.000000",
+    "normalized_return_pct": "0.0023",
+    "numeraire": "USDC"
+  }
+}
