@@ -2,7 +2,7 @@
 """
 Core data models for ARBY.
 
-Contains Quote, Opportunity, Trade, and other domain models.
+Contains Token, Pool, Quote, Opportunity, Trade, and other domain models.
 All money fields use Decimal/string per Roadmap 3.2.
 """
 
@@ -11,8 +11,89 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from core.constants import RejectReason, TradeOutcome
+from core.constants import DexType, PoolStatus, RejectReason, TradeOutcome
 from core.format_money import format_money
+
+
+@dataclass
+class Token:
+    """
+    Token representation for DEX operations.
+    
+    Immutable once created. Used for pool definitions and quotes.
+    """
+    chain_id: int
+    address: str
+    symbol: str
+    name: str
+    decimals: int = 18
+    is_core: bool = False  # True for tokens in core_tokens.yaml
+    
+    def __post_init__(self):
+        # Normalize address to lowercase
+        self.address = self.address.lower()
+    
+    def __hash__(self):
+        return hash((self.chain_id, self.address.lower()))
+    
+    def __eq__(self, other):
+        if not isinstance(other, Token):
+            return False
+        return (
+            self.chain_id == other.chain_id 
+            and self.address.lower() == other.address.lower()
+        )
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "chain_id": self.chain_id,
+            "address": self.address,
+            "symbol": self.symbol,
+            "name": self.name,
+            "decimals": self.decimals,
+            "is_core": self.is_core,
+        }
+
+
+@dataclass
+class Pool:
+    """
+    Liquidity pool representation.
+    
+    Represents a single pool on a DEX. Pool address may be empty if
+    not yet discovered/computed.
+    """
+    chain_id: int
+    pool_address: str
+    dex_type: DexType
+    dex_id: str  # e.g., "uniswap_v3", "camelot_v3"
+    token0: Token
+    token1: Token
+    fee: int = 0  # Fee tier in hundredths of bip (3000 = 0.30%)
+    status: PoolStatus = PoolStatus.ACTIVE
+    
+    def __post_init__(self):
+        # Normalize address
+        self.pool_address = self.pool_address.lower() if self.pool_address else ""
+    
+    def __hash__(self):
+        return hash((self.chain_id, self.pool_address.lower(), self.dex_id))
+    
+    @property
+    def pair_symbol(self) -> str:
+        return f"{self.token0.symbol}/{self.token1.symbol}"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "chain_id": self.chain_id,
+            "pool_address": self.pool_address,
+            "dex_type": self.dex_type.value,
+            "dex_id": self.dex_id,
+            "token0": self.token0.to_dict(),
+            "token1": self.token1.to_dict(),
+            "fee": self.fee,
+            "status": self.status.value,
+        }
 
 
 @dataclass
@@ -20,13 +101,16 @@ class Quote:
     """
     Quote from a DEX.
     
-    Per Roadmap M1.1: Contains block_number, timestamp, gas_estimate, ticks_crossed
+    Per Roadmap M1.1: Contains block_number, timestamp, gas_estimate, ticks_crossed.
+    
+    amount_in/amount_out are int (wei) for internal calculations,
+    but converted to string when serialized.
     """
     pool_address: str
     token_in: str
     token_out: str
-    amount_in: str  # wei as string
-    amount_out: str  # wei as string
+    amount_in: int  # wei as int for calculations
+    amount_out: int  # wei as int for calculations
     
     # Metadata per M1.1
     block_number: int = 0
@@ -42,17 +126,28 @@ class Quote:
     # Price (derived)
     price: str = "0"  # amount_out / amount_in normalized
     
+    # Extended fields for adapter compatibility
+    pool: Optional[Pool] = None
+    direction: str = ""  # "0to1" or "1to0"
+    token_in_obj: Optional[Token] = None
+    token_out_obj: Optional[Token] = None
+    timestamp_ms: int = 0
+    sqrt_price_x96_after: Optional[int] = None
+    latency_ms: int = 0
+    
     def __post_init__(self):
         if not self.timestamp:
             self.timestamp = datetime.now(timezone.utc).isoformat()
+        if not self.timestamp_ms:
+            self.timestamp_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "pool_address": self.pool_address,
             "token_in": self.token_in,
             "token_out": self.token_out,
-            "amount_in": self.amount_in,
-            "amount_out": self.amount_out,
+            "amount_in": str(self.amount_in),  # Convert to string for JSON
+            "amount_out": str(self.amount_out),  # Convert to string for JSON
             "block_number": self.block_number,
             "timestamp": self.timestamp,
             "gas_estimate": self.gas_estimate,

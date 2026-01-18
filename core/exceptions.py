@@ -6,7 +6,7 @@ Per Roadmap 3.6: Typed errors with revert vs infra distinction.
 """
 
 from typing import Optional
-from core.constants import RejectReason
+from core.constants import RejectReason, ErrorCode
 
 
 class ArbyError(Exception):
@@ -52,16 +52,50 @@ class RateLimitError(InfraError):
         super().__init__(message, RejectReason.INFRA_RATE_LIMIT, details)
 
 
-class QuoteError(ArbyError):
-    """Quote-related errors."""
-    pass
+class QuoteError(Exception):
+    """
+    Quote-related errors for DEX adapters.
+    
+    Supports both ErrorCode-based and RejectReason-based construction
+    for compatibility with different call sites.
+    """
+    
+    def __init__(
+        self,
+        message: str = "",
+        code: Optional[ErrorCode] = None,
+        reason: Optional[RejectReason] = None,
+        details: Optional[dict] = None,
+    ):
+        super().__init__(message)
+        self.message = message
+        self.details = details or {}
+        
+        # Support both ErrorCode and RejectReason
+        if code is not None:
+            self.code = code
+            # Map ErrorCode to RejectReason for compatibility
+            self.reason = RejectReason(code.value) if code.value in [r.value for r in RejectReason] else RejectReason.UNKNOWN
+        elif reason is not None:
+            self.reason = reason
+            self.code = ErrorCode(reason.value) if reason.value in [e.value for e in ErrorCode] else ErrorCode.UNKNOWN
+        else:
+            self.code = ErrorCode.UNKNOWN
+            self.reason = RejectReason.UNKNOWN
+    
+    def __str__(self):
+        return f"[{self.code.value}] {self.message}"
 
 
 class QuoteRevertError(QuoteError):
     """Quote call reverted."""
     
     def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(message, RejectReason.QUOTE_REVERT, details)
+        super().__init__(
+            message=message,
+            code=ErrorCode.QUOTE_REVERT,
+            details=details,
+        )
 
 
 class SlippageError(ArbyError):

@@ -8,17 +8,25 @@ tests/
 ├── conftest.py              # Pytest configuration
 ├── unit/                    # Unit tests
 │   ├── __init__.py
-│   ├── test_error_contract.py    # Issue #3 AC tests
-│   ├── test_paper_trading.py     # PaperSession/PaperTrade
+│   ├── test_algebra_adapter.py   # Algebra DEX adapter
 │   ├── test_confidence.py        # calculate_confidence
+│   ├── test_config.py            # Configuration loading
+│   ├── test_core_models.py       # Token/Pool/Quote models
+│   ├── test_edge_cases.py        # Edge case handling
+│   ├── test_error_contract.py    # Issue #3 AC tests
+│   ├── test_exceptions.py        # Exception classes
 │   ├── test_format_money.py      # Money formatting
-│   ├── test_truth_report.py      # TruthReport
-│   ├── test_rounding.py          # ROUND_HALF_UP verification
+│   ├── test_gates.py             # Gate validation
 │   ├── test_health_metrics.py    # RPC health consistency
 │   ├── test_logging_contract.py  # Logging API enforcement
-│   ├── test_decimal_safety.py    # No-float enforcement
-│   ├── test_integration.py       # End-to-end tests
-│   └── test_backwards_compat.py  # API compatibility
+│   ├── test_math.py              # Math utilities
+│   ├── test_models.py            # Data models
+│   ├── test_paper_trading.py     # PaperSession/PaperTrade
+│   ├── test_registry.py          # Pool registry
+│   ├── test_spread.py            # Spread calculations
+│   ├── test_time.py              # Time utilities
+│   ├── test_truth_report.py      # TruthReport
+│   └── test_validators.py        # Input validators
 └── integration/             # Integration tests
     ├── __init__.py
     └── test_smoke_run.py    # Full SMOKE run test
@@ -41,41 +49,41 @@ python -m pytest tests/unit/test_error_contract.py -v
 python -m pytest tests/unit/ --cov=core --cov=strategy --cov=monitoring --cov-report=html
 ```
 
-### Required Tests for Issue #3
+### Run Core Contract Tests
 ```bash
-python -m pytest tests/unit/test_error_contract.py tests/unit/test_paper_trading.py tests/unit/test_confidence.py -v
+python -m pytest tests/unit/test_core_models.py tests/unit/test_exceptions.py -v
 ```
 
 ## Test Categories
 
 ### Issue #3 Acceptance Criteria Tests
 
-| AC | Test File | Test Class/Method |
-|----|-----------|-------------------|
-| A) Logging API | `test_error_contract.py` | `TestLoggingAPICorrectness` |
-| A) Logging API | `test_logging_contract.py` | `TestLoggingContractEnforcement` |
-| B) Money formatting | `test_error_contract.py` | `TestMoneyFormattingSafety` |
-| B) Rounding | `test_rounding.py` | `TestRoundingHalfUp` |
-| C) No-float money | `test_error_contract.py` | `TestNoFloatMoneyContract` |
-| C) No-float money | `test_decimal_safety.py` | `TestDecimalSafetyInPaperTrading` |
-| D) RPC consistency | `test_error_contract.py` | `TestRPCHealthConsistency` |
-| D) RPC consistency | `test_health_metrics.py` | `TestRPCHealthReconciliation` |
+| AC | Test File | Description |
+|----|-----------|-------------|
+| A) Logging API | `test_error_contract.py` | Verifies extra={"context": {...}} usage |
+| A) Logging API | `test_logging_contract.py` | Enforces logging contract |
+| B) Money formatting | `test_error_contract.py` | Tests safe money formatting |
+| B) Money formatting | `test_format_money.py` | Tests format_money functions |
+| C) No-float money | `test_error_contract.py` | Verifies no float in money fields |
+| D) RPC consistency | `test_error_contract.py` | Tests RPC health reconciliation |
+| D) RPC consistency | `test_health_metrics.py` | Tests health metrics consistency |
 
-### Critical Rounding Test
+### Core Model Tests
 
-Per Issue #3: `Decimal("0.005")` with 2 decimals must become `"0.01"`.
-```python
-# From test_rounding.py
-def test_point_five_rounds_up(self):
-    result = format_money_short(Decimal("0.005"))
-    self.assertEqual(result, "0.01")  # MUST pass
-```
+| File | Tests |
+|------|-------|
+| `test_core_models.py` | Token, Pool, Quote dataclasses |
+| `test_algebra_adapter.py` | Algebra DEX adapter with correct selector (0x2d9ebd1d) |
 
 ## SMOKE Test
 
-### Run SMOKE
+### Run SMOKE Simulator
 ```bash
-python -m strategy.jobs.run_scan --cycles 1 --output-dir data/runs/smoke_test
+# Explicit smoke mode
+python -m strategy.jobs.run_scan --smoke --cycles 1 --output-dir data/runs/smoke_test
+
+# Or use smoke runner directly
+python -m strategy.jobs.run_scan_smoke --cycles 1 --output-dir data/runs/smoke_test
 ```
 
 ### Verify SMOKE Artifacts
@@ -116,12 +124,19 @@ def test_uses_extra_context(self):
     self.assertTrue(hasattr(records[0], "context"))
 ```
 
-### Testing Rounding
-```python
-def test_round_half_up(self):
-    # 0.005 -> 0.01 (not 0.00 as ROUND_HALF_EVEN would give)
-    self.assertEqual(format_money_short("0.005"), "0.01")
-    
-    # 0.025 -> 0.03 (not 0.02 as ROUND_HALF_EVEN would give)
-    self.assertEqual(format_money_short("0.025"), "0.03")
+## Verifying Core Contracts
+
+After making changes to core/, run:
+```bash
+# Test constants (DexType, PoolStatus, ErrorCode)
+python -c "from core.constants import DexType, PoolStatus, ErrorCode; print('OK')"
+
+# Test models (Token, Pool, Quote)
+python -c "from core.models import Token, Pool, Quote; print('OK')"
+
+# Test exceptions (QuoteError with ErrorCode)
+python -c "from core.exceptions import QuoteError; from core.constants import ErrorCode; QuoteError(code=ErrorCode.QUOTE_REVERT, message='test'); print('OK')"
+
+# Run full unit tests
+python -m pytest tests/unit/ -v --tb=short
 ```

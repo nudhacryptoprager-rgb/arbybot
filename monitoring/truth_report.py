@@ -304,15 +304,18 @@ def build_truth_report(
     except Exception:
         pass
     
+    # Get bps from paper_session_stats (where it's actually tracked), not scan_stats
+    total_pnl_bps = paper_stats.get("total_pnl_bps", "0.00")
+    
     cumulative_pnl = {
-        "total_bps": scan_stats.get("total_pnl_bps", 0),
+        "total_bps": total_pnl_bps,
         "total_usdc": total_pnl_usdc,
     }
     
     pnl = {
-        "signal_pnl_bps": scan_stats.get("signal_pnl_bps", 0),
-        "signal_pnl_usdc": format_money(scan_stats.get("signal_pnl_usdc", 0)),
-        "would_execute_pnl_bps": scan_stats.get("would_execute_pnl_bps", 0),
+        "signal_pnl_bps": paper_stats.get("total_pnl_bps", "0.00"),  # From paper session
+        "signal_pnl_usdc": total_pnl_usdc,
+        "would_execute_pnl_bps": paper_stats.get("total_pnl_bps", "0.00"),  # From paper session
         "would_execute_pnl_usdc": would_execute_pnl_usdc,
     }
     

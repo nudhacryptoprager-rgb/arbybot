@@ -25,6 +25,11 @@ def now_timestamp() -> float:
     return time.time()
 
 
+def now_ms() -> int:
+    """Get current Unix timestamp in milliseconds."""
+    return int(time.time() * 1000)
+
+
 def is_fresh(
     timestamp: float,
     max_age_seconds: float = 2.0,

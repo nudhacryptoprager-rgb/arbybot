@@ -10,11 +10,12 @@ from dex.adapters.algebra import (
     AlgebraQuoteResult,
     encode_quote_exact_input_single,
     decode_quote_response,
+    SELECTOR_QUOTE_EXACT_INPUT_SINGLE,
 )
 from dex.adapters.uniswap_v3 import UniswapV3Adapter
 from core.models import Token, Pool
-from core.constants import DexType
-from core.exceptions import QuoteError, ErrorCode
+from core.constants import DexType, ErrorCode
+from core.exceptions import QuoteError
 
 
 class TestAlgebraEncoding:
@@ -28,8 +29,10 @@ class TestAlgebraEncoding:
             amount_in=10**18,
         )
         
-        # Check selector
-        assert result.startswith("0xcdca1753")
+        # Check selector - CORRECT: 0x2d9ebd1d for quoteExactInputSingle(address,address,uint256,uint160)
+        # NOT 0xcdca1753 which is quoteExactInput(bytes path, uint256 amountIn)
+        assert result.startswith(f"0x{SELECTOR_QUOTE_EXACT_INPUT_SINGLE}")
+        assert result.startswith("0x2d9ebd1d"), f"Expected selector 0x2d9ebd1d, got {result[:10]}"
         # Check length: 0x + selector(8) + 4*64 = 266
         assert len(result) == 266
     
@@ -165,8 +168,8 @@ class TestAlgebraAdapter:
         
         assert quote.amount_in == 10**18
         assert quote.amount_out == amount_out
-        assert quote.token_in.symbol == "WETH"
-        assert quote.token_out.symbol == "USDC"
+        assert quote.token_in_obj.symbol == "WETH"
+        assert quote.token_out_obj.symbol == "USDC"
         # Algebra doesn't report ticks
         assert quote.ticks_crossed == 0
     
