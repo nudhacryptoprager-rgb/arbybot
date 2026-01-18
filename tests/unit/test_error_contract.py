@@ -1,3 +1,4 @@
+# PATH: tests/unit/test_error_contract.py
 """
 Unit tests for Issue B - M3 Quality v4 error contracts.
 
@@ -6,6 +7,7 @@ A) Logging API correctness - no kwargs; only extra context allowed
 B) Money formatting safety - format_money() never crashes on str/Decimal/int
 C) No-float money contract - paper_trades dict/stats have no float
 D) RPC health consistency - truth_report aligns with rejects
+E) Rounding correctness - Decimal("0.005") with 2 decimals -> "0.01"
 """
 
 import ast
@@ -30,10 +32,13 @@ class TestLoggingAPICorrectness(unittest.TestCase):
     
     ALLOWED_LOGGER_KWARGS = {"exc_info", "extra", "stack_info", "stacklevel"}
     
-    def _find_python_files(self, directory: Path) -> list[Path]:
+    def _find_python_files(self, directory: Path) -> list:
         """Find all Python files in directory, excluding tests and venv."""
         py_files = []
         exclude_dirs = {"venv", ".venv", "__pycache__", ".git", "test", "tests"}
+        
+        if not directory.exists():
+            return py_files
         
         for root, dirs, files in os.walk(directory):
             # Skip excluded directories
@@ -45,7 +50,7 @@ class TestLoggingAPICorrectness(unittest.TestCase):
         
         return py_files
     
-    def _check_logger_calls(self, file_path: Path) -> list[dict]:
+    def _check_logger_calls(self, file_path: Path) -> list:
         """
         Parse Python file and find logger calls with invalid kwargs.
         
@@ -216,13 +221,32 @@ class TestMoneyFormattingSafety(unittest.TestCase):
         
         result = format_money_short("123.456789")
         self.assertEqual(result, "123.46")
+    
+    def test_format_money_rounding_half_up(self):
+        """format_money uses ROUND_HALF_UP: 0.005 -> 0.01 with 2 decimals."""
+        from core.format_money import format_money_short, format_money
         
+        # Critical test: Decimal("0.005") with 2 decimals must become "0.01"
         result = format_money_short(Decimal("0.005"))
-        self.assertEqual(result, "0.01")  # Rounded
+        self.assertEqual(result, "0.01", "ROUND_HALF_UP: 0.005 should round to 0.01")
+        
+        result = format_money(Decimal("0.005"), decimals=2)
+        self.assertEqual(result, "0.01")
+        
+        # Also test string input
+        result = format_money_short("0.005")
+        self.assertEqual(result, "0.01")
+        
+        # Test other rounding cases
+        result = format_money_short(Decimal("0.004"))
+        self.assertEqual(result, "0.00")
+        
+        result = format_money_short(Decimal("0.015"))
+        self.assertEqual(result, "0.02")
     
     def test_record_trade_no_crash_on_string_money(self):
         """record_trade() must not crash when money fields are strings."""
-        # This tests the actual PaperTrade scenario
+        from core.format_money import format_money_short
         
         # Mock a PaperTrade-like object with string money fields
         class MockPaperTrade:
@@ -235,9 +259,6 @@ class TestMoneyFormattingSafety(unittest.TestCase):
         trade = MockPaperTrade()
         
         # The key test: formatting should not crash
-        from core.format_money import format_money_short
-        
-        # This is what was crashing before
         try:
             msg = (
                 f"Paper trade: {trade.outcome} {trade.spread_id} "
@@ -256,7 +277,7 @@ class TestNoFloatMoneyContract(unittest.TestCase):
     paper_trades dict/stats must have no float values.
     """
     
-    def _contains_float(self, obj: Any, path: str = "") -> list[str]:
+    def _contains_float(self, obj: Any, path: str = "") -> list:
         """Recursively check for float values, return paths to floats."""
         float_paths = []
         
@@ -272,84 +293,75 @@ class TestNoFloatMoneyContract(unittest.TestCase):
         return float_paths
     
     def test_paper_trade_dict_no_float(self):
-        """PaperTrade.to_dict() must not contain float values."""
-        # Simulate a PaperTrade dict output
-        paper_trade_dict = {
-            "spread_id": "spread_001",
-            "outcome": "WOULD_EXECUTE",
-            "numeraire": "USDC",
-            "amount_in_numeraire": "300.000000",  # Must be string
-            "expected_pnl_numeraire": "0.840000",  # Must be string
-            "gas_price_gwei": "0.01",  # Must be string
-            "timestamp": "2026-01-17T14:08:44.000000+00:00",
-            "metadata": {
-                "slippage_bps": "25",  # Must be string
-                "gas_estimate": "150000",  # Can be int
-            }
-        }
+        """PaperTrade.to_dict() must not contain float values in money fields."""
+        from strategy.paper_trading import PaperTrade
         
-        float_paths = self._contains_float(paper_trade_dict)
-        if float_paths:
-            self.fail(f"Found float values at: {float_paths}")
+        trade = PaperTrade(
+            spread_id="test_001",
+            outcome="WOULD_EXECUTE",
+            amount_in_numeraire="300.000000",
+            expected_pnl_numeraire="0.840000",
+            gas_price_gwei="0.01",
+        )
+        
+        trade_dict = trade.to_dict()
+        
+        # Check money fields are strings
+        self.assertIsInstance(trade_dict["amount_in_numeraire"], str)
+        self.assertIsInstance(trade_dict["expected_pnl_numeraire"], str)
+        self.assertIsInstance(trade_dict["gas_price_gwei"], str)
+        self.assertIsInstance(trade_dict["expected_pnl_bps"], str)
     
     def test_session_stats_no_float(self):
-        """Paper session stats must not contain float values."""
-        # Simulate session stats output
-        session_stats = {
-            "total_trades": 10,  # int OK
-            "would_execute_count": 5,  # int OK
-            "total_pnl_usdc": "10.500000",  # Must be string
-            "avg_pnl_usdc": "2.100000",  # Must be string
-            "win_rate": "0.80",  # Must be string
-        }
+        """Paper session stats must not contain float values in money fields."""
+        from strategy.paper_trading import PaperSession
         
-        float_paths = self._contains_float(session_stats)
-        if float_paths:
-            self.fail(f"Found float values at: {float_paths}")
+        session = PaperSession()
+        stats = session.get_stats()
+        
+        # Check money fields are strings
+        self.assertIsInstance(stats["total_pnl_usdc"], str)
+        self.assertIsInstance(stats["total_pnl_bps"], str)
+        self.assertIsInstance(stats["notion_capital_usdc"], str)
     
     def test_truth_report_pnl_no_float(self):
         """TruthReport PnL fields must not contain float values."""
-        # Simulate truth report PnL section
-        truth_report_pnl = {
-            "total_bps": 0,  # int OK for bps
-            "total_usdc": "0.000000",  # Must be string
-            "signal_pnl_bps": 0,
-            "signal_pnl_usdc": "0.000000",
-            "would_execute_pnl_bps": 0,
-            "would_execute_pnl_usdc": "0.000000",
-            "pnl_normalized": {
-                "notion_capital_numeraire": "10000.000000",
-                "normalized_return_pct": None,  # None is OK (suppressed)
-                "numeraire": "USDC",
-            }
-        }
+        from monitoring.truth_report import build_truth_report
         
-        float_paths = self._contains_float(truth_report_pnl)
-        if float_paths:
-            self.fail(f"Found float values at: {float_paths}")
+        report = build_truth_report(
+            scan_stats={},
+            reject_histogram={},
+            opportunities=[],
+        )
+        
+        report_dict = report.to_dict()
+        
+        # Check cumulative_pnl
+        self.assertIsInstance(report_dict["cumulative_pnl"]["total_usdc"], str)
+        
+        # Check pnl
+        self.assertIsInstance(report_dict["pnl"]["signal_pnl_usdc"], str)
+        self.assertIsInstance(report_dict["pnl"]["would_execute_pnl_usdc"], str)
+        
+        # Check pnl_normalized
+        self.assertIsInstance(report_dict["pnl_normalized"]["notion_capital_numeraire"], str)
     
     def test_calculate_usdc_value_returns_decimal(self):
         """calculate_usdc_value must return Decimal, not float."""
-        # This would import the actual function if available
-        # For now, test the contract
-        
-        def calculate_usdc_value(amount: str, price: str) -> Decimal:
-            """Example implementation that returns Decimal."""
-            return Decimal(amount) * Decimal(price)
+        from strategy.paper_trading import calculate_usdc_value
         
         result = calculate_usdc_value("100", "1.5")
         self.assertIsInstance(result, Decimal)
         self.assertNotIsInstance(result, float)
+        self.assertEqual(result, Decimal("150"))
     
     def test_calculate_pnl_usdc_returns_decimal(self):
         """calculate_pnl_usdc must return Decimal, not float."""
-        def calculate_pnl_usdc(buy_value: str, sell_value: str, fees: str) -> Decimal:
-            """Example implementation that returns Decimal."""
-            return Decimal(sell_value) - Decimal(buy_value) - Decimal(fees)
+        from strategy.paper_trading import calculate_pnl_usdc
         
-        result = calculate_pnl_usdc("100", "105", "0.5")
+        result = calculate_pnl_usdc("100", "105", "0.5", "0.1")
         self.assertIsInstance(result, Decimal)
-        self.assertEqual(result, Decimal("4.5"))
+        self.assertEqual(result, Decimal("4.4"))
 
 
 class TestRPCHealthConsistency(unittest.TestCase):
@@ -360,47 +372,61 @@ class TestRPCHealthConsistency(unittest.TestCase):
     
     def test_rpc_health_consistency_with_rpc_errors(self):
         """If reject_histogram has INFRA_RPC_ERROR > 0, rpc_total_requests must be > 0."""
-        # Simulate the inconsistent state from the bug report
+        from monitoring.truth_report import RPCHealthMetrics, build_health_section
+        
         reject_histogram = {
             "QUOTE_REVERT": 66,
             "QUOTE_GAS_TOO_HIGH": 47,
             "INFRA_RPC_ERROR": 5,  # RPC errors present
         }
         
-        health = {
-            "rpc_success_rate": 0.0,
-            "rpc_total_requests": 0,  # BUG: This should be > 0 if INFRA_RPC_ERROR > 0
-        }
+        # Create metrics with no tracked calls (simulating the bug)
+        rpc_metrics = RPCHealthMetrics()
         
-        # Check consistency
-        infra_rpc_errors = reject_histogram.get("INFRA_RPC_ERROR", 0)
-        rpc_total_requests = health.get("rpc_total_requests", 0)
+        # Build health - should reconcile
+        health = build_health_section({}, reject_histogram, rpc_metrics)
         
-        if infra_rpc_errors > 0:
-            # This assertion would fail with the old buggy code
-            # After fix, rpc_total_requests should track attempts
-            self.assertGreater(
-                rpc_total_requests + infra_rpc_errors,  # Allow error count as fallback metric
-                0,
-                "RPC health inconsistent: INFRA_RPC_ERROR > 0 but no tracked requests"
-            )
+        # After reconciliation, rpc_total_requests should reflect INFRA_RPC_ERROR
+        self.assertGreater(
+            health["rpc_total_requests"],
+            0,
+            "RPC health inconsistent: INFRA_RPC_ERROR > 0 but rpc_total_requests = 0"
+        )
+        self.assertGreaterEqual(
+            health["rpc_failed_requests"],
+            5,
+            "rpc_failed_requests should be at least INFRA_RPC_ERROR count"
+        )
+    
+    def test_rpc_metrics_reconcile(self):
+        """RPCHealthMetrics.reconcile_with_rejects fixes inconsistencies."""
+        from monitoring.truth_report import RPCHealthMetrics
+        
+        metrics = RPCHealthMetrics()
+        self.assertEqual(metrics.rpc_total_requests, 0)
+        
+        # Reconcile with rejects containing INFRA_RPC_ERROR
+        metrics.reconcile_with_rejects({"INFRA_RPC_ERROR": 10})
+        
+        self.assertEqual(metrics.rpc_failed_count, 10)
+        self.assertEqual(metrics.rpc_total_requests, 10)
     
     def test_health_metrics_track_quote_attempts(self):
-        """Health metrics should track quote_call_attempts separately."""
-        # The fix should add quote_call_attempts or similar metric
-        health_metrics = {
-            "rpc_success_rate": 0.95,
-            "rpc_total_requests": 100,
-            "rpc_failed_requests": 5,
-            "quote_call_attempts": 210,  # New metric to track total quote attempts
-        }
+        """Health metrics should track quote_call_attempts."""
+        from monitoring.truth_report import RPCHealthMetrics
         
-        # Verify internal consistency
-        self.assertEqual(
-            health_metrics["rpc_total_requests"],
-            health_metrics.get("rpc_failed_requests", 0) + 
-            int(health_metrics["rpc_success_rate"] * health_metrics["rpc_total_requests"])
-        )
+        metrics = RPCHealthMetrics()
+        
+        # Record some calls
+        metrics.record_success(latency_ms=50)
+        metrics.record_success(latency_ms=60)
+        metrics.record_failure()
+        
+        self.assertEqual(metrics.rpc_success_count, 2)
+        self.assertEqual(metrics.rpc_failed_count, 1)
+        self.assertEqual(metrics.rpc_total_requests, 3)
+        self.assertEqual(metrics.quote_call_attempts, 3)
+        self.assertEqual(metrics.avg_latency_ms, 55)
 
 
 class TestPriceSanityDiagnostics(unittest.TestCase):
@@ -410,7 +436,7 @@ class TestPriceSanityDiagnostics(unittest.TestCase):
     
     def test_price_sanity_failed_has_anchor_source(self):
         """PRICE_SANITY_FAILED rejects should include anchor_source for debugging."""
-        # Simulate a reject sample
+        # Simulate a reject sample with proper structure
         reject_sample = {
             "reason": "PRICE_SANITY_FAILED",
             "spread_id": "spread_001",
@@ -418,10 +444,9 @@ class TestPriceSanityDiagnostics(unittest.TestCase):
                 "expected_price": "1.0001",
                 "actual_price": "1.5000",
                 "deviation_pct": "49.99",
-                # These should be present for PRICE_SANITY_FAILED
                 "anchor_source": {
                     "dex": "uniswap_v3",
-                    "pool": "0x1234...",
+                    "pool": "0x1234567890abcdef",
                     "fee": 500,
                     "block": 12345678,
                 },
@@ -434,6 +459,72 @@ class TestPriceSanityDiagnostics(unittest.TestCase):
             self.assertIn("dex", anchor)
             self.assertIn("pool", anchor)
             self.assertIn("block", anchor)
+
+
+class TestCalculateConfidence(unittest.TestCase):
+    """Test calculate_confidence is available and works correctly."""
+    
+    def test_calculate_confidence_import(self):
+        """calculate_confidence must be importable from monitoring.truth_report."""
+        from monitoring.truth_report import calculate_confidence
+        self.assertTrue(callable(calculate_confidence))
+    
+    def test_calculate_confidence_range(self):
+        """calculate_confidence returns value between 0 and 1."""
+        from monitoring.truth_report import calculate_confidence
+        
+        # All perfect scores
+        score = calculate_confidence(1.0, 1.0, 1.0, 1.0, 1.0)
+        self.assertEqual(score, 1.0)
+        
+        # All zero scores
+        score = calculate_confidence(0.0, 0.0, 0.0, 0.0, 0.0)
+        self.assertEqual(score, 0.0)
+        
+        # Mixed scores
+        score = calculate_confidence(0.5, 0.5, 0.5, 0.5, 0.5)
+        self.assertEqual(score, 0.5)
+    
+    def test_calculate_confidence_clamped(self):
+        """calculate_confidence clamps to [0, 1] range."""
+        from monitoring.truth_report import calculate_confidence
+        
+        # Even with out-of-range inputs, output is clamped
+        score = calculate_confidence(2.0, 2.0, 2.0, 2.0, 2.0)
+        self.assertLessEqual(score, 1.0)
+        
+        score = calculate_confidence(-1.0, -1.0, -1.0, -1.0, -1.0)
+        self.assertGreaterEqual(score, 0.0)
+
+
+class TestPaperSessionImport(unittest.TestCase):
+    """Test PaperSession is available from strategy.paper_trading."""
+    
+    def test_paper_session_import(self):
+        """PaperSession must be importable from strategy.paper_trading."""
+        from strategy.paper_trading import PaperSession
+        self.assertTrue(callable(PaperSession))
+    
+    def test_paper_trade_import(self):
+        """PaperTrade must be importable from strategy.paper_trading."""
+        from strategy.paper_trading import PaperTrade
+        self.assertTrue(callable(PaperTrade))
+    
+    def test_paper_session_record_trade(self):
+        """PaperSession.record_trade works with string money values."""
+        from strategy.paper_trading import PaperSession, PaperTrade
+        
+        session = PaperSession()
+        trade = PaperTrade(
+            spread_id="test_001",
+            outcome="WOULD_EXECUTE",
+            amount_in_numeraire="100.000000",
+            expected_pnl_numeraire="1.500000",
+        )
+        
+        result = session.record_trade(trade)
+        self.assertTrue(result)
+        self.assertEqual(len(session.trades), 1)
 
 
 if __name__ == "__main__":
