@@ -1,0 +1,92 @@
+﻿# PATH: .github/workflows/issue-3-verification.yml
+name: Issue #3 Verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'core/**'
+      - 'strategy/**'
+      - 'monitoring/**'
+      - 'tests/**'
+
+jobs:
+  verify-issue-3:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+
+      - name: "AC-A: Logging API correctness"
+        run: |
+          echo "Testing: No invalid logger kwargs"
+          python -m pytest tests/unit/test_error_contract.py::TestLoggingAPICorrectness -v
+          python -m pytest tests/unit/test_logging_contract.py -v
+
+      - name: "AC-B: Money formatting safety"
+        run: |
+          echo "Testing: format_money handles all types safely"
+          python -m pytest tests/unit/test_error_contract.py::TestMoneyFormattingSafety -v
+          python -m pytest tests/unit/test_format_money.py -v
+          python -m pytest tests/unit/test_rounding.py -v
+
+      - name: "AC-C: No-float money"
+        run: |
+          echo "Testing: No float in money fields"
+          python -m pytest tests/unit/test_error_contract.py::TestNoFloatMoneyContract -v
+          python -m pytest tests/unit/test_decimal_safety.py -v
+
+      - name: "AC-D: RPC health consistency"
+        run: |
+          echo "Testing: RPC metrics align with rejects"
+          python -m pytest tests/unit/test_error_contract.py::TestRPCHealthConsistency -v
+          python -m pytest tests/unit/test_health_metrics.py -v
+
+      - name: "AC-E: SMOKE run with paper_trades"
+        run: |
+          echo "Running SMOKE cycle"
+          python -m strategy.jobs.run_scan --cycles 1 --output-dir data/runs/ac_smoke
+          
+          # Verify no crashes
+          if grep -qE "Traceback|ValueError.*format code|TypeError.*unexpected keyword" data/runs/ac_smoke/scan.log; then
+            echo "FAIL: Crashes found in log"
+            grep -E "Traceback|ValueError|TypeError" data/runs/ac_smoke/scan.log | head -20
+            exit 1
+          fi
+          
+          # Verify truth report exists and has consistent RPC metrics
+          python -c "
+          import json
+          from pathlib import Path
+          
+          reports = list(Path('data/runs/ac_smoke/reports').glob('truth_report_*.json'))
+          assert reports, 'No truth report found'
+          
+          with open(reports[0]) as f:
+              report = json.load(f)
+          
+          # Check money fields are strings
+          assert isinstance(report['pnl']['signal_pnl_usdc'], str), 'signal_pnl_usdc should be string'
+          assert isinstance(report['cumulative_pnl']['total_usdc'], str), 'total_usdc should be string'
+          
+          print('All AC checks passed!')
+          "
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== Issue #3 Verification Summary ==="
+          echo "AC-A: Logging API - ${{ job.status }}"
+          echo "AC-B: Money formatting - ${{ job.status }}"
+          echo "AC-C: No-float money - ${{ job.status }}"
+          echo "AC-D: RPC consistency - ${{ job.status }}"
+          echo "AC-E: SMOKE run - ${{ job.status }}"

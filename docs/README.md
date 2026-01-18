@@ -1,146 +1,61 @@
-# ARBY - DEX Arbitrage Engine
-
-**Crypto Arbitrage Project with Truth Engine and Execution**
+# PATH: README.md
+# ARBY - Cryptocurrency Arbitrage Bot
 
 ## Overview
 
-ARBY is a multi-chain DEX-DEX arbitrage system designed to:
-1. Generate **truthful executable opportunities** (Truth Engine)
-2. Execute trades with **controlled risk** (Execution Engine)
-3. Scale through **protocol adapters** (not hardcoded DEX logic)
+ARBY is a cryptocurrency arbitrage bot designed to identify and execute profitable 
+DEX-to-DEX arbitrage opportunities across multiple Layer 2 networks.
+
+## Project Structure
+```
+arby/
+├── config/           # Configuration files (chains, dexes, tokens)
+├── core/             # Core utilities (math, logging, models)
+├── strategy/         # Trading strategy and paper trading
+│   ├── jobs/         # CLI entry points
+│   └── paper_trading.py
+├── monitoring/       # Health monitoring and truth reports
+├── tests/            # Unit and integration tests
+│   └── unit/
+└── data/             # Runtime data (runs, snapshots)
+```
 
 ## Quick Start
-
-### Prerequisites
-
-- Python 3.11+
-- Alchemy API key
-- (Optional) Tenderly account for simulation
-
-### Installation
-
 ```bash
-# Clone repository
-git clone <repo-url>
-cd arby
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or: venv\Scripts\activate  # Windows
-
 # Install dependencies
 pip install -e ".[dev]"
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your API keys
+# Run tests
+pytest tests/unit/ -v
+
+# Run SMOKE scan
+python -m strategy.jobs.run_scan --cycles 1 --output-dir data/runs/smoke_test
 ```
 
-### Running
+## Key Features
 
+- **No Float Money**: All money values use Decimal/string (Roadmap 3.2)
+- **Structured Logging**: Context via `extra={"context": {...}}` (Roadmap A)
+- **RPC Health Tracking**: Consistent metrics with reject histogram
+- **Paper Trading**: Simulated execution with PnL tracking
+
+## Testing
 ```bash
-# Run scanner (single cycle)
-python -m strategy.jobs.run_scan --chain arbitrum_one --once
+# Run all unit tests
+pytest tests/unit/ -v
 
-# Run scanner (continuous)
-python -m strategy.jobs.run_scan --chain arbitrum_one --interval 1000
-
-# Run paper trading
-python -m strategy.jobs.run_paper --chain arbitrum_one --duration 3600
+# Run specific test files
+pytest tests/unit/test_error_contract.py -v
+pytest tests/unit/test_paper_trading.py -v
+pytest tests/unit/test_confidence.py -v
 ```
-
-## Project Structure
-
-```
-arby/
-├── config/                 # Configuration (trust anchors + strategy)
-│   ├── chains.yaml         # Network configuration
-│   ├── core_tokens.yaml    # Verified token addresses
-│   ├── dexes.yaml          # DEX contracts and adapter types
-│   ├── fees.yaml           # Fee configuration
-│   ├── strategy.yaml       # Trading parameters
-│   └── intent.txt          # Target trading pairs
-│
-├── core/                   # Core utilities
-│   ├── models.py           # Data models (Quote, Opportunity, Trade)
-│   ├── constants.py        # Enums and constants
-│   ├── exceptions.py       # Typed exceptions with error codes
-│   ├── math.py             # Safe math (no float!)
-│   ├── time.py             # Freshness and block pinning
-│   └── logging.py          # Structured JSON logging
-│
-├── chains/                 # Blockchain interaction
-├── dex/                    # DEX adapters
-├── cex/                    # CEX adapters (future)
-├── discovery/              # Pool/token discovery
-├── engine/                 # Quote and opportunity engines
-├── execution/              # Trade execution
-├── strategy/               # Scanning and trading
-│   └── jobs/               # CLI entrypoints
-├── monitoring/             # Health and reporting
-├── tests/                  # Unit and integration tests
-└── data/                   # Generated data (gitignored)
-```
-
-## Core Principles
-
-### 1. No Float Money
-All monetary values use `int` (wei) or `Decimal`. Float is forbidden in quoting/price/PnL.
-
-### 2. Directional Pricing
-- DEX BUY = quote → base (ExactOutput)
-- DEX SELL = base → quote (ExactInput)
-- Mid price is forbidden for arbitrage evaluation
-
-### 3. Every Reject Has a Reason
-No silent failures. Every rejected opportunity has an error code:
-`STALE_BLOCK`, `SLIPPAGE_TOO_HIGH`, `CEX_DEPTH_LOW`, etc.
-
-### 4. Simulate Before Sign
-No trade execution without prior simulation (eth_call/Tenderly).
-
-## Milestones
-
-See [Roadmap.md](Roadmap.md) for detailed development plan.
-
-- **M0**: Bootstrap ✅
-- **M1**: Truth Engine (quotes, freshness, PnL)
-- **M2**: Adapters (V3, Algebra, V2)
-- **M3**: Opportunity Engine (scoring, ranking)
-- **M4**: Execution (simulation, private tx)
-- **M5**: Production (reports, health)
 
 ## Configuration
 
-### Adding a Chain
-
-1. Add chain config to `config/chains.yaml`
-2. Add core tokens to `config/core_tokens.yaml`
-3. Add DEX configs to `config/dexes.yaml`
-4. Add pairs to `config/intent.txt`
-
-### Adding a DEX
-
-1. Add DEX config to `config/dexes.yaml` with `adapter_type`
-2. Ensure adapter exists in `dex/adapters/`
-3. Add ABI to `dex/abi/` if needed
-
-## Development
-
-```bash
-# Run tests
-pytest
-
-# Run linter
-ruff check .
-
-# Run formatter
-black .
-
-# Type checking
-mypy .
-```
+See `config/` directory for:
+- `chains.yaml` - Network configuration
+- `dexes.yaml` - DEX protocol anchors
+- `strategy.yaml` - Trading parameters
 
 ## License
 

@@ -1,270 +1,144 @@
+# PATH: core/math.py
 """
-core/math.py - Mathematical utilities.
+Math utilities for ARBY.
 
-CRITICAL: No float allowed in quoting/price/PnL.
-All monetary values use int (wei) or Decimal.
+Safe conversions and calculations per Roadmap 3.2 (no float money).
 """
 
-from decimal import Decimal, ROUND_DOWN, ROUND_UP, InvalidOperation
-from typing import overload
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Union, Optional
 
-from core.constants import BPS_DENOMINATOR, WEI_PER_ETH, WEI_PER_GWEI
-from core.exceptions import ValidationError
-
-
-# =============================================================================
-# BASIS POINTS
-# =============================================================================
-
-def bps_to_decimal(bps: int | Decimal) -> Decimal:
-    """
-    Convert basis points to decimal multiplier.
-    
-    Example: 50 bps -> 0.005
-    """
-    return Decimal(bps) / BPS_DENOMINATOR
+from core.format_money import format_money
 
 
-def decimal_to_bps(value: Decimal) -> Decimal:
-    """
-    Convert decimal to basis points.
-    
-    Example: 0.005 -> 50 bps
-    """
-    return value * BPS_DENOMINATOR
-
-
-def calculate_bps_diff(value_a: Decimal, value_b: Decimal) -> Decimal:
-    """
-    Calculate basis points difference between two values.
-    
-    Returns: (value_a - value_b) / value_b * 10000
-    """
-    if value_b == 0:
-        return Decimal("0")
-    return ((value_a - value_b) / value_b) * BPS_DENOMINATOR
-
-
-# =============================================================================
-# WEI CONVERSIONS
-# =============================================================================
-
-def wei_to_eth(wei: int) -> Decimal:
-    """Convert wei to ETH as Decimal."""
-    return Decimal(wei) / Decimal(WEI_PER_ETH)
-
-
-def eth_to_wei(eth: Decimal | str) -> int:
-    """Convert ETH to wei as int."""
-    return int(Decimal(eth) * WEI_PER_ETH)
-
-
-def wei_to_gwei(wei: int) -> Decimal:
-    """Convert wei to gwei as Decimal."""
-    return Decimal(wei) / Decimal(WEI_PER_GWEI)
-
-
-def gwei_to_wei(gwei: Decimal | str | int) -> int:
-    """Convert gwei to wei as int."""
-    return int(Decimal(gwei) * WEI_PER_GWEI)
-
-
-# =============================================================================
-# TOKEN AMOUNT CONVERSIONS
-# =============================================================================
-
-def wei_to_human(wei: int, decimals: int) -> Decimal:
-    """
-    Convert wei amount to human-readable Decimal.
-    
-    Example: wei_to_human(1000000, 6) -> Decimal('1.0')  # 1 USDC
-    """
-    if decimals < 0 or decimals > 18:
-        raise ValidationError(f"Invalid decimals: {decimals}")
-    return Decimal(wei) / Decimal(10**decimals)
-
-
-def human_to_wei(amount: Decimal | str, decimals: int) -> int:
-    """
-    Convert human-readable amount to wei.
-    
-    Example: human_to_wei('1.0', 6) -> 1000000  # 1 USDC in wei
-    """
-    if decimals < 0 or decimals > 18:
-        raise ValidationError(f"Invalid decimals: {decimals}")
-    return int(Decimal(amount) * Decimal(10**decimals))
-
-
-# =============================================================================
-# SAFE CONVERSIONS (NO FLOAT)
-# =============================================================================
-
-def safe_decimal(value: int | str | Decimal) -> Decimal:
+def safe_decimal(value: Union[str, int, float, Decimal, None], default: Decimal = Decimal("0")) -> Decimal:
     """
     Safely convert value to Decimal.
     
-    Raises ValidationError if float is passed or conversion fails.
+    Args:
+        value: Value to convert
+        default: Default if conversion fails
+        
+    Returns:
+        Decimal value
     """
-    if isinstance(value, float):
-        raise ValidationError(
-            "Float values are not allowed. Use int, str, or Decimal.",
-            {"value": value, "type": type(value).__name__}
-        )
-    
-    try:
-        return Decimal(value)
-    except (InvalidOperation, ValueError, TypeError) as e:
-        raise ValidationError(
-            f"Cannot convert to Decimal: {value}",
-            {"value": value, "type": type(value).__name__, "error": str(e)}
-        )
-
-
-def safe_int(value: int | str | Decimal) -> int:
-    """
-    Safely convert value to int (wei).
-    
-    Raises ValidationError if float is passed or conversion fails.
-    """
-    if isinstance(value, float):
-        raise ValidationError(
-            "Float values are not allowed. Use int, str, or Decimal.",
-            {"value": value, "type": type(value).__name__}
-        )
+    if value is None:
+        return default
     
     try:
         if isinstance(value, Decimal):
-            return int(value.to_integral_value(rounding=ROUND_DOWN))
-        return int(value)
-    except (ValueError, TypeError) as e:
-        raise ValidationError(
-            f"Cannot convert to int: {value}",
-            {"value": value, "type": type(value).__name__, "error": str(e)}
-        )
+            return value
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return default
 
 
-# =============================================================================
-# PNL CALCULATIONS
-# =============================================================================
+def bps_to_decimal(bps: Union[str, int, float, Decimal]) -> Decimal:
+    """
+    Convert basis points to decimal (100 bps = 0.01 = 1%).
+    
+    Args:
+        bps: Basis points value
+        
+    Returns:
+        Decimal fraction (e.g., 50 bps -> 0.005)
+    """
+    return safe_decimal(bps) / Decimal("10000")
 
-def calculate_net_pnl(
-    revenue_wei: int,
-    cost_wei: int,
-    gas_cost_wei: int,
+
+def decimal_to_bps(value: Union[str, int, float, Decimal]) -> Decimal:
+    """
+    Convert decimal to basis points.
+    
+    Args:
+        value: Decimal fraction
+        
+    Returns:
+        Basis points (e.g., 0.005 -> 50 bps)
+    """
+    return safe_decimal(value) * Decimal("10000")
+
+
+def calculate_pnl_bps(
+    pnl_usdc: Union[str, Decimal],
+    notional_usdc: Union[str, Decimal],
+) -> Decimal:
+    """
+    Calculate PnL in basis points.
+    
+    Args:
+        pnl_usdc: PnL in USDC
+        notional_usdc: Notional amount in USDC
+        
+    Returns:
+        PnL in basis points
+    """
+    pnl = safe_decimal(pnl_usdc)
+    notional = safe_decimal(notional_usdc)
+    
+    if notional == 0:
+        return Decimal("0")
+    
+    return (pnl / notional) * Decimal("10000")
+
+
+def calculate_slippage_bps(
+    expected_price: Union[str, Decimal],
+    actual_price: Union[str, Decimal],
+) -> Decimal:
+    """
+    Calculate slippage in basis points.
+    
+    Args:
+        expected_price: Expected execution price
+        actual_price: Actual execution price
+        
+    Returns:
+        Slippage in basis points (positive = worse than expected)
+    """
+    expected = safe_decimal(expected_price)
+    actual = safe_decimal(actual_price)
+    
+    if expected == 0:
+        return Decimal("0")
+    
+    slippage = (actual - expected) / expected
+    return slippage * Decimal("10000")
+
+
+def normalize_to_decimals(
+    amount: Union[str, int, Decimal],
     decimals: int,
 ) -> Decimal:
     """
-    Calculate net PnL in human-readable units.
-    
-    All inputs in wei. Returns Decimal.
-    """
-    net_wei = revenue_wei - cost_wei - gas_cost_wei
-    return wei_to_human(net_wei, decimals)
-
-
-def calculate_gas_cost_in_token(
-    gas_used: int,
-    gas_price_wei: int,
-    eth_price: Decimal,
-) -> Decimal:
-    """
-    Calculate gas cost in token units (e.g., USDC).
+    Normalize amount to token decimals (wei to token units).
     
     Args:
-        gas_used: Gas units used
-        gas_price_wei: Gas price in wei
-        eth_price: ETH price in token (e.g., ETH/USDC = 2500)
-    
+        amount: Amount in smallest unit (wei)
+        decimals: Token decimals
+        
     Returns:
-        Gas cost in token units as Decimal (e.g., 0.50 USDC)
+        Normalized amount
     """
-    gas_cost_eth = wei_to_eth(gas_used * gas_price_wei)
-    return gas_cost_eth * eth_price
+    amt = safe_decimal(amount)
+    divisor = Decimal(10) ** decimals
+    return amt / divisor
 
 
-# =============================================================================
-# PRICE CALCULATIONS
-# =============================================================================
-
-def calculate_price_impact_bps(
-    amount_in: int,
-    amount_out: int,
-    amount_in_small: int,
-    amount_out_small: int,
-) -> Decimal:
+def denormalize_from_decimals(
+    amount: Union[str, float, Decimal],
+    decimals: int,
+) -> int:
     """
-    Calculate price impact in basis points by comparing
-    a large trade to a small reference trade.
+    Denormalize amount from token units to wei.
     
-    Returns: Positive value means worse execution.
+    Args:
+        amount: Amount in token units
+        decimals: Token decimals
+        
+    Returns:
+        Amount in wei (int)
     """
-    if amount_in_small == 0 or amount_out_small == 0:
-        return Decimal("0")
-    
-    # Price for large trade
-    price_large = Decimal(amount_out) / Decimal(amount_in)
-    
-    # Price for small reference trade
-    price_small = Decimal(amount_out_small) / Decimal(amount_in_small)
-    
-    if price_small == 0:
-        return Decimal("0")
-    
-    # Impact = (price_small - price_large) / price_small * 10000
-    impact = ((price_small - price_large) / price_small) * BPS_DENOMINATOR
-    
-    return impact
-
-
-def normalize_price(
-    amount_in: int,
-    amount_out: int,
-    decimals_in: int,
-    decimals_out: int,
-) -> Decimal:
-    """
-    Calculate normalized price (amount_out / amount_in adjusted for decimals).
-    
-    Used for comparison only, not for PnL calculation.
-    """
-    if amount_in == 0:
-        return Decimal("0")
-    
-    normalized_in = Decimal(amount_in) / Decimal(10**decimals_in)
-    normalized_out = Decimal(amount_out) / Decimal(10**decimals_out)
-    
-    return normalized_out / normalized_in
-
-
-# =============================================================================
-# ROUNDING HELPERS
-# =============================================================================
-
-def round_down(value: Decimal, decimals: int) -> Decimal:
-    """Round down to specified decimal places."""
-    quantizer = Decimal(10) ** (-decimals)
-    return value.quantize(quantizer, rounding=ROUND_DOWN)
-
-
-def round_up(value: Decimal, decimals: int) -> Decimal:
-    """Round up to specified decimal places."""
-    quantizer = Decimal(10) ** (-decimals)
-    return value.quantize(quantizer, rounding=ROUND_UP)
-
-
-# =============================================================================
-# VALIDATION
-# =============================================================================
-
-def validate_no_float(*values: object) -> None:
-    """
-    Validate that none of the values are floats.
-    
-    Raises ValidationError if any float is found.
-    """
-    for i, value in enumerate(values):
-        if isinstance(value, float):
-            raise ValidationError(
-                f"Float value at position {i} is not allowed",
-                {"position": i, "value": value}
-            )
+    amt = safe_decimal(amount)
+    multiplier = Decimal(10) ** decimals
+    return int(amt * multiplier)

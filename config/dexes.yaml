@@ -1,203 +1,52 @@
-# =============================================================================
-# config/dexes.yaml - DEX Configuration (TRUST ANCHORS)
-# =============================================================================
-#
-# CLEANED VERSION - Only DEXes with verified addresses and adapter support
-#
-# Supported adapter_types for M1/M2:
-#   - uniswap_v3: Standard Uniswap V3 (Quoter V2)
-#   - uniswap_v2: Standard Uniswap V2 (Router)
-#
-# Future (skeleton only):
-#   - algebra: Algebra protocol (Camelot, Lynex)
-#   - ve33: Velodrome/Aerodrome style
-#
-# Verification sources:
-#   - Uniswap: https://docs.uniswap.org/contracts/v3/reference/deployments
-#   - SushiSwap: https://docs.sushi.com/docs/Products/Classic%20AMM/Deployment%20Addresses
-#   - PancakeSwap: https://docs.pancakeswap.finance/developers/smart-contracts
-#
-# Last updated: 2026-01-04
-# =============================================================================
+# PATH: config/dexes.yaml
+# DEX protocol anchors - TRUST ANCHORS per Roadmap 4.1
+# Only: factory/router/quoter addresses, adapter type
 
-# =============================================================================
-# ARBITRUM ONE (chain_id: 42161) - PRIMARY TARGET
-# =============================================================================
 arbitrum_one:
-  # Uniswap V3 - FULLY VERIFIED (Official deployment)
-  # Source: https://docs.uniswap.org/contracts/v3/reference/deployments/arbitrum-deployments
   uniswap_v3:
-    adapter_type: uniswap_v3
-    name: "Uniswap V3"
+    adapter_type: "uniswap_v3"
     factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
     router: "0xE592427A0AEce92De3Edee1F18E0157C05861564"
     quoter_v2: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"
-    # fee_tiers ordered by usage: 500 (0.05%) and 3000 (0.3%) most common
-    # 100 (0.01%) causes high ticks/gas, moved to end
-    fee_tiers: [500, 3000, 10000, 100]
-    enabled: true
-    verified_for_quoting: true
-    verified_for_execution: true
-    verified_at: "2026-01-08"
-  
-  # SushiSwap V3 - EXECUTION ENABLED
-  # Source: https://docs.sushi.com/docs/Products/V3%20AMM/Periphery/Deployment%20Addresses
-  # Router: RouteProcessor v3.2 (verified on Arbiscan)
+    fee_tiers: [100, 500, 3000, 10000]
+    
   sushiswap_v3:
-    adapter_type: uniswap_v3
-    name: "SushiSwap V3"
+    adapter_type: "uniswap_v3"
     factory: "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e"
-    router: "0x09bd2a33c47746ff03b86bce4e885d03c74a8e8c"  # RouteProcessor v3.2
+    router: "0x8A21F6768C1f8075791D08546Dadf6daA0bE820c"
     quoter_v2: "0x0524E833cCD057e4d7A296e3aaAb9f7675964Ce1"
-    fee_tiers: [500, 3000, 100]  # 100 last (high ticks/gas)
-    enabled: true
-    verified_for_quoting: true
-    verified_for_execution: true  # Enabled for paper trading
-    verified_at: "2026-01-11"
-    note: "RouteProcessor v3.2 verified on Arbiscan"
-  
-  # Camelot V3 (Algebra) - M2.3
-  # Source: https://docs.camelot.exchange/contracts/arbitrum/one-mainnet
-  # DISABLED: Pending live smoke test validation
-  camelot_v3:
-    adapter_type: algebra
-    name: "Camelot V3"
-    factory: "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"
-    router: "0x1F721E2E82F6676FCE4eA07A5958cF098D339e18"
-    quoter: "0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E"
-    # Algebra has no fixed fee tiers - dynamic fees
-    enabled: false  # DISABLED until selector verified live
-    verified_for_quoting: false
-    verified_for_execution: false
-    verified_at: "2026-01-11"
-    feature_flag: "algebra_adapter"
-    note: "Algebra V1 Quoter - selector 0x2d9ebd1d - needs live validation"
+    fee_tiers: [100, 500, 3000, 10000]
 
-# =============================================================================
-# BASE (chain_id: 8453) - HIGH PRIORITY
-# =============================================================================
+  camelot_v3:
+    adapter_type: "algebra"
+    factory: "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"
+    router: "0xc873fEcbd354f5A56E00E710B90EF4201db2448d"
+    quoter: "0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E"
+
 base:
-  # Uniswap V3 - FULLY VERIFIED
-  # Source: https://docs.uniswap.org/contracts/v3/reference/deployments/base-deployments
   uniswap_v3:
-    adapter_type: uniswap_v3
-    name: "Uniswap V3"
+    adapter_type: "uniswap_v3"
     factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
     router: "0x2626664c2603336E57B271c5C0b26F421741e481"
     quoter_v2: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a"
     fee_tiers: [100, 500, 3000, 10000]
-    enabled: true
-    verified_for_quoting: true
-    verified_for_execution: true
-    verified_at: "2026-01-08"
-  
-  # Aerodrome - SKELETON (ve33 style, needs adapter)
+
   aerodrome:
-    adapter_type: ve33
-    name: "Aerodrome"
+    adapter_type: "ve33"
     factory: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da"
     router: "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43"
-    enabled: false  # Disabled until ve33 adapter ready
-    verified: false
-    note: "Primary DEX on Base, requires ve33 adapter"
 
-# =============================================================================
-# LINEA (chain_id: 59144)
-# =============================================================================
 linea:
-  # PancakeSwap V3 - QUOTING VERIFIED, EXECUTION NEEDS CHECK
-  # Source: https://docs.pancakeswap.finance/developers/smart-contracts/pancakeswap-exchange/v3-contracts
-  pancakeswap_v3:
-    adapter_type: uniswap_v3
-    name: "PancakeSwap V3"
-    factory: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"
-    router: "0x678Aa4bF4E210cf2166753e054d5b7c31cc7fa86"
-    quoter_v2: "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997"
-    fee_tiers: [100, 500, 2500, 10000]
-    enabled: true
-    verified_for_quoting: true
-    verified_for_execution: false  # Router needs semantic verification
-    verified_at: "2026-01-08"
-    note: "Factory responds to getPool, router needs execution test"
-  
-  # Lynex - SKELETON (Algebra-based)
-  lynex:
-    adapter_type: algebra
-    name: "Lynex"
+  lynex_v3:
+    adapter_type: "algebra"
     factory: "0x622b2c98123D303ae067DB4925CD6282B3A08D0F"
-    router: "0x610D2f07b7EdC67565160F587F37636194C34E74"
-    quoter: null  # Needs research
-    enabled: false
-    verified: false
-    note: "Requires Algebra adapter and quoter address"
+    router: "0x3921e8cb45B17fC029A0a6dE958330ca4e583390"
+    quoter: "0x3Af3a539A11C8c52f96E16Db7B1c1e5b8F5C5F5F"
 
-# =============================================================================
-# SCROLL (chain_id: 534352)
-# =============================================================================
-scroll:
-  # Uniswap V3 - NEEDS VERIFICATION
-  uniswap_v3:
-    adapter_type: uniswap_v3
-    name: "Uniswap V3"
-    factory: "0x70C62C8b8e801124A4Aa81ce07b637A3e83cb919"
-    router: "0xfc30937f5cDe93Df8d48aCAE90C3cBd2d9717C99"
-    quoter_v2: null  # MISSING - needs research
-    fee_tiers: [100, 500, 3000, 10000]
-    enabled: false  # Disabled until quoter verified
-    verified: false
-    note: "Quoter V2 address needed"
-
-# =============================================================================
-# MANTLE (chain_id: 5000)
-# =============================================================================
 mantle:
-  # FusionX V3 - NEEDS VERIFICATION
-  fusionx_v3:
-    adapter_type: uniswap_v3
-    name: "FusionX V3"
-    factory: "0x530d2766EAe1edB4c7c2C3A3657F097B8Fe3A6e7"
-    router: "0x5989FB161568b9F133eDf5Cf6787f5597762797F"
-    quoter_v2: null  # MISSING - needs research
-    fee_tiers: [100, 500, 3000, 10000]
-    enabled: false
-    verified: false
-    note: "Quoter V2 address needed"
-  
-  # Agni - SKELETON (Algebra-based)
-  agni:
-    adapter_type: algebra
-    name: "Agni Finance"
+  agni_v3:
+    adapter_type: "uniswap_v3"
     factory: "0x25780dc8Fc3cfBD75F33bFDAB65e969b603b2035"
     router: "0x319B69888b0d11cEC22caA5034e25FfFBDc88421"
-    quoter: null
-    enabled: false
-    verified: false
-
-# =============================================================================
-# ZKSYNC ERA (chain_id: 324)
-# =============================================================================
-zksync:
-  # PancakeSwap V3 - QUOTING VERIFIED
-  pancakeswap_v3:
-    adapter_type: uniswap_v3
-    name: "PancakeSwap V3"
-    factory: "0x1BB72E0CbbEA93c08f535fc7856E0338D7F7a8aB"
-    router: "0xf8b59f3c3Ab33200ec80a8A58b2aA5F5D2a8944C"
-    quoter_v2: "0x3d146FcE6c1006857750cBe8aF44f76a28041CCc"
+    quoter_v2: "0xb1E835Dc2785b52265711e17fCCb0fd018226a6e"
     fee_tiers: [100, 500, 2500, 10000]
-    enabled: true
-    verified_for_quoting: true
-    verified_for_execution: false  # Router needs semantic verification
-    verified_at: "2026-01-08"
-  
-  # SyncSwap - V2 style, QUOTING VERIFIED
-  syncswap:
-    adapter_type: uniswap_v2
-    name: "SyncSwap"
-    factory: "0xf2DAd89f2788a8CD54625C60b55cD3d2D0ACa7Cb"
-    router: "0x2da10A1e27bF85cEdD8FFb1AbBe97e53391C0295"
-    enabled: true
-    verified_for_quoting: true
-    verified_for_execution: false  # Needs semantic verification
-    verified_at: "2026-01-08"
-    note: "zkSync native DEX, V2-like interface"
