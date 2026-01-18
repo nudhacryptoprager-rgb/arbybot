@@ -14,8 +14,7 @@ from dataclasses import dataclass
 import time
 
 from core.logging import get_logger
-from core.constants import ErrorCode
-from core.exceptions import QuoteError
+from core.exceptions import ErrorCode, QuoteError
 from core.models import Token, Pool, Quote
 from core.time import now_ms
 from chains.providers import RPCProvider
@@ -242,23 +241,16 @@ class AlgebraAdapter:
         gas_estimate = 200_000
         
         quote = Quote(
-            pool_address=pool.pool_address,
-            token_in=token_in.address,
-            token_out=token_out.address,
-            amount_in=amount_in,
-            amount_out=result.amount_out,
-            chain_id=pool.chain_id,
-            dex=self.dex_id,
-            fee_tier=result.fee,
-            block_number=block_number if block_number else 0,
-            gas_estimate=gas_estimate,
-            ticks_crossed=0,  # Algebra doesn't report this
-            # Extended fields
             pool=pool,
             direction=direction,
-            token_in_obj=token_in,
-            token_out_obj=token_out,
+            amount_in=amount_in,
+            amount_out=result.amount_out,
+            token_in=token_in,
+            token_out=token_out,
             timestamp_ms=now_ms(),
+            block_number=block_number if block_number else 0,
+            gas_estimate=gas_estimate,
+            ticks_crossed=0,  # Algebra doesn't report this; default to 0
             sqrt_price_x96_after=None,
             latency_ms=result.latency_ms,
         )

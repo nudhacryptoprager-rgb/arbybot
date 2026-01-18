@@ -6,7 +6,7 @@ Roadmap 3.2 compliance: No float money.
 All money values are str or Decimal. This module provides safe formatting.
 """
 
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from typing import Union
 
 
@@ -19,6 +19,7 @@ def format_money(value: Union[str, Decimal, int, float, None], decimals: int = 6
     - Decimal: format directly
     - int: convert to Decimal, format
     - float: convert to Decimal (legacy support), format
+    - bool: True=1, False=0
     - None: return "0.000000"
     
     Uses ROUND_HALF_UP for proper rounding (0.005 -> 0.01 with 2 decimals).
@@ -50,15 +51,22 @@ def format_money(value: Union[str, Decimal, int, float, None], decimals: int = 6
             dec_value = Decimal(value)
         elif isinstance(value, Decimal):
             dec_value = value
+        elif isinstance(value, bool):
+            # Handle bool explicitly BEFORE int (bool is subclass of int)
+            dec_value = Decimal(1 if value else 0)
         elif isinstance(value, (int, float)):
             dec_value = Decimal(str(value))
         else:
             # Unknown type - try string conversion
             dec_value = Decimal(str(value))
         
-        # Create quantize string for proper rounding
-        quantize_str = "0." + "0" * decimals if decimals > 0 else "0"
-        rounded = dec_value.quantize(Decimal(quantize_str), rounding=ROUND_HALF_UP)
+        # Use high-precision context for very large numbers
+        with localcontext() as ctx:
+            ctx.prec = 50  # Enough for typical financial numbers
+            
+            # Create quantize string for proper rounding
+            quantize_str = "0." + "0" * decimals if decimals > 0 else "0"
+            rounded = dec_value.quantize(Decimal(quantize_str), rounding=ROUND_HALF_UP)
         
         # Format with specified decimals
         format_str = f"{{:.{decimals}f}}"

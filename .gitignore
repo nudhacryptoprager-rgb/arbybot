@@ -32,6 +32,13 @@ ENV/
 *.swp
 *.swo
 *~
+# keep useful VSCode tasks/settings (tracked)
+!.vscode/tasks.json
+!.vscode/settings.json
+
+# allow committed sample artifacts (golden fixtures)
+!docs/artifacts/**
+!tests/fixtures/**
 
 # Testing
 .pytest_cache/

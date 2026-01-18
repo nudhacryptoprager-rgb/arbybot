@@ -5,25 +5,113 @@ Typed exceptions for ARBY.
 Per Roadmap 3.6: Typed errors with revert vs infra distinction.
 """
 
-from typing import Optional
-from core.constants import RejectReason, ErrorCode
+from enum import Enum
+from typing import Any, Dict, Optional
+
+
+class ErrorCode(str, Enum):
+    """Error codes for typed exceptions."""
+    
+    # Quote errors
+    QUOTE_STALE_BLOCK = "QUOTE_STALE_BLOCK"
+    QUOTE_TIMEOUT = "QUOTE_TIMEOUT"
+    QUOTE_REVERT = "QUOTE_REVERT"
+    QUOTE_EMPTY = "QUOTE_EMPTY"
+    QUOTE_GAS_TOO_HIGH = "QUOTE_GAS_TOO_HIGH"
+    
+    # Pool errors
+    POOL_DEAD = "POOL_DEAD"
+    POOL_NO_LIQUIDITY = "POOL_NO_LIQUIDITY"
+    POOL_NOT_FOUND = "POOL_NOT_FOUND"
+    POOL_DISABLED = "POOL_DISABLED"
+    
+    # Token errors
+    TOKEN_NOT_FOUND = "TOKEN_NOT_FOUND"
+    TOKEN_INVALID_DECIMALS = "TOKEN_INVALID_DECIMALS"
+    TOKEN_UNSUPPORTED = "TOKEN_UNSUPPORTED"
+    
+    # Execution errors
+    EXEC_REVERT = "EXEC_REVERT"
+    EXEC_SIMULATION_FAILED = "EXEC_SIMULATION_FAILED"
+    EXEC_SLIPPAGE = "EXEC_SLIPPAGE"
+    EXEC_GAS_TOO_HIGH = "EXEC_GAS_TOO_HIGH"
+    
+    # Infrastructure errors
+    INFRA_RPC_ERROR = "INFRA_RPC_ERROR"
+    INFRA_RPC_TIMEOUT = "INFRA_RPC_TIMEOUT"
+    INFRA_RATE_LIMIT = "INFRA_RATE_LIMIT"
+    INFRA_TIMEOUT = "INFRA_TIMEOUT"
+    
+    # CEX errors
+    CEX_DEPTH_LOW = "CEX_DEPTH_LOW"
+    CEX_CONNECTION_ERROR = "CEX_CONNECTION_ERROR"
+    CEX_RATE_LIMIT = "CEX_RATE_LIMIT"
+    
+    # Price/slippage errors
+    SLIPPAGE_TOO_HIGH = "SLIPPAGE_TOO_HIGH"
+    PRICE_SANITY_FAILED = "PRICE_SANITY_FAILED"
+    PRICE_ANCHOR_MISSING = "PRICE_ANCHOR_MISSING"
+    TICKS_CROSSED_TOO_MANY = "TICKS_CROSSED_TOO_MANY"
+    
+    # Quote consistency errors
+    QUOTE_ZERO_OUTPUT = "QUOTE_ZERO_OUTPUT"
+    QUOTE_INCONSISTENT = "QUOTE_INCONSISTENT"
+    
+    # PnL errors
+    PNL_BELOW_THRESHOLD = "PNL_BELOW_THRESHOLD"
+    PNL_NEGATIVE = "PNL_NEGATIVE"
+    
+    # Validation
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    
+    # Other
+    UNKNOWN = "UNKNOWN"
 
 
 class ArbyError(Exception):
-    """Base exception for ARBY."""
+    """Base exception for ARBY with typed error code."""
     
     def __init__(
         self,
+        code: ErrorCode,
         message: str,
-        reason: RejectReason = RejectReason.UNKNOWN,
-        details: Optional[dict] = None,
+        details: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(message)
-        self.reason = reason
+        self.code = code
+        self.message = message
         self.details = details or {}
     
-    def __str__(self):
-        return f"[{self.reason.value}] {super().__str__()}"
+    def __str__(self) -> str:
+        return f"[{self.code.value}] {self.message}"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dict."""
+        return {
+            "error_code": self.code.value,
+            "message": self.message,
+            "details": self.details,
+        }
+
+
+class QuoteError(ArbyError):
+    """Quote-related errors."""
+    pass
+
+
+class PoolError(ArbyError):
+    """Pool-related errors."""
+    pass
+
+
+class TokenError(ArbyError):
+    """Token-related errors."""
+    pass
+
+
+class ExecutionError(ArbyError):
+    """Execution-related errors."""
+    pass
 
 
 class InfraError(ArbyError):
@@ -31,89 +119,71 @@ class InfraError(ArbyError):
     pass
 
 
+class CexError(ArbyError):
+    """CEX-related errors."""
+    pass
+
+
+class ValidationError(ArbyError):
+    """Validation errors with automatic error code."""
+    
+    def __init__(
+        self,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            code=ErrorCode.VALIDATION_ERROR,
+            message=message,
+            details=details,
+        )
+
+
+# Legacy aliases for backwards compatibility with RejectReason-based code
 class RPCError(InfraError):
     """RPC call failed."""
     
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(message, RejectReason.INFRA_RPC_ERROR, details)
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.INFRA_RPC_ERROR, message, details)
 
 
 class TimeoutError(InfraError):
     """Operation timed out."""
     
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(message, RejectReason.INFRA_TIMEOUT, details)
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.INFRA_TIMEOUT, message, details)
 
 
 class RateLimitError(InfraError):
     """Rate limit exceeded."""
     
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(message, RejectReason.INFRA_RATE_LIMIT, details)
-
-
-class QuoteError(Exception):
-    """
-    Quote-related errors for DEX adapters.
-    
-    Supports both ErrorCode-based and RejectReason-based construction
-    for compatibility with different call sites.
-    """
-    
-    def __init__(
-        self,
-        message: str = "",
-        code: Optional[ErrorCode] = None,
-        reason: Optional[RejectReason] = None,
-        details: Optional[dict] = None,
-    ):
-        super().__init__(message)
-        self.message = message
-        self.details = details or {}
-        
-        # Support both ErrorCode and RejectReason
-        if code is not None:
-            self.code = code
-            # Map ErrorCode to RejectReason for compatibility
-            self.reason = RejectReason(code.value) if code.value in [r.value for r in RejectReason] else RejectReason.UNKNOWN
-        elif reason is not None:
-            self.reason = reason
-            self.code = ErrorCode(reason.value) if reason.value in [e.value for e in ErrorCode] else ErrorCode.UNKNOWN
-        else:
-            self.code = ErrorCode.UNKNOWN
-            self.reason = RejectReason.UNKNOWN
-    
-    def __str__(self):
-        return f"[{self.code.value}] {self.message}"
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.INFRA_RATE_LIMIT, message, details)
 
 
 class QuoteRevertError(QuoteError):
     """Quote call reverted."""
     
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(
-            message=message,
-            code=ErrorCode.QUOTE_REVERT,
-            details=details,
-        )
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.QUOTE_REVERT, message, details)
 
 
 class SlippageError(ArbyError):
     """Slippage exceeded threshold."""
     
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(message, RejectReason.SLIPPAGE_TOO_HIGH, details)
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.SLIPPAGE_TOO_HIGH, message, details)
 
 
 class PriceSanityError(ArbyError):
     """Price failed sanity check."""
     
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(message, RejectReason.PRICE_SANITY_FAILED, details)
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.PRICE_SANITY_FAILED, message, details)
 
 
-class LiquidityError(ArbyError):
+class LiquidityError(PoolError):
     """Insufficient liquidity."""
     
-    def __init__(self, message: str, details: Optional[dict] = None):
-        super().__init__(message, RejectReason.LIQUIDITY_TOO_LOW, details)
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.POOL_NO_LIQUIDITY, message, details)

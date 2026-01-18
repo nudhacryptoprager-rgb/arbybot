@@ -9,38 +9,75 @@ All money fields use Decimal/string per Roadmap 3.2.
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from core.constants import DexType, PoolStatus, RejectReason, TradeOutcome
-from core.format_money import format_money
+from core.constants import (
+    DexType,
+    TokenStatus,
+    PoolStatus,
+    TradeDirection,
+    TradeStatus,
+    OpportunityStatus,
+    TradeOutcome,
+    DEFAULT_QUOTE_FRESHNESS_MS,
+)
 
+if TYPE_CHECKING:
+    from core.exceptions import ErrorCode
+
+
+# =============================================================================
+# CHAIN INFO
+# =============================================================================
+
+@dataclass
+class ChainInfo:
+    """Information about a blockchain network."""
+    
+    chain_id: int
+    name: str
+    rpc_url: str = ""
+    block_time_ms: int = 12000  # 12 seconds default
+    native_token: str = "ETH"
+    explorer_url: str = ""
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "chain_id": self.chain_id,
+            "name": self.name,
+            "rpc_url": self.rpc_url,
+            "block_time_ms": self.block_time_ms,
+            "native_token": self.native_token,
+            "explorer_url": self.explorer_url,
+        }
+
+
+# =============================================================================
+# TOKEN
+# =============================================================================
 
 @dataclass
 class Token:
-    """
-    Token representation for DEX operations.
+    """Token on a specific chain."""
     
-    Immutable once created. Used for pool definitions and quotes.
-    """
     chain_id: int
     address: str
     symbol: str
     name: str
-    decimals: int = 18
-    is_core: bool = False  # True for tokens in core_tokens.yaml
+    decimals: int
+    is_core: bool = False
+    status: TokenStatus = TokenStatus.VERIFIED
     
-    def __post_init__(self):
-        # Normalize address to lowercase
-        self.address = self.address.lower()
-    
-    def __hash__(self):
+    def __hash__(self) -> int:
+        """Hash by chain_id and normalized address."""
         return hash((self.chain_id, self.address.lower()))
     
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
+        """Equal if same chain_id and address (case-insensitive)."""
         if not isinstance(other, Token):
             return False
         return (
-            self.chain_id == other.chain_id 
+            self.chain_id == other.chain_id
             and self.address.lower() == other.address.lower()
         )
     
@@ -52,65 +89,304 @@ class Token:
             "name": self.name,
             "decimals": self.decimals,
             "is_core": self.is_core,
+            "status": self.status.value,
         }
 
 
+# =============================================================================
+# POOL
+# =============================================================================
+
 @dataclass
 class Pool:
-    """
-    Liquidity pool representation.
+    """Liquidity pool on a DEX."""
     
-    Represents a single pool on a DEX. Pool address may be empty if
-    not yet discovered/computed.
-    """
     chain_id: int
-    pool_address: str
+    dex_id: str
     dex_type: DexType
-    dex_id: str  # e.g., "uniswap_v3", "camelot_v3"
+    pool_address: str
     token0: Token
     token1: Token
-    fee: int = 0  # Fee tier in hundredths of bip (3000 = 0.30%)
+    fee: int = 0  # Fee in hundredths of a bip (e.g., 500 = 0.05%)
     status: PoolStatus = PoolStatus.ACTIVE
     
-    def __post_init__(self):
-        # Normalize address
-        self.pool_address = self.pool_address.lower() if self.pool_address else ""
+    def __hash__(self) -> int:
+        """Hash by chain_id and pool_address."""
+        return hash((self.chain_id, self.pool_address.lower()))
     
-    def __hash__(self):
-        return hash((self.chain_id, self.pool_address.lower(), self.dex_id))
+    def __eq__(self, other: object) -> bool:
+        """Equal if same chain_id and pool_address."""
+        if not isinstance(other, Pool):
+            return False
+        return (
+            self.chain_id == other.chain_id
+            and self.pool_address.lower() == other.pool_address.lower()
+        )
     
     @property
-    def pair_symbol(self) -> str:
-        return f"{self.token0.symbol}/{self.token1.symbol}"
+    def pair_key(self) -> str:
+        """Canonical pair key (sorted alphabetically)."""
+        symbols = sorted([self.token0.symbol, self.token1.symbol])
+        return f"{symbols[0]}/{symbols[1]}"
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "chain_id": self.chain_id,
-            "pool_address": self.pool_address,
-            "dex_type": self.dex_type.value,
             "dex_id": self.dex_id,
+            "dex_type": self.dex_type.value,
+            "pool_address": self.pool_address,
             "token0": self.token0.to_dict(),
             "token1": self.token1.to_dict(),
             "fee": self.fee,
             "status": self.status.value,
+            "pair_key": self.pair_key,
         }
 
+
+# =============================================================================
+# QUOTE
+# =============================================================================
 
 @dataclass
 class Quote:
     """
     Quote from a DEX.
     
-    Per Roadmap M1.1: Contains block_number, timestamp, gas_estimate, ticks_crossed.
+    Per Roadmap M1.1: Contains pool, direction, block_number, timestamp_ms, gas_estimate, ticks_crossed.
+    """
+    pool: Pool
+    direction: TradeDirection
+    token_in: Token
+    token_out: Token
+    amount_in: int  # wei
+    amount_out: int  # wei
+    block_number: int
+    timestamp_ms: int
+    gas_estimate: int
+    ticks_crossed: int = 0
+    sqrt_price_x96_after: Optional[int] = None
+    latency_ms: int = 0
     
-    amount_in/amount_out are int (wei) for internal calculations,
-    but converted to string when serialized.
+    @property
+    def is_fresh(self) -> bool:
+        """Check if quote is fresh (within freshness threshold)."""
+        from core.time import now_ms
+        age_ms = now_ms() - self.timestamp_ms
+        return age_ms <= DEFAULT_QUOTE_FRESHNESS_MS
+    
+    @property
+    def effective_price(self) -> Decimal:
+        """
+        Calculate effective price (amount_out / amount_in) normalized by decimals.
+        
+        Returns price in terms of token_out per token_in.
+        """
+        if self.amount_in == 0:
+            return Decimal("0")
+        
+        # Normalize by decimals
+        amount_in_normalized = Decimal(self.amount_in) / Decimal(10 ** self.token_in.decimals)
+        amount_out_normalized = Decimal(self.amount_out) / Decimal(10 ** self.token_out.decimals)
+        
+        if amount_in_normalized == 0:
+            return Decimal("0")
+        
+        return amount_out_normalized / amount_in_normalized
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pool_address": self.pool.pool_address,
+            "direction": self.direction.value,
+            "token_in": self.token_in.symbol,
+            "token_out": self.token_out.symbol,
+            "amount_in": str(self.amount_in),
+            "amount_out": str(self.amount_out),
+            "block_number": self.block_number,
+            "timestamp_ms": self.timestamp_ms,
+            "gas_estimate": self.gas_estimate,
+            "ticks_crossed": self.ticks_crossed,
+            "effective_price": str(self.effective_price),
+            "is_fresh": self.is_fresh,
+        }
+
+
+# =============================================================================
+# QUOTE CURVE
+# =============================================================================
+
+@dataclass
+class QuoteCurve:
+    """Quote curve for analyzing price impact."""
+    
+    pool: Pool
+    direction: TradeDirection
+    amounts_in: List[int]
+    amounts_out: List[int]
+    block_number: int
+    timestamp_ms: int
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pool_address": self.pool.pool_address,
+            "direction": self.direction.value,
+            "amounts_in": [str(a) for a in self.amounts_in],
+            "amounts_out": [str(a) for a in self.amounts_out],
+            "block_number": self.block_number,
+            "timestamp_ms": self.timestamp_ms,
+        }
+
+
+# =============================================================================
+# PNL BREAKDOWN
+# =============================================================================
+
+@dataclass
+class PnLBreakdown:
+    """
+    PnL breakdown per Roadmap M1.4.
+    
+    Every "profit" has breakdown: revenue, cost, gas, fees, slippage.
+    """
+    gross_revenue: Decimal
+    gross_cost: Decimal
+    gas_cost: Decimal
+    dex_fee: Decimal
+    slippage_cost: Decimal
+    net_pnl: Decimal
+    settlement_currency: str = "USDC"
+    
+    @property
+    def net_bps(self) -> Decimal:
+        """Calculate net PnL in basis points."""
+        if self.gross_cost == 0:
+            return Decimal("0")
+        return (self.net_pnl / self.gross_cost) * Decimal("10000")
+    
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "gross_revenue": str(self.gross_revenue),
+            "gross_cost": str(self.gross_cost),
+            "gas_cost": str(self.gas_cost),
+            "dex_fee": str(self.dex_fee),
+            "slippage_cost": str(self.slippage_cost),
+            "net_pnl": str(self.net_pnl),
+            "net_bps": str(self.net_bps),
+            "settlement_currency": self.settlement_currency,
+        }
+
+
+# =============================================================================
+# REJECT REASON (Model, not Enum)
+# =============================================================================
+
+@dataclass
+class RejectReason:
+    """Reject reason with error code and details."""
+    
+    code: "ErrorCode"
+    message: str
+    details: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "code": self.code.value,
+            "message": self.message,
+            "details": self.details,
+        }
+
+
+# =============================================================================
+# OPPORTUNITY
+# =============================================================================
+
+@dataclass
+class Opportunity:
+    """
+    Arbitrage opportunity between two legs.
+    """
+    id: str
+    created_at: datetime
+    leg_buy: Quote
+    leg_sell: Quote
+    pnl: Optional[PnLBreakdown] = None
+    status: OpportunityStatus = OpportunityStatus.VALID
+    reject_reason: Optional[RejectReason] = None
+    confidence: float = 0.0
+    
+    @property
+    def is_executable(self) -> bool:
+        """Check if opportunity is executable."""
+        if self.status != OpportunityStatus.VALID:
+            return False
+        if self.pnl is None:
+            return False
+        if self.pnl.net_pnl <= 0:
+            return False
+        return True
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "created_at": self.created_at.isoformat(),
+            "leg_buy": self.leg_buy.to_dict(),
+            "leg_sell": self.leg_sell.to_dict(),
+            "pnl": self.pnl.to_dict() if self.pnl else None,
+            "status": self.status.value,
+            "reject_reason": self.reject_reason.to_dict() if self.reject_reason else None,
+            "confidence": self.confidence,
+            "is_executable": self.is_executable,
+        }
+
+
+# =============================================================================
+# TRADE
+# =============================================================================
+
+@dataclass
+class Trade:
+    """
+    Executed trade record.
+    """
+    id: str
+    opportunity_id: str
+    created_at: datetime
+    status: TradeStatus = TradeStatus.PENDING
+    tx_hash: Optional[str] = None
+    gas_used: Optional[int] = None
+    block_number: Optional[int] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "opportunity_id": self.opportunity_id,
+            "created_at": self.created_at.isoformat(),
+            "status": self.status.value.lower(),
+            "tx_hash": self.tx_hash,
+            "gas_used": self.gas_used,
+            "block_number": self.block_number,
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+        }
+
+
+# =============================================================================
+# LEGACY MODELS (for backwards compatibility)
+# =============================================================================
+
+@dataclass
+class LegacyQuote:
+    """
+    Legacy Quote model for backwards compatibility.
+    
+    Per Roadmap M1.1: Contains block_number, timestamp, gas_estimate, ticks_crossed
     """
     pool_address: str
     token_in: str
     token_out: str
-    amount_in: int  # wei as int for calculations
-    amount_out: int  # wei as int for calculations
+    amount_in: str  # wei as string
+    amount_out: str  # wei as string
     
     # Metadata per M1.1
     block_number: int = 0
@@ -126,28 +402,17 @@ class Quote:
     # Price (derived)
     price: str = "0"  # amount_out / amount_in normalized
     
-    # Extended fields for adapter compatibility
-    pool: Optional[Pool] = None
-    direction: str = ""  # "0to1" or "1to0"
-    token_in_obj: Optional[Token] = None
-    token_out_obj: Optional[Token] = None
-    timestamp_ms: int = 0
-    sqrt_price_x96_after: Optional[int] = None
-    latency_ms: int = 0
-    
     def __post_init__(self):
         if not self.timestamp:
             self.timestamp = datetime.now(timezone.utc).isoformat()
-        if not self.timestamp_ms:
-            self.timestamp_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "pool_address": self.pool_address,
             "token_in": self.token_in,
             "token_out": self.token_out,
-            "amount_in": str(self.amount_in),  # Convert to string for JSON
-            "amount_out": str(self.amount_out),  # Convert to string for JSON
+            "amount_in": self.amount_in,
+            "amount_out": self.amount_out,
             "block_number": self.block_number,
             "timestamp": self.timestamp,
             "gas_estimate": self.gas_estimate,
@@ -156,155 +421,4 @@ class Quote:
             "dex": self.dex,
             "fee_tier": self.fee_tier,
             "price": self.price,
-        }
-
-
-@dataclass
-class Opportunity:
-    """
-    Arbitrage opportunity between two quotes.
-    
-    All money fields as strings per Roadmap 3.2.
-    """
-    spread_id: str
-    quote_buy: Quote
-    quote_sell: Quote
-    
-    # PnL (all as string)
-    gross_pnl_usdc: str = "0.000000"
-    fees_usdc: str = "0.000000"
-    gas_cost_usdc: str = "0.000000"
-    net_pnl_usdc: str = "0.000000"
-    net_pnl_bps: str = "0.00"
-    
-    # Status
-    is_profitable: bool = False
-    is_executable: bool = False
-    reject_reason: Optional[RejectReason] = None
-    
-    # Confidence
-    confidence: float = 0.0
-    
-    # Metadata
-    timestamp: str = ""
-    notional_usdc: str = "0.000000"
-    
-    def __post_init__(self):
-        if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "spread_id": self.spread_id,
-            "quote_buy": self.quote_buy.to_dict(),
-            "quote_sell": self.quote_sell.to_dict(),
-            "gross_pnl_usdc": self.gross_pnl_usdc,
-            "fees_usdc": self.fees_usdc,
-            "gas_cost_usdc": self.gas_cost_usdc,
-            "net_pnl_usdc": self.net_pnl_usdc,
-            "net_pnl_bps": self.net_pnl_bps,
-            "is_profitable": self.is_profitable,
-            "is_executable": self.is_executable,
-            "reject_reason": self.reject_reason.value if self.reject_reason else None,
-            "confidence": self.confidence,
-            "timestamp": self.timestamp,
-            "notional_usdc": self.notional_usdc,
-        }
-
-
-@dataclass
-class Trade:
-    """
-    Executed trade record.
-    
-    All money fields as strings per Roadmap 3.2.
-    """
-    trade_id: str
-    spread_id: str
-    outcome: TradeOutcome
-    
-    # Amounts (string)
-    amount_in_usdc: str = "0.000000"
-    amount_out_usdc: str = "0.000000"
-    
-    # PnL (string)
-    expected_pnl_usdc: str = "0.000000"
-    realized_pnl_usdc: str = "0.000000"
-    
-    # Costs (string)
-    gas_paid_usdc: str = "0.000000"
-    slippage_usdc: str = "0.000000"
-    
-    # Execution details
-    tx_hash: Optional[str] = None
-    block_number: int = 0
-    timestamp: str = ""
-    
-    # Error info
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    
-    def __post_init__(self):
-        if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "trade_id": self.trade_id,
-            "spread_id": self.spread_id,
-            "outcome": self.outcome.value,
-            "amount_in_usdc": self.amount_in_usdc,
-            "amount_out_usdc": self.amount_out_usdc,
-            "expected_pnl_usdc": self.expected_pnl_usdc,
-            "realized_pnl_usdc": self.realized_pnl_usdc,
-            "gas_paid_usdc": self.gas_paid_usdc,
-            "slippage_usdc": self.slippage_usdc,
-            "tx_hash": self.tx_hash,
-            "block_number": self.block_number,
-            "timestamp": self.timestamp,
-            "error_code": self.error_code,
-            "error_message": self.error_message,
-        }
-
-
-@dataclass 
-class PnLBreakdown:
-    """
-    PnL breakdown per Roadmap M1.4.
-    
-    Every "profit" has breakdown: fee + gas + slippage + currency basis.
-    All fields as string.
-    """
-    gross_pnl: str = "0.000000"
-    dex_fees: str = "0.000000"
-    cex_fees: str = "0.000000"
-    gas_cost: str = "0.000000"
-    slippage_cost: str = "0.000000"
-    currency_basis: str = "0.000000"  # USDC/USDT conversion cost
-    net_pnl: str = "0.000000"
-    
-    numeraire: str = "USDC"
-    
-    def calculate_net(self) -> str:
-        """Calculate net PnL from components."""
-        from decimal import Decimal
-        
-        gross = Decimal(self.gross_pnl)
-        fees = Decimal(self.dex_fees) + Decimal(self.cex_fees)
-        costs = Decimal(self.gas_cost) + Decimal(self.slippage_cost) + Decimal(self.currency_basis)
-        
-        net = gross - fees - costs
-        self.net_pnl = format_money(net)
-        return self.net_pnl
-    
-    def to_dict(self) -> Dict[str, str]:
-        return {
-            "gross_pnl": self.gross_pnl,
-            "dex_fees": self.dex_fees,
-            "cex_fees": self.cex_fees,
-            "gas_cost": self.gas_cost,
-            "slippage_cost": self.slippage_cost,
-            "currency_basis": self.currency_basis,
-            "net_pnl": self.net_pnl,
-            "numeraire": self.numeraire,
         }

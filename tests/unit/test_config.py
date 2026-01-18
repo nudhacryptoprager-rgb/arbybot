@@ -57,7 +57,8 @@ class TestConfigLoading(unittest.TestCase):
         strategy = load_strategy()
         
         self.assertIsInstance(strategy, dict)
-        self.assertIn("sizes_usd", strategy)
+        self.assertIn("quote", strategy)
+        self.assertIn("sizes_usd", strategy["quote"])
     
     def test_get_chain_config(self):
         """Can get specific chain config."""

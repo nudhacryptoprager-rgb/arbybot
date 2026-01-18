@@ -6,8 +6,17 @@ Freshness rules and block pinning helpers per Roadmap M1.1.
 """
 
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
+
+
+@dataclass
+class BlockPin:
+    """Block number and timestamp for freshness tracking."""
+    
+    block_number: int
+    timestamp_ms: int
 
 
 def now_utc() -> datetime:

@@ -23,12 +23,88 @@ DEFAULT_MIN_NET_BPS = 10
 DEFAULT_COOLDOWN_SECONDS = 60
 DEFAULT_MAX_LATENCY_MS = 2000
 
+# Freshness defaults
+DEFAULT_QUOTE_FRESHNESS_MS = 3000  # 3 seconds
+
 # Capital defaults
 DEFAULT_NOTION_CAPITAL_USDC = "10000.000000"
 
 
+class DexType(str, Enum):
+    """DEX types supported by ARBY."""
+    
+    UNISWAP_V2 = "UNISWAP_V2"
+    UNISWAP_V3 = "UNISWAP_V3"
+    ALGEBRA = "ALGEBRA"
+    CURVE = "CURVE"
+    BALANCER = "BALANCER"
+    VELODROME = "VELODROME"
+    AERODROME = "AERODROME"
+    CAMELOT = "CAMELOT"
+    PANCAKESWAP = "PANCAKESWAP"
+
+
+class TokenStatus(str, Enum):
+    """Token status for ARBY."""
+    
+    VERIFIED = "VERIFIED"
+    UNVERIFIED = "UNVERIFIED"
+    BLACKLISTED = "BLACKLISTED"
+    UNKNOWN = "UNKNOWN"
+
+
+class PoolStatus(str, Enum):
+    """Pool status codes."""
+    
+    ACTIVE = "ACTIVE"
+    DISABLED = "DISABLED"
+    QUARANTINED = "QUARANTINED"
+    STALE = "STALE"
+    UNKNOWN = "UNKNOWN"
+
+
+class TradeDirection(str, Enum):
+    """Trade direction."""
+    
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class TradeStatus(str, Enum):
+    """Trade execution status."""
+    
+    PENDING = "PENDING"
+    SUBMITTED = "SUBMITTED"
+    CONFIRMED = "CONFIRMED"
+    FAILED = "FAILED"
+    REVERTED = "REVERTED"
+
+
+class OpportunityStatus(str, Enum):
+    """Opportunity status."""
+    
+    VALID = "VALID"
+    REJECTED = "REJECTED"
+    EXECUTED = "EXECUTED"
+    EXPIRED = "EXPIRED"
+
+
+class TradeOutcome(str, Enum):
+    """Trade outcome codes."""
+    
+    WOULD_EXECUTE = "WOULD_EXECUTE"
+    REJECTED = "REJECTED"
+    BLOCKED = "BLOCKED"
+    EXECUTED = "EXECUTED"
+    FAILED = "FAILED"
+
+
 class RejectReason(str, Enum):
-    """Reject reason codes per Roadmap 3.4."""
+    """Reject reason codes per Roadmap 3.4.
+    
+    Note: This enum is kept for backwards compatibility.
+    New code should use ErrorCode from core.exceptions.
+    """
     
     # Quote failures
     QUOTE_REVERT = "QUOTE_REVERT"
@@ -63,66 +139,4 @@ class RejectReason(str, Enum):
     
     # Other
     UNSUPPORTED_DEX_TYPE = "UNSUPPORTED_DEX_TYPE"
-    UNKNOWN = "UNKNOWN"
-
-
-class TradeOutcome(str, Enum):
-    """Trade outcome codes."""
-    
-    WOULD_EXECUTE = "WOULD_EXECUTE"
-    REJECTED = "REJECTED"
-    BLOCKED = "BLOCKED"
-    EXECUTED = "EXECUTED"
-    FAILED = "FAILED"
-
-
-class DexType(str, Enum):
-    """DEX protocol types for adapter selection."""
-    
-    UNISWAP_V2 = "uniswap_v2"
-    UNISWAP_V3 = "uniswap_v3"
-    ALGEBRA = "algebra"  # Camelot, etc.
-    CURVE = "curve"
-    BALANCER = "balancer"
-    VELODROME = "velodrome"
-    AERODROME = "aerodrome"
-
-
-class PoolStatus(str, Enum):
-    """Pool lifecycle status for registry management."""
-    
-    ACTIVE = "ACTIVE"              # Pool is active and quotable
-    DISABLED = "DISABLED"          # Manually disabled
-    QUARANTINED = "QUARANTINED"    # Temporarily blocked due to errors
-    STALE = "STALE"                # Data is outdated
-    UNKNOWN = "UNKNOWN"            # Status not yet determined
-
-
-class ErrorCode(str, Enum):
-    """
-    Error codes for adapters and exceptions.
-    
-    Aligns with RejectReason but provides a flat namespace for error handling.
-    """
-    
-    # Quote errors
-    QUOTE_REVERT = "QUOTE_REVERT"
-    QUOTE_TIMEOUT = "QUOTE_TIMEOUT"
-    QUOTE_EMPTY = "QUOTE_EMPTY"
-    QUOTE_INVALID = "QUOTE_INVALID"
-    
-    # Infrastructure errors
-    INFRA_RPC_ERROR = "INFRA_RPC_ERROR"
-    INFRA_TIMEOUT = "INFRA_TIMEOUT"
-    INFRA_RATE_LIMIT = "INFRA_RATE_LIMIT"
-    
-    # Price/sanity errors
-    PRICE_SANITY_FAILED = "PRICE_SANITY_FAILED"
-    SLIPPAGE_TOO_HIGH = "SLIPPAGE_TOO_HIGH"
-    TICKS_CROSSED_TOO_MANY = "TICKS_CROSSED_TOO_MANY"
-    
-    # Liquidity errors
-    LIQUIDITY_TOO_LOW = "LIQUIDITY_TOO_LOW"
-    
-    # Unknown
     UNKNOWN = "UNKNOWN"
