@@ -1,62 +1,44 @@
-# PATH: README.md
-# ARBY - Cryptocurrency Arbitrage Bot
+# Golden Fixtures: Smoke Test Baseline
 
-## Overview
+This directory contains reference artifacts from smoke test runs.
+These are committed to git as reproducible baselines for review.
 
-ARBY is a cryptocurrency arbitrage bot designed to identify and execute profitable 
-DEX-to-DEX arbitrage opportunities across multiple Layer 2 networks.
+## Contents
 
-## Project Structure
-```
-arby/
-├── config/           # Configuration files (chains, dexes, tokens)
-├── core/             # Core utilities (math, logging, models)
-├── strategy/         # Trading strategy and paper trading
-│   ├── jobs/         # CLI entry points
-│   └── paper_trading.py
-├── monitoring/       # Health monitoring and truth reports
-├── tests/            # Unit and integration tests
-│   └── unit/
-└── data/             # Runtime data (runs, snapshots)
-```
+- `scan_*.json` - Scan snapshot with stats, reject histogram, opportunities
+- `truth_report_*.json` - Truth report with health, PnL, RPC metrics
+- `reject_histogram_*.json` - Reject reason counts
+- `scan.log.txt` - Log file (renamed from .log for git)
 
-## Quick Start
-```bash
-# Install dependencies
-pip install -e ".[dev]"
+## Usage
 
-# Run tests
-pytest tests/unit/ -v
+Compare new smoke runs against these baselines:
 
-# Run SMOKE scan
-python -m strategy.jobs.run_scan --cycles 1 --output-dir data/runs/smoke_test
+```powershell
+# Run smoke test
+python -m strategy.jobs.run_scan --cycles 1 --output-dir data/runs/verify
+
+# Compare outputs
+diff data/runs/verify/reports/truth_report_*.json docs/artifacts/smoke/*/truth_report_*.json
 ```
 
-## Key Features
+## When to Update
 
-- **No Float Money**: All money values use Decimal/string (Roadmap 3.2)
-- **Structured Logging**: Context via `extra={"context": {...}}` (Roadmap A)
-- **RPC Health Tracking**: Consistent metrics with reject histogram
-- **Paper Trading**: Simulated execution with PnL tracking
+Update golden fixtures when:
+1. Schema changes (new fields added)
+2. Logic changes (different reject reasons)
+3. Significant improvement in metrics
 
-## Testing
-```bash
-# Run all unit tests
-pytest tests/unit/ -v
+Always document changes in PR description.
 
-# Run specific test files
-pytest tests/unit/test_error_contract.py -v
-pytest tests/unit/test_paper_trading.py -v
-pytest tests/unit/test_confidence.py -v
+## Structure
+
 ```
-
-## Configuration
-
-See `config/` directory for:
-- `chains.yaml` - Network configuration
-- `dexes.yaml` - DEX protocol anchors
-- `strategy.yaml` - Trading parameters
-
-## License
-
-MIT
+docs/artifacts/smoke/
+└── YYYYMMDD/
+    ├── README.md
+    ├── scan_YYYYMMDD_HHMMSS.json
+    ├── truth_report_YYYYMMDD_HHMMSS.json
+    ├── reject_histogram_YYYYMMDD_HHMMSS.json
+    └── scan.log.txt
+```

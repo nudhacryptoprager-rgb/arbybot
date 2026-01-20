@@ -23,8 +23,9 @@ wheels/
 
 # Virtual environments
 venv/
-.venv/
 ENV/
+env/
+.venv/
 
 # IDE
 .idea/
@@ -32,13 +33,6 @@ ENV/
 *.swp
 *.swo
 *~
-# keep useful VSCode tasks/settings (tracked)
-!.vscode/tasks.json
-!.vscode/settings.json
-
-# allow committed sample artifacts (golden fixtures)
-!docs/artifacts/**
-!tests/fixtures/**
 
 # Testing
 .pytest_cache/
@@ -47,53 +41,28 @@ htmlcov/
 .tox/
 .nox/
 
-# Environment
-.env
-.env.local
-*.env
-
-# Data (keep structure, ignore contents)
-data/runs/
-data/snapshots/
-data/trades/
-data/reports/
-data/*.sqlite
-data/*.db
-
 # Logs
 *.log
 logs/
+
+# Runtime data - NOT committed (Step 9)
+data/runs/
+data/cache/
+
+# Golden fixtures - ALLOWED (Step 8)
+!docs/artifacts/
+!docs/artifacts/**
+
+# Local config
+.env
+.env.local
+*.local.yaml
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Secrets
-*.pem
+# Secrets (never commit)
 *.key
+*.pem
 secrets/
-```
-```
-# PATH: .env.example
-# ARBY Environment Configuration
-
-# RPC Endpoints (optional overrides)
-ARBITRUM_RPC_URL=https://arb1.arbitrum.io/rpc
-BASE_RPC_URL=https://mainnet.base.org
-LINEA_RPC_URL=https://rpc.linea.build
-MANTLE_RPC_URL=https://rpc.mantle.xyz
-
-# Private key (for execution - NEVER commit real keys!)
-PRIVATE_KEY=
-
-# API Keys (optional)
-DEXSCREENER_API_KEY=
-TENDERLY_API_KEY=
-
-# Monitoring
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-
-# Logging
-LOG_LEVEL=INFO
-LOG_FORMAT=console  # console or json

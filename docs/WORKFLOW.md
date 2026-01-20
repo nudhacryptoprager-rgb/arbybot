@@ -1,42 +1,32 @@
-﻿# ARBY3 Dev Workflow (Windows + PR)
+﻿# ARBY3 Workflow (ChatGPT ↔ Claude ↔ VSCode ↔ GitHub)
 
-## Rule #1: PR is the workspace
-Everything needed to continue work must be in the PR:
-- docs/Status_*.md updated
-- artifacts under data/runs/YYYY-MM-DD/<run_id>/
-- brief log snippet or scan.log.txt
+## Джерело істини
+- Завжди: GitHub repo + Branch + HEAD SHA + Diff/Compare + актуальний Status*.md + артефакти runDir.
+- Будь-яка зміна вважається “існуючою” лише після пуша в GitHub.
 
-## Standard cycle
-1) Create a branch
-   - git checkout -b m3/<topic>
+## PR правила
+- 1 PR = 1 задача. 1–2 коміти максимум.
+- Заборонено “megapack” без розбиття на логічні PR.
+- PR не приймається, якщо `python -m pytest -q` не зелений.
 
-2) Create run folder
-   - powershell -ExecutionPolicy Bypass -File tools/new_run.ps1 -RunId "smoke_01"
-   - copy the printed path
+## Мінімальний verify перед пушем (Windows PowerShell)
+- `python -m pytest -q`
+- `python -m strategy.jobs.run_scan --cycles 1 --output-dir data\runs\session_<ts>`
+- Артефакти повинні створитись: scan_*.json, truth_report_*.json, reject_histogram_*.json, scan.log(+ paper_trades якщо є)
 
-3) Run scan and capture log
-   - Run from VS Code task OR terminal
-   - Save console output to: data/runs/<date>/<run_id>/scan.log.txt
-   - Ensure truth_report/reject_histogram/snapshots are in same folder (copy or export)
+## Артефакти і Git
+- `data/runs/**` НЕ комітимо (runtime).
+- Комітимо лише “golden fixtures” у `docs/artifacts/<type>/<date>/` (4 json + scan.log.txt + README.md).
+- Копіпаст дозволений тільки для коротких логів/traceback (5–30 рядків), не як заміна GitHub.
 
-4) Update docs/Status_*.md
-   - include:
-     - what changed
-     - how to reproduce
-     - key metrics (attempted/fetched/passed, top reject reasons)
-     - link to run folder path
+## Формат повідомлення для рев’ю (ChatGPT/Claude)
+- Repo, Branch, HEAD SHA
+- Compare link: `.../compare/main...<branch>` або `<oldSHA>...<newSHA>`
+- Status*.md permalink
+- `git diff --name-only origin/main...HEAD` (вставити список)
+- Посилання/файли golden artifacts (або прикріплення)
 
-5) Commit + push
-   - git add .
-   - git commit -m "M3: <topic> (run artifacts + status)"
-   - git push -u origin <branch>
-
-6) Open PR
-   - Fill PR template
-   - Link run folder + artifacts
-
-## Assistant context block (paste into Claude/ChatGPT)
-- PR link:
-- Status file:
-- Run folder:
-- Goal / expected outcome:
+## Ролі
+- Claude: робить зміни в коді, дрібні PR, зелений pytest, оновлює Status*.md.
+- ChatGPT: жорсткий рев’ю (10 проблем + 10 кроків), аналізує артефакти/Status/Roadmap.
+- Я: координатор (VSCode/GitHub), запускаєш verify-команди, додаєш артефакти, менеджиш PR.
