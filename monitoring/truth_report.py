@@ -5,12 +5,31 @@ Truth report module for ARBY.
 Generates truthful metrics and health reports for scan cycles.
 Ensures RPC health consistency with reject histogram.
 
-Semantic contract:
-- mode: TruthReport mode ("REGISTRY", "DISCOVERY") - legacy, for backwards compat
-- run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL") - new field
+SEMANTIC CONTRACT (Step 8):
+- mode: TruthReport data source mode
+    - "REGISTRY": Using registry for pool discovery
+    - "DISCOVERY": Using dynamic discovery
+- run_mode: Scanner runtime execution mode
+    - "SMOKE_SIMULATOR": Simulated quotes (no RPC)
+    - "REGISTRY_REAL": Real RPC quotes
+
+SCHEMA CONTRACT (Step 9):
+Schema version 3.0.0 fields:
+- schema_version, timestamp, mode, run_mode
+- health: rpc_*, quote_*, chains_active, dexes_active, pairs_covered, pools_scanned, top_reject_reasons
+- top_opportunities[]: spread_id, opportunity_id, dex_buy/sell, pool_buy/sell, token_in/out, amount_in/out, net_pnl_usdc/bps, confidence, chain_id
+- stats: spread_ids_*, signals_*, paper_executable_count, execution_ready_count, blocked_spreads
+- revalidation: total, passed, gates_changed, gates_changed_pct
+- cumulative_pnl: total_bps, total_usdc
+- pnl: signal_pnl_bps/usdc, would_execute_pnl_bps/usdc
+- pnl_normalized: notion_capital_numeraire, normalized_return_pct, numeraire
+
+BUMP RULES: Any field addition/removal/rename requires schema bump + migration PR.
 
 Contract invariants:
 - spreads_* = signals_* (1:1 mapping, reserved for post-ranking filtering)
+- spread_ids_executable = "economically executable" (PnL positive after gates)
+- execution_ready_count = "actually ready for on-chain execution" (0 in SMOKE mode)
 """
 
 import json
@@ -25,7 +44,7 @@ from core.format_money import format_money, format_money_short
 
 logger = logging.getLogger("monitoring.truth_report")
 
-# Keep at 3.0.0 until migration plan is ready
+# SCHEMA CONTRACT: Keep at 3.0.0. Bump requires migration PR.
 SCHEMA_VERSION = "3.0.0"
 
 
@@ -73,9 +92,7 @@ class RPCHealthMetrics:
         self.quote_call_attempts += 1
 
     def reconcile_with_rejects(self, reject_histogram: Dict[str, int]) -> None:
-        """
-        Ensure health metrics are consistent with reject histogram.
-        """
+        """Ensure health metrics are consistent with reject histogram."""
         infra_rpc_errors = reject_histogram.get("INFRA_RPC_ERROR", 0)
 
         if infra_rpc_errors > 0 and self.rpc_failed_count < infra_rpc_errors:
@@ -101,9 +118,7 @@ def calculate_confidence(
     freshness_score: float = 1.0,
     adapter_reliability: float = 1.0,
 ) -> float:
-    """
-    Calculate confidence score for an opportunity.
-    """
+    """Calculate confidence score for an opportunity."""
     weights = {
         "quote_fetch": 0.25,
         "quote_gate": 0.25,
@@ -128,9 +143,7 @@ def build_health_section(
     reject_histogram: Dict[str, int],
     rpc_metrics: Optional[RPCHealthMetrics] = None,
 ) -> Dict[str, Any]:
-    """
-    Build the health section for truth_report.
-    """
+    """Build the health section for truth_report."""
     if rpc_metrics is None:
         rpc_metrics = RPCHealthMetrics()
 
@@ -167,13 +180,21 @@ class TruthReport:
     
     All money values are strings per Roadmap 3.2.
     
-    Fields:
-    - mode: Legacy TruthReport mode ("REGISTRY", "DISCOVERY") - backwards compat
-    - run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL") - new
+    Fields (Step 8 - Semantic Documentation):
+    - mode: TruthReport data source mode ("REGISTRY", "DISCOVERY")
+        Used for: categorizing the scan approach
+        Default: "REGISTRY"
+    - run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL")
+        Used for: distinguishing simulated vs real execution
+        Default: "SMOKE_SIMULATOR"
+    
+    Stats semantics (Step 6):
+    - spread_ids_executable: "economically executable" - passed all gates, PnL > 0
+    - execution_ready_count: "ready for on-chain execution" - 0 in SMOKE mode
     """
     timestamp: str = ""
-    mode: str = "REGISTRY"  # Legacy: TruthReport mode (REGISTRY/DISCOVERY)
-    run_mode: str = "SMOKE_SIMULATOR"  # New: Scanner runtime mode
+    mode: str = "REGISTRY"  # TruthReport data source mode
+    run_mode: str = "SMOKE_SIMULATOR"  # Scanner runtime mode
     health: Dict[str, Any] = field(default_factory=dict)
     top_opportunities: List[Dict[str, Any]] = field(default_factory=list)
     stats: Dict[str, Any] = field(default_factory=dict)
@@ -191,8 +212,8 @@ class TruthReport:
         return {
             "schema_version": SCHEMA_VERSION,
             "timestamp": self.timestamp,
-            "mode": self.mode,  # Legacy field - keep for backwards compat
-            "run_mode": self.run_mode,  # New field - scanner runtime mode
+            "mode": self.mode,
+            "run_mode": self.run_mode,
             "health": self.health,
             "top_opportunities": self.top_opportunities,
             "stats": self.stats,
@@ -220,8 +241,8 @@ def build_truth_report(
     opportunities: List[Dict[str, Any]],
     paper_session_stats: Optional[Dict[str, Any]] = None,
     rpc_metrics: Optional[RPCHealthMetrics] = None,
-    mode: str = "REGISTRY",  # Legacy: TruthReport mode
-    run_mode: str = "SMOKE_SIMULATOR",  # New: Scanner runtime mode
+    mode: str = "REGISTRY",
+    run_mode: str = "SMOKE_SIMULATOR",
 ) -> TruthReport:
     """
     Build a complete truth report from scan data.
@@ -232,73 +253,55 @@ def build_truth_report(
         opportunities: List of opportunity dicts
         paper_session_stats: Stats from paper trading session
         rpc_metrics: RPC health metrics
-        mode: TruthReport mode ("REGISTRY", "DISCOVERY") - legacy
-        run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL") - new
-    
-    Returns:
-        TruthReport instance with all fields populated
+        mode: TruthReport mode ("REGISTRY", "DISCOVERY")
+        run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL")
     """
-    # Build health section
     health = build_health_section(scan_stats, reject_histogram, rpc_metrics)
 
-    # Normalize opportunities - ensure all required fields present
+    # Normalize opportunities
     normalized_opps = []
     for opp in opportunities:
         normalized_opp = {
-            # Required identification
             "spread_id": opp.get("spread_id", "unknown"),
             "opportunity_id": opp.get("opportunity_id") or opp.get("spread_id", "unknown"),
-            
-            # Full DEX/pool/token context (NEVER None)
             "dex_buy": opp.get("dex_buy") or opp.get("dex_a") or "unknown",
             "dex_sell": opp.get("dex_sell") or opp.get("dex_b") or "unknown",
             "pool_buy": opp.get("pool_buy") or opp.get("pool_a") or "unknown",
             "pool_sell": opp.get("pool_sell") or opp.get("pool_b") or "unknown",
             "token_in": opp.get("token_in") or "unknown",
             "token_out": opp.get("token_out") or "unknown",
-            
-            # Amounts
             "amount_in": opp.get("amount_in") or opp.get("amount_in_numeraire") or "0",
             "amount_out": opp.get("amount_out") or "0",
-            
-            # PnL
             "net_pnl_usdc": opp.get("net_pnl_usdc", "0.000000"),
             "net_pnl_bps": opp.get("net_pnl_bps", "0.00"),
-            
-            # Confidence
             "confidence": opp.get("confidence", 0.0),
-            
-            # Chain
             "chain_id": opp.get("chain_id", 0),
         }
         normalized_opps.append(normalized_opp)
 
-    # Sort by PnL and take top 10
     top_opps = sorted(
         normalized_opps,
         key=lambda x: Decimal(str(x.get("net_pnl_usdc", "0"))),
         reverse=True
     )[:10]
 
-    # Stats with spreads↔signals invariant
+    # Stats with Step 6 semantics
     spread_total = scan_stats.get("spread_ids_total", 0)
     spread_profitable = scan_stats.get("spread_ids_profitable", 0)
-    spread_executable = scan_stats.get("spread_ids_executable", 0)
+    spread_executable = scan_stats.get("spread_ids_executable", 0)  # economically executable
     
     stats = {
         "spread_ids_total": spread_total,
         "spread_ids_profitable": spread_profitable,
-        "spread_ids_executable": spread_executable,
-        # signals = spreads (invariant)
+        "spread_ids_executable": spread_executable,  # Step 6: economically executable
         "signals_total": spread_total,
         "signals_profitable": spread_profitable,
         "signals_executable": spread_executable,
         "paper_executable_count": scan_stats.get("paper_executable_count", 0),
-        "execution_ready_count": scan_stats.get("execution_ready_count", 0),
+        "execution_ready_count": scan_stats.get("execution_ready_count", 0),  # Step 6: 0 in SMOKE
         "blocked_spreads": scan_stats.get("blocked_spreads", 0),
     }
 
-    # Revalidation stats
     revalidation = {
         "total": scan_stats.get("revalidation_total", 0),
         "passed": scan_stats.get("revalidation_passed", 0),
@@ -308,13 +311,11 @@ def build_truth_report(
         ),
     }
 
-    # PnL from paper session
     paper_stats = paper_session_stats or {}
     total_pnl_usdc = paper_stats.get("total_pnl_usdc", "0.000000")
     would_execute_pnl_usdc = paper_stats.get("total_pnl_usdc", "0.000000")
     notion_capital = paper_stats.get("notion_capital_usdc", "10000.000000")
 
-    # Calculate normalized return
     normalized_return_pct = None
     try:
         pnl_dec = Decimal(str(total_pnl_usdc))
@@ -347,8 +348,8 @@ def build_truth_report(
     }
 
     return TruthReport(
-        mode=mode,  # Legacy
-        run_mode=run_mode,  # New
+        mode=mode,
+        run_mode=run_mode,
         health=health,
         top_opportunities=top_opps,
         stats=stats,
@@ -387,7 +388,8 @@ def print_truth_report(report: TruthReport) -> None:
     stats = report.stats
     print(f"Total spreads: {stats.get('spread_ids_total', 0)}")
     print(f"Profitable: {stats.get('spread_ids_profitable', 0)}")
-    print(f"Executable: {stats.get('spread_ids_executable', 0)}")
+    print(f"Economically executable: {stats.get('spread_ids_executable', 0)}")
+    print(f"Execution ready: {stats.get('execution_ready_count', 0)}")
     print(f"Blocked: {stats.get('blocked_spreads', 0)}")
 
     print("\n--- TOP OPPORTUNITIES ---")

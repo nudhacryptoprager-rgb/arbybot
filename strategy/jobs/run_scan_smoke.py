@@ -12,6 +12,10 @@ Key features:
 - run_mode field in all outputs
 - Paper trades linked via opportunity_id
 - QUOTE_REVERT with error_class/error_message
+- Step 2: reject_details includes gate_name for debugging
+- Step 3: histogram self-contained with totals
+- Step 4: pool address preserved even on INFRA_RPC_ERROR
+- Step 5: dexes_active counts actual unique dex_ids
 
 Usage:
     python -m strategy.jobs.run_scan_smoke --cycles 1 --output-dir data/runs/smoke
@@ -27,7 +31,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 # Add project root to path
@@ -51,7 +55,7 @@ class RunMode(str, Enum):
     REGISTRY_REAL = "REGISTRY_REAL"
 
 
-# Standardized DEX identifiers (adapter IDs)
+# Standardized DEX identifiers
 KNOWN_DEX_IDS = [
     "uniswap_v3",
     "sushiswap_v3",
@@ -105,10 +109,7 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
 
 
 def _get_simulated_block() -> int:
-    """
-    Get simulated block number based on current timestamp.
-    Not hardcoded - changes with each run.
-    """
+    """Get simulated block number based on timestamp."""
     base_block = 150_000_000
     ts_offset = int(time.time()) % 1_000_000
     return base_block + ts_offset
@@ -121,8 +122,8 @@ def _make_forensic_sample(
     token_in: str,
     token_out: str,
     amount_in: str,
-    amount_out: Optional[str],  # Can be null
-    gas_estimate: Optional[int],  # Can be null
+    amount_out: Optional[str],
+    gas_estimate: Optional[int],
     reject_reason: Optional[str] = None,
     reject_details: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -155,6 +156,9 @@ def _make_quote_revert_details(
 ) -> Dict[str, Any]:
     """Create QUOTE_REVERT reject details with error info."""
     return {
+        # Step 2: Add gate_name for debugging
+        "gate_name": "quote_execution",
+        "reason_family": "REVERT",
         "fn_or_selector": fn_or_selector,
         "params_summary": params_summary,
         "rpc_provider_tag": rpc_provider_tag,
@@ -175,14 +179,28 @@ def _make_slippage_details(
     deviation_bps: int,
     block_number: int,
 ) -> Dict[str, Any]:
-    """Create SLIPPAGE_TOO_HIGH reject details."""
+    """
+    Create SLIPPAGE_TOO_HIGH reject details.
+    
+    Step 2: Clarify semantics:
+    - gate_name: "slippage_gate" - the gate that triggered rejection
+    - slippage_bps: actual slippage between expected_out and min_out
+    - anchor_price/implied_price/deviation_bps: price sanity context
+    """
     return {
+        # Step 2: Gate identification
+        "gate_name": "slippage_gate",
+        "reason_family": "SLIPPAGE",
+        # Slippage calculation context
         "expected_out": expected_out,
         "min_out": min_out,
         "slippage_bps": slippage_bps,
+        "slippage_note": "slippage_bps = (expected_out - min_out) / expected_out * 10000",
+        # Price sanity context (why anchor is included)
         "implied_price": implied_price,
         "anchor_price": anchor_price,
         "deviation_bps": deviation_bps,
+        "anchor_note": "anchor from CEX/oracle; deviation_bps = price difference used for sanity check",
         "block_number": block_number,
     }
 
@@ -195,13 +213,10 @@ def run_scan_cycle(
     output_dir: Path,
     run_mode: RunMode = RunMode.SMOKE_SIMULATOR,
 ) -> Dict[str, Any]:
-    """
-    Run a single scan cycle.
-    """
+    """Run a single scan cycle."""
     timestamp = datetime.now(timezone.utc)
     timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
 
-    # Get realistic block number
     current_block = _get_simulated_block()
 
     logger.info(
@@ -213,6 +228,9 @@ def run_scan_cycle(
             "block": current_block,
         }}
     )
+
+    # Step 5: Track unique dex_ids for accurate dexes_active count
+    seen_dex_ids: Set[str] = set()
 
     scan_stats = {
         "cycle": cycle_num,
@@ -229,7 +247,7 @@ def run_scan_cycle(
         "signals_profitable": 0,
         "signals_executable": 0,
         "paper_executable_count": 0,
-        "execution_ready_count": 0,
+        "execution_ready_count": 0,  # Step 6: 0 in SMOKE mode
         "blocked_spreads": 0,
         "chains_active": 0,
         "dexes_active": 0,
@@ -251,6 +269,9 @@ def run_scan_cycle(
 
             dex_id = random.choice(KNOWN_DEX_IDS)
             pool_addr = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
+            
+            # Step 5: Track seen dex_ids
+            seen_dex_ids.add(dex_id)
 
             if random.random() > 0.1:
                 latency = random.randint(50, 200)
@@ -319,11 +340,12 @@ def run_scan_cycle(
                 rpc_metrics.record_failure()
                 reject_histogram["INFRA_RPC_ERROR"] = reject_histogram.get("INFRA_RPC_ERROR", 0) + 1
 
+                # Step 4: Keep pool address even on INFRA_RPC_ERROR (when known)
                 if len(sample_rejects) < MAX_FORENSIC_SAMPLES:
                     sample_rejects.append(_make_forensic_sample(
                         quote_id=quote_id,
                         dex_id=dex_id,
-                        pool="unknown",
+                        pool=pool_addr,  # Step 4: NOT "unknown"
                         token_in="WETH",
                         token_out="USDC",
                         amount_in="1000000000000000000",
@@ -331,17 +353,21 @@ def run_scan_cycle(
                         gas_estimate=None,
                         reject_reason="INFRA_RPC_ERROR",
                         reject_details={
+                            "gate_name": "rpc_call",  # Step 2
+                            "reason_family": "INFRA",  # Step 2
                             "rpc_provider_tag": "alchemy_arb_1",
                             "error_class": "TimeoutError",
                             "error_message": "RPC request timed out after 5000ms",
                             "block_number": current_block,
+                            "target_pool": pool_addr,  # Step 4: explicit target
                         },
                     ))
 
         scan_stats["quotes_total"] = 10
         scan_stats["pools_scanned"] = 10
         scan_stats["chains_active"] = 1
-        scan_stats["dexes_active"] = 2
+        # Step 5: dexes_active = actual unique dex_ids seen
+        scan_stats["dexes_active"] = len(seen_dex_ids)
         scan_stats["pairs_covered"] = 5
 
         if scan_stats["quotes_total"] > 0:
@@ -361,6 +387,9 @@ def run_scan_cycle(
             dex_sell = random.choice([d for d in KNOWN_DEX_IDS if d != dex_buy])
             pool_buy = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
             pool_sell = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
+            
+            seen_dex_ids.add(dex_buy)
+            seen_dex_ids.add(dex_sell)
 
             paper_trade = PaperTrade(
                 spread_id=spread_id,
@@ -391,9 +420,10 @@ def run_scan_cycle(
                 if recorded:
                     scan_stats["paper_executable_count"] += 1
                     scan_stats["spread_ids_profitable"] += 1
-                    scan_stats["spread_ids_executable"] += 1
+                    scan_stats["spread_ids_executable"] += 1  # economically executable
                     scan_stats["signals_profitable"] = scan_stats["spread_ids_profitable"]
                     scan_stats["signals_executable"] = scan_stats["spread_ids_executable"]
+                    # execution_ready_count stays 0 in SMOKE mode (Step 6)
 
                     opportunities.append({
                         "spread_id": spread_id,
@@ -423,6 +453,9 @@ def run_scan_cycle(
                     extra={"context": {"spread_id": spread_id, "error_type": type(e).__name__}}
                 )
 
+        # Update final dexes_active
+        scan_stats["dexes_active"] = len(seen_dex_ids)
+
     except Exception as e:
         logger.error(
             f"Cycle error: {e}",
@@ -447,16 +480,23 @@ def run_scan_cycle(
 
     logger.info(f"Snapshot saved: {snapshot_path}")
 
-    # Save reject histogram
+    # Step 3: Save self-contained reject histogram with totals
     reject_path = output_dir / "reports" / f"reject_histogram_{timestamp_str}.json"
     reject_path.parent.mkdir(parents=True, exist_ok=True)
     with open(reject_path, "w", encoding="utf-8") as f:
         json.dump({
             "run_mode": run_mode.value,
+            "timestamp": timestamp.isoformat(),
+            "chain_id": 42161,  # Step 3
+            "current_block": current_block,  # Step 3
+            # Step 3: Add totals for self-contained audit
+            "quotes_total": scan_stats["quotes_total"],
+            "quotes_fetched": scan_stats["quotes_fetched"],
+            "gates_passed": scan_stats["gates_passed"],
             "histogram": reject_histogram,
         }, f, indent=2)
 
-    # Build truth report - mode="REGISTRY" for legacy, run_mode for scanner
+    # Build truth report
     paper_stats = paper_session.get_stats()
     truth_report = build_truth_report(
         scan_stats=scan_stats,
@@ -464,8 +504,8 @@ def run_scan_cycle(
         opportunities=opportunities,
         paper_session_stats=paper_stats,
         rpc_metrics=rpc_metrics,
-        mode="REGISTRY",  # Legacy TruthReport mode
-        run_mode=run_mode.value,  # Scanner runtime mode
+        mode="REGISTRY",
+        run_mode=run_mode.value,
     )
 
     truth_path = output_dir / "reports" / f"truth_report_{timestamp_str}.json"
@@ -475,7 +515,8 @@ def run_scan_cycle(
 
     logger.info(
         f"Scan cycle complete: {scan_stats['quotes_fetched']}/{scan_stats['quotes_total']} fetched, "
-        f"{scan_stats['gates_passed']} passed gates, {scan_stats['spread_ids_executable']} executable",
+        f"{scan_stats['gates_passed']} passed gates, {scan_stats['spread_ids_executable']} executable, "
+        f"{scan_stats['dexes_active']} DEXes active",
         extra={"context": scan_stats}
     )
 

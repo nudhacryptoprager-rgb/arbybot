@@ -1,112 +1,143 @@
-# Status: 10-Step Fix v3 (Backward Compatible)
+# Status: M3 P3 Critical Fixes (Consolidated)
 
 **Date**: 2026-01-21
-**Branch**: chore/claude-megapack
-**Base SHA**: 9909290073be0979b879b5e838e7f0395ce54dfb
-**Source of truth**: docs/Status_M3_P3_10step_fix.md (this file updates it)
+**Branch**: chore/claude-megapack  
+**Base SHA**: a9a6a33e607284e5b1003f4eab5341abb2599c66
 
-## Summary
+> **SOURCE OF TRUTH**: This file replaces all previous Status_*.md files.
+> Previous versions (v2, v3) are deprecated.
 
-Fixes breaking changes from v2 to restore test compatibility while keeping new features.
+## Current State
 
-## Critical Fixes
+✅ All tests passing  
+✅ Backward compatibility maintained (mode + schema 3.0.0)  
+✅ New features added (run_mode, forensic samples, opportunity linking)
 
-### 1. Restore `TruthReport(mode=...)` API ✅
+## 10 Quality Improvements (v4)
 
-**Problem**: Tests use `TruthReport(mode="DISCOVERY")` but v2 renamed to `run_mode`.
+### Step 1: RPC Robustness
+**Status**: Documentation only (architectural change deferred)
 
-**Solution**: Keep BOTH fields:
-- `mode`: Legacy TruthReport mode ("REGISTRY", "DISCOVERY") - default "REGISTRY"
-- `run_mode`: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL") - new field
+Retry/fallback logic requires RPC abstraction layer. Current SMOKE mode doesn't use real RPC.
 
-```python
-@dataclass
-class TruthReport:
-    mode: str = "REGISTRY"  # Legacy
-    run_mode: str = "SMOKE_SIMULATOR"  # New
-```
+### Step 2: Reject Details with Gate Name ✅
 
-**Verify**:
-```powershell
-python -m pytest -q tests\unit\test_truth_report.py -k "to_dict or create_truth_report"
-```
+**Problem**: Can't distinguish "slippage gate" from "anchor deviation".
 
-### 2. Restore `report.mode` Attribute ✅
-
-**Problem**: `TruthReport object has no attribute 'mode'`.
-
-**Solution**: `mode` is now a dataclass field, accessible as `report.mode`.
-
-**Verify**:
-```powershell
-python -c "from monitoring.truth_report import TruthReport; r = TruthReport(); print(r.mode)"
-# Should print: REGISTRY
-```
-
-### 3. Keep `schema_version = "3.0.0"` ✅
-
-**Problem**: v2 bumped to 3.1.0, tests expect 3.0.0.
-
-**Solution**: Reverted to 3.0.0. Schema bumps need migration PR.
-
-**Verify**:
-```powershell
-python -m pytest -q tests\unit\test_truth_report.py::TestTruthReport::test_save_report
-```
-
-### 4. `to_dict()` Includes Both `mode` AND `run_mode` ✅
-
-**Problem**: v2 only had `run_mode`, breaking old consumers.
-
-**Solution**: JSON now includes:
+**Solution**: Added `gate_name` and `reason_family` to reject_details:
 ```json
 {
-  "schema_version": "3.0.0",
-  "mode": "REGISTRY",
-  "run_mode": "SMOKE_SIMULATOR",
-  ...
+  "gate_name": "slippage_gate",
+  "reason_family": "SLIPPAGE",
+  "slippage_note": "slippage_bps = (expected_out - min_out) / expected_out * 10000",
+  "anchor_note": "anchor from CEX/oracle; deviation_bps = price difference used for sanity check"
 }
 ```
 
-**Verify**:
-```powershell
-python -m pytest -q tests\unit\test_truth_report.py::TestTruthReport::test_to_dict
+### Step 3: Self-Contained Histogram ✅
+
+**Problem**: `reject_histogram_*.json` not auditable without snapshot.
+
+**Solution**: Added totals to histogram:
+```json
+{
+  "run_mode": "SMOKE_SIMULATOR",
+  "timestamp": "...",
+  "chain_id": 42161,
+  "current_block": 150123456,
+  "quotes_total": 10,
+  "quotes_fetched": 8,
+  "gates_passed": 5,
+  "histogram": {...}
+}
 ```
 
-### 5. `build_truth_report()` Accepts Both Parameters ✅
+### Step 4: Pool Address on INFRA_RPC_ERROR ✅
 
-**Problem**: Caller code used `mode=`, not `run_mode=`.
+**Problem**: `pool: "unknown"` makes debugging impossible.
 
-**Solution**: Function signature:
+**Solution**: Keep `pool` address when known, add `target_pool` in details:
+```json
+{
+  "pool": "0x...",
+  "reject_details": {
+    "target_pool": "0x...",
+    ...
+  }
+}
+```
+
+### Step 5: Accurate dexes_active Count ✅
+
+**Problem**: 4 dex_ids in data but `dexes_active=2`.
+
+**Solution**: Track actual unique dex_ids seen:
 ```python
-def build_truth_report(
-    ...,
-    mode: str = "REGISTRY",      # Legacy
-    run_mode: str = "SMOKE_SIMULATOR",  # New
-) -> TruthReport:
+seen_dex_ids: Set[str] = set()
+# ... add dex_id on each quote
+scan_stats["dexes_active"] = len(seen_dex_ids)
 ```
 
-### 6. Semantic Clarification ✅
+### Step 6: Executable Semantics Clarified ✅
 
-- `mode`: TruthReport mode (REGISTRY/DISCOVERY) - data source semantic
-- `run_mode`: Scanner runtime mode (SMOKE_SIMULATOR/REGISTRY_REAL) - execution semantic
+**Problem**: "executable" term is ambiguous.
 
-### 7. All Previous v2 Fixes Preserved ✅
+**Solution**: Documented in truth_report.py:
+- `spread_ids_executable`: **economically executable** (passed gates, PnL > 0)
+- `execution_ready_count`: **ready for on-chain execution** (0 in SMOKE mode)
 
-- Real block numbers (timestamp-based, ~150M)
-- `null` instead of `0` for unknown values
-- Standardized `dex_id` naming
-- `opportunity_id` linking in paper trades
-- `error_class`/`error_message` in QUOTE_REVERT
+### Step 7: Paper Trades Contract ✅
+
+**Problem**: No guarantee `opportunity_id`/`spread_id` present.
+
+**Solution**: Added validation in `PaperSession.record_trade()`:
+```python
+def validate(self) -> None:
+    if not self.spread_id or not self.spread_id.strip():
+        raise PaperTradeValidationError("spread_id is required")
+    if not self.opportunity_id or not self.opportunity_id.strip():
+        raise PaperTradeValidationError("opportunity_id is required")
+```
+
+### Step 8: Mode vs Run_Mode Documentation ✅
+
+**Problem**: Devs confuse `mode` and `run_mode`.
+
+**Solution**: Added docstring in truth_report.py:
+```
+SEMANTIC CONTRACT:
+- mode: TruthReport data source mode ("REGISTRY", "DISCOVERY")
+- run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL")
+```
+
+### Step 9: Schema Contract Frozen ✅
+
+**Problem**: Schema changes are "silent" and breaking.
+
+**Solution**: Added schema contract documentation in truth_report.py:
+```
+SCHEMA CONTRACT:
+Schema version 3.0.0 fields: [list of all fields]
+BUMP RULES: Any field addition/removal/rename requires schema bump + migration PR.
+```
+
+### Step 10: Status Consolidation ✅
+
+**Problem**: Multiple Status files, unclear source of truth.
+
+**Solution**: This file is the single source of truth. Deprecated files:
+- docs/Status_10step_fix_v2.md
+- docs/Status_10step_fix_v3.md
+- docs/Status_M3_P3_contracts_fix.md
+- docs/Status_M3_P3_contracts_fix_v2.md
 
 ## Files Changed
 
 | File | Changes |
 |------|---------|
-| `monitoring/truth_report.py` | Restore `mode`, keep `run_mode`, schema 3.0.0 |
-| `strategy/jobs/run_scan_smoke.py` | Pass `mode="REGISTRY"` + `run_mode` |
-| `strategy/jobs/run_scan.py` | Import RunMode |
-| `strategy/paper_trading.py` | opportunity_id field |
+| `monitoring/truth_report.py` | Schema contract, mode/run_mode docs, executable semantics |
+| `strategy/jobs/run_scan_smoke.py` | histogram totals, pool on errors, gate_name, dexes_active |
+| `strategy/paper_trading.py` | spread_id/opportunity_id validation |
 
 ## Verification Commands
 
@@ -114,43 +145,60 @@ def build_truth_report(
 # Full test suite
 python -m pytest -q
 
-# Specific contract tests
-python -m pytest -q tests\unit\test_truth_report.py
-
 # Smoke run
-python -m strategy.jobs.run_scan_smoke --cycles 1 --output-dir data\runs\verify_v3
+python -m strategy.jobs.run_scan_smoke --cycles 1 --output-dir data\runs\verify_v4
 
-# Check outputs
-Get-Content data\runs\verify_v3\reports\truth_report_*.json | Select-String '"mode"'
-Get-Content data\runs\verify_v3\reports\truth_report_*.json | Select-String '"run_mode"'
-Get-Content data\runs\verify_v3\reports\truth_report_*.json | Select-String '"schema_version"'
-# Expected:
-#   "mode": "REGISTRY",
-#   "run_mode": "SMOKE_SIMULATOR",
-#   "schema_version": "3.0.0",
+# Check histogram self-contained (Step 3)
+Get-Content data\runs\verify_v4\reports\reject_histogram_*.json
+# Should have: quotes_total, quotes_fetched, gates_passed
+
+# Check gate_name in rejects (Step 2)
+Get-Content data\runs\verify_v4\snapshots\scan_*.json | ConvertFrom-Json | Select -Expand sample_rejects | Select -First 1 | Select -Expand reject_details
+# Should have: gate_name, reason_family
+
+# Check dexes_active (Step 5)
+Get-Content data\runs\verify_v4\reports\truth_report_*.json | Select-String "dexes_active"
+
+# Check paper_trades has opportunity_id (Step 7)
+Select-String "opportunity_id" data\runs\verify_v4\paper_trades.jsonl
 ```
 
 ## Apply Instructions
 
 ```powershell
-# Copy patched files
+# Copy files
 Copy-Item outputs/monitoring/truth_report.py monitoring/
 Copy-Item outputs/strategy/jobs/run_scan_smoke.py strategy/jobs/
 Copy-Item outputs/strategy/jobs/run_scan.py strategy/jobs/
 Copy-Item outputs/strategy/paper_trading.py strategy/
 
-# Verify tests pass
+# Rename this as the source of truth
+Copy-Item outputs/docs/Status_M3_P3_10step_fix.md docs/
+
+# Verify
 python -m pytest -q
 
 # Commit
 git add -A
-git commit -m "fix: restore TruthReport backward compat (mode + schema 3.0.0)"
+git commit -m "fix: 10 quality improvements (v4) - histogram totals, gate names, dexes_active, validation"
 ```
 
-## Contract Summary
+## Schema 3.0.0 Contract
 
-| Field | Location | Value | Purpose |
-|-------|----------|-------|---------|
-| `schema_version` | JSON | "3.0.0" | Format version |
-| `mode` | TruthReport + JSON | "REGISTRY" | Legacy TruthReport mode |
-| `run_mode` | TruthReport + JSON + snapshot | "SMOKE_SIMULATOR" | Scanner runtime mode |
+Fields guaranteed in truth_report JSON:
+```
+schema_version, timestamp, mode, run_mode
+health: rpc_success_rate, rpc_avg_latency_ms, rpc_total_requests, rpc_failed_requests,
+        quote_fetch_rate, quote_gate_pass_rate, chains_active, dexes_active,
+        pairs_covered, pools_scanned, top_reject_reasons
+top_opportunities[]: spread_id, opportunity_id, dex_buy, dex_sell, pool_buy, pool_sell,
+                     token_in, token_out, amount_in, amount_out, net_pnl_usdc, net_pnl_bps,
+                     confidence, chain_id
+stats: spread_ids_total, spread_ids_profitable, spread_ids_executable,
+       signals_total, signals_profitable, signals_executable,
+       paper_executable_count, execution_ready_count, blocked_spreads
+revalidation: total, passed, gates_changed, gates_changed_pct
+cumulative_pnl: total_bps, total_usdc
+pnl: signal_pnl_bps, signal_pnl_usdc, would_execute_pnl_bps, would_execute_pnl_usdc
+pnl_normalized: notion_capital_numeraire, normalized_return_pct, numeraire
+```

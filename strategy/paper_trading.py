@@ -7,7 +7,12 @@ without actual execution.
 
 All money values are stored as Decimal-strings per Roadmap 3.2 compliance.
 
-Step 7: Added opportunity_id for linking trades to opportunities in reports.
+CONTRACT (Step 7):
+Every PaperTrade MUST have:
+- spread_id: Non-empty string identifying the spread
+- opportunity_id: Non-empty string linking to truth_report opportunities
+
+These are invariants for traceability. Validation enforced in record_trade().
 """
 
 import json
@@ -24,6 +29,11 @@ from core.format_money import format_money, format_money_short
 logger = logging.getLogger("arby.paper_trading")
 
 
+class PaperTradeValidationError(ValueError):
+    """Raised when PaperTrade fails contract validation."""
+    pass
+
+
 @dataclass
 class PaperTrade:
     """
@@ -31,7 +41,9 @@ class PaperTrade:
     
     All money fields are stored as strings (Roadmap 3.2 compliance).
     
-    Step 7: Added opportunity_id for linking to truth_report opportunities.
+    CONTRACT (Step 7):
+    - spread_id: REQUIRED, non-empty
+    - opportunity_id: REQUIRED, non-empty (auto-generated if not provided)
     """
     spread_id: str
     outcome: str  # WOULD_EXECUTE, REJECTED, BLOCKED
@@ -44,14 +56,14 @@ class PaperTrade:
     timestamp: str = ""
     chain_id: int = 0
     
-    # Step 7: Linking fields for traceability
-    opportunity_id: str = ""  # Links to truth_report.top_opportunities
+    # Linking fields for traceability (Step 7)
+    opportunity_id: str = ""
     
-    # DEX context (Step 4: use dex_id naming)
-    dex_a: str = ""  # Buy side DEX ID
-    dex_b: str = ""  # Sell side DEX ID
-    pool_a: str = ""  # Buy side pool address
-    pool_b: str = ""  # Sell side pool address
+    # DEX context
+    dex_a: str = ""
+    dex_b: str = ""
+    pool_a: str = ""
+    pool_b: str = ""
     token_in: str = ""
     token_out: str = ""
     
@@ -72,11 +84,24 @@ class PaperTrade:
         self.expected_pnl_bps = str(self.expected_pnl_bps)
         self.gas_price_gwei = str(self.gas_price_gwei)
 
+    def validate(self) -> None:
+        """
+        Step 7: Validate contract requirements.
+        
+        Raises:
+            PaperTradeValidationError: If validation fails
+        """
+        if not self.spread_id or not self.spread_id.strip():
+            raise PaperTradeValidationError("spread_id is required and cannot be empty")
+        
+        if not self.opportunity_id or not self.opportunity_id.strip():
+            raise PaperTradeValidationError("opportunity_id is required and cannot be empty")
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization. No floats in output."""
         return {
             "spread_id": self.spread_id,
-            "opportunity_id": self.opportunity_id,  # Step 7
+            "opportunity_id": self.opportunity_id,
             "outcome": self.outcome,
             "numeraire": self.numeraire,
             "amount_in_numeraire": self.amount_in_numeraire,
@@ -86,9 +111,8 @@ class PaperTrade:
             "gas_estimate": self.gas_estimate,
             "timestamp": self.timestamp,
             "chain_id": self.chain_id,
-            # Step 7: Include all linking fields
-            "dex_buy": self.dex_a,  # Alias for consistency with truth_report
-            "dex_sell": self.dex_b,  # Alias for consistency with truth_report
+            "dex_buy": self.dex_a,
+            "dex_sell": self.dex_b,
             "dex_a": self.dex_a,
             "dex_b": self.dex_b,
             "pool_a": self.pool_a,
@@ -132,9 +156,9 @@ class PaperSession:
         self.notion_capital_usdc = str(notion_capital_usdc)
 
         self.trades: List[PaperTrade] = []
-        self._seen_spreads: Dict[str, float] = {}  # spread_id -> timestamp
+        self._seen_spreads: Dict[str, float] = {}
 
-        # Stats (all money as string)
+        # Stats
         self.stats: Dict[str, Any] = {
             "total_trades": 0,
             "would_execute_count": 0,
@@ -144,7 +168,6 @@ class PaperSession:
             "total_pnl_bps": "0.00",
         }
 
-        # Ensure output file exists if output_dir specified
         self._trades_file: Optional[Path] = None
         if self.output_dir:
             self.output_dir = Path(self.output_dir)
@@ -173,15 +196,20 @@ class PaperSession:
         """
         Record a paper trade to the session.
         
-        Uses format_money() for safe string formatting of money values
-        that may be str, Decimal, or numeric types.
+        Step 7: Validates that trade has required keys before recording.
         
         Args:
             trade: PaperTrade instance to record
         
         Returns:
             True if recorded, False if duplicate/cooldown
+            
+        Raises:
+            PaperTradeValidationError: If trade fails contract validation
         """
+        # Step 7: Validate contract
+        trade.validate()
+        
         # Check cooldown dedup
         if self._is_duplicate(trade.spread_id):
             logger.debug(
@@ -200,7 +228,6 @@ class PaperSession:
         if trade.outcome == "WOULD_EXECUTE":
             self.stats["would_execute_count"] += 1
 
-            # Safe addition with Decimal
             current_pnl = Decimal(str(self.stats.get("total_pnl_usdc", "0")))
             trade_pnl = Decimal(str(trade.expected_pnl_numeraire or "0"))
             self.stats["total_pnl_usdc"] = format_money(current_pnl + trade_pnl)
@@ -214,7 +241,6 @@ class PaperSession:
         elif trade.outcome == "BLOCKED":
             self.stats["blocked_count"] += 1
 
-        # Log with safe money formatting
         pnl_formatted = format_money_short(trade.expected_pnl_numeraire)
         amount_formatted = format_money_short(trade.amount_in_numeraire)
 
@@ -225,15 +251,15 @@ class PaperSession:
             extra={
                 "context": {
                     "spread_id": trade.spread_id,
-                    "opportunity_id": trade.opportunity_id,  # Step 7
+                    "opportunity_id": trade.opportunity_id,
                     "outcome": trade.outcome,
                     "pnl": trade.expected_pnl_numeraire,
                     "amount": trade.amount_in_numeraire,
                     "numeraire": trade.numeraire,
-                    "dex_buy": trade.dex_a,  # Step 7
-                    "dex_sell": trade.dex_b,  # Step 7
-                    "token_in": trade.token_in,  # Step 7
-                    "token_out": trade.token_out,  # Step 7
+                    "dex_buy": trade.dex_a,
+                    "dex_sell": trade.dex_b,
+                    "token_in": trade.token_in,
+                    "token_out": trade.token_out,
                 }
             }
         )
@@ -244,24 +270,14 @@ class PaperSession:
         return True
 
     def get_stats(self) -> Dict[str, Any]:
-        """
-        Get session statistics.
-        
-        Returns:
-            Dict with all stats, money values as strings.
-        """
+        """Get session statistics."""
         return {
             **self.stats,
             "notion_capital_usdc": self.notion_capital_usdc,
         }
 
     def get_pnl_summary(self) -> Dict[str, Any]:
-        """
-        Get PnL summary with normalized return.
-        
-        Returns:
-            Dict with PnL metrics, all money as strings.
-        """
+        """Get PnL summary with normalized return."""
         total_pnl = Decimal(str(self.stats.get("total_pnl_usdc", "0")))
         notion_capital = Decimal(str(self.notion_capital_usdc))
 
@@ -289,17 +305,7 @@ class PaperSession:
 
 
 def calculate_usdc_value(amount: str, price: str, decimals: int = 6) -> Decimal:
-    """
-    Calculate USDC value from amount and price.
-    
-    Args:
-        amount: Amount as string
-        price: Price as string
-        decimals: Decimal places for result
-    
-    Returns:
-        Decimal result (not float per Roadmap 3.2)
-    """
+    """Calculate USDC value from amount and price."""
     return Decimal(str(amount)) * Decimal(str(price))
 
 
@@ -309,18 +315,7 @@ def calculate_pnl_usdc(
     fees: str = "0",
     gas_cost: str = "0",
 ) -> Decimal:
-    """
-    Calculate PnL in USDC.
-    
-    Args:
-        buy_value: Buy cost as string
-        sell_value: Sell proceeds as string
-        fees: Total fees as string
-        gas_cost: Gas cost in USDC as string
-    
-    Returns:
-        Decimal PnL (not float per Roadmap 3.2)
-    """
+    """Calculate PnL in USDC."""
     return (
         Decimal(str(sell_value))
         - Decimal(str(buy_value))
