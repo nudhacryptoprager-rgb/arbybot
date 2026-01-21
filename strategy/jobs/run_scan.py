@@ -2,15 +2,10 @@
 """
 Scan job runner for ARBY.
 
-Executes scan cycles using:
-- Registry for pool discovery (discovery/registry.py)
-- DEX adapters for quoting (dex/adapters/*.py)
-- Gates for opportunity validation (strategy/gates.py)
-- Paper trading for simulation (strategy/paper_trading.py)
-- Truth reports for metrics (monitoring/truth_report.py)
+Routes to appropriate scanner implementation based on mode.
 
-Modes:
-- SMOKE_SIMULATOR: Fake quotes for testing (default until real implementation)
+Modes (Step 6: unified as run_mode):
+- SMOKE_SIMULATOR: Fake quotes for testing (default)
 - REGISTRY_REAL: Real quotes from RPC (TODO)
 
 Usage:
@@ -20,8 +15,6 @@ Usage:
 import argparse
 import logging
 import sys
-from datetime import datetime
-from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -29,23 +22,16 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from strategy.jobs.run_scan_smoke import RunMode, run_scanner as run_smoke
 
-class ScannerMode(str, Enum):
-    """Scanner operation mode."""
-    SMOKE_SIMULATOR = "SMOKE_SIMULATOR"
-    REGISTRY_REAL = "REGISTRY_REAL"
-
-
-# Current active mode
-CURRENT_MODE = ScannerMode.SMOKE_SIMULATOR
 
 logger = logging.getLogger("arby.scan")
 
 
 def setup_logging(output_dir: Optional[Path] = None, level: int = logging.INFO) -> None:
     """Setup logging configuration."""
-    handlers = [logging.StreamHandler(sys.stdout)]  # Use stdout, not stderr
-    
+    handlers = [logging.StreamHandler(sys.stdout)]
+
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
         log_file = output_dir / "scan.log"
@@ -60,11 +46,6 @@ def setup_logging(output_dir: Optional[Path] = None, level: int = logging.INFO) 
     )
 
 
-def get_scanner_mode() -> ScannerMode:
-    """Get current scanner mode."""
-    return CURRENT_MODE
-
-
 def run_scanner(
     cycles: int = 1,
     output_dir: Optional[Path] = None,
@@ -73,22 +54,21 @@ def run_scanner(
     """
     Run the scanner for specified number of cycles.
     
-    Currently runs in SMOKE_SIMULATOR mode.
+    Currently routes to SMOKE_SIMULATOR.
     REGISTRY_REAL mode is under development.
     """
-    # Log mode info (to stdout via logger, not stderr)
+    # Log mode info
     logger.info(
-        "Scanner mode: %s (real scanner under development)",
-        CURRENT_MODE.value
+        "Scanner run_mode: %s (real scanner under development)",
+        RunMode.SMOKE_SIMULATOR.value
     )
-    
-    # Import and run smoke simulator
-    from strategy.jobs.run_scan_smoke import run_scanner as run_smoke
+
+    # Run smoke simulator
     run_smoke(
         cycles=cycles,
         output_dir=output_dir,
         config_path=config_path,
-        scanner_mode=CURRENT_MODE,  # Pass mode for JSON output
+        run_mode=RunMode.SMOKE_SIMULATOR,
     )
 
 
@@ -120,7 +100,7 @@ def main():
     )
 
     args = parser.parse_args()
-    
+
     # Setup logging first
     output_path = Path(args.output_dir) if args.output_dir else None
     setup_logging(output_path)
