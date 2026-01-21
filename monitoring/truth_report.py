@@ -5,10 +5,12 @@ Truth report module for ARBY.
 Generates truthful metrics and health reports for scan cycles.
 Ensures RPC health consistency with reject histogram.
 
+Semantic contract:
+- mode: TruthReport mode ("REGISTRY", "DISCOVERY") - legacy, for backwards compat
+- run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL") - new field
+
 Contract invariants:
-- spreads_* = base metrics (found pairs)
-- signals_* = spreads_* (currently 1:1, reserved for post-ranking filtering)
-- run_mode is unified across snapshot, truth_report, reject_histogram
+- spreads_* = signals_* (1:1 mapping, reserved for post-ranking filtering)
 """
 
 import json
@@ -23,7 +25,8 @@ from core.format_money import format_money, format_money_short
 
 logger = logging.getLogger("monitoring.truth_report")
 
-SCHEMA_VERSION = "3.1.0"  # Bumped for opportunity contract + run_mode unification
+# Keep at 3.0.0 until migration plan is ready
+SCHEMA_VERSION = "3.0.0"
 
 
 @dataclass
@@ -33,13 +36,9 @@ class RPCHealthMetrics:
     
     Key invariant: if infra_rpc_error_count > 0, then some request metric > 0
     """
-    # Successful RPC calls
     rpc_success_count: int = 0
-    # Failed RPC calls (timeouts, connection errors, etc.)
     rpc_failed_count: int = 0
-    # Total quote attempts (may differ from RPC calls due to caching)
     quote_call_attempts: int = 0
-    # Latency tracking
     total_latency_ms: int = 0
 
     @property
@@ -76,16 +75,12 @@ class RPCHealthMetrics:
     def reconcile_with_rejects(self, reject_histogram: Dict[str, int]) -> None:
         """
         Ensure health metrics are consistent with reject histogram.
-        
-        If INFRA_RPC_ERROR exists in rejects, our rpc_failed_count should reflect that.
         """
         infra_rpc_errors = reject_histogram.get("INFRA_RPC_ERROR", 0)
 
-        # If we have INFRA_RPC_ERROR rejects but no tracked failures, reconcile
         if infra_rpc_errors > 0 and self.rpc_failed_count < infra_rpc_errors:
             self.rpc_failed_count = max(self.rpc_failed_count, infra_rpc_errors)
 
-        # Ensure quote_call_attempts is at least as large as tracked calls
         if self.quote_call_attempts < self.rpc_total_requests:
             self.quote_call_attempts = self.rpc_total_requests
 
@@ -108,16 +103,6 @@ def calculate_confidence(
 ) -> float:
     """
     Calculate confidence score for an opportunity.
-    
-    Args:
-        quote_fetch_rate: Rate of successful quote fetches (0-1)
-        quote_gate_pass_rate: Rate of quotes passing gates (0-1)
-        rpc_success_rate: Rate of successful RPC calls (0-1)
-        freshness_score: Block freshness score (0-1)
-        adapter_reliability: Adapter reliability score (0-1)
-    
-    Returns:
-        Confidence score between 0 and 1
     """
     weights = {
         "quote_fetch": 0.25,
@@ -145,16 +130,12 @@ def build_health_section(
 ) -> Dict[str, Any]:
     """
     Build the health section for truth_report.
-    
-    Ensures RPC health is consistent with observed rejects.
     """
     if rpc_metrics is None:
         rpc_metrics = RPCHealthMetrics()
 
-    # CRITICAL: Reconcile with reject histogram
     rpc_metrics.reconcile_with_rejects(reject_histogram)
 
-    # Format top reject reasons
     sorted_rejects = sorted(
         reject_histogram.items(),
         key=lambda x: x[1],
@@ -185,10 +166,14 @@ class TruthReport:
     Truth report for a scan cycle.
     
     All money values are strings per Roadmap 3.2.
-    run_mode is unified across all outputs (Step 6).
+    
+    Fields:
+    - mode: Legacy TruthReport mode ("REGISTRY", "DISCOVERY") - backwards compat
+    - run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL") - new
     """
     timestamp: str = ""
-    run_mode: str = "SMOKE_SIMULATOR"  # Step 6: Unified field name
+    mode: str = "REGISTRY"  # Legacy: TruthReport mode (REGISTRY/DISCOVERY)
+    run_mode: str = "SMOKE_SIMULATOR"  # New: Scanner runtime mode
     health: Dict[str, Any] = field(default_factory=dict)
     top_opportunities: List[Dict[str, Any]] = field(default_factory=list)
     stats: Dict[str, Any] = field(default_factory=dict)
@@ -206,7 +191,8 @@ class TruthReport:
         return {
             "schema_version": SCHEMA_VERSION,
             "timestamp": self.timestamp,
-            "run_mode": self.run_mode,  # Step 6: Unified
+            "mode": self.mode,  # Legacy field - keep for backwards compat
+            "run_mode": self.run_mode,  # New field - scanner runtime mode
             "health": self.health,
             "top_opportunities": self.top_opportunities,
             "stats": self.stats,
@@ -234,7 +220,8 @@ def build_truth_report(
     opportunities: List[Dict[str, Any]],
     paper_session_stats: Optional[Dict[str, Any]] = None,
     rpc_metrics: Optional[RPCHealthMetrics] = None,
-    run_mode: str = "SMOKE_SIMULATOR",  # Step 6: Renamed from 'mode'
+    mode: str = "REGISTRY",  # Legacy: TruthReport mode
+    run_mode: str = "SMOKE_SIMULATOR",  # New: Scanner runtime mode
 ) -> TruthReport:
     """
     Build a complete truth report from scan data.
@@ -242,20 +229,19 @@ def build_truth_report(
     Args:
         scan_stats: Statistics from the scan cycle
         reject_histogram: Counts of reject reasons
-        opportunities: List of opportunity dicts (Step 1: must have full fields)
+        opportunities: List of opportunity dicts
         paper_session_stats: Stats from paper trading session
         rpc_metrics: RPC health metrics
-        run_mode: Scan mode (unified across outputs)
+        mode: TruthReport mode ("REGISTRY", "DISCOVERY") - legacy
+        run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL") - new
     
     Returns:
         TruthReport instance with all fields populated
     """
-    # Build health section with RPC consistency
+    # Build health section
     health = build_health_section(scan_stats, reject_histogram, rpc_metrics)
 
-    # Step 1: Validate and normalize top_opportunities
-    # Each opportunity MUST have: dex_buy, dex_sell, token_in, token_out, pool_buy, pool_sell,
-    # amount_in, amount_out, net_pnl_usdc, confidence
+    # Normalize opportunities - ensure all required fields present
     normalized_opps = []
     for opp in opportunities:
         normalized_opp = {
@@ -263,7 +249,7 @@ def build_truth_report(
             "spread_id": opp.get("spread_id", "unknown"),
             "opportunity_id": opp.get("opportunity_id") or opp.get("spread_id", "unknown"),
             
-            # Step 1: Full DEX/pool/token context (NEVER None)
+            # Full DEX/pool/token context (NEVER None)
             "dex_buy": opp.get("dex_buy") or opp.get("dex_a") or "unknown",
             "dex_sell": opp.get("dex_sell") or opp.get("dex_b") or "unknown",
             "pool_buy": opp.get("pool_buy") or opp.get("pool_a") or "unknown",
@@ -294,8 +280,7 @@ def build_truth_report(
         reverse=True
     )[:10]
 
-    # Step 5: Stats with spreads↔signals invariant
-    # Contract: signals_* = spreads_* (currently 1:1)
+    # Stats with spreads↔signals invariant
     spread_total = scan_stats.get("spread_ids_total", 0)
     spread_profitable = scan_stats.get("spread_ids_profitable", 0)
     spread_executable = scan_stats.get("spread_ids_executable", 0)
@@ -304,7 +289,7 @@ def build_truth_report(
         "spread_ids_total": spread_total,
         "spread_ids_profitable": spread_profitable,
         "spread_ids_executable": spread_executable,
-        # Step 5: signals = spreads (invariant)
+        # signals = spreads (invariant)
         "signals_total": spread_total,
         "signals_profitable": spread_profitable,
         "signals_executable": spread_executable,
@@ -323,7 +308,7 @@ def build_truth_report(
         ),
     }
 
-    # PnL from paper session (all as strings)
+    # PnL from paper session
     paper_stats = paper_session_stats or {}
     total_pnl_usdc = paper_stats.get("total_pnl_usdc", "0.000000")
     would_execute_pnl_usdc = paper_stats.get("total_pnl_usdc", "0.000000")
@@ -362,7 +347,8 @@ def build_truth_report(
     }
 
     return TruthReport(
-        run_mode=run_mode,  # Step 6: Unified
+        mode=mode,  # Legacy
+        run_mode=run_mode,  # New
         health=health,
         top_opportunities=top_opps,
         stats=stats,
@@ -379,7 +365,7 @@ def print_truth_report(report: TruthReport) -> None:
     print("TRUTH REPORT")
     print("=" * 60)
     print(f"Timestamp: {report.timestamp}")
-    print(f"Run Mode: {report.run_mode}")  # Step 6: Unified
+    print(f"Mode: {report.mode} | Run Mode: {report.run_mode}")
 
     print("\n--- HEALTH ---")
     health = report.health

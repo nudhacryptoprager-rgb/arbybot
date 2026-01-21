@@ -5,13 +5,13 @@ SMOKE SIMULATOR for ARBY.
 This is a SIMULATION-ONLY scanner for testing infrastructure without real RPC calls.
 It generates simulated metrics for testing paper trading, truth reports, and logging.
 
-Key fixes in this version:
-- Step 2: Block numbers derived from timestamp (not hardcoded 12345679)
-- Step 3: null instead of 0 for unknown values (amount_out, gas_estimate for rejects)
-- Step 4: Standardized dex_id (uniswap_v3, sushiswap_v3)
-- Step 6: run_mode unified across all outputs
-- Step 7: Paper trades linked via opportunity_id
-- Step 8: QUOTE_REVERT with error_class/error_message
+Key features:
+- Block numbers derived from timestamp (realistic)
+- null instead of 0 for unknown values
+- Standardized dex_id naming
+- run_mode field in all outputs
+- Paper trades linked via opportunity_id
+- QUOTE_REVERT with error_class/error_message
 
 Usage:
     python -m strategy.jobs.run_scan_smoke --cycles 1 --output-dir data/runs/smoke
@@ -46,12 +46,12 @@ from monitoring.truth_report import (
 
 
 class RunMode(str, Enum):
-    """Scanner operation mode (Step 6: unified naming)."""
+    """Scanner runtime mode (distinct from TruthReport mode)."""
     SMOKE_SIMULATOR = "SMOKE_SIMULATOR"
     REGISTRY_REAL = "REGISTRY_REAL"
 
 
-# Step 4: Standardized DEX identifiers (adapter IDs)
+# Standardized DEX identifiers (adapter IDs)
 KNOWN_DEX_IDS = [
     "uniswap_v3",
     "sushiswap_v3",
@@ -106,38 +106,36 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
 
 def _get_simulated_block() -> int:
     """
-    Step 2: Get simulated block number based on current timestamp.
+    Get simulated block number based on current timestamp.
     Not hardcoded - changes with each run.
     """
-    # Arbitrum produces ~4 blocks/second, started around block 0 in mid-2021
-    # Use timestamp to derive a realistic-looking block number
-    base_block = 150_000_000  # Approximate current Arbitrum block range
-    ts_offset = int(time.time()) % 1_000_000  # Add some variance
+    base_block = 150_000_000
+    ts_offset = int(time.time()) % 1_000_000
     return base_block + ts_offset
 
 
 def _make_forensic_sample(
     quote_id: str,
-    dex_id: str,  # Step 4: renamed from 'dex' to 'dex_id'
+    dex_id: str,
     pool: str,
     token_in: str,
     token_out: str,
     amount_in: str,
-    amount_out: Optional[str],  # Step 3: can be null
-    gas_estimate: Optional[int],  # Step 3: can be null
+    amount_out: Optional[str],  # Can be null
+    gas_estimate: Optional[int],  # Can be null
     reject_reason: Optional[str] = None,
     reject_details: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Create a forensic sample record."""
     sample = {
         "quote_id": quote_id,
-        "dex_id": dex_id,  # Step 4: standardized field name
+        "dex_id": dex_id,
         "pool": pool,
         "token_in": token_in,
         "token_out": token_out,
         "amount_in": amount_in,
-        "amount_out": amount_out,  # Step 3: null allowed
-        "gas_estimate": gas_estimate,  # Step 3: null allowed
+        "amount_out": amount_out,
+        "gas_estimate": gas_estimate,
     }
     if reject_reason:
         sample["reject_reason"] = reject_reason
@@ -150,21 +148,21 @@ def _make_quote_revert_details(
     params_summary: str,
     rpc_provider_tag: str,
     pool: str,
-    dex_id: str,  # Step 4: standardized
+    dex_id: str,
     block_number: int,
-    error_class: str,  # Step 8: added
-    error_message: str,  # Step 8: added
+    error_class: str,
+    error_message: str,
 ) -> Dict[str, Any]:
-    """Create QUOTE_REVERT reject details (Step 8: with error info)."""
+    """Create QUOTE_REVERT reject details with error info."""
     return {
         "fn_or_selector": fn_or_selector,
         "params_summary": params_summary,
         "rpc_provider_tag": rpc_provider_tag,
         "pool": pool,
-        "dex_id": dex_id,  # Step 4
+        "dex_id": dex_id,
         "block_number": block_number,
-        "error_class": error_class,  # Step 8
-        "error_message": error_message,  # Step 8
+        "error_class": error_class,
+        "error_message": error_message,
     }
 
 
@@ -175,7 +173,7 @@ def _make_slippage_details(
     implied_price: str,
     anchor_price: str,
     deviation_bps: int,
-    block_number: int,  # Step 2: include block context
+    block_number: int,
 ) -> Dict[str, Any]:
     """Create SLIPPAGE_TOO_HIGH reject details."""
     return {
@@ -185,7 +183,7 @@ def _make_slippage_details(
         "implied_price": implied_price,
         "anchor_price": anchor_price,
         "deviation_bps": deviation_bps,
-        "block_number": block_number,  # Step 2: real block
+        "block_number": block_number,
     }
 
 
@@ -195,7 +193,7 @@ def run_scan_cycle(
     paper_session: PaperSession,
     rpc_metrics: RPCHealthMetrics,
     output_dir: Path,
-    run_mode: RunMode = RunMode.SMOKE_SIMULATOR,  # Step 6: unified naming
+    run_mode: RunMode = RunMode.SMOKE_SIMULATOR,
 ) -> Dict[str, Any]:
     """
     Run a single scan cycle.
@@ -203,7 +201,7 @@ def run_scan_cycle(
     timestamp = datetime.now(timezone.utc)
     timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
 
-    # Step 2: Get realistic block number for this cycle
+    # Get realistic block number
     current_block = _get_simulated_block()
 
     logger.info(
@@ -211,17 +209,16 @@ def run_scan_cycle(
         extra={"context": {
             "cycle": cycle_num,
             "timestamp": timestamp.isoformat(),
-            "run_mode": run_mode.value,  # Step 6
-            "block": current_block,  # Step 2
+            "run_mode": run_mode.value,
+            "block": current_block,
         }}
     )
 
-    # Initialize stats with run_mode (Step 6)
     scan_stats = {
         "cycle": cycle_num,
         "timestamp": timestamp.isoformat(),
-        "run_mode": run_mode.value,  # Step 6: unified
-        "current_block": current_block,  # Step 2
+        "run_mode": run_mode.value,
+        "current_block": current_block,
         "quotes_fetched": 0,
         "quotes_total": 0,
         "gates_passed": 0,
@@ -252,45 +249,41 @@ def run_scan_cycle(
             quote_id = f"quote_{cycle_num}_{i}_{uuid4().hex[:8]}"
             rpc_metrics.record_quote_attempt()
 
-            # Step 4: Use standardized dex_id
             dex_id = random.choice(KNOWN_DEX_IDS)
             pool_addr = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
 
-            if random.random() > 0.1:  # 90% success
+            if random.random() > 0.1:
                 latency = random.randint(50, 200)
                 rpc_metrics.record_success(latency_ms=latency)
                 scan_stats["quotes_fetched"] += 1
 
-                if random.random() > 0.3:  # 70% pass gates
+                if random.random() > 0.3:
                     scan_stats["gates_passed"] += 1
 
                     if len(sample_passed) < MAX_FORENSIC_SAMPLES:
                         sample_passed.append(_make_forensic_sample(
                             quote_id=quote_id,
-                            dex_id=dex_id,  # Step 4
+                            dex_id=dex_id,
                             pool=pool_addr,
                             token_in="WETH",
                             token_out="USDC",
                             amount_in="1000000000000000000",
-                            amount_out="2500000000",  # Valid value
-                            gas_estimate=150000,  # Valid value
+                            amount_out="2500000000",
+                            gas_estimate=150000,
                         ))
                 else:
-                    # Gate failure
                     if random.random() > 0.5:
                         reason = "QUOTE_REVERT"
-                        # Step 8: Add error_class and error_message
                         details = _make_quote_revert_details(
                             fn_or_selector="0xf7729d43",
                             params_summary="tokenIn=WETH,tokenOut=USDC,fee=500,amountIn=1e18",
                             rpc_provider_tag="alchemy_arb_1",
                             pool=pool_addr,
-                            dex_id=dex_id,  # Step 4
-                            block_number=current_block,  # Step 2: real block
-                            error_class="ExecutionReverted",  # Step 8
-                            error_message="STF",  # Step 8: "SafeTransferFrom failed"
+                            dex_id=dex_id,
+                            block_number=current_block,
+                            error_class="ExecutionReverted",
+                            error_message="STF",
                         )
-                        # Step 3: null for unknown values
                         amount_out_val = None
                         gas_est_val = None
                     else:
@@ -302,9 +295,8 @@ def run_scan_cycle(
                             implied_price="2500.00",
                             anchor_price="2520.00",
                             deviation_bps=79,
-                            block_number=current_block,  # Step 2
+                            block_number=current_block,
                         )
-                        # Step 3: Use expected_out as amount_out for slippage
                         amount_out_val = "2500000000"
                         gas_est_val = 150000
 
@@ -313,13 +305,13 @@ def run_scan_cycle(
                     if len(sample_rejects) < MAX_FORENSIC_SAMPLES:
                         sample_rejects.append(_make_forensic_sample(
                             quote_id=quote_id,
-                            dex_id=dex_id,  # Step 4
+                            dex_id=dex_id,
                             pool=pool_addr,
                             token_in="WETH",
                             token_out="USDC",
                             amount_in="1000000000000000000",
-                            amount_out=amount_out_val,  # Step 3: null or value
-                            gas_estimate=gas_est_val,  # Step 3: null or value
+                            amount_out=amount_out_val,
+                            gas_estimate=gas_est_val,
                             reject_reason=reason,
                             reject_details=details,
                         ))
@@ -330,26 +322,26 @@ def run_scan_cycle(
                 if len(sample_rejects) < MAX_FORENSIC_SAMPLES:
                     sample_rejects.append(_make_forensic_sample(
                         quote_id=quote_id,
-                        dex_id=dex_id,  # Step 4
+                        dex_id=dex_id,
                         pool="unknown",
                         token_in="WETH",
                         token_out="USDC",
                         amount_in="1000000000000000000",
-                        amount_out=None,  # Step 3: null
-                        gas_estimate=None,  # Step 3: null
+                        amount_out=None,
+                        gas_estimate=None,
                         reject_reason="INFRA_RPC_ERROR",
                         reject_details={
                             "rpc_provider_tag": "alchemy_arb_1",
-                            "error_class": "TimeoutError",  # Step 8
-                            "error_message": "RPC request timed out after 5000ms",  # Step 8
-                            "block_number": current_block,  # Step 2
+                            "error_class": "TimeoutError",
+                            "error_message": "RPC request timed out after 5000ms",
+                            "block_number": current_block,
                         },
                     ))
 
         scan_stats["quotes_total"] = 10
         scan_stats["pools_scanned"] = 10
         scan_stats["chains_active"] = 1
-        scan_stats["dexes_active"] = len(set(KNOWN_DEX_IDS[:2]))
+        scan_stats["dexes_active"] = 2
         scan_stats["pairs_covered"] = 5
 
         if scan_stats["quotes_total"] > 0:
@@ -358,16 +350,13 @@ def run_scan_cycle(
             scan_stats["quote_gate_pass_rate"] = scan_stats["gates_passed"] / scan_stats["quotes_fetched"]
 
         scan_stats["spread_ids_total"] = 3
-        # Step 5: signals = spreads (invariant)
         scan_stats["signals_total"] = scan_stats["spread_ids_total"]
 
         # Simulate profitable opportunity
         if random.random() > 0.5:
-            # Step 7: Generate opportunity_id for linking
             opportunity_id = f"opp_{cycle_num}_{timestamp_str}_{uuid4().hex[:8]}"
             spread_id = f"spread_{cycle_num}_{timestamp_str}"
 
-            # Step 4: Use standardized dex_ids
             dex_buy = random.choice(KNOWN_DEX_IDS)
             dex_sell = random.choice([d for d in KNOWN_DEX_IDS if d != dex_buy])
             pool_buy = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
@@ -383,17 +372,17 @@ def run_scan_cycle(
                 gas_price_gwei=format_money(Decimal("0.01"), decimals=2),
                 gas_estimate=150000,
                 chain_id=42161,
-                dex_a=dex_buy,  # Step 4: standardized
-                dex_b=dex_sell,  # Step 4: standardized
+                dex_a=dex_buy,
+                dex_b=dex_sell,
                 pool_a=pool_buy,
                 pool_b=pool_sell,
                 token_in="WETH",
                 token_out="USDC",
                 metadata={
                     "simulated": True,
-                    "run_mode": run_mode.value,  # Step 6
-                    "opportunity_id": opportunity_id,  # Step 7
-                    "block_number": current_block,  # Step 2
+                    "run_mode": run_mode.value,
+                    "opportunity_id": opportunity_id,
+                    "block_number": current_block,
                 },
             )
 
@@ -403,31 +392,29 @@ def run_scan_cycle(
                     scan_stats["paper_executable_count"] += 1
                     scan_stats["spread_ids_profitable"] += 1
                     scan_stats["spread_ids_executable"] += 1
-                    # Step 5: signals = spreads
                     scan_stats["signals_profitable"] = scan_stats["spread_ids_profitable"]
                     scan_stats["signals_executable"] = scan_stats["spread_ids_executable"]
 
-                    # Step 1 & 7: Full opportunity with all required fields
                     opportunities.append({
                         "spread_id": spread_id,
-                        "opportunity_id": opportunity_id,  # Step 7
-                        "dex_buy": dex_buy,  # Step 1: not None
-                        "dex_sell": dex_sell,  # Step 1: not None
-                        "dex_a": dex_buy,  # Backwards compat
-                        "dex_b": dex_sell,  # Backwards compat
-                        "pool_buy": pool_buy,  # Step 1
-                        "pool_sell": pool_sell,  # Step 1
-                        "pool_a": pool_buy,  # Backwards compat
-                        "pool_b": pool_sell,  # Backwards compat
-                        "token_in": "WETH",  # Step 1: not None
-                        "token_out": "USDC",  # Step 1: not None
-                        "amount_in": paper_trade.amount_in_numeraire,  # Step 1
-                        "amount_out": format_money(Decimal("100.50")),  # Step 1
+                        "opportunity_id": opportunity_id,
+                        "dex_buy": dex_buy,
+                        "dex_sell": dex_sell,
+                        "dex_a": dex_buy,
+                        "dex_b": dex_sell,
+                        "pool_buy": pool_buy,
+                        "pool_sell": pool_sell,
+                        "pool_a": pool_buy,
+                        "pool_b": pool_sell,
+                        "token_in": "WETH",
+                        "token_out": "USDC",
+                        "amount_in": paper_trade.amount_in_numeraire,
+                        "amount_out": format_money(Decimal("100.50")),
                         "net_pnl_usdc": paper_trade.expected_pnl_numeraire,
                         "net_pnl_bps": paper_trade.expected_pnl_bps,
-                        "confidence": 0.85,  # Step 1: include confidence
+                        "confidence": 0.85,
                         "chain_id": 42161,
-                        "block_number": current_block,  # Step 2
+                        "block_number": current_block,
                     })
             except Exception as e:
                 logger.error(
@@ -443,14 +430,14 @@ def run_scan_cycle(
             extra={"context": {"cycle": cycle_num, "error_type": type(e).__name__}}
         )
 
-    # Save scan snapshot with run_mode (Step 6)
+    # Save scan snapshot
     snapshot_path = output_dir / "snapshots" / f"scan_{timestamp_str}.json"
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(snapshot_path, "w", encoding="utf-8") as f:
         json.dump({
-            "run_mode": run_mode.value,  # Step 6: unified
-            "current_block": current_block,  # Step 2
+            "run_mode": run_mode.value,
+            "current_block": current_block,
             "stats": scan_stats,
             "reject_histogram": reject_histogram,
             "opportunities": opportunities,
@@ -460,16 +447,16 @@ def run_scan_cycle(
 
     logger.info(f"Snapshot saved: {snapshot_path}")
 
-    # Save reject histogram with run_mode (Step 6)
+    # Save reject histogram
     reject_path = output_dir / "reports" / f"reject_histogram_{timestamp_str}.json"
     reject_path.parent.mkdir(parents=True, exist_ok=True)
     with open(reject_path, "w", encoding="utf-8") as f:
         json.dump({
-            "run_mode": run_mode.value,  # Step 6
+            "run_mode": run_mode.value,
             "histogram": reject_histogram,
         }, f, indent=2)
 
-    # Build truth report with run_mode (Step 6)
+    # Build truth report - mode="REGISTRY" for legacy, run_mode for scanner
     paper_stats = paper_session.get_stats()
     truth_report = build_truth_report(
         scan_stats=scan_stats,
@@ -477,7 +464,8 @@ def run_scan_cycle(
         opportunities=opportunities,
         paper_session_stats=paper_stats,
         rpc_metrics=rpc_metrics,
-        run_mode=run_mode.value,  # Step 6
+        mode="REGISTRY",  # Legacy TruthReport mode
+        run_mode=run_mode.value,  # Scanner runtime mode
     )
 
     truth_path = output_dir / "reports" / f"truth_report_{timestamp_str}.json"
@@ -504,7 +492,7 @@ def run_scanner(
     cycles: int = 1,
     output_dir: Optional[Path] = None,
     config_path: Optional[Path] = None,
-    run_mode: RunMode = RunMode.SMOKE_SIMULATOR,  # Step 6
+    run_mode: RunMode = RunMode.SMOKE_SIMULATOR,
 ) -> None:
     """Run the scanner for specified number of cycles."""
     if output_dir is None:
@@ -539,7 +527,7 @@ def run_scanner(
                 paper_session=paper_session,
                 rpc_metrics=rpc_metrics,
                 output_dir=output_dir,
-                run_mode=run_mode,  # Step 6
+                run_mode=run_mode,
             )
 
             if cycle < cycles:

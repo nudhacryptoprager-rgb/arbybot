@@ -4,7 +4,7 @@ Scan job runner for ARBY.
 
 Routes to appropriate scanner implementation based on mode.
 
-Modes (Step 6: unified as run_mode):
+Modes:
 - SMOKE_SIMULATOR: Fake quotes for testing (default)
 - REGISTRY_REAL: Real quotes from RPC (TODO)
 
@@ -57,13 +57,11 @@ def run_scanner(
     Currently routes to SMOKE_SIMULATOR.
     REGISTRY_REAL mode is under development.
     """
-    # Log mode info
     logger.info(
         "Scanner run_mode: %s (real scanner under development)",
         RunMode.SMOKE_SIMULATOR.value
     )
 
-    # Run smoke simulator
     run_smoke(
         cycles=cycles,
         output_dir=output_dir,
@@ -101,7 +99,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Setup logging first
     output_path = Path(args.output_dir) if args.output_dir else None
     setup_logging(output_path)
 
