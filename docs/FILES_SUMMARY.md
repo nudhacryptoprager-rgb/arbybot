@@ -1,3 +1,5 @@
+# NOTE: Cleaned pack keeps this file as-is. Status files moved under docs/status/.
+
 # PATH: docs/FILES_SUMMARY.md
 # Issue #3 - Complete File List
 

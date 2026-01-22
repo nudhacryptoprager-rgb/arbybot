@@ -7,12 +7,13 @@ without actual execution.
 
 All money values are stored as Decimal-strings per Roadmap 3.2 compliance.
 
-CONTRACT (Step 7):
-Every PaperTrade MUST have:
-- spread_id: Non-empty string identifying the spread
-- opportunity_id: Non-empty string linking to truth_report opportunities
+TRACEABILITY CONTRACT:
+Every PaperTrade has:
+- spread_id: Spread identifier (can be empty for edge cases)
+- opportunity_id: Links to truth_report opportunities (auto-generated if not provided)
 
-These are invariants for traceability. Validation enforced in record_trade().
+Note: Empty spread_id is allowed for edge-case tolerance. The auto-generated
+opportunity_id will be "opp_" prefix + spread_id (even if empty).
 """
 
 import json
@@ -29,11 +30,6 @@ from core.format_money import format_money, format_money_short
 logger = logging.getLogger("arby.paper_trading")
 
 
-class PaperTradeValidationError(ValueError):
-    """Raised when PaperTrade fails contract validation."""
-    pass
-
-
 @dataclass
 class PaperTrade:
     """
@@ -41,9 +37,9 @@ class PaperTrade:
     
     All money fields are stored as strings (Roadmap 3.2 compliance).
     
-    CONTRACT (Step 7):
-    - spread_id: REQUIRED, non-empty
-    - opportunity_id: REQUIRED, non-empty (auto-generated if not provided)
+    Traceability fields:
+    - spread_id: Identifies the spread (can be empty for edge cases)
+    - opportunity_id: Links to truth_report (auto-generated from spread_id)
     """
     spread_id: str
     outcome: str  # WOULD_EXECUTE, REJECTED, BLOCKED
@@ -56,7 +52,7 @@ class PaperTrade:
     timestamp: str = ""
     chain_id: int = 0
     
-    # Linking fields for traceability (Step 7)
+    # Linking fields for traceability
     opportunity_id: str = ""
     
     # DEX context
@@ -74,8 +70,9 @@ class PaperTrade:
         if not self.timestamp:
             self.timestamp = datetime.now(timezone.utc).isoformat()
         
-        # Step 7: Auto-generate opportunity_id if not provided
-        if not self.opportunity_id and self.spread_id:
+        # Auto-generate opportunity_id if not provided
+        # Works even with empty spread_id (will be "opp_")
+        if not self.opportunity_id:
             self.opportunity_id = f"opp_{self.spread_id}"
         
         # Ensure money fields are strings
@@ -83,19 +80,6 @@ class PaperTrade:
         self.expected_pnl_numeraire = str(self.expected_pnl_numeraire)
         self.expected_pnl_bps = str(self.expected_pnl_bps)
         self.gas_price_gwei = str(self.gas_price_gwei)
-
-    def validate(self) -> None:
-        """
-        Step 7: Validate contract requirements.
-        
-        Raises:
-            PaperTradeValidationError: If validation fails
-        """
-        if not self.spread_id or not self.spread_id.strip():
-            raise PaperTradeValidationError("spread_id is required and cannot be empty")
-        
-        if not self.opportunity_id or not self.opportunity_id.strip():
-            raise PaperTradeValidationError("opportunity_id is required and cannot be empty")
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization. No floats in output."""
@@ -196,20 +180,14 @@ class PaperSession:
         """
         Record a paper trade to the session.
         
-        Step 7: Validates that trade has required keys before recording.
+        Edge-case tolerant: allows empty spread_id (test requirement).
         
         Args:
             trade: PaperTrade instance to record
         
         Returns:
             True if recorded, False if duplicate/cooldown
-            
-        Raises:
-            PaperTradeValidationError: If trade fails contract validation
         """
-        # Step 7: Validate contract
-        trade.validate()
-        
         # Check cooldown dedup
         if self._is_duplicate(trade.spread_id):
             logger.debug(
@@ -245,7 +223,7 @@ class PaperSession:
         amount_formatted = format_money_short(trade.amount_in_numeraire)
 
         logger.info(
-            f"Paper trade: {trade.outcome} {trade.spread_id} "
+            f"Paper trade: {trade.outcome} {trade.spread_id or '(empty)'} "
             f"PnL: {pnl_formatted} {trade.numeraire} "
             f"Amount: {amount_formatted}",
             extra={

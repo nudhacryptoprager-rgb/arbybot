@@ -1,3 +1,5 @@
+# NOTE: Cleaned pack keeps this file as-is. Status files moved under docs/status/.
+
 # PATH: docs/ISSUE_3_CHECKLIST.md
 # Issue #3 - M3 Quality v4 Checklist
 

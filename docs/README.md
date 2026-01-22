@@ -1,44 +1,24 @@
-# Golden Fixtures: Smoke Test Baseline
+# ARBY3 Docs Index
 
-This directory contains reference artifacts from smoke test runs.
-These are committed to git as reproducible baselines for review.
+_Last cleaned: 2026-01-21_
 
-## Contents
+## What lives in /docs
+This folder is the “human layer” of the repo:
+- **Status**: progress + contracts + evidence per milestone (see `docs/status/`).
+- **Workflow**: how we develop, review, and accept changes (`docs/WORKFLOW.md`).
+- **Testing**: how to run tests and generate artifacts (`docs/TESTING.md`).
+- **Issue checklists** / file maps: tracking scope for targeted fixes (Issue #3, etc.).
 
-- `scan_*.json` - Scan snapshot with stats, reject histogram, opportunities
-- `truth_report_*.json` - Truth report with health, PnL, RPC metrics
-- `reject_histogram_*.json` - Reject reason counts
-- `scan.log.txt` - Log file (renamed from .log for git)
+## Status policy (important)
+- Keep **one** active status file per milestone/subphase.
+- Older variants are archived (do not delete history until the clean pack is merged).
+- Every status should reference:
+  - HEAD SHA / branch (when applicable)
+  - Evidence (artifacts path + test command used)
 
-## Usage
+## Artifacts policy (golden fixtures)
+We store **golden fixtures** only when they are needed for reproducible testing or schema verification.
+- Prefer committing **small, stable** JSON artifacts under `docs/artifacts/...` when they are used by tests or by CI verification scripts.
+- Do **not** commit full run directories (`data/runs/...`) unless explicitly designated as golden fixtures.
 
-Compare new smoke runs against these baselines:
-
-```powershell
-# Run smoke test
-python -m strategy.jobs.run_scan --cycles 1 --output-dir data/runs/verify
-
-# Compare outputs
-diff data/runs/verify/reports/truth_report_*.json docs/artifacts/smoke/*/truth_report_*.json
-```
-
-## When to Update
-
-Update golden fixtures when:
-1. Schema changes (new fields added)
-2. Logic changes (different reject reasons)
-3. Significant improvement in metrics
-
-Always document changes in PR description.
-
-## Structure
-
-```
-docs/artifacts/smoke/
-└── YYYYMMDD/
-    ├── README.md
-    ├── scan_YYYYMMDD_HHMMSS.json
-    ├── truth_report_YYYYMMDD_HHMMSS.json
-    ├── reject_histogram_YYYYMMDD_HHMMSS.json
-    └── scan.log.txt
-```
+See `docs/TESTING.md` and `docs/WORKFLOW.md` for exact rules.
