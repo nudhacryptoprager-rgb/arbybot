@@ -7,11 +7,21 @@ SEMANTIC CONTRACT:
 - run_mode: Scanner runtime ("SMOKE_SIMULATOR", "REGISTRY_REAL")
 
 SCHEMA CONTRACT (v3.0.0):
+<<<<<<< HEAD
 - top_opportunities[]: includes execution_blockers explaining why not ready
 - Units: amount_in_token (human token), amount_in_numeraire (USDC)
 - health.gate_breakdown: counts per gate (revert/slippage/infra)
 
 BUMP RULES: Any field change requires schema bump + migration PR.
+=======
+- schema_version: MUST NOT change without explicit bump in SCHEMA_VERSION constant
+- Bump requires: migration PR + test update
+- top_opportunities[]: uses amount_in_numeraire (no ambiguous amount_in)
+
+TERMINOLOGY:
+- paper_executable_spreads: passed all gates, PnL > 0, would execute in paper trading
+- execution_ready_count: actually ready for on-chain execution (0 in SMOKE mode)
+>>>>>>> 7690cd0 (fix: <fix_10_steps_v3>)
 """
 
 import json
@@ -26,6 +36,11 @@ from core.format_money import format_money
 
 logger = logging.getLogger("monitoring.truth_report")
 
+<<<<<<< HEAD
+=======
+# SCHEMA CONTRACT: Bump requires migration PR + test update
+# Test: test_schema_version_policy() ensures this is the single source of truth
+>>>>>>> 7690cd0 (fix: <fix_10_steps_v3>)
 SCHEMA_VERSION = "3.0.0"
 
 
@@ -107,6 +122,17 @@ def calculate_confidence(
     return min(max(score, 0.0), 1.0)
 
 
+def build_gate_breakdown(reject_histogram: Dict[str, int]) -> Dict[str, int]:
+    """Build gate breakdown from reject histogram."""
+    return {
+        "revert": reject_histogram.get("QUOTE_REVERT", 0),
+        "slippage": reject_histogram.get("SLIPPAGE_TOO_HIGH", 0),
+        "infra": reject_histogram.get("INFRA_RPC_ERROR", 0),
+        "other": sum(v for k, v in reject_histogram.items() 
+                     if k not in ["QUOTE_REVERT", "SLIPPAGE_TOO_HIGH", "INFRA_RPC_ERROR"]),
+    }
+
+
 def build_health_section(
     scan_stats: Dict[str, Any],
     reject_histogram: Dict[str, int],
@@ -125,6 +151,7 @@ def build_health_section(
     )
     top_rejects = [[reason, count] for reason, count in sorted_rejects[:5]]
 
+<<<<<<< HEAD
     # Gate breakdown from reject histogram
     gate_breakdown = {
         "revert": reject_histogram.get("QUOTE_REVERT", 0),
@@ -133,6 +160,9 @@ def build_health_section(
         "other": sum(v for k, v in reject_histogram.items() 
                      if k not in ["QUOTE_REVERT", "SLIPPAGE_TOO_HIGH", "INFRA_RPC_ERROR"]),
     }
+=======
+    gate_breakdown = build_gate_breakdown(reject_histogram)
+>>>>>>> 7690cd0 (fix: <fix_10_steps_v3>)
 
     health = {
         "rpc_success_rate": round(rpc_metrics.rpc_success_rate, 3),
@@ -240,6 +270,10 @@ def build_truth_report(
         except Exception:
             is_profitable = False
 
+<<<<<<< HEAD
+=======
+        # NO amount_in ambiguity - use only amount_in_numeraire
+>>>>>>> 7690cd0 (fix: <fix_10_steps_v3>)
         normalized_opp = {
             "spread_id": opp.get("spread_id", "unknown"),
             "opportunity_id": opp.get("opportunity_id") or opp.get("spread_id", "unknown"),
@@ -249,6 +283,7 @@ def build_truth_report(
             "pool_sell": opp.get("pool_sell") or opp.get("pool_b") or "unknown",
             "token_in": opp.get("token_in") or "unknown",
             "token_out": opp.get("token_out") or "unknown",
+<<<<<<< HEAD
             # Unified units
             "amount_in_token": opp.get("amount_in_token", "1.0"),
             "amount_in_numeraire": opp.get("amount_in_numeraire") or opp.get("amount_in") or "0",
@@ -257,10 +292,15 @@ def build_truth_report(
             # Legacy compat
             "amount_in": opp.get("amount_in") or opp.get("amount_in_numeraire") or "0",
             "amount_out": opp.get("amount_out") or "0",
+=======
+            "chain_id": opp.get("chain_id", 0),
+            # Unified units - NO amount_in (deprecated)
+            "amount_in_numeraire": opp.get("amount_in_numeraire") or opp.get("amount_in") or "0",
+            "amount_out_numeraire": opp.get("amount_out_numeraire") or opp.get("amount_out") or "0",
+>>>>>>> 7690cd0 (fix: <fix_10_steps_v3>)
             "net_pnl_usdc": pnl_usdc,
             "net_pnl_bps": opp.get("net_pnl_bps", "0.00"),
             "confidence": opp.get("confidence", 0.0),
-            "chain_id": opp.get("chain_id", 0),
             "is_profitable": is_profitable,
             "reject_reason": opp.get("reject_reason"),
         }
@@ -289,16 +329,21 @@ def build_truth_report(
                 "pool_sell": spread.get("pool_sell") or "unknown",
                 "token_in": spread.get("token_in") or "unknown",
                 "token_out": spread.get("token_out") or "unknown",
+<<<<<<< HEAD
                 "amount_in_token": spread.get("amount_in_token", "1.0"),
                 "amount_in_numeraire": spread.get("amount_in_numeraire") or spread.get("amount_in") or "0",
                 "amount_out_token": spread.get("amount_out_token", "0"),
                 "amount_out_numeraire": spread.get("amount_out_numeraire") or spread.get("amount_out") or "0",
                 "amount_in": spread.get("amount_in") or "0",
                 "amount_out": spread.get("amount_out") or "0",
+=======
+                "chain_id": spread.get("chain_id", 0),
+                "amount_in_numeraire": spread.get("amount_in_numeraire") or spread.get("amount_in") or "0",
+                "amount_out_numeraire": spread.get("amount_out_numeraire") or spread.get("amount_out") or "0",
+>>>>>>> 7690cd0 (fix: <fix_10_steps_v3>)
                 "net_pnl_usdc": spread.get("net_pnl_usdc", "0.000000"),
                 "net_pnl_bps": spread.get("net_pnl_bps", "0.00"),
                 "confidence": spread.get("confidence", 0.0),
-                "chain_id": spread.get("chain_id", 0),
                 "is_profitable": False,
                 "reject_reason": spread.get("reject_reason", "NOT_PROFITABLE"),
             }
@@ -307,17 +352,24 @@ def build_truth_report(
             opp["is_execution_ready"] = False
             top_opps.append(opp)
 
+<<<<<<< HEAD
+=======
+    # TERMINOLOGY FIX: paper_executable_spreads vs execution_ready_count
+>>>>>>> 7690cd0 (fix: <fix_10_steps_v3>)
     spread_total = scan_stats.get("spread_ids_total", 0)
     spread_profitable = scan_stats.get("spread_ids_profitable", 0)
-    spread_executable = scan_stats.get("spread_ids_executable", 0)
+    paper_executable = scan_stats.get("spread_ids_executable", 0)
     
     stats = {
         "spread_ids_total": spread_total,
         "spread_ids_profitable": spread_profitable,
-        "spread_ids_executable": spread_executable,
+        # DEPRECATED: spread_ids_executable (use paper_executable_spreads)
+        "spread_ids_executable": paper_executable,
+        # NEW: clear terminology
+        "paper_executable_spreads": paper_executable,
         "signals_total": spread_total,
         "signals_profitable": spread_profitable,
-        "signals_executable": spread_executable,
+        "signals_executable": paper_executable,
         "paper_executable_count": scan_stats.get("paper_executable_count", 0),
         "execution_ready_count": scan_stats.get("execution_ready_count", 0),
         "blocked_spreads": scan_stats.get("blocked_spreads", 0),
@@ -397,12 +449,20 @@ def print_truth_report(report: TruthReport) -> None:
     print("\n--- STATS ---")
     stats = report.stats
     print(f"Spreads: {stats.get('spread_ids_total', 0)} total, "
+<<<<<<< HEAD
           f"{stats.get('spread_ids_profitable', 0)} profitable, "
           f"{stats.get('spread_ids_executable', 0)} executable")
     exec_ready = stats.get('execution_ready_count', 0)
     print(f"Execution ready: {exec_ready}")
     if exec_ready == 0:
         print("  (see execution_blockers in top_opportunities for reasons)")
+=======
+          f"{stats.get('spread_ids_profitable', 0)} profitable")
+    print(f"Paper executable: {stats.get('paper_executable_spreads', 0)}")
+    print(f"Execution ready: {stats.get('execution_ready_count', 0)}")
+    if stats.get('execution_ready_count', 0) == 0:
+        print("  (see execution_blockers in top_opportunities)")
+>>>>>>> 7690cd0 (fix: <fix_10_steps_v3>)
 
     print("\n--- TOP OPPORTUNITIES ---")
     if not report.top_opportunities:
