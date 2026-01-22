@@ -61,6 +61,55 @@ ERROR_TO_GATE_CATEGORY = {
     "INFRA_RPC_ERROR": "infra",
 }
 
+# Fixed weights for confidence calculation (do not change without migration)
+CONFIDENCE_WEIGHTS = {
+    "quote_fetch": 0.25,
+    "quote_gate": 0.25,
+    "rpc": 0.20,
+    "freshness": 0.15,
+    "adapter": 0.15,
+}
+
+
+def calculate_confidence(
+    quote_fetch_rate: float,
+    quote_gate_pass_rate: float,
+    rpc_success_rate: float,
+    freshness_score: float = 1.0,
+    adapter_reliability: float = 1.0,
+) -> float:
+    """
+    Calculate confidence score for an opportunity.
+    
+    Args:
+        quote_fetch_rate: Rate of successful quote fetches [0.0, 1.0]
+        quote_gate_pass_rate: Rate of quotes passing gates [0.0, 1.0]
+        rpc_success_rate: RPC success rate [0.0, 1.0]
+        freshness_score: Quote freshness score [0.0, 1.0], default 1.0
+        adapter_reliability: Adapter reliability score [0.0, 1.0], default 1.0
+    
+    Returns:
+        Confidence score in [0.0, 1.0]
+    
+    The formula is deterministic: same inputs → same output.
+    """
+    # Clamp inputs to [0, 1]
+    qf = max(0.0, min(1.0, float(quote_fetch_rate)))
+    qg = max(0.0, min(1.0, float(quote_gate_pass_rate)))
+    rpc = max(0.0, min(1.0, float(rpc_success_rate)))
+    fresh = max(0.0, min(1.0, float(freshness_score)))
+    adapt = max(0.0, min(1.0, float(adapter_reliability)))
+
+    score = (
+        CONFIDENCE_WEIGHTS["quote_fetch"] * qf +
+        CONFIDENCE_WEIGHTS["quote_gate"] * qg +
+        CONFIDENCE_WEIGHTS["rpc"] * rpc +
+        CONFIDENCE_WEIGHTS["freshness"] * fresh +
+        CONFIDENCE_WEIGHTS["adapter"] * adapt
+    )
+
+    return min(max(score, 0.0), 1.0)
+
 
 @dataclass
 class RPCHealthMetrics:
@@ -123,16 +172,16 @@ def map_error_to_gate_category(reject_reason: str) -> str:
 def build_gate_breakdown(reject_histogram: Dict[str, int]) -> Dict[str, int]:
     """
     Build gate breakdown from reject histogram.
-    
+
     CANONICAL CONTRACT: keys MUST be [revert, slippage, infra, other].
     This is the SINGLE SOURCE OF TRUTH for gate breakdown calculation.
     """
     breakdown = {"revert": 0, "slippage": 0, "infra": 0, "other": 0}
-    
+
     for reason, count in reject_histogram.items():
         category = map_error_to_gate_category(reason)
         breakdown[category] += count
-    
+
     assert set(breakdown.keys()) == GATE_BREAKDOWN_KEYS
     return breakdown
 
@@ -231,30 +280,30 @@ def _get_execution_blockers(run_mode: str, opp: Dict[str, Any]) -> List[str]:
 def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
     """
     RANKING CONTRACT: Deterministic sort key for opportunities.
-    
+
     Sort order (all DESC except spread_id ASC):
       1. is_profitable DESC (True > False)
       2. net_pnl_usdc DESC
       3. net_pnl_bps DESC
       4. confidence DESC
       5. spread_id ASC (tiebreaker)
-    
+
     Using negative for DESC, positive for ASC.
     """
     try:
         net_pnl = Decimal(str(opp.get("net_pnl_usdc", "0")))
     except Exception:
         net_pnl = Decimal("0")
-    
+
     try:
         net_bps = Decimal(str(opp.get("net_pnl_bps", "0")))
     except Exception:
         net_bps = Decimal("0")
-    
+
     is_profitable = 1 if opp.get("is_profitable", False) else 0
     confidence = float(opp.get("confidence", 0.0))
     spread_id = opp.get("spread_id", "zzz")
-    
+
     return (
         -is_profitable,  # DESC: True (1) first
         -net_pnl,        # DESC: higher PnL first
@@ -267,7 +316,7 @@ def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
 def rank_opportunities(opportunities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Rank opportunities using deterministic sort key.
-    
+
     RANKING CONTRACT: Same input → same output order.
     """
     return sorted(opportunities, key=_opportunity_sort_key)
@@ -422,7 +471,7 @@ def build_truth_report(
     paper_stats = paper_session_stats or {}
     total_pnl_usdc = paper_stats.get("total_pnl_usdc", "0.000000")
     notion_capital = paper_stats.get("notion_capital_usdc", "10000.000000")
-    
+
     normalized_return_pct = None
     try:
         pnl_dec = Decimal(str(total_pnl_usdc))

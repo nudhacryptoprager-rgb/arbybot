@@ -8,18 +8,51 @@
 
 M3 implements the Opportunity Engine: scanning, quoting, gate validation, and truth reporting.
 
+## Done Criteria (M3)
+
+```
+✅ python -m pytest -q                → PASS
+✅ python scripts/ci_m3_gate.py       → PASS
+✅ Smoke creates 4 artifacts:
+   - snapshots/scan_*.json
+   - reports/reject_histogram_*.json
+   - reports/truth_report_*.json
+   - scan.log
+```
+
+## Commands (Windows PowerShell + venv)
+
+```powershell
+# 1. Create and activate venv
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+
+# 2. Install dependencies
+pip install -r requirements-dev.txt
+
+# 3. Run tests
+python -m pytest -q
+
+# 4. Run CI gate (runs tests + smoke + artifact check)
+python scripts/ci_m3_gate.py
+
+# 5. Manual smoke run
+python -m strategy.jobs.run_scan --mode smoke --cycles 1 --output-dir data/runs/manual_test
+```
+
 ## M3 Acceptance (Definition of Done)
 
-### Automatic Check (1 command → 3 artifacts)
+### Automatic Check (1 command → 4 artifacts)
 
 ```bash
 # Run smoke scan (1 cycle)
 python -m strategy.jobs.run_scan --mode smoke --cycles 1 --output-dir data/runs/m3_acceptance
 
-# Verify 3 artifacts generated:
+# Verify 4 artifacts generated:
 ls data/runs/m3_acceptance/snapshots/scan_*.json        # ✅ scan snapshot
 ls data/runs/m3_acceptance/reports/reject_histogram_*.json  # ✅ reject histogram
 ls data/runs/m3_acceptance/reports/truth_report_*.json      # ✅ truth report
+ls data/runs/m3_acceptance/scan.log                         # ✅ scan log
 ```
 
 ### truth_report Contract (required keys)
@@ -43,7 +76,7 @@ ls data/runs/m3_acceptance/reports/truth_report_*.json      # ✅ truth report
 python scripts/ci_m3_gate.py
 # → runs pytest -q
 # → runs smoke scan
-# → checks artifact sanity
+# → checks 4 artifacts (including scan.log)
 # → exit 0 if all pass
 ```
 
@@ -150,48 +183,10 @@ No silent mode substitution. If `--mode real` but REGISTRY_REAL not implemented 
 # Unit tests
 pytest tests/unit/test_core_models.py -v    # spread_id + confidence
 pytest tests/unit/test_truth_report.py -v   # ranking + gate breakdown
-
-# Integration tests
-pytest tests/integration/test_smoke_run.py -v  # artifact sanity
+pytest tests/unit/test_confidence.py -v     # confidence scoring
 
 # Full suite
 pytest -q
-```
-
-## Verification Steps
-
-```bash
-# 1. Run tests
-python -m pytest -q
-
-# 2. Run CI gate
-python scripts/ci_m3_gate.py
-
-# 3. Manual smoke run
-python -m strategy.jobs.run_scan --mode smoke --cycles 1 --output-dir data/runs/verify
-
-# 4. Verify spread_id roundtrip
-python -c "
-from core.models import generate_spread_id, parse_spread_id
-id = generate_spread_id(1, '20260122_171426', 0)
-p = parse_spread_id(id)
-print(f'ID: {id}')
-print(f'Valid: {p[\"valid\"]}, Format: {p[\"format\"]}')
-print(f'Roundtrip: {generate_spread_id(p[\"cycle\"], p[\"timestamp\"], p[\"index\"]) == id}')
-"
-
-# 5. Verify mode error
-python -m strategy.jobs.run_scan --mode real 2>&1 | head -5
-# → RuntimeError: REGISTRY_REAL scanner is not yet implemented.
-
-# 6. Verify confidence monotonicity
-python -c "
-from core.models import calculate_confidence
-base = calculate_confidence(0.9, 0.8, 0.7, 0.95, 0.85)
-worse = calculate_confidence(0.7, 0.8, 0.7, 0.95, 0.85)
-print(f'Base: {base}, Worse fetch: {worse}')
-print(f'Monotonic: {worse <= base}')
-"
 ```
 
 ## M3 → M4 Transition
