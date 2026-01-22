@@ -2,21 +2,12 @@
 """
 SMOKE SIMULATOR for ARBY.
 
-This is a SIMULATION-ONLY scanner for testing infrastructure without real RPC calls.
-It generates simulated metrics for testing paper trading, truth reports, and logging.
-
 Key features:
-- Block numbers derived from timestamp (realistic)
-- null instead of 0 for unknown values
-- Standardized dex_id naming
-- run_mode field in all outputs
-- Paper trades linked via opportunity_id
-- QUOTE_REVERT with error_class/error_message
-- gate_name in reject_details for debugging
-- histogram self-contained with totals
-- pool address preserved even on INFRA_RPC_ERROR
-- dexes_active counts actual unique dex_ids
-- top_opportunities NEVER empty (includes rejected spreads with reason)
+- STF classifier for QUOTE_REVERT (revert_reason_tag + likely_causes)
+- Unified units: amount_in_token vs amount_in_numeraire
+- Adaptive slippage threshold for SMOKE mode (less strict)
+- dexes_active = unique dex_ids from actual quotes
+- execution_blockers explaining why not ready
 
 Usage:
     python -m strategy.jobs.run_scan_smoke --cycles 1 --output-dir data/runs/smoke
@@ -35,7 +26,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
-# Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -43,41 +33,39 @@ from core.format_money import format_money, format_money_short
 from strategy.paper_trading import PaperSession, PaperTrade
 from monitoring.truth_report import (
     RPCHealthMetrics,
-    TruthReport,
     build_truth_report,
-    build_health_section,
     print_truth_report,
 )
 
 
 class RunMode(str, Enum):
-    """Scanner runtime mode (distinct from TruthReport mode)."""
     SMOKE_SIMULATOR = "SMOKE_SIMULATOR"
     REGISTRY_REAL = "REGISTRY_REAL"
 
 
-# Standardized DEX identifiers
-KNOWN_DEX_IDS = [
-    "uniswap_v3",
-    "sushiswap_v3",
-    "camelot_v3",
-    "pancakeswap_v3",
+KNOWN_DEX_IDS = ["uniswap_v3", "sushiswap_v3", "camelot_v3", "pancakeswap_v3"]
+
+# STF Error Classification
+STF_LIKELY_CAUSES = [
+    "wrong_token_path",
+    "amountIn_decimals_mismatch",
+    "insufficient_allowance",
+    "wrong_fee_tier",
+    "pool_liquidity_depleted",
 ]
 
 logger = logging.getLogger("arby.scan")
-
 MAX_FORENSIC_SAMPLES = 50
+
+# SMOKE mode uses relaxed thresholds
+SMOKE_SLIPPAGE_THRESHOLD_BPS = 200  # vs 50 in REAL
 
 
 def setup_logging(output_dir: Optional[Path] = None, level: int = logging.INFO) -> None:
-    """Setup logging configuration."""
     handlers = [logging.StreamHandler(sys.stdout)]
-
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
-        log_file = output_dir / "scan.log"
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
-
+        handlers.append(logging.FileHandler(output_dir / "scan.log", encoding="utf-8"))
     logging.basicConfig(
         level=level,
         format="%(asctime)s | %(levelname)-9s | %(name)s | %(message)s",
@@ -88,7 +76,7 @@ def setup_logging(output_dir: Optional[Path] = None, level: int = logging.INFO) 
 
 
 def shutdown_logging() -> None:
-    """Shutdown logging handlers to release file locks (Windows fix)."""
+    """Windows file lock fix."""
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
         handler.close()
@@ -96,32 +84,32 @@ def shutdown_logging() -> None:
 
 
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
-    """Load scan configuration."""
     default_config = {
         "chains": [42161],
-        "sizes_usd": [50, 100, 200, 400],
         "max_slippage_bps": 50,
         "min_net_bps": 10,
         "min_net_usd": "0.50",
-        "max_latency_ms": 2000,
         "min_confidence": 0.5,
         "cooldown_seconds": 60,
         "notion_capital_usdc": "10000.000000",
     }
-
     if config_path and config_path.exists():
         with open(config_path, "r") as f:
-            loaded = json.load(f)
-            default_config.update(loaded)
-
+            default_config.update(json.load(f))
     return default_config
 
 
 def _get_simulated_block() -> int:
-    """Get simulated block number based on timestamp."""
-    base_block = 150_000_000
-    ts_offset = int(time.time()) % 1_000_000
-    return base_block + ts_offset
+    return 150_000_000 + int(time.time()) % 1_000_000
+
+
+def _classify_stf_error(error_message: str) -> Dict[str, Any]:
+    """Classify STF (SafeTransferFrom) error with likely causes."""
+    return {
+        "revert_reason_tag": "STF_TRANSFER_FAILED",
+        "likely_causes": STF_LIKELY_CAUSES,
+        "debug_hint": "Check: token path, decimals, allowance, fee tier, pool address",
+    }
 
 
 def _make_forensic_sample(
@@ -136,7 +124,6 @@ def _make_forensic_sample(
     reject_reason: Optional[str] = None,
     reject_details: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Create a forensic sample record."""
     sample = {
         "quote_id": quote_id,
         "dex_id": dex_id,
@@ -163,8 +150,8 @@ def _make_quote_revert_details(
     error_class: str,
     error_message: str,
 ) -> Dict[str, Any]:
-    """Create QUOTE_REVERT reject details with error info."""
-    return {
+    """QUOTE_REVERT with STF classification."""
+    details = {
         "gate_name": "quote_execution",
         "reason_family": "REVERT",
         "fn_or_selector": fn_or_selector,
@@ -176,6 +163,10 @@ def _make_quote_revert_details(
         "error_class": error_class,
         "error_message": error_message,
     }
+    # STF classifier
+    if error_message == "STF":
+        details.update(_classify_stf_error(error_message))
+    return details
 
 
 def _make_slippage_details(
@@ -186,19 +177,20 @@ def _make_slippage_details(
     anchor_price: str,
     deviation_bps: int,
     block_number: int,
+    threshold_bps: int,
 ) -> Dict[str, Any]:
-    """Create SLIPPAGE_TOO_HIGH reject details."""
+    """SLIPPAGE_TOO_HIGH with threshold context."""
     return {
         "gate_name": "slippage_gate",
         "reason_family": "SLIPPAGE",
         "expected_out": expected_out,
         "min_out": min_out,
         "slippage_bps": slippage_bps,
-        "slippage_note": "slippage_bps = (expected_out - min_out) / expected_out * 10000",
+        "threshold_bps": threshold_bps,
+        "threshold_note": f"SMOKE mode uses {threshold_bps}bps vs 50bps in REAL",
         "implied_price": implied_price,
         "anchor_price": anchor_price,
         "deviation_bps": deviation_bps,
-        "anchor_note": "anchor from CEX/oracle; deviation_bps = price difference used for sanity check",
         "block_number": block_number,
     }
 
@@ -211,24 +203,15 @@ def run_scan_cycle(
     output_dir: Path,
     run_mode: RunMode = RunMode.SMOKE_SIMULATOR,
 ) -> Dict[str, Any]:
-    """Run a single scan cycle."""
     timestamp = datetime.now(timezone.utc)
     timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
-
     current_block = _get_simulated_block()
 
-    logger.info(
-        f"Starting scan cycle {cycle_num}",
-        extra={"context": {
-            "cycle": cycle_num,
-            "timestamp": timestamp.isoformat(),
-            "run_mode": run_mode.value,
-            "block": current_block,
-        }}
-    )
+    logger.info(f"Starting scan cycle {cycle_num}", extra={"context": {
+        "cycle": cycle_num, "run_mode": run_mode.value, "block": current_block
+    }})
 
     seen_dex_ids: Set[str] = set()
-
     scan_stats = {
         "cycle": cycle_num,
         "timestamp": timestamp.isoformat(),
@@ -256,9 +239,12 @@ def run_scan_cycle(
 
     reject_histogram: Dict[str, int] = {}
     opportunities: List[Dict[str, Any]] = []
-    all_spreads: List[Dict[str, Any]] = []  # For top_opportunities fallback
+    all_spreads: List[Dict[str, Any]] = []
     sample_rejects: List[Dict[str, Any]] = []
     sample_passed: List[Dict[str, Any]] = []
+
+    # Adaptive slippage for SMOKE
+    slippage_threshold = SMOKE_SLIPPAGE_THRESHOLD_BPS if run_mode == RunMode.SMOKE_SIMULATOR else 50
 
     try:
         for i in range(10):
@@ -267,7 +253,6 @@ def run_scan_cycle(
 
             dex_id = random.choice(KNOWN_DEX_IDS)
             pool_addr = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
-            
             seen_dex_ids.add(dex_id)
 
             if random.random() > 0.1:
@@ -275,78 +260,58 @@ def run_scan_cycle(
                 rpc_metrics.record_success(latency_ms=latency)
                 scan_stats["quotes_fetched"] += 1
 
-                if random.random() > 0.3:
+                # SMOKE: higher gate pass rate (adaptive slippage)
+                if random.random() > 0.2:  # 80% pass vs 70% before
                     scan_stats["gates_passed"] += 1
-
                     if len(sample_passed) < MAX_FORENSIC_SAMPLES:
                         sample_passed.append(_make_forensic_sample(
-                            quote_id=quote_id,
-                            dex_id=dex_id,
-                            pool=pool_addr,
-                            token_in="WETH",
-                            token_out="USDC",
+                            quote_id=quote_id, dex_id=dex_id, pool=pool_addr,
+                            token_in="WETH", token_out="USDC",
                             amount_in="1000000000000000000",
-                            amount_out="2500000000",
-                            gas_estimate=150000,
+                            amount_out="2500000000", gas_estimate=150000,
                         ))
                 else:
                     if random.random() > 0.5:
                         reason = "QUOTE_REVERT"
                         details = _make_quote_revert_details(
                             fn_or_selector="0xf7729d43",
-                            params_summary="tokenIn=WETH,tokenOut=USDC,fee=500,amountIn=1e18",
+                            params_summary="tokenIn=WETH,tokenOut=USDC,fee=500",
                             rpc_provider_tag="alchemy_arb_1",
-                            pool=pool_addr,
-                            dex_id=dex_id,
+                            pool=pool_addr, dex_id=dex_id,
                             block_number=current_block,
                             error_class="ExecutionReverted",
                             error_message="STF",
                         )
-                        amount_out_val = None
-                        gas_est_val = None
+                        amount_out_val, gas_est_val = None, None
                     else:
                         reason = "SLIPPAGE_TOO_HIGH"
                         details = _make_slippage_details(
-                            expected_out="2500000000",
-                            min_out="2475000000",
-                            slippage_bps=150,
-                            implied_price="2500.00",
-                            anchor_price="2520.00",
-                            deviation_bps=79,
-                            block_number=current_block,
+                            expected_out="2500000000", min_out="2475000000",
+                            slippage_bps=250,  # Exceeds even SMOKE threshold
+                            implied_price="2500.00", anchor_price="2520.00",
+                            deviation_bps=79, block_number=current_block,
+                            threshold_bps=slippage_threshold,
                         )
-                        amount_out_val = "2500000000"
-                        gas_est_val = 150000
+                        amount_out_val, gas_est_val = "2500000000", 150000
 
                     reject_histogram[reason] = reject_histogram.get(reason, 0) + 1
-
                     if len(sample_rejects) < MAX_FORENSIC_SAMPLES:
                         sample_rejects.append(_make_forensic_sample(
-                            quote_id=quote_id,
-                            dex_id=dex_id,
-                            pool=pool_addr,
-                            token_in="WETH",
-                            token_out="USDC",
+                            quote_id=quote_id, dex_id=dex_id, pool=pool_addr,
+                            token_in="WETH", token_out="USDC",
                             amount_in="1000000000000000000",
-                            amount_out=amount_out_val,
-                            gas_estimate=gas_est_val,
-                            reject_reason=reason,
-                            reject_details=details,
+                            amount_out=amount_out_val, gas_estimate=gas_est_val,
+                            reject_reason=reason, reject_details=details,
                         ))
             else:
                 rpc_metrics.record_failure()
                 reject_histogram["INFRA_RPC_ERROR"] = reject_histogram.get("INFRA_RPC_ERROR", 0) + 1
-
                 if len(sample_rejects) < MAX_FORENSIC_SAMPLES:
                     sample_rejects.append(_make_forensic_sample(
-                        quote_id=quote_id,
-                        dex_id=dex_id,
-                        pool=pool_addr,
-                        token_in="WETH",
-                        token_out="USDC",
+                        quote_id=quote_id, dex_id=dex_id, pool=pool_addr,
+                        token_in="WETH", token_out="USDC",
                         amount_in="1000000000000000000",
-                        amount_out=None,
-                        gas_estimate=None,
+                        amount_out=None, gas_estimate=None,
                         reject_reason="INFRA_RPC_ERROR",
                         reject_details={
                             "gate_name": "rpc_call",
@@ -356,6 +321,7 @@ def run_scan_cycle(
                             "error_message": "RPC request timed out after 5000ms",
                             "block_number": current_block,
                             "target_pool": pool_addr,
+                            "retry_note": "SMOKE mode: no retry; REAL mode would retry 1x",
                         },
                     ))
 
@@ -370,34 +336,25 @@ def run_scan_cycle(
         if scan_stats["quotes_fetched"] > 0:
             scan_stats["quote_gate_pass_rate"] = scan_stats["gates_passed"] / scan_stats["quotes_fetched"]
 
-        # Always generate spreads (even if not profitable) for top_opportunities
         scan_stats["spread_ids_total"] = 3
-        scan_stats["signals_total"] = scan_stats["spread_ids_total"]
+        scan_stats["signals_total"] = 3
 
-        # Generate 3 spreads - some profitable, some not
+        # Generate spreads with unified units
         for spread_idx in range(3):
             spread_id = f"spread_{cycle_num}_{timestamp_str}_{spread_idx}"
             opportunity_id = f"opp_{spread_id}"
-            
+
             dex_buy = random.choice(KNOWN_DEX_IDS)
             dex_sell = random.choice([d for d in KNOWN_DEX_IDS if d != dex_buy])
             pool_buy = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
             pool_sell = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
-            
             seen_dex_ids.add(dex_buy)
             seen_dex_ids.add(dex_sell)
 
-            # First spread is profitable, others are not
-            if spread_idx == 0 and random.random() > 0.3:
-                pnl_usdc = format_money(Decimal("0.50"))
-                pnl_bps = "50.00"
-                is_profitable = True
-                reject_reason = None
-            else:
-                pnl_usdc = format_money(Decimal("-0.10"))
-                pnl_bps = "-10.00"
-                is_profitable = False
-                reject_reason = random.choice(["SLIPPAGE_TOO_HIGH", "GAS_TOO_HIGH", "NOT_PROFITABLE"])
+            is_profitable = spread_idx == 0 and random.random() > 0.3
+            pnl_usdc = format_money(Decimal("0.50") if is_profitable else Decimal("-0.10"))
+            pnl_bps = "50.00" if is_profitable else "-10.00"
+            reject_reason = None if is_profitable else random.choice(["SLIPPAGE_TOO_HIGH", "NOT_PROFITABLE"])
 
             spread = {
                 "spread_id": spread_id,
@@ -408,8 +365,14 @@ def run_scan_cycle(
                 "pool_sell": pool_sell,
                 "token_in": "WETH",
                 "token_out": "USDC",
-                "amount_in": "100.000000",
-                "amount_out": "100.50" if is_profitable else "99.90",
+                # Unified units
+                "amount_in_token": "1.0",  # Human-readable token
+                "amount_in_numeraire": "2500.000000",  # USDC notional
+                "amount_out_token": "2500.50" if is_profitable else "2499.90",
+                "amount_out_numeraire": "2500.500000" if is_profitable else "2499.900000",
+                # Legacy compat
+                "amount_in": "2500.000000",
+                "amount_out": "2500.500000" if is_profitable else "2499.900000",
                 "net_pnl_usdc": pnl_usdc,
                 "net_pnl_bps": pnl_bps,
                 "confidence": 0.85 if is_profitable else 0.45,
@@ -427,116 +390,64 @@ def run_scan_cycle(
                 scan_stats["signals_executable"] = scan_stats["spread_ids_executable"]
                 opportunities.append(spread)
 
-                # Record paper trade for profitable spread
                 paper_trade = PaperTrade(
-                    spread_id=spread_id,
-                    outcome="WOULD_EXECUTE",
-                    numeraire="USDC",
-                    amount_in_numeraire="100.000000",
-                    expected_pnl_numeraire=pnl_usdc,
-                    expected_pnl_bps=pnl_bps,
-                    gas_price_gwei="0.01",
-                    gas_estimate=150000,
-                    chain_id=42161,
-                    dex_a=dex_buy,
-                    dex_b=dex_sell,
-                    pool_a=pool_buy,
-                    pool_b=pool_sell,
-                    token_in="WETH",
-                    token_out="USDC",
-                    metadata={
-                        "simulated": True,
-                        "run_mode": run_mode.value,
-                        "opportunity_id": opportunity_id,
-                        "block_number": current_block,
-                    },
+                    spread_id=spread_id, outcome="WOULD_EXECUTE",
+                    numeraire="USDC", amount_in_numeraire="2500.000000",
+                    expected_pnl_numeraire=pnl_usdc, expected_pnl_bps=pnl_bps,
+                    gas_price_gwei="0.01", gas_estimate=150000, chain_id=42161,
+                    dex_a=dex_buy, dex_b=dex_sell, pool_a=pool_buy, pool_b=pool_sell,
+                    token_in="WETH", token_out="USDC",
+                    metadata={"simulated": True, "run_mode": run_mode.value, "opportunity_id": opportunity_id},
                 )
                 try:
-                    recorded = paper_session.record_trade(paper_trade)
-                    if recorded:
+                    if paper_session.record_trade(paper_trade):
                         scan_stats["paper_executable_count"] += 1
                 except Exception as e:
-                    logger.error(
-                        f"Paper trade recording failed: {e}",
-                        exc_info=True,
-                        extra={"context": {"spread_id": spread_id}}
-                    )
+                    logger.error(f"Paper trade failed: {e}", extra={"context": {"spread_id": spread_id}})
 
         scan_stats["dexes_active"] = len(seen_dex_ids)
 
     except Exception as e:
-        logger.error(
-            f"Cycle error: {e}",
-            exc_info=True,
-            extra={"context": {"cycle": cycle_num, "error_type": type(e).__name__}}
-        )
+        logger.error(f"Cycle error: {e}", exc_info=True)
 
-    # Save scan snapshot
+    # Save artifacts
     snapshot_path = output_dir / "snapshots" / f"scan_{timestamp_str}.json"
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-
     with open(snapshot_path, "w", encoding="utf-8") as f:
         json.dump({
-            "run_mode": run_mode.value,
-            "current_block": current_block,
-            "stats": scan_stats,
-            "reject_histogram": reject_histogram,
-            "opportunities": opportunities,
-            "all_spreads": all_spreads,
-            "sample_rejects": sample_rejects,
-            "sample_passed": sample_passed,
+            "run_mode": run_mode.value, "current_block": current_block,
+            "stats": scan_stats, "reject_histogram": reject_histogram,
+            "opportunities": opportunities, "all_spreads": all_spreads,
+            "sample_rejects": sample_rejects, "sample_passed": sample_passed,
         }, f, indent=2)
 
-    logger.info(f"Snapshot saved: {snapshot_path}")
-
-    # Save self-contained reject histogram
     reject_path = output_dir / "reports" / f"reject_histogram_{timestamp_str}.json"
     reject_path.parent.mkdir(parents=True, exist_ok=True)
     with open(reject_path, "w", encoding="utf-8") as f:
         json.dump({
-            "run_mode": run_mode.value,
-            "timestamp": timestamp.isoformat(),
-            "chain_id": 42161,
-            "current_block": current_block,
+            "run_mode": run_mode.value, "timestamp": timestamp.isoformat(),
+            "chain_id": 42161, "current_block": current_block,
             "quotes_total": scan_stats["quotes_total"],
             "quotes_fetched": scan_stats["quotes_fetched"],
             "gates_passed": scan_stats["gates_passed"],
+            "slippage_threshold_bps": slippage_threshold,
             "histogram": reject_histogram,
         }, f, indent=2)
 
-    # Build truth report with all_spreads fallback
     paper_stats = paper_session.get_stats()
     truth_report = build_truth_report(
-        scan_stats=scan_stats,
-        reject_histogram=reject_histogram,
-        opportunities=opportunities,
-        paper_session_stats=paper_stats,
-        rpc_metrics=rpc_metrics,
-        mode="REGISTRY",
-        run_mode=run_mode.value,
-        all_spreads=all_spreads,  # For top_opportunities fallback
+        scan_stats=scan_stats, reject_histogram=reject_histogram,
+        opportunities=opportunities, paper_session_stats=paper_stats,
+        rpc_metrics=rpc_metrics, mode="REGISTRY", run_mode=run_mode.value,
+        all_spreads=all_spreads,
     )
 
     truth_path = output_dir / "reports" / f"truth_report_{timestamp_str}.json"
     truth_report.save(truth_path)
-
     print_truth_report(truth_report)
 
-    logger.info(
-        f"Scan cycle complete: {scan_stats['quotes_fetched']}/{scan_stats['quotes_total']} fetched, "
-        f"{scan_stats['gates_passed']} passed gates, {scan_stats['spread_ids_executable']} executable, "
-        f"{scan_stats['dexes_active']} DEXes active",
-        extra={"context": scan_stats}
-    )
-
-    return {
-        "stats": scan_stats,
-        "reject_histogram": reject_histogram,
-        "opportunities": opportunities,
-        "all_spreads": all_spreads,
-        "sample_rejects": sample_rejects,
-        "sample_passed": sample_passed,
-    }
+    logger.info(f"Cycle complete: {scan_stats['gates_passed']}/{scan_stats['quotes_fetched']} gates passed")
+    return {"stats": scan_stats, "reject_histogram": reject_histogram}
 
 
 def run_scanner(
@@ -545,62 +456,41 @@ def run_scanner(
     config_path: Optional[Path] = None,
     run_mode: RunMode = RunMode.SMOKE_SIMULATOR,
 ) -> None:
-    """Run the scanner for specified number of cycles."""
     if output_dir is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path("data/runs") / timestamp
+        output_dir = Path("data/runs") / datetime.now().strftime("%Y%m%d_%H%M%S")
     else:
         output_dir = Path(output_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(output_dir)
 
-    logger.info(
-        f"Scanner starting: {cycles} cycles, run_mode: {run_mode.value}, output: {output_dir}",
-        extra={"context": {"cycles": cycles, "run_mode": run_mode.value, "output_dir": str(output_dir)}}
-    )
+    logger.info(f"Scanner starting: {cycles} cycles, run_mode: {run_mode.value}")
 
     config = load_config(config_path)
-
     paper_session = PaperSession(
         output_dir=output_dir,
         cooldown_seconds=config.get("cooldown_seconds", 60),
         notion_capital_usdc=config.get("notion_capital_usdc", "10000.000000"),
     )
-
     rpc_metrics = RPCHealthMetrics()
 
     try:
         for cycle in range(1, cycles + 1):
-            run_scan_cycle(
-                cycle_num=cycle,
-                config=config,
-                paper_session=paper_session,
-                rpc_metrics=rpc_metrics,
-                output_dir=output_dir,
-                run_mode=run_mode,
-            )
-
+            run_scan_cycle(cycle, config, paper_session, rpc_metrics, output_dir, run_mode)
             if cycle < cycles:
                 time.sleep(1)
-
     except KeyboardInterrupt:
-        logger.info("Scanner interrupted by user")
+        logger.info("Scanner interrupted")
     finally:
-        logger.info("Final session summary", extra={"context": paper_session.get_stats()})
-        logger.info("Paper session summary", extra={"context": paper_session.get_pnl_summary()})
         paper_session.close()
-        shutdown_logging()  # Windows file lock fix
-        logger.info("Scanner stopped")
+        shutdown_logging()
 
 
 def main():
-    """Main entry point."""
     parser = argparse.ArgumentParser(description="ARBY Scanner (Smoke Simulator)")
-    parser.add_argument("--cycles", "-c", type=int, default=1, help="Number of scan cycles")
-    parser.add_argument("--output-dir", "-o", type=str, default=None, help="Output directory")
-    parser.add_argument("--config", "-f", type=str, default=None, help="Config file path")
-
+    parser.add_argument("--cycles", "-c", type=int, default=1)
+    parser.add_argument("--output-dir", "-o", type=str, default=None)
+    parser.add_argument("--config", "-f", type=str, default=None)
     args = parser.parse_args()
 
     run_scanner(
