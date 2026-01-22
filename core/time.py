@@ -1,197 +1,132 @@
+# PATH: core/time.py
 """
-core/time.py - Freshness rules and block pinning helpers.
+Time utilities for ARBY.
 
-Ensures quotes are fresh and block-consistent.
+Freshness rules and block pinning helpers per Roadmap M1.1.
 """
 
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-
-from core.constants import DEFAULT_MAX_BLOCK_AGE, DEFAULT_MAX_QUOTE_AGE_MS
+from typing import Optional
 
 
 @dataclass
 class BlockPin:
-    """
-    Pinned block reference for consistent quoting.
-    
-    All quotes in a scan cycle should reference the same block
-    to ensure consistency.
-    """
+    """Block number and timestamp for freshness tracking."""
     
     block_number: int
-    block_timestamp: int  # Unix timestamp
-    pinned_at_ms: int  # When we pinned this block (local time)
-    chain_id: int
-    
-    @property
-    def age_ms(self) -> int:
-        """Milliseconds since this block was pinned."""
-        return now_ms() - self.pinned_at_ms
-    
-    @property
-    def is_stale(self) -> bool:
-        """Check if this pin is too old (> 2 seconds by default)."""
-        return self.age_ms > DEFAULT_MAX_QUOTE_AGE_MS
-
-
-def now_ms() -> int:
-    """Current time in milliseconds (Unix timestamp)."""
-    return int(time.time() * 1000)
+    timestamp_ms: int
 
 
 def now_utc() -> datetime:
-    """Current UTC datetime."""
+    """Get current UTC datetime."""
     return datetime.now(timezone.utc)
 
 
-def is_quote_fresh(
-    quote_timestamp_ms: int,
-    max_age_ms: int = DEFAULT_MAX_QUOTE_AGE_MS,
+def now_iso() -> str:
+    """Get current UTC datetime as ISO string."""
+    return now_utc().isoformat()
+
+
+def now_timestamp() -> float:
+    """Get current Unix timestamp."""
+    return time.time()
+
+
+def now_ms() -> int:
+    """Get current Unix timestamp in milliseconds."""
+    return int(time.time() * 1000)
+
+
+def is_fresh(
+    timestamp: float,
+    max_age_seconds: float = 2.0,
+    current_time: Optional[float] = None,
 ) -> bool:
     """
-    Check if a quote is fresh enough.
+    Check if a timestamp is fresh (within max_age).
     
     Args:
-        quote_timestamp_ms: Quote timestamp in milliseconds
-        max_age_ms: Maximum allowed age in milliseconds
-    
+        timestamp: Unix timestamp to check
+        max_age_seconds: Maximum allowed age
+        current_time: Current time (defaults to now)
+        
     Returns:
-        True if quote is fresh
+        True if timestamp is fresh
     """
-    age = now_ms() - quote_timestamp_ms
-    return age <= max_age_ms
+    current = current_time or time.time()
+    age = current - timestamp
+    return age <= max_age_seconds
 
 
 def is_block_fresh(
     quote_block: int,
     current_block: int,
-    max_block_age: int = DEFAULT_MAX_BLOCK_AGE,
+    max_blocks: int = 2,
 ) -> bool:
     """
-    Check if a quote's block is fresh enough.
+    Check if a quote's block is fresh relative to current block.
     
     Args:
-        quote_block: Block number when quote was fetched
-        current_block: Current block number
-        max_block_age: Maximum allowed block age
-    
+        quote_block: Block number from quote
+        current_block: Current chain block
+        max_blocks: Maximum allowed block difference
+        
     Returns:
-        True if block is fresh
+        True if quote block is fresh
     """
-    return (current_block - quote_block) <= max_block_age
-
-
-def ms_to_seconds(ms: int) -> float:
-    """Convert milliseconds to seconds."""
-    return ms / 1000.0
-
-
-def seconds_to_ms(seconds: float) -> int:
-    """Convert seconds to milliseconds."""
-    return int(seconds * 1000)
-
-
-@dataclass
-class FreshnessCheck:
-    """Result of a freshness check."""
+    if quote_block <= 0 or current_block <= 0:
+        return False
     
-    is_fresh: bool
-    quote_age_ms: int
-    block_age: int
-    reason: str | None = None
-    
-    @classmethod
-    def fresh(cls, quote_age_ms: int, block_age: int) -> "FreshnessCheck":
-        return cls(
-            is_fresh=True,
-            quote_age_ms=quote_age_ms,
-            block_age=block_age,
-            reason=None,
-        )
-    
-    @classmethod
-    def stale_time(cls, quote_age_ms: int, block_age: int, max_age_ms: int) -> "FreshnessCheck":
-        return cls(
-            is_fresh=False,
-            quote_age_ms=quote_age_ms,
-            block_age=block_age,
-            reason=f"Quote too old: {quote_age_ms}ms > {max_age_ms}ms",
-        )
-    
-    @classmethod
-    def stale_block(
-        cls, quote_age_ms: int, block_age: int, max_block_age: int
-    ) -> "FreshnessCheck":
-        return cls(
-            is_fresh=False,
-            quote_age_ms=quote_age_ms,
-            block_age=block_age,
-            reason=f"Block too old: {block_age} blocks > {max_block_age}",
-        )
+    block_diff = current_block - quote_block
+    return 0 <= block_diff <= max_blocks
 
 
-def check_freshness(
-    quote_timestamp_ms: int,
+def calculate_staleness_score(
     quote_block: int,
     current_block: int,
-    max_age_ms: int = DEFAULT_MAX_QUOTE_AGE_MS,
-    max_block_age: int = DEFAULT_MAX_BLOCK_AGE,
-) -> FreshnessCheck:
+    max_blocks: int = 10,
+) -> float:
     """
-    Comprehensive freshness check for a quote.
+    Calculate staleness score (0 = fresh, 1 = stale).
     
-    Checks both time-based and block-based freshness.
+    Args:
+        quote_block: Block number from quote
+        current_block: Current chain block
+        max_blocks: Blocks at which score reaches 1.0
+        
+    Returns:
+        Staleness score between 0 and 1
     """
-    quote_age_ms = now_ms() - quote_timestamp_ms
-    block_age = current_block - quote_block
+    if quote_block <= 0 or current_block <= 0:
+        return 1.0
     
-    # Check time freshness
-    if quote_age_ms > max_age_ms:
-        return FreshnessCheck.stale_time(quote_age_ms, block_age, max_age_ms)
+    block_diff = current_block - quote_block
     
-    # Check block freshness
-    if block_age > max_block_age:
-        return FreshnessCheck.stale_block(quote_age_ms, block_age, max_block_age)
+    if block_diff < 0:
+        return 1.0  # Quote from future block is suspicious
     
-    return FreshnessCheck.fresh(quote_age_ms, block_age)
+    if block_diff >= max_blocks:
+        return 1.0
+    
+    return block_diff / max_blocks
 
 
-class ScanClock:
+def calculate_freshness_score(
+    quote_block: int,
+    current_block: int,
+    max_blocks: int = 10,
+) -> float:
     """
-    Clock for a scan cycle.
+    Calculate freshness score (1 = fresh, 0 = stale).
     
-    Tracks timing and ensures all operations reference
-    the same time window.
+    Args:
+        quote_block: Block number from quote
+        current_block: Current chain block
+        max_blocks: Blocks at which score reaches 0.0
+        
+    Returns:
+        Freshness score between 0 and 1
     """
-    
-    def __init__(self, chain_id: int):
-        self.chain_id = chain_id
-        self.started_at_ms = now_ms()
-        self.block_pin: BlockPin | None = None
-    
-    def pin_block(self, block_number: int, block_timestamp: int) -> BlockPin:
-        """Pin a block for this scan cycle."""
-        self.block_pin = BlockPin(
-            block_number=block_number,
-            block_timestamp=block_timestamp,
-            pinned_at_ms=now_ms(),
-            chain_id=self.chain_id,
-        )
-        return self.block_pin
-    
-    @property
-    def elapsed_ms(self) -> int:
-        """Milliseconds since scan started."""
-        return now_ms() - self.started_at_ms
-    
-    def is_block_pinned(self) -> bool:
-        """Check if a block has been pinned."""
-        return self.block_pin is not None
-    
-    def is_pin_stale(self) -> bool:
-        """Check if the pinned block is stale."""
-        if self.block_pin is None:
-            return True
-        return self.block_pin.is_stale
+    return 1.0 - calculate_staleness_score(quote_block, current_block, max_blocks)

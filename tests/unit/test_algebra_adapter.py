@@ -28,8 +28,8 @@ class TestAlgebraEncoding:
             amount_in=10**18,
         )
         
-        # Check selector
-        assert result.startswith("0xcdca1753")
+        # Check selector (quoteExactInputSingle)
+        assert result.startswith("0x2d9ebd1d")
         # Check length: 0x + selector(8) + 4*64 = 266
         assert len(result) == 266
     

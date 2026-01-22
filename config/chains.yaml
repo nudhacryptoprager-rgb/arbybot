@@ -1,153 +1,57 @@
-# =============================================================================
-# config/chains.yaml - Chain Configuration (TRUST ANCHORS)
-# =============================================================================
-# 
-# This file defines supported blockchain networks.
-# HARDCODED values: chain_id, native_symbol, explorer
-# RPC URLs use Alchemy API key from .env
-#
-# Last updated: 2026-01-04
-# =============================================================================
+# PATH: config/chains.yaml
+# Chain configuration - TRUST ANCHORS per Roadmap 4.1
+# Only infrastructure data: chain_id, rpc, ws, explorer, native token
 
-# =============================================================================
-# ARBITRUM ONE - PRIMARY TARGET
-# =============================================================================
 arbitrum_one:
   chain_id: 42161
   name: "Arbitrum One"
   native_symbol: "ETH"
-  explorer_url: "https://arbiscan.io"
-  
-  # RPC endpoints (primary + fallbacks)
-  # Use ALCHEMY_API_KEY from .env
-  rpc_urls:
-    - "https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-    - "https://arbitrum.llamarpc.com"
+  wrapped_native: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"  # WETH
+  explorer: "https://arbiscan.io"
+  rpc_endpoints:
     - "https://arb1.arbitrum.io/rpc"
-  
-  # WebSocket endpoints
-  ws_urls:
-    - "wss://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-  
-  # Chain-specific settings
-  block_time_ms: 250  # ~0.25s block time
-  max_gas_price_gwei: 1.0  # L2 gas is cheap
-  
-  # Status
-  enabled: true
-  priority: 1  # Highest priority
+    - "https://arbitrum-one.public.blastapi.io"
+  ws_endpoints:
+    - "wss://arb1.arbitrum.io/ws"
+  block_time_ms: 250
+  confirmations: 1
 
-# =============================================================================
-# BASE - HIGH PRIORITY (Most active L2 for meme trading)
-# =============================================================================
 base:
   chain_id: 8453
   name: "Base"
   native_symbol: "ETH"
-  explorer_url: "https://basescan.org"
-  
-  rpc_urls:
-    - "https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-    - "https://base.llamarpc.com"
+  wrapped_native: "0x4200000000000000000000000000000000000006"  # WETH
+  explorer: "https://basescan.org"
+  rpc_endpoints:
     - "https://mainnet.base.org"
-  
-  ws_urls:
-    - "wss://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-  
-  block_time_ms: 2000  # ~2s block time
-  max_gas_price_gwei: 0.1
-  
-  enabled: true
-  priority: 2
+    - "https://base.public.blastapi.io"
+  ws_endpoints:
+    - "wss://base.public.blastapi.io"
+  block_time_ms: 2000
+  confirmations: 1
 
-# =============================================================================
-# LINEA - SECONDARY
-# =============================================================================
 linea:
   chain_id: 59144
   name: "Linea"
   native_symbol: "ETH"
-  explorer_url: "https://lineascan.build"
-  
-  rpc_urls:
-    - "https://linea-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+  wrapped_native: "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f"  # WETH
+  explorer: "https://lineascan.build"
+  rpc_endpoints:
     - "https://rpc.linea.build"
-    - "https://linea.drpc.org"
-  
-  ws_urls:
-    - "wss://linea-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-  
+    - "https://linea.public.blastapi.io"
+  ws_endpoints: []
   block_time_ms: 2000
-  max_gas_price_gwei: 0.5
-  
-  enabled: true
-  priority: 3
+  confirmations: 1
 
-# =============================================================================
-# SCROLL - DISABLED (DEX verification failed: missing quoter/router)
-# =============================================================================
-scroll:
-  chain_id: 534352
-  name: "Scroll"
-  native_symbol: "ETH"
-  explorer_url: "https://scrollscan.com"
-  
-  rpc_urls:
-    - "https://scroll-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-    - "https://rpc.scroll.io"
-    - "https://scroll.drpc.org"
-  
-  ws_urls:
-    - "wss://scroll-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-  
-  block_time_ms: 3000
-  max_gas_price_gwei: 0.5
-  
-  enabled: false  # DEX verification failed
-  priority: 4
-
-# =============================================================================
-# MANTLE - DISABLED (FusionX factory not found, needs verification)
-# =============================================================================
 mantle:
   chain_id: 5000
   name: "Mantle"
-  native_symbol: "MNT"  # Native token is MNT, not ETH!
-  explorer_url: "https://mantlescan.xyz"
-  
-  rpc_urls:
-    - "https://mantle-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+  native_symbol: "MNT"
+  wrapped_native: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8"  # WMNT
+  explorer: "https://explorer.mantle.xyz"
+  rpc_endpoints:
     - "https://rpc.mantle.xyz"
-    - "https://mantle.drpc.org"
-  
-  ws_urls:
-    - "wss://mantle-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-  
+    - "https://mantle.public.blastapi.io"
+  ws_endpoints: []
   block_time_ms: 2000
-  max_gas_price_gwei: 0.02  # Very cheap
-  
-  enabled: false  # FusionX factory verification failed
-  priority: 5
-
-# =============================================================================
-# ZKSYNC ERA
-# =============================================================================
-zksync:
-  chain_id: 324
-  name: "zkSync Era"
-  native_symbol: "ETH"
-  explorer_url: "https://era.zksync.network"
-  
-  rpc_urls:
-    - "https://zksync-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-    - "https://mainnet.era.zksync.io"
-    - "https://zksync.drpc.org"
-  
-  ws_urls:
-    - "wss://zksync-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-  
-  block_time_ms: 1000
-  max_gas_price_gwei: 0.25
-  
-  enabled: true
-  priority: 6
+  confirmations: 1

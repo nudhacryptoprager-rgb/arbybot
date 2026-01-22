@@ -1,110 +1,92 @@
+# PATH: core/exceptions.py
 """
-core/exceptions.py - Typed exceptions with error codes.
+Typed exceptions for ARBY.
 
-Every error has a code for reject reasons and monitoring.
-No bare exceptions allowed in the project.
+Per Roadmap 3.6: Typed errors with revert vs infra distinction.
 """
 
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, Optional
 
 
 class ErrorCode(str, Enum):
-    """
-    Canonical error codes for reject reasons and monitoring.
-    
-    Categories:
-    - QUOTE_* : Quote fetching errors
-    - POOL_*  : Pool/liquidity errors  
-    - TOKEN_* : Token validation errors
-    - EXEC_*  : Execution errors
-    - INFRA_* : Infrastructure errors
-    - CEX_*   : CEX-specific errors
-    """
+    """Error codes for typed exceptions."""
     
     # Quote errors
     QUOTE_STALE_BLOCK = "QUOTE_STALE_BLOCK"
-    QUOTE_REVERT = "QUOTE_REVERT"
-    QUOTE_ZERO_OUTPUT = "QUOTE_ZERO_OUTPUT"
     QUOTE_TIMEOUT = "QUOTE_TIMEOUT"
-    QUOTE_INVALID_PARAMS = "QUOTE_INVALID_PARAMS"
+    QUOTE_REVERT = "QUOTE_REVERT"
+    QUOTE_EMPTY = "QUOTE_EMPTY"
     QUOTE_GAS_TOO_HIGH = "QUOTE_GAS_TOO_HIGH"
-    QUOTE_INCONSISTENT = "QUOTE_INCONSISTENT"  # Monotonicity violation
     
     # Pool errors
-    POOL_NOT_FOUND = "POOL_NOT_FOUND"
-    POOL_NO_LIQUIDITY = "POOL_NO_LIQUIDITY"
     POOL_DEAD = "POOL_DEAD"
-    POOL_SUSPICIOUS = "POOL_SUSPICIOUS"
-    POOL_UNSUPPORTED_FEE = "POOL_UNSUPPORTED_FEE"
-    
-    # Slippage / Impact
-    SLIPPAGE_TOO_HIGH = "SLIPPAGE_TOO_HIGH"
-    PRICE_IMPACT_TOO_HIGH = "PRICE_IMPACT_TOO_HIGH"
-    TICKS_CROSSED_TOO_MANY = "TICKS_CROSSED_TOO_MANY"
-    PRICE_SANITY_FAILED = "PRICE_SANITY_FAILED"  # Price deviates too much from anchor
-    PRICE_ANCHOR_MISSING = "PRICE_ANCHOR_MISSING"  # Non-anchor quote without anchor price
+    POOL_NO_LIQUIDITY = "POOL_NO_LIQUIDITY"
+    POOL_NOT_FOUND = "POOL_NOT_FOUND"
+    POOL_DISABLED = "POOL_DISABLED"
     
     # Token errors
     TOKEN_NOT_FOUND = "TOKEN_NOT_FOUND"
     TOKEN_INVALID_DECIMALS = "TOKEN_INVALID_DECIMALS"
-    TOKEN_SYMBOL_MISMATCH = "TOKEN_SYMBOL_MISMATCH"
-    TOKEN_NOT_VERIFIED = "TOKEN_NOT_VERIFIED"
+    TOKEN_UNSUPPORTED = "TOKEN_UNSUPPORTED"
     
     # Execution errors
-    EXEC_SIMULATION_FAILED = "EXEC_SIMULATION_FAILED"
     EXEC_REVERT = "EXEC_REVERT"
+    EXEC_SIMULATION_FAILED = "EXEC_SIMULATION_FAILED"
+    EXEC_SLIPPAGE = "EXEC_SLIPPAGE"
     EXEC_GAS_TOO_HIGH = "EXEC_GAS_TOO_HIGH"
-    EXEC_INSUFFICIENT_BALANCE = "EXEC_INSUFFICIENT_BALANCE"
-    EXEC_NONCE_ERROR = "EXEC_NONCE_ERROR"
-    
-    # PnL / Opportunity errors
-    PNL_NEGATIVE = "PNL_NEGATIVE"
-    PNL_BELOW_THRESHOLD = "PNL_BELOW_THRESHOLD"
-    PNL_CURRENCY_MISMATCH = "PNL_CURRENCY_MISMATCH"
     
     # Infrastructure errors
-    INFRA_RPC_TIMEOUT = "INFRA_RPC_TIMEOUT"
     INFRA_RPC_ERROR = "INFRA_RPC_ERROR"
+    INFRA_RPC_TIMEOUT = "INFRA_RPC_TIMEOUT"
     INFRA_RATE_LIMIT = "INFRA_RATE_LIMIT"
-    INFRA_CONNECTION_ERROR = "INFRA_CONNECTION_ERROR"
-    INFRA_BAD_ABI = "INFRA_BAD_ABI"  # Real ABI encoding/decoding errors
-    INFRA_BAD_ADDRESS = "INFRA_BAD_ADDRESS"
-    
-    # Internal code errors (bugs, not infrastructure)
-    INTERNAL_CODE_ERROR = "INTERNAL_CODE_ERROR"  # AttributeError/KeyError in our code
+    INFRA_TIMEOUT = "INFRA_TIMEOUT"
     
     # CEX errors
     CEX_DEPTH_LOW = "CEX_DEPTH_LOW"
-    CEX_PAIR_NOT_FOUND = "CEX_PAIR_NOT_FOUND"
+    CEX_CONNECTION_ERROR = "CEX_CONNECTION_ERROR"
     CEX_RATE_LIMIT = "CEX_RATE_LIMIT"
-    CEX_API_ERROR = "CEX_API_ERROR"
     
-    # DEX adapter errors
-    DEX_ADAPTER_NOT_FOUND = "DEX_ADAPTER_NOT_FOUND"
-    DEX_UNSUPPORTED_TYPE = "DEX_UNSUPPORTED_TYPE"
+    # Price/slippage errors
+    SLIPPAGE_TOO_HIGH = "SLIPPAGE_TOO_HIGH"
+    PRICE_SANITY_FAILED = "PRICE_SANITY_FAILED"
+    PRICE_ANCHOR_MISSING = "PRICE_ANCHOR_MISSING"
+    TICKS_CROSSED_TOO_MANY = "TICKS_CROSSED_TOO_MANY"
     
-    # Generic
-    UNKNOWN_ERROR = "UNKNOWN_ERROR"
+    # Quote consistency errors
+    QUOTE_ZERO_OUTPUT = "QUOTE_ZERO_OUTPUT"
+    QUOTE_INCONSISTENT = "QUOTE_INCONSISTENT"
+    
+    # PnL errors
+    PNL_BELOW_THRESHOLD = "PNL_BELOW_THRESHOLD"
+    PNL_NEGATIVE = "PNL_NEGATIVE"
+    
+    # Validation
     VALIDATION_ERROR = "VALIDATION_ERROR"
+    
+    # Other
+    UNKNOWN = "UNKNOWN"
 
 
 class ArbyError(Exception):
-    """Base exception for all ARBY errors."""
+    """Base exception for ARBY with typed error code."""
     
     def __init__(
         self,
         code: ErrorCode,
         message: str,
-        details: dict[str, Any] | None = None,
+        details: Optional[Dict[str, Any]] = None,
     ):
+        super().__init__(message)
         self.code = code
         self.message = message
         self.details = details or {}
-        super().__init__(f"[{code.value}] {message}")
     
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize for logging/reporting."""
+    def __str__(self) -> str:
+        return f"[{self.code.value}] {self.message}"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dict."""
         return {
             "error_code": self.code.value,
             "message": self.message,
@@ -113,37 +95,95 @@ class ArbyError(Exception):
 
 
 class QuoteError(ArbyError):
-    """Errors during quote fetching."""
+    """Quote-related errors."""
     pass
 
 
 class PoolError(ArbyError):
-    """Errors related to pool state."""
+    """Pool-related errors."""
     pass
 
 
 class TokenError(ArbyError):
-    """Errors during token validation."""
+    """Token-related errors."""
     pass
 
 
 class ExecutionError(ArbyError):
-    """Errors during trade execution."""
+    """Execution-related errors."""
     pass
 
 
 class InfraError(ArbyError):
-    """Infrastructure/network errors."""
+    """Infrastructure-related errors (RPC, timeouts, rate limits)."""
     pass
 
 
 class CexError(ArbyError):
-    """CEX-specific errors."""
+    """CEX-related errors."""
     pass
 
 
 class ValidationError(ArbyError):
-    """Input validation errors."""
+    """Validation errors with automatic error code."""
     
-    def __init__(self, message: str, details: dict[str, Any] | None = None):
-        super().__init__(ErrorCode.VALIDATION_ERROR, message, details)
+    def __init__(
+        self,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            code=ErrorCode.VALIDATION_ERROR,
+            message=message,
+            details=details,
+        )
+
+
+# Legacy aliases for backwards compatibility with RejectReason-based code
+class RPCError(InfraError):
+    """RPC call failed."""
+    
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.INFRA_RPC_ERROR, message, details)
+
+
+class TimeoutError(InfraError):
+    """Operation timed out."""
+    
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.INFRA_TIMEOUT, message, details)
+
+
+class RateLimitError(InfraError):
+    """Rate limit exceeded."""
+    
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.INFRA_RATE_LIMIT, message, details)
+
+
+class QuoteRevertError(QuoteError):
+    """Quote call reverted."""
+    
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.QUOTE_REVERT, message, details)
+
+
+class SlippageError(ArbyError):
+    """Slippage exceeded threshold."""
+    
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.SLIPPAGE_TOO_HIGH, message, details)
+
+
+class PriceSanityError(ArbyError):
+    """Price failed sanity check."""
+    
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.PRICE_SANITY_FAILED, message, details)
+
+
+class LiquidityError(PoolError):
+    """Insufficient liquidity."""
+    
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.POOL_NO_LIQUIDITY, message, details)

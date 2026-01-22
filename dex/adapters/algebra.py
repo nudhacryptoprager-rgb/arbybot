@@ -250,7 +250,7 @@ class AlgebraAdapter:
             timestamp_ms=now_ms(),
             block_number=block_number if block_number else 0,
             gas_estimate=gas_estimate,
-            ticks_crossed=None,  # Algebra doesn't report this
+            ticks_crossed=0,  # Algebra doesn't report this; default to 0
             sqrt_price_x96_after=None,
             latency_ms=result.latency_ms,
         )
