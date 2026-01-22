@@ -1,161 +1,122 @@
 # PATH: strategy/jobs/run_scan.py
 """
-Scan job runner for ARBY.
+ARBY Scanner Entry Point.
 
-Routes to appropriate scanner implementation based on mode.
+STEP 7: Explicit mode error - no silent mode substitution.
 
-Modes:
-- SMOKE_SIMULATOR: Fake quotes for testing (--mode smoke)
-- REGISTRY_REAL: Real quotes from RPC (--mode real) - NOT YET IMPLEMENTED
+If user runs with --mode real but REGISTRY_REAL is not implemented,
+the scanner raises RuntimeError immediately (not silent fallback to smoke).
 
-Usage:
-    python -m strategy.jobs.run_scan --mode smoke --cycles 1 --output-dir data/runs/scan
-    python -m strategy.jobs.run_scan --mode real --cycles 1  # Will raise RuntimeError
+MODES:
+  --mode smoke  → SMOKE_SIMULATOR (simulation only, always works)
+  --mode real   → REGISTRY_REAL (not yet implemented, raises error)
 """
 
 import argparse
-import logging
 import sys
+import warnings
 from pathlib import Path
-from typing import Optional
 
-# Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from strategy.jobs.run_scan_smoke import RunMode, run_scanner as run_smoke
-
-logger = logging.getLogger("arby.scan")
-
-
-class ScannerMode:
-    """Scanner mode constants."""
-    SMOKE = "smoke"
-    REAL = "real"
-    
-    VALID_MODES = {SMOKE, REAL}
-
-
-def setup_logging(output_dir: Optional[Path] = None, level: int = logging.INFO) -> None:
-    """Setup logging configuration."""
-    handlers = [logging.StreamHandler(sys.stdout)]
-    if output_dir:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        log_file = output_dir / "scan.log"
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
-
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s | %(levelname)-9s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=handlers,
-        force=True,
-    )
-
-
-def run_scanner(
-    mode: str,
-    cycles: int = 1,
-    output_dir: Optional[Path] = None,
-    config_path: Optional[Path] = None,
-) -> None:
-    """
-    Run the scanner for specified number of cycles.
-    
-    Args:
-        mode: Scanner mode - "smoke" or "real"
-        cycles: Number of scan cycles
-        output_dir: Output directory for artifacts
-        config_path: Path to config file
-    
-    Raises:
-        RuntimeError: If mode is "real" (not yet implemented)
-        ValueError: If mode is invalid
-    """
-    if mode not in ScannerMode.VALID_MODES:
-        raise ValueError(f"Invalid mode: {mode}. Valid modes: {ScannerMode.VALID_MODES}")
-    
-    if mode == ScannerMode.REAL:
-        # STEP 1: No silent redirect - explicit error for REAL mode
-        raise RuntimeError(
-            "Real scanner (REGISTRY_REAL) not yet implemented. "
-            "Use --mode smoke for simulation. "
-            "See docs/status/Status_M3.md for implementation roadmap."
-        )
-    
-    # SMOKE mode
-    logger.info(f"Scanner mode: {mode} -> {RunMode.SMOKE_SIMULATOR.value}")
-    run_smoke(
-        cycles=cycles,
-        output_dir=output_dir,
-        config_path=config_path,
-        run_mode=RunMode.SMOKE_SIMULATOR,
-    )
+# Feature flag: Set to True when REGISTRY_REAL is implemented
+REGISTRY_REAL_IMPLEMENTED = False
 
 
 def main():
-    """Main entry point."""
     parser = argparse.ArgumentParser(
         description="ARBY Scanner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+EXAMPLES:
+  # Run smoke simulator (default, always works)
   python -m strategy.jobs.run_scan --mode smoke --cycles 1
-  python -m strategy.jobs.run_scan --mode smoke --output-dir data/runs/myrun
 
-Modes:
-  smoke   Run in simulation mode (generates fake quotes)
-  real    Run with real RPC quotes (NOT YET IMPLEMENTED)
-"""
+  # Run real scanner (not yet implemented)
+  python -m strategy.jobs.run_scan --mode real --cycles 1
+  # → RuntimeError: REGISTRY_REAL scanner not yet implemented
+
+MODES:
+  smoke  SMOKE_SIMULATOR - all data is simulated, execution disabled
+  real   REGISTRY_REAL - live RPC calls (NOT YET IMPLEMENTED)
+        """,
     )
+
     parser.add_argument(
         "--mode", "-m",
-        type=str,
-        choices=list(ScannerMode.VALID_MODES),
-        default=ScannerMode.SMOKE,
-        help="Scanner mode: smoke (simulation) or real (RPC). Default: smoke"
+        choices=["smoke", "real"],
+        default="smoke",
+        help="Scanner mode: 'smoke' (simulation) or 'real' (live RPC). Default: smoke",
     )
     parser.add_argument(
         "--cycles", "-c",
         type=int,
         default=1,
-        help="Number of scan cycles to run (default: 1)"
+        help="Number of scan cycles to run. Default: 1",
     )
     parser.add_argument(
         "--output-dir", "-o",
         type=str,
         default=None,
-        help="Output directory for artifacts"
+        help="Output directory for artifacts. Default: data/runs/<timestamp>/",
     )
     parser.add_argument(
         "--config", "-f",
         type=str,
         default=None,
-        help="Path to configuration file"
+        help="Config file path. Default: None",
     )
-    # Legacy flag for backward compat
+
+    # Legacy flag (deprecated)
     parser.add_argument(
         "--smoke",
         action="store_true",
-        help="[DEPRECATED] Use --mode smoke instead"
+        help="[DEPRECATED] Use --mode smoke instead",
     )
 
     args = parser.parse_args()
-    
-    # Handle legacy --smoke flag
-    mode = args.mode
-    if args.smoke:
-        logger.warning("--smoke is deprecated, use --mode smoke instead")
-        mode = ScannerMode.SMOKE
 
-    output_path = Path(args.output_dir) if args.output_dir else None
-    setup_logging(output_path)
+    # Handle deprecated --smoke flag
+    if args.smoke:
+        warnings.warn(
+            "--smoke is deprecated. Use --mode smoke instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        args.mode = "smoke"
+
+    # STEP 7: Explicit mode check - no silent substitution
+    if args.mode == "real":
+        if not REGISTRY_REAL_IMPLEMENTED:
+            raise RuntimeError(
+                "REGISTRY_REAL scanner is not yet implemented.\n"
+                "\n"
+                "The --mode real option requires live RPC integration which is "
+                "planned for M4 (Execution Layer).\n"
+                "\n"
+                "Current options:\n"
+                "  1. Use --mode smoke for simulation (works now)\n"
+                "  2. Wait for REGISTRY_REAL implementation in M4\n"
+                "\n"
+                "This error prevents silent fallback to smoke mode, which could "
+                "cause confusion about whether you're running live or simulated."
+            )
+        # When implemented:
+        # from strategy.jobs.run_scan_real import run_scanner as run_real_scanner
+        # run_real_scanner(...)
+        # return
+
+    # Import smoke scanner (lazy to avoid circular imports)
+    from strategy.jobs.run_scan_smoke import run_scanner, RunMode
+
+    run_mode = RunMode.SMOKE_SIMULATOR if args.mode == "smoke" else RunMode.REGISTRY_REAL
 
     run_scanner(
-        mode=mode,
         cycles=args.cycles,
-        output_dir=output_path,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
         config_path=Path(args.config) if args.config else None,
+        run_mode=run_mode,
     )
 
 

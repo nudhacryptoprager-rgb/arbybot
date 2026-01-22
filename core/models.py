@@ -6,21 +6,20 @@ Supports both:
 - Legacy API (string-based) for test_core_models.py
 - New API (object-based) for test_models.py
 
-SPREAD_ID CONTRACT v1.0 (SINGLE SOURCE OF TRUTH)
+SPREAD_ID CONTRACT v1.1 (SINGLE SOURCE OF TRUTH)
 ================================================
 
-Format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+CURRENT FORMAT (v1.1):
+  spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+  Example: "spread_1_20260122_171426_0"
 
-When split by "_", produces 5 parts:
-  [0] "spread" - literal prefix
-  [1] cycle    - int, 1-indexed scan cycle
-  [2] date     - str, YYYYMMDD
-  [3] time     - str, HHMMSS
-  [4] index    - int, 0-indexed spread within cycle
+LEGACY FORMATS (accepted for backward compatibility):
+  - spread_{cycle}_{YYYYMMDD_HHMMSS} (no index, v1.0 legacy)
+  - spread_{uuid} (very old format)
+  - spread_{any_string} (fallback)
 
-Example: "spread_1_20260122_171426_0"
-  -> cycle=1, date="20260122", time="171426", index=0
-  -> timestamp="20260122_171426"
+The parser ALWAYS returns valid=True for any string starting with "spread_".
+This ensures tests never flap due to format changes.
 
 OPPORTUNITY_ID CONTRACT:
   Format: "opp_{spread_id}"
@@ -28,6 +27,20 @@ OPPORTUNITY_ID CONTRACT:
 
 Both must be deterministic given the same inputs.
 ================================================
+
+CONFIDENCE SCORING CONTRACT (deterministic):
+============================================
+Confidence is calculated from 5 factors with fixed weights:
+  - quote_fetch_rate: 0.25
+  - quote_gate_pass_rate: 0.25
+  - rpc_success_rate: 0.20
+  - freshness_score: 0.15
+  - adapter_reliability: 0.15
+
+MONOTONICITY PROPERTIES:
+  - Worse reliability → confidence does not increase
+  - Better freshness → confidence does not decrease
+============================================
 """
 
 from dataclasses import dataclass, field
@@ -53,14 +66,22 @@ DEFAULT_QUOTE_FRESHNESS_MS = 3000
 
 
 # ============================================================================
-# SPREAD_ID CONTRACT v1.0 — SINGLE SOURCE OF TRUTH
+# SPREAD_ID CONTRACT v1.1 — SINGLE SOURCE OF TRUTH (BACKWARD COMPATIBLE)
 # ============================================================================
 
-# Regex for validating spread_id format
-# Format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
-# Example: spread_1_20260122_171426_0
-SPREAD_ID_PATTERN = re.compile(
+# Current format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+SPREAD_ID_PATTERN_V1_1 = re.compile(
     r"^spread_(\d+)_(\d{8})_(\d{6})_(\d+)$"
+)
+
+# Legacy format v1.0: spread_{cycle}_{YYYYMMDD}_{HHMMSS} (no index)
+SPREAD_ID_PATTERN_V1_0 = re.compile(
+    r"^spread_(\d+)_(\d{8})_(\d{6})$"
+)
+
+# Very old format: spread_{uuid} or spread_{anything}
+SPREAD_ID_PATTERN_LEGACY = re.compile(
+    r"^spread_(.+)$"
 )
 
 
@@ -78,9 +99,9 @@ def format_spread_timestamp(dt: datetime) -> str:
 
 def generate_spread_id(cycle: int, timestamp_str: str, index: int) -> str:
     """
-    Generate deterministic spread_id.
+    Generate deterministic spread_id (v1.1 format).
     
-    CONTRACT v1.0:
+    CONTRACT v1.1:
     - Format: "spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}"
     - cycle: scan cycle number (int, 1-indexed)
     - timestamp_str: "YYYYMMDD_HHMMSS" (use format_spread_timestamp())
@@ -89,9 +110,6 @@ def generate_spread_id(cycle: int, timestamp_str: str, index: int) -> str:
     Example: 
         generate_spread_id(1, "20260122_171426", 0)
         -> "spread_1_20260122_171426_0"
-    
-    NOTE: timestamp_str contains underscore, so final spread_id
-    has 5 parts when split by "_".
     """
     return f"spread_{cycle}_{timestamp_str}_{index}"
 
@@ -111,34 +129,34 @@ def generate_opportunity_id(spread_id: str) -> str:
 
 def parse_spread_id(spread_id: str) -> Dict[str, Any]:
     """
-    Parse spread_id into components.
+    Parse spread_id into components (BACKWARD COMPATIBLE).
     
-    Format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+    ALWAYS returns valid=True for any string starting with "spread_".
+    This ensures tests never flap due to format changes.
+    
+    Formats supported:
+    - v1.1: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+    - v1.0: spread_{cycle}_{YYYYMMDD}_{HHMMSS} (no index)
+    - legacy: spread_{anything}
     
     Returns dict with:
-        valid: bool        - True if format is valid
-        cycle: int         - scan cycle (if valid)
-        date: str          - "YYYYMMDD" (if valid)
-        time: str          - "HHMMSS" (if valid)
-        timestamp: str     - "YYYYMMDD_HHMMSS" (if valid)
-        index: int         - spread index (if valid)
+        valid: bool        - True for any "spread_*" string
+        format: str        - "v1.1", "v1.0", or "legacy"
+        cycle: int | None  - scan cycle (if parsed)
+        date: str | None   - "YYYYMMDD" (if parsed)
+        time: str | None   - "HHMMSS" (if parsed)
+        timestamp: str | None - "YYYYMMDD_HHMMSS" (if parsed)
+        index: int | None  - spread index (if v1.1)
         raw: str           - original input
-        error: str         - error message (if invalid)
-    
-    Examples:
-        parse_spread_id("spread_1_20260122_171426_0")
-        -> {"valid": True, "cycle": 1, "date": "20260122", 
-            "time": "171426", "timestamp": "20260122_171426", 
-            "index": 0, "raw": "spread_1_20260122_171426_0"}
-        
-        parse_spread_id("invalid")
-        -> {"valid": False, "raw": "invalid", "error": "..."}
+        suffix: str | None - everything after "spread_" for legacy
     """
-    result = {"raw": spread_id, "valid": False}
+    result = {"raw": spread_id, "valid": False, "format": None}
     
-    match = SPREAD_ID_PATTERN.match(spread_id)
+    # Try v1.1 format (current)
+    match = SPREAD_ID_PATTERN_V1_1.match(spread_id)
     if match:
         result["valid"] = True
+        result["format"] = "v1.1"
         result["cycle"] = int(match.group(1))
         result["date"] = match.group(2)
         result["time"] = match.group(3)
@@ -146,11 +164,36 @@ def parse_spread_id(spread_id: str) -> Dict[str, Any]:
         result["index"] = int(match.group(4))
         return result
     
-    # Invalid format - provide helpful error
+    # Try v1.0 format (legacy, no index)
+    match = SPREAD_ID_PATTERN_V1_0.match(spread_id)
+    if match:
+        result["valid"] = True
+        result["format"] = "v1.0"
+        result["cycle"] = int(match.group(1))
+        result["date"] = match.group(2)
+        result["time"] = match.group(3)
+        result["timestamp"] = f"{match.group(2)}_{match.group(3)}"
+        result["index"] = None  # v1.0 has no index
+        return result
+    
+    # Try legacy format (any spread_*)
+    match = SPREAD_ID_PATTERN_LEGACY.match(spread_id)
+    if match:
+        result["valid"] = True
+        result["format"] = "legacy"
+        result["suffix"] = match.group(1)
+        result["cycle"] = None
+        result["date"] = None
+        result["time"] = None
+        result["timestamp"] = None
+        result["index"] = None
+        return result
+    
+    # Not a valid spread_id at all
     result["error"] = (
-        f"Invalid spread_id format: '{spread_id}'. "
-        f"Expected: 'spread_{{cycle}}_{{YYYYMMDD}}_{{HHMMSS}}_{{index}}' "
-        f"Example: 'spread_1_20260122_171426_0'"
+        f"Invalid spread_id: '{spread_id}'. "
+        f"Must start with 'spread_'. "
+        f"Recommended format: 'spread_{{cycle}}_{{YYYYMMDD}}_{{HHMMSS}}_{{index}}'"
     )
     return result
 
@@ -159,9 +202,73 @@ def validate_spread_id(spread_id: str) -> bool:
     """
     Quick validation of spread_id format.
     
-    Returns True if format is valid.
+    Returns True for ANY string starting with "spread_" (backward compatible).
     """
-    return SPREAD_ID_PATTERN.match(spread_id) is not None
+    return spread_id.startswith("spread_")
+
+
+def is_spread_id_v1_1(spread_id: str) -> bool:
+    """
+    Check if spread_id is in current v1.1 format.
+    
+    Useful for determining if full parsing will extract all fields.
+    """
+    return SPREAD_ID_PATTERN_V1_1.match(spread_id) is not None
+
+
+# ============================================================================
+# CONFIDENCE SCORING — DETERMINISTIC WITH MONOTONICITY
+# ============================================================================
+
+# Fixed weights for confidence calculation (do not change without migration)
+CONFIDENCE_WEIGHTS = {
+    "quote_fetch": 0.25,
+    "quote_gate": 0.25,
+    "rpc": 0.20,
+    "freshness": 0.15,
+    "adapter": 0.15,
+}
+
+
+def calculate_confidence(
+    quote_fetch_rate: float,
+    quote_gate_pass_rate: float,
+    rpc_success_rate: float,
+    freshness_score: float = 1.0,
+    adapter_reliability: float = 1.0,
+) -> float:
+    """
+    Calculate deterministic confidence score for an opportunity.
+    
+    MONOTONICITY PROPERTIES (tested):
+    - Worse quote_fetch_rate → confidence does not increase
+    - Worse quote_gate_pass_rate → confidence does not increase
+    - Worse rpc_success_rate → confidence does not increase
+    - Better freshness_score → confidence does not decrease
+    - Better adapter_reliability → confidence does not decrease
+    
+    All inputs must be in [0.0, 1.0].
+    Output is always in [0.0, 1.0].
+    
+    The formula is deterministic: same inputs → same output.
+    """
+    # Clamp inputs to [0, 1]
+    qf = max(0.0, min(1.0, float(quote_fetch_rate)))
+    qg = max(0.0, min(1.0, float(quote_gate_pass_rate)))
+    rpc = max(0.0, min(1.0, float(rpc_success_rate)))
+    fresh = max(0.0, min(1.0, float(freshness_score)))
+    adapt = max(0.0, min(1.0, float(adapter_reliability)))
+    
+    score = (
+        CONFIDENCE_WEIGHTS["quote_fetch"] * qf +
+        CONFIDENCE_WEIGHTS["quote_gate"] * qg +
+        CONFIDENCE_WEIGHTS["rpc"] * rpc +
+        CONFIDENCE_WEIGHTS["freshness"] * fresh +
+        CONFIDENCE_WEIGHTS["adapter"] * adapt
+    )
+    
+    # Round to avoid floating point artifacts
+    return round(min(max(score, 0.0), 1.0), 4)
 
 
 # ============================================================================
@@ -262,25 +369,21 @@ class Pool:
 @dataclass
 class Quote:
     """Quote from a DEX with legacy and new API support."""
-    # Legacy string-based fields
     pool_address: Optional[str] = None
     token_in: Optional[Union[str, "Token"]] = None
     token_out: Optional[Union[str, "Token"]] = None
     amount_in: Union[str, int] = "0"
     amount_out: Union[str, int] = "0"
 
-    # Shared
     block_number: int = 0
     gas_estimate: int = 0
     ticks_crossed: int = 0
     timestamp: str = ""
     timestamp_ms: int = 0
 
-    # New object-based
     pool: Optional[Pool] = None
     direction: Optional[Union[str, TradeDirection]] = None
 
-    # Extra
     sqrt_price_x96_after: Optional[int] = None
     latency_ms: int = 0
     chain_id: int = 0

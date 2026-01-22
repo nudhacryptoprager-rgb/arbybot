@@ -1,0 +1,27 @@
+# requirements-dev.txt
+# Development and testing dependencies for ARBY
+#
+# Usage:
+#   python -m venv venv
+#   source venv/bin/activate  # or venv\Scripts\activate on Windows
+#   pip install -r requirements-dev.txt
+#   pytest -q
+
+# Core dependencies
+pyyaml>=6.0.1
+httpx>=0.25.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Typing
+mypy>=1.7.0
+
+# Code quality
+ruff>=0.1.0
+black>=23.12.0
+
+# Optional: performance profiling
+# line-profiler>=4.1.0
+# memory-profiler>=0.61.0

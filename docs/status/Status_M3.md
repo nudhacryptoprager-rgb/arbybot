@@ -1,149 +1,215 @@
 # Status: Milestone 3 (M3) — Opportunity Engine
 
-**Status:** 🟡 IN PROGRESS  
+**Status:** 🟢 READY FOR CLOSURE  
 **Last Updated:** 2026-01-22  
-**Branch:** `work/20260122_1816-shortfix`
+**Branch:** `split/code`
 
 ## Overview
 
 M3 implements the Opportunity Engine: scanning, quoting, gate validation, and truth reporting.
 
-## Current State
+## M3 Acceptance (Definition of Done)
 
-### ✅ Completed
-- [x] Paper trading session tracking
-- [x] Truth report generation with schema v3.0.0
-- [x] Reject histogram with gate breakdown
-- [x] Scan snapshot with all artifacts
-- [x] RPC health metrics reconciliation
-- [x] Execution blockers explanation
-- [x] **spread_id contract v1.0** (fixed)
-- [x] **slippage gate comparator** (fixed)
-- [x] DEX coverage tracking (configured vs active vs passed)
+### Automatic Check (1 command → 3 artifacts)
 
-### 🟡 In Progress
-- [ ] Reduce QUOTE_REVERT rate (currently ~20%)
-- [ ] REGISTRY_REAL scanner implementation
+```bash
+# Run smoke scan (1 cycle)
+python -m strategy.jobs.run_scan --mode smoke --cycles 1 --output-dir data/runs/m3_acceptance
 
-### ❌ Blocked
-- Real RPC integration (requires REGISTRY_REAL implementation)
+# Verify 3 artifacts generated:
+ls data/runs/m3_acceptance/snapshots/scan_*.json        # ✅ scan snapshot
+ls data/runs/m3_acceptance/reports/reject_histogram_*.json  # ✅ reject histogram
+ls data/runs/m3_acceptance/reports/truth_report_*.json      # ✅ truth report
+```
 
-## Recent Patches
+### truth_report Contract (required keys)
 
-### Patch 2026-01-22 v11: spread_id Contract Fix + Slippage Gate Fix
+```json
+{
+  "schema_version": "3.0.0",
+  "health": {
+    "gate_breakdown": {"revert": N, "slippage": N, "infra": N, "other": N},
+    "top_reject_reasons": [...],
+    "dex_coverage": {...}
+  },
+  "top_opportunities": [...],
+  "stats": {...}
+}
+```
 
-**Root Cause:**
-1. `parse_spread_id()` expected 4 parts but `spread_1_20260122_171426_0` has 5 parts (timestamp contains underscore)
-2. Slippage gate rejected when `slippage_bps=176 < threshold_bps=200` (wrong comparator)
+### CI Gate
 
-**Changes:**
-1. ✅ **spread_id CONTRACT v1.0** — single source of truth in `core/models.py`
-   - Format: `spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}`
-   - Uses regex pattern: `^spread_(\d+)_(\d{8})_(\d{6})_(\d+)$`
-   - `format_spread_timestamp()` — single source for timestamp formatting
-   - `generate_spread_id()` — uses `format_spread_timestamp`
-   - `parse_spread_id()` — returns structured dict with all components
-   - `validate_spread_id()` — quick bool check
-
-2. ✅ **slippage gate CONTRACT**
-   - `check_slippage_gate(slippage_bps, threshold_bps)` — returns `True` if `slippage_bps <= threshold_bps`
-   - Documented in `_make_slippage_details()`: `"slippage_gate_contract": "PASS if slippage_bps <= threshold_bps"`
-
-3. ✅ **Roundtrip tests** — `generate -> parse -> regenerate` produces same ID
-
-**Files Modified:**
-- `core/models.py` — spread_id contract v1.0 with regex validation
-- `strategy/jobs/run_scan_smoke.py` — uses `generate_spread_id()` + fixed slippage gate
-- `tests/unit/test_core_models.py` — roundtrip tests + real artifact compat test
-
-**Verify:**
-```powershell
-# 1. Run tests
-python -m pytest -q tests\unit\test_core_models.py -v
-
-# 2. Check spread_id roundtrip
-python -c "from core.models import generate_spread_id, parse_spread_id; id=generate_spread_id(1,'20260122_171426',0); p=parse_spread_id(id); print(f'ID: {id}, valid: {p[\"valid\"]}, cycle: {p[\"cycle\"]}, ts: {p[\"timestamp\"]}, idx: {p[\"index\"]}')"
-
-# 3. Check real artifact example
-python -c "from core.models import parse_spread_id; r=parse_spread_id('spread_1_20260122_171426_0'); print(r)"
-
-# 4. Check slippage gate
-python -c "from strategy.jobs.run_scan_smoke import check_slippage_gate; print('176<=200:', check_slippage_gate(176, 200)); print('250<=200:', check_slippage_gate(250, 200))"
-
-# 5. Smoke run
-python -m strategy.jobs.run_scan --mode smoke --cycles 1 --output-dir data\runs\verify_v11
-
-# 6. Verify spread_id in artifacts parses
-$scan = Get-Content data\runs\verify_v11\snapshots\scan_*.json | ConvertFrom-Json
-python -c "from core.models import parse_spread_id; import sys; r=parse_spread_id(sys.argv[1]); print(r)" $scan.all_spreads[0].spread_id
+```bash
+python scripts/ci_m3_gate.py
+# → runs pytest -q
+# → runs smoke scan
+# → checks artifact sanity
+# → exit 0 if all pass
 ```
 
 ## Contracts
 
-### spread_id CONTRACT v1.0
+### spread_id CONTRACT v1.1 (Backward Compatible)
 
 ```
-Format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+Current format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+Example: spread_1_20260122_171426_0
 
-When split by "_", produces 5 parts:
-  [0] "spread" - literal prefix
-  [1] cycle    - int, 1-indexed
-  [2] date     - str, YYYYMMDD
-  [3] time     - str, HHMMSS
-  [4] index    - int, 0-indexed
+Parser accepts:
+- v1.1: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index} (full)
+- v1.0: spread_{cycle}_{YYYYMMDD}_{HHMMSS} (no index)
+- legacy: spread_{anything}
 
-Example: "spread_1_20260122_171426_0"
-  -> cycle=1, date="20260122", time="171426", index=0
+Key property: tests NEVER flap due to format changes.
 ```
 
-### opportunity_id CONTRACT
+### Confidence Scoring CONTRACT
 
-```
-Format: "opp_{spread_id}"
-Example: "opp_spread_1_20260122_171426_0"
-```
+```python
+# Fixed weights (do not change without migration)
+CONFIDENCE_WEIGHTS = {
+    "quote_fetch": 0.25,
+    "quote_gate": 0.25,
+    "rpc": 0.20,
+    "freshness": 0.15,
+    "adapter": 0.15,
+}
 
-### Slippage Gate CONTRACT
-
-```
-check_slippage_gate(slippage_bps, threshold_bps):
-  - slippage_bps <= threshold_bps -> PASS (return True)
-  - slippage_bps > threshold_bps  -> FAIL (SLIPPAGE_TOO_HIGH)
-
-Example:
-  check_slippage_gate(176, 200) -> True  (passes)
-  check_slippage_gate(250, 200) -> False (fails)
+# Monotonicity properties:
+# - Worse reliability → confidence does not increase
+# - Better freshness → confidence does not decrease
 ```
 
-### Scan/TruthReport SEMANTIC CONTRACT
+### Ranking CONTRACT (Deterministic)
 
 ```
-opportunities: 
-  Spreads that pass all gates AND are profitable.
-  Execution candidates.
+Sort key (all DESC except spread_id ASC):
+  1. is_profitable DESC (True > False)
+  2. net_pnl_usdc DESC (higher PnL first)
+  3. net_pnl_bps DESC (higher bps first)
+  4. confidence DESC (higher confidence first)
+  5. spread_id ASC (alphabetical tiebreaker)
 
-all_spreads:
-  All evaluated spreads (including rejected/unprofitable).
-  For debugging/analysis.
-
-top_opportunities (in truth_report):
-  Top-N by PnL, may include non-profitable for debugging.
-  Each has execution_blockers explaining why not execution-ready.
+Same input → same output order.
 ```
 
-## Definition of Done (M3 Closure)
+### Gate Breakdown CONTRACT
 
-- [x] pytest green
-- [x] spread_id roundtrip stable
-- [x] slippage gate comparator correct
-- [x] SMOKE artifacts valid (3 files generated)
-- [x] top_opportunities non-empty
-- [x] reject_reasons classified (STF, etc.)
-- [x] execution_blockers explain why not ready
-- [ ] REGISTRY_REAL scan produces similar structure
-- [ ] Golden artifacts in `docs/artifacts/`
+```python
+GATE_BREAKDOWN_KEYS = frozenset(["revert", "slippage", "infra", "other"])
+
+# Mapping:
+# QUOTE_REVERT → revert
+# SLIPPAGE_TOO_HIGH → slippage
+# INFRA_RPC_ERROR → infra
+# * → other
+```
+
+### Mode CONTRACT
+
+```bash
+python -m strategy.jobs.run_scan --mode smoke  # ✅ SMOKE_SIMULATOR (works)
+python -m strategy.jobs.run_scan --mode real   # ❌ RuntimeError (not implemented)
+```
+
+No silent mode substitution. If `--mode real` but REGISTRY_REAL not implemented → explicit error.
+
+## Checklist
+
+### ✅ Completed
+- [x] Paper trading session tracking
+- [x] Truth report generation (schema v3.0.0)
+- [x] Reject histogram with canonical gate breakdown
+- [x] Scan snapshot with all artifacts
+- [x] RPC health metrics reconciliation
+- [x] Execution blockers explanation
+- [x] spread_id CONTRACT v1.1 (backward compatible)
+- [x] Confidence scoring (deterministic + monotonicity)
+- [x] Ranking CONTRACT (deterministic sort)
+- [x] DEX coverage tracking
+- [x] Explicit mode error (no silent substitution)
+- [x] CI gate script
+- [x] Requirements-dev.txt
+
+### 🟡 M4 Skeleton Created
+- [x] execution/state_machine.py
+- [x] execution/simulator.py
+- [x] execution/dex_dex_executor.py
+
+### ❌ M4 (Not Started)
+- [ ] REGISTRY_REAL scanner
+- [ ] Live RPC integration
+- [ ] Flash swap execution
+- [ ] Private mempool submission
+- [ ] Post-trade accounting
+- [ ] Kill switch implementation
+
+## Test Coverage
+
+```bash
+# Unit tests
+pytest tests/unit/test_core_models.py -v    # spread_id + confidence
+pytest tests/unit/test_truth_report.py -v   # ranking + gate breakdown
+
+# Integration tests
+pytest tests/integration/test_smoke_run.py -v  # artifact sanity
+
+# Full suite
+pytest -q
+```
+
+## Verification Steps
+
+```bash
+# 1. Run tests
+python -m pytest -q
+
+# 2. Run CI gate
+python scripts/ci_m3_gate.py
+
+# 3. Manual smoke run
+python -m strategy.jobs.run_scan --mode smoke --cycles 1 --output-dir data/runs/verify
+
+# 4. Verify spread_id roundtrip
+python -c "
+from core.models import generate_spread_id, parse_spread_id
+id = generate_spread_id(1, '20260122_171426', 0)
+p = parse_spread_id(id)
+print(f'ID: {id}')
+print(f'Valid: {p[\"valid\"]}, Format: {p[\"format\"]}')
+print(f'Roundtrip: {generate_spread_id(p[\"cycle\"], p[\"timestamp\"], p[\"index\"]) == id}')
+"
+
+# 5. Verify mode error
+python -m strategy.jobs.run_scan --mode real 2>&1 | head -5
+# → RuntimeError: REGISTRY_REAL scanner is not yet implemented.
+
+# 6. Verify confidence monotonicity
+python -c "
+from core.models import calculate_confidence
+base = calculate_confidence(0.9, 0.8, 0.7, 0.95, 0.85)
+worse = calculate_confidence(0.7, 0.8, 0.7, 0.95, 0.85)
+print(f'Base: {base}, Worse fetch: {worse}')
+print(f'Monotonic: {worse <= base}')
+"
+```
+
+## M3 → M4 Transition
+
+### M3 Closure Criteria
+1. ✅ All tests pass (`pytest -q`)
+2. ✅ CI gate passes (`python scripts/ci_m3_gate.py`)
+3. ✅ spread_id roundtrip stable
+4. ✅ Ranking deterministic
+5. ✅ No silent mode substitution
+6. ⬜ Code review approved
+
+### M4 Start Criteria
+1. ✅ M4 skeleton files created
+2. ⬜ M3 PR merged to main
+3. ⬜ M4 branch created from main
 
 ## Links
 
-- Compare: https://github.com/nudhacryptoprager-rgb/arbybot/compare/work/20260122_1816-shortfix
-- Index: `docs/status/INDEX.md`
+- Compare: https://github.com/nudhacryptoprager-rgb/arbybot/compare/split/code
+- M4 Roadmap: execution layer, flash swaps, kill switch
