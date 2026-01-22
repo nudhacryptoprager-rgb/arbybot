@@ -2,36 +2,18 @@
 """
 Truth report module for ARBY.
 
-Generates truthful metrics and health reports for scan cycles.
-Ensures RPC health consistency with reject histogram.
-
 SEMANTIC CONTRACT:
-- mode: TruthReport data source mode
-    - "REGISTRY": Using registry for pool discovery
-    - "DISCOVERY": Using dynamic discovery
-- run_mode: Scanner runtime execution mode
-    - "SMOKE_SIMULATOR": Simulated quotes (no RPC)
-    - "REGISTRY_REAL": Real RPC quotes
+- mode: TruthReport data source ("REGISTRY", "DISCOVERY")
+- run_mode: Scanner runtime ("SMOKE_SIMULATOR", "REGISTRY_REAL")
 
 SCHEMA CONTRACT (v3.0.0):
-Schema version 3.0.0 fields:
-- schema_version, timestamp, mode, run_mode
-- health: rpc_*, quote_*, chains_active, dexes_active, pairs_covered, pools_scanned, top_reject_reasons
-- top_opportunities[]: spread_id, opportunity_id, dex_buy/sell, pool_buy/sell, token_in/out,
-                       amount_in/out, net_pnl_usdc/bps, confidence, chain_id, is_profitable, reject_reason
-- stats: spread_ids_*, signals_*, paper_executable_count, execution_ready_count, blocked_spreads
-- revalidation: total, passed, gates_changed, gates_changed_pct
-- cumulative_pnl: total_bps, total_usdc
-- pnl: signal_pnl_bps/usdc, would_execute_pnl_bps/usdc
-- pnl_normalized: notion_capital_numeraire, normalized_return_pct, numeraire
+- schema_version: MUST NOT change without explicit bump in SCHEMA_VERSION constant
+- Bump requires: migration PR + test update
+- top_opportunities[]: uses amount_in_numeraire (no ambiguous amount_in)
 
-BUMP RULES: Any field addition/removal/rename requires schema bump + migration PR.
-
-Contract invariants:
-- spreads_* = signals_* (1:1 mapping, reserved for post-ranking filtering)
-- spread_ids_executable = "economically executable" (PnL positive after gates)
-- execution_ready_count = "actually ready for on-chain execution" (0 in SMOKE mode)
-- top_opportunities NEVER empty when spreads exist (includes non-profitable with reject_reason)
+TERMINOLOGY:
+- paper_executable_spreads: passed all gates, PnL > 0, would execute in paper trading
+- execution_ready_count: actually ready for on-chain execution (0 in SMOKE mode)
 """
 
 import json
@@ -40,23 +22,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from core.format_money import format_money, format_money_short
+from core.format_money import format_money
 
 logger = logging.getLogger("monitoring.truth_report")
 
-# SCHEMA CONTRACT: Keep at 3.0.0. Bump requires migration PR.
+# SCHEMA CONTRACT: Bump requires migration PR + test update
+# Test: test_schema_version_policy() ensures this is the single source of truth
 SCHEMA_VERSION = "3.0.0"
 
 
 @dataclass
 class RPCHealthMetrics:
-    """
-    RPC health metrics that are consistent with reject histogram.
-    
-    Key invariant: if infra_rpc_error_count > 0, then some request metric > 0
-    """
+    """RPC health metrics consistent with reject histogram."""
     rpc_success_count: int = 0
     rpc_failed_count: int = 0
     quote_call_attempts: int = 0
@@ -79,27 +58,21 @@ class RPCHealthMetrics:
         return self.total_latency_ms // self.rpc_success_count
 
     def record_success(self, latency_ms: int = 0) -> None:
-        """Record a successful RPC call."""
         self.rpc_success_count += 1
         self.total_latency_ms += latency_ms
         self.quote_call_attempts += 1
 
     def record_failure(self) -> None:
-        """Record a failed RPC call."""
         self.rpc_failed_count += 1
         self.quote_call_attempts += 1
 
     def record_quote_attempt(self) -> None:
-        """Record a quote attempt (may be cached)."""
         self.quote_call_attempts += 1
 
     def reconcile_with_rejects(self, reject_histogram: Dict[str, int]) -> None:
-        """Ensure health metrics are consistent with reject histogram."""
         infra_rpc_errors = reject_histogram.get("INFRA_RPC_ERROR", 0)
-
         if infra_rpc_errors > 0 and self.rpc_failed_count < infra_rpc_errors:
             self.rpc_failed_count = max(self.rpc_failed_count, infra_rpc_errors)
-
         if self.quote_call_attempts < self.rpc_total_requests:
             self.quote_call_attempts = self.rpc_total_requests
 
@@ -128,7 +101,6 @@ def calculate_confidence(
         "freshness": 0.15,
         "adapter": 0.15,
     }
-
     score = (
         weights["quote_fetch"] * quote_fetch_rate
         + weights["quote_gate"] * quote_gate_pass_rate
@@ -136,8 +108,18 @@ def calculate_confidence(
         + weights["freshness"] * freshness_score
         + weights["adapter"] * adapter_reliability
     )
-
     return min(max(score, 0.0), 1.0)
+
+
+def build_gate_breakdown(reject_histogram: Dict[str, int]) -> Dict[str, int]:
+    """Build gate breakdown from reject histogram."""
+    return {
+        "revert": reject_histogram.get("QUOTE_REVERT", 0),
+        "slippage": reject_histogram.get("SLIPPAGE_TOO_HIGH", 0),
+        "infra": reject_histogram.get("INFRA_RPC_ERROR", 0),
+        "other": sum(v for k, v in reject_histogram.items() 
+                     if k not in ["QUOTE_REVERT", "SLIPPAGE_TOO_HIGH", "INFRA_RPC_ERROR"]),
+    }
 
 
 def build_health_section(
@@ -158,6 +140,8 @@ def build_health_section(
     )
     top_rejects = [[reason, count] for reason, count in sorted_rejects[:5]]
 
+    gate_breakdown = build_gate_breakdown(reject_histogram)
+
     health = {
         "rpc_success_rate": round(rpc_metrics.rpc_success_rate, 3),
         "rpc_avg_latency_ms": rpc_metrics.avg_latency_ms,
@@ -170,26 +154,39 @@ def build_health_section(
         "pairs_covered": scan_stats.get("pairs_covered", 0),
         "pools_scanned": scan_stats.get("pools_scanned", 0),
         "top_reject_reasons": top_rejects,
+        "gate_breakdown": gate_breakdown,
     }
 
     return health
 
 
+def _get_execution_blockers(run_mode: str, opp: Dict[str, Any]) -> List[str]:
+    """Determine why opportunity is not execution-ready."""
+    blockers = []
+    
+    if run_mode == "SMOKE_SIMULATOR":
+        blockers.append("SMOKE_MODE_NO_EXECUTION")
+    
+    try:
+        pnl = Decimal(str(opp.get("net_pnl_usdc", "0")))
+        if pnl <= 0:
+            blockers.append("NOT_PROFITABLE")
+    except Exception:
+        blockers.append("INVALID_PNL")
+    
+    confidence = opp.get("confidence", 0.0)
+    if confidence < 0.5:
+        blockers.append("LOW_CONFIDENCE")
+    
+    if opp.get("reject_reason"):
+        blockers.append(f"REJECTED:{opp.get('reject_reason')}")
+    
+    return blockers
+
+
 @dataclass
 class TruthReport:
-    """
-    Truth report for a scan cycle.
-    
-    All money values are strings per Roadmap 3.2.
-    
-    Fields:
-    - mode: TruthReport data source mode ("REGISTRY", "DISCOVERY")
-    - run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL")
-    
-    Stats semantics:
-    - spread_ids_executable: "economically executable" - passed all gates, PnL > 0
-    - execution_ready_count: "ready for on-chain execution" - 0 in SMOKE mode
-    """
+    """Truth report for a scan cycle."""
     timestamp: str = ""
     mode: str = "REGISTRY"
     run_mode: str = "SMOKE_SIMULATOR"
@@ -206,7 +203,6 @@ class TruthReport:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization."""
         return {
             "schema_version": SCHEMA_VERSION,
             "timestamp": self.timestamp,
@@ -222,11 +218,9 @@ class TruthReport:
         }
 
     def to_json(self, indent: int = 2) -> str:
-        """Serialize to JSON string."""
         return json.dumps(self.to_dict(), indent=indent)
 
     def save(self, path: Path) -> None:
-        """Save report to file."""
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(self.to_json())
@@ -243,25 +237,9 @@ def build_truth_report(
     run_mode: str = "SMOKE_SIMULATOR",
     all_spreads: Optional[List[Dict[str, Any]]] = None,
 ) -> TruthReport:
-    """
-    Build a complete truth report from scan data.
-    
-    Args:
-        scan_stats: Statistics from the scan cycle
-        reject_histogram: Counts of reject reasons
-        opportunities: List of profitable opportunity dicts
-        paper_session_stats: Stats from paper trading session
-        rpc_metrics: RPC health metrics
-        mode: TruthReport mode ("REGISTRY", "DISCOVERY")
-        run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL")
-        all_spreads: All spreads (including rejected) for top_opportunities fallback
-    
-    INVARIANT: top_opportunities is NEVER empty when spreads exist.
-    If no profitable opportunities, includes top spreads with reject_reason.
-    """
+    """Build truth report with execution_blockers for each opportunity."""
     health = build_health_section(scan_stats, reject_histogram, rpc_metrics)
 
-    # Normalize opportunities
     normalized_opps = []
     for opp in opportunities:
         pnl_usdc = opp.get("net_pnl_usdc", "0.000000")
@@ -269,7 +247,8 @@ def build_truth_report(
             is_profitable = Decimal(str(pnl_usdc)) > 0
         except Exception:
             is_profitable = False
-            
+
+        # NO amount_in ambiguity - use only amount_in_numeraire
         normalized_opp = {
             "spread_id": opp.get("spread_id", "unknown"),
             "opportunity_id": opp.get("opportunity_id") or opp.get("spread_id", "unknown"),
@@ -279,59 +258,70 @@ def build_truth_report(
             "pool_sell": opp.get("pool_sell") or opp.get("pool_b") or "unknown",
             "token_in": opp.get("token_in") or "unknown",
             "token_out": opp.get("token_out") or "unknown",
-            "amount_in": opp.get("amount_in") or opp.get("amount_in_numeraire") or "0",
-            "amount_out": opp.get("amount_out") or "0",
+            "chain_id": opp.get("chain_id", 0),
+            # Unified units - NO amount_in (deprecated)
+            "amount_in_numeraire": opp.get("amount_in_numeraire") or opp.get("amount_in") or "0",
+            "amount_out_numeraire": opp.get("amount_out_numeraire") or opp.get("amount_out") or "0",
             "net_pnl_usdc": pnl_usdc,
             "net_pnl_bps": opp.get("net_pnl_bps", "0.00"),
             "confidence": opp.get("confidence", 0.0),
-            "chain_id": opp.get("chain_id", 0),
             "is_profitable": is_profitable,
             "reject_reason": opp.get("reject_reason"),
         }
+        
+        blockers = _get_execution_blockers(run_mode, normalized_opp)
+        normalized_opp["execution_blockers"] = blockers
+        normalized_opp["is_execution_ready"] = len(blockers) == 0
+        
         normalized_opps.append(normalized_opp)
 
-    # Sort by PnL descending
     top_opps = sorted(
         normalized_opps,
         key=lambda x: Decimal(str(x.get("net_pnl_usdc", "0"))),
         reverse=True
     )[:10]
 
-    # INVARIANT: top_opportunities NEVER empty when spreads exist
-    # If no profitable opportunities but we have spreads, include top rejects with reason
+    # Fallback: include rejected spreads if no profitable opps
     if not top_opps and all_spreads:
         for spread in all_spreads[:5]:
-            top_opps.append({
+            opp = {
                 "spread_id": spread.get("spread_id", "unknown"),
                 "opportunity_id": spread.get("opportunity_id") or spread.get("spread_id", "unknown"),
-                "dex_buy": spread.get("dex_buy") or spread.get("dex_a") or "unknown",
-                "dex_sell": spread.get("dex_sell") or spread.get("dex_b") or "unknown",
-                "pool_buy": spread.get("pool_buy") or spread.get("pool_a") or "unknown",
-                "pool_sell": spread.get("pool_sell") or spread.get("pool_b") or "unknown",
+                "dex_buy": spread.get("dex_buy") or "unknown",
+                "dex_sell": spread.get("dex_sell") or "unknown",
+                "pool_buy": spread.get("pool_buy") or "unknown",
+                "pool_sell": spread.get("pool_sell") or "unknown",
                 "token_in": spread.get("token_in") or "unknown",
                 "token_out": spread.get("token_out") or "unknown",
-                "amount_in": spread.get("amount_in") or "0",
-                "amount_out": spread.get("amount_out") or "0",
+                "chain_id": spread.get("chain_id", 0),
+                "amount_in_numeraire": spread.get("amount_in_numeraire") or spread.get("amount_in") or "0",
+                "amount_out_numeraire": spread.get("amount_out_numeraire") or spread.get("amount_out") or "0",
                 "net_pnl_usdc": spread.get("net_pnl_usdc", "0.000000"),
                 "net_pnl_bps": spread.get("net_pnl_bps", "0.00"),
                 "confidence": spread.get("confidence", 0.0),
-                "chain_id": spread.get("chain_id", 0),
                 "is_profitable": False,
                 "reject_reason": spread.get("reject_reason", "NOT_PROFITABLE"),
-            })
+            }
+            blockers = _get_execution_blockers(run_mode, opp)
+            opp["execution_blockers"] = blockers
+            opp["is_execution_ready"] = False
+            top_opps.append(opp)
 
-    # Stats
+    # TERMINOLOGY FIX: paper_executable_spreads vs execution_ready_count
     spread_total = scan_stats.get("spread_ids_total", 0)
     spread_profitable = scan_stats.get("spread_ids_profitable", 0)
-    spread_executable = scan_stats.get("spread_ids_executable", 0)
+    paper_executable = scan_stats.get("spread_ids_executable", 0)
     
     stats = {
         "spread_ids_total": spread_total,
         "spread_ids_profitable": spread_profitable,
-        "spread_ids_executable": spread_executable,
+        # DEPRECATED: spread_ids_executable (use paper_executable_spreads)
+        "spread_ids_executable": paper_executable,
+        # NEW: clear terminology
+        "paper_executable_spreads": paper_executable,
         "signals_total": spread_total,
         "signals_profitable": spread_profitable,
-        "signals_executable": spread_executable,
+        "signals_executable": paper_executable,
         "paper_executable_count": scan_stats.get("paper_executable_count", 0),
         "execution_ready_count": scan_stats.get("execution_ready_count", 0),
         "blocked_spreads": scan_stats.get("blocked_spreads", 0),
@@ -341,14 +331,11 @@ def build_truth_report(
         "total": scan_stats.get("revalidation_total", 0),
         "passed": scan_stats.get("revalidation_passed", 0),
         "gates_changed": scan_stats.get("gates_changed", 0),
-        "gates_changed_pct": format_money(
-            scan_stats.get("gates_changed_pct", 0), decimals=1
-        ),
+        "gates_changed_pct": format_money(scan_stats.get("gates_changed_pct", 0), decimals=1),
     }
 
     paper_stats = paper_session_stats or {}
     total_pnl_usdc = paper_stats.get("total_pnl_usdc", "0.000000")
-    would_execute_pnl_usdc = paper_stats.get("total_pnl_usdc", "0.000000")
     notion_capital = paper_stats.get("notion_capital_usdc", "10000.000000")
 
     normalized_return_pct = None
@@ -356,31 +343,11 @@ def build_truth_report(
         pnl_dec = Decimal(str(total_pnl_usdc))
         capital_dec = Decimal(str(notion_capital))
         if capital_dec > 0:
-            normalized_return_pct = format_money(
-                (pnl_dec / capital_dec) * 100, decimals=4
-            )
+            normalized_return_pct = format_money((pnl_dec / capital_dec) * 100, decimals=4)
     except Exception:
         pass
 
     total_pnl_bps = paper_stats.get("total_pnl_bps", "0.00")
-
-    cumulative_pnl = {
-        "total_bps": total_pnl_bps,
-        "total_usdc": total_pnl_usdc,
-    }
-
-    pnl = {
-        "signal_pnl_bps": paper_stats.get("total_pnl_bps", "0.00"),
-        "signal_pnl_usdc": total_pnl_usdc,
-        "would_execute_pnl_bps": paper_stats.get("total_pnl_bps", "0.00"),
-        "would_execute_pnl_usdc": would_execute_pnl_usdc,
-    }
-
-    pnl_normalized = {
-        "notion_capital_numeraire": notion_capital,
-        "normalized_return_pct": normalized_return_pct,
-        "numeraire": "USDC",
-    }
 
     return TruthReport(
         mode=mode,
@@ -389,14 +356,23 @@ def build_truth_report(
         top_opportunities=top_opps,
         stats=stats,
         revalidation=revalidation,
-        cumulative_pnl=cumulative_pnl,
-        pnl=pnl,
-        pnl_normalized=pnl_normalized,
+        cumulative_pnl={"total_bps": total_pnl_bps, "total_usdc": total_pnl_usdc},
+        pnl={
+            "signal_pnl_bps": total_pnl_bps,
+            "signal_pnl_usdc": total_pnl_usdc,
+            "would_execute_pnl_bps": total_pnl_bps,
+            "would_execute_pnl_usdc": total_pnl_usdc,
+        },
+        pnl_normalized={
+            "notion_capital_numeraire": notion_capital,
+            "normalized_return_pct": normalized_return_pct,
+            "numeraire": "USDC",
+        },
     )
 
 
 def print_truth_report(report: TruthReport) -> None:
-    """Print truth report to console in formatted style."""
+    """Print truth report to console."""
     print("\n" + "=" * 60)
     print("TRUTH REPORT")
     print("=" * 60)
@@ -406,14 +382,17 @@ def print_truth_report(report: TruthReport) -> None:
     print("\n--- HEALTH ---")
     health = report.health
     rpc_pct = health.get("rpc_success_rate", 0) * 100
-    print(f"RPC: {rpc_pct:.1f}% success ({health.get('rpc_total_requests', 0)} requests), "
-          f"{health.get('rpc_avg_latency_ms', 0)}ms avg")
-    print(f"Quotes: {health.get('quote_fetch_rate', 0)*100:.1f}% fetch, "
-          f"{health.get('quote_gate_pass_rate', 0)*100:.1f}% pass gates")
+    gate_pass = health.get("quote_gate_pass_rate", 0) * 100
+    print(f"RPC: {rpc_pct:.1f}% success ({health.get('rpc_total_requests', 0)} requests)")
+    print(f"Gates: {gate_pass:.1f}% pass rate")
+    
+    breakdown = health.get("gate_breakdown", {})
+    if breakdown:
+        print(f"  Breakdown: revert={breakdown.get('revert', 0)}, "
+              f"slippage={breakdown.get('slippage', 0)}, infra={breakdown.get('infra', 0)}")
+
     print(f"Coverage: {health.get('chains_active', 0)} chains, "
-          f"{health.get('dexes_active', 0)} DEXes, "
-          f"{health.get('pairs_covered', 0)} pairs")
-    print(f"Pools scanned: {health.get('pools_scanned', 0)}")
+          f"{health.get('dexes_active', 0)} DEXes (from quotes), {health.get('pools_scanned', 0)} pools")
 
     print("\nTop reject reasons:")
     for reason, count in health.get("top_reject_reasons", []):
@@ -421,23 +400,24 @@ def print_truth_report(report: TruthReport) -> None:
 
     print("\n--- STATS ---")
     stats = report.stats
-    print(f"Total spreads: {stats.get('spread_ids_total', 0)}")
-    print(f"Profitable: {stats.get('spread_ids_profitable', 0)}")
-    print(f"Economically executable: {stats.get('spread_ids_executable', 0)}")
+    print(f"Spreads: {stats.get('spread_ids_total', 0)} total, "
+          f"{stats.get('spread_ids_profitable', 0)} profitable")
+    print(f"Paper executable: {stats.get('paper_executable_spreads', 0)}")
     print(f"Execution ready: {stats.get('execution_ready_count', 0)}")
-    print(f"Blocked: {stats.get('blocked_spreads', 0)}")
+    if stats.get('execution_ready_count', 0) == 0:
+        print("  (see execution_blockers in top_opportunities)")
 
     print("\n--- TOP OPPORTUNITIES ---")
     if not report.top_opportunities:
         print("  (none)")
     for i, opp in enumerate(report.top_opportunities[:5], 1):
-        profitable = "✓" if opp.get("is_profitable") else "✗"
-        reject = f" [{opp.get('reject_reason')}]" if opp.get("reject_reason") else ""
-        print(f"  {i}. {profitable} {opp.get('token_in')}->{opp.get('token_out')} "
-              f"via {opp.get('dex_buy')}/{opp.get('dex_sell')}: "
-              f"${opp.get('net_pnl_usdc')} ({opp.get('net_pnl_bps')} bps){reject}")
+        ready = "🟢" if opp.get("is_execution_ready") else "🔴"
+        blockers = opp.get("execution_blockers", [])
+        blocker_str = f" [{', '.join(blockers[:2])}]" if blockers else ""
+        print(f"  {i}. {ready} {opp.get('token_in')}->{opp.get('token_out')} "
+              f"${opp.get('net_pnl_usdc')} ({opp.get('net_pnl_bps')} bps){blocker_str}")
 
-    print("\n--- CUMULATIVE PNL ---")
+    print("\n--- PNL ---")
     cpnl = report.cumulative_pnl
     print(f"Total: {cpnl.get('total_bps', 0)} bps (${cpnl.get('total_usdc', '0.000000')})")
     print("=" * 60 + "\n")
