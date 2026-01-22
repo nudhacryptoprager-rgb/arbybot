@@ -1,7 +1,15 @@
 # PATH: tests/integration/test_smoke_run.py
 """
 Integration test for full SMOKE run.
+
 Tests the complete flow from scanner to artifacts.
+
+SMOKE ARTIFACTS CONTRACT:
+- scan_*.json: Snapshot with stats, rejects, opportunities
+- reject_histogram_*.json: Reject breakdown by reason
+- truth_report_*.json: Final truth report with health, stats, opps
+
+All three files MUST be generated and parseable.
 """
 
 import json
@@ -24,14 +32,13 @@ class TestFullSmokeRun(unittest.TestCase):
 
     def test_full_smoke_run(self):
         """Run full SMOKE cycle and verify all outputs."""
-        from strategy.jobs.run_scan import run_scanner
+        from strategy.jobs.run_scan import run_scanner, ScannerMode
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
-
             try:
-                # Run one cycle
-                run_scanner(cycles=1, output_dir=output_dir)
+                # Run one cycle in smoke mode
+                run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=output_dir)
 
                 # Verify scan.log exists
                 self.assertTrue(
@@ -42,7 +49,6 @@ class TestFullSmokeRun(unittest.TestCase):
                 # Verify no crashes in log
                 with open(output_dir / "scan.log") as f:
                     log_content = f.read()
-
                 self.assertNotIn("Traceback", log_content)
                 self.assertNotIn("ValueError: Unknown format code", log_content)
                 self.assertNotIn("TypeError: Logger._log() got an unexpected keyword", log_content)
@@ -58,7 +64,6 @@ class TestFullSmokeRun(unittest.TestCase):
                 # Validate truth report content
                 with open(truth_reports[0]) as f:
                     report = json.load(f)
-
                 self.assertIn("schema_version", report)
                 self.assertIn("health", report)
                 self.assertIn("pnl", report)
@@ -67,7 +72,6 @@ class TestFullSmokeRun(unittest.TestCase):
                 health = report["health"]
                 rpc_total = health.get("rpc_total_requests", 0)
                 rpc_failed = health.get("rpc_failed_requests", 0)
-
                 if rpc_failed > 0:
                     self.assertGreater(rpc_total, 0, "rpc_total_requests should be > 0 if rpc_failed_requests > 0")
 
@@ -78,6 +82,135 @@ class TestFullSmokeRun(unittest.TestCase):
             finally:
                 # CRITICAL: Close all handlers before tmpdir cleanup (fixes WinError32)
                 _close_all_handlers()
+
+
+class TestSmokeArtifactsContract(unittest.TestCase):
+    """
+    STEP 8: Smoke artifacts contract test.
+    
+    Verifies that all 3 required artifact files are generated and parseable.
+    """
+
+    def test_all_artifacts_generated(self):
+        """All 3 artifact files are generated: scan, reject_histogram, truth_report."""
+        from strategy.jobs.run_scan import run_scanner, ScannerMode
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            try:
+                run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=output_dir)
+
+                # Check snapshots directory
+                snapshots_dir = output_dir / "snapshots"
+                self.assertTrue(snapshots_dir.exists(), "snapshots directory must exist")
+
+                # Check reports directory
+                reports_dir = output_dir / "reports"
+                self.assertTrue(reports_dir.exists(), "reports directory must exist")
+
+                # 1. scan_*.json
+                scan_files = list(snapshots_dir.glob("scan_*.json"))
+                self.assertEqual(len(scan_files), 1, "Exactly one scan snapshot")
+                
+                with open(scan_files[0]) as f:
+                    scan_data = json.load(f)
+                self.assertIn("stats", scan_data)
+                self.assertIn("reject_histogram", scan_data)
+                self.assertIn("gate_breakdown", scan_data)
+
+                # 2. reject_histogram_*.json
+                reject_files = list(reports_dir.glob("reject_histogram_*.json"))
+                self.assertEqual(len(reject_files), 1, "Exactly one reject histogram")
+                
+                with open(reject_files[0]) as f:
+                    reject_data = json.load(f)
+                self.assertIn("histogram", reject_data)
+                self.assertIn("gate_breakdown", reject_data)
+
+                # 3. truth_report_*.json
+                truth_files = list(reports_dir.glob("truth_report_*.json"))
+                self.assertEqual(len(truth_files), 1, "Exactly one truth report")
+                
+                with open(truth_files[0]) as f:
+                    truth_data = json.load(f)
+                self.assertIn("schema_version", truth_data)
+                self.assertIn("health", truth_data)
+                self.assertIn("stats", truth_data)
+                self.assertIn("top_opportunities", truth_data)
+
+            finally:
+                _close_all_handlers()
+
+    def test_gate_breakdown_synced(self):
+        """gate_breakdown is identical between scan.json and truth_report.json."""
+        from strategy.jobs.run_scan import run_scanner, ScannerMode
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            try:
+                run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=output_dir)
+
+                # Load scan
+                scan_files = list((output_dir / "snapshots").glob("scan_*.json"))
+                with open(scan_files[0]) as f:
+                    scan_data = json.load(f)
+
+                # Load truth report
+                truth_files = list((output_dir / "reports").glob("truth_report_*.json"))
+                with open(truth_files[0]) as f:
+                    truth_data = json.load(f)
+
+                scan_breakdown = scan_data.get("gate_breakdown", {})
+                truth_breakdown = truth_data.get("health", {}).get("gate_breakdown", {})
+
+                # Must be identical
+                self.assertEqual(scan_breakdown, truth_breakdown,
+                    "gate_breakdown must be synced between scan.json and truth_report.json")
+
+            finally:
+                _close_all_handlers()
+
+    def test_dex_coverage_contract(self):
+        """DEX coverage includes configured vs active."""
+        from strategy.jobs.run_scan import run_scanner, ScannerMode
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            try:
+                run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=output_dir)
+
+                # Load scan
+                scan_files = list((output_dir / "snapshots").glob("scan_*.json"))
+                with open(scan_files[0]) as f:
+                    scan_data = json.load(f)
+
+                # Check dex_coverage
+                dex_coverage = scan_data.get("dex_coverage", {})
+                self.assertIn("configured", dex_coverage)
+                self.assertIn("with_quotes", dex_coverage)
+                self.assertIn("passed_gates", dex_coverage)
+
+                # configured >= with_quotes >= passed_gates
+                self.assertGreaterEqual(
+                    len(dex_coverage["configured"]),
+                    len(dex_coverage["with_quotes"]),
+                )
+
+            finally:
+                _close_all_handlers()
+
+
+class TestRealModeRaises(unittest.TestCase):
+    """Test that --mode real raises RuntimeError."""
+
+    def test_real_mode_raises_runtime_error(self):
+        """--mode real should raise RuntimeError (not yet implemented)."""
+        from strategy.jobs.run_scan import run_scanner, ScannerMode
+
+        with self.assertRaises(RuntimeError) as ctx:
+            run_scanner(mode=ScannerMode.REAL, cycles=1)
+
+        self.assertIn("not yet implemented", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":

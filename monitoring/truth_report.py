@@ -10,15 +10,24 @@ SCHEMA CONTRACT (v3.0.0) — KEEP BACKWARD COMPATIBLE:
 - schema_version: MUST NOT change without explicit bump in SCHEMA_VERSION constant
 - Bump requires: migration PR + test update + backward compat consideration
 - top_opportunities[]: uses amount_in_numeraire (no ambiguous amount_in)
-- health.gate_breakdown: counts per gate (revert/slippage/infra)
+- health.gate_breakdown: canonical keys [revert, slippage, infra, other]
 
-TERMINOLOGY:
-- paper_executable_spreads: passed all gates, PnL > 0, would execute in paper trading
-- execution_ready_count: actually ready for on-chain execution (0 in SMOKE mode)
+DEX COVERAGE CONTRACT:
+- configured_dexes: DEXes in config (may not have quotes)
+- dexes_active: DEXes that actually returned at least 1 quote
+- dexes_passed_gates: DEXes that had at least 1 quote pass gates
 
-BACKWARD COMPAT FIELDS (deprecated but kept):
-- spread_ids_executable: use paper_executable_spreads instead
-- signals_*: mirrors spread_ids_*
+GATE BREAKDOWN CONTRACT (canonical keys):
+- revert: QUOTE_REVERT count
+- slippage: SLIPPAGE_TOO_HIGH count  
+- infra: INFRA_RPC_ERROR count
+- other: sum of all other reject reasons
+
+ERROR CODE MAPPING:
+- QUOTE_REVERT: Quote execution reverted (STF, etc.)
+- INFRA_RPC_ERROR: RPC/network error (timeout, connection)
+- SLIPPAGE_TOO_HIGH: Slippage exceeded threshold
+These are mutually exclusive and should not mask each other.
 """
 
 import json
@@ -27,7 +36,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from core.format_money import format_money
 
@@ -37,6 +46,17 @@ logger = logging.getLogger("monitoring.truth_report")
 # Test: test_schema_version_policy() ensures this is the single source of truth
 # Version 3.0.0 — keep backward compatible
 SCHEMA_VERSION = "3.0.0"
+
+# GATE BREAKDOWN CONTRACT: Canonical keys that must be present
+GATE_BREAKDOWN_KEYS = frozenset(["revert", "slippage", "infra", "other"])
+
+# ERROR CODE MAPPING: Reject reason -> Gate breakdown category
+ERROR_TO_GATE_CATEGORY = {
+    "QUOTE_REVERT": "revert",
+    "SLIPPAGE_TOO_HIGH": "slippage",
+    "INFRA_RPC_ERROR": "infra",
+    # All others map to "other"
+}
 
 
 @dataclass
@@ -117,55 +137,59 @@ def calculate_confidence(
     return min(max(score, 0.0), 1.0)
 
 
+def map_error_to_gate_category(reject_reason: str) -> str:
+    """
+    Map reject reason to gate breakdown category.
+    
+    STEP 4: Unified error mapping - QUOTE_REVERT and INFRA_RPC_ERROR
+    are mutually exclusive and should not mask each other.
+    """
+    return ERROR_TO_GATE_CATEGORY.get(reject_reason, "other")
+
+
 def build_gate_breakdown(reject_histogram: Dict[str, int]) -> Dict[str, int]:
     """
     Build gate breakdown from reject histogram.
     
-    SINGLE SOURCE OF TRUTH for gate breakdown calculation.
+    STEP 3: Canonical contract - keys MUST be [revert, slippage, infra, other].
+    This is the SINGLE SOURCE OF TRUTH for gate breakdown calculation.
     Used by both truth_report and scan snapshot.
     """
-    return {
-        "revert": reject_histogram.get("QUOTE_REVERT", 0),
-        "slippage": reject_histogram.get("SLIPPAGE_TOO_HIGH", 0),
-        "infra": reject_histogram.get("INFRA_RPC_ERROR", 0),
-        "other": sum(v for k, v in reject_histogram.items() 
-                     if k not in ["QUOTE_REVERT", "SLIPPAGE_TOO_HIGH", "INFRA_RPC_ERROR"]),
+    breakdown = {
+        "revert": 0,
+        "slippage": 0,
+        "infra": 0,
+        "other": 0,
     }
+    
+    for reason, count in reject_histogram.items():
+        category = map_error_to_gate_category(reason)
+        breakdown[category] += count
+    
+    # Validate canonical keys
+    assert set(breakdown.keys()) == GATE_BREAKDOWN_KEYS, \
+        f"Gate breakdown keys must be {GATE_BREAKDOWN_KEYS}"
+    
+    return breakdown
 
 
-def build_scan_stats(
-    cycle: int,
-    timestamp_iso: str,
-    run_mode: str,
-    current_block: int,
-    chain_id: int,
+def build_dex_coverage(
+    configured_dex_ids: Set[str],
+    dexes_with_quotes: Set[str],
+    dexes_passed_gates: Set[str],
 ) -> Dict[str, Any]:
     """
-    SINGLE SOURCE OF TRUTH for scan stats structure.
+    Build DEX coverage metrics.
     
-    Used by both scan snapshot and truth_report to ensure consistency.
+    STEP 2: Separate configured vs active vs passed gates.
     """
     return {
-        "cycle": cycle,
-        "timestamp": timestamp_iso,
-        "run_mode": run_mode,
-        "current_block": current_block,
-        "chain_id": chain_id,
-        "quotes_fetched": 0,
-        "quotes_total": 0,
-        "gates_passed": 0,
-        "spread_ids_total": 0,
-        "spread_ids_profitable": 0,
-        "spread_ids_executable": 0,
-        "paper_executable_count": 0,
-        "execution_ready_count": 0,
-        "blocked_spreads": 0,
-        "chains_active": 0,
-        "dexes_active": 0,
-        "pairs_covered": 0,
-        "pools_scanned": 0,
-        "quote_fetch_rate": 0.0,
-        "quote_gate_pass_rate": 0.0,
+        "configured_dexes": len(configured_dex_ids),
+        "configured_dex_ids": sorted(configured_dex_ids),
+        "dexes_active": len(dexes_with_quotes),
+        "dexes_active_ids": sorted(dexes_with_quotes),
+        "dexes_passed_gates": len(dexes_passed_gates),
+        "dexes_passed_gates_ids": sorted(dexes_passed_gates),
     }
 
 
@@ -173,6 +197,9 @@ def build_health_section(
     scan_stats: Dict[str, Any],
     reject_histogram: Dict[str, int],
     rpc_metrics: Optional[RPCHealthMetrics] = None,
+    configured_dex_ids: Optional[Set[str]] = None,
+    dexes_with_quotes: Optional[Set[str]] = None,
+    dexes_passed_gates: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Build the health section for truth_report."""
     if rpc_metrics is None:
@@ -190,6 +217,11 @@ def build_health_section(
     # Use single source for gate breakdown
     gate_breakdown = build_gate_breakdown(reject_histogram)
 
+    # STEP 2: Dex coverage - configured vs active
+    dexes_active = scan_stats.get("dexes_active", 0)
+    if dexes_with_quotes is not None:
+        dexes_active = len(dexes_with_quotes)
+
     health = {
         "rpc_success_rate": round(rpc_metrics.rpc_success_rate, 3),
         "rpc_avg_latency_ms": rpc_metrics.avg_latency_ms,
@@ -198,12 +230,22 @@ def build_health_section(
         "quote_fetch_rate": round(scan_stats.get("quote_fetch_rate", 0.0), 3),
         "quote_gate_pass_rate": round(scan_stats.get("quote_gate_pass_rate", 0.0), 3),
         "chains_active": scan_stats.get("chains_active", 0),
-        "dexes_active": scan_stats.get("dexes_active", 0),
+        # STEP 2: dexes_active = actually quoted, not configured
+        "dexes_active": dexes_active,
         "pairs_covered": scan_stats.get("pairs_covered", 0),
         "pools_scanned": scan_stats.get("pools_scanned", 0),
         "top_reject_reasons": top_rejects,
+        # STEP 3: gate_breakdown as canonical contract
         "gate_breakdown": gate_breakdown,
     }
+    
+    # Include detailed dex coverage if available
+    if configured_dex_ids is not None and dexes_with_quotes is not None:
+        health["dex_coverage"] = build_dex_coverage(
+            configured_dex_ids,
+            dexes_with_quotes,
+            dexes_passed_gates or set(),
+        )
 
     return health
 
@@ -293,9 +335,15 @@ def build_truth_report(
     mode: str = "REGISTRY",
     run_mode: str = "SMOKE_SIMULATOR",
     all_spreads: Optional[List[Dict[str, Any]]] = None,
+    configured_dex_ids: Optional[Set[str]] = None,
+    dexes_with_quotes: Optional[Set[str]] = None,
+    dexes_passed_gates: Optional[Set[str]] = None,
 ) -> TruthReport:
     """Build truth report with execution_blockers for each opportunity."""
-    health = build_health_section(scan_stats, reject_histogram, rpc_metrics)
+    health = build_health_section(
+        scan_stats, reject_histogram, rpc_metrics,
+        configured_dex_ids, dexes_with_quotes, dexes_passed_gates
+    )
 
     normalized_opps = []
     for opp in opportunities:
@@ -449,7 +497,14 @@ def print_truth_report(report: TruthReport) -> None:
               f"slippage={breakdown.get('slippage', 0)}, infra={breakdown.get('infra', 0)}")
 
     print(f"Coverage: {health.get('chains_active', 0)} chains, "
-          f"{health.get('dexes_active', 0)} DEXes, {health.get('pools_scanned', 0)} pools")
+          f"{health.get('dexes_active', 0)} DEXes (active), {health.get('pools_scanned', 0)} pools")
+    
+    # Show dex coverage details if available
+    dex_cov = health.get("dex_coverage")
+    if dex_cov:
+        print(f"  Configured: {dex_cov.get('configured_dexes', 0)} | "
+              f"Active: {dex_cov.get('dexes_active', 0)} | "
+              f"Passed gates: {dex_cov.get('dexes_passed_gates', 0)}")
 
     print("\nTop reject reasons:")
     for reason, count in health.get("top_reject_reasons", []):
