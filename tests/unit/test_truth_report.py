@@ -3,6 +3,7 @@
 Unit tests for truth_report module.
 
 Tests TruthReport, RPCHealthMetrics, and health building functions.
+Includes regression tests for schema contract stability.
 """
 
 import json
@@ -19,6 +20,7 @@ from monitoring.truth_report import (
     build_truth_report,
     build_health_section,
     build_gate_breakdown,
+    build_scan_stats,
 )
 
 
@@ -65,7 +67,6 @@ class TestRPCHealthMetrics(unittest.TestCase):
     def test_reconcile_with_rejects_adds_missing(self):
         """Reconciliation adds INFRA_RPC_ERROR to failed count."""
         metrics = RPCHealthMetrics()
-        # No failures recorded, but rejects show errors
         metrics.reconcile_with_rejects({"INFRA_RPC_ERROR": 5})
 
         self.assertEqual(metrics.rpc_failed_count, 5)
@@ -74,12 +75,9 @@ class TestRPCHealthMetrics(unittest.TestCase):
     def test_reconcile_with_rejects_preserves_higher(self):
         """Reconciliation preserves higher failure count."""
         metrics = RPCHealthMetrics()
-        # Record 10 failures
         for _ in range(10):
             metrics.record_failure()
-        # Rejects show only 5 errors
         metrics.reconcile_with_rejects({"INFRA_RPC_ERROR": 5})
-        # Should keep 10, not reduce to 5
         self.assertEqual(metrics.rpc_failed_count, 10)
 
     def test_to_dict(self):
@@ -120,11 +118,10 @@ class TestBuildHealthSection(unittest.TestCase):
         """Health section reconciles RPC metrics with rejects."""
         scan_stats = {}
         reject_histogram = {"INFRA_RPC_ERROR": 10}
-        rpc_metrics = RPCHealthMetrics()  # No calls recorded
+        rpc_metrics = RPCHealthMetrics()
 
         health = build_health_section(scan_stats, reject_histogram, rpc_metrics)
 
-        # Should have non-zero requests due to reconciliation
         self.assertGreater(health["rpc_total_requests"], 0)
         self.assertGreaterEqual(health["rpc_failed_requests"], 10)
 
@@ -160,6 +157,26 @@ class TestBuildGateBreakdown(unittest.TestCase):
         self.assertEqual(breakdown["slippage"], 5)
         self.assertEqual(breakdown["infra"], 3)
         self.assertEqual(breakdown["other"], 2)
+
+
+class TestBuildScanStats(unittest.TestCase):
+    """Tests for build_scan_stats function."""
+
+    def test_scan_stats_structure(self):
+        """build_scan_stats returns proper structure."""
+        stats = build_scan_stats(
+            cycle=1,
+            timestamp_iso="2026-01-22T12:00:00Z",
+            run_mode="SMOKE_SIMULATOR",
+            current_block=150000000,
+            chain_id=42161,
+        )
+
+        self.assertEqual(stats["cycle"], 1)
+        self.assertEqual(stats["run_mode"], "SMOKE_SIMULATOR")
+        self.assertEqual(stats["chain_id"], 42161)
+        self.assertEqual(stats["quotes_fetched"], 0)
+        self.assertEqual(stats["quotes_total"], 0)
 
 
 class TestTruthReport(unittest.TestCase):
@@ -232,6 +249,75 @@ class TestSchemaVersionPolicy(unittest.TestCase):
         self.assertEqual(d["schema_version"], SCHEMA_VERSION)
 
 
+class TestRunModeInReport(unittest.TestCase):
+    """
+    Tests for run_mode field in TruthReport.
+    
+    Ensures run_mode is always present and valid.
+    """
+
+    def test_default_run_mode(self):
+        """Default run_mode is SMOKE_SIMULATOR."""
+        report = TruthReport()
+        self.assertEqual(report.run_mode, "SMOKE_SIMULATOR")
+
+    def test_run_mode_in_dict(self):
+        """run_mode is included in to_dict output."""
+        report = TruthReport(run_mode="REGISTRY_REAL")
+        d = report.to_dict()
+        self.assertIn("run_mode", d)
+        self.assertEqual(d["run_mode"], "REGISTRY_REAL")
+
+    def test_build_truth_report_run_mode(self):
+        """build_truth_report passes through run_mode."""
+        report = build_truth_report({}, {}, [], run_mode="SMOKE_SIMULATOR")
+        self.assertEqual(report.run_mode, "SMOKE_SIMULATOR")
+
+        report_real = build_truth_report({}, {}, [], run_mode="REGISTRY_REAL")
+        self.assertEqual(report_real.run_mode, "REGISTRY_REAL")
+
+
+class TestTopRejectReasonsFormat(unittest.TestCase):
+    """
+    Tests for top_reject_reasons format.
+    
+    Format must be [[reason, count], ...] for backward compatibility.
+    """
+
+    def test_top_reject_reasons_is_list(self):
+        """top_reject_reasons is a list."""
+        reject_histogram = {"QUOTE_REVERT": 5, "SLIPPAGE_TOO_HIGH": 3}
+        health = build_health_section({}, reject_histogram)
+        
+        self.assertIsInstance(health["top_reject_reasons"], list)
+
+    def test_top_reject_reasons_format(self):
+        """Each entry is [reason, count] format."""
+        reject_histogram = {"QUOTE_REVERT": 5, "SLIPPAGE_TOO_HIGH": 3}
+        health = build_health_section({}, reject_histogram)
+        
+        for entry in health["top_reject_reasons"]:
+            self.assertIsInstance(entry, list)
+            self.assertEqual(len(entry), 2)
+            self.assertIsInstance(entry[0], str)
+            self.assertIsInstance(entry[1], int)
+
+    def test_top_reject_reasons_sorted_descending(self):
+        """top_reject_reasons are sorted by count descending."""
+        reject_histogram = {"A": 1, "B": 5, "C": 3}
+        health = build_health_section({}, reject_histogram)
+        
+        counts = [entry[1] for entry in health["top_reject_reasons"]]
+        self.assertEqual(counts, sorted(counts, reverse=True))
+
+    def test_top_reject_reasons_max_5(self):
+        """top_reject_reasons has max 5 entries."""
+        reject_histogram = {f"REASON_{i}": i for i in range(10)}
+        health = build_health_section({}, reject_histogram)
+        
+        self.assertLessEqual(len(health["top_reject_reasons"]), 5)
+
+
 class TestExecutableTerminology(unittest.TestCase):
     """
     Tests for executable terminology clarity.
@@ -253,7 +339,6 @@ class TestExecutableTerminology(unittest.TestCase):
 
         self.assertIn("paper_executable_spreads", report.stats)
         self.assertIn("execution_ready_count", report.stats)
-        # paper_executable_spreads should equal spread_ids_executable
         self.assertEqual(
             report.stats["paper_executable_spreads"],
             report.stats["spread_ids_executable"]
@@ -267,7 +352,6 @@ class TestExecutableTerminology(unittest.TestCase):
         for opp in report.top_opportunities:
             self.assertIn("execution_blockers", opp)
             self.assertIn("is_execution_ready", opp)
-            # In SMOKE mode, should have SMOKE_MODE_NO_EXECUTION blocker
             self.assertIn("SMOKE_MODE_NO_EXECUTION", opp["execution_blockers"])
 
 
@@ -290,9 +374,7 @@ class TestNoAmountInAmbiguity(unittest.TestCase):
         report = build_truth_report({}, {}, opportunities)
 
         for opp in report.top_opportunities:
-            # Should have amount_in_numeraire
             self.assertIn("amount_in_numeraire", opp)
-            # Should NOT have ambiguous amount_in
             self.assertNotIn("amount_in", opp)
 
 
