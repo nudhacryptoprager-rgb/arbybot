@@ -5,7 +5,7 @@ Truth report module for ARBY.
 Generates truthful metrics and health reports for scan cycles.
 Ensures RPC health consistency with reject histogram.
 
-SEMANTIC CONTRACT (Step 8):
+SEMANTIC CONTRACT:
 - mode: TruthReport data source mode
     - "REGISTRY": Using registry for pool discovery
     - "DISCOVERY": Using dynamic discovery
@@ -13,11 +13,12 @@ SEMANTIC CONTRACT (Step 8):
     - "SMOKE_SIMULATOR": Simulated quotes (no RPC)
     - "REGISTRY_REAL": Real RPC quotes
 
-SCHEMA CONTRACT (Step 9):
+SCHEMA CONTRACT (v3.0.0):
 Schema version 3.0.0 fields:
 - schema_version, timestamp, mode, run_mode
 - health: rpc_*, quote_*, chains_active, dexes_active, pairs_covered, pools_scanned, top_reject_reasons
-- top_opportunities[]: spread_id, opportunity_id, dex_buy/sell, pool_buy/sell, token_in/out, amount_in/out, net_pnl_usdc/bps, confidence, chain_id
+- top_opportunities[]: spread_id, opportunity_id, dex_buy/sell, pool_buy/sell, token_in/out,
+                       amount_in/out, net_pnl_usdc/bps, confidence, chain_id, is_profitable, reject_reason
 - stats: spread_ids_*, signals_*, paper_executable_count, execution_ready_count, blocked_spreads
 - revalidation: total, passed, gates_changed, gates_changed_pct
 - cumulative_pnl: total_bps, total_usdc
@@ -30,6 +31,7 @@ Contract invariants:
 - spreads_* = signals_* (1:1 mapping, reserved for post-ranking filtering)
 - spread_ids_executable = "economically executable" (PnL positive after gates)
 - execution_ready_count = "actually ready for on-chain execution" (0 in SMOKE mode)
+- top_opportunities NEVER empty when spreads exist (includes non-profitable with reject_reason)
 """
 
 import json
@@ -180,21 +182,17 @@ class TruthReport:
     
     All money values are strings per Roadmap 3.2.
     
-    Fields (Step 8 - Semantic Documentation):
+    Fields:
     - mode: TruthReport data source mode ("REGISTRY", "DISCOVERY")
-        Used for: categorizing the scan approach
-        Default: "REGISTRY"
     - run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL")
-        Used for: distinguishing simulated vs real execution
-        Default: "SMOKE_SIMULATOR"
     
-    Stats semantics (Step 6):
+    Stats semantics:
     - spread_ids_executable: "economically executable" - passed all gates, PnL > 0
     - execution_ready_count: "ready for on-chain execution" - 0 in SMOKE mode
     """
     timestamp: str = ""
-    mode: str = "REGISTRY"  # TruthReport data source mode
-    run_mode: str = "SMOKE_SIMULATOR"  # Scanner runtime mode
+    mode: str = "REGISTRY"
+    run_mode: str = "SMOKE_SIMULATOR"
     health: Dict[str, Any] = field(default_factory=dict)
     top_opportunities: List[Dict[str, Any]] = field(default_factory=list)
     stats: Dict[str, Any] = field(default_factory=dict)
@@ -243,6 +241,7 @@ def build_truth_report(
     rpc_metrics: Optional[RPCHealthMetrics] = None,
     mode: str = "REGISTRY",
     run_mode: str = "SMOKE_SIMULATOR",
+    all_spreads: Optional[List[Dict[str, Any]]] = None,
 ) -> TruthReport:
     """
     Build a complete truth report from scan data.
@@ -250,17 +249,27 @@ def build_truth_report(
     Args:
         scan_stats: Statistics from the scan cycle
         reject_histogram: Counts of reject reasons
-        opportunities: List of opportunity dicts
+        opportunities: List of profitable opportunity dicts
         paper_session_stats: Stats from paper trading session
         rpc_metrics: RPC health metrics
         mode: TruthReport mode ("REGISTRY", "DISCOVERY")
         run_mode: Scanner runtime mode ("SMOKE_SIMULATOR", "REGISTRY_REAL")
+        all_spreads: All spreads (including rejected) for top_opportunities fallback
+    
+    INVARIANT: top_opportunities is NEVER empty when spreads exist.
+    If no profitable opportunities, includes top spreads with reject_reason.
     """
     health = build_health_section(scan_stats, reject_histogram, rpc_metrics)
 
     # Normalize opportunities
     normalized_opps = []
     for opp in opportunities:
+        pnl_usdc = opp.get("net_pnl_usdc", "0.000000")
+        try:
+            is_profitable = Decimal(str(pnl_usdc)) > 0
+        except Exception:
+            is_profitable = False
+            
         normalized_opp = {
             "spread_id": opp.get("spread_id", "unknown"),
             "opportunity_id": opp.get("opportunity_id") or opp.get("spread_id", "unknown"),
@@ -272,33 +281,59 @@ def build_truth_report(
             "token_out": opp.get("token_out") or "unknown",
             "amount_in": opp.get("amount_in") or opp.get("amount_in_numeraire") or "0",
             "amount_out": opp.get("amount_out") or "0",
-            "net_pnl_usdc": opp.get("net_pnl_usdc", "0.000000"),
+            "net_pnl_usdc": pnl_usdc,
             "net_pnl_bps": opp.get("net_pnl_bps", "0.00"),
             "confidence": opp.get("confidence", 0.0),
             "chain_id": opp.get("chain_id", 0),
+            "is_profitable": is_profitable,
+            "reject_reason": opp.get("reject_reason"),
         }
         normalized_opps.append(normalized_opp)
 
+    # Sort by PnL descending
     top_opps = sorted(
         normalized_opps,
         key=lambda x: Decimal(str(x.get("net_pnl_usdc", "0"))),
         reverse=True
     )[:10]
 
-    # Stats with Step 6 semantics
+    # INVARIANT: top_opportunities NEVER empty when spreads exist
+    # If no profitable opportunities but we have spreads, include top rejects with reason
+    if not top_opps and all_spreads:
+        for spread in all_spreads[:5]:
+            top_opps.append({
+                "spread_id": spread.get("spread_id", "unknown"),
+                "opportunity_id": spread.get("opportunity_id") or spread.get("spread_id", "unknown"),
+                "dex_buy": spread.get("dex_buy") or spread.get("dex_a") or "unknown",
+                "dex_sell": spread.get("dex_sell") or spread.get("dex_b") or "unknown",
+                "pool_buy": spread.get("pool_buy") or spread.get("pool_a") or "unknown",
+                "pool_sell": spread.get("pool_sell") or spread.get("pool_b") or "unknown",
+                "token_in": spread.get("token_in") or "unknown",
+                "token_out": spread.get("token_out") or "unknown",
+                "amount_in": spread.get("amount_in") or "0",
+                "amount_out": spread.get("amount_out") or "0",
+                "net_pnl_usdc": spread.get("net_pnl_usdc", "0.000000"),
+                "net_pnl_bps": spread.get("net_pnl_bps", "0.00"),
+                "confidence": spread.get("confidence", 0.0),
+                "chain_id": spread.get("chain_id", 0),
+                "is_profitable": False,
+                "reject_reason": spread.get("reject_reason", "NOT_PROFITABLE"),
+            })
+
+    # Stats
     spread_total = scan_stats.get("spread_ids_total", 0)
     spread_profitable = scan_stats.get("spread_ids_profitable", 0)
-    spread_executable = scan_stats.get("spread_ids_executable", 0)  # economically executable
+    spread_executable = scan_stats.get("spread_ids_executable", 0)
     
     stats = {
         "spread_ids_total": spread_total,
         "spread_ids_profitable": spread_profitable,
-        "spread_ids_executable": spread_executable,  # Step 6: economically executable
+        "spread_ids_executable": spread_executable,
         "signals_total": spread_total,
         "signals_profitable": spread_profitable,
         "signals_executable": spread_executable,
         "paper_executable_count": scan_stats.get("paper_executable_count", 0),
-        "execution_ready_count": scan_stats.get("execution_ready_count", 0),  # Step 6: 0 in SMOKE
+        "execution_ready_count": scan_stats.get("execution_ready_count", 0),
         "blocked_spreads": scan_stats.get("blocked_spreads", 0),
     }
 
@@ -393,10 +428,14 @@ def print_truth_report(report: TruthReport) -> None:
     print(f"Blocked: {stats.get('blocked_spreads', 0)}")
 
     print("\n--- TOP OPPORTUNITIES ---")
-    for i, opp in enumerate(report.top_opportunities[:3], 1):
-        print(f"  {i}. {opp.get('token_in')}->{opp.get('token_out')} "
+    if not report.top_opportunities:
+        print("  (none)")
+    for i, opp in enumerate(report.top_opportunities[:5], 1):
+        profitable = "✓" if opp.get("is_profitable") else "✗"
+        reject = f" [{opp.get('reject_reason')}]" if opp.get("reject_reason") else ""
+        print(f"  {i}. {profitable} {opp.get('token_in')}->{opp.get('token_out')} "
               f"via {opp.get('dex_buy')}/{opp.get('dex_sell')}: "
-              f"${opp.get('net_pnl_usdc')} ({opp.get('net_pnl_bps')} bps)")
+              f"${opp.get('net_pnl_usdc')} ({opp.get('net_pnl_bps')} bps){reject}")
 
     print("\n--- CUMULATIVE PNL ---")
     cpnl = report.cumulative_pnl

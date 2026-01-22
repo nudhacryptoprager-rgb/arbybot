@@ -12,10 +12,11 @@ Key features:
 - run_mode field in all outputs
 - Paper trades linked via opportunity_id
 - QUOTE_REVERT with error_class/error_message
-- Step 2: reject_details includes gate_name for debugging
-- Step 3: histogram self-contained with totals
-- Step 4: pool address preserved even on INFRA_RPC_ERROR
-- Step 5: dexes_active counts actual unique dex_ids
+- gate_name in reject_details for debugging
+- histogram self-contained with totals
+- pool address preserved even on INFRA_RPC_ERROR
+- dexes_active counts actual unique dex_ids
+- top_opportunities NEVER empty (includes rejected spreads with reason)
 
 Usage:
     python -m strategy.jobs.run_scan_smoke --cycles 1 --output-dir data/runs/smoke
@@ -84,6 +85,14 @@ def setup_logging(output_dir: Optional[Path] = None, level: int = logging.INFO) 
         handlers=handlers,
         force=True,
     )
+
+
+def shutdown_logging() -> None:
+    """Shutdown logging handlers to release file locks (Windows fix)."""
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        handler.close()
+        root_logger.removeHandler(handler)
 
 
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
@@ -156,7 +165,6 @@ def _make_quote_revert_details(
 ) -> Dict[str, Any]:
     """Create QUOTE_REVERT reject details with error info."""
     return {
-        # Step 2: Add gate_name for debugging
         "gate_name": "quote_execution",
         "reason_family": "REVERT",
         "fn_or_selector": fn_or_selector,
@@ -179,24 +187,14 @@ def _make_slippage_details(
     deviation_bps: int,
     block_number: int,
 ) -> Dict[str, Any]:
-    """
-    Create SLIPPAGE_TOO_HIGH reject details.
-    
-    Step 2: Clarify semantics:
-    - gate_name: "slippage_gate" - the gate that triggered rejection
-    - slippage_bps: actual slippage between expected_out and min_out
-    - anchor_price/implied_price/deviation_bps: price sanity context
-    """
+    """Create SLIPPAGE_TOO_HIGH reject details."""
     return {
-        # Step 2: Gate identification
         "gate_name": "slippage_gate",
         "reason_family": "SLIPPAGE",
-        # Slippage calculation context
         "expected_out": expected_out,
         "min_out": min_out,
         "slippage_bps": slippage_bps,
         "slippage_note": "slippage_bps = (expected_out - min_out) / expected_out * 10000",
-        # Price sanity context (why anchor is included)
         "implied_price": implied_price,
         "anchor_price": anchor_price,
         "deviation_bps": deviation_bps,
@@ -229,7 +227,6 @@ def run_scan_cycle(
         }}
     )
 
-    # Step 5: Track unique dex_ids for accurate dexes_active count
     seen_dex_ids: Set[str] = set()
 
     scan_stats = {
@@ -247,7 +244,7 @@ def run_scan_cycle(
         "signals_profitable": 0,
         "signals_executable": 0,
         "paper_executable_count": 0,
-        "execution_ready_count": 0,  # Step 6: 0 in SMOKE mode
+        "execution_ready_count": 0,
         "blocked_spreads": 0,
         "chains_active": 0,
         "dexes_active": 0,
@@ -259,6 +256,7 @@ def run_scan_cycle(
 
     reject_histogram: Dict[str, int] = {}
     opportunities: List[Dict[str, Any]] = []
+    all_spreads: List[Dict[str, Any]] = []  # For top_opportunities fallback
     sample_rejects: List[Dict[str, Any]] = []
     sample_passed: List[Dict[str, Any]] = []
 
@@ -270,7 +268,6 @@ def run_scan_cycle(
             dex_id = random.choice(KNOWN_DEX_IDS)
             pool_addr = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
             
-            # Step 5: Track seen dex_ids
             seen_dex_ids.add(dex_id)
 
             if random.random() > 0.1:
@@ -340,12 +337,11 @@ def run_scan_cycle(
                 rpc_metrics.record_failure()
                 reject_histogram["INFRA_RPC_ERROR"] = reject_histogram.get("INFRA_RPC_ERROR", 0) + 1
 
-                # Step 4: Keep pool address even on INFRA_RPC_ERROR (when known)
                 if len(sample_rejects) < MAX_FORENSIC_SAMPLES:
                     sample_rejects.append(_make_forensic_sample(
                         quote_id=quote_id,
                         dex_id=dex_id,
-                        pool=pool_addr,  # Step 4: NOT "unknown"
+                        pool=pool_addr,
                         token_in="WETH",
                         token_out="USDC",
                         amount_in="1000000000000000000",
@@ -353,20 +349,19 @@ def run_scan_cycle(
                         gas_estimate=None,
                         reject_reason="INFRA_RPC_ERROR",
                         reject_details={
-                            "gate_name": "rpc_call",  # Step 2
-                            "reason_family": "INFRA",  # Step 2
+                            "gate_name": "rpc_call",
+                            "reason_family": "INFRA",
                             "rpc_provider_tag": "alchemy_arb_1",
                             "error_class": "TimeoutError",
                             "error_message": "RPC request timed out after 5000ms",
                             "block_number": current_block,
-                            "target_pool": pool_addr,  # Step 4: explicit target
+                            "target_pool": pool_addr,
                         },
                     ))
 
         scan_stats["quotes_total"] = 10
         scan_stats["pools_scanned"] = 10
         scan_stats["chains_active"] = 1
-        # Step 5: dexes_active = actual unique dex_ids seen
         scan_stats["dexes_active"] = len(seen_dex_ids)
         scan_stats["pairs_covered"] = 5
 
@@ -375,14 +370,15 @@ def run_scan_cycle(
         if scan_stats["quotes_fetched"] > 0:
             scan_stats["quote_gate_pass_rate"] = scan_stats["gates_passed"] / scan_stats["quotes_fetched"]
 
+        # Always generate spreads (even if not profitable) for top_opportunities
         scan_stats["spread_ids_total"] = 3
         scan_stats["signals_total"] = scan_stats["spread_ids_total"]
 
-        # Simulate profitable opportunity
-        if random.random() > 0.5:
-            opportunity_id = f"opp_{cycle_num}_{timestamp_str}_{uuid4().hex[:8]}"
-            spread_id = f"spread_{cycle_num}_{timestamp_str}"
-
+        # Generate 3 spreads - some profitable, some not
+        for spread_idx in range(3):
+            spread_id = f"spread_{cycle_num}_{timestamp_str}_{spread_idx}"
+            opportunity_id = f"opp_{spread_id}"
+            
             dex_buy = random.choice(KNOWN_DEX_IDS)
             dex_sell = random.choice([d for d in KNOWN_DEX_IDS if d != dex_buy])
             pool_buy = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
@@ -391,69 +387,81 @@ def run_scan_cycle(
             seen_dex_ids.add(dex_buy)
             seen_dex_ids.add(dex_sell)
 
-            paper_trade = PaperTrade(
-                spread_id=spread_id,
-                outcome="WOULD_EXECUTE",
-                numeraire="USDC",
-                amount_in_numeraire=format_money(Decimal("100")),
-                expected_pnl_numeraire=format_money(Decimal("0.50")),
-                expected_pnl_bps=format_money(Decimal("50"), decimals=2),
-                gas_price_gwei=format_money(Decimal("0.01"), decimals=2),
-                gas_estimate=150000,
-                chain_id=42161,
-                dex_a=dex_buy,
-                dex_b=dex_sell,
-                pool_a=pool_buy,
-                pool_b=pool_sell,
-                token_in="WETH",
-                token_out="USDC",
-                metadata={
-                    "simulated": True,
-                    "run_mode": run_mode.value,
-                    "opportunity_id": opportunity_id,
-                    "block_number": current_block,
-                },
-            )
+            # First spread is profitable, others are not
+            if spread_idx == 0 and random.random() > 0.3:
+                pnl_usdc = format_money(Decimal("0.50"))
+                pnl_bps = "50.00"
+                is_profitable = True
+                reject_reason = None
+            else:
+                pnl_usdc = format_money(Decimal("-0.10"))
+                pnl_bps = "-10.00"
+                is_profitable = False
+                reject_reason = random.choice(["SLIPPAGE_TOO_HIGH", "GAS_TOO_HIGH", "NOT_PROFITABLE"])
 
-            try:
-                recorded = paper_session.record_trade(paper_trade)
-                if recorded:
-                    scan_stats["paper_executable_count"] += 1
-                    scan_stats["spread_ids_profitable"] += 1
-                    scan_stats["spread_ids_executable"] += 1  # economically executable
-                    scan_stats["signals_profitable"] = scan_stats["spread_ids_profitable"]
-                    scan_stats["signals_executable"] = scan_stats["spread_ids_executable"]
-                    # execution_ready_count stays 0 in SMOKE mode (Step 6)
+            spread = {
+                "spread_id": spread_id,
+                "opportunity_id": opportunity_id,
+                "dex_buy": dex_buy,
+                "dex_sell": dex_sell,
+                "pool_buy": pool_buy,
+                "pool_sell": pool_sell,
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "amount_in": "100.000000",
+                "amount_out": "100.50" if is_profitable else "99.90",
+                "net_pnl_usdc": pnl_usdc,
+                "net_pnl_bps": pnl_bps,
+                "confidence": 0.85 if is_profitable else 0.45,
+                "chain_id": 42161,
+                "block_number": current_block,
+                "is_profitable": is_profitable,
+                "reject_reason": reject_reason,
+            }
+            all_spreads.append(spread)
 
-                    opportunities.append({
-                        "spread_id": spread_id,
+            if is_profitable:
+                scan_stats["spread_ids_profitable"] += 1
+                scan_stats["spread_ids_executable"] += 1
+                scan_stats["signals_profitable"] = scan_stats["spread_ids_profitable"]
+                scan_stats["signals_executable"] = scan_stats["spread_ids_executable"]
+                opportunities.append(spread)
+
+                # Record paper trade for profitable spread
+                paper_trade = PaperTrade(
+                    spread_id=spread_id,
+                    outcome="WOULD_EXECUTE",
+                    numeraire="USDC",
+                    amount_in_numeraire="100.000000",
+                    expected_pnl_numeraire=pnl_usdc,
+                    expected_pnl_bps=pnl_bps,
+                    gas_price_gwei="0.01",
+                    gas_estimate=150000,
+                    chain_id=42161,
+                    dex_a=dex_buy,
+                    dex_b=dex_sell,
+                    pool_a=pool_buy,
+                    pool_b=pool_sell,
+                    token_in="WETH",
+                    token_out="USDC",
+                    metadata={
+                        "simulated": True,
+                        "run_mode": run_mode.value,
                         "opportunity_id": opportunity_id,
-                        "dex_buy": dex_buy,
-                        "dex_sell": dex_sell,
-                        "dex_a": dex_buy,
-                        "dex_b": dex_sell,
-                        "pool_buy": pool_buy,
-                        "pool_sell": pool_sell,
-                        "pool_a": pool_buy,
-                        "pool_b": pool_sell,
-                        "token_in": "WETH",
-                        "token_out": "USDC",
-                        "amount_in": paper_trade.amount_in_numeraire,
-                        "amount_out": format_money(Decimal("100.50")),
-                        "net_pnl_usdc": paper_trade.expected_pnl_numeraire,
-                        "net_pnl_bps": paper_trade.expected_pnl_bps,
-                        "confidence": 0.85,
-                        "chain_id": 42161,
                         "block_number": current_block,
-                    })
-            except Exception as e:
-                logger.error(
-                    f"Paper trade recording failed: {e}",
-                    exc_info=True,
-                    extra={"context": {"spread_id": spread_id, "error_type": type(e).__name__}}
+                    },
                 )
+                try:
+                    recorded = paper_session.record_trade(paper_trade)
+                    if recorded:
+                        scan_stats["paper_executable_count"] += 1
+                except Exception as e:
+                    logger.error(
+                        f"Paper trade recording failed: {e}",
+                        exc_info=True,
+                        extra={"context": {"spread_id": spread_id}}
+                    )
 
-        # Update final dexes_active
         scan_stats["dexes_active"] = len(seen_dex_ids)
 
     except Exception as e:
@@ -474,29 +482,29 @@ def run_scan_cycle(
             "stats": scan_stats,
             "reject_histogram": reject_histogram,
             "opportunities": opportunities,
+            "all_spreads": all_spreads,
             "sample_rejects": sample_rejects,
             "sample_passed": sample_passed,
         }, f, indent=2)
 
     logger.info(f"Snapshot saved: {snapshot_path}")
 
-    # Step 3: Save self-contained reject histogram with totals
+    # Save self-contained reject histogram
     reject_path = output_dir / "reports" / f"reject_histogram_{timestamp_str}.json"
     reject_path.parent.mkdir(parents=True, exist_ok=True)
     with open(reject_path, "w", encoding="utf-8") as f:
         json.dump({
             "run_mode": run_mode.value,
             "timestamp": timestamp.isoformat(),
-            "chain_id": 42161,  # Step 3
-            "current_block": current_block,  # Step 3
-            # Step 3: Add totals for self-contained audit
+            "chain_id": 42161,
+            "current_block": current_block,
             "quotes_total": scan_stats["quotes_total"],
             "quotes_fetched": scan_stats["quotes_fetched"],
             "gates_passed": scan_stats["gates_passed"],
             "histogram": reject_histogram,
         }, f, indent=2)
 
-    # Build truth report
+    # Build truth report with all_spreads fallback
     paper_stats = paper_session.get_stats()
     truth_report = build_truth_report(
         scan_stats=scan_stats,
@@ -506,6 +514,7 @@ def run_scan_cycle(
         rpc_metrics=rpc_metrics,
         mode="REGISTRY",
         run_mode=run_mode.value,
+        all_spreads=all_spreads,  # For top_opportunities fallback
     )
 
     truth_path = output_dir / "reports" / f"truth_report_{timestamp_str}.json"
@@ -524,6 +533,7 @@ def run_scan_cycle(
         "stats": scan_stats,
         "reject_histogram": reject_histogram,
         "opportunities": opportunities,
+        "all_spreads": all_spreads,
         "sample_rejects": sample_rejects,
         "sample_passed": sample_passed,
     }
@@ -580,6 +590,7 @@ def run_scanner(
         logger.info("Final session summary", extra={"context": paper_session.get_stats()})
         logger.info("Paper session summary", extra={"context": paper_session.get_pnl_summary()})
         paper_session.close()
+        shutdown_logging()  # Windows file lock fix
         logger.info("Scanner stopped")
 
 
