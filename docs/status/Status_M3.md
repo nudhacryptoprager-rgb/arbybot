@@ -2,7 +2,7 @@
 
 **Status:** 🟡 IN PROGRESS  
 **Last Updated:** 2026-01-22  
-**Branch:** `work/20260122_1739-shortfix`
+**Branch:** `work/20260122_1816-shortfix`
 
 ## Overview
 
@@ -17,16 +17,12 @@ M3 implements the Opportunity Engine: scanning, quoting, gate validation, and tr
 - [x] Scan snapshot with all artifacts
 - [x] RPC health metrics reconciliation
 - [x] Execution blockers explanation
-- [x] Schema version policy (SCHEMA_VERSION constant)
-- [x] Gate breakdown contract (revert/slippage/infra/other)
-- [x] Error code mapping (QUOTE_REVERT ≠ INFRA_RPC_ERROR)
-- [x] spread_id/opportunity_id contract
-- [x] Preflight validation for quote params
+- [x] **spread_id contract v1.0** (fixed)
+- [x] **slippage gate comparator** (fixed)
 - [x] DEX coverage tracking (configured vs active vs passed)
 
 ### 🟡 In Progress
-- [ ] Reduce QUOTE_REVERT rate (currently ~20-30%)
-- [ ] Improve gate pass rate (target: >70%)
+- [ ] Reduce QUOTE_REVERT rate (currently ~20%)
 - [ ] REGISTRY_REAL scanner implementation
 
 ### ❌ Blocked
@@ -34,90 +30,120 @@ M3 implements the Opportunity Engine: scanning, quoting, gate validation, and tr
 
 ## Recent Patches
 
-### Patch 2026-01-22: 10-Step Quality Fixes
+### Patch 2026-01-22 v11: spread_id Contract Fix + Slippage Gate Fix
+
+**Root Cause:**
+1. `parse_spread_id()` expected 4 parts but `spread_1_20260122_171426_0` has 5 parts (timestamp contains underscore)
+2. Slippage gate rejected when `slippage_bps=176 < threshold_bps=200` (wrong comparator)
 
 **Changes:**
-1. ✅ `--mode smoke/real` in run_scan.py (no silent redirect)
-2. ✅ `configured_dexes` vs `dexes_active` tracking
-3. ✅ `gate_breakdown` canonical contract with tests
-4. ✅ Error code mapping (QUOTE_REVERT/INFRA separate)
-5. ✅ Reduced simulated slippage for better pass rate
-6. ✅ Preflight validation for quote params
-7. ✅ spread_id/opportunity_id contract with tests
-8. ✅ Smoke artifacts contract test
-9. ✅ Schema version policy test
-10. ✅ WORKFLOW.md status location guidance
+1. ✅ **spread_id CONTRACT v1.0** — single source of truth in `core/models.py`
+   - Format: `spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}`
+   - Uses regex pattern: `^spread_(\d+)_(\d{8})_(\d{6})_(\d+)$`
+   - `format_spread_timestamp()` — single source for timestamp formatting
+   - `generate_spread_id()` — uses `format_spread_timestamp`
+   - `parse_spread_id()` — returns structured dict with all components
+   - `validate_spread_id()` — quick bool check
+
+2. ✅ **slippage gate CONTRACT**
+   - `check_slippage_gate(slippage_bps, threshold_bps)` — returns `True` if `slippage_bps <= threshold_bps`
+   - Documented in `_make_slippage_details()`: `"slippage_gate_contract": "PASS if slippage_bps <= threshold_bps"`
+
+3. ✅ **Roundtrip tests** — `generate -> parse -> regenerate` produces same ID
 
 **Files Modified:**
-- `strategy/jobs/run_scan.py` — explicit --mode
-- `strategy/jobs/run_scan_smoke.py` — preflight validation, dex coverage
-- `monitoring/truth_report.py` — gate breakdown, dex coverage, error mapping
-- `core/models.py` — spread_id contract
-- `tests/unit/test_truth_report.py` — schema/gate tests
-- `tests/unit/test_core_models.py` — spread_id tests
-- `tests/integration/test_smoke_run.py` — artifacts contract test
-- `docs/WORKFLOW.md` — status location guidance
+- `core/models.py` — spread_id contract v1.0 with regex validation
+- `strategy/jobs/run_scan_smoke.py` — uses `generate_spread_id()` + fixed slippage gate
+- `tests/unit/test_core_models.py` — roundtrip tests + real artifact compat test
 
 **Verify:**
 ```powershell
-# Tests pass
-python -m pytest -q
+# 1. Run tests
+python -m pytest -q tests\unit\test_core_models.py -v
 
-# --mode help works
-python -m strategy.jobs.run_scan --help
+# 2. Check spread_id roundtrip
+python -c "from core.models import generate_spread_id, parse_spread_id; id=generate_spread_id(1,'20260122_171426',0); p=parse_spread_id(id); print(f'ID: {id}, valid: {p[\"valid\"]}, cycle: {p[\"cycle\"]}, ts: {p[\"timestamp\"]}, idx: {p[\"index\"]}')"
 
-# --mode real raises RuntimeError
-python -m strategy.jobs.run_scan --mode real 2>&1 | Select-String "not yet implemented"
+# 3. Check real artifact example
+python -c "from core.models import parse_spread_id; r=parse_spread_id('spread_1_20260122_171426_0'); print(r)"
 
-# Smoke run generates all 3 artifacts
-python -m strategy.jobs.run_scan --mode smoke --cycles 1 --output-dir data\runs\verify_v10
-Get-ChildItem data\runs\verify_v10\snapshots\scan_*.json
-Get-ChildItem data\runs\verify_v10\reports\reject_histogram_*.json
-Get-ChildItem data\runs\verify_v10\reports\truth_report_*.json
+# 4. Check slippage gate
+python -c "from strategy.jobs.run_scan_smoke import check_slippage_gate; print('176<=200:', check_slippage_gate(176, 200)); print('250<=200:', check_slippage_gate(250, 200))"
+
+# 5. Smoke run
+python -m strategy.jobs.run_scan --mode smoke --cycles 1 --output-dir data\runs\verify_v11
+
+# 6. Verify spread_id in artifacts parses
+$scan = Get-Content data\runs\verify_v11\snapshots\scan_*.json | ConvertFrom-Json
+python -c "from core.models import parse_spread_id; import sys; r=parse_spread_id(sys.argv[1]); print(r)" $scan.all_spreads[0].spread_id
 ```
 
-## Schema Contract
+## Contracts
 
-**Version:** 3.0.0
+### spread_id CONTRACT v1.0
 
-**Breaking changes require:**
-1. Bump SCHEMA_VERSION in `monitoring/truth_report.py`
-2. Migration PR
-3. Test update (`test_schema_version_policy`)
+```
+Format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
 
-**Gate Breakdown Contract:**
-```json
-{
-  "gate_breakdown": {
-    "revert": 0,
-    "slippage": 0,
-    "infra": 0,
-    "other": 0
-  }
-}
+When split by "_", produces 5 parts:
+  [0] "spread" - literal prefix
+  [1] cycle    - int, 1-indexed
+  [2] date     - str, YYYYMMDD
+  [3] time     - str, HHMMSS
+  [4] index    - int, 0-indexed
+
+Example: "spread_1_20260122_171426_0"
+  -> cycle=1, date="20260122", time="171426", index=0
 ```
 
-**spread_id Contract:**
-- Format: `spread_{cycle}_{timestamp}_{index}`
-- Example: `spread_1_20260122_093438_0`
+### opportunity_id CONTRACT
 
-**opportunity_id Contract:**
-- Format: `opp_{spread_id}`
-- Example: `opp_spread_1_20260122_093438_0`
+```
+Format: "opp_{spread_id}"
+Example: "opp_spread_1_20260122_171426_0"
+```
+
+### Slippage Gate CONTRACT
+
+```
+check_slippage_gate(slippage_bps, threshold_bps):
+  - slippage_bps <= threshold_bps -> PASS (return True)
+  - slippage_bps > threshold_bps  -> FAIL (SLIPPAGE_TOO_HIGH)
+
+Example:
+  check_slippage_gate(176, 200) -> True  (passes)
+  check_slippage_gate(250, 200) -> False (fails)
+```
+
+### Scan/TruthReport SEMANTIC CONTRACT
+
+```
+opportunities: 
+  Spreads that pass all gates AND are profitable.
+  Execution candidates.
+
+all_spreads:
+  All evaluated spreads (including rejected/unprofitable).
+  For debugging/analysis.
+
+top_opportunities (in truth_report):
+  Top-N by PnL, may include non-profitable for debugging.
+  Each has execution_blockers explaining why not execution-ready.
+```
 
 ## Definition of Done (M3 Closure)
 
 - [x] pytest green
+- [x] spread_id roundtrip stable
+- [x] slippage gate comparator correct
 - [x] SMOKE artifacts valid (3 files generated)
 - [x] top_opportunities non-empty
 - [x] reject_reasons classified (STF, etc.)
 - [x] execution_blockers explain why not ready
-- [x] Schema version policy enforced by test
-- [x] Gate breakdown contract enforced by test
 - [ ] REGISTRY_REAL scan produces similar structure
 - [ ] Golden artifacts in `docs/artifacts/`
 
 ## Links
 
-- Compare: https://github.com/nudhacryptoprager-rgb/arbybot/compare/work/20260122_1739-shortfix
+- Compare: https://github.com/nudhacryptoprager-rgb/arbybot/compare/work/20260122_1816-shortfix
 - Index: `docs/status/INDEX.md`

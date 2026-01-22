@@ -2,7 +2,7 @@
 """
 Unit tests for core data models.
 
-Includes STEP 7: spread_id/opportunity_id contract tests.
+Includes SPREAD_ID CONTRACT v1.0 tests.
 """
 
 import unittest
@@ -11,24 +11,28 @@ from decimal import Decimal
 from core.models import (
     Quote, Opportunity, Trade, PnLBreakdown,
     generate_spread_id, generate_opportunity_id, parse_spread_id,
+    validate_spread_id, format_spread_timestamp, SPREAD_ID_PATTERN,
 )
 from core.constants import RejectReason, TradeOutcome
 
 
 class TestSpreadIdContract(unittest.TestCase):
     """
-    STEP 7: spread_id/opportunity_id contract tests.
+    SPREAD_ID CONTRACT v1.0 tests.
     
     CONTRACT:
-    - spread_id format: "spread_{cycle}_{timestamp}_{index}"
-    - opportunity_id format: "opp_{spread_id}"
-    - Both must be deterministic given the same inputs.
+    - Format: "spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}"
+    - When split by "_", produces 5 parts
+    - timestamp = "YYYYMMDD_HHMMSS" (contains underscore)
+    
+    CRITICAL: generate_spread_id() and parse_spread_id() must be 
+    mutually inverse (roundtrip stable).
     """
 
     def test_generate_spread_id_format(self):
         """spread_id follows contract format."""
-        spread_id = generate_spread_id(1, "20260122_093438", 0)
-        self.assertEqual(spread_id, "spread_1_20260122_093438_0")
+        spread_id = generate_spread_id(1, "20260122_171426", 0)
+        self.assertEqual(spread_id, "spread_1_20260122_171426_0")
 
     def test_generate_spread_id_deterministic(self):
         """Same inputs produce same spread_id."""
@@ -36,46 +40,118 @@ class TestSpreadIdContract(unittest.TestCase):
         id2 = generate_spread_id(5, "20260122_120000", 3)
         self.assertEqual(id1, id2)
 
+    def test_generate_spread_id_different_cycles(self):
+        """Different cycles produce different spread_ids."""
+        id1 = generate_spread_id(1, "20260122_120000", 0)
+        id2 = generate_spread_id(2, "20260122_120000", 0)
+        self.assertNotEqual(id1, id2)
+
     def test_generate_opportunity_id_format(self):
         """opportunity_id follows contract format."""
-        spread_id = "spread_1_20260122_093438_0"
+        spread_id = "spread_1_20260122_171426_0"
         opp_id = generate_opportunity_id(spread_id)
-        self.assertEqual(opp_id, "opp_spread_1_20260122_093438_0")
-
-    def test_generate_opportunity_id_deterministic(self):
-        """Same spread_id produces same opportunity_id."""
-        spread_id = "spread_1_20260122_093438_0"
-        id1 = generate_opportunity_id(spread_id)
-        id2 = generate_opportunity_id(spread_id)
-        self.assertEqual(id1, id2)
+        self.assertEqual(opp_id, "opp_spread_1_20260122_171426_0")
 
     def test_parse_spread_id_valid(self):
         """parse_spread_id extracts components correctly."""
-        result = parse_spread_id("spread_1_20260122_093438_0")
+        result = parse_spread_id("spread_1_20260122_171426_0")
         
         self.assertTrue(result["valid"])
         self.assertEqual(result["cycle"], 1)
-        self.assertEqual(result["timestamp"], "20260122")
+        self.assertEqual(result["date"], "20260122")
+        self.assertEqual(result["time"], "171426")
+        self.assertEqual(result["timestamp"], "20260122_171426")
         self.assertEqual(result["index"], 0)
+
+    def test_parse_spread_id_large_values(self):
+        """parse_spread_id handles large cycle and index."""
+        result = parse_spread_id("spread_999_20260122_235959_42")
+        
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["cycle"], 999)
+        self.assertEqual(result["index"], 42)
 
     def test_parse_spread_id_invalid_format(self):
         """parse_spread_id returns invalid for wrong format."""
         result = parse_spread_id("invalid_spread_id")
         self.assertFalse(result["valid"])
+        self.assertIn("error", result)
 
     def test_parse_spread_id_wrong_prefix(self):
         """parse_spread_id returns invalid for wrong prefix."""
-        result = parse_spread_id("opportunity_1_20260122_0")
+        result = parse_spread_id("opportunity_1_20260122_171426_0")
         self.assertFalse(result["valid"])
 
-    def test_spread_id_roundtrip(self):
-        """Can generate and parse spread_id."""
-        original_id = generate_spread_id(10, "20260115_143022", 7)
-        parsed = parse_spread_id(original_id)
+    def test_parse_spread_id_missing_index(self):
+        """parse_spread_id returns invalid when index is missing."""
+        # Old format without index should be invalid
+        result = parse_spread_id("spread_1_20260122_171426")
+        self.assertFalse(result["valid"])
+
+    def test_roundtrip_generate_parse(self):
+        """CRITICAL: generate -> parse roundtrip is stable."""
+        original_cycle = 7
+        original_ts = "20260115_143022"
+        original_idx = 12
         
+        # Generate
+        spread_id = generate_spread_id(original_cycle, original_ts, original_idx)
+        
+        # Parse
+        parsed = parse_spread_id(spread_id)
+        
+        # Verify roundtrip
+        self.assertTrue(parsed["valid"], f"Failed to parse generated spread_id: {spread_id}")
+        self.assertEqual(parsed["cycle"], original_cycle)
+        self.assertEqual(parsed["timestamp"], original_ts)
+        self.assertEqual(parsed["index"], original_idx)
+
+    def test_roundtrip_generate_parse_regenerate(self):
+        """CRITICAL: generate -> parse -> regenerate produces same ID."""
+        original_id = generate_spread_id(3, "20260122_093438", 5)
+        
+        parsed = parse_spread_id(original_id)
         self.assertTrue(parsed["valid"])
-        self.assertEqual(parsed["cycle"], 10)
-        self.assertEqual(parsed["index"], 7)
+        
+        regenerated_id = generate_spread_id(
+            parsed["cycle"], 
+            parsed["timestamp"], 
+            parsed["index"]
+        )
+        
+        self.assertEqual(original_id, regenerated_id)
+
+    def test_real_artifact_example(self):
+        """
+        COMPAT TEST: Real spread_id from artifacts must parse.
+        
+        Example from scan_20260122_171426.json artifact.
+        """
+        real_spread_id = "spread_1_20260122_171426_0"
+        
+        result = parse_spread_id(real_spread_id)
+        
+        self.assertTrue(result["valid"], 
+            f"Real artifact spread_id should be valid: {real_spread_id}")
+        self.assertEqual(result["cycle"], 1)
+        self.assertEqual(result["date"], "20260122")
+        self.assertEqual(result["time"], "171426")
+        self.assertEqual(result["index"], 0)
+
+    def test_validate_spread_id_quick(self):
+        """validate_spread_id() returns bool quickly."""
+        self.assertTrue(validate_spread_id("spread_1_20260122_171426_0"))
+        self.assertFalse(validate_spread_id("invalid"))
+        self.assertFalse(validate_spread_id("spread_1_20260122_171426"))  # missing index
+
+    def test_format_spread_timestamp(self):
+        """format_spread_timestamp produces correct format."""
+        from datetime import datetime, timezone
+        
+        dt = datetime(2026, 1, 22, 17, 14, 26, tzinfo=timezone.utc)
+        ts = format_spread_timestamp(dt)
+        
+        self.assertEqual(ts, "20260122_171426")
 
 
 class TestQuote(unittest.TestCase):

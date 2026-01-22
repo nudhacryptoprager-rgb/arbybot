@@ -5,14 +5,23 @@ SMOKE SIMULATOR for ARBY.
 NOTE: This is SIMULATION ONLY. Real execution path is disabled.
 All reject_details are marked with source="SMOKE_SIMULATOR".
 
+SEMANTIC CONTRACT:
+====================
+- opportunities: spreads that pass all gates AND are profitable (execution candidates)
+- all_spreads: all evaluated spreads (including rejected/unprofitable)
+- top_opportunities (in truth_report): top-N by PnL, may include non-profitable 
+  for debugging; each has execution_blockers explaining why not execution-ready
+
+SLIPPAGE GATE CONTRACT:
+=======================
+- slippage_bps <= threshold_bps -> PASS
+- slippage_bps > threshold_bps  -> FAIL (SLIPPAGE_TOO_HIGH)
+
 Key features:
 - chain_id in ALL reject_details
-- source="SMOKE_SIMULATOR" in reject_details (prevents false debugging)
-- slippage_basis documenting the formula
-- gate_breakdown synced between scan.json and truth_report
-- STEP 5: Reduced false slippage (lower simulated slippage for smaller amounts)
-- STEP 6: Preflight validation for quote params
-- configured_dexes vs dexes_active tracking
+- source="SMOKE_SIMULATOR" marks all simulated data
+- Uses generate_spread_id() from core.models (single source of truth)
+- FIXED: slippage comparison (reject only if slippage_bps > threshold_bps)
 """
 
 import argparse
@@ -32,6 +41,11 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.format_money import format_money
+from core.models import (
+    generate_spread_id, 
+    generate_opportunity_id, 
+    format_spread_timestamp,
+)
 from strategy.paper_trading import PaperSession, PaperTrade
 from monitoring.truth_report import (
     RPCHealthMetrics,
@@ -65,9 +79,6 @@ MAX_FORENSIC_SAMPLES = 50
 
 # SMOKE mode uses relaxed thresholds
 SMOKE_SLIPPAGE_THRESHOLD_BPS = 200  # vs 50 in REAL mode
-
-# STEP 5: Reduced max simulated slippage (was causing too many rejects)
-SMOKE_MAX_SIMULATED_SLIPPAGE_BPS = 180  # Must be < threshold to reduce rejects
 
 
 def setup_logging(output_dir: Optional[Path] = None, level: int = logging.INFO) -> None:
@@ -127,28 +138,22 @@ def _preflight_validate_quote_params(
     pool_address: str,
 ) -> Optional[Dict[str, Any]]:
     """
-    STEP 6: Preflight validation for quote parameters.
-    
+    Preflight validation for quote parameters.
     Returns error dict if validation fails, None if OK.
-    This reduces QUOTE_REVERT by catching bad params early.
     """
     errors = []
     
-    # Validate dex_id
     if dex_id not in CONFIGURED_DEX_IDS:
         errors.append(f"Unknown dex_id: {dex_id}")
     
-    # Validate fee tier (for V3)
     if "_v3" in dex_id and fee_tier not in VALID_FEE_TIERS:
         errors.append(f"Invalid fee_tier {fee_tier} for {dex_id}. Valid: {sorted(VALID_FEE_TIERS)}")
     
-    # Validate amount bounds
     if amount_in <= 0:
         errors.append(f"amount_in must be > 0, got {amount_in}")
-    if amount_in > 10 ** 24:  # Unreasonably large
+    if amount_in > 10 ** 24:
         errors.append(f"amount_in too large: {amount_in}")
     
-    # Validate pool address format
     if not pool_address.startswith("0x") or len(pool_address) != 42:
         errors.append(f"Invalid pool address format: {pool_address}")
     
@@ -161,6 +166,21 @@ def _preflight_validate_quote_params(
         }
     
     return None
+
+
+def check_slippage_gate(slippage_bps: int, threshold_bps: int) -> bool:
+    """
+    Check if slippage passes the gate.
+    
+    SLIPPAGE GATE CONTRACT:
+    - slippage_bps <= threshold_bps -> PASS (return True)
+    - slippage_bps > threshold_bps  -> FAIL (return False, SLIPPAGE_TOO_HIGH)
+    
+    Example:
+        check_slippage_gate(176, 200) -> True  (176 <= 200, passes)
+        check_slippage_gate(250, 200) -> False (250 > 200, fails)
+    """
+    return slippage_bps <= threshold_bps
 
 
 def _make_forensic_sample(
@@ -249,6 +269,7 @@ def _make_slippage_details(
         "threshold_bps": threshold_bps,
         "slippage_basis": "expected_out",
         "slippage_formula": "slippage_bps = (expected_out - min_out) / expected_out * 10000",
+        "slippage_gate_contract": "PASS if slippage_bps <= threshold_bps, else SLIPPAGE_TOO_HIGH",
         "implied_price": implied_price,
         "anchor_price": anchor_price,
         "deviation_bps": deviation_bps,
@@ -306,7 +327,8 @@ def run_scan_cycle(
     run_mode: RunMode = RunMode.SMOKE_SIMULATOR,
 ) -> Dict[str, Any]:
     timestamp = datetime.now(timezone.utc)
-    timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
+    # Use format_spread_timestamp from core.models (single source of truth)
+    timestamp_str = format_spread_timestamp(timestamp)
     current_block = _get_simulated_block()
     chain_id = 42161  # Arbitrum
 
@@ -317,7 +339,7 @@ def run_scan_cycle(
         "cycle": cycle_num, "run_mode": run_mode.value, "block": current_block, "chain_id": chain_id
     }})
 
-    # Track DEX coverage (STEP 2 in truth_report)
+    # Track DEX coverage
     configured_dex_ids: Set[str] = set(CONFIGURED_DEX_IDS)
     dexes_with_quotes: Set[str] = set()
     dexes_passed_gates: Set[str] = set()
@@ -364,8 +386,8 @@ def run_scan_cycle(
             pool_addr = f"0x{''.join(random.choices('0123456789abcdef', k=40))}"
             fee_tier = random.choice(list(VALID_FEE_TIERS))
             amount_in_raw = 1_000_000_000_000_000_000  # 1 ETH in wei
-            
-            # STEP 6: Preflight validation
+
+            # Preflight validation
             preflight_result = _preflight_validate_quote_params(
                 dex_id, fee_tier, amount_in_raw, pool_addr
             )
@@ -390,9 +412,17 @@ def run_scan_cycle(
                 rpc_metrics.record_success(latency_ms=latency)
                 scan_stats["quotes_fetched"] += 1
 
-                # STEP 5: Improved gate pass rate with reduced slippage
-                # Simulate 75% pass rate (was too low before)
-                if random.random() > 0.25:
+                # Simulate slippage (50-250 bps range)
+                simulated_slippage = random.randint(50, 250)
+                
+                # FIXED: Correct slippage gate check
+                # PASS if slippage_bps <= threshold_bps
+                slippage_passes = check_slippage_gate(simulated_slippage, slippage_threshold)
+                
+                # Simulate other checks (80% pass rate for non-slippage gates)
+                other_gates_pass = random.random() > 0.2
+
+                if slippage_passes and other_gates_pass:
                     scan_stats["gates_passed"] += 1
                     dexes_passed_gates.add(dex_id)
                     if len(sample_passed) < MAX_FORENSIC_SAMPLES:
@@ -403,8 +433,21 @@ def run_scan_cycle(
                             amount_out="2500000000", gas_estimate=150000,
                         ))
                 else:
-                    # Reject - 60% QUOTE_REVERT, 40% SLIPPAGE
-                    if random.random() > 0.4:
+                    # Determine reject reason
+                    if not slippage_passes:
+                        reason = "SLIPPAGE_TOO_HIGH"
+                        details = _make_slippage_details(
+                            expected_out="2500000000", min_out="2475000000",
+                            slippage_bps=simulated_slippage,
+                            implied_price="2500.00", anchor_price="2520.00",
+                            deviation_bps=79,
+                            block_number=current_block, chain_id=chain_id,
+                            threshold_bps=slippage_threshold,
+                            source=source_tag,
+                        )
+                        amount_out_val, gas_est_val = "2500000000", 150000
+                    else:
+                        # Other gate failed (QUOTE_REVERT)
                         reason = "QUOTE_REVERT"
                         details = _make_quote_revert_details(
                             fn_or_selector="0xf7729d43",
@@ -417,20 +460,6 @@ def run_scan_cycle(
                             source=source_tag,
                         )
                         amount_out_val, gas_est_val = None, None
-                    else:
-                        reason = "SLIPPAGE_TOO_HIGH"
-                        # STEP 5: Reduced simulated slippage (was 250, now within bounds more often)
-                        simulated_slippage = random.randint(100, SMOKE_MAX_SIMULATED_SLIPPAGE_BPS + 50)
-                        details = _make_slippage_details(
-                            expected_out="2500000000", min_out="2475000000",
-                            slippage_bps=simulated_slippage,
-                            implied_price="2500.00", anchor_price="2520.00",
-                            deviation_bps=79,
-                            block_number=current_block, chain_id=chain_id,
-                            threshold_bps=slippage_threshold,
-                            source=source_tag,
-                        )
-                        amount_out_val, gas_est_val = "2500000000", 150000
 
                     reject_histogram[reason] = reject_histogram.get(reason, 0) + 1
                     if len(sample_rejects) < MAX_FORENSIC_SAMPLES:
@@ -464,7 +493,6 @@ def run_scan_cycle(
         scan_stats["quotes_total"] = 10
         scan_stats["pools_scanned"] = 10
         scan_stats["chains_active"] = 1
-        # dexes_active from ACTUAL quotes (not configured)
         scan_stats["dexes_active"] = len(dexes_with_quotes)
         scan_stats["pairs_covered"] = 5
 
@@ -476,8 +504,9 @@ def run_scan_cycle(
         scan_stats["spread_ids_total"] = 3
 
         for spread_idx in range(3):
-            spread_id = f"spread_{cycle_num}_{timestamp_str}_{spread_idx}"
-            opportunity_id = f"opp_{spread_id}"
+            # Use generate_spread_id from core.models (single source of truth)
+            spread_id = generate_spread_id(cycle_num, timestamp_str, spread_idx)
+            opportunity_id = generate_opportunity_id(spread_id)
 
             dex_buy = random.choice(list(CONFIGURED_DEX_IDS))
             dex_sell = random.choice([d for d in CONFIGURED_DEX_IDS if d != dex_buy])
@@ -542,7 +571,7 @@ def run_scan_cycle(
     # gate_breakdown synced between scan.json and truth_report (SINGLE SOURCE)
     gate_breakdown = build_gate_breakdown(reject_histogram)
 
-    # Save scan snapshot with gate_breakdown
+    # Save scan snapshot
     snapshot_path = output_dir / "snapshots" / f"scan_{timestamp_str}.json"
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     with open(snapshot_path, "w", encoding="utf-8") as f:
@@ -581,7 +610,7 @@ def run_scan_cycle(
             "gate_breakdown": gate_breakdown,
         }, f, indent=2)
 
-    # Build truth report with dex coverage
+    # Build truth report
     paper_stats = paper_session.get_stats()
     truth_report = build_truth_report(
         scan_stats=scan_stats, reject_histogram=reject_histogram,

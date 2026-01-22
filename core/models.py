@@ -6,21 +6,35 @@ Supports both:
 - Legacy API (string-based) for test_core_models.py
 - New API (object-based) for test_models.py
 
-SPREAD_ID / OPPORTUNITY_ID CONTRACT:
-- spread_id: unique identifier for a spread (pair of pools)
-  Format: "spread_{cycle}_{timestamp}_{index}"
-  Components: cycle (int), timestamp (YYYYMMDD_HHMMSS), index (int)
-  
-- opportunity_id: unique identifier for an opportunity (spread + quote data)
+SPREAD_ID CONTRACT v1.0 (SINGLE SOURCE OF TRUTH)
+================================================
+
+Format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+
+When split by "_", produces 5 parts:
+  [0] "spread" - literal prefix
+  [1] cycle    - int, 1-indexed scan cycle
+  [2] date     - str, YYYYMMDD
+  [3] time     - str, HHMMSS
+  [4] index    - int, 0-indexed spread within cycle
+
+Example: "spread_1_20260122_171426_0"
+  -> cycle=1, date="20260122", time="171426", index=0
+  -> timestamp="20260122_171426"
+
+OPPORTUNITY_ID CONTRACT:
   Format: "opp_{spread_id}"
-  
+  Example: "opp_spread_1_20260122_171426_0"
+
 Both must be deterministic given the same inputs.
+================================================
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+import re
 
 from core.constants import (
     DexType,
@@ -39,20 +53,45 @@ DEFAULT_QUOTE_FRESHNESS_MS = 3000
 
 
 # ============================================================================
-# STEP 7: SPREAD_ID / OPPORTUNITY_ID CONTRACT
+# SPREAD_ID CONTRACT v1.0 — SINGLE SOURCE OF TRUTH
 # ============================================================================
+
+# Regex for validating spread_id format
+# Format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+# Example: spread_1_20260122_171426_0
+SPREAD_ID_PATTERN = re.compile(
+    r"^spread_(\d+)_(\d{8})_(\d{6})_(\d+)$"
+)
+
+
+def format_spread_timestamp(dt: datetime) -> str:
+    """
+    Format datetime to spread_id timestamp component.
+    
+    Returns: "YYYYMMDD_HHMMSS"
+    Example: "20260122_171426"
+    
+    SINGLE SOURCE OF TRUTH for timestamp formatting in spread_id.
+    """
+    return dt.strftime("%Y%m%d_%H%M%S")
+
 
 def generate_spread_id(cycle: int, timestamp_str: str, index: int) -> str:
     """
     Generate deterministic spread_id.
     
-    CONTRACT:
-    - Format: "spread_{cycle}_{timestamp}_{index}"
-    - cycle: scan cycle number (1-indexed)
-    - timestamp: format YYYYMMDD_HHMMSS
-    - index: spread index within cycle (0-indexed)
+    CONTRACT v1.0:
+    - Format: "spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}"
+    - cycle: scan cycle number (int, 1-indexed)
+    - timestamp_str: "YYYYMMDD_HHMMSS" (use format_spread_timestamp())
+    - index: spread index within cycle (int, 0-indexed)
     
-    Example: "spread_1_20260122_093438_0"
+    Example: 
+        generate_spread_id(1, "20260122_171426", 0)
+        -> "spread_1_20260122_171426_0"
+    
+    NOTE: timestamp_str contains underscore, so final spread_id
+    has 5 parts when split by "_".
     """
     return f"spread_{cycle}_{timestamp_str}_{index}"
 
@@ -65,7 +104,7 @@ def generate_opportunity_id(spread_id: str) -> str:
     - Format: "opp_{spread_id}"
     - 1:1 mapping from spread_id
     
-    Example: "opp_spread_1_20260122_093438_0"
+    Example: "opp_spread_1_20260122_171426_0"
     """
     return f"opp_{spread_id}"
 
@@ -74,27 +113,55 @@ def parse_spread_id(spread_id: str) -> Dict[str, Any]:
     """
     Parse spread_id into components.
     
-    Returns:
-        {
-            "cycle": int,
-            "timestamp": str,
-            "index": int,
-            "valid": bool
-        }
-    """
-    try:
-        parts = spread_id.split("_")
-        if len(parts) != 4 or parts[0] != "spread":
-            return {"valid": False, "error": "Invalid format"}
+    Format: spread_{cycle}_{YYYYMMDD}_{HHMMSS}_{index}
+    
+    Returns dict with:
+        valid: bool        - True if format is valid
+        cycle: int         - scan cycle (if valid)
+        date: str          - "YYYYMMDD" (if valid)
+        time: str          - "HHMMSS" (if valid)
+        timestamp: str     - "YYYYMMDD_HHMMSS" (if valid)
+        index: int         - spread index (if valid)
+        raw: str           - original input
+        error: str         - error message (if invalid)
+    
+    Examples:
+        parse_spread_id("spread_1_20260122_171426_0")
+        -> {"valid": True, "cycle": 1, "date": "20260122", 
+            "time": "171426", "timestamp": "20260122_171426", 
+            "index": 0, "raw": "spread_1_20260122_171426_0"}
         
-        return {
-            "valid": True,
-            "cycle": int(parts[1]),
-            "timestamp": parts[2],
-            "index": int(parts[3]),
-        }
-    except (ValueError, IndexError) as e:
-        return {"valid": False, "error": str(e)}
+        parse_spread_id("invalid")
+        -> {"valid": False, "raw": "invalid", "error": "..."}
+    """
+    result = {"raw": spread_id, "valid": False}
+    
+    match = SPREAD_ID_PATTERN.match(spread_id)
+    if match:
+        result["valid"] = True
+        result["cycle"] = int(match.group(1))
+        result["date"] = match.group(2)
+        result["time"] = match.group(3)
+        result["timestamp"] = f"{match.group(2)}_{match.group(3)}"
+        result["index"] = int(match.group(4))
+        return result
+    
+    # Invalid format - provide helpful error
+    result["error"] = (
+        f"Invalid spread_id format: '{spread_id}'. "
+        f"Expected: 'spread_{{cycle}}_{{YYYYMMDD}}_{{HHMMSS}}_{{index}}' "
+        f"Example: 'spread_1_20260122_171426_0'"
+    )
+    return result
+
+
+def validate_spread_id(spread_id: str) -> bool:
+    """
+    Quick validation of spread_id format.
+    
+    Returns True if format is valid.
+    """
+    return SPREAD_ID_PATTERN.match(spread_id) is not None
 
 
 # ============================================================================
@@ -194,14 +261,7 @@ class Pool:
 
 @dataclass
 class Quote:
-    """
-    Quote from a DEX.
-
-    Supports both legacy (string) and new (object) API.
-
-    Legacy: Quote(pool_address=str, token_in=str, amount_in=str, ...)
-    New: Quote(pool=Pool, direction=TradeDirection, token_in=Token, amount_in=int, timestamp_ms=int, ...)
-    """
+    """Quote from a DEX with legacy and new API support."""
     # Legacy string-based fields
     pool_address: Optional[str] = None
     token_in: Optional[Union[str, "Token"]] = None
@@ -213,8 +273,8 @@ class Quote:
     block_number: int = 0
     gas_estimate: int = 0
     ticks_crossed: int = 0
-    timestamp: str = ""  # Legacy ISO string
-    timestamp_ms: int = 0  # New ms timestamp
+    timestamp: str = ""
+    timestamp_ms: int = 0
 
     # New object-based
     pool: Optional[Pool] = None
@@ -297,15 +357,7 @@ class QuoteCurve:
 
 @dataclass
 class PnLBreakdown:
-    """
-    PnL breakdown.
-
-    Supports both legacy (string) and new (Decimal) API.
-
-    Legacy: gross_pnl, dex_fees, cex_fees (str) + calculate_net()
-    New: gross_revenue, gross_cost, dex_fee (Decimal) + net_bps property
-    """
-    # Legacy string fields
+    """PnL breakdown with legacy and new API support."""
     gross_pnl: str = "0.000000"
     dex_fees: str = "0.000000"
     cex_fees: str = "0.000000"
@@ -314,7 +366,6 @@ class PnLBreakdown:
     slippage_cost: Union[str, Decimal] = "0.000000"
     net_pnl: Union[str, Decimal] = "0.000000"
 
-    # New Decimal fields
     gross_revenue: Optional[Decimal] = None
     gross_cost: Optional[Decimal] = None
     dex_fee: Optional[Decimal] = None
@@ -322,7 +373,6 @@ class PnLBreakdown:
     numeraire: str = "USDC"
 
     def calculate_net(self) -> str:
-        """Calculate net PnL (legacy API)."""
         gross = Decimal(self.gross_pnl)
         fees = Decimal(self.dex_fees) + Decimal(self.cex_fees)
         costs = Decimal(str(self.gas_cost)) + Decimal(str(self.slippage_cost)) + Decimal(self.currency_basis)
@@ -332,7 +382,6 @@ class PnLBreakdown:
 
     @property
     def net_bps(self) -> Decimal:
-        """Net PnL in basis points (new API)."""
         if self.gross_cost is not None and self.gross_cost != 0:
             return (Decimal(str(self.net_pnl)) / self.gross_cost) * Decimal("10000")
         return Decimal("0")
@@ -364,14 +413,7 @@ class RejectReason:
 
 @dataclass
 class Opportunity:
-    """
-    Arbitrage opportunity.
-
-    Supports both legacy and new API.
-
-    Legacy: spread_id, quote_buy/sell, net_pnl_usdc (str)
-    New: id, leg_buy/sell, pnl (PnLBreakdown), is_executable property
-    """
+    """Arbitrage opportunity with legacy and new API support."""
     spread_id: str = ""
     id: str = ""
     quote_buy: Optional[Quote] = None
@@ -379,7 +421,6 @@ class Opportunity:
     leg_buy: Optional[Quote] = None
     leg_sell: Optional[Quote] = None
 
-    # Legacy money fields
     gross_pnl_usdc: str = "0.000000"
     fees_usdc: str = "0.000000"
     gas_cost_usdc: str = "0.000000"
@@ -401,7 +442,6 @@ class Opportunity:
         if self.created_at is None:
             self.created_at = datetime.now(timezone.utc)
 
-        # Sync naming (spread_id <-> id)
         if self.spread_id and not self.id:
             self.id = self.spread_id
         elif self.id and not self.spread_id:
@@ -419,7 +459,6 @@ class Opportunity:
 
     @property
     def is_executable(self) -> bool:
-        """Check if executable (new API)."""
         if self.status != OpportunityStatus.VALID:
             return False
         if self.pnl is None:
@@ -448,14 +487,7 @@ class Opportunity:
 
 @dataclass
 class Trade:
-    """
-    Trade record.
-
-    Supports both legacy and new API.
-
-    Legacy: trade_id, spread_id, outcome (TradeOutcome)
-    New: id, opportunity_id, status (TradeStatus)
-    """
+    """Trade record with legacy and new API support."""
     trade_id: str = ""
     id: str = ""
     spread_id: str = ""
@@ -463,7 +495,6 @@ class Trade:
     outcome: Optional[TradeOutcome] = None
     status: TradeStatus = TradeStatus.PENDING
 
-    # Legacy money
     amount_in_usdc: str = "0.000000"
     amount_out_usdc: str = "0.000000"
     expected_pnl_usdc: str = "0.000000"
