@@ -1,7 +1,4 @@
-# =============================================================================
-# ARBY .gitignore
-# =============================================================================
-
+# PATH: .gitignore
 # Python
 __pycache__/
 *.py[cod]
@@ -23,8 +20,6 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.json
-
 
 # Virtual environments
 venv/
@@ -39,54 +34,35 @@ env/
 *.swo
 *~
 
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Data (dynamic, not tracked)
-data/registry/
-data/registry.sqlite
-data/snapshots/*.json
-data/trades/*.json
-data/trades/*.jsonl
-data/reports/*.json
-data/reports/*.md
-# runtime artifacts
-data/
-data/**
-
-# Keep directory structure
-!data/snapshots/.gitkeep
-!data/trades/.gitkeep
-!data/reports/.gitkeep
-!data/registry/.gitkeep
-
-# Logs
-logs/
-*.log
-
 # Testing
+.pytest_cache/
 .coverage
 htmlcov/
-.pytest_cache/
-.mypy_cache/
+.tox/
+.nox/
+
+# Logs
+*.log
+logs/
+
+# Runtime data - NOT committed (Step 9)
+data/runs/
+data/cache/
+
+# Golden fixtures - ALLOWED (Step 8)
+!docs/artifacts/
+!docs/artifacts/**
+
+# Local config
+.env
+.env.local
+*.local.yaml
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Temporary files
-*.tmp
-*.bak
-
-!.vscode/
-!.vscode/tasks.json
-!.github/
-!.github/pull_request_template.md
-!.github/workflows/
-!.github/workflows/ci.yml
-!tools/
-!tools/new_run.ps1
-!docs/WORKFLOW.md
-
+# Secrets (never commit)
+*.key
+*.pem
+secrets/
