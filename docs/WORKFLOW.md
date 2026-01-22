@@ -1,42 +1,21 @@
-﻿# ARBY3 Dev Workflow (Windows + PR)
+# ARBY3 Workflow (ChatGPT ↔ Claude ↔ VSCode ↔ GitHub)
 
-## Rule #1: PR is the workspace
-Everything needed to continue work must be in the PR:
-- docs/Status_*.md updated
-- artifacts under data/runs/YYYY-MM-DD/<run_id>/
-- brief log snippet or scan.log.txt
+_Last cleaned: 2026-01-21_
 
-## Standard cycle
-1) Create a branch
-   - git checkout -b m3/<topic>
+## Rules (hard)
+- Work via GitHub SHA + latest Status as source of truth.
+- Small PRs (1–2 commits). Every PR must have:
+  - updated Status file
+  - `python -m pytest -q` green
+  - smoke run artifact evidence (as text link or designated golden fixtures)
+- Do not commit runtime run directories (`data/runs/...`) unless explicitly marked as **golden** and placed under `docs/artifacts/...`.
 
-2) Create run folder
-   - powershell -ExecutionPolicy Bypass -File tools/new_run.ps1 -RunId "smoke_01"
-   - copy the printed path
+## Review loop
+1) Developer pushes branch + Status update.
+2) Run tests + smoke and attach evidence.
+3) Reviewer provides max **10 critical issues + 10 fix steps**.
+4) Repeat until green and contracts stable.
 
-3) Run scan and capture log
-   - Run from VS Code task OR terminal
-   - Save console output to: data/runs/<date>/<run_id>/scan.log.txt
-   - Ensure truth_report/reject_histogram/snapshots are in same folder (copy or export)
-
-4) Update docs/Status_*.md
-   - include:
-     - what changed
-     - how to reproduce
-     - key metrics (attempted/fetched/passed, top reject reasons)
-     - link to run folder path
-
-5) Commit + push
-   - git add .
-   - git commit -m "M3: <topic> (run artifacts + status)"
-   - git push -u origin <branch>
-
-6) Open PR
-   - Fill PR template
-   - Link run folder + artifacts
-
-## Assistant context block (paste into Claude/ChatGPT)
-- PR link:
-- Status file:
-- Run folder:
-- Goal / expected outcome:
+## Artifact handling
+- If an artifact is required for reproducibility, move/copy it into `docs/artifacts/<scope>/<date>/...` and commit.
+- Otherwise keep it local (do not pollute git history).
