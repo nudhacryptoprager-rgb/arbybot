@@ -2,8 +2,19 @@
 """
 ARBY Scanner Entry Point.
 
-STEP 7: Explicit mode error - no silent mode substitution.
+PUBLIC API CONTRACT (for tests and external use):
+=================================================
+from strategy.jobs.run_scan import run_scanner, ScannerMode
 
+run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=Path(...))
+run_scanner(mode=ScannerMode.REAL, ...)  # raises RuntimeError
+
+ScannerMode:
+  - SMOKE: Simulation mode (always works)
+  - REAL: Live RPC mode (not yet implemented, raises RuntimeError)
+=================================================
+
+STEP 7: Explicit mode error - no silent mode substitution.
 If user runs with --mode real but REGISTRY_REAL is not implemented,
 the scanner raises RuntimeError immediately (not silent fallback to smoke).
 
@@ -15,7 +26,9 @@ MODES:
 import argparse
 import sys
 import warnings
+from enum import Enum
 from pathlib import Path
+from typing import Optional
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -24,7 +37,72 @@ sys.path.insert(0, str(PROJECT_ROOT))
 REGISTRY_REAL_IMPLEMENTED = False
 
 
+class ScannerMode(str, Enum):
+    """
+    Scanner mode for public API.
+    
+    SMOKE: Simulation mode - all data is simulated, execution disabled
+    REAL: Live RPC mode - not yet implemented (raises RuntimeError)
+    """
+    SMOKE = "SMOKE"
+    REAL = "REAL"
+
+
+def run_scanner(
+    mode: ScannerMode = ScannerMode.SMOKE,
+    cycles: int = 1,
+    output_dir: Optional[Path] = None,
+    config_path: Optional[Path] = None,
+) -> None:
+    """
+    Run the ARBY scanner.
+    
+    PUBLIC API CONTRACT:
+    - mode=ScannerMode.SMOKE: runs simulation (always works)
+    - mode=ScannerMode.REAL: raises RuntimeError (not yet implemented)
+    - cycles: number of scan cycles to run
+    - output_dir: where to write artifacts
+    - config_path: optional config file
+    
+    Artifacts generated in output_dir:
+    - scan.log
+    - snapshots/scan_*.json
+    - reports/reject_histogram_*.json
+    - reports/truth_report_*.json
+    """
+    # STEP 7: Explicit mode check - no silent substitution
+    if mode == ScannerMode.REAL:
+        if not REGISTRY_REAL_IMPLEMENTED:
+            raise RuntimeError(
+                "REGISTRY_REAL scanner is not yet implemented.\n"
+                "\n"
+                "The mode=ScannerMode.REAL option requires live RPC integration which is "
+                "planned for M4 (Execution Layer).\n"
+                "\n"
+                "Current options:\n"
+                "  1. Use mode=ScannerMode.SMOKE for simulation (works now)\n"
+                "  2. Wait for REGISTRY_REAL implementation in M4\n"
+                "\n"
+                "This error prevents silent fallback to smoke mode, which could "
+                "cause confusion about whether you're running live or simulated."
+            )
+    
+    # Import and delegate to internal implementation
+    from strategy.jobs.run_scan_smoke import run_scanner as _run_scanner_impl, RunMode
+    
+    # Map public ScannerMode to internal RunMode
+    run_mode = RunMode.SMOKE_SIMULATOR if mode == ScannerMode.SMOKE else RunMode.REGISTRY_REAL
+    
+    _run_scanner_impl(
+        cycles=cycles,
+        output_dir=output_dir,
+        config_path=config_path,
+        run_mode=run_mode,
+    )
+
+
 def main():
+    """CLI entry point."""
     parser = argparse.ArgumentParser(
         description="ARBY Scanner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -86,37 +164,14 @@ MODES:
         )
         args.mode = "smoke"
 
-    # STEP 7: Explicit mode check - no silent substitution
-    if args.mode == "real":
-        if not REGISTRY_REAL_IMPLEMENTED:
-            raise RuntimeError(
-                "REGISTRY_REAL scanner is not yet implemented.\n"
-                "\n"
-                "The --mode real option requires live RPC integration which is "
-                "planned for M4 (Execution Layer).\n"
-                "\n"
-                "Current options:\n"
-                "  1. Use --mode smoke for simulation (works now)\n"
-                "  2. Wait for REGISTRY_REAL implementation in M4\n"
-                "\n"
-                "This error prevents silent fallback to smoke mode, which could "
-                "cause confusion about whether you're running live or simulated."
-            )
-        # When implemented:
-        # from strategy.jobs.run_scan_real import run_scanner as run_real_scanner
-        # run_real_scanner(...)
-        # return
-
-    # Import smoke scanner (lazy to avoid circular imports)
-    from strategy.jobs.run_scan_smoke import run_scanner, RunMode
-
-    run_mode = RunMode.SMOKE_SIMULATOR if args.mode == "smoke" else RunMode.REGISTRY_REAL
+    # Map CLI mode to ScannerMode
+    scanner_mode = ScannerMode.SMOKE if args.mode == "smoke" else ScannerMode.REAL
 
     run_scanner(
+        mode=scanner_mode,
         cycles=args.cycles,
         output_dir=Path(args.output_dir) if args.output_dir else None,
         config_path=Path(args.config) if args.config else None,
-        run_mode=run_mode,
     )
 
 
