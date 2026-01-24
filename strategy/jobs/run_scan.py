@@ -7,20 +7,23 @@ PUBLIC API CONTRACT (for tests and external use):
 from strategy.jobs.run_scan import run_scanner, ScannerMode
 
 run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=Path(...))
-run_scanner(mode=ScannerMode.REAL, ...)  # raises RuntimeError
+run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=Path(...))
 
 ScannerMode:
-  - SMOKE: Simulation mode (always works)
-  - REAL: Live RPC mode (not yet implemented, raises RuntimeError)
+  - SMOKE: Simulation mode (all data simulated)
+  - REAL: Live quoting mode (real RPC, execution disabled)
 =================================================
 
-STEP 7: Explicit mode error - no silent mode substitution.
-If user runs with --mode real but REGISTRY_REAL is not implemented,
-the scanner raises RuntimeError immediately (not silent fallback to smoke).
+M4 CONTRACT:
+- --mode real runs live quoting pipeline
+- Execution is disabled (EXECUTION_DISABLED_M4)
+- Artifacts are same 4/4 as SMOKE
+- run_mode in truth_report: "REGISTRY_REAL"
+- quotes_fetched >= 1 required
 
 MODES:
-  --mode smoke  → SMOKE_SIMULATOR (simulation only, always works)
-  --mode real   → REGISTRY_REAL (not yet implemented, raises error)
+  --mode smoke  → SMOKE_SIMULATOR
+  --mode real   → REGISTRY_REAL (live quoting, no execution)
 """
 
 import argparse
@@ -33,16 +36,13 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Feature flag: Set to True when REGISTRY_REAL is implemented
-REGISTRY_REAL_IMPLEMENTED = False
-
 
 class ScannerMode(str, Enum):
     """
     Scanner mode for public API.
     
-    SMOKE: Simulation mode - all data is simulated, execution disabled
-    REAL: Live RPC mode - not yet implemented (raises RuntimeError)
+    SMOKE: Simulation mode - all data is simulated
+    REAL: Live quoting mode - real RPC calls, execution disabled (M4)
     """
     SMOKE = "SMOKE"
     REAL = "REAL"
@@ -59,46 +59,40 @@ def run_scanner(
     
     PUBLIC API CONTRACT:
     - mode=ScannerMode.SMOKE: runs simulation (always works)
-    - mode=ScannerMode.REAL: raises RuntimeError (not yet implemented)
+    - mode=ScannerMode.REAL: runs live quoting (M4: execution disabled)
     - cycles: number of scan cycles to run
     - output_dir: where to write artifacts
     - config_path: optional config file
     
-    Artifacts generated in output_dir:
+    Artifacts generated in output_dir (same for SMOKE and REAL):
     - scan.log
     - snapshots/scan_*.json
     - reports/reject_histogram_*.json
     - reports/truth_report_*.json
+    
+    M4 REAL mode contract:
+    - truth_report.run_mode: "REGISTRY_REAL"
+    - execution_ready_count: 0 (EXECUTION_DISABLED_M4)
+    - quotes_fetched >= 1 (required for M4 gate)
+    - current_block must be pinned (not None)
     """
-    # STEP 7: Explicit mode check - no silent substitution
     if mode == ScannerMode.REAL:
-        if not REGISTRY_REAL_IMPLEMENTED:
-            raise RuntimeError(
-                "REGISTRY_REAL scanner is not yet implemented.\n"
-                "\n"
-                "The mode=ScannerMode.REAL option requires live RPC integration which is "
-                "planned for M4 (Execution Layer).\n"
-                "\n"
-                "Current options:\n"
-                "  1. Use mode=ScannerMode.SMOKE for simulation (works now)\n"
-                "  2. Wait for REGISTRY_REAL implementation in M4\n"
-                "\n"
-                "This error prevents silent fallback to smoke mode, which could "
-                "cause confusion about whether you're running live or simulated."
-            )
-    
-    # Import and delegate to internal implementation
-    from strategy.jobs.run_scan_smoke import run_scanner as _run_scanner_impl, RunMode
-    
-    # Map public ScannerMode to internal RunMode
-    run_mode = RunMode.SMOKE_SIMULATOR if mode == ScannerMode.SMOKE else RunMode.REGISTRY_REAL
-    
-    _run_scanner_impl(
-        cycles=cycles,
-        output_dir=output_dir,
-        config_path=config_path,
-        run_mode=run_mode,
-    )
+        # M4: REAL mode runs live quoting pipeline
+        from strategy.jobs.run_scan_real import run_scanner as _run_real_scanner
+        _run_real_scanner(
+            cycles=cycles,
+            output_dir=output_dir,
+            config_path=config_path,
+        )
+    else:
+        # SMOKE mode: simulation
+        from strategy.jobs.run_scan_smoke import run_scanner as _run_smoke_scanner, RunMode
+        _run_smoke_scanner(
+            cycles=cycles,
+            output_dir=output_dir,
+            config_path=config_path,
+            run_mode=RunMode.SMOKE_SIMULATOR,
+        )
 
 
 def main():
@@ -108,16 +102,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 EXAMPLES:
-  # Run smoke simulator (default, always works)
+  # Run smoke simulator (default)
   python -m strategy.jobs.run_scan --mode smoke --cycles 1
 
-  # Run real scanner (not yet implemented)
+  # Run real scanner (M4: live quoting, no execution)
   python -m strategy.jobs.run_scan --mode real --cycles 1
-  # → RuntimeError: REGISTRY_REAL scanner not yet implemented
+
+  # Run real scanner with minimal config
+  python -m strategy.jobs.run_scan --mode real --cycles 1 --config config/real_minimal.yaml
 
 MODES:
-  smoke  SMOKE_SIMULATOR - all data is simulated, execution disabled
-  real   REGISTRY_REAL - live RPC calls (NOT YET IMPLEMENTED)
+  smoke  SMOKE_SIMULATOR - all data is simulated
+  real   REGISTRY_REAL - live RPC quoting, execution disabled (M4)
         """,
     )
 
@@ -125,7 +121,7 @@ MODES:
         "--mode", "-m",
         choices=["smoke", "real"],
         default="smoke",
-        help="Scanner mode: 'smoke' (simulation) or 'real' (live RPC). Default: smoke",
+        help="Scanner mode: 'smoke' (simulation) or 'real' (live quoting). Default: smoke",
     )
     parser.add_argument(
         "--cycles", "-c",
@@ -143,7 +139,7 @@ MODES:
         "--config", "-f",
         type=str,
         default=None,
-        help="Config file path. Default: None",
+        help="Config file path. Default: None (uses real_minimal for --mode real)",
     )
 
     # Legacy flag (deprecated)

@@ -3,6 +3,9 @@
 Typed exceptions for ARBY.
 
 Per Roadmap 3.6: Typed errors with revert vs infra distinction.
+
+M4 ADDITION:
+- INFRA_BLOCK_PIN_FAILED: Block pinning failed (critical for REAL mode)
 """
 
 from enum import Enum
@@ -41,6 +44,7 @@ class ErrorCode(str, Enum):
     INFRA_RPC_TIMEOUT = "INFRA_RPC_TIMEOUT"
     INFRA_RATE_LIMIT = "INFRA_RATE_LIMIT"
     INFRA_TIMEOUT = "INFRA_TIMEOUT"
+    INFRA_BLOCK_PIN_FAILED = "INFRA_BLOCK_PIN_FAILED"  # M4: Block pinning failed
     
     # CEX errors
     CEX_DEPTH_LOW = "CEX_DEPTH_LOW"
@@ -63,6 +67,7 @@ class ErrorCode(str, Enum):
     
     # Validation
     VALIDATION_ERROR = "VALIDATION_ERROR"
+    PREFLIGHT_VALIDATION_FAILED = "PREFLIGHT_VALIDATION_FAILED"
     
     # Other
     UNKNOWN = "UNKNOWN"
@@ -140,50 +145,50 @@ class ValidationError(ArbyError):
 
 
 # Legacy aliases for backwards compatibility with RejectReason-based code
+
 class RPCError(InfraError):
     """RPC call failed."""
-    
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(ErrorCode.INFRA_RPC_ERROR, message, details)
 
 
 class TimeoutError(InfraError):
     """Operation timed out."""
-    
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(ErrorCode.INFRA_TIMEOUT, message, details)
 
 
 class RateLimitError(InfraError):
     """Rate limit exceeded."""
-    
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(ErrorCode.INFRA_RATE_LIMIT, message, details)
 
 
+class BlockPinError(InfraError):
+    """Block pinning failed (M4: critical for REAL mode)."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.INFRA_BLOCK_PIN_FAILED, message, details)
+
+
 class QuoteRevertError(QuoteError):
     """Quote call reverted."""
-    
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(ErrorCode.QUOTE_REVERT, message, details)
 
 
 class SlippageError(ArbyError):
     """Slippage exceeded threshold."""
-    
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(ErrorCode.SLIPPAGE_TOO_HIGH, message, details)
 
 
 class PriceSanityError(ArbyError):
     """Price failed sanity check."""
-    
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(ErrorCode.PRICE_SANITY_FAILED, message, details)
 
 
 class LiquidityError(PoolError):
     """Insufficient liquidity."""
-    
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(ErrorCode.POOL_NO_LIQUIDITY, message, details)

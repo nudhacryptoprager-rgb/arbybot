@@ -1,0 +1,36 @@
+# PATH: config/real_minimal.yaml
+# Minimal config for M4 REAL mode (1 chain × 2 DEX × 2 pairs)
+#
+# Usage:
+#   python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml
+#
+# This config provides a stable, minimal scan scope for M4 development.
+# Keeps the scan fast and predictable while testing live RPC integration.
+
+# Chain: Arbitrum One only
+chain: arbitrum_one
+chain_id: 42161
+
+# DEXes: Only 2 most reliable V3 DEXes
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+
+# Pairs: Only 2 most liquid pairs
+pairs:
+  - token_in: WETH
+    token_out: USDC
+  - token_in: WETH
+    token_out: USDT
+
+# Gate thresholds (stricter for REAL)
+max_slippage_bps: 50
+min_net_bps: 10
+
+# Paper trading
+cooldown_seconds: 60
+notion_capital_usdc: "10000.000000"
+
+# M4 markers
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_M4
