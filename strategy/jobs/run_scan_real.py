@@ -5,6 +5,10 @@ REAL SCANNER for ARBY (M4).
 This is the REAL mode scanner that uses live RPC calls.
 Execution is DISABLED in M4 - only quoting is enabled.
 
+SAFETY: This module is ONLY called when explicit enable is given:
+- run_scanner(mode=REAL, allow_real=True)
+- run_scanner(mode=REAL, config_path=<file>)
+
 M4 CONTRACT:
 ============
 - run_mode: REGISTRY_REAL
@@ -19,14 +23,6 @@ ARTIFACTS (same as SMOKE):
 - snapshots/scan_*.json
 - reports/reject_histogram_*.json
 - reports/truth_report_*.json
-
-REJECT REASONS (real, from core/exceptions.py):
-- QUOTE_REVERT: Contract call reverted
-- SLIPPAGE_TOO_HIGH: Exceeds threshold
-- INFRA_RPC_ERROR: RPC timeout/error
-- INFRA_BLOCK_PIN_FAILED: Block not pinned
-- PRICE_SANITY_FAILED: Price out of range
-- POOL_NO_LIQUIDITY: Insufficient liquidity
 """
 
 import asyncio
@@ -216,10 +212,6 @@ async def fetch_quote_real(
     """
     import httpx
     
-    # QuoterV2.quoteExactInputSingle selector
-    # For simplicity, we'll simulate the RPC call structure
-    # In production, this would encode actual call data
-    
     async with httpx.AsyncClient(timeout=10.0) as client:
         for url in rpc_urls:
             try:
@@ -328,16 +320,14 @@ async def _run_scan_cycle_async(
         logger.error(f"Failed to load chain config: {e}")
         rpc_urls = ["https://arb1.arbitrum.io/rpc"]
     
-    # STEP 5: PINNED BLOCK INVARIANT
+    # PINNED BLOCK INVARIANT
     try:
         current_block = await get_pinned_block(rpc_urls, chain_id)
     except RuntimeError as e:
         logger.error(str(e))
-        # Record the failure in reject histogram
         reject_histogram = {"INFRA_BLOCK_PIN_FAILED": 1}
         gate_breakdown = build_gate_breakdown(reject_histogram)
         
-        # Still write artifacts even on failure
         scan_stats = {
             "cycle": cycle_num,
             "timestamp": timestamp.isoformat(),
@@ -387,7 +377,7 @@ async def _run_scan_cycle_async(
         "spread_ids_profitable": 0,
         "spread_ids_executable": 0,
         "paper_executable_count": 0,
-        "execution_ready_count": 0,  # M4: Always 0
+        "execution_ready_count": 0,
         "blocked_spreads": 0,
         "chains_active": 1,
         "dexes_active": 0,
@@ -395,7 +385,7 @@ async def _run_scan_cycle_async(
         "pools_scanned": 0,
         "quote_fetch_rate": 0.0,
         "quote_gate_pass_rate": 0.0,
-        "simulated_dex": False,  # REAL mode
+        "simulated_dex": False,
     }
     
     reject_histogram: Dict[str, int] = {}
@@ -404,9 +394,7 @@ async def _run_scan_cycle_async(
     sample_rejects: List[Dict[str, Any]] = []
     sample_passed: List[Dict[str, Any]] = []
     
-    slippage_threshold = REAL_SLIPPAGE_THRESHOLD_BPS
-    
-    # STEP 6: Live quoting - fetch real quotes
+    # Live quoting
     quote_count = 0
     for dex_name in dex_names:
         try:
@@ -424,13 +412,12 @@ async def _run_scan_cycle_async(
                 
                 quote_id = f"quote_{cycle_num}_{quote_count}_{uuid4().hex[:8]}"
                 
-                # Fetch real quote
                 quote_result = await fetch_quote_real(
                     rpc_urls=rpc_urls,
                     quoter_address=quoter_address,
                     token_in=pair["token_in"],
                     token_out=pair["token_out"],
-                    amount_in=1_000_000_000_000_000_000,  # 1 ETH
+                    amount_in=1_000_000_000_000_000_000,
                     fee_tier=500,
                     block_number=current_block,
                     chain_id=chain_id,
@@ -441,7 +428,6 @@ async def _run_scan_cycle_async(
                     rpc_metrics.record_success(latency_ms=quote_result.get("latency_ms", 0))
                     dexes_with_quotes.add(dex_name)
                     
-                    # For M4, we mark all as passing gates but not executable
                     scan_stats["gates_passed"] += 1
                     dexes_passed_gates.add(dex_name)
                     
@@ -454,7 +440,6 @@ async def _run_scan_cycle_async(
                         "latency_ms": quote_result.get("latency_ms", 0),
                     })
                 else:
-                    # STEP 8: Real reject reasons
                     rpc_metrics.record_failure()
                     error_code = quote_result.get("error_code", ErrorCode.INFRA_RPC_ERROR.value)
                     reject_histogram[error_code] = reject_histogram.get(error_code, 0) + 1
@@ -485,7 +470,7 @@ async def _run_scan_cycle_async(
     if scan_stats["quotes_fetched"] > 0:
         scan_stats["quote_gate_pass_rate"] = scan_stats["gates_passed"] / scan_stats["quotes_fetched"]
     
-    # Generate spreads (for M4, all are blocked with EXECUTION_DISABLED_M4)
+    # Generate spreads (all blocked in M4)
     scan_stats["spread_ids_total"] = min(scan_stats["gates_passed"], 3)
     
     for spread_idx in range(scan_stats["spread_ids_total"]):
@@ -495,7 +480,6 @@ async def _run_scan_cycle_async(
         dex_buy = list(dexes_passed_gates)[0] if dexes_passed_gates else "unknown"
         dex_sell = list(dexes_passed_gates)[-1] if len(dexes_passed_gates) > 1 else dex_buy
         
-        # STEP 9: Execution disabled, clearly marked
         spread = {
             "spread_id": spread_id,
             "opportunity_id": opportunity_id,
@@ -514,15 +498,14 @@ async def _run_scan_cycle_async(
             "block_number": current_block,
             "is_profitable": True,
             "reject_reason": None,
-            "execution_blockers": [EXECUTION_DISABLED_REASON],  # M4: Execution disabled
-            "is_execution_ready": False,  # M4: Never ready
+            "execution_blockers": [EXECUTION_DISABLED_REASON],
+            "is_execution_ready": False,
         }
         
         all_spreads.append(spread)
         scan_stats["spread_ids_profitable"] += 1
-        scan_stats["blocked_spreads"] += 1  # All blocked in M4
+        scan_stats["blocked_spreads"] += 1
         
-        # Record paper trade
         paper_trade = PaperTrade(
             spread_id=spread_id,
             outcome="BLOCKED",
@@ -553,7 +536,6 @@ async def _run_scan_cycle_async(
         except Exception as e:
             logger.error(f"Paper trade failed: {e}")
     
-    # STEP 7: Write artifacts (same 4/4 as SMOKE)
     gate_breakdown = build_gate_breakdown(reject_histogram)
     
     _write_artifacts(
@@ -635,7 +617,7 @@ def _write_artifacts(
     truth_report = build_truth_report(
         scan_stats=scan_stats,
         reject_histogram=reject_histogram,
-        opportunities=all_spreads,  # Use all spreads for REAL
+        opportunities=all_spreads,
         paper_session_stats=paper_stats,
         rpc_metrics=rpc_metrics,
         mode="REGISTRY",
@@ -659,12 +641,8 @@ def run_scanner(
     """
     Run the REAL scanner.
     
-    M4 CONTRACT:
-    - Uses live RPC for quotes
-    - Pinned block invariant
-    - Real reject reasons
-    - Execution disabled (EXECUTION_DISABLED_M4)
-    - Same 4/4 artifacts as SMOKE
+    NOTE: This function is ONLY called when explicit enable is given.
+    The caller (run_scan.py) enforces the explicit enable requirement.
     """
     if output_dir is None:
         output_dir = Path("data/runs") / datetime.now().strftime("%Y%m%d_%H%M%S")

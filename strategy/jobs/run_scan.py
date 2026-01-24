@@ -7,23 +7,21 @@ PUBLIC API CONTRACT (for tests and external use):
 from strategy.jobs.run_scan import run_scanner, ScannerMode
 
 run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=Path(...))
-run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=Path(...))
+run_scanner(mode=ScannerMode.REAL, ...)  # raises RuntimeError without explicit enable
 
 ScannerMode:
-  - SMOKE: Simulation mode (all data simulated)
-  - REAL: Live quoting mode (real RPC, execution disabled)
+  - SMOKE: Simulation mode (always works)
+  - REAL: Live RPC mode (requires explicit enable)
 =================================================
 
-M4 CONTRACT:
-- --mode real runs live quoting pipeline
-- Execution is disabled (EXECUTION_DISABLED_M4)
-- Artifacts are same 4/4 as SMOKE
-- run_mode in truth_report: "REGISTRY_REAL"
-- quotes_fetched >= 1 required
+REAL MODE SAFETY CONTRACT:
+- --mode real WITHOUT explicit enable → RuntimeError
+- Explicit enable = --allow-real flag OR --config <file>
+- This prevents accidental live RPC calls in tests/CI
 
 MODES:
-  --mode smoke  → SMOKE_SIMULATOR
-  --mode real   → REGISTRY_REAL (live quoting, no execution)
+  --mode smoke  → SMOKE_SIMULATOR (simulation only, always works)
+  --mode real   → REGISTRY_REAL (requires: --allow-real OR --config)
 """
 
 import argparse
@@ -42,7 +40,7 @@ class ScannerMode(str, Enum):
     Scanner mode for public API.
     
     SMOKE: Simulation mode - all data is simulated
-    REAL: Live quoting mode - real RPC calls, execution disabled (M4)
+    REAL: Live RPC mode - requires explicit enable (--allow-real or --config)
     """
     SMOKE = "SMOKE"
     REAL = "REAL"
@@ -53,31 +51,50 @@ def run_scanner(
     cycles: int = 1,
     output_dir: Optional[Path] = None,
     config_path: Optional[Path] = None,
+    allow_real: bool = False,
 ) -> None:
     """
     Run the ARBY scanner.
     
     PUBLIC API CONTRACT:
     - mode=ScannerMode.SMOKE: runs simulation (always works)
-    - mode=ScannerMode.REAL: runs live quoting (M4: execution disabled)
-    - cycles: number of scan cycles to run
-    - output_dir: where to write artifacts
-    - config_path: optional config file
+    - mode=ScannerMode.REAL: requires explicit enable (allow_real=True or config_path set)
     
-    Artifacts generated in output_dir (same for SMOKE and REAL):
-    - scan.log
-    - snapshots/scan_*.json
-    - reports/reject_histogram_*.json
-    - reports/truth_report_*.json
+    REAL MODE SAFETY:
+    - Without explicit enable: raises RuntimeError
+    - With allow_real=True OR config_path: runs live RPC pipeline
     
-    M4 REAL mode contract:
-    - truth_report.run_mode: "REGISTRY_REAL"
-    - execution_ready_count: 0 (EXECUTION_DISABLED_M4)
-    - quotes_fetched >= 1 (required for M4 gate)
-    - current_block must be pinned (not None)
+    Args:
+        mode: Scanner mode (SMOKE or REAL)
+        cycles: Number of scan cycles
+        output_dir: Output directory for artifacts
+        config_path: Config file (also acts as explicit enable for REAL)
+        allow_real: Explicit flag to enable REAL mode
+    
+    Raises:
+        RuntimeError: If mode=REAL without explicit enable
     """
     if mode == ScannerMode.REAL:
-        # M4: REAL mode runs live quoting pipeline
+        # REAL MODE SAFETY: Require explicit enable
+        explicit_enable = allow_real or (config_path is not None)
+        
+        if not explicit_enable:
+            raise RuntimeError(
+                "REAL mode requires explicit enable.\n"
+                "\n"
+                "To run REAL mode (live RPC), you must explicitly enable it:\n"
+                "  Option 1: --allow-real flag\n"
+                "  Option 2: --config <config_file>\n"
+                "\n"
+                "Examples:\n"
+                "  python -m strategy.jobs.run_scan --mode real --allow-real\n"
+                "  python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml\n"
+                "\n"
+                "This safety check prevents accidental live RPC calls in tests/CI.\n"
+                "Use --mode smoke for simulation (no explicit enable needed)."
+            )
+        
+        # REAL mode with explicit enable - run live pipeline
         from strategy.jobs.run_scan_real import run_scanner as _run_real_scanner
         _run_real_scanner(
             cycles=cycles,
@@ -85,7 +102,7 @@ def run_scanner(
             config_path=config_path,
         )
     else:
-        # SMOKE mode: simulation
+        # SMOKE mode - always works
         from strategy.jobs.run_scan_smoke import run_scanner as _run_smoke_scanner, RunMode
         _run_smoke_scanner(
             cycles=cycles,
@@ -102,18 +119,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 EXAMPLES:
-  # Run smoke simulator (default)
+  # Run smoke simulator (default, always works)
   python -m strategy.jobs.run_scan --mode smoke --cycles 1
 
-  # Run real scanner (M4: live quoting, no execution)
-  python -m strategy.jobs.run_scan --mode real --cycles 1
-
-  # Run real scanner with minimal config
-  python -m strategy.jobs.run_scan --mode real --cycles 1 --config config/real_minimal.yaml
+  # Run real scanner (requires explicit enable)
+  python -m strategy.jobs.run_scan --mode real --allow-real
+  python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml
 
 MODES:
-  smoke  SMOKE_SIMULATOR - all data is simulated
-  real   REGISTRY_REAL - live RPC quoting, execution disabled (M4)
+  smoke  SMOKE_SIMULATOR - all data is simulated (no explicit enable needed)
+  real   REGISTRY_REAL - live RPC (requires --allow-real OR --config)
+
+SAFETY:
+  --mode real without --allow-real or --config raises RuntimeError.
+  This prevents accidental live RPC calls in tests/CI.
         """,
     )
 
@@ -121,7 +140,7 @@ MODES:
         "--mode", "-m",
         choices=["smoke", "real"],
         default="smoke",
-        help="Scanner mode: 'smoke' (simulation) or 'real' (live quoting). Default: smoke",
+        help="Scanner mode: 'smoke' (simulation) or 'real' (live RPC). Default: smoke",
     )
     parser.add_argument(
         "--cycles", "-c",
@@ -139,7 +158,12 @@ MODES:
         "--config", "-f",
         type=str,
         default=None,
-        help="Config file path. Default: None (uses real_minimal for --mode real)",
+        help="Config file path. Acts as explicit enable for REAL mode.",
+    )
+    parser.add_argument(
+        "--allow-real",
+        action="store_true",
+        help="Explicitly enable REAL mode (live RPC). Required for --mode real without --config.",
     )
 
     # Legacy flag (deprecated)
@@ -168,6 +192,7 @@ MODES:
         cycles=args.cycles,
         output_dir=Path(args.output_dir) if args.output_dir else None,
         config_path=Path(args.config) if args.config else None,
+        allow_real=args.allow_real,
     )
 
 

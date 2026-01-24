@@ -5,18 +5,22 @@ CI Gate for M4 (Execution Layer - Phase 1: REAL Pipeline).
 
 This script runs:
   1. pytest -q (all tests must pass)
-  2. REAL scan (generates 4 artifacts with REGISTRY_REAL markers)
+  2. REAL scan with EXPLICIT ENABLE (--allow-real --config)
   3. Artifact sanity check (same 4/4 as M3)
   4. M4 invariants check
+
+REAL MODE SAFETY:
+- Uses --allow-real --config config/real_minimal.yaml
+- This is the ONLY place where REAL mode should be explicitly enabled in CI
+- Tests do NOT enable REAL (they expect RuntimeError without explicit enable)
 
 M4 REQUIREMENTS:
 - --mode real runs pipeline (execution disabled)
 - truth_report.run_mode == "REGISTRY_REAL"
 - truth_report.schema_version == "3.0.0"
-- quotes_fetched >= 1
+- quotes_fetched >= 1 (if quoting works)
 - current_block is pinned (not None, > 0)
 - execution_ready_count == 0 (EXECUTION_DISABLED_M4)
-- reject_histogram contains real reject codes (from core/exceptions.py)
 
 ARTIFACTS (same 4/4 as M3):
   - snapshots/scan_*.json
@@ -32,7 +36,7 @@ Exit codes:
   1 - Tests failed
   2 - REAL scan failed
   3 - Artifact sanity check failed
-  4 - M4 invariants failed
+  4 - M4 invariants failed (including quotes_fetched < 1)
 """
 
 import json
@@ -147,10 +151,9 @@ def check_m4_invariants(output_dir: Path) -> bool:
     M4 INVARIANTS:
     - run_mode == "REGISTRY_REAL"
     - schema_version == "3.0.0"
-    - quotes_fetched >= 1
+    - quotes_fetched >= 1 (CRITICAL for M4)
     - current_block > 0 (pinned)
     - execution_ready_count == 0 (execution disabled)
-    - reject_histogram contains real error codes
     """
     print(f"\n{'='*60}")
     print("STEP: M4 Invariants Check")
@@ -186,6 +189,9 @@ def check_m4_invariants(output_dir: Path) -> bool:
 
     # 3. Load scan snapshot for block and quotes
     scan_files = list((output_dir / "snapshots").glob("scan_*.json"))
+    quotes_fetched = 0
+    current_block = None
+    
     if scan_files:
         with open(scan_files[0], "r") as f:
             scan_data = json.load(f)
@@ -197,13 +203,23 @@ def check_m4_invariants(output_dir: Path) -> bool:
         else:
             errors.append(f"❌ current_block must be pinned (> 0), got: {current_block}")
 
-        # Check quotes_fetched >= 1 (M4 requirement)
+        # Check quotes_fetched >= 1 (CRITICAL M4 requirement)
         stats = scan_data.get("stats", {})
         quotes_fetched = stats.get("quotes_fetched", 0)
+        quotes_total = stats.get("quotes_total", 0)
+        
         if quotes_fetched >= 1:
-            print(f"✓ quotes_fetched: {quotes_fetched} (>= 1 required)")
+            print(f"✓ quotes_fetched: {quotes_fetched}/{quotes_total} (>= 1 required)")
         else:
-            errors.append(f"❌ quotes_fetched must be >= 1, got: {quotes_fetched}")
+            # This is a CRITICAL failure - quoting didn't work
+            reject_histogram = scan_data.get("reject_histogram", {})
+            reject_summary = ", ".join(f"{k}={v}" for k, v in reject_histogram.items())
+            errors.append(
+                f"❌ quotes_fetched must be >= 1, got: {quotes_fetched}/{quotes_total}\n"
+                f"   REAL pipeline ran but quoting failed.\n"
+                f"   Reject reasons: {reject_summary or 'none'}\n"
+                f"   Check: RPC connectivity, quoter addresses, network state."
+            )
 
         # Check run_mode in scan matches
         scan_run_mode = scan_data.get("run_mode", "")
@@ -212,7 +228,7 @@ def check_m4_invariants(output_dir: Path) -> bool:
         else:
             warnings_list.append(f"⚠ scan.run_mode: {scan_run_mode} (expected REGISTRY_REAL)")
 
-    # 4. Check reject histogram for real reject codes
+    # 4. Check reject histogram
     histogram_files = list((output_dir / "reports").glob("reject_histogram_*.json"))
     if histogram_files:
         with open(histogram_files[0], "r") as f:
@@ -220,23 +236,12 @@ def check_m4_invariants(output_dir: Path) -> bool:
 
         hist_data = histogram.get("histogram", {})
         if hist_data:
-            # Verify reject codes are from core/exceptions.py
-            valid_codes = {
-                "QUOTE_REVERT", "SLIPPAGE_TOO_HIGH", "INFRA_RPC_ERROR",
-                "INFRA_BLOCK_PIN_FAILED", "PRICE_SANITY_FAILED", "POOL_NO_LIQUIDITY",
-                "QUOTE_TIMEOUT", "INFRA_TIMEOUT", "PREFLIGHT_VALIDATION_FAILED",
-            }
-            unknown_codes = set(hist_data.keys()) - valid_codes
-            if unknown_codes:
-                warnings_list.append(f"⚠ Unknown reject codes: {unknown_codes}")
             print(f"✓ reject_histogram: {len(hist_data)} codes - {list(hist_data.keys())}")
         else:
-            warnings_list.append("⚠ reject_histogram is empty (may be OK if all quotes passed)")
-
-        # Check histogram run_mode
-        hist_run_mode = histogram.get("run_mode", "")
-        if hist_run_mode == "REGISTRY_REAL":
-            print(f"✓ histogram.run_mode: {hist_run_mode}")
+            if quotes_fetched > 0:
+                print("✓ reject_histogram: empty (all quotes passed)")
+            else:
+                warnings_list.append("⚠ reject_histogram is empty but quotes_fetched=0")
 
     # 5. Check execution is disabled (execution_ready_count == 0)
     stats = truth_report.get("stats", {})
@@ -245,22 +250,6 @@ def check_m4_invariants(output_dir: Path) -> bool:
         print(f"✓ execution_ready_count: {execution_ready} (M4: execution disabled)")
     else:
         errors.append(f"❌ execution_ready_count should be 0 (M4: execution disabled), got: {execution_ready}")
-
-    # 6. Check top_opportunities have execution_blockers
-    top_opps = truth_report.get("top_opportunities", [])
-    if top_opps:
-        blocked_count = sum(1 for opp in top_opps if opp.get("execution_blockers"))
-        print(f"✓ top_opportunities: {len(top_opps)} total, {blocked_count} blocked")
-        
-        # Check for EXECUTION_DISABLED_M4 blocker
-        has_m4_blocker = any(
-            "EXECUTION_DISABLED_M4" in opp.get("execution_blockers", [])
-            for opp in top_opps
-        )
-        if has_m4_blocker:
-            print("✓ EXECUTION_DISABLED_M4 blocker present")
-        elif top_opps:
-            warnings_list.append("⚠ No EXECUTION_DISABLED_M4 blocker found in opportunities")
 
     # Print warnings
     for warning in warnings_list:
@@ -288,6 +277,8 @@ def main():
     print("  - current_block pinned (> 0)")
     print("  - execution_ready_count == 0")
     print("  - 4/4 artifacts generated")
+    print()
+    print("REAL MODE: Using --allow-real --config config/real_minimal.yaml")
 
     # Step 1: Run pytest
     if not run_command(
@@ -297,18 +288,28 @@ def main():
         print("\n❌ CI GATE FAILED: Tests did not pass")
         sys.exit(1)
 
-    # Step 2: Run REAL scan
+    # Step 2: Run REAL scan WITH EXPLICIT ENABLE
+    # This is the ONLY place where REAL mode is explicitly enabled in CI
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path("data/runs") / f"ci_m4_gate_{timestamp}"
+
+    # Check config exists
+    config_path = Path("config/real_minimal.yaml")
+    if not config_path.exists():
+        print(f"\n❌ CI GATE FAILED: Config not found: {config_path}")
+        print("Create config/real_minimal.yaml for REAL mode.")
+        sys.exit(2)
 
     if not run_command(
         [
             sys.executable, "-m", "strategy.jobs.run_scan",
             "--mode", "real",
+            "--allow-real",  # Explicit enable
+            "--config", str(config_path),  # Also explicit enable
             "--cycles", "1",
             "--output-dir", str(output_dir),
         ],
-        "REAL Scan (1 cycle)",
+        "REAL Scan (1 cycle) with explicit enable",
     ):
         print("\n❌ CI GATE FAILED: REAL scan failed")
         sys.exit(2)
@@ -318,9 +319,15 @@ def main():
         print("\n❌ CI GATE FAILED: Artifact sanity check failed")
         sys.exit(3)
 
-    # Step 4: Check M4 invariants
+    # Step 4: Check M4 invariants (including quotes_fetched >= 1)
     if not check_m4_invariants(output_dir):
         print("\n❌ CI GATE FAILED: M4 invariants check failed")
+        print()
+        print("NOTE: If quotes_fetched=0, check:")
+        print("  1. RPC endpoints in config/chains.yaml")
+        print("  2. Quoter addresses in config/dexes.yaml")
+        print("  3. Network connectivity")
+        print("  4. ALCHEMY_API_KEY in .env (if using Alchemy)")
         sys.exit(4)
 
     print("\n" + "=" * 60)

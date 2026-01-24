@@ -3,6 +3,7 @@
 #
 # Usage:
 #   python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml
+#   python -m strategy.jobs.run_scan --mode real --allow-real --config config/real_minimal.yaml
 #
 # This config provides a stable, minimal scan scope for M4 development.
 # Keeps the scan fast and predictable while testing live RPC integration.

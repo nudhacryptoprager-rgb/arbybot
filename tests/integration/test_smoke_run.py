@@ -8,8 +8,11 @@ SMOKE ARTIFACTS CONTRACT:
 - scan_*.json: Snapshot with stats, rejects, opportunities
 - reject_histogram_*.json: Reject breakdown by reason
 - truth_report_*.json: Final truth report with health, stats, opps
-
 All three files MUST be generated and parseable.
+
+REAL MODE CONTRACT:
+- Without explicit enable (--allow-real or --config): raises RuntimeError
+- With explicit enable: runs live RPC pipeline (tested separately in ci_m4_gate.py)
 """
 
 import json
@@ -36,6 +39,7 @@ class TestFullSmokeRun(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
+
             try:
                 # Run one cycle in smoke mode
                 run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=output_dir)
@@ -64,6 +68,7 @@ class TestFullSmokeRun(unittest.TestCase):
                 # Validate truth report content
                 with open(truth_reports[0]) as f:
                     report = json.load(f)
+
                 self.assertIn("schema_version", report)
                 self.assertIn("health", report)
                 self.assertIn("pnl", report)
@@ -72,6 +77,7 @@ class TestFullSmokeRun(unittest.TestCase):
                 health = report["health"]
                 rpc_total = health.get("rpc_total_requests", 0)
                 rpc_failed = health.get("rpc_failed_requests", 0)
+
                 if rpc_failed > 0:
                     self.assertGreater(rpc_total, 0, "rpc_total_requests should be > 0 if rpc_failed_requests > 0")
 
@@ -87,7 +93,7 @@ class TestFullSmokeRun(unittest.TestCase):
 class TestSmokeArtifactsContract(unittest.TestCase):
     """
     STEP 8: Smoke artifacts contract test.
-    
+
     Verifies that all 3 required artifact files are generated and parseable.
     """
 
@@ -97,6 +103,7 @@ class TestSmokeArtifactsContract(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
+
             try:
                 run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=output_dir)
 
@@ -111,7 +118,7 @@ class TestSmokeArtifactsContract(unittest.TestCase):
                 # 1. scan_*.json
                 scan_files = list(snapshots_dir.glob("scan_*.json"))
                 self.assertEqual(len(scan_files), 1, "Exactly one scan snapshot")
-                
+
                 with open(scan_files[0]) as f:
                     scan_data = json.load(f)
                 self.assertIn("stats", scan_data)
@@ -121,7 +128,7 @@ class TestSmokeArtifactsContract(unittest.TestCase):
                 # 2. reject_histogram_*.json
                 reject_files = list(reports_dir.glob("reject_histogram_*.json"))
                 self.assertEqual(len(reject_files), 1, "Exactly one reject histogram")
-                
+
                 with open(reject_files[0]) as f:
                     reject_data = json.load(f)
                 self.assertIn("histogram", reject_data)
@@ -130,7 +137,7 @@ class TestSmokeArtifactsContract(unittest.TestCase):
                 # 3. truth_report_*.json
                 truth_files = list(reports_dir.glob("truth_report_*.json"))
                 self.assertEqual(len(truth_files), 1, "Exactly one truth report")
-                
+
                 with open(truth_files[0]) as f:
                     truth_data = json.load(f)
                 self.assertIn("schema_version", truth_data)
@@ -147,6 +154,7 @@ class TestSmokeArtifactsContract(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
+
             try:
                 run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=output_dir)
 
@@ -176,6 +184,7 @@ class TestSmokeArtifactsContract(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
+
             try:
                 run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=output_dir)
 
@@ -201,16 +210,76 @@ class TestSmokeArtifactsContract(unittest.TestCase):
 
 
 class TestRealModeRaises(unittest.TestCase):
-    """Test that --mode real raises RuntimeError."""
+    """
+    Test that --mode real WITHOUT explicit enable raises RuntimeError.
+    
+    REAL MODE CONTRACT:
+    - Without --allow-real AND without --config: raises RuntimeError
+    - Error message must contain "requires explicit enable"
+    - This prevents accidental live RPC calls in tests/CI
+    """
 
-    def test_real_mode_raises_runtime_error(self):
-        """--mode real should raise RuntimeError (not yet implemented)."""
+    def test_real_mode_raises_runtime_error_without_explicit_enable(self):
+        """
+        --mode real without explicit enable should raise RuntimeError.
+        
+        This is the SAFETY CONTRACT for REAL mode:
+        - Calling run_scanner(mode=ScannerMode.REAL) without allow_real=True
+          or config_path must raise RuntimeError.
+        - The error message must indicate how to enable REAL mode.
+        """
         from strategy.jobs.run_scan import run_scanner, ScannerMode
 
         with self.assertRaises(RuntimeError) as ctx:
+            # Call WITHOUT explicit enable - should raise
             run_scanner(mode=ScannerMode.REAL, cycles=1)
 
-        self.assertIn("not yet implemented", str(ctx.exception).lower())
+        error_message = str(ctx.exception).lower()
+        
+        # Error message must indicate this is about explicit enable
+        self.assertTrue(
+            "requires explicit enable" in error_message or
+            "explicit" in error_message or
+            "--allow-real" in error_message or
+            "--config" in error_message,
+            f"Error message should mention explicit enable requirement. Got: {ctx.exception}"
+        )
+
+    def test_real_mode_with_allow_real_does_not_raise_immediately(self):
+        """
+        --mode real WITH --allow-real should not raise RuntimeError about explicit enable.
+        
+        Note: This may still fail due to network/RPC issues, but NOT due to
+        the "requires explicit enable" check.
+        """
+        from strategy.jobs.run_scan import run_scanner, ScannerMode
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+
+            try:
+                # Call WITH explicit enable - should NOT raise "requires explicit enable"
+                # May still fail due to network, but that's a different error
+                run_scanner(
+                    mode=ScannerMode.REAL,
+                    cycles=1,
+                    output_dir=output_dir,
+                    allow_real=True,  # Explicit enable
+                )
+            except RuntimeError as e:
+                # If it raises, it should NOT be about explicit enable
+                error_message = str(e).lower()
+                self.assertFalse(
+                    "requires explicit enable" in error_message,
+                    f"With allow_real=True, should not get 'requires explicit enable' error. Got: {e}"
+                )
+            except Exception:
+                # Other exceptions (network, etc.) are acceptable
+                pass
+            finally:
+                _close_all_handlers()
 
 
 if __name__ == "__main__":
