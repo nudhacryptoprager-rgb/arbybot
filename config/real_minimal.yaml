@@ -1,32 +1,36 @@
 # PATH: config/real_minimal.yaml
-# Minimal config for M4 REAL mode (1 chain × 2 DEX × 2 pairs)
+# CANARY CONFIG for M4 REAL mode
+#
+# This is a minimal, deterministic config for debugging REAL pipeline.
+# Goal: stabilize quote attempts reliably with known pools.
 #
 # Usage:
 #   python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml
-#   python -m strategy.jobs.run_scan --mode real --allow-real --config config/real_minimal.yaml
 #
-# This config provides a stable, minimal scan scope for M4 development.
-# Keeps the scan fast and predictable while testing live RPC integration.
+# Config: 1 chain × 1 DEX × 2 pools (WETH/USDC, WETH/USDT)
 
-# Chain: Arbitrum One only
+# Chain: Arbitrum One only (most reliable RPC)
 chain: arbitrum_one
 chain_id: 42161
 
-# DEXes: Only 2 most reliable V3 DEXes
+# DEX: Only Uniswap V3 (most reliable quoter)
 dexes:
   - uniswap_v3
-  - sushiswap_v3
 
-# Pairs: Only 2 most liquid pairs
+# Pairs: Only the most liquid pairs
 pairs:
   - token_in: WETH
     token_out: USDC
   - token_in: WETH
     token_out: USDT
 
-# Gate thresholds (stricter for REAL)
-max_slippage_bps: 50
-min_net_bps: 10
+# Known pool addresses for debugging (optional reference)
+# WETH/USDC 0.05%: 0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443
+# WETH/USDT 0.05%: 0x641C00A822e8b671738d32a431a4Fb6074E5c79d
+
+# Gate thresholds
+max_slippage_bps: 100
+min_net_bps: 5
 
 # Paper trading
 cooldown_seconds: 60
@@ -35,3 +39,7 @@ notion_capital_usdc: "10000.000000"
 # M4 markers
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4
+
+# RPC settings (optional override)
+# rpc_timeout_seconds: 10
+# rpc_retries: 2

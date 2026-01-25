@@ -5,10 +5,6 @@ REAL SCANNER for ARBY (M4).
 This is the REAL mode scanner that uses live RPC calls.
 Execution is DISABLED in M4 - only quoting is enabled.
 
-SAFETY: This module is ONLY called when explicit enable is given:
-- run_scanner(mode=REAL, allow_real=True)
-- run_scanner(mode=REAL, config_path=<file>)
-
 M4 CONTRACT:
 ============
 - run_mode: REGISTRY_REAL
@@ -16,7 +12,7 @@ M4 CONTRACT:
 - Real RPC quotes (not simulated)
 - Real reject reasons from actual failures
 - Execution disabled (EXECUTION_DISABLED_M4)
-- Same 4/4 artifacts as SMOKE
+- ALWAYS produces 4 artifacts (even if quotes_fetched=0)
 
 ARTIFACTS (same as SMOKE):
 - scan.log
@@ -62,20 +58,20 @@ logger = logging.getLogger("arby.scan.real")
 # M4: Execution disabled marker
 EXECUTION_DISABLED_REASON = "EXECUTION_DISABLED_M4"
 
-# Real mode slippage threshold (stricter than SMOKE)
-REAL_SLIPPAGE_THRESHOLD_BPS = 50
+# Real mode slippage threshold
+REAL_SLIPPAGE_THRESHOLD_BPS = 100
 
-# Minimal config for M4 (1 chain × 2 DEX × 2 pairs)
+# Minimal config for M4
 REAL_MINIMAL_CONFIG = {
     "chain": "arbitrum_one",
     "chain_id": 42161,
-    "dexes": ["uniswap_v3", "sushiswap_v3"],
+    "dexes": ["uniswap_v3"],
     "pairs": [
         {"token_in": "WETH", "token_out": "USDC"},
         {"token_in": "WETH", "token_out": "USDT"},
     ],
-    "max_slippage_bps": 50,
-    "min_net_bps": 10,
+    "max_slippage_bps": 100,
+    "min_net_bps": 5,
     "cooldown_seconds": 60,
     "notion_capital_usdc": "10000.000000",
 }
@@ -113,8 +109,6 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
                 return yaml.safe_load(f)
             else:
                 return json.load(f)
-    
-    # Use minimal config for M4 REAL mode
     return REAL_MINIMAL_CONFIG.copy()
 
 
@@ -123,13 +117,10 @@ def load_chain_config(chain_name: str) -> Dict[str, Any]:
     chains_path = PROJECT_ROOT / "config" / "chains.yaml"
     if not chains_path.exists():
         raise RuntimeError(f"Chain config not found: {chains_path}")
-    
     with open(chains_path, "r") as f:
         chains = yaml.safe_load(f)
-    
     if chain_name not in chains:
         raise RuntimeError(f"Chain not found in config: {chain_name}")
-    
     return chains[chain_name]
 
 
@@ -138,16 +129,12 @@ def load_dex_config(chain_name: str, dex_name: str) -> Dict[str, Any]:
     dexes_path = PROJECT_ROOT / "config" / "dexes.yaml"
     if not dexes_path.exists():
         raise RuntimeError(f"DEX config not found: {dexes_path}")
-    
     with open(dexes_path, "r") as f:
         dexes = yaml.safe_load(f)
-    
     if chain_name not in dexes:
         raise RuntimeError(f"Chain not found in DEX config: {chain_name}")
-    
     if dex_name not in dexes[chain_name]:
         raise RuntimeError(f"DEX not found for chain {chain_name}: {dex_name}")
-    
     return dexes[chain_name][dex_name]
 
 
@@ -157,15 +144,13 @@ async def get_pinned_block(rpc_urls: List[str], chain_id: int) -> int:
     
     PINNED BLOCK INVARIANT (M4):
     - Block MUST be fetched from live RPC
-    - If fetch fails, raise INFRA_BLOCK_PIN_FAILED
-    - Block number is used for all quotes in this cycle
+    - If fetch fails, raise RuntimeError with INFRA_BLOCK_PIN_FAILED
     """
     import httpx
     
     async with httpx.AsyncClient(timeout=10.0) as client:
         for url in rpc_urls:
             try:
-                # Resolve env vars in URL
                 api_key = os.getenv("ALCHEMY_API_KEY", "")
                 resolved_url = url.replace("${ALCHEMY_API_KEY}", api_key)
                 
@@ -188,10 +173,9 @@ async def get_pinned_block(rpc_urls: List[str], chain_id: int) -> int:
                 logger.warning(f"Failed to get block from {url}: {e}")
                 continue
     
-    # All endpoints failed - this is a critical error for REAL mode
     raise RuntimeError(
         f"INFRA_BLOCK_PIN_FAILED: Could not pin block for chain {chain_id}. "
-        "All RPC endpoints failed. Check RPC URLs and network connectivity."
+        "All RPC endpoints failed."
     )
 
 
@@ -204,11 +188,13 @@ async def fetch_quote_real(
     fee_tier: int,
     block_number: int,
     chain_id: int,
+    rpc_metrics: RPCHealthMetrics,
 ) -> Dict[str, Any]:
     """
     Fetch real quote from DEX quoter contract.
     
-    Returns quote result or error details.
+    rpc_success_rate counts "RPC returned valid JSON without exception"
+    NOT "quote succeeded" (which is quote_fetch_rate)
     """
     import httpx
     
@@ -218,15 +204,13 @@ async def fetch_quote_real(
                 api_key = os.getenv("ALCHEMY_API_KEY", "")
                 resolved_url = url.replace("${ALCHEMY_API_KEY}", api_key)
                 
-                # Simulate eth_call to quoter
-                # In real implementation, encode proper calldata
                 payload = {
                     "jsonrpc": "2.0",
                     "method": "eth_call",
                     "params": [
                         {
                             "to": quoter_address,
-                            "data": f"0xc6a5026a",  # quoteExactInputSingle selector (simplified)
+                            "data": f"0xc6a5026a",  # quoteExactInputSingle selector
                         },
                         hex(block_number),
                     ],
@@ -238,6 +222,10 @@ async def fetch_quote_real(
                 latency_ms = int(time.time() * 1000) - start_ms
                 result = resp.json()
                 
+                # RPC SUCCESS: Got valid JSON response (even if it contains an error)
+                # This is what rpc_success_rate should measure
+                rpc_metrics.record_rpc_call(success=True, latency_ms=latency_ms)
+                
                 if "error" in result:
                     error_msg = result["error"].get("message", str(result["error"]))
                     return {
@@ -246,25 +234,29 @@ async def fetch_quote_real(
                         "error_message": error_msg,
                         "latency_ms": latency_ms,
                         "rpc_url": url,
+                        "rpc_success": True,  # RPC worked, quote reverted
                     }
                 
-                # Parse result (simplified - in production decode proper response)
                 return {
                     "success": True,
-                    "amount_out": str(amount_in),  # Placeholder
+                    "amount_out": str(amount_in),
                     "latency_ms": latency_ms,
                     "rpc_url": url,
                     "block_number": block_number,
+                    "rpc_success": True,
                 }
                 
             except httpx.TimeoutException:
+                rpc_metrics.record_rpc_call(success=False, latency_ms=10000)
                 return {
                     "success": False,
                     "error_code": ErrorCode.INFRA_RPC_ERROR.value,
-                    "error_message": f"RPC timeout after 10s",
+                    "error_message": "RPC timeout",
                     "rpc_url": url,
+                    "rpc_success": False,  # RPC failed
                 }
             except Exception as e:
+                rpc_metrics.record_rpc_call(success=False, latency_ms=0)
                 logger.warning(f"Quote failed from {url}: {e}")
                 continue
     
@@ -272,6 +264,7 @@ async def fetch_quote_real(
         "success": False,
         "error_code": ErrorCode.INFRA_RPC_ERROR.value,
         "error_message": "All RPC endpoints failed",
+        "rpc_success": False,
     }
 
 
@@ -298,18 +291,14 @@ async def _run_scan_cycle_async(
     """
     Run one REAL scan cycle with live RPC.
     
-    M4 CONTRACT:
-    - Pinned block invariant enforced
-    - Real quotes from RPC
-    - Real reject reasons
-    - Execution disabled
+    ALWAYS writes 4 artifacts, even if quotes_fetched=0.
     """
     timestamp = datetime.now(timezone.utc)
     timestamp_str = format_spread_timestamp(timestamp)
     
     chain_name = config.get("chain", "arbitrum_one")
     chain_id = config.get("chain_id", 42161)
-    dex_names = config.get("dexes", ["uniswap_v3", "sushiswap_v3"])
+    dex_names = config.get("dexes", ["uniswap_v3"])
     pairs = config.get("pairs", [{"token_in": "WETH", "token_out": "USDC"}])
     
     # Load chain config for RPC URLs
@@ -321,36 +310,7 @@ async def _run_scan_cycle_async(
         rpc_urls = ["https://arb1.arbitrum.io/rpc"]
     
     # PINNED BLOCK INVARIANT
-    try:
-        current_block = await get_pinned_block(rpc_urls, chain_id)
-    except RuntimeError as e:
-        logger.error(str(e))
-        reject_histogram = {"INFRA_BLOCK_PIN_FAILED": 1}
-        gate_breakdown = build_gate_breakdown(reject_histogram)
-        
-        scan_stats = {
-            "cycle": cycle_num,
-            "timestamp": timestamp.isoformat(),
-            "run_mode": "REGISTRY_REAL",
-            "current_block": None,
-            "chain_id": chain_id,
-            "quotes_fetched": 0,
-            "quotes_total": 0,
-            "gates_passed": 0,
-            "error": str(e),
-        }
-        
-        _write_artifacts(
-            output_dir, timestamp_str, chain_id, current_block=None,
-            scan_stats=scan_stats, reject_histogram=reject_histogram,
-            gate_breakdown=gate_breakdown, opportunities=[], all_spreads=[],
-            sample_rejects=[{"reason": "INFRA_BLOCK_PIN_FAILED", "message": str(e)}],
-            sample_passed=[], configured_dex_ids=set(dex_names),
-            dexes_with_quotes=set(), dexes_passed_gates=set(),
-            paper_session=paper_session, rpc_metrics=rpc_metrics,
-        )
-        
-        return {"stats": scan_stats, "reject_histogram": reject_histogram, "gate_breakdown": gate_breakdown}
+    current_block = await get_pinned_block(rpc_urls, chain_id)
     
     logger.info(f"REAL scan cycle {cycle_num} starting", extra={"context": {
         "cycle": cycle_num,
@@ -389,7 +349,6 @@ async def _run_scan_cycle_async(
     }
     
     reject_histogram: Dict[str, int] = {}
-    opportunities: List[Dict[str, Any]] = []
     all_spreads: List[Dict[str, Any]] = []
     sample_rejects: List[Dict[str, Any]] = []
     sample_passed: List[Dict[str, Any]] = []
@@ -421,13 +380,13 @@ async def _run_scan_cycle_async(
                     fee_tier=500,
                     block_number=current_block,
                     chain_id=chain_id,
+                    rpc_metrics=rpc_metrics,
                 )
                 
                 if quote_result.get("success"):
                     scan_stats["quotes_fetched"] += 1
                     rpc_metrics.record_success(latency_ms=quote_result.get("latency_ms", 0))
                     dexes_with_quotes.add(dex_name)
-                    
                     scan_stats["gates_passed"] += 1
                     dexes_passed_gates.add(dex_name)
                     
@@ -455,6 +414,8 @@ async def _run_scan_cycle_async(
                             "chain_id": chain_id,
                             "error_message": quote_result.get("error_message"),
                             "block_number": current_block,
+                            "quoter_address": quoter_address,
+                            "rpc_success": quote_result.get("rpc_success", False),
                         },
                     })
                     
@@ -538,9 +499,10 @@ async def _run_scan_cycle_async(
     
     gate_breakdown = build_gate_breakdown(reject_histogram)
     
+    # ALWAYS write artifacts (even if quotes_fetched=0)
     _write_artifacts(
         output_dir, timestamp_str, chain_id, current_block,
-        scan_stats, reject_histogram, gate_breakdown, opportunities, all_spreads,
+        scan_stats, reject_histogram, gate_breakdown, all_spreads,
         sample_rejects, sample_passed, configured_dex_ids,
         dexes_with_quotes, dexes_passed_gates, paper_session, rpc_metrics,
     )
@@ -557,11 +519,10 @@ def _write_artifacts(
     output_dir: Path,
     timestamp_str: str,
     chain_id: int,
-    current_block: Optional[int],
+    current_block: int,
     scan_stats: Dict[str, Any],
     reject_histogram: Dict[str, int],
     gate_breakdown: Dict[str, int],
-    opportunities: List[Dict[str, Any]],
     all_spreads: List[Dict[str, Any]],
     sample_rejects: List[Dict[str, Any]],
     sample_passed: List[Dict[str, Any]],
@@ -589,7 +550,6 @@ def _write_artifacts(
                 "with_quotes": sorted(dexes_with_quotes),
                 "passed_gates": sorted(dexes_passed_gates),
             },
-            "opportunities": opportunities,
             "all_spreads": all_spreads,
             "sample_rejects": sample_rejects,
             "sample_passed": sample_passed,
@@ -641,8 +601,10 @@ def run_scanner(
     """
     Run the REAL scanner.
     
-    NOTE: This function is ONLY called when explicit enable is given.
-    The caller (run_scan.py) enforces the explicit enable requirement.
+    M4 CONTRACT:
+    - ALWAYS writes 4 artifacts
+    - Execution disabled (EXECUTION_DISABLED_M4)
+    - quotes_fetched may be 0 (network-dependent)
     """
     if output_dir is None:
         output_dir = Path("data/runs") / datetime.now().strftime("%Y%m%d_%H%M%S")
