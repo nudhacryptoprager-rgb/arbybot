@@ -26,11 +26,11 @@ GATE BREAKDOWN CONTRACT (canonical keys):
 RANKING CONTRACT (deterministic sort key):
 ===========================================
 Opportunities are sorted by this key (all descending except spread_id):
-  1. is_profitable DESC (True > False)
-  2. net_pnl_usdc DESC (higher PnL first)
-  3. net_pnl_bps DESC (higher bps first)
-  4. confidence DESC (higher confidence first)
-  5. spread_id ASC (alphabetical tiebreaker)
+1. is_profitable DESC (True > False)
+2. net_pnl_usdc DESC (higher PnL first)
+3. net_pnl_bps DESC (higher bps first)
+4. confidence DESC (higher confidence first)
+5. spread_id ASC (alphabetical tiebreaker)
 
 This ensures identical input → identical output order.
 ===========================================
@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from core.format_money import format_money
 
@@ -60,6 +60,7 @@ ERROR_TO_GATE_CATEGORY = {
     "SLIPPAGE_TOO_HIGH": "slippage",
     "INFRA_RPC_ERROR": "infra",
 }
+
 
 # Fixed weights for confidence calculation (do not change without migration)
 CONFIDENCE_WEIGHTS = {
@@ -80,17 +81,17 @@ def calculate_confidence(
 ) -> float:
     """
     Calculate confidence score for an opportunity.
-    
+
     Args:
         quote_fetch_rate: Rate of successful quote fetches [0.0, 1.0]
         quote_gate_pass_rate: Rate of quotes passing gates [0.0, 1.0]
         rpc_success_rate: RPC success rate [0.0, 1.0]
         freshness_score: Quote freshness score [0.0, 1.0], default 1.0
         adapter_reliability: Adapter reliability score [0.0, 1.0], default 1.0
-    
+
     Returns:
         Confidence score in [0.0, 1.0]
-    
+
     The formula is deterministic: same inputs → same output.
     """
     # Clamp inputs to [0, 1]
@@ -101,11 +102,11 @@ def calculate_confidence(
     adapt = max(0.0, min(1.0, float(adapter_reliability)))
 
     score = (
-        CONFIDENCE_WEIGHTS["quote_fetch"] * qf +
-        CONFIDENCE_WEIGHTS["quote_gate"] * qg +
-        CONFIDENCE_WEIGHTS["rpc"] * rpc +
-        CONFIDENCE_WEIGHTS["freshness"] * fresh +
-        CONFIDENCE_WEIGHTS["adapter"] * adapt
+        CONFIDENCE_WEIGHTS["quote_fetch"] * qf
+        + CONFIDENCE_WEIGHTS["quote_gate"] * qg
+        + CONFIDENCE_WEIGHTS["rpc"] * rpc
+        + CONFIDENCE_WEIGHTS["freshness"] * fresh
+        + CONFIDENCE_WEIGHTS["adapter"] * adapt
     )
 
     return min(max(score, 0.0), 1.0)
@@ -113,7 +114,15 @@ def calculate_confidence(
 
 @dataclass
 class RPCHealthMetrics:
-    """RPC health metrics consistent with reject histogram."""
+    """
+    RPC health metrics consistent with reject histogram.
+    
+    API CONTRACT (M4):
+    - record_rpc_call(success, latency_ms): primary method used by run_scan_real.py
+    - record_success(latency_ms): legacy method (wrapper around record_rpc_call)
+    - record_failure(): legacy method (wrapper around record_rpc_call)
+    - record_quote_attempt(): increment quote attempts only
+    """
     rpc_success_count: int = 0
     rpc_failed_count: int = 0
     quote_call_attempts: int = 0
@@ -135,19 +144,39 @@ class RPCHealthMetrics:
             return 0
         return self.total_latency_ms // self.rpc_success_count
 
+    def record_rpc_call(self, success: bool, latency_ms: Union[int, float] = 0) -> None:
+        """
+        Record an RPC call result.
+        
+        PRIMARY METHOD used by run_scan_real.py RPCClient.
+        
+        Args:
+            success: True if RPC returned valid JSON (even if contains error)
+            latency_ms: Round-trip latency in milliseconds
+        """
+        latency_int = int(latency_ms)
+        if success:
+            self.rpc_success_count += 1
+            self.total_latency_ms += latency_int
+        else:
+            self.rpc_failed_count += 1
+
     def record_success(self, latency_ms: int = 0) -> None:
-        self.rpc_success_count += 1
-        self.total_latency_ms += latency_ms
+        """Legacy method - wraps record_rpc_call for backward compatibility."""
+        self.record_rpc_call(success=True, latency_ms=latency_ms)
         self.quote_call_attempts += 1
 
     def record_failure(self) -> None:
-        self.rpc_failed_count += 1
+        """Legacy method - wraps record_rpc_call for backward compatibility."""
+        self.record_rpc_call(success=False, latency_ms=0)
         self.quote_call_attempts += 1
 
     def record_quote_attempt(self) -> None:
+        """Record a quote attempt (without counting as RPC call)."""
         self.quote_call_attempts += 1
 
     def reconcile_with_rejects(self, reject_histogram: Dict[str, int]) -> None:
+        """Reconcile metrics with reject histogram for consistency."""
         infra_rpc_errors = reject_histogram.get("INFRA_RPC_ERROR", 0)
         if infra_rpc_errors > 0 and self.rpc_failed_count < infra_rpc_errors:
             self.rpc_failed_count = max(self.rpc_failed_count, infra_rpc_errors)
@@ -282,11 +311,11 @@ def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
     RANKING CONTRACT: Deterministic sort key for opportunities.
 
     Sort order (all DESC except spread_id ASC):
-      1. is_profitable DESC (True > False)
-      2. net_pnl_usdc DESC
-      3. net_pnl_bps DESC
-      4. confidence DESC
-      5. spread_id ASC (tiebreaker)
+    1. is_profitable DESC (True > False)
+    2. net_pnl_usdc DESC
+    3. net_pnl_bps DESC
+    4. confidence DESC
+    5. spread_id ASC (tiebreaker)
 
     Using negative for DESC, positive for ASC.
     """
@@ -305,11 +334,11 @@ def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
     spread_id = opp.get("spread_id", "zzz")
 
     return (
-        -is_profitable,  # DESC: True (1) first
-        -net_pnl,        # DESC: higher PnL first
-        -net_bps,        # DESC: higher bps first
-        -confidence,     # DESC: higher confidence first
-        spread_id,       # ASC: alphabetical tiebreaker
+        -is_profitable,   # DESC: True (1) first
+        -net_pnl,         # DESC: higher PnL first
+        -net_bps,         # DESC: higher bps first
+        -confidence,      # DESC: higher confidence first
+        spread_id,        # ASC: alphabetical tiebreaker
     )
 
 
@@ -325,6 +354,7 @@ def rank_opportunities(opportunities: List[Dict[str, Any]]) -> List[Dict[str, An
 @dataclass
 class TruthReport:
     """Truth report for a scan cycle. Schema contract 3.0.0."""
+
     timestamp: str = ""
     mode: str = "REGISTRY"
     run_mode: str = "SMOKE_SIMULATOR"
@@ -379,9 +409,14 @@ def build_truth_report(
     dexes_passed_gates: Optional[Set[str]] = None,
 ) -> TruthReport:
     """Build truth report with execution_blockers for each opportunity."""
+
     health = build_health_section(
-        scan_stats, reject_histogram, rpc_metrics,
-        configured_dex_ids, dexes_with_quotes, dexes_passed_gates
+        scan_stats,
+        reject_histogram,
+        rpc_metrics,
+        configured_dex_ids,
+        dexes_with_quotes,
+        dexes_passed_gates
     )
 
     normalized_opps = []
@@ -414,6 +449,7 @@ def build_truth_report(
         blockers = _get_execution_blockers(run_mode, normalized_opp)
         normalized_opp["execution_blockers"] = blockers
         normalized_opp["is_execution_ready"] = len(blockers) == 0
+
         normalized_opps.append(normalized_opp)
 
     # RANKING CONTRACT: deterministic sort

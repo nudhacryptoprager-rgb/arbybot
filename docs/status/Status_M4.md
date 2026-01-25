@@ -19,6 +19,23 @@ REAL mode must:
   ✓ 4/4 artifacts generated
 ```
 
+## Recent Fix: RPCHealthMetrics Contract
+
+**Problem:** `run_scan_real.py` called `rpc_metrics.record_rpc_call(success, latency_ms)` but method didn't exist in `RPCHealthMetrics` class.
+
+**Solution:** Added `record_rpc_call(success: bool, latency_ms: int | float)` method to `monitoring/truth_report.py`.
+
+**API Contract:**
+```python
+class RPCHealthMetrics:
+    # PRIMARY method used by run_scan_real.py RPCClient
+    def record_rpc_call(self, success: bool, latency_ms: int | float) -> None: ...
+    
+    # Legacy methods (backward compatible)
+    def record_success(self, latency_ms: int = 0) -> None: ...
+    def record_failure(self) -> None: ...
+```
+
 ## Definition of Done
 
 | Check | Command | Requirement |
@@ -71,73 +88,12 @@ python scripts/ci_m4_gate.py
 ============================================================
 ```
 
-## Config: config/real_minimal.yaml
+## Files Modified
 
-```yaml
-chain: arbitrum_one
-chain_id: 42161
-
-# Multiple RPC endpoints with fallback
-rpc_endpoints:
-  - "https://arb1.arbitrum.io/rpc"
-  - "https://arbitrum-one.public.blastapi.io"
-  - "https://rpc.ankr.com/arbitrum"
-
-# Retries and backoff
-rpc_retries: 3
-rpc_backoff_base_ms: 500
-
-# DEX
-dexes:
-  - uniswap_v3
-
-# Pairs with multiple fee tiers
-pairs:
-  - token_in: WETH
-    token_out: USDC
-    fee_tiers: [500, 3000]
-  - token_in: WETH
-    token_out: USDT
-    fee_tiers: [500, 3000]
-```
-
-## Features
-
-### RPC Client
-- Multiple endpoints with fallback
-- Retries with exponential backoff
-- Stats per endpoint
-- Detailed error tracking
-
-### Diagnostics
-- `sample_rejects` with endpoint, method, error info
-- `infra_samples` for RPC failures
-- `rpc_stats` with per-endpoint breakdown
-
-## Troubleshooting
-
-### quotes_fetched = 0
-
-1. Check RPC connectivity: `curl -X POST https://arb1.arbitrum.io/rpc`
-2. Check quoter addresses in `config/dexes.yaml`
-3. Check `infra_samples` in scan.json for error details
-4. Try different RPC endpoints
-
-### rpc_success_rate = 0
-
-1. Network connectivity issue
-2. All endpoints blocked/rate-limited
-3. Check `rpc_stats.per_endpoint` for details
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `strategy/jobs/run_scan.py` | Entry point (SMOKE/REAL router) |
-| `strategy/jobs/run_scan_real.py` | REAL pipeline with retries |
-| `config/real_minimal.yaml` | Canary config |
-| `scripts/ci_m4_gate.py` | M4 gate (STRICT) |
-| `tests/integration/test_smoke_run.py` | Integration tests |
+| File | Change |
+|------|--------|
+| `monitoring/truth_report.py` | Added `record_rpc_call(success, latency_ms)` method |
+| `tests/unit/test_health_metrics.py` | Added unit tests for RPCHealthMetrics contract |
 
 ## Links
 

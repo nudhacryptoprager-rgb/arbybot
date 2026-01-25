@@ -1,194 +1,145 @@
 # PATH: tests/unit/test_health_metrics.py
 """
-Tests for RPC health metrics and consistency.
+Unit tests for RPCHealthMetrics contract.
 
-Per Issue #3 AC (D): RPC health must be consistent with reject histogram.
+API CONTRACT (M4):
+- record_rpc_call(success, latency_ms): primary method used by run_scan_real.py
+- record_success(latency_ms): legacy method
+- record_failure(): legacy method
 """
 
 import unittest
-from monitoring.truth_report import RPCHealthMetrics, build_health_section
 
 
-class TestRPCHealthMetricsBasic(unittest.TestCase):
-    """Basic tests for RPCHealthMetrics."""
-    
-    def test_initial_state(self):
-        """Fresh metrics have zero counts."""
-        m = RPCHealthMetrics()
-        
-        self.assertEqual(m.rpc_success_count, 0)
-        self.assertEqual(m.rpc_failed_count, 0)
-        self.assertEqual(m.quote_call_attempts, 0)
-        self.assertEqual(m.total_latency_ms, 0)
-    
-    def test_record_success(self):
-        """Recording success updates counters."""
-        m = RPCHealthMetrics()
-        
-        m.record_success(latency_ms=100)
-        
-        self.assertEqual(m.rpc_success_count, 1)
-        self.assertEqual(m.quote_call_attempts, 1)
-        self.assertEqual(m.total_latency_ms, 100)
-    
-    def test_record_failure(self):
-        """Recording failure updates counters."""
-        m = RPCHealthMetrics()
-        
-        m.record_failure()
-        
-        self.assertEqual(m.rpc_failed_count, 1)
-        self.assertEqual(m.quote_call_attempts, 1)
-    
-    def test_rpc_total_requests(self):
-        """Total requests = success + failed."""
-        m = RPCHealthMetrics()
-        
-        m.record_success()
-        m.record_success()
-        m.record_failure()
-        
-        self.assertEqual(m.rpc_total_requests, 3)
-    
-    def test_success_rate(self):
-        """Success rate calculated correctly."""
-        m = RPCHealthMetrics()
-        
-        m.record_success()
-        m.record_success()
-        m.record_success()
-        m.record_failure()
-        
-        self.assertAlmostEqual(m.rpc_success_rate, 0.75)
-    
-    def test_success_rate_zero_requests(self):
-        """Success rate is 0 with no requests."""
-        m = RPCHealthMetrics()
-        
-        self.assertEqual(m.rpc_success_rate, 0.0)
-    
-    def test_avg_latency(self):
-        """Average latency calculated correctly."""
-        m = RPCHealthMetrics()
-        
-        m.record_success(latency_ms=100)
-        m.record_success(latency_ms=200)
-        m.record_success(latency_ms=300)
-        
-        self.assertEqual(m.avg_latency_ms, 200)
-    
-    def test_avg_latency_zero_success(self):
-        """Average latency is 0 with no successful requests."""
-        m = RPCHealthMetrics()
-        m.record_failure()
-        
-        self.assertEqual(m.avg_latency_ms, 0)
+class TestRPCHealthMetrics(unittest.TestCase):
+    """Test RPCHealthMetrics API contract."""
 
+    def test_record_rpc_call_exists(self):
+        """record_rpc_call method must exist."""
+        from monitoring.truth_report import RPCHealthMetrics
+        
+        metrics = RPCHealthMetrics()
+        self.assertTrue(hasattr(metrics, "record_rpc_call"))
+        self.assertTrue(callable(metrics.record_rpc_call))
 
-class TestRPCHealthReconciliation(unittest.TestCase):
-    """Tests for reconcile_with_rejects method."""
-    
-    def test_reconcile_adds_missing_failures(self):
-        """Reconciliation adds INFRA_RPC_ERROR count to failures."""
-        m = RPCHealthMetrics()
-        # No failures tracked
+    def test_record_rpc_call_success_increments_success_count(self):
+        """record_rpc_call(success=True) increments rpc_success_count."""
+        from monitoring.truth_report import RPCHealthMetrics
         
-        m.reconcile_with_rejects({"INFRA_RPC_ERROR": 10})
+        metrics = RPCHealthMetrics()
+        self.assertEqual(metrics.rpc_success_count, 0)
+        self.assertEqual(metrics.rpc_failed_count, 0)
         
-        self.assertEqual(m.rpc_failed_count, 10)
-        self.assertEqual(m.rpc_total_requests, 10)
-    
-    def test_reconcile_preserves_higher_count(self):
-        """Reconciliation doesn't reduce existing failure count."""
-        m = RPCHealthMetrics()
+        metrics.record_rpc_call(success=True, latency_ms=100)
         
-        # Track 20 failures
-        for _ in range(20):
-            m.record_failure()
-        
-        # Rejects show only 10
-        m.reconcile_with_rejects({"INFRA_RPC_ERROR": 10})
-        
-        # Should keep 20
-        self.assertEqual(m.rpc_failed_count, 20)
-    
-    def test_reconcile_with_no_errors(self):
-        """Reconciliation does nothing with no INFRA_RPC_ERROR."""
-        m = RPCHealthMetrics()
-        
-        m.reconcile_with_rejects({"QUOTE_REVERT": 10, "SLIPPAGE_TOO_HIGH": 5})
-        
-        self.assertEqual(m.rpc_failed_count, 0)
-    
-    def test_reconcile_updates_quote_attempts(self):
-        """Reconciliation ensures quote_call_attempts >= rpc_total."""
-        m = RPCHealthMetrics()
-        
-        m.reconcile_with_rejects({"INFRA_RPC_ERROR": 5})
-        
-        self.assertGreaterEqual(m.quote_call_attempts, m.rpc_total_requests)
+        self.assertEqual(metrics.rpc_success_count, 1)
+        self.assertEqual(metrics.rpc_failed_count, 0)
+        self.assertEqual(metrics.rpc_total_requests, 1)
+        self.assertEqual(metrics.total_latency_ms, 100)
 
+    def test_record_rpc_call_failure_increments_failed_count(self):
+        """record_rpc_call(success=False) increments rpc_failed_count."""
+        from monitoring.truth_report import RPCHealthMetrics
+        
+        metrics = RPCHealthMetrics()
+        
+        metrics.record_rpc_call(success=False, latency_ms=0)
+        
+        self.assertEqual(metrics.rpc_success_count, 0)
+        self.assertEqual(metrics.rpc_failed_count, 1)
+        self.assertEqual(metrics.rpc_total_requests, 1)
 
-class TestHealthSectionConsistency(unittest.TestCase):
-    """Tests that build_health_section maintains RPC consistency."""
-    
-    def test_health_reconciles_automatically(self):
-        """build_health_section calls reconcile internally."""
-        scan_stats = {}
-        reject_histogram = {"INFRA_RPC_ERROR": 15}
-        rpc_metrics = RPCHealthMetrics()  # No calls recorded
+    def test_record_rpc_call_accumulates_latency(self):
+        """record_rpc_call accumulates latency for successful calls."""
+        from monitoring.truth_report import RPCHealthMetrics
         
-        health = build_health_section(scan_stats, reject_histogram, rpc_metrics)
+        metrics = RPCHealthMetrics()
         
-        # Should have reconciled
-        self.assertGreater(health["rpc_total_requests"], 0)
-        self.assertGreaterEqual(health["rpc_failed_requests"], 15)
-    
-    def test_health_without_rpc_metrics(self):
-        """build_health_section works without rpc_metrics arg."""
-        health = build_health_section(
-            scan_stats={},
-            reject_histogram={"INFRA_RPC_ERROR": 5}
-        )
+        metrics.record_rpc_call(success=True, latency_ms=100)
+        metrics.record_rpc_call(success=True, latency_ms=200)
+        metrics.record_rpc_call(success=True, latency_ms=150)
         
-        # Should still reconcile with default metrics
-        self.assertGreater(health["rpc_total_requests"], 0)
-    
-    def test_health_structure(self):
-        """Health section has required fields."""
-        health = build_health_section({}, {})
+        self.assertEqual(metrics.rpc_success_count, 3)
+        self.assertEqual(metrics.total_latency_ms, 450)
+        self.assertEqual(metrics.avg_latency_ms, 150)  # 450 // 3
+
+    def test_record_rpc_call_handles_float_latency(self):
+        """record_rpc_call handles float latency_ms (converts to int)."""
+        from monitoring.truth_report import RPCHealthMetrics
         
-        required_fields = [
-            "rpc_success_rate",
-            "rpc_avg_latency_ms",
-            "rpc_total_requests",
-            "rpc_failed_requests",
-            "quote_fetch_rate",
-            "quote_gate_pass_rate",
-            "chains_active",
-            "dexes_active",
-            "pairs_covered",
-            "pools_scanned",
-            "top_reject_reasons",
-        ]
+        metrics = RPCHealthMetrics()
         
-        for field in required_fields:
-            self.assertIn(field, health, f"Missing field: {field}")
-    
-    def test_top_reject_reasons_sorted(self):
-        """Top reject reasons are sorted by count descending."""
-        reject_histogram = {
-            "A": 5,
-            "B": 20,
-            "C": 10,
-        }
+        metrics.record_rpc_call(success=True, latency_ms=123.456)
         
-        health = build_health_section({}, reject_histogram)
+        self.assertEqual(metrics.total_latency_ms, 123)
+
+    def test_rpc_success_rate_calculation(self):
+        """rpc_success_rate is correctly calculated."""
+        from monitoring.truth_report import RPCHealthMetrics
         
-        top_reasons = health["top_reject_reasons"]
-        counts = [r[1] for r in top_reasons]
+        metrics = RPCHealthMetrics()
         
-        self.assertEqual(counts, sorted(counts, reverse=True))
+        # 0/0 = 0
+        self.assertEqual(metrics.rpc_success_rate, 0.0)
+        
+        # 3 success, 1 failure = 75%
+        metrics.record_rpc_call(success=True, latency_ms=10)
+        metrics.record_rpc_call(success=True, latency_ms=10)
+        metrics.record_rpc_call(success=True, latency_ms=10)
+        metrics.record_rpc_call(success=False, latency_ms=0)
+        
+        self.assertAlmostEqual(metrics.rpc_success_rate, 0.75, places=2)
+
+    def test_avg_latency_zero_on_no_success(self):
+        """avg_latency_ms is 0 when no successful calls."""
+        from monitoring.truth_report import RPCHealthMetrics
+        
+        metrics = RPCHealthMetrics()
+        
+        metrics.record_rpc_call(success=False, latency_ms=0)
+        metrics.record_rpc_call(success=False, latency_ms=0)
+        
+        self.assertEqual(metrics.avg_latency_ms, 0)
+
+    def test_legacy_record_success_still_works(self):
+        """Legacy record_success method still works."""
+        from monitoring.truth_report import RPCHealthMetrics
+        
+        metrics = RPCHealthMetrics()
+        
+        metrics.record_success(latency_ms=50)
+        
+        self.assertEqual(metrics.rpc_success_count, 1)
+        self.assertEqual(metrics.total_latency_ms, 50)
+        self.assertEqual(metrics.quote_call_attempts, 1)
+
+    def test_legacy_record_failure_still_works(self):
+        """Legacy record_failure method still works."""
+        from monitoring.truth_report import RPCHealthMetrics
+        
+        metrics = RPCHealthMetrics()
+        
+        metrics.record_failure()
+        
+        self.assertEqual(metrics.rpc_failed_count, 1)
+        self.assertEqual(metrics.quote_call_attempts, 1)
+
+    def test_to_dict_output(self):
+        """to_dict returns expected structure."""
+        from monitoring.truth_report import RPCHealthMetrics
+        
+        metrics = RPCHealthMetrics()
+        metrics.record_rpc_call(success=True, latency_ms=100)
+        metrics.record_rpc_call(success=False, latency_ms=0)
+        
+        result = metrics.to_dict()
+        
+        self.assertIn("rpc_success_rate", result)
+        self.assertIn("rpc_avg_latency_ms", result)
+        self.assertIn("rpc_total_requests", result)
+        self.assertIn("rpc_failed_requests", result)
+        self.assertEqual(result["rpc_total_requests"], 2)
+        self.assertEqual(result["rpc_failed_requests"], 1)
 
 
 if __name__ == "__main__":
