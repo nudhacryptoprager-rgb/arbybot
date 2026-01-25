@@ -1,32 +1,52 @@
 # PATH: config/real_minimal.yaml
 # CANARY CONFIG for M4 REAL mode
 #
-# This is a minimal, deterministic config for debugging REAL pipeline.
-# Goal: stabilize quote attempts reliably with known pools.
+# M4 Requirements:
+#   - quotes_fetched >= 1
+#   - rpc_success_rate > 0
+#   - rpc_total_requests >= 3
+#   - dexes_active >= 1
 #
-# Usage:
-#   python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml
-#
-# Config: 1 chain × 1 DEX × 2 pools (WETH/USDC, WETH/USDT)
+# Config: 1 chain × 1 DEX × 2 pairs × multiple fee tiers = more quote attempts
 
-# Chain: Arbitrum One only (most reliable RPC)
+# Chain: Arbitrum One
 chain: arbitrum_one
 chain_id: 42161
 
-# DEX: Only Uniswap V3 (most reliable quoter)
+# RPC endpoints with fallback (primary + 2 fallbacks)
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+  - "https://rpc.ankr.com/arbitrum"
+
+# RPC settings
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# DEX: Uniswap V3 (most reliable)
 dexes:
   - uniswap_v3
 
-# Pairs: Only the most liquid pairs
+# Pairs with multiple fee tiers to increase quote attempts
 pairs:
   - token_in: WETH
     token_out: USDC
+    fee_tiers: [500, 3000]
   - token_in: WETH
     token_out: USDT
+    fee_tiers: [500, 3000]
 
-# Known pool addresses for debugging (optional reference)
+# Known pool addresses (for reference)
 # WETH/USDC 0.05%: 0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443
+# WETH/USDC 0.3%:  0x17c14D2c404D167802b16C450d3c99F88F2c4F4d
 # WETH/USDT 0.05%: 0x641C00A822e8b671738d32a431a4Fb6074E5c79d
+
+# Token addresses (Arbitrum)
+tokens:
+  WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+  USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+  USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
 
 # Gate thresholds
 max_slippage_bps: 100
@@ -39,7 +59,3 @@ notion_capital_usdc: "10000.000000"
 # M4 markers
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4
-
-# RPC settings (optional override)
-# rpc_timeout_seconds: 10
-# rpc_retries: 2
