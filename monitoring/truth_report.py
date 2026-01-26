@@ -36,6 +36,45 @@ ERROR_TO_GATE_CATEGORY = {
 }
 
 
+def calculate_confidence(
+    quote_fetch_rate: float,
+    quote_gate_pass_rate: float,
+    rpc_success_rate: float,
+    freshness_score: float = 1.0,
+    adapter_reliability: float = 1.0,
+) -> float:
+    """
+    Calculate confidence score for opportunities.
+    
+    Weights:
+    - quote_fetch_rate: 0.25
+    - quote_gate_pass_rate: 0.25
+    - rpc_success_rate: 0.25
+    - freshness_score: 0.125
+    - adapter_reliability: 0.125
+    
+    Returns: float in [0.0, 1.0]
+    """
+    # Clamp inputs to [0, 1]
+    qfr = max(0.0, min(1.0, quote_fetch_rate))
+    qgpr = max(0.0, min(1.0, quote_gate_pass_rate))
+    rsr = max(0.0, min(1.0, rpc_success_rate))
+    fs = max(0.0, min(1.0, freshness_score))
+    ar = max(0.0, min(1.0, adapter_reliability))
+    
+    # Weighted average
+    score = (
+        qfr * 0.25 +
+        qgpr * 0.25 +
+        rsr * 0.25 +
+        fs * 0.125 +
+        ar * 0.125
+    )
+    
+    # Clamp output to [0, 1]
+    return max(0.0, min(1.0, score))
+
+
 @dataclass
 class RPCHealthMetrics:
     """RPC health metrics."""

@@ -8,6 +8,7 @@ STEP 10: Python 3.11 version check
 
 M4 SUCCESS CRITERIA:
   ✓ Python version 3.11.x
+  ✓ Import contract (calculate_confidence)
   ✓ run_mode == "REGISTRY_REAL"
   ✓ current_block > 0
   ✓ execution_ready_count == 0
@@ -48,6 +49,28 @@ def check_python_version() -> bool:
     print(f"❌ Python version: {sys.version.split()[0]}")
     print(f"   Required: Python {REQUIRED_PYTHON_MAJOR}.{REQUIRED_PYTHON_MINOR}.x")
     print(f"   Install: pyenv install 3.11.9 && pyenv local 3.11.9")
+    return False
+
+
+def check_import_contract() -> bool:
+    """Check that calculate_confidence is importable from monitoring.truth_report."""
+    print(f"\n{'='*60}")
+    print("STEP: Import Contract Check")
+    print("=" * 60)
+
+    cmd = [
+        sys.executable, "-c",
+        "from monitoring.truth_report import calculate_confidence; print('✅ import ok')"
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode == 0:
+        print(result.stdout.strip())
+        return True
+
+    print("❌ Import failed:")
+    print(result.stderr)
     return False
 
 
@@ -522,6 +545,7 @@ def main():
     print()
     print("M4 Criteria:")
     print("  - Python 3.11.x (STEP 10)")
+    print("  - Import contract (calculate_confidence)")
     print("  - run_mode: REGISTRY_REAL")
     print("  - current_block > 0")
     print("  - execution_ready_count == 0")
@@ -546,6 +570,11 @@ def main():
             sys.exit(10)
     else:
         print("\n⚠ Skipping Python version check")
+
+    # NEW: Import contract check BEFORE pytest
+    if not check_import_contract():
+        print("\n❌ M4 CI GATE FAILED: Import contract broken")
+        sys.exit(11)
 
     # Step 1: pytest (unit tests)
     if not run_command(
@@ -606,6 +635,7 @@ def main():
     print()
     print("M4 Contract Verified:")
     print("  ✓ Python 3.11.x")
+    print("  ✓ Import contract (calculate_confidence)")
     print("  ✓ run_mode: REGISTRY_REAL")
     print("  ✓ current_block pinned")
     print("  ✓ execution disabled")
