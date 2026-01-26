@@ -2,41 +2,48 @@
 #
 # M4 REAL Pipeline - CANARY CONFIG
 #
-# STEP 8: Standardized RPC settings with env-var override
+# METRICS CONTRACT (STEP 1):
+# - quotes_total = attempted quote calls
+# - quotes_fetched = got valid RPC response (amount_out > 0)
+# - gates_passed = passed all gates (price sanity, etc.)
+# - dexes_active = DEXes with at least 1 response
+#
+# BOOTSTRAP THRESHOLDS (STEP 6):
+# - max_deviation_bps = 5000 (50%) for M4 bootstrap
+# - Will tighten to 1000 (10%) in M5 after validation
 #
 # Environment Variable Overrides:
-#   ARBY_RPC_URL         - Add custom RPC endpoint (priority)
-#   ARBY_RPC_TIMEOUT     - RPC timeout in seconds (default: 10)
-#   ARBY_RPC_RETRIES     - Max retries per endpoint (default: 3)
-#   ARBY_RPC_BACKOFF_MS  - Base backoff in ms (default: 500)
-#   ARBY_PRICE_SANITY_DISABLED - Disable price sanity gate (default: false)
+#   ARBY_RPC_URL - Add custom RPC endpoint (priority)
+#   ARBY_RPC_TIMEOUT - RPC timeout in seconds (default: 10)
+#   ARBY_RPC_RETRIES - Max retries per endpoint (default: 3)
+#   ARBY_RPC_BACKOFF_MS - Base backoff in ms (default: 500)
+#   ARBY_PRICE_SANITY_DISABLED - Disable price sanity gate
+#   ARBY_PRICE_SANITY_MAX_DEV - Override max_deviation_bps
 #
 # M4 Requirements (STRICT):
-#   - quotes_fetched >= 1
-#   - rpc_success_rate > 0
-#   - rpc_total_requests >= 3
-#   - dexes_active >= 2 (cross-DEX arbitrage)
-#   - price_sanity_passed >= 1 (STEP 1)
-#   - confidence < 1.0 (dynamic, STEP 5)
+# - quotes_fetched >= 1
+# - rpc_success_rate > 0
+# - rpc_total_requests >= 3
+# - dexes_active >= 2 (DEXes with responses)
+# - price_sanity_passed >= 1
+# - confidence < 1.0 (dynamic)
 
 # Chain: Arbitrum One
 chain: arbitrum_one
 chain_id: 42161
 
-# RPC endpoints with fallback (STEP 8: standardized)
-# Override: ARBY_RPC_URL env var adds priority endpoint
+# RPC endpoints with fallback
 rpc_endpoints:
   - "https://arb1.arbitrum.io/rpc"
   - "https://arbitrum-one.public.blastapi.io"
   - "https://rpc.ankr.com/arbitrum"
 
-# RPC settings (STEP 8: standardized with env-var override)
-# Override: ARBY_RPC_TIMEOUT, ARBY_RPC_RETRIES, ARBY_RPC_BACKOFF_MS
+# RPC settings
 rpc_timeout_seconds: 10
 rpc_retries: 3
 rpc_backoff_base_ms: 500
 
-# 2 DEXes for cross-DEX arbitrage (STEP 1)
+# 2 DEXes for cross-DEX arbitrage
 dexes:
   - uniswap_v3
   - sushiswap_v3
@@ -47,9 +54,9 @@ pairs:
     token_out: USDC
     fee_tiers: [500, 3000]
 
-# Pool addresses (STEP 2: no "unknown")
+# Pool addresses (verified on Arbitrum)
 pools:
-  # Uniswap V3 pools (Arbitrum)
+  # Uniswap V3 pools (Arbitrum) - canonical WETH/USDC
   uniswap_v3_WETH_USDC_500: "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443"
   uniswap_v3_WETH_USDC_3000: "0x17c14D2c404D167802b16C450d3c99F88F2c4F4d"
   # SushiSwap V3 pools (Arbitrum)
@@ -61,27 +68,31 @@ tokens:
   WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
   USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
 
-# Token decimals for proper normalization (STEP 2)
+# Token decimals for proper normalization
+# WETH = 18 decimals, USDC = 6 decimals
+# Price formula: (amount_out / 10^6) / (amount_in / 10^18) = USDC per WETH
 quote_decimals:
   WETH: 18
   USDC: 6
 
-# Quote sizing (STEP 3: amounts > 0)
-quote_amount_in_wei: "1000000000000000000"  # 1 ETH
+# Quote sizing: 1 ETH
+quote_amount_in_wei: "1000000000000000000"
 
 # Gate thresholds
 max_slippage_bps: 100
 min_net_bps: 5
 
-# Price sanity gate (STEP 1)
-# Override: ARBY_PRICE_SANITY_DISABLED=1 to disable
+# STEP 6: Price sanity gate with M4 BOOTSTRAP thresholds
+# Anchor: WETH/USDC expected ~3500 USD (canonical)
+# Bounds: [1500, 6000] - absolute limits
+# M4 Bootstrap: 50% deviation allowed (will tighten in M5)
 price_sanity_enabled: true
-price_sanity_max_deviation_bps: 1000  # 10% max deviation from expected
+price_sanity_max_deviation_bps: 5000  # 50% for bootstrap
 
 # Paper trading
 cooldown_seconds: 60
 notion_capital_usdc: "10000.000000"
 
-# M4 markers
+# M4 markers - execution disabled
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4

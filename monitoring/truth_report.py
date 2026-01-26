@@ -2,6 +2,11 @@
 """
 Truth report module for ARBY.
 
+METRICS CONTRACT:
+- quotes_total = attempted
+- quotes_fetched = got RPC response (amount > 0)
+- gates_passed = passed all gates
+
 STEP 3: Fields normalized:
 - amount_out_buy_numeraire = "out на buy leg у numeraire"
 - net_pnl_usdc = arithmetic-consistent with amounts
@@ -45,14 +50,14 @@ def calculate_confidence(
 ) -> float:
     """
     Calculate confidence score for opportunities.
-    
+
     Weights:
     - quote_fetch_rate: 0.25
     - quote_gate_pass_rate: 0.25
     - rpc_success_rate: 0.25
     - freshness_score: 0.125
     - adapter_reliability: 0.125
-    
+
     Returns: float in [0.0, 1.0]
     """
     # Clamp inputs to [0, 1]
@@ -61,7 +66,7 @@ def calculate_confidence(
     rsr = max(0.0, min(1.0, rpc_success_rate))
     fs = max(0.0, min(1.0, freshness_score))
     ar = max(0.0, min(1.0, adapter_reliability))
-    
+
     # Weighted average
     score = (
         qfr * 0.25 +
@@ -70,7 +75,7 @@ def calculate_confidence(
         fs * 0.125 +
         ar * 0.125
     )
-    
+
     # Clamp output to [0, 1]
     return max(0.0, min(1.0, score))
 
@@ -382,7 +387,6 @@ def build_truth_report(
     total_would_execute_pnl_usdc = Decimal("0")
 
     for opp in source_spreads:
-        # STEP 3-4: Handle both old and new PnL fields
         signal_pnl = opp.get("signal_pnl_usdc") or opp.get("net_pnl_usdc", "0.000000")
         would_execute_pnl = opp.get("would_execute_pnl_usdc") or signal_pnl
 
@@ -409,19 +413,15 @@ def build_truth_report(
             "token_in": opp.get("token_in") or "unknown",
             "token_out": opp.get("token_out") or "unknown",
             "chain_id": opp.get("chain_id", 0),
-            # STEP 3: Clear field naming
             "amount_in_numeraire": opp.get("amount_in_numeraire") or "0",
             "amount_out_buy_numeraire": opp.get("amount_out_buy_numeraire") or "0",
             "amount_out_sell_numeraire": opp.get("amount_out_sell_numeraire") or "0",
-            # STEP 4: Both PnL types
             "signal_pnl_usdc": signal_pnl,
             "signal_pnl_bps": opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0.00"),
             "would_execute_pnl_usdc": would_execute_pnl,
             "would_execute_pnl_bps": opp.get("would_execute_pnl_bps") or opp.get("net_pnl_bps", "0.00"),
-            # Legacy compatibility
             "net_pnl_usdc": signal_pnl,
             "net_pnl_bps": opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0.00"),
-            # STEP 5: Confidence with factors
             "confidence": opp.get("confidence", 0.0),
             "confidence_factors": opp.get("confidence_factors", {}),
             "is_profitable": is_profitable,
@@ -464,7 +464,6 @@ def build_truth_report(
     paper_stats = paper_session_stats or {}
     notion_capital = paper_stats.get("notion_capital_usdc", "10000.000000")
 
-    # STEP 4: Separate PnL reporting
     signal_pnl_str = format_money(total_signal_pnl_usdc, decimals=6)
     would_execute_pnl_str = format_money(total_would_execute_pnl_usdc, decimals=6)
 
@@ -487,7 +486,6 @@ def build_truth_report(
             "total_bps": "0.00",
             "total_usdc": signal_pnl_str,
         },
-        # STEP 4: Split PnL in report
         pnl={
             "signal_pnl_bps": "0.00",
             "signal_pnl_usdc": signal_pnl_str,
@@ -503,6 +501,7 @@ def build_truth_report(
 
 
 def print_truth_report(report: TruthReport) -> None:
+    """Print truth report with ASCII only (no emoji for Windows compatibility)."""
     print("\n" + "=" * 60)
     print("TRUTH REPORT")
     print("=" * 60)
@@ -513,8 +512,10 @@ def print_truth_report(report: TruthReport) -> None:
     health = report.health
     rpc_pct = health.get("rpc_success_rate", 0) * 100
     qf_pct = health.get("quote_fetch_rate", 0) * 100
+    gp_pct = health.get("quote_gate_pass_rate", 0) * 100
     print(f"RPC: {rpc_pct:.1f}% success ({health.get('rpc_total_requests', 0)} requests)")
-    print(f"Quotes: {health.get('quotes_fetched', 0)}/{health.get('quotes_total', 0)} ({qf_pct:.1f}%)")
+    print(f"Quotes: {health.get('quotes_fetched', 0)}/{health.get('quotes_total', 0)} fetched ({qf_pct:.1f}%)")
+    print(f"Gates: {health.get('gates_passed', 0)} passed ({gp_pct:.1f}%)")
     print(f"Price sanity: {health.get('price_sanity_passed', 0)} passed, {health.get('price_sanity_failed', 0)} failed")
     print(f"DEXes active: {health.get('dexes_active', 0)}")
 
@@ -522,7 +523,6 @@ def print_truth_report(report: TruthReport) -> None:
     stats = report.stats
     print(f"Spreads: {stats.get('spread_ids_total', 0)} total, {stats.get('spread_ids_profitable', 0)} profitable")
 
-    # STEP 4: Show both PnL types
     print("\n--- PNL ---")
     pnl = report.pnl
     print(f"Signal PnL: ${pnl.get('signal_pnl_usdc', '0.000000')}")
@@ -532,10 +532,12 @@ def print_truth_report(report: TruthReport) -> None:
     if not report.top_opportunities:
         print("  (none)")
     for i, opp in enumerate(report.top_opportunities[:5], 1):
-        ready = "🟢" if opp.get("is_execution_ready") else "🔴"
+        # ASCII only: [+] for ready, [-] for not ready
+        ready = "[+]" if opp.get("is_execution_ready") else "[-]"
         dex_buy = opp.get("dex_buy", "?")
         dex_sell = opp.get("dex_sell", "?")
-        cross = "→" if dex_buy != dex_sell else "="
+        # ASCII only: -> for cross-DEX, = for same-DEX
+        cross = "->" if dex_buy != dex_sell else "="
         conf = opp.get("confidence", 0)
         print(f"  {i}. {ready} {dex_buy}{cross}{dex_sell} "
               f"${opp.get('signal_pnl_usdc')} (conf={conf:.2f})")
