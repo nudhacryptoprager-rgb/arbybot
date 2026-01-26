@@ -1,19 +1,23 @@
 # PATH: config/real_minimal.yaml
-# CANARY CONFIG for M4 REAL mode
 #
-# M4 Requirements:
+# M4 REAL Pipeline - CANARY CONFIG
+#
+# M4 Requirements (STRICT):
 #   - quotes_fetched >= 1
 #   - rpc_success_rate > 0
 #   - rpc_total_requests >= 3
-#   - dexes_active >= 1
+#   - dexes_active >= 2 (STEP 1: cross-DEX arbitrage)
+#   - pool_buy != "unknown" (STEP 2)
+#   - amount_in_numeraire > 0 (STEP 3)
+#   - dex_buy != dex_sell for at least 1 opportunity (STEP 1)
 #
-# Config: 1 chain × 1 DEX × 2 pairs × multiple fee tiers = more quote attempts
+# Config: 1 chain × 2 DEX × 1 pair × 2 fee tiers = cross-DEX opportunities
 
 # Chain: Arbitrum One
 chain: arbitrum_one
 chain_id: 42161
 
-# RPC endpoints with fallback (primary + 2 fallbacks)
+# RPC endpoints with fallback
 rpc_endpoints:
   - "https://arb1.arbitrum.io/rpc"
   - "https://arbitrum-one.public.blastapi.io"
@@ -24,29 +28,38 @@ rpc_timeout_seconds: 10
 rpc_retries: 3
 rpc_backoff_base_ms: 500
 
-# DEX: Uniswap V3 (most reliable)
+# STEP 1: 2 DEXes for cross-DEX arbitrage
 dexes:
   - uniswap_v3
+  - sushiswap_v3
 
-# Pairs with multiple fee tiers to increase quote attempts
+# Single pair with fee tiers - same pair on both DEXes = arbitrage opportunity
 pairs:
   - token_in: WETH
     token_out: USDC
     fee_tiers: [500, 3000]
-  - token_in: WETH
-    token_out: USDT
-    fee_tiers: [500, 3000]
 
-# Known pool addresses (for reference)
-# WETH/USDC 0.05%: 0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443
-# WETH/USDC 0.3%:  0x17c14D2c404D167802b16C450d3c99F88F2c4F4d
-# WETH/USDT 0.05%: 0x641C00A822e8b671738d32a431a4Fb6074E5c79d
+# Pool addresses per DEX (STEP 2: no "unknown")
+# Format: {dex}_{token_in}_{token_out}_{fee} -> pool_address
+pools:
+  # Uniswap V3 pools
+  uniswap_v3_WETH_USDC_500: "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443"
+  uniswap_v3_WETH_USDC_3000: "0x17c14D2c404D167802b16C450d3c99F88F2c4F4d"
+  # SushiSwap V3 pools (Arbitrum)
+  sushiswap_v3_WETH_USDC_500: "0x90d5FFde59F0Ae1E7C19F59a29F3d8e9D44f57E5"
+  sushiswap_v3_WETH_USDC_3000: "0xD1d5A4c0eA98971894772Dcd6D2f1dc71083C44E"
 
 # Token addresses (Arbitrum)
 tokens:
   WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
   USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
-  USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+
+# STEP 3: Quote sizing
+quote_amount_in_wei: "1000000000000000000"  # 1 ETH
+quote_amount_in_human: "1.0"
+quote_decimals:
+  WETH: 18
+  USDC: 6
 
 # Gate thresholds
 max_slippage_bps: 100

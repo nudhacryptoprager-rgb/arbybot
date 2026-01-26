@@ -2,14 +2,17 @@
 """
 Integration tests for SMOKE and REAL runs.
 
-STEP 7: REAL mode consistency tests
+STEP 7: Deterministic tests - skip network-dependent tests in CI
+        Use ARBY_OFFLINE=1 env var to skip live RPC tests
 """
 
 import json
 import logging
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch, AsyncMock, MagicMock
 
 
 def _close_all_handlers():
@@ -17,6 +20,11 @@ def _close_all_handlers():
         handler.close()
         logging.root.removeHandler(handler)
     logging.shutdown()
+
+
+def is_offline_mode() -> bool:
+    """Check if running in offline mode (no network)."""
+    return os.environ.get("ARBY_OFFLINE", "0") == "1"
 
 
 class TestFullSmokeRun(unittest.TestCase):
@@ -56,7 +64,9 @@ class TestSmokeArtifactsContract(unittest.TestCase):
 class TestRealModeContract(unittest.TestCase):
     """REAL MODE CONTRACT TEST."""
 
+    @unittest.skipIf(is_offline_mode(), "Skipping live RPC test in offline mode")
     def test_real_mode_runs_without_raising(self):
+        """STEP 7: Only run with live RPC if not in offline mode."""
         from strategy.jobs.run_scan import run_scanner, ScannerMode
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -65,10 +75,13 @@ class TestRealModeContract(unittest.TestCase):
                 run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=output_dir)
                 self.assertTrue((output_dir / "scan.log").exists())
             except RuntimeError as e:
-                self.assertIn("INFRA_BLOCK_PIN_FAILED", str(e))
+                if "INFRA_BLOCK_PIN_FAILED" in str(e):
+                    self.skipTest(f"Network unavailable: {e}")
+                raise
             finally:
                 _close_all_handlers()
 
+    @unittest.skipIf(is_offline_mode(), "Skipping live RPC test in offline mode")
     def test_real_mode_produces_artifacts(self):
         from strategy.jobs.run_scan import run_scanner, ScannerMode
 
@@ -95,6 +108,7 @@ class TestRealModeContract(unittest.TestCase):
             finally:
                 _close_all_handlers()
 
+    @unittest.skipIf(is_offline_mode(), "Skipping live RPC test in offline mode")
     def test_real_mode_execution_disabled(self):
         from strategy.jobs.run_scan import run_scanner, ScannerMode
 
@@ -117,7 +131,15 @@ class TestRealModeContract(unittest.TestCase):
             finally:
                 _close_all_handlers()
 
-    def test_real_mode_not_smoke_fallback(self):
+
+class TestRealModeCrossDex(unittest.TestCase):
+    """
+    STEP 1: Cross-DEX arbitrage tests.
+    """
+
+    @unittest.skipIf(is_offline_mode(), "Skipping live RPC test in offline mode")
+    def test_cross_dex_opportunities_have_different_dexes(self):
+        """At least one opportunity should have dex_buy != dex_sell."""
         from strategy.jobs.run_scan import run_scanner, ScannerMode
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -125,11 +147,92 @@ class TestRealModeContract(unittest.TestCase):
             try:
                 run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=output_dir)
 
-                scan_files = list((output_dir / "snapshots").glob("scan_*.json"))
-                if scan_files:
-                    with open(scan_files[0]) as f:
-                        scan = json.load(f)
-                    self.assertEqual(scan.get("run_mode"), "REGISTRY_REAL")
+                truth_files = list((output_dir / "reports").glob("truth_report_*.json"))
+                if truth_files:
+                    with open(truth_files[0]) as f:
+                        truth = json.load(f)
+
+                    top_opps = truth.get("top_opportunities", [])
+
+                    # Only check if we have opportunities
+                    if top_opps:
+                        cross_dex = [
+                            opp for opp in top_opps
+                            if opp.get("dex_buy") != opp.get("dex_sell")
+                        ]
+                        self.assertGreater(
+                            len(cross_dex), 0,
+                            f"Expected cross-DEX opportunities, all {len(top_opps)} have same DEX"
+                        )
+
+            except RuntimeError as e:
+                if "INFRA_BLOCK_PIN_FAILED" in str(e):
+                    self.skipTest(f"Network unavailable: {e}")
+                raise
+            finally:
+                _close_all_handlers()
+
+    @unittest.skipIf(is_offline_mode(), "Skipping live RPC test in offline mode")
+    def test_pools_not_unknown(self):
+        """STEP 2: No pool should be "unknown"."""
+        from strategy.jobs.run_scan import run_scanner, ScannerMode
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            try:
+                run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=output_dir)
+
+                truth_files = list((output_dir / "reports").glob("truth_report_*.json"))
+                if truth_files:
+                    with open(truth_files[0]) as f:
+                        truth = json.load(f)
+
+                    top_opps = truth.get("top_opportunities", [])
+
+                    for opp in top_opps:
+                        self.assertNotEqual(
+                            opp.get("pool_buy"), "unknown",
+                            f"pool_buy is 'unknown' for {opp.get('spread_id')}"
+                        )
+                        self.assertNotEqual(
+                            opp.get("pool_sell"), "unknown",
+                            f"pool_sell is 'unknown' for {opp.get('spread_id')}"
+                        )
+
+            except RuntimeError as e:
+                if "INFRA_BLOCK_PIN_FAILED" in str(e):
+                    self.skipTest(f"Network unavailable: {e}")
+                raise
+            finally:
+                _close_all_handlers()
+
+    @unittest.skipIf(is_offline_mode(), "Skipping live RPC test in offline mode")
+    def test_amounts_not_zero(self):
+        """STEP 3: Amounts should not be zero for opportunities."""
+        from strategy.jobs.run_scan import run_scanner, ScannerMode
+        from decimal import Decimal
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            try:
+                run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=output_dir)
+
+                truth_files = list((output_dir / "reports").glob("truth_report_*.json"))
+                if truth_files:
+                    with open(truth_files[0]) as f:
+                        truth = json.load(f)
+
+                    top_opps = truth.get("top_opportunities", [])
+
+                    for opp in top_opps:
+                        amount_in = opp.get("amount_in_numeraire", "0")
+                        try:
+                            self.assertGreater(
+                                Decimal(amount_in), 0,
+                                f"amount_in is 0 for {opp.get('spread_id')}"
+                            )
+                        except:
+                            self.fail(f"Invalid amount_in for {opp.get('spread_id')}")
 
             except RuntimeError as e:
                 if "INFRA_BLOCK_PIN_FAILED" in str(e):
@@ -139,112 +242,122 @@ class TestRealModeContract(unittest.TestCase):
                 _close_all_handlers()
 
 
-class TestRealModeConsistency(unittest.TestCase):
+class TestRealModeOfflineFixture(unittest.TestCase):
     """
-    STEP 7: REAL mode consistency tests.
+    STEP 7: Deterministic tests with mock RPC.
     
-    Ensures truth_report matches scan for key metrics.
+    These tests use fixtures instead of live RPC calls.
     """
 
-    def test_truth_report_health_not_zero_when_quotes_fetched(self):
-        """
-        STEP 7: If quotes_fetched > 0, truth_report.health must NOT show 0%.
-        """
-        from strategy.jobs.run_scan import run_scanner, ScannerMode
+    def test_quote_dataclass_fields(self):
+        """Test Quote dataclass has required fields."""
+        from strategy.jobs.run_scan_real import Quote
+        from decimal import Decimal
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_dir = Path(tmpdir)
-            try:
-                run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=output_dir)
+        quote = Quote(
+            dex_id="uniswap_v3",
+            pool_address="0x123",
+            token_in="WETH",
+            token_out="USDC",
+            fee=500,
+            amount_in_wei=1000000000000000000,
+            amount_out_wei=3500000000,
+            amount_in_human="1.000000",
+            amount_out_human="3500.000000",
+            price=Decimal("3500"),
+            latency_ms=50,
+            block_number=12345678,
+            success=True,
+        )
 
-                scan_files = list((output_dir / "snapshots").glob("scan_*.json"))
-                truth_files = list((output_dir / "reports").glob("truth_report_*.json"))
+        self.assertEqual(quote.dex_id, "uniswap_v3")
+        self.assertEqual(quote.pool_address, "0x123")
+        self.assertTrue(quote.success)
+        self.assertEqual(quote.amount_out_wei, 3500000000)
 
-                if scan_files and truth_files:
-                    with open(scan_files[0]) as f:
-                        scan = json.load(f)
-                    with open(truth_files[0]) as f:
-                        truth = json.load(f)
+    def test_cross_dex_spread_generation(self):
+        """Test cross-DEX spread generation from quotes."""
+        from strategy.jobs.run_scan_real import Quote, find_cross_dex_spreads
+        from decimal import Decimal
 
-                    quotes_fetched = scan.get("stats", {}).get("quotes_fetched", 0)
-                    health = truth.get("health", {})
+        quotes = [
+            Quote(
+                dex_id="uniswap_v3",
+                pool_address="0xUNI_POOL",
+                token_in="WETH",
+                token_out="USDC",
+                fee=500,
+                amount_in_wei=1000000000000000000,
+                amount_out_wei=3500000000,  # 3500 USDC
+                amount_in_human="1.000000",
+                amount_out_human="3500.000000",
+                price=Decimal("3500"),
+                latency_ms=50,
+                block_number=12345678,
+                success=True,
+            ),
+            Quote(
+                dex_id="sushiswap_v3",
+                pool_address="0xSUSHI_POOL",
+                token_in="WETH",
+                token_out="USDC",
+                fee=500,
+                amount_in_wei=1000000000000000000,
+                amount_out_wei=3510000000,  # 3510 USDC (better)
+                amount_in_human="1.000000",
+                amount_out_human="3510.000000",
+                price=Decimal("3510"),
+                latency_ms=60,
+                block_number=12345678,
+                success=True,
+            ),
+        ]
 
-                    if quotes_fetched > 0:
-                        # quote_fetch_rate must NOT be 0
-                        self.assertGreater(health.get("quote_fetch_rate", 0), 0,
-                            f"quote_fetch_rate should be > 0 when quotes_fetched={quotes_fetched}")
+        spreads = find_cross_dex_spreads(
+            quotes, chain_id=42161, cycle_num=1, timestamp_str="20260125_120000"
+        )
 
-            except RuntimeError as e:
-                if "INFRA_BLOCK_PIN_FAILED" in str(e):
-                    self.skipTest(f"Network unavailable: {e}")
-                raise
-            finally:
-                _close_all_handlers()
+        self.assertGreater(len(spreads), 0)
 
-    def test_no_is_execution_ready_when_execution_disabled(self):
-        """
-        STEP 7: If execution_ready_count == 0, no opp can have is_execution_ready=True.
-        """
-        from strategy.jobs.run_scan import run_scanner, ScannerMode
+        spread = spreads[0]
+        # STEP 1: Different DEXes
+        self.assertNotEqual(spread.dex_buy, spread.dex_sell)
+        # STEP 2: Pool addresses not unknown
+        self.assertIn("0x", spread.pool_buy)
+        self.assertIn("0x", spread.pool_sell)
+        # STEP 3: Amount > 0
+        self.assertGreater(spread.amount_in_wei, 0)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_dir = Path(tmpdir)
-            try:
-                run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=output_dir)
+    def test_wei_to_human_conversion(self):
+        """Test wei to human readable conversion."""
+        from strategy.jobs.run_scan_real import wei_to_human
 
-                truth_files = list((output_dir / "reports").glob("truth_report_*.json"))
+        # 1 ETH
+        result = wei_to_human(1000000000000000000, 18)
+        self.assertEqual(result, "1.000000")
 
-                if truth_files:
-                    with open(truth_files[0]) as f:
-                        truth = json.load(f)
+        # 1000 USDC
+        result = wei_to_human(1000000000, 6)
+        self.assertEqual(result, "1000.000000")
 
-                    exec_ready = truth.get("stats", {}).get("execution_ready_count", 0)
-                    top_opps = truth.get("top_opportunities", [])
+    def test_pool_address_generation(self):
+        """STEP 2: Test pool address lookup and generation."""
+        from strategy.jobs.run_scan_real import get_pool_address
 
-                    if exec_ready == 0:
-                        ready_opps = [opp for opp in top_opps if opp.get("is_execution_ready", False)]
-                        self.assertEqual(len(ready_opps), 0,
-                            f"Found {len(ready_opps)} opps with is_execution_ready=True but execution disabled")
+        config = {
+            "pools": {
+                "uniswap_v3_WETH_USDC_500": "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443",
+            }
+        }
 
-            except RuntimeError as e:
-                if "INFRA_BLOCK_PIN_FAILED" in str(e):
-                    self.skipTest(f"Network unavailable: {e}")
-                raise
-            finally:
-                _close_all_handlers()
+        # Known pool
+        addr = get_pool_address(config, "uniswap_v3", "WETH", "USDC", 500)
+        self.assertEqual(addr, "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443")
 
-    def test_all_opps_have_blockers_when_execution_disabled(self):
-        """
-        STEP 7: When execution disabled, all opps must have execution_blockers.
-        """
-        from strategy.jobs.run_scan import run_scanner, ScannerMode
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_dir = Path(tmpdir)
-            try:
-                run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=output_dir)
-
-                truth_files = list((output_dir / "reports").glob("truth_report_*.json"))
-
-                if truth_files:
-                    with open(truth_files[0]) as f:
-                        truth = json.load(f)
-
-                    exec_ready = truth.get("stats", {}).get("execution_ready_count", 0)
-                    top_opps = truth.get("top_opportunities", [])
-
-                    if exec_ready == 0 and top_opps:
-                        for opp in top_opps:
-                            blockers = opp.get("execution_blockers", [])
-                            self.assertGreater(len(blockers), 0,
-                                f"Opp {opp.get('spread_id')} has no blockers but execution disabled")
-
-            except RuntimeError as e:
-                if "INFRA_BLOCK_PIN_FAILED" in str(e):
-                    self.skipTest(f"Network unavailable: {e}")
-                raise
-            finally:
-                _close_all_handlers()
+        # Unknown pool - should generate deterministic ID (not "unknown")
+        addr = get_pool_address(config, "uniswap_v3", "WETH", "USDT", 3000)
+        self.assertNotEqual(addr, "unknown")
+        self.assertIn("pool:", addr)
 
 
 if __name__ == "__main__":

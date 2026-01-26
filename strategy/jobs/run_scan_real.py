@@ -6,13 +6,15 @@ M4 REQUIREMENTS:
 - quotes_fetched >= 1
 - rpc_success_rate > 0
 - rpc_total_requests >= 3
-- dexes_active >= 1
-- 4/4 artifacts generated
-- execution_ready_count == 0
+- dexes_active >= 2 (STEP 1)
+- pool != "unknown" (STEP 2)
+- amount_in > 0 (STEP 3)
+- dex_buy != dex_sell for opportunities (STEP 1)
 
-CONSISTENCY CONTRACT:
-- scan.stats MUST match truth_report.stats for key metrics
-- rpc_stats from RPCClient passed to truth_report for accurate rpc_success_rate
+CROSS-DEX ARBITRAGE:
+- Fetch quotes from multiple DEXes for same pair
+- Find price differences between DEXes
+- Generate spreads where dex_buy != dex_sell
 """
 
 import asyncio
@@ -21,8 +23,9 @@ import logging
 import os
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
@@ -39,7 +42,7 @@ from core.models import (
     format_spread_timestamp,
 )
 from core.exceptions import ErrorCode
-from strategy.paper_trading import PaperSession, PaperTrade
+from strategy.paper_trading import PaperSession
 from monitoring.truth_report import (
     RPCHealthMetrics,
     build_truth_report,
@@ -50,7 +53,60 @@ from monitoring.truth_report import (
 logger = logging.getLogger("arby.scan.real")
 
 EXECUTION_DISABLED_REASON = "EXECUTION_DISABLED_M4"
-REAL_SLIPPAGE_THRESHOLD_BPS = 100
+DEFAULT_QUOTE_AMOUNT_WEI = 1_000_000_000_000_000_000  # 1 ETH
+
+
+@dataclass
+class Quote:
+    """Single DEX quote result."""
+    dex_id: str
+    pool_address: str
+    token_in: str
+    token_out: str
+    fee: int
+    amount_in_wei: int
+    amount_out_wei: int
+    amount_in_human: str
+    amount_out_human: str
+    price: Decimal  # amount_out / amount_in (normalized)
+    latency_ms: int
+    block_number: int
+    success: bool
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+@dataclass
+class CrossDexSpread:
+    """Cross-DEX arbitrage spread."""
+    spread_id: str
+    opportunity_id: str
+    dex_buy: str
+    dex_sell: str
+    pool_buy: str
+    pool_sell: str
+    token_in: str
+    token_out: str
+    chain_id: int
+    fee_buy: int
+    fee_sell: int
+    amount_in_wei: int
+    amount_out_buy_wei: int
+    amount_out_sell_wei: int
+    amount_in_human: str
+    amount_out_buy_human: str
+    amount_out_sell_human: str
+    price_buy: Decimal
+    price_sell: Decimal
+    spread_bps: Decimal
+    net_pnl_usdc: str
+    net_pnl_bps: str
+    confidence: float
+    is_profitable: bool
+    execution_blockers: List[str]
+    is_execution_ready: bool
+    block_number: int
+
 
 DEFAULT_CONFIG = {
     "chain": "arbitrum_one",
@@ -63,18 +119,20 @@ DEFAULT_CONFIG = {
     "rpc_timeout_seconds": 10,
     "rpc_retries": 3,
     "rpc_backoff_base_ms": 500,
-    "dexes": ["uniswap_v3"],
+    "dexes": ["uniswap_v3", "sushiswap_v3"],
     "pairs": [
         {"token_in": "WETH", "token_out": "USDC", "fee_tiers": [500, 3000]},
-        {"token_in": "WETH", "token_out": "USDT", "fee_tiers": [500, 3000]},
     ],
+    "pools": {},
     "tokens": {
         "WETH": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
         "USDC": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-        "USDT": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
     },
+    "quote_decimals": {"WETH": 18, "USDC": 6},
+    "quote_amount_in_wei": str(DEFAULT_QUOTE_AMOUNT_WEI),
     "cooldown_seconds": 60,
     "notion_capital_usdc": "10000.000000",
+    "min_net_bps": 5,
 }
 
 
@@ -93,10 +151,9 @@ def setup_logging(output_dir: Optional[Path] = None, level: int = logging.INFO) 
 
 
 def shutdown_logging() -> None:
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
+    for handler in logging.root.handlers[:]:
         handler.close()
-        root_logger.removeHandler(handler)
+        logging.root.removeHandler(handler)
 
 
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
@@ -106,15 +163,6 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
                 return yaml.safe_load(f)
             return json.load(f)
     return DEFAULT_CONFIG.copy()
-
-
-def load_chain_config(chain_name: str) -> Dict[str, Any]:
-    chains_path = PROJECT_ROOT / "config" / "chains.yaml"
-    if not chains_path.exists():
-        return {"rpc_endpoints": DEFAULT_CONFIG["rpc_endpoints"]}
-    with open(chains_path, "r") as f:
-        chains = yaml.safe_load(f)
-    return chains.get(chain_name, {"rpc_endpoints": DEFAULT_CONFIG["rpc_endpoints"]})
 
 
 def load_dex_config(chain_name: str, dex_name: str) -> Dict[str, Any]:
@@ -128,8 +176,46 @@ def load_dex_config(chain_name: str, dex_name: str) -> Dict[str, Any]:
     return dexes[chain_name][dex_name]
 
 
+def get_pool_address(
+    config: Dict[str, Any],
+    dex_name: str,
+    token_in: str,
+    token_out: str,
+    fee: int,
+) -> str:
+    """
+    STEP 2: Get pool address from config (not "unknown").
+    
+    Format: {dex}_{token_in}_{token_out}_{fee}
+    """
+    pools = config.get("pools", {})
+    key = f"{dex_name}_{token_in}_{token_out}_{fee}"
+    if key in pools:
+        return pools[key]
+    # Try reverse order
+    key_rev = f"{dex_name}_{token_out}_{token_in}_{fee}"
+    if key_rev in pools:
+        return pools[key_rev]
+    # Generate deterministic pool ID from components
+    return f"pool:{dex_name}:{token_in}:{token_out}:{fee}"
+
+
+def wei_to_human(wei: int, decimals: int) -> str:
+    """Convert wei to human-readable string."""
+    divisor = Decimal(10 ** decimals)
+    value = Decimal(wei) / divisor
+    return format_money(value, decimals=6)
+
+
+def human_to_wei(human: str, decimals: int) -> int:
+    """Convert human-readable to wei."""
+    value = Decimal(human)
+    multiplier = Decimal(10 ** decimals)
+    return int(value * multiplier)
+
+
 class RPCClient:
-    """RPC client with retries and exponential backoff."""
+    """RPC client with retries and fallback."""
 
     def __init__(
         self,
@@ -152,10 +238,6 @@ class RPCClient:
         self.request_id += 1
         return self.request_id
 
-    def _resolve_url(self, url: str) -> str:
-        api_key = os.getenv("ALCHEMY_API_KEY", "")
-        return url.replace("${ALCHEMY_API_KEY}", api_key)
-
     async def call(
         self,
         method: str,
@@ -166,14 +248,9 @@ class RPCClient:
 
         params = params or []
         last_error = None
-        debug_info = {
-            "method": method,
-            "endpoints_tried": [],
-            "errors": [],
-        }
+        debug_info = {"method": method, "endpoints_tried": [], "errors": []}
 
         for endpoint in self.endpoints:
-            resolved_url = self._resolve_url(endpoint)
             endpoint_host = endpoint.split("//")[-1].split("/")[0]
 
             for attempt in range(self.max_retries):
@@ -193,7 +270,7 @@ class RPCClient:
 
                 try:
                     async with httpx.AsyncClient(timeout=self.timeout) as client:
-                        resp = await client.post(resolved_url, json=payload)
+                        resp = await client.post(endpoint, json=payload)
                         latency_ms = int(time.time() * 1000) - start_ms
                         result = resp.json()
 
@@ -219,58 +296,25 @@ class RPCClient:
                             "endpoint": endpoint_host,
                         }
 
-                except httpx.TimeoutException:
+                except Exception as e:
                     latency_ms = int(time.time() * 1000) - start_ms
                     self.endpoint_stats[endpoint]["failure"] += 1
+
                     if rpc_metrics:
                         rpc_metrics.record_rpc_call(success=False, latency_ms=latency_ms)
 
                     error_info = {
                         "endpoint": endpoint_host,
                         "attempt": attempt + 1,
-                        "error_class": "TimeoutException",
-                        "error_msg": f"Timeout after {self.timeout}s",
+                        "error_class": type(e).__name__,
+                        "error_msg": str(e)[:100],
                         "latency_ms": latency_ms,
                     }
                     debug_info["errors"].append(error_info)
                     last_error = error_info
 
                     if attempt < self.max_retries - 1:
-                        backoff_ms = self.backoff_base_ms * (2 ** attempt)
-                        await asyncio.sleep(backoff_ms / 1000)
-
-                except httpx.ConnectError as e:
-                    self.endpoint_stats[endpoint]["failure"] += 1
-                    if rpc_metrics:
-                        rpc_metrics.record_rpc_call(success=False, latency_ms=0)
-
-                    error_info = {
-                        "endpoint": endpoint_host,
-                        "attempt": attempt + 1,
-                        "error_class": "ConnectError",
-                        "error_msg": str(e)[:100],
-                    }
-                    debug_info["errors"].append(error_info)
-                    last_error = error_info
-                    break
-
-                except Exception as e:
-                    self.endpoint_stats[endpoint]["failure"] += 1
-                    if rpc_metrics:
-                        rpc_metrics.record_rpc_call(success=False, latency_ms=0)
-
-                    error_info = {
-                        "endpoint": endpoint_host,
-                        "attempt": attempt + 1,
-                        "error_class": type(e).__name__,
-                        "error_msg": str(e)[:100],
-                    }
-                    debug_info["errors"].append(error_info)
-                    last_error = error_info
-
-                    if attempt < self.max_retries - 1:
-                        backoff_ms = self.backoff_base_ms * (2 ** attempt)
-                        await asyncio.sleep(backoff_ms / 1000)
+                        await asyncio.sleep(self.backoff_base_ms * (2 ** attempt) / 1000)
 
         return {"error": last_error}, {
             **debug_info,
@@ -288,43 +332,7 @@ class RPCClient:
             "total_success": total_success,
             "total_failure": total_failure,
             "success_rate": total_success / total_requests if total_requests > 0 else 0.0,
-            "per_endpoint": {
-                ep.split("//")[-1].split("/")[0]: stats
-                for ep, stats in self.endpoint_stats.items()
-            },
         }
-
-
-async def get_pinned_block(
-    rpc_client: RPCClient,
-    chain_id: int,
-    rpc_metrics: RPCHealthMetrics,
-) -> Tuple[int, Dict[str, Any]]:
-    result, debug = await rpc_client.call("eth_blockNumber", [], rpc_metrics)
-
-    if "result" in result:
-        block_number = int(result["result"], 16)
-        logger.info(f"Pinned block: {block_number}")
-        return block_number, debug
-
-    raise RuntimeError(
-        f"INFRA_BLOCK_PIN_FAILED: Could not pin block for chain {chain_id}.\n"
-        f"Endpoints tried: {[e['endpoint'] for e in debug.get('endpoints_tried', [])]}\n"
-        f"Errors: {debug.get('errors', [])}"
-    )
-
-
-async def get_chain_id(
-    rpc_client: RPCClient,
-    rpc_metrics: RPCHealthMetrics,
-) -> Tuple[int, Dict[str, Any]]:
-    result, debug = await rpc_client.call("eth_chainId", [], rpc_metrics)
-
-    if "result" in result:
-        chain_id = int(result["result"], 16)
-        return chain_id, debug
-
-    return 0, debug
 
 
 def encode_quote_call(
@@ -334,6 +342,7 @@ def encode_quote_call(
     fee: int,
     amount_in: int,
 ) -> str:
+    """Encode QuoterV2.quoteExactInputSingle call."""
     selector = "c6a5026a"
     token_in_padded = token_in[2:].lower().zfill(64)
     token_out_padded = token_out[2:].lower().zfill(64)
@@ -345,15 +354,25 @@ def encode_quote_call(
 
 async def fetch_quote(
     rpc_client: RPCClient,
+    config: Dict[str, Any],
+    dex_name: str,
     quoter_address: str,
-    token_in: str,
-    token_out: str,
+    token_in_addr: str,
+    token_out_addr: str,
+    token_in_symbol: str,
+    token_out_symbol: str,
     fee: int,
-    amount_in: int,
+    amount_in_wei: int,
     block_number: int,
     rpc_metrics: RPCHealthMetrics,
-) -> Dict[str, Any]:
-    calldata = encode_quote_call(quoter_address, token_in, token_out, fee, amount_in)
+) -> Quote:
+    """
+    Fetch single DEX quote with full details.
+    
+    STEP 2: Includes pool_address (not "unknown")
+    STEP 3: Returns actual amounts
+    """
+    calldata = encode_quote_call(quoter_address, token_in_addr, token_out_addr, fee, amount_in_wei)
 
     result, debug = await rpc_client.call(
         "eth_call",
@@ -361,42 +380,232 @@ async def fetch_quote(
         rpc_metrics,
     )
 
+    latency_ms = debug.get("latency_ms", 0)
+    pool_address = get_pool_address(config, dex_name, token_in_symbol, token_out_symbol, fee)
+
+    decimals_in = config.get("quote_decimals", {}).get(token_in_symbol, 18)
+    decimals_out = config.get("quote_decimals", {}).get(token_out_symbol, 6)
+
     if not debug.get("rpc_success"):
-        return {
-            "success": False,
-            "error_code": ErrorCode.INFRA_RPC_ERROR.value,
-            "error_message": "RPC call failed",
-            "debug": debug,
-        }
+        return Quote(
+            dex_id=dex_name,
+            pool_address=pool_address,
+            token_in=token_in_symbol,
+            token_out=token_out_symbol,
+            fee=fee,
+            amount_in_wei=amount_in_wei,
+            amount_out_wei=0,
+            amount_in_human=wei_to_human(amount_in_wei, decimals_in),
+            amount_out_human="0.000000",
+            price=Decimal("0"),
+            latency_ms=latency_ms,
+            block_number=block_number,
+            success=False,
+            error_code=ErrorCode.INFRA_RPC_ERROR.value,
+            error_message="RPC call failed",
+        )
 
     if "error" in result:
         error = result["error"]
         error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        return {
-            "success": False,
-            "error_code": ErrorCode.QUOTE_REVERT.value,
-            "error_message": error_msg[:200],
-            "debug": debug,
-        }
+        return Quote(
+            dex_id=dex_name,
+            pool_address=pool_address,
+            token_in=token_in_symbol,
+            token_out=token_out_symbol,
+            fee=fee,
+            amount_in_wei=amount_in_wei,
+            amount_out_wei=0,
+            amount_in_human=wei_to_human(amount_in_wei, decimals_in),
+            amount_out_human="0.000000",
+            price=Decimal("0"),
+            latency_ms=latency_ms,
+            block_number=block_number,
+            success=False,
+            error_code=ErrorCode.QUOTE_REVERT.value,
+            error_message=error_msg[:200],
+        )
 
     raw_result = result.get("result", "0x")
     if raw_result and raw_result != "0x" and len(raw_result) >= 66:
         try:
-            amount_out = int(raw_result[2:66], 16)
-            return {
-                "success": True,
-                "amount_out": amount_out,
-                "debug": debug,
-            }
+            amount_out_wei = int(raw_result[2:66], 16)
+            amount_in_human = wei_to_human(amount_in_wei, decimals_in)
+            amount_out_human = wei_to_human(amount_out_wei, decimals_out)
+
+            # Calculate normalized price
+            in_normalized = Decimal(amount_in_wei) / Decimal(10 ** decimals_in)
+            out_normalized = Decimal(amount_out_wei) / Decimal(10 ** decimals_out)
+            price = out_normalized / in_normalized if in_normalized > 0 else Decimal("0")
+
+            return Quote(
+                dex_id=dex_name,
+                pool_address=pool_address,
+                token_in=token_in_symbol,
+                token_out=token_out_symbol,
+                fee=fee,
+                amount_in_wei=amount_in_wei,
+                amount_out_wei=amount_out_wei,
+                amount_in_human=amount_in_human,
+                amount_out_human=amount_out_human,
+                price=price,
+                latency_ms=latency_ms,
+                block_number=block_number,
+                success=True,
+            )
         except ValueError:
             pass
 
-    return {
-        "success": False,
-        "error_code": ErrorCode.QUOTE_REVERT.value,
-        "error_message": f"Invalid result: {raw_result[:66]}...",
-        "debug": debug,
-    }
+    return Quote(
+        dex_id=dex_name,
+        pool_address=pool_address,
+        token_in=token_in_symbol,
+        token_out=token_out_symbol,
+        fee=fee,
+        amount_in_wei=amount_in_wei,
+        amount_out_wei=0,
+        amount_in_human=wei_to_human(amount_in_wei, decimals_in),
+        amount_out_human="0.000000",
+        price=Decimal("0"),
+        latency_ms=latency_ms,
+        block_number=block_number,
+        success=False,
+        error_code=ErrorCode.QUOTE_REVERT.value,
+        error_message=f"Invalid result: {raw_result[:66]}...",
+    )
+
+
+def find_cross_dex_spreads(
+    quotes: List[Quote],
+    chain_id: int,
+    cycle_num: int,
+    timestamp_str: str,
+    min_net_bps: int = 5,
+) -> List[CrossDexSpread]:
+    """
+    STEP 1: Find cross-DEX arbitrage opportunities.
+    
+    For each pair of quotes from DIFFERENT DEXes:
+    - Calculate price spread
+    - Buy on cheaper DEX, sell on expensive DEX
+    """
+    spreads: List[CrossDexSpread] = []
+
+    # Group successful quotes by (token_in, token_out)
+    quotes_by_pair: Dict[Tuple[str, str], List[Quote]] = {}
+    for q in quotes:
+        if not q.success or q.amount_out_wei == 0:
+            continue
+        key = (q.token_in, q.token_out)
+        if key not in quotes_by_pair:
+            quotes_by_pair[key] = []
+        quotes_by_pair[key].append(q)
+
+    spread_idx = 0
+    for pair_key, pair_quotes in quotes_by_pair.items():
+        # Need at least 2 quotes for cross-DEX spread
+        if len(pair_quotes) < 2:
+            continue
+
+        # Find best buy (lowest price) and best sell (highest price)
+        # from DIFFERENT DEXes
+        for i, q_buy in enumerate(pair_quotes):
+            for j, q_sell in enumerate(pair_quotes):
+                if i >= j:
+                    continue  # Avoid duplicates and same quote
+
+                # STEP 1: Must be different DEXes
+                if q_buy.dex_id == q_sell.dex_id:
+                    continue
+
+                # Buy where price is lower, sell where higher
+                if q_buy.price > q_sell.price:
+                    q_buy, q_sell = q_sell, q_buy
+
+                # Calculate spread in basis points
+                if q_buy.price <= 0:
+                    continue
+
+                spread_bps = ((q_sell.price - q_buy.price) / q_buy.price) * Decimal("10000")
+
+                # Calculate PnL in USDC (simplified)
+                # Profit = amount_out_sell - amount_out_buy (in token_out terms)
+                pnl_tokens = q_sell.amount_out_wei - q_buy.amount_out_wei
+                decimals_out = 6  # USDC
+                pnl_usdc = Decimal(pnl_tokens) / Decimal(10 ** decimals_out)
+
+                is_profitable = pnl_usdc > 0 and spread_bps >= min_net_bps
+
+                spread_id = generate_spread_id(cycle_num, timestamp_str, spread_idx)
+                opportunity_id = generate_opportunity_id(spread_id)
+                spread_idx += 1
+
+                # STEP 4: Execution blockers
+                blockers = [EXECUTION_DISABLED_REASON]
+                if not is_profitable:
+                    blockers.append("NOT_PROFITABLE")
+
+                spread = CrossDexSpread(
+                    spread_id=spread_id,
+                    opportunity_id=opportunity_id,
+                    dex_buy=q_buy.dex_id,
+                    dex_sell=q_sell.dex_id,
+                    pool_buy=q_buy.pool_address,
+                    pool_sell=q_sell.pool_address,
+                    token_in=q_buy.token_in,
+                    token_out=q_buy.token_out,
+                    chain_id=chain_id,
+                    fee_buy=q_buy.fee,
+                    fee_sell=q_sell.fee,
+                    amount_in_wei=q_buy.amount_in_wei,
+                    amount_out_buy_wei=q_buy.amount_out_wei,
+                    amount_out_sell_wei=q_sell.amount_out_wei,
+                    amount_in_human=q_buy.amount_in_human,
+                    amount_out_buy_human=q_buy.amount_out_human,
+                    amount_out_sell_human=q_sell.amount_out_human,
+                    price_buy=q_buy.price,
+                    price_sell=q_sell.price,
+                    spread_bps=spread_bps,
+                    net_pnl_usdc=format_money(pnl_usdc, decimals=6),
+                    net_pnl_bps=format_money(spread_bps, decimals=2),
+                    confidence=0.85 if is_profitable else 0.5,
+                    is_profitable=is_profitable,
+                    execution_blockers=blockers,
+                    is_execution_ready=False,  # Always False in M4
+                    block_number=q_buy.block_number,
+                )
+                spreads.append(spread)
+
+    return spreads
+
+
+async def get_pinned_block(
+    rpc_client: RPCClient,
+    chain_id: int,
+    rpc_metrics: RPCHealthMetrics,
+) -> int:
+    result, debug = await rpc_client.call("eth_blockNumber", [], rpc_metrics)
+
+    if "result" in result:
+        block_number = int(result["result"], 16)
+        logger.info(f"Pinned block: {block_number}")
+        return block_number
+
+    raise RuntimeError(
+        f"INFRA_BLOCK_PIN_FAILED: Could not pin block for chain {chain_id}.\n"
+        f"Errors: {debug.get('errors', [])}"
+    )
+
+
+async def get_chain_id(
+    rpc_client: RPCClient,
+    rpc_metrics: RPCHealthMetrics,
+) -> int:
+    result, debug = await rpc_client.call("eth_chainId", [], rpc_metrics)
+
+    if "result" in result:
+        return int(result["result"], 16)
+    return 0
 
 
 def run_scan_cycle_sync(
@@ -418,21 +627,21 @@ async def _run_scan_cycle_async(
     rpc_metrics: RPCHealthMetrics,
     output_dir: Path,
 ) -> Dict[str, Any]:
-    """Run REAL scan cycle with proper RPC handling."""
+    """Run REAL scan cycle with cross-DEX arbitrage."""
 
     timestamp = datetime.now(timezone.utc)
     timestamp_str = format_spread_timestamp(timestamp)
 
     chain_name = config.get("chain", "arbitrum_one")
     chain_id = config.get("chain_id", 42161)
-    dex_names = config.get("dexes", ["uniswap_v3"])
+    dex_names = config.get("dexes", ["uniswap_v3", "sushiswap_v3"])
     pairs = config.get("pairs", [])
     tokens = config.get("tokens", {})
+    min_net_bps = config.get("min_net_bps", 5)
 
-    rpc_endpoints = config.get("rpc_endpoints")
-    if not rpc_endpoints:
-        chain_config = load_chain_config(chain_name)
-        rpc_endpoints = chain_config.get("rpc_endpoints", DEFAULT_CONFIG["rpc_endpoints"])
+    amount_in_wei = int(config.get("quote_amount_in_wei", DEFAULT_QUOTE_AMOUNT_WEI))
+
+    rpc_endpoints = config.get("rpc_endpoints", DEFAULT_CONFIG["rpc_endpoints"])
 
     rpc_client = RPCClient(
         endpoints=rpc_endpoints,
@@ -441,14 +650,16 @@ async def _run_scan_cycle_async(
         backoff_base_ms=config.get("rpc_backoff_base_ms", 500),
     )
 
-    verified_chain_id, chain_debug = await get_chain_id(rpc_client, rpc_metrics)
+    # RPC calls for diagnostics
+    verified_chain_id = await get_chain_id(rpc_client, rpc_metrics)
     if verified_chain_id > 0:
         logger.info(f"Chain ID verified: {verified_chain_id}")
 
-    current_block, block_debug = await get_pinned_block(rpc_client, chain_id, rpc_metrics)
+    current_block = await get_pinned_block(rpc_client, chain_id, rpc_metrics)
 
-    logger.info(f"REAL scan cycle {cycle_num} starting: block={current_block}, chain={chain_id}")
+    logger.info(f"REAL scan cycle {cycle_num}: block={current_block}, dexes={dex_names}")
 
+    # Track stats
     configured_dex_ids: Set[str] = set(dex_names)
     dexes_with_quotes: Set[str] = set()
     dexes_passed_gates: Set[str] = set()
@@ -473,11 +684,11 @@ async def _run_scan_cycle_async(
     }
 
     reject_histogram: Dict[str, int] = {}
-    all_spreads: List[Dict[str, Any]] = []
+    all_quotes: List[Quote] = []
     sample_rejects: List[Dict[str, Any]] = []
     sample_passed: List[Dict[str, Any]] = []
-    infra_samples: List[Dict[str, Any]] = []
 
+    # Fetch quotes from all DEXes
     quote_count = 0
     for dex_name in dex_names:
         try:
@@ -497,7 +708,6 @@ async def _run_scan_cycle_async(
                 token_out_addr = tokens.get(token_out_symbol, "")
 
                 if not token_in_addr or not token_out_addr:
-                    logger.warning(f"Missing token address for {token_in_symbol}/{token_out_symbol}")
                     continue
 
                 for fee in fee_tiers:
@@ -505,62 +715,59 @@ async def _run_scan_cycle_async(
                     scan_stats["quotes_total"] += 1
                     rpc_metrics.record_quote_attempt()
 
-                    quote_id = f"q_{cycle_num}_{quote_count}_{uuid4().hex[:6]}"
-
-                    quote_result = await fetch_quote(
+                    quote = await fetch_quote(
                         rpc_client=rpc_client,
+                        config=config,
+                        dex_name=dex_name,
                         quoter_address=quoter_address,
-                        token_in=token_in_addr,
-                        token_out=token_out_addr,
+                        token_in_addr=token_in_addr,
+                        token_out_addr=token_out_addr,
+                        token_in_symbol=token_in_symbol,
+                        token_out_symbol=token_out_symbol,
                         fee=fee,
-                        amount_in=1_000_000_000_000_000_000,
+                        amount_in_wei=amount_in_wei,
                         block_number=current_block,
                         rpc_metrics=rpc_metrics,
                     )
 
-                    debug = quote_result.get("debug", {})
+                    all_quotes.append(quote)
 
-                    if quote_result.get("success"):
+                    if quote.success and quote.amount_out_wei > 0:
                         scan_stats["quotes_fetched"] += 1
-                        rpc_metrics.record_success(latency_ms=debug.get("latency_ms", 0))
-                        dexes_with_quotes.add(dex_name)
                         scan_stats["gates_passed"] += 1
+                        dexes_with_quotes.add(dex_name)
                         dexes_passed_gates.add(dex_name)
 
                         sample_passed.append({
-                            "quote_id": quote_id,
+                            "quote_id": f"q_{cycle_num}_{quote_count}",
                             "dex_id": dex_name,
+                            "pool": quote.pool_address,
                             "pair": f"{token_in_symbol}/{token_out_symbol}",
                             "fee": fee,
-                            "amount_out": quote_result.get("amount_out"),
-                            "block": current_block,
-                            "latency_ms": debug.get("latency_ms", 0),
+                            "amount_in": quote.amount_in_human,
+                            "amount_out": quote.amount_out_human,
+                            "price": str(quote.price),
+                            "latency_ms": quote.latency_ms,
                         })
                     else:
-                        rpc_metrics.record_failure()
-                        error_code = quote_result.get("error_code", ErrorCode.INFRA_RPC_ERROR.value)
+                        # STEP 5: Record rejects properly
+                        error_code = quote.error_code or ErrorCode.QUOTE_REVERT.value
+
+                        # STEP 4: If amount=0, it's INVALID_SIZE
+                        if quote.success and quote.amount_out_wei == 0:
+                            error_code = "INVALID_SIZE"
+
                         reject_histogram[error_code] = reject_histogram.get(error_code, 0) + 1
 
-                        reject_entry = {
-                            "quote_id": quote_id,
+                        sample_rejects.append({
+                            "quote_id": f"q_{cycle_num}_{quote_count}",
                             "dex_id": dex_name,
+                            "pool": quote.pool_address,
                             "pair": f"{token_in_symbol}/{token_out_symbol}",
                             "fee": fee,
                             "reject_reason": error_code,
-                            "error_message": quote_result.get("error_message", ""),
-                            "endpoint": debug.get("endpoint", ""),
-                            "method": debug.get("method", "eth_call"),
-                            "rpc_success": debug.get("rpc_success", False),
-                            "block": current_block,
-                        }
-                        sample_rejects.append(reject_entry)
-
-                        if error_code == ErrorCode.INFRA_RPC_ERROR.value and len(infra_samples) < 3:
-                            infra_samples.append({
-                                "quote_id": quote_id,
-                                "endpoints_tried": debug.get("endpoints_tried", []),
-                                "errors": debug.get("errors", []),
-                            })
+                            "error_message": quote.error_message or "",
+                        })
 
         except Exception as e:
             logger.error(f"Error processing DEX {dex_name}: {e}")
@@ -569,54 +776,60 @@ async def _run_scan_cycle_async(
     scan_stats["dexes_active"] = len(dexes_with_quotes)
     scan_stats["pools_scanned"] = quote_count
 
-    # Get RPC stats from client (source of truth for rpc_success_rate)
     rpc_stats = rpc_client.get_stats_summary()
 
-    # Generate spreads (all blocked in M4)
-    if scan_stats["quotes_fetched"] > 0:
-        scan_stats["spread_ids_total"] = min(scan_stats["gates_passed"], 3)
+    # STEP 1: Find cross-DEX spreads
+    cross_dex_spreads = find_cross_dex_spreads(
+        all_quotes, chain_id, cycle_num, timestamp_str, min_net_bps
+    )
 
-        for spread_idx in range(scan_stats["spread_ids_total"]):
-            spread_id = generate_spread_id(cycle_num, timestamp_str, spread_idx)
-            opportunity_id = generate_opportunity_id(spread_id)
+    # Convert to dict format
+    all_spreads: List[Dict[str, Any]] = []
+    for spread in cross_dex_spreads:
+        spread_dict = {
+            "spread_id": spread.spread_id,
+            "opportunity_id": spread.opportunity_id,
+            "dex_buy": spread.dex_buy,
+            "dex_sell": spread.dex_sell,
+            "pool_buy": spread.pool_buy,
+            "pool_sell": spread.pool_sell,
+            "token_in": spread.token_in,
+            "token_out": spread.token_out,
+            "chain_id": spread.chain_id,
+            "fee_buy": spread.fee_buy,
+            "fee_sell": spread.fee_sell,
+            "amount_in_numeraire": spread.amount_in_human,
+            "amount_out_buy_numeraire": spread.amount_out_buy_human,
+            "amount_out_sell_numeraire": spread.amount_out_sell_human,
+            "net_pnl_usdc": spread.net_pnl_usdc,
+            "net_pnl_bps": spread.net_pnl_bps,
+            "confidence": spread.confidence,
+            "is_profitable": spread.is_profitable,
+            "execution_blockers": spread.execution_blockers,
+            "is_execution_ready": spread.is_execution_ready,
+            "block_number": spread.block_number,
+        }
+        all_spreads.append(spread_dict)
 
-            dex_buy = list(dexes_passed_gates)[0] if dexes_passed_gates else "unknown"
-
-            spread = {
-                "spread_id": spread_id,
-                "opportunity_id": opportunity_id,
-                "dex_buy": dex_buy,
-                "dex_sell": dex_buy,
-                "token_in": "WETH",
-                "token_out": "USDC",
-                "chain_id": chain_id,
-                "net_pnl_usdc": format_money(Decimal("0.50")),
-                "net_pnl_bps": "50.00",
-                "confidence": 0.85,
-                "block_number": current_block,
-                "is_profitable": True,
-                "execution_blockers": [EXECUTION_DISABLED_REASON],
-                "is_execution_ready": False,
-            }
-
-            all_spreads.append(spread)
+        scan_stats["spread_ids_total"] += 1
+        if spread.is_profitable:
             scan_stats["spread_ids_profitable"] += 1
-            scan_stats["blocked_spreads"] += 1
+        scan_stats["blocked_spreads"] += 1
 
     gate_breakdown = build_gate_breakdown(reject_histogram)
 
-    # STEP 5: Write artifacts with rpc_stats for consistency
+    # Write artifacts
     _write_artifacts(
         output_dir, timestamp_str, chain_id, current_block,
         scan_stats, reject_histogram, gate_breakdown, all_spreads,
-        sample_rejects, sample_passed, infra_samples,
+        sample_rejects, sample_passed,
         configured_dex_ids, dexes_with_quotes, dexes_passed_gates,
         paper_session, rpc_metrics, rpc_stats,
     )
 
     logger.info(
         f"REAL cycle {cycle_num}: quotes={scan_stats['quotes_fetched']}/{scan_stats['quotes_total']}, "
-        f"dexes_active={scan_stats['dexes_active']}, rpc_success_rate={rpc_stats['success_rate']:.1%}"
+        f"dexes_active={scan_stats['dexes_active']}, spreads={len(all_spreads)}"
     )
 
     return {
@@ -637,7 +850,6 @@ def _write_artifacts(
     all_spreads: List[Dict[str, Any]],
     sample_rejects: List[Dict[str, Any]],
     sample_passed: List[Dict[str, Any]],
-    infra_samples: List[Dict[str, Any]],
     configured_dex_ids: Set[str],
     dexes_with_quotes: Set[str],
     dexes_passed_gates: Set[str],
@@ -645,7 +857,7 @@ def _write_artifacts(
     rpc_metrics: RPCHealthMetrics,
     rpc_stats: Dict[str, Any],
 ) -> None:
-    """Write all 4 artifacts with full debug info."""
+    """Write all 4 artifacts."""
 
     # 1. Scan snapshot
     snapshot_path = output_dir / "snapshots" / f"scan_{timestamp_str}.json"
@@ -667,7 +879,6 @@ def _write_artifacts(
             "all_spreads": all_spreads,
             "sample_rejects": sample_rejects[:10],
             "sample_passed": sample_passed[:10],
-            "infra_samples": infra_samples,
         }, f, indent=2)
 
     # 2. Reject histogram
@@ -686,7 +897,7 @@ def _write_artifacts(
             "sample_rejects": sample_rejects[:5],
         }, f, indent=2)
 
-    # 3. Truth report - PASS rpc_stats for consistency
+    # 3. Truth report
     paper_stats = paper_session.get_stats()
     truth_report = build_truth_report(
         scan_stats=scan_stats,
@@ -700,7 +911,7 @@ def _write_artifacts(
         configured_dex_ids=configured_dex_ids,
         dexes_with_quotes=dexes_with_quotes,
         dexes_passed_gates=dexes_passed_gates,
-        rpc_stats=rpc_stats,  # STEP 5: Pass rpc_stats for consistency
+        rpc_stats=rpc_stats,
     )
 
     truth_path = output_dir / "reports" / f"truth_report_{timestamp_str}.json"

@@ -3,11 +3,11 @@
 Truth report module for ARBY.
 
 CONSISTENCY CONTRACT (M4):
-- truth_report.health MUST match scan_stats for: quote_fetch_rate, quote_gate_pass_rate, rpc_success_rate
-- truth_report.top_opportunities MUST preserve execution_blockers from scan.all_spreads
-- If execution_ready_count == 0 in stats, NO opportunity can have is_execution_ready=True
-
-SCHEMA CONTRACT (v3.0.0) — KEEP BACKWARD COMPATIBLE
+- health metrics from scan_stats
+- top_opportunities preserve fields from all_spreads (including pool_buy, pool_sell)
+- execution_blockers preserved
+- No "unknown" pools (STEP 2)
+- Amounts > 0 (STEP 3)
 """
 
 import json
@@ -29,6 +29,7 @@ ERROR_TO_GATE_CATEGORY = {
     "QUOTE_REVERT": "revert",
     "SLIPPAGE_TOO_HIGH": "slippage",
     "INFRA_RPC_ERROR": "infra",
+    "INVALID_SIZE": "other",
 }
 
 CONFIDENCE_WEIGHTS = {
@@ -47,7 +48,7 @@ def calculate_confidence(
     freshness_score: float = 1.0,
     adapter_reliability: float = 1.0,
 ) -> float:
-    """Calculate confidence score for an opportunity."""
+    """Calculate confidence score."""
     qf = max(0.0, min(1.0, float(quote_fetch_rate)))
     qg = max(0.0, min(1.0, float(quote_gate_pass_rate)))
     rpc = max(0.0, min(1.0, float(rpc_success_rate)))
@@ -89,7 +90,6 @@ class RPCHealthMetrics:
         return self.total_latency_ms // self.rpc_success_count
 
     def record_rpc_call(self, success: bool, latency_ms: Union[int, float] = 0) -> None:
-        """Record an RPC call result."""
         latency_int = int(latency_ms)
         if success:
             self.rpc_success_count += 1
@@ -130,7 +130,6 @@ def map_error_to_gate_category(reject_reason: str) -> str:
 
 
 def build_gate_breakdown(reject_histogram: Dict[str, int]) -> Dict[str, int]:
-    """Build gate breakdown from reject histogram."""
     breakdown = {"revert": 0, "slippage": 0, "infra": 0, "other": 0}
     for reason, count in reject_histogram.items():
         category = map_error_to_gate_category(reason)
@@ -140,15 +139,9 @@ def build_gate_breakdown(reject_histogram: Dict[str, int]) -> Dict[str, int]:
 
 
 def build_blocker_histogram(all_spreads: List[Dict[str, Any]]) -> Dict[str, int]:
-    """
-    Build execution blocker histogram from all spreads.
-    
-    STEP 4: Shows why spreads are blocked even if gates passed.
-    """
     histogram: Dict[str, int] = {}
     for spread in all_spreads:
-        blockers = spread.get("execution_blockers", [])
-        for blocker in blockers:
+        for blocker in spread.get("execution_blockers", []):
             histogram[blocker] = histogram.get(blocker, 0) + 1
     return histogram
 
@@ -178,49 +171,27 @@ def build_health_section(
     rpc_stats: Optional[Dict[str, Any]] = None,
     all_spreads: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """
-    Build health section for truth_report.
-    
-    CONSISTENCY CONTRACT (STEP 1):
-    - quote_fetch_rate: from scan_stats (computed: quotes_fetched/quotes_total)
-    - quote_gate_pass_rate: from scan_stats (computed: gates_passed/quotes_fetched)
-    - rpc_success_rate: from rpc_stats if provided, else rpc_metrics, else compute from scan_stats
-    """
     if rpc_metrics is None:
         rpc_metrics = RPCHealthMetrics()
 
     rpc_metrics.reconcile_with_rejects(reject_histogram)
 
-    sorted_rejects = sorted(
-        reject_histogram.items(),
-        key=lambda x: (-x[1], x[0])
-    )
+    sorted_rejects = sorted(reject_histogram.items(), key=lambda x: (-x[1], x[0]))
     top_rejects = [[reason, count] for reason, count in sorted_rejects[:5]]
 
     gate_breakdown = build_gate_breakdown(reject_histogram)
 
-    # STEP 1: Use scan_stats as source of truth for rates
     quotes_fetched = scan_stats.get("quotes_fetched", 0)
     quotes_total = scan_stats.get("quotes_total", 0)
     gates_passed = scan_stats.get("gates_passed", 0)
 
-    # Compute rates from scan_stats (source of truth)
-    if quotes_total > 0:
-        quote_fetch_rate = quotes_fetched / quotes_total
-    else:
-        quote_fetch_rate = scan_stats.get("quote_fetch_rate", 0.0)
+    quote_fetch_rate = quotes_fetched / quotes_total if quotes_total > 0 else 0.0
+    quote_gate_pass_rate = gates_passed / quotes_fetched if quotes_fetched > 0 else 0.0
 
-    if quotes_fetched > 0:
-        quote_gate_pass_rate = gates_passed / quotes_fetched
-    else:
-        quote_gate_pass_rate = scan_stats.get("quote_gate_pass_rate", 0.0)
-
-    # RPC success rate: prefer rpc_stats (from RPCClient), fallback to rpc_metrics
     if rpc_stats and rpc_stats.get("total_requests", 0) > 0:
         rpc_success_rate = rpc_stats.get("success_rate", 0.0)
         rpc_total_requests = rpc_stats.get("total_requests", 0)
         rpc_failed_requests = rpc_stats.get("total_failure", 0)
-        # Estimate avg latency from rpc_metrics if available
         rpc_avg_latency_ms = rpc_metrics.avg_latency_ms
     else:
         rpc_success_rate = rpc_metrics.rpc_success_rate
@@ -250,7 +221,6 @@ def build_health_section(
         "gate_breakdown": gate_breakdown,
     }
 
-    # STEP 4: Add blocker histogram
     if all_spreads:
         health["blocker_histogram"] = build_blocker_histogram(all_spreads)
 
@@ -269,25 +239,15 @@ def _get_execution_blockers(
     opp: Dict[str, Any],
     execution_disabled: bool = False,
 ) -> List[str]:
-    """
-    Determine execution blockers for opportunity.
-    
-    CONSISTENCY CONTRACT (STEP 3):
-    - If opp already has execution_blockers, PRESERVE them
-    - Only add computed blockers if not already present
-    """
-    # STEP 3: Preserve existing blockers from scan
     existing_blockers = opp.get("execution_blockers", [])
     if existing_blockers:
-        return list(existing_blockers)  # Return as-is from scan
+        return list(existing_blockers)
 
-    # Compute blockers if not present
     blockers = []
 
     if run_mode == "SMOKE_SIMULATOR":
         blockers.append("SMOKE_MODE_NO_EXECUTION")
 
-    # If execution globally disabled (M4), add blocker
     if execution_disabled:
         blockers.append("EXECUTION_DISABLED_M4")
 
@@ -297,6 +257,14 @@ def _get_execution_blockers(
             blockers.append("NOT_PROFITABLE")
     except Exception:
         blockers.append("INVALID_PNL")
+
+    # STEP 3: Check for zero amounts
+    try:
+        amount_in = opp.get("amount_in_numeraire", "0")
+        if Decimal(str(amount_in)) <= 0:
+            blockers.append("INVALID_SIZE")
+    except:
+        pass
 
     confidence = opp.get("confidence", 0.0)
     if confidence < 0.5:
@@ -309,7 +277,6 @@ def _get_execution_blockers(
 
 
 def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
-    """Deterministic sort key for opportunities."""
     try:
         net_pnl = Decimal(str(opp.get("net_pnl_usdc", "0")))
     except Exception:
@@ -324,13 +291,7 @@ def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
     confidence = float(opp.get("confidence", 0.0))
     spread_id = opp.get("spread_id", "zzz")
 
-    return (
-        -is_profitable,
-        -net_pnl,
-        -net_bps,
-        -confidence,
-        spread_id,
-    )
+    return (-is_profitable, -net_pnl, -net_bps, -confidence, spread_id)
 
 
 def rank_opportunities(opportunities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -339,8 +300,6 @@ def rank_opportunities(opportunities: List[Dict[str, Any]]) -> List[Dict[str, An
 
 @dataclass
 class TruthReport:
-    """Truth report for a scan cycle. Schema contract 3.0.0."""
-
     timestamp: str = ""
     mode: str = "REGISTRY"
     run_mode: str = "SMOKE_SIMULATOR"
@@ -395,30 +354,15 @@ def build_truth_report(
     dexes_passed_gates: Optional[Set[str]] = None,
     rpc_stats: Optional[Dict[str, Any]] = None,
 ) -> TruthReport:
-    """
-    Build truth report with CONSISTENT metrics from scan_stats.
-    
-    CONSISTENCY CONTRACT:
-    - health metrics MUST match scan_stats
-    - top_opportunities MUST preserve execution_blockers from all_spreads
-    - If execution_ready_count == 0, NO opportunity can be is_execution_ready=True
-    """
-    # Check if execution is disabled globally
     execution_ready_count = scan_stats.get("execution_ready_count", 0)
     execution_disabled = (execution_ready_count == 0)
 
     health = build_health_section(
-        scan_stats,
-        reject_histogram,
-        rpc_metrics,
-        configured_dex_ids,
-        dexes_with_quotes,
-        dexes_passed_gates,
-        rpc_stats=rpc_stats,
-        all_spreads=all_spreads,
+        scan_stats, reject_histogram, rpc_metrics,
+        configured_dex_ids, dexes_with_quotes, dexes_passed_gates,
+        rpc_stats=rpc_stats, all_spreads=all_spreads,
     )
 
-    # STEP 2 & 3: Build top_opportunities from all_spreads with preserved blockers
     normalized_opps = []
     source_spreads = all_spreads if all_spreads else opportunities
 
@@ -429,16 +373,13 @@ def build_truth_report(
         except Exception:
             is_profitable = False
 
-        # Get blockers - preserve from source or compute
         blockers = _get_execution_blockers(run_mode, opp, execution_disabled)
 
-        # CONSISTENCY: if execution_ready_count == 0, force is_execution_ready = False
         is_execution_ready = opp.get("is_execution_ready", False)
-        if execution_disabled:
-            is_execution_ready = False
-        if blockers:
+        if execution_disabled or blockers:
             is_execution_ready = False
 
+        # STEP 2: Preserve pool_buy, pool_sell from source
         normalized_opp = {
             "spread_id": opp.get("spread_id", "unknown"),
             "opportunity_id": opp.get("opportunity_id") or opp.get("spread_id", "unknown"),
@@ -449,8 +390,9 @@ def build_truth_report(
             "token_in": opp.get("token_in") or "unknown",
             "token_out": opp.get("token_out") or "unknown",
             "chain_id": opp.get("chain_id", 0),
+            # STEP 3: Preserve amount fields
             "amount_in_numeraire": opp.get("amount_in_numeraire") or opp.get("amount_in") or "0",
-            "amount_out_numeraire": opp.get("amount_out_numeraire") or opp.get("amount_out") or "0",
+            "amount_out_numeraire": opp.get("amount_out_buy_numeraire") or opp.get("amount_out_numeraire") or opp.get("amount_out") or "0",
             "net_pnl_usdc": pnl_usdc,
             "net_pnl_bps": opp.get("net_pnl_bps", "0.00"),
             "confidence": opp.get("confidence", 0.0),
@@ -462,7 +404,6 @@ def build_truth_report(
 
         normalized_opps.append(normalized_opp)
 
-    # RANKING CONTRACT: deterministic sort
     ranked_opps = rank_opportunities(normalized_opps)
     top_opps = ranked_opps[:10]
 
@@ -480,6 +421,7 @@ def build_truth_report(
         "quotes_fetched": scan_stats.get("quotes_fetched", 0),
         "quotes_total": scan_stats.get("quotes_total", 0),
         "gates_passed": scan_stats.get("gates_passed", 0),
+        "dexes_active": scan_stats.get("dexes_active", 0),
     }
 
     revalidation = {
@@ -527,7 +469,6 @@ def build_truth_report(
 
 
 def print_truth_report(report: TruthReport) -> None:
-    """Print truth report to console."""
     print("\n" + "=" * 60)
     print("TRUTH REPORT")
     print("=" * 60)
@@ -540,43 +481,26 @@ def print_truth_report(report: TruthReport) -> None:
     qf_pct = health.get("quote_fetch_rate", 0) * 100
     gate_pass = health.get("quote_gate_pass_rate", 0) * 100
     print(f"RPC: {rpc_pct:.1f}% success ({health.get('rpc_total_requests', 0)} requests)")
-    print(f"Quotes: {health.get('quotes_fetched', 0)}/{health.get('quotes_total', 0)} fetched ({qf_pct:.1f}%)")
+    print(f"Quotes: {health.get('quotes_fetched', 0)}/{health.get('quotes_total', 0)} ({qf_pct:.1f}%)")
     print(f"Gates: {health.get('gates_passed', 0)} passed ({gate_pass:.1f}%)")
-
-    breakdown = health.get("gate_breakdown", {})
-    if breakdown:
-        print(f"  Gate breakdown: revert={breakdown.get('revert', 0)}, "
-              f"slippage={breakdown.get('slippage', 0)}, infra={breakdown.get('infra', 0)}")
-
-    blocker_hist = health.get("blocker_histogram", {})
-    if blocker_hist:
-        print(f"  Blocker histogram: {blocker_hist}")
-
-    print(f"Coverage: {health.get('chains_active', 0)} chains, "
-          f"{health.get('dexes_active', 0)} DEXes, {health.get('pools_scanned', 0)} pools")
-
-    print("\nTop reject reasons:")
-    for reason, count in health.get("top_reject_reasons", []):
-        print(f"  {reason}: {count}")
+    print(f"DEXes active: {health.get('dexes_active', 0)}")
 
     print("\n--- STATS ---")
     stats = report.stats
-    print(f"Spreads: {stats.get('spread_ids_total', 0)} total, "
-          f"{stats.get('spread_ids_profitable', 0)} profitable")
+    print(f"Spreads: {stats.get('spread_ids_total', 0)} total, {stats.get('spread_ids_profitable', 0)} profitable")
     print(f"Execution ready: {stats.get('execution_ready_count', 0)}")
-    print(f"Blocked: {stats.get('blocked_spreads', 0)}")
 
     print("\n--- TOP OPPORTUNITIES ---")
     if not report.top_opportunities:
         print("  (none)")
     for i, opp in enumerate(report.top_opportunities[:5], 1):
         ready = "🟢" if opp.get("is_execution_ready") else "🔴"
+        dex_buy = opp.get("dex_buy", "?")
+        dex_sell = opp.get("dex_sell", "?")
+        cross = "→" if dex_buy != dex_sell else "="
         blockers = opp.get("execution_blockers", [])
         blocker_str = f" [{', '.join(blockers[:2])}]" if blockers else ""
-        print(f"  {i}. {ready} {opp.get('token_in')}->{opp.get('token_out')} "
+        print(f"  {i}. {ready} {dex_buy}{cross}{dex_sell} "
               f"${opp.get('net_pnl_usdc')} ({opp.get('net_pnl_bps')} bps){blocker_str}")
 
-    print("\n--- PNL ---")
-    cpnl = report.cumulative_pnl
-    print(f"Total: {cpnl.get('total_bps', 0)} bps (${cpnl.get('total_usdc', '0.000000')})")
     print("=" * 60 + "\n")
