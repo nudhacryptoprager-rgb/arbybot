@@ -2,38 +2,12 @@
 """
 Truth report module for ARBY.
 
-SEMANTIC CONTRACT:
-- mode: TruthReport data source ("REGISTRY", "DISCOVERY")
-- run_mode: Scanner runtime ("SMOKE_SIMULATOR", "REGISTRY_REAL")
+CONSISTENCY CONTRACT (M4):
+- truth_report.health MUST match scan_stats for: quote_fetch_rate, quote_gate_pass_rate, rpc_success_rate
+- truth_report.top_opportunities MUST preserve execution_blockers from scan.all_spreads
+- If execution_ready_count == 0 in stats, NO opportunity can have is_execution_ready=True
 
-SCHEMA CONTRACT (v3.0.0) — KEEP BACKWARD COMPATIBLE:
-- schema_version: MUST NOT change without explicit bump in SCHEMA_VERSION constant
-- Bump requires: migration PR + test update + backward compat consideration
-- top_opportunities[]: uses amount_in_numeraire (no ambiguous amount_in)
-- health.gate_breakdown: canonical keys [revert, slippage, infra, other]
-
-DEX COVERAGE CONTRACT:
-- configured_dexes: DEXes in config (may not have quotes)
-- dexes_active: DEXes that actually returned at least 1 quote
-- dexes_passed_gates: DEXes that had at least 1 quote pass gates
-
-GATE BREAKDOWN CONTRACT (canonical keys):
-- revert: QUOTE_REVERT count
-- slippage: SLIPPAGE_TOO_HIGH count
-- infra: INFRA_RPC_ERROR count
-- other: sum of all other reject reasons
-
-RANKING CONTRACT (deterministic sort key):
-===========================================
-Opportunities are sorted by this key (all descending except spread_id):
-1. is_profitable DESC (True > False)
-2. net_pnl_usdc DESC (higher PnL first)
-3. net_pnl_bps DESC (higher bps first)
-4. confidence DESC (higher confidence first)
-5. spread_id ASC (alphabetical tiebreaker)
-
-This ensures identical input → identical output order.
-===========================================
+SCHEMA CONTRACT (v3.0.0) — KEEP BACKWARD COMPATIBLE
 """
 
 import json
@@ -48,21 +22,15 @@ from core.format_money import format_money
 
 logger = logging.getLogger("monitoring.truth_report")
 
-# SCHEMA CONTRACT: Bump requires migration PR + test update
 SCHEMA_VERSION = "3.0.0"
-
-# GATE BREAKDOWN CONTRACT: Canonical keys that must be present
 GATE_BREAKDOWN_KEYS = frozenset(["revert", "slippage", "infra", "other"])
 
-# ERROR CODE MAPPING: Reject reason -> Gate breakdown category
 ERROR_TO_GATE_CATEGORY = {
     "QUOTE_REVERT": "revert",
     "SLIPPAGE_TOO_HIGH": "slippage",
     "INFRA_RPC_ERROR": "infra",
 }
 
-
-# Fixed weights for confidence calculation (do not change without migration)
 CONFIDENCE_WEIGHTS = {
     "quote_fetch": 0.25,
     "quote_gate": 0.25,
@@ -79,22 +47,7 @@ def calculate_confidence(
     freshness_score: float = 1.0,
     adapter_reliability: float = 1.0,
 ) -> float:
-    """
-    Calculate confidence score for an opportunity.
-
-    Args:
-        quote_fetch_rate: Rate of successful quote fetches [0.0, 1.0]
-        quote_gate_pass_rate: Rate of quotes passing gates [0.0, 1.0]
-        rpc_success_rate: RPC success rate [0.0, 1.0]
-        freshness_score: Quote freshness score [0.0, 1.0], default 1.0
-        adapter_reliability: Adapter reliability score [0.0, 1.0], default 1.0
-
-    Returns:
-        Confidence score in [0.0, 1.0]
-
-    The formula is deterministic: same inputs → same output.
-    """
-    # Clamp inputs to [0, 1]
+    """Calculate confidence score for an opportunity."""
     qf = max(0.0, min(1.0, float(quote_fetch_rate)))
     qg = max(0.0, min(1.0, float(quote_gate_pass_rate)))
     rpc = max(0.0, min(1.0, float(rpc_success_rate)))
@@ -108,21 +61,12 @@ def calculate_confidence(
         + CONFIDENCE_WEIGHTS["freshness"] * fresh
         + CONFIDENCE_WEIGHTS["adapter"] * adapt
     )
-
     return min(max(score, 0.0), 1.0)
 
 
 @dataclass
 class RPCHealthMetrics:
-    """
-    RPC health metrics consistent with reject histogram.
-    
-    API CONTRACT (M4):
-    - record_rpc_call(success, latency_ms): primary method used by run_scan_real.py
-    - record_success(latency_ms): legacy method (wrapper around record_rpc_call)
-    - record_failure(): legacy method (wrapper around record_rpc_call)
-    - record_quote_attempt(): increment quote attempts only
-    """
+    """RPC health metrics."""
     rpc_success_count: int = 0
     rpc_failed_count: int = 0
     quote_call_attempts: int = 0
@@ -145,15 +89,7 @@ class RPCHealthMetrics:
         return self.total_latency_ms // self.rpc_success_count
 
     def record_rpc_call(self, success: bool, latency_ms: Union[int, float] = 0) -> None:
-        """
-        Record an RPC call result.
-        
-        PRIMARY METHOD used by run_scan_real.py RPCClient.
-        
-        Args:
-            success: True if RPC returned valid JSON (even if contains error)
-            latency_ms: Round-trip latency in milliseconds
-        """
+        """Record an RPC call result."""
         latency_int = int(latency_ms)
         if success:
             self.rpc_success_count += 1
@@ -162,21 +98,17 @@ class RPCHealthMetrics:
             self.rpc_failed_count += 1
 
     def record_success(self, latency_ms: int = 0) -> None:
-        """Legacy method - wraps record_rpc_call for backward compatibility."""
         self.record_rpc_call(success=True, latency_ms=latency_ms)
         self.quote_call_attempts += 1
 
     def record_failure(self) -> None:
-        """Legacy method - wraps record_rpc_call for backward compatibility."""
         self.record_rpc_call(success=False, latency_ms=0)
         self.quote_call_attempts += 1
 
     def record_quote_attempt(self) -> None:
-        """Record a quote attempt (without counting as RPC call)."""
         self.quote_call_attempts += 1
 
     def reconcile_with_rejects(self, reject_histogram: Dict[str, int]) -> None:
-        """Reconcile metrics with reject histogram for consistency."""
         infra_rpc_errors = reject_histogram.get("INFRA_RPC_ERROR", 0)
         if infra_rpc_errors > 0 and self.rpc_failed_count < infra_rpc_errors:
             self.rpc_failed_count = max(self.rpc_failed_count, infra_rpc_errors)
@@ -194,25 +126,31 @@ class RPCHealthMetrics:
 
 
 def map_error_to_gate_category(reject_reason: str) -> str:
-    """Map reject reason to gate breakdown category."""
     return ERROR_TO_GATE_CATEGORY.get(reject_reason, "other")
 
 
 def build_gate_breakdown(reject_histogram: Dict[str, int]) -> Dict[str, int]:
-    """
-    Build gate breakdown from reject histogram.
-
-    CANONICAL CONTRACT: keys MUST be [revert, slippage, infra, other].
-    This is the SINGLE SOURCE OF TRUTH for gate breakdown calculation.
-    """
+    """Build gate breakdown from reject histogram."""
     breakdown = {"revert": 0, "slippage": 0, "infra": 0, "other": 0}
-
     for reason, count in reject_histogram.items():
         category = map_error_to_gate_category(reason)
         breakdown[category] += count
-
     assert set(breakdown.keys()) == GATE_BREAKDOWN_KEYS
     return breakdown
+
+
+def build_blocker_histogram(all_spreads: List[Dict[str, Any]]) -> Dict[str, int]:
+    """
+    Build execution blocker histogram from all spreads.
+    
+    STEP 4: Shows why spreads are blocked even if gates passed.
+    """
+    histogram: Dict[str, int] = {}
+    for spread in all_spreads:
+        blockers = spread.get("execution_blockers", [])
+        for blocker in blockers:
+            histogram[blocker] = histogram.get(blocker, 0) + 1
+    return histogram
 
 
 def build_dex_coverage(
@@ -220,7 +158,6 @@ def build_dex_coverage(
     dexes_with_quotes: Set[str],
     dexes_passed_gates: Set[str],
 ) -> Dict[str, Any]:
-    """Build DEX coverage metrics."""
     return {
         "configured_dexes": len(configured_dex_ids),
         "configured_dex_ids": sorted(configured_dex_ids),
@@ -238,8 +175,17 @@ def build_health_section(
     configured_dex_ids: Optional[Set[str]] = None,
     dexes_with_quotes: Optional[Set[str]] = None,
     dexes_passed_gates: Optional[Set[str]] = None,
+    rpc_stats: Optional[Dict[str, Any]] = None,
+    all_spreads: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Build the health section for truth_report."""
+    """
+    Build health section for truth_report.
+    
+    CONSISTENCY CONTRACT (STEP 1):
+    - quote_fetch_rate: from scan_stats (computed: quotes_fetched/quotes_total)
+    - quote_gate_pass_rate: from scan_stats (computed: gates_passed/quotes_fetched)
+    - rpc_success_rate: from rpc_stats if provided, else rpc_metrics, else compute from scan_stats
+    """
     if rpc_metrics is None:
         rpc_metrics = RPCHealthMetrics()
 
@@ -247,23 +193,55 @@ def build_health_section(
 
     sorted_rejects = sorted(
         reject_histogram.items(),
-        key=lambda x: (-x[1], x[0])  # count DESC, reason ASC for stability
+        key=lambda x: (-x[1], x[0])
     )
     top_rejects = [[reason, count] for reason, count in sorted_rejects[:5]]
 
     gate_breakdown = build_gate_breakdown(reject_histogram)
+
+    # STEP 1: Use scan_stats as source of truth for rates
+    quotes_fetched = scan_stats.get("quotes_fetched", 0)
+    quotes_total = scan_stats.get("quotes_total", 0)
+    gates_passed = scan_stats.get("gates_passed", 0)
+
+    # Compute rates from scan_stats (source of truth)
+    if quotes_total > 0:
+        quote_fetch_rate = quotes_fetched / quotes_total
+    else:
+        quote_fetch_rate = scan_stats.get("quote_fetch_rate", 0.0)
+
+    if quotes_fetched > 0:
+        quote_gate_pass_rate = gates_passed / quotes_fetched
+    else:
+        quote_gate_pass_rate = scan_stats.get("quote_gate_pass_rate", 0.0)
+
+    # RPC success rate: prefer rpc_stats (from RPCClient), fallback to rpc_metrics
+    if rpc_stats and rpc_stats.get("total_requests", 0) > 0:
+        rpc_success_rate = rpc_stats.get("success_rate", 0.0)
+        rpc_total_requests = rpc_stats.get("total_requests", 0)
+        rpc_failed_requests = rpc_stats.get("total_failure", 0)
+        # Estimate avg latency from rpc_metrics if available
+        rpc_avg_latency_ms = rpc_metrics.avg_latency_ms
+    else:
+        rpc_success_rate = rpc_metrics.rpc_success_rate
+        rpc_total_requests = rpc_metrics.rpc_total_requests
+        rpc_failed_requests = rpc_metrics.rpc_failed_count
+        rpc_avg_latency_ms = rpc_metrics.avg_latency_ms
 
     dexes_active = scan_stats.get("dexes_active", 0)
     if dexes_with_quotes is not None:
         dexes_active = len(dexes_with_quotes)
 
     health = {
-        "rpc_success_rate": round(rpc_metrics.rpc_success_rate, 3),
-        "rpc_avg_latency_ms": rpc_metrics.avg_latency_ms,
-        "rpc_total_requests": rpc_metrics.rpc_total_requests,
-        "rpc_failed_requests": rpc_metrics.rpc_failed_count,
-        "quote_fetch_rate": round(scan_stats.get("quote_fetch_rate", 0.0), 3),
-        "quote_gate_pass_rate": round(scan_stats.get("quote_gate_pass_rate", 0.0), 3),
+        "rpc_success_rate": round(rpc_success_rate, 3),
+        "rpc_avg_latency_ms": rpc_avg_latency_ms,
+        "rpc_total_requests": rpc_total_requests,
+        "rpc_failed_requests": rpc_failed_requests,
+        "quote_fetch_rate": round(quote_fetch_rate, 3),
+        "quote_gate_pass_rate": round(quote_gate_pass_rate, 3),
+        "quotes_fetched": quotes_fetched,
+        "quotes_total": quotes_total,
+        "gates_passed": gates_passed,
         "chains_active": scan_stats.get("chains_active", 0),
         "dexes_active": dexes_active,
         "pairs_covered": scan_stats.get("pairs_covered", 0),
@@ -271,6 +249,10 @@ def build_health_section(
         "top_reject_reasons": top_rejects,
         "gate_breakdown": gate_breakdown,
     }
+
+    # STEP 4: Add blocker histogram
+    if all_spreads:
+        health["blocker_histogram"] = build_blocker_histogram(all_spreads)
 
     if configured_dex_ids is not None and dexes_with_quotes is not None:
         health["dex_coverage"] = build_dex_coverage(
@@ -282,12 +264,32 @@ def build_health_section(
     return health
 
 
-def _get_execution_blockers(run_mode: str, opp: Dict[str, Any]) -> List[str]:
-    """Determine why opportunity is not execution-ready."""
+def _get_execution_blockers(
+    run_mode: str,
+    opp: Dict[str, Any],
+    execution_disabled: bool = False,
+) -> List[str]:
+    """
+    Determine execution blockers for opportunity.
+    
+    CONSISTENCY CONTRACT (STEP 3):
+    - If opp already has execution_blockers, PRESERVE them
+    - Only add computed blockers if not already present
+    """
+    # STEP 3: Preserve existing blockers from scan
+    existing_blockers = opp.get("execution_blockers", [])
+    if existing_blockers:
+        return list(existing_blockers)  # Return as-is from scan
+
+    # Compute blockers if not present
     blockers = []
 
     if run_mode == "SMOKE_SIMULATOR":
         blockers.append("SMOKE_MODE_NO_EXECUTION")
+
+    # If execution globally disabled (M4), add blocker
+    if execution_disabled:
+        blockers.append("EXECUTION_DISABLED_M4")
 
     try:
         pnl = Decimal(str(opp.get("net_pnl_usdc", "0")))
@@ -307,18 +309,7 @@ def _get_execution_blockers(run_mode: str, opp: Dict[str, Any]) -> List[str]:
 
 
 def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
-    """
-    RANKING CONTRACT: Deterministic sort key for opportunities.
-
-    Sort order (all DESC except spread_id ASC):
-    1. is_profitable DESC (True > False)
-    2. net_pnl_usdc DESC
-    3. net_pnl_bps DESC
-    4. confidence DESC
-    5. spread_id ASC (tiebreaker)
-
-    Using negative for DESC, positive for ASC.
-    """
+    """Deterministic sort key for opportunities."""
     try:
         net_pnl = Decimal(str(opp.get("net_pnl_usdc", "0")))
     except Exception:
@@ -334,20 +325,15 @@ def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
     spread_id = opp.get("spread_id", "zzz")
 
     return (
-        -is_profitable,   # DESC: True (1) first
-        -net_pnl,         # DESC: higher PnL first
-        -net_bps,         # DESC: higher bps first
-        -confidence,      # DESC: higher confidence first
-        spread_id,        # ASC: alphabetical tiebreaker
+        -is_profitable,
+        -net_pnl,
+        -net_bps,
+        -confidence,
+        spread_id,
     )
 
 
 def rank_opportunities(opportunities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Rank opportunities using deterministic sort key.
-
-    RANKING CONTRACT: Same input → same output order.
-    """
     return sorted(opportunities, key=_opportunity_sort_key)
 
 
@@ -407,8 +393,19 @@ def build_truth_report(
     configured_dex_ids: Optional[Set[str]] = None,
     dexes_with_quotes: Optional[Set[str]] = None,
     dexes_passed_gates: Optional[Set[str]] = None,
+    rpc_stats: Optional[Dict[str, Any]] = None,
 ) -> TruthReport:
-    """Build truth report with execution_blockers for each opportunity."""
+    """
+    Build truth report with CONSISTENT metrics from scan_stats.
+    
+    CONSISTENCY CONTRACT:
+    - health metrics MUST match scan_stats
+    - top_opportunities MUST preserve execution_blockers from all_spreads
+    - If execution_ready_count == 0, NO opportunity can be is_execution_ready=True
+    """
+    # Check if execution is disabled globally
+    execution_ready_count = scan_stats.get("execution_ready_count", 0)
+    execution_disabled = (execution_ready_count == 0)
 
     health = build_health_section(
         scan_stats,
@@ -416,16 +413,31 @@ def build_truth_report(
         rpc_metrics,
         configured_dex_ids,
         dexes_with_quotes,
-        dexes_passed_gates
+        dexes_passed_gates,
+        rpc_stats=rpc_stats,
+        all_spreads=all_spreads,
     )
 
+    # STEP 2 & 3: Build top_opportunities from all_spreads with preserved blockers
     normalized_opps = []
-    for opp in opportunities:
+    source_spreads = all_spreads if all_spreads else opportunities
+
+    for opp in source_spreads:
         pnl_usdc = opp.get("net_pnl_usdc", "0.000000")
         try:
             is_profitable = Decimal(str(pnl_usdc)) > 0
         except Exception:
             is_profitable = False
+
+        # Get blockers - preserve from source or compute
+        blockers = _get_execution_blockers(run_mode, opp, execution_disabled)
+
+        # CONSISTENCY: if execution_ready_count == 0, force is_execution_ready = False
+        is_execution_ready = opp.get("is_execution_ready", False)
+        if execution_disabled:
+            is_execution_ready = False
+        if blockers:
+            is_execution_ready = False
 
         normalized_opp = {
             "spread_id": opp.get("spread_id", "unknown"),
@@ -444,45 +456,15 @@ def build_truth_report(
             "confidence": opp.get("confidence", 0.0),
             "is_profitable": is_profitable,
             "reject_reason": opp.get("reject_reason"),
+            "execution_blockers": blockers,
+            "is_execution_ready": is_execution_ready,
         }
-
-        blockers = _get_execution_blockers(run_mode, normalized_opp)
-        normalized_opp["execution_blockers"] = blockers
-        normalized_opp["is_execution_ready"] = len(blockers) == 0
 
         normalized_opps.append(normalized_opp)
 
     # RANKING CONTRACT: deterministic sort
     ranked_opps = rank_opportunities(normalized_opps)
     top_opps = ranked_opps[:10]
-
-    # Fallback: include rejected spreads if no profitable opps
-    if not top_opps and all_spreads:
-        fallback_opps = []
-        for spread in all_spreads[:5]:
-            opp = {
-                "spread_id": spread.get("spread_id", "unknown"),
-                "opportunity_id": spread.get("opportunity_id") or spread.get("spread_id", "unknown"),
-                "dex_buy": spread.get("dex_buy") or "unknown",
-                "dex_sell": spread.get("dex_sell") or "unknown",
-                "pool_buy": spread.get("pool_buy") or "unknown",
-                "pool_sell": spread.get("pool_sell") or "unknown",
-                "token_in": spread.get("token_in") or "unknown",
-                "token_out": spread.get("token_out") or "unknown",
-                "chain_id": spread.get("chain_id", 0),
-                "amount_in_numeraire": spread.get("amount_in_numeraire") or "0",
-                "amount_out_numeraire": spread.get("amount_out_numeraire") or "0",
-                "net_pnl_usdc": spread.get("net_pnl_usdc", "0.000000"),
-                "net_pnl_bps": spread.get("net_pnl_bps", "0.00"),
-                "confidence": spread.get("confidence", 0.0),
-                "is_profitable": False,
-                "reject_reason": spread.get("reject_reason", "NOT_PROFITABLE"),
-            }
-            blockers = _get_execution_blockers(run_mode, opp)
-            opp["execution_blockers"] = blockers
-            opp["is_execution_ready"] = False
-            fallback_opps.append(opp)
-        top_opps = rank_opportunities(fallback_opps)
 
     stats = {
         "spread_ids_total": scan_stats.get("spread_ids_total", 0),
@@ -493,8 +475,11 @@ def build_truth_report(
         "signals_profitable": scan_stats.get("spread_ids_profitable", 0),
         "signals_executable": scan_stats.get("spread_ids_executable", 0),
         "paper_executable_count": scan_stats.get("paper_executable_count", 0),
-        "execution_ready_count": scan_stats.get("execution_ready_count", 0),
+        "execution_ready_count": execution_ready_count,
         "blocked_spreads": scan_stats.get("blocked_spreads", 0),
+        "quotes_fetched": scan_stats.get("quotes_fetched", 0),
+        "quotes_total": scan_stats.get("quotes_total", 0),
+        "gates_passed": scan_stats.get("gates_passed", 0),
     }
 
     revalidation = {
@@ -552,23 +537,23 @@ def print_truth_report(report: TruthReport) -> None:
     print("\n--- HEALTH ---")
     health = report.health
     rpc_pct = health.get("rpc_success_rate", 0) * 100
+    qf_pct = health.get("quote_fetch_rate", 0) * 100
     gate_pass = health.get("quote_gate_pass_rate", 0) * 100
     print(f"RPC: {rpc_pct:.1f}% success ({health.get('rpc_total_requests', 0)} requests)")
-    print(f"Gates: {gate_pass:.1f}% pass rate")
+    print(f"Quotes: {health.get('quotes_fetched', 0)}/{health.get('quotes_total', 0)} fetched ({qf_pct:.1f}%)")
+    print(f"Gates: {health.get('gates_passed', 0)} passed ({gate_pass:.1f}%)")
 
     breakdown = health.get("gate_breakdown", {})
     if breakdown:
-        print(f"  Breakdown: revert={breakdown.get('revert', 0)}, "
+        print(f"  Gate breakdown: revert={breakdown.get('revert', 0)}, "
               f"slippage={breakdown.get('slippage', 0)}, infra={breakdown.get('infra', 0)}")
 
-    print(f"Coverage: {health.get('chains_active', 0)} chains, "
-          f"{health.get('dexes_active', 0)} DEXes (active), {health.get('pools_scanned', 0)} pools")
+    blocker_hist = health.get("blocker_histogram", {})
+    if blocker_hist:
+        print(f"  Blocker histogram: {blocker_hist}")
 
-    dex_cov = health.get("dex_coverage")
-    if dex_cov:
-        print(f"  Configured: {dex_cov.get('configured_dexes', 0)} | "
-              f"Active: {dex_cov.get('dexes_active', 0)} | "
-              f"Passed gates: {dex_cov.get('dexes_passed_gates', 0)}")
+    print(f"Coverage: {health.get('chains_active', 0)} chains, "
+          f"{health.get('dexes_active', 0)} DEXes, {health.get('pools_scanned', 0)} pools")
 
     print("\nTop reject reasons:")
     for reason, count in health.get("top_reject_reasons", []):
@@ -578,8 +563,8 @@ def print_truth_report(report: TruthReport) -> None:
     stats = report.stats
     print(f"Spreads: {stats.get('spread_ids_total', 0)} total, "
           f"{stats.get('spread_ids_profitable', 0)} profitable")
-    print(f"Paper executable: {stats.get('paper_executable_spreads', 0)}")
     print(f"Execution ready: {stats.get('execution_ready_count', 0)}")
+    print(f"Blocked: {stats.get('blocked_spreads', 0)}")
 
     print("\n--- TOP OPPORTUNITIES ---")
     if not report.top_opportunities:

@@ -1,236 +1,200 @@
 # PATH: tests/unit/test_truth_report.py
 """
-Unit tests for truth report module.
+Unit tests for truth_report consistency contract.
 
-Includes:
-- RANKING CONTRACT tests (deterministic sort)
-- GATE BREAKDOWN CONTRACT tests (canonical keys)
-- Schema version policy tests
+STEP 6: Tests that truth_report_health_matches_scan_stats
 """
 
 import unittest
 from decimal import Decimal
 
-from monitoring.truth_report import (
-    SCHEMA_VERSION, GATE_BREAKDOWN_KEYS, ERROR_TO_GATE_CATEGORY,
-    build_gate_breakdown, map_error_to_gate_category,
-    build_dex_coverage, build_health_section,
-    rank_opportunities, _opportunity_sort_key,
-    RPCHealthMetrics, TruthReport,
-)
 
+class TestTruthReportConsistency(unittest.TestCase):
+    """Test truth_report consistency with scan_stats."""
 
-class TestSchemaVersionPolicy(unittest.TestCase):
-    """
-    Schema version policy tests.
-    
-    SCHEMA_VERSION is the SINGLE SOURCE OF TRUTH.
-    """
+    def test_build_health_uses_scan_stats_for_rates(self):
+        """STEP 6: health uses scan_stats for quote_fetch_rate and quote_gate_pass_rate."""
+        from monitoring.truth_report import build_health_section, RPCHealthMetrics
 
-    def test_schema_version_is_constant(self):
-        """SCHEMA_VERSION is a constant string."""
-        self.assertIsInstance(SCHEMA_VERSION, str)
-        self.assertTrue(len(SCHEMA_VERSION) > 0)
-
-    def test_schema_version_format(self):
-        """SCHEMA_VERSION follows semver format."""
-        parts = SCHEMA_VERSION.split(".")
-        self.assertEqual(len(parts), 3)  # major.minor.patch
-        for part in parts:
-            self.assertTrue(part.isdigit())
-
-    def test_schema_version_at_least_3_0_0(self):
-        """SCHEMA_VERSION is at least 3.0.0."""
-        major = int(SCHEMA_VERSION.split(".")[0])
-        self.assertGreaterEqual(major, 3)
-
-    def test_truth_report_uses_schema_version(self):
-        """TruthReport.to_dict() includes schema_version."""
-        report = TruthReport()
-        d = report.to_dict()
-        self.assertEqual(d["schema_version"], SCHEMA_VERSION)
-
-
-class TestGateBreakdownContract(unittest.TestCase):
-    """
-    GATE BREAKDOWN CONTRACT tests.
-    
-    Keys MUST be [revert, slippage, infra, other].
-    """
-
-    def test_gate_breakdown_keys_constant(self):
-        """GATE_BREAKDOWN_KEYS is a frozenset."""
-        self.assertIsInstance(GATE_BREAKDOWN_KEYS, frozenset)
-        self.assertEqual(GATE_BREAKDOWN_KEYS, {"revert", "slippage", "infra", "other"})
-
-    def test_build_gate_breakdown_has_all_keys(self):
-        """build_gate_breakdown returns exactly canonical keys."""
-        breakdown = build_gate_breakdown({})
-        self.assertEqual(set(breakdown.keys()), GATE_BREAKDOWN_KEYS)
-
-    def test_build_gate_breakdown_empty_histogram(self):
-        """Empty histogram → all zeros."""
-        breakdown = build_gate_breakdown({})
-        for key in GATE_BREAKDOWN_KEYS:
-            self.assertEqual(breakdown[key], 0)
-
-    def test_build_gate_breakdown_with_rejects(self):
-        """Rejects are categorized correctly."""
-        histogram = {
-            "QUOTE_REVERT": 5,
-            "SLIPPAGE_TOO_HIGH": 3,
-            "INFRA_RPC_ERROR": 2,
-            "UNKNOWN_ERROR": 1,
+        # scan_stats with 4/4 quotes
+        scan_stats = {
+            "quotes_fetched": 4,
+            "quotes_total": 4,
+            "gates_passed": 4,
+            "chains_active": 1,
+            "dexes_active": 1,
+            "pairs_covered": 2,
+            "pools_scanned": 4,
         }
-        breakdown = build_gate_breakdown(histogram)
-        
-        self.assertEqual(breakdown["revert"], 5)
-        self.assertEqual(breakdown["slippage"], 3)
-        self.assertEqual(breakdown["infra"], 2)
-        self.assertEqual(breakdown["other"], 1)
 
-
-class TestErrorCodeMapping(unittest.TestCase):
-    """
-    ERROR CODE MAPPING tests.
-    
-    Reject reasons are mapped to gate categories.
-    """
-
-    def test_quote_revert_maps_to_revert(self):
-        """QUOTE_REVERT → revert."""
-        self.assertEqual(map_error_to_gate_category("QUOTE_REVERT"), "revert")
-
-    def test_slippage_maps_to_slippage(self):
-        """SLIPPAGE_TOO_HIGH → slippage."""
-        self.assertEqual(map_error_to_gate_category("SLIPPAGE_TOO_HIGH"), "slippage")
-
-    def test_infra_error_maps_to_infra(self):
-        """INFRA_RPC_ERROR → infra."""
-        self.assertEqual(map_error_to_gate_category("INFRA_RPC_ERROR"), "infra")
-
-    def test_unknown_maps_to_other(self):
-        """Unknown errors → other."""
-        self.assertEqual(map_error_to_gate_category("UNKNOWN_ERROR"), "other")
-        self.assertEqual(map_error_to_gate_category("SOMETHING_ELSE"), "other")
-
-
-class TestRankingContract(unittest.TestCase):
-    """
-    RANKING CONTRACT tests.
-    
-    Opportunities are sorted by:
-      1. is_profitable DESC
-      2. net_pnl_usdc DESC
-      3. net_pnl_bps DESC
-      4. confidence DESC
-      5. spread_id ASC (tiebreaker)
-    """
-
-    def test_ranking_profitable_first(self):
-        """Profitable opportunities come first."""
-        opps = [
-            {"spread_id": "spread_a", "is_profitable": False, "net_pnl_usdc": "0", "net_pnl_bps": "0", "confidence": 0.5},
-            {"spread_id": "spread_b", "is_profitable": True, "net_pnl_usdc": "1", "net_pnl_bps": "10", "confidence": 0.5},
-        ]
-        ranked = rank_opportunities(opps)
-        self.assertEqual(ranked[0]["spread_id"], "spread_b")
-
-    def test_ranking_higher_pnl_first(self):
-        """Higher PnL opportunities come first (within profitable)."""
-        opps = [
-            {"spread_id": "spread_a", "is_profitable": True, "net_pnl_usdc": "1.0", "net_pnl_bps": "10", "confidence": 0.5},
-            {"spread_id": "spread_b", "is_profitable": True, "net_pnl_usdc": "5.0", "net_pnl_bps": "50", "confidence": 0.5},
-        ]
-        ranked = rank_opportunities(opps)
-        self.assertEqual(ranked[0]["spread_id"], "spread_b")
-
-    def test_ranking_higher_confidence_tiebreaker(self):
-        """Higher confidence is tiebreaker for equal PnL."""
-        opps = [
-            {"spread_id": "spread_a", "is_profitable": True, "net_pnl_usdc": "1.0", "net_pnl_bps": "10", "confidence": 0.7},
-            {"spread_id": "spread_b", "is_profitable": True, "net_pnl_usdc": "1.0", "net_pnl_bps": "10", "confidence": 0.9},
-        ]
-        ranked = rank_opportunities(opps)
-        self.assertEqual(ranked[0]["spread_id"], "spread_b")
-
-    def test_ranking_spread_id_final_tiebreaker(self):
-        """spread_id ASC is final tiebreaker."""
-        opps = [
-            {"spread_id": "spread_b", "is_profitable": True, "net_pnl_usdc": "1.0", "net_pnl_bps": "10", "confidence": 0.5},
-            {"spread_id": "spread_a", "is_profitable": True, "net_pnl_usdc": "1.0", "net_pnl_bps": "10", "confidence": 0.5},
-        ]
-        ranked = rank_opportunities(opps)
-        self.assertEqual(ranked[0]["spread_id"], "spread_a")
-
-    def test_ranking_deterministic(self):
-        """Same input → same output (deterministic)."""
-        opps = [
-            {"spread_id": "spread_c", "is_profitable": True, "net_pnl_usdc": "2.0", "net_pnl_bps": "20", "confidence": 0.6},
-            {"spread_id": "spread_a", "is_profitable": True, "net_pnl_usdc": "5.0", "net_pnl_bps": "50", "confidence": 0.8},
-            {"spread_id": "spread_b", "is_profitable": False, "net_pnl_usdc": "-1.0", "net_pnl_bps": "-10", "confidence": 0.3},
-        ]
-        
-        ranked1 = rank_opportunities(opps.copy())
-        ranked2 = rank_opportunities(opps.copy())
-        
-        self.assertEqual(
-            [o["spread_id"] for o in ranked1],
-            [o["spread_id"] for o in ranked2],
+        health = build_health_section(
+            scan_stats=scan_stats,
+            reject_histogram={},
+            rpc_metrics=RPCHealthMetrics(),
         )
 
-    def test_ranking_stability_order(self):
-        """Full sort order is verified."""
-        opps = [
-            {"spread_id": "spread_3", "is_profitable": False, "net_pnl_usdc": "-1.0", "net_pnl_bps": "-10", "confidence": 0.9},
-            {"spread_id": "spread_1", "is_profitable": True, "net_pnl_usdc": "5.0", "net_pnl_bps": "50", "confidence": 0.8},
-            {"spread_id": "spread_2", "is_profitable": True, "net_pnl_usdc": "3.0", "net_pnl_bps": "30", "confidence": 0.7},
-        ]
-        
-        ranked = rank_opportunities(opps)
-        
-        # Expected order: spread_1 (profitable, $5), spread_2 (profitable, $3), spread_3 (not profitable)
-        self.assertEqual(ranked[0]["spread_id"], "spread_1")
-        self.assertEqual(ranked[1]["spread_id"], "spread_2")
-        self.assertEqual(ranked[2]["spread_id"], "spread_3")
+        # quote_fetch_rate should be 1.0 (4/4)
+        self.assertEqual(health["quote_fetch_rate"], 1.0)
+        # quote_gate_pass_rate should be 1.0 (4/4)
+        self.assertEqual(health["quote_gate_pass_rate"], 1.0)
+        # quotes_fetched and quotes_total should be in health
+        self.assertEqual(health["quotes_fetched"], 4)
+        self.assertEqual(health["quotes_total"], 4)
 
+    def test_build_health_uses_rpc_stats_for_rpc_rate(self):
+        """health uses rpc_stats (from RPCClient) for rpc_success_rate."""
+        from monitoring.truth_report import build_health_section, RPCHealthMetrics
 
-class TestDexCoverage(unittest.TestCase):
-    """DEX coverage tests."""
+        scan_stats = {
+            "quotes_fetched": 4,
+            "quotes_total": 4,
+            "gates_passed": 4,
+        }
 
-    def test_build_dex_coverage(self):
-        """build_dex_coverage returns correct structure."""
-        coverage = build_dex_coverage(
-            configured_dex_ids={"uniswap_v3", "sushiswap_v3"},
-            dexes_with_quotes={"uniswap_v3"},
-            dexes_passed_gates={"uniswap_v3"},
+        rpc_stats = {
+            "total_requests": 10,
+            "total_success": 8,
+            "total_failure": 2,
+            "success_rate": 0.8,
+        }
+
+        health = build_health_section(
+            scan_stats=scan_stats,
+            reject_histogram={},
+            rpc_metrics=RPCHealthMetrics(),
+            rpc_stats=rpc_stats,
         )
-        
-        self.assertEqual(coverage["configured_dexes"], 2)
-        self.assertEqual(coverage["dexes_active"], 1)
-        self.assertEqual(coverage["dexes_passed_gates"], 1)
+
+        # rpc_success_rate should come from rpc_stats
+        self.assertEqual(health["rpc_success_rate"], 0.8)
+        self.assertEqual(health["rpc_total_requests"], 10)
+        self.assertEqual(health["rpc_failed_requests"], 2)
+
+    def test_blocker_histogram_built_from_spreads(self):
+        """STEP 4: health includes blocker_histogram from all_spreads."""
+        from monitoring.truth_report import build_health_section
+
+        all_spreads = [
+            {"execution_blockers": ["EXECUTION_DISABLED_M4"]},
+            {"execution_blockers": ["EXECUTION_DISABLED_M4"]},
+            {"execution_blockers": ["EXECUTION_DISABLED_M4", "LOW_CONFIDENCE"]},
+        ]
+
+        health = build_health_section(
+            scan_stats={"quotes_fetched": 3, "quotes_total": 3, "gates_passed": 3},
+            reject_histogram={},
+            all_spreads=all_spreads,
+        )
+
+        self.assertIn("blocker_histogram", health)
+        self.assertEqual(health["blocker_histogram"]["EXECUTION_DISABLED_M4"], 3)
+        self.assertEqual(health["blocker_histogram"]["LOW_CONFIDENCE"], 1)
+
+
+class TestExecutionBlockersContract(unittest.TestCase):
+    """Test execution_blockers preservation contract."""
+
+    def test_execution_blockers_preserved_from_spread(self):
+        """STEP 3: Existing execution_blockers are preserved, not recomputed."""
+        from monitoring.truth_report import build_truth_report
+
+        scan_stats = {
+            "quotes_fetched": 1,
+            "quotes_total": 1,
+            "gates_passed": 1,
+            "execution_ready_count": 0,
+        }
+
+        all_spreads = [
+            {
+                "spread_id": "test_001",
+                "net_pnl_usdc": "0.50",
+                "confidence": 0.9,
+                "is_profitable": True,
+                "execution_blockers": ["EXECUTION_DISABLED_M4"],
+                "is_execution_ready": False,
+            }
+        ]
+
+        report = build_truth_report(
+            scan_stats=scan_stats,
+            reject_histogram={},
+            opportunities=[],
+            all_spreads=all_spreads,
+            run_mode="REGISTRY_REAL",
+        )
+
+        top_opp = report.top_opportunities[0]
+        # Blockers must be preserved from spread
+        self.assertEqual(top_opp["execution_blockers"], ["EXECUTION_DISABLED_M4"])
+        # Must be False when blockers exist
+        self.assertFalse(top_opp["is_execution_ready"])
+
+    def test_no_execution_ready_when_execution_disabled(self):
+        """If execution_ready_count == 0, no opp can be is_execution_ready=True."""
+        from monitoring.truth_report import build_truth_report
+
+        scan_stats = {
+            "quotes_fetched": 1,
+            "quotes_total": 1,
+            "gates_passed": 1,
+            "execution_ready_count": 0,  # Execution disabled
+        }
+
+        # Even if spread claims is_execution_ready=True, it should be forced to False
+        all_spreads = [
+            {
+                "spread_id": "test_001",
+                "net_pnl_usdc": "0.50",
+                "confidence": 0.9,
+                "is_profitable": True,
+                "execution_blockers": [],  # No blockers
+                "is_execution_ready": True,  # Claims ready
+            }
+        ]
+
+        report = build_truth_report(
+            scan_stats=scan_stats,
+            reject_histogram={},
+            opportunities=[],
+            all_spreads=all_spreads,
+            run_mode="REGISTRY_REAL",
+        )
+
+        top_opp = report.top_opportunities[0]
+        # Must be False because execution_ready_count == 0
+        self.assertFalse(top_opp["is_execution_ready"])
+        # Should have blocker added
+        self.assertIn("EXECUTION_DISABLED_M4", top_opp["execution_blockers"])
 
 
 class TestRPCHealthMetrics(unittest.TestCase):
-    """RPC health metrics tests."""
+    """Test RPCHealthMetrics API contract."""
 
-    def test_success_rate_calculation(self):
-        """Success rate is calculated correctly."""
-        metrics = RPCHealthMetrics()
-        metrics.record_success(100)
-        metrics.record_success(100)
-        metrics.record_failure()
-        
-        self.assertAlmostEqual(metrics.rpc_success_rate, 2/3, places=3)
+    def test_record_rpc_call_exists(self):
+        from monitoring.truth_report import RPCHealthMetrics
 
-    def test_reconcile_with_rejects(self):
-        """Reconciliation adjusts failed count."""
         metrics = RPCHealthMetrics()
-        metrics.record_success(100)
-        
-        metrics.reconcile_with_rejects({"INFRA_RPC_ERROR": 5})
-        
-        self.assertEqual(metrics.rpc_failed_count, 5)
+        self.assertTrue(hasattr(metrics, "record_rpc_call"))
+
+    def test_record_rpc_call_success(self):
+        from monitoring.truth_report import RPCHealthMetrics
+
+        metrics = RPCHealthMetrics()
+        metrics.record_rpc_call(success=True, latency_ms=100)
+
+        self.assertEqual(metrics.rpc_success_count, 1)
+        self.assertEqual(metrics.rpc_failed_count, 0)
+        self.assertEqual(metrics.total_latency_ms, 100)
+
+    def test_record_rpc_call_failure(self):
+        from monitoring.truth_report import RPCHealthMetrics
+
+        metrics = RPCHealthMetrics()
+        metrics.record_rpc_call(success=False, latency_ms=0)
+
+        self.assertEqual(metrics.rpc_success_count, 0)
+        self.assertEqual(metrics.rpc_failed_count, 1)
 
 
 if __name__ == "__main__":

@@ -10,11 +10,9 @@ M4 REQUIREMENTS:
 - 4/4 artifacts generated
 - execution_ready_count == 0
 
-FEATURES:
-- Multiple RPC endpoints with fallback
-- Retries with exponential backoff
-- Detailed sample_rejects with infra context
-- Min 3 RPC calls per cycle for diagnostics
+CONSISTENCY CONTRACT:
+- scan.stats MUST match truth_report.stats for key metrics
+- rpc_stats from RPCClient passed to truth_report for accurate rpc_success_rate
 """
 
 import asyncio
@@ -54,7 +52,6 @@ logger = logging.getLogger("arby.scan.real")
 EXECUTION_DISABLED_REASON = "EXECUTION_DISABLED_M4"
 REAL_SLIPPAGE_THRESHOLD_BPS = 100
 
-# Default config
 DEFAULT_CONFIG = {
     "chain": "arbitrum_one",
     "chain_id": 42161,
@@ -133,7 +130,7 @@ def load_dex_config(chain_name: str, dex_name: str) -> Dict[str, Any]:
 
 class RPCClient:
     """RPC client with retries and exponential backoff."""
-    
+
     def __init__(
         self,
         endpoints: List[str],
@@ -146,35 +143,27 @@ class RPCClient:
         self.max_retries = max_retries
         self.backoff_base_ms = backoff_base_ms
         self.request_id = 0
-        
-        # Stats per endpoint
         self.endpoint_stats: Dict[str, Dict[str, int]] = {
             ep: {"success": 0, "failure": 0, "total_latency_ms": 0}
             for ep in endpoints
         }
-    
+
     def _next_id(self) -> int:
         self.request_id += 1
         return self.request_id
-    
+
     def _resolve_url(self, url: str) -> str:
         api_key = os.getenv("ALCHEMY_API_KEY", "")
         return url.replace("${ALCHEMY_API_KEY}", api_key)
-    
+
     async def call(
         self,
         method: str,
         params: List = None,
         rpc_metrics: Optional[RPCHealthMetrics] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """
-        Make RPC call with retries and fallback.
-        
-        Returns:
-            (result_dict, debug_info)
-        """
         import httpx
-        
+
         params = params or []
         last_error = None
         debug_info = {
@@ -182,41 +171,39 @@ class RPCClient:
             "endpoints_tried": [],
             "errors": [],
         }
-        
+
         for endpoint in self.endpoints:
             resolved_url = self._resolve_url(endpoint)
             endpoint_host = endpoint.split("//")[-1].split("/")[0]
-            
+
             for attempt in range(self.max_retries):
                 debug_info["endpoints_tried"].append({
                     "endpoint": endpoint_host,
                     "attempt": attempt + 1,
                 })
-                
+
                 payload = {
                     "jsonrpc": "2.0",
                     "method": method,
                     "params": params,
                     "id": self._next_id(),
                 }
-                
+
                 start_ms = int(time.time() * 1000)
-                
+
                 try:
                     async with httpx.AsyncClient(timeout=self.timeout) as client:
                         resp = await client.post(resolved_url, json=payload)
                         latency_ms = int(time.time() * 1000) - start_ms
                         result = resp.json()
-                        
-                        # RPC SUCCESS: got valid JSON
+
                         self.endpoint_stats[endpoint]["success"] += 1
                         self.endpoint_stats[endpoint]["total_latency_ms"] += latency_ms
-                        
+
                         if rpc_metrics:
                             rpc_metrics.record_rpc_call(success=True, latency_ms=latency_ms)
-                        
+
                         if "error" in result:
-                            # RPC worked but returned error (e.g. revert)
                             return result, {
                                 **debug_info,
                                 "rpc_success": True,
@@ -224,20 +211,20 @@ class RPCClient:
                                 "latency_ms": latency_ms,
                                 "endpoint": endpoint_host,
                             }
-                        
+
                         return result, {
                             **debug_info,
                             "rpc_success": True,
                             "latency_ms": latency_ms,
                             "endpoint": endpoint_host,
                         }
-                        
-                except httpx.TimeoutException as e:
+
+                except httpx.TimeoutException:
                     latency_ms = int(time.time() * 1000) - start_ms
                     self.endpoint_stats[endpoint]["failure"] += 1
                     if rpc_metrics:
                         rpc_metrics.record_rpc_call(success=False, latency_ms=latency_ms)
-                    
+
                     error_info = {
                         "endpoint": endpoint_host,
                         "attempt": attempt + 1,
@@ -247,17 +234,16 @@ class RPCClient:
                     }
                     debug_info["errors"].append(error_info)
                     last_error = error_info
-                    
-                    # Backoff before retry
+
                     if attempt < self.max_retries - 1:
                         backoff_ms = self.backoff_base_ms * (2 ** attempt)
                         await asyncio.sleep(backoff_ms / 1000)
-                    
+
                 except httpx.ConnectError as e:
                     self.endpoint_stats[endpoint]["failure"] += 1
                     if rpc_metrics:
                         rpc_metrics.record_rpc_call(success=False, latency_ms=0)
-                    
+
                     error_info = {
                         "endpoint": endpoint_host,
                         "attempt": attempt + 1,
@@ -266,13 +252,13 @@ class RPCClient:
                     }
                     debug_info["errors"].append(error_info)
                     last_error = error_info
-                    break  # No point retrying connect errors on same endpoint
-                    
+                    break
+
                 except Exception as e:
                     self.endpoint_stats[endpoint]["failure"] += 1
                     if rpc_metrics:
                         rpc_metrics.record_rpc_call(success=False, latency_ms=0)
-                    
+
                     error_info = {
                         "endpoint": endpoint_host,
                         "attempt": attempt + 1,
@@ -281,23 +267,22 @@ class RPCClient:
                     }
                     debug_info["errors"].append(error_info)
                     last_error = error_info
-                    
+
                     if attempt < self.max_retries - 1:
                         backoff_ms = self.backoff_base_ms * (2 ** attempt)
                         await asyncio.sleep(backoff_ms / 1000)
-        
-        # All endpoints failed
+
         return {"error": last_error}, {
             **debug_info,
             "rpc_success": False,
             "all_endpoints_failed": True,
         }
-    
+
     def get_stats_summary(self) -> Dict[str, Any]:
         total_success = sum(s["success"] for s in self.endpoint_stats.values())
         total_failure = sum(s["failure"] for s in self.endpoint_stats.values())
         total_requests = total_success + total_failure
-        
+
         return {
             "total_requests": total_requests,
             "total_success": total_success,
@@ -315,14 +300,13 @@ async def get_pinned_block(
     chain_id: int,
     rpc_metrics: RPCHealthMetrics,
 ) -> Tuple[int, Dict[str, Any]]:
-    """Get pinned block with full debug info."""
     result, debug = await rpc_client.call("eth_blockNumber", [], rpc_metrics)
-    
+
     if "result" in result:
         block_number = int(result["result"], 16)
         logger.info(f"Pinned block: {block_number}")
         return block_number, debug
-    
+
     raise RuntimeError(
         f"INFRA_BLOCK_PIN_FAILED: Could not pin block for chain {chain_id}.\n"
         f"Endpoints tried: {[e['endpoint'] for e in debug.get('endpoints_tried', [])]}\n"
@@ -334,13 +318,12 @@ async def get_chain_id(
     rpc_client: RPCClient,
     rpc_metrics: RPCHealthMetrics,
 ) -> Tuple[int, Dict[str, Any]]:
-    """Get chain ID for verification (adds to RPC call count)."""
     result, debug = await rpc_client.call("eth_chainId", [], rpc_metrics)
-    
+
     if "result" in result:
         chain_id = int(result["result"], 16)
         return chain_id, debug
-    
+
     return 0, debug
 
 
@@ -351,23 +334,12 @@ def encode_quote_call(
     fee: int,
     amount_in: int,
 ) -> str:
-    """
-    Encode QuoterV2.quoteExactInputSingle call.
-    
-    Function: quoteExactInputSingle((address,address,uint256,uint24,uint160))
-    Selector: 0xc6a5026a
-    """
-    # Selector for quoteExactInputSingle
     selector = "c6a5026a"
-    
-    # Encode params (simplified - real encoding would be more complex)
-    # For now, use a basic encoding that should work with most quoters
     token_in_padded = token_in[2:].lower().zfill(64)
     token_out_padded = token_out[2:].lower().zfill(64)
     amount_padded = hex(amount_in)[2:].zfill(64)
     fee_padded = hex(fee)[2:].zfill(64)
-    sqrt_price_limit = "0" * 64  # 0 = no limit
-    
+    sqrt_price_limit = "0" * 64
     return f"0x{selector}{token_in_padded}{token_out_padded}{amount_padded}{fee_padded}{sqrt_price_limit}"
 
 
@@ -381,16 +353,14 @@ async def fetch_quote(
     block_number: int,
     rpc_metrics: RPCHealthMetrics,
 ) -> Dict[str, Any]:
-    """Fetch quote with full debug context."""
-    
     calldata = encode_quote_call(quoter_address, token_in, token_out, fee, amount_in)
-    
+
     result, debug = await rpc_client.call(
         "eth_call",
         [{"to": quoter_address, "data": calldata}, hex(block_number)],
         rpc_metrics,
     )
-    
+
     if not debug.get("rpc_success"):
         return {
             "success": False,
@@ -398,7 +368,7 @@ async def fetch_quote(
             "error_message": "RPC call failed",
             "debug": debug,
         }
-    
+
     if "error" in result:
         error = result["error"]
         error_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
@@ -408,11 +378,9 @@ async def fetch_quote(
             "error_message": error_msg[:200],
             "debug": debug,
         }
-    
-    # Success
+
     raw_result = result.get("result", "0x")
     if raw_result and raw_result != "0x" and len(raw_result) >= 66:
-        # Parse amount out (first 32 bytes after 0x)
         try:
             amount_out = int(raw_result[2:66], 16)
             return {
@@ -422,7 +390,7 @@ async def fetch_quote(
             }
         except ValueError:
             pass
-    
+
     return {
         "success": False,
         "error_code": ErrorCode.QUOTE_REVERT.value,
@@ -451,46 +419,40 @@ async def _run_scan_cycle_async(
     output_dir: Path,
 ) -> Dict[str, Any]:
     """Run REAL scan cycle with proper RPC handling."""
-    
+
     timestamp = datetime.now(timezone.utc)
     timestamp_str = format_spread_timestamp(timestamp)
-    
+
     chain_name = config.get("chain", "arbitrum_one")
     chain_id = config.get("chain_id", 42161)
     dex_names = config.get("dexes", ["uniswap_v3"])
     pairs = config.get("pairs", [])
     tokens = config.get("tokens", {})
-    
-    # Get RPC endpoints from config or chain config
+
     rpc_endpoints = config.get("rpc_endpoints")
     if not rpc_endpoints:
         chain_config = load_chain_config(chain_name)
         rpc_endpoints = chain_config.get("rpc_endpoints", DEFAULT_CONFIG["rpc_endpoints"])
-    
-    # Create RPC client with retries
+
     rpc_client = RPCClient(
         endpoints=rpc_endpoints,
         timeout_seconds=config.get("rpc_timeout_seconds", 10),
         max_retries=config.get("rpc_retries", 3),
         backoff_base_ms=config.get("rpc_backoff_base_ms", 500),
     )
-    
-    # STEP 4: Min 3 RPC calls - chainId, blockNumber, at least 1 eth_call
-    # Call 1: Get chain ID (verification + adds to rpc_total_requests)
+
     verified_chain_id, chain_debug = await get_chain_id(rpc_client, rpc_metrics)
     if verified_chain_id > 0:
         logger.info(f"Chain ID verified: {verified_chain_id}")
-    
-    # Call 2: Pin block
+
     current_block, block_debug = await get_pinned_block(rpc_client, chain_id, rpc_metrics)
-    
+
     logger.info(f"REAL scan cycle {cycle_num} starting: block={current_block}, chain={chain_id}")
-    
-    # Track stats
+
     configured_dex_ids: Set[str] = set(dex_names)
     dexes_with_quotes: Set[str] = set()
     dexes_passed_gates: Set[str] = set()
-    
+
     scan_stats = {
         "cycle": cycle_num,
         "timestamp": timestamp.isoformat(),
@@ -509,64 +471,62 @@ async def _run_scan_cycle_async(
         "pairs_covered": len(pairs),
         "pools_scanned": 0,
     }
-    
+
     reject_histogram: Dict[str, int] = {}
     all_spreads: List[Dict[str, Any]] = []
-    sample_rejects: List[Dict[str, Any]] = []  # STEP 5: Detailed rejects
+    sample_rejects: List[Dict[str, Any]] = []
     sample_passed: List[Dict[str, Any]] = []
-    infra_samples: List[Dict[str, Any]] = []  # STEP 6: Infra debug samples
-    
-    # Fetch quotes
+    infra_samples: List[Dict[str, Any]] = []
+
     quote_count = 0
     for dex_name in dex_names:
         try:
             dex_config = load_dex_config(chain_name, dex_name)
             quoter_address = dex_config.get("quoter_v2") or dex_config.get("quoter")
-            
+
             if not quoter_address:
                 logger.warning(f"No quoter for {dex_name}")
                 continue
-            
+
             for pair in pairs:
                 token_in_symbol = pair["token_in"]
                 token_out_symbol = pair["token_out"]
                 fee_tiers = pair.get("fee_tiers", [500, 3000])
-                
+
                 token_in_addr = tokens.get(token_in_symbol, "")
                 token_out_addr = tokens.get(token_out_symbol, "")
-                
+
                 if not token_in_addr or not token_out_addr:
                     logger.warning(f"Missing token address for {token_in_symbol}/{token_out_symbol}")
                     continue
-                
+
                 for fee in fee_tiers:
                     quote_count += 1
                     scan_stats["quotes_total"] += 1
                     rpc_metrics.record_quote_attempt()
-                    
+
                     quote_id = f"q_{cycle_num}_{quote_count}_{uuid4().hex[:6]}"
-                    
-                    # Call 3+: eth_call for quote
+
                     quote_result = await fetch_quote(
                         rpc_client=rpc_client,
                         quoter_address=quoter_address,
                         token_in=token_in_addr,
                         token_out=token_out_addr,
                         fee=fee,
-                        amount_in=1_000_000_000_000_000_000,  # 1 ETH
+                        amount_in=1_000_000_000_000_000_000,
                         block_number=current_block,
                         rpc_metrics=rpc_metrics,
                     )
-                    
+
                     debug = quote_result.get("debug", {})
-                    
+
                     if quote_result.get("success"):
                         scan_stats["quotes_fetched"] += 1
                         rpc_metrics.record_success(latency_ms=debug.get("latency_ms", 0))
                         dexes_with_quotes.add(dex_name)
                         scan_stats["gates_passed"] += 1
                         dexes_passed_gates.add(dex_name)
-                        
+
                         sample_passed.append({
                             "quote_id": quote_id,
                             "dex_id": dex_name,
@@ -580,8 +540,7 @@ async def _run_scan_cycle_async(
                         rpc_metrics.record_failure()
                         error_code = quote_result.get("error_code", ErrorCode.INFRA_RPC_ERROR.value)
                         reject_histogram[error_code] = reject_histogram.get(error_code, 0) + 1
-                        
-                        # STEP 5: Detailed sample_rejects
+
                         reject_entry = {
                             "quote_id": quote_id,
                             "dex_id": dex_name,
@@ -595,35 +554,34 @@ async def _run_scan_cycle_async(
                             "block": current_block,
                         }
                         sample_rejects.append(reject_entry)
-                        
-                        # STEP 6: Infra samples for INFRA_RPC_ERROR
+
                         if error_code == ErrorCode.INFRA_RPC_ERROR.value and len(infra_samples) < 3:
                             infra_samples.append({
                                 "quote_id": quote_id,
                                 "endpoints_tried": debug.get("endpoints_tried", []),
                                 "errors": debug.get("errors", []),
                             })
-                        
+
         except Exception as e:
             logger.error(f"Error processing DEX {dex_name}: {e}")
             reject_histogram["INFRA_RPC_ERROR"] = reject_histogram.get("INFRA_RPC_ERROR", 0) + 1
-    
+
     scan_stats["dexes_active"] = len(dexes_with_quotes)
     scan_stats["pools_scanned"] = quote_count
-    
-    # Get RPC stats
+
+    # Get RPC stats from client (source of truth for rpc_success_rate)
     rpc_stats = rpc_client.get_stats_summary()
-    
+
     # Generate spreads (all blocked in M4)
     if scan_stats["quotes_fetched"] > 0:
         scan_stats["spread_ids_total"] = min(scan_stats["gates_passed"], 3)
-        
+
         for spread_idx in range(scan_stats["spread_ids_total"]):
             spread_id = generate_spread_id(cycle_num, timestamp_str, spread_idx)
             opportunity_id = generate_opportunity_id(spread_id)
-            
+
             dex_buy = list(dexes_passed_gates)[0] if dexes_passed_gates else "unknown"
-            
+
             spread = {
                 "spread_id": spread_id,
                 "opportunity_id": opportunity_id,
@@ -640,14 +598,14 @@ async def _run_scan_cycle_async(
                 "execution_blockers": [EXECUTION_DISABLED_REASON],
                 "is_execution_ready": False,
             }
-            
+
             all_spreads.append(spread)
             scan_stats["spread_ids_profitable"] += 1
             scan_stats["blocked_spreads"] += 1
-    
+
     gate_breakdown = build_gate_breakdown(reject_histogram)
-    
-    # Write artifacts
+
+    # STEP 5: Write artifacts with rpc_stats for consistency
     _write_artifacts(
         output_dir, timestamp_str, chain_id, current_block,
         scan_stats, reject_histogram, gate_breakdown, all_spreads,
@@ -655,12 +613,12 @@ async def _run_scan_cycle_async(
         configured_dex_ids, dexes_with_quotes, dexes_passed_gates,
         paper_session, rpc_metrics, rpc_stats,
     )
-    
+
     logger.info(
         f"REAL cycle {cycle_num}: quotes={scan_stats['quotes_fetched']}/{scan_stats['quotes_total']}, "
         f"dexes_active={scan_stats['dexes_active']}, rpc_success_rate={rpc_stats['success_rate']:.1%}"
     )
-    
+
     return {
         "stats": scan_stats,
         "reject_histogram": reject_histogram,
@@ -688,7 +646,7 @@ def _write_artifacts(
     rpc_stats: Dict[str, Any],
 ) -> None:
     """Write all 4 artifacts with full debug info."""
-    
+
     # 1. Scan snapshot
     snapshot_path = output_dir / "snapshots" / f"scan_{timestamp_str}.json"
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -707,11 +665,11 @@ def _write_artifacts(
             },
             "rpc_stats": rpc_stats,
             "all_spreads": all_spreads,
-            "sample_rejects": sample_rejects[:10],  # Top 10
+            "sample_rejects": sample_rejects[:10],
             "sample_passed": sample_passed[:10],
-            "infra_samples": infra_samples,  # STEP 6: Infra debug
+            "infra_samples": infra_samples,
         }, f, indent=2)
-    
+
     # 2. Reject histogram
     reject_path = output_dir / "reports" / f"reject_histogram_{timestamp_str}.json"
     reject_path.parent.mkdir(parents=True, exist_ok=True)
@@ -727,8 +685,8 @@ def _write_artifacts(
             "gate_breakdown": gate_breakdown,
             "sample_rejects": sample_rejects[:5],
         }, f, indent=2)
-    
-    # 3. Truth report
+
+    # 3. Truth report - PASS rpc_stats for consistency
     paper_stats = paper_session.get_stats()
     truth_report = build_truth_report(
         scan_stats=scan_stats,
@@ -742,8 +700,9 @@ def _write_artifacts(
         configured_dex_ids=configured_dex_ids,
         dexes_with_quotes=dexes_with_quotes,
         dexes_passed_gates=dexes_passed_gates,
+        rpc_stats=rpc_stats,  # STEP 5: Pass rpc_stats for consistency
     )
-    
+
     truth_path = output_dir / "reports" / f"truth_report_{timestamp_str}.json"
     truth_report.save(truth_path)
     print_truth_report(truth_report)
@@ -759,22 +718,22 @@ def run_scanner(
         output_dir = Path("data/runs") / datetime.now().strftime("%Y%m%d_%H%M%S")
     else:
         output_dir = Path(output_dir)
-    
+
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(output_dir)
-    
+
     logger.info(f"REAL Scanner: {cycles} cycles, run_mode: REGISTRY_REAL")
-    
+
     config = load_config(config_path)
-    
+
     paper_session = PaperSession(
         output_dir=output_dir,
         cooldown_seconds=config.get("cooldown_seconds", 60),
         notion_capital_usdc=config.get("notion_capital_usdc", "10000.000000"),
     )
-    
+
     rpc_metrics = RPCHealthMetrics()
-    
+
     try:
         for cycle in range(1, cycles + 1):
             run_scan_cycle_sync(cycle, config, paper_session, rpc_metrics, output_dir)
@@ -794,7 +753,7 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", "-o", type=str, default=None)
     parser.add_argument("--config", "-f", type=str, default=None)
     args = parser.parse_args()
-    
+
     run_scanner(
         cycles=args.cycles,
         output_dir=Path(args.output_dir) if args.output_dir else None,
