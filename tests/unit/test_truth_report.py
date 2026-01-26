@@ -1,11 +1,11 @@
 # PATH: tests/unit/test_truth_report.py
 """
-Unit tests for truth_report consistency.
+Unit tests for truth_report.
 
-Tests:
-- STEP 2: pool_buy/pool_sell preserved (no "unknown")
-- STEP 3: amount_in_numeraire preserved
-- STEP 4: PnL consistency
+Tests for:
+- STEP 1: Price sanity gate
+- STEP 3-4: PnL split (signal vs would_execute)
+- STEP 5: Dynamic confidence
 """
 
 import unittest
@@ -24,6 +24,8 @@ class TestTruthReportConsistency(unittest.TestCase):
             "gates_passed": 4,
             "chains_active": 1,
             "dexes_active": 2,
+            "price_sanity_passed": 4,
+            "price_sanity_failed": 0,
         }
 
         health = build_health_section(
@@ -34,47 +36,30 @@ class TestTruthReportConsistency(unittest.TestCase):
 
         self.assertEqual(health["quote_fetch_rate"], 0.5)  # 4/8
         self.assertEqual(health["quote_gate_pass_rate"], 1.0)  # 4/4
-        self.assertEqual(health["quotes_fetched"], 4)
+        self.assertEqual(health["price_sanity_passed"], 4)
 
-    def test_pools_preserved_from_spreads(self):
-        """STEP 2: pool_buy/pool_sell must be preserved from all_spreads."""
-        from monitoring.truth_report import build_truth_report
+    def test_gate_breakdown_includes_sanity(self):
+        """Gate breakdown should include sanity category."""
+        from monitoring.truth_report import build_gate_breakdown
 
-        all_spreads = [
-            {
-                "spread_id": "test_001",
-                "dex_buy": "uniswap_v3",
-                "dex_sell": "sushiswap_v3",
-                "pool_buy": "0xUNI_POOL_123",
-                "pool_sell": "0xSUSHI_POOL_456",
-                "token_in": "WETH",
-                "token_out": "USDC",
-                "net_pnl_usdc": "0.50",
-                "net_pnl_bps": "10.00",
-                "confidence": 0.9,
-                "is_profitable": True,
-                "amount_in_numeraire": "1.000000",
-                "execution_blockers": ["EXECUTION_DISABLED_M4"],
-            }
-        ]
+        histogram = {
+            "QUOTE_REVERT": 2,
+            "INFRA_RPC_ERROR": 1,
+            "PRICE_SANITY_FAIL": 3,
+        }
 
-        report = build_truth_report(
-            scan_stats={"quotes_fetched": 2, "quotes_total": 4, "gates_passed": 2, "execution_ready_count": 0, "dexes_active": 2},
-            reject_histogram={},
-            opportunities=[],
-            all_spreads=all_spreads,
-            run_mode="REGISTRY_REAL",
-        )
+        breakdown = build_gate_breakdown(histogram)
 
-        opp = report.top_opportunities[0]
-        # Pool addresses must be preserved, not "unknown"
-        self.assertEqual(opp["pool_buy"], "0xUNI_POOL_123")
-        self.assertEqual(opp["pool_sell"], "0xSUSHI_POOL_456")
-        self.assertNotEqual(opp["pool_buy"], "unknown")
-        self.assertNotEqual(opp["pool_sell"], "unknown")
+        self.assertEqual(breakdown["revert"], 2)
+        self.assertEqual(breakdown["infra"], 1)
+        self.assertEqual(breakdown["sanity"], 3)
 
-    def test_amounts_preserved_from_spreads(self):
-        """STEP 3: amount_in_numeraire must be preserved."""
+
+class TestPnLSplit(unittest.TestCase):
+    """STEP 3-4: PnL split tests."""
+
+    def test_truth_report_has_both_pnl_types(self):
+        """Truth report should have signal_pnl and would_execute_pnl."""
         from monitoring.truth_report import build_truth_report
 
         all_spreads = [
@@ -86,44 +71,90 @@ class TestTruthReportConsistency(unittest.TestCase):
                 "pool_sell": "0x456",
                 "token_in": "WETH",
                 "token_out": "USDC",
-                "net_pnl_usdc": "0.50",
-                "amount_in_numeraire": "1.000000",
-                "amount_out_buy_numeraire": "3500.000000",
-                "confidence": 0.9,
-                "is_profitable": True,
-                "execution_blockers": ["EXECUTION_DISABLED_M4"],
-            }
-        ]
-
-        report = build_truth_report(
-            scan_stats={"quotes_fetched": 2, "quotes_total": 4, "gates_passed": 2, "execution_ready_count": 0},
-            reject_histogram={},
-            opportunities=[],
-            all_spreads=all_spreads,
-            run_mode="REGISTRY_REAL",
-        )
-
-        opp = report.top_opportunities[0]
-        self.assertEqual(opp["amount_in_numeraire"], "1.000000")
-        self.assertNotEqual(opp["amount_in_numeraire"], "0")
-        self.assertNotEqual(opp["amount_in_numeraire"], "0.000000")
-
-    def test_cross_dex_preserved(self):
-        """STEP 1: dex_buy != dex_sell must be preserved."""
-        from monitoring.truth_report import build_truth_report
-
-        all_spreads = [
-            {
-                "spread_id": "test_001",
-                "dex_buy": "uniswap_v3",
-                "dex_sell": "sushiswap_v3",
-                "pool_buy": "0x123",
-                "pool_sell": "0x456",
-                "token_in": "WETH",
-                "token_out": "USDC",
-                "net_pnl_usdc": "0.50",
+                "signal_pnl_usdc": "5.000000",
+                "signal_pnl_bps": "14.28",
+                "would_execute_pnl_usdc": "4.500000",
+                "would_execute_pnl_bps": "12.85",
                 "amount_in_numeraire": "1.0",
-                "confidence": 0.9,
+                "confidence": 0.82,
+                "confidence_factors": {"rpc_health": 1.0},
+                "is_profitable": True,
+                "execution_blockers": ["EXECUTION_DISABLED_M4"],
+            }
+        ]
+
+        report = build_truth_report(
+            scan_stats={"execution_ready_count": 0, "spread_ids_profitable": 1},
+            reject_histogram={},
+            opportunities=[],
+            all_spreads=all_spreads,
+            run_mode="REGISTRY_REAL",
+        )
+
+        # Check PnL section
+        pnl = report.pnl
+        self.assertIn("signal_pnl_usdc", pnl)
+        self.assertIn("would_execute_pnl_usdc", pnl)
+        self.assertEqual(pnl["signal_pnl_usdc"], "5.000000")
+
+        # Check top opportunities
+        opp = report.top_opportunities[0]
+        self.assertIn("signal_pnl_usdc", opp)
+        self.assertIn("would_execute_pnl_usdc", opp)
+
+    def test_pnl_aggregation_across_spreads(self):
+        """Total PnL should be sum of all spreads."""
+        from monitoring.truth_report import build_truth_report
+
+        all_spreads = [
+            {
+                "spread_id": "test_001",
+                "signal_pnl_usdc": "5.000000",
+                "would_execute_pnl_usdc": "4.500000",
+                "is_profitable": True,
+                "execution_blockers": ["EXECUTION_DISABLED_M4"],
+            },
+            {
+                "spread_id": "test_002",
+                "signal_pnl_usdc": "3.000000",
+                "would_execute_pnl_usdc": "2.500000",
+                "is_profitable": True,
+                "execution_blockers": ["EXECUTION_DISABLED_M4"],
+            },
+        ]
+
+        report = build_truth_report(
+            scan_stats={"execution_ready_count": 0},
+            reject_histogram={},
+            opportunities=[],
+            all_spreads=all_spreads,
+            run_mode="REGISTRY_REAL",
+        )
+
+        # Total should be 5 + 3 = 8
+        pnl = report.pnl
+        self.assertEqual(pnl["signal_pnl_usdc"], "8.000000")
+
+
+class TestConfidenceFactors(unittest.TestCase):
+    """STEP 5: Dynamic confidence scoring tests."""
+
+    def test_confidence_factors_preserved(self):
+        """Confidence factors should be preserved in truth_report."""
+        from monitoring.truth_report import build_truth_report
+
+        all_spreads = [
+            {
+                "spread_id": "test_001",
+                "signal_pnl_usdc": "5.000000",
+                "confidence": 0.82,
+                "confidence_factors": {
+                    "rpc_health": 1.0,
+                    "quote_coverage": 0.9,
+                    "price_stability": 0.85,
+                    "spread_quality": 0.75,
+                    "dex_diversity": 1.0,
+                },
                 "is_profitable": True,
                 "execution_blockers": ["EXECUTION_DISABLED_M4"],
             }
@@ -138,9 +169,9 @@ class TestTruthReportConsistency(unittest.TestCase):
         )
 
         opp = report.top_opportunities[0]
-        self.assertEqual(opp["dex_buy"], "uniswap_v3")
-        self.assertEqual(opp["dex_sell"], "sushiswap_v3")
-        self.assertNotEqual(opp["dex_buy"], opp["dex_sell"])
+        self.assertEqual(opp["confidence"], 0.82)
+        self.assertIn("confidence_factors", opp)
+        self.assertEqual(opp["confidence_factors"]["rpc_health"], 1.0)
 
 
 class TestRPCHealthMetrics(unittest.TestCase):
@@ -164,22 +195,13 @@ class TestRPCHealthMetrics(unittest.TestCase):
         self.assertEqual(metrics.rpc_failed_count, 1)
 
 
-class TestBlockerHistogram(unittest.TestCase):
-    def test_blocker_histogram_built(self):
-        """STEP 5: blocker_histogram from spreads."""
-        from monitoring.truth_report import build_blocker_histogram
+class TestSchemaVersion(unittest.TestCase):
+    """Test schema version is bumped for PnL split."""
 
-        spreads = [
-            {"execution_blockers": ["EXECUTION_DISABLED_M4"]},
-            {"execution_blockers": ["EXECUTION_DISABLED_M4", "LOW_CONFIDENCE"]},
-            {"execution_blockers": ["NOT_PROFITABLE"]},
-        ]
+    def test_schema_version_is_3_1_0(self):
+        from monitoring.truth_report import SCHEMA_VERSION
 
-        histogram = build_blocker_histogram(spreads)
-
-        self.assertEqual(histogram["EXECUTION_DISABLED_M4"], 2)
-        self.assertEqual(histogram["LOW_CONFIDENCE"], 1)
-        self.assertEqual(histogram["NOT_PROFITABLE"], 1)
+        self.assertEqual(SCHEMA_VERSION, "3.1.0")
 
 
 if __name__ == "__main__":

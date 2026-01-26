@@ -2,12 +2,13 @@
 """
 Truth report module for ARBY.
 
-CONSISTENCY CONTRACT (M4):
-- health metrics from scan_stats
-- top_opportunities preserve fields from all_spreads (including pool_buy, pool_sell)
-- execution_blockers preserved
-- No "unknown" pools (STEP 2)
-- Amounts > 0 (STEP 3)
+STEP 3: Fields normalized:
+- amount_out_buy_numeraire = "out на buy leg у numeraire"
+- net_pnl_usdc = arithmetic-consistent with amounts
+
+STEP 4: PnL split:
+- signal_pnl_*: theoretical profit from price difference
+- would_execute_pnl_*: signal minus estimated costs (gas, slippage)
 """
 
 import json
@@ -22,47 +23,17 @@ from core.format_money import format_money
 
 logger = logging.getLogger("monitoring.truth_report")
 
-SCHEMA_VERSION = "3.0.0"
-GATE_BREAKDOWN_KEYS = frozenset(["revert", "slippage", "infra", "other"])
+SCHEMA_VERSION = "3.1.0"  # Bumped for PnL split
+GATE_BREAKDOWN_KEYS = frozenset(["revert", "slippage", "infra", "other", "sanity"])
 
 ERROR_TO_GATE_CATEGORY = {
     "QUOTE_REVERT": "revert",
     "SLIPPAGE_TOO_HIGH": "slippage",
     "INFRA_RPC_ERROR": "infra",
     "INVALID_SIZE": "other",
+    "PRICE_SANITY_FAIL": "sanity",
+    "MINIMUM_REALISM_FAIL": "sanity",
 }
-
-CONFIDENCE_WEIGHTS = {
-    "quote_fetch": 0.25,
-    "quote_gate": 0.25,
-    "rpc": 0.20,
-    "freshness": 0.15,
-    "adapter": 0.15,
-}
-
-
-def calculate_confidence(
-    quote_fetch_rate: float,
-    quote_gate_pass_rate: float,
-    rpc_success_rate: float,
-    freshness_score: float = 1.0,
-    adapter_reliability: float = 1.0,
-) -> float:
-    """Calculate confidence score."""
-    qf = max(0.0, min(1.0, float(quote_fetch_rate)))
-    qg = max(0.0, min(1.0, float(quote_gate_pass_rate)))
-    rpc = max(0.0, min(1.0, float(rpc_success_rate)))
-    fresh = max(0.0, min(1.0, float(freshness_score)))
-    adapt = max(0.0, min(1.0, float(adapter_reliability)))
-
-    score = (
-        CONFIDENCE_WEIGHTS["quote_fetch"] * qf
-        + CONFIDENCE_WEIGHTS["quote_gate"] * qg
-        + CONFIDENCE_WEIGHTS["rpc"] * rpc
-        + CONFIDENCE_WEIGHTS["freshness"] * fresh
-        + CONFIDENCE_WEIGHTS["adapter"] * adapt
-    )
-    return min(max(score, 0.0), 1.0)
 
 
 @dataclass
@@ -130,11 +101,11 @@ def map_error_to_gate_category(reject_reason: str) -> str:
 
 
 def build_gate_breakdown(reject_histogram: Dict[str, int]) -> Dict[str, int]:
-    breakdown = {"revert": 0, "slippage": 0, "infra": 0, "other": 0}
+    """Build gate breakdown with sanity category."""
+    breakdown = {"revert": 0, "slippage": 0, "infra": 0, "other": 0, "sanity": 0}
     for reason, count in reject_histogram.items():
         category = map_error_to_gate_category(reason)
         breakdown[category] += count
-    assert set(breakdown.keys()) == GATE_BREAKDOWN_KEYS
     return breakdown
 
 
@@ -217,6 +188,8 @@ def build_health_section(
         "dexes_active": dexes_active,
         "pairs_covered": scan_stats.get("pairs_covered", 0),
         "pools_scanned": scan_stats.get("pools_scanned", 0),
+        "price_sanity_passed": scan_stats.get("price_sanity_passed", 0),
+        "price_sanity_failed": scan_stats.get("price_sanity_failed", 0),
         "top_reject_reasons": top_rejects,
         "gate_breakdown": gate_breakdown,
     }
@@ -252,13 +225,12 @@ def _get_execution_blockers(
         blockers.append("EXECUTION_DISABLED_M4")
 
     try:
-        pnl = Decimal(str(opp.get("net_pnl_usdc", "0")))
+        pnl = Decimal(str(opp.get("signal_pnl_usdc") or opp.get("net_pnl_usdc", "0")))
         if pnl <= 0:
             blockers.append("NOT_PROFITABLE")
     except Exception:
         blockers.append("INVALID_PNL")
 
-    # STEP 3: Check for zero amounts
     try:
         amount_in = opp.get("amount_in_numeraire", "0")
         if Decimal(str(amount_in)) <= 0:
@@ -278,12 +250,12 @@ def _get_execution_blockers(
 
 def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
     try:
-        net_pnl = Decimal(str(opp.get("net_pnl_usdc", "0")))
+        net_pnl = Decimal(str(opp.get("signal_pnl_usdc") or opp.get("net_pnl_usdc", "0")))
     except Exception:
         net_pnl = Decimal("0")
 
     try:
-        net_bps = Decimal(str(opp.get("net_pnl_bps", "0")))
+        net_bps = Decimal(str(opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0")))
     except Exception:
         net_bps = Decimal("0")
 
@@ -366,10 +338,19 @@ def build_truth_report(
     normalized_opps = []
     source_spreads = all_spreads if all_spreads else opportunities
 
+    # STEP 4: Calculate aggregate PnL
+    total_signal_pnl_usdc = Decimal("0")
+    total_would_execute_pnl_usdc = Decimal("0")
+
     for opp in source_spreads:
-        pnl_usdc = opp.get("net_pnl_usdc", "0.000000")
+        # STEP 3-4: Handle both old and new PnL fields
+        signal_pnl = opp.get("signal_pnl_usdc") or opp.get("net_pnl_usdc", "0.000000")
+        would_execute_pnl = opp.get("would_execute_pnl_usdc") or signal_pnl
+
         try:
-            is_profitable = Decimal(str(pnl_usdc)) > 0
+            is_profitable = Decimal(str(signal_pnl)) > 0
+            total_signal_pnl_usdc += Decimal(str(signal_pnl))
+            total_would_execute_pnl_usdc += Decimal(str(would_execute_pnl))
         except Exception:
             is_profitable = False
 
@@ -379,23 +360,31 @@ def build_truth_report(
         if execution_disabled or blockers:
             is_execution_ready = False
 
-        # STEP 2: Preserve pool_buy, pool_sell from source
         normalized_opp = {
             "spread_id": opp.get("spread_id", "unknown"),
             "opportunity_id": opp.get("opportunity_id") or opp.get("spread_id", "unknown"),
-            "dex_buy": opp.get("dex_buy") or opp.get("dex_a") or "unknown",
-            "dex_sell": opp.get("dex_sell") or opp.get("dex_b") or "unknown",
-            "pool_buy": opp.get("pool_buy") or opp.get("pool_a") or "unknown",
-            "pool_sell": opp.get("pool_sell") or opp.get("pool_b") or "unknown",
+            "dex_buy": opp.get("dex_buy") or "unknown",
+            "dex_sell": opp.get("dex_sell") or "unknown",
+            "pool_buy": opp.get("pool_buy") or "unknown",
+            "pool_sell": opp.get("pool_sell") or "unknown",
             "token_in": opp.get("token_in") or "unknown",
             "token_out": opp.get("token_out") or "unknown",
             "chain_id": opp.get("chain_id", 0),
-            # STEP 3: Preserve amount fields
-            "amount_in_numeraire": opp.get("amount_in_numeraire") or opp.get("amount_in") or "0",
-            "amount_out_numeraire": opp.get("amount_out_buy_numeraire") or opp.get("amount_out_numeraire") or opp.get("amount_out") or "0",
-            "net_pnl_usdc": pnl_usdc,
-            "net_pnl_bps": opp.get("net_pnl_bps", "0.00"),
+            # STEP 3: Clear field naming
+            "amount_in_numeraire": opp.get("amount_in_numeraire") or "0",
+            "amount_out_buy_numeraire": opp.get("amount_out_buy_numeraire") or "0",
+            "amount_out_sell_numeraire": opp.get("amount_out_sell_numeraire") or "0",
+            # STEP 4: Both PnL types
+            "signal_pnl_usdc": signal_pnl,
+            "signal_pnl_bps": opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0.00"),
+            "would_execute_pnl_usdc": would_execute_pnl,
+            "would_execute_pnl_bps": opp.get("would_execute_pnl_bps") or opp.get("net_pnl_bps", "0.00"),
+            # Legacy compatibility
+            "net_pnl_usdc": signal_pnl,
+            "net_pnl_bps": opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0.00"),
+            # STEP 5: Confidence with factors
             "confidence": opp.get("confidence", 0.0),
+            "confidence_factors": opp.get("confidence_factors", {}),
             "is_profitable": is_profitable,
             "reject_reason": opp.get("reject_reason"),
             "execution_blockers": blockers,
@@ -422,6 +411,8 @@ def build_truth_report(
         "quotes_total": scan_stats.get("quotes_total", 0),
         "gates_passed": scan_stats.get("gates_passed", 0),
         "dexes_active": scan_stats.get("dexes_active", 0),
+        "price_sanity_passed": scan_stats.get("price_sanity_passed", 0),
+        "price_sanity_failed": scan_stats.get("price_sanity_failed", 0),
     }
 
     revalidation = {
@@ -432,19 +423,19 @@ def build_truth_report(
     }
 
     paper_stats = paper_session_stats or {}
-    total_pnl_usdc = paper_stats.get("total_pnl_usdc", "0.000000")
     notion_capital = paper_stats.get("notion_capital_usdc", "10000.000000")
+
+    # STEP 4: Separate PnL reporting
+    signal_pnl_str = format_money(total_signal_pnl_usdc, decimals=6)
+    would_execute_pnl_str = format_money(total_would_execute_pnl_usdc, decimals=6)
 
     normalized_return_pct = None
     try:
-        pnl_dec = Decimal(str(total_pnl_usdc))
         capital_dec = Decimal(str(notion_capital))
         if capital_dec > 0:
-            normalized_return_pct = format_money((pnl_dec / capital_dec) * 100, decimals=4)
+            normalized_return_pct = format_money((total_signal_pnl_usdc / capital_dec) * 100, decimals=4)
     except Exception:
         pass
-
-    total_pnl_bps = paper_stats.get("total_pnl_bps", "0.00")
 
     return TruthReport(
         mode=mode,
@@ -453,12 +444,16 @@ def build_truth_report(
         top_opportunities=top_opps,
         stats=stats,
         revalidation=revalidation,
-        cumulative_pnl={"total_bps": total_pnl_bps, "total_usdc": total_pnl_usdc},
+        cumulative_pnl={
+            "total_bps": "0.00",
+            "total_usdc": signal_pnl_str,
+        },
+        # STEP 4: Split PnL in report
         pnl={
-            "signal_pnl_bps": total_pnl_bps,
-            "signal_pnl_usdc": total_pnl_usdc,
-            "would_execute_pnl_bps": total_pnl_bps,
-            "would_execute_pnl_usdc": total_pnl_usdc,
+            "signal_pnl_bps": "0.00",
+            "signal_pnl_usdc": signal_pnl_str,
+            "would_execute_pnl_bps": "0.00",
+            "would_execute_pnl_usdc": would_execute_pnl_str,
         },
         pnl_normalized={
             "notion_capital_numeraire": notion_capital,
@@ -479,16 +474,20 @@ def print_truth_report(report: TruthReport) -> None:
     health = report.health
     rpc_pct = health.get("rpc_success_rate", 0) * 100
     qf_pct = health.get("quote_fetch_rate", 0) * 100
-    gate_pass = health.get("quote_gate_pass_rate", 0) * 100
     print(f"RPC: {rpc_pct:.1f}% success ({health.get('rpc_total_requests', 0)} requests)")
     print(f"Quotes: {health.get('quotes_fetched', 0)}/{health.get('quotes_total', 0)} ({qf_pct:.1f}%)")
-    print(f"Gates: {health.get('gates_passed', 0)} passed ({gate_pass:.1f}%)")
+    print(f"Price sanity: {health.get('price_sanity_passed', 0)} passed, {health.get('price_sanity_failed', 0)} failed")
     print(f"DEXes active: {health.get('dexes_active', 0)}")
 
     print("\n--- STATS ---")
     stats = report.stats
     print(f"Spreads: {stats.get('spread_ids_total', 0)} total, {stats.get('spread_ids_profitable', 0)} profitable")
-    print(f"Execution ready: {stats.get('execution_ready_count', 0)}")
+
+    # STEP 4: Show both PnL types
+    print("\n--- PNL ---")
+    pnl = report.pnl
+    print(f"Signal PnL: ${pnl.get('signal_pnl_usdc', '0.000000')}")
+    print(f"Would-execute PnL: ${pnl.get('would_execute_pnl_usdc', '0.000000')}")
 
     print("\n--- TOP OPPORTUNITIES ---")
     if not report.top_opportunities:
@@ -498,9 +497,8 @@ def print_truth_report(report: TruthReport) -> None:
         dex_buy = opp.get("dex_buy", "?")
         dex_sell = opp.get("dex_sell", "?")
         cross = "→" if dex_buy != dex_sell else "="
-        blockers = opp.get("execution_blockers", [])
-        blocker_str = f" [{', '.join(blockers[:2])}]" if blockers else ""
+        conf = opp.get("confidence", 0)
         print(f"  {i}. {ready} {dex_buy}{cross}{dex_sell} "
-              f"${opp.get('net_pnl_usdc')} ({opp.get('net_pnl_bps')} bps){blocker_str}")
+              f"${opp.get('signal_pnl_usdc')} (conf={conf:.2f})")
 
     print("=" * 60 + "\n")

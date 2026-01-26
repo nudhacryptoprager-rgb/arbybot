@@ -2,47 +2,54 @@
 #
 # M4 REAL Pipeline - CANARY CONFIG
 #
+# STEP 8: Standardized RPC settings with env-var override
+#
+# Environment Variable Overrides:
+#   ARBY_RPC_URL         - Add custom RPC endpoint (priority)
+#   ARBY_RPC_TIMEOUT     - RPC timeout in seconds (default: 10)
+#   ARBY_RPC_RETRIES     - Max retries per endpoint (default: 3)
+#   ARBY_RPC_BACKOFF_MS  - Base backoff in ms (default: 500)
+#   ARBY_PRICE_SANITY_DISABLED - Disable price sanity gate (default: false)
+#
 # M4 Requirements (STRICT):
 #   - quotes_fetched >= 1
 #   - rpc_success_rate > 0
 #   - rpc_total_requests >= 3
-#   - dexes_active >= 2 (STEP 1: cross-DEX arbitrage)
-#   - pool_buy != "unknown" (STEP 2)
-#   - amount_in_numeraire > 0 (STEP 3)
-#   - dex_buy != dex_sell for at least 1 opportunity (STEP 1)
-#
-# Config: 1 chain × 2 DEX × 1 pair × 2 fee tiers = cross-DEX opportunities
+#   - dexes_active >= 2 (cross-DEX arbitrage)
+#   - price_sanity_passed >= 1 (STEP 1)
+#   - confidence < 1.0 (dynamic, STEP 5)
 
 # Chain: Arbitrum One
 chain: arbitrum_one
 chain_id: 42161
 
-# RPC endpoints with fallback
+# RPC endpoints with fallback (STEP 8: standardized)
+# Override: ARBY_RPC_URL env var adds priority endpoint
 rpc_endpoints:
   - "https://arb1.arbitrum.io/rpc"
   - "https://arbitrum-one.public.blastapi.io"
   - "https://rpc.ankr.com/arbitrum"
 
-# RPC settings
+# RPC settings (STEP 8: standardized with env-var override)
+# Override: ARBY_RPC_TIMEOUT, ARBY_RPC_RETRIES, ARBY_RPC_BACKOFF_MS
 rpc_timeout_seconds: 10
 rpc_retries: 3
 rpc_backoff_base_ms: 500
 
-# STEP 1: 2 DEXes for cross-DEX arbitrage
+# 2 DEXes for cross-DEX arbitrage (STEP 1)
 dexes:
   - uniswap_v3
   - sushiswap_v3
 
-# Single pair with fee tiers - same pair on both DEXes = arbitrage opportunity
+# Single pair for minimal canary test
 pairs:
   - token_in: WETH
     token_out: USDC
     fee_tiers: [500, 3000]
 
-# Pool addresses per DEX (STEP 2: no "unknown")
-# Format: {dex}_{token_in}_{token_out}_{fee} -> pool_address
+# Pool addresses (STEP 2: no "unknown")
 pools:
-  # Uniswap V3 pools
+  # Uniswap V3 pools (Arbitrum)
   uniswap_v3_WETH_USDC_500: "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443"
   uniswap_v3_WETH_USDC_3000: "0x17c14D2c404D167802b16C450d3c99F88F2c4F4d"
   # SushiSwap V3 pools (Arbitrum)
@@ -54,16 +61,22 @@ tokens:
   WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
   USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
 
-# STEP 3: Quote sizing
-quote_amount_in_wei: "1000000000000000000"  # 1 ETH
-quote_amount_in_human: "1.0"
+# Token decimals for proper normalization (STEP 2)
 quote_decimals:
   WETH: 18
   USDC: 6
 
+# Quote sizing (STEP 3: amounts > 0)
+quote_amount_in_wei: "1000000000000000000"  # 1 ETH
+
 # Gate thresholds
 max_slippage_bps: 100
 min_net_bps: 5
+
+# Price sanity gate (STEP 1)
+# Override: ARBY_PRICE_SANITY_DISABLED=1 to disable
+price_sanity_enabled: true
+price_sanity_max_deviation_bps: 1000  # 10% max deviation from expected
 
 # Paper trading
 cooldown_seconds: 60
