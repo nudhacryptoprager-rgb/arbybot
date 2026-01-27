@@ -7,13 +7,18 @@ METRICS CONTRACT:
 - quotes_fetched = got RPC response (amount > 0)
 - gates_passed = passed all gates
 
-STEP 3: Fields normalized:
-- amount_out_buy_numeraire = "out на buy leg у numeraire"
-- net_pnl_usdc = arithmetic-consistent with amounts
+STEP 5: Confidence formula consistency
+- price_stability_factor = min(1.0, price_sanity_passed / max(1, quotes_fetched))
+- Never 0.0 if price_sanity_passed > 0
 
-STEP 4: PnL split:
-- signal_pnl_*: theoretical profit from price difference
-- would_execute_pnl_*: signal minus estimated costs (gas, slippage)
+STEP 6: Truthful profit breakdown
+- If NO_COST_MODEL, net_pnl fields are None
+- gross_pnl is always present
+- cost breakdown fields present (may be None)
+
+STEP 9: Execution semantics
+- execution_enabled: false explicit
+- is_actionable: false for signal-only
 """
 
 import json
@@ -28,7 +33,7 @@ from core.format_money import format_money
 
 logger = logging.getLogger("monitoring.truth_report")
 
-SCHEMA_VERSION = "3.1.0"  # Bumped for PnL split
+SCHEMA_VERSION = "3.2.0"  # Bumped for profit breakdown + execution semantics
 GATE_BREAKDOWN_KEYS = frozenset(["revert", "slippage", "infra", "other", "sanity"])
 
 ERROR_TO_GATE_CATEGORY = {
@@ -78,6 +83,35 @@ def calculate_confidence(
 
     # Clamp output to [0, 1]
     return max(0.0, min(1.0, score))
+
+
+def calculate_price_stability_factor(
+    price_sanity_passed: int,
+    quotes_fetched: int,
+    price_sanity_failed: int = 0,
+) -> float:
+    """
+    STEP 5: Calculate price stability factor consistently.
+    
+    Never returns 0.0 if price_sanity_passed > 0.
+    """
+    if quotes_fetched <= 0:
+        # No quotes fetched - can't assess stability
+        return 0.5  # Neutral score
+    
+    if price_sanity_passed > 0:
+        # At least some passed - calculate ratio
+        total_checked = price_sanity_passed + price_sanity_failed
+        if total_checked > 0:
+            return min(1.0, price_sanity_passed / total_checked)
+        return min(1.0, price_sanity_passed / quotes_fetched)
+    
+    # All failed or none passed
+    if price_sanity_failed > 0:
+        return 0.0
+    
+    # No sanity checks run
+    return 0.5
 
 
 @dataclass
@@ -199,9 +233,16 @@ def build_health_section(
     quotes_fetched = scan_stats.get("quotes_fetched", 0)
     quotes_total = scan_stats.get("quotes_total", 0)
     gates_passed = scan_stats.get("gates_passed", 0)
+    price_sanity_passed = scan_stats.get("price_sanity_passed", 0)
+    price_sanity_failed = scan_stats.get("price_sanity_failed", 0)
 
     quote_fetch_rate = quotes_fetched / quotes_total if quotes_total > 0 else 0.0
     quote_gate_pass_rate = gates_passed / quotes_fetched if quotes_fetched > 0 else 0.0
+
+    # STEP 5: Consistent price stability factor
+    price_stability_factor = calculate_price_stability_factor(
+        price_sanity_passed, quotes_fetched, price_sanity_failed
+    )
 
     if rpc_stats and rpc_stats.get("total_requests", 0) > 0:
         rpc_success_rate = rpc_stats.get("success_rate", 0.0)
@@ -232,8 +273,10 @@ def build_health_section(
         "dexes_active": dexes_active,
         "pairs_covered": scan_stats.get("pairs_covered", 0),
         "pools_scanned": scan_stats.get("pools_scanned", 0),
-        "price_sanity_passed": scan_stats.get("price_sanity_passed", 0),
-        "price_sanity_failed": scan_stats.get("price_sanity_failed", 0),
+        "price_sanity_passed": price_sanity_passed,
+        "price_sanity_failed": price_sanity_failed,
+        # STEP 5: Expose stability factor
+        "price_stability_factor": round(price_stability_factor, 3),
         "top_reject_reasons": top_rejects,
         "gate_breakdown": gate_breakdown,
     }
@@ -269,7 +312,7 @@ def _get_execution_blockers(
         blockers.append("EXECUTION_DISABLED_M4")
 
     try:
-        pnl = Decimal(str(opp.get("signal_pnl_usdc") or opp.get("net_pnl_usdc", "0")))
+        pnl = Decimal(str(opp.get("signal_pnl_usdc") or opp.get("gross_pnl_usdc") or opp.get("net_pnl_usdc", "0")))
         if pnl <= 0:
             blockers.append("NOT_PROFITABLE")
     except Exception:
@@ -289,17 +332,24 @@ def _get_execution_blockers(
     if opp.get("reject_reason"):
         blockers.append(f"REJECTED:{opp.get('reject_reason')}")
 
+    # STEP 6: No cost model blocker
+    if not opp.get("cost_model_available", False):
+        blockers.append("NO_COST_MODEL")
+
     return blockers
 
 
 def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
     try:
-        net_pnl = Decimal(str(opp.get("signal_pnl_usdc") or opp.get("net_pnl_usdc", "0")))
+        # Use gross_pnl if net is None (STEP 6)
+        pnl_str = opp.get("net_pnl_usdc") or opp.get("gross_pnl_usdc") or opp.get("signal_pnl_usdc", "0")
+        net_pnl = Decimal(str(pnl_str)) if pnl_str else Decimal("0")
     except Exception:
         net_pnl = Decimal("0")
 
     try:
-        net_bps = Decimal(str(opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0")))
+        bps_str = opp.get("net_pnl_bps") or opp.get("signal_pnl_bps", "0")
+        net_bps = Decimal(str(bps_str)) if bps_str else Decimal("0")
     except Exception:
         net_bps = Decimal("0")
 
@@ -319,6 +369,9 @@ class TruthReport:
     timestamp: str = ""
     mode: str = "REGISTRY"
     run_mode: str = "SMOKE_SIMULATOR"
+    # STEP 9: Explicit execution semantics
+    execution_enabled: bool = False
+    execution_blocker: str = "EXECUTION_DISABLED_M4"
     health: Dict[str, Any] = field(default_factory=dict)
     top_opportunities: List[Dict[str, Any]] = field(default_factory=list)
     stats: Dict[str, Any] = field(default_factory=dict)
@@ -326,6 +379,8 @@ class TruthReport:
     cumulative_pnl: Dict[str, Any] = field(default_factory=dict)
     pnl: Dict[str, Any] = field(default_factory=dict)
     pnl_normalized: Dict[str, Any] = field(default_factory=dict)
+    # STEP 6: Cost model availability
+    cost_model_available: bool = False
 
     def __post_init__(self):
         if not self.timestamp:
@@ -337,6 +392,11 @@ class TruthReport:
             "timestamp": self.timestamp,
             "mode": self.mode,
             "run_mode": self.run_mode,
+            # STEP 9: Execution semantics
+            "execution_enabled": self.execution_enabled,
+            "execution_blocker": self.execution_blocker,
+            # STEP 6: Cost model flag
+            "cost_model_available": self.cost_model_available,
             "health": self.health,
             "top_opportunities": self.top_opportunities,
             "stats": self.stats,
@@ -347,7 +407,7 @@ class TruthReport:
         }
 
     def to_json(self, indent: int = 2) -> str:
-        return json.dumps(self.to_dict(), indent=indent)
+        return json.dumps(self.to_dict(), indent=indent, default=str)
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -369,6 +429,8 @@ def build_truth_report(
     dexes_with_quotes: Optional[Set[str]] = None,
     dexes_passed_gates: Optional[Set[str]] = None,
     rpc_stats: Optional[Dict[str, Any]] = None,
+    # STEP 6: Cost model flag
+    cost_model_available: bool = False,
 ) -> TruthReport:
     execution_ready_count = scan_stats.get("execution_ready_count", 0)
     execution_disabled = (execution_ready_count == 0)
@@ -382,18 +444,33 @@ def build_truth_report(
     normalized_opps = []
     source_spreads = all_spreads if all_spreads else opportunities
 
-    # STEP 4: Calculate aggregate PnL
-    total_signal_pnl_usdc = Decimal("0")
-    total_would_execute_pnl_usdc = Decimal("0")
+    # STEP 6: Aggregate PnL with cost awareness
+    total_gross_pnl_usdc = Decimal("0")
+    total_gas_estimate_usdc = Decimal("0")
+    total_slippage_estimate_usdc = Decimal("0")
+    total_net_pnl_usdc = Decimal("0") if cost_model_available else None
 
     for opp in source_spreads:
-        signal_pnl = opp.get("signal_pnl_usdc") or opp.get("net_pnl_usdc", "0.000000")
-        would_execute_pnl = opp.get("would_execute_pnl_usdc") or signal_pnl
-
+        # STEP 6: Get PnL components
+        gross_pnl = opp.get("gross_pnl_usdc") or opp.get("signal_pnl_usdc") or opp.get("net_pnl_usdc", "0.000000")
+        gas_estimate = opp.get("gas_estimate_usdc")
+        slippage_estimate = opp.get("slippage_estimate_usdc")
+        
         try:
-            is_profitable = Decimal(str(signal_pnl)) > 0
-            total_signal_pnl_usdc += Decimal(str(signal_pnl))
-            total_would_execute_pnl_usdc += Decimal(str(would_execute_pnl))
+            gross_dec = Decimal(str(gross_pnl))
+            is_profitable = gross_dec > 0
+            total_gross_pnl_usdc += gross_dec
+            
+            if gas_estimate is not None:
+                total_gas_estimate_usdc += Decimal(str(gas_estimate))
+            if slippage_estimate is not None:
+                total_slippage_estimate_usdc += Decimal(str(slippage_estimate))
+                
+            # STEP 6: Only calculate net if cost model available
+            if cost_model_available and gas_estimate is not None:
+                net_pnl = gross_dec - Decimal(str(gas_estimate or "0")) - Decimal(str(slippage_estimate or "0"))
+                if total_net_pnl_usdc is not None:
+                    total_net_pnl_usdc += net_pnl
         except Exception:
             is_profitable = False
 
@@ -402,6 +479,9 @@ def build_truth_report(
         is_execution_ready = opp.get("is_execution_ready", False)
         if execution_disabled or blockers:
             is_execution_ready = False
+
+        # STEP 9: is_actionable = False for signal-only
+        is_actionable = is_execution_ready and not execution_disabled
 
         normalized_opp = {
             "spread_id": opp.get("spread_id", "unknown"),
@@ -416,18 +496,25 @@ def build_truth_report(
             "amount_in_numeraire": opp.get("amount_in_numeraire") or "0",
             "amount_out_buy_numeraire": opp.get("amount_out_buy_numeraire") or "0",
             "amount_out_sell_numeraire": opp.get("amount_out_sell_numeraire") or "0",
-            "signal_pnl_usdc": signal_pnl,
+            # STEP 6: Profit breakdown
+            "gross_pnl_usdc": gross_pnl,
+            "gas_estimate_usdc": gas_estimate,  # May be None
+            "slippage_estimate_usdc": slippage_estimate,  # May be None
+            "net_pnl_usdc": None if not cost_model_available else opp.get("net_pnl_usdc"),
+            "net_pnl_bps": None if not cost_model_available else opp.get("net_pnl_bps"),
+            # Legacy compatibility
+            "signal_pnl_usdc": gross_pnl,
             "signal_pnl_bps": opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0.00"),
-            "would_execute_pnl_usdc": would_execute_pnl,
-            "would_execute_pnl_bps": opp.get("would_execute_pnl_bps") or opp.get("net_pnl_bps", "0.00"),
-            "net_pnl_usdc": signal_pnl,
-            "net_pnl_bps": opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0.00"),
             "confidence": opp.get("confidence", 0.0),
             "confidence_factors": opp.get("confidence_factors", {}),
             "is_profitable": is_profitable,
             "reject_reason": opp.get("reject_reason"),
             "execution_blockers": blockers,
             "is_execution_ready": is_execution_ready,
+            # STEP 9: Explicit actionability
+            "is_actionable": is_actionable,
+            # STEP 6: Cost model flag per opportunity
+            "cost_model_available": cost_model_available,
         }
 
         normalized_opps.append(normalized_opp)
@@ -464,33 +551,50 @@ def build_truth_report(
     paper_stats = paper_session_stats or {}
     notion_capital = paper_stats.get("notion_capital_usdc", "10000.000000")
 
-    signal_pnl_str = format_money(total_signal_pnl_usdc, decimals=6)
-    would_execute_pnl_str = format_money(total_would_execute_pnl_usdc, decimals=6)
+    gross_pnl_str = format_money(total_gross_pnl_usdc, decimals=6)
+    gas_str = format_money(total_gas_estimate_usdc, decimals=6) if total_gas_estimate_usdc > 0 else None
+    slippage_str = format_money(total_slippage_estimate_usdc, decimals=6) if total_slippage_estimate_usdc > 0 else None
+    net_pnl_str = format_money(total_net_pnl_usdc, decimals=6) if total_net_pnl_usdc is not None else None
 
     normalized_return_pct = None
     try:
         capital_dec = Decimal(str(notion_capital))
         if capital_dec > 0:
-            normalized_return_pct = format_money((total_signal_pnl_usdc / capital_dec) * 100, decimals=4)
+            normalized_return_pct = format_money((total_gross_pnl_usdc / capital_dec) * 100, decimals=4)
     except Exception:
         pass
+
+    # STEP 9: Determine execution blocker reason
+    execution_blocker = "EXECUTION_DISABLED_M4"
+    if run_mode == "SMOKE_SIMULATOR":
+        execution_blocker = "SMOKE_MODE_NO_EXECUTION"
 
     return TruthReport(
         mode=mode,
         run_mode=run_mode,
+        # STEP 9: Explicit execution semantics
+        execution_enabled=not execution_disabled,
+        execution_blocker=execution_blocker if execution_disabled else None,
+        # STEP 6: Cost model flag
+        cost_model_available=cost_model_available,
         health=health,
         top_opportunities=top_opps,
         stats=stats,
         revalidation=revalidation,
         cumulative_pnl={
             "total_bps": "0.00",
-            "total_usdc": signal_pnl_str,
+            "total_usdc": gross_pnl_str,
         },
+        # STEP 6: Profit breakdown with cost awareness
         pnl={
+            "gross_pnl_usdc": gross_pnl_str,
+            "gas_estimate_usdc": gas_str,
+            "slippage_estimate_usdc": slippage_str,
+            "net_pnl_usdc": net_pnl_str,  # None if NO_COST_MODEL
+            "cost_model_available": cost_model_available,
+            # Legacy compatibility
+            "signal_pnl_usdc": gross_pnl_str,
             "signal_pnl_bps": "0.00",
-            "signal_pnl_usdc": signal_pnl_str,
-            "would_execute_pnl_bps": "0.00",
-            "would_execute_pnl_usdc": would_execute_pnl_str,
         },
         pnl_normalized={
             "notion_capital_numeraire": notion_capital,
@@ -507,16 +611,22 @@ def print_truth_report(report: TruthReport) -> None:
     print("=" * 60)
     print(f"Timestamp: {report.timestamp}")
     print(f"Mode: {report.mode} | Run Mode: {report.run_mode}")
+    # STEP 9: Show execution status
+    exec_status = "ENABLED" if report.execution_enabled else f"DISABLED ({report.execution_blocker})"
+    print(f"Execution: {exec_status}")
 
     print("\n--- HEALTH ---")
     health = report.health
     rpc_pct = health.get("rpc_success_rate", 0) * 100
     qf_pct = health.get("quote_fetch_rate", 0) * 100
     gp_pct = health.get("quote_gate_pass_rate", 0) * 100
+    ps_factor = health.get("price_stability_factor", 0)
     print(f"RPC: {rpc_pct:.1f}% success ({health.get('rpc_total_requests', 0)} requests)")
     print(f"Quotes: {health.get('quotes_fetched', 0)}/{health.get('quotes_total', 0)} fetched ({qf_pct:.1f}%)")
     print(f"Gates: {health.get('gates_passed', 0)} passed ({gp_pct:.1f}%)")
     print(f"Price sanity: {health.get('price_sanity_passed', 0)} passed, {health.get('price_sanity_failed', 0)} failed")
+    # STEP 5: Show price stability factor
+    print(f"Price stability factor: {ps_factor:.3f}")
     print(f"DEXes active: {health.get('dexes_active', 0)}")
 
     print("\n--- STATS ---")
@@ -525,21 +635,28 @@ def print_truth_report(report: TruthReport) -> None:
 
     print("\n--- PNL ---")
     pnl = report.pnl
-    print(f"Signal PnL: ${pnl.get('signal_pnl_usdc', '0.000000')}")
-    print(f"Would-execute PnL: ${pnl.get('would_execute_pnl_usdc', '0.000000')}")
+    print(f"Gross PnL: ${pnl.get('gross_pnl_usdc', '0.000000')}")
+    # STEP 6: Show cost breakdown if available
+    if report.cost_model_available:
+        print(f"Gas estimate: ${pnl.get('gas_estimate_usdc', '0.000000')}")
+        print(f"Slippage estimate: ${pnl.get('slippage_estimate_usdc', '0.000000')}")
+        print(f"Net PnL: ${pnl.get('net_pnl_usdc', '0.000000')}")
+    else:
+        print("[NO_COST_MODEL] Net PnL not calculated - gas/slippage estimates unavailable")
 
     print("\n--- TOP OPPORTUNITIES ---")
     if not report.top_opportunities:
         print("  (none)")
     for i, opp in enumerate(report.top_opportunities[:5], 1):
-        # ASCII only: [+] for ready, [-] for not ready
-        ready = "[+]" if opp.get("is_execution_ready") else "[-]"
+        # ASCII only: [+] for actionable, [-] for not actionable
+        actionable = "[+]" if opp.get("is_actionable") else "[-]"
         dex_buy = opp.get("dex_buy", "?")
         dex_sell = opp.get("dex_sell", "?")
         # ASCII only: -> for cross-DEX, = for same-DEX
         cross = "->" if dex_buy != dex_sell else "="
         conf = opp.get("confidence", 0)
-        print(f"  {i}. {ready} {dex_buy}{cross}{dex_sell} "
-              f"${opp.get('signal_pnl_usdc')} (conf={conf:.2f})")
+        gross = opp.get("gross_pnl_usdc", "0")
+        print(f"  {i}. {actionable} {dex_buy}{cross}{dex_sell} "
+              f"gross=${gross} (conf={conf:.2f})")
 
     print("=" * 60 + "\n")

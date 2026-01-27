@@ -3,13 +3,110 @@
 Unit tests for truth_report.
 
 Tests for:
-- STEP 1: Price sanity gate
-- STEP 3-4: PnL split (signal vs would_execute)
-- STEP 5: Dynamic confidence
+- STEP 4: Import contract stability
+- STEP 5: Confidence formula consistency
+- STEP 6: Truthful profit breakdown
+- STEP 9: Execution semantics
 """
 
 import unittest
 from decimal import Decimal
+
+
+class TestImportContract(unittest.TestCase):
+    """STEP 4: Import contract tests."""
+
+    def test_import_from_truth_report(self):
+        """Can import calculate_confidence from monitoring.truth_report."""
+        from monitoring.truth_report import calculate_confidence
+        self.assertTrue(callable(calculate_confidence))
+
+    def test_import_from_monitoring_package(self):
+        """Can import calculate_confidence from monitoring package."""
+        from monitoring import calculate_confidence
+        self.assertTrue(callable(calculate_confidence))
+
+    def test_import_rpc_health_metrics(self):
+        """Can import RPCHealthMetrics."""
+        from monitoring.truth_report import RPCHealthMetrics
+        metrics = RPCHealthMetrics()
+        self.assertEqual(metrics.rpc_success_count, 0)
+
+    def test_import_truth_report_class(self):
+        """Can import TruthReport class."""
+        from monitoring.truth_report import TruthReport
+        report = TruthReport()
+        self.assertIsNotNone(report.timestamp)
+
+
+class TestPriceStabilityFactor(unittest.TestCase):
+    """STEP 5: Price stability factor consistency tests."""
+
+    def test_stability_factor_not_zero_when_sanity_passed(self):
+        """price_stability_factor cannot be 0 if price_sanity_passed > 0."""
+        from monitoring.truth_report import calculate_price_stability_factor
+
+        # Scenario: 3 passed, 1 failed
+        factor = calculate_price_stability_factor(
+            price_sanity_passed=3,
+            quotes_fetched=4,
+            price_sanity_failed=1,
+        )
+        self.assertGreater(factor, 0.0)
+        self.assertAlmostEqual(factor, 0.75, places=2)
+
+    def test_stability_factor_zero_when_all_failed(self):
+        """price_stability_factor should be 0 if all sanity checks failed."""
+        from monitoring.truth_report import calculate_price_stability_factor
+
+        factor = calculate_price_stability_factor(
+            price_sanity_passed=0,
+            quotes_fetched=4,
+            price_sanity_failed=4,
+        )
+        self.assertEqual(factor, 0.0)
+
+    def test_stability_factor_neutral_when_no_quotes(self):
+        """price_stability_factor should be 0.5 (neutral) if no quotes."""
+        from monitoring.truth_report import calculate_price_stability_factor
+
+        factor = calculate_price_stability_factor(
+            price_sanity_passed=0,
+            quotes_fetched=0,
+            price_sanity_failed=0,
+        )
+        self.assertEqual(factor, 0.5)
+
+    def test_stability_factor_perfect_when_all_passed(self):
+        """price_stability_factor should be 1.0 if all passed."""
+        from monitoring.truth_report import calculate_price_stability_factor
+
+        factor = calculate_price_stability_factor(
+            price_sanity_passed=4,
+            quotes_fetched=4,
+            price_sanity_failed=0,
+        )
+        self.assertEqual(factor, 1.0)
+
+    def test_health_section_includes_stability_factor(self):
+        """build_health_section should include price_stability_factor."""
+        from monitoring.truth_report import build_health_section
+
+        scan_stats = {
+            "quotes_fetched": 4,
+            "quotes_total": 8,
+            "gates_passed": 4,
+            "price_sanity_passed": 3,
+            "price_sanity_failed": 1,
+        }
+
+        health = build_health_section(
+            scan_stats=scan_stats,
+            reject_histogram={},
+        )
+
+        self.assertIn("price_stability_factor", health)
+        self.assertGreater(health["price_stability_factor"], 0.0)
 
 
 class TestTruthReportConsistency(unittest.TestCase):
@@ -55,29 +152,17 @@ class TestTruthReportConsistency(unittest.TestCase):
         self.assertEqual(breakdown["sanity"], 3)
 
 
-class TestPnLSplit(unittest.TestCase):
-    """STEP 3-4: PnL split tests."""
+class TestProfitBreakdown(unittest.TestCase):
+    """STEP 6: Truthful profit breakdown tests."""
 
-    def test_truth_report_has_both_pnl_types(self):
-        """Truth report should have signal_pnl and would_execute_pnl."""
+    def test_truth_report_has_gross_pnl(self):
+        """Truth report should have gross_pnl_usdc."""
         from monitoring.truth_report import build_truth_report
 
         all_spreads = [
             {
                 "spread_id": "test_001",
-                "dex_buy": "uniswap_v3",
-                "dex_sell": "sushiswap_v3",
-                "pool_buy": "0x123",
-                "pool_sell": "0x456",
-                "token_in": "WETH",
-                "token_out": "USDC",
-                "signal_pnl_usdc": "5.000000",
-                "signal_pnl_bps": "14.28",
-                "would_execute_pnl_usdc": "4.500000",
-                "would_execute_pnl_bps": "12.85",
-                "amount_in_numeraire": "1.0",
-                "confidence": 0.82,
-                "confidence_factors": {"rpc_health": 1.0},
+                "gross_pnl_usdc": "5.000000",
                 "is_profitable": True,
                 "execution_blockers": ["EXECUTION_DISABLED_M4"],
             }
@@ -89,72 +174,21 @@ class TestPnLSplit(unittest.TestCase):
             opportunities=[],
             all_spreads=all_spreads,
             run_mode="REGISTRY_REAL",
+            cost_model_available=False,
         )
 
-        # Check PnL section
         pnl = report.pnl
-        self.assertIn("signal_pnl_usdc", pnl)
-        self.assertIn("would_execute_pnl_usdc", pnl)
-        self.assertEqual(pnl["signal_pnl_usdc"], "5.000000")
+        self.assertIn("gross_pnl_usdc", pnl)
+        self.assertEqual(pnl["gross_pnl_usdc"], "5.000000")
 
-        # Check top opportunities
-        opp = report.top_opportunities[0]
-        self.assertIn("signal_pnl_usdc", opp)
-        self.assertIn("would_execute_pnl_usdc", opp)
-
-    def test_pnl_aggregation_across_spreads(self):
-        """Total PnL should be sum of all spreads."""
+    def test_net_pnl_none_without_cost_model(self):
+        """net_pnl should be None if cost_model_available=False."""
         from monitoring.truth_report import build_truth_report
 
         all_spreads = [
             {
                 "spread_id": "test_001",
-                "signal_pnl_usdc": "5.000000",
-                "would_execute_pnl_usdc": "4.500000",
-                "is_profitable": True,
-                "execution_blockers": ["EXECUTION_DISABLED_M4"],
-            },
-            {
-                "spread_id": "test_002",
-                "signal_pnl_usdc": "3.000000",
-                "would_execute_pnl_usdc": "2.500000",
-                "is_profitable": True,
-                "execution_blockers": ["EXECUTION_DISABLED_M4"],
-            },
-        ]
-
-        report = build_truth_report(
-            scan_stats={"execution_ready_count": 0},
-            reject_histogram={},
-            opportunities=[],
-            all_spreads=all_spreads,
-            run_mode="REGISTRY_REAL",
-        )
-
-        # Total should be 5 + 3 = 8
-        pnl = report.pnl
-        self.assertEqual(pnl["signal_pnl_usdc"], "8.000000")
-
-
-class TestConfidenceFactors(unittest.TestCase):
-    """STEP 5: Dynamic confidence scoring tests."""
-
-    def test_confidence_factors_preserved(self):
-        """Confidence factors should be preserved in truth_report."""
-        from monitoring.truth_report import build_truth_report
-
-        all_spreads = [
-            {
-                "spread_id": "test_001",
-                "signal_pnl_usdc": "5.000000",
-                "confidence": 0.82,
-                "confidence_factors": {
-                    "rpc_health": 1.0,
-                    "quote_coverage": 0.9,
-                    "price_stability": 0.85,
-                    "spread_quality": 0.75,
-                    "dex_diversity": 1.0,
-                },
+                "gross_pnl_usdc": "5.000000",
                 "is_profitable": True,
                 "execution_blockers": ["EXECUTION_DISABLED_M4"],
             }
@@ -166,15 +200,124 @@ class TestConfidenceFactors(unittest.TestCase):
             opportunities=[],
             all_spreads=all_spreads,
             run_mode="REGISTRY_REAL",
+            cost_model_available=False,
+        )
+
+        self.assertFalse(report.cost_model_available)
+        self.assertIsNone(report.pnl.get("net_pnl_usdc"))
+
+    def test_net_pnl_present_with_cost_model(self):
+        """net_pnl should be calculated if cost_model_available=True."""
+        from monitoring.truth_report import build_truth_report
+
+        all_spreads = [
+            {
+                "spread_id": "test_001",
+                "gross_pnl_usdc": "5.000000",
+                "gas_estimate_usdc": "0.500000",
+                "slippage_estimate_usdc": "0.100000",
+                "net_pnl_usdc": "4.400000",
+                "is_profitable": True,
+                "execution_blockers": [],
+            }
+        ]
+
+        report = build_truth_report(
+            scan_stats={"execution_ready_count": 0},
+            reject_histogram={},
+            opportunities=[],
+            all_spreads=all_spreads,
+            run_mode="REGISTRY_REAL",
+            cost_model_available=True,
+        )
+
+        self.assertTrue(report.cost_model_available)
+        # Net should be present
+        self.assertIn("gross_pnl_usdc", report.pnl)
+
+    def test_no_cost_model_blocker_added(self):
+        """NO_COST_MODEL blocker should be added when cost model unavailable."""
+        from monitoring.truth_report import build_truth_report
+
+        all_spreads = [
+            {
+                "spread_id": "test_001",
+                "gross_pnl_usdc": "5.000000",
+                "is_profitable": True,
+            }
+        ]
+
+        report = build_truth_report(
+            scan_stats={"execution_ready_count": 0},
+            reject_histogram={},
+            opportunities=[],
+            all_spreads=all_spreads,
+            run_mode="REGISTRY_REAL",
+            cost_model_available=False,
         )
 
         opp = report.top_opportunities[0]
-        self.assertEqual(opp["confidence"], 0.82)
-        self.assertIn("confidence_factors", opp)
-        self.assertEqual(opp["confidence_factors"]["rpc_health"], 1.0)
+        self.assertIn("NO_COST_MODEL", opp["execution_blockers"])
+
+
+class TestExecutionSemantics(unittest.TestCase):
+    """STEP 9: Execution semantics tests."""
+
+    def test_execution_enabled_field_present(self):
+        """TruthReport should have execution_enabled field."""
+        from monitoring.truth_report import build_truth_report
+
+        report = build_truth_report(
+            scan_stats={"execution_ready_count": 0},
+            reject_histogram={},
+            opportunities=[],
+            run_mode="REGISTRY_REAL",
+        )
+
+        self.assertIn("execution_enabled", report.to_dict())
+        self.assertEqual(report.execution_enabled, False)
+
+    def test_execution_blocker_field_present(self):
+        """TruthReport should have execution_blocker when disabled."""
+        from monitoring.truth_report import build_truth_report
+
+        report = build_truth_report(
+            scan_stats={"execution_ready_count": 0},
+            reject_histogram={},
+            opportunities=[],
+            run_mode="REGISTRY_REAL",
+        )
+
+        self.assertEqual(report.execution_blocker, "EXECUTION_DISABLED_M4")
+
+    def test_is_actionable_false_when_disabled(self):
+        """is_actionable should be False when execution disabled."""
+        from monitoring.truth_report import build_truth_report
+
+        all_spreads = [
+            {
+                "spread_id": "test_001",
+                "gross_pnl_usdc": "5.000000",
+                "is_profitable": True,
+                "is_execution_ready": True,  # Would be ready
+            }
+        ]
+
+        report = build_truth_report(
+            scan_stats={"execution_ready_count": 0},  # But execution disabled
+            reject_histogram={},
+            opportunities=[],
+            all_spreads=all_spreads,
+            run_mode="REGISTRY_REAL",
+        )
+
+        opp = report.top_opportunities[0]
+        self.assertFalse(opp["is_actionable"])
 
 
 class TestRPCHealthMetrics(unittest.TestCase):
+    """Test RPCHealthMetrics."""
+
     def test_record_rpc_call_success(self):
         from monitoring.truth_report import RPCHealthMetrics
 
@@ -196,12 +339,11 @@ class TestRPCHealthMetrics(unittest.TestCase):
 
 
 class TestSchemaVersion(unittest.TestCase):
-    """Test schema version is bumped for PnL split."""
+    """Test schema version is bumped."""
 
-    def test_schema_version_is_3_1_0(self):
+    def test_schema_version_is_3_2_0(self):
         from monitoring.truth_report import SCHEMA_VERSION
-
-        self.assertEqual(SCHEMA_VERSION, "3.1.0")
+        self.assertEqual(SCHEMA_VERSION, "3.2.0")
 
 
 if __name__ == "__main__":

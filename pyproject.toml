@@ -8,14 +8,15 @@ name = "arby"
 version = "0.3.0"
 description = "Cryptocurrency Arbitrage Bot"
 readme = "README.md"
-requires-python = ">=3.10"
+# STEP 1: Pin Python 3.11.x permanently
+requires-python = ">=3.11,<3.12"
 license = {text = "MIT"}
-
 dependencies = [
     "web3>=6.0.0",
     "aiohttp>=3.8.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0.0",
+    "httpx>=0.25.0",
 ]
 
 [project.optional-dependencies]
@@ -33,10 +34,14 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+# STEP 8: Default to offline mode in tests
+env = [
+    "ARBY_OFFLINE=1",
+]
 
 [tool.black]
 line-length = 100
-target-version = ["py310", "py311"]
+target-version = ["py311"]
 
 [tool.ruff]
 line-length = 100

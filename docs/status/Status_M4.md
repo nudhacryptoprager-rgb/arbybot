@@ -1,13 +1,47 @@
-# Status: M4 (REAL Pipeline)
+# Status: M4 (REAL Pipeline Hardening)
 
 **Status**: IN PROGRESS  
 **Branch**: `split/code`  
-**Last Updated**: 2025-01-26
+**Last Updated**: 2026-01-27
 
 ## Goal
 
-Run REAL pipeline with live RPC, pinned block, and honest metrics.
+Run REAL pipeline with live RPC, pinned block, and **truthful metrics**.
 Execution remains disabled - only price discovery and validation.
+
+## 10 Critical Issues Addressed
+
+| # | Issue | Fix |
+|---|-------|-----|
+| 1 | TruthReport profit misleading | STEP 6: Cost breakdown, NO_COST_MODEL flag |
+| 2 | Confidence metric inconsistent | STEP 5: price_stability_factor formula fix |
+| 3 | PRICE_SANITY decimals bug | STEP 7: Debug logging + diagnostics |
+| 4 | CI gate Windows encoding | STEP 3: ASCII-only output |
+| 5 | Online RPC in tests | STEP 8: Offline fixtures default |
+| 6 | Import contract fragility | STEP 4: Stable API + tests |
+| 7 | Python version drift | STEP 1: Pin 3.11.x permanently |
+| 8 | venv inconsistency | STEP 2: Unified .venv |
+| 9 | Execution signals unclear | STEP 9: is_actionable + blockers |
+| 10 | Roadmap drift | STEP 10: Skeleton stubs |
+
+## Python Version (STEP 1)
+
+**ARBY requires Python 3.11.x**
+
+```yaml
+# pyproject.toml
+requires-python = ">=3.11,<3.12"
+
+# .python-version
+3.11.9
+```
+
+Setup:
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+```
 
 ## Metrics Contract
 
@@ -15,101 +49,76 @@ Execution remains disabled - only price discovery and validation.
 quotes_total    = attempted quote calls
 quotes_fetched  = got valid RPC response (amount_out > 0)
 gates_passed    = passed all gates (price sanity, etc.)
-dexes_active    = DEXes with at least 1 response (with_quotes)
+dexes_active    = DEXes with at least 1 response
 ```
 
 ### Invariants
 
 1. `gates_passed <= quotes_fetched <= quotes_total`
 2. If `sample_rejects` has entries with `price != null`, then `quotes_fetched > 0`
-3. `dexes_active` counts DEXes in `dex_coverage.with_quotes`, not `passed_gates`
+3. If `price_sanity_passed > 0`, then `price_stability_factor > 0`
 
-## M4 Success Criteria
-
-| Metric | Requirement | Notes |
-|--------|-------------|-------|
-| `run_mode` | `REGISTRY_REAL` | Live RPC mode |
-| `current_block` | `> 0` | Pinned block |
-| `execution_ready_count` | `== 0` | Execution disabled |
-| `quotes_fetched` | `>= 1` | Got at least 1 quote |
-| `rpc_success_rate` | `> 0` | RPC working |
-| `dexes_active` | `>= 2` | Cross-DEX capability |
-| `rpc_total_requests` | `>= 3` | Minimum activity |
-| `price_sanity_passed` | `>= 1` | At least 1 sane price |
-| Artifacts | 4/4 | All artifacts present |
-
-## Bootstrap Thresholds (STEP 6)
-
-For M4 bootstrap, we use relaxed thresholds to allow initial data collection:
-
-```yaml
-# M4 Bootstrap (will tighten in M5)
-price_sanity_enabled: true
-price_sanity_max_deviation_bps: 5000  # 50% deviation allowed
-
-# Price bounds (absolute limits)
-WETH/USDC: [1500, 6000]  # Expected: 3500
-WBTC/USDC: [30000, 150000]  # Expected: 90000
-```
-
-### Why 50% Deviation?
-
-1. We need at least 1 quote to pass sanity for M4
-2. Real prices may deviate during volatility
-3. We'll tighten to 10% in M5 after collecting baseline data
-4. Bounds still catch truly insane prices (e.g., "9.7 USDC per WETH")
-
-## Price Sanity Anchor
-
-The anchor uses **hardcoded canonical values** (not live prices):
+## Confidence Formula (STEP 5)
 
 ```python
-PRICE_SANITY_ANCHORS = {
-    ("WETH", "USDC"): {"min": 1500, "max": 6000, "expected": 3500},
-    ("WBTC", "USDC"): {"min": 30000, "max": 150000, "expected": 90000},
-}
+def calculate_price_stability_factor(
+    price_sanity_passed: int,
+    quotes_fetched: int,
+    price_sanity_failed: int = 0,
+) -> float:
+    """Never returns 0.0 if price_sanity_passed > 0."""
+    if quotes_fetched <= 0:
+        return 0.5  # Neutral
+    if price_sanity_passed > 0:
+        total = price_sanity_passed + price_sanity_failed
+        return min(1.0, price_sanity_passed / total) if total > 0 else 0.5
+    return 0.0 if price_sanity_failed > 0 else 0.5
 ```
 
-This prevents comparing a price with itself or with an invalid source.
+## Profit Breakdown (STEP 6)
 
-## Diagnostics (STEP 2)
-
-When `PRICE_SANITY_FAIL` occurs, the reject payload includes:
+**Truthful profit requires:**
 
 ```json
 {
-  "reject_reason": "PRICE_SANITY_FAIL",
-  "price": "9.706103",
-  "price_deviation_bps": 1716,
-  "diagnostics": {
-    "implied_price": "9.706103",
-    "anchor_price": "3500",
-    "deviation_bps": 1716,
-    "token_in_decimals": 18,
-    "token_out_decimals": 6,
-    "price_bounds": ["1500", "6000"],
-    "pool_fee": 500
-  }
+  "gross_pnl_usdc": "5.000000",
+  "gas_estimate_usdc": null,
+  "slippage_estimate_usdc": null,
+  "net_pnl_usdc": null,
+  "cost_model_available": false
 }
 ```
 
-This enables fast debugging of price calculation issues.
+- If `cost_model_available: false`, `net_pnl_usdc` MUST be `null`
+- NO_COST_MODEL blocker added to opportunities
+- Never show "fake net profit"
 
-## CI Gate
+## Execution Semantics (STEP 9)
 
-`scripts/ci_m4_gate.py` is the **single source of truth** for M4 validation.
+```json
+{
+  "execution_enabled": false,
+  "execution_blocker": "EXECUTION_DISABLED_M4",
+  "top_opportunities": [
+    {
+      "is_actionable": false,
+      "execution_blockers": ["EXECUTION_DISABLED_M4", "NO_COST_MODEL"]
+    }
+  ]
+}
+```
 
-### Commands
+- `is_actionable: false` for all signal-only opportunities
+- `execution_blocker` explains why disabled
 
-```bash
-# Full validation with live RPC
-python scripts/ci_m4_gate.py
+## CI Gate (STEP 3, 8)
 
-# Offline validation with fixtures
+```powershell
+# Default: offline with fixtures (no network)
 python scripts/ci_m4_gate.py --offline
 
-# Skip Python version check
-python scripts/ci_m4_gate.py --skip-python-check
+# Live RPC (requires network)
+python scripts/ci_m4_gate.py --online
 ```
 
 ### Exit Codes
@@ -121,46 +130,85 @@ python scripts/ci_m4_gate.py --skip-python-check
 | 2 | REAL scan failed |
 | 3 | Artifacts missing |
 | 4 | M4 invariants failed |
-| 5 | Quality validation failed |
 | 6 | Metrics contract violation |
+| 7 | Confidence inconsistent (STEP 5) |
+| 8 | Profit not truthful (STEP 6) |
+| 9 | Execution semantics invalid (STEP 9) |
 | 10 | Wrong Python version |
 | 11 | Import contract broken |
 
+## Import Contract (STEP 4)
+
+These imports MUST work:
+
+```python
+from monitoring.truth_report import calculate_confidence
+from monitoring.truth_report import RPCHealthMetrics
+from monitoring.truth_report import TruthReport
+from monitoring.truth_report import build_truth_report
+from monitoring import calculate_confidence
+```
+
+## M4 Success Criteria
+
+| Metric | Requirement |
+|--------|-------------|
+| Python | 3.11.x |
+| `run_mode` | `REGISTRY_REAL` |
+| `current_block` | `> 0` |
+| `execution_enabled` | `false` |
+| `execution_ready_count` | `== 0` |
+| `quotes_fetched` | `>= 1` |
+| `rpc_success_rate` | `> 0` |
+| `dexes_active` | `>= 2` |
+| `price_sanity_passed` | `>= 1` |
+| `price_stability_factor` | `> 0` when sanity_passed > 0 |
+| `cost_model_available` | Field present |
+| Artifacts | 4/4 |
+
 ## Definition of Done
 
-```bash
+```powershell
 # A. Python version
 python --version  # Must be 3.11.x
 
-# B. Unit tests pass
+# B. Import contract
+python -c "from monitoring.truth_report import calculate_confidence; print('ok')"
+
+# C. Unit tests
 python -m pytest -q --ignore=tests/integration
 
-# C. M3 regression check
-python scripts/ci_m3_gate.py
-
-# D. M4 gate passes
-python scripts/ci_m4_gate.py
-
-# E. All output is ASCII (no emoji in CI logs)
+# D. M4 gate (offline)
+python scripts/ci_m4_gate.py --offline
 ```
 
-## Artifacts
+All must pass.
 
-| Artifact | Path | Content |
-|----------|------|---------|
-| Scan log | `scan.log` | Console output |
-| Snapshot | `snapshots/scan_*.json` | Full scan data |
-| Histogram | `reports/reject_histogram_*.json` | Reject counts |
-| Truth | `reports/truth_report_*.json` | Final report |
+## M4 Execution Skeleton (STEP 10)
+
+Minimal stubs for future M5:
+
+```
+strategy/execution/
+├── __init__.py
+├── state_machine.py    # States: IDLE, SCANNING, VALIDATING, EXECUTING
+├── simulator_gate.py   # Pre-execution validation stub
+├── accounting.py       # Post-trade record placeholder
+└── kill_switch.py      # Emergency stop config
+```
+
+All disabled by config, but structure exists.
 
 ## Known Issues
 
 1. **Price 9.7**: Some pools return inverted prices. Fixed by proper decimals handling.
-2. **quotes_fetched=0 with prices**: Bug in metrics counting. Fixed by separating `rpc_success` from `gate_passed`.
+2. **quotes_fetched=0 with prices**: Fixed by separating `rpc_success` from `gate_passed`.
+3. **Confidence 0.0 when sanity_passed > 0**: Fixed with `calculate_price_stability_factor`.
 
 ## Next Steps (M5)
 
 1. Tighten `price_sanity_max_deviation_bps` to 1000 (10%)
-2. Add more pairs (WBTC, LINK)
+2. Implement cost model (gas estimation)
 3. Enable paper trade execution
 4. Add slippage estimation
+5. Activate state machine
