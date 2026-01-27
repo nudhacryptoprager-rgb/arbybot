@@ -7,10 +7,9 @@ METRICS CONTRACT:
 - quotes_fetched = got RPC response (amount > 0)
 - gates_passed = passed all gates
 
-PNL CONTRACT (Requirement C):
-- All pnl money fields are ALWAYS strings (never None, never float)
-- Keys always present: signal_pnl_usdc, would_execute_pnl_usdc, etc.
-- Default to "0.000000" if no data
+PNL CONTRACT:
+- signal_pnl_usdc, would_execute_pnl_usdc: always str
+- net_pnl_usdc: None when cost_model_available=False, str otherwise
 
 STEP 5: Confidence formula consistency
 STEP 6: Truthful profit breakdown
@@ -29,7 +28,8 @@ from core.format_money import format_money
 
 logger = logging.getLogger("monitoring.truth_report")
 
-SCHEMA_VERSION = "3.2.1"  # Bumped for pnl contract fix
+# STEP 1: Schema version per test contract
+SCHEMA_VERSION = "3.2.0"
 GATE_BREAKDOWN_KEYS = frozenset(["revert", "slippage", "infra", "other", "sanity"])
 
 ERROR_TO_GATE_CATEGORY = {
@@ -466,7 +466,7 @@ def build_truth_report(
             "amount_in_numeraire": opp.get("amount_in_numeraire") or "0",
             "amount_out_buy_numeraire": opp.get("amount_out_buy_numeraire") or "0",
             "amount_out_sell_numeraire": opp.get("amount_out_sell_numeraire") or "0",
-            # PNL CONTRACT: All money fields always str
+            # PNL fields: signal/would_execute always str
             "signal_pnl_usdc": str(signal_pnl),
             "signal_pnl_bps": str(opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0.00")),
             "would_execute_pnl_usdc": str(would_execute_pnl),
@@ -518,7 +518,7 @@ def build_truth_report(
     paper_stats = paper_session_stats or {}
     notion_capital = paper_stats.get("notion_capital_usdc", "10000.000000")
 
-    # PNL CONTRACT: All money fields ALWAYS str, never None
+    # Format PnL values
     signal_pnl_str = format_money(total_signal_pnl_usdc, decimals=6)
     would_execute_pnl_str = format_money(total_would_execute_pnl_usdc, decimals=6)
 
@@ -534,6 +534,26 @@ def build_truth_report(
     if run_mode == "SMOKE_SIMULATOR":
         execution_blocker = "SMOKE_MODE_NO_EXECUTION"
 
+    # PNL CONTRACT:
+    # - signal_pnl_usdc, would_execute_pnl_usdc: always str
+    # - net_pnl_usdc: None when cost_model_available=False
+    pnl_dict = {
+        "signal_pnl_usdc": signal_pnl_str,
+        "signal_pnl_bps": "0.00",
+        "would_execute_pnl_usdc": would_execute_pnl_str,
+        "would_execute_pnl_bps": "0.00",
+        "gross_pnl_usdc": signal_pnl_str,
+        "cost_model_available": cost_model_available,
+    }
+
+    # STEP 3: net_pnl_usdc = None when no cost model
+    if cost_model_available:
+        pnl_dict["net_pnl_usdc"] = signal_pnl_str  # str when cost model exists
+        pnl_dict["net_pnl_bps"] = "0.00"
+    else:
+        pnl_dict["net_pnl_usdc"] = None  # None when no cost model
+        pnl_dict["net_pnl_bps"] = None
+
     return TruthReport(
         mode=mode,
         run_mode=run_mode,
@@ -544,24 +564,11 @@ def build_truth_report(
         top_opportunities=top_opps,
         stats=stats,
         revalidation=revalidation,
-        # PNL CONTRACT: cumulative_pnl - always str
         cumulative_pnl={
             "total_bps": "0.00",
             "total_usdc": signal_pnl_str,
         },
-        # PNL CONTRACT: pnl keys ALWAYS present, ALWAYS str (never None)
-        pnl={
-            "signal_pnl_usdc": signal_pnl_str,
-            "signal_pnl_bps": "0.00",
-            "would_execute_pnl_usdc": would_execute_pnl_str,
-            "would_execute_pnl_bps": "0.00",
-            # Additional fields (also always str or "0.00")
-            "gross_pnl_usdc": signal_pnl_str,
-            "net_pnl_usdc": signal_pnl_str,
-            "net_pnl_bps": "0.00",
-            "cost_model_available": cost_model_available,
-        },
-        # PNL CONTRACT: pnl_normalized - always str
+        pnl=pnl_dict,
         pnl_normalized={
             "notion_capital_numeraire": str(notion_capital),
             "normalized_return_pct": normalized_return_pct if normalized_return_pct else "0.0000",
@@ -601,6 +608,10 @@ def print_truth_report(report: TruthReport) -> None:
     pnl = report.pnl
     print(f"Signal PnL: ${pnl.get('signal_pnl_usdc', '0.000000')}")
     print(f"Would-execute PnL: ${pnl.get('would_execute_pnl_usdc', '0.000000')}")
+    if report.cost_model_available:
+        print(f"Net PnL: ${pnl.get('net_pnl_usdc', '0.000000')}")
+    else:
+        print("[NO_COST_MODEL] Net PnL not calculated")
 
     print("\n--- TOP OPPORTUNITIES ---")
     if not report.top_opportunities:
