@@ -11,6 +11,10 @@ PNL CONTRACT:
 - signal_pnl_usdc, would_execute_pnl_usdc: always str
 - net_pnl_usdc: None when cost_model_available=False, str otherwise
 
+REJECT REASON CONTRACT:
+- Canonical key: PRICE_SANITY_FAILED (not PRICE_SANITY_FAIL)
+- ERROR_TO_GATE_CATEGORY accepts both for backward compatibility
+
 STEP 5: Confidence formula consistency
 STEP 6: Truthful profit breakdown
 STEP 9: Execution semantics
@@ -28,15 +32,21 @@ from core.format_money import format_money
 
 logger = logging.getLogger("monitoring.truth_report")
 
-# STEP 1: Schema version per test contract
+# STEP 2: Frozen schema version
 SCHEMA_VERSION = "3.2.0"
 GATE_BREAKDOWN_KEYS = frozenset(["revert", "slippage", "infra", "other", "sanity"])
 
+# STEP 3: Unified reject reason mapping
+# Canonical: PRICE_SANITY_FAILED
+# Both PRICE_SANITY_FAIL and PRICE_SANITY_FAILED map to "sanity"
 ERROR_TO_GATE_CATEGORY = {
     "QUOTE_REVERT": "revert",
     "SLIPPAGE_TOO_HIGH": "slippage",
     "INFRA_RPC_ERROR": "infra",
     "INVALID_SIZE": "other",
+    # Canonical: PRICE_SANITY_FAILED
+    "PRICE_SANITY_FAILED": "sanity",
+    # Legacy compatibility: PRICE_SANITY_FAIL -> sanity
     "PRICE_SANITY_FAIL": "sanity",
     "MINIMUM_REALISM_FAIL": "sanity",
 }
@@ -534,7 +544,7 @@ def build_truth_report(
     if run_mode == "SMOKE_SIMULATOR":
         execution_blocker = "SMOKE_MODE_NO_EXECUTION"
 
-    # PNL CONTRACT:
+    # STEP 1: PNL CONTRACT - stable keys
     # - signal_pnl_usdc, would_execute_pnl_usdc: always str
     # - net_pnl_usdc: None when cost_model_available=False
     pnl_dict = {
@@ -546,12 +556,12 @@ def build_truth_report(
         "cost_model_available": cost_model_available,
     }
 
-    # STEP 3: net_pnl_usdc = None when no cost model
+    # net_pnl_usdc = None when no cost model
     if cost_model_available:
-        pnl_dict["net_pnl_usdc"] = signal_pnl_str  # str when cost model exists
+        pnl_dict["net_pnl_usdc"] = signal_pnl_str
         pnl_dict["net_pnl_bps"] = "0.00"
     else:
-        pnl_dict["net_pnl_usdc"] = None  # None when no cost model
+        pnl_dict["net_pnl_usdc"] = None
         pnl_dict["net_pnl_bps"] = None
 
     return TruthReport(

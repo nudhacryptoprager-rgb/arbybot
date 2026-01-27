@@ -139,10 +139,11 @@ class TestTruthReportConsistency(unittest.TestCase):
         """Gate breakdown should include sanity category."""
         from monitoring.truth_report import build_gate_breakdown
 
+        # STEP 3: Use canonical PRICE_SANITY_FAILED
         histogram = {
             "QUOTE_REVERT": 2,
             "INFRA_RPC_ERROR": 1,
-            "PRICE_SANITY_FAIL": 3,
+            "PRICE_SANITY_FAILED": 3,
         }
 
         breakdown = build_gate_breakdown(histogram)
@@ -150,6 +151,18 @@ class TestTruthReportConsistency(unittest.TestCase):
         self.assertEqual(breakdown["revert"], 2)
         self.assertEqual(breakdown["infra"], 1)
         self.assertEqual(breakdown["sanity"], 3)
+
+    def test_gate_breakdown_legacy_price_sanity_fail(self):
+        """Gate breakdown should handle legacy PRICE_SANITY_FAIL."""
+        from monitoring.truth_report import build_gate_breakdown
+
+        # Legacy key should also work
+        histogram = {
+            "PRICE_SANITY_FAIL": 2,
+        }
+
+        breakdown = build_gate_breakdown(histogram)
+        self.assertEqual(breakdown["sanity"], 2)
 
 
 class TestProfitBreakdown(unittest.TestCase):
@@ -339,7 +352,7 @@ class TestRPCHealthMetrics(unittest.TestCase):
 
 
 class TestSchemaVersion(unittest.TestCase):
-    """Test schema version is bumped."""
+    """Test schema version is frozen."""
 
     def test_schema_version_is_3_2_0(self):
         from monitoring.truth_report import SCHEMA_VERSION

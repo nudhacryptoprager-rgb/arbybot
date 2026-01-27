@@ -4,26 +4,26 @@
 CI Gate for M4 (REAL Pipeline).
 
 STEP 1: Python 3.11.x enforcement
-STEP 3: ASCII-safe output (no emojis)
+STEP 3: ASCII-safe output (no emojis), unified reject codes
 STEP 4: Import contract check
 STEP 6: Truthful profit validation
 STEP 8: Offline/online mode separation
 STEP 9: Execution semantics validation
 
 M4 SUCCESS CRITERIA:
-  - Python version 3.11.x
-  - Import contract (calculate_confidence)
-  - run_mode == "REGISTRY_REAL"
-  - current_block > 0
-  - execution_ready_count == 0
-  - execution_enabled == false
-  - quotes_fetched >= 1
-  - rpc_success_rate > 0
-  - dexes_active >= 2
-  - price_sanity_passed >= 1
-  - price_stability_factor > 0 when sanity_passed > 0
-  - cost_model_available flag present
-  - 4/4 artifacts
+- Python version 3.11.x
+- Import contract (calculate_confidence)
+- run_mode == "REGISTRY_REAL"
+- current_block > 0
+- execution_ready_count == 0
+- execution_enabled == false
+- quotes_fetched >= 1
+- rpc_success_rate > 0
+- dexes_active >= 2
+- price_sanity_passed >= 1
+- price_stability_factor > 0 when sanity_passed > 0
+- cost_model_available flag present
+- 4/4 artifacts
 """
 
 import json
@@ -48,8 +48,8 @@ def check_python_version() -> bool:
         return True
 
     print(f"[FAIL] Python version: {sys.version.split()[0]}")
-    print(f"   Required: Python {REQUIRED_PYTHON_MAJOR}.{REQUIRED_PYTHON_MINOR}.x")
-    print(f"   Install: py -3.11 -m venv .venv && .venv\\Scripts\\Activate.ps1")
+    print(f"       Required: Python {REQUIRED_PYTHON_MAJOR}.{REQUIRED_PYTHON_MINOR}.x")
+    print(f"       Install: py -3.11 -m venv .venv && .venv\\Scripts\\Activate.ps1")
     return False
 
 
@@ -60,7 +60,8 @@ def check_import_contract() -> bool:
     print("=" * 60)
 
     cmd = [
-        sys.executable, "-c",
+        sys.executable,
+        "-c",
         "from monitoring.truth_report import calculate_confidence"
     ]
 
@@ -79,14 +80,17 @@ def run_command(cmd: list, description: str) -> bool:
     """Run command with ASCII-safe output."""
     print(f"\n{'='*60}")
     print(f"STEP: {description}")
-    print(f"CMD:  {' '.join(cmd)}")
+    print(f"CMD: {' '.join(cmd)}")
     print("=" * 60)
+
     result = subprocess.run(cmd, capture_output=False)
     success = result.returncode == 0
+
     if success:
         print(f"[PASS] {description}")
     else:
         print(f"[FAIL] {description} (exit code {result.returncode})")
+
     return success
 
 
@@ -101,6 +105,7 @@ def create_offline_fixtures(output_dir: Path) -> None:
     with open(output_dir / "scan.log", "w") as f:
         f.write(f"[FIXTURE] Offline mode scan at {timestamp_str}\n")
 
+    # STEP 3: Use canonical PRICE_SANITY_FAILED (not PRICE_SANITY_FAIL)
     scan_data = {
         "run_mode": "REGISTRY_REAL",
         "current_block": 275000000,
@@ -124,7 +129,8 @@ def create_offline_fixtures(output_dir: Path) -> None:
             "price_sanity_passed": 2,
             "price_sanity_failed": 2,
         },
-        "reject_histogram": {"PRICE_SANITY_FAIL": 2},
+        # STEP 3: Canonical reject key
+        "reject_histogram": {"PRICE_SANITY_FAILED": 2},
         "gate_breakdown": {"revert": 0, "slippage": 0, "infra": 0, "other": 0, "sanity": 2},
         "dex_coverage": {
             "configured": ["sushiswap_v3", "uniswap_v3"],
@@ -158,6 +164,8 @@ def create_offline_fixtures(output_dir: Path) -> None:
                 "net_pnl_usdc": None,
                 "signal_pnl_usdc": "5.000000",
                 "signal_pnl_bps": "14.28",
+                "would_execute_pnl_usdc": "5.000000",
+                "would_execute_pnl_bps": "14.28",
                 "confidence": 0.82,
                 "confidence_factors": {
                     "rpc_health": 1.0,
@@ -181,7 +189,8 @@ def create_offline_fixtures(output_dir: Path) -> None:
                 "pool": "0x17c14D2c404D167802b16C450d3c99F88F2c4F4d",
                 "pair": "WETH/USDC",
                 "fee": 3000,
-                "reject_reason": "PRICE_SANITY_FAIL",
+                # STEP 3: Canonical reject reason
+                "reject_reason": "PRICE_SANITY_FAILED",
                 "price": "3600.123456",
                 "price_deviation_bps": 286,
             }
@@ -195,6 +204,7 @@ def create_offline_fixtures(output_dir: Path) -> None:
     with open(output_dir / "snapshots" / f"scan_{timestamp_str}.json", "w") as f:
         json.dump(scan_data, f, indent=2)
 
+    # STEP 3: Canonical reject key
     histogram_data = {
         "run_mode": "REGISTRY_REAL",
         "timestamp": datetime.now().isoformat(),
@@ -203,7 +213,7 @@ def create_offline_fixtures(output_dir: Path) -> None:
         "quotes_total": 4,
         "quotes_fetched": 4,
         "gates_passed": 2,
-        "histogram": {"PRICE_SANITY_FAIL": 2},
+        "histogram": {"PRICE_SANITY_FAILED": 2},
         "gate_breakdown": {"revert": 0, "slippage": 0, "infra": 0, "other": 0, "sanity": 2},
     }
 
@@ -255,6 +265,7 @@ def create_offline_fixtures(output_dir: Path) -> None:
                 "slippage_estimate_usdc": None,
                 "net_pnl_usdc": None,
                 "signal_pnl_usdc": "5.000000",
+                "would_execute_pnl_usdc": "5.000000",
                 "confidence": 0.82,
                 "confidence_factors": {"rpc_health": 1.0, "quote_coverage": 1.0},
                 "is_profitable": True,
@@ -278,11 +289,15 @@ def create_offline_fixtures(output_dir: Path) -> None:
         # STEP 6: PnL with cost awareness
         "pnl": {
             "gross_pnl_usdc": "5.000000",
+            "signal_pnl_usdc": "5.000000",
+            "signal_pnl_bps": "0.00",
+            "would_execute_pnl_usdc": "5.000000",
+            "would_execute_pnl_bps": "0.00",
             "gas_estimate_usdc": None,
             "slippage_estimate_usdc": None,
             "net_pnl_usdc": None,
+            "net_pnl_bps": None,
             "cost_model_available": False,
-            "signal_pnl_usdc": "5.000000",
         },
     }
 
@@ -357,7 +372,6 @@ def check_metrics_invariants(output_dir: Path) -> bool:
     quotes_fetched = stats.get("quotes_fetched", 0)
     quotes_total = stats.get("quotes_total", 0)
     gates_passed = stats.get("gates_passed", 0)
-
     sample_rejects = scan_data.get("sample_rejects", [])
 
     # If rejects have prices, quotes_fetched > 0
@@ -480,7 +494,7 @@ def check_profit_truthfulness(output_dir: Path) -> bool:
     for opp in truth_report.get("top_opportunities", []):
         blockers = opp.get("execution_blockers", [])
         opp_cost_model = opp.get("cost_model_available", None)
-        
+
         if opp_cost_model is False and "NO_COST_MODEL" not in blockers:
             errors.append(f"[FAIL] Opportunity {opp.get('spread_id')} has no cost model but missing NO_COST_MODEL blocker")
 
@@ -646,12 +660,10 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="ARBY M4 CI Gate")
-    parser.add_argument("--offline", action="store_true",
-                        help="STEP 8: Run on recorded fixtures (default)")
-    parser.add_argument("--online", action="store_true",
-                        help="STEP 8: Run with live RPC (requires network)")
-    parser.add_argument("--skip-python-check", action="store_true",
-                        help="Skip Python version check")
+    parser.add_argument("--offline", action="store_true", help="STEP 8: Run on recorded fixtures (default)")
+    parser.add_argument("--online", action="store_true", help="STEP 8: Run with live RPC (requires network)")
+    parser.add_argument("--skip-python-check", action="store_true", help="Skip Python version check")
+
     args = parser.parse_args()
 
     # Default to offline if neither specified
@@ -659,7 +671,7 @@ def main():
         args.offline = True
 
     print("\n" + "=" * 60)
-    print("  ARBY M4 CI GATE")
+    print("       ARBY M4 CI GATE")
     print("=" * 60)
     print()
     print("M4 Criteria:")
@@ -714,9 +726,10 @@ def main():
         create_offline_fixtures(output_dir)
     else:
         config_path = Path("config/real_minimal.yaml")
-
         cmd = [
-            sys.executable, "-m", "strategy.jobs.run_scan",
+            sys.executable,
+            "-m",
+            "strategy.jobs.run_scan",
             "--mode", "real",
             "--cycles", "1",
             "--output-dir", str(output_dir),
@@ -761,7 +774,7 @@ def main():
         sys.exit(4)
 
     print("\n" + "=" * 60)
-    print(f"  [PASS] M4 CI GATE PASSED ({mode_str})")
+    print(f"       [PASS] M4 CI GATE PASSED ({mode_str})")
     print("=" * 60)
     print(f"\nArtifacts: {output_dir}")
     print()
@@ -776,6 +789,7 @@ def main():
     print("  [OK] confidence consistent (STEP 5)")
     print("  [OK] profit truthful (STEP 6)")
     print("  [OK] 4/4 artifacts")
+
     sys.exit(0)
 
 
