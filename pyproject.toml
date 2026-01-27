@@ -34,10 +34,8 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
-# STEP 8: Default to offline mode in tests
-env = [
-    "ARBY_OFFLINE=1",
-]
+# Note: For offline mode, set ARBY_OFFLINE=1 before running tests
+# Removed env= option as it requires pytest-env plugin
 
 [tool.black]
 line-length = 100
