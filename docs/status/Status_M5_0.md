@@ -27,130 +27,47 @@ Consolidate infrastructure, unify contracts, and prepare for M5 multi-chain exec
 
 ---
 
-## 10 Кроків Виправлень
-
-### КРОК 1: Уніфікований Price Sanity ✅
-
-**File**: `core/validators.py`
-
-```python
-from core.validators import normalize_price, check_price_sanity
-
-# Unified API for both SMOKE and REAL pipelines
-price, was_inverted, diag = normalize_price(
-    amount_in_wei, amount_out_wei, decimals_in, decimals_out, token_in, token_out
-)
-
-passed, dev_bps, error, diagnostics = check_price_sanity(
-    token_in, token_out, price, config,
-    dynamic_anchor=None,  # BACKWARD COMPATIBLE
-    dex_id="uniswap_v3",
-    pool_address="0x...",
-)
-```
-
-### КРОК 2: ErrorCode Contract ✅
-
-**File**: `core/exceptions.py`, `tests/unit/test_error_codes.py`
-
-- Added `INFRA_BAD_ABI` to ErrorCode enum
-- Test that all `ErrorCode.XXXX` usages exist in enum
-- Test no duplicate values
-- Test ERROR_TO_GATE_CATEGORY maps valid codes
-
-### КРОК 3: Anchor Selection ✅
-
-**File**: `core/validators.py`, `core/constants.py`
-
-Priority:
-1. Quote from `anchor_dex` (uniswap_v3 > pancakeswap_v3 > sushiswap_v3)
-2. Median of valid quotes
-3. Hardcoded bounds (fallback)
-
-```python
-ANCHOR_DEX_PRIORITY = ("uniswap_v3", "pancakeswap_v3", "sushiswap_v3")
-```
-
-### КРОК 4: Extended Diagnostics ✅
-
-Sanity-fail diagnostics now include:
-
-| Field | Description |
-|-------|-------------|
-| `implied_price` | Normalized price |
-| `anchor_price` | Anchor used |
-| `amount_in_wei` | Raw input |
-| `amount_out_wei` | Raw output |
-| `decimals_in` | Input decimals |
-| `decimals_out` | Output decimals |
-| `raw_price` | Before normalization |
-| `inversion_applied` | Was price inverted |
-| `pool_fee` | Fee tier |
-| `pool_address` | Pool address |
-| `dex_id` | DEX identifier |
-| `anchor_source_info` | Anchor selection details |
-
-### КРОК 5: Централізовані Константи ✅
-
-**File**: `core/constants.py`
-
-```python
-from core.constants import (
-    SCHEMA_VERSION,        # "3.2.0" (frozen)
-    ExecutionBlocker,      # Enum of canonical blockers
-    RunMode,               # SMOKE_SIMULATOR, REGISTRY_REAL, etc.
-    ANCHOR_DEX_PRIORITY,   # ("uniswap_v3", ...)
-    PRICE_SANITY_BOUNDS,   # Hardcoded fallbacks
-    DexType,               # UNISWAP_V2, UNISWAP_V3, etc. (RESTORED)
-    TokenStatus,           # VERIFIED, UNVERIFIED, etc. (RESTORED)
-    PoolStatus,            # ACTIVE, DISABLED, etc. (RESTORED)
-)
-```
-
-### КРОК 6: Canonical Blocker Strings ✅
-
-**File**: `core/constants.py`
-
-```python
-class ExecutionBlocker(str, Enum):
-    EXECUTION_DISABLED_M4 = "EXECUTION_DISABLED_M4"
-    SMOKE_MODE_NO_EXECUTION = "SMOKE_MODE_NO_EXECUTION"
-    NOT_PROFITABLE = "NOT_PROFITABLE"
-    LOW_CONFIDENCE = "LOW_CONFIDENCE"
-    NO_COST_MODEL = "NO_COST_MODEL"
-    INVALID_SIZE = "INVALID_SIZE"
-    # ... etc
-```
-
-### КРОК 7-9: Provider/Concurrency (TODO M5)
-
-Not in M5_0 scope. Will be addressed in M5 multi-chain.
-
-### КРОК 10: M5_0 CI Gate ✅
-
-**File**: `scripts/ci_m5_0_gate.py`
-
-Offline artifact validation without heavy imports.
-
----
-
-## M5_0 Gate Usage
+## M5_0 CI Gate Usage
 
 ### Commands
 
+**Recommended: Explicit --run-dir (highest priority)**
 ```powershell
-# Offline with auto-generated fixture (default)
+python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
+```
+
+**Offline fixture (saves to data/runs/)**
+```powershell
+# Default: data/runs/ci_m5_0_gate_<timestamp>
 python scripts/ci_m5_0_gate.py --offline
 
-# Validate specific run directory
-python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
-
-# Self-test mode
-python scripts/ci_m5_0_gate.py --self-test
-
-# Show version
-python scripts/ci_m5_0_gate.py --version
+# Custom output directory
+python scripts/ci_m5_0_gate.py --offline --out-dir data/runs/my_fixture
 ```
+
+**Auto-select latest**
+```powershell
+# Auto-select (when no --run-dir and no --offline)
+python scripts/ci_m5_0_gate.py
+
+# Print latest valid runDir
+python scripts/ci_m5_0_gate.py --print-latest
+```
+
+### Run-Dir Selection Priority
+
+| Priority | Condition | Behavior |
+|----------|-----------|----------|
+| 1 | `--run-dir PATH` | Uses explicit path |
+| 2 | `--offline` | Creates fixture in `--out-dir` or `data/runs/ci_m5_0_gate_<ts>` |
+| 3 | Default | Auto-select latest valid runDir in `data/runs/` |
+
+### Latest RunDir Selection Logic
+
+- **Must have**: all 3 artifacts (scan_*.json, truth_report_*.json, reject_histogram_*.json)
+- **Priority prefixes**: `ci_m5_0_gate_*` > `run_scan_*` > `real_*` > `session_*` > other
+- **Within same priority**: sorted by mtime (newest first)
+- **Directories without 3 artifacts**: ignored
 
 ### What It Validates
 
@@ -158,7 +75,7 @@ python scripts/ci_m5_0_gate.py --version
 |-------|-------------|
 | Artifacts present | scan_*.json, truth_report_*.json, reject_histogram_*.json |
 | schema_version | Exists and matches X.Y.Z format |
-| run_mode | Exists in both scan and truth_report |
+| run_mode | Exists in both scan and truth_report, consistent |
 | current_block | > 0 for REGISTRY_REAL mode |
 | quotes_total | >= 1 |
 | quotes_fetched | >= 1 and <= quotes_total |
@@ -176,6 +93,11 @@ python scripts/ci_m5_0_gate.py --version
 | 1 | FAIL - one or more checks failed |
 | 2 | FAIL - artifacts missing or unreadable |
 
+### Fixture Marker
+
+Fixture data contains `_fixture: true` in JSON and uses `current_block: 275000000`.
+Gate output shows `[FIXTURE]` marker for synthetic data.
+
 ---
 
 ## Files Changed
@@ -184,12 +106,10 @@ python scripts/ci_m5_0_gate.py --version
 |------|--------|
 | `core/constants.py` | Centralized constants + restored DexType/TokenStatus/etc |
 | `core/exceptions.py` | Added INFRA_BAD_ABI to ErrorCode |
-| `core/validators.py` | NEW: Unified price sanity |
-| `monitoring/truth_report.py` | Import SCHEMA_VERSION from constants |
-| `tests/unit/test_error_codes.py` | NEW: ErrorCode contract test |
-| `tests/unit/test_ci_m5_0_gate.py` | NEW: M5_0 gate unit tests |
 | `scripts/ci_m5_0_gate.py` | NEW: M5_0 CI gate script |
+| `tests/unit/test_ci_m5_0_gate.py` | NEW: M5_0 gate unit tests |
 | `docs/TESTING.md` | Added M5_0 gate instructions |
+| `docs/status/Status_M5_0.md` | This file |
 
 ---
 
@@ -218,18 +138,6 @@ ExecutionBlocker.NO_COST_MODEL
 ExecutionBlocker.INVALID_SIZE
 ```
 
-### Price Sanity API
-```python
-# BACKWARD COMPATIBLE
-check_price_sanity(
-    token_in, token_out, price, config,
-    dynamic_anchor=None,  # Optional
-    fee=0, decimals_in=18, decimals_out=6,
-)
-# Returns: (passed, deviation_bps, error, diagnostics)
-# diagnostics ALWAYS includes: implied_price, anchor_price
-```
-
 ---
 
 ## Definition of Done (M5_0)
@@ -245,13 +153,12 @@ python -c "from core.exceptions import ErrorCode; print('INFRA_BAD_ABI' in [e.va
 # 3. Full pytest (NO --ignore)
 python -m pytest -q
 
-# 4. ErrorCode contract
-python -m pytest tests/unit/test_error_codes.py -v
-
-# 5. M5_0 gate (offline)
+# 4. M5_0 gate (offline or with explicit --run-dir)
 python scripts/ci_m5_0_gate.py --offline
+# or
+python scripts/ci_m5_0_gate.py --run-dir data/runs/<valid_run>
 
-# 6. M5_0 gate tests
+# 5. M5_0 gate tests
 python -m pytest tests/unit/test_ci_m5_0_gate.py -v
 ```
 
@@ -270,13 +177,16 @@ Copy-Item outputs/tests/unit/test_ci_m5_0_gate.py tests/unit/
 Copy-Item outputs/docs/TESTING.md docs/
 Copy-Item outputs/docs/status/Status_M5_0.md docs/status/
 
+# Add untracked files
+git add scripts/ci_m5_0_gate.py tests/unit/test_ci_m5_0_gate.py
+
 # Run tests
 python -m pytest -q
 
 # Run M5_0 gate
 python scripts/ci_m5_0_gate.py --offline
 
-# Commit
+# Commit all
 git add core/constants.py core/exceptions.py scripts/ci_m5_0_gate.py \
         tests/unit/test_ci_m5_0_gate.py docs/TESTING.md docs/status/Status_M5_0.md
 git commit -m "feat(M5_0): CI gate, centralized constants, ErrorCode fix"

@@ -18,14 +18,25 @@ M5_0 SUCCESS CRITERIA:
 - 3 core artifacts present (scan, truth_report, reject_histogram)
 
 USAGE:
-    # Validate existing run directory
+    # Validate specific run directory (RECOMMENDED)
     python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
 
-    # Run with fixture (for CI)
+    # Offline with fixture in data/runs (default location)
     python scripts/ci_m5_0_gate.py --offline
+
+    # Offline with custom output directory
+    python scripts/ci_m5_0_gate.py --offline --out-dir data/runs/my_fixture
+
+    # Auto-select latest valid runDir
+    python scripts/ci_m5_0_gate.py
 
     # Self-test mode
     python scripts/ci_m5_0_gate.py --self-test
+
+RUN-DIR SELECTION PRIORITY:
+1. --run-dir PATH (explicit, highest priority)
+2. --offline (creates fixture)
+3. Latest valid runDir in data/runs/ (by mtime, must have 3 artifacts)
 
 ASCII-SAFE: No emoji or Unicode symbols (Windows compatibility).
 """
@@ -34,16 +45,22 @@ import argparse
 import json
 import re
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # Version
-GATE_VERSION = "1.0.0"
+GATE_VERSION = "1.1.0"
 
 # Required schema version pattern (major.minor.patch)
 VALID_SCHEMA_PATTERN = r"^\d+\.\d+\.\d+$"
+
+# Default output directory for fixtures
+DEFAULT_RUNS_DIR = Path("data/runs")
+
+# Fixture marker (to distinguish from real data)
+FIXTURE_BLOCK = 275000000
+FIXTURE_MARKER = "[FIXTURE]"
 
 
 def log_ok(msg: str) -> None:
@@ -113,6 +130,58 @@ def find_artifacts(run_dir: Path) -> Dict[str, Optional[Path]]:
     return artifacts
 
 
+def has_all_artifacts(run_dir: Path) -> bool:
+    """Check if directory has all 3 required artifacts."""
+    artifacts = find_artifacts(run_dir)
+    return all(v is not None for v in artifacts.values())
+
+
+def find_latest_valid_rundir(base_dir: Path) -> Optional[Path]:
+    """
+    Find latest valid runDir by modification time.
+    
+    Selection criteria:
+    1. Must be a directory
+    2. Must contain all 3 artifacts (scan, truth_report, reject_histogram)
+    3. Prioritize ci_m5_0_gate_* and run_scan_* prefixes
+    4. Fall back to any directory with artifacts
+    5. Sort by mtime (newest first)
+    
+    Returns None if no valid runDir found.
+    """
+    if not base_dir.exists():
+        return None
+    
+    # Get all subdirectories
+    all_dirs = [d for d in base_dir.iterdir() if d.is_dir()]
+    
+    if not all_dirs:
+        return None
+    
+    # Filter to directories with all 3 artifacts
+    valid_dirs = [d for d in all_dirs if has_all_artifacts(d)]
+    
+    if not valid_dirs:
+        return None
+    
+    # Prioritize M5 and run_scan prefixes
+    priority_prefixes = ("ci_m5_0_gate_", "run_scan_", "real_", "session_")
+    
+    def sort_key(d: Path) -> Tuple[int, float]:
+        """Sort by: (priority, mtime). Lower priority number = higher priority."""
+        name = d.name
+        priority = 99  # Default low priority
+        for i, prefix in enumerate(priority_prefixes):
+            if name.startswith(prefix):
+                priority = i
+                break
+        # Negative mtime so newest is first
+        return (priority, -d.stat().st_mtime)
+    
+    valid_dirs.sort(key=sort_key)
+    return valid_dirs[0]
+
+
 def load_json(path: Path) -> Optional[Dict[str, Any]]:
     """Load JSON file safely."""
     try:
@@ -169,7 +238,6 @@ def check_run_mode(scan_data: Dict[str, Any], truth_report: Dict[str, Any]) -> T
     # Check scan data
     scan_mode = scan_data.get("run_mode")
     if scan_mode is None:
-        # Try stats.run_mode
         scan_mode = scan_data.get("stats", {}).get("run_mode")
     
     if scan_mode is None:
@@ -191,21 +259,23 @@ def check_run_mode(scan_data: Dict[str, Any], truth_report: Dict[str, Any]) -> T
     return len(errors) == 0, errors
 
 
-def check_block_pinned(scan_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+def check_block_pinned(scan_data: Dict[str, Any], is_fixture: bool = False) -> Tuple[bool, List[str]]:
     """Check current_block is valid (> 0 for REAL mode)."""
     errors: List[str] = []
     
     run_mode = scan_data.get("run_mode") or scan_data.get("stats", {}).get("run_mode", "")
     current_block = scan_data.get("current_block", 0)
     
+    # Mark fixture values
+    fixture_marker = f" {FIXTURE_MARKER}" if is_fixture and current_block == FIXTURE_BLOCK else ""
+    
     if run_mode == "REGISTRY_REAL":
         if current_block is None or current_block <= 0:
             errors.append(f"current_block must be > 0 for REAL mode, got: {current_block}")
         else:
-            log_ok(f"current_block: {current_block}")
+            log_ok(f"current_block: {current_block}{fixture_marker}")
     else:
-        # SMOKE mode - block is simulated, just report
-        log_info(f"current_block: {current_block} (SMOKE mode)")
+        log_info(f"current_block: {current_block} (SMOKE mode){fixture_marker}")
     
     return len(errors) == 0, errors
 
@@ -219,7 +289,6 @@ def check_quotes_metrics(scan_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     quotes_fetched = stats.get("quotes_fetched", 0)
     gates_passed = stats.get("gates_passed", 0)
     
-    # Invariant checks
     if quotes_total < 1:
         errors.append(f"quotes_total must be >= 1, got: {quotes_total}")
     else:
@@ -282,11 +351,8 @@ def check_reject_histogram(histogram_data: Dict[str, Any]) -> Tuple[bool, List[s
     errors: List[str] = []
     
     histogram = histogram_data.get("histogram", {})
-    
-    # Histogram can be empty (all passed)
     log_ok(f"reject_histogram: {len(histogram)} categories")
     
-    # Check for gate_breakdown if present
     gate_breakdown = histogram_data.get("gate_breakdown", {})
     if gate_breakdown:
         log_ok(f"gate_breakdown: {list(gate_breakdown.keys())}")
@@ -294,24 +360,45 @@ def check_reject_histogram(histogram_data: Dict[str, Any]) -> Tuple[bool, List[s
     return len(errors) == 0, errors
 
 
-def create_fixture_run_dir() -> Path:
-    """Create minimal fixture for offline/self-test mode."""
-    temp_dir = Path(tempfile.mkdtemp(prefix="m5_gate_"))
-    snapshots_dir = temp_dir / "snapshots"
-    reports_dir = temp_dir / "reports"
-    snapshots_dir.mkdir()
-    reports_dir.mkdir()
+def create_fixture_run_dir(out_dir: Optional[Path] = None) -> Path:
+    """
+    Create minimal fixture for offline/self-test mode.
     
+    Args:
+        out_dir: Output directory. If None, uses data/runs/ci_m5_0_gate_<timestamp>
+    
+    Returns:
+        Path to created fixture directory
+    """
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # Minimal scan data
+    if out_dir is None:
+        # Default: data/runs/ci_m5_0_gate_<timestamp>
+        out_dir = DEFAULT_RUNS_DIR / f"ci_m5_0_gate_{timestamp_str}"
+    
+    # Create directories
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        # Fallback to temp if can't create in data/runs
+        import tempfile
+        out_dir = Path(tempfile.mkdtemp(prefix="m5_gate_"))
+        log_info(f"Using temp directory (no write access to data/runs): {out_dir}")
+    
+    snapshots_dir = out_dir / "snapshots"
+    reports_dir = out_dir / "reports"
+    snapshots_dir.mkdir(exist_ok=True)
+    reports_dir.mkdir(exist_ok=True)
+    
+    # Minimal scan data with FIXTURE markers
     scan_data = {
         "run_mode": "REGISTRY_REAL",
-        "current_block": 275000000,
+        "current_block": FIXTURE_BLOCK,  # Fixture value
         "chain_id": 42161,
+        "_fixture": True,  # Explicit marker
         "stats": {
             "run_mode": "REGISTRY_REAL",
-            "current_block": 275000000,
+            "current_block": FIXTURE_BLOCK,
             "quotes_total": 4,
             "quotes_fetched": 4,
             "gates_passed": 2,
@@ -331,6 +418,7 @@ def create_fixture_run_dir() -> Path:
         "timestamp": datetime.now().isoformat(),
         "run_mode": "REGISTRY_REAL",
         "execution_enabled": False,
+        "_fixture": True,
         "health": {
             "quotes_total": 4,
             "quotes_fetched": 4,
@@ -353,6 +441,7 @@ def create_fixture_run_dir() -> Path:
     histogram_data = {
         "run_mode": "REGISTRY_REAL",
         "timestamp": datetime.now().isoformat(),
+        "_fixture": True,
         "histogram": {"PRICE_SANITY_FAILED": 2},
         "gate_breakdown": {"sanity": 2, "revert": 0, "slippage": 0, "infra": 0, "other": 0},
     }
@@ -360,11 +449,10 @@ def create_fixture_run_dir() -> Path:
     with open(reports_dir / f"reject_histogram_{timestamp_str}.json", "w") as f:
         json.dump(histogram_data, f, indent=2)
     
-    log_info(f"Created fixture in: {temp_dir}")
-    return temp_dir
+    return out_dir
 
 
-def run_gate(run_dir: Path) -> int:
+def run_gate(run_dir: Path, is_fixture: bool = False) -> int:
     """
     Run all M5_0 gate checks.
     
@@ -392,6 +480,9 @@ def run_gate(run_dir: Path) -> int:
     if scan_data is None or truth_report is None or histogram_data is None:
         return 2
     
+    # Check if this is fixture data
+    is_fixture = is_fixture or scan_data.get("_fixture", False)
+    
     all_passed = True
     
     # Schema version
@@ -418,7 +509,7 @@ def run_gate(run_dir: Path) -> int:
     print(f"\n{'='*60}")
     print("STEP: Block Pinned")
     print("=" * 60)
-    passed, errors = check_block_pinned(scan_data)
+    passed, errors = check_block_pinned(scan_data, is_fixture=is_fixture)
     if not passed:
         for e in errors:
             log_fail(e)
@@ -473,14 +564,28 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 EXAMPLES:
-    # Validate existing run directory
+    # Validate specific run directory (RECOMMENDED)
     python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
 
-    # Run with auto-generated fixture
+    # Offline with fixture in default location (data/runs/)
     python scripts/ci_m5_0_gate.py --offline
+
+    # Offline with custom output directory
+    python scripts/ci_m5_0_gate.py --offline --out-dir data/runs/my_test
+
+    # Auto-select latest valid runDir
+    python scripts/ci_m5_0_gate.py
 
     # Self-test mode
     python scripts/ci_m5_0_gate.py --self-test
+
+    # List latest valid runDir
+    python scripts/ci_m5_0_gate.py --print-latest
+
+RUN-DIR SELECTION PRIORITY:
+    1. --run-dir PATH (explicit, highest priority)
+    2. --offline (creates fixture in data/runs/ or --out-dir)
+    3. Latest valid runDir in data/runs/ (by mtime, must have 3 artifacts)
 
 M5_0 INVARIANTS:
     - schema_version exists (X.Y.Z format)
@@ -497,17 +602,28 @@ M5_0 INVARIANTS:
         "--run-dir",
         type=str,
         default=None,
-        help="Path to run directory with artifacts",
+        help="Path to run directory with artifacts (highest priority)",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default=None,
+        help="Output directory for --offline fixture (default: data/runs/ci_m5_0_gate_<timestamp>)",
     )
     parser.add_argument(
         "--offline",
         action="store_true",
-        help="Create fixture and validate (default if no --run-dir)",
+        help="Create fixture and validate (uses --out-dir or default location)",
     )
     parser.add_argument(
         "--self-test",
         action="store_true",
-        help="Run self-test with fixture",
+        help="Run self-test with fixture (same as --offline)",
+    )
+    parser.add_argument(
+        "--print-latest",
+        action="store_true",
+        help="Print latest valid runDir and exit",
     )
     parser.add_argument(
         "--version",
@@ -520,6 +636,15 @@ M5_0 INVARIANTS:
     if args.version:
         print(f"ci_m5_0_gate.py version {GATE_VERSION}")
         return 0
+    
+    if args.print_latest:
+        latest = find_latest_valid_rundir(DEFAULT_RUNS_DIR)
+        if latest:
+            print(f"Latest valid runDir: {latest}")
+            return 0
+        else:
+            print(f"No valid runDir found in {DEFAULT_RUNS_DIR}")
+            return 1
     
     print("\n" + "=" * 60)
     print(f" ARBY M5_0 CI GATE (v{GATE_VERSION})")
@@ -535,35 +660,45 @@ M5_0 INVARIANTS:
     print("  - price_sanity metrics exist")
     print("  - 3 core artifacts present")
     
-    # Determine run directory
+    # Determine run directory and discovery strategy
+    is_fixture = False
+    discovery_strategy = "unknown"
+    
     if args.run_dir:
+        # Explicit --run-dir (highest priority)
         run_dir = Path(args.run_dir)
         if not run_dir.exists():
             log_fail(f"Run directory does not exist: {run_dir}")
             return 1
-        mode_str = f"RUN-DIR: {run_dir}"
+        discovery_strategy = "explicit (--run-dir)"
+        
     elif args.offline or args.self_test:
-        run_dir = create_fixture_run_dir()
-        mode_str = "OFFLINE (fixture)"
+        # Create fixture
+        out_dir = Path(args.out_dir) if args.out_dir else None
+        run_dir = create_fixture_run_dir(out_dir)
+        is_fixture = True
+        discovery_strategy = "offline_fixture"
+        log_info(f"Created fixture: {run_dir}")
+        
     else:
-        # Default: try to find latest run
-        data_runs = Path("data/runs")
-        if data_runs.exists():
-            run_dirs = sorted([d for d in data_runs.iterdir() if d.is_dir()])
-            if run_dirs:
-                run_dir = run_dirs[-1]
-                mode_str = f"LATEST: {run_dir}"
-            else:
-                run_dir = create_fixture_run_dir()
-                mode_str = "OFFLINE (no runs found, using fixture)"
-        else:
+        # Auto-select latest valid runDir
+        run_dir = find_latest_valid_rundir(DEFAULT_RUNS_DIR)
+        if run_dir is None:
+            log_info(f"No valid runDir in {DEFAULT_RUNS_DIR}, creating fixture...")
             run_dir = create_fixture_run_dir()
-            mode_str = "OFFLINE (no data/runs/, using fixture)"
+            is_fixture = True
+            discovery_strategy = "offline_fixture (fallback)"
+            log_info(f"Created fixture: {run_dir}")
+        else:
+            discovery_strategy = "latest_by_mtime"
     
-    print(f"\n[MODE] {mode_str}")
+    print(f"\n[DISCOVERY] Strategy: {discovery_strategy}")
+    print(f"[RUN-DIR] {run_dir}")
+    if is_fixture:
+        print(f"[FIXTURE] Data is synthetic (current_block={FIXTURE_BLOCK})")
     
     # Run gate
-    exit_code = run_gate(run_dir)
+    exit_code = run_gate(run_dir, is_fixture=is_fixture)
     
     # Summary
     print("\n" + "=" * 60)
@@ -582,6 +717,10 @@ M5_0 INVARIANTS:
         print("  [OK] dexes_active >= 1")
         print("  [OK] price_sanity metrics exist")
         print("  [OK] 3/3 artifacts present")
+        if is_fixture:
+            print(f"\n  {FIXTURE_MARKER} Validated with synthetic fixture data")
+    
+    print(f"\nArtifacts: {run_dir}")
     
     return exit_code
 

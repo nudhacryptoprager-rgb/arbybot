@@ -11,23 +11,28 @@ Tests:
 - DEXes active validation
 - Price sanity metrics validation
 - Reject histogram validation
-- Fixture creation
+- Fixture creation in --out-dir
+- Latest runDir selection (priority, mtime, artifacts)
 
 Run: python -m pytest tests/unit/test_ci_m5_0_gate.py -v
 """
 
 import json
+import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
-# Import gate functions directly (no heavy deps)
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from scripts.ci_m5_0_gate import (
+    FIXTURE_BLOCK,
     find_artifacts,
+    find_latest_valid_rundir,
+    has_all_artifacts,
     check_schema_version,
     check_run_mode,
     check_block_pinned,
@@ -36,7 +41,6 @@ from scripts.ci_m5_0_gate import (
     check_price_sanity_metrics,
     check_reject_histogram,
     create_fixture_run_dir,
-    VALID_SCHEMA_PATTERN,
 )
 
 
@@ -88,6 +92,129 @@ class TestArtifactDiscovery(unittest.TestCase):
             self.assertIsNone(artifacts["scan"])
             self.assertIsNone(artifacts["truth_report"])
             self.assertIsNone(artifacts["reject_histogram"])
+
+    def test_has_all_artifacts_true(self):
+        """Test has_all_artifacts returns True when all present."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            (tmp_path / "scan_001.json").write_text("{}")
+            (tmp_path / "truth_report_001.json").write_text("{}")
+            (tmp_path / "reject_histogram_001.json").write_text("{}")
+
+            self.assertTrue(has_all_artifacts(tmp_path))
+
+    def test_has_all_artifacts_false(self):
+        """Test has_all_artifacts returns False when some missing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            (tmp_path / "scan_001.json").write_text("{}")
+            # Missing truth_report and histogram
+
+            self.assertFalse(has_all_artifacts(tmp_path))
+
+
+class TestLatestRunDirSelection(unittest.TestCase):
+    """Test latest runDir selection logic."""
+
+    def _create_valid_rundir(self, base_dir: Path, name: str) -> Path:
+        """Helper to create a valid runDir with all 3 artifacts."""
+        run_dir = base_dir / name
+        snapshots = run_dir / "snapshots"
+        reports = run_dir / "reports"
+        snapshots.mkdir(parents=True)
+        reports.mkdir()
+        (snapshots / "scan_001.json").write_text("{}")
+        (reports / "truth_report_001.json").write_text("{}")
+        (reports / "reject_histogram_001.json").write_text("{}")
+        return run_dir
+
+    def test_find_latest_no_dirs(self):
+        """Test returns None when no directories exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self.assertIsNone(find_latest_valid_rundir(tmp_path))
+
+    def test_find_latest_no_valid_dirs(self):
+        """Test returns None when dirs exist but none have all artifacts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            (tmp_path / "invalid_dir").mkdir()
+            (tmp_path / "invalid_dir" / "scan_001.json").write_text("{}")
+            # Missing truth_report and histogram
+
+            self.assertIsNone(find_latest_valid_rundir(tmp_path))
+
+    def test_find_latest_single_valid(self):
+        """Test finds single valid runDir."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            valid_dir = self._create_valid_rundir(tmp_path, "run_scan_001")
+
+            result = find_latest_valid_rundir(tmp_path)
+            self.assertEqual(result, valid_dir)
+
+    def test_find_latest_prioritizes_m5_gate_prefix(self):
+        """Test prioritizes ci_m5_0_gate_ prefix over others."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # Create older but higher priority
+            m5_dir = self._create_valid_rundir(tmp_path, "ci_m5_0_gate_001")
+            time.sleep(0.1)
+
+            # Create newer but lower priority
+            other_dir = self._create_valid_rundir(tmp_path, "other_run_002")
+
+            result = find_latest_valid_rundir(tmp_path)
+            self.assertEqual(result, m5_dir)
+
+    def test_find_latest_prioritizes_run_scan_prefix(self):
+        """Test prioritizes run_scan_ over generic directories."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # Create lower priority first
+            other_dir = self._create_valid_rundir(tmp_path, "some_other_dir")
+            time.sleep(0.1)
+
+            # Create higher priority later
+            scan_dir = self._create_valid_rundir(tmp_path, "run_scan_001")
+
+            result = find_latest_valid_rundir(tmp_path)
+            self.assertEqual(result, scan_dir)
+
+    def test_find_latest_uses_mtime_within_same_priority(self):
+        """Test uses mtime when priority is equal."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # Create older
+            old_dir = self._create_valid_rundir(tmp_path, "run_scan_001")
+            time.sleep(0.1)
+
+            # Create newer
+            new_dir = self._create_valid_rundir(tmp_path, "run_scan_002")
+
+            result = find_latest_valid_rundir(tmp_path)
+            self.assertEqual(result, new_dir)
+
+    def test_find_latest_ignores_invalid_dirs(self):
+        """Test ignores directories without all 3 artifacts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+
+            # Create invalid (newer)
+            invalid_dir = tmp_path / "ci_m5_0_gate_new"
+            invalid_dir.mkdir()
+            (invalid_dir / "scan_001.json").write_text("{}")
+            # Missing other artifacts
+            time.sleep(0.1)
+
+            # Create valid (older)
+            valid_dir = self._create_valid_rundir(tmp_path, "run_scan_old")
+
+            result = find_latest_valid_rundir(tmp_path)
+            self.assertEqual(result, valid_dir)
 
 
 class TestSchemaVersion(unittest.TestCase):
@@ -176,6 +303,13 @@ class TestBlockPinned(unittest.TestCase):
         """Test any block in SMOKE mode (always passes)."""
         data = {"run_mode": "SMOKE_SIMULATOR", "current_block": 0}
         passed, errors = check_block_pinned(data)
+        self.assertTrue(passed)
+
+    def test_fixture_marker_shown(self):
+        """Test fixture marker is applied when is_fixture=True."""
+        data = {"run_mode": "REGISTRY_REAL", "current_block": FIXTURE_BLOCK}
+        # This test just ensures no crash; marker is printed to stdout
+        passed, errors = check_block_pinned(data, is_fixture=True)
         self.assertTrue(passed)
 
 
@@ -275,7 +409,7 @@ class TestRejectHistogram(unittest.TestCase):
 class TestFixtureCreation(unittest.TestCase):
     """Test fixture creation."""
 
-    def test_create_fixture(self):
+    def test_create_fixture_default_location(self):
         """Test fixture creation creates valid structure."""
         fixture_dir = create_fixture_run_dir()
 
@@ -294,17 +428,46 @@ class TestFixtureCreation(unittest.TestCase):
             with open(artifacts["scan"]) as f:
                 scan_data = json.load(f)
             self.assertEqual(scan_data["run_mode"], "REGISTRY_REAL")
-            self.assertGreater(scan_data["current_block"], 0)
+            self.assertEqual(scan_data["current_block"], FIXTURE_BLOCK)
+            self.assertTrue(scan_data.get("_fixture", False))
 
             # Check truth report is valid
             with open(artifacts["truth_report"]) as f:
                 truth = json.load(f)
             self.assertEqual(truth["schema_version"], "3.2.0")
+            self.assertTrue(truth.get("_fixture", False))
 
         finally:
-            # Cleanup
-            import shutil
+            shutil.rmtree(fixture_dir, ignore_errors=True)
 
+    def test_create_fixture_custom_out_dir(self):
+        """Test fixture creation in custom --out-dir."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir) / "my_custom_fixture"
+            fixture_dir = create_fixture_run_dir(out_dir=out_dir)
+
+            self.assertEqual(fixture_dir, out_dir)
+            self.assertTrue((fixture_dir / "snapshots").exists())
+            self.assertTrue((fixture_dir / "reports").exists())
+            self.assertTrue(has_all_artifacts(fixture_dir))
+
+    def test_fixture_has_fixture_marker(self):
+        """Test fixture data has _fixture: true marker."""
+        fixture_dir = create_fixture_run_dir()
+
+        try:
+            artifacts = find_artifacts(fixture_dir)
+
+            with open(artifacts["scan"]) as f:
+                self.assertTrue(json.load(f).get("_fixture", False))
+
+            with open(artifacts["truth_report"]) as f:
+                self.assertTrue(json.load(f).get("_fixture", False))
+
+            with open(artifacts["reject_histogram"]) as f:
+                self.assertTrue(json.load(f).get("_fixture", False))
+
+        finally:
             shutil.rmtree(fixture_dir, ignore_errors=True)
 
 
@@ -341,8 +504,6 @@ class TestIntegration(unittest.TestCase):
             self.assertTrue(check_reject_histogram(histogram)[0])
 
         finally:
-            import shutil
-
             shutil.rmtree(fixture_dir, ignore_errors=True)
 
 

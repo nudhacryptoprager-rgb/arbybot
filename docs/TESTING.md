@@ -67,16 +67,42 @@ python scripts/ci_m4_gate.py --online
 ```
 
 ### M5_0 Gate (Infrastructure Hardening)
+
+**Recommended: Explicit --run-dir**
 ```powershell
-# Offline with fixture (default)
+# Validate a specific run directory
+python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
+```
+
+**Offline fixture mode**
+```powershell
+# Create fixture in data/runs/ (default location)
 python scripts/ci_m5_0_gate.py --offline
 
-# Validate specific run directory
-python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
-
-# Self-test mode
-python scripts/ci_m5_0_gate.py --self-test
+# Create fixture in custom directory
+python scripts/ci_m5_0_gate.py --offline --out-dir data/runs/my_test_fixture
 ```
+
+**Auto-select latest**
+```powershell
+# Auto-select latest valid runDir (when no --run-dir and no --offline)
+python scripts/ci_m5_0_gate.py
+
+# Print latest valid runDir without running gate
+python scripts/ci_m5_0_gate.py --print-latest
+```
+
+**Run-Dir Selection Priority:**
+| Priority | Flag | Behavior |
+|----------|------|----------|
+| 1 | `--run-dir PATH` | Uses explicit path (highest priority) |
+| 2 | `--offline` | Creates fixture in `--out-dir` or `data/runs/ci_m5_0_gate_<ts>` |
+| 3 | (default) | Auto-selects latest valid runDir in `data/runs/` |
+
+**Latest RunDir Selection Logic:**
+- Must contain all 3 artifacts (scan, truth_report, reject_histogram)
+- Priority: `ci_m5_0_gate_*` > `run_scan_*` > `real_*` > other
+- Within same priority: sorted by modification time (newest first)
 
 **M5_0 Gate validates:**
 - schema_version exists (X.Y.Z format)
@@ -107,6 +133,7 @@ python --version
 
 # 2. Import check
 python -c "from monitoring.truth_report import calculate_confidence; print('OK')"
+python -c "from core.constants import DexType, SCHEMA_VERSION; print(SCHEMA_VERSION)"
 
 # 3. Unit tests
 python -m pytest -q
@@ -114,8 +141,10 @@ python -m pytest -q
 # 4. M4 gate (if applicable)
 python scripts/ci_m4_gate.py --offline
 
-# 5. M5_0 gate (if applicable)
+# 5. M5_0 gate (RECOMMENDED: use explicit --run-dir)
 python scripts/ci_m5_0_gate.py --offline
+# or with specific runDir:
+python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
 ```
 
 ## Offline vs Online Testing (STEP 8)
@@ -165,4 +194,14 @@ python -m pytest tests/unit/test_ci_m5_0_gate.py -v
 ### Core Models
 ```powershell
 python -m pytest tests/unit/test_core_models.py -v
+```
+
+## Help Commands
+
+```powershell
+# M5_0 gate help
+python scripts/ci_m5_0_gate.py --help
+
+# M4 gate help
+python scripts/ci_m4_gate.py --help
 ```
