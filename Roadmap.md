@@ -283,6 +283,24 @@ arby/
 - Post-trade accounting: realized PnL, gas paid, slippage realized
 - Kill switch / circuit breaker
 
+### M5_0 — Infra: RPC Providers, Streaming, Tracing (No Execution)
+
+Goal: Improve data quality + stability without changing execution semantics.
+
+Scope:
+- Provider abstraction layer (HTTP + optional WS)
+- Multi-provider routing (public RPC / Alchemy) with retries, backoff, timeouts
+- Optional Tenderly tracing/simulation hook for diagnostics (not required for pass)
+- Centralized asyncio concurrency control (semaphores, connection pooling)
+- Observability: richer RPC health metrics and artifact invariants
+
+Done Criteria:
+- Full test suite green (unit + integration)
+- M4 gate remains green (offline)
+- New M5_0 gate script passes offline (recorded fixtures)
+- Config supports selecting provider per chain (env + yaml)
+- No execution enabled; execution_ready_count remains 0
+
 ---
 
 ### Milestone 5 — Production small

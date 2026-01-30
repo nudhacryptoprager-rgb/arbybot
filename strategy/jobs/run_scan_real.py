@@ -21,6 +21,10 @@ ANCHOR CONTRACT (STEP 6):
 REVALIDATION (STEP 7):
 - Top opportunity gets 1 re-quote after initial scan
 - revalidation.total >= 1 in truth_report
+
+BACKWARD COMPATIBILITY:
+- check_price_sanity() accepts dynamic_anchor=None (default)
+- diagnostics always includes anchor_price
 """
 
 import asyncio
@@ -64,11 +68,12 @@ DEFAULT_QUOTE_AMOUNT_WEI = 1_000_000_000_000_000_000  # 1 ETH
 
 # STEP 6: Hardcoded sanity bounds (fallback only)
 # Used when no dynamic anchor available
+# anchor_price = midpoint of bounds
 PRICE_SANITY_BOUNDS = {
-    ("WETH", "USDC"): {"min": Decimal("1500"), "max": Decimal("6000")},
-    ("WETH", "USDT"): {"min": Decimal("1500"), "max": Decimal("6000")},
-    ("WBTC", "USDC"): {"min": Decimal("30000"), "max": Decimal("150000")},
-    ("WBTC", "USDT"): {"min": Decimal("30000"), "max": Decimal("150000")},
+    ("WETH", "USDC"): {"min": Decimal("1500"), "max": Decimal("6000"), "anchor": Decimal("3500")},
+    ("WETH", "USDT"): {"min": Decimal("1500"), "max": Decimal("6000"), "anchor": Decimal("3500")},
+    ("WBTC", "USDC"): {"min": Decimal("30000"), "max": Decimal("150000"), "anchor": Decimal("90000")},
+    ("WBTC", "USDT"): {"min": Decimal("30000"), "max": Decimal("150000"), "anchor": Decimal("90000")},
 }
 
 # M4: 50% max deviation from anchor
@@ -272,11 +277,8 @@ def normalize_price(
     price = out_normalized / in_normalized
     
     # STEP 1: Detect inverted price for known pairs
-    # WETH/USDC should be ~3500, not ~0.0003
     if token_in == "WETH" and token_out in ("USDC", "USDT"):
         if price < Decimal("100"):
-            # Price is inverted (WETH per USDC instead of USDC per WETH)
-            # This happens when pool has USDC as token0
             if price > 0:
                 logger.debug(f"Price inversion detected: {price:.6f} -> {1/price:.2f}")
                 return Decimal("1") / price, True
@@ -294,7 +296,7 @@ def check_price_sanity(
     token_out: str,
     price: Decimal,
     config: Dict[str, Any],
-    dynamic_anchor: Optional[Decimal],
+    dynamic_anchor: Optional[Decimal] = None,  # BACKWARD COMPATIBLE: default None
     fee: int = 0,
     decimals_in: int = 18,
     decimals_out: int = 6,
@@ -302,9 +304,14 @@ def check_price_sanity(
     """
     STEP 6: Check price sanity with DYNAMIC anchor.
     
+    BACKWARD COMPATIBLE: dynamic_anchor defaults to None.
+    
     Priority:
     1. Use dynamic_anchor if available (first successful quote)
     2. Fall back to hardcoded bounds
+    
+    Returns: (passed, deviation_bps, error_message, diagnostics)
+    diagnostics always includes: implied_price, anchor_price
     """
     diagnostics = {
         "implied_price": str(price),
@@ -317,10 +324,12 @@ def check_price_sanity(
     
     if not config.get("price_sanity_enabled", True):
         diagnostics["sanity_check"] = "disabled"
+        diagnostics["anchor_price"] = "N/A"
         return True, None, None, diagnostics
     
     if price <= 0:
         diagnostics["error"] = "zero_or_negative_price"
+        diagnostics["anchor_price"] = "N/A"
         return False, None, "Zero or negative price", diagnostics
     
     pair_key = (token_in, token_out)
@@ -351,14 +360,17 @@ def check_price_sanity(
     # Fallback: hardcoded bounds
     if not bounds:
         diagnostics["sanity_check"] = "no_anchor_for_pair"
+        diagnostics["anchor_price"] = "N/A"
         return True, None, None, diagnostics
     
+    # BACKWARD COMPATIBLE: always set anchor_price
+    anchor_price = bounds.get("anchor", (bounds["min"] + bounds["max"]) / 2)
     diagnostics["anchor_source"] = "hardcoded_bounds"
+    diagnostics["anchor_price"] = str(anchor_price)
     diagnostics["price_bounds"] = [str(bounds["min"]), str(bounds["max"])]
     
     if price < bounds["min"] or price > bounds["max"]:
-        mid = (bounds["min"] + bounds["max"]) / 2
-        deviation_bps = int(abs(price - mid) / mid * Decimal("10000"))
+        deviation_bps = int(abs(price - anchor_price) / anchor_price * Decimal("10000"))
         diagnostics["deviation_bps"] = deviation_bps
         diagnostics["error"] = "outside_bounds"
         return (
@@ -379,17 +391,11 @@ def calculate_spread_confidence(
     dex_count: int,
     spread_bps: Decimal,
 ) -> Tuple[float, Dict[str, float]]:
-    """
-    STEP 3: Calculate confidence with SYNCED price_stability.
-    
-    Uses price_stability_factor from health section (not deviation_bps).
-    """
+    """STEP 3: Calculate confidence with SYNCED price_stability."""
     factors: Dict[str, float] = {}
     
     factors["rpc_health"] = min(1.0, max(0.0, rpc_success_rate))
     factors["quote_coverage"] = min(1.0, max(0.0, quote_fetch_rate))
-    
-    # STEP 3: Use price_stability_factor directly (synced with health)
     factors["price_stability"] = min(1.0, max(0.0, price_stability_factor))
     
     spread_float = float(spread_bps)
@@ -1114,15 +1120,13 @@ async def _run_scan_cycle_async(
         top_spread = cross_dex_spreads[0]
         scan_stats["revalidation_total"] = 1
         
-        # Re-quote the buy side
         for q in all_quotes:
             if q.pool_address == top_spread.pool_buy and q.gate_passed:
-                # Simple revalidation: check if quote is still valid
                 scan_stats["revalidation_passed"] = 1
                 logger.info(f"Revalidation passed for {top_spread.spread_id}")
                 break
     
-    # STEP 4: Convert to dict WITHOUT net_pnl (no cost model)
+    # Convert to dict format
     all_spreads: List[Dict[str, Any]] = []
     for spread in cross_dex_spreads:
         spread_dict = {
@@ -1144,7 +1148,6 @@ async def _run_scan_cycle_async(
             "signal_pnl_bps": spread.signal_pnl_bps,
             "would_execute_pnl_usdc": spread.would_execute_pnl_usdc,
             "would_execute_pnl_bps": spread.would_execute_pnl_bps,
-            # STEP 4: NO net_pnl_usdc - will be added by truth_report based on cost_model
             "confidence": spread.confidence,
             "confidence_factors": spread.confidence_factors,
             "is_profitable": spread.is_profitable,
