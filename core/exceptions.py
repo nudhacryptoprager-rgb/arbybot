@@ -6,6 +6,9 @@ Per Roadmap 3.6: Typed errors with revert vs infra distinction.
 
 M4 ADDITION:
 - INFRA_BLOCK_PIN_FAILED: Block pinning failed (critical for REAL mode)
+
+M5_0 ADDITION:
+- INFRA_BAD_ABI: ABI encoding/decoding error (AttributeError/KeyError on contract method)
 """
 
 from enum import Enum
@@ -45,6 +48,7 @@ class ErrorCode(str, Enum):
     INFRA_RATE_LIMIT = "INFRA_RATE_LIMIT"
     INFRA_TIMEOUT = "INFRA_TIMEOUT"
     INFRA_BLOCK_PIN_FAILED = "INFRA_BLOCK_PIN_FAILED"  # M4: Block pinning failed
+    INFRA_BAD_ABI = "INFRA_BAD_ABI"  # M5_0: ABI encoding/decoding error
     
     # CEX errors
     CEX_DEPTH_LOW = "CEX_DEPTH_LOW"
@@ -145,7 +149,6 @@ class ValidationError(ArbyError):
 
 
 # Legacy aliases for backwards compatibility with RejectReason-based code
-
 class RPCError(InfraError):
     """RPC call failed."""
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
@@ -168,6 +171,12 @@ class BlockPinError(InfraError):
     """Block pinning failed (M4: critical for REAL mode)."""
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(ErrorCode.INFRA_BLOCK_PIN_FAILED, message, details)
+
+
+class ABIError(InfraError):
+    """ABI encoding/decoding error (M5_0: AttributeError/KeyError on contract method)."""
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(ErrorCode.INFRA_BAD_ABI, message, details)
 
 
 class QuoteRevertError(QuoteError):
