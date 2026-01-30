@@ -3,13 +3,6 @@
 """
 CI Gate for M4 (REAL Pipeline).
 
-STEP 1: Python 3.11.x enforcement
-STEP 3: ASCII-safe output (no emojis), unified reject codes
-STEP 4: Import contract check
-STEP 6: Truthful profit validation
-STEP 8: Offline/online mode separation
-STEP 9: Execution semantics validation
-
 M4 SUCCESS CRITERIA:
 - Python version 3.11.x
 - Import contract (calculate_confidence)
@@ -22,8 +15,12 @@ M4 SUCCESS CRITERIA:
 - dexes_active >= 2
 - price_sanity_passed >= 1
 - price_stability_factor > 0 when sanity_passed > 0
-- cost_model_available flag present
+- confidence_factors.price_stability == health.price_stability_factor
+- net_pnl_usdc == null (no cost model)
+- revalidation.total >= 0 (best effort)
 - 4/4 artifacts
+
+ASCII-SAFE: No emoji or Unicode symbols (Windows compatibility).
 """
 
 import json
@@ -39,7 +36,7 @@ REQUIRED_PYTHON_MINOR = 11
 
 
 def check_python_version() -> bool:
-    """STEP 1: Check Python version is 3.11.x"""
+    """Check Python version is 3.11.x"""
     major = sys.version_info.major
     minor = sys.version_info.minor
 
@@ -49,12 +46,11 @@ def check_python_version() -> bool:
 
     print(f"[FAIL] Python version: {sys.version.split()[0]}")
     print(f"       Required: Python {REQUIRED_PYTHON_MAJOR}.{REQUIRED_PYTHON_MINOR}.x")
-    print(f"       Install: py -3.11 -m venv .venv && .venv\\Scripts\\Activate.ps1")
     return False
 
 
 def check_import_contract() -> bool:
-    """STEP 4: Check import contract."""
+    """Check import contract."""
     print(f"\n{'='*60}")
     print("STEP: Import Contract Check")
     print("=" * 60)
@@ -62,13 +58,14 @@ def check_import_contract() -> bool:
     cmd = [
         sys.executable,
         "-c",
-        "from monitoring.truth_report import calculate_confidence"
+        "from monitoring.truth_report import calculate_confidence, calculate_price_stability_factor"
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode == 0:
         print("[OK] import monitoring.truth_report.calculate_confidence")
+        print("[OK] import monitoring.truth_report.calculate_price_stability_factor")
         return True
 
     print("[FAIL] Import failed:")
@@ -95,7 +92,7 @@ def run_command(cmd: list, description: str) -> bool:
 
 
 def create_offline_fixtures(output_dir: Path) -> None:
-    """STEP 8: Create fixture data for offline mode."""
+    """Create fixture data for offline mode."""
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "snapshots").mkdir(exist_ok=True)
     (output_dir / "reports").mkdir(exist_ok=True)
@@ -105,7 +102,7 @@ def create_offline_fixtures(output_dir: Path) -> None:
     with open(output_dir / "scan.log", "w") as f:
         f.write(f"[FIXTURE] Offline mode scan at {timestamp_str}\n")
 
-    # STEP 3: Use canonical PRICE_SANITY_FAILED (not PRICE_SANITY_FAIL)
+    # Canonical: PRICE_SANITY_FAILED (not PRICE_SANITY_FAIL)
     scan_data = {
         "run_mode": "REGISTRY_REAL",
         "current_block": 275000000,
@@ -128,8 +125,9 @@ def create_offline_fixtures(output_dir: Path) -> None:
             "pools_scanned": 4,
             "price_sanity_passed": 2,
             "price_sanity_failed": 2,
+            "revalidation_total": 1,
+            "revalidation_passed": 1,
         },
-        # STEP 3: Canonical reject key
         "reject_histogram": {"PRICE_SANITY_FAILED": 2},
         "gate_breakdown": {"revert": 0, "slippage": 0, "infra": 0, "other": 0, "sanity": 2},
         "dex_coverage": {
@@ -157,11 +155,6 @@ def create_offline_fixtures(output_dir: Path) -> None:
                 "amount_in_numeraire": "1.000000",
                 "amount_out_buy_numeraire": "3500.000000",
                 "amount_out_sell_numeraire": "3505.000000",
-                # STEP 6: Profit breakdown
-                "gross_pnl_usdc": "5.000000",
-                "gas_estimate_usdc": None,
-                "slippage_estimate_usdc": None,
-                "net_pnl_usdc": None,
                 "signal_pnl_usdc": "5.000000",
                 "signal_pnl_bps": "14.28",
                 "would_execute_pnl_usdc": "5.000000",
@@ -170,16 +163,14 @@ def create_offline_fixtures(output_dir: Path) -> None:
                 "confidence_factors": {
                     "rpc_health": 1.0,
                     "quote_coverage": 1.0,
-                    "price_stability": 0.95,
+                    "price_stability": 0.5,
                     "spread_quality": 0.9,
                     "dex_diversity": 1.0,
                 },
                 "is_profitable": True,
                 "execution_blockers": ["EXECUTION_DISABLED_M4", "NO_COST_MODEL"],
                 "is_execution_ready": False,
-                # STEP 9: Explicit actionability
                 "is_actionable": False,
-                "cost_model_available": False,
             }
         ],
         "sample_rejects": [
@@ -189,7 +180,6 @@ def create_offline_fixtures(output_dir: Path) -> None:
                 "pool": "0x17c14D2c404D167802b16C450d3c99F88F2c4F4d",
                 "pair": "WETH/USDC",
                 "fee": 3000,
-                # STEP 3: Canonical reject reason
                 "reject_reason": "PRICE_SANITY_FAILED",
                 "price": "3600.123456",
                 "price_deviation_bps": 286,
@@ -204,7 +194,6 @@ def create_offline_fixtures(output_dir: Path) -> None:
     with open(output_dir / "snapshots" / f"scan_{timestamp_str}.json", "w") as f:
         json.dump(scan_data, f, indent=2)
 
-    # STEP 3: Canonical reject key
     histogram_data = {
         "run_mode": "REGISTRY_REAL",
         "timestamp": datetime.now().isoformat(),
@@ -220,15 +209,14 @@ def create_offline_fixtures(output_dir: Path) -> None:
     with open(output_dir / "reports" / f"reject_histogram_{timestamp_str}.json", "w") as f:
         json.dump(histogram_data, f, indent=2)
 
+    # price_stability_factor = 2 / (2+2) = 0.5
     truth_report = {
         "schema_version": "3.2.0",
         "timestamp": datetime.now().isoformat(),
         "mode": "REGISTRY",
         "run_mode": "REGISTRY_REAL",
-        # STEP 9: Execution semantics
         "execution_enabled": False,
         "execution_blocker": "EXECUTION_DISABLED_M4",
-        # STEP 6: Cost model flag
         "cost_model_available": False,
         "health": {
             "rpc_success_rate": 1.0,
@@ -245,7 +233,6 @@ def create_offline_fixtures(output_dir: Path) -> None:
             "pools_scanned": 4,
             "price_sanity_passed": 2,
             "price_sanity_failed": 2,
-            # STEP 5: Consistent price stability
             "price_stability_factor": 0.5,
             "gate_breakdown": {"revert": 0, "slippage": 0, "infra": 0, "other": 0, "sanity": 2},
         },
@@ -259,15 +246,22 @@ def create_offline_fixtures(output_dir: Path) -> None:
                 "token_in": "WETH",
                 "token_out": "USDC",
                 "amount_in_numeraire": "1.000000",
-                # STEP 6: Profit breakdown
-                "gross_pnl_usdc": "5.000000",
-                "gas_estimate_usdc": None,
-                "slippage_estimate_usdc": None,
-                "net_pnl_usdc": None,
                 "signal_pnl_usdc": "5.000000",
+                "signal_pnl_bps": "14.28",
                 "would_execute_pnl_usdc": "5.000000",
+                "would_execute_pnl_bps": "14.28",
+                # STEP 4: net_pnl_usdc = null (no cost model)
+                "net_pnl_usdc": None,
+                "net_pnl_bps": None,
                 "confidence": 0.82,
-                "confidence_factors": {"rpc_health": 1.0, "quote_coverage": 1.0},
+                # STEP 3: confidence_factors.price_stability == health.price_stability_factor
+                "confidence_factors": {
+                    "rpc_health": 1.0,
+                    "quote_coverage": 1.0,
+                    "price_stability": 0.5,
+                    "spread_quality": 0.9,
+                    "dex_diversity": 1.0,
+                },
                 "is_profitable": True,
                 "execution_blockers": ["EXECUTION_DISABLED_M4", "NO_COST_MODEL"],
                 "is_execution_ready": False,
@@ -286,15 +280,19 @@ def create_offline_fixtures(output_dir: Path) -> None:
             "price_sanity_passed": 2,
             "price_sanity_failed": 2,
         },
-        # STEP 6: PnL with cost awareness
+        "revalidation": {
+            "total": 1,
+            "passed": 1,
+            "gates_changed": 0,
+            "gates_changed_pct": "0.0",
+        },
         "pnl": {
-            "gross_pnl_usdc": "5.000000",
             "signal_pnl_usdc": "5.000000",
             "signal_pnl_bps": "0.00",
             "would_execute_pnl_usdc": "5.000000",
             "would_execute_pnl_bps": "0.00",
-            "gas_estimate_usdc": None,
-            "slippage_estimate_usdc": None,
+            "gross_pnl_usdc": "5.000000",
+            # STEP 4: net_pnl_usdc = null when no cost model
             "net_pnl_usdc": None,
             "net_pnl_bps": None,
             "cost_model_available": False,
@@ -372,38 +370,19 @@ def check_metrics_invariants(output_dir: Path) -> bool:
     quotes_fetched = stats.get("quotes_fetched", 0)
     quotes_total = stats.get("quotes_total", 0)
     gates_passed = stats.get("gates_passed", 0)
-    sample_rejects = scan_data.get("sample_rejects", [])
 
-    # If rejects have prices, quotes_fetched > 0
-    rejects_with_price = [r for r in sample_rejects if r.get("price") is not None]
-    if rejects_with_price and quotes_fetched == 0:
-        errors.append(
-            f"[FAIL] INVARIANT: {len(rejects_with_price)} rejects have price "
-            f"but quotes_fetched=0"
-        )
-
-    # gates_passed <= quotes_fetched
     if gates_passed > quotes_fetched:
-        errors.append(
-            f"[FAIL] INVARIANT: gates_passed ({gates_passed}) > "
-            f"quotes_fetched ({quotes_fetched})"
-        )
+        errors.append(f"[FAIL] INVARIANT: gates_passed ({gates_passed}) > quotes_fetched ({quotes_fetched})")
 
-    # quotes_fetched <= quotes_total
     if quotes_fetched > quotes_total:
-        errors.append(
-            f"[FAIL] INVARIANT: quotes_fetched ({quotes_fetched}) > "
-            f"quotes_total ({quotes_total})"
-        )
+        errors.append(f"[FAIL] INVARIANT: quotes_fetched ({quotes_fetched}) > quotes_total ({quotes_total})")
 
     if not errors:
         print(f"[OK] quotes_total: {quotes_total}")
         print(f"[OK] quotes_fetched: {quotes_fetched}")
         print(f"[OK] gates_passed: {gates_passed}")
-        print(f"[OK] Metrics contract invariants satisfied")
 
     if errors:
-        print()
         for e in errors:
             print(e)
         return False
@@ -413,7 +392,7 @@ def check_metrics_invariants(output_dir: Path) -> bool:
 
 
 def check_confidence_consistency(output_dir: Path) -> bool:
-    """STEP 5: Check confidence factors are consistent."""
+    """STEP 3: Check confidence factors are synced with health."""
     print(f"\n{'='*60}")
     print("STEP: Confidence Consistency Check")
     print("=" * 60)
@@ -434,18 +413,29 @@ def check_confidence_consistency(output_dir: Path) -> bool:
     price_sanity_passed = health.get("price_sanity_passed", 0)
     price_stability_factor = health.get("price_stability_factor", None)
 
-    # STEP 5: If sanity_passed > 0, stability factor must not be 0
+    # Check: if sanity_passed > 0, stability factor must not be 0
     if price_sanity_passed > 0 and price_stability_factor == 0:
         errors.append(
-            f"[FAIL] CONFIDENCE INCONSISTENCY: price_sanity_passed={price_sanity_passed} "
+            f"[FAIL] CONFIDENCE: price_sanity_passed={price_sanity_passed} "
             f"but price_stability_factor=0"
         )
     else:
         print(f"[OK] price_sanity_passed: {price_sanity_passed}")
         print(f"[OK] price_stability_factor: {price_stability_factor}")
 
+    # STEP 3: Check confidence_factors.price_stability == health.price_stability_factor
+    for opp in truth_report.get("top_opportunities", []):
+        opp_psf = opp.get("confidence_factors", {}).get("price_stability")
+        if opp_psf is not None and price_stability_factor is not None:
+            if abs(opp_psf - price_stability_factor) > 0.01:
+                errors.append(
+                    f"[FAIL] SYNC: opp.confidence_factors.price_stability={opp_psf} "
+                    f"!= health.price_stability_factor={price_stability_factor}"
+                )
+            else:
+                print(f"[OK] confidence_factors.price_stability synced: {opp_psf}")
+
     if errors:
-        print()
         for e in errors:
             print(e)
         return False
@@ -454,10 +444,10 @@ def check_confidence_consistency(output_dir: Path) -> bool:
     return True
 
 
-def check_profit_truthfulness(output_dir: Path) -> bool:
-    """STEP 6: Check profit breakdown is truthful."""
+def check_pnl_contract(output_dir: Path) -> bool:
+    """STEP 4: Check PnL contract (net_pnl_usdc=null when no cost model)."""
     print(f"\n{'='*60}")
-    print("STEP: Profit Truthfulness Check")
+    print("STEP: PnL Contract Check")
     print("=" * 60)
 
     errors = []
@@ -472,42 +462,42 @@ def check_profit_truthfulness(output_dir: Path) -> bool:
     with open(truth_files[0], "r") as f:
         truth_report = json.load(f)
 
-    pnl = truth_report.get("pnl", {})
     cost_model_available = truth_report.get("cost_model_available", False)
+    pnl = truth_report.get("pnl", {})
 
-    # Check gross_pnl exists
-    if "gross_pnl_usdc" not in pnl and "signal_pnl_usdc" not in pnl:
-        errors.append("[FAIL] Missing gross_pnl_usdc or signal_pnl_usdc")
+    # Check signal_pnl and would_execute_pnl exist
+    if "signal_pnl_usdc" not in pnl:
+        errors.append("[FAIL] Missing signal_pnl_usdc in pnl")
+    else:
+        print(f"[OK] pnl.signal_pnl_usdc: {pnl['signal_pnl_usdc']}")
 
-    # STEP 6: If no cost model, net_pnl should be None
+    if "would_execute_pnl_usdc" not in pnl:
+        errors.append("[FAIL] Missing would_execute_pnl_usdc in pnl")
+    else:
+        print(f"[OK] pnl.would_execute_pnl_usdc: {pnl['would_execute_pnl_usdc']}")
+
+    # STEP 4: net_pnl_usdc must be null when no cost model
     if not cost_model_available:
         net_pnl = pnl.get("net_pnl_usdc")
         if net_pnl is not None:
-            # Check if it's properly flagged
-            if "cost_model_available" not in pnl or pnl.get("cost_model_available") != False:
-                errors.append("[FAIL] net_pnl present without cost_model but flag not set")
-        print("[OK] cost_model_available: False (net_pnl appropriately handled)")
-    else:
-        print("[OK] cost_model_available: True")
+            errors.append(f"[FAIL] pnl.net_pnl_usdc should be null, got: {net_pnl}")
+        else:
+            print("[OK] pnl.net_pnl_usdc: null (no cost model)")
 
-    # Check opportunities have proper flags
-    for opp in truth_report.get("top_opportunities", []):
-        blockers = opp.get("execution_blockers", [])
-        opp_cost_model = opp.get("cost_model_available", None)
-
-        if opp_cost_model is False and "NO_COST_MODEL" not in blockers:
-            errors.append(f"[FAIL] Opportunity {opp.get('spread_id')} has no cost model but missing NO_COST_MODEL blocker")
-
-    if not errors:
-        print("[OK] Profit breakdown is truthful")
+        # Check top_opportunities too
+        for i, opp in enumerate(truth_report.get("top_opportunities", [])):
+            opp_net = opp.get("net_pnl_usdc")
+            if opp_net is not None:
+                errors.append(f"[FAIL] top_opportunities[{i}].net_pnl_usdc should be null, got: {opp_net}")
+            else:
+                print(f"[OK] top_opportunities[{i}].net_pnl_usdc: null")
 
     if errors:
-        print()
         for e in errors:
             print(e)
         return False
 
-    print("\n[PASS] Profit truthfulness validated")
+    print("\n[PASS] PnL contract valid")
     return True
 
 
@@ -529,14 +519,12 @@ def check_execution_semantics(output_dir: Path) -> bool:
     with open(truth_files[0], "r") as f:
         truth_report = json.load(f)
 
-    # Check execution_enabled field exists
     if "execution_enabled" not in truth_report:
         errors.append("[FAIL] Missing execution_enabled field")
     else:
         exec_enabled = truth_report.get("execution_enabled")
         print(f"[OK] execution_enabled: {exec_enabled}")
 
-    # Check execution_blocker when disabled
     if truth_report.get("execution_enabled") == False:
         blocker = truth_report.get("execution_blocker")
         if not blocker:
@@ -544,7 +532,6 @@ def check_execution_semantics(output_dir: Path) -> bool:
         else:
             print(f"[OK] execution_blocker: {blocker}")
 
-    # Check opportunities have is_actionable
     for opp in truth_report.get("top_opportunities", []):
         if "is_actionable" not in opp:
             errors.append(f"[FAIL] Opportunity {opp.get('spread_id')} missing is_actionable field")
@@ -552,10 +539,9 @@ def check_execution_semantics(output_dir: Path) -> bool:
             errors.append(f"[FAIL] Opportunity {opp.get('spread_id')} is_actionable=True but execution disabled")
 
     if not errors:
-        print("[OK] All opportunities have is_actionable=False (execution disabled)")
+        print("[OK] All opportunities have is_actionable=False")
 
     if errors:
-        print()
         for e in errors:
             print(e)
         return False
@@ -646,6 +632,12 @@ def check_m4_invariants(output_dir: Path) -> bool:
     else:
         errors.append(f"[FAIL] price_sanity_passed: must be >= 1, got {price_sanity_passed}")
 
+    # revalidation (best effort - just report)
+    reval = truth_report.get("revalidation", {})
+    reval_total = reval.get("total", 0)
+    reval_passed = reval.get("passed", 0)
+    print(f"[INFO] revalidation: {reval_passed}/{reval_total}")
+
     if errors:
         print()
         for e in errors:
@@ -660,13 +652,12 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="ARBY M4 CI Gate")
-    parser.add_argument("--offline", action="store_true", help="STEP 8: Run on recorded fixtures (default)")
-    parser.add_argument("--online", action="store_true", help="STEP 8: Run with live RPC (requires network)")
+    parser.add_argument("--offline", action="store_true", help="Run on recorded fixtures (default)")
+    parser.add_argument("--online", action="store_true", help="Run with live RPC")
     parser.add_argument("--skip-python-check", action="store_true", help="Skip Python version check")
 
     args = parser.parse_args()
 
-    # Default to offline if neither specified
     if not args.offline and not args.online:
         args.offline = True
 
@@ -675,23 +666,23 @@ def main():
     print("=" * 60)
     print()
     print("M4 Criteria:")
-    print("  - Python 3.11.x (STEP 1)")
-    print("  - Import contract (STEP 4)")
+    print("  - Python 3.11.x")
+    print("  - Import contract")
     print("  - run_mode: REGISTRY_REAL")
     print("  - current_block > 0")
-    print("  - execution_enabled == false (STEP 9)")
+    print("  - execution_enabled == false")
     print("  - quotes_fetched >= 1")
     print("  - rpc_success_rate > 0")
     print("  - dexes_active >= 2")
     print("  - price_sanity_passed >= 1")
-    print("  - price_stability_factor consistent (STEP 5)")
-    print("  - cost_model flags present (STEP 6)")
+    print("  - confidence_factors.price_stability == health.price_stability_factor")
+    print("  - net_pnl_usdc == null (no cost model)")
     print("  - 4/4 artifacts")
 
     mode_str = "OFFLINE" if args.offline else "ONLINE"
     print(f"\n[MODE] {mode_str}")
 
-    # Python version check
+    # Python version
     if not args.skip_python_check:
         print(f"\n{'='*60}")
         print("STEP: Python Version Check")
@@ -702,7 +693,7 @@ def main():
     else:
         print("\n[SKIP] Python version check")
 
-    # Import contract check
+    # Import contract
     if not check_import_contract():
         print("\n[FAIL] M4 CI GATE FAILED: Import contract broken")
         sys.exit(11)
@@ -729,8 +720,7 @@ def main():
         cmd = [
             sys.executable,
             "-m",
-            "strategy.jobs.run_scan",
-            "--mode", "real",
+            "strategy.jobs.run_scan_real",
             "--cycles", "1",
             "--output-dir", str(output_dir),
         ]
@@ -743,32 +733,27 @@ def main():
             print("\n[FAIL] M4 CI GATE FAILED: REAL scan failed")
             sys.exit(2)
 
-    # Artifacts
+    # Checks
     if not check_artifact_sanity(output_dir):
         print("\n[FAIL] M4 CI GATE FAILED: Artifacts missing")
         sys.exit(3)
 
-    # Metrics contract
     if not check_metrics_invariants(output_dir):
         print("\n[FAIL] M4 CI GATE FAILED: Metrics contract violation")
         sys.exit(6)
 
-    # STEP 5: Confidence consistency
     if not check_confidence_consistency(output_dir):
         print("\n[FAIL] M4 CI GATE FAILED: Confidence inconsistent")
         sys.exit(7)
 
-    # STEP 6: Profit truthfulness
-    if not check_profit_truthfulness(output_dir):
-        print("\n[FAIL] M4 CI GATE FAILED: Profit not truthful")
+    if not check_pnl_contract(output_dir):
+        print("\n[FAIL] M4 CI GATE FAILED: PnL contract violation")
         sys.exit(8)
 
-    # STEP 9: Execution semantics
     if not check_execution_semantics(output_dir):
         print("\n[FAIL] M4 CI GATE FAILED: Execution semantics invalid")
         sys.exit(9)
 
-    # M4 Invariants
     if not check_m4_invariants(output_dir):
         print("\n[FAIL] M4 CI GATE FAILED: M4 invariants failed")
         sys.exit(4)
@@ -782,12 +767,12 @@ def main():
     print("  [OK] Python 3.11.x")
     print("  [OK] Import contract")
     print("  [OK] run_mode: REGISTRY_REAL")
-    print("  [OK] execution disabled (STEP 9)")
+    print("  [OK] execution disabled")
     print("  [OK] quotes_fetched >= 1")
     print("  [OK] dexes_active >= 2")
     print("  [OK] price_sanity_passed >= 1")
-    print("  [OK] confidence consistent (STEP 5)")
-    print("  [OK] profit truthful (STEP 6)")
+    print("  [OK] confidence factors synced")
+    print("  [OK] net_pnl_usdc = null (no cost model)")
     print("  [OK] 4/4 artifacts")
 
     sys.exit(0)

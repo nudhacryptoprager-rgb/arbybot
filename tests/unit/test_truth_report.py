@@ -3,8 +3,9 @@
 Unit tests for truth_report.
 
 Tests for:
-- STEP 4: Import contract stability
-- STEP 5: Confidence formula consistency
+- STEP 3: Confidence factors consistency (price_stability sync)
+- STEP 4: PnL contract (net_pnl_usdc=None when no cost model)
+- STEP 5: Schema version frozen
 - STEP 6: Truthful profit breakdown
 - STEP 9: Execution semantics
 """
@@ -46,7 +47,6 @@ class TestPriceStabilityFactor(unittest.TestCase):
         """price_stability_factor cannot be 0 if price_sanity_passed > 0."""
         from monitoring.truth_report import calculate_price_stability_factor
 
-        # Scenario: 3 passed, 1 failed
         factor = calculate_price_stability_factor(
             price_sanity_passed=3,
             quotes_fetched=4,
@@ -109,6 +109,55 @@ class TestPriceStabilityFactor(unittest.TestCase):
         self.assertGreater(health["price_stability_factor"], 0.0)
 
 
+class TestConfidenceFactorsConsistency(unittest.TestCase):
+    """STEP 3: Confidence factors sync with health.price_stability_factor."""
+
+    def test_confidence_factors_synced_with_health(self):
+        """confidence_factors.price_stability must equal health.price_stability_factor."""
+        from monitoring.truth_report import build_truth_report
+
+        all_spreads = [
+            {
+                "spread_id": "test_001",
+                "gross_pnl_usdc": "5.000000",
+                "is_profitable": True,
+                "confidence": 0.8,
+                "confidence_factors": {
+                    "rpc_health": 1.0,
+                    "quote_coverage": 1.0,
+                    "price_stability": 0.0,  # Will be overwritten
+                },
+            }
+        ]
+
+        scan_stats = {
+            "execution_ready_count": 0,
+            "quotes_fetched": 4,
+            "quotes_total": 4,
+            "gates_passed": 3,
+            "price_sanity_passed": 3,
+            "price_sanity_failed": 1,
+        }
+
+        report = build_truth_report(
+            scan_stats=scan_stats,
+            reject_histogram={},
+            opportunities=[],
+            all_spreads=all_spreads,
+            run_mode="REGISTRY_REAL",
+            cost_model_available=False,
+        )
+
+        # health.price_stability_factor = 3 / (3+1) = 0.75
+        health_psf = report.health["price_stability_factor"]
+        self.assertAlmostEqual(health_psf, 0.75, places=2)
+
+        # top_opportunities[0].confidence_factors.price_stability should match
+        opp = report.top_opportunities[0]
+        opp_psf = opp["confidence_factors"]["price_stability"]
+        self.assertEqual(opp_psf, health_psf)
+
+
 class TestTruthReportConsistency(unittest.TestCase):
     """Test truth_report consistency with scan_stats."""
 
@@ -131,15 +180,14 @@ class TestTruthReportConsistency(unittest.TestCase):
             rpc_metrics=RPCHealthMetrics(),
         )
 
-        self.assertEqual(health["quote_fetch_rate"], 0.5)  # 4/8
-        self.assertEqual(health["quote_gate_pass_rate"], 1.0)  # 4/4
+        self.assertEqual(health["quote_fetch_rate"], 0.5)
+        self.assertEqual(health["quote_gate_pass_rate"], 1.0)
         self.assertEqual(health["price_sanity_passed"], 4)
 
     def test_gate_breakdown_includes_sanity(self):
         """Gate breakdown should include sanity category."""
         from monitoring.truth_report import build_gate_breakdown
 
-        # STEP 3: Use canonical PRICE_SANITY_FAILED
         histogram = {
             "QUOTE_REVERT": 2,
             "INFRA_RPC_ERROR": 1,
@@ -156,7 +204,6 @@ class TestTruthReportConsistency(unittest.TestCase):
         """Gate breakdown should handle legacy PRICE_SANITY_FAIL."""
         from monitoring.truth_report import build_gate_breakdown
 
-        # Legacy key should also work
         histogram = {
             "PRICE_SANITY_FAIL": 2,
         }
@@ -219,6 +266,30 @@ class TestProfitBreakdown(unittest.TestCase):
         self.assertFalse(report.cost_model_available)
         self.assertIsNone(report.pnl.get("net_pnl_usdc"))
 
+    def test_net_pnl_none_in_top_opportunities_without_cost_model(self):
+        """STEP 4: net_pnl_usdc in top_opportunities should be None when no cost model."""
+        from monitoring.truth_report import build_truth_report
+
+        all_spreads = [
+            {
+                "spread_id": "test_001",
+                "gross_pnl_usdc": "5.000000",
+                "is_profitable": True,
+            }
+        ]
+
+        report = build_truth_report(
+            scan_stats={"execution_ready_count": 0},
+            reject_histogram={},
+            opportunities=[],
+            all_spreads=all_spreads,
+            run_mode="REGISTRY_REAL",
+            cost_model_available=False,
+        )
+
+        opp = report.top_opportunities[0]
+        self.assertIsNone(opp.get("net_pnl_usdc"))
+
     def test_net_pnl_present_with_cost_model(self):
         """net_pnl should be calculated if cost_model_available=True."""
         from monitoring.truth_report import build_truth_report
@@ -245,8 +316,8 @@ class TestProfitBreakdown(unittest.TestCase):
         )
 
         self.assertTrue(report.cost_model_available)
-        # Net should be present
         self.assertIn("gross_pnl_usdc", report.pnl)
+        self.assertIsNotNone(report.pnl.get("net_pnl_usdc"))
 
     def test_no_cost_model_blocker_added(self):
         """NO_COST_MODEL blocker should be added when cost model unavailable."""
@@ -312,12 +383,12 @@ class TestExecutionSemantics(unittest.TestCase):
                 "spread_id": "test_001",
                 "gross_pnl_usdc": "5.000000",
                 "is_profitable": True,
-                "is_execution_ready": True,  # Would be ready
+                "is_execution_ready": True,
             }
         ]
 
         report = build_truth_report(
-            scan_stats={"execution_ready_count": 0},  # But execution disabled
+            scan_stats={"execution_ready_count": 0},
             reject_histogram={},
             opportunities=[],
             all_spreads=all_spreads,

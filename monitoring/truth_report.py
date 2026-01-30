@@ -7,13 +7,16 @@ METRICS CONTRACT:
 - quotes_fetched = got RPC response (amount > 0)
 - gates_passed = passed all gates
 
-PNL CONTRACT:
+PNL CONTRACT (STEP 4):
 - signal_pnl_usdc, would_execute_pnl_usdc: always str
-- net_pnl_usdc: None when cost_model_available=False, str otherwise
+- net_pnl_usdc: None when cost_model_available=False (in both pnl dict AND top_opportunities)
 
 REJECT REASON CONTRACT:
 - Canonical key: PRICE_SANITY_FAILED (not PRICE_SANITY_FAIL)
 - ERROR_TO_GATE_CATEGORY accepts both for backward compatibility
+
+CONFIDENCE CONTRACT (STEP 3):
+- health.price_stability_factor = confidence_factors.price_stability (same value)
 
 STEP 5: Confidence formula consistency
 STEP 6: Truthful profit breakdown
@@ -32,21 +35,17 @@ from core.format_money import format_money
 
 logger = logging.getLogger("monitoring.truth_report")
 
-# STEP 2: Frozen schema version
+# STEP 5: Frozen schema version
 SCHEMA_VERSION = "3.2.0"
 GATE_BREAKDOWN_KEYS = frozenset(["revert", "slippage", "infra", "other", "sanity"])
 
-# STEP 3: Unified reject reason mapping
-# Canonical: PRICE_SANITY_FAILED
-# Both PRICE_SANITY_FAIL and PRICE_SANITY_FAILED map to "sanity"
+# Unified reject reason mapping
 ERROR_TO_GATE_CATEGORY = {
     "QUOTE_REVERT": "revert",
     "SLIPPAGE_TOO_HIGH": "slippage",
     "INFRA_RPC_ERROR": "infra",
     "INVALID_SIZE": "other",
-    # Canonical: PRICE_SANITY_FAILED
     "PRICE_SANITY_FAILED": "sanity",
-    # Legacy compatibility: PRICE_SANITY_FAIL -> sanity
     "PRICE_SANITY_FAIL": "sanity",
     "MINIMUM_REALISM_FAIL": "sanity",
 }
@@ -71,14 +70,12 @@ def calculate_confidence(
 
     Returns: float in [0.0, 1.0]
     """
-    # Clamp inputs to [0, 1]
     qfr = max(0.0, min(1.0, quote_fetch_rate))
     qgpr = max(0.0, min(1.0, quote_gate_pass_rate))
     rsr = max(0.0, min(1.0, rpc_success_rate))
     fs = max(0.0, min(1.0, freshness_score))
     ar = max(0.0, min(1.0, adapter_reliability))
 
-    # Weighted average
     score = (
         qfr * 0.25 +
         qgpr * 0.25 +
@@ -87,7 +84,6 @@ def calculate_confidence(
         ar * 0.125
     )
 
-    # Clamp output to [0, 1]
     return max(0.0, min(1.0, score))
 
 
@@ -97,8 +93,9 @@ def calculate_price_stability_factor(
     price_sanity_failed: int = 0,
 ) -> float:
     """
-    STEP 5: Calculate price stability factor consistently.
+    STEP 3: Calculate price stability factor.
     
+    Formula: sanity_passed / (sanity_passed + sanity_failed)
     Never returns 0.0 if price_sanity_passed > 0.
     """
     if quotes_fetched <= 0:
@@ -241,6 +238,7 @@ def build_health_section(
     quote_fetch_rate = quotes_fetched / quotes_total if quotes_total > 0 else 0.0
     quote_gate_pass_rate = gates_passed / quotes_fetched if quotes_fetched > 0 else 0.0
 
+    # STEP 3: Calculate price_stability_factor
     price_stability_factor = calculate_price_stability_factor(
         price_sanity_passed, quotes_fetched, price_sanity_failed
     )
@@ -340,13 +338,14 @@ def _get_execution_blockers(
 
 def _opportunity_sort_key(opp: Dict[str, Any]) -> Tuple:
     try:
-        pnl_str = opp.get("net_pnl_usdc") or opp.get("gross_pnl_usdc") or opp.get("signal_pnl_usdc", "0")
+        # STEP 4: Use signal_pnl for sorting when no cost model
+        pnl_str = opp.get("signal_pnl_usdc") or opp.get("gross_pnl_usdc", "0")
         net_pnl = Decimal(str(pnl_str)) if pnl_str else Decimal("0")
     except Exception:
         net_pnl = Decimal("0")
 
     try:
-        bps_str = opp.get("net_pnl_bps") or opp.get("signal_pnl_bps", "0")
+        bps_str = opp.get("signal_pnl_bps", "0")
         net_bps = Decimal(str(bps_str)) if bps_str else Decimal("0")
     except Exception:
         net_bps = Decimal("0")
@@ -434,6 +433,9 @@ def build_truth_report(
         rpc_stats=rpc_stats, all_spreads=all_spreads,
     )
 
+    # STEP 3: Get price_stability_factor from health for sync
+    price_stability_factor = health.get("price_stability_factor", 0.5)
+
     normalized_opps = []
     source_spreads = all_spreads if all_spreads else opportunities
 
@@ -441,9 +443,7 @@ def build_truth_report(
     total_would_execute_pnl_usdc = Decimal("0")
 
     for opp in source_spreads:
-        # Get signal PnL (gross before costs)
         signal_pnl = opp.get("signal_pnl_usdc") or opp.get("gross_pnl_usdc") or opp.get("net_pnl_usdc", "0.000000")
-        # Get would_execute PnL (signal minus estimated costs, or same as signal if no cost model)
         would_execute_pnl = opp.get("would_execute_pnl_usdc") or signal_pnl
         
         try:
@@ -463,6 +463,11 @@ def build_truth_report(
 
         is_actionable = is_execution_ready and not execution_disabled
 
+        # STEP 3: Sync confidence_factors.price_stability with health
+        existing_factors = opp.get("confidence_factors", {})
+        synced_factors = dict(existing_factors)
+        synced_factors["price_stability"] = price_stability_factor
+
         normalized_opp = {
             "spread_id": opp.get("spread_id", "unknown"),
             "opportunity_id": opp.get("opportunity_id") or opp.get("spread_id", "unknown"),
@@ -478,14 +483,15 @@ def build_truth_report(
             "amount_out_sell_numeraire": opp.get("amount_out_sell_numeraire") or "0",
             # PNL fields: signal/would_execute always str
             "signal_pnl_usdc": str(signal_pnl),
-            "signal_pnl_bps": str(opp.get("signal_pnl_bps") or opp.get("net_pnl_bps", "0.00")),
+            "signal_pnl_bps": str(opp.get("signal_pnl_bps") or "0.00"),
             "would_execute_pnl_usdc": str(would_execute_pnl),
             "would_execute_pnl_bps": str(opp.get("would_execute_pnl_bps") or opp.get("signal_pnl_bps", "0.00")),
-            # Legacy compatibility
-            "net_pnl_usdc": str(signal_pnl),
-            "net_pnl_bps": str(opp.get("net_pnl_bps") or opp.get("signal_pnl_bps", "0.00")),
+            # STEP 4: net_pnl_usdc = None when no cost model (not str!)
+            "net_pnl_usdc": str(signal_pnl) if cost_model_available else None,
+            "net_pnl_bps": str(opp.get("net_pnl_bps") or opp.get("signal_pnl_bps", "0.00")) if cost_model_available else None,
             "confidence": opp.get("confidence", 0.0),
-            "confidence_factors": opp.get("confidence_factors", {}),
+            # STEP 3: Use synced factors
+            "confidence_factors": synced_factors,
             "is_profitable": is_profitable,
             "reject_reason": opp.get("reject_reason"),
             "execution_blockers": blockers,
@@ -528,7 +534,6 @@ def build_truth_report(
     paper_stats = paper_session_stats or {}
     notion_capital = paper_stats.get("notion_capital_usdc", "10000.000000")
 
-    # Format PnL values
     signal_pnl_str = format_money(total_signal_pnl_usdc, decimals=6)
     would_execute_pnl_str = format_money(total_would_execute_pnl_usdc, decimals=6)
 
@@ -544,9 +549,7 @@ def build_truth_report(
     if run_mode == "SMOKE_SIMULATOR":
         execution_blocker = "SMOKE_MODE_NO_EXECUTION"
 
-    # STEP 1: PNL CONTRACT - stable keys
-    # - signal_pnl_usdc, would_execute_pnl_usdc: always str
-    # - net_pnl_usdc: None when cost_model_available=False
+    # PNL dict
     pnl_dict = {
         "signal_pnl_usdc": signal_pnl_str,
         "signal_pnl_bps": "0.00",
@@ -556,7 +559,7 @@ def build_truth_report(
         "cost_model_available": cost_model_available,
     }
 
-    # net_pnl_usdc = None when no cost model
+    # STEP 4: net_pnl_usdc = None when no cost model
     if cost_model_available:
         pnl_dict["net_pnl_usdc"] = signal_pnl_str
         pnl_dict["net_pnl_bps"] = "0.00"
@@ -613,6 +616,10 @@ def print_truth_report(report: TruthReport) -> None:
     print("\n--- STATS ---")
     stats = report.stats
     print(f"Spreads: {stats.get('spread_ids_total', 0)} total, {stats.get('spread_ids_profitable', 0)} profitable")
+
+    print("\n--- REVALIDATION ---")
+    reval = report.revalidation
+    print(f"Total: {reval.get('total', 0)}, Passed: {reval.get('passed', 0)}")
 
     print("\n--- PNL ---")
     pnl = report.pnl
