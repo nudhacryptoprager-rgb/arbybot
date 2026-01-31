@@ -7,15 +7,28 @@ M5_0: Consolidates price sanity logic from:
 - strategy/jobs/run_scan_real.py (check_price_sanity, normalize_price)
 
 CONTRACTS:
-- normalize_price(): Always returns (price, was_inverted, diagnostics)
-- check_price_sanity(): Backward compatible, dynamic_anchor=None default
-- PriceSanityResult: Standardized result with full diagnostics
+
+1. PRICE ORIENTATION CONTRACT:
+   - Price is ALWAYS "quote_token per 1 base_token"
+   - For WETH/USDC: price = USDC per 1 WETH (~3500)
+   - base_token = token_in, quote_token = token_out
+
+2. DEVIATION FORMULA CONTRACT:
+   deviation_bps = int(round(abs(price - anchor) / anchor * 10000))
+   
+   This is the CANONICAL formula. Do NOT change without updating:
+   - tests/unit/test_price_sanity_inversion.py
+   - docs/status/Status_M5_0.md
+
+3. INVERSION INVARIANT:
+   When inversion_applied=True: raw_price * final_price ≈ 1
 
 USAGE:
-    from core.validators import normalize_price, check_price_sanity
+    from core.validators import normalize_price, check_price_sanity, select_anchor
     
     price, inverted, diag = normalize_price(...)
-    passed, deviation, error, diagnostics = check_price_sanity(...)
+    passed, deviation_bps, error, diagnostics = check_price_sanity(...)
+    anchor_price, anchor_info = select_anchor(quotes, pair_key)
 """
 
 import logging
@@ -48,19 +61,22 @@ def normalize_price(
     """
     Normalize price with inversion detection.
     
-    PRICE CONTRACT:
+    PRICE ORIENTATION CONTRACT:
     - Price is ALWAYS "token_out per 1 token_in"
     - For WETH/USDC: price ~ 3500 (USDC per 1 WETH)
     - If price < 100 for WETH/USDC, it's inverted and auto-corrected
+    
+    INVERSION INVARIANT:
+    - When inversion_applied=True: raw_price * final_price ≈ 1
     
     Args:
         amount_in_wei: Input amount in wei
         amount_out_wei: Output amount in wei
         decimals_in: Token in decimals
         decimals_out: Token out decimals
-        token_in: Token in symbol
-        token_out: Token out symbol
-        
+        token_in: Token in symbol (base token)
+        token_out: Token out symbol (quote token)
+    
     Returns:
         Tuple of (normalized_price, was_inverted, diagnostics)
         - normalized_price: Decimal, token_out per 1 token_in
@@ -113,6 +129,42 @@ def normalize_price(
 
 
 # =============================================================================
+# DEVIATION CALCULATION
+# =============================================================================
+
+def calculate_deviation_bps(price: Decimal, anchor: Decimal) -> int:
+    """
+    Calculate price deviation in basis points.
+    
+    DEVIATION FORMULA CONTRACT:
+        deviation_bps = int(round(abs(price - anchor) / anchor * 10000))
+    
+    This formula:
+    - Uses anchor as denominator (percentage relative to anchor)
+    - Uses round() before int() to avoid truncation errors
+    - Returns integer basis points
+    
+    Args:
+        price: Current price
+        anchor: Reference/anchor price
+    
+    Returns:
+        Deviation in basis points (non-negative integer)
+    
+    Raises:
+        ValueError: If anchor is zero or negative
+    """
+    if anchor <= 0:
+        raise ValueError(f"Anchor must be positive, got: {anchor}")
+    
+    # Calculate using Decimal for precision
+    deviation = abs(price - anchor) / anchor * Decimal("10000")
+    
+    # Round before converting to int to avoid truncation errors
+    return int(round(deviation))
+
+
+# =============================================================================
 # ANCHOR SELECTION (STEP 3 - improved)
 # =============================================================================
 
@@ -148,7 +200,7 @@ def select_anchor(
     Args:
         quotes: List of valid quotes for the pair
         pair_key: (token_in, token_out) tuple
-        
+    
     Returns:
         Tuple of (anchor_price, anchor_info) or None
     """
@@ -233,12 +285,8 @@ def check_price_sanity(
     
     BACKWARD COMPATIBLE: dynamic_anchor defaults to None.
     
-    DIAGNOSTIC CONTRACT (STEP 4 - expanded):
-    diagnostics always includes:
-    - implied_price, anchor_price (always)
-    - amount_in_wei, amount_out_wei, decimals_in/out (when provided)
-    - raw_price, normalized_price, inversion_applied (when applicable)
-    - pool_fee, pool_address, dex_id (when provided)
+    DEVIATION FORMULA (documented):
+        deviation_bps = int(round(abs(price - anchor) / anchor * 10000))
     
     Priority:
     1. Use dynamic_anchor if available (from anchor_dex or median)
@@ -258,11 +306,11 @@ def check_price_sanity(
         amount_in_wei: Raw input amount (for diagnostics)
         amount_out_wei: Raw output amount (for diagnostics)
         anchor_source: Info about anchor source (for diagnostics)
-        
+    
     Returns:
         Tuple of (passed, deviation_bps, error_message, diagnostics)
     """
-    # STEP 4: Extended diagnostics
+    # Build diagnostics
     diagnostics: Dict[str, Any] = {
         "implied_price": str(price),
         "token_in": token_in,
@@ -299,16 +347,18 @@ def check_price_sanity(
     pair_key = (token_in, token_out)
     bounds = PRICE_SANITY_BOUNDS.get(pair_key)
     max_deviation_bps = config.get(
-        "price_sanity_max_deviation_bps", 
+        "price_sanity_max_deviation_bps",
         PRICE_SANITY_MAX_DEVIATION_BPS
     )
     
-    # STEP 6: Use dynamic anchor if available
+    # Use dynamic anchor if available
     if dynamic_anchor and dynamic_anchor > 0:
         diagnostics["anchor_source"] = "dynamic"
         diagnostics["anchor_price"] = str(dynamic_anchor)
         
-        deviation_bps = int(abs(price - dynamic_anchor) / dynamic_anchor * Decimal("10000"))
+        # Use canonical deviation formula
+        deviation_bps = calculate_deviation_bps(price, dynamic_anchor)
+        
         diagnostics["deviation_bps"] = deviation_bps
         diagnostics["max_deviation_bps"] = max_deviation_bps
         
@@ -330,14 +380,14 @@ def check_price_sanity(
         diagnostics["anchor_price"] = "N/A"
         return True, None, None, diagnostics
     
-    # BACKWARD COMPATIBLE: always set anchor_price
+    # Use hardcoded anchor
     anchor_price = bounds.get("anchor", (bounds["min"] + bounds["max"]) / 2)
     diagnostics["anchor_source"] = "hardcoded_bounds"
     diagnostics["anchor_price"] = str(anchor_price)
     diagnostics["price_bounds"] = [str(bounds["min"]), str(bounds["max"])]
     
     if price < bounds["min"] or price > bounds["max"]:
-        deviation_bps = int(abs(price - anchor_price) / anchor_price * Decimal("10000"))
+        deviation_bps = calculate_deviation_bps(price, anchor_price)
         diagnostics["deviation_bps"] = deviation_bps
         diagnostics["error"] = "outside_bounds"
         return (

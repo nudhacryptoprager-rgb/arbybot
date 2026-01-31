@@ -1,6 +1,6 @@
 # ARBY3 Testing Guide
 
-_Last updated: 2026-01-30_
+_Last updated: 2026-01-31_
 
 ## Python Version (STEP 1 - MANDATORY)
 
@@ -68,13 +68,14 @@ python scripts/ci_m4_gate.py --online
 
 ### M5_0 Gate (Infrastructure Hardening)
 
-**Recommended: Explicit --run-dir**
+**Mode Selection Priority**: CLI > ENV > auto-detect
+
+#### Explicit run directory (RECOMMENDED)
 ```powershell
-# Validate a specific run directory
 python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
 ```
 
-**Offline fixture mode**
+#### Offline fixture mode
 ```powershell
 # Create fixture in data/runs/ (default location)
 python scripts/ci_m5_0_gate.py --offline
@@ -83,7 +84,7 @@ python scripts/ci_m5_0_gate.py --offline
 python scripts/ci_m5_0_gate.py --offline --out-dir data/runs/my_test_fixture
 ```
 
-**Auto-select latest**
+#### Auto-select latest
 ```powershell
 # Auto-select latest valid runDir (when no --run-dir and no --offline)
 python scripts/ci_m5_0_gate.py
@@ -92,26 +93,66 @@ python scripts/ci_m5_0_gate.py
 python scripts/ci_m5_0_gate.py --print-latest
 ```
 
-**Run-Dir Selection Priority:**
-| Priority | Flag | Behavior |
-|----------|------|----------|
-| 1 | `--run-dir PATH` | Uses explicit path (highest priority) |
-| 2 | `--offline` | Creates fixture in `--out-dir` or `data/runs/ci_m5_0_gate_<ts>` |
-| 3 | (default) | Auto-selects latest valid runDir in `data/runs/` |
+#### Require real data (reject fixtures)
+```powershell
+python scripts/ci_m5_0_gate.py --run-dir data/runs/real_xxx --require-real
+```
 
-**Latest RunDir Selection Logic:**
-- Must contain all 3 artifacts (scan, truth_report, reject_histogram)
-- Priority: `ci_m5_0_gate_*` > `run_scan_*` > `real_*` > other
-- Within same priority: sorted by modification time (newest first)
+### Using Environment Variables (for CI pipelines)
 
-**M5_0 Gate validates:**
-- schema_version exists (X.Y.Z format)
-- run_mode exists (REGISTRY_REAL or SMOKE_SIMULATOR)
-- current_block > 0 (for REAL mode)
-- quotes_total >= 1, quotes_fetched >= 1
-- dexes_active >= 1
-- price_sanity_passed/failed metrics exist
-- 3 core artifacts: scan_*.json, truth_report_*.json, reject_histogram_*.json
+```bash
+# GitHub Actions / CI example
+export ARBY_RUN_DIR=data/runs/real_20260131_123456
+export ARBY_REQUIRE_REAL=1
+python scripts/ci_m5_0_gate.py
+
+# Offline mode via ENV
+export ARBY_GATE_MODE=offline
+export ARBY_GATE_OUT_DIR=data/runs/ci_fixture
+python scripts/ci_m5_0_gate.py
+```
+
+PowerShell equivalent:
+```powershell
+$env:ARBY_RUN_DIR = "data\runs\real_20260131_123456"
+$env:ARBY_REQUIRE_REAL = "1"
+python scripts/ci_m5_0_gate.py
+```
+
+### M5_0 Gate Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `ARBY_RUN_DIR` | Explicit run directory (same as --run-dir) | `data/runs/real_xxx` |
+| `ARBY_GATE_MODE` | Mode: `offline` or `latest` | `offline` |
+| `ARBY_GATE_OUT_DIR` | Output dir for fixture | `data/runs/ci_test` |
+| `ARBY_REQUIRE_REAL` | Reject fixture data if "1" | `1` |
+
+### M5_0 Gate Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | PASS - all checks passed |
+| 1 | FAIL - one or more checks failed |
+| 2 | FAIL - artifacts missing or unreadable |
+| 3 | FAIL - fixture rejected (--require-real) |
+
+### Run-Dir Selection Priority
+
+| Priority | Source | Behavior |
+|----------|--------|----------|
+| 1 | `--run-dir PATH` | CLI explicit path (highest) |
+| 2 | `ARBY_RUN_DIR` | ENV explicit path |
+| 3 | `--offline` | CLI offline mode |
+| 4 | `ARBY_GATE_MODE` | ENV mode (offline/latest) |
+| 5 | Auto-detect | Latest valid runDir in `data/runs/` |
+
+### Latest RunDir Selection Logic
+
+- **Must have**: all 3 artifacts (scan_*.json, truth_report_*.json, reject_histogram_*.json)
+- **Priority prefixes**: `ci_m5_0_gate_*` > `run_scan_*` > `real_*` > `session_*` > other
+- **Within same priority**: sorted by mtime (newest first)
+- **Directories without 3 artifacts**: ignored
 
 ## What "Green" Means
 
@@ -134,17 +175,21 @@ python --version
 # 2. Import check
 python -c "from monitoring.truth_report import calculate_confidence; print('OK')"
 python -c "from core.constants import DexType, SCHEMA_VERSION; print(SCHEMA_VERSION)"
+python -c "from core.validators import select_anchor, normalize_price; print('OK')"
 
 # 3. Unit tests
 python -m pytest -q
 
-# 4. M4 gate (if applicable)
+# 4. Price sanity inversion tests
+python -m pytest tests/unit/test_price_sanity_inversion.py -v
+
+# 5. M4 gate (if applicable)
 python scripts/ci_m4_gate.py --offline
 
-# 5. M5_0 gate (RECOMMENDED: use explicit --run-dir)
+# 6. M5_0 gate (RECOMMENDED: use explicit --run-dir for real artifacts)
 python scripts/ci_m5_0_gate.py --offline
 # or with specific runDir:
-python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
+python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456 --require-real
 ```
 
 ## Offline vs Online Testing (STEP 8)
@@ -175,6 +220,11 @@ If CI fails but local is green, treat CI as source of truth and fix CI first.
 | scan.log | flat | `data/runs/{session}/scan.log` |
 
 ## Testing Specific Components
+
+### Price Sanity Inversion
+```powershell
+python -m pytest tests/unit/test_price_sanity_inversion.py -v
+```
 
 ### ErrorCode Contract
 ```powershell
