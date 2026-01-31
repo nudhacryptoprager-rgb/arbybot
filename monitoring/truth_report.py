@@ -2,7 +2,15 @@
 """
 Truth Report generator for ARBY.
 
-M5_0: Uses EXECUTION_DISABLED (stage-agnostic), NOT _M4.
+BACKWARD COMPATIBILITY CONTRACT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- RPCHealthMetrics MUST exist (monitoring/__init__.py imports it)
+- HealthMetrics MUST exist
+- TruthReport MUST exist
+- calculate_confidence MUST exist (tests/unit/test_confidence.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+M5_0: Uses EXECUTION_DISABLED (stage-agnostic).
 """
 
 import json
@@ -21,6 +29,41 @@ from core.constants import (
 logger = logging.getLogger("monitoring.truth_report")
 
 
+# =============================================================================
+# RPC HEALTH METRICS (CRITICAL - DO NOT REMOVE)
+# Used by: monitoring/__init__.py, tests/unit/test_confidence.py
+# =============================================================================
+
+@dataclass
+class RPCHealthMetrics:
+    """
+    RPC health metrics container.
+    
+    CRITICAL: This class MUST exist for backward compatibility.
+    Used by: monitoring/__init__.py, tests/unit/test_confidence.py
+    """
+    total_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    timeout_requests: int = 0
+    avg_latency_ms: float = 0.0
+    max_latency_ms: float = 0.0
+    success_rate: float = 1.0
+    endpoints_healthy: int = 0
+    endpoints_total: int = 0
+    
+    @property
+    def health_ratio(self) -> float:
+        """Calculate health ratio."""
+        if self.endpoints_total == 0:
+            return 0.0
+        return self.endpoints_healthy / self.endpoints_total
+
+
+# =============================================================================
+# SPREAD SIGNAL
+# =============================================================================
+
 @dataclass
 class SpreadSignal:
     """Spread opportunity (signal-only without cost model)."""
@@ -30,7 +73,7 @@ class SpreadSignal:
     buy_price: str
     sell_price: str
     spread_bps: int
-    is_profitable: bool  # SIGNAL-ONLY without cost model
+    is_profitable: bool
     is_profitable_net: Optional[bool] = None
     estimated_profit_usd: Optional[str] = None
     confidence: str = "medium"
@@ -39,6 +82,10 @@ class SpreadSignal:
     buy_fee: Optional[int] = None
     sell_fee: Optional[int] = None
 
+
+# =============================================================================
+# HEALTH METRICS
+# =============================================================================
 
 @dataclass
 class HealthMetrics:
@@ -54,6 +101,10 @@ class HealthMetrics:
     rpc_success_rate: float = 1.0
 
 
+# =============================================================================
+# TRUTH REPORT
+# =============================================================================
+
 @dataclass
 class TruthReport:
     """
@@ -65,26 +116,18 @@ class TruthReport:
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     run_mode: str = "REGISTRY_REAL"
     
-    # Execution (disabled, stage-agnostic)
     execution_enabled: bool = False
-    execution_blocker: str = CURRENT_EXECUTION_BLOCKER.value  # EXECUTION_DISABLED
+    execution_blocker: str = CURRENT_EXECUTION_BLOCKER.value
     cost_model_available: bool = False
     
-    # Signals
     spread_signals: List[SpreadSignal] = field(default_factory=list)
-    
-    # Health
     health: HealthMetrics = field(default_factory=HealthMetrics)
-    
-    # Stats
     stats: Dict[str, Any] = field(default_factory=dict)
     
-    # Metadata
     chain_id: int = 42161
     current_block: int = 0
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dict for JSON."""
         return {
             "schema_version": self.schema_version,
             "timestamp": self.timestamp,
@@ -100,7 +143,6 @@ class TruthReport:
         }
     
     def save(self, output_dir: Path, timestamp_str: Optional[str] = None) -> Path:
-        """Save report to JSON."""
         if timestamp_str is None:
             timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         
@@ -115,6 +157,10 @@ class TruthReport:
         logger.info(f"Truth report saved: {output_path}")
         return output_path
 
+
+# =============================================================================
+# FACTORY FUNCTION
+# =============================================================================
 
 def create_truth_report(
     scan_stats: Dict[str, Any],
@@ -157,9 +203,8 @@ def create_truth_report(
             sell_fee=s.get("sell_fee"),
         ))
     
-    # Determine blocker (stage-agnostic)
     if not execution_enabled:
-        blocker = CURRENT_EXECUTION_BLOCKER.value  # EXECUTION_DISABLED
+        blocker = CURRENT_EXECUTION_BLOCKER.value
     elif not cost_model_available:
         blocker = ExecutionBlocker.NO_COST_MODEL.value
     else:
@@ -176,3 +221,33 @@ def create_truth_report(
         chain_id=chain_id,
         current_block=current_block,
     )
+
+
+# =============================================================================
+# CONFIDENCE CALCULATION (CRITICAL - used by tests/unit/test_confidence.py)
+# =============================================================================
+
+def calculate_confidence(
+    spread_bps: int,
+    liquidity_score: float = 1.0,
+    rpc_health: Optional[RPCHealthMetrics] = None,
+) -> str:
+    """
+    Calculate confidence level.
+    
+    CRITICAL: Used by tests/unit/test_confidence.py
+    """
+    if spread_bps < 30:
+        return "low"
+    elif spread_bps < 100:
+        base = "medium"
+    else:
+        base = "high"
+    
+    if rpc_health and rpc_health.success_rate < 0.9:
+        if base == "high":
+            return "medium"
+        elif base == "medium":
+            return "low"
+    
+    return base

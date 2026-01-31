@@ -2,13 +2,18 @@
 """
 Core constants for ARBY.
 
-BACKWARD COMPATIBILITY CONTRACT:
-- DexType MUST exist (used by core.models, dex.adapters.*)
-- TokenStatus MUST exist (used by core.models, discovery.*)
-- ExecutionBlocker MUST exist (used by monitoring.truth_report)
-- Any removal/rename → alias/deprecation ONLY
+BACKWARD COMPATIBILITY CONTRACT (CRITICAL):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PUBLIC SYMBOLS ONLY GROW, NEVER DISAPPEAR.
 
-M5_0: Use EXECUTION_DISABLED (stage-agnostic), not _M4.
+Required symbols (DO NOT REMOVE):
+- DexType (core.models, dex.adapters.*)
+- TokenStatus (core.models, discovery.*)
+- PoolStatus (core.models) ← WAS MISSING!
+- ExecutionBlocker (monitoring.truth_report)
+
+If renamed → provide alias to old name.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 from decimal import Decimal
@@ -27,12 +32,7 @@ SCHEMA_VERSION = "3.2.0"
 # =============================================================================
 
 class DexType(str, Enum):
-    """
-    DEX type identifiers.
-    
-    CRITICAL: This enum MUST exist for backward compatibility.
-    Used by: core.models, dex.adapters.*, strategy.*
-    """
+    """DEX type identifiers."""
     UNISWAP_V3 = "uniswap_v3"
     SUSHISWAP_V3 = "sushiswap_v3"
     PANCAKESWAP_V3 = "pancakeswap_v3"
@@ -43,7 +43,6 @@ class DexType(str, Enum):
     
     @classmethod
     def from_string(cls, s: str) -> "DexType":
-        """Convert string to DexType."""
         for member in cls:
             if member.value == s:
                 return member
@@ -55,16 +54,30 @@ class DexType(str, Enum):
 # =============================================================================
 
 class TokenStatus(str, Enum):
-    """
-    Token status in the system.
-    
-    CRITICAL: This enum MUST exist for backward compatibility.
-    Used by: core.models, discovery.*
-    """
+    """Token status in the system."""
     ACTIVE = "active"
     INACTIVE = "inactive"
     BLACKLISTED = "blacklisted"
     PENDING = "pending"
+
+
+# =============================================================================
+# POOL STATUS (CRITICAL - DO NOT REMOVE)
+# Used by: core.models, discovery.*, dex.adapters.*
+# =============================================================================
+
+class PoolStatus(str, Enum):
+    """
+    Pool status in the system.
+    
+    CRITICAL: This enum MUST exist for backward compatibility.
+    Used by: core.models, discovery.*, dex.adapters.*
+    """
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    QUARANTINED = "quarantined"
+    PENDING = "pending"
+    ERROR = "error"
 
 
 # =============================================================================
@@ -77,23 +90,17 @@ class ExecutionBlocker(str, Enum):
     
     M5_0: Use EXECUTION_DISABLED (stage-agnostic).
     """
-    # Stage-agnostic (PREFERRED for M5_0+)
     EXECUTION_DISABLED = "EXECUTION_DISABLED"
+    EXECUTION_DISABLED_M4 = "EXECUTION_DISABLED_M4"  # Legacy compat
     
-    # Legacy (kept for backward compat with old artifacts)
-    EXECUTION_DISABLED_M4 = "EXECUTION_DISABLED_M4"
-    
-    # Profitability
     NOT_PROFITABLE = "NOT_PROFITABLE"
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
     INSUFFICIENT_LIQUIDITY = "INSUFFICIENT_LIQUIDITY"
     
-    # Safety
     PRICE_SANITY_FAILED = "PRICE_SANITY_FAILED"
     SLIPPAGE_TOO_HIGH = "SLIPPAGE_TOO_HIGH"
     GAS_TOO_HIGH = "GAS_TOO_HIGH"
     
-    # Infrastructure
     NO_COST_MODEL = "NO_COST_MODEL"
     RPC_ERROR = "RPC_ERROR"
 
@@ -119,7 +126,7 @@ DEFAULT_ANCHOR_DEX = "uniswap_v3"
 # PRICE SANITY BOUNDS
 # =============================================================================
 
-PRICE_SANITY_MAX_DEVIATION_BPS = 5000  # 50%
+PRICE_SANITY_MAX_DEVIATION_BPS = 5000
 
 PRICE_SANITY_BOUNDS: Dict[Tuple[str, str], Dict[str, Decimal]] = {
     ("WETH", "USDC"): {
@@ -163,7 +170,7 @@ CHAIN_IDS = {
 
 
 # =============================================================================
-# DEX IDENTIFIERS (string constants)
+# DEX IDENTIFIERS
 # =============================================================================
 
 DEX_IDS = {

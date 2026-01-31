@@ -1,39 +1,30 @@
 # PATH: monitoring/__init__.py
 """
-Monitoring package for ARBY.
+Monitoring package.
 
-STEP 4: Stable import contract.
-
-These exports MUST remain stable:
-- calculate_confidence
-- calculate_price_stability_factor
-- RPCHealthMetrics
+PUBLIC SYMBOLS (backward compat - DO NOT REMOVE):
 - TruthReport
-- build_truth_report
-- build_health_section
-- print_truth_report
+- HealthMetrics
+- SpreadSignal
+- RPCHealthMetrics ← WAS MISSING!
+- create_truth_report
+- calculate_confidence
 """
 
 from monitoring.truth_report import (
     TruthReport,
+    HealthMetrics,
+    SpreadSignal,
     RPCHealthMetrics,
+    create_truth_report,
     calculate_confidence,
-    calculate_price_stability_factor,
-    build_truth_report,
-    build_health_section,
-    build_gate_breakdown,
-    print_truth_report,
-    SCHEMA_VERSION,
 )
 
 __all__ = [
     "TruthReport",
+    "HealthMetrics",
+    "SpreadSignal",
     "RPCHealthMetrics",
+    "create_truth_report",
     "calculate_confidence",
-    "calculate_price_stability_factor",
-    "build_truth_report",
-    "build_health_section",
-    "build_gate_breakdown",
-    "print_truth_report",
-    "SCHEMA_VERSION",
 ]

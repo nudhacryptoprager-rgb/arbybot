@@ -41,7 +41,7 @@ class TestModeExclusion(unittest.TestCase):
     """Test --offline and --online are mutually exclusive."""
 
     def test_offline_and_online_together_error(self):
-        """Test argparse error when both used."""
+        """--offline + --online → argparse error."""
         with patch('sys.argv', ['ci_m5_0_gate.py', '--offline', '--online']):
             with self.assertRaises(SystemExit) as cm:
                 main()
@@ -52,7 +52,7 @@ class TestOfflineModeIgnoresEnv(unittest.TestCase):
     """Test --offline ignores ALL ENV."""
 
     def test_offline_ignores_arby_run_dir(self):
-        """--offline + ARBY_RUN_DIR set → still offline."""
+        """--offline + ARBY_RUN_DIR set → still creates offline dir."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_root = Path(tmpdir)
             
@@ -68,12 +68,16 @@ class TestOfflineModeIgnoresEnv(unittest.TestCase):
                 
                 # Should PASS (ignores invalid ENV)
                 self.assertEqual(result, 0)
+                
+                # Should create ci_m5_0_gate_offline_* dir
+                dirs = list(output_root.glob("ci_m5_0_gate_offline_*"))
+                self.assertEqual(len(dirs), 1)
             finally:
                 os.environ.clear()
                 os.environ.update(env_backup)
 
     def test_offline_ignores_arby_require_real(self):
-        """--offline + ARBY_REQUIRE_REAL=1 → still PASS."""
+        """--offline + ARBY_REQUIRE_REAL=1 → still PASS with fixture."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_root = Path(tmpdir)
             
@@ -92,27 +96,6 @@ class TestOfflineModeIgnoresEnv(unittest.TestCase):
             finally:
                 os.environ.clear()
                 os.environ.update(env_backup)
-
-    def test_offline_creates_fixture(self):
-        """--offline creates fixture in output_root."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_root = Path(tmpdir)
-            
-            with patch('sys.argv', [
-                'ci_m5_0_gate.py', '--offline',
-                '--output-root', str(output_root)
-            ]):
-                result = main()
-            
-            self.assertEqual(result, 0)
-            
-            dirs = list(output_root.glob("ci_m5_0_gate_offline_*"))
-            self.assertEqual(len(dirs), 1)
-            
-            artifacts = discover_artifacts(dirs[0])
-            self.assertIsNotNone(artifacts["scan"])
-            self.assertIsNotNone(artifacts["truth_report"])
-            self.assertIsNotNone(artifacts["reject_histogram"])
 
 
 class TestOnlineModeIgnoresEnv(unittest.TestCase):
@@ -136,6 +119,7 @@ class TestOnlineModeIgnoresEnv(unittest.TestCase):
                     ]):
                         main()
                     
+                    # Verify subprocess called with output_root, NOT ARBY_RUN_DIR
                     call_args = mock_run.call_args[0][0]
                     output_dir_arg = None
                     for i, arg in enumerate(call_args):
@@ -144,7 +128,6 @@ class TestOnlineModeIgnoresEnv(unittest.TestCase):
                             break
                     
                     self.assertIsNotNone(output_dir_arg)
-                    # Should use output_root, NOT ARBY_RUN_DIR
                     self.assertIn(str(output_root), output_dir_arg)
                     self.assertNotIn("/some/other/path", output_dir_arg)
             finally:
@@ -198,7 +181,7 @@ class TestFixtureGeneration(unittest.TestCase):
             self.assertEqual(data["run_mode"], "FIXTURE_OFFLINE")
 
     def test_fixture_has_execution_disabled(self):
-        """Test fixture uses EXECUTION_DISABLED (not _M4)."""
+        """Fixture uses EXECUTION_DISABLED (not _M4)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
             artifacts = generate_fixture_artifacts(output_dir, "20260131_120000")
@@ -210,6 +193,7 @@ class TestFixtureGeneration(unittest.TestCase):
             self.assertNotIn("M4", data["execution_blocker"])
 
     def test_fixture_has_m5_0_fields(self):
+        """Fixture has inversion_applied, suspect_quote fields."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
             artifacts = generate_fixture_artifacts(output_dir, "20260131_120000")

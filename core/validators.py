@@ -3,10 +3,10 @@
 Unified validators for ARBY.
 
 CONTRACTS:
-1. PRICE ORIENTATION: Price = quote_token per 1 base_token
-2. DEVIATION: deviation_bps = abs(price - anchor) / anchor * 10000
-3. NO AUTO-INVERSION: inversion_applied is ALWAYS False
-4. AnchorQuote.dex_id: REQUIRED field (backward compat)
+1. Price = quote_token per 1 base_token
+2. deviation_bps = abs(price - anchor) / anchor * 10000
+3. inversion_applied is ALWAYS False
+4. AnchorQuote.dex_id is REQUIRED
 """
 
 import logging
@@ -33,11 +33,7 @@ def normalize_price(
     token_in: str,
     token_out: str,
 ) -> Tuple[Decimal, bool, Dict[str, Any]]:
-    """
-    Normalize price from raw amounts.
-    
-    Returns: (price, suspect_quote, diagnostics)
-    """
+    """Normalize price from raw amounts."""
     diagnostics: Dict[str, Any] = {
         "amount_in_wei": str(amount_in_wei),
         "amount_out_wei": str(amount_out_wei),
@@ -46,7 +42,7 @@ def normalize_price(
         "token_in": token_in,
         "token_out": token_out,
         "numeraire_side": f"{token_out}_per_{token_in}",
-        "inversion_applied": False,  # ALWAYS False
+        "inversion_applied": False,
     }
     
     if decimals_in >= 0:
@@ -101,11 +97,7 @@ def calculate_deviation_bps(
     anchor: Decimal, 
     cap: int = MAX_DEVIATION_BPS_CAP
 ) -> Tuple[int, int, bool]:
-    """
-    Calculate price deviation in basis points.
-    
-    Returns: (deviation_bps, deviation_bps_raw, was_capped)
-    """
+    """Calculate price deviation in basis points."""
     if anchor <= 0:
         raise ValueError(f"Anchor must be positive, got: {anchor}")
     
@@ -122,16 +114,14 @@ class AnchorQuote:
     """
     Quote that can be used as anchor.
     
-    CONTRACT: dex_id is a REQUIRED field.
-    All code that creates AnchorQuote MUST provide dex_id.
+    CONTRACT: dex_id is REQUIRED.
     """
-    dex_id: str  # REQUIRED - backward compat contract
+    dex_id: str  # REQUIRED
     price: Decimal
     fee: int
     pool_address: str
     block_number: int
     
-    # Optional fields
     token_in: str = ""
     token_out: str = ""
     amount_in_wei: int = 0
@@ -139,11 +129,9 @@ class AnchorQuote:
     
     @property
     def is_from_anchor_dex(self) -> bool:
-        """Check if from priority anchor DEX."""
         return self.dex_id in ANCHOR_DEX_PRIORITY
     
     def __post_init__(self):
-        """Validate required fields."""
         if not self.dex_id:
             raise ValueError("AnchorQuote.dex_id is required")
 
@@ -158,18 +146,11 @@ def select_anchor(
     if not quotes:
         if bounds:
             anchor_price = bounds.get("anchor", (bounds["min"] + bounds["max"]) / 2)
-            return anchor_price, {
-                "source": "hardcoded_bounds",
-                "dex_id": None,
-                "bounds": [str(bounds["min"]), str(bounds["max"])],
-            }
+            return anchor_price, {"source": "hardcoded_bounds", "dex_id": None}
         return None
     
     if bounds:
-        reasonable = [
-            q for q in quotes 
-            if q.price >= bounds["min"] / 2 and q.price <= bounds["max"] * 2
-        ]
+        reasonable = [q for q in quotes if q.price >= bounds["min"] / 2 and q.price <= bounds["max"] * 2]
         if reasonable:
             quotes = reasonable
     
@@ -188,10 +169,7 @@ def select_anchor(
     if valid_prices:
         n = len(valid_prices)
         median = valid_prices[n // 2] if n % 2 == 1 else (valid_prices[n // 2 - 1] + valid_prices[n // 2]) / 2
-        return median, {
-            "source": "median_quotes",
-            "quotes_count": n,
-        }
+        return median, {"source": "median_quotes", "quotes_count": n}
     
     if bounds:
         return bounds.get("anchor", (bounds["min"] + bounds["max"]) / 2), {"source": "hardcoded_bounds"}

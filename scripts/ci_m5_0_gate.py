@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 # PATH: scripts/ci_m5_0_gate.py
 """
-M5_0 CI Gate v2.0.0 - Infrastructure Hardening validation.
+M5_0 CI Gate v2.0.0.
 
 TWO CANONICAL COMMANDS:
   python scripts/ci_m5_0_gate.py --offline
   python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 
 MODES (MUTUALLY EXCLUSIVE):
-  --offline   Create fixture, ALWAYS works, IGNORES ALL ENV
-  --online    Run real scan, IGNORES ARBY_RUN_DIR
-
-PRIORITY: CLI > ENV (always)
+  --offline   ALWAYS works, IGNORES ALL ENV
+  --online    Runs real scan, IGNORES ARBY_RUN_DIR
 
 EXIT CODES:
   0 = PASS
@@ -180,7 +178,7 @@ def validate_health_metrics(data: Dict[str, Any]) -> Tuple[bool, str]:
         return False, "quotes_fetched < 1"
     if health.get("dexes_active", 0) < 1:
         return False, "dexes_active < 1"
-    return True, f"health OK"
+    return True, "health OK"
 
 
 def validate_price_sanity_metrics(data: Dict[str, Any]) -> Tuple[bool, str]:
@@ -189,7 +187,7 @@ def validate_price_sanity_metrics(data: Dict[str, Any]) -> Tuple[bool, str]:
     failed = health.get("price_sanity_failed")
     if passed is None and failed is None:
         return False, "Missing price_sanity metrics"
-    return True, f"price_sanity OK"
+    return True, "price_sanity OK"
 
 
 def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool = False) -> Tuple[bool, List[str]]:
@@ -291,17 +289,14 @@ def main() -> int:
 CANONICAL COMMANDS:
   python scripts/ci_m5_0_gate.py --offline
   python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
-
-ADVANCED (use --offline or --online instead):
-  python scripts/ci_m5_0_gate.py --run-dir data/runs/real_xxx
         """
     )
     
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--offline", action="store_true",
-        help="Offline mode: create fixture (IGNORES ALL ENV)")
+        help="Offline mode (IGNORES ALL ENV)")
     mode_group.add_argument("--online", action="store_true",
-        help="Online mode: run real scan (IGNORES ARBY_RUN_DIR)")
+        help="Online mode (IGNORES ARBY_RUN_DIR)")
     
     parser.add_argument("--run-dir", type=Path, help="[ADVANCED] Explicit run directory")
     parser.add_argument("--require-real", action="store_true", help="Reject fixture artifacts")
@@ -323,9 +318,7 @@ ADVANCED (use --offline or --online instead):
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # =========================================================================
-    # OFFLINE MODE (ignores ALL ENV)
-    # =========================================================================
+    # OFFLINE MODE
     if args.offline:
         print(f"\n{'='*60}")
         print(f"M5_0 GATE v{__version__} - OFFLINE")
@@ -361,9 +354,7 @@ ADVANCED (use --offline or --online instead):
             print(f"RESULT: FAIL")
             return 1
     
-    # =========================================================================
-    # ONLINE MODE (ignores ARBY_RUN_DIR)
-    # =========================================================================
+    # ONLINE MODE
     if args.online:
         print(f"\n{'='*60}")
         print(f"M5_0 GATE v{__version__} - ONLINE")
@@ -411,9 +402,7 @@ ADVANCED (use --offline or --online instead):
             print(f"RESULT: FAIL")
             return 1
     
-    # =========================================================================
-    # ADVANCED MODE (for backward compat)
-    # =========================================================================
+    # ADVANCED MODE
     print(f"\n{'='*60}")
     print(f"M5_0 GATE v{__version__} - ADVANCED")
     print(f"{'='*60}")
