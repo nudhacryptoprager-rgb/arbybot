@@ -2,19 +2,13 @@
 """
 Truth Report generator for ARBY.
 
-M5_0: Uses EXECUTION_DISABLED (not _M4) for stage-agnostic blocking.
-
-IMPORTANT:
-- cost_model_available=false means is_profitable is signal-only
-- execution_enabled=false means no live trades
-- Do NOT interpret profitable signals as "ready to trade"
+M5_0: Uses EXECUTION_DISABLED (stage-agnostic), NOT _M4.
 """
 
 import json
 import logging
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -29,11 +23,7 @@ logger = logging.getLogger("monitoring.truth_report")
 
 @dataclass
 class SpreadSignal:
-    """
-    A detected spread opportunity.
-    
-    IMPORTANT: is_profitable=true is SIGNAL-ONLY when cost_model_available=false.
-    """
+    """Spread opportunity (signal-only without cost model)."""
     pair: str
     buy_dex: str
     sell_dex: str
@@ -41,11 +31,9 @@ class SpreadSignal:
     sell_price: str
     spread_bps: int
     is_profitable: bool  # SIGNAL-ONLY without cost model
-    is_profitable_net: Optional[bool] = None  # null if no cost model
+    is_profitable_net: Optional[bool] = None
     estimated_profit_usd: Optional[str] = None
     confidence: str = "medium"
-    
-    # Execution metadata
     buy_pool_address: Optional[str] = None
     sell_pool_address: Optional[str] = None
     buy_fee: Optional[int] = None
@@ -54,7 +42,7 @@ class SpreadSignal:
 
 @dataclass
 class HealthMetrics:
-    """Health metrics for the scan."""
+    """Health metrics for scan."""
     quotes_total: int = 0
     quotes_fetched: int = 0
     gates_passed: int = 0
@@ -69,23 +57,20 @@ class HealthMetrics:
 @dataclass
 class TruthReport:
     """
-    The Truth Report - single source of truth for scan results.
+    Truth Report - single source of truth.
     
-    M5_0 CONTRACTS:
-    - execution_blocker: Uses EXECUTION_DISABLED (not _M4)
-    - cost_model_available: false means is_profitable is signal-only
-    - execution_enabled: false means no live trades
+    M5_0: execution_blocker = EXECUTION_DISABLED (stage-agnostic)
     """
     schema_version: str = SCHEMA_VERSION
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     run_mode: str = "REGISTRY_REAL"
     
-    # Execution status
+    # Execution (disabled, stage-agnostic)
     execution_enabled: bool = False
     execution_blocker: str = CURRENT_EXECUTION_BLOCKER.value  # EXECUTION_DISABLED
     cost_model_available: bool = False
     
-    # Signals (profitable = signal-only without cost model)
+    # Signals
     spread_signals: List[SpreadSignal] = field(default_factory=list)
     
     # Health
@@ -99,8 +84,8 @@ class TruthReport:
     current_block: int = 0
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        result = {
+        """Convert to dict for JSON."""
+        return {
             "schema_version": self.schema_version,
             "timestamp": self.timestamp,
             "run_mode": self.run_mode,
@@ -113,10 +98,9 @@ class TruthReport:
             "stats": self.stats,
             "spread_signals": [asdict(s) for s in self.spread_signals],
         }
-        return result
     
     def save(self, output_dir: Path, timestamp_str: Optional[str] = None) -> Path:
-        """Save report to JSON file."""
+        """Save report to JSON."""
         if timestamp_str is None:
             timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         
@@ -141,22 +125,7 @@ def create_truth_report(
     execution_enabled: bool = False,
     cost_model_available: bool = False,
 ) -> TruthReport:
-    """
-    Create a TruthReport from scan results.
-    
-    Args:
-        scan_stats: Statistics from the scan
-        spread_signals: Detected spread opportunities
-        run_mode: Run mode (REGISTRY_REAL, SMOKE, etc.)
-        chain_id: Chain ID
-        current_block: Block number at scan time
-        execution_enabled: Whether execution is enabled
-        cost_model_available: Whether cost model is available
-    
-    Returns:
-        TruthReport instance
-    """
-    # Build health metrics
+    """Create TruthReport from scan results."""
     health = HealthMetrics(
         quotes_total=scan_stats.get("quotes_total", 0),
         quotes_fetched=scan_stats.get("quotes_fetched", 0),
@@ -169,7 +138,6 @@ def create_truth_report(
         rpc_success_rate=scan_stats.get("rpc_success_rate", 1.0),
     )
     
-    # Build spread signals
     signals = []
     for s in spread_signals:
         signals.append(SpreadSignal(
@@ -180,7 +148,7 @@ def create_truth_report(
             sell_price=str(s.get("sell_price", "0")),
             spread_bps=s.get("spread_bps", 0),
             is_profitable=s.get("is_profitable", False),
-            is_profitable_net=s.get("is_profitable_net"),  # None if no cost model
+            is_profitable_net=s.get("is_profitable_net"),
             estimated_profit_usd=str(s.get("estimated_profit_usd")) if s.get("estimated_profit_usd") else None,
             confidence=s.get("confidence", "medium"),
             buy_pool_address=s.get("buy_pool_address"),
@@ -189,18 +157,18 @@ def create_truth_report(
             sell_fee=s.get("sell_fee"),
         ))
     
-    # Determine execution blocker
+    # Determine blocker (stage-agnostic)
     if not execution_enabled:
         blocker = CURRENT_EXECUTION_BLOCKER.value  # EXECUTION_DISABLED
     elif not cost_model_available:
         blocker = ExecutionBlocker.NO_COST_MODEL.value
     else:
-        blocker = None
+        blocker = ""
     
     return TruthReport(
         run_mode=run_mode,
         execution_enabled=execution_enabled,
-        execution_blocker=blocker or "",
+        execution_blocker=blocker,
         cost_model_available=cost_model_available,
         spread_signals=signals,
         health=health,

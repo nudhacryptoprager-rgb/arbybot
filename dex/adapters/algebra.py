@@ -3,25 +3,19 @@
 Algebra-based DEX adapter (Sushiswap V3, Camelot, etc).
 
 M5_0 REQUIREMENTS:
-1. Include real pool address (0x...) in diagnostics, not just key
-2. Add direction sanity check (diagnostic flag, not gate)
-3. Log sqrtPriceX96, token0/token1 for debugging
-
-KNOWN ISSUE (M5_0):
-- sushiswap_v3:WETH/USDC:3000 returns ~8.6 USDC per WETH (should be ~2600)
-- This is likely a pool mapping issue in registry
-- See docs/status/Status_M5_0.md for details
+1. Include real pool address (0x...) in diagnostics
+2. Include token0/token1/decimals for debugging
+3. Direction sanity check (diagnostic flag, not gate)
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("dex.adapters.algebra")
 
 # Minimum expected price for direction sanity (diagnostic only)
-# If WETH -> USDC returns < 100 USDC, something is wrong
 DIRECTION_SANITY_MIN = {
     ("WETH", "USDC"): Decimal("100"),
     ("WETH", "USDT"): Decimal("100"),
@@ -32,11 +26,7 @@ DIRECTION_SANITY_MIN = {
 
 @dataclass
 class AlgebraPool:
-    """
-    Algebra pool information.
-    
-    M5_0: Must include real on-chain address for debugging.
-    """
+    """Pool information with hard facts."""
     dex_id: str
     pool_address: str  # MUST be real 0x... address
     token0: str
@@ -45,49 +35,47 @@ class AlgebraPool:
     token1_decimals: int
     fee: int
     
-    # For debugging
+    # Optional debugging info
     sqrt_price_x96: Optional[int] = None
     tick: Optional[int] = None
     liquidity: Optional[int] = None
     
     @property
     def pool_key(self) -> str:
-        """Generate pool key (for indexing, not for diagnostics)."""
+        """Pool key (for indexing, NOT for diagnostics)."""
         return f"pool:{self.dex_id}:{self.token0}:{self.token1}:{self.fee}"
 
 
-@dataclass  
+@dataclass
 class QuoteResult:
     """
-    Quote result with full diagnostics.
+    Quote result with diagnostics.
     
-    M5_0: Diagnostics must include real pool address.
+    CONTRACT:
+    - pool_address: MUST be real 0x... address
+    - diagnostics: MUST include hard facts
     """
     amount_out: int
     price: Decimal
     pool_address: str  # Real 0x... address
     fee: int
     
-    # Diagnostics
-    diagnostics: Dict[str, Any] = None
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
     
     # Direction sanity (diagnostic flag)
     suspect_direction: bool = False
     suspect_reason: Optional[str] = None
-    
-    def __post_init__(self):
-        if self.diagnostics is None:
-            self.diagnostics = {}
 
 
 class AlgebraAdapter:
     """
-    Adapter for Algebra-based DEXes (Sushiswap V3, Camelot, etc).
+    Adapter for Algebra-based DEXes.
     
-    M5_0 CONTRACTS:
-    1. pool_address in diagnostics is ALWAYS real 0x... address
-    2. Direction sanity check adds suspect_direction flag (not gate)
-    3. Logs include sqrtPriceX96 and token order for debugging
+    DIAGNOSTICS CONTRACT:
+    - pool_address: real 0x... (NOT pool key)
+    - pool_key: for indexing (separate field)
+    - token0, token1, decimals: hard facts
+    - suspect_direction: diagnostic flag
     """
     
     def __init__(self, web3, quoter_address: str, dex_id: str = "sushiswap_v3"):
@@ -95,8 +83,8 @@ class AlgebraAdapter:
         self.quoter_address = quoter_address
         self.dex_id = dex_id
         
-        # Pool registry: maps (token_in, token_out, fee) -> real pool address
-        self._pool_registry: Dict[Tuple[str, str, int], str] = {}
+        # Pool registry: (token_in, token_out, fee) -> AlgebraPool
+        self._pool_registry: Dict[Tuple[str, str, int], AlgebraPool] = {}
     
     def register_pool(
         self,
@@ -110,40 +98,38 @@ class AlgebraAdapter:
         token1_decimals: int = 6,
     ) -> None:
         """
-        Register a pool with its real on-chain address.
+        Register pool with real address.
         
-        M5_0: pool_address MUST be real 0x... address.
+        CONTRACT: pool_address MUST be real 0x...
         """
         if not pool_address.startswith("0x"):
-            logger.warning(
-                f"Pool address should be 0x..., got: {pool_address}. "
-                f"This will make debugging difficult."
-            )
+            logger.warning(f"Pool address should be 0x..., got: {pool_address}")
+        
+        pool = AlgebraPool(
+            dex_id=self.dex_id,
+            pool_address=pool_address,
+            token0=token0,
+            token1=token1,
+            token0_decimals=token0_decimals,
+            token1_decimals=token1_decimals,
+            fee=fee,
+        )
         
         key = (token_in, token_out, fee)
-        self._pool_registry[key] = pool_address
-        
-        logger.debug(
-            f"Registered pool: {self.dex_id}:{token_in}/{token_out}:{fee} -> {pool_address}"
-        )
+        self._pool_registry[key] = pool
+    
+    def get_pool(self, token_in: str, token_out: str, fee: int) -> Optional[AlgebraPool]:
+        """Get pool info."""
+        pool = self._pool_registry.get((token_in, token_out, fee))
+        if pool:
+            return pool
+        # Try reverse
+        return self._pool_registry.get((token_out, token_in, fee))
     
     def get_pool_address(self, token_in: str, token_out: str, fee: int) -> Optional[str]:
-        """
-        Get real pool address for a pair.
-        
-        Returns None if pool not registered.
-        """
-        # Try direct lookup
-        addr = self._pool_registry.get((token_in, token_out, fee))
-        if addr:
-            return addr
-        
-        # Try reverse (some pools have reversed token order)
-        addr = self._pool_registry.get((token_out, token_in, fee))
-        if addr:
-            return addr
-        
-        return None
+        """Get real pool address."""
+        pool = self.get_pool(token_in, token_out, fee)
+        return pool.pool_address if pool else None
     
     def quote(
         self,
@@ -155,32 +141,31 @@ class AlgebraAdapter:
         decimals_out: int = 6,
     ) -> Optional[QuoteResult]:
         """
-        Get quote for a swap.
+        Get quote with full diagnostics.
         
-        M5_0 CONTRACTS:
-        1. Returns real pool_address (0x...) in result
-        2. Adds direction sanity check (diagnostic flag)
-        3. Logs sqrtPriceX96 and token order for debugging
-        
-        Returns:
-            QuoteResult with real pool address and diagnostics
+        DIAGNOSTICS INCLUDE:
+        - pool_address: real 0x...
+        - pool_key: for indexing
+        - token0, token1: hard facts
+        - suspect_direction: diagnostic flag
         """
-        # Get real pool address
-        pool_address = self.get_pool_address(token_in, token_out, fee)
+        pool = self.get_pool(token_in, token_out, fee)
         
-        if pool_address is None:
-            logger.warning(
-                f"No pool registered for {self.dex_id}:{token_in}/{token_out}:{fee}"
-            )
+        if pool is None:
+            logger.warning(f"No pool: {self.dex_id}:{token_in}/{token_out}:{fee}")
             return None
         
-        # Build diagnostics (M5_0: always include real address)
+        # Build diagnostics with HARD FACTS
         diagnostics: Dict[str, Any] = {
             "dex_id": self.dex_id,
-            "pool_address": pool_address,  # REAL 0x... address
-            "pool_key": f"pool:{self.dex_id}:{token_in}:{token_out}:{fee}",
+            "pool_address": pool.pool_address,  # REAL 0x...
+            "pool_key": pool.pool_key,          # For indexing
             "token_in": token_in,
             "token_out": token_out,
+            "token0": pool.token0,
+            "token1": pool.token1,
+            "token0_decimals": pool.token0_decimals,
+            "token1_decimals": pool.token1_decimals,
             "amount_in": str(amount_in),
             "fee": fee,
             "decimals_in": decimals_in,
@@ -188,49 +173,42 @@ class AlgebraAdapter:
         }
         
         try:
-            # Get quote from quoter contract
-            # NOTE: This is a placeholder - real implementation would call the contract
-            amount_out = self._call_quoter(
-                pool_address, token_in, token_out, amount_in, fee
-            )
+            # Get quote from quoter
+            amount_out = self._call_quoter(pool.pool_address, token_in, token_out, amount_in, fee)
             
             if amount_out is None or amount_out <= 0:
                 diagnostics["error"] = "zero_amount_out"
                 return None
             
             # Calculate price
-            in_normalized = Decimal(amount_in) / Decimal(10 ** decimals_in)
-            out_normalized = Decimal(amount_out) / Decimal(10 ** decimals_out)
+            in_norm = Decimal(amount_in) / Decimal(10 ** decimals_in)
+            out_norm = Decimal(amount_out) / Decimal(10 ** decimals_out)
             
-            if in_normalized > 0:
-                price = out_normalized / in_normalized
-            else:
-                price = Decimal("0")
+            price = out_norm / in_norm if in_norm > 0 else Decimal("0")
             
             diagnostics["amount_out"] = str(amount_out)
             diagnostics["price"] = str(price)
             
-            # Direction sanity check (M5_0: diagnostic flag only)
+            # Direction sanity (diagnostic flag)
             suspect_direction = False
             suspect_reason = None
             
             min_expected = DIRECTION_SANITY_MIN.get((token_in, token_out))
             if min_expected and price < min_expected:
                 suspect_direction = True
-                suspect_reason = f"price {price:.4f} below minimum expected {min_expected}"
+                suspect_reason = f"price {price:.4f} < min {min_expected}"
                 diagnostics["suspect_direction"] = True
                 diagnostics["suspect_reason"] = suspect_reason
                 
                 logger.warning(
                     f"SUSPECT_DIRECTION: {self.dex_id}:{token_in}/{token_out}:{fee} "
-                    f"price={price:.4f} < min_expected={min_expected}. "
-                    f"Pool: {pool_address}. Check registry mapping."
+                    f"price={price:.4f}. Pool: {pool.pool_address}"
                 )
             
             return QuoteResult(
                 amount_out=amount_out,
                 price=price,
-                pool_address=pool_address,  # Real address
+                pool_address=pool.pool_address,
                 fee=fee,
                 diagnostics=diagnostics,
                 suspect_direction=suspect_direction,
@@ -239,7 +217,7 @@ class AlgebraAdapter:
             
         except Exception as e:
             diagnostics["error"] = str(e)
-            logger.error(f"Quote failed for {pool_address}: {e}")
+            logger.error(f"Quote failed: {pool.pool_address}: {e}")
             return None
     
     def _call_quoter(
@@ -253,33 +231,16 @@ class AlgebraAdapter:
         """
         Call quoter contract.
         
-        NOTE: This is a placeholder. Real implementation would:
-        1. Get token addresses from registry
-        2. Call quoter.quoteExactInputSingle()
-        3. Log sqrtPriceX96 and tick from pool for debugging
+        Placeholder - real impl calls contract.
         """
-        # Placeholder - real implementation calls contract
-        # For now, return None to indicate not implemented
-        return None
-    
-    def get_pool_state(self, pool_address: str) -> Optional[Dict[str, Any]]:
-        """
-        Get current pool state for debugging.
-        
-        M5_0: Useful for debugging bad quotes.
-        
-        Returns:
-            Dict with sqrtPriceX96, tick, liquidity, token0, token1
-        """
-        # Placeholder - real implementation would call pool.slot0()
         return None
 
 
 def create_sushiswap_v3_adapter(web3, quoter_address: str) -> AlgebraAdapter:
-    """Create Sushiswap V3 adapter (Algebra-based)."""
+    """Create Sushiswap V3 adapter."""
     return AlgebraAdapter(web3, quoter_address, dex_id="sushiswap_v3")
 
 
 def create_camelot_adapter(web3, quoter_address: str) -> AlgebraAdapter:
-    """Create Camelot adapter (Algebra-based)."""
+    """Create Camelot adapter."""
     return AlgebraAdapter(web3, quoter_address, dex_id="camelot")

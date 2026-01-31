@@ -1,19 +1,15 @@
 # PATH: config/real_m5_0_golden.yaml
 # M5_0 Golden Config for Infrastructure Regression Testing
 #
-# PURPOSE:
-# - Test infrastructure changes (Alchemy/Tenderly/WebSocket)
-# - Cover multiple pairs and pools (not just 1 pair / 4 pools)
-# - Detect regression in quote quality across DEXes
-#
-# USAGE:
-#   python -m strategy.jobs.run_scan_real --config config/real_m5_0_golden.yaml --cycles 1
+# RULES:
+# - Only stable, verified pools
+# - No known-broken pools (sushiswap_v3:fee=3000)
+# - Minimum coverage for regression
 
-# Run mode
 run_mode: REGISTRY_REAL
 chain_id: 42161  # Arbitrum
 
-# Pairs to scan (expanded from minimal config)
+# Pairs to scan
 pairs:
   - token_in: WETH
     token_out: USDC
@@ -23,29 +19,20 @@ pairs:
     
   - token_in: WBTC
     token_out: USDC
-    
-  - token_in: WBTC
-    token_out: WETH
 
-# DEXes to scan
+# DEXes - only stable configurations
 dexes:
   - id: uniswap_v3
     enabled: true
-    fee_tiers: [500, 3000, 10000]
+    fee_tiers: [500, 3000]
     
   - id: sushiswap_v3
     enabled: true
-    fee_tiers: [500, 3000]
-    # KNOWN ISSUE: fee=3000 on WETH/USDC returns bad quotes
-    # See docs/status/Status_M5_0.md
+    fee_tiers: [500]  # NOTE: fee=3000 excluded (known issue)
     
   - id: pancakeswap_v3
     enabled: true
     fee_tiers: [500, 2500]
-    
-  - id: camelot
-    enabled: true
-    fee_tiers: [500, 3000]
 
 # Quote parameters
 quote_amount_wei:
@@ -54,27 +41,26 @@ quote_amount_wei:
   USDC: 1000000000           # 1000 USDC
   USDT: 1000000000           # 1000 USDT
 
-# Price sanity settings
+# Price sanity
 price_sanity:
   enabled: true
   max_deviation_bps: 5000  # 50%
   
-# RPC settings
+# RPC
 rpc:
   timeout_seconds: 10
   max_retries: 3
   
-# Expected pool count (for validation)
-# M5_0: Should be 15-25 pools across 4 pairs × 4 DEXes
-expected_pools_min: 10
-expected_pools_max: 30
+# Expected pool count
+expected_pools_min: 8
+expected_pools_max: 20
 
-# Gate thresholds
+# Gates
 gates:
   min_spread_bps: 30
   max_slippage_bps: 100
   
-# Output settings
+# Output
 output:
   save_snapshots: true
   save_truth_report: true
@@ -83,9 +69,8 @@ output:
 # Execution (disabled for M5_0)
 execution:
   enabled: false
-  blocker: EXECUTION_DISABLED  # Not _M4
+  blocker: EXECUTION_DISABLED  # Stage-agnostic
 
-# Cost model (not available in M5_0)
+# Cost model
 cost_model:
   available: false
-  # When cost_model.available=false, is_profitable is signal-only

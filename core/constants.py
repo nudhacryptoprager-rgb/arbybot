@@ -2,10 +2,13 @@
 """
 Core constants for ARBY.
 
-M5_0: Updated execution blockers, anchor priority, price bounds, and DexType.
+BACKWARD COMPATIBILITY CONTRACT:
+- DexType MUST exist (used by core.models, dex.adapters.*)
+- TokenStatus MUST exist (used by core.models, discovery.*)
+- ExecutionBlocker MUST exist (used by monitoring.truth_report)
+- Any removal/rename → alias/deprecation ONLY
 
-IMPORTANT: DexType MUST exist for backward compatibility with core.models
-and other modules that import it.
+M5_0: Use EXECUTION_DISABLED (stage-agnostic), not _M4.
 """
 
 from decimal import Decimal
@@ -28,7 +31,7 @@ class DexType(str, Enum):
     DEX type identifiers.
     
     CRITICAL: This enum MUST exist for backward compatibility.
-    Many modules import: from core.constants import DexType
+    Used by: core.models, dex.adapters.*, strategy.*
     """
     UNISWAP_V3 = "uniswap_v3"
     SUSHISWAP_V3 = "sushiswap_v3"
@@ -48,6 +51,23 @@ class DexType(str, Enum):
 
 
 # =============================================================================
+# TOKEN STATUS (CRITICAL - DO NOT REMOVE)
+# =============================================================================
+
+class TokenStatus(str, Enum):
+    """
+    Token status in the system.
+    
+    CRITICAL: This enum MUST exist for backward compatibility.
+    Used by: core.models, discovery.*
+    """
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    BLACKLISTED = "blacklisted"
+    PENDING = "pending"
+
+
+# =============================================================================
 # EXECUTION BLOCKERS
 # =============================================================================
 
@@ -55,23 +75,30 @@ class ExecutionBlocker(str, Enum):
     """
     Reasons why execution is blocked.
     
-    M5_0: Use EXECUTION_DISABLED (stage-agnostic), not _M4.
+    M5_0: Use EXECUTION_DISABLED (stage-agnostic).
     """
+    # Stage-agnostic (PREFERRED for M5_0+)
     EXECUTION_DISABLED = "EXECUTION_DISABLED"
-    EXECUTION_DISABLED_M4 = "EXECUTION_DISABLED_M4"  # Legacy
     
+    # Legacy (kept for backward compat with old artifacts)
+    EXECUTION_DISABLED_M4 = "EXECUTION_DISABLED_M4"
+    
+    # Profitability
     NOT_PROFITABLE = "NOT_PROFITABLE"
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
     INSUFFICIENT_LIQUIDITY = "INSUFFICIENT_LIQUIDITY"
     
+    # Safety
     PRICE_SANITY_FAILED = "PRICE_SANITY_FAILED"
     SLIPPAGE_TOO_HIGH = "SLIPPAGE_TOO_HIGH"
     GAS_TOO_HIGH = "GAS_TOO_HIGH"
     
+    # Infrastructure
     NO_COST_MODEL = "NO_COST_MODEL"
     RPC_ERROR = "RPC_ERROR"
 
 
+# M5_0+: Use stage-agnostic blocker
 CURRENT_EXECUTION_BLOCKER = ExecutionBlocker.EXECUTION_DISABLED
 
 
