@@ -1,416 +1,378 @@
 # PATH: tests/unit/test_ci_m5_0_gate.py
 """
-Unit tests for M5_0 CI Gate script.
+Unit tests for ci_m5_0_gate.py v2.0.0.
 
-Tests:
-- Artifact discovery (nested and flat layouts)
-- Schema version validation
-- Run mode validation
-- Block pinning validation
-- Quotes metrics validation
-- DEXes active validation
-- Price sanity metrics validation
-- Reject histogram validation
-- Fixture creation in --out-dir
-- Latest runDir selection (priority, mtime, artifacts)
-- CLI > ENV > auto priority
-- --require-real flag
-
-Run: python -m pytest tests/unit/test_ci_m5_0_gate.py -v
+TESTS:
+1. --offline mode creates fixture in data/runs, ignores ENV
+2. --online mode creates runDir and calls runner (mocked)
+3. --offline and --online are mutually exclusive
+4. CLI > ENV priority (but --offline/--online ignore ENV)
+5. Artifact validation works correctly
 """
 
 import json
 import os
-import shutil
+import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
-from unittest import mock
-
-import sys
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from scripts.ci_m5_0_gate import (
-    FIXTURE_BLOCK,
-    EXIT_PASS,
-    EXIT_FAIL,
-    EXIT_ARTIFACTS_MISSING,
-    EXIT_FIXTURE_REJECTED,
-    find_artifacts,
-    find_latest_valid_rundir,
-    has_all_artifacts,
-    check_schema_version,
-    check_run_mode,
-    check_block_pinned,
-    check_quotes_metrics,
-    check_dexes_active,
-    check_price_sanity_metrics,
-    check_reject_histogram,
-    create_fixture_run_dir,
-    run_gate,
-    get_env_bool,
-    get_env_str,
+    generate_fixture_artifacts,
+    discover_artifacts,
+    validate_artifacts,
+    validate_schema_version,
+    validate_run_mode,
+    validate_health_metrics,
+    validate_price_sanity_metrics,
+    get_run_dir_candidates,
+    main,
+    __version__,
 )
 
 
-class TestEnvHelpers(unittest.TestCase):
-    """Test environment variable helper functions."""
+class TestFixtureGeneration(unittest.TestCase):
+    """Test fixture artifact generation."""
 
-    def test_get_env_bool_true_values(self):
-        """Test that true-ish values return True."""
-        for val in ["1", "true", "True", "TRUE", "yes", "YES", "on", "ON"]:
-            with mock.patch.dict(os.environ, {"TEST_VAR": val}):
-                self.assertTrue(get_env_bool("TEST_VAR"))
+    def test_generate_fixture_creates_all_artifacts(self):
+        """Test that fixture generation creates all 3 artifacts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "test_run"
+            output_dir.mkdir()
+            
+            artifacts = generate_fixture_artifacts(output_dir, "20260131_120000")
+            
+            self.assertIn("scan", artifacts)
+            self.assertIn("truth_report", artifacts)
+            self.assertIn("reject_histogram", artifacts)
+            
+            for name, path in artifacts.items():
+                self.assertTrue(path.exists(), f"{name} should exist")
 
-    def test_get_env_bool_false_values(self):
-        """Test that false-ish values return False."""
-        for val in ["0", "false", "False", "FALSE", "no", "NO", "off", "OFF"]:
-            with mock.patch.dict(os.environ, {"TEST_VAR": val}):
-                self.assertFalse(get_env_bool("TEST_VAR"))
+    def test_fixture_artifacts_are_valid_json(self):
+        """Test that fixture artifacts are valid JSON."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "test_run"
+            output_dir.mkdir()
+            
+            artifacts = generate_fixture_artifacts(output_dir, "20260131_120000")
+            
+            for name, path in artifacts.items():
+                with open(path) as f:
+                    data = json.load(f)
+                
+                self.assertIn("schema_version", data)
+                self.assertIn("run_mode", data)
+                self.assertEqual(data["run_mode"], "FIXTURE_OFFLINE")
 
-    def test_get_env_bool_default(self):
-        """Test default value when env not set."""
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertFalse(get_env_bool("NONEXISTENT_VAR"))
-            self.assertTrue(get_env_bool("NONEXISTENT_VAR", default=True))
-
-    def test_get_env_str_value(self):
-        """Test string value retrieval."""
-        with mock.patch.dict(os.environ, {"TEST_VAR": "some_value"}):
-            self.assertEqual(get_env_str("TEST_VAR"), "some_value")
-
-    def test_get_env_str_empty(self):
-        """Test empty string returns default."""
-        with mock.patch.dict(os.environ, {"TEST_VAR": ""}):
-            self.assertIsNone(get_env_str("TEST_VAR"))
-            self.assertEqual(get_env_str("TEST_VAR", "default"), "default")
+    def test_fixture_has_correct_m5_0_structure(self):
+        """Test that fixture has correct M5_0 structure."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "test_run"
+            output_dir.mkdir()
+            
+            artifacts = generate_fixture_artifacts(output_dir, "20260131_120000")
+            
+            # Truth report must have health metrics
+            with open(artifacts["truth_report"]) as f:
+                truth = json.load(f)
+            
+            self.assertIn("health", truth)
+            self.assertIn("quotes_total", truth["health"])
+            self.assertIn("price_sanity_passed", truth["health"])
+            
+            # Reject histogram must have M5_0 fields
+            with open(artifacts["reject_histogram"]) as f:
+                reject = json.load(f)
+            
+            self.assertIn("rejects", reject)
+            if reject["rejects"]:
+                r = reject["rejects"][0]
+                self.assertIn("inversion_applied", r)
+                self.assertEqual(r["inversion_applied"], False)
 
 
 class TestArtifactDiscovery(unittest.TestCase):
-    """Test artifact discovery functions."""
+    """Test artifact discovery."""
 
-    def test_find_artifacts_nested_layout(self):
-        """Test finding artifacts in nested layout (M4 style)."""
+    def test_discover_finds_all_artifacts(self):
+        """Test discovery finds all artifacts."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-            snapshots = tmp_path / "snapshots"
-            reports = tmp_path / "reports"
-            snapshots.mkdir()
-            reports.mkdir()
-
-            # Create artifacts
-            (snapshots / "scan_20260130_120000.json").write_text("{}")
-            (reports / "truth_report_20260130_120000.json").write_text("{}")
-            (reports / "reject_histogram_20260130_120000.json").write_text("{}")
-
-            artifacts = find_artifacts(tmp_path)
-
+            output_dir = Path(tmpdir) / "test_run"
+            output_dir.mkdir()
+            
+            generate_fixture_artifacts(output_dir, "20260131_120000")
+            
+            artifacts = discover_artifacts(output_dir)
+            
             self.assertIsNotNone(artifacts["scan"])
             self.assertIsNotNone(artifacts["truth_report"])
             self.assertIsNotNone(artifacts["reject_histogram"])
 
-    def test_find_artifacts_flat_layout(self):
-        """Test finding artifacts in flat layout."""
+    def test_discover_returns_none_for_missing(self):
+        """Test discovery returns None for missing artifacts."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-
-            # Create artifacts in root
-            (tmp_path / "scan_20260130_120000.json").write_text("{}")
-            (tmp_path / "truth_report_20260130_120000.json").write_text("{}")
-            (tmp_path / "reject_histogram_20260130_120000.json").write_text("{}")
-
-            artifacts = find_artifacts(tmp_path)
-
-            self.assertIsNotNone(artifacts["scan"])
-            self.assertIsNotNone(artifacts["truth_report"])
-            self.assertIsNotNone(artifacts["reject_histogram"])
-
-    def test_find_artifacts_missing(self):
-        """Test handling missing artifacts."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-            artifacts = find_artifacts(tmp_path)
-
+            output_dir = Path(tmpdir) / "empty_run"
+            output_dir.mkdir()
+            (output_dir / "reports").mkdir()
+            
+            artifacts = discover_artifacts(output_dir)
+            
             self.assertIsNone(artifacts["scan"])
             self.assertIsNone(artifacts["truth_report"])
             self.assertIsNone(artifacts["reject_histogram"])
 
-    def test_has_all_artifacts_true(self):
-        """Test has_all_artifacts returns True when all present."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-            (tmp_path / "scan_001.json").write_text("{}")
-            (tmp_path / "truth_report_001.json").write_text("{}")
-            (tmp_path / "reject_histogram_001.json").write_text("{}")
 
-            self.assertTrue(has_all_artifacts(tmp_path))
+class TestValidation(unittest.TestCase):
+    """Test artifact validation."""
 
-    def test_has_all_artifacts_false(self):
-        """Test has_all_artifacts returns False when some missing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-            (tmp_path / "scan_001.json").write_text("{}")
-            # Missing truth_report and histogram
-
-            self.assertFalse(has_all_artifacts(tmp_path))
-
-
-class TestLatestRunDirSelection(unittest.TestCase):
-    """Test latest runDir selection logic."""
-
-    def _create_valid_rundir(self, base_dir: Path, name: str) -> Path:
-        """Helper to create a valid runDir with all 3 artifacts."""
-        run_dir = base_dir / name
-        snapshots = run_dir / "snapshots"
-        reports = run_dir / "reports"
-        snapshots.mkdir(parents=True)
-        reports.mkdir()
-        (snapshots / "scan_001.json").write_text("{}")
-        (reports / "truth_report_001.json").write_text("{}")
-        (reports / "reject_histogram_001.json").write_text("{}")
-        return run_dir
-
-    def test_find_latest_no_dirs(self):
-        """Test returns None when no directories exist."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-            self.assertIsNone(find_latest_valid_rundir(tmp_path))
-
-    def test_find_latest_no_valid_dirs(self):
-        """Test returns None when dirs exist but none have all artifacts."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-            (tmp_path / "invalid_dir").mkdir()
-            (tmp_path / "invalid_dir" / "scan_001.json").write_text("{}")
-            # Missing truth_report and histogram
-
-            self.assertIsNone(find_latest_valid_rundir(tmp_path))
-
-    def test_find_latest_single_valid(self):
-        """Test finds single valid runDir."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-            valid_dir = self._create_valid_rundir(tmp_path, "run_scan_001")
-
-            result = find_latest_valid_rundir(tmp_path)
-            self.assertEqual(result, valid_dir)
-
-    def test_find_latest_prioritizes_m5_gate_prefix(self):
-        """Test prioritizes ci_m5_0_gate_ prefix over others."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-
-            # Create older but higher priority
-            m5_dir = self._create_valid_rundir(tmp_path, "ci_m5_0_gate_001")
-            time.sleep(0.1)
-
-            # Create newer but lower priority
-            other_dir = self._create_valid_rundir(tmp_path, "other_run_002")
-
-            result = find_latest_valid_rundir(tmp_path)
-            self.assertEqual(result, m5_dir)
-
-    def test_find_latest_uses_mtime_within_same_priority(self):
-        """Test uses mtime when priority is equal."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-
-            # Create older
-            old_dir = self._create_valid_rundir(tmp_path, "run_scan_001")
-            time.sleep(0.1)
-
-            # Create newer
-            new_dir = self._create_valid_rundir(tmp_path, "run_scan_002")
-
-            result = find_latest_valid_rundir(tmp_path)
-            self.assertEqual(result, new_dir)
-
-    def test_find_latest_ignores_invalid_dirs(self):
-        """Test ignores directories without all 3 artifacts."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-
-            # Create invalid (newer)
-            invalid_dir = tmp_path / "ci_m5_0_gate_new"
-            invalid_dir.mkdir()
-            (invalid_dir / "scan_001.json").write_text("{}")
-            # Missing other artifacts
-            time.sleep(0.1)
-
-            # Create valid (older)
-            valid_dir = self._create_valid_rundir(tmp_path, "run_scan_old")
-
-            result = find_latest_valid_rundir(tmp_path)
-            self.assertEqual(result, valid_dir)
-
-
-class TestSchemaVersion(unittest.TestCase):
-    """Test schema version validation."""
-
-    def test_valid_schema_version(self):
-        """Test valid schema version."""
+    def test_validate_schema_version_valid(self):
+        """Test schema version validation with valid version."""
         data = {"schema_version": "3.2.0"}
-        passed, errors = check_schema_version(data)
-        self.assertTrue(passed)
-        self.assertEqual(len(errors), 0)
+        ok, msg = validate_schema_version(data)
+        self.assertTrue(ok)
 
-    def test_missing_schema_version(self):
-        """Test missing schema version."""
-        data = {}
-        passed, errors = check_schema_version(data)
-        self.assertFalse(passed)
-        self.assertIn("Missing: schema_version", errors)
-
-    def test_invalid_schema_format(self):
-        """Test invalid schema format."""
+    def test_validate_schema_version_invalid(self):
+        """Test schema version validation with invalid version."""
         data = {"schema_version": "invalid"}
-        passed, errors = check_schema_version(data)
-        self.assertFalse(passed)
-        self.assertTrue(any("invalid format" in e for e in errors))
+        ok, msg = validate_schema_version(data)
+        self.assertFalse(ok)
+
+    def test_validate_schema_version_missing(self):
+        """Test schema version validation with missing version."""
+        data = {}
+        ok, msg = validate_schema_version(data)
+        self.assertFalse(ok)
+
+    def test_validate_run_mode_valid(self):
+        """Test run mode validation."""
+        data = {"run_mode": "REGISTRY_REAL"}
+        ok, msg = validate_run_mode(data)
+        self.assertTrue(ok)
+
+    def test_validate_health_metrics_valid(self):
+        """Test health metrics validation."""
+        data = {
+            "health": {
+                "quotes_total": 10,
+                "quotes_fetched": 10,
+                "dexes_active": 2,
+            }
+        }
+        ok, msg = validate_health_metrics(data)
+        self.assertTrue(ok)
+
+    def test_validate_health_metrics_zero_quotes(self):
+        """Test health metrics validation with zero quotes."""
+        data = {
+            "health": {
+                "quotes_total": 0,
+                "quotes_fetched": 0,
+                "dexes_active": 0,
+            }
+        }
+        ok, msg = validate_health_metrics(data)
+        self.assertFalse(ok)
+
+    def test_validate_price_sanity_metrics_valid(self):
+        """Test price sanity metrics validation."""
+        data = {
+            "health": {
+                "price_sanity_passed": 9,
+                "price_sanity_failed": 1,
+            }
+        }
+        ok, msg = validate_price_sanity_metrics(data)
+        self.assertTrue(ok)
 
 
-class TestRunMode(unittest.TestCase):
-    """Test run mode validation."""
+class TestModeExclusion(unittest.TestCase):
+    """Test that --offline and --online are mutually exclusive."""
 
-    def test_valid_run_mode_both(self):
-        """Test valid run mode in both artifacts."""
-        scan = {"run_mode": "REGISTRY_REAL"}
-        truth = {"run_mode": "REGISTRY_REAL"}
-        passed, errors = check_run_mode(scan, truth)
-        self.assertTrue(passed)
-
-    def test_run_mode_mismatch(self):
-        """Test run mode mismatch."""
-        scan = {"run_mode": "SMOKE_SIMULATOR"}
-        truth = {"run_mode": "REGISTRY_REAL"}
-        passed, errors = check_run_mode(scan, truth)
-        self.assertFalse(passed)
-        self.assertTrue(any("mismatch" in e for e in errors))
+    def test_offline_and_online_mutually_exclusive(self):
+        """Test argparse raises error when both modes used."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('sys.argv', ['ci_m5_0_gate.py', '--offline', '--online']):
+                with self.assertRaises(SystemExit) as cm:
+                    main()
+                self.assertEqual(cm.exception.code, 2)
 
 
-class TestBlockPinned(unittest.TestCase):
-    """Test block pinning validation."""
+class TestOfflineMode(unittest.TestCase):
+    """Test --offline mode."""
 
-    def test_valid_block_real_mode(self):
-        """Test valid block in REAL mode."""
-        data = {"run_mode": "REGISTRY_REAL", "current_block": 275000000}
-        passed, errors = check_block_pinned(data)
-        self.assertTrue(passed)
+    def test_offline_creates_fixture_in_output_root(self):
+        """Test --offline creates fixture in specified output root."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            with patch('sys.argv', [
+                'ci_m5_0_gate.py', 
+                '--offline', 
+                '--output-root', str(output_root)
+            ]):
+                result = main()
+            
+            self.assertEqual(result, 0)
+            
+            dirs = list(output_root.glob("ci_m5_0_gate_offline_*"))
+            self.assertEqual(len(dirs), 1)
+            
+            artifacts = discover_artifacts(dirs[0])
+            self.assertIsNotNone(artifacts["scan"])
+            self.assertIsNotNone(artifacts["truth_report"])
+            self.assertIsNotNone(artifacts["reject_histogram"])
 
-    def test_zero_block_real_mode(self):
-        """Test zero block in REAL mode (should fail)."""
-        data = {"run_mode": "REGISTRY_REAL", "current_block": 0}
-        passed, errors = check_block_pinned(data)
-        self.assertFalse(passed)
+    def test_offline_ignores_env(self):
+        """Test --offline ignores ARBY_RUN_DIR and ARBY_REQUIRE_REAL."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            env_backup = os.environ.copy()
+            os.environ["ARBY_RUN_DIR"] = "/nonexistent/path"
+            os.environ["ARBY_REQUIRE_REAL"] = "1"
+            
+            try:
+                with patch('sys.argv', [
+                    'ci_m5_0_gate.py', 
+                    '--offline', 
+                    '--output-root', str(output_root)
+                ]):
+                    result = main()
+                
+                self.assertEqual(result, 0)
+            finally:
+                os.environ.clear()
+                os.environ.update(env_backup)
 
-    def test_any_block_smoke_mode(self):
-        """Test any block in SMOKE mode (always passes)."""
-        data = {"run_mode": "SMOKE_SIMULATOR", "current_block": 0}
-        passed, errors = check_block_pinned(data)
-        self.assertTrue(passed)
+
+class TestOnlineMode(unittest.TestCase):
+    """Test --online mode."""
+
+    def test_online_calls_run_scan_real(self):
+        """Test --online calls strategy.jobs.run_scan_real."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            with patch('subprocess.run') as mock_run:
+                mock_run.return_value = MagicMock(returncode=0)
+                
+                with patch('sys.argv', [
+                    'ci_m5_0_gate.py', 
+                    '--online', 
+                    '--output-root', str(output_root),
+                    '--config', 'config/real_minimal.yaml'
+                ]):
+                    result = main()
+                
+                mock_run.assert_called_once()
+                call_args = mock_run.call_args[0][0]
+                self.assertIn("strategy.jobs.run_scan_real", " ".join(call_args))
+
+    def test_online_ignores_arby_run_dir(self):
+        """Test --online ignores ARBY_RUN_DIR."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            env_backup = os.environ.copy()
+            os.environ["ARBY_RUN_DIR"] = "/some/other/path"
+            
+            try:
+                with patch('subprocess.run') as mock_run:
+                    mock_run.return_value = MagicMock(returncode=0)
+                    
+                    with patch('sys.argv', [
+                        'ci_m5_0_gate.py', 
+                        '--online', 
+                        '--output-root', str(output_root)
+                    ]):
+                        main()
+                    
+                    call_args = mock_run.call_args[0][0]
+                    output_dir_arg = None
+                    for i, arg in enumerate(call_args):
+                        if arg == "--output-dir" and i + 1 < len(call_args):
+                            output_dir_arg = call_args[i + 1]
+                            break
+                    
+                    self.assertIsNotNone(output_dir_arg)
+                    self.assertIn(str(output_root), output_dir_arg)
+                    self.assertNotIn("/some/other/path", output_dir_arg)
+            finally:
+                os.environ.clear()
+                os.environ.update(env_backup)
 
 
-class TestQuotesMetrics(unittest.TestCase):
-    """Test quotes metrics validation."""
+class TestLegacyMode(unittest.TestCase):
+    """Test legacy mode (no --offline or --online)."""
 
-    def test_valid_quotes(self):
-        """Test valid quotes metrics."""
-        data = {"stats": {"quotes_total": 4, "quotes_fetched": 4, "gates_passed": 2}}
-        passed, errors = check_quotes_metrics(data)
-        self.assertTrue(passed)
+    def test_legacy_uses_run_dir_arg(self):
+        """Test legacy mode uses --run-dir."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "test_run"
+            run_dir.mkdir()
+            
+            generate_fixture_artifacts(run_dir, "20260131_120000")
+            
+            with patch('sys.argv', [
+                'ci_m5_0_gate.py', 
+                '--run-dir', str(run_dir)
+            ]):
+                result = main()
+            
+            self.assertEqual(result, 0)
 
-    def test_invariant_violation_fetched_gt_total(self):
-        """Test invariant: fetched > total."""
-        data = {"stats": {"quotes_total": 2, "quotes_fetched": 4, "gates_passed": 1}}
-        passed, errors = check_quotes_metrics(data)
-        self.assertFalse(passed)
-        self.assertTrue(any("INVARIANT" in e for e in errors))
+    def test_legacy_uses_env_when_no_run_dir(self):
+        """Test legacy mode uses ARBY_RUN_DIR when no --run-dir."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "test_run"
+            run_dir.mkdir()
+            
+            generate_fixture_artifacts(run_dir, "20260131_120000")
+            
+            env_backup = os.environ.copy()
+            os.environ["ARBY_RUN_DIR"] = str(run_dir)
+            
+            try:
+                with patch('sys.argv', ['ci_m5_0_gate.py']):
+                    result = main()
+                
+                self.assertEqual(result, 0)
+            finally:
+                os.environ.clear()
+                os.environ.update(env_backup)
 
 
 class TestRequireReal(unittest.TestCase):
     """Test --require-real flag."""
 
-    def test_fixture_rejected_when_require_real(self):
-        """Test that fixture data is rejected when require_real=True."""
-        fixture_dir = create_fixture_run_dir()
-
-        try:
-            exit_code = run_gate(fixture_dir, is_fixture=True, require_real=True)
-            self.assertEqual(exit_code, EXIT_FIXTURE_REJECTED)
-        finally:
-            shutil.rmtree(fixture_dir, ignore_errors=True)
-
-    def test_fixture_accepted_when_not_require_real(self):
-        """Test that fixture data is accepted when require_real=False."""
-        fixture_dir = create_fixture_run_dir()
-
-        try:
-            exit_code = run_gate(fixture_dir, is_fixture=True, require_real=False)
-            self.assertEqual(exit_code, EXIT_PASS)
-        finally:
-            shutil.rmtree(fixture_dir, ignore_errors=True)
-
-
-class TestFixtureCreation(unittest.TestCase):
-    """Test fixture creation."""
-
-    def test_create_fixture_default_location(self):
-        """Test fixture creation creates valid structure."""
-        fixture_dir = create_fixture_run_dir()
-
-        try:
-            # Check structure
-            self.assertTrue((fixture_dir / "snapshots").exists())
-            self.assertTrue((fixture_dir / "reports").exists())
-
-            # Check artifacts exist
-            artifacts = find_artifacts(fixture_dir)
-            self.assertIsNotNone(artifacts["scan"])
-            self.assertIsNotNone(artifacts["truth_report"])
-            self.assertIsNotNone(artifacts["reject_histogram"])
-
-            # Check scan data is valid
-            with open(artifacts["scan"]) as f:
-                scan_data = json.load(f)
-            self.assertEqual(scan_data["run_mode"], "REGISTRY_REAL")
-            self.assertEqual(scan_data["current_block"], FIXTURE_BLOCK)
-            self.assertTrue(scan_data.get("_fixture", False))
-
-        finally:
-            shutil.rmtree(fixture_dir, ignore_errors=True)
-
-    def test_create_fixture_custom_out_dir(self):
-        """Test fixture creation in custom --out-dir."""
+    def test_require_real_rejects_fixture(self):
+        """Test --require-real rejects fixture artifacts."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            out_dir = Path(tmpdir) / "my_custom_fixture"
-            fixture_dir = create_fixture_run_dir(out_dir=out_dir)
+            run_dir = Path(tmpdir) / "test_run"
+            run_dir.mkdir()
+            
+            generate_fixture_artifacts(run_dir, "20260131_120000")
+            
+            with patch('sys.argv', [
+                'ci_m5_0_gate.py', 
+                '--run-dir', str(run_dir),
+                '--require-real'
+            ]):
+                result = main()
+            
+            self.assertEqual(result, 1)
 
-            self.assertEqual(fixture_dir, out_dir)
-            self.assertTrue((fixture_dir / "snapshots").exists())
-            self.assertTrue((fixture_dir / "reports").exists())
-            self.assertTrue(has_all_artifacts(fixture_dir))
 
+class TestVersion(unittest.TestCase):
+    """Test version."""
 
-class TestIntegration(unittest.TestCase):
-    """Integration tests using fixture."""
-
-    def test_full_gate_with_fixture(self):
-        """Test full gate run with fixture."""
-        fixture_dir = create_fixture_run_dir()
-
-        try:
-            exit_code = run_gate(fixture_dir, is_fixture=True)
-            self.assertEqual(exit_code, EXIT_PASS)
-        finally:
-            shutil.rmtree(fixture_dir, ignore_errors=True)
-
-    def test_gate_returns_artifacts_missing_for_empty_dir(self):
-        """Test gate returns EXIT_ARTIFACTS_MISSING for empty directory."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            exit_code = run_gate(Path(tmpdir))
-            self.assertEqual(exit_code, EXIT_ARTIFACTS_MISSING)
+    def test_version_is_2_0_0(self):
+        """Test version is 2.0.0."""
+        self.assertEqual(__version__, "2.0.0")
 
 
 if __name__ == "__main__":

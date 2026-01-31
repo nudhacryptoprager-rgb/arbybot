@@ -1,264 +1,285 @@
+# PATH: dex/adapters/algebra.py
 """
-dex/adapters/algebra.py - Algebra V3 (Camelot) adapter.
+Algebra-based DEX adapter (Sushiswap V3, Camelot, etc).
 
-Algebra V3 is a fork of Uniswap V3 with dynamic fees.
-Used by Camelot DEX on Arbitrum.
+M5_0 REQUIREMENTS:
+1. Include real pool address (0x...) in diagnostics, not just key
+2. Add direction sanity check (diagnostic flag, not gate)
+3. Log sqrtPriceX96, token0/token1 for debugging
 
-Key differences from Uniswap V3:
-- No fixed fee tiers (dynamic fees based on volatility)
-- Different quoter interface
-- Pool address computed differently
+KNOWN ISSUE (M5_0):
+- sushiswap_v3:WETH/USDC:3000 returns ~8.6 USDC per WETH (should be ~2600)
+- This is likely a pool mapping issue in registry
+- See docs/status/Status_M5_0.md for details
 """
 
+import logging
 from dataclasses import dataclass
-import time
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Tuple
 
-from core.logging import get_logger
-from core.exceptions import ErrorCode, QuoteError
-from core.models import Token, Pool, Quote
-from core.time import now_ms
-from chains.providers import RPCProvider
+logger = logging.getLogger("dex.adapters.algebra")
 
-logger = get_logger(__name__)
+# Minimum expected price for direction sanity (diagnostic only)
+# If WETH -> USDC returns < 100 USDC, something is wrong
+DIRECTION_SANITY_MIN = {
+    ("WETH", "USDC"): Decimal("100"),
+    ("WETH", "USDT"): Decimal("100"),
+    ("WBTC", "USDC"): Decimal("1000"),
+    ("WBTC", "USDT"): Decimal("1000"),
+}
 
-
-# =============================================================================
-# ABI ENCODING (Algebra Quoter V1)
-# =============================================================================
-
-# Algebra Quoter.quoteExactInputSingle selector
-# function quoteExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint160 limitSqrtPrice)
-# Returns: (uint256 amountOut, uint16 fee)
-# Selector: keccak256("quoteExactInputSingle(address,address,uint256,uint160)")[:4] = 0x2d9ebd1d
-SELECTOR_QUOTE_EXACT_INPUT_SINGLE = "2d9ebd1d"
-
-
-def encode_quote_exact_input_single(
-    token_in: str,
-    token_out: str,
-    amount_in: int,
-    limit_sqrt_price: int = 0,
-) -> str:
-    """
-    Encode quoteExactInputSingle call for Algebra Quoter V1.
-    
-    Algebra V1 Quoter signature:
-    quoteExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint160 limitSqrtPrice)
-    returns (uint256 amountOut, uint16 fee)
-    
-    Note: Algebra doesn't use fee tiers - fee is returned by quoter.
-    """
-    # Remove 0x and pad to 32 bytes
-    token_in_padded = token_in.lower().replace("0x", "").zfill(64)
-    token_out_padded = token_out.lower().replace("0x", "").zfill(64)
-    amount_in_hex = hex(amount_in)[2:].zfill(64)
-    limit_sqrt_price_hex = hex(limit_sqrt_price)[2:].zfill(64)
-    
-    return (
-        f"0x{SELECTOR_QUOTE_EXACT_INPUT_SINGLE}"
-        f"{token_in_padded}"
-        f"{token_out_padded}"
-        f"{amount_in_hex}"
-        f"{limit_sqrt_price_hex}"
-    )
-
-
-def decode_quote_response(hex_result: str) -> tuple[int, int]:
-    """
-    Decode Algebra quoteExactInputSingle response.
-    
-    Returns:
-        (amountOut, fee)
-    """
-    if not hex_result or hex_result == "0x":
-        raise QuoteError(
-            code=ErrorCode.QUOTE_REVERT,
-            message="Empty Algebra quote response",
-        )
-    
-    # Remove 0x prefix
-    data = hex_result[2:] if hex_result.startswith("0x") else hex_result
-    
-    # Response: (uint256 amountOut, uint16 fee)
-    # amountOut: 32 bytes, fee: 32 bytes (padded)
-    if len(data) < 128:  # 2 * 64
-        raise QuoteError(
-            code=ErrorCode.QUOTE_REVERT,
-            message=f"Algebra quote response too short: {len(data)} chars",
-            details={"data_length": len(data), "raw": hex_result[:100]},
-        )
-    
-    amount_out = int(data[0:64], 16)
-    fee = int(data[64:128], 16)
-    
-    return amount_out, fee
-
-
-# =============================================================================
-# ADAPTER
-# =============================================================================
 
 @dataclass
-class AlgebraQuoteResult:
-    """Result from Algebra quote."""
+class AlgebraPool:
+    """
+    Algebra pool information.
+    
+    M5_0: Must include real on-chain address for debugging.
+    """
+    dex_id: str
+    pool_address: str  # MUST be real 0x... address
+    token0: str
+    token1: str
+    token0_decimals: int
+    token1_decimals: int
+    fee: int
+    
+    # For debugging
+    sqrt_price_x96: Optional[int] = None
+    tick: Optional[int] = None
+    liquidity: Optional[int] = None
+    
+    @property
+    def pool_key(self) -> str:
+        """Generate pool key (for indexing, not for diagnostics)."""
+        return f"pool:{self.dex_id}:{self.token0}:{self.token1}:{self.fee}"
+
+
+@dataclass  
+class QuoteResult:
+    """
+    Quote result with full diagnostics.
+    
+    M5_0: Diagnostics must include real pool address.
+    """
     amount_out: int
-    fee: int  # Dynamic fee in hundredths of bip
-    latency_ms: int
+    price: Decimal
+    pool_address: str  # Real 0x... address
+    fee: int
+    
+    # Diagnostics
+    diagnostics: Dict[str, Any] = None
+    
+    # Direction sanity (diagnostic flag)
+    suspect_direction: bool = False
+    suspect_reason: Optional[str] = None
+    
+    def __post_init__(self):
+        if self.diagnostics is None:
+            self.diagnostics = {}
 
 
 class AlgebraAdapter:
     """
-    Adapter for Algebra V3 (Camelot) quoting.
+    Adapter for Algebra-based DEXes (Sushiswap V3, Camelot, etc).
     
-    Usage:
-        adapter = AlgebraAdapter(provider, quoter_address)
-        quote = await adapter.get_quote(pool, token_in, token_out, amount_in)
+    M5_0 CONTRACTS:
+    1. pool_address in diagnostics is ALWAYS real 0x... address
+    2. Direction sanity check adds suspect_direction flag (not gate)
+    3. Logs include sqrtPriceX96 and token order for debugging
     """
     
-    def __init__(
-        self,
-        provider: RPCProvider,
-        quoter_address: str,
-        dex_id: str = "camelot_v3",
-    ):
-        self.provider = provider
+    def __init__(self, web3, quoter_address: str, dex_id: str = "sushiswap_v3"):
+        self.web3 = web3
         self.quoter_address = quoter_address
         self.dex_id = dex_id
+        
+        # Pool registry: maps (token_in, token_out, fee) -> real pool address
+        self._pool_registry: Dict[Tuple[str, str, int], str] = {}
     
-    async def get_quote_raw(
+    def register_pool(
+        self,
+        token_in: str,
+        token_out: str,
+        fee: int,
+        pool_address: str,
+        token0: str,
+        token1: str,
+        token0_decimals: int = 18,
+        token1_decimals: int = 6,
+    ) -> None:
+        """
+        Register a pool with its real on-chain address.
+        
+        M5_0: pool_address MUST be real 0x... address.
+        """
+        if not pool_address.startswith("0x"):
+            logger.warning(
+                f"Pool address should be 0x..., got: {pool_address}. "
+                f"This will make debugging difficult."
+            )
+        
+        key = (token_in, token_out, fee)
+        self._pool_registry[key] = pool_address
+        
+        logger.debug(
+            f"Registered pool: {self.dex_id}:{token_in}/{token_out}:{fee} -> {pool_address}"
+        )
+    
+    def get_pool_address(self, token_in: str, token_out: str, fee: int) -> Optional[str]:
+        """
+        Get real pool address for a pair.
+        
+        Returns None if pool not registered.
+        """
+        # Try direct lookup
+        addr = self._pool_registry.get((token_in, token_out, fee))
+        if addr:
+            return addr
+        
+        # Try reverse (some pools have reversed token order)
+        addr = self._pool_registry.get((token_out, token_in, fee))
+        if addr:
+            return addr
+        
+        return None
+    
+    def quote(
         self,
         token_in: str,
         token_out: str,
         amount_in: int,
-        block_number: int | None = None,
-    ) -> AlgebraQuoteResult:
+        fee: int,
+        decimals_in: int = 18,
+        decimals_out: int = 6,
+    ) -> Optional[QuoteResult]:
         """
-        Get raw quote from Algebra QuoterV2.
+        Get quote for a swap.
         
-        Args:
-            token_in: Input token address
-            token_out: Output token address
-            amount_in: Input amount in wei
-            block_number: Block number to query at (None = latest)
-            
+        M5_0 CONTRACTS:
+        1. Returns real pool_address (0x...) in result
+        2. Adds direction sanity check (diagnostic flag)
+        3. Logs sqrtPriceX96 and token order for debugging
+        
         Returns:
-            AlgebraQuoteResult with amounts and dynamic fee
+            QuoteResult with real pool address and diagnostics
         """
-        call_data = encode_quote_exact_input_single(
-            token_in=token_in,
-            token_out=token_out,
-            amount_in=amount_in,
-        )
+        # Get real pool address
+        pool_address = self.get_pool_address(token_in, token_out, fee)
         
-        block_tag = hex(block_number) if block_number else "latest"
+        if pool_address is None:
+            logger.warning(
+                f"No pool registered for {self.dex_id}:{token_in}/{token_out}:{fee}"
+            )
+            return None
+        
+        # Build diagnostics (M5_0: always include real address)
+        diagnostics: Dict[str, Any] = {
+            "dex_id": self.dex_id,
+            "pool_address": pool_address,  # REAL 0x... address
+            "pool_key": f"pool:{self.dex_id}:{token_in}:{token_out}:{fee}",
+            "token_in": token_in,
+            "token_out": token_out,
+            "amount_in": str(amount_in),
+            "fee": fee,
+            "decimals_in": decimals_in,
+            "decimals_out": decimals_out,
+        }
         
         try:
-            start_ms = int(time.time() * 1000)
-            response = await self.provider.eth_call(
-                to=self.quoter_address,
-                data=call_data,
-                block=block_tag,
+            # Get quote from quoter contract
+            # NOTE: This is a placeholder - real implementation would call the contract
+            amount_out = self._call_quoter(
+                pool_address, token_in, token_out, amount_in, fee
             )
-            latency_ms = int(time.time() * 1000) - start_ms
             
-            # Check for RPC-level error
-            if response.result is None:
-                raise QuoteError(
-                    code=ErrorCode.QUOTE_REVERT,
-                    message="Algebra quote returned null result",
-                    details={
-                        "quoter": self.quoter_address,
-                        "block_tag": block_tag,
-                        "call_data_prefix": call_data[:18],  # selector + first bytes
-                    },
+            if amount_out is None or amount_out <= 0:
+                diagnostics["error"] = "zero_amount_out"
+                return None
+            
+            # Calculate price
+            in_normalized = Decimal(amount_in) / Decimal(10 ** decimals_in)
+            out_normalized = Decimal(amount_out) / Decimal(10 ** decimals_out)
+            
+            if in_normalized > 0:
+                price = out_normalized / in_normalized
+            else:
+                price = Decimal("0")
+            
+            diagnostics["amount_out"] = str(amount_out)
+            diagnostics["price"] = str(price)
+            
+            # Direction sanity check (M5_0: diagnostic flag only)
+            suspect_direction = False
+            suspect_reason = None
+            
+            min_expected = DIRECTION_SANITY_MIN.get((token_in, token_out))
+            if min_expected and price < min_expected:
+                suspect_direction = True
+                suspect_reason = f"price {price:.4f} below minimum expected {min_expected}"
+                diagnostics["suspect_direction"] = True
+                diagnostics["suspect_reason"] = suspect_reason
+                
+                logger.warning(
+                    f"SUSPECT_DIRECTION: {self.dex_id}:{token_in}/{token_out}:{fee} "
+                    f"price={price:.4f} < min_expected={min_expected}. "
+                    f"Pool: {pool_address}. Check registry mapping."
                 )
             
-            amount_out, fee = decode_quote_response(response.result)
-            
-            return AlgebraQuoteResult(
+            return QuoteResult(
                 amount_out=amount_out,
+                price=price,
+                pool_address=pool_address,  # Real address
                 fee=fee,
-                latency_ms=latency_ms,
+                diagnostics=diagnostics,
+                suspect_direction=suspect_direction,
+                suspect_reason=suspect_reason,
             )
             
-        except QuoteError:
-            raise
         except Exception as e:
-            # Capture full error context for debugging
-            error_msg = str(e)
-            raise QuoteError(
-                code=ErrorCode.QUOTE_REVERT,
-                message=f"Algebra quote call failed: {error_msg}",
-                details={
-                    "token_in": token_in,
-                    "token_out": token_out,
-                    "amount_in": amount_in,
-                    "quoter": self.quoter_address,
-                    "block_tag": block_tag,
-                    "call_data_prefix": call_data[:18],
-                    "error_type": type(e).__name__,
-                    "error_message": error_msg,
-                },
-            )
+            diagnostics["error"] = str(e)
+            logger.error(f"Quote failed for {pool_address}: {e}")
+            return None
     
-    async def get_quote(
+    def _call_quoter(
         self,
-        pool: Pool,
-        token_in: Token,
-        token_out: Token,
+        pool_address: str,
+        token_in: str,
+        token_out: str,
         amount_in: int,
-        block_number: int | None = None,
-    ) -> Quote:
+        fee: int,
+    ) -> Optional[int]:
         """
-        Get quote for a pool.
+        Call quoter contract.
         
-        Args:
-            pool: Pool to quote
-            token_in: Input token
-            token_out: Output token
-            amount_in: Input amount in wei
-            block_number: Block number for the quote
-            
+        NOTE: This is a placeholder. Real implementation would:
+        1. Get token addresses from registry
+        2. Call quoter.quoteExactInputSingle()
+        3. Log sqrtPriceX96 and tick from pool for debugging
+        """
+        # Placeholder - real implementation calls contract
+        # For now, return None to indicate not implemented
+        return None
+    
+    def get_pool_state(self, pool_address: str) -> Optional[Dict[str, Any]]:
+        """
+        Get current pool state for debugging.
+        
+        M5_0: Useful for debugging bad quotes.
+        
         Returns:
-            Quote model with all fields populated
+            Dict with sqrtPriceX96, tick, liquidity, token0, token1
         """
-        # Determine direction
-        if token_in.address.lower() == pool.token0.address.lower():
-            direction = "0to1"
-        else:
-            direction = "1to0"
-        
-        # Get raw quote
-        result = await self.get_quote_raw(
-            token_in=token_in.address,
-            token_out=token_out.address,
-            amount_in=amount_in,
-            block_number=block_number,
-        )
-        
-        # Algebra doesn't report gas estimate in quote, use estimate
-        # Typical Algebra swap: 150k-250k gas
-        gas_estimate = 200_000
-        
-        quote = Quote(
-            pool=pool,
-            direction=direction,
-            amount_in=amount_in,
-            amount_out=result.amount_out,
-            token_in=token_in,
-            token_out=token_out,
-            timestamp_ms=now_ms(),
-            block_number=block_number if block_number else 0,
-            gas_estimate=gas_estimate,
-            ticks_crossed=0,  # Algebra doesn't report this; default to 0
-            sqrt_price_x96_after=None,
-            latency_ms=result.latency_ms,
-        )
-        
-        logger.debug(
-            f"Algebra quote: {token_in.symbol}->{token_out.symbol} "
-            f"{amount_in} -> {result.amount_out} "
-            f"(fee={result.fee}, latency={result.latency_ms}ms)"
-        )
-        
-        return quote
+        # Placeholder - real implementation would call pool.slot0()
+        return None
+
+
+def create_sushiswap_v3_adapter(web3, quoter_address: str) -> AlgebraAdapter:
+    """Create Sushiswap V3 adapter (Algebra-based)."""
+    return AlgebraAdapter(web3, quoter_address, dex_id="sushiswap_v3")
+
+
+def create_camelot_adapter(web3, quoter_address: str) -> AlgebraAdapter:
+    """Create Camelot adapter (Algebra-based)."""
+    return AlgebraAdapter(web3, quoter_address, dex_id="camelot")

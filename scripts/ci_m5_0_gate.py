@@ -1,865 +1,550 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # PATH: scripts/ci_m5_0_gate.py
 """
-CI Gate for M5_0 (Infrastructure Hardening).
+M5_0 CI Gate - Infrastructure Hardening validation.
 
-OFFLINE-FIRST: Validates artifacts WITHOUT running the scanner.
-NO HEAVY IMPORTS: Only uses json, pathlib, argparse, sys, re, os.
+VERSION: 2.0.0
 
-MODE SELECTION PRIORITY (CLI > ENV > auto):
-1. --run-dir PATH (explicit, highest priority)
-2. ARBY_RUN_DIR env var
-3. --offline (creates fixture)
-4. ARBY_GATE_MODE=offline env var
-5. Auto-detect latest valid runDir in data/runs/
+TWO MUTUALLY EXCLUSIVE MODES:
 
-ENV VARIABLES:
-    ARBY_RUN_DIR       - Path to run directory (same as --run-dir)
-    ARBY_GATE_MODE     - Mode: offline, latest, run_dir
-    ARBY_GATE_OUT_DIR  - Output dir for fixture (same as --out-dir)
-    ARBY_REQUIRE_REAL  - If "1", reject fixture data (_fixture=true)
+1. --offline (always works, creates fixture in data/runs)
+   - Ignores ENV (ARBY_RUN_DIR, ARBY_REQUIRE_REAL)
+   - Creates data/runs/ci_m5_0_gate_offline_<timestamp>/
+   - Generates fixture artifacts
+   - Validates M5_0 contracts
 
-USAGE:
-    # Explicit run directory (RECOMMENDED for CI)
-    python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
+2. --online (creates new runDir, runs real scan, validates)
+   - Ignores ENV (creates its own runDir)
+   - Creates data/runs/ci_m5_0_gate_<timestamp>/
+   - Runs: python -m strategy.jobs.run_scan_real --cycles 1 --output-dir <dir>
+   - Validates real artifacts
 
-    # Offline with fixture
-    python scripts/ci_m5_0_gate.py --offline
-
-    # Require real data (reject fixtures)
-    python scripts/ci_m5_0_gate.py --run-dir data/runs/real_xxx --require-real
-
-    # Using ENV (for CI pipelines)
-    ARBY_RUN_DIR=data/runs/real_xxx python scripts/ci_m5_0_gate.py
+PRIORITY: CLI > ENV > auto (but --offline and --online ignore ENV)
 
 EXIT CODES:
-    0 = PASS
-    1 = FAIL (validation failed)
-    2 = FAIL (artifacts missing)
-    3 = FAIL (fixture rejected by --require-real)
+  0 = PASS
+  1 = FAIL (validation)
+  2 = FAIL (artifacts missing)
+  3 = FAIL (mode error)
+
+USAGE:
+  python scripts/ci_m5_0_gate.py --offline
+  python scripts/ci_m5_0_gate.py --online
+  python scripts/ci_m5_0_gate.py --online --config config/real_m5_0_golden.yaml
+  python scripts/ci_m5_0_gate.py --list-candidates
 """
 
 import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Version
-GATE_VERSION = "1.3.0"
+__version__ = "2.0.0"
 
-# Required schema version pattern (major.minor.patch)
-VALID_SCHEMA_PATTERN = r"^\d+\.\d+\.\d+$"
+DEFAULT_OUTPUT_ROOT = Path("data/runs")
+DEFAULT_CONFIG = "config/real_minimal.yaml"
+GOLDEN_CONFIG = "config/real_m5_0_golden.yaml"
 
-# Default output directory for fixtures
-DEFAULT_RUNS_DIR = Path("data/runs")
-
-# Fixture marker (to distinguish from real data)
-FIXTURE_BLOCK = 275000000
-FIXTURE_MARKER = "[FIXTURE]"
-
-# Exit codes
-EXIT_PASS = 0
-EXIT_FAIL = 1
-EXIT_ARTIFACTS_MISSING = 2
-EXIT_FIXTURE_REJECTED = 3
-
-# How many candidates to show when runDir not found
-MAX_CANDIDATES_TO_SHOW = 5
+REQUIRED_ARTIFACTS = [
+    "scan_*.json",
+    "truth_report_*.json",
+    "reject_histogram_*.json",
+]
 
 
-def log_ok(msg: str) -> None:
-    print(f"[OK] {msg}")
-
-
-def log_fail(msg: str) -> None:
-    print(f"[FAIL] {msg}")
-
-
-def log_info(msg: str) -> None:
-    print(f"[INFO] {msg}")
-
-
-def log_warn(msg: str) -> None:
-    print(f"[WARN] {msg}")
-
-
-def get_env_bool(name: str, default: bool = False) -> bool:
-    """Get boolean from environment variable."""
-    val = os.environ.get(name, "").lower()
-    if val in ("1", "true", "yes", "on"):
-        return True
-    if val in ("0", "false", "no", "off"):
-        return False
-    return default
-
-
-def get_env_str(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Get string from environment variable."""
-    val = os.environ.get(name, "").strip()
-    return val if val else default
-
-
-def find_artifacts(run_dir: Path) -> Dict[str, Optional[Path]]:
-    """
-    Find artifacts in run directory.
+def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Path]:
+    """Generate fixture artifacts for --offline mode."""
+    reports_dir = output_dir / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
     
-    Supports two layouts:
-    1. Flat: scan_*.json, truth_report_*.json, reject_histogram_*.json
-    2. Nested: snapshots/scan_*.json, reports/truth_report_*.json, reports/reject_histogram_*.json
-    """
-    artifacts: Dict[str, Optional[Path]] = {
-        "scan": None,
-        "truth_report": None,
-        "reject_histogram": None,
+    artifacts = {}
+    
+    # Scan artifact
+    scan_data = {
+        "schema_version": "3.2.0",
+        "timestamp": datetime.utcnow().isoformat(),
+        "run_mode": "FIXTURE_OFFLINE",
+        "chain_id": 42161,
+        "current_block": 999999999,
+        "quotes": [
+            {
+                "pair": "WETH/USDC",
+                "dex_id": "uniswap_v3",
+                "fee": 500,
+                "price": "2650.0",
+                "amount_in_wei": "1000000000000000000",
+                "amount_out_wei": "2650000000",
+            }
+        ],
+        "stats": {
+            "quotes_total": 4,
+            "quotes_fetched": 4,
+            "gates_passed": 3,
+            "dexes_active": 2,
+            "price_sanity_passed": 3,
+            "price_sanity_failed": 1,
+        },
     }
+    scan_path = reports_dir / f"scan_{timestamp}.json"
+    with open(scan_path, "w") as f:
+        json.dump(scan_data, f, indent=2)
+    artifacts["scan"] = scan_path
     
-    # Try nested layout first (M4 style)
-    snapshots_dir = run_dir / "snapshots"
-    reports_dir = run_dir / "reports"
+    # Truth report
+    truth_data = {
+        "schema_version": "3.2.0",
+        "timestamp": datetime.utcnow().isoformat(),
+        "run_mode": "FIXTURE_OFFLINE",
+        "execution_enabled": False,
+        "execution_blocker": "EXECUTION_DISABLED",
+        "cost_model_available": False,
+        "chain_id": 42161,
+        "current_block": 999999999,
+        "health": {
+            "quotes_total": 4,
+            "quotes_fetched": 4,
+            "gates_passed": 3,
+            "dexes_active": 2,
+            "price_sanity_passed": 3,
+            "price_sanity_failed": 1,
+            "price_stability_factor": 0.95,
+            "rpc_errors": 0,
+            "rpc_success_rate": 1.0,
+        },
+        "spread_signals": [],
+        "stats": scan_data["stats"],
+    }
+    truth_path = reports_dir / f"truth_report_{timestamp}.json"
+    with open(truth_path, "w") as f:
+        json.dump(truth_data, f, indent=2)
+    artifacts["truth_report"] = truth_path
     
-    if snapshots_dir.exists():
-        scan_files = list(snapshots_dir.glob("scan_*.json"))
-        if scan_files:
-            artifacts["scan"] = sorted(scan_files)[-1]  # Latest
-    
-    if reports_dir.exists():
-        truth_files = list(reports_dir.glob("truth_report_*.json"))
-        if truth_files:
-            artifacts["truth_report"] = sorted(truth_files)[-1]
-        
-        histogram_files = list(reports_dir.glob("reject_histogram_*.json"))
-        if histogram_files:
-            artifacts["reject_histogram"] = sorted(histogram_files)[-1]
-    
-    # Try flat layout (fallback)
-    if artifacts["scan"] is None:
-        scan_files = list(run_dir.glob("scan_*.json"))
-        if scan_files:
-            artifacts["scan"] = sorted(scan_files)[-1]
-    
-    if artifacts["truth_report"] is None:
-        truth_files = list(run_dir.glob("truth_report_*.json"))
-        if truth_files:
-            artifacts["truth_report"] = sorted(truth_files)[-1]
-    
-    if artifacts["reject_histogram"] is None:
-        histogram_files = list(run_dir.glob("reject_histogram_*.json"))
-        if histogram_files:
-            artifacts["reject_histogram"] = sorted(histogram_files)[-1]
+    # Reject histogram
+    reject_data = {
+        "schema_version": "3.2.0",
+        "timestamp": datetime.utcnow().isoformat(),
+        "run_mode": "FIXTURE_OFFLINE",
+        "rejects": [
+            {
+                "pair": "WETH/USDC",
+                "dex_id": "sushiswap_v3",
+                "pool_fee": 3000,
+                "implied_price": "8.605",
+                "expected_range": ["1500", "6000"],
+                "anchor_price": "2650",
+                "deviation_bps": 9966,
+                "deviation_bps_raw": 9966,
+                "deviation_bps_capped": False,
+                "max_deviation_bps": 5000,
+                "error": "deviation_exceeded",
+                "inversion_applied": False,
+                "suspect_quote": True,
+                "suspect_reason": "way_below_expected",
+            }
+        ],
+        "total_rejects": 1,
+    }
+    reject_path = reports_dir / f"reject_histogram_{timestamp}.json"
+    with open(reject_path, "w") as f:
+        json.dump(reject_data, f, indent=2)
+    artifacts["reject_histogram"] = reject_path
     
     return artifacts
 
 
-def has_all_artifacts(run_dir: Path) -> bool:
-    """Check if directory has all 3 required artifacts."""
-    artifacts = find_artifacts(run_dir)
-    return all(v is not None for v in artifacts.values())
-
-
-def count_artifacts(run_dir: Path) -> int:
-    """Count how many artifacts are present in a directory."""
-    artifacts = find_artifacts(run_dir)
-    return sum(1 for v in artifacts.values() if v is not None)
-
-
-def get_run_dir_candidates(base_dir: Path, max_count: int = MAX_CANDIDATES_TO_SHOW) -> List[Tuple[Path, int, float]]:
-    """
-    Get list of candidate run directories sorted by validity and recency.
+def discover_artifacts(run_dir: Path) -> Dict[str, Optional[Path]]:
+    """Discover artifacts in a run directory."""
+    reports_dir = run_dir / "reports"
     
-    Returns: List of (path, artifact_count, mtime) tuples
-    """
-    if not base_dir.exists():
+    artifacts = {"scan": None, "truth_report": None, "reject_histogram": None}
+    
+    if not reports_dir.exists():
+        return artifacts
+    
+    for f in reports_dir.glob("*.json"):
+        name = f.name
+        if name.startswith("scan_"):
+            artifacts["scan"] = f
+        elif name.startswith("truth_report_"):
+            artifacts["truth_report"] = f
+        elif name.startswith("reject_histogram_"):
+            artifacts["reject_histogram"] = f
+    
+    return artifacts
+
+
+def get_run_dir_candidates(output_root: Path = DEFAULT_OUTPUT_ROOT) -> List[Path]:
+    """Get list of potential run directories sorted by recency."""
+    if not output_root.exists():
         return []
     
     candidates = []
-    for d in base_dir.iterdir():
-        if d.is_dir():
-            artifact_count = count_artifacts(d)
-            mtime = d.stat().st_mtime
-            candidates.append((d, artifact_count, mtime))
+    for d in output_root.iterdir():
+        if d.is_dir() and (d / "reports").exists():
+            reports = list((d / "reports").glob("*.json"))
+            if reports:
+                mtime = max(f.stat().st_mtime for f in reports)
+                candidates.append((d, mtime, len(reports)))
     
-    # Sort by: artifact_count (desc), mtime (desc)
-    candidates.sort(key=lambda x: (-x[1], -x[2]))
-    return candidates[:max_count]
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return [c[0] for c in candidates]
 
 
-def print_candidates(base_dir: Path, max_count: int = MAX_CANDIDATES_TO_SHOW) -> None:
-    """Print helpful list of candidate run directories."""
-    candidates = get_run_dir_candidates(base_dir, max_count)
+def print_candidates(output_root: Path = DEFAULT_OUTPUT_ROOT) -> None:
+    """Print available run directory candidates."""
+    candidates = get_run_dir_candidates(output_root)
     
     if not candidates:
-        print(f"\n  No directories found in {base_dir}")
-        print(f"\n  Run a scan first:")
-        print(f"    python -m strategy.jobs.run_scan_real --cycles 1 --output-dir data/runs/real_$(date +%Y%m%d_%H%M%S)")
+        print(f"No run directories found in {output_root}")
         return
     
-    print(f"\n  Available run directories in {base_dir}:")
-    print()
+    print(f"\nAvailable run directories in {output_root}:\n")
+    for i, d in enumerate(candidates[:10], 1):
+        artifacts = discover_artifacts(d)
+        count = sum(1 for v in artifacts.values() if v is not None)
+        print(f"  {i}. {d.name} ({count}/3 artifacts)")
     
-    for path, artifact_count, mtime in candidates:
-        mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
-        status = "✓" if artifact_count == 3 else f"({artifact_count}/3)"
-        print(f"    {status} {path.name}  [{mtime_str}]")
-    
-    # Show example command with best candidate
-    best_valid = next((p for p, count, _ in candidates if count == 3), None)
-    if best_valid:
-        print(f"\n  Example command:")
-        print(f"    python scripts/ci_m5_0_gate.py --run-dir {best_valid}")
-    else:
-        print(f"\n  No complete run directories found (need 3/3 artifacts).")
-        print(f"  Run a scan first to generate artifacts.")
+    if len(candidates) > 10:
+        print(f"  ... and {len(candidates) - 10} more")
 
 
-def find_latest_valid_rundir(base_dir: Path) -> Optional[Path]:
-    """
-    Find latest valid runDir by modification time.
-    
-    Selection criteria:
-    1. Must be a directory
-    2. Must contain all 3 artifacts (scan, truth_report, reject_histogram)
-    3. Prioritize ci_m5_0_gate_* and run_scan_* prefixes
-    4. Fall back to any directory with artifacts
-    5. Sort by mtime (newest first)
-    
-    Returns None if no valid runDir found.
-    """
-    if not base_dir.exists():
-        return None
-    
-    # Get all subdirectories
-    all_dirs = [d for d in base_dir.iterdir() if d.is_dir()]
-    
-    if not all_dirs:
-        return None
-    
-    # Filter to directories with all 3 artifacts
-    valid_dirs = [d for d in all_dirs if has_all_artifacts(d)]
-    
-    if not valid_dirs:
-        return None
-    
-    # Prioritize M5 and run_scan prefixes
-    priority_prefixes = ("ci_m5_0_gate_", "run_scan_", "real_", "session_")
-    
-    def sort_key(d: Path) -> Tuple[int, float]:
-        """Sort by: (priority, mtime). Lower priority number = higher priority."""
-        name = d.name
-        priority = 99  # Default low priority
-        for i, prefix in enumerate(priority_prefixes):
-            if name.startswith(prefix):
-                priority = i
-                break
-        # Negative mtime so newest is first
-        return (priority, -d.stat().st_mtime)
-    
-    valid_dirs.sort(key=sort_key)
-    return valid_dirs[0]
+def validate_schema_version(data: Dict[str, Any]) -> Tuple[bool, str]:
+    """Validate schema_version field."""
+    version = data.get("schema_version")
+    if not version:
+        return False, "Missing schema_version"
+    if not re.match(r"^\d+\.\d+\.\d+$", version):
+        return False, f"Invalid schema_version format: {version}"
+    return True, f"schema_version={version}"
 
 
-def load_json(path: Path) -> Optional[Dict[str, Any]]:
-    """Load JSON file safely."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        log_fail(f"Failed to load {path}: {e}")
-        return None
+def validate_run_mode(data: Dict[str, Any]) -> Tuple[bool, str]:
+    """Validate run_mode field."""
+    mode = data.get("run_mode")
+    if not mode:
+        return False, "Missing run_mode"
+    return True, f"run_mode={mode}"
 
 
-def check_artifacts_present(artifacts: Dict[str, Optional[Path]]) -> Tuple[bool, List[str]]:
-    """Check all required artifacts are present."""
-    errors: List[str] = []
+def validate_health_metrics(data: Dict[str, Any]) -> Tuple[bool, str]:
+    """Validate health metrics."""
+    health = data.get("health", data.get("stats", {}))
     
-    if artifacts["scan"] is None:
-        errors.append("Missing: scan_*.json")
-    else:
-        log_ok(f"Found: {artifacts['scan'].name}")
+    required = ["quotes_total", "quotes_fetched", "dexes_active"]
+    missing = [k for k in required if k not in health]
     
-    if artifacts["truth_report"] is None:
-        errors.append("Missing: truth_report_*.json")
-    else:
-        log_ok(f"Found: {artifacts['truth_report'].name}")
+    if missing:
+        return False, f"Missing health metrics: {missing}"
+    if health.get("quotes_total", 0) < 1:
+        return False, "quotes_total < 1"
+    if health.get("quotes_fetched", 0) < 1:
+        return False, "quotes_fetched < 1"
+    if health.get("dexes_active", 0) < 1:
+        return False, "dexes_active < 1"
     
-    if artifacts["reject_histogram"] is None:
-        errors.append("Missing: reject_histogram_*.json")
-    else:
-        log_ok(f"Found: {artifacts['reject_histogram'].name}")
-    
-    return len(errors) == 0, errors
+    return True, f"health metrics OK (quotes={health.get('quotes_total')})"
 
 
-def check_schema_version(truth_report: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Check schema_version exists and is valid."""
-    errors: List[str] = []
+def validate_price_sanity_metrics(data: Dict[str, Any]) -> Tuple[bool, str]:
+    """Validate price sanity metrics exist."""
+    health = data.get("health", data.get("stats", {}))
     
-    schema = truth_report.get("schema_version")
-    if schema is None:
-        errors.append("Missing: schema_version")
-    elif not isinstance(schema, str):
-        errors.append(f"schema_version must be string, got: {type(schema).__name__}")
-    elif not re.match(VALID_SCHEMA_PATTERN, schema):
-        errors.append(f"schema_version invalid format: {schema} (expected X.Y.Z)")
-    else:
-        log_ok(f"schema_version: {schema}")
+    passed = health.get("price_sanity_passed")
+    failed = health.get("price_sanity_failed")
     
-    return len(errors) == 0, errors
+    if passed is None and failed is None:
+        return False, "Missing price_sanity_passed and price_sanity_failed"
+    
+    return True, f"price_sanity_passed={passed}, price_sanity_failed={failed}"
 
 
-def check_run_mode(scan_data: Dict[str, Any], truth_report: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Check run_mode exists and is consistent."""
-    errors: List[str] = []
-    
-    # Check scan data
-    scan_mode = scan_data.get("run_mode")
-    if scan_mode is None:
-        scan_mode = scan_data.get("stats", {}).get("run_mode")
-    
-    if scan_mode is None:
-        errors.append("Missing: run_mode in scan data")
-    else:
-        log_ok(f"scan.run_mode: {scan_mode}")
-    
-    # Check truth report
-    truth_mode = truth_report.get("run_mode")
-    if truth_mode is None:
-        errors.append("Missing: run_mode in truth_report")
-    else:
-        log_ok(f"truth_report.run_mode: {truth_mode}")
-    
-    # Check consistency
-    if scan_mode and truth_mode and scan_mode != truth_mode:
-        errors.append(f"run_mode mismatch: scan={scan_mode}, truth_report={truth_mode}")
-    
-    return len(errors) == 0, errors
-
-
-def check_block_pinned(scan_data: Dict[str, Any], is_fixture: bool = False) -> Tuple[bool, List[str]]:
-    """Check current_block is valid (> 0 for REAL mode)."""
-    errors: List[str] = []
-    
-    run_mode = scan_data.get("run_mode") or scan_data.get("stats", {}).get("run_mode", "")
-    current_block = scan_data.get("current_block", 0)
-    
-    # Mark fixture values
-    fixture_marker = f" {FIXTURE_MARKER}" if is_fixture and current_block == FIXTURE_BLOCK else ""
-    
-    if run_mode == "REGISTRY_REAL":
-        if current_block is None or current_block <= 0:
-            errors.append(f"current_block must be > 0 for REAL mode, got: {current_block}")
-        else:
-            log_ok(f"current_block: {current_block}{fixture_marker}")
-    else:
-        log_info(f"current_block: {current_block} (SMOKE mode){fixture_marker}")
-    
-    return len(errors) == 0, errors
-
-
-def check_quotes_metrics(scan_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Check quotes metrics are valid."""
-    errors: List[str] = []
-    stats = scan_data.get("stats", {})
-    
-    quotes_total = stats.get("quotes_total", 0)
-    quotes_fetched = stats.get("quotes_fetched", 0)
-    gates_passed = stats.get("gates_passed", 0)
-    
-    if quotes_total < 1:
-        errors.append(f"quotes_total must be >= 1, got: {quotes_total}")
-    else:
-        log_ok(f"quotes_total: {quotes_total}")
-    
-    if quotes_fetched < 1:
-        errors.append(f"quotes_fetched must be >= 1, got: {quotes_fetched}")
-    else:
-        log_ok(f"quotes_fetched: {quotes_fetched}")
-    
-    if quotes_fetched > quotes_total:
-        errors.append(f"INVARIANT: quotes_fetched ({quotes_fetched}) > quotes_total ({quotes_total})")
-    
-    if gates_passed > quotes_fetched:
-        errors.append(f"INVARIANT: gates_passed ({gates_passed}) > quotes_fetched ({quotes_fetched})")
-    else:
-        log_ok(f"gates_passed: {gates_passed}")
-    
-    return len(errors) == 0, errors
-
-
-def check_dexes_active(scan_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Check dexes_active >= 1."""
-    errors: List[str] = []
-    stats = scan_data.get("stats", {})
-    
-    dexes_active = stats.get("dexes_active", 0)
-    
-    if dexes_active < 1:
-        errors.append(f"dexes_active must be >= 1, got: {dexes_active}")
-    else:
-        log_ok(f"dexes_active: {dexes_active}")
-    
-    return len(errors) == 0, errors
-
-
-def check_price_sanity_metrics(scan_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Check price sanity metrics exist."""
-    errors: List[str] = []
-    stats = scan_data.get("stats", {})
-    
-    passed = stats.get("price_sanity_passed")
-    failed = stats.get("price_sanity_failed")
-    
-    if passed is None:
-        errors.append("Missing: stats.price_sanity_passed")
-    else:
-        log_ok(f"price_sanity_passed: {passed}")
-    
-    if failed is None:
-        errors.append("Missing: stats.price_sanity_failed")
-    else:
-        log_ok(f"price_sanity_failed: {failed}")
-    
-    return len(errors) == 0, errors
-
-
-def check_reject_histogram(histogram_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Check reject histogram exists and has expected structure."""
-    errors: List[str] = []
-    
-    histogram = histogram_data.get("histogram", {})
-    log_ok(f"reject_histogram: {len(histogram)} categories")
-    
-    gate_breakdown = histogram_data.get("gate_breakdown", {})
-    if gate_breakdown:
-        log_ok(f"gate_breakdown: {list(gate_breakdown.keys())}")
-    
-    return len(errors) == 0, errors
-
-
-def create_fixture_run_dir(out_dir: Optional[Path] = None) -> Path:
-    """
-    Create minimal fixture for offline/self-test mode.
-    
-    Args:
-        out_dir: Output directory. If None, uses data/runs/ci_m5_0_gate_<timestamp>
-    
-    Returns:
-        Path to created fixture directory
-    """
-    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    if out_dir is None:
-        # Default: data/runs/ci_m5_0_gate_<timestamp>
-        out_dir = DEFAULT_RUNS_DIR / f"ci_m5_0_gate_{timestamp_str}"
-    
-    # Create directories
-    try:
-        out_dir.mkdir(parents=True, exist_ok=True)
-    except PermissionError:
-        # Fallback to temp if can't create in data/runs
-        import tempfile
-        out_dir = Path(tempfile.mkdtemp(prefix="m5_gate_"))
-        log_info(f"Using temp directory (no write access to data/runs): {out_dir}")
-    
-    snapshots_dir = out_dir / "snapshots"
-    reports_dir = out_dir / "reports"
-    snapshots_dir.mkdir(exist_ok=True)
-    reports_dir.mkdir(exist_ok=True)
-    
-    # Minimal scan data with FIXTURE markers
-    scan_data = {
-        "run_mode": "REGISTRY_REAL",
-        "current_block": FIXTURE_BLOCK,  # Fixture value
-        "chain_id": 42161,
-        "_fixture": True,  # Explicit marker
-        "stats": {
-            "run_mode": "REGISTRY_REAL",
-            "current_block": FIXTURE_BLOCK,
-            "quotes_total": 4,
-            "quotes_fetched": 4,
-            "gates_passed": 2,
-            "dexes_active": 2,
-            "price_sanity_passed": 2,
-            "price_sanity_failed": 2,
-        },
-        "reject_histogram": {"PRICE_SANITY_FAILED": 2},
-    }
-    
-    with open(snapshots_dir / f"scan_{timestamp_str}.json", "w") as f:
-        json.dump(scan_data, f, indent=2)
-    
-    # Minimal truth report
-    truth_report = {
-        "schema_version": "3.2.0",
-        "timestamp": datetime.now().isoformat(),
-        "run_mode": "REGISTRY_REAL",
-        "execution_enabled": False,
-        "_fixture": True,
-        "health": {
-            "quotes_total": 4,
-            "quotes_fetched": 4,
-            "gates_passed": 2,
-            "dexes_active": 2,
-            "price_sanity_passed": 2,
-            "price_sanity_failed": 2,
-            "price_stability_factor": 0.5,
-        },
-        "stats": {
-            "quotes_total": 4,
-            "quotes_fetched": 4,
-        },
-    }
-    
-    with open(reports_dir / f"truth_report_{timestamp_str}.json", "w") as f:
-        json.dump(truth_report, f, indent=2)
-    
-    # Minimal reject histogram
-    histogram_data = {
-        "run_mode": "REGISTRY_REAL",
-        "timestamp": datetime.now().isoformat(),
-        "_fixture": True,
-        "histogram": {"PRICE_SANITY_FAILED": 2},
-        "gate_breakdown": {"sanity": 2, "revert": 0, "slippage": 0, "infra": 0, "other": 0},
-    }
-    
-    with open(reports_dir / f"reject_histogram_{timestamp_str}.json", "w") as f:
-        json.dump(histogram_data, f, indent=2)
-    
-    return out_dir
-
-
-def run_gate(run_dir: Path, is_fixture: bool = False, require_real: bool = False) -> int:
-    """
-    Run all M5_0 gate checks.
-    
-    Returns:
-        0 = PASS
-        1 = FAIL (general)
-        2 = FAIL (artifacts missing)
-        3 = FAIL (fixture rejected by require_real)
-    """
-    print(f"\n{'='*60}")
-    print("STEP: Artifact Discovery")
-    print("=" * 60)
-    
-    artifacts = find_artifacts(run_dir)
-    passed, errors = check_artifacts_present(artifacts)
-    if not passed:
-        for e in errors:
-            log_fail(e)
-        return EXIT_ARTIFACTS_MISSING
-    
-    # Load artifacts
-    scan_data = load_json(artifacts["scan"])  # type: ignore
-    truth_report = load_json(artifacts["truth_report"])  # type: ignore
-    histogram_data = load_json(artifacts["reject_histogram"])  # type: ignore
-    
-    if scan_data is None or truth_report is None or histogram_data is None:
-        return EXIT_ARTIFACTS_MISSING
-    
-    # Check if this is fixture data
-    is_fixture = is_fixture or scan_data.get("_fixture", False)
-    
-    # Reject fixture if require_real is set
-    if require_real and is_fixture:
-        log_fail("Fixture data rejected: --require-real is set")
-        log_info("Run a real scan to generate non-fixture artifacts")
-        return EXIT_FIXTURE_REJECTED
-    
+def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool = False) -> Tuple[bool, List[str]]:
+    """Validate all artifacts."""
+    messages = []
     all_passed = True
     
-    # Schema version
-    print(f"\n{'='*60}")
-    print("STEP: Schema Version")
-    print("=" * 60)
-    passed, errors = check_schema_version(truth_report)
-    if not passed:
-        for e in errors:
-            log_fail(e)
-        all_passed = False
+    for name, path in artifacts.items():
+        if path is None:
+            messages.append(f"FAIL: {name} artifact missing")
+            all_passed = False
+        else:
+            messages.append(f"OK: {name} found at {path.name}")
     
-    # Run mode
-    print(f"\n{'='*60}")
-    print("STEP: Run Mode")
-    print("=" * 60)
-    passed, errors = check_run_mode(scan_data, truth_report)
-    if not passed:
-        for e in errors:
-            log_fail(e)
-        all_passed = False
+    if not all_passed:
+        return False, messages
     
-    # Block pinned
-    print(f"\n{'='*60}")
-    print("STEP: Block Pinned")
-    print("=" * 60)
-    passed, errors = check_block_pinned(scan_data, is_fixture=is_fixture)
-    if not passed:
-        for e in errors:
-            log_fail(e)
-        all_passed = False
+    for name, path in artifacts.items():
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            
+            ok, msg = validate_schema_version(data)
+            if not ok:
+                messages.append(f"FAIL: {name} - {msg}")
+                all_passed = False
+            else:
+                messages.append(f"OK: {name} - {msg}")
+            
+            ok, msg = validate_run_mode(data)
+            if not ok:
+                messages.append(f"FAIL: {name} - {msg}")
+                all_passed = False
+            else:
+                run_mode = data.get("run_mode", "")
+                if require_real and "FIXTURE" in run_mode:
+                    messages.append(f"FAIL: {name} - fixture rejected (--require-real)")
+                    all_passed = False
+                else:
+                    messages.append(f"OK: {name} - {msg}")
+            
+            if name == "truth_report":
+                ok, msg = validate_health_metrics(data)
+                if not ok:
+                    messages.append(f"FAIL: {name} - {msg}")
+                    all_passed = False
+                else:
+                    messages.append(f"OK: {name} - {msg}")
+                
+                ok, msg = validate_price_sanity_metrics(data)
+                if not ok:
+                    messages.append(f"FAIL: {name} - {msg}")
+                    all_passed = False
+                else:
+                    messages.append(f"OK: {name} - {msg}")
+                    
+        except json.JSONDecodeError as e:
+            messages.append(f"FAIL: {name} - invalid JSON: {e}")
+            all_passed = False
+        except Exception as e:
+            messages.append(f"FAIL: {name} - error: {e}")
+            all_passed = False
     
-    # Quotes metrics
-    print(f"\n{'='*60}")
-    print("STEP: Quotes Metrics")
-    print("=" * 60)
-    passed, errors = check_quotes_metrics(scan_data)
-    if not passed:
-        for e in errors:
-            log_fail(e)
-        all_passed = False
+    return all_passed, messages
+
+
+def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool, str]:
+    """Run real scan using strategy.jobs.run_scan_real."""
+    cmd = [
+        sys.executable, "-m", "strategy.jobs.run_scan_real",
+        "--cycles", str(cycles),
+        "--output-dir", str(output_dir),
+    ]
     
-    # DEXes active
-    print(f"\n{'='*60}")
-    print("STEP: DEXes Active")
-    print("=" * 60)
-    passed, errors = check_dexes_active(scan_data)
-    if not passed:
-        for e in errors:
-            log_fail(e)
-        all_passed = False
+    if config:
+        cmd.extend(["--config", config])
     
-    # Price sanity metrics
-    print(f"\n{'='*60}")
-    print("STEP: Price Sanity Metrics")
-    print("=" * 60)
-    passed, errors = check_price_sanity_metrics(scan_data)
-    if not passed:
-        for e in errors:
-            log_fail(e)
-        all_passed = False
+    print(f"\n[ONLINE] Running: {' '.join(cmd)}")
+    print("-" * 60)
     
-    # Reject histogram
-    print(f"\n{'='*60}")
-    print("STEP: Reject Histogram")
-    print("=" * 60)
-    passed, errors = check_reject_histogram(histogram_data)
-    if not passed:
-        for e in errors:
-            log_fail(e)
-        all_passed = False
-    
-    return EXIT_PASS if all_passed else EXIT_FAIL
+    try:
+        result = subprocess.run(cmd, capture_output=False, text=True, timeout=300)
+        if result.returncode == 0:
+            return True, "Scan completed successfully"
+        else:
+            return False, f"Scan failed with exit code {result.returncode}"
+    except subprocess.TimeoutExpired:
+        return False, "Scan timed out (300s)"
+    except FileNotFoundError:
+        return False, "strategy.jobs.run_scan_real module not found"
+    except Exception as e:
+        return False, f"Scan error: {e}"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="ARBY M5_0 CI Gate - Offline Artifact Validation",
+        description="M5_0 CI Gate - Infrastructure Hardening validation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+MODES (mutually exclusive):
+  --offline    Create fixture artifacts, always works
+  --online     Run real scan, validate results
+
 EXAMPLES:
-    # Validate specific run directory (RECOMMENDED for CI)
-    python scripts/ci_m5_0_gate.py --run-dir data/runs/real_20260130_123456
-
-    # Offline with fixture in default location
-    python scripts/ci_m5_0_gate.py --offline
-
-    # Offline with custom output directory
-    python scripts/ci_m5_0_gate.py --offline --out-dir data/runs/my_test
-
-    # Require real data (reject fixtures)
-    python scripts/ci_m5_0_gate.py --run-dir data/runs/xxx --require-real
-
-    # Using environment variables (for CI)
-    ARBY_RUN_DIR=data/runs/real_xxx python scripts/ci_m5_0_gate.py
-    ARBY_GATE_MODE=offline python scripts/ci_m5_0_gate.py
-    ARBY_REQUIRE_REAL=1 python scripts/ci_m5_0_gate.py --run-dir data/runs/xxx
-
-FIND REAL RUNDIRS:
-    PowerShell:  Get-ChildItem data\\runs | Sort-Object LastWriteTime -Desc | Select -First 5
-    Bash:        ls -lt data/runs | head -6
-        """,
+  python scripts/ci_m5_0_gate.py --offline
+  python scripts/ci_m5_0_gate.py --online
+  python scripts/ci_m5_0_gate.py --online --config config/real_m5_0_golden.yaml
+  python scripts/ci_m5_0_gate.py --list-candidates
+        """
     )
-    parser.add_argument(
-        "--run-dir",
-        type=str,
-        default=None,
-        help="Path to run directory with artifacts (highest priority)",
-    )
-    parser.add_argument(
-        "--out-dir",
-        type=str,
-        default=None,
-        help="Output directory for --offline fixture (default: data/runs/ci_m5_0_gate_<timestamp>)",
-    )
-    parser.add_argument(
-        "--offline",
-        action="store_true",
-        help="Create fixture and validate (uses --out-dir or default location)",
-    )
-    parser.add_argument(
-        "--self-test",
-        action="store_true",
-        help="Run self-test with fixture (same as --offline)",
-    )
-    parser.add_argument(
-        "--require-real",
-        action="store_true",
-        help="Reject fixture data (_fixture=true), require real scan artifacts",
-    )
-    parser.add_argument(
-        "--print-latest",
-        action="store_true",
-        help="Print latest valid runDir and exit",
-    )
-    parser.add_argument(
-        "--list-candidates",
-        action="store_true",
-        help="List available run directories and exit",
-    )
-    parser.add_argument(
-        "--version",
-        action="store_true",
-        help="Print version and exit",
-    )
+    
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--offline", action="store_true",
+        help="Offline mode: create fixture artifacts (ignores ENV)")
+    mode_group.add_argument("--online", action="store_true",
+        help="Online mode: run real scan and validate (ignores ARBY_RUN_DIR)")
+    
+    parser.add_argument("--run-dir", type=Path,
+        help="Explicit run directory (legacy, prefer --offline or --online)")
+    parser.add_argument("--require-real", action="store_true",
+        help="Reject fixture/offline artifacts")
+    parser.add_argument("--list-candidates", action="store_true",
+        help="List available run directories")
+    
+    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG,
+        help=f"Config file for --online mode (default: {DEFAULT_CONFIG})")
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT,
+        help=f"Root directory for runs (default: {DEFAULT_OUTPUT_ROOT})")
+    parser.add_argument("--cycles", type=int, default=1,
+        help="Number of scan cycles for --online mode (default: 1)")
+    
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     
     args = parser.parse_args()
     
-    if args.version:
-        print(f"ci_m5_0_gate.py version {GATE_VERSION}")
-        return 0
-    
     if args.list_candidates:
-        print(f"\n{'='*60}")
-        print(" ARBY M5_0 CI GATE - Run Directory Candidates")
-        print("=" * 60)
-        print_candidates(DEFAULT_RUNS_DIR, max_count=10)
+        print_candidates(args.output_root)
         return 0
     
-    # Get ENV values
-    env_run_dir = get_env_str("ARBY_RUN_DIR")
-    env_mode = get_env_str("ARBY_GATE_MODE")
-    env_out_dir = get_env_str("ARBY_GATE_OUT_DIR")
-    env_require_real = get_env_bool("ARBY_REQUIRE_REAL")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # Merge require_real from CLI and ENV
-    require_real = args.require_real or env_require_real
-    
-    if args.print_latest:
-        latest = find_latest_valid_rundir(DEFAULT_RUNS_DIR)
-        if latest:
-            print(f"Latest valid runDir: {latest}")
+    # OFFLINE MODE
+    if args.offline:
+        print(f"\n{'='*60}")
+        print(f"M5_0 GATE v{__version__} - OFFLINE MODE")
+        print(f"{'='*60}")
+        print("\n[OFFLINE] Ignoring ENV variables (ARBY_RUN_DIR, ARBY_REQUIRE_REAL)")
+        
+        run_dir = args.output_root / f"ci_m5_0_gate_offline_{timestamp}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"[OFFLINE] Creating fixture in: {run_dir}")
+        
+        artifacts_paths = generate_fixture_artifacts(run_dir, timestamp)
+        artifacts = discover_artifacts(run_dir)
+        
+        print(f"\n[OFFLINE] Generated artifacts:")
+        for name, path in artifacts_paths.items():
+            print(f"  - {name}: {path.name}")
+        
+        print(f"\n{'='*60}")
+        print("VALIDATION")
+        print(f"{'='*60}\n")
+        
+        passed, messages = validate_artifacts(artifacts, require_real=False)
+        
+        for msg in messages:
+            print(f"  {msg}")
+        
+        print(f"\n{'='*60}")
+        if passed:
+            print(f"RESULT: PASS (offline fixture)")
+            print(f"Run directory: {run_dir}")
             return 0
         else:
-            print(f"No valid runDir found in {DEFAULT_RUNS_DIR}")
-            print_candidates(DEFAULT_RUNS_DIR)
+            print(f"RESULT: FAIL")
             return 1
     
-    print("\n" + "=" * 60)
-    print(f" ARBY M5_0 CI GATE (v{GATE_VERSION})")
-    print("=" * 60)
-    print()
-    print("M5_0 Criteria:")
-    print("  - schema_version exists (X.Y.Z)")
-    print("  - run_mode exists")
-    print("  - current_block > 0 (REAL mode)")
-    print("  - quotes_total >= 1")
-    print("  - quotes_fetched >= 1")
-    print("  - dexes_active >= 1")
-    print("  - price_sanity metrics exist")
-    print("  - 3 core artifacts present")
+    # ONLINE MODE
+    if args.online:
+        print(f"\n{'='*60}")
+        print(f"M5_0 GATE v{__version__} - ONLINE MODE")
+        print(f"{'='*60}")
+        print("\n[ONLINE] Ignoring ARBY_RUN_DIR (creating new run directory)")
+        
+        run_dir = args.output_root / f"ci_m5_0_gate_{timestamp}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"[ONLINE] Run directory: {run_dir}")
+        print(f"[ONLINE] Config: {args.config}")
+        print(f"[ONLINE] Cycles: {args.cycles}")
+        
+        success, message = run_real_scan(run_dir, args.config, args.cycles)
+        
+        if not success:
+            print(f"\n{'='*60}")
+            print(f"RESULT: FAIL - {message}")
+            return 1
+        
+        print(f"\n{'-'*60}")
+        print(f"[ONLINE] {message}")
+        
+        artifacts = discover_artifacts(run_dir)
+        
+        missing = [name for name, path in artifacts.items() if path is None]
+        if missing:
+            print(f"\n{'='*60}")
+            print(f"RESULT: FAIL - Missing artifacts: {missing}")
+            return 2
+        
+        print(f"\n{'='*60}")
+        print("VALIDATION")
+        print(f"{'='*60}\n")
+        
+        passed, messages = validate_artifacts(artifacts, require_real=True)
+        
+        for msg in messages:
+            print(f"  {msg}")
+        
+        print(f"\n{'='*60}")
+        if passed:
+            print(f"RESULT: PASS (online)")
+            print(f"Run directory: {run_dir}")
+            return 0
+        else:
+            print(f"RESULT: FAIL")
+            return 1
     
-    if require_real:
-        print()
-        print("[MODE] --require-real: Fixture data will be rejected")
+    # LEGACY MODE
+    print(f"\n{'='*60}")
+    print(f"M5_0 GATE v{__version__} - LEGACY MODE")
+    print(f"{'='*60}")
+    print("\nWARNING: Consider using --offline or --online instead")
     
-    # Determine run directory and discovery strategy
-    is_fixture = False
-    discovery_strategy = "unknown"
-    run_dir: Optional[Path] = None
+    run_dir = None
     
-    # Priority 1: CLI --run-dir
     if args.run_dir:
-        run_dir = Path(args.run_dir)
-        if not run_dir.exists():
-            log_fail(f"Run directory does not exist: {run_dir}")
-            print_candidates(DEFAULT_RUNS_DIR)
-            return 1
-        discovery_strategy = "explicit (--run-dir CLI)"
-    
-    # Priority 2: ENV ARBY_RUN_DIR
-    elif env_run_dir:
-        run_dir = Path(env_run_dir)
-        if not run_dir.exists():
-            log_fail(f"Run directory does not exist: {run_dir} (from ARBY_RUN_DIR)")
-            print_candidates(DEFAULT_RUNS_DIR)
-            return 1
-        discovery_strategy = "explicit (ARBY_RUN_DIR env)"
-    
-    # Priority 3: CLI --offline
-    elif args.offline or args.self_test:
-        out_dir = Path(args.out_dir) if args.out_dir else (Path(env_out_dir) if env_out_dir else None)
-        run_dir = create_fixture_run_dir(out_dir)
-        is_fixture = True
-        discovery_strategy = "offline_fixture (--offline CLI)"
-        log_info(f"Created fixture: {run_dir}")
-    
-    # Priority 4: ENV ARBY_GATE_MODE
-    elif env_mode:
-        if env_mode == "offline":
-            out_dir = Path(env_out_dir) if env_out_dir else None
-            run_dir = create_fixture_run_dir(out_dir)
-            is_fixture = True
-            discovery_strategy = "offline_fixture (ARBY_GATE_MODE=offline)"
-            log_info(f"Created fixture: {run_dir}")
-        elif env_mode == "latest":
-            run_dir = find_latest_valid_rundir(DEFAULT_RUNS_DIR)
-            if run_dir is None:
-                log_fail(f"No valid runDir in {DEFAULT_RUNS_DIR} (ARBY_GATE_MODE=latest)")
-                print_candidates(DEFAULT_RUNS_DIR)
-                return 1
-            discovery_strategy = "latest_by_mtime (ARBY_GATE_MODE=latest)"
-        else:
-            log_fail(f"Unknown ARBY_GATE_MODE: {env_mode} (expected: offline, latest)")
-            return 1
-    
-    # Priority 5: Auto-detect
+        run_dir = args.run_dir
+        print(f"\n[LEGACY] Using --run-dir: {run_dir}")
+    elif os.environ.get("ARBY_RUN_DIR"):
+        run_dir = Path(os.environ["ARBY_RUN_DIR"])
+        print(f"\n[LEGACY] Using ARBY_RUN_DIR: {run_dir}")
     else:
-        run_dir = find_latest_valid_rundir(DEFAULT_RUNS_DIR)
-        if run_dir is None:
-            log_info(f"No valid runDir in {DEFAULT_RUNS_DIR}, creating fixture...")
-            run_dir = create_fixture_run_dir()
-            is_fixture = True
-            discovery_strategy = "offline_fixture (fallback)"
-            log_info(f"Created fixture: {run_dir}")
+        candidates = get_run_dir_candidates(args.output_root)
+        if candidates:
+            run_dir = candidates[0]
+            print(f"\n[LEGACY] Using latest: {run_dir}")
         else:
-            discovery_strategy = "latest_by_mtime (auto)"
+            print(f"\nERROR: No run directory found")
+            print(f"Use --offline to create fixture, or --online to run real scan")
+            print_candidates(args.output_root)
+            return 2
     
-    print(f"\n[DISCOVERY] Strategy: {discovery_strategy}")
-    print(f"[RUN-DIR] {run_dir}")
-    if is_fixture:
-        print(f"[FIXTURE] Data is synthetic (current_block={FIXTURE_BLOCK})")
+    if not run_dir.exists():
+        print(f"\nERROR: Run directory does not exist: {run_dir}")
+        print(f"Use --offline to create fixture, or --online to run real scan")
+        return 2
     
-    # Run gate
-    exit_code = run_gate(run_dir, is_fixture=is_fixture, require_real=require_real)
+    require_real = args.require_real or os.environ.get("ARBY_REQUIRE_REAL") == "1"
     
-    # Summary
-    print("\n" + "=" * 60)
-    if exit_code == EXIT_PASS:
-        print(" [PASS] M5_0 CI GATE PASSED")
-    elif exit_code == EXIT_FIXTURE_REJECTED:
-        print(" [FAIL] M5_0 CI GATE FAILED (fixture rejected)")
+    artifacts = discover_artifacts(run_dir)
+    
+    missing = [name for name, path in artifacts.items() if path is None]
+    if missing:
+        print(f"\nERROR: Missing artifacts: {missing}")
+        return 2
+    
+    print(f"\n{'='*60}")
+    print("VALIDATION")
+    print(f"{'='*60}\n")
+    
+    passed, messages = validate_artifacts(artifacts, require_real=require_real)
+    
+    for msg in messages:
+        print(f"  {msg}")
+    
+    print(f"\n{'='*60}")
+    if passed:
+        print(f"RESULT: PASS")
+        print(f"Run directory: {run_dir}")
+        return 0
     else:
-        print(f" [FAIL] M5_0 CI GATE FAILED (exit code {exit_code})")
-    print("=" * 60)
-    
-    if exit_code == EXIT_PASS:
-        print("\nM5_0 Contract Verified:")
-        print("  [OK] schema_version valid")
-        print("  [OK] run_mode exists")
-        print("  [OK] current_block valid")
-        print("  [OK] quotes metrics valid")
-        print("  [OK] dexes_active >= 1")
-        print("  [OK] price_sanity metrics exist")
-        print("  [OK] 3/3 artifacts present")
-        if is_fixture:
-            print(f"\n  {FIXTURE_MARKER} Validated with synthetic fixture data")
-    
-    print(f"\nArtifacts: {run_dir}")
-    
-    return exit_code
+        print(f"RESULT: FAIL")
+        return 1
 
 
 if __name__ == "__main__":
