@@ -1,151 +1,134 @@
-# Status: M5_0 (Infrastructure Hardening)
+# Status: M5_0 Infrastructure Hardening
 
 **Status**: IN PROGRESS  
-**Branch**: `split/code`  
-**Last Updated**: 2026-01-31
+**Last Updated**: 2026-02-01
 
-## Goal
+## Overview
 
-Consolidate infrastructure, unify contracts, prepare for M5 execution.
+M5_0 focuses on API stability and import contract hardening after 4 waves of "Enum drift" broke core.models imports.
 
----
+## API Stability Policy (GUARDRAIL)
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PUBLIC SYMBOLS ONLY GROW, NEVER DISAPPEAR.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If renamed → MUST provide alias: OldName = NewName
+If deprecated → MUST keep alias for 2 milestones minimum
+
+Any rename/delete in core.constants without alias → M5_0 "not Done"
+```
+
+## Enum Drift History
+
+| Wave | Symbol | Status |
+|------|--------|--------|
+| 1 | DexType | ✅ Fixed |
+| 2 | TokenStatus | ✅ Fixed |
+| 3 | PoolStatus | ✅ Fixed |
+| 4 | TradeDirection | ✅ Fixed |
+
+## Required Public Symbols (core.constants)
+
+```python
+# Enums - DO NOT REMOVE
+DexType
+TokenStatus
+PoolStatus
+TradeDirection   # ← Wave 4 fix
+ExecutionBlocker
+
+# Constants - DO NOT REMOVE
+ANCHOR_DEX_PRIORITY
+PRICE_SANITY_BOUNDS
+PRICE_SANITY_MAX_DEVIATION_BPS
+CURRENT_EXECUTION_BLOCKER
+SCHEMA_VERSION
+CHAIN_IDS
+DEX_IDS
+DEFAULT_QUOTE_AMOUNT_WEI
+```
 
 ## CI Gate v2.0.0
 
-### Two Canonical Commands
+### Canonical Commands
 
-```powershell
-# OFFLINE (always works)
+```bash
+# Offline (ALWAYS works, IGNORES ALL ENV)
 python scripts/ci_m5_0_gate.py --offline
 
-# ONLINE (runs real scan)
+# Online (runs real scan)
 python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 ```
 
-### Mode Rules
+### Exit Codes
 
-| Mode | Creates | Ignores | Validates |
-|------|---------|---------|-----------|
-| `--offline` | `ci_m5_0_gate_offline_<ts>/` | ALL ENV | Fixture |
-| `--online` | `ci_m5_0_gate_<ts>/` | ARBY_RUN_DIR | Real |
+| Code | Meaning |
+|------|---------|
+| 0 | PASS |
+| 1 | FAIL validation |
+| 2 | FAIL missing artifacts |
+| 3 | FAIL scanner error |
 
----
+## Test Import Contract
 
-## Known Issues
+The "police" test catches Enum drift before suite fails:
 
-### ⚠️ P1: Sushi V3 fee=3000 Bad Quote
+```bash
+# Run FIRST (< 0.2 seconds)
+python -m pytest tests/unit/test_imports_contract.py -v
 
-**Symptom**: sushiswap_v3 fee=3000 returns ~8.6 USDC for 1 WETH
-
-**Status**: Gate REJECTS correctly. Root cause NOT fixed.
-
-**Workaround**: Excluded from `real_m5_0_golden.yaml`.
-
----
-
-## Contracts
-
-### 1. Backward Compatibility
-
-```python
-# These MUST exist in core.constants:
-from core.constants import DexType      # REQUIRED
-from core.constants import TokenStatus  # REQUIRED
-from core.constants import ExecutionBlocker  # REQUIRED
+# If it fails → restore symbol in core/constants.py
+# DO NOT weaken the test!
 ```
-
-### 2. Price Orientation
-
-Price = `quote_token per 1 base_token`
-
-### 3. NO INVERSION
-
-`inversion_applied` is **ALWAYS** `False`
-
-### 4. AnchorQuote.dex_id
-
-`dex_id` is a **REQUIRED** field
-
-### 5. Execution Blocker
-
-Use `EXECUTION_DISABLED` (stage-agnostic, NOT `_M4`)
-
----
 
 ## Definition of Done
 
-```powershell
-# 1. Add untracked files
-git add tests/unit/test_imports_contract.py
-git add config/real_m5_0_golden.yaml
-
-# 2. Import smoke tests
-python -m pytest tests/unit/test_imports_contract.py -v
-
-# 3. All unit tests
-python -m pytest tests/unit -q
-
-# 4. Offline gate
-python scripts/ci_m5_0_gate.py --offline
-
-# 5. Online gate (optional)
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
-
-# 6. Verify artifacts
-dir data\runs\ci_m5_0_gate_*
-```
-
----
+- [x] TradeDirection restored in core.constants
+- [x] test_imports_contract.py covers all 5 Enums
+- [x] "constants must not shrink" regression test
+- [x] ci_m5_0_gate.py --offline works
+- [x] API Stability Policy documented
+- [ ] core.models imports without error (needs repo sync)
+- [ ] Full test suite green (needs repo sync)
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `core/constants.py` | DexType, TokenStatus, EXECUTION_DISABLED |
-| `core/validators.py` | AnchorQuote.dex_id required |
-| `scripts/ci_m5_0_gate.py` | v2.0.0: --offline/--online |
-| `monitoring/truth_report.py` | EXECUTION_DISABLED (not _M4) |
-| `dex/adapters/algebra.py` | Real pool address in diagnostics |
-| `tests/unit/test_imports_contract.py` | NEW: import smoke tests |
-| `tests/unit/test_ci_m5_0_gate.py` | Mode tests |
-| `tests/unit/test_algebra_adapter.py` | Stable field tests |
-| `tests/unit/test_price_sanity_inversion.py` | Contract tests |
-| `config/real_m5_0_golden.yaml` | NEW: stable golden config |
-| `docs/TESTING.md` | Canonical commands |
-
----
+| core/constants.py | +TradeDirection, API stability comment |
+| core/validators.py | AnchorQuote.dex_id required |
+| monitoring/__init__.py | Export all symbols |
+| monitoring/truth_report.py | EXECUTION_DISABLED (not _M4) |
+| scripts/ci_m5_0_gate.py | v2.0.0, --offline/--online |
+| tests/unit/test_imports_contract.py | +TradeDirection, regression guard |
+| tests/unit/test_ci_m5_0_gate.py | Mode tests |
+| docs/status/Status_M5_0.md | API stability policy |
 
 ## Apply Commands
 
 ```powershell
-# 1. Copy files
+# Copy files
 Copy-Item outputs/core/constants.py core/
 Copy-Item outputs/core/validators.py core/
-Copy-Item outputs/scripts/ci_m5_0_gate.py scripts/
+Copy-Item outputs/monitoring/__init__.py monitoring/
 Copy-Item outputs/monitoring/truth_report.py monitoring/
-Copy-Item outputs/dex/adapters/algebra.py dex/adapters/
+Copy-Item outputs/scripts/ci_m5_0_gate.py scripts/
 Copy-Item outputs/tests/unit/test_imports_contract.py tests/unit/
 Copy-Item outputs/tests/unit/test_ci_m5_0_gate.py tests/unit/
-Copy-Item outputs/tests/unit/test_algebra_adapter.py tests/unit/
-Copy-Item outputs/tests/unit/test_price_sanity_inversion.py tests/unit/
-Copy-Item outputs/config/real_m5_0_golden.yaml config/
-Copy-Item outputs/docs/TESTING.md docs/
 Copy-Item outputs/docs/status/Status_M5_0.md docs/status/
 
-# 2. Add NEW files to Git (CRITICAL for CI)
-git add tests/unit/test_imports_contract.py
-git add config/real_m5_0_golden.yaml
-
-# 3. Verify imports
+# Run import tests FIRST
 python -m pytest tests/unit/test_imports_contract.py -v
 
-# 4. All unit tests
-python -m pytest tests/unit -q
+# Verify core.models imports
+python -c "import core.models; print('core.models ok')"
 
-# 5. Offline gate
+# Run gate
 python scripts/ci_m5_0_gate.py --offline
 
-# 6. Commit
+# Commit
 git add -A
-git commit -m "fix(M5_0): back-compat + gate v2.0.0 + untracked files"
+git commit -m "fix(M5_0): TradeDirection (wave 4) + API stability policy"
 ```

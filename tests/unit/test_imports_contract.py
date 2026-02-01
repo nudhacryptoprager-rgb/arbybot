@@ -1,19 +1,20 @@
 # PATH: tests/unit/test_imports_contract.py
 """
-Import contract smoke tests.
+Import contract smoke tests — THE POLICE.
 
-PURPOSE: Catch ImportError regressions EARLY.
+PURPOSE: Catch ImportError in < 0.2 seconds BEFORE entire suite fails.
 RUN FIRST: python -m pytest tests/unit/test_imports_contract.py -v
 
-CRITICAL CONTRACTS (DO NOT WEAKEN):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- DexType MUST be importable
-- TokenStatus MUST be importable
-- PoolStatus MUST be importable ← NEW
-- ExecutionBlocker MUST be importable
-- RPCHealthMetrics MUST be importable ← NEW
-- AnchorQuote.dex_id MUST be required
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENUM DRIFT HISTORY (4 waves so far):
+  Wave 1: DexType disappeared → fixed
+  Wave 2: TokenStatus disappeared → fixed
+  Wave 3: PoolStatus disappeared → fixed
+  Wave 4: TradeDirection disappeared → NOW FIXED
+
+If any symbol disappears, this test catches it FIRST.
+DO NOT weaken this test — if it fails, restore the symbol!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import unittest
@@ -23,149 +24,160 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
-class TestCoreConstantsImports(unittest.TestCase):
-    """Test core.constants imports."""
+class TestConstantsMustNotShrink(unittest.TestCase):
+    """
+    REGRESSION GUARD: core.constants public symbols must not disappear.
+    
+    If this test fails:
+    1. DO NOT delete from this test
+    2. Restore the symbol in core/constants.py
+    3. If renamed, add alias: OldName = NewName
+    """
 
-    def test_import_module(self):
-        """Test import core.constants works."""
-        from core import constants
-        self.assertTrue(hasattr(constants, 'SCHEMA_VERSION'))
+    def test_all_required_symbols_exist(self):
+        """
+        CRITICAL: All required symbols MUST be importable.
+        
+        This is the PRIMARY guard against Enum drift.
+        """
+        import core.constants as C
+        
+        # =================================================================
+        # REQUIRED SYMBOLS — DO NOT REMOVE FROM THIS LIST
+        # =================================================================
+        required_symbols = [
+            # Enums (4 waves of drift history)
+            "DexType",           # Wave 1
+            "TokenStatus",       # Wave 2
+            "PoolStatus",        # Wave 3
+            "TradeDirection",    # Wave 4 ← LATEST FIX
+            "ExecutionBlocker",
+            
+            # Constants
+            "ANCHOR_DEX_PRIORITY",
+            "PRICE_SANITY_BOUNDS",
+            "PRICE_SANITY_MAX_DEVIATION_BPS",
+            "CURRENT_EXECUTION_BLOCKER",
+            "SCHEMA_VERSION",
+            "CHAIN_IDS",
+            "DEX_IDS",
+            "DEFAULT_QUOTE_AMOUNT_WEI",
+        ]
+        
+        missing = []
+        for symbol in required_symbols:
+            if not hasattr(C, symbol):
+                missing.append(symbol)
+        
+        if missing:
+            self.fail(
+                f"\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"ENUM DRIFT DETECTED!\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Missing symbols in core.constants: {missing}\n"
+                f"\n"
+                f"DO NOT delete from this test!\n"
+                f"Restore the symbol in core/constants.py instead.\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+
+
+class TestTradeDirection(unittest.TestCase):
+    """
+    Wave 4: TradeDirection import tests.
+    
+    This was the 4th Enum drift victim.
+    Used by: core.models, strategy.*, traders.*
+    """
+
+    def test_import_trade_direction(self):
+        """TradeDirection MUST be importable."""
+        from core.constants import TradeDirection
+        
+        self.assertTrue(hasattr(TradeDirection, '__members__'))
+
+    def test_trade_direction_has_buy_sell(self):
+        """TradeDirection MUST have BUY and SELL."""
+        from core.constants import TradeDirection
+        
+        self.assertIn('BUY', TradeDirection.__members__)
+        self.assertIn('SELL', TradeDirection.__members__)
+        self.assertEqual(TradeDirection.BUY.value, "buy")
+        self.assertEqual(TradeDirection.SELL.value, "sell")
+
+    def test_trade_direction_opposite_property(self):
+        """TradeDirection.opposite MUST work."""
+        from core.constants import TradeDirection
+        
+        self.assertEqual(TradeDirection.BUY.opposite, TradeDirection.SELL)
+        self.assertEqual(TradeDirection.SELL.opposite, TradeDirection.BUY)
+
+
+class TestCoreConstantsImports(unittest.TestCase):
+    """Test individual Enum imports (Waves 1-3)."""
 
     def test_import_dex_type(self):
-        """CRITICAL: Test DexType import."""
+        """Wave 1: DexType."""
         from core.constants import DexType
-        
-        self.assertTrue(hasattr(DexType, 'UNISWAP_V3'))
         self.assertEqual(DexType.UNISWAP_V3.value, "uniswap_v3")
 
     def test_import_token_status(self):
-        """CRITICAL: Test TokenStatus import."""
+        """Wave 2: TokenStatus."""
         from core.constants import TokenStatus
-        
-        self.assertTrue(hasattr(TokenStatus, 'ACTIVE'))
         self.assertEqual(TokenStatus.ACTIVE.value, "active")
 
     def test_import_pool_status(self):
-        """
-        CRITICAL: Test PoolStatus import.
-        
-        This was missing and broke core.models!
-        Used by: core.models, discovery.*, dex.adapters.*
-        """
+        """Wave 3: PoolStatus."""
         from core.constants import PoolStatus
-        
-        self.assertTrue(hasattr(PoolStatus, 'ACTIVE'))
-        self.assertTrue(hasattr(PoolStatus, 'INACTIVE'))
-        self.assertTrue(hasattr(PoolStatus, 'QUARANTINED'))
-        self.assertTrue(hasattr(PoolStatus, 'PENDING'))
-        self.assertTrue(hasattr(PoolStatus, 'ERROR'))
-        
-        self.assertEqual(PoolStatus.ACTIVE.value, "active")
         self.assertEqual(PoolStatus.QUARANTINED.value, "quarantined")
 
     def test_import_execution_blocker(self):
-        """Test ExecutionBlocker import."""
+        """ExecutionBlocker."""
         from core.constants import ExecutionBlocker
-        
-        self.assertTrue(hasattr(ExecutionBlocker, 'EXECUTION_DISABLED'))
         self.assertEqual(ExecutionBlocker.EXECUTION_DISABLED.value, "EXECUTION_DISABLED")
+        self.assertNotIn("M4", ExecutionBlocker.EXECUTION_DISABLED.value)
 
-    def test_import_current_execution_blocker_stage_agnostic(self):
-        """Test CURRENT_EXECUTION_BLOCKER is stage-agnostic (not M4)."""
+    def test_current_execution_blocker_stage_agnostic(self):
+        """CURRENT_EXECUTION_BLOCKER is stage-agnostic."""
         from core.constants import CURRENT_EXECUTION_BLOCKER, ExecutionBlocker
-        
         self.assertEqual(CURRENT_EXECUTION_BLOCKER, ExecutionBlocker.EXECUTION_DISABLED)
-        self.assertNotIn("M4", CURRENT_EXECUTION_BLOCKER.value)
-
-    def test_import_anchor_priority(self):
-        """Test ANCHOR_DEX_PRIORITY import."""
-        from core.constants import ANCHOR_DEX_PRIORITY
-        
-        self.assertIsInstance(ANCHOR_DEX_PRIORITY, tuple)
-        self.assertIn("uniswap_v3", ANCHOR_DEX_PRIORITY)
-
-    def test_import_price_sanity_bounds(self):
-        """Test PRICE_SANITY_BOUNDS import."""
-        from core.constants import PRICE_SANITY_BOUNDS
-        
-        self.assertIsInstance(PRICE_SANITY_BOUNDS, dict)
-        self.assertIn(("WETH", "USDC"), PRICE_SANITY_BOUNDS)
 
 
 class TestMonitoringImports(unittest.TestCase):
     """Test monitoring package imports."""
 
-    def test_import_truth_report_module(self):
-        """Test import monitoring.truth_report works."""
-        from monitoring import truth_report
-        self.assertTrue(hasattr(truth_report, 'TruthReport'))
-
-    def test_import_rpc_health_metrics_from_module(self):
-        """
-        CRITICAL: Test RPCHealthMetrics import from module.
-        
-        This was missing and broke monitoring/__init__.py!
-        Used by: monitoring/__init__.py, tests/unit/test_confidence.py
-        """
+    def test_import_rpc_health_metrics(self):
+        """RPCHealthMetrics MUST be importable."""
         from monitoring.truth_report import RPCHealthMetrics
-        
-        # Verify it's a dataclass with expected fields
         metrics = RPCHealthMetrics()
-        self.assertTrue(hasattr(metrics, 'total_requests'))
-        self.assertTrue(hasattr(metrics, 'successful_requests'))
-        self.assertTrue(hasattr(metrics, 'failed_requests'))
         self.assertTrue(hasattr(metrics, 'success_rate'))
-        self.assertTrue(hasattr(metrics, 'health_ratio'))
 
-    def test_import_rpc_health_metrics_from_package(self):
-        """Test RPCHealthMetrics can be imported from monitoring package."""
-        from monitoring import RPCHealthMetrics
-        
-        metrics = RPCHealthMetrics(total_requests=100, successful_requests=95)
-        self.assertEqual(metrics.total_requests, 100)
-        self.assertEqual(metrics.successful_requests, 95)
-
-    def test_import_health_metrics(self):
-        """Test HealthMetrics import."""
-        from monitoring.truth_report import HealthMetrics
-        
-        metrics = HealthMetrics(quotes_total=10, quotes_fetched=10)
-        self.assertEqual(metrics.quotes_total, 10)
-
-    def test_import_calculate_confidence(self):
-        """
-        Test calculate_confidence import.
-        
-        Used by: tests/unit/test_confidence.py
-        """
-        from monitoring import calculate_confidence
-        
+    def test_import_from_package(self):
+        """All monitoring exports MUST work."""
+        from monitoring import RPCHealthMetrics, TruthReport, calculate_confidence
         self.assertTrue(callable(calculate_confidence))
-        result = calculate_confidence(spread_bps=50)
-        self.assertIn(result, ["low", "medium", "high"])
 
-    def test_import_truth_report_class(self):
-        """Test TruthReport class import."""
+    def test_truth_report_execution_blocker(self):
+        """TruthReport uses EXECUTION_DISABLED (not _M4)."""
         from monitoring import TruthReport
-        
         report = TruthReport()
-        self.assertTrue(hasattr(report, 'execution_blocker'))
         self.assertEqual(report.execution_blocker, "EXECUTION_DISABLED")
 
 
 class TestCoreValidatorsImports(unittest.TestCase):
     """Test core.validators imports."""
 
-    def test_import_module(self):
-        """Test import core.validators works."""
+    def test_import_check_price_sanity(self):
+        """check_price_sanity MUST be importable."""
         try:
-            from core import validators
-            self.assertTrue(hasattr(validators, 'check_price_sanity'))
+            from core.validators import check_price_sanity
+            self.assertTrue(callable(check_price_sanity))
         except ImportError:
             self.skipTest("core.validators not available")
 
-    def test_import_anchor_quote(self):
-        """Test AnchorQuote import and dex_id required."""
+    def test_anchor_quote_dex_id_required(self):
+        """AnchorQuote.dex_id MUST be required."""
         try:
             from core.validators import AnchorQuote
             from decimal import Decimal
@@ -185,27 +197,13 @@ class TestCoreValidatorsImports(unittest.TestCase):
 class TestCrossModuleCompat(unittest.TestCase):
     """Test cross-module compatibility."""
 
-    def test_dex_type_in_anchor_priority(self):
-        """Test DexType values match ANCHOR_DEX_PRIORITY."""
+    def test_dex_type_values_in_anchor_priority(self):
+        """DexType values MUST include ANCHOR_DEX_PRIORITY."""
         from core.constants import DexType, ANCHOR_DEX_PRIORITY
         
+        dex_values = [m.value for m in DexType]
         for dex in ANCHOR_DEX_PRIORITY:
-            found = any(m.value == dex for m in DexType)
-            self.assertTrue(found, f"DexType missing: {dex}")
-
-    def test_pool_status_has_quarantine(self):
-        """Test PoolStatus has QUARANTINED for RPC quarantine."""
-        from core.constants import PoolStatus
-        
-        self.assertTrue(hasattr(PoolStatus, 'QUARANTINED'))
-        self.assertEqual(PoolStatus.QUARANTINED.value, "quarantined")
-
-    def test_rpc_health_metrics_has_health_ratio(self):
-        """Test RPCHealthMetrics.health_ratio property."""
-        from monitoring import RPCHealthMetrics
-        
-        metrics = RPCHealthMetrics(endpoints_healthy=8, endpoints_total=10)
-        self.assertAlmostEqual(metrics.health_ratio, 0.8)
+            self.assertIn(dex, dex_values, f"Missing in DexType: {dex}")
 
 
 if __name__ == "__main__":

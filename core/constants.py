@@ -2,18 +2,22 @@
 """
 Core constants for ARBY.
 
-BACKWARD COMPATIBILITY CONTRACT (CRITICAL):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+API STABILITY POLICY (M5_0+):
 PUBLIC SYMBOLS ONLY GROW, NEVER DISAPPEAR.
 
-Required symbols (DO NOT REMOVE):
-- DexType (core.models, dex.adapters.*)
-- TokenStatus (core.models, discovery.*)
-- PoolStatus (core.models) ← WAS MISSING!
-- ExecutionBlocker (monitoring.truth_report)
+Required symbols (DO NOT REMOVE - will break core.models):
+- DexType        (Wave 1 drift - fixed)
+- TokenStatus    (Wave 2 drift - fixed)
+- PoolStatus     (Wave 3 drift - fixed)
+- TradeDirection (Wave 4 drift - NOW FIXED)
+- ExecutionBlocker
+- ANCHOR_DEX_PRIORITY
+- PRICE_SANITY_BOUNDS
 
-If renamed → provide alias to old name.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+If renamed → MUST provide alias to old name.
+If deprecated → MUST keep alias for 2 milestones minimum.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 from decimal import Decimal
@@ -28,7 +32,8 @@ SCHEMA_VERSION = "3.2.0"
 
 
 # =============================================================================
-# DEX TYPE (CRITICAL - DO NOT REMOVE)
+# DEX TYPE (Wave 1 - DO NOT REMOVE)
+# Used by: core.models, dex.adapters.*
 # =============================================================================
 
 class DexType(str, Enum):
@@ -50,7 +55,8 @@ class DexType(str, Enum):
 
 
 # =============================================================================
-# TOKEN STATUS (CRITICAL - DO NOT REMOVE)
+# TOKEN STATUS (Wave 2 - DO NOT REMOVE)
+# Used by: core.models, discovery.*
 # =============================================================================
 
 class TokenStatus(str, Enum):
@@ -62,17 +68,12 @@ class TokenStatus(str, Enum):
 
 
 # =============================================================================
-# POOL STATUS (CRITICAL - DO NOT REMOVE)
+# POOL STATUS (Wave 3 - DO NOT REMOVE)
 # Used by: core.models, discovery.*, dex.adapters.*
 # =============================================================================
 
 class PoolStatus(str, Enum):
-    """
-    Pool status in the system.
-    
-    CRITICAL: This enum MUST exist for backward compatibility.
-    Used by: core.models, discovery.*, dex.adapters.*
-    """
+    """Pool status in the system."""
     ACTIVE = "active"
     INACTIVE = "inactive"
     QUARANTINED = "quarantined"
@@ -81,7 +82,28 @@ class PoolStatus(str, Enum):
 
 
 # =============================================================================
-# EXECUTION BLOCKERS
+# TRADE DIRECTION (Wave 4 - DO NOT REMOVE)
+# Used by: core.models, strategy.*, traders.*
+# =============================================================================
+
+class TradeDirection(str, Enum):
+    """
+    Trade direction for arbitrage.
+    
+    CRITICAL: This enum MUST exist for backward compatibility.
+    Used by: core.models, strategy.*, traders.*
+    """
+    BUY = "buy"
+    SELL = "sell"
+    
+    @property
+    def opposite(self) -> "TradeDirection":
+        """Get opposite direction."""
+        return TradeDirection.SELL if self == TradeDirection.BUY else TradeDirection.BUY
+
+
+# =============================================================================
+# EXECUTION BLOCKERS (DO NOT REMOVE)
 # =============================================================================
 
 class ExecutionBlocker(str, Enum):
@@ -110,7 +132,7 @@ CURRENT_EXECUTION_BLOCKER = ExecutionBlocker.EXECUTION_DISABLED
 
 
 # =============================================================================
-# ANCHOR DEX PRIORITY
+# ANCHOR DEX PRIORITY (DO NOT REMOVE)
 # =============================================================================
 
 ANCHOR_DEX_PRIORITY: Tuple[str, ...] = (
@@ -123,7 +145,7 @@ DEFAULT_ANCHOR_DEX = "uniswap_v3"
 
 
 # =============================================================================
-# PRICE SANITY BOUNDS
+# PRICE SANITY BOUNDS (DO NOT REMOVE)
 # =============================================================================
 
 PRICE_SANITY_MAX_DEVIATION_BPS = 5000
