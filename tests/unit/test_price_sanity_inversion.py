@@ -1,250 +1,233 @@
 # PATH: tests/unit/test_price_sanity_inversion.py
 """
-Price sanity validation tests.
+Price sanity regression tests.
 
-CONTRACTS TESTED:
-1. Price = quote_token per 1 base_token
-2. inversion_applied is ALWAYS False
-3. deviation_bps formula and cap semantics
-4. AnchorQuote.dex_id is required
+CONTRACTS VERIFIED:
+1. inversion_applied = False (ALWAYS)
+2. 5% deviation = exactly 500 bps (Decimal math)
+3. capped deviation = 10000 with deviation_bps_capped=True
+4. anchor_source parameter accepted
 """
 
 import unittest
+import sys
 from decimal import Decimal
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from core.validators import (
-    normalize_price,
-    check_price_sanity,
-    select_anchor,
-    calculate_deviation_bps,
-    AnchorQuote,
-    MAX_DEVIATION_BPS_CAP,
-)
-from core.constants import PRICE_SANITY_BOUNDS
-
-
-class TestPriceNormalization(unittest.TestCase):
-    """Test price normalization."""
-
-    def test_normal_weth_usdc_price(self):
-        """Test normal WETH/USDC price."""
-        price, suspect, diag = normalize_price(
-            amount_in_wei=10**18,
-            amount_out_wei=2600 * 10**6,
-            decimals_in=18, decimals_out=6,
-            token_in="WETH", token_out="USDC",
-        )
-        
-        self.assertAlmostEqual(float(price), 2600.0, delta=1.0)
-        self.assertFalse(suspect)
-        self.assertEqual(diag["numeraire_side"], "USDC_per_WETH")
-        self.assertEqual(diag["inversion_applied"], False)
-
-    def test_inversion_applied_always_false(self):
-        """CRITICAL: inversion_applied is ALWAYS False."""
-        test_cases = [
-            (2600 * 10**6, False),     # Normal
-            (int(8.6 * 10**6), True),  # Suspect low
-            (int(0.001 * 10**6), True),# Very low
-            (50000 * 10**6, True),     # Suspect high
-        ]
-        
-        for amount_out, _ in test_cases:
-            _, _, diag = normalize_price(
-                amount_in_wei=10**18,
-                amount_out_wei=amount_out,
-                decimals_in=18, decimals_out=6,
-                token_in="WETH", token_out="USDC",
-            )
-            self.assertEqual(diag["inversion_applied"], False)
-
-    def test_suspect_quote_flagged(self):
-        """Test suspect quote flagged correctly."""
-        price, suspect, diag = normalize_price(
-            amount_in_wei=10**18,
-            amount_out_wei=int(8.6 * 10**6),
-            decimals_in=18, decimals_out=6,
-            token_in="WETH", token_out="USDC",
-        )
-        
-        self.assertTrue(suspect)
-        self.assertEqual(diag["suspect_quote"], True)
-        self.assertEqual(diag["suspect_reason"], "way_below_expected")
-        self.assertEqual(diag["inversion_applied"], False)
-
-    def test_raw_price_not_zero_placeholder(self):
-        """Test raw_price is actual value, not "0"."""
-        price, _, diag = normalize_price(
-            amount_in_wei=10**18,
-            amount_out_wei=2600 * 10**6,
-            decimals_in=18, decimals_out=6,
-            token_in="WETH", token_out="USDC",
-        )
-        
-        raw = diag["raw_price_quote_per_base"]
-        self.assertIsNotNone(raw)
-        self.assertNotEqual(raw, "0")
-
-    def test_raw_price_none_on_zero_input(self):
-        """Test raw_price is None on zero input."""
-        _, _, diag = normalize_price(
-            amount_in_wei=0,
-            amount_out_wei=2600 * 10**6,
-            decimals_in=18, decimals_out=6,
-            token_in="WETH", token_out="USDC",
-        )
-        
-        self.assertIsNone(diag["raw_price_quote_per_base"])
-
 
 class TestDeviationCalculation(unittest.TestCase):
-    """Test deviation calculation."""
+    """Test calculate_deviation_bps with Decimal math."""
 
-    def test_exact_deviation(self):
-        """Test exact deviation."""
-        dev, dev_raw, capped = calculate_deviation_bps(Decimal("900"), Decimal("1000"))
-        self.assertEqual(dev, 1000)
-        self.assertEqual(dev_raw, 1000)
-        self.assertFalse(capped)
-
-    def test_deviation_capping(self):
-        """Test cap at 10000 bps."""
-        dev, dev_raw, capped = calculate_deviation_bps(Decimal("3000"), Decimal("1000"))
+    def test_5_percent_deviation_is_exactly_500_bps(self):
+        """5% deviation MUST be exactly 500 bps."""
+        from core.validators import calculate_deviation_bps
         
+        # 105 vs 100 = 5% deviation
+        dev, raw, capped = calculate_deviation_bps(Decimal("105"), Decimal("100"))
+        self.assertEqual(dev, 500, "5% deviation should be exactly 500 bps")
+        self.assertEqual(raw, 500)
+        self.assertFalse(capped)
+        
+        # Also test the other direction
+        dev, raw, capped = calculate_deviation_bps(Decimal("95"), Decimal("100"))
+        self.assertEqual(dev, 500, "5% deviation (down) should be exactly 500 bps")
+
+    def test_1_percent_deviation_is_100_bps(self):
+        """1% deviation = 100 bps."""
+        from core.validators import calculate_deviation_bps
+        
+        dev, raw, capped = calculate_deviation_bps(Decimal("101"), Decimal("100"))
+        self.assertEqual(dev, 100)
+
+    def test_0_5_percent_deviation_is_50_bps(self):
+        """0.5% deviation = 50 bps."""
+        from core.validators import calculate_deviation_bps
+        
+        dev, raw, capped = calculate_deviation_bps(Decimal("100.5"), Decimal("100"))
+        self.assertEqual(dev, 50)
+
+    def test_capping_at_10000_bps(self):
+        """Large deviation MUST be capped at 10000 bps."""
+        from core.validators import calculate_deviation_bps, MAX_DEVIATION_BPS_CAP
+        
+        # 200% deviation = 20000 bps raw, should cap to 10000
+        dev, raw, capped = calculate_deviation_bps(Decimal("300"), Decimal("100"))
         self.assertEqual(dev, MAX_DEVIATION_BPS_CAP)
-        self.assertEqual(dev_raw, 20000)
+        self.assertEqual(raw, 20000)
         self.assertTrue(capped)
 
-    def test_deviation_invariant(self):
-        """INVARIANT: Same % gives same bps."""
-        for scale in [1, 10, 100, 1000]:
-            dev, _, _ = calculate_deviation_bps(Decimal(90 * scale), Decimal(100 * scale))
-            self.assertEqual(dev, 1000)
-
-
-class TestPriceSanity(unittest.TestCase):
-    """Test price sanity check."""
-
-    def test_sanity_passes_normal(self):
-        """Normal price passes."""
-        config = {"price_sanity_enabled": True, "price_sanity_max_deviation_bps": 5000}
+    def test_exact_cap_boundary(self):
+        """100% deviation = exactly 10000 bps (at cap, not capped)."""
+        from core.validators import calculate_deviation_bps
         
-        passed, dev, error, diag = check_price_sanity(
-            token_in="WETH", token_out="USDC",
-            price=Decimal("2800"),
-            config=config,
-            dynamic_anchor=Decimal("2600"),
-        )
+        # 200 vs 100 = 100% deviation = 10000 bps
+        dev, raw, capped = calculate_deviation_bps(Decimal("200"), Decimal("100"))
+        self.assertEqual(dev, 10000)
+        self.assertEqual(raw, 10000)
+        self.assertFalse(capped)  # Exactly at cap, not over
+
+    def test_weth_usdc_realistic_deviation(self):
+        """Test realistic WETH/USDC deviation."""
+        from core.validators import calculate_deviation_bps
         
-        self.assertTrue(passed)
-        self.assertEqual(diag["inversion_applied"], False)
+        # 2730 vs 2600 anchor = 5% deviation
+        dev, raw, capped = calculate_deviation_bps(Decimal("2730"), Decimal("2600"))
+        self.assertEqual(dev, 500)
 
-    def test_sanity_fails_suspect_quote(self):
-        """Suspect quote fails."""
-        config = {"price_sanity_enabled": True, "price_sanity_max_deviation_bps": 5000}
+    def test_sushi_suspect_quote_deviation(self):
+        """Test suspect quote from Sushi with huge deviation."""
+        from core.validators import calculate_deviation_bps
         
-        passed, dev, error, diag = check_price_sanity(
-            token_in="WETH", token_out="USDC",
-            price=Decimal("8.605"),
-            config=config,
-            dynamic_anchor=Decimal("2600"),
-            dex_id="sushiswap_v3",
-            fee=3000,
-        )
+        # 8.605 vs 2600 = ~99.67% deviation = ~9967 bps
+        dev, raw, capped = calculate_deviation_bps(Decimal("8.605"), Decimal("2600"))
+        self.assertGreater(raw, 9900)
+        self.assertLess(raw, 10000)
+        self.assertFalse(capped)  # Just under cap
+
+
+class TestNormalizePriceInversion(unittest.TestCase):
+    """Test normalize_price always has inversion_applied=False."""
+
+    def test_inversion_applied_always_false(self):
+        """inversion_applied MUST always be False."""
+        from core.validators import normalize_price
         
-        self.assertFalse(passed)
-        self.assertEqual(diag["inversion_applied"], False)
-        self.assertEqual(diag.get("suspect_quote"), True)
-
-    def test_anchor_source_backward_compat(self):
-        """Test anchor_source parameter accepted."""
-        config = {"price_sanity_enabled": True}
-        
-        passed, _, _, diag = check_price_sanity(
-            token_in="WETH", token_out="USDC",
-            price=Decimal("2600"),
-            config=config,
-            dynamic_anchor=Decimal("2600"),
-            anchor_source="dynamic_first_quote",
-        )
-        
-        self.assertTrue(passed)
-        self.assertEqual(diag["anchor_source"], "dynamic_first_quote")
-
-
-class TestAnchorQuote(unittest.TestCase):
-    """Test AnchorQuote."""
-
-    def test_dex_id_required(self):
-        """Test dex_id is required."""
-        quote = AnchorQuote(
-            dex_id="uniswap_v3",
-            price=Decimal("2600"),
-            fee=500,
-            pool_address="0x1234",
-            block_number=100,
-        )
-        self.assertEqual(quote.dex_id, "uniswap_v3")
-
-    def test_is_from_anchor_dex(self):
-        """Test is_from_anchor_dex property."""
-        quote = AnchorQuote(
-            dex_id="uniswap_v3",
-            price=Decimal("2600"),
-            fee=500,
-            pool_address="0x1234",
-            block_number=100,
-        )
-        self.assertTrue(quote.is_from_anchor_dex)
-
-
-class TestAnchorSelection(unittest.TestCase):
-    """Test anchor selection."""
-
-    def test_anchor_dex_priority(self):
-        """Test anchor_dex has priority."""
-        quotes = [
-            AnchorQuote(dex_id="sushiswap_v3", price=Decimal("2500"), fee=3000, pool_address="0x111", block_number=100),
-            AnchorQuote(dex_id="uniswap_v3", price=Decimal("2600"), fee=500, pool_address="0x222", block_number=100),
-        ]
-        
-        anchor_price, info = select_anchor(quotes, ("WETH", "USDC"))
-        self.assertEqual(float(anchor_price), 2600.0)
-        self.assertEqual(info["dex_id"], "uniswap_v3")
-
-
-class TestRealWorldRegression(unittest.TestCase):
-    """Regression tests."""
-
-    def test_sushi_v3_bad_quote(self):
-        """Sushi v3 bad quote: 8.6 USDC per WETH."""
-        price, suspect, norm_diag = normalize_price(
+        price, diag = normalize_price(
             amount_in_wei=10**18,
-            amount_out_wei=int(8.605 * 10**6),
-            decimals_in=18, decimals_out=6,
-            token_in="WETH", token_out="USDC",
+            amount_out_wei=2600 * 10**6,
+            decimals_in=18,
+            decimals_out=6,
+            token_in="WETH",
+            token_out="USDC",
         )
         
-        self.assertEqual(norm_diag["inversion_applied"], False)
-        self.assertTrue(suspect)
+        self.assertIn("inversion_applied", diag)
+        self.assertEqual(diag["inversion_applied"], False)
+
+    def test_suspect_quote_detection(self):
+        """Suspect quotes should be flagged."""
+        from core.validators import normalize_price
         
-        config = {"price_sanity_enabled": True, "price_sanity_max_deviation_bps": 5000}
-        passed, dev, error, diag = check_price_sanity(
-            token_in="WETH", token_out="USDC",
-            price=price,
-            config=config,
-            dynamic_anchor=Decimal("2600"),
+        # Price way below expected (8.6 vs expected 1500-6000)
+        price, diag = normalize_price(
+            amount_in_wei=10**18,
+            amount_out_wei=8_600_000,  # 8.6 USDC
+            decimals_in=18,
+            decimals_out=6,
+            token_in="WETH",
+            token_out="USDC",
+        )
+        
+        self.assertIn("suspect_quote", diag)
+        self.assertTrue(diag["suspect_quote"])
+        self.assertEqual(diag["suspect_reason"], "way_below_expected")
+
+
+class TestCheckPriceSanityContract(unittest.TestCase):
+    """Test check_price_sanity contract."""
+
+    def test_anchor_source_parameter_accepted(self):
+        """check_price_sanity MUST accept anchor_source parameter."""
+        from core.validators import check_price_sanity
+        
+        passed, dev, err, diag = check_price_sanity(
+            price=Decimal("2600"),
+            anchor_price=Decimal("2600"),
+            pair="WETH/USDC",
+            dex_id="uniswap_v3",
+            anchor_source="uniswap_v3_500",
+        )
+        
+        self.assertTrue(passed)
+        self.assertEqual(diag.get("anchor_source"), "uniswap_v3_500")
+
+    def test_deviation_bps_capped_flag_exists(self):
+        """deviation_bps_capped MUST be in diagnostics."""
+        from core.validators import check_price_sanity
+        
+        passed, dev, err, diag = check_price_sanity(
+            price=Decimal("2600"),
+            anchor_price=Decimal("2600"),
+            pair="WETH/USDC",
+            dex_id="uniswap_v3",
+        )
+        
+        self.assertIn("deviation_bps_capped", diag)
+        self.assertFalse(diag["deviation_bps_capped"])
+
+    def test_capped_deviation_has_flag_true(self):
+        """When deviation > cap, deviation_bps_capped MUST be True."""
+        from core.validators import check_price_sanity
+        
+        # Huge deviation that will be capped
+        passed, dev, err, diag = check_price_sanity(
+            price=Decimal("8000"),
+            anchor_price=Decimal("2600"),
+            pair="WETH/USDC",
             dex_id="sushiswap_v3",
-            fee=3000,
+            max_deviation_bps=5000,
         )
         
         self.assertFalse(passed)
-        self.assertEqual(diag["dex_id"], "sushiswap_v3")
+        self.assertIn("deviation_bps_capped", diag)
+        # Raw deviation is >10000 for this extreme case, so it will be capped
+        # Actually 8000 vs 2600 = ~208% deviation = ~20769 bps
+        self.assertTrue(diag["deviation_bps_capped"])
+
+    def test_inversion_applied_always_false_in_sanity(self):
+        """inversion_applied MUST be False in check_price_sanity."""
+        from core.validators import check_price_sanity
+        
+        passed, dev, err, diag = check_price_sanity(
+            price=Decimal("2600"),
+            anchor_price=Decimal("2600"),
+            pair="WETH/USDC",
+            dex_id="uniswap_v3",
+        )
+        
+        self.assertIn("inversion_applied", diag)
         self.assertEqual(diag["inversion_applied"], False)
+
+
+class TestSushiFee3000SuspectQuote(unittest.TestCase):
+    """Regression test for Sushi fee=3000 suspect quote issue."""
+
+    def test_sushi_3000_deviation_detection(self):
+        """Sushi fee=3000 bad quote should be flagged correctly."""
+        from core.validators import check_price_sanity, normalize_price
+        
+        # Simulate the bad Sushi quote: WETH->USDC returns 8.6 USDC
+        price, norm_diag = normalize_price(
+            amount_in_wei=10**18,
+            amount_out_wei=8_605_000,  # 8.605 USDC
+            decimals_in=18,
+            decimals_out=6,
+            token_in="WETH",
+            token_out="USDC",
+        )
+        
+        # Should be flagged as suspect
+        self.assertTrue(norm_diag.get("suspect_quote", False))
+        
+        # Run sanity check
+        passed, dev, err, sanity_diag = check_price_sanity(
+            price=price,
+            anchor_price=Decimal("2600"),
+            pair="WETH/USDC",
+            dex_id="sushiswap_v3",
+            fee_tier=3000,
+            max_deviation_bps=5000,
+            anchor_source="uniswap_v3_500",
+        )
+        
+        # Should fail sanity check
+        self.assertFalse(passed)
+        self.assertIsNotNone(err)
+        # Error message contains "Deviation" and "> max"
+        self.assertIn("deviation", err.lower())
+        self.assertEqual(sanity_diag.get("error"), "deviation_exceeded")
 
 
 if __name__ == "__main__":

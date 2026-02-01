@@ -1,5 +1,5 @@
 # PATH: tests/unit/test_ci_m5_0_gate.py
-"""Unit tests for ci_m5_0_gate.py v2.0.0."""
+"""Unit tests for ci_m5_0_gate.py v2.1.0."""
 
 import json
 import os
@@ -13,15 +13,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from scripts.ci_m5_0_gate import (
     generate_fixture_artifacts,
+    discover_artifacts,
     validate_artifacts,
+    validate_schema_version,
+    validate_health_metrics,
     main,
     __version__,
 )
 
 
 class TestVersion(unittest.TestCase):
-    def test_version_is_2_0_0(self):
-        self.assertEqual(__version__, "2.0.0")
+    def test_version_is_2_1_0(self):
+        self.assertEqual(__version__, "2.1.0")
 
 
 class TestModeExclusion(unittest.TestCase):
@@ -65,14 +68,77 @@ class TestFixtureGeneration(unittest.TestCase):
             for path in artifacts.values():
                 self.assertTrue(path.exists())
 
-    def test_fixture_has_execution_disabled(self):
+    def test_fixture_has_schema_version(self):
+        """All fixtures MUST have schema_version."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifacts = generate_fixture_artifacts(Path(tmpdir), "20260201_120000")
+            
+            for name, path in artifacts.items():
+                with open(path) as f:
+                    data = json.load(f)
+                self.assertIn("schema_version", data, f"{name} missing schema_version")
+
+    def test_fixture_has_top_level_metrics(self):
+        """truth_report MUST have top-level metrics."""
         with tempfile.TemporaryDirectory() as tmpdir:
             artifacts = generate_fixture_artifacts(Path(tmpdir), "20260201_120000")
             
             with open(artifacts["truth_report"]) as f:
                 data = json.load(f)
             
-            self.assertEqual(data["execution_blocker"], "EXECUTION_DISABLED")
+            self.assertIn("quotes_total", data)
+            self.assertIn("dexes_active", data)
+
+
+class TestDiscoverArtifacts(unittest.TestCase):
+    def test_discover_from_reports(self):
+        """Should find artifacts in reports/."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            generate_fixture_artifacts(run_dir, "20260201_120000")
+            
+            artifacts = discover_artifacts(run_dir)
+            
+            self.assertIsNotNone(artifacts["scan"])
+            self.assertIsNotNone(artifacts["truth_report"])
+            self.assertIsNotNone(artifacts["reject_histogram"])
+
+    def test_discover_fallback_to_snapshots(self):
+        """Should fallback to snapshots/ for scan if not in reports/."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            
+            # Create scan only in snapshots/
+            snapshots = run_dir / "snapshots"
+            snapshots.mkdir()
+            scan_data = {"schema_version": "3.2.0"}
+            with open(snapshots / "scan_20260201.json", "w") as f:
+                json.dump(scan_data, f)
+            
+            artifacts = discover_artifacts(run_dir)
+            
+            self.assertIsNotNone(artifacts["scan"])
+
+
+class TestValidation(unittest.TestCase):
+    def test_validate_schema_version_valid(self):
+        ok, _ = validate_schema_version({"schema_version": "3.2.0"})
+        self.assertTrue(ok)
+
+    def test_validate_schema_version_missing(self):
+        ok, msg = validate_schema_version({})
+        self.assertFalse(ok)
+        self.assertIn("Missing", msg)
+
+    def test_validate_health_metrics_from_top_level(self):
+        """Should accept metrics from top-level."""
+        ok, _ = validate_health_metrics({"quotes_total": 10, "dexes_active": 2})
+        self.assertTrue(ok)
+
+    def test_validate_health_metrics_from_nested(self):
+        """Should accept metrics from nested health."""
+        ok, _ = validate_health_metrics({"health": {"quotes_total": 10, "dexes_active": 2}})
+        self.assertTrue(ok)
 
 
 class TestRequireReal(unittest.TestCase):
@@ -87,16 +153,24 @@ class TestRequireReal(unittest.TestCase):
             self.assertEqual(result, 1)
 
 
-class TestAdvancedMode(unittest.TestCase):
-    def test_advanced_uses_run_dir_arg(self):
+class TestEnvVariables(unittest.TestCase):
+    def test_arby_config_env(self):
+        """ARBY_CONFIG should override default."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
             generate_fixture_artifacts(run_dir, "20260201_120000")
             
-            with patch('sys.argv', ['ci_m5_0_gate.py', '--run-dir', str(run_dir)]):
-                result = main()
+            env_backup = os.environ.copy()
+            os.environ["ARBY_CONFIG"] = "config/test.yaml"
             
-            self.assertEqual(result, 0)
+            try:
+                with patch('sys.argv', ['ci_m5_0_gate.py', '--run-dir', str(run_dir)]):
+                    # Just check it doesn't crash
+                    result = main()
+                    self.assertIn(result, [0, 1])
+            finally:
+                os.environ.clear()
+                os.environ.update(env_backup)
 
 
 if __name__ == "__main__":

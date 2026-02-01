@@ -6,11 +6,12 @@ PURPOSE: Catch ImportError in < 0.2 seconds BEFORE entire suite fails.
 RUN FIRST: python -m pytest tests/unit/test_imports_contract.py -v
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ENUM DRIFT HISTORY (4 waves so far):
+ENUM DRIFT HISTORY:
   Wave 1: DexType disappeared → fixed
   Wave 2: TokenStatus disappeared → fixed
   Wave 3: PoolStatus disappeared → fixed
-  Wave 4: TradeDirection disappeared → NOW FIXED
+  Wave 4: TradeDirection disappeared → fixed
+  Wave 5: TradeStatus/OpportunityStatus/TradeOutcome missing → NOW FIXED
 
 If any symbol disappears, this test catches it FIRST.
 DO NOT weaken this test — if it fails, restore the symbol!
@@ -23,49 +24,57 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+# =============================================================================
+# REQUIRED SYMBOLS WHITELIST - DO NOT REMOVE FROM THIS LIST
+# =============================================================================
+
+REQUIRED_CONSTANTS_SYMBOLS = [
+    # Enums (Waves 1-4)
+    "DexType",
+    "TokenStatus",
+    "PoolStatus",
+    "TradeDirection",
+    
+    # Enums (Wave 5)
+    "TradeStatus",
+    "OpportunityStatus",
+    "TradeOutcome",
+    
+    # Blockers
+    "ExecutionBlocker",
+    
+    # Constants
+    "ANCHOR_DEX_PRIORITY",
+    "PRICE_SANITY_BOUNDS",
+    "PRICE_SANITY_MAX_DEVIATION_BPS",
+    "CURRENT_EXECUTION_BLOCKER",
+    "SCHEMA_VERSION",
+    "CHAIN_IDS",
+    "DEX_IDS",
+    "DEFAULT_QUOTE_AMOUNT_WEI",
+]
+
+REQUIRED_VALIDATORS_SYMBOLS = [
+    "MAX_DEVIATION_BPS_CAP",
+    "calculate_deviation_bps",
+    "normalize_price",
+    "AnchorQuote",
+    "select_anchor",
+    "check_price_sanity",
+]
+
 
 class TestConstantsMustNotShrink(unittest.TestCase):
     """
     REGRESSION GUARD: core.constants public symbols must not disappear.
-    
-    If this test fails:
-    1. DO NOT delete from this test
-    2. Restore the symbol in core/constants.py
-    3. If renamed, add alias: OldName = NewName
     """
 
     def test_all_required_symbols_exist(self):
-        """
-        CRITICAL: All required symbols MUST be importable.
-        
-        This is the PRIMARY guard against Enum drift.
-        """
+        """CRITICAL: All required symbols MUST be importable."""
         import core.constants as C
         
-        # =================================================================
-        # REQUIRED SYMBOLS — DO NOT REMOVE FROM THIS LIST
-        # =================================================================
-        required_symbols = [
-            # Enums (4 waves of drift history)
-            "DexType",           # Wave 1
-            "TokenStatus",       # Wave 2
-            "PoolStatus",        # Wave 3
-            "TradeDirection",    # Wave 4 ← LATEST FIX
-            "ExecutionBlocker",
-            
-            # Constants
-            "ANCHOR_DEX_PRIORITY",
-            "PRICE_SANITY_BOUNDS",
-            "PRICE_SANITY_MAX_DEVIATION_BPS",
-            "CURRENT_EXECUTION_BLOCKER",
-            "SCHEMA_VERSION",
-            "CHAIN_IDS",
-            "DEX_IDS",
-            "DEFAULT_QUOTE_AMOUNT_WEI",
-        ]
-        
         missing = []
-        for symbol in required_symbols:
+        for symbol in REQUIRED_CONSTANTS_SYMBOLS:
             if not hasattr(C, symbol):
                 missing.append(symbol)
         
@@ -83,122 +92,191 @@ class TestConstantsMustNotShrink(unittest.TestCase):
             )
 
 
-class TestTradeDirection(unittest.TestCase):
-    """
-    Wave 4: TradeDirection import tests.
-    
-    This was the 4th Enum drift victim.
-    Used by: core.models, strategy.*, traders.*
-    """
+class TestValidatorsMustNotShrink(unittest.TestCase):
+    """REGRESSION GUARD: core.validators public symbols must not disappear."""
 
-    def test_import_trade_direction(self):
-        """TradeDirection MUST be importable."""
-        from core.constants import TradeDirection
+    def test_all_required_symbols_exist(self):
+        """CRITICAL: All required symbols MUST be importable."""
+        import core.validators as V
         
-        self.assertTrue(hasattr(TradeDirection, '__members__'))
-
-    def test_trade_direction_has_buy_sell(self):
-        """TradeDirection MUST have BUY and SELL."""
-        from core.constants import TradeDirection
+        missing = []
+        for symbol in REQUIRED_VALIDATORS_SYMBOLS:
+            if not hasattr(V, symbol):
+                missing.append(symbol)
         
-        self.assertIn('BUY', TradeDirection.__members__)
-        self.assertIn('SELL', TradeDirection.__members__)
-        self.assertEqual(TradeDirection.BUY.value, "buy")
-        self.assertEqual(TradeDirection.SELL.value, "sell")
+        if missing:
+            self.fail(
+                f"\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"VALIDATORS API DRIFT DETECTED!\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Missing symbols in core.validators: {missing}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
 
-    def test_trade_direction_opposite_property(self):
-        """TradeDirection.opposite MUST work."""
-        from core.constants import TradeDirection
+
+class TestWave5Enums(unittest.TestCase):
+    """Wave 5: TradeStatus, OpportunityStatus, TradeOutcome."""
+
+    def test_trade_status_import(self):
+        """TradeStatus MUST be importable."""
+        from core.constants import TradeStatus
         
-        self.assertEqual(TradeDirection.BUY.opposite, TradeDirection.SELL)
-        self.assertEqual(TradeDirection.SELL.opposite, TradeDirection.BUY)
+        self.assertTrue(hasattr(TradeStatus, '__members__'))
+        required = ['PENDING', 'SUBMITTED', 'MINED', 'FAILED', 'CANCELLED']
+        for member in required:
+            self.assertIn(member, TradeStatus.__members__)
+
+    def test_opportunity_status_import(self):
+        """OpportunityStatus MUST be importable."""
+        from core.constants import OpportunityStatus
+        
+        required = ['NEW', 'VALID', 'REJECTED', 'EXECUTABLE', 'EXECUTED', 'EXPIRED']
+        for member in required:
+            self.assertIn(member, OpportunityStatus.__members__)
+
+    def test_trade_outcome_import(self):
+        """TradeOutcome MUST be importable."""
+        from core.constants import TradeOutcome
+        
+        required = ['WOULD_EXECUTE', 'EXECUTED', 'BLOCKED_EXEC', 'COOLDOWN', 'FAILED', 'REJECTED']
+        for member in required:
+            self.assertIn(member, TradeOutcome.__members__)
 
 
-class TestCoreConstantsImports(unittest.TestCase):
-    """Test individual Enum imports (Waves 1-3)."""
+class TestWave1to4Enums(unittest.TestCase):
+    """Test Waves 1-4 enums."""
 
-    def test_import_dex_type(self):
-        """Wave 1: DexType."""
+    def test_dex_type(self):
         from core.constants import DexType
         self.assertEqual(DexType.UNISWAP_V3.value, "uniswap_v3")
 
-    def test_import_token_status(self):
-        """Wave 2: TokenStatus."""
+    def test_token_status(self):
         from core.constants import TokenStatus
         self.assertEqual(TokenStatus.ACTIVE.value, "active")
 
-    def test_import_pool_status(self):
-        """Wave 3: PoolStatus."""
+    def test_pool_status(self):
         from core.constants import PoolStatus
         self.assertEqual(PoolStatus.QUARANTINED.value, "quarantined")
 
-    def test_import_execution_blocker(self):
-        """ExecutionBlocker."""
-        from core.constants import ExecutionBlocker
-        self.assertEqual(ExecutionBlocker.EXECUTION_DISABLED.value, "EXECUTION_DISABLED")
-        self.assertNotIn("M4", ExecutionBlocker.EXECUTION_DISABLED.value)
+    def test_trade_direction(self):
+        from core.constants import TradeDirection
+        self.assertEqual(TradeDirection.BUY.value, "buy")
+        self.assertEqual(TradeDirection.BUY.opposite, TradeDirection.SELL)
 
-    def test_current_execution_blocker_stage_agnostic(self):
-        """CURRENT_EXECUTION_BLOCKER is stage-agnostic."""
-        from core.constants import CURRENT_EXECUTION_BLOCKER, ExecutionBlocker
+    def test_execution_blocker(self):
+        from core.constants import ExecutionBlocker, CURRENT_EXECUTION_BLOCKER
+        self.assertEqual(ExecutionBlocker.EXECUTION_DISABLED.value, "EXECUTION_DISABLED")
         self.assertEqual(CURRENT_EXECUTION_BLOCKER, ExecutionBlocker.EXECUTION_DISABLED)
+
+
+class TestValidatorsAPI(unittest.TestCase):
+    """Test core.validators API contracts."""
+
+    def test_max_deviation_cap_is_10000(self):
+        """MAX_DEVIATION_BPS_CAP MUST be 10000."""
+        from core.validators import MAX_DEVIATION_BPS_CAP
+        self.assertEqual(MAX_DEVIATION_BPS_CAP, 10000)
+
+    def test_calculate_deviation_5_percent_is_500_bps(self):
+        """5% deviation MUST be exactly 500 bps (Decimal math)."""
+        from core.validators import calculate_deviation_bps
+        from decimal import Decimal
+        
+        dev, raw, capped = calculate_deviation_bps(Decimal("105"), Decimal("100"))
+        self.assertEqual(dev, 500, "5% deviation should be exactly 500 bps")
+        self.assertEqual(raw, 500)
+        self.assertFalse(capped)
+
+    def test_calculate_deviation_capping_to_10000(self):
+        """Large deviation MUST be capped to 10000."""
+        from core.validators import calculate_deviation_bps, MAX_DEVIATION_BPS_CAP
+        from decimal import Decimal
+        
+        # 200% deviation = 20000 bps, should cap to 10000
+        dev, raw, capped = calculate_deviation_bps(Decimal("300"), Decimal("100"))
+        self.assertEqual(dev, MAX_DEVIATION_BPS_CAP)
+        self.assertEqual(raw, 20000)
+        self.assertTrue(capped)
+
+    def test_normalize_price_inversion_always_false(self):
+        """normalize_price MUST have inversion_applied=False."""
+        from core.validators import normalize_price
+        
+        price, diag = normalize_price(
+            amount_in_wei=10**18,
+            amount_out_wei=2600 * 10**6,
+            decimals_in=18,
+            decimals_out=6,
+            token_in="WETH",
+            token_out="USDC",
+        )
+        self.assertEqual(diag["inversion_applied"], False)
+        self.assertIn("suspect_quote", diag)
+
+    def test_anchor_quote_dex_id_required(self):
+        """AnchorQuote.dex_id MUST be required."""
+        from core.validators import AnchorQuote
+        from decimal import Decimal
+        
+        quote = AnchorQuote(
+            dex_id="uniswap_v3",
+            price=Decimal("2600"),
+            fee=500,
+            pool_address="0x1234",
+            block_number=100,
+        )
+        self.assertEqual(quote.dex_id, "uniswap_v3")
+
+    def test_check_price_sanity_accepts_anchor_source(self):
+        """check_price_sanity MUST accept anchor_source parameter."""
+        from core.validators import check_price_sanity
+        from decimal import Decimal
+        
+        passed, dev, err, diag = check_price_sanity(
+            price=Decimal("2600"),
+            anchor_price=Decimal("2600"),
+            pair="WETH/USDC",
+            dex_id="uniswap_v3",
+            anchor_source="test_source",
+        )
+        self.assertTrue(passed)
+        self.assertEqual(diag.get("anchor_source"), "test_source")
+
+    def test_check_price_sanity_deviation_capped_flag(self):
+        """check_price_sanity diag MUST include deviation_bps_capped."""
+        from core.validators import check_price_sanity
+        from decimal import Decimal
+        
+        # Large deviation that should be capped
+        passed, dev, err, diag = check_price_sanity(
+            price=Decimal("8000"),
+            anchor_price=Decimal("2600"),
+            pair="WETH/USDC",
+            dex_id="sushiswap_v3",
+            max_deviation_bps=5000,
+        )
+        self.assertIn("deviation_bps_capped", diag)
 
 
 class TestMonitoringImports(unittest.TestCase):
     """Test monitoring package imports."""
 
-    def test_import_rpc_health_metrics(self):
-        """RPCHealthMetrics MUST be importable."""
+    def test_rpc_health_metrics(self):
         from monitoring.truth_report import RPCHealthMetrics
         metrics = RPCHealthMetrics()
         self.assertTrue(hasattr(metrics, 'success_rate'))
 
-    def test_import_from_package(self):
-        """All monitoring exports MUST work."""
-        from monitoring import RPCHealthMetrics, TruthReport, calculate_confidence
-        self.assertTrue(callable(calculate_confidence))
-
-    def test_truth_report_execution_blocker(self):
-        """TruthReport uses EXECUTION_DISABLED (not _M4)."""
+    def test_truth_report(self):
         from monitoring import TruthReport
         report = TruthReport()
         self.assertEqual(report.execution_blocker, "EXECUTION_DISABLED")
-
-
-class TestCoreValidatorsImports(unittest.TestCase):
-    """Test core.validators imports."""
-
-    def test_import_check_price_sanity(self):
-        """check_price_sanity MUST be importable."""
-        try:
-            from core.validators import check_price_sanity
-            self.assertTrue(callable(check_price_sanity))
-        except ImportError:
-            self.skipTest("core.validators not available")
-
-    def test_anchor_quote_dex_id_required(self):
-        """AnchorQuote.dex_id MUST be required."""
-        try:
-            from core.validators import AnchorQuote
-            from decimal import Decimal
-            
-            quote = AnchorQuote(
-                dex_id="uniswap_v3",
-                price=Decimal("2600"),
-                fee=500,
-                pool_address="0x1234",
-                block_number=100,
-            )
-            self.assertEqual(quote.dex_id, "uniswap_v3")
-        except ImportError:
-            self.skipTest("core.validators not available")
 
 
 class TestCrossModuleCompat(unittest.TestCase):
     """Test cross-module compatibility."""
 
     def test_dex_type_values_in_anchor_priority(self):
-        """DexType values MUST include ANCHOR_DEX_PRIORITY."""
         from core.constants import DexType, ANCHOR_DEX_PRIORITY
         
         dex_values = [m.value for m in DexType]

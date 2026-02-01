@@ -1,26 +1,11 @@
 # PATH: monitoring/truth_report.py
-"""
-Truth Report generator for ARBY.
+"""Truth Report generator for ARBY."""
 
-BACKWARD COMPATIBILITY CONTRACT:
-- RPCHealthMetrics MUST exist
-- TruthReport MUST exist
-- calculate_confidence MUST exist
-
-M5_0: Uses EXECUTION_DISABLED (stage-agnostic).
-"""
-
-import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.constants import (
-    SCHEMA_VERSION,
-    ExecutionBlocker,
-    CURRENT_EXECUTION_BLOCKER,
-)
+from core.constants import SCHEMA_VERSION, CURRENT_EXECUTION_BLOCKER
 
 
 @dataclass
@@ -89,19 +74,7 @@ class TruthReport:
     current_block: int = 0
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "timestamp": self.timestamp,
-            "run_mode": self.run_mode,
-            "execution_enabled": self.execution_enabled,
-            "execution_blocker": self.execution_blocker,
-            "cost_model_available": self.cost_model_available,
-            "chain_id": self.chain_id,
-            "current_block": self.current_block,
-            "health": asdict(self.health),
-            "stats": self.stats,
-            "spread_signals": [asdict(s) for s in self.spread_signals],
-        }
+        return asdict(self)
 
 
 def calculate_confidence(

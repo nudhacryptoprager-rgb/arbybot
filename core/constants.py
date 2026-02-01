@@ -7,15 +7,12 @@ API STABILITY POLICY (M5_0+):
 PUBLIC SYMBOLS ONLY GROW, NEVER DISAPPEAR.
 
 Required symbols (DO NOT REMOVE - will break core.models):
-- DexType        (Wave 1 drift - fixed)
-- TokenStatus    (Wave 2 drift - fixed)
-- PoolStatus     (Wave 3 drift - fixed)
-- TradeDirection (Wave 4 drift - NOW FIXED)
+- DexType, TokenStatus, PoolStatus, TradeDirection (Waves 1-4)
+- TradeStatus, OpportunityStatus, TradeOutcome (Wave 5)
 - ExecutionBlocker
-- ANCHOR_DEX_PRIORITY
-- PRICE_SANITY_BOUNDS
+- ANCHOR_DEX_PRIORITY, PRICE_SANITY_BOUNDS, etc.
 
-If renamed → MUST provide alias to old name.
+If renamed → MUST provide alias: OldName = NewName
 If deprecated → MUST keep alias for 2 milestones minimum.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
@@ -33,7 +30,6 @@ SCHEMA_VERSION = "3.2.0"
 
 # =============================================================================
 # DEX TYPE (Wave 1 - DO NOT REMOVE)
-# Used by: core.models, dex.adapters.*
 # =============================================================================
 
 class DexType(str, Enum):
@@ -56,7 +52,6 @@ class DexType(str, Enum):
 
 # =============================================================================
 # TOKEN STATUS (Wave 2 - DO NOT REMOVE)
-# Used by: core.models, discovery.*
 # =============================================================================
 
 class TokenStatus(str, Enum):
@@ -69,7 +64,6 @@ class TokenStatus(str, Enum):
 
 # =============================================================================
 # POOL STATUS (Wave 3 - DO NOT REMOVE)
-# Used by: core.models, discovery.*, dex.adapters.*
 # =============================================================================
 
 class PoolStatus(str, Enum):
@@ -83,23 +77,60 @@ class PoolStatus(str, Enum):
 
 # =============================================================================
 # TRADE DIRECTION (Wave 4 - DO NOT REMOVE)
-# Used by: core.models, strategy.*, traders.*
 # =============================================================================
 
 class TradeDirection(str, Enum):
-    """
-    Trade direction for arbitrage.
-    
-    CRITICAL: This enum MUST exist for backward compatibility.
-    Used by: core.models, strategy.*, traders.*
-    """
+    """Trade direction for arbitrage."""
     BUY = "buy"
     SELL = "sell"
     
     @property
     def opposite(self) -> "TradeDirection":
-        """Get opposite direction."""
         return TradeDirection.SELL if self == TradeDirection.BUY else TradeDirection.BUY
+
+
+# =============================================================================
+# TRADE STATUS (Wave 5 - DO NOT REMOVE)
+# Used by: core.models, traders.*, strategy.*
+# =============================================================================
+
+class TradeStatus(str, Enum):
+    """Trade lifecycle status."""
+    PENDING = "pending"
+    SUBMITTED = "submitted"
+    MINED = "mined"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+# =============================================================================
+# OPPORTUNITY STATUS (Wave 5 - DO NOT REMOVE)
+# Used by: core.models, strategy.*
+# =============================================================================
+
+class OpportunityStatus(str, Enum):
+    """Arbitrage opportunity status."""
+    NEW = "new"
+    VALID = "valid"
+    REJECTED = "rejected"
+    EXECUTABLE = "executable"
+    EXECUTED = "executed"
+    EXPIRED = "expired"
+
+
+# =============================================================================
+# TRADE OUTCOME (Wave 5 - DO NOT REMOVE)
+# Used by: core.models, traders.*, monitoring.*
+# =============================================================================
+
+class TradeOutcome(str, Enum):
+    """Trade execution outcome."""
+    WOULD_EXECUTE = "would_execute"
+    EXECUTED = "executed"
+    BLOCKED_EXEC = "blocked_exec"
+    COOLDOWN = "cooldown"
+    FAILED = "failed"
+    REJECTED = "rejected"
 
 
 # =============================================================================
@@ -107,11 +138,7 @@ class TradeDirection(str, Enum):
 # =============================================================================
 
 class ExecutionBlocker(str, Enum):
-    """
-    Reasons why execution is blocked.
-    
-    M5_0: Use EXECUTION_DISABLED (stage-agnostic).
-    """
+    """Reasons why execution is blocked."""
     EXECUTION_DISABLED = "EXECUTION_DISABLED"
     EXECUTION_DISABLED_M4 = "EXECUTION_DISABLED_M4"  # Legacy compat
     
@@ -127,7 +154,6 @@ class ExecutionBlocker(str, Enum):
     RPC_ERROR = "RPC_ERROR"
 
 
-# M5_0+: Use stage-agnostic blocker
 CURRENT_EXECUTION_BLOCKER = ExecutionBlocker.EXECUTION_DISABLED
 
 
@@ -216,3 +242,37 @@ DEFAULT_QUOTE_AMOUNT_WEI = {
     "USDC": 1000 * 10**6,
     "USDT": 1000 * 10**6,
 }
+
+
+# =============================================================================
+# __all__ - EXPORT ALL PUBLIC SYMBOLS
+# =============================================================================
+
+__all__ = [
+    # Schema
+    "SCHEMA_VERSION",
+    
+    # Enums (Waves 1-4)
+    "DexType",
+    "TokenStatus",
+    "PoolStatus",
+    "TradeDirection",
+    
+    # Enums (Wave 5)
+    "TradeStatus",
+    "OpportunityStatus",
+    "TradeOutcome",
+    
+    # Blockers
+    "ExecutionBlocker",
+    "CURRENT_EXECUTION_BLOCKER",
+    
+    # Constants
+    "ANCHOR_DEX_PRIORITY",
+    "DEFAULT_ANCHOR_DEX",
+    "PRICE_SANITY_MAX_DEVIATION_BPS",
+    "PRICE_SANITY_BOUNDS",
+    "CHAIN_IDS",
+    "DEX_IDS",
+    "DEFAULT_QUOTE_AMOUNT_WEI",
+]
