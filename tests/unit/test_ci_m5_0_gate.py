@@ -19,6 +19,7 @@ from scripts.ci_m5_0_gate import (
     validate_health_metrics,
     main,
     __version__,
+    validate_current_block,
 )
 
 
@@ -171,6 +172,29 @@ class TestEnvVariables(unittest.TestCase):
             finally:
                 os.environ.clear()
                 os.environ.update(env_backup)
+
+
+class TestCurrentBlockValidation(unittest.TestCase):
+    def test_validate_current_block_success(self):
+        scan = {"current_block": 100}
+        truth = {"current_block": 100}
+        ok, msg = validate_current_block(scan, truth)
+        self.assertTrue(ok)
+        self.assertIn("current_block OK", msg)
+
+    def test_validate_current_block_mismatch(self):
+        scan = {"current_block": 10}
+        truth = {"current_block": 11}
+        ok, msg = validate_current_block(scan, truth)
+        self.assertFalse(ok)
+        self.assertIn("mismatch", msg)
+
+    def test_validate_current_block_missing(self):
+        scan = {"current_block": 10}
+        truth = {}
+        ok, msg = validate_current_block(scan, truth)
+        self.assertFalse(ok)
+        self.assertIn("Missing current_block", msg)
 
 
 if __name__ == "__main__":

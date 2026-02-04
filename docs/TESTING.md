@@ -92,3 +92,13 @@ python scripts/ci_m5_0_gate.py
 ```
 
 **Note**: Prefer `--offline` or `--online` for new workflows.
+
+## M5_0 Gate Semantics
+
+- `truth_report.current_block` and `scan.current_block` MUST be present at top-level when running `--online`.
+- Both fields MUST be integers > 0 and MUST be equal across `scan` and `truth_report`.
+- `--offline` mode uses fixtures and does not require RPC pin; `--online` fails hard if `current_block` is missing/invalid/mismatched.
+
+Artifacts location (canonical): `data/runs/<run>/reports/scan_*.json`, `truth_report_*.json`, `reject_histogram_*.json`.
+
+When debugging gate failures, the gate prints resolved artifact paths and schema_version to help identify mismatched runners.

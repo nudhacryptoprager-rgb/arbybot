@@ -209,10 +209,12 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
         return False, messages
     
     # Validate each artifact
+    loaded_data: Dict[str, Dict[str, Any]] = {}
     for name, path in artifacts.items():
         try:
             with open(path) as f:
                 data = json.load(f)
+            loaded_data[name] = data
             
             # Validate schema_version (required for all)
             ok, msg = validate_schema_version(data)
@@ -234,18 +236,6 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                 messages.append(f"{'OK' if ok else 'FAIL'}: {name} - {msg}")
                 if not ok:
                     all_passed = False
-                # If requiring real artifacts, ensure current_block is not a sentinel
-                if require_real:
-                    try:
-                        from core.constants import FAKE_BLOCK_SENTINELS
-                        cb = data.get("current_block") or data.get("stats", {}).get("current_block")
-                        if cb in FAKE_BLOCK_SENTINELS:
-                            messages.append(f"FAIL: {name} - current_block is sentinel ({cb})")
-                            all_passed = False
-                        else:
-                            messages.append(f"OK: {name} - current_block={cb}")
-                    except Exception:
-                        messages.append(f"WARN: {name} - could not validate current_block")
             # Additional check: validate reject histogram cap semantics
             if name == "reject_histogram":
                 try:
@@ -271,7 +261,57 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
             messages.append(f"FAIL: {name} - {e}")
             all_passed = False
     
-    return all_passed, messages
+        try:
+            if "scan" in loaded_data and "truth_report" in loaded_data:
+                ok_cb, msg_cb = validate_current_block(loaded_data.get("scan", {}), loaded_data.get("truth_report", {}))
+                if ok_cb:
+                    messages.append(f"OK: current_block - {msg_cb}")
+                else:
+                    messages.append(f"FAIL: current_block - {msg_cb}")
+                    all_passed = False
+        except Exception as e:
+            messages.append(f"FAIL: current_block validation exception: {type(e).__name__}: {e}")
+
+        return all_passed, messages
+
+
+def validate_current_block(scan_data: Dict[str, Any], truth_data: Dict[str, Any]) -> Tuple[bool, str]:
+    """Validate current_block present, int>0 and equal between scan and truth_report.
+
+    Returns (ok, message)
+    """
+    try:
+        # Only consider top-level fields per contract
+        scan_cb = scan_data.get("current_block")
+        truth_cb = truth_data.get("current_block")
+
+        missing = []
+        if scan_cb is None:
+            missing.append("scan.current_block")
+        if truth_cb is None:
+            missing.append("truth_report.current_block")
+        if missing:
+            return False, f"Missing current_block in: {', '.join(missing)}; truth keys: {list(truth_data.keys())}, scan keys: {list(scan_data.keys())}"
+
+        # Type checks: must be int
+        if not isinstance(scan_cb, int):
+            return False, f"scan.current_block not int: {type(scan_cb).__name__} ({scan_cb})"
+        if not isinstance(truth_cb, int):
+            return False, f"truth_report.current_block not int: {type(truth_cb).__name__} ({truth_cb})"
+
+        # Value checks
+        if scan_cb <= 0:
+            return False, f"scan.current_block must be >0, got {scan_cb}"
+        if truth_cb <= 0:
+            return False, f"truth_report.current_block must be >0, got {truth_cb}"
+
+        # Equality
+        if scan_cb != truth_cb:
+            return False, f"current_block mismatch: scan={scan_cb} truth_report={truth_cb}"
+
+        return True, f"current_block OK: {scan_cb}"
+    except Exception as e:
+        return False, f"Exception validating current_block: {type(e).__name__}: {e}"
 
 
 def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool, str]:
@@ -378,6 +418,10 @@ ENV VARIABLES:
         
         artifacts_paths = generate_fixture_artifacts(run_dir, timestamp)
         artifacts = discover_artifacts(run_dir)
+        # Log resolved artifact paths for clarity
+        print("\n[ONLINE] Resolved artifact paths:")
+        for k, p in artifacts.items():
+            print(f"  {k}: {p}")
         
         print(f"\n[OFFLINE] Generated {len(artifacts_paths)} artifacts:")
         for name, path in artifacts_paths.items():
