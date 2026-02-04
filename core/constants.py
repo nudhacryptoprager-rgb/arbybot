@@ -219,6 +219,10 @@ CHAIN_IDS = {
 }
 
 
+# Sentinel values that indicate a non-real block (for REAL runs)
+FAKE_BLOCK_SENTINELS = {0, 1, 999999999}
+
+
 # =============================================================================
 # DEX IDENTIFIERS
 # =============================================================================

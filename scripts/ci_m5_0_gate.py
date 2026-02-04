@@ -234,6 +234,18 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                 messages.append(f"{'OK' if ok else 'FAIL'}: {name} - {msg}")
                 if not ok:
                     all_passed = False
+                # If requiring real artifacts, ensure current_block is not a sentinel
+                if require_real:
+                    try:
+                        from core.constants import FAKE_BLOCK_SENTINELS
+                        cb = data.get("current_block") or data.get("stats", {}).get("current_block")
+                        if cb in FAKE_BLOCK_SENTINELS:
+                            messages.append(f"FAIL: {name} - current_block is sentinel ({cb})")
+                            all_passed = False
+                        else:
+                            messages.append(f"OK: {name} - current_block={cb}")
+                    except Exception:
+                        messages.append(f"WARN: {name} - could not validate current_block")
                     
         except json.JSONDecodeError as e:
             messages.append(f"FAIL: {name} - invalid JSON: {e}")

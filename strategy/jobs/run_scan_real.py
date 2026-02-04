@@ -15,8 +15,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import yaml
 
 from core.constants import SCHEMA_VERSION, CURRENT_EXECUTION_BLOCKER
+from core.constants import FAKE_BLOCK_SENTINELS
+from core.exceptions import BlockPinError
+from chains.providers import register_provider
+import asyncio
 
 logger = logging.getLogger("run_scan_real")
 
@@ -123,6 +128,29 @@ def run_scan(
     """
     logger.info(f"Starting scan: cycles={cycles}, output={output_dir}")
     
+    # Try to fetch real block via RPC when running in REAL mode
+    def get_current_block_via_rpc(cfg: Dict[str, Any]) -> int:
+        rpc_urls = cfg.get("rpc_endpoints") or cfg.get("rpc_endpoints", [])
+        if not rpc_urls:
+            rpc_urls = cfg.get("rpc_endpoints", [])
+        # Register provider and fetch block
+        provider = register_provider(cfg.get("chain_id", 42161), rpc_urls, timeout_seconds=cfg.get("rpc_timeout_seconds", 10))
+        try:
+            block, _lat = asyncio.run(provider.get_block_number())
+            return int(block)
+        except Exception as e:
+            raise BlockPinError(f"Failed to pin current block via RPC: {e}")
+
+    # Fetch real block and validate it's not a sentinel
+    current_block = None
+    try:
+        current_block = get_current_block_via_rpc(config)
+        if current_block in FAKE_BLOCK_SENTINELS:
+            raise BlockPinError(f"Invalid current block from RPC: {current_block}")
+    except BlockPinError:
+        # In REAL mode we must fail rather than use a fake block
+        raise
+
     # Mock scan results (placeholder - real implementation fetches from DEXes)
     stats = {
         "quotes_total": 12,
@@ -146,7 +174,7 @@ def run_scan(
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
         "chain_id": config.get("chain_id", 42161),
-        "current_block": 999999999,
+        "current_block": current_block,
         
         # Top-level metrics (for backward compat)
         "quotes_total": stats["quotes_total"],
@@ -168,7 +196,7 @@ def run_scan(
         "execution_blocker": CURRENT_EXECUTION_BLOCKER.value,
         "cost_model_available": False,
         "chain_id": config.get("chain_id", 42161),
-        "current_block": 999999999,
+        "current_block": current_block,
         
         # Top-level metrics (for backward compat)
         "quotes_total": stats["quotes_total"],
@@ -259,8 +287,19 @@ def run_scanner(cycles: int = 1, output_dir: Optional[Path] = None, config_path:
     else:
         output_dir = Path(output_dir)
 
-    # Minimal config resolution. If config_path provided we don't attempt full YAML parse here.
+    # Minimal config resolution. If config_path provided, load YAML so tests and callers
+    # get full config (including `rpc_endpoints`). Otherwise fall back to minimal config.
     config = {"chain_id": 42161}
+    if config_path:
+        cfgp = Path(config_path)
+        if cfgp.exists():
+            try:
+                with open(cfgp, "r", encoding="utf-8") as f:
+                    file_cfg = yaml.safe_load(f) or {}
+                config.update(file_cfg)
+            except Exception as e:
+                logger.warning(f"Could not load config {cfgp}: {e}")
+
     try:
         return run_scan(config, output_dir, cycles)
     except Exception:
@@ -295,12 +334,22 @@ def main() -> int:
     # Handle --once alias
     cycles = 1 if args.once else args.cycles
     
-    # Load config (simplified - real implementation would parse YAML)
+    # Load config: prefer provided YAML config path, fall back to minimal
     config = {
         "chain_id": args.chain_id,
         "price_sanity_enabled": True,
         "price_sanity_max_deviation_bps": 5000,
     }
+    if args.config:
+        cfg_path = Path(args.config)
+        if cfg_path.exists():
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    file_cfg = yaml.safe_load(f) or {}
+                # Merge file config into default config, prefer file values
+                config.update(file_cfg)
+            except Exception as e:
+                logger.warning(f"Could not load config {cfg_path}: {e}")
     
     # Setup logging
     logging.basicConfig(

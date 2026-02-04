@@ -358,28 +358,30 @@ def check_price_sanity(
         diagnostics["deviation_bps_capped"] = False
         return False, 0, "Invalid anchor price", diagnostics
     
-    # Calculate deviation
+    # Calculate raw deviation (use high cap to compute raw reliably)
     try:
-        dev_bps, dev_raw, capped = calculate_deviation_bps(price, anchor_price, MAX_DEVIATION_BPS_CAP)
+        _dev_bps, raw_bps, _was_capped = calculate_deviation_bps(price, anchor_price, MAX_DEVIATION_BPS_CAP)
     except ValueError as e:
         diagnostics["error"] = str(e)
         diagnostics["deviation_bps"] = 0
         diagnostics["deviation_bps_raw"] = 0
         diagnostics["deviation_bps_capped"] = False
         return False, 0, str(e), diagnostics
-    
+
+    # Apply caller-provided max_deviation_bps for decision and capping
+    dev_bps = int(min(raw_bps, int(max_deviation_bps)))
     diagnostics["deviation_bps"] = dev_bps
-    diagnostics["deviation_bps_raw"] = dev_raw
-    diagnostics["deviation_bps_capped"] = capped
-    
-    # Check against threshold
-    if dev_bps > max_deviation_bps:
+    diagnostics["deviation_bps_raw"] = raw_bps
+    diagnostics["deviation_bps_capped"] = raw_bps > int(max_deviation_bps)
+
+    # Check against threshold using the raw deviation
+    if raw_bps > int(max_deviation_bps):
         diagnostics["error"] = "deviation_exceeded"
-        error_msg = f"Deviation {dev_bps}bps > max {max_deviation_bps}bps"
-        if capped:
-            error_msg += f" (raw: {dev_raw}bps, capped to {MAX_DEVIATION_BPS_CAP})"
+        error_msg = f"Deviation {raw_bps}bps > max {max_deviation_bps}bps"
+        if _was_capped:
+            error_msg += f" (raw: {raw_bps}bps, capped to {MAX_DEVIATION_BPS_CAP})"
         return False, dev_bps, error_msg, diagnostics
-    
+
     diagnostics["sanity_check"] = "passed"
     return True, dev_bps, None, diagnostics
 

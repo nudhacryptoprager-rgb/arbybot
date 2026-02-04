@@ -93,6 +93,13 @@ python -m pytest tests/unit/test_imports_contract.py -v
 - [ ] core.models imports without error (needs repo sync)
 - [ ] Full test suite green (needs repo sync)
 
+## REAL Block Policy (M5_0)
+
+- **REAL_BLOCK must be fetched from RPC**: runs with `run_mode=REGISTRY_REAL` or when `--online` are required to pin the current block via RPC provider. Sentinel values (0, 1, 999999999) are forbidden and indicate a failed block pin.
+- **Gate behavior**: `scripts/ci_m5_0_gate.py --online` will fail with a clear message if the produced `truth_report` contains a sentinel `current_block` value (exit code 1).
+- **Scanner behavior**: `strategy.jobs.run_scan_real` will attempt to obtain the block via the RPC provider registry and raise `core.exceptions.BlockPinError` (ErrorCode.INFRA_BLOCK_PIN_FAILED) if pinning fails instead of writing a fake sentinel block.
+- **Reject diagnostics**: validators must always expose `deviation_bps_raw` (unclamped) and `deviation_bps` (clamped to caller `max_deviation_bps`) and `deviation_bps_capped` flag should be `true` when raw > requested max.
+
 ## Files Changed
 
 | File | Change |
