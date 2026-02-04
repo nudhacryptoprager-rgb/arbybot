@@ -150,6 +150,26 @@ git commit -m "fix(M5_0): TradeDirection (wave 4) + API stability policy"
 - Restored integration entrypoints in `strategy/jobs/run_scan_real.py`:
 	- `run_scanner(...)` wrapper, `check_price_sanity(...)` delegating to `core.validators`, and `Quote` re-export alias.
 
+## Recent Fixes (2026-02-04T00:00:00Z)
+
+Summary: applied compatibility-layer fixes to restore public API contracts for monitoring, validators, and real/smoke scanners; added an adapter for `Quote` to accept legacy kwargs; ensured CI gate offline/online modes and cap semantics. Full unit test suite now passes locally.
+
+- **Tests:** `python -m pytest -q` → 424 passed (local run on 2026-02-04)
+
+Files changed in this iteration:
+
+- `monitoring/truth_report.py` — restored facade (RPCHealthMetrics, TruthReport.save, helpers)
+- `strategy/jobs/run_scan_real.py` — run_scanner, check_price_sanity wrapper, Quote adapter to accept legacy kwargs and preserve `rpc_success`/`gate_passed`, artifact fixes (pnl, quotes_sample)
+- `core/validators.py` — deviation cap semantics, diagnostics (deviation_bps_raw, deviation_bps, deviation_bps_capped)
+- `core/constants.py` — ensured required public symbols exist (Enums, SCHEMA_VERSION)
+- `scripts/ci_m5_0_gate.py` — offline/online modes and cap-consistency validation
+
+Notes & Next steps:
+
+- Keep compatibility wrappers for two milestones and plan migration of callers to canonical implementations.
+- Recommend adding focused unit tests for `Quote` adapter and cap-edge-case rejects (I can add these next).
+
+
 ### How to verify
 
 Run the following commands locally:

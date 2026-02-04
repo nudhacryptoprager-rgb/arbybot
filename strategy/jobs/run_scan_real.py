@@ -56,7 +56,54 @@ class QuoteCompat:
 
 
 # Export compatibility alias regardless of core.models availability
-Quote = QuoteCompat
+if Quote is None:
+    Quote = QuoteCompat
+else:
+    # core.models.Quote exists; provide a thin adapter that accepts legacy
+    # keyword `dex_id` and maps it to the newer `dex` parameter so
+    # callers using Quote(dex_id=...) continue to work.
+    CoreQuote = Quote
+
+    class QuoteAdapter:
+        def __init__(self, *args, **kwargs):
+            # Map legacy kw names to core.models.Quote expected names
+            if "dex_id" in kwargs and "dex" not in kwargs:
+                kwargs["dex"] = kwargs.pop("dex_id")
+            if "fee" in kwargs and "fee_tier" not in kwargs:
+                kwargs["fee_tier"] = kwargs.pop("fee")
+            if "amount_in_wei" in kwargs and "amount_in" not in kwargs:
+                kwargs["amount_in"] = kwargs.pop("amount_in_wei")
+            if "amount_out_wei" in kwargs and "amount_out" not in kwargs:
+                kwargs["amount_out"] = kwargs.pop("amount_out_wei")
+
+            # Extract scanner-only flags that core Quote may not accept
+            self.rpc_success = kwargs.pop("rpc_success", True)
+            self.gate_passed = kwargs.pop("gate_passed", True)
+
+            # Ensure price is a string for core Quote
+            if "price" in kwargs and not isinstance(kwargs["price"], str):
+                try:
+                    kwargs["price"] = str(kwargs["price"])
+                except Exception:
+                    pass
+
+            # Remove legacy human-readable amount fields not accepted by core Quote
+            kwargs.pop("amount_in_human", None)
+            kwargs.pop("amount_out_human", None)
+
+            # forward positional args/kwargs to core Quote
+            self._inner = CoreQuote(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def to_dict(self):
+            try:
+                return self._inner.to_dict()
+            except Exception:
+                return self.__dict__
+
+    Quote = QuoteAdapter
 
 try:
     from core.validators import check_price_sanity as _check_price_sanity  # type: ignore
