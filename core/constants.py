@@ -57,6 +57,7 @@ class DexType(str, Enum):
 class TokenStatus(str, Enum):
     """Token status in the system."""
     ACTIVE = "active"
+    VERIFIED = "verified"
     INACTIVE = "inactive"
     BLACKLISTED = "blacklisted"
     PENDING = "pending"
@@ -101,6 +102,7 @@ class TradeStatus(str, Enum):
     MINED = "mined"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    CONFIRMED = "confirmed"
 
 
 # =============================================================================

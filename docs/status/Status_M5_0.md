@@ -132,3 +132,28 @@ python scripts/ci_m5_0_gate.py --offline
 git add -A
 git commit -m "fix(M5_0): TradeDirection (wave 4) + API stability policy"
 ```
+
+## Recent Compatibility Fixes (claude iteration)
+
+- Restored compatibility wrappers in `monitoring/truth_report.py`:
+	- `build_truth_report`, `build_health_section`, `build_gate_breakdown`, `calculate_price_stability_factor`, `calculate_confidence` (float-returning wrapper) and `calculate_confidence_label` (legacy label helper).
+	- `RPCHealthMetrics` regained `rpc_success_count`, `rpc_fail_count`, `rpc_latency_ms_total` and `record_rpc_call()` method.
+- Restored integration entrypoints in `strategy/jobs/run_scan_real.py`:
+	- `run_scanner(...)` wrapper, `check_price_sanity(...)` delegating to `core.validators`, and `Quote` re-export alias.
+
+### How to verify
+
+Run the following commands locally:
+
+```bash
+python -m pytest tests/unit/test_truth_report.py -q
+python -m pytest tests/unit/test_confidence.py -q
+python -m pytest tests/integration/test_smoke_run.py -q
+python scripts/ci_m5_0_gate.py --offline
+```
+
+### Risks and plan
+
+- These are lightweight compatibility wrappers to restore public API surface; plan is to keep wrappers for two milestones and then migrate callers to new implementations.
+- Risk: If underlying implementations were intentionally changed, wrappers may mask deeper semantic shifts. Next step: add tests asserting semantic behavior and schedule migration.
+

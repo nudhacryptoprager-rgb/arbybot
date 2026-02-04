@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Todo List</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="container">
+    <h1>Todo List</h1>
+    <form id="todo-form">
+      <input id="todo-input" placeholder="Add a task..." autocomplete="off">
+      <button type="submit">Add</button>
+    </form>
+
+    <div class="controls">
+      <button id="clear-completed">Clear completed</button>
+      <span id="count"></span>
+    </div>
+
+    <ul id="todo-list" class="todo-list"></ul>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

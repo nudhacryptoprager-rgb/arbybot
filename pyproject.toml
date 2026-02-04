@@ -19,6 +19,21 @@ dependencies = [
     "httpx>=0.25.0",
 ]
 
+[tool.setuptools.packages.find]
+include = [
+    "core",
+    "strategy",
+    "monitoring",
+    "execution",
+    "engine",
+    "dex",
+    "cex",
+    "config",
+    "utils",
+    "tests",
+    "todo_app",
+]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
