@@ -111,6 +111,23 @@ class RPCHealthMetrics:
     def total_latency_ms(self) -> int:
         return self.rpc_latency_ms_total
 
+    # Compatibility: quote attempt/fetch recording used by scanner
+    def record_quote_attempt(self) -> None:
+        """Record that a quote attempt was made."""
+        # Map to total_requests/quote attempts
+        self.total_requests += 1
+
+    def record_quote_fetch(self, success: bool) -> None:
+        """Record that a quote fetch succeeded/failed."""
+        if success:
+            self.quotes_fetched = getattr(self, "quotes_fetched", 0) + 1
+            self.successful_requests += 1
+            self.rpc_success_count += 1
+        else:
+            self.failed_requests += 1
+            self.rpc_fail_count += 1
+    # Backwards-compatible fields modified in place; no conflicting properties
+
 
 @dataclass
 class SpreadSignal:
@@ -163,6 +180,21 @@ class TruthReport:
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def save(self, path: str) -> None:
+        """Serialize the report to JSON file at `path`.
+
+        Kept for backward compatibility with code/tests that call TruthReport.save(path).
+        """
+        import json
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.to_dict(), f, indent=2, default=str)
+        except Exception:
+            # Best effort: do not raise to keep backwards compatibility expectations
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(str(self.to_dict()))
 
 
 def build_truth_report(health: Optional[HealthMetrics] = None, spread_signals: Optional[List[SpreadSignal]] = None, *, chain_id: int = 42161, current_block: int = 0, run_mode: str = "REGISTRY_REAL") -> TruthReport:

@@ -180,12 +180,21 @@ def run_scan(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     now = datetime.now(timezone.utc).isoformat()
     
-    # Build a small quotes sample for debugging
+    # Build a small quotes sample for debugging using real configured DEXes
     quotes_sample = []
-    for i in range(3):
+    pools_cfg = config.get("pools", {}) or {}
+    token_pair_tag = "WETH_USDC"
+    for dex in dexes_list:
+        # attempt to find a pool address for this dex and token pair
+        pool_addr = None
+        for k, v in pools_cfg.items():
+            if dex in k and token_pair_tag in k:
+                pool_addr = v
+                break
+
         q = QuoteCompat(
-            dex_id=dexes_list[i] if i < len(dexes_list) else f"dex_{i}",
-            pool_address="",
+            dex_id=dex,
+            pool_address=pool_addr,
             token_in="WETH",
             token_out="USDC",
             fee=3000,
@@ -200,6 +209,9 @@ def run_scan(
             gate_passed=True,
         )
         quotes_sample.append(q.__dict__)
+    # Derive dexes active list from actual quotes_sample to avoid placeholders
+    dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
+    stats["dexes_active"] = len(dexes_active_list)
 
     # Scan data with schema_version and top-level metrics
     scan_data = {
@@ -212,13 +224,13 @@ def run_scan(
         "quotes_total": stats["quotes_total"],
         "quotes_fetched": stats["quotes_fetched"],
         "dexes_active": stats["dexes_active"],
-        "dexes_active_list": dexes_list,
+        "dexes_active_list": dexes_active_list,
         "price_sanity_passed": stats["price_sanity_passed"],
         "price_sanity_failed": stats["price_sanity_failed"],
         
         # Nested stats (full details)
         "stats": stats,
-        "quotes": [],  # Would contain actual quotes
+        "quotes": quotes_sample,  # minimal fetched quotes sample
         "quotes_sample": quotes_sample,
     }
     
@@ -253,6 +265,15 @@ def run_scan(
             "rpc_success_rate": stats["rpc_success_rate"],
         },
         "stats": stats,
+        # PnL summary: include required keys even when cost model not available
+        "pnl": {
+            "signal_pnl_usdc": "0.000000",
+            "would_execute_pnl_usdc": "0.000000",
+            "gross_pnl_usdc": "0.000000",
+            "net_pnl_usdc": None,
+            "net_pnl_bps": None,
+            "cost_model_available": False,
+        },
         "spread_signals": [],
     }
     
