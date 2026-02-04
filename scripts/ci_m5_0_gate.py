@@ -246,6 +246,23 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                             messages.append(f"OK: {name} - current_block={cb}")
                     except Exception:
                         messages.append(f"WARN: {name} - could not validate current_block")
+            # Additional check: validate reject histogram cap semantics
+            if name == "reject_histogram":
+                try:
+                    rejects = data.get("rejects", [])
+                    for r in rejects:
+                        raw = r.get("deviation_bps_raw")
+                        maxd = r.get("max_deviation_bps")
+                        capped = r.get("deviation_bps_capped")
+                        if raw is not None and maxd is not None:
+                            try:
+                                if int(raw) > int(maxd) and not bool(capped):
+                                    messages.append(f"FAIL: {name} - reject {r.get('pair')} raw({raw})>max({maxd}) but capped=false")
+                                    all_passed = False
+                            except Exception:
+                                messages.append(f"WARN: {name} - could not evaluate cap for reject {r}")
+                except Exception:
+                    messages.append(f"WARN: {name} - could not validate reject_histogram semantics")
                     
         except json.JSONDecodeError as e:
             messages.append(f"FAIL: {name} - invalid JSON: {e}")
