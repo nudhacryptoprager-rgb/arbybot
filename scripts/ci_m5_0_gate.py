@@ -49,6 +49,7 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "schema_version": "3.2.0",
         "timestamp": now,
         "run_mode": "FIXTURE_OFFLINE",
+        "current_block": 100,
         "chain_id": 42161,
         # Top-level metrics
         "quotes_total": 4,
@@ -71,6 +72,7 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "schema_version": "3.2.0",
         "timestamp": now,
         "run_mode": "FIXTURE_OFFLINE",
+        "current_block": 100,
         "execution_enabled": False,
         "execution_blocker": "EXECUTION_DISABLED",
         # Top-level metrics
@@ -95,6 +97,7 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "schema_version": "3.2.0",
         "timestamp": now,
         "run_mode": "FIXTURE_OFFLINE",
+        "current_block": 100,
         "rejects": [{
             "pair": "WETH/USDC", "dex_id": "sushiswap_v3",
             "deviation_bps": 10000, "deviation_bps_capped": False,
@@ -175,6 +178,94 @@ def validate_schema_version(data: Dict[str, Any]) -> Tuple[bool, str]:
     return True, f"schema_version={version}"
 
 
+def validate_scan_fields(data: Dict[str, Any], path: Optional[Path] = None, require_real: bool = False) -> Tuple[bool, str]:
+    """Validate top-level scan fields required by M5_0.
+
+    Returns (ok, message).
+    """
+    try:
+        keys = list(data.keys())
+        # schema and run_mode already checked elsewhere
+        cb = data.get("current_block")
+        if cb is None:
+            return False, f"scan.current_block missing; keys={keys}"
+        if not isinstance(cb, int):
+            return False, f"scan.current_block not int: {type(cb).__name__} ({cb})"
+        if require_real and cb <= 0:
+            return False, f"scan.current_block must be >0 for online runs, got {cb}"
+
+        quotes_total = data.get("quotes_total")
+        if quotes_total is None:
+            return False, f"scan.quotes_total missing; keys={keys}"
+        # allow zero in offline but require >=1 in online
+        if require_real and int(quotes_total) < 1:
+            return False, f"scan.quotes_total < 1 for online runs: {quotes_total}"
+
+        dexes_active = data.get("dexes_active")
+        if dexes_active is None:
+            return False, f"scan.dexes_active missing; keys={keys}"
+        if int(dexes_active) < 1:
+            return False, f"scan.dexes_active < 1: {dexes_active}"
+
+        return True, f"scan fields OK"
+    except Exception as e:
+        return False, f"Exception validating scan fields: {type(e).__name__}: {e}"
+
+
+def validate_truth_report_fields(data: Dict[str, Any], path: Optional[Path] = None, require_real: bool = False) -> Tuple[bool, str]:
+    """Validate truth_report required fields per M5_0.
+
+    Returns (ok, message).
+    """
+    try:
+        keys = list(data.keys())
+        # schema and run_mode expected to be checked
+        cb = data.get("current_block")
+        if cb is None:
+            return False, f"truth_report.current_block missing; keys={keys}"
+        if not isinstance(cb, int):
+            return False, f"truth_report.current_block not int: {type(cb).__name__} ({cb})"
+        if require_real and cb <= 0:
+            return False, f"truth_report.current_block must be >0 for online runs, got {cb}"
+
+        quotes_total = data.get("quotes_total")
+        quotes_fetched = data.get("quotes_fetched")
+        if quotes_total is None or quotes_fetched is None:
+            return False, f"truth_report.quotes_total/quotes_fetched missing; keys={keys}"
+        if require_real and int(quotes_fetched) < 1:
+            return False, f"truth_report.quotes_fetched < 1 for online runs: {quotes_fetched}"
+
+        dexes_active = data.get("dexes_active")
+        if dexes_active is None:
+            return False, f"truth_report.dexes_active missing; keys={keys}"
+        if int(dexes_active) < 1:
+            return False, f"truth_report.dexes_active < 1: {dexes_active}"
+
+        # price sanity metrics existence
+        if "price_sanity_passed" not in data or "price_sanity_failed" not in data:
+            # also check nested health
+            health = data.get("health", {}) or {}
+            if "price_sanity_passed" not in health or "price_sanity_failed" not in health:
+                return False, f"price_sanity_passed/failed missing in truth_report (keys={keys})"
+
+        return True, "truth_report fields OK"
+    except Exception as e:
+        return False, f"Exception validating truth_report fields: {type(e).__name__}: {e}"
+
+
+def validate_reject_histogram_fields(data: Dict[str, Any], path: Optional[Path] = None) -> Tuple[bool, str]:
+    try:
+        keys = list(data.keys())
+        if "rejects" not in data:
+            return False, f"reject_histogram.missing 'rejects' key; keys={keys}"
+        if not isinstance(data.get("rejects"), list):
+            return False, f"reject_histogram.rejects not a list"
+        # gate breakdown optional but helpfully present in health/gate_breakdown
+        return True, "reject_histogram fields OK"
+    except Exception as e:
+        return False, f"Exception validating reject_histogram: {type(e).__name__}: {e}"
+
+
 def validate_health_metrics(data: Dict[str, Any]) -> Tuple[bool, str]:
     """Validate health metrics exist and are reasonable."""
     # Check both top-level and nested health
@@ -222,19 +313,28 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
             if not ok:
                 all_passed = False
             
-            # Check run_mode
-            run_mode = data.get("run_mode", "")
-            if require_real and "FIXTURE" in run_mode:
-                messages.append(f"FAIL: {name} - fixture rejected (require_real=True)")
+            # Check run_mode presence and value
+            if "run_mode" not in data:
+                messages.append(f"FAIL: {name} - missing run_mode")
                 all_passed = False
             else:
-                messages.append(f"OK: {name} - run_mode={run_mode}")
+                run_mode = data.get("run_mode", "")
+                if require_real and "FIXTURE" in run_mode:
+                    messages.append(f"FAIL: {name} - fixture rejected (require_real=True)")
+                    all_passed = False
+                else:
+                    messages.append(f"OK: {name} - run_mode={run_mode}")
             
             # Validate health metrics for truth_report
             if name == "truth_report":
                 ok, msg = validate_health_metrics(data)
                 messages.append(f"{'OK' if ok else 'FAIL'}: {name} - {msg}")
                 if not ok:
+                    all_passed = False
+                # Strict truth_report field validation
+                ok_tr, msg_tr = validate_truth_report_fields(data, path)
+                messages.append(f"{'OK' if ok_tr else 'FAIL'}: {name} - {msg_tr}")
+                if not ok_tr:
                     all_passed = False
             # Additional check: validate reject histogram cap semantics
             if name == "reject_histogram":
@@ -253,6 +353,11 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                                 messages.append(f"WARN: {name} - could not evaluate cap for reject {r}")
                 except Exception:
                     messages.append(f"WARN: {name} - could not validate reject_histogram semantics")
+                # Strict reject_histogram validation
+                ok_rh, msg_rh = validate_reject_histogram_fields(data, path)
+                messages.append(f"{'OK' if ok_rh else 'FAIL'}: {name} - {msg_rh}")
+                if not ok_rh:
+                    all_passed = False
                     
         except json.JSONDecodeError as e:
             messages.append(f"FAIL: {name} - invalid JSON: {e}")
@@ -272,7 +377,7 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
         except Exception as e:
             messages.append(f"FAIL: current_block validation exception: {type(e).__name__}: {e}")
 
-        return all_passed, messages
+    return all_passed, messages
 
 
 def validate_current_block(scan_data: Dict[str, Any], truth_data: Dict[str, Any]) -> Tuple[bool, str]:

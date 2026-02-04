@@ -197,5 +197,50 @@ class TestCurrentBlockValidation(unittest.TestCase):
         self.assertIn("Missing current_block", msg)
 
 
+    def test_gate_fails_when_truth_missing_run_mode(self):
+        # Create a run_dir with scan and truth_report missing run_mode
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            reports = run_dir / "reports"
+            reports.mkdir(parents=True)
+            now = "20260204_120000"
+            scan = {"schema_version": "3.2.0", "run_mode": "REGISTRY_REAL", "current_block": 100, "quotes_total": 2, "dexes_active": 2}
+            truth = {"schema_version": "3.2.0", "current_block": 100, "quotes_total": 2, "quotes_fetched": 2, "dexes_active": 2, "price_sanity_passed": 1, "price_sanity_failed": 0}
+            # deliberately remove run_mode from truth to simulate bad generator
+            if "run_mode" in truth:
+                truth.pop("run_mode")
+
+            with open(reports / f"scan_{now}.json", "w") as f:
+                json.dump(scan, f)
+            with open(reports / f"truth_report_{now}.json", "w") as f:
+                json.dump(truth, f)
+            with open(reports / f"reject_histogram_{now}.json", "w") as f:
+                json.dump({"schema_version": "3.2.0", "rejects": []}, f)
+
+            with patch('sys.argv', ['ci_m5_0_gate.py', '--run-dir', str(run_dir), '--require-real']):
+                result = main()
+            self.assertNotEqual(result, 0)
+
+    def test_gate_fails_on_current_block_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            reports = run_dir / "reports"
+            reports.mkdir(parents=True)
+            now = "20260204_120001"
+            scan = {"schema_version": "3.2.0", "run_mode": "REGISTRY_REAL", "current_block": 100, "quotes_total": 2, "dexes_active": 2}
+            truth = {"schema_version": "3.2.0", "run_mode": "REGISTRY_REAL", "current_block": 101, "quotes_total": 2, "quotes_fetched": 2, "dexes_active": 2, "price_sanity_passed": 1, "price_sanity_failed": 0}
+
+            with open(reports / f"scan_{now}.json", "w") as f:
+                json.dump(scan, f)
+            with open(reports / f"truth_report_{now}.json", "w") as f:
+                json.dump(truth, f)
+            with open(reports / f"reject_histogram_{now}.json", "w") as f:
+                json.dump({"schema_version": "3.2.0", "rejects": []}, f)
+
+            with patch('sys.argv', ['ci_m5_0_gate.py', '--run-dir', str(run_dir), '--require-real']):
+                result = main()
+            self.assertNotEqual(result, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
