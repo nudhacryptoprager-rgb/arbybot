@@ -184,6 +184,48 @@ def run_scan(
     Returns scan statistics.
     """
     logger.info(f"Starting scan: cycles={cycles}, output={output_dir}")
+    # Resolve RPC endpoints early to ensure downstream providers use the same mapping
+    try:
+        from core.rpc_urls import resolve_rpc_http, resolve_rpc_ws
+    except Exception:
+        resolve_rpc_http = resolve_rpc_ws = None
+
+    try:
+        resolved_http = None
+        resolved_ws = None
+        if resolve_rpc_http:
+            url, provider_name, diag = resolve_rpc_http(chain_id=config.get("chain_id"), network=os.environ.get("NETWORK"), env=os.environ)
+            resolved_http = url
+            if url:
+                try:
+                    from urllib.parse import urlparse
+                    os.environ.setdefault("ARBY_RPC_HTTP_PRIMARY", url)
+                    os.environ.setdefault("ARBY_RPC_PROVIDER", provider_name)
+                    os.environ.setdefault("ARBY_RPC_HTTP_HOST", urlparse(url).netloc)
+                except Exception:
+                    pass
+        if resolve_rpc_ws:
+            urlw, providerw, diagw = resolve_rpc_ws(chain_id=config.get("chain_id"), network=os.environ.get("NETWORK"), env=os.environ)
+            resolved_ws = urlw
+            if urlw:
+                try:
+                    from urllib.parse import urlparse
+                    os.environ.setdefault("ARBY_RPC_WS_PRIMARY", urlw)
+                    os.environ.setdefault("ARBY_RPC_WS_PROVIDER", providerw)
+                    os.environ.setdefault("ARBY_RPC_WS_HOST", urlparse(urlw).netloc)
+                except Exception:
+                    pass
+
+        # Log selected vs effective
+        try:
+            sel_provider = os.environ.get("ARBY_RPC_PROVIDER") or ("alchemy" if os.environ.get("ALCHEMY_API_KEY") else "public")
+            effective_host = os.environ.get("ARBY_RPC_HTTP_HOST") or (resolved_http and resolved_http) or "unknown"
+            ws_flag = "enabled" if os.environ.get("ARBY_RPC_WS_PRIMARY") else "disabled"
+            logger.info("RPC selected: provider=%s host=%s ws=%s", sel_provider, effective_host, ws_flag)
+        except Exception:
+            pass
+    except Exception:
+        pass
     
     # Try to fetch real block via RPC when running in REAL mode
     def get_current_block_via_rpc(cfg: Dict[str, Any]) -> int:
@@ -424,7 +466,7 @@ def run_scan(
         try:
             sel_host = rpc_http_host or os.environ.get("ARBY_RPC_HTTP_HOST") or "unknown"
             ws_flag = "enabled" if ws_enabled else "disabled"
-            logger.info(f"RPC selected: provider=%s host=%s ws=%s", rpc_provider, sel_host, ws_flag)
+            logger.info("RPC selected: provider=%s host=%s ws=%s", rpc_provider, sel_host, ws_flag)
         except Exception:
             pass
     except Exception:
@@ -523,6 +565,11 @@ def run_scan(
         "total_rejects": 1,
         "price_sanity_failed": stats["price_sanity_failed"],
     }
+    # Mirror infra into reject histogram for transparency
+    try:
+        reject_data["infra"] = scan_data.get("infra", {})
+    except Exception:
+        pass
     
     # Write artifacts
     artifacts = _write_artifacts(output_dir, timestamp, scan_data, truth_data, reject_data)

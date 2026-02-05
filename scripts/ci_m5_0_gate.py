@@ -437,9 +437,17 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
             host_t = infra_t.get("rpc_http_host")
 
             if not prov_s or not host_s:
-                messages.append("WARN: scan.infra missing rpc_provider or rpc_http_host")
+                if require_real:
+                    messages.append("FAIL: scan.infra missing rpc_provider or rpc_http_host")
+                    all_passed = False
+                else:
+                    messages.append("WARN: scan.infra missing rpc_provider or rpc_http_host")
             if not prov_t or not host_t:
-                messages.append("WARN: truth_report.infra missing rpc_provider or rpc_http_host")
+                if require_real:
+                    messages.append("FAIL: truth_report.infra missing rpc_provider or rpc_http_host")
+                    all_passed = False
+                else:
+                    messages.append("WARN: truth_report.infra missing rpc_provider or rpc_http_host")
 
             # If env required Alchemy, ensure provider is alchemy
             if os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1":
