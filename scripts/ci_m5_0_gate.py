@@ -30,8 +30,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from dotenv import load_dotenv
 
 __version__ = "2.1.0"
+
+# Load .env if present but do not error if missing
+load_dotenv()
 
 DEFAULT_OUTPUT_ROOT = Path("data/runs")
 DEFAULT_CONFIG = "config/real_minimal.yaml"
@@ -51,6 +55,7 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "run_mode": "FIXTURE_OFFLINE",
         "current_block": 100,
         "chain_id": 42161,
+        "infra": {"rpc_provider": "fixture", "transport": "http", "ws_enabled": False, "tenderly_enabled": False},
         # Top-level metrics
         "quotes_total": 4,
         "quotes_fetched": 4,
@@ -75,6 +80,7 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "current_block": 100,
         "execution_enabled": False,
         "execution_blocker": "EXECUTION_DISABLED",
+        "infra": {"rpc_provider": "fixture", "transport": "http", "ws_enabled": False, "tenderly_enabled": False},
         # Top-level metrics
         "quotes_total": 4,
         "quotes_fetched": 4,
@@ -98,6 +104,7 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "timestamp": now,
         "run_mode": "FIXTURE_OFFLINE",
         "current_block": 100,
+        "infra": {"rpc_provider": "fixture", "transport": "http", "ws_enabled": False, "tenderly_enabled": False},
         "rejects": [{
             "pair": "WETH/USDC", "dex_id": "sushiswap_v3",
             "deviation_bps": 10000, "deviation_bps_capped": False,
@@ -432,8 +439,40 @@ def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool,
     print(f"\n[ONLINE] Running: {' '.join(cmd)}")
     print("-" * 60)
     
+    # Resolve RPC URLs from env: prefer explicit ALCHEMY_RPC_HTTP/WS, else build from ALCHEMY_API_KEY
     try:
-        result = subprocess.run(cmd, capture_output=False, text=True, timeout=300)
+        from core.rpc_urls import build_alchemy_http_url, build_alchemy_ws_url, public_fallback_for
+    except Exception:
+        build_alchemy_http_url = build_alchemy_ws_url = public_fallback_for = None
+
+    env_for_run = os.environ.copy()
+    # Determine canonical network: prefer ENV NETWORK, otherwise leave to scanner/config
+    network = os.environ.get("NETWORK") or os.environ.get("CHAIN")
+
+    # HTTP primary
+    primary_http = os.environ.get("ALCHEMY_RPC_HTTP") or os.environ.get("ARBY_RPC_HTTP_PRIMARY")
+    if not primary_http and os.environ.get("ALCHEMY_API_KEY") and build_alchemy_http_url:
+        candidate = build_alchemy_http_url(network, os.environ.get("ALCHEMY_API_KEY"))
+        if candidate:
+            primary_http = candidate
+        else:
+            primary_http = public_fallback_for(network) if public_fallback_for else None
+
+    # WS primary (optional)
+    primary_ws = os.environ.get("ALCHEMY_RPC_WS") or os.environ.get("ARBY_RPC_WS_PRIMARY")
+    if not primary_ws and os.environ.get("ALCHEMY_API_KEY") and build_alchemy_ws_url:
+        candidate_ws = build_alchemy_ws_url(network, os.environ.get("ALCHEMY_API_KEY"))
+        if candidate_ws:
+            primary_ws = candidate_ws
+
+    # Inject into env passed to scanner (do not log secrets)
+    if primary_http:
+        env_for_run.setdefault("ARBY_RPC_HTTP_PRIMARY", primary_http)
+    if primary_ws:
+        env_for_run.setdefault("ARBY_RPC_WS_PRIMARY", primary_ws)
+
+    try:
+        result = subprocess.run(cmd, capture_output=False, text=True, timeout=300, env=env_for_run)
         if result.returncode == 0:
             return True, "Scan completed successfully"
         else:

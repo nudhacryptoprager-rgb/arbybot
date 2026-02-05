@@ -193,9 +193,13 @@ def run_scan(
     # Fetch real block and validate it's not a sentinel
     current_block = None
     try:
-        current_block = get_current_block_via_rpc(config)
-        if current_block in FAKE_BLOCK_SENTINELS:
-            raise BlockPinError(f"Invalid current block from RPC: {current_block}")
+        # Allow tests to skip real RPC by setting ARBY_SKIP_RPC=1 and ARBY_FAKE_BLOCK
+        if os.environ.get("ARBY_SKIP_RPC") == "1":
+            current_block = int(os.environ.get("ARBY_FAKE_BLOCK", "100"))
+        else:
+            current_block = get_current_block_via_rpc(config)
+            if current_block in FAKE_BLOCK_SENTINELS:
+                raise BlockPinError(f"Invalid current block from RPC: {current_block}")
     except BlockPinError:
         # In REAL mode we must fail rather than use a fake block
         raise
@@ -280,6 +284,30 @@ def run_scan(
         "quotes": quotes_sample,  # minimal fetched quotes sample
         "quotes_sample": quotes_sample,
     }
+    # infra section: indicate provider and transport used (do not record secrets)
+    try:
+        rpc_provider = "public"
+        transport = "http"
+        ws_enabled = False
+        # prefer explicit env overrides
+        primary_http = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or os.environ.get("ALCHEMY_RPC_HTTP")
+        primary_ws = os.environ.get("ARBY_RPC_WS_PRIMARY") or os.environ.get("ALCHEMY_RPC_WS")
+        if os.environ.get("ALCHEMY_API_KEY"):
+            rpc_provider = "alchemy"
+        elif primary_http and "alchemy" in primary_http:
+            rpc_provider = "alchemy"
+        if primary_ws:
+            ws_enabled = True
+            transport = "ws+http"
+        scan_data["infra"] = {
+            "rpc_provider": rpc_provider,
+            "transport": transport,
+            "ws_enabled": ws_enabled,
+            "ws_connected": False,
+            "tenderly_enabled": bool(os.environ.get("TENDERLY_ACCESS_KEY")),
+        }
+    except Exception:
+        scan_data["infra"] = {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False}
     
     # Truth report data
     truth_data = {
@@ -323,6 +351,11 @@ def run_scan(
         },
         "spread_signals": [],
     }
+    # Mirror infra into truth report as well
+    try:
+        truth_data["infra"] = scan_data.get("infra", {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False})
+    except Exception:
+        truth_data["infra"] = {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False}
     
     # Reject histogram data
     # Build a reject entry consistent with cap semantics
