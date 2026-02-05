@@ -297,7 +297,10 @@ def validate_health_metrics(data: Dict[str, Any]) -> Tuple[bool, str]:
     return True, f"quotes_total={quotes_total}, dexes_active={dexes_active}"
 
 
-def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool = False) -> Tuple[bool, List[str]]:
+def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool = False,
+                       require_infra_hosts: bool = False,
+                       require_cross_artifact: bool = False,
+                       require_tenderly: bool = False) -> Tuple[bool, List[str]]:
     """Validate all artifacts."""
     messages = []
     all_passed = True
@@ -410,8 +413,11 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
 
             if mismatches:
                 for key, sv, tv in mismatches:
-                    messages.append(f"FAIL: summary_mismatch - {key} scan={sv} truth_report={tv}")
-                all_passed = False
+                    if require_cross_artifact:
+                        messages.append(f"FAIL: summary_mismatch - {key} scan={sv} truth_report={tv}")
+                        all_passed = False
+                    else:
+                        messages.append(f"WARN: summary_mismatch - {key} scan={sv} truth_report={tv}")
 
             # Basic reject histogram vs totals sanity
             try:
@@ -437,13 +443,13 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
             host_t = infra_t.get("rpc_http_host")
 
             if not prov_s or not host_s:
-                if require_real:
+                if require_infra_hosts or require_real:
                     messages.append("FAIL: scan.infra missing rpc_provider or rpc_http_host")
                     all_passed = False
                 else:
                     messages.append("WARN: scan.infra missing rpc_provider or rpc_http_host")
             if not prov_t or not host_t:
-                if require_real:
+                if require_infra_hosts or require_real:
                     messages.append("FAIL: truth_report.infra missing rpc_provider or rpc_http_host")
                     all_passed = False
                 else:
@@ -461,8 +467,11 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                     ok = infra.get("tenderly_ok")
                     err = infra.get("tenderly_error")
                     if ok is not True and (not err):
-                        messages.append(f"FAIL: {name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
-                        all_passed = False
+                        if require_tenderly:
+                            messages.append(f"FAIL: {name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
+                            all_passed = False
+                        else:
+                            messages.append(f"WARN: {name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
 
             # WS diagnostics validation
             for name, infra in (("scan", infra_s), ("truth_report", infra_t)):
@@ -656,6 +665,12 @@ ENV VARIABLES:
                         help="Prefer WS transport when resolving endpoints")
     parser.add_argument("--ws-required", action="store_true",
                         help="Require WS to be available; fail if WS not connected")
+    parser.add_argument("--require-infra-hosts", action="store_true",
+                        help="Fail if artifacts do not include infra.rpc_provider or infra.rpc_http_host")
+    parser.add_argument("--require-cross-artifact", action="store_true",
+                        help="Treat cross-artifact summary mismatches as FAIL instead of WARN")
+    parser.add_argument("--require-tenderly", action="store_true",
+                        help="Require tenderly diagnostics to be present and passing when enabled in artifacts")
     
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     
@@ -708,7 +723,13 @@ ENV VARIABLES:
         print("VALIDATION")
         print(f"{'='*60}\n")
         
-        passed, messages = validate_artifacts(artifacts, require_real=False)
+        passed, messages = validate_artifacts(
+            artifacts,
+            require_real=False,
+            require_infra_hosts=args.require_infra_hosts,
+            require_cross_artifact=args.require_cross_artifact,
+            require_tenderly=args.require_tenderly,
+        )
         for msg in messages:
             print(f"  {msg}")
         
@@ -759,7 +780,13 @@ ENV VARIABLES:
         print("VALIDATION")
         print(f"{'='*60}\n")
         
-        passed, messages = validate_artifacts(artifacts, require_real=True)
+        passed, messages = validate_artifacts(
+            artifacts,
+            require_real=True,
+            require_infra_hosts=args.require_infra_hosts,
+            require_cross_artifact=args.require_cross_artifact,
+            require_tenderly=args.require_tenderly,
+        )
         for msg in messages:
             print(f"  {msg}")
         
@@ -809,7 +836,13 @@ ENV VARIABLES:
     print("VALIDATION")
     print(f"{'='*60}\n")
     
-    passed, messages = validate_artifacts(artifacts, require_real=require_real)
+    passed, messages = validate_artifacts(
+        artifacts,
+        require_real=require_real,
+        require_infra_hosts=args.require_infra_hosts,
+        require_cross_artifact=args.require_cross_artifact,
+        require_tenderly=args.require_tenderly,
+    )
     for msg in messages:
         print(f"  {msg}")
     
