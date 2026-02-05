@@ -1,12 +1,31 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-05 20:42 UTC  
+> **Оновлено**: 2026-02-05 21:45 UTC  
 > **SHA**: `pending`  
-> **Статус**: ✅ PASS
+> **Статус**: ✅ PASS — Signals MVP v3 DONE
 
 ---
 
 ## Recent Changes (2026-02-05)
+
+### 🎉 Signals MVP v3 DONE
+
+**Summary**: Spread signals production-ready з повною семантикою та transparency.
+
+#### Signal Schema v3 (FINAL)
+- `spread_bps_exact`: float для micro-spreads
+- `spread_bps_int`: int для UI
+- `spread_pct`: відсоток (e.g., 0.0157%)
+- `spread_frac`: **NEW** fraction для math (0.00015721)
+- `confidence_reasons`: **NEW** transparency array
+
+#### Stats improvements
+- `requested_cycles`: **NEW** what user asked
+- `cycles_completed`: what actually ran
+- `execution_pnl`: **NEW** separated from spread_signals
+
+#### Config additions
+- `min_spread_bps: 0` — filter threshold
 
 ### Критичний фікс: amount_out vs price consistency
 
@@ -260,25 +279,26 @@ M5_0 closed on SHA: `087d014`. Close only if:
 
 ## Останній прогін
 
-**RESULT: PASS + data\runs\manual_run_20260205_211954 (Signals MVP v3)**
+**RESULT: PASS + data\runs\manual_run_20260205_213126 (Signals MVP v3 FINAL)**
 
 ```powershell
 python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml --cycles 5
 ```
 
-**Всі баги виправлено!**:
-- `spread_bps_exact`: **1.4542** ✅ (не 0!)
-- `is_gross_positive`: **True** ✅ (sell > buy)
-- `size_source`: **config** ✅ (не default)
-- `slippage_source`: **config** ✅ (не default)
-- `slippage_bps`: **0** ✅ (з config)
-- `net_pnl_usdc_est`: **+$0.0454** ✅ (позитивний!)
+**Signals MVP v3 — всі 9 issues закрито!**:
+- `spread_bps_exact`: **1.5721** ✅
+- `spread_frac`: **0.00015721** ✅ (NEW)
+- `is_gross_positive`: **True** ✅
+- `confidence_reasons`: **["micro_spread", "execution_disabled", "paper_cost_model"]** ✅ (NEW)
+- `requested_cycles`: **5** ✅ (NEW)
+- `cycles_completed`: **5** ✅
+- `execution_pnl.cost_model_available`: **False** ✅ (NEW: separated)
+- `net_pnl_usdc_est`: **+$0.0572** ✅
 - `is_net_positive_est`: **True** ✅
 
 Провенанс:
 - buy: sushiswap_v3 @ $1889.48
-- sell: uniswap_v3 @ $1889.75
-- spread: 1.45 bps (0.0145%)
+- sell: uniswap_v3 @ $1889.78
 
 ## Юніт-тести
 
@@ -286,11 +306,11 @@ python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml -
 461 passed, 5 subtests passed
 ```
 
-## Signals MVP DoD (2026-02-05)
+## Signals MVP DoD (2026-02-05) — DONE ✅
 
-**Summary**: Spread signals генеруються правильно з точною математикою.
+**Summary**: Spread signals генеруються правильно з точною математикою та повною семантикою.
 
-### Баги виправлені
+### Баги виправлені (Round 1 & 2)
 
 **Bug 1: is_gross_positive** — використовував `spread_bps_int > 0` замість `spread_bps_decimal > 0`.
 ```python
@@ -318,36 +338,74 @@ paper_slippage_bps: 0
 gas_usd_estimate: 0.10
 ```
 
-### Signal Schema v2
+### Семантичні покращення (Round 3)
+
+**Issue 5: spread_pct unclear** — додано `spread_frac` для ясності.
+```python
+"spread_pct": 0.0145,    # % (0.0145%)
+"spread_frac": 0.000145, # fraction (multiply by amount)
+```
+
+**Issue 6: confidence black-box** — додано `confidence_reasons`.
+```python
+"confidence_reasons": ["micro_spread", "execution_disabled", "paper_cost_model"]
+```
+
+**Issue 7: cycles semantics** — розділено на `requested_cycles` + `cycles_completed`.
+
+**Issue 8: pnl confusion** — перейменовано на `execution_pnl` (disabled).
+
+**Issue 9: min_spread_bps** — додано в config.
+```yaml
+min_spread_bps: 0  # 0 = any positive spread (MVP)
+```
+
+### Signal Schema v3 (FINAL)
 
 ```json
 {
-  "spread_bps_exact": 1.4542,      // float для micro-spreads
-  "spread_bps_int": 1,             // int для UI
-  "spread_pct": 0.014542,          // відсоток (0.0145%)
-  "is_gross_positive": true,       // sell > buy (Decimal)
-  "size_source": "config",         // не "default"
-  "slippage_source": "config",     // не "default"
-  "slippage_bps": 0,               // з config
-  "net_pnl_usdc_est": 0.0454,      // позитивний!
+  "spread_bps_exact": 1.5721,          // float для micro-spreads
+  "spread_bps_int": 1,                  // int для UI
+  "spread_pct": 0.015721,               // відсоток (0.0157%)
+  "spread_frac": 0.00015721,            // fraction для math
+  "is_gross_positive": true,            // sell > buy (Decimal)
+  "confidence_reasons": [               // NEW: transparency
+    "micro_spread",
+    "execution_disabled",
+    "paper_cost_model"
+  ],
+  "size_source": "config",
+  "slippage_source": "config",
+  "slippage_bps": 0,
+  "net_pnl_usdc_est": 0.0572,
   "is_net_positive_est": true
+}
+```
+
+### Stats Schema v3
+
+```json
+{
+  "requested_cycles": 5,     // NEW: what user asked for
+  "cycles_completed": 5,     // what actually ran
+  "execution_pnl": {         // NEW: renamed from "pnl"
+    "signal_pnl_usdc": 0.0,
+    "cost_model_available": false
+  }
 }
 ```
 
 ### Верифікаційний прогін (5 циклів)
 
 ```
-run: manual_run_20260205_211954
-cycles: 5
-spread_bps_exact: 1.4542 ✅
-spread_bps_int: 1
+run: manual_run_20260205_213126
+requested_cycles: 5 ✅
+cycles_completed: 5 ✅
+spread_bps_exact: 1.5721 ✅
+spread_frac: 0.00015721 ✅
 is_gross_positive: True ✅
-size_source: config ✅
-slippage_source: config ✅
-slippage_bps: 0 ✅
-gross_pnl_usdc_est: $0.1454
-net_pnl_usdc_est: $0.0454 ✅ (позитивний!)
-is_net_positive_est: True ✅
+net_pnl_usdc_est: $0.0572 ✅
+confidence_reasons: micro_spread,execution_disabled,paper_cost_model ✅
 ```
 
 ### Unit тести (7 нових)
@@ -365,9 +423,14 @@ is_net_positive_est: True ✅
 - [x] `is_gross_positive` коректний (sell > buy, Decimal)
 - [x] `spread_bps_exact` не нуль при різних цінах
 - [x] `spread_bps_int` для UI
+- [x] `spread_frac` для math (NEW)
+- [x] `confidence_reasons` array (NEW)
+- [x] `requested_cycles` + `cycles_completed` (NEW)
+- [x] `execution_pnl` separated from spread_signals (NEW)
+- [x] `min_spread_bps` in config (NEW)
 - [x] `size_source != "default"` (з config)
 - [x] `slippage_source != "default"` (з config)
-- [x] `paper_slippage_bps: 0` в config (не 1)
+- [x] `paper_slippage_bps: 0` в config
 - [x] Unit тест для micro-spread
 - [x] 5-cycle прогін з `is_net_positive_est=True`
 - [x] 461 unit тест пройшов

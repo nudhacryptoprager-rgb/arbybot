@@ -100,6 +100,10 @@ gas_usd_estimate: 0.10
 paper_size_usd: 1000
 paper_slippage_bps: 0  # 0 bps default - conservative for micro-spreads
 
+# Spread signal threshold (M5)
+# Signals with spread_bps_exact < this are filtered out
+min_spread_bps: 0  # 0 = any positive spread (MVP)
+
 # M4 markers - execution disabled
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4

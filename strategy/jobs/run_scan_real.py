@@ -299,6 +299,7 @@ def run_scan(
         "price_sanity_failed": 0,
         "rpc_errors": 0,
         "rpc_success_rate": 1.0,
+        "requested_cycles": cycles,
         "cycles_completed": cycles,
     }
 
@@ -613,8 +614,9 @@ def run_scan(
     # Compare prices between different DEXes for the same token pair
     # Use price_exact (from sqrt_price_x96) when available for accurate spread detection
     spread_signals: List[Dict[str, Any]] = []
-    spread_threshold_bps = config.get("spread_threshold_bps", 0)  # default 0 bps for MVP - any positive spread
-    logger.info("Starting spread signal computation: %d quotes, threshold=%d bps", len(quotes_sample), spread_threshold_bps)
+    # min_spread_bps from config (or legacy spread_threshold_bps), default 0 for MVP
+    spread_threshold_bps = config.get("min_spread_bps", config.get("spread_threshold_bps", 0))
+    logger.info("Starting spread signal computation: %d quotes, threshold=%s bps", len(quotes_sample), spread_threshold_bps)
     try:
         # Group quotes by pair (token_in/token_out)
         quotes_by_pair: Dict[str, List[Dict[str, Any]]] = {}
@@ -682,6 +684,14 @@ def run_scan(
                 
                 net_pnl_usdc_estimate = gross_pnl_usdc - gas_usd_estimate - slippage_usd_estimate
                 
+                # Confidence reasons (for transparency)
+                confidence_reasons = []
+                if abs(spread_bps) < 5:
+                    confidence_reasons.append("micro_spread")
+                if not config.get("execution_enabled", False):
+                    confidence_reasons.append("execution_disabled")
+                confidence_reasons.append("paper_cost_model")
+                
                 signal = {
                     "pair": pair,
                     "buy_dex": best_buy.get("dex_id"),
@@ -694,9 +704,11 @@ def run_scan(
                     # spread_bps_int: rounded for display (may be 0)
                     "spread_bps_exact": round(float(spread_bps_decimal), 4),
                     "spread_bps_int": spread_bps,
-                    # spread_pct: percentage (0.00267 means 0.00267%)
-                    # Formula: spread_bps / 100 = pct
+                    # spread_pct: percentage (0.0145 means 0.0145%)
+                    # spread_frac: decimal fraction (0.000145)
+                    # Formula: spread_bps / 100 = pct, spread_bps / 10000 = frac
                     "spread_pct": round(float(spread_bps_decimal) / 100, 6),
+                    "spread_frac": round(float(spread_bps_decimal) / 10000, 8),
                     "block_number": current_block,
                     # is_gross_positive: sell > buy (use Decimal comparison)
                     "is_gross_positive": bool(spread_bps_decimal > 0),
@@ -712,6 +724,7 @@ def run_scan(
                     "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
                     "is_net_positive_est": net_pnl_usdc_estimate > 0,
                     "confidence": "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low",
+                    "confidence_reasons": confidence_reasons,
                 }
                 spread_signals.append(signal)
 
@@ -739,13 +752,22 @@ def run_scan(
         "stats": stats,
         # execution_pnl: PnL from actual execution (DISABLED in M5)
         # This is separate from spread_signals[].net_pnl_usdc_est (paper estimates)
-        "pnl": {
+        "execution_pnl": {
             "signal_pnl_usdc": "0.000000",  # sum of executed signal PnL
             "would_execute_pnl_usdc": "0.000000",  # hypothetical if we had executed
             "gross_pnl_usdc": "0.000000",  # execution gross (not paper)
             "net_pnl_usdc": None,  # execution net (requires cost_model)
             "net_pnl_bps": None,
             "cost_model_available": False,  # no execution cost model yet
+        },
+        # DEPRECATED: pnl alias for backwards compatibility (use execution_pnl)
+        "pnl": {
+            "signal_pnl_usdc": "0.000000",
+            "would_execute_pnl_usdc": "0.000000",
+            "gross_pnl_usdc": "0.000000",
+            "net_pnl_usdc": None,
+            "net_pnl_bps": None,
+            "cost_model_available": False,
         },
         # spread_signals: paper estimates (ACTIVE in M5)
         # Each signal has gross/net estimates based on config gas_usd_estimate
@@ -818,6 +840,7 @@ def run_scan(
         "price_sanity_failed": 3,
         "rpc_errors": 0,
         "rpc_success_rate": 1.0,
+        "requested_cycles": cycles,
         "cycles_completed": cycles,
     }
 
@@ -1127,7 +1150,16 @@ def run_scan(
             "rpc_success_rate": stats["rpc_success_rate"],
         },
         "stats": stats,
-        # PnL summary: include required keys even when cost model not available
+        # execution_pnl: PnL from actual execution (DISABLED in M5)
+        "execution_pnl": {
+            "signal_pnl_usdc": "0.000000",
+            "would_execute_pnl_usdc": "0.000000",
+            "gross_pnl_usdc": "0.000000",
+            "net_pnl_usdc": None,
+            "net_pnl_bps": None,
+            "cost_model_available": False,
+        },
+        # DEPRECATED: pnl alias for backwards compatibility
         "pnl": {
             "signal_pnl_usdc": "0.000000",
             "would_execute_pnl_usdc": "0.000000",

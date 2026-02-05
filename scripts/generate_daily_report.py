@@ -181,9 +181,18 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
                 continue
             top_opportunities.append(
                 {
+                    "pair": s.get("pair"),
+                    "buy_dex": s.get("buy_dex"),
+                    "sell_dex": s.get("sell_dex"),
+                    "spread_bps_exact": s.get("spread_bps_exact"),
                     "spread_pct": s.get("spread_pct"),
+                    "spread_frac": s.get("spread_frac"),
+                    "gross_pnl_usdc_est": s.get("gross_pnl_usdc_est"),
+                    "net_pnl_usdc_est": s.get("net_pnl_usdc_est"),
+                    "is_net_positive_est": s.get("is_net_positive_est"),
                     "size_usd": s.get("size_usd") or s.get("size") or None,
                     "confidence": s.get("confidence"),
+                    "confidence_reasons": s.get("confidence_reasons"),
                     "source": "signal",
                 }
             )
