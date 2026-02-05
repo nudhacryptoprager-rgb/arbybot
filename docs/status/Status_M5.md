@@ -102,8 +102,18 @@ paper_net_pnl_usdc = gross_spread_usd - gas_usd_estimate - slippage_usd_estimate
 ### top_opportunities та opportunities_reason
 
 - `top_opportunities` заповнюється ТІЛЬКИ з `truth_report.spread_signals`
+- `spread_signals` генеруються на основі `price_exact` (з sqrt_price_x96) для точного виявлення мікроспредів
 - Якщо `spread_signals` порожній → `top_opportunities: []` і `opportunities_reason: "no_spread_signals"`
-- Це **НЕ означає, що бот нічого не знаходить** — це означає, що spread_signals генерація ще не реалізована (M6+)
+- Threshold для сигналів: 1 bps (0.01%) — мінімальний spread для реєстрації
+
+### Paper PnL формула
+
+```
+gross_spread_usdc = Σ(spread_pct * size_usd) для всіх signals
+paper_net_pnl_usdc = gross_spread_usdc - gas_usd_estimate - slippage_usd_estimate
+```
+
+**paper_win_rate** = price_sanity_passed / quotes_total (НЕ пов'язаний з PnL)
 
 Price provenance (on-chain доказовість ціни)
 

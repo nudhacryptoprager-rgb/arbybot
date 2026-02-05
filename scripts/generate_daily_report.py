@@ -97,13 +97,24 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     pnl = truth.get("pnl", {})
     gross_net_pnl_usdc = pnl.get("net_pnl_usdc") or 0.0
 
+    # Calculate gross spread from spread_signals
+    # gross_spread_usdc = sum of (spread_pct * size_usd) for all signals
+    signals = truth.get("spread_signals") or []
+    gross_spread_usdc = 0.0
+    default_size_usd = 1000.0  # default size for paper PnL calculation
+    for sig in signals:
+        spread_pct = sig.get("spread_pct") or 0.0
+        size_usd = sig.get("size_usd") or default_size_usd
+        gross_spread_usdc += float(spread_pct) / 100.0 * float(size_usd)
+
     # minimal cost model: gas-only + optional slippage estimate
+    # paper_net = gross_spread - gas - slippage
     if gas_usd_estimate is not None:
-        paper_net = float(gross_net_pnl_usdc) - float(gas_usd_estimate) - float(slippage_usd_estimate or 0.0)
+        paper_net = gross_spread_usdc - float(gas_usd_estimate) - float(slippage_usd_estimate or 0.0)
         pnl_available = True
         pnl_reason = None
     else:
-        paper_net = float(gross_net_pnl_usdc or 0.0)
+        paper_net = gross_spread_usdc
         pnl_available = False
         pnl_reason = "no_cost_model"
 
@@ -219,7 +230,8 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     quotes_fetched = stats.get("quotes_fetched") or scan.get("quotes_fetched") or 0
 
     # Build human-readable summary
-    summary = f"quotes_fetched={quotes_fetched}, gates_passed={gates_passed}, gas_only_pnl={paper_net:.2f}"
+    spread_info = f"spreads={len(signals)}" if signals else "spreads=0"
+    summary = f"quotes_fetched={quotes_fetched}, gates_passed={gates_passed}, {spread_info}, paper_pnl={paper_net:.2f}"
 
     report = {
         "schema_version": "m5:daily:v1",
@@ -232,7 +244,8 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "period": {"from": date.today().isoformat(), "to": date.today().isoformat()},
         "runs_included": 1,
         "pnl_mode": "paper",
-        "paper_net_pnl_usdc": paper_net,
+        "gross_spread_usdc": round(gross_spread_usdc, 6),
+        "paper_net_pnl_usdc": round(paper_net, 6),
         "pnl_available": pnl_available,
         "pnl_reason": pnl_reason,
         "cost_model": cost_model,

@@ -4,7 +4,7 @@
   "timezone": "UTC",
   "run_id": "golden_m5_reference",
   "source_run_dir": "docs/artifacts/golden_run",
-  "summary": "quotes_fetched=10, gates_passed=8, gas_only_pnl=-0.10",
+  "summary": "quotes_fetched=10, gates_passed=8, spreads=0, paper_pnl=-0.10",
   "artifacts": {
     "scan_path": "docs/artifacts/scan_golden.json",
     "truth_report_path": "docs/artifacts/truth_report_golden.json",
@@ -16,6 +16,7 @@
   },
   "runs_included": 1,
   "pnl_mode": "paper",
+  "gross_spread_usdc": 0.0,
   "paper_net_pnl_usdc": -0.10,
   "pnl_available": true,
   "pnl_reason": null,

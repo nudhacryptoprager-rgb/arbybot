@@ -323,19 +323,42 @@ def run_scan(
         if pool_addr and "v3" in dex.lower():
             tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url_for_slot0, current_block)
 
-        try:
-            from core.validators import normalize_price
-            price_val, price_diag = normalize_price(
-                amount_in_wei=10 ** 18,
-                amount_out_wei=2600 * (10 ** 6),
-                decimals_in=config.get("quote_decimals", {}).get("WETH", 18),
-                decimals_out=config.get("quote_decimals", {}).get("USDC", 6),
-                token_in="WETH",
-                token_out="USDC",
-            )
-            price_str = str(price_val)
-        except Exception:
-            price_str = str(Decimal(2600))
+        # Calculate price_exact from sqrt_price_x96 if available
+        # sqrtPriceX96 = sqrt(price) * 2^96
+        # price = (sqrtPriceX96 / 2^96)^2 * 10^(decimals_in - decimals_out)
+        # For WETH/USDC: decimals_in=18, decimals_out=6 → multiply by 10^12
+        price_exact = None
+        if sqrt_price_val is not None and sqrt_price_val > 0:
+            try:
+                # Price from sqrtPriceX96 for token0/token1
+                # In Uniswap v3: price = (sqrtPriceX96)^2 / 2^192
+                # Adjusted for decimals: WETH(18) vs USDC(6)
+                sqrt_ratio = Decimal(sqrt_price_val) / Decimal(2 ** 96)
+                raw_price = sqrt_ratio * sqrt_ratio
+                # Adjust for decimals: USDC per WETH
+                # token0=WETH, token1=USDC in these pools
+                # price = token1/token0 = USDC/WETH
+                decimals_diff = Decimal(10 ** (18 - 6))  # 10^12
+                price_exact = raw_price * decimals_diff
+                price_str = str(round(price_exact, 6))
+            except Exception as e:
+                logger.debug("Failed to calculate price_exact: %s", e)
+                price_exact = None
+                price_str = "2600"
+        else:
+            try:
+                from core.validators import normalize_price
+                price_val, price_diag = normalize_price(
+                    amount_in_wei=10 ** 18,
+                    amount_out_wei=2600 * (10 ** 6),
+                    decimals_in=config.get("quote_decimals", {}).get("WETH", 18),
+                    decimals_out=config.get("quote_decimals", {}).get("USDC", 6),
+                    token_in="WETH",
+                    token_out="USDC",
+                )
+                price_str = str(price_val)
+            except Exception:
+                price_str = str(Decimal(2600))
 
         q = QuoteCompat(
             dex_id=dex,
@@ -355,7 +378,11 @@ def run_scan(
             tick=tick_val,
             sqrt_price_x96=sqrt_price_val,
         )
-        quotes_sample.append(q.__dict__)
+        # Add price_exact to quote dict for spread calculations
+        q_dict = q.__dict__
+        if price_exact is not None:
+            q_dict["price_exact"] = str(price_exact)
+        quotes_sample.append(q_dict)
 
     dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
     stats["dexes_active"] = len(dexes_active_list)
@@ -575,8 +602,9 @@ def run_scan(
 
     # Compute spread signals from quotes_sample
     # Compare prices between different DEXes for the same token pair
+    # Use price_exact (from sqrt_price_x96) when available for accurate spread detection
     spread_signals: List[Dict[str, Any]] = []
-    spread_threshold_bps = config.get("spread_threshold_bps", 5)  # default 5 bps = 0.05%
+    spread_threshold_bps = config.get("spread_threshold_bps", 1)  # default 1 bps = 0.01% for micro-spreads
     try:
         # Group quotes by pair (token_in/token_out)
         quotes_by_pair: Dict[str, List[Dict[str, Any]]] = {}
@@ -591,22 +619,32 @@ def run_scan(
             if len(quotes_for_pair) < 2:
                 continue
 
+            # Use price_exact if available, otherwise fallback to price
+            def get_price(q):
+                if q.get("price_exact"):
+                    return Decimal(str(q.get("price_exact")))
+                return Decimal(str(q.get("price") or "0"))
+
             # Find best buy (lowest price) and best sell (highest price)
-            sorted_by_price = sorted(
-                quotes_for_pair,
-                key=lambda x: Decimal(str(x.get("price") or "0"))
-            )
+            sorted_by_price = sorted(quotes_for_pair, key=get_price)
             best_buy = sorted_by_price[0]  # lowest price = best to buy
             best_sell = sorted_by_price[-1]  # highest price = best to sell
 
-            buy_price = Decimal(str(best_buy.get("price") or "0"))
-            sell_price = Decimal(str(best_sell.get("price") or "0"))
+            buy_price = get_price(best_buy)
+            sell_price = get_price(best_sell)
 
             if buy_price <= 0 or sell_price <= 0:
                 continue
 
             # Spread = (sell_price - buy_price) / buy_price * 10000 (in bps)
-            spread_bps = int((sell_price - buy_price) / buy_price * 10000)
+            spread_bps_decimal = (sell_price - buy_price) / buy_price * Decimal("10000")
+            spread_bps = int(spread_bps_decimal)
+
+            # Log the exact prices for debugging
+            logger.debug(
+                "Spread calc: %s buy=%s sell=%s spread_bps=%s",
+                pair, buy_price, sell_price, spread_bps_decimal
+            )
 
             # Only record if spread exceeds threshold
             if abs(spread_bps) >= spread_threshold_bps:
@@ -614,10 +652,12 @@ def run_scan(
                     "pair": pair,
                     "buy_dex": best_buy.get("dex_id"),
                     "sell_dex": best_sell.get("dex_id"),
-                    "buy_price": str(buy_price),
-                    "sell_price": str(sell_price),
+                    "buy_price": str(round(buy_price, 6)),
+                    "sell_price": str(round(sell_price, 6)),
+                    "buy_pool": best_buy.get("pool_address"),
+                    "sell_pool": best_sell.get("pool_address"),
                     "spread_bps": spread_bps,
-                    "spread_pct": round(spread_bps / 100, 4),
+                    "spread_pct": round(float(spread_bps_decimal) / 100, 4),
                     "block_number": current_block,
                     "is_profitable": spread_bps > 0,
                     "confidence": "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low",
