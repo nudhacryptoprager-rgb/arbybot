@@ -1,7 +1,7 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-05 19:33 UTC  
-> **SHA**: `0a627c3`  
+> **Оновлено**: 2026-02-05 19:48 UTC  
+> **SHA**: `60dd4ac`  
 > **Статус**: ✅ PASS
 
 ---
@@ -53,6 +53,7 @@ Important: `trades_count` is a legacy name kept for backwards compatibility and 
 Additional recommended fields (required for M5 progression):
 - `autosize`: {`new_size_usd`, `reason`, `cooldown_remaining`} — auto-size decisions must be surfaced in the report even if only as metadata.
 - `top_opportunities`: list of top-5 opportunity summaries: {`spread_pct`, `size_usd`, `confidence`, `source`} — should be derived from `truth_report.spread_signals` or from `scan.quotes` when signals absent.
+- `top_quotes`: list of top-2 raw quotes sample with full provenance: {`dex_id`, `pool_address`, `block_number`, `price`, `tick`, `sqrt_price_x96`, `pair`, `timestamp`} — provides transparency into scanner output.
 
 Cost model (мінімальна газова модель)
 
@@ -79,6 +80,25 @@ paper_net_pnl_usdc = gross_spread_usd - gas_usd_estimate - slippage_usd_estimate
 
 **Чому розділено**: daily_report може показувати paper PnL навіть коли truth_report не має cost_model. Це дозволяє операційний моніторинг без повної інтеграції execution engine.
 
+### **⚠️ ВАЖЛИВО: cost_model layers**
+
+**Є ДВА різні cost_model:**
+
+1. **daily_report.cost_model** (АКТИВНИЙ у M5):
+   - Тип: `gas_only` 
+   - Джерело: CLI `--gas-usd-estimate` або config `gas_usd_estimate`
+   - Формула: `paper_net_pnl_usdc = gross_pnl - gas_usd_estimate - slippage_usd_estimate`
+   - Призначення: **paper-estimate для оперативного моніторингу**
+   - Це ESTIMATE, не реальний газ
+
+2. **truth_report.cost_model** (ВИМКНЕНИЙ, M6+):
+   - Тип: execution-level cost model
+   - Джерело: газ oracle + execution engine
+   - Призначення: **execution-рівень PnL після реального трейду**
+   - Поле: `cost_model_available: false` поки не реалізовано
+
+**НЕ плутати** daily_report.cost_model (paper) з truth_report cost_model (execution)!
+
 Price provenance (on-chain доказовість ціни)
 
 Для M5 quotes ПОВИННІ містити:
@@ -94,6 +114,31 @@ Golden artifact policy
 - Maintain golden `daily_report_*.json` files under `docs/artifacts/` for regression testing.
 - Update golden only when the `schema_version` changes or a deliberate addition of fields is accepted by the team. Do NOT auto-update golden from the latest run unless schema changed.
 - Golden artifacts include: `daily_report_golden.json`, `scan_golden.json` з прикладами v3 provenance.
+
+### **⚠️ Golden artifacts update rules (CANONICAL)**
+
+1. **Коли оновлювати golden:**
+   - `schema_version` змінено (e.g., `m5:daily:v1` → `m5:daily:v2`)
+   - Додано нове required поле до артефакту
+   - Виправлено помилку у структурі даних
+
+2. **Коли НЕ оновлювати golden:**
+   - Просто змінились значення даних (quotes, prices)
+   - Нічого не змінилось у schema
+
+3. **Процедура оновлення:**
+   ```bash
+   # 1. Запустити canonical run
+   python scripts/ci_m5_gate.py --online --config config/real_minimal.yaml --cycles 1 --gas-usd-estimate 0.10
+   
+   # 2. Скопіювати артефакти
+   cp data/runs/latest/reports/daily_report_*.json docs/artifacts/daily_report_golden.json
+   
+   # 3. Оновити schema_version у Status_M5.md якщо змінено
+   ```
+
+4. **Перевірка golden:**
+   - `python -m pytest tests/unit -q` — включає golden validation tests
 
 Negative tests (required):
 - `current_block` mismatch (already present)
@@ -139,10 +184,10 @@ Retention & golden artifacts
 
 M5_0 closure
 
-M5_0 closed on SHA: `0a627c3`. Close only if:
+M5_0 closed on SHA: `60dd4ac`. Close only if:
 
 - `scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml` passes ✅
-- `pytest -q` green (447 passed) ✅
+- `pytest -q` green (449 passed) ✅
 
 ---
 
@@ -175,23 +220,32 @@ M5_0 closed on SHA: `0a627c3`. Close only if:
 
 ## Останній прогін
 
-**RESULT: PASS + data\runs\ci_m5_0_gate_20260205_193252**
+**RESULT: PASS + data\runs\manual_run_20260205_194841**
+
+Команда:
+```bash
+python -m scripts.ci_m5_gate --online --config config/real_minimal.yaml --cycles 1 --gas-usd-estimate 0.10
+```
 
 Артефакти:
-- `tick`: заповнений для uniswap_v3 (-200676)
-- `sqrt_price_x96`: заповнений для uniswap_v3 
-- `cost_model`: `{"type": "gas_only", "gas_usd_estimate": 0.1}`
-- `paper_net_pnl_usdc`: -0.1 (gas-only)
+- Scan: `data/runs/manual_run_20260205_194841/snapshots/scan_20260205_194843.json`
+- Daily report: `data/runs/manual_run_20260205_194841/reports/daily_report_2026-02-05T18-48-44.308180+00-00.json`
+
+Провенанс (v3 tick/sqrt_price_x96):
+- `uniswap_v3`: tick=-200741, sqrt_price_x96=3467988426551225090982811
+- `sushiswap_v3`: tick=-200738, sqrt_price_x96=3468418291105540965540117 ✅
+
+cost_model: `{"type": "gas_only", "gas_usd_estimate": 0.1}`
 
 ## Юніт-тести
 
 ```
-443 passed, 5 subtests passed
+449 passed, 5 subtests passed
 ```
 
 ## Наступні кроки
 
-1. Запустити канонічну команду з реальним RPC для верифікації slot0()
+1. ~~Запустити канонічну команду з реальним RPC для верифікації slot0()~~ ✅
 2. Додати генерацію `spread_signals` у truth_report
 3. Заповнити `top_opportunities` з реальних signals
 4. Додати газ oracle інтеграцію (M6)

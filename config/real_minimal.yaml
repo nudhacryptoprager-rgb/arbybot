@@ -54,14 +54,14 @@ pairs:
     token_out: USDC
     fee_tiers: [500, 3000]
 
-# Pool addresses (verified on Arbitrum)
+# Pool addresses (verified on Arbitrum via factory.getPool())
 pools:
   # Uniswap V3 pools (Arbitrum) - canonical WETH/USDC
   uniswap_v3_WETH_USDC_500: "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443"
   uniswap_v3_WETH_USDC_3000: "0x17c14D2c404D167802b16C450d3c99F88F2c4F4d"
-  # SushiSwap V3 pools (Arbitrum)
-  sushiswap_v3_WETH_USDC_500: "0x90d5FFde59F0Ae1E7C19F59a29F3d8e9D44f57E5"
-  sushiswap_v3_WETH_USDC_3000: "0xD1d5A4c0eA98971894772Dcd6D2f1dc71083C44E"
+  # SushiSwap V3 pools (Arbitrum) - verified via SushiSwap V3 Factory 0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e
+  sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
+  sushiswap_v3_WETH_USDC_3000: "0xC96525298419f7E00dA8826B733Ee52e271662b5"
 
 # Token addresses (Arbitrum)
 tokens:

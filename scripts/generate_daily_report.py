@@ -170,6 +170,25 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
             )
     # If no signals → top_opportunities remains empty (no fallback to scan quotes)
 
+    # top_quotes: sample top-2 quotes from scan.quotes with provenance fields
+    # This provides a sample of raw scanner output with full provenance
+    top_quotes = []
+    raw_quotes = scan.get("quotes") or []
+    for q in raw_quotes[:2]:  # take first 2 as sample
+        if not q:
+            continue
+        quote_sample = {
+            "dex_id": q.get("dex_id"),
+            "pool_address": q.get("pool_address"),
+            "block_number": q.get("block_number"),
+            "price": q.get("price"),
+            "tick": q.get("tick"),
+            "sqrt_price_x96": q.get("sqrt_price_x96"),
+            "pair": q.get("pair"),
+            "timestamp": q.get("timestamp"),
+        }
+        top_quotes.append(quote_sample)
+
     # Build cost_model block for transparency
     cost_model = {
         "type": "gas_only" if gas_usd_estimate is not None else "none",
@@ -193,14 +212,13 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "cost_model": cost_model,
         "paper_win_rate": win_rate,
         "checks_count": quotes_total,
-        # DEPRECATED: trades_count is legacy alias for checks_count. Prefer checks_count.
-        # Removal planned in schema v2.
-        "trades_count": quotes_total,
+        # legacy_trades_count: backward compat alias for transition. Use checks_count.
         "legacy_trades_count": quotes_total,
         "tail_losses": tail_losses,
         "top_reject_reasons": top_rejects,
         "autosize": autosize_summary,
         "top_opportunities": top_opportunities,
+        "top_quotes": top_quotes,
         "health": health,
     }
     return report
@@ -264,15 +282,16 @@ def main() -> None:
             "pnl_mode": "paper",
             "paper_net_pnl_usdc": sum((r.get("paper_net_pnl_usdc") or 0) for r in reports),
             "paper_win_rate": None,
-            "trades_count": sum((r.get("trades_count") or 0) for r in reports),
+            "checks_count": sum((r.get("checks_count") or 0) for r in reports),
+            "legacy_trades_count": sum((r.get("checks_count") or 0) for r in reports),
             "top_reject_reasons": [],
             "tail_losses": [],
             "health": {},
         }
         # compute combined win_rate
-        total_trades = merged["trades_count"]
-        total_passed = sum(((r.get("paper_win_rate") or 0) * (r.get("trades_count") or 0)) for r in reports)
-        merged["paper_win_rate"] = (total_passed / total_trades) if total_trades else None
+        total_checks = merged["checks_count"]
+        total_passed = sum(((r.get("paper_win_rate") or 0) * (r.get("checks_count") or 0)) for r in reports)
+        merged["paper_win_rate"] = (total_passed / total_checks) if total_checks else None
 
         # aggregate top rejects
         counter = Counter()

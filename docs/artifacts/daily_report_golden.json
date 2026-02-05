@@ -25,7 +25,6 @@
   },
   "paper_win_rate": 0.58,
   "checks_count": 12,
-  "trades_count": 12,
   "legacy_trades_count": 12,
   "tail_losses": [],
   "top_reject_reasons": [],
@@ -36,6 +35,7 @@
     "cooldown_remaining": 0
   },
   "top_opportunities": [],
+  "top_quotes": [],
   "health": {
     "rpc": {
       "success_rate": 1.0,

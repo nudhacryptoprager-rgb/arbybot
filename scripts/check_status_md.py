@@ -53,6 +53,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Check Status*.md files for required sections")
     parser.add_argument("--fix", action="store_true", help="Add missing sections (not implemented)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument("--file", help="Check only specific Status file (e.g., Status_M5.md)")
     args = parser.parse_args()
 
     status_dir = Path(__file__).parent.parent / "docs" / "status"
@@ -60,7 +61,16 @@ def main() -> int:
         print(f"WARN: Status directory not found: {status_dir}")
         return 0
 
-    status_files = list(status_dir.glob("Status*.md"))
+    if args.file:
+        # Check only specific file
+        filepath = status_dir / args.file
+        if not filepath.exists():
+            print(f"ERROR: File not found: {filepath}")
+            return 1
+        status_files = [filepath]
+    else:
+        status_files = list(status_dir.glob("Status*.md"))
+
     if not status_files:
         print("WARN: No Status*.md files found")
         return 0

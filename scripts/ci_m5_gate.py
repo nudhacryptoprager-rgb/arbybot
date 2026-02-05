@@ -271,6 +271,26 @@ def main() -> None:
         else:
             print(f"{r}: OK")
 
+    # If validation passed, also run check_status_md.py as final step
+    if ok:
+        try:
+            # Run check_status_md for Status_M5.md only (current milestone)
+            result = subprocess.run(
+                [sys.executable, "-m", "scripts.check_status_md", "--file", "Status_M5.md"],
+                capture_output=True,
+                text=True
+            )
+            print("\n--- Running check_status_md validation ---")
+            print(result.stdout)
+            if result.returncode != 0:
+                ok = False
+                print("check_status_md.py validation FAILED")
+                if result.stderr:
+                    print(result.stderr)
+        except Exception as e:
+            print(f"check_status_md.py error: {e}")
+            ok = False
+
     # Print canonical RESULT line for easy CI consumption
     run_dir_display = str(run_dir) if run_dir is not None else "None"
     if ok:
