@@ -26,3 +26,6 @@ black>=23.12.0
 # Optional: performance profiling
 # line-profiler>=4.1.0
 # memory-profiler>=0.61.0
+
+# WebSocket client used for optional lightweight WS handshake tests
+websocket-client>=1.6.0

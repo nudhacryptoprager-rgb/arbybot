@@ -31,6 +31,14 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load .env from repo root early so CLI picks up keys
+try:
+    from core.env import load_root_dotenv
+
+    load_root_dotenv()
+except Exception:
+    pass
+
 
 class ScannerMode(str, Enum):
     """Scanner mode."""

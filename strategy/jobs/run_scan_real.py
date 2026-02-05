@@ -27,6 +27,14 @@ import asyncio
 
 logger = logging.getLogger("run_scan_real")
 
+# Ensure environment variables from project .env are loaded
+try:
+    from core.env import load_root_dotenv
+
+    load_root_dotenv()
+except Exception:
+    pass
+
 # Re-exports and compatibility wrappers expected by integration tests
 try:
     from core.models import Quote as Quote  # type: ignore
@@ -332,13 +340,55 @@ def run_scan(
         if ws_required and not ws_connected:
             raise RuntimeError(f"WS required but not connected: {ws_error}")
 
+        # ws_attempted and fallback info
+        ws_attempted = bool(primary_ws)
+        ws_fallback_to_http = False
+        if ws_attempted and not ws_connected and primary_http:
+            ws_fallback_to_http = True
+
+        tenderly_enabled = bool(os.environ.get("TENDERLY_ACCESS_KEY"))
+        tenderly_ok = False
+        tenderly_error = None
+        # Optional live Tenderly check: only when explicitly requested and network allowed.
+        # Controlled by `ARBY_CHECK_TENDERLY=1`. Honor `ARBY_SKIP_RPC=1` for tests.
+        if tenderly_enabled and os.environ.get("ARBY_CHECK_TENDERLY") == "1" and os.environ.get("ARBY_SKIP_RPC") != "1":
+            try:
+                import httpx
+
+                headers = {"X-Access-Key": os.environ.get("TENDERLY_ACCESS_KEY")}
+                account = os.environ.get("TENDERLY_ACCOUNT")
+                project = os.environ.get("TENDERLY_PROJECT")
+                # Prefer a project-scoped endpoint if account+project provided
+                if account and project:
+                    url = f"https://api.tenderly.co/api/v1/account/{account}/project/{project}"
+                else:
+                    url = "https://api.tenderly.co/api/v1/account"
+
+                resp = httpx.get(url, headers=headers, timeout=5.0)
+                if resp.status_code == 200:
+                    tenderly_ok = True
+                    tenderly_error = None
+                else:
+                    tenderly_ok = False
+                    tenderly_error = f"http_status:{resp.status_code}"
+            except Exception as e:
+                tenderly_ok = False
+                tenderly_error = f"error:{type(e).__name__}"
+        else:
+            tenderly_ok = False
+            tenderly_error = "not_checked" if tenderly_enabled else "not_configured"
+
         scan_data["infra"] = {
             "rpc_provider": rpc_provider,
             "transport": transport,
             "ws_enabled": ws_enabled,
+            "ws_attempted": ws_attempted,
             "ws_connected": ws_connected,
+            "ws_fallback_to_http": ws_fallback_to_http,
             "ws_error": ws_error,
-            "tenderly_enabled": bool(os.environ.get("TENDERLY_ACCESS_KEY")),
+            "tenderly_enabled": tenderly_enabled,
+            "tenderly_ok": tenderly_ok,
+            "tenderly_error": tenderly_error,
         }
     except Exception:
         scan_data["infra"] = {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False}
@@ -390,6 +440,18 @@ def run_scan(
         truth_data["infra"] = scan_data.get("infra", {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False})
     except Exception:
         truth_data["infra"] = {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False}
+
+    # Mirror tenderly diagnostics into truth report as well
+    try:
+        infra = truth_data.get("infra", {})
+        if "tenderly_enabled" in infra:
+            truth_data["infra"]["tenderly_ok"] = infra.get("tenderly_ok", False)
+            truth_data["infra"]["tenderly_error"] = infra.get("tenderly_error")
+        if "ws_attempted" in infra:
+            truth_data["infra"]["ws_attempted"] = infra.get("ws_attempted")
+            truth_data["infra"]["ws_fallback_to_http"] = infra.get("ws_fallback_to_http")
+    except Exception:
+        pass
     
     # Reject histogram data
     # Build a reject entry consistent with cap semantics

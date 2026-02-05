@@ -25,7 +25,25 @@ from pathlib import Path
 
 def is_offline_mode() -> bool:
     """Check if running in offline mode (no network)."""
-    return os.environ.get("ARBY_OFFLINE", "").lower() in ("1", "true", "yes")
+    # Offline if explicitly set, or if integration tests not opt-in
+    if os.environ.get("ARBY_OFFLINE", "").lower() in ("1", "true", "yes"):
+        return True
+
+    # Integration tests must be explicitly enabled
+    enabled = os.environ.get("ARBY_RUN_INTEGRATION", "").lower() in ("1", "true", "yes") or os.environ.get("ARBY_ONLINE_TESTS", "").lower() in ("1", "true", "yes")
+    if not enabled:
+        return True
+
+    # If enabled, ensure resolver can build an RPC endpoint (ALCHEMY_API_KEY or explicit URL)
+    try:
+        from core.rpc_urls import resolve_rpc_http
+        url, provider, diag = resolve_rpc_http()
+        if not url:
+            return True
+    except Exception:
+        return True
+
+    return False
 
 
 class TestSmokeRunREAL(unittest.TestCase):

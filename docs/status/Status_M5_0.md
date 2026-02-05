@@ -90,8 +90,13 @@ python -m pytest tests/unit/test_imports_contract.py -v
 - [x] "constants must not shrink" regression test
 - [x] ci_m5_0_gate.py --offline works
 - [x] API Stability Policy documented
-- [ ] core.models imports without error (needs repo sync)
-- [ ] Full test suite green (needs repo sync)
+- [x] core.models imports without error
+- [x] Full unit test suite green locally
+- [x] Integration smoke tests are opt-in (ARBY_RUN_INTEGRATION / ARBY_ONLINE_TESTS)
+
+Known gaps:
+
+- infra.tenderly_ok/tenderly_error: tenderly diagnostics added but not fully exercised in CI (no network calls by default); values may be `not_checked` until a tenderly check is implemented.
 
 ## REAL Block Policy (M5_0)
 

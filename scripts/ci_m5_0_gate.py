@@ -30,12 +30,19 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from dotenv import load_dotenv
+
+# Ensure repository root is on sys.path so `python scripts/ci_m5_0_gate.py` works
+try:
+    REPO_ROOT = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(REPO_ROOT))
+except Exception:
+    pass
+
+# Load .env from repo root (best-effort)
+from core.env import load_root_dotenv
+load_root_dotenv()
 
 __version__ = "2.1.0"
-
-# Load .env if present but do not error if missing
-load_dotenv()
 
 DEFAULT_OUTPUT_ROOT = Path("data/runs")
 DEFAULT_CONFIG = "config/real_minimal.yaml"
@@ -384,6 +391,39 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
         except Exception as e:
             messages.append(f"FAIL: current_block validation exception: {type(e).__name__}: {e}")
 
+        # Cross-artifact summary cross-checks (scan vs truth_report vs reject_histogram)
+        try:
+            s = loaded_data.get("scan", {})
+            t = loaded_data.get("truth_report", {})
+            r = loaded_data.get("reject_histogram", {})
+
+            def _get(d, key):
+                return d.get(key) if d else None
+
+            # Compare top-level counts
+            mismatches = []
+            for key in ("quotes_total", "quotes_fetched", "dexes_active", "price_sanity_passed", "price_sanity_failed"):
+                sv = _get(s, key)
+                tv = _get(t, key)
+                if sv is not None and tv is not None and int(sv) != int(tv):
+                    mismatches.append((key, sv, tv))
+
+            if mismatches:
+                for key, sv, tv in mismatches:
+                    messages.append(f"FAIL: summary_mismatch - {key} scan={sv} truth_report={tv}")
+                all_passed = False
+
+            # Basic reject histogram vs totals sanity
+            try:
+                total_rejects = int(r.get("total_rejects", 0)) if r else 0
+                rejects_len = len(r.get("rejects", [])) if r else 0
+                if total_rejects != rejects_len:
+                    messages.append(f"WARN: reject_histogram.total_rejects ({total_rejects}) != len(rejects) ({rejects_len})")
+            except Exception:
+                messages.append("WARN: could not cross-check reject_histogram totals")
+        except Exception as e:
+            messages.append(f"WARN: cross-artifact checks failed: {type(e).__name__}: {e}")
+
     return all_passed, messages
 
 
@@ -572,7 +612,7 @@ ENV VARIABLES:
         artifacts_paths = generate_fixture_artifacts(run_dir, timestamp)
         artifacts = discover_artifacts(run_dir)
         # Log resolved artifact paths for clarity
-        print("\n[ONLINE] Resolved artifact paths:")
+        print("\n[OFFLINE] Artifact paths:")
         for k, p in artifacts.items():
             print(f"  {k}: {p}")
         
