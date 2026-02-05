@@ -1,7 +1,7 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-05 19:48 UTC  
-> **SHA**: `60dd4ac`  
+> **Оновлено**: 2026-02-05 20:00 UTC  
+> **SHA**: `281ec1e`  
 > **Статус**: ✅ PASS
 
 ---
@@ -99,6 +99,12 @@ paper_net_pnl_usdc = gross_spread_usd - gas_usd_estimate - slippage_usd_estimate
 
 **НЕ плутати** daily_report.cost_model (paper) з truth_report cost_model (execution)!
 
+### top_opportunities та opportunities_reason
+
+- `top_opportunities` заповнюється ТІЛЬКИ з `truth_report.spread_signals`
+- Якщо `spread_signals` порожній → `top_opportunities: []` і `opportunities_reason: "no_spread_signals"`
+- Це **НЕ означає, що бот нічого не знаходить** — це означає, що spread_signals генерація ще не реалізована (M6+)
+
 Price provenance (on-chain доказовість ціни)
 
 Для M5 quotes ПОВИННІ містити:
@@ -184,7 +190,7 @@ Retention & golden artifacts
 
 M5_0 closure
 
-M5_0 closed on SHA: `60dd4ac`. Close only if:
+M5_0 closed on SHA: `281ec1e`. Close only if:
 
 - `scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml` passes ✅
 - `pytest -q` green (449 passed) ✅
@@ -220,7 +226,7 @@ M5_0 closed on SHA: `60dd4ac`. Close only if:
 
 ## Останній прогін
 
-**RESULT: PASS + data\runs\manual_run_20260205_194841**
+**RESULT: PASS + data\runs\manual_run_20260205_200019**
 
 Команда:
 ```bash
@@ -228,12 +234,20 @@ python -m scripts.ci_m5_gate --online --config config/real_minimal.yaml --cycles
 ```
 
 Артефакти:
-- Scan: `data/runs/manual_run_20260205_194841/snapshots/scan_20260205_194843.json`
-- Daily report: `data/runs/manual_run_20260205_194841/reports/daily_report_2026-02-05T18-48-44.308180+00-00.json`
+- Daily report: `data/runs/manual_run_20260205_200019/reports/daily_report_2026-02-05T19-00-22.674056+00-00.json`
+- Scan: `data/runs/manual_run_20260205_200019/reports/scan_20260205_200021.json`
+
+Нові поля в daily_report:
+- `summary`: "quotes_fetched=10, gates_passed=8, gas_only_pnl=-0.10"
+- `quotes_fetched`: 10
+- `gates_passed`: 8
+- `opportunities_reason`: "no_spread_signals"
+- `top_quotes[].pair`: "WETH/USDC" (заповнено)
+- `top_quotes[].timestamp`: заповнено з scan
 
 Провенанс (v3 tick/sqrt_price_x96):
-- `uniswap_v3`: tick=-200741, sqrt_price_x96=3467988426551225090982811
-- `sushiswap_v3`: tick=-200738, sqrt_price_x96=3468418291105540965540117 ✅
+- `uniswap_v3`: tick=-200581, sqrt_price_x96=3495802435336546433321785
+- `sushiswap_v3`: tick=-200582, sqrt_price_x96=3495622064483228647750106 ✅
 
 cost_model: `{"type": "gas_only", "gas_usd_estimate": 0.1}`
 

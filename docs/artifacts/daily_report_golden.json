@@ -4,6 +4,7 @@
   "timezone": "UTC",
   "run_id": "golden_m5_reference",
   "source_run_dir": "docs/artifacts/golden_run",
+  "summary": "quotes_fetched=10, gates_passed=8, gas_only_pnl=-0.10",
   "artifacts": {
     "scan_path": "docs/artifacts/scan_golden.json",
     "truth_report_path": "docs/artifacts/truth_report_golden.json",
@@ -25,6 +26,8 @@
   },
   "paper_win_rate": 0.58,
   "checks_count": 12,
+  "quotes_fetched": 10,
+  "gates_passed": 8,
   "legacy_trades_count": 12,
   "tail_losses": [],
   "top_reject_reasons": [],
@@ -35,7 +38,29 @@
     "cooldown_remaining": 0
   },
   "top_opportunities": [],
-  "top_quotes": [],
+  "opportunities_reason": "no_spread_signals",
+  "top_quotes": [
+    {
+      "dex_id": "uniswap_v3",
+      "pool_address": "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443",
+      "block_number": 428976014,
+      "price": "2600",
+      "tick": -200741,
+      "sqrt_price_x96": 3467988426551225090982811,
+      "pair": "WETH/USDC",
+      "timestamp": "2026-02-05T18:48:43.584044+00:00"
+    },
+    {
+      "dex_id": "sushiswap_v3",
+      "pool_address": "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296",
+      "block_number": 428976014,
+      "price": "2600",
+      "tick": -200738,
+      "sqrt_price_x96": 3468418291105540965540117,
+      "pair": "WETH/USDC",
+      "timestamp": "2026-02-05T18:48:43.584044+00:00"
+    }
+  ],
   "health": {
     "rpc": {
       "success_rate": 1.0,

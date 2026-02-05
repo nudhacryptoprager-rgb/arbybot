@@ -169,14 +169,29 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
                 }
             )
     # If no signals → top_opportunities remains empty (no fallback to scan quotes)
+    # Add reason when empty
+    opportunities_reason = None
+    if not top_opportunities:
+        spread_signals_count = len(signals)
+        if spread_signals_count == 0:
+            opportunities_reason = "no_spread_signals"
+        else:
+            opportunities_reason = "no_valid_signals"
 
     # top_quotes: sample top-2 quotes from scan.quotes with provenance fields
     # This provides a sample of raw scanner output with full provenance
     top_quotes = []
     raw_quotes = scan.get("quotes") or []
+    scan_timestamp = scan.get("timestamp")  # use scan timestamp for all quotes
     for q in raw_quotes[:2]:  # take first 2 as sample
         if not q:
             continue
+        # Build pair from token_in/token_out if not present
+        pair = q.get("pair")
+        if not pair:
+            token_in = q.get("token_in") or "?"
+            token_out = q.get("token_out") or "?"
+            pair = f"{token_in}/{token_out}"
         quote_sample = {
             "dex_id": q.get("dex_id"),
             "pool_address": q.get("pool_address"),
@@ -184,8 +199,8 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
             "price": q.get("price"),
             "tick": q.get("tick"),
             "sqrt_price_x96": q.get("sqrt_price_x96"),
-            "pair": q.get("pair"),
-            "timestamp": q.get("timestamp"),
+            "pair": pair,
+            "timestamp": q.get("timestamp") or scan_timestamp,
         }
         top_quotes.append(quote_sample)
 
@@ -196,12 +211,20 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "slippage_usd_estimate": slippage_usd_estimate if gas_usd_estimate is not None else None,
     }
 
+    # Extract gates_passed and quotes_fetched for explicit surfacing
+    gates_passed = stats.get("gates_passed") or 0
+    quotes_fetched = stats.get("quotes_fetched") or scan.get("quotes_fetched") or 0
+
+    # Build human-readable summary
+    summary = f"quotes_fetched={quotes_fetched}, gates_passed={gates_passed}, gas_only_pnl={paper_net:.2f}"
+
     report = {
         "schema_version": "m5:daily:v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "timezone": "UTC",
         "run_id": str(run_dir.name),
         "source_run_dir": str(run_dir),
+        "summary": summary,
         "artifacts": artifacts,
         "period": {"from": date.today().isoformat(), "to": date.today().isoformat()},
         "runs_included": 1,
@@ -212,12 +235,15 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "cost_model": cost_model,
         "paper_win_rate": win_rate,
         "checks_count": quotes_total,
+        "quotes_fetched": quotes_fetched,
+        "gates_passed": gates_passed,
         # legacy_trades_count: backward compat alias for transition. Use checks_count.
         "legacy_trades_count": quotes_total,
         "tail_losses": tail_losses,
         "top_reject_reasons": top_rejects,
         "autosize": autosize_summary,
         "top_opportunities": top_opportunities,
+        "opportunities_reason": opportunities_reason,
         "top_quotes": top_quotes,
         "health": health,
     }
