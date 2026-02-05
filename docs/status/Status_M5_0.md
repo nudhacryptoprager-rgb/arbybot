@@ -93,6 +93,7 @@ python -m pytest tests/unit/test_imports_contract.py -v
 - [x] core.models imports without error
 - [x] Full unit test suite green locally
 - [x] Integration smoke tests are opt-in (ARBY_RUN_INTEGRATION / ARBY_ONLINE_TESTS)
+ - [ ] DoD enforcement: online gate must run with strict checks (require-infra-hosts + require-cross-artifact) by default
 
 Known gaps:
 
@@ -123,6 +124,15 @@ Known gaps:
 - WS is optional by default. The gate exposes flags and an optional CLI switch to require WS (`--ws-required`).
 
 - Tenderly is optional. If `TENDERLY_ACCESS_KEY` (and related vars) present, `infra.tenderly_enabled=true` is written; otherwise `false`.
+
+DoD enforcement note:
+
+- The gate now promotes a strict M5_0 profile for DoD: when running `--online`, the gate will enable `require-infra-hosts` and `require-cross-artifact` checks by default to prevent PASS with semantically-invalid data. `tenderly` remains optional and is enforced only when `--require-tenderly` is explicitly provided.
+
+Blockers to resolve before DoD online runs:
+
+- BLOCKER: RPC host mismatch — runs must not map `chain_id=42161` to a `mantle-` host (scan/truth infra must reflect the correct network).
+- BLOCKER: `truth_report.health` must be derived from `stats` so `price_sanity_failed` and related counters are consistent across artifacts.
 
 Additional infra transparency (new requirements):
 

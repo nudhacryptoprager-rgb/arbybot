@@ -81,12 +81,15 @@ _CHAIN_ID_TO_NETWORK = {
 
 
 def _normalize_network_from_chain(chain_id: Optional[int], network: Optional[str]) -> Optional[str]:
-    # Prefer explicit network string
+    # Prefer chain_id mapping when available (avoid accidental mismatched NETWORK env)
+    if chain_id is not None:
+        mapped = _CHAIN_ID_TO_NETWORK.get(int(chain_id))
+        if mapped:
+            return mapped
+    # Fallback to explicit network string if chain_id not mapped
     if network:
         return _normalize_network(network)
-    if chain_id is None:
-        return None
-    return _CHAIN_ID_TO_NETWORK.get(int(chain_id))
+    return None
 
 
 def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = None, env: Optional[dict] = None):

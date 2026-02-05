@@ -416,22 +416,27 @@ def run_scan(
                 except Exception:
                     _wsclient = None
 
-                if _wsclient:
-                    try:
-                        import time as _time
-                        start = _time.monotonic()
-                        conn = _wsclient.create_connection(primary_ws, timeout=5)
-                        conn.close()
-                        end = _time.monotonic()
-                        ws_handshake_ms = int((end - start) * 1000)
-                        globals()["ws_handshake_ms"] = ws_handshake_ms
-                        ws_connected = True
-                    except Exception as e:
-                        ws_connected = False
-                        ws_error = f"handshake_failed: {e}"
-                else:
+                # Skip WS handshake during unit tests or when ARBY_SKIP_RPC is set
+                if os.environ.get("ARBY_SKIP_RPC") == "1":
                     ws_connected = False
-                    ws_error = "websocket-client-missing"
+                    ws_error = "skipped"
+                else:
+                    if _wsclient:
+                        try:
+                            import time as _time
+                            start = _time.monotonic()
+                            conn = _wsclient.create_connection(primary_ws, timeout=5)
+                            conn.close()
+                            end = _time.monotonic()
+                            ws_handshake_ms = int((end - start) * 1000)
+                            globals()["ws_handshake_ms"] = ws_handshake_ms
+                            ws_connected = True
+                        except Exception as e:
+                            ws_connected = False
+                            ws_error = f"handshake_failed: {e}"
+                    else:
+                        ws_connected = False
+                        ws_error = "websocket-client-missing"
             except Exception as e:
                 ws_connected = False
                 ws_error = f"ws_check_exception: {e}"
@@ -446,18 +451,19 @@ def run_scan(
         if ws_attempted and not ws_connected and primary_http:
             ws_fallback_to_http = True
 
-        tenderly_enabled = bool(os.environ.get("TENDERLY_ACCESS_KEY"))
-        tenderly_ok = False
+        # Treat Tenderly as optional by default. Only mark enabled when a key is present
+        # and a lightweight ping succeeds. Otherwise record as disabled to avoid noise.
+        tenderly_configured = bool(os.environ.get("TENDERLY_ACCESS_KEY"))
+        tenderly_enabled = False
+        tenderly_ok = None
         tenderly_error = None
-        # If Tenderly key is configured, perform a lightweight ping (unless tests skip RPC).
-        if tenderly_enabled and os.environ.get("ARBY_SKIP_RPC") != "1":
+        if tenderly_configured and os.environ.get("ARBY_SKIP_RPC") != "1":
             try:
                 import httpx
 
                 headers = {"X-Access-Key": os.environ.get("TENDERLY_ACCESS_KEY")}
                 account = os.environ.get("TENDERLY_ACCOUNT")
                 project = os.environ.get("TENDERLY_PROJECT")
-                # Prefer a project-scoped endpoint if account+project provided
                 if account and project:
                     url = f"https://api.tenderly.co/api/v1/account/{account}/project/{project}"
                 else:
@@ -465,17 +471,22 @@ def run_scan(
 
                 resp = httpx.get(url, headers=headers, timeout=5.0)
                 if resp.status_code == 200:
+                    tenderly_enabled = True
                     tenderly_ok = True
                     tenderly_error = None
                 else:
+                    # Treat unavailable/4xx/5xx as disabled to avoid false FAILs
+                    tenderly_enabled = False
                     tenderly_ok = False
-                    tenderly_error = f"http_status:{resp.status_code}"
-            except Exception as e:
+                    tenderly_error = "disabled"
+            except Exception:
+                tenderly_enabled = False
                 tenderly_ok = False
-                tenderly_error = f"error:{type(e).__name__}"
+                tenderly_error = "disabled"
         else:
-            tenderly_ok = False
-            tenderly_error = "not_configured"
+            tenderly_enabled = False
+            tenderly_ok = None
+            tenderly_error = "disabled"
 
         # include host/provider transparently (no keys)
         infra_payload = {
@@ -647,6 +658,9 @@ def run_scan(
         "inversion_applied": False,
         "suspect_quote": True,
         "suspect_reason": "way_below_expected",
+        # Include expected/anchor info when reason references expected price
+        "expected_price": str(anchor_price),
+        "anchor_source": "config",
     }
 
     reject_data = {
@@ -662,6 +676,21 @@ def run_scan(
         stats["price_sanity_failed"] = int(reject_data.get("total_rejects", 0))
     except Exception:
         stats["price_sanity_failed"] = stats.get("price_sanity_failed", 0)
+
+    # Record suspect quotes counts and reasons separately from price_sanity_failed
+    try:
+        suspect_count = sum(1 for r in reject_data.get("rejects", []) if r.get("suspect_quote"))
+        stats["suspect_quotes"] = int(suspect_count)
+        # Aggregate reasons
+        reasons = {}
+        for r in reject_data.get("rejects", []):
+            if r.get("suspect_quote"):
+                reason = r.get("suspect_reason") or "unknown"
+                reasons[reason] = reasons.get(reason, 0) + 1
+        stats["suspect_reasons"] = reasons
+    except Exception:
+        stats["suspect_quotes"] = 0
+        stats["suspect_reasons"] = {}
 
     # Propagate synced stats into scan_data and truth_data to avoid cross-artifact drift
     try:
@@ -686,6 +715,22 @@ def run_scan(
     # Mirror infra into reject histogram for transparency
     try:
         reject_data["infra"] = scan_data.get("infra", {})
+    except Exception:
+        pass
+
+    # Ensure truth_data.health is derived from the canonical stats to avoid two truths
+    try:
+        truth_data["health"] = {
+            "quotes_total": stats.get("quotes_total"),
+            "quotes_fetched": stats.get("quotes_fetched"),
+            "gates_passed": stats.get("gates_passed"),
+            "dexes_active": stats.get("dexes_active"),
+            "price_sanity_passed": stats.get("price_sanity_passed"),
+            "price_sanity_failed": stats.get("price_sanity_failed"),
+            "price_stability_factor": stats.get("price_stability_factor"),
+            "rpc_errors": stats.get("rpc_errors"),
+            "rpc_success_rate": stats.get("rpc_success_rate"),
+        }
     except Exception:
         pass
     

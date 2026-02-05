@@ -5,6 +5,7 @@ Pytest configuration and fixtures for ARBY tests.
 
 import sys
 from pathlib import Path
+import os
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -20,3 +21,6 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "integration: marks tests as integration tests"
     )
+    # Prevent unit tests from making real RPC/network calls by default.
+    # Integration tests that require network should explicitly enable it.
+    os.environ.setdefault("ARBY_SKIP_RPC", "1")

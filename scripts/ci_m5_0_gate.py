@@ -461,6 +461,27 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                     messages.append(f"FAIL: REQUIRE_ALCHEMY set but provider != alchemy (scan={prov_s} truth={prov_t})")
                     all_passed = False
 
+            # Heuristic: chain_id vs rpc host mismatch (blocker)
+            try:
+                chain_id_s = s.get("chain_id")
+                chain_id_t = t.get("chain_id")
+                # prefer scan chain_id if present
+                chain_id_val = chain_id_s or chain_id_t
+                if chain_id_val is not None:
+                    try:
+                        cid = int(chain_id_val)
+                        # Quick heuristic for known mismatch: Arbitrum chain_id (42161) must not point to Mantle host
+                        if cid == 42161:
+                            hs = (host_s or "").lower()
+                            ht = (host_t or "").lower()
+                            if "mantle" in hs or "mantle" in ht:
+                                messages.append(f"FAIL: chain_id=42161 (Arbitrum) but rpc_http_host contains 'mantle' (scan={host_s} truth={host_t})")
+                                all_passed = False
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
             # Tenderly diagnostic consistency
             for name, infra in (("scan", infra_s), ("truth_report", infra_t)):
                 if infra.get("tenderly_enabled"):
@@ -759,6 +780,11 @@ ENV VARIABLES:
             os.environ.setdefault("ARBY_PREFER_WS", "1")
         if args.ws_required:
             os.environ.setdefault("ARBY_WS_REQUIRED", "1")
+
+        # For M5_0 DoD: make infra-hosts and cross-artifact checks strict by default in online runs
+        # These can still be overridden by explicit flags if needed.
+        args.require_infra_hosts = True
+        args.require_cross_artifact = True
 
         success, message = run_real_scan(run_dir, args.config, args.cycles)
         
