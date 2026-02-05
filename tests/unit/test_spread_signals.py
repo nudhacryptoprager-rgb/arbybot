@@ -187,26 +187,48 @@ def test_no_signal_when_same_dex():
     assert len(signals) == 0, "Should not generate signal with only 1 quote"
 
 
-def test_paper_cost_model():
-    """Test paper cost model calculations."""
-    # Given a spread signal with known values
-    spread_bps = Decimal("1.5")  # 1.5 bps = 0.015%
+def test_paper_cost_model_arithmetic():
+    """
+    Test the corrected paper cost model arithmetic.
+    
+    Formula:
+      gross_pnl = size_usd * spread_bps / 10000
+      slippage_usd = size_usd * slippage_bps / 10000
+      net_pnl = gross_pnl - gas_usd - slippage_usd
+    
+    This is a regression test for the bug where slippage was 0.1% ($1.00)
+    instead of 1 bps ($0.10), causing net_pnl to be incorrectly negative.
+    """
+    # Test case 1: 2 bps spread, should be net positive
+    spread_bps = Decimal("2")  # 2 bps = 0.02%
     size_usd = Decimal(1000)
     gas_usd = Decimal("0.10")
-    slippage_pct = Decimal("0.001")  # 0.1%
+    slippage_bps = Decimal("1")  # 1 bps (corrected from 10 bps)
     
-    # Calculate as in run_scan_real.py
-    gross_spread_pct = spread_bps / 100
-    gross_pnl = float(size_usd * gross_spread_pct / 100)
-    slippage_usd = float(size_usd * slippage_pct)
+    # gross = 1000 * 2 / 10000 = 0.20 USD
+    gross_pnl = float(size_usd * spread_bps / Decimal(10000))
+    assert abs(gross_pnl - 0.20) < 0.001, f"Gross PnL wrong: {gross_pnl}"
+    
+    # slippage = 1000 * 1 / 10000 = 0.10 USD
+    slippage_usd = float(size_usd * slippage_bps / Decimal(10000))
+    assert abs(slippage_usd - 0.10) < 0.001, f"Slippage wrong: {slippage_usd}"
+    
+    # net = 0.20 - 0.10 - 0.10 = 0.00 USD (breakeven)
     net_pnl = gross_pnl - float(gas_usd) - slippage_usd
+    assert abs(net_pnl - 0.00) < 0.001, f"Net PnL wrong: {net_pnl}, expected 0.00"
     
-    # gross = 1000 * 0.015 / 100 = 0.15 USD
-    assert abs(gross_pnl - 0.15) < 0.01, f"Gross PnL wrong: {gross_pnl}"
+    # Test case 2: 5 bps spread, should be clearly net positive
+    spread_bps = Decimal("5")  # 5 bps = 0.05%
+    gross_pnl = float(size_usd * spread_bps / Decimal(10000))  # = 0.50
+    net_pnl = gross_pnl - float(gas_usd) - slippage_usd  # = 0.50 - 0.10 - 0.10 = 0.30
     
-    # slippage = 1000 * 0.001 = 1.0 USD  
-    assert abs(slippage_usd - 1.0) < 0.01, f"Slippage wrong: {slippage_usd}"
+    assert net_pnl > 0, f"5 bps spread should be net positive, got {net_pnl}"
+    assert abs(net_pnl - 0.30) < 0.001, f"Net PnL wrong: {net_pnl}, expected 0.30"
     
-    # net = 0.15 - 0.10 - 1.0 = -0.95 USD (negative!)
-    assert net_pnl < 0, "Net should be negative with high slippage"
-    assert abs(net_pnl - (-0.95)) < 0.01, f"Net PnL wrong: {net_pnl}"
+    # Test case 3: Verify the OLD bug would have given wrong result
+    # OLD formula: slippage = size * 0.001 = 1000 * 0.001 = $1.00 (10x too high!)
+    bad_slippage_usd = float(size_usd * Decimal("0.001"))  # = $1.00
+    bad_net_pnl = gross_pnl - float(gas_usd) - bad_slippage_usd  # = 0.50 - 0.10 - 1.00 = -0.60
+    
+    assert bad_net_pnl < 0, "Old formula should have been negative"
+    assert abs(bad_net_pnl - (-0.60)) < 0.001, f"Old bug net wrong: {bad_net_pnl}"

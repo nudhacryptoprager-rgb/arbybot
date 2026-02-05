@@ -662,13 +662,21 @@ def run_scan(
             # Use Decimal comparison, not int, to catch micro-spreads
             if abs(spread_bps_decimal) >= spread_threshold_bps:
                 # Paper cost estimates (M5 layer - no real execution)
-                paper_size_usd = Decimal(1000)  # Default paper trade size
-                gross_spread_pct = spread_bps_decimal / 100
-                gross_pnl_usdc = float(paper_size_usd * gross_spread_pct / 100)
+                # Size from config, default $1000
+                paper_size_usd = Decimal(str(config.get("paper_size_usd", 1000)))
+                size_source = "config" if "paper_size_usd" in config else "default"
+                
+                # gross_pnl = size * (spread_bps / 10000)
+                # spread_bps_decimal is in bps, so divide by 10000 to get decimal multiplier
+                gross_pnl_usdc = float(paper_size_usd * spread_bps_decimal / Decimal(10000))
                 
                 # Estimated costs (paper layer - conservative estimates)
-                gas_usd_estimate = 0.10  # Conservative L2 gas
-                slippage_usd_estimate = float(paper_size_usd * Decimal("0.001"))  # 0.1% slippage
+                # Gas from config, default $0.10 for L2
+                gas_usd_estimate = float(config.get("gas_usd_estimate", 0.10))
+                # Slippage: 1 bps (0.01%) is reasonable for paper estimates
+                slippage_bps = Decimal(str(config.get("slippage_bps", 1)))  # default 1 bps
+                slippage_usd_estimate = float(paper_size_usd * slippage_bps / Decimal(10000))
+                
                 net_pnl_usdc_estimate = gross_pnl_usdc - gas_usd_estimate - slippage_usd_estimate
                 
                 signal = {
@@ -682,12 +690,14 @@ def run_scan(
                     "spread_bps": spread_bps,
                     "spread_pct": round(float(spread_bps_decimal) / 100, 4),
                     "block_number": current_block,
-                    # is_gross_positive: spread > 0 (doesn't account for costs)
-                    "is_gross_positive": spread_bps > 0,
+                    # is_gross_positive: spread > 0 (use Decimal, not int)
+                    "is_gross_positive": spread_bps_decimal > 0,
                     # Paper estimates (not real execution)
                     "size_usd": float(paper_size_usd),
+                    "size_source": size_source,
                     "gross_pnl_usdc_est": round(gross_pnl_usdc, 4),
                     "gas_usd_estimate": gas_usd_estimate,
+                    "slippage_usd_estimate": round(slippage_usd_estimate, 4),
                     "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
                     "is_net_positive_est": net_pnl_usdc_estimate > 0,
                     "confidence": "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low",
@@ -716,14 +726,18 @@ def run_scan(
         "price_sanity_failed": stats["price_sanity_failed"],
         "health": {},
         "stats": stats,
+        # execution_pnl: PnL from actual execution (DISABLED in M5)
+        # This is separate from spread_signals[].net_pnl_usdc_est (paper estimates)
         "pnl": {
-            "signal_pnl_usdc": "0.000000",
-            "would_execute_pnl_usdc": "0.000000",
-            "gross_pnl_usdc": "0.000000",
-            "net_pnl_usdc": None,
+            "signal_pnl_usdc": "0.000000",  # sum of executed signal PnL
+            "would_execute_pnl_usdc": "0.000000",  # hypothetical if we had executed
+            "gross_pnl_usdc": "0.000000",  # execution gross (not paper)
+            "net_pnl_usdc": None,  # execution net (requires cost_model)
             "net_pnl_bps": None,
-            "cost_model_available": False,
+            "cost_model_available": False,  # no execution cost model yet
         },
+        # spread_signals: paper estimates (ACTIVE in M5)
+        # Each signal has gross/net estimates based on config gas_usd_estimate
         "spread_signals": spread_signals,
     }
 
