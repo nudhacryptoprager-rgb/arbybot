@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import sys
 from pathlib import Path
-from datetime import date
-from typing import List
+from datetime import date, datetime
+from typing import List, Optional
 
 
 def validate_report(path: Path) -> List[str]:
@@ -90,33 +92,101 @@ def validate_report(path: Path) -> List[str]:
     return errors
 
 
+def _latest_run_dir(runs_root: Path) -> Optional[Path]:
+    if not runs_root.exists():
+        return None
+    cand = [p for p in runs_root.iterdir() if p.is_dir()]
+    if not cand:
+        return None
+    cand.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return cand[0]
+
+
+def _run_scan_module(config: Optional[str], cycles: int) -> None:
+    cmd = [sys.executable, "-m", "strategy.jobs.run_scan", "--mode", "real", "--cycles", str(cycles)]
+    if config:
+        cmd += ["--config", config]
+    # Run scanner as subprocess to keep same semantics as CI
+    subprocess.check_call(cmd)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--reports", nargs="+", required=False, help="daily_report JSON files to validate")
     p.add_argument("--generate-report", help="Path to runDir to generate daily_report before validation")
-    p.add_argument("--strict-paper-only", help="Enforce paper_* fields only (fail on legacy fields)", action="store_true", default=True)
+    p.add_argument("--run-dir", help="Use existing runDir instead of running scanner")
+    p.add_argument("--online", help="Run scanner before generating and validating report", action="store_true")
+    p.add_argument("--config", help="Config file to pass to scanner when --online")
+    p.add_argument("--cycles", type=int, default=1, help="Number of cycles to run when --online")
+    p.add_argument("--strict-paper-only", help="Enforce paper_* fields only (fail on legacy fields)", action="store_true", default=False)
     args = p.parse_args()
 
-    # If requested, generate report first to avoid validating stale reports
+    run_dir: Optional[Path] = None
+
+    # If --run-dir provided, use it and skip scanning
+    if args.run_dir:
+        run_dir = Path(args.run_dir)
+
+    # If online requested and no run-dir given, run the scanner
+    if args.online and run_dir is None:
+        try:
+            _run_scan_module(args.config, args.cycles)
+        except Exception as e:
+            print(f"Scanner run failed: {e}")
+            print(f"RESULT: FAIL (scanner) + None")
+            raise
+        # try to discover latest runDir under data/runs
+        runs_root = Path("data") / "runs"
+        run_dir = _latest_run_dir(runs_root)
+        if run_dir is None:
+            print("No runDir found after scanner run")
+            print("RESULT: FAIL + None")
+            raise SystemExit(2)
+
+    # If generate-report requested with a runDir path string
     if args.generate_report:
-        from scripts.generate_daily_report import aggregate_run
         run_dir = Path(args.generate_report)
-        report = aggregate_run(run_dir)
+
+    generated_report_paths: List[Path] = []
+
+    # If a run_dir is available, generate a report for it
+    if run_dir is not None:
+        from scripts.generate_daily_report import aggregate_run
+        import os
+
+        gas_env = os.environ.get("ARBY_GAS_USD_ESTIMATE") or os.environ.get("GAS_USD_ESTIMATE")
+        slip_env = os.environ.get("ARBY_SLIPPAGE_USD_ESTIMATE") or os.environ.get("SLIPPAGE_USD_ESTIMATE")
+        gas_val = float(gas_env) if gas_env is not None else None
+        slip_val = float(slip_env) if slip_env is not None else 0.0
+
+        report = aggregate_run(run_dir, gas_usd_estimate=gas_val, slippage_usd_estimate=slip_val)
         write_dir = run_dir / "reports"
         write_dir.mkdir(parents=True, exist_ok=True)
-        out_path = write_dir / f"daily_report_{report.get('generated_at', date.today().isoformat())}.json"
+        # Use date part for filename
+        gen_at = report.get("generated_at") or datetime.utcnow().isoformat()
+        safe_ts = gen_at.replace(":", "-")
+        out_path = write_dir / f"daily_report_{safe_ts}.json"
         out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf8")
         print(f"Generated report: {out_path}")
+        generated_report_paths.append(out_path)
 
     all_errors = {}
+
+    # Validate provided report files (either via --reports or generated)
+    reports_to_check: List[Path] = []
     if args.reports:
-        for r in args.reports:
-            path = Path(r)
-            errs = validate_report(path)
-            all_errors[r] = errs
+        reports_to_check = [Path(r) for r in args.reports]
     else:
-        print("No reports provided for validation; use --reports or --generate-report")
+        reports_to_check = generated_report_paths
+
+    if not reports_to_check:
+        print("No reports provided for validation; use --reports, --run-dir, --generate-report, or --online")
+        print("RESULT: FAIL + None")
         raise SystemExit(2)
+
+    for r in reports_to_check:
+        errs = validate_report(r)
+        all_errors[str(r)] = errs
 
     ok = True
     for r, errs in all_errors.items():
@@ -126,7 +196,13 @@ def main() -> None:
         else:
             print(f"{r}: OK")
 
-    if not ok:
+    # Print canonical RESULT line for easy CI consumption
+    run_dir_display = str(run_dir) if run_dir is not None else "None"
+    if ok:
+        print(f"RESULT: PASS + {run_dir_display}")
+        raise SystemExit(0)
+    else:
+        print(f"RESULT: FAIL + {run_dir_display}")
         raise SystemExit(1)
 
 

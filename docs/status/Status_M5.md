@@ -10,8 +10,12 @@ Roadmap Milestone 5 deliverables
 
 DoD-commands
 
-- Run the gate in strict online mode and produce artifacts:
-  - `python scripts/ci_m5_gate.py --validate-daily report.json`
+- Canonical (two-step) — when you already have a runDir:
+  - `python scripts/ci_m5_gate.py --run-dir data/runs/<runDir> --generate-report`
+
+- Canonical (one-step runner) — run scanner, generate report, validate (runner mode):
+  - `python scripts/ci_m5_gate.py --online --config config/real_minimal.yaml --cycles 1`
+
 - Unit tests green: `python -m pytest -q`
 
 Execution policy
@@ -31,10 +35,35 @@ Minimal fields (schema_version v1):
 - `net_pnl_usdc`: number (net pnl for paper trades in USDC)
 - `win_rate`: number (fraction 0..1) — defined for M5 as: paper trades/opportunities that passed gates and would have executed (execution disabled)
 - Note: For clarity these are *paper* metrics in M5. The canonical field names produced by the generator will be `paper_net_pnl_usdc` and `paper_win_rate` and `pnl_mode: "paper"`.
+ - Note: For clarity these are *paper* metrics in M5. The canonical field names produced by the generator will be `paper_net_pnl_usdc` and `paper_win_rate` and `pnl_mode: "paper"`.
 - `trades_count`: int
+
+Important: `trades_count` is a legacy name kept for backwards compatibility and is equivalent to `checks_count` produced by the generator. This field is deprecated and consumers should prefer `checks_count`.
 - `tail_losses`: list of top-k worst trade outcomes (by pnl)
 - `top_reject_reasons`: list of {reason, count}
 - `health`: {rpc: {...}, dex: {...}, system: {...}}
+
+Additional recommended fields (required for M5 progression):
+- `autosize`: {`new_size_usd`, `reason`, `cooldown_remaining`} — auto-size decisions must be surfaced in the report even if only as metadata.
+- `top_opportunities`: list of top-5 opportunity summaries: {`spread_pct`, `size_usd`, `confidence`, `source`} — should be derived from `truth_report.spread_signals` or from `scan.quotes` when signals absent.
+
+Cost model (minimal)
+
+For M5 the initial cost model must be gas-only and explicitly configured. The generator reads a config key `gas_usd_estimate` (example: `0.10`) and optionally `slippage_usd_estimate`.
+
+paper_net_pnl_usdc = gross_spread_usd - gas_usd_estimate - slippage_usd_estimate
+
+When `gas_usd_estimate` is present the report SHOULD set `pnl_available: true` and clear `pnl_reason`.
+
+Golden artifact policy
+
+- Maintain golden `daily_report_*.json` files under `docs/artifacts/` for regression testing.
+- Update golden only when the `schema_version` changes or a deliberate addition of fields is accepted by the team. Do NOT auto-update golden from the latest run unless schema changed.
+
+Negative tests (required):
+- `current_block` mismatch (already present)
+- `quotes_total` mismatch (unit test added)
+- `rejects_total` mismatch (unit test added)
 
 DoD additions
 

@@ -24,7 +24,7 @@ def load_json_first(path: Path, pattern: str):
         return json.load(fh)
 
 
-def aggregate_run(run_dir: Path) -> Dict[str, Any]:
+def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage_usd_estimate: float = 0.0) -> Dict[str, Any]:
     # Search for artifacts in common locations: run_dir/, run_dir/reports/, run_dir/snapshots/
     def find_first(pattern: str):
         for candidate_dir in (run_dir, run_dir / "reports", run_dir / "snapshots"):
@@ -95,7 +95,17 @@ def aggregate_run(run_dir: Path) -> Dict[str, Any]:
 
     # net_pnl_usdc: prefer truth.pnl.net_pnl_usdc or zero
     pnl = truth.get("pnl", {})
-    net_pnl_usdc = pnl.get("net_pnl_usdc") or 0.0
+    gross_net_pnl_usdc = pnl.get("net_pnl_usdc") or 0.0
+
+    # minimal cost model: gas-only + optional slippage estimate
+    if gas_usd_estimate is not None:
+        paper_net = float(gross_net_pnl_usdc) - float(gas_usd_estimate) - float(slippage_usd_estimate or 0.0)
+        pnl_available = True
+        pnl_reason = None
+    else:
+        paper_net = float(gross_net_pnl_usdc or 0.0)
+        pnl_available = False
+        pnl_reason = "no_cost_model"
 
     # win_rate: define as (quotes that passed sanity) / total quotes
     quotes_total = truth.get("quotes_total") or scan.get("quotes_total") or 0
@@ -126,6 +136,47 @@ def aggregate_run(run_dir: Path) -> Dict[str, Any]:
         "reject_histogram_path": str(reject_path) if reject_path else None,
     }
 
+    # autosize: surface autosize decisions from truth if present
+    autosize = truth.get("autosize") or {}
+    autosize_summary = None
+    if autosize:
+        autosize_summary = {
+            "new_size_usd": autosize.get("new_size_usd") or autosize.get("new_size") or None,
+            "reason": autosize.get("reason"),
+            "cooldown_remaining": autosize.get("cooldown_remaining"),
+        }
+
+    # top_opportunities: prefer truth.spread_signals, fallback to scan.quotes
+    top_opportunities = []
+    signals = truth.get("spread_signals") or []
+    if signals:
+        # sort by confidence or spread_pct
+        def _sig_score(s):
+            return float(s.get("confidence") or s.get("spread_pct") or 0)
+
+        sorted_sigs = sorted(signals, key=_sig_score, reverse=True)
+        for s in sorted_sigs[:5]:
+            top_opportunities.append(
+                {
+                    "spread_pct": s.get("spread_pct"),
+                    "size_usd": s.get("size_usd") or s.get("size") or None,
+                    "confidence": s.get("confidence"),
+                    "source": "truth",
+                }
+            )
+    else:
+        for q in (scan.get("quotes") or [])[:5]:
+            if not q:
+                continue
+            top_opportunities.append(
+                {
+                    "spread_pct": q.get("spread_pct") or q.get("spread") or None,
+                    "size_usd": q.get("size_usd") or q.get("size") or None,
+                    "confidence": q.get("confidence"),
+                    "source": "scan",
+                }
+            )
+
     report = {
         "schema_version": "m5:daily:v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -136,12 +187,16 @@ def aggregate_run(run_dir: Path) -> Dict[str, Any]:
         "period": {"from": date.today().isoformat(), "to": date.today().isoformat()},
         "runs_included": 1,
         "pnl_mode": "paper",
-        "paper_net_pnl_usdc": net_pnl_usdc,
+        "paper_net_pnl_usdc": paper_net,
+        "pnl_available": pnl_available,
+        "pnl_reason": pnl_reason,
         "paper_win_rate": win_rate,
         "checks_count": quotes_total,
         "trades_count": quotes_total,
         "tail_losses": tail_losses,
         "top_reject_reasons": top_rejects,
+        "autosize": autosize_summary,
+        "top_opportunities": top_opportunities,
         "health": health,
     }
     return report
@@ -151,6 +206,8 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--run-dir", required=True, help="One run directory to aggregate")
     p.add_argument("--out", help="Output directory for daily report", default=".")
+    p.add_argument("--gas-usd-estimate", type=float, help="Optional gas USD estimate to enable cost model")
+    p.add_argument("--slippage-usd-estimate", type=float, help="Optional slippage USD estimate to subtract from PnL", default=0.0)
     p.add_argument("--runs-root", help="Optional root to aggregate multiple runs for a date")
     p.add_argument("--date", help="Date to aggregate (YYYYMMDD) when using --runs-root")
     args = p.parse_args()
@@ -226,7 +283,7 @@ def main() -> None:
         print(f"Wrote {out_path}")
         return
 
-    report = aggregate_run(run_dir)
+    report = aggregate_run(run_dir, gas_usd_estimate=args.gas_usd_estimate, slippage_usd_estimate=args.slippage_usd_estimate)
     # default: write under run_dir/reports
     write_dir = run_dir / "reports"
     write_dir.mkdir(parents=True, exist_ok=True)
