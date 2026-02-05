@@ -692,13 +692,10 @@ def run_scan(
                     confidence_reasons.append("execution_disabled")
                 confidence_reasons.append("paper_cost_model")
                 
-                # Compute spread_bps_int for UI display
-                # For positive spreads, show at least 1 to avoid "0 bps" confusion
+                # Compute spread_bps_int for UI display (honest floor, may be 0)
                 # spread_bps_int is NOT used for logic, only for display
-                if spread_bps_decimal > 0:
-                    spread_bps_int_display = max(1, int(spread_bps_decimal))
-                else:
-                    spread_bps_int_display = int(spread_bps_decimal)
+                # HONEST: floor(0.36) = 0, not 1
+                spread_bps_int_display = int(spread_bps_decimal)  # floor for positive
                 
                 # Compute net and determine reason if negative
                 net_negative_reason = None
@@ -717,7 +714,7 @@ def run_scan(
                     "buy_pool": best_buy.get("pool_address"),
                     "sell_pool": best_sell.get("pool_address"),
                     # spread_bps_exact: float for micro-spreads (e.g., 0.267) - USE THIS FOR LOGIC
-                    # spread_bps_int: min 1 for positive spreads, for UI display ONLY
+                    # spread_bps_int: floor() for display - HONEST (may be 0 for micro-spreads)
                     "spread_bps_exact": round(float(spread_bps_decimal), 4),
                     "spread_bps_int": spread_bps_int_display,
                     # spread_pct: percentage (0.0145 means 0.0145%)
