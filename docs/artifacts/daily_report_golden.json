@@ -30,6 +30,7 @@
   "quotes_fetched": 10,
   "gates_passed": 8,
   "spread_signals_count": 0,
+  "top_signal": null,
   "deprecated_legacy_trades_count": 12,
   "tail_losses": [],
   "top_reject_reasons": [],

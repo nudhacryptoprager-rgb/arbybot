@@ -328,6 +328,9 @@ def run_scan(
         # price = (sqrtPriceX96 / 2^96)^2 * 10^(decimals_in - decimals_out)
         # For WETH/USDC: decimals_in=18, decimals_out=6 → multiply by 10^12
         price_exact = None
+        amount_out_wei_val = 2600 * (10 ** 6)  # Default fallback
+        amount_out_human_str = "2600"
+        
         if sqrt_price_val is not None and sqrt_price_val > 0:
             try:
                 # Price from sqrtPriceX96 for token0/token1
@@ -341,6 +344,12 @@ def run_scan(
                 decimals_diff = Decimal(10 ** (18 - 6))  # 10^12
                 price_exact = raw_price * decimals_diff
                 price_str = str(round(price_exact, 6))
+                
+                # Calculate consistent amount_out from price_exact
+                # For 1 WETH input: amount_out = price_exact USDC
+                amount_out_human_val = price_exact  # USDC for 1 WETH
+                amount_out_wei_val = int(amount_out_human_val * (10 ** 6))  # USDC 6 decimals
+                amount_out_human_str = str(round(amount_out_human_val, 6))
             except Exception as e:
                 logger.debug("Failed to calculate price_exact: %s", e)
                 price_exact = None
@@ -367,9 +376,9 @@ def run_scan(
             token_out="USDC",
             fee=3000,
             amount_in_wei=10 ** 18,
-            amount_out_wei=2600 * (10 ** 6),
+            amount_out_wei=amount_out_wei_val,
             amount_in_human="1",
-            amount_out_human="2600",
+            amount_out_human=amount_out_human_str,
             price=price_str,
             latency_ms=int(globals().get("rpc_latency", 0) or 10),
             block_number=current_block,
@@ -648,6 +657,16 @@ def run_scan(
 
             # Only record if spread exceeds threshold
             if abs(spread_bps) >= spread_threshold_bps:
+                # Paper cost estimates (M5 layer - no real execution)
+                paper_size_usd = Decimal(1000)  # Default paper trade size
+                gross_spread_pct = spread_bps_decimal / 100
+                gross_pnl_usdc = float(paper_size_usd * gross_spread_pct / 100)
+                
+                # Estimated costs (paper layer - conservative estimates)
+                gas_usd_estimate = 0.10  # Conservative L2 gas
+                slippage_usd_estimate = float(paper_size_usd * Decimal("0.001"))  # 0.1% slippage
+                net_pnl_usdc_estimate = gross_pnl_usdc - gas_usd_estimate - slippage_usd_estimate
+                
                 signal = {
                     "pair": pair,
                     "buy_dex": best_buy.get("dex_id"),
@@ -659,7 +678,14 @@ def run_scan(
                     "spread_bps": spread_bps,
                     "spread_pct": round(float(spread_bps_decimal) / 100, 4),
                     "block_number": current_block,
-                    "is_profitable": spread_bps > 0,
+                    # is_gross_positive: spread > 0 (doesn't account for costs)
+                    "is_gross_positive": spread_bps > 0,
+                    # Paper estimates (not real execution)
+                    "size_usd": float(paper_size_usd),
+                    "gross_pnl_usdc_est": round(gross_pnl_usdc, 4),
+                    "gas_usd_estimate": gas_usd_estimate,
+                    "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
+                    "is_net_positive_est": net_pnl_usdc_estimate > 0,
                     "confidence": "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low",
                 }
                 spread_signals.append(signal)

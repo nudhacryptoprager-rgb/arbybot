@@ -233,6 +233,22 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     spread_info = f"spreads={len(signals)}" if signals else "spreads=0"
     summary = f"quotes_fetched={quotes_fetched}, gates_passed={gates_passed}, {spread_info}, paper_pnl={paper_net:.2f}"
 
+    # Top signal for summary (best spread)
+    top_signal = None
+    if signals:
+        # Sort by spread_bps descending to get best signal
+        sorted_signals = sorted(signals, key=lambda s: s.get("spread_bps", 0), reverse=True)
+        best = sorted_signals[0]
+        top_signal = {
+            "pair": best.get("pair"),
+            "buy_dex": best.get("buy_dex"),
+            "sell_dex": best.get("sell_dex"),
+            "spread_bps": best.get("spread_bps"),
+            "gross_pnl_usdc_est": best.get("gross_pnl_usdc_est"),
+            "net_pnl_usdc_est": best.get("net_pnl_usdc_est"),
+            "is_net_positive_est": best.get("is_net_positive_est"),
+        }
+
     report = {
         "schema_version": "m5:daily:v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -254,6 +270,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "quotes_fetched": quotes_fetched,
         "gates_passed": gates_passed,
         "spread_signals_count": len(signals),
+        "top_signal": top_signal,
         # DEPRECATED: will be removed in schema v2. Use checks_count.
         "deprecated_legacy_trades_count": quotes_total,
         "tail_losses": tail_losses,

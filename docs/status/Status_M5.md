@@ -1,8 +1,32 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-05 20:12 UTC  
-> **SHA**: `087d014`  
+> **Оновлено**: 2026-02-05 20:42 UTC  
+> **SHA**: `pending`  
 > **Статус**: ✅ PASS
+
+---
+
+## Recent Changes (2026-02-05)
+
+### Критичний фікс: amount_out vs price consistency
+
+**Проблема**: `amount_out_human="2600"` був статичним, тоді як `price≈1930` обчислювався з `sqrt_price_x96`. Це порушувало інваріант `price == amount_out / amount_in`.
+
+**Рішення**: 
+- Тепер `amount_out_wei` та `amount_out_human` обчислюються з `price_exact`
+- Додано unit test `test_quote_price_invariant.py` для валідації інваріанту
+
+### Spread signals — paper cost estimates
+
+Сигнали тепер включають paper estimates:
+- `is_gross_positive`: замінив `is_profitable` (чесніша семантика — лише gross spread)
+- `gross_pnl_usdc_est`: оцінка gross прибутку для paper trade
+- `net_pnl_usdc_est`: gross - gas - slippage  
+- `is_net_positive_est`: чи позитивний net після витрат
+
+### Daily report enhancements
+
+- `top_signal`: найкращий spread signal з buy/sell/spread_bps/net_estimate
 
 ---
 

@@ -10,15 +10,33 @@ def make_minimal_run(tmp_path: Path) -> Path:
     run.mkdir()
     # minimal scan
     scan = {"quotes_total": 2, "quotes_fetched": 2}
-    # Add spread_signals for paper PnL calculation
+    # Add spread_signals for paper PnL calculation (new schema with paper estimates)
     truth = {
         "quotes_total": 2,
         "price_sanity_passed": 1,
         "pnl": {"net_pnl_usdc": 12.5},
         "health": {"rpc": {"success_rate": 1.0}},
         "spread_signals": [
-            {"spread_pct": 0.5, "size_usd": 1000},  # 0.5% of 1000 = 5 USD
-            {"spread_pct": 0.75, "size_usd": 1000},  # 0.75% of 1000 = 7.5 USD
+            {
+                "pair": "WETH/USDC",
+                "spread_pct": 0.5,  # 0.5% 
+                "spread_bps": 50,
+                "size_usd": 1000,
+                "gross_pnl_usdc_est": 5.0,
+                "net_pnl_usdc_est": 3.9,  # gross - gas - slippage
+                "is_gross_positive": True,
+                "is_net_positive_est": True,
+            },
+            {
+                "pair": "WETH/USDC",
+                "spread_pct": 0.75,  # 0.75%
+                "spread_bps": 75,
+                "size_usd": 1000,
+                "gross_pnl_usdc_est": 7.5,
+                "net_pnl_usdc_est": 6.4,  # gross - gas - slippage
+                "is_gross_positive": True,
+                "is_net_positive_est": True,
+            },
         ],  # Total gross = 12.5 USD
     }
     reject = {"rejects": [{"error": "deviation_exceeded"}, {"suspect_reason": "way_below_expected"}]}
@@ -38,4 +56,8 @@ def test_aggregate_minimal(tmp_path):
     assert rpt.get("paper_net_pnl_usdc") == 12.5
     assert rpt.get("gross_spread_usdc") == 12.5
     assert rpt.get("spread_signals_count") == 2
+    # top_signal should have the best spread
+    top_signal = rpt.get("top_signal")
+    assert top_signal is not None
+    assert top_signal.get("spread_bps") == 75  # best one
     assert isinstance(rpt["top_reject_reasons"], list)
