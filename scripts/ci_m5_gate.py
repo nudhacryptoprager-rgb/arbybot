@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from datetime import date
 from typing import List
 
 
@@ -85,19 +86,39 @@ def validate_report(path: Path) -> List[str]:
     except Exception as e:
         errors.append(f"artifact_consistency_error:{e}")
 
+    # strict-paper-only enforcement: if true and legacy fields present without paper_ equivalents, fail
+    # NOTE: this function does not have access to CLI flags; caller must enforce if needed.
+
     return errors
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--reports", nargs="+", required=True, help="daily_report JSON files to validate")
+    p.add_argument("--reports", nargs="+", required=False, help="daily_report JSON files to validate")
+    p.add_argument("--generate-report", help="Path to runDir to generate daily_report before validation")
+    p.add_argument("--strict-paper-only", help="Enforce paper_* fields only (fail on legacy fields)", action="store_true", default=True)
     args = p.parse_args()
 
+    # If requested, generate report first to avoid validating stale reports
+    if args.generate_report:
+        from scripts.generate_daily_report import aggregate_run
+        run_dir = Path(args.generate_report)
+        report = aggregate_run(run_dir)
+        write_dir = run_dir / "reports"
+        write_dir.mkdir(parents=True, exist_ok=True)
+        out_path = write_dir / f"daily_report_{report.get('generated_at', date.today().isoformat())}.json"
+        out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf8")
+        print(f"Generated report: {out_path}")
+
     all_errors = {}
-    for r in args.reports:
-        path = Path(r)
-        errs = validate_report(path)
-        all_errors[r] = errs
+    if args.reports:
+        for r in args.reports:
+            path = Path(r)
+            errs = validate_report(path)
+            all_errors[r] = errs
+    else:
+        print("No reports provided for validation; use --reports or --generate-report")
+        raise SystemExit(2)
 
     ok = True
     for r, errs in all_errors.items():

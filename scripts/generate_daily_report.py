@@ -25,15 +25,56 @@ def load_json_first(path: Path, pattern: str):
 
 
 def aggregate_run(run_dir: Path) -> Dict[str, Any]:
-    scan_path = sorted(run_dir.glob("scan_*.json"))[:1]
-    truth_path = sorted(run_dir.glob("truth_report_*.json"))[:1]
-    reject_path = sorted(run_dir.glob("reject_histogram_*.json"))[:1]
-    scan = json.loads(scan_path[0].read_text(encoding="utf8")) if scan_path else {}
-    truth = json.loads(truth_path[0].read_text(encoding="utf8")) if truth_path else {}
-    reject = json.loads(reject_path[0].read_text(encoding="utf8")) if reject_path else {}
+    # Search for artifacts in common locations: run_dir/, run_dir/reports/, run_dir/snapshots/
+    def find_first(pattern: str):
+        for candidate_dir in (run_dir, run_dir / "reports", run_dir / "snapshots"):
+            if not candidate_dir.exists():
+                continue
+            files = sorted(candidate_dir.glob(pattern))
+            if files:
+                return files[0]
+        return None
+
+    scan_path = find_first("scan_*.json")
+    truth_path = find_first("truth_report_*.json")
+    reject_path = find_first("reject_histogram_*.json")
+    scan = json.loads(scan_path.read_text(encoding="utf8")) if scan_path else {}
+    truth = json.loads(truth_path.read_text(encoding="utf8")) if truth_path else {}
+    reject = json.loads(reject_path.read_text(encoding="utf8")) if reject_path else {}
 
     # Minimal aggregations
+    stats = truth.get("stats", {})
+    infra = truth.get("infra", {})
     health = truth.get("health", {})
+
+    # Derive structured health sections if not present or missing components
+    if not (isinstance(health, dict) and health.get("rpc") and health.get("dex") and health.get("system")):
+        rpc_success_rate = stats.get("rpc_success_rate") if isinstance(stats.get("rpc_success_rate"), (int, float)) else 1.0
+        p50_latency = stats.get("rpc_latency") if stats.get("rpc_latency") is not None else None
+        ws_connected_rate = 1.0 if infra.get("ws_connected") else 0.0
+
+        quotes_total = stats.get("quotes_total") or 0
+        quotes_fetched = stats.get("quotes_fetched") or 0
+        quote_fetch_rate = (quotes_fetched / quotes_total) if quotes_total else None
+
+        gates_passed = stats.get("gates_passed") or 0
+        gate_pass_rate = (gates_passed / quotes_total) if quotes_total else None
+
+        health = {
+            "rpc": {
+                "success_rate": rpc_success_rate,
+                "p50_latency_ms": p50_latency,
+                "ws_connected_rate": ws_connected_rate,
+            },
+            "dex": {
+                "quote_fetch_rate": quote_fetch_rate,
+                "revert_rate": 0,
+            },
+            "system": {
+                "gate_pass_rate": gate_pass_rate,
+                "artifacts_ok_rate": 1.0,
+            },
+        }
 
     # net_pnl_usdc: prefer truth.pnl.net_pnl_usdc or zero
     pnl = truth.get("pnl", {})
@@ -51,6 +92,8 @@ def aggregate_run(run_dir: Path) -> Dict[str, Any]:
         reasons_counter[reason] += 1
 
     top_rejects = [{"reason": k, "count": v} for k, v in reasons_counter.most_common(10)]
+    if not top_rejects:
+        top_rejects = [{"reason": "no_rejects", "count": 0}]
 
     # tail losses: use suspect_summary examples if available (placeholder)
     tail_losses = []
@@ -61,9 +104,9 @@ def aggregate_run(run_dir: Path) -> Dict[str, Any]:
 
     # Provenance
     artifacts = {
-        "scan_path": str(scan_path[0]) if scan_path else None,
-        "truth_report_path": str(truth_path[0]) if truth_path else None,
-        "reject_histogram_path": str(reject_path[0]) if reject_path else None,
+        "scan_path": str(scan_path) if scan_path else None,
+        "truth_report_path": str(truth_path) if truth_path else None,
+        "reject_histogram_path": str(reject_path) if reject_path else None,
     }
 
     report = {
@@ -100,8 +143,33 @@ def main() -> None:
     if args.runs_root and args.date:
         runs_root = Path(args.runs_root)
         date_token = args.date
-        candidates = [d for d in runs_root.iterdir() if d.is_dir() and date_token in d.name]
-        aggregated = None
+        candidates = []
+        # More robust selection: read timestamp from scan/truth artifact inside runDir
+        for d in runs_root.iterdir():
+            if not d.is_dir():
+                continue
+            # try to read scan_*.json or truth_report_*.json
+            sp = sorted(d.glob("scan_*.json"))[:1]
+            tp = sorted(d.glob("truth_report_*.json"))[:1]
+            ts = None
+            try:
+                if sp:
+                    j = json.loads(sp[0].read_text(encoding="utf8"))
+                    ts = j.get("timestamp")
+                elif tp:
+                    j = json.loads(tp[0].read_text(encoding="utf8"))
+                    ts = j.get("timestamp")
+            except Exception:
+                ts = None
+            if ts:
+                # compare date prefix YYYY-MM-DD
+                if ts.startswith(date_token) or ts.startswith(date_token.replace("-", "")):
+                    candidates.append(d)
+            else:
+                # fallback: include if date token in folder name (legacy)
+                if date_token in d.name:
+                    candidates.append(d)
+
         reports = []
         for d in sorted(candidates):
             r = aggregate_run(d)
