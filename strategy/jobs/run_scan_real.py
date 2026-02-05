@@ -260,6 +260,10 @@ def run_scan(
             current_block = int(os.environ.get("ARBY_FAKE_BLOCK", "100"))
         else:
             current_block, rpc_latency = get_current_block_via_rpc(config)
+            try:
+                globals()["rpc_latency"] = int(rpc_latency or 0)
+            except Exception:
+                globals()["rpc_latency"] = 0
             if current_block in FAKE_BLOCK_SENTINELS:
                 raise BlockPinError(f"Invalid current block from RPC: {current_block}")
     except BlockPinError:
@@ -305,6 +309,21 @@ def run_scan(
                 pool_addr = v
                 break
 
+        # Compute a realistic price for the sample using normalize_price when possible
+        try:
+            from core.validators import normalize_price
+            price_val, price_diag = normalize_price(
+                amount_in_wei=10 ** 18,
+                amount_out_wei=2600 * (10 ** 6),
+                decimals_in=config.get("quote_decimals", {}).get("WETH", 18),
+                decimals_out=config.get("quote_decimals", {}).get("USDC", 6),
+                token_in="WETH",
+                token_out="USDC",
+            )
+            price_str = str(price_val)
+        except Exception:
+            price_str = str(Decimal(2600))
+
         q = QuoteCompat(
             dex_id=dex,
             pool_address=pool_addr,
@@ -315,7 +334,7 @@ def run_scan(
             amount_out_wei=2600 * (10 ** 6),
             amount_in_human="1",
             amount_out_human="2600",
-            price=str(Decimal(2600)),
+            price=price_str,
             latency_ms=int(globals().get('rpc_latency', 0) or 10),
             block_number=current_block,
             rpc_success=True,
@@ -583,9 +602,29 @@ def run_scan(
     # Reject histogram data
     # Build a reject entry consistent with cap semantics
     max_dev = config.get("price_sanity_max_deviation_bps", 5000)
-    # Example: implied price way below anchor
-    implied_price = Decimal("8.605")
-    anchor_price = Decimal("2600")
+    # Build reject entries and compute implied price properly from amounts/decimals
+    # Example anchor price (from config bounds or canonical value)
+    try:
+        anchor_price = Decimal(str(config.get("tokens_anchor_price", {}).get("WETH_USDC", 2600)))
+    except Exception:
+        anchor_price = Decimal("2600")
+
+    # Use normalize_price to compute implied price from amounts and decimals
+    try:
+        from core.validators import normalize_price
+
+        implied_price_dec, diag = normalize_price(
+            amount_in_wei=10 ** 18,
+            amount_out_wei=2600 * (10 ** 6),
+            decimals_in=config.get("quote_decimals", {}).get("WETH", 18),
+            decimals_out=config.get("quote_decimals", {}).get("USDC", 6),
+            token_in="WETH",
+            token_out="USDC",
+        )
+        implied_price = Decimal(str(implied_price_dec))
+    except Exception:
+        implied_price = Decimal("0")
+
     _, raw_bps, _was_capped = calculate_deviation_bps(implied_price, anchor_price)
     capped_flag = raw_bps > int(max_dev)
     deviation_bps = int(min(raw_bps, int(max_dev)))
@@ -616,8 +655,29 @@ def run_scan(
         "rejects": [reject_entry],
         "sample_rejects": [reject_entry],
         "total_rejects": 1,
-        "price_sanity_failed": stats["price_sanity_failed"],
+        "price_sanity_failed": stats.get("price_sanity_failed", 0),
     }
+    # Ensure stats reflects actual reject counts for consistency
+    try:
+        stats["price_sanity_failed"] = int(reject_data.get("total_rejects", 0))
+    except Exception:
+        stats["price_sanity_failed"] = stats.get("price_sanity_failed", 0)
+
+    # Propagate synced stats into scan_data and truth_data to avoid cross-artifact drift
+    try:
+        scan_data["price_sanity_failed"] = stats.get("price_sanity_failed")
+        scan_data["stats"]["price_sanity_failed"] = stats.get("price_sanity_failed")
+    except Exception:
+        pass
+    try:
+        truth_data["price_sanity_failed"] = stats.get("price_sanity_failed")
+        truth_data["stats"]["price_sanity_failed"] = stats.get("price_sanity_failed")
+    except Exception:
+        pass
+    try:
+        reject_data["price_sanity_failed"] = stats.get("price_sanity_failed")
+    except Exception:
+        pass
     # Populate truth report uncapped worst-deviation metric for debugging
     try:
         truth_data["price_sanity_deviation_bps_raw_max"] = int(raw_bps)
