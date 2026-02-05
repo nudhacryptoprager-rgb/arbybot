@@ -1,0 +1,73 @@
+{
+  "schema_version": "m5:scan:v1.1",
+  "timestamp": "2026-02-05T19:30:00+00:00",
+  "run_mode": "REGISTRY_REAL",
+  "chain_id": 42161,
+  "current_block": 301234567,
+  "quotes_total": 12,
+  "quotes_fetched": 10,
+  "dexes_active": 2,
+  "dexes_active_list": ["sushiswap_v3", "uniswap_v3"],
+  "price_sanity_passed": 7,
+  "price_sanity_failed": 0,
+  "stats": {
+    "quotes_total": 12,
+    "quotes_fetched": 10,
+    "gates_passed": 8,
+    "dexes_active": 2,
+    "price_sanity_passed": 7,
+    "price_sanity_failed": 0,
+    "rpc_errors": 0,
+    "rpc_success_rate": 1.0,
+    "cycles_completed": 1
+  },
+  "quotes": [
+    {
+      "dex_id": "uniswap_v3",
+      "pool_address": "0x17c14D2c404D167802b16C450d3c99F88F2c4F4d",
+      "token_in": "WETH",
+      "token_out": "USDC",
+      "fee": 3000,
+      "amount_in_wei": 1000000000000000000,
+      "amount_out_wei": 2600000000,
+      "price": "2600",
+      "latency_ms": 150,
+      "block_number": 301234567,
+      "rpc_success": true,
+      "gate_passed": true,
+      "tick": -201234,
+      "sqrt_price_x96": 1234567890123456789012345678901234567890
+    },
+    {
+      "dex_id": "sushiswap_v3",
+      "pool_address": "0xD1d5A4c0eA98971894772Dcd6D2f1dc71083C44E",
+      "token_in": "WETH",
+      "token_out": "USDC",
+      "fee": 3000,
+      "amount_in_wei": 1000000000000000000,
+      "amount_out_wei": 2600000000,
+      "price": "2600",
+      "latency_ms": 155,
+      "block_number": 301234567,
+      "rpc_success": true,
+      "gate_passed": true,
+      "tick": -201235,
+      "sqrt_price_x96": 1234567890123456789012345678901234567891
+    }
+  ],
+  "infra": {
+    "rpc_provider": "alchemy",
+    "transport": "ws+http",
+    "ws_enabled": true,
+    "ws_attempted": true,
+    "ws_connected": true,
+    "ws_fallback_to_http": false,
+    "ws_error": null,
+    "tenderly_enabled": false,
+    "tenderly_ok": null,
+    "tenderly_error": "disabled",
+    "rpc_http_host": "arb-mainnet.g.alchemy.com",
+    "rpc_ws_host": "arb-mainnet.g.alchemy.com",
+    "ws_handshake_ms": 45
+  }
+}

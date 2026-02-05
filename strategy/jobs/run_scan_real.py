@@ -257,6 +257,38 @@ def run_scan(
     except BlockPinError:
         raise
 
+    # Helper: read slot0() for v3 pool (tick + sqrtPriceX96 provenance)
+    def read_slot0_v3(pool_address: str, rpc_url: str | None, block_num: int) -> tuple[int | None, int | None]:
+        """Read slot0() from a Uniswap V3 pool contract to get tick and sqrtPriceX96.
+        Returns (tick, sqrtPriceX96) or (None, None) on failure."""
+        if not pool_address or not rpc_url:
+            return None, None
+        if os.environ.get("ARBY_SKIP_RPC") == "1":
+            return None, None
+        try:
+            from web3 import Web3
+        except ImportError:
+            logger.debug("slot0() skipped: web3 not installed")
+            return None, None
+        try:
+            from pathlib import Path as P
+            abi_path = P(__file__).parent.parent.parent / "dex" / "abi" / "uniswap_v3_pool.json"
+            if not abi_path.exists():
+                logger.debug("slot0() skipped: ABI not found at %s", abi_path)
+                return None, None
+            abi = json.loads(abi_path.read_text(encoding="utf8"))
+            w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 5}))
+            pool = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=abi)
+            slot0 = pool.functions.slot0().call(block_identifier=block_num)
+            # slot0 returns: (sqrtPriceX96, tick, observationIndex, observationCardinality, observationCardinalityNext, feeProtocol, unlocked)
+            sqrt_price_x96 = int(slot0[0])
+            tick = int(slot0[1])
+            logger.debug("slot0() success for %s: tick=%s, sqrtPriceX96=%s", pool_address, tick, sqrt_price_x96)
+            return tick, sqrt_price_x96
+        except Exception as e:
+            logger.debug("slot0() read failed for %s: %s", pool_address, e)
+            return None, None
+
     # Base stats and placeholders
     stats: Dict[str, Any] = {
         "quotes_total": 12,
@@ -275,6 +307,9 @@ def run_scan(
     dexes_list = config.get("dexes") or []
     pools_cfg = config.get("pools", {}) or {}
     token_pair_tag = "WETH_USDC"
+    # Determine RPC URL for slot0 reads
+    rpc_url_for_slot0 = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or (config.get("rpc_endpoints") or [None])[0]
+
     for dex in dexes_list:
         # attempt to find a pool address for this dex and token pair
         pool_addr = None
@@ -282,6 +317,11 @@ def run_scan(
             if dex in k and token_pair_tag in k:
                 pool_addr = v
                 break
+
+        # Read slot0 for v3 provenance (tick + sqrtPriceX96)
+        tick_val, sqrt_price_val = None, None
+        if pool_addr and "v3" in dex.lower():
+            tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url_for_slot0, current_block)
 
         try:
             from core.validators import normalize_price
@@ -312,8 +352,8 @@ def run_scan(
             block_number=current_block,
             rpc_success=True,
             gate_passed=True,
-            tick=None,
-            sqrt_price_x96=None,
+            tick=tick_val,
+            sqrt_price_x96=sqrt_price_val,
         )
         quotes_sample.append(q.__dict__)
 
@@ -648,6 +688,9 @@ def run_scan(
     quotes_sample = []
     pools_cfg = config.get("pools", {}) or {}
     token_pair_tag = "WETH_USDC"
+    # Determine RPC URL for slot0 reads
+    rpc_url_for_slot0 = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or (config.get("rpc_endpoints") or [None])[0]
+
     for dex in dexes_list:
         # attempt to find a pool address for this dex and token pair
         pool_addr = None
@@ -655,6 +698,11 @@ def run_scan(
             if dex in k and token_pair_tag in k:
                 pool_addr = v
                 break
+
+        # Read slot0 for v3 provenance (tick + sqrtPriceX96)
+        tick_val, sqrt_price_val = None, None
+        if pool_addr and "v3" in dex.lower():
+            tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url_for_slot0, current_block)
 
         # Compute a realistic price for the sample using normalize_price when possible
         try:
@@ -686,9 +734,8 @@ def run_scan(
             block_number=current_block,
             rpc_success=True,
             gate_passed=True,
-            # v3 provenance fields: tick and sqrtPriceX96 (placeholders for sample; real quotes fill these)
-            tick=None,
-            sqrt_price_x96=None,
+            tick=tick_val,
+            sqrt_price_x96=sqrt_price_val,
         )
         quotes_sample.append(q.__dict__)
     # Derive dexes active list from actual quotes_sample to avoid placeholders

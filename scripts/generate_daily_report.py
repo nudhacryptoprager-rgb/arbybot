@@ -170,6 +170,13 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
             )
     # If no signals → top_opportunities remains empty (no fallback to scan quotes)
 
+    # Build cost_model block for transparency
+    cost_model = {
+        "type": "gas_only" if gas_usd_estimate is not None else "none",
+        "gas_usd_estimate": gas_usd_estimate,
+        "slippage_usd_estimate": slippage_usd_estimate if gas_usd_estimate is not None else None,
+    }
+
     report = {
         "schema_version": "m5:daily:v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -183,9 +190,13 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "paper_net_pnl_usdc": paper_net,
         "pnl_available": pnl_available,
         "pnl_reason": pnl_reason,
+        "cost_model": cost_model,
         "paper_win_rate": win_rate,
         "checks_count": quotes_total,
+        # DEPRECATED: trades_count is legacy alias for checks_count. Prefer checks_count.
+        # Removal planned in schema v2.
         "trades_count": quotes_total,
+        "legacy_trades_count": quotes_total,
         "tail_losses": tail_losses,
         "top_reject_reasons": top_rejects,
         "autosize": autosize_summary,

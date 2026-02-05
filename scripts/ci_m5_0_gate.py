@@ -383,133 +383,138 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
             messages.append(f"FAIL: {name} - {e}")
             all_passed = False
     
-        try:
-            if "scan" in loaded_data and "truth_report" in loaded_data:
-                ok_cb, msg_cb = validate_current_block(loaded_data.get("scan", {}), loaded_data.get("truth_report", {}))
-                if ok_cb:
-                    messages.append(f"OK: current_block - {msg_cb}")
-                else:
-                    messages.append(f"FAIL: current_block - {msg_cb}")
+    # =========================================================================
+    # Cross-artifact validations (AFTER loading all artifacts)
+    # =========================================================================
+    
+    try:
+        if "scan" in loaded_data and "truth_report" in loaded_data:
+            ok_cb, msg_cb = validate_current_block(loaded_data.get("scan", {}), loaded_data.get("truth_report", {}))
+            if ok_cb:
+                messages.append(f"OK: current_block - {msg_cb}")
+            else:
+                messages.append(f"FAIL: current_block - {msg_cb}")
+                all_passed = False
+    except Exception as e:
+        messages.append(f"FAIL: current_block validation exception: {type(e).__name__}: {e}")
+
+    # Cross-artifact summary cross-checks (scan vs truth_report vs reject_histogram)
+    try:
+        s = loaded_data.get("scan", {})
+        t = loaded_data.get("truth_report", {})
+        r = loaded_data.get("reject_histogram", {})
+
+        def _get(d, key):
+            return d.get(key) if d else None
+
+        # Compare top-level counts
+        mismatches = []
+        for key in ("quotes_total", "quotes_fetched", "dexes_active", "price_sanity_passed", "price_sanity_failed"):
+            sv = _get(s, key)
+            tv = _get(t, key)
+            if sv is not None and tv is not None and int(sv) != int(tv):
+                mismatches.append((key, sv, tv))
+
+        if mismatches:
+            for key, sv, tv in mismatches:
+                if require_cross_artifact:
+                    messages.append(f"FAIL: summary_mismatch - {key} scan={sv} truth_report={tv}")
                     all_passed = False
-        except Exception as e:
-            messages.append(f"FAIL: current_block validation exception: {type(e).__name__}: {e}")
+                else:
+                    messages.append(f"WARN: summary_mismatch - {key} scan={sv} truth_report={tv}")
 
-        # Cross-artifact summary cross-checks (scan vs truth_report vs reject_histogram)
+        # Basic reject histogram vs totals sanity
         try:
-            s = loaded_data.get("scan", {})
-            t = loaded_data.get("truth_report", {})
-            r = loaded_data.get("reject_histogram", {})
+            total_rejects = int(r.get("total_rejects", 0)) if r else 0
+            rejects_len = len(r.get("rejects", [])) if r else 0
+            if total_rejects != rejects_len:
+                messages.append(f"WARN: reject_histogram.total_rejects ({total_rejects}) != len(rejects) ({rejects_len})")
+        except Exception:
+            messages.append("WARN: could not cross-check reject_histogram totals")
+    except Exception as e:
+        messages.append(f"WARN: cross-artifact checks failed: {type(e).__name__}: {e}")
 
-            def _get(d, key):
-                return d.get(key) if d else None
+    # Infra transparency checks: confirm provider and host present and consistent
+    try:
+        infra_s = (s.get("infra") or {})
+        infra_t = (t.get("infra") or {})
+        infra_r = (r.get("infra") or {})
 
-            # Compare top-level counts
-            mismatches = []
-            for key in ("quotes_total", "quotes_fetched", "dexes_active", "price_sanity_passed", "price_sanity_failed"):
-                sv = _get(s, key)
-                tv = _get(t, key)
-                if sv is not None and tv is not None and int(sv) != int(tv):
-                    mismatches.append((key, sv, tv))
+        # Extract provider/hosts
+        prov_s = infra_s.get("rpc_provider")
+        prov_t = infra_t.get("rpc_provider")
+        host_s = infra_s.get("rpc_http_host")
+        host_t = infra_t.get("rpc_http_host")
 
-            if mismatches:
-                for key, sv, tv in mismatches:
-                    if require_cross_artifact:
-                        messages.append(f"FAIL: summary_mismatch - {key} scan={sv} truth_report={tv}")
+        if not prov_s or not host_s:
+            if require_infra_hosts or require_real:
+                messages.append("FAIL: scan.infra missing rpc_provider or rpc_http_host")
+                all_passed = False
+            else:
+                messages.append("WARN: scan.infra missing rpc_provider or rpc_http_host")
+        if not prov_t or not host_t:
+            if require_infra_hosts or require_real:
+                messages.append("FAIL: truth_report.infra missing rpc_provider or rpc_http_host")
+                all_passed = False
+            else:
+                messages.append("WARN: truth_report.infra missing rpc_provider or rpc_http_host")
+
+        # If env required Alchemy, ensure provider is alchemy
+        if os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1":
+            if prov_s != "alchemy" or prov_t != "alchemy":
+                messages.append(f"FAIL: REQUIRE_ALCHEMY set but provider != alchemy (scan={prov_s} truth={prov_t})")
+                all_passed = False
+
+        # Heuristic: chain_id vs rpc host mismatch (blocker)
+        try:
+            chain_id_s = s.get("chain_id")
+            chain_id_t = t.get("chain_id")
+            # prefer scan chain_id if present
+            chain_id_val = chain_id_s or chain_id_t
+            if chain_id_val is not None:
+                try:
+                    cid = int(chain_id_val)
+                    # Quick heuristic for known mismatch: Arbitrum chain_id (42161) must not point to Mantle host
+                    if cid == 42161:
+                        hs = (host_s or "").lower()
+                        ht = (host_t or "").lower()
+                        if "mantle" in hs or "mantle" in ht:
+                            messages.append(f"FAIL: chain_id=42161 (Arbitrum) but rpc_http_host contains 'mantle' (scan={host_s} truth={host_t})")
+                            all_passed = False
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Tenderly diagnostic consistency
+        for artifact_name, infra in (("scan", infra_s), ("truth_report", infra_t)):
+            if infra.get("tenderly_enabled"):
+                ok = infra.get("tenderly_ok")
+                err = infra.get("tenderly_error")
+                if ok is not True and (not err):
+                    if require_tenderly:
+                        messages.append(f"FAIL: {artifact_name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
                         all_passed = False
                     else:
-                        messages.append(f"WARN: summary_mismatch - {key} scan={sv} truth_report={tv}")
+                        messages.append(f"WARN: {artifact_name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
 
-            # Basic reject histogram vs totals sanity
-            try:
-                total_rejects = int(r.get("total_rejects", 0)) if r else 0
-                rejects_len = len(r.get("rejects", [])) if r else 0
-                if total_rejects != rejects_len:
-                    messages.append(f"WARN: reject_histogram.total_rejects ({total_rejects}) != len(rejects) ({rejects_len})")
-            except Exception:
-                messages.append("WARN: could not cross-check reject_histogram totals")
-        except Exception as e:
-            messages.append(f"WARN: cross-artifact checks failed: {type(e).__name__}: {e}")
-
-        # Infra transparency checks: confirm provider and host present and consistent
-        try:
-            infra_s = (s.get("infra") or {})
-            infra_t = (t.get("infra") or {})
-            infra_r = (r.get("infra") or {})
-
-            # Extract provider/hosts
-            prov_s = infra_s.get("rpc_provider")
-            prov_t = infra_t.get("rpc_provider")
-            host_s = infra_s.get("rpc_http_host")
-            host_t = infra_t.get("rpc_http_host")
-
-            if not prov_s or not host_s:
-                if require_infra_hosts or require_real:
-                    messages.append("FAIL: scan.infra missing rpc_provider or rpc_http_host")
+        # WS diagnostics validation
+        for artifact_name, infra in (("scan", infra_s), ("truth_report", infra_t)):
+            if infra.get("ws_enabled"):
+                attempted = infra.get("ws_attempted")
+                connected = infra.get("ws_connected")
+                fallback = infra.get("ws_fallback_to_http")
+                ws_err = infra.get("ws_error")
+                if attempted is not True and attempted is not False:
+                    messages.append(f"WARN: {artifact_name}.infra missing ws_attempted")
+                if connected is not True and connected is not False:
+                    messages.append(f"WARN: {artifact_name}.infra missing ws_connected")
+                if connected is False and not (ws_err or fallback):
+                    messages.append(f"FAIL: {artifact_name}.infra ws_enabled true but not connected and no ws_error/fallback provided")
                     all_passed = False
-                else:
-                    messages.append("WARN: scan.infra missing rpc_provider or rpc_http_host")
-            if not prov_t or not host_t:
-                if require_infra_hosts or require_real:
-                    messages.append("FAIL: truth_report.infra missing rpc_provider or rpc_http_host")
-                    all_passed = False
-                else:
-                    messages.append("WARN: truth_report.infra missing rpc_provider or rpc_http_host")
+    except Exception as e:
+        messages.append(f"WARN: infra transparency checks failed: {type(e).__name__}: {e}")
 
-            # If env required Alchemy, ensure provider is alchemy
-            if os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1":
-                if prov_s != "alchemy" or prov_t != "alchemy":
-                    messages.append(f"FAIL: REQUIRE_ALCHEMY set but provider != alchemy (scan={prov_s} truth={prov_t})")
-                    all_passed = False
-
-            # Heuristic: chain_id vs rpc host mismatch (blocker)
-            try:
-                chain_id_s = s.get("chain_id")
-                chain_id_t = t.get("chain_id")
-                # prefer scan chain_id if present
-                chain_id_val = chain_id_s or chain_id_t
-                if chain_id_val is not None:
-                    try:
-                        cid = int(chain_id_val)
-                        # Quick heuristic for known mismatch: Arbitrum chain_id (42161) must not point to Mantle host
-                        if cid == 42161:
-                            hs = (host_s or "").lower()
-                            ht = (host_t or "").lower()
-                            if "mantle" in hs or "mantle" in ht:
-                                messages.append(f"FAIL: chain_id=42161 (Arbitrum) but rpc_http_host contains 'mantle' (scan={host_s} truth={host_t})")
-                                all_passed = False
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            # Tenderly diagnostic consistency
-            for name, infra in (("scan", infra_s), ("truth_report", infra_t)):
-                if infra.get("tenderly_enabled"):
-                    ok = infra.get("tenderly_ok")
-                    err = infra.get("tenderly_error")
-                    if ok is not True and (not err):
-                        if require_tenderly:
-                            messages.append(f"FAIL: {name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
-                            all_passed = False
-                        else:
-                            messages.append(f"WARN: {name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
-
-            # WS diagnostics validation
-            for name, infra in (("scan", infra_s), ("truth_report", infra_t)):
-                if infra.get("ws_enabled"):
-                    attempted = infra.get("ws_attempted")
-                    connected = infra.get("ws_connected")
-                    fallback = infra.get("ws_fallback_to_http")
-                    ws_err = infra.get("ws_error")
-                    if attempted is not True and attempted is not False:
-                        messages.append(f"WARN: {name}.infra missing ws_attempted")
-                    if connected is not True and connected is not False:
-                        messages.append(f"WARN: {name}.infra missing ws_connected")
-                    if connected is False and not (ws_err or fallback):
-                        messages.append(f"FAIL: {name}.infra ws_enabled true but not connected and no ws_error/fallback provided")
-                        all_passed = False
-        except Exception as e:
-            messages.append(f"WARN: infra transparency checks failed: {type(e).__name__}: {e}")
     return all_passed, messages
 
 
@@ -693,6 +698,14 @@ ENV VARIABLES:
     parser.add_argument("--require-tenderly", action="store_true",
                         help="Require tenderly diagnostics to be present and passing when enabled in artifacts")
     
+    # M5 additions: strict mode and cost model
+    parser.add_argument("--strict", action="store_true",
+                        help="Enable strict validation (fail on any WARN)")
+    parser.add_argument("--gas-usd-estimate", type=float,
+                        help="Gas USD estimate for cost model (overrides config)")
+    parser.add_argument("--slippage-usd-estimate", type=float, default=0.0,
+                        help="Slippage USD estimate for cost model")
+    
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     
     args = parser.parse_args()
@@ -794,6 +807,39 @@ ENV VARIABLES:
             print(f"\n{'='*60}")
             print(f"RESULT: FAIL - Scanner error")
             return 3
+        
+        # Generate daily_report with cost model
+        try:
+            from scripts.generate_daily_report import aggregate_run
+            import yaml
+            
+            # Determine gas_usd_estimate: CLI > config
+            gas_estimate = args.gas_usd_estimate
+            slippage_estimate = args.slippage_usd_estimate
+            if gas_estimate is None:
+                try:
+                    cfg_path = Path(args.config)
+                    if cfg_path.exists():
+                        with open(cfg_path, "r", encoding="utf8") as f:
+                            cfg = yaml.safe_load(f)
+                        gas_estimate = cfg.get("gas_usd_estimate")
+                        if slippage_estimate == 0.0:
+                            slippage_estimate = cfg.get("slippage_usd_estimate", 0.0)
+                except Exception:
+                    pass
+            
+            report = aggregate_run(run_dir, gas_usd_estimate=gas_estimate, slippage_usd_estimate=slippage_estimate)
+            
+            # Write daily_report
+            report_dir = run_dir / "reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            from datetime import date
+            report_path = report_dir / f"daily_report_{date.today().isoformat()}.json"
+            with open(report_path, "w", encoding="utf8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            print(f"[ONLINE] Generated: {report_path}")
+        except Exception as e:
+            print(f"[ONLINE] WARN: daily_report generation failed: {e}")
         
         artifacts = discover_artifacts(run_dir)
         missing = [name for name, path in artifacts.items() if path is None]

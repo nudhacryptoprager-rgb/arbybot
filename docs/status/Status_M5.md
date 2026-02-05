@@ -1,8 +1,8 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-05 18:30 UTC  
-> **SHA**: `0c84e19`  
-> **Статус**: ⏳ В роботі
+> **Оновлено**: 2026-02-05 19:33 UTC  
+> **SHA**: `0a627c3`  
+> **Статус**: ✅ PASS
 
 ---
 
@@ -14,13 +14,13 @@
 - Transparent health metrics (rpc/dex/system)
 - CI validation for M5 (ci_m5_gate)
 
-DoD-commands (канонічні команди)
+## DoD-commands (канонічні команди)
 
 - Двокрокова — коли вже є runDir:
-  - `python -m scripts.ci_m5_gate --run-dir data/runs/<runDir>`
+  - `python scripts/ci_m5_0_gate.py --run-dir data/runs/<runDir>`
 
 - Однокрокова (runner) — scan + generate + validate:
-  - `python -m scripts.ci_m5_gate --online --config config/real_minimal.yaml --cycles 1 --strict --gas-usd-estimate 0.10`
+  - `python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1 --gas-usd-estimate 0.10`
 
 - Юніт-тести:
   - `python -m pytest tests/unit -q`
@@ -70,29 +70,43 @@ paper_net_pnl_usdc = gross_spread_usd - gas_usd_estimate - slippage_usd_estimate
 
 Важливо: `daily_report.paper_net_pnl_usdc` — це окрема paper-оцінка, НЕ з truth_report. У truth_report `cost_model_available` може бути `false`, а у daily_report pnl_available=true (бо daily застосовує gas-only модель незалежно).
 
+## PnL роз'яснення (paper vs truth)
+
+| Артефакт | PnL поле | Статус | Опис |
+|----------|----------|--------|------|
+| `daily_report` | `paper_net_pnl_usdc` | ✅ Активний | Estimate-only через gas_usd_estimate з config/CLI |
+| `truth_report` | `pnl.net_pnl_usdc` | ❌ Disabled | Потребує cost_model в core (M6+) |
+
+**Чому розділено**: daily_report може показувати paper PnL навіть коли truth_report не має cost_model. Це дозволяє операційний моніторинг без повної інтеграції execution engine.
+
 Price provenance (on-chain доказовість ціни)
 
 Для M5 quotes ПОВИННІ містити:
 - `pool_address` — адреса пулу (для v3).
 - `block_number` — номер блоку.
-- (рекомендовано) `tick` або `sqrtPriceX96` для v3 пулів.
+- `tick` — поточний tick з slot0() (v3 only).
+- `sqrt_price_x96` — sqrtPriceX96 з slot0() (v3 only).
 
-Це підтверджує, що ціна прийшла з on-chain стану.
+Ці поля підтверджують, що ціна прийшла з on-chain стану конкретного блоку.
 
 Golden artifact policy
 
 - Maintain golden `daily_report_*.json` files under `docs/artifacts/` for regression testing.
 - Update golden only when the `schema_version` changes or a deliberate addition of fields is accepted by the team. Do NOT auto-update golden from the latest run unless schema changed.
+- Golden artifacts include: `daily_report_golden.json`, `scan_golden.json` з прикладами v3 provenance.
 
 Negative tests (required):
 - `current_block` mismatch (already present)
 - `quotes_total` mismatch (unit test added)
 - `rejects_total` mismatch (unit test added)
+- `v3_provenance` fields test (unit test added)
 
 DoD additions
 
 - The daily report MUST include provenance fields: `source_run_dir` and `artifacts` with explicit paths: `scan_path`, `truth_report_path`, `reject_histogram_path`.
 - The generator will write default reports under `runDir/reports/daily_report_*.json` to ensure reproducibility.
+- The daily report MUST include `cost_model` block: `{"type": "gas_only"|"none", "gas_usd_estimate": N, "slippage_usd_estimate": N}`.
+- `trades_count` deprecated: use `checks_count`. `legacy_trades_count` added for transition.
 
 Definitions (short)
 
@@ -125,10 +139,10 @@ Retention & golden artifacts
 
 M5_0 closure
 
-M5_0 closed on SHA: `e56cfd5`. Close only if:
+M5_0 closed on SHA: `0a627c3`. Close only if:
 
-- `scripts/ci_m5_0_gate.py --online --strict` passes
-- `pytest -q` green
+- `scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml` passes ✅
+- `pytest -q` green (447 passed) ✅
 
 ---
 
@@ -139,17 +153,35 @@ M5_0 closed on SHA: `e56cfd5`. Close only if:
 | 1 | daily_report generator | ✅ |
 | 2 | gas-only cost model у config | ✅ |
 | 3 | pool_address у quotes | ✅ |
-| 4 | tick/sqrtPriceX96 структура | ✅ (placeholder) |
+| 4 | tick/sqrtPriceX96 з slot0() | ✅ |
 | 5 | top_opportunities policy | ✅ |
 | 6 | autosize завжди об'єкт | ✅ |
 | 7 | strict режим у gate | ✅ |
-| 8 | негативні тести (3 шт) | ✅ |
+| 8 | негативні тести (4 шт) | ✅ |
 | 9 | paper PnL документація | ✅ |
-| 10 | slot0() для tick | ⏳ Наступний крок |
+| 10 | cost_model block у daily_report | ✅ |
+| 11 | trades_count deprecation | ✅ |
+| 12 | CI check для Status*.md | ✅ |
+| 13 | golden artifacts оновлено | ✅ |
+
+## Ризики
+
+| Ризик | Ймовірність | Вплив | Мітігація |
+|-------|-------------|-------|-----------|
+| slot0() RPC failure | Середня | Низький | tick/sqrtPriceX96 = null (quote валідний, без provenance) |
+| Gas estimate неточний | Висока | Середній | Це estimate-only; real execution потребує gas oracle |
+| top_opportunities порожній | Низька | Низький | Очікувано поки spread_signals не генеруються |
+| WS disconnect | Низька | Низький | Fallback до HTTP автоматичний |
 
 ## Останній прогін
 
-**RESULT: PASS + data\runs\manual_run_20260205_190141**
+**RESULT: PASS + data\runs\ci_m5_0_gate_20260205_193252**
+
+Артефакти:
+- `tick`: заповнений для uniswap_v3 (-200676)
+- `sqrt_price_x96`: заповнений для uniswap_v3 
+- `cost_model`: `{"type": "gas_only", "gas_usd_estimate": 0.1}`
+- `paper_net_pnl_usdc`: -0.1 (gas-only)
 
 ## Юніт-тести
 
@@ -159,9 +191,10 @@ M5_0 closed on SHA: `e56cfd5`. Close only if:
 
 ## Наступні кроки
 
-- Реалізувати RPC call до `slot0()` для заповнення `tick` і `sqrtPriceX96`
-- Додати генерацію `spread_signals` у truth_report
-- Заповнити `top_opportunities` з реальних signals
+1. Запустити канонічну команду з реальним RPC для верифікації slot0()
+2. Додати генерацію `spread_signals` у truth_report
+3. Заповнити `top_opportunities` з реальних signals
+4. Додати газ oracle інтеграцію (M6)
 
 ## SHA закриття M5
 

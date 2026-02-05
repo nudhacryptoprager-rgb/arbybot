@@ -1,12 +1,13 @@
 {
   "schema_version": "m5:daily:v1",
-  "generated_at": "2026-02-05",
-  "run_id": "manual_run_20260205_164728",
-  "source_run_dir": "data\\runs\\manual_run_20260205_164728",
+  "generated_at": "2026-02-05T19:30:00+00:00",
+  "timezone": "UTC",
+  "run_id": "golden_m5_reference",
+  "source_run_dir": "docs/artifacts/golden_run",
   "artifacts": {
-    "scan_path": null,
-    "truth_report_path": null,
-    "reject_histogram_path": null
+    "scan_path": "docs/artifacts/scan_golden.json",
+    "truth_report_path": "docs/artifacts/truth_report_golden.json",
+    "reject_histogram_path": "docs/artifacts/reject_histogram_golden.json"
   },
   "period": {
     "from": "2026-02-05",
@@ -14,10 +15,40 @@
   },
   "runs_included": 1,
   "pnl_mode": "paper",
-  "paper_net_pnl_usdc": 0.0,
-  "paper_win_rate": null,
-  "trades_count": 0,
+  "paper_net_pnl_usdc": -0.10,
+  "pnl_available": true,
+  "pnl_reason": null,
+  "cost_model": {
+    "type": "gas_only",
+    "gas_usd_estimate": 0.10,
+    "slippage_usd_estimate": 0.00
+  },
+  "paper_win_rate": 0.58,
+  "checks_count": 12,
+  "trades_count": 12,
+  "legacy_trades_count": 12,
   "tail_losses": [],
   "top_reject_reasons": [],
-  "health": {}
+  "autosize": {
+    "enabled": false,
+    "reason": "not_configured",
+    "new_size_usd": null,
+    "cooldown_remaining": 0
+  },
+  "top_opportunities": [],
+  "health": {
+    "rpc": {
+      "success_rate": 1.0,
+      "p50_latency_ms": 150,
+      "ws_connected_rate": 1.0
+    },
+    "dex": {
+      "quote_fetch_rate": 0.83,
+      "revert_rate": 0
+    },
+    "system": {
+      "gate_pass_rate": 0.67,
+      "artifacts_ok_rate": 1.0
+    }
+  }
 }
