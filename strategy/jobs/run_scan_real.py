@@ -296,14 +296,48 @@ def run_scan(
             rpc_provider = "alchemy"
         elif primary_http and "alchemy" in primary_http:
             rpc_provider = "alchemy"
+        # Honor prefer/ws flags from env (injected by gate):
+        prefer_ws = os.environ.get("ARBY_PREFER_WS") == "1"
+        ws_required = os.environ.get("ARBY_WS_REQUIRED") == "1"
+
+        ws_connected = False
+        ws_error = None
+
         if primary_ws:
             ws_enabled = True
             transport = "ws+http"
+            # Attempt a lightweight WS handshake if available
+            try:
+                try:
+                    import websocket as _wsclient  # websocket-client
+                except Exception:
+                    _wsclient = None
+
+                if _wsclient:
+                    try:
+                        conn = _wsclient.create_connection(primary_ws, timeout=5)
+                        conn.close()
+                        ws_connected = True
+                    except Exception as e:
+                        ws_connected = False
+                        ws_error = f"handshake_failed: {e}"
+                else:
+                    ws_connected = False
+                    ws_error = "websocket-client-missing"
+            except Exception as e:
+                ws_connected = False
+                ws_error = f"ws_check_exception: {e}"
+
+        # If prefer_ws requested but ws not connected and ws_required -> fail
+        if ws_required and not ws_connected:
+            raise RuntimeError(f"WS required but not connected: {ws_error}")
+
         scan_data["infra"] = {
             "rpc_provider": rpc_provider,
             "transport": transport,
             "ws_enabled": ws_enabled,
-            "ws_connected": False,
+            "ws_connected": ws_connected,
+            "ws_error": ws_error,
             "tenderly_enabled": bool(os.environ.get("TENDERLY_ACCESS_KEY")),
         }
     except Exception:

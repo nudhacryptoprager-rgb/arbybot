@@ -102,6 +102,25 @@ python -m pytest tests/unit/test_imports_contract.py -v
  - **Reject diagnostics**: validators must always expose `deviation_bps_raw` (unclamped) and `deviation_bps` (clamped to caller `max_deviation_bps`) and `deviation_bps_capped` flag should be `true` when raw > requested max.
  - **CAP semantics**: CI gate will now reject runs where any `reject_histogram` entry has `deviation_bps_raw > max_deviation_bps` but `deviation_bps_capped` is false.
 
+## RPC / Infra Contract (M5_0 enhancements)
+
+- The gate now resolves RPC endpoints from environment using a single source-of-truth logic:
+	1. Explicit `ALCHEMY_RPC_HTTP` / `ALCHEMY_RPC_WS` (highest priority).
+	2. `ALCHEMY_API_KEY` + `NETWORK`/`chain_id` (build Alchemy HTTP/WS via `core.rpc_urls`).
+	3. Public fallback for the canonical network.
+
+- Supported canonical networks: `arbitrum`, `base`, `linea`, `mantle` (aliases: `arbitrum_one` → `arbitrum`).
+
+- The gate sets `ARBY_RPC_HTTP_PRIMARY` / `ARBY_RPC_WS_PRIMARY` in the scanner subprocess env to ensure the scanner uses the resolved provider.
+
+- Artifacts now include a small `infra` section (no secrets): `rpc_provider`, `transport`, `ws_enabled`, `ws_connected`, `ws_error`, `tenderly_enabled`.
+
+- WS is optional by default. The gate exposes flags and an optional CLI switch to require WS (`--ws-required`).
+
+- Tenderly is optional. If `TENDERLY_ACCESS_KEY` (and related vars) present, `infra.tenderly_enabled=true` is written; otherwise `false`.
+
+These rules are implemented in `core/rpc_urls.py`, `scripts/ci_m5_0_gate.py`, and `strategy/jobs/run_scan_real.py`.
+
 ## Files Changed
 
 | File | Change |

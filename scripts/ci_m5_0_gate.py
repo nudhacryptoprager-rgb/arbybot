@@ -471,6 +471,8 @@ def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool,
     if primary_ws:
         env_for_run.setdefault("ARBY_RPC_WS_PRIMARY", primary_ws)
 
+    # NOTE: WS preference flags are read from the calling process env by the scanner.
+
     try:
         result = subprocess.run(cmd, capture_output=False, text=True, timeout=300, env=env_for_run)
         if result.returncode == 0:
@@ -526,10 +528,17 @@ ENV VARIABLES:
     parser.add_argument("--cycles", type=int,
                         default=int(os.environ.get("ARBY_CYCLES", "1")),
                         help="Scan cycles (default: $ARBY_CYCLES or 1)")
+    parser.add_argument("--ws", action="store_true",
+                        help="Prefer WS transport when resolving endpoints")
+    parser.add_argument("--ws-required", action="store_true",
+                        help="Require WS to be available; fail if WS not connected")
     
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     
     args = parser.parse_args()
+
+    # Log presence of sensitive env keys (presence only; do not print values)
+    print(f"ENV: ALCHEMY_API_KEY present={bool(os.environ.get('ALCHEMY_API_KEY'))}, TENDERLY_ACCESS_KEY present={bool(os.environ.get('TENDERLY_ACCESS_KEY'))}")
     
     # Handle --list-candidates
     if args.list_candidates:
@@ -600,6 +609,12 @@ ENV VARIABLES:
         print(f"[ONLINE] Config: {args.config}")
         print(f"[ONLINE] Cycles: {args.cycles}")
         
+        # Export WS preference flags into the environment so run_real_scan picks them up
+        if args.ws:
+            os.environ.setdefault("ARBY_PREFER_WS", "1")
+        if args.ws_required:
+            os.environ.setdefault("ARBY_WS_REQUIRED", "1")
+
         success, message = run_real_scan(run_dir, args.config, args.cycles)
         
         print(f"\n[ONLINE] {message}")
