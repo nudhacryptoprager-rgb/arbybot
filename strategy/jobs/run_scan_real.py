@@ -216,7 +216,7 @@ def run_scan(
                 except Exception:
                     pass
 
-        # Log selected vs effective
+        # Log selected vs effective (selection may differ from config endpoints)
         try:
             sel_provider = os.environ.get("ARBY_RPC_PROVIDER") or ("alchemy" if os.environ.get("ALCHEMY_API_KEY") else "public")
             effective_host = os.environ.get("ARBY_RPC_HTTP_HOST") or (resolved_http and resolved_http) or "unknown"
@@ -228,15 +228,27 @@ def run_scan(
         pass
     
     # Try to fetch real block via RPC when running in REAL mode
-    def get_current_block_via_rpc(cfg: Dict[str, Any]) -> int:
-        rpc_urls = cfg.get("rpc_endpoints") or cfg.get("rpc_endpoints", [])
-        if not rpc_urls:
-            rpc_urls = cfg.get("rpc_endpoints", [])
+    def get_current_block_via_rpc(cfg: Dict[str, Any]) -> tuple[int, int]:
+        rpc_urls = cfg.get("rpc_endpoints") or []
+        # Ensure resolved_http (if available) is preferred by placing it first
+        try:
+            resolved_http_env = os.environ.get("ARBY_RPC_HTTP_PRIMARY")
+            if resolved_http_env:
+                # Prepend if not already present
+                if rpc_urls and rpc_urls[0] != resolved_http_env:
+                    # Avoid duplicates
+                    rpc_urls = [resolved_http_env] + [u for u in rpc_urls if u != resolved_http_env]
+                elif not rpc_urls:
+                    rpc_urls = [resolved_http_env]
+                cfg["rpc_endpoints"] = rpc_urls
+        except Exception:
+            pass
+
         # Register provider and fetch block
         provider = register_provider(cfg.get("chain_id", 42161), rpc_urls, timeout_seconds=cfg.get("rpc_timeout_seconds", 10))
         try:
-            block, _lat = asyncio.run(provider.get_block_number())
-            return int(block)
+            block, lat = asyncio.run(provider.get_block_number())
+            return int(block), int(lat or 0)
         except Exception as e:
             raise BlockPinError(f"Failed to pin current block via RPC: {e}")
 
@@ -247,7 +259,7 @@ def run_scan(
         if os.environ.get("ARBY_SKIP_RPC") == "1":
             current_block = int(os.environ.get("ARBY_FAKE_BLOCK", "100"))
         else:
-            current_block = get_current_block_via_rpc(config)
+            current_block, rpc_latency = get_current_block_via_rpc(config)
             if current_block in FAKE_BLOCK_SENTINELS:
                 raise BlockPinError(f"Invalid current block from RPC: {current_block}")
     except BlockPinError:
@@ -304,7 +316,7 @@ def run_scan(
             amount_in_human="1",
             amount_out_human="2600",
             price=str(Decimal(2600)),
-            latency_ms=10,
+            latency_ms=int(globals().get('rpc_latency', 0) or 10),
             block_number=current_block,
             rpc_success=True,
             gate_passed=True,
@@ -387,8 +399,13 @@ def run_scan(
 
                 if _wsclient:
                     try:
+                        import time as _time
+                        start = _time.monotonic()
                         conn = _wsclient.create_connection(primary_ws, timeout=5)
                         conn.close()
+                        end = _time.monotonic()
+                        ws_handshake_ms = int((end - start) * 1000)
+                        globals()["ws_handshake_ms"] = ws_handshake_ms
                         ws_connected = True
                     except Exception as e:
                         ws_connected = False
@@ -413,9 +430,8 @@ def run_scan(
         tenderly_enabled = bool(os.environ.get("TENDERLY_ACCESS_KEY"))
         tenderly_ok = False
         tenderly_error = None
-        # Optional live Tenderly check: only when explicitly requested and network allowed.
-        # Controlled by `ARBY_CHECK_TENDERLY=1`. Honor `ARBY_SKIP_RPC=1` for tests.
-        if tenderly_enabled and os.environ.get("ARBY_CHECK_TENDERLY") == "1" and os.environ.get("ARBY_SKIP_RPC") != "1":
+        # If Tenderly key is configured, perform a lightweight ping (unless tests skip RPC).
+        if tenderly_enabled and os.environ.get("ARBY_SKIP_RPC") != "1":
             try:
                 import httpx
 
@@ -440,7 +456,7 @@ def run_scan(
                 tenderly_error = f"error:{type(e).__name__}"
         else:
             tenderly_ok = False
-            tenderly_error = "not_checked" if tenderly_enabled else "not_configured"
+            tenderly_error = "not_configured"
 
         # include host/provider transparently (no keys)
         infra_payload = {
@@ -455,10 +471,40 @@ def run_scan(
             "tenderly_ok": tenderly_ok,
             "tenderly_error": tenderly_error,
         }
+
+        # Effective HTTP host (from resolved_http or env), plus explicit rpc_http_host
+        effective_http_host = None
+        try:
+            from urllib.parse import urlparse
+
+            effective_http = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or resolved_http
+            if effective_http:
+                effective_http_host = urlparse(effective_http).netloc
+                infra_payload["rpc_effective_http_host"] = effective_http_host
+                infra_payload["rpc_effective_provider"] = os.environ.get("ARBY_RPC_PROVIDER") or ("alchemy" if os.environ.get("ALCHEMY_API_KEY") else "public")
+        except Exception:
+            pass
+
         if rpc_http_host:
             infra_payload["rpc_http_host"] = rpc_http_host
+        else:
+            # Fallback to effective host when explicit rpc_http_host not available
+            try:
+                if effective_http_host:
+                    infra_payload["rpc_http_host"] = effective_http_host
+            except Exception:
+                pass
         if rpc_ws_host:
             infra_payload["rpc_ws_host"] = rpc_ws_host
+
+        # WS handshake evidence
+        try:
+            if primary_ws:
+                from urllib.parse import urlparse
+                infra_payload["ws_url_host"] = urlparse(primary_ws).netloc
+        except Exception:
+            pass
+        infra_payload["ws_handshake_ms"] = globals().get("ws_handshake_ms") if globals().get("ws_handshake_ms") is not None else None
 
         scan_data["infra"] = infra_payload
 
@@ -514,6 +560,8 @@ def run_scan(
         },
         "spread_signals": [],
     }
+    # Placeholder for uncapped worst deviation observed in this run (filled after rejects computed)
+    truth_data["price_sanity_deviation_bps_raw_max"] = None
     # Mirror infra into truth report as well
     try:
         truth_data["infra"] = scan_data.get("infra", {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False})
@@ -547,6 +595,11 @@ def run_scan(
         "dex_id": "sushiswap_v3",
         "pool_fee": 3000,
         "implied_price": str(implied_price),
+        "token_in_decimals": config.get("quote_decimals", {}).get("WETH", 18),
+        "token_out_decimals": config.get("quote_decimals", {}).get("USDC", 6),
+        "amount_in": 10 ** 18,
+        "amount_out": 2600 * (10 ** 6),
+        "orientation": "normal",
         "deviation_bps": deviation_bps,
         "deviation_bps_raw": raw_bps,
         "deviation_bps_capped": capped_flag,
@@ -565,6 +618,11 @@ def run_scan(
         "total_rejects": 1,
         "price_sanity_failed": stats["price_sanity_failed"],
     }
+    # Populate truth report uncapped worst-deviation metric for debugging
+    try:
+        truth_data["price_sanity_deviation_bps_raw_max"] = int(raw_bps)
+    except Exception:
+        truth_data["price_sanity_deviation_bps_raw_max"] = None
     # Mirror infra into reject histogram for transparency
     try:
         reject_data["infra"] = scan_data.get("infra", {})
