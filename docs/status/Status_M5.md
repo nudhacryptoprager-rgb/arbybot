@@ -1,7 +1,7 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-05 20:00 UTC  
-> **SHA**: `281ec1e`  
+> **Оновлено**: 2026-02-05 20:12 UTC  
+> **SHA**: `087d014`  
 > **Статус**: ✅ PASS
 
 ---
@@ -190,7 +190,7 @@ Retention & golden artifacts
 
 M5_0 closure
 
-M5_0 closed on SHA: `281ec1e`. Close only if:
+M5_0 closed on SHA: `087d014`. Close only if:
 
 - `scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml` passes ✅
 - `pytest -q` green (449 passed) ✅
@@ -226,30 +226,24 @@ M5_0 closed on SHA: `281ec1e`. Close only if:
 
 ## Останній прогін
 
-**RESULT: PASS + data\runs\manual_run_20260205_200019**
+**RESULT: PASS + data\runs\manual_run_20260205_201234**
 
 Команда:
 ```bash
 python -m scripts.ci_m5_gate --online --config config/real_minimal.yaml --cycles 1 --gas-usd-estimate 0.10
 ```
 
-Артефакти:
-- Daily report: `data/runs/manual_run_20260205_200019/reports/daily_report_2026-02-05T19-00-22.674056+00-00.json`
-- Scan: `data/runs/manual_run_20260205_200019/reports/scan_20260205_200021.json`
-
 Нові поля в daily_report:
 - `summary`: "quotes_fetched=10, gates_passed=8, gas_only_pnl=-0.10"
-- `quotes_fetched`: 10
-- `gates_passed`: 8
-- `opportunities_reason`: "no_spread_signals"
-- `top_quotes[].pair`: "WETH/USDC" (заповнено)
-- `top_quotes[].timestamp`: заповнено з scan
+- `spread_signals_count`: 0 (спред на ринку < 5 bps threshold)
+- `deprecated_legacy_trades_count`: замість legacy_trades_count
+- `top_quotes[].fee/amount_in_human/amount_out_human`: додано
 
 Провенанс (v3 tick/sqrt_price_x96):
-- `uniswap_v3`: tick=-200581, sqrt_price_x96=3495802435336546433321785
-- `sushiswap_v3`: tick=-200582, sqrt_price_x96=3495622064483228647750106 ✅
+- `uniswap_v3`: tick=-200629, block=428981851
+- `sushiswap_v3`: tick=-200632, block=428981851 ✅
 
-cost_model: `{"type": "gas_only", "gas_usd_estimate": 0.1}`
+spread_signals генерація: ✅ Реалізовано (threshold: 5 bps)
 
 ## Юніт-тести
 

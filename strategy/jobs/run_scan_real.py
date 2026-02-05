@@ -573,6 +573,62 @@ def run_scan(
     # price_sanity_failed should reflect only sanity rejects
     stats["price_sanity_failed"] = int(reject_data.get("price_sanity_failed", 0))
 
+    # Compute spread signals from quotes_sample
+    # Compare prices between different DEXes for the same token pair
+    spread_signals: List[Dict[str, Any]] = []
+    spread_threshold_bps = config.get("spread_threshold_bps", 5)  # default 5 bps = 0.05%
+    try:
+        # Group quotes by pair (token_in/token_out)
+        quotes_by_pair: Dict[str, List[Dict[str, Any]]] = {}
+        for q in quotes_sample:
+            pair_key = f"{q.get('token_in')}/{q.get('token_out')}"
+            if pair_key not in quotes_by_pair:
+                quotes_by_pair[pair_key] = []
+            quotes_by_pair[pair_key].append(q)
+
+        # For each pair, compare prices between DEXes
+        for pair, quotes_for_pair in quotes_by_pair.items():
+            if len(quotes_for_pair) < 2:
+                continue
+
+            # Find best buy (lowest price) and best sell (highest price)
+            sorted_by_price = sorted(
+                quotes_for_pair,
+                key=lambda x: Decimal(str(x.get("price") or "0"))
+            )
+            best_buy = sorted_by_price[0]  # lowest price = best to buy
+            best_sell = sorted_by_price[-1]  # highest price = best to sell
+
+            buy_price = Decimal(str(best_buy.get("price") or "0"))
+            sell_price = Decimal(str(best_sell.get("price") or "0"))
+
+            if buy_price <= 0 or sell_price <= 0:
+                continue
+
+            # Spread = (sell_price - buy_price) / buy_price * 10000 (in bps)
+            spread_bps = int((sell_price - buy_price) / buy_price * 10000)
+
+            # Only record if spread exceeds threshold
+            if abs(spread_bps) >= spread_threshold_bps:
+                signal = {
+                    "pair": pair,
+                    "buy_dex": best_buy.get("dex_id"),
+                    "sell_dex": best_sell.get("dex_id"),
+                    "buy_price": str(buy_price),
+                    "sell_price": str(sell_price),
+                    "spread_bps": spread_bps,
+                    "spread_pct": round(spread_bps / 100, 4),
+                    "block_number": current_block,
+                    "is_profitable": spread_bps > 0,
+                    "confidence": "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low",
+                }
+                spread_signals.append(signal)
+
+        logger.info("Computed %d spread signals (threshold: %d bps)", len(spread_signals), spread_threshold_bps)
+    except Exception as e:
+        logger.warning("Failed to compute spread signals: %s", e)
+        spread_signals = []
+
     # truth report
     truth_data: Dict[str, Any] = {
         "timestamp": now,
@@ -598,7 +654,7 @@ def run_scan(
             "net_pnl_bps": None,
             "cost_model_available": False,
         },
-        "spread_signals": [],
+        "spread_signals": spread_signals,
     }
 
     # mirror infra

@@ -197,6 +197,9 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
             "pool_address": q.get("pool_address"),
             "block_number": q.get("block_number"),
             "price": q.get("price"),
+            "fee": q.get("fee"),
+            "amount_in_human": q.get("amount_in_human"),
+            "amount_out_human": q.get("amount_out_human"),
             "tick": q.get("tick"),
             "sqrt_price_x96": q.get("sqrt_price_x96"),
             "pair": pair,
@@ -237,8 +240,9 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "checks_count": quotes_total,
         "quotes_fetched": quotes_fetched,
         "gates_passed": gates_passed,
-        # legacy_trades_count: backward compat alias for transition. Use checks_count.
-        "legacy_trades_count": quotes_total,
+        "spread_signals_count": len(signals),
+        # DEPRECATED: will be removed in schema v2. Use checks_count.
+        "deprecated_legacy_trades_count": quotes_total,
         "tail_losses": tail_losses,
         "top_reject_reasons": top_rejects,
         "autosize": autosize_summary,
