@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -50,7 +50,24 @@ def aggregate_run(run_dir: Path) -> Dict[str, Any]:
     # Derive structured health sections if not present or missing components
     if not (isinstance(health, dict) and health.get("rpc") and health.get("dex") and health.get("system")):
         rpc_success_rate = stats.get("rpc_success_rate") if isinstance(stats.get("rpc_success_rate"), (int, float)) else 1.0
-        p50_latency = stats.get("rpc_latency") if stats.get("rpc_latency") is not None else None
+        # compute p50 latency from scan.quotes latencies when available
+        p50_latency = None
+        try:
+            qlat = []
+            for q in (scan.get("quotes") or []):
+                if q and isinstance(q.get("latency_ms"), (int, float)):
+                    qlat.append(float(q.get("latency_ms")))
+            if qlat:
+                qlat.sort()
+                n = len(qlat)
+                mid = n // 2
+                if n % 2 == 1:
+                    p50_latency = qlat[mid]
+                else:
+                    p50_latency = (qlat[mid - 1] + qlat[mid]) / 2.0
+        except Exception:
+            p50_latency = None
+
         ws_connected_rate = 1.0 if infra.get("ws_connected") else 0.0
 
         quotes_total = stats.get("quotes_total") or 0
@@ -111,7 +128,8 @@ def aggregate_run(run_dir: Path) -> Dict[str, Any]:
 
     report = {
         "schema_version": "m5:daily:v1",
-        "generated_at": date.today().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "timezone": "UTC",
         "run_id": str(run_dir.name),
         "source_run_dir": str(run_dir),
         "artifacts": artifacts,
@@ -120,6 +138,7 @@ def aggregate_run(run_dir: Path) -> Dict[str, Any]:
         "pnl_mode": "paper",
         "paper_net_pnl_usdc": net_pnl_usdc,
         "paper_win_rate": win_rate,
+        "checks_count": quotes_total,
         "trades_count": quotes_total,
         "tail_losses": tail_losses,
         "top_reject_reasons": top_rejects,

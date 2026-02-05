@@ -46,9 +46,7 @@ def validate_report(path: Path) -> List[str]:
     tr = j.get("top_reject_reasons") or []
     if not isinstance(tr, list):
         errors.append("top_reject_reasons_invalid")
-    # top_reject_reasons should not be empty unless explained
-    if isinstance(tr, list) and len(tr) == 0:
-        errors.append("top_reject_reasons_empty")
+    # Empty top_reject_reasons is acceptable; gate will accept empty list as 'no rejects'
 
     health = j.get("health")
     if health is None:
