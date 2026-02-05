@@ -162,7 +162,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     top_opportunities = []
     signals = truth.get("spread_signals") or []
     if signals:
-        # sort by spread_bps (primary) or spread_pct
+        # sort by spread_bps_exact (or spread_bps for backwards compat)
         def _sig_score(s):
             # confidence is a string ("low", "medium", "high") - convert to numeric
             conf_map = {"high": 3, "medium": 2, "low": 1}
@@ -171,7 +171,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
                 conf = conf_map.get(conf.lower(), 0)
             else:
                 conf = float(conf or 0)
-            spread = float(s.get("spread_bps") or s.get("spread_pct") or 0)
+            spread = float(s.get("spread_bps_exact") or s.get("spread_bps") or s.get("spread_pct") or 0)
             return (conf, spread)  # sort by confidence first, then spread
 
         sorted_sigs = sorted(signals, key=_sig_score, reverse=True)
@@ -244,14 +244,20 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     # Top signal for summary (best spread)
     top_signal = None
     if signals:
-        # Sort by spread_bps descending to get best signal
-        sorted_signals = sorted(signals, key=lambda s: s.get("spread_bps", 0), reverse=True)
+        # Sort by spread_bps_exact (or spread_bps for backwards compat) descending
+        sorted_signals = sorted(
+            signals, 
+            key=lambda s: s.get("spread_bps_exact") or s.get("spread_bps") or 0, 
+            reverse=True
+        )
         best = sorted_signals[0]
         top_signal = {
             "pair": best.get("pair"),
             "buy_dex": best.get("buy_dex"),
             "sell_dex": best.get("sell_dex"),
-            "spread_bps": best.get("spread_bps"),
+            "spread_bps_exact": best.get("spread_bps_exact"),
+            "spread_bps_int": best.get("spread_bps_int") or best.get("spread_bps"),
+            "is_gross_positive": best.get("is_gross_positive"),
             "gross_pnl_usdc_est": best.get("gross_pnl_usdc_est"),
             "net_pnl_usdc_est": best.get("net_pnl_usdc_est"),
             "is_net_positive_est": best.get("is_net_positive_est"),

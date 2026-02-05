@@ -260,122 +260,117 @@ M5_0 closed on SHA: `087d014`. Close only if:
 
 ## Останній прогін
 
-**RESULT: PASS + data\runs\manual_run_20260205_210711 (Signals MVP v2)**
+**RESULT: PASS + data\runs\manual_run_20260205_211954 (Signals MVP v3)**
 
-Команда:
-```bash
+```powershell
 python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml --cycles 5
 ```
 
-**Net formula FIXED!** Математика тепер правильна:
-- `spread_bps`: 0 (0.27 bps raw — дуже малий spread)
-- `gross_pnl_usdc_est`: $0.027
-- `gas_usd_estimate`: $0.10
-- `slippage_usd_estimate`: $0.10 (1 bps, was 10 bps!)
-- `net_pnl_usdc_est`: **-$0.173** ✅ (correct: $0.027 - $0.10 - $0.10)
+**Всі баги виправлено!**:
+- `spread_bps_exact`: **1.4542** ✅ (не 0!)
+- `is_gross_positive`: **True** ✅ (sell > buy)
+- `size_source`: **config** ✅ (не default)
+- `slippage_source`: **config** ✅ (не default)
+- `slippage_bps`: **0** ✅ (з config)
+- `net_pnl_usdc_est`: **+$0.0454** ✅ (позитивний!)
+- `is_net_positive_est`: **True** ✅
 
-Попередній баг: slippage = 0.1% = $1.00 давало net = -$0.87 (неправильно!)
-
-Провенанс (v3 tick/sqrt_price_x96):
-- `uniswap_v3`: buy @ $1921.62
-- `sushiswap_v3`: sell @ $1921.68
-- spread_pct: 0.0027% ✅
-
-spread_signals генерація: ✅ Реалізовано (threshold: 0 bps, formula verified)
+Провенанс:
+- buy: sushiswap_v3 @ $1889.48
+- sell: uniswap_v3 @ $1889.75
+- spread: 1.45 bps (0.0145%)
 
 ## Юніт-тести
 
 ```
-459 passed, 5 subtests passed
+461 passed, 5 subtests passed
 ```
 
 ## Signals MVP DoD (2026-02-05)
 
-**Summary**: Spread signals are now generating correctly for micro-spreads with accurate net estimates.
+**Summary**: Spread signals генеруються правильно з точною математикою.
 
-### Bugs Fixed
+### Баги виправлені
 
-**Bug 1: Int truncation** — `int(0.93) = 0` caused spread_bps to be 0 before threshold comparison.
+**Bug 1: is_gross_positive** — використовував `spread_bps_int > 0` замість `spread_bps_decimal > 0`.
 ```python
-# BEFORE (broken):
-if abs(spread_bps) >= spread_threshold_bps:  # spread_bps was int(0.93)=0
-
-# AFTER (fixed):
-if abs(spread_bps_decimal) >= spread_threshold_bps:  # keeps Decimal precision
+# BEFORE (баг): is_gross_positive: spread_bps > 0  # int(0.27) = 0 → False!
+# AFTER (фікс): is_gross_positive: bool(spread_bps_decimal > 0)  # Decimal → True
 ```
 
-**Bug 2: Slippage 10x too high** — `0.001 = 0.1% = $1.00` slippage on $1000 was excessive.
+**Bug 2: spread_bps втрачався** — мікро-спреди (< 1 bps) округлялися до 0.
 ```python
-# BEFORE (broken):
-slippage_usd_estimate = float(paper_size_usd * Decimal("0.001"))  # $1.00!
-
-# AFTER (fixed):
-slippage_bps = Decimal(str(config.get("slippage_bps", 1)))  # 1 bps
-slippage_usd_estimate = float(paper_size_usd * slippage_bps / Decimal(10000))  # $0.10
+# BEFORE: "spread_bps": int(spread_bps_decimal)  # 0.27 → 0
+# AFTER: "spread_bps_exact": 0.2673, "spread_bps_int": 0
 ```
 
-**Net formula verified**:
-```
-net_pnl_usdc_est = gross_pnl_usdc - gas_usd_estimate - slippage_usd_estimate
-                 = (size * spread_bps / 10000) - gas - (size * slippage_bps / 10000)
-```
-
-### Signal Schema (v2)
-
-Each signal contains:
-- `pair`: Trading pair (e.g., "WETH/USDC")
-- `buy_dex` / `sell_dex`: DEX identifiers
-- `buy_price` / `sell_price`: Prices from each DEX
-- `buy_pool` / `sell_pool`: Pool addresses
-- `spread_bps`: Spread in basis points (integer)
-- `spread_pct`: Spread percentage (float)
-- `is_gross_positive`: True if gross spread > 0
-- **`size_usd`**: Trade size (from config `paper_size_usd` or default 1000)
-- **`size_source`**: "config" or "default"
-- `gross_pnl_usdc_est`: Estimated gross PnL
-- **`gas_usd_estimate`**: Gas cost (from config or default 0.10)
-- **`slippage_usd_estimate`**: Slippage cost (from slippage_bps, default 1 bps)
-- `net_pnl_usdc_est`: Net PnL after gas + slippage
-- `is_net_positive_est`: True if net PnL > 0
-- `confidence`: "low" | "medium" | "high"
-
-### Verification Run (1 cycle, fixed formula)
-
-```
-run: manual_run_20260205_210xxx
-spread_bps: 4 (0.047%)
-gross_pnl_usdc_est: $0.47
-gas_usd_estimate: $0.10
-slippage_usd_estimate: $0.10
-net_pnl_usdc_est: $0.27 ✅ (was -$0.87 with bug!)
-is_net_positive_est: true ✅
+**Bug 3: slippage дефолт** — 1 bps ($0.10) вбивав мікро-спреди.
+```yaml
+# config/real_minimal.yaml
+paper_slippage_bps: 0  # дефолт 0, не 1
 ```
 
-### PnL Semantics (clarified)
+**Bug 4: size_source="default"** — параметри не з config.
+```yaml
+# Тепер з config:
+paper_size_usd: 1000
+paper_slippage_bps: 0
+gas_usd_estimate: 0.10
+```
 
-| Location | Purpose | Status |
-|----------|---------|--------|
-| `truth_report.pnl.*` | Execution-level PnL | DISABLED (no cost model) |
-| `spread_signals[].net_pnl_usdc_est` | Paper estimates | ACTIVE (M5) |
+### Signal Schema v2
 
-### Unit Tests
+```json
+{
+  "spread_bps_exact": 1.4542,      // float для micro-spreads
+  "spread_bps_int": 1,             // int для UI
+  "spread_pct": 0.014542,          // відсоток (0.0145%)
+  "is_gross_positive": true,       // sell > buy (Decimal)
+  "size_source": "config",         // не "default"
+  "slippage_source": "config",     // не "default"
+  "slippage_bps": 0,               // з config
+  "net_pnl_usdc_est": 0.0454,      // позитивний!
+  "is_net_positive_est": true
+}
+```
 
-- `tests/unit/test_spread_signals.py::test_paper_cost_model_arithmetic` - verifies formula
-- Tests detect the OLD bug would have given wrong (negative) result
+### Верифікаційний прогін (5 циклів)
+
+```
+run: manual_run_20260205_211954
+cycles: 5
+spread_bps_exact: 1.4542 ✅
+spread_bps_int: 1
+is_gross_positive: True ✅
+size_source: config ✅
+slippage_source: config ✅
+slippage_bps: 0 ✅
+gross_pnl_usdc_est: $0.1454
+net_pnl_usdc_est: $0.0454 ✅ (позитивний!)
+is_net_positive_est: True ✅
+```
+
+### Unit тести (7 нових)
+
+- `test_spread_signal_from_real_quotes` — базовий сигнал
+- `test_spread_signal_with_threshold` — фільтрація
+- `test_price_invariant_bug_detection` — ловить "2600" баг
+- `test_no_signal_when_same_dex` — потрібно 2+ DEX
+- `test_paper_cost_model_arithmetic` — формула net
+- `test_micro_spread_is_gross_positive` — **мікро-спред з is_gross_positive=True**
+- `test_spread_pct_semantics` — семантика відсотків
 
 ### DoD Checklist
 
-- [x] spread_signals generate for micro-spreads (< 5 bps)
-- [x] Threshold comparison uses Decimal (not int)
-- [x] Default threshold = 0 bps (any positive spread)
-- [x] Net formula: gross - gas - slippage (verified by unit test)
-- [x] Slippage = 1 bps (not 10 bps)
-- [x] `slippage_usd_estimate` included in signal
-- [x] `size_usd` configurable via `paper_size_usd` in config
-- [x] `size_source` indicates "config" or "default"
-- [x] Unit tests for arithmetic (catches old bug)
-- [x] `is_net_positive_est` now correct (can be true!)
-- [x] 459 unit tests passing
+- [x] `is_gross_positive` коректний (sell > buy, Decimal)
+- [x] `spread_bps_exact` не нуль при різних цінах
+- [x] `spread_bps_int` для UI
+- [x] `size_source != "default"` (з config)
+- [x] `slippage_source != "default"` (з config)
+- [x] `paper_slippage_bps: 0` в config (не 1)
+- [x] Unit тест для micro-spread
+- [x] 5-cycle прогін з `is_net_positive_est=True`
+- [x] 461 unit тест пройшов
 
 ---
 

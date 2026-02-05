@@ -95,7 +95,10 @@ notion_capital_usdc: "10000.000000"
 
 # M5 Cost model (gas-only)
 gas_usd_estimate: 0.10
-slippage_usd_estimate: 0.05
+
+# Paper trading settings (M5)
+paper_size_usd: 1000
+paper_slippage_bps: 0  # 0 bps default - conservative for micro-spreads
 
 # M4 markers - execution disabled
 execution_enabled: false

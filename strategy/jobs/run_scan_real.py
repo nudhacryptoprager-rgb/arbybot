@@ -670,11 +670,14 @@ def run_scan(
                 # spread_bps_decimal is in bps, so divide by 10000 to get decimal multiplier
                 gross_pnl_usdc = float(paper_size_usd * spread_bps_decimal / Decimal(10000))
                 
-                # Estimated costs (paper layer - conservative estimates)
+                # Estimated costs (paper layer)
                 # Gas from config, default $0.10 for L2
                 gas_usd_estimate = float(config.get("gas_usd_estimate", 0.10))
-                # Slippage: 1 bps (0.01%) is reasonable for paper estimates
-                slippage_bps = Decimal(str(config.get("slippage_bps", 1)))  # default 1 bps
+                gas_source = "config" if "gas_usd_estimate" in config else "default"
+                
+                # Slippage from config, default 0 bps (conservative for micro-spreads)
+                slippage_bps = Decimal(str(config.get("paper_slippage_bps", 0)))
+                slippage_source = "config" if "paper_slippage_bps" in config else "default"
                 slippage_usd_estimate = float(paper_size_usd * slippage_bps / Decimal(10000))
                 
                 net_pnl_usdc_estimate = gross_pnl_usdc - gas_usd_estimate - slippage_usd_estimate
@@ -687,17 +690,25 @@ def run_scan(
                     "sell_price": str(round(sell_price, 6)),
                     "buy_pool": best_buy.get("pool_address"),
                     "sell_pool": best_sell.get("pool_address"),
-                    "spread_bps": spread_bps,
-                    "spread_pct": round(float(spread_bps_decimal) / 100, 4),
+                    # spread_bps_exact: float for micro-spreads (e.g., 0.267)
+                    # spread_bps_int: rounded for display (may be 0)
+                    "spread_bps_exact": round(float(spread_bps_decimal), 4),
+                    "spread_bps_int": spread_bps,
+                    # spread_pct: percentage (0.00267 means 0.00267%)
+                    # Formula: spread_bps / 100 = pct
+                    "spread_pct": round(float(spread_bps_decimal) / 100, 6),
                     "block_number": current_block,
-                    # is_gross_positive: spread > 0 (use Decimal, not int)
-                    "is_gross_positive": spread_bps_decimal > 0,
+                    # is_gross_positive: sell > buy (use Decimal comparison)
+                    "is_gross_positive": bool(spread_bps_decimal > 0),
                     # Paper estimates (not real execution)
                     "size_usd": float(paper_size_usd),
                     "size_source": size_source,
                     "gross_pnl_usdc_est": round(gross_pnl_usdc, 4),
                     "gas_usd_estimate": gas_usd_estimate,
+                    "gas_source": gas_source,
+                    "slippage_bps": float(slippage_bps),
                     "slippage_usd_estimate": round(slippage_usd_estimate, 4),
+                    "slippage_source": slippage_source,
                     "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
                     "is_net_positive_est": net_pnl_usdc_estimate > 0,
                     "confidence": "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low",

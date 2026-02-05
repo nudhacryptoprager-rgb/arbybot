@@ -20,7 +20,8 @@ def make_minimal_run(tmp_path: Path) -> Path:
             {
                 "pair": "WETH/USDC",
                 "spread_pct": 0.5,  # 0.5% 
-                "spread_bps": 50,
+                "spread_bps_exact": 50.0,
+                "spread_bps_int": 50,
                 "size_usd": 1000,
                 "gross_pnl_usdc_est": 5.0,
                 "net_pnl_usdc_est": 3.9,  # gross - gas - slippage
@@ -30,7 +31,8 @@ def make_minimal_run(tmp_path: Path) -> Path:
             {
                 "pair": "WETH/USDC",
                 "spread_pct": 0.75,  # 0.75%
-                "spread_bps": 75,
+                "spread_bps_exact": 75.0,
+                "spread_bps_int": 75,
                 "size_usd": 1000,
                 "gross_pnl_usdc_est": 7.5,
                 "net_pnl_usdc_est": 6.4,  # gross - gas - slippage
@@ -59,5 +61,7 @@ def test_aggregate_minimal(tmp_path):
     # top_signal should have the best spread
     top_signal = rpt.get("top_signal")
     assert top_signal is not None
-    assert top_signal.get("spread_bps") == 75  # best one
+    # Now uses spread_bps_exact and spread_bps_int
+    assert top_signal.get("spread_bps_exact") == 75.0  # best one
+    assert top_signal.get("spread_bps_int") == 75
     assert isinstance(rpt["top_reject_reasons"], list)
