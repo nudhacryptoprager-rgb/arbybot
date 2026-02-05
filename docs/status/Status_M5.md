@@ -1,6 +1,12 @@
 # Milestone 5 — Production small
 
-Roadmap Milestone 5 deliverables
+> **Оновлено**: 2026-02-05 18:30 UTC  
+> **SHA**: `0c84e19`  
+> **Статус**: ⏳ В роботі
+
+---
+
+## Deliverables (Roadmap)
 
 - Daily reporting artifact (daily_report_*.json) with schema_version and run coverage
 - Stable definitions: win_rate, net_pnl_usdc, tail_losses, top_reject_reasons
@@ -8,15 +14,16 @@ Roadmap Milestone 5 deliverables
 - Transparent health metrics (rpc/dex/system)
 - CI validation for M5 (ci_m5_gate)
 
-DoD-commands
+DoD-commands (канонічні команди)
 
-- Canonical (two-step) — when you already have a runDir:
-  - `python scripts/ci_m5_gate.py --run-dir data/runs/<runDir> --generate-report`
+- Двокрокова — коли вже є runDir:
+  - `python -m scripts.ci_m5_gate --run-dir data/runs/<runDir>`
 
-- Canonical (one-step runner) — run scanner, generate report, validate (runner mode):
-  - `python scripts/ci_m5_gate.py --online --config config/real_minimal.yaml --cycles 1`
+- Однокрокова (runner) — scan + generate + validate:
+  - `python -m scripts.ci_m5_gate --online --config config/real_minimal.yaml --cycles 1 --strict --gas-usd-estimate 0.10`
 
-- Unit tests green: `python -m pytest -q`
+- Юніт-тести:
+  - `python -m pytest tests/unit -q`
 
 Execution policy
 
@@ -47,13 +54,30 @@ Additional recommended fields (required for M5 progression):
 - `autosize`: {`new_size_usd`, `reason`, `cooldown_remaining`} — auto-size decisions must be surfaced in the report even if only as metadata.
 - `top_opportunities`: list of top-5 opportunity summaries: {`spread_pct`, `size_usd`, `confidence`, `source`} — should be derived from `truth_report.spread_signals` or from `scan.quotes` when signals absent.
 
-Cost model (minimal)
+Cost model (мінімальна газова модель)
 
-For M5 the initial cost model must be gas-only and explicitly configured. The generator reads a config key `gas_usd_estimate` (example: `0.10`) and optionally `slippage_usd_estimate`.
+Для M5 початкова cost model — gas-only і явно задана в config або CLI.
 
+- У config: `gas_usd_estimate: 0.10` (приклад).
+- CLI: `--gas-usd-estimate 0.10`.
+- Env: `ARBY_GAS_USD_ESTIMATE=0.10`.
+
+```
 paper_net_pnl_usdc = gross_spread_usd - gas_usd_estimate - slippage_usd_estimate
+```
 
-When `gas_usd_estimate` is present the report SHOULD set `pnl_available: true` and clear `pnl_reason`.
+Коли `gas_usd_estimate` задано, репорт ПОВИНЕН мати `pnl_available: true` і `pnl_reason: null`.
+
+Важливо: `daily_report.paper_net_pnl_usdc` — це окрема paper-оцінка, НЕ з truth_report. У truth_report `cost_model_available` може бути `false`, а у daily_report pnl_available=true (бо daily застосовує gas-only модель незалежно).
+
+Price provenance (on-chain доказовість ціни)
+
+Для M5 quotes ПОВИННІ містити:
+- `pool_address` — адреса пулу (для v3).
+- `block_number` — номер блоку.
+- (рекомендовано) `tick` або `sqrtPriceX96` для v3 пулів.
+
+Це підтверджує, що ціна прийшла з on-chain стану.
 
 Golden artifact policy
 
@@ -101,9 +125,48 @@ Retention & golden artifacts
 
 M5_0 closure
 
-M5_0 closed on SHAs: add your SHAs here. Close only if:
+M5_0 closed on SHA: `e56cfd5`. Close only if:
 
 - `scripts/ci_m5_0_gate.py --online --strict` passes
 - `pytest -q` green
 
-Next: Milestone 5 — Production small (see Status_M5.md)
+---
+
+## Статус виконання M5
+
+| # | Задача | Статус |
+|---|--------|--------|
+| 1 | daily_report generator | ✅ |
+| 2 | gas-only cost model у config | ✅ |
+| 3 | pool_address у quotes | ✅ |
+| 4 | tick/sqrtPriceX96 структура | ✅ (placeholder) |
+| 5 | top_opportunities policy | ✅ |
+| 6 | autosize завжди об'єкт | ✅ |
+| 7 | strict режим у gate | ✅ |
+| 8 | негативні тести (3 шт) | ✅ |
+| 9 | paper PnL документація | ✅ |
+| 10 | slot0() для tick | ⏳ Наступний крок |
+
+## Останній прогін
+
+**RESULT: PASS + data\runs\manual_run_20260205_190141**
+
+## Юніт-тести
+
+```
+443 passed, 5 subtests passed
+```
+
+## Наступні кроки
+
+- Реалізувати RPC call до `slot0()` для заповнення `tick` і `sqrtPriceX96`
+- Додати генерацію `spread_signals` у truth_report
+- Заповнити `top_opportunities` з реальних signals
+
+## SHA закриття M5
+
+_(заповнюється при закритті milestone)_
+
+---
+
+Next: Milestone 6

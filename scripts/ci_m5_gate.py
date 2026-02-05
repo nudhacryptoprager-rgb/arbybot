@@ -198,13 +198,30 @@ def main() -> None:
     if run_dir is not None:
         from scripts.generate_daily_report import aggregate_run
         import os
+        import yaml
 
-        # precedence: CLI args > env
+        # Load config to try reading gas/slippage estimates from there
+        config_gas = None
+        config_slip = None
+        if args.config:
+            try:
+                with open(args.config, "r", encoding="utf8") as f:
+                    cfg = yaml.safe_load(f)
+                config_gas = cfg.get("gas_usd_estimate")
+                config_slip = cfg.get("slippage_usd_estimate")
+            except Exception:
+                pass
+
+        # precedence: CLI args > env > config
         gas_val = args.gas_usd_estimate if args.gas_usd_estimate is not None else (
-            float(os.environ.get("ARBY_GAS_USD_ESTIMATE")) if os.environ.get("ARBY_GAS_USD_ESTIMATE") else None
+            float(os.environ.get("ARBY_GAS_USD_ESTIMATE")) if os.environ.get("ARBY_GAS_USD_ESTIMATE") else (
+                float(config_gas) if config_gas is not None else None
+            )
         )
         slip_val = args.slippage_usd_estimate if args.slippage_usd_estimate is not None else (
-            float(os.environ.get("ARBY_SLIPPAGE_USD_ESTIMATE")) if os.environ.get("ARBY_SLIPPAGE_USD_ESTIMATE") else 0.0
+            float(os.environ.get("ARBY_SLIPPAGE_USD_ESTIMATE")) if os.environ.get("ARBY_SLIPPAGE_USD_ESTIMATE") else (
+                float(config_slip) if config_slip is not None else 0.0
+            )
         )
 
         report = aggregate_run(run_dir, gas_usd_estimate=gas_val, slippage_usd_estimate=slip_val)

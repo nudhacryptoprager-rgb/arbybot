@@ -93,6 +93,10 @@ price_sanity_max_deviation_bps: 5000  # 50% for bootstrap
 cooldown_seconds: 60
 notion_capital_usdc: "10000.000000"
 
+# M5 Cost model (gas-only)
+gas_usd_estimate: 0.10
+slippage_usd_estimate: 0.05
+
 # M4 markers - execution disabled
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4

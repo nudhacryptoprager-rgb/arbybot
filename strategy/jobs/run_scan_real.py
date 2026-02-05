@@ -61,6 +61,9 @@ class QuoteCompat:
     block_number: int = 0
     rpc_success: bool = True
     gate_passed: bool = True
+    # v3 provenance fields (on-chain state markers)
+    tick: int | None = None
+    sqrt_price_x96: int | None = None
 
 
 # Export compatibility alias regardless of core.models availability
@@ -270,7 +273,16 @@ def run_scan(
     # Build quotes sample
     quotes_sample: List[Dict[str, Any]] = []
     dexes_list = config.get("dexes") or []
+    pools_cfg = config.get("pools", {}) or {}
+    token_pair_tag = "WETH_USDC"
     for dex in dexes_list:
+        # attempt to find a pool address for this dex and token pair
+        pool_addr = None
+        for k, v in pools_cfg.items():
+            if dex in k and token_pair_tag in k:
+                pool_addr = v
+                break
+
         try:
             from core.validators import normalize_price
             price_val, price_diag = normalize_price(
@@ -287,7 +299,7 @@ def run_scan(
 
         q = QuoteCompat(
             dex_id=dex,
-            pool_address=None,
+            pool_address=pool_addr,
             token_in="WETH",
             token_out="USDC",
             fee=3000,
@@ -300,6 +312,8 @@ def run_scan(
             block_number=current_block,
             rpc_success=True,
             gate_passed=True,
+            tick=None,
+            sqrt_price_x96=None,
         )
         quotes_sample.append(q.__dict__)
 
@@ -672,6 +686,9 @@ def run_scan(
             block_number=current_block,
             rpc_success=True,
             gate_passed=True,
+            # v3 provenance fields: tick and sqrtPriceX96 (placeholders for sample; real quotes fill these)
+            tick=None,
+            sqrt_price_x96=None,
         )
         quotes_sample.append(q.__dict__)
     # Derive dexes active list from actual quotes_sample to avoid placeholders

@@ -146,7 +146,8 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     else:
         autosize_summary = {"enabled": False, "reason": "not_configured", "new_size_usd": None, "cooldown_remaining": 0}
 
-    # top_opportunities: prefer truth.spread_signals, fallback to scan.quotes
+    # top_opportunities: ONLY from spread_signals. If empty → empty list.
+    # We do NOT fallback to scan.quotes anymore to avoid noisy null entries.
     top_opportunities = []
     signals = truth.get("spread_signals") or []
     if signals:
@@ -156,40 +157,18 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
 
         sorted_sigs = sorted(signals, key=_sig_score, reverse=True)
         for s in sorted_sigs[:5]:
+            # require at least spread_pct or confidence to be valid opportunity
+            if s.get("spread_pct") is None and s.get("confidence") is None:
+                continue
             top_opportunities.append(
                 {
                     "spread_pct": s.get("spread_pct"),
                     "size_usd": s.get("size_usd") or s.get("size") or None,
                     "confidence": s.get("confidence"),
-                    "source": "truth",
+                    "source": "signal",
                 }
             )
-    else:
-        for q in (scan.get("quotes") or [])[:5]:
-            if not q:
-                continue
-            spread = q.get("spread_pct") or q.get("spread")
-            price = q.get("price") or q.get("mid_price")
-            size_usd = q.get("size_usd") or q.get("size")
-            confidence = q.get("confidence")
-            dex_id = q.get("dex_id") or q.get("dex")
-            token_in = q.get("token_in") or q.get("token0")
-            token_out = q.get("token_out") or q.get("token1")
-            # require at least one meaningful field to avoid noisy null entries
-            if not any((spread, price, size_usd, confidence, dex_id, token_in, token_out)):
-                continue
-            top_opportunities.append(
-                {
-                    "spread_pct": spread,
-                    "size_usd": size_usd,
-                    "confidence": confidence,
-                    "price": price,
-                    "dex_id": dex_id,
-                    "token_in": token_in,
-                    "token_out": token_out,
-                    "source": "scan",
-                }
-            )
+    # If no signals → top_opportunities remains empty (no fallback to scan quotes)
 
     report = {
         "schema_version": "m5:daily:v1",
