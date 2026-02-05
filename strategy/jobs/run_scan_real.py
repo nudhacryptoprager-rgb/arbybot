@@ -613,7 +613,8 @@ def run_scan(
     # Compare prices between different DEXes for the same token pair
     # Use price_exact (from sqrt_price_x96) when available for accurate spread detection
     spread_signals: List[Dict[str, Any]] = []
-    spread_threshold_bps = config.get("spread_threshold_bps", 1)  # default 1 bps = 0.01% for micro-spreads
+    spread_threshold_bps = config.get("spread_threshold_bps", 0)  # default 0 bps for MVP - any positive spread
+    logger.info("Starting spread signal computation: %d quotes, threshold=%d bps", len(quotes_sample), spread_threshold_bps)
     try:
         # Group quotes by pair (token_in/token_out)
         quotes_by_pair: Dict[str, List[Dict[str, Any]]] = {}
@@ -622,6 +623,8 @@ def run_scan(
             if pair_key not in quotes_by_pair:
                 quotes_by_pair[pair_key] = []
             quotes_by_pair[pair_key].append(q)
+        
+        logger.info("Grouped quotes: %s", {k: len(v) for k, v in quotes_by_pair.items()})
 
         # For each pair, compare prices between DEXes
         for pair, quotes_for_pair in quotes_by_pair.items():
@@ -650,13 +653,14 @@ def run_scan(
             spread_bps = int(spread_bps_decimal)
 
             # Log the exact prices for debugging
-            logger.debug(
-                "Spread calc: %s buy=%s sell=%s spread_bps=%s",
-                pair, buy_price, sell_price, spread_bps_decimal
+            logger.info(
+                "Spread calc: %s buy=%s sell=%s spread_bps_decimal=%s spread_bps_int=%s threshold=%s",
+                pair, buy_price, sell_price, spread_bps_decimal, spread_bps, spread_threshold_bps
             )
 
             # Only record if spread exceeds threshold
-            if abs(spread_bps) >= spread_threshold_bps:
+            # Use Decimal comparison, not int, to catch micro-spreads
+            if abs(spread_bps_decimal) >= spread_threshold_bps:
                 # Paper cost estimates (M5 layer - no real execution)
                 paper_size_usd = Decimal(1000)  # Default paper trade size
                 gross_spread_pct = spread_bps_decimal / 100

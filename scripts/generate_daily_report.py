@@ -162,9 +162,17 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     top_opportunities = []
     signals = truth.get("spread_signals") or []
     if signals:
-        # sort by confidence or spread_pct
+        # sort by spread_bps (primary) or spread_pct
         def _sig_score(s):
-            return float(s.get("confidence") or s.get("spread_pct") or 0)
+            # confidence is a string ("low", "medium", "high") - convert to numeric
+            conf_map = {"high": 3, "medium": 2, "low": 1}
+            conf = s.get("confidence")
+            if isinstance(conf, str):
+                conf = conf_map.get(conf.lower(), 0)
+            else:
+                conf = float(conf or 0)
+            spread = float(s.get("spread_bps") or s.get("spread_pct") or 0)
+            return (conf, spread)  # sort by confidence first, then spread
 
         sorted_sigs = sorted(signals, key=_sig_score, reverse=True)
         for s in sorted_sigs[:5]:

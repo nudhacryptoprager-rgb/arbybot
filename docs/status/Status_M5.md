@@ -260,36 +260,113 @@ M5_0 closed on SHA: `087d014`. Close only if:
 
 ## Останній прогін
 
-**RESULT: PASS + data\runs\manual_run_20260205_201234**
+**RESULT: PASS + data\runs\manual_run_20260205_205612 (Signals MVP)**
 
 Команда:
 ```bash
-python -m scripts.ci_m5_gate --online --config config/real_minimal.yaml --cycles 1 --gas-usd-estimate 0.10
+python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml --cycles 5
 ```
+
+**Signals MVP успішно!** spread_signals генеруються для мікро-спредів:
+- `spread_signals_count`: 1 ✅ (раніше було 0)
+- `spread_bps`: 2 (виявлено ~0.02% спред)
+- `is_net_positive_est`: false (спред недостатній для покриття газу)
 
 Нові поля в daily_report:
 - `summary`: "quotes_fetched=10, gates_passed=8, gas_only_pnl=-0.10"
-- `spread_signals_count`: 0 (спред на ринку < 5 bps threshold)
+- `spread_signals_count`: 1 ✅ (фікс int truncation bug)
 - `deprecated_legacy_trades_count`: замість legacy_trades_count
 - `top_quotes[].fee/amount_in_human/amount_out_human`: додано
 
 Провенанс (v3 tick/sqrt_price_x96):
-- `uniswap_v3`: tick=-200629, block=428981851
-- `sushiswap_v3`: tick=-200632, block=428981851 ✅
+- `uniswap_v3`: tick=-200629, block=428992399
+- `sushiswap_v3`: tick=-200632, block=428992399 ✅
 
-spread_signals генерація: ✅ Реалізовано (threshold: 5 bps)
+spread_signals генерація: ✅ Реалізовано (threshold: 0 bps)
 
 ## Юніт-тести
 
 ```
-449 passed, 5 subtests passed
+459 passed, 5 subtests passed
 ```
+
+## Signals MVP DoD (2026-02-05)
+
+**Summary**: Spread signals are now generating correctly for micro-spreads.
+
+### Bug Fixed
+
+**Root Cause**: `int(0.93) = 0` — spread_bps was truncated before threshold comparison.
+
+```python
+# BEFORE (broken):
+if abs(spread_bps) >= spread_threshold_bps:  # spread_bps was int(0.93)=0, threshold=1
+
+# AFTER (fixed):
+if abs(spread_bps_decimal) >= spread_threshold_bps:  # keeps Decimal precision
+```
+
+**Threshold Change**: Default `spread_threshold_bps` changed from `1` to `0` (any positive spread).
+
+### Signal Schema
+
+Each signal contains:
+- `pair`: Trading pair (e.g., "WETH/USDC")
+- `buy_dex` / `sell_dex`: DEX identifiers
+- `buy_price` / `sell_price`: Prices from each DEX
+- `buy_pool` / `sell_pool`: Pool addresses
+- `spread_bps`: Spread in basis points (integer)
+- `spread_pct`: Spread percentage (float)
+- `is_gross_positive`: True if gross spread > 0
+- `gross_pnl_usdc_est`: Estimated gross PnL for $1000 trade
+- `gas_usd_estimate`: Gas cost estimate (from config)
+- `net_pnl_usdc_est`: Net PnL after gas + slippage
+- `is_net_positive_est`: True if net PnL > 0
+- `confidence`: "low" | "medium" | "high"
+
+### Verification Run (5 cycles)
+
+```
+run: manual_run_20260205_205612
+cycles_completed: 5
+spread_signals_count: 1
+
+signal:
+  pair: WETH/USDC
+  buy_dex: sushiswap_v3 @ $1922.17
+  sell_dex: uniswap_v3 @ $1922.62
+  spread_bps: 2
+  gross_pnl_usdc_est: $0.23
+  net_pnl_usdc_est: -$0.87 (negative after costs)
+  is_net_positive_est: false
+```
+
+### Unit Tests Added
+
+- `tests/unit/test_spread_signals.py` (5 tests):
+  - `test_spread_signal_generated_from_real_quotes`
+  - `test_spread_signal_respects_threshold`
+  - `test_price_invariant_bug_detection` (catches "2600" bug)
+  - `test_no_spread_signal_for_single_dex`
+  - `test_paper_cost_model_deduction`
+
+### DoD Checklist
+
+- [x] spread_signals generate for micro-spreads (< 5 bps)
+- [x] Threshold comparison uses Decimal (not int)
+- [x] Default threshold = 0 bps (any positive spread)
+- [x] Paper cost estimates included (gas + slippage)
+- [x] Unit tests for spread signal generation
+- [x] 5-cycle verification run passed
+- [x] 459 unit tests passing
+
+---
 
 ## Наступні кроки
 
 1. ~~Запустити канонічну команду з реальним RPC для верифікації slot0()~~ ✅
-2. Додати генерацію `spread_signals` у truth_report
-3. Заповнити `top_opportunities` з реальних signals
+2. ~~Додати генерацію `spread_signals` у truth_report~~ ✅ (Signals MVP)
+3. ~~Заповнити `top_opportunities` з реальних signals~~ ✅
 4. Додати газ oracle інтеграцію (M6)
 
 ## SHA закриття M5
