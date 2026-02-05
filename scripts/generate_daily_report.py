@@ -161,6 +161,9 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     # We do NOT fallback to scan.quotes anymore to avoid noisy null entries.
     top_opportunities = []
     top_opportunities_net_positive = []  # Separate list for net-positive only
+    # Read min_net_pnl_usdc_est threshold from config_params (0 = break-even or better)
+    config_params = truth.get("config_params") or {}
+    min_net_threshold = float(config_params.get("min_net_pnl_usdc_est", 0.0))
     signals = truth.get("spread_signals") or []
     if signals:
         # sort by net_pnl_usdc_est descending (most profitable first)
@@ -193,8 +196,10 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
                 "source": "signal",
             }
             top_opportunities.append(opp)
-            # Also add to net_positive list if profitable
-            if s.get("is_net_positive_est"):
+            # Also add to net_positive list if above threshold
+            # Uses min_net_pnl_usdc_est from config (default 0 = break-even)
+            net_pnl = float(s.get("net_pnl_usdc_est") or 0)
+            if net_pnl >= min_net_threshold:
                 top_opportunities_net_positive.append(opp)
     # If no signals → top_opportunities remains empty (no fallback to scan quotes)
     # Add reason when empty

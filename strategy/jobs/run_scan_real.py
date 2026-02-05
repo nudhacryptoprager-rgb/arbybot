@@ -759,7 +759,8 @@ def run_scan(
         "current_block": current_block,
         # config_params: log relevant config for reproducibility
         "config_params": {
-            "min_spread_bps": spread_threshold_bps,
+            "min_spread_bps": spread_threshold_bps,  # debug=0; production=2-5 or net-only
+            "min_net_pnl_usdc_est": config.get("min_net_pnl_usdc_est", 0.0),
             "paper_size_usd": config.get("paper_size_usd", 1000),
             "gas_usd_estimate": config.get("gas_usd_estimate", 0.10),
             "paper_slippage_bps": config.get("paper_slippage_bps", 0),
