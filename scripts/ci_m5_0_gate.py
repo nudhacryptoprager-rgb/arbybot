@@ -424,6 +424,54 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
         except Exception as e:
             messages.append(f"WARN: cross-artifact checks failed: {type(e).__name__}: {e}")
 
+        # Infra transparency checks: confirm provider and host present and consistent
+        try:
+            infra_s = (s.get("infra") or {})
+            infra_t = (t.get("infra") or {})
+            infra_r = (r.get("infra") or {})
+
+            # Extract provider/hosts
+            prov_s = infra_s.get("rpc_provider")
+            prov_t = infra_t.get("rpc_provider")
+            host_s = infra_s.get("rpc_http_host")
+            host_t = infra_t.get("rpc_http_host")
+
+            if not prov_s or not host_s:
+                messages.append("WARN: scan.infra missing rpc_provider or rpc_http_host")
+            if not prov_t or not host_t:
+                messages.append("WARN: truth_report.infra missing rpc_provider or rpc_http_host")
+
+            # If env required Alchemy, ensure provider is alchemy
+            if os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1":
+                if prov_s != "alchemy" or prov_t != "alchemy":
+                    messages.append(f"FAIL: REQUIRE_ALCHEMY set but provider != alchemy (scan={prov_s} truth={prov_t})")
+                    all_passed = False
+
+            # Tenderly diagnostic consistency
+            for name, infra in (("scan", infra_s), ("truth_report", infra_t)):
+                if infra.get("tenderly_enabled"):
+                    ok = infra.get("tenderly_ok")
+                    err = infra.get("tenderly_error")
+                    if ok is not True and (not err):
+                        messages.append(f"FAIL: {name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
+                        all_passed = False
+
+            # WS diagnostics validation
+            for name, infra in (("scan", infra_s), ("truth_report", infra_t)):
+                if infra.get("ws_enabled"):
+                    attempted = infra.get("ws_attempted")
+                    connected = infra.get("ws_connected")
+                    fallback = infra.get("ws_fallback_to_http")
+                    ws_err = infra.get("ws_error")
+                    if attempted is not True and attempted is not False:
+                        messages.append(f"WARN: {name}.infra missing ws_attempted")
+                    if connected is not True and connected is not False:
+                        messages.append(f"WARN: {name}.infra missing ws_connected")
+                    if connected is False and not (ws_err or fallback):
+                        messages.append(f"FAIL: {name}.infra ws_enabled true but not connected and no ws_error/fallback provided")
+                        all_passed = False
+        except Exception as e:
+            messages.append(f"WARN: infra transparency checks failed: {type(e).__name__}: {e}")
     return all_passed, messages
 
 
@@ -481,35 +529,63 @@ def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool,
     
     # Resolve RPC URLs from env: prefer explicit ALCHEMY_RPC_HTTP/WS, else build from ALCHEMY_API_KEY
     try:
-        from core.rpc_urls import build_alchemy_http_url, build_alchemy_ws_url, public_fallback_for
+        from core.rpc_urls import resolve_rpc_http, resolve_rpc_ws
     except Exception:
-        build_alchemy_http_url = build_alchemy_ws_url = public_fallback_for = None
+        resolve_rpc_http = resolve_rpc_ws = None
 
     env_for_run = os.environ.copy()
-    # Determine canonical network: prefer ENV NETWORK, otherwise leave to scanner/config
+    # Determine canonical network/chain: prefer ENV NETWORK, otherwise leave to scanner/config
     network = os.environ.get("NETWORK") or os.environ.get("CHAIN")
+    chain_id = os.environ.get("CHAIN_ID")
+    try:
+        chain_id_int = int(chain_id) if chain_id else None
+    except Exception:
+        chain_id_int = None
 
-    # HTTP primary
-    primary_http = os.environ.get("ALCHEMY_RPC_HTTP") or os.environ.get("ARBY_RPC_HTTP_PRIMARY")
-    if not primary_http and os.environ.get("ALCHEMY_API_KEY") and build_alchemy_http_url:
-        candidate = build_alchemy_http_url(network, os.environ.get("ALCHEMY_API_KEY"))
-        if candidate:
-            primary_http = candidate
-        else:
-            primary_http = public_fallback_for(network) if public_fallback_for else None
+    # Use resolver to find the best HTTP and WS endpoints and provider metadata
+    primary_http = None
+    primary_ws = None
+    provider_http = "unknown"
+    provider_ws = "unknown"
+    http_diag = {}
+    ws_diag = {}
 
-    # WS primary (optional)
-    primary_ws = os.environ.get("ALCHEMY_RPC_WS") or os.environ.get("ARBY_RPC_WS_PRIMARY")
-    if not primary_ws and os.environ.get("ALCHEMY_API_KEY") and build_alchemy_ws_url:
-        candidate_ws = build_alchemy_ws_url(network, os.environ.get("ALCHEMY_API_KEY"))
-        if candidate_ws:
-            primary_ws = candidate_ws
+    if resolve_rpc_http:
+        url, provider, diag = resolve_rpc_http(chain_id=chain_id_int, network=network, env=os.environ)
+        primary_http = url
+        provider_http = provider
+        http_diag = diag or {}
 
-    # Inject into env passed to scanner (do not log secrets)
+    if resolve_rpc_ws:
+        urlw, providerw, diagw = resolve_rpc_ws(chain_id=chain_id_int, network=network, env=os.environ)
+        primary_ws = urlw
+        provider_ws = providerw
+        ws_diag = diagw or {}
+
+    # Inject resolved endpoints into scanner env (do not log keys)
     if primary_http:
         env_for_run.setdefault("ARBY_RPC_HTTP_PRIMARY", primary_http)
+        env_for_run.setdefault("ARBY_RPC_PROVIDER", provider_http)
+        # expose host only (no keys)
+        try:
+            from urllib.parse import urlparse
+            env_for_run.setdefault("ARBY_RPC_HTTP_HOST", urlparse(primary_http).netloc)
+        except Exception:
+            pass
     if primary_ws:
         env_for_run.setdefault("ARBY_RPC_WS_PRIMARY", primary_ws)
+        env_for_run.setdefault("ARBY_RPC_WS_PROVIDER", provider_ws)
+        try:
+            from urllib.parse import urlparse
+            env_for_run.setdefault("ARBY_RPC_WS_HOST", urlparse(primary_ws).netloc)
+        except Exception:
+            pass
+
+    # Enforce Require-Alchemy behavior if requested
+    require_alchemy = os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
+    if require_alchemy and provider_http != "alchemy":
+        print(f"FAIL: Alchemy expected but resolved provider={provider_http} (host={env_for_run.get('ARBY_RPC_HTTP_HOST')})")
+        return False, "Alchemy expected but public fallback used"
 
     # NOTE: WS preference flags are read from the calling process env by the scanner.
 

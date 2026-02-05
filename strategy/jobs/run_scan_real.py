@@ -297,12 +297,29 @@ def run_scan(
         rpc_provider = "public"
         transport = "http"
         ws_enabled = False
-        # prefer explicit env overrides
+        # prefer explicit env overrides; if not present, resolve via core.rpc_urls
         primary_http = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or os.environ.get("ALCHEMY_RPC_HTTP")
         primary_ws = os.environ.get("ARBY_RPC_WS_PRIMARY") or os.environ.get("ALCHEMY_RPC_WS")
-        if os.environ.get("ALCHEMY_API_KEY"):
-            rpc_provider = "alchemy"
-        elif primary_http and "alchemy" in primary_http:
+        rpc_http_host = None
+        rpc_ws_host = None
+        try:
+            from core.rpc_urls import resolve_rpc_http, resolve_rpc_ws
+        except Exception:
+            resolve_rpc_http = resolve_rpc_ws = None
+
+        if not primary_http and resolve_rpc_http:
+            url, provider_name, diag = resolve_rpc_http(chain_id=config.get("chain_id"), network=os.environ.get("NETWORK"), env=os.environ)
+            primary_http = url
+            rpc_provider = provider_name or rpc_provider
+            if url:
+                try:
+                    from urllib.parse import urlparse
+                    rpc_http_host = urlparse(url).netloc
+                except Exception:
+                    rpc_http_host = None
+
+        # If explicit primary_http indicates alchemy, prefer marking provider accordingly
+        if primary_http and "alchemy" in (primary_http or ""):
             rpc_provider = "alchemy"
         # Honor prefer/ws flags from env (injected by gate):
         prefer_ws = os.environ.get("ARBY_PREFER_WS") == "1"
@@ -314,6 +331,11 @@ def run_scan(
         if primary_ws:
             ws_enabled = True
             transport = "ws+http"
+            try:
+                from urllib.parse import urlparse
+                rpc_ws_host = urlparse(primary_ws).netloc
+            except Exception:
+                rpc_ws_host = None
             # Attempt a lightweight WS handshake if available
             try:
                 try:
@@ -378,7 +400,8 @@ def run_scan(
             tenderly_ok = False
             tenderly_error = "not_checked" if tenderly_enabled else "not_configured"
 
-        scan_data["infra"] = {
+        # include host/provider transparently (no keys)
+        infra_payload = {
             "rpc_provider": rpc_provider,
             "transport": transport,
             "ws_enabled": ws_enabled,
@@ -390,6 +413,20 @@ def run_scan(
             "tenderly_ok": tenderly_ok,
             "tenderly_error": tenderly_error,
         }
+        if rpc_http_host:
+            infra_payload["rpc_http_host"] = rpc_http_host
+        if rpc_ws_host:
+            infra_payload["rpc_ws_host"] = rpc_ws_host
+
+        scan_data["infra"] = infra_payload
+
+        # Emit single-line selection log
+        try:
+            sel_host = rpc_http_host or os.environ.get("ARBY_RPC_HTTP_HOST") or "unknown"
+            ws_flag = "enabled" if ws_enabled else "disabled"
+            logger.info(f"RPC selected: provider=%s host=%s ws=%s", rpc_provider, sel_host, ws_flag)
+        except Exception:
+            pass
     except Exception:
         scan_data["infra"] = {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False}
     

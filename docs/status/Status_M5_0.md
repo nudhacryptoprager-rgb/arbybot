@@ -124,6 +124,16 @@ Known gaps:
 
 - Tenderly is optional. If `TENDERLY_ACCESS_KEY` (and related vars) present, `infra.tenderly_enabled=true` is written; otherwise `false`.
 
+Additional infra transparency (new requirements):
+
+- Artifacts MUST include these infra fields (no secrets): `infra.rpc_provider`, `infra.rpc_http_host`.
+- Optionally include `infra.rpc_ws_host` when WS is attempted.
+- If `ARBY_REQUIRE_ALCHEMY=1` (or `REQUIRE_ALCHEMY=1`) is set, the gate must fail if resolved provider is not `alchemy`.
+- Tenderly: when `tenderly_enabled=true`, artifacts must include either `tenderly_ok=true` or a non-empty `tenderly_error` string.
+- WS: when `ws_enabled=true`, artifacts must include `ws_attempted`, `ws_connected`, and either `ws_error` or `ws_fallback_to_http` if not connected.
+
+These checks are enforced by `scripts/ci_m5_0_gate.py`.
+
 These rules are implemented in `core/rpc_urls.py`, `scripts/ci_m5_0_gate.py`, and `strategy/jobs/run_scan_real.py`.
 
 ## Files Changed
