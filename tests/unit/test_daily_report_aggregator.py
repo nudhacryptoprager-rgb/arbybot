@@ -28,5 +28,6 @@ def test_aggregate_minimal(tmp_path):
     rpt = aggregate_run(run)
     assert rpt["schema_version"] == "m5:daily:v1"
     assert rpt["runs_included"] == 1
-    assert rpt["net_pnl_usdc"] == 12.5
+    # M5 reports use paper_net_pnl_usdc
+    assert rpt.get("paper_net_pnl_usdc") == 12.5
     assert isinstance(rpt["top_reject_reasons"], list)

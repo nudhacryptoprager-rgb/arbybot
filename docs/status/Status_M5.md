@@ -30,15 +30,26 @@ Minimal fields (schema_version v1):
 - `runs_included`: int
 - `net_pnl_usdc`: number (net pnl for paper trades in USDC)
 - `win_rate`: number (fraction 0..1) — defined for M5 as: paper trades/opportunities that passed gates and would have executed (execution disabled)
+- Note: For clarity these are *paper* metrics in M5. The canonical field names produced by the generator will be `paper_net_pnl_usdc` and `paper_win_rate` and `pnl_mode: "paper"`.
 - `trades_count`: int
 - `tail_losses`: list of top-k worst trade outcomes (by pnl)
 - `top_reject_reasons`: list of {reason, count}
 - `health`: {rpc: {...}, dex: {...}, system: {...}}
 
+DoD additions
+
+- The daily report MUST include provenance fields: `source_run_dir` and `artifacts` with explicit paths: `scan_path`, `truth_report_path`, `reject_histogram_path`.
+- The generator will write default reports under `runDir/reports/daily_report_*.json` to ensure reproducibility.
+
 Definitions (short)
 
 - `win_rate`: for M5 initial phase, count paper trades (opportunities) that pass gates divided by total opportunities considered; execution disabled so this is paper win-rate.
 - `net_pnl_usdc`: net pnl estimated for paper trades in USDC terms (consistent currency for M5).
+
+Validation & CI
+
+- `ci_m5_gate.py` will validate daily report schema and consistency with artifacts (quotes_total, total_rejects, current_block) when artifact paths present.
+- `ci_m5_gate.py` will also ensure `paper_win_rate` in [0,1], `top_reject_reasons` present (or explicit empty explanation), and health keys (`rpc`,`dex`,`system`) present.
 - `tail_losses`: for example the top-5 worst trade outcomes for the period, by pnl.
 - `reject reasons`: include origin stage (normalize: normalize_price|sanity_check|execution|rpc)
 

@@ -1,4 +1,4 @@
-from core.auto_size import clamp_size, reduce_on_slippage, restore_size
+from core.auto_size import clamp_size, autosize_step
 
 
 def test_clamp_size():
@@ -7,17 +7,20 @@ def test_clamp_size():
     assert clamp_size(20, 1, 10) == 10
 
 
-def test_reduce_on_slippage():
+def test_autosize_reduce_and_cooldown():
     size = 10
-    new = reduce_on_slippage(size, slippage_bps=100, ticks_crossed=0, s1=50, t1=2, min_size=1)
+    state = None
+    new, state, reason = autosize_step(size, last_slippage_bps=100, last_ticks_crossed=0, min_size=1, max_size=20)
     assert new == 5
-    new2 = reduce_on_slippage(size, slippage_bps=10, ticks_crossed=0, s1=50, t1=2, min_size=1)
-    assert new2 == 10
+    assert reason == "reduced_on_slippage_or_ticks"
+    # cooldown prevents immediate restore
+    new2, state, reason2 = autosize_step(new, last_slippage_bps=0, last_ticks_crossed=0, min_size=1, max_size=20, state=state)
+    assert reason2 == "cooldown"
 
 
-def test_restore_size():
+def test_autosize_restore_after_good_cycles():
     size = 5
-    r = restore_size(size, consecutive_good=3, required=3, factor=1.2, max_size=10)
-    assert abs(r - 6.0) < 1e-6
-    r2 = restore_size(size, consecutive_good=1, required=3, factor=1.2, max_size=10)
-    assert r2 == size
+    state = {"cooldown": 0, "consecutive_good": 0}
+    for i in range(3):
+        size, state, reason = autosize_step(size, last_slippage_bps=0, last_ticks_crossed=0, min_size=1, max_size=10, state=state)
+    assert reason == "restored_after_good_cycles"
