@@ -230,3 +230,70 @@ python scripts/ci_m5_0_gate.py --offline
 - These are lightweight compatibility wrappers to restore public API surface; plan is to keep wrappers for two milestones and then migrate callers to new implementations.
 - Risk: If underlying implementations were intentionally changed, wrappers may mask deeper semantic shifts. Next step: add tests asserting semantic behavior and schedule migration.
 
+
+
+## M5_0 Closure Summary (finalization checklist)
+
+This section records what has been implemented, verified, and which DoD commands were executed to allow closing M5_0 and moving work to Milestone 5 (Production small).
+
+**Implemented & Verified**
+
+- RPC resolver unified and chain_id precedence fixed (`core/rpc_urls.py`) — prevents Arbitrum→Mantle host mismatch.
+- Early RPC resolution + env injection in scanner (`strategy/jobs/run_scan_real.py`): `ARBY_RPC_HTTP_PRIMARY`, `ARBY_RPC_WS_PRIMARY`, `ARBY_RPC_HTTP_HOST` are set for reproducibility.
+- Infra diagnostics added to artifacts (`infra.*`): `rpc_provider`, `rpc_http_host`, `rpc_ws_host`, `ws_attempted`, `ws_connected`, `ws_error`, `ws_handshake_ms`, `tenderly_enabled`, `tenderly_ok`, `tenderly_error` (no secrets written).
+- WS handshake evidence implemented and skipped in unit tests via `ARBY_SKIP_RPC=1` to keep tests deterministic.
+- Optional Tenderly probe implemented (only enforced with `--require-tenderly`).
+- Suspect vs sanity separation implemented:
+	- `suspect_examples` and `truth_report.suspect_summary` added
+	- `stats` now includes `suspect_quotes` and `suspect_reasons` separate from sanity rejects
+	- `reject_histogram` contains sanity rejects only (deviation > max)
+- Cap semantics and deviation diagnostics: validators expose `deviation_bps_raw`, `deviation_bps`, `deviation_bps_capped`.
+- CI gate enhancements (`scripts/ci_m5_0_gate.py`): `--require-infra-hosts`, `--require-cross-artifact`, `--require-tenderly`, and online strict profile enabling infra+cross checks by default.
+- Tests and test harness improvements:
+	- `ARBY_SKIP_RPC=1` default for unit tests (no external RPC calls)
+	- New unit tests added covering RPC mapping, suspect counters, reject inclusion, autosize logic, and daily report aggregation.
+- Added `docs/status/Status_M5.md` (Milestone 5 plan) and initial daily report generator `scripts/generate_daily_report.py` and minimal `ci_m5_gate.py` validator for M5.
+
+**Artifacts produced**
+
+- Completed 5 online scanner runs during validation; artifacts written to `data/runs/manual_run_*` with `scan_*.json`, `truth_report_*.json`, and `reject_histogram_*.json` containing infra diagnostics.
+- Example daily report generator can convert a run into `daily_report_<date>.json` (schema_version `m5:daily:v1`).
+
+**Unit test results (local)**
+
+- Full unit suite: `python -m pytest tests/unit -q` → 434 passed, 5 subtests passed (current local run).
+
+**DoD reproduction commands executed**
+
+- Unit tests green:
+	- `python -m pytest -q` (green locally)
+- Online strict gate profile executed via scanner + gate:
+	- `python -m strategy.jobs.run_scan --mode real --cycles 1 --config config/real_minimal.yaml` (produced artifacts)
+	- `python scripts/ci_m5_0_gate.py --online --require-infra-hosts --require-cross-artifact` (strict checks; used during validation)
+
+These commands were exercised during development and validation; gate flags ensure infra transparency and cross-artifact consistency for the DoD.
+
+**Blockers cleared**
+
+- RPC host mismatch for Arbitrum fixed (chain_id mapping prioritized).
+- `truth_report.health` derived from `stats` to ensure cross-artifact consistency.
+
+**Open / Known minor gaps**
+
+- Tenderly checks are optional and not exercised by default in CI; `tenderly_ok` may be `disabled` unless keys are provided.
+- Golden daily reports and formal retention policy are prepared (docs change) but not yet populated with curated golden artifacts — recommend adding 1–2 artifacts to `docs/artifacts/`.
+
+## Final closure record
+
+- M5_0: considered complete and ready to close when the following two checks pass in CI/runner:
+	1. `python -m pytest -q` → green
+	2. `python scripts/ci_m5_0_gate.py --online --require-infra-hosts --require-cross-artifact` → exit code 0
+
+- Local verification performed on workspace HEAD: `e56cfd5` (replace with CI tag if different).
+
+If both pass in the CI environment (with allowed environment secrets configured), this `Status_M5_0.md` should be updated with the CI run SHA(s) and the milestone marked CLOSED.
+
+---
+
+Next: move work to Milestone 5 (`docs/status/Status_M5.md`) — daily reporting, autosize, health metrics, and M5 CI gate.
+
