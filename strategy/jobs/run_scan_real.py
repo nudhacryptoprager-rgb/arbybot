@@ -692,6 +692,22 @@ def run_scan(
                     confidence_reasons.append("execution_disabled")
                 confidence_reasons.append("paper_cost_model")
                 
+                # Compute spread_bps_int for UI display
+                # For positive spreads, show at least 1 to avoid "0 bps" confusion
+                # spread_bps_int is NOT used for logic, only for display
+                if spread_bps_decimal > 0:
+                    spread_bps_int_display = max(1, int(spread_bps_decimal))
+                else:
+                    spread_bps_int_display = int(spread_bps_decimal)
+                
+                # Compute net and determine reason if negative
+                net_negative_reason = None
+                if net_pnl_usdc_estimate < 0:
+                    if float(spread_bps_decimal) < 1.0:
+                        net_negative_reason = "micro_spread_net_negative_due_to_gas"
+                    else:
+                        net_negative_reason = "costs_exceed_gross"
+                
                 signal = {
                     "pair": pair,
                     "buy_dex": best_buy.get("dex_id"),
@@ -700,15 +716,15 @@ def run_scan(
                     "sell_price": str(round(sell_price, 6)),
                     "buy_pool": best_buy.get("pool_address"),
                     "sell_pool": best_sell.get("pool_address"),
-                    # spread_bps_exact: float for micro-spreads (e.g., 0.267)
-                    # spread_bps_int: rounded for display (may be 0)
+                    # spread_bps_exact: float for micro-spreads (e.g., 0.267) - USE THIS FOR LOGIC
+                    # spread_bps_int: min 1 for positive spreads, for UI display ONLY
                     "spread_bps_exact": round(float(spread_bps_decimal), 4),
-                    "spread_bps_int": spread_bps,
+                    "spread_bps_int": spread_bps_int_display,
                     # spread_pct: percentage (0.0145 means 0.0145%)
-                    # spread_frac: decimal fraction (0.000145)
+                    # spread_frac: string Decimal for stability (no scientific notation)
                     # Formula: spread_bps / 100 = pct, spread_bps / 10000 = frac
                     "spread_pct": round(float(spread_bps_decimal) / 100, 6),
-                    "spread_frac": round(float(spread_bps_decimal) / 10000, 8),
+                    "spread_frac": str(round(spread_bps_decimal / Decimal(10000), 10)),
                     "block_number": current_block,
                     # is_gross_positive: sell > buy (use Decimal comparison)
                     "is_gross_positive": bool(spread_bps_decimal > 0),
@@ -723,6 +739,7 @@ def run_scan(
                     "slippage_source": slippage_source,
                     "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
                     "is_net_positive_est": net_pnl_usdc_estimate > 0,
+                    "net_negative_reason": net_negative_reason,
                     "confidence": "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low",
                     "confidence_reasons": confidence_reasons,
                 }
@@ -743,6 +760,13 @@ def run_scan(
         "cost_model_available": False,
         "chain_id": config.get("chain_id", 42161),
         "current_block": current_block,
+        # config_params: log relevant config for reproducibility
+        "config_params": {
+            "min_spread_bps": spread_threshold_bps,
+            "paper_size_usd": config.get("paper_size_usd", 1000),
+            "gas_usd_estimate": config.get("gas_usd_estimate", 0.10),
+            "paper_slippage_bps": config.get("paper_slippage_bps", 0),
+        },
         "quotes_total": stats["quotes_total"],
         "quotes_fetched": stats["quotes_fetched"],
         "dexes_active": stats["dexes_active"],
@@ -761,7 +785,10 @@ def run_scan(
             "cost_model_available": False,  # no execution cost model yet
         },
         # DEPRECATED: pnl alias for backwards compatibility (use execution_pnl)
+        # Will be removed in schema v2. Consumers should migrate to execution_pnl.
         "pnl": {
+            "_deprecated": True,
+            "_migration": "Use 'execution_pnl' instead. This field will be removed in schema v2.",
             "signal_pnl_usdc": "0.000000",
             "would_execute_pnl_usdc": "0.000000",
             "gross_pnl_usdc": "0.000000",

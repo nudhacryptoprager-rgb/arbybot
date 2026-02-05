@@ -160,42 +160,42 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     # top_opportunities: ONLY from spread_signals. If empty → empty list.
     # We do NOT fallback to scan.quotes anymore to avoid noisy null entries.
     top_opportunities = []
+    top_opportunities_net_positive = []  # Separate list for net-positive only
     signals = truth.get("spread_signals") or []
     if signals:
-        # sort by spread_bps_exact (or spread_bps for backwards compat)
+        # sort by net_pnl_usdc_est descending (most profitable first)
         def _sig_score(s):
-            # confidence is a string ("low", "medium", "high") - convert to numeric
-            conf_map = {"high": 3, "medium": 2, "low": 1}
-            conf = s.get("confidence")
-            if isinstance(conf, str):
-                conf = conf_map.get(conf.lower(), 0)
-            else:
-                conf = float(conf or 0)
-            spread = float(s.get("spread_bps_exact") or s.get("spread_bps") or s.get("spread_pct") or 0)
-            return (conf, spread)  # sort by confidence first, then spread
+            # Primary: net_pnl_usdc_est (profitability)
+            net = float(s.get("net_pnl_usdc_est") or 0)
+            # Secondary: spread_bps_exact
+            spread = float(s.get("spread_bps_exact") or s.get("spread_bps") or 0)
+            return (net, spread)  # sort by net first, then spread
 
         sorted_sigs = sorted(signals, key=_sig_score, reverse=True)
         for s in sorted_sigs[:5]:
             # require at least spread_pct or confidence to be valid opportunity
             if s.get("spread_pct") is None and s.get("confidence") is None:
                 continue
-            top_opportunities.append(
-                {
-                    "pair": s.get("pair"),
-                    "buy_dex": s.get("buy_dex"),
-                    "sell_dex": s.get("sell_dex"),
-                    "spread_bps_exact": s.get("spread_bps_exact"),
-                    "spread_pct": s.get("spread_pct"),
-                    "spread_frac": s.get("spread_frac"),
-                    "gross_pnl_usdc_est": s.get("gross_pnl_usdc_est"),
-                    "net_pnl_usdc_est": s.get("net_pnl_usdc_est"),
-                    "is_net_positive_est": s.get("is_net_positive_est"),
-                    "size_usd": s.get("size_usd") or s.get("size") or None,
-                    "confidence": s.get("confidence"),
-                    "confidence_reasons": s.get("confidence_reasons"),
-                    "source": "signal",
-                }
-            )
+            opp = {
+                "pair": s.get("pair"),
+                "buy_dex": s.get("buy_dex"),
+                "sell_dex": s.get("sell_dex"),
+                "spread_bps_exact": s.get("spread_bps_exact"),
+                "spread_pct": s.get("spread_pct"),
+                "spread_frac": s.get("spread_frac"),
+                "gross_pnl_usdc_est": s.get("gross_pnl_usdc_est"),
+                "net_pnl_usdc_est": s.get("net_pnl_usdc_est"),
+                "is_net_positive_est": s.get("is_net_positive_est"),
+                "net_negative_reason": s.get("net_negative_reason"),
+                "size_usd": s.get("size_usd") or s.get("size") or None,
+                "confidence": s.get("confidence"),
+                "confidence_reasons": s.get("confidence_reasons"),
+                "source": "signal",
+            }
+            top_opportunities.append(opp)
+            # Also add to net_positive list if profitable
+            if s.get("is_net_positive_est"):
+                top_opportunities_net_positive.append(opp)
     # If no signals → top_opportunities remains empty (no fallback to scan quotes)
     # Add reason when empty
     opportunities_reason = None
@@ -293,6 +293,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "quotes_fetched": quotes_fetched,
         "gates_passed": gates_passed,
         "spread_signals_count": len(signals),
+        "net_positive_signals_count": len(top_opportunities_net_positive),
         "top_signal": top_signal,
         # DEPRECATED: will be removed in schema v2. Use checks_count.
         "deprecated_legacy_trades_count": quotes_total,
@@ -300,6 +301,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "top_reject_reasons": top_rejects,
         "autosize": autosize_summary,
         "top_opportunities": top_opportunities,
+        "top_opportunities_net_positive": top_opportunities_net_positive,
         "opportunities_reason": opportunities_reason,
         "top_quotes": top_quotes,
         "health": health,
