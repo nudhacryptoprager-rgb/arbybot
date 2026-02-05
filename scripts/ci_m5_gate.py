@@ -14,7 +14,7 @@ from datetime import date, datetime
 from typing import List, Optional
 
 
-def validate_report(path: Path) -> List[str]:
+def validate_report(path: Path, strict: bool = False) -> List[str]:
     errors = []
     try:
         j = json.loads(path.read_text(encoding="utf8"))
@@ -57,6 +57,48 @@ def validate_report(path: Path) -> List[str]:
         for k in ("rpc", "dex", "system"):
             if k not in health:
                 errors.append(f"health_missing_{k}")
+
+    # strict checks: p50 presence if quotes_fetched>0
+    if strict:
+        # derive quotes_fetched from the report or artifacts
+        quotes_fetched = None
+        if j.get("checks_count") is not None:
+            quotes_fetched = j.get("checks_count")
+        elif j.get("trades_count") is not None:
+            quotes_fetched = j.get("trades_count")
+        else:
+            artifacts = j.get("artifacts") or {}
+            truth_p = artifacts.get("truth_report_path")
+            if truth_p:
+                try:
+                    t = json.loads(Path(truth_p).read_text(encoding="utf8"))
+                    stats = t.get("stats") or {}
+                    quotes_fetched = stats.get("quotes_fetched") or stats.get("quotes_total")
+                except Exception:
+                    quotes_fetched = None
+
+        try:
+            qf = int(quotes_fetched) if quotes_fetched is not None else 0
+        except Exception:
+            qf = 0
+
+        p50 = None
+        try:
+            p50 = health.get("rpc", {}).get("p50_latency_ms") if health else None
+        except Exception:
+            p50 = None
+
+        if qf > 0 and p50 is None:
+            errors.append("health_rpc_p50_missing_when_quotes_fetched")
+
+        # top_opportunities sanity: if present non-empty, require source + one of spread_pct/price/confidence
+        tops = j.get("top_opportunities") or []
+        if tops and isinstance(tops, list):
+            for i, op in enumerate(tops):
+                if not op.get("source"):
+                    errors.append(f"top_opportunity_missing_source_{i}")
+                if not any([op.get("spread_pct") is not None, op.get("price") is not None, op.get("confidence") is not None]):
+                    errors.append(f"top_opportunity_missing_min_fields_{i}")
 
     # Consistency checks with artifacts if provided
     artifacts = j.get("artifacts") or {}
@@ -119,6 +161,9 @@ def main() -> None:
     p.add_argument("--config", help="Config file to pass to scanner when --online")
     p.add_argument("--cycles", type=int, default=1, help="Number of cycles to run when --online")
     p.add_argument("--strict-paper-only", help="Enforce paper_* fields only (fail on legacy fields)", action="store_true", default=False)
+    p.add_argument("--gas-usd-estimate", type=float, help="Optional gas USD estimate to enable cost model when generating report")
+    p.add_argument("--slippage-usd-estimate", type=float, help="Optional slippage USD estimate to subtract from PnL", default=0.0)
+    p.add_argument("--strict", help="Enable strict validations (p50 presence when quotes_fetched>0, top_opportunities sanity)", action="store_true", default=False)
     args = p.parse_args()
 
     run_dir: Optional[Path] = None
@@ -154,10 +199,13 @@ def main() -> None:
         from scripts.generate_daily_report import aggregate_run
         import os
 
-        gas_env = os.environ.get("ARBY_GAS_USD_ESTIMATE") or os.environ.get("GAS_USD_ESTIMATE")
-        slip_env = os.environ.get("ARBY_SLIPPAGE_USD_ESTIMATE") or os.environ.get("SLIPPAGE_USD_ESTIMATE")
-        gas_val = float(gas_env) if gas_env is not None else None
-        slip_val = float(slip_env) if slip_env is not None else 0.0
+        # precedence: CLI args > env
+        gas_val = args.gas_usd_estimate if args.gas_usd_estimate is not None else (
+            float(os.environ.get("ARBY_GAS_USD_ESTIMATE")) if os.environ.get("ARBY_GAS_USD_ESTIMATE") else None
+        )
+        slip_val = args.slippage_usd_estimate if args.slippage_usd_estimate is not None else (
+            float(os.environ.get("ARBY_SLIPPAGE_USD_ESTIMATE")) if os.environ.get("ARBY_SLIPPAGE_USD_ESTIMATE") else 0.0
+        )
 
         report = aggregate_run(run_dir, gas_usd_estimate=gas_val, slippage_usd_estimate=slip_val)
         write_dir = run_dir / "reports"
@@ -185,8 +233,18 @@ def main() -> None:
         raise SystemExit(2)
 
     for r in reports_to_check:
-        errs = validate_report(r)
+        errs = validate_report(Path(r), strict=args.strict)
         all_errors[str(r)] = errs
+
+    # If gas estimate was provided to the runner, enforce invariant: generated report must have pnl_available true
+    if args.gas_usd_estimate is not None:
+        for p in reports_to_check:
+            try:
+                j = json.loads(Path(p).read_text(encoding="utf8"))
+                if not j.get("pnl_available"):
+                    all_errors[str(p)] = all_errors.get(str(p), []) + ["pnl_available_false_when_gas_estimate_provided"]
+            except Exception:
+                all_errors[str(p)] = all_errors.get(str(p), []) + ["pnl_read_error"]
 
     ok = True
     for r, errs in all_errors.items():

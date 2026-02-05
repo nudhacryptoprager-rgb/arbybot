@@ -119,8 +119,6 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         reasons_counter[reason] += 1
 
     top_rejects = [{"reason": k, "count": v} for k, v in reasons_counter.most_common(10)]
-    if not top_rejects:
-        top_rejects = [{"reason": "no_rejects", "count": 0}]
 
     # tail losses: use suspect_summary examples if available (placeholder)
     tail_losses = []
@@ -145,6 +143,8 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
             "reason": autosize.get("reason"),
             "cooldown_remaining": autosize.get("cooldown_remaining"),
         }
+    else:
+        autosize_summary = {"enabled": False, "reason": "not_configured", "new_size_usd": None, "cooldown_remaining": 0}
 
     # top_opportunities: prefer truth.spread_signals, fallback to scan.quotes
     top_opportunities = []
@@ -168,11 +168,25 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         for q in (scan.get("quotes") or [])[:5]:
             if not q:
                 continue
+            spread = q.get("spread_pct") or q.get("spread")
+            price = q.get("price") or q.get("mid_price")
+            size_usd = q.get("size_usd") or q.get("size")
+            confidence = q.get("confidence")
+            dex_id = q.get("dex_id") or q.get("dex")
+            token_in = q.get("token_in") or q.get("token0")
+            token_out = q.get("token_out") or q.get("token1")
+            # require at least one meaningful field to avoid noisy null entries
+            if not any((spread, price, size_usd, confidence, dex_id, token_in, token_out)):
+                continue
             top_opportunities.append(
                 {
-                    "spread_pct": q.get("spread_pct") or q.get("spread") or None,
-                    "size_usd": q.get("size_usd") or q.get("size") or None,
-                    "confidence": q.get("confidence"),
+                    "spread_pct": spread,
+                    "size_usd": size_usd,
+                    "confidence": confidence,
+                    "price": price,
+                    "dex_id": dex_id,
+                    "token_in": token_in,
+                    "token_out": token_out,
                     "source": "scan",
                 }
             )
