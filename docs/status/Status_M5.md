@@ -1,7 +1,7 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-06 10:25 UTC  
-> **SHA**: `748b46d`  
+> **Оновлено**: 2026-02-06 10:45 UTC  
+> **SHA**: `7a823ba`  
 > **Статус**: ✅ Signals MVP DONE
 
 ---
@@ -40,8 +40,42 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycl
 | 6 | spread_frac as string | ✅ |
 | 7 | spread_bps_ui (renamed from int) | ✅ |
 | 8 | signals_total / opportunities_total | ✅ |
-| 9 | execution_pnl separated | ✅ |
-| 10 | pnl deprecated (v3.3 removal) | ✅ |
+| 9 | gate_pass_rate / signal_win_rate | ✅ |
+| 10 | schema tests for consistency | ✅ |
+
+---
+
+## DoD E2E Flow
+
+```
+scan → truth_report → daily_report → ci_m5_gate PASS
+```
+
+### Example Run (2026-02-06):
+
+```
+RunDir: data/runs/manual_run_20260206_102300/
+├── reports/
+│   ├── scan_20260206_102302.json
+│   ├── truth_report_20260206_102302.json
+│   ├── reject_histogram_20260206_102302.json
+│   └── daily_report_2026-02-06.json
+```
+
+### Key Fields from daily_report:
+
+```json
+{
+  "paper_net_pnl_usdc": 0.39833,
+  "spread_bps_exact": 4.9833,
+  "current_block": 429187300,
+  "ws_connected": true,
+  "gate_pass_rate": 0.5833,
+  "signal_win_rate": 1.0,
+  "signals_total": 1,
+  "opportunities_total": 1
+}
+```
 
 ---
 
@@ -103,7 +137,7 @@ python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml -
 ## Юніт-тести
 
 ```
-465 passed, 5 subtests passed
+471 passed, 5 subtests passed
 ```
 
 ---
@@ -142,14 +176,32 @@ min_net_pnl_usdc_est: 0.0      # break-even threshold for opportunities
 
 ### Policy
 
-- `spread_bps_exact` — **source of truth** for logic, gates, ranking
-- `spread_bps_ui` — floor(), may be 0, **UI display only** (NEVER use for filtering/ranking)
+- `spread_bps_exact` — **source of truth** for logic, gates, ranking, DoD
+- `spread_bps_ui` — floor(), may be 0, **UI display only** (NEVER use for filtering/ranking/DoD)
 - `spread_pct` = percent, `spread_frac` = fraction (both derived from `spread_bps_exact`)
 - Net-negative micro-spreads excluded from `top_opportunities_net_positive`
 - `net_negative_reason` explains why net < 0
 - **Debug profile**: `min_spread_bps: 0` — shows all positive spreads
 - **Production profile**: either `min_spread_bps: 2-5` or net-only filter via `min_net_pnl_usdc_est`
 - **Tuning rule**: if net always < 0, raise threshold — don't trust opportunities
+
+### Rates Definitions
+
+| Field | Formula | Purpose |
+|-------|---------|---------|
+| `gate_pass_rate` | sanity_passed / quotes_total | Gate filtering efficiency |
+| `signal_win_rate` | opportunities_total / signals_total | Profitable signal ratio |
+
+**Note**: `paper_win_rate` is **deprecated** alias for `gate_pass_rate` (renamed in v1.1).
+
+### Empty Histogram = Normal
+
+When `top_reject_reasons: []` in daily_report — this is **expected** for:
+- Small universe (few pairs)
+- Online runs with valid quotes
+- No sanity gate failures
+
+Unit tests cover reject scenarios; live runs may have 0 rejects.
 
 ### Deprecation Plan: `pnl` → `execution_pnl`
 
@@ -169,11 +221,23 @@ min_net_pnl_usdc_est: 0.0      # break-even threshold for opportunities
 
 1. ~~Розширити universe (5-10 пар)~~ ✅ Done (5 pairs)
 2. ~~Ранжування signals за net_pnl~~ ✅ Done
-3. Gas oracle інтеграція (M6)
-4. Schema v2 bump: remove deprecated `pnl` field
+3. ~~gate_pass_rate / signal_win_rate~~ ✅ Done
+4. Gas oracle інтеграція (M6)
+5. Schema v3.3 bump: remove deprecated `pnl` field
+6. If micro-spreads dominate → raise `min_net_pnl_usdc_est`
+
+---
+
+## Status Update Rule
+
+**Every commit must update Status_M5.md per REPORT_TEMPLATE.md**:
+1. Виконані директиви (таблиця)
+2. Результати прогону (команда + RESULT)
+3. Артефакти (ключові поля)
+4. Юніт-тести (count)
 
 ---
 
 ## SHA закриття
 
-`748b46d` — Signals MVP DONE
+`7a823ba` — Signals MVP DONE + Schema Tests

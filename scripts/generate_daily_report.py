@@ -118,10 +118,15 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         pnl_available = False
         pnl_reason = "no_cost_model"
 
-    # win_rate: define as (quotes that passed sanity) / total quotes
+    # gate_pass_rate: quotes that passed sanity / total quotes
+    # This is NOT a "win rate" - it measures gate filtering
     quotes_total = truth.get("quotes_total") or scan.get("quotes_total") or 0
     passed = truth.get("price_sanity_passed") or scan.get("price_sanity_passed") or 0
-    win_rate = (passed / quotes_total) if quotes_total else None
+    gate_pass_rate = (passed / quotes_total) if quotes_total else None
+    
+    # signal_win_rate: net-positive signals / total signals
+    # This is the actual "win rate" - profitable opportunities vs all detected
+    signal_win_rate = None  # computed after signals are counted
 
     # rejects reasons
     reasons_counter = Counter()
@@ -278,6 +283,12 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
             "net_negative_reason": best.get("net_negative_reason"),
         }
 
+    # Compute signal_win_rate now that we have signal counts
+    if len(signals) > 0:
+        signal_win_rate = len(top_opportunities_net_positive) / len(signals)
+    else:
+        signal_win_rate = None
+
     report = {
         "schema_version": "m5:daily:v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -294,7 +305,11 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "pnl_available": pnl_available,
         "pnl_reason": pnl_reason,
         "cost_model": cost_model,
-        "paper_win_rate": win_rate,
+        # Rates (renamed from misleading paper_win_rate)
+        "gate_pass_rate": gate_pass_rate,  # sanity_passed / quotes_total
+        "signal_win_rate": signal_win_rate,  # net_positive / signals_total
+        # DEPRECATED: paper_win_rate renamed to gate_pass_rate in schema v1.1
+        "paper_win_rate": gate_pass_rate,  # alias for backwards compat
         "checks_count": quotes_total,
         "quotes_fetched": quotes_fetched,
         "gates_passed": gates_passed,

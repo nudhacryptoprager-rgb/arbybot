@@ -797,6 +797,9 @@ def run_scan(
         # spread_signals: paper estimates (ACTIVE in M5)
         # Each signal has gross/net estimates based on config gas_usd_estimate
         "spread_signals": spread_signals,
+        # Signal counts for quick reference (mirrors daily_report)
+        "signals_total": len(spread_signals),
+        "opportunities_total": len([s for s in spread_signals if s.get("is_net_positive_est")]),
     }
 
     # mirror infra
