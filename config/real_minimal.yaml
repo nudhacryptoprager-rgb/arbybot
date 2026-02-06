@@ -138,10 +138,13 @@ paper_slippage_bps: 0  # 0 bps default - conservative for micro-spreads
 
 # Spread signal threshold (M5)
 # Signals with spread_bps_exact < this are filtered out
-min_spread_bps: 0  # 0 = any positive spread (MVP/debug)
+# Production: 5 bps minimum (filters micro-spreads that can't cover gas)
+# Debug: 0 = any positive spread
+min_spread_bps: 5  # 5 bps = production threshold
 
 # Net PnL threshold for daily_report top_opportunities (M5)
-# Signals with net_pnl_usdc_est < this are excluded from top_opportunities_net_positive
+# Signals with net_pnl_usdc_est < this are excluded from top_opportunities
+# 0 = break-even or better (opportunity must cover costs)
 min_net_pnl_usdc_est: 0.0  # 0 = break-even or better
 
 # M4 markers - execution disabled

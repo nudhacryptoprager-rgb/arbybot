@@ -100,12 +100,20 @@ Schema `m5:daily:v1` **заморожена**. Дозволено:
 
 ### Signals vs Opportunities Contract
 
-```
-opportunity = signal where:
-  - is_net_positive_est = true, AND
-  - net_pnl_usdc_est >= min_net_pnl_usdc_est (from config)
+**signals_total**: All detected spread signals (raw, unfiltered)
+- Includes net-negative spreads
+- Purpose: debug, audit, visibility
 
-Therefore: top_opportunities ⊆ top_signals (subset)
+**opportunities_total**: Net-positive signals only (filtered)
+- Filtered by: `is_net_positive_est=true` AND `net_pnl_usdc_est >= min_net_pnl_usdc_est`
+- Purpose: actionable candidates
+
+```
+top_opportunities ⊆ top_signals (strict subset)
+
+Example:
+  signals_total=1, opportunities_total=0
+  → 1 signal detected, but net < 0, so 0 opportunities
 ```
 
 ### Tenderly Policy
@@ -140,15 +148,32 @@ Therefore: top_opportunities ⊆ top_signals (subset)
 
 ---
 
-## Key Metrics
+## Key Metrics (Golden Run)
 
-| Metric | Value | Source |
-|--------|-------|--------|
-| `signals_total` | 1 | truth_report |
-| `opportunities_total` | 1 | truth_report |
-| `gate_pass_rate` | 0.58 | daily_report |
-| `signal_win_rate` | 1.0 | daily_report |
-| `paper_net_pnl_usdc` | +0.40 | daily_report |
+| Metric | Value | Description |
+|--------|-------|-------------|
+| `signals_total` | 1 | Raw spread signals detected |
+| `opportunities_total` | 0 | Net-positive only (filtered) |
+| `quote_sanity_rate` | 0.5833 | price_sanity_passed / quotes_total |
+| `signal_win_rate` | 0.0 | opportunities / signals |
+| `paper_net_pnl_usdc` | -$0.06 | Net negative (micro-spread < gas) |
+
+### Rate Definitions
+
+| Rate | Formula | Location |
+|------|---------|----------|
+| `quote_sanity_rate` | price_sanity_passed / quotes_total | daily_report (top-level) |
+| `gate_pass_rate` | gates_passed / quotes_total | health.system.gate_pass_rate |
+| `signal_win_rate` | opportunities_total / signals_total | daily_report (top-level) |
+
+**Note**: `quote_sanity_rate` ≠ `health.system.gate_pass_rate` — different metrics!
+
+### spread_bps_ui Policy
+
+`spread_bps_ui` is **UI-only** (floor of exact):
+- ✅ Use for display/logs
+- ❌ NEVER use for filtering or DoD
+- Always use `spread_bps_exact` for logic
 
 ---
 
@@ -159,9 +184,10 @@ Therefore: top_opportunities ⊆ top_signals (subset)
 | `test_top_signal_matches_truth_spread_signals` | daily/truth consistency |
 | `test_signals_total_matches` | count invariant |
 | `test_opportunities_total_matches` | filter invariant |
-| `test_gate_pass_rate_calculation` | rate formula |
+| `test_quote_sanity_rate_calculation` | rate formula |
 | `test_signal_win_rate_calculation` | rate formula |
 | `test_empty_spread_signals_no_top_signal` | edge case |
+| `test_cycles_propagation_in_truth_report` | CLI→artifact invariant |
 
 ---
 
@@ -170,8 +196,8 @@ Therefore: top_opportunities ⊆ top_signals (subset)
 | Field | Current | Removal |
 |-------|---------|---------|
 | `pnl` | v3.2 (deprecated) | v3.3 |
-| `paper_win_rate` | v1.0 (alias) | v2.0 |
 | `deprecated_legacy_trades_count` | v1.0 | v2.0 |
+| `gate_pass_rate` (top-level) | v1.0→v1.1 (renamed) | Already removed, use `quote_sanity_rate` |
 
 ---
 
