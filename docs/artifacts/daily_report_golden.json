@@ -25,7 +25,7 @@
     "gas_usd_estimate": 0.10,
     "slippage_usd_estimate": 0.00
   },
-  "gate_pass_rate": 0.58,
+  "quote_sanity_rate": 0.58,
   "signal_win_rate": null,
   "checks_count": 12,
   "quotes_fetched": 10,

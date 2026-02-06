@@ -50,7 +50,7 @@ class TestOfflineModeIgnoresEnv(unittest.TestCase):
                     result = main()
                 
                 self.assertEqual(result, 0)
-                dirs = list(output_root.glob("ci_m5_0_gate_offline_*"))
+                dirs = list(output_root.glob("ci_m5_gate_offline_*"))
                 self.assertEqual(len(dirs), 1)
             finally:
                 os.environ.clear()

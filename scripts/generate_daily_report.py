@@ -118,11 +118,12 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         pnl_available = False
         pnl_reason = "no_cost_model"
 
-    # gate_pass_rate: quotes that passed sanity / total quotes
-    # This is NOT a "win rate" - it measures gate filtering
+    # quote_sanity_rate: quotes that passed price sanity / total quotes
+    # This is NOT a "win rate" - it measures price sanity filtering
+    # Note: health.system.gate_pass_rate uses gates_passed (different metric)
     quotes_total = truth.get("quotes_total") or scan.get("quotes_total") or 0
     passed = truth.get("price_sanity_passed") or scan.get("price_sanity_passed") or 0
-    gate_pass_rate = (passed / quotes_total) if quotes_total else None
+    quote_sanity_rate = (passed / quotes_total) if quotes_total else None
     
     # signal_win_rate: net-positive signals / total signals
     # This is the actual "win rate" - profitable opportunities vs all detected
@@ -162,8 +163,16 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     else:
         autosize_summary = {"enabled": False, "reason": "not_configured", "new_size_usd": None, "cooldown_remaining": 0}
 
-    # top_signals: ALL spread signals (for debug/audit)
-    # top_opportunities: ONLY net-positive filtered (for action)
+    # SIGNALS vs OPPORTUNITIES CONTRACT:
+    # ===================================
+    # top_signals: ALL spread signals (raw detection, for debug/audit)
+    # top_opportunities: ONLY net-positive filtered (actionable, for execution)
+    #
+    # An opportunity is defined as a signal where:
+    #   - is_net_positive_est = true, AND
+    #   - net_pnl_usdc_est >= min_net_pnl_usdc_est (from config, default 0)
+    #
+    # Therefore: top_opportunities ⊆ top_signals (subset)
     # We do NOT fallback to scan.quotes anymore to avoid noisy null entries.
     top_signals = []
     top_opportunities = []  # Net-positive only (filtered by min_net_pnl_usdc_est)
@@ -307,7 +316,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "pnl_reason": pnl_reason,
         "cost_model": cost_model,
         # Rates
-        "gate_pass_rate": gate_pass_rate,  # sanity_passed / quotes_total
+        "quote_sanity_rate": quote_sanity_rate,  # price_sanity_passed / quotes_total
         "signal_win_rate": signal_win_rate,  # net_positive / signals_total
         "checks_count": quotes_total,
         "quotes_fetched": quotes_fetched,

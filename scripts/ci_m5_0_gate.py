@@ -737,7 +737,7 @@ ENV VARIABLES:
         print(f"{'='*60}")
         print("\n[OFFLINE] IGNORING ALL ENV VARIABLES")
         
-        run_dir = args.output_root / f"ci_m5_0_gate_offline_{timestamp}"
+        run_dir = args.output_root / f"ci_m5_gate_offline_{timestamp}"
         run_dir.mkdir(parents=True, exist_ok=True)
         
         print(f"[OFFLINE] Creating: {run_dir}")
@@ -781,7 +781,7 @@ ENV VARIABLES:
         print(f"{'='*60}")
         print("\n[ONLINE] IGNORING ARBY_RUN_DIR (creating new run directory)")
         
-        run_dir = args.output_root / f"ci_m5_0_gate_{timestamp}"
+        run_dir = args.output_root / f"ci_m5_gate_{timestamp}"
         run_dir.mkdir(parents=True, exist_ok=True)
         
         print(f"[ONLINE] RunDir: {run_dir}")

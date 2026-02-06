@@ -1,6 +1,6 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-06 11:00 UTC  
+> **Оновлено**: 2026-02-06 11:11 UTC  
 > **SHA**: `7a823ba`  
 > **Статус**: ✅ DONE
 
@@ -33,18 +33,50 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycl
 
 ---
 
-## Останній PASS
+## Останній Golden Run
 
-**RunDir**: `data/runs/manual_run_20260206_102300`  
+**RunDir**: `data/runs/ci_m5_gate_20260206_111041`  
 **Date**: 2026-02-06  
-**Result**: PASS
+**Result**: ✅ PASS
+
+### Key Metrics
+
+| Metric | Value |
+|--------|-------|
+| `paper_net_pnl_usdc` | -$0.06 (micro-spread, gas > gross) |
+| `spread_bps_exact` | 0.3952 |
+| `spread_bps_ui` | 0 (floor) |
+| `quote_sanity_rate` | 0.5833 |
+| `signal_win_rate` | 0.0 |
+| `signals_total` | 1 |
+| `opportunities_total` | 0 |
+| `requested_cycles` | 5 |
+| `cycles_completed` | 5 |
+| `p50_latency_ms` | ~120ms |
+| `ws_connected` | true |
+
+### top_signal Example
+
+```json
+{
+  "pair": "WETH/USDC",
+  "buy_dex": "sushiswap_v3",
+  "sell_dex": "uniswap_v3",
+  "spread_bps_exact": 0.3952,
+  "spread_bps_ui": 0,
+  "gross_pnl_usdc_est": 0.0395,
+  "net_pnl_usdc_est": -0.0605,
+  "is_net_positive_est": false,
+  "net_negative_reason": "micro_spread_net_negative_due_to_gas"
+}
+```
 
 ---
 
 ## Юніт-тести
 
 ```
-471 passed, 5 subtests passed
+472 passed, 5 subtests passed
 ```
 
 ---
@@ -65,6 +97,16 @@ Schema `m5:daily:v1` **заморожена**. Дозволено:
 - ✅ Додавати нові optional поля
 - ❌ Перейменовувати існуючі поля
 - ❌ Видаляти поля без schema bump
+
+### Signals vs Opportunities Contract
+
+```
+opportunity = signal where:
+  - is_net_positive_est = true, AND
+  - net_pnl_usdc_est >= min_net_pnl_usdc_est (from config)
+
+Therefore: top_opportunities ⊆ top_signals (subset)
+```
 
 ### Tenderly Policy
 

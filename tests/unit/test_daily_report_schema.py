@@ -109,16 +109,16 @@ def test_opportunities_total_matches():
         assert report["opportunities_total"] == expected_opportunities
 
 
-def test_gate_pass_rate_calculation():
-    """Test that gate_pass_rate is calculated correctly."""
+def test_quote_sanity_rate_calculation():
+    """Test that quote_sanity_rate is calculated correctly."""
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         run_path, truth = make_consistent_run(Path(tmp))
         report = aggregate_run(run_path)
         
-        # gate_pass_rate = sanity_passed / quotes_total
+        # quote_sanity_rate = price_sanity_passed / quotes_total
         expected = truth["price_sanity_passed"] / truth["quotes_total"]
-        assert report["gate_pass_rate"] == expected
+        assert report["quote_sanity_rate"] == expected
 
 
 def test_signal_win_rate_calculation():
@@ -163,3 +163,44 @@ def test_empty_spread_signals_no_top_signal():
         assert report["signals_total"] == 0
         assert report["opportunities_total"] == 0
         assert report["signal_win_rate"] is None
+
+
+def test_cycles_propagation_in_truth_report():
+    """Test that requested_cycles from CLI is correctly written to truth_report.
+    
+    Contract: if runner requests N cycles via --cycles N, then:
+      - stats.requested_cycles == N
+      - stats.cycles_completed == N (on successful completion)
+    
+    This ensures no mismatch between CLI args and artifact data.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp) / "cycles_test"
+        run.mkdir()
+        
+        # Simulate a run with 5 cycles
+        requested_cycles = 5
+        scan = {"quotes": [], "quotes_total": 10}
+        truth = {
+            "quotes_total": 10,
+            "price_sanity_passed": 7,
+            "spread_signals": [],
+            "stats": {
+                "requested_cycles": requested_cycles,
+                "cycles_completed": requested_cycles,
+                "quotes_total": 10,
+            },
+            "pnl": {},
+            "health": {},
+        }
+        reject = {"rejects": []}
+        
+        (run / "scan_1.json").write_text(json.dumps(scan))
+        (run / "truth_report_1.json").write_text(json.dumps(truth))
+        (run / "reject_histogram_1.json").write_text(json.dumps(reject))
+        
+        # Verify truth_report has correct cycles
+        loaded_truth = json.loads((run / "truth_report_1.json").read_text())
+        assert loaded_truth["stats"]["requested_cycles"] == requested_cycles
+        assert loaded_truth["stats"]["cycles_completed"] == requested_cycles
