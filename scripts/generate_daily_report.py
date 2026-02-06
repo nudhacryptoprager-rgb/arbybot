@@ -270,11 +270,12 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
             "buy_dex": best.get("buy_dex"),
             "sell_dex": best.get("sell_dex"),
             "spread_bps_exact": best.get("spread_bps_exact"),
-            "spread_bps_int": best.get("spread_bps_int") or best.get("spread_bps"),
+            "spread_bps_ui": best.get("spread_bps_ui") or best.get("spread_bps_int") or best.get("spread_bps"),
             "is_gross_positive": best.get("is_gross_positive"),
             "gross_pnl_usdc_est": best.get("gross_pnl_usdc_est"),
             "net_pnl_usdc_est": best.get("net_pnl_usdc_est"),
             "is_net_positive_est": best.get("is_net_positive_est"),
+            "net_negative_reason": best.get("net_negative_reason"),
         }
 
     report = {
@@ -297,8 +298,13 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "checks_count": quotes_total,
         "quotes_fetched": quotes_fetched,
         "gates_passed": gates_passed,
-        "spread_signals_count": len(signals),
-        "net_positive_signals_count": len(top_opportunities_net_positive),
+        # Signals vs Opportunities (raw vs filtered)
+        # signals_total: all detected spreads (raw, for debug)
+        # opportunities_total: filtered by min_net_pnl_usdc_est threshold
+        "signals_total": len(signals),
+        "opportunities_total": len(top_opportunities_net_positive),
+        "spread_signals_count": len(signals),  # alias for signals_total
+        "net_positive_signals_count": len(top_opportunities_net_positive),  # alias for opportunities_total
         "top_signal": top_signal,
         # DEPRECATED: will be removed in schema v2. Use checks_count.
         "deprecated_legacy_trades_count": quotes_total,

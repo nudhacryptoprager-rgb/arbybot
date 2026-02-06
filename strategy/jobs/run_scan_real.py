@@ -692,10 +692,10 @@ def run_scan(
                     confidence_reasons.append("execution_disabled")
                 confidence_reasons.append("paper_cost_model")
                 
-                # Compute spread_bps_int for UI display (honest floor, may be 0)
-                # spread_bps_int is NOT used for logic, only for display
+                # Compute spread_bps_ui for UI display (honest floor, may be 0)
+                # spread_bps_ui is NOT used for logic, only for display
                 # HONEST: floor(0.36) = 0, not 1
-                spread_bps_int_display = int(spread_bps_decimal)  # floor for positive
+                spread_bps_ui_display = int(spread_bps_decimal)  # floor for positive
                 
                 # Compute net and determine reason if negative
                 net_negative_reason = None
@@ -714,9 +714,9 @@ def run_scan(
                     "buy_pool": best_buy.get("pool_address"),
                     "sell_pool": best_sell.get("pool_address"),
                     # spread_bps_exact: float for micro-spreads (e.g., 0.267) - USE THIS FOR LOGIC
-                    # spread_bps_int: floor() for display - HONEST (may be 0 for micro-spreads)
+                    # spread_bps_ui: floor() for display - HONEST (may be 0 for micro-spreads)
                     "spread_bps_exact": round(float(spread_bps_decimal), 4),
-                    "spread_bps_int": spread_bps_int_display,
+                    "spread_bps_ui": spread_bps_ui_display,
                     # spread_pct: percentage (0.0145 means 0.0145%)
                     # spread_frac: string Decimal for stability (no scientific notation)
                     # Formula: spread_bps / 100 = pct, spread_bps / 10000 = frac
@@ -783,10 +783,10 @@ def run_scan(
             "cost_model_available": False,  # no execution cost model yet
         },
         # DEPRECATED: pnl alias for backwards compatibility (use execution_pnl)
-        # Will be removed in schema v2. Consumers should migrate to execution_pnl.
+        # Will be removed in next schema bump (v3.3). Consumers should migrate to execution_pnl.
         "pnl": {
             "_deprecated": True,
-            "_migration": "Use 'execution_pnl' instead. This field will be removed in schema v2.",
+            "_migration": "Use 'execution_pnl' instead. This field will be removed in schema v3.3.",
             "signal_pnl_usdc": "0.000000",
             "would_execute_pnl_usdc": "0.000000",
             "gross_pnl_usdc": "0.000000",

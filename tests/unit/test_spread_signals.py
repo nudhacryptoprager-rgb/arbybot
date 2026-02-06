@@ -56,8 +56,8 @@ def compute_spread_signals_from_quotes(quotes: List[Dict[str, Any]], threshold_b
                 "sell_dex": best_sell.get("dex_id"),
                 # spread_bps_exact: float for micro-spreads
                 "spread_bps_exact": float(spread_bps_decimal),
-                # spread_bps_int: rounded for display
-                "spread_bps_int": int(spread_bps_decimal),
+                # spread_bps_ui: floor for display (may be 0)
+                "spread_bps_ui": int(spread_bps_decimal),
                 # is_gross_positive: sell > buy (Decimal comparison)
                 "is_gross_positive": bool(spread_bps_decimal > 0),
                 "buy_price": str(buy_price),
@@ -241,7 +241,7 @@ def test_paper_cost_model_arithmetic():
 
 def test_micro_spread_is_gross_positive():
     """
-    Test that micro-spreads with spread_bps_int=0 still have is_gross_positive=True.
+    Test that micro-spreads with spread_bps_ui=0 still have is_gross_positive=True.
     
     This is a regression test for the bug where is_gross_positive was calculated
     from spread_bps (int) instead of spread_bps_decimal, causing false negatives.
@@ -270,13 +270,13 @@ def test_micro_spread_is_gross_positive():
     # spread = (1921.676578 - 1921.625227) / 1921.625227 * 10000 = ~0.267 bps
     assert 0.2 <= sig["spread_bps_exact"] <= 0.3, f"Expected ~0.27 bps, got {sig['spread_bps_exact']}"
     
-    # spread_bps_int rounds to 0 (micro-spread)
-    assert sig["spread_bps_int"] == 0, f"spread_bps_int should be 0, got {sig['spread_bps_int']}"
+    # spread_bps_ui rounds to 0 (micro-spread)
+    assert sig["spread_bps_ui"] == 0, f"spread_bps_ui should be 0, got {sig['spread_bps_ui']}"
     
     # BUT is_gross_positive MUST be True (sell > buy)
     assert sig["is_gross_positive"] is True, (
         f"CRITICAL: is_gross_positive must be True when sell > buy, "
-        f"even if spread_bps_int=0. Got {sig['is_gross_positive']}"
+        f"even if spread_bps_ui=0. Got {sig['is_gross_positive']}"
     )
 
 
