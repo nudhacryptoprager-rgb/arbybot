@@ -162,10 +162,11 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     else:
         autosize_summary = {"enabled": False, "reason": "not_configured", "new_size_usd": None, "cooldown_remaining": 0}
 
-    # top_opportunities: ONLY from spread_signals. If empty → empty list.
+    # top_signals: ALL spread signals (for debug/audit)
+    # top_opportunities: ONLY net-positive filtered (for action)
     # We do NOT fallback to scan.quotes anymore to avoid noisy null entries.
-    top_opportunities = []
-    top_opportunities_net_positive = []  # Separate list for net-positive only
+    top_signals = []
+    top_opportunities = []  # Net-positive only (filtered by min_net_pnl_usdc_est)
     # Read min_net_pnl_usdc_est threshold from config_params (0 = break-even or better)
     config_params = truth.get("config_params") or {}
     min_net_threshold = float(config_params.get("min_net_pnl_usdc_est", 0.0))
@@ -200,16 +201,16 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
                 "confidence_reasons": s.get("confidence_reasons"),
                 "source": "signal",
             }
-            top_opportunities.append(opp)
-            # Also add to net_positive list if above threshold
+            top_signals.append(opp)
+            # Also add to opportunities list if net-positive (above threshold)
             # Uses min_net_pnl_usdc_est from config (default 0 = break-even)
             net_pnl = float(s.get("net_pnl_usdc_est") or 0)
             if net_pnl >= min_net_threshold:
-                top_opportunities_net_positive.append(opp)
-    # If no signals → top_opportunities remains empty (no fallback to scan quotes)
+                top_opportunities.append(opp)
+    # If no signals → top_signals remains empty (no fallback to scan quotes)
     # Add reason when empty
     opportunities_reason = None
-    if not top_opportunities:
+    if not top_signals:
         spread_signals_count = len(signals)
         if spread_signals_count == 0:
             opportunities_reason = "no_spread_signals"
@@ -275,7 +276,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
             "buy_dex": best.get("buy_dex"),
             "sell_dex": best.get("sell_dex"),
             "spread_bps_exact": best.get("spread_bps_exact"),
-            "spread_bps_ui": best.get("spread_bps_ui") or best.get("spread_bps_int") or best.get("spread_bps"),
+            "spread_bps_ui": int(best.get("spread_bps_ui") or best.get("spread_bps_int") or best.get("spread_bps_exact") or 0),
             "is_gross_positive": best.get("is_gross_positive"),
             "gross_pnl_usdc_est": best.get("gross_pnl_usdc_est"),
             "net_pnl_usdc_est": best.get("net_pnl_usdc_est"),
@@ -285,7 +286,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
 
     # Compute signal_win_rate now that we have signal counts
     if len(signals) > 0:
-        signal_win_rate = len(top_opportunities_net_positive) / len(signals)
+        signal_win_rate = len(top_opportunities) / len(signals)
     else:
         signal_win_rate = None
 
@@ -305,11 +306,9 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "pnl_available": pnl_available,
         "pnl_reason": pnl_reason,
         "cost_model": cost_model,
-        # Rates (renamed from misleading paper_win_rate)
+        # Rates
         "gate_pass_rate": gate_pass_rate,  # sanity_passed / quotes_total
         "signal_win_rate": signal_win_rate,  # net_positive / signals_total
-        # DEPRECATED: paper_win_rate renamed to gate_pass_rate in schema v1.1
-        "paper_win_rate": gate_pass_rate,  # alias for backwards compat
         "checks_count": quotes_total,
         "quotes_fetched": quotes_fetched,
         "gates_passed": gates_passed,
@@ -317,17 +316,17 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         # signals_total: all detected spreads (raw, for debug)
         # opportunities_total: filtered by min_net_pnl_usdc_est threshold
         "signals_total": len(signals),
-        "opportunities_total": len(top_opportunities_net_positive),
+        "opportunities_total": len(top_opportunities),
         "spread_signals_count": len(signals),  # alias for signals_total
-        "net_positive_signals_count": len(top_opportunities_net_positive),  # alias for opportunities_total
+        "net_positive_signals_count": len(top_opportunities),  # alias for opportunities_total
         "top_signal": top_signal,
         # DEPRECATED: will be removed in schema v2. Use checks_count.
         "deprecated_legacy_trades_count": quotes_total,
         "tail_losses": tail_losses,
         "top_reject_reasons": top_rejects,
         "autosize": autosize_summary,
-        "top_opportunities": top_opportunities,
-        "top_opportunities_net_positive": top_opportunities_net_positive,
+        "top_signals": top_signals,  # All signals (for debug/audit)
+        "top_opportunities": top_opportunities,  # Net-positive only (for action)
         "opportunities_reason": opportunities_reason,
         "top_quotes": top_quotes,
         "health": health,

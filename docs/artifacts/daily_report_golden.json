@@ -25,11 +25,15 @@
     "gas_usd_estimate": 0.10,
     "slippage_usd_estimate": 0.00
   },
-  "paper_win_rate": 0.58,
+  "gate_pass_rate": 0.58,
+  "signal_win_rate": null,
   "checks_count": 12,
   "quotes_fetched": 10,
   "gates_passed": 8,
+  "signals_total": 0,
+  "opportunities_total": 0,
   "spread_signals_count": 0,
+  "net_positive_signals_count": 0,
   "top_signal": null,
   "deprecated_legacy_trades_count": 12,
   "tail_losses": [],
@@ -40,6 +44,7 @@
     "new_size_usd": null,
     "cooldown_remaining": 0
   },
+  "top_signals": [],
   "top_opportunities": [],
   "opportunities_reason": "no_spread_signals",
   "top_quotes": [
