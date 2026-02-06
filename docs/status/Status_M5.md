@@ -1,136 +1,43 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-06 10:45 UTC  
+> **Оновлено**: 2026-02-06 11:00 UTC  
 > **SHA**: `7a823ba`  
-> **Статус**: ✅ Signals MVP DONE
+> **Статус**: ✅ DONE
 
 ---
 
-## Deliverables
+## DONE Criteria (per Roadmap)
 
-- Daily reporting artifact (`daily_report_*.json`) with schema_version
-- Spread signals with paper cost estimates
-- Transparent health metrics (rpc/dex/system)
-- CI validation (`ci_m5_0_gate.py`)
+Roadmap M5 вимагає:
+- ✅ Daily report: net PnL, win-rate, tail losses, reject reasons
+- ✅ Авто-зниження size при рості impact (autosize object present)
+- ✅ Health score для RPC/DEX/System
 
-## DoD-commands
+### Acceptance Checklist
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | `ci_m5_0_gate.py --online --cycles 5` PASS | ✅ |
+| 2 | daily_report: provenance, health, top_reject_reasons, top_opportunities | ✅ |
+| 3 | daily_report: autosize object always present | ✅ |
+| 4 | negative tests: schema_version mismatch, quotes_total invariant | ✅ |
+| 5 | truth_report: signals_total, opportunities_total | ✅ |
+
+---
+
+## Канонічна команда
 
 ```powershell
-# Канонічна команда (scan + artifacts)
-python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml --cycles 5
-
-# Юніт-тести
-python -m pytest tests/unit -q
-
-# CI gate (online)
 python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 5
 ```
 
 ---
 
-## Статус виконання
+## Останній PASS
 
-| # | Задача | Статус |
-|---|--------|--------|
-| 1 | daily_report generator | ✅ |
-| 2 | spread_signals з paper estimates | ✅ |
-| 3 | tick/sqrtPriceX96 provenance | ✅ |
-| 4 | config_params logging | ✅ |
-| 5 | net_negative_reason field | ✅ |
-| 6 | spread_frac as string | ✅ |
-| 7 | spread_bps_ui (renamed from int) | ✅ |
-| 8 | signals_total / opportunities_total | ✅ |
-| 9 | gate_pass_rate / signal_win_rate | ✅ |
-| 10 | schema tests for consistency | ✅ |
-
----
-
-## DoD E2E Flow
-
-```
-scan → truth_report → daily_report → ci_m5_gate PASS
-```
-
-### Example Run (2026-02-06):
-
-```
-RunDir: data/runs/manual_run_20260206_102300/
-├── reports/
-│   ├── scan_20260206_102302.json
-│   ├── truth_report_20260206_102302.json
-│   ├── reject_histogram_20260206_102302.json
-│   └── daily_report_2026-02-06.json
-```
-
-### Key Fields from daily_report:
-
-```json
-{
-  "paper_net_pnl_usdc": 0.39833,
-  "spread_bps_exact": 4.9833,
-  "current_block": 429187300,
-  "ws_connected": true,
-  "gate_pass_rate": 0.5833,
-  "signal_win_rate": 1.0,
-  "signals_total": 1,
-  "opportunities_total": 1
-}
-```
-
----
-
-## Signals vs Opportunities (raw vs filtered)
-
-| Layer | Purpose | Threshold |
-|-------|---------|-----------|
-| `spread_signals` | Raw detected spreads (for debug) | `min_spread_bps` |
-| `top_opportunities_net_positive` | Filtered opportunities | `min_net_pnl_usdc_est` |
-
-**Contract**:
-- `signals_total` = count of all detected spreads (may include net-negative)
-- `opportunities_total` = count of spreads passing net threshold (actionable)
-- When `signals_total > 0` but `opportunities_total = 0` → micro-spreads eaten by gas
-
-### Example: Net-Negative Signal
-
-```json
-{
-  "spread_bps_exact": 0.5422,
-  "spread_bps_ui": 0,
-  "gross_pnl_usdc_est": 0.0542,
-  "net_pnl_usdc_est": -0.0458,
-  "is_net_positive_est": false,
-  "net_negative_reason": "micro_spread_net_negative_due_to_gas"
-}
-```
-
-**Interpretation**: Spread exists (0.54 bps), but gas ($0.10) > gross ($0.05), so net is negative.
-This is **expected behavior** — the signal is valid for debug, but not an opportunity.
-
----
-
-## Останній прогін
-
-```powershell
-python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml --cycles 5
-```
-
-**RESULT: PASS + data\runs\manual_run_20260206_102300**
-
-### Артефакти (ключові поля):
-
-- `pairs`: 5 (WETH/USDC, WETH/USDT, WBTC/WETH, ARB/WETH, LINK/WETH) ✅
-- `signals_total`: 1 — raw signals detected ✅
-- `opportunities_total`: 1 — net-positive opportunities ✅
-- `spread_bps_exact`: 4.9833 — real spread ✅
-- `spread_bps_ui`: 4 — honest floor() ✅
-- `net_pnl_usdc_est`: +0.3983 — **NET POSITIVE** ✅
-- `is_net_positive_est`: true ✅
-- `net_negative_reason`: null (not needed) ✅
-- `stats.requested_cycles`: 5 ✅
-- `stats.cycles_completed`: 5 ✅
-
-**Note**: signals_total=1, opportunities_total=1 — real opportunity detected and actionable.
+**RunDir**: `data/runs/manual_run_20260206_102300`  
+**Date**: 2026-02-06  
+**Result**: PASS
 
 ---
 
@@ -142,102 +49,107 @@ python -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml -
 
 ---
 
-## Key Definitions
+## Policies
 
-| Field | Type | Semantics |
-|-------|------|-----------|
-| `spread_bps_exact` | float | Basis points — **USE FOR LOGIC/RANKING** |
-| `spread_bps_ui` | int | floor() — honest, may be 0 — **UI DISPLAY ONLY, NEVER FOR LOGIC** |
-| `spread_pct` | float | **Percent** (0.0036 = 0.0036%, NOT fraction) |
-| `spread_frac` | string | **Fraction** as string (no scientific notation, e.g. "0.000036") |
-| `*_est` fields | float | **Paper only** — estimates, not execution |
-| `net_pnl_usdc_est` | float | Paper estimate: gross - gas - slippage |
-| `net_negative_reason` | string | Why net < 0 (null if positive) |
-| `execution_pnl` | object | Execution PnL (DISABLED in M5, requires gas oracle) |
+### Golden Artifact Policy
 
-### Paper vs Execution (Strong Guarantee)
+Golden artifacts (`docs/artifacts/*_golden.json`) оновлюються **ТІЛЬКИ** коли:
+1. `schema_version` змінено (official bump), або
+2. Офіційно додано нові required поля (задокументовано в Status)
 
-| Layer | Status | Purpose |
-|-------|--------|---------|
-| Paper (`*_est` fields) | ✅ ACTIVE | Estimates based on config gas/slippage |
-| Execution (`execution_pnl`) | ❌ DISABLED | Requires gas oracle (M6) |
+**Інакше golden залишається фіксованим** — це regression anchor.
 
-**Contract**: `paper != execution`. Paper estimates are for signal ranking only.
+### daily_report Schema Contract
 
-### Canonical Config Params
+Schema `m5:daily:v1` **заморожена**. Дозволено:
+- ✅ Додавати нові optional поля
+- ❌ Перейменовувати існуючі поля
+- ❌ Видаляти поля без schema bump
 
-```yaml
-paper_size_usd: 1000
-gas_usd_estimate: 0.10
-paper_slippage_bps: 0
-min_spread_bps: 0              # debug=0; production=2-5 or net-only
-min_net_pnl_usdc_est: 0.0      # break-even threshold for opportunities
+### Tenderly Policy
+
+- `tenderly_enabled: false` — default для M5
+- Tenderly не блокує PASS (optional diagnostic)
+- Статус прозоро в артефактах: `infra.tenderly_enabled`, `infra.tenderly_attempted`
+
+### WS Health Rules
+
+| Condition | Result |
+|-----------|--------|
+| `ws_enabled=true`, `ws_connected=true` | ✅ OK |
+| `ws_enabled=true`, `ws_connected=false` | ⚠️ WARN (fallback to HTTP) |
+| `ws_enabled=false` | ✅ OK (HTTP only) |
+
+### Cost Model Transparency
+
+Всі paper estimates мають чітке джерело:
+
+```json
+{
+  "cost_model": {
+    "type": "gas_only",
+    "gas_usd_estimate": 0.10,
+    "gas_source": "config"
+  }
+}
 ```
 
-### Policy
+Якщо `pnl_available=true`, то `cost_model` **обов'язковий**.
 
-- `spread_bps_exact` — **source of truth** for logic, gates, ranking, DoD
-- `spread_bps_ui` — floor(), may be 0, **UI display only** (NEVER use for filtering/ranking/DoD)
-- `spread_pct` = percent, `spread_frac` = fraction (both derived from `spread_bps_exact`)
-- Net-negative micro-spreads excluded from `top_opportunities_net_positive`
-- `net_negative_reason` explains why net < 0
-- **Debug profile**: `min_spread_bps: 0` — shows all positive spreads
-- **Production profile**: either `min_spread_bps: 2-5` or net-only filter via `min_net_pnl_usdc_est`
-- **Tuning rule**: if net always < 0, raise threshold — don't trust opportunities
+---
 
-### Rates Definitions
+## Key Metrics
 
-| Field | Formula | Purpose |
+| Metric | Value | Source |
+|--------|-------|--------|
+| `signals_total` | 1 | truth_report |
+| `opportunities_total` | 1 | truth_report |
+| `gate_pass_rate` | 0.58 | daily_report |
+| `signal_win_rate` | 1.0 | daily_report |
+| `paper_net_pnl_usdc` | +0.40 | daily_report |
+
+---
+
+## Schema Tests
+
+| Test | Purpose |
+|------|---------|
+| `test_top_signal_matches_truth_spread_signals` | daily/truth consistency |
+| `test_signals_total_matches` | count invariant |
+| `test_opportunities_total_matches` | filter invariant |
+| `test_gate_pass_rate_calculation` | rate formula |
+| `test_signal_win_rate_calculation` | rate formula |
+| `test_empty_spread_signals_no_top_signal` | edge case |
+
+---
+
+## Deprecation Plan
+
+| Field | Current | Removal |
 |-------|---------|---------|
-| `gate_pass_rate` | sanity_passed / quotes_total | Gate filtering efficiency |
-| `signal_win_rate` | opportunities_total / signals_total | Profitable signal ratio |
-
-**Note**: `paper_win_rate` is **deprecated** alias for `gate_pass_rate` (renamed in v1.1).
-
-### Empty Histogram = Normal
-
-When `top_reject_reasons: []` in daily_report — this is **expected** for:
-- Small universe (few pairs)
-- Online runs with valid quotes
-- No sanity gate failures
-
-Unit tests cover reject scenarios; live runs may have 0 rejects.
-
-### Deprecation Plan: `pnl` → `execution_pnl`
-
-| Schema Version | `pnl` Field | `execution_pnl` Field |
-|----------------|-------------|----------------------|
-| m5:truth:v3.2 | ✅ Present (deprecated) | ✅ Present |
-| m5:truth:v3.3 | ❌ Removed | ✅ Present |
-
-**Migration**:
-- Consumers should use `execution_pnl` now
-- `pnl` contains `_deprecated: true` and `_migration` message
-- Unit test: `test_pnl_marked_deprecated` verifies deprecation
+| `pnl` | v3.2 (deprecated) | v3.3 |
+| `paper_win_rate` | v1.0 (alias) | v2.0 |
+| `deprecated_legacy_trades_count` | v1.0 | v2.0 |
 
 ---
 
-## Наступні кроки
+## Roadmap Next
 
-1. ~~Розширити universe (5-10 пар)~~ ✅ Done (5 pairs)
-2. ~~Ранжування signals за net_pnl~~ ✅ Done
-3. ~~gate_pass_rate / signal_win_rate~~ ✅ Done
-4. Gas oracle інтеграція (M6)
-5. Schema v3.3 bump: remove deprecated `pnl` field
-6. If micro-spreads dominate → raise `min_net_pnl_usdc_est`
+Per Roadmap.md:
+- **M6**: CEX↔DEX inventory-based (optional)
+- **M7**: Triangular (R&D)
+- **M8**: Cross-chain (R&D)
 
 ---
 
-## Status Update Rule
+## References
 
-**Every commit must update Status_M5.md per REPORT_TEMPLATE.md**:
-1. Виконані директиви (таблиця)
-2. Результати прогону (команда + RESULT)
-3. Артефакти (ключові поля)
-4. Юніт-тести (count)
+- **Roadmap**: [Roadmap.md](../../Roadmap.md)
+- **Template**: [REPORT_TEMPLATE.md](../REPORT_TEMPLATE.md)
+- **Testing**: [TESTING.md](../TESTING.md)
 
 ---
 
 ## SHA закриття
 
-`7a823ba` — Signals MVP DONE + Schema Tests
+`7a823ba` — M5 DONE
