@@ -1,8 +1,30 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-07 10:35 UTC  
-> **SHA**: `pending`  
+> **Оновлено**: 2026-02-07 10:51 UTC  
+> **SHA**: `8be1712`  
 > **Статус**: ✅ DONE
+
+---
+
+## ⚠️ CRITICAL INVARIANTS (M5)
+
+```
+1. opportunities == net-positive paper signals (is_net_positive_est=true)
+   ⚠️ NOT "ready to execute" — merely paper estimates without fees/impact
+
+2. execution_enabled = false ALWAYS in M5
+   blocker: "EXECUTION_DISABLED_M5_0 - verified: no cost model"
+
+3. anti-placeholder invariant:
+   - pool_address MUST exist (non-null)
+   - tick MUST exist (for v3)
+   - sqrt_price_x96 MUST exist (for v3)
+   → Any quote with null values is REJECTED, not passed
+
+4. fees NOT included in net_pnl_usdc_est
+   → ARB/USDC 14.9 bps looks sweet but likely eaten by swap fees
+   → Treat as "micro-arb visibility", not "strategy win"
+```
 
 ---
 
@@ -54,8 +76,9 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 
 ## Останній Golden Run
 
-**RunDir**: `data/runs/ci_m5_gate_20260207_103328`  
-**Date**: 2026-02-07  
+**RunDir**: `data/runs/ci_m5_gate_20260207_105133`  
+**Date**: 2026-02-07 10:51 UTC  
+**Block**: 429,541,297  
 **Result**: ✅ PASS
 
 ### Key Metrics
@@ -63,23 +86,26 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 | Metric | Value |
 |--------|-------|
 | `quotes_total` | 12 |
+| `quotes_fetched` | 10 |
 | `quotes_rejected` | 0 |
 | `pool_missing_count` | 0 |
 | `v3_slot0_failed_count` | 0 |
+| `price_sanity_passed` | 7 |
 | `price_sanity_failed` | 0 |
 | `dexes_active` | 2 |
 | `pairs_scanned` | 5 |
-| `spread_signals` | 2 |
+| `pools_quoted` | 10 |
+| `spread_signals` | 1 |
 
 ### Spread Signals (реальні ціни!)
 
 | Pair | Spread (bps) | Status |
 |------|-------------|--------|
-| WETH/USDC | 1.4 | ✅ Стабільна |
-| WETH/USDT | 1.0 | ✅ Стабільна |
-| ARB/WETH | 7.6 | ✅ **Signal!** |
-| wstETH/WETH | 0.09 | ✅ Стабільна |
-| ARB/USDC | 14.9 | ✅ **Signal!** |
+| ARB/WETH | **13.7** | ✅ **Signal!** |
+| WETH/USDT | 4.6 | ⚪ Нижче threshold |
+| WETH/USDC | 1.7 | ⚪ Нижче threshold |
+| ARB/USDC | 1.1 | ⚪ Нижче threshold |
+| wstETH/WETH | 0.08 | ⚪ Дуже стабільна |
 
 ### Приклад Quote (реальні дані)
 
@@ -99,8 +125,14 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 ## Юніт-тести
 
 ```
-472 passed, 5 subtests passed
+481 passed, 5 subtests passed
 ```
+
+### Нові тести (anti-placeholder)
+
+- `test_ci_m5_gate_negative_anti_placeholder.py` — 9 тестів
+- Перевіряє FAIL при `pool_address=null`
+- Перевіряє FAIL при `tick=null` / `sqrt_price_x96=null` для v3
 
 ---
 
@@ -182,6 +214,9 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 - If `signals_total == 0`: `paper_net = 0`
 - If `pool_missing_count > 0`: `pnl_available = false`
 
+**⚠️ FEES NOT INCLUDED**: `net_pnl_usdc_est` does NOT include swap fees (0.05%-0.3%).
+Real profitability requires: `net = gross - gas - fees - slippage - impact`
+
 ### Cost Model Transparency
 
 ```json
@@ -189,10 +224,41 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
   "cost_model": {
     "type": "gas_only",
     "gas_usd_estimate": 0.10,
-    "gas_source": "config"
+    "gas_source": "config",
+    "fees_included": false,
+    "fees_note": "swap fees (0.05-0.3%) NOT included - micro-arbs likely unprofitable"
   }
 }
 ```
+
+---
+
+## Metric Definitions
+
+### quote_sanity_rate vs price_sanity_failed
+
+```
+quote_sanity_rate = price_sanity_passed / quotes_total
+                  = 7 / 12 = 0.5833
+
+price_sanity_failed = quotes that failed price anchor check
+                    = 0 (all passed sanity)
+```
+
+**⚠️ Different metrics!**
+- `quote_sanity_rate < 1.0` means some quotes didn't reach sanity check (e.g., gate rejected earlier)
+- `price_sanity_failed = 0` means all checked quotes passed anchor validation
+
+### signals_total vs opportunities_total
+
+```
+signals_total       = spread signals that passed min_spread_bps threshold
+opportunities_total = signals where is_net_positive_est = true
+
+Example: signals=2, opportunities=2 means both are net-positive (paper estimate)
+```
+
+**⚠️ opportunities ≠ "ready to execute"** — just paper net > 0 without fees/impact.
 
 ---
 
@@ -259,4 +325,14 @@ Per Roadmap.md:
 
 ## SHA закриття
 
-`pending` — M5 DONE (updated 2026-02-07)
+`8be1712` — M5 DONE (closed 2026-02-07 10:51 UTC)
+
+### CI Gate Checks (v2.1.0)
+
+```
+✅ anti_placeholder OK (10 quotes checked)
+✅ coverage OK (pairs=5 pools=10)
+✅ schema_version=3.2.0
+✅ run_mode=REGISTRY_REAL
+✅ current_block=429541297
+```

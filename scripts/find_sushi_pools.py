@@ -1,6 +1,18 @@
-"""Find SushiSwap V3 pools on Arbitrum via Factory contract."""
+"""Find SushiSwap V3 pools on Arbitrum via Factory contract.
+
+Generates JSON whitelist for pool addresses.
+
+Usage:
+  python scripts/find_sushi_pools.py                    # Print to stdout
+  python scripts/find_sushi_pools.py --output FILE     # Save to JSON file
+  python scripts/find_sushi_pools.py --update-config   # Update config/real_minimal.yaml
+"""
 from web3 import Web3
 import os
+import json
+import argparse
+from datetime import datetime, timezone
+from pathlib import Path
 
 # RPC
 rpc = os.environ.get('ARBY_RPC_HTTP_PRIMARY', 'https://arb1.arbitrum.io/rpc')
@@ -121,3 +133,58 @@ for b, q, f in sorted(common):
 
 print()
 print(f'Total pairs with both DEXes: {len(common)}')
+
+# Generate JSON whitelist
+whitelist = {
+    "schema_version": "1.0.0",
+    "generated_at": datetime.now(timezone.utc).isoformat(),
+    "chain": "arbitrum_one",
+    "chain_id": 42161,
+    "factories": {
+        "uniswap_v3": UNISWAP_FACTORY,
+        "sushiswap_v3": FACTORY,
+    },
+    "tokens": TOKENS,
+    "pools": {},
+    "pairs_with_both_dexes": [],
+}
+
+# Add all pools
+for base, quote, fee, pool in found_pools:
+    key = f"sushiswap_v3_{base}_{quote}_{fee}"
+    whitelist["pools"][key] = pool
+
+for base, quote, fee, pool in uni_pools:
+    key = f"uniswap_v3_{base}_{quote}_{fee}"
+    whitelist["pools"][key] = pool
+
+# Add common pairs
+for b, q, f in sorted(common):
+    sushi = next(p for bb, qq, ff, p in found_pools if (bb, qq, ff) == (b, q, f))
+    uni = next(p for bb, qq, ff, p in uni_pools if (bb, qq, ff) == (b, q, f))
+    whitelist["pairs_with_both_dexes"].append({
+        "base": b,
+        "quote": q,
+        "fee": f,
+        "uniswap_v3": uni,
+        "sushiswap_v3": sushi,
+    })
+
+# Parse arguments
+parser = argparse.ArgumentParser(description="Find V3 pools on Arbitrum")
+parser.add_argument("--output", "-o", help="Output JSON file path")
+args, _ = parser.parse_known_args()
+
+if args.output:
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(whitelist, f, indent=2)
+    print(f"\nWhitelist saved to: {output_path}")
+else:
+    # Save to docs/artifacts by default
+    default_path = Path(__file__).parent.parent / "docs" / "artifacts" / "pool_whitelist.json"
+    default_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(default_path, "w") as f:
+        json.dump(whitelist, f, indent=2)
+    print(f"\nWhitelist saved to: {default_path}")

@@ -1,0 +1,321 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-02-07T09:50:24.764258+00:00",
+  "chain": "arbitrum_one",
+  "chain_id": 42161,
+  "factories": {
+    "uniswap_v3": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    "sushiswap_v3": "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e"
+  },
+  "tokens": {
+    "WETH": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+    "USDC": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+    "USDT": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+    "WBTC": "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
+    "ARB": "0x912CE59144191C1204E64559FE8253a0e49E6548",
+    "LINK": "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
+    "wstETH": "0x5979D7b546E38E414F7E9822514be443A4800529",
+    "GMX": "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a",
+    "DAI": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"
+  },
+  "pools": {
+    "sushiswap_v3_WETH_USDC_100": "0xB658eE5c63922d2852f24458efFA2Bfa2cBA3574",
+    "sushiswap_v3_WETH_USDC_500": "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296",
+    "sushiswap_v3_WETH_USDC_3000": "0xC96525298419f7E00dA8826B733Ee52e271662b5",
+    "sushiswap_v3_WETH_USDC_10000": "0x0ed17087175A677C05328a37B9795728E9Cd8821",
+    "sushiswap_v3_WETH_USDT_100": "0x824D9bc425C599F46C700AFDcAe0867596f48cE2",
+    "sushiswap_v3_WETH_USDT_500": "0x96aDA81328abCe21939A51D971A63077e16db26E",
+    "sushiswap_v3_WETH_USDT_3000": "0x92d543A8a158A6bC2C7018ae17803819Cb9150B2",
+    "sushiswap_v3_WETH_USDT_10000": "0x7F9061b253545103b80698e579C9891718057Dfc",
+    "sushiswap_v3_WBTC_WETH_100": "0xbb08872AeC88fa7BCDa9faaDccEe8bfA806414f8",
+    "sushiswap_v3_WBTC_WETH_500": "0xf79099596045A41bB2ae53fa6677576687242455",
+    "sushiswap_v3_WBTC_WETH_3000": "0x6F10667F314498649eb2f80da244e8c6E9f031d5",
+    "sushiswap_v3_ARB_WETH_100": "0x011cc642ae74315001eeb541C1d2D225e92Ece3d",
+    "sushiswap_v3_ARB_WETH_500": "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11",
+    "sushiswap_v3_ARB_WETH_3000": "0xB3942c9FFA04efBC1Fa746e146bE7565c76E3dC1",
+    "sushiswap_v3_ARB_WETH_10000": "0xB1674e700f0dCFF2f7B4BfC68Cb6d9dEa7DdbB2e",
+    "sushiswap_v3_LINK_WETH_500": "0x942E53ED315Db6451AdCd601D4D08f059F88C77f",
+    "sushiswap_v3_LINK_WETH_3000": "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65",
+    "sushiswap_v3_wstETH_WETH_100": "0x8BD39fA8608fd949C253987767540c26a0D974CF",
+    "sushiswap_v3_wstETH_WETH_500": "0xc60f4760a70Bb900776DBBfcce9eF1a109a185B0",
+    "sushiswap_v3_wstETH_WETH_10000": "0x3e023c199e3e540ac81bacb770d800463Fae7671",
+    "sushiswap_v3_GMX_WETH_100": "0xD652C168206EE4f09cDEd59A82AADA04Ec4a00df",
+    "sushiswap_v3_GMX_WETH_500": "0xe7988687004933525734Da744102ea8E0e472A91",
+    "sushiswap_v3_GMX_WETH_3000": "0x2AB937e744B6E067c55329838A587d1Cf50C874f",
+    "sushiswap_v3_ARB_USDC_100": "0x2dEEEf8d852E7c4e66Eab5e4efe0206d60DC06c3",
+    "sushiswap_v3_ARB_USDC_500": "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC",
+    "sushiswap_v3_ARB_USDC_3000": "0x14716A16ef9eeAaDa7E266bcF023b71D2c9ADbf3",
+    "sushiswap_v3_ARB_USDC_10000": "0x4Ea5B77307349147dCF47C2D86FBad178679265F",
+    "sushiswap_v3_WBTC_USDC_100": "0x6Fe8728c7b62f78aC71d1ee2b3dda6Ca1a6f584d",
+    "sushiswap_v3_WBTC_USDC_500": "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF",
+    "sushiswap_v3_WBTC_USDC_3000": "0x4E5c883d6e9cCE0be8E464C3066bCFF036Da674a",
+    "sushiswap_v3_WBTC_USDC_10000": "0x3dcaFfae72Ff58a03A9a4AC90EB9Aea40d1374CF",
+    "sushiswap_v3_DAI_USDC_100": "0x5DcF1Aa6B3422D8A59dc0e00904E02A1c1ea5a58",
+    "uniswap_v3_WETH_USDC_100": "0x6f38e884725a116C9C7fBF208e79FE8828a2595F",
+    "uniswap_v3_WETH_USDC_500": "0xC6962004f452bE9203591991D15f6b388e09E8D0",
+    "uniswap_v3_WETH_USDC_3000": "0xc473e2aEE3441BF9240Be85eb122aBB059A3B57c",
+    "uniswap_v3_WETH_USDC_10000": "0x42FC852A750BA93D5bf772ecdc857e87a86403a9",
+    "uniswap_v3_WETH_USDT_100": "0x42161084d0672e1d3F26a9B53E653bE2084ff19C",
+    "uniswap_v3_WETH_USDT_500": "0x641C00A822e8b671738d32a431a4Fb6074E5c79d",
+    "uniswap_v3_WETH_USDT_3000": "0xc82819F72A9e77E2c0c3A69B3196478f44303cf4",
+    "uniswap_v3_WETH_USDT_10000": "0x58039203442C9F2A45D5536bd021a383C7f3035C",
+    "uniswap_v3_WBTC_WETH_100": "0x03a3bE7Ab4aa263D42d63B6CC594F4fb3D3F3951",
+    "uniswap_v3_WBTC_WETH_500": "0x2f5e87C9312fa29aed5c179E456625D79015299c",
+    "uniswap_v3_WBTC_WETH_3000": "0x149e36E72726e0BceA5c59d40df2c43F60f5A22D",
+    "uniswap_v3_WBTC_WETH_10000": "0x99dFc0126ED31E0169fc32dB6B89adF9FeE9a77e",
+    "uniswap_v3_ARB_WETH_100": "0x89A4026E9aDE251C67b7fb38054931a39936D9C5",
+    "uniswap_v3_ARB_WETH_500": "0xC6F780497A95e246EB9449f5e4770916DCd6396A",
+    "uniswap_v3_ARB_WETH_3000": "0x92c63d0e701CAAe670C9415d91C474F686298f00",
+    "uniswap_v3_ARB_WETH_10000": "0x92fd143A8FA0C84e016C2765648B9733b0aa519e",
+    "uniswap_v3_LINK_WETH_100": "0xD49ab568dB5721AFE8E86811Ff4D0d5F5AFeA300",
+    "uniswap_v3_LINK_WETH_500": "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907",
+    "uniswap_v3_LINK_WETH_3000": "0x468b88941e7Cc0B88c1869d68ab6b570bCEF62Ff",
+    "uniswap_v3_LINK_WETH_10000": "0x22127577D772c4098c160B49a8e5caE3012C5824",
+    "uniswap_v3_wstETH_WETH_100": "0x35218a1cbaC5Bbc3E57fd9Bd38219D37571b3537",
+    "uniswap_v3_wstETH_WETH_500": "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13",
+    "uniswap_v3_wstETH_WETH_3000": "0x7103B8F34473C7812818C55EB127D1F590F67D84",
+    "uniswap_v3_wstETH_WETH_10000": "0x62bc45B7ea9B854FaccE545a267295D8eB4a58F7",
+    "uniswap_v3_GMX_WETH_100": "0x5e609d174Eedb5ccb42d290A3bA37b56C4cfCB41",
+    "uniswap_v3_GMX_WETH_500": "0xb435ebfE0BF4CE66810AA4d44e3a5CA875D40DB1",
+    "uniswap_v3_GMX_WETH_3000": "0x1aEEdD3727A6431b8F070C0aFaA81Cc74f273882",
+    "uniswap_v3_GMX_WETH_10000": "0x80A9ae39310abf666A87C743d6ebBD0E8C42158E",
+    "uniswap_v3_ARB_USDC_100": "0x616a2a065bFE53DA48e83E7d709fB428AA3C9F5B",
+    "uniswap_v3_ARB_USDC_500": "0xb0f6cA40411360c03d41C5fFc5F179b8403CdcF8",
+    "uniswap_v3_ARB_USDC_3000": "0xaEBDcA1Bc8d89177EbE2308d62af5e74885DcCc3",
+    "uniswap_v3_ARB_USDC_10000": "0xAC9a19E85A49BACc28Bd2DeeCab3cdfADBFc3e00",
+    "uniswap_v3_WBTC_USDC_100": "0xBD65e976BD6b0b59232144c7966e1065024b874c",
+    "uniswap_v3_WBTC_USDC_500": "0x0E4831319A50228B9e450861297aB92dee15B44F",
+    "uniswap_v3_WBTC_USDC_3000": "0x6985cb98CE393FCE8d6272127F39013f61e36166",
+    "uniswap_v3_WBTC_USDC_10000": "0x719826896832C9DeAA868272f2dD55CF1e5Ca3e7",
+    "uniswap_v3_DAI_USDC_100": "0x7CF803e8d82A50504180f417B8bC7a493C0a0503",
+    "uniswap_v3_DAI_USDC_500": "0x9264e764e6D5D252a5c17C457C9Bb059b8831Bb1",
+    "uniswap_v3_DAI_USDC_3000": "0xD46c8A1940113ae64f960B7aA12EF5dcAB0ffe0E",
+    "uniswap_v3_DAI_USDC_10000": "0xbFf936a43e6Fe6F891789bE66043BcC8eFfee938"
+  },
+  "pairs_with_both_dexes": [
+    {
+      "base": "ARB",
+      "quote": "USDC",
+      "fee": 100,
+      "uniswap_v3": "0x616a2a065bFE53DA48e83E7d709fB428AA3C9F5B",
+      "sushiswap_v3": "0x2dEEEf8d852E7c4e66Eab5e4efe0206d60DC06c3"
+    },
+    {
+      "base": "ARB",
+      "quote": "USDC",
+      "fee": 500,
+      "uniswap_v3": "0xb0f6cA40411360c03d41C5fFc5F179b8403CdcF8",
+      "sushiswap_v3": "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
+    },
+    {
+      "base": "ARB",
+      "quote": "USDC",
+      "fee": 3000,
+      "uniswap_v3": "0xaEBDcA1Bc8d89177EbE2308d62af5e74885DcCc3",
+      "sushiswap_v3": "0x14716A16ef9eeAaDa7E266bcF023b71D2c9ADbf3"
+    },
+    {
+      "base": "ARB",
+      "quote": "USDC",
+      "fee": 10000,
+      "uniswap_v3": "0xAC9a19E85A49BACc28Bd2DeeCab3cdfADBFc3e00",
+      "sushiswap_v3": "0x4Ea5B77307349147dCF47C2D86FBad178679265F"
+    },
+    {
+      "base": "ARB",
+      "quote": "WETH",
+      "fee": 100,
+      "uniswap_v3": "0x89A4026E9aDE251C67b7fb38054931a39936D9C5",
+      "sushiswap_v3": "0x011cc642ae74315001eeb541C1d2D225e92Ece3d"
+    },
+    {
+      "base": "ARB",
+      "quote": "WETH",
+      "fee": 500,
+      "uniswap_v3": "0xC6F780497A95e246EB9449f5e4770916DCd6396A",
+      "sushiswap_v3": "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11"
+    },
+    {
+      "base": "ARB",
+      "quote": "WETH",
+      "fee": 3000,
+      "uniswap_v3": "0x92c63d0e701CAAe670C9415d91C474F686298f00",
+      "sushiswap_v3": "0xB3942c9FFA04efBC1Fa746e146bE7565c76E3dC1"
+    },
+    {
+      "base": "ARB",
+      "quote": "WETH",
+      "fee": 10000,
+      "uniswap_v3": "0x92fd143A8FA0C84e016C2765648B9733b0aa519e",
+      "sushiswap_v3": "0xB1674e700f0dCFF2f7B4BfC68Cb6d9dEa7DdbB2e"
+    },
+    {
+      "base": "DAI",
+      "quote": "USDC",
+      "fee": 100,
+      "uniswap_v3": "0x7CF803e8d82A50504180f417B8bC7a493C0a0503",
+      "sushiswap_v3": "0x5DcF1Aa6B3422D8A59dc0e00904E02A1c1ea5a58"
+    },
+    {
+      "base": "GMX",
+      "quote": "WETH",
+      "fee": 100,
+      "uniswap_v3": "0x5e609d174Eedb5ccb42d290A3bA37b56C4cfCB41",
+      "sushiswap_v3": "0xD652C168206EE4f09cDEd59A82AADA04Ec4a00df"
+    },
+    {
+      "base": "GMX",
+      "quote": "WETH",
+      "fee": 500,
+      "uniswap_v3": "0xb435ebfE0BF4CE66810AA4d44e3a5CA875D40DB1",
+      "sushiswap_v3": "0xe7988687004933525734Da744102ea8E0e472A91"
+    },
+    {
+      "base": "GMX",
+      "quote": "WETH",
+      "fee": 3000,
+      "uniswap_v3": "0x1aEEdD3727A6431b8F070C0aFaA81Cc74f273882",
+      "sushiswap_v3": "0x2AB937e744B6E067c55329838A587d1Cf50C874f"
+    },
+    {
+      "base": "LINK",
+      "quote": "WETH",
+      "fee": 500,
+      "uniswap_v3": "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907",
+      "sushiswap_v3": "0x942E53ED315Db6451AdCd601D4D08f059F88C77f"
+    },
+    {
+      "base": "LINK",
+      "quote": "WETH",
+      "fee": 3000,
+      "uniswap_v3": "0x468b88941e7Cc0B88c1869d68ab6b570bCEF62Ff",
+      "sushiswap_v3": "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65"
+    },
+    {
+      "base": "WBTC",
+      "quote": "USDC",
+      "fee": 100,
+      "uniswap_v3": "0xBD65e976BD6b0b59232144c7966e1065024b874c",
+      "sushiswap_v3": "0x6Fe8728c7b62f78aC71d1ee2b3dda6Ca1a6f584d"
+    },
+    {
+      "base": "WBTC",
+      "quote": "USDC",
+      "fee": 500,
+      "uniswap_v3": "0x0E4831319A50228B9e450861297aB92dee15B44F",
+      "sushiswap_v3": "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"
+    },
+    {
+      "base": "WBTC",
+      "quote": "USDC",
+      "fee": 3000,
+      "uniswap_v3": "0x6985cb98CE393FCE8d6272127F39013f61e36166",
+      "sushiswap_v3": "0x4E5c883d6e9cCE0be8E464C3066bCFF036Da674a"
+    },
+    {
+      "base": "WBTC",
+      "quote": "USDC",
+      "fee": 10000,
+      "uniswap_v3": "0x719826896832C9DeAA868272f2dD55CF1e5Ca3e7",
+      "sushiswap_v3": "0x3dcaFfae72Ff58a03A9a4AC90EB9Aea40d1374CF"
+    },
+    {
+      "base": "WBTC",
+      "quote": "WETH",
+      "fee": 100,
+      "uniswap_v3": "0x03a3bE7Ab4aa263D42d63B6CC594F4fb3D3F3951",
+      "sushiswap_v3": "0xbb08872AeC88fa7BCDa9faaDccEe8bfA806414f8"
+    },
+    {
+      "base": "WBTC",
+      "quote": "WETH",
+      "fee": 500,
+      "uniswap_v3": "0x2f5e87C9312fa29aed5c179E456625D79015299c",
+      "sushiswap_v3": "0xf79099596045A41bB2ae53fa6677576687242455"
+    },
+    {
+      "base": "WBTC",
+      "quote": "WETH",
+      "fee": 3000,
+      "uniswap_v3": "0x149e36E72726e0BceA5c59d40df2c43F60f5A22D",
+      "sushiswap_v3": "0x6F10667F314498649eb2f80da244e8c6E9f031d5"
+    },
+    {
+      "base": "WETH",
+      "quote": "USDC",
+      "fee": 100,
+      "uniswap_v3": "0x6f38e884725a116C9C7fBF208e79FE8828a2595F",
+      "sushiswap_v3": "0xB658eE5c63922d2852f24458efFA2Bfa2cBA3574"
+    },
+    {
+      "base": "WETH",
+      "quote": "USDC",
+      "fee": 500,
+      "uniswap_v3": "0xC6962004f452bE9203591991D15f6b388e09E8D0",
+      "sushiswap_v3": "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
+    },
+    {
+      "base": "WETH",
+      "quote": "USDC",
+      "fee": 3000,
+      "uniswap_v3": "0xc473e2aEE3441BF9240Be85eb122aBB059A3B57c",
+      "sushiswap_v3": "0xC96525298419f7E00dA8826B733Ee52e271662b5"
+    },
+    {
+      "base": "WETH",
+      "quote": "USDC",
+      "fee": 10000,
+      "uniswap_v3": "0x42FC852A750BA93D5bf772ecdc857e87a86403a9",
+      "sushiswap_v3": "0x0ed17087175A677C05328a37B9795728E9Cd8821"
+    },
+    {
+      "base": "WETH",
+      "quote": "USDT",
+      "fee": 100,
+      "uniswap_v3": "0x42161084d0672e1d3F26a9B53E653bE2084ff19C",
+      "sushiswap_v3": "0x824D9bc425C599F46C700AFDcAe0867596f48cE2"
+    },
+    {
+      "base": "WETH",
+      "quote": "USDT",
+      "fee": 500,
+      "uniswap_v3": "0x641C00A822e8b671738d32a431a4Fb6074E5c79d",
+      "sushiswap_v3": "0x96aDA81328abCe21939A51D971A63077e16db26E"
+    },
+    {
+      "base": "WETH",
+      "quote": "USDT",
+      "fee": 3000,
+      "uniswap_v3": "0xc82819F72A9e77E2c0c3A69B3196478f44303cf4",
+      "sushiswap_v3": "0x92d543A8a158A6bC2C7018ae17803819Cb9150B2"
+    },
+    {
+      "base": "WETH",
+      "quote": "USDT",
+      "fee": 10000,
+      "uniswap_v3": "0x58039203442C9F2A45D5536bd021a383C7f3035C",
+      "sushiswap_v3": "0x7F9061b253545103b80698e579C9891718057Dfc"
+    },
+    {
+      "base": "wstETH",
+      "quote": "WETH",
+      "fee": 100,
+      "uniswap_v3": "0x35218a1cbaC5Bbc3E57fd9Bd38219D37571b3537",
+      "sushiswap_v3": "0x8BD39fA8608fd949C253987767540c26a0D974CF"
+    },
+    {
+      "base": "wstETH",
+      "quote": "WETH",
+      "fee": 500,
+      "uniswap_v3": "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13",
+      "sushiswap_v3": "0xc60f4760a70Bb900776DBBfcce9eF1a109a185B0"
+    },
+    {
+      "base": "wstETH",
+      "quote": "WETH",
+      "fee": 10000,
+      "uniswap_v3": "0x62bc45B7ea9B854FaccE545a267295D8eB4a58F7",
+      "sushiswap_v3": "0x3e023c199e3e540ac81bacb770d800463Fae7671"
+    }
+  ]
+}

@@ -192,6 +192,77 @@ def validate_schema_version(data: Dict[str, Any]) -> Tuple[bool, str]:
     return True, f"schema_version={version}"
 
 
+def validate_anti_placeholder(data: Dict[str, Any], require_real: bool = False) -> Tuple[bool, str]:
+    """Validate anti-placeholder invariant: no quotes with null pool_address/tick/sqrt_price_x96.
+    
+    This catches the BLOCKER bug where fake quotes with placeholder prices slipped through.
+    """
+    quotes = data.get("quotes_sample", [])
+    if not quotes:
+        # No quotes to check
+        return True, "anti_placeholder OK (no quotes_sample)"
+    
+    violations = []
+    for i, q in enumerate(quotes):
+        dex_id = q.get("dex_id", "unknown")
+        pair = f"{q.get('token_in', '?')}/{q.get('token_out', '?')}"
+        
+        # Check pool_address
+        pool_addr = q.get("pool_address")
+        if pool_addr is None or pool_addr == "" or pool_addr == "0x0000000000000000000000000000000000000000":
+            violations.append(f"quote[{i}] {dex_id} {pair}: pool_address=null")
+        
+        # Check tick/sqrt_price_x96 for v3 pools
+        if "v3" in dex_id.lower():
+            tick = q.get("tick")
+            sqrt_price = q.get("sqrt_price_x96")
+            if tick is None:
+                violations.append(f"quote[{i}] {dex_id} {pair}: tick=null (v3 requires tick)")
+            if sqrt_price is None:
+                violations.append(f"quote[{i}] {dex_id} {pair}: sqrt_price_x96=null (v3 requires sqrt)")
+    
+    if violations:
+        msg = f"ANTI_PLACEHOLDER VIOLATION: {len(violations)} placeholder quotes: {violations[:3]}"
+        if require_real:
+            return False, msg
+        else:
+            return True, f"WARN: {msg}"  # Warn in offline mode
+    
+    return True, f"anti_placeholder OK ({len(quotes)} quotes checked)"
+
+
+def validate_coverage(data: Dict[str, Any], min_pairs: int = 5, min_pools: int = 6) -> Tuple[bool, str]:
+    """Validate minimum coverage: pairs_count >= min_pairs and pools_quoted >= min_pools.
+    
+    Prevents PASS on empty universe.
+    """
+    quotes = data.get("quotes_sample", [])
+    
+    # Count unique pairs
+    pairs = set()
+    pools = set()
+    for q in quotes:
+        pair = f"{q.get('token_in', '?')}/{q.get('token_out', '?')}"
+        pairs.add(pair)
+        pool = q.get("pool_address")
+        if pool:
+            pools.add(pool)
+    
+    pairs_count = len(pairs)
+    pools_count = len(pools)
+    
+    issues = []
+    if pairs_count < min_pairs:
+        issues.append(f"pairs_count={pairs_count} < {min_pairs}")
+    if pools_count < min_pools:
+        issues.append(f"pools_count={pools_count} < {min_pools}")
+    
+    if issues:
+        return False, f"COVERAGE FAIL: {', '.join(issues)}"
+    
+    return True, f"coverage OK (pairs={pairs_count} pools={pools_count})"
+
+
 def validate_scan_fields(data: Dict[str, Any], path: Optional[Path] = None, require_real: bool = False) -> Tuple[bool, str]:
     """Validate top-level scan fields required by M5_0.
 
@@ -353,6 +424,25 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                 messages.append(f"{'OK' if ok_tr else 'FAIL'}: {name} - {msg_tr}")
                 if not ok_tr:
                     all_passed = False
+            
+            # Anti-placeholder validation for scan (CRITICAL)
+            if name == "scan":
+                ok_ap, msg_ap = validate_anti_placeholder(data, require_real=require_real)
+                if ok_ap:
+                    messages.append(f"OK: {name} - {msg_ap}")
+                else:
+                    messages.append(f"FAIL: {name} - {msg_ap}")
+                    all_passed = False
+                
+                # Coverage validation for online runs
+                if require_real:
+                    ok_cov, msg_cov = validate_coverage(data, min_pairs=5, min_pools=6)
+                    if ok_cov:
+                        messages.append(f"OK: {name} - {msg_cov}")
+                    else:
+                        messages.append(f"FAIL: {name} - {msg_cov}")
+                        all_passed = False
+            
             # Additional check: validate reject histogram cap semantics
             if name == "reject_histogram":
                 try:
