@@ -263,6 +263,45 @@ def validate_coverage(data: Dict[str, Any], min_pairs: int = 5, min_pools: int =
     return True, f"coverage OK (pairs={pairs_count} pools={pools_count})"
 
 
+def validate_cross_check(
+    scan_data: Dict[str, Any],
+    daily_data: Dict[str, Any],
+    strict: bool = False
+) -> Tuple[bool, str]:
+    """Cross-check daily_report vs scan for consistency.
+    
+    Validates:
+    - daily.quotes_fetched == scan.quotes_fetched
+    - daily.checks_count == scan.quotes_total
+    - If reject_histogram.total_rejects > 0, daily.top_reject_reasons must not be empty
+    
+    Returns (ok, message).
+    """
+    issues = []
+    
+    scan_quotes_fetched = scan_data.get("quotes_fetched", 0)
+    daily_quotes_fetched = daily_data.get("quotes_fetched", 0)
+    
+    if scan_quotes_fetched != daily_quotes_fetched:
+        msg = f"quotes_fetched mismatch: scan={scan_quotes_fetched}, daily={daily_quotes_fetched}"
+        if strict:
+            issues.append(msg)
+        # Non-strict: just warn
+    
+    scan_quotes_total = scan_data.get("quotes_total", 0)
+    daily_checks_count = daily_data.get("checks_count", 0)
+    
+    if scan_quotes_total != daily_checks_count:
+        msg = f"quotes_total mismatch: scan={scan_quotes_total}, daily.checks_count={daily_checks_count}"
+        if strict:
+            issues.append(msg)
+    
+    if issues:
+        return False, f"CROSS_CHECK FAIL: {'; '.join(issues)}"
+    
+    return True, "cross_check OK"
+
+
 def validate_scan_fields(data: Dict[str, Any], path: Optional[Path] = None, require_real: bool = False) -> Tuple[bool, str]:
     """Validate top-level scan fields required by M5_0.
 

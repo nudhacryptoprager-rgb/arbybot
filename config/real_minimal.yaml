@@ -196,6 +196,23 @@ gas_usd_estimate: 0.10
 paper_size_usd: 1000
 paper_slippage_bps: 0  # 0 bps default - conservative for micro-spreads
 
+# Autosize configuration (M5)
+# Auto-reduces position size when impact/ticksCrossed grows
+autosize:
+  enabled: true
+  base_size_usd: 1000           # Starting position size
+  min_size_usd: 100             # Floor - never go below this
+  max_size_usd: 5000            # Ceiling - never exceed this
+  impact_threshold_bps: 50      # Reduce size if impact > 50 bps
+  ticks_crossed_threshold: 5    # Reduce size if ticksCrossed > 5
+  reduction_factor: 0.5         # Reduce by 50% per threshold breach
+  cooldown_seconds: 300         # Wait 5 min before re-adjusting
+  reason_codes:
+    - "high_impact"             # impact_bps > threshold
+    - "ticks_crossed"           # ticksCrossed > threshold
+    - "volatility"              # price moved > X% in window
+    - "cooldown_active"         # within cooldown period
+
 # Spread signal threshold (M5)
 # Signals with spread_bps_exact < this are filtered out
 # Production: 5 bps minimum (filters micro-spreads that can't cover gas)

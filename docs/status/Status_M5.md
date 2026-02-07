@@ -1,8 +1,18 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-07 10:51 UTC  
-> **SHA**: `8be1712`  
+> **Оновлено**: 2026-02-07 11:21 UTC  
+> **SHA**: `506e8d0`  
 > **Статус**: ✅ DONE
+
+---
+
+## Канонічна команда
+
+```powershell
+python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1
+```
+
+**Очікування**: `RESULT: PASS` + шлях до RunDir
 
 ---
 
@@ -76,9 +86,9 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 
 ## Останній Golden Run
 
-**RunDir**: `data/runs/ci_m5_gate_20260207_105133`  
-**Date**: 2026-02-07 10:51 UTC  
-**Block**: 429,541,297  
+**RunDir**: `data/runs/ci_m5_gate_20260207_112126`  
+**Date**: 2026-02-07 11:21 UTC  
+**Block**: 429,548,505  
 **Result**: ✅ PASS
 
 ### Key Metrics
@@ -95,28 +105,32 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 | `dexes_active` | 2 |
 | `pairs_scanned` | 5 |
 | `pools_quoted` | 10 |
-| `spread_signals` | 1 |
+| `spread_signals` | 2 |
+| `paper_net_pnl_usdc` | ~$3.40 |
 
 ### Spread Signals (реальні ціни!)
 
-| Pair | Spread (bps) | Status |
-|------|-------------|--------|
-| ARB/WETH | **13.7** | ✅ **Signal!** |
-| WETH/USDT | 4.6 | ⚪ Нижче threshold |
-| WETH/USDC | 1.7 | ⚪ Нижче threshold |
-| ARB/USDC | 1.1 | ⚪ Нижче threshold |
-| wstETH/WETH | 0.08 | ⚪ Дуже стабільна |
+| Pair | Spread (bps) | Net PnL (est) | Status |
+|------|-------------|---------------|--------|
+| ARB/WETH | **24.8** | ~$2.38 | ✅ **Signal!** |
+| ARB/USDC | **9.3** | ~$0.83 | ✅ **Signal!** |
+| WETH/USDT | 2.3 | - | ⚪ Нижче threshold |
+| WETH/USDC | 0.2 | - | ⚪ Дуже стабільна |
+| wstETH/WETH | 0.08 | - | ⚪ Дуже стабільна |
 
-### Приклад Quote (реальні дані)
+### Autosize (enabled!)
 
 ```json
 {
-  "pair": "WETH/USDC",
-  "dex_id": "uniswap_v3",
-  "pool_address": "0xC6962004f452bE9203591991D15f6b388e09E8D0",
-  "price_exact": "2011.35",
-  "tick": -201234,
-  "sqrt_price_x96": "3456789012345678901234"
+  "enabled": true,
+  "new_size_usd": 1000,
+  "reason": "configured_no_adjustment",
+  "config": {
+    "base_size_usd": 1000,
+    "min_size_usd": 100,
+    "max_size_usd": 5000,
+    "impact_threshold_bps": 50
+  }
 }
 ```
 
@@ -349,12 +363,13 @@ Per Roadmap.md:
 - **Template**: [REPORT_TEMPLATE.md](../REPORT_TEMPLATE.md)
 - **Testing**: [TESTING.md](../TESTING.md)
 - **Pool Discovery**: [find_sushi_pools.py](../../scripts/find_sushi_pools.py)
+- **Pool Whitelist**: [pool_whitelist.json](../artifacts/pool_whitelist.json)
 
 ---
 
 ## SHA закриття
 
-`8be1712` — M5 DONE (closed 2026-02-07 10:51 UTC)
+`506e8d0` — M5 DONE (closed 2026-02-07 11:21 UTC)
 
 ### CI Gate Checks (v2.1.0)
 
@@ -362,6 +377,20 @@ Per Roadmap.md:
 ✅ anti_placeholder OK (10 quotes checked)
 ✅ coverage OK (pairs=5 pools=10)
 ✅ schema_version=3.2.0
+✅ run_mode=REGISTRY_REAL
+✅ current_block=429548505
+✅ autosize.enabled=true
+```
+
+### Стабільність (3 прогони)
+
+| Run | Signals | Block | ARB/WETH | ARB/USDC |
+|-----|---------|-------|----------|----------|
+| 1 | 3 | 429548277 | 24.4 bps | 9.3 bps |
+| 2 | 2 | 429548451 | 24.8 bps | 9.3 bps |
+| 3 | 2 | 429548505 | 24.8 bps | 9.3 bps |
+
+**Інваріанти виконуються стабільно.**
 ✅ run_mode=REGISTRY_REAL
 ✅ current_block=429541297
 ```

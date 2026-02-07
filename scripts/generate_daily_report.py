@@ -159,12 +159,22 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         pnl_available = False
         pnl_reason = "invalid_quotes_present"
 
-    # tail losses: use suspect_summary examples if available (placeholder)
+    # tail losses: use suspect_summary examples if available
+    # Minimum N=5 samples required to populate tail_losses; otherwise explain why empty
     tail_losses = []
+    tail_losses_reason = None
+    MIN_TAIL_SAMPLES = 5
+    
     suspect_summary = truth.get("suspect_summary", {})
     examples = suspect_summary.get("examples", []) if suspect_summary else []
-    for ex in examples[:5]:
-        tail_losses.append({"pair": ex.get("pair"), "pnl_usdc": None, "reason": ex.get("reason")})
+    
+    if len(examples) >= MIN_TAIL_SAMPLES:
+        for ex in examples[:5]:
+            tail_losses.append({"pair": ex.get("pair"), "pnl_usdc": None, "reason": ex.get("reason")})
+    elif len(examples) > 0:
+        tail_losses_reason = f"insufficient_samples (got {len(examples)}, need {MIN_TAIL_SAMPLES})"
+    else:
+        tail_losses_reason = "no_suspects_detected"
 
     # Provenance
     artifacts = {
@@ -174,13 +184,33 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     }
 
     # autosize: surface autosize decisions from truth if present
+    # Also check config_params for autosize configuration
     autosize = truth.get("autosize") or {}
+    config_params = truth.get("config_params") or {}
+    autosize_config = config_params.get("autosize") or {}
+    
     autosize_summary = None
-    if autosize:
+    if autosize and autosize.get("new_size_usd"):
+        # Runtime autosize decision exists
         autosize_summary = {
+            "enabled": True,
             "new_size_usd": autosize.get("new_size_usd") or autosize.get("new_size") or None,
             "reason": autosize.get("reason"),
             "cooldown_remaining": autosize.get("cooldown_remaining"),
+        }
+    elif autosize_config.get("enabled"):
+        # Autosize configured but no runtime decision yet
+        autosize_summary = {
+            "enabled": True,
+            "new_size_usd": autosize_config.get("base_size_usd"),
+            "reason": "configured_no_adjustment",
+            "cooldown_remaining": 0,
+            "config": {
+                "base_size_usd": autosize_config.get("base_size_usd"),
+                "min_size_usd": autosize_config.get("min_size_usd"),
+                "max_size_usd": autosize_config.get("max_size_usd"),
+                "impact_threshold_bps": autosize_config.get("impact_threshold_bps"),
+            }
         }
     else:
         autosize_summary = {"enabled": False, "reason": "not_configured", "new_size_usd": None, "cooldown_remaining": 0}
@@ -377,6 +407,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         # DEPRECATED: will be removed in schema v2. Use checks_count.
         "deprecated_legacy_trades_count": quotes_total,
         "tail_losses": tail_losses,
+        "tail_losses_reason": tail_losses_reason,  # Explains empty tail_losses
         "top_reject_reasons": top_rejects,
         "autosize": autosize_summary,
         "top_signals": top_signals,  # All signals (for debug/audit)

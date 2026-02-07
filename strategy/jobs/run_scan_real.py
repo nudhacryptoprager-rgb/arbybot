@@ -905,6 +905,7 @@ def run_scan(
             "paper_size_usd": config.get("paper_size_usd", 1000),
             "gas_usd_estimate": config.get("gas_usd_estimate", 0.10),
             "paper_slippage_bps": config.get("paper_slippage_bps", 0),
+            "autosize": config.get("autosize", {}),  # M5: autosize config for daily_report
         },
         "quotes_total": stats["quotes_total"],
         "quotes_fetched": stats["quotes_fetched"],
