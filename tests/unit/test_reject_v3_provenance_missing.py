@@ -34,11 +34,16 @@ def test_v3_quote_without_provenance_is_rejected():
     # Config that should trigger v3 provenance check
     cfg = {
         "chain_id": 42161,
+        "chain": "arbitrum_one",
         "dexes": ["uniswap_v3"],  # v3 requires provenance
         "quote_decimals": {"WETH": 18, "USDC": 6},
         "tokens_anchor_price": {"WETH_USDC": 2600},
         "price_sanity_enabled": True,
         "price_sanity_max_deviation_bps": 100,  # Strict: 1% max deviation
+        "pairs": [{"base": "WETH", "quote": "USDC"}],
+        "pools": {
+            "uniswap_v3_WETH_USDC": "0x1234567890123456789012345678901234567890",
+        },
     }
     
     # Skip RPC, use fake block
@@ -96,9 +101,14 @@ def test_reject_histogram_structure():
     tmp = Path(tempfile.mkdtemp())
     cfg = {
         "chain_id": 42161,
+        "chain": "arbitrum_one",
         "dexes": ["uniswap_v3"],
         "quote_decimals": {"WETH": 18, "USDC": 6},
         "tokens_anchor_price": {"WETH_USDC": 1900},  # Close to typical ETH price
+        "pairs": [{"base": "WETH", "quote": "USDC"}],
+        "pools": {
+            "uniswap_v3_WETH_USDC": "0x1234567890123456789012345678901234567890",
+        },
     }
     
     os.environ["ARBY_SKIP_RPC"] = "1"
@@ -139,6 +149,7 @@ def test_truth_report_has_config_params():
     tmp = Path(tempfile.mkdtemp())
     cfg = {
         "chain_id": 42161,
+        "chain": "arbitrum_one",
         "dexes": ["uniswap_v3"],
         "quote_decimals": {"WETH": 18, "USDC": 6},
         "tokens_anchor_price": {"WETH_USDC": 1900},
@@ -146,6 +157,10 @@ def test_truth_report_has_config_params():
         "paper_size_usd": 500,  # Custom size
         "gas_usd_estimate": 0.05,  # Custom gas
         "paper_slippage_bps": 2,  # Custom slippage
+        "pairs": [{"base": "WETH", "quote": "USDC"}],
+        "pools": {
+            "uniswap_v3_WETH_USDC": "0x1234567890123456789012345678901234567890",
+        },
     }
     
     os.environ["ARBY_SKIP_RPC"] = "1"
@@ -185,9 +200,14 @@ def test_pnl_marked_deprecated():
     tmp = Path(tempfile.mkdtemp())
     cfg = {
         "chain_id": 42161,
+        "chain": "arbitrum_one",
         "dexes": ["uniswap_v3"],
         "quote_decimals": {"WETH": 18, "USDC": 6},
         "tokens_anchor_price": {"WETH_USDC": 1900},
+        "pairs": [{"base": "WETH", "quote": "USDC"}],
+        "pools": {
+            "uniswap_v3_WETH_USDC": "0x1234567890123456789012345678901234567890",
+        },
     }
     
     os.environ["ARBY_SKIP_RPC"] = "1"

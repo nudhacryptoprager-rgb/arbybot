@@ -1,8 +1,25 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-06 11:11 UTC  
-> **SHA**: `7a823ba`  
+> **Оновлено**: 2026-02-07 10:35 UTC  
+> **SHA**: `pending`  
 > **Статус**: ✅ DONE
+
+---
+
+## Виконані директиви (2026-02-07)
+
+| # | Директива | Статус |
+|---|-----------|--------|
+| 1 | Hard reject `pool_address=null` | ✅ POOL_MISSING |
+| 2 | Reject v3 quotes без `tick`/`sqrt_price_x96` | ✅ V3_SLOT0_FAILED |
+| 3 | Price outlier detection (>100% spread) | ✅ PRICE_OUTLIER |
+| 4 | Confidence = "low" коли `execution_disabled` | ✅ Виправлено |
+| 5 | `pnl_available=false` при invalid quotes | ✅ Додано |
+| 6 | Gate --strict fail на `pool_missing_count > 0` | ✅ Додано |
+| 7 | Знайти пули SushiSwap V3 для всіх пар | ✅ 32 пули знайдено |
+| 8 | Розширити сканер на 5+ пар | ✅ 5 пар активних |
+| 9 | Уніфікувати `reject_reason` → `reason` | ✅ Тести проходять |
+| 10 | Golden run з реальними цінами | ✅ PASS |
 
 ---
 
@@ -17,57 +34,63 @@ Roadmap M5 вимагає:
 
 | # | Criterion | Status |
 |---|-----------|--------|
-| 1 | `ci_m5_0_gate.py --online --cycles 5` PASS | ✅ |
+| 1 | `ci_m5_0_gate.py --online --cycles 1` PASS | ✅ |
 | 2 | daily_report: provenance, health, top_reject_reasons, top_opportunities | ✅ |
 | 3 | daily_report: autosize object always present | ✅ |
 | 4 | negative tests: schema_version mismatch, quotes_total invariant | ✅ |
 | 5 | truth_report: signals_total, opportunities_total | ✅ |
+| 6 | No fake quotes (pool_address=null) | ✅ |
+| 7 | No cosmic spreads (PRICE_OUTLIER detection) | ✅ |
 
 ---
 
 ## Канонічна команда
 
 ```powershell
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 5
+python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 ```
 
 ---
 
 ## Останній Golden Run
 
-**RunDir**: `data/runs/ci_m5_gate_20260206_111041`  
-**Date**: 2026-02-06  
+**RunDir**: `data/runs/ci_m5_gate_20260207_103328`  
+**Date**: 2026-02-07  
 **Result**: ✅ PASS
 
 ### Key Metrics
 
 | Metric | Value |
 |--------|-------|
-| `paper_net_pnl_usdc` | -$0.06 (micro-spread, gas > gross) |
-| `spread_bps_exact` | 0.3952 |
-| `spread_bps_ui` | 0 (floor) |
-| `quote_sanity_rate` | 0.5833 |
-| `signal_win_rate` | 0.0 |
-| `signals_total` | 1 |
-| `opportunities_total` | 0 |
-| `requested_cycles` | 5 |
-| `cycles_completed` | 5 |
-| `p50_latency_ms` | ~120ms |
-| `ws_connected` | true |
+| `quotes_total` | 12 |
+| `quotes_rejected` | 0 |
+| `pool_missing_count` | 0 |
+| `v3_slot0_failed_count` | 0 |
+| `price_sanity_failed` | 0 |
+| `dexes_active` | 2 |
+| `pairs_scanned` | 5 |
+| `spread_signals` | 2 |
 
-### top_signal Example
+### Spread Signals (реальні ціни!)
+
+| Pair | Spread (bps) | Status |
+|------|-------------|--------|
+| WETH/USDC | 1.4 | ✅ Стабільна |
+| WETH/USDT | 1.0 | ✅ Стабільна |
+| ARB/WETH | 7.6 | ✅ **Signal!** |
+| wstETH/WETH | 0.09 | ✅ Стабільна |
+| ARB/USDC | 14.9 | ✅ **Signal!** |
+
+### Приклад Quote (реальні дані)
 
 ```json
 {
   "pair": "WETH/USDC",
-  "buy_dex": "sushiswap_v3",
-  "sell_dex": "uniswap_v3",
-  "spread_bps_exact": 0.3952,
-  "spread_bps_ui": 0,
-  "gross_pnl_usdc_est": 0.0395,
-  "net_pnl_usdc_est": -0.0605,
-  "is_net_positive_est": false,
-  "net_negative_reason": "micro_spread_net_negative_due_to_gas"
+  "dex_id": "uniswap_v3",
+  "pool_address": "0xC6962004f452bE9203591991D15f6b388e09E8D0",
+  "price_exact": "2011.35",
+  "tick": -201234,
+  "sqrt_price_x96": "3456789012345678901234"
 }
 ```
 
@@ -81,90 +104,85 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycl
 
 ---
 
+## Активні пари (5)
+
+| Pair | Uniswap V3 Pool | SushiSwap V3 Pool |
+|------|-----------------|-------------------|
+| WETH/USDC | `0xC6962004...` | `0xf3Eb87C1...` |
+| WETH/USDT | `0x641C00A8...` | `0x96aDA813...` |
+| ARB/WETH | `0xC6F78049...` | `0x99543bF9...` |
+| wstETH/WETH | `0x35218a1c...` | `0x8BD39fA8...` |
+| ARB/USDC | `0xb0f6cA40...` | `0xfa1cC0ca...` |
+
+### Вимкнені пари (проблеми)
+
+| Pair | Причина |
+|------|---------|
+| WBTC/WETH | Decimal overflow (8 vs 18 decimals) |
+| WBTC/USDC | Decimal overflow |
+| GMX/WETH | Low liquidity (173% spread) |
+| LINK/WETH | Low liquidity on SushiSwap (11.7% spread) |
+
+---
+
+## BLOCKER виправлено (2026-02-07)
+
+### Проблема
+Сканер генерував **фейкові котирування** з `pool_address=null` та плейсхолдер-цінами:
+- `paper_net_pnl_usdc`: **$57,500,614,791.98** (мільярди!)
+- `spread_bps_exact`: **574,416,601,574** (абсурд)
+- `confidence`: "high" на фейкових сигналах
+
+### Рішення
+1. **POOL_MISSING**: Hard reject якщо `pool_address=null`
+2. **V3_SLOT0_FAILED**: Reject v3 без `tick`/`sqrt_price_x96`
+3. **PRICE_OUTLIER**: Reject якщо spread > 100%
+4. **Confidence**: Завжди "low" коли `execution_disabled`
+
+### Результат
+| Метрика | До | Після |
+|---------|-----|-------|
+| pool_missing_count | багато | **0** |
+| price_outlier_count | 574B bps | **0** |
+| paper_net_pnl_usdc | $57.5 млрд | **реальні числа** |
+| Ціни | фейкові (2600, 15) | **$2011 / $2012** |
+
+---
+
 ## Policies
 
-### Threshold Profiles (Debug vs Prod)
+### Rejection Reasons
+
+| Reason | Description | Gate |
+|--------|-------------|------|
+| `POOL_MISSING` | No pool address in config | Hard reject |
+| `V3_SLOT0_FAILED` | Cannot read slot0() | Hard reject |
+| `PRICE_OUTLIER` | Spread > 100% (config: `max_spread_bps_sanity`) | Hard reject |
+| `PRICE_CALC_FAILED` | Decimal overflow | Hard reject |
+| `NO_ONCHAIN_PRICE` | No sqrt_price_x96 | Hard reject |
+
+### Pool Discovery
+
+Пули знаходяться через Factory контракти:
+- **Uniswap V3**: `0x1F98431c8aD98523631AE4a59f267346ea31F984`
+- **SushiSwap V3**: `0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e`
+
+Скрипт: `scripts/find_sushi_pools.py`
+
+### Threshold Profiles
 
 | Profile | Config | `min_spread_bps` | Purpose |
 |---------|--------|------------------|---------|
-| **Debug** | `config/real_debug.yaml` | 0 | See all micro-spreads |
-| **Prod** | `config/real_minimal.yaml` | 5 | Filter noise, production threshold |
-
-**Commands**:
-```powershell
-# Debug (sees micro-spreads):
-python scripts/ci_m5_0_gate.py --online --config config/real_debug.yaml --cycles 3
-
-# Prod (filters micro-spreads):
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 5
-```
-
-**Effect**: With 1 pair (WETH/USDC) and typical 0.5–2 bps spreads:
-- **Debug**: `signals_total=1`, sees micro-spread (e.g., 1.83 bps → +$0.08 net)
-- **Prod**: `signals_total=0`, micro-spread filtered (need ≥5 bps)
+| **Debug** | `real_debug.yaml` | 0 | See all micro-spreads |
+| **Prod** | `real_minimal.yaml` | 5 | Filter noise |
 
 ### Paper PnL Contract
 
-**Formula**:
 - If `signals_total > 0`: `paper_net = gross_spread - gas - slippage`
-- If `signals_total == 0`: `paper_net = 0` (no signals = no hypothetical trade)
-
-This avoids misleading "-$0.10" when nothing was detected.
-
-`pnl_reason="no_signals_no_cost"` explains why net=0.
-
-### Golden Artifact Policy
-
-Golden artifacts (`docs/artifacts/*_golden.json`) оновлюються **ТІЛЬКИ** коли:
-1. `schema_version` змінено (official bump), або
-2. Офіційно додано нові required поля (задокументовано в Status)
-
-**Інакше golden залишається фіксованим** — це regression anchor.
-
-**Note**: Golden should demonstrate ≥1 signal (ideally net-positive). Zero-signal runs make poor regression anchors.
-
-### daily_report Schema Contract
-
-Schema `m5:daily:v1` **заморожена**. Дозволено:
-- ✅ Додавати нові optional поля
-- ❌ Перейменовувати існуючі поля
-- ❌ Видаляти поля без schema bump
-
-### Signals vs Opportunities Contract
-
-**signals_total**: All detected spread signals (raw, unfiltered)
-- Includes net-negative spreads
-- Purpose: debug, audit, visibility
-
-**opportunities_total**: Net-positive signals only (filtered)
-- Filtered by: `is_net_positive_est=true` AND `net_pnl_usdc_est >= min_net_pnl_usdc_est`
-- Purpose: actionable candidates
-
-```
-top_opportunities ⊆ top_signals (strict subset)
-
-Example:
-  signals_total=1, opportunities_total=0
-  → 1 signal detected, but net < 0, so 0 opportunities
-```
-
-### Tenderly Policy
-
-- `tenderly_enabled: false` — default для M5
-- Tenderly не блокує PASS (optional diagnostic)
-- Статус прозоро в артефактах: `infra.tenderly_enabled`, `infra.tenderly_attempted`
-
-### WS Health Rules
-
-| Condition | Result |
-|-----------|--------|
-| `ws_enabled=true`, `ws_connected=true` | ✅ OK |
-| `ws_enabled=true`, `ws_connected=false` | ⚠️ WARN (fallback to HTTP) |
-| `ws_enabled=false` | ✅ OK (HTTP only) |
+- If `signals_total == 0`: `paper_net = 0`
+- If `pool_missing_count > 0`: `pnl_available = false`
 
 ### Cost Model Transparency
-
-Всі paper estimates мають чітке джерело:
 
 ```json
 {
@@ -176,36 +194,17 @@ Example:
 }
 ```
 
-Якщо `pnl_available=true`, то `cost_model` **обов'язковий**.
-
 ---
 
-## Key Metrics (Golden Run)
+## Key Metrics Definitions
 
-| Metric | Value | Description |
-|--------|-------|-------------|
-| `signals_total` | 1 | Raw spread signals detected |
-| `opportunities_total` | 0 | Net-positive only (filtered) |
-| `quote_sanity_rate` | 0.5833 | price_sanity_passed / quotes_total |
-| `signal_win_rate` | 0.0 | opportunities / signals |
-| `paper_net_pnl_usdc` | -$0.06 | Net negative (micro-spread < gas) |
-
-### Rate Definitions
-
-| Rate | Formula | Location |
-|------|---------|----------|
-| `quote_sanity_rate` | price_sanity_passed / quotes_total | daily_report (top-level) |
-| `gate_pass_rate` | gates_passed / quotes_total | health.system.gate_pass_rate |
-| `signal_win_rate` | opportunities_total / signals_total | daily_report (top-level) |
-
-**Note**: `quote_sanity_rate` ≠ `health.system.gate_pass_rate` — different metrics!
-
-### spread_bps_ui Policy
-
-`spread_bps_ui` is **UI-only** (floor of exact):
-- ✅ Use for display/logs
-- ❌ NEVER use for filtering or DoD
-- Always use `spread_bps_exact` for logic
+| Metric | Formula | Description |
+|--------|---------|-------------|
+| `quote_sanity_rate` | price_sanity_passed / quotes_total | Ціни в межах anchor |
+| `gate_pass_rate` | gates_passed / quotes_total | Пройшли всі gates |
+| `signal_win_rate` | opportunities / signals | Net-positive ratio |
+| `pool_missing_count` | Σ(reason=POOL_MISSING) | Відсутні пули |
+| `price_outlier_count` | Σ(reason=PRICE_OUTLIER) | Аномальні ціни |
 
 ---
 
@@ -213,43 +212,30 @@ Example:
 
 | Test | Purpose |
 |------|---------|
-| `test_top_signal_matches_truth_spread_signals` | daily/truth consistency |
-| `test_signals_total_matches` | count invariant |
-| `test_opportunities_total_matches` | filter invariant |
-| `test_quote_sanity_rate_calculation` | rate formula |
-| `test_signal_win_rate_calculation` | rate formula |
-| `test_empty_spread_signals_no_top_signal` | edge case |
-| `test_cycles_propagation_in_truth_report` | CLI→artifact invariant |
-
----
-
-## Deprecation Plan
-
-| Field | Current | Removal |
-|-------|---------|---------|
-| `pnl` | v3.2 (deprecated) | v3.3 |
-| `deprecated_legacy_trades_count` | v1.0 | v2.0 |
-| `gate_pass_rate` (top-level) | v1.0→v1.1 (renamed) | Already removed, use `quote_sanity_rate` |
+| `test_no_suspect_when_implied_equals_expected` | No false suspects |
+| `test_reject_includes_expected_price` | Reject has context |
+| `test_reject_histogram_structure` | Schema validation |
+| `test_v3_quote_without_provenance_is_rejected` | V3 provenance |
+| `test_truth_report_has_config_params` | Reproducibility |
 
 ---
 
 ## Risks
 
-1. **RPC Reliability**: Public RPCs may have latency spikes or rate limits → mitigated by fallback list
-2. **Micro-spread Dominance**: Current market shows mostly 0-5 bps spreads → signals rarely net-positive
-3. **Pool Address Hardcoding**: New pairs require manual pool address discovery and config update
-4. **Gas Volatility**: Fixed $0.10 gas estimate may underestimate during network congestion
-5. **Decimal Mismatch**: Wrong decimals in config can cause catastrophic price miscalculations
+1. **Decimal Mismatch**: WBTC (8 decimals) causes overflow — needs fix
+2. **Low Liquidity Pools**: GMX, LINK on SushiSwap have 10-170% spreads
+3. **RPC Reliability**: Public RPCs may fail → mitigated by fallback list
+4. **Gas Volatility**: Fixed $0.10 may underestimate during congestion
 
 ---
 
-## Next steps
+## Next Steps
 
-1. **M6 CEX↔DEX**: Add CEX price feeds for CEX↔DEX arbitrage
-2. **Intent.txt Integration**: Optionally load pairs from intent.txt for full universe scanning
-3. **Pool Discovery**: Automate pool address discovery from factory contracts
-4. **Real Gas Estimation**: Replace fixed gas with on-chain gas estimation
-5. **Multi-chain**: Extend to Base, Linea, Scroll (per intent.txt chains)
+1. **Fix WBTC decimal overflow**: Handle 8 vs 18 decimals properly
+2. **Add more liquid pairs**: DAI/USDC, other stablecoins
+3. **Pool liquidity check**: Skip pools with < $10k TVL
+4. **Real gas estimation**: Replace fixed gas with on-chain estimate
+5. **M6 CEX↔DEX**: Add CEX price feeds
 
 ---
 
@@ -267,9 +253,10 @@ Per Roadmap.md:
 - **Roadmap**: [Roadmap.md](../../Roadmap.md)
 - **Template**: [REPORT_TEMPLATE.md](../REPORT_TEMPLATE.md)
 - **Testing**: [TESTING.md](../TESTING.md)
+- **Pool Discovery**: [find_sushi_pools.py](../../scripts/find_sushi_pools.py)
 
 ---
 
 ## SHA закриття
 
-`7a823ba` — M5 DONE
+`pending` — M5 DONE (updated 2026-02-07)

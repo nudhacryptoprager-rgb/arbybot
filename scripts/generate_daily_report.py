@@ -138,11 +138,26 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
 
     # rejects reasons
     reasons_counter = Counter()
+    has_critical_rejects = False  # Track if there are POOL_MISSING or PRICE_OUTLIER rejects
     for r in (reject.get("rejects") or []):
-        reason = r.get("error") or r.get("suspect_reason") or "unknown"
+        reason = r.get("reject_reason") or r.get("error") or r.get("suspect_reason") or "unknown"
         reasons_counter[reason] += 1
+        # Check for critical reject types that invalidate PnL
+        if reason in ("POOL_MISSING", "V3_SLOT0_FAILED", "PRICE_OUTLIER", "NO_ONCHAIN_PRICE"):
+            has_critical_rejects = True
 
     top_rejects = [{"reason": k, "count": v} for k, v in reasons_counter.most_common(10)]
+    
+    # Additional check from reject histogram
+    pool_missing_count = reject.get("pool_missing_count", 0)
+    price_outlier_count = reject.get("price_outlier_count", 0)
+    if pool_missing_count > 0 or price_outlier_count > 0:
+        has_critical_rejects = True
+    
+    # If critical rejects exist, mark pnl as unavailable (data quality issue)
+    if has_critical_rejects and pnl_available:
+        pnl_available = False
+        pnl_reason = "invalid_quotes_present"
 
     # tail losses: use suspect_summary examples if available (placeholder)
     tail_losses = []

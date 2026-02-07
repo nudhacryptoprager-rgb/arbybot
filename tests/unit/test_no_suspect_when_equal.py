@@ -9,9 +9,15 @@ def test_no_suspect_when_implied_equals_expected(monkeypatch):
     monkeypatch.setenv("ARBY_FAKE_BLOCK", "123")
     tmp = Path(tempfile.mkdtemp())
     # Set tokens_anchor_price equal to the implied calculation so implied == expected
+    # Must include pool addresses to avoid POOL_MISSING rejects
     cfg = {
         "chain_id": 42161,
+        "chain": "arbitrum_one",
         "dexes": ["uniswap_v3"],
+        "pairs": [{"token_in": "WETH", "token_out": "USDC", "fee_tiers": [3000]}],
+        "pools": {
+            "uniswap_v3_WETH_USDC_3000": "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443",
+        },
         "quote_decimals": {"WETH": 18, "USDC": 6},
         "tokens_anchor_price": {"WETH_USDC": 2600},
     }

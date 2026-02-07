@@ -91,6 +91,27 @@ def validate_report(path: Path, strict: bool = False) -> List[str]:
         if qf > 0 and p50 is None:
             errors.append("health_rpc_p50_missing_when_quotes_fetched")
 
+        # CRITICAL: Check for invalid quotes (POOL_MISSING, PRICE_OUTLIER) in strict mode
+        # These indicate data quality issues that produce fake spreads
+        pool_missing = 0
+        price_outlier = 0
+        for r in tr:
+            reason = r.get("reason", "")
+            if reason == "POOL_MISSING":
+                pool_missing = r.get("count", 0)
+            elif reason == "PRICE_OUTLIER":
+                price_outlier = r.get("count", 0)
+        
+        if pool_missing > 0:
+            errors.append(f"strict_pool_missing_count_{pool_missing}")
+        if price_outlier > 0:
+            errors.append(f"strict_price_outlier_count_{price_outlier}")
+        
+        # Also check pnl_available - if false due to invalid_quotes, this is a problem
+        pnl_reason = j.get("pnl_reason")
+        if pnl_reason == "invalid_quotes_present":
+            errors.append("strict_pnl_unavailable_due_to_invalid_quotes")
+
         # top_opportunities sanity: if present non-empty, require source + one of spread_pct/price/confidence
         tops = j.get("top_opportunities") or []
         if tops and isinstance(tops, list):

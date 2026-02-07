@@ -8,7 +8,17 @@ def test_reject_includes_expected_price(monkeypatch):
     monkeypatch.setenv("ARBY_SKIP_RPC", "1")
     monkeypatch.setenv("ARBY_FAKE_BLOCK", "123")
     tmp = Path(tempfile.mkdtemp())
-    cfg = {"chain_id": 42161, "dexes": ["sushiswap_v3"], "quote_decimals": {"WETH": 18, "USDC": 6}, "tokens_anchor_price": {"WETH_USDC": 2600}}
+    cfg = {
+        "chain_id": 42161,
+        "chain": "arbitrum_one",
+        "dexes": ["sushiswap_v3"],
+        "quote_decimals": {"WETH": 18, "USDC": 6},
+        "tokens_anchor_price": {"WETH_USDC": 2600},
+        "pairs": [{"base": "WETH", "quote": "USDC"}],
+        "pools": {
+            "sushiswap_v3_WETH_USDC": "0x1234567890123456789012345678901234567890",
+        },
+    }
     stats = run_scan(cfg, tmp, cycles=1)
     reports = tmp / "reports"
     files = list(reports.glob("reject_histogram_*.json"))

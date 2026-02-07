@@ -306,6 +306,7 @@ def run_scan(
 
     # Build quotes sample - DYNAMIC from config pairs
     quotes_sample: List[Dict[str, Any]] = []
+    rejected_quotes: List[Dict[str, Any]] = []  # Track rejected quotes for histogram
     dexes_list = config.get("dexes") or []
     pools_cfg = config.get("pools", {}) or {}
     
@@ -331,6 +332,16 @@ def run_scan(
         decimals_in = pair_cfg.token_in_decimals
         decimals_out = pair_cfg.token_out_decimals
         
+        # Get anchor price for this pair early (needed for SKIP_RPC fallback)
+        tokens_anchor_price = config.get("tokens_anchor_price") or {}
+        anchor_price = tokens_anchor_price.get(token_pair_tag)
+        if not anchor_price:
+            # Try reversed tag
+            reversed_tag = f"{token_out}_{token_in}"
+            anchor_price = tokens_anchor_price.get(reversed_tag)
+            if anchor_price:
+                anchor_price = 1.0 / anchor_price
+        
         for dex in dexes_list:
             # Find pool address using helper
             pool_addr = get_pool_address(config, dex, token_pair_tag)
@@ -342,23 +353,59 @@ def run_scan(
                             pool_addr = v
                             break
 
+            # CRITICAL: Hard reject if pool_address is missing
+            # This prevents fake quotes with placeholder prices
+            if not pool_addr:
+                rejected_quotes.append({
+                    "pair": f"{token_in}/{token_out}",
+                    "dex_id": dex,
+                    "reason": "POOL_MISSING",
+                    "gate_passed": False,
+                    "error": f"No pool address configured for {dex}_{token_pair_tag}",
+                })
+                logger.warning("POOL_MISSING: %s %s/%s - no pool address, skipping", dex, token_in, token_out)
+                continue  # Skip this quote entirely
+
             # Read slot0 for v3 provenance (tick + sqrtPriceX96)
             tick_val, sqrt_price_val = None, None
-            if pool_addr and "v3" in dex.lower():
+            skip_rpc = os.environ.get("ARBY_SKIP_RPC") == "1"
+            if "v3" in dex.lower():
                 tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url_for_slot0, current_block)
+                
+                # CRITICAL: For v3 pools, tick and sqrt_price_x96 are REQUIRED
+                # Without them we cannot get real on-chain price
+                # Exception: In SKIP_RPC test mode, use anchor price as fallback
+                if tick_val is None or sqrt_price_val is None:
+                    if skip_rpc and anchor_price is not None:
+                        # Test mode: use anchor price directly to simulate valid quote
+                        # This allows tests to run without RPC while still exercising validation logic
+                        logger.debug("SKIP_RPC mode: using anchor price %s for %s/%s", anchor_price, token_in, token_out)
+                        # Synthesize sqrtPriceX96 from anchor price for consistent quote generation
+                        # sqrtPriceX96 = sqrt(price * 2^192 / 10^(decimals_diff))
+                        from math import sqrt
+                        try:
+                            decimals_diff_pow = 10 ** (decimals_in - decimals_out)
+                            raw_price = anchor_price / decimals_diff_pow
+                            sqrt_price_val = int(sqrt(raw_price) * (2 ** 96))
+                            tick_val = 0  # Placeholder for test mode
+                        except Exception as e:
+                            logger.warning("Failed to synthesize sqrtPriceX96 from anchor: %s", e)
+                            sqrt_price_val = None
+                    else:
+                        rejected_quotes.append({
+                            "pair": f"{token_in}/{token_out}",
+                            "dex_id": dex,
+                            "pool_address": pool_addr,
+                            "reason": "V3_SLOT0_FAILED",
+                            "gate_passed": False,
+                            "error": f"Failed to read slot0 from pool {pool_addr}",
+                        })
+                        logger.warning("V3_SLOT0_FAILED: %s %s/%s pool=%s - cannot read slot0, skipping", 
+                                       dex, token_in, token_out, pool_addr[:10] + "...")
+                        continue  # Skip this quote - no real price available
 
-            # Calculate price_exact from sqrt_price_x96 if available
-            # sqrtPriceX96 = sqrt(price) * 2^96
-            # price = (sqrtPriceX96 / 2^96)^2 * 10^(decimals_in - decimals_out)
+            # Calculate price_exact from sqrt_price_x96 (REQUIRED for v3)
             price_exact = None
-            
-            # Default anchor price from config or fallback
-            anchor_prices = config.get("tokens_anchor_price", {})
-            anchor_key = f"{token_in}_{token_out}"
-            default_anchor = anchor_prices.get(anchor_key, anchor_prices.get("WETH_USDC", 2600))
-            
-            amount_out_wei_val = int(default_anchor * (10 ** decimals_out))  # Default fallback
-            amount_out_human_str = str(default_anchor)
             
             if sqrt_price_val is not None and sqrt_price_val > 0:
                 try:
@@ -377,23 +424,29 @@ def run_scan(
                     amount_out_wei_val = int(amount_out_human_val * (10 ** decimals_out))
                     amount_out_human_str = str(round(amount_out_human_val, 6))
                 except Exception as e:
-                    logger.debug("Failed to calculate price_exact: %s", e)
-                    price_exact = None
-                    price_str = str(default_anchor)
+                    logger.warning("PRICE_CALC_FAILED: %s %s/%s - %s", dex, token_in, token_out, e)
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "pool_address": pool_addr,
+                        "reason": "PRICE_CALC_FAILED",
+                        "gate_passed": False,
+                        "error": str(e),
+                    })
+                    continue  # Skip - cannot calculate real price
             else:
-                try:
-                    from core.validators import normalize_price
-                    price_val, price_diag = normalize_price(
-                        amount_in_wei=10 ** decimals_in,
-                        amount_out_wei=amount_out_wei_val,
-                        decimals_in=decimals_in,
-                        decimals_out=decimals_out,
-                        token_in=token_in,
-                        token_out=token_out,
-                    )
-                    price_str = str(price_val)
-                except Exception:
-                    price_str = str(Decimal(default_anchor))
+                # For non-v3 pools or when sqrt_price not available
+                # This should not happen for v3 pools (already rejected above)
+                logger.warning("NO_ONCHAIN_PRICE: %s %s/%s - no sqrt_price_x96", dex, token_in, token_out)
+                rejected_quotes.append({
+                    "pair": f"{token_in}/{token_out}",
+                    "dex_id": dex,
+                    "pool_address": pool_addr,
+                    "reason": "NO_ONCHAIN_PRICE",
+                    "gate_passed": False,
+                    "error": "No on-chain price available (sqrt_price_x96 missing)",
+                })
+                continue  # Skip - no real price
 
             q = QuoteCompat(
                 dex_id=dex,
@@ -418,6 +471,15 @@ def run_scan(
             if price_exact is not None:
                 q_dict["price_exact"] = str(price_exact)
             quotes_sample.append(q_dict)
+
+    # Update stats with reject counts
+    stats["quotes_rejected"] = len(rejected_quotes)
+    stats["pool_missing_count"] = sum(1 for r in rejected_quotes if r.get("reason") == "POOL_MISSING")
+    stats["v3_slot0_failed_count"] = sum(1 for r in rejected_quotes if r.get("reason") == "V3_SLOT0_FAILED")
+    
+    logger.info("Quotes: %d valid, %d rejected (pool_missing=%d, slot0_failed=%d)",
+                len(quotes_sample), len(rejected_quotes),
+                stats["pool_missing_count"], stats["v3_slot0_failed_count"])
 
     dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
     stats["dexes_active"] = len(dexes_active_list)
@@ -624,10 +686,13 @@ def run_scan(
     reject_data = {
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
-        "rejects": sanity_rejects,
-        "sample_rejects": sanity_rejects if sanity_rejects else [],
-        "total_rejects": len(sanity_rejects),
+        "rejects": sanity_rejects + rejected_quotes,  # Include all rejects
+        "sample_rejects": (sanity_rejects + rejected_quotes)[:10] if (sanity_rejects or rejected_quotes) else [],
+        "total_rejects": len(sanity_rejects) + len(rejected_quotes),
         "price_sanity_failed": len(sanity_rejects),
+        "pool_missing_count": stats.get("pool_missing_count", 0),
+        "v3_slot0_failed_count": stats.get("v3_slot0_failed_count", 0),
+        "price_outlier_count": sum(1 for r in rejected_quotes if r.get("reason") == "PRICE_OUTLIER"),
     }
 
     # stats: suspect counters separate from sanity
@@ -688,9 +753,36 @@ def run_scan(
             if buy_price <= 0 or sell_price <= 0:
                 continue
 
+            # CRITICAL: Verify both quotes have valid pool addresses
+            # This prevents fake spreads from placeholder quotes
+            buy_pool = best_buy.get("pool_address")
+            sell_pool = best_sell.get("pool_address")
+            if not buy_pool or not sell_pool:
+                logger.warning("INVALID_SPREAD: %s - missing pool address (buy=%s, sell=%s)", 
+                               pair, buy_pool, sell_pool)
+                continue  # Skip - cannot compute valid spread
+
             # Spread = (sell_price - buy_price) / buy_price * 10000 (in bps)
             spread_bps_decimal = (sell_price - buy_price) / buy_price * Decimal("10000")
             spread_bps = int(spread_bps_decimal)
+
+            # CRITICAL: Price outlier detection
+            # If spread > max_spread_bps_sanity (default 10000 = 100%), it's likely a bug
+            max_spread_bps_sanity = config.get("max_spread_bps_sanity", 10000)  # 100% max
+            if abs(spread_bps_decimal) > max_spread_bps_sanity:
+                logger.error("PRICE_OUTLIER: %s spread=%s bps exceeds sanity limit %s", 
+                             pair, spread_bps_decimal, max_spread_bps_sanity)
+                rejected_quotes.append({
+                    "pair": pair,
+                    "buy_dex": best_buy.get("dex_id"),
+                    "sell_dex": best_sell.get("dex_id"),
+                    "reason": "PRICE_OUTLIER",
+                    "gate_passed": False,
+                    "spread_bps": float(spread_bps_decimal),
+                    "max_allowed_bps": max_spread_bps_sanity,
+                    "error": f"Spread {spread_bps_decimal} bps exceeds sanity limit",
+                })
+                continue  # Skip - this is clearly a data quality issue
 
             # Log the exact prices for debugging
             logger.info(
@@ -775,7 +867,11 @@ def run_scan(
                     "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
                     "is_net_positive_est": net_pnl_usdc_estimate > 0,
                     "net_negative_reason": net_negative_reason,
-                    "confidence": "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low",
+                    # Confidence: MUST be low when execution_disabled or paper_cost_model
+                    # High confidence requires: execution_enabled, real cost model, spread >= 20 bps
+                    "confidence": "low" if not config.get("execution_enabled", False) else (
+                        "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low"
+                    ),
                     "confidence_reasons": confidence_reasons,
                 }
                 spread_signals.append(signal)
