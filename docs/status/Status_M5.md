@@ -199,7 +199,36 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 - **Uniswap V3**: `0x1F98431c8aD98523631AE4a59f267346ea31F984`
 - **SushiSwap V3**: `0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e`
 
-Скрипт: `scripts/find_sushi_pools.py`
+Скрипт: `scripts/find_sushi_pools.py`  
+Whitelist: `docs/artifacts/pool_whitelist.json`
+
+### Whitelist Enforcement
+
+| Mode | Behavior |
+|------|----------|
+| `warn` (default) | Якщо pool не знайдений → reject з POOL_MISSING |
+| `enforce` | Якщо pool не в whitelist → ValueError |
+
+Налаштування: `get_pool_address(..., enforcement_mode="warn"|"enforce")`
+
+### Price Direction Semantics
+
+```
+price_direction: "quote_out_per_1_base_in"
+price_note: "1 ARB = X WETH"
+
+Приклад: ARB/WETH = 17282 означає 17282 WETH за 1 ARB
+(це НЕ баг, це просто price = amount_out / amount_in)
+```
+
+### Canary Field: no_rejects
+
+```json
+{
+  "total_rejects": 0,
+  "no_rejects": true  // Canary: легко помітити дрейф якщо зміниться
+}
+```
 
 ### Threshold Profiles
 

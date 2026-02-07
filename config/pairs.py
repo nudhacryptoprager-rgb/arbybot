@@ -247,6 +247,7 @@ def get_pool_address(
     dex: str,
     pair_tag: str,
     fee_tier: Optional[int] = None,
+    enforcement_mode: str = "warn",
 ) -> Optional[str]:
     """
     Look up pool address from config.pools section.
@@ -259,9 +260,15 @@ def get_pool_address(
         dex: DEX key (e.g. "uniswap_v3")
         pair_tag: Pair tag (e.g. "WETH_USDC")
         fee_tier: Optional fee tier (e.g. 500)
+        enforcement_mode: "warn" (default) or "enforce"
+            - warn: return None if not found (will be rejected with POOL_MISSING)
+            - enforce: raise ValueError if not in whitelist
         
     Returns:
         Pool address or None
+        
+    Raises:
+        ValueError: if enforcement_mode="enforce" and pool not in whitelist
     """
     pools = config.get("pools", {})
     
@@ -279,5 +286,9 @@ def get_pool_address(
         if dex in key and pair_tag in key:
             if addr and addr != "0x0000000000000000000000000000000000000000":
                 return addr
+    
+    # Pool not found
+    if enforcement_mode == "enforce":
+        raise ValueError(f"WHITELIST_ENFORCE: pool not found for {dex}/{pair_tag}/{fee_tier}")
     
     return None

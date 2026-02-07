@@ -683,12 +683,14 @@ def run_scan(
             "reason": reject_entry.get("suspect_reason"),
         })
 
+    total_rejects = len(sanity_rejects) + len(rejected_quotes)
     reject_data = {
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
         "rejects": sanity_rejects + rejected_quotes,  # Include all rejects
         "sample_rejects": (sanity_rejects + rejected_quotes)[:10] if (sanity_rejects or rejected_quotes) else [],
-        "total_rejects": len(sanity_rejects) + len(rejected_quotes),
+        "total_rejects": total_rejects,
+        "no_rejects": total_rejects == 0,  # Canary: true when clean, easy to spot drift
         "price_sanity_failed": len(sanity_rejects),
         "pool_missing_count": stats.get("pool_missing_count", 0),
         "v3_slot0_failed_count": stats.get("v3_slot0_failed_count", 0),
@@ -843,6 +845,11 @@ def run_scan(
                     "sell_price": str(round(sell_price, 6)),
                     "buy_pool": best_buy.get("pool_address"),
                     "sell_pool": best_sell.get("pool_address"),
+                    # Price semantics: "quote_out_per_1_base_in"
+                    # e.g., ARB/WETH=17282 means 17282 WETH per 1 ARB (inverted display)
+                    # This is amount_out / amount_in where token_in is base (ARB), token_out is quote (WETH)
+                    "price_direction": "quote_out_per_1_base_in",
+                    "price_note": f"1 {pair.split('/')[0]} = X {pair.split('/')[1]}",
                     # spread_bps_exact: float for micro-spreads (e.g., 0.267) - USE THIS FOR LOGIC
                     # spread_bps_ui: floor() for display - HONEST (may be 0 for micro-spreads)
                     "spread_bps_exact": round(float(spread_bps_decimal), 4),
