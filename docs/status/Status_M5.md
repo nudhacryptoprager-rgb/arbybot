@@ -83,6 +83,36 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycl
 
 ## Policies
 
+### Threshold Profiles (Debug vs Prod)
+
+| Profile | Config | `min_spread_bps` | Purpose |
+|---------|--------|------------------|---------|
+| **Debug** | `config/real_debug.yaml` | 0 | See all micro-spreads |
+| **Prod** | `config/real_minimal.yaml` | 5 | Filter noise, production threshold |
+
+**Commands**:
+```powershell
+# Debug (sees micro-spreads):
+python scripts/ci_m5_0_gate.py --online --config config/real_debug.yaml --cycles 3
+
+# Prod (filters micro-spreads):
+python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 5
+```
+
+**Effect**: With 1 pair (WETH/USDC) and typical 0.5–2 bps spreads:
+- **Debug**: `signals_total=1`, sees micro-spread (e.g., 1.83 bps → +$0.08 net)
+- **Prod**: `signals_total=0`, micro-spread filtered (need ≥5 bps)
+
+### Paper PnL Contract
+
+**Formula**:
+- If `signals_total > 0`: `paper_net = gross_spread - gas - slippage`
+- If `signals_total == 0`: `paper_net = 0` (no signals = no hypothetical trade)
+
+This avoids misleading "-$0.10" when nothing was detected.
+
+`pnl_reason="no_signals_no_cost"` explains why net=0.
+
 ### Golden Artifact Policy
 
 Golden artifacts (`docs/artifacts/*_golden.json`) оновлюються **ТІЛЬКИ** коли:
@@ -90,6 +120,8 @@ Golden artifacts (`docs/artifacts/*_golden.json`) оновлюються **ТІ�
 2. Офіційно додано нові required поля (задокументовано в Status)
 
 **Інакше golden залишається фіксованим** — це regression anchor.
+
+**Note**: Golden should demonstrate ≥1 signal (ideally net-positive). Zero-signal runs make poor regression anchors.
 
 ### daily_report Schema Contract
 
@@ -198,6 +230,26 @@ Example:
 | `pnl` | v3.2 (deprecated) | v3.3 |
 | `deprecated_legacy_trades_count` | v1.0 | v2.0 |
 | `gate_pass_rate` (top-level) | v1.0→v1.1 (renamed) | Already removed, use `quote_sanity_rate` |
+
+---
+
+## Risks
+
+1. **RPC Reliability**: Public RPCs may have latency spikes or rate limits → mitigated by fallback list
+2. **Micro-spread Dominance**: Current market shows mostly 0-5 bps spreads → signals rarely net-positive
+3. **Pool Address Hardcoding**: New pairs require manual pool address discovery and config update
+4. **Gas Volatility**: Fixed $0.10 gas estimate may underestimate during network congestion
+5. **Decimal Mismatch**: Wrong decimals in config can cause catastrophic price miscalculations
+
+---
+
+## Next steps
+
+1. **M6 CEX↔DEX**: Add CEX price feeds for CEX↔DEX arbitrage
+2. **Intent.txt Integration**: Optionally load pairs from intent.txt for full universe scanning
+3. **Pool Discovery**: Automate pool address discovery from factory contracts
+4. **Real Gas Estimation**: Replace fixed gas with on-chain gas estimation
+5. **Multi-chain**: Extend to Base, Linea, Scroll (per intent.txt chains)
 
 ---
 

@@ -1,0 +1,82 @@
+# PATH: config/real_debug.yaml
+#
+# DEBUG CONFIG - Shows all micro-spreads (min_spread_bps=0)
+# Use for visibility and testing; prod should use real_minimal.yaml
+#
+# Inherits from real_minimal.yaml but with relaxed thresholds
+
+# Chain: Arbitrum One
+chain: arbitrum_one
+chain_id: 42161
+
+# RPC endpoints with fallback
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+  - "https://rpc.ankr.com/arbitrum"
+
+# RPC settings
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# 2 DEXes for cross-DEX arbitrage
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+
+# Pairs (currently only WETH/USDC is implemented in scanner)
+pairs:
+  - token_in: WETH
+    token_out: USDC
+    fee_tiers: [500, 3000]
+
+# Pool addresses (verified on Arbitrum)
+pools:
+  uniswap_v3_WETH_USDC_500: "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443"
+  uniswap_v3_WETH_USDC_3000: "0x17c14D2c404D167802b16C450d3c99F88F2c4F4d"
+  sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
+  sushiswap_v3_WETH_USDC_3000: "0xC96525298419f7E00dA8826B733Ee52e271662b5"
+
+# Token addresses
+tokens:
+  WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+  USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+
+# Token decimals
+quote_decimals:
+  WETH: 18
+  USDC: 6
+
+# Quote sizing: 1 ETH
+quote_amount_in_wei: "1000000000000000000"
+
+# Gate thresholds (RELAXED for debug)
+max_slippage_bps: 100
+min_net_bps: 0
+
+# Price sanity gate
+price_sanity_enabled: true
+price_sanity_max_deviation_bps: 5000
+
+# Paper trading settings (DEBUG)
+paper_size_usd: 1000
+paper_slippage_bps: 0
+
+# DEBUG: min_spread_bps=0 shows ALL micro-spreads
+# This helps validate the pipeline even when spreads are tiny
+min_spread_bps: 0  # 0 = any positive spread (DEBUG MODE)
+
+# Net PnL threshold
+min_net_pnl_usdc_est: 0.0
+
+# Gas estimate
+gas_usd_estimate: 0.10
+
+# Execution disabled
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_DEBUG
+
+# Paper trading
+cooldown_seconds: 60
+notion_capital_usdc: "10000.000000"

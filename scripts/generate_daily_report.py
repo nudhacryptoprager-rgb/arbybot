@@ -107,12 +107,19 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         size_usd = sig.get("size_usd") or default_size_usd
         gross_spread_usdc += float(spread_pct) / 100.0 * float(size_usd)
 
-    # minimal cost model: gas-only + optional slippage estimate
-    # paper_net = gross_spread - gas - slippage
+    # Paper PnL calculation:
+    # - If signals_total > 0: paper_net = gross_spread - gas - slippage (per-signal cost)
+    # - If signals_total == 0: paper_net = 0 (no signals = no hypothetical trade = no cost)
+    # This avoids misleading "-$0.10" when nothing was detected
     if gas_usd_estimate is not None:
-        paper_net = gross_spread_usdc - float(gas_usd_estimate) - float(slippage_usd_estimate or 0.0)
+        if len(signals) > 0:
+            # Per-signal cost model: deduct gas for each hypothetical trade
+            paper_net = gross_spread_usdc - float(gas_usd_estimate) - float(slippage_usd_estimate or 0.0)
+        else:
+            # No signals = no trade = no gas cost
+            paper_net = 0.0
         pnl_available = True
-        pnl_reason = None
+        pnl_reason = None if len(signals) > 0 else "no_signals_no_cost"
     else:
         paper_net = gross_spread_usdc
         pnl_available = False
@@ -299,6 +306,28 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
     else:
         signal_win_rate = None
 
+    # Coverage metrics: show what was scanned (explains why signals may be 0)
+    quotes = scan.get("quotes") or []
+    # Derive pair from token_in/token_out if pair field not present
+    pairs_set = set()
+    for q in quotes:
+        pair = q.get("pair")
+        if not pair and q.get("token_in") and q.get("token_out"):
+            pair = f"{q['token_in']}/{q['token_out']}"
+        if pair:
+            pairs_set.add(pair)
+    pairs_scanned = sorted(pairs_set)
+    dexes_active_list = sorted(set(q.get("dex_id") for q in quotes if q.get("dex_id")))
+    pools_quoted = len(set((q.get("dex_id"), q.get("pool_address")) for q in quotes if q.get("pool_address")))
+    coverage = {
+        "pairs_scanned": pairs_scanned,
+        "pairs_count": len(pairs_scanned),
+        "dexes_active_list": dexes_active_list,
+        "dexes_active": len(dexes_active_list),
+        "pools_quoted": pools_quoted,
+        "min_spread_bps": truth.get("config_params", {}).get("min_spread_bps", 0),
+    }
+
     report = {
         "schema_version": "m5:daily:v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -318,6 +347,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         # Rates
         "quote_sanity_rate": quote_sanity_rate,  # price_sanity_passed / quotes_total
         "signal_win_rate": signal_win_rate,  # net_positive / signals_total
+        "paper_win_rate": signal_win_rate,  # alias for gate compat (signals-based)
         "checks_count": quotes_total,
         "quotes_fetched": quotes_fetched,
         "gates_passed": gates_passed,
@@ -337,6 +367,7 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         "top_signals": top_signals,  # All signals (for debug/audit)
         "top_opportunities": top_opportunities,  # Net-positive only (for action)
         "opportunities_reason": opportunities_reason,
+        "coverage": coverage,  # Scan coverage (explains why signals may be 0)
         "top_quotes": top_quotes,
         "health": health,
     }

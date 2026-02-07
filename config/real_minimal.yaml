@@ -110,6 +110,19 @@ tokens:
 quote_decimals:
   WETH: 18
   USDC: 6
+  USDT: 6
+  WBTC: 8
+  ARB: 18
+  LINK: 18
+
+# Anchor prices for each pair (used for price sanity checks)
+# Format: TOKEN_IN_TOKEN_OUT: expected_price
+tokens_anchor_price:
+  WETH_USDC: 2600    # ~$2600 per WETH
+  WETH_USDT: 2600    # ~$2600 per WETH
+  WBTC_WETH: 15      # ~15 WETH per WBTC
+  ARB_WETH: 0.0003   # ~0.0003 WETH per ARB
+  LINK_WETH: 0.004   # ~0.004 WETH per LINK
 
 # Quote sizing: 1 ETH
 quote_amount_in_wei: "1000000000000000000"

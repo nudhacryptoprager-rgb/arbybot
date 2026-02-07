@@ -23,6 +23,7 @@ from decimal import Decimal
 from core.validators import calculate_deviation_bps
 from core.exceptions import BlockPinError
 from chains.providers import register_provider
+from config.pairs import load_pairs, get_pool_address, PairConfig
 import asyncio
 
 logger = logging.getLogger("run_scan_real")
@@ -303,96 +304,120 @@ def run_scan(
         "cycles_completed": cycles,
     }
 
-    # Build quotes sample
+    # Build quotes sample - DYNAMIC from config pairs
     quotes_sample: List[Dict[str, Any]] = []
     dexes_list = config.get("dexes") or []
     pools_cfg = config.get("pools", {}) or {}
-    token_pair_tag = "WETH_USDC"
+    
+    # Load pairs from config (variative system)
+    chain_key = config.get("chain", "arbitrum_one")
+    pairs_list = load_pairs(chain_key, config, use_intent=False)
+    if not pairs_list:
+        # Fallback: single WETH/USDC pair for backwards compat
+        from config.pairs import get_pair_info
+        fallback_pair = get_pair_info(chain_key, "WETH", "USDC")
+        if fallback_pair:
+            pairs_list = [fallback_pair]
+    
+    logger.info("Scanning %d pairs: %s", len(pairs_list), [p.display_name for p in pairs_list])
+    
     # Determine RPC URL for slot0 reads
     rpc_url_for_slot0 = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or (config.get("rpc_endpoints") or [None])[0]
 
-    for dex in dexes_list:
-        # attempt to find a pool address for this dex and token pair
-        pool_addr = None
-        for k, v in pools_cfg.items():
-            if dex in k and token_pair_tag in k:
-                pool_addr = v
-                break
-
-        # Read slot0 for v3 provenance (tick + sqrtPriceX96)
-        tick_val, sqrt_price_val = None, None
-        if pool_addr and "v3" in dex.lower():
-            tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url_for_slot0, current_block)
-
-        # Calculate price_exact from sqrt_price_x96 if available
-        # sqrtPriceX96 = sqrt(price) * 2^96
-        # price = (sqrtPriceX96 / 2^96)^2 * 10^(decimals_in - decimals_out)
-        # For WETH/USDC: decimals_in=18, decimals_out=6 → multiply by 10^12
-        price_exact = None
-        amount_out_wei_val = 2600 * (10 ** 6)  # Default fallback
-        amount_out_human_str = "2600"
+    for pair_cfg in pairs_list:
+        token_pair_tag = pair_cfg.pair_tag  # e.g. "WETH_USDC"
+        token_in = pair_cfg.token_in
+        token_out = pair_cfg.token_out
+        decimals_in = pair_cfg.token_in_decimals
+        decimals_out = pair_cfg.token_out_decimals
         
-        if sqrt_price_val is not None and sqrt_price_val > 0:
-            try:
-                # Price from sqrtPriceX96 for token0/token1
-                # In Uniswap v3: price = (sqrtPriceX96)^2 / 2^192
-                # Adjusted for decimals: WETH(18) vs USDC(6)
-                sqrt_ratio = Decimal(sqrt_price_val) / Decimal(2 ** 96)
-                raw_price = sqrt_ratio * sqrt_ratio
-                # Adjust for decimals: USDC per WETH
-                # token0=WETH, token1=USDC in these pools
-                # price = token1/token0 = USDC/WETH
-                decimals_diff = Decimal(10 ** (18 - 6))  # 10^12
-                price_exact = raw_price * decimals_diff
-                price_str = str(round(price_exact, 6))
-                
-                # Calculate consistent amount_out from price_exact
-                # For 1 WETH input: amount_out = price_exact USDC
-                amount_out_human_val = price_exact  # USDC for 1 WETH
-                amount_out_wei_val = int(amount_out_human_val * (10 ** 6))  # USDC 6 decimals
-                amount_out_human_str = str(round(amount_out_human_val, 6))
-            except Exception as e:
-                logger.debug("Failed to calculate price_exact: %s", e)
-                price_exact = None
-                price_str = "2600"
-        else:
-            try:
-                from core.validators import normalize_price
-                price_val, price_diag = normalize_price(
-                    amount_in_wei=10 ** 18,
-                    amount_out_wei=2600 * (10 ** 6),
-                    decimals_in=config.get("quote_decimals", {}).get("WETH", 18),
-                    decimals_out=config.get("quote_decimals", {}).get("USDC", 6),
-                    token_in="WETH",
-                    token_out="USDC",
-                )
-                price_str = str(price_val)
-            except Exception:
-                price_str = str(Decimal(2600))
+        for dex in dexes_list:
+            # Find pool address using helper
+            pool_addr = get_pool_address(config, dex, token_pair_tag)
+            if not pool_addr:
+                # Try alternate key format: dex_TOKENA_TOKENB without fee
+                for k, v in pools_cfg.items():
+                    if dex in k and token_pair_tag in k:
+                        if v and v != "0x0000000000000000000000000000000000000000":
+                            pool_addr = v
+                            break
 
-        q = QuoteCompat(
-            dex_id=dex,
-            pool_address=pool_addr,
-            token_in="WETH",
-            token_out="USDC",
-            fee=3000,
-            amount_in_wei=10 ** 18,
-            amount_out_wei=amount_out_wei_val,
-            amount_in_human="1",
-            amount_out_human=amount_out_human_str,
-            price=price_str,
-            latency_ms=int(globals().get("rpc_latency", 0) or 10),
-            block_number=current_block,
-            rpc_success=True,
-            gate_passed=True,
-            tick=tick_val,
-            sqrt_price_x96=sqrt_price_val,
-        )
-        # Add price_exact to quote dict for spread calculations
-        q_dict = q.__dict__
-        if price_exact is not None:
-            q_dict["price_exact"] = str(price_exact)
-        quotes_sample.append(q_dict)
+            # Read slot0 for v3 provenance (tick + sqrtPriceX96)
+            tick_val, sqrt_price_val = None, None
+            if pool_addr and "v3" in dex.lower():
+                tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url_for_slot0, current_block)
+
+            # Calculate price_exact from sqrt_price_x96 if available
+            # sqrtPriceX96 = sqrt(price) * 2^96
+            # price = (sqrtPriceX96 / 2^96)^2 * 10^(decimals_in - decimals_out)
+            price_exact = None
+            
+            # Default anchor price from config or fallback
+            anchor_prices = config.get("tokens_anchor_price", {})
+            anchor_key = f"{token_in}_{token_out}"
+            default_anchor = anchor_prices.get(anchor_key, anchor_prices.get("WETH_USDC", 2600))
+            
+            amount_out_wei_val = int(default_anchor * (10 ** decimals_out))  # Default fallback
+            amount_out_human_str = str(default_anchor)
+            
+            if sqrt_price_val is not None and sqrt_price_val > 0:
+                try:
+                    # Price from sqrtPriceX96 for token0/token1
+                    # In Uniswap v3: price = (sqrtPriceX96)^2 / 2^192
+                    sqrt_ratio = Decimal(sqrt_price_val) / Decimal(2 ** 96)
+                    raw_price = sqrt_ratio * sqrt_ratio
+                    # Adjust for decimals difference
+                    decimals_diff = Decimal(10 ** (decimals_in - decimals_out))
+                    price_exact = raw_price * decimals_diff
+                    price_str = str(round(price_exact, 6))
+                    
+                    # Calculate consistent amount_out from price_exact
+                    # For 1 unit token_in: amount_out = price_exact token_out
+                    amount_out_human_val = price_exact
+                    amount_out_wei_val = int(amount_out_human_val * (10 ** decimals_out))
+                    amount_out_human_str = str(round(amount_out_human_val, 6))
+                except Exception as e:
+                    logger.debug("Failed to calculate price_exact: %s", e)
+                    price_exact = None
+                    price_str = str(default_anchor)
+            else:
+                try:
+                    from core.validators import normalize_price
+                    price_val, price_diag = normalize_price(
+                        amount_in_wei=10 ** decimals_in,
+                        amount_out_wei=amount_out_wei_val,
+                        decimals_in=decimals_in,
+                        decimals_out=decimals_out,
+                        token_in=token_in,
+                        token_out=token_out,
+                    )
+                    price_str = str(price_val)
+                except Exception:
+                    price_str = str(Decimal(default_anchor))
+
+            q = QuoteCompat(
+                dex_id=dex,
+                pool_address=pool_addr,
+                token_in=token_in,
+                token_out=token_out,
+                fee=3000,
+                amount_in_wei=10 ** decimals_in,
+                amount_out_wei=amount_out_wei_val,
+                amount_in_human="1",
+                amount_out_human=amount_out_human_str,
+                price=price_str,
+                latency_ms=int(globals().get("rpc_latency", 0) or 10),
+                block_number=current_block,
+                rpc_success=True,
+                gate_passed=True,
+                tick=tick_val,
+                sqrt_price_x96=sqrt_price_val,
+            )
+            # Add price_exact to quote dict for spread calculations
+            q_dict = q.__dict__
+            if price_exact is not None:
+                q_dict["price_exact"] = str(price_exact)
+            quotes_sample.append(q_dict)
 
     dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
     stats["dexes_active"] = len(dexes_active_list)
@@ -518,21 +543,34 @@ def run_scan(
 
     scan_data["infra"] = infra_payload
 
-    # Rejects: compute anchor, implied, deviations
+    # Rejects: compute anchor, implied, deviations (using first pair for reference)
     max_dev = config.get("price_sanity_max_deviation_bps", 5000)
+    
+    # Use first pair for anchor price reference
+    ref_pair = pairs_list[0] if pairs_list else None
+    ref_token_in = ref_pair.token_in if ref_pair else "WETH"
+    ref_token_out = ref_pair.token_out if ref_pair else "USDC"
+    ref_pair_key = f"{ref_token_in}_{ref_token_out}"
+    ref_decimals_in = ref_pair.token_in_decimals if ref_pair else 18
+    ref_decimals_out = ref_pair.token_out_decimals if ref_pair else 6
+    
     try:
-        anchor_price = Decimal(str(config.get("tokens_anchor_price", {}).get("WETH_USDC", 2600)))
+        anchor_price = Decimal(str(config.get("tokens_anchor_price", {}).get(ref_pair_key, 2600)))
     except Exception:
         anchor_price = Decimal("2600")
+    
+    # Get default amount_out from anchor for reference pair
+    ref_amount_out = int(anchor_price * (10 ** ref_decimals_out))
+    
     try:
         from core.validators import normalize_price
         implied_price_dec, diag = normalize_price(
-            amount_in_wei=10 ** 18,
-            amount_out_wei=2600 * (10 ** 6),
-            decimals_in=config.get("quote_decimals", {}).get("WETH", 18),
-            decimals_out=config.get("quote_decimals", {}).get("USDC", 6),
-            token_in="WETH",
-            token_out="USDC",
+            amount_in_wei=10 ** ref_decimals_in,
+            amount_out_wei=ref_amount_out,
+            decimals_in=ref_decimals_in,
+            decimals_out=ref_decimals_out,
+            token_in=ref_token_in,
+            token_out=ref_token_out,
         )
         implied_price = Decimal(str(implied_price_dec))
     except Exception:
@@ -548,14 +586,14 @@ def run_scan(
         implied_lt_expected = False
 
     reject_entry = {
-        "pair": "WETH/USDC",
+        "pair": f"{ref_token_in}/{ref_token_out}",
         "dex_id": dexes_active_list[0] if dexes_active_list else "unknown",
         "pool_fee": 3000,
         "implied_price": str(implied_price),
-        "token_in_decimals": config.get("quote_decimals", {}).get("WETH", 18),
-        "token_out_decimals": config.get("quote_decimals", {}).get("USDC", 6),
-        "amount_in": 10 ** 18,
-        "amount_out": 2600 * (10 ** 6),
+        "token_in_decimals": ref_decimals_in,
+        "token_out_decimals": ref_decimals_out,
+        "amount_in": 10 ** ref_decimals_in,
+        "amount_out": ref_amount_out,
         "orientation": "normal",
         "deviation_bps": deviation_bps,
         "deviation_bps_raw": raw_bps,
@@ -840,524 +878,6 @@ def run_scan(
     for name, path in artifacts.items():
         logger.info("  %s: %s", name, path)
 
-    return stats
-    current_block = None
-    try:
-        # Allow tests to skip real RPC by setting ARBY_SKIP_RPC=1 and ARBY_FAKE_BLOCK
-        if os.environ.get("ARBY_SKIP_RPC") == "1":
-            current_block = int(os.environ.get("ARBY_FAKE_BLOCK", "100"))
-        else:
-            current_block, rpc_latency = get_current_block_via_rpc(config)
-            try:
-                globals()["rpc_latency"] = int(rpc_latency or 0)
-            except Exception:
-                globals()["rpc_latency"] = 0
-            if current_block in FAKE_BLOCK_SENTINELS:
-                raise BlockPinError(f"Invalid current block from RPC: {current_block}")
-    except BlockPinError:
-        # In REAL mode we must fail rather than use a fake block
-        raise
-
-    # Mock scan results (placeholder - real implementation fetches from DEXes)
-    stats = {
-        "quotes_total": 12,
-        "quotes_fetched": 10,
-        "gates_passed": 8,
-        "dexes_active": 3,
-        "price_sanity_passed": 7,
-        "price_sanity_failed": 3,
-        "rpc_errors": 0,
-        "rpc_success_rate": 1.0,
-        "requested_cycles": cycles,
-        "cycles_completed": cycles,
-    }
-
-    # dex list from config for transparency
-    dexes_list = config.get("dexes") or []
-
-    # price stability factor simple heuristic
-    try:
-        price_stability_factor = max(0.0, 1.0 - stats["price_sanity_failed"] / max(1, stats["quotes_total"]))
-    except Exception:
-        price_stability_factor = 1.0
-    stats["price_stability_factor"] = price_stability_factor
-    
-    # Generate artifacts
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    now = datetime.now(timezone.utc).isoformat()
-    
-    # Build a small quotes sample for debugging using real configured DEXes
-    quotes_sample = []
-    pools_cfg = config.get("pools", {}) or {}
-    token_pair_tag = "WETH_USDC"
-    # Determine RPC URL for slot0 reads
-    rpc_url_for_slot0 = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or (config.get("rpc_endpoints") or [None])[0]
-
-    for dex in dexes_list:
-        # attempt to find a pool address for this dex and token pair
-        pool_addr = None
-        for k, v in pools_cfg.items():
-            if dex in k and token_pair_tag in k:
-                pool_addr = v
-                break
-
-        # Read slot0 for v3 provenance (tick + sqrtPriceX96)
-        tick_val, sqrt_price_val = None, None
-        if pool_addr and "v3" in dex.lower():
-            tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url_for_slot0, current_block)
-
-        # Compute a realistic price for the sample using normalize_price when possible
-        try:
-            from core.validators import normalize_price
-            price_val, price_diag = normalize_price(
-                amount_in_wei=10 ** 18,
-                amount_out_wei=2600 * (10 ** 6),
-                decimals_in=config.get("quote_decimals", {}).get("WETH", 18),
-                decimals_out=config.get("quote_decimals", {}).get("USDC", 6),
-                token_in="WETH",
-                token_out="USDC",
-            )
-            price_str = str(price_val)
-        except Exception:
-            price_str = str(Decimal(2600))
-
-        q = QuoteCompat(
-            dex_id=dex,
-            pool_address=pool_addr,
-            token_in="WETH",
-            token_out="USDC",
-            fee=3000,
-            amount_in_wei=10 ** 18,
-            amount_out_wei=2600 * (10 ** 6),
-            amount_in_human="1",
-            amount_out_human="2600",
-            price=price_str,
-            latency_ms=int(globals().get('rpc_latency', 0) or 10),
-            block_number=current_block,
-            rpc_success=True,
-            gate_passed=True,
-            tick=tick_val,
-            sqrt_price_x96=sqrt_price_val,
-        )
-        quotes_sample.append(q.__dict__)
-    # Derive dexes active list from actual quotes_sample to avoid placeholders
-    dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
-    stats["dexes_active"] = len(dexes_active_list)
-
-    # Scan data with schema_version and top-level metrics
-    scan_data = {
-        "timestamp": now,
-        "run_mode": "REGISTRY_REAL",
-        "chain_id": config.get("chain_id", 42161),
-        "current_block": current_block,
-        
-        # Top-level metrics (for backward compat)
-        "quotes_total": stats["quotes_total"],
-        "quotes_fetched": stats["quotes_fetched"],
-        "dexes_active": stats["dexes_active"],
-        "dexes_active_list": dexes_active_list,
-        "price_sanity_passed": stats["price_sanity_passed"],
-        "price_sanity_failed": stats["price_sanity_failed"],
-        
-        # Nested stats (full details)
-        "stats": stats,
-        "quotes": quotes_sample,  # minimal fetched quotes sample
-        "quotes_sample": quotes_sample,
-    }
-    # infra section: indicate provider and transport used (do not record secrets)
-    try:
-        rpc_provider = "public"
-        transport = "http"
-        ws_enabled = False
-        # prefer explicit env overrides; if not present, resolve via core.rpc_urls
-        primary_http = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or os.environ.get("ALCHEMY_RPC_HTTP")
-        primary_ws = os.environ.get("ARBY_RPC_WS_PRIMARY") or os.environ.get("ALCHEMY_RPC_WS")
-        rpc_http_host = None
-        rpc_ws_host = None
-        try:
-            from core.rpc_urls import resolve_rpc_http, resolve_rpc_ws
-        except Exception:
-            resolve_rpc_http = resolve_rpc_ws = None
-
-        if not primary_http and resolve_rpc_http:
-            url, provider_name, diag = resolve_rpc_http(chain_id=config.get("chain_id"), network=os.environ.get("NETWORK"), env=os.environ)
-            primary_http = url
-            rpc_provider = provider_name or rpc_provider
-            if url:
-                try:
-                    from urllib.parse import urlparse
-                    rpc_http_host = urlparse(url).netloc
-                except Exception:
-                    rpc_http_host = None
-
-        # If explicit primary_http indicates alchemy, prefer marking provider accordingly
-        if primary_http and "alchemy" in (primary_http or ""):
-            rpc_provider = "alchemy"
-        # Honor prefer/ws flags from env (injected by gate):
-        prefer_ws = os.environ.get("ARBY_PREFER_WS") == "1"
-        ws_required = os.environ.get("ARBY_WS_REQUIRED") == "1"
-
-        ws_connected = False
-        ws_error = None
-
-        if primary_ws:
-            ws_enabled = True
-            transport = "ws+http"
-            try:
-                from urllib.parse import urlparse
-                rpc_ws_host = urlparse(primary_ws).netloc
-            except Exception:
-                rpc_ws_host = None
-            # Attempt a lightweight WS handshake if available
-            try:
-                try:
-                    import websocket as _wsclient  # websocket-client
-                except Exception:
-                    _wsclient = None
-
-                # Skip WS handshake during unit tests or when ARBY_SKIP_RPC is set
-                if os.environ.get("ARBY_SKIP_RPC") == "1":
-                    ws_connected = False
-                    ws_error = "skipped"
-                else:
-                    if _wsclient:
-                        try:
-                            import time as _time
-                            start = _time.monotonic()
-                            conn = _wsclient.create_connection(primary_ws, timeout=5)
-                            conn.close()
-                            end = _time.monotonic()
-                            ws_handshake_ms = int((end - start) * 1000)
-                            globals()["ws_handshake_ms"] = ws_handshake_ms
-                            ws_connected = True
-                        except Exception as e:
-                            ws_connected = False
-                            ws_error = f"handshake_failed: {e}"
-                    else:
-                        ws_connected = False
-                        ws_error = "websocket-client-missing"
-            except Exception as e:
-                ws_connected = False
-                ws_error = f"ws_check_exception: {e}"
-
-        # If prefer_ws requested but ws not connected and ws_required -> fail
-        if ws_required and not ws_connected:
-            raise RuntimeError(f"WS required but not connected: {ws_error}")
-
-        # ws_attempted and fallback info
-        ws_attempted = bool(primary_ws)
-        ws_fallback_to_http = False
-        if ws_attempted and not ws_connected and primary_http:
-            ws_fallback_to_http = True
-
-        # Treat Tenderly as optional by default. Only mark enabled when a key is present
-        # and a lightweight ping succeeds. Otherwise record as disabled to avoid noise.
-        tenderly_configured = bool(os.environ.get("TENDERLY_ACCESS_KEY"))
-        tenderly_enabled = False
-        tenderly_ok = None
-        tenderly_error = None
-        if tenderly_configured and os.environ.get("ARBY_SKIP_RPC") != "1":
-            try:
-                import httpx
-
-                headers = {"X-Access-Key": os.environ.get("TENDERLY_ACCESS_KEY")}
-                account = os.environ.get("TENDERLY_ACCOUNT")
-                project = os.environ.get("TENDERLY_PROJECT")
-                if account and project:
-                    url = f"https://api.tenderly.co/api/v1/account/{account}/project/{project}"
-                else:
-                    url = "https://api.tenderly.co/api/v1/account"
-
-                resp = httpx.get(url, headers=headers, timeout=5.0)
-                if resp.status_code == 200:
-                    tenderly_enabled = True
-                    tenderly_ok = True
-                    tenderly_error = None
-                else:
-                    # Treat unavailable/4xx/5xx as disabled to avoid false FAILs
-                    tenderly_enabled = False
-                    tenderly_ok = False
-                    tenderly_error = "disabled"
-            except Exception:
-                tenderly_enabled = False
-                tenderly_ok = False
-                tenderly_error = "disabled"
-        else:
-            tenderly_enabled = False
-            tenderly_ok = None
-            tenderly_error = "disabled"
-
-        # include host/provider transparently (no keys)
-        infra_payload = {
-            "rpc_provider": rpc_provider,
-            "transport": transport,
-            "ws_enabled": ws_enabled,
-            "ws_attempted": ws_attempted,
-            "ws_connected": ws_connected,
-            "ws_fallback_to_http": ws_fallback_to_http,
-            "ws_error": ws_error,
-            "tenderly_enabled": tenderly_enabled,
-            "tenderly_ok": tenderly_ok,
-            "tenderly_error": tenderly_error,
-        }
-
-        # Effective HTTP host (from resolved_http or env), plus explicit rpc_http_host
-        effective_http_host = None
-        try:
-            from urllib.parse import urlparse
-
-            effective_http = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or resolved_http
-            if effective_http:
-                effective_http_host = urlparse(effective_http).netloc
-                infra_payload["rpc_effective_http_host"] = effective_http_host
-                infra_payload["rpc_effective_provider"] = os.environ.get("ARBY_RPC_PROVIDER") or ("alchemy" if os.environ.get("ALCHEMY_API_KEY") else "public")
-        except Exception:
-            pass
-
-        if rpc_http_host:
-            infra_payload["rpc_http_host"] = rpc_http_host
-        else:
-            # Fallback to effective host when explicit rpc_http_host not available
-            try:
-                if effective_http_host:
-                    infra_payload["rpc_http_host"] = effective_http_host
-            except Exception:
-                pass
-        if rpc_ws_host:
-            infra_payload["rpc_ws_host"] = rpc_ws_host
-
-        # WS handshake evidence
-        try:
-            if primary_ws:
-                from urllib.parse import urlparse
-                infra_payload["ws_url_host"] = urlparse(primary_ws).netloc
-        except Exception:
-            pass
-        infra_payload["ws_handshake_ms"] = globals().get("ws_handshake_ms") if globals().get("ws_handshake_ms") is not None else None
-
-        scan_data["infra"] = infra_payload
-
-        # Emit single-line selection log
-        try:
-            sel_host = rpc_http_host or os.environ.get("ARBY_RPC_HTTP_HOST") or "unknown"
-            ws_flag = "enabled" if ws_enabled else "disabled"
-            logger.info("RPC selected: provider=%s host=%s ws=%s", rpc_provider, sel_host, ws_flag)
-        except Exception:
-            pass
-    except Exception:
-        scan_data["infra"] = {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False}
-    
-    # Truth report data
-    truth_data = {
-        "timestamp": now,
-        "run_mode": "REGISTRY_REAL",
-        "execution_enabled": False,
-        "execution_blocker": CURRENT_EXECUTION_BLOCKER.value,
-        "execution_blocker_details": "EXECUTION_DISABLED_M5_0 - verified: no cost model",
-        "cost_model_available": False,
-        "chain_id": config.get("chain_id", 42161),
-        "current_block": current_block,
-        
-        # Top-level metrics (for backward compat)
-        "quotes_total": stats["quotes_total"],
-        "quotes_fetched": stats["quotes_fetched"],
-        "dexes_active": stats["dexes_active"],
-        "price_sanity_passed": stats["price_sanity_passed"],
-        "price_sanity_failed": stats["price_sanity_failed"],
-        
-        # Nested health (full details)
-        "health": {
-            "quotes_total": stats["quotes_total"],
-            "quotes_fetched": stats["quotes_fetched"],
-            "gates_passed": stats["gates_passed"],
-            "dexes_active": stats["dexes_active"],
-            "price_sanity_passed": stats["price_sanity_passed"],
-            "price_sanity_failed": stats["price_sanity_failed"],
-            "price_stability_factor": stats["price_stability_factor"],
-            "rpc_errors": stats["rpc_errors"],
-            "rpc_success_rate": stats["rpc_success_rate"],
-        },
-        "stats": stats,
-        # execution_pnl: PnL from actual execution (DISABLED in M5)
-        "execution_pnl": {
-            "signal_pnl_usdc": "0.000000",
-            "would_execute_pnl_usdc": "0.000000",
-            "gross_pnl_usdc": "0.000000",
-            "net_pnl_usdc": None,
-            "net_pnl_bps": None,
-            "cost_model_available": False,
-        },
-        # DEPRECATED: pnl alias for backwards compatibility
-        "pnl": {
-            "signal_pnl_usdc": "0.000000",
-            "would_execute_pnl_usdc": "0.000000",
-            "gross_pnl_usdc": "0.000000",
-            "net_pnl_usdc": None,
-            "net_pnl_bps": None,
-            "cost_model_available": False,
-        },
-        "spread_signals": [],
-    }
-    # Placeholder for uncapped worst deviation observed in this run (filled after rejects computed)
-    truth_data["price_sanity_deviation_bps_raw_max"] = None
-    # Mirror infra into truth report as well
-    try:
-        truth_data["infra"] = scan_data.get("infra", {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False})
-    except Exception:
-        truth_data["infra"] = {"rpc_provider": "unknown", "transport": "http", "ws_enabled": False, "ws_connected": False, "tenderly_enabled": False}
-
-    # Mirror tenderly diagnostics into truth report as well
-    try:
-        infra = truth_data.get("infra", {})
-        if "tenderly_enabled" in infra:
-            truth_data["infra"]["tenderly_ok"] = infra.get("tenderly_ok", False)
-            truth_data["infra"]["tenderly_error"] = infra.get("tenderly_error")
-        if "ws_attempted" in infra:
-            truth_data["infra"]["ws_attempted"] = infra.get("ws_attempted")
-            truth_data["infra"]["ws_fallback_to_http"] = infra.get("ws_fallback_to_http")
-    except Exception:
-        pass
-    
-    # Reject histogram data
-    # Build a reject entry consistent with cap semantics
-    max_dev = config.get("price_sanity_max_deviation_bps", 5000)
-    # Build reject entries and compute implied price properly from amounts/decimals
-    # Example anchor price (from config bounds or canonical value)
-    try:
-        anchor_price = Decimal(str(config.get("tokens_anchor_price", {}).get("WETH_USDC", 2600)))
-    except Exception:
-        anchor_price = Decimal("2600")
-
-    # Use normalize_price to compute implied price from amounts and decimals
-    try:
-        from core.validators import normalize_price
-
-        implied_price_dec, diag = normalize_price(
-            amount_in_wei=10 ** 18,
-            amount_out_wei=2600 * (10 ** 6),
-            decimals_in=config.get("quote_decimals", {}).get("WETH", 18),
-            decimals_out=config.get("quote_decimals", {}).get("USDC", 6),
-            token_in="WETH",
-            token_out="USDC",
-        )
-        implied_price = Decimal(str(implied_price_dec))
-    except Exception:
-        implied_price = Decimal("0")
-
-    _, raw_bps, _was_capped = calculate_deviation_bps(implied_price, anchor_price)
-    capped_flag = raw_bps > int(max_dev)
-    deviation_bps = int(min(raw_bps, int(max_dev)))
-
-    reject_entry = {
-        "pair": "WETH/USDC",
-        "dex_id": "sushiswap_v3",
-        "pool_fee": 3000,
-        "implied_price": str(implied_price),
-        "token_in_decimals": config.get("quote_decimals", {}).get("WETH", 18),
-        "token_out_decimals": config.get("quote_decimals", {}).get("USDC", 6),
-        "amount_in": 10 ** 18,
-        "amount_out": 2600 * (10 ** 6),
-        "orientation": "normal",
-        "deviation_bps": deviation_bps,
-        "deviation_bps_raw": raw_bps,
-        "deviation_bps_capped": capped_flag,
-        "max_deviation_bps": int(max_dev),
-        "error": "deviation_exceeded" if raw_bps > int(max_dev) else None,
-        "inversion_applied": False,
-        "suspect_quote": True,
-        "suspect_reason": "way_below_expected",
-        # Include expected/anchor info when reason references expected price
-        "expected_price": str(anchor_price),
-        "anchor_source": "config",
-    }
-
-    reject_data = {
-        "timestamp": now,
-        "run_mode": "REGISTRY_REAL",
-        "rejects": [reject_entry],
-        "sample_rejects": [reject_entry],
-        "total_rejects": 1,
-        "price_sanity_failed": stats.get("price_sanity_failed", 0),
-    }
-    # Ensure stats reflects actual reject counts for consistency
-    try:
-        stats["price_sanity_failed"] = int(reject_data.get("total_rejects", 0))
-    except Exception:
-        stats["price_sanity_failed"] = stats.get("price_sanity_failed", 0)
-
-    # Record suspect quotes counts and reasons separately from price_sanity_failed
-    try:
-        suspect_count = sum(1 for r in reject_data.get("rejects", []) if r.get("suspect_quote"))
-        stats["suspect_quotes"] = int(suspect_count)
-        # Aggregate reasons
-        reasons = {}
-        for r in reject_data.get("rejects", []):
-            if r.get("suspect_quote"):
-                reason = r.get("suspect_reason") or "unknown"
-                reasons[reason] = reasons.get(reason, 0) + 1
-        stats["suspect_reasons"] = reasons
-    except Exception:
-        stats["suspect_quotes"] = 0
-        stats["suspect_reasons"] = {}
-
-    # Propagate synced stats into scan_data and truth_data to avoid cross-artifact drift
-    try:
-        scan_data["price_sanity_failed"] = stats.get("price_sanity_failed")
-        scan_data["stats"]["price_sanity_failed"] = stats.get("price_sanity_failed")
-    except Exception:
-        pass
-    try:
-        truth_data["price_sanity_failed"] = stats.get("price_sanity_failed")
-        truth_data["stats"]["price_sanity_failed"] = stats.get("price_sanity_failed")
-    except Exception:
-        pass
-    try:
-        reject_data["price_sanity_failed"] = stats.get("price_sanity_failed")
-    except Exception:
-        pass
-    # Populate truth report uncapped worst-deviation metric for debugging
-    try:
-        truth_data["price_sanity_deviation_bps_raw_max"] = int(raw_bps)
-    except Exception:
-        truth_data["price_sanity_deviation_bps_raw_max"] = None
-    # Mirror infra into reject histogram for transparency
-    try:
-        reject_data["infra"] = scan_data.get("infra", {})
-    except Exception:
-        pass
-    # Populate suspect_summary in truth_report for debugging (separate from sanity rejects)
-    try:
-        truth_data["suspect_summary"] = {
-            "count": stats.get("suspect_quotes", 0),
-            "reasons": stats.get("suspect_reasons", {}),
-            "examples": suspect_examples,
-        }
-    except Exception:
-        pass
-
-    # Ensure truth_data.health is derived from the canonical stats to avoid two truths
-    try:
-        truth_data["health"] = {
-            "quotes_total": stats.get("quotes_total"),
-            "quotes_fetched": stats.get("quotes_fetched"),
-            "gates_passed": stats.get("gates_passed"),
-            "dexes_active": stats.get("dexes_active"),
-            "price_sanity_passed": stats.get("price_sanity_passed"),
-            "price_sanity_failed": stats.get("price_sanity_failed"),
-            "price_stability_factor": stats.get("price_stability_factor"),
-            "rpc_errors": stats.get("rpc_errors"),
-            "rpc_success_rate": stats.get("rpc_success_rate"),
-        }
-    except Exception:
-        pass
-    
-    # Write artifacts
-    artifacts = _write_artifacts(output_dir, timestamp, scan_data, truth_data, reject_data)
-    
-    logger.info(f"Scan completed: {len(artifacts)} artifacts written")
-    for name, path in artifacts.items():
-        logger.info(f"  {name}: {path}")
-    
     return stats
 
 

@@ -4,7 +4,7 @@
   "timezone": "UTC",
   "run_id": "golden_m5_reference",
   "source_run_dir": "docs/artifacts/golden_run",
-  "summary": "quotes_fetched=10, gates_passed=8, spreads=0, paper_pnl=-0.10",
+  "summary": "quotes_fetched=10, gates_passed=8, spreads=0, paper_pnl=0.00",
   "artifacts": {
     "scan_path": "docs/artifacts/scan_golden.json",
     "truth_report_path": "docs/artifacts/truth_report_golden.json",
@@ -17,9 +17,9 @@
   "runs_included": 1,
   "pnl_mode": "paper",
   "gross_spread_usdc": 0.0,
-  "paper_net_pnl_usdc": -0.10,
+  "paper_net_pnl_usdc": 0.0,
   "pnl_available": true,
-  "pnl_reason": null,
+  "pnl_reason": "no_signals_no_cost",
   "cost_model": {
     "type": "gas_only",
     "gas_usd_estimate": 0.10,
@@ -47,6 +47,14 @@
   "top_signals": [],
   "top_opportunities": [],
   "opportunities_reason": "no_spread_signals",
+  "coverage": {
+    "pairs_scanned": ["WETH/USDC"],
+    "pairs_count": 1,
+    "dexes_active_list": ["sushiswap_v3", "uniswap_v3"],
+    "dexes_active": 2,
+    "pools_quoted": 2,
+    "min_spread_bps": 5
+  },
   "top_quotes": [
     {
       "dex_id": "uniswap_v3",
