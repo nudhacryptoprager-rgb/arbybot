@@ -1,0 +1,207 @@
+{
+  "schema_version": "m5:daily:v1",
+  "generated_at": "2026-02-07T10:35:37.408875+00:00",
+  "timezone": "UTC",
+  "run_id": "ci_m5_gate_20260207_113530",
+  "source_run_dir": "data\\runs\\ci_m5_gate_20260207_113530",
+  "summary": "quotes_fetched=10, gates_passed=8, spreads=2, paper_pnl=2.87",
+  "artifacts": {
+    "scan_path": "data\\runs\\ci_m5_gate_20260207_113530\\reports\\scan_20260207_113536.json",
+    "truth_report_path": "data\\runs\\ci_m5_gate_20260207_113530\\reports\\truth_report_20260207_113536.json",
+    "reject_histogram_path": "data\\runs\\ci_m5_gate_20260207_113530\\reports\\reject_histogram_20260207_113536.json"
+  },
+  "period": {
+    "from": "2026-02-07",
+    "to": "2026-02-07"
+  },
+  "runs_included": 1,
+  "pnl_mode": "paper",
+  "gross_spread_usdc": 2.96713,
+  "paper_net_pnl_usdc": 2.86713,
+  "pnl_available": true,
+  "pnl_reason": null,
+  "cost_model": {
+    "type": "gas_only",
+    "gas_usd_estimate": 0.1,
+    "slippage_usd_estimate": 0.0
+  },
+  "quote_sanity_rate": 0.5833333333333334,
+  "signal_win_rate": 1.0,
+  "paper_win_rate": 1.0,
+  "checks_count": 12,
+  "quotes_fetched": 10,
+  "gates_passed": 8,
+  "signals_total": 2,
+  "opportunities_total": 2,
+  "spread_signals_count": 2,
+  "net_positive_signals_count": 2,
+  "top_signal": {
+    "pair": "ARB/USDC",
+    "buy_dex": "uniswap_v3",
+    "sell_dex": "sushiswap_v3",
+    "spread_bps_exact": 15.0307,
+    "spread_bps_ui": 15,
+    "is_gross_positive": true,
+    "gross_pnl_usdc_est": 1.5031,
+    "net_pnl_usdc_est": 1.4031,
+    "is_net_positive_est": true,
+    "net_negative_reason": null
+  },
+  "deprecated_legacy_trades_count": 12,
+  "tail_losses": [],
+  "tail_losses_reason": "no_suspects_detected",
+  "top_reject_reasons": [],
+  "autosize": {
+    "enabled": true,
+    "new_size_usd": 1000,
+    "reason": "configured_no_adjustment",
+    "cooldown_remaining": 0,
+    "config": {
+      "base_size_usd": 1000,
+      "min_size_usd": 100,
+      "max_size_usd": 5000,
+      "impact_threshold_bps": 50
+    }
+  },
+  "top_signals": [
+    {
+      "pair": "ARB/USDC",
+      "buy_dex": "uniswap_v3",
+      "sell_dex": "sushiswap_v3",
+      "spread_bps_exact": 15.0307,
+      "spread_pct": 0.150307,
+      "spread_frac": "0.0015030745",
+      "gross_pnl_usdc_est": 1.5031,
+      "net_pnl_usdc_est": 1.4031,
+      "is_net_positive_est": true,
+      "net_negative_reason": null,
+      "size_usd": 1000.0,
+      "confidence": "low",
+      "confidence_reasons": [
+        "execution_disabled",
+        "paper_cost_model"
+      ],
+      "source": "signal"
+    },
+    {
+      "pair": "ARB/WETH",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "spread_bps_exact": 14.6406,
+      "spread_pct": 0.146406,
+      "spread_frac": "0.0014640569",
+      "gross_pnl_usdc_est": 1.4641,
+      "net_pnl_usdc_est": 1.3641,
+      "is_net_positive_est": true,
+      "net_negative_reason": null,
+      "size_usd": 1000.0,
+      "confidence": "low",
+      "confidence_reasons": [
+        "execution_disabled",
+        "paper_cost_model"
+      ],
+      "source": "signal"
+    }
+  ],
+  "top_opportunities": [
+    {
+      "pair": "ARB/USDC",
+      "buy_dex": "uniswap_v3",
+      "sell_dex": "sushiswap_v3",
+      "spread_bps_exact": 15.0307,
+      "spread_pct": 0.150307,
+      "spread_frac": "0.0015030745",
+      "gross_pnl_usdc_est": 1.5031,
+      "net_pnl_usdc_est": 1.4031,
+      "is_net_positive_est": true,
+      "net_negative_reason": null,
+      "size_usd": 1000.0,
+      "confidence": "low",
+      "confidence_reasons": [
+        "execution_disabled",
+        "paper_cost_model"
+      ],
+      "source": "signal"
+    },
+    {
+      "pair": "ARB/WETH",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "spread_bps_exact": 14.6406,
+      "spread_pct": 0.146406,
+      "spread_frac": "0.0014640569",
+      "gross_pnl_usdc_est": 1.4641,
+      "net_pnl_usdc_est": 1.3641,
+      "is_net_positive_est": true,
+      "net_negative_reason": null,
+      "size_usd": 1000.0,
+      "confidence": "low",
+      "confidence_reasons": [
+        "execution_disabled",
+        "paper_cost_model"
+      ],
+      "source": "signal"
+    }
+  ],
+  "opportunities_reason": null,
+  "coverage": {
+    "pairs_scanned": [
+      "ARB/USDC",
+      "ARB/WETH",
+      "WETH/USDC",
+      "WETH/USDT",
+      "wstETH/WETH"
+    ],
+    "pairs_count": 5,
+    "dexes_active_list": [
+      "sushiswap_v3",
+      "uniswap_v3"
+    ],
+    "dexes_active": 2,
+    "pools_quoted": 10,
+    "min_spread_bps": 5
+  },
+  "top_quotes": [
+    {
+      "dex_id": "uniswap_v3",
+      "pool_address": "0xC6962004f452bE9203591991D15f6b388e09E8D0",
+      "block_number": 429551893,
+      "price": "2003.593615",
+      "fee": 3000,
+      "amount_in_human": "1",
+      "amount_out_human": "2003.593615",
+      "tick": -200294,
+      "sqrt_price_x96": 3546372929484856074698752,
+      "pair": "WETH/USDC",
+      "timestamp": "2026-02-07T10:35:36.662860+00:00"
+    },
+    {
+      "dex_id": "sushiswap_v3",
+      "pool_address": "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296",
+      "block_number": 429551893,
+      "price": "2003.943663",
+      "fee": 3000,
+      "amount_in_human": "1",
+      "amount_out_human": "2003.943663",
+      "tick": -200292,
+      "sqrt_price_x96": 3546682709855291745617667,
+      "pair": "WETH/USDC",
+      "timestamp": "2026-02-07T10:35:36.662860+00:00"
+    }
+  ],
+  "health": {
+    "rpc": {
+      "success_rate": 1.0,
+      "p50_latency_ms": 96.0,
+      "ws_connected_rate": 1.0
+    },
+    "dex": {
+      "quote_fetch_rate": 0.8333333333333334,
+      "revert_rate": 0
+    },
+    "system": {
+      "gate_pass_rate": 0.6666666666666666,
+      "artifacts_ok_rate": 1.0
+    }
+  }
+}

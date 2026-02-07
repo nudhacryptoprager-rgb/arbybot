@@ -1,8 +1,8 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-07 11:21 UTC  
-> **SHA**: `506e8d0`  
-> **Статус**: ✅ DONE
+> **Оновлено**: 2026-02-07 11:36 UTC  
+> **SHA**: `TBD`  
+> **Статус**: ✅ DONE (with CRITICAL price direction fix)
 
 ---
 
@@ -34,6 +34,13 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycl
 4. fees NOT included in net_pnl_usdc_est
    → ARB/USDC 14.9 bps looks sweet but likely eaten by swap fees
    → Treat as "micro-arb visibility", not "strategy win"
+
+5. PRICE_SCALE_BOUNDS invariant (NEW!):
+   - ARB/WETH: 0.00001 - 0.01 (expect ~0.00035)
+   - ARB/USDC: 0.01 - 10 (expect ~0.70)
+   - WETH/USDC: 100 - 10000 (expect ~2000)
+   - wstETH/WETH: 0.9 - 1.5 (expect ~1.15)
+   → Detects token0/token1 direction errors (17000 vs 0.00035)
 ```
 
 ---
@@ -52,6 +59,8 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycl
 | 8 | Розширити сканер на 5+ пар | ✅ 5 пар активних |
 | 9 | Уніфікувати `reject_reason` → `reason` | ✅ Тести проходять |
 | 10 | Golden run з реальними цінами | ✅ PASS |
+| 11 | **CRITICAL: Price direction fix** | ✅ **token0/token1 order!** |
+| 12 | PRICE_SCALE_BOUNDS invariant | ✅ Unit-tested |
 
 ---
 
@@ -86,10 +95,11 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 
 ## Останній Golden Run
 
-**RunDir**: `data/runs/ci_m5_gate_20260207_112126`  
-**Date**: 2026-02-07 11:21 UTC  
-**Block**: 429,548,505  
-**Result**: ✅ PASS
+**RunDir**: `data/runs/ci_m5_gate_20260207_113530`  
+**GoldenCopy**: `docs/artifacts/golden/m5_golden_run`  
+**Date**: 2026-02-07 11:35 UTC  
+**Block**: 429,551,893  
+**Result**: ✅ PASS (5/5 runs passed!)
 
 ### Key Metrics
 
@@ -108,15 +118,15 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 | `spread_signals` | 2 |
 | `paper_net_pnl_usdc` | ~$3.40 |
 
-### Spread Signals (реальні ціни!)
+### Spread Signals (реальні ціни — POST price direction fix!)
 
-| Pair | Spread (bps) | Net PnL (est) | Status |
-|------|-------------|---------------|--------|
-| ARB/WETH | **24.8** | ~$2.38 | ✅ **Signal!** |
-| ARB/USDC | **9.3** | ~$0.83 | ✅ **Signal!** |
-| WETH/USDT | 2.3 | - | ⚪ Нижче threshold |
-| WETH/USDC | 0.2 | - | ⚪ Дуже стабільна |
-| wstETH/WETH | 0.08 | - | ⚪ Дуже стабільна |
+| Pair | Spread (bps) | Price (corrected) | Status |
+|------|-------------|-------------------|--------|
+| ARB/USDC | **15.0** | 0.116 USDC | ✅ **Signal!** |
+| ARB/WETH | **14.6** | 0.0000578 WETH | ✅ **Signal!** |
+| WETH/USDT | 2.1 | 2003 USDT | ⚪ Нижче threshold |
+| WETH/USDC | 1.7 | 2003 USDC | ⚪ Стабільна |
+| wstETH/WETH | 0.08 | 1.225 WETH | ⚪ Дуже стабільна |
 
 ### Autosize (enabled!)
 
@@ -139,14 +149,16 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 ## Юніт-тести
 
 ```
-481 passed, 5 subtests passed
+490 passed, 5 subtests passed
 ```
 
-### Нові тести (anti-placeholder)
+### Нові тести (price direction)
 
 - `test_ci_m5_gate_negative_anti_placeholder.py` — 9 тестів
+- `test_ci_m5_gate_negative_price_scale.py` — **9 тестів** (NEW!)
 - Перевіряє FAIL при `pool_address=null`
 - Перевіряє FAIL при `tick=null` / `sqrt_price_x96=null` для v3
+- **Перевіряє FAIL при inverted price (17000 vs 0.00035)**
 
 ---
 
@@ -230,10 +242,29 @@ Whitelist: `docs/artifacts/pool_whitelist.json`
 ```
 price_direction: "quote_out_per_1_base_in"
 price_note: "1 ARB = X WETH"
-
-Приклад: ARB/WETH = 17282 означає 17282 WETH за 1 ARB
-(це НЕ баг, це просто price = amount_out / amount_in)
 ```
+
+**CRITICAL FIX (2026-02-07)**: 
+
+Uniswap V3 `sqrtPriceX96` дає ціну **token1/token0**, а НЕ token_in/token_out!
+
+В пулі ARB/WETH:
+- `token0 = WETH` (0x82a...) — менша адреса
+- `token1 = ARB` (0x912...) — більша адреса
+
+Формула: `raw_price = (sqrtPriceX96² / 2^192) = token1/token0 = ARB/WETH`
+
+**Проблема**: код припускав що `token_in = token0`, давав ціну 17000 замість 0.00035
+
+**Рішення**: Перевірка `token_in_addr < token_out_addr`:
+- Якщо TRUE: `price = raw_price` (token_in = token0)
+- Якщо FALSE: `price = 1/raw_price` (token_in = token1)
+
+| Пара | До фіксу | Після фіксу |
+|------|----------|-------------|
+| ARB/WETH | 17263 WETH | **0.0000578 WETH** ✅ |
+| ARB/USDC | 0.116 | **0.116** ✅ |
+| WETH/USDC | 2005 | **2005** ✅ |
 
 ### Canary Field: no_rejects
 

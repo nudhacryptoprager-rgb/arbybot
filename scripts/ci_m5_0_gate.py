@@ -231,6 +231,57 @@ def validate_anti_placeholder(data: Dict[str, Any], require_real: bool = False) 
     return True, f"anti_placeholder OK ({len(quotes)} quotes checked)"
 
 
+# Price scale bounds for sanity check (prevents inverted direction bugs)
+# Format: pair -> (min_expected, max_expected)
+PRICE_SCALE_BOUNDS = {
+    "ARB/WETH": (0.00001, 0.01),      # ~0.00035 WETH per ARB
+    "ARB/USDC": (0.01, 10.0),         # ~$0.70 per ARB
+    "WETH/USDC": (100, 50000),        # ~$2000 per WETH
+    "WETH/USDT": (100, 50000),        # ~$2000 per WETH
+    "wstETH/WETH": (0.5, 2.0),        # ~1.15 WETH per wstETH
+}
+
+
+def validate_price_scale(data: Dict[str, Any], require_real: bool = False) -> Tuple[bool, str]:
+    """Validate price scale invariant: detect inverted direction bugs.
+    
+    This catches bugs where price is calculated as token0/token1 instead of token1/token0
+    (or vice versa), resulting in prices that are orders of magnitude wrong.
+    """
+    quotes = data.get("quotes_sample", [])
+    if not quotes:
+        return True, "price_scale OK (no quotes_sample)"
+    
+    violations = []
+    for q in quotes:
+        pair = f"{q.get('token_in', '?')}/{q.get('token_out', '?')}"
+        price_str = q.get("price_exact") or q.get("price")
+        if not price_str:
+            continue
+        
+        try:
+            price = float(price_str)
+        except (ValueError, TypeError):
+            continue
+        
+        bounds = PRICE_SCALE_BOUNDS.get(pair)
+        if bounds:
+            min_p, max_p = bounds
+            if price < min_p or price > max_p:
+                violations.append(
+                    f"{pair}: price={price:.6g} outside [{min_p}, {max_p}] (likely inverted direction)"
+                )
+    
+    if violations:
+        msg = f"PRICE_SCALE VIOLATION: {len(violations)} quotes with wrong scale: {violations[:3]}"
+        if require_real:
+            return False, msg
+        else:
+            return True, f"WARN: {msg}"
+    
+    return True, f"price_scale OK ({len(quotes)} quotes checked)"
+
+
 def validate_coverage(data: Dict[str, Any], min_pairs: int = 5, min_pools: int = 6) -> Tuple[bool, str]:
     """Validate minimum coverage: pairs_count >= min_pairs and pools_quoted >= min_pools.
     
@@ -471,6 +522,14 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                     messages.append(f"OK: {name} - {msg_ap}")
                 else:
                     messages.append(f"FAIL: {name} - {msg_ap}")
+                    all_passed = False
+                
+                # Price scale validation (CRITICAL - detects inverted direction bugs)
+                ok_ps, msg_ps = validate_price_scale(data, require_real=require_real)
+                if ok_ps:
+                    messages.append(f"OK: {name} - {msg_ps}")
+                else:
+                    messages.append(f"FAIL: {name} - {msg_ps}")
                     all_passed = False
                 
                 # Coverage validation for online runs

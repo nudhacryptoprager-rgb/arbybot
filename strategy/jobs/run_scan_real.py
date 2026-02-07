@@ -310,6 +310,9 @@ def run_scan(
     dexes_list = config.get("dexes") or []
     pools_cfg = config.get("pools", {}) or {}
     
+    # Token addresses for token0/token1 ordering (CRITICAL for correct price direction)
+    token_addresses = config.get("tokens", {}) or {}
+    
     # Load pairs from config (variative system)
     chain_key = config.get("chain", "arbitrum_one")
     pairs_list = load_pairs(chain_key, config, use_intent=False)
@@ -405,17 +408,49 @@ def run_scan(
                         continue  # Skip this quote - no real price available
 
             # Calculate price_exact from sqrt_price_x96 (REQUIRED for v3)
+            # CRITICAL: sqrtPriceX96 gives price of token1 in terms of token0
+            # In Uniswap v3: token0 < token1 (lexicographically by address)
+            # price = (sqrtPriceX96)^2 / 2^192 = token1/token0 (how much token0 for 1 token1)
             price_exact = None
             
             if sqrt_price_val is not None and sqrt_price_val > 0:
                 try:
-                    # Price from sqrtPriceX96 for token0/token1
-                    # In Uniswap v3: price = (sqrtPriceX96)^2 / 2^192
+                    # Determine token order in pool (token0 < token1 by address)
+                    token_in_addr = token_addresses.get(token_in, "").lower()
+                    token_out_addr = token_addresses.get(token_out, "").lower()
+                    
+                    # sqrtPriceX96² / 2^192 gives price = token1/token0
                     sqrt_ratio = Decimal(sqrt_price_val) / Decimal(2 ** 96)
-                    raw_price = sqrt_ratio * sqrt_ratio
-                    # Adjust for decimals difference
-                    decimals_diff = Decimal(10 ** (decimals_in - decimals_out))
-                    price_exact = raw_price * decimals_diff
+                    raw_price = sqrt_ratio * sqrt_ratio  # This is token1/token0 (in base units)
+                    
+                    # Adjust for decimals
+                    # If token_in is token0 and token_out is token1:
+                    #   we want token_out/token_in = token1/token0 = raw_price
+                    # If token_in is token1 and token_out is token0:
+                    #   we want token_out/token_in = token0/token1 = 1/raw_price
+                    
+                    if token_in_addr and token_out_addr:
+                        token_in_is_token0 = token_in_addr < token_out_addr
+                        
+                        if token_in_is_token0:
+                            # token_in = token0, token_out = token1
+                            # We want: how much token_out (token1) per 1 token_in (token0)
+                            # raw_price = token1/token0 (in base units)
+                            # Need to adjust for decimals: multiply by 10^(decimals_in - decimals_out)
+                            decimals_diff = Decimal(10 ** (decimals_in - decimals_out))
+                            price_exact = raw_price * decimals_diff
+                        else:
+                            # token_in = token1, token_out = token0
+                            # We want: how much token_out (token0) per 1 token_in (token1)
+                            # raw_price = token1/token0, so we need 1/raw_price = token0/token1
+                            # Need to adjust for decimals: multiply by 10^(decimals_in - decimals_out)
+                            decimals_diff = Decimal(10 ** (decimals_in - decimals_out))
+                            price_exact = (Decimal(1) / raw_price) * decimals_diff
+                    else:
+                        # Fallback: assume token_in is token0 (legacy behavior)
+                        decimals_diff = Decimal(10 ** (decimals_in - decimals_out))
+                        price_exact = raw_price * decimals_diff
+                    
                     price_str = str(round(price_exact, 6))
                     
                     # Calculate consistent amount_out from price_exact
