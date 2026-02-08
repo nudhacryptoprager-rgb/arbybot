@@ -1,5 +1,8 @@
 """CI gate for Milestone 5: validate presence and basic correctness of daily_report.
 
+STATUS: FROZEN (2026-02-08)
+Changes only for M4 execution requirements. M5 feature set is complete.
+
 Initial / minimal validator: accepts one or more daily_report JSON files and
 performs basic schema checks (schema_version, non-null metrics, top_reject_reasons not empty).
 
@@ -18,20 +21,15 @@ from pathlib import Path
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple, Any
 
+# Ensure repository root is on sys.path
+try:
+    REPO_ROOT = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(REPO_ROOT))
+except Exception:
+    pass
 
-# ============================================================
-# PRICE SCALE INVARIANT (M5 strict rule)
-# ============================================================
-# Prevents inverted direction bugs where price is calculated as
-# token0/token1 instead of token1/token0 (or vice versa)
-# Example: ARB/WETH = 17000 (WRONG) vs 0.00035 (correct)
-PRICE_SCALE_BOUNDS: Dict[str, Tuple[float, float]] = {
-    "ARB/WETH": (0.00001, 0.01),      # ~0.00035 WETH per ARB
-    "ARB/USDC": (0.01, 10.0),         # ~$0.70 per ARB
-    "WETH/USDC": (100, 50000),        # ~$2000 per WETH
-    "WETH/USDT": (100, 50000),        # ~$2000 per WETH
-    "wstETH/WETH": (0.5, 2.0),        # ~1.15 WETH per wstETH
-}
+# Import canonical PRICE_SCALE_BOUNDS from core.constants
+from core.constants import PRICE_SCALE_BOUNDS
 
 
 def validate_price_scale(data: Dict[str, Any]) -> Tuple[bool, List[str]]:

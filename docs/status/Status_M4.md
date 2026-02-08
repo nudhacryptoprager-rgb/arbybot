@@ -1,153 +1,161 @@
-# Status: M4 (REAL Pipeline Hardening)
+# Status: M4 (DEX↔DEX Atomic Execution v1)
 
-**Status**: CLOSING  
-**Branch**: `split/code`  
-**Last Updated**: 2026-01-30
-
-## Goal
-
-Run REAL pipeline with live RPC, pinned block, and **truthful metrics**.
-Execution remains disabled - only price discovery and validation.
+**Status**: 🚧 **IN PROGRESS**  
+**Updated**: 2026-02-08  
+**Predecessor**: M5_0 (CLOSED), M5 (FROZEN)
 
 ---
 
-## M4 CLOSE Definition of Done
+## M4 Goal (from Roadmap)
 
-### Commands (MUST ALL PASS)
+> "DEX ↔ DEX на одній мережі з атомарним виконанням (одна транзакція / bundle) + pre-trade simulation + приватна подача."
 
-```bash
-# 1. Full pytest (NO --ignore)
-python -m pytest -q
+---
 
-# 2. CI gate offline
-python scripts/ci_m4_gate.py --offline --skip-python-check
+## M4 Success Criterion (Minimal)
 
-# 3. (Optional) CI gate online - requires RPC
-python scripts/ci_m4_gate.py --online --skip-python-check
-```
+**Mінімальний критерій успіху:**
 
-### Expected Output
+1. **1–2 пари** з реальними spread сигналами
+2. **2 DEX** (Uniswap V3 + SushiSwap V3) на Arbitrum
+3. **Сигнал знайдено** → **Симульовано** → **net > 0 після gas/slippage**
 
 ```
-python -m pytest -q
-.........................
-XX passed in Y.YYs
-
-python scripts/ci_m4_gate.py --offline --skip-python-check
-[PASS] M4 CI GATE PASSED (OFFLINE)
+┌─────────────────────────────────────────────────────────────┐
+│  SIGNAL → SIMULATE (eth_call) → VERIFY net > 0 → [PREVIEW] │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Contracts (Frozen)
+## Definition of Done (M4)
 
-### Schema Version
+### M4.1 — Trade State Machine (skeleton)
 
-**SCHEMA_VERSION = "3.2.0"** (frozen)
+| Deliverable | Status |
+|-------------|--------|
+| `execution/state_machine.py` — states: NEW → SIMULATING → READY → EXECUTING → DONE | ⏳ |
+| State transitions logged with reason codes | ⏳ |
+| Unit tests for state transitions | ⏳ |
 
-### API Contract (Backward Compatible)
+### M4.2 — Pre-Trade Simulation Gate
 
-```python
-# check_price_sanity - MUST have default for dynamic_anchor
-def check_price_sanity(
-    token_in: str,
-    token_out: str,
-    price: Decimal,
-    config: Dict[str, Any],
-    dynamic_anchor: Optional[Decimal] = None,  # DEFAULT!
-    fee: int = 0,
-    decimals_in: int = 18,
-    decimals_out: int = 6,
-) -> Tuple[bool, Optional[int], Optional[str], Dict[str, Any]]:
-    ...
+| Deliverable | Status |
+|-------------|--------|
+| `execution/simulator.py` — `simulate(opportunity)` implemented | ⏳ |
+| Build swap calldata (exactInputSingle / exactOutputSingle) | ⏳ |
+| Execute eth_call on pinned block | ⏳ |
+| Verify simulated_out ≈ expected within slippage | ⏳ |
+| Gas estimate from simulation | ⏳ |
+| Unit test: simulation matches expected | ⏳ |
 
-# Diagnostics MUST always include anchor_price
-diagnostics = {
-    "implied_price": str,
-    "anchor_price": str,  # ALWAYS PRESENT
-    ...
-}
-```
+### M4.3 — Net Profitability Check
 
-### Price Contract
+| Deliverable | Status |
+|-------------|--------|
+| `net_pnl = gross_pnl - gas_cost - slippage_cost` | ⏳ |
+| Reject signals where `net_pnl < min_threshold` | ⏳ |
+| Log reason: `NET_NEGATIVE_AFTER_COSTS` | ⏳ |
 
-```
-price = token_out per 1 token_in
+### M4.4 — Private Send Integration (Optional for M4)
 
-Examples:
-- WETH/USDC: price ~ 3500 (USDC per 1 WETH)
-- WBTC/USDC: price ~ 90000 (USDC per 1 WBTC)
-```
+| Deliverable | Status |
+|-------------|--------|
+| Flashbots Protect / MEV blocker integration | ⏳ |
+| Bundle submission (if using Flashbots) | ⏳ |
+| Fallback to public mempool (with warning) | ⏳ |
 
-### PnL Contract
+### M4.5 — Post-Trade Accounting
 
-| Field | Type | No cost model | With cost model |
-|-------|------|---------------|-----------------|
-| `signal_pnl_usdc` | str | Always | Always |
-| `would_execute_pnl_usdc` | str | Always | Always |
-| `gross_pnl_usdc` | str | Always | Always |
-| `net_pnl_usdc` | str \| None | **None** | str |
-| `net_pnl_bps` | str \| None | **None** | str |
-| `cost_model_available` | bool | False | True |
+| Deliverable | Status |
+|-------------|--------|
+| Track: realized PnL, gas paid, slippage realized | ⏳ |
+| Compare expected vs actual | ⏳ |
+| Log `EXECUTION_COMPLETE` with breakdown | ⏳ |
 
-### Execution Contract
+### M4.6 — Kill Switch / Circuit Breaker
 
-| Field | M4 Value |
-|-------|----------|
-| `execution_enabled` | False |
-| `execution_blocker` | "EXECUTION_DISABLED_M4" |
-| `execution_ready_count` | 0 |
-| `is_actionable` | False (all opps) |
+| Deliverable | Status |
+|-------------|--------|
+| `execution/risk.py` — exposure limits | ⏳ |
+| Circuit breaker on consecutive failures | ⏳ |
+| Kill switch via ENV or signal | ⏳ |
 
 ---
 
-## M4 Invariants (Checked by CI Gate)
+## Acceptance Gate
 
-| Metric | Requirement |
-|--------|-------------|
-| `run_mode` | `REGISTRY_REAL` |
-| `current_block` | `> 0` |
-| `execution_enabled` | `false` |
-| `execution_ready_count` | `0` |
-| `quotes_fetched` | `>= 1` |
-| `dexes_active` | `>= 2` |
-| `price_sanity_passed` | `>= 1` |
-| `net_pnl_usdc` | `null` (no cost model) |
-| Artifacts | 4/4 |
+```powershell
+# M4 minimal acceptance
+python scripts/ci_m4_execution_gate.py --dry-run
+# EXPECT: ≥1 net-positive signal found
 
----
-
-## Files Changed for M4 CLOSE
-
-| File | Change |
-|------|--------|
-| `strategy/jobs/run_scan_real.py` | `dynamic_anchor=None` default, `anchor_price` always in diagnostics |
-| `docs/status/Status_M4.md` | This file - M4 CLOSE criteria |
-
----
-
-## Exit Codes (ci_m4_gate.py)
-
-| Code | Meaning |
-|------|---------|
-| 0 | PASS |
-| 1 | Unit tests failed |
-| 2 | REAL scan failed |
-| 3 | Artifacts missing |
-| 4 | M4 invariants failed |
-| 6 | Metrics contract violation |
-| 7 | Confidence inconsistent |
-| 8 | PnL contract violation |
-| 9 | Execution semantics invalid |
-| 10 | Wrong Python version |
-| 11 | Import contract broken |
-
----
-
-## M4 CLOSE Commit
-
-```bash
-# After all tests pass:
-git add strategy/jobs/run_scan_real.py docs/status/Status_M4.md
-git commit -m "chore: close M4 contract (tests+gate green)"
+python scripts/ci_m4_execution_gate.py --simulate
+# EXPECT: Simulation PASS, net > 0 after gas
 ```
+
+---
+
+## Blockers (Must Address Before M4 Complete)
+
+| # | Blocker | Resolution |
+|---|---------|------------|
+| 1 | Simulator not implemented | M4.2 |
+| 2 | No calldata builder | M4.2 |
+| 3 | No eth_call integration | M4.2 |
+| 4 | Slippage model is 0 bps | Add realistic estimate |
+
+---
+
+## Current State (from M5_0 close)
+
+**Available now:**
+- ✅ 2 net-positive signals: ARB/WETH (11 bps, $1.02), ARB/USDC (15 bps, $1.42)
+- ✅ On-chain prices from slot0 (sqrt_price_x96)
+- ✅ Paper cost model: gas $0.10 + slippage 0 bps
+- ✅ Cross-artifact invariants verified
+- ✅ 498 unit tests passing
+
+**M4 TODO (execution layer):**
+1. Build swap calldata for Uniswap V3
+2. Execute eth_call simulation
+3. Verify output matches expected
+4. Estimate gas
+5. Decide: EXECUTE or REJECT
+
+---
+
+## Files to Create/Modify
+
+| File | Purpose | Priority |
+|------|---------|----------|
+| `execution/simulator.py` | Implement simulate() | P0 |
+| `execution/calldata_builder.py` | Build swap calldata | P0 |
+| `execution/state_machine.py` | Trade lifecycle | P1 |
+| `execution/risk.py` | Circuit breaker, limits | P1 |
+| `scripts/ci_m4_execution_gate.py` | M4 acceptance gate | P0 |
+
+---
+
+## Timeline
+
+| Week | Focus |
+|------|-------|
+| 1 | M4.2: Simulator + calldata builder |
+| 2 | M4.3: Net profitability + M4.1: State machine |
+| 3 | M4.6: Risk controls + M4.5: Accounting |
+| 4 | Integration testing, paper trades |
+
+---
+
+## Notes
+
+- **No real execution** until simulation consistently predicts correct output
+- **Paper mode first**: Log "would execute" without sending transaction
+- **Gradual rollout**: Small sizes ($100), increase after validation
+
+---
+
+## Legacy M4 (REAL Pipeline Hardening) - CLOSED
+
+The previous M4 focused on REAL pipeline with live RPC. That work is complete and merged into M5_0/M5.

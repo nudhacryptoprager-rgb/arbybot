@@ -224,6 +224,24 @@ FAKE_BLOCK_SENTINELS = {0, 1, 999999999}
 
 
 # =============================================================================
+# PRICE SCALE BOUNDS (POLICY - DO NOT REMOVE)
+# Used by: gates, validators
+# Detects inverted token0/token1 direction bugs
+# Format: "TOKEN_A/TOKEN_B" -> (min_expected, max_expected)
+# =============================================================================
+
+PRICE_SCALE_BOUNDS: Dict[str, Tuple[float, float]] = {
+    "ARB/WETH": (0.00001, 0.01),      # ~0.00035 WETH per ARB
+    "ARB/USDC": (0.01, 10.0),         # ~$0.70 per ARB
+    "WETH/USDC": (100.0, 50000.0),    # ~$2000 per WETH
+    "WETH/USDT": (100.0, 50000.0),    # ~$2000 per WETH
+    "wstETH/WETH": (0.5, 2.0),        # ~1.15 WETH per wstETH
+    "WBTC/USDC": (10000.0, 200000.0), # ~$90000 per BTC
+    "WBTC/WETH": (10.0, 100.0),       # ~30 WETH per BTC
+}
+
+
+# =============================================================================
 # DEX IDENTIFIERS
 # =============================================================================
 
@@ -278,7 +296,9 @@ __all__ = [
     "DEFAULT_ANCHOR_DEX",
     "PRICE_SANITY_MAX_DEVIATION_BPS",
     "PRICE_SANITY_BOUNDS",
+    "PRICE_SCALE_BOUNDS",
     "CHAIN_IDS",
     "DEX_IDS",
     "DEFAULT_QUOTE_AMOUNT_WEI",
+    "FAKE_BLOCK_SENTINELS",
 ]

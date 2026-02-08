@@ -290,16 +290,18 @@ def run_scan(
             logger.debug("slot0() read failed for %s: %s", pool_address, e)
             return None, None
 
-    # Base stats and placeholders
+    # Stats initialized to ZERO - will be computed from REAL data
+    # CRITICAL: No placeholder values allowed in real pipeline
+    # All stats MUST be derived from actual scan results
     stats: Dict[str, Any] = {
-        "quotes_total": 12,
-        "quotes_fetched": 10,
-        "gates_passed": 8,
-        "dexes_active": 0,
-        "price_sanity_passed": 7,
-        "price_sanity_failed": 0,
-        "rpc_errors": 0,
-        "rpc_success_rate": 1.0,
+        "quotes_total": 0,           # Will be set to len(pairs) × len(dexes)
+        "quotes_fetched": 0,         # Will be set to len(quotes_sample)
+        "gates_passed": 0,           # Will be set to count of gate_passed=True
+        "dexes_active": 0,           # Will be set to len(unique dexes in quotes)
+        "price_sanity_passed": 0,    # Will be set to quotes_fetched - price_sanity_failed
+        "price_sanity_failed": 0,    # Will be set from sanity_rejects count
+        "rpc_errors": 0,             # Will be incremented on RPC failures
+        "rpc_success_rate": 1.0,     # Will be computed after scan
         "requested_cycles": cycles,
         "cycles_completed": cycles,
     }
@@ -511,6 +513,25 @@ def run_scan(
     stats["quotes_rejected"] = len(rejected_quotes)
     stats["pool_missing_count"] = sum(1 for r in rejected_quotes if r.get("reason") == "POOL_MISSING")
     stats["v3_slot0_failed_count"] = sum(1 for r in rejected_quotes if r.get("reason") == "V3_SLOT0_FAILED")
+    
+    # CRITICAL: Compute REAL stats from actual data (no placeholders)
+    # quotes_total = total attempts = pairs × dexes
+    stats["quotes_total"] = len(pairs_list) * len(dexes_list) if pairs_list and dexes_list else 0
+    # quotes_fetched = successful quotes with valid prices
+    stats["quotes_fetched"] = len(quotes_sample)
+    # gates_passed = quotes that passed all validation gates
+    stats["gates_passed"] = sum(1 for q in quotes_sample if q.get("gate_passed", True))
+    # price_sanity_passed will be computed after sanity_rejects is populated
+    # (set placeholder here, will be finalized after price sanity checks)
+    stats["price_sanity_passed"] = stats["quotes_fetched"]  # Will be reduced by sanity failures
+    
+    # rpc_success_rate based on real attempts vs successes
+    total_attempts = stats["quotes_total"]
+    if total_attempts > 0:
+        rpc_failures = stats.get("rpc_errors", 0) + stats["pool_missing_count"] + stats["v3_slot0_failed_count"]
+        stats["rpc_success_rate"] = max(0.0, 1.0 - rpc_failures / total_attempts)
+    else:
+        stats["rpc_success_rate"] = 0.0 if stats.get("rpc_errors", 0) > 0 else 1.0
     
     logger.info("Quotes: %d valid, %d rejected (pool_missing=%d, slot0_failed=%d)",
                 len(quotes_sample), len(rejected_quotes),
@@ -754,6 +775,8 @@ def run_scan(
 
     # price_sanity_failed should reflect only sanity rejects
     stats["price_sanity_failed"] = int(reject_data.get("price_sanity_failed", 0))
+    # CRITICAL: Finalize price_sanity_passed = quotes_fetched - price_sanity_failed
+    stats["price_sanity_passed"] = max(0, stats["quotes_fetched"] - stats["price_sanity_failed"])
 
     # Compute spread signals from quotes_sample
     # Compare prices between different DEXes for the same token pair

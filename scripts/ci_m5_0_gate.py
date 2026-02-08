@@ -3,6 +3,9 @@
 """
 M5_0 CI Gate v2.1.0.
 
+STATUS: FROZEN (2026-02-08)
+Changes only for M4 execution requirements. M5_0 infra is complete.
+
 CANONICAL COMMANDS:
   python scripts/ci_m5_0_gate.py --offline
   python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
@@ -41,6 +44,9 @@ except Exception:
 # Load .env from repo root (best-effort)
 from core.env import load_root_dotenv
 load_root_dotenv()
+
+# Import canonical PRICE_SCALE_BOUNDS from core.constants
+from core.constants import PRICE_SCALE_BOUNDS as CORE_PRICE_SCALE_BOUNDS
 
 __version__ = "2.1.0"
 
@@ -233,15 +239,9 @@ def validate_anti_placeholder(data: Dict[str, Any], require_real: bool = False) 
     return True, f"anti_placeholder OK ({len(quotes)} quotes checked)"
 
 
-# Price scale bounds for sanity check (prevents inverted direction bugs)
-# Format: pair -> (min_expected, max_expected)
-PRICE_SCALE_BOUNDS = {
-    "ARB/WETH": (0.00001, 0.01),      # ~0.00035 WETH per ARB
-    "ARB/USDC": (0.01, 10.0),         # ~$0.70 per ARB
-    "WETH/USDC": (100, 50000),        # ~$2000 per WETH
-    "WETH/USDT": (100, 50000),        # ~$2000 per WETH
-    "wstETH/WETH": (0.5, 2.0),        # ~1.15 WETH per wstETH
-}
+# PRICE_SCALE_BOUNDS - import from canonical source (core.constants)
+# Local alias for backward compatibility with tests that import from here
+PRICE_SCALE_BOUNDS = CORE_PRICE_SCALE_BOUNDS
 
 
 def validate_price_scale(data: Dict[str, Any], require_real: bool = False) -> Tuple[bool, str]:
