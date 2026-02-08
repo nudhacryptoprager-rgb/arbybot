@@ -110,6 +110,7 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "schema_version": "3.2.0",
         "timestamp": now,
         "run_mode": "FIXTURE_OFFLINE",
+        "chain_id": 42161,
         "current_block": 100,
         "infra": {"rpc_provider": "fixture", "transport": "http", "ws_enabled": False, "tenderly_enabled": False},
         "rejects": [{
@@ -117,7 +118,8 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
             "deviation_bps": 10000, "deviation_bps_capped": False,
             "inversion_applied": False, "suspect_quote": True,
         }],
-        "total_rejects": 1,
+        "rejects_total": 1,
+        "total_rejects": 1,  # deprecated alias
     }
     reject_path = reports_dir / f"reject_histogram_{timestamp}.json"
     with open(reject_path, "w") as f:
@@ -428,14 +430,28 @@ def validate_truth_report_fields(data: Dict[str, Any], path: Optional[Path] = No
         return False, f"Exception validating truth_report fields: {type(e).__name__}: {e}"
 
 
-def validate_reject_histogram_fields(data: Dict[str, Any], path: Optional[Path] = None) -> Tuple[bool, str]:
+def validate_reject_histogram_fields(data: Dict[str, Any], path: Optional[Path] = None, require_real: bool = False) -> Tuple[bool, str]:
     try:
         keys = list(data.keys())
         if "rejects" not in data:
             return False, f"reject_histogram.missing 'rejects' key; keys={keys}"
         if not isinstance(data.get("rejects"), list):
             return False, f"reject_histogram.rejects not a list"
-        # gate breakdown optional but helpfully present in health/gate_breakdown
+        
+        # Cross-artifact invariant: current_block and chain_id required
+        cb = data.get("current_block")
+        if cb is None:
+            return False, f"reject_histogram.current_block missing (cross-artifact invariant); keys={keys}"
+        
+        chain_id = data.get("chain_id")
+        if chain_id is None:
+            return False, f"reject_histogram.chain_id missing; keys={keys}"
+        
+        # Canonical totals field
+        rejects_total = data.get("rejects_total") or data.get("total_rejects")
+        if rejects_total is None:
+            return False, f"reject_histogram.rejects_total missing; keys={keys}"
+        
         return True, "reject_histogram fields OK"
     except Exception as e:
         return False, f"Exception validating reject_histogram: {type(e).__name__}: {e}"
@@ -583,6 +599,18 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
             else:
                 messages.append(f"FAIL: current_block - {msg_cb}")
                 all_passed = False
+        
+        # Cross-artifact: reject_histogram.current_block must match scan/truth_report
+        if "reject_histogram" in loaded_data and "scan" in loaded_data:
+            scan_block = loaded_data["scan"].get("current_block")
+            reject_block = loaded_data["reject_histogram"].get("current_block")
+            if scan_block is not None and reject_block is not None:
+                if int(scan_block) != int(reject_block):
+                    if require_cross_artifact:
+                        messages.append(f"FAIL: cross-artifact - reject_histogram.current_block ({reject_block}) != scan ({scan_block})")
+                        all_passed = False
+                    else:
+                        messages.append(f"WARN: cross-artifact - reject_histogram.current_block ({reject_block}) != scan ({scan_block})")
     except Exception as e:
         messages.append(f"FAIL: current_block validation exception: {type(e).__name__}: {e}")
 

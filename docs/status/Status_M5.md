@@ -1,8 +1,62 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-08 10:17 UTC  
+> **Оновлено**: 2026-02-08 10:33 UTC  
 > **SHA**: `TBD`  
-> **Статус**: ✅ DONE (with 10 critical fixes)
+> **Статус**: ✅ **M5_0 CLOSED** | M5 feature-complete
+
+---
+
+## 🔒 M5_0 CLOSE CONFIRMATION
+
+**RunDir**: `data/runs/ci_m5_gate_20260208_103330`  
+**Block**: 429,883,452  
+**Tests**: 498 passed  
+**Gate**: PASS  
+
+**Key Invariants Verified:**
+- ✅ `execution_ready_count: 0`
+- ✅ `execution_enabled: false`
+- ✅ `paper_cost_model_available: true`
+- ✅ `execution_cost_model_available: false`
+- ✅ `current_block` рівний в scan/truth/reject_histogram
+- ✅ `chain_id: 42161` в усіх артефактах
+- ✅ `rejects_total == len(rejects)`
+
+---
+
+## 🔒 CLOSE CHECKLIST (M5_0 / M5)
+
+**Команди для закриття:**
+
+```powershell
+# 1. Unit tests must pass
+python -m pytest tests/unit -q --tb=no
+# EXPECT: 500+ passed
+
+# 2. Integration test (requires RPC)
+python -m pytest tests/integration/test_artifact_invariants.py -v
+# EXPECT: 7 passed (or SKIP if ARBY_SKIP_RPC=1)
+
+# 3. Canonical online run
+python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
+# EXPECT: RESULT: PASS
+
+# 4. Offline fixture test
+python scripts/ci_m5_0_gate.py --offline
+# EXPECT: RESULT: PASS
+```
+
+**Інваріанти для перевірки:**
+
+| # | Інваріант | Перевірка |
+|---|-----------|-----------|
+| 1 | `execution_ready_count == 0` | truth_report |
+| 2 | `current_block` рівний в scan/truth/reject | cross-artifact |
+| 3 | `schema_version` присутній в усіх | all artifacts |
+| 4 | `rejects_total == len(rejects)` | reject_histogram |
+| 5 | Ціни в PRICE_SCALE_BOUNDS | scan.quotes_sample |
+| 6 | `run_mode == REGISTRY_REAL` | all artifacts |
+| 7 | `chain_id == 42161` | all artifacts |
 
 ---
 

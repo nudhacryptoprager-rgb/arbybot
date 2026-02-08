@@ -720,11 +720,16 @@ def run_scan(
 
     total_rejects = len(sanity_rejects) + len(rejected_quotes)
     reject_data = {
+        "schema_version": SCHEMA_VERSION,
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
+        "chain_id": config.get("chain_id", 42161),
+        "current_block": current_block,
         "rejects": sanity_rejects + rejected_quotes,  # Include all rejects
         "sample_rejects": (sanity_rejects + rejected_quotes)[:10] if (sanity_rejects or rejected_quotes) else [],
-        "total_rejects": total_rejects,
+        # Canonical field: rejects_total (deprecated alias: total_rejects)
+        "rejects_total": total_rejects,
+        "total_rejects": total_rejects,  # deprecated alias for backward compat
         "no_rejects": total_rejects == 0,  # Canary: true when clean, easy to spot drift
         "price_sanity_failed": len(sanity_rejects),
         "pool_missing_count": stats.get("pool_missing_count", 0),
@@ -925,9 +930,11 @@ def run_scan(
 
     # truth report
     truth_data: Dict[str, Any] = {
+        "schema_version": "3.2.0",
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
         "execution_enabled": False,
+        "execution_ready_count": 0,  # M5_0 DoD: always 0 when execution_enabled=False
         "execution_blocker": CURRENT_EXECUTION_BLOCKER.value,
         "execution_blocker_details": "EXECUTION_DISABLED_M5_0 - no execution cost model (paper estimates use gas-only)",
         # Cost model terminology:
