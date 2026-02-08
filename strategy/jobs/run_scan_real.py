@@ -929,8 +929,12 @@ def run_scan(
         "run_mode": "REGISTRY_REAL",
         "execution_enabled": False,
         "execution_blocker": CURRENT_EXECUTION_BLOCKER.value,
-        "execution_blocker_details": "EXECUTION_DISABLED_M5_0 - verified: no cost model",
-        "cost_model_available": False,
+        "execution_blocker_details": "EXECUTION_DISABLED_M5_0 - no execution cost model (paper estimates use gas-only)",
+        # Cost model terminology:
+        # - paper_cost_model_available: gas-only model for paper PnL estimates
+        # - execution_cost_model_available: full model with slippage/impact (NOT available)
+        "paper_cost_model_available": True,  # gas-only paper estimates work
+        "execution_cost_model_available": False,  # no full execution cost model
         "chain_id": config.get("chain_id", 42161),
         "current_block": current_block,
         # config_params: log relevant config for reproducibility

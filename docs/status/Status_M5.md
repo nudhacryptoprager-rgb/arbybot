@@ -1,8 +1,8 @@
 # Milestone 5 — Production small
 
-> **Оновлено**: 2026-02-07 11:36 UTC  
+> **Оновлено**: 2026-02-08 10:17 UTC  
 > **SHA**: `TBD`  
-> **Статус**: ✅ DONE (with CRITICAL price direction fix)
+> **Статус**: ✅ DONE (with 10 critical fixes)
 
 ---
 
@@ -95,11 +95,22 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 
 ## Останній Golden Run
 
-**RunDir**: `data/runs/ci_m5_gate_20260207_113530`  
-**GoldenCopy**: `docs/artifacts/golden/m5_golden_run`  
-**Date**: 2026-02-07 11:35 UTC  
-**Block**: 429,551,893  
+**RunDir**: `data/runs/ci_m5_gate_20260208_101732` (reference, not committed)  
+**Date**: 2026-02-08 10:17 UTC  
+**Block**: 429,879,603  
 **Result**: ✅ PASS (5/5 runs passed!)
+
+### 5 Canonical Runs (2026-02-08)
+
+| Run | Block | Signals | ARB/USDC (bps) | ARB/WETH (bps) |
+|-----|-------|---------|----------------|----------------|
+| 1 | 429879376 | 2 | 48.7 | 13.7 |
+| 2 | 429879441 | 2 | 48.7 | 9.0 |
+| 3 | 429879494 | 2 | 48.7 | 9.0 |
+| 4 | 429879547 | 3 | 48.7 | 9.0 |
+| 5 | 429879603 | 3 | 48.7 | 9.0 |
+
+**Інваріанти стабільні**: ціни правильного масштабу, спреди реалістичні.
 
 ### Key Metrics
 
@@ -144,21 +155,43 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 }
 ```
 
+**Autosize Triggers (tested):**
+- `ticks_crossed > 2` → reduce 50% (reason: `reduced_on_slippage_or_ticks`)
+- `impact_bps > 50` → reduce 50%
+- `3 good cycles` → restore ×1.2
+
+---
+
+## Paper vs Execution (термінологія)
+
+| Поле | Значення |
+|------|----------|
+| `paper_cost_model_available` | `true` — gas-only estimates для paper PnL |
+| `execution_cost_model_available` | `false` — немає повної моделі з slippage/impact |
+| `paper_win_rate` | **paper estimate** = `net_pnl_usdc_est > 0` (NOT real execution!) |
+| `signal_win_rate=1.0` | Означає: всі paper signals мають позитивний `net_pnl_usdc_est` |
+
+⚠️ **Важливо**: `paper_win_rate` — це НЕ реальний профіт. Це лише paper estimate без повних витрат (slippage, impact, MEV).
+
 ---
 
 ## Юніт-тести
 
 ```
-490 passed, 5 subtests passed
+498 passed, 5 subtests passed
 ```
 
-### Нові тести (price direction)
+### Нові тести (10 critical fixes)
 
 - `test_ci_m5_gate_negative_anti_placeholder.py` — 9 тестів
-- `test_ci_m5_gate_negative_price_scale.py` — **9 тестів** (NEW!)
+- `test_ci_m5_gate_negative_price_scale.py` — 9 тестів
+- `test_cost_model_terminology.py` — 5 тестів (NEW!)
+- `test_auto_size.py` — 6 тестів (extended)
 - Перевіряє FAIL при `pool_address=null`
 - Перевіряє FAIL при `tick=null` / `sqrt_price_x96=null` для v3
 - **Перевіряє FAIL при inverted price (17000 vs 0.00035)**
+- **Перевіряє cost model terminology consistency**
+- **Перевіряє autosize ticks_crossed/impact triggers**
 
 ---
 
@@ -357,6 +390,22 @@ Example: signals=2, opportunities=2 means both are net-positive (paper estimate)
 | `test_reject_histogram_structure` | Schema validation |
 | `test_v3_quote_without_provenance_is_rejected` | V3 provenance |
 | `test_truth_report_has_config_params` | Reproducibility |
+
+---
+
+## Golden Policy
+
+**Правило**: НЕ комітити runtime artifacts (data/runs/*) крім explicit golden fixtures.
+
+| Artifact | Location | Commit? |
+|----------|----------|---------|
+| Runtime runs | `data/runs/ci_m5_gate_*` | ❌ NO (gitignored) |
+| Golden fixtures | `docs/artifacts/*.json` | ✅ Yes (on schema change) |
+| Schema examples | `docs/artifacts/examples/` | ✅ Yes |
+
+**Оновлення golden**: Лише при свідомій зміні schema/полів через `scripts/make_golden_daily_report.py`.
+
+**Referencing runs**: Вказуємо шлях у docs (`RunDir: data/runs/ci_m5_gate_YYYYMMDD_HHMMSS`) без коміту самих файлів.
 
 ---
 

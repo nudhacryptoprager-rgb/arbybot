@@ -2,6 +2,11 @@
 
 Initial / minimal validator: accepts one or more daily_report JSON files and
 performs basic schema checks (schema_version, non-null metrics, top_reject_reasons not empty).
+
+M5 STRICT INVARIANTS:
+1. PRICE_SCALE_BOUNDS: detect inverted token0/token1 direction bugs
+2. paper_win_rate = paper estimate, NOT real execution
+3. health.rpc.p50_latency_ms required when quotes_fetched > 0
 """
 from __future__ import annotations
 
@@ -11,7 +16,56 @@ import subprocess
 import sys
 from pathlib import Path
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple, Any
+
+
+# ============================================================
+# PRICE SCALE INVARIANT (M5 strict rule)
+# ============================================================
+# Prevents inverted direction bugs where price is calculated as
+# token0/token1 instead of token1/token0 (or vice versa)
+# Example: ARB/WETH = 17000 (WRONG) vs 0.00035 (correct)
+PRICE_SCALE_BOUNDS: Dict[str, Tuple[float, float]] = {
+    "ARB/WETH": (0.00001, 0.01),      # ~0.00035 WETH per ARB
+    "ARB/USDC": (0.01, 10.0),         # ~$0.70 per ARB
+    "WETH/USDC": (100, 50000),        # ~$2000 per WETH
+    "WETH/USDT": (100, 50000),        # ~$2000 per WETH
+    "wstETH/WETH": (0.5, 2.0),        # ~1.15 WETH per wstETH
+}
+
+
+def validate_price_scale(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """Validate price scale invariant (M5 strict gate rule).
+    
+    Returns (ok, errors) where errors contains violation messages.
+    """
+    errors = []
+    
+    # Look for quotes in various locations
+    quotes = data.get("top_opportunities", [])
+    if not quotes:
+        return True, []
+    
+    for i, q in enumerate(quotes):
+        pair = q.get("pair") or f"{q.get('token_in', '?')}/{q.get('token_out', '?')}"
+        price_str = q.get("price") or q.get("price_exact")
+        if not price_str:
+            continue
+        
+        try:
+            price = float(price_str)
+        except (ValueError, TypeError):
+            continue
+        
+        bounds = PRICE_SCALE_BOUNDS.get(pair)
+        if bounds:
+            min_p, max_p = bounds
+            if price < min_p or price > max_p:
+                errors.append(
+                    f"strict_price_scale_violation_{i}_{pair}_{price:.6g}_outside_{min_p}_{max_p}"
+                )
+    
+    return len(errors) == 0, errors
 
 
 def validate_report(path: Path, strict: bool = False) -> List[str]:
@@ -90,6 +144,20 @@ def validate_report(path: Path, strict: bool = False) -> List[str]:
 
         if qf > 0 and p50 is None:
             errors.append("health_rpc_p50_missing_when_quotes_fetched")
+        
+        # ws_attempted check: if quotes_fetched > 0 and ws_enabled, require ws_attempted=true
+        # (prevents health lying about WS connectivity)
+        ws_enabled = False
+        ws_attempted = False
+        try:
+            infra = j.get("infra") or {}
+            ws_enabled = infra.get("ws_enabled", False)
+            ws_attempted = infra.get("ws_attempted", False)
+        except Exception:
+            pass
+        
+        if qf > 0 and ws_enabled and not ws_attempted:
+            errors.append("health_ws_not_attempted_when_enabled")
 
         # CRITICAL: Check for invalid quotes (POOL_MISSING, PRICE_OUTLIER) in strict mode
         # These indicate data quality issues that produce fake spreads
@@ -120,6 +188,12 @@ def validate_report(path: Path, strict: bool = False) -> List[str]:
                     errors.append(f"top_opportunity_missing_source_{i}")
                 if not any([op.get("spread_pct") is not None, op.get("price") is not None, op.get("confidence") is not None]):
                     errors.append(f"top_opportunity_missing_min_fields_{i}")
+        
+        # PRICE_SCALE_BOUNDS invariant (M5 strict rule)
+        # Detects inverted token0/token1 direction bugs
+        ps_ok, ps_errors = validate_price_scale(j)
+        if not ps_ok:
+            errors.extend(ps_errors)
 
     # Consistency checks with artifacts if provided
     artifacts = j.get("artifacts") or {}
