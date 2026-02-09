@@ -1,0 +1,79 @@
+{
+  "schema_version": "m4:execution:v1",
+  "run_mode": "FIXTURE_OFFLINE",
+  "generated_at": "2026-02-09T09:40:00Z",
+  "execution_enabled": false,
+  "simulations": [
+    {
+      "signal_id": "sig_golden_001",
+      "pair": "ARB/WETH",
+      "buy_dex": "uniswap_v3",
+      "sell_dex": "sushiswap_v3",
+      "buy_price": "0.00005625",
+      "sell_price": "0.00005644",
+      "spread_bps_exact": 33.78,
+      "simulation_status": "PASS",
+      "blocker": null,
+      "gas_used": 250000,
+      "gas_usd": "0.45",
+      "slippage_bps_actual": 5,
+      "slippage_usd": "0.02",
+      "net_usd": "0.38",
+      "is_profitable": true
+    },
+    {
+      "signal_id": "sig_golden_002",
+      "pair": "WETH/USDC",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "buy_price": "2091.90",
+      "sell_price": "2092.15",
+      "spread_bps_exact": 1.2,
+      "simulation_status": "FAIL",
+      "blocker": "SIM_UNPROFITABLE",
+      "gas_used": 280000,
+      "gas_usd": "0.52",
+      "slippage_bps_actual": 8,
+      "slippage_usd": "0.15",
+      "net_usd": "-0.67",
+      "is_profitable": false
+    },
+    {
+      "signal_id": "sig_golden_003",
+      "pair": "ARB/USDC",
+      "buy_dex": "uniswap_v3",
+      "sell_dex": "sushiswap_v3",
+      "buy_price": "0.1175",
+      "sell_price": "0.1185",
+      "spread_bps_exact": 85.11,
+      "simulation_status": "PASS",
+      "blocker": null,
+      "gas_used": 265000,
+      "gas_usd": "0.48",
+      "slippage_bps_actual": 3,
+      "slippage_usd": "0.01",
+      "net_usd": "0.51",
+      "is_profitable": true
+    }
+  ],
+  "simulations_count": 3,
+  "simulations_passed": 2,
+  "simulations_failed": 1,
+  "total_gas_usd": "1.45",
+  "total_net_usd": "0.22",
+  "pass_rate": 0.667,
+  "accounting": {
+    "signals_total": 3,
+    "signals_profitable": 2,
+    "signals_unprofitable": 1,
+    "gas_total_usd": "1.45",
+    "slippage_total_usd": "0.18",
+    "net_total_usd": "0.22"
+  },
+  "health": {
+    "simulation_pass_rate": 0.667,
+    "accounting_complete": true,
+    "all_signals_simulated": true
+  },
+  "_comment": "Golden fixture for M4 execution gate. DO NOT MODIFY without updating gate validation."
+}

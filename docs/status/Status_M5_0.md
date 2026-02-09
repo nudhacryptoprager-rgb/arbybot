@@ -1,7 +1,30 @@
 # Status: M5_0 Infrastructure Hardening
 
-**Status**: IN PROGRESS  
-**Last Updated**: 2026-02-08
+**Status**: ✅ DONE  
+**Last Updated**: 2026-02-09  
+**Closure SHA**: `93c08b0`  
+**Final RunDir**: `data/runs/ci_m5_gate_20260208_113637`
+
+## Closure Summary
+
+M5_0 is **frozen**. Any future changes require a separate PR with clear ROI justification.
+
+**Key invariants preserved**:
+- `execution_enabled=false` in all M5_0/M5 modes (no side-effects)
+- Offline fixtures use `infra.rpc_provider="fixture"` (minimal, not fake-real)
+- WARN skipped in fixtures mode (documented below)
+- Gate v2.1.0 stable
+
+**Reproduction commands**:
+```bash
+# Offline gate (0 WARN)
+python scripts/ci_m5_0_gate.py --offline --strict
+
+# Online gate (real scan)
+python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
+```
+
+---
 
 ## Overview
 

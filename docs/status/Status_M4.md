@@ -1,8 +1,28 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
 **Status**: 🚧 **IN PROGRESS**  
-**Updated**: 2026-02-08  
-**Predecessor**: M5_0 (CLOSED), M5 (FROZEN)
+**Updated**: 2026-02-09  
+**Predecessor**: M5_0 (✅ DONE), M5 (FROZEN)
+
+---
+
+## Latest Progress (2026-02-09)
+
+**Completed today:**
+- ✅ `ci_m4_execution_gate.py` v1.0.0 - full PASS/FAIL gate structure
+- ✅ `--offline --strict` mode with fixture generation
+- ✅ SimRejectReason enum: `SIM_REVERT`, `SIM_GAS_TOO_HIGH`, `SIM_UNPROFITABLE`, `SIM_SLIPPAGE`, `SIM_BLOCK_STALE`
+- ✅ Accounting fields in execution_report: `gas_usd`, `slippage_usd`, `net_usd`
+- ✅ Golden fixtures in `docs/artifacts/m4_golden_run/`
+- ✅ 9 unit tests in `test_ci_m4_gate_negative.py`
+- ✅ `core/reject_reasons.py` - canonical reject reasons module
+- ✅ `--dry-run` shows real signals from M5 truth_report
+
+**Current signals (from last scan):**
+```
+ARB/WETH: spread=34.12 bps, net_pnl_est=$3.31
+ARB/USDC: spread=82.38 bps, net_pnl_est=$8.14
+```
 
 ---
 

@@ -1,0 +1,46 @@
+{
+  "schema_version": "m4:signals:v1",
+  "run_mode": "FIXTURE_OFFLINE",
+  "generated_at": "2026-02-09T09:40:00Z",
+  "signals": [
+    {
+      "signal_id": "sig_golden_001",
+      "pair": "ARB/WETH",
+      "buy_dex": "uniswap_v3",
+      "sell_dex": "sushiswap_v3",
+      "buy_price": "0.00005625",
+      "sell_price": "0.00005644",
+      "spread_bps_exact": 33.78,
+      "is_net_positive_est": true,
+      "net_pnl_usdc_est": 0.85,
+      "pinned_block": 429900000
+    },
+    {
+      "signal_id": "sig_golden_002",
+      "pair": "WETH/USDC",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "buy_price": "2091.90",
+      "sell_price": "2092.15",
+      "spread_bps_exact": 1.2,
+      "is_net_positive_est": false,
+      "net_pnl_usdc_est": -0.50,
+      "pinned_block": 429900000
+    },
+    {
+      "signal_id": "sig_golden_003",
+      "pair": "ARB/USDC",
+      "buy_dex": "uniswap_v3",
+      "sell_dex": "sushiswap_v3",
+      "buy_price": "0.1175",
+      "sell_price": "0.1185",
+      "spread_bps_exact": 85.11,
+      "is_net_positive_est": true,
+      "net_pnl_usdc_est": 0.99,
+      "pinned_block": 429900000
+    }
+  ],
+  "signals_count": 3,
+  "net_positive_count": 2,
+  "_comment": "Golden fixture for M4 signals. Matches execution_report_golden.json"
+}
