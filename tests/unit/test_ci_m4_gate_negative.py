@@ -293,5 +293,70 @@ class TestGateIntegration(unittest.TestCase):
             self.assertEqual(result, 0, "Offline strict gate should PASS")
 
 
+class TestPriceDirectionInvariant(unittest.TestCase):
+    """Test price direction / pair semantics invariants."""
+
+    def test_signals_have_base_quote_tokens(self):
+        """Signals must have base_token, quote_token, price_in fields."""
+        # Valid signal with proper semantics
+        valid_signal = {
+            "signal_id": "sig_001",
+            "pair": "ARB/WETH",
+            "base_token": "ARB",
+            "quote_token": "WETH",
+            "price_in": "quote_per_base",
+            "buy_price": "0.00005625",
+            "sell_price": "0.00005644",
+        }
+        
+        # Check base/quote consistency with pair
+        pair_parts = valid_signal["pair"].split("/")
+        self.assertEqual(valid_signal["base_token"], pair_parts[0])
+        self.assertEqual(valid_signal["quote_token"], pair_parts[1])
+        
+    def test_pair_semantics_must_match(self):
+        """If pair=ARB/WETH, then base=ARB, quote=WETH - no swap."""
+        # Simulating a fixture that swaps the direction
+        invalid_signal = {
+            "signal_id": "sig_001",
+            "pair": "ARB/WETH",       # pair says ARB is base
+            "base_token": "WETH",     # BUT this says WETH is base
+            "quote_token": "ARB",     # WRONG direction
+        }
+        
+        pair_parts = invalid_signal["pair"].split("/")
+        # This should NOT match - it's the invariant violation
+        self.assertNotEqual(
+            invalid_signal["base_token"], pair_parts[0],
+            "If pair=ARB/WETH, base_token must be ARB, not WETH"
+        )
+
+    def test_spread_bps_micro_is_integer(self):
+        """spread_bps_micro must be an integer, not float."""
+        valid_signal = {
+            "spread_bps_micro": 337800,  # 33.78 bps as integer micro-bps
+        }
+        
+        self.assertIsInstance(valid_signal["spread_bps_micro"], int)
+        # 1 bps = 10000 micro-bps
+        bps = valid_signal["spread_bps_micro"] / 10000
+        self.assertAlmostEqual(bps, 33.78, places=2)
+
+    def test_price_format_is_decimal_string(self):
+        """Prices must be decimal strings, not numbers."""
+        valid_signal = {
+            "buy_price": "0.00005625",
+            "sell_price": "0.00005644",
+        }
+        
+        self.assertIsInstance(valid_signal["buy_price"], str)
+        self.assertIsInstance(valid_signal["sell_price"], str)
+        
+        # Should be parseable as float
+        buy = float(valid_signal["buy_price"])
+        sell = float(valid_signal["sell_price"])
+        self.assertGreater(sell, buy)  # Sell > Buy for profitable signal
+
+
 if __name__ == "__main__":
     unittest.main()

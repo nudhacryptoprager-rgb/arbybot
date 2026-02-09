@@ -98,6 +98,8 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
     - signals_<ts>.json: Input signals
     
     Fixture uses numerical USD values (not strings) for proper validation.
+    All prices are strings (decimal format) for consistency.
+    spread_bps is integer micro-bps (1 bps = 10000 micro-bps).
     """
     reports_dir = run_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -106,64 +108,100 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
     chain_id = DEFAULT_CHAIN_ID
     
     # Mock signals for fixture - all with same pinned_block
+    # Prices are ALWAYS string decimal, format: "quote_per_base"
+    # spread_bps_micro is integer (1 bps = 10000 micro-bps)
     fixture_signals = [
         {
             "signal_id": f"sig_001_{ts}",
             "pair": "ARB/WETH",
+            "base_token": "ARB",
+            "quote_token": "WETH",
+            "price_in": "quote_per_base",  # price = how much WETH per 1 ARB
             "buy_dex": "uniswap_v3",
             "sell_dex": "sushiswap_v3",
-            "buy_price": "0.00005625",
-            "sell_price": "0.00005644",
-            "spread_bps_exact": 33.78,
+            "buy_price": "0.00005625",     # Always string decimal
+            "sell_price": "0.00005644",    # Always string decimal
+            "spread_bps_micro": 337800,    # 33.78 bps = 337800 micro-bps (integer)
+            "size_usd_est": 100.0,         # Trade size in USD
+            "gross_pnl_usdc_est": 1.30,    # Before costs
+            "gas_usdc_est": 0.45,          # Estimated gas
+            "slippage_usdc_est": 0.02,     # Estimated slippage
+            "net_pnl_usdc_est": 0.83,      # net = gross - gas - slippage
             "is_net_positive_est": True,
-            "net_pnl_usdc_est": 0.85,
+            "confidence": 0.85,            # Signal confidence [0,1]
+            "liquidity_hint": "adequate",  # "thin", "adequate", "deep"
             "pinned_block": pinned_block,
         },
         {
             "signal_id": f"sig_002_{ts}",
             "pair": "WETH/USDC",
+            "base_token": "WETH",
+            "quote_token": "USDC",
+            "price_in": "quote_per_base",  # price = how much USDC per 1 WETH
             "buy_dex": "sushiswap_v3",
             "sell_dex": "uniswap_v3",
-            "buy_price": "2091.90",
-            "sell_price": "2092.15",
-            "spread_bps_exact": 1.2,
+            "buy_price": "2091.90",        # Always string decimal
+            "sell_price": "2092.15",       # Always string decimal
+            "spread_bps_micro": 12000,     # 1.2 bps = 12000 micro-bps (integer)
+            "size_usd_est": 100.0,
+            "gross_pnl_usdc_est": 0.12,
+            "gas_usdc_est": 0.52,
+            "slippage_usdc_est": 0.15,
+            "net_pnl_usdc_est": -0.55,
             "is_net_positive_est": False,
-            "net_pnl_usdc_est": -0.50,
+            "confidence": 0.60,
+            "liquidity_hint": "adequate",
             "pinned_block": pinned_block,
         },
     ]
     
     # Mock simulation results - numerical USD values
+    # All USD fields are numbers for proper aggregation
     fixture_simulations = [
         {
             "signal_id": f"sig_001_{ts}",
             "pair": "ARB/WETH",
+            "base_token": "ARB",
+            "quote_token": "WETH",
             "simulation_status": "PASS",
             "blocker": None,
             "block_used": pinned_block,
             "gas_used": 250000,
-            "gas_usd": 0.45,        # Number, not string
-            "slippage_bps_actual": 5,
-            "slippage_usd": 0.02,   # Number, not string
-            "net_usd": 0.38,        # Number, not string
+            "gas_usd": 0.45,              # Number, not string
+            "slippage_bps_actual": 50000, # 5 bps = 50000 micro-bps
+            "slippage_usd": 0.02,         # Number
+            "gross_pnl_usd": 0.85,        # Before costs
+            "net_usd": 0.38,              # net = gross - gas - slippage
             "is_profitable": True,
-            "est_was_correct": True,  # estimate matched simulation
+            "est_was_correct": True,      # estimate matched simulation
         },
         {
             "signal_id": f"sig_002_{ts}",
             "pair": "WETH/USDC",
+            "base_token": "WETH",
+            "quote_token": "USDC",
             "simulation_status": "FAIL",
             "blocker": SimRejectReason.SIM_UNPROFITABLE.value,
             "block_used": pinned_block,
             "gas_used": 280000,
             "gas_usd": 0.52,
-            "slippage_bps_actual": 8,
+            "slippage_bps_actual": 80000, # 8 bps = 80000 micro-bps
             "slippage_usd": 0.15,
+            "gross_pnl_usd": 0.00,
             "net_usd": -0.67,
             "is_profitable": False,
-            "est_was_correct": True,  # estimate (false) matched simulation (false)
+            "est_was_correct": True,      # estimate (false) matched simulation (false)
         },
     ]
+    
+    # Compute aggregates by pair and route
+    signals_by_pair: Dict[str, int] = {}
+    signals_by_route: Dict[str, int] = {}
+    for sig in fixture_signals:
+        pair = sig.get("pair", "UNKNOWN")
+        signals_by_pair[pair] = signals_by_pair.get(pair, 0) + 1
+        route = f"{sig.get('buy_dex', '?')}->{sig.get('sell_dex', '?')}"
+        signals_by_route[route] = signals_by_route.get(route, 0) + 1
     
     # Compute est vs sim metrics
     est_profitable_count = sum(1 for s in fixture_signals if s.get("is_net_positive_est"))
@@ -173,17 +211,21 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
         if sig.get("is_net_positive_est") != sim.get("is_profitable")
     )
     
-    # Write signals
+    # Write signals with v1.1 schema
     signals_path = reports_dir / f"signals_{ts}.json"
     signals_data = {
-        "schema_version": "m4:signals:v1",
+        "schema_version": "m4:signals:v1.1",
         "run_mode": "FIXTURE_OFFLINE",
+        "price_format": "decimal_str",    # All prices are string decimals
+        "spread_format": "micro_bps",     # spread_bps_micro is integer (1 bps = 10000)
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "chain_id": chain_id,
         "pinned_block": pinned_block,
         "signals": fixture_signals,
         "signals_count": len(fixture_signals),
         "net_positive_count": est_profitable_count,
+        "signals_by_pair": signals_by_pair,
+        "signals_by_route": signals_by_route,
     }
     with open(signals_path, "w") as f:
         json.dump(signals_data, f, indent=2)
@@ -431,17 +473,18 @@ def validate_execution_report(
             checks.append(("dod_smoke_accounting", False, "accounting_complete=false"))
     
     elif profile == DoDProfile.PROFIT:
-        # PROFIT: PASS if total_net_usd > 0 AND signals_profitable >= 1
+        # PROFIT: PASS if total_net_usd > 0 AND sim_profitable_count >= 1
+        sim_profitable_count = est_vs_sim.get("sim_profitable_count", sims_passed)
+        
         if total_net_usd > 0:
             checks.append(("dod_profit_net", True, f"total_net_usd={total_net_usd:.4f} > 0"))
         else:
             checks.append(("dod_profit_net", False, f"total_net_usd={total_net_usd:.4f} <= 0 (UNPROFITABLE)"))
         
-        signals_profitable = accounting.get("signals_profitable", 0)
-        if signals_profitable >= 1:
-            checks.append(("dod_profit_signals", True, f"signals_profitable={signals_profitable} >= 1"))
+        if sim_profitable_count >= 1:
+            checks.append(("dod_profit_sims", True, f"sim_profitable_count={sim_profitable_count} >= 1"))
         else:
-            checks.append(("dod_profit_signals", False, f"signals_profitable={signals_profitable} < 1"))
+            checks.append(("dod_profit_sims", False, f"sim_profitable_count={sim_profitable_count} < 1"))
     
     # Strict mode: require at least one profitable
     if strict and sims_passed == 0:

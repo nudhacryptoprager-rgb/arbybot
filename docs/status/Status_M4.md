@@ -6,6 +6,15 @@
 
 ---
 
+## Schema Versions
+
+| Artifact | Version | Description |
+|----------|---------|-------------|
+| signals | `m4:signals:v1.1` | With base/quote, price_in, micro-bps |
+| execution_report | `m4:execution:v1.1` | Numerical USD, block consistency |
+
+---
+
 ## Latest Progress (2026-02-09)
 
 ### M4 Execution Gate v1.1.0 Released
@@ -14,25 +23,32 @@
 - ✅ `ci_m4_execution_gate.py` v1.1.0 - production-quality gate
 - ✅ **DoD Profiles**: `--profile smoke|profit`
   - SMOKE: ≥1 profitable simulation + accounting complete
-  - PROFIT: total_net_usd > 0
-- ✅ **Block Consistency Invariant**: pinned_block in header, block_used in each simulation, all must match
-- ✅ **Numerical USD fields**: gas_usd, slippage_usd, net_usd as numbers (not strings)
-- ✅ **est_vs_sim metrics**: est_profitable_count, sim_profitable_count, est_sim_mismatch_count
-- ✅ **Expanded blocker taxonomy** (15 reasons in SimRejectReason)
-- ✅ chain_id + pinned_block in execution_report header
-- ✅ 10 unit tests in `test_ci_m4_gate_negative.py`
+  - PROFIT: total_net_usd > 0 + sim_profitable_count ≥ 1
+- ✅ **Block Consistency Invariant**: pinned_block in header, block_used in each simulation
+- ✅ **Numerical USD fields**: gas_usd, slippage_usd, net_usd as numbers
+- ✅ **Price semantics**: base_token, quote_token, price_in="quote_per_base"
+- ✅ **Spread as micro-bps**: spread_bps_micro (integer, 1 bps = 10000)
+- ✅ **PnL breakdown**: gross_pnl, gas, slippage, net per signal
+- ✅ **est_vs_sim metrics**: track estimate vs simulation accuracy
+- ✅ **Blocker taxonomy** (15 canonical SimRejectReason values)
+- ✅ 14 unit tests in `test_ci_m4_gate_negative.py`
+- ✅ Golden fixtures in `docs/artifacts/m4_golden_run/`
 
 **Canonical Commands:**
 ```bash
 # SMOKE profile (default) - requires ≥1 profitable
 python scripts/ci_m4_execution_gate.py --offline --profile smoke
 
-# PROFIT profile - requires total_net_usd > 0
+# PROFIT profile - requires total_net_usd > 0 AND sim_profitable >= 1
 python scripts/ci_m4_execution_gate.py --offline --profile profit
 
-# Strict mode (requires profitable in accounting)
+# Strict mode
 python scripts/ci_m4_execution_gate.py --offline --strict
 ```
+
+**Golden Reference:**
+- Path: `docs/artifacts/m4_golden_run/`
+- README: describes schema, invariants, canonical reproduction
 
 **Current signals (from last scan):**
 ```
@@ -40,7 +56,18 @@ ARB/WETH: spread=34.12 bps, net_pnl_est=$3.31
 ARB/USDC: spread=82.38 bps, net_pnl_est=$8.14
 ```
 
-**Schema Version:** `m4:execution:v1.1`
+---
+
+## Price Direction Invariant
+
+For `pair = "ARB/WETH"`:
+```
+base_token  = "ARB"   (pair.split("/")[0])
+quote_token = "WETH"  (pair.split("/")[1])
+price_in    = "quote_per_base"  (how much WETH per 1 ARB)
+```
+
+**CRITICAL:** If this invariant is violated, execution will swap direction!
 
 ---
 
@@ -65,6 +92,8 @@ Canonical reasons for simulation/execution failures:
 | `EXEC_INSUFFICIENT_BALANCE` | Not enough balance |
 | `EXEC_APPROVAL_NEEDED` | Token approval needed |
 | `EXEC_BLOCK_MISMATCH` | Block mismatch during execution |
+
+**NOTE:** M4 SimRejectReason is separate from M5_0 QuoteRejectReason to avoid conflicts.
 
 ---
 
