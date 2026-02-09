@@ -3,7 +3,7 @@
 """
 M4 Execution Gate - DEX↔DEX Atomic Execution v1.
 
-VERSION: 1.3.0 (2026-02-09)
+VERSION: 1.4.0 (2026-02-09)
 STATUS: ACTIVE
 
 PURPOSE:
@@ -40,6 +40,24 @@ DOD PROFILES:
 COST MODELS:
   paper_realistic: gas=$0.10, slippage=5bps (default)
   paper_conservative: gas=$0.30, slippage=20bps (stress test)
+
+FAIL CONDITIONS (explicit, v1.4.0):
+  - FAIL_NET: total_net_usdc <= 0 (PROFIT profile)
+  - FAIL_DRIFT_MAE: mae_net_usdc >= 0.50 (inclusive, PROFIT profile)
+  - FAIL_DRIFT_SIGN: sign_correct_rate < 0.70 (PROFIT profile)
+  - FAIL_SIGN_MISMATCH: sign_mismatch_count > 0 (strict mode)
+  - FAIL_NO_PROFITABLE: sim_profitable_count == 0
+
+ARTIFACTS GENERATED:
+  - signals_<ts>.json: M4 signals from truth_report
+  - execution_report_<ts>.json: Simulation results
+  - run_summary_<ts>.json: Canonical single-run summary (v1, source of truth for continuous scan)
+  - stability_summary_<ts>.json: Multi-run aggregator (when multiple runs exist)
+
+FIELD DEFINITIONS:
+  - sign_mismatch_count: Signals where sign(est_net) != sign(sim_net)
+  - would_execute_if_enabled: Simulation passed AND execution_enabled would be true
+  - exec_ready: false (always, until M5 enables execution)
 
 SUCCESS CRITERIA (from Roadmap):
   - 1-2 pairs, 2 DEX, on one chain
@@ -80,7 +98,29 @@ from core.artifact_invariants import (
     get_profile,
 )
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
+
+# ============================================================
+# FAIL REASON CODES (explicit definitions)
+# ============================================================
+
+class FailReason:
+    """
+    Explicit fail reason codes for M4 execution gate.
+    
+    These codes are used in run_summary.json.reasons[] to explain FAIL/WARN status.
+    Each reason corresponds to a specific threshold violation.
+    """
+    # FAIL conditions
+    FAIL_NET = "FAIL_NET"                        # total_net_usdc <= 0 (PROFIT profile)
+    FAIL_DRIFT_MAE = "FAIL_DRIFT_MAE"            # mae_net_usdc >= 0.50 (inclusive)
+    FAIL_DRIFT_SIGN = "FAIL_DRIFT_SIGN"          # sign_correct_rate < 0.70
+    FAIL_SIGN_MISMATCH = "FAIL_SIGN_MISMATCH"    # sign_mismatch_count > 0 (strict mode)
+    FAIL_NO_PROFITABLE = "FAIL_NO_PROFITABLE"    # sim_profitable_count == 0
+    
+    # WARN conditions
+    WARN_DRIFT_MAE = "WARN_DRIFT_MAE"            # mae in warn range (0.30 <= mae < 0.50)
+    
 
 # ============================================================
 # COST MODEL REGISTRY
@@ -403,7 +443,8 @@ def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE)
     # Compute est vs sim metrics
     est_profitable_count = sum(1 for s in fixture_signals if s.get("is_net_positive_est"))
     sim_profitable_count = sum(1 for s in fixture_simulations if s.get("is_profitable"))
-    est_sim_mismatch_count = sum(
+    # Renamed from est_sim_mismatch_count to sign_mismatch_count (v1.4.0)
+    sign_mismatch_count = sum(
         1 for sig, sim in zip(fixture_signals, fixture_simulations)
         if sig.get("is_net_positive_est") != sim.get("is_profitable")
     )
@@ -471,7 +512,8 @@ def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE)
         "est_vs_sim": {
             "est_profitable_count": est_profitable_count,
             "sim_profitable_count": sim_profitable_count,
-            "est_sim_mismatch_count": est_sim_mismatch_count,
+            # Renamed from est_sim_mismatch_count (v1.4.0)
+            "sign_mismatch_count": sign_mismatch_count,
             "est_net_usdc_sum": est_net_sum,
             "sim_net_usdc_sum": sim_net_sum,
             "est_sign_correct_count": est_sign_correct_count,
@@ -759,7 +801,11 @@ def generate_m4_from_online_inputs(
             "est_sign_correct": sign_correct,
             "is_profitable": is_profitable,
             "blocker": blocker,
-            "would_execute": is_profitable,
+            # Clarified field names (v1.4.0):
+            # would_execute_if_enabled: True if sim passed AND we would execute if enabled
+            # exec_ready: Always false until M5 enables real execution
+            "would_execute_if_enabled": is_profitable,
+            "exec_ready": False,  # M4 = simulation only, never ready for real execution
             # Compat fields for net_usdc
             "net_usdc": sim_net_usdc,  # Legacy: same as sim_net_usdc
             # Required for online validation
@@ -772,15 +818,16 @@ def generate_m4_from_online_inputs(
     mae_net_usdc = round(sum(est_errors) / len(est_errors), 4) if est_errors else 0.0
     est_sign_correct_rate = round(sign_correct_count / len(m4_signals), 4) if m4_signals else 0.0
     
-    # Count est_sim mismatches (sign disagreement)
-    est_sim_mismatch_count = len(m4_signals) - sign_correct_count
+    # Count sign mismatches: signals where sign(est_net) != sign(sim_net)
+    # Renamed from est_sim_mismatch_count for clarity (v1.4.0)
+    sign_mismatch_count = len(m4_signals) - sign_correct_count
     
     print(f"[ONLINE] Simulated: {len(simulations)} signals")
     print(f"[ONLINE] Profitable: {sim_profitable_count}/{len(simulations)}")
     print(f"[ONLINE] total_net_usdc: ${total_net_usdc:.4f}")
     print(f"[ONLINE] MAE: ${mae_net_usdc:.4f}, sign_rate: {est_sign_correct_rate:.2%}")
-    if est_sim_mismatch_count > 0:
-        print(f"[ONLINE] est_sim_mismatch_count: {est_sim_mismatch_count}")
+    if sign_mismatch_count > 0:
+        print(f"[ONLINE] sign_mismatch_count: {sign_mismatch_count}")
     
     # Write execution_report
     exec_path = reports_dir / f"execution_report_{ts}.json"
@@ -820,7 +867,8 @@ def generate_m4_from_online_inputs(
         "est_vs_sim": {
             "est_net_usdc_sum": round(est_net_sum, 4),
             "sim_net_usdc_sum": round(sim_net_sum, 4),
-            "est_sim_mismatch_count": est_sim_mismatch_count,
+            # Renamed from est_sim_mismatch_count for clarity (v1.4.0)
+            "sign_mismatch_count": sign_mismatch_count,
             "sim_profitable_count": sim_profitable_count,
             "mae_net_usdc": mae_net_usdc,
             "est_sign_correct_count": sign_correct_count,
@@ -847,8 +895,30 @@ def generate_m4_from_online_inputs(
     
     # Generate stability_summary.json artifact
     stability_path = reports_dir / f"stability_summary_{ts}.json"
+    
+    # Determine status with explicit reason codes (v1.4.0)
+    stability_reasons = []
+    stability_status = "PASS"
+    
+    # MAE check (>= 0.50 is FAIL, inclusive)
+    if mae_net_usdc >= 0.50:
+        stability_status = "FAIL"
+        stability_reasons.append(FailReason.FAIL_DRIFT_MAE)
+    elif mae_net_usdc >= 0.30:
+        stability_reasons.append(FailReason.WARN_DRIFT_MAE)
+    
+    # Sign rate check
+    if est_sign_correct_rate < 0.70:
+        stability_status = "FAIL"
+        stability_reasons.append(FailReason.FAIL_DRIFT_SIGN)
+    
+    # Net profitability check
+    if total_net_usdc <= 0:
+        stability_status = "FAIL"
+        stability_reasons.append(FailReason.FAIL_NET)
+    
     stability_data = {
-        "schema_version": "m4:stability:v1.0",
+        "schema_version": "m4:stability:v1.1",  # Bumped for sign_mismatch_count rename
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "source_sha": source_sha,
         "run_id": run_id,
@@ -869,21 +939,19 @@ def generate_m4_from_online_inputs(
         "drift_metrics": {
             "mae_net_usdc": mae_net_usdc,
             "est_sign_correct_rate": est_sign_correct_rate,
-            "est_sim_mismatch_count": est_sim_mismatch_count,
+            # Renamed from est_sim_mismatch_count (v1.4.0)
+            "sign_mismatch_count": sign_mismatch_count,
             "est_net_sum": round(est_net_sum, 4),
             "sim_net_sum": round(sim_net_sum, 4),
             "sum_drift_usdc": round(abs(est_net_sum - sim_net_sum), 4),
         },
         "thresholds": {
             "mae_warn": 0.30,
-            "mae_fail": 0.50,
+            "mae_fail": 0.50,  # >= 0.50 is FAIL (inclusive)
             "sign_rate_min": 0.70,
         },
-        "status": "PASS" if (
-            mae_net_usdc <= 0.50 and 
-            est_sign_correct_rate >= 0.70 and 
-            total_net_usdc > 0
-        ) else "FAIL",
+        "status": stability_status,
+        "reasons": stability_reasons,  # Explicit fail/warn reason codes
     }
     
     with open(stability_path, "w") as f:
@@ -891,11 +959,174 @@ def generate_m4_from_online_inputs(
     
     print(f"[ONLINE] Generated: {stability_path.name}")
     
+    # ============================================================
+    # GENERATE run_summary.json (v1.4.0)
+    # Canonical single-run summary - source of truth for continuous scan
+    # ============================================================
+    run_summary_path = reports_dir / f"run_summary_{ts}.json"
+    
+    # Build reasons array for run summary
+    run_reasons = list(stability_reasons)  # Copy from stability
+    if sim_profitable_count == 0:
+        run_reasons.append(FailReason.FAIL_NO_PROFITABLE)
+    
+    run_summary_data = {
+        "schema_version": "run:summary:v1",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        # Provenance
+        "source_sha": source_sha,
+        "run_id": run_id,
+        # Inputs
+        "inputs": {
+            "chain_id": chain_id,
+            "pinned_block": source_block,
+            "source_truth_report": truth_path.name,
+            "source_signals": signals_path.name,
+        },
+        # Cost models - truth vs sim for transparency
+        "cost_models": {
+            "truth": {
+                "name": "gas_only",  # truth_report uses paper_slippage_bps=0
+                "description": "Truth report estimate (gas only, no slippage)",
+                "gas_usd": 0.10,
+                "slippage_bps": 0,
+            },
+            "sim": {
+                "name": cost_model.name,
+                "description": cost_model.description,
+                "gas_usd": cost_model.gas_usd,
+                "slippage_bps": cost_model.slippage_bps,
+            },
+        },
+        # Metrics - all key numbers in one place
+        "metrics": {
+            "signals_count": len(m4_signals),
+            "simulations_count": len(simulations),
+            "sim_profitable_count": sim_profitable_count,
+            "total_net_usdc": round(total_net_usdc, 4),
+            "profitable_rate": round(sim_profitable_count / len(simulations), 4) if simulations else 0,
+            "est_net_usdc_sum": round(est_net_sum, 4),
+            "sim_net_usdc_sum": round(sim_net_sum, 4),
+            "mae_net_usdc": mae_net_usdc,
+            "est_sign_correct_rate": est_sign_correct_rate,
+            "sign_mismatch_count": sign_mismatch_count,
+        },
+        # Thresholds - explicit boundaries
+        "thresholds": {
+            "mae_warn": 0.30,
+            "mae_fail": 0.50,  # >= 0.50 is FAIL (inclusive)
+            "sign_rate_min": 0.70,
+        },
+        # Status - explicit PASS/FAIL/WARN with reasons
+        "status": stability_status,
+        "reasons": run_reasons,
+        # Safety invariants
+        "safety": {
+            "execution_enabled": False,
+            "kill_switch_active": True,
+            "exec_ready": False,  # Always false until M5
+        },
+        # Profile used
+        "profile": "profit",  # PROFIT profile for online
+    }
+    
+    with open(run_summary_path, "w") as f:
+        json.dump(run_summary_data, f, indent=2)
+    
+    print(f"[ONLINE] Generated: {run_summary_path.name}")
+    
     return {
         "signals": signals_path,
         "execution_report": exec_path,
         "stability_summary": stability_path,
+        "run_summary": run_summary_path,
     }
+
+
+# ============================================================
+# MULTI-RUN STABILITY AGGREGATOR (v1.4.0)
+# ============================================================
+
+def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Dict[str, Any]:
+    """
+    Aggregate multiple run_summary.json files into a multi-run stability report.
+    
+    This is the canonical aggregator for continuous scan. Each run produces
+    a run_summary.json, and this function combines them into aggregate metrics.
+    
+    Args:
+        run_dirs: List of run directories to aggregate
+        output_path: Where to write the aggregated stability report
+    
+    Returns:
+        Aggregated stability data
+    """
+    runs_data = []
+    
+    for run_dir in run_dirs:
+        reports_dir = run_dir / "reports"
+        if not reports_dir.exists():
+            continue
+        
+        # Find run_summary.json
+        summary_files = list(reports_dir.glob("run_summary_*.json"))
+        if not summary_files:
+            continue
+        
+        summary_path = sorted(summary_files, key=lambda x: x.name, reverse=True)[0]
+        with open(summary_path) as f:
+            data = json.load(f)
+        
+        runs_data.append({
+            "run_dir": str(run_dir.name),
+            "run_id": data.get("run_id", ""),
+            "timestamp": data.get("timestamp", ""),
+            "status": data.get("status", "UNKNOWN"),
+            "reasons": data.get("reasons", []),
+            "metrics": data.get("metrics", {}),
+        })
+    
+    if not runs_data:
+        return {"error": "No run_summary.json files found"}
+    
+    # Aggregate metrics
+    total_signals = sum(r["metrics"].get("signals_count", 0) for r in runs_data)
+    total_profitable = sum(r["metrics"].get("sim_profitable_count", 0) for r in runs_data)
+    total_net = sum(r["metrics"].get("total_net_usdc", 0) for r in runs_data)
+    mae_values = [r["metrics"].get("mae_net_usdc", 0) for r in runs_data if r["metrics"].get("mae_net_usdc") is not None]
+    sign_rates = [r["metrics"].get("est_sign_correct_rate", 0) for r in runs_data if r["metrics"].get("est_sign_correct_rate") is not None]
+    
+    # Compute aggregates
+    pass_count = sum(1 for r in runs_data if r["status"] == "PASS")
+    fail_count = sum(1 for r in runs_data if r["status"] == "FAIL")
+    
+    aggregated = {
+        "schema_version": "m4:stability_agg:v1",
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "runs_included": len(runs_data),
+        "runs": runs_data,
+        "aggregates": {
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+            "pass_rate": round(pass_count / len(runs_data), 4) if runs_data else 0,
+            "total_signals": total_signals,
+            "total_profitable": total_profitable,
+            "total_net_usdc": round(total_net, 4),
+            "avg_net_usdc": round(total_net / len(runs_data), 4) if runs_data else 0,
+            "mae_avg": round(sum(mae_values) / len(mae_values), 4) if mae_values else None,
+            "mae_max": max(mae_values) if mae_values else None,
+            "mae_min": min(mae_values) if mae_values else None,
+            "sign_rate_avg": round(sum(sign_rates) / len(sign_rates), 4) if sign_rates else None,
+            "sign_rate_min": min(sign_rates) if sign_rates else None,
+        },
+        "status": "PASS" if pass_count == len(runs_data) else "FAIL",
+        "reasons": list(set(reason for r in runs_data for reason in r.get("reasons", []))),
+    }
+    
+    with open(output_path, "w") as f:
+        json.dump(aggregated, f, indent=2)
+    
+    return aggregated
 
 
 # ============================================================
@@ -1079,8 +1310,9 @@ def validate_execution_report(
     # est_vs_sim metrics
     est_vs_sim = data.get("est_vs_sim", {})
     if est_vs_sim:
-        mismatch = est_vs_sim.get("est_sim_mismatch_count", 0)
-        checks.append(("est_vs_sim", True, f"est_sim_mismatch_count={mismatch}"))
+        # Support both old name (est_sim_mismatch_count) and new (sign_mismatch_count)
+        mismatch = est_vs_sim.get("sign_mismatch_count", est_vs_sim.get("est_sim_mismatch_count", 0))
+        checks.append(("est_vs_sim", True, f"sign_mismatch_count={mismatch}"))
         
         # Est vs Sim drift detection (critical for model accuracy)
         mae_net_usdc = est_vs_sim.get("mae_net_usdc", 0)
@@ -1106,7 +1338,7 @@ def validate_execution_report(
             elif mismatch > 0:
                 # MAE=0 but there are sign mismatches - bug
                 checks.append(("mae_zero_guard", False, 
-                    f"MAE=0 but est_sim_mismatch_count={mismatch} (strict mode)"))
+                    f"MAE=0 but sign_mismatch_count={mismatch} (strict mode)"))
             # If both sums equal and no mismatches, it might be legitimate (same model)
         
         # Sign correct rate: WARN if < 80%
@@ -1346,6 +1578,7 @@ def run_online_gate(
     profile: str = DoDProfile.SMOKE, 
     strict: bool = False,
     cost_model_name: str = "paper_realistic",
+    strict_evidence: bool = False,
 ) -> int:
     """
     Run M4 gate in online mode using real artifacts.
@@ -1360,6 +1593,7 @@ def run_online_gate(
         profile: DoD profile to validate against
         strict: Strict mode - fail on MAE==0
         cost_model_name: Cost model to use for simulation
+        strict_evidence: Require source_sha matches HEAD and run_id is valid
     """
     if run_dir is None:
         run_dir = find_latest_run_dir()
@@ -1421,19 +1655,35 @@ def run_online_gate(
                 print(f"  - {name}: {ts}")
             print("  (artifacts may be from different runs)")
     
+    # Strict evidence mode: validate source_sha matches HEAD
+    if strict_evidence:
+        print("\n[ONLINE] Strict evidence mode enabled")
+        current_sha = get_git_sha()
+        if current_sha and current_sha != "unknown":
+            print(f"[ONLINE] Current HEAD: {current_sha[:8]}...")
+        
+        # Will be validated in validate_gate
+    
     print(f"\n[ONLINE] Profile: {profile}")
     print(f"[ONLINE] Artifacts found:")
     for name, path in artifacts.items():
         if path:
             print(f"  - {name}: {path.name}")
     
-    return validate_gate(run_dir, {k: v for k, v in artifacts.items() if v}, profile, strict)
+    return validate_gate(run_dir, {k: v for k, v in artifacts.items() if v}, profile, strict, strict_evidence)
 
 
 
-def validate_gate(run_dir: Path, artifacts: Dict[str, Path], profile: str, strict: bool) -> int:
+def validate_gate(run_dir: Path, artifacts: Dict[str, Path], profile: str, strict: bool, strict_evidence: bool = False) -> int:
     """
     Core validation logic for M4 gate.
+    
+    Args:
+        run_dir: Run directory path
+        artifacts: Dictionary of artifact paths
+        profile: DoD profile
+        strict: Strict mode - fail on MAE==0
+        strict_evidence: Require source_sha matches HEAD
     """
     print("\n" + "=" * 60)
     print(f"VALIDATION (profile={profile})")
@@ -1460,6 +1710,32 @@ def validate_gate(run_dir: Path, artifacts: Dict[str, Path], profile: str, stric
     # Load execution report
     with open(exec_path) as f:
         exec_data = json.load(f)
+    
+    # Strict evidence mode: validate source_sha matches HEAD
+    if strict_evidence:
+        artifact_sha = exec_data.get("source_sha", "")
+        artifact_run_id = exec_data.get("run_id", "")
+        current_sha = get_git_sha()
+        
+        if artifact_sha and current_sha and current_sha != "unknown":
+            if artifact_sha == current_sha:
+                all_checks.append(("source_sha_match", True, f"source_sha matches HEAD ({artifact_sha[:8]}...)"))
+            else:
+                all_checks.append(("source_sha_match", False, 
+                    f"source_sha mismatch: artifact={artifact_sha[:8]}... HEAD={current_sha[:8]}..."))
+                print(f"  FAIL: source_sha mismatch (strict evidence mode)")
+        else:
+            all_checks.append(("source_sha_match", False, "Missing source_sha in artifact or cannot get HEAD"))
+        
+        if artifact_run_id:
+            # Validate run_id format: m4_<timestamp> or similar
+            import re
+            if re.match(r"^m4_\d{8}_\d{6}$", artifact_run_id):
+                all_checks.append(("run_id_valid", True, f"run_id format valid: {artifact_run_id}"))
+            else:
+                all_checks.append(("run_id_valid", False, f"run_id format invalid: {artifact_run_id}"))
+        else:
+            all_checks.append(("run_id_valid", False, "Missing run_id in artifact"))
     
     # Validate execution report with profile
     checks = validate_execution_report(exec_data, profile, strict)
@@ -1541,6 +1817,8 @@ def main() -> int:
                         help="Cost model: paper_realistic (default), paper_conservative (stress test)")
     parser.add_argument("--strict", action="store_true",
                         help="Require at least one profitable simulation, fail on MAE==0")
+    parser.add_argument("--strict-evidence", action="store_true",
+                        help="Require source_sha matches HEAD and run_id is valid (continuous scan)")
     parser.add_argument("--require-tenderly", action="store_true",
                         help="Require tenderly diagnostics when enabled in artifacts")
     parser.add_argument("--run-dir", type=Path,
@@ -1564,7 +1842,10 @@ def main() -> int:
     if args.offline:
         return run_offline_gate(args.output_root, args.profile, args.strict)
     elif args.online:
-        return run_online_gate(args.run_dir, args.profile, args.strict, args.cost_model)
+        return run_online_gate(
+            args.run_dir, args.profile, args.strict, args.cost_model,
+            strict_evidence=args.strict_evidence
+        )
     elif args.dry_run:
         return run_dry_run()
     elif args.simulate:

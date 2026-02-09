@@ -167,6 +167,15 @@ class TruthReport:
     execution_blocker: str = CURRENT_EXECUTION_BLOCKER.value
     cost_model_available: bool = False
     
+    # Cost model details (v1.4.0) - transparent about what costs are applied
+    # paper_slippage_bps=0 by default (truth_report shows raw estimates)
+    cost_model: Dict[str, Any] = field(default_factory=lambda: {
+        "name": "gas_only",
+        "description": "Truth report estimate (gas only, no slippage for raw estimate)",
+        "gas_usd": 0.10,
+        "slippage_bps": 0,
+    })
+    
     spread_signals: List[SpreadSignal] = field(default_factory=list)
     health: HealthMetrics = field(default_factory=HealthMetrics)
     stats: Dict[str, Any] = field(default_factory=dict)

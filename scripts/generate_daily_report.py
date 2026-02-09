@@ -5,6 +5,10 @@ Usage (manual, initial):
 
 This is intentionally minimal: it reads `scan_*.json`, `truth_report_*.json`, and
 `reject_histogram_*.json` from a run directory and builds `daily_report_<date>.json`.
+
+Cost Model (v1.4.0):
+  Uses CostModelRegistry from ci_m4_execution_gate.py for unified cost models.
+  Available models: paper_realistic, paper_conservative, gas_only
 """
 from __future__ import annotations
 
@@ -13,7 +17,16 @@ import json
 from collections import Counter
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+
+
+# Import CostModelRegistry if available (optional for backwards compat)
+try:
+    from scripts.ci_m4_execution_gate import CostModelRegistry, CostModelConfig
+    COST_MODEL_REGISTRY_AVAILABLE = True
+except ImportError:
+    COST_MODEL_REGISTRY_AVAILABLE = False
+    CostModelConfig = None  # type: ignore
 
 
 def load_json_first(path: Path, pattern: str):
@@ -24,7 +37,33 @@ def load_json_first(path: Path, pattern: str):
         return json.load(fh)
 
 
-def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage_usd_estimate: float = 0.0) -> Dict[str, Any]:
+def aggregate_run(
+    run_dir: Path, 
+    gas_usd_estimate: float | None = None, 
+    slippage_usd_estimate: float = 0.0,
+    cost_model_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Aggregate a single run directory into a daily report.
+    
+    Args:
+        run_dir: Path to run directory
+        gas_usd_estimate: Gas cost in USD (legacy, prefer cost_model_name)
+        slippage_usd_estimate: Slippage cost in USD (legacy)
+        cost_model_name: Cost model from CostModelRegistry (v1.4.0)
+            Available: paper_realistic, paper_conservative, gas_only
+    """
+    # If cost_model_name is provided, use CostModelRegistry
+    if cost_model_name and COST_MODEL_REGISTRY_AVAILABLE:
+        registry = CostModelRegistry.default()
+        cost_model_config = registry.get(cost_model_name)
+        gas_usd_estimate = cost_model_config.gas_usd
+        # slippage is calculated per-signal based on size and bps
+        slippage_bps = cost_model_config.slippage_bps
+    else:
+        cost_model_config = None
+        slippage_bps = 0
+    
     # Search for artifacts in common locations: run_dir/, run_dir/reports/, run_dir/snapshots/
     def find_first(pattern: str):
         for candidate_dir in (run_dir, run_dir / "reports", run_dir / "snapshots"):
@@ -307,12 +346,24 @@ def aggregate_run(run_dir: Path, gas_usd_estimate: float | None = None, slippage
         }
         top_quotes.append(quote_sample)
 
-    # Build cost_model block for transparency
-    cost_model = {
-        "type": "gas_only" if gas_usd_estimate is not None else "none",
-        "gas_usd_estimate": gas_usd_estimate,
-        "slippage_usd_estimate": slippage_usd_estimate if gas_usd_estimate is not None else None,
-    }
+    # Build cost_model block for transparency (v1.4.0: unified with CostModelRegistry)
+    if cost_model_config:
+        cost_model = {
+            "name": cost_model_config.name,
+            "description": cost_model_config.description,
+            "gas_usd": cost_model_config.gas_usd,
+            "slippage_bps": cost_model_config.slippage_bps,
+            "source": "CostModelRegistry",
+        }
+    else:
+        cost_model = {
+            "name": "gas_only" if gas_usd_estimate is not None else "none",
+            "description": "Legacy gas estimate",
+            "gas_usd": gas_usd_estimate,
+            "slippage_bps": 0,
+            "slippage_usd_estimate": slippage_usd_estimate if gas_usd_estimate is not None else None,
+            "source": "legacy_params",
+        }
 
     # Extract gates_passed and quotes_fetched for explicit surfacing
     gates_passed = stats.get("gates_passed") or 0

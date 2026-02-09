@@ -1,9 +1,9 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
-**Updated**: 2026-02-09 14:10 UTC  
-**Evidence SHA**: `9e04df9`  
-**Gate Version**: `ci_m4_execution_gate.py` v1.3.0  
+**Updated**: 2026-02-09 17:30 UTC  
+**Evidence SHA**: `f5f9380`  
+**Gate Version**: `ci_m4_execution_gate.py` v1.4.0  
 **Tests**: 553 passed, 1 skipped
 
 ---
@@ -125,7 +125,7 @@ python scripts/ci_m4_execution_gate.py --online --profile profit --cost-model pa
 |--------|-----------|---------|------------------|--------|
 | `mae_net_usdc` | ≤ 0.30 | 0.24 | *TBD* | ⏳ |
 | `est_sign_correct_rate` | ≥ 80% | 100% | *TBD* | ⏳ |
-| `est_sim_mismatch_count` | 0 | 0 | *TBD* | ⏳ |
+| `sign_mismatch_count` | 0 | 0 | *TBD* | ⏳ |
 
 **✅ MAE Fix (v1.3.0):**
 - `est_net_usdc` = from truth_report (original, paper_slippage_bps=0)
@@ -451,11 +451,131 @@ SIGNAL → SIMULATE (eth_call) → VERIFY net > 0 → [PREVIEW/EXECUTE]
 
 ---
 
+## v1.4.0 Changes (Canonical Artifacts)
+
+### run_summary.json (Source of Truth)
+
+**Schema**: `run:summary:v1`
+
+Канонічний артефакт для continuous scan. Один run = один run_summary.json.
+
+```json
+{
+  "schema_version": "run:summary:v1",
+  "source_sha": "9e04df9...",
+  "run_id": "m4_20260209_163045",
+  "inputs": {
+    "chain_id": 42161,
+    "pinned_block": 430296537,
+    "source_truth_report": "truth_report_20260209_163045.json"
+  },
+  "cost_models": {
+    "truth": { "name": "gas_only", "slippage_bps": 0 },
+    "sim": { "name": "paper_realistic", "slippage_bps": 5 }
+  },
+  "metrics": {
+    "signals_count": 2,
+    "sim_profitable_count": 2,
+    "total_net_usdc": 15.29,
+    "mae_net_usdc": 0.50,
+    "sign_mismatch_count": 0
+  },
+  "status": "PASS",
+  "reasons": []
+}
+```
+
+### Explicit FAIL Conditions
+
+| Code | Condition | Profile |
+|------|-----------|---------|
+| `FAIL_NET` | total_net_usdc ≤ 0 | PROFIT |
+| `FAIL_DRIFT_MAE` | mae_net_usdc ≥ 0.50 | PROFIT |
+| `FAIL_DRIFT_SIGN` | sign_correct_rate < 0.70 | PROFIT |
+| `FAIL_SIGN_MISMATCH` | sign_mismatch_count > 0 | strict |
+| `FAIL_NO_PROFITABLE` | sim_profitable_count = 0 | any |
+
+### Field Renames (v1.4.0)
+
+| Old Name | New Name | Definition |
+|----------|----------|------------|
+| `est_sim_mismatch_count` | `sign_mismatch_count` | Signals where sign(est) ≠ sign(sim) |
+| `would_execute` | `would_execute_if_enabled` | Sim passed AND would execute if enabled |
+| (new) | `exec_ready` | Always false until M5 enables |
+
+### Strict Evidence Mode
+
+```bash
+# Validate source_sha matches HEAD and run_id format
+python scripts/ci_m4_execution_gate.py --online --strict-evidence
+```
+
+**Перевіряє:**
+- `source_sha` == git HEAD
+- `run_id` format: `m4_YYYYMMDD_HHMMSS`
+
+---
+
+### Multi-Run Stability Aggregator (v1.4.0)
+
+**Schema**: `m4:stability_agg:v1`
+
+Агрегує кілька `run_summary.json` у єдиний звіт для continuous scan.
+
+```python
+from scripts.ci_m4_execution_gate import aggregate_stability_summaries
+from pathlib import Path
+
+run_dirs = [Path("data/runs/run1"), Path("data/runs/run2"), ...]
+output = Path("data/reports/stability_aggregate.json")
+result = aggregate_stability_summaries(run_dirs, output)
+```
+
+**Структура:**
+```json
+{
+  "schema_version": "m4:stability_agg:v1",
+  "runs_included": 5,
+  "aggregates": {
+    "pass_count": 4,
+    "fail_count": 1,
+    "pass_rate": 0.80,
+    "total_net_usdc": 25.28,
+    "avg_net_usdc": 5.06,
+    "mae_avg": 0.45,
+    "mae_max": 0.50,
+    "sign_rate_avg": 0.85
+  },
+  "status": "FAIL",
+  "reasons": ["FAIL_DRIFT_MAE"]
+}
+```
+
+---
+
+### Unified Cost Model (v1.4.0)
+
+| Component | Cost Model | Source |
+|-----------|------------|--------|
+| **truth_report** | `gas_only` (slippage=0) | Default in TruthReport dataclass |
+| **daily_report** | Configurable via CostModelRegistry | `--cost-model` param |
+| **M4 simulation** | `paper_realistic` (slippage=5bps) | Default for online |
+
+**daily_report тепер використовує CostModelRegistry:**
+```python
+from scripts.generate_daily_report import aggregate_run
+report = aggregate_run(run_dir, cost_model_name="paper_realistic")
+```
+
+---
+
 ## Files Reference
 
 | File | Purpose |
 |------|---------|
-| `scripts/ci_m4_execution_gate.py` | M4 acceptance gate v1.2.0 |
+| `scripts/ci_m4_execution_gate.py` | M4 acceptance gate v1.4.0 |
+| `scripts/generate_daily_report.py` | Daily report with CostModelRegistry |
+| `monitoring/truth_report.py` | Truth report with cost_model field |
 | `tests/unit/test_ci_m4_gate_negative.py` | 22 unit tests |
 | `execution/simulator.py` | Simulation interface (skeleton) |
 | `execution/state_machine.py` | Trade lifecycle (skeleton) |
@@ -468,3 +588,5 @@ SIGNAL → SIMULATE (eth_call) → VERIFY net > 0 → [PREVIEW/EXECUTE]
 - **No real execution** until kill_switch is deliberately disabled
 - **Paper mode**: All trades are "WOULD_EXECUTE" with no actual TX
 - **Gradual rollout**: When ready, start with small sizes ($100)
+- **run_summary.json** = canonical source of truth for continuous scan
+- **aggregate_stability_summaries()** = multi-run aggregator for CI
