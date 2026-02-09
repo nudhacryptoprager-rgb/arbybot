@@ -1031,7 +1031,11 @@ def generate_m4_from_online_inputs(
             "est_net_sum": round(est_net_sum, 4),
             "sim_net_sum": round(sim_net_sum, 4),
             "sum_drift_usdc": round(abs(est_net_sum - sim_net_sum), 4),
-            "slippage_contribution": slippage_contribution_per_signal,  # Expected slippage per signal
+            # Slippage explanation (v1.6.0):
+            # - mae_slippage_component: expected per-signal MAE from slippage difference (truth=0, sim=Xbps)
+            # - total_slippage_usdc: total slippage across all signals = mae_slippage_component * signals_count
+            "mae_slippage_component": slippage_contribution_per_signal,
+            "total_slippage_usdc": round(slippage_contribution_per_signal * len(simulations), 4),
         },
         "thresholds": {
             "mae_warn": Thresholds.MAE_WARN,
@@ -1086,8 +1090,15 @@ def generate_m4_from_online_inputs(
     
     evidence_ok = len(evidence_issues) == 0
     
+    # Find source_scan from same directory
+    scan_files = list(reports_dir.glob("scan_*.json"))
+    source_scan_name = sorted(scan_files, key=lambda x: x.name, reverse=True)[0].name if scan_files else None
+    
+    # Calculate sum_drift for run_summary
+    sum_drift_usdc = round(abs(est_net_sum - sim_net_sum), 4)
+    
     run_summary_data = {
-        "schema_version": "run:summary:v1.1",  # Bumped for split status + evidence
+        "schema_version": "run:summary:v1.2",  # v1.6.0: policy, kpi, sum_drift, source_scan
         "timestamp": datetime.utcnow().isoformat() + "Z",
         # Provenance
         "source_sha": source_sha,
@@ -1098,10 +1109,24 @@ def generate_m4_from_online_inputs(
             "issues": evidence_issues,
             "current_sha": current_sha if current_sha != "unknown" else None,
         },
+        # Policy (v1.6.0) - explicit threshold interpretation
+        "policy": {
+            "mae_fail_inclusive": False,  # > 0.50 is FAIL, not >= 0.50
+            "warn_means": "Model drift detected but profitable - investigate but don't block",
+            "fail_means": "Critical issue - fix before proceeding",
+            "status_rule": "PASS if profit_status=PASS AND drift_status!=FAIL",
+        },
+        # KPI (v1.6.0) - what we measure for M4 success
+        "kpi": {
+            "primary": "sim_net_usdc_sum",
+            "description": "M4 KPI is simulated net PnL (with realistic costs)",
+            "value": round(sim_net_sum, 4),
+        },
         # Inputs
         "inputs": {
             "chain_id": chain_id,
             "pinned_block": source_block,
+            "source_scan": source_scan_name,
             "source_truth_report": truth_path.name,
             "source_signals": signals_path.name,
         },
@@ -1129,8 +1154,11 @@ def generate_m4_from_online_inputs(
             "profitable_rate": round(sim_profitable_count / len(simulations), 4) if simulations else 0,
             "est_net_usdc_sum": round(est_net_sum, 4),
             "sim_net_usdc_sum": round(sim_net_sum, 4),
+            "sum_drift_usdc": sum_drift_usdc,  # v1.6.0: est_sum - sim_sum
             "mae_net_usdc": mae_net_usdc,
             "mae_no_slippage": mae_no_slippage,  # v1.5.0
+            "mae_slippage_component": slippage_contribution_per_signal,  # v1.6.0: expected per-signal slippage MAE
+            "total_slippage_usdc": round(slippage_contribution_per_signal * len(simulations), 4),  # v1.6.0
             "est_sign_correct_rate": est_sign_correct_rate,
             "sign_mismatch_count": sign_mismatch_count,
             "fragile_count": fragile_count,  # v1.5.0
@@ -1157,8 +1185,8 @@ def generate_m4_from_online_inputs(
         },
         # Profile used
         "profile": "profit",  # PROFIT profile for online
-        # Fragile signals list (v1.5.0)
-        "fragile_signals": fragile_signals if fragile_count > 0 else None,
+        # Fragile signals list (v1.6.0): top-10 with reasons when fragile_count>0
+        "fragile_signals": fragile_signals[:10] if fragile_count > 0 and fragile_signals else None,
     }
     
     with open(run_summary_path, "w") as f:
@@ -1240,6 +1268,13 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
     profit_pass_count = sum(1 for r in runs_data if r["profit_status"] == "PASS")
     drift_pass_count = sum(1 for r in runs_data if r["drift_status"] == "PASS")
     
+    # Warn/Fail rates (v1.6.0)
+    warn_count = sum(1 for r in runs_data if "WARN_DRIFT_MAE" in r.get("reasons", []))
+    drift_fail_count = sum(1 for r in runs_data if r["drift_status"] == "FAIL")
+    
+    # Net values for percentiles (v1.6.0)
+    net_values = [r["metrics"].get("total_net_usdc", 0) for r in runs_data if r["metrics"].get("total_net_usdc") is not None]
+    
     # Collect all fail reasons with counts
     all_reasons = {}
     for r in runs_data:
@@ -1257,7 +1292,7 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
         return round(sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f]), 4)
     
     aggregated = {
-        "schema_version": "m4:stability_agg:v1.1",  # Bumped for split status + percentiles
+        "schema_version": "m4:stability_agg:v1.2",  # v1.6.0: warn_rate, net_p50/p90
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "runs_included": len(runs_data),
         "runs": runs_data,
@@ -1266,6 +1301,11 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
             "pass_count": pass_count,
             "fail_count": fail_count,
             "pass_rate": round(pass_count / len(runs_data), 4) if runs_data else 0,
+            # Warn/Fail rates (v1.6.0)
+            "warn_count": warn_count,
+            "warn_rate": round(warn_count / len(runs_data), 4) if runs_data else 0,
+            "drift_fail_count": drift_fail_count,
+            "drift_fail_rate": round(drift_fail_count / len(runs_data), 4) if runs_data else 0,
             # Split status (v1.5.0)
             "profit_pass_count": profit_pass_count,
             "profit_pass_rate": round(profit_pass_count / len(runs_data), 4) if runs_data else 0,
@@ -1277,6 +1317,11 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
             "total_fragile": total_fragile,
             "total_net_usdc": round(total_net, 4),
             "avg_net_usdc": round(total_net / len(runs_data), 4) if runs_data else 0,
+            # Net percentiles (v1.6.0)
+            "net_p50": percentile(net_values, 50),
+            "net_p90": percentile(net_values, 90),
+            "net_min": min(net_values) if net_values else None,
+            "net_max": max(net_values) if net_values else None,
             # MAE with percentiles (v1.5.0)
             "mae_avg": round(sum(mae_values) / len(mae_values), 4) if mae_values else None,
             "mae_max": max(mae_values) if mae_values else None,
@@ -1300,6 +1345,79 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
         json.dump(aggregated, f, indent=2)
     
     return aggregated
+
+
+def emit_to_aggregator(run_dir: Path, agg_path: Path) -> None:
+    """
+    Append run results to a persistent aggregator file (v1.6.0).
+    
+    For continuous scan mode: maintains a single JSON file that accumulates
+    results across multiple runs. The file is updated atomically.
+    
+    Usage:
+        python scripts/ci_m4_execution_gate.py --online ... --emit-agg data/runs/_agg/m4_stability_agg.json
+    
+    Args:
+        run_dir: The run directory with run_summary.json
+        agg_path: Path to the aggregator file (created if doesn't exist)
+    """
+    # Load existing aggregator or create new
+    if agg_path.exists():
+        with open(agg_path) as f:
+            agg_data = json.load(f)
+    else:
+        agg_path.parent.mkdir(parents=True, exist_ok=True)
+        agg_data = {
+            "schema_version": "m4:stability_agg:v1.2",
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "runs": [],
+        }
+    
+    # Load run_summary from this run
+    reports_dir = run_dir / "reports"
+    summary_files = list(reports_dir.glob("run_summary_*.json"))
+    if not summary_files:
+        print(f"[EMIT-AGG] No run_summary found in {run_dir}")
+        return
+    
+    summary_path = sorted(summary_files, key=lambda x: x.name, reverse=True)[0]
+    with open(summary_path) as f:
+        run_data = json.load(f)
+    
+    # Append to runs list
+    agg_data["runs"].append({
+        "run_dir": str(run_dir.name),
+        "run_id": run_data.get("run_id", ""),
+        "timestamp": run_data.get("timestamp", ""),
+        "profit_status": run_data.get("profit_status", "UNKNOWN"),
+        "drift_status": run_data.get("drift_status", "UNKNOWN"),
+        "status": run_data.get("status", "UNKNOWN"),
+        "reasons": run_data.get("reasons", []),
+        "metrics": run_data.get("metrics", {}),
+    })
+    
+    # Update aggregated stats
+    runs = agg_data["runs"]
+    agg_data["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    agg_data["runs_included"] = len(runs)
+    
+    # Quick stats
+    pass_count = sum(1 for r in runs if r["status"] == "PASS")
+    total_net = sum(r["metrics"].get("total_net_usdc", 0) for r in runs)
+    
+    agg_data["quick_stats"] = {
+        "pass_count": pass_count,
+        "fail_count": len(runs) - pass_count,
+        "pass_rate": round(pass_count / len(runs), 4) if runs else 0,
+        "total_net_usdc": round(total_net, 4),
+        "avg_net_usdc": round(total_net / len(runs), 4) if runs else 0,
+    }
+    
+    # Write atomically
+    with open(agg_path, "w") as f:
+        json.dump(agg_data, f, indent=2)
+    
+    print(f"[EMIT-AGG] Updated: {agg_path} (runs={len(runs)})")
 
 
 # ============================================================
@@ -1979,8 +2097,6 @@ def main() -> int:
                             help="Use real artifacts from latest run")
     mode_group.add_argument("--dry-run", action="store_true",
                             help="Show signals that would be simulated")
-    mode_group.add_argument("--simulate", action="store_true",
-                            help="Run simulation on signals (NOT IMPLEMENTED)")
     
     parser.add_argument("--profile", type=str, default=DoDProfile.SMOKE,
                         choices=[DoDProfile.SMOKE, DoDProfile.PROFIT, DoDProfile.ONLINE],
@@ -2001,6 +2117,9 @@ def main() -> int:
                         help="Root for output directories")
     parser.add_argument("--signal", type=int, default=0,
                         help="Signal index to simulate (0 = first)")
+    # Aggregator mode (v1.6.0)
+    parser.add_argument("--emit-agg", type=Path, default=None,
+                        help="Append results to aggregator file (continuous scan mode)")
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__}")
     
@@ -2015,16 +2134,16 @@ def main() -> int:
     if args.offline:
         return run_offline_gate(args.output_root, args.profile, args.strict)
     elif args.online:
-        return run_online_gate(
+        result = run_online_gate(
             args.run_dir, args.profile, args.strict, args.cost_model,
             strict_evidence=args.strict_evidence
         )
+        # Emit to aggregator if requested (v1.6.0)
+        if args.emit_agg and args.run_dir:
+            emit_to_aggregator(args.run_dir, args.emit_agg)
+        return result
     elif args.dry_run:
         return run_dry_run()
-    elif args.simulate:
-        print("\nERROR: --simulate not yet implemented")
-        print("Use --offline for fixture-based validation")
-        return 1
     else:
         parser.print_help()
         return 0

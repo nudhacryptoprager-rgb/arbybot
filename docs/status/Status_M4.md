@@ -1,14 +1,68 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
-**Updated**: 2026-02-09 18:30 UTC  
-**Evidence SHA**: `ee05ff5`  
-**Gate Version**: `ci_m4_execution_gate.py` v1.5.0  
-**Tests**: 553 passed, 1 skipped
+**Updated**: 2026-02-09 19:00 UTC  
+**Evidence SHA**: `12771d6`  
+**Gate Version**: `ci_m4_execution_gate.py` v1.6.0  
+**Tests**: 562 passed, 1 skipped
 
 ---
 
-## Status Model v1.5.0
+## 📖 How to Read run_summary.json (v1.6.0)
+
+> **Quick Guide for PASS / WARN / FAIL interpretation**
+
+### Status Fields
+
+| Field | Meaning |
+|-------|---------|
+| `profit_status` | PASS = net profit > 0 (primary KPI) |
+| `drift_status` | PASS/WARN/FAIL = model accuracy |
+| `status` | Combined: PASS if both OK |
+
+### What to Do
+
+| Scenario | Action |
+|----------|--------|
+| `profit_status=PASS`, `drift_status=PASS` | ✅ All good, proceed |
+| `profit_status=PASS`, `drift_status=WARN` | ⚠️ Profitable but investigate MAE drift |
+| `profit_status=PASS`, `drift_status=FAIL` | 🔴 Profitable but model unreliable - fix before scaling |
+| `profit_status=FAIL` | 🚨 Not profitable - investigate immediately |
+
+### Key Metrics to Check
+
+1. **`kpi.value`** - The M4 KPI: `sim_net_usdc_sum` (simulated profit)
+2. **`mae_net_usdc`** - Model accuracy (lower is better, WARN > 0.30, FAIL > 0.50)
+3. **`mae_no_slippage`** - Drift without slippage (should be ~0 if model is accurate)
+4. **`fragile_count`** - Signals at risk of flipping sign (ideally 0)
+
+### Policy Block
+
+```json
+"policy": {
+  "mae_fail_inclusive": false,  // > 0.50 is FAIL, not >= 0.50
+  "status_rule": "PASS if profit_status=PASS AND drift_status!=FAIL"
+}
+```
+
+### Example: Good Run
+
+```json
+{
+  "profit_status": "PASS",
+  "drift_status": "PASS",
+  "reasons": ["WARN_DRIFT_MAE"],  // WARN but not FAIL
+  "kpi": {"value": 8.1121},
+  "metrics": {
+    "mae_net_usdc": 0.5,       // On threshold but OK (exclusive)
+    "mae_no_slippage": 0       // All drift from cost model difference
+  }
+}
+```
+
+---
+
+## Status Model v1.6.0
 
 > **Split Status Policy:**
 > - `profit_status`: PASS if total_net > 0 (we made money)
