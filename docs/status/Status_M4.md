@@ -1,9 +1,10 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
-**Status**: ✅ **DONE** (offline fixtures), ⏳ **NOT PROVEN** (online profit)  
-**Updated**: 2026-02-09  
+**Status**: ✅ **DONE** (offline fixtures only), ❌ **NOT PROVEN** (online profit)  
+**Updated**: 2026-02-09 14:05 UTC  
+**Evidence SHA**: `6403ecc` (FROZEN for this review cycle)  
 **Gate Version**: `ci_m4_execution_gate.py` v1.2.0  
-**Tests**: 553 passed
+**Tests**: 553 passed, 1 skipped
 
 ---
 
@@ -16,6 +17,11 @@
 >
 > **M4-profit по суті** = N онлайн прогонів з `total_net_usdc > 0` на реальних блоках.  
 > Поки цього немає — "profit ✅ DONE" є математичною оцінкою, не виконанням.
+
+**⚠️ SHA Discipline:**  
+- Один SHA = один review cycle
+- Забороняється змінювати SHA посеред рев'ю
+- Будь-яке "✅ DONE" прив'язане до конкретного SHA
 
 ---
 
@@ -109,15 +115,16 @@ python -m pytest tests/unit -q
 
 ## Evidence Links (Reproducible Status)
 
-**Last Verified Offline Run:**
+**⚠️ FIXTURE_OFFLINE ONLY - NOT ONLINE PROOF**
 
 | Field | Value |
 |-------|-------|
-| **RunDir** | `data/runs/ci_m4_gate_offline_20260209_123029/` |
-| **Timestamp** | `20260209_123029` |
-| **Artifacts** | `signals_20260209_123029.json`, `execution_report_20260209_123029.json` |
-| **run_mode** | `FIXTURE_OFFLINE` |
-| **pinned_block** | `429900000` (synthetic) |
+| **Evidence SHA** | `6403ecc` (FROZEN) |
+| **RunDir** | `data/runs/ci_m4_gate_offline_20260209_130543/` |
+| **Timestamp** | `20260209_130543` |
+| **Artifacts** | `signals_20260209_130543.json`, `execution_report_20260209_130543.json` |
+| **run_mode** | `FIXTURE_OFFLINE` ⚠️ |
+| **pinned_block** | `429900000` (synthetic) ⚠️ |
 
 **Key Metrics (from execution_report):**
 
@@ -129,7 +136,33 @@ python -m pytest tests/unit -q
 | `mae_net_usdc` | 0.2850 | 0.2400 |
 | `pass_rate` | 50% | 100% |
 
-**⚠️ Note:** These are FIXTURE_OFFLINE results. Online DoD requires N=5 runs on real blocks.
+**⚠️ CRITICAL:** These are FIXTURE_OFFLINE results. **Online DoD NOT PROVEN.**
+
+---
+
+## Proof Commands (Run 2026-02-09 14:05)
+
+```bash
+# 1. pytest -q
+$ python -m pytest tests/unit -q
+# 553 passed, 1 skipped, 5 subtests passed in 3.22s
+
+# 2. ci_full_pipeline --mode ci
+$ python scripts/ci_full_pipeline.py --mode ci
+# pytest: [OK] PASS
+# m5_0_offline: [OK] PASS
+# m5_offline: [SKIP] SKIPPED
+# m4_smoke: [OK] PASS
+# m4_profit: [OK] PASS
+# [OK] ALL REQUIRED GATES PASSED
+
+# 3. ci_m4_execution_gate --offline --profile profit --strict
+$ python scripts/ci_m4_execution_gate.py --offline --profile profit --strict
+# RESULT: PASS (profile=profit)
+#   simulations_passed: 2
+#   total_net_usdc: 0.5
+# RunDir: data/runs/ci_m4_gate_offline_20260209_130543
+```
 
 ---
 
@@ -140,11 +173,38 @@ python -m pytest tests/unit -q
 | Stage | Status | Description |
 |-------|--------|-------------|
 | **Offline fixtures** | ✅ DONE | Synthetic pinned_block, mock simulations |
-| **Online simulation** | ⏳ NEXT | Real eth_call on real block |
-| **Paper execution** | ⏳ FUTURE | "WOULD_EXECUTE" logging |
-| **Real execution** | ⏳ FUTURE | Actual TX submission |
+| **Online simulation** | ❌ NOT DONE | Real eth_call on real block |
+| **Paper execution** | ❌ NOT DONE | "WOULD_EXECUTE" logging |
+| **Real execution** | ❌ NOT DONE | Actual TX submission |
 
 **Чітко**: На поточному етапі **реальний блок не потрібен**. Offline fixtures використовують synthetic `pinned_block=429900000` і це **нормально**.
+
+---
+
+## Schema Compatibility Matrix
+
+**⚠️ CRITICAL: Schema Family Separation**
+
+| Family | Artifacts | Block Field | Valid Together? |
+|--------|-----------|-------------|-----------------|
+| **M4** | signals, execution_report | `pinned_block` | ✅ YES (same family) |
+| **M5** | scan, truth_report, reject_histogram | `current_block` | ✅ YES (same family) |
+| **M4 + M5** | mixed | different fields | ❌ **NO** in same runDir |
+
+**Rules:**
+1. M4 artifacts (`m4:*:v1.1`) must be in **separate runDir** from M5 artifacts (`3.2.0`)
+2. Block consistency validated **within family only**
+3. Gates validate their own family, never cross-family
+
+**⚠️ Block Mismatch Warning:**
+- M4: `pinned_block=429900000` (synthetic)
+- M5: `current_block=100` (fixture)
+- These are **different families** and **MUST NOT be mixed in one runDir**
+
+**Current Implementation:**
+- `ci_m4_execution_gate.py` creates M4-only runDir
+- `ci_m5_0_gate.py` creates M5-only runDir
+- `ci_full_pipeline.py` runs them as **separate gates with separate runDirs**
 
 ---
 
@@ -272,7 +332,7 @@ Cycle 3: block=150634514, 1 profitable, paper_trades=2
 | `TestEstErrorFormula` | 3 | est_error_usdc calculation |
 | `TestQuoteCcyConsistency` | 2 | quote_ccy + health fields |
 
-**Total:** 22 M4-specific tests (522 total in suite)
+**Total:** 22 M4-specific tests (553 total in suite)
 
 ---
 
@@ -303,7 +363,7 @@ SIGNAL → SIMULATE (eth_call) → VERIFY net > 0 → [PREVIEW/EXECUTE]
 
 | File | Purpose |
 |------|---------|
-| `scripts/ci_m4_execution_gate.py` | M4 acceptance gate v1.1.0 |
+| `scripts/ci_m4_execution_gate.py` | M4 acceptance gate v1.2.0 |
 | `tests/unit/test_ci_m4_gate_negative.py` | 22 unit tests |
 | `execution/simulator.py` | Simulation interface (skeleton) |
 | `execution/state_machine.py` | Trade lifecycle (skeleton) |

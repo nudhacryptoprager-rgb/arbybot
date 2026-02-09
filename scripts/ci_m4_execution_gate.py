@@ -665,6 +665,7 @@ def validate_execution_report(
     
     elif profile == DoDProfile.PROFIT:
         # PROFIT: PASS if total_net_usdc > 0 AND sim_profitable_count >= 1
+        # AND drift thresholds are acceptable
         sim_profitable_count = est_vs_sim.get("sim_profitable_count", sims_passed)
         
         if total_net_usdc > 0:
@@ -676,6 +677,24 @@ def validate_execution_report(
             checks.append(("dod_profit_sims", True, f"sim_profitable_count={sim_profitable_count} >= 1"))
         else:
             checks.append(("dod_profit_sims", False, f"sim_profitable_count={sim_profitable_count} < 1"))
+        
+        # PROFIT profile MUST also pass drift thresholds (FAIL, not WARN)
+        # These are critical for online: est error -0.45 USDC on $100 = dangerous
+        MAE_FAIL_THRESHOLD = 0.50  # USDC per trade (50 cents max drift)
+        SIGN_RATE_MIN = 0.70  # 70% min for profit profile
+        
+        mae_net_usdc = est_vs_sim.get("mae_net_usdc", 0)
+        est_sign_rate = est_vs_sim.get("est_sign_correct_rate", 1.0)
+        
+        if mae_net_usdc <= MAE_FAIL_THRESHOLD:
+            checks.append(("dod_profit_drift_mae", True, f"mae_net_usdc={mae_net_usdc:.4f} <= {MAE_FAIL_THRESHOLD} (PROFIT threshold)"))
+        else:
+            checks.append(("dod_profit_drift_mae", False, f"mae_net_usdc={mae_net_usdc:.4f} > {MAE_FAIL_THRESHOLD} (DANGEROUS DRIFT)"))
+        
+        if est_sign_rate >= SIGN_RATE_MIN:
+            checks.append(("dod_profit_drift_sign", True, f"est_sign_correct_rate={est_sign_rate:.2%} >= {SIGN_RATE_MIN:.0%} (PROFIT threshold)"))
+        else:
+            checks.append(("dod_profit_drift_sign", False, f"est_sign_correct_rate={est_sign_rate:.2%} < {SIGN_RATE_MIN:.0%} (UNRELIABLE ESTIMATES)"))
     
     # Strict mode: require at least one profitable
     if strict and sims_passed == 0:
