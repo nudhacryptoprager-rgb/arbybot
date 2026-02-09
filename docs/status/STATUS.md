@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-02-09  
-**SHA:** ca1e636  
+**SHA:** 0d3d2c1  
 **Version:** M4 Execution Gate v1.8.1  
 
 ---
@@ -10,7 +10,25 @@
 
 ### Summary
 
-M4 Execution Gate калібровано на основі 35 online прогонів (20 до калібрації + 15 після). Система демонструє стабільну прибутковість з `agg_status=PASS`.
+M4 Execution Gate калібровано на основі 35 online прогонів. Система демонструє стабільну прибутковість з `agg_status=PASS`.
+
+---
+
+## Artifacts Policy
+
+**Runtime artifacts are NEVER committed to git.**
+
+| What | Where | In Git? |
+|------|-------|---------|
+| Run outputs | `data/runs/<run_id>/` | ❌ No |
+| Rolling aggregator | `data/runs/_rolling/` | ❌ No |
+| Analysis reports | Local only | ❌ No |
+| Golden fixtures | `docs/artifacts/golden/` | ✅ Yes |
+
+**Continuous scan storage:**
+- `data/runs/_rolling/` — overwrite mode
+- Retention: N=50 runs max
+- See `docs/WORKFLOW.md#artifacts-policy` for full policy
 
 ---
 
@@ -45,20 +63,6 @@ M4 Execution Gate калібровано на основі 35 online прого�
 
 ---
 
-## Aggregator Health (15 runs)
-
-| Metric | Value |
-|--------|-------|
-| Runs | 15 |
-| Pass Rate | 100% |
-| Fail Rate | 0% |
-| Warn Rate Core | 0% |
-| MAE p90 | 0.50 |
-| Total Net | $13.22 |
-| **agg_status** | **PASS** |
-
----
-
 ## Schema Versions
 
 | Schema | Version |
@@ -71,9 +75,9 @@ M4 Execution Gate калібровано на основі 35 online прого�
 
 ## Recent Changes
 
-### v1.8.1 (ca1e636) - Threshold Calibration
+### v1.8.1 (0d3d2c1) - Threshold Calibration
 
-**Problem:** 20 online runs showed 100% WARN and 50% FAIL false positives because `mae=0.50` (slippage) was treated as model error.
+**Problem:** 20 online runs showed 100% WARN false positives because `mae=0.50` (slippage) was treated as model error.
 
 **Solution:** Calibrated thresholds based on empirical data:
 - MAE_WARN: 0.30 → 0.55
@@ -83,40 +87,14 @@ M4 Execution Gate калібровано на основі 35 online прого�
 
 **Result:** 15 verification runs → 100% pass rate, `agg_status=PASS`
 
-### v1.8.0 (127934d) - Warm-up Gate
-
-- Added `MIN_RUNS_FOR_AGG=10`, `MIN_SIGNALS_FOR_AGG=30`
-- New status `PASS_WITH_WARMUP` during warm-up
-- Separated `warn_rate_core` from `low_sample_rate`
-- Added `fragile_rate_p50/p90`, `net_p10`
-- Enhanced `_latest.json` with paths
-
-### v1.7.0 (2adb8f6) - Rolling Aggregator
-
-- Added multi-run aggregator with rolling window
-- Aggregator-level thresholds (AGG_*)
-- Fragile policy with `fragile_rate`
-- `WARN_LOW_SAMPLE` for <5 signals
-
----
-
-## Artifacts
-
-| File | Description |
-|------|-------------|
-| [calibration_report_20260209.md](../artifacts/calibration_report_20260209.md) | Empirical calibration analysis |
-| [ci_m4_execution_gate.py](../../scripts/ci_m4_execution_gate.py) | Gate script v1.8.1 |
-| data/runs/_rolling/m4_stability_agg.json | Rolling aggregator (15 runs) |
-| data/runs/_rolling/_latest.json | Latest run pointer |
-
 ---
 
 ## Next Steps
 
-1. **Continue monitoring** - Run 50+ cycles to validate thresholds long-term
-2. **Consider semantic separation** - Split `mae_model_error` from `mae_cost_delta`
-3. **Exclude fragile from sign_rate** - Or use separate `fragile_sign_rate`
+1. Continue monitoring with calibrated thresholds
+2. Implement retention policy (keep N=50 runs)
+3. Add pre-commit guard for runtime artifacts
 
 ---
 
-*Generated: 2026-02-09 | SHA: ca1e636*
+*Updated: 2026-02-09 | SHA: 0d3d2c1*

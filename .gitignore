@@ -52,15 +52,34 @@ data/trades/*.json
 data/trades/*.jsonl
 data/reports/*.json
 data/reports/*.md
-# runtime artifacts
+# =============================================================================
+# RUNTIME ARTIFACTS - NEVER COMMIT (Policy: docs/WORKFLOW.md#artifacts-policy)
+# =============================================================================
+# All runtime outputs from scans/gates stay local or in CI artifacts.
+# Only golden fixtures under docs/artifacts/golden/ are allowed in git.
+
+# Data directory (all runtime)
 data/
 data/**
+
+# Run-specific artifacts (anywhere in repo)
+**/run_summary_*.json
+**/stability_summary_*.json
+**/execution_report_*.json
+**/signals_*.json
+**/m4_stability_agg*.json
+**/_latest.json
+**/online_runs_report_*.md
 
 # Keep directory structure
 !data/snapshots/.gitkeep
 !data/trades/.gitkeep
 !data/reports/.gitkeep
 !data/registry/.gitkeep
+
+# Allow golden fixtures only
+!docs/artifacts/golden/
+!docs/artifacts/golden/**
 
 # Logs
 logs/
