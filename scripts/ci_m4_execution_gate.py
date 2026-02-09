@@ -1320,9 +1320,12 @@ def generate_m4_from_online_inputs(
     # ============================================================
     run_summary_path = reports_dir / f"run_summary_{ts}.json"
     
-    # Evidence validation (v1.5.0)
+    # Get git context for run_context (v1.9.0) - BEFORE evidence validation
+    git_ctx = get_git_context()
+    
+    # Evidence validation (v1.5.0, v1.9.0: dirty check)
     evidence_issues = []
-    current_sha = get_git_sha()
+    current_sha = git_ctx["code_sha"]
     
     # Check source_sha matches HEAD
     if source_sha and current_sha and current_sha != "unknown":
@@ -1330,6 +1333,10 @@ def generate_m4_from_online_inputs(
             evidence_issues.append(f"source_sha_mismatch: artifact={source_sha[:8]} HEAD={current_sha[:8]}")
     else:
         evidence_issues.append("source_sha_unavailable")
+    
+    # v1.9.0: Check dirty worktree - weaker evidence if uncommitted changes
+    if git_ctx["code_dirty"] is True:
+        evidence_issues.append("DIRTY_WORKTREE_PRECOMMIT")
     
     # Check timestamp deltas
     truth_ts_str = truth_data.get("timestamp", "")
@@ -1352,9 +1359,6 @@ def generate_m4_from_online_inputs(
     
     # Calculate sum_drift for run_summary
     sum_drift_usdc = round(abs(est_net_sum - sim_net_sum), 4)
-    
-    # Get git context for run_context (v1.9.0)
-    git_ctx = get_git_context()
     
     run_summary_data = {
         "schema_version": "run:summary:v1.5",  # v1.9.0: run_context with code_sha/dirty/evidence
@@ -2486,13 +2490,32 @@ def run_online_gate(
         # Fixed path for rolling agg (always exists)
         agg_path = rolling_dir / "m4_stability_agg.json"
         
-        # Update evidence with real git HEAD
-        git_sha = get_git_head_sha()
+        # Update evidence with real git HEAD and dirty status (v1.9.1)
+        git_ctx = get_git_context()
+        git_sha = git_ctx["code_sha"]
+        code_dirty = git_ctx["code_dirty"]
+        
         if "evidence" in run_summary:
             run_summary["evidence"]["current_sha"] = git_sha
-            run_summary["evidence"]["ok"] = run_summary.get("source_sha", "") == git_sha
-            if not run_summary["evidence"]["ok"]:
-                run_summary["evidence"]["issues"] = run_summary["evidence"].get("issues", []) + [f"SHA_MISMATCH: source={run_summary.get('source_sha')}, HEAD={git_sha}"]
+            sha_match = run_summary.get("source_sha", "") == git_sha
+            
+            # v1.9.1: evidence.ok = false if SHA mismatch OR dirty worktree
+            evidence_issues = run_summary["evidence"].get("issues", [])
+            
+            if not sha_match:
+                evidence_issues.append(f"SHA_MISMATCH: source={run_summary.get('source_sha')}, HEAD={git_sha}")
+            
+            if code_dirty is True and "DIRTY_WORKTREE_PRECOMMIT" not in evidence_issues:
+                evidence_issues.append("DIRTY_WORKTREE_PRECOMMIT")
+            
+            run_summary["evidence"]["issues"] = evidence_issues
+            run_summary["evidence"]["ok"] = len(evidence_issues) == 0
+        
+        # Update run_context with current git state
+        if "run_context" in run_summary:
+            run_summary["run_context"]["code_sha"] = git_sha
+            run_summary["run_context"]["code_dirty"] = code_dirty if code_dirty is not None else False
+            run_summary["run_context"]["code_desc"] = git_ctx["code_desc"]
         
         # Determine status considering NO_DATA
         status = run_summary.get("status", "UNKNOWN")
@@ -2585,30 +2608,32 @@ def run_online_gate(
         
         # Get git context
         git_ctx = get_git_context()
+        head_sha = get_git_head_sha()
         
         latest_data = {
-            "schema_version": "m4:latest:v1.4",
+            "schema_version": "m4:latest:v1.5",
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "git_sha": git_ctx["code_sha"],  # Backwards compat
+            # v1.9.0: Clear SHA fields
+            "head_sha": head_sha,  # Current HEAD at time of update
             "run_context": {
                 "code_sha": git_ctx["code_sha"],
-                "code_dirty": git_ctx["code_dirty"],
+                "code_dirty": git_ctx["code_dirty"] if git_ctx["code_dirty"] is not None else False,
                 "code_desc": git_ctx["code_desc"],
-                "evidence_sha": None,  # Set by attach_evidence
+                "evidence_sha": "",  # Empty string, not null - set by attach_evidence
             },
             "latest_mode": "ONLINE" if is_online else "OFFLINE",
             "latest_kind": "INCIDENT" if is_incident else "NORMAL",
             "run_status": status,
             "threshold_profile_name": profile,
             "agg_status": agg_data.get("agg_status", "UNKNOWN"),
-            "agg_reasons": agg_reasons,
+            "agg_reasons": agg_reasons if agg_reasons else [],
             "runs_in_window": agg_data.get("runs_in_window", 0),
             "in_warmup": agg_data.get("rolling_window", {}).get("in_warmup", True),
             "total_signals_in_window": agg_data.get("quick_stats", {}).get("total_signals", 0),
             "paths": {
                 "run_summary_latest": rel_path(run_summary_path),
                 "rolling_agg": rel_path(agg_path),
-                "last_incident": rel_path(incident_dir / "run_summary.json") if incident_dir else None,
+                "last_incident": rel_path(incident_dir / "run_summary.json") if incident_dir else "",
             },
         }
         with open(latest_path, "w") as f:

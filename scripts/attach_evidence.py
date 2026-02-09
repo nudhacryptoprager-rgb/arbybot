@@ -54,6 +54,7 @@ def attach_evidence(sha: str, update_status_md: bool = True) -> int:
         0 on success, 1 on error
     """
     print(f"[ATTACH] Evidence SHA: {sha}")
+    warnings = []
     
     # Update _latest.json
     latest_path = ROLLING_DIR / "_latest.json"
@@ -65,10 +66,14 @@ def attach_evidence(sha: str, update_status_md: bool = True) -> int:
         if "run_context" not in latest_data:
             latest_data["run_context"] = {
                 "code_sha": latest_data.get("git_sha", "unknown"),
-                "code_dirty": None,
+                "code_dirty": False,
                 "code_desc": latest_data.get("git_sha", "unknown"),
-                "evidence_sha": None,
+                "evidence_sha": "",
             }
+        
+        # Check if run was dirty - add warning
+        if latest_data["run_context"].get("code_dirty") is True:
+            warnings.append("DIRTY_WORKTREE_PRECOMMIT: Run was made with uncommitted changes")
         
         latest_data["run_context"]["evidence_sha"] = sha
         latest_data["evidence_attached_at"] = datetime.now(timezone.utc).isoformat()
@@ -89,10 +94,19 @@ def attach_evidence(sha: str, update_status_md: bool = True) -> int:
         if "run_context" not in summary_data:
             summary_data["run_context"] = {
                 "code_sha": summary_data.get("source_sha", "unknown"),
-                "code_dirty": None,
+                "code_dirty": False,
                 "code_desc": summary_data.get("source_sha", "unknown"),
-                "evidence_sha": None,
+                "evidence_sha": "",
             }
+        
+        # Check if run was dirty - add issue to evidence
+        if summary_data["run_context"].get("code_dirty") is True:
+            if "evidence" in summary_data:
+                issues = summary_data["evidence"].get("issues", [])
+                if "DIRTY_WORKTREE_PRECOMMIT" not in issues:
+                    issues.append("DIRTY_WORKTREE_PRECOMMIT")
+                    summary_data["evidence"]["issues"] = issues
+                    summary_data["evidence"]["ok"] = False
         
         summary_data["run_context"]["evidence_sha"] = sha
         
@@ -119,6 +133,12 @@ def attach_evidence(sha: str, update_status_md: bool = True) -> int:
             print(f"[ATTACH] Updated: Status_M4.md")
         else:
             print(f"[ATTACH] SKIP: Status_M4.md - no Evidence SHA line found")
+    
+    # Print warnings
+    if warnings:
+        print(f"[ATTACH] WARNINGS:")
+        for w in warnings:
+            print(f"  - {w}")
     
     print(f"[ATTACH] Done. Evidence SHA {sha} attached to rolling artifacts.")
     return 0

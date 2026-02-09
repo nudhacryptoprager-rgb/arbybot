@@ -1,9 +1,9 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
-**Updated**: 2026-02-09 21:10 UTC  
+**Updated**: 2026-02-09 21:20 UTC  
 **Evidence SHA**: `8ce8814`  
-**Gate Version**: `ci_m4_execution_gate.py` v1.9.0  
+**Gate Version**: `ci_m4_execution_gate.py` v1.9.1  
 **Tests**: 562 passed, 1 skipped
 
 ## 🔐 SHA Context: code_sha vs evidence_sha (v1.9.0)
@@ -18,19 +18,37 @@
 | `run_context.code_dirty` | `true` if uncommitted changes | During run |
 | `run_context.code_desc` | `"{sha}-dirty"` or `"{sha}-clean"` | During run |
 | `run_context.evidence_sha` | SHA of commit that **documents** this run | After commit, via `attach_evidence.py` |
+| `head_sha` | Current HEAD at time of _latest.json update | During update |
 
-### Workflow
+### Evidence Workflow
 
-1. **Run scan** → artifacts get `code_sha` from current HEAD
-2. **Commit code** → get new SHA (e.g., `abc1234`)
-3. **Attach evidence** → `python scripts/attach_evidence.py --sha abc1234`
-4. **Status_M4.md** → updated with `evidence_sha`
+```
+1. Run scan           → code_sha = HEAD, code_dirty = true/false
+2. Commit code        → get new SHA (e.g., abc1234)  
+3. Attach evidence    → python scripts/attach_evidence.py --sha abc1234
+4. Status_M4.md       → updated with evidence_sha
+```
+
+### Evidence Issues
+
+| Issue | Meaning | Action |
+|-------|---------|--------|
+| `DIRTY_WORKTREE_PRECOMMIT` | Run was made with uncommitted changes | Weaker evidence - consider re-run after commit |
+| `source_sha_mismatch` | Artifact SHA differs from HEAD | Normal for pre-commit runs |
+| `timestamp_delta_high` | Artifact >5min old | Consider fresh run |
 
 ### Why Two SHAs?
 
 - **code_sha**: Ensures you know which code **produced** these metrics (for regression debugging)
 - **evidence_sha**: Documents which commit **officially corresponds** to these artifacts (for auditing)
 - **code_dirty**: Warns if run was made with uncommitted changes
+
+### Canonical Proof Requirement
+
+For **PROVEN** status, at least one run should have:
+- `code_dirty = false` (clean worktree)
+- `evidence_sha` attached post-commit
+- `evidence.ok = true` (no issues)
 
 ## 🛡️ Artifact Retention & Disk Policy (v1.8.0)
 
