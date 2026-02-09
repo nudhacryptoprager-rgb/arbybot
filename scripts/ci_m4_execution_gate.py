@@ -14,6 +14,46 @@ def get_git_head_sha() -> str:
     return "unknown"
 
 
+def get_git_context() -> dict:
+    """
+    Get full git context for run_context.
+    Returns dict with:
+        code_sha: str - current HEAD SHA (short)
+        code_dirty: bool|None - True if uncommitted changes, None if git unavailable
+        code_desc: str - "{sha}-dirty" or "{sha}-clean" or "unknown"
+    """
+    import subprocess
+    context = {
+        "code_sha": "unknown",
+        "code_dirty": None,
+        "code_desc": "unknown",
+    }
+    try:
+        # Get SHA
+        sha_result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5, cwd=REPO_ROOT
+        )
+        if sha_result.returncode == 0:
+            sha = sha_result.stdout.strip()
+            context["code_sha"] = sha
+            
+            # Check dirty status
+            dirty_result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True, text=True, timeout=5, cwd=REPO_ROOT
+            )
+            if dirty_result.returncode == 0:
+                is_dirty = len(dirty_result.stdout.strip()) > 0
+                context["code_dirty"] = is_dirty
+                context["code_desc"] = f"{sha}-dirty" if is_dirty else f"{sha}-clean"
+            else:
+                context["code_desc"] = sha
+    except Exception:
+        pass
+    return context
+
+
 def ensure_rolling_agg_exists(agg_path: 'Path') -> dict:
     """Ensure rolling aggregator file exists. Creates empty one if not."""
     from datetime import datetime, timezone
@@ -61,12 +101,25 @@ def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int 
     metrics = run_summary.get("metrics", {})
     status = run_summary.get("status", "UNKNOWN")
     signals_count = metrics.get("signals_count", 0)
+    run_id = run_summary.get("run_id", "")
     
     # Determine run status for agg: NO_DATA if signals_count=0
     run_status = "NO_DATA" if signals_count == 0 else status
     
+    # DEDUPLICATION: Check if run_id already exists
+    existing_run_ids = {r.get("run_id") for r in agg_data.get("runs", []) if r.get("run_id")}
+    if run_id and run_id in existing_run_ids:
+        # Skip duplicate - just return current agg_data
+        print(f"[EMIT-AGG] SKIP duplicate run_id={run_id}")
+        return agg_data
+    
+    # Get git context for run entry
+    git_ctx = get_git_context()
+    
     agg_data["runs"].append({
+        "run_id": run_id,  # NEW: for deduplication
         "timestamp": run_summary.get("timestamp", ""),
+        "code_sha": git_ctx["code_sha"],  # NEW: code SHA
         "net_usdc": metrics.get("total_net_usdc", 0),
         "mae": metrics.get("mae_net_usdc", 0),
         "sign_rate": metrics.get("est_sign_correct_rate", 0),
@@ -1300,17 +1353,27 @@ def generate_m4_from_online_inputs(
     # Calculate sum_drift for run_summary
     sum_drift_usdc = round(abs(est_net_sum - sim_net_sum), 4)
     
+    # Get git context for run_context (v1.9.0)
+    git_ctx = get_git_context()
+    
     run_summary_data = {
-        "schema_version": "run:summary:v1.4",  # v1.8.0: drift_includes_cost_model_delta, market_regime_hint
+        "schema_version": "run:summary:v1.5",  # v1.9.0: run_context with code_sha/dirty/evidence
         "timestamp": datetime.utcnow().isoformat() + "Z",
-        # Provenance
-        "source_sha": source_sha,
+        # Provenance (v1.9.0: split into run_context)
+        "source_sha": git_ctx["code_sha"],  # Kept for backwards compat
         "run_id": run_id,
+        # Run context (v1.9.0) - clear separation of code vs evidence SHA
+        "run_context": {
+            "code_sha": git_ctx["code_sha"],  # SHA of code that generated this run
+            "code_dirty": git_ctx["code_dirty"],  # True if uncommitted changes
+            "code_desc": git_ctx["code_desc"],  # "{sha}-dirty" or "{sha}-clean"
+            "evidence_sha": None,  # Filled by attach_evidence command post-commit
+        },
         # Evidence validation (v1.5.0)
         "evidence": {
             "ok": evidence_ok,
             "issues": evidence_issues,
-            "current_sha": current_sha if current_sha != "unknown" else None,
+            "current_sha": git_ctx["code_sha"] if git_ctx["code_sha"] != "unknown" else None,
         },
         # Policy (v1.6.0) - explicit threshold interpretation
         "policy": {
@@ -2520,10 +2583,19 @@ def run_online_gate(
             if agg_data.get("quick_stats", {}).get("total_signals", 0) < rolling_window.get("min_signals", 10):
                 agg_reasons.append("WARMUP_MIN_SIGNALS")
         
+        # Get git context
+        git_ctx = get_git_context()
+        
         latest_data = {
-            "schema_version": "m4:latest:v1.3",
+            "schema_version": "m4:latest:v1.4",
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "git_sha": git_sha,
+            "git_sha": git_ctx["code_sha"],  # Backwards compat
+            "run_context": {
+                "code_sha": git_ctx["code_sha"],
+                "code_dirty": git_ctx["code_dirty"],
+                "code_desc": git_ctx["code_desc"],
+                "evidence_sha": None,  # Set by attach_evidence
+            },
             "latest_mode": "ONLINE" if is_online else "OFFLINE",
             "latest_kind": "INCIDENT" if is_incident else "NORMAL",
             "run_status": status,

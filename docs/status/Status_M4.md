@@ -1,10 +1,36 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
-**Updated**: 2026-02-09 20:58 UTC  
-**Evidence SHA**: `dd8ae9a`  
-**Gate Version**: `ci_m4_execution_gate.py` v1.8.0  
+**Updated**: 2026-02-09 21:10 UTC  
+**Evidence SHA**: `8ce8814`  
+**Gate Version**: `ci_m4_execution_gate.py` v1.9.0  
 **Tests**: 562 passed, 1 skipped
+
+## 🔐 SHA Context: code_sha vs evidence_sha (v1.9.0)
+
+> **Two separate SHA fields for proper provenance tracking**
+
+### Terminology
+
+| Field | Meaning | When Set |
+|-------|---------|----------|
+| `run_context.code_sha` | SHA of code that **ran** the scan | During run |
+| `run_context.code_dirty` | `true` if uncommitted changes | During run |
+| `run_context.code_desc` | `"{sha}-dirty"` or `"{sha}-clean"` | During run |
+| `run_context.evidence_sha` | SHA of commit that **documents** this run | After commit, via `attach_evidence.py` |
+
+### Workflow
+
+1. **Run scan** → artifacts get `code_sha` from current HEAD
+2. **Commit code** → get new SHA (e.g., `abc1234`)
+3. **Attach evidence** → `python scripts/attach_evidence.py --sha abc1234`
+4. **Status_M4.md** → updated with `evidence_sha`
+
+### Why Two SHAs?
+
+- **code_sha**: Ensures you know which code **produced** these metrics (for regression debugging)
+- **evidence_sha**: Documents which commit **officially corresponds** to these artifacts (for auditing)
+- **code_dirty**: Warns if run was made with uncommitted changes
 
 ## 🛡️ Artifact Retention & Disk Policy (v1.8.0)
 
