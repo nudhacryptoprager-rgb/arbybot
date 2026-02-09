@@ -112,7 +112,7 @@ from core.artifact_invariants import (
     get_profile,
 )
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 # ============================================================
 # FAIL REASON CODES (explicit definitions)
@@ -140,6 +140,7 @@ class FailReason:
     # WARN conditions
     WARN_DRIFT_MAE = "WARN_DRIFT_MAE"            # 0.30 < mae <= 0.50
     WARN_LOW_SAMPLE = "WARN_LOW_SAMPLE"          # signals_count < MIN_SAMPLE_SIZE (v1.7.0)
+    WARN_AGG_WARMUP = "WARN_AGG_WARMUP"          # runs_in_window < MIN_RUNS_FOR_AGG (v1.8.0)
 
 
 # ============================================================
@@ -165,8 +166,16 @@ class Thresholds:
     
     # Aggregator-level thresholds (v1.7.0) - applied on rolling window, not single run
     AGG_MAE_P90_FAIL = 0.60       # FAIL if p90(MAE) > 0.60 across rolling window
-    AGG_WARN_RATE_FAIL = 0.30     # FAIL if warn_rate > 30% in rolling window
+    AGG_WARN_RATE_FAIL = 0.30     # FAIL if warn_rate_core > 30% in rolling window
     AGG_FAIL_RATE_FAIL = 0.10     # FAIL if fail_rate > 10% in rolling window
+    
+    # Warm-up thresholds (v1.8.0) - aggregator needs minimum data before hard FAIL
+    MIN_RUNS_FOR_AGG = 10         # < 10 runs → PASS_WITH_WARMUP instead of FAIL
+    MIN_SIGNALS_FOR_AGG = 30      # < 30 total signals → warn thresholds relaxed
+    
+    # Fragile rate thresholds (v1.8.0)
+    AGG_FRAGILE_P90_WARN = 0.50   # WARN if p90(fragile_rate) > 50%
+    AGG_FRAGILE_P90_FAIL = 0.70   # FAIL if p90(fragile_rate) > 70%
     
 
 # ============================================================
@@ -1125,7 +1134,7 @@ def generate_m4_from_online_inputs(
     sum_drift_usdc = round(abs(est_net_sum - sim_net_sum), 4)
     
     run_summary_data = {
-        "schema_version": "run:summary:v1.3",  # v1.7.0: source_execution_report, no_slippage_definition, fragile_rate
+        "schema_version": "run:summary:v1.4",  # v1.8.0: drift_includes_cost_model_delta, market_regime_hint
         "timestamp": datetime.utcnow().isoformat() + "Z",
         # Provenance
         "source_sha": source_sha,
@@ -1144,6 +1153,9 @@ def generate_m4_from_online_inputs(
             "status_rule": "PASS if profit_status=PASS AND drift_status!=FAIL",
             # v1.7.0: Explain what no_slippage calculation disables
             "no_slippage_definition": "mae_no_slippage disables only slippage_bps delta, keeps gas cost",
+            # v1.8.0: Clarify that drift metrics include cost model delta, not just model error
+            "drift_includes_cost_model_delta": True,
+            "drift_explanation": "mae_net_usdc measures truth(gas_only) vs sim(paper_realistic) - includes systematic slippage delta, not model degradation",
         },
         # KPI (v1.6.0) - what we measure for M4 success
         "kpi": {
@@ -1219,6 +1231,12 @@ def generate_m4_from_online_inputs(
         "profile": "profit",  # PROFIT profile for online
         # Fragile signals list (v1.6.0): top-10 with reasons when fragile_count>0
         "fragile_signals": fragile_signals[:10] if fragile_count > 0 and fragile_signals else None,
+        # Market regime hint (v1.8.0) - optional context for understanding drift spikes
+        "market_regime_hint": {
+            "gas_gwei": None,  # TODO: populate from RPC when available
+            "volatility_proxy": None,  # TODO: compute from price moves
+            "note": "Placeholder for future market context - helps explain drift spikes",
+        },
     }
     
     with open(run_summary_path, "w") as f:
@@ -1300,12 +1318,18 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
     profit_pass_count = sum(1 for r in runs_data if r["profit_status"] == "PASS")
     drift_pass_count = sum(1 for r in runs_data if r["drift_status"] == "PASS")
     
-    # Warn/Fail rates (v1.6.0)
-    warn_count = sum(1 for r in runs_data if "WARN_DRIFT_MAE" in r.get("reasons", []))
+    # Warn/Fail rates (v1.6.0) - separate core from low_sample (v1.8.0)
+    warn_count_all = sum(1 for r in runs_data if "WARN_DRIFT_MAE" in r.get("reasons", []))
+    low_sample_count = sum(1 for r in runs_data if "WARN_LOW_SAMPLE" in r.get("reasons", []))
+    # warn_rate_core excludes WARN_LOW_SAMPLE (v1.8.0)
+    warn_count_core = warn_count_all  # WARN_DRIFT_MAE only, not affected by sample size
     drift_fail_count = sum(1 for r in runs_data if r["drift_status"] == "FAIL")
     
     # Net values for percentiles (v1.6.0)
     net_values = [r["metrics"].get("total_net_usdc", 0) for r in runs_data if r["metrics"].get("total_net_usdc") is not None]
+    
+    # Fragile rates per run (v1.8.0)
+    fragile_rates = [r["metrics"].get("fragile_rate", 0) for r in runs_data if r["metrics"].get("fragile_rate") is not None]
     
     # Collect all fail reasons with counts
     all_reasons = {}
@@ -1323,25 +1347,41 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
         c = f + 1 if f + 1 < len(sorted_vals) else f
         return round(sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f]), 4)
     
-    # Calculate aggregator-level status (v1.7.0)
+    # Calculate aggregator-level status (v1.7.0, v1.8.0 warm-up)
     # Thresholds are applied on the rolling window, not single runs
     mae_p90 = percentile(mae_values, 90)
-    warn_rate = warn_count / len(runs_data) if runs_data else 0
+    warn_rate_core = warn_count_core / len(runs_data) if runs_data else 0
+    low_sample_rate = low_sample_count / len(runs_data) if runs_data else 0
     fail_rate = fail_count / len(runs_data) if runs_data else 0
+    fragile_p90 = percentile(fragile_rates, 90)
+    
+    # Warm-up check (v1.8.0)
+    in_warmup = len(runs_data) < Thresholds.MIN_RUNS_FOR_AGG or total_signals < Thresholds.MIN_SIGNALS_FOR_AGG
     
     agg_status = "PASS"
     agg_reasons = []
     
-    # Check aggregator-level thresholds (v1.7.0)
-    if mae_p90 and mae_p90 > Thresholds.AGG_MAE_P90_FAIL:
-        agg_status = "FAIL"
-        agg_reasons.append(f"AGG_FAIL_MAE_P90: p90(MAE)={mae_p90} > {Thresholds.AGG_MAE_P90_FAIL}")
-    if warn_rate > Thresholds.AGG_WARN_RATE_FAIL:
-        agg_status = "FAIL"
-        agg_reasons.append(f"AGG_FAIL_WARN_RATE: warn_rate={warn_rate:.2%} > {Thresholds.AGG_WARN_RATE_FAIL:.0%}")
-    if fail_rate > Thresholds.AGG_FAIL_RATE_FAIL:
-        agg_status = "FAIL"
-        agg_reasons.append(f"AGG_FAIL_RATE: fail_rate={fail_rate:.2%} > {Thresholds.AGG_FAIL_RATE_FAIL:.0%}")
+    # Warm-up mode: don't hard FAIL, use PASS_WITH_WARMUP (v1.8.0)
+    if in_warmup:
+        agg_status = "PASS_WITH_WARMUP"
+        agg_reasons.append(f"WARN_AGG_WARMUP: runs={len(runs_data)}/{Thresholds.MIN_RUNS_FOR_AGG}, signals={total_signals}/{Thresholds.MIN_SIGNALS_FOR_AGG}")
+    else:
+        # Check aggregator-level thresholds only after warm-up (v1.8.0)
+        if mae_p90 and mae_p90 > Thresholds.AGG_MAE_P90_FAIL:
+            agg_status = "FAIL"
+            agg_reasons.append(f"AGG_FAIL_MAE_P90: p90(MAE)={mae_p90} > {Thresholds.AGG_MAE_P90_FAIL}")
+        if warn_rate_core > Thresholds.AGG_WARN_RATE_FAIL:
+            agg_status = "FAIL"
+            agg_reasons.append(f"AGG_FAIL_WARN_RATE: warn_rate_core={warn_rate_core:.2%} > {Thresholds.AGG_WARN_RATE_FAIL:.0%}")
+        if fail_rate > Thresholds.AGG_FAIL_RATE_FAIL:
+            agg_status = "FAIL"
+            agg_reasons.append(f"AGG_FAIL_RATE: fail_rate={fail_rate:.2%} > {Thresholds.AGG_FAIL_RATE_FAIL:.0%}")
+        # Fragile rate threshold (v1.8.0)
+        if fragile_p90 and fragile_p90 > Thresholds.AGG_FRAGILE_P90_FAIL:
+            agg_status = "FAIL"
+            agg_reasons.append(f"AGG_FAIL_FRAGILE_P90: p90(fragile_rate)={fragile_p90:.2%} > {Thresholds.AGG_FRAGILE_P90_FAIL:.0%}")
+        elif fragile_p90 and fragile_p90 > Thresholds.AGG_FRAGILE_P90_WARN:
+            agg_reasons.append(f"AGG_WARN_FRAGILE_P90: p90(fragile_rate)={fragile_p90:.2%} > {Thresholds.AGG_FRAGILE_P90_WARN:.0%}")
     
     # Fragile rate across all signals (v1.7.0)
     fragile_rate = total_fragile / total_signals if total_signals > 0 else 0
@@ -1355,6 +1395,10 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
             "default": Thresholds.ROLLING_WINDOW_DEFAULT,
             "max": Thresholds.ROLLING_WINDOW_MAX,
             "current": len(runs_data),
+            # Warm-up thresholds (v1.8.0)
+            "min_runs": Thresholds.MIN_RUNS_FOR_AGG,
+            "min_signals": Thresholds.MIN_SIGNALS_FOR_AGG,
+            "in_warmup": in_warmup,
         },
         "runs": runs_data,
         "aggregates": {
@@ -1362,9 +1406,12 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
             "pass_count": pass_count,
             "fail_count": fail_count,
             "pass_rate": round(pass_count / len(runs_data), 4) if runs_data else 0,
-            # Warn/Fail rates (v1.6.0)
-            "warn_count": warn_count,
-            "warn_rate": round(warn_count / len(runs_data), 4) if runs_data else 0,
+            # Warn/Fail rates (v1.6.0, v1.8.0: separate core from low_sample)
+            "warn_count_all": warn_count_all,
+            "warn_count_core": warn_count_core,  # v1.8.0: excludes WARN_LOW_SAMPLE
+            "low_sample_count": low_sample_count,  # v1.8.0
+            "warn_rate_core": round(warn_rate_core, 4),  # v1.8.0: used for threshold
+            "low_sample_rate": round(low_sample_rate, 4),  # v1.8.0
             "drift_fail_count": drift_fail_count,
             "drift_fail_rate": round(drift_fail_count / len(runs_data), 4) if runs_data else 0,
             # Split status (v1.5.0)
@@ -1377,9 +1424,13 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
             "total_profitable": total_profitable,
             "total_fragile": total_fragile,
             "fragile_rate": round(fragile_rate, 4),  # v1.7.0
+            # Fragile rate percentiles (v1.8.0)
+            "fragile_rate_p50": percentile(fragile_rates, 50),
+            "fragile_rate_p90": fragile_p90,
             "total_net_usdc": round(total_net, 4),
             "avg_net_usdc": round(total_net / len(runs_data), 4) if runs_data else 0,
-            # Net percentiles (v1.6.0)
+            # Net percentiles (v1.6.0, v1.8.0: added p10 for bad tail)
+            "net_p10": percentile(net_values, 10),  # v1.8.0: bad tail
             "net_p50": percentile(net_values, 50),
             "net_p90": percentile(net_values, 90),
             "net_p99": percentile(net_values, 99),  # v1.7.0
@@ -1398,15 +1449,19 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
             "sign_rate_avg": round(sum(sign_rates) / len(sign_rates), 4) if sign_rates else None,
             "sign_rate_min": min(sign_rates) if sign_rates else None,
         },
-        # Aggregator-level thresholds (v1.7.0)
+        # Aggregator-level thresholds (v1.7.0, v1.8.0: added warm-up + fragile)
         "agg_thresholds": {
             "mae_p90_fail": Thresholds.AGG_MAE_P90_FAIL,
-            "warn_rate_fail": Thresholds.AGG_WARN_RATE_FAIL,
+            "warn_rate_core_fail": Thresholds.AGG_WARN_RATE_FAIL,  # v1.8.0: renamed
             "fail_rate_fail": Thresholds.AGG_FAIL_RATE_FAIL,
+            "min_runs_for_agg": Thresholds.MIN_RUNS_FOR_AGG,  # v1.8.0
+            "min_signals_for_agg": Thresholds.MIN_SIGNALS_FOR_AGG,  # v1.8.0
+            "fragile_p90_warn": Thresholds.AGG_FRAGILE_P90_WARN,  # v1.8.0
+            "fragile_p90_fail": Thresholds.AGG_FRAGILE_P90_FAIL,  # v1.8.0
         },
         # Fail reasons with counts (v1.5.0)
         "fail_reason_counts": all_reasons,
-        # Aggregator-level status (v1.7.0)
+        # Aggregator-level status (v1.7.0, v1.8.0: PASS_WITH_WARMUP)
         "agg_status": agg_status,
         "agg_reasons": agg_reasons,
         # Per-run status (backwards compat)
@@ -1488,9 +1543,11 @@ def emit_to_aggregator(run_dir: Path, agg_path: Path, max_runs: int = None) -> N
         "current": len(runs),
     }
     
-    # Calculate comprehensive stats (v1.7.0)
+    # Calculate comprehensive stats (v1.7.0, v1.8.0: warm-up + separate warn rates)
     pass_count = sum(1 for r in runs if r["status"] == "PASS")
-    warn_count = sum(1 for r in runs if "WARN_DRIFT_MAE" in r.get("reasons", []))
+    warn_count_all = sum(1 for r in runs if "WARN_DRIFT_MAE" in r.get("reasons", []))
+    low_sample_count = sum(1 for r in runs if "WARN_LOW_SAMPLE" in r.get("reasons", []))
+    warn_count_core = warn_count_all  # WARN_DRIFT_MAE only
     fail_count = len(runs) - pass_count
     total_net = sum(r["metrics"].get("total_net_usdc", 0) for r in runs)
     total_signals = sum(r["metrics"].get("signals_count", 0) for r in runs)
@@ -1498,6 +1555,7 @@ def emit_to_aggregator(run_dir: Path, agg_path: Path, max_runs: int = None) -> N
     
     mae_values = [r["metrics"].get("mae_net_usdc", 0) for r in runs if r["metrics"].get("mae_net_usdc") is not None]
     net_values = [r["metrics"].get("total_net_usdc", 0) for r in runs if r["metrics"].get("total_net_usdc") is not None]
+    fragile_rates = [r["metrics"].get("fragile_rate", 0) for r in runs if r["metrics"].get("fragile_rate") is not None]
     
     def percentile(values: List[float], p: float) -> Optional[float]:
         if not values:
@@ -1509,44 +1567,74 @@ def emit_to_aggregator(run_dir: Path, agg_path: Path, max_runs: int = None) -> N
         return round(sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f]), 4)
     
     mae_p90 = percentile(mae_values, 90)
-    warn_rate = warn_count / len(runs) if runs else 0
+    warn_rate_core = warn_count_core / len(runs) if runs else 0
+    low_sample_rate = low_sample_count / len(runs) if runs else 0
     fail_rate = fail_count / len(runs) if runs else 0
+    fragile_p90 = percentile(fragile_rates, 90)
     
-    # Aggregator-level status (v1.7.0)
+    # Warm-up check (v1.8.0)
+    in_warmup = len(runs) < Thresholds.MIN_RUNS_FOR_AGG or total_signals < Thresholds.MIN_SIGNALS_FOR_AGG
+    
+    # Aggregator-level status (v1.7.0, v1.8.0: warm-up mode)
     agg_status = "PASS"
     agg_reasons = []
-    if mae_p90 and mae_p90 > Thresholds.AGG_MAE_P90_FAIL:
-        agg_status = "FAIL"
-        agg_reasons.append(f"AGG_FAIL_MAE_P90: {mae_p90} > {Thresholds.AGG_MAE_P90_FAIL}")
-    if warn_rate > Thresholds.AGG_WARN_RATE_FAIL:
-        agg_status = "FAIL"
-        agg_reasons.append(f"AGG_FAIL_WARN_RATE: {warn_rate:.2%} > {Thresholds.AGG_WARN_RATE_FAIL:.0%}")
-    if fail_rate > Thresholds.AGG_FAIL_RATE_FAIL:
-        agg_status = "FAIL"
-        agg_reasons.append(f"AGG_FAIL_RATE: {fail_rate:.2%} > {Thresholds.AGG_FAIL_RATE_FAIL:.0%}")
+    
+    if in_warmup:
+        agg_status = "PASS_WITH_WARMUP"
+        agg_reasons.append(f"WARN_AGG_WARMUP: runs={len(runs)}/{Thresholds.MIN_RUNS_FOR_AGG}, signals={total_signals}/{Thresholds.MIN_SIGNALS_FOR_AGG}")
+    else:
+        if mae_p90 and mae_p90 > Thresholds.AGG_MAE_P90_FAIL:
+            agg_status = "FAIL"
+            agg_reasons.append(f"AGG_FAIL_MAE_P90: {mae_p90} > {Thresholds.AGG_MAE_P90_FAIL}")
+        if warn_rate_core > Thresholds.AGG_WARN_RATE_FAIL:
+            agg_status = "FAIL"
+            agg_reasons.append(f"AGG_FAIL_WARN_RATE: {warn_rate_core:.2%} > {Thresholds.AGG_WARN_RATE_FAIL:.0%}")
+        if fail_rate > Thresholds.AGG_FAIL_RATE_FAIL:
+            agg_status = "FAIL"
+            agg_reasons.append(f"AGG_FAIL_RATE: {fail_rate:.2%} > {Thresholds.AGG_FAIL_RATE_FAIL:.0%}")
+        if fragile_p90 and fragile_p90 > Thresholds.AGG_FRAGILE_P90_FAIL:
+            agg_status = "FAIL"
+            agg_reasons.append(f"AGG_FAIL_FRAGILE_P90: {fragile_p90:.2%} > {Thresholds.AGG_FRAGILE_P90_FAIL:.0%}")
     
     agg_data["quick_stats"] = {
         "pass_count": pass_count,
         "fail_count": fail_count,
-        "warn_count": warn_count,
+        "warn_count_all": warn_count_all,
+        "warn_count_core": warn_count_core,  # v1.8.0
+        "low_sample_count": low_sample_count,  # v1.8.0
         "pass_rate": round(pass_count / len(runs), 4) if runs else 0,
-        "warn_rate": round(warn_rate, 4),
+        "warn_rate_core": round(warn_rate_core, 4),  # v1.8.0
+        "low_sample_rate": round(low_sample_rate, 4),  # v1.8.0
         "fail_rate": round(fail_rate, 4),
         "total_signals": total_signals,
         "total_fragile": total_fragile,
         "fragile_rate": round(total_fragile / total_signals, 4) if total_signals else 0,
+        "fragile_rate_p90": fragile_p90,  # v1.8.0
         "total_net_usdc": round(total_net, 4),
         "avg_net_usdc": round(total_net / len(runs), 4) if runs else 0,
+        "net_p10": percentile(net_values, 10),  # v1.8.0: bad tail
         "mae_p50": percentile(mae_values, 50),
         "mae_p90": mae_p90,
         "net_p50": percentile(net_values, 50),
         "net_p90": percentile(net_values, 90),
     }
     
+    agg_data["schema_version"] = "m4:stability_agg:v1.4"  # v1.8.0
+    agg_data["rolling_window"] = {
+        "max": max_runs,
+        "current": len(runs),
+        "min_runs": Thresholds.MIN_RUNS_FOR_AGG,
+        "min_signals": Thresholds.MIN_SIGNALS_FOR_AGG,
+        "in_warmup": in_warmup,
+    }
     agg_data["agg_thresholds"] = {
         "mae_p90_fail": Thresholds.AGG_MAE_P90_FAIL,
-        "warn_rate_fail": Thresholds.AGG_WARN_RATE_FAIL,
+        "warn_rate_core_fail": Thresholds.AGG_WARN_RATE_FAIL,  # v1.8.0: renamed
         "fail_rate_fail": Thresholds.AGG_FAIL_RATE_FAIL,
+        "min_runs_for_agg": Thresholds.MIN_RUNS_FOR_AGG,  # v1.8.0
+        "min_signals_for_agg": Thresholds.MIN_SIGNALS_FOR_AGG,  # v1.8.0
+        "fragile_p90_warn": Thresholds.AGG_FRAGILE_P90_WARN,  # v1.8.0
+        "fragile_p90_fail": Thresholds.AGG_FRAGILE_P90_FAIL,  # v1.8.0
     }
     agg_data["agg_status"] = agg_status
     agg_data["agg_reasons"] = agg_reasons
@@ -1555,17 +1643,29 @@ def emit_to_aggregator(run_dir: Path, agg_path: Path, max_runs: int = None) -> N
     with open(agg_path, "w") as f:
         json.dump(agg_data, f, indent=2)
     
-    # Update _latest.json pointer (v1.7.0)
+    # Find stability_summary and run_summary paths for _latest.json (v1.8.0)
+    stability_files = list(reports_dir.glob("stability_summary_*.json"))
+    stability_path_name = sorted(stability_files, key=lambda x: x.name, reverse=True)[0].name if stability_files else None
+    
+    # Update _latest.json pointer (v1.7.0, v1.8.0: added paths)
     latest_path = agg_path.parent / "_latest.json"
     latest_data = {
-        "schema_version": "m4:latest:v1.0",
+        "schema_version": "m4:latest:v1.1",  # v1.8.0
         "updated_at": datetime.utcnow().isoformat() + "Z",
         "latest_run_dir": str(run_dir.name),
         "latest_run_id": run_data.get("run_id", ""),
         "latest_status": run_data.get("status", "UNKNOWN"),
-        "aggregator_path": agg_path.name,
+        # v1.8.0: Full paths for external tools
+        "paths": {
+            "run_summary": f"{run_dir.name}/reports/{summary_path.name}",
+            "stability_summary": f"{run_dir.name}/reports/{stability_path_name}" if stability_path_name else None,
+            "rolling_agg": agg_path.name,
+        },
+        "aggregator_path": agg_path.name,  # backwards compat
         "agg_status": agg_status,
         "runs_in_window": len(runs),
+        "in_warmup": in_warmup,  # v1.8.0
+        "total_signals_in_window": total_signals,  # v1.8.0
     }
     with open(latest_path, "w") as f:
         json.dump(latest_data, f, indent=2)
