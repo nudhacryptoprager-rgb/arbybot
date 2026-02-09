@@ -3,10 +3,10 @@
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
 **Updated**: 2026-02-09 21:20 UTC  
 **Evidence SHA**: `8ce8814`  
-**Gate Version**: `ci_m4_execution_gate.py` v1.9.1  
+**Gate Version**: `ci_m4_execution_gate.py` v1.9.2  
 **Tests**: 562 passed, 1 skipped
 
-## 🔐 SHA Context: code_sha vs evidence_sha (v1.9.0)
+## 🔐 SHA Context: code_sha vs evidence_sha (v1.9.2)
 
 > **Two separate SHA fields for proper provenance tracking**
 
@@ -48,6 +48,24 @@
 For **PROVEN** status, at least one run should have:
 - `code_dirty = false` (clean worktree)
 - `evidence_sha` attached post-commit
+
+### --reset-window Flag (v1.9.2)
+
+Use `--reset-window` to clear the aggregator file before a run:
+
+```bash
+python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window
+```
+
+**When to use:**
+- After major refactors that change metric meanings
+- When aggregator contains stale or invalid runs
+- To start fresh stability window
+
+**What it does:**
+- Deletes `m4_stability_agg.json` before emitting new run
+- New run becomes the only entry in aggregator
+- Does NOT affect `_latest.json` or `run_summary_latest.json`
 - `evidence.ok = true` (no issues)
 
 ## 🛡️ Artifact Retention & Disk Policy (v1.8.0)

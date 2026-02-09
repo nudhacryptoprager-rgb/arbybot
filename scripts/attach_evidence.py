@@ -68,7 +68,7 @@ def attach_evidence(sha: str, update_status_md: bool = True) -> int:
                 "code_sha": latest_data.get("git_sha", "unknown"),
                 "code_dirty": False,
                 "code_desc": latest_data.get("git_sha", "unknown"),
-                "evidence_sha": "",
+                "evidence_sha": None,  # null, not ""
             }
         
         # Check if run was dirty - add warning
@@ -76,6 +76,8 @@ def attach_evidence(sha: str, update_status_md: bool = True) -> int:
             warnings.append("DIRTY_WORKTREE_PRECOMMIT: Run was made with uncommitted changes")
         
         latest_data["run_context"]["evidence_sha"] = sha
+        # Also set top-level for easy access
+        latest_data["latest_evidence_sha"] = sha
         latest_data["evidence_attached_at"] = datetime.now(timezone.utc).isoformat()
         
         with open(latest_path, "w") as f:
@@ -96,7 +98,7 @@ def attach_evidence(sha: str, update_status_md: bool = True) -> int:
                 "code_sha": summary_data.get("source_sha", "unknown"),
                 "code_dirty": False,
                 "code_desc": summary_data.get("source_sha", "unknown"),
-                "evidence_sha": "",
+                "evidence_sha": None,  # null, not ""
             }
         
         # Check if run was dirty - add issue to evidence

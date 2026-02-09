@@ -102,9 +102,17 @@ def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int 
     status = run_summary.get("status", "UNKNOWN")
     signals_count = metrics.get("signals_count", 0)
     run_id = run_summary.get("run_id", "")
+    reasons = run_summary.get("reasons", [])
     
     # Determine run status for agg: NO_DATA if signals_count=0
     run_status = "NO_DATA" if signals_count == 0 else status
+    
+    # v1.9.2: Clean reasons for NO_DATA - no FAIL_* allowed
+    if run_status == "NO_DATA":
+        reasons = [r for r in reasons if not r.startswith("FAIL_")]
+        if "NO_DATA" not in reasons:
+            reasons = ["NO_DATA"] + reasons
+        reasons = [r for r in reasons if r in ["NO_DATA", "WARN_LOW_SAMPLE"]]
     
     # DEDUPLICATION: Check if run_id already exists
     existing_run_ids = {r.get("run_id") for r in agg_data.get("runs", []) if r.get("run_id")}
@@ -123,7 +131,7 @@ def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int 
         "net_usdc": metrics.get("total_net_usdc", 0),
         "mae": metrics.get("mae_net_usdc", 0),
         "sign_rate": metrics.get("est_sign_correct_rate", 0),
-        "reasons": run_summary.get("reasons", []),
+        "reasons": reasons,  # Cleaned for NO_DATA
         "fragile_rate": metrics.get("fragile_rate", 0),
         "signals_count": signals_count,
         "run_status": run_status,  # NEW: NO_DATA|PASS|WARN|FAIL
@@ -2360,6 +2368,7 @@ def run_online_gate(
     strict_evidence: bool = False,
     artifact_mode: str = "rolling",
     emit_agg: Optional[Path] = None,
+    reset_window: bool = False,
 ) -> int:
     # Incident bundle persistence and retention
     def persist_incident_bundle(run_id, bundle_dict):
@@ -2554,6 +2563,11 @@ def run_online_gate(
                 if k.startswith("source_"):
                     run_summary["inputs"][k] = None
         
+        # RESET WINDOW: delete aggregator file if --reset-window was passed
+        if reset_window and agg_path.exists():
+            print(f"[RESET] --reset-window: deleting aggregator file {agg_path}")
+            agg_path.unlink()
+        
         # STEP 1: Emit to aggregator FIRST (always)
         agg_data = emit_to_aggregator_light(run_summary, agg_path)
         
@@ -2619,7 +2633,7 @@ def run_online_gate(
                 "code_sha": git_ctx["code_sha"],
                 "code_dirty": git_ctx["code_dirty"] if git_ctx["code_dirty"] is not None else False,
                 "code_desc": git_ctx["code_desc"],
-                "evidence_sha": "",  # Empty string, not null - set by attach_evidence
+                "evidence_sha": None,  # null until attach_evidence sets it
             },
             "latest_mode": "ONLINE" if is_online else "OFFLINE",
             "latest_kind": "INCIDENT" if is_incident else "NORMAL",
@@ -2633,7 +2647,7 @@ def run_online_gate(
             "paths": {
                 "run_summary_latest": rel_path(run_summary_path),
                 "rolling_agg": rel_path(agg_path),
-                "last_incident": rel_path(incident_dir / "run_summary.json") if incident_dir else "",
+                "last_incident": rel_path(incident_dir / "run_summary.json") if incident_dir else None,
             },
         }
         with open(latest_path, "w") as f:
@@ -2814,6 +2828,8 @@ def main() -> int:
     parser.add_argument("--artifact-mode", type=str, default="rolling",
                         choices=["rolling", "full"],
                         help="Artifact mode: rolling (default, only rolling/incident), full (legacy per-run)")
+    parser.add_argument("--reset-window", action="store_true",
+                        help="Reset rolling aggregator window (start fresh after major refactor)")
 
     args = parser.parse_args()
 
@@ -2830,7 +2846,8 @@ def main() -> int:
             args.run_dir, args.profile, args.strict, args.cost_model,
             strict_evidence=args.strict_evidence,
             artifact_mode=args.artifact_mode,
-            emit_agg=args.emit_agg
+            emit_agg=args.emit_agg,
+            reset_window=args.reset_window
         )
         return result
     elif args.dry_run:
