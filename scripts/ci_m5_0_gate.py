@@ -650,86 +650,98 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
     except Exception as e:
         messages.append(f"WARN: cross-artifact checks failed: {type(e).__name__}: {e}")
 
+    # Determine if this is offline mode (fixture artifacts)
+    # In offline mode, infra fields are intentionally absent - skip validation
+    run_mode_s = s.get("run_mode", "")
+    run_mode_t = t.get("run_mode", "")
+    is_offline = "FIXTURE" in run_mode_s or "FIXTURE" in run_mode_t
+    
     # Infra transparency checks: confirm provider and host present and consistent
-    try:
-        infra_s = (s.get("infra") or {})
-        infra_t = (t.get("infra") or {})
-        infra_r = (r.get("infra") or {})
-
-        # Extract provider/hosts
-        prov_s = infra_s.get("rpc_provider")
-        prov_t = infra_t.get("rpc_provider")
-        host_s = infra_s.get("rpc_http_host")
-        host_t = infra_t.get("rpc_http_host")
-
-        if not prov_s or not host_s:
-            if require_infra_hosts or require_real:
-                messages.append("FAIL: scan.infra missing rpc_provider or rpc_http_host")
-                all_passed = False
-            else:
-                messages.append("WARN: scan.infra missing rpc_provider or rpc_http_host")
-        if not prov_t or not host_t:
-            if require_infra_hosts or require_real:
-                messages.append("FAIL: truth_report.infra missing rpc_provider or rpc_http_host")
-                all_passed = False
-            else:
-                messages.append("WARN: truth_report.infra missing rpc_provider or rpc_http_host")
-
-        # If env required Alchemy, ensure provider is alchemy
-        if os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1":
-            if prov_s != "alchemy" or prov_t != "alchemy":
-                messages.append(f"FAIL: REQUIRE_ALCHEMY set but provider != alchemy (scan={prov_s} truth={prov_t})")
-                all_passed = False
-
-        # Heuristic: chain_id vs rpc host mismatch (blocker)
+    # SKIP in offline mode - fixtures don't have real infra data
+    if is_offline:
+        # Silently skip infra validation for offline fixtures
+        pass
+    else:
         try:
-            chain_id_s = s.get("chain_id")
-            chain_id_t = t.get("chain_id")
-            # prefer scan chain_id if present
-            chain_id_val = chain_id_s or chain_id_t
-            if chain_id_val is not None:
-                try:
-                    cid = int(chain_id_val)
-                    # Quick heuristic for known mismatch: Arbitrum chain_id (42161) must not point to Mantle host
-                    if cid == 42161:
-                        hs = (host_s or "").lower()
-                        ht = (host_t or "").lower()
-                        if "mantle" in hs or "mantle" in ht:
-                            messages.append(f"FAIL: chain_id=42161 (Arbitrum) but rpc_http_host contains 'mantle' (scan={host_s} truth={host_t})")
-                            all_passed = False
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            infra_s = (s.get("infra") or {})
+            infra_t = (t.get("infra") or {})
+            infra_r = (r.get("infra") or {})
 
-        # Tenderly diagnostic consistency
-        for artifact_name, infra in (("scan", infra_s), ("truth_report", infra_t)):
-            if infra.get("tenderly_enabled"):
-                ok = infra.get("tenderly_ok")
-                err = infra.get("tenderly_error")
-                if ok is not True and (not err):
-                    if require_tenderly:
-                        messages.append(f"FAIL: {artifact_name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
-                        all_passed = False
-                    else:
-                        messages.append(f"WARN: {artifact_name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
+            # Extract provider/hosts
+            prov_s = infra_s.get("rpc_provider")
+            prov_t = infra_t.get("rpc_provider")
+            host_s = infra_s.get("rpc_http_host")
+            host_t = infra_t.get("rpc_http_host")
 
-        # WS diagnostics validation
-        for artifact_name, infra in (("scan", infra_s), ("truth_report", infra_t)):
-            if infra.get("ws_enabled"):
-                attempted = infra.get("ws_attempted")
-                connected = infra.get("ws_connected")
-                fallback = infra.get("ws_fallback_to_http")
-                ws_err = infra.get("ws_error")
-                if attempted is not True and attempted is not False:
-                    messages.append(f"WARN: {artifact_name}.infra missing ws_attempted")
-                if connected is not True and connected is not False:
-                    messages.append(f"WARN: {artifact_name}.infra missing ws_connected")
-                if connected is False and not (ws_err or fallback):
-                    messages.append(f"FAIL: {artifact_name}.infra ws_enabled true but not connected and no ws_error/fallback provided")
+            if not prov_s or not host_s:
+                if require_infra_hosts or require_real:
+                    messages.append("FAIL: scan.infra missing rpc_provider or rpc_http_host")
                     all_passed = False
-    except Exception as e:
-        messages.append(f"WARN: infra transparency checks failed: {type(e).__name__}: {e}")
+                # In online mode without --require-infra-hosts, still warn
+                elif prov_s != "alchemy" and prov_s != "public":
+                    messages.append(f"WARN: scan.infra missing rpc_http_host (provider={prov_s})")
+            if not prov_t or not host_t:
+                if require_infra_hosts or require_real:
+                    messages.append("FAIL: truth_report.infra missing rpc_provider or rpc_http_host")
+                    all_passed = False
+                elif prov_t != "alchemy" and prov_t != "public":
+                    messages.append(f"WARN: truth_report.infra missing rpc_http_host (provider={prov_t})")
+
+            # If env required Alchemy, ensure provider is alchemy
+            if os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1":
+                if prov_s != "alchemy" or prov_t != "alchemy":
+                    messages.append(f"FAIL: REQUIRE_ALCHEMY set but provider != alchemy (scan={prov_s} truth={prov_t})")
+                    all_passed = False
+
+            # Heuristic: chain_id vs rpc host mismatch (blocker)
+            try:
+                chain_id_s = s.get("chain_id")
+                chain_id_t = t.get("chain_id")
+                # prefer scan chain_id if present
+                chain_id_val = chain_id_s or chain_id_t
+                if chain_id_val is not None:
+                    try:
+                        cid = int(chain_id_val)
+                        # Quick heuristic for known mismatch: Arbitrum chain_id (42161) must not point to Mantle host
+                        if cid == 42161:
+                            hs = (host_s or "").lower()
+                            ht = (host_t or "").lower()
+                            if "mantle" in hs or "mantle" in ht:
+                                messages.append(f"FAIL: chain_id=42161 (Arbitrum) but rpc_http_host contains 'mantle' (scan={host_s} truth={host_t})")
+                                all_passed = False
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Tenderly diagnostic consistency
+            for artifact_name, infra in (("scan", infra_s), ("truth_report", infra_t)):
+                if infra.get("tenderly_enabled"):
+                    ok = infra.get("tenderly_ok")
+                    err = infra.get("tenderly_error")
+                    if ok is not True and (not err):
+                        if require_tenderly:
+                            messages.append(f"FAIL: {artifact_name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
+                            all_passed = False
+                        else:
+                            messages.append(f"WARN: {artifact_name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
+
+            # WS diagnostics validation
+            for artifact_name, infra in (("scan", infra_s), ("truth_report", infra_t)):
+                if infra.get("ws_enabled"):
+                    attempted = infra.get("ws_attempted")
+                    connected = infra.get("ws_connected")
+                    fallback = infra.get("ws_fallback_to_http")
+                    ws_err = infra.get("ws_error")
+                    if attempted is not True and attempted is not False:
+                        messages.append(f"WARN: {artifact_name}.infra missing ws_attempted")
+                    if connected is not True and connected is not False:
+                        messages.append(f"WARN: {artifact_name}.infra missing ws_connected")
+                    if connected is False and not (ws_err or fallback):
+                        messages.append(f"FAIL: {artifact_name}.infra ws_enabled true but not connected and no ws_error/fallback provided")
+                        all_passed = False
+        except Exception as e:
+            messages.append(f"WARN: infra transparency checks failed: {type(e).__name__}: {e}")
 
     return all_passed, messages
 

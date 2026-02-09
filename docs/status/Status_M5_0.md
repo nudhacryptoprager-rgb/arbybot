@@ -1,7 +1,7 @@
 # Status: M5_0 Infrastructure Hardening
 
 **Status**: IN PROGRESS  
-**Last Updated**: 2026-02-01
+**Last Updated**: 2026-02-08
 
 ## Overview
 
@@ -282,6 +282,24 @@ These commands were exercised during development and validation; gate flags ensu
 
 - Tenderly checks are optional and not exercised by default in CI; `tenderly_ok` may be `disabled` unless keys are provided.
 - Golden daily reports and formal retention policy are prepared (docs change) but not yet populated with curated golden artifacts — recommend adding 1–2 artifacts to `docs/artifacts/`.
+
+## Offline Mode Infra Skip (v2.1.0 enhancement)
+
+**Rationale**: Offline mode uses `run_mode=FIXTURE_OFFLINE` artifacts which deliberately omit infra fields (`rpc_provider`, `rpc_http_host`, `chain_id`, etc.). These fields are absent by design because offline mode generates deterministic fixtures for CI without network calls.
+
+**Behavior (gate v2.1.0+)**:
+- In offline mode (`--offline` flag or `run_mode` containing `FIXTURE`), the gate **skips infra validation entirely**.
+- This eliminates WARN noise that would otherwise appear for missing infra fields.
+- Result: clean CI output with 0 WARN for valid offline runs.
+
+**Online mode** continues to validate infra fields when:
+- `--require-infra-hosts` is provided (explicit requirement).
+- `--require-real` is provided (rejects FIXTURE artifacts).
+- `ARBY_REQUIRE_ALCHEMY=1` is set (requires Alchemy provider).
+
+**Tests**: `tests/unit/test_ci_m5_0_gate_infra_skip.py` validates:
+1. Offline mode has 0 WARN for missing infra fields.
+2. Online mode with `--require-real` fails on FIXTURE artifacts.
 
 ## Final closure record
 
