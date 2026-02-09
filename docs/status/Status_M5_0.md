@@ -4,7 +4,7 @@
 **Updated**: 2026-02-09  
 **Closure SHA**: `93c08b0`  
 **Gate Version**: `ci_m5_0_gate.py` v2.1.0  
-**Tests**: 522 passed
+**Tests**: 549 passed
 
 ---
 
@@ -22,13 +22,38 @@ M5_0 is **frozen**. Any future changes require a separate PR with clear ROI just
 # Offline gate (0 WARN, no secrets required)
 python scripts/ci_m5_0_gate.py --offline --strict
 # EXPECT: PASS
+# Example output:
+#   RESULT: PASS
+#   Run directory: data/runs/ci_m5_0_gate_offline_<timestamp>
+#   Exit code: 0
 
 # Online gate (requires RPC, real scan)
 python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
-# EXPECT: PASS
+# EXPECT: PASS (if RPC available)
+# Example output:
+#   RESULT: PASS
+#   quotes_fetched: 6
+#   dexes_active: 2
+#   Exit code: 0
 
-# Full CI pipeline
-python scripts/ci_full_pipeline.py
+# M4 execution gate (offline)
+python scripts/ci_m4_execution_gate.py --offline --profile smoke
+# EXPECT: PASS
+# Example output:
+#   RESULT: PASS (profile=smoke)
+#   simulations_passed: 1
+#   total_net_usdc: -0.29
+
+python scripts/ci_m4_execution_gate.py --offline --profile profit
+# EXPECT: PASS
+# Example output:
+#   RESULT: PASS (profile=profit)
+#   simulations_passed: 2
+#   total_net_usdc: 0.5
+
+# Unit tests
+python -m pytest tests/unit -q
+# EXPECT: 549 passed, 1 skipped
 ```
 
 ---

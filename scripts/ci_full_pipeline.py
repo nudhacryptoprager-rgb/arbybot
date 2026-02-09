@@ -50,9 +50,9 @@ def run_command(cmd: list, name: str) -> int:
     result = subprocess.run(cmd, cwd=PROJECT_ROOT)
     
     if result.returncode == 0:
-        print(f"✅ {name}: PASS")
+        print(f"[OK] {name}: PASS")
     else:
-        print(f"❌ {name}: FAIL (exit code {result.returncode})")
+        print(f"[FAIL] {name}: FAIL (exit code {result.returncode})")
     
     return result.returncode
 
@@ -73,11 +73,11 @@ def main():
     mode_label = "E2E (online + offline)" if is_e2e else "CI (offline only)"
     
     print(f"""
-╔══════════════════════════════════════════════════════════════╗
-║                    ARBY CI PIPELINE v{__version__}                      ║
-║                    {start.strftime('%Y-%m-%d %H:%M:%S')}                        ║
-║                    Mode: {mode_label:<25}          ║
-╚══════════════════════════════════════════════════════════════╝
+============================================================
+                    ARBY CI PIPELINE v{__version__}
+                    {start.strftime('%Y-%m-%d %H:%M:%S')}
+                    Mode: {mode_label}
+============================================================
 """)
     
     # ================================================================
@@ -90,7 +90,7 @@ def main():
         )
         results["pytest"] = exit_code
         if exit_code != 0:
-            print(f"\n❌ PIPELINE FAILED at pytest (exit code 1)")
+            print(f"\n[FAIL] PIPELINE FAILED at pytest (exit code 1)")
             return 1
     
     # ================================================================
@@ -102,7 +102,7 @@ def main():
     )
     results["m5_0_offline"] = exit_code
     if exit_code != 0:
-        print(f"\n❌ PIPELINE FAILED at M5_0 gate (exit code 2)")
+        print(f"\n[FAIL] PIPELINE FAILED at M5_0 gate (exit code 2)")
         return 2
     
     # ================================================================
@@ -122,14 +122,14 @@ def main():
             )
             results["m5_online"] = exit_code
             if exit_code != 0:
-                print(f"\n❌ PIPELINE FAILED at M5 gate (exit code 3)")
+                print(f"\n[FAIL] PIPELINE FAILED at M5 gate (exit code 3)")
                 return 3
         else:
-            print(f"\n⚠️  M5 gate script not found, skipping")
+            print(f"\n[WARN] M5 gate script not found, skipping")
             results["m5_online"] = -1
     else:
         # CI mode: M5 skipped as expected
-        print(f"\n⏭️  M5 gate: SKIPPED (CI mode - daily_report requires runDir)")
+        print(f"\n[SKIP] M5 gate: SKIPPED (CI mode - daily_report requires runDir)")
         results["m5_offline"] = -1
     
     # ================================================================
@@ -141,7 +141,17 @@ def main():
     )
     results["m4_smoke"] = exit_code
     if exit_code != 0:
-        print(f"\n❌ PIPELINE FAILED at M4 gate (exit code 4)")
+        print(f"\n[FAIL] PIPELINE FAILED at M4 smoke gate (exit code 4)")
+        return 4
+    
+    # M4 Profit profile
+    exit_code = run_command(
+        [sys.executable, "scripts/ci_m4_execution_gate.py", "--offline", "--profile", "profit"],
+        "M4 Execution Gate (offline profit)"
+    )
+    results["m4_profit"] = exit_code
+    if exit_code != 0:
+        print(f"\n[FAIL] PIPELINE FAILED at M4 profit gate (exit code 4)")
         return 4
     
     # ================================================================
@@ -160,7 +170,7 @@ def main():
         results["m5_0_online"] = exit_code
         # Online failures are warnings in E2E, not blockers
         if exit_code != 0:
-            print(f"⚠️  M5_0 online failed (non-blocking in E2E)")
+            print(f"[WARN] M5_0 online failed (non-blocking in E2E)")
     
     # ================================================================
     # SUMMARY
@@ -168,18 +178,18 @@ def main():
     elapsed = datetime.now() - start
     
     print(f"""
-╔══════════════════════════════════════════════════════════════╗
-║                    PIPELINE SUMMARY                          ║
-╚══════════════════════════════════════════════════════════════╝
+============================================================
+                    PIPELINE SUMMARY
+============================================================
 """)
     
     for name, code in results.items():
         if code == -1:
-            status = "⏭️  SKIPPED"
+            status = "[SKIP] SKIPPED"
         elif code == 0:
-            status = "✅ PASS"
+            status = "[OK] PASS"
         else:
-            status = f"❌ FAIL ({code})"
+            status = f"[FAIL] FAIL ({code})"
         print(f"  {name}: {status}")
     
     print(f"\n  Mode:    {args.mode.upper()}")
@@ -187,17 +197,17 @@ def main():
     
     # In CI mode: only offline gates must pass
     # In E2E mode: offline gates must pass, online are warnings
-    required_keys = ["m5_0_offline", "m4_smoke"]
+    required_keys = ["m5_0_offline", "m4_smoke", "m4_profit"]
     if not args.skip_tests:
         required_keys.append("pytest")
     
     all_required_pass = all(results.get(k, 0) in (0, -1) for k in required_keys)
     
     if all_required_pass:
-        print(f"\n✅ ALL REQUIRED GATES PASSED")
+        print(f"\n[OK] ALL REQUIRED GATES PASSED")
         return 0
     else:
-        print(f"\n❌ PIPELINE FAILED")
+        print(f"\n[FAIL] PIPELINE FAILED")
         return 1
 
 

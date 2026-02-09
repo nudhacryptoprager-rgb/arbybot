@@ -99,8 +99,10 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "timestamp": now,
         "run_mode": "FIXTURE_OFFLINE",
         "current_block": 100,
+        "chain_id": 42161,
         "execution_enabled": False,
         "execution_blocker": "EXECUTION_DISABLED",
+        "execution_ready_count": 0,
         "infra": {"rpc_provider": "fixture", "transport": "http", "ws_enabled": False, "tenderly_enabled": False},
         # Top-level metrics
         "quotes_total": 4,
@@ -114,6 +116,8 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
             "dexes_active": 2, "price_sanity_passed": 3, "price_sanity_failed": 1,
             "rpc_success_rate": 1.0,
         },
+        # Spread signals (empty for fixture)
+        "spread_signals": [],
     }
     truth_path = reports_dir / f"truth_report_{timestamp}.json"
     with open(truth_path, "w") as f:
@@ -134,6 +138,8 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         }],
         "rejects_total": 1,
         "total_rejects": 1,  # deprecated alias
+        "price_sanity_failed": 1,
+        "no_rejects": False,
     }
     reject_path = reports_dir / f"reject_histogram_{timestamp}.json"
     with open(reject_path, "w") as f:

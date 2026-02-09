@@ -8,9 +8,105 @@ Used by: ci_m5_0_gate.py, ci_m5_gate.py, ci_m4_execution_gate.py
 CRITICAL: Do not duplicate these checks elsewhere.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+
+# =============================================================================
+# PROFILE REGISTRY
+# =============================================================================
+
+@dataclass
+class ProfileConfig:
+    """Configuration for a DoD profile."""
+    name: str
+    description: str
+    # Profitability thresholds
+    min_simulations: int = 1
+    min_profitable_sims: int = 1
+    require_net_positive: bool = False
+    min_net_usdc: float = 0.0
+    # Estimation accuracy thresholds
+    max_mae_usdc: float = 0.30  # Max mean absolute error
+    min_sign_correct_rate: float = 0.80  # 80% minimum
+    # Custom validator (optional)
+    custom_validator: Optional[Callable[[Dict[str, Any]], List["InvariantCheck"]]] = None
+
+
+class ProfileRegistry:
+    """
+    Central registry for DoD profiles.
+    
+    Usage:
+        registry = ProfileRegistry.default()
+        profile = registry.get("smoke")
+        checks = profile.validate(execution_report)
+    """
+    
+    _instance: Optional["ProfileRegistry"] = None
+    
+    def __init__(self):
+        self._profiles: Dict[str, ProfileConfig] = {}
+    
+    def register(self, profile: ProfileConfig) -> None:
+        """Register a profile."""
+        self._profiles[profile.name] = profile
+    
+    def get(self, name: str) -> ProfileConfig:
+        """Get profile by name."""
+        if name not in self._profiles:
+            raise ValueError(f"Unknown profile: {name}. Available: {list(self._profiles.keys())}")
+        return self._profiles[name]
+    
+    def list_profiles(self) -> List[str]:
+        """List all registered profile names."""
+        return list(self._profiles.keys())
+    
+    @classmethod
+    def default(cls) -> "ProfileRegistry":
+        """Get default registry with standard profiles."""
+        if cls._instance is None:
+            cls._instance = cls()
+            cls._instance._register_defaults()
+        return cls._instance
+    
+    def _register_defaults(self) -> None:
+        """Register default profiles."""
+        # M4 SMOKE profile: PASS if at least 1 profitable sim
+        self.register(ProfileConfig(
+            name="smoke",
+            description="M4 smoke: PASS if >= 1 profitable simulation",
+            min_simulations=1,
+            min_profitable_sims=1,
+            require_net_positive=False,
+            min_net_usdc=-999999.0,  # No minimum
+        ))
+        
+        # M4 PROFIT profile: PASS if total_net_usdc > 0
+        self.register(ProfileConfig(
+            name="profit",
+            description="M4 profit: PASS if total_net_usdc > 0",
+            min_simulations=1,
+            min_profitable_sims=1,
+            require_net_positive=True,
+            min_net_usdc=0.0,  # Must be positive
+        ))
+        
+        # M5 SCAN profile: PASS if quotes fetched successfully
+        self.register(ProfileConfig(
+            name="scan",
+            description="M5 scan: PASS if quotes fetched",
+            min_simulations=0,
+            min_profitable_sims=0,
+            require_net_positive=False,
+        ))
+
+
+def get_profile(name: str) -> ProfileConfig:
+    """Convenience function to get profile from default registry."""
+    return ProfileRegistry.default().get(name)
 
 
 class RunMode(Enum):

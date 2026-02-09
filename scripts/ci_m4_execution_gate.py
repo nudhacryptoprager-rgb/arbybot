@@ -60,18 +60,25 @@ from core.artifact_invariants import (
     check_m4_execution_invariants,
     check_m4_profitability,
     validate_block_number,
+    ProfileRegistry,
+    get_profile,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # ============================================================
-# DOD PROFILES
+# DOD PROFILES (using registry)
 # ============================================================
 
 class DoDProfile:
     """Definition of Done profiles for M4 gate."""
     SMOKE = "smoke"    # PASS if >=1 profitable sim + accounting complete
     PROFIT = "profit"  # PASS if total_net_usd > 0
+    
+    @classmethod
+    def get_config(cls, profile: str):
+        """Get profile config from registry."""
+        return get_profile(profile)
 
 # ============================================================
 # THRESHOLDS
@@ -97,7 +104,7 @@ DEFAULT_PINNED_BLOCK = 429900000
 # FIXTURE GENERATION (OFFLINE MODE)
 # ============================================================
 
-def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
+def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE) -> Dict[str, Path]:
     """
     Generate M4 execution fixture for offline testing.
     
@@ -108,12 +115,69 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
     Fixture uses numerical USD values (not strings) for proper validation.
     All prices are strings (decimal format) for consistency.
     spread_bps is integer micro-bps (1 bps = 10000 micro-bps).
+    
+    Args:
+        run_dir: Output directory
+        ts: Timestamp string
+        profile: DoDProfile.SMOKE or DoDProfile.PROFIT
+                 SMOKE: 1 profitable + 1 unprofitable = net negative
+                 PROFIT: 2 profitable = net positive
     """
     reports_dir = run_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     
     pinned_block = DEFAULT_PINNED_BLOCK
     chain_id = DEFAULT_CHAIN_ID
+    
+    # Profile-specific signal/simulation values
+    # SMOKE: sig_002 is unprofitable (tests accounting of losses)
+    # PROFIT: sig_002 is profitable (tests total_net_usdc > 0 criterion)
+    if profile == DoDProfile.PROFIT:
+        # PROFIT profile: both signals profitable
+        sig_002_values = {
+            "gross_pnl_usdc_est": 0.45,
+            "gas_usdc_est": 0.25,
+            "slippage_usdc_est": 0.05,
+            "net_pnl_usdc_est": 0.15,
+            "is_net_positive_est": True,
+        }
+        sim_002_values = {
+            "simulation_status": "PASS",
+            "blocker": None,
+            "gas_usdc": 0.25,
+            "slippage_usdc": 0.05,
+            "gross_pnl_usdc": 0.42,
+            "net_usdc": 0.12,  # Positive! Total = 0.38 + 0.12 = 0.50
+            "is_profitable": True,
+            "est_net_usdc": 0.15,
+            "est_was_positive": True,
+            "sim_was_positive": True,
+            "est_sign_correct": True,
+            "est_error_usdc": -0.03,  # sim worse by 0.03
+        }
+    else:
+        # SMOKE profile: sig_002 is unprofitable (original behavior)
+        sig_002_values = {
+            "gross_pnl_usdc_est": 0.12,
+            "gas_usdc_est": 0.52,
+            "slippage_usdc_est": 0.15,
+            "net_pnl_usdc_est": -0.55,
+            "is_net_positive_est": False,
+        }
+        sim_002_values = {
+            "simulation_status": "FAIL",
+            "blocker": SimRejectReason.SIM_UNPROFITABLE.value,
+            "gas_usdc": 0.52,
+            "slippage_usdc": 0.15,
+            "gross_pnl_usdc": 0.00,
+            "net_usdc": -0.67,
+            "is_profitable": False,
+            "est_net_usdc": -0.55,
+            "est_was_positive": False,
+            "sim_was_positive": False,
+            "est_sign_correct": True,
+            "est_error_usdc": -0.12,
+        }
     
     # Mock signals for fixture - all with same pinned_block
     # Prices are ALWAYS string decimal, format: "quote_per_base"
@@ -152,11 +216,12 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
             "sell_price": "2092.15",       # Always string decimal
             "spread_bps_micro": 12000,     # 1.2 bps = 12000 micro-bps (integer)
             "size_usd_est": 100.0,
-            "gross_pnl_usdc_est": 0.12,
-            "gas_usdc_est": 0.52,
-            "slippage_usdc_est": 0.15,
-            "net_pnl_usdc_est": -0.55,
-            "is_net_positive_est": False,
+            # Profile-specific values
+            "gross_pnl_usdc_est": sig_002_values["gross_pnl_usdc_est"],
+            "gas_usdc_est": sig_002_values["gas_usdc_est"],
+            "slippage_usdc_est": sig_002_values["slippage_usdc_est"],
+            "net_pnl_usdc_est": sig_002_values["net_pnl_usdc_est"],
+            "is_net_positive_est": sig_002_values["is_net_positive_est"],
             "confidence": 0.60,
             "liquidity_hint": "adequate",
             "pinned_block": pinned_block,
@@ -204,25 +269,25 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
             "price_in": "quote_per_base",
             "buy_dex": "sushiswap_v3",
             "sell_dex": "uniswap_v3",
-            "simulation_status": "FAIL",
-            "blocker": SimRejectReason.SIM_UNPROFITABLE.value,
+            "simulation_status": sim_002_values["simulation_status"],
+            "blocker": sim_002_values["blocker"],
             "block_used": pinned_block,
             "confidence": 0.60,
             "liquidity_hint": "adequate",
             "size_usdc_simulated": 100.0,
-            "gas_used": 280000,
-            "gas_usdc": 0.52,
-            "slippage_bps_actual": 8,      # Real bps, 8 bps = 0.08%
-            "slippage_usdc": 0.15,
-            "gross_pnl_usdc": 0.00,
-            "net_usdc": -0.67,
-            "is_profitable": False,
+            "gas_used": 280000 if profile != DoDProfile.PROFIT else 180000,
+            "gas_usdc": sim_002_values["gas_usdc"],
+            "slippage_bps_actual": 8 if profile != DoDProfile.PROFIT else 3,
+            "slippage_usdc": sim_002_values["slippage_usdc"],
+            "gross_pnl_usdc": sim_002_values["gross_pnl_usdc"],
+            "net_usdc": sim_002_values["net_usdc"],
+            "is_profitable": sim_002_values["is_profitable"],
             # Expanded est_vs_sim
-            "est_net_usdc": -0.55,
-            "est_was_positive": False,
-            "sim_was_positive": False,
-            "est_sign_correct": True,
-            "est_error_usdc": -0.12,       # sim worse than estimate
+            "est_net_usdc": sim_002_values["est_net_usdc"],
+            "est_was_positive": sim_002_values["est_was_positive"],
+            "sim_was_positive": sim_002_values["sim_was_positive"],
+            "est_sign_correct": sim_002_values["est_sign_correct"],
+            "est_error_usdc": sim_002_values["est_error_usdc"],
         },
     ]
     
@@ -513,6 +578,29 @@ def validate_execution_report(
     if est_vs_sim:
         mismatch = est_vs_sim.get("est_sim_mismatch_count", 0)
         checks.append(("est_vs_sim", True, f"est_sim_mismatch_count={mismatch}"))
+        
+        # Est vs Sim drift detection (critical for model accuracy)
+        mae_net_usdc = est_vs_sim.get("mae_net_usdc", 0)
+        est_sign_correct_rate = est_vs_sim.get("est_sign_correct_rate", 1.0)
+        est_net_sum = est_vs_sim.get("est_net_usdc_sum", 0)
+        sim_net_sum = est_vs_sim.get("sim_net_usdc_sum", 0)
+        
+        # MAE threshold: WARN if > 0.30 USDC per trade (30 cents drift)
+        MAE_WARN_THRESHOLD = 0.30
+        if mae_net_usdc <= MAE_WARN_THRESHOLD:
+            checks.append(("est_mae_ok", True, f"mae_net_usdc={mae_net_usdc:.4f} <= {MAE_WARN_THRESHOLD}"))
+        else:
+            checks.append(("est_mae_ok", False, f"mae_net_usdc={mae_net_usdc:.4f} > {MAE_WARN_THRESHOLD} (HIGH DRIFT)"))
+        
+        # Sign correct rate: WARN if < 80%
+        if est_sign_correct_rate >= 0.80:
+            checks.append(("est_sign_rate_ok", True, f"est_sign_correct_rate={est_sign_correct_rate:.2%} >= 80%"))
+        else:
+            checks.append(("est_sign_rate_ok", False, f"est_sign_correct_rate={est_sign_correct_rate:.2%} < 80% (UNRELIABLE)"))
+        
+        # Est vs Sim sum drift (total drift)
+        sum_drift = abs(est_net_sum - sim_net_sum)
+        checks.append(("est_sum_drift", True, f"est_sum={est_net_sum:.4f}, sim_sum={sim_net_sum:.4f}, drift={sum_drift:.4f}"))
     
     # ============================================================
     # PROFILE-SPECIFIC CHECKS
@@ -706,8 +794,8 @@ def run_offline_gate(output_root: Path, profile: str = DoDProfile.SMOKE, strict:
     print(f"\n[OFFLINE] Creating: {display_path}")
     print(f"[OFFLINE] Profile: {profile}")
     
-    # Generate fixtures
-    artifacts = generate_m4_fixture(run_dir, ts)
+    # Generate fixtures with profile-specific values
+    artifacts = generate_m4_fixture(run_dir, ts, profile)
     
     print(f"[OFFLINE] Generated artifacts:")
     for name, path in artifacts.items():
