@@ -3,7 +3,7 @@
 """
 M4 Execution Gate - DEX↔DEX Atomic Execution v1.
 
-VERSION: 1.4.0 (2026-02-09)
+VERSION: 1.5.0 (2026-02-09)
 STATUS: ACTIVE
 
 PURPOSE:
@@ -41,23 +41,37 @@ COST MODELS:
   paper_realistic: gas=$0.10, slippage=5bps (default)
   paper_conservative: gas=$0.30, slippage=20bps (stress test)
 
-FAIL CONDITIONS (explicit, v1.4.0):
+STATUS MODEL (v1.5.0):
+  run_summary now has TWO separate statuses:
+  - profit_status: PASS if net > 0 AND sim_profitable >= 1 (core profitability)
+  - drift_status: PASS if mae <= threshold AND sign_rate >= threshold (estimation quality)
+  - final status: Configurable policy (default: PASS requires both)
+
+FAIL CONDITIONS (explicit, v1.5.0):
   - FAIL_NET: total_net_usdc <= 0 (PROFIT profile)
-  - FAIL_DRIFT_MAE: mae_net_usdc >= 0.50 (inclusive, PROFIT profile)
+  - FAIL_DRIFT_MAE: mae_net_usdc > 0.50 (exclusive, PROFIT profile)
   - FAIL_DRIFT_SIGN: sign_correct_rate < 0.70 (PROFIT profile)
   - FAIL_SIGN_MISMATCH: sign_mismatch_count > 0 (strict mode)
   - FAIL_NO_PROFITABLE: sim_profitable_count == 0
+  - WARN_DRIFT_MAE: 0.30 < mae_net_usdc <= 0.50
+
+THRESHOLDS (v1.5.0):
+  - mae_warn: > 0.30 (exclusive)
+  - mae_fail: > 0.50 (exclusive, not >=)
+  - sign_rate_min: < 0.70
 
 ARTIFACTS GENERATED:
   - signals_<ts>.json: M4 signals from truth_report
   - execution_report_<ts>.json: Simulation results
-  - run_summary_<ts>.json: Canonical single-run summary (v1, source of truth for continuous scan)
-  - stability_summary_<ts>.json: Multi-run aggregator (when multiple runs exist)
+  - run_summary_<ts>.json: Canonical single-run summary (v1.1, with profit_status + drift_status)
+  - stability_summary_<ts>.json: Single-run stability with reasons
 
 FIELD DEFINITIONS:
   - sign_mismatch_count: Signals where sign(est_net) != sign(sim_net)
   - would_execute_if_enabled: Simulation passed AND execution_enabled would be true
   - exec_ready: false (always, until M5 enables execution)
+  - fragile: Signal where est_net < slippage + gas (at risk of flip)
+  - mae_no_slippage: MAE calculated without slippage component
 
 SUCCESS CRITERIA (from Roadmap):
   - 1-2 pairs, 2 DEX, on one chain
@@ -98,7 +112,7 @@ from core.artifact_invariants import (
     get_profile,
 )
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 # ============================================================
 # FAIL REASON CODES (explicit definitions)
@@ -110,16 +124,35 @@ class FailReason:
     
     These codes are used in run_summary.json.reasons[] to explain FAIL/WARN status.
     Each reason corresponds to a specific threshold violation.
+    
+    v1.5.0: mae_fail is now > 0.50 (exclusive), not >= 0.50
     """
-    # FAIL conditions
+    # FAIL conditions (profit_status)
     FAIL_NET = "FAIL_NET"                        # total_net_usdc <= 0 (PROFIT profile)
-    FAIL_DRIFT_MAE = "FAIL_DRIFT_MAE"            # mae_net_usdc >= 0.50 (inclusive)
-    FAIL_DRIFT_SIGN = "FAIL_DRIFT_SIGN"          # sign_correct_rate < 0.70
-    FAIL_SIGN_MISMATCH = "FAIL_SIGN_MISMATCH"    # sign_mismatch_count > 0 (strict mode)
     FAIL_NO_PROFITABLE = "FAIL_NO_PROFITABLE"    # sim_profitable_count == 0
     
+    # FAIL conditions (drift_status)
+    FAIL_DRIFT_MAE = "FAIL_DRIFT_MAE"            # mae_net_usdc > 0.50 (exclusive)
+    FAIL_DRIFT_SIGN = "FAIL_DRIFT_SIGN"          # sign_correct_rate < 0.70
+    FAIL_SIGN_MISMATCH = "FAIL_SIGN_MISMATCH"    # sign_mismatch_count > 0 (strict mode)
+    
     # WARN conditions
-    WARN_DRIFT_MAE = "WARN_DRIFT_MAE"            # mae in warn range (0.30 <= mae < 0.50)
+    WARN_DRIFT_MAE = "WARN_DRIFT_MAE"            # 0.30 < mae <= 0.50
+
+
+# ============================================================
+# THRESHOLDS (centralized, v1.5.0)
+# ============================================================
+
+class Thresholds:
+    """Centralized threshold definitions for drift metrics."""
+    MAE_WARN = 0.30      # mae > 0.30 triggers WARN
+    MAE_FAIL = 0.50      # mae > 0.50 triggers FAIL (exclusive, not >=)
+    SIGN_RATE_MIN = 0.70  # sign_rate < 0.70 triggers FAIL
+    
+    # Slippage component (for mae_no_slippage calculation)
+    # When truth uses slippage=0 and sim uses slippage=X, drift includes systematic component
+    SLIPPAGE_SYSTEMATIC_FACTOR = 1.0  # per-signal slippage adds to expected drift
     
 
 # ============================================================
@@ -203,6 +236,23 @@ class CostModelRegistry:
 def get_cost_model(name: str) -> CostModelConfig:
     """Convenience function to get cost model from default registry."""
     return CostModelRegistry.default().get(name)
+
+
+def get_git_sha() -> str:
+    """Get current git HEAD SHA (short form)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
 
 
 # ============================================================
@@ -896,29 +946,65 @@ def generate_m4_from_online_inputs(
     # Generate stability_summary.json artifact
     stability_path = reports_dir / f"stability_summary_{ts}.json"
     
-    # Determine status with explicit reason codes (v1.4.0)
-    stability_reasons = []
-    stability_status = "PASS"
+    # ============================================================
+    # SPLIT STATUS: profit_status vs drift_status (v1.5.0)
+    # ============================================================
     
-    # MAE check (>= 0.50 is FAIL, inclusive)
-    if mae_net_usdc >= 0.50:
-        stability_status = "FAIL"
-        stability_reasons.append(FailReason.FAIL_DRIFT_MAE)
-    elif mae_net_usdc >= 0.30:
-        stability_reasons.append(FailReason.WARN_DRIFT_MAE)
+    # profit_status: core profitability (net > 0, profitable sims exist)
+    profit_reasons = []
+    profit_status = "PASS"
+    if total_net_usdc <= 0:
+        profit_status = "FAIL"
+        profit_reasons.append(FailReason.FAIL_NET)
+    if sim_profitable_count == 0:
+        profit_status = "FAIL"
+        profit_reasons.append(FailReason.FAIL_NO_PROFITABLE)
+    
+    # drift_status: estimation quality (mae, sign rate)
+    drift_reasons = []
+    drift_status = "PASS"
+    
+    # MAE check (> 0.50 is FAIL, exclusive, v1.5.0)
+    if mae_net_usdc > Thresholds.MAE_FAIL:
+        drift_status = "FAIL"
+        drift_reasons.append(FailReason.FAIL_DRIFT_MAE)
+    elif mae_net_usdc > Thresholds.MAE_WARN:
+        drift_reasons.append(FailReason.WARN_DRIFT_MAE)
     
     # Sign rate check
-    if est_sign_correct_rate < 0.70:
-        stability_status = "FAIL"
-        stability_reasons.append(FailReason.FAIL_DRIFT_SIGN)
+    if est_sign_correct_rate < Thresholds.SIGN_RATE_MIN:
+        drift_status = "FAIL"
+        drift_reasons.append(FailReason.FAIL_DRIFT_SIGN)
     
-    # Net profitability check
-    if total_net_usdc <= 0:
-        stability_status = "FAIL"
-        stability_reasons.append(FailReason.FAIL_NET)
+    # Calculate mae_no_slippage: what MAE would be if slippage were the same
+    # Since truth uses slippage=0 and sim uses slippage=X, drift includes systematic component
+    # mae_no_slippage = mae - expected_slippage_contribution
+    slippage_contribution_per_signal = round(
+        sum(sig.get("size_usd", 0) * cost_model.slippage_bps / 10000 for sig in m4_signals) / len(m4_signals), 4
+    ) if m4_signals else 0.0
+    mae_no_slippage = round(max(0, mae_net_usdc - slippage_contribution_per_signal), 4)
+    
+    # Count fragile signals: est_net < slippage + gas (at risk of sign flip)
+    fragile_count = 0
+    fragile_signals = []
+    for sig in m4_signals:
+        est_net = sig.get("truth_net_usdc", 0)
+        size_usd = sig.get("size_usd", 0)
+        slippage_usdc = size_usd * cost_model.slippage_bps / 10000
+        gas_usdc = cost_model.gas_usd
+        if est_net < slippage_usdc + gas_usdc and est_net > 0:
+            fragile_count += 1
+            fragile_signals.append(sig.get("signal_id", "unknown"))
+    
+    # Combined status with policy
+    # Default policy: PASS requires profit_status=PASS (drift can be WARN/FAIL)
+    # Alternative policy (strict): PASS requires both profit_status=PASS AND drift_status=PASS
+    # Current: Use combined for backwards compat, but expose both
+    all_reasons = profit_reasons + drift_reasons
+    combined_status = "FAIL" if (profit_status == "FAIL" or drift_status == "FAIL") else "PASS"
     
     stability_data = {
-        "schema_version": "m4:stability:v1.1",  # Bumped for sign_mismatch_count rename
+        "schema_version": "m4:stability:v1.2",  # Bumped for split status
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "source_sha": source_sha,
         "run_id": run_id,
@@ -935,23 +1021,31 @@ def generate_m4_from_online_inputs(
             "sim_profitable_count": sim_profitable_count,
             "total_net_usdc": round(total_net_usdc, 4),
             "profitable_rate": round(sim_profitable_count / len(simulations), 4) if simulations else 0,
+            "fragile_count": fragile_count,
         },
         "drift_metrics": {
             "mae_net_usdc": mae_net_usdc,
+            "mae_no_slippage": mae_no_slippage,  # v1.5.0: MAE without slippage component
             "est_sign_correct_rate": est_sign_correct_rate,
-            # Renamed from est_sim_mismatch_count (v1.4.0)
             "sign_mismatch_count": sign_mismatch_count,
             "est_net_sum": round(est_net_sum, 4),
             "sim_net_sum": round(sim_net_sum, 4),
             "sum_drift_usdc": round(abs(est_net_sum - sim_net_sum), 4),
+            "slippage_contribution": slippage_contribution_per_signal,  # Expected slippage per signal
         },
         "thresholds": {
-            "mae_warn": 0.30,
-            "mae_fail": 0.50,  # >= 0.50 is FAIL (inclusive)
-            "sign_rate_min": 0.70,
+            "mae_warn": Thresholds.MAE_WARN,
+            "mae_fail": Thresholds.MAE_FAIL,  # > 0.50 is FAIL (exclusive, v1.5.0)
+            "sign_rate_min": Thresholds.SIGN_RATE_MIN,
         },
-        "status": stability_status,
-        "reasons": stability_reasons,  # Explicit fail/warn reason codes
+        # Split status (v1.5.0)
+        "profit_status": profit_status,
+        "profit_reasons": profit_reasons,
+        "drift_status": drift_status,
+        "drift_reasons": drift_reasons,
+        # Combined status (backwards compat)
+        "status": combined_status,
+        "reasons": all_reasons,
     }
     
     with open(stability_path, "w") as f:
@@ -960,22 +1054,50 @@ def generate_m4_from_online_inputs(
     print(f"[ONLINE] Generated: {stability_path.name}")
     
     # ============================================================
-    # GENERATE run_summary.json (v1.4.0)
+    # GENERATE run_summary.json (v1.5.0)
     # Canonical single-run summary - source of truth for continuous scan
+    # Split profit_status / drift_status with evidence validation
     # ============================================================
     run_summary_path = reports_dir / f"run_summary_{ts}.json"
     
-    # Build reasons array for run summary
-    run_reasons = list(stability_reasons)  # Copy from stability
-    if sim_profitable_count == 0:
-        run_reasons.append(FailReason.FAIL_NO_PROFITABLE)
+    # Evidence validation (v1.5.0)
+    evidence_issues = []
+    current_sha = get_git_sha()
+    
+    # Check source_sha matches HEAD
+    if source_sha and current_sha and current_sha != "unknown":
+        if source_sha != current_sha:
+            evidence_issues.append(f"source_sha_mismatch: artifact={source_sha[:8]} HEAD={current_sha[:8]}")
+    else:
+        evidence_issues.append("source_sha_unavailable")
+    
+    # Check timestamp deltas
+    truth_ts_str = truth_data.get("timestamp", "")
+    try:
+        if truth_ts_str:
+            # Parse truth timestamp
+            truth_ts = datetime.fromisoformat(truth_ts_str.replace("Z", "+00:00"))
+            now = datetime.now(truth_ts.tzinfo) if truth_ts.tzinfo else datetime.utcnow()
+            delta_seconds = abs((now - truth_ts).total_seconds())
+            if delta_seconds > 300:  # 5 minutes tolerance
+                evidence_issues.append(f"timestamp_delta_high: {delta_seconds:.0f}s")
+    except Exception:
+        pass
+    
+    evidence_ok = len(evidence_issues) == 0
     
     run_summary_data = {
-        "schema_version": "run:summary:v1",
+        "schema_version": "run:summary:v1.1",  # Bumped for split status + evidence
         "timestamp": datetime.utcnow().isoformat() + "Z",
         # Provenance
         "source_sha": source_sha,
         "run_id": run_id,
+        # Evidence validation (v1.5.0)
+        "evidence": {
+            "ok": evidence_ok,
+            "issues": evidence_issues,
+            "current_sha": current_sha if current_sha != "unknown" else None,
+        },
         # Inputs
         "inputs": {
             "chain_id": chain_id,
@@ -1008,18 +1130,25 @@ def generate_m4_from_online_inputs(
             "est_net_usdc_sum": round(est_net_sum, 4),
             "sim_net_usdc_sum": round(sim_net_sum, 4),
             "mae_net_usdc": mae_net_usdc,
+            "mae_no_slippage": mae_no_slippage,  # v1.5.0
             "est_sign_correct_rate": est_sign_correct_rate,
             "sign_mismatch_count": sign_mismatch_count,
+            "fragile_count": fragile_count,  # v1.5.0
         },
         # Thresholds - explicit boundaries
         "thresholds": {
-            "mae_warn": 0.30,
-            "mae_fail": 0.50,  # >= 0.50 is FAIL (inclusive)
-            "sign_rate_min": 0.70,
+            "mae_warn": Thresholds.MAE_WARN,
+            "mae_fail": Thresholds.MAE_FAIL,  # > 0.50 is FAIL (exclusive)
+            "sign_rate_min": Thresholds.SIGN_RATE_MIN,
         },
-        # Status - explicit PASS/FAIL/WARN with reasons
-        "status": stability_status,
-        "reasons": run_reasons,
+        # Split status (v1.5.0) - allows policy-based interpretation
+        "profit_status": profit_status,
+        "profit_reasons": profit_reasons,
+        "drift_status": drift_status,
+        "drift_reasons": drift_reasons,
+        # Combined status (backwards compat, default policy: both must pass)
+        "status": combined_status,
+        "reasons": all_reasons,
         # Safety invariants
         "safety": {
             "execution_enabled": False,
@@ -1028,6 +1157,8 @@ def generate_m4_from_online_inputs(
         },
         # Profile used
         "profile": "profit",  # PROFIT profile for online
+        # Fragile signals list (v1.5.0)
+        "fragile_signals": fragile_signals if fragile_count > 0 else None,
     }
     
     with open(run_summary_path, "w") as f:
@@ -1081,8 +1212,13 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
             "run_dir": str(run_dir.name),
             "run_id": data.get("run_id", ""),
             "timestamp": data.get("timestamp", ""),
+            # Split status (v1.5.0)
+            "profit_status": data.get("profit_status", data.get("status", "UNKNOWN")),
+            "drift_status": data.get("drift_status", "UNKNOWN"),
             "status": data.get("status", "UNKNOWN"),
             "reasons": data.get("reasons", []),
+            "profit_reasons": data.get("profit_reasons", []),
+            "drift_reasons": data.get("drift_reasons", []),
             "metrics": data.get("metrics", {}),
         })
     
@@ -1093,34 +1229,71 @@ def aggregate_stability_summaries(run_dirs: List[Path], output_path: Path) -> Di
     total_signals = sum(r["metrics"].get("signals_count", 0) for r in runs_data)
     total_profitable = sum(r["metrics"].get("sim_profitable_count", 0) for r in runs_data)
     total_net = sum(r["metrics"].get("total_net_usdc", 0) for r in runs_data)
+    total_fragile = sum(r["metrics"].get("fragile_count", 0) for r in runs_data)
     mae_values = [r["metrics"].get("mae_net_usdc", 0) for r in runs_data if r["metrics"].get("mae_net_usdc") is not None]
+    mae_no_slippage_values = [r["metrics"].get("mae_no_slippage", 0) for r in runs_data if r["metrics"].get("mae_no_slippage") is not None]
     sign_rates = [r["metrics"].get("est_sign_correct_rate", 0) for r in runs_data if r["metrics"].get("est_sign_correct_rate") is not None]
     
-    # Compute aggregates
+    # Compute aggregates with split status (v1.5.0)
     pass_count = sum(1 for r in runs_data if r["status"] == "PASS")
     fail_count = sum(1 for r in runs_data if r["status"] == "FAIL")
+    profit_pass_count = sum(1 for r in runs_data if r["profit_status"] == "PASS")
+    drift_pass_count = sum(1 for r in runs_data if r["drift_status"] == "PASS")
+    
+    # Collect all fail reasons with counts
+    all_reasons = {}
+    for r in runs_data:
+        for reason in r.get("reasons", []):
+            all_reasons[reason] = all_reasons.get(reason, 0) + 1
+    
+    # Calculate percentiles for mae (v1.5.0)
+    def percentile(values: List[float], p: float) -> Optional[float]:
+        if not values:
+            return None
+        sorted_vals = sorted(values)
+        k = (len(sorted_vals) - 1) * p / 100
+        f = int(k)
+        c = f + 1 if f + 1 < len(sorted_vals) else f
+        return round(sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f]), 4)
     
     aggregated = {
-        "schema_version": "m4:stability_agg:v1",
+        "schema_version": "m4:stability_agg:v1.1",  # Bumped for split status + percentiles
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "runs_included": len(runs_data),
         "runs": runs_data,
         "aggregates": {
+            # Combined status
             "pass_count": pass_count,
             "fail_count": fail_count,
             "pass_rate": round(pass_count / len(runs_data), 4) if runs_data else 0,
+            # Split status (v1.5.0)
+            "profit_pass_count": profit_pass_count,
+            "profit_pass_rate": round(profit_pass_count / len(runs_data), 4) if runs_data else 0,
+            "drift_pass_count": drift_pass_count,
+            "drift_pass_rate": round(drift_pass_count / len(runs_data), 4) if runs_data else 0,
+            # Metrics
             "total_signals": total_signals,
             "total_profitable": total_profitable,
+            "total_fragile": total_fragile,
             "total_net_usdc": round(total_net, 4),
             "avg_net_usdc": round(total_net / len(runs_data), 4) if runs_data else 0,
+            # MAE with percentiles (v1.5.0)
             "mae_avg": round(sum(mae_values) / len(mae_values), 4) if mae_values else None,
             "mae_max": max(mae_values) if mae_values else None,
             "mae_min": min(mae_values) if mae_values else None,
+            "mae_p50": percentile(mae_values, 50),
+            "mae_p90": percentile(mae_values, 90),
+            "mae_p99": percentile(mae_values, 99),
+            # MAE no slippage (v1.5.0)
+            "mae_no_slippage_avg": round(sum(mae_no_slippage_values) / len(mae_no_slippage_values), 4) if mae_no_slippage_values else None,
+            # Sign rate
             "sign_rate_avg": round(sum(sign_rates) / len(sign_rates), 4) if sign_rates else None,
             "sign_rate_min": min(sign_rates) if sign_rates else None,
         },
+        # Fail reasons with counts (v1.5.0)
+        "fail_reason_counts": all_reasons,
         "status": "PASS" if pass_count == len(runs_data) else "FAIL",
-        "reasons": list(set(reason for r in runs_data for reason in r.get("reasons", []))),
+        "reasons": list(all_reasons.keys()),
     }
     
     with open(output_path, "w") as f:

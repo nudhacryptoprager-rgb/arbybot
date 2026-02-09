@@ -6,8 +6,11 @@ Usage (manual, initial):
 This is intentionally minimal: it reads `scan_*.json`, `truth_report_*.json`, and
 `reject_histogram_*.json` from a run directory and builds `daily_report_<date>.json`.
 
-Cost Model (v1.4.0):
-  Uses CostModelRegistry from ci_m4_execution_gate.py for unified cost models.
+Cost Model (v1.5.0):
+  Dual PnL: reports both gas_only and paper_realistic (with slippage)
+  - paper_net_pnl_usdc_gas_only: gas only (no slippage)
+  - paper_net_pnl_usdc_realistic: gas + 5bps slippage (M4 paper simulation)
+  Uses CostModelRegistry for unified cost models.
   Available models: paper_realistic, paper_conservative, gas_only
 """
 from __future__ import annotations
@@ -52,10 +55,25 @@ def aggregate_run(
         slippage_usd_estimate: Slippage cost in USD (legacy)
         cost_model_name: Cost model from CostModelRegistry (v1.4.0)
             Available: paper_realistic, paper_conservative, gas_only
+    
+    v1.5.0: Dual PnL - both gas_only and paper_realistic
     """
+    # Load both cost models for dual PnL (v1.5.0)
+    gas_only_model = None
+    paper_realistic_model = None
+    if COST_MODEL_REGISTRY_AVAILABLE:
+        registry = CostModelRegistry.default()
+        try:
+            gas_only_model = registry.get("gas_only")
+        except ValueError:
+            pass
+        try:
+            paper_realistic_model = registry.get("paper_realistic")
+        except ValueError:
+            pass
+    
     # If cost_model_name is provided, use CostModelRegistry
     if cost_model_name and COST_MODEL_REGISTRY_AVAILABLE:
-        registry = CostModelRegistry.default()
         cost_model_config = registry.get(cost_model_name)
         gas_usd_estimate = cost_model_config.gas_usd
         # slippage is calculated per-signal based on size and bps
@@ -146,23 +164,47 @@ def aggregate_run(
         size_usd = sig.get("size_usd") or default_size_usd
         gross_spread_usdc += float(spread_pct) / 100.0 * float(size_usd)
 
-    # Paper PnL calculation:
-    # - If signals_total > 0: paper_net = gross_spread - gas - slippage (per-signal cost)
-    # - If signals_total == 0: paper_net = 0 (no signals = no hypothetical trade = no cost)
-    # This avoids misleading "-$0.10" when nothing was detected
-    if gas_usd_estimate is not None:
-        if len(signals) > 0:
-            # Per-signal cost model: deduct gas for each hypothetical trade
-            paper_net = gross_spread_usdc - float(gas_usd_estimate) - float(slippage_usd_estimate or 0.0)
-        else:
-            # No signals = no trade = no gas cost
-            paper_net = 0.0
-        pnl_available = True
-        pnl_reason = None if len(signals) > 0 else "no_signals_no_cost"
+    # Dual PnL calculation (v1.5.0):
+    # Both gas_only (truth estimate) and paper_realistic (M4 simulation)
+    # - If signals_total > 0: paper_net = gross_spread - gas - slippage
+    # - If signals_total == 0: paper_net = 0 (no signals = no trade = no cost)
+    
+    # Calculate slippage USD from paper_realistic model
+    slippage_usdc_realistic = 0.0
+    if paper_realistic_model and len(signals) > 0:
+        # Slippage = sum(size_usd * slippage_bps / 10000) for each signal
+        for sig in signals:
+            size = float(sig.get("size_usd") or default_size_usd)
+            slippage_usdc_realistic += size * paper_realistic_model.slippage_bps / 10000
+    
+    # Paper PnL (gas_only) - matches truth_report estimate
+    if gas_only_model:
+        gas_only_gas = gas_only_model.gas_usd
+    elif gas_usd_estimate is not None:
+        gas_only_gas = gas_usd_estimate
     else:
-        paper_net = gross_spread_usdc
-        pnl_available = False
-        pnl_reason = "no_cost_model"
+        gas_only_gas = 0.10  # default
+    
+    if len(signals) > 0:
+        paper_net_gas_only = gross_spread_usdc - gas_only_gas
+    else:
+        paper_net_gas_only = 0.0
+    
+    # Paper PnL (realistic) - matches M4 simulation
+    if paper_realistic_model:
+        realistic_gas = paper_realistic_model.gas_usd
+    else:
+        realistic_gas = gas_only_gas
+    
+    if len(signals) > 0:
+        paper_net_realistic = gross_spread_usdc - realistic_gas - slippage_usdc_realistic
+    else:
+        paper_net_realistic = 0.0
+    
+    # Legacy paper_net uses gas_only for backwards compatibility
+    paper_net = paper_net_gas_only
+    pnl_available = True
+    pnl_reason = None if len(signals) > 0 else "no_signals_no_cost"
 
     # quote_sanity_rate: quotes that passed price sanity / total quotes
     # This is NOT a "win rate" - it measures price sanity filtering
@@ -425,7 +467,7 @@ def aggregate_run(
     }
 
     report = {
-        "schema_version": "m5:daily:v1",
+        "schema_version": "m5:daily:v1.1",  # Bumped for dual PnL (v1.5.0)
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "timezone": "UTC",
         "run_id": str(run_dir.name),
@@ -436,7 +478,11 @@ def aggregate_run(
         "runs_included": 1,
         "pnl_mode": "paper",
         "gross_spread_usdc": round(gross_spread_usdc, 6),
-        "paper_net_pnl_usdc": round(paper_net, 6),
+        # Dual PnL (v1.5.0)
+        "paper_net_pnl_usdc": round(paper_net, 6),  # Legacy: gas_only
+        "paper_net_pnl_usdc_gas_only": round(paper_net_gas_only, 6),  # Truth estimate (no slippage)
+        "paper_net_pnl_usdc_realistic": round(paper_net_realistic, 6),  # M4 sim (with slippage)
+        "slippage_usdc_realistic": round(slippage_usdc_realistic, 6),  # Slippage component
         "pnl_available": pnl_available,
         "pnl_reason": pnl_reason,
         "cost_model": cost_model,

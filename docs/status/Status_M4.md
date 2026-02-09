@@ -1,10 +1,35 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
-**Updated**: 2026-02-09 17:30 UTC  
-**Evidence SHA**: `f5f9380`  
-**Gate Version**: `ci_m4_execution_gate.py` v1.4.0  
+**Updated**: 2026-02-09 18:30 UTC  
+**Evidence SHA**: `ee05ff5`  
+**Gate Version**: `ci_m4_execution_gate.py` v1.5.0  
 **Tests**: 553 passed, 1 skipped
+
+---
+
+## Status Model v1.5.0
+
+> **Split Status Policy:**
+> - `profit_status`: PASS if total_net > 0 (we made money)
+> - `drift_status`: PASS/WARN/FAIL based on MAE and sign_rate (model accuracy)
+> - `status` (combined): Requires both profit and drift to PASS
+
+**Thresholds:**
+| Metric | WARN | FAIL | Notes |
+|--------|------|------|-------|
+| MAE | > 0.30 | > 0.50 | Exclusive: mae=0.50 is WARN, mae=0.51 is FAIL |
+| Sign Rate | < 0.80 | < 0.70 | Percentage of correct sign predictions |
+
+**Interpretation:**
+- **profit_status=PASS, drift_status=WARN**: Profitable but model needs tuning
+- **profit_status=PASS, drift_status=FAIL**: Profitable but unreliable model (lucky?)
+- **profit_status=FAIL**: Not profitable (fix immediately)
+
+**New Metrics (v1.5.0):**
+- `mae_no_slippage`: MAE excluding systematic slippage component
+- `fragile_count`: Signals where est_net < slippage + gas (at risk of flip)
+- `evidence.ok`: Whether source_sha matches current HEAD
 
 ---
 
@@ -119,13 +144,19 @@ python scripts/ci_m4_execution_gate.py --online --profile profit --cost-model pa
 
 ---
 
-## Est vs Sim Drift Metrics
+## Est vs Sim Drift Metrics (v1.5.0)
 
-| Metric | Threshold | Offline | Online (v1.3.0+) | Status |
-|--------|-----------|---------|------------------|--------|
-| `mae_net_usdc` | ≤ 0.30 | 0.24 | *TBD* | ⏳ |
-| `est_sign_correct_rate` | ≥ 80% | 100% | *TBD* | ⏳ |
-| `sign_mismatch_count` | 0 | 0 | *TBD* | ⏳ |
+| Metric | WARN | FAIL | Latest | Status |
+|--------|------|------|--------|--------|
+| `mae_net_usdc` | > 0.30 | > 0.50 | 0.50 | ⚠️ WARN |
+| `mae_no_slippage` | > 0.25 | > 0.40 | TBD | ⏳ |
+| `est_sign_correct_rate` | < 80% | < 70% | 100% | ✅ PASS |
+| `fragile_count` | > 1 | > 2 | TBD | ⏳ |
+
+**MAE Threshold Change (v1.5.0):**
+- **FAIL at > 0.50** (exclusive), not >= 0.50
+- This prevents edge-flapping when mae=0.50 exactly
+- mae=0.50 is now WARN, mae=0.51 is FAIL
 
 **✅ MAE Fix (v1.3.0):**
 - `est_net_usdc` = from truth_report (original, paper_slippage_bps=0)

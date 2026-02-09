@@ -51,11 +51,14 @@ def make_minimal_run(tmp_path: Path) -> Path:
 def test_aggregate_minimal(tmp_path):
     run = make_minimal_run(tmp_path)
     rpt = aggregate_run(run)
-    assert rpt["schema_version"] == "m5:daily:v1"
+    assert rpt["schema_version"] == "m5:daily:v1.1"  # v1.5.0: bumped for dual PnL
     assert rpt["runs_included"] == 1
     # M5 reports use paper_net_pnl_usdc calculated from spread_signals
-    # gross = 5 + 7.5 = 12.5, no gas/slippage → net = 12.5
-    assert rpt.get("paper_net_pnl_usdc") == 12.5
+    # gross = 5 + 7.5 = 12.5, gas_only gas = 0.10 → net = 12.40
+    assert rpt.get("paper_net_pnl_usdc") == 12.40  # gas_only: 12.5 - 0.10
+    assert rpt.get("paper_net_pnl_usdc_gas_only") == 12.40
+    # realistic: 12.5 - 0.10 - slippage (2 signals * 1000 * 5bps = 1.0) = 11.40
+    assert rpt.get("paper_net_pnl_usdc_realistic") == 11.40
     assert rpt.get("gross_spread_usdc") == 12.5
     assert rpt.get("spread_signals_count") == 2
     # Signals vs Opportunities counters
