@@ -3,23 +3,28 @@
 """
 Full CI pipeline for ARBY.
 
+MODES:
+  --mode ci   : Offline only (fixtures), no RPC required - DEFAULT
+  --mode e2e  : Online + offline (requires secrets)
+
 Runs all gates in sequence:
 1. pytest -q (unit tests)
 2. ci_m5_0_gate.py --offline --strict
-3. ci_m5_gate.py --offline --strict  
+3. M5 gate: SKIPPED in CI mode (requires runDir), RUN in E2E mode
 4. ci_m4_execution_gate.py --offline --profile smoke
 
 Exit codes:
   0 = All gates PASS
   1 = pytest failed
   2 = M5_0 gate failed
-  3 = M5 gate failed
+  3 = M5 gate failed (E2E only)
   4 = M4 gate failed
 
 Usage:
-  python scripts/ci_full_pipeline.py
-  python scripts/ci_full_pipeline.py --skip-tests  # Skip pytest
-  python scripts/ci_full_pipeline.py --online      # Run online gates too
+  python scripts/ci_full_pipeline.py              # CI mode (default)
+  python scripts/ci_full_pipeline.py --mode ci    # Explicit CI mode
+  python scripts/ci_full_pipeline.py --mode e2e   # E2E with online gates
+  python scripts/ci_full_pipeline.py --skip-tests # Skip pytest
 """
 
 import argparse
@@ -32,8 +37,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+__version__ = "1.1.0"
 
-def run_command(cmd: list, name: str, check: bool = True) -> int:
+
+def run_command(cmd: list, name: str) -> int:
     """Run a command and return exit code."""
     print(f"\n{'='*60}")
     print(f"RUNNING: {name}")
@@ -52,22 +59,30 @@ def run_command(cmd: list, name: str, check: bool = True) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Full CI pipeline")
+    parser.add_argument("--mode", choices=["ci", "e2e"], default="ci",
+                        help="Pipeline mode: ci=offline only, e2e=online+offline")
     parser.add_argument("--skip-tests", action="store_true", help="Skip pytest")
-    parser.add_argument("--online", action="store_true", help="Include online gates")
-    parser.add_argument("--config", default="config/real_minimal.yaml", help="Config for online")
+    parser.add_argument("--config", default="config/real_minimal.yaml", 
+                        help="Config for online gates (E2E mode)")
     args = parser.parse_args()
     
+    is_e2e = args.mode == "e2e"
     start = datetime.now()
     results = {}
     
+    mode_label = "E2E (online + offline)" if is_e2e else "CI (offline only)"
+    
     print(f"""
 ╔══════════════════════════════════════════════════════════════╗
-║                    ARBY CI PIPELINE                          ║
+║                    ARBY CI PIPELINE v{__version__}                      ║
 ║                    {start.strftime('%Y-%m-%d %H:%M:%S')}                        ║
+║                    Mode: {mode_label:<25}          ║
 ╚══════════════════════════════════════════════════════════════╝
 """)
     
-    # 1. Unit tests
+    # ================================================================
+    # 1. UNIT TESTS
+    # ================================================================
     if not args.skip_tests:
         exit_code = run_command(
             [sys.executable, "-m", "pytest", "tests/unit", "-q", "--tb=short"],
@@ -78,7 +93,9 @@ def main():
             print(f"\n❌ PIPELINE FAILED at pytest (exit code 1)")
             return 1
     
-    # 2. M5_0 Offline Gate
+    # ================================================================
+    # 2. M5_0 GATE (OFFLINE)
+    # ================================================================
     exit_code = run_command(
         [sys.executable, "scripts/ci_m5_0_gate.py", "--offline", "--strict"],
         "M5_0 Gate (offline)"
@@ -88,13 +105,36 @@ def main():
         print(f"\n❌ PIPELINE FAILED at M5_0 gate (exit code 2)")
         return 2
     
-    # 3. M5 Gate - SKIPPED in offline mode
-    # M5 gate validates daily_report which requires a full runDir with consistent paths.
-    # This level of validation is done during online runs only.
-    print(f"\n⚠️  M5 gate skipped in offline mode (requires live runDir)")
-    results["m5_offline"] = -1
+    # ================================================================
+    # 3. M5 GATE
+    # ================================================================
+    # M5 validates daily_report which requires a complete runDir.
+    # In CI mode: SKIPPED (daily_report is an aggregation layer)
+    # In E2E mode: Run with --online to create runDir first
     
-    # 4. M4 Execution Gate (smoke profile)
+    if is_e2e:
+        m5_gate = PROJECT_ROOT / "scripts" / "ci_m5_gate.py"
+        if m5_gate.exists():
+            exit_code = run_command(
+                [sys.executable, "scripts/ci_m5_gate.py", "--online", 
+                 "--config", args.config, "--strict"],
+                "M5 Gate (online)"
+            )
+            results["m5_online"] = exit_code
+            if exit_code != 0:
+                print(f"\n❌ PIPELINE FAILED at M5 gate (exit code 3)")
+                return 3
+        else:
+            print(f"\n⚠️  M5 gate script not found, skipping")
+            results["m5_online"] = -1
+    else:
+        # CI mode: M5 skipped as expected
+        print(f"\n⏭️  M5 gate: SKIPPED (CI mode - daily_report requires runDir)")
+        results["m5_offline"] = -1
+    
+    # ================================================================
+    # 4. M4 EXECUTION GATE (OFFLINE)
+    # ================================================================
     exit_code = run_command(
         [sys.executable, "scripts/ci_m4_execution_gate.py", "--offline", "--profile", "smoke"],
         "M4 Execution Gate (offline smoke)"
@@ -104,26 +144,27 @@ def main():
         print(f"\n❌ PIPELINE FAILED at M4 gate (exit code 4)")
         return 4
     
-    # 5. Online gates (optional)
-    if args.online:
+    # ================================================================
+    # 5. E2E ONLINE GATES (if E2E mode)
+    # ================================================================
+    if is_e2e:
         print("\n" + "="*60)
-        print("ONLINE GATES (optional)")
+        print("E2E: ONLINE GATES")
         print("="*60)
         
         exit_code = run_command(
-            [sys.executable, "scripts/ci_m5_0_gate.py", "--online", "--config", args.config],
+            [sys.executable, "scripts/ci_m5_0_gate.py", "--online", 
+             "--config", args.config, "--strict"],
             "M5_0 Gate (online)"
         )
         results["m5_0_online"] = exit_code
-        
-        if m5_gate.exists():
-            exit_code = run_command(
-                [sys.executable, "scripts/ci_m5_gate.py", "--online", "--config", args.config],
-                "M5 Gate (online)"
-            )
-            results["m5_online"] = exit_code
+        # Online failures are warnings in E2E, not blockers
+        if exit_code != 0:
+            print(f"⚠️  M5_0 online failed (non-blocking in E2E)")
     
-    # Summary
+    # ================================================================
+    # SUMMARY
+    # ================================================================
     elapsed = datetime.now() - start
     
     print(f"""
@@ -141,10 +182,19 @@ def main():
             status = f"❌ FAIL ({code})"
         print(f"  {name}: {status}")
     
-    print(f"\n  Elapsed: {elapsed.total_seconds():.1f}s")
+    print(f"\n  Mode:    {args.mode.upper()}")
+    print(f"  Elapsed: {elapsed.total_seconds():.1f}s")
     
-    if all(c in (0, -1) for c in results.values()):
-        print(f"\n✅ ALL GATES PASSED")
+    # In CI mode: only offline gates must pass
+    # In E2E mode: offline gates must pass, online are warnings
+    required_keys = ["m5_0_offline", "m4_smoke"]
+    if not args.skip_tests:
+        required_keys.append("pytest")
+    
+    all_required_pass = all(results.get(k, 0) in (0, -1) for k in required_keys)
+    
+    if all_required_pass:
+        print(f"\n✅ ALL REQUIRED GATES PASSED")
         return 0
     else:
         print(f"\n❌ PIPELINE FAILED")

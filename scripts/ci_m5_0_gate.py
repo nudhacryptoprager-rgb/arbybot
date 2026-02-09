@@ -48,6 +48,14 @@ load_root_dotenv()
 # Import canonical PRICE_SCALE_BOUNDS from core.constants
 from core.constants import PRICE_SCALE_BOUNDS as CORE_PRICE_SCALE_BOUNDS
 
+# Import artifact invariants for unified validation
+from core.artifact_invariants import (
+    RunMode,
+    check_cross_artifact_invariants,
+    validate_block_number,
+    validate_schema_version as invariants_validate_schema,
+)
+
 __version__ = "2.1.0"
 
 DEFAULT_OUTPUT_ROOT = Path("data/runs")

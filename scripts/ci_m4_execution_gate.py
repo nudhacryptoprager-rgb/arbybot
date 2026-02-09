@@ -54,6 +54,14 @@ except Exception:
 # Import canonical reject reasons
 from core.reject_reasons import SimRejectReason
 
+# Import artifact invariants for unified validation
+from core.artifact_invariants import (
+    RunMode,
+    check_m4_execution_invariants,
+    check_m4_profitability,
+    validate_block_number,
+)
+
 __version__ = "1.1.0"
 
 # ============================================================

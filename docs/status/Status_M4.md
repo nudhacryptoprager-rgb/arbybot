@@ -98,6 +98,16 @@ python scripts/ci_full_pipeline.py
 
 ⚠️ **НЕ ЗМІНЮВАТИ golden fixtures без оновлення тестів!**
 
+### Golden Update Policy
+
+```bash
+# ONLY way to update golden M4 artifacts
+python scripts/update_golden_artifacts.py --run-dir data/runs/<dir> --stage m4
+
+# Dry run first
+python scripts/update_golden_artifacts.py --run-dir data/runs/<dir> --stage m4 --dry-run
+```
+
 ---
 
 ## Price Direction Invariant

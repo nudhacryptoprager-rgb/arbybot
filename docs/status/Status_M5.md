@@ -10,15 +10,30 @@
 ## Canonical Commands
 
 ```bash
-# M5 Offline Gate (ALWAYS works, no secrets)
-python scripts/ci_m5_gate.py --offline --strict
-
-# M5 Online Gate (requires RPC)
+# M5 Online Gate (requires runDir with scan/truth/histogram)
 python scripts/ci_m5_gate.py --online --config config/real_minimal.yaml
 
-# Full CI Pipeline (all gates)
-python scripts/ci_full_pipeline.py
+# M5 with existing runDir
+python scripts/ci_m5_gate.py --generate-report data/runs/<rundir>
+
+# Full CI Pipeline (M5 is SKIPPED in offline mode)
+python scripts/ci_full_pipeline.py --mode ci   # M5: SKIPPED
+python scripts/ci_full_pipeline.py --mode e2e  # M5: RUN
 ```
+
+### ⚠️ M5 Offline Behavior
+
+M5 gate validates `daily_report` which **requires a complete runDir** with
+scan/truth/histogram artifacts. In CI mode (`--mode ci`), M5 is **SKIPPED**:
+
+```
+M5 gate: SKIPPED (CI mode - daily_report requires runDir)
+```
+
+This is **expected** because:
+1. `daily_report` is an aggregation layer on top of M5_0 artifacts
+2. M5_0 offline gate validates the underlying artifacts
+3. M5 online is verified via `--mode e2e`
 
 ---
 
@@ -38,7 +53,10 @@ python scripts/ci_full_pipeline.py
 ⚠️ **Golden artifacts are updated ONLY via explicit script:**
 
 ```bash
-# ONLY way to update golden
+# ONLY way to update golden (M5 daily_report)
+python scripts/update_golden_artifacts.py --run-dir data/runs/<dir> --stage m5
+
+# Or use legacy script
 python scripts/make_golden_daily_report.py --output docs/artifacts/m5_golden/
 
 # Gates NEVER auto-update golden
