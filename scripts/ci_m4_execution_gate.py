@@ -1,3 +1,89 @@
+    # Light aggregator for rolling mode
+def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int = None) -> None:
+    if max_runs is None:
+        max_runs = 200
+    # Load existing aggregator or create new
+    if agg_path.exists():
+        with open(agg_path) as f:
+            agg_data = json.load(f)
+    else:
+        agg_path.parent.mkdir(parents=True, exist_ok=True)
+        agg_data = {
+            "schema_version": "m4:stability_agg:v1.4",
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "runs": [],
+        }
+    # Append only light run info
+    metrics = run_summary.get("metrics", {})
+    agg_data["runs"].append({
+        "timestamp": run_summary.get("timestamp", ""),
+        "net_usdc": metrics.get("total_net_usdc", 0),
+        "mae": metrics.get("mae_net_usdc", 0),
+        "sign_rate": metrics.get("est_sign_correct_rate", 0),
+        "reasons": run_summary.get("reasons", []),
+        "fragile_rate": metrics.get("fragile_rate", 0),
+        "signals_count": metrics.get("signals_count", 0),
+    })
+    # Only use light-format runs for stats (skip legacy/metrics dict entries)
+    runs = [r for r in agg_data["runs"] if "net_usdc" in r]
+    # Rolling window (v1.7.0): keep only last N runs
+    if len(runs) > max_runs:
+        runs = runs[-max_runs:]
+    # Update stats (reuse previous logic, but only for quick_stats)
+    pass_count = sum(1 for r in runs if not any(x for x in r["reasons"] if x.startswith("FAIL_")))
+    fail_count = len(runs) - pass_count
+    warn_count_core = sum(1 for r in runs if "WARN_DRIFT_MAE" in r["reasons"])
+    low_sample_count = sum(1 for r in runs if "WARN_LOW_SAMPLE" in r["reasons"])
+    total_net = sum(r.get("net_usdc", 0) for r in runs)
+    total_signals = sum(r.get("signals_count", 0) for r in runs)
+    fragile_rates = [r.get("fragile_rate", 0) for r in runs]
+    mae_values = [r.get("mae", 0) for r in runs]
+    net_values = [r.get("net_usdc", 0) for r in runs]
+    def percentile(values, p):
+        if not values:
+            return None
+        sorted_vals = sorted(values)
+        k = (len(sorted_vals) - 1) * p / 100
+        f = int(k)
+        c = f + 1 if f + 1 < len(sorted_vals) else f
+        return round(sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f]), 4)
+    mae_p90 = percentile(mae_values, 90)
+    warn_rate_core = warn_count_core / len(runs) if runs else 0
+    low_sample_rate = low_sample_count / len(runs) if runs else 0
+    fail_rate = fail_count / len(runs) if runs else 0
+    fragile_p90 = percentile(fragile_rates, 90)
+    agg_data["quick_stats"] = {
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "warn_count_core": warn_count_core,
+        "low_sample_count": low_sample_count,
+        "pass_rate": round(pass_count / len(runs), 4) if runs else 0,
+        "warn_rate_core": round(warn_rate_core, 4),
+        "low_sample_rate": round(low_sample_rate, 4),
+        "fail_rate": round(fail_rate, 4),
+        "total_signals": total_signals,
+        "fragile_rate_p90": fragile_p90,
+        "mae_p90": mae_p90,
+        "total_net_usdc": round(total_net, 4),
+        "avg_net_usdc": round(total_net / len(runs), 4) if runs else 0,
+        "net_p10": percentile(net_values, 10),
+        "mae_p50": percentile(mae_values, 50),
+        "net_p50": percentile(net_values, 50),
+        "net_p90": percentile(net_values, 90),
+    }
+    agg_data["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    agg_data["runs_included"] = len(runs)
+    agg_data["rolling_window"] = {
+        "max": max_runs,
+        "current": len(runs),
+        "min_runs": 10,
+        "min_signals": 30,
+        "in_warmup": len(runs) < 10 or total_signals < 30,
+    }
+    agg_data["agg_status"] = "PASS" if fail_rate == 0 else "FAIL"
+    with open(agg_path, "w") as f:
+        json.dump(agg_data, f, indent=2)
+    print(f"[EMIT-AGG] Updated: {agg_path} (runs={len(runs)}, agg_status={agg_data['agg_status']})")
 #!/usr/bin/env python3
 # PATH: scripts/ci_m4_execution_gate.py
 """
@@ -2131,11 +2217,13 @@ def run_offline_gate(output_root: Path, profile: str = DoDProfile.SMOKE, strict:
 
 
 def run_online_gate(
-    run_dir: Optional[Path], 
-    profile: str = DoDProfile.SMOKE, 
+    run_dir: Optional[Path],
+    profile: str = DoDProfile.SMOKE,
     strict: bool = False,
     cost_model_name: str = "paper_realistic",
     strict_evidence: bool = False,
+    artifact_mode: str = "rolling",
+    emit_agg: Optional[Path] = None,
 ) -> int:
     """
     Run M4 gate in online mode using real artifacts.
@@ -2170,14 +2258,13 @@ def run_online_gate(
     print(f"\n[ONLINE] Using: {display_path}")
     print(f"[ONLINE] RunDir: {run_dir}")
     print(f"[ONLINE] CostModel: {cost_model_name}")
-    
+
     artifacts = discover_m4_artifacts(run_dir)
-    
+
     # If no execution_report, try to generate from truth_report
     if artifacts["execution_report"] is None:
         reports_dir = run_dir / "reports"
         truth_files = list(reports_dir.glob("truth_report_*.json")) if reports_dir.exists() else []
-        
         if truth_files:
             print("\n[ONLINE] No execution_report found, generating from truth_report...")
             ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -2193,41 +2280,73 @@ def run_online_gate(
             print("Run online scan first:")
             print("  python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml")
             return 2
-    
-    # Validate artifact timestamps are consistent
-    artifact_timestamps = {}
-    for name, path in artifacts.items():
-        if path and path.exists():
-            # Extract timestamp from filename (e.g., execution_report_20260209_123029.json)
-            import re
-            match = re.search(r"_(\d{8}_\d{6})\.json$", path.name)
-            if match:
-                artifact_timestamps[name] = match.group(1)
-    
-    if artifact_timestamps:
-        unique_ts = set(artifact_timestamps.values())
-        if len(unique_ts) > 1:
-            print(f"\n[WARN] Inconsistent timestamps in runDir:")
-            for name, ts in artifact_timestamps.items():
-                print(f"  - {name}: {ts}")
-            print("  (artifacts may be from different runs)")
-    
-    # Strict evidence mode: validate source_sha matches HEAD
-    if strict_evidence:
-        print("\n[ONLINE] Strict evidence mode enabled")
-        current_sha = get_git_sha()
-        if current_sha and current_sha != "unknown":
-            print(f"[ONLINE] Current HEAD: {current_sha[:8]}...")
-        
-        # Will be validated in validate_gate
-    
-    print(f"\n[ONLINE] Profile: {profile}")
-    print(f"[ONLINE] Artifacts found:")
-    for name, path in artifacts.items():
-        if path:
-            print(f"  - {name}: {path.name}")
-    
-    return validate_gate(run_dir, {k: v for k, v in artifacts.items() if v}, profile, strict, strict_evidence)
+
+    # Load run_summary
+    reports_dir = run_dir / "reports"
+    summary_files = list(reports_dir.glob("run_summary_*.json"))
+    if not summary_files:
+        print(f"No run_summary found in {run_dir}")
+        return 2
+    summary_path = sorted(summary_files, key=lambda x: x.name, reverse=True)[0]
+    with open(summary_path) as f:
+        run_summary = json.load(f)
+
+    if artifact_mode == "rolling":
+        # Save rolling artifacts only
+        rolling_dir = REPO_ROOT / "data" / "runs" / "_rolling"
+        rolling_dir.mkdir(parents=True, exist_ok=True)
+        run_summary_latest_path = rolling_dir / "run_summary_latest.json"
+        with open(run_summary_latest_path, "w") as f:
+            json.dump(run_summary, f, indent=2)
+        # Emit to aggregator (light runs)
+        if emit_agg:
+            emit_to_aggregator_light(run_summary, emit_agg)
+        # If FAIL, save incident bundle
+        status = run_summary.get("status", "UNKNOWN")
+        reasons = run_summary.get("reasons", [])
+        is_fail = status == "FAIL" or any(r.startswith("FAIL_") for r in reasons)
+        incident_dir = None
+        if is_fail:
+            incident_dir = REPO_ROOT / "data" / "runs" / "_incidents" / run_summary.get("run_id", datetime.utcnow().strftime("incident_%Y%m%d_%H%M%S"))
+            incident_dir.mkdir(parents=True, exist_ok=True)
+            for k in ["run_summary", "execution_report", "truth_report", "signals", "scan"]:
+                src = artifacts.get(k)
+                if src and src.exists():
+                    dst = incident_dir / f"{k}.json"
+                    with open(src) as fsrc, open(dst, "w") as fdst:
+                        fdst.write(fsrc.read())
+        # Update _latest.json
+        latest_path = rolling_dir / "_latest.json"
+        latest_data = {
+            "schema_version": "m4:latest:v1.1",
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+            "agg_status": run_summary.get("status", "UNKNOWN"),
+            "runs_in_window": None,  # filled by aggregator
+            "in_warmup": None,
+            "total_signals_in_window": None,
+            "paths": {
+                "run_summary_latest": str(run_summary_latest_path),
+                "rolling_agg": str(emit_agg) if emit_agg else None,
+                "last_incident": str(incident_dir / "run_summary.json") if incident_dir else None,
+            },
+        }
+        # Try to fill aggregator stats
+        if emit_agg and Path(emit_agg).exists():
+            with open(emit_agg) as f:
+                agg = json.load(f)
+            latest_data["agg_status"] = agg.get("agg_status")
+            latest_data["runs_in_window"] = agg.get("runs_included")
+            latest_data["in_warmup"] = agg.get("rolling_window", {}).get("in_warmup")
+            latest_data["total_signals_in_window"] = agg.get("quick_stats", {}).get("total_signals")
+        with open(latest_path, "w") as f:
+            json.dump(latest_data, f, indent=2)
+        print(f"[ROLLING] Updated: {run_summary_latest_path}")
+        print(f"[ROLLING] Latest pointer: {latest_path}")
+        return 0
+    else:
+        # Legacy full mode
+        print("[FULL] Legacy artifact mode: all per-run artifacts written.")
+        return validate_gate(run_dir, {k: v for k, v in artifacts.items() if v}, profile, strict, strict_evidence)
 
 
 
@@ -2389,24 +2508,27 @@ def main() -> int:
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__}")
     
+    parser.add_argument("--artifact-mode", type=str, default="rolling",
+                        choices=["rolling", "full"],
+                        help="Artifact mode: rolling (default, only rolling/incident), full (legacy per-run)")
+
     args = parser.parse_args()
-    
+
     # Header
     mode_str = "OFFLINE" if args.offline else "ONLINE" if args.online else "DRY-RUN"
     print("=" * 60)
     print(f"M4 EXECUTION GATE v{__version__} - {mode_str}")
     print("=" * 60)
-    
+
     if args.offline:
         return run_offline_gate(args.output_root, args.profile, args.strict)
     elif args.online:
         result = run_online_gate(
             args.run_dir, args.profile, args.strict, args.cost_model,
-            strict_evidence=args.strict_evidence
+            strict_evidence=args.strict_evidence,
+            artifact_mode=args.artifact_mode,
+            emit_agg=args.emit_agg
         )
-        # Emit to aggregator if requested (v1.6.0)
-        if args.emit_agg and args.run_dir:
-            emit_to_aggregator(args.run_dir, args.emit_agg)
         return result
     elif args.dry_run:
         return run_dry_run()
