@@ -311,11 +311,14 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
             "net_total_usdc": total_net_usdc,
             "accounting_complete": True,
         },
-        # Health metrics
+        # Health metrics (includes execution safety invariants)
         "health": {
             "simulation_pass_rate": round(sim_profitable_count / len(fixture_simulations), 4) if fixture_simulations else 0,
             "blocks_consistent": True,  # All sims used same pinned_block
             "all_signals_simulated": True,
+            # Execution safety invariants (strict: must be checked in gate)
+            "execution_enabled": False,      # INVARIANT: must be false in M4
+            "kill_switch_active": True,      # INVARIANT: must be true in M4
         },
     }
     with open(exec_path, "w") as f:
@@ -518,7 +521,7 @@ def validate_execution_report(
             total_net_usdc = 0
     
     if profile == DoDProfile.SMOKE:
-        # SMOKE: PASS if simulations_passed >= 1 AND accounting_complete AND blocks_consistent
+        # SMOKE: PASS if simulations_passed >= 1 AND accounting_complete AND blocks_consistent AND all_signals_simulated
         if sims_passed >= 1:
             checks.append(("dod_smoke_profitable", True, f"simulations_passed={sims_passed} >= 1"))
         else:
@@ -534,7 +537,15 @@ def validate_execution_report(
         # blocks_consistent check
         if blocks_consistent:
             checks.append(("dod_smoke_blocks", True, "blocks_consistent=true"))
-        # else: already checked above
+        else:
+            checks.append(("dod_smoke_blocks", False, "blocks_consistent=false"))
+        
+        # all_signals_simulated check (new in v1.1)
+        all_signals_simulated = health.get("all_signals_simulated", False)
+        if all_signals_simulated:
+            checks.append(("dod_smoke_all_simulated", True, "all_signals_simulated=true"))
+        else:
+            checks.append(("dod_smoke_all_simulated", False, "all_signals_simulated=false (MISSING simulations)"))
     
     elif profile == DoDProfile.PROFIT:
         # PROFIT: PASS if total_net_usdc > 0 AND sim_profitable_count >= 1
@@ -557,14 +568,22 @@ def validate_execution_report(
     return checks
 
 
-def validate_simulations(simulations: List[Dict[str, Any]]) -> List[Tuple[str, bool, str]]:
-    """Validate individual simulations have required fields and valid blockers."""
+def validate_simulations(simulations: List[Dict[str, Any]], run_mode: str = "") -> List[Tuple[str, bool, str]]:
+    """Validate individual simulations have required fields and valid blockers.
+    
+    Args:
+        simulations: List of simulation results
+        run_mode: If not FIXTURE_OFFLINE, require confidence and liquidity_hint
+    """
     checks = []
     
     required_fields = ["signal_id", "simulation_status", "gas_usdc", "net_usdc", "is_profitable"]
     
     # Valid blocker values from SimRejectReason enum
     valid_blockers = {r.value for r in SimRejectReason}
+    
+    # Online mode requires confidence and liquidity_hint (not null)
+    is_online = run_mode and "OFFLINE" not in run_mode.upper()
     
     for i, sim in enumerate(simulations):
         missing = [f for f in required_fields if f not in sim]
@@ -588,6 +607,21 @@ def validate_simulations(simulations: List[Dict[str, Any]]) -> List[Tuple[str, b
         block_used = sim.get("block_used")
         if block_used:
             checks.append((f"sim[{i}]_block", True, f"block_used={block_used}"))
+        
+        # Online mode: require confidence and liquidity_hint not null
+        if is_online:
+            confidence = sim.get("confidence")
+            liquidity_hint = sim.get("liquidity_hint")
+            
+            if confidence is not None:
+                checks.append((f"sim[{i}]_confidence", True, f"confidence={confidence}"))
+            else:
+                checks.append((f"sim[{i}]_confidence", False, "confidence is null (required for online)"))
+            
+            if liquidity_hint is not None:
+                checks.append((f"sim[{i}]_liquidity", True, f"liquidity_hint={liquidity_hint}"))
+            else:
+                checks.append((f"sim[{i}]_liquidity", False, "liquidity_hint is null (required for online)"))
     
     return checks
 
@@ -747,9 +781,10 @@ def validate_gate(run_dir: Path, artifacts: Dict[str, Path], profile: str, stric
     
     # Validate individual simulations
     simulations = exec_data.get("simulations", [])
+    run_mode = exec_data.get("run_mode", "")
     if simulations:
         print()
-        sim_checks = validate_simulations(simulations)
+        sim_checks = validate_simulations(simulations, run_mode=run_mode)
         all_checks.extend(sim_checks)
         
         for name, passed, msg in sim_checks:

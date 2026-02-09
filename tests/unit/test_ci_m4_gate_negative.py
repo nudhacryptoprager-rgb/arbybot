@@ -460,5 +460,118 @@ class TestPriceDirectionInvariant(unittest.TestCase):
         self.assertGreater(sell, buy)  # Sell > Buy for profitable signal
 
 
+class TestEstErrorFormula(unittest.TestCase):
+    """Test that est_error_usdc = sim_net_usdc - est_net_usdc for all entries."""
+
+    def test_est_error_formula_profitable(self):
+        """est_error_usdc must equal sim_net_usdc - est_net_usdc for profitable sim."""
+        sim = {
+            "sim_net_usdc": 0.38,
+            "est_net_usdc": 0.83,
+            "est_error_usdc": -0.45,  # 0.38 - 0.83 = -0.45
+        }
+        
+        expected = sim["sim_net_usdc"] - sim["est_net_usdc"]
+        self.assertAlmostEqual(sim["est_error_usdc"], expected, places=6)
+
+    def test_est_error_formula_unprofitable(self):
+        """est_error_usdc must equal sim_net_usdc - est_net_usdc for unprofitable sim."""
+        sim = {
+            "sim_net_usdc": -0.67,
+            "est_net_usdc": -0.55,
+            "est_error_usdc": -0.12,  # -0.67 - (-0.55) = -0.12
+        }
+        
+        expected = sim["sim_net_usdc"] - sim["est_net_usdc"]
+        self.assertAlmostEqual(sim["est_error_usdc"], expected, places=6)
+
+    def test_est_error_in_fixture(self):
+        """Validate that offline fixture generates correct est_error_usdc."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            with patch('sys.argv', ['ci_m4_execution_gate.py', '--offline', '--output-root', str(output_root)]):
+                main()
+            
+            # Find generated execution report
+            run_dirs = list(output_root.glob("ci_m4_gate_offline_*"))
+            self.assertEqual(len(run_dirs), 1)
+            
+            exec_files = list((run_dirs[0] / "reports").glob("execution_report_*.json"))
+            self.assertEqual(len(exec_files), 1)
+            
+            with open(exec_files[0]) as f:
+                exec_data = json.load(f)
+            
+            # Verify formula for each simulation
+            for sim in exec_data.get("simulations", []):
+                if "est_net_usdc" in sim and "net_usdc" in sim:
+                    expected = sim["net_usdc"] - sim["est_net_usdc"]
+                    actual = sim.get("est_error_usdc", 0)
+                    self.assertAlmostEqual(
+                        actual, expected, places=6,
+                        msg=f"est_error_usdc mismatch for {sim.get('signal_id')}: {actual} != {expected}"
+                    )
+
+
+class TestQuoteCcyConsistency(unittest.TestCase):
+    """Test that quote_ccy is consistent between signals and execution_report."""
+
+    def test_quote_ccy_matches(self):
+        """quote_ccy in signals must match quote_ccy in execution_report."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            with patch('sys.argv', ['ci_m4_execution_gate.py', '--offline', '--output-root', str(output_root)]):
+                main()
+            
+            run_dirs = list(output_root.glob("ci_m4_gate_offline_*"))
+            self.assertEqual(len(run_dirs), 1)
+            
+            signals_files = list((run_dirs[0] / "reports").glob("signals_*.json"))
+            exec_files = list((run_dirs[0] / "reports").glob("execution_report_*.json"))
+            
+            self.assertEqual(len(signals_files), 1)
+            self.assertEqual(len(exec_files), 1)
+            
+            with open(signals_files[0]) as f:
+                signals_data = json.load(f)
+            with open(exec_files[0]) as f:
+                exec_data = json.load(f)
+            
+            # Both must have quote_ccy and they must match
+            signals_ccy = signals_data.get("quote_ccy")
+            exec_ccy = exec_data.get("quote_ccy")
+            
+            self.assertIsNotNone(signals_ccy, "signals must have quote_ccy")
+            self.assertIsNotNone(exec_ccy, "execution_report must have quote_ccy")
+            self.assertEqual(signals_ccy, exec_ccy, f"quote_ccy mismatch: {signals_ccy} != {exec_ccy}")
+            self.assertEqual(signals_ccy, "USDC", "quote_ccy must be USDC")
+
+    def test_health_contains_execution_safety(self):
+        """health section must contain execution_enabled and kill_switch_active."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            with patch('sys.argv', ['ci_m4_execution_gate.py', '--offline', '--output-root', str(output_root)]):
+                main()
+            
+            run_dirs = list(output_root.glob("ci_m4_gate_offline_*"))
+            exec_files = list((run_dirs[0] / "reports").glob("execution_report_*.json"))
+            
+            with open(exec_files[0]) as f:
+                exec_data = json.load(f)
+            
+            health = exec_data.get("health", {})
+            
+            # Must have execution safety fields
+            self.assertIn("execution_enabled", health, "health must have execution_enabled")
+            self.assertIn("kill_switch_active", health, "health must have kill_switch_active")
+            
+            # M4 invariants
+            self.assertEqual(health["execution_enabled"], False, "health.execution_enabled must be false")
+            self.assertEqual(health["kill_switch_active"], True, "health.kill_switch_active must be true")
+
+
 if __name__ == "__main__":
     unittest.main()
