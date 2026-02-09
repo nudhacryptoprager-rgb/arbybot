@@ -1,20 +1,70 @@
     # Light aggregator for rolling mode
-def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int = None) -> None:
+def get_git_head_sha() -> str:
+    """Get current git HEAD SHA. Returns 'unknown' if git not available."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5, cwd=REPO_ROOT
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def ensure_rolling_agg_exists(agg_path: 'Path') -> dict:
+    """Ensure rolling aggregator file exists. Creates empty one if not."""
+    from datetime import datetime, timezone
+    if agg_path.exists():
+        with open(agg_path) as f:
+            return json.load(f)
+    # Create empty aggregator
+    agg_path.parent.mkdir(parents=True, exist_ok=True)
+    agg_data = {
+        "schema_version": "m4:stability_agg:v1.5",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "runs": [],
+        "runs_included": 0,
+        "runs_in_window": 0,
+        "rolling_window": {
+            "max": 200,
+            "current": 0,
+            "min_runs": 10,
+            "min_signals": 30,
+            "in_warmup": True,
+        },
+        "quick_stats": {
+            "pass_count": 0,
+            "fail_count": 0,
+            "no_data_count": 0,
+            "total_signals": 0,
+            "total_net_usdc": 0,
+        },
+        "agg_status": "PASS_WARMUP",
+    }
+    with open(agg_path, "w") as f:
+        json.dump(agg_data, f, indent=2)
+    return agg_data
+
+
+def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int = None) -> dict:
+    """Emit run to rolling aggregator. Returns updated agg_data."""
+    from datetime import datetime, timezone
     if max_runs is None:
         max_runs = 200
     # Load existing aggregator or create new
-    if agg_path.exists():
-        with open(agg_path) as f:
-            agg_data = json.load(f)
-    else:
-        agg_path.parent.mkdir(parents=True, exist_ok=True)
-        agg_data = {
-            "schema_version": "m4:stability_agg:v1.4",
-            "created_at": datetime.utcnow().isoformat() + "Z",
-            "runs": [],
-        }
+    agg_data = ensure_rolling_agg_exists(agg_path)
+    
     # Append only light run info
     metrics = run_summary.get("metrics", {})
+    status = run_summary.get("status", "UNKNOWN")
+    signals_count = metrics.get("signals_count", 0)
+    
+    # Determine run status for agg: NO_DATA if signals_count=0
+    run_status = "NO_DATA" if signals_count == 0 else status
+    
     agg_data["runs"].append({
         "timestamp": run_summary.get("timestamp", ""),
         "net_usdc": metrics.get("total_net_usdc", 0),
@@ -22,7 +72,8 @@ def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int 
         "sign_rate": metrics.get("est_sign_correct_rate", 0),
         "reasons": run_summary.get("reasons", []),
         "fragile_rate": metrics.get("fragile_rate", 0),
-        "signals_count": metrics.get("signals_count", 0),
+        "signals_count": signals_count,
+        "run_status": run_status,  # NEW: NO_DATA|PASS|WARN|FAIL
     })
     # Clean legacy: keep only light-format runs
     agg_data["runs"] = [r for r in agg_data["runs"] if "net_usdc" in r]
@@ -31,35 +82,44 @@ def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int 
     if len(runs) > max_runs:
         agg_data["runs"] = runs[-max_runs:]
         runs = agg_data["runs"]
-    # Update stats (reuse previous logic, but only for quick_stats)
-    pass_count = sum(1 for r in runs if not any(x for x in r["reasons"] if x.startswith("FAIL_")))
-    fail_count = len(runs) - pass_count
-    warn_count_core = sum(1 for r in runs if "WARN_DRIFT_MAE" in r["reasons"])
-    low_sample_count = sum(1 for r in runs if "WARN_LOW_SAMPLE" in r["reasons"])
+    
+    # Count by status (NO_DATA excluded from fail rate)
+    no_data_count = sum(1 for r in runs if r.get("run_status") == "NO_DATA" or r.get("signals_count", 0) == 0)
+    data_runs = [r for r in runs if r.get("signals_count", 0) > 0]
+    pass_count = sum(1 for r in data_runs if not any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
+    fail_count = len(data_runs) - pass_count
+    warn_count_core = sum(1 for r in data_runs if "WARN_DRIFT_MAE" in r.get("reasons", []))
+    low_sample_count = sum(1 for r in runs if "WARN_LOW_SAMPLE" in r.get("reasons", []))
     total_net = sum(r.get("net_usdc", 0) for r in runs)
     total_signals = sum(r.get("signals_count", 0) for r in runs)
-    fragile_rates = [r.get("fragile_rate", 0) for r in runs]
-    mae_values = [r.get("mae", 0) for r in runs]
-    net_values = [r.get("net_usdc", 0) for r in runs]
+    fragile_rates = [r.get("fragile_rate", 0) for r in data_runs]
+    mae_values = [r.get("mae", 0) for r in data_runs]
+    net_values = [r.get("net_usdc", 0) for r in data_runs]
+    
     def percentile(values, p):
         if not values:
-            return None
+            return 0  # Never null
         sorted_vals = sorted(values)
         k = (len(sorted_vals) - 1) * p / 100
         f = int(k)
         c = f + 1 if f + 1 < len(sorted_vals) else f
         return round(sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f]), 4)
+    
     mae_p90 = percentile(mae_values, 90)
-    warn_rate_core = warn_count_core / len(runs) if runs else 0
+    warn_rate_core = warn_count_core / len(data_runs) if data_runs else 0
     low_sample_rate = low_sample_count / len(runs) if runs else 0
-    fail_rate = fail_count / len(runs) if runs else 0
+    fail_rate = fail_count / len(data_runs) if data_runs else 0
     fragile_p90 = percentile(fragile_rates, 90)
+    
+    in_warmup = len(runs) < 10 or total_signals < 30
+    
     agg_data["quick_stats"] = {
         "pass_count": pass_count,
         "fail_count": fail_count,
+        "no_data_count": no_data_count,
         "warn_count_core": warn_count_core,
         "low_sample_count": low_sample_count,
-        "pass_rate": round(pass_count / len(runs), 4) if runs else 0,
+        "pass_rate": round(pass_count / len(data_runs), 4) if data_runs else 0,
         "warn_rate_core": round(warn_rate_core, 4),
         "low_sample_rate": round(low_sample_rate, 4),
         "fail_rate": round(fail_rate, 4),
@@ -67,13 +127,13 @@ def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int 
         "fragile_rate_p90": fragile_p90,
         "mae_p90": mae_p90,
         "total_net_usdc": round(total_net, 4),
-        "avg_net_usdc": round(total_net / len(runs), 4) if runs else 0,
+        "avg_net_usdc": round(total_net / len(data_runs), 4) if data_runs else 0,
         "net_p10": percentile(net_values, 10),
         "mae_p50": percentile(mae_values, 50),
         "net_p50": percentile(net_values, 50),
         "net_p90": percentile(net_values, 90),
     }
-    agg_data["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    agg_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     agg_data["runs_included"] = len(runs)
     agg_data["runs_in_window"] = len(runs)
     agg_data["rolling_window"] = {
@@ -81,12 +141,18 @@ def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int 
         "current": len(runs),
         "min_runs": 10,
         "min_signals": 30,
-        "in_warmup": len(runs) < 10 or total_signals < 30,
+        "in_warmup": in_warmup,
     }
-    agg_data["agg_status"] = "PASS" if fail_rate == 0 else "FAIL"
+    # Agg status: PASS_WARMUP if warmup, else PASS/FAIL based on data runs only
+    if in_warmup:
+        agg_data["agg_status"] = "PASS_WARMUP"
+    else:
+        agg_data["agg_status"] = "PASS" if fail_rate == 0 else "FAIL"
+    
     with open(agg_path, "w") as f:
         json.dump(agg_data, f, indent=2)
-    print(f"[EMIT-AGG] Updated: {agg_path} (runs={len(runs)}, agg_status={agg_data['agg_status']})")
+    print(f"[EMIT-AGG] Updated: {agg_path} (runs={len(runs)}, data_runs={len(data_runs)}, agg_status={agg_data['agg_status']})")
+    return agg_data
 #!/usr/bin/env python3
 # PATH: scripts/ci_m4_execution_gate.py
 """
@@ -176,7 +242,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -2324,56 +2390,164 @@ def run_online_gate(
         run_summary = json.load(f)
 
     if artifact_mode == "rolling":
-        # Save rolling artifacts only
+        # Determine run mode (FIXTURE_OFFLINE, SMOKE_SIMULATOR = offline; REAL_ONLINE, ONLINE = online)
+        run_mode = run_summary.get("inputs", {}).get("run_mode", "") or run_summary.get("run_mode", "")
+        
+        # Fallback: try to get from truth_report
+        if not run_mode:
+            truth_files = list((run_dir / "reports").glob("truth_report_*.json"))
+            if truth_files:
+                with open(sorted(truth_files)[-1]) as f:
+                    truth_data = json.load(f)
+                run_mode = truth_data.get("run_mode", "")
+        
+        # Fallback: infer from run_dir name
+        if not run_mode:
+            run_dir_name = run_dir.name.lower()
+            if "offline" in run_dir_name or "fixture" in run_dir_name:
+                run_mode = "FIXTURE_OFFLINE"
+            elif "smoke" in run_dir_name or "simulator" in run_dir_name:
+                run_mode = "SMOKE_SIMULATOR"
+            else:
+                run_mode = "UNKNOWN"
+        
+        run_mode_upper = run_mode.upper()
+        # Offline patterns: FIXTURE, SMOKE, SIMULATOR
+        is_offline = any(x in run_mode_upper for x in ["FIXTURE", "SMOKE", "SIMULATOR", "OFFLINE"])
+        # Online patterns: explicitly REAL or ONLINE without OFFLINE
+        is_online = ("REAL" in run_mode_upper) and not is_offline
+        
         rolling_dir = REPO_ROOT / "data" / "runs" / "_rolling"
         rolling_dir.mkdir(parents=True, exist_ok=True)
-        # Remove source_* filenames in rolling mode (they may not exist on disk)
+        
+        # Fixed path for rolling agg (always exists)
+        agg_path = rolling_dir / "m4_stability_agg.json"
+        
+        # Update evidence with real git HEAD
+        git_sha = get_git_head_sha()
+        if "evidence" in run_summary:
+            run_summary["evidence"]["current_sha"] = git_sha
+            run_summary["evidence"]["ok"] = run_summary.get("source_sha", "") == git_sha
+            if not run_summary["evidence"]["ok"]:
+                run_summary["evidence"]["issues"] = run_summary["evidence"].get("issues", []) + [f"SHA_MISMATCH: source={run_summary.get('source_sha')}, HEAD={git_sha}"]
+        
+        # Determine status considering NO_DATA
+        status = run_summary.get("status", "UNKNOWN")
+        reasons = run_summary.get("reasons", [])
+        signals_count = run_summary.get("metrics", {}).get("signals_count", 0)
+        pinned_block = run_summary.get("inputs", {}).get("pinned_block", 0)
+        
+        # NO_DATA status for empty runs - clean semantic noise
+        if signals_count == 0:
+            status = "NO_DATA"
+            # Remove all FAIL_* from reasons - they are meaningless for NO_DATA
+            reasons = [r for r in reasons if not r.startswith("FAIL_")]
+            if "NO_DATA" not in reasons:
+                reasons = ["NO_DATA"] + reasons
+            # Keep only relevant warnings
+            reasons = [r for r in reasons if r in ["NO_DATA", "WARN_LOW_SAMPLE"]]
+            
+            run_summary["status"] = status
+            run_summary["reasons"] = reasons
+            run_summary["profit_status"] = "NO_DATA"
+            run_summary["drift_status"] = "NO_DATA"
+            # Clean profit/drift reasons too
+            run_summary["profit_reasons"] = ["NO_DATA"]
+            run_summary["drift_reasons"] = ["NO_DATA"]
+        
+        # Add block_is_synthetic flag for offline
+        if "inputs" in run_summary:
+            run_summary["inputs"]["block_is_synthetic"] = is_offline or pinned_block < 1000
+        
+        is_fail = status == "FAIL" or any(r.startswith("FAIL_") for r in reasons)
+        is_incident = is_fail  # NO_DATA is not incident
+        
+        # Remove source_* filenames in rolling mode
         if "inputs" in run_summary and isinstance(run_summary["inputs"], dict):
             for k in list(run_summary["inputs"].keys()):
                 if k.startswith("source_"):
                     run_summary["inputs"][k] = None
-        run_summary_latest_path = rolling_dir / "run_summary_latest.json"
-        with open(run_summary_latest_path, "w") as f:
+        
+        # STEP 1: Emit to aggregator FIRST (always)
+        agg_data = emit_to_aggregator_light(run_summary, agg_path)
+        
+        # STEP 2: Write run_summary_latest (only for ONLINE, or if no online exists)
+        if is_offline:
+            # Offline writes to separate file, does NOT overwrite online latest
+            run_summary_path = rolling_dir / "run_summary_latest_offline.json"
+            latest_file = "_latest_offline.json"
+        else:
+            run_summary_path = rolling_dir / "run_summary_latest.json"
+            latest_file = "_latest.json"
+        
+        with open(run_summary_path, "w") as f:
             json.dump(run_summary, f, indent=2)
-        # Emit to aggregator (light runs)
-        if emit_agg:
-            emit_to_aggregator_light(run_summary, emit_agg)
-        # Incident bundle persistence
-        status = run_summary.get("status", "UNKNOWN")
-        reasons = run_summary.get("reasons", [])
-        is_fail = status == "FAIL" or any(r.startswith("FAIL_") for r in reasons)
+        
+        # STEP 3: Incident bundle persistence (only for real incidents)
         incident_dir = None
-        if is_fail:
-            bundle_dict = {k: artifacts[k] if isinstance(artifacts[k], dict) else {} for k in ["run_summary", "execution_report", "truth_report", "signals", "scan"] if k in artifacts}
-            incident_dir = persist_incident_bundle(run_summary.get("run_id", datetime.utcnow().strftime("incident_%Y%m%d_%H%M%S")), bundle_dict)
+        if is_incident:
+            bundle_dict = {}
+            for k in ["run_summary", "execution_report", "truth_report", "signals", "scan"]:
+                if k in artifacts:
+                    val = artifacts[k]
+                    if isinstance(val, dict):
+                        bundle_dict[k] = val
+                    elif isinstance(val, Path) and val.exists():
+                        with open(val) as f:
+                            bundle_dict[k] = json.load(f)
+            incident_dir = persist_incident_bundle(
+                run_summary.get("run_id", datetime.now(timezone.utc).strftime("incident_%Y%m%d_%H%M%S")), 
+                bundle_dict
+            )
             cleanup_incidents(max_n=50, max_days=7)
-        # Update _latest.json
-        latest_path = rolling_dir / "_latest.json"
+        
+        # STEP 4: Update _latest.json LAST (always consistent)
+        latest_path = rolling_dir / latest_file
+        
+        # Compute relative paths from rolling_dir
+        def rel_path(p: Path) -> str:
+            try:
+                return str(p.relative_to(rolling_dir.parent))  # Relative to data/runs
+            except ValueError:
+                return p.name  # Fallback to just filename
+        
+        # Determine agg_reasons based on warmup state
+        agg_reasons = []
+        rolling_window = agg_data.get("rolling_window", {})
+        if rolling_window.get("in_warmup", True):
+            if agg_data.get("runs_in_window", 0) < rolling_window.get("min_runs", 5):
+                agg_reasons.append("WARMUP_MIN_RUNS")
+            if agg_data.get("quick_stats", {}).get("total_signals", 0) < rolling_window.get("min_signals", 10):
+                agg_reasons.append("WARMUP_MIN_SIGNALS")
+        
         latest_data = {
-            "schema_version": "m4:latest:v1.1",
-            "updated_at": datetime.utcnow().isoformat() + "Z",
-            "agg_status": run_summary.get("status", "UNKNOWN"),
-            "runs_in_window": None,  # filled by aggregator
-            "in_warmup": None,
-            "total_signals_in_window": None,
+            "schema_version": "m4:latest:v1.3",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "git_sha": git_sha,
+            "latest_mode": "ONLINE" if is_online else "OFFLINE",
+            "latest_kind": "INCIDENT" if is_incident else "NORMAL",
+            "run_status": status,
+            "threshold_profile_name": profile,
+            "agg_status": agg_data.get("agg_status", "UNKNOWN"),
+            "agg_reasons": agg_reasons,
+            "runs_in_window": agg_data.get("runs_in_window", 0),
+            "in_warmup": agg_data.get("rolling_window", {}).get("in_warmup", True),
+            "total_signals_in_window": agg_data.get("quick_stats", {}).get("total_signals", 0),
             "paths": {
-                "run_summary_latest": str(run_summary_latest_path),
-                "rolling_agg": str(emit_agg) if emit_agg else None,
-                "last_incident": str(incident_dir / "run_summary.json") if incident_dir else None,
+                "run_summary_latest": rel_path(run_summary_path),
+                "rolling_agg": rel_path(agg_path),
+                "last_incident": rel_path(incident_dir / "run_summary.json") if incident_dir else None,
             },
         }
-        # Try to fill aggregator stats
-        if emit_agg and Path(emit_agg).exists():
-            with open(emit_agg) as f:
-                agg = json.load(f)
-            latest_data["agg_status"] = agg.get("agg_status")
-            latest_data["runs_in_window"] = agg.get("runs_included")
-            latest_data["in_warmup"] = agg.get("rolling_window", {}).get("in_warmup")
-            latest_data["total_signals_in_window"] = agg.get("quick_stats", {}).get("total_signals")
         with open(latest_path, "w") as f:
             json.dump(latest_data, f, indent=2)
-        print(f"[ROLLING] Updated: {run_summary_latest_path}")
-        print(f"[ROLLING] Latest pointer: {latest_path}")
+        
+        print(f"[ROLLING] Mode: {'ONLINE' if is_online else 'OFFLINE'}, Status: {status}")
+        print(f"[ROLLING] Updated: {run_summary_path.name}")
+        print(f"[ROLLING] Aggregator: {agg_path.name} (runs={agg_data.get('runs_in_window', 0)})")
+        print(f"[ROLLING] Latest: {latest_file}")
+        if is_incident:
+            print(f"[ROLLING] Incident: {incident_dir}")
         return 0
     else:
         # Legacy full mode

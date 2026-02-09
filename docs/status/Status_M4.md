@@ -1,9 +1,9 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
-**Updated**: 2026-02-09 20:00 UTC  
-**Evidence SHA**: `cfddcca`  
-**Gate Version**: `ci_m4_execution_gate.py` v1.7.0  
+**Updated**: 2026-02-09 20:58 UTC  
+**Evidence SHA**: `dd8ae9a`  
+**Gate Version**: `ci_m4_execution_gate.py` v1.8.0  
 **Tests**: 562 passed, 1 skipped
 
 ## 🛡️ Artifact Retention & Disk Policy (v1.8.0)
@@ -13,9 +13,11 @@
 ### Artifact Retention Rules
 
 - **Rolling artifacts only:**
-  - `data/runs/_rolling/_latest.json`
+  - `data/runs/_rolling/_latest.json` (online runs)
+  - `data/runs/_rolling/_latest_offline.json` (offline runs - separate)
   - `data/runs/_rolling/m4_stability_agg.json`
-  - `data/runs/_rolling/run_summary_latest.json`
+  - `data/runs/_rolling/run_summary_latest.json` (online)
+  - `data/runs/_rolling/run_summary_latest_offline.json` (offline)
 - **Per-run artifacts:**
   - Written to `data/runs/_incidents/<run_id>/` only on incident (FAIL)
   - All scan/truth/signals/execution artifacts are generated in-memory/tmp unless incident
@@ -28,12 +30,27 @@
 - **Golden fixtures:**
   - Only committed under `docs/artifacts/` for reproducible tests
 
+### Offline vs Online Separation
+
+| Mode | Latest File | Summary File | Overwrites Online? |
+|------|-------------|--------------|-------------------|
+| ONLINE | `_latest.json` | `run_summary_latest.json` | Yes (online only) |
+| OFFLINE | `_latest_offline.json` | `run_summary_latest_offline.json` | No (separate files) |
+
+### NO_DATA Status (v1.8.0)
+
+- When `signals_count == 0`, status is `NO_DATA` instead of `FAIL`
+- `NO_DATA` is not counted as incident (no per-run artifacts written)
+- `profit_reasons` and `drift_reasons` are set to `["NO_DATA"]` (no FAIL_* noise)
+
 ### Example Directory Structure
 
 ```
 data/runs/_rolling/_latest.json
+data/runs/_rolling/_latest_offline.json
 data/runs/_rolling/m4_stability_agg.json
 data/runs/_rolling/run_summary_latest.json
+data/runs/_rolling/run_summary_latest_offline.json
 data/runs/_incidents/<run_id>/run_summary.json  # Only for FAIL
 docs/artifacts/ci_m4_gate_offline_YYYYMMDD/     # Golden fixtures only
 ```
@@ -140,9 +157,18 @@ mae_no_slippage = 0  # All drift explained by slippage ✅
 | Artifact | Type | Schema | Purpose |
 |----------|------|--------|---------|
 | `stability_summary_*.json` | Single-run | `m4:stability:v1.2` | One execution gate run |
-| `run_summary_*.json` | Single-run | `run:summary:v1.3` | Canonical single-run source of truth |
+| `run_summary_*.json` | Single-run | `run:summary:v1.4` | Canonical single-run source of truth |
 | `m4_stability_agg.json` | Multi-run | `m4:stability_agg:v1.3` | Rolling window aggregator |
-| `_latest.json` | Pointer | `m4:latest:v1.0` | Points to latest run for continuous scan |
+| `_latest.json` | Pointer | `m4:latest:v1.3` | Points to latest run for continuous scan |
+| `_latest_offline.json` | Pointer | `m4:latest:v1.3` | Offline runs (separate from online) |
+
+**New fields in `_latest.json` v1.3:**
+- `latest_mode`: `ONLINE` or `OFFLINE`
+- `latest_kind`: `NORMAL` or `INCIDENT`
+- `run_status`: `PASS`, `FAIL`, `NO_DATA`
+- `threshold_profile_name`: Profile used for thresholds
+- `agg_reasons`: Array with `WARMUP_MIN_RUNS`, `WARMUP_MIN_SIGNALS`
+- `paths`: Relative paths from `data/runs/`
 
 **⚠️ "summary" = per-run artifact, "agg" = multi-run aggregate**
 
