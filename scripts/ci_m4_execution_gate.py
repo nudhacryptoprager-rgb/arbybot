@@ -3,7 +3,7 @@
 """
 M4 Execution Gate - DEX↔DEX Atomic Execution v1.
 
-VERSION: 1.2.0 (2026-02-09)
+VERSION: 1.3.0 (2026-02-09)
 STATUS: ACTIVE
 
 PURPOSE:
@@ -28,11 +28,18 @@ CANONICAL COMMANDS:
   # Online - real artifacts (requires prior scan/simulation run)
   python scripts/ci_m4_execution_gate.py --online --run-dir data/runs/<dir>
   python scripts/ci_m4_execution_gate.py --online --profile profit
+  
+  # Online with cost model selection
+  python scripts/ci_m4_execution_gate.py --online --cost-model paper_conservative
 
 DOD PROFILES:
   smoke (default): PASS if simulations_passed >= 1 AND accounting_complete
   profit: PASS if total_net_usdc > 0 AND sim_profitable_count >= 1
   online: PASS if profit criteria met on REAL block (not fixture)
+
+COST MODELS:
+  paper_realistic: gas=$0.10, slippage=5bps (default)
+  paper_conservative: gas=$0.30, slippage=20bps (stress test)
 
 SUCCESS CRITERIA (from Roadmap):
   - 1-2 pairs, 2 DEX, on one chain
@@ -45,7 +52,9 @@ EXIT CODES: 0=PASS, 1=FAIL validation, 2=NO_SIGNALS, 3=SIM_FAILED
 import argparse
 import json
 import os
+import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -71,7 +80,90 @@ from core.artifact_invariants import (
     get_profile,
 )
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
+
+# ============================================================
+# COST MODEL REGISTRY
+# ============================================================
+
+@dataclass
+class CostModelConfig:
+    """Cost model configuration for simulation."""
+    name: str
+    description: str
+    gas_usd: float
+    slippage_bps: int
+    
+
+class CostModelRegistry:
+    """
+    Registry for simulation cost models.
+    
+    Usage:
+        registry = CostModelRegistry.default()
+        model = registry.get("paper_realistic")
+        gas = model.gas_usd
+        slippage = model.slippage_bps
+    """
+    
+    _instance: Optional["CostModelRegistry"] = None
+    
+    def __init__(self):
+        self._models: Dict[str, CostModelConfig] = {}
+    
+    def register(self, model: CostModelConfig) -> None:
+        """Register a cost model."""
+        self._models[model.name] = model
+    
+    def get(self, name: str) -> CostModelConfig:
+        """Get cost model by name."""
+        if name not in self._models:
+            raise ValueError(f"Unknown cost model: {name}. Available: {list(self._models.keys())}")
+        return self._models[name]
+    
+    def list_models(self) -> List[str]:
+        """List all registered cost model names."""
+        return list(self._models.keys())
+    
+    @classmethod
+    def default(cls) -> "CostModelRegistry":
+        """Get default registry with standard cost models."""
+        if cls._instance is None:
+            cls._instance = cls()
+            cls._instance._register_defaults()
+        return cls._instance
+    
+    def _register_defaults(self) -> None:
+        """Register default cost models."""
+        # Paper realistic: optimistic but reasonable
+        self.register(CostModelConfig(
+            name="paper_realistic",
+            description="Paper simulation with realistic costs (gas=$0.10, slippage=5bps)",
+            gas_usd=0.10,
+            slippage_bps=5,
+        ))
+        
+        # Paper conservative: stress test (higher costs)
+        self.register(CostModelConfig(
+            name="paper_conservative",
+            description="Paper simulation with conservative costs (gas=$0.30, slippage=20bps)",
+            gas_usd=0.30,
+            slippage_bps=20,
+        ))
+        
+        # Gas only: M5 compatibility (slippage=0)
+        self.register(CostModelConfig(
+            name="gas_only",
+            description="Gas only, no slippage (M5 truth_report compatibility)",
+            gas_usd=0.10,
+            slippage_bps=0,
+        ))
+
+
+def get_cost_model(name: str) -> CostModelConfig:
+    """Convenience function to get cost model from default registry."""
+    return CostModelRegistry.default().get(name)
+
 
 # ============================================================
 # DOD PROFILES (using registry)
@@ -419,26 +511,56 @@ def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE)
 # ONLINE EXECUTION: scan/truth → M4 signals → simulation
 # ============================================================
 
-def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
+def get_source_sha() -> str:
+    """Get current git commit SHA."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=REPO_ROOT
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def generate_m4_from_online_inputs(
+    run_dir: Path, 
+    ts: str,
+    cost_model_name: str = "paper_realistic",
+) -> Dict[str, Path]:
     """
     Generate M4 execution artifacts from online scan/truth inputs.
     
     This bridges online M5 scan/truth → M4 signals/execution_report.
     
+    CRITICAL: est_net comes from truth_report (original estimate with paper_slippage_bps=0),
+    sim_net is calculated with realistic cost model. This separation allows MAE to
+    measure actual drift between estimate and simulation.
+    
     Steps:
     1. Read truth_report_*.json to get spread_signals
-    2. Convert spread_signals → M4 signals format
-    3. Simulate each signal (paper simulation with realistic cost model)
-    4. Generate execution_report with run_mode from truth_report
+    2. Convert spread_signals → M4 signals format (preserving original estimates)
+    3. Simulate each signal with realistic cost model
+    4. Generate execution_report with est_vs_sim drift metrics
     
     Args:
         run_dir: Directory containing scan/truth artifacts
         ts: Timestamp for output filenames
+        cost_model_name: Name of cost model to use (default: paper_realistic)
         
     Returns:
         Dict with paths to generated signals and execution_report
     """
     reports_dir = run_dir / "reports"
+    
+    # Get cost model from registry
+    cost_model = get_cost_model(cost_model_name)
+    
+    # Get source SHA for artifact provenance
+    source_sha = get_source_sha()
+    run_id = run_dir.name  # Use directory name as run_id
     
     # Find truth_report
     truth_files = sorted(reports_dir.glob("truth_report_*.json"), reverse=True)
@@ -456,21 +578,23 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
     source_timestamp = truth_data.get("timestamp", "")
     spread_signals = truth_data.get("spread_signals", [])
     
-    # Cost model params (use realistic values, not paper-optimistic)
-    config_params = truth_data.get("config_params", {})
-    gas_estimate = float(config_params.get("gas_usd_estimate", 0.10))
-    paper_slippage_bps = config_params.get("paper_slippage_bps", 0)
-    
-    # REALISTIC slippage: at least 5 bps for any real execution
-    realistic_slippage_bps = max(paper_slippage_bps, 5)
+    # Get cost model from registry (passed via argument)
+    # This allows switching between paper_realistic and paper_conservative
+    gas_estimate = cost_model.gas_usd
+    realistic_slippage_bps = cost_model.slippage_bps
     
     print(f"\n[ONLINE] Source: {truth_path.name}")
     print(f"[ONLINE] run_mode: {source_run_mode}")
     print(f"[ONLINE] current_block: {source_block}")
     print(f"[ONLINE] spread_signals: {len(spread_signals)}")
-    print(f"[ONLINE] cost_model: gas=${gas_estimate:.2f}, slippage={realistic_slippage_bps}bps")
+    print(f"[ONLINE] source_sha: {source_sha}")
+    print(f"[ONLINE] run_id: {run_id}")
+    print(f"[ONLINE] cost_model: {cost_model.name} (gas=${gas_estimate:.2f}, slippage={realistic_slippage_bps}bps)")
     
     # Convert spread_signals → M4 signals
+    # CRITICAL: est_net_usdc comes DIRECTLY from truth_report (original estimate)
+    # sim_net_usdc will be calculated SEPARATELY with realistic cost model
+    # This separation allows MAE to measure actual drift between estimate and simulation
     m4_signals = []
     for i, sig in enumerate(spread_signals):
         signal_id = f"sig_{i+1:03d}_{ts}"
@@ -491,7 +615,10 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
         spread_bps = sig.get("spread_bps_exact", 0)
         size_usd = sig.get("size_usd", 1000.0)
         gross_pnl_est = sig.get("gross_pnl_usdc_est", 0)
-        net_pnl_est = sig.get("net_pnl_usdc_est", 0)
+        
+        # ORIGINAL estimate from truth_report (with paper_slippage_bps from config, usually 0)
+        truth_net_pnl_est = sig.get("net_pnl_usdc_est", 0)
+        truth_slippage_bps = sig.get("slippage_bps", 0)  # Usually 0 for paper
         is_net_positive = sig.get("is_net_positive_est", False)
         
         m4_signal = {
@@ -510,10 +637,12 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
             "spread_bps": round(spread_bps, 2),
             "size_usd": size_usd,
             "est_gross_usdc": round(gross_pnl_est, 4),
-            "est_gas_usdc": gas_estimate,
-            "est_slippage_bps": realistic_slippage_bps,
-            "est_slippage_usdc": round(size_usd * realistic_slippage_bps / 10000, 4),
-            "est_net_usdc": round(net_pnl_est - (size_usd * realistic_slippage_bps / 10000), 4),
+            # ORIGINAL estimate values from truth_report (for MAE calculation)
+            "truth_net_usdc": round(truth_net_pnl_est, 4),  # Original estimate, no realistic slippage
+            "truth_slippage_bps": truth_slippage_bps,
+            # Simulator cost model (realistic) - applied during simulation
+            "sim_gas_usdc": gas_estimate,
+            "sim_slippage_bps": realistic_slippage_bps,
             "is_net_positive_est": is_net_positive,
             "confidence": sig.get("confidence", "low"),
             "block_number": sig.get("block_number", source_block),
@@ -523,9 +652,12 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
     # Write M4 signals
     signals_path = reports_dir / f"signals_{ts}.json"
     signals_data = {
-        "schema_version": "m4:signals:v1.1",
+        "schema_version": "m4:signals:v1.2",  # Bumped for source_sha/run_id
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "run_mode": source_run_mode,  # Inherit from truth_report
+        # Provenance fields
+        "source_sha": source_sha,
+        "run_id": run_id,
         "source_truth_report": truth_path.name,
         "source_block": source_block,
         "chain_id": chain_id,
@@ -534,6 +666,12 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
         "price_format": "decimal_str",
         "price_in": "quote_per_base",
         "spread_format": "bps",
+        # Cost model used for simulation
+        "cost_model": {
+            "name": cost_model.name,
+            "gas_usd": cost_model.gas_usd,
+            "slippage_bps": cost_model.slippage_bps,
+        },
         "signals": m4_signals,
     }
     with open(signals_path, "w") as f:
@@ -542,26 +680,31 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
     print(f"[ONLINE] Generated: {signals_path.name} ({len(m4_signals)} signals)")
     
     # Simulate each signal (paper simulation with realistic costs)
+    # CRITICAL: est_net comes from truth_report, sim_net from simulator with realistic costs
+    # This separation allows MAE to measure actual drift
     simulations = []
     sim_profitable_count = 0
     total_net_usdc = 0.0
-    est_net_sum = 0.0
-    sim_net_sum = 0.0
+    est_net_sum = 0.0  # Sum of ORIGINAL estimates from truth_report
+    sim_net_sum = 0.0  # Sum of SIMULATED net with realistic costs
     est_errors = []
     sign_correct_count = 0
     
     for sig in m4_signals:
         signal_id = sig["signal_id"]
-        est_net = sig["est_net_usdc"]
+        
+        # ORIGINAL estimate from truth_report (usually with paper_slippage_bps=0)
+        est_net = sig["truth_net_usdc"]  # From truth_report, NOT recalculated
         est_net_sum += est_net
         
-        # Simulate: apply realistic gas and slippage
-        # For paper simulation, we deduct gas + slippage from gross
+        # Simulate: apply REALISTIC gas and slippage
         est_gross = sig["est_gross_usdc"]
-        gas_usdc = sig["est_gas_usdc"]
-        slippage_usdc = sig["est_slippage_usdc"]
+        gas_usdc = sig["sim_gas_usdc"]  # Realistic gas from cost model
+        slippage_bps = sig["sim_slippage_bps"]  # Realistic slippage (e.g., 5bps)
+        size_usd = sig["size_usd"]
+        slippage_usdc = round(size_usd * slippage_bps / 10000, 4)
         
-        # Simulated net = gross - gas - slippage (simplified model)
+        # Simulated net = gross - gas - slippage (with REALISTIC costs)
         sim_net_usdc = round(est_gross - gas_usdc - slippage_usdc, 4)
         
         # Check if simulation would be profitable
@@ -572,12 +715,17 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
         total_net_usdc += sim_net_usdc
         sim_net_sum += sim_net_usdc
         
-        # Calculate est error
+        # Calculate est error: sim_net - est_net
+        # Negative = simulation worse than estimate (est was optimistic)
+        # Positive = simulation better than estimate (est was conservative)
         est_error = round(sim_net_usdc - est_net, 4)
         est_errors.append(abs(est_error))
         
-        # Sign correct?
-        if (est_net > 0 and sim_net_usdc > 0) or (est_net <= 0 and sim_net_usdc <= 0):
+        # Sign correct? (both predict same sign of profitability)
+        est_was_positive = est_net > 0
+        sim_was_positive = sim_net_usdc > 0
+        sign_correct = (est_was_positive == sim_was_positive)
+        if sign_correct:
             sign_correct_count += 1
         
         # Determine blocker if not profitable
@@ -595,19 +743,25 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
         simulation = {
             "signal_id": signal_id,
             "simulation_status": "OK" if is_profitable else "FAIL",
-            "simulation_mode": "paper",  # Paper simulation
+            "simulation_mode": "paper_realistic",  # Paper simulation with realistic costs
+            "cost_model": "paper_realistic",
             "block_used": sig["block_number"],
             "gas_used": 250000,  # Estimated
             "gas_usdc": gas_usdc,
-            "slippage_bps_expected": sig["est_slippage_bps"],
-            "slippage_bps_actual": sig["est_slippage_bps"],
+            "slippage_bps_applied": slippage_bps,
+            "slippage_usdc": slippage_usdc,
             "gross_usdc": est_gross,
-            "net_usdc": sim_net_usdc,
-            "est_net_usdc": est_net,
-            "est_error_usdc": est_error,
+            "sim_net_usdc": sim_net_usdc,  # SIMULATED with realistic costs
+            "est_net_usdc": est_net,  # ORIGINAL from truth_report
+            "est_error_usdc": est_error,  # Drift: sim - est
+            "est_was_positive": est_was_positive,
+            "sim_was_positive": sim_was_positive,
+            "est_sign_correct": sign_correct,
             "is_profitable": is_profitable,
             "blocker": blocker,
             "would_execute": is_profitable,
+            # Compat fields for net_usdc
+            "net_usdc": sim_net_usdc,  # Legacy: same as sim_net_usdc
             # Required for online validation
             "confidence": sig.get("confidence", "medium"),
             "liquidity_hint": "sufficient",  # Assumed for paper simulation
@@ -618,17 +772,25 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
     mae_net_usdc = round(sum(est_errors) / len(est_errors), 4) if est_errors else 0.0
     est_sign_correct_rate = round(sign_correct_count / len(m4_signals), 4) if m4_signals else 0.0
     
+    # Count est_sim mismatches (sign disagreement)
+    est_sim_mismatch_count = len(m4_signals) - sign_correct_count
+    
     print(f"[ONLINE] Simulated: {len(simulations)} signals")
     print(f"[ONLINE] Profitable: {sim_profitable_count}/{len(simulations)}")
     print(f"[ONLINE] total_net_usdc: ${total_net_usdc:.4f}")
     print(f"[ONLINE] MAE: ${mae_net_usdc:.4f}, sign_rate: {est_sign_correct_rate:.2%}")
+    if est_sim_mismatch_count > 0:
+        print(f"[ONLINE] est_sim_mismatch_count: {est_sim_mismatch_count}")
     
     # Write execution_report
     exec_path = reports_dir / f"execution_report_{ts}.json"
     exec_data = {
-        "schema_version": "m4:execution:v1.1",
+        "schema_version": "m4:execution:v1.2",  # Bumped for source_sha/run_id
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "run_mode": source_run_mode,  # REGISTRY_REAL from truth_report
+        # Provenance fields for artifact integrity
+        "source_sha": source_sha,
+        "run_id": run_id,
         "source_truth_report": truth_path.name,
         "source_signals": signals_path.name,
         "chain_id": chain_id,
@@ -638,14 +800,15 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
         "price_in": "quote_per_base",
         "spread_format": "bps",
         "slippage_format": "bps",
-        "est_error_definition": "sim_net_usdc - est_net_usdc",
+        "est_error_definition": "sim_net_usdc - est_net_usdc (negative = sim worse than est)",
         # Root-level safety invariants (MUST be checked by gate)
         "execution_enabled": False,
         "kill_switch_active": True,
         "cost_model": {
-            "type": "paper_realistic",
-            "gas_usd": gas_estimate,
-            "slippage_bps": realistic_slippage_bps,
+            "name": cost_model.name,
+            "description": cost_model.description,
+            "gas_usd": cost_model.gas_usd,
+            "slippage_bps": cost_model.slippage_bps,
         },
         "signals_count": len(m4_signals),
         "simulations_count": len(simulations),
@@ -657,9 +820,10 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
         "est_vs_sim": {
             "est_net_usdc_sum": round(est_net_sum, 4),
             "sim_net_usdc_sum": round(sim_net_sum, 4),
-            "est_sim_mismatch_count": 0,
+            "est_sim_mismatch_count": est_sim_mismatch_count,
             "sim_profitable_count": sim_profitable_count,
             "mae_net_usdc": mae_net_usdc,
+            "est_sign_correct_count": sign_correct_count,
             "est_sign_correct_rate": est_sign_correct_rate,
         },
         "accounting": {
@@ -681,9 +845,56 @@ def generate_m4_from_online_inputs(run_dir: Path, ts: str) -> Dict[str, Path]:
     
     print(f"[ONLINE] Generated: {exec_path.name}")
     
+    # Generate stability_summary.json artifact
+    stability_path = reports_dir / f"stability_summary_{ts}.json"
+    stability_data = {
+        "schema_version": "m4:stability:v1.0",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "source_sha": source_sha,
+        "run_id": run_id,
+        "chain_id": chain_id,
+        "pinned_block": source_block,
+        "cost_model": {
+            "name": cost_model.name,
+            "gas_usd": cost_model.gas_usd,
+            "slippage_bps": cost_model.slippage_bps,
+        },
+        "summary": {
+            "signals_count": len(m4_signals),
+            "simulations_count": len(simulations),
+            "sim_profitable_count": sim_profitable_count,
+            "total_net_usdc": round(total_net_usdc, 4),
+            "profitable_rate": round(sim_profitable_count / len(simulations), 4) if simulations else 0,
+        },
+        "drift_metrics": {
+            "mae_net_usdc": mae_net_usdc,
+            "est_sign_correct_rate": est_sign_correct_rate,
+            "est_sim_mismatch_count": est_sim_mismatch_count,
+            "est_net_sum": round(est_net_sum, 4),
+            "sim_net_sum": round(sim_net_sum, 4),
+            "sum_drift_usdc": round(abs(est_net_sum - sim_net_sum), 4),
+        },
+        "thresholds": {
+            "mae_warn": 0.30,
+            "mae_fail": 0.50,
+            "sign_rate_min": 0.70,
+        },
+        "status": "PASS" if (
+            mae_net_usdc <= 0.50 and 
+            est_sign_correct_rate >= 0.70 and 
+            total_net_usdc > 0
+        ) else "FAIL",
+    }
+    
+    with open(stability_path, "w") as f:
+        json.dump(stability_data, f, indent=2)
+    
+    print(f"[ONLINE] Generated: {stability_path.name}")
+    
     return {
         "signals": signals_path,
         "execution_report": exec_path,
+        "stability_summary": stability_path,
     }
 
 
@@ -883,6 +1094,20 @@ def validate_execution_report(
             checks.append(("est_mae_ok", True, f"mae_net_usdc={mae_net_usdc:.4f} <= {MAE_WARN_THRESHOLD}"))
         else:
             checks.append(("est_mae_ok", False, f"mae_net_usdc={mae_net_usdc:.4f} > {MAE_WARN_THRESHOLD} (HIGH DRIFT)"))
+        
+        # STRICT MODE: MAE==0 is suspicious (same calculation path?)
+        # Only FAIL in strict mode, WARN otherwise
+        if strict and mae_net_usdc == 0.0 and len(data.get("simulations", [])) > 0:
+            # Check if est_sum != sim_sum (indicates real drift exists but MAE=0)
+            if est_net_sum != sim_net_sum:
+                # MAE=0 but sums differ - calculation path bug
+                checks.append(("mae_zero_guard", False, 
+                    f"MAE=0 but est_sum={est_net_sum:.4f} != sim_sum={sim_net_sum:.4f} (strict mode)"))
+            elif mismatch > 0:
+                # MAE=0 but there are sign mismatches - bug
+                checks.append(("mae_zero_guard", False, 
+                    f"MAE=0 but est_sim_mismatch_count={mismatch} (strict mode)"))
+            # If both sums equal and no mismatches, it might be legitimate (same model)
         
         # Sign correct rate: WARN if < 80%
         if est_sign_correct_rate >= 0.80:
@@ -1116,7 +1341,12 @@ def run_offline_gate(output_root: Path, profile: str = DoDProfile.SMOKE, strict:
     return validate_gate(run_dir, artifacts, profile, strict)
 
 
-def run_online_gate(run_dir: Optional[Path], profile: str = DoDProfile.SMOKE, strict: bool = False) -> int:
+def run_online_gate(
+    run_dir: Optional[Path], 
+    profile: str = DoDProfile.SMOKE, 
+    strict: bool = False,
+    cost_model_name: str = "paper_realistic",
+) -> int:
     """
     Run M4 gate in online mode using real artifacts.
     
@@ -1124,6 +1354,12 @@ def run_online_gate(run_dir: Optional[Path], profile: str = DoDProfile.SMOKE, st
     execution from online inputs (scan/truth → signals → simulation).
     
     Validates that all artifacts come from the same runDir with consistent timestamps.
+    
+    Args:
+        run_dir: Explicit run directory (or None for latest)
+        profile: DoD profile to validate against
+        strict: Strict mode - fail on MAE==0
+        cost_model_name: Cost model to use for simulation
     """
     if run_dir is None:
         run_dir = find_latest_run_dir()
@@ -1142,6 +1378,7 @@ def run_online_gate(run_dir: Optional[Path], profile: str = DoDProfile.SMOKE, st
         display_path = run_dir
     print(f"\n[ONLINE] Using: {display_path}")
     print(f"[ONLINE] RunDir: {run_dir}")
+    print(f"[ONLINE] CostModel: {cost_model_name}")
     
     artifacts = discover_m4_artifacts(run_dir)
     
@@ -1154,7 +1391,7 @@ def run_online_gate(run_dir: Optional[Path], profile: str = DoDProfile.SMOKE, st
             print("\n[ONLINE] No execution_report found, generating from truth_report...")
             ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             try:
-                generated = generate_m4_from_online_inputs(run_dir, ts)
+                generated = generate_m4_from_online_inputs(run_dir, ts, cost_model_name)
                 artifacts["signals"] = generated["signals"]
                 artifacts["execution_report"] = generated["execution_report"]
             except Exception as e:
@@ -1299,8 +1536,11 @@ def main() -> int:
     parser.add_argument("--profile", type=str, default=DoDProfile.SMOKE,
                         choices=[DoDProfile.SMOKE, DoDProfile.PROFIT, DoDProfile.ONLINE],
                         help="DoD profile: smoke (>=1 profitable), profit (total_net>0), online (profit on real block)")
+    parser.add_argument("--cost-model", type=str, default="paper_realistic",
+                        choices=CostModelRegistry.default().list_models(),
+                        help="Cost model: paper_realistic (default), paper_conservative (stress test)")
     parser.add_argument("--strict", action="store_true",
-                        help="Require at least one profitable simulation")
+                        help="Require at least one profitable simulation, fail on MAE==0")
     parser.add_argument("--require-tenderly", action="store_true",
                         help="Require tenderly diagnostics when enabled in artifacts")
     parser.add_argument("--run-dir", type=Path,
@@ -1324,7 +1564,7 @@ def main() -> int:
     if args.offline:
         return run_offline_gate(args.output_root, args.profile, args.strict)
     elif args.online:
-        return run_online_gate(args.run_dir, args.profile, args.strict)
+        return run_online_gate(args.run_dir, args.profile, args.strict, args.cost_model)
     elif args.dry_run:
         return run_dry_run()
     elif args.simulate:

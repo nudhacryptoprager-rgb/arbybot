@@ -481,9 +481,11 @@ SUPPORTED_SCHEMAS = {
     "3.2.0": "scan_report",
     "3.1.0": "scan_report",
     "3.0.0": "scan_report",
-    # M4 execution artifacts
+    # M4 execution artifacts (v1.2 = source_sha/run_id support)
+    "m4:signals:v1.2": "signals",
     "m4:signals:v1.1": "signals",
     "m4:signals:v1": "signals",
+    "m4:execution:v1.2": "execution_report",
     "m4:execution:v1.1": "execution_report",
     "m4:execution:v1": "execution_report",
 }
