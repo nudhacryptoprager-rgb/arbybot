@@ -17,17 +17,38 @@ This directory contains golden fixtures for the M4 Execution Gate.
 | `execution_report_golden.json` | v1.0 execution report (legacy) |
 | `execution_report_golden_v1_1.json` | v1.1 execution report (current) |
 
-## Canonical Reproduction Command
+## Canonical Commands (Expected Results)
+
+### SMOKE Profile — Expected: PASS ✅
 
 ```bash
-# Generate offline fixtures (SMOKE profile)
 python scripts/ci_m4_execution_gate.py --offline --profile smoke
+```
 
-# Validate with PROFIT profile (stricter)
+**Expected Output:**
+```
+RESULT: PASS (profile=smoke)
+  simulations_passed: 1
+  total_net_usd: -0.29
+```
+
+**Why PASS:** SMOKE вимагає лише `simulations_passed >= 1` + `accounting_complete`.
+
+### PROFIT Profile — Expected: FAIL ❌
+
+```bash
 python scripts/ci_m4_execution_gate.py --offline --profile profit
 ```
 
-**Expected Output:** `RESULT: PASS (profile=smoke)`
+**Expected Output:**
+```
+RESULT: FAIL (1 failures)
+  - total_net_usd=-0.29 <= 0 (UNPROFITABLE)
+```
+
+**Why FAIL:** PROFIT вимагає `total_net_usd > 0`. Golden має 1 profitable (+$0.38) і 1 unprofitable (-$0.67) = **сумарно -$0.29**.
+
+---
 
 **RunDir Pattern:** `data/runs/ci_m4_gate_offline_YYYYMMDD_HHMMSS/`
 

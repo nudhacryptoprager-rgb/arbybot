@@ -1,8 +1,21 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
-**Status**: 🚧 **IN PROGRESS**  
+**Status**: 🚧 **IN PROGRESS** (M4-smoke ✅, M4-profit ⏳)  
 **Updated**: 2026-02-09  
 **Predecessor**: M5_0 (✅ DONE), M5 (FROZEN)
+
+---
+
+## DoD Profile Status
+
+| Profile | Status | Criterion |
+|---------|--------|-----------|
+| **smoke** | ✅ **DONE** | `simulations_passed >= 1` AND `accounting_complete` AND `blocks_consistent` |
+| **profit** | ⏳ IN PROGRESS | `total_net_usd > 0` AND `sim_profitable_count >= 1` |
+
+**Чому profit ще не PASS:**  
+Golden має 1 profitable (+$0.38) і 1 unprofitable (-$0.67) = **сумарно -$0.29**.  
+Потрібен prefilter або top-K щоб не симулювати завідомо збиткові.
 
 ---
 
@@ -10,8 +23,8 @@
 
 | Artifact | Version | Description |
 |----------|---------|-------------|
-| signals | `m4:signals:v1.1` | With base/quote, price_in, micro-bps |
-| execution_report | `m4:execution:v1.1` | Numerical USD, block consistency |
+| signals | `m4:signals:v1.1` | base/quote, price_in, micro-bps, PnL breakdown |
+| execution_report | `m4:execution:v1.1` | Numerical USD (rounded), block consistency, kill_switch |
 
 ---
 
@@ -19,27 +32,30 @@
 
 ### M4 Execution Gate v1.1.0 Released
 
-**Completed today:**
+**Completed:**
 - ✅ `ci_m4_execution_gate.py` v1.1.0 - production-quality gate
 - ✅ **DoD Profiles**: `--profile smoke|profit`
-  - SMOKE: ≥1 profitable simulation + accounting complete
+  - SMOKE: ≥1 profitable simulation + accounting complete + blocks_consistent
   - PROFIT: total_net_usd > 0 + sim_profitable_count ≥ 1
 - ✅ **Block Consistency Invariant**: pinned_block in header, block_used in each simulation
-- ✅ **Numerical USD fields**: gas_usd, slippage_usd, net_usd as numbers
+- ✅ **Numerical USD fields**: rounded to 4 digits (no float artifacts)
 - ✅ **Price semantics**: base_token, quote_token, price_in="quote_per_base"
 - ✅ **Spread as micro-bps**: spread_bps_micro (integer, 1 bps = 10000)
+- ✅ **Slippage as real bps**: slippage_bps_actual (0-10000), slippage_format="bps"
 - ✅ **PnL breakdown**: gross_pnl, gas, slippage, net per signal
-- ✅ **est_vs_sim metrics**: track estimate vs simulation accuracy
+- ✅ **Expanded est_vs_sim**: est_net_usd, sim_net_usd, mae_net_usd, est_sign_correct_rate
+- ✅ **Route in simulations**: buy_dex, sell_dex copied from signal
+- ✅ **Kill switch invariant**: kill_switch_active=true (no real execution)
 - ✅ **Blocker taxonomy** (15 canonical SimRejectReason values)
 - ✅ 14 unit tests in `test_ci_m4_gate_negative.py`
 - ✅ Golden fixtures in `docs/artifacts/m4_golden_run/`
 
 **Canonical Commands:**
 ```bash
-# SMOKE profile (default) - requires ≥1 profitable
+# SMOKE profile — Expected: PASS ✅
 python scripts/ci_m4_execution_gate.py --offline --profile smoke
 
-# PROFIT profile - requires total_net_usd > 0 AND sim_profitable >= 1
+# PROFIT profile — Expected: FAIL ❌ (total_net_usd < 0)
 python scripts/ci_m4_execution_gate.py --offline --profile profit
 
 # Strict mode
