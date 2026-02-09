@@ -23,18 +23,32 @@ Golden fixture має 1 profitable (+$0.38) і 1 unprofitable (-$0.67) = **су�
 ## Canonical Commands
 
 ```bash
+# 1 COMMAND = 1 GATE = PASS/FAIL
+
 # SMOKE profile — Expected: PASS ✅
 python scripts/ci_m4_execution_gate.py --offline --profile smoke
 
 # PROFIT profile — Expected: FAIL ❌ (total_net_usdc < 0)
 python scripts/ci_m4_execution_gate.py --offline --profile profit
 
-# Online 3-cycle smoke scan
-python -m strategy.jobs.run_scan --mode smoke --cycles 3
-
-# Run all unit tests
-python -m pytest tests/unit -q
+# Full CI pipeline
+python scripts/ci_full_pipeline.py
 ```
+
+---
+
+## Stage Clarification
+
+**Поточний етап**: Offline execution gate з fixture даними
+
+| Stage | Status | Description |
+|-------|--------|-------------|
+| **Offline fixtures** | ✅ DONE | Synthetic pinned_block, mock simulations |
+| **Online simulation** | ⏳ NEXT | Real eth_call on real block |
+| **Paper execution** | ⏳ FUTURE | "WOULD_EXECUTE" logging |
+| **Real execution** | ⏳ FUTURE | Actual TX submission |
+
+**Чітко**: На поточному етапі **реальний блок не потрібен**. Offline fixtures використовують synthetic `pinned_block=429900000` і це **нормально**.
 
 ---
 
@@ -73,7 +87,7 @@ python -m pytest tests/unit -q
 ### What is NOT validated offline
 
 - Реальність номера блоку (може бути synthetic 429900000)
-- confidence/liquidity_hint (можуть бути mock)
+- confidence/liquidity_hint (можуть бути mock values)
 
 ### Golden як контрольний тест
 

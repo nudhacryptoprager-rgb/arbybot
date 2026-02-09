@@ -1,0 +1,181 @@
+{
+  "timestamp": "2026-02-07T10:35:36.662860+00:00",
+  "run_mode": "REGISTRY_REAL",
+  "execution_enabled": false,
+  "execution_blocker": "EXECUTION_DISABLED",
+  "execution_blocker_details": "EXECUTION_DISABLED_M5_0 - verified: no cost model",
+  "cost_model_available": false,
+  "chain_id": 42161,
+  "current_block": 429551893,
+  "config_params": {
+    "min_spread_bps": 5,
+    "min_net_pnl_usdc_est": 0.0,
+    "paper_size_usd": 1000,
+    "gas_usd_estimate": 0.1,
+    "paper_slippage_bps": 0,
+    "autosize": {
+      "enabled": true,
+      "base_size_usd": 1000,
+      "min_size_usd": 100,
+      "max_size_usd": 5000,
+      "impact_threshold_bps": 50,
+      "ticks_crossed_threshold": 5,
+      "reduction_factor": 0.5,
+      "cooldown_seconds": 300,
+      "reason_codes": [
+        "high_impact",
+        "ticks_crossed",
+        "volatility",
+        "cooldown_active"
+      ]
+    }
+  },
+  "quotes_total": 12,
+  "quotes_fetched": 10,
+  "dexes_active": 2,
+  "price_sanity_passed": 7,
+  "price_sanity_failed": 0,
+  "health": {
+    "quotes_total": 12,
+    "quotes_fetched": 10,
+    "gates_passed": 8,
+    "dexes_active": 2,
+    "price_sanity_passed": 7,
+    "price_sanity_failed": 0,
+    "price_stability_factor": 1.0,
+    "rpc_errors": 0,
+    "rpc_success_rate": 1.0
+  },
+  "stats": {
+    "quotes_total": 12,
+    "quotes_fetched": 10,
+    "gates_passed": 8,
+    "dexes_active": 2,
+    "price_sanity_passed": 7,
+    "price_sanity_failed": 0,
+    "rpc_errors": 0,
+    "rpc_success_rate": 1.0,
+    "requested_cycles": 1,
+    "cycles_completed": 1,
+    "quotes_rejected": 0,
+    "pool_missing_count": 0,
+    "v3_slot0_failed_count": 0,
+    "price_stability_factor": 1.0,
+    "suspect_quotes": 0,
+    "suspect_reasons": {
+      "way_below_expected": 0
+    }
+  },
+  "execution_pnl": {
+    "signal_pnl_usdc": "0.000000",
+    "would_execute_pnl_usdc": "0.000000",
+    "gross_pnl_usdc": "0.000000",
+    "net_pnl_usdc": null,
+    "net_pnl_bps": null,
+    "cost_model_available": false
+  },
+  "pnl": {
+    "_deprecated": true,
+    "_migration": "Use 'execution_pnl' instead. This field will be removed in schema v3.3.",
+    "signal_pnl_usdc": "0.000000",
+    "would_execute_pnl_usdc": "0.000000",
+    "gross_pnl_usdc": "0.000000",
+    "net_pnl_usdc": null,
+    "net_pnl_bps": null,
+    "cost_model_available": false
+  },
+  "spread_signals": [
+    {
+      "pair": "ARB/WETH",
+      "buy_dex": "sushiswap_v3",
+      "sell_dex": "uniswap_v3",
+      "buy_price": "0.000058",
+      "sell_price": "0.000058",
+      "buy_pool": "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11",
+      "sell_pool": "0xC6F780497A95e246EB9449f5e4770916DCd6396A",
+      "price_direction": "quote_out_per_1_base_in",
+      "price_note": "1 ARB = X WETH",
+      "spread_bps_exact": 14.6406,
+      "spread_bps_ui": 14,
+      "spread_pct": 0.146406,
+      "spread_frac": "0.0014640569",
+      "block_number": 429551893,
+      "is_gross_positive": true,
+      "size_usd": 1000.0,
+      "size_source": "config",
+      "gross_pnl_usdc_est": 1.4641,
+      "gas_usd_estimate": 0.1,
+      "gas_source": "config",
+      "slippage_bps": 0.0,
+      "slippage_usd_estimate": 0.0,
+      "slippage_source": "config",
+      "net_pnl_usdc_est": 1.3641,
+      "is_net_positive_est": true,
+      "net_negative_reason": null,
+      "confidence": "low",
+      "confidence_reasons": [
+        "execution_disabled",
+        "paper_cost_model"
+      ]
+    },
+    {
+      "pair": "ARB/USDC",
+      "buy_dex": "uniswap_v3",
+      "sell_dex": "sushiswap_v3",
+      "buy_price": "0.116065",
+      "sell_price": "0.116240",
+      "buy_pool": "0xb0f6cA40411360c03d41C5fFc5F179b8403CdcF8",
+      "sell_pool": "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC",
+      "price_direction": "quote_out_per_1_base_in",
+      "price_note": "1 ARB = X USDC",
+      "spread_bps_exact": 15.0307,
+      "spread_bps_ui": 15,
+      "spread_pct": 0.150307,
+      "spread_frac": "0.0015030745",
+      "block_number": 429551893,
+      "is_gross_positive": true,
+      "size_usd": 1000.0,
+      "size_source": "config",
+      "gross_pnl_usdc_est": 1.5031,
+      "gas_usd_estimate": 0.1,
+      "gas_source": "config",
+      "slippage_bps": 0.0,
+      "slippage_usd_estimate": 0.0,
+      "slippage_source": "config",
+      "net_pnl_usdc_est": 1.4031,
+      "is_net_positive_est": true,
+      "net_negative_reason": null,
+      "confidence": "low",
+      "confidence_reasons": [
+        "execution_disabled",
+        "paper_cost_model"
+      ]
+    }
+  ],
+  "signals_total": 2,
+  "opportunities_total": 2,
+  "infra": {
+    "rpc_provider": "alchemy",
+    "transport": "ws+http",
+    "ws_enabled": true,
+    "ws_attempted": true,
+    "ws_connected": true,
+    "ws_fallback_to_http": false,
+    "ws_error": null,
+    "tenderly_enabled": false,
+    "tenderly_ok": false,
+    "tenderly_error": "disabled",
+    "rpc_http_host": "arb-mainnet.g.alchemy.com",
+    "rpc_ws_host": "arb-mainnet.g.alchemy.com",
+    "ws_handshake_ms": 141
+  },
+  "suspect_summary": {
+    "count": 0,
+    "reasons": {
+      "way_below_expected": 0
+    },
+    "examples": []
+  },
+  "price_sanity_deviation_bps_raw_max": 0,
+  "schema_version": "3.2.0"
+}

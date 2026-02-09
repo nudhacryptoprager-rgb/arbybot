@@ -20,6 +20,7 @@
   "paper_net_pnl_usdc": 0.0,
   "pnl_available": true,
   "pnl_reason": "no_signals_no_cost",
+  "paper_win_rate": 0.0,
   "cost_model": {
     "type": "gas_only",
     "gas_usd_estimate": 0.10,

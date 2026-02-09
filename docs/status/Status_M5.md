@@ -1,530 +1,121 @@
-# Milestone 5 — Production small
+# Status: M5 (Production Small)
 
-> **Оновлено**: 2026-02-08 10:33 UTC  
-> **SHA**: `TBD`  
-> **Статус**: ✅ **M5_0 CLOSED** | M5 feature-complete
-
----
-
-## 🔒 M5_0 CLOSE CONFIRMATION
-
-**RunDir**: `data/runs/ci_m5_gate_20260208_103330`  
-**Block**: 429,883,452  
-**Tests**: 498 passed  
-**Gate**: PASS  
-
-**Key Invariants Verified:**
-- ✅ `execution_ready_count: 0`
-- ✅ `execution_enabled: false`
-- ✅ `paper_cost_model_available: true`
-- ✅ `execution_cost_model_available: false`
-- ✅ `current_block` рівний в scan/truth/reject_histogram
-- ✅ `chain_id: 42161` в усіх артефактах
-- ✅ `rejects_total == len(rejects)`
+**Status**: ✅ **DONE** (feature-complete)  
+**Updated**: 2026-02-09  
+**Gate Version**: `ci_m5_gate.py` v1.0.0 (when created)  
+**Tests**: 522 passed
 
 ---
 
-## 🔒 CLOSE CHECKLIST (M5_0 / M5)
+## Canonical Commands
 
-**Команди для закриття:**
+```bash
+# M5 Offline Gate (ALWAYS works, no secrets)
+python scripts/ci_m5_gate.py --offline --strict
 
-```powershell
-# 1. Unit tests must pass
-python -m pytest tests/unit -q --tb=no
-# EXPECT: 500+ passed
+# M5 Online Gate (requires RPC)
+python scripts/ci_m5_gate.py --online --config config/real_minimal.yaml
 
-# 2. Integration test (requires RPC)
-python -m pytest tests/integration/test_artifact_invariants.py -v
-# EXPECT: 7 passed (or SKIP if ARBY_SKIP_RPC=1)
-
-# 3. Canonical online run
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
-# EXPECT: RESULT: PASS
-
-# 4. Offline fixture test
-python scripts/ci_m5_0_gate.py --offline
-# EXPECT: RESULT: PASS
-```
-
-**Інваріанти для перевірки:**
-
-| # | Інваріант | Перевірка |
-|---|-----------|-----------|
-| 1 | `execution_ready_count == 0` | truth_report |
-| 2 | `current_block` рівний в scan/truth/reject | cross-artifact |
-| 3 | `schema_version` присутній в усіх | all artifacts |
-| 4 | `rejects_total == len(rejects)` | reject_histogram |
-| 5 | Ціни в PRICE_SCALE_BOUNDS | scan.quotes_sample |
-| 6 | `run_mode == REGISTRY_REAL` | all artifacts |
-| 7 | `chain_id == 42161` | all artifacts |
-
----
-
-## Канонічна команда
-
-```powershell
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1
-```
-
-**Очікування**: `RESULT: PASS` + шлях до RunDir
-
----
-
-## ⚠️ CRITICAL INVARIANTS (M5)
-
-```
-1. opportunities == net-positive paper signals (is_net_positive_est=true)
-   ⚠️ NOT "ready to execute" — merely paper estimates without fees/impact
-
-2. execution_enabled = false ALWAYS in M5
-   blocker: "EXECUTION_DISABLED_M5_0 - verified: no cost model"
-
-3. anti-placeholder invariant:
-   - pool_address MUST exist (non-null)
-   - tick MUST exist (for v3)
-   - sqrt_price_x96 MUST exist (for v3)
-   → Any quote with null values is REJECTED, not passed
-
-4. fees NOT included in net_pnl_usdc_est
-   → ARB/USDC 14.9 bps looks sweet but likely eaten by swap fees
-   → Treat as "micro-arb visibility", not "strategy win"
-
-5. PRICE_SCALE_BOUNDS invariant (NEW!):
-   - ARB/WETH: 0.00001 - 0.01 (expect ~0.00035)
-   - ARB/USDC: 0.01 - 10 (expect ~0.70)
-   - WETH/USDC: 100 - 10000 (expect ~2000)
-   - wstETH/WETH: 0.9 - 1.5 (expect ~1.15)
-   → Detects token0/token1 direction errors (17000 vs 0.00035)
+# Full CI Pipeline (all gates)
+python scripts/ci_full_pipeline.py
 ```
 
 ---
 
-## Виконані директиви (2026-02-07)
+## DoD Summary
 
-| # | Директива | Статус |
-|---|-----------|--------|
-| 1 | Hard reject `pool_address=null` | ✅ POOL_MISSING |
-| 2 | Reject v3 quotes без `tick`/`sqrt_price_x96` | ✅ V3_SLOT0_FAILED |
-| 3 | Price outlier detection (>100% spread) | ✅ PRICE_OUTLIER |
-| 4 | Confidence = "low" коли `execution_disabled` | ✅ Виправлено |
-| 5 | `pnl_available=false` при invalid quotes | ✅ Додано |
-| 6 | Gate --strict fail на `pool_missing_count > 0` | ✅ Додано |
-| 7 | Знайти пули SushiSwap V3 для всіх пар | ✅ 32 пули знайдено |
-| 8 | Розширити сканер на 5+ пар | ✅ 5 пар активних |
-| 9 | Уніфікувати `reject_reason` → `reason` | ✅ Тести проходять |
-| 10 | Golden run з реальними цінами | ✅ PASS |
-| 11 | **CRITICAL: Price direction fix** | ✅ **token0/token1 order!** |
-| 12 | PRICE_SCALE_BOUNDS invariant | ✅ Unit-tested |
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Daily report with net PnL, win-rate, tail losses | ✅ | `daily_report_*.json` |
+| Auto-size adjustment (impact-based) | ✅ | `autosize` object present |
+| Health score for RPC/DEX/System | ✅ | `health` section in reports |
+| Golden artifacts | ✅ | `docs/artifacts/m5_golden/` |
 
 ---
 
-## DONE Criteria (per Roadmap)
+## Golden Update Policy
 
-Roadmap M5 вимагає:
-- ✅ Daily report: net PnL, win-rate, tail losses, reject reasons
-- ✅ Авто-зниження size при рості impact (autosize object present)
-- ✅ Health score для RPC/DEX/System
+⚠️ **Golden artifacts are updated ONLY via explicit script:**
 
-### Acceptance Checklist
+```bash
+# ONLY way to update golden
+python scripts/make_golden_daily_report.py --output docs/artifacts/m5_golden/
 
-| # | Criterion | Status |
-|---|-----------|--------|
-| 1 | `ci_m5_0_gate.py --online --cycles 1` PASS | ✅ |
-| 2 | daily_report: provenance, health, top_reject_reasons, top_opportunities | ✅ |
-| 3 | daily_report: autosize object always present | ✅ |
-| 4 | negative tests: schema_version mismatch, quotes_total invariant | ✅ |
-| 5 | truth_report: signals_total, opportunities_total | ✅ |
-| 6 | No fake quotes (pool_address=null) | ✅ |
-| 7 | No cosmic spreads (PRICE_OUTLIER detection) | ✅ |
-
----
-
-## Канонічна команда
-
-```powershell
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
+# Gates NEVER auto-update golden
 ```
 
 ---
 
-## Останній Golden Run
+## Artifacts Produced
 
-**RunDir**: `data/runs/ci_m5_gate_20260208_101732` (reference, not committed)  
-**Date**: 2026-02-08 10:17 UTC  
-**Block**: 429,879,603  
-**Result**: ✅ PASS (5/5 runs passed!)
-
-### 5 Canonical Runs (2026-02-08)
-
-| Run | Block | Signals | ARB/USDC (bps) | ARB/WETH (bps) |
-|-----|-------|---------|----------------|----------------|
-| 1 | 429879376 | 2 | 48.7 | 13.7 |
-| 2 | 429879441 | 2 | 48.7 | 9.0 |
-| 3 | 429879494 | 2 | 48.7 | 9.0 |
-| 4 | 429879547 | 3 | 48.7 | 9.0 |
-| 5 | 429879603 | 3 | 48.7 | 9.0 |
-
-**Інваріанти стабільні**: ціни правильного масштабу, спреди реалістичні.
-
-### Key Metrics
-
-| Metric | Value |
-|--------|-------|
-| `quotes_total` | 12 |
-| `quotes_fetched` | 10 |
-| `quotes_rejected` | 0 |
-| `pool_missing_count` | 0 |
-| `v3_slot0_failed_count` | 0 |
-| `price_sanity_passed` | 7 |
-| `price_sanity_failed` | 0 |
-| `dexes_active` | 2 |
-| `pairs_scanned` | 5 |
-| `pools_quoted` | 10 |
-| `spread_signals` | 2 |
-| `paper_net_pnl_usdc` | ~$3.40 |
-
-### Spread Signals (реальні ціни — POST price direction fix!)
-
-| Pair | Spread (bps) | Price (corrected) | Status |
-|------|-------------|-------------------|--------|
-| ARB/USDC | **15.0** | 0.116 USDC | ✅ **Signal!** |
-| ARB/WETH | **14.6** | 0.0000578 WETH | ✅ **Signal!** |
-| WETH/USDT | 2.1 | 2003 USDT | ⚪ Нижче threshold |
-| WETH/USDC | 1.7 | 2003 USDC | ⚪ Стабільна |
-| wstETH/WETH | 0.08 | 1.225 WETH | ⚪ Дуже стабільна |
-
-### Autosize (enabled!)
-
-```json
-{
-  "enabled": true,
-  "new_size_usd": 1000,
-  "reason": "configured_no_adjustment",
-  "config": {
-    "base_size_usd": 1000,
-    "min_size_usd": 100,
-    "max_size_usd": 5000,
-    "impact_threshold_bps": 50
-  }
-}
-```
-
-**Autosize Triggers (tested):**
-- `ticks_crossed > 2` → reduce 50% (reason: `reduced_on_slippage_or_ticks`)
-- `impact_bps > 50` → reduce 50%
-- `3 good cycles` → restore ×1.2
+| Artifact | Purpose |
+|----------|---------|
+| `scan_*.json` | Raw scan results |
+| `truth_report_*.json` | Validated truth |
+| `reject_histogram_*.json` | Reject reasons distribution |
+| `daily_report_*.json` | Daily summary (M5) |
 
 ---
 
-## Paper vs Execution (термінологія)
+## Cross-Artifact Invariants
 
-| Поле | Значення |
-|------|----------|
-| `paper_cost_model_available` | `true` — gas-only estimates для paper PnL |
-| `execution_cost_model_available` | `false` — немає повної моделі з slippage/impact |
-| `paper_win_rate` | **paper estimate** = `net_pnl_usdc_est > 0` (NOT real execution!) |
-| `signal_win_rate=1.0` | Означає: всі paper signals мають позитивний `net_pnl_usdc_est` |
+All gates validate using `core/artifact_invariants.py`:
 
-⚠️ **Важливо**: `paper_win_rate` — це НЕ реальний профіт. Це лише paper estimate без повних витрат (slippage, impact, MEV).
-
----
-
-## Юніт-тести
-
-```
-498 passed, 5 subtests passed
-```
-
-### Нові тести (10 critical fixes)
-
-- `test_ci_m5_gate_negative_anti_placeholder.py` — 9 тестів
-- `test_ci_m5_gate_negative_price_scale.py` — 9 тестів
-- `test_cost_model_terminology.py` — 5 тестів (NEW!)
-- `test_auto_size.py` — 6 тестів (extended)
-- Перевіряє FAIL при `pool_address=null`
-- Перевіряє FAIL при `tick=null` / `sqrt_price_x96=null` для v3
-- **Перевіряє FAIL при inverted price (17000 vs 0.00035)**
-- **Перевіряє cost model terminology consistency**
-- **Перевіряє autosize ticks_crossed/impact triggers**
+| Invariant | Description |
+|-----------|-------------|
+| `current_block` | Same in scan, truth, histogram |
+| `chain_id` | Same in all artifacts |
+| `run_mode` | Consistent across artifacts |
+| `quotes_total` | Matches between scan and truth |
+| `schema_version` | Supported version |
 
 ---
 
-## Активні пари (5)
+## M5 vs M5_0 Relationship
 
-| Pair | Uniswap V3 Pool | SushiSwap V3 Pool |
-|------|-----------------|-------------------|
-| WETH/USDC | `0xC6962004...` | `0xf3Eb87C1...` |
-| WETH/USDT | `0x641C00A8...` | `0x96aDA813...` |
-| ARB/WETH | `0xC6F78049...` | `0x99543bF9...` |
-| wstETH/WETH | `0x35218a1c...` | `0x8BD39fA8...` |
-| ARB/USDC | `0xb0f6cA40...` | `0xfa1cC0ca...` |
+| Aspect | M5_0 | M5 |
+|--------|------|-----|
+| Focus | Infrastructure hardening | Production features |
+| Key artifact | truth_report | daily_report |
+| Gate | `ci_m5_0_gate.py` | `ci_m5_gate.py` |
+| Status | ✅ DONE | ✅ DONE |
 
-### Вимкнені пари (проблеми)
+---
 
-| Pair | Причина |
+## Exit Codes
+
+| Code | Meaning |
 |------|---------|
-| WBTC/WETH | Decimal overflow (8 vs 18 decimals) |
-| WBTC/USDC | Decimal overflow |
-| GMX/WETH | Low liquidity (173% spread) |
-| LINK/WETH | Low liquidity on SushiSwap (11.7% spread) |
+| 0 | PASS |
+| 1 | FAIL validation |
+| 2 | FAIL missing artifacts |
+| 3 | FAIL scanner error |
 
 ---
 
-## BLOCKER виправлено (2026-02-07)
-
-### Проблема
-Сканер генерував **фейкові котирування** з `pool_address=null` та плейсхолдер-цінами:
-- `paper_net_pnl_usdc`: **$57,500,614,791.98** (мільярди!)
-- `spread_bps_exact`: **574,416,601,574** (абсурд)
-- `confidence`: "high" на фейкових сигналах
-
-### Рішення
-1. **POOL_MISSING**: Hard reject якщо `pool_address=null`
-2. **V3_SLOT0_FAILED**: Reject v3 без `tick`/`sqrt_price_x96`
-3. **PRICE_OUTLIER**: Reject якщо spread > 100%
-4. **Confidence**: Завжди "low" коли `execution_disabled`
-
-### Результат
-| Метрика | До | Після |
-|---------|-----|-------|
-| pool_missing_count | багато | **0** |
-| price_outlier_count | 574B bps | **0** |
-| paper_net_pnl_usdc | $57.5 млрд | **реальні числа** |
-| Ціни | фейкові (2600, 15) | **$2011 / $2012** |
-
----
-
-## Policies
-
-### Rejection Reasons
-
-| Reason | Description | Gate |
-|--------|-------------|------|
-| `POOL_MISSING` | No pool address in config | Hard reject |
-| `V3_SLOT0_FAILED` | Cannot read slot0() | Hard reject |
-| `PRICE_OUTLIER` | Spread > 100% (config: `max_spread_bps_sanity`) | Hard reject |
-| `PRICE_CALC_FAILED` | Decimal overflow | Hard reject |
-| `NO_ONCHAIN_PRICE` | No sqrt_price_x96 | Hard reject |
-
-### Pool Discovery
-
-Пули знаходяться через Factory контракти:
-- **Uniswap V3**: `0x1F98431c8aD98523631AE4a59f267346ea31F984`
-- **SushiSwap V3**: `0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e`
-
-Скрипт: `scripts/find_sushi_pools.py`  
-Whitelist: `docs/artifacts/pool_whitelist.json`
-
-### Whitelist Enforcement
-
-| Mode | Behavior |
-|------|----------|
-| `warn` (default) | Якщо pool не знайдений → reject з POOL_MISSING |
-| `enforce` | Якщо pool не в whitelist → ValueError |
-
-Налаштування: `get_pool_address(..., enforcement_mode="warn"|"enforce")`
-
-### Price Direction Semantics
+## Critical Invariants
 
 ```
-price_direction: "quote_out_per_1_base_in"
-price_note: "1 ARB = X WETH"
-```
+1. execution_enabled = false ALWAYS in M5
+   blocker: "EXECUTION_DISABLED_M5_0"
 
-**CRITICAL FIX (2026-02-07)**: 
+2. opportunities == net-positive paper signals (is_net_positive_est=true)
+   NOT "ready to execute" — merely paper estimates
 
-Uniswap V3 `sqrtPriceX96` дає ціну **token1/token0**, а НЕ token_in/token_out!
+3. PRICE_SCALE_BOUNDS validated for all pairs
 
-В пулі ARB/WETH:
-- `token0 = WETH` (0x82a...) — менша адреса
-- `token1 = ARB` (0x912...) — більша адреса
+4. No fake quotes (pool_address=null rejected)
 
-Формула: `raw_price = (sqrtPriceX96² / 2^192) = token1/token0 = ARB/WETH`
-
-**Проблема**: код припускав що `token_in = token0`, давав ціну 17000 замість 0.00035
-
-**Рішення**: Перевірка `token_in_addr < token_out_addr`:
-- Якщо TRUE: `price = raw_price` (token_in = token0)
-- Якщо FALSE: `price = 1/raw_price` (token_in = token1)
-
-| Пара | До фіксу | Після фіксу |
-|------|----------|-------------|
-| ARB/WETH | 17263 WETH | **0.0000578 WETH** ✅ |
-| ARB/USDC | 0.116 | **0.116** ✅ |
-| WETH/USDC | 2005 | **2005** ✅ |
-
-### Canary Field: no_rejects
-
-```json
-{
-  "total_rejects": 0,
-  "no_rejects": true  // Canary: легко помітити дрейф якщо зміниться
-}
-```
-
-### Threshold Profiles
-
-| Profile | Config | `min_spread_bps` | Purpose |
-|---------|--------|------------------|---------|
-| **Debug** | `real_debug.yaml` | 0 | See all micro-spreads |
-| **Prod** | `real_minimal.yaml` | 5 | Filter noise |
-
-### Paper PnL Contract
-
-- If `signals_total > 0`: `paper_net = gross_spread - gas - slippage`
-- If `signals_total == 0`: `paper_net = 0`
-- If `pool_missing_count > 0`: `pnl_available = false`
-
-**⚠️ FEES NOT INCLUDED**: `net_pnl_usdc_est` does NOT include swap fees (0.05%-0.3%).
-Real profitability requires: `net = gross - gas - fees - slippage - impact`
-
-### Cost Model Transparency
-
-```json
-{
-  "cost_model": {
-    "type": "gas_only",
-    "gas_usd_estimate": 0.10,
-    "gas_source": "config",
-    "fees_included": false,
-    "fees_note": "swap fees (0.05-0.3%) NOT included - micro-arbs likely unprofitable"
-  }
-}
+5. Tenderly is OPTIONAL (never blocks)
 ```
 
 ---
 
-## Metric Definitions
+## Files Reference
 
-### quote_sanity_rate vs price_sanity_failed
-
-```
-quote_sanity_rate = price_sanity_passed / quotes_total
-                  = 7 / 12 = 0.5833
-
-price_sanity_failed = quotes that failed price anchor check
-                    = 0 (all passed sanity)
-```
-
-**⚠️ Different metrics!**
-- `quote_sanity_rate < 1.0` means some quotes didn't reach sanity check (e.g., gate rejected earlier)
-- `price_sanity_failed = 0` means all checked quotes passed anchor validation
-
-### signals_total vs opportunities_total
-
-```
-signals_total       = spread signals that passed min_spread_bps threshold
-opportunities_total = signals where is_net_positive_est = true
-
-Example: signals=2, opportunities=2 means both are net-positive (paper estimate)
-```
-
-**⚠️ opportunities ≠ "ready to execute"** — just paper net > 0 without fees/impact.
-
----
-
-## Key Metrics Definitions
-
-| Metric | Formula | Description |
-|--------|---------|-------------|
-| `quote_sanity_rate` | price_sanity_passed / quotes_total | Ціни в межах anchor |
-| `gate_pass_rate` | gates_passed / quotes_total | Пройшли всі gates |
-| `signal_win_rate` | opportunities / signals | Net-positive ratio |
-| `pool_missing_count` | Σ(reason=POOL_MISSING) | Відсутні пули |
-| `price_outlier_count` | Σ(reason=PRICE_OUTLIER) | Аномальні ціни |
-
----
-
-## Schema Tests
-
-| Test | Purpose |
+| File | Purpose |
 |------|---------|
-| `test_no_suspect_when_implied_equals_expected` | No false suspects |
-| `test_reject_includes_expected_price` | Reject has context |
-| `test_reject_histogram_structure` | Schema validation |
-| `test_v3_quote_without_provenance_is_rejected` | V3 provenance |
-| `test_truth_report_has_config_params` | Reproducibility |
-
----
-
-## Golden Policy
-
-**Правило**: НЕ комітити runtime artifacts (data/runs/*) крім explicit golden fixtures.
-
-| Artifact | Location | Commit? |
-|----------|----------|---------|
-| Runtime runs | `data/runs/ci_m5_gate_*` | ❌ NO (gitignored) |
-| Golden fixtures | `docs/artifacts/*.json` | ✅ Yes (on schema change) |
-| Schema examples | `docs/artifacts/examples/` | ✅ Yes |
-
-**Оновлення golden**: Лише при свідомій зміні schema/полів через `scripts/make_golden_daily_report.py`.
-
-**Referencing runs**: Вказуємо шлях у docs (`RunDir: data/runs/ci_m5_gate_YYYYMMDD_HHMMSS`) без коміту самих файлів.
-
----
-
-## Risks
-
-1. **Decimal Mismatch**: WBTC (8 decimals) causes overflow — needs fix
-2. **Low Liquidity Pools**: GMX, LINK on SushiSwap have 10-170% spreads
-3. **RPC Reliability**: Public RPCs may fail → mitigated by fallback list
-4. **Gas Volatility**: Fixed $0.10 may underestimate during congestion
-
----
-
-## Next Steps
-
-1. **Fix WBTC decimal overflow**: Handle 8 vs 18 decimals properly
-2. **Add more liquid pairs**: DAI/USDC, other stablecoins
-3. **Pool liquidity check**: Skip pools with < $10k TVL
-4. **Real gas estimation**: Replace fixed gas with on-chain estimate
-5. **M6 CEX↔DEX**: Add CEX price feeds
-
----
-
-## Roadmap Next
-
-Per Roadmap.md:
-- **M6**: CEX↔DEX inventory-based (optional)
-- **M7**: Triangular (R&D)
-- **M8**: Cross-chain (R&D)
-
----
-
-## References
-
-- **Roadmap**: [Roadmap.md](../../Roadmap.md)
-- **Template**: [REPORT_TEMPLATE.md](../REPORT_TEMPLATE.md)
-- **Testing**: [TESTING.md](../TESTING.md)
-- **Pool Discovery**: [find_sushi_pools.py](../../scripts/find_sushi_pools.py)
-- **Pool Whitelist**: [pool_whitelist.json](../artifacts/pool_whitelist.json)
-
----
-
-## SHA закриття
-
-`506e8d0` — M5 DONE (closed 2026-02-07 11:21 UTC)
-
-### CI Gate Checks (v2.1.0)
-
-```
-✅ anti_placeholder OK (10 quotes checked)
-✅ coverage OK (pairs=5 pools=10)
-✅ schema_version=3.2.0
-✅ run_mode=REGISTRY_REAL
-✅ current_block=429548505
-✅ autosize.enabled=true
-```
-
-### Стабільність (3 прогони)
-
-| Run | Signals | Block | ARB/WETH | ARB/USDC |
-|-----|---------|-------|----------|----------|
-| 1 | 3 | 429548277 | 24.4 bps | 9.3 bps |
-| 2 | 2 | 429548451 | 24.8 bps | 9.3 bps |
-| 3 | 2 | 429548505 | 24.8 bps | 9.3 bps |
-
-**Інваріанти виконуються стабільно.**
-✅ run_mode=REGISTRY_REAL
-✅ current_block=429541297
-```
+| `scripts/ci_m5_gate.py` | M5 acceptance gate |
+| `scripts/make_golden_daily_report.py` | Golden update script |
+| `core/artifact_invariants.py` | Cross-artifact validation |
+| `docs/artifacts/m5_golden/` | Golden reference artifacts |

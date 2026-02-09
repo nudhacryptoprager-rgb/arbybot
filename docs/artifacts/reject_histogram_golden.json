@@ -1,0 +1,28 @@
+{
+  "timestamp": "2026-02-07T10:35:36.662860+00:00",
+  "run_mode": "REGISTRY_REAL",
+  "rejects": [],
+  "sample_rejects": [],
+  "total_rejects": 0,
+  "no_rejects": true,
+  "price_sanity_failed": 0,
+  "pool_missing_count": 0,
+  "v3_slot0_failed_count": 0,
+  "price_outlier_count": 0,
+  "infra": {
+    "rpc_provider": "alchemy",
+    "transport": "ws+http",
+    "ws_enabled": true,
+    "ws_attempted": true,
+    "ws_connected": true,
+    "ws_fallback_to_http": false,
+    "ws_error": null,
+    "tenderly_enabled": false,
+    "tenderly_ok": false,
+    "tenderly_error": "disabled",
+    "rpc_http_host": "arb-mainnet.g.alchemy.com",
+    "rpc_ws_host": "arb-mainnet.g.alchemy.com",
+    "ws_handshake_ms": 141
+  },
+  "schema_version": "3.2.0"
+}
