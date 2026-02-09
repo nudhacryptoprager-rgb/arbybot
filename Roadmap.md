@@ -36,18 +36,41 @@ Triangular, Cross-chain — тільки після того, як Truth Engine 
 
 > **M4 execution gate є "core truth" для релізу.**
 
+### ⚠️ CRITICAL: M4-profit Definition of Done
+
+**Offline fixtures PASS ≠ Proof of online profitability.**
+
+| DoD Level | Criterion | Evidence Required |
+|-----------|-----------|-------------------|
+| **Offline** | Code/schema/invariants work | `run_mode=FIXTURE_OFFLINE`, synthetic block |
+| **Online** | Real profitability | `run_mode=REAL`, N=5 runs with `total_net_usdc > 0` |
+
+**M4-profit по суті (справжній DoD):**
+```
+N = 5 consecutive online runs where:
+  - run_mode = "REAL" (not FIXTURE_OFFLINE)
+  - pinned_block = real block (not 429900000)
+  - total_net_usdc > 0
+  - all from same runDir with consistent timestamps
+```
+
+**Поки online DoD не виконано — "M4 profit" є математичною оцінкою, не доказом виконання.**
+
 ### Canonical Runner (одна "релізна кнопка")
 
 ```bash
 # Єдина канонічна команда для E2E:
 python scripts/ci_full_pipeline.py --mode e2e --config config/real_minimal.yaml --cycles 1 --strict
+
+# M4 online validation (requires prior scan + simulation)
+python scripts/ci_m4_execution_gate.py --online --run-dir data/runs/<dir> --profile profit
 ```
 
 ### Gate Hierarchy
 
 | Gate | Purpose | Blocks Release? |
 |------|---------|-----------------|
-| **M4 profit (online)** | DEX↔DEX net > 0 | ✅ YES (core truth) |
+| **M4 profit (online)** | DEX↔DEX net > 0 on real block | ✅ YES (core truth) |
 | **M4 smoke (offline)** | Fixture sanity | ✅ YES |
 | **M5_0 (offline)** | Artifact schema | ✅ YES |
 | **M5 (online)** | Daily report | ❌ NO (monitoring layer) |
@@ -61,6 +84,7 @@ python scripts/ci_full_pipeline.py --mode e2e --config config/real_minimal.yaml 
 
 **Gates must validate:**
 - M4: `pinned_block > 0` AND `block_used == pinned_block` для кожної симуляції
+- M4 online: `pinned_block != 429900000` (reject synthetic fixture block)
 - M5_0: `current_block > 0` AND consistent across scan/truth/reject
 
 ### M4 Online DoD (справжній критерій)
@@ -76,6 +100,22 @@ N = 5 (на реальних блоках, не fixture)
 
 > Не шліфувати M5, поки M4 online-profit не стабільний.  
 > Якщо core DEX↔DEX не дає мінімальний +PnL онлайн — все інше буде "красивою звітністю".
+
+### Compare Workflow (для рев'ю)
+
+**Правильний compare:**
+```bash
+# Якщо працюєте в split/code branch
+git log --oneline -5 split/code  # Знайти попередній SHA
+git diff <previous_sha>..HEAD --stat  # Compare від попереднього
+
+# НЕ використовувати origin/main...HEAD (показує "пів репо змінено")
+```
+
+**Для Status update:**
+- Кожен Status має містити SHA і runDir
+- Compare робиться від SHA попереднього Status
+- Це робить рев'ю відтворюваним
 
 ---
 

@@ -1,9 +1,21 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
-**Status**: ✅ **DONE** (offline fixtures), ⏳ **IN PROGRESS** (online profit)  
+**Status**: ✅ **DONE** (offline fixtures), ⏳ **NOT PROVEN** (online profit)  
 **Updated**: 2026-02-09  
 **Gate Version**: `ci_m4_execution_gate.py` v1.2.0  
-**Tests**: 549 passed
+**Tests**: 553 passed
+
+---
+
+## ⚠️ CRITICAL: What This Status Means
+
+> **Offline fixtures PASS ≠ Proof of online profitability.**
+>
+> Поточний статус підтверджено **FIXTURE_OFFLINE (simulate_only)**.  
+> Це валідує код/схеми/інваріанти, але **НЕ є доказом ONLINE PnL**.
+>
+> **M4-profit по суті** = N онлайн прогонів з `total_net_usdc > 0` на реальних блоках.  
+> Поки цього немає — "profit ✅ DONE" є математичною оцінкою, не виконанням.
 
 ---
 
@@ -17,11 +29,11 @@
 
 ## DoD Profile Status
 
-| Profile | Status | Criterion | Golden Result |
-|---------|--------|-----------|---------------|
-| **smoke** | ✅ **DONE** | `simulations_passed >= 1` | PASS (net=-$0.29) |
-| **profit** | ✅ **DONE** (offline) | `total_net_usdc > 0` | PASS (net=+$0.50) |
-| **online** | ⏳ **IN PROGRESS** | N online runs with `total_net_usdc > 0` | N=5 required |
+| Profile | Status | Criterion | Evidence |
+|---------|--------|-----------|----------|
+| **smoke** | ✅ **DONE** | `simulations_passed >= 1` | FIXTURE_OFFLINE (net=-$0.29) |
+| **profit** | ✅ **DONE** (offline) | `total_net_usdc > 0` | FIXTURE_OFFLINE (net=+$0.50) |
+| **online** | ⏳ **NOT PROVEN** | N=5 online runs with net > 0 | Requires real block, not 429900000 |
 
 **Fixture strategy:**
 - SMOKE profile: 1 profitable (+$0.38) + 1 unprofitable (-$0.67) = net -$0.29 ✅
@@ -65,7 +77,7 @@ python scripts/ci_full_pipeline.py --mode e2e --config config/real_minimal.yaml 
 
 # Unit tests
 python -m pytest tests/unit -q
-# Expected: 549 passed, 1 skipped
+# Expected: 553 passed, 1 skipped
 ```
 
 ---
@@ -92,6 +104,32 @@ python -m pytest tests/unit -q
 **Формула:** `sim_net_usdc - est_net_usdc`
 
 Якщо drift великий — сигнали "гарні", а результат посередній.
+
+---
+
+## Evidence Links (Reproducible Status)
+
+**Last Verified Offline Run:**
+
+| Field | Value |
+|-------|-------|
+| **RunDir** | `data/runs/ci_m4_gate_offline_20260209_123029/` |
+| **Timestamp** | `20260209_123029` |
+| **Artifacts** | `signals_20260209_123029.json`, `execution_report_20260209_123029.json` |
+| **run_mode** | `FIXTURE_OFFLINE` |
+| **pinned_block** | `429900000` (synthetic) |
+
+**Key Metrics (from execution_report):**
+
+| Metric | Smoke Profile | Profit Profile |
+|--------|---------------|----------------|
+| `simulations_count` | 2 | 2 |
+| `simulations_passed` | 1 | 2 |
+| `total_net_usdc` | -0.29 | +0.50 |
+| `mae_net_usdc` | 0.2850 | 0.2400 |
+| `pass_rate` | 50% | 100% |
+
+**⚠️ Note:** These are FIXTURE_OFFLINE results. Online DoD requires N=5 runs on real blocks.
 
 ---
 

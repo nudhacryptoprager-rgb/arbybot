@@ -314,3 +314,105 @@ class TestM4Schema:
             
             errors = validate_keys(data, EXECUTION_REPORT_REQUIRED_KEYS, "execution_report")
             assert not errors, f"Schema errors: {errors}"
+
+class TestSchemaCompatibility:
+    """Tests for cross-schema compatibility between M4 and M5 artifacts."""
+    
+    def test_schema_version_families_documented(self):
+        """Verify schema version families are consistent."""
+        # M5 family uses semver (e.g., "3.2.0")
+        # M4 family uses namespace:type:version (e.g., "m4:execution:v1.1")
+        m5_pattern = r"^\d+\.\d+\.\d+$"
+        m4_pattern = r"^m4:\w+:v\d+\.\d+$"
+        
+        import re
+        
+        # These are the expected patterns
+        assert re.match(m5_pattern, "3.2.0"), "M5 semver pattern"
+        assert re.match(m4_pattern, "m4:execution:v1.1"), "M4 namespace pattern"
+        assert re.match(m4_pattern, "m4:signals:v1.1"), "M4 signals pattern"
+    
+    def test_m4_and_m5_fixtures_can_coexist(self):
+        """Verify M4 and M5 fixtures can be generated in same runDir."""
+        from scripts.ci_m4_execution_gate import generate_m4_fixture
+        from scripts.ci_m5_0_gate import generate_fixture_artifacts
+        import tempfile
+        from pathlib import Path
+        import json
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            ts = "20260209_120000"
+            
+            # Generate M4 fixtures
+            m4_artifacts = generate_m4_fixture(run_dir, ts)
+            
+            # Generate M5 fixtures (different timestamp to avoid collision)
+            ts2 = "20260209_120001"
+            m5_artifacts = generate_fixture_artifacts(run_dir, ts2)
+            
+            # Both should exist
+            assert m4_artifacts["signals"].exists()
+            assert m4_artifacts["execution_report"].exists()
+            assert m5_artifacts["scan"].exists()
+            assert m5_artifacts["truth_report"].exists()
+            
+            # Verify schema versions are from correct families
+            with open(m4_artifacts["execution_report"]) as f:
+                m4_data = json.load(f)
+            assert m4_data["schema_version"].startswith("m4:")
+            
+            with open(m5_artifacts["scan"]) as f:
+                m5_data = json.load(f)
+            assert not m5_data["schema_version"].startswith("m4:")
+    
+    def test_run_mode_consistency(self):
+        """Verify run_mode is consistent across artifacts from same fixture."""
+        from scripts.ci_m4_execution_gate import generate_m4_fixture
+        import tempfile
+        from pathlib import Path
+        import json
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            ts = "20260209_120000"
+            
+            artifacts = generate_m4_fixture(run_dir, ts)
+            
+            with open(artifacts["signals"]) as f:
+                signals = json.load(f)
+            with open(artifacts["execution_report"]) as f:
+                exec_report = json.load(f)
+            
+            # Both must have same run_mode
+            assert signals["run_mode"] == exec_report["run_mode"]
+            assert signals["run_mode"] == "FIXTURE_OFFLINE"
+    
+    def test_pinned_block_consistency(self):
+        """Verify pinned_block is consistent across M4 artifacts."""
+        from scripts.ci_m4_execution_gate import generate_m4_fixture
+        import tempfile
+        from pathlib import Path
+        import json
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            ts = "20260209_120000"
+            
+            artifacts = generate_m4_fixture(run_dir, ts)
+            
+            with open(artifacts["signals"]) as f:
+                signals = json.load(f)
+            with open(artifacts["execution_report"]) as f:
+                exec_report = json.load(f)
+            
+            # Headers must match
+            assert signals["pinned_block"] == exec_report["pinned_block"]
+            
+            # All signals must use same block
+            for sig in signals["signals"]:
+                assert sig["pinned_block"] == signals["pinned_block"]
+            
+            # All simulations must use same block
+            for sim in exec_report["simulations"]:
+                assert sim["block_used"] == exec_report["pinned_block"]

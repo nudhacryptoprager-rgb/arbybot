@@ -124,6 +124,9 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         json.dump(truth_data, f, indent=2)
     artifacts["truth_report"] = truth_path
     
+    # reject_histogram: Contains individual reject samples (not aggregated histogram)
+    # Semantics: "rejects" is a list of suspect/rejected quotes with details
+    # "rejects_total" is the count of samples, "price_sanity_failed" is aggregate metric
     reject_data = {
         "schema_version": "3.2.0",
         "timestamp": now,
@@ -131,14 +134,15 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "chain_id": 42161,
         "current_block": 100,
         "infra": {"rpc_provider": "fixture", "transport": "http", "ws_enabled": False, "tenderly_enabled": False},
+        # "rejects" = list of individual reject samples (NOT aggregated counts)
         "rejects": [{
             "pair": "WETH/USDC", "dex_id": "sushiswap_v3",
             "deviation_bps": 10000, "deviation_bps_capped": False,
             "inversion_applied": False, "suspect_quote": True,
         }],
-        "rejects_total": 1,
-        "total_rejects": 1,  # deprecated alias
-        "price_sanity_failed": 1,
+        "rejects_total": 1,      # Count of samples in "rejects" list
+        "total_rejects": 1,      # Deprecated alias
+        "price_sanity_failed": 1,  # Aggregate metric (may differ from rejects_total)
         "no_rejects": False,
     }
     reject_path = reports_dir / f"reject_histogram_{timestamp}.json"

@@ -3,7 +3,7 @@
 """
 M4 Execution Gate - DEX↔DEX Atomic Execution v1.
 
-VERSION: 1.1.0 (2026-02-09)
+VERSION: 1.2.0 (2026-02-09)
 STATUS: ACTIVE
 
 PURPOSE:
@@ -13,19 +13,26 @@ PURPOSE:
   3. Verify net > 0 after gas/slippage
   4. Report PASS/FAIL with reasons
 
+MODES:
+  --offline: Uses synthetic fixtures (no RPC). run_mode=FIXTURE_OFFLINE.
+             This validates code/schema correctness, NOT online profitability.
+  --online:  Uses real artifacts from --run-dir or latest run.
+             Validates actual simulation results on real blocks.
+
 CANONICAL COMMANDS:
-  # Offline - uses fixtures (no RPC)
+  # Offline - synthetic fixtures (no RPC, no proof of online profit)
   python scripts/ci_m4_execution_gate.py --offline
-  python scripts/ci_m4_execution_gate.py --offline --strict
+  python scripts/ci_m4_execution_gate.py --offline --profile smoke
   python scripts/ci_m4_execution_gate.py --offline --profile profit
 
-  # Online - uses real signals from latest run
-  python scripts/ci_m4_execution_gate.py --online
+  # Online - real artifacts (requires prior scan/simulation run)
+  python scripts/ci_m4_execution_gate.py --online --run-dir data/runs/<dir>
   python scripts/ci_m4_execution_gate.py --online --profile profit
 
 DOD PROFILES:
   smoke (default): PASS if simulations_passed >= 1 AND accounting_complete
-  profit: PASS if total_net_usd > 0 AND signals_profitable >= 1
+  profit: PASS if total_net_usdc > 0 AND sim_profitable_count >= 1
+  online: PASS if profit criteria met on REAL block (not fixture)
 
 SUCCESS CRITERIA (from Roadmap):
   - 1-2 pairs, 2 DEX, on one chain
@@ -358,9 +365,13 @@ def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE)
         "execution_enabled": False,         # INVARIANT: must be false in M4
         "kill_switch_active": True,         # INVARIANT: no real execution allowed
         "simulations": fixture_simulations,
+        # Counts (use *_count consistently, never None)
         "simulations_count": len(fixture_simulations),
         "simulations_passed": sim_profitable_count,
         "simulations_failed": len(fixture_simulations) - sim_profitable_count,
+        "trades_count": 0,                  # simulate_only = no trades executed
+        "trades_executed": 0,               # explicit zero, never None
+        # Totals (USDC)
         "total_gas_usdc": total_gas_usdc,
         "total_net_usdc": total_net_usdc,
         "pass_rate": round(sim_profitable_count / len(fixture_simulations), 4) if fixture_simulations else 0,
@@ -817,6 +828,8 @@ def run_offline_gate(output_root: Path, profile: str = DoDProfile.SMOKE, strict:
 def run_online_gate(run_dir: Optional[Path], profile: str = DoDProfile.SMOKE, strict: bool = False) -> int:
     """
     Run M4 gate in online mode using real artifacts.
+    
+    Validates that all artifacts come from the same runDir with consistent timestamps.
     """
     if run_dir is None:
         run_dir = find_latest_run_dir()
@@ -826,13 +839,35 @@ def run_online_gate(run_dir: Optional[Path], profile: str = DoDProfile.SMOKE, st
         print("Run: python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml")
         return 2
     
+    # Ensure run_dir is absolute
+    run_dir = Path(run_dir).resolve()
+    
     try:
         display_path = run_dir.relative_to(REPO_ROOT)
     except ValueError:
         display_path = run_dir
     print(f"\n[ONLINE] Using: {display_path}")
+    print(f"[ONLINE] RunDir: {run_dir}")
     
     artifacts = discover_m4_artifacts(run_dir)
+    
+    # Validate artifact timestamps are consistent
+    artifact_timestamps = {}
+    for name, path in artifacts.items():
+        if path and path.exists():
+            # Extract timestamp from filename (e.g., execution_report_20260209_123029.json)
+            import re
+            match = re.search(r"_(\d{8}_\d{6})\.json$", path.name)
+            if match:
+                artifact_timestamps[name] = match.group(1)
+    
+    if artifact_timestamps:
+        unique_ts = set(artifact_timestamps.values())
+        if len(unique_ts) > 1:
+            print(f"\n[WARN] Inconsistent timestamps in runDir:")
+            for name, ts in artifact_timestamps.items():
+                print(f"  - {name}: {ts}")
+            print("  (artifacts may be from different runs)")
     
     # If no execution_report, return NO_SIGNALS
     if artifacts["execution_report"] is None:
@@ -842,6 +877,11 @@ def run_online_gate(run_dir: Optional[Path], profile: str = DoDProfile.SMOKE, st
         return 2
     
     print(f"[ONLINE] Profile: {profile}")
+    print(f"[ONLINE] Artifacts found:")
+    for name, path in artifacts.items():
+        if path:
+            print(f"  - {name}: {path.name}")
+    
     return validate_gate(run_dir, {k: v for k, v in artifacts.items() if v}, profile, strict)
 
 

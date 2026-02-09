@@ -4,7 +4,15 @@
 **Updated**: 2026-02-09  
 **Closure SHA**: `93c08b0`  
 **Gate Version**: `ci_m5_0_gate.py` v2.1.0  
-**Tests**: 549 passed
+**Tests**: 553 passed
+
+---
+
+## ⚠️ Core Truth Statement
+
+> **M5_0 не блокує M4-profit, але є обов'язковим для CI.**  
+> M5_0 валідує схеми/інваріанти артефактів.  
+> M4 execution gate є "core truth" для релізу.
 
 ---
 
@@ -53,7 +61,7 @@ python scripts/ci_m4_execution_gate.py --offline --profile profit
 
 # Unit tests
 python -m pytest tests/unit -q
-# EXPECT: 549 passed, 1 skipped
+# EXPECT: 553 passed, 1 skipped
 ```
 
 ---
@@ -118,6 +126,21 @@ DexType, TokenStatus, PoolStatus, TradeDirection, ExecutionBlocker
 ANCHOR_DEX_PRIORITY, PRICE_SANITY_BOUNDS, PRICE_SANITY_MAX_DEVIATION_BPS
 CURRENT_EXECUTION_BLOCKER, SCHEMA_VERSION, CHAIN_IDS, DEX_IDS
 ```
+
+---
+
+## Schema Versions
+
+| Artifact | Schema Family | Version | Notes |
+|----------|---------------|---------|-------|
+| scan | semver | `3.2.0` | M5 family |
+| truth_report | semver | `3.2.0` | M5 family |
+| reject_histogram | semver | `3.2.0` | M5 family, contains reject **samples** not aggregated counts |
+
+**⚠️ reject_histogram Semantics:**
+- `rejects` = list of individual reject samples (NOT aggregated histogram)
+- `rejects_total` = count of samples in list
+- `price_sanity_failed` = aggregate metric (may differ from rejects_total)
 
 ---
 

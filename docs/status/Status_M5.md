@@ -1,9 +1,9 @@
 # Status: M5 (Production Small)
 
-**Status**: ✅ **DONE** (feature-complete)  
+**Status**: ✅ **DONE** (feature-complete), ⏳ **BLOCKED** by M4 online  
 **Updated**: 2026-02-09  
 **Gate Version**: `ci_m5_gate.py` v1.0.0 (when created)  
-**Tests**: 549 passed
+**Tests**: 553 passed
 
 ---
 
@@ -99,14 +99,32 @@ All gates validate using `core/artifact_invariants.py`:
 
 ---
 
-## M5 vs M5_0 Relationship
+## M5 vs M5_0 vs M4 Relationship
 
-| Aspect | M5_0 | M5 |
-|--------|------|-----|
-| Focus | Infrastructure hardening | Production features |
-| Key artifact | truth_report | daily_report |
-| Gate | `ci_m5_0_gate.py` | `ci_m5_gate.py` |
-| Status | ✅ DONE | ✅ DONE |
+| Aspect | M5_0 | M5 | M4 |
+|--------|------|-----|-----|
+| Focus | Infrastructure | Reporting | Execution |
+| Key artifact | truth_report | daily_report | execution_report |
+| Gate | `ci_m5_0_gate.py` | `ci_m5_gate.py` | `ci_m4_execution_gate.py` |
+| Schema family | semver (3.2.0) | semver (3.2.0) | namespace (m4:*:v1.1) |
+| Blocks Release? | ✅ YES | ❌ NO | ✅ YES (core truth) |
+| Status | ✅ DONE | ✅ DONE | ⏳ ONLINE NOT PROVEN |
+
+---
+
+## Schema Versions
+
+| Artifact | Schema | Family |
+|----------|--------|--------|
+| scan | `3.2.0` | M5 semver |
+| truth_report | `3.2.0` | M5 semver |
+| reject_histogram | `3.2.0` | M5 semver |
+| daily_report | `3.2.0` | M5 semver |
+
+**Cross-family compatibility:**
+- M4 artifacts use namespace pattern: `m4:execution:v1.1`, `m4:signals:v1.1`
+- M5 artifacts use semver pattern: `3.2.0`
+- Gates validate within their family, not across families
 
 ---
 
