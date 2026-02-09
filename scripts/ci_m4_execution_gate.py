@@ -155,15 +155,17 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
         },
     ]
     
-    # Mock simulation results - numerical USD values
-    # All USD fields are numbers, rounded to avoid float artifacts
+    # Mock simulation results - all monetary values in USDC
+    # All USDC fields are numbers, rounded to avoid float artifacts
     # slippage_bps_actual is real bps (0-10000), NOT micro-bps
+    # est_error_usdc = sim_net_usdc - est_net_usdc (negative = sim worse than estimate)
     fixture_simulations = [
         {
             "signal_id": f"sig_001_{ts}",
             "pair": "ARB/WETH",
             "base_token": "ARB",
             "quote_token": "WETH",
+            "price_in": "quote_per_base",  # From signal
             "buy_dex": "uniswap_v3",       # Route from signal
             "sell_dex": "sushiswap_v3",    # Route from signal
             "simulation_status": "PASS",
@@ -171,25 +173,27 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
             "block_used": pinned_block,
             "confidence": 0.85,            # From signal
             "liquidity_hint": "adequate",  # From signal
+            "size_usdc_simulated": 100.0,  # Actual size used in simulation
             "gas_used": 250000,
-            "gas_usd": 0.45,
+            "gas_usdc": 0.45,
             "slippage_bps_actual": 5,      # Real bps (0-10000), 5 bps = 0.05%
-            "slippage_usd": 0.02,
-            "gross_pnl_usd": 0.85,
-            "net_usd": 0.38,
+            "slippage_usdc": 0.02,
+            "gross_pnl_usdc": 0.85,
+            "net_usdc": 0.38,
             "is_profitable": True,
-            # Expanded est_vs_sim
-            "est_net_usd": 0.83,           # From signal.net_pnl_usdc_est
+            # Expanded est_vs_sim (all USDC)
+            "est_net_usdc": 0.83,          # From signal.net_pnl_usdc_est
             "est_was_positive": True,
             "sim_was_positive": True,
             "est_sign_correct": True,      # est_was_positive == sim_was_positive
-            "est_error_usd": -0.45,        # sim_net - est_net (simulation was worse)
+            "est_error_usdc": -0.45,       # sim_net - est_net (negative = sim worse)
         },
         {
             "signal_id": f"sig_002_{ts}",
             "pair": "WETH/USDC",
             "base_token": "WETH",
             "quote_token": "USDC",
+            "price_in": "quote_per_base",
             "buy_dex": "sushiswap_v3",
             "sell_dex": "uniswap_v3",
             "simulation_status": "FAIL",
@@ -197,19 +201,20 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
             "block_used": pinned_block,
             "confidence": 0.60,
             "liquidity_hint": "adequate",
+            "size_usdc_simulated": 100.0,
             "gas_used": 280000,
-            "gas_usd": 0.52,
+            "gas_usdc": 0.52,
             "slippage_bps_actual": 8,      # Real bps, 8 bps = 0.08%
-            "slippage_usd": 0.15,
-            "gross_pnl_usd": 0.00,
-            "net_usd": -0.67,
+            "slippage_usdc": 0.15,
+            "gross_pnl_usdc": 0.00,
+            "net_usdc": -0.67,
             "is_profitable": False,
             # Expanded est_vs_sim
-            "est_net_usd": -0.55,
+            "est_net_usdc": -0.55,
             "est_was_positive": False,
             "sim_was_positive": False,
             "est_sign_correct": True,
-            "est_error_usd": -0.12,        # sim worse than estimate
+            "est_error_usdc": -0.12,       # sim worse than estimate
         },
     ]
     
@@ -235,6 +240,7 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
     signals_data = {
         "schema_version": "m4:signals:v1.1",
         "run_mode": "FIXTURE_OFFLINE",
+        "quote_ccy": "USDC",              # All monetary values in USDC
         "price_format": "decimal_str",    # All prices are string decimals
         "spread_format": "micro_bps",     # spread_bps_micro is integer (1 bps = 10000)
         "generated_at": datetime.utcnow().isoformat() + "Z",
@@ -250,15 +256,16 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
         json.dump(signals_data, f, indent=2)
     
     # Compute totals (numerical) - ROUND to avoid float artifacts
-    total_gas_usd = round(sum(s.get("gas_usd", 0) for s in fixture_simulations), 4)
-    total_slippage_usd = round(sum(s.get("slippage_usd", 0) for s in fixture_simulations), 4)
-    total_net_usd = round(sum(s.get("net_usd", 0) for s in fixture_simulations), 4)
+    # All monetary values are in USDC
+    total_gas_usdc = round(sum(s.get("gas_usdc", 0) for s in fixture_simulations), 4)
+    total_slippage_usdc = round(sum(s.get("slippage_usdc", 0) for s in fixture_simulations), 4)
+    total_net_usdc = round(sum(s.get("net_usdc", 0) for s in fixture_simulations), 4)
     
     # Compute expanded est_vs_sim metrics
-    est_net_sum = round(sum(s.get("est_net_usd", 0) for s in fixture_simulations), 4)
-    sim_net_sum = total_net_usd
+    est_net_sum = round(sum(s.get("est_net_usdc", 0) for s in fixture_simulations), 4)
+    sim_net_sum = total_net_usdc
     est_sign_correct_count = sum(1 for s in fixture_simulations if s.get("est_sign_correct", False))
-    mae_net_usd = round(sum(abs(s.get("est_error_usd", 0)) for s in fixture_simulations) / len(fixture_simulations), 4) if fixture_simulations else 0
+    mae_net_usdc = round(sum(abs(s.get("est_error_usdc", 0)) for s in fixture_simulations) / len(fixture_simulations), 4) if fixture_simulations else 0
     
     # Write execution report
     exec_path = reports_dir / f"execution_report_{ts}.json"
@@ -266,39 +273,42 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
         "schema_version": "m4:execution:v1.1",
         "run_mode": "FIXTURE_OFFLINE",
         "execution_mode": "simulate_only",  # INVARIANT: no real execution
-        "quote_ccy": "USD",                 # All *_usd fields are in USD (≈USDC)
+        "quote_ccy": "USDC",                # All monetary values in USDC
+        "price_format": "decimal_str",      # From signals schema
+        "price_in": "quote_per_base",       # From signals schema  
         "slippage_format": "bps",           # slippage_bps_actual is real bps (0-10000)
+        "est_error_definition": "sim_net_usdc - est_net_usdc",  # Negative = sim worse
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "chain_id": chain_id,
         "pinned_block": pinned_block,
-        "execution_enabled": False,         # INVARIANT: must be false
+        "execution_enabled": False,         # INVARIANT: must be false in M4
         "kill_switch_active": True,         # INVARIANT: no real execution allowed
         "simulations": fixture_simulations,
         "simulations_count": len(fixture_simulations),
         "simulations_passed": sim_profitable_count,
         "simulations_failed": len(fixture_simulations) - sim_profitable_count,
-        "total_gas_usd": total_gas_usd,
-        "total_net_usd": total_net_usd,
+        "total_gas_usdc": total_gas_usdc,
+        "total_net_usdc": total_net_usdc,
         "pass_rate": round(sim_profitable_count / len(fixture_simulations), 4) if fixture_simulations else 0,
         # Expanded Estimate vs Simulation metrics
         "est_vs_sim": {
             "est_profitable_count": est_profitable_count,
             "sim_profitable_count": sim_profitable_count,
             "est_sim_mismatch_count": est_sim_mismatch_count,
-            "est_net_usd_sum": est_net_sum,
-            "sim_net_usd_sum": sim_net_sum,
+            "est_net_usdc_sum": est_net_sum,
+            "sim_net_usdc_sum": sim_net_sum,
             "est_sign_correct_count": est_sign_correct_count,
             "est_sign_correct_rate": round(est_sign_correct_count / len(fixture_simulations), 4) if fixture_simulations else 0,
-            "mae_net_usd": mae_net_usd,  # Mean Absolute Error
+            "mae_net_usdc": mae_net_usdc,  # Mean Absolute Error
         },
-        # Accounting summary (all numbers, rounded)
+        # Accounting summary (all numbers, rounded, in USDC)
         "accounting": {
             "signals_total": len(fixture_signals),
             "signals_profitable": sim_profitable_count,
             "signals_unprofitable": len(fixture_simulations) - sim_profitable_count,
-            "gas_total_usd": total_gas_usd,
-            "slippage_total_usd": total_slippage_usd,
-            "net_total_usd": total_net_usd,
+            "gas_total_usdc": total_gas_usdc,
+            "slippage_total_usdc": total_slippage_usdc,
+            "net_total_usdc": total_net_usdc,
             "accounting_complete": True,
         },
         # Health metrics
@@ -418,13 +428,13 @@ def validate_execution_report(
     else:
         checks.append(("execution_enabled", False, f"INVARIANT VIOLATED: execution_enabled={exec_enabled}"))
     
-    # kill_switch_active MUST be true (M4 DoD)
+    # kill_switch_active MUST be true (M4 DoD - STRICT)
     kill_switch = data.get("kill_switch_active")
     if kill_switch is True:
         checks.append(("kill_switch", True, "kill_switch_active=true (no real execution)"))
     elif kill_switch is None:
-        # Optional for backwards compatibility
-        pass
+        # STRICT: missing is a FAIL in M4 - must be explicitly true
+        checks.append(("kill_switch", False, "MISSING: kill_switch_active must be true in M4"))
     else:
         checks.append(("kill_switch", False, f"DANGER: kill_switch_active={kill_switch}"))
     
@@ -471,16 +481,21 @@ def validate_execution_report(
         checks.append(("simulation_pass_rate", False, "Missing simulation_pass_rate"))
     
     # Block consistency check
-    blocks_consistent = health.get("blocks_consistent", False)
-    if blocks_consistent:
+    blocks_consistent = health.get("blocks_consistent")  # None if not present
+    if blocks_consistent is True:
         checks.append(("blocks_consistent", True, "All simulations used same pinned_block"))
+    elif blocks_consistent is False:
+        # Explicitly false - fail
+        checks.append(("blocks_consistent", False, "blocks_consistent=false in health"))
     elif data.get("simulations"):
-        # Validate manually
+        # Not present but has simulations - validate manually
         sim_blocks = [s.get("block_used") for s in data.get("simulations", [])]
         if sim_blocks and all(b == sim_blocks[0] for b in sim_blocks):
             checks.append(("blocks_consistent", True, "All simulations used same block"))
+            blocks_consistent = True  # Update for DoD checks
         else:
             checks.append(("blocks_consistent", False, f"Block mismatch in simulations: {set(sim_blocks)}"))
+            blocks_consistent = False
     
     # est_vs_sim metrics
     est_vs_sim = data.get("est_vs_sim", {})
@@ -493,14 +508,14 @@ def validate_execution_report(
     # ============================================================
     
     sims_passed = data.get("simulations_passed", 0)
-    total_net_usd = data.get("total_net_usd", 0)
+    total_net_usdc = data.get("total_net_usdc", 0)
     
     # Convert to number if string
-    if isinstance(total_net_usd, str):
+    if isinstance(total_net_usdc, str):
         try:
-            total_net_usd = float(total_net_usd)
+            total_net_usdc = float(total_net_usdc)
         except ValueError:
-            total_net_usd = 0
+            total_net_usdc = 0
     
     if profile == DoDProfile.SMOKE:
         # SMOKE: PASS if simulations_passed >= 1 AND accounting_complete AND blocks_consistent
@@ -522,13 +537,13 @@ def validate_execution_report(
         # else: already checked above
     
     elif profile == DoDProfile.PROFIT:
-        # PROFIT: PASS if total_net_usd > 0 AND sim_profitable_count >= 1
+        # PROFIT: PASS if total_net_usdc > 0 AND sim_profitable_count >= 1
         sim_profitable_count = est_vs_sim.get("sim_profitable_count", sims_passed)
         
-        if total_net_usd > 0:
-            checks.append(("dod_profit_net", True, f"total_net_usd={total_net_usd:.4f} > 0"))
+        if total_net_usdc > 0:
+            checks.append(("dod_profit_net", True, f"total_net_usdc={total_net_usdc:.4f} > 0"))
         else:
-            checks.append(("dod_profit_net", False, f"total_net_usd={total_net_usd:.4f} <= 0 (UNPROFITABLE)"))
+            checks.append(("dod_profit_net", False, f"total_net_usdc={total_net_usdc:.4f} <= 0 (UNPROFITABLE)"))
         
         if sim_profitable_count >= 1:
             checks.append(("dod_profit_sims", True, f"sim_profitable_count={sim_profitable_count} >= 1"))
@@ -546,7 +561,7 @@ def validate_simulations(simulations: List[Dict[str, Any]]) -> List[Tuple[str, b
     """Validate individual simulations have required fields and valid blockers."""
     checks = []
     
-    required_fields = ["signal_id", "simulation_status", "gas_usd", "net_usd", "is_profitable"]
+    required_fields = ["signal_id", "simulation_status", "gas_usdc", "net_usdc", "is_profitable"]
     
     # Valid blocker values from SimRejectReason enum
     valid_blockers = {r.value for r in SimRejectReason}
@@ -764,11 +779,11 @@ def validate_gate(run_dir: Path, artifacts: Dict[str, Path], profile: str, stric
         return 1
     else:
         # Show key metrics
-        total_net = exec_data.get("total_net_usd", 0)
+        total_net = exec_data.get("total_net_usdc", 0)
         sims_passed = exec_data.get("simulations_passed", 0)
         print(f"RESULT: PASS (profile={profile})")
         print(f"  simulations_passed: {sims_passed}")
-        print(f"  total_net_usd: {total_net}")
+        print(f"  total_net_usdc: {total_net}")
         print(f"RunDir: {run_dir}")
         return 0
 

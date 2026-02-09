@@ -58,15 +58,15 @@ class TestCurrentBlockMismatch(unittest.TestCase):
                     "signal_id": "sig_001",
                     "simulation_status": "PASS",
                     "block_used": 429900001,  # MISMATCH - different block
-                    "gas_usd": 0.45,
-                    "net_usd": 0.38,
+                    "gas_usdc": 0.45,
+                    "net_usdc": 0.38,
                     "is_profitable": True,
                 }
             ],
             "simulations_count": 1,
             "simulations_passed": 1,
             "simulations_failed": 0,
-            "total_net_usd": 0.38,
+            "total_net_usdc": 0.38,
             "accounting": {"signals_total": 1, "accounting_complete": True},
             "health": {"simulation_pass_rate": 1.0},
         }
@@ -102,7 +102,8 @@ class TestCurrentBlockMismatch(unittest.TestCase):
             "simulations_count": 0,
             "simulations_passed": 0,
             "simulations_failed": 0,
-            "total_net_usd": 0,
+            "total_net_usdc": 0,
+            "kill_switch_active": True,
             "accounting": {"signals_total": 0, "accounting_complete": True},
             "health": {"simulation_pass_rate": 0},
         }
@@ -116,14 +117,14 @@ class TestCurrentBlockMismatch(unittest.TestCase):
 class TestMissingSimulationMetrics(unittest.TestCase):
     """Test that missing simulation metrics fail validation."""
 
-    def test_missing_gas_usd_fails(self):
-        """Simulation without gas_usd should fail."""
+    def test_missing_gas_usdc_fails(self):
+        """Simulation without gas_usdc should fail."""
         simulations = [
             {
                 "signal_id": "sig_001",
                 "simulation_status": "PASS",
-                # "gas_usd": "0.45",  # MISSING
-                "net_usd": "0.38",
+                # "gas_usdc": "0.45",  # MISSING
+                "net_usdc": "0.38",
                 "is_profitable": True,
             }
         ]
@@ -132,16 +133,16 @@ class TestMissingSimulationMetrics(unittest.TestCase):
         failures = [c for c in checks if not c[1]]
         
         self.assertEqual(len(failures), 1)
-        self.assertIn("gas_usd", str(failures[0]))
+        self.assertIn("gas_usdc", str(failures[0]))
 
-    def test_missing_net_usd_fails(self):
-        """Simulation without net_usd should fail."""
+    def test_missing_net_usdc_fails(self):
+        """Simulation without net_usdc should fail."""
         simulations = [
             {
                 "signal_id": "sig_001",
                 "simulation_status": "PASS",
-                "gas_usd": "0.45",
-                # "net_usd": "0.38",  # MISSING
+                "gas_usdc": "0.45",
+                # "net_usdc": "0.38",  # MISSING
                 "is_profitable": True,
             }
         ]
@@ -150,7 +151,7 @@ class TestMissingSimulationMetrics(unittest.TestCase):
         failures = [c for c in checks if not c[1]]
         
         self.assertEqual(len(failures), 1)
-        self.assertIn("net_usd", str(failures[0]))
+        self.assertIn("net_usdc", str(failures[0]))
 
     def test_fail_without_blocker_reason_fails(self):
         """FAIL status without blocker reason should fail validation."""
@@ -158,8 +159,8 @@ class TestMissingSimulationMetrics(unittest.TestCase):
             {
                 "signal_id": "sig_001",
                 "simulation_status": "FAIL",
-                "gas_usd": "0.45",
-                "net_usd": "-0.20",
+                "gas_usdc": "0.45",
+                "net_usdc": "-0.20",
                 "is_profitable": False,
                 # "blocker": "SIM_UNPROFITABLE",  # MISSING
             }
@@ -189,7 +190,8 @@ class TestExecutionEnabledInvariant(unittest.TestCase):
             "simulations_count": 0,
             "simulations_passed": 0,
             "simulations_failed": 0,
-            "total_net_usd": 0,
+            "total_net_usdc": 0,
+            "kill_switch_active": True,
             "accounting": {"signals_total": 0, "accounting_complete": True},
             "health": {"simulation_pass_rate": 0},
         }
@@ -209,13 +211,14 @@ class TestExecutionEnabledInvariant(unittest.TestCase):
             "run_mode": "FIXTURE_OFFLINE",
             "execution_mode": "simulate_only",
             # "execution_enabled": False,  # MISSING
+            "kill_switch_active": True,
             "chain_id": 42161,
             "pinned_block": 429900000,
             "simulations": [],
             "simulations_count": 0,
             "simulations_passed": 0,
             "simulations_failed": 0,
-            "total_net_usd": 0,
+            "total_net_usdc": 0,
             "accounting": {"signals_total": 0, "accounting_complete": True},
             "health": {"simulation_pass_rate": 0},
         }
@@ -245,15 +248,16 @@ class TestStrictModeRequirements(unittest.TestCase):
                     "simulation_status": "FAIL",
                     "block_used": 429900000,
                     "blocker": "SIM_UNPROFITABLE",
-                    "gas_usd": 0.45,
-                    "net_usd": -0.20,
+                    "gas_usdc": 0.45,
+                    "net_usdc": -0.20,
                     "is_profitable": False,
                 }
             ],
             "simulations_count": 1,
             "simulations_passed": 0,
             "simulations_failed": 1,
-            "total_net_usd": -0.20,
+            "total_net_usdc": -0.20,
+            "kill_switch_active": True,
             "accounting": {"signals_total": 1, "accounting_complete": True},
             "health": {"simulation_pass_rate": 0},
         }
@@ -267,6 +271,104 @@ class TestStrictModeRequirements(unittest.TestCase):
         checks_profit = validate_execution_report(exec_data, DoDProfile.PROFIT, strict=False)
         failures_profit = [c for c in checks_profit if not c[1]]
         self.assertGreater(len(failures_profit), 0, "Profit profile should fail with negative net")
+
+
+class TestKillSwitchStrict(unittest.TestCase):
+    """Test strict kill_switch validation (M4 invariant)."""
+
+    def test_kill_switch_false_fails(self):
+        """kill_switch_active=false should fail (M4 invariant)."""
+        exec_data = {
+            "schema_version": "m4:execution:v1.1",
+            "run_mode": "FIXTURE_OFFLINE",
+            "execution_mode": "simulate_only",
+            "execution_enabled": False,
+            "kill_switch_active": False,  # INVARIANT VIOLATION
+            "chain_id": 42161,
+            "pinned_block": 429900000,
+            "simulations": [],
+            "simulations_count": 0,
+            "simulations_passed": 0,
+            "simulations_failed": 0,
+            "total_net_usdc": 0,
+            "accounting": {"signals_total": 0, "accounting_complete": True},
+            "health": {"simulation_pass_rate": 0},
+        }
+        
+        checks = validate_execution_report(exec_data, DoDProfile.SMOKE, strict=False)
+        failures = [c for c in checks if not c[1]]
+        
+        ks_failures = [f for f in failures if "kill_switch" in f[0]]
+        self.assertEqual(len(ks_failures), 1, "kill_switch=false should fail")
+        self.assertIn("DANGER", ks_failures[0][2])
+
+    def test_kill_switch_missing_fails(self):
+        """Missing kill_switch_active should fail (M4 strict)."""
+        exec_data = {
+            "schema_version": "m4:execution:v1.1",
+            "run_mode": "FIXTURE_OFFLINE",
+            "execution_mode": "simulate_only",
+            "execution_enabled": False,
+            # "kill_switch_active": True,  # MISSING
+            "chain_id": 42161,
+            "pinned_block": 429900000,
+            "simulations": [],
+            "simulations_count": 0,
+            "simulations_passed": 0,
+            "simulations_failed": 0,
+            "total_net_usdc": 0,
+            "accounting": {"signals_total": 0, "accounting_complete": True},
+            "health": {"simulation_pass_rate": 0},
+        }
+        
+        checks = validate_execution_report(exec_data, DoDProfile.SMOKE, strict=False)
+        failures = [c for c in checks if not c[1]]
+        
+        ks_failures = [f for f in failures if "kill_switch" in f[0]]
+        self.assertEqual(len(ks_failures), 1, "kill_switch missing should fail")
+        self.assertIn("MISSING", ks_failures[0][2])
+
+
+class TestBlocksConsistentFails(unittest.TestCase):
+    """Test that blocks_consistent=false fails validation."""
+
+    def test_blocks_inconsistent_fails_smoke(self):
+        """blocks_consistent=false should fail smoke profile."""
+        exec_data = {
+            "schema_version": "m4:execution:v1.1",
+            "run_mode": "FIXTURE_OFFLINE",
+            "execution_mode": "simulate_only",
+            "execution_enabled": False,
+            "kill_switch_active": True,
+            "chain_id": 42161,
+            "pinned_block": 429900000,
+            "simulations": [
+                {
+                    "signal_id": "sig_001",
+                    "simulation_status": "PASS",
+                    "block_used": 429900001,  # DIFFERENT from pinned
+                    "gas_usdc": 0.45,
+                    "net_usdc": 0.38,
+                    "is_profitable": True,
+                }
+            ],
+            "simulations_count": 1,
+            "simulations_passed": 1,
+            "simulations_failed": 0,
+            "total_net_usdc": 0.38,
+            "accounting": {"signals_total": 1, "accounting_complete": True},
+            "health": {
+                "simulation_pass_rate": 1.0,
+                "blocks_consistent": False,  # Explicitly false
+            },
+        }
+        
+        checks = validate_execution_report(exec_data, DoDProfile.SMOKE, strict=False)
+        failures = [c for c in checks if not c[1]]
+        
+        # Should have blocks_consistent failure
+        block_failures = [f for f in failures if "block" in f[0].lower()]
+        self.assertGreater(len(block_failures), 0, "blocks_consistent=false should fail smoke")
 
 
 class TestGateIntegration(unittest.TestCase):

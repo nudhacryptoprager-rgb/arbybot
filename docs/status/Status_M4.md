@@ -24,7 +24,24 @@ Golden має 1 profitable (+$0.38) і 1 unprofitable (-$0.67) = **сумарн�
 | Artifact | Version | Description |
 |----------|---------|-------------|
 | signals | `m4:signals:v1.1` | base/quote, price_in, micro-bps, PnL breakdown |
-| execution_report | `m4:execution:v1.1` | Numerical USD (rounded), block consistency, kill_switch |
+| execution_report | `m4:execution:v1.1` | Numerical USDC (rounded), block consistency, kill_switch |
+
+### Fixture Rules (ВАЖЛИВО)
+
+1. **Synthetic pinned_block**: Offline fixtures використовують фіктивний `pinned_block=429900000`. Важливий **тільки інваріант консистентності** (всі blocks однакові), а не реальність номера блоку.
+
+2. **Currency**: Всі грошові поля використовують USDC як quote currency:
+   - signals: `*_usdc_est` (estimated)
+   - execution_report: `*_usdc` (simulated/actual) + `quote_ccy="USDC"`
+
+3. **est_error_usdc**: Визначення: `sim_net_usdc - est_net_usdc`
+   - Негативне значення = симуляція гірша за оцінку
+   - Позитивне = симуляція краща за оцінку
+
+4. **Golden як контрольний тест**:
+   - `--profile smoke` → **PASS** (є 1 profitable)
+   - `--profile profit` → **FAIL** (total_net < 0)
+   - НЕ ЗМІНЮВАТИ golden без оновлення тестів!
 
 ---
 
