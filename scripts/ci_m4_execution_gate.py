@@ -2625,10 +2625,11 @@ def run_online_gate(
         head_sha = get_git_head_sha()
         
         latest_data = {
-            "schema_version": "m4:latest:v1.5",
+            "schema_version": "m4:latest:v1.6",
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            # v1.9.0: Clear SHA fields
-            "head_sha": head_sha,  # Current HEAD at time of update
+            # v1.9.2: Clear SHA naming
+            "latest_run_code_sha": git_ctx["code_sha"],  # SHA of code that ran this scan
+            "attached_evidence_sha": None,  # null until attach_evidence.py sets it
             "run_context": {
                 "code_sha": git_ctx["code_sha"],
                 "code_dirty": git_ctx["code_dirty"] if git_ctx["code_dirty"] is not None else False,

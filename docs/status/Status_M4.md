@@ -2,7 +2,7 @@
 
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
 **Updated**: 2026-02-09 21:20 UTC  
-**Evidence SHA**: `8ce8814`  
+**Evidence SHA**: `4dba845`  
 **Gate Version**: `ci_m4_execution_gate.py` v1.9.2  
 **Tests**: 562 passed, 1 skipped
 
@@ -14,20 +14,35 @@
 
 | Field | Meaning | When Set |
 |-------|---------|----------|
-| `run_context.code_sha` | SHA of code that **ran** the scan | During run |
+| `latest_run_code_sha` | SHA of code that **ran** the scan (top-level in _latest.json) | During run |
+| `attached_evidence_sha` | SHA attached as evidence (top-level in _latest.json) | After `attach_evidence.py` |
+| `run_context.code_sha` | Same as `latest_run_code_sha` (in run_context block) | During run |
 | `run_context.code_dirty` | `true` if uncommitted changes | During run |
 | `run_context.code_desc` | `"{sha}-dirty"` or `"{sha}-clean"` | During run |
-| `run_context.evidence_sha` | SHA of commit that **documents** this run | After commit, via `attach_evidence.py` |
-| `head_sha` | Current HEAD at time of _latest.json update | During update |
+| `run_context.evidence_sha` | Same as `attached_evidence_sha` | After `attach_evidence.py` |
 
 ### Evidence Workflow
 
+```bash
+# 1. Run scan (with dirty worktree is OK for development)
+python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling
+
+# 2. Commit your code changes
+git add -A && git commit -m "your changes"
+
+# 3. Attach evidence SHA to rolling artifacts
+python scripts/attach_evidence.py           # Uses current HEAD
+python scripts/attach_evidence.py --sha abc1234  # Or specify SHA
+python scripts/attach_evidence.py --dry-run  # Preview changes
+
+# 4. Verify
+cat data/runs/_rolling/_latest.json | grep evidence
 ```
-1. Run scan           → code_sha = HEAD, code_dirty = true/false
-2. Commit code        → get new SHA (e.g., abc1234)  
-3. Attach evidence    → python scripts/attach_evidence.py --sha abc1234
-4. Status_M4.md       → updated with evidence_sha
-```
+
+**Exit codes for attach_evidence.py:**
+- `0` = Success (files updated)
+- `1` = Error
+- `2` = Noop (SHA already attached)
 
 ### Evidence Issues
 
@@ -47,7 +62,10 @@
 
 For **PROVEN** status, at least one run should have:
 - `code_dirty = false` (clean worktree)
-- `evidence_sha` attached post-commit
+- `evidence_sha` attached post-commit (NOT null)
+- `evidence.ok = true` (no issues)
+
+**⚠️ CRITICAL: Artifacts with `evidence_sha = null` are NOT considered valid proof.**
 
 ### --reset-window Flag (v1.9.2)
 
