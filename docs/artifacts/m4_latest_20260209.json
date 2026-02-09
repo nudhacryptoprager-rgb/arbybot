@@ -1,0 +1,17 @@
+{
+  "schema_version": "m4:latest:v1.1",
+  "updated_at": "2026-02-09T17:51:52.832983Z",
+  "latest_run_dir": "ci_m5_gate_20260209_185145",
+  "latest_run_id": "ci_m5_gate_20260209_185145",
+  "latest_status": "PASS",
+  "paths": {
+    "run_summary": "ci_m5_gate_20260209_185145/reports/run_summary_20260209_175152.json",
+    "stability_summary": "ci_m5_gate_20260209_185145/reports/stability_summary_20260209_175152.json",
+    "rolling_agg": "m4_stability_agg.json"
+  },
+  "aggregator_path": "m4_stability_agg.json",
+  "agg_status": "PASS",
+  "runs_in_window": 15,
+  "in_warmup": false,
+  "total_signals_in_window": 40
+}
