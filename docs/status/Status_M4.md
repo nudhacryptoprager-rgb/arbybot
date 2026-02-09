@@ -1,14 +1,14 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
-**Updated**: 2026-02-09 19:00 UTC  
-**Evidence SHA**: `12771d6`  
-**Gate Version**: `ci_m4_execution_gate.py` v1.6.0  
+**Updated**: 2026-02-09 20:00 UTC  
+**Evidence SHA**: `cfddcca`  
+**Gate Version**: `ci_m4_execution_gate.py` v1.7.0  
 **Tests**: 562 passed, 1 skipped
 
 ---
 
-## 📖 How to Read run_summary.json (v1.6.0)
+## 📖 How to Read run_summary.json (v1.7.0)
 
 > **Quick Guide for PASS / WARN / FAIL interpretation**
 
@@ -28,6 +28,7 @@
 | `profit_status=PASS`, `drift_status=WARN` | ⚠️ Profitable but investigate MAE drift |
 | `profit_status=PASS`, `drift_status=FAIL` | 🔴 Profitable but model unreliable - fix before scaling |
 | `profit_status=FAIL` | 🚨 Not profitable - investigate immediately |
+| `WARN_LOW_SAMPLE` in reasons | ⚠️ Too few signals (<5) - conclusions unreliable |
 
 ### Key Metrics to Check
 
@@ -35,13 +36,15 @@
 2. **`mae_net_usdc`** - Model accuracy (lower is better, WARN > 0.30, FAIL > 0.50)
 3. **`mae_no_slippage`** - Drift without slippage (should be ~0 if model is accurate)
 4. **`fragile_count`** - Signals at risk of flipping sign (ideally 0)
+5. **`fragile_rate`** - Percentage of fragile signals (v1.7.0)
 
-### Policy Block
+### Policy Block (v1.7.0)
 
 ```json
 "policy": {
   "mae_fail_inclusive": false,  // > 0.50 is FAIL, not >= 0.50
-  "status_rule": "PASS if profit_status=PASS AND drift_status!=FAIL"
+  "status_rule": "PASS if profit_status=PASS AND drift_status!=FAIL",
+  "no_slippage_definition": "mae_no_slippage disables only slippage_bps delta, keeps gas cost"
 }
 ```
 
@@ -62,7 +65,57 @@
 
 ---
 
-## Status Model v1.6.0
+## 📊 MAE Drift Components (v1.7.0)
+
+> **Understanding drift metrics**
+
+| Metric | Formula | Meaning |
+|--------|---------|---------|
+| `sum_drift_usdc` | `abs(est_net_sum - sim_net_sum)` | Total $ difference between truth and simulation |
+| `mae_net_usdc` | `mean(abs(est_i - sim_i))` | Average per-signal absolute error |
+| `mae_slippage_component` | `mean(size_usd * slippage_bps / 10000)` | Expected MAE from slippage difference (truth=0bps, sim=Xbps) |
+| `total_slippage_usdc` | `mae_slippage_component * signals_count` | Total slippage cost across all signals |
+| `mae_no_slippage` | `max(0, mae_net_usdc - mae_slippage_component)` | MAE attributable to non-slippage factors |
+
+**Key insight:**
+- If `mae_no_slippage ≈ 0`, then all drift is from slippage cost model difference
+- If `mae_no_slippage > 0`, there's additional model error (prices, gas, etc.)
+
+**Example:**
+```
+est_net_usdc_sum = 4.68   # truth estimate (no slippage)
+sim_net_usdc_sum = 3.68   # simulation (5bps slippage)
+sum_drift_usdc   = 1.00   # |4.68 - 3.68| = $1.00 total drift
+
+mae_slippage_component = 0.50  # Expected per-signal slippage cost
+total_slippage_usdc    = 1.00  # 0.50 * 2 signals = $1.00
+
+mae_no_slippage = 0  # All drift explained by slippage ✅
+```
+
+---
+
+## 📁 Artifact Naming Convention (v1.7.0)
+
+> **Clarity on single-run vs multi-run artifacts**
+
+| Artifact | Type | Schema | Purpose |
+|----------|------|--------|---------|
+| `stability_summary_*.json` | Single-run | `m4:stability:v1.2` | One execution gate run |
+| `run_summary_*.json` | Single-run | `run:summary:v1.3` | Canonical single-run source of truth |
+| `m4_stability_agg.json` | Multi-run | `m4:stability_agg:v1.3` | Rolling window aggregator |
+| `_latest.json` | Pointer | `m4:latest:v1.0` | Points to latest run for continuous scan |
+
+**⚠️ "summary" = per-run artifact, "agg" = multi-run aggregate**
+
+**Rolling window defaults:**
+- Default window: 50 runs
+- Max window: 200 runs
+- Older runs are dropped to prevent unbounded growth
+
+---
+
+## Status Model v1.7.0
 
 > **Split Status Policy:**
 > - `profit_status`: PASS if total_net > 0 (we made money)
@@ -74,16 +127,25 @@
 |--------|------|------|-------|
 | MAE | > 0.30 | > 0.50 | Exclusive: mae=0.50 is WARN, mae=0.51 is FAIL |
 | Sign Rate | < 0.80 | < 0.70 | Percentage of correct sign predictions |
+| Sample Size | < 5 | - | WARN_LOW_SAMPLE added to reasons |
+
+**Aggregator-level thresholds (v1.7.0):**
+| Metric | Threshold | Action |
+|--------|-----------|--------|
+| p90(MAE) | > 0.60 | AGG_FAIL |
+| warn_rate | > 30% | AGG_FAIL |
+| fail_rate | > 10% | AGG_FAIL |
 
 **Interpretation:**
 - **profit_status=PASS, drift_status=WARN**: Profitable but model needs tuning
 - **profit_status=PASS, drift_status=FAIL**: Profitable but unreliable model (lucky?)
 - **profit_status=FAIL**: Not profitable (fix immediately)
 
-**New Metrics (v1.5.0):**
-- `mae_no_slippage`: MAE excluding systematic slippage component
-- `fragile_count`: Signals where est_net < slippage + gas (at risk of flip)
-- `evidence.ok`: Whether source_sha matches current HEAD
+**New Metrics (v1.7.0):**
+- `fragile_rate`: Percentage of signals that are fragile
+- `WARN_LOW_SAMPLE`: Added when signals_count < 5
+- `source_execution_report` in inputs: Links to the execution report
+- Aggregator `agg_status`/`agg_reasons`: Rolling window level status
 
 ---
 
