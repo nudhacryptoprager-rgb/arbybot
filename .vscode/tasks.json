@@ -1,19 +1,101 @@
-﻿{
+{
   "version": "2.0.0",
   "tasks": [
     {
       "label": "ARBY: SMOKE scan (once)",
       "type": "shell",
-      "command": "python -m strategy.jobs.run_scan --chain arbitrum_one --once --no-json-logs",
+      "command": "python -m strategy.jobs.run_scan --mode smoke --cycles 1",
       "problemMatcher": [],
-      "group": "build"
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      }
     },
     {
       "label": "ARBY: pytest (unit)",
       "type": "shell",
-      "command": "pytest -q",
+      "command": "python -m pytest tests/unit -q",
       "problemMatcher": [],
-      "group": "test"
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      }
+    },
+    {
+      "label": "ARBY: M4 gate OFFLINE (profit)",
+      "type": "shell",
+      "command": "python scripts/ci_m4_execution_gate.py --offline --profile profit --artifact-mode rolling",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      }
+    },
+    {
+      "label": "ARBY: M4 gate OFFLINE (smoke)",
+      "type": "shell",
+      "command": "python scripts/ci_m4_execution_gate.py --offline --profile smoke --artifact-mode rolling",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      }
+    },
+    {
+      "label": "ARBY: M5 gate OFFLINE",
+      "type": "shell",
+      "command": "python scripts/ci_m5_0_gate.py --offline",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      }
+    },
+    {
+      "label": "ARBY: M4 gate ONLINE (profit)",
+      "type": "shell",
+      "command": "python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      }
+    },
+    {
+      "label": "ARBY: Full Pipeline (CI)",
+      "type": "shell",
+      "command": "python scripts/ci_full_pipeline.py --mode ci",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      }
+    },
+    {
+      "label": "ARBY: Check Rolling Artifacts",
+      "type": "shell",
+      "command": "Get-Content data\\runs\\_rolling\\_latest.json; Get-Content data\\runs\\_rolling\\run_summary_latest.json | Select-Object -First 30",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      }
     }
   ]
 }

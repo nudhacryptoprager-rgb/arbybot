@@ -26,6 +26,8 @@ from pathlib import Path
 # Patterns that indicate runtime artifacts (should NOT be committed)
 FORBIDDEN_PATTERNS = [
     "data/runs/",
+    "data/runs/_rolling/",
+    "data/runs/_incidents/",
     "run_summary_",
     "stability_summary_",
     "execution_report_",

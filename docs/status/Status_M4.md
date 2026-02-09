@@ -6,6 +6,44 @@
 **Gate Version**: `ci_m4_execution_gate.py` v1.7.0  
 **Tests**: 562 passed, 1 skipped
 
+## 🛡️ Artifact Retention & Disk Policy (v1.8.0)
+
+> **New policy: Only rolling artifacts persist; per-run artifacts are disk-written only for incidents (FAIL).**
+
+### Artifact Retention Rules
+
+- **Rolling artifacts only:**
+  - `data/runs/_rolling/_latest.json`
+  - `data/runs/_rolling/m4_stability_agg.json`
+  - `data/runs/_rolling/run_summary_latest.json`
+- **Per-run artifacts:**
+  - Written to `data/runs/_incidents/<run_id>/` only on incident (FAIL)
+  - All scan/truth/signals/execution artifacts are generated in-memory/tmp unless incident
+- **Aggregator:**
+  - Uses light-format only; legacy runs are purged
+- **Retention:**
+  - Incident bundles: N=50, TTL=7 days
+- **CI guard:**
+  - Blocks runtime artifacts except golden fixtures (see `ci_no_runtime_artifacts.py`)
+- **Golden fixtures:**
+  - Only committed under `docs/artifacts/` for reproducible tests
+
+### Example Directory Structure
+
+```
+data/runs/_rolling/_latest.json
+data/runs/_rolling/m4_stability_agg.json
+data/runs/_rolling/run_summary_latest.json
+data/runs/_incidents/<run_id>/run_summary.json  # Only for FAIL
+docs/artifacts/ci_m4_gate_offline_YYYYMMDD/     # Golden fixtures only
+```
+
+### Enforcement
+
+- CI guard (`ci_no_runtime_artifacts.py`) blocks any runtime artifacts except golden fixtures
+- All scan/truth/signals/execution artifacts are in-memory/tmp unless incident
+- Aggregator and rolling window are disk-safe, unbounded growth prevented
+
 ---
 
 ## 📖 How to Read run_summary.json (v1.7.0)

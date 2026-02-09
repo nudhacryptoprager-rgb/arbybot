@@ -155,6 +155,7 @@ def run_scan(
     config: Dict[str, Any],
     output_dir: Path,
     cycles: int = 1,
+    artifact_mode: str = "full",
 ) -> Dict[str, Any]:
     """
     Run scan cycle(s).
@@ -277,7 +278,7 @@ def run_scan(
     
     # Write artifacts
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    artifacts = write_artifacts(output_dir, timestamp, scan_data, truth_data, reject_data)
+    artifacts = write_artifacts(output_dir, timestamp, scan_data, truth_data, reject_data, artifact_mode=artifact_mode)
     
     logger.info("Scan completed: %s artifacts written", len(artifacts))
     for name, path in artifacts.items():

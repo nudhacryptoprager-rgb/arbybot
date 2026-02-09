@@ -24,11 +24,13 @@ def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int 
         "fragile_rate": metrics.get("fragile_rate", 0),
         "signals_count": metrics.get("signals_count", 0),
     })
-    # Only use light-format runs for stats (skip legacy/metrics dict entries)
-    runs = [r for r in agg_data["runs"] if "net_usdc" in r]
+    # Clean legacy: keep only light-format runs
+    agg_data["runs"] = [r for r in agg_data["runs"] if "net_usdc" in r]
+    runs = agg_data["runs"]
     # Rolling window (v1.7.0): keep only last N runs
     if len(runs) > max_runs:
-        runs = runs[-max_runs:]
+        agg_data["runs"] = runs[-max_runs:]
+        runs = agg_data["runs"]
     # Update stats (reuse previous logic, but only for quick_stats)
     pass_count = sum(1 for r in runs if not any(x for x in r["reasons"] if x.startswith("FAIL_")))
     fail_count = len(runs) - pass_count
@@ -73,6 +75,7 @@ def emit_to_aggregator_light(run_summary: dict, agg_path: 'Path', max_runs: int 
     }
     agg_data["updated_at"] = datetime.utcnow().isoformat() + "Z"
     agg_data["runs_included"] = len(runs)
+    agg_data["runs_in_window"] = len(runs)
     agg_data["rolling_window"] = {
         "max": max_runs,
         "current": len(runs),
@@ -2225,6 +2228,35 @@ def run_online_gate(
     artifact_mode: str = "rolling",
     emit_agg: Optional[Path] = None,
 ) -> int:
+    # Incident bundle persistence and retention
+    def persist_incident_bundle(run_id, bundle_dict):
+        incident_dir = REPO_ROOT / "data" / "runs" / "_incidents" / run_id
+        incident_dir.mkdir(parents=True, exist_ok=True)
+        for k, v in bundle_dict.items():
+            path = incident_dir / f"{k}.json"
+            with open(path, "w") as f:
+                json.dump(v, f, indent=2)
+        return incident_dir
+
+    def cleanup_incidents(max_n=50, max_days=7):
+        incidents_root = REPO_ROOT / "data" / "runs" / "_incidents"
+        if not incidents_root.exists():
+            return
+        dirs = sorted([d for d in incidents_root.iterdir() if d.is_dir()], key=lambda x: x.stat().st_mtime, reverse=True)
+        # Remove by count
+        for d in dirs[max_n:]:
+            for f in d.glob("*.json"):
+                f.unlink()
+            d.rmdir()
+        # Remove by TTL
+        now = datetime.utcnow()
+        for d in dirs:
+            age_days = (now - datetime.utcfromtimestamp(d.stat().st_mtime)).days
+            if age_days > max_days:
+                for f in d.glob("*.json"):
+                    f.unlink()
+                d.rmdir()
+
     """
     Run M4 gate in online mode using real artifacts.
     
@@ -2295,26 +2327,26 @@ def run_online_gate(
         # Save rolling artifacts only
         rolling_dir = REPO_ROOT / "data" / "runs" / "_rolling"
         rolling_dir.mkdir(parents=True, exist_ok=True)
+        # Remove source_* filenames in rolling mode (they may not exist on disk)
+        if "inputs" in run_summary and isinstance(run_summary["inputs"], dict):
+            for k in list(run_summary["inputs"].keys()):
+                if k.startswith("source_"):
+                    run_summary["inputs"][k] = None
         run_summary_latest_path = rolling_dir / "run_summary_latest.json"
         with open(run_summary_latest_path, "w") as f:
             json.dump(run_summary, f, indent=2)
         # Emit to aggregator (light runs)
         if emit_agg:
             emit_to_aggregator_light(run_summary, emit_agg)
-        # If FAIL, save incident bundle
+        # Incident bundle persistence
         status = run_summary.get("status", "UNKNOWN")
         reasons = run_summary.get("reasons", [])
         is_fail = status == "FAIL" or any(r.startswith("FAIL_") for r in reasons)
         incident_dir = None
         if is_fail:
-            incident_dir = REPO_ROOT / "data" / "runs" / "_incidents" / run_summary.get("run_id", datetime.utcnow().strftime("incident_%Y%m%d_%H%M%S"))
-            incident_dir.mkdir(parents=True, exist_ok=True)
-            for k in ["run_summary", "execution_report", "truth_report", "signals", "scan"]:
-                src = artifacts.get(k)
-                if src and src.exists():
-                    dst = incident_dir / f"{k}.json"
-                    with open(src) as fsrc, open(dst, "w") as fdst:
-                        fdst.write(fsrc.read())
+            bundle_dict = {k: artifacts[k] if isinstance(artifacts[k], dict) else {} for k in ["run_summary", "execution_report", "truth_report", "signals", "scan"] if k in artifacts}
+            incident_dir = persist_incident_bundle(run_summary.get("run_id", datetime.utcnow().strftime("incident_%Y%m%d_%H%M%S")), bundle_dict)
+            cleanup_incidents(max_n=50, max_days=7)
         # Update _latest.json
         latest_path = rolling_dir / "_latest.json"
         latest_data = {

@@ -25,7 +25,9 @@ def write_artifacts(
     scan_data: Dict[str, Any],
     truth_data: Dict[str, Any],
     reject_data: Dict[str, Any],
-) -> Dict[str, Path]:
+    artifact_mode: str = "rolling",
+    status: str = "PASS",
+) -> Dict[str, Any]:
     """
     Write all artifacts with schema_version.
     
@@ -36,44 +38,42 @@ def write_artifacts(
         Dict mapping artifact names to paths
     """
     artifacts = {}
-    
     # Ensure schema_version in all artifacts
     scan_data["schema_version"] = SCHEMA_VERSION
     truth_data["schema_version"] = SCHEMA_VERSION
     reject_data["schema_version"] = SCHEMA_VERSION
-    
-    # PRIMARY: reports/ (ci_m5_0_gate.py looks here)
+
+    if artifact_mode == "rolling" and status == "PASS":
+        # In-memory only: return dicts, do not write files
+        artifacts["scan"] = scan_data
+        artifacts["truth_report"] = truth_data
+        artifacts["reject_histogram"] = reject_data
+        return artifacts
+
+    # Otherwise (incident or full mode): write to disk
     reports_dir = output_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
-    
     scan_path = reports_dir / f"scan_{timestamp}.json"
     with open(scan_path, "w") as f:
         json.dump(scan_data, f, indent=2, default=str)
     artifacts["scan"] = scan_path
-    
     truth_path = reports_dir / f"truth_report_{timestamp}.json"
     with open(truth_path, "w") as f:
         json.dump(truth_data, f, indent=2, default=str)
     artifacts["truth_report"] = truth_path
-    
     reject_path = reports_dir / f"reject_histogram_{timestamp}.json"
     with open(reject_path, "w") as f:
         json.dump(reject_data, f, indent=2, default=str)
     artifacts["reject_histogram"] = reject_path
-    
     # LEGACY: snapshots/ (backward compat)
     snapshots_dir = output_dir / "snapshots"
     snapshots_dir.mkdir(parents=True, exist_ok=True)
-    
     snapshot_scan = snapshots_dir / f"scan_{timestamp}.json"
     with open(snapshot_scan, "w") as f:
         json.dump(scan_data, f, indent=2, default=str)
-    
-    # Legacy top-level scan log expected by integration tests
     scan_log = output_dir / "scan.log"
     with open(scan_log, "w") as f:
         f.write(f"scan completed: {timestamp}\n")
-    
     return artifacts
 
 
