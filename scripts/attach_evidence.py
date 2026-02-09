@@ -98,9 +98,13 @@ def attach_evidence(sha: str, update_status_md: bool = True, dry_run: bool = Fal
         if latest_data["run_context"].get("code_dirty") is True:
             warnings.append("DIRTY_WORKTREE_PRECOMMIT: Run was made with uncommitted changes")
         
+        # Get current HEAD for informational purposes
+        current_head = get_git_head_sha()
+        
         # Update evidence fields
         latest_data["run_context"]["evidence_sha"] = sha
         latest_data["attached_evidence_sha"] = sha
+        latest_data["repo_head_sha_at_attach"] = current_head  # Informational: actual HEAD when attach ran
         latest_data["evidence_attached_at"] = datetime.now(timezone.utc).isoformat()
         
         if old_evidence != sha or old_attached != sha:

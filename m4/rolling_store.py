@@ -1,0 +1,207 @@
+"""
+M4 Rolling Store Module
+
+Rolling artifact persistence for aggregator, latest files, and incidents.
+
+Artifacts:
+- _latest.json: Pointer to latest run status (schema m4:latest:v1.6)
+- run_summary_latest.json: Full run summary for latest run
+- m4_stability_agg.json: Rolling window aggregator
+
+Key concepts:
+- Rolling window: Only keeps last N runs (default 200)
+- Light format: Aggregator stores minimal fields per run
+- Deduplication: Same run_id is skipped
+"""
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+from .evidence import get_git_context
+
+
+def ensure_rolling_agg_exists(agg_path: Path) -> dict:
+    """
+    Ensure aggregator file exists with valid schema.
+    
+    Args:
+        agg_path: Path to m4_stability_agg.json
+        
+    Returns:
+        Loaded or initialized aggregator data
+    """
+    if agg_path.exists():
+        try:
+            with open(agg_path) as f:
+                data = json.load(f)
+            # Validate has required fields
+            if "runs" in data and "schema_version" in data:
+                return data
+        except Exception:
+            pass
+    
+    # Initialize new aggregator
+    return {
+        "schema_version": "m4:stability_agg:v1.5",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "runs": [],
+    }
+
+
+def emit_to_aggregator_light(
+    run_summary: dict,
+    agg_path: Path,
+    max_runs: int = 200
+) -> dict:
+    """
+    Emit run to rolling aggregator. Returns updated agg_data.
+    
+    Args:
+        run_summary: Run summary dict with metrics
+        agg_path: Path to aggregator file
+        max_runs: Maximum runs to keep in window
+        
+    Returns:
+        Updated aggregator data
+    """
+    agg_data = ensure_rolling_agg_exists(agg_path)
+    
+    # Extract key fields
+    metrics = run_summary.get("metrics", {})
+    status = run_summary.get("status", "UNKNOWN")
+    signals_count = metrics.get("signals_count", 0)
+    run_id = run_summary.get("run_id", "")
+    reasons = run_summary.get("reasons", [])
+    
+    # Determine run status: NO_DATA if signals_count=0
+    run_status = "NO_DATA" if signals_count == 0 else status
+    
+    # v1.9.3: Clean reasons for NO_DATA - no FAIL_* allowed
+    if run_status == "NO_DATA":
+        reasons = [r for r in reasons if not r.startswith("FAIL_")]
+        if "NO_DATA" not in reasons:
+            reasons = ["NO_DATA"] + reasons
+        reasons = [r for r in reasons if r in ["NO_DATA", "WARN_LOW_SAMPLE"]]
+    
+    # DEDUPLICATION: Check if run_id already exists
+    existing_run_ids = {r.get("run_id") for r in agg_data.get("runs", []) if r.get("run_id")}
+    if run_id and run_id in existing_run_ids:
+        print(f"[EMIT-AGG] SKIP duplicate run_id={run_id}")
+        return agg_data
+    
+    # Get git context for run entry
+    git_ctx = get_git_context()
+    
+    # Append light run info
+    agg_data["runs"].append({
+        "run_id": run_id,
+        "timestamp": run_summary.get("timestamp", ""),
+        "code_sha": git_ctx["code_sha"],
+        "net_usdc": metrics.get("total_net_usdc", 0),
+        "mae": metrics.get("mae_net_usdc", 0),
+        "sign_rate": metrics.get("est_sign_correct_rate", 0),
+        "reasons": reasons,
+        "fragile_rate": metrics.get("fragile_rate", 0),
+        "signals_count": signals_count,
+        "run_status": run_status,
+    })
+    
+    # Clean legacy: keep only light-format runs
+    agg_data["runs"] = [r for r in agg_data["runs"] if "net_usdc" in r]
+    runs = agg_data["runs"]
+    
+    # Rolling window: keep only last N runs
+    if len(runs) > max_runs:
+        agg_data["runs"] = runs[-max_runs:]
+        runs = agg_data["runs"]
+    
+    # Compute quick stats
+    agg_data = _compute_quick_stats(agg_data)
+    
+    # Write to disk
+    with open(agg_path, "w") as f:
+        json.dump(agg_data, f, indent=2)
+    
+    print(f"[EMIT-AGG] Updated: {agg_path} (runs={len(runs)}, "
+          f"data_runs={agg_data['quick_stats']['pass_count'] + agg_data['quick_stats']['fail_count']}, "
+          f"agg_status={agg_data.get('agg_status', 'UNKNOWN')})")
+    
+    return agg_data
+
+
+def _compute_quick_stats(agg_data: dict) -> dict:
+    """Compute quick stats and rolling window info for aggregator."""
+    runs = agg_data.get("runs", [])
+    
+    # Count by status
+    no_data_count = sum(1 for r in runs if r.get("run_status") == "NO_DATA" or r.get("signals_count", 0) == 0)
+    data_runs = [r for r in runs if r.get("signals_count", 0) > 0]
+    pass_count = sum(1 for r in data_runs if not any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
+    fail_count = len(data_runs) - pass_count
+    warn_count_core = sum(1 for r in data_runs if "WARN_DRIFT_MAE" in r.get("reasons", []))
+    low_sample_count = sum(1 for r in runs if "WARN_LOW_SAMPLE" in r.get("reasons", []))
+    total_net = sum(r.get("net_usdc", 0) for r in runs)
+    total_signals = sum(r.get("signals_count", 0) for r in runs)
+    
+    # Percentile calculations
+    fragile_rates = [r.get("fragile_rate", 0) for r in data_runs]
+    mae_values = [r.get("mae", 0) for r in data_runs]
+    net_values = [r.get("net_usdc", 0) for r in data_runs]
+    
+    def percentile(values, p):
+        """Compute percentile with linear interpolation."""
+        if not values:
+            return 0
+        sorted_vals = sorted(values)
+        k = (len(sorted_vals) - 1) * p / 100
+        f = int(k)
+        c = f + 1 if f + 1 < len(sorted_vals) else f
+        return round(sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f]), 4)
+    
+    # Rolling window
+    min_runs = 10
+    min_signals = 30
+    in_warmup = len(runs) < min_runs or total_signals < min_signals
+    
+    agg_data["runs_included"] = len(runs)
+    agg_data["runs_in_window"] = len(runs)
+    agg_data["rolling_window"] = {
+        "max": 200,
+        "current": len(runs),
+        "min_runs": min_runs,
+        "min_signals": min_signals,
+        "in_warmup": in_warmup,
+    }
+    
+    agg_data["quick_stats"] = {
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "no_data_count": no_data_count,
+        "warn_count_core": warn_count_core,
+        "low_sample_count": low_sample_count,
+        "pass_rate": pass_count / len(data_runs) if data_runs else 0,
+        "warn_rate_core": warn_count_core / len(data_runs) if data_runs else 0,
+        "low_sample_rate": low_sample_count / len(runs) if runs else 0,
+        "fail_rate": fail_count / len(data_runs) if data_runs else 0,
+        "total_signals": total_signals,
+        "fragile_rate_p90": percentile(fragile_rates, 90),
+        "mae_p90": percentile(mae_values, 90),
+        "total_net_usdc": total_net,
+        "avg_net_usdc": total_net / len(data_runs) if data_runs else 0,
+        "net_p10": percentile(net_values, 10),
+        "mae_p50": percentile(mae_values, 50),
+    }
+    
+    # Aggregate status
+    if in_warmup:
+        agg_data["agg_status"] = "PASS_WARMUP"
+    elif fail_count > 0:
+        agg_data["agg_status"] = "FAIL"
+    elif warn_count_core > 0:
+        agg_data["agg_status"] = "WARN"
+    else:
+        agg_data["agg_status"] = "PASS"
+    
+    return agg_data
