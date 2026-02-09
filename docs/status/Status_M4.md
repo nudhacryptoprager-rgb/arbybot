@@ -8,21 +8,63 @@
 
 ## Latest Progress (2026-02-09)
 
+### M4 Execution Gate v1.1.0 Released
+
 **Completed today:**
-- ✅ `ci_m4_execution_gate.py` v1.0.0 - full PASS/FAIL gate structure
-- ✅ `--offline --strict` mode with fixture generation
-- ✅ SimRejectReason enum: `SIM_REVERT`, `SIM_GAS_TOO_HIGH`, `SIM_UNPROFITABLE`, `SIM_SLIPPAGE`, `SIM_BLOCK_STALE`
-- ✅ Accounting fields in execution_report: `gas_usd`, `slippage_usd`, `net_usd`
-- ✅ Golden fixtures in `docs/artifacts/m4_golden_run/`
-- ✅ 9 unit tests in `test_ci_m4_gate_negative.py`
-- ✅ `core/reject_reasons.py` - canonical reject reasons module
-- ✅ `--dry-run` shows real signals from M5 truth_report
+- ✅ `ci_m4_execution_gate.py` v1.1.0 - production-quality gate
+- ✅ **DoD Profiles**: `--profile smoke|profit`
+  - SMOKE: ≥1 profitable simulation + accounting complete
+  - PROFIT: total_net_usd > 0
+- ✅ **Block Consistency Invariant**: pinned_block in header, block_used in each simulation, all must match
+- ✅ **Numerical USD fields**: gas_usd, slippage_usd, net_usd as numbers (not strings)
+- ✅ **est_vs_sim metrics**: est_profitable_count, sim_profitable_count, est_sim_mismatch_count
+- ✅ **Expanded blocker taxonomy** (15 reasons in SimRejectReason)
+- ✅ chain_id + pinned_block in execution_report header
+- ✅ 10 unit tests in `test_ci_m4_gate_negative.py`
+
+**Canonical Commands:**
+```bash
+# SMOKE profile (default) - requires ≥1 profitable
+python scripts/ci_m4_execution_gate.py --offline --profile smoke
+
+# PROFIT profile - requires total_net_usd > 0
+python scripts/ci_m4_execution_gate.py --offline --profile profit
+
+# Strict mode (requires profitable in accounting)
+python scripts/ci_m4_execution_gate.py --offline --strict
+```
 
 **Current signals (from last scan):**
 ```
 ARB/WETH: spread=34.12 bps, net_pnl_est=$3.31
 ARB/USDC: spread=82.38 bps, net_pnl_est=$8.14
 ```
+
+**Schema Version:** `m4:execution:v1.1`
+
+---
+
+## SimRejectReason Taxonomy
+
+Canonical reasons for simulation/execution failures:
+
+| Reason | Description |
+|--------|-------------|
+| `SIM_REVERT` | Contract reverted during simulation |
+| `SIM_OUT_OF_GAS` | Gas limit exceeded |
+| `SIM_GAS_TOO_HIGH` | Gas cost exceeds profit |
+| `SIM_UNPROFITABLE` | Net PnL negative after costs |
+| `SIM_SLIPPAGE_TOO_HIGH` | Slippage exceeds threshold |
+| `SIM_PRICE_MOVED` | Price moved since signal |
+| `SIM_LIQUIDITY_CHANGED` | Liquidity changed |
+| `SIM_BLOCK_STALE` | Block is stale |
+| `SIM_RPC_FAILED` | RPC call failed |
+| `SIM_DECODE_FAILED` | Failed to decode result |
+| `SIM_NOT_IMPLEMENTED` | Feature not implemented |
+| `EXEC_KILL_SWITCH` | Kill switch activated |
+| `EXEC_INSUFFICIENT_BALANCE` | Not enough balance |
+| `EXEC_APPROVAL_NEEDED` | Token approval needed |
+| `EXEC_BLOCK_MISMATCH` | Block mismatch during execution |
 
 ---
 

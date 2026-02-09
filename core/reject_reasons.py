@@ -42,18 +42,30 @@ class QuoteRejectReason(str, Enum):
 class SimRejectReason(str, Enum):
     """Simulation-level rejection reasons (M4 execution phase)."""
     
-    # Simulation failures
+    # Simulation failures - eth_call level
     SIM_REVERT = "SIM_REVERT"                  # eth_call reverted
+    SIM_OUT_OF_GAS = "SIM_OUT_OF_GAS"          # eth_call ran out of gas
+    
+    # Cost-based rejections
     SIM_GAS_TOO_HIGH = "SIM_GAS_TOO_HIGH"      # Gas estimate exceeds threshold
     SIM_UNPROFITABLE = "SIM_UNPROFITABLE"      # Net < 0 after costs
-    SIM_SLIPPAGE = "SIM_SLIPPAGE"              # Actual slippage > expected
+    SIM_SLIPPAGE_TOO_HIGH = "SIM_SLIPPAGE_TOO_HIGH"  # Actual slippage > max tolerance
+    
+    # Market condition rejections
+    SIM_PRICE_MOVED = "SIM_PRICE_MOVED"        # Price changed since signal
+    SIM_LIQUIDITY_CHANGED = "SIM_LIQUIDITY_CHANGED"  # Liquidity decreased
     SIM_BLOCK_STALE = "SIM_BLOCK_STALE"        # Block too old for execution
+    
+    # Technical issues
+    SIM_RPC_FAILED = "SIM_RPC_FAILED"          # RPC call failed
+    SIM_DECODE_FAILED = "SIM_DECODE_FAILED"    # Failed to decode simulation result
     SIM_NOT_IMPLEMENTED = "SIM_NOT_IMPLEMENTED"  # Simulation not yet implemented
     
-    # Execution blockers
+    # Execution blockers (pre-simulation)
     EXEC_KILL_SWITCH = "EXEC_KILL_SWITCH"      # execution_enabled=false
     EXEC_INSUFFICIENT_BALANCE = "EXEC_INSUFFICIENT_BALANCE"
     EXEC_APPROVAL_NEEDED = "EXEC_APPROVAL_NEEDED"
+    EXEC_BLOCK_MISMATCH = "EXEC_BLOCK_MISMATCH"  # Pinned block != current block
 
 
 def build_reject_entry(

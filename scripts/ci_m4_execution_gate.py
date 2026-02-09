@@ -3,7 +3,7 @@
 """
 M4 Execution Gate - DEX↔DEX Atomic Execution v1.
 
-VERSION: 1.0.0 (2026-02-09)
+VERSION: 1.1.0 (2026-02-09)
 STATUS: ACTIVE
 
 PURPOSE:
@@ -17,10 +17,15 @@ CANONICAL COMMANDS:
   # Offline - uses fixtures (no RPC)
   python scripts/ci_m4_execution_gate.py --offline
   python scripts/ci_m4_execution_gate.py --offline --strict
+  python scripts/ci_m4_execution_gate.py --offline --profile profit
 
   # Online - uses real signals from latest run
   python scripts/ci_m4_execution_gate.py --online
-  python scripts/ci_m4_execution_gate.py --simulate --signal 0
+  python scripts/ci_m4_execution_gate.py --online --profile profit
+
+DOD PROFILES:
+  smoke (default): PASS if simulations_passed >= 1 AND accounting_complete
+  profit: PASS if total_net_usd > 0 AND signals_profitable >= 1
 
 SUCCESS CRITERIA (from Roadmap):
   - 1-2 pairs, 2 DEX, on one chain
@@ -46,20 +51,19 @@ try:
 except Exception:
     pass
 
-__version__ = "1.0.0"
+# Import canonical reject reasons
+from core.reject_reasons import SimRejectReason
+
+__version__ = "1.1.0"
 
 # ============================================================
-# SIMULATION REJECT REASONS
+# DOD PROFILES
 # ============================================================
 
-class SimRejectReason:
-    """Canonical simulation reject reasons for M4."""
-    SIM_REVERT = "SIM_REVERT"              # eth_call reverted
-    SIM_GAS_TOO_HIGH = "SIM_GAS_TOO_HIGH"  # gas > threshold
-    SIM_UNPROFITABLE = "SIM_UNPROFITABLE"  # net < 0 after costs
-    SIM_SLIPPAGE = "SIM_SLIPPAGE"          # actual slippage > expected
-    SIM_BLOCK_STALE = "SIM_BLOCK_STALE"    # block too old
-    SIM_NOT_IMPLEMENTED = "SIM_NOT_IMPLEMENTED"  # placeholder
+class DoDProfile:
+    """Definition of Done profiles for M4 gate."""
+    SMOKE = "smoke"    # PASS if >=1 profitable sim + accounting complete
+    PROFIT = "profit"  # PASS if total_net_usd > 0
 
 # ============================================================
 # THRESHOLDS
@@ -74,6 +78,12 @@ MAX_GAS_USD = Decimal("5.00")  # $5.00 max gas
 # Maximum slippage tolerance (bps)
 MAX_SLIPPAGE_BPS = 50  # 0.5%
 
+# Default chain for fixtures
+DEFAULT_CHAIN_ID = 42161  # Arbitrum One
+
+# Default pinned block for fixtures
+DEFAULT_PINNED_BLOCK = 429900000
+
 
 # ============================================================
 # FIXTURE GENERATION (OFFLINE MODE)
@@ -86,11 +96,16 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
     Creates:
     - execution_report_<ts>.json: Simulation results
     - signals_<ts>.json: Input signals
+    
+    Fixture uses numerical USD values (not strings) for proper validation.
     """
     reports_dir = run_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     
-    # Mock signals for fixture
+    pinned_block = DEFAULT_PINNED_BLOCK
+    chain_id = DEFAULT_CHAIN_ID
+    
+    # Mock signals for fixture - all with same pinned_block
     fixture_signals = [
         {
             "signal_id": f"sig_001_{ts}",
@@ -102,7 +117,7 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
             "spread_bps_exact": 33.78,
             "is_net_positive_est": True,
             "net_pnl_usdc_est": 0.85,
-            "pinned_block": 429900000,
+            "pinned_block": pinned_block,
         },
         {
             "signal_id": f"sig_002_{ts}",
@@ -113,38 +128,50 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
             "sell_price": "2092.15",
             "spread_bps_exact": 1.2,
             "is_net_positive_est": False,
-            "net_pnl_usdc_est": -0.50,  # Unprofitable after gas
-            "pinned_block": 429900000,
+            "net_pnl_usdc_est": -0.50,
+            "pinned_block": pinned_block,
         },
     ]
     
-    # Mock simulation results
+    # Mock simulation results - numerical USD values
     fixture_simulations = [
         {
             "signal_id": f"sig_001_{ts}",
             "pair": "ARB/WETH",
             "simulation_status": "PASS",
             "blocker": None,
+            "block_used": pinned_block,
             "gas_used": 250000,
-            "gas_usd": "0.45",
+            "gas_usd": 0.45,        # Number, not string
             "slippage_bps_actual": 5,
-            "slippage_usd": "0.02",
-            "net_usd": "0.38",
+            "slippage_usd": 0.02,   # Number, not string
+            "net_usd": 0.38,        # Number, not string
             "is_profitable": True,
+            "est_was_correct": True,  # estimate matched simulation
         },
         {
             "signal_id": f"sig_002_{ts}",
             "pair": "WETH/USDC",
             "simulation_status": "FAIL",
-            "blocker": SimRejectReason.SIM_UNPROFITABLE,
+            "blocker": SimRejectReason.SIM_UNPROFITABLE.value,
+            "block_used": pinned_block,
             "gas_used": 280000,
-            "gas_usd": "0.52",
+            "gas_usd": 0.52,
             "slippage_bps_actual": 8,
-            "slippage_usd": "0.15",
-            "net_usd": "-0.67",
+            "slippage_usd": 0.15,
+            "net_usd": -0.67,
             "is_profitable": False,
+            "est_was_correct": True,  # estimate (false) matched simulation (false)
         },
     ]
+    
+    # Compute est vs sim metrics
+    est_profitable_count = sum(1 for s in fixture_signals if s.get("is_net_positive_est"))
+    sim_profitable_count = sum(1 for s in fixture_simulations if s.get("is_profitable"))
+    est_sim_mismatch_count = sum(
+        1 for sig, sim in zip(fixture_signals, fixture_simulations)
+        if sig.get("is_net_positive_est") != sim.get("is_profitable")
+    )
     
     # Write signals
     signals_path = reports_dir / f"signals_{ts}.json"
@@ -152,41 +179,58 @@ def generate_m4_fixture(run_dir: Path, ts: str) -> Dict[str, Path]:
         "schema_version": "m4:signals:v1",
         "run_mode": "FIXTURE_OFFLINE",
         "generated_at": datetime.utcnow().isoformat() + "Z",
+        "chain_id": chain_id,
+        "pinned_block": pinned_block,
         "signals": fixture_signals,
         "signals_count": len(fixture_signals),
-        "net_positive_count": 1,
+        "net_positive_count": est_profitable_count,
     }
     with open(signals_path, "w") as f:
         json.dump(signals_data, f, indent=2)
     
+    # Compute totals (numerical)
+    total_gas_usd = sum(s.get("gas_usd", 0) for s in fixture_simulations)
+    total_slippage_usd = sum(s.get("slippage_usd", 0) for s in fixture_simulations)
+    total_net_usd = sum(s.get("net_usd", 0) for s in fixture_simulations)
+    
     # Write execution report
     exec_path = reports_dir / f"execution_report_{ts}.json"
     exec_data = {
-        "schema_version": "m4:execution:v1",
+        "schema_version": "m4:execution:v1.1",
         "run_mode": "FIXTURE_OFFLINE",
+        "execution_mode": "simulate_only",  # Clarifies no real execution
         "generated_at": datetime.utcnow().isoformat() + "Z",
+        "chain_id": chain_id,
+        "pinned_block": pinned_block,
         "execution_enabled": False,  # INVARIANT: must be false
         "simulations": fixture_simulations,
         "simulations_count": len(fixture_simulations),
-        "simulations_passed": 1,
-        "simulations_failed": 1,
-        "total_gas_usd": "0.97",
-        "total_net_usd": "-0.29",
-        "pass_rate": 0.5,
-        # Accounting summary
-        "accounting": {
-            "signals_total": 2,
-            "signals_profitable": 1,
-            "signals_unprofitable": 1,
-            "gas_total_usd": "0.97",
-            "slippage_total_usd": "0.17",
-            "net_total_usd": "-0.29",
+        "simulations_passed": sim_profitable_count,
+        "simulations_failed": len(fixture_simulations) - sim_profitable_count,
+        "total_gas_usd": total_gas_usd,      # Number
+        "total_net_usd": total_net_usd,      # Number
+        "pass_rate": sim_profitable_count / len(fixture_simulations) if fixture_simulations else 0,
+        # Estimate vs Simulation metrics
+        "est_vs_sim": {
+            "est_profitable_count": est_profitable_count,
+            "sim_profitable_count": sim_profitable_count,
+            "est_sim_mismatch_count": est_sim_mismatch_count,
         },
-        # Health metrics (different from M5 - simulation focused)
+        # Accounting summary (all numbers)
+        "accounting": {
+            "signals_total": len(fixture_signals),
+            "signals_profitable": sim_profitable_count,
+            "signals_unprofitable": len(fixture_simulations) - sim_profitable_count,
+            "gas_total_usd": total_gas_usd,
+            "slippage_total_usd": total_slippage_usd,
+            "net_total_usd": total_net_usd,
+        },
+        # Health metrics
         "health": {
-            "simulation_pass_rate": 0.5,
+            "simulation_pass_rate": sim_profitable_count / len(fixture_simulations) if fixture_simulations else 0,
             "accounting_complete": True,
             "all_signals_simulated": True,
+            "blocks_consistent": True,  # All sims used same pinned_block
         },
     }
     with open(exec_path, "w") as f:
@@ -268,9 +312,18 @@ def discover_m4_artifacts(run_dir: Path) -> Dict[str, Optional[Path]]:
 # VALIDATION
 # ============================================================
 
-def validate_execution_report(data: Dict[str, Any], strict: bool = False) -> List[Tuple[str, bool, str]]:
+def validate_execution_report(
+    data: Dict[str, Any], 
+    profile: str = DoDProfile.SMOKE,
+    strict: bool = False,
+) -> List[Tuple[str, bool, str]]:
     """
     Validate execution_report fields.
+    
+    Args:
+        data: Execution report data
+        profile: DoD profile - "smoke" or "profit"
+        strict: Require at least one profitable simulation
     
     Returns list of (check_name, passed, message).
     """
@@ -297,6 +350,19 @@ def validate_execution_report(data: Dict[str, Any], strict: bool = False) -> Lis
     else:
         checks.append(("run_mode", False, "Missing run_mode"))
     
+    # pinned_block and chain_id (new in v1.1)
+    pinned_block = data.get("pinned_block")
+    chain_id = data.get("chain_id")
+    if pinned_block:
+        checks.append(("pinned_block", True, f"pinned_block={pinned_block}"))
+    else:
+        checks.append(("pinned_block", False, "Missing pinned_block in header"))
+    
+    if chain_id:
+        checks.append(("chain_id", True, f"chain_id={chain_id}"))
+    else:
+        checks.append(("chain_id", False, "Missing chain_id in header"))
+    
     # simulations_count
     sim_count = data.get("simulations_count", 0)
     if sim_count > 0:
@@ -313,29 +379,85 @@ def validate_execution_report(data: Dict[str, Any], strict: bool = False) -> Lis
     
     # health metrics
     health = data.get("health", {})
-    sim_pass_rate = health.get("simulation_pass_rate", 0)
+    sim_pass_rate = health.get("simulation_pass_rate")
     if sim_pass_rate is not None:
-        checks.append(("simulation_pass_rate", True, f"simulation_pass_rate={sim_pass_rate}"))
+        checks.append(("simulation_pass_rate", True, f"simulation_pass_rate={sim_pass_rate:.2%}"))
     else:
         checks.append(("simulation_pass_rate", False, "Missing simulation_pass_rate"))
     
-    # Check for at least one profitable simulation
+    # Block consistency check
+    blocks_consistent = health.get("blocks_consistent", False)
+    if blocks_consistent:
+        checks.append(("blocks_consistent", True, "All simulations used same pinned_block"))
+    elif data.get("simulations"):
+        # Validate manually
+        sim_blocks = [s.get("block_used") for s in data.get("simulations", [])]
+        if sim_blocks and all(b == sim_blocks[0] for b in sim_blocks):
+            checks.append(("blocks_consistent", True, "All simulations used same block"))
+        else:
+            checks.append(("blocks_consistent", False, f"Block mismatch in simulations: {set(sim_blocks)}"))
+    
+    # est_vs_sim metrics
+    est_vs_sim = data.get("est_vs_sim", {})
+    if est_vs_sim:
+        mismatch = est_vs_sim.get("est_sim_mismatch_count", 0)
+        checks.append(("est_vs_sim", True, f"est_sim_mismatch_count={mismatch}"))
+    
+    # ============================================================
+    # PROFILE-SPECIFIC CHECKS
+    # ============================================================
+    
     sims_passed = data.get("simulations_passed", 0)
-    if sims_passed > 0:
-        checks.append(("profitable_sims", True, f"simulations_passed={sims_passed}"))
-    elif strict:
-        checks.append(("profitable_sims", False, "No profitable simulations (strict mode)"))
-    else:
-        checks.append(("profitable_sims", True, f"WARN: simulations_passed={sims_passed}"))
+    total_net_usd = data.get("total_net_usd", 0)
+    
+    # Convert to number if string
+    if isinstance(total_net_usd, str):
+        try:
+            total_net_usd = float(total_net_usd)
+        except ValueError:
+            total_net_usd = 0
+    
+    if profile == DoDProfile.SMOKE:
+        # SMOKE: PASS if simulations_passed >= 1 AND accounting_complete
+        if sims_passed >= 1:
+            checks.append(("dod_smoke_profitable", True, f"simulations_passed={sims_passed} >= 1"))
+        else:
+            checks.append(("dod_smoke_profitable", False, f"simulations_passed={sims_passed} < 1"))
+        
+        accounting_complete = health.get("accounting_complete", False)
+        if accounting_complete:
+            checks.append(("dod_smoke_accounting", True, "accounting_complete=true"))
+        else:
+            checks.append(("dod_smoke_accounting", False, "accounting_complete=false"))
+    
+    elif profile == DoDProfile.PROFIT:
+        # PROFIT: PASS if total_net_usd > 0 AND signals_profitable >= 1
+        if total_net_usd > 0:
+            checks.append(("dod_profit_net", True, f"total_net_usd={total_net_usd:.4f} > 0"))
+        else:
+            checks.append(("dod_profit_net", False, f"total_net_usd={total_net_usd:.4f} <= 0 (UNPROFITABLE)"))
+        
+        signals_profitable = accounting.get("signals_profitable", 0)
+        if signals_profitable >= 1:
+            checks.append(("dod_profit_signals", True, f"signals_profitable={signals_profitable} >= 1"))
+        else:
+            checks.append(("dod_profit_signals", False, f"signals_profitable={signals_profitable} < 1"))
+    
+    # Strict mode: require at least one profitable
+    if strict and sims_passed == 0:
+        checks.append(("strict_profitable", False, "No profitable simulations (strict mode)"))
     
     return checks
 
 
 def validate_simulations(simulations: List[Dict[str, Any]]) -> List[Tuple[str, bool, str]]:
-    """Validate individual simulations have required fields."""
+    """Validate individual simulations have required fields and valid blockers."""
     checks = []
     
     required_fields = ["signal_id", "simulation_status", "gas_usd", "net_usd", "is_profitable"]
+    
+    # Valid blocker values from SimRejectReason enum
+    valid_blockers = {r.value for r in SimRejectReason}
     
     for i, sim in enumerate(simulations):
         missing = [f for f in required_fields if f not in sim]
@@ -350,7 +472,68 @@ def validate_simulations(simulations: List[Dict[str, Any]]) -> List[Tuple[str, b
         if status == "FAIL" and not blocker:
             checks.append((f"sim[{i}]_blocker", False, "FAIL without blocker reason"))
         elif status == "FAIL":
-            checks.append((f"sim[{i}]_blocker", True, f"blocker={blocker}"))
+            if blocker in valid_blockers:
+                checks.append((f"sim[{i}]_blocker", True, f"blocker={blocker}"))
+            else:
+                checks.append((f"sim[{i}]_blocker", False, f"Unknown blocker: {blocker} (not in SimRejectReason)"))
+        
+        # Validate block_used if present
+        block_used = sim.get("block_used")
+        if block_used:
+            checks.append((f"sim[{i}]_block", True, f"block_used={block_used}"))
+    
+    return checks
+
+
+def validate_block_consistency(
+    signals_data: Optional[Dict[str, Any]], 
+    exec_data: Dict[str, Any]
+) -> List[Tuple[str, bool, str]]:
+    """
+    Validate that pinned_block is consistent across signals and execution report.
+    
+    Invariant: All signals[].pinned_block == signals header pinned_block == exec header pinned_block
+    """
+    checks = []
+    
+    exec_pinned = exec_data.get("pinned_block")
+    
+    if signals_data:
+        signals_pinned = signals_data.get("pinned_block")
+        
+        # Check signals header vs exec header
+        if signals_pinned and exec_pinned:
+            if signals_pinned == exec_pinned:
+                checks.append(("header_block_match", True, f"pinned_block={exec_pinned} matches"))
+            else:
+                checks.append(("header_block_match", False, 
+                              f"Block mismatch: signals={signals_pinned} vs exec={exec_pinned}"))
+        
+        # Check individual signals
+        signals_list = signals_data.get("signals", [])
+        signal_blocks = [s.get("pinned_block") for s in signals_list if s.get("pinned_block")]
+        if signal_blocks:
+            if all(b == signal_blocks[0] for b in signal_blocks):
+                if signals_pinned and signal_blocks[0] == signals_pinned:
+                    checks.append(("signals_block_uniform", True, 
+                                  f"All {len(signal_blocks)} signals use pinned_block={signal_blocks[0]}"))
+                else:
+                    checks.append(("signals_block_uniform", False,
+                                  f"Signal blocks ({signal_blocks[0]}) != header ({signals_pinned})"))
+            else:
+                checks.append(("signals_block_uniform", False, 
+                              f"Non-uniform pinned_block in signals: {set(signal_blocks)}"))
+    
+    # Check simulations block_used
+    simulations = exec_data.get("simulations", [])
+    sim_blocks = [s.get("block_used") for s in simulations if s.get("block_used")]
+    if sim_blocks and exec_pinned:
+        if all(b == exec_pinned for b in sim_blocks):
+            checks.append(("sim_block_match", True, 
+                          f"All {len(sim_blocks)} simulations used pinned_block"))
+        else:
+            checks.append(("sim_block_match", False, 
+                          f"Simulation blocks != header: {set(sim_blocks)} vs {exec_pinned}"))
     
     return checks
 
@@ -359,7 +542,7 @@ def validate_simulations(simulations: List[Dict[str, Any]]) -> List[Tuple[str, b
 # MAIN GATE LOGIC
 # ============================================================
 
-def run_offline_gate(output_root: Path, strict: bool = False) -> int:
+def run_offline_gate(output_root: Path, profile: str = DoDProfile.SMOKE, strict: bool = False) -> int:
     """
     Run M4 gate in offline mode with fixtures.
     """
@@ -372,6 +555,7 @@ def run_offline_gate(output_root: Path, strict: bool = False) -> int:
     except ValueError:
         display_path = run_dir
     print(f"\n[OFFLINE] Creating: {display_path}")
+    print(f"[OFFLINE] Profile: {profile}")
     
     # Generate fixtures
     artifacts = generate_m4_fixture(run_dir, ts)
@@ -381,10 +565,10 @@ def run_offline_gate(output_root: Path, strict: bool = False) -> int:
         print(f"  - {name}: {path.name}")
     
     # Load and validate
-    return validate_gate(run_dir, artifacts, strict)
+    return validate_gate(run_dir, artifacts, profile, strict)
 
 
-def run_online_gate(run_dir: Optional[Path], strict: bool = False) -> int:
+def run_online_gate(run_dir: Optional[Path], profile: str = DoDProfile.SMOKE, strict: bool = False) -> int:
     """
     Run M4 gate in online mode using real artifacts.
     """
@@ -411,20 +595,22 @@ def run_online_gate(run_dir: Optional[Path], strict: bool = False) -> int:
         print("Use --offline for fixture-based validation")
         return 2
     
-    return validate_gate(run_dir, {k: v for k, v in artifacts.items() if v}, strict)
+    print(f"[ONLINE] Profile: {profile}")
+    return validate_gate(run_dir, {k: v for k, v in artifacts.items() if v}, profile, strict)
 
 
 
-def validate_gate(run_dir: Path, artifacts: Dict[str, Path], strict: bool) -> int:
+def validate_gate(run_dir: Path, artifacts: Dict[str, Path], profile: str, strict: bool) -> int:
     """
     Core validation logic for M4 gate.
     """
     print("\n" + "=" * 60)
-    print("VALIDATION")
+    print(f"VALIDATION (profile={profile})")
     print("=" * 60)
     print()
     
     all_checks = []
+    signals_data = None
     
     # Check artifacts exist
     exec_path = artifacts.get("execution_report")
@@ -433,12 +619,19 @@ def validate_gate(run_dir: Path, artifacts: Dict[str, Path], strict: bool) -> in
         return 1
     print(f"  OK: execution_report found")
     
+    # Load signals if present
+    signals_path = artifacts.get("signals")
+    if signals_path and signals_path.exists():
+        with open(signals_path) as f:
+            signals_data = json.load(f)
+        print(f"  OK: signals found")
+    
     # Load execution report
     with open(exec_path) as f:
         exec_data = json.load(f)
     
-    # Validate execution report
-    checks = validate_execution_report(exec_data, strict)
+    # Validate execution report with profile
+    checks = validate_execution_report(exec_data, profile, strict)
     all_checks.extend(checks)
     
     for name, passed, msg in checks:
@@ -456,6 +649,15 @@ def validate_gate(run_dir: Path, artifacts: Dict[str, Path], strict: bool) -> in
             status = "OK" if passed else "FAIL"
             print(f"  {status}: {msg}")
     
+    # Validate block consistency
+    print()
+    block_checks = validate_block_consistency(signals_data, exec_data)
+    all_checks.extend(block_checks)
+    
+    for name, passed, msg in block_checks:
+        status = "OK" if passed else "FAIL"
+        print(f"  {status}: {msg}")
+    
     # Summary
     print()
     print("=" * 60)
@@ -469,7 +671,12 @@ def validate_gate(run_dir: Path, artifacts: Dict[str, Path], strict: bool) -> in
         print(f"RunDir: {run_dir}")
         return 1
     else:
-        print("RESULT: PASS")
+        # Show key metrics
+        total_net = exec_data.get("total_net_usd", 0)
+        sims_passed = exec_data.get("simulations_passed", 0)
+        print(f"RESULT: PASS (profile={profile})")
+        print(f"  simulations_passed: {sims_passed}")
+        print(f"  total_net_usd: {total_net}")
         print(f"RunDir: {run_dir}")
         return 0
 
@@ -494,6 +701,9 @@ def main() -> int:
     mode_group.add_argument("--simulate", action="store_true",
                             help="Run simulation on signals (NOT IMPLEMENTED)")
     
+    parser.add_argument("--profile", type=str, default=DoDProfile.SMOKE,
+                        choices=[DoDProfile.SMOKE, DoDProfile.PROFIT],
+                        help="DoD profile: smoke (>=1 profitable) or profit (total_net>0)")
     parser.add_argument("--strict", action="store_true",
                         help="Require at least one profitable simulation")
     parser.add_argument("--run-dir", type=Path,
@@ -515,9 +725,9 @@ def main() -> int:
     print("=" * 60)
     
     if args.offline:
-        return run_offline_gate(args.output_root, args.strict)
+        return run_offline_gate(args.output_root, args.profile, args.strict)
     elif args.online:
-        return run_online_gate(args.run_dir, args.strict)
+        return run_online_gate(args.run_dir, args.profile, args.strict)
     elif args.dry_run:
         return run_dry_run()
     elif args.simulate:

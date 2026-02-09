@@ -5,6 +5,7 @@ Tests cover:
 1. current_block mismatch between signal and execution
 2. missing simulation metrics
 3. execution_enabled=true invariant violation
+4. DoD profile requirements (smoke vs profit)
 """
 
 import json
@@ -19,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from scripts.ci_m4_execution_gate import (
     validate_execution_report,
     validate_simulations,
+    validate_block_consistency,
+    DoDProfile,
     main,
 )
 
@@ -27,11 +30,12 @@ class TestCurrentBlockMismatch(unittest.TestCase):
     """Test that block mismatch is detected."""
 
     def test_signal_and_sim_block_mismatch_fails(self):
-        """If simulation uses different block than signal, gate should warn."""
+        """If simulation uses different block than signal/header, gate should fail."""
         # Create signals with one block
         signals_data = {
             "schema_version": "m4:signals:v1",
             "run_mode": "FIXTURE_OFFLINE",
+            "pinned_block": 429900000,
             "signals": [
                 {
                     "signal_id": "sig_001",
@@ -41,34 +45,72 @@ class TestCurrentBlockMismatch(unittest.TestCase):
             ],
         }
         
-        # Create execution with different block context
+        # Create execution with DIFFERENT block in simulations
         exec_data = {
-            "schema_version": "m4:execution:v1",
+            "schema_version": "m4:execution:v1.1",
             "run_mode": "FIXTURE_OFFLINE",
+            "execution_mode": "simulate_only",
             "execution_enabled": False,
+            "chain_id": 42161,
+            "pinned_block": 429900000,  # Header matches signals
             "simulations": [
                 {
                     "signal_id": "sig_001",
                     "simulation_status": "PASS",
-                    "gas_usd": "0.45",
-                    "net_usd": "0.38",
+                    "block_used": 429900001,  # MISMATCH - different block
+                    "gas_usd": 0.45,
+                    "net_usd": 0.38,
                     "is_profitable": True,
-                    # Note: no pinned_block field - this is a gap to address
                 }
             ],
             "simulations_count": 1,
             "simulations_passed": 1,
             "simulations_failed": 0,
-            "accounting": {"signals_total": 1},
+            "total_net_usd": 0.38,
+            "accounting": {"signals_total": 1, "accounting_complete": True},
             "health": {"simulation_pass_rate": 1.0},
         }
         
-        # Currently passes because block matching not yet enforced
-        checks = validate_execution_report(exec_data, strict=False)
-        # All should pass for now
+        # Block consistency check should fail
+        checks = validate_block_consistency(signals_data, exec_data)
         failures = [c for c in checks if not c[1]]
-        # This test documents the gap - block binding not yet enforced
-        self.assertEqual(len(failures), 0, "Block binding not yet enforced")
+        
+        # Should have failure for sim block mismatch
+        self.assertGreater(len(failures), 0, "Block mismatch should be detected")
+        self.assertTrue(
+            any("block" in f[2].lower() and "!=" in f[2] for f in failures),
+            f"Expected block mismatch failure, got: {failures}"
+        )
+
+    def test_header_block_mismatch_fails(self):
+        """If signals header and execution header have different pinned_block, fail."""
+        signals_data = {
+            "schema_version": "m4:signals:v1",
+            "run_mode": "FIXTURE_OFFLINE",
+            "pinned_block": 429900000,
+            "signals": [],
+        }
+        
+        exec_data = {
+            "schema_version": "m4:execution:v1.1",
+            "run_mode": "FIXTURE_OFFLINE",
+            "execution_mode": "simulate_only",
+            "execution_enabled": False,
+            "chain_id": 42161,
+            "pinned_block": 429900999,  # MISMATCH with signals header
+            "simulations": [],
+            "simulations_count": 0,
+            "simulations_passed": 0,
+            "simulations_failed": 0,
+            "total_net_usd": 0,
+            "accounting": {"signals_total": 0, "accounting_complete": True},
+            "health": {"simulation_pass_rate": 0},
+        }
+        
+        checks = validate_block_consistency(signals_data, exec_data)
+        failures = [c for c in checks if not c[1]]
+        
+        self.assertGreater(len(failures), 0, "Header block mismatch should be detected")
 
 
 class TestMissingSimulationMetrics(unittest.TestCase):
@@ -137,18 +179,22 @@ class TestExecutionEnabledInvariant(unittest.TestCase):
     def test_execution_enabled_true_fails(self):
         """execution_enabled=true should fail validation (M4/M5 invariant)."""
         exec_data = {
-            "schema_version": "m4:execution:v1",
+            "schema_version": "m4:execution:v1.1",
             "run_mode": "FIXTURE_OFFLINE",
+            "execution_mode": "simulate_only",
             "execution_enabled": True,  # INVARIANT VIOLATION
+            "chain_id": 42161,
+            "pinned_block": 429900000,
             "simulations": [],
             "simulations_count": 0,
             "simulations_passed": 0,
             "simulations_failed": 0,
-            "accounting": {"signals_total": 0},
+            "total_net_usd": 0,
+            "accounting": {"signals_total": 0, "accounting_complete": True},
             "health": {"simulation_pass_rate": 0},
         }
         
-        checks = validate_execution_report(exec_data, strict=False)
+        checks = validate_execution_report(exec_data, DoDProfile.SMOKE, strict=False)
         failures = [c for c in checks if not c[1]]
         
         # Should have at least one failure for execution_enabled
@@ -159,16 +205,22 @@ class TestExecutionEnabledInvariant(unittest.TestCase):
     def test_execution_enabled_missing_fails(self):
         """Missing execution_enabled should fail validation."""
         exec_data = {
-            "schema_version": "m4:execution:v1",
+            "schema_version": "m4:execution:v1.1",
             "run_mode": "FIXTURE_OFFLINE",
+            "execution_mode": "simulate_only",
             # "execution_enabled": False,  # MISSING
+            "chain_id": 42161,
+            "pinned_block": 429900000,
             "simulations": [],
             "simulations_count": 0,
-            "accounting": {"signals_total": 0},
+            "simulations_passed": 0,
+            "simulations_failed": 0,
+            "total_net_usd": 0,
+            "accounting": {"signals_total": 0, "accounting_complete": True},
             "health": {"simulation_pass_rate": 0},
         }
         
-        checks = validate_execution_report(exec_data, strict=False)
+        checks = validate_execution_report(exec_data, DoDProfile.SMOKE, strict=False)
         failures = [c for c in checks if not c[1]]
         
         exec_failures = [f for f in failures if "execution_enabled" in f[0]]
@@ -178,38 +230,43 @@ class TestExecutionEnabledInvariant(unittest.TestCase):
 class TestStrictModeRequirements(unittest.TestCase):
     """Test strict mode requirements."""
 
-    def test_no_profitable_sims_passes_normal_fails_strict(self):
-        """0 profitable simulations should pass normal, fail strict."""
+    def test_no_profitable_sims_passes_smoke_fails_profit(self):
+        """0 profitable simulations should pass smoke profile, fail profit profile."""
         exec_data = {
-            "schema_version": "m4:execution:v1",
+            "schema_version": "m4:execution:v1.1",
             "run_mode": "FIXTURE_OFFLINE",
+            "execution_mode": "simulate_only",
             "execution_enabled": False,
+            "chain_id": 42161,
+            "pinned_block": 429900000,
             "simulations": [
                 {
                     "signal_id": "sig_001",
                     "simulation_status": "FAIL",
+                    "block_used": 429900000,
                     "blocker": "SIM_UNPROFITABLE",
-                    "gas_usd": "0.45",
-                    "net_usd": "-0.20",
+                    "gas_usd": 0.45,
+                    "net_usd": -0.20,
                     "is_profitable": False,
                 }
             ],
             "simulations_count": 1,
             "simulations_passed": 0,
             "simulations_failed": 1,
-            "accounting": {"signals_total": 1},
+            "total_net_usd": -0.20,
+            "accounting": {"signals_total": 1, "accounting_complete": True},
             "health": {"simulation_pass_rate": 0},
         }
         
-        # Normal mode - should pass (WARN only)
-        checks_normal = validate_execution_report(exec_data, strict=False)
-        failures_normal = [c for c in checks_normal if not c[1]]
-        self.assertEqual(len(failures_normal), 0, "Normal mode should pass with 0 profitable")
+        # Smoke profile with 0 profitable should FAIL (requires >=1)
+        checks_smoke = validate_execution_report(exec_data, DoDProfile.SMOKE, strict=False)
+        failures_smoke = [c for c in checks_smoke if not c[1]]
+        self.assertGreater(len(failures_smoke), 0, "Smoke profile should fail with 0 profitable")
         
-        # Strict mode - should fail
-        checks_strict = validate_execution_report(exec_data, strict=True)
-        failures_strict = [c for c in checks_strict if not c[1]]
-        self.assertGreater(len(failures_strict), 0, "Strict mode should fail with 0 profitable")
+        # Profit profile should also fail (total_net < 0)
+        checks_profit = validate_execution_report(exec_data, DoDProfile.PROFIT, strict=False)
+        failures_profit = [c for c in checks_profit if not c[1]]
+        self.assertGreater(len(failures_profit), 0, "Profit profile should fail with negative net")
 
 
 class TestGateIntegration(unittest.TestCase):
