@@ -3,7 +3,17 @@
 **Status**: ✅ **DONE** (feature-complete)  
 **Updated**: 2026-02-09  
 **Gate Version**: `ci_m5_gate.py` v1.0.0 (when created)  
-**Tests**: 522 passed
+**Tests**: 549 passed
+
+---
+
+## ⚠️ Core Truth Statement
+
+> **M5 не блокує M4-profit.**  
+> M5 — це reporting/monitoring поверх working execution truth.  
+> M4 execution gate є "core truth" для релізу.
+
+**Пріоритет:** Не шліфувати M5, поки M4 online-profit не стабільний.
 
 ---
 

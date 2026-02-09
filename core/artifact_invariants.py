@@ -94,6 +94,19 @@ class ProfileRegistry:
             min_net_usdc=0.0,  # Must be positive
         ))
         
+        # M4 ONLINE profile: PASS if N online runs with net > 0
+        # Used for tracking online profit history
+        self.register(ProfileConfig(
+            name="online",
+            description="M4 online: PASS if total_net_usdc > 0 on real block",
+            min_simulations=1,
+            min_profitable_sims=1,
+            require_net_positive=True,
+            min_net_usdc=0.0,
+            max_mae_usdc=0.50,  # Higher tolerance for online
+            min_sign_correct_rate=0.70,  # 70% for online
+        ))
+        
         # M5 SCAN profile: PASS if quotes fetched successfully
         self.register(ProfileConfig(
             name="scan",

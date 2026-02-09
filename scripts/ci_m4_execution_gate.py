@@ -74,6 +74,7 @@ class DoDProfile:
     """Definition of Done profiles for M4 gate."""
     SMOKE = "smoke"    # PASS if >=1 profitable sim + accounting complete
     PROFIT = "profit"  # PASS if total_net_usd > 0
+    ONLINE = "online"  # PASS if total_net_usd > 0 on real block (for tracking)
     
     @classmethod
     def get_config(cls, profile: str):
@@ -526,6 +527,14 @@ def validate_execution_report(
     chain_id = data.get("chain_id")
     if pinned_block:
         checks.append(("pinned_block", True, f"pinned_block={pinned_block}"))
+        # ONLINE profile requires real pinned_block > 0 (not synthetic fixture)
+        if profile == DoDProfile.ONLINE:
+            # Validate block is realistic (not fixture synthetic 429900000)
+            if pinned_block > 100000 and pinned_block != 429900000:
+                checks.append(("pinned_block_real", True, f"pinned_block={pinned_block} (real)"))
+            else:
+                checks.append(("pinned_block_real", False, 
+                              f"ONLINE profile requires real block, got {pinned_block}"))
     else:
         checks.append(("pinned_block", False, "Missing pinned_block in header"))
     
@@ -940,10 +949,12 @@ def main() -> int:
                             help="Run simulation on signals (NOT IMPLEMENTED)")
     
     parser.add_argument("--profile", type=str, default=DoDProfile.SMOKE,
-                        choices=[DoDProfile.SMOKE, DoDProfile.PROFIT],
-                        help="DoD profile: smoke (>=1 profitable) or profit (total_net>0)")
+                        choices=[DoDProfile.SMOKE, DoDProfile.PROFIT, DoDProfile.ONLINE],
+                        help="DoD profile: smoke (>=1 profitable), profit (total_net>0), online (profit on real block)")
     parser.add_argument("--strict", action="store_true",
                         help="Require at least one profitable simulation")
+    parser.add_argument("--require-tenderly", action="store_true",
+                        help="Require tenderly diagnostics when enabled in artifacts")
     parser.add_argument("--run-dir", type=Path,
                         help="Explicit run directory to validate")
     parser.add_argument("--output-root", type=Path,

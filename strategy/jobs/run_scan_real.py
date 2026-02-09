@@ -27,9 +27,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from core.constants import SCHEMA_VERSION, FAKE_BLOCK_SENTINELS
-from core.exceptions import BlockPinError
 from core.validators import calculate_deviation_bps
-from chains.providers import register_provider
 from config.pairs import load_pairs
 
 # Import extracted modules
@@ -42,6 +40,7 @@ from strategy.infra import (
     check_ws_connection,
     check_tenderly_connection,
     build_infra_payload,
+    get_current_block_via_rpc,
 )
 
 logger = logging.getLogger("run_scan_real")
@@ -61,30 +60,11 @@ except Exception:
 
 
 def _get_current_block(config: Dict[str, Any]) -> tuple[int, int]:
-    """Get current block via RPC or environment."""
+    """Get current block via RPC or environment (wrapper for compatibility)."""
     if os.environ.get("ARBY_SKIP_RPC") == "1":
         block = int(os.environ.get("ARBY_FAKE_BLOCK", "100"))
         return block, 0
-    
-    rpc_urls = config.get("rpc_endpoints") or []
-    resolved_http = os.environ.get("ARBY_RPC_HTTP_PRIMARY")
-    if resolved_http:
-        if rpc_urls and rpc_urls[0] != resolved_http:
-            rpc_urls = [resolved_http] + [u for u in rpc_urls if u != resolved_http]
-        elif not rpc_urls:
-            rpc_urls = [resolved_http]
-    
-    provider = register_provider(
-        config.get("chain_id", 42161),
-        rpc_urls,
-        timeout_seconds=config.get("rpc_timeout_seconds", 10)
-    )
-    
-    try:
-        block, latency = asyncio.run(provider.get_block_number())
-        return int(block), int(latency or 0)
-    except Exception as e:
-        raise BlockPinError(f"Failed to pin current block via RPC: {e}")
+    return get_current_block_via_rpc(config)
 
 
 def _compute_sanity_rejects(

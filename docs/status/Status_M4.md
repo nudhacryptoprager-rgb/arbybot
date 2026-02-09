@@ -1,9 +1,17 @@
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
-**Status**: ✅ **DONE** (M4-smoke ✅, M4-profit ✅)  
+**Status**: ✅ **DONE** (offline fixtures), ⏳ **IN PROGRESS** (online profit)  
 **Updated**: 2026-02-09  
 **Gate Version**: `ci_m4_execution_gate.py` v1.2.0  
 **Tests**: 549 passed
+
+---
+
+## ⚠️ Core Truth Statement
+
+> **M4 execution gate є "core truth" для релізу.**  
+> M5 — це reporting/monitoring поверх working execution truth.  
+> Без стабільного M4 online-profit, M5 є лише "красивою звітністю".
 
 ---
 
@@ -12,11 +20,17 @@
 | Profile | Status | Criterion | Golden Result |
 |---------|--------|-----------|---------------|
 | **smoke** | ✅ **DONE** | `simulations_passed >= 1` | PASS (net=-$0.29) |
-| **profit** | ✅ **DONE** | `total_net_usdc > 0` | PASS (net=+$0.50) |
+| **profit** | ✅ **DONE** (offline) | `total_net_usdc > 0` | PASS (net=+$0.50) |
+| **online** | ⏳ **IN PROGRESS** | N online runs with `total_net_usdc > 0` | N=5 required |
 
 **Fixture strategy:**
 - SMOKE profile: 1 profitable (+$0.38) + 1 unprofitable (-$0.67) = net -$0.29 ✅
 - PROFIT profile: 2 profitable (+$0.38 + $0.12) = net +$0.50 ✅
+
+**⚠️ FIXTURE_OFFLINE Warning:**
+- `pinned_block=429900000` є synthetic — це **норма для offline**
+- FIXTURE_OFFLINE **НЕ доводить** що DEX↔DEX прибутковий онлайн
+- **Справжній DoD** = N онлайн прогонів з `total_net_usdc > 0` на реальних блоках
 
 ---
 
@@ -25,24 +39,59 @@
 ```bash
 # 1 COMMAND = 1 GATE = PASS/FAIL
 
-# SMOKE profile — Expected: PASS ✅
+# SMOKE profile (offline) — Expected: PASS ✅
 python scripts/ci_m4_execution_gate.py --offline --profile smoke
 # Example output:
 #   RESULT: PASS (profile=smoke)
 #     simulations_passed: 1
 #     total_net_usdc: -0.29
 
-# PROFIT profile — Expected: PASS ✅
+# PROFIT profile (offline) — Expected: PASS ✅
 python scripts/ci_m4_execution_gate.py --offline --profile profit
 # Example output:
 #   RESULT: PASS (profile=profit)
 #     simulations_passed: 2
 #     total_net_usdc: 0.5
 
+# ONLINE profile — Expected: PASS (N=5 runs)
+python scripts/ci_m4_execution_gate.py --online --profile profit --config config/real_minimal.yaml
+# Example output:
+#   RESULT: PASS (profile=profit)
+#     simulations_passed: 2
+#     total_net_usdc: 0.15
+
+# FULL PIPELINE (canonical runner)
+python scripts/ci_full_pipeline.py --mode e2e --config config/real_minimal.yaml --cycles 1 --strict
+
 # Unit tests
 python -m pytest tests/unit -q
 # Expected: 549 passed, 1 skipped
 ```
+
+---
+
+## Kill-Switch Invariant
+
+**`execution_enabled=false` та `kill_switch_active=true` — by design.**
+
+Це означає:
+- Жодних реальних транзакцій не виконується
+- Режим **simulate_only** активний
+- Для переходу до реального виконання потрібно **явно вимкнути** kill-switch
+
+---
+
+## Est vs Sim Drift Metrics
+
+| Metric | Threshold | Current | Status |
+|--------|-----------|---------|--------|
+| `mae_net_usdc` | ≤ 0.30 | 0.24 | ✅ OK |
+| `est_sign_correct_rate` | ≥ 80% | 100% | ✅ OK |
+| `est_sim_mismatch_count` | 0 | 0 | ✅ OK |
+
+**Формула:** `sim_net_usdc - est_net_usdc`
+
+Якщо drift великий — сигнали "гарні", а результат посередній.
 
 ---
 

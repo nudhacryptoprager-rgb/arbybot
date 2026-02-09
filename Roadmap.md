@@ -32,6 +32,53 @@ Triangular, Cross-chain — тільки після того, як Truth Engine 
 
 ---
 
+## 2.1) Core Truth & Release Priority (2026-02)
+
+> **M4 execution gate є "core truth" для релізу.**
+
+### Canonical Runner (одна "релізна кнопка")
+
+```bash
+# Єдина канонічна команда для E2E:
+python scripts/ci_full_pipeline.py --mode e2e --config config/real_minimal.yaml --cycles 1 --strict
+```
+
+### Gate Hierarchy
+
+| Gate | Purpose | Blocks Release? |
+|------|---------|-----------------|
+| **M4 profit (online)** | DEX↔DEX net > 0 | ✅ YES (core truth) |
+| **M4 smoke (offline)** | Fixture sanity | ✅ YES |
+| **M5_0 (offline)** | Artifact schema | ✅ YES |
+| **M5 (online)** | Daily report | ❌ NO (monitoring layer) |
+
+### Block Semantics
+
+| Context | Field | Description |
+|---------|-------|-------------|
+| M4 execution | `pinned_block` | Block at which simulation runs |
+| M5_0/scan/truth | `current_block` | Block at scan time |
+
+**Gates must validate:**
+- M4: `pinned_block > 0` AND `block_used == pinned_block` для кожної симуляції
+- M5_0: `current_block > 0` AND consistent across scan/truth/reject
+
+### M4 Online DoD (справжній критерій)
+
+```
+M4 profit DoD = N онлайн прогонів з total_net_usdc > 0
+N = 5 (на реальних блоках, не fixture)
+```
+
+**Тільки після цього:** M4 закрито по суті, можна повертатись до M5.
+
+### Priority Rule
+
+> Не шліфувати M5, поки M4 online-profit не стабільний.  
+> Якщо core DEX↔DEX не дає мінімальний +PnL онлайн — все інше буде "красивою звітністю".
+
+---
+
 ## 3) Непорушні правила (без цього PR не приймаємо)
 
 ### 3.1 Мінімальний хардкод: що дозволено
