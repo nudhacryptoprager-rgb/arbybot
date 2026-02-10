@@ -38,13 +38,15 @@ def ensure_rolling_agg_exists(agg_path: Path) -> dict:
                 data = json.load(f)
             # Validate has required fields
             if "runs" in data and "schema_version" in data:
+                # Upgrade schema to current version on load
+                data["schema_version"] = "m4:stability_agg:v1.8"
                 return data
         except Exception:
             pass
     
     # Initialize new aggregator
     return {
-        "schema_version": "m4:stability_agg:v1.7",  # v1.9.7: fragile_p50, unified thresholds
+        "schema_version": "m4:stability_agg:v1.8",  # v1.9.8: runs_since_sha, diversity
         "created_at": datetime.now(timezone.utc).isoformat(),
         "runs": [],
     }
@@ -86,7 +88,7 @@ def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
     
     # Create fresh aggregator
     fresh = {
-        "schema_version": "m4:stability_agg:v1.7",
+        "schema_version": "m4:stability_agg:v1.8",  # v1.9.8: runs_since_sha, diversity
         "created_at": datetime.now(timezone.utc).isoformat(),
         "reset_from_sha": git_ctx["code_sha"],
         "reset_reason": reason,
@@ -192,6 +194,9 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     """
     from m4.policy import Thresholds, POLICY_VERSION
     
+    # Always upgrade schema_version on save (forward migration)
+    agg_data["schema_version"] = "m4:stability_agg:v1.8"
+    
     runs = agg_data.get("runs", [])
     
     # Count by status
@@ -244,6 +249,17 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "in_warmup": in_warmup,
     }
     
+    # v1.9.8: Diversity metrics - detect duplicate signals pattern
+    unique_net_values = len(set(round(r.get("net_usdc", 0), 2) for r in data_runs))
+    net_diversity_rate = unique_net_values / len(data_runs) if data_runs else 0
+    
+    # v1.9.8: Stats for current code_sha only (since_sha view)
+    from m4.evidence import get_git_context
+    current_sha = get_git_context()["code_sha"]
+    current_sha_runs = [r for r in runs if r.get("code_sha") == current_sha]
+    current_sha_data_runs = [r for r in current_sha_runs if r.get("signals_count", 0) > 0]
+    current_sha_pass = sum(1 for r in current_sha_data_runs if not any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
+    
     agg_data["quick_stats"] = {
         "pass_count": pass_count,
         "fail_count": fail_count,
@@ -251,7 +267,7 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "warn_count_core": warn_count_core,
         "low_sample_count": low_sample_count,
         "pass_rate": round(pass_rate, 4),
-        "effective_pass_rate": round(effective_pass_rate, 4),  # v1.9.5: true rate
+        "effective_pass_rate": round(effective_pass_rate, 4),  # v1.9.5: PRIMARY metric
         "no_data_rate": round(no_data_rate, 4),                # v1.9.5: NO_DATA fraction
         "warn_rate_core": round(warn_rate_core, 4),
         "low_sample_rate": round(low_sample_rate, 4),
@@ -264,6 +280,18 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "avg_net_usdc": round(total_net / len(data_runs), 4) if data_runs else 0,
         "net_p10": percentile(net_values, 10),
         "mae_p50": percentile(mae_values, 50),
+        # v1.9.8: Diversity metrics
+        "unique_net_values": unique_net_values,
+        "net_diversity_rate": round(net_diversity_rate, 4),
+    }
+    
+    # v1.9.8: Add runs_since_sha (current code stability)
+    agg_data["runs_since_sha"] = {
+        "sha": current_sha,
+        "runs_count": len(current_sha_runs),
+        "data_runs_count": len(current_sha_data_runs),
+        "pass_count": current_sha_pass,
+        "effective_pass_rate": round(current_sha_pass / len(current_sha_runs), 4) if current_sha_runs else 0,
     }
     
     # v1.9.7: Compute fragile_rate_p50
