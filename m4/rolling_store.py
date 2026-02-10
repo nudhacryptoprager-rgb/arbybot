@@ -217,41 +217,55 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     
     # === Aggregate status with QUALITY GATES (v1.9.5) ===
     quality_warnings = []
+    agg_reasons = []  # v1.9.6: canonical tokens for agg_status
     
     # Check quality thresholds
     if fragile_rate_p90 > Thresholds.AGG_FRAGILE_P90_FAIL:
         quality_warnings.append(f"FRAGILE_P90_HIGH({fragile_rate_p90:.2f}>{Thresholds.AGG_FRAGILE_P90_FAIL})")
+        agg_reasons.append("FRAGILE_P90_HIGH")
     elif fragile_rate_p90 > Thresholds.AGG_FRAGILE_P90_WARN:
         quality_warnings.append(f"FRAGILE_P90_ELEVATED({fragile_rate_p90:.2f}>{Thresholds.AGG_FRAGILE_P90_WARN})")
+        agg_reasons.append("FRAGILE_P90_ELEVATED")
     
     if low_sample_rate > Thresholds.AGG_LOW_SAMPLE_RATE_FAIL:
         quality_warnings.append(f"LOW_SAMPLE_RATE_HIGH({low_sample_rate:.2f}>{Thresholds.AGG_LOW_SAMPLE_RATE_FAIL})")
+        agg_reasons.append("LOW_SAMPLE_RATE_HIGH")
     elif low_sample_rate > Thresholds.AGG_LOW_SAMPLE_RATE_WARN:
         quality_warnings.append(f"LOW_SAMPLE_RATE_ELEVATED({low_sample_rate:.2f}>{Thresholds.AGG_LOW_SAMPLE_RATE_WARN})")
+        agg_reasons.append("LOW_SAMPLE_RATE_ELEVATED")
     
     if mae_p90 > Thresholds.AGG_MAE_P90_FAIL:
         quality_warnings.append(f"MAE_P90_HIGH({mae_p90:.2f}>{Thresholds.AGG_MAE_P90_FAIL})")
+        agg_reasons.append("MAE_P90_HIGH")
     
-    # Store quality warnings
+    # Store quality warnings and reasons
     agg_data["quality_warnings"] = quality_warnings
     agg_data["policy_version"] = POLICY_VERSION
     
     # Determine agg_status with quality gate enforcement
+    # v1.9.6: agg_reasons populated for ALL non-PASS statuses
     if in_warmup:
         agg_data["agg_status"] = "PASS_WARMUP"
+        agg_data["agg_reasons"] = ["WARMUP"]
     elif any("HIGH" in w for w in quality_warnings):
         # Quality gate failure - data quality too poor for reliable signal
         agg_data["agg_status"] = "FAIL_QUALITY"
+        agg_data["agg_reasons"] = agg_reasons  # Contains HIGH tokens
     elif fail_rate > Thresholds.AGG_FAIL_RATE_FAIL:
         agg_data["agg_status"] = "FAIL"
+        agg_data["agg_reasons"] = agg_reasons + [f"FAIL_RATE_HIGH({fail_rate:.2f})"]
     elif warn_rate_core > Thresholds.AGG_WARN_RATE_FAIL:
         agg_data["agg_status"] = "WARN_EXCESSIVE"
+        agg_data["agg_reasons"] = agg_reasons + [f"WARN_RATE_HIGH({warn_rate_core:.2f})"]
     elif any("ELEVATED" in w for w in quality_warnings):
         agg_data["agg_status"] = "WARN_QUALITY"
+        agg_data["agg_reasons"] = agg_reasons  # Contains ELEVATED tokens
     elif warn_count_core > 0 or fail_count > 0:
         agg_data["agg_status"] = "WARN"
+        agg_data["agg_reasons"] = [f"WARN_RUNS({warn_count_core})", f"FAIL_RUNS({fail_count})"]
     else:
         agg_data["agg_status"] = "PASS"
+        agg_data["agg_reasons"] = []
     
     # v1.9.4: Always update timestamp on emit
     agg_data["updated_at"] = datetime.now(timezone.utc).isoformat()

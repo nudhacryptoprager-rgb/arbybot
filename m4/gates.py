@@ -717,10 +717,12 @@ def run_online_gate(
             except ValueError:
                 return p.name  # Fallback to just filename
         
-        # Determine agg_reasons based on warmup state
-        agg_reasons = []
+        # v1.9.6: Use agg_reasons from aggregator (computed in rolling_store)
+        agg_reasons = agg_data.get("agg_reasons", [])
+        
+        # Fallback: add warmup reasons if not already present
         rolling_window = agg_data.get("rolling_window", {})
-        if rolling_window.get("in_warmup", True):
+        if rolling_window.get("in_warmup", True) and not agg_reasons:
             if agg_data.get("runs_in_window", 0) < rolling_window.get("min_runs", 5):
                 agg_reasons.append("WARMUP_MIN_RUNS")
             if agg_data.get("quick_stats", {}).get("total_signals", 0) < rolling_window.get("min_signals", 10):

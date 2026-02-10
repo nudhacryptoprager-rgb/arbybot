@@ -762,30 +762,44 @@ def generate_m4_from_online_inputs(
     # If signals are too few (<5), statistical conclusions are unreliable
     sample_size_warn = len(m4_signals) < Thresholds.MIN_SAMPLE_SIZE
     
-    # v1.9.5: Quality warnings for run-level issues
+    # v1.9.6: Quality warnings for run-level issues (structured)
     quality_warnings = []
+    quality_reasons = []  # Canonical tokens for reasons array
+    
     if sample_size_warn:
         quality_warnings.append(f"LOW_SAMPLE({len(m4_signals)}<{Thresholds.MIN_SAMPLE_SIZE})")
+        quality_reasons.append(FailReason.WARN_LOW_SAMPLE)
+    
     if len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
         quality_warnings.append(f"MICRO_SAMPLE({len(m4_signals)}<{Thresholds.MIN_SIGNALS_FOR_PASS})")
-    if fragile_count > 0 and len(m4_signals) > 0:
-        frag_rate = fragile_count / len(m4_signals)
-        if frag_rate > 0.50:
-            quality_warnings.append(f"HIGH_FRAGILE_RATE({frag_rate:.2f})")
+    
+    # v1.9.6: WARN_FRAGILE_HIGH when fragile_rate >= 0.5
+    frag_rate = fragile_count / len(m4_signals) if m4_signals else 0
+    if frag_rate >= 0.50:
+        quality_warnings.append(f"HIGH_FRAGILE_RATE({frag_rate:.2f})")
+        quality_reasons.append("WARN_FRAGILE_HIGH")
+    
+    # v1.9.6: Determine quality_status
+    if len(m4_signals) == 0:
+        quality_status = "NO_DATA"
+    elif any("HIGH" in w or "MICRO" in w for w in quality_warnings):
+        quality_status = "FAIL_QUALITY"
+    elif quality_warnings:
+        quality_status = "WARN_QUALITY"
+    else:
+        quality_status = "PASS"
     
     # Combined status with policy
     # Default policy: PASS requires profit_status=PASS (drift can be WARN/FAIL)
-    # Alternative policy (strict): PASS requires both profit_status=PASS AND drift_status=PASS
-    # Current: Use combined for backwards compat, but expose both
-    # v1.9.5: PASS_LOW_CONFIDENCE if micro-sample (< MIN_SIGNALS_FOR_PASS)
-    all_reasons = profit_reasons + drift_reasons
-    if sample_size_warn:
-        all_reasons.append(FailReason.WARN_LOW_SAMPLE)
+    # v1.9.6: PASS only if profit_status=PASS AND quality_status != FAIL_QUALITY
+    all_reasons = profit_reasons + drift_reasons + quality_reasons
     
     if profit_status == "FAIL" or drift_status == "FAIL":
         combined_status = "FAIL"
-    elif len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
-        combined_status = "PASS_LOW_CONFIDENCE"  # v1.9.5: micro-sample
+    elif quality_status == "FAIL_QUALITY":
+        combined_status = "PASS_LOW_CONFIDENCE"  # v1.9.6: quality fail blocks full PASS
+    elif quality_status == "NO_DATA":
+        combined_status = "NO_DATA"
     else:
         combined_status = "PASS"
     
@@ -877,10 +891,10 @@ def generate_m4_from_online_inputs(
     evidence_ok = len(evidence_issues) == 0
     
     run_summary_data = {
-        "schema_version": "m4:run_summary:v1.4",  # v1.9.5: added quality_warnings, policy_version
+        "schema_version": "m4:run_summary:v1.5",  # v1.9.6: quality_status, run_dir_rel, source_sha sync
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "run_id": run_id,
-        "source_sha": source_sha,  # Deprecated: use run_context.code_sha
+        "source_sha": git_ctx["code_sha"],  # v1.9.6: synced with run_context.code_sha
         # v1.9.0: run_context with evidence data
         "run_context": {
             "code_sha": git_ctx["code_sha"],
@@ -890,8 +904,9 @@ def generate_m4_from_online_inputs(
         },
         "inputs": {
             "run_mode": source_run_mode,
-            "run_dir": str(run_dir),
+            "run_dir_rel": str(run_dir.relative_to(REPO_ROOT)) if run_dir.is_relative_to(REPO_ROOT) else run_dir.name,  # v1.9.6: relative canonical
             "run_dir_name": run_dir.name,  # v1.9.4: basename for portability
+            "run_dir_abs": str(run_dir),  # v1.9.6: debug only
             "truth_report": truth_path.name,
             "pinned_block": source_block,
             "chain_id": chain_id,
@@ -905,20 +920,25 @@ def generate_m4_from_online_inputs(
             "est_sign_correct_rate": est_sign_correct_rate,
             "sign_mismatch_count": sign_mismatch_count,
             "fragile_count": fragile_count,
-            "fragile_rate": round(fragile_count / len(m4_signals), 4) if m4_signals else 0,  # v1.9.4
+            "fragile_rate": round(frag_rate, 4),  # v1.9.6: use computed frag_rate
         },
         "thresholds": {
             "policy_version": POLICY_VERSION,  # v1.9.5: provenance
+            "threshold_profile_name": "profit",  # v1.9.6: default profile
             "mae_warn": Thresholds.MAE_WARN,
             "mae_fail": Thresholds.MAE_FAIL,
             "sign_rate_min": Thresholds.SIGN_RATE_MIN,
             "min_signals_for_pass": Thresholds.MIN_SIGNALS_FOR_PASS,  # v1.9.5
+            "fragile_rate_warn": 0.50,  # v1.9.6
         },
         # Split status (v1.5.0)
         "profit_status": profit_status,
         "profit_reasons": profit_reasons,
         "drift_status": drift_status,
         "drift_reasons": drift_reasons,
+        # v1.9.6: quality_status (new canonical field)
+        "quality_status": quality_status,
+        "quality_reasons": quality_reasons,
         # Combined status (backwards compat)
         "status": combined_status,
         "reasons": all_reasons,
