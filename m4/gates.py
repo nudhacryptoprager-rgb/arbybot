@@ -652,13 +652,19 @@ def run_online_gate(
         signals_count = run_summary.get("metrics", {}).get("signals_count", 0)
         pinned_block = run_summary.get("inputs", {}).get("pinned_block", 0)
         
-        # NO_DATA status for empty runs - clean semantic noise
-        if signals_count == 0:
+        # v1.10.0: NO_DATA status for runs below MIN_SIGNALS_FOR_PASS threshold
+        # This is the REAL quality gate - insufficient signals cannot produce valid statistics
+        is_no_data = signals_count < Thresholds.MIN_SIGNALS_FOR_PASS
+        
+        if is_no_data:
             status = "NO_DATA"
             # Remove all FAIL_* from reasons - they are meaningless for NO_DATA
             reasons = [r for r in reasons if not r.startswith("FAIL_")]
             if "NO_DATA" not in reasons:
                 reasons = ["NO_DATA"] + reasons
+            # Add WARN_LOW_SAMPLE if signals > 0 but < threshold
+            if signals_count > 0 and "WARN_LOW_SAMPLE" not in reasons:
+                reasons.append("WARN_LOW_SAMPLE")
             # Keep only relevant warnings
             reasons = [r for r in reasons if r in ["NO_DATA", "WARN_LOW_SAMPLE"]]
             
@@ -666,9 +672,19 @@ def run_online_gate(
             run_summary["reasons"] = reasons
             run_summary["profit_status"] = "NO_DATA"
             run_summary["drift_status"] = "NO_DATA"
+            run_summary["quality_status"] = "NO_DATA"  # v1.10.0: explicit quality_status
             # Clean profit/drift reasons too
             run_summary["profit_reasons"] = ["NO_DATA"]
             run_summary["drift_reasons"] = ["NO_DATA"]
+        else:
+            # v1.10.0: Set quality_status for valid runs based on FAIL reasons
+            quality_fail_reasons = [r for r in reasons if r.startswith("FAIL_")]
+            if quality_fail_reasons:
+                run_summary["quality_status"] = "FAIL_QUALITY"
+            elif any(r.startswith("WARN_") for r in reasons):
+                run_summary["quality_status"] = "WARN_QUALITY"
+            else:
+                run_summary["quality_status"] = "PASS"
         
         # Add block_is_synthetic flag for offline
         if "inputs" in run_summary:
@@ -817,6 +833,13 @@ def run_online_gate(
         print(f"[ROLLING] Latest: {latest_file}")
         if is_incident:
             print(f"[ROLLING] Incident: {incident_dir}")
+        
+        # v1.10.0: Return appropriate exit code based on status
+        # 0 = PASS/WARN, 1 = FAIL, 2 = NO_DATA
+        if status == "NO_DATA":
+            return 2
+        elif status == "FAIL" or is_fail:
+            return 1
         return 0
     else:
         # Legacy full mode

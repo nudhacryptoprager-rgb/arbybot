@@ -1,10 +1,30 @@
 # Status: M4 (DEX↔DEX Atomic Execution)
 
 **Status**: ✅ **PROVEN** (simulate_only), ❌ **NOT PROVEN** (real execution)  
-**Updated**: 2026-02-09  
-**Evidence SHA**: `03cc828`  
-**Gate Version**: v1.9.3  
+**Updated**: 2026-02-10  
+**Evidence SHA**: `d318f3a`  
+**Gate Version**: v1.10.0  
+**Policy Version**: v1.10.0  
 **Tests**: 562 passed
+
+## Rolling KPIs (Target)
+
+| Metric | Target | Description |
+|--------|--------|-------------|
+| `data_run_rate` | ≥ 0.70 | % runs with ≥5 signals |
+| `low_sample_rate` | ≤ 0.30 | % runs with <5 signals |
+| `fragile_rate_p90` | ≤ 0.30 | p90 fragile rate across window |
+| `agg_status` | PASS/WARN | Not FAIL_QUALITY |
+
+## DoD-1 Thresholds (profit profile)
+
+| Threshold | Value | Description |
+|-----------|-------|-------------|
+| `MIN_SIGNALS_FOR_PASS` | 5 | Below = NO_DATA |
+| `MAE_WARN` | 0.55 | MAE warning |
+| `MAE_FAIL` | 0.80 | MAE failure |
+| `SIGN_RATE_MIN` | 0.60 | Sign rate minimum |
+| `fragile_rate_max` | 0.20 | Max fragile rate |
 
 ## Current State
 
@@ -17,17 +37,23 @@
 | Evidence Attached | Yes | ✅ |
 | Code Dirty | Yes | ⚠️ |
 
-## Quick Commands
+## Canonical Commands
 
 ```bash
-# Run M4 gate (online, profit profile)
-python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling
+# Coverage batch (collect signals until target)
+python scripts/run_coverage_batch.py --min-signals-target 30 --max-seconds 600 --profile profit
+
+# Standard batch (N runs)
+python scripts/run_coverage_batch.py --count 10 --profile profit
+
+# M4 gate (online, profit profile, strict evidence)
+python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --require-clean
 
 # Attach evidence after commit
 python scripts/attach_evidence.py
 
-# Check rolling artifacts
-cat data/runs/_rolling/_latest.json
+# Check rolling stats
+Get-Content data/runs/_rolling/_latest.json | Select-String "data_run_rate|agg_status|effective_pass_rate"
 
 # Reset rolling window
 python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window
