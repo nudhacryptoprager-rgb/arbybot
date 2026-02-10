@@ -204,4 +204,14 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     else:
         agg_data["agg_status"] = "PASS"
     
+    # v1.9.4: Always update timestamp on emit
+    agg_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    # v1.9.4: Add runs_by_code_sha breakdown
+    sha_counts = {}
+    for r in runs:
+        sha = r.get("code_sha", "unknown")
+        sha_counts[sha] = sha_counts.get(sha, 0) + 1
+    agg_data["runs_by_code_sha"] = sha_counts
+    
     return agg_data

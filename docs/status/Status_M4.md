@@ -2,7 +2,7 @@
 
 **Status**: ✅ **PROVEN** (simulate_only), ❌ **NOT PROVEN** (real execution)  
 **Updated**: 2026-02-09  
-**Evidence SHA**: `b60c5f1`  
+**Evidence SHA**: `74bbdb5`  
 **Gate Version**: v1.9.3  
 **Tests**: 562 passed
 

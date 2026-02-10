@@ -21,7 +21,7 @@ Usage:
     from m4.cli import main
 """
 
-__version__ = "1.9.3"
+__version__ = "1.9.4"
 
 # Re-export key functions for convenience
 from .evidence import get_git_context, get_git_head_sha, is_evidence_ok

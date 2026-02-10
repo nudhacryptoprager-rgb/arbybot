@@ -730,9 +730,23 @@ def run_online_gate(
         git_ctx = get_git_context()
         head_sha = get_git_head_sha()
         
+        # v1.9.4: Compute agg lag
+        now_utc = datetime.now(timezone.utc)
+        agg_updated_at = agg_data.get("updated_at")
+        agg_lag_seconds = None
+        if agg_updated_at:
+            try:
+                from datetime import datetime as dt
+                if agg_updated_at.endswith('Z'):
+                    agg_updated_at = agg_updated_at[:-1] + '+00:00'
+                agg_ts = dt.fromisoformat(agg_updated_at)
+                agg_lag_seconds = round((now_utc - agg_ts).total_seconds(), 1)
+            except Exception:
+                pass
+        
         latest_data = {
-            "schema_version": "m4:latest:v1.6",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "schema_version": "m4:latest:v1.7",
+            "updated_at": now_utc.isoformat(),
             # v1.9.2: Clear SHA naming
             "latest_run_code_sha": git_ctx["code_sha"],  # SHA of code that ran this scan
             "attached_evidence_sha": None,  # null until attach_evidence.py sets it
@@ -748,7 +762,10 @@ def run_online_gate(
             "threshold_profile_name": profile,
             "agg_status": agg_data.get("agg_status", "UNKNOWN"),
             "agg_reasons": agg_reasons if agg_reasons else [],
+            "agg_updated_at": agg_updated_at,  # v1.9.4: agg last update
+            "agg_lag_seconds": agg_lag_seconds,  # v1.9.4: lag detection
             "runs_in_window": agg_data.get("runs_in_window", 0),
+            "runs_by_code_sha": agg_data.get("runs_by_code_sha", {}),  # v1.9.4: breakdown
             "in_warmup": agg_data.get("rolling_window", {}).get("in_warmup", True),
             "total_signals_in_window": agg_data.get("quick_stats", {}).get("total_signals", 0),
             "paths": {

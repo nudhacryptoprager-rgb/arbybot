@@ -872,6 +872,7 @@ def generate_m4_from_online_inputs(
         "inputs": {
             "run_mode": source_run_mode,
             "run_dir": str(run_dir),
+            "run_dir_name": run_dir.name,  # v1.9.4: basename for portability
             "truth_report": truth_path.name,
             "pinned_block": source_block,
             "chain_id": chain_id,
@@ -885,6 +886,7 @@ def generate_m4_from_online_inputs(
             "est_sign_correct_rate": est_sign_correct_rate,
             "sign_mismatch_count": sign_mismatch_count,
             "fragile_count": fragile_count,
+            "fragile_rate": round(fragile_count / len(m4_signals), 4) if m4_signals else 0,  # v1.9.4
         },
         "thresholds": {
             "mae_warn": Thresholds.MAE_WARN,
