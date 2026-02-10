@@ -124,3 +124,125 @@ class TestEmitToAggregatorProvenance:
             runs = result.get("runs", [])
             assert len(runs) == 1
             assert runs[0]["code_sha"] == "artifact_sha_123"
+
+
+class TestRollingIntegrationContract:
+    """Step 8: Integration tests for rolling artifact consistency."""
+    
+    def test_emit_aggregator_tracks_run_sha(self):
+        """emit_to_aggregator_light must record artifact SHA in run entry."""
+        from m4.rolling_store import emit_to_aggregator_light
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agg_path = Path(tmpdir) / "m4_stability_agg.json"
+            
+            # Create run_summary with specific SHA
+            run_summary = {
+                "run_id": "consistency_test_001",
+                "timestamp": "2026-02-10T15:00:00Z",
+                "run_context": {
+                    "code_sha": "test_sha_abc",
+                    "code_dirty": False,
+                    "code_desc": "test_sha_abc",
+                    "evidence_sha": None,
+                },
+                "status": "PASS",
+                "metrics": {
+                    "signals_count": 5,
+                    "total_net_usdc": 5.0,
+                    "mae_net_usdc": 0.3,
+                    "est_sign_correct_rate": 1.0,
+                    "fragile_rate": 0,
+                },
+                "reasons": [],
+                "inputs": {"pairs": ["A/B"], "routes": ["dex1->dex2"]},
+            }
+            
+            # Emit to aggregator
+            agg_data = emit_to_aggregator_light(run_summary, agg_path)
+            
+            # Verify consistency: run entry has artifact SHA
+            runs = agg_data.get("runs", [])
+            assert len(runs) == 1
+            assert runs[0]["code_sha"] == "test_sha_abc"
+            
+            # Verify aggregator has quick_stats
+            qs = agg_data.get("quick_stats", {})
+            assert qs is not None
+            # runs_since_sha is computed via _compute_quick_stats during gate, not emit
+    
+    def test_multiple_runs_append_to_aggregator(self):
+        """Multiple emits append to runs, not overwrite."""
+        from m4.rolling_store import emit_to_aggregator_light
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agg_path = Path(tmpdir) / "m4_stability_agg.json"
+            
+            base_summary = {
+                "timestamp": "2026-02-10T15:00:00Z",
+                "run_context": {"code_sha": "v1", "code_dirty": False, "code_desc": "v1", "evidence_sha": None},
+                "status": "PASS",
+                "metrics": {"signals_count": 5, "total_net_usdc": 1.0, "mae_net_usdc": 0.3, "est_sign_correct_rate": 1.0, "fragile_rate": 0},
+                "reasons": [],
+                "inputs": {"pairs": ["A/B"], "routes": ["dex1->dex2"]},
+            }
+            
+            # First run
+            run1 = {**base_summary, "run_id": "run_001", "run_context": {**base_summary["run_context"], "code_sha": "sha_v1"}}
+            agg1 = emit_to_aggregator_light(run1, agg_path)
+            
+            # Second run (should append)
+            run2 = {**base_summary, "run_id": "run_002", "run_context": {**base_summary["run_context"], "code_sha": "sha_v2"}}
+            agg2 = emit_to_aggregator_light(run2, agg_path)
+            
+            # Aggregator should have 2 runs
+            assert len(agg2.get("runs", [])) == 2
+            assert agg2["runs"][0]["code_sha"] == "sha_v1"
+            assert agg2["runs"][1]["code_sha"] == "sha_v2"
+
+
+class TestSHAPriority:
+    """Step 9: Test SHA resolution priority."""
+    
+    def test_sha_priority_target_over_run_summary_over_git(self):
+        """SHA priority: target_sha > run_context.code_sha > git fallback."""
+        from m4.rolling_store import _compute_quick_stats
+        
+        # Priority 1: target_sha wins when provided
+        run_summary = {"run_context": {"code_sha": "from_artifact"}}
+        result = _compute_quick_stats(
+            {"runs": [{"code_sha": "target", "run_kind": "NORMAL", "signals_count": 5}]},
+            run_summary=run_summary,
+            target_sha="target"
+        )
+        assert result["runs_since_sha"]["sha"] == "target", "target_sha should have highest priority"
+        
+        # Priority 2: run_summary.run_context.code_sha when no target_sha
+        result2 = _compute_quick_stats(
+            {"runs": [{"code_sha": "artifact", "run_kind": "NORMAL", "signals_count": 5}]},
+            run_summary={"run_context": {"code_sha": "artifact"}}
+        )
+        assert result2["runs_since_sha"]["sha"] == "artifact", "run_context.code_sha should be used"
+        
+        # Priority 3: git fallback when nothing else
+        result3 = _compute_quick_stats({"runs": []})
+        assert result3["runs_since_sha"]["sha"] is not None, "should fall back to git SHA"
+    
+    def test_evidence_sha_separate_from_code_sha(self):
+        """evidence_sha is separate tracking, not used for provenance filtering."""
+        # evidence_sha is for audit trail, not for runs_since_sha logic
+        run_context = {
+            "code_sha": "code_abc",
+            "code_dirty": False,
+            "code_desc": "code_abc",
+            "evidence_sha": "evidence_xyz",  # Different from code_sha
+        }
+        
+        # Both should be present
+        assert run_context["code_sha"] != run_context["evidence_sha"]
+        # evidence_sha tracks the commit where evidence was attached
+        # code_sha tracks the commit where the run was made

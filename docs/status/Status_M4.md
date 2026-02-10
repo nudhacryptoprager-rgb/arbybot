@@ -131,6 +131,7 @@ Location: `data/runs/_rolling/`
 3. **Online scan unusable**: quotes_fetched=0, dexes_active=0 in last run
 4. **Rolling artifacts need reset**: existing artifacts have v1.11 schema/policy_version
 5. **Provenance fixes in v1.12.2**: _latest and runs_since_sha now use artifact context, not git
+6. **Rolling artifacts stale**: `latest_run_code_sha`/`runs_since_sha.sha` still at `6661379`, not HEAD; M4 online DoD remains open until fresh online run + M4 gate PASS on that runDir
 
 ### v1.12.2 Provenance Fixes
 - `_latest.latest_run_code_sha` now sourced from run artifact, not live git context
