@@ -758,31 +758,30 @@ def generate_m4_from_online_inputs(
                 "reason": "est_net < slippage + gas"
             })
     
-    # Low sample warning (v1.7.0)
-    # If signals are too few (<5), statistical conclusions are unreliable
-    sample_size_warn = len(m4_signals) < Thresholds.MIN_SAMPLE_SIZE
+    # v1.9.7: Unified sample threshold
+    # signals < MIN_SIGNALS_FOR_PASS (5) → NO_DATA (not counted in pass_rate)
+    is_low_sample = len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS
     
-    # v1.9.6: Quality warnings for run-level issues (structured)
+    # v1.9.7: Quality warnings for run-level issues (structured)
     quality_warnings = []
     quality_reasons = []  # Canonical tokens for reasons array
     
-    if sample_size_warn:
-        quality_warnings.append(f"LOW_SAMPLE({len(m4_signals)}<{Thresholds.MIN_SAMPLE_SIZE})")
+    if is_low_sample and len(m4_signals) > 0:
+        # Has signals but too few for statistical validity
+        quality_warnings.append(f"LOW_SAMPLE({len(m4_signals)}<{Thresholds.MIN_SIGNALS_FOR_PASS})")
         quality_reasons.append(FailReason.WARN_LOW_SAMPLE)
     
-    if len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
-        quality_warnings.append(f"MICRO_SAMPLE({len(m4_signals)}<{Thresholds.MIN_SIGNALS_FOR_PASS})")
-    
-    # v1.9.6: WARN_FRAGILE_HIGH when fragile_rate >= 0.5
+    # v1.9.7: WARN_FRAGILE_HIGH when fragile_rate >= 0.5 (only if enough signals)
     frag_rate = fragile_count / len(m4_signals) if m4_signals else 0
-    if frag_rate >= 0.50:
+    if not is_low_sample and frag_rate >= 0.50:
         quality_warnings.append(f"HIGH_FRAGILE_RATE({frag_rate:.2f})")
         quality_reasons.append("WARN_FRAGILE_HIGH")
     
-    # v1.9.6: Determine quality_status
-    if len(m4_signals) == 0:
-        quality_status = "NO_DATA"
-    elif any("HIGH" in w or "MICRO" in w for w in quality_warnings):
+    # v1.9.7: Determine quality_status
+    # NO_DATA if signals < MIN_SIGNALS_FOR_PASS (unified threshold)
+    if len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
+        quality_status = "NO_DATA"  # Not enough for statistical evaluation
+    elif any("HIGH" in w for w in quality_warnings):
         quality_status = "FAIL_QUALITY"
     elif quality_warnings:
         quality_status = "WARN_QUALITY"
@@ -790,16 +789,15 @@ def generate_m4_from_online_inputs(
         quality_status = "PASS"
     
     # Combined status with policy
-    # Default policy: PASS requires profit_status=PASS (drift can be WARN/FAIL)
-    # v1.9.6: PASS only if profit_status=PASS AND quality_status != FAIL_QUALITY
+    # v1.9.7: NO_DATA if signals < MIN_SIGNALS_FOR_PASS (not counted in pass_rate)
     all_reasons = profit_reasons + drift_reasons + quality_reasons
     
-    if profit_status == "FAIL" or drift_status == "FAIL":
+    if len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
+        combined_status = "NO_DATA"  # v1.9.7: unified - not enough signals
+    elif profit_status == "FAIL" or drift_status == "FAIL":
         combined_status = "FAIL"
     elif quality_status == "FAIL_QUALITY":
-        combined_status = "PASS_LOW_CONFIDENCE"  # v1.9.6: quality fail blocks full PASS
-    elif quality_status == "NO_DATA":
-        combined_status = "NO_DATA"
+        combined_status = "WARN_QUALITY"  # v1.9.7: quality fail → WARN (not blocking)
     else:
         combined_status = "PASS"
     
@@ -891,7 +889,7 @@ def generate_m4_from_online_inputs(
     evidence_ok = len(evidence_issues) == 0
     
     run_summary_data = {
-        "schema_version": "m4:run_summary:v1.5",  # v1.9.6: quality_status, run_dir_rel, source_sha sync
+        "schema_version": "m4:run_summary:v1.6",  # v1.9.7: unified min_signals, NO_DATA semantics
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "run_id": run_id,
         "source_sha": git_ctx["code_sha"],  # v1.9.6: synced with run_context.code_sha
@@ -928,8 +926,8 @@ def generate_m4_from_online_inputs(
             "mae_warn": Thresholds.MAE_WARN,
             "mae_fail": Thresholds.MAE_FAIL,
             "sign_rate_min": Thresholds.SIGN_RATE_MIN,
-            "min_signals_for_pass": Thresholds.MIN_SIGNALS_FOR_PASS,  # v1.9.5
-            "fragile_rate_warn": 0.50,  # v1.9.6
+            "min_signals_for_pass": Thresholds.MIN_SIGNALS_FOR_PASS,  # v1.9.7: unified
+            "fragile_rate_warn": 0.50,  # v1.9.7: run-level fragile gate
         },
         # Split status (v1.5.0)
         "profit_status": profit_status,

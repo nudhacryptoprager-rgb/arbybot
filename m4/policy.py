@@ -51,14 +51,19 @@ class FailReason:
 # ============================================================
 
 # Policy version for artifact provenance
-POLICY_VERSION = "1.9.6"
+POLICY_VERSION = "1.9.7"
 
 class Thresholds:
     """
     Centralized threshold definitions for drift metrics.
     
+    v1.9.7 UNIFIED SAMPLE THRESHOLDS:
+    - MIN_SIGNALS_FOR_PASS unified with MIN_SAMPLE_SIZE = 5
+    - signals < 5 → NO_DATA (not counted in pass_rate)
+    - Added AGG_FRAGILE_P50_WARN for early signal
+    
     v1.9.5 QUALITY GATES:
-    - Added MIN_SIGNALS_FOR_PASS: runs with < 3 signals get PASS_LOW_CONFIDENCE
+    - Added MIN_SIGNALS_FOR_PASS: runs with < 5 signals get NO_DATA
     - Added AGG_LOW_SAMPLE_RATE_FAIL: if > 50% runs are low-sample, agg fails quality
     - AGG_FRAGILE_P90_WARN/FAIL now enforced in aggregator status
     
@@ -77,15 +82,16 @@ class Thresholds:
     # Slippage component (for mae_no_slippage calculation)
     SLIPPAGE_SYSTEMATIC_FACTOR = 1.0  # per-signal slippage adds to expected drift
     
-    # === Sample size thresholds (v1.9.5) ===
-    MIN_SAMPLE_SIZE = 5           # < 5 signals triggers WARN_LOW_SAMPLE
-    MIN_SIGNALS_FOR_PASS = 3      # < 3 signals → PASS_LOW_CONFIDENCE (not full PASS)
+    # === Sample size thresholds (v1.9.7 UNIFIED) ===
+    # Single threshold: signals < 5 → NO_DATA (not pass, not counted in pass_rate)
+    MIN_SAMPLE_SIZE = 5           # < 5 signals → NO_DATA
+    MIN_SIGNALS_FOR_PASS = 5      # v1.9.7: unified with MIN_SAMPLE_SIZE
     
     # Rolling window for aggregator (v1.7.0)
     ROLLING_WINDOW_DEFAULT = 50   # Default rolling window for aggregator
     ROLLING_WINDOW_MAX = 200      # Max window for extended analysis
     
-    # === Aggregator-level thresholds (v1.9.5) ===
+    # === Aggregator-level thresholds (v1.9.7) ===
     AGG_MAE_P90_FAIL = 0.85           # FAIL if p90(MAE) > 0.85
     AGG_WARN_RATE_FAIL = 0.60         # FAIL if warn_rate_core > 60%
     AGG_FAIL_RATE_FAIL = 0.40         # FAIL if fail_rate > 40%
@@ -96,7 +102,8 @@ class Thresholds:
     MIN_RUNS_FOR_AGG = 10         # < 10 runs → PASS_WITH_WARMUP instead of FAIL
     MIN_SIGNALS_FOR_AGG = 30      # < 30 total signals → warn thresholds relaxed
     
-    # Fragile rate thresholds (v1.9.5) - enforced in agg status
+    # Fragile rate thresholds (v1.9.7) - enforced in agg status
+    AGG_FRAGILE_P50_WARN = 0.40   # v1.9.7: early signal when median is elevated
     AGG_FRAGILE_P90_WARN = 0.30   # WARN if p90(fragile_rate) > 30%
     AGG_FRAGILE_P90_FAIL = 0.50   # FAIL_QUALITY if p90(fragile_rate) > 50%
 

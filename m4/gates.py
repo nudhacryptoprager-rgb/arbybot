@@ -43,7 +43,7 @@ from .policy import (
     get_cost_model,
 )
 from .evidence import get_git_context, get_git_head_sha
-from .rolling_store import emit_to_aggregator_light, ensure_rolling_agg_exists
+from .rolling_store import emit_to_aggregator_light, ensure_rolling_agg_exists, reset_rolling_window
 from .discovery import find_latest_run_dir, discover_m4_artifacts
 from .fixtures import generate_m4_fixture, generate_m4_from_online_inputs
 
@@ -669,10 +669,9 @@ def run_online_gate(
                 if k.startswith("source_"):
                     run_summary["inputs"][k] = None
         
-        # RESET WINDOW: delete aggregator file if --reset-window was passed
+        # v1.9.7: Reset window with archive (archives old data before creating fresh)
         if reset_window and agg_path.exists():
-            print(f"[RESET] --reset-window: deleting aggregator file {agg_path}")
-            agg_path.unlink()
+            reset_rolling_window(agg_path, reason="cli_reset_window")
         
         # STEP 1: Emit to aggregator FIRST (always)
         agg_data = emit_to_aggregator_light(run_summary, agg_path)
@@ -747,7 +746,7 @@ def run_online_gate(
                 pass
         
         latest_data = {
-            "schema_version": "m4:latest:v1.8",  # v1.9.5: quality_warnings, policy_version
+            "schema_version": "m4:latest:v1.9",  # v1.9.7: unified thresholds, fragile_p50
             "updated_at": now_utc.isoformat(),
             # v1.9.2: Clear SHA naming
             "latest_run_code_sha": git_ctx["code_sha"],  # SHA of code that ran this scan

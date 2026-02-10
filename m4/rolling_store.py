@@ -44,10 +44,60 @@ def ensure_rolling_agg_exists(agg_path: Path) -> dict:
     
     # Initialize new aggregator
     return {
-        "schema_version": "m4:stability_agg:v1.6",  # v1.9.5: quality_warnings, policy_version
+        "schema_version": "m4:stability_agg:v1.7",  # v1.9.7: fragile_p50, unified thresholds
         "created_at": datetime.now(timezone.utc).isoformat(),
         "runs": [],
     }
+
+
+def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
+    """
+    Reset rolling window by archiving current aggregator and creating fresh one.
+    
+    Use after major policy changes, threshold recalibrations, or version upgrades.
+    
+    Args:
+        agg_path: Path to m4_stability_agg.json
+        reason: Reason for reset (stored in archive)
+        
+    Returns:
+        Fresh aggregator data
+    """
+    git_ctx = get_git_context()
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    
+    # Archive current aggregator if exists
+    if agg_path.exists():
+        archive_name = f"m4_stability_agg_archive_{ts}.json"
+        archive_path = agg_path.parent / archive_name
+        
+        with open(agg_path) as f:
+            old_data = json.load(f)
+        
+        # Add archive metadata
+        old_data["archived_at"] = datetime.now(timezone.utc).isoformat()
+        old_data["archive_reason"] = reason
+        old_data["archive_code_sha"] = git_ctx["code_sha"]
+        
+        with open(archive_path, "w") as f:
+            json.dump(old_data, f, indent=2)
+        
+        print(f"[ROLLING-RESET] Archived: {archive_name} (runs={len(old_data.get('runs', []))})")
+    
+    # Create fresh aggregator
+    fresh = {
+        "schema_version": "m4:stability_agg:v1.7",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "reset_from_sha": git_ctx["code_sha"],
+        "reset_reason": reason,
+        "runs": [],
+    }
+    
+    with open(agg_path, "w") as f:
+        json.dump(fresh, f, indent=2)
+    
+    print(f"[ROLLING-RESET] Fresh aggregator created at {agg_path.name}")
+    return fresh
 
 
 def emit_to_aggregator_light(
@@ -207,6 +257,7 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "low_sample_rate": round(low_sample_rate, 4),
         "fail_rate": round(fail_rate, 4),
         "total_signals": total_signals,
+        "fragile_rate_p50": percentile(fragile_rates, 50),  # v1.9.7: median fragile
         "fragile_rate_p90": fragile_rate_p90,
         "mae_p90": mae_p90,
         "total_net_usdc": round(total_net, 4),
@@ -215,7 +266,10 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "mae_p50": percentile(mae_values, 50),
     }
     
-    # === Aggregate status with QUALITY GATES (v1.9.5) ===
+    # v1.9.7: Compute fragile_rate_p50
+    fragile_rate_p50 = percentile(fragile_rates, 50)
+    
+    # === Aggregate status with QUALITY GATES (v1.9.7) ===
     quality_warnings = []
     agg_reasons = []  # v1.9.6: canonical tokens for agg_status
     
@@ -226,6 +280,11 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     elif fragile_rate_p90 > Thresholds.AGG_FRAGILE_P90_WARN:
         quality_warnings.append(f"FRAGILE_P90_ELEVATED({fragile_rate_p90:.2f}>{Thresholds.AGG_FRAGILE_P90_WARN})")
         agg_reasons.append("FRAGILE_P90_ELEVATED")
+    
+    # v1.9.7: FRAGILE_P50 early warning (median fragile check)
+    if fragile_rate_p50 > Thresholds.AGG_FRAGILE_P50_WARN:
+        quality_warnings.append(f"FRAGILE_P50_ELEVATED({fragile_rate_p50:.2f}>{Thresholds.AGG_FRAGILE_P50_WARN})")
+        agg_reasons.append("FRAGILE_P50_ELEVATED")
     
     if low_sample_rate > Thresholds.AGG_LOW_SAMPLE_RATE_FAIL:
         quality_warnings.append(f"LOW_SAMPLE_RATE_HIGH({low_sample_rate:.2f}>{Thresholds.AGG_LOW_SAMPLE_RATE_FAIL})")

@@ -75,6 +75,7 @@ from m4.evidence import (
 from m4.rolling_store import (
     emit_to_aggregator_light,
     ensure_rolling_agg_exists,
+    reset_rolling_window,
 )
 
 # Discovery
