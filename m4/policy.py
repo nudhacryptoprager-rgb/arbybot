@@ -21,12 +21,34 @@ from typing import Dict, List, Optional
 # FAIL REASON CODES (explicit definitions)
 # ============================================================
 
+class RunKind:
+    """
+    Run kind classification for segmented aggregation.
+    
+    v1.11.0: Rolling KPI segmentation by run purpose.
+    - NORMAL: Regular online continuous scan (counted in main rolling KPIs)
+    - COVERAGE: Coverage collection runs (harness mode, separate KPIs)
+    - SMOKE: Smoke test runs (offline/fixture, separate KPIs)
+    - OFFLINE: Offline fixture runs (not counted in main KPIs)
+    """
+    NORMAL = "NORMAL"      # Regular online scan
+    COVERAGE = "COVERAGE"  # Coverage batch collection
+    SMOKE = "SMOKE"        # Smoke test
+    OFFLINE = "OFFLINE"    # Offline fixture
+
+
 class FailReason:
     """
     Explicit fail reason codes for M4 execution gate.
     
     These codes are used in run_summary.json.reasons[] to explain FAIL/WARN status.
     Each reason corresponds to a specific threshold violation.
+    
+    STATUS CONTRACT (v1.11.0):
+    - NO_DATA: ONLY when signals_count == 0 (no signals at all)
+    - profit_status: PASS (net>0) / FAIL (net<=0) - independent of sample size
+    - quality_status: PASS / WARN_LOW_SAMPLE (<min_signals) / FAIL_QUALITY (fragile/drift)
+    - Overall status: PASS if profit_status=PASS AND quality_status != FAIL_QUALITY
     
     v1.5.0: mae_fail is now > 0.50 (exclusive), not >= 0.50
     v1.7.0: Added WARN_LOW_SAMPLE for insufficient signals
@@ -51,15 +73,20 @@ class FailReason:
 # ============================================================
 
 # Policy version for artifact provenance
-POLICY_VERSION = "1.10.0"
+POLICY_VERSION = "1.11.0"
 
 class Thresholds:
     """
     Centralized threshold definitions for drift metrics.
     
+    v1.11.0 STATUS CONTRACT:
+    - NO_DATA: ONLY when signals_count == 0 (no signals at all)
+    - Signals >= 1 → profit/drift evaluated normally
+    - Signals < MIN_SIGNALS_FOR_PASS → quality_status=WARN_LOW_SAMPLE (not NO_DATA)
+    
     v1.9.7 UNIFIED SAMPLE THRESHOLDS:
     - MIN_SIGNALS_FOR_PASS unified with MIN_SAMPLE_SIZE = 5
-    - signals < 5 → NO_DATA (not counted in pass_rate)
+    - signals < 5 → quality_status=WARN_LOW_SAMPLE (not counted as data_run)
     - Added AGG_FRAGILE_P50_WARN for early signal
     
     v1.9.5 QUALITY GATES:
@@ -82,11 +109,13 @@ class Thresholds:
     # Slippage component (for mae_no_slippage calculation)
     SLIPPAGE_SYSTEMATIC_FACTOR = 1.0  # per-signal slippage adds to expected drift
     
-    # === Sample size thresholds (v1.10.0 ADAPTIVE) ===
-    # Two thresholds: profit-grade vs coverage-mode
+    # === Sample size thresholds (v1.11.0 SEMANTIC FIX) ===
+    # NO_DATA: ONLY when signals_count == 0
+    # WARN_LOW_SAMPLE: signals > 0 but < MIN_SIGNALS_FOR_PASS
     MIN_SAMPLE_SIZE = 5           # < 5 signals → WARN_LOW_SAMPLE (legacy compat)
-    MIN_SIGNALS_FOR_PASS = 5      # v1.10.0: profit-grade threshold for data_run
+    MIN_SIGNALS_FOR_PASS = 5      # v1.11.0: profit-grade threshold for data_run
     MIN_SIGNALS_COVERAGE = 3      # v1.10.0: coverage-mode threshold (diagnostic)
+    MIN_SIGNALS_WARN = 3          # v1.11.0: Below this → WARN_LOW_SAMPLE but still evaluate
     
     # Rolling window for aggregator (v1.7.0)
     ROLLING_WINDOW_DEFAULT = 50   # Default rolling window for aggregator

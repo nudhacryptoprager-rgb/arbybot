@@ -39,14 +39,14 @@ def ensure_rolling_agg_exists(agg_path: Path) -> dict:
             # Validate has required fields
             if "runs" in data and "schema_version" in data:
                 # Upgrade schema to current version on load
-                data["schema_version"] = "m4:stability_agg:v1.10"
+                data["schema_version"] = "m4:stability_agg:v1.11"
                 return data
         except Exception:
             pass
     
     # Initialize new aggregator
     return {
-        "schema_version": "m4:stability_agg:v1.10",  # v1.10.0: runs_since_sha enhanced, status contract
+        "schema_version": "m4:stability_agg:v1.11",  # v1.11.0: run_kind segmentation, NO_DATA fix
         "created_at": datetime.now(timezone.utc).isoformat(),
         "runs": [],
     }
@@ -88,7 +88,7 @@ def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
     
     # Create fresh aggregator
     fresh = {
-        "schema_version": "m4:stability_agg:v1.10",  # v1.10.0: runs_since_sha enhanced, status contract
+        "schema_version": "m4:stability_agg:v1.11",  # v1.11.0: run_kind segmentation, NO_DATA fix
         "created_at": datetime.now(timezone.utc).isoformat(),
         "reset_from_sha": git_ctx["code_sha"],
         "reset_reason": reason,
@@ -130,34 +130,35 @@ def emit_to_aggregator_light(
     reasons = run_summary.get("reasons", [])
     total_net = metrics.get("total_net_usdc", 0)
     
-    # v1.10.0: Adaptive min_signals logic
-    # - is_data_run: signals >= MIN_SIGNALS_FOR_PASS (profit-grade)
-    # - If signals >= MIN_SIGNALS_COVERAGE and net > 0: PASS + WARN_LOW_SAMPLE (not NO_DATA)
-    # - If signals < MIN_SIGNALS_COVERAGE: NO_DATA
+    # v1.11.0: Determine run_kind from run_id/context
+    run_kind = "NORMAL"  # default
+    if "offline" in run_id.lower() or "fixture" in run_id.lower():
+        run_kind = "OFFLINE"
+    elif "coverage" in run_id.lower():
+        run_kind = "COVERAGE"
+    elif "smoke" in run_id.lower():
+        run_kind = "SMOKE"
+    # Override from run_summary if explicitly set
+    run_kind = run_summary.get("run_kind", run_kind)
+    
+    # v1.11.0: STATUS CONTRACT - NO_DATA ONLY when signals_count == 0
+    # For signals > 0: status based on profit/quality independently
     is_data_run = signals_count >= Thresholds.MIN_SIGNALS_FOR_PASS
-    is_coverage_run = signals_count >= Thresholds.MIN_SIGNALS_COVERAGE
     
     # v1.10.0: Detect INFRA failures
     is_infra_fail = any(r.startswith("INFRA_") for r in reasons)
     
+    # v1.11.0: Proper NO_DATA semantic
     if signals_count == 0:
         run_status = "NO_DATA"
-    elif is_coverage_run and total_net > 0 and not is_data_run:
-        # Coverage-grade: enough for diagnostic, but not profit-grade
-        run_status = status if status != "NO_DATA" else "PASS"
-        if "WARN_LOW_SAMPLE" not in reasons:
-            reasons = list(reasons) + ["WARN_LOW_SAMPLE"]
-    elif not is_coverage_run:
-        run_status = "NO_DATA"
+        reasons = ["NO_DATA"]
     else:
+        # signals > 0 → use status from run_summary (computed by gates.py)
         run_status = status
-    
-    # v1.10.0: Clean reasons for NO_DATA - no FAIL_* allowed
-    if run_status == "NO_DATA":
-        reasons = [r for r in reasons if not r.startswith("FAIL_")]
-        if "NO_DATA" not in reasons:
-            reasons = ["NO_DATA"] + reasons
-        reasons = [r for r in reasons if r in ["NO_DATA", "WARN_LOW_SAMPLE", "INFRA_RPC_ERROR", "INFRA_BLOCK_PIN_FAILED"]]
+        # Add WARN_LOW_SAMPLE if below threshold but not in reasons
+        if signals_count < Thresholds.MIN_SIGNALS_FOR_PASS:
+            if "WARN_LOW_SAMPLE" not in reasons:
+                reasons = list(reasons) + ["WARN_LOW_SAMPLE"]
     
     # DEDUPLICATION: Check if run_id already exists
     existing_run_ids = {r.get("run_id") for r in agg_data.get("runs", []) if r.get("run_id")}
@@ -184,8 +185,9 @@ def emit_to_aggregator_light(
         "fragile_rate": metrics.get("fragile_rate", 0),
         "signals_count": signals_count,
         "run_status": run_status,
-        "is_data_run": is_data_run,        # v1.10.0: profit-grade data run
-        "is_infra_fail": is_infra_fail,    # v1.10.0: INFRA_* failure
+        "run_kind": run_kind,                  # v1.11.0: segmentation by purpose
+        "is_data_run": is_data_run,            # v1.10.0: profit-grade data run
+        "is_infra_fail": is_infra_fail,        # v1.10.0: INFRA_* failure
         "pairs": run_pairs[:10] if run_pairs else [],  # v1.9.9: pairs (limit 10)
         "routes": run_routes[:10] if run_routes else [],  # v1.9.9: routes (limit 10)
     })
@@ -217,7 +219,10 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     """
     Compute quick stats and rolling window info for aggregator.
     
-    v1.10.0 QUALITY GATES:
+    v1.11.0 STATUS CONTRACT:
+    - NO_DATA: ONLY when signals_count == 0
+    - Segments by run_kind: NORMAL, COVERAGE, SMOKE, OFFLINE
+    - Main KPIs computed on NORMAL runs only (not penalized by coverage/stress runs)
     - Uses is_data_run flag for data_run classification
     - Adds infra_fail_count/infra_fail_rate for RPC failure tracking
     - Adds diversity warnings (WARN_DIVERSITY_LOW)
@@ -226,32 +231,45 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     from m4.policy import Thresholds, POLICY_VERSION
     
     # Always upgrade schema_version on save (forward migration)
-    agg_data["schema_version"] = "m4:stability_agg:v1.10"  # v1.10.0: is_data_run, infra metrics, diversity KPIs
+    agg_data["schema_version"] = "m4:stability_agg:v1.11"  # v1.11.0: run_kind segmentation, NO_DATA fix
     
     runs = agg_data.get("runs", [])
+    
+    # v1.11.0: Segment runs by kind
+    # Main KPIs are computed on NORMAL runs only
+    normal_runs = [r for r in runs if r.get("run_kind", "NORMAL") == "NORMAL"]
+    coverage_runs = [r for r in runs if r.get("run_kind") == "COVERAGE"]
+    other_runs = [r for r in runs if r.get("run_kind") in ("SMOKE", "OFFLINE")]
     
     # v1.10.0: Use is_data_run flag (profit-grade threshold)
     # Fallback to signals_count >= MIN_SIGNALS_FOR_PASS for legacy runs
     min_signals = Thresholds.MIN_SIGNALS_FOR_PASS
-    data_runs = [r for r in runs if r.get("is_data_run", r.get("signals_count", 0) >= min_signals)]
-    no_data_count = len(runs) - len(data_runs)
+    
+    # v1.11.0: Compute stats on NORMAL runs for main KPIs
+    # This prevents coverage/stress runs from penalizing data_run_rate
+    data_runs = [r for r in normal_runs if r.get("is_data_run", r.get("signals_count", 0) >= min_signals)]
+    no_data_count = sum(1 for r in normal_runs if r.get("signals_count", 0) == 0)  # v1.11.0: true NO_DATA only
+    low_sample_count = sum(1 for r in normal_runs if "WARN_LOW_SAMPLE" in r.get("reasons", []))
     data_run_count = len(data_runs)
     
-    # v1.10.0: INFRA failure tracking
+    # v1.10.0: INFRA failure tracking (across all runs)
     infra_fail_count = sum(1 for r in runs if r.get("is_infra_fail", False) or 
                            any("INFRA_" in str(x) for x in r.get("reasons", [])))
     
+    # v1.11.0: Main KPIs on NORMAL runs only
     pass_count = sum(1 for r in data_runs if not any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
     fail_count = len(data_runs) - pass_count
     warn_count_core = sum(1 for r in data_runs if "WARN_DRIFT_MAE" in r.get("reasons", []))
-    low_sample_count = sum(1 for r in runs if "WARN_LOW_SAMPLE" in r.get("reasons", []))
-    total_net = sum(r.get("net_usdc", 0) for r in runs)
-    total_signals = sum(r.get("signals_count", 0) for r in runs)
+    total_net = sum(r.get("net_usdc", 0) for r in normal_runs)
+    total_signals = sum(r.get("signals_count", 0) for r in normal_runs)
     
     # Percentile calculations
     fragile_rates = [r.get("fragile_rate", 0) for r in data_runs]
     mae_values = [r.get("mae", 0) for r in data_runs]
     net_values = [r.get("net_usdc", 0) for r in data_runs]
+    
+    # v1.11.0: Signals per run stats (operational KPI for continuous scan)
+    signals_per_run = [r.get("signals_count", 0) for r in normal_runs]
     
     def percentile(values, p):
         """Compute percentile with linear interpolation."""
@@ -266,24 +284,32 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     # Rolling window
     min_runs = Thresholds.MIN_RUNS_FOR_AGG
     min_signals = Thresholds.MIN_SIGNALS_FOR_AGG
-    in_warmup = len(runs) < min_runs or total_signals < min_signals
+    in_warmup = len(normal_runs) < min_runs or total_signals < min_signals
     
-    # Quality metrics
-    no_data_rate = no_data_count / len(runs) if runs else 0
-    low_sample_rate = low_sample_count / len(runs) if runs else 0
-    data_run_rate = data_run_count / len(runs) if runs else 0  # v1.9.9: % of runs with sufficient signals
-    effective_pass_rate = pass_count / len(runs) if runs else 0  # True rate including NO_DATA
+    # v1.11.0: Quality metrics on NORMAL runs only
+    # This prevents coverage/stress runs from penalizing operational KPIs
+    no_data_rate = no_data_count / len(normal_runs) if normal_runs else 0
+    low_sample_rate = low_sample_count / len(normal_runs) if normal_runs else 0
+    data_run_rate = data_run_count / len(normal_runs) if normal_runs else 0  # v1.11.0: NORMAL only
+    effective_pass_rate = pass_count / len(normal_runs) if normal_runs else 0  # True rate including NO_DATA
     pass_rate = pass_count / len(data_runs) if data_runs else 0  # Rate excluding NO_DATA
     warn_rate_core = warn_count_core / len(data_runs) if data_runs else 0
     fail_rate = fail_count / len(data_runs) if data_runs else 0
     fragile_rate_p90 = percentile(fragile_rates, 90)
     mae_p90 = percentile(mae_values, 90)
     
+    # v1.11.0: Coverage runs stats (separate)
+    coverage_signals = sum(r.get("signals_count", 0) for r in coverage_runs)
+    coverage_net = sum(r.get("net_usdc", 0) for r in coverage_runs)
+    
     agg_data["runs_included"] = len(runs)
     agg_data["runs_in_window"] = len(runs)
     agg_data["rolling_window"] = {
         "max": Thresholds.ROLLING_WINDOW_MAX,
         "current": len(runs),
+        "normal_runs": len(normal_runs),     # v1.11.0: main KPI runs
+        "coverage_runs": len(coverage_runs), # v1.11.0: coverage runs (separate)
+        "other_runs": len(other_runs),       # v1.11.0: smoke/offline
         "min_runs": min_runs,
         "min_signals": min_signals,
         "in_warmup": in_warmup,
@@ -303,10 +329,11 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     unique_routes = len(all_routes)
     
     # v1.10.0: Stats for current code_sha only (since_sha view)
-    # This is the PRIMARY view for understanding regression/improvement
+    # v1.11.0: Filter to NORMAL runs only for primary KPI
     from m4.evidence import get_git_context
     current_sha = get_git_context()["code_sha"]
-    current_sha_runs = [r for r in runs if r.get("code_sha") == current_sha]
+    current_sha_all_runs = [r for r in runs if r.get("code_sha") == current_sha]
+    current_sha_runs = [r for r in normal_runs if r.get("code_sha") == current_sha]  # NORMAL only
     current_sha_data_runs = [r for r in current_sha_runs 
                              if r.get("signals_count", 0) >= Thresholds.MIN_SIGNALS_FOR_PASS]
     current_sha_pass = sum(1 for r in current_sha_data_runs 
@@ -314,7 +341,7 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     current_sha_fail = sum(1 for r in current_sha_data_runs 
                           if any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
     current_sha_no_data = sum(1 for r in current_sha_runs 
-                             if r.get("signals_count", 0) < Thresholds.MIN_SIGNALS_FOR_PASS)
+                             if r.get("signals_count", 0) == 0)  # v1.11.0: true NO_DATA only
     
     agg_data["quick_stats"] = {
         "pass_count": pass_count,
@@ -325,8 +352,8 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "low_sample_count": low_sample_count,
         "pass_rate": round(pass_rate, 4),
         "effective_pass_rate": round(effective_pass_rate, 4),  # v1.9.5: PRIMARY metric
-        "data_run_rate": round(data_run_rate, 4),              # v1.9.9: % runs with sufficient signals
-        "no_data_rate": round(no_data_rate, 4),                # v1.9.5: NO_DATA fraction
+        "data_run_rate": round(data_run_rate, 4),              # v1.11.0: NORMAL runs only
+        "no_data_rate": round(no_data_rate, 4),                # v1.11.0: true NO_DATA (signals=0)
         "warn_rate_core": round(warn_rate_core, 4),
         "low_sample_rate": round(low_sample_rate, 4),
         "fail_rate": round(fail_rate, 4),
@@ -347,31 +374,42 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         # v1.10.0: INFRA failure tracking
         "infra_fail_count": infra_fail_count,
         "infra_fail_rate": round(infra_fail_count / len(runs), 4) if runs else 0,
+        # v1.11.0: Coverage stats (separate from main KPIs)
+        "coverage_runs_count": len(coverage_runs),
+        "coverage_signals_total": coverage_signals,
+        "coverage_net_usdc": round(coverage_net, 4),
+        # v1.11.0: Signals per run stats (operational KPI)
+        "signals_per_run_p50": percentile(signals_per_run, 50),
+        "signals_per_run_p90": percentile(signals_per_run, 90),
+        "signals_per_run_avg": round(sum(signals_per_run) / len(signals_per_run), 2) if signals_per_run else 0,
     }
     
-    # v1.10.0: Enhanced runs_since_sha (current code stability - PRIMARY view)
-    # Use is_data_run flag for accurate data_runs counting
-    current_sha_data_runs = [r for r in current_sha_runs 
-                             if r.get("is_data_run", r.get("signals_count", 0) >= Thresholds.MIN_SIGNALS_FOR_PASS)]
+    # v1.11.0: Enhanced runs_since_sha (current code stability - PRIMARY view)
+    # Use is_data_run flag for accurate data_runs counting, NORMAL runs only
     current_sha_infra_fails = sum(1 for r in current_sha_runs if r.get("is_infra_fail", False))
     sha_data_run_rate = len(current_sha_data_runs) / len(current_sha_runs) if current_sha_runs else 0
     sha_effective_pass_rate = current_sha_pass / len(current_sha_data_runs) if current_sha_data_runs else 0
     sha_fail_rate = current_sha_fail / len(current_sha_data_runs) if current_sha_data_runs else 0
     sha_total_signals = sum(r.get("signals_count", 0) for r in current_sha_data_runs)
     
+    # v1.11.0: Count low_sample runs for SHA (signals 1-4)
+    sha_low_sample_count = sum(1 for r in current_sha_runs 
+                               if 0 < r.get("signals_count", 0) < Thresholds.MIN_SIGNALS_FOR_PASS)
+    
     agg_data["runs_since_sha"] = {
         "sha": current_sha,
         "runs_count": len(current_sha_runs),
         "data_runs_count": len(current_sha_data_runs),
         "data_signals_total": sha_total_signals,  # v1.10.0: total signals in data_runs
-        "no_data_count": current_sha_no_data,
+        "no_data_count": current_sha_no_data,     # v1.11.0: true NO_DATA (signals=0)
+        "low_sample_count": sha_low_sample_count, # v1.11.0: signals 1-4 (WARN, not NO_DATA)
         "infra_fail_count": current_sha_infra_fails,  # v1.10.0: infra failures for this SHA
         "pass_count": current_sha_pass,
         "fail_count": current_sha_fail,
         "data_run_rate": round(sha_data_run_rate, 4),
         "effective_pass_rate": round(sha_effective_pass_rate, 4),
         "fail_rate": round(sha_fail_rate, 4),
-        # v1.10.0: status based on data_runs_count threshold
+        # v1.11.0: status based on data_runs_count threshold
         "status": "PENDING" if len(current_sha_data_runs) < 5 else (
             "OK" if sha_effective_pass_rate >= 0.80 and sha_data_run_rate >= 0.50 else
             "WARN" if sha_effective_pass_rate >= 0.60 else "FAIL"

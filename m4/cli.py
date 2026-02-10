@@ -136,13 +136,16 @@ def main(argv: Optional[list] = None) -> int:
                         help="Reset rolling aggregator window (start fresh after major refactor)")
     parser.add_argument("--require-clean", action="store_true",
                         help="Reject dirty worktree - refuse to write _latest if code_dirty=true")
+    parser.add_argument("--allow-dirty", action="store_true",
+                        help="Allow dirty worktree for profit profile (override default require-clean)")
 
     args = parser.parse_args(argv)
 
-    # v1.10.0: --strict-evidence + --profile profit implies --require-clean
-    if args.strict_evidence and args.profile == DoDProfile.PROFIT:
+    # v1.11.0: profit profile defaults to require-clean (evidence standard)
+    # --allow-dirty explicitly overrides this default
+    if args.profile == DoDProfile.PROFIT and not args.allow_dirty:
         if not args.require_clean:
-            print("[POLICY] --strict-evidence + --profile profit → enabling --require-clean")
+            print("[POLICY] --profile profit → enabling --require-clean (use --allow-dirty to override)")
             args.require_clean = True
 
     # Header
