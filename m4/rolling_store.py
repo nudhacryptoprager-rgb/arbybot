@@ -105,7 +105,8 @@ def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
 def emit_to_aggregator_light(
     run_summary: dict,
     agg_path: Path,
-    max_runs: int = 200
+    max_runs: int = 200,
+    target_sha: str = None  # v1.12.2: explicit SHA for runs_since_sha (artifact-based, not git)
 ) -> dict:
     """
     Emit run to rolling aggregator. Returns updated agg_data.
@@ -114,6 +115,8 @@ def emit_to_aggregator_light(
         run_summary: Run summary dict with metrics
         agg_path: Path to aggregator file
         max_runs: Maximum runs to keep in window
+        target_sha: If provided, use this SHA for runs_since_sha instead of git context.
+                   Defaults to run_summary.run_context.code_sha (artifact provenance).
         
     Returns:
         Updated aggregator data
@@ -332,8 +335,18 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     
     # v1.10.0: Stats for current code_sha only (since_sha view)
     # v1.11.0: Filter to NORMAL runs only for primary KPI
-    from m4.evidence import get_git_context
-    current_sha = get_git_context()["code_sha"]
+    # v1.12.2: Use target_sha if provided, else artifact run_context, never git context
+    if target_sha:
+        current_sha = target_sha
+    else:
+        # Use the latest run's artifact SHA, not live git state
+        artifact_sha = run_summary.get("run_context", {}).get("code_sha")
+        if artifact_sha:
+            current_sha = artifact_sha
+        else:
+            # Fallback for legacy runs without run_context
+            from m4.evidence import get_git_context
+            current_sha = get_git_context()["code_sha"]
     current_sha_all_runs = [r for r in runs if r.get("code_sha") == current_sha]
     current_sha_runs = [r for r in normal_runs if r.get("code_sha") == current_sha]  # NORMAL only
     current_sha_data_runs = [r for r in current_sha_runs 

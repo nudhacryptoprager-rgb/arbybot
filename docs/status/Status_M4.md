@@ -1,9 +1,10 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
-**Status**: PROVISIONAL (rolling contract restored), NOT PROVEN (real execution)  
+**Status**: PROVISIONAL (code-level fixes validated offline; online proof pending)  
 **Updated**: 2026-02-10  
-**Gate Version**: v1.12.1  
+**Gate Version**: v1.12.2  
 **Policy Version**: v1.12.0  
+**Evidence**: `6661379` code-level fixes validated offline; online proof currently blocked by chain/provider mismatch and NO_DATA run; canonical evidence pending clean online rerun + attach_evidence.  
 
 ## Taxonomy Contract (v1.12.0)
 
@@ -101,19 +102,39 @@ Location: `data/runs/_rolling/`
 
 ## Known Blockers (2026-02-10)
 
-1. **Rolling artifacts need reset** - existing artifacts have v1.11 schema/policy_version
-2. **Taxonomy violations cleaned** - v1.12.1 fixes PASS+FAIL_* contradiction, provenance falsification
-3. **PROVEN claim at risk** - requires rolling window reset + validation run to restore
+1. **Python version**: Pipelines running under Python 3.14, repo requires 3.11
+2. **Chain/provider mismatch**: chain_id=42161 (Arbitrum) with Mantle RPC host detected in last online run
+3. **Online scan unusable**: quotes_fetched=0, dexes_active=0 in last run
+4. **Rolling artifacts need reset**: existing artifacts have v1.11 schema/policy_version
+5. **Provenance fixes in v1.12.2**: _latest and runs_since_sha now use artifact context, not git
+
+### v1.12.2 Provenance Fixes
+- `_latest.latest_run_code_sha` now sourced from run artifact, not live git context
+- `_latest.run_context.*` copied from run artifact, with fallback for legacy runs
+- `runs_since_sha` computed against artifact SHA, with optional `target_sha` override
+- Added `validate_chain_rpc_consistency()` to detect chain_id/RPC host mismatches
 
 ### Recovery Steps
 ```bash
-# 1. Reset rolling window
-python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window --allow-dirty
+# 0. Enforce Python 3.11
+py -3.11 -m venv .venv && .\.venv\Scripts\Activate.ps1
 
-# 2. Run coverage batch to rebuild KPIs
-python scripts/run_coverage_batch.py --min-signals-target 30 --max-seconds 600 --profile profit
+# 1. Verify chain/RPC consistency before running online
+python -c "from core.rpc_urls import validate_chain_rpc_consistency; print(validate_chain_rpc_consistency(42161, 'arb-mainnet.g.alchemy.com'))"
 
-# 3. Validate rolling artifacts
+# 2. Reset rolling window (clean worktree)
+git stash && python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window
+
+# 3. Re-run online M5_0 until quotes_fetched > 0
+python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
+
+# 4. Run M4 profit gate on valid runDir
+python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling
+
+# 5. Attach evidence SHA
+python scripts/attach_evidence.py --sha <new_commit_sha>
+
+# 6. Validate rolling artifacts
 Get-Content data/runs/_rolling/m4_stability_agg.json | Select-String "schema_version|policy_version|agg_status"
 ```
 

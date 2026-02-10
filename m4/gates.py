@@ -784,16 +784,18 @@ def run_online_gate(
                 pass
         
         latest_data = {
-            "schema_version": "m4:latest:v1.12",  # v1.10.0: profit=main, NO_PROOF, status contract
+            "schema_version": "m4:latest:v1.13",  # v1.12.2: provenance from artifact, not git
             "updated_at": now_utc.isoformat(),
-            # v1.9.2: Clear SHA naming
-            "latest_run_code_sha": git_ctx["code_sha"],  # SHA of code that ran this scan
-            "attached_evidence_sha": None,  # null until attach_evidence.py sets it
+            # v1.12.2: Provenance from run artifact, NOT current git state
+            # This preserves original code_sha that generated the scan
+            "latest_run_code_sha": run_summary.get("run_context", {}).get("code_sha", git_ctx["code_sha"]),
+            "attached_evidence_sha": run_summary.get("run_context", {}).get("evidence_sha"),  # from artifact
             "run_context": {
-                "code_sha": git_ctx["code_sha"],
-                "code_dirty": git_ctx["code_dirty"] if git_ctx["code_dirty"] is not None else False,
-                "code_desc": git_ctx["code_desc"],
-                "evidence_sha": None,  # null until attach_evidence sets it
+                # v1.12.2: Copy from artifact, fallback to git for legacy runs
+                "code_sha": run_summary.get("run_context", {}).get("code_sha", git_ctx["code_sha"]),
+                "code_dirty": run_summary.get("run_context", {}).get("code_dirty", git_ctx.get("code_dirty", False)),
+                "code_desc": run_summary.get("run_context", {}).get("code_desc", git_ctx.get("code_desc", "")),
+                "evidence_sha": run_summary.get("run_context", {}).get("evidence_sha"),
             },
             "latest_mode": "ONLINE" if is_online else "OFFLINE",
             "latest_kind": "INCIDENT" if is_incident else "NORMAL",
