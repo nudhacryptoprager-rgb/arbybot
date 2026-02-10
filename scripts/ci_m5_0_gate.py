@@ -1034,6 +1034,37 @@ ENV VARIABLES:
         print(f"[ONLINE] Config: {args.config}")
         print(f"[ONLINE] Cycles: {args.cycles}")
         
+        # v1.12.2: Chain/RPC validation precheck
+        # Detect mismatches like chain_id=42161 with Mantle RPC host
+        try:
+            import yaml
+            from core.rpc_urls import validate_chain_rpc_consistency, resolve_rpc_http
+            
+            cfg_path = Path(args.config)
+            if cfg_path.exists():
+                with open(cfg_path, "r", encoding="utf8") as f:
+                    cfg = yaml.safe_load(f)
+                cfg_chain_id = cfg.get("chain_id", 42161)
+                
+                # Resolve RPC URL to check host
+                rpc_url, _, _ = resolve_rpc_http(chain_id=cfg_chain_id, env=dict(os.environ))
+                if rpc_url:
+                    from urllib.parse import urlparse
+                    rpc_host = urlparse(rpc_url).netloc
+                    is_valid, error_msg = validate_chain_rpc_consistency(cfg_chain_id, rpc_host)
+                    
+                    if not is_valid:
+                        print(f"\n{'='*60}")
+                        print(f"RESULT: FAIL - Chain/RPC mismatch")
+                        print(f"  {error_msg}")
+                        print(f"  RPC URL: {rpc_url}")
+                        print(f"{'='*60}")
+                        return 3
+                    else:
+                        print(f"[ONLINE] Chain/RPC validated: chain_id={cfg_chain_id}, host={rpc_host}")
+        except Exception as e:
+            print(f"[ONLINE] WARN: Chain/RPC validation skipped: {e}")
+        
         # Export WS preference flags into the environment so run_real_scan picks them up
         if args.ws:
             os.environ.setdefault("ARBY_PREFER_WS", "1")

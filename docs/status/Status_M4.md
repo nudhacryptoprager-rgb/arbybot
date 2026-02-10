@@ -2,9 +2,28 @@
 
 **Status**: PROVISIONAL (code-level fixes validated offline; online proof pending)  
 **Updated**: 2026-02-10  
-**Gate Version**: v1.12.2  
+**Gate Version**: v1.12.3  
 **Policy Version**: v1.12.0  
-**Evidence**: `6661379` code-level fixes validated offline; online proof currently blocked by chain/provider mismatch and NO_DATA run; canonical evidence pending clean online rerun + attach_evidence.  
+**Evidence**: `9b07ab7` code-level fixes validated offline; online proof currently blocked by chain/provider mismatch and NO_DATA run; canonical evidence pending clean online rerun + attach_evidence.  
+
+## Workflow Split (v1.12.3)
+
+| Mode | Description | SHA Binding | Evidence Required |
+|------|-------------|-------------|-------------------|
+| **DEV** | Fast iteration cycle | None | Rolling trio + runDir |
+| **RELEASE_EVIDENCE** | Public proof | Mandatory | attach_evidence + SHA linkage |
+
+**DEV Mode:**
+- No hard commit-binding (HEAD_SHA != run_context.code_sha is OK)
+- No mandatory attach_evidence on every cycle
+- Minimal bundle: `_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json` + runDir
+- Use for rapid development and debugging
+
+**RELEASE_EVIDENCE Mode:**
+- Clean worktree required (code_dirty=false)
+- `attach_evidence.py --sha <commit>` mandatory after successful run
+- `evidence_sha` in artifacts must match committed code
+- Use for milestone claims in Status_M4.md  
 
 ## Taxonomy Contract (v1.12.0)
 

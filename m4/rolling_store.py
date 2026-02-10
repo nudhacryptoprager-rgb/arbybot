@@ -207,7 +207,7 @@ def emit_to_aggregator_light(
         runs = agg_data["runs"]
     
     # Compute quick stats
-    agg_data = _compute_quick_stats(agg_data)
+    agg_data = _compute_quick_stats(agg_data, run_summary=run_summary, target_sha=target_sha)
     
     # Write to disk
     with open(agg_path, "w") as f:
@@ -220,9 +220,18 @@ def emit_to_aggregator_light(
     return agg_data
 
 
-def _compute_quick_stats(agg_data: dict) -> dict:
+def _compute_quick_stats(
+    agg_data: dict,
+    run_summary: dict = None,
+    target_sha: str = None
+) -> dict:
     """
     Compute quick stats and rolling window info for aggregator.
+    
+    Args:
+        agg_data: Aggregator data dict with runs list
+        run_summary: Latest run summary (for artifact-based SHA extraction)
+        target_sha: Explicit SHA for runs_since_sha; if None, uses run_summary.run_context.code_sha
     
     v1.11.0 STATUS CONTRACT:
     - NO_DATA: ONLY when signals_count == 0
@@ -232,6 +241,8 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     - Adds infra_fail_count/infra_fail_rate for RPC failure tracking
     - Adds diversity warnings (WARN_DIVERSITY_LOW)
     - Enhanced runs_since_sha with data_runs tracking
+    
+    v1.12.2: run_summary and target_sha for artifact-based provenance
     """
     from m4.policy import Thresholds, POLICY_VERSION
     
@@ -338,7 +349,7 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     # v1.12.2: Use target_sha if provided, else artifact run_context, never git context
     if target_sha:
         current_sha = target_sha
-    else:
+    elif run_summary:
         # Use the latest run's artifact SHA, not live git state
         artifact_sha = run_summary.get("run_context", {}).get("code_sha")
         if artifact_sha:
@@ -347,6 +358,10 @@ def _compute_quick_stats(agg_data: dict) -> dict:
             # Fallback for legacy runs without run_context
             from m4.evidence import get_git_context
             current_sha = get_git_context()["code_sha"]
+    else:
+        # No run_summary provided - fallback to git context
+        from m4.evidence import get_git_context
+        current_sha = get_git_context()["code_sha"]
     current_sha_all_runs = [r for r in runs if r.get("code_sha") == current_sha]
     current_sha_runs = [r for r in normal_runs if r.get("code_sha") == current_sha]  # NORMAL only
     current_sha_data_runs = [r for r in current_sha_runs 
