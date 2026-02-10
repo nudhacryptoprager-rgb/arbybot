@@ -39,14 +39,14 @@ def ensure_rolling_agg_exists(agg_path: Path) -> dict:
             # Validate has required fields
             if "runs" in data and "schema_version" in data:
                 # Upgrade schema to current version on load
-                data["schema_version"] = "m4:stability_agg:v1.11"
+                data["schema_version"] = "m4:stability_agg:v1.12"
                 return data
         except Exception:
             pass
     
     # Initialize new aggregator
     return {
-        "schema_version": "m4:stability_agg:v1.11",  # v1.11.0: run_kind segmentation, NO_DATA fix
+        "schema_version": "m4:stability_agg:v1.12",  # v1.12.0: taxonomy contract, thresholds bite
         "created_at": datetime.now(timezone.utc).isoformat(),
         "runs": [],
     }
@@ -88,7 +88,7 @@ def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
     
     # Create fresh aggregator
     fresh = {
-        "schema_version": "m4:stability_agg:v1.11",  # v1.11.0: run_kind segmentation, NO_DATA fix
+        "schema_version": "m4:stability_agg:v1.12",  # v1.12.0: taxonomy contract, thresholds bite
         "created_at": datetime.now(timezone.utc).isoformat(),
         "reset_from_sha": git_ctx["code_sha"],
         "reset_reason": reason,
@@ -231,7 +231,7 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     from m4.policy import Thresholds, POLICY_VERSION
     
     # Always upgrade schema_version on save (forward migration)
-    agg_data["schema_version"] = "m4:stability_agg:v1.11"  # v1.11.0: run_kind segmentation, NO_DATA fix
+    agg_data["schema_version"] = "m4:stability_agg:v1.12"  # v1.12.0: taxonomy contract, thresholds bite
     
     runs = agg_data.get("runs", [])
     
@@ -409,10 +409,12 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "data_run_rate": round(sha_data_run_rate, 4),
         "effective_pass_rate": round(sha_effective_pass_rate, 4),
         "fail_rate": round(sha_fail_rate, 4),
-        # v1.11.0: status based on data_runs_count threshold
-        "status": "PENDING" if len(current_sha_data_runs) < 5 else (
-            "OK" if sha_effective_pass_rate >= 0.80 and sha_data_run_rate >= 0.50 else
-            "WARN" if sha_effective_pass_rate >= 0.60 else "FAIL"
+        # v1.12.0: Improved status - show progress immediately, not just after 5 data_runs
+        "status": (
+            "OK" if len(current_sha_data_runs) >= 3 and sha_effective_pass_rate >= 0.80 and sha_data_run_rate >= 0.50 else
+            "WARN" if len(current_sha_runs) >= 1 and (sha_effective_pass_rate >= 0.60 or len(current_sha_data_runs) < 3) else
+            "FAIL" if len(current_sha_data_runs) >= 3 and sha_effective_pass_rate < 0.60 else
+            "PENDING"  # No runs yet
         ),
     }
     
@@ -456,10 +458,17 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         agg_reasons.append("DATA_RUN_RATE_WARN")
     
     # v1.10.0: Diversity KPI warnings
-    if unique_pairs < Thresholds.DIVERSITY_PAIRS_TARGET:
+    # v1.12.0: Add FAIL thresholds for diversity (not just WARN)
+    if unique_pairs < Thresholds.DIVERSITY_PAIRS_MIN:
+        quality_warnings.append(f"DIVERSITY_PAIRS_FAIL({unique_pairs}<{Thresholds.DIVERSITY_PAIRS_MIN})")
+        agg_reasons.append("DIVERSITY_PAIRS_FAIL")
+    elif unique_pairs < Thresholds.DIVERSITY_PAIRS_TARGET:
         quality_warnings.append(f"DIVERSITY_PAIRS_LOW({unique_pairs}<{Thresholds.DIVERSITY_PAIRS_TARGET})")
         agg_reasons.append("DIVERSITY_PAIRS_LOW")
-    if unique_routes < Thresholds.DIVERSITY_ROUTES_TARGET:
+    if unique_routes < Thresholds.DIVERSITY_ROUTES_MIN:
+        quality_warnings.append(f"DIVERSITY_ROUTES_FAIL({unique_routes}<{Thresholds.DIVERSITY_ROUTES_MIN})")
+        agg_reasons.append("DIVERSITY_ROUTES_FAIL")
+    elif unique_routes < Thresholds.DIVERSITY_ROUTES_TARGET:
         quality_warnings.append(f"DIVERSITY_ROUTES_LOW({unique_routes}<{Thresholds.DIVERSITY_ROUTES_TARGET})")
         agg_reasons.append("DIVERSITY_ROUTES_LOW")
     

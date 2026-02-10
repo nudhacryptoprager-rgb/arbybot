@@ -41,6 +41,7 @@ from .policy import (
     FailReason,
     RunKind,
     Thresholds,
+    compute_status,
     get_cost_model,
 )
 from .evidence import get_git_context, get_git_head_sha
@@ -648,8 +649,6 @@ def run_online_gate(
             run_summary["run_context"]["code_desc"] = git_ctx["code_desc"]
         
         # Determine status considering NO_DATA
-        status = run_summary.get("status", "UNKNOWN")
-        reasons = run_summary.get("reasons", [])
         signals_count = run_summary.get("metrics", {}).get("signals_count", 0)
         total_net = run_summary.get("metrics", {}).get("total_net_usdc", 0)
         pinned_block = run_summary.get("inputs", {}).get("pinned_block", 0)
@@ -657,96 +656,35 @@ def run_online_gate(
         sign_rate = run_summary.get("metrics", {}).get("est_sign_correct_rate", 1.0)
         fragile_rate = run_summary.get("metrics", {}).get("fragile_rate", 0)
         
-        # v1.11.0: STATUS CONTRACT - NO_DATA ONLY when signals_count == 0
-        # For signals > 0: evaluate profit/drift/quality independently
-        # This fixes the semantic bug where runs with data were marked NO_DATA
-        is_data_run = signals_count >= Thresholds.MIN_SIGNALS_FOR_PASS
+        # v1.12.0: Use compute_status() as SINGLE SOURCE OF TRUTH
+        # This ensures FAIL_* → status=FAIL invariant (taxonomy contract)
+        status_result = compute_status(
+            signals_count=signals_count,
+            total_net_usdc=total_net,
+            mae_net_usdc=mae_net,
+            sign_rate=sign_rate,
+            fragile_rate=fragile_rate,
+            code_dirty=code_dirty if code_dirty else False,
+            require_clean=require_clean if require_clean else False,
+        )
         
-        if signals_count == 0:
-            # True NO_DATA - absolutely no signals
-            status = "NO_DATA"
-            reasons = ["NO_DATA"]
-            run_summary["status"] = status
-            run_summary["reasons"] = reasons
-            run_summary["profit_status"] = "NO_DATA"
-            run_summary["drift_status"] = "NO_DATA"
-            run_summary["quality_status"] = "NO_DATA"
-            run_summary["profit_reasons"] = ["NO_DATA"]
-            run_summary["drift_reasons"] = ["NO_DATA"]
-        else:
-            # v1.11.0: signals_count > 0 → EVALUATE profit/drift/quality INDEPENDENTLY
-            # NO_DATA is NOT allowed when we have data!
-            
-            # === profit_status: PASS (net>0) / FAIL (net<=0) ===
-            profit_reasons = []
-            if total_net > 0:
-                profit_status = "PASS"
-            else:
-                profit_status = "FAIL"
-                profit_reasons.append(FailReason.FAIL_NET)
-            
-            # === drift_status: Based on MAE/sign_rate thresholds ===
-            drift_reasons = []
-            if mae_net > Thresholds.MAE_FAIL:
-                drift_status = "FAIL"
-                drift_reasons.append(FailReason.FAIL_DRIFT_MAE)
-            elif mae_net > Thresholds.MAE_WARN:
-                drift_status = "WARN"
-                drift_reasons.append(FailReason.WARN_DRIFT_MAE)
-            elif sign_rate < Thresholds.SIGN_RATE_MIN:
-                drift_status = "FAIL"
-                drift_reasons.append(FailReason.FAIL_DRIFT_SIGN)
-            else:
-                drift_status = "PASS"
-            
-            # === quality_status: PASS / WARN_LOW_SAMPLE / FAIL_QUALITY ===
-            quality_reasons = []
-            quality_status = "PASS"
-            
-            # Low sample check
-            if signals_count < Thresholds.MIN_SIGNALS_FOR_PASS:
-                quality_status = "WARN"
-                quality_reasons.append(FailReason.WARN_LOW_SAMPLE)
-                if FailReason.WARN_LOW_SAMPLE not in reasons:
-                    reasons = list(reasons) + [FailReason.WARN_LOW_SAMPLE]
-            
-            # Fragile rate check
-            if fragile_rate > 0.50:
-                quality_status = "FAIL_QUALITY"
-                quality_reasons.append("FAIL_FRAGILE_HIGH")
-            elif fragile_rate > Thresholds.AGG_FRAGILE_P90_WARN:
-                if quality_status != "FAIL_QUALITY":
-                    quality_status = "WARN"
-                quality_reasons.append("WARN_FRAGILE_ELEVATED")
-            
-            # === Overall status rule: PASS if profit=PASS and quality != FAIL_QUALITY ===
-            # quality WARN does not kill profit run
-            if profit_status == "PASS" and quality_status != "FAIL_QUALITY" and drift_status != "FAIL":
-                status = "PASS"
-            elif profit_status == "FAIL":
-                status = "FAIL"
-            elif quality_status == "FAIL_QUALITY":
-                status = "FAIL"
-            elif drift_status == "FAIL":
-                status = "FAIL"
-            else:
-                status = "PASS"
-            
-            # Combine reasons
-            all_reasons = list(set(profit_reasons + drift_reasons + quality_reasons))
-            if not all_reasons:
-                all_reasons = reasons if reasons else []
-            else:
-                all_reasons = all_reasons + [r for r in reasons if r not in all_reasons]
-            
-            run_summary["status"] = status
-            run_summary["reasons"] = all_reasons
-            run_summary["profit_status"] = profit_status
-            run_summary["profit_reasons"] = profit_reasons
-            run_summary["drift_status"] = drift_status
-            run_summary["drift_reasons"] = drift_reasons
-            run_summary["quality_status"] = quality_status
-            run_summary["quality_reasons"] = quality_reasons
+        status = status_result["status"]
+        reasons = status_result["reasons"]
+        profit_status = status_result["profit_status"]
+        drift_status = status_result["drift_status"]
+        quality_status = status_result["quality_status"]
+        
+        # Update run_summary with computed status
+        run_summary["status"] = status
+        run_summary["reasons"] = reasons
+        run_summary["profit_status"] = profit_status
+        run_summary["drift_status"] = drift_status
+        run_summary["quality_status"] = quality_status
+        run_summary["profit_reasons"] = [r for r in reasons if r in (FailReason.FAIL_NET, FailReason.FAIL_NO_PROFITABLE)]
+        run_summary["drift_reasons"] = [r for r in reasons if "DRIFT" in r or "SIGN" in r]
+        run_summary["quality_reasons"] = [r for r in reasons if r in (FailReason.WARN_LOW_SAMPLE, FailReason.FAIL_FRAGILE_HIGH, FailReason.WARN_FRAGILE_ELEVATED)]
+        
+        is_data_run = signals_count >= Thresholds.MIN_SIGNALS_FOR_PASS
         
         # Add block_is_synthetic flag for offline
         if "inputs" in run_summary:

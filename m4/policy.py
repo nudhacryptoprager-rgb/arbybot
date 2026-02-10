@@ -44,6 +44,12 @@ class FailReason:
     These codes are used in run_summary.json.reasons[] to explain FAIL/WARN status.
     Each reason corresponds to a specific threshold violation.
     
+    TAXONOMY CONTRACT (v1.12.0):
+    - FAIL_* reasons → status MUST be FAIL (enforced by compute_status)
+    - WARN_* reasons → status may be PASS with quality_status=WARN
+    - BLOCK_* reasons → deprecated, use FAIL_* or WARN_* only
+    - NO_DATA → ONLY when signals_count == 0
+    
     STATUS CONTRACT (v1.11.0):
     - NO_DATA: ONLY when signals_count == 0 (no signals at all)
     - profit_status: PASS (net>0) / FAIL (net<=0) - independent of sample size
@@ -53,19 +59,136 @@ class FailReason:
     v1.5.0: mae_fail is now > 0.50 (exclusive), not >= 0.50
     v1.7.0: Added WARN_LOW_SAMPLE for insufficient signals
     """
-    # FAIL conditions (profit_status)
+    # FAIL conditions (profit_status) - require status=FAIL
     FAIL_NET = "FAIL_NET"                        # total_net_usdc <= 0 (PROFIT profile)
     FAIL_NO_PROFITABLE = "FAIL_NO_PROFITABLE"    # sim_profitable_count == 0
     
-    # FAIL conditions (drift_status)
-    FAIL_DRIFT_MAE = "FAIL_DRIFT_MAE"            # mae_net_usdc > 0.50 (exclusive)
-    FAIL_DRIFT_SIGN = "FAIL_DRIFT_SIGN"          # sign_correct_rate < 0.70
+    # FAIL conditions (drift_status) - require status=FAIL
+    FAIL_DRIFT_MAE = "FAIL_DRIFT_MAE"            # mae_net_usdc > MAE_FAIL
+    FAIL_DRIFT_SIGN = "FAIL_DRIFT_SIGN"          # sign_correct_rate < SIGN_RATE_MIN
     FAIL_SIGN_MISMATCH = "FAIL_SIGN_MISMATCH"    # sign_mismatch_count > 0 (strict mode)
     
-    # WARN conditions
-    WARN_DRIFT_MAE = "WARN_DRIFT_MAE"            # 0.30 < mae <= 0.50
+    # FAIL conditions (quality_status) - require status=FAIL
+    FAIL_FRAGILE_HIGH = "FAIL_FRAGILE_HIGH"      # fragile_rate > AGG_FRAGILE_P90_FAIL
+    FAIL_EVIDENCE_DIRTY = "FAIL_EVIDENCE_DIRTY"  # v1.12.0: dirty worktree with --require-clean
+    
+    # WARN conditions - status may be PASS
+    WARN_DRIFT_MAE = "WARN_DRIFT_MAE"            # MAE_WARN < mae <= MAE_FAIL
     WARN_LOW_SAMPLE = "WARN_LOW_SAMPLE"          # signals_count < MIN_SAMPLE_SIZE (v1.7.0)
     WARN_AGG_WARMUP = "WARN_AGG_WARMUP"          # runs_in_window < MIN_RUNS_FOR_AGG (v1.8.0)
+    WARN_FRAGILE_ELEVATED = "WARN_FRAGILE_ELEVATED"  # v1.12.0: elevated but not failing
+    WARN_DIVERSITY_LOW = "WARN_DIVERSITY_LOW"    # v1.12.0: low pair/route diversity
+
+
+def compute_status(
+    signals_count: int,
+    total_net_usdc: float,
+    mae_net_usdc: float = 0,
+    sign_rate: float = 1.0,
+    fragile_rate: float = 0,
+    code_dirty: bool = False,
+    require_clean: bool = False,
+) -> dict:
+    """
+    Single source of truth for status computation.
+    
+    This function MUST be used by both run_summary generation and rolling_agg
+    to ensure taxonomy consistency (FAIL_* → status=FAIL invariant).
+    
+    Args:
+        signals_count: Number of signals in run
+        total_net_usdc: Total net PnL in USDC
+        mae_net_usdc: Mean absolute error vs simulation
+        sign_rate: Correct sign prediction rate
+        fragile_rate: Fraction of fragile simulations
+        code_dirty: Whether code has uncommitted changes
+        require_clean: Whether clean worktree is required
+        
+    Returns:
+        dict with keys:
+        - status: "NO_DATA" | "PASS" | "FAIL"
+        - profit_status: "NO_DATA" | "PASS" | "FAIL"
+        - drift_status: "NO_DATA" | "PASS" | "WARN" | "FAIL"
+        - quality_status: "NO_DATA" | "PASS" | "WARN" | "FAIL_QUALITY"
+        - reasons: list of reason codes (guaranteed FAIL_* only if status=FAIL)
+    """
+    reasons = []
+    
+    # NO_DATA: only when signals_count == 0
+    if signals_count == 0:
+        return {
+            "status": "NO_DATA",
+            "profit_status": "NO_DATA",
+            "drift_status": "NO_DATA",
+            "quality_status": "NO_DATA",
+            "reasons": ["NO_DATA"],
+        }
+    
+    # === PROFIT STATUS ===
+    if total_net_usdc > 0:
+        profit_status = "PASS"
+    else:
+        profit_status = "FAIL"
+        reasons.append(FailReason.FAIL_NET)
+    
+    # === DRIFT STATUS ===
+    drift_status = "PASS"
+    if mae_net_usdc > Thresholds.MAE_FAIL:
+        drift_status = "FAIL"
+        reasons.append(FailReason.FAIL_DRIFT_MAE)
+    elif mae_net_usdc > Thresholds.MAE_WARN:
+        drift_status = "WARN"
+        reasons.append(FailReason.WARN_DRIFT_MAE)
+    
+    if sign_rate < Thresholds.SIGN_RATE_MIN:
+        drift_status = "FAIL"
+        reasons.append(FailReason.FAIL_DRIFT_SIGN)
+    
+    # === QUALITY STATUS ===
+    quality_status = "PASS"
+    
+    # Low sample check (WARN, not FAIL)
+    if signals_count < Thresholds.MIN_SIGNALS_FOR_PASS:
+        quality_status = "WARN"
+        reasons.append(FailReason.WARN_LOW_SAMPLE)
+    
+    # Fragile rate check
+    if fragile_rate > Thresholds.AGG_FRAGILE_P90_FAIL:
+        quality_status = "FAIL_QUALITY"
+        reasons.append(FailReason.FAIL_FRAGILE_HIGH)
+    elif fragile_rate > Thresholds.AGG_FRAGILE_P90_WARN:
+        if quality_status != "FAIL_QUALITY":
+            quality_status = "WARN"
+        reasons.append(FailReason.WARN_FRAGILE_ELEVATED)
+    
+    # Dirty worktree check
+    if require_clean and code_dirty:
+        quality_status = "FAIL_QUALITY"
+        reasons.append(FailReason.FAIL_EVIDENCE_DIRTY)
+    
+    # === OVERALL STATUS ===
+    # INVARIANT: status=FAIL if any FAIL_* in reasons
+    has_fail_reason = any(r.startswith("FAIL_") for r in reasons)
+    
+    if has_fail_reason:
+        status = "FAIL"
+    elif profit_status == "PASS" and quality_status != "FAIL_QUALITY":
+        status = "PASS"
+    else:
+        status = "FAIL"
+    
+    # TAXONOMY ENFORCEMENT: Remove FAIL_* from reasons if status != FAIL
+    # This should never happen due to logic above, but enforce as contract
+    if status != "FAIL":
+        reasons = [r for r in reasons if not r.startswith("FAIL_")]
+    
+    return {
+        "status": status,
+        "profit_status": profit_status,
+        "drift_status": drift_status,
+        "quality_status": quality_status,
+        "reasons": reasons,
+    }
 
 
 # ============================================================
@@ -73,11 +196,16 @@ class FailReason:
 # ============================================================
 
 # Policy version for artifact provenance
-POLICY_VERSION = "1.11.0"
+POLICY_VERSION = "1.12.0"
 
 class Thresholds:
     """
     Centralized threshold definitions for drift metrics.
+    
+    v1.12.0 TAXONOMY CONTRACT:
+    - FAIL_* in reasons → status MUST be FAIL (enforced by compute_status)
+    - Use compute_status() for all status decisions (single source of truth)
+    - AGG thresholds now "bite": > threshold → FAIL, not just WARN
     
     v1.11.0 STATUS CONTRACT:
     - NO_DATA: ONLY when signals_count == 0 (no signals at all)
@@ -121,10 +249,11 @@ class Thresholds:
     ROLLING_WINDOW_DEFAULT = 50   # Default rolling window for aggregator
     ROLLING_WINDOW_MAX = 200      # Max window for extended analysis
     
-    # === Aggregator-level thresholds (v1.9.7) ===
+    # === Aggregator-level thresholds (v1.12.0 "BITE") ===
+    # v1.12.0: Thresholds that actually trigger FAIL, not just WARN
     AGG_MAE_P90_FAIL = 0.85           # FAIL if p90(MAE) > 0.85
     AGG_WARN_RATE_FAIL = 0.60         # FAIL if warn_rate_core > 60%
-    AGG_FAIL_RATE_FAIL = 0.40         # FAIL if fail_rate > 40%
+    AGG_FAIL_RATE_FAIL = 0.15         # v1.12.0: FAIL if fail_rate > 15% (was 40%, never bit)
     AGG_LOW_SAMPLE_RATE_WARN = 0.50   # WARN if low_sample_rate > 50%
     AGG_LOW_SAMPLE_RATE_FAIL = 0.80   # FAIL_QUALITY if low_sample_rate > 80%
     
@@ -137,13 +266,16 @@ class Thresholds:
     AGG_FRAGILE_P90_WARN = 0.30   # WARN if p90(fragile_rate) > 30%
     AGG_FRAGILE_P90_FAIL = 0.50   # FAIL_QUALITY if p90(fragile_rate) > 50%
     
-    # v1.9.9: Data run rate thresholds (% of runs with >= MIN_SIGNALS_FOR_PASS signals)
+    # v1.12.0: Data run rate thresholds (% of NORMAL runs with >= MIN_SIGNALS_FOR_PASS)
+    # This is the PRIMARY operational gate for continuous scan
     AGG_DATA_RUN_RATE_WARN = 0.50  # WARN if data_run_rate < 50%
     AGG_DATA_RUN_RATE_FAIL = 0.30  # FAIL_QUALITY if data_run_rate < 30%
     
-    # v1.10.0: Diversity targets (coverage mode KPIs)
+    # v1.12.0: Diversity thresholds (FAIL, not just WARN)
     DIVERSITY_PAIRS_TARGET = 10    # WARN_DIVERSITY_LOW if unique_pairs < 10
+    DIVERSITY_PAIRS_MIN = 3        # v1.12.0: FAIL if unique_pairs < 3
     DIVERSITY_ROUTES_TARGET = 4    # WARN_DIVERSITY_LOW if unique_routes < 4
+    DIVERSITY_ROUTES_MIN = 2       # v1.12.0: FAIL if unique_routes < 2
 
 
 # ============================================================

@@ -2,10 +2,20 @@
 
 **Status**: ✅ **PROVEN** (simulate_only), ❌ **NOT PROVEN** (real execution)  
 **Updated**: 2026-02-10  
-**Gate Version**: v1.11.0  
-**Policy Version**: v1.11.0  
+**Gate Version**: v1.12.0  
+**Policy Version**: v1.12.0  
 
-## Status Contract (v1.11.0)
+## Taxonomy Contract (v1.12.0)
+
+| Reason Prefix | Status Required | Semantic |
+|---------------|-----------------|----------|
+| `FAIL_*` | status=FAIL | Hard failure, blocks passage |
+| `WARN_*` | status=PASS allowed | Warning, quality concern |
+| `NO_DATA` | status=NO_DATA | signals_count == 0 only |
+
+**Invariant**: If `FAIL_*` appears in reasons, status MUST be FAIL. Enforced by `compute_status()`.
+
+## Status Contract (v1.11.0+)
 
 | Condition | Status | Semantic |
 |-----------|--------|----------|
@@ -27,17 +37,15 @@
 
 ## Rolling KPIs (Targets)
 
-| Metric | Target | Description |
-|--------|--------|-------------|
-| `data_run_rate` | ≥ 0.70 | % NORMAL runs with ≥5 signals |
-| `low_sample_rate` | ≤ 0.30 | % NORMAL runs with 1-4 signals |
-| `no_data_rate` | ≤ 0.10 | % NORMAL runs with 0 signals |
-| `fragile_rate_p90` | ≤ 0.30 | p90 fragile rate |
-| `unique_pairs` | ≥ 10 | Pair diversity |
-| `unique_routes` | ≥ 4 | Route diversity |
-| `signals_per_run_p50` | ≥ 3 | Median signals/run |
+| Metric | Target | FAIL | Description |
+|--------|--------|------|-------------|
+| `data_run_rate` | ≥ 0.50 | < 0.30 | % NORMAL runs with ≥5 signals |
+| `fail_rate` | ≤ 0.10 | > 0.15 | % FAIL runs (v1.12.0 bites) |
+| `fragile_rate_p90` | ≤ 0.30 | > 0.50 | p90 fragile rate |
+| `unique_pairs` | ≥ 10 | < 3 | Pair diversity |
+| `unique_routes` | ≥ 4 | < 2 | Route diversity |
 
-## Thresholds (v1.11.0)
+## Thresholds (v1.12.0)
 
 | Threshold | Value | Description |
 |-----------|-------|-------------|
@@ -46,6 +54,9 @@
 | `MAE_WARN` | 0.55 | MAE warning |
 | `MAE_FAIL` | 0.80 | MAE failure |
 | `SIGN_RATE_MIN` | 0.60 | Min sign correct rate |
+| `AGG_FAIL_RATE_FAIL` | 0.15 | v1.12.0: fail_rate > 15% → FAIL |
+| `DIVERSITY_PAIRS_MIN` | 3 | v1.12.0: < 3 pairs → FAIL |
+| `DIVERSITY_ROUTES_MIN` | 2 | v1.12.0: < 2 routes → FAIL |
 
 ## Canonical Commands
 
