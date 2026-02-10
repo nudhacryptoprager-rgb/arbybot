@@ -782,37 +782,43 @@ def generate_m4_from_online_inputs(
         quality_warnings.append(f"LOW_SAMPLE({len(m4_signals)}<{Thresholds.MIN_SIGNALS_FOR_PASS})")
         quality_reasons.append(FailReason.WARN_LOW_SAMPLE)
     
-    # v1.9.7: WARN_FRAGILE_HIGH when fragile_rate >= 0.5 (only if enough signals)
-    # v1.9.9: FAIL for profit profile when fragile_rate > fragile_rate_max
+    # v1.10.0: FAIL_FRAGILE_HIGH when fragile_rate violates limits
+    # Priority: profile.fragile_rate_max (e.g., 0.20 for profit) → FAIL
+    # Fallback: universal threshold 0.50 → FAIL (not just WARN)
     frag_rate = fragile_count / len(m4_signals) if m4_signals else 0
     from m4.policy import get_profile
     try:
         profile_config = get_profile(profile)
         fragile_rate_max = profile_config.fragile_rate_max
     except (ValueError, NameError):
-        fragile_rate_max = 1.0  # Fallback: no limit
+        fragile_rate_max = 0.50  # v1.10.0: universal fail threshold (was 1.0)
     
     if not is_low_sample and frag_rate > fragile_rate_max:
-        # v1.9.9: Hard filter for profit profile
+        # v1.10.0: Hard filter - profile-specific or universal 0.50
         quality_warnings.append(f"FAIL_FRAGILE_RATE({frag_rate:.2f}>{fragile_rate_max})")
         quality_reasons.append("FAIL_FRAGILE_HIGH")
-    elif not is_low_sample and frag_rate >= 0.50:
-        quality_warnings.append(f"HIGH_FRAGILE_RATE({frag_rate:.2f})")
-        quality_reasons.append("WARN_FRAGILE_HIGH")
+    elif not is_low_sample and frag_rate >= 0.30:
+        # v1.10.0: WARN at 0.30 (early warning, before 0.50 cutoff)
+        quality_warnings.append(f"WARN_FRAGILE_RATE({frag_rate:.2f}>=0.30)")
+        quality_reasons.append("WARN_FRAGILE_ELEVATED")
     
-    # v1.9.7: Determine quality_status
+    # v1.10.0: Determine quality_status (contract alignment)
     # NO_DATA if signals < MIN_SIGNALS_FOR_PASS (unified threshold)
+    # FAIL_QUALITY if any FAIL_* reason present
+    # WARN_QUALITY if any WARN_* reason present
     if len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
         quality_status = "NO_DATA"  # Not enough for statistical evaluation
+    elif any(r.startswith("FAIL_") for r in quality_reasons):
+        quality_status = "FAIL_QUALITY"  # v1.10.0: explicit FAIL_* check
     elif any("HIGH" in w for w in quality_warnings):
-        quality_status = "FAIL_QUALITY"
-    elif quality_warnings:
+        quality_status = "FAIL_QUALITY"  # v1.9.7: HIGH fragile rate
+    elif quality_warnings or quality_reasons:
         quality_status = "WARN_QUALITY"
     else:
         quality_status = "PASS"
     
     # Combined status with policy
-    # v1.9.7: NO_DATA if signals < MIN_SIGNALS_FOR_PASS (not counted in pass_rate)
+    # v1.10.0: quality_status=FAIL_QUALITY now reflects in combined_status
     all_reasons = profit_reasons + drift_reasons + quality_reasons
     
     if len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
@@ -820,7 +826,9 @@ def generate_m4_from_online_inputs(
     elif profit_status == "FAIL" or drift_status == "FAIL":
         combined_status = "FAIL"
     elif quality_status == "FAIL_QUALITY":
-        combined_status = "WARN_QUALITY"  # v1.9.7: quality fail → WARN (not blocking)
+        combined_status = "FAIL_QUALITY"  # v1.10.0: explicit quality fail (was WARN)
+    elif quality_status == "WARN_QUALITY":
+        combined_status = "WARN"  # v1.10.0: quality warn → WARN (not PASS)
     else:
         combined_status = "PASS"
     
@@ -911,8 +919,21 @@ def generate_m4_from_online_inputs(
     
     evidence_ok = len(evidence_issues) == 0
     
+    # v1.10.0: Forbid dirty proof in profit profile
+    # If code_dirty=true in profit profile → evidence.ok=false, status=NO_PROOF
+    is_dirty_proof = False
+    if profile == "profit" and git_ctx["code_dirty"] is True:
+        is_dirty_proof = True
+        evidence_ok = False  # Force evidence.ok=false
+        if "DIRTY_WORKTREE_PRECOMMIT" not in evidence_issues:
+            evidence_issues.append("DIRTY_WORKTREE_PRECOMMIT")
+        # Override combined_status → NO_PROOF (not PASS)
+        if combined_status == "PASS":
+            combined_status = "NO_PROOF"
+            all_reasons.append("DIRTY_PROOF_FORBIDDEN")
+    
     run_summary_data = {
-        "schema_version": "m4:run_summary:v1.7",  # v1.9.9: profile param, removed source_sha, pairs/routes
+        "schema_version": "m4:run_summary:v1.8",  # v1.10.0: NO_PROOF status, status contract fix
         "policy_version": POLICY_VERSION,  # v1.9.9: top-level provenance
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "run_id": run_id,

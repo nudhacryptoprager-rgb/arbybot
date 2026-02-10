@@ -51,7 +51,7 @@ class FailReason:
 # ============================================================
 
 # Policy version for artifact provenance
-POLICY_VERSION = "1.9.9"
+POLICY_VERSION = "1.10.0"
 
 class Thresholds:
     """

@@ -691,9 +691,13 @@ def run_online_gate(
         agg_data = emit_to_aggregator_light(run_summary, agg_path)
         
         # STEP 2: Write run_summary_latest (only for ONLINE, or if no online exists)
-        # v1.9.9: Split by profile (smoke vs profit) to avoid confusion
+        # v1.10.0: profit is main _latest, smoke is _latest_smoke
         mode_suffix = "_offline" if is_offline else ""
-        profile_suffix = f"_{profile}" if profile else ""
+        # v1.10.0: profit → "" (main), smoke/other → "_smoke"
+        if profile == DoDProfile.PROFIT:
+            profile_suffix = ""  # profit is the main/canonical latest
+        else:
+            profile_suffix = "_smoke"  # smoke/other are secondary
         
         run_summary_path = rolling_dir / f"run_summary_latest{mode_suffix}{profile_suffix}.json"
         latest_file = f"_latest{mode_suffix}{profile_suffix}.json"
@@ -759,7 +763,7 @@ def run_online_gate(
                 pass
         
         latest_data = {
-            "schema_version": "m4:latest:v1.11",  # v1.9.9: data_run_rate, profile-split, --require-clean
+            "schema_version": "m4:latest:v1.12",  # v1.10.0: profit=main, NO_PROOF, status contract
             "updated_at": now_utc.isoformat(),
             # v1.9.2: Clear SHA naming
             "latest_run_code_sha": git_ctx["code_sha"],  # SHA of code that ran this scan

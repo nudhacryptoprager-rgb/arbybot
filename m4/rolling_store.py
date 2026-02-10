@@ -39,14 +39,14 @@ def ensure_rolling_agg_exists(agg_path: Path) -> dict:
             # Validate has required fields
             if "runs" in data and "schema_version" in data:
                 # Upgrade schema to current version on load
-                data["schema_version"] = "m4:stability_agg:v1.8"
+                data["schema_version"] = "m4:stability_agg:v1.10"
                 return data
         except Exception:
             pass
     
     # Initialize new aggregator
     return {
-        "schema_version": "m4:stability_agg:v1.8",  # v1.9.8: runs_since_sha, diversity
+        "schema_version": "m4:stability_agg:v1.10",  # v1.10.0: runs_since_sha enhanced, status contract
         "created_at": datetime.now(timezone.utc).isoformat(),
         "runs": [],
     }
@@ -88,7 +88,7 @@ def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
     
     # Create fresh aggregator
     fresh = {
-        "schema_version": "m4:stability_agg:v1.8",  # v1.9.8: runs_since_sha, diversity
+        "schema_version": "m4:stability_agg:v1.10",  # v1.10.0: runs_since_sha enhanced, status contract
         "created_at": datetime.now(timezone.utc).isoformat(),
         "reset_from_sha": git_ctx["code_sha"],
         "reset_reason": reason,
@@ -273,12 +273,19 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     unique_pairs = len(all_pairs)
     unique_routes = len(all_routes)
     
-    # v1.9.8: Stats for current code_sha only (since_sha view)
+    # v1.10.0: Stats for current code_sha only (since_sha view)
+    # This is the PRIMARY view for understanding regression/improvement
     from m4.evidence import get_git_context
     current_sha = get_git_context()["code_sha"]
     current_sha_runs = [r for r in runs if r.get("code_sha") == current_sha]
-    current_sha_data_runs = [r for r in current_sha_runs if r.get("signals_count", 0) > 0]
-    current_sha_pass = sum(1 for r in current_sha_data_runs if not any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
+    current_sha_data_runs = [r for r in current_sha_runs 
+                             if r.get("signals_count", 0) >= Thresholds.MIN_SIGNALS_FOR_PASS]
+    current_sha_pass = sum(1 for r in current_sha_data_runs 
+                          if not any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
+    current_sha_fail = sum(1 for r in current_sha_data_runs 
+                          if any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
+    current_sha_no_data = sum(1 for r in current_sha_runs 
+                             if r.get("signals_count", 0) < Thresholds.MIN_SIGNALS_FOR_PASS)
     
     agg_data["quick_stats"] = {
         "pass_count": pass_count,
@@ -310,13 +317,26 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "unique_routes": unique_routes,
     }
     
-    # v1.9.8: Add runs_since_sha (current code stability)
+    # v1.10.0: Enhanced runs_since_sha (current code stability - PRIMARY view)
+    sha_data_run_rate = len(current_sha_data_runs) / len(current_sha_runs) if current_sha_runs else 0
+    sha_effective_pass_rate = current_sha_pass / len(current_sha_data_runs) if current_sha_data_runs else 0
+    sha_fail_rate = current_sha_fail / len(current_sha_data_runs) if current_sha_data_runs else 0
+    
     agg_data["runs_since_sha"] = {
         "sha": current_sha,
         "runs_count": len(current_sha_runs),
         "data_runs_count": len(current_sha_data_runs),
+        "no_data_count": current_sha_no_data,
         "pass_count": current_sha_pass,
-        "effective_pass_rate": round(current_sha_pass / len(current_sha_runs), 4) if current_sha_runs else 0,
+        "fail_count": current_sha_fail,
+        "data_run_rate": round(sha_data_run_rate, 4),
+        "effective_pass_rate": round(sha_effective_pass_rate, 4),
+        "fail_rate": round(sha_fail_rate, 4),
+        # v1.10.0: status for current sha only
+        "status": "PENDING" if len(current_sha_data_runs) < 3 else (
+            "PASS" if sha_effective_pass_rate >= 0.80 and sha_data_run_rate >= 0.50 else
+            "WARN" if sha_effective_pass_rate >= 0.60 else "FAIL"
+        ),
     }
     
     # v1.9.7: Compute fragile_rate_p50
