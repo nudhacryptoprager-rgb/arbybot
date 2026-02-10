@@ -32,6 +32,7 @@ from .policy import (
     get_cost_model,
     DEFAULT_CHAIN_ID,
     DEFAULT_PINNED_BLOCK,
+    POLICY_VERSION,
 )
 
 # Import from m4 evidence module
@@ -761,14 +762,32 @@ def generate_m4_from_online_inputs(
     # If signals are too few (<5), statistical conclusions are unreliable
     sample_size_warn = len(m4_signals) < Thresholds.MIN_SAMPLE_SIZE
     
+    # v1.9.5: Quality warnings for run-level issues
+    quality_warnings = []
+    if sample_size_warn:
+        quality_warnings.append(f"LOW_SAMPLE({len(m4_signals)}<{Thresholds.MIN_SAMPLE_SIZE})")
+    if len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
+        quality_warnings.append(f"MICRO_SAMPLE({len(m4_signals)}<{Thresholds.MIN_SIGNALS_FOR_PASS})")
+    if fragile_count > 0 and len(m4_signals) > 0:
+        frag_rate = fragile_count / len(m4_signals)
+        if frag_rate > 0.50:
+            quality_warnings.append(f"HIGH_FRAGILE_RATE({frag_rate:.2f})")
+    
     # Combined status with policy
     # Default policy: PASS requires profit_status=PASS (drift can be WARN/FAIL)
     # Alternative policy (strict): PASS requires both profit_status=PASS AND drift_status=PASS
     # Current: Use combined for backwards compat, but expose both
+    # v1.9.5: PASS_LOW_CONFIDENCE if micro-sample (< MIN_SIGNALS_FOR_PASS)
     all_reasons = profit_reasons + drift_reasons
     if sample_size_warn:
         all_reasons.append(FailReason.WARN_LOW_SAMPLE)
-    combined_status = "FAIL" if (profit_status == "FAIL" or drift_status == "FAIL") else "PASS"
+    
+    if profit_status == "FAIL" or drift_status == "FAIL":
+        combined_status = "FAIL"
+    elif len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
+        combined_status = "PASS_LOW_CONFIDENCE"  # v1.9.5: micro-sample
+    else:
+        combined_status = "PASS"
     
     stability_data = {
         "schema_version": "m4:stability:v1.2",  # Bumped for split status
@@ -858,7 +877,7 @@ def generate_m4_from_online_inputs(
     evidence_ok = len(evidence_issues) == 0
     
     run_summary_data = {
-        "schema_version": "m4:run_summary:v1.3",  # Bumped for run_context
+        "schema_version": "m4:run_summary:v1.4",  # v1.9.5: added quality_warnings, policy_version
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "run_id": run_id,
         "source_sha": source_sha,  # Deprecated: use run_context.code_sha
@@ -889,9 +908,11 @@ def generate_m4_from_online_inputs(
             "fragile_rate": round(fragile_count / len(m4_signals), 4) if m4_signals else 0,  # v1.9.4
         },
         "thresholds": {
+            "policy_version": POLICY_VERSION,  # v1.9.5: provenance
             "mae_warn": Thresholds.MAE_WARN,
             "mae_fail": Thresholds.MAE_FAIL,
             "sign_rate_min": Thresholds.SIGN_RATE_MIN,
+            "min_signals_for_pass": Thresholds.MIN_SIGNALS_FOR_PASS,  # v1.9.5
         },
         # Split status (v1.5.0)
         "profit_status": profit_status,
@@ -901,6 +922,8 @@ def generate_m4_from_online_inputs(
         # Combined status (backwards compat)
         "status": combined_status,
         "reasons": all_reasons,
+        # v1.9.5: Quality warnings (separate from status reasons)
+        "quality_warnings": quality_warnings,
         # Evidence validation
         "evidence": {
             "ok": evidence_ok,

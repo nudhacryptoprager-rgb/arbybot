@@ -745,7 +745,7 @@ def run_online_gate(
                 pass
         
         latest_data = {
-            "schema_version": "m4:latest:v1.7",
+            "schema_version": "m4:latest:v1.8",  # v1.9.5: quality_warnings, policy_version
             "updated_at": now_utc.isoformat(),
             # v1.9.2: Clear SHA naming
             "latest_run_code_sha": git_ctx["code_sha"],  # SHA of code that ran this scan
@@ -762,12 +762,15 @@ def run_online_gate(
             "threshold_profile_name": profile,
             "agg_status": agg_data.get("agg_status", "UNKNOWN"),
             "agg_reasons": agg_reasons if agg_reasons else [],
+            "quality_warnings": agg_data.get("quality_warnings", []),  # v1.9.5
+            "policy_version": agg_data.get("policy_version", "unknown"),  # v1.9.5
             "agg_updated_at": agg_updated_at,  # v1.9.4: agg last update
             "agg_lag_seconds": agg_lag_seconds,  # v1.9.4: lag detection
             "runs_in_window": agg_data.get("runs_in_window", 0),
             "runs_by_code_sha": agg_data.get("runs_by_code_sha", {}),  # v1.9.4: breakdown
             "in_warmup": agg_data.get("rolling_window", {}).get("in_warmup", True),
             "total_signals_in_window": agg_data.get("quick_stats", {}).get("total_signals", 0),
+            "quick_stats": agg_data.get("quick_stats", {}),  # v1.9.5: full stats visibility
             "paths": {
                 "run_summary_latest": rel_path(run_summary_path),
                 "rolling_agg": rel_path(agg_path),

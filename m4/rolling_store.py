@@ -44,7 +44,7 @@ def ensure_rolling_agg_exists(agg_path: Path) -> dict:
     
     # Initialize new aggregator
     return {
-        "schema_version": "m4:stability_agg:v1.5",
+        "schema_version": "m4:stability_agg:v1.6",  # v1.9.5: quality_warnings, policy_version
         "created_at": datetime.now(timezone.utc).isoformat(),
         "runs": [],
     }
@@ -132,7 +132,16 @@ def emit_to_aggregator_light(
 
 
 def _compute_quick_stats(agg_data: dict) -> dict:
-    """Compute quick stats and rolling window info for aggregator."""
+    """
+    Compute quick stats and rolling window info for aggregator.
+    
+    v1.9.5 QUALITY GATES:
+    - Enforces AGG_FRAGILE_P90_FAIL and AGG_LOW_SAMPLE_RATE_FAIL
+    - Adds no_data_rate, effective_pass_rate
+    - agg_status now has FAIL_QUALITY variant for quality gate failures
+    """
+    from m4.policy import Thresholds, POLICY_VERSION
+    
     runs = agg_data.get("runs", [])
     
     # Count by status
@@ -161,14 +170,24 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         return round(sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f]), 4)
     
     # Rolling window
-    min_runs = 10
-    min_signals = 30
+    min_runs = Thresholds.MIN_RUNS_FOR_AGG
+    min_signals = Thresholds.MIN_SIGNALS_FOR_AGG
     in_warmup = len(runs) < min_runs or total_signals < min_signals
+    
+    # Quality metrics
+    no_data_rate = no_data_count / len(runs) if runs else 0
+    low_sample_rate = low_sample_count / len(runs) if runs else 0
+    effective_pass_rate = pass_count / len(runs) if runs else 0  # True rate including NO_DATA
+    pass_rate = pass_count / len(data_runs) if data_runs else 0  # Rate excluding NO_DATA
+    warn_rate_core = warn_count_core / len(data_runs) if data_runs else 0
+    fail_rate = fail_count / len(data_runs) if data_runs else 0
+    fragile_rate_p90 = percentile(fragile_rates, 90)
+    mae_p90 = percentile(mae_values, 90)
     
     agg_data["runs_included"] = len(runs)
     agg_data["runs_in_window"] = len(runs)
     agg_data["rolling_window"] = {
-        "max": 200,
+        "max": Thresholds.ROLLING_WINDOW_MAX,
         "current": len(runs),
         "min_runs": min_runs,
         "min_signals": min_signals,
@@ -181,25 +200,55 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "no_data_count": no_data_count,
         "warn_count_core": warn_count_core,
         "low_sample_count": low_sample_count,
-        "pass_rate": pass_count / len(data_runs) if data_runs else 0,
-        "warn_rate_core": warn_count_core / len(data_runs) if data_runs else 0,
-        "low_sample_rate": low_sample_count / len(runs) if runs else 0,
-        "fail_rate": fail_count / len(data_runs) if data_runs else 0,
+        "pass_rate": round(pass_rate, 4),
+        "effective_pass_rate": round(effective_pass_rate, 4),  # v1.9.5: true rate
+        "no_data_rate": round(no_data_rate, 4),                # v1.9.5: NO_DATA fraction
+        "warn_rate_core": round(warn_rate_core, 4),
+        "low_sample_rate": round(low_sample_rate, 4),
+        "fail_rate": round(fail_rate, 4),
         "total_signals": total_signals,
-        "fragile_rate_p90": percentile(fragile_rates, 90),
-        "mae_p90": percentile(mae_values, 90),
-        "total_net_usdc": total_net,
-        "avg_net_usdc": total_net / len(data_runs) if data_runs else 0,
+        "fragile_rate_p90": fragile_rate_p90,
+        "mae_p90": mae_p90,
+        "total_net_usdc": round(total_net, 4),
+        "avg_net_usdc": round(total_net / len(data_runs), 4) if data_runs else 0,
         "net_p10": percentile(net_values, 10),
         "mae_p50": percentile(mae_values, 50),
     }
     
-    # Aggregate status
+    # === Aggregate status with QUALITY GATES (v1.9.5) ===
+    quality_warnings = []
+    
+    # Check quality thresholds
+    if fragile_rate_p90 > Thresholds.AGG_FRAGILE_P90_FAIL:
+        quality_warnings.append(f"FRAGILE_P90_HIGH({fragile_rate_p90:.2f}>{Thresholds.AGG_FRAGILE_P90_FAIL})")
+    elif fragile_rate_p90 > Thresholds.AGG_FRAGILE_P90_WARN:
+        quality_warnings.append(f"FRAGILE_P90_ELEVATED({fragile_rate_p90:.2f}>{Thresholds.AGG_FRAGILE_P90_WARN})")
+    
+    if low_sample_rate > Thresholds.AGG_LOW_SAMPLE_RATE_FAIL:
+        quality_warnings.append(f"LOW_SAMPLE_RATE_HIGH({low_sample_rate:.2f}>{Thresholds.AGG_LOW_SAMPLE_RATE_FAIL})")
+    elif low_sample_rate > Thresholds.AGG_LOW_SAMPLE_RATE_WARN:
+        quality_warnings.append(f"LOW_SAMPLE_RATE_ELEVATED({low_sample_rate:.2f}>{Thresholds.AGG_LOW_SAMPLE_RATE_WARN})")
+    
+    if mae_p90 > Thresholds.AGG_MAE_P90_FAIL:
+        quality_warnings.append(f"MAE_P90_HIGH({mae_p90:.2f}>{Thresholds.AGG_MAE_P90_FAIL})")
+    
+    # Store quality warnings
+    agg_data["quality_warnings"] = quality_warnings
+    agg_data["policy_version"] = POLICY_VERSION
+    
+    # Determine agg_status with quality gate enforcement
     if in_warmup:
         agg_data["agg_status"] = "PASS_WARMUP"
-    elif fail_count > 0:
+    elif any("HIGH" in w for w in quality_warnings):
+        # Quality gate failure - data quality too poor for reliable signal
+        agg_data["agg_status"] = "FAIL_QUALITY"
+    elif fail_rate > Thresholds.AGG_FAIL_RATE_FAIL:
         agg_data["agg_status"] = "FAIL"
-    elif warn_count_core > 0:
+    elif warn_rate_core > Thresholds.AGG_WARN_RATE_FAIL:
+        agg_data["agg_status"] = "WARN_EXCESSIVE"
+    elif any("ELEVATED" in w for w in quality_warnings):
+        agg_data["agg_status"] = "WARN_QUALITY"
+    elif warn_count_core > 0 or fail_count > 0:
         agg_data["agg_status"] = "WARN"
     else:
         agg_data["agg_status"] = "PASS"
