@@ -166,8 +166,10 @@ def emit_to_aggregator_light(
         print(f"[EMIT-AGG] SKIP duplicate run_id={run_id}")
         return agg_data
     
-    # Get git context for run entry
-    git_ctx = get_git_context()
+    # v1.12.1: Use run_summary's run_context.code_sha (artifact provenance)
+    # NOT current git state - that falsifies attribution
+    run_context = run_summary.get("run_context", {})
+    artifact_code_sha = run_context.get("code_sha", "unknown")
     
     # Append light run info
     # v1.9.9: Add pair, route, dex diversity tracking
@@ -177,7 +179,7 @@ def emit_to_aggregator_light(
     agg_data["runs"].append({
         "run_id": run_id,
         "timestamp": run_summary.get("timestamp", ""),
-        "code_sha": git_ctx["code_sha"],
+        "code_sha": artifact_code_sha,  # v1.12.1: from artifact, not git context
         "net_usdc": metrics.get("total_net_usdc", 0),
         "mae": metrics.get("mae_net_usdc", 0),
         "sign_rate": metrics.get("est_sign_correct_rate", 0),
@@ -476,24 +478,29 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     agg_data["quality_warnings"] = quality_warnings
     agg_data["policy_version"] = POLICY_VERSION
     
-    # Determine agg_status with quality gate enforcement
-    # v1.9.6: agg_reasons populated for ALL non-PASS statuses
+    # v1.12.1: Reworked agg_status logic with explicit threshold checks
+    # Canonical statuses: PASS, FAIL, NO_DATA (with agg-specific WARN_* variants)
+    # Check for FAIL-level threshold breaches explicitly
+    has_fail_threshold = (
+        any("FAIL" in w for w in quality_warnings) or  # DIVERSITY_PAIRS_FAIL, etc.
+        fail_rate > Thresholds.AGG_FAIL_RATE_FAIL or
+        data_run_rate < Thresholds.AGG_DATA_RUN_RATE_FAIL  # v1.12.1: data_run_rate as FAIL gate
+    )
+    has_warn_threshold = (
+        any("ELEVATED" in w or "LOW" in w for w in quality_warnings) or
+        warn_rate_core > Thresholds.AGG_WARN_RATE_FAIL
+    )
+    
     if in_warmup:
         agg_data["agg_status"] = "PASS_WARMUP"
         agg_data["agg_reasons"] = ["WARMUP"]
-    elif any("HIGH" in w for w in quality_warnings):
-        # Quality gate failure - data quality too poor for reliable signal
-        agg_data["agg_status"] = "FAIL_QUALITY"
-        agg_data["agg_reasons"] = agg_reasons  # Contains HIGH tokens
-    elif fail_rate > Thresholds.AGG_FAIL_RATE_FAIL:
+    elif has_fail_threshold:
+        # v1.12.1: FAIL status with explicit reason (not FAIL_QUALITY)
         agg_data["agg_status"] = "FAIL"
-        agg_data["agg_reasons"] = agg_reasons + [f"FAIL_RATE_HIGH({fail_rate:.2f})"]
-    elif warn_rate_core > Thresholds.AGG_WARN_RATE_FAIL:
-        agg_data["agg_status"] = "WARN_EXCESSIVE"
-        agg_data["agg_reasons"] = agg_reasons + [f"WARN_RATE_HIGH({warn_rate_core:.2f})"]
-    elif any("ELEVATED" in w for w in quality_warnings):
+        agg_data["agg_reasons"] = agg_reasons
+    elif has_warn_threshold:
         agg_data["agg_status"] = "WARN_QUALITY"
-        agg_data["agg_reasons"] = agg_reasons  # Contains ELEVATED tokens
+        agg_data["agg_reasons"] = agg_reasons
     elif warn_count_core > 0 or fail_count > 0:
         agg_data["agg_status"] = "WARN"
         agg_data["agg_reasons"] = [f"WARN_RUNS({warn_count_core})", f"FAIL_RUNS({fail_count})"]

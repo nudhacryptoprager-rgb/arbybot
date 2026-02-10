@@ -573,5 +573,49 @@ class TestQuoteCcyConsistency(unittest.TestCase):
             self.assertEqual(health["kill_switch_active"], True, "health.kill_switch_active must be true")
 
 
+class TestCLIEncoding(unittest.TestCase):
+    """Test that CLI output contains only ASCII characters (CP1251 safe)."""
+
+    def test_cli_output_is_ascii_safe(self):
+        """Verify m4/cli.py has no non-ASCII characters that would crash on CP1251."""
+        import m4.cli as cli_module
+        import inspect
+        
+        # Get source code of cli module
+        source = inspect.getsource(cli_module)
+        
+        # Check for non-ASCII characters
+        non_ascii = []
+        for i, char in enumerate(source):
+            if ord(char) > 127:
+                # Find line number
+                line_num = source[:i].count('\n') + 1
+                non_ascii.append((line_num, char, hex(ord(char))))
+        
+        self.assertEqual(
+            non_ascii, 
+            [], 
+            f"Found non-ASCII characters in m4/cli.py that would crash on CP1251: {non_ascii[:5]}"
+        )
+    
+    def test_cli_print_statements_are_encodable(self):
+        """Verify all print statements in cli.py can be encoded as ASCII."""
+        import m4.cli as cli_module
+        import inspect
+        import re
+        
+        source = inspect.getsource(cli_module)
+        
+        # Find all string literals in print() calls
+        print_pattern = r'print\s*\(["\']([^"\']*)["\']'
+        matches = re.findall(print_pattern, source)
+        
+        for msg in matches:
+            try:
+                msg.encode('ascii')
+            except UnicodeEncodeError as e:
+                self.fail(f"Print message contains non-ASCII: {msg!r} - {e}")
+
+
 if __name__ == "__main__":
     unittest.main()

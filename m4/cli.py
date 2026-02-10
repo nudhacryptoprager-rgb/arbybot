@@ -92,7 +92,7 @@ def main(argv: Optional[list] = None) -> int:
         Exit code (0=PASS, 1=FAIL, 2=NO_DATA, 3=ERROR)
     """
     parser = argparse.ArgumentParser(
-        description="M4 Execution Gate - DEX↔DEX Atomic Execution",
+        description="M4 Execution Gate - DEX<->DEX Atomic Execution",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
@@ -145,7 +145,7 @@ def main(argv: Optional[list] = None) -> int:
     # --allow-dirty explicitly overrides this default
     if args.profile == DoDProfile.PROFIT and not args.allow_dirty:
         if not args.require_clean:
-            print("[POLICY] --profile profit → enabling --require-clean (use --allow-dirty to override)")
+            print("[POLICY] --profile profit -> enabling --require-clean (use --allow-dirty to override)")
             args.require_clean = True
 
     # Header

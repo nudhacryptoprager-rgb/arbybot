@@ -642,11 +642,12 @@ def run_online_gate(
             run_summary["evidence"]["issues"] = evidence_issues
             run_summary["evidence"]["ok"] = len(evidence_issues) == 0
         
-        # Update run_context with current git state
+        # v1.12.1: PRESERVE original run_context from artifact
+        # Only add evidence_sha placeholder if not already set
+        # Do NOT overwrite code_sha/code_dirty/code_desc - that falsifies provenance
         if "run_context" in run_summary:
-            run_summary["run_context"]["code_sha"] = git_sha
-            run_summary["run_context"]["code_dirty"] = code_dirty if code_dirty is not None else False
-            run_summary["run_context"]["code_desc"] = git_ctx["code_desc"]
+            if "evidence_sha" not in run_summary["run_context"]:
+                run_summary["run_context"]["evidence_sha"] = None  # Placeholder for attach_evidence.py
         
         # Determine status considering NO_DATA
         signals_count = run_summary.get("metrics", {}).get("signals_count", 0)
@@ -684,13 +685,19 @@ def run_online_gate(
         run_summary["drift_reasons"] = [r for r in reasons if "DRIFT" in r or "SIGN" in r]
         run_summary["quality_reasons"] = [r for r in reasons if r in (FailReason.WARN_LOW_SAMPLE, FailReason.FAIL_FRAGILE_HIGH, FailReason.WARN_FRAGILE_ELEVATED)]
         
+        # v1.12.1: Propagate POLICY_VERSION centrally to all emitted run summaries
+        from m4.policy import POLICY_VERSION
+        run_summary["policy_version"] = POLICY_VERSION
+        
         is_data_run = signals_count >= Thresholds.MIN_SIGNALS_FOR_PASS
         
         # Add block_is_synthetic flag for offline
         if "inputs" in run_summary:
             run_summary["inputs"]["block_is_synthetic"] = is_offline or pinned_block < 1000
         
-        is_fail = status == "FAIL" or any(r.startswith("FAIL_") for r in reasons)
+        # v1.12.1: Derive is_fail from status ONLY (compute_status enforces taxonomy)
+        # FAIL_* in reasons with status=PASS is now impossible per taxonomy contract
+        is_fail = status == "FAIL"
         is_incident = is_fail  # NO_DATA is not incident
         
         # Remove source_* filenames in rolling mode
@@ -707,16 +714,14 @@ def run_online_gate(
         agg_data = emit_to_aggregator_light(run_summary, agg_path)
         
         # STEP 2: Write run_summary_latest (only for ONLINE, or if no online exists)
-        # v1.10.0: profit is main _latest, smoke is _latest_smoke
-        mode_suffix = "_offline" if is_offline else ""
-        # v1.10.0: profit → "" (main), smoke/other → "_smoke"
-        if profile == DoDProfile.PROFIT:
-            profile_suffix = ""  # profit is the main/canonical latest
-        else:
-            profile_suffix = "_smoke"  # smoke/other are secondary
+        # v1.12.1: Canonical rolling files ONLY per AGENTS.md:
+        #   _latest.json, run_summary_latest.json, m4_stability_agg.json
+        #   Optional: _latest_offline.json, run_summary_latest_offline.json
+        # NO profile suffix - profit is always canonical, smoke writes to offline suffixed files
+        mode_suffix = "_offline" if is_offline or profile != DoDProfile.PROFIT else ""
         
-        run_summary_path = rolling_dir / f"run_summary_latest{mode_suffix}{profile_suffix}.json"
-        latest_file = f"_latest{mode_suffix}{profile_suffix}.json"
+        run_summary_path = rolling_dir / f"run_summary_latest{mode_suffix}.json"
+        latest_file = f"_latest{mode_suffix}.json"
         
         with open(run_summary_path, "w") as f:
             json.dump(run_summary, f, indent=2)

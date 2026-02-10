@@ -1,8 +1,8 @@
-# Status: M4 (DEX↔DEX Atomic Execution)
+# Status: M4 (DEX<->DEX Atomic Execution)
 
-**Status**: ✅ **PROVEN** (simulate_only), ❌ **NOT PROVEN** (real execution)  
+**Status**: PROVISIONAL (rolling contract restored), NOT PROVEN (real execution)  
 **Updated**: 2026-02-10  
-**Gate Version**: v1.12.0  
+**Gate Version**: v1.12.1  
 **Policy Version**: v1.12.0  
 
 ## Taxonomy Contract (v1.12.0)
@@ -95,9 +95,27 @@ Location: `data/runs/_rolling/`
 - [x] Rolling artifacts persist
 - [x] Evidence workflow works
 
-### M4.2: Real Execution — ❌ NOT PROVEN
+### M4.2: Real Execution -- NOT PROVEN
 - [ ] Kill switch disabled
 - [ ] Real TX submitted
+
+## Known Blockers (2026-02-10)
+
+1. **Rolling artifacts need reset** - existing artifacts have v1.11 schema/policy_version
+2. **Taxonomy violations cleaned** - v1.12.1 fixes PASS+FAIL_* contradiction, provenance falsification
+3. **PROVEN claim at risk** - requires rolling window reset + validation run to restore
+
+### Recovery Steps
+```bash
+# 1. Reset rolling window
+python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window --allow-dirty
+
+# 2. Run coverage batch to rebuild KPIs
+python scripts/run_coverage_batch.py --min-signals-target 30 --max-seconds 600 --profile profit
+
+# 3. Validate rolling artifacts
+Get-Content data/runs/_rolling/m4_stability_agg.json | Select-String "schema_version|policy_version|agg_status"
+```
 
 ## Documentation
 
