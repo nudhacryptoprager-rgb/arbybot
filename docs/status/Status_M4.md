@@ -10,11 +10,16 @@
 
 | Mode | Description | SHA Binding | Evidence Required |
 |------|-------------|-------------|-------------------|
-| **DEV** | Fast iteration cycle | None | Rolling trio + runDir |
-| **RELEASE_EVIDENCE** | Public proof | Mandatory | attach_evidence + SHA linkage |
+| **DEV** | Fast iteration cycle | Soft | Rolling trio + runDir |
+| **RELEASE_EVIDENCE** | Public proof | Hard | attach_evidence + SHA linkage |
+
+**SHA Policy (v1.12.3):**
+> Hard commit-binding disabled (HEAD may differ from run_context.code_sha).  
+> BUT `run_context.code_sha` and `evidence_sha` fields remain **mandatory** in all artifacts for provenance and audit.
 
 **DEV Mode:**
-- No hard commit-binding (HEAD_SHA != run_context.code_sha is OK)
+- No hard HEAD == run_context.code_sha check (allows iteration without commit)
+- run_context.code_sha still recorded (captures which code actually ran)
 - No mandatory attach_evidence on every cycle
 - Minimal bundle: `_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json` + runDir
 - Use for rapid development and debugging
