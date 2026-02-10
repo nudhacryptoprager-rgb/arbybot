@@ -82,10 +82,11 @@ class Thresholds:
     # Slippage component (for mae_no_slippage calculation)
     SLIPPAGE_SYSTEMATIC_FACTOR = 1.0  # per-signal slippage adds to expected drift
     
-    # === Sample size thresholds (v1.9.7 UNIFIED) ===
-    # Single threshold: signals < 5 → NO_DATA (not pass, not counted in pass_rate)
-    MIN_SAMPLE_SIZE = 5           # < 5 signals → NO_DATA
-    MIN_SIGNALS_FOR_PASS = 5      # v1.9.7: unified with MIN_SAMPLE_SIZE
+    # === Sample size thresholds (v1.10.0 ADAPTIVE) ===
+    # Two thresholds: profit-grade vs coverage-mode
+    MIN_SAMPLE_SIZE = 5           # < 5 signals → WARN_LOW_SAMPLE (legacy compat)
+    MIN_SIGNALS_FOR_PASS = 5      # v1.10.0: profit-grade threshold for data_run
+    MIN_SIGNALS_COVERAGE = 3      # v1.10.0: coverage-mode threshold (diagnostic)
     
     # Rolling window for aggregator (v1.7.0)
     ROLLING_WINDOW_DEFAULT = 50   # Default rolling window for aggregator
@@ -110,6 +111,10 @@ class Thresholds:
     # v1.9.9: Data run rate thresholds (% of runs with >= MIN_SIGNALS_FOR_PASS signals)
     AGG_DATA_RUN_RATE_WARN = 0.50  # WARN if data_run_rate < 50%
     AGG_DATA_RUN_RATE_FAIL = 0.30  # FAIL_QUALITY if data_run_rate < 30%
+    
+    # v1.10.0: Diversity targets (coverage mode KPIs)
+    DIVERSITY_PAIRS_TARGET = 10    # WARN_DIVERSITY_LOW if unique_pairs < 10
+    DIVERSITY_ROUTES_TARGET = 4    # WARN_DIVERSITY_LOW if unique_routes < 4
 
 
 # ============================================================

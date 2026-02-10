@@ -128,16 +128,36 @@ def emit_to_aggregator_light(
     signals_count = metrics.get("signals_count", 0)
     run_id = run_summary.get("run_id", "")
     reasons = run_summary.get("reasons", [])
+    total_net = metrics.get("total_net_usdc", 0)
     
-    # v1.9.9: NO_DATA if signals_count < MIN_SIGNALS_FOR_PASS (real quality gate)
-    run_status = "NO_DATA" if signals_count < Thresholds.MIN_SIGNALS_FOR_PASS else status
+    # v1.10.0: Adaptive min_signals logic
+    # - is_data_run: signals >= MIN_SIGNALS_FOR_PASS (profit-grade)
+    # - If signals >= MIN_SIGNALS_COVERAGE and net > 0: PASS + WARN_LOW_SAMPLE (not NO_DATA)
+    # - If signals < MIN_SIGNALS_COVERAGE: NO_DATA
+    is_data_run = signals_count >= Thresholds.MIN_SIGNALS_FOR_PASS
+    is_coverage_run = signals_count >= Thresholds.MIN_SIGNALS_COVERAGE
     
-    # v1.9.3: Clean reasons for NO_DATA - no FAIL_* allowed
+    # v1.10.0: Detect INFRA failures
+    is_infra_fail = any(r.startswith("INFRA_") for r in reasons)
+    
+    if signals_count == 0:
+        run_status = "NO_DATA"
+    elif is_coverage_run and total_net > 0 and not is_data_run:
+        # Coverage-grade: enough for diagnostic, but not profit-grade
+        run_status = status if status != "NO_DATA" else "PASS"
+        if "WARN_LOW_SAMPLE" not in reasons:
+            reasons = list(reasons) + ["WARN_LOW_SAMPLE"]
+    elif not is_coverage_run:
+        run_status = "NO_DATA"
+    else:
+        run_status = status
+    
+    # v1.10.0: Clean reasons for NO_DATA - no FAIL_* allowed
     if run_status == "NO_DATA":
         reasons = [r for r in reasons if not r.startswith("FAIL_")]
         if "NO_DATA" not in reasons:
             reasons = ["NO_DATA"] + reasons
-        reasons = [r for r in reasons if r in ["NO_DATA", "WARN_LOW_SAMPLE"]]
+        reasons = [r for r in reasons if r in ["NO_DATA", "WARN_LOW_SAMPLE", "INFRA_RPC_ERROR", "INFRA_BLOCK_PIN_FAILED"]]
     
     # DEDUPLICATION: Check if run_id already exists
     existing_run_ids = {r.get("run_id") for r in agg_data.get("runs", []) if r.get("run_id")}
@@ -164,6 +184,8 @@ def emit_to_aggregator_light(
         "fragile_rate": metrics.get("fragile_rate", 0),
         "signals_count": signals_count,
         "run_status": run_status,
+        "is_data_run": is_data_run,        # v1.10.0: profit-grade data run
+        "is_infra_fail": is_infra_fail,    # v1.10.0: INFRA_* failure
         "pairs": run_pairs[:10] if run_pairs else [],  # v1.9.9: pairs (limit 10)
         "routes": run_routes[:10] if run_routes else [],  # v1.9.9: routes (limit 10)
     })
@@ -195,23 +217,30 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     """
     Compute quick stats and rolling window info for aggregator.
     
-    v1.9.5 QUALITY GATES:
-    - Enforces AGG_FRAGILE_P90_FAIL and AGG_LOW_SAMPLE_RATE_FAIL
-    - Adds no_data_rate, effective_pass_rate
-    - agg_status now has FAIL_QUALITY variant for quality gate failures
+    v1.10.0 QUALITY GATES:
+    - Uses is_data_run flag for data_run classification
+    - Adds infra_fail_count/infra_fail_rate for RPC failure tracking
+    - Adds diversity warnings (WARN_DIVERSITY_LOW)
+    - Enhanced runs_since_sha with data_runs tracking
     """
     from m4.policy import Thresholds, POLICY_VERSION
     
     # Always upgrade schema_version on save (forward migration)
-    agg_data["schema_version"] = "m4:stability_agg:v1.9"  # v1.9.9: data_run_rate, MIN_SIGNALS_FOR_PASS gate
+    agg_data["schema_version"] = "m4:stability_agg:v1.10"  # v1.10.0: is_data_run, infra metrics, diversity KPIs
     
     runs = agg_data.get("runs", [])
     
-    # v1.9.9: Count by status using MIN_SIGNALS_FOR_PASS threshold (not just 0)
+    # v1.10.0: Use is_data_run flag (profit-grade threshold)
+    # Fallback to signals_count >= MIN_SIGNALS_FOR_PASS for legacy runs
     min_signals = Thresholds.MIN_SIGNALS_FOR_PASS
-    no_data_count = sum(1 for r in runs if r.get("run_status") == "NO_DATA" or r.get("signals_count", 0) < min_signals)
-    data_runs = [r for r in runs if r.get("signals_count", 0) >= min_signals]
+    data_runs = [r for r in runs if r.get("is_data_run", r.get("signals_count", 0) >= min_signals)]
+    no_data_count = len(runs) - len(data_runs)
     data_run_count = len(data_runs)
+    
+    # v1.10.0: INFRA failure tracking
+    infra_fail_count = sum(1 for r in runs if r.get("is_infra_fail", False) or 
+                           any("INFRA_" in str(x) for x in r.get("reasons", [])))
+    
     pass_count = sum(1 for r in data_runs if not any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
     fail_count = len(data_runs) - pass_count
     warn_count_core = sum(1 for r in data_runs if "WARN_DRIFT_MAE" in r.get("reasons", []))
@@ -315,26 +344,36 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         # v1.9.9: Pair/Route diversity
         "unique_pairs": unique_pairs,
         "unique_routes": unique_routes,
+        # v1.10.0: INFRA failure tracking
+        "infra_fail_count": infra_fail_count,
+        "infra_fail_rate": round(infra_fail_count / len(runs), 4) if runs else 0,
     }
     
     # v1.10.0: Enhanced runs_since_sha (current code stability - PRIMARY view)
+    # Use is_data_run flag for accurate data_runs counting
+    current_sha_data_runs = [r for r in current_sha_runs 
+                             if r.get("is_data_run", r.get("signals_count", 0) >= Thresholds.MIN_SIGNALS_FOR_PASS)]
+    current_sha_infra_fails = sum(1 for r in current_sha_runs if r.get("is_infra_fail", False))
     sha_data_run_rate = len(current_sha_data_runs) / len(current_sha_runs) if current_sha_runs else 0
     sha_effective_pass_rate = current_sha_pass / len(current_sha_data_runs) if current_sha_data_runs else 0
     sha_fail_rate = current_sha_fail / len(current_sha_data_runs) if current_sha_data_runs else 0
+    sha_total_signals = sum(r.get("signals_count", 0) for r in current_sha_data_runs)
     
     agg_data["runs_since_sha"] = {
         "sha": current_sha,
         "runs_count": len(current_sha_runs),
         "data_runs_count": len(current_sha_data_runs),
+        "data_signals_total": sha_total_signals,  # v1.10.0: total signals in data_runs
         "no_data_count": current_sha_no_data,
+        "infra_fail_count": current_sha_infra_fails,  # v1.10.0: infra failures for this SHA
         "pass_count": current_sha_pass,
         "fail_count": current_sha_fail,
         "data_run_rate": round(sha_data_run_rate, 4),
         "effective_pass_rate": round(sha_effective_pass_rate, 4),
         "fail_rate": round(sha_fail_rate, 4),
-        # v1.10.0: status for current sha only
-        "status": "PENDING" if len(current_sha_data_runs) < 3 else (
-            "PASS" if sha_effective_pass_rate >= 0.80 and sha_data_run_rate >= 0.50 else
+        # v1.10.0: status based on data_runs_count threshold
+        "status": "PENDING" if len(current_sha_data_runs) < 5 else (
+            "OK" if sha_effective_pass_rate >= 0.80 and sha_data_run_rate >= 0.50 else
             "WARN" if sha_effective_pass_rate >= 0.60 else "FAIL"
         ),
     }
@@ -377,6 +416,14 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     elif data_run_rate < Thresholds.AGG_DATA_RUN_RATE_WARN:
         quality_warnings.append(f"DATA_RUN_RATE_WARN({data_run_rate:.2f}<{Thresholds.AGG_DATA_RUN_RATE_WARN})")
         agg_reasons.append("DATA_RUN_RATE_WARN")
+    
+    # v1.10.0: Diversity KPI warnings
+    if unique_pairs < Thresholds.DIVERSITY_PAIRS_TARGET:
+        quality_warnings.append(f"DIVERSITY_PAIRS_LOW({unique_pairs}<{Thresholds.DIVERSITY_PAIRS_TARGET})")
+        agg_reasons.append("DIVERSITY_PAIRS_LOW")
+    if unique_routes < Thresholds.DIVERSITY_ROUTES_TARGET:
+        quality_warnings.append(f"DIVERSITY_ROUTES_LOW({unique_routes}<{Thresholds.DIVERSITY_ROUTES_TARGET})")
+        agg_reasons.append("DIVERSITY_ROUTES_LOW")
     
     # Store quality warnings and reasons
     agg_data["quality_warnings"] = quality_warnings

@@ -139,6 +139,12 @@ def main(argv: Optional[list] = None) -> int:
 
     args = parser.parse_args(argv)
 
+    # v1.10.0: --strict-evidence + --profile profit implies --require-clean
+    if args.strict_evidence and args.profile == DoDProfile.PROFIT:
+        if not args.require_clean:
+            print("[POLICY] --strict-evidence + --profile profit → enabling --require-clean")
+            args.require_clean = True
+
     # Header
     mode_str = "OFFLINE" if args.offline else "ONLINE" if args.online else "DRY-RUN"
     print("=" * 60)

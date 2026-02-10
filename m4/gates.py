@@ -650,30 +650,48 @@ def run_online_gate(
         status = run_summary.get("status", "UNKNOWN")
         reasons = run_summary.get("reasons", [])
         signals_count = run_summary.get("metrics", {}).get("signals_count", 0)
+        total_net = run_summary.get("metrics", {}).get("total_net_usdc", 0)
         pinned_block = run_summary.get("inputs", {}).get("pinned_block", 0)
         
-        # v1.10.0: NO_DATA status for runs below MIN_SIGNALS_FOR_PASS threshold
-        # This is the REAL quality gate - insufficient signals cannot produce valid statistics
-        is_no_data = signals_count < Thresholds.MIN_SIGNALS_FOR_PASS
+        # v1.10.0: Adaptive NO_DATA logic
+        # - is_data_run: signals >= MIN_SIGNALS_FOR_PASS (profit-grade)
+        # - is_coverage_run: signals >= MIN_SIGNALS_COVERAGE (diagnostic)
+        # - If coverage-grade with net > 0: PASS + WARN_LOW_SAMPLE (not NO_DATA)
+        is_data_run = signals_count >= Thresholds.MIN_SIGNALS_FOR_PASS
+        is_coverage_run = signals_count >= Thresholds.MIN_SIGNALS_COVERAGE
         
-        if is_no_data:
+        if signals_count == 0:
+            # True NO_DATA - no signals at all
             status = "NO_DATA"
-            # Remove all FAIL_* from reasons - they are meaningless for NO_DATA
-            reasons = [r for r in reasons if not r.startswith("FAIL_")]
-            if "NO_DATA" not in reasons:
-                reasons = ["NO_DATA"] + reasons
-            # Add WARN_LOW_SAMPLE if signals > 0 but < threshold
-            if signals_count > 0 and "WARN_LOW_SAMPLE" not in reasons:
-                reasons.append("WARN_LOW_SAMPLE")
-            # Keep only relevant warnings
-            reasons = [r for r in reasons if r in ["NO_DATA", "WARN_LOW_SAMPLE"]]
-            
+            reasons = ["NO_DATA"]
             run_summary["status"] = status
             run_summary["reasons"] = reasons
             run_summary["profit_status"] = "NO_DATA"
             run_summary["drift_status"] = "NO_DATA"
-            run_summary["quality_status"] = "NO_DATA"  # v1.10.0: explicit quality_status
-            # Clean profit/drift reasons too
+            run_summary["quality_status"] = "NO_DATA"
+            run_summary["profit_reasons"] = ["NO_DATA"]
+            run_summary["drift_reasons"] = ["NO_DATA"]
+        elif is_coverage_run and total_net > 0 and not is_data_run:
+            # Coverage-grade: enough for diagnostic, but not profit-grade
+            # Keep original status but add WARN_LOW_SAMPLE
+            if "WARN_LOW_SAMPLE" not in reasons:
+                reasons = list(reasons) + ["WARN_LOW_SAMPLE"]
+            run_summary["reasons"] = reasons
+            run_summary["quality_status"] = "WARN_QUALITY"
+        elif not is_coverage_run:
+            # Below coverage threshold - NO_DATA
+            status = "NO_DATA"
+            reasons = [r for r in reasons if not r.startswith("FAIL_")]
+            if "NO_DATA" not in reasons:
+                reasons = ["NO_DATA"] + reasons
+            if signals_count > 0 and "WARN_LOW_SAMPLE" not in reasons:
+                reasons.append("WARN_LOW_SAMPLE")
+            reasons = [r for r in reasons if r in ["NO_DATA", "WARN_LOW_SAMPLE"]]
+            run_summary["status"] = status
+            run_summary["reasons"] = reasons
+            run_summary["profit_status"] = "NO_DATA"
+            run_summary["drift_status"] = "NO_DATA"
+            run_summary["quality_status"] = "NO_DATA"
             run_summary["profit_reasons"] = ["NO_DATA"]
             run_summary["drift_reasons"] = ["NO_DATA"]
         else:
