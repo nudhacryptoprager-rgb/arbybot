@@ -118,6 +118,8 @@ def emit_to_aggregator_light(
     Returns:
         Updated aggregator data
     """
+    from m4.policy import Thresholds
+    
     agg_data = ensure_rolling_agg_exists(agg_path)
     
     # Extract key fields
@@ -127,8 +129,8 @@ def emit_to_aggregator_light(
     run_id = run_summary.get("run_id", "")
     reasons = run_summary.get("reasons", [])
     
-    # Determine run status: NO_DATA if signals_count=0
-    run_status = "NO_DATA" if signals_count == 0 else status
+    # v1.9.9: NO_DATA if signals_count < MIN_SIGNALS_FOR_PASS (real quality gate)
+    run_status = "NO_DATA" if signals_count < Thresholds.MIN_SIGNALS_FOR_PASS else status
     
     # v1.9.3: Clean reasons for NO_DATA - no FAIL_* allowed
     if run_status == "NO_DATA":
@@ -147,6 +149,10 @@ def emit_to_aggregator_light(
     git_ctx = get_git_context()
     
     # Append light run info
+    # v1.9.9: Add pair, route, dex diversity tracking
+    run_pairs = run_summary.get("inputs", {}).get("pairs", [])
+    run_routes = run_summary.get("inputs", {}).get("routes", [])
+    
     agg_data["runs"].append({
         "run_id": run_id,
         "timestamp": run_summary.get("timestamp", ""),
@@ -158,6 +164,8 @@ def emit_to_aggregator_light(
         "fragile_rate": metrics.get("fragile_rate", 0),
         "signals_count": signals_count,
         "run_status": run_status,
+        "pairs": run_pairs[:10] if run_pairs else [],  # v1.9.9: pairs (limit 10)
+        "routes": run_routes[:10] if run_routes else [],  # v1.9.9: routes (limit 10)
     })
     
     # Clean legacy: keep only light-format runs
@@ -195,13 +203,15 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     from m4.policy import Thresholds, POLICY_VERSION
     
     # Always upgrade schema_version on save (forward migration)
-    agg_data["schema_version"] = "m4:stability_agg:v1.8"
+    agg_data["schema_version"] = "m4:stability_agg:v1.9"  # v1.9.9: data_run_rate, MIN_SIGNALS_FOR_PASS gate
     
     runs = agg_data.get("runs", [])
     
-    # Count by status
-    no_data_count = sum(1 for r in runs if r.get("run_status") == "NO_DATA" or r.get("signals_count", 0) == 0)
-    data_runs = [r for r in runs if r.get("signals_count", 0) > 0]
+    # v1.9.9: Count by status using MIN_SIGNALS_FOR_PASS threshold (not just 0)
+    min_signals = Thresholds.MIN_SIGNALS_FOR_PASS
+    no_data_count = sum(1 for r in runs if r.get("run_status") == "NO_DATA" or r.get("signals_count", 0) < min_signals)
+    data_runs = [r for r in runs if r.get("signals_count", 0) >= min_signals]
+    data_run_count = len(data_runs)
     pass_count = sum(1 for r in data_runs if not any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
     fail_count = len(data_runs) - pass_count
     warn_count_core = sum(1 for r in data_runs if "WARN_DRIFT_MAE" in r.get("reasons", []))
@@ -232,6 +242,7 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     # Quality metrics
     no_data_rate = no_data_count / len(runs) if runs else 0
     low_sample_rate = low_sample_count / len(runs) if runs else 0
+    data_run_rate = data_run_count / len(runs) if runs else 0  # v1.9.9: % of runs with sufficient signals
     effective_pass_rate = pass_count / len(runs) if runs else 0  # True rate including NO_DATA
     pass_rate = pass_count / len(data_runs) if data_runs else 0  # Rate excluding NO_DATA
     warn_rate_core = warn_count_core / len(data_runs) if data_runs else 0
@@ -253,6 +264,15 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     unique_net_values = len(set(round(r.get("net_usdc", 0), 2) for r in data_runs))
     net_diversity_rate = unique_net_values / len(data_runs) if data_runs else 0
     
+    # v1.9.9: Pair/Route/DEX diversity across window
+    all_pairs = set()
+    all_routes = set()
+    for r in runs:
+        all_pairs.update(r.get("pairs", []))
+        all_routes.update(r.get("routes", []))
+    unique_pairs = len(all_pairs)
+    unique_routes = len(all_routes)
+    
     # v1.9.8: Stats for current code_sha only (since_sha view)
     from m4.evidence import get_git_context
     current_sha = get_git_context()["code_sha"]
@@ -264,10 +284,12 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         "pass_count": pass_count,
         "fail_count": fail_count,
         "no_data_count": no_data_count,
+        "data_run_count": data_run_count,      # v1.9.9: runs with >= MIN_SIGNALS_FOR_PASS
         "warn_count_core": warn_count_core,
         "low_sample_count": low_sample_count,
         "pass_rate": round(pass_rate, 4),
         "effective_pass_rate": round(effective_pass_rate, 4),  # v1.9.5: PRIMARY metric
+        "data_run_rate": round(data_run_rate, 4),              # v1.9.9: % runs with sufficient signals
         "no_data_rate": round(no_data_rate, 4),                # v1.9.5: NO_DATA fraction
         "warn_rate_core": round(warn_rate_core, 4),
         "low_sample_rate": round(low_sample_rate, 4),
@@ -283,6 +305,9 @@ def _compute_quick_stats(agg_data: dict) -> dict:
         # v1.9.8: Diversity metrics
         "unique_net_values": unique_net_values,
         "net_diversity_rate": round(net_diversity_rate, 4),
+        # v1.9.9: Pair/Route diversity
+        "unique_pairs": unique_pairs,
+        "unique_routes": unique_routes,
     }
     
     # v1.9.8: Add runs_since_sha (current code stability)
@@ -324,6 +349,14 @@ def _compute_quick_stats(agg_data: dict) -> dict:
     if mae_p90 > Thresholds.AGG_MAE_P90_FAIL:
         quality_warnings.append(f"MAE_P90_HIGH({mae_p90:.2f}>{Thresholds.AGG_MAE_P90_FAIL})")
         agg_reasons.append("MAE_P90_HIGH")
+    
+    # v1.9.9: DATA_RUN_RATE quality gate
+    if data_run_rate < Thresholds.AGG_DATA_RUN_RATE_FAIL:
+        quality_warnings.append(f"DATA_RUN_RATE_LOW({data_run_rate:.2f}<{Thresholds.AGG_DATA_RUN_RATE_FAIL})")
+        agg_reasons.append("DATA_RUN_RATE_LOW")
+    elif data_run_rate < Thresholds.AGG_DATA_RUN_RATE_WARN:
+        quality_warnings.append(f"DATA_RUN_RATE_WARN({data_run_rate:.2f}<{Thresholds.AGG_DATA_RUN_RATE_WARN})")
+        agg_reasons.append("DATA_RUN_RATE_WARN")
     
     # Store quality warnings and reasons
     agg_data["quality_warnings"] = quality_warnings

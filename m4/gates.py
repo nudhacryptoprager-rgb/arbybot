@@ -469,6 +469,7 @@ def run_online_gate(
     artifact_mode: str = "rolling",
     emit_agg: Optional[Path] = None,
     reset_window: bool = False,
+    require_clean: bool = False,
 ) -> int:
     """
     Run M4 gate in online mode using real artifacts.
@@ -487,10 +488,23 @@ def run_online_gate(
         artifact_mode: "rolling" (default) or "full" 
         emit_agg: Path to emit aggregator (optional)
         reset_window: If True, delete aggregator before emitting
+        require_clean: If True, refuse to write _latest when code_dirty=true
         
     Returns:
         Exit code: 0=PASS, 1=FAIL, 2=NO_SIGNALS, 3=SIM_FAILED
     """
+    # v1.9.9: Require clean worktree check
+    if require_clean:
+        git_ctx = get_git_context()
+        if git_ctx.get("code_dirty") is True:
+            print("\n" + "=" * 60)
+            print("ERROR: --require-clean specified but worktree is dirty")
+            print(f"  code_sha: {git_ctx['code_sha']}")
+            print(f"  code_desc: {git_ctx['code_desc']}")
+            print("\nCommit your changes first, then run again.")
+            print("=" * 60 + "\n")
+            return 1
+    
     # Incident bundle persistence and retention
     def persist_incident_bundle(run_id, bundle_dict):
         incident_dir = REPO_ROOT / "data" / "runs" / "_incidents" / run_id
@@ -549,7 +563,7 @@ def run_online_gate(
             print("\n[ONLINE] No execution_report found, generating from truth_report...")
             ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             try:
-                generated = generate_m4_from_online_inputs(run_dir, ts, cost_model_name)
+                generated = generate_m4_from_online_inputs(run_dir, ts, cost_model_name, profile)
                 artifacts["signals"] = generated["signals"]
                 artifacts["execution_report"] = generated["execution_report"]
             except Exception as e:
@@ -677,13 +691,12 @@ def run_online_gate(
         agg_data = emit_to_aggregator_light(run_summary, agg_path)
         
         # STEP 2: Write run_summary_latest (only for ONLINE, or if no online exists)
-        if is_offline:
-            # Offline writes to separate file, does NOT overwrite online latest
-            run_summary_path = rolling_dir / "run_summary_latest_offline.json"
-            latest_file = "_latest_offline.json"
-        else:
-            run_summary_path = rolling_dir / "run_summary_latest.json"
-            latest_file = "_latest.json"
+        # v1.9.9: Split by profile (smoke vs profit) to avoid confusion
+        mode_suffix = "_offline" if is_offline else ""
+        profile_suffix = f"_{profile}" if profile else ""
+        
+        run_summary_path = rolling_dir / f"run_summary_latest{mode_suffix}{profile_suffix}.json"
+        latest_file = f"_latest{mode_suffix}{profile_suffix}.json"
         
         with open(run_summary_path, "w") as f:
             json.dump(run_summary, f, indent=2)
@@ -746,7 +759,7 @@ def run_online_gate(
                 pass
         
         latest_data = {
-            "schema_version": "m4:latest:v1.10",  # v1.9.8: runs_since_sha, diversity, NON-CANONICAL
+            "schema_version": "m4:latest:v1.11",  # v1.9.9: data_run_rate, profile-split, --require-clean
             "updated_at": now_utc.isoformat(),
             # v1.9.2: Clear SHA naming
             "latest_run_code_sha": git_ctx["code_sha"],  # SHA of code that ran this scan
@@ -774,6 +787,7 @@ def run_online_gate(
             "total_signals_in_window": agg_data.get("quick_stats", {}).get("total_signals", 0),
             # v1.9.8: PRIMARY metrics at top level
             "effective_pass_rate": agg_data.get("quick_stats", {}).get("effective_pass_rate", 0),
+            "data_run_rate": agg_data.get("quick_stats", {}).get("data_run_rate", 0),  # v1.9.9: % runs with >= 5 signals
             "net_diversity_rate": agg_data.get("quick_stats", {}).get("net_diversity_rate", 0),
             "quick_stats": agg_data.get("quick_stats", {}),  # v1.9.5: full stats visibility
             "paths": {

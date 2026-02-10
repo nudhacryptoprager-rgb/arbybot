@@ -1,0 +1,229 @@
+# PATH: config/real_minimal.yaml
+#
+# M4 REAL Pipeline - CANARY CONFIG
+#
+# METRICS CONTRACT (STEP 1):
+# - quotes_total = attempted quote calls
+# - quotes_fetched = got valid RPC response (amount_out > 0)
+# - gates_passed = passed all gates (price sanity, etc.)
+# - dexes_active = DEXes with at least 1 response
+#
+# BOOTSTRAP THRESHOLDS (STEP 6):
+# - max_deviation_bps = 5000 (50%) for M4 bootstrap
+# - Will tighten to 1000 (10%) in M5 after validation
+#
+# Environment Variable Overrides:
+#   ARBY_RPC_URL - Add custom RPC endpoint (priority)
+#   ARBY_RPC_TIMEOUT - RPC timeout in seconds (default: 10)
+#   ARBY_RPC_RETRIES - Max retries per endpoint (default: 3)
+#   ARBY_RPC_BACKOFF_MS - Base backoff in ms (default: 500)
+#   ARBY_PRICE_SANITY_DISABLED - Disable price sanity gate
+#   ARBY_PRICE_SANITY_MAX_DEV - Override max_deviation_bps
+#
+# M4 Requirements (STRICT):
+# - quotes_fetched >= 1
+# - rpc_success_rate > 0
+# - rpc_total_requests >= 3
+# - dexes_active >= 2 (DEXes with responses)
+# - price_sanity_passed >= 1
+# - confidence < 1.0 (dynamic)
+
+# Chain: Arbitrum One
+chain: arbitrum_one
+chain_id: 42161
+
+# RPC endpoints with fallback
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+  - "https://rpc.ankr.com/arbitrum"
+
+# RPC settings
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# 2 DEXes for cross-DEX arbitrage
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+
+# M5 pairs: ONLY pairs with verified pool addresses on BOTH DEXes
+# Pairs without pool addresses on all configured DEXes will be rejected as POOL_MISSING
+# All pool addresses verified via factory.getPool() on 2026-02-07
+pairs:
+  # Major pairs with high liquidity on both DEXes
+  - token_in: WETH
+    token_out: USDC
+    fee_tiers: [500, 3000]
+  - token_in: WETH
+    token_out: USDT
+    fee_tiers: [500, 3000]
+  # NOTE: WBTC pairs disabled - decimal overflow in price calc (8 vs 18 decimals)
+  # - token_in: WBTC
+  #   token_out: WETH
+  #   fee_tiers: [500, 3000]
+  - token_in: ARB
+    token_out: WETH
+    fee_tiers: [500, 3000]
+  # NOTE: LINK disabled - SushiSwap pool has low liquidity (11% spread)
+  # - token_in: LINK
+  #   token_out: WETH
+  #   fee_tiers: [500, 3000]
+  # NOTE: GMX disabled - low liquidity causes price outliers (173% spread)
+  # - token_in: GMX
+  #   token_out: WETH
+  #   fee_tiers: [500, 3000]
+  - token_in: wstETH
+    token_out: WETH
+    fee_tiers: [100, 500]
+  - token_in: ARB
+    token_out: USDC
+    fee_tiers: [500, 3000]
+  # NOTE: WBTC/USDC disabled - same decimal issue
+  # - token_in: WBTC
+  #   token_out: USDC
+  #   fee_tiers: [500, 3000]
+
+# Pool addresses (verified on Arbitrum via factory.getPool() on 2026-02-07)
+# Uniswap V3 Factory: 0x1F98431c8aD98523631AE4a59f267346ea31F984
+# SushiSwap V3 Factory: 0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e
+pools:
+  # === WETH/USDC ===
+  uniswap_v3_WETH_USDC_500: "0xC6962004f452bE9203591991D15f6b388e09E8D0"
+  uniswap_v3_WETH_USDC_3000: "0xc473e2aEE3441BF9240Be85eb122aBB059A3B57c"
+  sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
+  sushiswap_v3_WETH_USDC_3000: "0xC96525298419f7E00dA8826B733Ee52e271662b5"
+  # === WETH/USDT ===
+  uniswap_v3_WETH_USDT_500: "0x641C00A822e8b671738d32a431a4Fb6074E5c79d"
+  uniswap_v3_WETH_USDT_3000: "0xc82819F72A9e77E2c0c3A69B3196478f44303cf4"
+  sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
+  sushiswap_v3_WETH_USDT_3000: "0x92d543A8a158A6bC2C7018ae17803819Cb9150B2"
+  # === WBTC/WETH ===
+  uniswap_v3_WBTC_WETH_500: "0x2f5e87C9312fa29aed5c179E456625D79015299c"
+  uniswap_v3_WBTC_WETH_3000: "0x149e36E72726e0BceA5c59d40df2c43F60f5A22D"
+  sushiswap_v3_WBTC_WETH_500: "0xf79099596045A41bB2ae53fa6677576687242455"
+  sushiswap_v3_WBTC_WETH_3000: "0x6F10667F314498649eb2f80da244e8c6E9f031d5"
+  # === ARB/WETH ===
+  uniswap_v3_ARB_WETH_500: "0xC6F780497A95e246EB9449f5e4770916DCd6396A"
+  uniswap_v3_ARB_WETH_3000: "0x92c63d0e701CAAe670C9415d91C474F686298f00"
+  sushiswap_v3_ARB_WETH_500: "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11"
+  sushiswap_v3_ARB_WETH_3000: "0xB3942c9FFA04efBC1Fa746e146bE7565c76E3dC1"
+  # === LINK/WETH ===
+  uniswap_v3_LINK_WETH_500: "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907"
+  uniswap_v3_LINK_WETH_3000: "0x468b88941e7Cc0B88c1869d68ab6b570bCEF62Ff"
+  sushiswap_v3_LINK_WETH_500: "0x942E53ED315Db6451AdCd601D4D08f059F88C77f"
+  sushiswap_v3_LINK_WETH_3000: "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65"
+  # === GMX/WETH ===
+  uniswap_v3_GMX_WETH_500: "0xb435ebfE0BF4CE66810AA4d44e3a5CA875D40DB1"
+  uniswap_v3_GMX_WETH_3000: "0x1aEEdD3727A6431b8F070C0aFaA81Cc74f273882"
+  sushiswap_v3_GMX_WETH_500: "0xe7988687004933525734Da744102ea8E0e472A91"
+  sushiswap_v3_GMX_WETH_3000: "0x2AB937e744B6E067c55329838A587d1Cf50C874f"
+  # === wstETH/WETH ===
+  uniswap_v3_wstETH_WETH_100: "0x35218a1cbaC5Bbc3E57fd9Bd38219D37571b3537"
+  uniswap_v3_wstETH_WETH_500: "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13"
+  sushiswap_v3_wstETH_WETH_100: "0x8BD39fA8608fd949C253987767540c26a0D974CF"
+  sushiswap_v3_wstETH_WETH_500: "0xc60f4760a70Bb900776DBBfcce9eF1a109a185B0"
+  # === ARB/USDC ===
+  uniswap_v3_ARB_USDC_500: "0xb0f6cA40411360c03d41C5fFc5F179b8403CdcF8"
+  uniswap_v3_ARB_USDC_3000: "0xaEBDcA1Bc8d89177EbE2308d62af5e74885DcCc3"
+  sushiswap_v3_ARB_USDC_500: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
+  sushiswap_v3_ARB_USDC_3000: "0x14716A16ef9eeAaDa7E266bcF023b71D2c9ADbf3"
+  # === WBTC/USDC ===
+  uniswap_v3_WBTC_USDC_500: "0x0E4831319A50228B9e450861297aB92dee15B44F"
+  uniswap_v3_WBTC_USDC_3000: "0x6985cb98CE393FCE8d6272127F39013f61e36166"
+  sushiswap_v3_WBTC_USDC_500: "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"
+  sushiswap_v3_WBTC_USDC_3000: "0x4E5c883d6e9cCE0be8E464C3066bCFF036Da674a"
+
+# Token addresses (Arbitrum)
+tokens:
+  WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+  USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+  USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+  WBTC: "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f"
+  ARB: "0x912CE59144191C1204E64559FE8253a0e49E6548"
+  LINK: "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4"
+  GMX: "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
+  wstETH: "0x5979D7b546E38E414F7E9822514be443A4800529"
+
+# Token decimals for proper normalization
+quote_decimals:
+  WETH: 18
+  USDC: 6
+  USDT: 6
+  WBTC: 8
+  ARB: 18
+  LINK: 18
+  GMX: 18
+  wstETH: 18
+
+# Anchor prices for each pair (used for price sanity checks)
+# Format: TOKEN_IN_TOKEN_OUT: expected_price
+# Prices as of 2026-02-07
+tokens_anchor_price:
+  WETH_USDC: 2000     # ~$2000 per WETH
+  WETH_USDT: 2000     # ~$2000 per WETH
+  WBTC_WETH: 17       # ~17 WETH per WBTC (~$34k BTC)
+  ARB_WETH: 0.00035   # ~0.00035 WETH per ARB (~$0.70 ARB)
+  LINK_WETH: 0.0055   # ~0.0055 WETH per LINK (~$11 LINK)
+  GMX_WETH: 0.012     # ~0.012 WETH per GMX (~$24 GMX)
+  wstETH_WETH: 1.15   # ~1.15 WETH per wstETH (staking yield)
+  ARB_USDC: 0.70      # ~$0.70 per ARB
+  WBTC_USDC: 34000    # ~$34,000 per WBTC
+
+# Quote sizing: 1 ETH
+quote_amount_in_wei: "1000000000000000000"
+
+# Gate thresholds
+max_slippage_bps: 100
+min_net_bps: 5
+
+# STEP 6: Price sanity gate with M4 BOOTSTRAP thresholds
+# Anchor: WETH/USDC expected ~3500 USD (canonical)
+# Bounds: [1500, 6000] - absolute limits
+# M4 Bootstrap: 50% deviation allowed (will tighten in M5)
+price_sanity_enabled: true
+price_sanity_max_deviation_bps: 5000  # 50% for bootstrap
+
+# Paper trading
+cooldown_seconds: 60
+notion_capital_usdc: "10000.000000"
+
+# M5 Cost model (gas-only)
+gas_usd_estimate: 0.10
+
+# Paper trading settings (M5)
+paper_size_usd: 1000
+paper_slippage_bps: 0  # 0 bps default - conservative for micro-spreads
+
+# Autosize configuration (M5)
+# Auto-reduces position size when impact/ticksCrossed grows
+autosize:
+  enabled: true
+  base_size_usd: 1000           # Starting position size
+  min_size_usd: 100             # Floor - never go below this
+  max_size_usd: 5000            # Ceiling - never exceed this
+  impact_threshold_bps: 50      # Reduce size if impact > 50 bps
+  ticks_crossed_threshold: 5    # Reduce size if ticksCrossed > 5
+  reduction_factor: 0.5         # Reduce by 50% per threshold breach
+  cooldown_seconds: 300         # Wait 5 min before re-adjusting
+  reason_codes:
+    - "high_impact"             # impact_bps > threshold
+    - "ticks_crossed"           # ticksCrossed > threshold
+    - "volatility"              # price moved > X% in window
+    - "cooldown_active"         # within cooldown period
+
+# Spread signal threshold (M5)
+# Signals with spread_bps_exact < this are filtered out
+# Production: 5 bps minimum (filters micro-spreads that can't cover gas)
+# Debug: 0 = any positive spread
+min_spread_bps: 0  # 5 bps = production threshold
+
+# Net PnL threshold for daily_report top_opportunities (M5)
+# Signals with net_pnl_usdc_est < this are excluded from top_opportunities
+# 0 = break-even or better (opportunity must cover costs)
+min_net_pnl_usdc_est: 0.0  # 0 = break-even or better
+
+# M4 markers - execution disabled
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_M4

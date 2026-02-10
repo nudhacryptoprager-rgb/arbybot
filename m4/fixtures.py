@@ -373,6 +373,7 @@ def generate_m4_from_online_inputs(
     run_dir: Path, 
     ts: str,
     cost_model_name: str = "paper_realistic",
+    profile: str = "smoke",
 ) -> Dict[str, Path]:
     """
     Generate M4 execution artifacts from online scan/truth inputs.
@@ -393,6 +394,7 @@ def generate_m4_from_online_inputs(
         run_dir: Directory containing scan/truth artifacts
         ts: Timestamp for output filenames
         cost_model_name: Name of cost model to use (default: paper_realistic)
+        profile: DoD profile for threshold evaluation (default: smoke)
         
     Returns:
         Dict with paths to generated signals and execution_report
@@ -495,6 +497,15 @@ def generate_m4_from_online_inputs(
             "block_number": sig.get("block_number", source_block),
         }
         m4_signals.append(m4_signal)
+    
+    # Compute aggregates by pair and route for diversity tracking (v1.9.9)
+    signals_by_pair: Dict[str, int] = {}
+    signals_by_route: Dict[str, int] = {}
+    for sig in m4_signals:
+        pair = sig.get("pair", "UNKNOWN")
+        signals_by_pair[pair] = signals_by_pair.get(pair, 0) + 1
+        route = f"{sig.get('buy_dex', '?')}->{sig.get('sell_dex', '?')}"
+        signals_by_route[route] = signals_by_route.get(route, 0) + 1
     
     # Write M4 signals
     signals_path = reports_dir / f"signals_{ts}.json"
@@ -772,8 +783,20 @@ def generate_m4_from_online_inputs(
         quality_reasons.append(FailReason.WARN_LOW_SAMPLE)
     
     # v1.9.7: WARN_FRAGILE_HIGH when fragile_rate >= 0.5 (only if enough signals)
+    # v1.9.9: FAIL for profit profile when fragile_rate > fragile_rate_max
     frag_rate = fragile_count / len(m4_signals) if m4_signals else 0
-    if not is_low_sample and frag_rate >= 0.50:
+    from m4.policy import get_profile
+    try:
+        profile_config = get_profile(profile)
+        fragile_rate_max = profile_config.fragile_rate_max
+    except (ValueError, NameError):
+        fragile_rate_max = 1.0  # Fallback: no limit
+    
+    if not is_low_sample and frag_rate > fragile_rate_max:
+        # v1.9.9: Hard filter for profit profile
+        quality_warnings.append(f"FAIL_FRAGILE_RATE({frag_rate:.2f}>{fragile_rate_max})")
+        quality_reasons.append("FAIL_FRAGILE_HIGH")
+    elif not is_low_sample and frag_rate >= 0.50:
         quality_warnings.append(f"HIGH_FRAGILE_RATE({frag_rate:.2f})")
         quality_reasons.append("WARN_FRAGILE_HIGH")
     
@@ -889,11 +912,11 @@ def generate_m4_from_online_inputs(
     evidence_ok = len(evidence_issues) == 0
     
     run_summary_data = {
-        "schema_version": "m4:run_summary:v1.6",  # v1.9.7: unified min_signals, NO_DATA semantics
+        "schema_version": "m4:run_summary:v1.7",  # v1.9.9: profile param, removed source_sha, pairs/routes
+        "policy_version": POLICY_VERSION,  # v1.9.9: top-level provenance
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "run_id": run_id,
-        "source_sha": git_ctx["code_sha"],  # v1.9.6: synced with run_context.code_sha
-        # v1.9.0: run_context with evidence data
+        # v1.9.0: run_context with evidence data (source_sha REMOVED - use run_context.code_sha)
         "run_context": {
             "code_sha": git_ctx["code_sha"],
             "code_dirty": git_ctx["code_dirty"] if git_ctx["code_dirty"] is not None else False,
@@ -909,6 +932,9 @@ def generate_m4_from_online_inputs(
             "pinned_block": source_block,
             "chain_id": chain_id,
             "cost_model": cost_model.name,
+            # v1.9.9: pairs/routes for diversity tracking
+            "pairs": list(signals_by_pair.keys()),
+            "routes": list(signals_by_route.keys()),
         },
         "metrics": {
             "signals_count": len(m4_signals),

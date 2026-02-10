@@ -134,6 +134,8 @@ def main(argv: Optional[list] = None) -> int:
                         help="Artifact mode: rolling (default, only rolling/incident), full (legacy per-run)")
     parser.add_argument("--reset-window", action="store_true",
                         help="Reset rolling aggregator window (start fresh after major refactor)")
+    parser.add_argument("--require-clean", action="store_true",
+                        help="Reject dirty worktree - refuse to write _latest if code_dirty=true")
 
     args = parser.parse_args(argv)
 
@@ -151,7 +153,8 @@ def main(argv: Optional[list] = None) -> int:
             strict_evidence=args.strict_evidence,
             artifact_mode=args.artifact_mode,
             emit_agg=args.emit_agg,
-            reset_window=args.reset_window
+            reset_window=args.reset_window,
+            require_clean=args.require_clean
         )
         return result
     elif args.dry_run:

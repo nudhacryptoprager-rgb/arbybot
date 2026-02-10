@@ -51,7 +51,7 @@ class FailReason:
 # ============================================================
 
 # Policy version for artifact provenance
-POLICY_VERSION = "1.9.8"
+POLICY_VERSION = "1.9.9"
 
 class Thresholds:
     """
@@ -106,6 +106,10 @@ class Thresholds:
     AGG_FRAGILE_P50_WARN = 0.40   # v1.9.7: early signal when median is elevated
     AGG_FRAGILE_P90_WARN = 0.30   # WARN if p90(fragile_rate) > 30%
     AGG_FRAGILE_P90_FAIL = 0.50   # FAIL_QUALITY if p90(fragile_rate) > 50%
+    
+    # v1.9.9: Data run rate thresholds (% of runs with >= MIN_SIGNALS_FOR_PASS signals)
+    AGG_DATA_RUN_RATE_WARN = 0.50  # WARN if data_run_rate < 50%
+    AGG_DATA_RUN_RATE_FAIL = 0.30  # FAIL_QUALITY if data_run_rate < 30%
 
 
 # ============================================================
@@ -210,6 +214,7 @@ class ThresholdProfile:
     mae_fail: float  # MAE threshold for FAIL status
     sign_rate_min: float  # Minimum sign correctness rate
     min_sample_size: int  # Below this, WARN_LOW_SAMPLE is issued
+    fragile_rate_max: float = 1.0  # v1.9.9: Maximum fragile_rate for PASS (1.0 = no limit)
     description: str = ""
 
 
@@ -221,6 +226,7 @@ PROFILES: Dict[str, ThresholdProfile] = {
         mae_fail=0.50,
         sign_rate_min=0.80,
         min_sample_size=2,
+        fragile_rate_max=1.0,  # No limit for smoke
         description="Minimal thresholds for smoke testing",
     ),
     DoDProfile.PROFIT: ThresholdProfile(
@@ -229,6 +235,7 @@ PROFILES: Dict[str, ThresholdProfile] = {
         mae_fail=0.80,
         sign_rate_min=0.60,
         min_sample_size=5,
+        fragile_rate_max=0.20,  # v1.9.9: Hard filter - fragile_rate <= 20% for profit profile
         description="Production thresholds for profitable trading",
     ),
 }
