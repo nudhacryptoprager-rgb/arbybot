@@ -77,7 +77,51 @@ def public_fallback_for(network: Optional[str]) -> Optional[str]:
 # Map common chain IDs to canonical network names (partial list; extend as needed)
 _CHAIN_ID_TO_NETWORK = {
     42161: "arbitrum",
+    8453: "base",
+    59144: "linea",
+    5000: "mantle",
 }
+
+# v1.12.2: Host patterns for chain validation
+_CHAIN_ID_HOST_PATTERNS = {
+    42161: ["arb", "arbitrum"],
+    8453: ["base"],
+    59144: ["linea"],
+    5000: ["mantle"],
+}
+
+
+def validate_chain_rpc_consistency(chain_id: int, rpc_http_host: str) -> tuple:
+    """
+    Validate that the RPC host matches the expected chain.
+    
+    Returns (is_valid, error_message).
+    If chain_id is unknown, returns (True, None) - allows unknown chains.
+    
+    v1.12.2: Prevent chain_id / RPC mismatch (e.g., Arbitrum chain_id with Mantle host).
+    """
+    if chain_id not in _CHAIN_ID_HOST_PATTERNS:
+        return True, None  # Unknown chain, can't validate
+    
+    expected_patterns = _CHAIN_ID_HOST_PATTERNS[chain_id]
+    expected_network = _CHAIN_ID_TO_NETWORK.get(chain_id, "unknown")
+    host_lower = rpc_http_host.lower()
+    
+    # Check if host contains at least one expected pattern
+    if any(pattern in host_lower for pattern in expected_patterns):
+        return True, None
+    
+    # Check for known mismatches
+    for other_chain_id, other_patterns in _CHAIN_ID_HOST_PATTERNS.items():
+        if other_chain_id != chain_id:
+            if any(pattern in host_lower for pattern in other_patterns):
+                other_network = _CHAIN_ID_TO_NETWORK.get(other_chain_id, "unknown")
+                return False, (
+                    f"chain_id={chain_id} ({expected_network}) but RPC host '{rpc_http_host}' "
+                    f"appears to be for {other_network} (chain_id={other_chain_id})"
+                )
+    
+    return True, None  # No mismatch detected
 
 
 def _normalize_network_from_chain(chain_id: Optional[int], network: Optional[str]) -> Optional[str]:
