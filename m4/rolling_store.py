@@ -65,8 +65,9 @@ def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
     Returns:
         Fresh aggregator data
     """
-    git_ctx = get_git_context()
+    from m4.evidence import get_run_timestamp
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_timestamp = get_run_timestamp()
     
     # Archive current aggregator if exists
     if agg_path.exists():
@@ -76,21 +77,21 @@ def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
         with open(agg_path) as f:
             old_data = json.load(f)
         
-        # Add archive metadata
+        # v2.0: Add archive metadata (SHA-free)
         old_data["archived_at"] = datetime.now(timezone.utc).isoformat()
         old_data["archive_reason"] = reason
-        old_data["archive_code_sha"] = git_ctx["code_sha"]
+        old_data["archive_run_timestamp"] = run_timestamp  # v2.0: timestamp instead of SHA
         
         with open(archive_path, "w") as f:
             json.dump(old_data, f, indent=2)
         
         print(f"[ROLLING-RESET] Archived: {archive_name} (runs={len(old_data.get('runs', []))})")
     
-    # Create fresh aggregator
+    # v2.0: Create fresh aggregator (SHA-free)
     fresh = {
-        "schema_version": "m4:stability_agg:v1.12",  # v1.12.0: taxonomy contract, thresholds bite
+        "schema_version": "m4:stability_agg:v2.0",
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "reset_from_sha": git_ctx["code_sha"],
+        "reset_run_timestamp": run_timestamp,  # v2.0: timestamp instead of SHA
         "reset_reason": reason,
         "runs": [],
     }
@@ -106,7 +107,7 @@ def emit_to_aggregator_light(
     run_summary: dict,
     agg_path: Path,
     max_runs: int = 200,
-    target_sha: str = None  # v1.12.2: explicit SHA for runs_since_sha (artifact-based, not git)
+    target_sha: str = None  # v2.0: DEPRECATED, kept for backward compat
 ) -> dict:
     """
     Emit run to rolling aggregator. Returns updated agg_data.
@@ -115,8 +116,7 @@ def emit_to_aggregator_light(
         run_summary: Run summary dict with metrics
         agg_path: Path to aggregator file
         max_runs: Maximum runs to keep in window
-        target_sha: If provided, use this SHA for runs_since_sha instead of git context.
-                   Defaults to run_summary.run_context.code_sha (artifact provenance).
+        target_sha: DEPRECATED (v2.0: SHA tracking removed)
         
     Returns:
         Updated aggregator data
@@ -169,10 +169,9 @@ def emit_to_aggregator_light(
         print(f"[EMIT-AGG] SKIP duplicate run_id={run_id}")
         return agg_data
     
-    # v1.12.1: Use run_summary's run_context.code_sha (artifact provenance)
-    # NOT current git state - that falsifies attribution
+    # v2.0: SHA tracking removed - use run_timestamp from run_context
     run_context = run_summary.get("run_context", {})
-    artifact_code_sha = run_context.get("code_sha", "unknown")
+    run_timestamp = run_context.get("run_timestamp", run_summary.get("timestamp", ""))
     
     # Append light run info
     # v1.9.9: Add pair, route, dex diversity tracking
@@ -182,7 +181,8 @@ def emit_to_aggregator_light(
     agg_data["runs"].append({
         "run_id": run_id,
         "timestamp": run_summary.get("timestamp", ""),
-        "code_sha": artifact_code_sha,  # v1.12.1: from artifact, not git context
+        "run_timestamp": run_timestamp,  # v2.0: primary provenance field
+        "code_sha": None,  # v2.0: DEPRECATED
         "net_usdc": metrics.get("total_net_usdc", 0),
         "mae": metrics.get("mae_net_usdc", 0),
         "sign_rate": metrics.get("est_sign_correct_rate", 0),
@@ -223,31 +223,27 @@ def emit_to_aggregator_light(
 def _compute_quick_stats(
     agg_data: dict,
     run_summary: dict = None,
-    target_sha: str = None
+    target_sha: str = None  # v2.0: DEPRECATED, kept for backward compat
 ) -> dict:
     """
     Compute quick stats and rolling window info for aggregator.
     
     Args:
         agg_data: Aggregator data dict with runs list
-        run_summary: Latest run summary (for artifact-based SHA extraction)
-        target_sha: Explicit SHA for runs_since_sha; if None, uses run_summary.run_context.code_sha
+        run_summary: Latest run summary (optional, for future use)
+        target_sha: DEPRECATED (v2.0: SHA tracking removed)
     
-    v1.11.0 STATUS CONTRACT:
+    v2.0 STATUS CONTRACT:
+    - SHA tracking removed, timestamp-based provenance
     - NO_DATA: ONLY when signals_count == 0
     - Segments by run_kind: NORMAL, COVERAGE, SMOKE, OFFLINE
-    - Main KPIs computed on NORMAL runs only (not penalized by coverage/stress runs)
-    - Uses is_data_run flag for data_run classification
-    - Adds infra_fail_count/infra_fail_rate for RPC failure tracking
-    - Adds diversity warnings (WARN_DIVERSITY_LOW)
-    - Enhanced runs_since_sha with data_runs tracking
-    
-    v1.12.2: run_summary and target_sha for artifact-based provenance
+    - Main KPIs computed on NORMAL runs only
+    - All runs treated as same code identity (no per-SHA breakdown)
     """
     from m4.policy import Thresholds, POLICY_VERSION
     
-    # Always upgrade schema_version on save (forward migration)
-    agg_data["schema_version"] = "m4:stability_agg:v1.12"  # v1.12.0: taxonomy contract, thresholds bite
+    # v2.0: Upgrade schema_version (SHA-free)
+    agg_data["schema_version"] = "m4:stability_agg:v2.0"
     
     runs = agg_data.get("runs", [])
     
@@ -344,26 +340,10 @@ def _compute_quick_stats(
     unique_pairs = len(all_pairs)
     unique_routes = len(all_routes)
     
-    # v1.10.0: Stats for current code_sha only (since_sha view)
-    # v1.11.0: Filter to NORMAL runs only for primary KPI
-    # v1.12.2: Use target_sha if provided, else artifact run_context, never git context
-    if target_sha:
-        current_sha = target_sha
-    elif run_summary:
-        # Use the latest run's artifact SHA, not live git state
-        artifact_sha = run_summary.get("run_context", {}).get("code_sha")
-        if artifact_sha:
-            current_sha = artifact_sha
-        else:
-            # Fallback for legacy runs without run_context
-            from m4.evidence import get_git_context
-            current_sha = get_git_context()["code_sha"]
-    else:
-        # No run_summary provided - fallback to git context
-        from m4.evidence import get_git_context
-        current_sha = get_git_context()["code_sha"]
-    current_sha_all_runs = [r for r in runs if r.get("code_sha") == current_sha]
-    current_sha_runs = [r for r in normal_runs if r.get("code_sha") == current_sha]  # NORMAL only
+    # v2.0: SHA tracking removed - all runs treated as same code identity
+    # No per-SHA filtering, use all NORMAL runs for stats
+    current_sha_all_runs = normal_runs  # All normal runs (no SHA filter)
+    current_sha_runs = normal_runs  # NORMAL only
     current_sha_data_runs = [r for r in current_sha_runs 
                              if r.get("signals_count", 0) >= Thresholds.MIN_SIGNALS_FOR_PASS]
     current_sha_pass = sum(1 for r in current_sha_data_runs 
@@ -426,25 +406,27 @@ def _compute_quick_stats(
     sha_low_sample_count = sum(1 for r in current_sha_runs 
                                if 0 < r.get("signals_count", 0) < Thresholds.MIN_SIGNALS_FOR_PASS)
     
-    agg_data["runs_since_sha"] = {
-        "sha": current_sha,
+    # v2.0: SHA tracking removed - renamed to runs_since_timestamp
+    # All runs treated as same code identity, no per-SHA breakdown
+    agg_data["runs_since_timestamp"] = {
+        "sha": None,  # v2.0: DEPRECATED
         "runs_count": len(current_sha_runs),
         "data_runs_count": len(current_sha_data_runs),
-        "data_signals_total": sha_total_signals,  # v1.10.0: total signals in data_runs
-        "no_data_count": current_sha_no_data,     # v1.11.0: true NO_DATA (signals=0)
-        "low_sample_count": sha_low_sample_count, # v1.11.0: signals 1-4 (WARN, not NO_DATA)
-        "infra_fail_count": current_sha_infra_fails,  # v1.10.0: infra failures for this SHA
+        "data_signals_total": sha_total_signals,
+        "no_data_count": current_sha_no_data,
+        "low_sample_count": sha_low_sample_count,
+        "infra_fail_count": current_sha_infra_fails,
         "pass_count": current_sha_pass,
         "fail_count": current_sha_fail,
         "data_run_rate": round(sha_data_run_rate, 4),
         "effective_pass_rate": round(sha_effective_pass_rate, 4),
         "fail_rate": round(sha_fail_rate, 4),
-        # v1.12.0: Improved status - show progress immediately, not just after 5 data_runs
+        # v2.0: Simplified status (no per-SHA tracking)
         "status": (
             "OK" if len(current_sha_data_runs) >= 3 and sha_effective_pass_rate >= 0.80 and sha_data_run_rate >= 0.50 else
             "WARN" if len(current_sha_runs) >= 1 and (sha_effective_pass_rate >= 0.60 or len(current_sha_data_runs) < 3) else
             "FAIL" if len(current_sha_data_runs) >= 3 and sha_effective_pass_rate < 0.60 else
-            "PENDING"  # No runs yet
+            "PENDING"
         ),
     }
     

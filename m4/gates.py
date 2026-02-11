@@ -490,22 +490,13 @@ def run_online_gate(
         artifact_mode: "rolling" (default) or "full" 
         emit_agg: Path to emit aggregator (optional)
         reset_window: If True, delete aggregator before emitting
-        require_clean: If True, refuse to write _latest when code_dirty=true
+        require_clean: DEPRECATED (v2.0: SHA tracking removed)
         
     Returns:
         Exit code: 0=PASS, 1=FAIL, 2=NO_SIGNALS, 3=SIM_FAILED
     """
-    # v1.9.9: Require clean worktree check
-    if require_clean:
-        git_ctx = get_git_context()
-        if git_ctx.get("code_dirty") is True:
-            print("\n" + "=" * 60)
-            print("ERROR: --require-clean specified but worktree is dirty")
-            print(f"  code_sha: {git_ctx['code_sha']}")
-            print(f"  code_desc: {git_ctx['code_desc']}")
-            print("\nCommit your changes first, then run again.")
-            print("=" * 60 + "\n")
-            return 1
+    # v2.0: require_clean check removed (SHA tracking disabled)
+    # The parameter is kept for backward compatibility but ignored
     
     # Incident bundle persistence and retention
     def persist_incident_bundle(run_id, bundle_dict):
@@ -621,33 +612,24 @@ def run_online_gate(
         # Fixed path for rolling agg (always exists)
         agg_path = rolling_dir / "m4_stability_agg.json"
         
-        # Update evidence with real git HEAD and dirty status (v1.9.1)
-        git_ctx = get_git_context()
-        git_sha = git_ctx["code_sha"]
-        code_dirty = git_ctx["code_dirty"]
+        # v2.0: SHA tracking removed - get run_timestamp from evidence module
+        from m4.evidence import get_run_timestamp
+        run_timestamp = get_run_timestamp()
         
+        # v2.0: SHA-free evidence structure
         if "evidence" in run_summary:
-            run_summary["evidence"]["current_sha"] = git_sha
-            
-            # v1.9.3: Removed SHA_MISMATCH check - source_sha is now deprecated
-            # Only check for dirty worktree
-            evidence_issues = run_summary["evidence"].get("issues", [])
-            
-            # Remove any old SHA_MISMATCH issues (v1.9.3 cleanup)
-            evidence_issues = [i for i in evidence_issues if not i.startswith("SHA_MISMATCH")]
-            
-            if code_dirty is True and "DIRTY_WORKTREE_PRECOMMIT" not in evidence_issues:
-                evidence_issues.append("DIRTY_WORKTREE_PRECOMMIT")
-            
-            run_summary["evidence"]["issues"] = evidence_issues
-            run_summary["evidence"]["ok"] = len(evidence_issues) == 0
+            run_summary["evidence"]["current_sha"] = None  # DEPRECATED
+            run_summary["evidence"]["issues"] = []  # No SHA validation
+            run_summary["evidence"]["ok"] = True
         
-        # v1.12.1: PRESERVE original run_context from artifact
-        # Only add evidence_sha placeholder if not already set
-        # Do NOT overwrite code_sha/code_dirty/code_desc - that falsifies provenance
-        if "run_context" in run_summary:
-            if "evidence_sha" not in run_summary["run_context"]:
-                run_summary["run_context"]["evidence_sha"] = None  # Placeholder for attach_evidence.py
+        # v2.0: Update run_context with timestamp, SHA fields deprecated
+        if "run_context" not in run_summary:
+            run_summary["run_context"] = {}
+        run_summary["run_context"]["run_timestamp"] = run_timestamp
+        run_summary["run_context"]["code_sha"] = None  # DEPRECATED
+        run_summary["run_context"]["code_dirty"] = None  # DEPRECATED
+        run_summary["run_context"]["code_desc"] = None  # DEPRECATED
+        run_summary["run_context"]["evidence_sha"] = None  # DEPRECATED
         
         # Determine status considering NO_DATA
         signals_count = run_summary.get("metrics", {}).get("signals_count", 0)
@@ -657,16 +639,15 @@ def run_online_gate(
         sign_rate = run_summary.get("metrics", {}).get("est_sign_correct_rate", 1.0)
         fragile_rate = run_summary.get("metrics", {}).get("fragile_rate", 0)
         
-        # v1.12.0: Use compute_status() as SINGLE SOURCE OF TRUTH
-        # This ensures FAIL_* → status=FAIL invariant (taxonomy contract)
+        # v2.0: SHA-free compute_status (code_dirty always False)
         status_result = compute_status(
             signals_count=signals_count,
             total_net_usdc=total_net,
             mae_net_usdc=mae_net,
             sign_rate=sign_rate,
             fragile_rate=fragile_rate,
-            code_dirty=code_dirty if code_dirty else False,
-            require_clean=require_clean if require_clean else False,
+            code_dirty=False,  # v2.0: SHA tracking removed
+            require_clean=False,  # v2.0: No clean worktree requirement
         )
         
         status = status_result["status"]
@@ -765,11 +746,7 @@ def run_online_gate(
             if agg_data.get("quick_stats", {}).get("total_signals", 0) < rolling_window.get("min_signals", 10):
                 agg_reasons.append("WARMUP_MIN_SIGNALS")
         
-        # Get git context
-        git_ctx = get_git_context()
-        head_sha = get_git_head_sha()
-        
-        # v1.9.4: Compute agg lag
+        # v2.0: SHA tracking removed, compute agg lag
         now_utc = datetime.now(timezone.utc)
         agg_updated_at = agg_data.get("updated_at")
         agg_lag_seconds = None
@@ -784,18 +761,17 @@ def run_online_gate(
                 pass
         
         latest_data = {
-            "schema_version": "m4:latest:v1.13",  # v1.12.2: provenance from artifact, not git
+            "schema_version": "m4:latest:v2.0",  # v2.0: SHA-free, timestamp-based provenance
             "updated_at": now_utc.isoformat(),
-            # v1.12.2: Provenance from run artifact, NOT current git state
-            # This preserves original code_sha that generated the scan
-            "latest_run_code_sha": run_summary.get("run_context", {}).get("code_sha", git_ctx["code_sha"]),
-            "attached_evidence_sha": run_summary.get("run_context", {}).get("evidence_sha"),  # from artifact
+            # v2.0: Timestamp-based provenance (SHA removed)
+            "latest_run_timestamp": run_summary.get("run_context", {}).get("run_timestamp", now_utc.isoformat()),
             "run_context": {
-                # v1.12.2: Copy from artifact, fallback to git for legacy runs
-                "code_sha": run_summary.get("run_context", {}).get("code_sha", git_ctx["code_sha"]),
-                "code_dirty": run_summary.get("run_context", {}).get("code_dirty", git_ctx.get("code_dirty", False)),
-                "code_desc": run_summary.get("run_context", {}).get("code_desc", git_ctx.get("code_desc", "")),
-                "evidence_sha": run_summary.get("run_context", {}).get("evidence_sha"),
+                # v2.0: SHA fields deprecated (None), run_timestamp is primary
+                "code_sha": None,  # DEPRECATED
+                "code_dirty": None,  # DEPRECATED
+                "code_desc": None,  # DEPRECATED
+                "evidence_sha": None,  # DEPRECATED
+                "run_timestamp": run_summary.get("run_context", {}).get("run_timestamp", now_utc.isoformat()),
             },
             "latest_mode": "ONLINE" if is_online else "OFFLINE",
             "latest_kind": "INCIDENT" if is_incident else "NORMAL",
@@ -808,8 +784,7 @@ def run_online_gate(
             "agg_updated_at": agg_updated_at,  # v1.9.4: agg last update
             "agg_lag_seconds": agg_lag_seconds,  # v1.9.4: lag detection
             "runs_in_window": agg_data.get("runs_in_window", 0),
-            "runs_by_code_sha": agg_data.get("runs_by_code_sha", {}),  # v1.9.4: breakdown
-            "runs_since_sha": agg_data.get("runs_since_sha", {}),  # v1.9.8: current code view
+            "runs_since_timestamp": agg_data.get("runs_since_timestamp", {}),  # v2.0: timestamp-based
             "in_warmup": agg_data.get("rolling_window", {}).get("in_warmup", True),
             "total_signals_in_window": agg_data.get("quick_stats", {}).get("total_signals", 0),
             # v1.9.8: PRIMARY metrics at top level
@@ -826,13 +801,8 @@ def run_online_gate(
         with open(latest_path, "w") as f:
             json.dump(latest_data, f, indent=2)
         
-        # v1.9.8: NON-CANONICAL warning when code_dirty=true
-        if git_ctx["code_dirty"] is True:
-            print("\n" + "=" * 60)
-            print("WARNING: RUN IS NON-CANONICAL (code_dirty=true)")
-            print("    This run was made with uncommitted changes.")
-            print("    For canonical evidence: commit -> run -> attach_evidence")
-            print("=" * 60 + "\n")
+        # v2.0.0: SHA tracking removed - no more code_dirty warnings
+        # Provenance is now based on run_timestamp alone
         
         print(f"[ROLLING] Mode: {'ONLINE' if is_online else 'OFFLINE'}, Status: {status}")
         print(f"[ROLLING] Updated: {run_summary_path.name}")

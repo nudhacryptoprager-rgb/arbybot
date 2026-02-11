@@ -1,34 +1,33 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
 **Status**: PROVISIONAL (code-level fixes validated offline; online proof pending)  
-**Updated**: 2026-02-10  
-**Gate Version**: v1.12.3  
+**Updated**: 2026-02-11  
+**Gate Version**: v2.0.0  
 **Policy Version**: v1.12.0  
-**Evidence**: `9b07ab7` code-level fixes validated offline; online proof currently blocked by chain/provider mismatch and NO_DATA run; canonical evidence pending clean online rerun + attach_evidence.  
+**Evidence**: Timestamp-based provenance (SHA tracking removed in v2.0)  
 
-## Workflow Split (v1.12.3)
+## Workflow (v2.0.0 - SHA-free)
 
-| Mode | Description | SHA Binding | Evidence Required |
-|------|-------------|-------------|-------------------|
-| **DEV** | Fast iteration cycle | Soft | Rolling trio + runDir |
-| **RELEASE_EVIDENCE** | Public proof | Hard | attach_evidence + SHA linkage |
+| Mode | Description | Provenance |
+|------|-------------|------------|
+| **DEV** | Fast iteration cycle | run_timestamp only |
+| **RELEASE** | Public proof | run_timestamp + rolling artifacts |
 
-**SHA Policy (v1.12.3):**
-> Hard commit-binding disabled (HEAD may differ from run_context.code_sha).  
-> BUT `run_context.code_sha` and `evidence_sha` fields remain **mandatory** in all artifacts for provenance and audit.
+**Provenance Policy (v2.0.0):**
+> SHA tracking completely removed.  
+> `run_context.run_timestamp` is the primary provenance field.  
+> `code_sha`, `evidence_sha` fields are None (deprecated).
 
 **DEV Mode:**
-- No hard HEAD == run_context.code_sha check (allows iteration without commit)
-- run_context.code_sha still recorded (captures which code actually ran)
-- No mandatory attach_evidence on every cycle
+- No SHA tracking or commit binding
+- run_timestamp recorded for each run
 - Minimal bundle: `_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json` + runDir
 - Use for rapid development and debugging
 
-**RELEASE_EVIDENCE Mode:**
-- Clean worktree required (code_dirty=false)
-- `attach_evidence.py --sha <commit>` mandatory after successful run
-- `evidence_sha` in artifacts must match committed code
-- Use for milestone claims in Status_M4.md  
+**RELEASE Mode:**
+- Rolling artifacts with run_timestamp
+- Optional: reference commit SHA in Status_M4.md for documentation purposes
+- Use for milestone claims  
 
 ## Taxonomy Contract (v1.12.0)
 
@@ -124,20 +123,20 @@ Location: `data/runs/_rolling/`
 - [ ] Kill switch disabled
 - [ ] Real TX submitted
 
-## Known Blockers (2026-02-10)
+## Known Blockers (2026-02-11)
 
 1. **Python version**: Pipelines running under Python 3.14, repo requires 3.11
 2. ~~**Chain/provider mismatch**~~: FIXED - `.env` NETWORK=mantle corrected to arbitrum
 3. ~~**Online scan unusable**~~: FIXED - quotes=10, dexes=2, spreads=2 achieved
-4. **Rolling artifacts need reset**: existing artifacts have v1.11 schema/policy_version
-5. **Provenance fixes in v1.12.2**: _latest and runs_since_sha now use artifact context, not git
-6. **M4 online DoD open**: Rolling SHA now `30f9254`, but `agg_status=FAIL`, `data_run_rate=0.20<0.30`, `low_sample_rate=0.75>0.50`, diversity below thresholds (`pairs=5<10`, `routes=2<4`)
+4. ~~**Rolling artifacts need reset**~~: FIXED - v2.0 schema with timestamp-based provenance
+5. ~~**Provenance fixes in v1.12.2**~~: REPLACED by v2.0.0 timestamp provenance
+6. **M4 online DoD open**: Aggregator quality thresholds not yet met (`data_run_rate`, `low_sample_rate`, diversity)
 
-### v1.12.2 Provenance Fixes
-- `_latest.latest_run_code_sha` now sourced from run artifact, not live git context
-- `_latest.run_context.*` copied from run artifact, with fallback for legacy runs
-- `runs_since_sha` computed against artifact SHA, with optional `target_sha` override
-- Added `validate_chain_rpc_consistency()` to detect chain_id/RPC host mismatches
+### v2.0.0 Provenance Model
+- SHA tracking completely removed (`code_sha`, `evidence_sha` = None)
+- `run_timestamp` (ISO-8601) is the primary provenance field
+- Rolling artifacts use `runs_since_timestamp` instead of `runs_since_sha`
+- `attach_evidence.py` script deleted (no longer needed)
 
 ### Recovery Steps
 ```bash
@@ -147,8 +146,8 @@ py -3.11 -m venv .venv && .\.venv\Scripts\Activate.ps1
 # 1. Verify chain/RPC consistency before running online
 python -c "from core.rpc_urls import validate_chain_rpc_consistency; print(validate_chain_rpc_consistency(42161, 'arb-mainnet.g.alchemy.com'))"
 
-# 2. Reset rolling window (clean worktree)
-git stash && python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window
+# 2. Reset rolling window
+python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window
 
 # 3. Re-run online M5_0 until quotes_fetched > 0
 python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
@@ -156,11 +155,8 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 # 4. Run M4 profit gate on valid runDir
 python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling
 
-# 5. Attach evidence SHA
-python scripts/attach_evidence.py --sha <new_commit_sha>
-
-# 6. Validate rolling artifacts
-Get-Content data/runs/_rolling/m4_stability_agg.json | Select-String "schema_version|policy_version|agg_status"
+# 5. Validate rolling artifacts
+Get-Content data/runs/_rolling/m4_stability_agg.json | Select-String "schema_version|policy_version|agg_status|run_timestamp"
 ```
 
 ## Documentation

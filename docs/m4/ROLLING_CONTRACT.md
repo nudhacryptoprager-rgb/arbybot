@@ -6,25 +6,31 @@ Schema and data contract for M4 execution gate rolling artifacts.
 
 | File | Schema | Version | Description |
 |------|--------|---------|-------------|
-| `_latest.json` | `m4:latest` | v1.6 | Latest run pointer |
-| `run_summary_latest.json` | `run:summary` | v1.6 | Full run summary |
-| `m4_stability_agg.json` | `m4:stability_agg` | v1.5 | Rolling aggregator |
+| `_latest.json` | `m4:latest` | v2.0 | Latest run pointer (timestamp provenance) |
+| `run_summary_latest.json` | `run:summary` | v2.0 | Full run summary |
+| `m4_stability_agg.json` | `m4:stability_agg` | v2.0 | Rolling aggregator |
 
-## _latest.json (m4:latest:v1.6)
+## Provenance Model (v2.0.0)
+
+SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
+
+- `run_context.run_timestamp` (ISO-8601) is the primary provenance field
+- `code_sha`, `evidence_sha` are `null` (deprecated, kept for schema compatibility)
+- `runs_since_timestamp` replaces `runs_since_sha` in aggregator
+
+## _latest.json (m4:latest:v2.0)
 
 ```json
 {
-  "schema_version": "m4:latest:v1.6",
+  "schema_version": "m4:latest:v2.0",
   "updated_at": "ISO8601",
-  "latest_run_code_sha": "abc1234",       // SHA of code that ran scan
-  "attached_evidence_sha": "def5678",     // SHA attached post-commit (null if not attached)
-  "repo_head_sha_at_attach": "def5678",   // HEAD when attach_evidence ran
-  "evidence_attached_at": "ISO8601",      // When evidence was attached
+  "latest_run_timestamp": "2026-02-11T10:05:45Z",  // Primary provenance
   "run_context": {
-    "code_sha": "abc1234",                // Same as latest_run_code_sha
-    "code_dirty": true,                   // True if uncommitted changes at run time
-    "code_desc": "abc1234-dirty",         // Human-readable description
-    "evidence_sha": "def5678"             // Same as attached_evidence_sha
+    "run_timestamp": "2026-02-11T10:05:45Z",  // Primary provenance
+    "code_sha": null,                         // v2.0: deprecated
+    "code_dirty": null,                       // v2.0: deprecated
+    "code_desc": null,                        // v2.0: deprecated
+    "evidence_sha": null                      // v2.0: deprecated
   },
   "latest_mode": "ONLINE",                // ONLINE or OFFLINE
   "latest_kind": "NORMAL",                // NORMAL or INCIDENT
@@ -43,24 +49,19 @@ Schema and data contract for M4 execution gate rolling artifacts.
 }
 ```
 
-## run_summary (run:summary:v1.6)
+## run_summary (run:summary:v2.0)
 
 ```json
 {
-  "schema_version": "run:summary:v1.6",
+  "schema_version": "run:summary:v2.0",
   "timestamp": "ISO8601",
-  "source_sha": "abc1234",               // DEPRECATED: alias to run_context.code_sha
   "run_id": "manual_run_20260209_120000",
   "run_context": {
-    "code_sha": "abc1234",
-    "code_dirty": false,
-    "code_desc": "abc1234-clean",
-    "evidence_sha": null
-  },
-  "evidence": {
-    "ok": true,
-    "issues": [],
-    "current_sha": "abc1234"
+    "run_timestamp": "2026-02-09T12:00:00Z",  // Primary provenance
+    "code_sha": null,                         // v2.0: deprecated
+    "code_dirty": null,                       // v2.0: deprecated
+    "code_desc": null,                        // v2.0: deprecated
+    "evidence_sha": null                      // v2.0: deprecated
   },
   "metrics": {
     "signals_count": 5,
@@ -76,17 +77,19 @@ Schema and data contract for M4 execution gate rolling artifacts.
 }
 ```
 
-## m4_stability_agg (m4:stability_agg:v1.5)
+## m4_stability_agg (m4:stability_agg:v2.0)
 
 ```json
 {
-  "schema_version": "m4:stability_agg:v1.5",
+  "schema_version": "m4:stability_agg:v2.0",
   "created_at": "ISO8601",
+  "runs_since_timestamp": "2026-02-09T12:00:00Z",  // v2.0: replaces runs_since_sha
   "runs": [
     {
       "run_id": "...",
       "timestamp": "ISO8601",
-      "code_sha": "abc1234",
+      "run_timestamp": "2026-02-09T12:00:00Z",  // Primary provenance
+      "code_sha": null,                         // v2.0: deprecated
       "net_usdc": 5.00,
       "mae": 0.25,
       "sign_rate": 1.0,
@@ -113,24 +116,26 @@ Schema and data contract for M4 execution gate rolling artifacts.
 }
 ```
 
-## Deprecations
+## Deprecations (v2.0)
 
-### source_sha (v1.9.3)
+### SHA tracking (removed in v2.0)
 
-The `source_sha` field in `run_summary` is **deprecated**.
+All SHA-based provenance fields are deprecated:
+- `source_sha` - removed
+- `code_sha` - null, kept for schema compatibility
+- `code_dirty` - null
+- `code_desc` - null
+- `evidence_sha` - null
+- `runs_since_sha` - replaced by `runs_since_timestamp`
 
-- Previously: Used to match artifact provenance with git HEAD
-- Issue: Created confusing SHA_MISMATCH errors
-- Now: `source_sha` is always an alias to `run_context.code_sha`
-- Canonical: Use `run_context.code_sha` (run time) and `evidence_sha` (post-commit)
+Use `run_timestamp` as the canonical provenance field.
 
-## Evidence Workflow
+## Provenance Workflow (v2.0)
 
 ```
-1. Run scan              → code_sha = HEAD, code_dirty = true/false
-2. Commit changes        → git commit
-3. Attach evidence       → python scripts/attach_evidence.py
-4. Verify                → evidence_sha != null, evidence.ok = true
+1. Run scan              → run_timestamp recorded
+2. Rolling update        → runs_since_timestamp tracks window
+3. Verify                → Check run_timestamp in artifacts
 ```
 
 For **PROVEN** status, require:

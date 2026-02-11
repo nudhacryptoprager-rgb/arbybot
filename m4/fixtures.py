@@ -937,12 +937,13 @@ def generate_m4_from_online_inputs(
         "policy_version": POLICY_VERSION,  # v1.9.9: top-level provenance
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "run_id": run_id,
-        # v1.9.0: run_context with evidence data (source_sha REMOVED - use run_context.code_sha)
+        # v2.0.0: run_context with timestamp-based provenance (SHA tracking removed)
         "run_context": {
-            "code_sha": git_ctx["code_sha"],
-            "code_dirty": git_ctx["code_dirty"] if git_ctx["code_dirty"] is not None else False,
-            "code_desc": git_ctx["code_desc"],
-            "evidence_sha": None,  # Attached by attach_evidence.py post-commit
+            "code_sha": None,  # v2.0: deprecated
+            "code_dirty": None,  # v2.0: deprecated
+            "code_desc": None,  # v2.0: deprecated
+            "evidence_sha": None,  # v2.0: deprecated
+            "run_timestamp": datetime.utcnow().isoformat() + "Z",
         },
         "inputs": {
             "run_mode": source_run_mode,

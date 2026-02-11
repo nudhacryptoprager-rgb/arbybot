@@ -49,21 +49,20 @@ Rolling artifacts **must be overwritten**, not multiplied per run.
 
 ---
 
-## 2) Evidence / SHA discipline (required)
-Runtime runs often happen before a commit. Therefore:
-- **run_context.code_sha** may differ from the current repo HEAD.
-- The user will attach an evidence SHA after committing.
+## 2) Provenance discipline (v2.0.0)
+As of v2.0.0, SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
 
-You MUST support this workflow:
+You MUST understand this workflow:
 - A run produces rolling artifacts with:
-  - `run_context.code_sha`
-  - `run_context.code_dirty`
-  - `run_context.code_desc`
-  - `run_context.evidence_sha` (default null)
-- After commit, the user runs `scripts/attach_evidence.py --sha <shortSHA>`
-  which sets `run_context.evidence_sha` and updates `docs/status/Status_M4.md` evidence line.
+  - `run_context.run_timestamp` (ISO-8601, primary provenance)
+  - `run_context.code_sha` = None (deprecated)
+  - `run_context.code_dirty` = None (deprecated)
+  - `run_context.code_desc` = None (deprecated)
+  - `run_context.evidence_sha` = None (deprecated)
+- Rolling aggregator uses `runs_since_timestamp` instead of `runs_since_sha`
+- No `attach_evidence.py` script (deleted in v2.0.0)
 
-You MUST NOT assume `source_sha == HEAD_SHA`.
+The `run_timestamp` is the canonical identifier for provenance.
 
 ---
 
