@@ -1,140 +1,106 @@
 """
-M4 Evidence Module
+M4 Evidence Module (SHA-free v2.0)
 
-Git context detection and evidence attachment for artifact provenance.
+Timestamp-based artifact provenance. SHA tracking removed.
 
 Key concepts:
-- code_sha: SHA of code that ran the scan (captured at run time)
-- code_dirty: True if uncommitted changes existed at run time
-- evidence_sha: SHA of commit that documents this run (attached post-commit)
+- run_timestamp: ISO timestamp when scan started (primary identifier)
+- All SHA fields return None for backward compatibility
 
 Usage:
-    from m4.evidence import get_git_context, get_git_head_sha
+    from m4.evidence import get_git_context, get_run_timestamp
     
     context = get_git_context()
-    # {'code_sha': 'abc1234', 'code_dirty': True, 'code_desc': 'abc1234-dirty'}
+    # {'code_sha': None, 'code_dirty': None, 'code_desc': None, 'run_timestamp': '2026-02-11T...'}
 """
 
-import subprocess
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Optional
 
-# Repository root - assumes this file is at m4/evidence.py
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
-
-def get_git_head_sha() -> str:
+def get_run_timestamp() -> str:
     """
-    Get current git HEAD SHA (short form).
+    Get current UTC timestamp for artifact provenance.
     
     Returns:
-        7-char SHA string, or 'unknown' if git not available.
+        ISO-8601 timestamp string with Z suffix.
     """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5, cwd=REPO_ROOT
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def get_git_head_sha() -> Optional[str]:
+    """
+    DEPRECATED: SHA tracking removed.
+    
+    Returns:
+        None (SHA tracking disabled)
+    """
+    return None
 
 
 def get_git_context() -> dict:
     """
-    Get full git context for run_context field.
+    Get run context for artifact provenance.
+    
+    SHA tracking removed - returns timestamp-based context.
+    SHA fields kept as None for backward compatibility.
     
     Returns:
         Dict with:
-            code_sha: str - current HEAD SHA (short)
-            code_dirty: bool|None - True if uncommitted changes, None if unavailable
-            code_desc: str - "{sha}-dirty" or "{sha}-clean" or "unknown"
+            code_sha: None (deprecated)
+            code_dirty: None (deprecated)
+            code_desc: None (deprecated)
+            run_timestamp: str - ISO timestamp of this call
     """
-    context = {
-        "code_sha": "unknown",
+    return {
+        "code_sha": None,
         "code_dirty": None,
-        "code_desc": "unknown",
+        "code_desc": None,
+        "run_timestamp": get_run_timestamp(),
     }
-    try:
-        # Get SHA
-        sha_result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5, cwd=REPO_ROOT
-        )
-        if sha_result.returncode == 0:
-            sha = sha_result.stdout.strip()
-            context["code_sha"] = sha
-            
-            # Check dirty status
-            dirty_result = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True, text=True, timeout=5, cwd=REPO_ROOT
-            )
-            if dirty_result.returncode == 0:
-                is_dirty = len(dirty_result.stdout.strip()) > 0
-                context["code_dirty"] = is_dirty
-                context["code_desc"] = f"{sha}-dirty" if is_dirty else f"{sha}-clean"
-            else:
-                context["code_desc"] = sha
-    except Exception:
-        pass
-    
-    return context
 
 
-def get_git_sha() -> str:
+def get_git_sha() -> Optional[str]:
     """
-    Get short git SHA for artifact provenance.
-    Alias for get_git_head_sha() for backward compatibility.
+    DEPRECATED: SHA tracking removed.
+    Kept for backward compatibility.
     """
-    return get_git_head_sha()
+    return None
 
 
-def get_source_sha() -> str:
+def get_source_sha() -> Optional[str]:
     """
-    DEPRECATED: Use get_git_context()['code_sha'] instead.
-    
-    Get source SHA for artifact provenance.
-    Returns 'unknown' if git unavailable.
+    DEPRECATED: SHA tracking removed.
+    Kept for backward compatibility.
     """
-    return get_git_head_sha()
+    return None
 
 
 def is_evidence_ok(issues: list) -> bool:
     """
-    Determine if evidence is OK based on issues list.
+    Evidence is always OK now (no SHA validation needed).
     
-    Evidence is NOT OK if:
-    - DIRTY_WORKTREE_PRECOMMIT is present
-    - Any other critical issue is present
+    Kept for backward compatibility with gates.
     
     Args:
-        issues: List of issue strings
+        issues: List of issue strings (ignored)
         
     Returns:
-        True if evidence is acceptable for PROVEN status
+        Always True
     """
-    critical_issues = {"DIRTY_WORKTREE_PRECOMMIT"}
-    return not any(issue in critical_issues for issue in issues)
+    return True
 
 
 def validate_evidence(git_ctx: dict) -> tuple:
     """
-    Validate evidence and return (ok, issues) tuple.
+    Validate evidence - always passes now (no SHA validation).
+    
+    Kept for backward compatibility.
     
     Args:
-        git_ctx: Dict from get_git_context()
+        git_ctx: Dict from get_git_context() (ignored)
         
     Returns:
-        (ok: bool, issues: list[str])
+        (True, [])
     """
-    issues = []
-    
-    # Check dirty worktree - weaker evidence
-    if git_ctx.get("code_dirty") is True:
-        issues.append("DIRTY_WORKTREE_PRECOMMIT")
-    
-    ok = is_evidence_ok(issues)
-    return ok, issues
+    return True, []

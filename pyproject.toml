@@ -29,9 +29,7 @@ include = [
     "dex",
     "cex",
     "config",
-    "utils",
     "tests",
-    "todo_app",
 ]
 
 [project.optional-dependencies]

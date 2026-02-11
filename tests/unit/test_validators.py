@@ -6,7 +6,7 @@ Tests for validation utilities.
 import unittest
 from decimal import Decimal
 
-from utils.validators import (
+from core.validators import (
     is_valid_address,
     is_valid_money_string,
     validate_no_float,

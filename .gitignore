@@ -105,7 +105,5 @@ Thumbs.db
 !.github/pull_request_template.md
 !.github/workflows/
 !.github/workflows/ci.yml
-!tools/
-!tools/new_run.ps1
 !docs/WORKFLOW.md
 

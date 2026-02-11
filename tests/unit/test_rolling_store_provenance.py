@@ -2,32 +2,34 @@
 """
 Tests for rolling_store provenance logic.
 
-v1.12.3: SHA provenance from artifact context, not git context.
+v2.0.0: SHA provenance REMOVED - timestamp-based tracking only.
 
 Contract:
-- run_context.code_sha and evidence_sha are REQUIRED in artifacts (for audit)
-- Hard commit-binding DISABLED (HEAD != run_context.code_sha is OK)
-- _compute_quick_stats uses artifact SHA, not live git state
+- run_context.code_sha/evidence_sha are None (deprecated)
+- run_context.run_timestamp is the primary provenance field
+- _compute_quick_stats works without SHA
 """
 
 import pytest
 
 
 class TestRollingSHAProvenance:
-    """v1.12.3: Test rolling_store provenance logic."""
+    """v2.0.0: Test rolling_store provenance logic (SHA-free)."""
     
-    def test_compute_quick_stats_no_args_uses_git_fallback(self):
-        """_compute_quick_stats with no run_summary/target_sha falls back to git."""
+    def test_compute_quick_stats_no_args_works(self):
+        """_compute_quick_stats with no run_summary/target_sha works."""
         from m4.rolling_store import _compute_quick_stats
         
         result = _compute_quick_stats({"runs": []})
         
-        # Should not crash (was NameError before fix)
+        # Should not crash
         assert "runs_since_sha" in result
         assert "sha" in result["runs_since_sha"]
+        # SHA is now None (tracking removed)
+        assert result["runs_since_sha"]["sha"] is None
     
     def test_compute_quick_stats_with_target_sha(self):
-        """_compute_quick_stats with explicit target_sha uses it."""
+        """_compute_quick_stats with explicit target_sha uses it (backward compat)."""
         from m4.rolling_store import _compute_quick_stats
         
         result = _compute_quick_stats(
@@ -35,11 +37,12 @@ class TestRollingSHAProvenance:
             target_sha="abc123"
         )
         
+        # Still respects explicit target_sha for backward compat
         assert result["runs_since_sha"]["sha"] == "abc123"
         assert result["runs_since_sha"]["runs_count"] == 1
     
     def test_compute_quick_stats_with_run_summary_context(self):
-        """_compute_quick_stats extracts SHA from run_summary.run_context."""
+        """_compute_quick_stats extracts SHA from run_summary.run_context (backward compat)."""
         from m4.rolling_store import _compute_quick_stats
         
         run_summary = {"run_context": {"code_sha": "def456"}}
@@ -48,6 +51,7 @@ class TestRollingSHAProvenance:
             run_summary=run_summary
         )
         
+        # Uses artifact SHA if provided
         assert result["runs_since_sha"]["sha"] == "def456"
         assert result["runs_since_sha"]["runs_count"] == 1
     
@@ -66,23 +70,20 @@ class TestRollingSHAProvenance:
         assert result["runs_since_sha"]["sha"] == "explicit_target"
         assert result["runs_since_sha"]["runs_count"] == 1
     
-    def test_run_context_sha_required_in_artifact(self):
-        """Verify run_context.code_sha is present in run summary structure."""
-        # This is a structural contract test - run_context.code_sha must exist
-        # for provenance even when hard binding is disabled
+    def test_run_context_sha_fields_deprecated(self):
+        """Verify run_context SHA fields are deprecated but present."""
+        from m4.evidence import get_git_context
         
-        required_fields = ["code_sha", "code_dirty", "code_desc"]
+        ctx = get_git_context()
         
-        # Minimal valid run_context structure
-        valid_run_context = {
-            "code_sha": "abc1234",
-            "code_dirty": False,
-            "code_desc": "abc1234",
-            "evidence_sha": None,  # null until attach_evidence
-        }
-        
-        for field in required_fields:
-            assert field in valid_run_context, f"run_context must have {field}"
+        # SHA fields exist but are None
+        assert "code_sha" in ctx
+        assert ctx["code_sha"] is None
+        assert "code_dirty" in ctx  
+        assert ctx["code_dirty"] is None
+        # run_timestamp is the new primary field
+        assert "run_timestamp" in ctx
+        assert ctx["run_timestamp"] is not None
 
 
 class TestEmitToAggregatorProvenance:
@@ -206,13 +207,13 @@ class TestRollingIntegrationContract:
 
 
 class TestSHAPriority:
-    """Step 9: Test SHA resolution priority."""
+    """Step 9: Test SHA resolution priority (v2.0 - SHA deprecated)."""
     
-    def test_sha_priority_target_over_run_summary_over_git(self):
-        """SHA priority: target_sha > run_context.code_sha > git fallback."""
+    def test_sha_priority_backward_compat(self):
+        """SHA priority still works for backward compat when explicitly provided."""
         from m4.rolling_store import _compute_quick_stats
         
-        # Priority 1: target_sha wins when provided
+        # Priority 1: target_sha wins when provided (backward compat)
         run_summary = {"run_context": {"code_sha": "from_artifact"}}
         result = _compute_quick_stats(
             {"runs": [{"code_sha": "target", "run_kind": "NORMAL", "signals_count": 5}]},
@@ -228,21 +229,21 @@ class TestSHAPriority:
         )
         assert result2["runs_since_sha"]["sha"] == "artifact", "run_context.code_sha should be used"
         
-        # Priority 3: git fallback when nothing else
+        # Priority 3: git fallback now returns None (SHA tracking removed)
         result3 = _compute_quick_stats({"runs": []})
-        assert result3["runs_since_sha"]["sha"] is not None, "should fall back to git SHA"
+        assert result3["runs_since_sha"]["sha"] is None, "git SHA fallback removed, should be None"
     
-    def test_evidence_sha_separate_from_code_sha(self):
-        """evidence_sha is separate tracking, not used for provenance filtering."""
-        # evidence_sha is for audit trail, not for runs_since_sha logic
-        run_context = {
-            "code_sha": "code_abc",
-            "code_dirty": False,
-            "code_desc": "code_abc",
-            "evidence_sha": "evidence_xyz",  # Different from code_sha
-        }
+    def test_timestamp_is_now_primary_provenance(self):
+        """run_timestamp is now the primary provenance field."""
+        from m4.evidence import get_git_context
         
-        # Both should be present
-        assert run_context["code_sha"] != run_context["evidence_sha"]
-        # evidence_sha tracks the commit where evidence was attached
-        # code_sha tracks the commit where the run was made
+        ctx = get_git_context()
+        
+        # SHA fields are deprecated (None)
+        assert ctx["code_sha"] is None
+        assert ctx["code_dirty"] is None
+        
+        # Timestamp is the new primary
+        assert "run_timestamp" in ctx
+        assert ctx["run_timestamp"] is not None
+        assert "T" in ctx["run_timestamp"]  # ISO format
