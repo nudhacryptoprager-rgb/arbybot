@@ -127,11 +127,11 @@ Location: `data/runs/_rolling/`
 ## Known Blockers (2026-02-10)
 
 1. **Python version**: Pipelines running under Python 3.14, repo requires 3.11
-2. **Chain/provider mismatch**: chain_id=42161 (Arbitrum) with Mantle RPC host detected in last online run
-3. **Online scan unusable**: quotes_fetched=0, dexes_active=0 in last run
+2. ~~**Chain/provider mismatch**~~: FIXED - `.env` NETWORK=mantle corrected to arbitrum
+3. ~~**Online scan unusable**~~: FIXED - quotes=10, dexes=2, spreads=2 achieved
 4. **Rolling artifacts need reset**: existing artifacts have v1.11 schema/policy_version
 5. **Provenance fixes in v1.12.2**: _latest and runs_since_sha now use artifact context, not git
-6. **Rolling artifacts stale**: `latest_run_code_sha`/`runs_since_sha.sha` still at `6661379`, not HEAD; M4 online DoD remains open until fresh online run + M4 gate PASS on that runDir
+6. **M4 online DoD open**: Rolling SHA now `30f9254`, but `agg_status=FAIL`, `data_run_rate=0.20<0.30`, `low_sample_rate=0.75>0.50`, diversity below thresholds (`pairs=5<10`, `routes=2<4`)
 
 ### v1.12.2 Provenance Fixes
 - `_latest.latest_run_code_sha` now sourced from run artifact, not live git context
