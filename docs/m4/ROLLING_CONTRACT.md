@@ -49,15 +49,17 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
 }
 ```
 
-## run_summary (run:summary:v2.0)
+## run_summary (m4:run_summary:v2.0)
 
 ```json
 {
-  "schema_version": "run:summary:v2.0",
+  "schema_version": "m4:run_summary:v2.0",
+  "policy_version": "2.0.1",
   "timestamp": "ISO8601",
   "run_id": "manual_run_20260209_120000",
   "run_context": {
     "run_timestamp": "2026-02-09T12:00:00Z",  // Primary provenance
+    "code_identity": "ts:2026-02-09T12:00:00Z",  // v2.0.1: deterministic code ref
     "code_sha": null,                         // v2.0: deprecated
     "code_dirty": null,                       // v2.0: deprecated
     "code_desc": null,                        // v2.0: deprecated
@@ -82,13 +84,29 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
 ```json
 {
   "schema_version": "m4:stability_agg:v2.0",
+  "policy_version": "2.0.1",
   "created_at": "ISO8601",
-  "runs_since_timestamp": "2026-02-09T12:00:00Z",  // v2.0: replaces runs_since_sha
+  "runs_since_timestamp": {                      // v2.0: object with metrics (replaces runs_since_sha)
+    "sha": null,
+    "runs_count": 10,
+    "data_runs_count": 10,
+    "data_signals_total": 37,
+    "no_data_count": 0,
+    "low_sample_count": 0,
+    "infra_fail_count": 0,
+    "pass_count": 10,
+    "fail_count": 0,
+    "data_run_rate": 1.0,
+    "effective_pass_rate": 1.0,
+    "fail_rate": 0.0,
+    "status": "OK"
+  },
   "runs": [
     {
       "run_id": "...",
       "timestamp": "ISO8601",
       "run_timestamp": "2026-02-09T12:00:00Z",  // Primary provenance
+      "code_identity": "ts:2026-02-09T12:00:00Z",  // v2.0.1: deterministic code ref
       "code_sha": null,                         // v2.0: deprecated
       "net_usdc": 5.00,
       "mae": 0.25,
@@ -96,9 +114,13 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
       "reasons": [],
       "fragile_rate": 0.10,
       "signals_count": 3,
-      "run_status": "PASS"
+      "run_status": "PASS",
+      "is_data_run": true
     }
   ],
+  "runs_by_date": {                            // v2.0: replaces runs_by_code_sha
+    "2026-02-09": 10
+  },
   "rolling_window": {
     "max": 200,
     "current": 10,

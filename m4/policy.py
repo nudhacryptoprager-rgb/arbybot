@@ -196,7 +196,8 @@ def compute_status(
 # ============================================================
 
 # Policy version for artifact provenance
-POLICY_VERSION = "1.12.0"
+# v2.0.1: MIN_SIGNALS_FOR_PASS=3, MIN_SAMPLE_SIZE=3, MIN_SIGNALS_WARN=2
+POLICY_VERSION = "2.0.1"
 
 class Thresholds:
     """

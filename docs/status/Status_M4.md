@@ -1,10 +1,39 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
-**Status**: PROVISIONAL (code-level fixes validated offline; online proof pending)  
-**Updated**: 2026-02-11  
+**Status**: PROVISIONAL (M4.1 simulate-only PROVEN; M4 online profit DoD NOT PROVEN)  
+**Updated**: 2026-02-12  
 **Gate Version**: v2.0.0  
-**Policy Version**: v1.12.0  
+**Policy Version**: v2.0.1  
 **Evidence**: Timestamp-based provenance (SHA tracking removed in v2.0)  
+
+## Core Truth (from Roadmap.md)
+
+> **M4 execution gate є "core truth" для релізу.**
+
+| DoD Level | Criterion | Evidence Required | Status |
+|-----------|-----------|-------------------|--------|
+| **M4.1 Simulate-only** | Code/schema/invariants | FIXTURE_OFFLINE or REAL with simulate_only=true | ✅ PROVEN |
+| **M4 Online Profit (core truth)** | Real profitability | `run_mode=REAL`, N=5 runs with `total_net_usdc > 0` | ❌ NOT PROVEN |
+
+**M4-profit по суті (справжній DoD, цитата з Roadmap):**
+```
+N = 5 consecutive online runs where:
+  - run_mode = "REAL" (not FIXTURE_OFFLINE)
+  - pinned_block = real block (not 429900000)
+  - total_net_usdc > 0
+  - all from same runDir with consistent timestamps
+```
+
+> **Поки online DoD не виконано — "M4 profit" є математичною оцінкою, не доказом виконання.**
+
+## Docs Truth Map
+
+| Document | Purpose | Source of Truth For |
+|----------|---------|---------------------|
+| `Roadmap.md` | Master plan, DoD definitions | Release criteria, feature priorities |
+| `docs/status/Status_M4.md` | M4 milestone status | Current state, blockers, policy version |
+| `docs/m4/ROLLING_CONTRACT.md` | Rolling artifact schemas | JSON structure, field semantics |
+| `data/runs/_rolling/*` | Operational artifacts | Runtime metrics, provenance |
 
 ## Workflow (v2.0.0 - SHA-free)
 
@@ -63,7 +92,7 @@
 
 | Metric | Target | FAIL | Description |
 |--------|--------|------|-------------|
-| `data_run_rate` | ≥ 0.50 | < 0.30 | % NORMAL runs with ≥5 signals |
+| `data_run_rate` | ≥ 0.50 | < 0.30 | % NORMAL runs with ≥MIN_SIGNALS_FOR_PASS signals (v2.0.1: 3) |
 | `fail_rate` | ≤ 0.10 | > 0.15 | % FAIL runs (v1.12.0 bites) |
 | `fragile_rate_p90` | ≤ 0.30 | > 0.50 | p90 fragile rate |
 | `unique_pairs` | ≥ 10 | < 3 | Pair diversity |
@@ -81,6 +110,25 @@
 | `AGG_FAIL_RATE_FAIL` | 0.15 | v1.12.0: fail_rate > 15% → FAIL |
 | `DIVERSITY_PAIRS_MIN` | 3 | v1.12.0: < 3 pairs → FAIL |
 | `DIVERSITY_ROUTES_MIN` | 2 | v1.12.0: < 2 routes → FAIL |
+
+### Policy Version Note (v2.0.1, 2026-02-12)
+**BREAKING CHANGE**: З 2026-02-12 (v2.0.1) `MIN_SIGNALS_FOR_PASS=3` (було 5). Це означає:
+- KPI `data_run_rate` та `low_sample_rate` рахуються від нового порогу
+- Попередні значення (до v2.0.1) **несумісні** без перерахунку
+
+### Acceptable States (agg_status)
+
+| agg_status | DEV | RELEASE | Actions |
+|------------|-----|---------|---------|
+| `PASS` | ✅ OK | ✅ OK | Continue to next milestone |
+| `WARN_QUALITY` (only DIVERSITY_*) | ✅ OK | ⚠️ TEMP OK | Expand config to reach diversity targets |
+| `WARN_QUALITY` (DATA_RUN_RATE/LOW_SAMPLE) | ❌ FAIL | ❌ FAIL | Fix signal generation or policy |
+| `FAIL` | ❌ FAIL | ❌ FAIL | Fix underlying issues |
+| `PASS_WARMUP` | ✅ OK | ❌ WAIT | Accumulate ≥10 runs |
+
+**TEMPORARY RULE (expires when targets met):**
+> `WARN_QUALITY` з тільки `DIVERSITY_PAIRS_LOW` та/або `DIVERSITY_ROUTES_LOW` приймається як PASS-еквівалент для M4.1 simulate-only DoD.
+> **Exit criteria:** досягти `unique_pairs >= 10` і `unique_routes >= 4`, або явно затвердити нижчі targets у Roadmap.
 
 ## Canonical Commands
 
@@ -118,8 +166,15 @@ Location: `data/runs/_rolling/`
 - [x] Simulator calculates PnL
 - [x] Rolling artifacts persist
 - [x] Evidence workflow works
+- [x] agg_status = WARN_QUALITY (only DIVERSITY_*) accepted per Acceptable States table
 
-### M4.2: Real Execution -- NOT PROVEN
+### M4 Online Profit (core truth) — ❌ NOT PROVEN
+- [ ] N=5 consecutive online runs with run_mode=REAL
+- [ ] All runs have total_net_usdc > 0
+- [ ] All runs use real pinned_block (not 429900000)
+- [ ] agg_status = PASS (no WARN_QUALITY)
+
+### M4.2: Real Execution — ❌ NOT PROVEN
 - [ ] Kill switch disabled
 - [ ] Real TX submitted
 
@@ -130,8 +185,9 @@ Location: `data/runs/_rolling/`
 3. ~~**Online scan unusable**~~: FIXED - quotes=10, dexes=2, spreads=2 achieved
 4. ~~**Rolling artifacts need reset**~~: FIXED - v2.0 schema with timestamp-based provenance
 5. ~~**Provenance fixes in v1.12.2**~~: REPLACED by v2.0.0 timestamp provenance
-6. **M4 online DoD open**: Aggregator quality thresholds not yet met (`data_run_rate`, `low_sample_rate`, diversity)
-7. **Quality thresholds (2026-02-12)**: Після reset window: `runs_count=10`, але `data_runs_count=0`, `data_run_rate=0.0`, `unique_pairs=3`, `unique_routes=2` — потрібне розширення `config/real_minimal.yaml` для виконання quality thresholds (signals_count>=5 per run)
+6. ~~**M4.1 quality thresholds**~~: RESOLVED (v2.0.1) - data_run_rate=1.0, low_sample_rate=0.0 with MIN_SIGNALS_FOR_PASS=3
+7. **M4 online profit DoD**: NOT PROVEN - need N=5 real runs with total_net_usdc>0 per Roadmap.md
+8. **DIVERSITY targets**: unique_pairs=4 (<10 target), unique_routes=2 (<4 target) - causes WARN_QUALITY
 
 ### v2.0.0 Provenance Model
 - SHA tracking completely removed (`code_sha`, `evidence_sha` = None)
