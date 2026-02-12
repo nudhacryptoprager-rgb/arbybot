@@ -18,7 +18,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
 
 # Ensure repository root is on sys.path
@@ -321,7 +321,7 @@ def main() -> None:
         write_dir = run_dir / "reports"
         write_dir.mkdir(parents=True, exist_ok=True)
         # Use date part for filename
-        gen_at = report.get("generated_at") or datetime.utcnow().isoformat()
+        gen_at = report.get("generated_at") or datetime.now(timezone.utc).isoformat()
         safe_ts = gen_at.replace(":", "-")
         out_path = write_dir / f"daily_report_{safe_ts}.json"
         out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf8")

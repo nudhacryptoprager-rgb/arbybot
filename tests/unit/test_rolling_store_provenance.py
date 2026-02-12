@@ -229,3 +229,75 @@ class TestTimestampProvenance:
         result = _compute_quick_stats({"runs": []})
         
         assert result.get("schema_version") == "m4:stability_agg:v2.0"
+
+
+class TestV20ContractEnforcement:
+    """v2.0 contract enforcement tests."""
+    
+    def test_no_runs_by_code_sha_after_v2(self):
+        """v2.0: runs_by_code_sha should not exist, replaced by runs_by_date."""
+        from m4.rolling_store import emit_to_aggregator_light
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agg_path = Path(tmpdir) / "test_agg.json"
+            
+            run_summary = {
+                "run_id": "test_run_v2",
+                "timestamp": "2026-02-11T12:00:00Z",
+                "run_context": {
+                    "run_timestamp": "2026-02-11T12:00:00Z",
+                    "code_sha": None,
+                },
+                "run_kind": "NORMAL",
+                "metrics": {"signals_count": 5, "total_net_usdc": 1.0, "mae_net_usdc": 0.1, "fragile_rate": 0.1},
+                "status": "PASS",
+                "reasons": [],
+            }
+            
+            emit_to_aggregator_light(run_summary, agg_path)
+            
+            import json
+            agg = json.loads(agg_path.read_text())
+            
+            # runs_by_code_sha should NOT exist
+            assert "runs_by_code_sha" not in agg
+            # runs_by_date SHOULD exist
+            assert "runs_by_date" in agg
+            assert "2026-02-11" in agg["runs_by_date"]
+    
+    def test_run_timestamp_always_filled(self):
+        """run_timestamp must always be filled in run entries."""
+        from m4.rolling_store import emit_to_aggregator_light
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agg_path = Path(tmpdir) / "test_agg.json"
+            
+            run_summary = {
+                "run_id": "test_run_ts",
+                "timestamp": "2026-02-11T12:00:00Z",
+                "run_context": {
+                    "run_timestamp": "2026-02-11T12:00:00Z",
+                    "code_sha": None,
+                },
+                "run_kind": "NORMAL",
+                "metrics": {"signals_count": 2, "total_net_usdc": 0.5, "mae_net_usdc": 0.2, "fragile_rate": 0.0},
+                "status": "PASS",
+                "reasons": [],
+            }
+            
+            emit_to_aggregator_light(run_summary, agg_path)
+            
+            import json
+            agg = json.loads(agg_path.read_text())
+            
+            # All runs must have run_timestamp
+            for run in agg["runs"]:
+                assert "run_timestamp" in run
+                assert run["run_timestamp"] is not None
+                assert "T" in run["run_timestamp"]  # ISO format
+                # code_sha should be None
+                assert run["code_sha"] is None

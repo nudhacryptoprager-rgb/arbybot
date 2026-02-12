@@ -19,7 +19,7 @@ Usage:
 
 import json
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -277,7 +277,7 @@ def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE)
         "quote_ccy": "USDC",              # All monetary values in USDC
         "price_format": "decimal_str",    # All prices are string decimals
         "spread_format": "micro_bps",     # spread_bps_micro is integer (1 bps = 10000)
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "chain_id": chain_id,
         "pinned_block": pinned_block,
         "signals": fixture_signals,
@@ -312,7 +312,7 @@ def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE)
         "price_in": "quote_per_base",       # From signals schema  
         "slippage_format": "bps",           # slippage_bps_actual is real bps (0-10000)
         "est_error_definition": "sim_net_usdc - est_net_usdc",  # Negative = sim worse
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "chain_id": chain_id,
         "pinned_block": pinned_block,
         "execution_enabled": False,         # INVARIANT: must be false in M4
@@ -511,7 +511,7 @@ def generate_m4_from_online_inputs(
     signals_path = reports_dir / f"signals_{ts}.json"
     signals_data = {
         "schema_version": "m4:signals:v1.2",  # Bumped for source_sha/run_id
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "run_mode": source_run_mode,  # Inherit from truth_report
         # Provenance fields
         "source_sha": source_sha,
@@ -649,7 +649,7 @@ def generate_m4_from_online_inputs(
     exec_path = reports_dir / f"execution_report_{ts}.json"
     exec_data = {
         "schema_version": "m4:execution:v1.2",  # Bumped for source_sha/run_id
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "run_mode": source_run_mode,  # REGISTRY_REAL from truth_report
         # Provenance fields for artifact integrity
         "source_sha": source_sha,
@@ -834,7 +834,7 @@ def generate_m4_from_online_inputs(
     
     stability_data = {
         "schema_version": "m4:stability:v1.2",  # Bumped for split status
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "source_sha": source_sha,
         "run_id": run_id,
         "chain_id": chain_id,
@@ -893,16 +893,12 @@ def generate_m4_from_online_inputs(
     # ============================================================
     run_summary_path = reports_dir / f"run_summary_{ts}.json"
     
-    # Get git context for run_context (v1.9.0) - BEFORE evidence validation
+    # v2.0: Get timestamp-based provenance (SHA tracking removed)
     git_ctx = get_git_context()
+    run_timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     
-    # Evidence validation (v1.5.0, v1.9.0: dirty check, v1.9.3: removed source_sha_mismatch)
+    # v2.0: Evidence validation based on timestamp consistency only
     evidence_issues = []
-    current_sha = git_ctx["code_sha"]
-    
-    # v1.9.0: Check dirty worktree - weaker evidence if uncommitted changes
-    if git_ctx["code_dirty"] is True:
-        evidence_issues.append("DIRTY_WORKTREE_PRECOMMIT")
     
     # Check timestamp deltas
     truth_ts_str = truth_data.get("timestamp", "")
@@ -910,7 +906,7 @@ def generate_m4_from_online_inputs(
         if truth_ts_str:
             # Parse truth timestamp
             truth_ts = datetime.fromisoformat(truth_ts_str.replace("Z", "+00:00"))
-            now = datetime.now(truth_ts.tzinfo) if truth_ts.tzinfo else datetime.utcnow()
+            now = datetime.now(timezone.utc)
             delta_seconds = abs((now - truth_ts).total_seconds())
             if delta_seconds > 300:  # 5 minutes tolerance
                 evidence_issues.append(f"timestamp_delta_high: {delta_seconds:.0f}s")
@@ -919,31 +915,23 @@ def generate_m4_from_online_inputs(
     
     evidence_ok = len(evidence_issues) == 0
     
-    # v1.10.0: Forbid dirty proof in profit profile
-    # If code_dirty=true in profit profile → evidence.ok=false, status=NO_PROOF
+    # v2.0: Dirty proof check removed - SHA tracking disabled
+    # Provenance is now based on run_timestamp only
     is_dirty_proof = False
-    if profile == "profit" and git_ctx["code_dirty"] is True:
-        is_dirty_proof = True
-        evidence_ok = False  # Force evidence.ok=false
-        if "DIRTY_WORKTREE_PRECOMMIT" not in evidence_issues:
-            evidence_issues.append("DIRTY_WORKTREE_PRECOMMIT")
-        # Override combined_status → NO_PROOF (not PASS)
-        if combined_status == "PASS":
-            combined_status = "NO_PROOF"
-            all_reasons.append("DIRTY_PROOF_FORBIDDEN")
     
     run_summary_data = {
-        "schema_version": "m4:run_summary:v1.8",  # v1.10.0: NO_PROOF status, status contract fix
-        "policy_version": POLICY_VERSION,  # v1.9.9: top-level provenance
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "schema_version": "m4:run_summary:v2.0",  # v2.0: timestamp-based provenance
+        "policy_version": POLICY_VERSION,
+        "timestamp": run_timestamp,
         "run_id": run_id,
         # v2.0.0: run_context with timestamp-based provenance (SHA tracking removed)
         "run_context": {
+            "run_timestamp": run_timestamp,
+            "code_identity": f"ts:{run_timestamp}",  # v2.0: deterministic code ref
             "code_sha": None,  # v2.0: deprecated
             "code_dirty": None,  # v2.0: deprecated
             "code_desc": None,  # v2.0: deprecated
             "evidence_sha": None,  # v2.0: deprecated
-            "run_timestamp": datetime.utcnow().isoformat() + "Z",
         },
         "inputs": {
             "run_mode": source_run_mode,

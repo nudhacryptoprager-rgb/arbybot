@@ -172,6 +172,7 @@ def emit_to_aggregator_light(
     # v2.0: SHA tracking removed - use run_timestamp from run_context
     run_context = run_summary.get("run_context", {})
     run_timestamp = run_context.get("run_timestamp", run_summary.get("timestamp", ""))
+    code_identity = run_context.get("code_identity", f"ts:{run_timestamp}")
     
     # Append light run info
     # v1.9.9: Add pair, route, dex diversity tracking
@@ -182,6 +183,7 @@ def emit_to_aggregator_light(
         "run_id": run_id,
         "timestamp": run_summary.get("timestamp", ""),
         "run_timestamp": run_timestamp,  # v2.0: primary provenance field
+        "code_identity": code_identity,  # v2.0.1: deterministic code ref
         "code_sha": None,  # v2.0: DEPRECATED
         "net_usdc": metrics.get("total_net_usdc", 0),
         "mae": metrics.get("mae_net_usdc", 0),
@@ -394,22 +396,22 @@ def _compute_quick_stats(
         "signals_per_run_avg": round(sum(signals_per_run) / len(signals_per_run), 2) if signals_per_run else 0,
     }
     
-    # v1.11.0: Enhanced runs_since_sha (current code stability - PRIMARY view)
-    # Use is_data_run flag for accurate data_runs counting, NORMAL runs only
+    # v2.0: runs_since_timestamp (replaces runs_since_sha)
+    # All runs treated as same code identity, timestamp-based tracking
     current_sha_infra_fails = sum(1 for r in current_sha_runs if r.get("is_infra_fail", False))
     sha_data_run_rate = len(current_sha_data_runs) / len(current_sha_runs) if current_sha_runs else 0
     sha_effective_pass_rate = current_sha_pass / len(current_sha_data_runs) if current_sha_data_runs else 0
     sha_fail_rate = current_sha_fail / len(current_sha_data_runs) if current_sha_data_runs else 0
     sha_total_signals = sum(r.get("signals_count", 0) for r in current_sha_data_runs)
     
-    # v1.11.0: Count low_sample runs for SHA (signals 1-4)
+    # v2.0: Count low_sample runs (signals 1-4)
     sha_low_sample_count = sum(1 for r in current_sha_runs 
                                if 0 < r.get("signals_count", 0) < Thresholds.MIN_SIGNALS_FOR_PASS)
     
-    # v2.0: SHA tracking removed - renamed to runs_since_timestamp
+    # v2.0: runs_since_timestamp (SHA tracking removed)
     # All runs treated as same code identity, no per-SHA breakdown
     agg_data["runs_since_timestamp"] = {
-        "sha": None,  # v2.0: DEPRECATED
+        "sha": None,  # v2.0: DEPRECATED (kept for schema compat)
         "runs_count": len(current_sha_runs),
         "data_runs_count": len(current_sha_data_runs),
         "data_signals_total": sha_total_signals,
@@ -521,11 +523,13 @@ def _compute_quick_stats(
     # v1.9.4: Always update timestamp on emit
     agg_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
-    # v1.9.4: Add runs_by_code_sha breakdown
-    sha_counts = {}
+    # v2.0: runs_by_timestamp breakdown (replaces deprecated runs_by_code_sha)
+    ts_counts = {}
     for r in runs:
-        sha = r.get("code_sha", "unknown")
-        sha_counts[sha] = sha_counts.get(sha, 0) + 1
-    agg_data["runs_by_code_sha"] = sha_counts
+        ts = r.get("run_timestamp", r.get("timestamp", "unknown"))
+        # Group by date (YYYY-MM-DD) for readability
+        ts_date = ts[:10] if isinstance(ts, str) and len(ts) >= 10 else "unknown"
+        ts_counts[ts_date] = ts_counts.get(ts_date, 0) + 1
+    agg_data["runs_by_date"] = ts_counts
     
     return agg_data

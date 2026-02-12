@@ -440,7 +440,7 @@ def run_offline_gate(output_root: Path, profile: str = DoDProfile.SMOKE, strict:
     Returns:
         Exit code: 0=PASS, 1=FAIL, 2=NO_SIGNALS, 3=SIM_FAILED
     """
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_dir = output_root / f"ci_m4_gate_offline_{ts}"
     
     # Use relative_to if possible, otherwise show absolute path
@@ -519,9 +519,9 @@ def run_online_gate(
                 f.unlink()
             d.rmdir()
         # Remove by TTL
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for d in dirs:
-            age_days = (now - datetime.utcfromtimestamp(d.stat().st_mtime)).days
+            age_days = (now - datetime.fromtimestamp(d.stat().st_mtime, tz=timezone.utc)).days
             if age_days > max_days:
                 for f in d.glob("*.json"):
                     f.unlink()
@@ -554,7 +554,7 @@ def run_online_gate(
         truth_files = list(reports_dir.glob("truth_report_*.json")) if reports_dir.exists() else []
         if truth_files:
             print("\n[ONLINE] No execution_report found, generating from truth_report...")
-            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             try:
                 generated = generate_m4_from_online_inputs(run_dir, ts, cost_model_name, profile)
                 artifacts["signals"] = generated["signals"]
@@ -765,13 +765,15 @@ def run_online_gate(
             "updated_at": now_utc.isoformat(),
             # v2.0: Timestamp-based provenance (SHA removed)
             "latest_run_timestamp": run_summary.get("run_context", {}).get("run_timestamp", now_utc.isoformat()),
+            "code_identity": run_summary.get("run_context", {}).get("code_identity", f"ts:{now_utc.isoformat()}"),  # v2.0.1
             "run_context": {
                 # v2.0: SHA fields deprecated (None), run_timestamp is primary
+                "run_timestamp": run_summary.get("run_context", {}).get("run_timestamp", now_utc.isoformat()),
+                "code_identity": run_summary.get("run_context", {}).get("code_identity", f"ts:{now_utc.isoformat()}"),  # v2.0.1
                 "code_sha": None,  # DEPRECATED
                 "code_dirty": None,  # DEPRECATED
                 "code_desc": None,  # DEPRECATED
                 "evidence_sha": None,  # DEPRECATED
-                "run_timestamp": run_summary.get("run_context", {}).get("run_timestamp", now_utc.isoformat()),
             },
             "latest_mode": "ONLINE" if is_online else "OFFLINE",
             "latest_kind": "INCIDENT" if is_incident else "NORMAL",

@@ -135,8 +135,29 @@ Location: `data/runs/_rolling/`
 ### v2.0.0 Provenance Model
 - SHA tracking completely removed (`code_sha`, `evidence_sha` = None)
 - `run_timestamp` (ISO-8601) is the primary provenance field
+- `code_identity` format: `ts:<ISO-8601>` (deterministic code ref)
 - Rolling artifacts use `runs_since_timestamp` instead of `runs_since_sha`
 - `attach_evidence.py` script deleted (no longer needed)
+- `runs_by_code_sha` replaced with `runs_by_date`
+
+### v2.0 Migration Policy
+**CRITICAL**: v2.0 migration requires clearing rolling window to remove legacy `code_sha` entries and ensure metrics reflect timestamp-based provenance only.
+
+### Warmup Period (post-reset)
+After reset rolling window, `PASS_WARMUP` is expected until ≥10 runs accumulate. KPIs are only valid after exiting warmup. Quality thresholds (`data_run_rate`, `low_sample_rate`, diversity) apply only after warmup completes.
+
+| Action | Command |
+|--------|---------|
+| Reset window | `python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window` |
+| Verify clean | Check aggregator has no legacy `code_sha` entries |
+| Fresh start | Run 10+ NORMAL runs to populate new v2.0 metrics |
+
+### DEV vs RELEASE Provenance
+
+| Mode | Provenance | code_identity | Proof |
+|------|------------|---------------|-------|
+| DEV | `run_timestamp` | `ts:<ISO>` | Not required |
+| RELEASE | `run_timestamp` | `ts:<ISO>` | Document in Status_M4.md |
 
 ### Recovery Steps
 ```bash

@@ -138,7 +138,11 @@ Use `run_timestamp` as the canonical provenance field.
 3. Verify                → Check run_timestamp in artifacts
 ```
 
-For **PROVEN** status, require:
-- `code_dirty = false` (clean worktree at run time)
-- `evidence_sha` attached post-commit
-- `evidence.ok = true`
+## DEV vs RELEASE Policy (v2.0)
+
+| Mode | Provenance | Proof |
+|------|------------|-------|
+| DEV | `run_timestamp` only | Not required |
+| RELEASE | `run_timestamp` + `code_identity` | Document in Status_M4.md |
+
+**code_identity** format: `ts:<ISO-8601>` (deterministic, SHA-free)
