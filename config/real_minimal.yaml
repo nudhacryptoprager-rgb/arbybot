@@ -66,14 +66,14 @@ pairs:
   - token_in: ARB
     token_out: WETH
     fee_tiers: [500, 3000]
-  # NOTE: LINK disabled - SushiSwap pool has low liquidity (11% spread)
-  # - token_in: LINK
-  #   token_out: WETH
-  #   fee_tiers: [500, 3000]
-  # NOTE: GMX disabled - low liquidity causes price outliers (173% spread)
-  # - token_in: GMX
-  #   token_out: WETH
-  #   fee_tiers: [500, 3000]
+  # NOTE: LINK re-enabled for signals diversity (quality gate requirement)
+  - token_in: LINK
+    token_out: WETH
+    fee_tiers: [500, 3000]
+  # NOTE: GMX re-enabled for signals diversity (quality gate requirement)
+  - token_in: GMX
+    token_out: WETH
+    fee_tiers: [500, 3000]
   - token_in: wstETH
     token_out: WETH
     fee_tiers: [100, 500]

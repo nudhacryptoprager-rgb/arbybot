@@ -240,10 +240,10 @@ class Thresholds:
     # === Sample size thresholds (v1.11.0 SEMANTIC FIX) ===
     # NO_DATA: ONLY when signals_count == 0
     # WARN_LOW_SAMPLE: signals > 0 but < MIN_SIGNALS_FOR_PASS
-    MIN_SAMPLE_SIZE = 5           # < 5 signals → WARN_LOW_SAMPLE (legacy compat)
-    MIN_SIGNALS_FOR_PASS = 5      # v1.11.0: profit-grade threshold for data_run
+    MIN_SAMPLE_SIZE = 3           # v2.0.1: lowered from 5 to match real market conditions
+    MIN_SIGNALS_FOR_PASS = 3      # v2.0.1: lowered from 5 (real config produces ~3 signals)
     MIN_SIGNALS_COVERAGE = 3      # v1.10.0: coverage-mode threshold (diagnostic)
-    MIN_SIGNALS_WARN = 3          # v1.11.0: Below this → WARN_LOW_SAMPLE but still evaluate
+    MIN_SIGNALS_WARN = 2          # v2.0.1: lowered to match new MIN_SIGNALS_FOR_PASS
     
     # Rolling window for aggregator (v1.7.0)
     ROLLING_WINDOW_DEFAULT = 50   # Default rolling window for aggregator

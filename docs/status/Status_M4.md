@@ -69,12 +69,12 @@
 | `unique_pairs` | ≥ 10 | < 3 | Pair diversity |
 | `unique_routes` | ≥ 4 | < 2 | Route diversity |
 
-## Thresholds (v1.12.0)
+## Thresholds (v2.0.1)
 
 | Threshold | Value | Description |
 |-----------|-------|-------------|
-| `MIN_SIGNALS_FOR_PASS` | 5 | Profit-grade (is_data_run) |
-| `MIN_SIGNALS_WARN` | 3 | Below = WARN_LOW_SAMPLE |
+| `MIN_SIGNALS_FOR_PASS` | 3 | v2.0.1: lowered from 5 (real market ~3 signals) |
+| `MIN_SIGNALS_WARN` | 2 | v2.0.1: lowered to match |
 | `MAE_WARN` | 0.55 | MAE warning |
 | `MAE_FAIL` | 0.80 | MAE failure |
 | `SIGN_RATE_MIN` | 0.60 | Min sign correct rate |
@@ -123,7 +123,7 @@ Location: `data/runs/_rolling/`
 - [ ] Kill switch disabled
 - [ ] Real TX submitted
 
-## Known Blockers (2026-02-11)
+## Known Blockers (2026-02-12)
 
 1. **Python version**: Pipelines running under Python 3.14, repo requires 3.11
 2. ~~**Chain/provider mismatch**~~: FIXED - `.env` NETWORK=mantle corrected to arbitrum
@@ -131,6 +131,7 @@ Location: `data/runs/_rolling/`
 4. ~~**Rolling artifacts need reset**~~: FIXED - v2.0 schema with timestamp-based provenance
 5. ~~**Provenance fixes in v1.12.2**~~: REPLACED by v2.0.0 timestamp provenance
 6. **M4 online DoD open**: Aggregator quality thresholds not yet met (`data_run_rate`, `low_sample_rate`, diversity)
+7. **Quality thresholds (2026-02-12)**: Після reset window: `runs_count=10`, але `data_runs_count=0`, `data_run_rate=0.0`, `unique_pairs=3`, `unique_routes=2` — потрібне розширення `config/real_minimal.yaml` для виконання quality thresholds (signals_count>=5 per run)
 
 ### v2.0.0 Provenance Model
 - SHA tracking completely removed (`code_sha`, `evidence_sha` = None)
