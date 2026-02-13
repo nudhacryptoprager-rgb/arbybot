@@ -196,12 +196,18 @@ def compute_status(
 # ============================================================
 
 # Policy version for artifact provenance
+# v2.0.2: SHA-free provenance (run_timestamp + code_identity replaces source_sha)
 # v2.0.1: MIN_SIGNALS_FOR_PASS=3, MIN_SAMPLE_SIZE=3, MIN_SIGNALS_WARN=2
-POLICY_VERSION = "2.0.1"
+POLICY_VERSION = "2.0.2"
 
 class Thresholds:
     """
     Centralized threshold definitions for drift metrics.
+    
+    v2.0.2 PROVENANCE CHANGE (2026-02-13):
+    - SHA tracking completely removed from all artifacts
+    - Provenance now: run_timestamp (ISO-8601) + code_identity ("ts:...")
+    - source_sha field removed from execution_report, signals, stability
     
     v2.0.1 POLICY CHANGE (2026-02-12):
     - MIN_SIGNALS_FOR_PASS lowered from 5 to 3 (real market conditions)
@@ -274,6 +280,12 @@ class Thresholds:
     DIVERSITY_PAIRS_MIN = 3        # v1.12.0: FAIL if unique_pairs < 3
     DIVERSITY_ROUTES_TARGET = 4    # WARN_DIVERSITY_LOW if unique_routes < 4
     DIVERSITY_ROUTES_MIN = 2       # v1.12.0: FAIL if unique_routes < 2
+    
+    # v2.0.2: Profit sanity thresholds (too-good-to-be-true detection)
+    # If all N>=10 runs are profitable with very low variance, flag as suspicious
+    PROFIT_SANITY_MIN_RUNS = 10    # Min runs to trigger sanity check
+    PROFIT_SANITY_NET_DIV_MIN = 0.20  # Min net_diversity_rate (unique values / runs)
+    PROFIT_SANITY_LOSS_RATE_MIN = 0.05  # Min expected loss rate for realistic market
 
 
 # ============================================================
@@ -399,7 +411,7 @@ PROFILES: Dict[str, ThresholdProfile] = {
         mae_fail=0.80,
         sign_rate_min=0.60,
         min_sample_size=5,
-        fragile_rate_max=0.20,  # v1.9.9: Hard filter - fragile_rate <= 20% for profit profile
+        fragile_rate_max=0.30,  # v2.0.2: Aligned with AGG_FRAGILE_P90_WARN (was 0.20)
         description="Production thresholds for profitable trading",
     ),
 }

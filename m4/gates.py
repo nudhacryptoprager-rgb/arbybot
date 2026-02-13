@@ -57,20 +57,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def get_git_sha() -> str:
-    """Get current git HEAD SHA (short form)."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
+    """
+    Get current git HEAD SHA (short form).
+    
+    DEPRECATED (v2.0.2): SHA tracking removed. Returns "deprecated" always.
+    Kept for backwards compatibility with old tooling.
+    """
+    return "deprecated"
 
 
 # ============================================================
@@ -486,7 +479,7 @@ def run_online_gate(
         profile: DoD profile to validate against
         strict: Strict mode - fail on MAE==0
         cost_model_name: Cost model to use for simulation
-        strict_evidence: Require source_sha matches HEAD and run_id is valid
+        strict_evidence: v2.0.2: Validate run_timestamp/code_identity present (SHA-free)
         artifact_mode: "rolling" (default) or "full" 
         emit_agg: Path to emit aggregator (optional)
         reset_window: If True, delete aggregator before emitting
@@ -792,6 +785,7 @@ def run_online_gate(
             # v1.9.8: PRIMARY metrics at top level
             "effective_pass_rate": agg_data.get("quick_stats", {}).get("effective_pass_rate", 0),
             "data_run_rate": agg_data.get("quick_stats", {}).get("data_run_rate", 0),  # v1.9.9: % runs with >= 5 signals
+            "low_sample_rate": agg_data.get("quick_stats", {}).get("low_sample_rate", 0),  # v2.0.2: top-level KPI
             "net_diversity_rate": agg_data.get("quick_stats", {}).get("net_diversity_rate", 0),
             "quick_stats": agg_data.get("quick_stats", {}),  # v1.9.5: full stats visibility
             "paths": {
@@ -843,7 +837,7 @@ def validate_gate(
         artifacts: Dictionary of artifact paths
         profile: DoD profile
         strict: Strict mode - fail on MAE==0
-        strict_evidence: Require source_sha matches HEAD
+        strict_evidence: v2.0.2: Validate run_timestamp/code_identity present (SHA-free)
         
     Returns:
         Exit code: 0=PASS, 1=FAIL
@@ -874,21 +868,31 @@ def validate_gate(
     with open(exec_path) as f:
         exec_data = json.load(f)
     
-    # Strict evidence mode: validate source_sha matches HEAD
+    # Strict evidence mode: validate provenance (v2.0.2: SHA-free)
     if strict_evidence:
-        artifact_sha = exec_data.get("source_sha", "")
+        # v2.0.2: Check run_timestamp exists (replaces source_sha)
+        artifact_run_timestamp = exec_data.get("run_timestamp", "")
+        artifact_code_identity = exec_data.get("code_identity", "")
         artifact_run_id = exec_data.get("run_id", "")
-        current_sha = get_git_sha()
         
-        if artifact_sha and current_sha and current_sha != "unknown":
-            if artifact_sha == current_sha:
-                all_checks.append(("source_sha_match", True, f"source_sha matches HEAD ({artifact_sha[:8]}...)"))
-            else:
-                all_checks.append(("source_sha_match", False, 
-                    f"source_sha mismatch: artifact={artifact_sha[:8]}... HEAD={current_sha[:8]}..."))
-                print(f"  FAIL: source_sha mismatch (strict evidence mode)")
+        # Validate run_timestamp is present (primary provenance)
+        if artifact_run_timestamp:
+            all_checks.append(("run_timestamp_present", True, 
+                f"run_timestamp present: {artifact_run_timestamp}"))
         else:
-            all_checks.append(("source_sha_match", False, "Missing source_sha in artifact or cannot get HEAD"))
+            all_checks.append(("run_timestamp_present", False, "Missing run_timestamp in artifact"))
+            print(f"  FAIL: Missing run_timestamp (v2.0.2 provenance)")
+        
+        # Validate code_identity format if present
+        if artifact_code_identity:
+            if artifact_code_identity.startswith("ts:"):
+                all_checks.append(("code_identity_valid", True, 
+                    f"code_identity format valid: {artifact_code_identity[:20]}..."))
+            else:
+                all_checks.append(("code_identity_valid", False, 
+                    f"code_identity format invalid (expected ts:...): {artifact_code_identity[:20]}..."))
+        else:
+            all_checks.append(("code_identity_valid", False, "Missing code_identity in artifact"))
         
         if artifact_run_id:
             # Validate run_id format: m4_<timestamp> or similar

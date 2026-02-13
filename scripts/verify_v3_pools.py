@@ -75,6 +75,33 @@ FACTORY_ABI = [{
     "type": "function"
 }]
 
+# Pool ABI (liquidity check)
+# v2.0.2: Added liquidity/slot0 queries to verify pool is active, not just exists
+POOL_ABI = [
+    {
+        "name": "liquidity",
+        "inputs": [],
+        "outputs": [{"type": "uint128"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "name": "slot0",
+        "inputs": [],
+        "outputs": [
+            {"name": "sqrtPriceX96", "type": "uint160"},
+            {"name": "tick", "type": "int24"},
+            {"name": "observationIndex", "type": "uint16"},
+            {"name": "observationCardinality", "type": "uint16"},
+            {"name": "observationCardinalityNext", "type": "uint16"},
+            {"name": "feeProtocol", "type": "uint8"},
+            {"name": "unlocked", "type": "bool"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]
+
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
@@ -106,11 +133,14 @@ def verify_pools(
         "factories": FACTORIES,
         "tokens": TOKENS,
         "pairs_checked": [],
-        "verified_pools": [],
+        "verified_pools": [],      # All pools found (including empty)
+        "active_pools": [],        # v2.0.2: Only pools with liquidity > 0
+        "inactive_pools": [],      # v2.0.2: Pools with no liquidity
         "missing_pools": [],
         "summary": {
             "total_pairs": len(pairs),
             "pairs_with_pools": 0,
+            "pairs_with_active_pools": 0,  # v2.0.2: pairs with liquidity
             "pairs_missing_all": 0,
         }
     }
@@ -142,6 +172,23 @@ def verify_pools(
                     pool_addr = factory.functions.getPool(base_addr, quote_addr, fee).call()
                     
                     if pool_addr != ZERO_ADDRESS:
+                        # v2.0.2: Check pool has liquidity (active, not just exists)
+                        liquidity = 0
+                        sqrtPriceX96 = 0
+                        pool_active = False
+                        try:
+                            pool_contract = w3.eth.contract(
+                                address=Web3.to_checksum_address(pool_addr),
+                                abi=POOL_ABI
+                            )
+                            liquidity = pool_contract.functions.liquidity().call()
+                            slot0 = pool_contract.functions.slot0().call()
+                            sqrtPriceX96 = slot0[0] if slot0 else 0
+                            pool_active = liquidity > 0 and sqrtPriceX96 > 0
+                        except Exception as e:
+                            if verbose:
+                                print(f"  [WARN] {dex_name} {pair_key} fee={fee}: liquidity check failed: {e}")
+                        
                         pool_info = {
                             "pair": pair_key,
                             "dex": dex_name,
@@ -149,12 +196,21 @@ def verify_pools(
                             "pool": pool_addr,
                             "base": base,
                             "quote": quote,
+                            # v2.0.2: Activity metrics
+                            "liquidity": str(liquidity),  # uint128 can overflow JSON int
+                            "sqrtPriceX96": str(sqrtPriceX96),
+                            "active": pool_active,
                         }
                         results["verified_pools"].append(pool_info)
-                        found_any = True
+                        if pool_active:
+                            found_any = True
+                            results["active_pools"].append(pool_info)
+                        else:
+                            results["inactive_pools"].append(pool_info)
                         
                         if verbose:
-                            print(f"  [OK] {dex_name} {pair_key} fee={fee}: {pool_addr}")
+                            status = "ACTIVE" if pool_active else "EMPTY"
+                            print(f"  [{status}] {dex_name} {pair_key} fee={fee}: {pool_addr} (liq={liquidity})")
                     elif verbose:
                         print(f"  [--] {dex_name} {pair_key} fee={fee}: no pool")
                         
@@ -164,9 +220,16 @@ def verify_pools(
         
         if found_any:
             results["summary"]["pairs_with_pools"] += 1
+            results["summary"]["pairs_with_active_pools"] += 1
         else:
-            results["missing_pools"].append(pair_key)
-            results["summary"]["pairs_missing_all"] += 1
+            # Check if we found any pools at all (even inactive)
+            pair_pools = [p for p in results["verified_pools"] if p["pair"] == pair_key]
+            if pair_pools:
+                results["summary"]["pairs_with_pools"] += 1
+                # Has pools but none active
+            else:
+                results["missing_pools"].append(pair_key)
+                results["summary"]["pairs_missing_all"] += 1
     
     return results
 
@@ -200,8 +263,18 @@ def main() -> int:
     print(f"Summary:")
     print(f"  Pairs checked: {results['summary']['total_pairs']}")
     print(f"  Pairs with pools: {results['summary']['pairs_with_pools']}")
+    print(f"  Pairs with ACTIVE pools: {results['summary']['pairs_with_active_pools']}")  # v2.0.2
     print(f"  Pairs missing all: {results['summary']['pairs_missing_all']}")
     print(f"  Total verified pools: {len(results['verified_pools'])}")
+    print(f"  Active pools (liquidity>0): {len(results['active_pools'])}")       # v2.0.2
+    print(f"  Inactive pools (liquidity=0): {len(results['inactive_pools'])}")   # v2.0.2
+    
+    if results["inactive_pools"]:
+        print(f"\nInactive pools (exist but no liquidity):")
+        for p in results["inactive_pools"][:5]:  # Show first 5
+            print(f"  - {p['dex']} {p['pair']} fee={p['fee']}")
+        if len(results["inactive_pools"]) > 5:
+            print(f"  ... and {len(results['inactive_pools']) - 5} more")
     
     if results["missing_pools"]:
         print(f"\nMissing pairs (no pools found):")
@@ -216,8 +289,9 @@ def main() -> int:
             json.dump(results, f, indent=2)
         print(f"\nResults saved to: {output_path}")
     else:
-        # Default: save to gitignored location (data/runs/_rolling/)
-        default_path = Path(__file__).parent.parent / "data" / "runs" / "_rolling" / "verified_pools.json"
+        # Default: save to gitignored cache location (data/runs/_cache/)
+        # NOTE: _cache is aux runtime, not canonical rolling (which is 3 files in _rolling/)
+        default_path = Path(__file__).parent.parent / "data" / "runs" / "_cache" / "verified_pools.json"
         default_path.parent.mkdir(parents=True, exist_ok=True)
         with open(default_path, "w") as f:
             json.dump(results, f, indent=2)

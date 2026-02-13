@@ -301,3 +301,113 @@ class TestV20ContractEnforcement:
                 assert "T" in run["run_timestamp"]  # ISO format
                 # code_sha should be None
                 assert run["code_sha"] is None
+
+
+class TestRollingStoreDoD202Fields:
+    """v2.0.2: Test rolling_store DoD verification fields.
+    
+    Contract: m4_stability_agg.json.runs[] must contain fields needed
+    for DoD verification without manually inspecting runDir bundles:
+    - run_mode: REGISTRY_REAL or FIXTURE_OFFLINE
+    - chain_id: e.g. 42161 for Arbitrum
+    - pinned_block: real block number
+    - block_is_synthetic: false for real runs
+    """
+    
+    def test_emit_includes_run_mode(self):
+        """emit_to_aggregator_light should include run_mode from inputs."""
+        from m4.rolling_store import emit_to_aggregator_light
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agg_path = Path(tmpdir) / "test_agg.json"
+            
+            run_summary = {
+                "run_id": "dod_test_001",
+                "timestamp": "2026-02-13T12:00:00Z",
+                "run_context": {"run_timestamp": "2026-02-13T12:00:00Z", "code_sha": None},
+                "status": "PASS",
+                "metrics": {"signals_count": 5, "total_net_usdc": 10.0, "mae_net_usdc": 0.5, "est_sign_correct_rate": 1.0, "fragile_rate": 0},
+                "reasons": [],
+                "inputs": {
+                    "run_mode": "REGISTRY_REAL",
+                    "chain_id": 42161,
+                    "pinned_block": 431000000,
+                    "block_is_synthetic": False,
+                    "pairs": ["WETH/USDC"],
+                    "routes": ["uniswap_v3->sushiswap_v3"],
+                },
+            }
+            
+            result = emit_to_aggregator_light(run_summary, agg_path)
+            
+            runs = result.get("runs", [])
+            assert len(runs) == 1
+            assert runs[0]["run_mode"] == "REGISTRY_REAL"
+            assert runs[0]["chain_id"] == 42161
+            assert runs[0]["pinned_block"] == 431000000
+            assert runs[0]["block_is_synthetic"] is False
+    
+    def test_emit_dod_fields_offline(self):
+        """emit_to_aggregator_light should store FIXTURE_OFFLINE mode correctly."""
+        from m4.rolling_store import emit_to_aggregator_light
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agg_path = Path(tmpdir) / "test_agg.json"
+            
+            run_summary = {
+                "run_id": "dod_test_offline_001",
+                "timestamp": "2026-02-13T12:00:00Z",
+                "run_context": {"run_timestamp": "2026-02-13T12:00:00Z", "code_sha": None},
+                "status": "PASS",
+                "metrics": {"signals_count": 5, "total_net_usdc": 10.0, "mae_net_usdc": 0.5, "est_sign_correct_rate": 1.0, "fragile_rate": 0},
+                "reasons": [],
+                "inputs": {
+                    "run_mode": "FIXTURE_OFFLINE",
+                    "chain_id": 42161,
+                    "pinned_block": 429900000,  # synthetic
+                    "block_is_synthetic": True,
+                    "pairs": [],
+                    "routes": [],
+                },
+            }
+            
+            result = emit_to_aggregator_light(run_summary, agg_path)
+            
+            runs = result.get("runs", [])
+            assert len(runs) == 1
+            assert runs[0]["run_mode"] == "FIXTURE_OFFLINE"
+            assert runs[0]["block_is_synthetic"] is True
+
+    def test_emit_dod_fields_unknown_defaults(self):
+        """emit_to_aggregator_light should handle missing inputs gracefully."""
+        from m4.rolling_store import emit_to_aggregator_light
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agg_path = Path(tmpdir) / "test_agg.json"
+            
+            # No inputs section
+            run_summary = {
+                "run_id": "dod_test_missing_001",
+                "timestamp": "2026-02-13T12:00:00Z",
+                "run_context": {"run_timestamp": "2026-02-13T12:00:00Z", "code_sha": None},
+                "status": "PASS",
+                "metrics": {"signals_count": 5, "total_net_usdc": 10.0, "mae_net_usdc": 0.5, "est_sign_correct_rate": 1.0, "fragile_rate": 0},
+                "reasons": [],
+                # Note: no inputs section
+            }
+            
+            result = emit_to_aggregator_light(run_summary, agg_path)
+            
+            runs = result.get("runs", [])
+            assert len(runs) == 1
+            # Should have default/unknown values
+            assert runs[0]["run_mode"] == "UNKNOWN"
+            assert runs[0]["chain_id"] is None
+            assert runs[0]["pinned_block"] is None
+            assert runs[0]["block_is_synthetic"] is None

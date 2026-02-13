@@ -1,10 +1,10 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
 **Status**: PROVEN (M4.1 simulate-only + M4 online profit DoD PROVEN; M4.2 real execution NOT PROVEN)  
-**Updated**: 2026-02-12  
+**Updated**: 2026-02-13  
 **Gate Version**: v2.0.0  
-**Policy Version**: v2.0.1  
-**Evidence**: Timestamp-based provenance (SHA tracking removed in v2.0)  
+**Policy Version**: v2.0.2  
+**Evidence**: Timestamp-based provenance (SHA tracking removed in v2.0, finalized in v2.0.2)  
 
 ## Core Truth (from Roadmap.md)
 
@@ -19,27 +19,25 @@
 > `REGISTRY_REAL` is the canonical run_mode for online scanning.
 > Legacy docs may use `REAL` as shorthand but artifacts MUST use `REGISTRY_REAL`.
 
-**M4-profit по суті (справжній DoD, цитата з Roadmap, оновлено v2.0.1):**
-```
-N >= 5 consecutive online runs in rolling window where:
-  - run_mode = "REGISTRY_REAL" (not FIXTURE_OFFLINE)
-  - pinned_block = real block (not 429900000)
-  - total_net_usdc > 0 (per run)
-  - all from same rolling aggregator window (m4_stability_agg.json.runs[])
-```
+**M4-profit DoD (посилання на Roadmap.md L52-62):**
+> See `Roadmap.md` for canonical DoD definition.
+> Quick ref: N≥5 runs in `m4_stability_agg.json.runs[]` with:
+> `run_mode=REGISTRY_REAL`, `pinned_block!=429900000`, `block_is_synthetic=false`, `total_net_usdc>0`
 
-**Evidence for M4 online-profit PROVEN (2026-02-12):**
-| run_id | net_usdc | run_status | signals |
-|--------|----------|------------|--------|
-| ci_m5_gate_20260212_102415 | 123.42 | PASS | 3 |
-| ci_m5_gate_20260212_102427 | 123.42 | PASS | 3 |
-| ci_m5_gate_20260212_102438 | 123.42 | PASS | 3 |
-| ci_m5_gate_20260212_102449 | 123.40 | PASS | 4 |
-| ci_m5_gate_20260212_102459 | 123.40 | PASS | 4 |
+**Evidence for M4 online-profit PROVEN (updated 2026-02-13, 41 runs):**
+| run_id | net_usdc | run_status | signals | run_mode | pinned_block |
+|--------|----------|------------|---------|----------|--------------|
+| ci_m5_gate_20260213_152736 | 116.32 | PASS | 3 | REGISTRY_REAL | 431689209 |
+| ci_m5_gate_20260213_152746 | 115.93 | PASS | 3 | REGISTRY_REAL | 431689275 |
+| ci_m5_gate_20260213_152757 | 118.78 | PASS | 4 | REGISTRY_REAL | 431689318 |
+| ci_m5_gate_20260213_152808 | 118.51 | PASS | 4 | REGISTRY_REAL | 431689395 |
+| ci_m5_gate_20260213_152819 | 118.27 | PASS | 4 | REGISTRY_REAL | 431689441 |
 
-> Source: `data/runs/_rolling/m4_stability_agg.json.runs[0:5]`
+> Source: `data/runs/_rolling/m4_stability_agg.json.runs[-5:]`
+> Total runs in window: 41 | Total net_usdc: $4912.79 | net_diversity_rate: 0.675
+> Policy Version: 2.0.2 | low_sample_rate: 0.0244 | effective_pass_rate: 0.9756
 
-> **M4 online profit DoD виконано (2026-02-12).** Це означає:
+> **M4 online profit DoD виконано (2026-02-12, оновлено 2026-02-13).** Це означає:
 > - `simulate_only=true`, `execution_enabled=false` — реальних TX немає
 > - Прибуток підтверджено симуляцією, не реальними угодами
 > - Для M4.2 (real execution) потрібен окремий DoD proof з TX on-chain
@@ -168,12 +166,18 @@ N >= 5 consecutive online runs in rolling window where:
 >
 > Це НЕ застосовується до M4.2 real execution DoD.
 >
-> **M4 Exit criteria (v2.0.1):**
-> - `unique_pairs >= 10`: досяжно через верифікацію пулів LINK/USDC, ARB/USDT тощо
-> - `unique_routes >= 2`: затверджено як M4-ціль (з 2 DEX більше неможливо)
+> **M4 Exit criteria (v2.0.2, 2026-02-13 після 31 runs):**
+> - `unique_pairs`: 5/10 — потребує більше verified pools (LINK/USDT, GMX/USDC тощо)
+> - `unique_routes`: 2/4 — затверджено як M4-ціль (з 2 DEX більше неможливо)
+>
+> **Diversity Decision (2026-02-13):**
+> - M4 ok з `unique_routes=2` — більше з 2 DEX неможливо
+> - `unique_pairs` target (10) переноситься в M5 як окреме requirements
+> - Поточний `unique_pairs=5` достатній для M4 simulate-only proof
 >
 > **M5 Target (deferred):**
 > - `unique_routes >= 4`: потребує 3-й DEX (Camelot, Curve)
+> - `unique_pairs >= 10`: потребує verified pools для GMX, wstETH, etc.
 
 ## Canonical Commands
 

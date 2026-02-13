@@ -49,14 +49,16 @@ Triangular, Cross-chain — тільки після того, як Truth Engine 
 > `REGISTRY_REAL` is the canonical run_mode for online scanning.
 > Legacy docs may use `REAL` as shorthand but artifacts MUST use `REGISTRY_REAL`.
 
-**M4-profit по суті (справжній DoD):**
+**M4-profit по суті (справжній DoD, v2.0.1):**
 ```
-N = 5 consecutive online runs where:
+N >= 5 consecutive online runs in m4_stability_agg.json.runs[] where:
   - run_mode = "REGISTRY_REAL" (not FIXTURE_OFFLINE)
   - pinned_block = real block (not 429900000)
-  - total_net_usdc > 0
-  - all from same runDir with consistent timestamps
+  - block_is_synthetic = false
+  - total_net_usdc > 0 (per run)
+  - all from same rolling aggregator window
 ```
+> Rolling window is canonical for provenance (not individual runDir).
 
 **Поки online DoD не виконано — "M4 profit" є математичною оцінкою, не доказом виконання.**
 

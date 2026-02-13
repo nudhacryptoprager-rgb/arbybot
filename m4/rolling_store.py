@@ -176,8 +176,10 @@ def emit_to_aggregator_light(
     
     # Append light run info
     # v1.9.9: Add pair, route, dex diversity tracking
+    # v2.0.2: Add run_mode, chain_id, pinned_block, block_is_synthetic for full provenance
     run_pairs = run_summary.get("inputs", {}).get("pairs", [])
     run_routes = run_summary.get("inputs", {}).get("routes", [])
+    run_inputs = run_summary.get("inputs", {})
     
     agg_data["runs"].append({
         "run_id": run_id,
@@ -197,6 +199,11 @@ def emit_to_aggregator_light(
         "is_infra_fail": is_infra_fail,        # v1.10.0: INFRA_* failure
         "pairs": run_pairs[:10] if run_pairs else [],  # v1.9.9: pairs (limit 10)
         "routes": run_routes[:10] if run_routes else [],  # v1.9.9: routes (limit 10)
+        # v2.0.2: Full provenance fields for DoD verification
+        "run_mode": run_inputs.get("run_mode", "UNKNOWN"),
+        "chain_id": run_inputs.get("chain_id", None),
+        "pinned_block": run_inputs.get("pinned_block", None),
+        "block_is_synthetic": run_inputs.get("block_is_synthetic", None),
     })
     
     # Clean legacy: keep only light-format runs
@@ -485,6 +492,18 @@ def _compute_quick_stats(
     elif unique_routes < Thresholds.DIVERSITY_ROUTES_TARGET:
         quality_warnings.append(f"DIVERSITY_ROUTES_LOW({unique_routes}<{Thresholds.DIVERSITY_ROUTES_TARGET})")
         agg_reasons.append("DIVERSITY_ROUTES_LOW")
+    
+    # v2.0.2: Profit sanity check (too-good-to-be-true detection)
+    # Flag suspicious if ALL runs are profitable with very low variance
+    if len(data_runs) >= Thresholds.PROFIT_SANITY_MIN_RUNS:
+        all_profitable = all(r.get("net_usdc", 0) > 0 for r in data_runs)
+        low_diversity = net_diversity_rate < Thresholds.PROFIT_SANITY_NET_DIV_MIN
+        no_losses = fail_rate == 0
+        if all_profitable and low_diversity and no_losses:
+            quality_warnings.append(
+                f"PROFIT_SANITY_WARN(all_{len(data_runs)}_profitable,div={net_diversity_rate:.2f}<{Thresholds.PROFIT_SANITY_NET_DIV_MIN})"
+            )
+            agg_reasons.append("PROFIT_SANITY_WARN")
     
     # Store quality warnings and reasons
     agg_data["quality_warnings"] = quality_warnings

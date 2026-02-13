@@ -35,8 +35,8 @@ from .policy import (
     POLICY_VERSION,
 )
 
-# Import from m4 evidence module
-from .evidence import get_git_context
+# Import from m4 evidence module (SHA-free v2.0)
+from .evidence import get_git_context, get_run_timestamp
 
 # Import canonical reject reasons
 from core.reject_reasons import SimRejectReason
@@ -44,19 +44,8 @@ from core.reject_reasons import SimRejectReason
 # Repository root - assumes this file is at m4/fixtures.py
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-
-def get_source_sha() -> str:
-    """Get current git commit SHA."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, cwd=REPO_ROOT
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
+# v2.0.2: get_source_sha() REMOVED - SHA tracking is deprecated
+# Use run_timestamp for provenance instead
 
 
 def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE) -> Dict[str, Path]:
@@ -407,8 +396,9 @@ def generate_m4_from_online_inputs(
     # Get cost model from registry
     cost_model = get_cost_model(cost_model_name)
     
-    # Get source SHA for artifact provenance
-    source_sha = get_source_sha()
+    # v2.0.2: SHA tracking removed - use run_timestamp for provenance
+    run_timestamp = get_run_timestamp()
+    code_identity = f"ts:{run_timestamp}"
     run_id = run_dir.name  # Use directory name as run_id
     
     # Find truth_report
@@ -436,7 +426,7 @@ def generate_m4_from_online_inputs(
     print(f"[ONLINE] run_mode: {source_run_mode}")
     print(f"[ONLINE] current_block: {source_block}")
     print(f"[ONLINE] spread_signals: {len(spread_signals)}")
-    print(f"[ONLINE] source_sha: {source_sha}")
+    print(f"[ONLINE] run_timestamp: {run_timestamp}")
     print(f"[ONLINE] run_id: {run_id}")
     print(f"[ONLINE] cost_model: {cost_model.name} (gas=${gas_estimate:.2f}, slippage={realistic_slippage_bps}bps)")
     
@@ -510,11 +500,12 @@ def generate_m4_from_online_inputs(
     # Write M4 signals
     signals_path = reports_dir / f"signals_{ts}.json"
     signals_data = {
-        "schema_version": "m4:signals:v1.2",  # Bumped for source_sha/run_id
+        "schema_version": "m4:signals:v2.0",  # v2.0.2: SHA-free provenance
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "run_mode": source_run_mode,  # Inherit from truth_report
-        # Provenance fields
-        "source_sha": source_sha,
+        # Provenance fields (v2.0.2: SHA-free)
+        "run_timestamp": run_timestamp,
+        "code_identity": code_identity,
         "run_id": run_id,
         "source_truth_report": truth_path.name,
         "source_block": source_block,
@@ -648,11 +639,12 @@ def generate_m4_from_online_inputs(
     # Write execution_report
     exec_path = reports_dir / f"execution_report_{ts}.json"
     exec_data = {
-        "schema_version": "m4:execution:v1.2",  # Bumped for source_sha/run_id
+        "schema_version": "m4:execution:v2.0",  # v2.0.2: SHA-free provenance
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "run_mode": source_run_mode,  # REGISTRY_REAL from truth_report
-        # Provenance fields for artifact integrity
-        "source_sha": source_sha,
+        # Provenance fields (v2.0.2: SHA-free)
+        "run_timestamp": run_timestamp,
+        "code_identity": code_identity,
         "run_id": run_id,
         "source_truth_report": truth_path.name,
         "source_signals": signals_path.name,
@@ -833,9 +825,11 @@ def generate_m4_from_online_inputs(
         combined_status = "PASS"
     
     stability_data = {
-        "schema_version": "m4:stability:v1.2",  # Bumped for split status
+        "schema_version": "m4:stability:v2.0",  # v2.0.2: SHA-free provenance
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "source_sha": source_sha,
+        # Provenance fields (v2.0.2: SHA-free)
+        "run_timestamp": run_timestamp,
+        "code_identity": code_identity,
         "run_id": run_id,
         "chain_id": chain_id,
         "pinned_block": source_block,

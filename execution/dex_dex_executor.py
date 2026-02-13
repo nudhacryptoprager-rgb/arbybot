@@ -48,8 +48,12 @@ class ExecutionMethod(str, Enum):
 
 
 class ExecutionBlocker:
-    """Standard execution blocker codes."""
+    """Standard execution blocker codes.
+    
+    v2.0.2: Added EXECUTION_DISABLED for master switch off.
+    """
     SMOKE_MODE_NO_EXECUTION = "SMOKE_MODE_NO_EXECUTION"
+    EXECUTION_DISABLED = "EXECUTION_DISABLED"  # v2.0.2: Master switch off
     KILL_SWITCH_ACTIVE = "KILL_SWITCH_ACTIVE"
     SIMULATION_REQUIRED = "SIMULATION_REQUIRED"
     SIMULATION_FAILED = "SIMULATION_FAILED"
@@ -102,12 +106,22 @@ class ExecutionResult:
 
 @dataclass
 class ExecutorConfig:
-    """Configuration for DEX-DEX executor."""
+    """Configuration for DEX-DEX executor.
+    
+    M4 SAFETY CONTRACT (v2.0.2):
+    - execution_enabled: Master switch for ANY real tx submission
+    - kill_switch_active: Emergency stop for all trades
+    - smoke_mode: Safe mode that simulates but never submits
+    
+    CRITICAL: execution_enabled=False by default, MUST be explicitly
+    enabled in production config after full M4.2 DoD proof.
+    """
     default_method: ExecutionMethod = ExecutionMethod.PUBLIC_MEMPOOL
     max_gas_price_gwei: float = 100.0
     max_slippage_bps: int = 100
     require_simulation: bool = True
     smoke_mode: bool = True  # Default to smoke mode (safe)
+    execution_enabled: bool = False  # v2.0.2: Master switch - NEVER True until M4.2 DoD
 
 
 class DexDexExecutor:
@@ -150,14 +164,23 @@ class DexDexExecutor:
         self._kill_switch_active = False
 
     def _get_blockers(self, opportunity: Dict[str, Any]) -> List[str]:
-        """Check for execution blockers."""
+        """Check for execution blockers.
+        
+        v2.0.2: Updated with execution_enabled master switch check.
+        Order matters: check kill switch first, then master switch, then mode.
+        """
         blockers = []
+        
+        # v2.0.2: Kill switch first (emergency)
+        if self._kill_switch_active:
+            blockers.append(ExecutionBlocker.KILL_SWITCH_ACTIVE)
+        
+        # v2.0.2: Master switch second (M4.2 gate)
+        if not self.config.execution_enabled:
+            blockers.append(ExecutionBlocker.EXECUTION_DISABLED)
         
         if self.config.smoke_mode:
             blockers.append(ExecutionBlocker.SMOKE_MODE_NO_EXECUTION)
-        
-        if self._kill_switch_active:
-            blockers.append(ExecutionBlocker.KILL_SWITCH_ACTIVE)
         
         if self.config.require_simulation and not opportunity.get("simulation_passed"):
             blockers.append(ExecutionBlocker.SIMULATION_REQUIRED)

@@ -110,6 +110,32 @@ def main():
             return 1
     
     # ================================================================
+    # 1.5 DOC VERIFICATION (fast, no RPC)
+    # ================================================================
+    # v2.0.2: Mandatory doc consistency checks before gates
+    docs_script = PROJECT_ROOT / "scripts" / "ci_docs_consistency.py"
+    if docs_script.exists():
+        exit_code = run_command(
+            [sys.executable, "scripts/ci_docs_consistency.py", "--verbose"],
+            "Docs Consistency Check"
+        )
+        results["docs_consistency"] = exit_code
+        if exit_code != 0:
+            print(f"\n[FAIL] PIPELINE FAILED at docs consistency (exit code 1)")
+            return 1
+    
+    status_script = PROJECT_ROOT / "scripts" / "check_status_md.py"
+    if status_script.exists():
+        exit_code = run_command(
+            [sys.executable, "scripts/check_status_md.py", "--file", "docs/status/Status_M4.md", "--verbose"],
+            "Status_M4.md Check"
+        )
+        results["status_m4_check"] = exit_code
+        if exit_code != 0:
+            print(f"\n[FAIL] PIPELINE FAILED at Status_M4 check (exit code 1)")
+            return 1
+    
+    # ================================================================
     # 2. M5_0 GATE (OFFLINE)
     # ================================================================
     exit_code = run_command(

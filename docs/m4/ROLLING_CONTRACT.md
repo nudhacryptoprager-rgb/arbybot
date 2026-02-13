@@ -32,8 +32,10 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
   "schema_version": "m4:latest:v2.0",
   "updated_at": "ISO8601",
   "latest_run_timestamp": "2026-02-11T10:05:45Z",  // Primary provenance
+  "code_identity": "ts:2026-02-11T10:05:45Z",      // v2.0.1
   "run_context": {
     "run_timestamp": "2026-02-11T10:05:45Z",  // Primary provenance
+    "code_identity": "ts:2026-02-11T10:05:45Z", // v2.0.1
     "code_sha": null,                         // v2.0: deprecated
     "code_dirty": null,                       // v2.0: deprecated
     "code_desc": null,                        // v2.0: deprecated
@@ -48,6 +50,12 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
   "runs_in_window": 5,
   "in_warmup": true,
   "total_signals_in_window": 15,
+  // v2.0.2: Top-level KPIs for quick access
+  "effective_pass_rate": 0.95,
+  "data_run_rate": 0.90,
+  "low_sample_rate": 0.10,
+  "net_diversity_rate": 0.50,
+  "quick_stats": { /* ... see m4_stability_agg.quick_stats */ },
   "paths": {
     "run_summary_latest": "_rolling/run_summary_latest.json",
     "rolling_agg": "_rolling/m4_stability_agg.json",
