@@ -13,12 +13,16 @@
 | DoD Level | Criterion | Evidence Required | Status |
 |-----------|-----------|-------------------|--------|
 | **M4.1 Simulate-only** | Code/schema/invariants | FIXTURE_OFFLINE or REAL with simulate_only=true | ✅ PROVEN |
-| **M4 Online Profit (core truth)** | Real profitability | `run_mode=REAL`, N=5 runs with `total_net_usdc > 0` | ❌ NOT PROVEN |
+| **M4 Online Profit (core truth)** | Real profitability | `run_mode=REGISTRY_REAL`, N=5 runs with `total_net_usdc > 0` | ❌ NOT PROVEN |
+
+**RunMode Canonical (v2.0.1):**
+> `REGISTRY_REAL` is the canonical run_mode for online scanning.
+> Legacy docs may use `REAL` as shorthand but artifacts MUST use `REGISTRY_REAL`.
 
 **M4-profit по суті (справжній DoD, цитата з Roadmap):**
 ```
 N = 5 consecutive online runs where:
-  - run_mode = "REAL" (not FIXTURE_OFFLINE)
+  - run_mode = "REGISTRY_REAL" (not FIXTURE_OFFLINE)
   - pinned_block = real block (not 429900000)
   - total_net_usdc > 0
   - all from same runDir with consistent timestamps
@@ -55,8 +59,19 @@ N = 5 consecutive online runs where:
 
 **RELEASE Mode:**
 - Rolling artifacts with run_timestamp
-- Optional: reference commit SHA in Status_M4.md for documentation purposes
-- Use for milestone claims  
+- Use for milestone claims
+
+## Docs Freeze Rules (v2.0.1)
+
+**Зміни DoD/контрактів дозволені лише при:**
+1. Зміні коду/скриптів, що вимагає нового контракту
+2. Оновленні `docs/m4/ROLLING_CONTRACT.md` з новою схемою
+3. Прикладі у rolling/runDir artifacts, що демонструє нову структуру
+
+**Policy Version Discipline:**
+- `policy_version` у `m4/policy.py` MUST змінюватись при будь-якому зсуві порогів `MIN_*`
+- `policy_version` у rolling артефактах MUST дорівнювати `policy.py`
+- Розбіжність = FAIL для release gates  
 
 ## Taxonomy Contract (v1.12.0)
 
@@ -169,7 +184,7 @@ Location: `data/runs/_rolling/`
 - [x] agg_status = WARN_QUALITY (only DIVERSITY_*) accepted per Acceptable States table
 
 ### M4 Online Profit (core truth) — ❌ NOT PROVEN
-- [ ] N=5 consecutive online runs with run_mode=REAL
+- [ ] N=5 consecutive online runs with run_mode=REGISTRY_REAL
 - [ ] All runs have total_net_usdc > 0
 - [ ] All runs use real pinned_block (not 429900000)
 - [ ] agg_status = PASS (no WARN_QUALITY)
@@ -188,6 +203,10 @@ Location: `data/runs/_rolling/`
 6. ~~**M4.1 quality thresholds**~~: RESOLVED (v2.0.1) - data_run_rate=1.0, low_sample_rate=0.0 with MIN_SIGNALS_FOR_PASS=3
 7. **M4 online profit DoD**: NOT PROVEN - need N=5 real runs with total_net_usdc>0 per Roadmap.md
 8. **DIVERSITY targets**: unique_pairs=4 (<10 target), unique_routes=2 (<4 target) - causes WARN_QUALITY
+
+**Next focus**: Close Roadmap Core Truth - M4 online profit DoD (N=5 real runs, run_mode=REGISTRY_REAL, total_net_usdc>0). Once proven, update this section.
+
+**Next engineering focus**: Scanner coverage + adapters + discovery для досягнення core truth (N=5 runs, total_net_usdc>0).
 
 ### v2.0.0 Provenance Model
 - SHA tracking completely removed (`code_sha`, `evidence_sha` = None)

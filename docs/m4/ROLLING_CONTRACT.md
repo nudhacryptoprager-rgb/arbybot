@@ -7,8 +7,15 @@ Schema and data contract for M4 execution gate rolling artifacts.
 | File | Schema | Version | Description |
 |------|--------|---------|-------------|
 | `_latest.json` | `m4:latest` | v2.0 | Latest run pointer (timestamp provenance) |
-| `run_summary_latest.json` | `run:summary` | v2.0 | Full run summary |
+| `run_summary_latest.json` | `m4:run_summary` | v2.0 | Full run summary |
 | `m4_stability_agg.json` | `m4:stability_agg` | v2.0 | Rolling aggregator |
+
+**Де брати ключові метрики:**
+- `signals_count` → `run_summary_latest.metrics.signals_count`
+- `total_net_usdc` → `run_summary_latest.metrics.total_net_usdc` (per run) / `m4_stability_agg.quick_stats.total_net_usdc` (window)
+- `low_sample_rate` → `m4_stability_agg.quick_stats.low_sample_rate`
+- `unique_pairs/unique_routes` → `m4_stability_agg.quick_stats.unique_pairs/unique_routes`
+- `run_mode` → `run_summary_latest.inputs.run_mode`
 
 ## Provenance Model (v2.0.0)
 

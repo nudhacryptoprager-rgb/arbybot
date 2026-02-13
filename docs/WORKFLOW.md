@@ -1,6 +1,10 @@
 # ARBY3 Workflow (ChatGPT ↔ Claude ↔ VSCode ↔ GitHub)
 
-_Last updated: 2026-01-27_
+_Last updated: 2026-02-13 (v2.x SHA-free)_
+
+> **v2.0+ Provenance**: SHA tracking removed. Evidence based on `run_timestamp` + rolling artifacts.
+> See `docs/DEV_REPORT_CANONICAL_UA.md` for canonical report format.
+> See `docs/status/Status_M4.md` for current milestone status.
 
 ## Setup (STEP 1+2)
 
@@ -24,11 +28,11 @@ python -c "from monitoring import calculate_confidence; print('import ok')"
 
 ## Rules (hard)
 
-- Work via GitHub SHA + latest Status as source of truth
+- Work via rolling artifacts + latest Status as source of truth (v2.x: no SHA binding)
 - Small PRs (1-2 commits). Every PR must have:
-  - Updated Status file
+  - Updated Status file (with Updated timestamp, run_id)
   - `python -m pytest -q` green
-  - `python scripts/ci_m4_gate.py --offline` green with 4/4 artifacts
+  - `python scripts/ci_m4_execution_gate.py --offline --profile profit` green
   - No emojis in subprocess output (ASCII only)
 - Do not commit runtime run directories (`data/runs/...`) unless explicitly marked as **golden**
 

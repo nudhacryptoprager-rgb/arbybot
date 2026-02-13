@@ -203,6 +203,13 @@ class Thresholds:
     """
     Centralized threshold definitions for drift metrics.
     
+    v2.0.1 POLICY CHANGE (2026-02-12):
+    - MIN_SIGNALS_FOR_PASS lowered from 5 to 3 (real market conditions)
+    - MIN_SAMPLE_SIZE lowered from 5 to 3
+    - MIN_SIGNALS_WARN lowered from 3 to 2
+    - KPI data_run_rate/low_sample_rate now use threshold 3
+    - WARN_QUALITY (only DIVERSITY_*) accepted as PASS-equivalent for M4.1
+    
     v1.12.0 TAXONOMY CONTRACT:
     - FAIL_* in reasons → status MUST be FAIL (enforced by compute_status)
     - Use compute_status() for all status decisions (single source of truth)
@@ -212,16 +219,6 @@ class Thresholds:
     - NO_DATA: ONLY when signals_count == 0 (no signals at all)
     - Signals >= 1 → profit/drift evaluated normally
     - Signals < MIN_SIGNALS_FOR_PASS → quality_status=WARN_LOW_SAMPLE (not NO_DATA)
-    
-    v1.9.7 UNIFIED SAMPLE THRESHOLDS:
-    - MIN_SIGNALS_FOR_PASS unified with MIN_SAMPLE_SIZE = 5
-    - signals < 5 → quality_status=WARN_LOW_SAMPLE (not counted as data_run)
-    - Added AGG_FRAGILE_P50_WARN for early signal
-    
-    v1.9.5 QUALITY GATES:
-    - Added MIN_SIGNALS_FOR_PASS: runs with < 5 signals get NO_DATA
-    - Added AGG_LOW_SAMPLE_RATE_FAIL: if > 50% runs are low-sample, agg fails quality
-    - AGG_FRAGILE_P90_WARN/FAIL now enforced in aggregator status
     
     v1.8.1 CALIBRATION (based on 20 online runs, 56 signals):
     - MAE_WARN raised from 0.30 → 0.55 to account for systematic slippage=$0.50

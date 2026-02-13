@@ -1,0 +1,219 @@
+# PATH: config/real_expanded.yaml
+#
+# M4 REAL Pipeline - EXPANDED CONFIG (Diversity Targets)
+#
+# PURPOSE: Reach DIVERSITY targets (unique_pairs >= 10, unique_routes >= 4)
+# BASED ON: config/real_minimal.yaml (v2.0.1)
+#
+# Diversity Plan:
+# - Pairs: 10+ unique pairs from different categories
+# - Routes: 4+ unique routes (uniswap_v3<->sushiswap_v3, both directions, + fee tiers)
+# - Categories: majors (WETH pairs), stables (USDC/USDT cross), alts (ARB, LINK, GMX)
+#
+# Note: This config is for diversity expansion.
+# Pool addresses must be verified before adding new pairs.
+
+# Chain: Arbitrum One
+chain: arbitrum_one
+chain_id: 42161
+
+# RPC endpoints with fallback
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+  - "https://rpc.ankr.com/arbitrum"
+
+# RPC settings
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# 2 DEXes for cross-DEX arbitrage
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+
+# EXPANDED PAIRS (verified pools only - safe-by-default)
+# NOTE: Pairs without verified pools are COMMENTED OUT until verification.
+# To enable a pair: 1) verify pools via factory.getPool() 2) add to pools section 3) uncomment
+pairs:
+  # === MAJORS (WETH pairs) - VERIFIED ===
+  - token_in: WETH
+    token_out: USDC
+    fee_tiers: [500, 3000]
+  - token_in: WETH
+    token_out: USDT
+    fee_tiers: [500, 3000]
+  - token_in: wstETH
+    token_out: WETH
+    fee_tiers: [100, 500]
+  # === ALTS (WETH pairs) - VERIFIED ===
+  - token_in: ARB
+    token_out: WETH
+    fee_tiers: [500, 3000]
+  - token_in: LINK
+    token_out: WETH
+    fee_tiers: [500, 3000]
+  - token_in: GMX
+    token_out: WETH
+    fee_tiers: [500, 3000]
+  # === ARB/USDC - VERIFIED ===
+  - token_in: ARB
+    token_out: USDC
+    fee_tiers: [500, 3000]
+  # === TODO: Pairs below need pool verification before enabling ===
+  # - token_in: LINK
+  #   token_out: USDC
+  #   fee_tiers: [500, 3000]
+  # - token_in: ARB
+  #   token_out: USDT
+  #   fee_tiers: [500, 3000]
+  # - token_in: LINK
+  #   token_out: USDT
+  #   fee_tiers: [500, 3000]
+    fee_tiers: [500, 3000]
+
+# Pool addresses (verified on Arbitrum via factory.getPool() on 2026-02-07)
+# Uniswap V3 Factory: 0x1F98431c8aD98523631AE4a59f267346ea31F984
+# SushiSwap V3 Factory: 0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e
+pools:
+  # === WETH/USDC ===
+  uniswap_v3_WETH_USDC_500: "0xC6962004f452bE9203591991D15f6b388e09E8D0"
+  uniswap_v3_WETH_USDC_3000: "0xc473e2aEE3441BF9240Be85eb122aBB059A3B57c"
+  sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
+  sushiswap_v3_WETH_USDC_3000: "0xC96525298419f7E00dA8826B733Ee52e271662b5"
+  # === WETH/USDT ===
+  uniswap_v3_WETH_USDT_500: "0x641C00A822e8b671738d32a431a4Fb6074E5c79d"
+  uniswap_v3_WETH_USDT_3000: "0xc82819F72A9e77E2c0c3A69B3196478f44303cf4"
+  sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
+  sushiswap_v3_WETH_USDT_3000: "0x92d543A8a158A6bC2C7018ae17803819Cb9150B2"
+  # === ARB/WETH ===
+  uniswap_v3_ARB_WETH_500: "0xC6F780497A95e246EB9449f5e4770916DCd6396A"
+  uniswap_v3_ARB_WETH_3000: "0x92c63d0e701CAAe670C9415d91C474F686298f00"
+  sushiswap_v3_ARB_WETH_500: "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11"
+  sushiswap_v3_ARB_WETH_3000: "0xB3942c9FFA04efBC1Fa746e146bE7565c76E3dC1"
+  # === LINK/WETH ===
+  uniswap_v3_LINK_WETH_500: "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907"
+  uniswap_v3_LINK_WETH_3000: "0x468b88941e7Cc0B88c1869d68ab6b570bCEF62Ff"
+  sushiswap_v3_LINK_WETH_500: "0x942E53ED315Db6451AdCd601D4D08f059F88C77f"
+  sushiswap_v3_LINK_WETH_3000: "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65"
+  # === GMX/WETH ===
+  uniswap_v3_GMX_WETH_500: "0xb435ebfE0BF4CE66810AA4d44e3a5CA875D40DB1"
+  uniswap_v3_GMX_WETH_3000: "0x1aEEdD3727A6431b8F070C0aFaA81Cc74f273882"
+  sushiswap_v3_GMX_WETH_500: "0xe7988687004933525734Da744102ea8E0e472A91"
+  sushiswap_v3_GMX_WETH_3000: "0x2AB937e744B6E067c55329838A587d1Cf50C874f"
+  # === wstETH/WETH ===
+  uniswap_v3_wstETH_WETH_100: "0x35218a1cbaC5Bbc3E57fd9Bd38219D37571b3537"
+  uniswap_v3_wstETH_WETH_500: "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13"
+  sushiswap_v3_wstETH_WETH_100: "0x8BD39fA8608fd949C253987767540c26a0D974CF"
+  sushiswap_v3_wstETH_WETH_500: "0xc60f4760a70Bb900776DBBfcce9eF1a109a185B0"
+  # === ARB/USDC ===
+  uniswap_v3_ARB_USDC_500: "0xb0f6cA40411360c03d41C5fFc5F179b8403CdcF8"
+  uniswap_v3_ARB_USDC_3000: "0xaEBDcA1Bc8d89177EbE2308d62af5e74885DcCc3"
+  sushiswap_v3_ARB_USDC_500: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
+  sushiswap_v3_ARB_USDC_3000: "0x14716A16ef9eeAaDa7E266bcF023b71D2c9ADbf3"
+  # === LINK/USDC (need to verify pools) ===
+  # TODO: verify via factory.getPool() before enabling
+  # uniswap_v3_LINK_USDC_500: "TBD"
+  # uniswap_v3_LINK_USDC_3000: "TBD"
+  # sushiswap_v3_LINK_USDC_500: "TBD"
+  # sushiswap_v3_LINK_USDC_3000: "TBD"
+  # === ARB/USDT (need to verify pools) ===
+  # TODO: verify via factory.getPool() before enabling
+  # uniswap_v3_ARB_USDT_500: "TBD"
+  # uniswap_v3_ARB_USDT_3000: "TBD"
+  # sushiswap_v3_ARB_USDT_500: "TBD"
+  # sushiswap_v3_ARB_USDT_3000: "TBD"
+  # === LINK/USDT (need to verify pools) ===
+  # TODO: verify via factory.getPool() before enabling
+  # uniswap_v3_LINK_USDT_500: "TBD"
+  # uniswap_v3_LINK_USDT_3000: "TBD"
+  # sushiswap_v3_LINK_USDT_500: "TBD"
+  # sushiswap_v3_LINK_USDT_3000: "TBD"
+
+# Token addresses (Arbitrum)
+tokens:
+  WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+  USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+  USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+  WBTC: "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f"
+  ARB: "0x912CE59144191C1204E64559FE8253a0e49E6548"
+  LINK: "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4"
+  GMX: "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
+  wstETH: "0x5979D7b546E38E414F7E9822514be443A4800529"
+
+# Token decimals for proper normalization
+quote_decimals:
+  WETH: 18
+  USDC: 6
+  USDT: 6
+  WBTC: 8
+  ARB: 18
+  LINK: 18
+  GMX: 18
+  wstETH: 18
+
+# Anchor prices for each pair (used for price sanity checks)
+# Format: TOKEN_IN_TOKEN_OUT: expected_price
+# Prices as of 2026-02-07
+tokens_anchor_price:
+  WETH_USDC: 2000     # ~$2000 per WETH
+  WETH_USDT: 2000     # ~$2000 per WETH
+  WBTC_WETH: 17       # ~17 WETH per WBTC (~$34k BTC)
+  ARB_WETH: 0.00035   # ~0.00035 WETH per ARB (~$0.70 ARB)
+  LINK_WETH: 0.0055   # ~0.0055 WETH per LINK (~$11 LINK)
+  GMX_WETH: 0.012     # ~0.012 WETH per GMX (~$24 GMX)
+  wstETH_WETH: 1.15   # ~1.15 WETH per wstETH (staking yield)
+  ARB_USDC: 0.70      # ~$0.70 per ARB
+  WBTC_USDC: 34000    # ~$34,000 per WBTC
+  LINK_USDC: 11.0     # ~$11 per LINK
+  ARB_USDT: 0.70      # ~$0.70 per ARB
+  LINK_USDT: 11.0     # ~$11 per LINK
+
+# Quote sizing: 1 ETH
+quote_amount_in_wei: "1000000000000000000"
+
+# Gate thresholds
+max_slippage_bps: 100
+min_net_bps: 5
+
+# STEP 6: Price sanity gate with M4 BOOTSTRAP thresholds
+price_sanity_enabled: true
+price_sanity_max_deviation_bps: 5000  # 50% for bootstrap
+
+# Paper trading
+cooldown_seconds: 60
+notion_capital_usdc: "10000.000000"
+
+# M5 Cost model (gas-only)
+gas_usd_estimate: 0.10
+
+# Paper trading settings (M5)
+paper_size_usd: 1000
+paper_slippage_bps: 0
+
+# Autosize configuration (M5)
+autosize:
+  enabled: true
+  base_size_usd: 1000
+  min_size_usd: 100
+  max_size_usd: 5000
+  impact_threshold_bps: 50
+  ticks_crossed_threshold: 5
+  reduction_factor: 0.5
+  cooldown_seconds: 300
+  reason_codes:
+    - "high_impact"
+    - "ticks_crossed"
+    - "volatility"
+    - "cooldown_active"
+
+# Spread signal threshold (M5)
+min_spread_bps: 5
+
+# Net PnL threshold for daily_report top_opportunities (M5)
+min_net_pnl_usdc_est: 0.0
+
+# M4 markers - execution disabled
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_M4

@@ -43,12 +43,16 @@ Triangular, Cross-chain — тільки після того, як Truth Engine 
 | DoD Level | Criterion | Evidence Required |
 |-----------|-----------|-------------------|
 | **Offline** | Code/schema/invariants work | `run_mode=FIXTURE_OFFLINE`, synthetic block |
-| **Online** | Real profitability | `run_mode=REAL`, N=5 runs with `total_net_usdc > 0` |
+| **Online** | Real profitability | `run_mode=REGISTRY_REAL`, N=5 runs with `total_net_usdc > 0` |
+
+**RunMode Canonical (v2.0.1):**
+> `REGISTRY_REAL` is the canonical run_mode for online scanning.
+> Legacy docs may use `REAL` as shorthand but artifacts MUST use `REGISTRY_REAL`.
 
 **M4-profit по суті (справжній DoD):**
 ```
 N = 5 consecutive online runs where:
-  - run_mode = "REAL" (not FIXTURE_OFFLINE)
+  - run_mode = "REGISTRY_REAL" (not FIXTURE_OFFLINE)
   - pinned_block = real block (not 429900000)
   - total_net_usdc > 0
   - all from same runDir with consistent timestamps
@@ -101,21 +105,17 @@ N = 5 (на реальних блоках, не fixture)
 > Не шліфувати M5, поки M4 online-profit не стабільний.  
 > Якщо core DEX↔DEX не дає мінімальний +PnL онлайн — все інше буде "красивою звітністю".
 
-### Compare Workflow (для рев'ю)
+### Evidence Workflow (v2.0+)
 
-**Правильний compare:**
-```bash
-# Якщо працюєте в split/code branch
-git log --oneline -5 split/code  # Знайти попередній SHA
-git diff <previous_sha>..HEAD --stat  # Compare від попереднього
-
-# НЕ використовувати origin/main...HEAD (показує "пів репо змінено")
-```
+**Provenance policy (SHA-free):**
+- `run_timestamp` (ISO-8601) is the primary provenance field
+- `code_identity` = `ts:<ISO-8601>` (deterministic code ref)
+- SHA tracking completely removed (code_sha, evidence_sha = null)
 
 **Для Status update:**
-- Кожен Status має містити SHA і runDir
-- Compare робиться від SHA попереднього Status
-- Це робить рев'ю відтворюваним
+- Кожен Status має містити `run_timestamp` і `run_id`/`runDir`
+- Evidence базується на rolling artifacts: `_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
+- Це робить рев'ю відтворюваним через disk-visible artifacts
 
 ---
 
@@ -266,7 +266,7 @@ arby/
 ### 4.2 Де НЕ можна хардкодити
 - `discovery/*` не містить ручних адрес токенів/пулів (крім smoke pairs)
 - `engine/*` не містить “списків пар”
-- `strategy/scanner.py` не містить адрес контрактів (вони тільки в config + adapter)
+- `strategy/jobs/run_scan*.py` не містить адрес контрактів (вони тільки в config + adapter)
 
 ---
 
@@ -456,7 +456,7 @@ Done Criteria:
 Цей додаток описує, як **запустити в роботу universe** з `intent.txt` (мінімальний список пар) на всіх мережах та підхопити **всі можливі пули** в рамках підтримуваних протоколів/DEX-ів.
 
 > Джерело truth для universe: `intent.txt` (chain:BASE/QUOTE).  
-> Важливо: ми **не довіряємо символам** як адресам. Символ = лише “намір”, адреса підтверджується тільки через verify. fileciteturn15file0
+> Важливо: ми **не довіряємо символам** як адресам. Символ = лише "намір", адреса підтверджується тільки через on-chain verify.
 
 ## A1) Де це лежить у проєкті
 
@@ -470,18 +470,26 @@ Done Criteria:
 - `data/registry.sqlite` — verified tokens, pools, pair-universe, health metrics
 - `data/snapshots/*` — quotes/opportunities/rejects з reason codes
 
-### Код (нові/оновлені модулі)
-- `discovery/intent_loader.py` — парсить `intent.txt`, дає canonical pair-universe
-- `discovery/verify.py` — on-chain verify токенів/пулів
-- `discovery/index_factories.py` — **factory-based enumeration** пулів для підтримуваних DEX-ів
-- `discovery/dexscreener.py` — fallback discovery (не як truth, а як “hint/source”)
-- `dex/registry.py` + `dex/adapters/*` — quoting/adapter support
-- `strategy/scanner.py` — цикл скану, який працює тільки з registry
+### Код (існуючі + TODO модулі)
+
+**Існуючі:**
+- `discovery/registry.py` — registry токенів/пулів
+- `discovery/quarantine.py` — quarantine логіка для проблемних пар/пулів
+- `strategy/jobs/run_scan.py` — entry point сканера (dispatch smoke/real)
+- `strategy/jobs/run_scan_real.py` — цикл скану для REGISTRY_REAL mode
+- `strategy/jobs/run_scan_smoke.py` — smoke test mode
+- `dex/adapters/*` — quoting/adapter support
+
+**TODO (заплановані модулі, ще не реалізовані):**
+- `discovery/intent_loader.py` — TODO: парсить `intent.txt`, дає canonical pair-universe
+- `discovery/verify.py` — TODO: on-chain verify токенів/пулів
+- `discovery/index_factories.py` — TODO: factory-based enumeration пулів
+- `discovery/dexscreener.py` — TODO: fallback discovery (hint/source)
 
 ## A2) Як ми запускаємо “всі токени + всі мережі” з intent.txt
 
 ### Крок 1 — Парсинг intent.txt → canonical universe
-**Виконує:** `discovery/intent_loader.py`
+**Виконує:** `discovery/intent_loader.py` (TODO: ще не реалізовано)
 
 Правила:
 1) Рядок формату `chain:AAA/BBB` додає пару (unordered) в universe для chain.
@@ -493,10 +501,10 @@ Done Criteria:
 **Збереження:**
 - `registry.sqlite` таблиці `intent_pairs(chain_id, sym_a, sym_b, added_at, source='intent')`
 
-> Пара у intent — це мінімум. Далі ми розширюємо пул-лист, але не розширюємо список пар без явного рішення. fileciteturn15file0
+> Пара у intent — це мінімум. Далі ми розширюємо пул-лист, але не розширюємо список пар без явного рішення.
 
 ### Крок 2 — Token resolution: symbol → verified token address (per chain)
-**Виконує:** `discovery/verify.py` (через discovery hints)
+**Виконує:** `discovery/verify.py` (TODO: ще не реалізовано; тимчасово `scripts/verify_anchors.py`)
 
 Порядок (жорсткий):
 1) Якщо символ входить у `config/core_tokens.yaml` для цієї мережі → беремо address+decimals як trust anchor.
@@ -511,9 +519,9 @@ Done Criteria:
 > Якщо виявлено 2 різні адреси з одним символом — обидві зберігаються, але лише одна може бути “canonical” після ручного рішення (`status='candidate'`).
 
 ### Крок 3 — “All possible pools”: factory-based enumeration (основний метод)
-**Виконує:** `discovery/index_factories.py`
+**Виконує:** `discovery/index_factories.py` (TODO: ще не реалізовано; тимчасово `scripts/find_sushi_pools.py`)
 
-Ціль: для кожної `intent pair` на кожному chain, пройти по **всіх DEX-ах**, які ми реально підтримуємо адаптерами, і знайти всі пули. fileciteturn15file0
+Ціль: для кожної `intent pair` на кожному chain, пройти по **всіх DEX-ах**, які ми реально підтримуємо адаптерами, і знайти всі пули.
 
 #### Для Uniswap V3 / Pancake V3 (adapter_type = `uniswap_v3`)
 - Для кожної fee tier з `core/constants.py: V3_FEE_TIERS`
@@ -540,7 +548,7 @@ Done Criteria:
 > Це і є наше визначення “всі можливі пули”: **всі пули для кожної intent-пари в межах підтримуваних DEX-ів** (тих, що є в `dexes.yaml` і мають адаптер).
 
 ### Крок 4 — DexScreener як доповнення (не як truth)
-**Виконує:** `discovery/dexscreener.py`
+**Виконує:** `discovery/dexscreener.py` (TODO: ще не реалізовано)
 
 Використовуємо DexScreener:
 - щоб знайти “невідомі” DEX/пули, яких немає в `dexes.yaml`
@@ -564,8 +572,8 @@ Done Criteria:
 ## A3) Як scanner використовує universe і пули (runtime)
 
 ### Scanner pipeline
-`strategy/scanner.py`:
-1) бере список intent pairs з `registry.sqlite`
+`strategy/jobs/run_scan_real.py` (або run_scan.py для dispatch):
+1) бере список пар з config YAML
 2) для кожної пари:
    - дістає всі `active` пули з `pools` (по всіх DEX-ах)
    - викликає адаптер для BUY і SELL quotes:
@@ -612,7 +620,7 @@ Done Criteria:
 3) запустити scanner + `monitoring/truth_report.py`
 
 ## A6) Коментар Team Lead щодо intent.txt
-`intent.txt` — це **мінімальний список пар**, який задає бізнес-фокус (токени, мережі, напрямки). fileciteturn15file0  
+`intent.txt` — це **мінімальний список пар**, який задає бізнес-фокус (токени, мережі, напрямки).
 Ми масштабуємось **по пулах**, а не “роздуваємо список пар”:
 - для кожної intent-пари збираємо всі пули по підтримуваних DEX-ах
 - фільтруємо, скоримо і тримаємо `active` список

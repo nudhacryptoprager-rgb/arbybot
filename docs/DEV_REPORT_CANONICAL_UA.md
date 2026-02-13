@@ -73,28 +73,44 @@ run_dir_bundle (ONLINE):
   - data/runs/<DIR>/snapshots
 
 ## 4) Key Results (числа з артефактів)
+
+**Де брати метрики (v2.0.1):**
+- `signals_count` → `run_summary_latest.metrics.signals_count`
+- `total_net_usdc` (run) → `run_summary_latest.metrics.total_net_usdc`
+- `total_net_usdc` (window) → `m4_stability_agg.quick_stats.total_net_usdc`
+- `low_sample_rate` → `m4_stability_agg.quick_stats.low_sample_rate`
+- `data_run_rate` → `_latest.data_run_rate` або `m4_stability_agg.quick_stats.data_run_rate`
+- `unique_pairs/unique_routes` → `m4_stability_agg.quick_stats.unique_pairs/unique_routes`
+- `run_mode` → `run_summary_latest.inputs.run_mode`
+
+```md
 latest:
   schema_version: <...>
   run_status: <...>
   agg_status: <...>
-  data_run_rate: <...>
-  low_sample_rate: <...>
+  data_run_rate: <...>              # top-level
+  low_sample_rate: <...>            # from quick_stats
 run_summary_latest:
   schema_version: <...>
   status: <...>
-  signals_count: <...>
-  profit_status: <...> | total_net_usdc: <...>
+  metrics.signals_count: <...>
+  metrics.total_net_usdc: <...>
+  profit_status: <...>
   drift_status: <...>
   quality_status: <...> | quality_reasons: <...>
   run_timestamp: <...>
   code_identity: <...>
+  inputs.run_mode: <...>            # REGISTRY_REAL or FIXTURE_OFFLINE
 stability_agg:
   schema_version: <...>
   agg_status: <...>
   agg_reasons: <...comma list...>
   runs_since_timestamp.runs_count: <...>
   runs_since_timestamp.data_runs_count: <...>
+  quick_stats.unique_pairs: <...>
+  quick_stats.unique_routes: <...>
   runs_by_date: <...>
+```
 
 ## 5) Contract Checks (коротко)
 status/reasons consistency: <OK|NOT OK> + 1 рядок

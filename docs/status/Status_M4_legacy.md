@@ -1,3 +1,12 @@
+# ⚠️ ARCHIVE / НЕ АКТУАЛЬНО (v2.0.0+)
+
+> **Цей документ збережено для історичних цілей.**  
+> **Актуальний статус: [`Status_M4.md`](Status_M4.md)**  
+> **Провенанс моделі змінено у v2.0.0 — SHA tracking видалено.**  
+> **Не використовувати для релізних рішень.**
+
+---
+
 # Status: M4 (DEX↔DEX Atomic Execution v1)
 
 **Status**: ✅ **PROVEN** (simulate_only online), ❌ **NOT PROVEN** (real execution)  
