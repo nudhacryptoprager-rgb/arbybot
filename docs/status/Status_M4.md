@@ -1,10 +1,22 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
-**Status**: PROVEN (M4.1 simulate-only + M4 online profit DoD PROVEN; M4.2 real execution NOT PROVEN)  
+**Status**: M4 ONLINE PROFIT NOT PROVEN (data_run_rate < 0.50)  
 **Updated**: 2026-02-13  
-**Gate Version**: v2.0.0  
-**Policy Version**: v2.0.2  
-**Evidence**: Timestamp-based provenance (SHA tracking removed in v2.0, finalized in v2.0.2)  
+**Gate Version**: v2.0.5  
+**Policy Version**: v2.0.5  
+**Evidence**: Timestamp-based provenance (v2.0.5: NO_DATA only when included=0, WARN for 1-2 signals)  
+
+## ⚠️ PROFIT REALISM WARNING (v2.0.4)
+
+**Paper profit PROVEN** under simulated cost model (`gas=$0.10`, `slippage=5bps`).  
+**Profit realism NOT PROVEN** — current validation has known gaps:
+
+1. **SUSPECT_SPREAD signals now excluded (v2.0.4)**: Spread > 500bps triggers `is_excluded_spread=true`, signal excluded from DoD metrics
+2. **TOP_PAIR_NET_SHARE check active (v2.0.4)**: Single pair > 80% of net profit → `FAIL_TOP_PAIR_DOMINANCE`
+3. **Linear PnL model**: No price impact modeling; large trades overestimate profit
+4. **Liquidity imbalance undetected**: Different pool liquidities not compared (root cause of LINK/WETH outlier)
+
+Until these gaps are closed, M4 profit = "paper profit under declared cost model", NOT "realistic profit".
 
 ## Core Truth (from Roadmap.md)
 
@@ -24,20 +36,25 @@
 > Quick ref: N≥5 runs in `m4_stability_agg.json.runs[]` with:
 > `run_mode=REGISTRY_REAL`, `pinned_block!=429900000`, `block_is_synthetic=false`, `total_net_usdc>0`
 
-**Evidence for M4 online-profit PROVEN (updated 2026-02-13, 41 runs):**
-| run_id | net_usdc | run_status | signals | run_mode | pinned_block |
-|--------|----------|------------|---------|----------|--------------|
-| ci_m5_gate_20260213_152736 | 116.32 | PASS | 3 | REGISTRY_REAL | 431689209 |
-| ci_m5_gate_20260213_152746 | 115.93 | PASS | 3 | REGISTRY_REAL | 431689275 |
-| ci_m5_gate_20260213_152757 | 118.78 | PASS | 4 | REGISTRY_REAL | 431689318 |
-| ci_m5_gate_20260213_152808 | 118.51 | PASS | 4 | REGISTRY_REAL | 431689395 |
-| ci_m5_gate_20260213_152819 | 118.27 | PASS | 4 | REGISTRY_REAL | 431689441 |
+**Evidence for M4 online-profit (updated 2026-02-13, 20 runs, v2.0.5 clean window):**
+
+> **STATUS: NOT PROVEN** - `data_run_rate=0.35 < 0.50` violates DoD threshold.
+
+| run_id | net_usdc | run_status | included_signals | run_mode | pinned_block |
+|--------|----------|------------|------------------|----------|--------------|
+| ci_m5_gate_20260213_172639 | 1.49 | WARN | 2 | REGISTRY_REAL | 431717801 |
+| ci_m5_gate_20260213_172650 | 1.27 | WARN | 1 | REGISTRY_REAL | 431717844 |
+| ci_m5_gate_20260213_172701 | 1.27 | WARN | 1 | REGISTRY_REAL | 431717888 |
+| ci_m5_gate_20260213_172712 | 1.27 | WARN | 1 | REGISTRY_REAL | 431717932 |
+| ci_m5_gate_20260213_172723 | 1.33 | WARN | 1 | REGISTRY_REAL | 431717975 |
 
 > Source: `data/runs/_rolling/m4_stability_agg.json.runs[-5:]`
-> Total runs in window: 41 | Total net_usdc: $4912.79 | net_diversity_rate: 0.675
-> Policy Version: 2.0.2 | low_sample_rate: 0.0244 | effective_pass_rate: 0.9756
+> Total runs in window: 20 | Total net_usdc: $41.18 | net_diversity_rate: 1.0
+> Policy Version: 2.0.5 | low_sample_rate: 0.65 | data_run_rate: 0.35 | effective_pass_rate: 0.35
+> Status Domain: NO_DATA | PASS | WARN | FAIL | FAIL_QUALITY (not LOW_SAMPLE)
+> Quality Warnings: FRAGILE_P90_ELEVATED, LOW_SAMPLE_RATE_ELEVATED, DATA_RUN_RATE_WARN, DIVERSITY_PAIRS_LOW, DIVERSITY_ROUTES_LOW
 
-> **M4 online profit DoD виконано (2026-02-12, оновлено 2026-02-13).** Це означає:
+> **M4 online profit DoD: NOT MET** (v2.0.5, 2026-02-13). Reasons:
 > - `simulate_only=true`, `execution_enabled=false` — реальних TX немає
 > - Прибуток підтверджено симуляцією, не реальними угодами
 > - Для M4.2 (real execution) потрібен окремий DoD proof з TX on-chain
@@ -270,6 +287,14 @@ Location: `data/runs/_rolling/`
    - **Decision (v2.0.1)**: Accept `unique_routes=2` as M4.1 minimum. Target of 4 requires 3rd DEX (e.g., Curve, Camelot).
    - Pairs expansion: Add verified pairs (LINK/USDC, ARB/USDT) to `config/real_expanded.yaml` once pools verified.
    - Full diversity targets deferred to M5 when 3rd DEX adapter available.
+9. **⚠️ PROFIT REALISM NOT PROVEN (v2.0.3)**:
+   - Current paper model uses `gross_pnl = size_usd * spread_bps / 10000` — **no price impact**.
+   - **Evidence of bug**: LINK/WETH spread ~1133 bps (11.3%) between UniV3 and SushiV3 same block.
+   - **Root cause**: SushiV3 LINK/WETH pool has ~8 million times less liquidity than UniV3 (7.8e14 vs 6.6e21).
+   - **Impact**: $1000 trade on SushiV3 would have catastrophic slippage, but model shows +$113 profit.
+   - **Mitigation (v2.0.3)**: `SUSPECT_SPREAD` flag for spreads > 300 bps, excluded from DoD at > 500 bps.
+   - **Required for M4.2**: quoter-based PnL model with real `amountOut` queries.
+   - **DO NOT proceed to M4.2 execution until quoter/impact model validated.**
 
 **Next focus**: M5_0 — Infra (RPC Providers, Streaming, Tracing). M4 online profit DoD is PROVEN.
 

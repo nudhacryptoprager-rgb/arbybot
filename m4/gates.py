@@ -625,12 +625,22 @@ def run_online_gate(
         run_summary["run_context"]["evidence_sha"] = None  # DEPRECATED
         
         # Determine status considering NO_DATA
-        signals_count = run_summary.get("metrics", {}).get("signals_count", 0)
-        total_net = run_summary.get("metrics", {}).get("total_net_usdc", 0)
+        # v2.0.4: Use included_signals_count for DoD metrics (excluded signals don't count)
+        metrics = run_summary.get("metrics", {})
+        signals_count_all = metrics.get("signals_count", 0)
+        included_signals_count = metrics.get("included_signals_count", signals_count_all)  # v2.0.4
+        excluded_signals_count = metrics.get("excluded_signals_count", 0)
+        # Use included count for status/threshold calculations
+        signals_count = included_signals_count
+        total_net = metrics.get("total_net_usdc", 0)
         pinned_block = run_summary.get("inputs", {}).get("pinned_block", 0)
-        mae_net = run_summary.get("metrics", {}).get("mae_net_usdc", 0)
-        sign_rate = run_summary.get("metrics", {}).get("est_sign_correct_rate", 1.0)
-        fragile_rate = run_summary.get("metrics", {}).get("fragile_rate", 0)
+        mae_net = metrics.get("mae_net_usdc", 0)
+        sign_rate = metrics.get("est_sign_correct_rate", 1.0)
+        fragile_rate = metrics.get("fragile_rate", 0)
+        
+        # v2.0.4: Preserve upstream quality_warnings (don't lose them in recompute)
+        upstream_quality_warnings = run_summary.get("quality_warnings", [])
+        upstream_quality_reasons = run_summary.get("quality_reasons", [])
         
         # v2.0: SHA-free compute_status (code_dirty always False)
         status_result = compute_status(
@@ -649,6 +659,33 @@ def run_online_gate(
         drift_status = status_result["drift_status"]
         quality_status = status_result["quality_status"]
         
+        # v2.0.4: Merge upstream quality warnings with computed reasons
+        # Upstream may have EXCLUDED_PRESENT, TOP_PAIR_DOMINANCE, CRITICAL_REJECT etc.
+        computed_quality_reasons = [r for r in reasons if r in (FailReason.WARN_LOW_SAMPLE, FailReason.FAIL_FRAGILE_HIGH, FailReason.WARN_FRAGILE_ELEVATED)]
+        
+        # v2.0.5 FIX: Filter out FAIL_* tokens from upstream - they can't coexist with status=PASS
+        # FAIL_* at run-level must imply status=FAIL; if status!=FAIL, downgrade to WARN_*
+        merged_quality_reasons = list(computed_quality_reasons)
+        for ur in upstream_quality_reasons:
+            if ur not in merged_quality_reasons:
+                # v2.0.5: Never merge FAIL_* if status is PASS
+                if ur.startswith("FAIL_") and status not in ("FAIL", "FAIL_QUALITY"):
+                    # Downgrade to WARN variant
+                    warn_variant = ur.replace("FAIL_", "WARN_")
+                    if warn_variant not in merged_quality_reasons:
+                        merged_quality_reasons.append(warn_variant)
+                else:
+                    merged_quality_reasons.append(ur)
+        
+        # v2.0.5 FIX: quality_status domain is NO_DATA|PASS|WARN|FAIL_QUALITY (not WARN_QUALITY)
+        has_upstream_quality_issues = (
+            excluded_signals_count > 0 or
+            any(w for w in upstream_quality_warnings if "HIGH" in w or "DOMINANCE" in w or "CRITICAL" in w) or
+            any(r for r in merged_quality_reasons if r.startswith("WARN_"))
+        )
+        if has_upstream_quality_issues and quality_status == "PASS" and status != "NO_DATA":
+            quality_status = "WARN"  # v2.0.5: domain fix - WARN not WARN_QUALITY
+        
         # Update run_summary with computed status
         run_summary["status"] = status
         run_summary["reasons"] = reasons
@@ -657,13 +694,17 @@ def run_online_gate(
         run_summary["quality_status"] = quality_status
         run_summary["profit_reasons"] = [r for r in reasons if r in (FailReason.FAIL_NET, FailReason.FAIL_NO_PROFITABLE)]
         run_summary["drift_reasons"] = [r for r in reasons if "DRIFT" in r or "SIGN" in r]
-        run_summary["quality_reasons"] = [r for r in reasons if r in (FailReason.WARN_LOW_SAMPLE, FailReason.FAIL_FRAGILE_HIGH, FailReason.WARN_FRAGILE_ELEVATED)]
+        run_summary["quality_reasons"] = merged_quality_reasons
+        # Preserve upstream quality_warnings (they have detailed info like counts)
+        if upstream_quality_warnings:
+            run_summary["quality_warnings"] = upstream_quality_warnings
         
         # v1.12.1: Propagate POLICY_VERSION centrally to all emitted run summaries
         from m4.policy import POLICY_VERSION
         run_summary["policy_version"] = POLICY_VERSION
         
-        is_data_run = signals_count >= Thresholds.MIN_SIGNALS_FOR_PASS
+        # v2.0.5 FIX: Use included_signals_count for is_data_run (consistent with DoD metrics)
+        is_data_run = included_signals_count >= Thresholds.MIN_SIGNALS_FOR_PASS
         
         # Add block_is_synthetic flag for offline
         if "inputs" in run_summary:

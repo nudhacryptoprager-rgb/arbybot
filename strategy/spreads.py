@@ -12,7 +12,39 @@ import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Tuple
 
+from m4.policy import Thresholds
+
 logger = logging.getLogger("strategy.spreads")
+
+
+def is_suspect_spread_value(spread_bps: float) -> bool:
+    """Check if spread_bps exceeds the SUSPECT threshold (300 bps).
+    
+    Suspect spreads are likely due to low-liquidity pools and may not
+    represent real arbitrage opportunities.
+    
+    Args:
+        spread_bps: Spread in basis points
+        
+    Returns:
+        True if spread > SUSPECT_SPREAD_BPS (300)
+    """
+    return abs(spread_bps) > Thresholds.SUSPECT_SPREAD_BPS
+
+
+def is_excluded_spread_value(spread_bps: float) -> bool:
+    """Check if spread_bps exceeds the EXCLUDE threshold (500 bps).
+    
+    Excluded spreads are so high they are almost certainly not real arb
+    opportunities. These signals are excluded from DoD metrics.
+    
+    Args:
+        spread_bps: Spread in basis points
+        
+    Returns:
+        True if spread > SUSPECT_SPREAD_BPS_HARD (500)
+    """
+    return abs(spread_bps) > Thresholds.SUSPECT_SPREAD_BPS_HARD
 
 
 def compute_spread_signals(
@@ -179,6 +211,18 @@ def _build_spread_signal(
         confidence_reasons.append("execution_disabled")
     confidence_reasons.append("paper_cost_model")
     
+    # v2.0.3: Suspect spread detection (unrealistic arb due to low liquidity)
+    # Spreads > 300 bps are often illusions from low-liquidity pools
+    suspect_spread_bps = config.get("suspect_spread_bps", 300)
+    suspect_spread_hard = config.get("suspect_spread_bps_hard", 500)
+    is_suspect_spread = abs(spread_bps_decimal) > suspect_spread_bps
+    is_excluded_spread = abs(spread_bps_decimal) > suspect_spread_hard
+    
+    if is_excluded_spread:
+        confidence_reasons.append("SUSPECT_SPREAD_EXCLUDED")
+    elif is_suspect_spread:
+        confidence_reasons.append("SUSPECT_SPREAD")
+    
     spread_bps_ui_display = int(spread_bps_decimal)
     
     net_negative_reason = None
@@ -219,8 +263,15 @@ def _build_spread_signal(
         "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
         "is_net_positive_est": net_pnl_usdc_estimate > 0,
         "net_negative_reason": net_negative_reason,
-        "confidence": "low" if not config.get("execution_enabled", False) else (
-            "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low"
+        # v2.0.3: Suspect spread flags (unrealistic arb detection)
+        "is_suspect_spread": is_suspect_spread,
+        "is_excluded_spread": is_excluded_spread,
+        "suspect_spread_threshold_bps": suspect_spread_bps,
+        # Confidence downgrades if suspect
+        "confidence": "suspect" if is_excluded_spread else (
+            "low" if not config.get("execution_enabled", False) or is_suspect_spread else (
+                "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low"
+            )
         ),
         "confidence_reasons": confidence_reasons,
     }

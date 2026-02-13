@@ -21,7 +21,7 @@ import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 # Import from m4 policy module
 from .policy import (
@@ -410,6 +410,26 @@ def generate_m4_from_online_inputs(
     with open(truth_path) as f:
         truth_data = json.load(f)
     
+    # v2.0.4: Load reject_histogram to check for critical rejects
+    critical_rejects = []
+    reject_files = sorted(reports_dir.glob("reject_histogram_*.json"), reverse=True)
+    if reject_files:
+        try:
+            with open(reject_files[0]) as f:
+                reject_data = json.load(f)
+            # v2.0.4 FIX: Use actual schema with direct count fields (not reject_counts dict)
+            # Schema has: pool_missing_count, price_outlier_count, price_sanity_failed, total_rejects
+            critical_reasons = {
+                "POOL_MISSING": reject_data.get("pool_missing_count", 0),
+                "PRICE_OUTLIER": reject_data.get("price_outlier_count", 0),
+                "PRICE_SANITY_FAILED": reject_data.get("price_sanity_failed", 0),
+            }
+            for reason, count in critical_reasons.items():
+                if count > 0:
+                    critical_rejects.append({"reason": reason, "count": count})
+        except Exception:
+            pass  # If reject_histogram is missing or invalid, continue without it
+    
     # Extract key metadata from truth_report
     source_run_mode = truth_data.get("run_mode", "UNKNOWN")
     source_block = truth_data.get("current_block", 0)
@@ -485,17 +505,34 @@ def generate_m4_from_online_inputs(
             "is_net_positive_est": is_net_positive,
             "confidence": sig.get("confidence", "low"),
             "block_number": sig.get("block_number", source_block),
+            # v2.0.3: SUSPECT_SPREAD fields (for DoD filtering)
+            "is_suspect_spread": sig.get("is_suspect_spread", False),
+            "is_excluded_spread": sig.get("is_excluded_spread", False),
+            "suspect_spread_threshold_bps": sig.get("suspect_spread_threshold_bps", 300),
+            "confidence_reasons": sig.get("confidence_reasons", []),
         }
         m4_signals.append(m4_signal)
     
     # Compute aggregates by pair and route for diversity tracking (v1.9.9)
+    # v2.0.3: Track signals and net per pair (for concentration check)
+    # v2.0.4: Also track included-only pairs/routes for DoD diversity KPIs
     signals_by_pair: Dict[str, int] = {}
     signals_by_route: Dict[str, int] = {}
+    included_pairs: Set[str] = set()  # v2.0.4: pairs with at least one included signal
+    included_routes: Set[str] = set()  # v2.0.4: routes with at least one included signal
+    net_by_pair: Dict[str, float] = {}  # v2.0.3: for TOP_PAIR_NET_SHARE (legacy, now use sim_net_by_pair)
+    
     for sig in m4_signals:
         pair = sig.get("pair", "UNKNOWN")
+        is_excluded = sig.get("is_excluded_spread", False)
         signals_by_pair[pair] = signals_by_pair.get(pair, 0) + 1
         route = f"{sig.get('buy_dex', '?')}->{sig.get('sell_dex', '?')}"
         signals_by_route[route] = signals_by_route.get(route, 0) + 1
+        # v2.0.3: Track net per pair only for included signals
+        if not is_excluded:
+            net_by_pair[pair] = net_by_pair.get(pair, 0) + sig.get("truth_net_usdc", 0)
+            included_pairs.add(pair)  # v2.0.4: track included pairs
+            included_routes.add(route)  # v2.0.4: track included routes
     
     # Write M4 signals
     signals_path = reports_dir / f"signals_{ts}.json"
@@ -538,13 +575,26 @@ def generate_m4_from_online_inputs(
     sim_net_sum = 0.0  # Sum of SIMULATED net with realistic costs
     est_errors = []
     sign_correct_count = 0
+    sim_net_by_pair: Dict[str, float] = {}  # v2.0.4 FIX: sim-based net for TOP_PAIR_DOMINANCE
+    
+    # v2.0.3: Track excluded/suspect signals (for metrics exclusion)
+    excluded_signals_count = 0  # is_excluded_spread=true (NOT counted in metrics)
+    suspect_signals_count = 0   # is_suspect_spread=true (includes excluded)
+    included_signals_count = 0  # Actually counted in metrics
     
     for sig in m4_signals:
         signal_id = sig["signal_id"]
+        is_excluded = sig.get("is_excluded_spread", False)
+        is_suspect = sig.get("is_suspect_spread", False)
+        
+        # Track suspect/excluded counts
+        if is_suspect:
+            suspect_signals_count += 1
+        if is_excluded:
+            excluded_signals_count += 1
         
         # ORIGINAL estimate from truth_report (usually with paper_slippage_bps=0)
         est_net = sig["truth_net_usdc"]  # From truth_report, NOT recalculated
-        est_net_sum += est_net
         
         # Simulate: apply REALISTIC gas and slippage
         est_gross = sig["est_gross_usdc"]
@@ -558,24 +608,30 @@ def generate_m4_from_online_inputs(
         
         # Check if simulation would be profitable
         is_profitable = sim_net_usdc > 0
-        if is_profitable:
-            sim_profitable_count += 1
         
-        total_net_usdc += sim_net_usdc
-        sim_net_sum += sim_net_usdc
-        
-        # Calculate est error: sim_net - est_net
-        # Negative = simulation worse than estimate (est was optimistic)
-        # Positive = simulation better than estimate (est was conservative)
-        est_error = round(sim_net_usdc - est_net, 4)
-        est_errors.append(abs(est_error))
-        
-        # Sign correct? (both predict same sign of profitability)
-        est_was_positive = est_net > 0
-        sim_was_positive = sim_net_usdc > 0
-        sign_correct = (est_was_positive == sim_was_positive)
-        if sign_correct:
-            sign_correct_count += 1
+        # v2.0.3: Only accumulate metrics for NON-EXCLUDED signals
+        # Excluded signals are still simulated (for audit), but don't count toward DoD metrics
+        if not is_excluded:
+            included_signals_count += 1
+            est_net_sum += est_net
+            sim_net_sum += sim_net_usdc
+            total_net_usdc += sim_net_usdc
+            # v2.0.4 FIX: Track sim_net per pair for TOP_PAIR_DOMINANCE (consistent basis)
+            pair = sig.get("pair", "UNKNOWN")
+            sim_net_by_pair[pair] = sim_net_by_pair.get(pair, 0) + sim_net_usdc
+            if is_profitable:
+                sim_profitable_count += 1
+            # Calculate est error: sim_net - est_net
+            # Negative = simulation worse than estimate (est was optimistic)
+            # Positive = simulation better than estimate (est was conservative)
+            est_error = round(sim_net_usdc - est_net, 4)
+            est_errors.append(abs(est_error))
+            # Sign correct? (both predict same sign of profitability)
+            est_was_positive = est_net > 0
+            sim_was_positive = sim_net_usdc > 0
+            sign_correct = (est_was_positive == sim_was_positive)
+            if sign_correct:
+                sign_correct_count += 1
         
         # Determine blocker if not profitable
         blocker = None
@@ -621,20 +677,22 @@ def generate_m4_from_online_inputs(
         }
         simulations.append(simulation)
     
-    # Calculate drift metrics
+    # Calculate drift metrics (v2.0.3: based on included signals only)
     mae_net_usdc = round(sum(est_errors) / len(est_errors), 4) if est_errors else 0.0
-    est_sign_correct_rate = round(sign_correct_count / len(m4_signals), 4) if m4_signals else 0.0
+    est_sign_correct_rate = round(sign_correct_count / included_signals_count, 4) if included_signals_count else 0.0
     
     # Count sign mismatches: signals where sign(est_net) != sign(sim_net)
-    # Renamed from est_sim_mismatch_count for clarity (v1.4.0)
-    sign_mismatch_count = len(m4_signals) - sign_correct_count
+    # v2.0.3: Only count mismatches for included signals
+    sign_mismatch_count = included_signals_count - sign_correct_count
     
-    print(f"[ONLINE] Simulated: {len(simulations)} signals")
-    print(f"[ONLINE] Profitable: {sim_profitable_count}/{len(simulations)}")
+    print(f"[ONLINE] Simulated: {len(simulations)} signals (included={included_signals_count}, excluded={excluded_signals_count})")
+    print(f"[ONLINE] Profitable: {sim_profitable_count}/{included_signals_count}")
     print(f"[ONLINE] total_net_usdc: ${total_net_usdc:.4f}")
     print(f"[ONLINE] MAE: ${mae_net_usdc:.4f}, sign_rate: {est_sign_correct_rate:.2%}")
     if sign_mismatch_count > 0:
         print(f"[ONLINE] sign_mismatch_count: {sign_mismatch_count}")
+    if excluded_signals_count > 0:
+        print(f"[ONLINE] WARNING: {excluded_signals_count} excluded signals (SUSPECT_SPREAD) - not counted in metrics")
     
     # Write execution_report
     exec_path = reports_dir / f"execution_report_{ts}.json"
@@ -665,10 +723,14 @@ def generate_m4_from_online_inputs(
             "gas_usd": cost_model.gas_usd,
             "slippage_bps": cost_model.slippage_bps,
         },
+        # v2.0.3: signals_count = ALL signals, included_signals_count = non-excluded
         "signals_count": len(m4_signals),
+        "included_signals_count": included_signals_count,  # For DoD metrics
+        "excluded_signals_count": excluded_signals_count,  # SUSPECT_SPREAD excluded
+        "suspect_signals_count": suspect_signals_count,    # SUSPECT_SPREAD flagged (superset of excluded)
         "simulations_count": len(simulations),
-        "simulations_passed": sim_profitable_count,
-        "total_net_usdc": round(total_net_usdc, 4),
+        "simulations_passed": sim_profitable_count,  # Based on included signals only
+        "total_net_usdc": round(total_net_usdc, 4),  # Based on included signals only
         "trades_count": 0,  # Paper mode - no actual trades
         "trades_executed": 0,
         "simulations": simulations,
@@ -681,18 +743,24 @@ def generate_m4_from_online_inputs(
             "mae_net_usdc": mae_net_usdc,
             "est_sign_correct_count": sign_correct_count,
             "est_sign_correct_rate": est_sign_correct_rate,
+            # v2.0.3: Note on excluded
+            "excluded_from_metrics": excluded_signals_count,
         },
         "accounting": {
             "accounting_complete": True,
             "signals_total": len(m4_signals),
+            "signals_included": included_signals_count,
+            "signals_excluded": excluded_signals_count,
             "simulations_total": len(simulations),
         },
         "health": {
-            "simulation_pass_rate": round(sim_profitable_count / len(simulations), 4) if simulations else 0,
+            "simulation_pass_rate": round(sim_profitable_count / included_signals_count, 4) if included_signals_count else 0,
             "blocks_consistent": True,
             "all_signals_simulated": True,
             "execution_enabled": False,  # Kill switch active
             "kill_switch_active": True,
+            # v2.0.3: Exclusion health
+            "has_excluded_signals": excluded_signals_count > 0,
         },
     }
     
@@ -747,6 +815,9 @@ def generate_m4_from_online_inputs(
     fragile_count = 0
     fragile_signals = []
     for sig in m4_signals:
+        # v2.0.3: Skip excluded signals for fragile calculation
+        if sig.get("is_excluded_spread", False):
+            continue
         est_net = sig.get("truth_net_usdc", 0)
         size_usd = sig.get("size_usd", 0)
         slippage_usdc = size_usd * cost_model.slippage_bps / 10000
@@ -762,22 +833,34 @@ def generate_m4_from_online_inputs(
             })
     
     # v1.9.7: Unified sample threshold
-    # signals < MIN_SIGNALS_FOR_PASS (5) → NO_DATA (not counted in pass_rate)
-    is_low_sample = len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS
+    # v2.0.3: Use included_signals_count (exclude SUSPECT_SPREAD) for statistical checks
+    is_low_sample = included_signals_count < Thresholds.MIN_SIGNALS_FOR_PASS
     
     # v1.9.7: Quality warnings for run-level issues (structured)
     quality_warnings = []
     quality_reasons = []  # Canonical tokens for reasons array
     
-    if is_low_sample and len(m4_signals) > 0:
+    # v2.0.3: EXCLUDED_PRESENT warning when signals were excluded due to SUSPECT_SPREAD
+    if excluded_signals_count > 0:
+        quality_warnings.append(f"EXCLUDED_PRESENT({excluded_signals_count})")
+        quality_reasons.append("WARN_EXCLUDED_SIGNALS")
+    
+    # v2.0.4: CRITICAL_REJECTS warning when reject_histogram has data quality issues
+    if critical_rejects:
+        for cr in critical_rejects:
+            quality_warnings.append(f"CRITICAL_REJECT({cr['reason']}:{cr['count']})")
+        quality_reasons.append("WARN_CRITICAL_REJECTS")
+    
+    if is_low_sample and included_signals_count > 0:
         # Has signals but too few for statistical validity
-        quality_warnings.append(f"LOW_SAMPLE({len(m4_signals)}<{Thresholds.MIN_SIGNALS_FOR_PASS})")
+        quality_warnings.append(f"LOW_SAMPLE({included_signals_count}<{Thresholds.MIN_SIGNALS_FOR_PASS})")
         quality_reasons.append(FailReason.WARN_LOW_SAMPLE)
     
     # v1.10.0: FAIL_FRAGILE_HIGH when fragile_rate violates limits
     # Priority: profile.fragile_rate_max (e.g., 0.20 for profit) → FAIL
     # Fallback: universal threshold 0.50 → FAIL (not just WARN)
-    frag_rate = fragile_count / len(m4_signals) if m4_signals else 0
+    # v2.0.3: Use included_signals_count (excluded signals not counted)
+    frag_rate = fragile_count / included_signals_count if included_signals_count else 0
     from m4.policy import get_profile
     try:
         profile_config = get_profile(profile)
@@ -794,18 +877,40 @@ def generate_m4_from_online_inputs(
         quality_warnings.append(f"WARN_FRAGILE_RATE({frag_rate:.2f}>=0.30)")
         quality_reasons.append("WARN_FRAGILE_ELEVATED")
     
+    # v2.0.3: TOP_PAIR_NET_SHARE concentration check
+    # v2.0.4 FIX: Use sim_net_by_pair (same basis as total_net_usdc) not net_by_pair (truth_net)
+    # v2.0.5 FIX: Only check when statistically meaningful (>=MIN_SIGNALS_FOR_PASS and >=2 pairs)
+    # Detects when a single pair dominates net profit (suspicious data quality)
+    if (total_net_usdc > 0 and sim_net_by_pair and 
+        included_signals_count >= Thresholds.MIN_SIGNALS_FOR_PASS and len(included_pairs) >= 2):
+        top_pair_net = max(sim_net_by_pair.values())
+        top_pair = max(sim_net_by_pair, key=lambda p: sim_net_by_pair.get(p, 0))
+        top_pair_share = top_pair_net / total_net_usdc if total_net_usdc > 0 else 0
+        # v2.0.5: Downgraded FAIL to WARN - FAIL_* at run-level requires status=FAIL
+        if top_pair_share > Thresholds.TOP_PAIR_NET_SHARE_FAIL:
+            quality_warnings.append(f"TOP_PAIR_DOMINANCE_HIGH({top_pair}:{top_pair_share:.2f}>{Thresholds.TOP_PAIR_NET_SHARE_FAIL})")
+            quality_reasons.append("WARN_TOP_PAIR_DOMINANCE_HIGH")
+        elif top_pair_share > Thresholds.TOP_PAIR_NET_SHARE_WARN:
+            quality_warnings.append(f"TOP_PAIR_DOMINANCE_WARN({top_pair}:{top_pair_share:.2f}>{Thresholds.TOP_PAIR_NET_SHARE_WARN})")
+            quality_reasons.append("WARN_TOP_PAIR_DOMINANCE")
+    
     # v1.10.0: Determine quality_status (contract alignment)
-    # NO_DATA if signals < MIN_SIGNALS_FOR_PASS (unified threshold)
-    # FAIL_QUALITY if any FAIL_* reason present
-    # WARN_QUALITY if any WARN_* reason present
-    if len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
-        quality_status = "NO_DATA"  # Not enough for statistical evaluation
+    # v2.0.5 FIX: NO_DATA only when included_signals_count == 0
+    # Domain: NO_DATA | PASS | WARN | FAIL_QUALITY (not WARN_QUALITY)
+    # For 1-2 signals: WARN (not NO_DATA)
+    # v2.0.3: Use included_signals_count (excluded signals not counted for DoD)
+    if included_signals_count == 0:
+        quality_status = "NO_DATA"  # v2.0.5: only when truly NO data
+    elif included_signals_count < Thresholds.MIN_SIGNALS_FOR_PASS:
+        quality_status = "WARN"  # v2.0.5: LOW_SAMPLE -> WARN (not NO_DATA)
+        if "WARN_LOW_SAMPLE" not in quality_reasons:
+            quality_reasons.append("WARN_LOW_SAMPLE")
     elif any(r.startswith("FAIL_") for r in quality_reasons):
         quality_status = "FAIL_QUALITY"  # v1.10.0: explicit FAIL_* check
     elif any("HIGH" in w for w in quality_warnings):
         quality_status = "FAIL_QUALITY"  # v1.9.7: HIGH fragile rate
     elif quality_warnings or quality_reasons:
-        quality_status = "WARN_QUALITY"
+        quality_status = "WARN"  # v2.0.5: domain is WARN not WARN_QUALITY
     else:
         quality_status = "PASS"
     
@@ -813,14 +918,16 @@ def generate_m4_from_online_inputs(
     # v1.10.0: quality_status=FAIL_QUALITY now reflects in combined_status
     all_reasons = profit_reasons + drift_reasons + quality_reasons
     
-    if len(m4_signals) < Thresholds.MIN_SIGNALS_FOR_PASS:
-        combined_status = "NO_DATA"  # v1.9.7: unified - not enough signals
+    # v2.0.5 FIX: NO_DATA only when included_signals_count == 0
+    # For 1-2 signals: WARN (LOW_SAMPLE) not NO_DATA
+    if included_signals_count == 0:
+        combined_status = "NO_DATA"  # v2.0.5: truly NO data
     elif profit_status == "FAIL" or drift_status == "FAIL":
         combined_status = "FAIL"
     elif quality_status == "FAIL_QUALITY":
-        combined_status = "FAIL_QUALITY"  # v1.10.0: explicit quality fail (was WARN)
-    elif quality_status == "WARN_QUALITY":
-        combined_status = "WARN"  # v1.10.0: quality warn → WARN (not PASS)
+        combined_status = "FAIL_QUALITY"  # v1.10.0: explicit quality fail
+    elif quality_status == "WARN" or included_signals_count < Thresholds.MIN_SIGNALS_FOR_PASS:
+        combined_status = "WARN"  # v2.0.5: LOW_SAMPLE → WARN
     else:
         combined_status = "PASS"
     
@@ -840,10 +947,14 @@ def generate_m4_from_online_inputs(
         },
         "summary": {
             "signals_count": len(m4_signals),
+            # v2.0.3: included/excluded breakdown
+            "included_signals_count": included_signals_count,
+            "excluded_signals_count": excluded_signals_count,
+            "suspect_signals_count": suspect_signals_count,
             "simulations_count": len(simulations),
             "sim_profitable_count": sim_profitable_count,
             "total_net_usdc": round(total_net_usdc, 4),
-            "profitable_rate": round(sim_profitable_count / len(simulations), 4) if simulations else 0,
+            "profitable_rate": round(sim_profitable_count / included_signals_count, 4) if included_signals_count else 0,
             "fragile_count": fragile_count,
         },
         "drift_metrics": {
@@ -936,12 +1047,19 @@ def generate_m4_from_online_inputs(
             "pinned_block": source_block,
             "chain_id": chain_id,
             "cost_model": cost_model.name,
-            # v1.9.9: pairs/routes for diversity tracking
+            # v1.9.9: pairs/routes for diversity tracking (all signals)
             "pairs": list(signals_by_pair.keys()),
             "routes": list(signals_by_route.keys()),
+            # v2.0.4: included-only pairs/routes for DoD diversity KPIs
+            "included_pairs": sorted(included_pairs),
+            "included_routes": sorted(included_routes),
         },
         "metrics": {
             "signals_count": len(m4_signals),
+            # v2.0.3: included/excluded breakdown
+            "included_signals_count": included_signals_count,
+            "excluded_signals_count": excluded_signals_count,
+            "suspect_signals_count": suspect_signals_count,
             "sim_profitable_count": sim_profitable_count,
             "total_net_usdc": round(total_net_usdc, 4),
             "mae_net_usdc": mae_net_usdc,

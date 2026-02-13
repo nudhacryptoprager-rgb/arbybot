@@ -128,7 +128,12 @@ def emit_to_aggregator_light(
     # Extract key fields
     metrics = run_summary.get("metrics", {})
     status = run_summary.get("status", "UNKNOWN")
-    signals_count = metrics.get("signals_count", 0)
+    # v2.0.4: Use included_signals_count for DoD metrics (excluded signals don't count)
+    signals_count_all = metrics.get("signals_count", 0)
+    included_signals_count = metrics.get("included_signals_count", signals_count_all)
+    excluded_signals_count = metrics.get("excluded_signals_count", 0)
+    # For status/threshold calculations, use included count
+    signals_count = included_signals_count
     run_id = run_summary.get("run_id", "")
     reasons = run_summary.get("reasons", [])
     total_net = metrics.get("total_net_usdc", 0)
@@ -192,13 +197,18 @@ def emit_to_aggregator_light(
         "sign_rate": metrics.get("est_sign_correct_rate", 0),
         "reasons": reasons,
         "fragile_rate": metrics.get("fragile_rate", 0),
-        "signals_count": signals_count,
+        "signals_count": signals_count_all,  # v2.0.4: all signals (for compat)
+        "included_signals_count": included_signals_count,  # v2.0.4: DoD metric
+        "excluded_signals_count": excluded_signals_count,  # v2.0.4: SUSPECT_SPREAD
         "run_status": run_status,
         "run_kind": run_kind,                  # v1.11.0: segmentation by purpose
         "is_data_run": is_data_run,            # v1.10.0: profit-grade data run
         "is_infra_fail": is_infra_fail,        # v1.10.0: INFRA_* failure
         "pairs": run_pairs[:10] if run_pairs else [],  # v1.9.9: pairs (limit 10)
         "routes": run_routes[:10] if run_routes else [],  # v1.9.9: routes (limit 10)
+        # v2.0.4: Included-only pairs/routes for diversity KPIs
+        "included_pairs": run_summary.get("inputs", {}).get("included_pairs", run_pairs)[:10],
+        "included_routes": run_summary.get("inputs", {}).get("included_routes", run_routes)[:10],
         # v2.0.2: Full provenance fields for DoD verification
         "run_mode": run_inputs.get("run_mode", "UNKNOWN"),
         "chain_id": run_inputs.get("chain_id", None),
@@ -268,9 +278,15 @@ def _compute_quick_stats(
     
     # v1.11.0: Compute stats on NORMAL runs for main KPIs
     # This prevents coverage/stress runs from penalizing data_run_rate
-    data_runs = [r for r in normal_runs if r.get("is_data_run", r.get("signals_count", 0) >= min_signals)]
-    no_data_count = sum(1 for r in normal_runs if r.get("signals_count", 0) == 0)  # v1.11.0: true NO_DATA only
-    low_sample_count = sum(1 for r in normal_runs if "WARN_LOW_SAMPLE" in r.get("reasons", []))
+    # v2.0.4: Use included_signals_count for DoD metrics (fallback to signals_count for legacy)
+    def get_included_signals(r):
+        """Get included_signals_count, fallback to signals_count for legacy runs."""
+        return r.get("included_signals_count", r.get("signals_count", 0))
+    
+    data_runs = [r for r in normal_runs if r.get("is_data_run", get_included_signals(r) >= min_signals)]
+    no_data_count = sum(1 for r in normal_runs if get_included_signals(r) == 0)  # v2.0.4: included-based
+    low_sample_count = sum(1 for r in normal_runs if "WARN_LOW_SAMPLE" in r.get("reasons", []) or 
+                          (0 < get_included_signals(r) < min_signals))  # v2.0.4: catch low included
     data_run_count = len(data_runs)
     
     # v1.10.0: INFRA failure tracking (across all runs)
@@ -340,27 +356,34 @@ def _compute_quick_stats(
     unique_net_values = len(set(round(r.get("net_usdc", 0), 2) for r in data_runs))
     net_diversity_rate = unique_net_values / len(data_runs) if data_runs else 0
     
-    # v1.9.9: Pair/Route/DEX diversity across window
+    # v2.0.4: Pair/Route diversity across window - use included_pairs/routes for DoD KPIs
     all_pairs = set()
     all_routes = set()
+    included_pairs_set = set()  # v2.0.4: only pairs with included signals
+    included_routes_set = set()  # v2.0.4: only routes with included signals
     for r in runs:
         all_pairs.update(r.get("pairs", []))
         all_routes.update(r.get("routes", []))
-    unique_pairs = len(all_pairs)
-    unique_routes = len(all_routes)
+        # Use included_pairs/routes if available, else fall back to all
+        included_pairs_set.update(r.get("included_pairs", r.get("pairs", [])))
+        included_routes_set.update(r.get("included_routes", r.get("routes", [])))
+    unique_pairs = len(included_pairs_set)  # v2.0.4: DoD uses included-only
+    unique_routes = len(included_routes_set)  # v2.0.4: DoD uses included-only
+    unique_pairs_all = len(all_pairs)  # For backwards compat / debugging
     
     # v2.0: SHA tracking removed - all runs treated as same code identity
     # No per-SHA filtering, use all NORMAL runs for stats
     current_sha_all_runs = normal_runs  # All normal runs (no SHA filter)
     current_sha_runs = normal_runs  # NORMAL only
+    # v2.0.4: Use included_signals_count for DoD metrics
     current_sha_data_runs = [r for r in current_sha_runs 
-                             if r.get("signals_count", 0) >= Thresholds.MIN_SIGNALS_FOR_PASS]
+                             if get_included_signals(r) >= Thresholds.MIN_SIGNALS_FOR_PASS]
     current_sha_pass = sum(1 for r in current_sha_data_runs 
                           if not any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
     current_sha_fail = sum(1 for r in current_sha_data_runs 
                           if any(x for x in r.get("reasons", []) if x.startswith("FAIL_")))
     current_sha_no_data = sum(1 for r in current_sha_runs 
-                             if r.get("signals_count", 0) == 0)  # v1.11.0: true NO_DATA only
+                             if get_included_signals(r) == 0)  # v2.0.4: included-based
     
     agg_data["quick_stats"] = {
         "pass_count": pass_count,
@@ -411,9 +434,10 @@ def _compute_quick_stats(
     sha_fail_rate = current_sha_fail / len(current_sha_data_runs) if current_sha_data_runs else 0
     sha_total_signals = sum(r.get("signals_count", 0) for r in current_sha_data_runs)
     
-    # v2.0: Count low_sample runs (signals 1-4)
+    # v2.0.5 FIX: Use get_included_signals for low_sample consistency with quick_stats
     sha_low_sample_count = sum(1 for r in current_sha_runs 
-                               if 0 < r.get("signals_count", 0) < Thresholds.MIN_SIGNALS_FOR_PASS)
+                               if 0 < get_included_signals(r) < Thresholds.MIN_SIGNALS_FOR_PASS)
+    sha_data_signals_total = sum(get_included_signals(r) for r in current_sha_data_runs)  # v2.0.5: included-based
     
     # v2.0: runs_since_timestamp (SHA tracking removed)
     # All runs treated as same code identity, no per-SHA breakdown

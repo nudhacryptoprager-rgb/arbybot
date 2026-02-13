@@ -196,9 +196,15 @@ def compute_status(
 # ============================================================
 
 # Policy version for artifact provenance
+# v2.0.4: SUSPECT_SPREAD exclusion from metrics (is_excluded_spread signals don't count in DoD)
+#         + TOP_PAIR_NET_SHARE concentration check (>60% warn, >80% fail)
+# v2.0.5: NO_DATA domain fix (only when included=0), quality_status domain (NO_DATA|PASS|WARN|FAIL_QUALITY)
+#         + TOP_PAIR_DOMINANCE gated (>=MIN_SIGNALS_FOR_PASS, >=2 pairs), FAIL_* tokens downgraded when status!=FAIL
+# v2.0.4: SUSPECT_SPREAD exclusion from DoD metrics (is_excluded_spread=true)
+# v2.0.3: SUSPECT_SPREAD detection (spread > 300bps = suspicious, > 500bps = excluded)
 # v2.0.2: SHA-free provenance (run_timestamp + code_identity replaces source_sha)
 # v2.0.1: MIN_SIGNALS_FOR_PASS=3, MIN_SAMPLE_SIZE=3, MIN_SIGNALS_WARN=2
-POLICY_VERSION = "2.0.2"
+POLICY_VERSION = "2.0.5"
 
 class Thresholds:
     """
@@ -286,6 +292,15 @@ class Thresholds:
     PROFIT_SANITY_MIN_RUNS = 10    # Min runs to trigger sanity check
     PROFIT_SANITY_NET_DIV_MIN = 0.20  # Min net_diversity_rate (unique values / runs)
     PROFIT_SANITY_LOSS_RATE_MIN = 0.05  # Min expected loss rate for realistic market
+    
+    # v2.0.3: Suspect spread threshold (unrealistic arb detection)
+    # Spreads > 300 bps for major pairs are likely low-liquidity illusions
+    SUSPECT_SPREAD_BPS = 300       # Spread > 300 bps → SUSPECT_SPREAD warning
+    SUSPECT_SPREAD_BPS_HARD = 500  # Spread > 500 bps → exclude from DoD evidence
+    
+    # v2.0.3: Top pair concentration (single-pair dominance)
+    TOP_PAIR_NET_SHARE_WARN = 0.60  # WARN if single pair > 60% of window net profit
+    TOP_PAIR_NET_SHARE_FAIL = 0.80  # FAIL_QUALITY if single pair > 80% of net profit
 
 
 # ============================================================

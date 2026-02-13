@@ -104,15 +104,16 @@ from m4.gates import (
 from m4.cli import main, run_dry_run
 
 
-# Legacy aliases for backward compatibility
-def get_git_sha() -> str:
-    """Legacy alias for get_git_head_sha."""
-    return get_git_head_sha()
+# v2.0.3: Legacy SHA aliases removed - SHA tracking deprecated
+# These functions return None to break any accidental usage
+def get_git_sha() -> None:
+    """DEPRECATED (v2.0.3): SHA tracking removed."""
+    return None
 
 
-def get_source_sha() -> str:
-    """DEPRECATED: Use get_git_context()['code_sha'] instead."""
-    return get_git_head_sha()
+def get_source_sha() -> None:
+    """DEPRECATED (v2.0.3): SHA tracking removed."""
+    return None
 
 
 if __name__ == "__main__":
