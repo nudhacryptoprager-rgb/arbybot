@@ -367,7 +367,7 @@ def generate_m4_from_online_inputs(
     """
     Generate M4 execution artifacts from online scan/truth inputs.
     
-    This bridges online M5 scan/truth → M4 signals/execution_report.
+    This bridges online M5 scan/truth -> M4 signals/execution_report.
     
     CRITICAL: est_net comes from truth_report (original estimate with paper_slippage_bps=0),
     sim_net is calculated with realistic cost model. This separation allows MAE to
@@ -375,7 +375,7 @@ def generate_m4_from_online_inputs(
     
     Steps:
     1. Read truth_report_*.json to get spread_signals
-    2. Convert spread_signals → M4 signals format (preserving original estimates)
+    2. Convert spread_signals -> M4 signals format (preserving original estimates)
     3. Simulate each signal with realistic cost model
     4. Generate execution_report with est_vs_sim drift metrics
     
@@ -450,7 +450,7 @@ def generate_m4_from_online_inputs(
     print(f"[ONLINE] run_id: {run_id}")
     print(f"[ONLINE] cost_model: {cost_model.name} (gas=${gas_estimate:.2f}, slippage={realistic_slippage_bps}bps)")
     
-    # Convert spread_signals → M4 signals
+    # Convert spread_signals -> M4 signals
     # CRITICAL: est_net_usdc comes DIRECTLY from truth_report (original estimate)
     # sim_net_usdc will be calculated SEPARATELY with realistic cost model
     # This separation allows MAE to measure actual drift between estimate and simulation
@@ -609,6 +609,13 @@ def generate_m4_from_online_inputs(
         # Check if simulation would be profitable
         is_profitable = sim_net_usdc > 0
         
+        # Calculate est error and sign correctness (always, for audit data)
+        # These are used in simulation dict even for excluded signals
+        est_error = round(sim_net_usdc - est_net, 4)
+        est_was_positive = est_net > 0
+        sim_was_positive = sim_net_usdc > 0
+        sign_correct = (est_was_positive == sim_was_positive)
+        
         # v2.0.3: Only accumulate metrics for NON-EXCLUDED signals
         # Excluded signals are still simulated (for audit), but don't count toward DoD metrics
         if not is_excluded:
@@ -621,15 +628,9 @@ def generate_m4_from_online_inputs(
             sim_net_by_pair[pair] = sim_net_by_pair.get(pair, 0) + sim_net_usdc
             if is_profitable:
                 sim_profitable_count += 1
-            # Calculate est error: sim_net - est_net
-            # Negative = simulation worse than estimate (est was optimistic)
-            # Positive = simulation better than estimate (est was conservative)
-            est_error = round(sim_net_usdc - est_net, 4)
+            # Accumulate error for MAE calculation (only for included signals)
             est_errors.append(abs(est_error))
             # Sign correct? (both predict same sign of profitability)
-            est_was_positive = est_net > 0
-            sim_was_positive = sim_net_usdc > 0
-            sign_correct = (est_was_positive == sim_was_positive)
             if sign_correct:
                 sign_correct_count += 1
         
@@ -857,8 +858,8 @@ def generate_m4_from_online_inputs(
         quality_reasons.append(FailReason.WARN_LOW_SAMPLE)
     
     # v1.10.0: FAIL_FRAGILE_HIGH when fragile_rate violates limits
-    # Priority: profile.fragile_rate_max (e.g., 0.20 for profit) → FAIL
-    # Fallback: universal threshold 0.50 → FAIL (not just WARN)
+    # Priority: profile.fragile_rate_max (e.g., 0.20 for profit) -> FAIL
+    # Fallback: universal threshold 0.50 -> FAIL (not just WARN)
     # v2.0.3: Use included_signals_count (excluded signals not counted)
     frag_rate = fragile_count / included_signals_count if included_signals_count else 0
     from m4.policy import get_profile
@@ -899,6 +900,7 @@ def generate_m4_from_online_inputs(
     # Domain: NO_DATA | PASS | WARN | FAIL_QUALITY (not WARN_QUALITY)
     # For 1-2 signals: WARN (not NO_DATA)
     # v2.0.3: Use included_signals_count (excluded signals not counted for DoD)
+    # v2.0.7 FIX: FAIL_QUALITY only from FAIL_* prefixed reasons, not from substring matching
     if included_signals_count == 0:
         quality_status = "NO_DATA"  # v2.0.5: only when truly NO data
     elif included_signals_count < Thresholds.MIN_SIGNALS_FOR_PASS:
@@ -906,30 +908,27 @@ def generate_m4_from_online_inputs(
         if "WARN_LOW_SAMPLE" not in quality_reasons:
             quality_reasons.append("WARN_LOW_SAMPLE")
     elif any(r.startswith("FAIL_") for r in quality_reasons):
-        quality_status = "FAIL_QUALITY"  # v1.10.0: explicit FAIL_* check
-    elif any("HIGH" in w for w in quality_warnings):
-        quality_status = "FAIL_QUALITY"  # v1.9.7: HIGH fragile rate
+        quality_status = "FAIL_QUALITY"  # v1.10.0: explicit FAIL_* check only
     elif quality_warnings or quality_reasons:
-        quality_status = "WARN"  # v2.0.5: domain is WARN not WARN_QUALITY
+        quality_status = "WARN"  # v2.0.7: WARN_* reasons -> WARN quality_status
     else:
         quality_status = "PASS"
     
     # Combined status with policy
-    # v1.10.0: quality_status=FAIL_QUALITY now reflects in combined_status
+    # v2.0.6: status domain is NO_DATA | PASS | FAIL only (WARN belongs in quality_status)
     all_reasons = profit_reasons + drift_reasons + quality_reasons
     
-    # v2.0.5 FIX: NO_DATA only when included_signals_count == 0
-    # For 1-2 signals: WARN (LOW_SAMPLE) not NO_DATA
+    # v2.0.6 FIX: combined_status domain aligned with compute_status()
+    # status: NO_DATA | PASS | FAIL (no WARN, no FAIL_QUALITY at top-level)
+    # quality_status: NO_DATA | PASS | WARN | FAIL_QUALITY
     if included_signals_count == 0:
         combined_status = "NO_DATA"  # v2.0.5: truly NO data
     elif profit_status == "FAIL" or drift_status == "FAIL":
         combined_status = "FAIL"
     elif quality_status == "FAIL_QUALITY":
-        combined_status = "FAIL_QUALITY"  # v1.10.0: explicit quality fail
-    elif quality_status == "WARN" or included_signals_count < Thresholds.MIN_SIGNALS_FOR_PASS:
-        combined_status = "WARN"  # v2.0.5: LOW_SAMPLE → WARN
+        combined_status = "FAIL"  # v2.0.6: FAIL_QUALITY -> overall FAIL
     else:
-        combined_status = "PASS"
+        combined_status = "PASS"  # v2.0.6: WARN in quality_status, not status
     
     stability_data = {
         "schema_version": "m4:stability:v2.0",  # v2.0.2: SHA-free provenance

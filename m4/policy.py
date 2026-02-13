@@ -45,10 +45,10 @@ class FailReason:
     Each reason corresponds to a specific threshold violation.
     
     TAXONOMY CONTRACT (v1.12.0):
-    - FAIL_* reasons → status MUST be FAIL (enforced by compute_status)
-    - WARN_* reasons → status may be PASS with quality_status=WARN
-    - BLOCK_* reasons → deprecated, use FAIL_* or WARN_* only
-    - NO_DATA → ONLY when signals_count == 0
+    - FAIL_* reasons -> status MUST be FAIL (enforced by compute_status)
+    - WARN_* reasons -> status may be PASS with quality_status=WARN
+    - BLOCK_* reasons -> deprecated, use FAIL_* or WARN_* only
+    - NO_DATA -> ONLY when signals_count == 0
     
     STATUS CONTRACT (v1.11.0):
     - NO_DATA: ONLY when signals_count == 0 (no signals at all)
@@ -93,7 +93,7 @@ def compute_status(
     Single source of truth for status computation.
     
     This function MUST be used by both run_summary generation and rolling_agg
-    to ensure taxonomy consistency (FAIL_* → status=FAIL invariant).
+    to ensure taxonomy consistency (FAIL_* -> status=FAIL invariant).
     
     Args:
         signals_count: Number of signals in run
@@ -197,6 +197,12 @@ def compute_status(
 
 # Policy version for artifact provenance
 # v2.0.4: SUSPECT_SPREAD exclusion from metrics (is_excluded_spread signals don't count in DoD)
+# v2.0.7: Taxonomy bug fix - WARN_* reasons no longer trigger FAIL_QUALITY
+#         + Removed substring "HIGH" matching for quality_status (only FAIL_* prefix triggers FAIL_QUALITY)
+#         + Added regression test test_warn_reasons_do_not_trigger_fail_quality
+# v2.0.6: Status domain unification - combined_status now NO_DATA|PASS|FAIL only (WARN belongs in quality_status)
+#         + pass_rate semantic alignment (runs_since_timestamp matches quick_stats definition)
+#         + data_signals_total uses included-based sum, ASCII normalization in comments
 #         + TOP_PAIR_NET_SHARE concentration check (>60% warn, >80% fail)
 # v2.0.5: NO_DATA domain fix (only when included=0), quality_status domain (NO_DATA|PASS|WARN|FAIL_QUALITY)
 #         + TOP_PAIR_DOMINANCE gated (>=MIN_SIGNALS_FOR_PASS, >=2 pairs), FAIL_* tokens downgraded when status!=FAIL
@@ -204,7 +210,7 @@ def compute_status(
 # v2.0.3: SUSPECT_SPREAD detection (spread > 300bps = suspicious, > 500bps = excluded)
 # v2.0.2: SHA-free provenance (run_timestamp + code_identity replaces source_sha)
 # v2.0.1: MIN_SIGNALS_FOR_PASS=3, MIN_SAMPLE_SIZE=3, MIN_SIGNALS_WARN=2
-POLICY_VERSION = "2.0.5"
+POLICY_VERSION = "2.0.7"
 
 class Thresholds:
     """
@@ -223,19 +229,19 @@ class Thresholds:
     - WARN_QUALITY (only DIVERSITY_*) accepted as PASS-equivalent for M4.1
     
     v1.12.0 TAXONOMY CONTRACT:
-    - FAIL_* in reasons → status MUST be FAIL (enforced by compute_status)
+    - FAIL_* in reasons -> status MUST be FAIL (enforced by compute_status)
     - Use compute_status() for all status decisions (single source of truth)
-    - AGG thresholds now "bite": > threshold → FAIL, not just WARN
+    - AGG thresholds now "bite": > threshold -> FAIL, not just WARN
     
     v1.11.0 STATUS CONTRACT:
     - NO_DATA: ONLY when signals_count == 0 (no signals at all)
-    - Signals >= 1 → profit/drift evaluated normally
-    - Signals < MIN_SIGNALS_FOR_PASS → quality_status=WARN_LOW_SAMPLE (not NO_DATA)
+    - Signals >= 1 -> profit/drift evaluated normally
+    - Signals < MIN_SIGNALS_FOR_PASS -> quality_status=WARN_LOW_SAMPLE (not NO_DATA)
     
     v1.8.1 CALIBRATION (based on 20 online runs, 56 signals):
-    - MAE_WARN raised from 0.30 → 0.55 to account for systematic slippage=$0.50
-    - MAE_FAIL raised from 0.50 → 0.80 to allow slippage + small model error
-    - SIGN_RATE_MIN lowered from 0.70 → 0.60 to allow 2/3 for small samples
+    - MAE_WARN raised from 0.30 -> 0.55 to account for systematic slippage=$0.50
+    - MAE_FAIL raised from 0.50 -> 0.80 to allow slippage + small model error
+    - SIGN_RATE_MIN lowered from 0.70 -> 0.60 to allow 2/3 for small samples
     
     Rationale: mae=0.50 is expected when slippage=$0.50. This is not model error.
     """
@@ -268,8 +274,8 @@ class Thresholds:
     AGG_LOW_SAMPLE_RATE_FAIL = 0.80   # FAIL_QUALITY if low_sample_rate > 80%
     
     # Warm-up thresholds (v1.8.0) - aggregator needs minimum data before hard FAIL
-    MIN_RUNS_FOR_AGG = 10         # < 10 runs → PASS_WITH_WARMUP instead of FAIL
-    MIN_SIGNALS_FOR_AGG = 30      # < 30 total signals → warn thresholds relaxed
+    MIN_RUNS_FOR_AGG = 10         # < 10 runs -> PASS_WITH_WARMUP instead of FAIL
+    MIN_SIGNALS_FOR_AGG = 30      # < 30 total signals -> warn thresholds relaxed
     
     # Fragile rate thresholds (v1.9.7) - enforced in agg status
     AGG_FRAGILE_P50_WARN = 0.40   # v1.9.7: early signal when median is elevated
@@ -295,8 +301,8 @@ class Thresholds:
     
     # v2.0.3: Suspect spread threshold (unrealistic arb detection)
     # Spreads > 300 bps for major pairs are likely low-liquidity illusions
-    SUSPECT_SPREAD_BPS = 300       # Spread > 300 bps → SUSPECT_SPREAD warning
-    SUSPECT_SPREAD_BPS_HARD = 500  # Spread > 500 bps → exclude from DoD evidence
+    SUSPECT_SPREAD_BPS = 300       # Spread > 300 bps -> SUSPECT_SPREAD warning
+    SUSPECT_SPREAD_BPS_HARD = 500  # Spread > 500 bps -> exclude from DoD evidence
     
     # v2.0.3: Top pair concentration (single-pair dominance)
     TOP_PAIR_NET_SHARE_WARN = 0.60  # WARN if single pair > 60% of window net profit

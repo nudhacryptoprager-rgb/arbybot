@@ -470,7 +470,7 @@ def run_online_gate(
     Run M4 gate in online mode using real artifacts.
     
     If execution_report doesn't exist but truth_report does, generates M4
-    execution from online inputs (scan/truth → signals → simulation).
+    execution from online inputs (scan/truth -> signals -> simulation).
     
     Validates that all artifacts come from the same runDir with consistent timestamps.
     

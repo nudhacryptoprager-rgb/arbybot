@@ -55,6 +55,34 @@ python -c "from monitoring import calculate_confidence; print('import ok')"
 - CI gate checks Python version
 - Never use Python 3.12+ or 3.10-
 
+### Canonical Commands (Windows)
+
+**IMPORTANT**: Always use `py -3.11` on Windows to ensure correct Python version:
+
+```powershell
+# Tests
+py -3.11 -m pytest -q
+
+# Full CI pipeline
+py -3.11 scripts/ci_full_pipeline.py --mode ci
+
+# M4 gates
+py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict --artifact-mode rolling
+py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling
+
+# M5 gate (online scan)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
+
+# Retention (preview then execute)
+py -3.11 scripts/prune_run_dirs.py --keep 50 --dry-run
+py -3.11 scripts/prune_run_dirs.py --keep 50 --yes
+```
+
+If using activated venv, `python` is sufficient but verify version first:
+```powershell
+python --version  # MUST be 3.11.x
+```
+
 ---
 
 ## Artifacts Policy
@@ -90,9 +118,16 @@ For continuous/rolling operations:
 
 ### Rule #4: Retention policy
 
+- **NEVER manually delete** `data/runs/ci_*` directories — use `prune_run_dirs.py` only
 - Keep only last N=50 run directories in `data/runs/`
-- Older runs: auto-delete or archive to zip outside git
+- **Protected (never deleted)**:
+  - `data/runs/_rolling/` — canonical rolling artifacts
+  - `data/runs/_incidents/` — incident records
+  - `data/runs/_cache/` — cache data
+  - `run_dir_name` referenced in `_latest.json` / `run_summary_latest.json`
+- Older runs: auto-delete via script or archive to zip outside git
 - CI: save runtime artifacts as GitHub Actions artifacts (7-30 day retention)
+- **Usage**: `py -3.11 scripts/prune_run_dirs.py --keep 50 --dry-run` (preview), then `--yes` to execute
 
 ### Rule #5: Pre-commit guard
 

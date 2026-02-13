@@ -11,11 +11,11 @@ Schema and data contract for M4 execution gate rolling artifacts.
 | `m4_stability_agg.json` | `m4:stability_agg` | v2.0 | Rolling aggregator |
 
 **Де брати ключові метрики:**
-- `signals_count` → `run_summary_latest.metrics.signals_count`
-- `total_net_usdc` → `run_summary_latest.metrics.total_net_usdc` (per run) / `m4_stability_agg.quick_stats.total_net_usdc` (window)
-- `low_sample_rate` → `m4_stability_agg.quick_stats.low_sample_rate`
-- `unique_pairs/unique_routes` → `m4_stability_agg.quick_stats.unique_pairs/unique_routes`
-- `run_mode` → `run_summary_latest.inputs.run_mode`
+- `signals_count` -> `run_summary_latest.metrics.signals_count`
+- `total_net_usdc` -> `run_summary_latest.metrics.total_net_usdc` (per run) / `m4_stability_agg.quick_stats.total_net_usdc` (window)
+- `low_sample_rate` -> `m4_stability_agg.quick_stats.low_sample_rate`
+- `unique_pairs/unique_routes` -> `m4_stability_agg.quick_stats.unique_pairs/unique_routes`
+- `run_mode` -> `run_summary_latest.inputs.run_mode`
 
 ## Provenance Model (v2.0.0)
 
@@ -170,9 +170,9 @@ Use `run_timestamp` as the canonical provenance field.
 ## Provenance Workflow (v2.0)
 
 ```
-1. Run scan              → run_timestamp recorded
-2. Rolling update        → runs_since_timestamp tracks window
-3. Verify                → Check run_timestamp in artifacts
+1. Run scan              -> run_timestamp recorded
+2. Rolling update        -> runs_since_timestamp tracks window
+3. Verify                -> Check run_timestamp in artifacts
 ```
 
 ## DEV vs RELEASE Policy (v2.0)

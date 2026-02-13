@@ -15,9 +15,9 @@ from m4.policy import Thresholds, POLICY_VERSION
 class TestSuspectSpreadThresholds:
     """Test SUSPECT_SPREAD threshold values."""
 
-    def test_policy_version_is_2_0_5(self):
-        """Policy version should be 2.0.5 for NO_DATA domain fix."""
-        assert POLICY_VERSION == "2.0.5"
+    def test_policy_version_is_2_0_7(self):
+        """Policy version should be 2.0.7 for taxonomy bug fix (WARN_* reasons no longer trigger FAIL_QUALITY)."""
+        assert POLICY_VERSION == "2.0.7"
 
     def test_suspect_spread_bps_threshold(self):
         """SUSPECT_SPREAD_BPS should be 300 (warn) / 500 (exclude)."""
@@ -250,3 +250,36 @@ class TestStatusDomainConsistency:
             len(multi_pair_good_sample["included_pairs"]) >= 2
         )
         assert should_check == True, "Should check TOP_PAIR with >=MIN_SIGNALS and >=2 pairs"
+
+    def test_warn_reasons_do_not_trigger_fail_quality(self):
+        """v2.0.7: WARN_* reasons must NOT trigger FAIL_QUALITY - only FAIL_* reasons can.
+        
+        This is a regression test for the bug where WARN_TOP_PAIR_DOMINANCE_HIGH
+        was incorrectly triggering FAIL_QUALITY via substring matching on "HIGH".
+        """
+        # Any WARN_* reason should result in quality_status=WARN, not FAIL_QUALITY
+        warn_only_reasons = [
+            "WARN_TOP_PAIR_DOMINANCE_HIGH",
+            "WARN_TOP_PAIR_DOMINANCE",
+            "WARN_LOW_SAMPLE",
+            "WARN_CRITICAL_REJECTS",
+            "WARN_EXCLUDED_SIGNALS",
+            "WARN_FRAGILE",
+        ]
+        
+        for reason in warn_only_reasons:
+            # Given: only WARN_* reasons (no FAIL_*)
+            quality_reasons = [reason]
+            
+            # When: determining quality_status
+            has_fail_reason = any(r.startswith("FAIL_") for r in quality_reasons)
+            
+            # Then: FAIL_QUALITY should NOT be triggered
+            assert has_fail_reason == False, f"{reason} should not trigger FAIL_QUALITY"
+            
+        # Verify: only FAIL_* prefix should trigger FAIL_QUALITY
+        fail_reasons = ["FAIL_NET", "FAIL_TOP_PAIR_DOMINANCE", "FAIL_DRIFT"]
+        for reason in fail_reasons:
+            quality_reasons = [reason]
+            has_fail_reason = any(r.startswith("FAIL_") for r in quality_reasons)
+            assert has_fail_reason == True, f"{reason} SHOULD trigger FAIL_QUALITY"

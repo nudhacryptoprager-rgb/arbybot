@@ -127,7 +127,7 @@ def main():
     status_script = PROJECT_ROOT / "scripts" / "check_status_md.py"
     if status_script.exists():
         exit_code = run_command(
-            [sys.executable, "scripts/check_status_md.py", "--file", "docs/status/Status_M4.md", "--verbose"],
+            [sys.executable, "scripts/check_status_md.py", "--file", "Status_M4.md", "--verbose"],
             "Status_M4.md Check"
         )
         results["status_m4_check"] = exit_code

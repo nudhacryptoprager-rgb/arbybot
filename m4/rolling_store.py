@@ -161,7 +161,7 @@ def emit_to_aggregator_light(
         run_status = "NO_DATA"
         reasons = ["NO_DATA"]
     else:
-        # signals > 0 → use status from run_summary (computed by gates.py)
+        # signals > 0 -> use status from run_summary (computed by gates.py)
         run_status = status
         # Add WARN_LOW_SAMPLE if below threshold but not in reasons
         if signals_count < Thresholds.MIN_SIGNALS_FOR_PASS:
@@ -430,7 +430,11 @@ def _compute_quick_stats(
     # All runs treated as same code identity, timestamp-based tracking
     current_sha_infra_fails = sum(1 for r in current_sha_runs if r.get("is_infra_fail", False))
     sha_data_run_rate = len(current_sha_data_runs) / len(current_sha_runs) if current_sha_runs else 0
-    sha_effective_pass_rate = current_sha_pass / len(current_sha_data_runs) if current_sha_data_runs else 0
+    # v2.0.6 FIX: Semantic alignment with quick_stats
+    # effective_pass_rate: pass_count / normal_runs (includes NO_DATA in denominator)
+    # pass_rate: pass_count / data_runs (excludes NO_DATA from denominator)
+    sha_effective_pass_rate = current_sha_pass / len(current_sha_runs) if current_sha_runs else 0  # v2.0.6: matches quick_stats
+    sha_pass_rate = current_sha_pass / len(current_sha_data_runs) if current_sha_data_runs else 0  # v2.0.6: excludes NO_DATA
     sha_fail_rate = current_sha_fail / len(current_sha_data_runs) if current_sha_data_runs else 0
     sha_total_signals = sum(r.get("signals_count", 0) for r in current_sha_data_runs)
     
@@ -445,14 +449,15 @@ def _compute_quick_stats(
         "sha": None,  # v2.0: DEPRECATED (kept for schema compat)
         "runs_count": len(current_sha_runs),
         "data_runs_count": len(current_sha_data_runs),
-        "data_signals_total": sha_total_signals,
+        "data_signals_total": sha_data_signals_total,  # v2.0.6: included-based (not sha_total_signals)
         "no_data_count": current_sha_no_data,
         "low_sample_count": sha_low_sample_count,
         "infra_fail_count": current_sha_infra_fails,
         "pass_count": current_sha_pass,
         "fail_count": current_sha_fail,
         "data_run_rate": round(sha_data_run_rate, 4),
-        "effective_pass_rate": round(sha_effective_pass_rate, 4),
+        "pass_rate": round(sha_pass_rate, 4),  # v2.0.6: excludes NO_DATA (matches quick_stats.pass_rate)
+        "effective_pass_rate": round(sha_effective_pass_rate, 4),  # v2.0.6: includes NO_DATA (matches quick_stats)
         "fail_rate": round(sha_fail_rate, 4),
         # v2.0: Simplified status (no per-SHA tracking)
         "status": (
