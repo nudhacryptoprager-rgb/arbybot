@@ -593,7 +593,7 @@ Done Criteria:
 ## A4) Як “підключити всі мережі” без хаосу
 
 ### Правило 1 — не включати мережу без smoke checks
-Для кожної мережі робимо smoke check на “base pairs” з intent: WETH/USDC, USDC/USDT (якщо є). fileciteturn15file0  
+Для кожної мережі робимо smoke check на "base pairs" з intent: WETH/USDC, USDC/USDT (якщо є).
 **Критерії включення мережі:**
 - quotes оновлюються по blockNumber
 - timeouts < X%

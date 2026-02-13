@@ -1,5 +1,9 @@
 # Канонічний шаблон звіту агента
 
+> **⚠️ ARCHIVE (v2.0+)**: Цей шаблон містить SHA-based references.
+> Для v2.x використовуй `docs/DEV_REPORT_CANONICAL_UA.md`.
+> SHA tracking замінено на `run_timestamp` provenance.
+
 Цей шаблон є обов'язковим форматом для всіх звітів і відповідей агента.
 
 ---

@@ -28,9 +28,16 @@ CORE_DOCS = [
     "docs/m4/ROLLING_CONTRACT.md",
 ]
 
+# Files excluded from v2.x check (legacy/archive - may contain SHA refs)
+ARCHIVE_DOCS = [
+    "docs/REPORT_TEMPLATE.md",
+    "docs/README.md",
+    "docs/status/STATUS.md",
+]
+
 # Forbidden patterns (v2.x SHA-free)
 FORBIDDEN_PATTERNS = [
-    (r"filecite\w+", "filecite artifact (garbage from AI)"),
+    (r"filecite", "filecite artifact (garbage from AI)"),
     (r"Evidence SHA.*`[0-9a-f]{7,}`", "SHA-based evidence (deprecated in v2.x)"),
     (r"git diff.*previous_sha", "SHA-based compare workflow (deprecated)"),
     (r"strategy/scanner\.py", "reference to non-existent strategy/scanner.py (use strategy/jobs/run_scan*.py)"),
@@ -116,7 +123,31 @@ def main() -> int:
     dev_report = root / "docs/DEV_REPORT_CANONICAL_UA.md"
     issues = check_dev_report(dev_report, args.verbose)
     all_issues.extend(issues)
-    
+
+    # Check TODO_FILES references
+    # Files in TODO_FILES that are referenced in docs must either:
+    # 1. Exist, OR
+    # 2. Be marked with TODO/PLACEHOLDER in the referencing doc
+    if args.verbose:
+        print("Checking TODO_FILES references...")
+    for doc_path in CORE_DOCS:
+        filepath = root / doc_path
+        if not filepath.exists():
+            continue
+        content = filepath.read_text(encoding="utf-8")
+        for todo_file in TODO_FILES:
+            file_exists = (root / todo_file).exists()
+            is_referenced = todo_file in content
+            if is_referenced and not file_exists:
+                # Check if marked with TODO/PLACEHOLDER near reference
+                pattern = rf"(TODO|PLACEHOLDER|not.*implemented|future).{{0,100}}{re.escape(todo_file)}"
+                pattern2 = rf"{re.escape(todo_file)}.{{0,100}}(TODO|PLACEHOLDER|not.*implemented|future)"
+                has_marker = re.search(pattern, content, re.IGNORECASE) or re.search(pattern2, content, re.IGNORECASE)
+                if not has_marker:
+                    all_issues.append(f"{doc_path}: references {todo_file} which doesn't exist (add TODO marker)")
+                elif args.verbose:
+                    print(f"  [OK] {doc_path} references {todo_file} with TODO marker")
+
     # Report results
     print()
     if all_issues:

@@ -57,6 +57,9 @@ touched_files:
   - <список шляхів>
 
 ## 2) Commands Executed (лише факти)
+
+**RULE**: Завжди використовуй повний шлях `python scripts/...` (не `python ci_*.py`).
+
 python -m pytest -q: <PASS|FAIL> (duration: <...>)
 python scripts/ci_full_pipeline.py --mode ci: <PASS|FAIL|NOT RUN> (reason: <...>)
 python scripts/ci_m4_execution_gate.py --offline --profile profit --strict: <PASS|FAIL>

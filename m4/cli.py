@@ -91,6 +91,12 @@ def main(argv: Optional[list] = None) -> int:
     Returns:
         Exit code (0=PASS, 1=FAIL, 2=NO_DATA, 3=ERROR)
     """
+    # Python 3.11 enforcement - warn only, don't block
+    # Enforce via CI / pyproject.toml requires-python
+    import os
+    if sys.version_info[:2] != (3, 11) and not os.environ.get("ARBY_SKIP_PYTHON_CHECK"):
+        print(f"[WARN] Python version: {sys.version.split()[0]} (expected 3.11.x)")
+    
     parser = argparse.ArgumentParser(
         description="M4 Execution Gate - DEX<->DEX Atomic Execution",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -113,7 +119,7 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--strict", action="store_true",
                         help="Require at least one profitable simulation, fail on MAE==0")
     parser.add_argument("--strict-evidence", action="store_true",
-                        help="Require source_sha matches HEAD and run_id is valid (continuous scan)")
+                        help="Require valid run_timestamp and run_id (continuous scan mode)")
     parser.add_argument("--require-tenderly", action="store_true",
                         help="Require tenderly diagnostics when enabled in artifacts")
     parser.add_argument("--run-dir", type=Path,

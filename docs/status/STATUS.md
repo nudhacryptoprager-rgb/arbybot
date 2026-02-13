@@ -1,7 +1,10 @@
 # Project Status
 
+> **⚠️ ARCHIVE (v2.0+)**: Цей файл використовує застарілий SHA tracking.
+> Актуальний статус: `docs/status/Status_M4.md` з timestamp-based provenance.
+
 **Date:** 2026-02-09  
-**SHA:** 0d3d2c1  
+**SHA:** 0d3d2c1 *(deprecated - see run_timestamp in rolling artifacts)*  
 **Version:** M4 Execution Gate v1.8.1  
 
 ---

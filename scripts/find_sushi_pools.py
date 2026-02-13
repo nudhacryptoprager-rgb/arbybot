@@ -1,11 +1,15 @@
-"""Find SushiSwap V3 pools on Arbitrum via Factory contract.
+"""Find SushiSwap V3 and Uniswap V3 pools on Arbitrum via Factory contracts.
 
-Generates JSON whitelist for pool addresses.
+**ROLE**: Whitelist generator - produces JSON with ALL discovered pools.
+**CANONICAL VERIFICATION**: Use `scripts/verify_v3_pools.py` for targeted pool verification.
+
+This script queries factory contracts for pre-defined pairs and generates
+a comprehensive whitelist. For production config updates, use verify_v3_pools.py
+to verify specific pairs before adding to real_expanded.yaml.
 
 Usage:
-  python scripts/find_sushi_pools.py                    # Print to stdout
-  python scripts/find_sushi_pools.py --output FILE     # Save to JSON file
-  python scripts/find_sushi_pools.py --update-config   # Update config/real_minimal.yaml
+  python scripts/find_sushi_pools.py                    # Save to docs/artifacts/pool_whitelist.json
+  python scripts/find_sushi_pools.py --output FILE     # Save to custom JSON file
 """
 from web3 import Web3
 import os

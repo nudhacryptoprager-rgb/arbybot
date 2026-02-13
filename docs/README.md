@@ -1,5 +1,8 @@
 # ARBY3 Docs Index
 
+> **⚠️ ARCHIVE (v2.0+)**: Цей файл може містити застарілі SHA-based references.
+> Primary provenance тепер `run_timestamp` (див. `docs/status/Status_M4.md`).
+
 _Last cleaned: 2026-01-21_
 
 ## What lives in /docs

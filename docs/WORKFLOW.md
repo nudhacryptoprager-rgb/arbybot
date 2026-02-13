@@ -39,7 +39,7 @@ python -c "from monitoring import calculate_confidence; print('import ok')"
 ## Review Loop
 
 1. Developer pushes branch + Status update
-2. Run tests + gates and attach evidence
+2. Run tests + gates; evidence = `run_timestamp` + rolling artifacts (`_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`) + runDir bundle
 3. Reviewer provides max **10 critical issues + 10 fix steps**
 4. Repeat until green and contracts stable
 

@@ -57,7 +57,23 @@ def run_command(cmd: list, name: str) -> int:
     return result.returncode
 
 
+def check_python_version() -> bool:
+    """Check Python version is 3.11.x (hard fail for CI)."""
+    major, minor = sys.version_info[:2]
+    if (major, minor) == (3, 11):
+        print(f"[OK] Python version: {sys.version.split()[0]}")
+        return True
+    print(f"[FAIL] Python version: {sys.version.split()[0]}")
+    print("       Required: Python 3.11.x")
+    print("       Fix: py -3.11 -m venv .venv && .venv\\Scripts\\Activate.ps1")
+    return False
+
+
 def main():
+    # Python 3.11 hard check (CI requirement)
+    if not check_python_version():
+        return 1
+    
     parser = argparse.ArgumentParser(description="Full CI pipeline")
     parser.add_argument("--mode", choices=["ci", "e2e"], default="ci",
                         help="Pipeline mode: ci=offline only, e2e=online+offline")

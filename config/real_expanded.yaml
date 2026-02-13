@@ -61,17 +61,21 @@ pairs:
   - token_in: ARB
     token_out: USDC
     fee_tiers: [500, 3000]
-  # === TODO: Pairs below need pool verification before enabling ===
-  # - token_in: LINK
-  #   token_out: USDC
-  #   fee_tiers: [500, 3000]
-  # - token_in: ARB
-  #   token_out: USDT
-  #   fee_tiers: [500, 3000]
-  # - token_in: LINK
-  #   token_out: USDT
-  #   fee_tiers: [500, 3000]
+  # === LINK/USDC - VERIFIED (2026-02-13) ===
+  # Pools: Uniswap V3 (500,3000), SushiSwap V3 (3000)
+  - token_in: LINK
+    token_out: USDC
     fee_tiers: [500, 3000]
+  # === ARB/USDT - VERIFIED (2026-02-13) ===
+  # Pools: Uniswap V3 (500,3000), SushiSwap V3 (500,3000)
+  - token_in: ARB
+    token_out: USDT
+    fee_tiers: [500, 3000]
+  # === TODO: Pairs below need both DEX pools for cross-dex arb ===
+  # - token_in: LINK
+  #   token_out: USDT
+  #   fee_tiers: [500, 3000]
+  #   # Note: Only Uniswap V3 has pools, no SushiSwap V3 pools - no cross-dex arb possible
 
 # Pool addresses (verified on Arbitrum via factory.getPool() on 2026-02-07)
 # Uniswap V3 Factory: 0x1F98431c8aD98523631AE4a59f267346ea31F984
@@ -112,24 +116,18 @@ pools:
   uniswap_v3_ARB_USDC_3000: "0xaEBDcA1Bc8d89177EbE2308d62af5e74885DcCc3"
   sushiswap_v3_ARB_USDC_500: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
   sushiswap_v3_ARB_USDC_3000: "0x14716A16ef9eeAaDa7E266bcF023b71D2c9ADbf3"
-  # === LINK/USDC (need to verify pools) ===
-  # TODO: verify via factory.getPool() before enabling
-  # uniswap_v3_LINK_USDC_500: "TBD"
-  # uniswap_v3_LINK_USDC_3000: "TBD"
-  # sushiswap_v3_LINK_USDC_500: "TBD"
-  # sushiswap_v3_LINK_USDC_3000: "TBD"
-  # === ARB/USDT (need to verify pools) ===
-  # TODO: verify via factory.getPool() before enabling
-  # uniswap_v3_ARB_USDT_500: "TBD"
-  # uniswap_v3_ARB_USDT_3000: "TBD"
-  # sushiswap_v3_ARB_USDT_500: "TBD"
-  # sushiswap_v3_ARB_USDT_3000: "TBD"
-  # === LINK/USDT (need to verify pools) ===
-  # TODO: verify via factory.getPool() before enabling
-  # uniswap_v3_LINK_USDT_500: "TBD"
-  # uniswap_v3_LINK_USDT_3000: "TBD"
-  # sushiswap_v3_LINK_USDT_500: "TBD"
-  # sushiswap_v3_LINK_USDT_3000: "TBD"
+  # === LINK/USDC (verified 2026-02-13) ===
+  uniswap_v3_LINK_USDC_500: "0x655C1607F8c2E73D5b4ddAbCe9Ba8792b87592B6"
+  uniswap_v3_LINK_USDC_3000: "0xbBe36e6f0331C6a36AB44Bc8421E28E1a1871C1e"
+  # Note: SushiSwap V3 only has fee=3000 pool for LINK/USDC
+  sushiswap_v3_LINK_USDC_3000: "0x7e039FC42A52d717E79288d58742A41C7BD2b742"
+  # === ARB/USDT (verified 2026-02-13) ===
+  uniswap_v3_ARB_USDT_500: "0xB791Ad21ba45C76629003b4A2f04c0d544406e37"
+  uniswap_v3_ARB_USDT_3000: "0x97bca422Ec0Ee4851F2110eA743C1cd0a14835a1"
+  sushiswap_v3_ARB_USDT_500: "0xfc60Eb5B96B88a0256F260d104AB70Cd87693cEC"
+  sushiswap_v3_ARB_USDT_3000: "0x1cBC69e7dAdC7332612b5fBf41c3037cB3D33f53"
+  # === LINK/USDT (NO cross-dex arb - only Uniswap V3 has pools) ===
+  # Not enabled: SushiSwap V3 has no LINK/USDT pools
 
 # Token addresses (Arbitrum)
 tokens:
