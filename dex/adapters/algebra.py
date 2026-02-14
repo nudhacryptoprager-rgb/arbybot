@@ -229,11 +229,75 @@ class AlgebraAdapter:
         fee: int,
     ) -> Optional[int]:
         """
-        Call quoter contract.
+        Call Algebra quoter contract.
         
-        Placeholder - real impl calls contract.
+        Algebra/Camelot quoteExactInputSingle signature:
+          function quoteExactInputSingle(
+              address tokenIn,
+              address tokenOut,
+              uint256 amountIn,
+              uint160 limitSqrtPrice
+          ) external returns (uint256 amountOut, uint16 fee);
+        
+        Note: Algebra uses dynamic fees, fee is OUTPUT not input.
         """
-        return None
+        if self.web3 is None:
+            logger.debug("No web3 instance, skipping quoter call")
+            return None
+        
+        if not self.quoter_address:
+            logger.debug("No quoter address, skipping quoter call")
+            return None
+        
+        try:
+            # Selector: keccak256("quoteExactInputSingle(address,address,uint256,uint160)")[:4]
+            # = 0x2d58eb1d
+            SELECTOR = "0x2d58eb1d"
+            
+            # Encode call data
+            token_in_padded = token_in[2:].lower().zfill(64)
+            token_out_padded = token_out[2:].lower().zfill(64)
+            amount_in_hex = hex(amount_in)[2:].zfill(64)
+            sqrt_price_limit = hex(0)[2:].zfill(64)  # 0 = no limit
+            
+            call_data = (
+                f"{SELECTOR}"
+                f"{token_in_padded}"
+                f"{token_out_padded}"
+                f"{amount_in_hex}"
+                f"{sqrt_price_limit}"
+            )
+            
+            # Call quoter
+            result_hex = self.web3.eth.call({
+                "to": self.web3.to_checksum_address(self.quoter_address),
+                "data": call_data,
+            }).hex()
+            
+            # Decode response: (uint256 amountOut, uint16 fee)
+            if not result_hex or result_hex == "0x":
+                logger.debug("Empty quoter response")
+                return None
+            
+            data = result_hex[2:] if result_hex.startswith("0x") else result_hex
+            if len(data) < 64:
+                logger.debug("Quoter response too short: %d", len(data))
+                return None
+            
+            amount_out = int(data[0:64], 16)
+            # fee is in next 32 bytes (uint16 padded to 32)
+            # dynamic_fee = int(data[64:128], 16) if len(data) >= 128 else None
+            
+            logger.debug(
+                "Algebra quoter success: %s -> %s, amountOut=%d",
+                token_in[:10], token_out[:10], amount_out
+            )
+            
+            return amount_out
+            
+        except Exception as e:
+            logger.debug("Algebra quoter call failed: %s", e)
+            return None
 
 
 def create_sushiswap_v3_adapter(web3, quoter_address: str) -> AlgebraAdapter:

@@ -80,6 +80,10 @@ def main():
     parser.add_argument("--skip-tests", action="store_true", help="Skip pytest")
     parser.add_argument("--config", default="config/real_minimal.yaml", 
                         help="Config for online gates (E2E mode)")
+    parser.add_argument("--cycles", type=int, default=1,
+                        help="Number of scan cycles in E2E mode (passed to ci_m5_0_gate.py)")
+    parser.add_argument("--strict", action="store_true", default=True,
+                        help="Enable strict validation in E2E mode (default: True)")
     args = parser.parse_args()
     
     is_e2e = args.mode == "e2e"
@@ -157,11 +161,11 @@ def main():
     if is_e2e:
         m5_gate = PROJECT_ROOT / "scripts" / "ci_m5_gate.py"
         if m5_gate.exists():
-            exit_code = run_command(
-                [sys.executable, "scripts/ci_m5_gate.py", "--online", 
-                 "--config", args.config, "--strict"],
-                "M5 Gate (online)"
-            )
+            cmd = [sys.executable, "scripts/ci_m5_gate.py", "--online", 
+                   "--config", args.config]
+            if args.strict:
+                cmd.append("--strict")
+            exit_code = run_command(cmd, "M5 Gate (online)")
             results["m5_online"] = exit_code
             if exit_code != 0:
                 print(f"\n[FAIL] PIPELINE FAILED at M5 gate (exit code 3)")
@@ -204,11 +208,13 @@ def main():
         print("E2E: ONLINE GATES")
         print("="*60)
         
-        exit_code = run_command(
-            [sys.executable, "scripts/ci_m5_0_gate.py", "--online", 
-             "--config", args.config, "--strict"],
-            "M5_0 Gate (online)"
-        )
+        # Build command with cycles and strict from args
+        cmd = [sys.executable, "scripts/ci_m5_0_gate.py", "--online", 
+               "--config", args.config, "--cycles", str(args.cycles)]
+        if args.strict:
+            cmd.append("--strict")
+        
+        exit_code = run_command(cmd, "M5_0 Gate (online)")
         results["m5_0_online"] = exit_code
         # Online failures are warnings in E2E, not blockers
         if exit_code != 0:

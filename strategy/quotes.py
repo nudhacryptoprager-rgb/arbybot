@@ -64,6 +64,158 @@ def read_slot0_v3(pool_address: str, rpc_url: Optional[str], block_num: int) -> 
         return None, None
 
 
+# =============================================================================
+# USD-NOTIONAL SIZING (M4.2)
+# =============================================================================
+
+# Default USD prices for common tokens (for sizing, not profit calc)
+DEFAULT_TOKEN_USD_PRICES = {
+    "WETH": 2000.0,
+    "ETH": 2000.0,
+    "WBTC": 34000.0,
+    "USDC": 1.0,
+    "USDT": 1.0,
+    "DAI": 1.0,
+    "ARB": 0.70,
+    "LINK": 11.0,
+    "GMX": 24.0,
+    "wstETH": 2300.0,
+    "UNI": 6.0,
+    "AAVE": 100.0,
+}
+
+
+def calculate_amount_in_wei(
+    token_symbol: str,
+    decimals: int,
+    target_usd_notional: float,
+    tokens_usd_price: Optional[Dict[str, float]] = None,
+) -> int:
+    """
+    Calculate amount_in_wei for a given USD notional target.
+    
+    M4.2 CONTRACT:
+    - All quotes use consistent USD notional (e.g., $1000)
+    - This makes profit metrics comparable across pairs
+    
+    Args:
+        token_symbol: Input token symbol (e.g., "WETH")
+        decimals: Token decimals
+        target_usd_notional: Target USD value (e.g., 1000.0)
+        tokens_usd_price: Optional price overrides
+        
+    Returns:
+        Amount in wei (int)
+    """
+    # Merge config prices with defaults
+    prices = dict(DEFAULT_TOKEN_USD_PRICES)
+    if tokens_usd_price:
+        prices.update(tokens_usd_price)
+    
+    # Get token USD price
+    token_price = prices.get(token_symbol, 1.0)  # Default $1 if unknown
+    
+    if token_price <= 0:
+        logger.warning("Invalid token price for %s: %s, using $1", token_symbol, token_price)
+        token_price = 1.0
+    
+    # Calculate token amount for target USD notional
+    token_amount = target_usd_notional / token_price
+    
+    # Convert to wei
+    amount_in_wei = int(token_amount * (10 ** decimals))
+    
+    logger.debug(
+        "USD-notional sizing: %s $%.0f -> %.6f tokens -> %d wei",
+        token_symbol, target_usd_notional, token_amount, amount_in_wei
+    )
+    
+    return amount_in_wei
+
+
+# =============================================================================
+# QUOTER V2 - Executable quotes (M4.2)
+# =============================================================================
+
+def read_quoter_v2(
+    quoter_address: str,
+    token_in: str,
+    token_out: str,
+    amount_in: int,
+    fee: int,
+    rpc_url: Optional[str],
+    block_num: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get executable quote from QuoterV2 contract.
+    
+    M4.2 CONTRACT:
+    - Returns actual amountOut (not spot price)
+    - Returns gas_estimate and ticks_crossed
+    - Can detect low liquidity (high ticks/gas)
+    
+    Args:
+        quoter_address: QuoterV2 contract address
+        token_in: Input token address
+        token_out: Output token address
+        amount_in: Input amount in wei
+        fee: Fee tier
+        rpc_url: RPC URL
+        block_num: Block number
+        
+    Returns:
+        Dict with: amount_out, sqrt_price_after, ticks_crossed, gas_estimate
+        None on failure
+    """
+    if not quoter_address or not rpc_url:
+        return None
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+    
+    try:
+        from web3 import Web3
+    except ImportError:
+        logger.debug("QuoterV2 skipped: web3 not installed")
+        return None
+    
+    try:
+        # Encode quoteExactInputSingle call
+        from dex.adapters.uniswap_v3 import (
+            encode_quote_exact_input_single,
+            decode_quote_response,
+        )
+        
+        call_data = encode_quote_exact_input_single(
+            token_in=token_in,
+            token_out=token_out,
+            amount_in=amount_in,
+            fee=fee,
+        )
+        
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        result_hex = w3.eth.call(
+            {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
+            block_identifier=block_num,
+        ).hex()
+        
+        amount_out, sqrt_price_after, ticks_crossed, gas_estimate = decode_quote_response(result_hex)
+        
+        logger.debug(
+            "QuoterV2 success: %s -> %s, amountOut=%d, ticks=%d, gas=%d",
+            token_in[:10], token_out[:10], amount_out, ticks_crossed, gas_estimate
+        )
+        
+        return {
+            "amount_out": amount_out,
+            "sqrt_price_after": sqrt_price_after,
+            "ticks_crossed": ticks_crossed,
+            "gas_estimate": gas_estimate,
+        }
+    except Exception as e:
+        logger.debug("QuoterV2 failed: %s", e)
+        return None
+
+
 def synthesize_sqrt_price_from_anchor(
     anchor_price: float,
     decimals_in: int,
@@ -183,6 +335,11 @@ def collect_quotes(
     skip_rpc = os.environ.get("ARBY_SKIP_RPC") == "1"
     tokens_anchor_price = config.get("tokens_anchor_price") or {}
     
+    # M4.2: USD-notional sizing
+    target_usd_notional = config.get("target_usd_notional", 1000.0)
+    tokens_usd_price = config.get("tokens_usd_price") or {}
+    use_usd_notional = config.get("use_usd_notional", True)  # Default ON for M4.2
+    
     for pair_cfg in pairs_list:
         token_pair_tag = pair_cfg.pair_tag
         token_in = pair_cfg.token_in
@@ -224,6 +381,37 @@ def collect_quotes(
                 # See dex/adapters/uniswap_v3.py UniswapV3Adapter
                 # Quoter addresses in config/dexes.yaml: quoter_v2
                 # This would give: amountOut, ticksCrossed, gasEstimate
+                
+                # M4.2 Preview: Try QuoterV2 if configured (optional feature flag)
+                use_quoter_v2 = config.get("use_quoter_v2", False)
+                quoter_result = None
+                
+                # M4.2: Calculate amount_in_wei using USD-notional sizing
+                if use_usd_notional:
+                    amount_in_wei = calculate_amount_in_wei(
+                        token_in, decimals_in, target_usd_notional, tokens_usd_price
+                    )
+                else:
+                    amount_in_wei = 10 ** decimals_in  # Legacy: 1 token
+                
+                if use_quoter_v2 and "v3" in dex.lower():
+                    # Load quoter address from config/dexes.yaml
+                    try:
+                        from dex.registry import get_dex_config
+                        chain_name = config.get("chain", "arbitrum_one")
+                        dex_cfg = get_dex_config(chain_name, dex)
+                        if dex_cfg:
+                            quoter_addr = dex_cfg.get_quoter_address()
+                            if quoter_addr:
+                                # Get token addresses
+                                token_in_addr = token_addresses.get(token_in, "")
+                                token_out_addr = token_addresses.get(token_out, "")
+                                quoter_result = read_quoter_v2(
+                                    quoter_addr, token_in_addr, token_out_addr,
+                                    amount_in_wei, fee_tier, rpc_url, current_block
+                                )
+                    except Exception as e:
+                        logger.debug("QuoterV2 path failed: %s", e)
                 
                 # Read slot0 for v3 pools (current: spot price, not executable quote)
                 tick_val, sqrt_price_val = None, None
@@ -329,15 +517,17 @@ def collect_quotes(
                     continue
                 
                 # Build quote with actual fee_tier (v2.0.7: no more hardcoded fee=3000)
+                # M4.2: Use USD-notional sizing for amount_in_wei
+                amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
                 q = QuoteCompat(
                     dex_id=dex,
                     pool_address=pool_addr,
                     token_in=token_in,
                     token_out=token_out,
                     fee=fee_tier,  # v2.0.7: actual fee tier from config
-                    amount_in_wei=10 ** decimals_in,  # 1 token in (explicit contract)
+                    amount_in_wei=amount_in_wei,  # M4.2: USD-notional sizing
                     amount_out_wei=amount_out_wei_val,
-                    amount_in_human="1",
+                    amount_in_human=amount_in_human_str,
                     amount_out_human=amount_out_human_str,
                     price=price_str,
                     latency_ms=rpc_latency or 10,
@@ -350,6 +540,19 @@ def collect_quotes(
                 q_dict = q.__dict__
                 if price_exact is not None:
                     q_dict["price_exact"] = str(price_exact)
+                
+                # M4.2: Add USD-notional metadata
+                q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
+                
+                # M4.2: Add QuoterV2 data if available (executable quote)
+                if quoter_result:
+                    q_dict["quoter_amount_out"] = quoter_result.get("amount_out")
+                    q_dict["quoter_gas_estimate"] = quoter_result.get("gas_estimate")
+                    q_dict["quoter_ticks_crossed"] = quoter_result.get("ticks_crossed")
+                    q_dict["quote_source"] = "quoter_v2"
+                else:
+                    q_dict["quote_source"] = "slot0"
+                
                 quotes_sample.append(q_dict)
     
     return quotes_sample, rejected_quotes, counts
