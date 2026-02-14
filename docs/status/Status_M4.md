@@ -1,10 +1,10 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY)  
-**Updated**: 2026-02-13  
-**Gate Version**: v2.0.7  
-**Policy Version**: v2.0.7  
-**Evidence**: Timestamp-based provenance (v2.0.7: WARN_* reasons -> WARN quality_status, not FAIL_QUALITY)  
+**Updated**: 2026-02-14  
+**Gate Version**: v2.0.8  
+**Policy Version**: v2.0.8  
+**Evidence**: Timestamp-based provenance (v2.0.8: fee_tier strict lookup, quotes_total=attempted, unique_routes_cross_dex)  
 
 ## Status Separation (v2.0.7)
 
@@ -14,9 +14,9 @@
 | **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | ⚠️ WARN_QUALITY |
 | **M4.2 Real Execution** | On-chain TX with profit | ❌ NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). data_run_rate=0.4615, runs_in_window=52, total_net_usdc=$416.18.  
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). data_run_rate=0.5385, runs_in_window=65, total_net_usdc=$1002.59.  
 
-## ⚠️ PROFIT REALISM WARNING (v2.0.4)
+## ⚠️ PROFIT REALISM WARNING (v2.0.8)
 
 **Paper profit PROVEN** under simulated cost model (`gas=$0.10`, `slippage=5bps`).  
 **Profit realism NOT PROVEN** — current validation has known gaps:
@@ -25,6 +25,12 @@
 2. **TOP_PAIR_NET_SHARE check active (v2.0.4)**: Single pair > 80% of net profit -> `FAIL_TOP_PAIR_DOMINANCE`
 3. **Linear PnL model**: No price impact modeling; large trades overestimate profit
 4. **Liquidity imbalance undetected**: Different pool liquidities not compared (root cause of LINK/WETH outlier)
+5. **slot0 quotes (v2.0.8)**: Using slot0 spot price, NOT QuoterV2 executable quotes (M2.2 Roadmap)
+6. **unique_routes includes intra-DEX (v2.0.8)**: `sushiswap_v3->sushiswap_v3` counted as route; see `unique_routes_cross_dex` for cross-DEX only
+
+**M4.2 Blockers**:
+- QuoterV2 integration: `dex/adapters/uniswap_v3.py` ready, quoter addresses in `config/dexes.yaml`
+- Profit Reality Audit: compare paper model vs quoter-based amountOut
 
 Until these gaps are closed, M4 profit = "paper profit under declared cost model", NOT "realistic profit".
 
@@ -59,26 +65,31 @@ Until these gaps are closed, M4 profit = "paper profit under declared cost model
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| runs_in_window | 52 | `_latest.json` |
-| data_runs_count | 24 | `runs_since_timestamp.data_runs_count` |
-| pass_count | 24 | `runs_since_timestamp.pass_count` |
-| total_net_usdc (window) | $416.18 | `quick_stats.total_net_usdc` |
-| data_run_rate | 0.4615 | `quick_stats.data_run_rate` |
-| low_sample_rate | 0.5385 | `quick_stats.low_sample_rate` |
-| unique_pairs | 3 | `quick_stats.unique_pairs` |
-| unique_routes | 2 | `quick_stats.unique_routes` |
+| runs_in_window | 65 | `_latest.json` |
+| data_runs_count | 35 | `runs_since_timestamp.data_runs_count` |
+| pass_count | 35 | `runs_since_timestamp.pass_count` |
+| total_net_usdc (window) | $1002.59 | `quick_stats.total_net_usdc` |
+| data_run_rate | 0.5385 | `quick_stats.data_run_rate` |
+| low_sample_rate | 0.4615 | `quick_stats.low_sample_rate` |
+| unique_pairs | 5 | `quick_stats.unique_pairs` |
+| unique_routes | 3 | `quick_stats.unique_routes` |
 | agg_status | WARN_QUALITY | `_latest.json` |
-| agg_reasons | FRAGILE_P90_ELEVATED, LOW_SAMPLE_RATE_ELEVATED, DATA_RUN_RATE_WARN, DIVERSITY_PAIRS_LOW, DIVERSITY_ROUTES_LOW | |
+| agg_reasons | FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW, DIVERSITY_ROUTES_LOW | `_latest.json` |
+
+> **v2.0.8 Note**: After ONLINE regeneration, verify:
+> - `quotes_total >= quotes_fetched` in scan_*.json
+> - `unique_routes_cross_dex` exists in rolling quick_stats
+> - Current rolling artifacts have `policy_version=2.0.7` (pre-v2.0.8 run)
 
 > **Why agg_status=WARN_QUALITY and Core Truth=PROVEN?**
-> - 24 з 52 runs мають >=3 included signals (data runs)
-> - Всі 24 data runs є прибуткові (pass_count=24, fail_count=0)
-> - Core Truth: система генерує profit (total_net_usdc=$416.18)
-> - data_run_rate=0.4615 >= 0.30 threshold -> WARN_QUALITY (not FAIL)
-> - v2.0.7: Fixed taxonomy bug where WARN_TOP_PAIR_DOMINANCE_HIGH incorrectly triggered FAIL_QUALITY
+> - 35 з 65 runs мають >=3 included signals (data runs)
+> - Всі 35 data runs є прибуткові (pass_count=35, fail_count=0)
+> - Core Truth: система генерує profit (total_net_usdc=$1002.59)
+> - data_run_rate=0.5385 >= 0.50 threshold (QUALITY TARGET MET)
+> - v2.0.8: Fixed fee_tiers iteration, QUOTE_ZERO_OUT gate added
 
 > Source: `data/runs/_rolling/_latest.json`, `data/runs/_rolling/m4_stability_agg.json`
-> Policy Version: 2.0.6 | Status Domain: status=NO_DATA|PASS|FAIL; quality_status=NO_DATA|PASS|WARN|FAIL_QUALITY
+> Policy Version: 2.0.7 | Status Domain: status=NO_DATA|PASS|FAIL; quality_status=NO_DATA|PASS|WARN|FAIL_QUALITY
 
 ## Docs Truth Map
 

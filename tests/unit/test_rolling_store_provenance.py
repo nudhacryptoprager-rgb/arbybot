@@ -411,3 +411,69 @@ class TestRollingStoreDoD202Fields:
             assert runs[0]["chain_id"] is None
             assert runs[0]["pinned_block"] is None
             assert runs[0]["block_is_synthetic"] is None
+
+
+class TestUniqueRoutesCrossDex:
+    """v2.0.8: Test unique_routes_cross_dex metric in quick_stats."""
+    
+    def test_unique_routes_cross_dex_exists_in_quick_stats(self):
+        """quick_stats must have unique_routes_cross_dex key."""
+        from m4.rolling_store import _compute_quick_stats
+        
+        # Run with cross-DEX and intra-DEX routes
+        runs = [
+            {
+                "run_kind": "NORMAL",
+                "signals_count": 3,
+                "net_usdc": 5.0,
+                "run_status": "PASS",
+                "routes": ["sushiswap_v3->uniswap_v3", "sushiswap_v3->sushiswap_v3"],
+                "pairs": ["WETH/USDC"],
+            }
+        ]
+        
+        result = _compute_quick_stats({"runs": runs})
+        
+        qs = result.get("quick_stats", {})
+        # Key must exist and be an integer
+        assert "unique_routes_cross_dex" in qs, "unique_routes_cross_dex missing"
+        assert isinstance(qs["unique_routes_cross_dex"], int), "unique_routes_cross_dex must be int"
+    
+    def test_unique_routes_cross_dex_excludes_intra_dex(self):
+        """unique_routes_cross_dex excludes same-DEX routes."""
+        from m4.rolling_store import _compute_quick_stats
+        
+        # One cross-DEX route, one intra-DEX route
+        runs = [
+            {
+                "run_kind": "NORMAL",
+                "signals_count": 3,
+                "net_usdc": 5.0,
+                "run_status": "PASS",
+                "routes": ["sushiswap_v3->uniswap_v3", "uniswap_v3->uniswap_v3"],
+                "pairs": ["WETH/USDC"],
+            }
+        ]
+        
+        result = _compute_quick_stats({"runs": runs})
+        qs = result.get("quick_stats", {})
+        
+        # unique_routes includes both (2), cross_dex only includes 1
+        assert qs["unique_routes"] == 2
+        assert qs["unique_routes_cross_dex"] == 1
+    
+    def test_is_cross_dex_route_function(self):
+        """is_cross_dex_route correctly identifies cross-DEX routes."""
+        from m4.rolling_store import is_cross_dex_route
+        
+        # Cross-DEX routes
+        assert is_cross_dex_route("sushiswap_v3->uniswap_v3") is True
+        assert is_cross_dex_route("uniswap_v3->sushiswap_v3") is True
+        
+        # Intra-DEX routes
+        assert is_cross_dex_route("sushiswap_v3->sushiswap_v3") is False
+        assert is_cross_dex_route("uniswap_v3->uniswap_v3") is False
+        
+        # Edge cases
+        assert is_cross_dex_route("invalid") is False
+        assert is_cross_dex_route("") is False

@@ -272,16 +272,20 @@ def get_pool_address(
     """
     pools = config.get("pools", {})
     
-    # Try with fee tier first
-    if fee_tier:
+    # v2.0.8: STRICT fee-tier lookup - no fallback when fee_tier is specified
+    if fee_tier is not None:
         key = f"{dex}_{pair_tag}_{fee_tier}"
         if key in pools:
             addr = pools[key]
             # Skip null/zero addresses
             if addr and addr != "0x0000000000000000000000000000000000000000":
                 return addr
+        # v2.0.8: fee_tier specified but not found - return None or raise (NO FALLBACK)
+        if enforcement_mode == "enforce":
+            raise ValueError(f"WHITELIST_ENFORCE: pool not found for {dex}/{pair_tag}/{fee_tier}")
+        return None
     
-    # Try without fee tier (find any matching pool)
+    # fee_tier not specified - find any matching pool (legacy behavior)
     for key, addr in pools.items():
         if dex in key and pair_tag in key:
             if addr and addr != "0x0000000000000000000000000000000000000000":

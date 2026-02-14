@@ -63,9 +63,10 @@ pairs:
     fee_tiers: [500, 3000]
   # === LINK/USDC - VERIFIED (2026-02-13) ===
   # Pools: Uniswap V3 (500,3000), SushiSwap V3 (3000)
+  # v2.0.8: fee=500 pools may be empty/dead - restrict to 3000 only
   - token_in: LINK
     token_out: USDC
-    fee_tiers: [500, 3000]
+    fee_tiers: [3000]  # v2.0.8: 500 pool has QUOTE_ZERO_OUT
   # === ARB/USDT - VERIFIED (2026-02-13) ===
   # Pools: Uniswap V3 (500,3000), SushiSwap V3 (500,3000)
   - token_in: ARB
@@ -117,7 +118,8 @@ pools:
   sushiswap_v3_ARB_USDC_500: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
   sushiswap_v3_ARB_USDC_3000: "0x14716A16ef9eeAaDa7E266bcF023b71D2c9ADbf3"
   # === LINK/USDC (verified 2026-02-13) ===
-  uniswap_v3_LINK_USDC_500: "0x655C1607F8c2E73D5b4ddAbCe9Ba8792b87592B6"
+  # v2.0.8: uniswap_v3_LINK_USDC_500 has QUOTE_ZERO_OUT - commented out
+  # uniswap_v3_LINK_USDC_500: "0x655C1607F8c2E73D5b4ddAbCe9Ba8792b87592B6"
   uniswap_v3_LINK_USDC_3000: "0xbBe36e6f0331C6a36AB44Bc8421E28E1a1871C1e"
   # Note: SushiSwap V3 only has fee=3000 pool for LINK/USDC
   sushiswap_v3_LINK_USDC_3000: "0x7e039FC42A52d717E79288d58742A41C7BD2b742"

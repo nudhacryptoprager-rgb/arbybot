@@ -210,7 +210,8 @@ def compute_status(
 # v2.0.3: SUSPECT_SPREAD detection (spread > 300bps = suspicious, > 500bps = excluded)
 # v2.0.2: SHA-free provenance (run_timestamp + code_identity replaces source_sha)
 # v2.0.1: MIN_SIGNALS_FOR_PASS=3, MIN_SAMPLE_SIZE=3, MIN_SIGNALS_WARN=2
-POLICY_VERSION = "2.0.7"
+# v2.0.8: fee_tier strict lookup, quotes_total=attempted, unique_routes_cross_dex, price_stability order fix
+POLICY_VERSION = "2.0.8"
 
 class Thresholds:
     """

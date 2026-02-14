@@ -239,6 +239,27 @@ def emit_to_aggregator_light(
     return agg_data
 
 
+def is_cross_dex_route(route: str) -> bool:
+    """
+    Check if route is cross-DEX (e.g., 'uniswap_v3->sushiswap_v3').
+    
+    v2.0.8: Extracts buy/sell DEX from route string and compares.
+    Returns False for intra-DEX routes like 'sushiswap_v3->sushiswap_v3'.
+    
+    Args:
+        route: Route string in format "buy_dex->sell_dex"
+        
+    Returns:
+        True if buy_dex != sell_dex, False otherwise
+    """
+    if "->" not in route:
+        return False
+    parts = route.split("->")
+    if len(parts) != 2:
+        return False
+    return parts[0].strip() != parts[1].strip()
+
+
 def _compute_quick_stats(
     agg_data: dict,
     run_summary: dict = None,
@@ -371,6 +392,11 @@ def _compute_quick_stats(
     unique_routes = len(included_routes_set)  # v2.0.4: DoD uses included-only
     unique_pairs_all = len(all_pairs)  # For backwards compat / debugging
     
+    # v2.0.8: Cross-DEX routes only (buy_dex != sell_dex)
+    # Uses module-level is_cross_dex_route() function
+    cross_dex_routes = {r for r in included_routes_set if is_cross_dex_route(r)}
+    unique_routes_cross_dex = len(cross_dex_routes)
+    
     # v2.0: SHA tracking removed - all runs treated as same code identity
     # No per-SHA filtering, use all NORMAL runs for stats
     current_sha_all_runs = normal_runs  # All normal runs (no SHA filter)
@@ -413,6 +439,7 @@ def _compute_quick_stats(
         # v1.9.9: Pair/Route diversity
         "unique_pairs": unique_pairs,
         "unique_routes": unique_routes,
+        "unique_routes_cross_dex": unique_routes_cross_dex,  # v2.0.8: cross-DEX only
         # v1.10.0: INFRA failure tracking
         "infra_fail_count": infra_fail_count,
         "infra_fail_rate": round(infra_fail_count / len(runs), 4) if runs else 0,
@@ -459,11 +486,16 @@ def _compute_quick_stats(
         "pass_rate": round(sha_pass_rate, 4),  # v2.0.6: excludes NO_DATA (matches quick_stats.pass_rate)
         "effective_pass_rate": round(sha_effective_pass_rate, 4),  # v2.0.6: includes NO_DATA (matches quick_stats)
         "fail_rate": round(sha_fail_rate, 4),
-        # v2.0: Simplified status (no per-SHA tracking)
+        # v2.0.7: Status aligned with agg_status taxonomy (PASS/WARN/FAIL/PENDING)
+        # Uses pass_rate (profit on data runs) not effective_pass_rate (penalized by NO_DATA)
+        # PASS: >= 3 data runs with all profitable (pass_rate == 1.0)
+        # WARN: quality issues but no profit failure (pass_rate >= threshold)
+        # FAIL: actual profit failure (data runs with losses)
+        # PENDING: not enough data runs
         "status": (
-            "OK" if len(current_sha_data_runs) >= 3 and sha_effective_pass_rate >= 0.80 and sha_data_run_rate >= 0.50 else
-            "WARN" if len(current_sha_runs) >= 1 and (sha_effective_pass_rate >= 0.60 or len(current_sha_data_runs) < 3) else
-            "FAIL" if len(current_sha_data_runs) >= 3 and sha_effective_pass_rate < 0.60 else
+            "PASS" if len(current_sha_data_runs) >= 3 and sha_pass_rate >= 0.95 else
+            "WARN" if len(current_sha_data_runs) >= 3 and sha_pass_rate >= 0.80 else
+            "FAIL" if len(current_sha_data_runs) >= 3 and sha_pass_rate < 0.80 else
             "PENDING"
         ),
     }

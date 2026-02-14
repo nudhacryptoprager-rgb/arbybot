@@ -198,108 +198,158 @@ def collect_quotes(
             if anchor_price:
                 anchor_price = 1.0 / anchor_price
         
+        # v2.0.7: Iterate over fee_tiers from pair config
+        fee_tiers = pair_cfg.fee_tiers or [500, 3000]
+        
         for dex in dexes_list:
-            pool_addr = get_pool_address(config, dex, token_pair_tag)
-            if not pool_addr:
-                for k, v in pools_cfg.items():
-                    if dex in k and token_pair_tag in k:
-                        if v and v != "0x0000000000000000000000000000000000000000":
-                            pool_addr = v
-                            break
-            
-            if not pool_addr:
-                rejected_quotes.append({
-                    "pair": f"{token_in}/{token_out}",
-                    "dex_id": dex,
-                    "reason": "POOL_MISSING",
-                    "gate_passed": False,
-                    "error": f"No pool address configured for {dex}_{token_pair_tag}",
-                })
-                counts["pool_missing"] += 1
-                logger.warning("POOL_MISSING: %s %s/%s", dex, token_in, token_out)
-                continue
-            
-            # Read slot0 for v3 pools
-            tick_val, sqrt_price_val = None, None
-            if "v3" in dex.lower():
-                tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url, current_block)
+            for fee_tier in fee_tiers:
+                # v2.0.8: STRICT fee-tier lookup - no fallback, use enforcement_mode="warn"
+                # get_pool_address returns None if fee_tier specified but pool not found
+                pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)
                 
-                if tick_val is None or sqrt_price_val is None:
-                    if skip_rpc and anchor_price is not None:
-                        tick_val, sqrt_price_val = synthesize_sqrt_price_from_anchor(
-                            anchor_price, decimals_in, decimals_out
-                        )
-                    else:
-                        rejected_quotes.append({
-                            "pair": f"{token_in}/{token_out}",
-                            "dex_id": dex,
-                            "pool_address": pool_addr,
-                            "reason": "V3_SLOT0_FAILED",
-                            "gate_passed": False,
-                            "error": f"Failed to read slot0 from pool {pool_addr}",
-                        })
-                        counts["v3_slot0_failed"] += 1
-                        logger.warning("V3_SLOT0_FAILED: %s %s/%s", dex, token_in, token_out)
-                        continue
-            
-            # Calculate price from sqrtPriceX96
-            if sqrt_price_val is not None and sqrt_price_val > 0:
-                token_in_addr = token_addresses.get(token_in, "")
-                token_out_addr = token_addresses.get(token_out, "")
-                price_exact = calculate_price_from_sqrt(
-                    sqrt_price_val, token_in_addr, token_out_addr, decimals_in, decimals_out
-                )
-                
-                if price_exact is None:
+                if not pool_addr:
                     rejected_quotes.append({
                         "pair": f"{token_in}/{token_out}",
                         "dex_id": dex,
-                        "pool_address": pool_addr,
-                        "reason": "PRICE_CALC_FAILED",
+                        "fee": fee_tier,
+                        "reason": "POOL_MISSING",
                         "gate_passed": False,
-                        "error": "Failed to calculate price from sqrtPriceX96",
+                        "error": f"No pool address configured for {dex}_{token_pair_tag}_{fee_tier}",
                     })
-                    counts["price_calc_failed"] += 1
+                    counts["pool_missing"] += 1
+                    logger.warning("POOL_MISSING: %s %s/%s fee=%d", dex, token_in, token_out, fee_tier)
                     continue
                 
-                price_str = str(round(price_exact, 6))
-                amount_out_human_val = price_exact
-                amount_out_wei_val = int(amount_out_human_val * (10 ** decimals_out))
-                amount_out_human_str = str(round(amount_out_human_val, 6))
-            else:
-                rejected_quotes.append({
-                    "pair": f"{token_in}/{token_out}",
-                    "dex_id": dex,
-                    "pool_address": pool_addr,
-                    "reason": "NO_ONCHAIN_PRICE",
-                    "gate_passed": False,
-                    "error": "No on-chain price available",
-                })
-                counts["no_onchain_price"] += 1
-                continue
-            
-            # Build quote
-            q = QuoteCompat(
-                dex_id=dex,
-                pool_address=pool_addr,
-                token_in=token_in,
-                token_out=token_out,
-                fee=3000,
-                amount_in_wei=10 ** decimals_in,
-                amount_out_wei=amount_out_wei_val,
-                amount_in_human="1",
-                amount_out_human=amount_out_human_str,
-                price=price_str,
-                latency_ms=rpc_latency or 10,
-                block_number=current_block,
-                rpc_success=True,
-                gate_passed=True,
-                tick=tick_val,
-                sqrt_price_x96=sqrt_price_val,
-            )
-            q_dict = q.__dict__
-            if price_exact is not None:
-                q_dict["price_exact"] = str(price_exact)
-            quotes_sample.append(q_dict)
+                # TODO(M4.2): Replace slot0 with QuoterV2 for executable quotes
+                # See dex/adapters/uniswap_v3.py UniswapV3Adapter
+                # Quoter addresses in config/dexes.yaml: quoter_v2
+                # This would give: amountOut, ticksCrossed, gasEstimate
+                
+                # Read slot0 for v3 pools (current: spot price, not executable quote)
+                tick_val, sqrt_price_val = None, None
+                if "v3" in dex.lower():
+                    tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url, current_block)
+                    
+                    if tick_val is None or sqrt_price_val is None:
+                        if skip_rpc and anchor_price is not None:
+                            tick_val, sqrt_price_val = synthesize_sqrt_price_from_anchor(
+                                anchor_price, decimals_in, decimals_out
+                            )
+                        else:
+                            rejected_quotes.append({
+                                "pair": f"{token_in}/{token_out}",
+                                "dex_id": dex,
+                                "fee": fee_tier,
+                                "pool_address": pool_addr,
+                                "reason": "V3_SLOT0_FAILED",
+                                "gate_passed": False,
+                                "error": f"Failed to read slot0 from pool {pool_addr}",
+                            })
+                            counts["v3_slot0_failed"] += 1
+                            logger.warning("V3_SLOT0_FAILED: %s %s/%s fee=%d", dex, token_in, token_out, fee_tier)
+                            continue
+                
+                # Calculate price from sqrtPriceX96
+                if sqrt_price_val is not None and sqrt_price_val > 0:
+                    token_in_addr = token_addresses.get(token_in, "")
+                    token_out_addr = token_addresses.get(token_out, "")
+                    price_exact = calculate_price_from_sqrt(
+                        sqrt_price_val, token_in_addr, token_out_addr, decimals_in, decimals_out
+                    )
+                    
+                    if price_exact is None:
+                        rejected_quotes.append({
+                            "pair": f"{token_in}/{token_out}",
+                            "dex_id": dex,
+                            "fee": fee_tier,
+                            "pool_address": pool_addr,
+                            "reason": "PRICE_CALC_FAILED",
+                            "gate_passed": False,
+                            "error": "Failed to calculate price from sqrtPriceX96",
+                        })
+                        counts["price_calc_failed"] += 1
+                        continue
+                    
+                    price_str = str(round(price_exact, 6))
+                    amount_out_human_val = price_exact
+                    amount_out_wei_val = int(amount_out_human_val * (10 ** decimals_out))
+                    amount_out_human_str = str(round(amount_out_human_val, 6))
+                    
+                    # v2.0.8: Enhanced QUOTE_ZERO_OUT gate with diagnostics
+                    # Detect: zero output, micro-liquidity, token0/token1 mismatch
+                    # token_in_addr / token_out_addr already looked up above
+                    token_in_is_token0 = (
+                        token_in_addr.lower() < token_out_addr.lower()
+                        if token_in_addr and token_out_addr else None
+                    )
+                    
+                    # Micro-price threshold: 1e-18 is suspiciously small
+                    is_micro_price = price_exact is not None and price_exact < 1e-18
+                    
+                    if amount_out_wei_val <= 0 or is_micro_price:
+                        # Build diagnostic payload
+                        diag = {
+                            "pair": f"{token_in}/{token_out}",
+                            "dex_id": dex,
+                            "fee": fee_tier,
+                            "pool_address": pool_addr,
+                            "reason": "QUOTE_ZERO_OUT",
+                            "gate_passed": False,
+                            "error": f"amount_out_wei={amount_out_wei_val} <= 0" if amount_out_wei_val <= 0 else f"micro_price={price_exact}",
+                            "price_exact": str(price_exact) if price_exact else None,
+                            # v2.0.8: Enhanced diagnostics
+                            "diag_token_in_is_token0": token_in_is_token0,
+                            "diag_sqrt_price_x96": str(sqrt_price_val) if sqrt_price_val else None,
+                            "diag_tick": tick_val,
+                            "diag_decimals": f"{decimals_in}/{decimals_out}",
+                        }
+                        
+                        # Detect potential token0/token1 mismatch
+                        if is_micro_price and price_exact < 1e-20:
+                            diag["diag_suspect"] = "TOKEN_ORDER_MISMATCH_OR_UNINITIALIZED"
+                        
+                        rejected_quotes.append(diag)
+                        counts["quote_zero_out"] = counts.get("quote_zero_out", 0) + 1
+                        logger.warning(
+                            "QUOTE_ZERO_OUT: %s %s/%s fee=%d price=%s token_in_is_token0=%s",
+                            dex, token_in, token_out, fee_tier, price_exact, token_in_is_token0
+                        )
+                        continue
+                else:
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "NO_ONCHAIN_PRICE",
+                        "gate_passed": False,
+                        "error": "No on-chain price available",
+                    })
+                    counts["no_onchain_price"] += 1
+                    continue
+                
+                # Build quote with actual fee_tier (v2.0.7: no more hardcoded fee=3000)
+                q = QuoteCompat(
+                    dex_id=dex,
+                    pool_address=pool_addr,
+                    token_in=token_in,
+                    token_out=token_out,
+                    fee=fee_tier,  # v2.0.7: actual fee tier from config
+                    amount_in_wei=10 ** decimals_in,  # 1 token in (explicit contract)
+                    amount_out_wei=amount_out_wei_val,
+                    amount_in_human="1",
+                    amount_out_human=amount_out_human_str,
+                    price=price_str,
+                    latency_ms=rpc_latency or 10,
+                    block_number=current_block,
+                    rpc_success=True,
+                    gate_passed=True,
+                    tick=tick_val,
+                    sqrt_price_x96=sqrt_price_val,
+                )
+                q_dict = q.__dict__
+                if price_exact is not None:
+                    q_dict["price_exact"] = str(price_exact)
+                quotes_sample.append(q_dict)
     
     return quotes_sample, rejected_quotes, counts

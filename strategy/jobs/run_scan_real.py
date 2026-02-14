@@ -199,10 +199,10 @@ def run_scan(
     chain_key = config.get("chain", "arbitrum_one")
     pairs_list = load_pairs(chain_key, config, use_intent=False)
     
-    stats["quotes_total"] = len(pairs_list) * len(dexes_list) if pairs_list and dexes_list else 0
+    # v2.0.8: quotes_total = attempted quotes (valid + rejected), accounts for fee_tiers
+    stats["quotes_total"] = len(quotes_sample) + len(rejected_quotes)
     stats["quotes_fetched"] = len(quotes_sample)
     stats["gates_passed"] = sum(1 for q in quotes_sample if q.get("gate_passed", True))
-    stats["price_sanity_passed"] = stats["quotes_fetched"]
     
     total_attempts = stats["quotes_total"]
     if total_attempts > 0:
@@ -216,18 +216,17 @@ def run_scan(
     dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
     stats["dexes_active"] = len(dexes_active_list)
     
-    try:
-        price_stability_factor = max(0.0, 1.0 - stats["price_sanity_failed"] / max(1, stats["quotes_total"]))
-    except Exception:
-        price_stability_factor = 1.0
-    stats["price_stability_factor"] = price_stability_factor
-    
     # Compute spread signals
     spread_threshold_bps = config.get("min_spread_bps", config.get("spread_threshold_bps", 0))
     spread_signals = compute_spread_signals(quotes_sample, config, current_block, rejected_quotes)
     
-    # Compute sanity rejects
-    sanity_rejects, suspect_examples, raw_bps = _compute_sanity_rejects(
+    # v2.0.8: Per-quote price sanity from rejected_quotes
+    # Count rejects that indicate price/quote validity issues
+    sanity_reject_reasons = {"QUOTE_ZERO_OUT", "PRICE_CALC_FAILED", "NO_ONCHAIN_PRICE", "PRICE_SANITY_FAILED"}
+    sanity_rejects = [r for r in rejected_quotes if r.get("reason") in sanity_reject_reasons]
+    
+    # Compute additional sanity rejects from _compute_sanity_rejects (legacy placeholder)
+    legacy_sanity_rejects, suspect_examples, raw_bps = _compute_sanity_rejects(
         config, pairs_list, dexes_active_list
     )
     
@@ -245,8 +244,16 @@ def run_scan(
         stats["suspect_quotes"] = 0
         stats["suspect_reasons"] = {"way_below_expected": 0}
     
+    # v2.0.8: price_sanity_failed includes per-quote sanity rejects
     stats["price_sanity_failed"] = len(sanity_rejects)
-    stats["price_sanity_passed"] = max(0, stats["quotes_fetched"] - stats["price_sanity_failed"])
+    stats["price_sanity_passed"] = max(0, stats["quotes_fetched"])
+    
+    # v2.0.8 FIX: Calculate price_stability_factor AFTER price_sanity_failed is set
+    try:
+        price_stability_factor = max(0.0, 1.0 - stats["price_sanity_failed"] / max(1, stats["quotes_total"]))
+    except Exception:
+        price_stability_factor = 1.0
+    stats["price_stability_factor"] = price_stability_factor
     
     # Build infra payload
     primary_http = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or resolved_http

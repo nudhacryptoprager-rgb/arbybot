@@ -14,9 +14,11 @@ def test_reject_includes_expected_price(monkeypatch):
         "dexes": ["sushiswap_v3"],
         "quote_decimals": {"WETH": 18, "USDC": 6},
         "tokens_anchor_price": {"WETH_USDC": 2600},
-        "pairs": [{"base": "WETH", "quote": "USDC"}],
+        # v2.0.8: must use token_in/token_out (not base/quote) for load_pairs_from_config
+        "pairs": [{"token_in": "WETH", "token_out": "USDC", "fee_tiers": [500]}],
         "pools": {
-            "sushiswap_v3_WETH_USDC": "0x1234567890123456789012345678901234567890",
+            # v2.0.8: strict fee_tier lookup requires exact pool key with fee suffix
+            "sushiswap_v3_WETH_USDC_500": "0x1234567890123456789012345678901234567890",
         },
     }
     stats = run_scan(cfg, tmp, cycles=1)

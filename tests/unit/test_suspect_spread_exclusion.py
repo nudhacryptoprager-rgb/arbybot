@@ -15,9 +15,11 @@ from m4.policy import Thresholds, POLICY_VERSION
 class TestSuspectSpreadThresholds:
     """Test SUSPECT_SPREAD threshold values."""
 
-    def test_policy_version_is_2_0_7(self):
-        """Policy version should be 2.0.7 for taxonomy bug fix (WARN_* reasons no longer trigger FAIL_QUALITY)."""
-        assert POLICY_VERSION == "2.0.7"
+    def test_policy_version_gte_2_0_7(self):
+        """Policy version should be >= 2.0.7 for taxonomy bug fix (WARN_* reasons no longer trigger FAIL_QUALITY)."""
+        # v2.0.7 introduced taxonomy fix, v2.0.8 adds fee_tier strict lookup
+        major, minor, patch = map(int, POLICY_VERSION.split("."))
+        assert (major, minor, patch) >= (2, 0, 7), f"Expected >= 2.0.7, got {POLICY_VERSION}"
 
     def test_suspect_spread_bps_threshold(self):
         """SUSPECT_SPREAD_BPS should be 300 (warn) / 500 (exclude)."""
