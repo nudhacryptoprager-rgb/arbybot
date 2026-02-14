@@ -117,3 +117,47 @@ class TestGetDexConfig:
         config = get_dex_config("arbitrum_one", "nonexistent_dex")
         
         assert config is None
+
+
+class TestCreateAdapter:
+    """Test adapter factory."""
+    
+    def test_create_adapter_uniswap_v3(self):
+        """create_adapter creates UniswapV3Adapter instance."""
+        from dex.registry import get_dex_config, create_adapter
+        
+        config = get_dex_config("arbitrum_one", "uniswap_v3")
+        assert config is not None
+        
+        # Create without RPC (provider=None)
+        adapter = create_adapter(config, rpc_provider=None)
+        
+        assert adapter is not None
+        assert adapter.dex_id == "uniswap_v3"
+        assert adapter.quoter_address != ""
+    
+    def test_create_adapter_algebra(self):
+        """create_adapter creates AlgebraAdapter for camelot_v3."""
+        from dex.registry import get_dex_config, create_adapter
+        
+        config = get_dex_config("arbitrum_one", "camelot_v3")
+        assert config is not None
+        
+        adapter = create_adapter(config, rpc_provider=None)
+        
+        assert adapter is not None
+        assert adapter.dex_id == "camelot_v3"
+    
+    def test_create_adapter_unknown_type(self):
+        """create_adapter returns None for unknown adapter type."""
+        from dex.registry import DexConfig, create_adapter
+        
+        fake_config = DexConfig(
+            name="fake_dex",
+            adapter_type="nonexistent_type",
+            factory="0x0000000000000000000000000000000000000000",
+        )
+        
+        adapter = create_adapter(fake_config, rpc_provider=None)
+        
+        assert adapter is None

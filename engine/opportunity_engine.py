@@ -289,10 +289,11 @@ class OpportunityEngine:
             else:
                 gross_spread_bps = Decimal("0")
             
-            # Get fee tiers (in bps: 500 = 0.05%, 3000 = 0.30%)
+            # M4.2 FIX: fee_tier 500 = 0.05% = 5 bps, fee_tier 3000 = 0.30% = 30 bps
+            # Formula: fee_bps = fee_tier / 100
             buy_fee = buy_quote.get("fee", 3000)
             sell_fee = sell_quote.get("fee", 3000)
-            total_fee_bps = Decimal(buy_fee + sell_fee) / Decimal("10000")  # Convert to bps
+            total_fee_bps = Decimal(buy_fee + sell_fee) / Decimal("100")  # e.g., 500+500 = 10 bps
             
             # Net spread after fees
             net_spread_bps = gross_spread_bps - total_fee_bps
@@ -300,12 +301,12 @@ class OpportunityEngine:
             # Get USD notional
             usd_notional = buy_quote.get("usd_notional") or sell_quote.get("usd_notional") or 1000.0
             
-            # Calculate gross profit in USD
+            # Calculate gross profit in USD (from NET spread, already deducted fees)
             gross_profit_usd = float(net_spread_bps / Decimal("10000")) * usd_notional
             
             # Calculate gas costs
-            buy_gas = buy_quote.get("quoter_gas_estimate")
-            sell_gas = sell_quote.get("quoter_gas_estimate")
+            buy_gas = buy_quote.get("gas_estimate") or buy_quote.get("quoter_gas_estimate")
+            sell_gas = sell_quote.get("gas_estimate") or sell_quote.get("quoter_gas_estimate")
             
             # Total gas: buy swap + sell swap
             total_gas = None
@@ -314,10 +315,10 @@ class OpportunityEngine:
             
             gas_cost_usd = self.gas_config.gas_cost_usd(total_gas)
             
-            # Fee cost already included in net_spread_bps
+            # Fee cost in USD (bps to fraction: divide by 10000)
             fee_cost_usd = float(total_fee_bps / Decimal("10000")) * usd_notional
             
-            # Net profit
+            # Net profit (gross profit already has fees deducted, subtract gas)
             net_profit_usd = gross_profit_usd - gas_cost_usd
             
             # Generate spread_id

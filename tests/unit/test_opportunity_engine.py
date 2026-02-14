@@ -129,6 +129,46 @@ class TestOpportunityEngine:
         assert not opps[0].gate_passed
         assert "NET_PROFIT_TOO_LOW" in (opps[0].reject_reason or "")
     
+    def test_fee_math_regression_500_tier(self):
+        """M4.2 FIX: fee_tier 500 = 5 bps per leg = 10 bps total for both."""
+        engine = OpportunityEngine(min_net_profit_usd=0.0)
+        # 1% spread = 100 bps gross, fee_tier 500 each side = 10 bps total fees
+        # net_spread = 100 - 10 = 90 bps
+        quotes = [
+            {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1},
+            {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1},
+        ]
+        opps = engine.build_opportunities(quotes)
+        opp = opps[0]
+        
+        # 1% spread = 100 bps
+        assert abs(opp.gross_spread_bps - Decimal("100")) < Decimal("1")
+        # Fee: 500 + 500 = 1000/100 = 10 bps
+        assert opp.fee_cost_usd > 0
+        # Net spread = 100 - 10 = 90 bps
+        assert abs(opp.net_spread_bps - Decimal("90")) < Decimal("1")
+    
+    def test_fee_math_regression_3000_tier(self):
+        """M4.2 FIX: fee_tier 3000 = 30 bps per leg = 60 bps total."""
+        engine = OpportunityEngine(min_net_profit_usd=0.0)
+        # 1% spread = 100 bps gross, fee_tier 3000 each side = 60 bps total fees
+        # net_spread = 100 - 60 = 40 bps
+        quotes = [
+            {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 3000, "usd_notional": 1000, "amount_in_wei": 1},
+            {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 3000, "usd_notional": 1000, "amount_in_wei": 1},
+        ]
+        opps = engine.build_opportunities(quotes)
+        opp = opps[0]
+        
+        # Net spread = 100 - 60 = 40 bps
+        assert abs(opp.net_spread_bps - Decimal("40")) < Decimal("1")
+        # At $1000 notional, 40 bps = $4 gross profit (before gas)
+        assert 3.0 < opp.gross_profit_usd < 5.0
+    
     def test_filter_profitable(self):
         """Filter returns only profitable opportunities."""
         engine = OpportunityEngine()

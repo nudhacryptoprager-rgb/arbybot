@@ -216,6 +216,91 @@ def read_quoter_v2(
         return None
 
 
+def read_algebra_quoter(
+    quoter_address: str,
+    token_in: str,
+    token_out: str,
+    amount_in: int,
+    rpc_url: Optional[str],
+    block_num: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get executable quote from Algebra (Camelot) quoter contract.
+    
+    Algebra quoter uses different signature than UniswapV3 QuoterV2:
+    - No fee parameter (Algebra has dynamic fees)
+    - Different return values
+    
+    Args:
+        quoter_address: Algebra quoter contract address
+        token_in: Input token address
+        token_out: Output token address
+        amount_in: Input amount in wei
+        rpc_url: RPC URL
+        block_num: Block number
+        
+    Returns:
+        Dict with: amount_out, gas_estimate
+        None on failure
+    """
+    if not quoter_address or not rpc_url:
+        return None
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+    
+    try:
+        from web3 import Web3
+    except ImportError:
+        logger.debug("Algebra quoter skipped: web3 not installed")
+        return None
+    
+    try:
+        # Algebra quoteExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint160 limitSqrtPrice)
+        # Returns (uint256 amountOut, uint16 fee)
+        # Selector: 0x2d58eb1d
+        SELECTOR = "0x2d58eb1d"
+        
+        token_in_padded = token_in[2:].lower().zfill(64)
+        token_out_padded = token_out[2:].lower().zfill(64)
+        amount_in_hex = hex(amount_in)[2:].zfill(64)
+        sqrt_price_limit = hex(0)[2:].zfill(64)  # 0 = no limit
+        
+        call_data = f"{SELECTOR}{token_in_padded}{token_out_padded}{amount_in_hex}{sqrt_price_limit}"
+        
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        result_hex = w3.eth.call(
+            {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
+            block_identifier=block_num,
+        ).hex()
+        
+        if not result_hex or result_hex == "0x":
+            logger.debug("Algebra quoter empty response")
+            return None
+        
+        data = result_hex[2:] if result_hex.startswith("0x") else result_hex
+        if len(data) < 64:
+            logger.debug("Algebra quoter response too short: %d", len(data))
+            return None
+        
+        amount_out = int(data[0:64], 16)
+        # dynamic_fee = int(data[64:128], 16) if len(data) >= 128 else None
+        
+        logger.debug(
+            "Algebra quoter success: %s -> %s, amountOut=%d",
+            token_in[:10], token_out[:10], amount_out
+        )
+        
+        return {
+            "amount_out": amount_out,
+            "sqrt_price_after": None,  # Algebra doesn't return this
+            "ticks_crossed": None,
+            "gas_estimate": 200_000,  # Conservative estimate for Algebra
+        }
+    except Exception as e:
+        logger.debug("Algebra quoter failed: %s", e)
+        return None
+
+
 def synthesize_sqrt_price_from_anchor(
     anchor_price: float,
     decimals_in: int,
@@ -359,7 +444,19 @@ def collect_quotes(
         fee_tiers = pair_cfg.fee_tiers or [500, 3000]
         
         for dex in dexes_list:
-            for fee_tier in fee_tiers:
+            # M4.2 FIX: Get adapter_type to determine fee handling
+            from dex.registry import get_dex_config
+            chain_name = config.get("chain", "arbitrum_one")
+            dex_cfg = get_dex_config(chain_name, dex)
+            adapter_type = dex_cfg.adapter_type if dex_cfg else None
+            
+            # M4.2 FIX: Algebra DEXes use dynamic fees, use fee=0 for pool lookup
+            if adapter_type == "algebra":
+                effective_fee_tiers = [0]  # Dynamic fee - lookup with fee=0
+            else:
+                effective_fee_tiers = fee_tiers
+            
+            for fee_tier in effective_fee_tiers:
                 # v2.0.8: STRICT fee-tier lookup - no fallback, use enforcement_mode="warn"
                 # get_pool_address returns None if fee_tier specified but pool not found
                 pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)
@@ -394,28 +491,32 @@ def collect_quotes(
                 else:
                     amount_in_wei = 10 ** decimals_in  # Legacy: 1 token
                 
-                if use_quoter_v2 and "v3" in dex.lower():
-                    # Load quoter address from config/dexes.yaml
-                    try:
-                        from dex.registry import get_dex_config
-                        chain_name = config.get("chain", "arbitrum_one")
-                        dex_cfg = get_dex_config(chain_name, dex)
-                        if dex_cfg:
-                            quoter_addr = dex_cfg.get_quoter_address()
-                            if quoter_addr:
-                                # Get token addresses
-                                token_in_addr = token_addresses.get(token_in, "")
-                                token_out_addr = token_addresses.get(token_out, "")
-                                quoter_result = read_quoter_v2(
-                                    quoter_addr, token_in_addr, token_out_addr,
-                                    amount_in_wei, fee_tier, rpc_url, current_block
-                                )
-                    except Exception as e:
-                        logger.debug("QuoterV2 path failed: %s", e)
+                # M4.2 FIX: Use adapter_type for branching (reuse from outer loop)
+                is_v3_dex = adapter_type in ("uniswap_v3", "algebra")
+                is_algebra = adapter_type == "algebra"
+                
+                if use_quoter_v2 and dex_cfg:
+                    quoter_addr = dex_cfg.get_quoter_address()
+                    if quoter_addr:
+                        token_in_addr = token_addresses.get(token_in, "")
+                        token_out_addr = token_addresses.get(token_out, "")
+                        
+                        if adapter_type == "uniswap_v3":
+                            # UniswapV3 QuoterV2
+                            quoter_result = read_quoter_v2(
+                                quoter_addr, token_in_addr, token_out_addr,
+                                amount_in_wei, fee_tier, rpc_url, current_block
+                            )
+                        elif adapter_type == "algebra":
+                            # Algebra quoter (Camelot) - use fee=0 for dynamic fees
+                            quoter_result = read_algebra_quoter(
+                                quoter_addr, token_in_addr, token_out_addr,
+                                amount_in_wei, rpc_url, current_block
+                            )
                 
                 # Read slot0 for v3 pools (current: spot price, not executable quote)
                 tick_val, sqrt_price_val = None, None
-                if "v3" in dex.lower():
+                if is_v3_dex:
                     tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url, current_block)
                     
                     if tick_val is None or sqrt_price_val is None:
@@ -459,9 +560,15 @@ def collect_quotes(
                         continue
                     
                     price_str = str(round(price_exact, 6))
-                    amount_out_human_val = price_exact
-                    amount_out_wei_val = int(amount_out_human_val * (10 ** decimals_out))
-                    amount_out_human_str = str(round(amount_out_human_val, 6))
+                    # M4.2 FIX: amount_out must scale with amount_in_wei (USD-notional)
+                    # For slot0: price_exact = amount_out per 1 token_in
+                    # amount_out = price_exact * (amount_in_wei / 10^decimals_in)
+                    # amount_out_wei = amount_out * 10^decimals_out
+                    price_exact_dec = Decimal(str(price_exact)) if not isinstance(price_exact, Decimal) else price_exact
+                    amount_in_tokens = Decimal(amount_in_wei) / Decimal(10 ** decimals_in)
+                    amount_out_human_dec = price_exact_dec * amount_in_tokens
+                    amount_out_wei_val = int(price_exact_dec * Decimal(amount_in_wei) * Decimal(10 ** decimals_out) / Decimal(10 ** decimals_in))
+                    amount_out_human_str = str(round(float(amount_out_human_dec), 6))
                     
                     # v2.0.8: Enhanced QUOTE_ZERO_OUT gate with diagnostics
                     # Detect: zero output, micro-liquidity, token0/token1 mismatch
@@ -519,6 +626,27 @@ def collect_quotes(
                 # Build quote with actual fee_tier (v2.0.7: no more hardcoded fee=3000)
                 # M4.2: Use USD-notional sizing for amount_in_wei
                 amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                
+                # M4.2 FIX: When quoter_result available, use it as CANONICAL source
+                if quoter_result and quoter_result.get("amount_out"):
+                    # QuoterV2 gives executable amount_out
+                    amount_out_wei_val = quoter_result["amount_out"]
+                    amount_out_human_val = float(Decimal(amount_out_wei_val) / Decimal(10 ** decimals_out))
+                    amount_out_human_str = str(round(amount_out_human_val, 6))
+                    # Recalculate price from quoter amounts
+                    if amount_in_wei > 0:
+                        amount_in_tokens = float(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                        price_from_quoter = amount_out_human_val / amount_in_tokens if amount_in_tokens > 0 else 0
+                        price_str = str(round(price_from_quoter, 6))
+                        price_exact = price_from_quoter
+                    quote_source = "quoter_v2"
+                    gas_estimate = quoter_result.get("gas_estimate")
+                    ticks_crossed = quoter_result.get("ticks_crossed")
+                else:
+                    quote_source = "slot0"
+                    gas_estimate = None
+                    ticks_crossed = None
+                
                 q = QuoteCompat(
                     dex_id=dex,
                     pool_address=pool_addr,
@@ -544,14 +672,10 @@ def collect_quotes(
                 # M4.2: Add USD-notional metadata
                 q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
                 
-                # M4.2: Add QuoterV2 data if available (executable quote)
-                if quoter_result:
-                    q_dict["quoter_amount_out"] = quoter_result.get("amount_out")
-                    q_dict["quoter_gas_estimate"] = quoter_result.get("gas_estimate")
-                    q_dict["quoter_ticks_crossed"] = quoter_result.get("ticks_crossed")
-                    q_dict["quote_source"] = "quoter_v2"
-                else:
-                    q_dict["quote_source"] = "slot0"
+                # M4.2: Quote source and quoter diagnostics (canonical now)
+                q_dict["quote_source"] = quote_source
+                q_dict["gas_estimate"] = gas_estimate
+                q_dict["ticks_crossed"] = ticks_crossed
                 
                 quotes_sample.append(q_dict)
     

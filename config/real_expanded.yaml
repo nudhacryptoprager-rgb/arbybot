@@ -234,3 +234,34 @@ min_net_pnl_usdc_est: 0.0
 # M4 markers - execution disabled
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4
+
+# =============================================================================
+# M4.2 QUOTE CONFIGURATION (v2.0.9+)
+# =============================================================================
+
+# QuoterV2 integration (feature flag)
+# When true: use on-chain quoters for executable amounts (replaces slot0 spot price)
+# When false: use slot0 for spot price estimation only
+use_quoter_v2: false  # M4.2: Set to true for executable quote testing
+
+# USD-notional sizing (M4.2)
+# When true: all quotes use consistent USD notional (e.g., $1000) for fair comparison
+# When false: legacy mode, uses 1 token regardless of value
+use_usd_notional: true
+
+# Target USD notional for quote sizing (when use_usd_notional=true)
+target_usd_notional: 1000.0
+
+# Token USD prices for sizing (optional override, defaults in strategy/quotes.py)
+# Format: TOKEN_SYMBOL: usd_price
+tokens_usd_price:
+  WETH: 2000.0
+  WBTC: 34000.0
+  ARB: 0.70
+  LINK: 11.0
+  GMX: 24.0
+  wstETH: 2300.0
+  # Stables default to $1.0
+
+# Legacy field - no longer used when use_usd_notional=true
+# quote_amount_in_wei: "1000000000000000000"

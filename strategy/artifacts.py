@@ -159,6 +159,8 @@ def build_truth_data(
             "reasons": stats.get("suspect_reasons", {}),
             "examples": suspect_examples,
         },
+        # M4.2: Opportunity engine integration
+        "opportunity_engine": stats.get("opportunity_engine", {}),
     }
     
     try:

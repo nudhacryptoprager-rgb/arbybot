@@ -277,6 +277,29 @@ def run_scan(
         tenderly_enabled, tenderly_ok, tenderly_error
     )
     
+    # M4.2: Evaluate opportunities using opportunity_engine
+    try:
+        from engine.opportunity_engine import evaluate_quotes
+        eth_usd = config.get("tokens_anchor_price", {}).get("WETH_USDC", 2000.0)
+        opps_list, opps_summary = evaluate_quotes(
+            quotes_sample, cycle=0, timestamp=timestamp,
+            eth_usd_price=eth_usd, min_net_profit_usd=0.10
+        )
+        stats["opportunity_engine"] = {
+            "enabled": True,
+            "summary": opps_summary,
+            "top_opportunities": opps_list[:5] if opps_list else [],
+        }
+        logger.info(
+            "OpportunityEngine: %d opportunities, %d profitable, best=$%.2f",
+            opps_summary.get("total_opportunities", 0),
+            opps_summary.get("profitable_count", 0),
+            opps_summary.get("best_net_profit_usd", 0),
+        )
+    except Exception as e:
+        logger.debug("OpportunityEngine skipped: %s", e)
+        stats["opportunity_engine"] = {"enabled": False, "error": str(e)}
+    
     # Build artifact data structures
     scan_data = build_scan_data(config, current_block, stats, quotes_sample, infra_payload)
     

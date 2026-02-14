@@ -124,9 +124,12 @@ def create_adapter(
     """
     Create adapter instance from DexConfig.
     
+    M4.2 FIX: Use factory pattern that matches actual adapter constructors.
+    Adapters expect (provider, quoter_address, dex_id) not (DexConfig, rpc_provider).
+    
     Args:
         dex_config: DEX configuration
-        rpc_provider: RPC provider for blockchain calls
+        rpc_provider: RPC provider for blockchain calls (web3 or RPCProvider)
         
     Returns:
         Adapter instance or None if adapter type not supported
@@ -136,7 +139,16 @@ def create_adapter(
         logger.warning(f"Unknown adapter type: {dex_config.adapter_type} for {dex_config.name}")
         return None
     
-    return adapter_class(dex_config, rpc_provider)
+    try:
+        quoter_address = dex_config.get_quoter_address() or ""
+        dex_id = dex_config.name
+        
+        # Both UniswapV3Adapter and AlgebraAdapter have signature:
+        # __init__(self, provider/web3, quoter_address: str, dex_id: str = ...)
+        return adapter_class(rpc_provider, quoter_address, dex_id)
+    except Exception as e:
+        logger.warning(f"Failed to create adapter for {dex_config.name}: {e}")
+        return None
 
 
 def list_adapter_types() -> list[str]:
