@@ -87,6 +87,51 @@ class TestQuotesTotalInvariant:
         # quotes_total >= quotes_fetched (might have rejections)
         assert quotes_total >= quotes_fetched, \
             f"Artifact invariant: quotes_total ({quotes_total}) >= quotes_fetched ({quotes_fetched})"
+    
+    def test_quotes_total_equals_fetched_plus_rejected(self, monkeypatch):
+        """v2.0.8: Exact equality: quotes_total == quotes_fetched + quotes_rejected (strict)."""
+        monkeypatch.setenv("ARBY_SKIP_RPC", "1")
+        monkeypatch.setenv("ARBY_FAKE_BLOCK", "123")
+        
+        from strategy.jobs.run_scan_real import run_scan
+        
+        tmp = Path(tempfile.mkdtemp())
+        cfg = {
+            "chain_id": 42161,
+            "chain": "arbitrum_one",
+            "dexes": ["sushiswap_v3", "uniswap_v3"],  # 2 DEXes
+            "quote_decimals": {"WETH": 18, "USDC": 6},
+            "tokens_anchor_price": {"WETH_USDC": 2600},
+            # 2 fee tiers x 2 DEXes = 4 quote attempts, but only 1 pool configured
+            "pairs": [
+                {"token_in": "WETH", "token_out": "USDC", "fee_tiers": [500, 3000]},
+            ],
+            "pools": {
+                # Only 1 of 4 pools configured - will have 3 rejections
+                "sushiswap_v3_WETH_USDC_500": "0x1234567890123456789012345678901234567890",
+            },
+        }
+        
+        stats = run_scan(cfg, tmp, cycles=1)
+        
+        # v2.0.8 CONTRACT: quotes_rejected MUST exist in stats (not optional)
+        assert "quotes_rejected" in stats, (
+            "Contract violation: stats must contain 'quotes_rejected' key. "
+            "If run_scan changes, ensure quotes_rejected is always emitted."
+        )
+        
+        # v2.0.8: Use stats fields directly - no histogram fallback
+        quotes_total = stats["quotes_total"]
+        quotes_fetched = stats["quotes_fetched"]
+        quotes_rejected = stats["quotes_rejected"]
+        
+        # STRICT invariant: quotes_total == quotes_fetched + quotes_rejected
+        # No OR clause - this must be exact equality
+        expected_total = quotes_fetched + quotes_rejected
+        assert quotes_total == expected_total, (
+            f"STRICT invariant violated: quotes_total ({quotes_total}) != "
+            f"quotes_fetched ({quotes_fetched}) + quotes_rejected ({quotes_rejected}) = {expected_total}"
+        )
 
 
 class TestPriceStabilityFactorOrder:

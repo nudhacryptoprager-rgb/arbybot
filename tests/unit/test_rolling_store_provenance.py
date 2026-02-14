@@ -477,3 +477,85 @@ class TestUniqueRoutesCrossDex:
         # Edge cases
         assert is_cross_dex_route("invalid") is False
         assert is_cross_dex_route("") is False
+
+
+class TestDiversityRoutesLowUsesCrossDex:
+    """v2.0.8: Test DIVERSITY_ROUTES_LOW warning uses unique_routes_cross_dex."""
+    
+    def test_diversity_routes_low_uses_cross_dex_not_total_routes(self):
+        """DIVERSITY_ROUTES_LOW should trigger based on unique_routes_cross_dex, not unique_routes."""
+        from m4.rolling_store import _compute_quick_stats
+        from m4.policy import Thresholds
+        
+        # Scenario: 5 total routes but only 2 cross-DEX routes
+        # unique_routes=5 >= target(4), unique_routes_cross_dex=2 >= min(2) but < target(4)
+        # DIVERSITY_ROUTES_LOW warning should trigger because cross_dex < target
+        runs = [
+            {
+                "run_kind": "NORMAL",
+                "signals_count": 3,
+                "net_usdc": 5.0,
+                "run_status": "PASS",
+                "routes": [
+                    "sushiswap_v3->uniswap_v3",      # cross-DEX
+                    "uniswap_v3->sushiswap_v3",      # cross-DEX (different direction)
+                    "sushiswap_v3->sushiswap_v3",    # intra-DEX
+                    "uniswap_v3->uniswap_v3",        # intra-DEX
+                    "curve->curve",                   # intra-DEX (hypothetical)
+                ],
+                "pairs": ["WETH/USDC", "LINK/USDC", "ARB/USDC", "GMX/USDC", "ARB/USDT"],
+            }
+        ]
+        
+        result = _compute_quick_stats({"runs": runs})
+        qs = result.get("quick_stats", {})
+        warnings = result.get("quality_warnings", [])
+        
+        # unique_routes=5, unique_routes_cross_dex=2
+        assert qs["unique_routes"] == 5, f"Expected unique_routes=5, got {qs['unique_routes']}"
+        assert qs["unique_routes_cross_dex"] == 2, f"Expected cross_dex=2, got {qs['unique_routes_cross_dex']}"
+        
+        # DIVERSITY_ROUTES_LOW should be in warnings (2 >= 2 min, but 2 < 4 target)
+        diversity_warnings = [w for w in warnings if w.startswith("DIVERSITY_ROUTES_LOW")]
+        assert len(diversity_warnings) == 1, f"Expected DIVERSITY_ROUTES_LOW warning, got {warnings}"
+        
+        # The warning should reference cross_dex value (2<4), not total routes (5)
+        assert "2<" in diversity_warnings[0], f"Warning should show 2<4: {diversity_warnings[0]}"
+        assert "5<" not in diversity_warnings[0], f"Warning should NOT show 5<4: {diversity_warnings[0]}"
+    
+    def test_diversity_routes_passes_with_enough_cross_dex(self):
+        """DIVERSITY_ROUTES_LOW should NOT trigger if unique_routes_cross_dex >= threshold."""
+        from m4.rolling_store import _compute_quick_stats
+        from m4.policy import Thresholds
+        
+        # Scenario: 4 cross-DEX routes + 2 intra-DEX = 6 total
+        # unique_routes=6, unique_routes_cross_dex=4 >= threshold(4)
+        runs = [
+            {
+                "run_kind": "NORMAL",
+                "signals_count": 3,
+                "net_usdc": 5.0,
+                "run_status": "PASS",
+                "routes": [
+                    "sushiswap_v3->uniswap_v3", 
+                    "uniswap_v3->sushiswap_v3",
+                    "curve->uniswap_v3",
+                    "sushiswap_v3->curve",
+                    "sushiswap_v3->sushiswap_v3",  # intra
+                    "uniswap_v3->uniswap_v3",      # intra
+                ],
+                "pairs": ["WETH/USDC", "LINK/USDC", "ARB/USDC", "GMX/USDC"],
+            }
+        ]
+        
+        result = _compute_quick_stats({"runs": runs})
+        qs = result.get("quick_stats", {})
+        warnings = result.get("quality_warnings", [])
+        
+        # unique_routes=6, unique_routes_cross_dex=4
+        assert qs["unique_routes"] == 6
+        assert qs["unique_routes_cross_dex"] == 4
+        
+        # DIVERSITY_ROUTES_LOW should NOT be in warnings (4 >= 4)
+        diversity_warnings = [w for w in warnings if w.startswith("DIVERSITY_ROUTES_LOW")]
+        assert len(diversity_warnings) == 0, f"Unexpected DIVERSITY_ROUTES_LOW: {warnings}"

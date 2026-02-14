@@ -10,16 +10,16 @@
 
 | DoD | What it means | Current Status |
 |-----|---------------|----------------|
-| **Core Truth (paper +PnL)** | N>=5 REGISTRY_REAL runs with total_net_usdc > 0 | ✅ PROVEN |
-| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | ⚠️ WARN_QUALITY |
-| **M4.2 Real Execution** | On-chain TX with profit | ❌ NOT STARTED |
+| **Core Truth (paper +PnL)** | N>=5 REGISTRY_REAL runs with total_net_usdc > 0 | [OK] PROVEN |
+| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [WARN] WARN_QUALITY |
+| **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). data_run_rate=0.5385, runs_in_window=65, total_net_usdc=$1002.59.  
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). data_run_rate=0.5588, runs_in_window=68, total_net_usdc=$1166.16.  
 
-## ⚠️ PROFIT REALISM WARNING (v2.0.8)
+## [WARN] PROFIT REALISM WARNING (v2.0.8)
 
 **Paper profit PROVEN** under simulated cost model (`gas=$0.10`, `slippage=5bps`).  
-**Profit realism NOT PROVEN** — current validation has known gaps:
+**Profit realism NOT PROVEN** - current validation has known gaps:
 
 1. **SUSPECT_SPREAD signals now excluded (v2.0.4)**: Spread > 500bps triggers `is_excluded_spread=true`, signal excluded from DoD metrics
 2. **TOP_PAIR_NET_SHARE check active (v2.0.4)**: Single pair > 80% of net profit -> `FAIL_TOP_PAIR_DOMINANCE`
@@ -40,12 +40,12 @@ Until these gaps are closed, M4 profit = "paper profit under declared cost model
 
 | DoD Level | Criterion | Evidence Required | Status |
 |-----------|-----------|-------------------|--------|
-| **M4.1 Simulate-only** | Code/schema/invariants | FIXTURE_OFFLINE or REAL with simulate_only=true | ✅ PROVEN |
-| **M4 Online Profit (core truth)** | Real profitability | `run_mode=REGISTRY_REAL`, N>=5 runs with `total_net_usdc > 0` | ✅ PROVEN |
-| **Rolling Quality Gate** | Operational stability | `data_run_rate >= 0.30`, `agg_status != FAIL` | ⚠️ WARN_QUALITY |
+| **M4.1 Simulate-only** | Code/schema/invariants | FIXTURE_OFFLINE or REAL with simulate_only=true | [OK] PROVEN |
+| **M4 Online Profit (core truth)** | Real profitability | `run_mode=REGISTRY_REAL`, N>=5 runs with `total_net_usdc > 0` | [OK] PROVEN |
+| **Rolling Quality Gate** | Operational stability | `data_run_rate >= 0.30`, `agg_status != FAIL` | [WARN] WARN_QUALITY |
 
 **Clarification (v2.0.6):**
-> "Core Truth" (+PnL) ≠ "Rolling Quality Gate". Core truth підтверджує що система генерує profit (paper).
+> "Core Truth" (+PnL) != "Rolling Quality Gate". Core truth підтверджує що система генерує profit (paper).
 > Rolling quality gate перевіряє стабільність в операційному режимі.
 > agg_status=FAIL означає проблеми з якістю даних, НЕ відсутність profit.
 
@@ -55,41 +55,46 @@ Until these gaps are closed, M4 profit = "paper profit under declared cost model
 
 **M4-profit DoD (посилання на Roadmap.md L52-62):**
 > See `Roadmap.md` for canonical DoD definition.
-> Quick ref: N≥5 runs in `m4_stability_agg.json.runs[]` with:
+> Quick ref: N>=5 runs in `m4_stability_agg.json.runs[]` with:
 > `run_mode=REGISTRY_REAL`, `pinned_block!=429900000`, `block_is_synthetic=false`, `total_net_usdc>0`
 
-**Evidence for M4 online-profit (v2.0.7 rolling snapshot, 2026-02-13):**
+**Evidence for M4 online-profit (v2.0.8 rolling snapshot, 2026-02-14):**
 
 > **CORE TRUTH: PROVEN** (+PnL confirmed in N>=5 runs)
 > **ROLLING QUALITY: WARN_QUALITY** (data_run_rate >= 0.30, quality issues remain)
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| runs_in_window | 65 | `_latest.json` |
-| data_runs_count | 35 | `runs_since_timestamp.data_runs_count` |
-| pass_count | 35 | `runs_since_timestamp.pass_count` |
-| total_net_usdc (window) | $1002.59 | `quick_stats.total_net_usdc` |
-| data_run_rate | 0.5385 | `quick_stats.data_run_rate` |
-| low_sample_rate | 0.4615 | `quick_stats.low_sample_rate` |
+| runs_in_window | 68 | `_latest.json` |
+| data_runs_count | 38 | `runs_since_timestamp.data_runs_count` |
+| pass_count | 38 | `runs_since_timestamp.pass_count` |
+| total_net_usdc (window) | $1166.16 | `quick_stats.total_net_usdc` |
+| data_run_rate | 0.5588 | `quick_stats.data_run_rate` |
+| low_sample_rate | 0.4412 | `quick_stats.low_sample_rate` |
 | unique_pairs | 5 | `quick_stats.unique_pairs` |
-| unique_routes | 3 | `quick_stats.unique_routes` |
+| unique_routes | 4 | `quick_stats.unique_routes` |
+| unique_routes_cross_dex | 2 | `quick_stats.unique_routes_cross_dex` |
 | agg_status | WARN_QUALITY | `_latest.json` |
 | agg_reasons | FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW, DIVERSITY_ROUTES_LOW | `_latest.json` |
 
-> **v2.0.8 Note**: After ONLINE regeneration, verify:
-> - `quotes_total >= quotes_fetched` in scan_*.json
-> - `unique_routes_cross_dex` exists in rolling quick_stats
-> - Current rolling artifacts have `policy_version=2.0.7` (pre-v2.0.8 run)
+> **v2.0.8 VERIFIED**:
+> - `quotes_total >= quotes_fetched` in scan_*.json: OK (28/28)
+> - `unique_routes_cross_dex=2` exists in rolling quick_stats: OK
+> - `policy_version=2.0.8` in rolling: OK
+> - DIVERSITY_ROUTES_LOW now uses unique_routes_cross_dex (2<4), not unique_routes (4)
+
+> **DIVERSITY_ROUTES_LOW (v2.0.8)**: Очікуваний WARN до інтеграції 3-го DEX.
+> Метрика routes = `unique_routes_cross_dex` (cross-DEX тільки). Target 4 потребує 3-го DEX (M5).
 
 > **Why agg_status=WARN_QUALITY and Core Truth=PROVEN?**
-> - 35 з 65 runs мають >=3 included signals (data runs)
-> - Всі 35 data runs є прибуткові (pass_count=35, fail_count=0)
-> - Core Truth: система генерує profit (total_net_usdc=$1002.59)
-> - data_run_rate=0.5385 >= 0.50 threshold (QUALITY TARGET MET)
-> - v2.0.8: Fixed fee_tiers iteration, QUOTE_ZERO_OUT gate added
+> - 38 з 68 runs мають >=3 included signals (data runs)
+> - Всі 38 data runs є прибуткові (pass_count=38, fail_count=0)
+> - Core Truth: система генерує profit (total_net_usdc=$1166.16)
+> - data_run_rate=0.5588 >= 0.50 threshold (QUALITY TARGET MET)
+> - v2.0.8: Fixed fee_tiers iteration, QUOTE_ZERO_OUT gate, unique_routes_cross_dex, DIVERSITY_ROUTES uses cross_dex
 
 > Source: `data/runs/_rolling/_latest.json`, `data/runs/_rolling/m4_stability_agg.json`
-> Policy Version: 2.0.7 | Status Domain: status=NO_DATA|PASS|FAIL; quality_status=NO_DATA|PASS|WARN|FAIL_QUALITY
+> Policy Version: 2.0.8 | Status Domain: status=NO_DATA|PASS|FAIL; quality_status=NO_DATA|PASS|WARN|FAIL_QUALITY
 
 ## Docs Truth Map
 
@@ -150,7 +155,7 @@ Until these gaps are closed, M4 profit = "paper profit under declared cost model
 |-----------|--------|----------|
 | `signals_count == 0` | NO_DATA | True absence of data |
 | `signals > 0, net > 0` | PASS | Profitable (quality may warn) |
-| `signals > 0, net ≤ 0` | FAIL | Unprofitable |
+| `signals > 0, net <= 0` | FAIL | Unprofitable |
 | `signals < 5` | quality_status=WARN | Low sample (not NO_DATA) |
 
 **Rule**: NO_DATA only when signals_count == 0. Low sample -> WARN, not NO_DATA.
@@ -159,20 +164,20 @@ Until these gaps are closed, M4 profit = "paper profit under declared cost model
 
 | Kind | Description | Counted in KPIs |
 |------|-------------|-----------------|
-| NORMAL | Regular online scan | ✅ Main KPIs |
-| COVERAGE | Coverage batch run | ❌ Separate stats |
-| SMOKE | Smoke test | ❌ Excluded |
-| OFFLINE | Offline fixture | ❌ Excluded |
+| NORMAL | Regular online scan | [YES] Main KPIs |
+| COVERAGE | Coverage batch run | [NO] Separate stats |
+| SMOKE | Smoke test | [NO] Excluded |
+| OFFLINE | Offline fixture | [NO] Excluded |
 
 ## Rolling KPIs (Targets)
 
 | Metric | Target | FAIL | Description |
 |--------|--------|------|-------------|
-| `data_run_rate` | ≥ 0.50 | < 0.30 | % NORMAL runs with ≥MIN_SIGNALS_FOR_PASS signals (v2.0.1: 3) |
-| `fail_rate` | ≤ 0.10 | > 0.15 | % FAIL runs (v1.12.0 bites) |
-| `fragile_rate_p90` | ≤ 0.30 | > 0.50 | p90 fragile rate |
-| `unique_pairs` | ≥ 10 | < 3 | Pair diversity |
-| `unique_routes` | ≥ 4* | < 2 | Route diversity |
+| `data_run_rate` | >= 0.50 | < 0.30 | % NORMAL runs with >=MIN_SIGNALS_FOR_PASS signals (v2.0.1: 3) |
+| `fail_rate` | <= 0.10 | > 0.15 | % FAIL runs (v1.12.0 bites) |
+| `fragile_rate_p90` | <= 0.30 | > 0.50 | p90 fragile rate |
+| `unique_pairs` | >= 10 | < 3 | Pair diversity |
+| `unique_routes` | >= 4* | < 2 | Route diversity |
 
 **Diversity Targets Decision (v2.0.1, 2026-02-13):**
 > `unique_routes >= 4` структурно недосяжно з 2 DEX (Uniswap V3 + SushiSwap V3).
@@ -202,26 +207,26 @@ Until these gaps are closed, M4 profit = "paper profit under declared cost model
 
 | agg_status | DEV | RELEASE | Actions |
 |------------|-----|---------|---------|
-| `PASS` | ✅ OK | ✅ OK | Continue to next milestone |
-| `WARN_QUALITY` (only DIVERSITY_*) | ✅ OK | ⚠️ TEMP OK | Expand config to reach diversity targets |
-| `WARN_QUALITY` (DATA_RUN_RATE/LOW_SAMPLE) | ⚠️ WARN | ❌ FAIL | Acceptable for M4.1 DEV, improve for RELEASE |
-| `FAIL` | ❌ FAIL | ❌ FAIL | Fix underlying issues |
-| `PASS_WARMUP` | ✅ OK | ❌ WAIT | Accumulate ≥10 runs |
+| `PASS` | [OK] | [OK] | Continue to next milestone |
+| `WARN_QUALITY` (only DIVERSITY_*) | [OK] | [WARN] TEMP OK | Expand config to reach diversity targets |
+| `WARN_QUALITY` (DATA_RUN_RATE/LOW_SAMPLE) | [WARN] | [FAIL] | Acceptable for M4.1 DEV, improve for RELEASE |
+| `FAIL` | [FAIL] | [FAIL] | Fix underlying issues |
+| `PASS_WARMUP` | [OK] | [WAIT] | Accumulate >=10 runs |
 
 **TEMPORARY RULE (expires when targets met):**
 > `WARN_QUALITY` з тільки `DIVERSITY_PAIRS_LOW` та/або `DIVERSITY_ROUTES_LOW` приймається як PASS-еквівалент для:
 > - M4.1 simulate-only DoD
-> - M4 online profit DoD (N≥5 runs proof)
+> - M4 online profit DoD (N>=5 runs proof)
 >
 > Це НЕ застосовується до M4.2 real execution DoD.
 >
 > **M4 Exit criteria (v2.0.6, 2026-02-13 - 42 runs in window):**
-> - `unique_pairs`: 3/10 — потребує більше verified pools (LINK/USDT, GMX/USDC тощо)
-> - `unique_routes`: 2/4 — затверджено як M4-ціль (з 2 DEX більше неможливо)
+> - `unique_pairs`: 3/10 - потребує більше verified pools (LINK/USDT, GMX/USDC тощо)
+> - `unique_routes`: 2/4 - затверджено як M4-ціль (з 2 DEX більше неможливо)
 > - `data_run_rate`: 0.4878 >= 0.30 (threshold met, target 0.50 pending)
 >
 > **Diversity Decision (2026-02-13):**
-> - M4 ok з `unique_routes=2` — більше з 2 DEX неможливо
+> - M4 ok з `unique_routes=2` - більше з 2 DEX неможливо
 > - `unique_pairs` target (10) переноситься в M5 як окреме requirements
 > - Поточний `unique_pairs=3` достатній для M4 simulate-only proof (threshold >=3)
 >
@@ -260,23 +265,23 @@ Location: `data/runs/_rolling/`
 
 ## Definition of Done
 
-### M4.1: Simulate-Only — ✅ PROVEN
+### M4.1: Simulate-Only -- [OK] PROVEN
 - [x] Online scan generates signals
 - [x] Simulator calculates PnL
 - [x] Rolling artifacts persist
 - [x] Evidence workflow works
 - [x] agg_status = WARN_QUALITY (only DIVERSITY_*) accepted per Acceptable States table
 
-### M4 Online Profit (core truth) — ✅ PROVEN
+### M4 Online Profit (core truth) -- [OK] PROVEN
 - [x] N>=5 consecutive online runs with run_mode=REGISTRY_REAL (52 runs total, 24 data runs)
 - [x] All data runs have total_net_usdc > 0 (pass_count=24, fail_count=0)
 - [x] All runs use real pinned_block (not 429900000)
 - [x] Paper profit confirmed under declared cost model
 - [x] total_net_usdc (window): $416.18
 
-**Rolling Quality Gate — ⚠️ WARN_QUALITY (v2.0.7, 2026-02-13):**
-- [x] data_run_rate >= 0.30 (current: 0.4615 ✅)
-- [x] agg_status != FAIL (current: WARN_QUALITY ✅)
+**Rolling Quality Gate -- [WARN] WARN_QUALITY (v2.0.7, 2026-02-13):**
+- [x] data_run_rate >= 0.30 (current: 0.4615 [OK])
+- [x] agg_status != FAIL (current: WARN_QUALITY [OK])
 
 **Поточні WARN причини (не блокують M4.1):**
 > - FRAGILE_P90_ELEVATED
@@ -292,7 +297,7 @@ Location: `data/runs/_rolling/`
 > 2. unique_pairs >= 10
 > 3. unique_routes >= 4 (requires 3rd DEX)
 
-### M4.2: Real Execution — ❌ NOT PROVEN
+### M4.2: Real Execution -- [NO] NOT PROVEN
 - [ ] Kill switch disabled
 - [ ] Real TX submitted
 - [ ] On-chain profit recorded
@@ -320,8 +325,8 @@ Location: `data/runs/_rolling/`
    - **Decision (v2.0.6)**: Accept `unique_routes=2` as M4.1 minimum. Target of 4 requires 3rd DEX (e.g., Curve, Camelot).
    - Pairs expansion: Add verified pairs (LINK/USDC, ARB/USDT) to `config/real_expanded.yaml` once pools verified.
    - Full diversity targets deferred to M5 when 3rd DEX adapter available.
-9. **⚠️ PROFIT REALISM NOT PROVEN (v2.0.3)**:
-   - Current paper model uses `gross_pnl = size_usd * spread_bps / 10000` — **no price impact**.
+9. **[WARN] PROFIT REALISM NOT PROVEN (v2.0.3)**:
+   - Current paper model uses `gross_pnl = size_usd * spread_bps / 10000` -- **no price impact**.
    - **Evidence of bug**: LINK/WETH spread ~1133 bps (11.3%) between UniV3 and SushiV3 same block.
    - **Root cause**: SushiV3 LINK/WETH pool has ~8 million times less liquidity than UniV3 (7.8e14 vs 6.6e21).
    - **Impact**: $1000 trade on SushiV3 would have catastrophic slippage, but model shows +$113 profit.
@@ -345,7 +350,7 @@ Location: `data/runs/_rolling/`
 **CRITICAL**: v2.0 migration requires clearing rolling window to remove legacy `code_sha` entries and ensure metrics reflect timestamp-based provenance only.
 
 ### Warmup Period (post-reset)
-After reset rolling window, `PASS_WARMUP` is expected until ≥10 runs accumulate. KPIs are only valid after exiting warmup. Quality thresholds (`data_run_rate`, `low_sample_rate`, diversity) apply only after warmup completes.
+After reset rolling window, `PASS_WARMUP` is expected until >=10 runs accumulate. KPIs are only valid after exiting warmup. Quality thresholds (`data_run_rate`, `low_sample_rate`, diversity) apply only after warmup completes.
 
 | Action | Command |
 |--------|---------|

@@ -547,11 +547,12 @@ def _compute_quick_stats(
     elif unique_pairs < Thresholds.DIVERSITY_PAIRS_TARGET:
         quality_warnings.append(f"DIVERSITY_PAIRS_LOW({unique_pairs}<{Thresholds.DIVERSITY_PAIRS_TARGET})")
         agg_reasons.append("DIVERSITY_PAIRS_LOW")
-    if unique_routes < Thresholds.DIVERSITY_ROUTES_MIN:
-        quality_warnings.append(f"DIVERSITY_ROUTES_FAIL({unique_routes}<{Thresholds.DIVERSITY_ROUTES_MIN})")
+    # v2.0.8: Use unique_routes_cross_dex for DIVERSITY_ROUTES checks (intra-DEX routes excluded)
+    if unique_routes_cross_dex < Thresholds.DIVERSITY_ROUTES_MIN:
+        quality_warnings.append(f"DIVERSITY_ROUTES_FAIL({unique_routes_cross_dex}<{Thresholds.DIVERSITY_ROUTES_MIN})")
         agg_reasons.append("DIVERSITY_ROUTES_FAIL")
-    elif unique_routes < Thresholds.DIVERSITY_ROUTES_TARGET:
-        quality_warnings.append(f"DIVERSITY_ROUTES_LOW({unique_routes}<{Thresholds.DIVERSITY_ROUTES_TARGET})")
+    elif unique_routes_cross_dex < Thresholds.DIVERSITY_ROUTES_TARGET:
+        quality_warnings.append(f"DIVERSITY_ROUTES_LOW({unique_routes_cross_dex}<{Thresholds.DIVERSITY_ROUTES_TARGET})")
         agg_reasons.append("DIVERSITY_ROUTES_LOW")
     
     # v2.0.2: Profit sanity check (too-good-to-be-true detection)

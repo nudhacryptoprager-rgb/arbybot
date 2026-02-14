@@ -244,9 +244,15 @@ def run_scan(
         stats["suspect_quotes"] = 0
         stats["suspect_reasons"] = {"way_below_expected": 0}
     
-    # v2.0.8: price_sanity_failed includes per-quote sanity rejects
+    # v2.0.8: price_sanity metrics
+    # Contract: price_sanity operates on quotes that got far enough to have a price computed
+    # - price_sanity_failed: quotes with sanity issues (QUOTE_ZERO_OUT, PRICE_CALC_FAILED, etc.)
+    # - price_sanity_passed: quotes that passed sanity and are in quotes_sample
+    # Note: POOL_MISSING rejects don't count toward sanity (no price was computed)
     stats["price_sanity_failed"] = len(sanity_rejects)
-    stats["price_sanity_passed"] = max(0, stats["quotes_fetched"])
+    stats["price_sanity_passed"] = stats["quotes_fetched"]  # = len(quotes_sample)
+    # Invariant: price_sanity_passed + price_sanity_failed <= quotes_total
+    # (equals only if all rejects are sanity-related; POOL_MISSING etc. are excluded)
     
     # v2.0.8 FIX: Calculate price_stability_factor AFTER price_sanity_failed is set
     try:
