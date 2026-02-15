@@ -812,6 +812,61 @@ def collect_quotes(
                 # M4.2: Use USD-notional sizing for amount_in_wei
                 amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
                 
+                # v2.1.0-fix: PRICE_SANITY gate for slot0 path (parity with quoter path)
+                # Issue #3: slot0 quotes were bypassing PRICE_SANITY check, allowing outliers
+                price_sanity_enabled = config.get("price_sanity_enabled", True)
+                price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
+                # Note: tokens_anchor_price uses underscore format (WBTC_WETH), not slash
+                slot0_anchor_price = tokens_anchor_price.get(f"{token_in}_{token_out}")
+                if not slot0_anchor_price:
+                    reversed_tag = f"{token_out}_{token_in}"
+                    slot0_anchor_price = tokens_anchor_price.get(reversed_tag)
+                    if slot0_anchor_price:
+                        slot0_anchor_price = 1.0 / slot0_anchor_price
+                if price_sanity_enabled and slot0_anchor_price and price_exact is not None:
+                    from core.validators import check_price_sanity
+                    sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
+                        price=Decimal(str(price_exact)),
+                        anchor_price=Decimal(str(slot0_anchor_price)),
+                        pair=f"{token_in}/{token_out}",
+                        dex_id=dex,
+                        fee_tier=fee_tier,
+                        max_deviation_bps=price_sanity_max_bps,
+                        anchor_source="tokens_anchor_price",
+                        pool_address=pool_addr,
+                    )
+                    if not sanity_passed:
+                        try:
+                            ratio = float(price_exact) / float(slot0_anchor_price) if slot0_anchor_price else 0.0
+                        except (TypeError, ZeroDivisionError, OverflowError):
+                            ratio = 0.0
+                        
+                        rejected_quotes.append({
+                            "pair": f"{token_in}/{token_out}",
+                            "dex_id": dex,
+                            "fee": fee_tier,
+                            "pool_address": pool_addr,
+                            "reason": "PRICE_SANITY_FAILED",
+                            "gate_passed": False,
+                            "error": sanity_err,
+                            "deviation_bps": sanity_dev_bps,
+                            "anchor_price": str(slot0_anchor_price),
+                            "price_exact": str(price_exact),
+                            "price_ratio": round(ratio, 4) if abs(ratio) < 1e20 else None,
+                            "anchor_source": "tokens_anchor_price",
+                            "quote_source": "slot0",
+                            "tick": tick_val,
+                            "diagnostics": sanity_diag,
+                        })
+                        counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                        counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                        logger.info(
+                            "PRICE_SANITY_FAILED (slot0): %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s",
+                            dex, token_in, token_out, fee_tier, sanity_dev_bps,
+                            str(slot0_anchor_price)[:12], str(price_exact)[:20]
+                        )
+                        continue
+                
                 # M4.2: This path is only reached via slot0 (quoter success continues early above)
                 quote_source = "slot0"
                 gas_estimate = None

@@ -168,6 +168,10 @@ def build_truth_data(
             "profitable_count": stats.get("roundtrip", {}).get("profitable_count", 0),
             "real_quote_count": stats.get("roundtrip", {}).get("real_quote_count", 0),
             "best_net_pnl_bps": stats.get("roundtrip", {}).get("best_net_pnl_bps"),
+            # v2.1.0-fix: Add L1 cost and gas source tracking for execution readiness
+            "l1_cost_wei": stats.get("roundtrip", {}).get("l1_cost_wei", 0),
+            "l1_cost_source": stats.get("roundtrip", {}).get("l1_cost_source", "none"),
+            "gas_price_wei_used": stats.get("roundtrip", {}).get("gas_price_wei_used", 0),
         },
         # v2.1.0: truth_mode_m42 - when true, one-leg PnL is DIAGNOSTIC only, roundtrip is canonical
         "truth_mode_m42": config.get("truth_mode_m42", False),

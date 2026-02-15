@@ -174,6 +174,9 @@ class TestRoundtripCanonicalGating(unittest.TestCase):
                 "profitable_count": 2,
                 "real_quote_count": 4,
                 "best_net_pnl_bps": 25.5,
+                "l1_cost_wei": 123456789,
+                "l1_cost_source": "onchain",
+                "gas_price_wei_used": 100000000,
             }
         )
         
@@ -196,6 +199,10 @@ class TestRoundtripCanonicalGating(unittest.TestCase):
         self.assertEqual(rs["profitable_count"], 2)
         self.assertEqual(rs["real_quote_count"], 4)
         self.assertEqual(rs["best_net_pnl_bps"], 25.5)
+        # v2.1.0-fix: New fields for execution readiness
+        self.assertEqual(rs["l1_cost_wei"], 123456789)
+        self.assertEqual(rs["l1_cost_source"], "onchain")
+        self.assertEqual(rs["gas_price_wei_used"], 100000000)
 
 
 class TestRoundtripResultSlippageSource(unittest.TestCase):

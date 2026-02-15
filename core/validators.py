@@ -13,7 +13,7 @@ CONTRACTS:
 
 import logging
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation, localcontext
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.constants import (
@@ -89,6 +89,7 @@ def calculate_deviation_bps(
     - Uses Decimal math with ROUND_HALF_UP
     - 5% deviation → exactly 500 bps
     - raw > cap → returns (cap, raw, True)
+    - v2.1.0-fix: Handles extreme values (e.g., 3.4e28) without InvalidOperation
     """
     if anchor <= 0:
         raise ValueError(f"Anchor must be positive, got: {anchor}")
@@ -101,8 +102,15 @@ def calculate_deviation_bps(
     deviation_ratio = abs(price - anchor) / anchor
     raw_bps_decimal = deviation_ratio * Decimal("10000")
     
-    # Round to nearest integer with ROUND_HALF_UP
-    raw_bps = int(raw_bps_decimal.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    # v2.1.0-fix: Handle extreme values that cause InvalidOperation on quantize
+    # For extreme prices (e.g., 3.4e28 vs anchor 25), raw_bps can be astronomical
+    try:
+        with localcontext() as ctx:
+            ctx.traps[InvalidOperation] = False
+            raw_bps = int(raw_bps_decimal.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, OverflowError, ValueError):
+        # Extreme value - cap at a very high number
+        raw_bps = cap * 10000  # 100,000,000 bps = effectively infinite deviation
     
     # Apply cap
     if raw_bps > cap:

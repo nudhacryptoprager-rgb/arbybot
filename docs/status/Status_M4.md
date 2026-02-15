@@ -5,9 +5,9 @@
 **Gate Version**: v2.1.0  
 **Policy Version**: 2.0.8  
 **Engine Version**: v2.1.0-fix  
-**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ONE_LEG_ONLY_DIAGNOSTIC (truth_mode_m42 pending ONLINE validation)  
+**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE (truth_mode_m42=true VALIDATED, runDir ci_m5_gate_20260215_205854)  
 
-## v2.1.0-fix Changes (2026-02-16)
+## v2.1.0-fix Changes (2026-02-15)
 
 | Change | File | Description |
 |--------|------|-------------|
@@ -29,7 +29,7 @@
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip ще не валідований (truth_mode_m42=false, profit_realism_status=ONE_LEG_ONLY_DIAGNOSTIC). Snapshot (2026-02-15): runs_in_window=84, data_run_rate=0.631, low_sample_rate=0.3571, total_net_usdc=$1939.12, unique_pairs=6, unique_routes=4, unique_routes_cross_dex=2.  
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE, evaluated_count=3, best_net_pnl_bps=-58.94). Snapshot (2026-02-15): runs_in_window=87, data_run_rate=0.6437, low_sample_rate=0.3448, total_net_usdc=$2122.58, unique_pairs=6, unique_routes=4, unique_routes_cross_dex=2.  
 
 ## Roadmap Progress Mapping (v2.1.0-fix)
 
@@ -137,13 +137,13 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| runs_in_window | 71 | `_latest.json` |
-| data_runs_count | 40 | `runs_since_timestamp.data_runs_count` |
-| pass_count | 40 | `runs_since_timestamp.pass_count` |
-| total_net_usdc (window) | $1292.77 | `quick_stats.total_net_usdc` |
-| data_run_rate | 0.5634 | `quick_stats.data_run_rate` |
-| low_sample_rate | 0.4225 | `quick_stats.low_sample_rate` |
-| unique_pairs | 5 | `quick_stats.unique_pairs` |
+| runs_in_window | 87 | `_latest.json` |
+| data_runs_count | 56 | `runs_since_timestamp.data_runs_count` |
+| pass_count | 56 | `runs_since_timestamp.pass_count` |
+| total_net_usdc (window) | $2122.58 | `quick_stats.total_net_usdc` |
+| data_run_rate | 0.6437 | `quick_stats.data_run_rate` |
+| low_sample_rate | 0.3448 | `quick_stats.low_sample_rate` |
+| unique_pairs | 6 | `quick_stats.unique_pairs` |
 | unique_routes | 4 | `quick_stats.unique_routes` |
 | unique_routes_cross_dex | 2 | `quick_stats.unique_routes_cross_dex` |
 | agg_status | WARN_QUALITY | `_latest.json` |
@@ -172,7 +172,7 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 
 | Track | Version | Scope | Notes |
 |-------|---------|-------|-------|
-| **Policy Version** | 2.1.0 | Thresholds, gates, DoD rules | v2.1.0-fix: WBTC pairs re-enabled (10 pairs total) |
+| **Policy Version** | 2.0.8 | Thresholds, gates, DoD rules | v2.1.0-fix: WBTC pairs re-enabled (10 pairs total) |
 | **Gate Version** | 2.1.0 | ci_m4_execution_gate.py, ci_m5_0_gate.py | v2.1.0-fix: --refresh-rolling-strict |
 | **Engine Version** | 2.1.0-fix | quotes.py, run_scan_real.py, roundtrip.py | Decimal fix, gas_override, L1 calldata |
 | **Schema Version** | 3.2.0 | Artifact JSON structure | Backward compatible |
