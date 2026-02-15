@@ -1,0 +1,149 @@
+"""
+Unit tests for emit_rolling_artifacts function.
+
+v2.1.0: Tests for the --refresh-rolling functionality in ci_m5_0_gate.py.
+Ensures the import works and function doesn't no-op silently.
+"""
+import json
+import tempfile
+from pathlib import Path
+from unittest import TestCase
+
+
+class TestEmitRollingArtifactsImport(TestCase):
+    """Test that emit_rolling_artifacts can be imported and called."""
+    
+    def test_import_from_m4_rolling_store(self):
+        """emit_rolling_artifacts must be importable from m4.rolling_store."""
+        from m4.rolling_store import emit_rolling_artifacts
+        self.assertIsNotNone(emit_rolling_artifacts)
+        self.assertTrue(callable(emit_rolling_artifacts))
+    
+    def test_import_from_m4_init(self):
+        """emit_rolling_artifacts must be importable from m4 top-level."""
+        from m4 import emit_rolling_artifacts
+        self.assertIsNotNone(emit_rolling_artifacts)
+        self.assertTrue(callable(emit_rolling_artifacts))
+    
+    def test_raises_on_missing_rundir(self):
+        """emit_rolling_artifacts must raise FileNotFoundError for missing runDir."""
+        from m4.rolling_store import emit_rolling_artifacts
+        
+        with self.assertRaises(FileNotFoundError):
+            emit_rolling_artifacts(Path("/nonexistent/path/ci_m5_gate_fake"))
+    
+    def test_raises_on_missing_run_summary(self):
+        """emit_rolling_artifacts must raise FileNotFoundError if no run_summary found."""
+        from m4.rolling_store import emit_rolling_artifacts
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "ci_m5_gate_test"
+            run_dir.mkdir()
+            
+            with self.assertRaises(FileNotFoundError) as ctx:
+                emit_rolling_artifacts(run_dir)
+            
+            self.assertIn("run_summary", str(ctx.exception))
+
+
+class TestEmitRollingArtifactsFunctional(TestCase):
+    """Functional tests for emit_rolling_artifacts with real data."""
+    
+    def test_emit_creates_rolling_artifacts(self):
+        """emit_rolling_artifacts must create _latest.json and run_summary_latest.json."""
+        from m4.rolling_store import emit_rolling_artifacts
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_dir = Path(tmpdir) / "data" / "runs"
+            runs_dir.mkdir(parents=True)
+            
+            run_dir = runs_dir / "ci_m5_gate_test_20260215_120000"
+            run_dir.mkdir()
+            reports_dir = run_dir / "reports"
+            reports_dir.mkdir()
+            
+            # Create minimal run_summary
+            run_summary = {
+                "schema_version": "m4:run_summary:v2.0",
+                "run_id": "ci_m5_gate_test_20260215_120000",
+                "status": "PASS",
+                "run_context": {
+                    "run_timestamp": "2026-02-15T12:00:00Z",
+                    "code_identity": "ts:2026-02-15T12:00:00Z",
+                },
+                "metrics": {
+                    "signals_count": 5,
+                    "included_signals_count": 5,
+                    "total_net_usdc": 50.0,
+                    "mae_net_usdc": 0.5,
+                    "est_sign_correct_rate": 1.0,
+                },
+                "inputs": {
+                    "run_mode": "REGISTRY_REAL",
+                    "run_dir_name": "ci_m5_gate_test_20260215_120000",
+                },
+                "thresholds": {
+                    "threshold_profile_name": "profit",
+                },
+            }
+            
+            run_summary_path = reports_dir / "run_summary_20260215_120000.json"
+            with open(run_summary_path, "w") as f:
+                json.dump(run_summary, f)
+            
+            # Call emit_rolling_artifacts
+            result = emit_rolling_artifacts(run_dir)
+            
+            # Verify return value
+            self.assertIn("updated_at", result)
+            self.assertEqual(result["run_id"], "ci_m5_gate_test_20260215_120000")
+            self.assertIn("agg_status", result)
+            
+            # Verify rolling artifacts created
+            rolling_dir = runs_dir / "_rolling"
+            self.assertTrue(rolling_dir.exists(), "_rolling directory not created")
+            
+            latest_path = rolling_dir / "_latest.json"
+            self.assertTrue(latest_path.exists(), "_latest.json not created")
+            
+            run_summary_latest_path = rolling_dir / "run_summary_latest.json"
+            self.assertTrue(run_summary_latest_path.exists(), "run_summary_latest.json not created")
+            
+            agg_path = rolling_dir / "m4_stability_agg.json"
+            self.assertTrue(agg_path.exists(), "m4_stability_agg.json not created")
+            
+            # Verify _latest.json content
+            with open(latest_path) as f:
+                latest_data = json.load(f)
+            
+            self.assertEqual(latest_data["schema_version"], "m4:latest:v2.0")
+            self.assertEqual(latest_data["run_status"], "PASS")
+            self.assertIn("updated_at", latest_data)
+    
+    def test_validates_run_summary_fields(self):
+        """emit_rolling_artifacts must raise ValueError for invalid run_summary."""
+        from m4.rolling_store import emit_rolling_artifacts
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_dir = Path(tmpdir) / "data" / "runs"
+            runs_dir.mkdir(parents=True)
+            
+            run_dir = runs_dir / "ci_m5_gate_invalid"
+            run_dir.mkdir()
+            
+            # Create invalid run_summary (missing metrics)
+            invalid_summary = {
+                "schema_version": "m4:run_summary:v2.0",
+                "run_id": "ci_m5_gate_invalid",
+                "status": "PASS",
+                # Missing: metrics
+            }
+            
+            run_summary_path = run_dir / "run_summary_test.json"
+            with open(run_summary_path, "w") as f:
+                json.dump(invalid_summary, f)
+            
+            with self.assertRaises(ValueError) as ctx:
+                emit_rolling_artifacts(run_dir)
+            
+            self.assertIn("metrics", str(ctx.exception))

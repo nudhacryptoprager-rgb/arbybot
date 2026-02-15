@@ -323,10 +323,14 @@ def run_scan(
         from engine.opportunity_engine import evaluate_quotes, GasConfig
         eth_usd = config.get("tokens_anchor_price", {}).get("WETH_USDC", 2000.0)
         
-        # v2.1.0: Create GasConfig with live gas price for consistent accounting
+        # v2.1.0: Create GasConfig with live gas price and L1 params from config
+        l1_data_gas_units = config.get("l1_data_gas_units", 2000)
+        l1_gas_price_gwei = config.get("l1_gas_price_gwei", 30.0)
         gas_config = GasConfig(
             gas_price_gwei=live_gas_price_wei / 1e9,
             eth_usd_price=eth_usd,
+            l1_data_gas_units=l1_data_gas_units,
+            l1_gas_price_gwei=l1_gas_price_gwei,
             _live_mode=w3_instance is not None,
         )
         
@@ -417,6 +421,22 @@ def run_scan(
         # Evaluate top-5 one-leg opportunities with round-trip
         roundtrip_results = []
         if opps_list:
+            # v2.1.0: Get L1 cost with source tracking (prefer onchain if w3 available)
+            try:
+                from chains.l1_cost import get_l1_cost_with_source
+                l1_cost_wei, l1_cost_source = get_l1_cost_with_source(
+                    w3=w3,
+                    config={
+                        "l1_data_gas_units": gas_config.l1_data_gas_units,
+                        "l1_gas_price_gwei": gas_config.l1_gas_price_gwei,
+                    },
+                    prefer_onchain=True,
+                )
+            except ImportError:
+                # Fallback to config-based estimate
+                l1_cost_wei = int(gas_config.l1_data_gas_units * gas_config.l1_gas_price_gwei * 1e9)
+                l1_cost_source = "config"
+            
             roundtrip_results = evaluate_roundtrip_candidates(
                 opportunities=opps_list[:5],
                 buy_quotes_by_key=quotes_by_key,
@@ -424,11 +444,17 @@ def run_scan(
                 gas_price_wei=live_gas_price_wei,
                 top_n=5,
                 leg2_quote_callback_factory=make_leg2_callback,
+                l1_cost_wei=l1_cost_wei,
+                l1_cost_source=l1_cost_source,
             )
         
         # Summarize round-trip results
         rt_profitable = [r for r in roundtrip_results if r.is_profitable]
         rt_using_real_quote = [r for r in roundtrip_results if r.leg2_is_real_quote]
+        
+        # v2.1.0: Track L1 cost source for transparency
+        l1_cost_source_used = l1_cost_source if opps_list else "none"
+        l1_cost_wei_used = l1_cost_wei if opps_list else 0
         
         stats["roundtrip"] = {
             "enabled": True,
@@ -436,19 +462,28 @@ def run_scan(
             "profitable_count": len(rt_profitable),
             "real_quote_count": len(rt_using_real_quote),
             "gas_price_wei_used": live_gas_price_wei,
+            "l1_cost_wei": l1_cost_wei_used,  # v2.1.0: L1 cost tracking
+            "l1_cost_source": l1_cost_source_used,  # v2.1.0: "onchain" | "config" | "default"
             "results": [r.to_dict() for r in roundtrip_results[:3]],
         }
         
-        if rt_profitable:
-            best_rt = max(rt_profitable, key=lambda r: r.net_pnl_bps)
+        # v2.1.0: FIX issue #8 - best_net_pnl_bps should show actual best, not 0.0 when all negative
+        if roundtrip_results:
+            best_rt = max(roundtrip_results, key=lambda r: r.net_pnl_bps)
             stats["roundtrip"]["best_net_pnl_bps"] = best_rt.net_pnl_bps
-            logger.info(
-                "Roundtrip: %d/%d profitable, best=%.2f bps",
-                len(rt_profitable), len(roundtrip_results), best_rt.net_pnl_bps
-            )
+            if rt_profitable:
+                logger.info(
+                    "Roundtrip: %d/%d profitable, best=%.2f bps",
+                    len(rt_profitable), len(roundtrip_results), best_rt.net_pnl_bps
+                )
+            else:
+                logger.info(
+                    "Roundtrip: 0/%d profitable, best(negative)=%.2f bps",
+                    len(roundtrip_results), best_rt.net_pnl_bps
+                )
         else:
-            stats["roundtrip"]["best_net_pnl_bps"] = 0.0
-            logger.info("Roundtrip: 0/%d profitable", len(roundtrip_results))
+            stats["roundtrip"]["best_net_pnl_bps"] = None
+            logger.info("Roundtrip: no candidates evaluated")
             
     except Exception as rt_err:
         logger.debug("Roundtrip evaluation skipped: %s", rt_err)

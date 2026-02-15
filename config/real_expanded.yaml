@@ -275,3 +275,22 @@ tokens_usd_price:
 
 # Legacy field - no longer used when use_usd_notional=true
 # quote_amount_in_wei: "1000000000000000000"
+
+# =============================================================================
+# L1 GAS COST MODEL (v2.1.0)
+# =============================================================================
+# Arbitrum/Optimism L1 data posting overhead
+# NOTE: These are configurable so we can tune without code changes
+# For live L1 gas oracle integration, set l1_gas_oracle: true (future)
+
+# L1 calldata units (compression factor applied to typical swap tx)
+# Default: 2000 units (conservative for ~300 bytes of calldata after compression)
+l1_data_gas_units: 2000
+
+# L1 gas price in gwei (mainnet gas price for data posting)
+# Default: 30 gwei (moderate congestion)
+# When Ethereum L1 is congested (>50 gwei), update this to reflect actual cost
+l1_gas_price_gwei: 30.0
+
+# Future: Enable live L1 gas oracle (NodeInterface.gasEstimateL1Component on Arbitrum)
+# l1_gas_oracle: false

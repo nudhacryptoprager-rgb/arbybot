@@ -1,11 +1,11 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
-**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY)  
+**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY, roundtrip NOT_PROFITABLE)  
 **Updated**: 2026-02-15  
 **Gate Version**: v2.1.0  
 **Policy Version**: v2.0.8  
-**Engine Version**: v2.1.0 (quoter_v2 canonical, MIXED_SOURCE gate, live gas, roundtrip leg2 callback)  
-**Evidence**: Timestamp-based provenance (v2.1.0: roundtrip leg2 re-quote ready, live gas in opportunity_engine)  
+**Engine Version**: v2.1.0  
+**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE  
 
 ## Status Separation (v2.0.7)
 
@@ -13,32 +13,52 @@
 |-----|---------------|----------------|
 | **Core Truth (paper +PnL)** | N>=5 REGISTRY_REAL runs with total_net_usdc > 0 | [OK] PROVEN |
 | **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [WARN] WARN_QUALITY |
+| **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). data_run_rate=0.5634, runs_in_window=71, total_net_usdc=$1292.77.  
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip показує реальні збитки (profit_realism_status=ROUNDTRIP_NOT_PROFITABLE, best_net_pnl_bps=-65.1). data_run_rate=0.5753, runs_in_window=73, data_runs_count=42, total_net_usdc=$1422.45, unique_pairs=6, unique_routes=4.  
 
-## [WARN] PROFIT REALISM WARNING (v2.0.8)
+## Roadmap Progress Mapping (v2.1.0)
+
+> **Clarification**: M4 in Roadmap.md = "Execution v1 (DEX↔DEX atomic)". This section maps actual progress to Roadmap.
+
+| Roadmap Component | Description | Status |
+|-------------------|-------------|--------|
+| **Milestone 3** | Truth Engine / Opportunity Detection | [OK] MOSTLY CLOSED |
+| **M4: Pre-trade simulation gate** | Paper-profit simulation with realistic costs | [OK] CLOSED (profit_realism via roundtrip) |
+| **M4: Execution state machine** | `execution/state_machine.py` with TX lifecycle | [NO] NOT STARTED |
+| **M4: Private send / bundle** | Flashbots/Bloxroute bundle submission | [NO] NOT STARTED |
+| **M4: Post-trade realized accounting** | Compare simulated vs actual on-chain PnL | [NO] NOT STARTED |
+| **M4: On-chain atomic swap** | Real DEX↔DEX TX with profit | [NO] NOT STARTED |
+
+> **Note**: ROUNDTRIP_NOT_PROFITABLE is expected behavior — it means pre-trade simulation correctly identifies no arb opportunity in current market conditions. This is NOT a blocker for "pre-trade simulation gate" (working as designed), but IS a blocker for "execution readiness" (we won't execute losing trades).
+
+## [WARN] PROFIT REALISM WARNING (v2.1.0)
 
 **Paper profit PROVEN** under simulated cost model (`gas=$0.10`, `slippage=5bps`).  
-**Profit realism NOT PROVEN** - current validation has known gaps:
+**Profit realism NOT PROVEN** - round-trip shows actual losses:
 
-1. **SUSPECT_SPREAD signals now excluded (v2.0.4)**: Spread > 500bps triggers `is_excluded_spread=true`, signal excluded from DoD metrics
-2. **TOP_PAIR_NET_SHARE check active (v2.0.4)**: Single pair > 80% of net profit -> `FAIL_TOP_PAIR_DOMINANCE`
-3. **Linear PnL model**: No price impact modeling; large trades overestimate profit
-4. **Liquidity imbalance undetected**: Different pool liquidities not compared (root cause of LINK/WETH outlier)
-5. **QuoterV2 canonical (v2.0.9)**: QuoterV2 is now canonical source; slot0 fallback only for UniswapV3 without quoter config. Algebra DEXes (Camelot) require quoter (different ABI, see `dex/abi/algebra_quoter.json`)
-6. **unique_routes includes intra-DEX (v2.0.8)**: `sushiswap_v3->sushiswap_v3` counted as route; see `unique_routes_cross_dex` for cross-DEX only
+1. **ROUNDTRIP real_quote_count=3, profitable_count=0**: всі roundtrip opportunities NOT_PROFITABLE
+2. **BEST roundtrip: net_pnl_bps=-65.1** (WETH/USDC, uniswap_v3->sushiswap_v3)
+3. **SUSPECT_SPREAD signals excluded (v2.0.4)**: Spread > 500bps triggers `is_excluded_spread=true`
+4. **TOP_PAIR_NET_SHARE check active (v2.0.4)**: Single pair > 80% of net profit -> `FAIL_TOP_PAIR_DOMINANCE`
+5. **Unified gas model (v2.1.0)**: L2+L1 overhead в roundtrip та opportunity_engine
+6. **L1 fee parameterized**: `l1_data_gas_units=2000`, `l1_gas_price_gwei=30.0` в config
 
 **M4.2 Blockers**:
-- QuoterV2 integration: `dex/adapters/uniswap_v3.py` ready, quoter addresses in `config/dexes.yaml`
-- Profit Reality Audit: compare paper model vs quoter-based amountOut
+- Roundtrip profitable_count=0 (actual market має нульовий чи від'ємний арбітраж зараз)
+- Need to expand pairs/routes diversity (unique_pairs=6, unique_routes=4)
 
-Until these gaps are closed, M4 profit = "paper profit under declared cost model", NOT "realistic profit".
+Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under declared cost model", NOT "realistic profit".
 
 ## M4.2 Profit Truth Definition (v2.1.0)
 
-> **CANONICAL PROFIT = Round-trip quoter model + live gas**
-> One-leg opportunity_engine = DIAGNOSTIC ONLY until two-leg implemented
+> **FORMAL DEFINITION (binding):**
+> When `truth_mode_m42=true` in config:
+> - **Canonical profit** = Round-trip net_pnl_wei (leg1 + leg2 via QuoterV2, minus gas L2+L1)
+> - **One-leg gross/net** = DIAGNOSTIC ONLY (not used in gating decisions)
+> - **profit_realism_status** = mandatory field in truth_report (ROUNDTRIP_PROFITABLE | ROUNDTRIP_NOT_PROFITABLE | ONE_LEG_ONLY_DIAGNOSTIC)
+> - **Roundtrip NOT_PROFITABLE is not a bug** — it means Truth Engine correctly detects no real arb opportunity
 
 | Model | Description | Status |
 |-------|-------------|--------|

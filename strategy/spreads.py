@@ -223,6 +223,23 @@ def _build_spread_signal(
     elif is_suspect_spread:
         confidence_reasons.append("SUSPECT_SPREAD")
     
+    # v2.1.0: Quote source tracking for truth_mode_m42
+    buy_quote_source = best_buy.get("quote_source", "unknown")
+    sell_quote_source = best_sell.get("quote_source", "unknown")
+    is_mixed_source = buy_quote_source != sell_quote_source
+    is_slot0_only = buy_quote_source == "slot0" or sell_quote_source == "slot0"
+    is_quoter_v2_both = buy_quote_source == "quoter_v2" and sell_quote_source == "quoter_v2"
+    
+    # v2.1.0: Mark slot0/mixed-source as diagnostic only when truth_mode_m42=true
+    is_diagnostic_only = (
+        config.get("truth_mode_m42", False) and 
+        (is_slot0_only or is_mixed_source)
+    )
+    if is_slot0_only:
+        confidence_reasons.append("SLOT0_DIAGNOSTIC")
+    if is_mixed_source:
+        confidence_reasons.append("MIXED_SOURCE_DIAGNOSTIC")
+    
     spread_bps_ui_display = int(spread_bps_decimal)
     
     net_negative_reason = None
@@ -267,6 +284,13 @@ def _build_spread_signal(
         "is_suspect_spread": is_suspect_spread,
         "is_excluded_spread": is_excluded_spread,
         "suspect_spread_threshold_bps": suspect_spread_bps,
+        # v2.1.0: Quote source tracking for truth_mode_m42
+        "buy_quote_source": buy_quote_source,
+        "sell_quote_source": sell_quote_source,
+        "is_quoter_v2_both": is_quoter_v2_both,
+        "is_slot0_only": is_slot0_only,
+        "is_mixed_source": is_mixed_source,
+        "is_diagnostic_only": is_diagnostic_only,
         # Confidence downgrades if suspect
         "confidence": "suspect" if is_excluded_spread else (
             "low" if not config.get("execution_enabled", False) or is_suspect_spread else (

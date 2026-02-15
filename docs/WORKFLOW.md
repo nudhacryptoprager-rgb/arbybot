@@ -55,9 +55,23 @@ python -c "from monitoring import calculate_confidence; print('import ok')"
 - CI gate checks Python version
 - Never use Python 3.12+ or 3.10-
 
+### Version Check (mandatory before any command)
+
+```powershell
+# Quick version check (Windows)
+py -0p  # Shows all installed Python versions
+
+# Verify 3.11 is available
+py -3.11 --version  # MUST output 3.11.x
+
+# If using activated venv, verify it's 3.11
+python --version  # MUST be 3.11.x
+```
+
 ### Canonical Commands (Windows)
 
-**IMPORTANT**: Always use `py -3.11` on Windows to ensure correct Python version:
+**CRITICAL**: Always use `py -3.11` prefix on Windows to ensure correct Python version.
+Using wrong Python (e.g., 3.14) will cause `ci_full_pipeline.py` to FAIL with version check error.
 
 ```powershell
 # Tests
@@ -72,6 +86,7 @@ py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mo
 
 # M5 gate (online scan)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_expanded.yaml --prune-keep 50
 
 # Retention (preview then execute)
 py -3.11 scripts/prune_run_dirs.py --keep 50 --dry-run
@@ -82,6 +97,22 @@ If using activated venv, `python` is sufficient but verify version first:
 ```powershell
 python --version  # MUST be 3.11.x
 ```
+
+### Profit Reality Audit (one-liner)
+
+Quick audit to check roundtrip profit realism state:
+
+```powershell
+# Check roundtrip_summary from latest rolling artifact
+py -3.11 -c "import json; d=json.load(open('data/runs/_rolling/run_summary_latest.json')); r=d.get('roundtrip_summary',{}); print(f'real_quote_count={r.get(\"real_quote_count\",0)}, profitable_count={r.get(\"profitable_count\",0)}, best={r.get(\"best_net_pnl_bps\",\"N/A\")}bps')"
+```
+
+Expected output when Truth Engine works correctly:
+- `real_quote_count>0` — we're getting real callback quotes
+- `profitable_count=0` + `best_net_pnl_bps<0` — no profitable arb = ROUNDTRIP_NOT_PROFITABLE (expected behavior)
+- `profitable_count>0` + `best>0` — found profitable arb = ROUNDTRIP_PROFITABLE (ready for execution)
+
+**Interpretation**: ROUNDTRIP_NOT_PROFITABLE is NOT a bug — it's proof Truth Engine correctly identifies non-profitable conditions.
 
 ---
 
@@ -118,16 +149,33 @@ For continuous/rolling operations:
 
 ### Rule #4: Retention policy
 
+v2.1.0 CANONICAL SEMANTICS for `--prune-keep N`:
+- **N=50 means 50 runDirs** (directories like `ci_m5_gate_20260215_140031`)
+- Protected directories are NOT counted toward N (they stay forever)
+- Deletion order: oldest first by timestamp in directory name
+
+**Protected directories** (NEVER deleted):
+| Directory | Reason |
+|-----------|--------|
+| `data/runs/_rolling/` | Canonical rolling artifacts |
+| `data/runs/_incidents/` | Incident records |
+| `data/runs/_cache/` | Cache data |
+| Any runDir referenced in `_latest.json` | Active evidence |
+| Any runDir referenced in Status_M4.md | Active evidence (automatic detection) |
+
+**Usage workflow**:
+```powershell
+# 1. Preview what will be deleted
+py -3.11 scripts/prune_run_dirs.py --keep 50 --dry-run
+
+# 2. Execute deletion
+py -3.11 scripts/prune_run_dirs.py --keep 50 --yes
+```
+
+**M5 gate integration**: `--prune-keep 50` in M5 gate automatically prunes after scan.
+
 - **NEVER manually delete** `data/runs/ci_*` directories — use `prune_run_dirs.py` only
-- Keep only last N=50 run directories in `data/runs/`
-- **Protected (never deleted)**:
-  - `data/runs/_rolling/` — canonical rolling artifacts
-  - `data/runs/_incidents/` — incident records
-  - `data/runs/_cache/` — cache data
-  - `run_dir_name` referenced in `_latest.json` / `run_summary_latest.json`
-- Older runs: auto-delete via script or archive to zip outside git
 - CI: save runtime artifacts as GitHub Actions artifacts (7-30 day retention)
-- **Usage**: `py -3.11 scripts/prune_run_dirs.py --keep 50 --dry-run` (preview), then `--yes` to execute
 
 ### Rule #5: Pre-commit guard
 

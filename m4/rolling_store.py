@@ -614,3 +614,146 @@ def _compute_quick_stats(
     agg_data["runs_by_date"] = ts_counts
     
     return agg_data
+
+
+def emit_rolling_artifacts(run_dir: Path) -> dict:
+    """
+    v2.1.0: Emit rolling artifacts from a completed runDir.
+    
+    This is the canonical function for refreshing rolling artifacts from an existing
+    runDir without re-running the full M4 gate. Called by ci_m5_0_gate.py --refresh-rolling.
+    
+    Steps:
+    1. Find run_summary_*.json in runDir
+    2. Call emit_to_aggregator_light() to update m4_stability_agg.json
+    3. Write run_summary_latest.json
+    4. Write _latest.json
+    
+    Args:
+        run_dir: Path to completed runDir (e.g., data/runs/ci_m5_gate_20260215_140031)
+        
+    Returns:
+        dict with updated_at, run_id, agg_status keys for verification
+        
+    Raises:
+        FileNotFoundError: If run_summary not found in runDir
+        ValueError: If run_summary is invalid
+    """
+    from pathlib import Path
+    
+    run_dir = Path(run_dir)
+    if not run_dir.exists():
+        raise FileNotFoundError(f"RunDir not found: {run_dir}")
+    
+    # Find run_summary file (try reports/ first, then root)
+    run_summary_path = None
+    reports_dir = run_dir / "reports"
+    
+    # Search patterns
+    patterns = [
+        reports_dir / "run_summary_*.json" if reports_dir.exists() else None,
+        run_dir / "run_summary_*.json",
+    ]
+    
+    for pattern_dir in [reports_dir, run_dir]:
+        if not pattern_dir.exists():
+            continue
+        for f in pattern_dir.glob("run_summary_*.json"):
+            run_summary_path = f
+            break
+        if run_summary_path:
+            break
+    
+    if not run_summary_path or not run_summary_path.exists():
+        raise FileNotFoundError(f"No run_summary_*.json found in {run_dir} or {reports_dir}")
+    
+    # Load run_summary
+    with open(run_summary_path) as f:
+        run_summary = json.load(f)
+    
+    # Validate required fields
+    if "metrics" not in run_summary or "status" not in run_summary:
+        raise ValueError(f"Invalid run_summary: missing metrics or status in {run_summary_path}")
+    
+    # Determine rolling_dir
+    rolling_dir = run_dir.parent / "_rolling"
+    rolling_dir.mkdir(parents=True, exist_ok=True)
+    
+    agg_path = rolling_dir / "m4_stability_agg.json"
+    
+    # STEP 1: Emit to aggregator
+    agg_data = emit_to_aggregator_light(run_summary, agg_path)
+    
+    # Save aggregator
+    with open(agg_path, "w") as f:
+        json.dump(agg_data, f, indent=2)
+    
+    # STEP 2: Write run_summary_latest.json
+    run_summary_latest_path = rolling_dir / "run_summary_latest.json"
+    with open(run_summary_latest_path, "w") as f:
+        json.dump(run_summary, f, indent=2)
+    
+    # STEP 3: Write _latest.json
+    now_utc = datetime.now(timezone.utc)
+    run_context = run_summary.get("run_context", {})
+    
+    # Compute relative paths
+    def rel_path(p: Path) -> str:
+        try:
+            return str(p.relative_to(rolling_dir.parent))
+        except ValueError:
+            return p.name
+    
+    latest_data = {
+        "schema_version": "m4:latest:v2.0",
+        "updated_at": now_utc.isoformat(),
+        "latest_run_timestamp": run_context.get("run_timestamp", now_utc.isoformat()),
+        "code_identity": run_context.get("code_identity", f"ts:{now_utc.isoformat()}"),
+        "run_context": {
+            "run_timestamp": run_context.get("run_timestamp", now_utc.isoformat()),
+            "code_identity": run_context.get("code_identity", f"ts:{now_utc.isoformat()}"),
+            "code_sha": None,
+            "code_dirty": None,
+            "code_desc": None,
+            "evidence_sha": None,
+        },
+        "latest_mode": "ONLINE" if "REGISTRY_REAL" in str(run_summary.get("inputs", {}).get("run_mode", "")) else "OFFLINE",
+        "latest_kind": "NORMAL",
+        "run_status": run_summary.get("status", "UNKNOWN"),
+        "threshold_profile_name": run_summary.get("thresholds", {}).get("threshold_profile_name", "profit"),
+        "agg_status": agg_data.get("agg_status", "UNKNOWN"),
+        "agg_reasons": agg_data.get("agg_reasons", []),
+        "quality_warnings": agg_data.get("quality_warnings", []),
+        "policy_version": agg_data.get("policy_version", "unknown"),
+        "agg_updated_at": agg_data.get("updated_at"),
+        "agg_lag_seconds": 0.0,
+        "runs_in_window": agg_data.get("runs_in_window", 0),
+        "runs_since_timestamp": agg_data.get("runs_since_timestamp", {}),
+        "in_warmup": agg_data.get("rolling_window", {}).get("in_warmup", False),
+        "total_signals_in_window": agg_data.get("quick_stats", {}).get("total_signals", 0),
+        "effective_pass_rate": agg_data.get("quick_stats", {}).get("effective_pass_rate", 0),
+        "data_run_rate": agg_data.get("quick_stats", {}).get("data_run_rate", 0),
+        "low_sample_rate": agg_data.get("quick_stats", {}).get("low_sample_rate", 0),
+        "net_diversity_rate": agg_data.get("quick_stats", {}).get("net_diversity_rate", 0),
+        "quick_stats": agg_data.get("quick_stats", {}),
+        "paths": {
+            "run_summary_latest": rel_path(run_summary_latest_path),
+            "rolling_agg": rel_path(agg_path),
+            "last_incident": None,
+        },
+    }
+    
+    latest_path = rolling_dir / "_latest.json"
+    with open(latest_path, "w") as f:
+        json.dump(latest_data, f, indent=2)
+    
+    print(f"[ROLLING-REFRESH] Updated rolling artifacts from {run_dir.name}")
+    print(f"[ROLLING-REFRESH] _latest.json updated_at: {latest_data['updated_at']}")
+    print(f"[ROLLING-REFRESH] agg_status: {agg_data.get('agg_status')}, runs_in_window: {agg_data.get('runs_in_window')}")
+    
+    return {
+        "updated_at": latest_data["updated_at"],
+        "run_id": run_summary.get("run_id", run_dir.name),
+        "agg_status": agg_data.get("agg_status"),
+        "runs_in_window": agg_data.get("runs_in_window"),
+    }

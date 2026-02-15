@@ -74,6 +74,41 @@ def get_protected_from_latest() -> set:
     return protected
 
 
+def get_protected_from_status_md() -> set:
+    """v2.1.0: Get protected run_dir names referenced in Status_M4.md.
+    
+    Scans Status_M4.md for patterns like:
+    - ci_m5_gate_YYYYMMDD_HHMMSS
+    - ci_m4_gate_YYYYMMDD_HHMMSS
+    - Any directory name matching run_dir patterns
+    """
+    import re
+    
+    protected = set()
+    status_path = REPO_ROOT / "docs" / "status" / "Status_M4.md"
+    
+    if not status_path.exists():
+        return protected
+    
+    try:
+        content = status_path.read_text(encoding="utf-8")
+        
+        # Match common runDir patterns:
+        # ci_m5_gate_20260215_140031
+        # ci_m4_gate_20260215_140031
+        # ci_m5_0_gate_offline_20260215_140031
+        pattern = r'(ci_m[45][_0-9a-z]*gate[_0-9a-z]*_\d{8}_\d{6})'
+        matches = re.findall(pattern, content, re.IGNORECASE)
+        
+        for match in matches:
+            protected.add(match)
+            
+    except Exception:
+        pass
+    
+    return protected
+
+
 def get_run_dirs() -> list:
     """Get list of run directories sorted by modification time (oldest first)."""
     run_dirs = []
@@ -113,7 +148,9 @@ def prune_run_dirs(keep: int, dry_run: bool, yes: bool) -> dict:
     Returns:
         dict with counts of protected, kept, and deleted directories
     """
+    # v2.1.0: Combine protection from _latest.json AND Status_M4.md
     protected_dirs = get_protected_from_latest()
+    protected_dirs.update(get_protected_from_status_md())
     all_dirs = get_run_dirs()
     
     # Partition into protected and deletable

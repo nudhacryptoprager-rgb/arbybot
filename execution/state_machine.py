@@ -30,6 +30,11 @@ Transitions:
 
 =========================
 
+v2.1.0: Added ExecutionContext with:
+- DRY_RUN mode (default ON)
+- kill_switch_active flag (default True)
+- Global blockers list
+
 NOTE: This is a skeleton for M4. Implementation will follow
 after M3 closure.
 """
@@ -38,6 +43,91 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+
+# =============================================================================
+# v2.1.0 Step 9: Execution Context / Global Kill Switch
+# =============================================================================
+
+class ExecutionMode(str, Enum):
+    """Execution modes for M4."""
+    DRY_RUN = "DRY_RUN"  # Log only, no transactions
+    SIMULATE = "SIMULATE"  # eth_call simulation only
+    LIVE = "LIVE"  # Actual on-chain execution
+
+
+@dataclass
+class ExecutionContext:
+    """
+    Global execution context with safety controls.
+    
+    v2.1.0 CONTRACT:
+    - kill_switch_active=True by default (M4 safety)
+    - mode=DRY_RUN by default
+    - All trades check is_execution_allowed() before submitting
+    """
+    mode: ExecutionMode = ExecutionMode.DRY_RUN
+    kill_switch_active: bool = True  # v2.1.0: DEFAULT ON for safety
+    blockers: List[str] = field(default_factory=lambda: ["EXECUTION_DISABLED_M5_0"])
+    
+    def is_execution_allowed(self) -> bool:
+        """Check if real execution is allowed."""
+        if self.kill_switch_active:
+            return False
+        if self.mode != ExecutionMode.LIVE:
+            return False
+        if self.blockers:
+            return False
+        return True
+    
+    def get_execution_blocker(self) -> Optional[str]:
+        """Get the primary reason execution is blocked."""
+        if self.kill_switch_active:
+            return "KILL_SWITCH_ACTIVE"
+        if self.mode != ExecutionMode.LIVE:
+            return f"MODE_{self.mode.value}"
+        if self.blockers:
+            return self.blockers[0]
+        return None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize for logging/artifacts."""
+        return {
+            "mode": self.mode.value,
+            "kill_switch_active": self.kill_switch_active,
+            "blockers": self.blockers,
+            "is_execution_allowed": self.is_execution_allowed(),
+            "execution_blocker": self.get_execution_blocker(),
+        }
+
+
+# Global singleton context (v2.1.0 default: DRY_RUN + kill switch ON)
+_execution_context = ExecutionContext()
+
+
+def get_execution_context() -> ExecutionContext:
+    """Get the global execution context."""
+    return _execution_context
+
+
+def set_execution_mode(mode: ExecutionMode) -> None:
+    """Set the execution mode (for testing/configuration)."""
+    _execution_context.mode = mode
+
+
+def activate_kill_switch(reason: str = "Manual activation") -> None:
+    """Activate the global kill switch."""
+    _execution_context.kill_switch_active = True
+
+
+def deactivate_kill_switch() -> None:
+    """Deactivate the global kill switch (requires explicit call)."""
+    _execution_context.kill_switch_active = False
+
+
+# =============================================================================
+# Trade States
+# =============================================================================
 
 
 class TradeState(str, Enum):

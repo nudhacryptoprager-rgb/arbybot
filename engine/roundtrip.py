@@ -67,6 +67,14 @@ class RoundTripResult:
     net_pnl_bps: float = 0.0
     total_ticks: int = 0
     total_gas: int = 0
+    # v2.1.0: Slippage estimate from ticks (heuristic: ~0.5 bps per tick in V3)
+    # TODO v2.2.0: Replace with measured slippage from sqrtPriceAfter (QuoterV2 output)
+    #   - sqrtPriceAfter = price AFTER swap, gives exact slippage vs sqrtPriceBefore
+    #   - requires adapter changes to expose sqrtPriceAfter in quote dict
+    estimated_slippage_bps: float = 0.0
+    slippage_source: str = "ticks_heuristic"  # "ticks_heuristic" | "sqrtPriceAfter" | "probe"
+    # v2.1.0: L1 cost source for traceability
+    l1_cost_source: str = "default"  # "config" | "onchain" | "default"
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for JSON output."""
@@ -95,6 +103,9 @@ class RoundTripResult:
             "net_pnl_bps": round(self.net_pnl_bps, 2),
             "total_ticks": self.total_ticks,
             "total_gas": self.total_gas,
+            "estimated_slippage_bps": round(self.estimated_slippage_bps, 2),
+            "slippage_source": self.slippage_source,
+            "l1_cost_source": self.l1_cost_source,
         }
 
 
@@ -104,6 +115,8 @@ def simulate_roundtrip(
     gas_price_wei: int = 100_000_000,  # 0.1 gwei default (Arbitrum)
     max_ticks_crossed: int = 30,  # Total for both legs
     leg2_quote_callback: Optional[callable] = None,  # v2.1.0: Optional re-quote function
+    l1_cost_wei: int = 60_000_000_000_000,  # v2.1.0: L1 overhead (~$0.12 at 2000 gas * 30 gwei)
+    l1_cost_source: str = "default",  # v2.1.0: "config" | "onchain" | "default"
 ) -> RoundTripResult:
     """
     Simulate round-trip arbitrage.
@@ -111,13 +124,18 @@ def simulate_roundtrip(
     v2.1.0 CONTRACT:
     - If `leg2_quote_callback` is provided, leg2 uses ACTUAL re-quote for leg1_amount_out
     - If not provided, uses ratio estimate from sell_quote (DIAGNOSTIC ONLY, upper-bound)
+    - Gas cost includes L1 overhead (unified with opportunity_engine.GasConfig)
     
     The callback signature: leg2_quote_callback(amount_in_wei: int) -> Optional[Dict]
     where the returned dict has: amount_out_wei, gas_estimate, ticks_crossed
     
     Args:
         buy_quote: Quote dict for leg 1 (token_in -> token_out) from lower-price DEX
-        sell_quote: Quote dict for leg 2 (token_out -> token_in) from higher-price DEX  
+        sell_quote: Quote dict for leg 2 (token_out -> token_in) from higher-price DEX
+        gas_price_wei: L2 gas price in wei
+        max_ticks_crossed: Maximum allowed ticks crossed (both legs combined)
+        leg2_quote_callback: Optional callback to re-quote leg2 with actual leg1_amount_out
+        l1_cost_wei: L1 data posting overhead in wei (Arbitrum/Optimism specific)  
         gas_price_wei: Current gas price in wei
         max_ticks_crossed: Max total ticks before rejecting
         leg2_quote_callback: Optional callback to re-quote leg2 with actual amount
@@ -135,6 +153,7 @@ def simulate_roundtrip(
         token_in=buy_quote.get("token_in", ""),
         token_out=buy_quote.get("token_out", ""),
         leg1_amount_out=0,
+        l1_cost_source=l1_cost_source,  # v2.1.0: source tracking
     )
     
     # Leg 1: Extract from buy quote
@@ -206,13 +225,44 @@ def simulate_roundtrip(
     amount_back = result.leg2_amount_out
     
     result.gross_pnl_wei = amount_back - amount_in
-    result.gas_cost_wei = result.total_gas * gas_price_wei
+    # v2.1.0: Unified gas model - L2 execution + L1 data overhead
+    l2_gas_cost = result.total_gas * gas_price_wei
+    result.gas_cost_wei = l2_gas_cost + l1_cost_wei
     result.net_pnl_wei = result.gross_pnl_wei - result.gas_cost_wei
     
     # Calculate bps for comparison
     if amount_in > 0:
         result.gross_pnl_bps = float(result.gross_pnl_wei) / float(amount_in) * 10000
         result.net_pnl_bps = float(result.net_pnl_wei) / float(amount_in) * 10000
+    
+    # v2.1.0: Calculate slippage - prefer sqrtPriceAfter when available
+    # Check for sqrt_price_after in quotes (from QuoterV2)
+    buy_sqrt_before = buy_quote.get("sqrt_price_x96")
+    buy_sqrt_after = buy_quote.get("sqrt_price_after")
+    sell_sqrt_before = sell_quote.get("sqrt_price_x96") 
+    sell_sqrt_after = sell_quote.get("sqrt_price_after")
+    
+    # Try measured slippage first
+    total_measured_slippage = 0.0
+    slippage_source = "ticks_heuristic"  # default
+    
+    if buy_sqrt_before and buy_sqrt_after:
+        leg1_slippage, _ = calculate_slippage_from_sqrt_prices(buy_sqrt_before, buy_sqrt_after, is_buy=True)
+        total_measured_slippage += abs(leg1_slippage)
+        slippage_source = "sqrtPriceAfter"
+    
+    if sell_sqrt_before and sell_sqrt_after:
+        leg2_slippage, _ = calculate_slippage_from_sqrt_prices(sell_sqrt_before, sell_sqrt_after, is_buy=False)
+        total_measured_slippage += abs(leg2_slippage)
+        slippage_source = "sqrtPriceAfter"
+    
+    if slippage_source == "sqrtPriceAfter" and total_measured_slippage > 0:
+        result.estimated_slippage_bps = total_measured_slippage
+        result.slippage_source = "sqrtPriceAfter"
+    else:
+        # Fallback: Heuristic ~0.5 bps per tick crossed
+        result.estimated_slippage_bps = float(result.total_ticks) * 0.5
+        result.slippage_source = "ticks_heuristic"
     
     result.is_profitable = result.net_pnl_wei > 0
     
@@ -229,6 +279,8 @@ def evaluate_roundtrip_candidates(
     gas_price_wei: int = 100_000_000,
     top_n: int = 5,
     leg2_quote_callback_factory: Optional[callable] = None,
+    l1_cost_wei: int = 60_000_000_000_000,  # v2.1.0: L1 overhead for unified gas model
+    l1_cost_source: str = "default",  # v2.1.0: "config" | "onchain" | "default"
 ) -> list[RoundTripResult]:
     """
     Evaluate top-N one-leg opportunities with round-trip simulation.
@@ -270,7 +322,7 @@ def evaluate_roundtrip_candidates(
             except Exception as e:
                 logger.debug("Leg2 callback factory failed: %s", e)
         
-        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei, leg2_quote_callback=leg2_callback)
+        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei, leg2_quote_callback=leg2_callback, l1_cost_wei=l1_cost_wei, l1_cost_source=l1_cost_source)
         results.append(result)
     
     return results
@@ -365,3 +417,58 @@ def probe_slippage(
     
     diag["slippage_bps"] = float(slippage_bps)
     return slippage_bps, diag
+
+
+def calculate_slippage_from_sqrt_prices(
+    sqrt_price_before: Optional[int],
+    sqrt_price_after: Optional[int],
+    is_buy: bool = True,
+) -> Tuple[float, str]:
+    """
+    v2.1.0: Calculate measured slippage from sqrtPriceX96 before/after.
+    
+    sqrtPriceX96 = sqrt(price) * 2^96
+    price = (sqrtPriceX96 / 2^96)^2
+    
+    Slippage = (price_after - price_before) / price_before * 10000 bps
+    
+    For buys: positive slippage = price moved up (worse for buyer)
+    For sells: positive slippage = price moved down (worse for seller)
+    
+    Args:
+        sqrt_price_before: sqrtPriceX96 before swap (from slot0)
+        sqrt_price_after: sqrtPriceX96 after swap (from quoter)
+        is_buy: True if this is a buy (token_in -> token_out)
+        
+    Returns:
+        Tuple of (slippage_bps, source)
+        - slippage_bps: Signed slippage in basis points
+        - source: "sqrtPriceAfter" if valid, "none" if data missing
+    """
+    if sqrt_price_before is None or sqrt_price_after is None:
+        return 0.0, "none"
+    
+    if sqrt_price_before == 0:
+        return 0.0, "none"
+    
+    try:
+        # Convert to floats for calculation
+        Q96 = 2 ** 96
+        
+        price_before = (sqrt_price_before / Q96) ** 2
+        price_after = (sqrt_price_after / Q96) ** 2
+        
+        if price_before == 0:
+            return 0.0, "none"
+        
+        # Calculate slippage in bps
+        slippage_bps = (price_after - price_before) / price_before * 10000
+        
+        # For sells, slippage direction is reversed
+        if not is_buy:
+            slippage_bps = -slippage_bps
+        
+        return round(slippage_bps, 2), "sqrtPriceAfter"
+        
+    except Exception:
+        return 0.0, "none"

@@ -966,6 +966,14 @@ ENV VARIABLES:
     parser.add_argument("--slippage-usd-estimate", type=float, default=0.0,
                         help="Slippage USD estimate for cost model")
     
+    # v2.1.0: Prune automation
+    parser.add_argument("--prune-keep", type=int, default=0,
+                        help="After successful run, prune runDirs keeping N most recent (0=disabled)")
+    
+    # v2.1.0: Rolling refresh automation
+    parser.add_argument("--refresh-rolling", action="store_true",
+                        help="Regenerate _rolling artifacts from current run before exit")
+    
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     
     args = parser.parse_args()
@@ -1156,6 +1164,40 @@ ENV VARIABLES:
         print(f"\n{'='*60}")
         print(f"RESULT: {'PASS' if passed else 'FAIL'}")
         print(f"RunDir: {run_dir}")
+        
+        # v2.1.0: Auto-refresh rolling artifacts if enabled
+        # Must run M4 gate first to generate run_summary, then emit rolling
+        if passed and args.refresh_rolling:
+            try:
+                print(f"\n[ONLINE] Running M4 gate to generate run_summary...")
+                import subprocess
+                m4_cmd = [
+                    sys.executable,
+                    "scripts/ci_m4_execution_gate.py",
+                    "--online",
+                    "--profile", "profit",
+                    "--artifact-mode", "rolling",
+                    "--run-dir", str(run_dir),
+                ]
+                m4_result = subprocess.run(m4_cmd, capture_output=True, text=True, timeout=120)
+                if m4_result.returncode == 0:
+                    print(f"[ONLINE] M4 gate passed, rolling artifacts updated")
+                else:
+                    print(f"[ONLINE] M4 gate returned {m4_result.returncode}")
+                    # Non-fatal: still continue
+            except Exception as e:
+                print(f"[ONLINE] WARN: M4 gate refresh failed: {e}")
+        
+        # v2.1.0: Auto-prune if enabled and scan passed
+        if passed and args.prune_keep > 0:
+            try:
+                from scripts.prune_run_dirs import prune_run_dirs
+                print(f"\n[ONLINE] Pruning runDirs (keeping {args.prune_keep} most recent)...")
+                prune_result = prune_run_dirs(keep=args.prune_keep, dry_run=False, yes=True)
+                print(f"[ONLINE] Pruned {prune_result.get('delete_count', 0)} old directories")
+            except Exception as e:
+                print(f"[ONLINE] WARN: Prune failed: {e}")
+        
         return 0 if passed else 1
     
     # =========================================================================

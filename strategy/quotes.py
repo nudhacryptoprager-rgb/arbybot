@@ -579,6 +579,12 @@ def collect_quotes(
                             pool_address=pool_addr,
                         )
                         if not sanity_passed:
+                            # v2.1.0 Step 8: Enhanced price_sanity reject logging
+                            try:
+                                ratio = float(price_exact) / float(anchor_price) if anchor_price else 0.0
+                            except (TypeError, ZeroDivisionError):
+                                ratio = 0.0
+                            
                             rejected_quotes.append({
                                 "pair": f"{token_in}/{token_out}",
                                 "dex_id": dex,
@@ -590,12 +596,21 @@ def collect_quotes(
                                 "deviation_bps": sanity_dev_bps,
                                 "anchor_price": str(anchor_price),
                                 "price_exact": str(price_exact),
+                                # v2.1.0 Step 8: Enhanced diagnostics
+                                "price_ratio": round(ratio, 4),
+                                "anchor_source": "tokens_anchor_price",
+                                "amount_in_wei": amount_in_wei,
+                                "notional_usd_target": target_usd_notional if use_usd_notional else None,
                                 "diagnostics": sanity_diag,
                             })
                             counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
                             counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
-                            logger.debug("PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps", 
-                                        dex, token_in, token_out, fee_tier, sanity_dev_bps)
+                            # v2.1.0: Log at INFO level for visibility of price sanity failures
+                            logger.info(
+                                "PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s ratio=%.4f",
+                                dex, token_in, token_out, fee_tier, sanity_dev_bps,
+                                str(anchor_price)[:12], str(price_exact)[:12], ratio
+                            )
                             continue  # Skip this quote
                     
                     # Build quote directly from quoter data
@@ -620,9 +635,28 @@ def collect_quotes(
                     q_dict = q.__dict__
                     q_dict["price_exact"] = str(price_exact)
                     q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
+                    
+                    # v2.1.0: Enhanced USD-notional tracking (Step 7)
+                    q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
+                    token_out_price = tokens_usd_price.get(token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
+                    notional_usd_actual = round(amount_out_human_val * token_out_price, 2)
+                    q_dict["notional_usd_actual"] = notional_usd_actual
+                    
+                    # NOTIONAL_DRIFT logging
+                    if use_usd_notional and target_usd_notional > 0 and notional_usd_actual > 0:
+                        drift_pct = abs(notional_usd_actual - target_usd_notional) / target_usd_notional * 100
+                        q_dict["notional_drift_pct"] = round(drift_pct, 2)
+                        if drift_pct > 10.0:
+                            logger.warning(
+                                "NOTIONAL_DRIFT: %s/%s %s target=$%.0f actual=$%.2f drift=%.1f%%",
+                                token_in, token_out, dex, target_usd_notional, notional_usd_actual, drift_pct
+                            )
+                    
                     q_dict["quote_source"] = quote_source
                     q_dict["gas_estimate"] = gas_estimate
                     q_dict["ticks_crossed"] = ticks_crossed
+                    # v2.1.0: Add sqrt_price_after for measured slippage calculation
+                    q_dict["sqrt_price_after"] = quoter_result.get("sqrt_price_after") if quoter_result else None
                     quotes_sample.append(q_dict)
                     counts["quotes_fetched"] += 1
                     logger.debug("QuoterV2 canonical: %s %s/%s fee=%d amount_out=%s", 
@@ -790,6 +824,27 @@ def collect_quotes(
                 
                 # M4.2: Add USD-notional metadata
                 q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
+                
+                # v2.1.0: Enhanced USD-notional tracking (Step 7)
+                # notional_usd_target: what we asked for
+                # notional_usd_actual: what we got (amount_out * token_out_price)
+                q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
+                
+                # Calculate actual USD value of amount_out
+                token_out_price = tokens_usd_price.get(token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
+                amount_out_val = float(amount_out_human_str) if amount_out_human_str else 0.0
+                notional_usd_actual = round(amount_out_val * token_out_price, 2)
+                q_dict["notional_usd_actual"] = notional_usd_actual
+                
+                # NOTIONAL_DRIFT: log when target vs actual differs significantly (>10%)
+                if use_usd_notional and target_usd_notional > 0 and notional_usd_actual > 0:
+                    drift_pct = abs(notional_usd_actual - target_usd_notional) / target_usd_notional * 100
+                    q_dict["notional_drift_pct"] = round(drift_pct, 2)
+                    if drift_pct > 10.0:
+                        logger.warning(
+                            "NOTIONAL_DRIFT: %s/%s %s target=$%.0f actual=$%.2f drift=%.1f%%",
+                            token_in, token_out, dex, target_usd_notional, notional_usd_actual, drift_pct
+                        )
                 
                 # M4.2: Quote source and quoter diagnostics (canonical now)
                 q_dict["quote_source"] = quote_source

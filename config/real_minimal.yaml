@@ -59,7 +59,9 @@ pairs:
   - token_in: WETH
     token_out: USDT
     fee_tiers: [500, 3000]
-  # NOTE: WBTC pairs disabled - decimal overflow in price calc (8 vs 18 decimals)
+  # v2.1.0 NOTE: WBTC pairs cause decimal.InvalidOperation
+  # Issue: 8 vs 18 decimal diff in price calculation
+  # Disabling until fix in v2.1.1
   # - token_in: WBTC
   #   token_out: WETH
   #   fee_tiers: [500, 3000]
@@ -80,10 +82,15 @@ pairs:
   - token_in: ARB
     token_out: USDC
     fee_tiers: [500, 3000]
-  # NOTE: WBTC/USDC disabled - same decimal issue
+  # v2.1.0 NOTE: WBTC/USDC causes same issue - disabled
   # - token_in: WBTC
   #   token_out: USDC
   #   fee_tiers: [500, 3000]
+  # v2.1.0: LINK/USDC added for stablecoin diversity (Step 10)
+  # Note: Only 3000 tier - 500 tier had QUOTE_ZERO_OUT
+  - token_in: LINK
+    token_out: USDC
+    fee_tiers: [3000]
 
 # Pool addresses (verified on Arbitrum via factory.getPool() on 2026-02-07)
 # Uniswap V3 Factory: 0x1F98431c8aD98523631AE4a59f267346ea31F984
@@ -134,6 +141,10 @@ pools:
   uniswap_v3_WBTC_USDC_3000: "0x6985cb98CE393FCE8d6272127F39013f61e36166"
   sushiswap_v3_WBTC_USDC_500: "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"
   sushiswap_v3_WBTC_USDC_3000: "0x4E5c883d6e9cCE0be8E464C3066bCFF036Da674a"
+  # === LINK/USDC (v2.1.0 Step 10) ===
+  # Note: 500 tier had QUOTE_ZERO_OUT - use 3000 only
+  uniswap_v3_LINK_USDC_3000: "0xbBe36e6f0331C6a36AB44Bc8421E28E1a1871C1e"
+  sushiswap_v3_LINK_USDC_3000: "0x7e039FC42A52d717E79288d58742A41C7BD2b742"
 
 # Token addresses (Arbitrum)
 tokens:
@@ -170,6 +181,7 @@ tokens_anchor_price:
   wstETH_WETH: 1.15   # ~1.15 WETH per wstETH (staking yield)
   ARB_USDC: 0.70      # ~$0.70 per ARB
   WBTC_USDC: 34000    # ~$34,000 per WBTC
+  LINK_USDC: 11.0     # ~$11 per LINK (v2.1.0 Step 10)
 
 # Quote sizing: 1 ETH
 quote_amount_in_wei: "1000000000000000000"

@@ -161,6 +161,21 @@ def build_truth_data(
         },
         # M4.2: Opportunity engine integration
         "opportunity_engine": stats.get("opportunity_engine", {}),
+        # v2.1.0: Roundtrip reality check (Step 4 - roundtrip in truth_report)
+        "roundtrip_summary": {
+            "enabled": stats.get("roundtrip", {}).get("enabled", False),
+            "evaluated_count": stats.get("roundtrip", {}).get("evaluated_count", 0),
+            "profitable_count": stats.get("roundtrip", {}).get("profitable_count", 0),
+            "real_quote_count": stats.get("roundtrip", {}).get("real_quote_count", 0),
+            "best_net_pnl_bps": stats.get("roundtrip", {}).get("best_net_pnl_bps"),
+        },
+        # v2.1.0: truth_mode_m42 - when true, one-leg PnL is DIAGNOSTIC only, roundtrip is canonical
+        "truth_mode_m42": config.get("truth_mode_m42", False),
+        "profit_realism_status": (
+            "ROUNDTRIP_PROFITABLE" if stats.get("roundtrip", {}).get("profitable_count", 0) > 0
+            else "ROUNDTRIP_NOT_PROFITABLE" if stats.get("roundtrip", {}).get("evaluated_count", 0) > 0
+            else "ONE_LEG_ONLY_DIAGNOSTIC"
+        ),
     }
     
     try:
@@ -182,11 +197,38 @@ def build_reject_data(
     """
     Build reject histogram data structure.
     
+    Note: sanity_rejects is a SUBSET of rejected_quotes (filtered by reason).
+    We use rejected_quotes as canonical rejects list to avoid double-counting.
+    
     Returns:
         Reject histogram dict
     """
     now = datetime.now(timezone.utc).isoformat()
-    total_rejects = len(sanity_rejects) + len(rejected_quotes)
+    # v2.1.0: FIX double-count bug - sanity_rejects is subset of rejected_quotes
+    total_rejects = len(rejected_quotes)
+    
+    # v2.1.0 Step 8: Build reason histogram with sample details
+    reason_histogram = {}
+    for r in rejected_quotes:
+        reason = r.get("reason", "UNKNOWN")
+        reason_histogram[reason] = reason_histogram.get(reason, 0) + 1
+    
+    # v2.1.0 Step 8: Extract PRICE_SANITY_FAILED samples with anchor/observed details
+    price_sanity_samples = []
+    for r in rejected_quotes:
+        if r.get("reason") == "PRICE_SANITY_FAILED":
+            price_sanity_samples.append({
+                "pair": r.get("pair"),
+                "dex_id": r.get("dex_id"),
+                "fee": r.get("fee"),
+                "deviation_bps": r.get("deviation_bps"),
+                "anchor_price": r.get("anchor_price"),
+                "price_exact": r.get("price_exact"),
+                "price_ratio": r.get("price_ratio"),
+                "anchor_source": r.get("anchor_source"),
+            })
+            if len(price_sanity_samples) >= 5:  # Cap at 5 samples
+                break
     
     return {
         "schema_version": SCHEMA_VERSION,
@@ -194,15 +236,19 @@ def build_reject_data(
         "run_mode": "REGISTRY_REAL",
         "chain_id": config.get("chain_id", 42161),
         "current_block": current_block,
-        "rejects": sanity_rejects + rejected_quotes,
-        "sample_rejects": (sanity_rejects + rejected_quotes)[:10] if (sanity_rejects or rejected_quotes) else [],
+        "rejects": rejected_quotes,  # canonical list (includes sanity_rejects)
+        "sample_rejects": rejected_quotes[:10] if rejected_quotes else [],
         "rejects_total": total_rejects,
         "total_rejects": total_rejects,  # deprecated alias
         "no_rejects": total_rejects == 0,
+        "sanity_rejects_count": len(sanity_rejects),  # v2.1.0: separate field
         "price_sanity_failed": len(sanity_rejects),
         "pool_missing_count": stats.get("pool_missing_count", 0),
         "v3_slot0_failed_count": stats.get("v3_slot0_failed_count", 0),
         "price_outlier_count": sum(1 for r in rejected_quotes if r.get("reason") == "PRICE_OUTLIER"),
+        # v2.1.0 Step 8: Enhanced histogram and samples
+        "reason_histogram": reason_histogram,
+        "price_sanity_samples": price_sanity_samples,
         "infra": infra_payload,
     }
 
