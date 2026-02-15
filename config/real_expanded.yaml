@@ -28,11 +28,12 @@ rpc_timeout_seconds: 10
 rpc_retries: 3
 rpc_backoff_base_ms: 500
 
-# 3 DEXes for cross-DEX arbitrage (includes Camelot/Algebra)
+# 2 DEXes for cross-DEX arbitrage 
+# NOTE: camelot_v3 disabled - Algebra quoter requires different ABI (TODO: M4.3)
 dexes:
   - uniswap_v3
   - sushiswap_v3
-  - camelot_v3
+  # - camelot_v3  # Disabled: Algebra quoter signature differs from standard
 
 # EXPANDED PAIRS (verified pools only - safe-by-default)
 # NOTE: Pairs without verified pools are COMMENTED OUT until verification.
@@ -242,7 +243,8 @@ execution_block_reason: EXECUTION_DISABLED_M4
 # QuoterV2 integration (feature flag)
 # When true: use on-chain quoters for executable amounts (replaces slot0 spot price)
 # When false: use slot0 for spot price estimation only
-use_quoter_v2: false  # M4.2: Set to true for executable quote testing
+# IMPORTANT: Algebra-based DEXes (camelot_v3) REQUIRE use_quoter_v2=true
+use_quoter_v2: true  # M4.2: Required for camelot_v3 (Algebra ABI)
 
 # USD-notional sizing (M4.2)
 # When true: all quotes use consistent USD notional (e.g., $1000) for fair comparison

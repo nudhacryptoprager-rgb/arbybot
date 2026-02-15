@@ -165,6 +165,19 @@ def run_scan(
     """
     logger.info("Starting scan: cycles=%s, output=%s", cycles, output_dir)
     
+    # M4.2: Config validation - algebra DEXes require quoter
+    dexes_list = config.get("dexes") or []
+    use_quoter_v2 = config.get("use_quoter_v2", False)
+    algebra_dexes = [d for d in dexes_list if d in ("camelot_v3", "algebra", "swaap_v3")]
+    
+    if algebra_dexes and not use_quoter_v2:
+        logger.warning(
+            "CONFIG_WARN: %s in dexes but use_quoter_v2=false. "
+            "Algebra-based DEXes require QuoterV2 (slot0 ABI incompatible). "
+            "Quotes from these DEXes will be rejected with ALGEBRA_NEEDS_QUOTER.",
+            algebra_dexes
+        )
+    
     # Resolve RPC endpoints
     resolved_http, resolved_ws, provider_http, provider_ws = resolve_rpc_endpoints(config)
     
@@ -277,6 +290,9 @@ def run_scan(
         tenderly_enabled, tenderly_ok, tenderly_error
     )
     
+    # Generate timestamp early (used by opportunity_engine and artifact writes)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
     # M4.2: Evaluate opportunities using opportunity_engine
     try:
         from engine.opportunity_engine import evaluate_quotes
@@ -312,8 +328,7 @@ def run_scan(
         config, current_block, sanity_rejects, rejected_quotes, stats, infra_payload
     )
     
-    # Write artifacts
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Write artifacts (timestamp already set before opportunity_engine)
     artifacts = write_artifacts(output_dir, timestamp, scan_data, truth_data, reject_data, artifact_mode=artifact_mode)
     
     logger.info("Scan completed: %s artifacts written", len(artifacts))

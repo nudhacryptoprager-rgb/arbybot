@@ -4,6 +4,7 @@
 **Updated**: 2026-02-14  
 **Gate Version**: v2.0.8  
 **Policy Version**: v2.0.8  
+**Engine Version**: v2.0.9 (quoter_v2 canonical, opportunity_engine, Algebra exclusion)  
 **Evidence**: Timestamp-based provenance (v2.0.8: fee_tier strict lookup, quotes_total=attempted, unique_routes_cross_dex)  
 
 ## Status Separation (v2.0.7)
@@ -25,7 +26,7 @@
 2. **TOP_PAIR_NET_SHARE check active (v2.0.4)**: Single pair > 80% of net profit -> `FAIL_TOP_PAIR_DOMINANCE`
 3. **Linear PnL model**: No price impact modeling; large trades overestimate profit
 4. **Liquidity imbalance undetected**: Different pool liquidities not compared (root cause of LINK/WETH outlier)
-5. **slot0 quotes (v2.0.8)**: Using slot0 spot price, NOT QuoterV2 executable quotes (M2.2 Roadmap)
+5. **QuoterV2 canonical (v2.0.9)**: QuoterV2 is now canonical source; slot0 fallback only for UniswapV3 without quoter config. Algebra DEXes (Camelot) require quoter (different ABI, see `dex/abi/algebra_quoter.json`)
 6. **unique_routes includes intra-DEX (v2.0.8)**: `sushiswap_v3->sushiswap_v3` counted as route; see `unique_routes_cross_dex` for cross-DEX only
 
 **M4.2 Blockers**:
@@ -95,6 +96,21 @@ Until these gaps are closed, M4 profit = "paper profit under declared cost model
 
 > Source: `data/runs/_rolling/_latest.json`, `data/runs/_rolling/m4_stability_agg.json`
 > Policy Version: 2.0.8 | Status Domain: status=NO_DATA|PASS|FAIL; quality_status=NO_DATA|PASS|WARN|FAIL_QUALITY
+
+## Version Discipline (v2.0.9)
+
+| Track | Version | Scope | Notes |
+|-------|---------|-------|-------|
+| **Policy Version** | 2.0.8 | Thresholds, gates, DoD rules | Changes require status artifact migration |
+| **Gate Version** | 2.0.8 | ci_m4_execution_gate.py | Validation logic |
+| **Engine Version** | 2.0.9 | quotes.py, run_scan_real.py | Scanner/engine features |
+| **Schema Version** | 3.2.0 | Artifact JSON structure | Backward compatible |
+
+> **v2.0.9 Engine Changes** (policy unchanged):
+> - QuoterV2 canonical source (slot0 fallback only)
+> - ALGEBRA_NEEDS_QUOTER rejection for Camelot (different quoter ABI)
+> - opportunity_engine integration
+> - timestamp fix for artifact provenance
 
 ## Docs Truth Map
 

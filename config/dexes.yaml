@@ -21,6 +21,7 @@ arbitrum_one:
     adapter_type: "algebra"
     factory: "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"
     router: "0xc873fEcbd354f5A56E00E710B90EF4201db2448d"
+    # Camelot V3 quoter - https://arbiscan.io/address/0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E
     quoter: "0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E"
 
 base:

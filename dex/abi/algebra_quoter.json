@@ -1,0 +1,47 @@
+{
+  "$comment": [
+    "Algebra/Camelot Quoter ABI (minimal)",
+    "Contract: AlgebraQuoter (Swap Router)",
+    "Deployed addresses by chain:",
+    "- Arbitrum One: 0xAF20b56e3b54F3EB05eb5BB33c0Fa6e6D8959533 (Camelot V3)",
+    "",
+    "This is NOT the full ABI - only the function we use for quoting.",
+    "Full ABI: https://arbiscan.io/address/0xAF20b56e3b54F3EB05eb5BB33c0Fa6e6D8959533#code"
+  ],
+  "quoteExactInputSingle": {
+    "selector": "0x2d58eb1d",
+    "inputs": [
+      { "name": "tokenIn", "type": "address", "description": "Input token address" },
+      { "name": "tokenOut", "type": "address", "description": "Output token address" },
+      { "name": "amountIn", "type": "uint256", "description": "Input amount in wei" },
+      { "name": "limitSqrtPrice", "type": "uint160", "description": "Price limit (0 = no limit)" }
+    ],
+    "outputs": [
+      { "name": "amountOut", "type": "uint256", "description": "Output amount in wei" },
+      { "name": "fee", "type": "uint16", "description": "Dynamic fee applied (in bps*100)" }
+    ],
+    "notes": [
+      "Algebra uses DYNAMIC FEES - no fee parameter in input",
+      "limitSqrtPrice=0 means 'no limit' (accept any price)",
+      "fee output: Algebra reports fee*100 (e.g., 500 = 0.05%)",
+      "Unlike UniswapV3, Algebra pools have single pool per pair (no fee tiers)"
+    ]
+  },
+  "abi_fragment": [
+    {
+      "inputs": [
+        { "internalType": "address", "name": "tokenIn", "type": "address" },
+        { "internalType": "address", "name": "tokenOut", "type": "address" },
+        { "internalType": "uint256", "name": "amountIn", "type": "uint256" },
+        { "internalType": "uint160", "name": "limitSqrtPrice", "type": "uint160" }
+      ],
+      "name": "quoteExactInputSingle",
+      "outputs": [
+        { "internalType": "uint256", "name": "amountOut", "type": "uint256" },
+        { "internalType": "uint16", "name": "fee", "type": "uint16" }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}

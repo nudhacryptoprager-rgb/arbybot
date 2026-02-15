@@ -9,6 +9,14 @@ Contract:
 - adapter_type must match config/dexes.yaml `adapter_type` field
 - Each adapter must implement get_quote() method
 - Registry is the single source of truth for adapter classes
+
+M2.1 STATUS (v2.0.9):
+- Registry provides DexConfig loading from config/dexes.yaml ✓
+- Registry provides adapter_type -> quoter_address mapping ✓
+- Registry provides create_adapter() factory ✓
+- TODO(M2.1): Scanner should quote ONLY via registry-created adapters
+  Current: Scanner uses registry for metadata but calls read_slot0/read_quoter directly
+  Target: Scanner calls adapter.get_quote() which internally handles quoter vs slot0
 """
 
 from dataclasses import dataclass

@@ -393,10 +393,12 @@ def collect_quotes(
     rejected_quotes: List[Dict[str, Any]] = []
     
     counts = {
+        "quotes_fetched": 0,
         "pool_missing": 0,
         "v3_slot0_failed": 0,
         "price_calc_failed": 0,
         "no_onchain_price": 0,
+        "algebra_needs_quoter": 0,
     }
     
     dexes_list = config.get("dexes") or []
@@ -514,9 +516,76 @@ def collect_quotes(
                                 amount_in_wei, rpc_url, current_block
                             )
                 
-                # Read slot0 for v3 pools (current: spot price, not executable quote)
+                # M4.2 FIX: If quoter_result is successful, we DON'T need slot0 at all
+                # quoter_result gives executable amount_out, price derived from amount_out/amount_in
                 tick_val, sqrt_price_val = None, None
-                if is_v3_dex:
+                quoter_success = quoter_result and quoter_result.get("amount_out", 0) > 0
+                
+                # Path A: quoter canonical - skip slot0 for v3/algebra when quoter succeeds
+                if quoter_success:
+                    # Use quoter data directly - no slot0 needed
+                    amount_out_wei_val = quoter_result["amount_out"]
+                    amount_out_human_val = float(Decimal(amount_out_wei_val) / Decimal(10 ** decimals_out))
+                    amount_out_human_str = str(round(amount_out_human_val, 6))
+                    amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                    # Price from quoter amounts
+                    amount_in_tokens = float(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                    price_exact = Decimal(str(amount_out_human_val)) / Decimal(str(amount_in_tokens)) if amount_in_tokens > 0 else Decimal(0)
+                    price_str = str(round(float(price_exact), 6))
+                    quote_source = "quoter_v2"
+                    gas_estimate = quoter_result.get("gas_estimate")
+                    ticks_crossed = quoter_result.get("ticks_crossed")
+                    
+                    # Build quote directly from quoter data
+                    q = QuoteCompat(
+                        dex_id=dex,
+                        pool_address=pool_addr,
+                        token_in=token_in,
+                        token_out=token_out,
+                        fee=fee_tier,
+                        amount_in_wei=amount_in_wei,
+                        amount_out_wei=amount_out_wei_val,
+                        amount_in_human=amount_in_human_str,
+                        amount_out_human=amount_out_human_str,
+                        price=price_str,
+                        latency_ms=rpc_latency or 10,
+                        block_number=current_block,
+                        rpc_success=True,
+                        gate_passed=True,
+                        tick=tick_val,  # None - quoter doesn't give tick
+                        sqrt_price_x96=sqrt_price_val,  # None - quoter doesn't give sqrt
+                    )
+                    q_dict = q.__dict__
+                    q_dict["price_exact"] = str(price_exact)
+                    q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
+                    q_dict["quote_source"] = quote_source
+                    q_dict["gas_estimate"] = gas_estimate
+                    q_dict["ticks_crossed"] = ticks_crossed
+                    quotes_sample.append(q_dict)
+                    counts["quotes_fetched"] += 1
+                    logger.debug("QuoterV2 canonical: %s %s/%s fee=%d amount_out=%s", 
+                                dex, token_in, token_out, fee_tier, amount_out_wei_val)
+                    continue  # Skip slot0 path entirely
+                
+                # M4.2 FIX: Algebra DEXes require quoter - slot0() ABI is incompatible
+                if is_algebra and not quoter_success:
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "ALGEBRA_NEEDS_QUOTER",
+                        "gate_passed": False,
+                        "error": "Algebra/Camelot DEX requires use_quoter_v2=true (slot0 ABI incompatible)",
+                        "use_quoter_v2": use_quoter_v2,
+                    })
+                    counts["algebra_needs_quoter"] = counts.get("algebra_needs_quoter", 0) + 1
+                    logger.warning("ALGEBRA_NEEDS_QUOTER: %s %s/%s fee=%d (enable use_quoter_v2)", 
+                                  dex, token_in, token_out, fee_tier)
+                    continue
+                
+                # Path B: slot0 fallback - only for uniswap_v3 when no quoter
+                if is_v3_dex and not is_algebra:
                     tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url, current_block)
                     
                     if tick_val is None or sqrt_price_val is None:
@@ -533,9 +602,12 @@ def collect_quotes(
                                 "reason": "V3_SLOT0_FAILED",
                                 "gate_passed": False,
                                 "error": f"Failed to read slot0 from pool {pool_addr}",
+                                # M4.2: Add diagnostic - was quoter attempted?
+                                "quoter_attempted": use_quoter_v2 and dex_cfg is not None,
                             })
                             counts["v3_slot0_failed"] += 1
-                            logger.warning("V3_SLOT0_FAILED: %s %s/%s fee=%d", dex, token_in, token_out, fee_tier)
+                            logger.warning("V3_SLOT0_FAILED: %s %s/%s fee=%d (quoter_attempted=%s)", 
+                                          dex, token_in, token_out, fee_tier, use_quoter_v2)
                             continue
                 
                 # Calculate price from sqrtPriceX96
@@ -627,25 +699,10 @@ def collect_quotes(
                 # M4.2: Use USD-notional sizing for amount_in_wei
                 amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
                 
-                # M4.2 FIX: When quoter_result available, use it as CANONICAL source
-                if quoter_result and quoter_result.get("amount_out"):
-                    # QuoterV2 gives executable amount_out
-                    amount_out_wei_val = quoter_result["amount_out"]
-                    amount_out_human_val = float(Decimal(amount_out_wei_val) / Decimal(10 ** decimals_out))
-                    amount_out_human_str = str(round(amount_out_human_val, 6))
-                    # Recalculate price from quoter amounts
-                    if amount_in_wei > 0:
-                        amount_in_tokens = float(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
-                        price_from_quoter = amount_out_human_val / amount_in_tokens if amount_in_tokens > 0 else 0
-                        price_str = str(round(price_from_quoter, 6))
-                        price_exact = price_from_quoter
-                    quote_source = "quoter_v2"
-                    gas_estimate = quoter_result.get("gas_estimate")
-                    ticks_crossed = quoter_result.get("ticks_crossed")
-                else:
-                    quote_source = "slot0"
-                    gas_estimate = None
-                    ticks_crossed = None
+                # M4.2: This path is only reached via slot0 (quoter success continues early above)
+                quote_source = "slot0"
+                gas_estimate = None
+                ticks_crossed = None
                 
                 q = QuoteCompat(
                     dex_id=dex,
