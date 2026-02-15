@@ -1,0 +1,367 @@
+# PATH: engine/roundtrip.py
+"""
+Round-trip PnL simulator for M4.2.
+
+M4.2 CONTRACT (v2.1.0):
+- Canonical profit = round-trip: token_in -> token_out -> token_in
+- One-leg spread = diagnostic only
+- Uses QuoterV2 for both legs when available
+
+Round-trip formula:
+1. Buy leg: Start with `amount_in` of token_in, get `amount_out` of token_out
+2. Sell leg: Take `amount_out`, swap back to token_in, get `amount_back`
+3. Gross PnL = amount_back - amount_in (negative if loss)
+4. Net PnL = Gross PnL - gas_cost
+
+This inherently includes:
+- LP fees (via quoter amount_out)
+- Price impact/slippage (via quoter amount_out)
+- Liquidity constraints (detected via ticks_crossed)
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger("engine.roundtrip")
+
+
+@dataclass
+class RoundTripResult:
+    """Result of a round-trip simulation."""
+    # Input
+    pair: str
+    buy_dex: str
+    sell_dex: str
+    amount_in_wei: int
+    token_in: str
+    token_out: str
+    
+    # Leg 1 (buy): token_in -> token_out
+    leg1_amount_out: int  # token_out received
+    leg1_gas_estimate: Optional[int] = None
+    leg1_ticks_crossed: Optional[int] = None
+    leg1_success: bool = False
+    
+    # Leg 2 (sell): token_out -> token_in
+    leg2_amount_out: int = 0  # token_in received back
+    leg2_gas_estimate: Optional[int] = None
+    leg2_ticks_crossed: Optional[int] = None
+    leg2_success: bool = False
+    leg2_is_real_quote: bool = False  # v2.1.0: True if re-quoted, False if ratio estimate
+    
+    # Results
+    gross_pnl_wei: int = 0  # amount_back - amount_in
+    gas_cost_wei: int = 0
+    net_pnl_wei: int = 0
+    
+    # Quality flags
+    is_profitable: bool = False
+    reject_reason: Optional[str] = None
+    
+    # Diagnostics
+    gross_pnl_bps: float = 0.0  # for comparison with one-leg
+    net_pnl_bps: float = 0.0
+    total_ticks: int = 0
+    total_gas: int = 0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize for JSON output."""
+        return {
+            "pair": self.pair,
+            "buy_dex": self.buy_dex,
+            "sell_dex": self.sell_dex,
+            "amount_in_wei": str(self.amount_in_wei),
+            "token_in": self.token_in,
+            "token_out": self.token_out,
+            "leg1_amount_out": str(self.leg1_amount_out),
+            "leg1_gas_estimate": self.leg1_gas_estimate,
+            "leg1_ticks_crossed": self.leg1_ticks_crossed,
+            "leg1_success": self.leg1_success,
+            "leg2_amount_out": str(self.leg2_amount_out),
+            "leg2_gas_estimate": self.leg2_gas_estimate,
+            "leg2_ticks_crossed": self.leg2_ticks_crossed,
+            "leg2_success": self.leg2_success,
+            "leg2_is_real_quote": self.leg2_is_real_quote,
+            "gross_pnl_wei": str(self.gross_pnl_wei),
+            "gas_cost_wei": str(self.gas_cost_wei),
+            "net_pnl_wei": str(self.net_pnl_wei),
+            "is_profitable": self.is_profitable,
+            "reject_reason": self.reject_reason,
+            "gross_pnl_bps": round(self.gross_pnl_bps, 2),
+            "net_pnl_bps": round(self.net_pnl_bps, 2),
+            "total_ticks": self.total_ticks,
+            "total_gas": self.total_gas,
+        }
+
+
+def simulate_roundtrip(
+    buy_quote: Dict[str, Any],
+    sell_quote: Dict[str, Any],
+    gas_price_wei: int = 100_000_000,  # 0.1 gwei default (Arbitrum)
+    max_ticks_crossed: int = 30,  # Total for both legs
+    leg2_quote_callback: Optional[callable] = None,  # v2.1.0: Optional re-quote function
+) -> RoundTripResult:
+    """
+    Simulate round-trip arbitrage.
+    
+    v2.1.0 CONTRACT:
+    - If `leg2_quote_callback` is provided, leg2 uses ACTUAL re-quote for leg1_amount_out
+    - If not provided, uses ratio estimate from sell_quote (DIAGNOSTIC ONLY, upper-bound)
+    
+    The callback signature: leg2_quote_callback(amount_in_wei: int) -> Optional[Dict]
+    where the returned dict has: amount_out_wei, gas_estimate, ticks_crossed
+    
+    Args:
+        buy_quote: Quote dict for leg 1 (token_in -> token_out) from lower-price DEX
+        sell_quote: Quote dict for leg 2 (token_out -> token_in) from higher-price DEX  
+        gas_price_wei: Current gas price in wei
+        max_ticks_crossed: Max total ticks before rejecting
+        leg2_quote_callback: Optional callback to re-quote leg2 with actual amount
+        
+    Returns:
+        RoundTripResult with full breakdown
+    """
+    pair = f"{buy_quote.get('token_in', '')}/{buy_quote.get('token_out', '')}"
+    
+    result = RoundTripResult(
+        pair=pair,
+        buy_dex=buy_quote.get("dex_id", "unknown"),
+        sell_dex=sell_quote.get("dex_id", "unknown"),
+        amount_in_wei=buy_quote.get("amount_in_wei", 0),
+        token_in=buy_quote.get("token_in", ""),
+        token_out=buy_quote.get("token_out", ""),
+        leg1_amount_out=0,
+    )
+    
+    # Leg 1: Extract from buy quote
+    leg1_amount_out = buy_quote.get("amount_out_wei", 0)
+    leg1_gas = buy_quote.get("gas_estimate") or 150_000
+    leg1_ticks = buy_quote.get("ticks_crossed") or 0
+    
+    if not leg1_amount_out or leg1_amount_out <= 0:
+        result.reject_reason = "LEG1_NO_AMOUNT_OUT"
+        return result
+    
+    result.leg1_amount_out = leg1_amount_out
+    result.leg1_gas_estimate = leg1_gas
+    result.leg1_ticks_crossed = leg1_ticks
+    result.leg1_success = True
+    
+    # Leg 2: Re-quote if callback provided, otherwise ratio estimate
+    leg2_gas = sell_quote.get("gas_estimate") or 150_000
+    leg2_ticks = sell_quote.get("ticks_crossed") or 0
+    leg2_amount_out = 0
+    leg2_is_real_quote = False
+    
+    if leg2_quote_callback:
+        # v2.1.0: CANONICAL - use actual re-quote for leg2
+        try:
+            leg2_real_quote = leg2_quote_callback(leg1_amount_out)
+            if leg2_real_quote and leg2_real_quote.get("amount_out_wei"):
+                leg2_amount_out = leg2_real_quote["amount_out_wei"]
+                leg2_gas = leg2_real_quote.get("gas_estimate", leg2_gas)
+                leg2_ticks = leg2_real_quote.get("ticks_crossed", leg2_ticks)
+                leg2_is_real_quote = True
+                logger.debug("Leg2 real quote: amount_out=%d, gas=%d", leg2_amount_out, leg2_gas)
+        except Exception as e:
+            logger.warning("Leg2 re-quote failed: %s", e)
+            leg2_is_real_quote = False
+    
+    if not leg2_is_real_quote:
+        # DIAGNOSTIC: ratio estimate from existing sell_quote
+        # This is an upper-bound estimate and NOT canonical profit
+        sell_amount_in = sell_quote.get("amount_in_wei", 0)
+        sell_amount_out = sell_quote.get("amount_out_wei", 0)
+        
+        if not sell_amount_in or not sell_amount_out or sell_amount_in <= 0:
+            result.reject_reason = "LEG2_NO_QUOTE_DATA"
+            return result
+        
+        # Estimate: scale by ratio
+        ratio = Decimal(str(sell_amount_out)) / Decimal(str(sell_amount_in))
+        leg2_amount_out = int(Decimal(str(leg1_amount_out)) * ratio)
+        logger.debug("Leg2 ratio estimate: amount_out=%d (ratio=%s)", leg2_amount_out, ratio)
+    
+    result.leg2_amount_out = leg2_amount_out
+    result.leg2_gas_estimate = leg2_gas
+    result.leg2_ticks_crossed = leg2_ticks
+    result.leg2_success = True
+    result.leg2_is_real_quote = leg2_is_real_quote  # v2.1.0: Track quote method
+    
+    # Calculate totals
+    result.total_ticks = (leg1_ticks or 0) + (leg2_ticks or 0)
+    result.total_gas = (leg1_gas or 0) + (leg2_gas or 0)
+    
+    # Check ticks limit
+    if result.total_ticks > max_ticks_crossed:
+        result.reject_reason = f"TOTAL_TICKS_EXCEEDED: {result.total_ticks}>{max_ticks_crossed}"
+        return result
+    
+    # Calculate PnL
+    amount_in = result.amount_in_wei
+    amount_back = result.leg2_amount_out
+    
+    result.gross_pnl_wei = amount_back - amount_in
+    result.gas_cost_wei = result.total_gas * gas_price_wei
+    result.net_pnl_wei = result.gross_pnl_wei - result.gas_cost_wei
+    
+    # Calculate bps for comparison
+    if amount_in > 0:
+        result.gross_pnl_bps = float(result.gross_pnl_wei) / float(amount_in) * 10000
+        result.net_pnl_bps = float(result.net_pnl_wei) / float(amount_in) * 10000
+    
+    result.is_profitable = result.net_pnl_wei > 0
+    
+    if not result.is_profitable:
+        result.reject_reason = f"NOT_PROFITABLE: net_pnl_bps={result.net_pnl_bps:.2f}"
+    
+    return result
+
+
+def evaluate_roundtrip_candidates(
+    opportunities: list,
+    buy_quotes_by_key: Dict[str, Dict],
+    sell_quotes_by_key: Dict[str, Dict],
+    gas_price_wei: int = 100_000_000,
+    top_n: int = 5,
+    leg2_quote_callback_factory: Optional[callable] = None,
+) -> list[RoundTripResult]:
+    """
+    Evaluate top-N one-leg opportunities with round-trip simulation.
+    
+    v2.1.0 CONTRACT:
+    - If `leg2_quote_callback_factory` is provided, leg2 uses ACTUAL QuoterV2 re-quote
+    - Factory signature: (sell_quote: Dict) -> callable(amount_in_wei: int) -> Optional[Dict]
+    - This enables CANONICAL round-trip profit (vs ratio estimate)
+    
+    Args:
+        opportunities: List of one-leg opportunity dicts (from opportunity_engine)
+        buy_quotes_by_key: Dict mapping "dex_id:pool:fee" -> quote dict
+        sell_quotes_by_key: Same for sell side
+        gas_price_wei: Current gas price
+        top_n: Number of candidates to evaluate
+        leg2_quote_callback_factory: Optional factory to create leg2 re-quote callbacks
+        
+    Returns:
+        List of RoundTripResult for top candidates
+    """
+    results = []
+    
+    for opp in opportunities[:top_n]:
+        buy_key = f"{opp.get('buy_dex')}:{opp.get('diagnostics', {}).get('buy_pool')}:{opp.get('buy_fee')}"
+        sell_key = f"{opp.get('sell_dex')}:{opp.get('diagnostics', {}).get('sell_pool')}:{opp.get('sell_fee')}"
+        
+        buy_quote = buy_quotes_by_key.get(buy_key)
+        sell_quote = sell_quotes_by_key.get(sell_key)
+        
+        if not buy_quote or not sell_quote:
+            logger.debug("Missing quotes for roundtrip: buy=%s sell=%s", buy_key, sell_key)
+            continue
+        
+        # v2.1.0: Create leg2 callback if factory provided
+        leg2_callback = None
+        if leg2_quote_callback_factory:
+            try:
+                leg2_callback = leg2_quote_callback_factory(sell_quote)
+            except Exception as e:
+                logger.debug("Leg2 callback factory failed: %s", e)
+        
+        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei, leg2_quote_callback=leg2_callback)
+        results.append(result)
+    
+    return results
+
+
+def estimate_slippage_bps(
+    quote: Dict[str, Any],
+    reference_price: Optional[Decimal] = None,
+) -> Tuple[Decimal, str]:
+    """
+    v2.1.0: Estimate slippage from quoter vs reference price.
+    
+    Live slippage = (quoter_effective_price - reference_price) / reference_price * 10000
+    
+    Args:
+        quote: Quote dict with 'price_exact' (quoter) and optionally 'slot0_price'
+        reference_price: Optional reference price (if None, uses slot0_price from quote)
+        
+    Returns:
+        Tuple of (slippage_bps, method_used)
+        - slippage_bps: Positive = worse than reference (buying more expensive, selling cheaper)
+        - method_used: "slot0" | "provided" | "none"
+    """
+    quoter_price = quote.get("price_exact")
+    if not quoter_price:
+        return Decimal("0"), "none"
+    
+    quoter_price = Decimal(str(quoter_price))
+    
+    # Determine reference price
+    if reference_price:
+        ref = Decimal(str(reference_price))
+        method = "provided"
+    else:
+        slot0 = quote.get("slot0_price") or quote.get("sqrtPriceX96_slot0")
+        if slot0:
+            ref = Decimal(str(slot0))
+            method = "slot0"
+        else:
+            return Decimal("0"), "none"
+    
+    if ref == 0:
+        return Decimal("0"), method
+    
+    # Calculate slippage: (actual - expected) / expected * 10000
+    slippage_bps = (quoter_price - ref) / ref * Decimal("10000")
+    return slippage_bps, method
+
+
+def probe_slippage(
+    quote_small: Dict[str, Any],
+    quote_target: Dict[str, Any],
+) -> Tuple[Decimal, Dict[str, Any]]:
+    """
+    v2.1.0: Probe slippage by comparing small notional vs target notional quotes.
+    
+    Live slippage = (target_effective_price - small_effective_price) / small_effective_price * 10000
+    
+    The small quote approximates zero-impact price; target quote shows actual slippage.
+    
+    Args:
+        quote_small: Quote for small amount (e.g., 1% of target)
+        quote_target: Quote for target amount (e.g., $1000)
+        
+    Returns:
+        Tuple of (slippage_bps, diagnostics_dict)
+        - slippage_bps: Positive = worse price for target (more slippage)
+        - diagnostics: {small_price, target_price, small_amount, target_amount}
+    """
+    small_price = quote_small.get("price_exact")
+    target_price = quote_target.get("price_exact")
+    
+    diag = {
+        "small_amount_in": quote_small.get("amount_in_wei"),
+        "target_amount_in": quote_target.get("amount_in_wei"),
+        "small_price": str(small_price) if small_price else None,
+        "target_price": str(target_price) if target_price else None,
+        "method": "probe_small_vs_target",
+    }
+    
+    if not small_price or not target_price:
+        return Decimal("0"), {**diag, "error": "missing_price"}
+    
+    small_p = Decimal(str(small_price))
+    target_p = Decimal(str(target_price))
+    
+    if small_p == 0:
+        return Decimal("0"), {**diag, "error": "small_price_zero"}
+    
+    # Slippage: how much worse is target vs small
+    slippage_bps = (target_p - small_p) / small_p * Decimal("10000")
+    
+    diag["slippage_bps"] = float(slippage_bps)
+    return slippage_bps, diag

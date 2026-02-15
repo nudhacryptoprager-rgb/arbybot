@@ -181,6 +181,16 @@ def run_scan(
     # Resolve RPC endpoints
     resolved_http, resolved_ws, provider_http, provider_ws = resolve_rpc_endpoints(config)
     
+    # v2.1.0: Create web3 instance for live gas/block queries
+    w3_instance = None
+    try:
+        from web3 import Web3
+        if resolved_http:
+            w3_instance = Web3(Web3.HTTPProvider(resolved_http, request_kwargs={"timeout": 5}))
+            logger.debug("Web3 instance created for live queries")
+    except Exception as w3_err:
+        logger.debug("Web3 instance creation skipped: %s", w3_err)
+    
     # Get current block
     current_block, rpc_latency = _get_current_block(config)
     if current_block in FAKE_BLOCK_SENTINELS:
@@ -235,6 +245,7 @@ def run_scan(
     
     # v2.0.8: Per-quote price sanity from rejected_quotes
     # Count rejects that indicate price/quote validity issues
+    # v2.1.0: Use "PRICE_SANITY_FAILED" (canonical ErrorCode, matches strategy/quotes.py)
     sanity_reject_reasons = {"QUOTE_ZERO_OUT", "PRICE_CALC_FAILED", "NO_ONCHAIN_PRICE", "PRICE_SANITY_FAILED"}
     sanity_rejects = [r for r in rejected_quotes if r.get("reason") in sanity_reject_reasons]
     
@@ -293,13 +304,36 @@ def run_scan(
     # Generate timestamp early (used by opportunity_engine and artifact writes)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
+    # v2.1.0: Fetch live gas price BEFORE opportunity_engine for consistent gas costing
+    live_gas_price_wei = 100_000_000  # 0.1 gwei default
+    if w3_instance:
+        try:
+            live_gas_price_wei = w3_instance.eth.gas_price
+            stats["live_gas_price_wei"] = live_gas_price_wei
+            stats["live_gas_price_gwei"] = live_gas_price_wei / 1e9
+            logger.info("Live gas price: %.4f gwei", stats["live_gas_price_gwei"])
+        except Exception as gas_err:
+            logger.debug("Failed to get live gas: %s", gas_err)
+    else:
+        stats["live_gas_price_wei"] = live_gas_price_wei
+        stats["live_gas_price_gwei"] = live_gas_price_wei / 1e9
+    
     # M4.2: Evaluate opportunities using opportunity_engine
     try:
-        from engine.opportunity_engine import evaluate_quotes
+        from engine.opportunity_engine import evaluate_quotes, GasConfig
         eth_usd = config.get("tokens_anchor_price", {}).get("WETH_USDC", 2000.0)
+        
+        # v2.1.0: Create GasConfig with live gas price for consistent accounting
+        gas_config = GasConfig(
+            gas_price_gwei=live_gas_price_wei / 1e9,
+            eth_usd_price=eth_usd,
+            _live_mode=w3_instance is not None,
+        )
+        
         opps_list, opps_summary = evaluate_quotes(
             quotes_sample, cycle=0, timestamp=timestamp,
-            eth_usd_price=eth_usd, min_net_profit_usd=0.10
+            eth_usd_price=eth_usd, min_net_profit_usd=0.10,
+            gas_config=gas_config,
         )
         stats["opportunity_engine"] = {
             "enabled": True,
@@ -315,6 +349,110 @@ def run_scan(
     except Exception as e:
         logger.debug("OpportunityEngine skipped: %s", e)
         stats["opportunity_engine"] = {"enabled": False, "error": str(e)}
+    
+    # v2.1.0: Round-trip evaluation for CANONICAL profit (after one-leg diagnostic)
+    try:
+        from engine.roundtrip import simulate_roundtrip, evaluate_roundtrip_candidates
+        from strategy.quotes import read_quoter_v2
+        from config import get_token_address
+        from dex.registry import get_dex_config
+        
+        # Build quotes lookup by key for round-trip matching
+        quotes_by_key: Dict[str, Dict] = {}
+        for q in quotes_sample:
+            key = f"{q.get('dex_id')}:{q.get('pool_address')}:{q.get('fee')}"
+            quotes_by_key[key] = q
+        
+        # v2.1.0: live_gas_price_wei already fetched above (before opportunity_engine)
+        
+        # v2.1.0: Create leg2 re-quote callback factory (CANONICAL round-trip)
+        # This factory creates a callback that re-quotes leg2 using QuoterV2
+        # with the actual leg1 amount_out (not the original target amount)
+        
+        def make_leg2_callback(sell_quote: Dict):
+            """Factory: creates leg2 callback for specific sell_quote context."""
+            dex_id = sell_quote.get("dex_id", "")
+            dex_cfg = get_dex_config(chain_key, dex_id)
+            quoter_addr = dex_cfg.get_quoter_address() if dex_cfg else None
+            
+            # For leg2 (sell back): token_out -> token_in
+            # sell_quote has: token_in, token_out (as symbols)
+            # Leg2 needs to swap token_out back to token_in
+            token_out_symbol = sell_quote.get("token_out", "")  # What we got from leg1
+            token_in_symbol = sell_quote.get("token_in", "")    # What we want back
+            fee = sell_quote.get("fee", 3000)
+            
+            # Resolve token addresses from symbols
+            token_out_addr = get_token_address(chain_key, token_out_symbol)
+            token_in_addr = get_token_address(chain_key, token_in_symbol)
+            
+            if not quoter_addr or not token_in_addr or not token_out_addr:
+                logger.debug(
+                    "Leg2 callback: missing quoter/token info for %s (quoter=%s, in=%s, out=%s)",
+                    dex_id, quoter_addr[:10] if quoter_addr else None, token_in_symbol, token_out_symbol
+                )
+                return None
+            
+            def leg2_requote(amount_in_wei: int) -> Optional[Dict]:
+                """Re-quote leg2 with actual amount from leg1."""
+                result = read_quoter_v2(
+                    quoter_address=quoter_addr,
+                    token_in=token_out_addr,  # Swap token_out (what we have) back
+                    token_out=token_in_addr,  # To token_in (what we started with)
+                    amount_in=amount_in_wei,
+                    fee=fee,
+                    rpc_url=resolved_http,
+                    block_num=current_block,
+                )
+                if result:
+                    return {
+                        "amount_out_wei": result["amount_out"],
+                        "gas_estimate": result.get("gas_estimate", 150000),
+                        "ticks_crossed": result.get("ticks_crossed", 0),
+                    }
+                return None
+            
+            return leg2_requote
+        
+        # Evaluate top-5 one-leg opportunities with round-trip
+        roundtrip_results = []
+        if opps_list:
+            roundtrip_results = evaluate_roundtrip_candidates(
+                opportunities=opps_list[:5],
+                buy_quotes_by_key=quotes_by_key,
+                sell_quotes_by_key=quotes_by_key,
+                gas_price_wei=live_gas_price_wei,
+                top_n=5,
+                leg2_quote_callback_factory=make_leg2_callback,
+            )
+        
+        # Summarize round-trip results
+        rt_profitable = [r for r in roundtrip_results if r.is_profitable]
+        rt_using_real_quote = [r for r in roundtrip_results if r.leg2_is_real_quote]
+        
+        stats["roundtrip"] = {
+            "enabled": True,
+            "evaluated_count": len(roundtrip_results),
+            "profitable_count": len(rt_profitable),
+            "real_quote_count": len(rt_using_real_quote),
+            "gas_price_wei_used": live_gas_price_wei,
+            "results": [r.to_dict() for r in roundtrip_results[:3]],
+        }
+        
+        if rt_profitable:
+            best_rt = max(rt_profitable, key=lambda r: r.net_pnl_bps)
+            stats["roundtrip"]["best_net_pnl_bps"] = best_rt.net_pnl_bps
+            logger.info(
+                "Roundtrip: %d/%d profitable, best=%.2f bps",
+                len(rt_profitable), len(roundtrip_results), best_rt.net_pnl_bps
+            )
+        else:
+            stats["roundtrip"]["best_net_pnl_bps"] = 0.0
+            logger.info("Roundtrip: 0/%d profitable", len(roundtrip_results))
+            
+    except Exception as rt_err:
+        logger.debug("Roundtrip evaluation skipped: %s", rt_err)
+        stats["roundtrip"] = {"enabled": False, "error": str(rt_err)}
     
     # Build artifact data structures
     scan_data = build_scan_data(config, current_block, stats, quotes_sample, infra_payload)

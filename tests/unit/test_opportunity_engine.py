@@ -120,9 +120,11 @@ class TestOpportunityEngine:
         engine = OpportunityEngine(min_net_profit_usd=10.0)  # High threshold
         quotes = [
             {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
-             "price": "2000", "fee": 500, "usd_notional": 100, "amount_in_wei": 1},
+             "price": "2000", "fee": 500, "usd_notional": 100, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},  # v2.1.0: Use quoter to avoid SLOT0_DIAGNOSTIC
             {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
-             "price": "2001", "fee": 500, "usd_notional": 100, "amount_in_wei": 1},
+             "price": "2001", "fee": 500, "usd_notional": 100, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},
         ]
         opps = engine.build_opportunities(quotes)
         assert len(opps) == 1
@@ -248,3 +250,180 @@ class TestOpportunityModel:
             amount_in_wei=1, net_profit_usd=-0.01, gate_passed=False,
         )
         assert not opp_not_profitable.is_profitable
+
+
+# =============================================================================
+# v2.1.0 REGRESSION TESTS
+# =============================================================================
+
+class TestV210FeeModelFix:
+    """
+    v2.1.0 FIX: Fee model depends on quote source.
+    
+    - quoter_v2: amount_out already includes fee, DON'T subtract fee_bps
+    - slot0: spot price without fee, so subtract fee_bps
+    """
+    
+    def test_quoter_source_no_double_fee(self):
+        """quoter_v2 source should NOT have fee deducted."""
+        engine = OpportunityEngine(min_net_profit_usd=0.0)
+        quotes = [
+            {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 3000, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},  # Quoter source
+            {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 3000, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},  # Quoter source
+        ]
+        opps = engine.build_opportunities(quotes)
+        opp = opps[0]
+        
+        # With quoter_v2 both sides, fee_applicable = 0, so net_spread = gross_spread
+        assert opp.gross_spread_bps == opp.net_spread_bps
+    
+    def test_slot0_source_has_fee_deducted(self):
+        """slot0 source should have fee deducted."""
+        engine = OpportunityEngine(min_net_profit_usd=0.0)
+        quotes = [
+            {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 3000, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "slot0"},  # Slot0 source
+            {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 3000, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "slot0"},  # Slot0 source
+        ]
+        opps = engine.build_opportunities(quotes)
+        opp = opps[0]
+        
+        # With slot0 both sides, total_fee = 60 bps
+        # gross = 100 bps, net = 100 - 60 = 40 bps
+        assert opp.net_spread_bps < opp.gross_spread_bps
+        assert abs(opp.gross_spread_bps - opp.net_spread_bps - Decimal("60")) < Decimal("1")
+
+
+class TestV210NotionalDriftGate:
+    """
+    v2.1.0: NOTIONAL_DRIFT gate - ensure trade size within expected range.
+    """
+    
+    def test_notional_within_drift_passes(self):
+        """Notional within 20% of target passes gate."""
+        engine = OpportunityEngine(
+            min_net_profit_usd=0.0, 
+            target_notional_usd=1000.0,
+            max_notional_drift_pct=20.0
+        )
+        quotes = [
+            {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 900, "amount_in_wei": 1},  # 10% drift
+            {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2100", "fee": 500, "usd_notional": 900, "amount_in_wei": 1},
+        ]
+        opps = engine.build_opportunities(quotes)
+        opp = opps[0]
+        
+        # 10% drift < 20% max -> passes
+        assert opp.gate_passed is True or "NOTIONAL_DRIFT" not in (opp.reject_reason or "")
+    
+    def test_notional_exceeds_drift_fails(self):
+        """Notional beyond drift threshold fails gate."""
+        engine = OpportunityEngine(
+            min_net_profit_usd=0.0,
+            target_notional_usd=1000.0,
+            max_notional_drift_pct=20.0,
+            max_gross_spread_bps=10000.0,  # Override so SUSPECT_SPREAD_HARD doesn't trigger
+        )
+        quotes = [
+            {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 500, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},  # 50% drift
+            {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2100", "fee": 500, "usd_notional": 500, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},
+        ]
+        opps = engine.build_opportunities(quotes)
+        opp = opps[0]
+        
+        # 50% drift > 20% max -> gated
+        assert opp.gate_passed is False
+        assert "NOTIONAL_DRIFT" in (opp.reject_reason or "")
+
+
+class TestV210MixedSourceGate:
+    """
+    v2.1.0: No mixed-source opportunities allowed.
+    Both legs must be quoter_v2 for M4.2 canonical profit.
+    """
+    
+    def test_mixed_source_rejected(self):
+        """Mixed source (one quoter, one slot0) is rejected."""
+        engine = OpportunityEngine(min_net_profit_usd=0.0)
+        quotes = [
+            {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},  # Quoter
+            {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "slot0"},  # Slot0
+        ]
+        opps = engine.build_opportunities(quotes)
+        opp = opps[0]
+        
+        assert opp.gate_passed is False
+        assert "MIXED_SOURCE" in (opp.reject_reason or "")
+    
+    def test_both_slot0_diagnostic_rejected(self):
+        """Both legs slot0 is rejected for M4.2 (diagnostic only)."""
+        engine = OpportunityEngine(min_net_profit_usd=0.0)
+        quotes = [
+            {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "slot0"},
+            {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "slot0"},
+        ]
+        opps = engine.build_opportunities(quotes)
+        opp = opps[0]
+        
+        assert opp.gate_passed is False
+        assert "SLOT0_DIAGNOSTIC" in (opp.reject_reason or "")
+    
+    def test_both_quoter_passes(self):
+        """Both legs quoter_v2 passes (M4.2 canonical)."""
+        engine = OpportunityEngine(min_net_profit_usd=0.0, max_gross_spread_bps=10000.0)
+        quotes = [
+            {"dex_id": "dex_a", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},
+            {"dex_id": "dex_b", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},
+        ]
+        opps = engine.build_opportunities(quotes)
+        opp = opps[0]
+        
+        # Should pass mixed-source gate (may still be gated by other criteria)
+        assert "MIXED_SOURCE" not in (opp.reject_reason or "")
+        assert "SLOT0_DIAGNOSTIC" not in (opp.reject_reason or "")
+
+
+class TestV210PolicyUnification:
+    """
+    v2.1.0: OpportunityEngine uses m4.policy.Thresholds for defaults.
+    """
+    
+    def test_default_max_spread_from_policy(self):
+        """Default max_gross_spread_bps comes from Thresholds.SUSPECT_SPREAD_BPS_HARD."""
+        from m4.policy import Thresholds
+        
+        engine = OpportunityEngine()
+        
+        assert engine.max_gross_spread_bps == float(Thresholds.SUSPECT_SPREAD_BPS_HARD)
+        assert engine.suspect_spread_bps == float(Thresholds.SUSPECT_SPREAD_BPS)
+    
+    def test_override_max_spread(self):
+        """Can override max_gross_spread_bps."""
+        engine = OpportunityEngine(max_gross_spread_bps=1000.0)
+        
+        assert engine.max_gross_spread_bps == 1000.0

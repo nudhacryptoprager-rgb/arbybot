@@ -240,6 +240,14 @@ execution_block_reason: EXECUTION_DISABLED_M4
 # M4.2 QUOTE CONFIGURATION (v2.0.9+)
 # =============================================================================
 
+# M4.2 Truth Mode (v2.1.0)
+# When true: CANONICAL profit = round-trip with real leg2 re-quote
+#   - Opportunities require BOTH legs quote_source=quoter_v2
+#   - Round-trip must have leg2_is_real_quote=true for canonical
+#   - Slot0/mixed-source opportunities = DIAGNOSTIC ONLY (excluded from M4 signals)
+# When false: Legacy M4.1 mode, one-leg spread = profit (paper simulation)
+truth_mode_m42: true
+
 # QuoterV2 integration (feature flag)
 # When true: use on-chain quoters for executable amounts (replaces slot0 spot price)
 # When false: use slot0 for spot price estimation only

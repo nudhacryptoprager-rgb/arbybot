@@ -238,7 +238,30 @@ PRICE_SCALE_BOUNDS: Dict[str, Tuple[float, float]] = {
     "wstETH/WETH": (0.5, 2.0),        # ~1.15 WETH per wstETH
     "WBTC/USDC": (10000.0, 200000.0), # ~$90000 per BTC
     "WBTC/WETH": (10.0, 100.0),       # ~30 WETH per BTC
+    # v2.0.9: Added pairs from config/real_expanded.yaml
+    "ARB/USDT": (0.01, 10.0),         # ~$0.70 per ARB (same as ARB/USDC)
+    "LINK/WETH": (0.001, 0.1),        # ~0.007 WETH per LINK
+    "LINK/USDC": (1.0, 100.0),        # ~$15 per LINK
+    "GMX/WETH": (0.001, 0.1),         # ~0.015 WETH per GMX
+    "GMX/USDC": (1.0, 200.0),         # ~$30 per GMX
 }
+
+
+# =============================================================================
+# QUOTER IMPACT THRESHOLDS (v2.0.9 - SUSPECT_LIQUIDITY gate)
+# =============================================================================
+
+# Maximum ticks crossed before marking as SUSPECT_LIQUIDITY
+# High ticks_crossed indicates low liquidity / high price impact
+QUOTER_MAX_TICKS_CROSSED = 15  # Conservative: most good pools have <5
+
+# Maximum gas estimate before marking as SUSPECT_LIQUIDITY
+# Very high gas indicates complex path or low-liquidity pools
+QUOTER_MAX_GAS_ESTIMATE = 500_000  # Normal V3 swap is ~150k-200k
+
+# v2.1.0 DEPRECATED: Use m4.policy.Thresholds.SUSPECT_SPREAD_BPS_HARD (500 bps) instead
+# This constant is kept for backwards compatibility but is NOT used by opportunity_engine
+# PRICE_OUTLIER_MAX_BPS = 10000  # DEPRECATED - see m4.policy.Thresholds
 
 
 # =============================================================================

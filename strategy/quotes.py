@@ -536,6 +536,68 @@ def collect_quotes(
                     gas_estimate = quoter_result.get("gas_estimate")
                     ticks_crossed = quoter_result.get("ticks_crossed")
                     
+                    # v2.0.9: SUSPECT_LIQUIDITY gate - reject high-impact quotes early
+                    from core.constants import QUOTER_MAX_TICKS_CROSSED, QUOTER_MAX_GAS_ESTIMATE
+                    suspect_liquidity_reason = None
+                    if ticks_crossed is not None and ticks_crossed > QUOTER_MAX_TICKS_CROSSED:
+                        suspect_liquidity_reason = f"ticks_crossed={ticks_crossed}>{QUOTER_MAX_TICKS_CROSSED}"
+                    elif gas_estimate is not None and gas_estimate > QUOTER_MAX_GAS_ESTIMATE:
+                        suspect_liquidity_reason = f"gas_estimate={gas_estimate}>{QUOTER_MAX_GAS_ESTIMATE}"
+                    
+                    if suspect_liquidity_reason:
+                        rejected_quotes.append({
+                            "pair": f"{token_in}/{token_out}",
+                            "dex_id": dex,
+                            "fee": fee_tier,
+                            "pool_address": pool_addr,
+                            "reason": "SUSPECT_LIQUIDITY",
+                            "gate_passed": False,
+                            "error": suspect_liquidity_reason,
+                            "ticks_crossed": ticks_crossed,
+                            "gas_estimate": gas_estimate,
+                        })
+                        counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                        counts["suspect_liquidity"] = counts.get("suspect_liquidity", 0) + 1
+                        logger.debug("SUSPECT_LIQUIDITY: %s %s/%s fee=%d: %s", 
+                                    dex, token_in, token_out, fee_tier, suspect_liquidity_reason)
+                        continue  # Skip this quote
+                    
+                    # v2.1.0: PRICE_SANITY gate (per-quote)
+                    price_sanity_enabled = config.get("price_sanity_enabled", True)
+                    price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
+                    if price_sanity_enabled and anchor_price:
+                        from decimal import Decimal as _Decimal
+                        from core.validators import check_price_sanity
+                        sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
+                            price=_Decimal(str(price_exact)),
+                            anchor_price=_Decimal(str(anchor_price)),
+                            pair=f"{token_in}/{token_out}",
+                            dex_id=dex,
+                            fee_tier=fee_tier,
+                            max_deviation_bps=price_sanity_max_bps,
+                            anchor_source="tokens_anchor_price",
+                            pool_address=pool_addr,
+                        )
+                        if not sanity_passed:
+                            rejected_quotes.append({
+                                "pair": f"{token_in}/{token_out}",
+                                "dex_id": dex,
+                                "fee": fee_tier,
+                                "pool_address": pool_addr,
+                                "reason": "PRICE_SANITY_FAILED",  # v2.1.0: Match ErrorCode canonical
+                                "gate_passed": False,
+                                "error": sanity_err,
+                                "deviation_bps": sanity_dev_bps,
+                                "anchor_price": str(anchor_price),
+                                "price_exact": str(price_exact),
+                                "diagnostics": sanity_diag,
+                            })
+                            counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                            counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                            logger.debug("PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps", 
+                                        dex, token_in, token_out, fee_tier, sanity_dev_bps)
+                            continue  # Skip this quote
+                    
                     # Build quote directly from quoter data
                     q = QuoteCompat(
                         dex_id=dex,

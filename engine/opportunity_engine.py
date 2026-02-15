@@ -9,7 +9,7 @@ M4.2 CONTRACT:
 - Ranks opportunities by profit
 - Applies quality gates (min profit, max gas, etc.)
 
-This is the canonical transformation layer between quoting and execution.
+v2.1.0: Unified with m4.policy.Thresholds for consistent gate definitions.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
+
+from m4.policy import Thresholds  # v2.1.0: Policy-unified thresholds
 
 logger = logging.getLogger("engine.opportunity_engine")
 
@@ -41,6 +43,47 @@ class GasConfig:
     
     # ETH price for USD conversion
     eth_usd_price: float = 2000.0
+    
+    # v2.1.0: Live gas tracking
+    _live_mode: bool = False
+    _last_updated: Optional[str] = None
+    
+    @classmethod
+    def from_live(cls, w3, eth_price_usd: Optional[float] = None) -> "GasConfig":
+        """
+        Create GasConfig from live RPC data.
+        
+        v2.1.0: Fetches live gas price from the network.
+        
+        Args:
+            w3: Web3 instance connected to the chain
+            eth_price_usd: Optional live ETH price (if None, uses fallback 2000)
+            
+        Returns:
+            GasConfig with live values
+        """
+        import datetime
+        
+        try:
+            # Fetch live L2 gas price
+            gas_price_wei = w3.eth.gas_price
+            gas_price_gwei = gas_price_wei / 1e9
+            
+            # For Arbitrum, also try to estimate L1 calldata cost
+            # This is harder, so we keep L1 estimate static for now
+            l1_gas_price_gwei = 30.0  # TODO: Could query L1 gas oracle
+            
+            config = cls(
+                gas_price_gwei=gas_price_gwei,
+                l1_gas_price_gwei=l1_gas_price_gwei,
+                eth_usd_price=eth_price_usd or 2000.0,
+                _live_mode=True,
+                _last_updated=datetime.datetime.utcnow().isoformat(),
+            )
+            return config
+        except Exception:
+            # Fallback to defaults on RPC failure
+            return cls()
     
     def estimate_gas_cost_wei(self, gas_estimate: Optional[int] = None) -> int:
         """Estimate total gas cost in wei."""
@@ -168,11 +211,20 @@ class OpportunityEngine:
         min_net_profit_usd: float = 0.50,  # Minimum net profit threshold
         max_gas_cost_usd: float = 5.00,     # Maximum acceptable gas
         min_gross_spread_bps: float = 5.0,  # Minimum raw spread
+        max_gross_spread_bps: Optional[float] = None,  # v2.1.0: PRICE_OUTLIER cap (from Thresholds)
+        max_notional_drift_pct: float = 20.0,  # v2.0.9: Max deviation from target notional
+        target_notional_usd: float = 1000.0,   # v2.1.0: Target notional for drift calc
+        suspect_spread_bps: Optional[float] = None,  # v2.1.0: SUSPECT_SPREAD threshold (from Thresholds)
     ):
         self.gas_config = gas_config or GasConfig()
         self.min_net_profit_usd = min_net_profit_usd
         self.max_gas_cost_usd = max_gas_cost_usd
         self.min_gross_spread_bps = min_gross_spread_bps
+        # v2.1.0: Use policy thresholds as defaults
+        self.max_gross_spread_bps = max_gross_spread_bps if max_gross_spread_bps is not None else float(Thresholds.SUSPECT_SPREAD_BPS_HARD)
+        self.suspect_spread_bps = suspect_spread_bps if suspect_spread_bps is not None else float(Thresholds.SUSPECT_SPREAD_BPS)
+        self.max_notional_drift_pct = max_notional_drift_pct
+        self.target_notional_usd = target_notional_usd
     
     def build_opportunities(
         self,
@@ -269,8 +321,11 @@ class OpportunityEngine:
     ) -> Optional[Opportunity]:
         """Build and score a single opportunity from two quotes."""
         try:
-            price_a = Decimal(str(quote_a.get("price", "0")))
-            price_b = Decimal(str(quote_b.get("price", "0")))
+            # v2.0.9: Use price_exact (high precision) if available, fallback to price (rounded)
+            price_a_str = quote_a.get("price_exact") or quote_a.get("price", "0")
+            price_b_str = quote_b.get("price_exact") or quote_b.get("price", "0")
+            price_a = Decimal(str(price_a_str))
+            price_b = Decimal(str(price_b_str))
             
             if price_a <= 0 or price_b <= 0:
                 return None
@@ -293,9 +348,19 @@ class OpportunityEngine:
             # Formula: fee_bps = fee_tier / 100
             buy_fee = buy_quote.get("fee", 3000)
             sell_fee = sell_quote.get("fee", 3000)
-            total_fee_bps = Decimal(buy_fee + sell_fee) / Decimal("100")  # e.g., 500+500 = 10 bps
             
-            # Net spread after fees
+            # v2.1.0 FIX: Fee model depends on quote source
+            # - quoter_v2: amount_out already includes fee, so DON'T subtract fee_bps
+            # - slot0: spot price without fee, so subtract fee_bps
+            buy_source = buy_quote.get("quote_source", "slot0")
+            sell_source = sell_quote.get("quote_source", "slot0")
+            
+            # Only apply fee if source is slot0 (spot price without fee)
+            buy_fee_applicable = buy_fee if buy_source == "slot0" else 0
+            sell_fee_applicable = sell_fee if sell_source == "slot0" else 0
+            total_fee_bps = Decimal(buy_fee_applicable + sell_fee_applicable) / Decimal("100")
+            
+            # Net spread after fees (for slot0 sources only)
             net_spread_bps = gross_spread_bps - total_fee_bps
             
             # Get USD notional
@@ -329,7 +394,24 @@ class OpportunityEngine:
             gate_passed = True
             reject_reason = None
             
-            if net_profit_usd < self.min_net_profit_usd:
+            # v2.1.0: No mixed-source opportunities - both legs must be quoter_v2
+            # slot0 is diagnostic only, cannot be used for gated profit calculation
+            is_mixed_source = (buy_source == "quoter_v2") != (sell_source == "quoter_v2")
+            is_slot0_only = buy_source == "slot0" and sell_source == "slot0"
+            is_quoter_both = buy_source == "quoter_v2" and sell_source == "quoter_v2"
+            
+            if is_mixed_source:
+                gate_passed = False
+                reject_reason = f"MIXED_SOURCE: buy={buy_source}, sell={sell_source} (require both quoter_v2)"
+            elif is_slot0_only:
+                gate_passed = False
+                reject_reason = "SLOT0_DIAGNOSTIC: both legs slot0 (quoter_v2 required for M4.2)"
+            # v2.1.0: SUSPECT_SPREAD_HARD gate (from Thresholds.SUSPECT_SPREAD_BPS_HARD)
+            # Absurd spreads (>500bps for major pairs) indicate bad data/price inversion
+            elif float(gross_spread_bps) > self.max_gross_spread_bps:
+                gate_passed = False
+                reject_reason = f"SUSPECT_SPREAD_HARD: {gross_spread_bps:.1f} > {self.max_gross_spread_bps:.1f} bps"
+            elif net_profit_usd < self.min_net_profit_usd:
                 gate_passed = False
                 reject_reason = f"NET_PROFIT_TOO_LOW: {net_profit_usd:.2f} < {self.min_net_profit_usd:.2f}"
             elif gas_cost_usd > self.max_gas_cost_usd:
@@ -338,6 +420,12 @@ class OpportunityEngine:
             elif float(gross_spread_bps) < self.min_gross_spread_bps:
                 gate_passed = False
                 reject_reason = f"SPREAD_TOO_LOW: {gross_spread_bps:.1f} < {self.min_gross_spread_bps:.1f} bps"
+            else:
+                # v2.1.0: NOTIONAL_DRIFT gate - ensure trade size is within expected range
+                notional_drift_pct = abs(usd_notional - self.target_notional_usd) / self.target_notional_usd * 100
+                if notional_drift_pct > self.max_notional_drift_pct:
+                    gate_passed = False
+                    reject_reason = f"NOTIONAL_DRIFT: {notional_drift_pct:.1f}% > {self.max_notional_drift_pct:.1f}%"
             
             return Opportunity(
                 spread_id=spread_id,
@@ -399,14 +487,18 @@ def evaluate_quotes(
     timestamp: str = "",
     eth_usd_price: float = 2000.0,
     min_net_profit_usd: float = 0.50,
+    gas_config: Optional[GasConfig] = None,
 ) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     Convenience function to evaluate quotes and return opportunities.
     
+    v2.1.0: Accepts optional gas_config for live gas pricing.
+    
     Returns:
         (opportunities_as_dicts, summary_stats)
     """
-    gas_config = GasConfig(eth_usd_price=eth_usd_price)
+    if gas_config is None:
+        gas_config = GasConfig(eth_usd_price=eth_usd_price)
     engine = OpportunityEngine(
         gas_config=gas_config,
         min_net_profit_usd=min_net_profit_usd,
@@ -418,16 +510,40 @@ def evaluate_quotes(
     profitable = engine.filter_profitable(opportunities)
     gated = engine.filter_gated(opportunities)
     
+    # v2.0.9: Use only gated opportunities for stats (excludes PRICE_OUTLIER etc.)
+    max_gated_spread = max((float(o.gross_spread_bps) for o in gated), default=0.0)
+    
+    # v2.0.9: Quality warnings
+    quality_warnings = []
+    if max_gated_spread > 1000:  # >10% spread is suspicious even if gated
+        quality_warnings.append(f"HIGH_GATED_SPREAD: max {max_gated_spread:.0f} bps")
+    
     summary = {
         "total_opportunities": len(opportunities),
         "profitable_count": len(profitable),
         "gated_count": len(gated),
-        "best_net_profit_usd": max((o.net_profit_usd for o in opportunities), default=0.0),
+        "best_net_profit_usd": max((o.net_profit_usd for o in gated), default=0.0),
         "total_potential_usd": sum(o.net_profit_usd for o in gated),
         "avg_gas_cost_usd": (
-            sum(o.gas_cost_usd for o in opportunities) / len(opportunities)
-            if opportunities else 0.0
+            sum(o.gas_cost_usd for o in gated) / len(gated)
+            if gated else 0.0
         ),
+        "rejected_count": len(opportunities) - len(gated),
+        "rejected_reasons": _count_reject_reasons(opportunities),
+        "max_gated_spread_bps": max_gated_spread,  # v2.0.9: for quality monitoring
+        "quality_warnings": quality_warnings,  # v2.0.9
     }
     
-    return [o.to_dict() for o in opportunities], summary
+    # Return only gated opportunities (excludes PRICE_OUTLIER, etc.)
+    return [o.to_dict() for o in gated], summary
+
+
+def _count_reject_reasons(opportunities: List[Opportunity]) -> Dict[str, int]:
+    """Count rejection reasons from non-gated opportunities."""
+    reasons: Dict[str, int] = {}
+    for o in opportunities:
+        if not o.gate_passed and o.reject_reason:
+            # Extract reason type (e.g., "PRICE_OUTLIER" from "PRICE_OUTLIER: 12345.6 > 10000.0 bps")
+            reason_type = o.reject_reason.split(":")[0] if ":" in o.reject_reason else o.reject_reason
+            reasons[reason_type] = reasons.get(reason_type, 0) + 1
+    return reasons

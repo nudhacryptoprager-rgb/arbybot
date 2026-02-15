@@ -155,6 +155,18 @@ class TestPriceScale_Bounds(unittest.TestCase):
         self.assertIn("ARB/USDC", PRICE_SCALE_BOUNDS)
         self.assertIn("WETH/USDC", PRICE_SCALE_BOUNDS)
         self.assertIn("wstETH/WETH", PRICE_SCALE_BOUNDS)
+    
+    def test_bounds_exist_for_real_expanded_pairs(self):
+        """v2.0.9: All pairs from config/real_expanded.yaml must have bounds."""
+        # Pairs from config/real_expanded.yaml
+        required_pairs = [
+            "WETH/USDC", "WETH/USDT", "wstETH/WETH",
+            "ARB/WETH", "LINK/WETH", "GMX/WETH",
+            "ARB/USDC", "LINK/USDC", "ARB/USDT", "GMX/USDC",
+        ]
+        for pair in required_pairs:
+            with self.subTest(pair=pair):
+                self.assertIn(pair, PRICE_SCALE_BOUNDS, f"Missing bounds for {pair}")
 
 
 if __name__ == "__main__":

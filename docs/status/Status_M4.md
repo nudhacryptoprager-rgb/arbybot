@@ -1,11 +1,11 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY)  
-**Updated**: 2026-02-14  
-**Gate Version**: v2.0.8  
+**Updated**: 2026-02-15  
+**Gate Version**: v2.1.0  
 **Policy Version**: v2.0.8  
-**Engine Version**: v2.0.9 (quoter_v2 canonical, opportunity_engine, Algebra exclusion)  
-**Evidence**: Timestamp-based provenance (v2.0.8: fee_tier strict lookup, quotes_total=attempted, unique_routes_cross_dex)  
+**Engine Version**: v2.1.0 (quoter_v2 canonical, MIXED_SOURCE gate, live gas, roundtrip leg2 callback)  
+**Evidence**: Timestamp-based provenance (v2.1.0: roundtrip leg2 re-quote ready, live gas in opportunity_engine)  
 
 ## Status Separation (v2.0.7)
 
@@ -15,7 +15,7 @@
 | **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [WARN] WARN_QUALITY |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). data_run_rate=0.5588, runs_in_window=68, total_net_usdc=$1166.16.  
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). data_run_rate=0.5634, runs_in_window=71, total_net_usdc=$1292.77.  
 
 ## [WARN] PROFIT REALISM WARNING (v2.0.8)
 
@@ -34,6 +34,38 @@
 - Profit Reality Audit: compare paper model vs quoter-based amountOut
 
 Until these gaps are closed, M4 profit = "paper profit under declared cost model", NOT "realistic profit".
+
+## M4.2 Profit Truth Definition (v2.1.0)
+
+> **CANONICAL PROFIT = Round-trip quoter model + live gas**
+> One-leg opportunity_engine = DIAGNOSTIC ONLY until two-leg implemented
+
+| Model | Description | Status |
+|-------|-------------|--------|
+| **One-leg spread** | `price_a / price_b` across DEX | DIAGNOSTIC ONLY |
+| **Round-trip quoter** | `token_in -> token_out -> token_in` via QuoterV2 | [OK] Callback ready, leg2 re-quote wired |
+| **Live gas** | `eth_getGasPrice` + WETH/USDC live price | [OK] In opportunity_engine + roundtrip |
+| **Live slippage** | `(small_quote - target_quote) / target_quote` | [TODO] probe_slippage() ready, artifact integration pending |
+
+**Reality Gates in Effect (v2.1.0):**
+| Gate | Source | Threshold | Status |
+|------|--------|-----------|--------|
+| `PRICE_SANITY_FAILED` | `strategy/quotes.py` via `core.validators.check_price_sanity` | `price_sanity_max_deviation_bps` | [OK] CONNECTED (quoter-path) |
+| `SUSPECT_LIQUIDITY` | `strategy/quotes.py` | `ticks>15` or `gas>500k` | [OK] ACTIVE |
+| `SUSPECT_SPREAD_HARD` | `engine/opportunity_engine.py` | `spread > SUSPECT_SPREAD_BPS_HARD` (500bps) | [OK] ACTIVE |
+| `NOTIONAL_DRIFT` | `engine/opportunity_engine.py` | `|notional - target| / target > max_drift%` | [OK] ACTIVE |
+| `MIXED_SOURCE` | `engine/opportunity_engine.py` | one leg quoter_v2, one leg slot0 | [OK] v2.1.0 ACTIVE |
+| `SLOT0_DIAGNOSTIC` | `engine/opportunity_engine.py` | both legs slot0 | [OK] v2.1.0 ACTIVE |
+
+**M4.2 Quote Source Policy:**
+| Source | When Used | M4.2 Status |
+|--------|-----------|-------------|
+| `quoter_v2` | QuoterV2 call success | [OK] CANONICAL for profit |
+| `slot0` | QuoterV2 fails/unavailable | DIAGNOSTIC ONLY (excluded from gated top-N) |
+| `mixed` | One leg quoter, one leg slot0 | REJECTED (no mixed-source opportunities) |
+
+> **M4.2 NOTE**: slot0 fallback quotes are collected for diagnostics but NOT used in opportunity gating.
+> Opportunities require BOTH legs to have `quote_source=quoter_v2`.
 
 ## Core Truth (from Roadmap.md)
 
@@ -59,19 +91,19 @@ Until these gaps are closed, M4 profit = "paper profit under declared cost model
 > Quick ref: N>=5 runs in `m4_stability_agg.json.runs[]` with:
 > `run_mode=REGISTRY_REAL`, `pinned_block!=429900000`, `block_is_synthetic=false`, `total_net_usdc>0`
 
-**Evidence for M4 online-profit (v2.0.8 rolling snapshot, 2026-02-14):**
+**Evidence for M4 online-profit (v2.1.0 rolling snapshot, 2026-02-15):**
 
 > **CORE TRUTH: PROVEN** (+PnL confirmed in N>=5 runs)
 > **ROLLING QUALITY: WARN_QUALITY** (data_run_rate >= 0.30, quality issues remain)
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| runs_in_window | 68 | `_latest.json` |
-| data_runs_count | 38 | `runs_since_timestamp.data_runs_count` |
-| pass_count | 38 | `runs_since_timestamp.pass_count` |
-| total_net_usdc (window) | $1166.16 | `quick_stats.total_net_usdc` |
-| data_run_rate | 0.5588 | `quick_stats.data_run_rate` |
-| low_sample_rate | 0.4412 | `quick_stats.low_sample_rate` |
+| runs_in_window | 71 | `_latest.json` |
+| data_runs_count | 40 | `runs_since_timestamp.data_runs_count` |
+| pass_count | 40 | `runs_since_timestamp.pass_count` |
+| total_net_usdc (window) | $1292.77 | `quick_stats.total_net_usdc` |
+| data_run_rate | 0.5634 | `quick_stats.data_run_rate` |
+| low_sample_rate | 0.4225 | `quick_stats.low_sample_rate` |
 | unique_pairs | 5 | `quick_stats.unique_pairs` |
 | unique_routes | 4 | `quick_stats.unique_routes` |
 | unique_routes_cross_dex | 2 | `quick_stats.unique_routes_cross_dex` |
