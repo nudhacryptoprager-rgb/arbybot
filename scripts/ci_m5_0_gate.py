@@ -973,6 +973,8 @@ ENV VARIABLES:
     # v2.1.0: Rolling refresh automation
     parser.add_argument("--refresh-rolling", action="store_true",
                         help="Regenerate _rolling artifacts from current run before exit")
+    parser.add_argument("--refresh-rolling-strict", action="store_true",
+                        help="If --refresh-rolling fails, treat as fatal error (exit FAIL)")
     
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     
@@ -1167,6 +1169,7 @@ ENV VARIABLES:
         
         # v2.1.0: Auto-refresh rolling artifacts if enabled
         # Must run M4 gate first to generate run_summary, then emit rolling
+        refresh_rolling_ok = True
         if passed and args.refresh_rolling:
             try:
                 print(f"\n[ONLINE] Running M4 gate to generate run_summary...")
@@ -1179,14 +1182,24 @@ ENV VARIABLES:
                     "--artifact-mode", "rolling",
                     "--run-dir", str(run_dir),
                 ]
-                m4_result = subprocess.run(m4_cmd, capture_output=True, text=True, timeout=120)
+                m4_result = subprocess.run(m4_cmd, capture_output=True, text=True, timeout=180)
                 if m4_result.returncode == 0:
                     print(f"[ONLINE] M4 gate passed, rolling artifacts updated")
                 else:
                     print(f"[ONLINE] M4 gate returned {m4_result.returncode}")
-                    # Non-fatal: still continue
+                    refresh_rolling_ok = False
+                    if args.refresh_rolling_strict:
+                        print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate failed")
+            except subprocess.TimeoutExpired:
+                print(f"[ONLINE] M4 gate timeout (180s)")
+                refresh_rolling_ok = False
+                if args.refresh_rolling_strict:
+                    print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate timeout")
             except Exception as e:
                 print(f"[ONLINE] WARN: M4 gate refresh failed: {e}")
+                refresh_rolling_ok = False
+                if args.refresh_rolling_strict:
+                    print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate exception")
         
         # v2.1.0: Auto-prune if enabled and scan passed
         if passed and args.prune_keep > 0:
@@ -1198,7 +1211,12 @@ ENV VARIABLES:
             except Exception as e:
                 print(f"[ONLINE] WARN: Prune failed: {e}")
         
-        return 0 if passed else 1
+        # v2.1.0: Determine final status considering rolling refresh
+        final_pass = passed
+        if args.refresh_rolling_strict and not refresh_rolling_ok:
+            final_pass = False
+        
+        return 0 if final_pass else 1
     
     # =========================================================================
     # ADVANCED MODE (uses ARBY_RUN_DIR or --run-dir)

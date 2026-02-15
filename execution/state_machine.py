@@ -278,3 +278,105 @@ class TradeStateMachine:
             ],
             "metadata": self.metadata,
         }
+
+
+# =============================================================================
+# v2.1.0-fix Step 9: Execution Dry-Run Stub
+# =============================================================================
+
+
+def simulate_trade_execution(
+    trade_sm: TradeStateMachine,
+    roundtrip_result: Optional[Dict[str, Any]] = None,
+    eth_call_result: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    M4.3 dry-run simulation stub.
+    
+    This function simulates the execution flow WITHOUT submitting any
+    real transactions. Used for M4 validation of the execution path.
+    
+    v2.1.0 CONTRACT:
+    - Always checks ExecutionContext before any action
+    - Default: DRY_RUN mode + kill_switch_active=True
+    - Records simulation results in trade metadata
+    - Never submits real transactions in M4
+    
+    Args:
+        trade_sm: TradeStateMachine for this trade
+        roundtrip_result: RoundTripResult.to_dict() with PnL estimate
+        eth_call_result: Optional eth_call simulation result
+        
+    Returns:
+        Dict with simulation summary:
+        - state: Final trade state
+        - would_execute: True if execution would proceed (but blocked)
+        - blocker: Why execution is blocked (if any)
+        - pnl_estimate: PnL estimate from roundtrip
+    """
+    ctx = get_execution_context()
+    result = {
+        "trade_id": trade_sm.trade_id,
+        "initial_state": trade_sm.state.value,
+        "execution_context": ctx.to_dict(),
+        "roundtrip_result": roundtrip_result,
+        "eth_call_result": eth_call_result,
+    }
+    
+    # Transition to SIMULATING
+    if trade_sm.state == TradeState.PENDING:
+        trade_sm.transition_to(
+            TradeState.SIMULATING,
+            reason="M4.3 dry-run simulation started",
+        )
+    
+    # Check roundtrip profitability
+    is_profitable = False
+    pnl_estimate = None
+    if roundtrip_result:
+        is_profitable = roundtrip_result.get("is_profitable", False)
+        pnl_estimate = {
+            "net_pnl_bps": roundtrip_result.get("net_pnl_bps", 0),
+            "net_pnl_wei": roundtrip_result.get("net_pnl_wei", "0"),
+            "gas_cost_wei": roundtrip_result.get("gas_cost_wei", "0"),
+        }
+    
+    # Check eth_call success (if provided)
+    eth_call_success = True
+    if eth_call_result:
+        eth_call_success = eth_call_result.get("success", False)
+    
+    # Determine simulation result
+    sim_passed = is_profitable and eth_call_success
+    
+    if sim_passed:
+        trade_sm.transition_to(
+            TradeState.SIM_PASSED,
+            reason="Simulation passed: profitable and eth_call OK",
+            metadata={"pnl_estimate": pnl_estimate},
+        )
+    else:
+        reasons = []
+        if not is_profitable:
+            reasons.append("NOT_PROFITABLE")
+        if not eth_call_success:
+            reasons.append("ETH_CALL_FAILED")
+        trade_sm.transition_to(
+            TradeState.SIM_FAILED,
+            reason=f"Simulation failed: {', '.join(reasons)}",
+        )
+    
+    # Check if execution would be allowed
+    would_execute = trade_sm.state == TradeState.SIM_PASSED and ctx.is_execution_allowed()
+    blocker = ctx.get_execution_blocker()
+    
+    result.update({
+        "final_state": trade_sm.state.value,
+        "sim_passed": sim_passed,
+        "would_execute": would_execute,
+        "blocker": blocker,
+        "pnl_estimate": pnl_estimate,
+        "trade_history": trade_sm.to_dict()["history"],
+    })
+    
+    return result

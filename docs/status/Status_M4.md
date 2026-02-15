@@ -3,9 +3,22 @@
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY, roundtrip NOT_PROFITABLE)  
 **Updated**: 2026-02-15  
 **Gate Version**: v2.1.0  
-**Policy Version**: v2.0.8  
-**Engine Version**: v2.1.0  
-**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE  
+**Policy Version**: 2.0.8  
+**Engine Version**: v2.1.0-fix  
+**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ONE_LEG_ONLY_DIAGNOSTIC (truth_mode_m42 pending ONLINE validation)  
+
+## v2.1.0-fix Changes (2026-02-16)
+
+| Change | File | Description |
+|--------|------|-------------|
+| **--refresh-rolling-strict** | `scripts/ci_m5_0_gate.py` | M4 gate failures now fatal in strict mode |
+| **emit_rolling_artifacts docstring** | `m4/rolling_store.py` | Clarified manual tool vs --refresh-rolling |
+| **Deterministic run_summary selection** | `m4/rolling_store.py` | Sort by timestamp suffix, take latest |
+| **L1 cost with calldata** | `strategy/jobs/run_scan_real.py` | Pass representative swap calldata to NodeInterface |
+| **gas_override parameter** | `engine/roundtrip.py` | gas_override + gas_source tracking (NOT WIRED YET) |
+| **WBTC decimals fix** | `strategy/quotes.py` | `Decimal(10)**exp` prevents overflow for 8 vs 18 decimals |
+| **Universe expansion** | `config/real_minimal.yaml` | Re-enabled WBTC pairs, 10 pairs in config (6 in rolling) |
+| **M4.3 dry-run stub** | `execution/state_machine.py` | `simulate_trade_execution()` (unit-tested, NOT WIRED to pipeline) |
 
 ## Status Separation (v2.0.7)
 
@@ -16,9 +29,9 @@
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip показує реальні збитки (profit_realism_status=ROUNDTRIP_NOT_PROFITABLE, best_net_pnl_bps=-65.1). data_run_rate=0.5753, runs_in_window=73, data_runs_count=42, total_net_usdc=$1422.45, unique_pairs=6, unique_routes=4.  
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip ще не валідований (truth_mode_m42=false, profit_realism_status=ONE_LEG_ONLY_DIAGNOSTIC). Snapshot (2026-02-15): runs_in_window=84, data_run_rate=0.631, low_sample_rate=0.3571, total_net_usdc=$1939.12, unique_pairs=6, unique_routes=4, unique_routes_cross_dex=2.  
 
-## Roadmap Progress Mapping (v2.1.0)
+## Roadmap Progress Mapping (v2.1.0-fix)
 
 > **Clarification**: M4 in Roadmap.md = "Execution v1 (DEX↔DEX atomic)". This section maps actual progress to Roadmap.
 
@@ -26,10 +39,16 @@
 |-------------------|-------------|--------|
 | **Milestone 3** | Truth Engine / Opportunity Detection | [OK] MOSTLY CLOSED |
 | **M4: Pre-trade simulation gate** | Paper-profit simulation with realistic costs | [OK] CLOSED (profit_realism via roundtrip) |
-| **M4: Execution state machine** | `execution/state_machine.py` with TX lifecycle | [NO] NOT STARTED |
+| **M4: Execution state machine** | `execution/state_machine.py` with TX lifecycle | [IN PROGRESS] stub exists, not wired to pipeline |
 | **M4: Private send / bundle** | Flashbots/Bloxroute bundle submission | [NO] NOT STARTED |
 | **M4: Post-trade realized accounting** | Compare simulated vs actual on-chain PnL | [NO] NOT STARTED |
 | **M4: On-chain atomic swap** | Real DEX↔DEX TX with profit | [NO] NOT STARTED |
+
+> **v2.1.0-fix Note**: Execution state machine now has `simulate_trade_execution()` stub that:
+> - Runs simulation flow (PENDING → SIMULATING → SIM_PASSED/SIM_FAILED)
+> - Checks ExecutionContext with kill_switch_active=True by default
+> - Records would_execute + blocker for diagnostics
+> This is NOT real execution - just validates the ex path with safety controls.
 
 > **Note**: ROUNDTRIP_NOT_PROFITABLE is expected behavior — it means pre-trade simulation correctly identifies no arb opportunity in current market conditions. This is NOT a blocker for "pre-trade simulation gate" (working as designed), but IS a blocker for "execution readiness" (we won't execute losing trades).
 
@@ -149,20 +168,22 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 > Source: `data/runs/_rolling/_latest.json`, `data/runs/_rolling/m4_stability_agg.json`
 > Policy Version: 2.0.8 | Status Domain: status=NO_DATA|PASS|FAIL; quality_status=NO_DATA|PASS|WARN|FAIL_QUALITY
 
-## Version Discipline (v2.0.9)
+## Version Discipline (v2.1.0-fix)
 
 | Track | Version | Scope | Notes |
 |-------|---------|-------|-------|
-| **Policy Version** | 2.0.8 | Thresholds, gates, DoD rules | Changes require status artifact migration |
-| **Gate Version** | 2.0.8 | ci_m4_execution_gate.py | Validation logic |
-| **Engine Version** | 2.0.9 | quotes.py, run_scan_real.py | Scanner/engine features |
+| **Policy Version** | 2.1.0 | Thresholds, gates, DoD rules | v2.1.0-fix: WBTC pairs re-enabled (10 pairs total) |
+| **Gate Version** | 2.1.0 | ci_m4_execution_gate.py, ci_m5_0_gate.py | v2.1.0-fix: --refresh-rolling-strict |
+| **Engine Version** | 2.1.0-fix | quotes.py, run_scan_real.py, roundtrip.py | Decimal fix, gas_override, L1 calldata |
 | **Schema Version** | 3.2.0 | Artifact JSON structure | Backward compatible |
 
-> **v2.0.9 Engine Changes** (policy unchanged):
-> - QuoterV2 canonical source (slot0 fallback only)
-> - ALGEBRA_NEEDS_QUOTER rejection for Camelot (different quoter ABI)
-> - opportunity_engine integration
-> - timestamp fix for artifact provenance
+> **v2.1.0-fix Engine Changes**:
+> - `calculate_price_from_sqrt()`: `Decimal(10)**exp` prevents overflow for WBTC (8 decimals)
+> - `simulate_roundtrip()`: `gas_override` parameter, `gas_source` field in result
+> - `get_l1_cost_with_source()`: Pass representative swap calldata for accurate L1 estimate
+> - `simulate_trade_execution()`: M4.3 dry-run stub with kill_switch=True default
+> - `emit_rolling_artifacts()`: Deterministic run_summary selection (sort by timestamp)
+> - Config: WBTC/WETH and WBTC/USDC re-enabled, 10 pairs total
 
 ## Docs Truth Map
 

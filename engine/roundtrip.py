@@ -75,6 +75,8 @@ class RoundTripResult:
     slippage_source: str = "ticks_heuristic"  # "ticks_heuristic" | "sqrtPriceAfter" | "probe"
     # v2.1.0: L1 cost source for traceability
     l1_cost_source: str = "default"  # "config" | "onchain" | "default"
+    # v2.1.0-fix: L2 gas source for traceability
+    gas_source: str = "quoter"  # "quoter" | "eth_estimateGas" | "default"
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for JSON output."""
@@ -106,6 +108,7 @@ class RoundTripResult:
             "estimated_slippage_bps": round(self.estimated_slippage_bps, 2),
             "slippage_source": self.slippage_source,
             "l1_cost_source": self.l1_cost_source,
+            "gas_source": self.gas_source,
         }
 
 
@@ -117,6 +120,7 @@ def simulate_roundtrip(
     leg2_quote_callback: Optional[callable] = None,  # v2.1.0: Optional re-quote function
     l1_cost_wei: int = 60_000_000_000_000,  # v2.1.0: L1 overhead (~$0.12 at 2000 gas * 30 gwei)
     l1_cost_source: str = "default",  # v2.1.0: "config" | "onchain" | "default"
+    gas_override: Optional[Tuple[int, int]] = None,  # v2.1.0-fix: (leg1_gas, leg2_gas) from eth_estimateGas
 ) -> RoundTripResult:
     """
     Simulate round-trip arbitrage.
@@ -125,6 +129,11 @@ def simulate_roundtrip(
     - If `leg2_quote_callback` is provided, leg2 uses ACTUAL re-quote for leg1_amount_out
     - If not provided, uses ratio estimate from sell_quote (DIAGNOSTIC ONLY, upper-bound)
     - Gas cost includes L1 overhead (unified with opportunity_engine.GasConfig)
+    
+    v2.1.0-fix: gas_override integration
+    - If `gas_override` is provided, use those values instead of quoter gas estimates
+    - gas_override = (leg1_gas, leg2_gas) from eth_estimateGas
+    - Sets gas_source = "eth_estimateGas" for traceability
     
     The callback signature: leg2_quote_callback(amount_in_wei: int) -> Optional[Dict]
     where the returned dict has: amount_out_wei, gas_estimate, ticks_crossed
@@ -136,14 +145,16 @@ def simulate_roundtrip(
         max_ticks_crossed: Maximum allowed ticks crossed (both legs combined)
         leg2_quote_callback: Optional callback to re-quote leg2 with actual leg1_amount_out
         l1_cost_wei: L1 data posting overhead in wei (Arbitrum/Optimism specific)  
-        gas_price_wei: Current gas price in wei
-        max_ticks_crossed: Max total ticks before rejecting
-        leg2_quote_callback: Optional callback to re-quote leg2 with actual amount
+        l1_cost_source: Source of L1 cost estimate
+        gas_override: Optional (leg1_gas, leg2_gas) tuple from eth_estimateGas
         
     Returns:
         RoundTripResult with full breakdown
     """
     pair = f"{buy_quote.get('token_in', '')}/{buy_quote.get('token_out', '')}"
+    
+    # v2.1.0-fix: Track gas source
+    gas_source = "quoter"
     
     result = RoundTripResult(
         pair=pair,
@@ -158,8 +169,18 @@ def simulate_roundtrip(
     
     # Leg 1: Extract from buy quote
     leg1_amount_out = buy_quote.get("amount_out_wei", 0)
-    leg1_gas = buy_quote.get("gas_estimate") or 150_000
     leg1_ticks = buy_quote.get("ticks_crossed") or 0
+    
+    # v2.1.0-fix: Use gas_override if provided (from eth_estimateGas)
+    if gas_override is not None:
+        leg1_gas = gas_override[0]
+        gas_source = "eth_estimateGas"
+    else:
+        leg1_gas = buy_quote.get("gas_estimate") or 150_000
+        if buy_quote.get("gas_estimate"):
+            gas_source = "quoter"
+        else:
+            gas_source = "default"
     
     if not leg1_amount_out or leg1_amount_out <= 0:
         result.reject_reason = "LEG1_NO_AMOUNT_OUT"
@@ -171,7 +192,11 @@ def simulate_roundtrip(
     result.leg1_success = True
     
     # Leg 2: Re-quote if callback provided, otherwise ratio estimate
-    leg2_gas = sell_quote.get("gas_estimate") or 150_000
+    # v2.1.0-fix: Use gas_override[1] if provided
+    if gas_override is not None:
+        leg2_gas = gas_override[1]
+    else:
+        leg2_gas = sell_quote.get("gas_estimate") or 150_000
     leg2_ticks = sell_quote.get("ticks_crossed") or 0
     leg2_amount_out = 0
     leg2_is_real_quote = False
@@ -265,6 +290,9 @@ def simulate_roundtrip(
         result.slippage_source = "ticks_heuristic"
     
     result.is_profitable = result.net_pnl_wei > 0
+    
+    # v2.1.0-fix: Set gas source for traceability
+    result.gas_source = gas_source
     
     if not result.is_profitable:
         result.reject_reason = f"NOT_PROFITABLE: net_pnl_bps={result.net_pnl_bps:.2f}"

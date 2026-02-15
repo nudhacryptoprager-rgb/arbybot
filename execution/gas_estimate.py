@@ -83,8 +83,10 @@ def estimate_roundtrip_gas(
         sender_address: Executor address
         
     Returns:
-        Tuple of (total_gas, estimated_gas_cost_wei, source)
-        source: "eth_estimateGas" | "quoter" | "default"
+        Tuple of (leg1_gas, leg2_gas, source)
+        source: "eth_estimateGas" | "default"
+        
+    Note: Does NOT include multicall overhead - caller should add if needed.
     """
     leg1_gas = estimate_swap_gas(w3, leg1_calldata, leg1_router, sender_address)
     leg2_gas = estimate_swap_gas(w3, leg2_calldata, leg2_router, sender_address)
@@ -99,9 +101,7 @@ def estimate_roundtrip_gas(
         leg2_gas = DEFAULT_V3_SWAP_GAS
         source = "default"
     
-    total_gas = leg1_gas + leg2_gas + DEFAULT_MULTICALL_OVERHEAD
-    
-    return total_gas, source
+    return leg1_gas, leg2_gas, source
 
 
 def get_router_address(dex_id: str, chain_id: int = 42161) -> Optional[str]:
@@ -136,42 +136,76 @@ def build_exact_input_single_calldata(
     amount_in: int,
     amount_out_min: int = 0,
     sqrt_price_limit: int = 0,
+    deadline: Optional[int] = None,
 ) -> bytes:
     """
-    Build V3 exactInputSingle calldata.
+    Build V3 SwapRouter exactInputSingle calldata.
     
-    This is a simplified version - real implementation would use
-    web3 contract.encodeABI().
+    Uses manual ABI encoding (no eth_abi dependency).
     
     Args:
         token_in: Input token address
         token_out: Output token address
-        fee: Pool fee tier
+        fee: Pool fee tier (500, 3000, 10000)
         recipient: Token recipient address
         amount_in: Input amount in wei
         amount_out_min: Minimum output (0 for simulation)
         sqrt_price_limit: Price limit (0 for no limit)
+        deadline: Transaction deadline (default: far future)
         
     Returns:
         Encoded calldata bytes
     """
+    import time
+    
     # exactInputSingle selector: 0x414bf389
     selector = bytes.fromhex("414bf389")
     
-    # For V3 SwapRouter.exactInputSingle:
+    # Default deadline: 1 hour from now
+    if deadline is None:
+        deadline = int(time.time()) + 3600
+    
+    # Manual ABI encoding for ExactInputSingleParams struct
     # struct ExactInputSingleParams {
-    #     address tokenIn;
-    #     address tokenOut;
-    #     uint24 fee;
-    #     address recipient;
-    #     uint256 deadline;
-    #     uint256 amountIn;
-    #     uint256 amountOutMinimum;
-    #     uint160 sqrtPriceLimitX96;
+    #     address tokenIn;      // 20 bytes, padded to 32
+    #     address tokenOut;     // 20 bytes, padded to 32
+    #     uint24 fee;           // 3 bytes, padded to 32
+    #     address recipient;    // 20 bytes, padded to 32
+    #     uint256 deadline;     // 32 bytes
+    #     uint256 amountIn;     // 32 bytes
+    #     uint256 amountOutMinimum; // 32 bytes
+    #     uint160 sqrtPriceLimitX96; // 20 bytes, padded to 32
     # }
-    # 
-    # This is simplified - real encoding would use eth_abi
-    return selector + b"\x00" * 256  # Placeholder
+    
+    def encode_address(addr: str) -> bytes:
+        """Encode address as 32-byte word."""
+        clean = addr.lower().replace("0x", "")
+        return bytes.fromhex(clean.zfill(64))
+    
+    def encode_uint256(val: int) -> bytes:
+        """Encode uint256 as 32-byte word."""
+        return val.to_bytes(32, "big")
+    
+    def encode_uint24(val: int) -> bytes:
+        """Encode uint24 as 32-byte word (right-padded with zeros)."""
+        return val.to_bytes(32, "big")
+    
+    def encode_uint160(val: int) -> bytes:
+        """Encode uint160 as 32-byte word."""
+        return val.to_bytes(32, "big")
+    
+    params = (
+        encode_address(token_in) +
+        encode_address(token_out) +
+        encode_uint24(fee) +
+        encode_address(recipient) +
+        encode_uint256(deadline) +
+        encode_uint256(amount_in) +
+        encode_uint256(amount_out_min) +
+        encode_uint160(sqrt_price_limit)
+    )
+    
+    return selector + params
 
 
 def validate_gas_headroom(

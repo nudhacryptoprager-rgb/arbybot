@@ -620,11 +620,20 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
     """
     v2.1.0: Emit rolling artifacts from a completed runDir.
     
-    This is the canonical function for refreshing rolling artifacts from an existing
-    runDir without re-running the full M4 gate. Called by ci_m5_0_gate.py --refresh-rolling.
+    This is a MANUAL tool for refreshing rolling artifacts from an existing
+    runDir without re-running the full M4 gate.
+    
+    NOTE: ci_m5_0_gate.py --refresh-rolling does NOT call this function directly.
+    Instead, it triggers M4 gate via subprocess which generates run_summary,
+    and rolling artifacts are updated by M4 gate's --artifact-mode rolling.
+    
+    Use cases for this function:
+    - Manual refresh after debugging
+    - Re-emit from specific runDir without full gate run
+    - Testing/scripting
     
     Steps:
-    1. Find run_summary_*.json in runDir
+    1. Find latest run_summary_*.json in runDir (deterministic: by timestamp suffix)
     2. Call emit_to_aggregator_light() to update m4_stability_agg.json
     3. Write run_summary_latest.json
     4. Write _latest.json
@@ -646,26 +655,30 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
         raise FileNotFoundError(f"RunDir not found: {run_dir}")
     
     # Find run_summary file (try reports/ first, then root)
-    run_summary_path = None
+    # v2.1.0 FIX: Use deterministic selection - sort by timestamp suffix and take latest
+    run_summary_candidates = []
     reports_dir = run_dir / "reports"
-    
-    # Search patterns
-    patterns = [
-        reports_dir / "run_summary_*.json" if reports_dir.exists() else None,
-        run_dir / "run_summary_*.json",
-    ]
     
     for pattern_dir in [reports_dir, run_dir]:
         if not pattern_dir.exists():
             continue
-        for f in pattern_dir.glob("run_summary_*.json"):
-            run_summary_path = f
-            break
-        if run_summary_path:
-            break
+        run_summary_candidates.extend(pattern_dir.glob("run_summary_*.json"))
     
-    if not run_summary_path or not run_summary_path.exists():
+    if not run_summary_candidates:
         raise FileNotFoundError(f"No run_summary_*.json found in {run_dir} or {reports_dir}")
+    
+    # v2.1.0 FIX: Deterministic selection - sort by filename (timestamp suffix) descending
+    # run_summary_20260215_191510.json -> sort key: 20260215_191510
+    def extract_timestamp(p: Path) -> str:
+        """Extract timestamp from run_summary_YYYYMMDD_HHMMSS.json"""
+        name = p.stem  # run_summary_20260215_191510
+        parts = name.split("_")
+        if len(parts) >= 3:
+            return "_".join(parts[2:])  # 20260215_191510
+        return name
+    
+    run_summary_candidates.sort(key=extract_timestamp, reverse=True)  # Latest first
+    run_summary_path = run_summary_candidates[0]
     
     # Load run_summary
     with open(run_summary_path) as f:

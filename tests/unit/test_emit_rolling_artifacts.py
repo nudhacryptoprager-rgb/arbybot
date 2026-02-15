@@ -147,3 +147,70 @@ class TestEmitRollingArtifactsFunctional(TestCase):
                 emit_rolling_artifacts(run_dir)
             
             self.assertIn("metrics", str(ctx.exception))
+    
+    def test_deterministic_run_summary_selection(self):
+        """v2.1.0: When multiple run_summary files exist, select latest by timestamp."""
+        from m4.rolling_store import emit_rolling_artifacts
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_dir = Path(tmpdir) / "data" / "runs"
+            runs_dir.mkdir(parents=True)
+            
+            run_dir = runs_dir / "ci_m5_gate_multi_summary"
+            run_dir.mkdir()
+            reports_dir = run_dir / "reports"
+            reports_dir.mkdir()
+            
+            # Base template for run_summary
+            def make_summary(run_id: str, net_usdc: float):
+                return {
+                    "schema_version": "m4:run_summary:v2.0",
+                    "run_id": run_id,
+                    "status": "PASS",
+                    "run_context": {
+                        "run_timestamp": "2026-02-15T12:00:00Z",
+                        "code_identity": "ts:2026-02-15T12:00:00Z",
+                    },
+                    "metrics": {
+                        "signals_count": 5,
+                        "included_signals_count": 5,
+                        "total_net_usdc": net_usdc,  # Unique marker
+                        "mae_net_usdc": 0.5,
+                        "est_sign_correct_rate": 1.0,
+                    },
+                    "inputs": {
+                        "run_mode": "REGISTRY_REAL",
+                        "run_dir_name": run_id,
+                    },
+                    "thresholds": {
+                        "threshold_profile_name": "profit",
+                    },
+                }
+            
+            # Create OLDER run_summary (earlier timestamp)
+            old_summary = make_summary("ci_m5_gate_multi_summary", net_usdc=10.0)
+            old_path = reports_dir / "run_summary_20260215_100000.json"
+            with open(old_path, "w") as f:
+                json.dump(old_summary, f)
+            
+            # Create NEWER run_summary (later timestamp)
+            new_summary = make_summary("ci_m5_gate_multi_summary", net_usdc=99.99)
+            new_path = reports_dir / "run_summary_20260215_120000.json"
+            with open(new_path, "w") as f:
+                json.dump(new_summary, f)
+            
+            # Call emit_rolling_artifacts
+            result = emit_rolling_artifacts(run_dir)
+            
+            # Verify it picked the NEWER one (net_usdc=99.99)
+            rolling_dir = runs_dir / "_rolling"
+            run_summary_latest_path = rolling_dir / "run_summary_latest.json"
+            
+            with open(run_summary_latest_path) as f:
+                latest_summary = json.load(f)
+            
+            # The selected run_summary should have the newer net_usdc
+            self.assertEqual(
+                latest_summary["metrics"]["total_net_usdc"], 99.99,
+                "Should select run_summary with latest timestamp (120000 > 100000)"
+            )

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -339,6 +339,11 @@ def calculate_price_from_sqrt(
     """
     Calculate price from sqrtPriceX96.
     
+    v2.1.0-fix: Use Decimal exponentiation to avoid overflow with high-decimal 
+    difference pairs (e.g., WBTC(8) / WETH(18) = -10 decimals diff).
+    Previously used `10 ** (decimals_in - decimals_out)` which could overflow
+    to float for large negative exponents.
+    
     Args:
         sqrt_price_val: sqrtPriceX96 value
         token_in_addr: Address of token_in
@@ -356,17 +361,19 @@ def calculate_price_from_sqrt(
         sqrt_ratio = Decimal(sqrt_price_val) / Decimal(2 ** 96)
         raw_price = sqrt_ratio * sqrt_ratio
         
+        # v2.1.0-fix: Use Decimal(10) ** exp to avoid float overflow for large
+        # negative exponents (e.g., WBTC/WETH has decimals_in=8, decimals_out=18)
+        decimals_exp = decimals_in - decimals_out
+        decimals_diff = Decimal(10) ** decimals_exp
+        
         if token_in_addr and token_out_addr:
             token_in_is_token0 = token_in_addr.lower() < token_out_addr.lower()
             
             if token_in_is_token0:
-                decimals_diff = Decimal(10 ** (decimals_in - decimals_out))
                 return raw_price * decimals_diff
             else:
-                decimals_diff = Decimal(10 ** (decimals_in - decimals_out))
                 return (Decimal(1) / raw_price) * decimals_diff
         else:
-            decimals_diff = Decimal(10 ** (decimals_in - decimals_out))
             return raw_price * decimals_diff
     except Exception as e:
         logger.warning("Price calculation failed: %s", e)
@@ -727,7 +734,14 @@ def collect_quotes(
                         counts["price_calc_failed"] += 1
                         continue
                     
-                    price_str = str(round(price_exact, 6))
+                    # v2.1.0-fix: Use localcontext to avoid InvalidOperation trap on round()
+                    # Some Decimal values (extreme precision) can trigger trap
+                    try:
+                        with localcontext() as ctx:
+                            ctx.traps[InvalidOperation] = False
+                            price_str = str(round(price_exact, 6))
+                    except Exception:
+                        price_str = str(price_exact)[:20]  # Fallback to truncation
                     # M4.2 FIX: amount_out must scale with amount_in_wei (USD-notional)
                     # For slot0: price_exact = amount_out per 1 token_in
                     # amount_out = price_exact * (amount_in_wei / 10^decimals_in)
@@ -736,7 +750,10 @@ def collect_quotes(
                     amount_in_tokens = Decimal(amount_in_wei) / Decimal(10 ** decimals_in)
                     amount_out_human_dec = price_exact_dec * amount_in_tokens
                     amount_out_wei_val = int(price_exact_dec * Decimal(amount_in_wei) * Decimal(10 ** decimals_out) / Decimal(10 ** decimals_in))
-                    amount_out_human_str = str(round(float(amount_out_human_dec), 6))
+                    try:
+                        amount_out_human_str = str(round(float(amount_out_human_dec), 6))
+                    except (OverflowError, ValueError):
+                        amount_out_human_str = "0.0"
                     
                     # v2.0.8: Enhanced QUOTE_ZERO_OUT gate with diagnostics
                     # Detect: zero output, micro-liquidity, token0/token1 mismatch

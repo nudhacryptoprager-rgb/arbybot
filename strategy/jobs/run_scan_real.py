@@ -421,11 +421,25 @@ def run_scan(
         # Evaluate top-5 one-leg opportunities with round-trip
         roundtrip_results = []
         if opps_list:
-            # v2.1.0: Get L1 cost with source tracking (prefer onchain if w3 available)
+            # v2.1.0: Get L1 cost with source tracking (prefer onchain if w3_instance available)
+            # v2.1.0-fix: Pass representative swap calldata for accurate L1 estimation
             try:
-                from chains.l1_cost import get_l1_cost_with_source
+                from chains.l1_cost import get_l1_cost_with_source, create_sample_swap_calldata
+                
+                # Create representative swap calldata using WETH/USDC (canonical pair)
+                # L1 cost depends primarily on calldata SIZE, not actual tokens
+                weth_addr = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"  # Arbitrum WETH
+                usdc_addr = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"  # Arbitrum native USDC
+                sample_calldata = create_sample_swap_calldata(
+                    token_in=weth_addr,
+                    token_out=usdc_addr,
+                    amount_in=int(1e18),  # 1 WETH
+                    fee=3000,
+                )
+                
                 l1_cost_wei, l1_cost_source = get_l1_cost_with_source(
-                    w3=w3,
+                    w3=w3_instance,
+                    calldata=sample_calldata,
                     config={
                         "l1_data_gas_units": gas_config.l1_data_gas_units,
                         "l1_gas_price_gwei": gas_config.l1_gas_price_gwei,

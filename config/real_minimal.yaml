@@ -59,12 +59,11 @@ pairs:
   - token_in: WETH
     token_out: USDT
     fee_tiers: [500, 3000]
-  # v2.1.0 NOTE: WBTC pairs cause decimal.InvalidOperation
-  # Issue: 8 vs 18 decimal diff in price calculation
-  # Disabling until fix in v2.1.1
-  # - token_in: WBTC
-  #   token_out: WETH
-  #   fee_tiers: [500, 3000]
+  # v2.1.0-fix: WBTC pairs re-enabled after Decimal(10)**exp fix
+  # Previously caused decimal.InvalidOperation with 8 vs 18 decimals
+  - token_in: WBTC
+    token_out: WETH
+    fee_tiers: [500, 3000]
   - token_in: ARB
     token_out: WETH
     fee_tiers: [500, 3000]
@@ -82,10 +81,10 @@ pairs:
   - token_in: ARB
     token_out: USDC
     fee_tiers: [500, 3000]
-  # v2.1.0 NOTE: WBTC/USDC causes same issue - disabled
-  # - token_in: WBTC
-  #   token_out: USDC
-  #   fee_tiers: [500, 3000]
+  # v2.1.0-fix: WBTC/USDC re-enabled after Decimal(10)**exp fix
+  - token_in: WBTC
+    token_out: USDC
+    fee_tiers: [500, 3000]
   # v2.1.0: LINK/USDC added for stablecoin diversity (Step 10)
   # Note: Only 3000 tier - 500 tier had QUOTE_ZERO_OUT
   - token_in: LINK
