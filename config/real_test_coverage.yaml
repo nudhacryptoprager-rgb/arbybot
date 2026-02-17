@@ -159,17 +159,18 @@ quote_decimals:
 
 # Anchor prices for each pair (used for price sanity checks)
 # Format: TOKEN_IN_TOKEN_OUT: expected_price
-# Prices as of 2026-02-07
+# Prices as of 2026-02-17 (from on-chain evidence ci_m5_gate_20260217_100114)
+# Discipline: anchors from median valid quotes, NOT market intuition
 tokens_anchor_price:
-  WETH_USDC: 2000     # ~$2000 per WETH
-  WETH_USDT: 2000     # ~$2000 per WETH
-  WBTC_WETH: 17       # ~17 WETH per WBTC (~$34k BTC)
-  ARB_WETH: 0.00035   # ~0.00035 WETH per ARB (~$0.70 ARB)
-  LINK_WETH: 0.0055   # ~0.0055 WETH per LINK (~$11 LINK)
-  GMX_WETH: 0.012     # ~0.012 WETH per GMX (~$24 GMX)
-  wstETH_WETH: 1.15   # ~1.15 WETH per wstETH (staking yield)
-  ARB_USDC: 0.70      # ~$0.70 per ARB
-  WBTC_USDC: 34000    # ~$34,000 per WBTC
+  WETH_USDC: 1980     # on-chain median ~1977 (2026-02-17)
+  WETH_USDT: 1980     # on-chain median ~1978 (2026-02-17)
+  WBTC_WETH: 35       # on-chain median ~34.4 (2026-02-17)
+  ARB_WETH: 0.000058  # on-chain observed ~0.0000576 (2026-02-17)
+  LINK_WETH: 0.0045   # on-chain median ~0.0044 (2026-02-17)
+  GMX_WETH: 0.008     # on-chain valid ~0.0084 (sushi); uni pools suspect
+  wstETH_WETH: 1.20   # on-chain median ~1.22 (2026-02-17)
+  ARB_USDC: 0.11      # on-chain observed ~0.114 (2026-02-17)
+  WBTC_USDC: 68000    # on-chain median ~68019 (2026-02-17)
 
 # Quote sizing: 1 ETH
 quote_amount_in_wei: "1000000000000000000"

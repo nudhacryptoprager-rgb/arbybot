@@ -2,7 +2,7 @@
 Unit tests for slot0 PRICE_SANITY gate (v2.1.0-fix).
 
 Issue: slot0 quotes were bypassing PRICE_SANITY check, allowing outlier prices
-like WBTC/WETH sushi fee=500 with tick=887271 and price_exact≈3.4e28.
+like WBTC/WETH sushi fee=500 with tick=887271 and price_exact~3.4e28.
 
 These tests validate that slot0 quotes with extreme prices are now correctly 
 rejected with PRICE_SANITY_FAILED.
@@ -22,7 +22,7 @@ class TestSlot0PriceSanity:
         # WBTC (8 decimals) / WETH (18 decimals)
         # tick=887271 is MAX_TICK, produces extreme sqrtPriceX96
         
-        # sqrtPriceX96 at MAX_TICK ≈ 1.46e57 (much larger than 2^96)
+        # sqrtPriceX96 at MAX_TICK ~ 1.46e57 (much larger than 2^96)
         # For test we use a representative extreme value
         extreme_sqrt_price = int(1.4e57)  # Approximation of MAX_TICK sqrtPriceX96
         
@@ -39,7 +39,7 @@ class TestSlot0PriceSanity:
         )
         
         # Price should be astronomically large (way beyond sanity range)
-        # Expected anchor for WBTC/WETH is ~25 (1 WBTC = 25 WETH approx)
+        # Expected anchor for WBTC/WETH is ~35 (1 WBTC = 35 WETH approx)
         # Any price > 1e10 should fail sanity with 5000bps threshold
         assert price is not None
         assert price > Decimal("1e10"), f"Extreme tick should produce large price, got {price}"
@@ -48,8 +48,8 @@ class TestSlot0PriceSanity:
         """Test that core.validators.check_price_sanity rejects extreme prices."""
         from core.validators import check_price_sanity
         
-        # Anchor price: WBTC/WETH ≈ 25 (realistic)
-        anchor_price = Decimal("25.0")
+        # Anchor price: WBTC/WETH ~ 35 (realistic, updated 2026-02-17)
+        anchor_price = Decimal("35.0")
         
         # Extreme price from slot0 (like the WBTC/WETH sushi outlier)
         extreme_price = Decimal("3.4e28")
@@ -91,6 +91,30 @@ class TestSlot0PriceSanity:
         
         assert passed is True, f"Normal price should pass sanity, error: {err}"
         assert dev_bps < 5000
+
+    def test_wbtc_weth_realistic_price_passes_sanity(self):
+        """Contract: WBTC/WETH price~35 should PASS with anchor=35 (updated config)."""
+        from core.validators import check_price_sanity
+        
+        # Anchor from updated config: WBTC/WETH = 35
+        anchor_price = Decimal("35.0")
+        
+        # Realistic observed price from on-chain (~35 WETH per WBTC)
+        observed_price = Decimal("34.95")  # Similar to real market data
+        
+        passed, dev_bps, err, diag = check_price_sanity(
+            price=observed_price,
+            anchor_price=anchor_price,
+            pair="WBTC/WETH",
+            dex_id="uniswap_v3",
+            fee_tier=500,
+            max_deviation_bps=5000,
+            anchor_source="tokens_anchor_price",
+            pool_address="0x2f5e87C9312fa29aed5c179E456625D79015299c",
+        )
+        
+        assert passed is True, f"Realistic price should pass sanity, error: {err}"
+        assert dev_bps < 100, f"Deviation should be minimal, got {dev_bps}bps"
 
     def test_slot0_micro_price_fails_early_gate(self):
         """Test that micro prices (< 1e-18) are caught by QUOTE_ZERO_OUT gate."""
@@ -146,8 +170,8 @@ class TestRegressionWbtcWethOutlier:
     def test_tick_887271_produces_outlier_price(self):
         """
         Regression: tick=887271 on sushiswap_v3 WBTC/WETH fee=500 produced:
-        - price_exact ≈ 3.4e28
-        - amount_out_human ≈ 1e27
+        - price_exact ~ 3.4e28
+        - amount_out_human ~ 1e27
         - price = 'NaN'
         
         This should now be rejected by PRICE_SANITY_FAILED.
@@ -159,8 +183,8 @@ class TestRegressionWbtcWethOutlier:
         # 1. calculate_price_from_sqrt uses Decimal exponentiation (overflow protection)
         # 2. PRICE_SANITY gate in slot0 path rejects extreme prices
         
-        # Anchor from config: WBTC/WETH ≈ 25 (1 WBTC = 25 WETH)
-        anchor_price = Decimal("25.0")
+        # Anchor from config: WBTC/WETH ~ 35 (1 WBTC = 35 WETH)
+        anchor_price = Decimal("35.0")
         
         # If observed price > 10x anchor or < 0.1x anchor, that's > 9900bps deviation
         # With max_deviation_bps=5000, this should FAIL

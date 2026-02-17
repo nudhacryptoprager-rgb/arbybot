@@ -1,16 +1,21 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY, roundtrip NOT_PROFITABLE)  
-**Updated**: 2026-02-15  
+**Updated**: 2026-02-17  
 **Gate Version**: v2.1.0  
 **Policy Version**: 2.0.8  
 **Engine Version**: v2.1.0-fix  
-**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE (truth_mode_m42=true VALIDATED, runDir ci_m5_gate_20260215_205854)  
+**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE (truth_mode_m42=true VALIDATED for `config/real_expanded.yaml` runDir ci_m5_gate_20260215_205854; `real_minimal.yaml` uses truth_mode_m42=false)  
 
-## v2.1.0-fix Changes (2026-02-15)
+## v2.1.0-fix Changes (2026-02-17)
 
 | Change | File | Description |
 |--------|------|-------------|
+| **WBTC_WETH anchor fix** | `config/real_minimal.yaml` | Updated anchor from 17 to 35 (on-chain median ~34.4) |
+| **WETH_USDC anchor fix** | `config/real_minimal.yaml` | Updated anchor from 2000 to 1980 (on-chain median ~1977) |
+| **slot0 PRICE_SANITY fix** | `strategy/quotes.py` | Fixed anchor key format (underscore + reversed_tag fallback) |
+| **ASCII normalization** | `tests/unit/test_slot0_price_sanity.py` | Replaced unicode chars with ASCII equivalents |
+| **Anchor prices from on-chain evidence** | `config/real_*.yaml` | All anchors updated from median valid quotes (2026-02-17) |
 | **--refresh-rolling-strict** | `scripts/ci_m5_0_gate.py` | M4 gate failures now fatal in strict mode |
 | **emit_rolling_artifacts docstring** | `m4/rolling_store.py` | Clarified manual tool vs --refresh-rolling |
 | **Deterministic run_summary selection** | `m4/rolling_store.py` | Sort by timestamp suffix, take latest |
@@ -29,7 +34,30 @@
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE, evaluated_count=3, best_net_pnl_bps=-58.94). Snapshot (2026-02-15): runs_in_window=87, data_run_rate=0.6437, low_sample_rate=0.3448, total_net_usdc=$2122.58, unique_pairs=6, unique_routes=4, unique_routes_cross_dex=2.  
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_expanded.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
+
+**Snapshot (2026-02-17 post-anchor-fix)**: runs_in_window=12, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$658.81, avg_net_usdc=$54.9, unique_pairs=6, unique_routes_cross_dex=2. Rolling window RESET (--reset-window) to remove stale data from outdated anchors.
+
+**Anchor Discipline (v2.1.0-fix enforced):**
+> Anchors MUST come from on-chain evidence (median valid quotes from runDir artifacts), NOT from market intuition.
+> Bad pools get REMOVED/quarantined, NOT "fixed" by artificially raising anchors.
+> If a pool returns extreme prices (e.g., WBTC/WETH sushi fee=500 returns 3.4 vs anchor 35), it's a bad pool, not a bad anchor.
+> Evidence source: `data/runs/ci_m5_gate_*` scan artifacts → median price from valid quotes per pair.
+
+**Anchor values (from on-chain evidence 2026-02-17):**
+| Pair | Old Anchor | New Anchor | Evidence |
+|------|------------|------------|----------|
+| WETH_USDC | 2800 | 1980 | median valid ~1977 |
+| WETH_USDT | 2800 | 1980 | median valid ~1978 |
+| WBTC_USDC | 98000 | 68000 | median valid ~68019 |
+| ARB_WETH | 0.00035 | 0.000058 | median valid ~0.0000576 |
+| ARB_USDC | 0.70 | 0.11 | median valid ~0.114 |
+| GMX_WETH | 0.012 | 0.008 | sushi valid ~0.0084 |
+| LINK_WETH | 0.0055 | 0.0045 | median valid ~0.0044 |
+| wstETH_WETH | 1.15 | 1.20 | median valid ~1.22 |
+| LINK_USDC | 11.0 | 9.0 | median valid ~8.79 |
+
+**Result**: PRICE_SANITY_FAILED reduced from 12 → 5 (remaining are legitimate bad pools).  
 
 ## Roadmap Progress Mapping (v2.1.0-fix)
 
@@ -65,8 +93,9 @@
 6. **L1 fee parameterized**: `l1_data_gas_units=2000`, `l1_gas_price_gwei=30.0` в config
 
 **M4.2 Blockers**:
-- Roundtrip profitable_count=0 (actual market має нульовий чи від'ємний арбітраж зараз)
-- Need to expand pairs/routes diversity (unique_pairs=6, unique_routes=4)
+- Roundtrip profitable_count=0 (actual market has no arb opportunity currently)
+- Need to expand pairs/routes diversity (unique_pairs=6, unique_routes_cross_dex=2)
+- ~~`tokens_anchor_price` outdated~~ **FIXED** (2026-02-17): All anchors updated from on-chain evidence
 
 Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under declared cost model", NOT "realistic profit".
 
@@ -130,24 +159,24 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 > Quick ref: N>=5 runs in `m4_stability_agg.json.runs[]` with:
 > `run_mode=REGISTRY_REAL`, `pinned_block!=429900000`, `block_is_synthetic=false`, `total_net_usdc>0`
 
-**Evidence for M4 online-profit (v2.1.0 rolling snapshot, 2026-02-15):**
+**Evidence for M4 online-profit (v2.1.0-fix rolling snapshot post-anchor-fix, 2026-02-17):**
 
 > **CORE TRUTH: PROVEN** (+PnL confirmed in N>=5 runs)
-> **ROLLING QUALITY: WARN_QUALITY** (data_run_rate >= 0.30, quality issues remain)
+> **ROLLING QUALITY: WARN_QUALITY** (data_run_rate=1.0, diversity warnings remain)
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| runs_in_window | 87 | `_latest.json` |
-| data_runs_count | 56 | `runs_since_timestamp.data_runs_count` |
-| pass_count | 56 | `runs_since_timestamp.pass_count` |
-| total_net_usdc (window) | $2122.58 | `quick_stats.total_net_usdc` |
-| data_run_rate | 0.6437 | `quick_stats.data_run_rate` |
-| low_sample_rate | 0.3448 | `quick_stats.low_sample_rate` |
+| runs_in_window | 12 | `_latest.json` |
+| data_runs_count | 12 | `runs_since_timestamp.data_runs_count` |
+| pass_count | 12 | `runs_since_timestamp.pass_count` |
+| total_net_usdc (window) | $658.81 | `quick_stats.total_net_usdc` |
+| avg_net_usdc | $54.90 | `quick_stats.avg_net_usdc` |
+| data_run_rate | 1.0 | `quick_stats.data_run_rate` |
+| pass_rate | 1.0 | `quick_stats.pass_rate` |
 | unique_pairs | 6 | `quick_stats.unique_pairs` |
-| unique_routes | 4 | `quick_stats.unique_routes` |
 | unique_routes_cross_dex | 2 | `quick_stats.unique_routes_cross_dex` |
 | agg_status | WARN_QUALITY | `_latest.json` |
-| agg_reasons | FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW, DIVERSITY_ROUTES_LOW | `_latest.json` |
+| agg_reasons | DIVERSITY_PAIRS_LOW, DIVERSITY_ROUTES_LOW | `_latest.json` |
 
 > **v2.0.8 VERIFIED**:
 > - `quotes_total >= quotes_fetched` in scan_*.json: OK (28/28)
