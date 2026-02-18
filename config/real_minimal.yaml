@@ -266,6 +266,10 @@ min_spread_bps: 5  # 5 bps = production threshold
 # 0 = break-even or better (opportunity must cover costs)
 min_net_pnl_usdc_est: 0.0  # 0 = break-even or better
 
+# v2.2.0: truth_mode_m42 - roundtrip is canonical, one-leg is diagnostic only
+# This ensures profit calculations use proper two-leg roundtrip semantics
+truth_mode_m42: true
+
 # M4 markers - execution disabled
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4

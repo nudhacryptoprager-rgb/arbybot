@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from core.constants import SCHEMA_VERSION, CURRENT_EXECUTION_BLOCKER
+from strategy.quarantine import get_quarantine_manager
 
 logger = logging.getLogger("strategy.artifacts")
 
@@ -249,11 +250,13 @@ def build_reject_data(
         "price_sanity_failed": len(sanity_rejects),
         "pool_missing_count": stats.get("pool_missing_count", 0),
         "pool_disabled_count": stats.get("pool_disabled_count", 0),
+        "quarantined_count": stats.get("quarantined_count", 0),
         "v3_slot0_failed_count": stats.get("v3_slot0_failed_count", 0),
         "price_outlier_count": sum(1 for r in rejected_quotes if r.get("reason") == "PRICE_OUTLIER"),
         # v2.1.0 Step 8: Enhanced histogram and samples
         "reason_histogram": reason_histogram,
         "price_sanity_samples": price_sanity_samples,
+        "quarantine_stats": get_quarantine_manager().to_dict(),
         "infra": infra_payload,
     }
 

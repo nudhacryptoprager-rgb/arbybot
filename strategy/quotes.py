@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config.pairs import load_pairs, get_pool_address, is_pool_disabled, PairConfig
 from strategy.compat import QuoteCompat
+from strategy.quarantine import get_quarantine_manager
+from strategy.dynamic_anchors import get_anchor_manager
 
 logger = logging.getLogger("strategy.quotes")
 
@@ -403,11 +405,18 @@ def collect_quotes(
         "quotes_fetched": 0,
         "pool_missing": 0,
         "pool_disabled": 0,
+        "quarantined": 0,
         "v3_slot0_failed": 0,
         "price_calc_failed": 0,
         "no_onchain_price": 0,
         "algebra_needs_quoter": 0,
     }
+    
+    # Get quarantine manager for runtime auto-quarantine
+    qm = get_quarantine_manager()
+    
+    # Get dynamic anchor manager
+    am = get_anchor_manager()
     
     dexes_list = config.get("dexes") or []
     pools_cfg = config.get("pools", {}) or {}
@@ -442,13 +451,17 @@ def collect_quotes(
         decimals_in = pair_cfg.token_in_decimals
         decimals_out = pair_cfg.token_out_decimals
         
-        # Get anchor price for this pair
-        anchor_price = tokens_anchor_price.get(token_pair_tag)
-        if not anchor_price:
+        # Get anchor price for this pair (v2.2.0: prefer dynamic over YAML)
+        yaml_anchor = tokens_anchor_price.get(token_pair_tag)
+        if not yaml_anchor:
             reversed_tag = f"{token_out}_{token_in}"
-            anchor_price = tokens_anchor_price.get(reversed_tag)
-            if anchor_price:
-                anchor_price = 1.0 / anchor_price
+            yaml_anchor = tokens_anchor_price.get(reversed_tag)
+            if yaml_anchor:
+                yaml_anchor = 1.0 / yaml_anchor
+        
+        # Dynamic anchor with YAML fallback
+        pair_tag_display = f"{token_in}/{token_out}"
+        anchor_price, anchor_source = am.get_anchor(pair_tag_display, yaml_anchor)
         
         # v2.0.7: Iterate over fee_tiers from pair config
         fee_tiers = pair_cfg.fee_tiers or [500, 3000]
@@ -482,6 +495,23 @@ def collect_quotes(
                     counts["pool_disabled"] += 1
                     logger.info("POOL_DISABLED: %s %s/%s fee=%d reason=%s", 
                                dex, token_in, token_out, fee_tier, disabled_info.get('reason', 'DISABLED'))
+                    continue
+                
+                # v2.1.0-fix: Check runtime quarantine (auto-quarantine for failing pools)
+                pair_tag = f"{token_in}/{token_out}"
+                if qm.is_quarantined(dex, pair_tag, fee_tier):
+                    remaining = qm.get_quarantine_remaining(dex, pair_tag, fee_tier)
+                    rejected_quotes.append({
+                        "pair": pair_tag,
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "reason": "QUARANTINED",
+                        "gate_passed": False,
+                        "error": f"Pool quarantined (remaining: {remaining:.0f}s)",
+                    })
+                    counts["quarantined"] += 1
+                    logger.info("QUARANTINED: %s %s fee=%d (remaining: %.0fs)", 
+                               dex, pair_tag, fee_tier, remaining)
                     continue
                 
                 # v2.0.8: STRICT fee-tier lookup - no fallback, use enforcement_mode="warn"
@@ -623,7 +653,7 @@ def collect_quotes(
                                 "price_exact": str(price_exact),
                                 # v2.1.0 Step 8: Enhanced diagnostics
                                 "price_ratio": round(ratio, 4),
-                                "anchor_source": "tokens_anchor_price",
+                                "anchor_source": anchor_source,  # v2.2.0: dynamic or yaml_fallback
                                 "amount_in_wei": amount_in_wei,
                                 "notional_usd_target": target_usd_notional if use_usd_notional else None,
                                 "diagnostics": sanity_diag,
@@ -680,10 +710,16 @@ def collect_quotes(
                     q_dict["quote_source"] = quote_source
                     q_dict["gas_estimate"] = gas_estimate
                     q_dict["ticks_crossed"] = ticks_crossed
+                    q_dict["anchor_source"] = anchor_source  # v2.2.0: track dynamic vs yaml
                     # v2.1.0: Add sqrt_price_after for measured slippage calculation
                     q_dict["sqrt_price_after"] = quoter_result.get("sqrt_price_after") if quoter_result else None
                     quotes_sample.append(q_dict)
                     counts["quotes_fetched"] += 1
+                    # Record success to reset quarantine failure counter
+                    qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
+                    # v2.2.0: Record valid quote for dynamic anchor calculation
+                    if price_exact is not None and float(price_exact) > 0:
+                        am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
                     logger.debug("QuoterV2 canonical: %s %s/%s fee=%d amount_out=%s", 
                                 dex, token_in, token_out, fee_tier, amount_out_wei_val)
                     continue  # Skip slot0 path entirely
@@ -729,6 +765,9 @@ def collect_quotes(
                             counts["v3_slot0_failed"] += 1
                             logger.warning("V3_SLOT0_FAILED: %s %s/%s fee=%d (quoter_attempted=%s)", 
                                           dex, token_in, token_out, fee_tier, use_quoter_v2)
+                            # Record failure for auto-quarantine
+                            qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "QUOTE_REVERT",
+                                            details={"pool_address": pool_addr, "error": "slot0_failed"})
                             continue
                 
                 # Calculate price from sqrtPriceX96
@@ -940,7 +979,14 @@ def collect_quotes(
                 q_dict["quote_source"] = quote_source
                 q_dict["gas_estimate"] = gas_estimate
                 q_dict["ticks_crossed"] = ticks_crossed
+                q_dict["anchor_source"] = anchor_source  # v2.2.0: track dynamic vs yaml
                 
                 quotes_sample.append(q_dict)
+                counts["quotes_fetched"] = counts.get("quotes_fetched", 0) + 1
+                # Record success to reset quarantine failure counter
+                qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
+                # v2.2.0: Record valid quote for dynamic anchor calculation
+                if price_exact is not None and float(price_exact) > 0:
+                    am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
     
     return quotes_sample, rejected_quotes, counts

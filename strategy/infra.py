@@ -210,6 +210,10 @@ def check_tenderly_connection() -> Tuple[bool, Optional[bool], Optional[str]]:
         return False, False, "disabled"
 
 
+# Forward declaration for singleton (defined at end of file)
+_provider_router = None
+
+
 def build_infra_payload(
     resolved_http: Optional[str],
     resolved_ws: Optional[str],
@@ -264,4 +268,182 @@ def build_infra_payload(
     if ws_handshake_ms is not None:
         payload["ws_handshake_ms"] = ws_handshake_ms
     
+    # Add provider router stats (if any providers registered)
+    # Lazy access to avoid forward reference
+    global _provider_router
+    if _provider_router is not None:
+        router_stats = _provider_router.get_stats()
+        if router_stats["providers_count"] > 0:
+            payload["provider_router"] = router_stats
+    
     return payload
+
+
+# =============================================================================
+# MULTI-PROVIDER ROUTER (v2.2.0)
+# =============================================================================
+
+class ProviderHealth:
+    """Health tracking for a single RPC provider."""
+    
+    def __init__(self, provider_id: str, url: str):
+        self.provider_id = provider_id
+        self.url = url
+        self.success_count = 0
+        self.failure_count = 0
+        self.consecutive_failures = 0
+        self.total_latency_ms = 0
+        self.last_success_time = 0.0
+        self.last_failure_time = 0.0
+        self.quarantined_until = 0.0
+    
+    @property
+    def avg_latency_ms(self) -> float:
+        if self.success_count == 0:
+            return 0.0
+        return self.total_latency_ms / self.success_count
+    
+    @property
+    def success_rate(self) -> float:
+        total = self.success_count + self.failure_count
+        if total == 0:
+            return 1.0
+        return self.success_count / total
+    
+    @property
+    def health_score(self) -> float:
+        """Health score 0-1 (higher is better)."""
+        import time
+        
+        # Check if quarantined
+        if self.quarantined_until > time.time():
+            return 0.0
+        
+        # Base score from success rate
+        score = self.success_rate
+        
+        # Penalty for consecutive failures
+        if self.consecutive_failures > 0:
+            score *= 0.5 ** min(self.consecutive_failures, 3)
+        
+        return score
+
+
+class MultiProviderRouter:
+    """
+    Routes RPC requests across multiple providers with health tracking.
+    
+    Features:
+    - Health-based provider selection
+    - Automatic failover
+    - Quarantine for failing providers
+    - Latency tracking
+    """
+    
+    QUARANTINE_THRESHOLD = 3  # Consecutive failures before quarantine
+    QUARANTINE_DURATION_SECONDS = 60
+    
+    def __init__(self):
+        self._providers: Dict[str, ProviderHealth] = {}
+        self._primary: Optional[str] = None
+    
+    def register_provider(self, provider_id: str, url: str, is_primary: bool = False) -> None:
+        """Register an RPC provider."""
+        self._providers[provider_id] = ProviderHealth(provider_id, url)
+        if is_primary or self._primary is None:
+            self._primary = provider_id
+    
+    def record_success(self, provider_id: str, latency_ms: int) -> None:
+        """Record a successful request."""
+        import time
+        
+        if provider_id not in self._providers:
+            return
+        
+        p = self._providers[provider_id]
+        p.success_count += 1
+        p.total_latency_ms += latency_ms
+        p.consecutive_failures = 0
+        p.last_success_time = time.time()
+    
+    def record_failure(self, provider_id: str) -> None:
+        """Record a failed request."""
+        import time
+        
+        if provider_id not in self._providers:
+            return
+        
+        p = self._providers[provider_id]
+        p.failure_count += 1
+        p.consecutive_failures += 1
+        p.last_failure_time = time.time()
+        
+        # Auto-quarantine after threshold
+        if p.consecutive_failures >= self.QUARANTINE_THRESHOLD:
+            p.quarantined_until = time.time() + self.QUARANTINE_DURATION_SECONDS
+            logger.warning(
+                "Provider %s quarantined for %ds (consecutive failures: %d)",
+                provider_id, self.QUARANTINE_DURATION_SECONDS, p.consecutive_failures
+            )
+    
+    def get_best_provider(self) -> Optional[Tuple[str, str]]:
+        """
+        Get the best available provider.
+        
+        Returns:
+            (provider_id, url) or None if no healthy providers
+        """
+        import time
+        
+        candidates = [
+            (p.provider_id, p.url, p.health_score)
+            for p in self._providers.values()
+            if p.quarantined_until <= time.time()
+        ]
+        
+        if not candidates:
+            return None
+        
+        # Sort by health score (descending)
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        return (candidates[0][0], candidates[0][1])
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get router statistics."""
+        import time
+        
+        now = time.time()
+        return {
+            "providers_count": len(self._providers),
+            "primary": self._primary,
+            "providers": {
+                p_id: {
+                    "success_count": p.success_count,
+                    "failure_count": p.failure_count,
+                    "consecutive_failures": p.consecutive_failures,
+                    "avg_latency_ms": round(p.avg_latency_ms, 1),
+                    "success_rate": round(p.success_rate, 3),
+                    "health_score": round(p.health_score, 3),
+                    "quarantined": p.quarantined_until > now,
+                }
+                for p_id, p in self._providers.items()
+            },
+        }
+
+
+# Singleton router
+_provider_router: Optional[MultiProviderRouter] = None
+
+
+def get_provider_router() -> MultiProviderRouter:
+    """Get the singleton provider router."""
+    global _provider_router
+    if _provider_router is None:
+        _provider_router = MultiProviderRouter()
+    return _provider_router
+
+
+def reset_provider_router() -> None:
+    """Reset the singleton (for testing)."""
+    global _provider_router
+    _provider_router = None

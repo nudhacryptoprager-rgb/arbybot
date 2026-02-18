@@ -17,6 +17,7 @@ dependencies = [
     "pyyaml>=6.0",
     "python-dotenv>=1.0.0",
     "httpx>=0.25.0",
+    "websocket-client>=1.6.0",  # v2.2.0: WS support for block feed
 ]
 
 [tool.setuptools.packages.find]

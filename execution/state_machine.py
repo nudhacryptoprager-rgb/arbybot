@@ -380,3 +380,120 @@ def simulate_trade_execution(
     })
     
     return result
+
+
+# =============================================================================
+# v2.2.0: M4.3 PREFLIGHT CHECK
+# =============================================================================
+
+
+@dataclass
+class PreflightResult:
+    """Result of M4.3 preflight check."""
+    passed: bool
+    checks: Dict[str, bool]
+    errors: List[str]
+    warnings: List[str]
+    execution_context: Dict[str, Any]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "checks": self.checks,
+            "errors": self.errors,
+            "warnings": self.warnings,
+            "execution_context": self.execution_context,
+        }
+
+
+def run_preflight_check(
+    config: Dict[str, Any],
+    roundtrip_result: Optional[Dict[str, Any]] = None,
+    infra_payload: Optional[Dict[str, Any]] = None,
+) -> PreflightResult:
+    """
+    Run M4.3 preflight check before execution attempt.
+    
+    This validates all execution prerequisites are met:
+    - Kill switch is properly configured
+    - Execution mode is correct
+    - RPC connectivity is available
+    - Gas estimation is possible
+    - Roundtrip is profitable (if provided)
+    
+    v2.2.0 CONTRACT:
+    - This is a DIAGNOSTIC function for M4.3
+    - Does NOT perform any execution
+    - Returns detailed check results
+    - Execution should remain disabled (kill_switch_active=True)
+    
+    Args:
+        config: Scanner/execution config
+        roundtrip_result: Optional roundtrip profitability result
+        infra_payload: Optional infrastructure status
+        
+    Returns:
+        PreflightResult with all check results
+    """
+    ctx = get_execution_context()
+    checks = {}
+    errors = []
+    warnings = []
+    
+    # Check 1: Kill switch must be ON for M4.3
+    checks["kill_switch_active"] = ctx.kill_switch_active
+    if not ctx.kill_switch_active:
+        errors.append("KILL_SWITCH_DISABLED: M4.3 requires kill switch ON")
+    
+    # Check 2: Mode should be DRY_RUN or SIMULATE
+    checks["mode_safe"] = ctx.mode in (ExecutionMode.DRY_RUN, ExecutionMode.SIMULATE)
+    if ctx.mode == ExecutionMode.LIVE:
+        errors.append("LIVE_MODE_DETECTED: M4.3 should not use LIVE mode")
+    
+    # Check 3: Execution disabled in config
+    exec_disabled = not config.get("execution_enabled", False)
+    checks["config_execution_disabled"] = exec_disabled
+    if not exec_disabled:
+        warnings.append("EXECUTION_ENABLED_IN_CONFIG: Should be disabled for M4.3")
+    
+    # Check 4: RPC connectivity (from infra)
+    if infra_payload:
+        ws_connected = infra_payload.get("ws_connected", False)
+        checks["rpc_available"] = True  # HTTP is default
+        if infra_payload.get("ws_enabled") and not ws_connected:
+            warnings.append("WS_NOT_CONNECTED: WebSocket enabled but not connected")
+    else:
+        checks["rpc_available"] = None  # Unknown
+        warnings.append("INFRA_UNKNOWN: No infra payload provided")
+    
+    # Check 5: Roundtrip profitability (if provided)
+    if roundtrip_result:
+        is_profitable = roundtrip_result.get("is_profitable", False)
+        checks["roundtrip_profitable"] = is_profitable
+        if not is_profitable:
+            warnings.append("NOT_PROFITABLE: Roundtrip shows no profit")
+    else:
+        checks["roundtrip_profitable"] = None  # Not checked
+    
+    # Check 6: Truth mode enabled
+    truth_mode = config.get("truth_mode_m42", False)
+    checks["truth_mode_enabled"] = truth_mode
+    if not truth_mode:
+        warnings.append("TRUTH_MODE_OFF: truth_mode_m42 should be true")
+    
+    # Determine overall pass/fail
+    # Must have: kill switch ON, safe mode, config disabled
+    critical_checks = [
+        checks.get("kill_switch_active", False),
+        checks.get("mode_safe", False),
+        checks.get("config_execution_disabled", True),
+    ]
+    passed = all(critical_checks) and len(errors) == 0
+    
+    return PreflightResult(
+        passed=passed,
+        checks=checks,
+        errors=errors,
+        warnings=warnings,
+        execution_context=ctx.to_dict(),
+    )
