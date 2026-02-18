@@ -2,10 +2,23 @@
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY, roundtrip NOT_PROFITABLE)  
 **Updated**: 2026-02-18  
-**Gate Version**: v2.2.0  
+**Gate Version**: v2.3.0  
 **Policy Version**: 2.0.8  
-**Engine Version**: v2.2.0  
-**Evidence**: M5_0 infra validated: `ws_connected=true` (ws_lag_ms=125-155), `preflight.passed=true`, `quarantine_stats` in artifacts. Rolling provenance via `run_context.run_timestamp`. Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. truth_mode_m42=true for real_minimal.yaml. POOL_DISABLED semantics implemented.
+**Engine Version**: v2.3.0  
+**Evidence**: M5_0 infra validated: `ws_connected=true` (ws_lag_ms=125-155), `preflight.passed=true`, `quarantine_stats` in artifacts. Rolling provenance via `run_context.run_timestamp` (unified across scan/truth/reject). v2.3.0: `field_success_rates` per-field multicall observability, `failover_stress_active` mode for failover proof, `profit_is_diagnostic/profit_truth_source` explicit semantics. Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. truth_mode_m42=true for real_minimal.yaml. POOL_DISABLED semantics implemented.
+
+## v2.3.0 Fix Steps (2026-02-18)
+
+| Step | Change | File | Description |
+|------|--------|------|-------------|
+| 1 | **multicall field_success_rates** | `core/multicall.py` | Per-field `call_success/call_fail` tracking in batch_token_info/batch_decimals |
+| 2 | **provenance unification** | `strategy/artifacts.py`, `run_scan_real.py` | `run_context.run_timestamp` unified across scan/truth/reject |
+| 3 | **failover stress-test mode** | `scripts/ci_m5_0_gate.py`, `chains/providers.py` | `--failover-stress N` + `ARBY_FAILOVER_STRESS_N` env |
+| 4 | **failover_stress_active flag** | `strategy/infra.py` | `provider_router.failover_stress_active` in artifacts |
+| 5 | **profit DIAGNOSTIC semantics** | `strategy/artifacts.py`, `m4/fixtures.py` | `profit_is_diagnostic/profit_truth_source` in truth_report + run_summary |
+| 6 | **rolling isolation for stress** | `scripts/ci_m5_0_gate.py` | `--failover-stress` disables rolling refresh by default |
+| 7 | **endpoint_id metrics** | `chains/providers.py`, `strategy/infra.py` | `requests_by_endpoint`, `errors_by_endpoint`, `endpoints_details` |
+| 8 | **version bump** | `scripts/ci_m5_0_gate.py` | `__version__ = "2.3.0"` |
 
 ## v2.2.0 Fix Steps (2026-02-18)
 
@@ -65,14 +78,16 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-18 v2.2.0)**: From `m4_stability_agg.json` (canonical source): runs_in_window=63, data_run_rate=0.9841, pass_rate=1.0, **total_net_usdc=$3612.62**, unique_pairs=8, **unique_routes=4** (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics). ws_connected=true, preflight.passed=true, **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE), quarantine_stats in artifacts. Provenance: `run_context.run_timestamp` (top-level `run_timestamp` may be null by design).
+**Snapshot (2026-02-18 v2.3.0)**: From `m4_stability_agg.json` (canonical source): runs_in_window=66, data_run_rate=0.9848, pass_rate=1.0, **total_net_usdc=$3757.08**, unique_pairs=8, **unique_routes=4** (**unique_routes_cross_dex=2** < target=4 → WARN). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics). ws_connected=true, preflight.passed=true, **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE), quarantine_stats in artifacts. Provenance: `run_context.run_timestamp` unified across scan/truth/reject. **Clean PnL NOT AVAILABLE** (`execution_pnl.cost_model_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode).
 
-**Evidence (ci_m5_gate_20260218_191720)**: `scan.infra.provider_id=alchemy`, `scan.infra.multicall.requested_fields=[slot0, liquidity, token0, token1, decimals, fee]`, `scan.infra.provider_router.endpoints_used=[alchemy]` (canonical provider ID), `truth_report.execution_ready_count=0`, `truth_report.would_execute_count=0`, `opportunity_engine.one_leg_profit_is_diagnostic=true`, `truth_report.profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`, `run_context.run_timestamp=2026-02-18T18:17:43.343812Z`.
+**Evidence (ci_m5_gate_20260218_202328 - normal run)**: `scan.infra.provider_id=alchemy`, `scan.infra.multicall.requested_fields=[slot0, liquidity, token0, token1, decimals, fee]`, `scan.infra.multicall.field_success_rates={slot0:1.0, liquidity:1.0, token0:1.0, token1:1.0, decimals:1.0, fee:1.0}`, `scan.infra.provider_router.endpoints_used=[alchemy]`, `truth_report.execution_ready_count=0`, `truth_report.would_execute_count=0`, `truth_report.profit_is_diagnostic=true`, `truth_report.profit_truth_source=ONE_LEG_DIAGNOSTIC`, `truth_report.profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`, `run_context.run_timestamp=2026-02-18T19:23:50.940359Z`.
+
+**Failover Evidence (ci_m5_gate_20260218_202357 - stress run)**: `--failover-stress 3` mode. `endpoints_used_count=2`, `endpoints_used=[alchemy, arbitrum_public]`, `failover_stress_active=true`, `requests_by_endpoint={alchemy_3470f46a:1, arbitrum_public_9722a04c:1}`, `errors_by_endpoint={alchemy_3470f46a:1}`. **Proof**: Primary endpoint (alchemy) had simulated failure, router successfully failed over to secondary (arbitrum_public). `field_success_rates={slot0:1.0, liquidity:1.0, token0:1.0, token1:1.0, decimals:1.0, fee:1.0}` (all fields 100% success after failover).
 
 **Quality Note**: 
 - **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_CRITICAL_REJECTS`
-- **Window-level** (`_latest.agg_reasons`): `DIVERSITY_PAIRS_LOW, DIVERSITY_ROUTES_LOW`
-- See `data/runs/_rolling/run_summary_latest.json` (runDir: ci_m5_gate_20260218_191720).
+- **Window-level** (`_latest.agg_reasons`): `DIVERSITY_PAIRS_LOW` (unique_pairs=8 < 10), `DIVERSITY_ROUTES_LOW` (**unique_routes_cross_dex=2** < target=4, NOT unique_routes)
+- See `data/runs/_rolling/run_summary_latest.json` (runDir: ci_m5_gate_20260218_202328).
 
 **Anchor Discipline (v2.1.0-fix enforced):**
 > Anchors MUST come from on-chain evidence (median valid quotes from runDir artifacts), NOT from market intuition.

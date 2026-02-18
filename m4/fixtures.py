@@ -998,8 +998,14 @@ def generate_m4_from_online_inputs(
     run_summary_path = reports_dir / f"run_summary_{ts}.json"
     
     # v2.0: Get timestamp-based provenance (SHA tracking removed)
+    # v2.3.0: Use truth_report's run_context.run_timestamp for unified provenance across runDir bundle
     git_ctx = get_git_context()
-    run_timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    truth_run_context = truth_data.get("run_context", {})
+    run_timestamp = truth_run_context.get("run_timestamp") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
+    # v2.3.0: Propagate profit semantics from truth_report
+    profit_is_diagnostic = truth_data.get("profit_is_diagnostic", True)
+    profit_truth_source = truth_data.get("profit_truth_source", "ONE_LEG_DIAGNOSTIC")
     
     # v2.0: Evidence validation based on timestamp consistency only
     evidence_issues = []
@@ -1066,9 +1072,9 @@ def generate_m4_from_online_inputs(
             "sign_mismatch_count": sign_mismatch_count,
             "fragile_count": fragile_count,
             "fragile_rate": round(frag_rate, 4),  # v1.9.6: use computed frag_rate
-            # v2.3.0: Explicit profit semantics
-            "profit_is_diagnostic": True,  # v2.3.0: M5_0 simulate_only = always diagnostic
-            "profit_truth_source": "ONE_LEG_DIAGNOSTIC",  # v2.3.0: Until roundtrip canonical
+            # v2.3.0: Explicit profit semantics (propagated from truth_report)
+            "profit_is_diagnostic": profit_is_diagnostic,
+            "profit_truth_source": profit_truth_source,
         },
         "thresholds": {
             "policy_version": POLICY_VERSION,  # v1.9.5: provenance
