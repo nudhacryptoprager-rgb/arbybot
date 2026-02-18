@@ -65,9 +65,9 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-18 v2.2.0 post-fix)**: runs_in_window=59, data_run_rate=0.983, pass_rate=1.0, total_net_usdc=$3453.67, avg_net_usdc=$59.55, unique_pairs=7, unique_routes=4 (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics). ws_connected=true, ws_lag_ms=125-155, preflight.passed=true, execution_ready_count=1, quarantine_stats in artifacts. **v2.2.0 Fix Steps**: provider_id semantics fixed (alchemy not chain_42161), multicall.call_types tracking, truth_mode conditional logging, would_execute_count requires roundtrip_profitable, discovery_dry_run flag integrated, intent_loader 19 tests added.
+**Snapshot (2026-02-18 v2.2.0 post-fix)**: runs_in_window=61, data_run_rate=0.984, pass_rate=1.0, total_net_usdc=$3500+, unique_pairs=8, unique_routes=2 (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics). ws_connected=true, ws_lag_ms=125-155, preflight.passed=true, **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE), quarantine_stats in artifacts. **v2.2.0 Fix Steps**: provider_id semantics fixed (alchemy not chain_42161), multicall.call_types tracking, truth_mode conditional logging, would_execute_count requires roundtrip_profitable, discovery_dry_run flag integrated, intent_loader 19 tests added. **v2.2.1 Evidence (ci_m5_gate_20260218_182200)**: `infra.provider_id=alchemy`, `infra.multicall.requested_fields=[slot0, liquidity]`, `truth_report.execution_ready_count=0`, `truth_report.would_execute_count=0`.
 
-**Quality Note**: `run_summary_latest.quality_status=WARN` (reasons: `WARN_EXCLUDED_SIGNALS`, `WARN_CRITICAL_REJECTS`, `WARN_TOP_PAIR_DOMINANCE`) — see `data/runs/_rolling/run_summary_latest.json` (ci_m5_gate_20260218_152511).
+**Quality Note**: `run_summary_latest.quality_status=WARN` (reasons: `DIVERSITY_PAIRS_LOW`, `DIVERSITY_ROUTES_LOW`) — see `data/runs/_rolling/run_summary_latest.json` (ci_m5_gate_20260218_182200).
 
 **Anchor Discipline (v2.1.0-fix enforced):**
 > Anchors MUST come from on-chain evidence (median valid quotes from runDir artifacts), NOT from market intuition.

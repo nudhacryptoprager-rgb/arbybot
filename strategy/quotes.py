@@ -28,16 +28,19 @@ logger = logging.getLogger("strategy.quotes")
 
 # Module-level cache for multicall prefetch results
 _multicall_slot0_cache: Dict[str, Optional[Tuple[int, int]]] = {}
+_multicall_liquidity_cache: Dict[str, Optional[int]] = {}  # v2.2.0 Fix Step 6: Add liquidity cache
 
 
 def prefetch_slot0_multicall(
     pool_addresses: List[str], rpc_url: str, block_num: int
 ) -> Dict[str, Optional[Tuple[int, int]]]:
     """
-    Prefetch slot0 data for multiple pools using multicall.
+    Prefetch slot0 and liquidity data for multiple pools using multicall.
     
     v2.2.0: Roadmap M5_0 requires multicall batching per cycle.
     This reduces RPC calls from N to 1 for N pools.
+    
+    v2.2.0 Fix Step 6: Also batch liquidity() calls.
     
     Args:
         pool_addresses: List of pool addresses to fetch
@@ -47,7 +50,7 @@ def prefetch_slot0_multicall(
     Returns:
         Dict mapping pool_address -> (tick, sqrt_price_x96) or None
     """
-    global _multicall_slot0_cache
+    global _multicall_slot0_cache, _multicall_liquidity_cache
     
     if not pool_addresses or not rpc_url:
         return {}
@@ -59,7 +62,12 @@ def prefetch_slot0_multicall(
         from core.multicall import get_multicall_batcher
         
         batcher = get_multicall_batcher(rpc_url, block_num)
+        
+        # Batch slot0 calls
         results = batcher.batch_slot0(pool_addresses)
+        
+        # v2.2.0 Fix Step 6: Also batch liquidity calls
+        liquidity_results = batcher.batch_liquidity(pool_addresses)
         
         # Convert from (sqrt, tick, liq) to (tick, sqrt)
         output = {}
@@ -70,20 +78,30 @@ def prefetch_slot0_multicall(
             else:
                 output[addr.lower()] = None
         
-        # Update cache
+        # Update caches
         _multicall_slot0_cache.update(output)
-        logger.info("Multicall prefetch: %d pools, %d success", 
-                   len(pool_addresses), sum(1 for v in output.values() if v is not None))
+        _multicall_liquidity_cache.update({k.lower(): v for k, v in liquidity_results.items()})
+        
+        success_count = sum(1 for v in output.values() if v is not None)
+        liq_count = sum(1 for v in liquidity_results.values() if v is not None)
+        logger.info("Multicall prefetch: %d pools, %d success (slot0: %d, liquidity: %d)", 
+                   len(pool_addresses), success_count, success_count, liq_count)
         return output
     except Exception as e:
         logger.debug("Multicall prefetch failed: %s", e)
         return {addr: None for addr in pool_addresses}
 
 
+def get_cached_liquidity(pool_address: str) -> Optional[int]:
+    """Get liquidity from multicall cache if available."""
+    return _multicall_liquidity_cache.get(pool_address.lower())
+
+
 def clear_multicall_cache() -> None:
     """Clear the multicall prefetch cache (for testing)."""
-    global _multicall_slot0_cache
+    global _multicall_slot0_cache, _multicall_liquidity_cache
     _multicall_slot0_cache.clear()
+    _multicall_liquidity_cache.clear()  # v2.2.0 Fix Step 6
 
 
 def read_slot0_v3(pool_address: str, rpc_url: Optional[str], block_num: int) -> Tuple[Optional[int], Optional[int]]:

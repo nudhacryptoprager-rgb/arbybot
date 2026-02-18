@@ -469,7 +469,7 @@ def extract_provider_name(url: str) -> str:
             # Remove www. prefix and take first part
             domain = domain.replace("www.", "")
             parts = domain.split(".")
-            if parts:
+            if parts and parts[0]:  # v2.2.0: Check for non-empty
                 return parts[0]
         except Exception:
             pass

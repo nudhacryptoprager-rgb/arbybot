@@ -328,7 +328,10 @@ def run_scan(
     infra_payload = build_infra_payload(
         primary_http, primary_ws,
         ws_connected, ws_handshake_ms, ws_error,
-        tenderly_enabled, tenderly_ok, tenderly_error
+        tenderly_enabled, tenderly_ok, tenderly_error,
+        provider_http=provider_http,  # v2.2.0 Fix Step 4: actually used provider
+        provider_ws=provider_ws,
+        config=config,
     )
     
     # Generate timestamp early (used by opportunity_engine and artifact writes)

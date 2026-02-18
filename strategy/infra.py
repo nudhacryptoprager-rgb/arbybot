@@ -223,16 +223,25 @@ def build_infra_payload(
     tenderly_enabled: bool,
     tenderly_ok: Optional[bool],
     tenderly_error: Optional[str],
+    *,
+    provider_http: str = "unknown",
+    provider_ws: str = "unknown",
+    config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Build infra payload for artifacts.
+    
+    Args:
+        provider_http: Provider ID for HTTP endpoint (from resolve_rpc_endpoints)
+        provider_ws: Provider ID for WS endpoint (from resolve_rpc_endpoints)
     
     Returns:
         Dict with infra diagnostics
     """
     from urllib.parse import urlparse
     
-    rpc_provider = "public"
+    # v2.2.0 Fix Step 4: Use actually resolved provider, not from primary URL
+    rpc_provider = provider_http if provider_http != "unknown" else "public"
     transport = "http"
     ws_enabled = False
     rpc_http_host = None
@@ -272,30 +281,36 @@ def build_infra_payload(
     if ws_handshake_ms is not None:
         payload["ws_handshake_ms"] = ws_handshake_ms
     
+    # v2.2.0 Fix Step 4: Set provider_id to actually used provider (not from config/registry)
+    # Roadmap M5_0 requires "який провайдер реально використано"
+    payload["provider_id"] = provider_http if provider_http != "unknown" else None
+    if provider_http != "unknown" or provider_ws != "unknown":
+        payload["provider_id_http"] = provider_http
+        payload["provider_id_ws"] = provider_ws
+    
     # v2.2.0: Add provider stats from chains/providers.py (canonical source)
     # Replaces the duplicate MultiProviderRouter scaffolding
     try:
-        from chains.providers import get_global_provider_stats, get_primary_provider_id
+        from chains.providers import get_global_provider_stats
         provider_stats = get_global_provider_stats()
         if provider_stats.get("providers_count", 0) > 0:
-            # v2.2.0 Fix Step 3: Prove multi-provider with endpoint details
+            # v2.2.0 Fix Step 5: Clarify router metrics
             provider_names = provider_stats.get("provider_names", [])
             endpoints_count = 0
+            chains_count = 0
             for chain_data in provider_stats.get("providers", {}).values():
+                chains_count += 1
                 endpoints_count += len(chain_data)  # Each chain has dict of URL -> stats
             
             payload["provider_router"] = {
-                "providers_count": provider_stats["providers_count"],
-                "endpoints_count": endpoints_count,  # v2.2.0: Number of actual RPC endpoints
+                "chains_count": chains_count,  # v2.2.0 Fix Step 5: Number of chains configured
+                "endpoints_configured_count": endpoints_count,  # v2.2.0: Number of RPC URLs configured
+                "endpoints_seen_count": provider_stats.get("total_requests", 0),  # Actually used
                 "provider_names": provider_names,  # v2.2.0: List of provider names
                 "total_requests": provider_stats.get("total_requests", 0),
                 "global_success_rate": provider_stats.get("global_success_rate", 1.0),
                 "source": "chains/providers.py",  # v2.2.0: Canonical source
             }
-            # v2.2.0 Fix Step 2: Set provider_id to actual provider name (not chain_id)
-            # Roadmap M5_0 requires "який провайдер реально використано"
-            chain_id = config.get("chain_id", 42161) if isinstance(config, dict) else 42161
-            payload["provider_id"] = get_primary_provider_id(chain_id)
     except Exception as e:
         logger.debug("Provider stats unavailable: %s", e)
     

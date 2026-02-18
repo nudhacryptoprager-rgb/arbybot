@@ -481,6 +481,12 @@ def run_preflight_check(
     if not truth_mode:
         warnings.append("TRUTH_MODE_OFF: truth_mode_m42 should be true")
     
+    # Check 7: v2.2.0 Fix Step 10: QuoterV2 required for truth_mode_m42
+    use_quoter_v2 = config.get("use_quoter_v2", False)
+    checks["quoter_v2_enabled"] = use_quoter_v2
+    if truth_mode and not use_quoter_v2:
+        errors.append("QUOTER_V2_REQUIRED: truth_mode_m42=true requires use_quoter_v2=true")
+    
     # Determine overall pass/fail
     # Must have: kill switch ON, safe mode, config disabled
     critical_checks = [

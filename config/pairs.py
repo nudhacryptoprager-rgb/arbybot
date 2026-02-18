@@ -196,22 +196,43 @@ def load_pairs(
             ))
     
     # Fallback to intent.txt
+    # v2.2.0 Fix Step 9: Use discovery/intent_loader.py as canonical module
     if not result and use_intent:
-        intent_pairs = parse_intent_file(chain_filter=chain)
-        for _, token_in, token_out in intent_pairs:
-            in_addr, in_dec = resolve_token_info(chain, token_in)
-            out_addr, out_dec = resolve_token_info(chain, token_out)
-            
-            result.append(PairConfig(
-                chain=chain,
-                token_in=token_in,
-                token_out=token_out,
-                token_in_address=in_addr,
-                token_out_address=out_addr,
-                token_in_decimals=in_dec,
-                token_out_decimals=out_dec,
-                fee_tiers=[500, 3000],  # default for intent pairs
-            ))
+        try:
+            from discovery.intent_loader import get_intent_universe
+            universe = get_intent_universe()
+            intent_pairs = universe.get_pairs_for_chain(chain)
+            for pair in intent_pairs:
+                in_addr, in_dec = resolve_token_info(chain, pair.token_a)
+                out_addr, out_dec = resolve_token_info(chain, pair.token_b)
+                
+                result.append(PairConfig(
+                    chain=chain,
+                    token_in=pair.token_a,
+                    token_out=pair.token_b,
+                    token_in_address=in_addr,
+                    token_out_address=out_addr,
+                    token_in_decimals=in_dec,
+                    token_out_decimals=out_dec,
+                    fee_tiers=[500, 3000],  # default for intent pairs
+                ))
+        except ImportError:
+            # Fallback to legacy parse_intent_file if discovery module not available
+            intent_pairs = parse_intent_file(chain_filter=chain)
+            for _, token_in, token_out in intent_pairs:
+                in_addr, in_dec = resolve_token_info(chain, token_in)
+                out_addr, out_dec = resolve_token_info(chain, token_out)
+                
+                result.append(PairConfig(
+                    chain=chain,
+                    token_in=token_in,
+                    token_out=token_out,
+                    token_in_address=in_addr,
+                    token_out_address=out_addr,
+                    token_in_decimals=in_dec,
+                    token_out_decimals=out_dec,
+                    fee_tiers=[500, 3000],  # default for intent pairs
+                ))
     
     return result
 
