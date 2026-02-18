@@ -29,7 +29,8 @@ logger = logging.getLogger("strategy.quotes")
 # Module-level cache for multicall prefetch results
 _multicall_slot0_cache: Dict[str, Optional[Tuple[int, int]]] = {}
 _multicall_liquidity_cache: Dict[str, Optional[int]] = {}  # v2.2.0 Fix Step 6: Add liquidity cache
-_multicall_token_info_cache: Dict[str, Optional[Tuple[str, str, int]]] = {}  # v2.2.1 Fix Step 6: Add token_info cache
+_multicall_token_info_cache: Dict[str, Optional[Tuple[str, str, int]]] = {}  # v2.2.0 Fix Step 6: Add token_info cache
+_multicall_decimals_cache: Dict[str, Optional[int]] = {}  # v2.2.0 Fix Step 5: Add decimals cache
 
 
 def prefetch_slot0_multicall(
@@ -71,8 +72,22 @@ def prefetch_slot0_multicall(
         # v2.2.0 Fix Step 6: Also batch liquidity calls
         liquidity_results = batcher.batch_liquidity(pool_addresses)
         
-        # v2.2.1 Fix Step 6: Also batch token_info calls (token0, token1, fee)
+        # v2.2.0 Fix Step 6: Also batch token_info calls (token0, token1, fee)
         token_info_results = batcher.batch_token_info(pool_addresses)
+        
+        # v2.2.0 Fix Step 5: Batch decimals for unique tokens from token_info
+        unique_tokens: set[str] = set()
+        for info in token_info_results.values():
+            if info is not None:
+                token0, token1, _ = info
+                if token0:
+                    unique_tokens.add(token0.lower())
+                if token1:
+                    unique_tokens.add(token1.lower())
+        
+        decimals_results: Dict[str, Optional[int]] = {}
+        if unique_tokens:
+            decimals_results = batcher.batch_decimals(list(unique_tokens))
         
         # Convert from (sqrt, tick, liq) to (tick, sqrt)
         output = {}
@@ -87,12 +102,14 @@ def prefetch_slot0_multicall(
         _multicall_slot0_cache.update(output)
         _multicall_liquidity_cache.update({k.lower(): v for k, v in liquidity_results.items()})
         _multicall_token_info_cache.update({k.lower(): v for k, v in token_info_results.items()})
+        _multicall_decimals_cache.update({k.lower(): v for k, v in decimals_results.items()})
         
         success_count = sum(1 for v in output.values() if v is not None)
         liq_count = sum(1 for v in liquidity_results.values() if v is not None)
         token_count = sum(1 for v in token_info_results.values() if v is not None)
-        logger.info("Multicall prefetch: %d pools, success: slot0=%d, liquidity=%d, token_info=%d", 
-                   len(pool_addresses), success_count, liq_count, token_count)
+        decimals_count = sum(1 for v in decimals_results.values() if v is not None)
+        logger.info("Multicall prefetch: %d pools, %d tokens, success: slot0=%d, liquidity=%d, token_info=%d, decimals=%d", 
+                   len(pool_addresses), len(unique_tokens), success_count, liq_count, token_count, decimals_count)
         return output
     except Exception as e:
         logger.debug("Multicall prefetch failed: %s", e)
@@ -109,12 +126,18 @@ def get_cached_token_info(pool_address: str) -> Optional[Tuple[str, str, int]]:
     return _multicall_token_info_cache.get(pool_address.lower())
 
 
+def get_cached_decimals(token_address: str) -> Optional[int]:
+    """Get decimals from multicall cache if available."""
+    return _multicall_decimals_cache.get(token_address.lower())
+
+
 def clear_multicall_cache() -> None:
     """Clear the multicall prefetch cache (for testing)."""
-    global _multicall_slot0_cache, _multicall_liquidity_cache, _multicall_token_info_cache
+    global _multicall_slot0_cache, _multicall_liquidity_cache, _multicall_token_info_cache, _multicall_decimals_cache
     _multicall_slot0_cache.clear()
     _multicall_liquidity_cache.clear()  # v2.2.0 Fix Step 6
-    _multicall_token_info_cache.clear()  # v2.2.1 Fix Step 6
+    _multicall_token_info_cache.clear()  # v2.2.0 Fix Step 6
+    _multicall_decimals_cache.clear()  # v2.2.0 Fix Step 5
 
 
 def read_slot0_v3(pool_address: str, rpc_url: Optional[str], block_num: int) -> Tuple[Optional[int], Optional[int]]:

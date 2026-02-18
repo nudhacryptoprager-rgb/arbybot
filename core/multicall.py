@@ -301,6 +301,9 @@ class MulticallBatcher:
         self.stats["calls_batched"] += len(calls)
         self.stats["calls_made"] += 1
         
+        # v2.2.0 Fix Step 5: Track decimals call type
+        self.call_types["decimals"] += len(token_addresses)
+        
         results = self._execute_multicall(calls)
         if results is None:
             return {addr: None for addr in token_addresses}

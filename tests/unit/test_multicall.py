@@ -123,14 +123,36 @@ class TestMulticallRequestedFields:
         batcher.call_types["token0"] = 5
         batcher.call_types["token1"] = 5
         batcher.call_types["fee"] = 5
+        batcher.call_types["decimals"] = 3  # v2.2.0: Also batch decimals
         
         stats = get_aggregate_multicall_stats()
         assert "requested_fields" in stats, "Aggregate stats should include requested_fields"
         
-        # v2.2.1 Fix Step 7: requested_fields should include all batched types
+        # v2.2.0: requested_fields should include all batched types per Roadmap M5_0
         rf = stats["requested_fields"]
         assert "slot0" in rf, "slot0 should be in requested_fields"
         assert "liquidity" in rf, "liquidity should be in requested_fields"
-        assert "token0" in rf, "token0 should be in requested_fields after v2.2.1"
-        assert "token1" in rf, "token1 should be in requested_fields after v2.2.1"
-        assert "fee" in rf, "fee should be in requested_fields after v2.2.1"
+        assert "token0" in rf, "token0 should be in requested_fields"
+        assert "token1" in rf, "token1 should be in requested_fields"
+        assert "fee" in rf, "fee should be in requested_fields"
+        assert "decimals" in rf, "decimals should be in requested_fields (v2.2.0 Fix Step 5)"
+    
+    def test_requested_fields_roadmap_contract(self):
+        """Roadmap M5_0 requires: slot0, liquidity, token0, token1, decimals in requested_fields."""
+        from core.multicall import get_aggregate_multicall_stats
+        
+        batcher = get_multicall_batcher("http://localhost:8545", 99999)
+        # Simulate full prefetch as done in strategy/quotes.py
+        batcher.call_types["slot0"] = 33
+        batcher.call_types["liquidity"] = 33
+        batcher.call_types["token0"] = 33
+        batcher.call_types["token1"] = 33
+        batcher.call_types["fee"] = 33
+        batcher.call_types["decimals"] = 10  # Unique tokens
+        
+        stats = get_aggregate_multicall_stats()
+        rf = set(stats["requested_fields"])
+        
+        # Roadmap M5_0 required fields
+        required = {"slot0", "liquidity", "token0", "token1", "decimals"}
+        assert required.issubset(rf), f"Missing required fields: {required - rf}"

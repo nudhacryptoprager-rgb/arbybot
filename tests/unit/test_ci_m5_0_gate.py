@@ -24,8 +24,8 @@ from scripts.ci_m5_0_gate import (
 
 
 class TestVersion(unittest.TestCase):
-    def test_version_is_2_1_0(self):
-        self.assertEqual(__version__, "2.1.0")
+    def test_version_is_2_2_0(self):
+        self.assertEqual(__version__, "2.2.0")
 
 
 class TestModeExclusion(unittest.TestCase):

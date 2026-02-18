@@ -228,3 +228,54 @@ class TestEndpointsUsedSemantics:
             assert "global_success_rate" in router
             # When failover happens, endpoints_used should have > 1 entry
             # (This test documents the contract, actual failover tested elsewhere)
+
+
+class TestEndpointsUsedProviderIdContract:
+    """Test v2.2.0 Fix Step 3: endpoints_used must contain canonical provider IDs.
+    
+    endpoints_used should contain values like 'alchemy', 'infura', 'llamarpc'
+    (as returned by extract_provider_name), NOT hostnames like 'arb-mainnet'.
+    """
+    
+    def test_endpoints_used_are_canonical_provider_ids(self):
+        """endpoints_used entries should be canonical provider IDs."""
+        from chains.providers import extract_provider_name
+        
+        # Known provider URLs and expected IDs
+        test_cases = [
+            ("https://arb-mainnet.g.alchemy.com/v2/key", "alchemy"),
+            ("https://arbitrum-mainnet.infura.io/v3/key", "infura"),
+            ("https://arbitrum.llamarpc.com", "llamarpc"),
+            ("https://arb1.arbitrum.io/rpc", "arbitrum_public"),
+        ]
+        
+        for url, expected_id in test_cases:
+            provider_id = extract_provider_name(url)
+            assert provider_id == expected_id, f"URL {url} should yield {expected_id}, got {provider_id}"
+            # Verify it's not a hostname pattern
+            assert "." not in provider_id, f"provider_id '{provider_id}' should not contain dots"
+            assert "-" not in provider_id or provider_id == "arbitrum_public", \
+                f"provider_id '{provider_id}' should not contain dashes (except arbitrum_public)"
+    
+    def test_endpoints_used_no_hostname_pattern(self):
+        """endpoints_used should NOT contain hostname-like patterns."""
+        # Patterns that indicate incorrect hostname extraction
+        invalid_patterns = [
+            "arb-mainnet",  # Alchemy hostname prefix
+            "arbitrum-mainnet",  # Infura hostname prefix
+            "arb1",  # Arbitrum public hostname prefix
+            "g.alchemy",  # Partial hostname
+        ]
+        
+        from chains.providers import extract_provider_name
+        
+        # All of these should NOT appear in extract_provider_name output
+        for url in [
+            "https://arb-mainnet.g.alchemy.com/v2/key",
+            "https://arbitrum-mainnet.infura.io/v3/key",
+            "https://arb1.arbitrum.io/rpc",
+        ]:
+            provider_id = extract_provider_name(url)
+            for pattern in invalid_patterns:
+                assert pattern not in provider_id.lower(), \
+                    f"provider_id '{provider_id}' should not contain '{pattern}'"

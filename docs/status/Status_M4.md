@@ -65,11 +65,14 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-18 v2.2.0)**: From `m4_stability_agg.json` (canonical source): runs_in_window=61, data_run_rate=0.9836, pass_rate=1.0, **total_net_usdc=$3523.72**, unique_pairs=8, **unique_routes=4** (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics). ws_connected=true, ws_lag_ms=125-155, preflight.passed=true, **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE), quarantine_stats in artifacts. Provenance: `run_context.run_timestamp` (top-level `run_timestamp` may be null by design).
+**Snapshot (2026-02-18 v2.2.0)**: From `m4_stability_agg.json` (canonical source): runs_in_window=63, data_run_rate=0.9841, pass_rate=1.0, **total_net_usdc=$3612.62**, unique_pairs=8, **unique_routes=4** (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics). ws_connected=true, preflight.passed=true, **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE), quarantine_stats in artifacts. Provenance: `run_context.run_timestamp` (top-level `run_timestamp` may be null by design).
 
-**Evidence (ci_m5_gate_20260218_182200)**: `scan.infra.provider_id=alchemy`, `scan.infra.multicall.requested_fields=[slot0, liquidity]`, `truth_report.execution_ready_count=0`, `truth_report.would_execute_count=0`, `run_context.run_timestamp=2026-02-18T17:22:24.050319Z`.
+**Evidence (ci_m5_gate_20260218_191720)**: `scan.infra.provider_id=alchemy`, `scan.infra.multicall.requested_fields=[slot0, liquidity, token0, token1, decimals, fee]`, `scan.infra.provider_router.endpoints_used=[alchemy]` (canonical provider ID), `truth_report.execution_ready_count=0`, `truth_report.would_execute_count=0`, `opportunity_engine.one_leg_profit_is_diagnostic=true`, `truth_report.profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`, `run_context.run_timestamp=2026-02-18T18:17:43.343812Z`.
 
-**Quality Note**: `run_summary_latest.quality_status=WARN` (reasons: `DIVERSITY_PAIRS_LOW`, `DIVERSITY_ROUTES_LOW`) — see `data/runs/_rolling/run_summary_latest.json` (runDir: ci_m5_gate_20260218_182200).
+**Quality Note**: 
+- **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_CRITICAL_REJECTS`
+- **Window-level** (`_latest.agg_reasons`): `DIVERSITY_PAIRS_LOW, DIVERSITY_ROUTES_LOW`
+- See `data/runs/_rolling/run_summary_latest.json` (runDir: ci_m5_gate_20260218_191720).
 
 **Anchor Discipline (v2.1.0-fix enforced):**
 > Anchors MUST come from on-chain evidence (median valid quotes from runDir artifacts), NOT from market intuition.
