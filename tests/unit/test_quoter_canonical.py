@@ -20,6 +20,11 @@ class TestQuoterCanonical:
         """Set up test environment."""
         monkeypatch.setenv("ARBY_SKIP_RPC", "1")
         monkeypatch.setenv("ARBY_FAKE_BLOCK", "123")
+        # v2.2.0: Reset anchor manager to avoid pollution from other tests
+        from strategy.dynamic_anchors import reset_anchor_manager
+        from strategy.quarantine import reset_quarantine_manager
+        reset_anchor_manager()
+        reset_quarantine_manager()
         
     def test_quoter_success_bypasses_slot0(self, mock_env, monkeypatch):
         """When quoter succeeds, slot0 is not even called for that quote."""
@@ -49,6 +54,7 @@ class TestQuoterCanonical:
             "use_usd_notional": True,
             "target_usd_notional": 1000.0,
             "tokens_usd_price": {"WETH": 2500.0, "USDC": 1.0},
+            "tokens_anchor_price": {"WETH_USDC": 6250.0},  # v2.2.0: Match mock output
             "quote_decimals": {"WETH": 18, "USDC": 6},
             "token_addresses": {
                 "WETH": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
@@ -98,6 +104,7 @@ class TestQuoterCanonical:
             "use_usd_notional": True,
             "target_usd_notional": 1000.0,
             "tokens_usd_price": {"WETH": 2500.0, "USDC": 1.0},
+            "tokens_anchor_price": {"WETH_USDC": 2500.0},  # v2.2.0: Match mock output
             "quote_decimals": {"WETH": 18, "USDC": 6},
             "token_addresses": {
                 "WETH": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",

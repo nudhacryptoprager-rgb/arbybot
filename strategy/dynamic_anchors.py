@@ -91,13 +91,15 @@ class DynamicAnchorManager:
         self,
         config: Dict[str, Any] | None = None,
         cache_path: Path | None = None,
+        load_cache: bool = True,
     ):
         self.config = config or DYNAMIC_ANCHOR_CONFIG
         self.cache_path = cache_path or DEFAULT_CACHE_PATH
         self._pairs: Dict[str, PairAnchorData] = {}
         
-        # Try to load from cache
-        self._load_cache()
+        # Try to load from cache (can be disabled for testing)
+        if load_cache:
+            self._load_cache()
     
     def _load_cache(self) -> None:
         """Load cached anchor data."""
@@ -211,6 +213,16 @@ class DynamicAnchorManager:
             
             median = pair_data.calculate_median(max_age, min_samples)
             if median is not None:
+                # v2.2.0: Check for anchor drift from YAML baseline
+                if yaml_fallback is not None and yaml_fallback > 0:
+                    drift_pct = abs(median - yaml_fallback) / yaml_fallback * 100
+                    drift_threshold = self.config.get("drift_warning_pct", 10.0)
+                    if drift_pct > drift_threshold:
+                        logger.warning(
+                            "ANCHOR_DRIFT: %s dynamic=%.4f yaml=%.4f drift=%.1f%%",
+                            pair, median, yaml_fallback, drift_pct
+                        )
+                
                 return median, "dynamic"
         
         # Fallback to YAML
@@ -218,6 +230,49 @@ class DynamicAnchorManager:
             return yaml_fallback, "yaml_fallback"
         
         return None, "none"
+    
+    def get_anchor_detailed(
+        self,
+        pair: str,
+        yaml_fallback: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get detailed anchor information including age.
+        
+        Returns dict with: anchor_value, anchor_source, anchor_age_seconds, sample_count
+        """
+        result = {
+            "anchor_value": None,
+            "anchor_source": "none",
+            "anchor_age_seconds": None,
+            "sample_count": 0,
+        }
+        
+        if pair in self._pairs:
+            pair_data = self._pairs[pair]
+            max_age = self.config.get("max_sample_age_seconds", 3600)
+            min_samples = self.config.get("min_samples", 3)
+            
+            valid_samples = pair_data.get_valid_samples(max_age)
+            result["sample_count"] = len(valid_samples)
+            
+            if valid_samples and len(valid_samples) >= min_samples:
+                median = pair_data.calculate_median(max_age, min_samples)
+                if median is not None:
+                    result["anchor_value"] = median
+                    result["anchor_source"] = "dynamic"
+                    # Age is time since newest sample
+                    newest_ts = max(s.timestamp for s in valid_samples)
+                    result["anchor_age_seconds"] = time.time() - newest_ts
+                    return result
+        
+        # Fallback to YAML
+        if yaml_fallback is not None:
+            result["anchor_value"] = yaml_fallback
+            result["anchor_source"] = "yaml_fallback"
+            result["anchor_age_seconds"] = None  # YAML has no age
+        
+        return result
     
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about anchor data."""
@@ -267,8 +322,9 @@ def get_anchor_manager() -> DynamicAnchorManager:
 
 
 def reset_anchor_manager() -> None:
-    """Reset the singleton (for testing)."""
+    """Reset the singleton (for testing). Does NOT load from cache."""
     global _anchor_manager
     if _anchor_manager is not None:
         _anchor_manager.clear()
-    _anchor_manager = None
+    # Create fresh manager without loading cache
+    _anchor_manager = DynamicAnchorManager(load_cache=False)

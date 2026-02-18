@@ -381,3 +381,36 @@ def clear_batchers() -> None:
     """Clear all cached batchers (for testing)."""
     global _batchers
     _batchers.clear()
+
+
+def get_aggregate_multicall_stats() -> Dict[str, Any]:
+    """
+    Get aggregated stats across all multicall batchers.
+    
+    Returns:
+        Dict with aggregated multicall metrics
+    """
+    total_calls_made = 0
+    total_calls_batched = 0
+    total_calls_failed = 0
+    total_rpc_calls = 0
+    
+    for batcher in _batchers.values():
+        stats = batcher.get_stats()
+        total_calls_made += stats.get("calls_made", 0)
+        total_calls_batched += stats.get("calls_batched", 0)
+        total_calls_failed += stats.get("calls_failed", 0)
+        total_rpc_calls += stats.get("rpc_calls", 0)
+    
+    success_rate = 1.0
+    if total_calls_batched > 0:
+        success_rate = 1.0 - (total_calls_failed / total_calls_batched)
+    
+    return {
+        "batchers_count": len(_batchers),
+        "calls_made": total_calls_made,
+        "calls_batched": total_calls_batched,
+        "calls_failed": total_calls_failed,
+        "rpc_calls": total_rpc_calls,
+        "success_rate": round(success_rate, 4),
+    }

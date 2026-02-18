@@ -261,6 +261,10 @@ def build_infra_payload(
         "tenderly_error": tenderly_error,
     }
     
+    # v2.2.0: Add ws_lag_ms (alias for ws_handshake_ms for Roadmap M5_0)
+    if ws_handshake_ms is not None:
+        payload["ws_lag_ms"] = ws_handshake_ms
+    
     if rpc_http_host:
         payload["rpc_http_host"] = rpc_http_host
     if rpc_ws_host:
@@ -275,6 +279,15 @@ def build_infra_payload(
         router_stats = _provider_router.get_stats()
         if router_stats["providers_count"] > 0:
             payload["provider_router"] = router_stats
+    
+    # v2.2.0: Add multicall stats
+    try:
+        from core.multicall import get_aggregate_multicall_stats
+        multicall_stats = get_aggregate_multicall_stats()
+        if multicall_stats.get("calls_batched", 0) > 0:
+            payload["multicall"] = multicall_stats
+    except Exception:
+        pass  # multicall not used yet
     
     return payload
 

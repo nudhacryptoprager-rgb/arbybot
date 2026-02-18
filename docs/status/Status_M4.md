@@ -2,10 +2,23 @@
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY, roundtrip NOT_PROFITABLE)  
 **Updated**: 2026-02-18  
-**Gate Version**: v2.1.0  
+**Gate Version**: v2.2.0  
 **Policy Version**: 2.0.8  
-**Engine Version**: v2.1.0-fix  
-**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE (truth_mode_m42=true VALIDATED for `config/real_expanded.yaml` runDir ci_m5_gate_20260215_205854; `real_minimal.yaml` uses truth_mode_m42=false). POOL_DISABLED semantics implemented (ci_m5_gate_20260218_105536).  
+**Engine Version**: v2.2.0  
+**Evidence**: M5_0 infra validated: `ws_connected=true` (ws_lag_ms=155), `preflight.passed=true`, `quarantine_stats` in artifacts. Rolling provenance via `run_context.run_timestamp`. Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. truth_mode_m42=true for real_minimal.yaml. POOL_DISABLED semantics implemented.
+
+## v2.2.0 Changes (2026-02-18)
+
+| Change | File | Description |
+|--------|------|-------------|
+| **MultiProviderRouter** | `strategy/infra.py` | Health-based provider selection with quarantine |
+| **MulticallBatcher** | `core/multicall.py` | Batch V3 pool reads (slot0/liquidity/token) |
+| **DynamicAnchorManager** | `strategy/dynamic_anchors.py` | Rolling median anchors with YAML fallback |
+| **M4.3 Preflight** | `execution/state_machine.py` | `run_preflight_check()` integrated in run_scan_real |
+| **Quarantine persistence** | `strategy/quarantine.py` | Cache to data/cache/quarantine_state.json |
+| **ws_lag_ms** | `strategy/infra.py` | WebSocket latency tracking in infra payload |
+| **execution_ready_count** | `strategy/jobs/run_scan_real.py` | Preflight pass count in stats |
+| **websocket-client** | `pyproject.toml` | Added WS dependency |
 
 ## v2.1.0-fix Changes (2026-02-17)
 
@@ -37,9 +50,9 @@
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_expanded.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-18 POOL_DISABLED)**: runs_in_window=56, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$3371.28, avg_net_usdc=$60.20, unique_pairs=6, unique_routes=4 (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics).
+**Snapshot (2026-02-18 v2.2.0)**: runs_in_window=57, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$3422.84, avg_net_usdc=$60.05, unique_pairs=6, unique_routes=4 (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics). ws_connected=true, ws_lag_ms=155, preflight.passed=true, execution_ready_count=1, quarantine_stats in artifacts.
 
 **Quality Note**: `run_summary_latest.quality_status=WARN` (reasons: `WARN_EXCLUDED_SIGNALS`, `WARN_TOP_PAIR_DOMINANCE`) — see `data/runs/_rolling/run_summary_latest.json` (ci_m5_gate_20260218_111717).
 

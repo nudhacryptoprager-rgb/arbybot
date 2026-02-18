@@ -505,6 +505,35 @@ def run_scan(
         logger.debug("Roundtrip evaluation skipped: %s", rt_err)
         stats["roundtrip"] = {"enabled": False, "error": str(rt_err)}
     
+    # v2.2.0: M4.3 Preflight check for execution readiness
+    try:
+        from execution.state_machine import run_preflight_check
+        
+        # Use best roundtrip result if available
+        best_roundtrip = None
+        if "roundtrip" in stats and stats["roundtrip"].get("results"):
+            best_roundtrip = stats["roundtrip"]["results"][0] if stats["roundtrip"]["results"] else None
+        
+        preflight_result = run_preflight_check(
+            config=config,
+            roundtrip_result=best_roundtrip,
+            infra_payload=infra_payload,
+        )
+        
+        stats["preflight"] = preflight_result.to_dict()
+        stats["execution_ready_count"] = 1 if preflight_result.passed else 0
+        
+        logger.info(
+            "M4.3 Preflight: %s (errors=%d, warnings=%d)",
+            "PASS" if preflight_result.passed else "FAIL",
+            len(preflight_result.errors),
+            len(preflight_result.warnings),
+        )
+    except Exception as pf_err:
+        logger.debug("Preflight check skipped: %s", pf_err)
+        stats["preflight"] = {"enabled": False, "error": str(pf_err)}
+        stats["execution_ready_count"] = 0
+    
     # Build artifact data structures
     scan_data = build_scan_data(config, current_block, stats, quotes_sample, infra_payload)
     
@@ -519,6 +548,17 @@ def run_scan(
     
     # Write artifacts (timestamp already set before opportunity_engine)
     artifacts = write_artifacts(output_dir, timestamp, scan_data, truth_data, reject_data, artifact_mode=artifact_mode)
+    
+    # v2.2.0: Flush quarantine and dynamic anchors state to disk
+    try:
+        from strategy.quarantine import flush_quarantine_manager
+        from strategy.dynamic_anchors import get_anchor_manager
+        
+        flush_quarantine_manager()
+        get_anchor_manager().flush()
+        logger.debug("Quarantine and dynamic anchors state flushed to disk")
+    except Exception as flush_err:
+        logger.debug("State flush skipped: %s", flush_err)
     
     logger.info("Scan completed: %s artifacts written", len(artifacts))
     for name, path in artifacts.items():

@@ -342,6 +342,94 @@ class QuarantineManager:
 
 
 # =============================================================================
+# PERSISTENCE (v2.2.0)
+# =============================================================================
+
+import json
+from pathlib import Path
+
+QUARANTINE_CACHE_PATH = Path("data/cache/quarantine_state.json")
+
+
+def save_quarantine_state(manager: "QuarantineManager") -> bool:
+    """
+    Save quarantine state to disk cache.
+    
+    Returns True if saved successfully.
+    """
+    try:
+        QUARANTINE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        state = {
+            "version": "2.2.0",
+            "saved_at": time.time(),
+            "records": {}
+        }
+        for key, record in manager._records.items():
+            state["records"][str(key)] = {
+                "dex_id": key.dex_id,
+                "pair": key.pair,
+                "fee": key.fee,
+                "quoter_address": key.quoter_address,
+                "consecutive_failures": record.consecutive_failures,
+                "total_failures": record.total_failures,
+                "last_failure_time": record.last_failure_time,
+                "last_error_code": record.last_error_code,
+                "quarantined_until": record.quarantined_until,
+                "quarantine_count": record.quarantine_count,
+            }
+        QUARANTINE_CACHE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        logger.debug("Quarantine state saved to %s", QUARANTINE_CACHE_PATH)
+        return True
+    except Exception as e:
+        logger.warning("Failed to save quarantine state: %s", e)
+        return False
+
+
+def load_quarantine_state(manager: "QuarantineManager") -> bool:
+    """
+    Load quarantine state from disk cache.
+    
+    Returns True if loaded successfully.
+    """
+    try:
+        if not QUARANTINE_CACHE_PATH.exists():
+            return False
+        
+        state = json.loads(QUARANTINE_CACHE_PATH.read_text(encoding="utf-8"))
+        now = time.time()
+        loaded_count = 0
+        
+        for key_str, data in state.get("records", {}).items():
+            # Skip expired quarantines
+            quarantined_until = data.get("quarantined_until", 0.0)
+            if quarantined_until > 0 and quarantined_until <= now:
+                continue  # Expired
+            
+            key = QuarantineKey(
+                dex_id=data["dex_id"],
+                pair=data["pair"],
+                fee=data["fee"],
+                quoter_address=data.get("quoter_address"),
+            )
+            record = FailureRecord(
+                consecutive_failures=data.get("consecutive_failures", 0),
+                total_failures=data.get("total_failures", 0),
+                last_failure_time=data.get("last_failure_time", 0.0),
+                last_error_code=data.get("last_error_code", ""),
+                quarantined_until=quarantined_until,
+                quarantine_count=data.get("quarantine_count", 0),
+            )
+            manager._records[key] = record
+            loaded_count += 1
+        
+        logger.info("Loaded %d quarantine records from cache", loaded_count)
+        return loaded_count > 0
+    except Exception as e:
+        logger.warning("Failed to load quarantine state: %s", e)
+        return False
+
+
+# =============================================================================
 # SINGLETON INSTANCE
 # =============================================================================
 
@@ -349,10 +437,11 @@ _quarantine_manager: QuarantineManager | None = None
 
 
 def get_quarantine_manager() -> QuarantineManager:
-    """Get the singleton quarantine manager."""
+    """Get the singleton quarantine manager (loads from cache if exists)."""
     global _quarantine_manager
     if _quarantine_manager is None:
         _quarantine_manager = QuarantineManager()
+        load_quarantine_state(_quarantine_manager)
     return _quarantine_manager
 
 
@@ -362,3 +451,11 @@ def reset_quarantine_manager() -> None:
     if _quarantine_manager is not None:
         _quarantine_manager.clear()
     _quarantine_manager = None
+
+
+def flush_quarantine_manager() -> bool:
+    """Save current quarantine state to disk."""
+    global _quarantine_manager
+    if _quarantine_manager is not None:
+        return save_quarantine_state(_quarantine_manager)
+    return False
