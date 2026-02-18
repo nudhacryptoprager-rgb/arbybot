@@ -275,19 +275,27 @@ def build_infra_payload(
     # v2.2.0: Add provider stats from chains/providers.py (canonical source)
     # Replaces the duplicate MultiProviderRouter scaffolding
     try:
-        from chains.providers import get_global_provider_stats
+        from chains.providers import get_global_provider_stats, get_primary_provider_id
         provider_stats = get_global_provider_stats()
         if provider_stats.get("providers_count", 0) > 0:
+            # v2.2.0 Fix Step 3: Prove multi-provider with endpoint details
+            provider_names = provider_stats.get("provider_names", [])
+            endpoints_count = 0
+            for chain_data in provider_stats.get("providers", {}).values():
+                endpoints_count += len(chain_data)  # Each chain has dict of URL -> stats
+            
             payload["provider_router"] = {
                 "providers_count": provider_stats["providers_count"],
+                "endpoints_count": endpoints_count,  # v2.2.0: Number of actual RPC endpoints
+                "provider_names": provider_names,  # v2.2.0: List of provider names
                 "total_requests": provider_stats.get("total_requests", 0),
                 "global_success_rate": provider_stats.get("global_success_rate", 1.0),
                 "source": "chains/providers.py",  # v2.2.0: Canonical source
             }
-            # Set provider_id to chain_id for M5_0 artifact requirement
-            chain_ids = list(provider_stats.get("providers", {}).keys())
-            if chain_ids:
-                payload["provider_id"] = f"chain_{chain_ids[0]}"
+            # v2.2.0 Fix Step 2: Set provider_id to actual provider name (not chain_id)
+            # Roadmap M5_0 requires "який провайдер реально використано"
+            chain_id = config.get("chain_id", 42161) if isinstance(config, dict) else 42161
+            payload["provider_id"] = get_primary_provider_id(chain_id)
     except Exception as e:
         logger.debug("Provider stats unavailable: %s", e)
     

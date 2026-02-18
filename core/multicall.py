@@ -87,6 +87,16 @@ class MulticallBatcher:
             "calls_failed": 0,
             "rpc_calls": 0,
         }
+        # v2.2.0 Fix Step 4: Track call types explicitly
+        self.call_types: Dict[str, int] = {
+            "slot0": 0,
+            "liquidity": 0,
+            "token0": 0,
+            "token1": 0,
+            "decimals": 0,
+            "symbol": 0,
+            "fee": 0,
+        }
         self._w3 = None
         self._multicall = None
     
@@ -157,6 +167,7 @@ class MulticallBatcher:
         calls = self._encode_calls(pool_addresses, V3_SLOT0_SELECTOR)
         self.stats["calls_batched"] += len(calls)
         self.stats["calls_made"] += 1
+        self.call_types["slot0"] += len(pool_addresses)  # v2.2.0: Track call type
         
         results = self._execute_multicall(calls)
         if results is None:
@@ -194,6 +205,7 @@ class MulticallBatcher:
         calls = self._encode_calls(pool_addresses, V3_LIQUIDITY_SELECTOR)
         self.stats["calls_batched"] += len(calls)
         self.stats["calls_made"] += 1
+        self.call_types["liquidity"] += len(pool_addresses)  # v2.2.0: Track call type
         
         results = self._execute_multicall(calls)
         if results is None:
@@ -360,9 +372,11 @@ class MulticallBatcher:
         
         return output
     
-    def get_stats(self) -> Dict[str, int]:
-        """Get batcher statistics."""
-        return dict(self.stats)
+    def get_stats(self) -> Dict[str, Any]:
+        """Get batcher statistics including call types."""
+        stats = dict(self.stats)
+        stats["call_types"] = dict(self.call_types)  # v2.2.0: Include call types
+        return stats
 
 
 # Singleton batcher per (rpc_url, block_num)
@@ -394,6 +408,8 @@ def get_aggregate_multicall_stats() -> Dict[str, Any]:
     total_calls_batched = 0
     total_calls_failed = 0
     total_rpc_calls = 0
+    # v2.2.0 Fix Step 4: Aggregate call types
+    aggregated_call_types: Dict[str, int] = {}
     
     for batcher in _batchers.values():
         stats = batcher.get_stats()
@@ -401,10 +417,16 @@ def get_aggregate_multicall_stats() -> Dict[str, Any]:
         total_calls_batched += stats.get("calls_batched", 0)
         total_calls_failed += stats.get("calls_failed", 0)
         total_rpc_calls += stats.get("rpc_calls", 0)
+        # Aggregate call types
+        for call_type, count in stats.get("call_types", {}).items():
+            aggregated_call_types[call_type] = aggregated_call_types.get(call_type, 0) + count
     
     success_rate = 1.0
     if total_calls_batched > 0:
         success_rate = 1.0 - (total_calls_failed / total_calls_batched)
+    
+    # v2.2.0: Build list of requested fields that had calls
+    requested_fields = [k for k, v in aggregated_call_types.items() if v > 0]
     
     return {
         "batchers_count": len(_batchers),
@@ -413,4 +435,6 @@ def get_aggregate_multicall_stats() -> Dict[str, Any]:
         "calls_failed": total_calls_failed,
         "rpc_calls": total_rpc_calls,
         "success_rate": round(success_rate, 4),
+        "call_types": aggregated_call_types,  # v2.2.0: Explicit call types
+        "requested_fields": requested_fields,  # v2.2.0: List of fields fetched
     }

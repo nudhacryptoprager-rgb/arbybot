@@ -5,7 +5,20 @@
 **Gate Version**: v2.2.0  
 **Policy Version**: 2.0.8  
 **Engine Version**: v2.2.0  
-**Evidence**: M5_0 infra validated: `ws_connected=true` (ws_lag_ms=155), `preflight.passed=true`, `quarantine_stats` in artifacts. Rolling provenance via `run_context.run_timestamp`. Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. truth_mode_m42=true for real_minimal.yaml. POOL_DISABLED semantics implemented.
+**Evidence**: M5_0 infra validated: `ws_connected=true` (ws_lag_ms=125-155), `preflight.passed=true`, `quarantine_stats` in artifacts. Rolling provenance via `run_context.run_timestamp`. Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. truth_mode_m42=true for real_minimal.yaml. POOL_DISABLED semantics implemented.
+
+## v2.2.0 Fix Steps (2026-02-18)
+
+| Step | Change | File | Description |
+|------|--------|------|-------------|
+| 2 | **provider_id semantics** | `chains/providers.py` | `extract_provider_name()` + `get_primary_provider_id()` – returns "alchemy" not "chain_42161" |
+| 3 | **multi-provider proof** | `strategy/infra.py` | `endpoints_count` + `provider_names` in provider_router payload |
+| 4 | **multicall contract** | `core/multicall.py` | `call_types` tracking + `requested_fields` in stats |
+| 5 | **truth-mode reporting** | `strategy/jobs/run_scan_real.py` | Conditional "one_leg_profitable (DIAGNOSTIC)" vs "profitable" |
+| 6 | **would_execute_count** | `strategy/jobs/run_scan_real.py` | Requires `roundtrip_profitable=True` when truth_mode_m42 |
+| 7 | **Appendix A integration** | `strategy/jobs/run_scan_real.py` | `universe_source=config\|intent` flag |
+| 8 | **intent_loader tests** | `tests/unit/test_intent_loader.py` | 19 tests for IntentPair/IntentUniverse |
+| 9 | **discovery dry-run** | `discovery/index_factories.py` | `count_discovery_candidates()` + `discovery_dry_run` config flag |
 
 ## v2.2.0 Changes (2026-02-18)
 
@@ -52,9 +65,9 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-18 v2.2.0)**: runs_in_window=57, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$3422.84, avg_net_usdc=$60.05, unique_pairs=6, unique_routes=4 (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics). ws_connected=true, ws_lag_ms=155, preflight.passed=true, execution_ready_count=1, quarantine_stats in artifacts.
+**Snapshot (2026-02-18 v2.2.0 post-fix)**: runs_in_window=59, data_run_rate=0.983, pass_rate=1.0, total_net_usdc=$3453.67, avg_net_usdc=$59.55, unique_pairs=7, unique_routes=4 (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics). ws_connected=true, ws_lag_ms=125-155, preflight.passed=true, execution_ready_count=1, quarantine_stats in artifacts. **v2.2.0 Fix Steps**: provider_id semantics fixed (alchemy not chain_42161), multicall.call_types tracking, truth_mode conditional logging, would_execute_count requires roundtrip_profitable, discovery_dry_run flag integrated, intent_loader 19 tests added.
 
-**Quality Note**: `run_summary_latest.quality_status=WARN` (reasons: `WARN_EXCLUDED_SIGNALS`, `WARN_TOP_PAIR_DOMINANCE`) — see `data/runs/_rolling/run_summary_latest.json` (ci_m5_gate_20260218_111717).
+**Quality Note**: `run_summary_latest.quality_status=WARN` (reasons: `WARN_EXCLUDED_SIGNALS`, `WARN_CRITICAL_REJECTS`, `WARN_TOP_PAIR_DOMINANCE`) — see `data/runs/_rolling/run_summary_latest.json` (ci_m5_gate_20260218_152511).
 
 **Anchor Discipline (v2.1.0-fix enforced):**
 > Anchors MUST come from on-chain evidence (median valid quotes from runDir artifacts), NOT from market intuition.

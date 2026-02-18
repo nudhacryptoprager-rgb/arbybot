@@ -394,11 +394,12 @@ def get_global_provider_stats() -> Dict[str, Any]:
         Dict with provider stats for all registered chains
     """
     if not _registry.chain_ids:
-        return {"providers_count": 0, "providers": {}}
+        return {"providers_count": 0, "providers": {}, "provider_names": []}
     
     all_stats: Dict[str, Any] = {}
     total_success = 0
     total_requests = 0
+    provider_names: list[str] = []
     
     for chain_id in _registry.chain_ids:
         provider = _registry.get(chain_id)
@@ -407,11 +408,15 @@ def get_global_provider_stats() -> Dict[str, Any]:
             all_stats[str(chain_id)] = chain_stats
             
             # Aggregate across all endpoints
-            for url_stats in chain_stats.values():
+            for url, url_stats in chain_stats.items():
                 total_requests += url_stats.get("total_requests", 0)
                 sr = url_stats.get("success_rate", 1.0)
                 tr = url_stats.get("total_requests", 0)
                 total_success += int(sr * tr)
+                # v2.2.0: Extract provider names
+                pname = extract_provider_name(url)
+                if pname not in provider_names:
+                    provider_names.append(pname)
     
     global_success_rate = round(total_success / max(total_requests, 1), 4)
     
@@ -420,4 +425,67 @@ def get_global_provider_stats() -> Dict[str, Any]:
         "total_requests": total_requests,
         "global_success_rate": global_success_rate,
         "providers": all_stats,
+        "provider_names": provider_names,  # v2.2.0: List of actual provider names
     }
+
+def extract_provider_name(url: str) -> str:
+    """
+    Extract friendly provider name from RPC URL.
+    
+    v2.2.0: For infra.provider_id (Roadmap M5_0 - actual provider identification).
+    
+    Examples:
+        "https://arb-mainnet.g.alchemy.com/v2/..." -> "alchemy"
+        "https://arbitrum.llamarpc.com" -> "llamarpc"
+        "https://arb1.arbitrum.io/rpc" -> "arbitrum_public"
+        "http://localhost:8545" -> "localhost"
+    """
+    url_lower = url.lower()
+    
+    if "alchemy.com" in url_lower:
+        return "alchemy"
+    elif "infura.io" in url_lower:
+        return "infura"
+    elif "llamarpc.com" in url_lower:
+        return "llamarpc"
+    elif "quicknode.com" in url_lower or "quiknode.pro" in url_lower:
+        return "quicknode"
+    elif "tenderly.co" in url_lower:
+        return "tenderly"
+    elif "ankr.com" in url_lower:
+        return "ankr"
+    elif "arbitrum.io" in url_lower:
+        return "arbitrum_public"
+    elif "drpc.org" in url_lower:
+        return "drpc"
+    elif "localhost" in url_lower or "127.0.0.1" in url_lower:
+        return "localhost"
+    else:
+        # Extract domain from URL
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            domain = parsed.netloc.split(":")[0]  # Remove port
+            # Remove www. prefix and take first part
+            domain = domain.replace("www.", "")
+            parts = domain.split(".")
+            if parts:
+                return parts[0]
+        except Exception:
+            pass
+        return "unknown"
+
+
+def get_primary_provider_id(chain_id: int = 42161) -> str:
+    """
+    Get the primary provider ID for a chain.
+    
+    v2.2.0: For infra.provider_id field (Roadmap M5_0).
+    
+    Returns:
+        Provider name derived from first RPC URL.
+    """
+    provider = _registry.get(chain_id)
+    if provider and provider.rpc_urls:
+        return extract_provider_name(provider.rpc_urls[0])
+    return "unknown"

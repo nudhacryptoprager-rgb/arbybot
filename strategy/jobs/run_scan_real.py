@@ -168,6 +168,7 @@ def run_scan(
     # M4.2: Config validation - algebra DEXes require quoter
     dexes_list = config.get("dexes") or []
     use_quoter_v2 = config.get("use_quoter_v2", False)
+    truth_mode_m42 = config.get("truth_mode_m42", False)  # v2.2.0 Fix Step 5
     algebra_dexes = [d for d in dexes_list if d in ("camelot_v3", "algebra", "swaap_v3")]
     
     if algebra_dexes and not use_quoter_v2:
@@ -222,7 +223,33 @@ def run_scan(
     
     dexes_list = config.get("dexes") or []
     chain_key = config.get("chain", "arbitrum_one")
-    pairs_list = load_pairs(chain_key, config, use_intent=False)
+    
+    # v2.2.0 Fix Step 7: universe_source=config|intent for Appendix A integration
+    universe_source = config.get("universe_source", "config")
+    use_intent = (universe_source == "intent")
+    pairs_list = load_pairs(chain_key, config, use_intent=use_intent)
+    
+    if use_intent:
+        logger.info("Using intent.txt universe (universe_source=intent)")
+    else:
+        logger.debug("Using config pairs (universe_source=config)")
+    
+    # v2.2.0 Fix Step 9: discovery_dry_run flag - count candidates without RPC
+    discovery_dry_run = config.get("discovery_dry_run", False)
+    if discovery_dry_run:
+        try:
+            from discovery.index_factories import count_discovery_candidates
+            dexes_list_cfg = config.get("dexes") or []
+            candidates = count_discovery_candidates(chain_key, dexes_list_cfg if dexes_list_cfg else None)
+            stats["discovery_candidates_count"] = candidates.get("discovery_candidates_count", 0)
+            logger.info(
+                "Discovery dry-run: %d candidates (resolvable pairs), %d total queries possible",
+                candidates["discovery_candidates_count"],
+                candidates["total_potential_queries"],
+            )
+        except Exception as e:
+            logger.warning("Discovery dry-run failed: %s", e)
+            stats["discovery_candidates_count"] = 0
     
     # v2.0.8: quotes_total = attempted quotes (valid + rejected), accounts for fee_tiers
     stats["quotes_total"] = len(quotes_sample) + len(rejected_quotes)
@@ -233,6 +260,7 @@ def run_scan(
     if total_attempts > 0:
         rpc_failures = stats.get("rpc_errors", 0) + counts["pool_missing"] + counts["v3_slot0_failed"]
         stats["rpc_success_rate"] = max(0.0, 1.0 - rpc_failures / total_attempts)
+
     else:
         stats["rpc_success_rate"] = 0.0 if stats.get("rpc_errors", 0) > 0 else 1.0
     
@@ -345,13 +373,24 @@ def run_scan(
             "enabled": True,
             "summary": opps_summary,
             "top_opportunities": opps_list[:5] if opps_list else [],
+            "truth_mode_m42": truth_mode_m42,  # v2.2.0: Track truth mode
         }
-        logger.info(
-            "OpportunityEngine: %d opportunities, %d profitable, best=$%.2f",
-            opps_summary.get("total_opportunities", 0),
-            opps_summary.get("profitable_count", 0),
-            opps_summary.get("best_net_profit_usd", 0),
-        )
+        # v2.2.0 Fix Step 5: Normalize truth-mode reporting
+        # When truth_mode=true, one-leg profits are diagnostic only
+        if truth_mode_m42:
+            logger.info(
+                "OpportunityEngine: %d opportunities, %d one_leg_profitable (DIAGNOSTIC), best=$%.2f",
+                opps_summary.get("total_opportunities", 0),
+                opps_summary.get("profitable_count", 0),
+                opps_summary.get("best_net_profit_usd", 0),
+            )
+        else:
+            logger.info(
+                "OpportunityEngine: %d opportunities, %d profitable, best=$%.2f",
+                opps_summary.get("total_opportunities", 0),
+                opps_summary.get("profitable_count", 0),
+                opps_summary.get("best_net_profit_usd", 0),
+            )
     except Exception as e:
         logger.debug("OpportunityEngine skipped: %s", e)
         stats["opportunity_engine"] = {"enabled": False, "error": str(e)}
@@ -531,8 +570,19 @@ def run_scan(
         else:
             stats["execution_ready_count"] = 0
         
-        # Diagnostic: how many would execute if kill switch was OFF
-        stats["would_execute_count"] = 1 if preflight_result.passed else 0
+        # v2.2.0 Fix Step 6: would_execute_count semantics
+        # When truth_mode_m42=true, would_execute only if roundtrip-profitable
+        # (one-leg profit is diagnostic only, not execution-worthy)
+        roundtrip_profitable = (
+            best_roundtrip is not None and 
+            best_roundtrip.get("is_profitable", False)
+        )
+        if truth_mode_m42:
+            # Truth mode: require roundtrip profit for "would execute"
+            stats["would_execute_count"] = 1 if (preflight_result.passed and roundtrip_profitable) else 0
+        else:
+            # Legacy mode: just preflight pass
+            stats["would_execute_count"] = 1 if preflight_result.passed else 0
         
         logger.info(
             "M4.3 Preflight: %s (errors=%d, warnings=%d, execution_ready=%d, would_execute=%d)",

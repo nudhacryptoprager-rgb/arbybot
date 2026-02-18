@@ -371,3 +371,75 @@ def reset_pool_index() -> None:
     """Reset the singleton (for testing)."""
     global _pool_index
     _pool_index = None
+
+
+# =============================================================================
+# DRY-RUN / CANDIDATE COUNT
+# =============================================================================
+
+def count_discovery_candidates(chain: str, dexes: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Count discovery candidates without making RPC calls (dry-run).
+    
+    Returns stats about how many pairs/pools could potentially be discovered
+    based on intent.txt and core_tokens.yaml.
+    
+    Args:
+        chain: Chain to analyze
+        dexes: DEX list to consider (default: all known for chain)
+        
+    Returns:
+        dict with candidate counts and details
+    """
+    universe = get_intent_universe()
+    registry = get_token_registry()
+    
+    pairs = universe.get_pairs_for_chain(chain)
+    chain_factories = FACTORY_ADDRESSES.get(chain, {})
+    
+    if dexes is None:
+        dexes = list(chain_factories.keys())
+    
+    # Count pairs with fully resolved tokens
+    resolvable_pairs = []
+    unresolvable_pairs = []
+    
+    for pair in pairs:
+        addr_a = registry.get_address(chain, pair.token_a)
+        addr_b = registry.get_address(chain, pair.token_b)
+        
+        if addr_a and addr_b:
+            resolvable_pairs.append({
+                "token_a": pair.token_a,
+                "token_b": pair.token_b,
+                "addr_a": addr_a,
+                "addr_b": addr_b,
+            })
+        else:
+            unresolvable_pairs.append({
+                "token_a": pair.token_a,
+                "token_b": pair.token_b,
+                "missing_a": not addr_a,
+                "missing_b": not addr_b,
+            })
+    
+    # Count potential pool queries (V3 = 4 fee tiers per pair per dex)
+    v3_dexes = [d for d in dexes if "v3" in d.lower()]
+    v2_dexes = [d for d in dexes if "v2" in d.lower()]
+    
+    potential_v3_queries = len(resolvable_pairs) * len(v3_dexes) * len(V3_FEE_TIERS)
+    potential_v2_queries = len(resolvable_pairs) * len(v2_dexes)
+    
+    return {
+        "chain": chain,
+        "intent_pairs_total": len(pairs),
+        "resolvable_pairs": len(resolvable_pairs),
+        "unresolvable_pairs": len(unresolvable_pairs),
+        "dexes_available": dexes,
+        "v3_dexes": v3_dexes,
+        "v2_dexes": v2_dexes,
+        "potential_v3_queries": potential_v3_queries,
+        "potential_v2_queries": potential_v2_queries,
+        "total_potential_queries": potential_v3_queries + potential_v2_queries,
+        "discovery_candidates_count": len(resolvable_pairs),
+    }
