@@ -1,16 +1,19 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY, roundtrip NOT_PROFITABLE)  
-**Updated**: 2026-02-17  
+**Updated**: 2026-02-18  
 **Gate Version**: v2.1.0  
 **Policy Version**: 2.0.8  
 **Engine Version**: v2.1.0-fix  
-**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE (truth_mode_m42=true VALIDATED for `config/real_expanded.yaml` runDir ci_m5_gate_20260215_205854; `real_minimal.yaml` uses truth_mode_m42=false)  
+**Evidence**: Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE (truth_mode_m42=true VALIDATED for `config/real_expanded.yaml` runDir ci_m5_gate_20260215_205854; `real_minimal.yaml` uses truth_mode_m42=false). POOL_DISABLED semantics implemented (ci_m5_gate_20260218_105536).  
 
 ## v2.1.0-fix Changes (2026-02-17)
 
 | Change | File | Description |
 |--------|------|-------------|
+| **POOL_DISABLED semantics** | `config/pairs.py`, `strategy/quotes.py` | `is_pool_disabled()` function, distinct from POOL_MISSING |
+| **pool_disabled_count** | `strategy/artifacts.py`, `run_scan_real.py` | Counter in reject_histogram |
+| **test_disabled_pools.py** | `tests/unit/` | 9 unit tests for disabled_pools behavior |
 | **WBTC_WETH anchor fix** | `config/real_minimal.yaml` | Updated anchor from 17 to 35 (on-chain median ~34.4) |
 | **WETH_USDC anchor fix** | `config/real_minimal.yaml` | Updated anchor from 2000 to 1980 (on-chain median ~1977) |
 | **slot0 PRICE_SANITY fix** | `strategy/quotes.py` | Fixed anchor key format (underscore + reversed_tag fallback) |
@@ -36,7 +39,7 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_expanded.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-17 post-quarantine)**: runs_in_window=53, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$3202.51, avg_net_usdc=$60.42, unique_pairs=6, unique_routes_cross_dex=2. Rolling window RESET + 2 bad pools QUARANTINED (sushiswap_v3_WBTC_WETH_500, sushiswap_v3_LINK_USDC_3000).
+**Snapshot (2026-02-18 POOL_DISABLED)**: runs_in_window=55, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$3318.09, avg_net_usdc=$60.33, unique_pairs=6, unique_routes_cross_dex=2. POOL_DISABLED=5, POOL_MISSING=0 (correct semantics).
 
 **Anchor Discipline (v2.1.0-fix enforced):**
 > Anchors MUST come from on-chain evidence (median valid quotes from runDir artifacts), NOT from market intuition.
@@ -44,13 +47,19 @@
 > If a pool returns extreme prices (e.g., WBTC/WETH sushi fee=500 returns `price_exact~3.4e28` at tick=887271 vs anchor 35), it's a bad pool, not a bad anchor.
 > Evidence source: `data/runs/ci_m5_gate_*` scan artifacts → median price from valid quotes per pair.
 
-**Quarantined Pools (v2.1.0-fix, 2026-02-17):**
-| Pool | Address | Reason |
-|------|---------|--------|
-| sushiswap_v3_WBTC_WETH_500 | 0xf790... | tick=887271, price_exact~3.4e28, PRICE_SANITY_FAILED |
-| sushiswap_v3_LINK_USDC_3000 | 0x7e039... | price_exact~19.90 vs anchor 9.0, PRICE_SANITY_FAILED |
+**Quarantined Pools (v2.1.0-fix, 2026-02-18):**
 
-**Next Focus**: M5_0 always-online data-plane (WS + Alchemy + multicall) + dynamic anchors + auto-quarantine.
+> **Migration (v2.1.0-fix)**: Manual comment-out pools deprecated. Now using `disabled_pools:` section in YAML (machine-readable quarantine with reasons).
+
+| Pool | Address | Reason | Evidence Run |
+|------|---------|--------|--------------|
+| sushiswap_v3_WBTC_WETH_500 | 0xf790... | tick=887271, price_exact~3.4e28 | ci_m5_gate_20260217_103807 |
+| sushiswap_v3_LINK_USDC_3000 | 0x7e039... | price_exact~19.9 vs anchor 9.0 | ci_m5_gate_20260217_103807 |
+| uniswap_v3_GMX_WETH_500 | 0xb435... | price_exact~0.00323 vs anchor 0.008 | ci_m5_gate_20260217_113317 |
+| uniswap_v3_GMX_WETH_3000 | 0x1aEE... | price_exact~0.00327 vs anchor 0.008 | ci_m5_gate_20260217_113317 |
+| sushiswap_v3_ARB_USDC_3000 | 0x14716... | price_exact~1.009 vs anchor 0.11 (inverted) | ci_m5_gate_20260217_113317 |
+
+**Next Focus**: M5_0 always-online data-plane (WS + Alchemy + multicall) + dynamic anchors + runtime auto-quarantine via `strategy/quarantine.py`.
 
 **Anchor values (from on-chain evidence 2026-02-17):**
 | Pair | Old Anchor | New Anchor | Evidence |

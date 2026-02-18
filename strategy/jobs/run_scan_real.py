@@ -216,6 +216,7 @@ def run_scan(
     # Update stats from counts
     stats["quotes_rejected"] = len(rejected_quotes)
     stats["pool_missing_count"] = counts["pool_missing"]
+    stats["pool_disabled_count"] = counts.get("pool_disabled", 0)
     stats["v3_slot0_failed_count"] = counts["v3_slot0_failed"]
     
     dexes_list = config.get("dexes") or []

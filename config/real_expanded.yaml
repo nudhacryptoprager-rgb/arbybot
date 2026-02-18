@@ -125,11 +125,8 @@ pools:
   sushiswap_v3_ARB_USDC_500: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
   sushiswap_v3_ARB_USDC_3000: "0x14716A16ef9eeAaDa7E266bcF023b71D2c9ADbf3"
   # === LINK/USDC (verified 2026-02-13) ===
-  # v2.0.8: uniswap_v3_LINK_USDC_500 has QUOTE_ZERO_OUT - commented out
-  # uniswap_v3_LINK_USDC_500: "0x655C1607F8c2E73D5b4ddAbCe9Ba8792b87592B6"
+  # v2.0.8: uniswap_v3_LINK_USDC_500 has QUOTE_ZERO_OUT - see disabled_pools
   uniswap_v3_LINK_USDC_3000: "0xbBe36e6f0331C6a36AB44Bc8421E28E1a1871C1e"
-  # QUARANTINE (2026-02-17): price_exact~19.9 vs anchor 9.0, PRICE_SANITY_FAILED
-  # sushiswap_v3_LINK_USDC_3000: "0x7e039FC42A52d717E79288d58742A41C7BD2b742"
   # === ARB/USDT (verified 2026-02-13) ===
   uniswap_v3_ARB_USDT_500: "0xB791Ad21ba45C76629003b4A2f04c0d544406e37"
   uniswap_v3_ARB_USDT_3000: "0x97bca422Ec0Ee4851F2110eA743C1cd0a14835a1"
@@ -148,6 +145,20 @@ pools:
   camelot_v3_ARB_WETH_0: "0xcDA53B1F66614552F834cEeF671A0aBa41d04c1e"
   camelot_v3_LINK_WETH_0: "0x6Cb72EB0fEa821d4F7Ef6F3D09b6d36Ca8f57BF4"
   camelot_v3_ARB_USDC_0: "0xfaE2AE0a9f87FD35b5b0E24B47BAC796A7EEfEa1"
+
+# Disabled pools (machine-readable quarantine, v2.1.0-fix)
+# See config/real_minimal.yaml for full list with reasons
+disabled_pools:
+  sushiswap_v3_LINK_USDC_3000:
+    address: "0x7e039FC42A52d717E79288d58742A41C7BD2b742"
+    reason: "PRICE_SANITY_FAILED"
+    detail: "price_exact~19.9 vs anchor 9.0"
+    disabled_date: "2026-02-17"
+  uniswap_v3_LINK_USDC_500:
+    address: "0x655C1607F8c2E73D5b4ddAbCe9Ba8792b87592B6"
+    reason: "QUOTE_ZERO_OUT"
+    detail: "no liquidity / zero output"
+    disabled_date: "2026-02-13"
 
 # Token addresses (Arbitrum)
 tokens:

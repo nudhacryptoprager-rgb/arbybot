@@ -242,6 +242,38 @@ def get_pair_info(chain: str, token_in: str, token_out: str) -> Optional[PairCon
     )
 
 
+def is_pool_disabled(
+    config: Dict[str, Any],
+    dex: str,
+    pair_tag: str,
+    fee_tier: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Check if a pool is in the disabled_pools section.
+    
+    Args:
+        config: YAML config dict
+        dex: DEX key (e.g. "uniswap_v3")
+        pair_tag: Pair tag (e.g. "WETH_USDC")
+        fee_tier: Fee tier (e.g. 500)
+        
+    Returns:
+        Disabled pool info dict if disabled, None otherwise
+        The dict contains: address, reason, detail, evidence_run, disabled_date
+    """
+    disabled_pools = config.get("disabled_pools", {})
+    key = f"{dex}_{pair_tag}_{fee_tier}"
+    
+    if key in disabled_pools:
+        info = disabled_pools[key]
+        if isinstance(info, dict):
+            return info
+        # Legacy: just address string
+        return {"address": info, "reason": "DISABLED"}
+    
+    return None
+
+
 def get_pool_address(
     config: Dict[str, Any],
     dex: str,

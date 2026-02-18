@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from config.pairs import load_pairs, get_pool_address, PairConfig
+from config.pairs import load_pairs, get_pool_address, is_pool_disabled, PairConfig
 from strategy.compat import QuoteCompat
 
 logger = logging.getLogger("strategy.quotes")
@@ -402,6 +402,7 @@ def collect_quotes(
     counts = {
         "quotes_fetched": 0,
         "pool_missing": 0,
+        "pool_disabled": 0,
         "v3_slot0_failed": 0,
         "price_calc_failed": 0,
         "no_onchain_price": 0,
@@ -466,6 +467,23 @@ def collect_quotes(
                 effective_fee_tiers = fee_tiers
             
             for fee_tier in effective_fee_tiers:
+                # v2.1.0-fix: Check disabled_pools FIRST (before pool lookup)
+                disabled_info = is_pool_disabled(config, dex, token_pair_tag, fee_tier)
+                if disabled_info:
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "reason": "POOL_DISABLED",
+                        "gate_passed": False,
+                        "error": f"Pool disabled: {disabled_info.get('reason', 'DISABLED')} - {disabled_info.get('detail', '')}",
+                        "disabled_info": disabled_info,
+                    })
+                    counts["pool_disabled"] += 1
+                    logger.info("POOL_DISABLED: %s %s/%s fee=%d reason=%s", 
+                               dex, token_in, token_out, fee_tier, disabled_info.get('reason', 'DISABLED'))
+                    continue
+                
                 # v2.0.8: STRICT fee-tier lookup - no fallback, use enforcement_mode="warn"
                 # get_pool_address returns None if fee_tier specified but pool not found
                 pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)

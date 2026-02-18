@@ -102,8 +102,6 @@ pools:
   # === WBTC/WETH ===
   uniswap_v3_WBTC_WETH_500: "0x2f5e87C9312fa29aed5c179E456625D79015299c"
   uniswap_v3_WBTC_WETH_3000: "0x149e36E72726e0BceA5c59d40df2c43F60f5A22D"
-  # QUARANTINE (2026-02-17): tick=887271, price_exact~3.4e28, PRICE_SANITY_FAILED
-  # sushiswap_v3_WBTC_WETH_500: "0xf79099596045A41bB2ae53fa6677576687242455"
   sushiswap_v3_WBTC_WETH_3000: "0x6F10667F314498649eb2f80da244e8c6E9f031d5"
   # === ARB/WETH ===
   uniswap_v3_ARB_WETH_500: "0xC6F780497A95e246EB9449f5e4770916DCd6396A"
@@ -135,6 +133,14 @@ pools:
   uniswap_v3_WBTC_USDC_3000: "0x6985cb98CE393FCE8d6272127F39013f61e36166"
   sushiswap_v3_WBTC_USDC_500: "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"
   sushiswap_v3_WBTC_USDC_3000: "0x4E5c883d6e9cCE0be8E464C3066bCFF036Da674a"
+
+# Disabled pools (machine-readable quarantine, v2.1.0-fix)
+# See config/real_minimal.yaml for full list with reasons
+disabled_pools:
+  sushiswap_v3_WBTC_WETH_500:
+    address: "0xf79099596045A41bB2ae53fa6677576687242455"
+    reason: "PRICE_SANITY_FAILED"
+    disabled_date: "2026-02-17"
 
 # Token addresses (Arbitrum)
 tokens:
