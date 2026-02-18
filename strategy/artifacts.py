@@ -87,14 +87,19 @@ def build_truth_data(
     infra_payload: Dict[str, Any],
     raw_bps: int,
     spread_threshold_bps: int,
+    run_timestamp: Optional[str] = None,  # v2.3.0: Unified provenance
 ) -> Dict[str, Any]:
     """
     Build truth report data structure.
     
+    Args:
+        run_timestamp: Optional ISO-8601 timestamp for unified provenance.
+                       If not provided, generates new timestamp.
+    
     Returns:
         Truth report dict
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = run_timestamp or datetime.now(timezone.utc).isoformat()
     
     truth_data = {
         "schema_version": SCHEMA_VERSION,
@@ -213,6 +218,7 @@ def build_reject_data(
     rejected_quotes: List[Dict[str, Any]],
     stats: Dict[str, Any],
     infra_payload: Dict[str, Any],
+    run_timestamp: Optional[str] = None,  # v2.3.0: Unified provenance
 ) -> Dict[str, Any]:
     """
     Build reject histogram data structure.
@@ -220,10 +226,13 @@ def build_reject_data(
     Note: sanity_rejects is a SUBSET of rejected_quotes (filtered by reason).
     We use rejected_quotes as canonical rejects list to avoid double-counting.
     
+    Args:
+        run_timestamp: Optional ISO-8601 timestamp for unified provenance.
+    
     Returns:
         Reject histogram dict
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = run_timestamp or datetime.now(timezone.utc).isoformat()
     # v2.1.0: FIX double-count bug - sanity_rejects is subset of rejected_quotes
     total_rejects = len(rejected_quotes)
     
@@ -254,6 +263,10 @@ def build_reject_data(
         "schema_version": SCHEMA_VERSION,
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
+        # v2.3.0: Unified provenance
+        "run_context": {
+            "run_timestamp": now,
+        },
         "chain_id": config.get("chain_id", 42161),
         "current_block": current_block,
         "rejects": rejected_quotes,  # canonical list (includes sanity_rejects)
@@ -282,19 +295,27 @@ def build_scan_data(
     stats: Dict[str, Any],
     quotes_sample: List[Dict[str, Any]],
     infra_payload: Dict[str, Any],
+    run_timestamp: Optional[str] = None,  # v2.3.0: Unified provenance
 ) -> Dict[str, Any]:
     """
     Build scan data structure.
     
+    Args:
+        run_timestamp: Optional ISO-8601 timestamp for unified provenance.
+    
     Returns:
         Scan data dict
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = run_timestamp or datetime.now(timezone.utc).isoformat()
     dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
     
     return {
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
+        # v2.3.0: Unified provenance
+        "run_context": {
+            "run_timestamp": now,
+        },
         "chain_id": config.get("chain_id", 42161),
         "current_block": current_block,
         "quotes_total": stats["quotes_total"],

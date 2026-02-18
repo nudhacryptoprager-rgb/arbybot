@@ -604,15 +604,19 @@ def run_scan(
         stats["would_execute_count"] = 0
     
     # Build artifact data structures
-    scan_data = build_scan_data(config, current_block, stats, quotes_sample, infra_payload)
+    # v2.3.0: Unified run_timestamp for provenance across all artifacts
+    from datetime import timezone
+    run_timestamp = datetime.now(timezone.utc).isoformat()
+    
+    scan_data = build_scan_data(config, current_block, stats, quotes_sample, infra_payload, run_timestamp=run_timestamp)
     
     truth_data = build_truth_data(
         config, stats, current_block, spread_signals, suspect_examples,
-        infra_payload, raw_bps, spread_threshold_bps
+        infra_payload, raw_bps, spread_threshold_bps, run_timestamp=run_timestamp
     )
     
     reject_data = build_reject_data(
-        config, current_block, sanity_rejects, rejected_quotes, stats, infra_payload
+        config, current_block, sanity_rejects, rejected_quotes, stats, infra_payload, run_timestamp=run_timestamp
     )
     
     # Write artifacts (timestamp already set before opportunity_engine)

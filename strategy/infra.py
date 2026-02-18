@@ -352,6 +352,7 @@ def build_infra_payload(
                 "requests_by_endpoint": requests_by_endpoint,  # v2.3.0: Per-endpoint request counts
                 "errors_by_endpoint": errors_by_endpoint,  # v2.3.0: Per-endpoint error counts
                 "endpoints_details": endpoint_details,  # v2.3.0: Full endpoint breakdown
+                "failover_stress_active": int(os.environ.get("ARBY_FAILOVER_STRESS_N", "0")) > 0,  # v2.3.0
                 "source": "chains/providers.py",  # v2.2.0: Canonical source
             }
     except Exception as e:

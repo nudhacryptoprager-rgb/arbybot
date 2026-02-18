@@ -156,3 +156,91 @@ class TestMulticallRequestedFields:
         # Roadmap M5_0 required fields
         required = {"slot0", "liquidity", "token0", "token1", "decimals"}
         assert required.issubset(rf), f"Missing required fields: {required - rf}"
+
+
+class TestMulticallFieldSuccessRates:
+    """Test v2.3.0 field_success_rates contract for per-field observability."""
+    
+    def setup_method(self):
+        """Clear batchers before each test."""
+        clear_batchers()
+    
+    def teardown_method(self):
+        """Clear batchers after each test."""
+        clear_batchers()
+    
+    def test_call_success_fail_initialized(self):
+        """Batcher should have call_success and call_fail dicts initialized."""
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        assert hasattr(batcher, "call_success"), "Missing call_success dict"
+        assert hasattr(batcher, "call_fail"), "Missing call_fail dict"
+        # All fields should be initialized to 0
+        expected_fields = ["slot0", "liquidity", "token0", "token1", "decimals", "fee"]
+        for field in expected_fields:
+            assert field in batcher.call_success, f"Missing call_success[{field}]"
+            assert field in batcher.call_fail, f"Missing call_fail[{field}]"
+            assert batcher.call_success[field] == 0
+            assert batcher.call_fail[field] == 0
+    
+    def test_call_success_fail_in_stats(self):
+        """Stats should include call_success and call_fail for artifact tracking."""
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        stats = batcher.get_stats()
+        assert "call_success" in stats, "Stats should include call_success"
+        assert "call_fail" in stats, "Stats should include call_fail"
+    
+    def test_aggregate_field_success_fail(self):
+        """Aggregate stats should include field_success and field_fail."""
+        from core.multicall import get_aggregate_multicall_stats
+        
+        batcher = get_multicall_batcher("http://localhost:8545", 12346)
+        # Simulate some calls with success/fail
+        batcher.call_types["slot0"] = 10
+        batcher.call_success["slot0"] = 8
+        batcher.call_fail["slot0"] = 2
+        batcher.call_types["liquidity"] = 10
+        batcher.call_success["liquidity"] = 10
+        batcher.call_fail["liquidity"] = 0
+        
+        stats = get_aggregate_multicall_stats()
+        assert "field_success" in stats, "Aggregate stats should include field_success"
+        assert "field_fail" in stats, "Aggregate stats should include field_fail"
+        assert stats["field_success"]["slot0"] == 8
+        assert stats["field_fail"]["slot0"] == 2
+        assert stats["field_success"]["liquidity"] == 10
+    
+    def test_aggregate_field_success_rates(self):
+        """Aggregate stats should include field_success_rates with correct calculation."""
+        from core.multicall import get_aggregate_multicall_stats
+        
+        batcher = get_multicall_batcher("http://localhost:8545", 12347)
+        # Simulate some calls
+        batcher.call_types["slot0"] = 10
+        batcher.call_success["slot0"] = 8
+        batcher.call_fail["slot0"] = 2
+        batcher.call_types["liquidity"] = 10
+        batcher.call_success["liquidity"] = 10
+        
+        stats = get_aggregate_multicall_stats()
+        assert "field_success_rates" in stats, "Aggregate stats should include field_success_rates"
+        # slot0: 8/10 = 0.8
+        assert stats["field_success_rates"]["slot0"] == 0.8
+        # liquidity: 10/10 = 1.0
+        assert stats["field_success_rates"]["liquidity"] == 1.0
+    
+    def test_field_success_rates_not_zero_when_calls_made(self):
+        """When calls are made and succeed, field_success_rates should be > 0."""
+        from core.multicall import get_aggregate_multicall_stats
+        
+        batcher = get_multicall_batcher("http://localhost:8545", 12348)
+        # Simulate token0/token1/fee/decimals calls with success
+        fields = ["token0", "token1", "fee", "decimals"]
+        for field in fields:
+            batcher.call_types[field] = 5
+            batcher.call_success[field] = 5  # All success
+        
+        stats = get_aggregate_multicall_stats()
+        fsr = stats["field_success_rates"]
+        for field in fields:
+            assert fsr.get(field, 0) > 0, f"field_success_rates[{field}] should be > 0 when calls succeed"
+            assert fsr[field] == 1.0, f"field_success_rates[{field}] should be 1.0 when all calls succeed"

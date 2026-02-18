@@ -131,6 +131,27 @@ class TestArtifactInvariants:
                 data = json.load(f)
             run_mode = data.get("run_mode")
             assert run_mode == "REGISTRY_REAL", f"{name} unexpected run_mode: {run_mode}"
+    
+    def test_run_context_run_timestamp_unified(self, run_artifacts):
+        """v2.3.0: run_context.run_timestamp must match across all artifacts."""
+        timestamps = {}
+        
+        for name, path in run_artifacts.items():
+            with open(path) as f:
+                data = json.load(f)
+            rc = data.get("run_context", {})
+            timestamps[name] = rc.get("run_timestamp")
+        
+        # All must be present
+        assert timestamps["scan"] is not None, "scan missing run_context.run_timestamp"
+        assert timestamps["truth_report"] is not None, "truth_report missing run_context.run_timestamp"
+        assert timestamps["reject_histogram"] is not None, "reject_histogram missing run_context.run_timestamp"
+        
+        # All must match (v2.3.0 provenance unification)
+        assert timestamps["scan"] == timestamps["truth_report"], \
+            f"scan.run_context.run_timestamp ({timestamps['scan']}) != truth_report ({timestamps['truth_report']})"
+        assert timestamps["scan"] == timestamps["reject_histogram"], \
+            f"scan.run_context.run_timestamp ({timestamps['scan']}) != reject_histogram ({timestamps['reject_histogram']})"
 
 
 if __name__ == "__main__":

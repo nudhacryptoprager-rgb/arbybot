@@ -56,7 +56,7 @@ from core.artifact_invariants import (
     validate_schema_version as invariants_validate_schema,
 )
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 DEFAULT_OUTPUT_ROOT = Path("data/runs")
 DEFAULT_CONFIG = "config/real_minimal.yaml"
@@ -1100,9 +1100,16 @@ ENV VARIABLES:
             os.environ.setdefault("ARBY_WS_REQUIRED", "1")
         
         # v2.3.0: Failover stress-test mode
-        if args.failover_stress > 0:
+        # When stress-test is active, disable rolling refresh by default to avoid polluting
+        # rolling artifacts with artificial failures (unless explicitly requested)
+        failover_stress_active = args.failover_stress > 0
+        if failover_stress_active:
             os.environ["ARBY_FAILOVER_STRESS_N"] = str(args.failover_stress)
             print(f"[ONLINE] FAILOVER-STRESS: Will simulate {args.failover_stress} failures on primary endpoint")
+            # v2.3.0: Disable rolling refresh unless explicitly requested
+            if not args.refresh_rolling:
+                print("[ONLINE] FAILOVER-STRESS: Rolling refresh disabled (use --refresh-rolling to override)")
+                args._rolling_defaults_set = True  # Prevent auto-enable below
 
         # For M5_0 DoD: make infra-hosts and cross-artifact checks strict by default in online runs
         # These can still be overridden by explicit flags if needed.
@@ -1112,6 +1119,7 @@ ENV VARIABLES:
         # v2.2.0: Rolling freshness enforcement — default for online runs
         # Ensures rolling artifacts are always refreshed when scanning online
         # Prevents stale rolling evidence (Issue: rolling not matching latest runDir)
+        # v2.3.0: Skip if failover-stress disables it
         if not hasattr(args, '_rolling_defaults_set'):
             args.refresh_rolling = True
             args.refresh_rolling_strict = True

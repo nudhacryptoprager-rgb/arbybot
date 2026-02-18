@@ -270,6 +270,10 @@ class MulticallBatcher:
         
         results = self._execute_multicall(calls)
         if results is None:
+            # v2.3.0: Track all as failed when RPC fails
+            self.call_fail["token0"] += len(pool_addresses)
+            self.call_fail["token1"] += len(pool_addresses)
+            self.call_fail["fee"] += len(pool_addresses)
             return {addr: None for addr in pool_addresses}
         
         output = {}
@@ -279,14 +283,26 @@ class MulticallBatcher:
                 # token0
                 s0, d0 = results[base_idx]
                 token0 = "0x" + d0[-20:].hex() if s0 and len(d0) >= 20 else None
+                if token0:
+                    self.call_success["token0"] += 1
+                else:
+                    self.call_fail["token0"] += 1
                 
                 # token1
                 s1, d1 = results[base_idx + 1]
                 token1 = "0x" + d1[-20:].hex() if s1 and len(d1) >= 20 else None
+                if token1:
+                    self.call_success["token1"] += 1
+                else:
+                    self.call_fail["token1"] += 1
                 
                 # fee
                 s2, d2 = results[base_idx + 2]
                 fee = int.from_bytes(d2[-4:], "big") if s2 and len(d2) >= 4 else None
+                if fee is not None:
+                    self.call_success["fee"] += 1
+                else:
+                    self.call_fail["fee"] += 1
                 
                 if token0 and token1 and fee is not None:
                     output[addr] = (token0, token1, fee)
@@ -294,6 +310,9 @@ class MulticallBatcher:
                     output[addr] = None
             except Exception:
                 output[addr] = None
+                self.call_fail["token0"] += 1
+                self.call_fail["token1"] += 1
+                self.call_fail["fee"] += 1
         
         return output
     
@@ -319,6 +338,8 @@ class MulticallBatcher:
         
         results = self._execute_multicall(calls)
         if results is None:
+            # v2.3.0: Track all as failed when RPC fails
+            self.call_fail["decimals"] += len(token_addresses)
             return {addr: None for addr in token_addresses}
         
         output = {}
@@ -329,10 +350,13 @@ class MulticallBatcher:
                     # decimals is typically uint8, returned as uint256
                     decimals = int.from_bytes(data[-1:], "big")
                     output[addr] = decimals
+                    self.call_success["decimals"] += 1  # v2.3.0
                 except Exception:
                     output[addr] = None
+                    self.call_fail["decimals"] += 1  # v2.3.0
             else:
                 output[addr] = None
+                self.call_fail["decimals"] += 1  # v2.3.0
         
         return output
     
