@@ -2,10 +2,23 @@
 strategy/quarantine.py - Automatic quarantine for consistently failing pools.
 
 Team Lead:
-"Quarantine правило: якщо QUOTE_REVERT стабільний на конкретній 
-(dex, pair, fee, quoter) — автоматично quarantine на N хвилин/циклів."
+"Quarantine pravylo: yakshcho QUOTE_REVERT stabil'nyi na konkretnii 
+(dex, pair, fee, quoter) — avtomatychno quarantine na N khvylyn/tsykliv."
 
 This module tracks failure patterns and quarantines pools that consistently fail.
+
+v2.2.0 CANONICAL SOURCE:
+========================
+This is the canonical runtime quarantine manager for quote collection.
+Used by strategy/quotes.py via get_quarantine_manager().
+
+The discovery/quarantine.py module provides a separate cycle-based system
+for registry/universe pruning. The two serve different purposes:
+- strategy/quarantine.py: Runtime, time-based (this file)
+- discovery/quarantine.py: Registry, cycle-based
+
+For all runtime quote filtering, import from this module:
+    from strategy.quarantine import get_quarantine_manager
 """
 
 import time

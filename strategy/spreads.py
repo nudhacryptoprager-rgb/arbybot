@@ -56,6 +56,9 @@ def compute_spread_signals(
     """
     Compute spread signals from quotes.
     
+    v2.2.0: When truth_mode_m42=true, diagnostic-only quotes (slot0)
+    are excluded from spread computation.
+    
     Args:
         quotes_sample: List of quote dicts
         config: Configuration dict
@@ -68,14 +71,30 @@ def compute_spread_signals(
     spread_signals: List[Dict[str, Any]] = []
     spread_threshold_bps = config.get("min_spread_bps", config.get("spread_threshold_bps", 0))
     max_spread_bps_sanity = config.get("max_spread_bps_sanity", 10000)
+    truth_mode = config.get("truth_mode_m42", False)
     
-    logger.info("Starting spread signal computation: %d quotes, threshold=%s bps", 
-                len(quotes_sample), spread_threshold_bps)
+    # v2.2.0: Filter out diagnostic-only quotes when truth_mode=true
+    executable_quotes = quotes_sample
+    diagnostic_count = 0
+    if truth_mode:
+        executable_quotes = []
+        for q in quotes_sample:
+            if q.get("is_diagnostic_only", False):
+                diagnostic_count += 1
+            else:
+                executable_quotes.append(q)
+        
+        if diagnostic_count > 0:
+            logger.info("truth_mode_m42: excluded %d diagnostic-only (slot0) quotes from spread evaluation",
+                       diagnostic_count)
+    
+    logger.info("Starting spread signal computation: %d quotes (%d diagnostic excluded), threshold=%s bps", 
+                len(executable_quotes), diagnostic_count, spread_threshold_bps)
     
     try:
         # Group quotes by pair
         quotes_by_pair: Dict[str, List[Dict[str, Any]]] = {}
-        for q in quotes_sample:
+        for q in executable_quotes:
             pair_key = f"{q.get('token_in')}/{q.get('token_out')}"
             if pair_key not in quotes_by_pair:
                 quotes_by_pair[pair_key] = []

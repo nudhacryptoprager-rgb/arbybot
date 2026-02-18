@@ -272,13 +272,34 @@ def build_infra_payload(
     if ws_handshake_ms is not None:
         payload["ws_handshake_ms"] = ws_handshake_ms
     
-    # Add provider router stats (if any providers registered)
-    # Lazy access to avoid forward reference
-    global _provider_router
-    if _provider_router is not None:
-        router_stats = _provider_router.get_stats()
-        if router_stats["providers_count"] > 0:
-            payload["provider_router"] = router_stats
+    # v2.2.0: Add provider stats from chains/providers.py (canonical source)
+    # Replaces the duplicate MultiProviderRouter scaffolding
+    try:
+        from chains.providers import get_global_provider_stats
+        provider_stats = get_global_provider_stats()
+        if provider_stats.get("providers_count", 0) > 0:
+            payload["provider_router"] = {
+                "providers_count": provider_stats["providers_count"],
+                "total_requests": provider_stats.get("total_requests", 0),
+                "global_success_rate": provider_stats.get("global_success_rate", 1.0),
+                "source": "chains/providers.py",  # v2.2.0: Canonical source
+            }
+            # Set provider_id to chain_id for M5_0 artifact requirement
+            chain_ids = list(provider_stats.get("providers", {}).keys())
+            if chain_ids:
+                payload["provider_id"] = f"chain_{chain_ids[0]}"
+    except Exception as e:
+        logger.debug("Provider stats unavailable: %s", e)
+    
+    # v2.2.0: Add dynamic anchor stats
+    try:
+        from strategy.dynamic_anchors import get_anchor_manager
+        am = get_anchor_manager()
+        anchor_stats = am.get_stats()
+        if anchor_stats.get("total_pairs", 0) > 0:
+            payload["dynamic_anchors"] = anchor_stats
+    except Exception as e:
+        logger.debug("Dynamic anchor stats unavailable: %s", e)
     
     # v2.2.0: Add multicall stats
     try:

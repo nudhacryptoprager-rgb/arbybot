@@ -5,8 +5,20 @@ Hard-filter for (pair, fee, dex) combinations that consistently fail gates.
 Tracks failure rates and auto-quarantines combinations exceeding thresholds.
 
 Team Lead directive:
-"Зробити hard-filter у registry/universe: прибрати (pair, fee, dex), 
-які дають PRICE_SANITY_FAILED > X% за останні N циклів."
+"Zrobiti hard-filter u registry/universe: priburati (pair, fee, dex), 
+yaki dayut PRICE_SANITY_FAILED > X% za ostanni N cykli."
+
+v2.2.0 NOTE:
+============
+This module provides cycle-based quarantine tracking for discovery/registry.
+For runtime quote collection, use `strategy/quarantine.py` which provides:
+- Time-based quarantine (seconds, not cycles)
+- Singleton manager with persistence
+- Integration with quotes.py via get_quarantine_manager()
+
+The two modules have different purposes:
+- discovery/quarantine.py: Registry-level, cycle-based, for universe pruning
+- strategy/quarantine.py: Runtime, time-based, for quote collection filtering
 """
 
 import json

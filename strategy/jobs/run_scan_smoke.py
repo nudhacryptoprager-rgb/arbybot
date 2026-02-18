@@ -357,7 +357,8 @@ def run_scan_cycle(
         "spread_ids_profitable": 0,
         "spread_ids_executable": 0,
         "paper_executable_count": 0,
-        "execution_ready_count": 0,
+        "execution_ready_count": 0,  # v2.2.0: Always 0 when kill switch ON (Roadmap M5_0 DoD)
+        "would_execute_count": 0,    # v2.2.0: Diagnostic - how many would execute if allowed
         "blocked_spreads": 0,
         "chains_active": 0,
         "dexes_active": 0,

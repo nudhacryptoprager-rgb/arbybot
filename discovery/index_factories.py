@@ -1,0 +1,373 @@
+# PATH: discovery/index_factories.py
+"""
+Factory-based pool discovery (Roadmap Appendix A Step 3).
+
+Enumerates pools from Uniswap-style factories using:
+1. factory.getPool(tokenA, tokenB, fee) for V3 factories
+2. factory.getPair(tokenA, tokenB) for V2 factories
+
+Only queries for token pairs that appear in intent.txt and have
+verified addresses in the token registry.
+"""
+
+import logging
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+
+from discovery.intent_loader import get_intent_universe, IntentPair
+from discovery.verify import get_token_registry
+
+logger = logging.getLogger("discovery.index_factories")
+
+# Standard fee tiers for Uniswap V3 and forks
+V3_FEE_TIERS = [100, 500, 3000, 10000]  # 0.01%, 0.05%, 0.3%, 1%
+
+# Known factory addresses per (chain, dex)
+FACTORY_ADDRESSES: Dict[str, Dict[str, str]] = {
+    "arbitrum_one": {
+        "uniswap_v3": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+        "sushiswap_v3": "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e",
+        # V2 factories
+        "uniswap_v2": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",  # legacy on mainnet
+        "sushiswap_v2": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
+    },
+    "base": {
+        "uniswap_v3": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+        "aerodrome": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
+    },
+    "ethereum": {
+        "uniswap_v3": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+        "uniswap_v2": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
+    },
+}
+
+
+class DiscoveredPool(NamedTuple):
+    """Pool discovered from factory."""
+    chain: str
+    dex: str
+    address: str
+    token0: str
+    token1: str
+    token0_symbol: str
+    token1_symbol: str
+    fee_tier: Optional[int]  # None for V2
+
+
+class PoolIndex:
+    """
+    Index of discovered pools per chain.
+    
+    Pools are discovered by querying factory.getPool() for each intent pair
+    and each fee tier.
+    """
+    
+    def __init__(self):
+        self._pools: Dict[str, List[DiscoveredPool]] = {}  # chain -> list of pools
+        self._indexed_pairs: Dict[str, set] = {}  # chain -> set of (tokenA, tokenB, dex)
+    
+    def add_pool(self, pool: DiscoveredPool) -> None:
+        """Add a discovered pool."""
+        if pool.chain not in self._pools:
+            self._pools[pool.chain] = []
+        self._pools[pool.chain].append(pool)
+    
+    def get_pools(self, chain: str) -> List[DiscoveredPool]:
+        """Get all pools for a chain."""
+        return self._pools.get(chain, [])
+    
+    def get_pools_for_pair(
+        self,
+        chain: str,
+        symbol_a: str,
+        symbol_b: str,
+    ) -> List[DiscoveredPool]:
+        """Get all pools for a specific pair (any fee tier, any dex)."""
+        pools = []
+        for pool in self.get_pools(chain):
+            syms = {pool.token0_symbol.upper(), pool.token1_symbol.upper()}
+            if {symbol_a.upper(), symbol_b.upper()} == syms:
+                pools.append(pool)
+        return pools
+    
+    def mark_indexed(self, chain: str, token_a: str, token_b: str, dex: str) -> None:
+        """Mark a pair as indexed for a dex."""
+        if chain not in self._indexed_pairs:
+            self._indexed_pairs[chain] = set()
+        key = tuple(sorted([token_a.lower(), token_b.lower()])) + (dex,)
+        self._indexed_pairs[chain].add(key)
+    
+    def is_indexed(self, chain: str, token_a: str, token_b: str, dex: str) -> bool:
+        """Check if pair has been indexed for a dex."""
+        if chain not in self._indexed_pairs:
+            return False
+        key = tuple(sorted([token_a.lower(), token_b.lower()])) + (dex,)
+        return key in self._indexed_pairs[chain]
+    
+    def stats(self) -> Dict[str, Any]:
+        """Get index statistics."""
+        return {
+            "chains": list(self._pools.keys()),
+            "pools_per_chain": {c: len(p) for c, p in self._pools.items()},
+            "total_pools": sum(len(p) for p in self._pools.values()),
+        }
+
+
+def get_factory_address(chain: str, dex: str) -> Optional[str]:
+    """Get factory address for chain/dex combo."""
+    chain_factories = FACTORY_ADDRESSES.get(chain, {})
+    return chain_factories.get(dex)
+
+
+def query_v3_pool(
+    rpc_url: str,
+    factory_address: str,
+    token_a: str,
+    token_b: str,
+    fee: int,
+) -> Optional[str]:
+    """
+    Query Uniswap V3 factory.getPool(tokenA, tokenB, fee).
+    
+    Returns pool address or None if not found.
+    """
+    import os
+    
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+    
+    try:
+        from web3 import Web3
+    except ImportError:
+        logger.warning("web3 not installed")
+        return None
+    
+    V3_FACTORY_ABI = [
+        {
+            "inputs": [
+                {"internalType": "address", "name": "", "type": "address"},
+                {"internalType": "address", "name": "", "type": "address"},
+                {"internalType": "uint24", "name": "", "type": "uint24"},
+            ],
+            "name": "getPool",
+            "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+            "stateMutability": "view",
+            "type": "function",
+        }
+    ]
+    
+    try:
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        factory = w3.eth.contract(
+            address=Web3.to_checksum_address(factory_address),
+            abi=V3_FACTORY_ABI,
+        )
+        
+        pool_addr = factory.functions.getPool(
+            Web3.to_checksum_address(token_a),
+            Web3.to_checksum_address(token_b),
+            fee,
+        ).call()
+        
+        # Zero address means pool doesn't exist
+        if pool_addr == "0x0000000000000000000000000000000000000000":
+            return None
+        
+        return pool_addr.lower()
+        
+    except Exception as e:
+        logger.debug("getPool failed: %s", e)
+        return None
+
+
+def query_v2_pair(
+    rpc_url: str,
+    factory_address: str,
+    token_a: str,
+    token_b: str,
+) -> Optional[str]:
+    """
+    Query Uniswap V2 factory.getPair(tokenA, tokenB).
+    
+    Returns pair address or None if not found.
+    """
+    import os
+    
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+    
+    try:
+        from web3 import Web3
+    except ImportError:
+        logger.warning("web3 not installed")
+        return None
+    
+    V2_FACTORY_ABI = [
+        {
+            "constant": True,
+            "inputs": [
+                {"internalType": "address", "name": "", "type": "address"},
+                {"internalType": "address", "name": "", "type": "address"},
+            ],
+            "name": "getPair",
+            "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+            "stateMutability": "view",
+            "type": "function",
+        }
+    ]
+    
+    try:
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        factory = w3.eth.contract(
+            address=Web3.to_checksum_address(factory_address),
+            abi=V2_FACTORY_ABI,
+        )
+        
+        pair_addr = factory.functions.getPair(
+            Web3.to_checksum_address(token_a),
+            Web3.to_checksum_address(token_b),
+        ).call()
+        
+        # Zero address means pair doesn't exist
+        if pair_addr == "0x0000000000000000000000000000000000000000":
+            return None
+        
+        return pair_addr.lower()
+        
+    except Exception as e:
+        logger.debug("getPair failed: %s", e)
+        return None
+
+
+def index_intent_pairs(
+    chain: str,
+    dexes: Optional[List[str]] = None,
+    rpc_url: Optional[str] = None,
+) -> PoolIndex:
+    """
+    Index all intent pairs for a chain from factories.
+    
+    Args:
+        chain: Chain to index (e.g., "arbitrum_one")
+        dexes: List of DEX keys to query (default: all known for chain)
+        rpc_url: RPC URL (default: from config)
+        
+    Returns:
+        PoolIndex with discovered pools
+    """
+    import os
+    from core.rpc_urls import get_rpc_url
+    
+    index = PoolIndex()
+    universe = get_intent_universe()
+    registry = get_token_registry()
+    
+    pairs = universe.get_chain_pairs(chain)
+    if not pairs:
+        logger.info("No intent pairs for chain %s", chain)
+        return index
+    
+    if rpc_url is None:
+        rpc_url = get_rpc_url(chain)
+    
+    if rpc_url is None or os.environ.get("ARBY_SKIP_RPC") == "1":
+        logger.info("RPC unavailable for %s, skipping factory indexing", chain)
+        return index
+    
+    chain_factories = FACTORY_ADDRESSES.get(chain, {})
+    if dexes is None:
+        dexes = list(chain_factories.keys())
+    
+    indexed_count = 0
+    
+    for pair in pairs:
+        # Resolve symbols to addresses
+        addr_a = registry.get_address(chain, pair.base)
+        addr_b = registry.get_address(chain, pair.quote)
+        
+        if not addr_a:
+            logger.debug("Unknown token: %s:%s", chain, pair.base)
+            continue
+        if not addr_b:
+            logger.debug("Unknown token: %s:%s", chain, pair.quote)
+            continue
+        
+        for dex in dexes:
+            factory_addr = get_factory_address(chain, dex)
+            if not factory_addr:
+                continue
+            
+            if index.is_indexed(chain, addr_a, addr_b, dex):
+                continue
+            
+            # V3-style DEXes
+            if "v3" in dex.lower():
+                for fee in V3_FEE_TIERS:
+                    pool_addr = query_v3_pool(rpc_url, factory_addr, addr_a, addr_b, fee)
+                    if pool_addr:
+                        pool = DiscoveredPool(
+                            chain=chain,
+                            dex=dex,
+                            address=pool_addr,
+                            token0=addr_a,
+                            token1=addr_b,
+                            token0_symbol=pair.base,
+                            token1_symbol=pair.quote,
+                            fee_tier=fee,
+                        )
+                        index.add_pool(pool)
+                        indexed_count += 1
+                        logger.debug(
+                            "Found %s pool: %s/%s fee=%d @ %s",
+                            dex, pair.base, pair.quote, fee, pool_addr[:10]
+                        )
+            
+            # V2-style DEXes
+            elif "v2" in dex.lower():
+                pair_addr = query_v2_pair(rpc_url, factory_addr, addr_a, addr_b)
+                if pair_addr:
+                    pool = DiscoveredPool(
+                        chain=chain,
+                        dex=dex,
+                        address=pair_addr,
+                        token0=addr_a,
+                        token1=addr_b,
+                        token0_symbol=pair.base,
+                        token1_symbol=pair.quote,
+                        fee_tier=None,
+                    )
+                    index.add_pool(pool)
+                    indexed_count += 1
+                    logger.debug(
+                        "Found %s pair: %s/%s @ %s",
+                        dex, pair.base, pair.quote, pair_addr[:10]
+                    )
+            
+            index.mark_indexed(chain, addr_a, addr_b, dex)
+    
+    logger.info(
+        "Indexed %d pools for %s from %d factories",
+        indexed_count, chain, len(dexes)
+    )
+    
+    return index
+
+
+# =============================================================================
+# SINGLETON INDEX
+# =============================================================================
+
+_pool_index: Optional[PoolIndex] = None
+
+
+def get_pool_index() -> PoolIndex:
+    """Get the singleton pool index."""
+    global _pool_index
+    if _pool_index is None:
+        _pool_index = PoolIndex()
+    return _pool_index
+
+
+def reset_pool_index() -> None:
+    """Reset the singleton (for testing)."""
+    global _pool_index
+    _pool_index = None

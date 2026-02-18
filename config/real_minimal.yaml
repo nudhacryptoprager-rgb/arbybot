@@ -270,6 +270,10 @@ min_net_pnl_usdc_est: 0.0  # 0 = break-even or better
 # This ensures profit calculations use proper two-leg roundtrip semantics
 truth_mode_m42: true
 
+# v2.2.0: use_quoter_v2 enables QuoterV2 calls for executable pricing
+# Required for truth_mode_m42 to produce executable quotes
+use_quoter_v2: true
+
 # M4 markers - execution disabled
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4

@@ -22,10 +22,75 @@ from strategy.dynamic_anchors import get_anchor_manager
 
 logger = logging.getLogger("strategy.quotes")
 
+# =============================================================================
+# MULTICALL PREFETCH CACHE (v2.2.0)
+# =============================================================================
+
+# Module-level cache for multicall prefetch results
+_multicall_slot0_cache: Dict[str, Optional[Tuple[int, int]]] = {}
+
+
+def prefetch_slot0_multicall(
+    pool_addresses: List[str], rpc_url: str, block_num: int
+) -> Dict[str, Optional[Tuple[int, int]]]:
+    """
+    Prefetch slot0 data for multiple pools using multicall.
+    
+    v2.2.0: Roadmap M5_0 requires multicall batching per cycle.
+    This reduces RPC calls from N to 1 for N pools.
+    
+    Args:
+        pool_addresses: List of pool addresses to fetch
+        rpc_url: RPC URL
+        block_num: Block number
+        
+    Returns:
+        Dict mapping pool_address -> (tick, sqrt_price_x96) or None
+    """
+    global _multicall_slot0_cache
+    
+    if not pool_addresses or not rpc_url:
+        return {}
+    
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return {addr: None for addr in pool_addresses}
+    
+    try:
+        from core.multicall import get_multicall_batcher
+        
+        batcher = get_multicall_batcher(rpc_url, block_num)
+        results = batcher.batch_slot0(pool_addresses)
+        
+        # Convert from (sqrt, tick, liq) to (tick, sqrt)
+        output = {}
+        for addr, data in results.items():
+            if data is not None:
+                sqrt_price, tick, _ = data
+                output[addr.lower()] = (tick, sqrt_price)
+            else:
+                output[addr.lower()] = None
+        
+        # Update cache
+        _multicall_slot0_cache.update(output)
+        logger.info("Multicall prefetch: %d pools, %d success", 
+                   len(pool_addresses), sum(1 for v in output.values() if v is not None))
+        return output
+    except Exception as e:
+        logger.debug("Multicall prefetch failed: %s", e)
+        return {addr: None for addr in pool_addresses}
+
+
+def clear_multicall_cache() -> None:
+    """Clear the multicall prefetch cache (for testing)."""
+    global _multicall_slot0_cache
+    _multicall_slot0_cache.clear()
+
 
 def read_slot0_v3(pool_address: str, rpc_url: Optional[str], block_num: int) -> Tuple[Optional[int], Optional[int]]:
     """
     Read slot0() from a Uniswap V3 pool contract.
+    
+    v2.2.0: Checks multicall cache first if prefetch was done.
     
     Args:
         pool_address: Pool contract address
@@ -37,6 +102,16 @@ def read_slot0_v3(pool_address: str, rpc_url: Optional[str], block_num: int) -> 
     """
     if not pool_address or not rpc_url:
         return None, None
+    
+    # v2.2.0: Check multicall cache first
+    cache_key = pool_address.lower()
+    if cache_key in _multicall_slot0_cache:
+        cached = _multicall_slot0_cache[cache_key]
+        if cached is not None:
+            logger.debug("slot0() from multicall cache for %s", pool_address)
+            return cached  # (tick, sqrt_price_x96)
+        # None in cache means multicall tried and failed - fall through to direct read
+    
     if os.environ.get("ARBY_SKIP_RPC") == "1":
         return None, None
     
@@ -439,6 +514,36 @@ def collect_quotes(
     skip_rpc = os.environ.get("ARBY_SKIP_RPC") == "1"
     tokens_anchor_price = config.get("tokens_anchor_price") or {}
     
+    # v2.2.0: Multicall prefetch for slot0 batching (Roadmap M5_0 requirement)
+    use_multicall = config.get("use_multicall", True)  # Default ON for v2.2.0
+    if use_multicall and rpc_url and not skip_rpc:
+        # Collect all pool addresses that will be queried
+        all_pool_addrs: List[str] = []
+        for pair_cfg in pairs_list:
+            token_pair_tag = pair_cfg.pair_tag
+            fee_tiers = pair_cfg.fee_tiers or [500, 3000]
+            for dex in dexes_list:
+                from dex.registry import get_dex_config
+                dex_cfg = get_dex_config(chain_key, dex)
+                adapter_type = dex_cfg.adapter_type if dex_cfg else None
+                
+                if adapter_type == "algebra":
+                    effective_fees = [0]
+                else:
+                    effective_fees = fee_tiers
+                
+                for fee in effective_fees:
+                    pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee)
+                    if pool_addr:
+                        all_pool_addrs.append(pool_addr)
+        
+        # Unique pool addresses
+        unique_pools = list(set(all_pool_addrs))
+        if unique_pools:
+            logger.info("Multicall prefetch: %d unique pools", len(unique_pools))
+            clear_multicall_cache()  # Clear cache before prefetch
+            prefetch_slot0_multicall(unique_pools, rpc_url, current_block)
+    
     # M4.2: USD-notional sizing
     target_usd_notional = config.get("target_usd_notional", 1000.0)
     tokens_usd_price = config.get("tokens_usd_price") or {}
@@ -713,6 +818,8 @@ def collect_quotes(
                     q_dict["anchor_source"] = anchor_source  # v2.2.0: track dynamic vs yaml
                     # v2.1.0: Add sqrt_price_after for measured slippage calculation
                     q_dict["sqrt_price_after"] = quoter_result.get("sqrt_price_after") if quoter_result else None
+                    # v2.2.0 Fix Step 5: quoter_v2 quotes are executable, not diagnostic
+                    q_dict["is_diagnostic_only"] = False
                     quotes_sample.append(q_dict)
                     counts["quotes_fetched"] += 1
                     # Record success to reset quarantine failure counter
@@ -980,6 +1087,20 @@ def collect_quotes(
                 q_dict["gas_estimate"] = gas_estimate
                 q_dict["ticks_crossed"] = ticks_crossed
                 q_dict["anchor_source"] = anchor_source  # v2.2.0: track dynamic vs yaml
+                
+                # v2.2.0 Fix Step 5: truth_mode_m42 behavior
+                # When truth_mode_m42=true, slot0-only quotes are diagnostic only
+                # These should be excluded from opportunity evaluation
+                truth_mode = config.get("truth_mode_m42", False)
+                if truth_mode and quote_source == "slot0":
+                    q_dict["is_diagnostic_only"] = True
+                    q_dict["diagnostic_reason"] = "SLOT0_DIAGNOSTIC"
+                    logger.debug(
+                        "SLOT0_DIAGNOSTIC: %s %s/%s (truth_mode requires quoter for executable quotes)",
+                        dex, token_in, token_out
+                    )
+                else:
+                    q_dict["is_diagnostic_only"] = False
                 
                 quotes_sample.append(q_dict)
                 counts["quotes_fetched"] = counts.get("quotes_fetched", 0) + 1

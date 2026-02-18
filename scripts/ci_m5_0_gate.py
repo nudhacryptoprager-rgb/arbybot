@@ -1099,6 +1099,16 @@ ENV VARIABLES:
         # These can still be overridden by explicit flags if needed.
         args.require_infra_hosts = True
         args.require_cross_artifact = True
+        
+        # v2.2.0: Rolling freshness enforcement — default for online runs
+        # Ensures rolling artifacts are always refreshed when scanning online
+        # Prevents stale rolling evidence (Issue: rolling not matching latest runDir)
+        if not hasattr(args, '_rolling_defaults_set'):
+            args.refresh_rolling = True
+            args.refresh_rolling_strict = True
+            if args.prune_keep == 0:
+                args.prune_keep = 50
+            args._rolling_defaults_set = True
 
         success, message = run_real_scan(run_dir, args.config, args.cycles)
         

@@ -507,7 +507,7 @@ def run_scan(
     
     # v2.2.0: M4.3 Preflight check for execution readiness
     try:
-        from execution.state_machine import run_preflight_check
+        from execution.state_machine import run_preflight_check, get_execution_context
         
         # Use best roundtrip result if available
         best_roundtrip = None
@@ -521,18 +521,32 @@ def run_scan(
         )
         
         stats["preflight"] = preflight_result.to_dict()
-        stats["execution_ready_count"] = 1 if preflight_result.passed else 0
+        
+        # v2.2.0 FIX: Roadmap M5_0 DoD requires execution_ready_count=0 while kill switch ON
+        # execution_ready_count: actual execution allowed (is_execution_allowed==True)
+        # would_execute_count: diagnostic - preflight passed but execution blocked
+        exec_ctx = get_execution_context()
+        if exec_ctx.is_execution_allowed() and preflight_result.passed:
+            stats["execution_ready_count"] = 1
+        else:
+            stats["execution_ready_count"] = 0
+        
+        # Diagnostic: how many would execute if kill switch was OFF
+        stats["would_execute_count"] = 1 if preflight_result.passed else 0
         
         logger.info(
-            "M4.3 Preflight: %s (errors=%d, warnings=%d)",
+            "M4.3 Preflight: %s (errors=%d, warnings=%d, execution_ready=%d, would_execute=%d)",
             "PASS" if preflight_result.passed else "FAIL",
             len(preflight_result.errors),
             len(preflight_result.warnings),
+            stats["execution_ready_count"],
+            stats["would_execute_count"],
         )
     except Exception as pf_err:
         logger.debug("Preflight check skipped: %s", pf_err)
         stats["preflight"] = {"enabled": False, "error": str(pf_err)}
         stats["execution_ready_count"] = 0
+        stats["would_execute_count"] = 0
     
     # Build artifact data structures
     scan_data = build_scan_data(config, current_block, stats, quotes_sample, infra_payload)

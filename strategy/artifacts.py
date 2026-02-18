@@ -101,7 +101,8 @@ def build_truth_data(
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
         "execution_enabled": False,
-        "execution_ready_count": 0,
+        "execution_ready_count": stats.get("execution_ready_count", 0),  # v2.2.0: From stats (respects kill switch)
+        "would_execute_count": stats.get("would_execute_count", 0),      # v2.2.0: Diagnostic only
         "execution_blocker": CURRENT_EXECUTION_BLOCKER.value,
         "execution_blocker_details": "EXECUTION_DISABLED_M5_0 - no execution cost model",
         "paper_cost_model_available": True,

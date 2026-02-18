@@ -12,7 +12,7 @@ import asyncio
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict
 
 import httpx
 from dotenv import load_dotenv
@@ -382,3 +382,42 @@ def register_provider(
 async def close_all_providers() -> None:
     """Close all providers in global registry."""
     await _registry.close_all()
+
+
+def get_global_provider_stats() -> Dict[str, Any]:
+    """
+    Get aggregated provider stats from global registry.
+    
+    v2.2.0: For infra payload population (Roadmap M5_0).
+    
+    Returns:
+        Dict with provider stats for all registered chains
+    """
+    if not _registry.chain_ids:
+        return {"providers_count": 0, "providers": {}}
+    
+    all_stats: Dict[str, Any] = {}
+    total_success = 0
+    total_requests = 0
+    
+    for chain_id in _registry.chain_ids:
+        provider = _registry.get(chain_id)
+        if provider:
+            chain_stats = provider.get_stats_summary()
+            all_stats[str(chain_id)] = chain_stats
+            
+            # Aggregate across all endpoints
+            for url_stats in chain_stats.values():
+                total_requests += url_stats.get("total_requests", 0)
+                sr = url_stats.get("success_rate", 1.0)
+                tr = url_stats.get("total_requests", 0)
+                total_success += int(sr * tr)
+    
+    global_success_rate = round(total_success / max(total_requests, 1), 4)
+    
+    return {
+        "providers_count": len(_registry.chain_ids),
+        "total_requests": total_requests,
+        "global_success_rate": global_success_rate,
+        "providers": all_stats,
+    }
