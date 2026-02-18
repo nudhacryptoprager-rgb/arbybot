@@ -36,13 +36,21 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_expanded.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-17 post-anchor-fix)**: runs_in_window=12, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$658.81, avg_net_usdc=$54.9, unique_pairs=6, unique_routes_cross_dex=2. Rolling window RESET (--reset-window) to remove stale data from outdated anchors.
+**Snapshot (2026-02-17 post-quarantine)**: runs_in_window=53, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$3202.51, avg_net_usdc=$60.42, unique_pairs=6, unique_routes_cross_dex=2. Rolling window RESET + 2 bad pools QUARANTINED (sushiswap_v3_WBTC_WETH_500, sushiswap_v3_LINK_USDC_3000).
 
 **Anchor Discipline (v2.1.0-fix enforced):**
 > Anchors MUST come from on-chain evidence (median valid quotes from runDir artifacts), NOT from market intuition.
 > Bad pools get REMOVED/quarantined, NOT "fixed" by artificially raising anchors.
-> If a pool returns extreme prices (e.g., WBTC/WETH sushi fee=500 returns 3.4 vs anchor 35), it's a bad pool, not a bad anchor.
+> If a pool returns extreme prices (e.g., WBTC/WETH sushi fee=500 returns `price_exact~3.4e28` at tick=887271 vs anchor 35), it's a bad pool, not a bad anchor.
 > Evidence source: `data/runs/ci_m5_gate_*` scan artifacts → median price from valid quotes per pair.
+
+**Quarantined Pools (v2.1.0-fix, 2026-02-17):**
+| Pool | Address | Reason |
+|------|---------|--------|
+| sushiswap_v3_WBTC_WETH_500 | 0xf790... | tick=887271, price_exact~3.4e28, PRICE_SANITY_FAILED |
+| sushiswap_v3_LINK_USDC_3000 | 0x7e039... | price_exact~19.90 vs anchor 9.0, PRICE_SANITY_FAILED |
+
+**Next Focus**: M5_0 always-online data-plane (WS + Alchemy + multicall) + dynamic anchors + auto-quarantine.
 
 **Anchor values (from on-chain evidence 2026-02-17):**
 | Pair | Old Anchor | New Anchor | Evidence |
@@ -159,18 +167,18 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 > Quick ref: N>=5 runs in `m4_stability_agg.json.runs[]` with:
 > `run_mode=REGISTRY_REAL`, `pinned_block!=429900000`, `block_is_synthetic=false`, `total_net_usdc>0`
 
-**Evidence for M4 online-profit (v2.1.0-fix rolling snapshot post-anchor-fix, 2026-02-17):**
+**Evidence for M4 online-profit (v2.1.0-fix rolling snapshot post-quarantine, 2026-02-17):**
 
 > **CORE TRUTH: PROVEN** (+PnL confirmed in N>=5 runs)
 > **ROLLING QUALITY: WARN_QUALITY** (data_run_rate=1.0, diversity warnings remain)
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| runs_in_window | 12 | `_latest.json` |
-| data_runs_count | 12 | `runs_since_timestamp.data_runs_count` |
-| pass_count | 12 | `runs_since_timestamp.pass_count` |
-| total_net_usdc (window) | $658.81 | `quick_stats.total_net_usdc` |
-| avg_net_usdc | $54.90 | `quick_stats.avg_net_usdc` |
+| runs_in_window | 53 | `_latest.json` |
+| data_runs_count | 53 | `runs_since_timestamp.data_runs_count` |
+| pass_count | 53 | `runs_since_timestamp.pass_count` |
+| total_net_usdc (window) | $3202.51 | `quick_stats.total_net_usdc` |
+| avg_net_usdc | $60.42 | `quick_stats.avg_net_usdc` |
 | data_run_rate | 1.0 | `quick_stats.data_run_rate` |
 | pass_rate | 1.0 | `quick_stats.pass_rate` |
 | unique_pairs | 6 | `quick_stats.unique_pairs` |

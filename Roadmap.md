@@ -382,6 +382,18 @@ Scope:
 - Optional Tenderly tracing/simulation hook for diagnostics (not required for pass)
 - Centralized asyncio concurrency control (semaphores, connection pooling)
 - Observability: richer RPC health metrics and artifact invariants
+#### Always-Online Data Plane (Anti-Hardcode Policy)
+
+Мета: бот працює онлайн безперервно, з мінімумом hardcode, на динамічних live-даних.
+
+Вимоги:
+- RPC: multi-provider router (Alchemy primary) + health score + timeouts/backoff; HTTP + WebSocket.
+- WS: `newHeads` для live `current_block` + (опційно) logs для factory/pool events.
+- Multicall: батчинг читань (slot0, liquidity, token0/token1, decimals) для всіх пулів за цикл.
+- Dynamic universe: discovery пулів через factory events + on-chain verify; автооновлення whitelist; quarantine нестабільних пулів.
+- Dynamic anchors: anchors рахуються з on-chain evidence (rolling median валідних quotes з anchor DEX priority); YAML anchors = fallback only.
+- Артефакти: кожен online цикл пише scan/truth/reject + rolling refresh; логуються `provider_id`, `ws_lag_ms`, `multicall_success_rate`, `quarantine_stats`, `anchor_source`.
+- Safety: `execution_enabled=false` до завершення M4.3 preflight; kill switch за замовчуванням ON.
 
 Done Criteria:
 - Full test suite green (unit + integration)
