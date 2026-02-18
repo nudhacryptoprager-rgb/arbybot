@@ -39,7 +39,9 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_expanded.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-18 POOL_DISABLED)**: runs_in_window=55, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$3318.09, avg_net_usdc=$60.33, unique_pairs=6, unique_routes_cross_dex=2. POOL_DISABLED=5, POOL_MISSING=0 (correct semantics).
+**Snapshot (2026-02-18 POOL_DISABLED)**: runs_in_window=56, data_run_rate=1.0, pass_rate=1.0, total_net_usdc=$3371.28, avg_net_usdc=$60.20, unique_pairs=6, unique_routes=4 (unique_routes_cross_dex=2). POOL_DISABLED=5, POOL_MISSING=0 (correct semantics).
+
+**Quality Note**: `run_summary_latest.quality_status=WARN` (reasons: `WARN_EXCLUDED_SIGNALS`, `WARN_TOP_PAIR_DOMINANCE`) — see `data/runs/_rolling/run_summary_latest.json` (ci_m5_gate_20260218_111717).
 
 **Anchor Discipline (v2.1.0-fix enforced):**
 > Anchors MUST come from on-chain evidence (median valid quotes from runDir artifacts), NOT from market intuition.

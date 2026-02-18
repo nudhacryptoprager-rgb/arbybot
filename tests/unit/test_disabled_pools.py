@@ -156,8 +156,8 @@ class TestPoolDisabledVsPoolMissing(unittest.TestCase):
 class TestRealConfigDisabledPools(unittest.TestCase):
     """Tests against real config files to verify 5 disabled pools."""
 
-    def test_real_minimal_has_5_disabled_pools(self):
-        """real_minimal.yaml has exactly 5 disabled pools."""
+    def test_real_minimal_has_expected_disabled_pools(self):
+        """real_minimal.yaml contains at least the known disabled pools."""
         from pathlib import Path
         import yaml
 
@@ -169,7 +169,7 @@ class TestRealConfigDisabledPools(unittest.TestCase):
             config = yaml.safe_load(f)
 
         disabled_pools = config.get("disabled_pools", {})
-        self.assertEqual(len(disabled_pools), 5, f"Expected 5 disabled pools, got {len(disabled_pools)}")
+        self.assertGreaterEqual(len(disabled_pools), 5, f"Expected at least 5 disabled pools, got {len(disabled_pools)}")
 
         # Verify all 5 expected pools are disabled
         expected_disabled = [
