@@ -302,11 +302,23 @@ def build_infra_payload(
                 chains_count += 1
                 endpoints_count += len(chain_data)  # Each chain has dict of URL -> stats
             
+            # v2.2.1 Fix Step 4: Count distinct endpoints actually used (requests > 0)
+            endpoints_used_count = 0
+            endpoints_used_ids: List[str] = []
+            for chain_id, chain_data in provider_stats.get("providers", {}).items():
+                for url, url_stats in chain_data.items():
+                    if url_stats.get("total_requests", 0) > 0:
+                        endpoints_used_count += 1
+                        pname = url_stats.get("provider_name") or url.split("//")[1].split("/")[0].split(".")[0]
+                        if pname not in endpoints_used_ids:
+                            endpoints_used_ids.append(pname)
+            
             payload["provider_router"] = {
                 "chains_count": chains_count,  # v2.2.0 Fix Step 5: Number of chains configured
                 "endpoints_configured_count": endpoints_count,  # v2.2.0: Number of RPC URLs configured
-                "endpoints_seen_count": provider_stats.get("total_requests", 0),  # Actually used
-                "provider_names": provider_names,  # v2.2.0: List of provider names
+                "endpoints_used_count": endpoints_used_count,  # v2.2.1: Distinct endpoints with requests > 0
+                "endpoints_used": endpoints_used_ids,  # v2.2.1: Provider IDs of actually used endpoints
+                "provider_names": provider_names,  # v2.2.0: List of all configured provider names
                 "total_requests": provider_stats.get("total_requests", 0),
                 "global_success_rate": provider_stats.get("global_success_rate", 1.0),
                 "source": "chains/providers.py",  # v2.2.0: Canonical source

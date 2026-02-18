@@ -79,3 +79,58 @@ class TestMulticallSingleton:
         b1 = get_multicall_batcher("http://localhost:8545", 100)
         b2 = get_multicall_batcher("http://other:8545", 100)
         assert b1 is not b2
+
+
+class TestMulticallCallTypes:
+    """Test call_types tracking for Roadmap M5_0 multicall contract."""
+    
+    def test_call_types_initialized(self):
+        """Call types should include all expected fields: slot0, liquidity, token0, token1, decimals, symbol, fee."""
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        expected_types = ["slot0", "liquidity", "token0", "token1", "decimals", "symbol", "fee"]
+        for call_type in expected_types:
+            assert call_type in batcher.call_types, f"Missing call_type: {call_type}"
+            assert batcher.call_types[call_type] == 0
+    
+    def test_call_types_in_stats(self):
+        """Stats should include call_types for artifact tracking."""
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        stats = batcher.get_stats()
+        assert "call_types" in stats, "Stats should include call_types"
+        assert isinstance(stats["call_types"], dict)
+
+
+class TestMulticallRequestedFields:
+    """Test requested_fields aggregation for Roadmap M5_0 contract verification."""
+    
+    def setup_method(self):
+        """Clear batchers before each test."""
+        clear_batchers()
+    
+    def teardown_method(self):
+        """Clear batchers after each test."""
+        clear_batchers()
+    
+    def test_requested_fields_from_aggregate_stats(self):
+        """Aggregate stats should include requested_fields for artifact verification."""
+        from core.multicall import get_aggregate_multicall_stats
+        
+        # Create a batcher and simulate some calls
+        batcher = get_multicall_batcher("http://localhost:8545", 12345)
+        # Manually increment call_types to simulate actual batching
+        batcher.call_types["slot0"] = 10
+        batcher.call_types["liquidity"] = 10
+        batcher.call_types["token0"] = 5
+        batcher.call_types["token1"] = 5
+        batcher.call_types["fee"] = 5
+        
+        stats = get_aggregate_multicall_stats()
+        assert "requested_fields" in stats, "Aggregate stats should include requested_fields"
+        
+        # v2.2.1 Fix Step 7: requested_fields should include all batched types
+        rf = stats["requested_fields"]
+        assert "slot0" in rf, "slot0 should be in requested_fields"
+        assert "liquidity" in rf, "liquidity should be in requested_fields"
+        assert "token0" in rf, "token0 should be in requested_fields after v2.2.1"
+        assert "token1" in rf, "token1 should be in requested_fields after v2.2.1"
+        assert "fee" in rf, "fee should be in requested_fields after v2.2.1"

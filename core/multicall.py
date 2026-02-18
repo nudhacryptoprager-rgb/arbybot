@@ -250,6 +250,11 @@ class MulticallBatcher:
         self.stats["calls_batched"] += len(calls)
         self.stats["calls_made"] += 1
         
+        # v2.2.1 Fix Step 6: Track call types for token_info
+        self.call_types["token0"] += len(pool_addresses)
+        self.call_types["token1"] += len(pool_addresses)
+        self.call_types["fee"] += len(pool_addresses)
+        
         results = self._execute_multicall(calls)
         if results is None:
             return {addr: None for addr in pool_addresses}

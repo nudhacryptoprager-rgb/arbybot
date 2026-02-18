@@ -217,7 +217,12 @@ def load_pairs(
                     fee_tiers=[500, 3000],  # default for intent pairs
                 ))
         except ImportError:
-            # Fallback to legacy parse_intent_file if discovery module not available
+            # v2.2.1 Fix Step 9: Emit warning when using legacy fallback
+            import logging
+            logging.getLogger(__name__).warning(
+                "INTENT_LOADER_FALLBACK: Using legacy parse_intent_file() - "
+                "discovery/intent_loader.py not available. This is deprecated."
+            )
             intent_pairs = parse_intent_file(chain_filter=chain)
             for _, token_in, token_out in intent_pairs:
                 in_addr, in_dec = resolve_token_info(chain, token_in)

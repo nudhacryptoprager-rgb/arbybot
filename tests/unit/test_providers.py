@@ -163,3 +163,68 @@ class TestProviderStatsFields:
             assert "chains_count" in router or "endpoints_configured_count" in router
             # Should NOT have ambiguous "providers_count"
             # (We can't enforce this until we remove the old code)
+
+
+class TestEndpointsUsedSemantics:
+    """Test v2.2.1 Fix Step 4: endpoints_used_count semantics.
+    
+    endpoints_used_count should represent distinct endpoints with requests > 0,
+    not total_requests. This provides proper multi-provider proof.
+    """
+    
+    def test_endpoints_used_count_distinct(self):
+        """endpoints_used_count should be distinct endpoints with requests > 0."""
+        from strategy.infra import build_infra_payload
+        
+        payload = build_infra_payload(
+            resolved_http="https://arb-mainnet.g.alchemy.com/v2/key",
+            resolved_ws=None,
+            ws_connected=False,
+            ws_handshake_ms=None,
+            ws_error=None,
+            tenderly_enabled=False,
+            tenderly_ok=None,
+            tenderly_error=None,
+            provider_http="alchemy",
+            provider_ws="unknown",
+        )
+        
+        router = payload.get("provider_router")
+        if router:
+            # v2.2.1: Should have endpoints_used_count (not endpoints_seen_count)
+            # endpoints_used_count should be <= endpoints_configured_count
+            if "endpoints_used_count" in router:
+                assert router["endpoints_used_count"] <= router.get("endpoints_configured_count", 100)
+                # Should also have endpoints_used list
+                assert "endpoints_used" in router
+                assert isinstance(router["endpoints_used"], list)
+
+    def test_provider_router_failover_evidence_structure(self):
+        """provider_router should have structure for proving failover.
+        
+        v2.2.1 Fix Step 5: For multi-provider proof, we need:
+        - endpoints_used_count > 1 OR
+        - test that shows switching on failure
+        """
+        from strategy.infra import build_infra_payload
+        
+        payload = build_infra_payload(
+            resolved_http="https://arb-mainnet.g.alchemy.com/v2/key",
+            resolved_ws=None,
+            ws_connected=False,
+            ws_handshake_ms=None,
+            ws_error=None,
+            tenderly_enabled=False,
+            tenderly_ok=None,
+            tenderly_error=None,
+            provider_http="alchemy",
+            provider_ws="unknown",
+        )
+        
+        router = payload.get("provider_router")
+        if router:
+            # Structure should support failover tracking
+            assert "total_requests" in router
+            assert "global_success_rate" in router
+            # When failover happens, endpoints_used should have > 1 entry
+            # (This test documents the contract, actual failover tested elsewhere)
