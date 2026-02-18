@@ -30,6 +30,7 @@ load_dotenv()
 class RPCStats:
     """Statistics for an RPC endpoint."""
     url: str
+    endpoint_id: str = ""  # v2.3.0: Stable hash-based ID for tracking
     total_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
@@ -38,6 +39,7 @@ class RPCStats:
     last_success_ts: int | None = None
     quarantined: bool = False
     quarantine_until_ts: int | None = None
+    stress_test_fails: int = 0  # v2.3.0: Simulated fails for stress-test mode
     
     @property
     def avg_latency_ms(self) -> int:
@@ -56,6 +58,26 @@ class RPCStats:
 MIN_REQUESTS_FOR_QUARANTINE = 5  # Need at least N requests before quarantine
 MIN_SUCCESS_RATE_FOR_ACTIVE = 0.1  # Below this = quarantine
 QUARANTINE_DURATION_MS = 60_000  # 1 minute quarantine
+
+# v2.3.0: Failover stress-test support
+# ARBY_FAILOVER_STRESS_N=<count> simulates N failures on primary endpoint to prove failover
+FAILOVER_STRESS_COUNT = int(os.getenv("ARBY_FAILOVER_STRESS_N", "0"))
+
+
+def generate_endpoint_id(url: str) -> str:
+    """Generate stable endpoint ID from URL (hash-based, no secrets)."""
+    import hashlib
+    # Extract provider name and host for stable identification
+    provider = extract_provider_name(url)
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        host = parsed.netloc.split(":")[0]
+    except Exception:
+        host = "unknown"
+    # Create stable short hash
+    content = f"{provider}:{host}"
+    return f"{provider}_{hashlib.sha256(content.encode()).hexdigest()[:8]}"
 
 
 @dataclass
@@ -89,9 +111,10 @@ class RPCProvider:
         # Resolve API keys in URLs
         self.rpc_urls = self._resolve_urls(rpc_urls)
         
-        # Track stats per endpoint
+        # Track stats per endpoint with stable endpoint_id
         self.stats: dict[str, RPCStats] = {
-            url: RPCStats(url=url) for url in self.rpc_urls
+            url: RPCStats(url=url, endpoint_id=generate_endpoint_id(url))
+            for url in self.rpc_urls
         }
     
     def _resolve_urls(self, urls: list[str]) -> list[str]:
@@ -170,6 +193,17 @@ class RPCProvider:
                     logger.info(f"Endpoint released from quarantine: {url}")
             
             stats.total_requests += 1
+            
+            # v2.3.0: Failover stress-test mode - simulate failures on primary endpoint
+            if FAILOVER_STRESS_COUNT > 0 and url == self.rpc_urls[0]:
+                # Only simulate failure if we haven't exceeded stress test count
+                if stats.stress_test_fails < FAILOVER_STRESS_COUNT:
+                    stats.stress_test_fails += 1
+                    stats.failed_requests += 1
+                    stats.last_error = f"STRESS_TEST_SIMULATED_FAIL ({stats.stress_test_fails}/{FAILOVER_STRESS_COUNT})"
+                    self._check_quarantine(stats)
+                    logger.info(f"[STRESS-TEST] Simulated failure on primary: {url} ({stats.stress_test_fails}/{FAILOVER_STRESS_COUNT})")
+                    continue
             
             payload = {
                 "jsonrpc": "2.0",
@@ -305,11 +339,15 @@ class RPCProvider:
         """Get statistics summary for all endpoints."""
         return {
             url: {
+                "endpoint_id": s.endpoint_id,  # v2.3.0: Stable ID for tracking
                 "total_requests": s.total_requests,
+                "successful_requests": s.successful_requests,  # v2.3.0: For breakdown
+                "failed_requests": s.failed_requests,  # v2.3.0: For breakdown
                 "success_rate": round(s.success_rate, 3),
                 "avg_latency_ms": s.avg_latency_ms,
                 "last_error": s.last_error,
                 "quarantined": s.quarantined,
+                "stress_test_fails": s.stress_test_fails,  # v2.3.0: Simulated failures
             }
             for url, s in self.stats.items()
         }

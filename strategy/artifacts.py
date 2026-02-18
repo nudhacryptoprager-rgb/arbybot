@@ -100,6 +100,8 @@ def build_truth_data(
         "schema_version": SCHEMA_VERSION,
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
+        # v2.3.0: Explicit safety contract
+        "kill_switch_active": True,  # v2.3.0: Always true in M5_0 (no execution)
         "execution_enabled": False,
         "execution_ready_count": stats.get("execution_ready_count", 0),  # v2.2.0: From stats (respects kill switch)
         "would_execute_count": stats.get("would_execute_count", 0),      # v2.2.0: Diagnostic only
@@ -107,6 +109,10 @@ def build_truth_data(
         "execution_blocker_details": "EXECUTION_DISABLED_M5_0 - no execution cost model",
         "paper_cost_model_available": True,
         "execution_cost_model_available": False,
+        # v2.3.0: Provenance binding (run_context)
+        "run_context": {
+            "run_timestamp": now,
+        },
         "chain_id": config.get("chain_id", 42161),
         "current_block": current_block,
         "config_params": {
@@ -177,6 +183,14 @@ def build_truth_data(
         },
         # v2.1.0: truth_mode_m42 - when true, one-leg PnL is DIAGNOSTIC only, roundtrip is canonical
         "truth_mode_m42": config.get("truth_mode_m42", False),
+        # v2.3.0: Explicit DIAGNOSTIC vs CANONICAL profit semantics
+        # profit_is_diagnostic=True means total_net_usdc is NOT canonical/realized profit
+        "profit_is_diagnostic": config.get("truth_mode_m42", False) or not stats.get("roundtrip", {}).get("profitable_count", 0) > 0,
+        "profit_truth_source": (
+            "ROUNDTRIP_CANONICAL" if stats.get("roundtrip", {}).get("profitable_count", 0) > 0
+            else "ONE_LEG_DIAGNOSTIC" if config.get("truth_mode_m42", False)
+            else "ONE_LEG_UNVERIFIED"
+        ),
         "profit_realism_status": (
             "ROUNDTRIP_PROFITABLE" if stats.get("roundtrip", {}).get("profitable_count", 0) > 0
             else "ROUNDTRIP_NOT_PROFITABLE" if stats.get("roundtrip", {}).get("evaluated_count", 0) > 0

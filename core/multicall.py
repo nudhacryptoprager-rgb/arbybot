@@ -86,8 +86,10 @@ class MulticallBatcher:
             "calls_batched": 0,
             "calls_failed": 0,
             "rpc_calls": 0,
+            "latency_ms_total": 0,  # v2.3.0: Total latency for averaging
         }
         # v2.2.0 Fix Step 4: Track call types explicitly
+        # v2.3.0: Track success/fail per field
         self.call_types: Dict[str, int] = {
             "slot0": 0,
             "liquidity": 0,
@@ -97,6 +99,8 @@ class MulticallBatcher:
             "symbol": 0,
             "fee": 0,
         }
+        self.call_success: Dict[str, int] = {k: 0 for k in self.call_types}
+        self.call_fail: Dict[str, int] = {k: 0 for k in self.call_types}
         self._w3 = None
         self._multicall = None
     
@@ -171,6 +175,8 @@ class MulticallBatcher:
         
         results = self._execute_multicall(calls)
         if results is None:
+            # v2.3.0: Track all as failed when RPC fails
+            self.call_fail["slot0"] += len(pool_addresses)
             return {addr: None for addr in pool_addresses}
         
         output = {}
@@ -182,10 +188,13 @@ class MulticallBatcher:
                     sqrt_price = int.from_bytes(data[0:32], "big")
                     tick = int.from_bytes(data[32:64], "big", signed=True)
                     output[addr] = (sqrt_price, tick, 0)  # liquidity from separate call
+                    self.call_success["slot0"] += 1  # v2.3.0: Track success
                 except Exception:
                     output[addr] = None
+                    self.call_fail["slot0"] += 1  # v2.3.0: Track fail
             else:
                 output[addr] = None
+                self.call_fail["slot0"] += 1  # v2.3.0: Track fail
         
         return output
     
@@ -209,6 +218,7 @@ class MulticallBatcher:
         
         results = self._execute_multicall(calls)
         if results is None:
+            self.call_fail["liquidity"] += len(pool_addresses)  # v2.3.0
             return {addr: None for addr in pool_addresses}
         
         output = {}
@@ -218,10 +228,13 @@ class MulticallBatcher:
                 try:
                     liquidity = int.from_bytes(data[0:16], "big")
                     output[addr] = liquidity
+                    self.call_success["liquidity"] += 1  # v2.3.0
                 except Exception:
                     output[addr] = None
+                    self.call_fail["liquidity"] += 1  # v2.3.0
             else:
                 output[addr] = None
+                self.call_fail["liquidity"] += 1  # v2.3.0
         
         return output
     
@@ -381,9 +394,11 @@ class MulticallBatcher:
         return output
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get batcher statistics including call types."""
+        """Get batcher statistics including call types and success/fail breakdown."""
         stats = dict(self.stats)
         stats["call_types"] = dict(self.call_types)  # v2.2.0: Include call types
+        stats["call_success"] = dict(self.call_success)  # v2.3.0: Per-field success counts
+        stats["call_fail"] = dict(self.call_fail)  # v2.3.0: Per-field fail counts
         return stats
 
 
@@ -416,8 +431,12 @@ def get_aggregate_multicall_stats() -> Dict[str, Any]:
     total_calls_batched = 0
     total_calls_failed = 0
     total_rpc_calls = 0
+    total_latency_ms = 0
     # v2.2.0 Fix Step 4: Aggregate call types
     aggregated_call_types: Dict[str, int] = {}
+    # v2.3.0: Per-field success/fail
+    aggregated_call_success: Dict[str, int] = {}
+    aggregated_call_fail: Dict[str, int] = {}
     
     for batcher in _batchers.values():
         stats = batcher.get_stats()
@@ -425,9 +444,15 @@ def get_aggregate_multicall_stats() -> Dict[str, Any]:
         total_calls_batched += stats.get("calls_batched", 0)
         total_calls_failed += stats.get("calls_failed", 0)
         total_rpc_calls += stats.get("rpc_calls", 0)
+        total_latency_ms += stats.get("latency_ms_total", 0)
         # Aggregate call types
         for call_type, count in stats.get("call_types", {}).items():
             aggregated_call_types[call_type] = aggregated_call_types.get(call_type, 0) + count
+        # v2.3.0: Aggregate success/fail per field
+        for field, count in stats.get("call_success", {}).items():
+            aggregated_call_success[field] = aggregated_call_success.get(field, 0) + count
+        for field, count in stats.get("call_fail", {}).items():
+            aggregated_call_fail[field] = aggregated_call_fail.get(field, 0) + count
     
     success_rate = 1.0
     if total_calls_batched > 0:
@@ -436,6 +461,18 @@ def get_aggregate_multicall_stats() -> Dict[str, Any]:
     # v2.2.0: Build list of requested fields that had calls
     requested_fields = [k for k, v in aggregated_call_types.items() if v > 0]
     
+    # v2.3.0: Per-field success rates
+    field_success_rates: Dict[str, float] = {}
+    for field in requested_fields:
+        total = aggregated_call_types.get(field, 0)
+        success = aggregated_call_success.get(field, 0)
+        if total > 0:
+            field_success_rates[field] = round(success / total, 4)
+    
+    avg_latency_ms = 0
+    if total_rpc_calls > 0:
+        avg_latency_ms = total_latency_ms // total_rpc_calls
+    
     return {
         "batchers_count": len(_batchers),
         "calls_made": total_calls_made,
@@ -443,6 +480,10 @@ def get_aggregate_multicall_stats() -> Dict[str, Any]:
         "calls_failed": total_calls_failed,
         "rpc_calls": total_rpc_calls,
         "success_rate": round(success_rate, 4),
+        "avg_latency_ms": avg_latency_ms,  # v2.3.0
         "call_types": aggregated_call_types,  # v2.2.0: Explicit call types
         "requested_fields": requested_fields,  # v2.2.0: List of fields fetched
+        "field_success": aggregated_call_success,  # v2.3.0: Per-field success counts
+        "field_fail": aggregated_call_fail,  # v2.3.0: Per-field fail counts
+        "field_success_rates": field_success_rates,  # v2.3.0: Per-field success rates
     }

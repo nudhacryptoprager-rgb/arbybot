@@ -304,16 +304,42 @@ def build_infra_payload(
             
             # v2.2.0 Fix Step 4: Count distinct endpoints actually used (requests > 0)
             # v2.2.0 Fix Step 3: Use extract_provider_name() for canonical provider_id
+            # v2.3.0: Add per-endpoint breakdown for failover evidence
             endpoints_used_count = 0
             endpoints_used_ids: List[str] = []
+            requests_by_endpoint: Dict[str, int] = {}
+            errors_by_endpoint: Dict[str, int] = {}
+            endpoint_details: List[Dict[str, Any]] = []
+            
             for chain_id, chain_data in provider_stats.get("providers", {}).items():
                 for url, url_stats in chain_data.items():
-                    if url_stats.get("total_requests", 0) > 0:
+                    endpoint_id = url_stats.get("endpoint_id", "unknown")
+                    total_req = url_stats.get("total_requests", 0)
+                    failed_req = url_stats.get("failed_requests", 0)
+                    
+                    if total_req > 0:
                         endpoints_used_count += 1
                         # Use canonical extract_provider_name for proper provider_id
                         pname = extract_provider_name(url)
                         if pname and pname != "unknown" and pname not in endpoints_used_ids:
                             endpoints_used_ids.append(pname)
+                        
+                        # v2.3.0: Per-endpoint metrics
+                        requests_by_endpoint[endpoint_id] = total_req
+                        if failed_req > 0:
+                            errors_by_endpoint[endpoint_id] = failed_req
+                        
+                        # v2.3.0: Detailed endpoint info for debugging
+                        endpoint_details.append({
+                            "endpoint_id": endpoint_id,
+                            "provider": pname,
+                            "requests": total_req,
+                            "success_rate": url_stats.get("success_rate", 0.0),
+                            "failed": failed_req,
+                            "avg_latency_ms": url_stats.get("avg_latency_ms", 0),
+                            "quarantined": url_stats.get("quarantined", False),
+                            "stress_test_fails": url_stats.get("stress_test_fails", 0),
+                        })
             
             payload["provider_router"] = {
                 "chains_count": chains_count,  # v2.2.0 Fix Step 5: Number of chains configured
@@ -323,6 +349,9 @@ def build_infra_payload(
                 "provider_names": provider_names,  # v2.2.0: List of all configured provider names
                 "total_requests": provider_stats.get("total_requests", 0),
                 "global_success_rate": provider_stats.get("global_success_rate", 1.0),
+                "requests_by_endpoint": requests_by_endpoint,  # v2.3.0: Per-endpoint request counts
+                "errors_by_endpoint": errors_by_endpoint,  # v2.3.0: Per-endpoint error counts
+                "endpoints_details": endpoint_details,  # v2.3.0: Full endpoint breakdown
                 "source": "chains/providers.py",  # v2.2.0: Canonical source
             }
     except Exception as e:

@@ -21,13 +21,20 @@ logger = logging.getLogger("strategy.dynamic_anchors")
 # Default cache file location
 DEFAULT_CACHE_PATH = Path("data/cache/dynamic_anchors.json")
 
+# v2.3.0: Configurable TTL and sample settings
+# Override via: ARBY_ANCHOR_MAX_AGE_SECONDS, ARBY_ANCHOR_MIN_SAMPLES
+import os as _os
+_env_max_age = int(_os.environ.get("ARBY_ANCHOR_MAX_AGE_SECONDS", "21600"))  # 6h default
+_env_min_samples = int(_os.environ.get("ARBY_ANCHOR_MIN_SAMPLES", "3"))
+
 # Config
 DYNAMIC_ANCHOR_CONFIG = {
     # Minimum samples needed to use dynamic anchor
-    "min_samples": 3,
+    "min_samples": _env_min_samples,
     
     # Maximum age of samples (seconds)
-    "max_sample_age_seconds": 3600,  # 1 hour
+    # v2.3.0: Changed from 1h to 6h default for better sample accumulation
+    "max_sample_age_seconds": _env_max_age,
     
     # Maximum samples to keep per pair
     "max_samples_per_pair": 100,
@@ -38,7 +45,33 @@ DYNAMIC_ANCHOR_CONFIG = {
         "sushiswap_v3",
         "camelot_v3",
     ],
+    
+    # v2.3.0: Drift warning threshold (percentage)
+    "drift_warning_pct": 10.0,
 }
+
+
+def canonicalize_pair(pair: str) -> str:
+    """
+    Canonicalize pair key for consistent lookup.
+    
+    v2.3.0: Sorts token symbols alphabetically to ensure
+    WETH/USDC and USDC/WETH map to the same anchor.
+    
+    Args:
+        pair: Pair string like "WETH/USDC" or "USDC/WETH"
+        
+    Returns:
+        Canonical pair like "USDC/WETH" (alphabetically sorted)
+    """
+    if "/" not in pair:
+        return pair
+    tokens = pair.split("/")
+    if len(tokens) != 2:
+        return pair
+    # Sort alphabetically
+    sorted_tokens = sorted(tokens)
+    return f"{sorted_tokens[0]}/{sorted_tokens[1]}"
 
 
 @dataclass
@@ -175,9 +208,13 @@ class DynamicAnchorManager:
         Record a valid quote for anchor calculation.
         
         Only call this for quotes that passed price sanity validation.
+        v2.3.0: Uses canonical pair key (sorted tokens).
         """
-        if pair not in self._pairs:
-            self._pairs[pair] = PairAnchorData(pair=pair)
+        # v2.3.0: Canonicalize pair key for consistent lookup
+        canonical_pair = canonicalize_pair(pair)
+        
+        if canonical_pair not in self._pairs:
+            self._pairs[canonical_pair] = PairAnchorData(pair=canonical_pair)
         
         sample = AnchorSample(
             timestamp=time.time(),
@@ -188,7 +225,7 @@ class DynamicAnchorManager:
         )
         
         max_samples = self.config.get("max_samples_per_pair", 100)
-        self._pairs[pair].add_sample(sample, max_samples)
+        self._pairs[canonical_pair].add_sample(sample, max_samples)
     
     def get_anchor(
         self,
@@ -204,11 +241,16 @@ class DynamicAnchorManager:
         
         Returns:
             (anchor_price, anchor_source) where anchor_source is "dynamic" or "yaml_fallback"
+        
+        v2.3.0: Uses canonical pair key for lookup.
         """
+        # v2.3.0: Canonicalize pair for lookup
+        canonical_pair = canonicalize_pair(pair)
+        
         # Check if we have enough dynamic samples
-        if pair in self._pairs:
-            pair_data = self._pairs[pair]
-            max_age = self.config.get("max_sample_age_seconds", 3600)
+        if canonical_pair in self._pairs:
+            pair_data = self._pairs[canonical_pair]
+            max_age = self.config.get("max_sample_age_seconds", 21600)  # v2.3.0: 6h default
             min_samples = self.config.get("min_samples", 3)
             
             median = pair_data.calculate_median(max_age, min_samples)
@@ -240,6 +282,7 @@ class DynamicAnchorManager:
         Get detailed anchor information including age.
         
         Returns dict with: anchor_value, anchor_source, anchor_age_seconds, sample_count
+        v2.3.0: Uses canonical pair key for lookup.
         """
         result = {
             "anchor_value": None,
@@ -248,9 +291,12 @@ class DynamicAnchorManager:
             "sample_count": 0,
         }
         
-        if pair in self._pairs:
-            pair_data = self._pairs[pair]
-            max_age = self.config.get("max_sample_age_seconds", 3600)
+        # v2.3.0: Canonicalize pair for lookup
+        canonical_pair = canonicalize_pair(pair)
+        
+        if canonical_pair in self._pairs:
+            pair_data = self._pairs[canonical_pair]
+            max_age = self.config.get("max_sample_age_seconds", 21600)  # v2.3.0: 6h default
             min_samples = self.config.get("min_samples", 3)
             
             valid_samples = pair_data.get_valid_samples(max_age)
@@ -276,24 +322,36 @@ class DynamicAnchorManager:
     
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about anchor data."""
-        max_age = self.config.get("max_sample_age_seconds", 3600)
+        max_age = self.config.get("max_sample_age_seconds", 21600)  # v2.3.0
+        min_samples = self.config.get("min_samples", 3)
         
         active_pairs = 0
         total_samples = 0
+        dynamic_ready_count = 0  # v2.3.0: Pairs with enough samples for dynamic anchor
         
         for pair_data in self._pairs.values():
             valid_samples = pair_data.get_valid_samples(max_age)
             if valid_samples:
                 active_pairs += 1
                 total_samples += len(valid_samples)
+                if len(valid_samples) >= min_samples:
+                    dynamic_ready_count += 1
+        
+        # v2.3.0: Compute coverage rate (pairs ready for dynamic anchoring)
+        coverage_rate = 0.0
+        if active_pairs > 0:
+            coverage_rate = round(dynamic_ready_count / active_pairs, 4)
         
         return {
             "total_pairs": len(self._pairs),
             "active_pairs": active_pairs,
+            "dynamic_ready_count": dynamic_ready_count,  # v2.3.0: Ready for dynamic anchor
+            "coverage_rate": coverage_rate,  # v2.3.0: Fraction of pairs with dynamic data
             "total_samples": total_samples,
             "config": {
                 "min_samples": self.config.get("min_samples"),
                 "max_sample_age_seconds": self.config.get("max_sample_age_seconds"),
+                "drift_warning_pct": self.config.get("drift_warning_pct", 10.0),  # v2.3.0
             },
         }
     

@@ -976,6 +976,10 @@ ENV VARIABLES:
     parser.add_argument("--refresh-rolling-strict", action="store_true",
                         help="If --refresh-rolling fails, treat as fatal error (exit FAIL)")
     
+    # v2.3.0: Failover stress-test
+    parser.add_argument("--failover-stress", type=int, default=0, metavar="N",
+                        help="Simulate N failures on primary endpoint to prove failover (sets ARBY_FAILOVER_STRESS_N)")
+    
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     
     args = parser.parse_args()
@@ -1094,6 +1098,11 @@ ENV VARIABLES:
             os.environ.setdefault("ARBY_PREFER_WS", "1")
         if args.ws_required:
             os.environ.setdefault("ARBY_WS_REQUIRED", "1")
+        
+        # v2.3.0: Failover stress-test mode
+        if args.failover_stress > 0:
+            os.environ["ARBY_FAILOVER_STRESS_N"] = str(args.failover_stress)
+            print(f"[ONLINE] FAILOVER-STRESS: Will simulate {args.failover_stress} failures on primary endpoint")
 
         # For M5_0 DoD: make infra-hosts and cross-artifact checks strict by default in online runs
         # These can still be overridden by explicit flags if needed.

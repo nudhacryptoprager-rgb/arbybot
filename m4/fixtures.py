@@ -1066,6 +1066,9 @@ def generate_m4_from_online_inputs(
             "sign_mismatch_count": sign_mismatch_count,
             "fragile_count": fragile_count,
             "fragile_rate": round(frag_rate, 4),  # v1.9.6: use computed frag_rate
+            # v2.3.0: Explicit profit semantics
+            "profit_is_diagnostic": True,  # v2.3.0: M5_0 simulate_only = always diagnostic
+            "profit_truth_source": "ONE_LEG_DIAGNOSTIC",  # v2.3.0: Until roundtrip canonical
         },
         "thresholds": {
             "policy_version": POLICY_VERSION,  # v1.9.5: provenance
