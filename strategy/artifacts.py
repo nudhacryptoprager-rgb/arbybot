@@ -98,7 +98,8 @@ def _compute_execution_pnl(
     gas_usd_estimate = config.get("gas_usd_estimate", 0.0)
     
     # Compute totals from all signals
-    total_gross_pnl = sum(s.get("spread_usdc", 0) for s in spread_signals)
+    # v2.3.2 FIX: Use gross_pnl_usdc_est (actual field name from strategy/spreads.py)
+    total_gross_pnl = sum(s.get("gross_pnl_usdc_est", 0) for s in spread_signals)
     total_net_pnl = sum(s.get("net_pnl_usdc_est", 0) for s in spread_signals if s.get("is_net_positive_est"))
     signals_with_estimates = [s for s in spread_signals if s.get("net_pnl_usdc_est") is not None]
     
@@ -230,7 +231,8 @@ def build_truth_data(
         "truth_mode_m42": config.get("truth_mode_m42", False),
         # v2.3.0: Explicit DIAGNOSTIC vs CANONICAL profit semantics
         # profit_is_diagnostic=True means total_net_usdc is NOT canonical/realized profit
-        "profit_is_diagnostic": config.get("truth_mode_m42", False) or not stats.get("roundtrip", {}).get("profitable_count", 0) > 0,
+        # v2.3.2 FIX: When roundtrip.profitable_count > 0, profit is CANONICAL regardless of truth_mode_m42
+        "profit_is_diagnostic": not (stats.get("roundtrip", {}).get("profitable_count", 0) > 0),
         "profit_truth_source": (
             "ROUNDTRIP_CANONICAL" if stats.get("roundtrip", {}).get("profitable_count", 0) > 0
             else "ONE_LEG_DIAGNOSTIC" if config.get("truth_mode_m42", False)

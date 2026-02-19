@@ -1,119 +1,92 @@
-# DEV REPORT 2026-02-19 v2.3.2 (UA)
+# DEV REPORT
 
-## Статус сесії
+## 0) Meta
+timestamp_utc: 2026-02-19T19:03:54Z
+run_id: data/runs/ci_m5_gate_20260219_190354
+mode: ONLINE
+artifact_mode: rolling
+config: config/real_minimal.yaml (profit profile)
+code_identity:
+  primary: ts:2026-02-19T19:03:54Z
+  dirty: false
+  desc: v2.3.2-fix profit_is_diagnostic + gross_pnl_usdc_est + ASCII
 
-**Дата:** 2026-02-19  
-**Версія політики:** v2.0.8  
-**Версія гейту:** v2.3.2  
-**Commit:** (pending)
+## 1) Scope (що і навіщо)
+goal (Roadmap пункт): M4 simulate-only, v2.3.2 Profit Truth Semantics
+change_summary:
+  - FIX: profit_is_diagnostic тепер false при roundtrip.profitable_count > 0 (навіть якщо truth_mode_m42=true)
+  - FIX: _compute_execution_pnl використовує gross_pnl_usdc_est (не spread_usdc)
+  - FIX: ASCII encoding в status файлах (em-dash, arrows)
+  - ADD: 7 нових тестів для profit_is_diagnostic/execution_pnl
+  - ADD: 5 нових sushi regression test cases (WBTC/USDC, inverted)
+  - UPDATE: Status_M5_0.md test counts (926 passed)
+  - UPDATE: Status_M4.md - прибрано M5_0 infra деталі
+touched_files:
+  - strategy/artifacts.py
+  - tests/unit/test_truth_report.py
+  - tests/unit/test_sushi_price_sanity_regression.py
+  - docs/status/Status_M4.md
+  - docs/status/Status_M5_0.md
+  - docs/status/INDEX.md
+  - Roadmap.md
 
-## Виконані кроки (10/10)
+## 2) Commands Executed (лише факти)
 
-| # | Крок | Статус |
-|---|------|--------|
-| 1 | Clean encoding/ASCII у Status файлах | [DONE] |
-| 2 | Повне розділення M4/M5_0 evidence | [DONE] |
-| 3 | profit_truth_available контракт у Roadmap | [DONE] |
-| 4 | Переписати тести на реальний код | [DONE] |
-| 5 | Підготовка ONLINE evidence | [DONE] |
-| 6 | Enable Clean PnL v1 | [DONE] |
-| 7 | Roundtrip canonical logic | [DONE] |
-| 8 | Sushi PRICE_SANITY regression test | [DONE] |
-| 9 | Discovery/intent integration | [DONE] |
-| 10 | Canonical DEV REPORT UA | [DONE] |
+python -m pytest -q: PASS (938 passed, 12 skipped, 10.55s)
+python scripts/ci_full_pipeline.py --mode ci: NOT RUN (ONLINE used)
+python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1 --refresh-rolling: PASS
+python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling: PASS (via rolling refresh)
 
-## Нові/змінені файли
+## 3) Artifacts Attached (шляхи)
+rolling:
+  - data/runs/_rolling/_latest.json
+  - data/runs/_rolling/run_summary_latest.json
+  - data/runs/_rolling/m4_stability_agg.json
+run_dir_bundle (ONLINE):
+  - data/runs/ci_m5_gate_20260219_190354/reports
 
-### Код (production)
+## 4) Key Results (числа з артефактів)
 
-| Файл | Зміна |
-|------|-------|
-| `m4/gates.py` | +`compute_profit_truth_available()`, +`apply_profit_diagnostic_warning()` |
-| `strategy/artifacts.py` | +`_compute_execution_pnl()` helper для Clean PnL v1 |
-| `discovery/index_factories.py` | +`verify_pool_exists()`, +`validate_pool_address()` |
-| `core/rpc_urls.py` | +`get_rpc_url()` simple helper |
+latest:
+  schema_version: m4:latest:v2.0
+  run_status: PASS
+  agg_status: WARN_QUALITY
+  data_run_rate: 0.9865
+run_summary_latest:
+  schema_version: m4:run_summary:v2.0
+  status: PASS
+  metrics.signals_count: 8
+  metrics.total_net_usdc: 43.7188
+  metrics.profit_truth_available: false
+  metrics.cost_model_available: true
+  metrics.profit_is_diagnostic: true
+  metrics.profit_truth_source: ONE_LEG_DIAGNOSTIC
+  quality_reasons: ['WARN_EXCLUDED_SIGNALS', 'WARN_CRITICAL_REJECTS', 'WARN_PROFIT_DIAGNOSTIC']
+m4_stability_agg:
+  total_net_usdc: 4041.9231
+  unique_pairs: 8
+  unique_routes: 4
+  unique_routes_cross_dex: 2
+  low_sample_rate: 0.0
 
-### Тести
+## 5) v2.3.2 Fields Evidence
 
-| Файл | Тести |
-|------|-------|
-| `tests/unit/test_profit_truth_available.py` | 12 тестів (реальний код з m4/gates.py) |
-| `tests/unit/test_sushi_price_sanity_regression.py` | 11 тестів |
-| `tests/unit/test_discovery_factories.py` | 16 тестів |
+truth_report (ci_m5_gate_20260219_190354):
+  execution_pnl.cost_model_available: true
+  execution_pnl.cost_model_version: paper_gas_slippage_v1
+  execution_pnl.gross_pnl_usdc: 888.227900
+  profit_is_diagnostic: true
+  profit_truth_source: ONE_LEG_DIAGNOSTIC
 
-### Документація
+## 6) Blockers
 
-| Файл | Зміна |
-|------|-------|
-| `docs/status/INDEX.md` | Емоджі → ASCII, дата оновлена |
-| `docs/status/Status_M5_0.md` | Емоджі → ASCII |
-| `docs/status/Status_M4.md` | Видалено M5_0 infra evidence |
-| `Roadmap.md` | +v2.3.2 Profit Truth Semantics section |
+- roundtrip.profitable_count=0 (no arb opportunity in current market)
+- profit_truth_available=false (diagnostic mode)
+- unique_routes_cross_dex=2 < 4 (need 3rd DEX)
+- unique_pairs=8 < 10 (diversity warning)
 
-## Артефакти на диску
+## 7) Next Steps
 
-```
-data/runs/_rolling/
-├── _latest.json                  (2026-02-19)
-├── run_summary_latest.json       (2026-02-19)
-└── m4_stability_agg.json         (2026-02-19)
-```
-
-## Тести
-
-```
-926 passed, 12 skipped, 1 warning
-```
-
-### Нові тести по категоріям
-
-- **profit_truth_available:** 12 тестів (compute + apply helpers)
-- **sushi PRICE_SANITY:** 11 регресійних тестів
-- **discovery factories:** 16 тестів (PoolIndex, verify, validate)
-
-## Команди для верифікації
-
-```powershell
-# Unit tests
-py -3.11 -m pytest -q
-
-# M4 gate offline (profit profile)
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict
-
-# Full pipeline CI
-py -3.11 scripts/ci_full_pipeline.py --mode ci
-
-# M5_0 gate offline
-py -3.11 scripts/ci_m5_0_gate.py --offline
-```
-
-## Блокери / TODO для ONLINE
-
-1. **RPC Rate Limit:** Потрібен ALCHEMY_API_KEY для ONLINE run
-2. **Rolling refresh:** Після ONLINE run оновити `_rolling/` артефакти
-3. **Roundtrip evidence:** Потрібен profitable roundtrip для `profit_truth_available=True`
-
-## Контракти
-
-### profit_truth_available (v2.3.2)
-
-```
-profit_truth_available = (NOT profit_is_diagnostic) AND cost_model_available
-
-profit_is_diagnostic = truth_mode_m42 OR (roundtrip.profitable_count == 0)
-cost_model_available = (gas_usd_estimate > 0)
-```
-
-### profit_truth_source
-
-| Значення | Умова |
-|----------|-------|
-| `ROUNDTRIP_CANONICAL` | roundtrip.profitable_count > 0 |
-| `ONE_LEG_DIAGNOSTIC` | truth_mode_m42=True |
-| `ONE_LEG_UNVERIFIED` | інакше |
-
-## Наступні кроки
-
-1. Запустити ONLINE scan: `py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml`
-2. Оновити rolling артефакти після успішного run
-3. Створити commit з усіма змінами
+1. Add 3rd DEX (camelot_v3) for diversity_routes
+2. Wait for market conditions with actual arb opportunity
+3. When roundtrip.profitable_count > 0, profit_truth_available will become true

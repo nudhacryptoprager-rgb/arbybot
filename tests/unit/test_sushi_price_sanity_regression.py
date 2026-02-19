@@ -29,6 +29,14 @@ class TestSushiPriceSanityRegression:
         ("WETH/USDC", "sushi", 3000, Decimal("3450.0"), Decimal("3500.0"), True),  # normal
         # Edge case: price near zero (should fail)
         ("ARB/WETH", "sushi", 3000, Decimal("1e-30"), Decimal("0.0005"), False),
+        # v2.3.2: WBTC/USDC inverted-ish anomalies
+        ("WBTC/USDC", "sushi", 500, Decimal("1.5e-5"), Decimal("97500.0"), False),  # Inverted/near-zero
+        ("WBTC/USDC", "sushi", 500, Decimal("9.75e8"), Decimal("97500.0"), False),  # 10x outlier
+        # Real reject from ci_m5_gate_20260219_144126
+        ("ARB/USDC", "sushi", 3000, Decimal("1.009"), Decimal("0.11"), False),  # Inverted 10x
+        ("GMX/WETH", "uniswap_v3", 500, Decimal("0.00323"), Decimal("0.008"), False),  # 60% off
+        # LINK/USDC outlier from quarantine
+        ("LINK/USDC", "sushi", 3000, Decimal("19.9"), Decimal("9.0"), False),  # 2x outlier
     ]
 
     @pytest.mark.parametrize("pair,dex_id,fee_tier,observed,anchor,expected_pass", REAL_CASES)

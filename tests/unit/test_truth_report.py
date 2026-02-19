@@ -430,5 +430,153 @@ class TestSchemaVersion(unittest.TestCase):
         self.assertEqual(SCHEMA_VERSION, "3.2.0")
 
 
+class TestProfitIsDiagnosticSemantics(unittest.TestCase):
+    """v2.3.2: profit_is_diagnostic semantics tests."""
+
+    def _make_minimal_stats(self, roundtrip_profitable_count=0, roundtrip_evaluated_count=0):
+        """Create minimal stats dict for build_truth_data."""
+        return {
+            "roundtrip": {
+                "profitable_count": roundtrip_profitable_count,
+                "evaluated_count": roundtrip_evaluated_count,
+            },
+            "quotes_fetched": 10,
+            "quotes_total": 10,
+            "dexes_active": ["uniswap_v3"],
+            "price_sanity_passed": 10,
+            "price_sanity_failed": 0,
+            "gates_passed": 10,
+            "price_stability_factor": 1.0,
+            "rpc_errors": 0,
+            "rpc_success_rate": 1.0,
+        }
+
+    def test_profit_is_diagnostic_false_when_roundtrip_profitable(self):
+        """profit_is_diagnostic=False when roundtrip.profitable_count > 0, even with truth_mode_m42=True."""
+        from strategy.artifacts import build_truth_data
+        
+        config = {"truth_mode_m42": True}
+        stats = self._make_minimal_stats(roundtrip_profitable_count=2, roundtrip_evaluated_count=5)
+        
+        truth_data = build_truth_data(
+            config=config,
+            stats=stats,
+            current_block=12345,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=100,
+            spread_threshold_bps=50,
+        )
+        
+        # v2.3.2 FIX: roundtrip.profitable_count > 0 makes profit CANONICAL
+        self.assertFalse(truth_data["profit_is_diagnostic"])
+        self.assertEqual(truth_data["profit_truth_source"], "ROUNDTRIP_CANONICAL")
+
+    def test_profit_is_diagnostic_true_when_no_roundtrip_profit(self):
+        """profit_is_diagnostic=True when roundtrip.profitable_count == 0."""
+        from strategy.artifacts import build_truth_data
+        
+        config = {"truth_mode_m42": False}
+        stats = self._make_minimal_stats(roundtrip_profitable_count=0, roundtrip_evaluated_count=5)
+        
+        truth_data = build_truth_data(
+            config=config,
+            stats=stats,
+            current_block=12345,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=100,
+            spread_threshold_bps=50,
+        )
+        
+        self.assertTrue(truth_data["profit_is_diagnostic"])
+
+    def test_profit_truth_source_roundtrip_canonical(self):
+        """profit_truth_source=ROUNDTRIP_CANONICAL when profitable."""
+        from strategy.artifacts import build_truth_data
+        
+        config = {}
+        stats = self._make_minimal_stats(roundtrip_profitable_count=1)
+        
+        truth_data = build_truth_data(
+            config=config,
+            stats=stats,
+            current_block=12345,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=100,
+            spread_threshold_bps=50,
+        )
+        
+        self.assertEqual(truth_data["profit_truth_source"], "ROUNDTRIP_CANONICAL")
+
+
+class TestComputeExecutionPnl(unittest.TestCase):
+    """v2.3.2: _compute_execution_pnl tests."""
+
+    def test_uses_gross_pnl_usdc_est_field(self):
+        """_compute_execution_pnl uses gross_pnl_usdc_est (not spread_usdc)."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        spread_signals = [
+            {"gross_pnl_usdc_est": 1.5, "net_pnl_usdc_est": 1.2, "is_net_positive_est": True},
+            {"gross_pnl_usdc_est": 0.8, "net_pnl_usdc_est": 0.5, "is_net_positive_est": True},
+        ]
+        config = {"gas_usd_estimate": 0.1}
+        
+        result = _compute_execution_pnl(spread_signals, config)
+        
+        # Total gross should be 1.5 + 0.8 = 2.3
+        self.assertEqual(float(result["gross_pnl_usdc"]), 2.3)
+        # Total net should be 1.2 + 0.5 = 1.7
+        self.assertEqual(float(result["would_execute_pnl_usdc"]), 1.7)
+
+    def test_cost_model_available_true_with_gas_estimate(self):
+        """cost_model_available=True when gas_usd_estimate > 0 and signals exist."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        spread_signals = [
+            {"gross_pnl_usdc_est": 1.0, "net_pnl_usdc_est": 0.8, "is_net_positive_est": True},
+        ]
+        config = {"gas_usd_estimate": 0.15}
+        
+        result = _compute_execution_pnl(spread_signals, config)
+        
+        self.assertTrue(result["cost_model_available"])
+        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_v1")
+
+    def test_cost_model_available_false_without_gas_estimate(self):
+        """cost_model_available=False when gas_usd_estimate is 0."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        spread_signals = [
+            {"gross_pnl_usdc_est": 1.0, "net_pnl_usdc_est": 0.8, "is_net_positive_est": True},
+        ]
+        config = {"gas_usd_estimate": 0}
+        
+        result = _compute_execution_pnl(spread_signals, config)
+        
+        self.assertFalse(result["cost_model_available"])
+        self.assertIsNone(result["cost_model_version"])
+
+    def test_ignores_nonexistent_spread_usdc_field(self):
+        """Verifies no reliance on old spread_usdc field."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        # Signal with spread_usdc (wrong field) but no gross_pnl_usdc_est
+        spread_signals = [
+            {"spread_usdc": 999.0, "net_pnl_usdc_est": 0.5, "is_net_positive_est": True},
+        ]
+        config = {"gas_usd_estimate": 0.1}
+        
+        result = _compute_execution_pnl(spread_signals, config)
+        
+        # Should NOT use spread_usdc (should be 0, not 999)
+        self.assertEqual(float(result["gross_pnl_usdc"]), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

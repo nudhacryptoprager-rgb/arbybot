@@ -97,7 +97,7 @@ python scripts/ci_m4_execution_gate.py --online --run-dir data/runs/<dir> --prof
 
 | Gate | Purpose | Blocks Release? |
 |------|---------|-----------------|
-| **M4 profit (online)** | DEX↔DEX net > 0 on real block | ✅ YES (core truth) |
+| **M4 profit (online)** | DEX<->DEX net > 0 on real block | [OK] YES (core truth) |
 | **M4 smoke (offline)** | Fixture sanity | ✅ YES |
 | **M5_0 (offline)** | Artifact schema | ✅ YES |
 | **M5 (online)** | Daily report | ❌ NO (monitoring layer) |

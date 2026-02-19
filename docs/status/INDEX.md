@@ -18,13 +18,13 @@ _Last updated: 2026-02-19 (v2.3.2)_
 
 ## Current Focus
 
-**M4 — DEX↔DEX Atomic Execution**: M4.1 simulate-only PROVEN; M4 online profit DoD NOT PROVEN.
+**M4 - DEX<->DEX Atomic Execution**: M4.1 simulate-only PROVEN; M4 online profit DoD NOT PROVEN.
 
 See `Roadmap.md` Core Truth for release criteria.
 
 ## Archive
 
-- [Status_M4_legacy.md](Status_M4_legacy.md) — ARCHIVE (SHA-based, deprecated)
+- [Status_M4_legacy.md](Status_M4_legacy.md) - ARCHIVE (SHA-based, deprecated)
 - See [archive/](archive/) folder for historical status documents.
 
 ## Rules

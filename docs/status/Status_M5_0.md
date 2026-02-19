@@ -3,7 +3,7 @@
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-19  
 **Gate Version**: `ci_m5_0_gate.py` v2.3.0  
-**Tests**: 889 passed
+**Tests**: 926 passed
 
 ---
 
@@ -54,7 +54,7 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --fa
 
 # Unit tests
 py -3.11 -m pytest tests/unit -q
-# EXPECT: 882 passed, 1 skipped
+# EXPECT: 926 passed, 12 skipped
 ```
 
 ---

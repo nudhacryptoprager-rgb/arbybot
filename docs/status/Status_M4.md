@@ -31,7 +31,7 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-19 v2.3.2)**: From `m4_stability_agg.json` (canonical source): runs_in_window=73, data_run_rate=0.9863, pass_rate=1.0, **total_net_usdc=$3998.20**, unique_pairs=8, **unique_routes=4** (**unique_routes_cross_dex=2** < target=4 -> WARN). POOL_DISABLED=6, POOL_MISSING=3 (UNI/WETH+GMX/USDC on Sushi - expected, pools don't exist). ws_connected=true, preflight.passed=true, **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE), quarantine_stats in artifacts. Provenance: v2.3.2 fix - `run_timestamp` now read from runDir scan artifact (no more NEW timestamp generation in rolling). **pool_missing_keys** now in scan.stats for observability. **WETH/DAI DISABLED** (v2.3.2 - SUSPECT_LIQUIDITY + PRICE_SANITY_FAILED on Sushi, needs quoter path investigation). **Clean PnL NOT AVAILABLE** (`execution_pnl.cost_model_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode). **field_success_rates=1.0** (all fields) after pool address fix.
+**Snapshot (2026-02-19 v2.3.2)**: From `m4_stability_agg.json` (canonical source): runs_in_window=73, data_run_rate=0.9863, pass_rate=1.0, **total_net_usdc=$3998.20**, unique_pairs=8, **unique_routes=4** (**unique_routes_cross_dex=2** < target=4 -> WARN). POOL_DISABLED=6, POOL_MISSING=3 (UNI/WETH+GMX/USDC on Sushi - expected, pools don't exist). **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). Provenance: v2.3.2 fix - `run_timestamp` now read from runDir scan artifact (no more NEW timestamp generation in rolling). **pool_missing_keys** now in scan.stats for observability. **WETH/DAI DISABLED** (v2.3.2 - SUSPECT_LIQUIDITY + PRICE_SANITY_FAILED on Sushi, needs quoter path investigation). **Clean PnL NOT AVAILABLE** (`execution_pnl.cost_model_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode). For ws/multicall/failover see [Status_M5_0.md](Status_M5_0.md).
 
 > **NOTE: DIVERSITY_ROUTES_LOW (2 DEX limitation)**: With 2 active DEXes (uniswap_v3+sushiswap_v3), `unique_routes_cross_dex` maximum = 2. Policy target = 4 requires adding 3rd DEX with working quoter (camelot_v3 in real_expanded.yaml pending Algebra quoter integration).
 
@@ -78,7 +78,7 @@
 
 ## Roadmap Progress Mapping (v2.1.0-fix)
 
-> **Clarification**: M4 in Roadmap.md = "Execution v1 (DEX↔DEX atomic)". This section maps actual progress to Roadmap.
+> **Clarification**: M4 in Roadmap.md = "Execution v1 (DEX<->DEX atomic)". This section maps actual progress to Roadmap.
 
 | Roadmap Component | Description | Status |
 |-------------------|-------------|--------|
@@ -87,7 +87,7 @@
 | **M4: Execution state machine** | `execution/state_machine.py` with TX lifecycle | [IN PROGRESS] stub exists, not wired to pipeline |
 | **M4: Private send / bundle** | Flashbots/Bloxroute bundle submission | [NO] NOT STARTED |
 | **M4: Post-trade realized accounting** | Compare simulated vs actual on-chain PnL | [NO] NOT STARTED |
-| **M4: On-chain atomic swap** | Real DEX↔DEX TX with profit | [NO] NOT STARTED |
+| **M4: On-chain atomic swap** | Real DEX<->DEX TX with profit | [NO] NOT STARTED |
 
 > **v2.1.0-fix Note**: Execution state machine now has `simulate_trade_execution()` stub that:
 > - Runs simulation flow (PENDING → SIMULATING → SIM_PASSED/SIM_FAILED)
@@ -95,7 +95,7 @@
 > - Records would_execute + blocker for diagnostics
 > This is NOT real execution - just validates the ex path with safety controls.
 
-> **Note**: ROUNDTRIP_NOT_PROFITABLE is expected behavior — it means pre-trade simulation correctly identifies no arb opportunity in current market conditions. This is NOT a blocker for "pre-trade simulation gate" (working as designed), but IS a blocker for "execution readiness" (we won't execute losing trades).
+> **Note**: ROUNDTRIP_NOT_PROFITABLE is expected behavior - it means pre-trade simulation correctly identifies no arb opportunity in current market conditions. This is NOT a blocker for "pre-trade simulation gate" (working as designed), but IS a blocker for "execution readiness" (we won't execute losing trades).
 
 ## [WARN] PROFIT REALISM WARNING (v2.1.0)
 
@@ -123,7 +123,7 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 > - **Canonical profit** = Round-trip net_pnl_wei (leg1 + leg2 via QuoterV2, minus gas L2+L1)
 > - **One-leg gross/net** = DIAGNOSTIC ONLY (not used in gating decisions)
 > - **profit_realism_status** = mandatory field in truth_report (ROUNDTRIP_PROFITABLE | ROUNDTRIP_NOT_PROFITABLE | ONE_LEG_ONLY_DIAGNOSTIC)
-> - **Roundtrip NOT_PROFITABLE is not a bug** — it means Truth Engine correctly detects no real arb opportunity
+> - **Roundtrip NOT_PROFITABLE is not a bug** - it means Truth Engine correctly detects no real arb opportunity
 
 | Model | Description | Status |
 |-------|-------------|--------|
