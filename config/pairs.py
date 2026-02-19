@@ -173,7 +173,8 @@ def load_pairs(
         chain: Chain key (e.g. "arbitrum_one")
         config: Optional YAML config dict with pairs section
         use_intent: Whether to fallback to intent.txt
-        force_intent: If True, use intent.txt directly (v2.3.0 intent_verified mode)
+        force_intent: If True, use intent.txt directly (v2.3.0 intent_forced mode)
+                      NOTE: This does NOT verify pools on-chain. See verify_v3_pools.py.
         
     Returns:
         List of PairConfig objects with resolved addresses/decimals

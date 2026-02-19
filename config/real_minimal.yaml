@@ -149,11 +149,11 @@ pools:
   uniswap_v3_LINK_USDC_3000: "0xbBe36e6f0331C6a36AB44Bc8421E28E1a1871C1e"
   # === GMX/USDC (v2.3.0 Step 5) ===
   # Note: GMX/WETH works on SushiSwap, GMX/USDC for triangular closing
-  uniswap_v3_GMX_USDC_3000: "0x0824a03b76A5f8d5EF6E6f11C9b1fB7e0254E0b8"
-  sushiswap_v3_GMX_USDC_3000: "0x2Ab937E744B6E067C55329838A587d1cF50C874F"
+  # Verified via factory.getPool() on 2026-02-19 (SushiSwap has no GMX/USDC pool)
+  uniswap_v3_GMX_USDC_3000: "0x135E49cC315fED87F989e072ee11132686CF84F3"
   # === UNI/WETH (v2.3.0 Step 5) ===
-  uniswap_v3_UNI_WETH_3000: "0x99aBA82823BF99a3e0a34Ce5b79A6b22B18adA10"
-  sushiswap_v3_UNI_WETH_3000: "0x7C8aA6905c18c6c81fd73b3AaB55F0bE90B2b6aC"
+  # Verified via factory.getPool() on 2026-02-19 (SushiSwap has no UNI/WETH fee=3000)
+  uniswap_v3_UNI_WETH_3000: "0xC24f7d8E51A64dc1238880BD00bb961D54cbeb29"
   # NOTE: Camelot V3 pools moved to real_expanded.yaml (need Algebra quoter integration)
 
 # Disabled pools (machine-readable quarantine, v2.1.0-fix)

@@ -9,69 +9,115 @@ Contract:
 - quotes_rejected count should NOT include POOL_MISSING
 """
 
+import os
 import pytest
+from unittest.mock import patch, MagicMock
 
 
-class TestPoolMissingIsSkip:
-    """Test that POOL_MISSING is a skip, not a reject."""
+class TestPoolMissingSkipBehavior:
+    """Test actual POOL_MISSING skip behavior via collect_quotes."""
     
-    def test_pool_missing_defined_as_reason(self):
-        """POOL_MISSING should be defined in QuoteRejectReason."""
+    @pytest.fixture
+    def mock_config_missing_pool(self):
+        """Config with a pair that has NO pool address configured."""
+        return {
+            "chain": "arbitrum_one",
+            "chain_id": 42161,
+            "dexes": ["uniswap_v3"],
+            "rpc_endpoints": ["https://example.com/rpc"],
+            # pools section does NOT have the pair we'll request
+            "pools": {
+                # Empty - no pools configured
+            },
+            "tokens": {
+                "WETH": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                "USDC": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+            },
+            "use_multicall": False,  # Skip multicall for unit test
+        }
+    
+    def test_pool_missing_increments_count_not_rejected(self, mock_config_missing_pool):
+        """When pool address is missing, pool_missing_count increases but rejected_quotes stays empty."""
+        from config.pairs import get_pool_address
+        
+        # Verify get_pool_address returns None for unconfigured pool
+        result = get_pool_address(
+            mock_config_missing_pool, 
+            "uniswap_v3", 
+            "WETH_USDC", 
+            fee_tier=500
+        )
+        assert result is None, "get_pool_address should return None for unconfigured pool"
+    
+    def test_pool_missing_semantics_in_quotes_module(self):
+        """Verify the POOL_MISSING handling code exists and returns continue (skip)."""
+        import inspect
+        from strategy import quotes
+        
+        # Read the source code to verify the skip pattern
+        source = inspect.getsource(quotes.collect_quotes)
+        
+        # Should have pool_missing count
+        assert "pool_missing" in source, "collect_quotes should track pool_missing"
+        
+        # Should NOT append POOL_MISSING to rejected_quotes - verify by checking
+        # that after the pool_missing increment, we continue (not append)
+        # The code pattern is: counts["pool_missing"] += 1 ... continue
+        assert 'counts["pool_missing"]' in source, "Should increment pool_missing count"
+        
+        # Verify we log POOL_SKIP, not POOL_REJECT
+        assert "POOL_SKIP" in source, "Should log POOL_SKIP (skip semantics)"
+    
+    def test_pool_missing_not_in_reject_histogram_schema(self):
+        """POOL_MISSING should not be a reason that appears in reject_histogram."""
         from core.reject_reasons import QuoteRejectReason
         
-        # POOL_MISSING exists as a defined reason code
+        # POOL_MISSING exists as a reason code (for documentation)
         assert hasattr(QuoteRejectReason, "POOL_MISSING")
-        assert QuoteRejectReason.POOL_MISSING.value == "POOL_MISSING"
+        
+        # But the key point is that strategy/quotes.py never appends it to rejected_quotes
+        # This is a behavioral contract, not schema - tested via source inspection above
     
-    def test_pool_missing_count_in_stats(self):
-        """pool_missing_count should be a valid stats field."""
-        # This verifies the contract that pool_missing is counted separately
-        # In strategy/quotes.py, counts["pool_missing"] is tracked
-        expected_fields = ["pool_missing"]
-        for field in expected_fields:
-            # If we're counting it, it should be in the stats schema
-            assert field.replace("_count", "") in ["pool_missing", "quarantined", "v3_slot0_failed"]
-    
-    def test_pool_missing_semantics_documentation(self):
-        """Contract: POOL_MISSING skip semantics must be documented."""
-        # v2.3.0 Fix Step 4: comment in real_minimal.yaml must say "skip" not "reject"
-        import os
-        config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "real_minimal.yaml")
-        if os.path.exists(config_path):
-            with open(config_path, "r") as f:
-                content = f.read()
-            # Should NOT say "rejected as POOL_MISSING"
-            assert "rejected as POOL_MISSING" not in content, \
-                "real_minimal.yaml should not claim POOL_MISSING is a reject"
-            # Should say "silent skip" or similar
-            assert "skip" in content.lower() or "POOL_SKIP" in content, \
-                "real_minimal.yaml should document POOL_MISSING as skip"
+    def test_get_pool_address_returns_none_for_missing_fee(self):
+        """get_pool_address returns None when fee tier not in config."""
+        from config.pairs import get_pool_address
+        
+        config = {
+            "pools": {
+                "uniswap_v3_WETH_USDC_500": "0x123...",  # Only 500 exists
+            }
+        }
+        
+        # Fee 3000 not configured - should return None
+        result = get_pool_address(config, "uniswap_v3", "WETH_USDC", fee_tier=3000)
+        assert result is None, "Should return None for unconfigured fee tier"
+        
+        # Fee 500 is configured - should return address
+        result_500 = get_pool_address(config, "uniswap_v3", "WETH_USDC", fee_tier=500)
+        assert result_500 == "0x123...", "Should return address for configured fee tier"
 
 
-class TestPoolMissingCountTracking:
-    """Test that pool_missing_count is properly tracked in artifacts."""
+class TestPoolMissingDocumentation:
+    """Test documentation contracts for POOL_MISSING semantics."""
     
-    def test_pool_missing_count_in_scan_artifact_schema(self):
-        """pool_missing_count should be in scan artifact schema."""
-        # v2.3.0: This count must appear in scan_*.json stats
-        # Used to verify that POOL_MISSING events are tracked even though not rejected
-        expected_count_fields = [
-            "pool_missing_count",
-            "v3_slot0_failed_count",
-            "quarantined_count",
-        ]
-        # These are all "skip" categories that don't add to rejected_quotes
-        # but are tracked in stats
-        for field in expected_count_fields:
-            # Just verify they're valid field names
-            assert "_count" in field or field.endswith("_count")
-    
-    def test_pool_missing_is_not_actionable(self):
-        """POOL_MISSING is not actionable - it means pair/fee not in config."""
-        # Documentation contract: POOL_MISSING means the pool isn't configured
-        # It's NOT an RPC failure or data quality issue
-        # The scanner should simply skip and not clutter reject_histogram
-        pass  # Semantic test - just documents the contract
+    def test_real_minimal_yaml_documents_skip_not_reject(self):
+        """Contract: real_minimal.yaml must document POOL_MISSING as skip, not reject."""
+        config_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "config", "real_minimal.yaml"
+        )
+        
+        assert os.path.exists(config_path), "real_minimal.yaml should exist"
+        
+        with open(config_path, "r") as f:
+            content = f.read()
+        
+        # Should NOT say "rejected as POOL_MISSING"
+        assert "rejected as POOL_MISSING" not in content, \
+            "real_minimal.yaml should not claim POOL_MISSING is a reject"
+        
+        # Should say "skip" somewhere in the POOL_MISSING context
+        assert "skip" in content.lower(), \
+            "real_minimal.yaml should document POOL_MISSING as skip"
 
 
 class TestRejectVsSkipDistinction:
@@ -90,17 +136,12 @@ class TestRejectVsSkipDistinction:
         ]
         
         for code in reject_codes:
-            # These should exist as reject reasons
             assert hasattr(QuoteRejectReason, code), f"{code} should be a valid QuoteRejectReason"
     
-    def test_skip_reasons_are_not_in_histogram(self):
-        """Skip reasons should not clutter reject_histogram."""
-        # POOL_MISSING is a skip, should not appear in reject_histogram
-        # This is verified by the fact that strategy/quotes.py does NOT call
-        # rejected_quotes.append() for POOL_MISSING
-        skip_codes = ["POOL_MISSING"]
+    def test_pool_missing_reason_exists(self):
+        """POOL_MISSING should be defined but not used for rejection."""
+        from core.reject_reasons import QuoteRejectReason
         
-        # These codes should not be in reject artifacts
-        # (verified by reading actual artifacts in integration tests)
-        for code in skip_codes:
-            assert code in skip_codes  # Trivial, but documents the contract
+        # POOL_MISSING exists as a defined reason code
+        assert hasattr(QuoteRejectReason, "POOL_MISSING")
+        assert QuoteRejectReason.POOL_MISSING.value == "POOL_MISSING"

@@ -226,17 +226,21 @@ def run_scan(
     dexes_list = config.get("dexes") or []
     chain_key = config.get("chain", "arbitrum_one")
     
-    # v2.2.0 Fix Step 7: universe_source=config|intent|intent_verified for Appendix A integration
-    # v2.3.0 Fix Step 4: intent_verified mode - reads from intent.txt directly, bypassing config pairs
+    # v2.2.0 Fix Step 7: universe_source=config|intent|intent_forced for Appendix A integration
+    # v2.3.0 Fix Step 4: intent_forced mode - reads from intent.txt directly, bypassing config pairs
+    # NOTE: "intent_forced" (not "intent_verified") - pools are NOT on-chain verified in this mode
     universe_source = config.get("universe_source", "config")
     use_intent = (universe_source == "intent")
-    force_intent = (universe_source == "intent_verified")
+    # Support both legacy "intent_verified" and new "intent_forced" names
+    force_intent = (universe_source in ("intent_verified", "intent_forced"))
     pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
     
-    if universe_source == "intent_verified":
-        logger.info("Using intent.txt universe FORCED (universe_source=intent_verified, %d pairs)", len(pairs_list))
-        stats["universe_source"] = "intent_verified"
+    if force_intent:
+        # Always report as "intent_forced" (honest naming)
+        logger.info("Using intent.txt universe FORCED (universe_source=%s -> intent_forced, %d pairs)", universe_source, len(pairs_list))
+        stats["universe_source"] = "intent_forced"  # Canonical name
         stats["intent_pairs_count"] = len(pairs_list)
+        stats["intent_on_chain_verified"] = False  # Explicit: NOT verified on-chain
     elif universe_source == "intent":
         logger.info("Using intent.txt universe (universe_source=intent)")
         stats["universe_source"] = "intent"
