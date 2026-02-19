@@ -98,10 +98,12 @@ pairs:
   - token_in: UNI
     token_out: WETH
     fee_tiers: [3000]
-  # v2.3.1: WETH/DAI cross-dex pair (verified on both Uni+Sushi 2026-02-19)
-  - token_in: WETH
-    token_out: DAI
-    fee_tiers: [500, 3000]
+  # v2.3.2: WETH/DAI DISABLED - SUSPECT_LIQUIDITY (ticks_crossed=319) + PRICE_SANITY_FAILED (sushi)
+  # Cross-dex verified but quality gates failing, needs quoter path investigation
+  # TODO: Re-enable after fixing Sushi WETH/DAI quoting (Issue #PRICE_SANITY)
+  # - token_in: WETH
+  #   token_out: DAI
+  #   fee_tiers: [500, 3000]
 
 # Pool addresses (verified on Arbitrum via factory.getPool() - dates vary)
 # Uniswap V3 Factory: 0x1F98431c8aD98523631AE4a59f267346ea31F984
@@ -158,12 +160,13 @@ pools:
   # === UNI/WETH (v2.3.0 Step 5) ===
   # Verified via factory.getPool() on 2026-02-19 (SushiSwap has no UNI/WETH fee=3000)
   uniswap_v3_UNI_WETH_3000: "0xC24f7d8E51A64dc1238880BD00bb961D54cbeb29"
-  # === WETH/DAI (v2.3.1 cross-dex) ===
+  # === WETH/DAI (v2.3.2 - DISABLED, see pairs section comment) ===
   # Verified via factory.getPool() on 2026-02-19 (both DEXes have pools)
+  # Kept for future re-enable; remove fee=100 pool (wrong tier, never used)
   uniswap_v3_WETH_DAI_500: "0x31Fa55e03bAD93C7f8AFfdd2eC616EbFde246001"
   uniswap_v3_WETH_DAI_3000: "0xA961F0473dA4864C5eD28e00FcC53a3AAb056c1b"
-  sushiswap_v3_WETH_DAI_100: "0x59311e6B9682eac59D8cAc796ab1D9E323b020C3"
-  sushiswap_v3_WETH_DAI_3000: "0x3370EA4a1640C657bDD94D71325541bA927f5Aef"
+  # sushiswap_v3_WETH_DAI_100 removed: fee=100 not in fee_tiers [500,3000]
+  # sushiswap_v3_WETH_DAI_3000 moved to disabled_pools (PRICE_SANITY_FAILED)
   # NOTE: Camelot V3 pools moved to real_expanded.yaml (need Algebra quoter integration)
 
 # Disabled pools (machine-readable quarantine, v2.1.0-fix)
@@ -200,6 +203,12 @@ disabled_pools:
     detail: "price_exact~1.009 vs anchor 0.11 (inverted ratio)"
     evidence_run: "ci_m5_gate_20260217_113317"
     disabled_date: "2026-02-18"
+  sushiswap_v3_WETH_DAI_3000:
+    address: "0x3370EA4a1640C657bDD94D71325541bA927f5Aef"
+    reason: "PRICE_SANITY_FAILED"
+    detail: "price_exact~60.96 vs anchor 1980 (scaling/path error)"
+    evidence_run: "ci_m5_gate_20260219_140542"
+    disabled_date: "2026-02-19"
 
 # Token addresses (Arbitrum)
 tokens:

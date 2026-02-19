@@ -222,6 +222,9 @@ def run_scan(
     stats["v3_slot0_failed_count"] = counts["v3_slot0_failed"]
     # v2.3.0: Track failed pool addresses for actionable diagnostics
     stats["failed_pool_addresses"] = counts.get("failed_pool_addresses", [])
+    # v2.3.2: Track pool_missing_keys for observability (what pools were skipped)
+    stats["pool_missing_keys"] = counts.get("pool_missing_keys", [])
+    stats["pool_missing_keys_total"] = counts.get("pool_missing_keys_total", 0)
     
     dexes_list = config.get("dexes") or []
     chain_key = config.get("chain", "arbitrum_one")

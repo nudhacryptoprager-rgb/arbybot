@@ -74,6 +74,18 @@ def main():
     if not check_python_version():
         return 1
     
+    # v2.3.2: Repo safety check before any gates
+    repo_safety_script = PROJECT_ROOT / "scripts" / "check_repo_safety.py"
+    if repo_safety_script.exists():
+        result = subprocess.run(
+            [sys.executable, "scripts/check_repo_safety.py"],
+            cwd=PROJECT_ROOT
+        )
+        if result.returncode != 0:
+            print(f"\n[FAIL] PIPELINE FAILED at repo safety (exit code 5)")
+            return 5
+        print("[OK] Repo Safety Check: PASS")
+    
     parser = argparse.ArgumentParser(description="Full CI pipeline")
     parser.add_argument("--mode", choices=["ci", "e2e"], default="ci",
                         help="Pipeline mode: ci=offline only, e2e=online+offline")
