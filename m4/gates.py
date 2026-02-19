@@ -605,9 +605,24 @@ def run_online_gate(
         # Fixed path for rolling agg (always exists)
         agg_path = rolling_dir / "m4_stability_agg.json"
         
-        # v2.0: SHA tracking removed - get run_timestamp from evidence module
-        from m4.evidence import get_run_timestamp
-        run_timestamp = get_run_timestamp()
+        # v2.3.1 FIX: Get run_timestamp from runDir scan artifact (NOT generate new)
+        # This ensures rolling provenance matches runDir provenance
+        scan_files = list(reports_dir.glob("scan_*.json"))
+        if scan_files:
+            with open(sorted(scan_files)[-1]) as f:
+                scan_data = json.load(f)
+            run_timestamp = scan_data.get("run_context", {}).get("run_timestamp")
+            if not run_timestamp:
+                # Fallback to truth_report
+                truth_files_for_ts = list(reports_dir.glob("truth_report_*.json"))
+                if truth_files_for_ts:
+                    with open(sorted(truth_files_for_ts)[-1]) as f:
+                        truth_for_ts = json.load(f)
+                    run_timestamp = truth_for_ts.get("run_context", {}).get("run_timestamp")
+        if not run_timestamp:
+            # Last resort fallback (should not happen with valid runDir)
+            from m4.evidence import get_run_timestamp
+            run_timestamp = get_run_timestamp()
         
         # v2.0: SHA-free evidence structure
         if "evidence" in run_summary:

@@ -544,6 +544,9 @@ def collect_quotes(
     # v2.3.0: Track failed pool addresses for actionable diagnostics
     failed_pool_addresses: List[Dict[str, str]] = []
     
+    # v2.3.1: Track pool_missing_keys for observability (what pools were skipped)
+    pool_missing_keys: List[str] = []
+    
     # Get quarantine manager for runtime auto-quarantine
     qm = get_quarantine_manager()
     
@@ -555,8 +558,12 @@ def collect_quotes(
     token_addresses = config.get("tokens", {}) or {}
     
     # Load pairs from config
+    # v2.3.1 FIX: Respect universe_source from config
     chain_key = config.get("chain", "arbitrum_one")
-    pairs_list = load_pairs(chain_key, config, use_intent=False)
+    universe_source = config.get("universe_source", "config")
+    use_intent = (universe_source == "intent")
+    force_intent = (universe_source in ("intent_verified", "intent_forced"))
+    pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
     
     if not pairs_list:
         from config.pairs import get_pair_info
@@ -682,9 +689,11 @@ def collect_quotes(
                 
                 if not pool_addr:
                     # v2.3.0: Silent skip (not reject) for unconfigured pools
-                    # POOL_MISSING is not actionable - just means this DEX/pair/fee combo isn't in config
+                    # v2.3.1: Track pool_missing_keys for observability
                     counts["pool_missing"] += 1
-                    logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config", dex, token_in, token_out, fee_tier)
+                    pool_key = f"{dex}_{token_pair_tag}_{fee_tier}"
+                    pool_missing_keys.append(pool_key)
+                    logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config (key=%s)", dex, token_in, token_out, fee_tier, pool_key)
                     continue
                 
                 # TODO(M4.2): Replace slot0 with QuoterV2 for executable quotes
@@ -1171,5 +1180,10 @@ def collect_quotes(
     
     # v2.3.0: Add failed pool addresses to counts for artifact generation
     counts["failed_pool_addresses"] = failed_pool_addresses
+    
+    # v2.3.1: Add pool_missing_keys for observability (what pools were skipped)
+    # Limit to top 20 to avoid huge artifacts
+    counts["pool_missing_keys"] = pool_missing_keys[:20]
+    counts["pool_missing_keys_total"] = len(pool_missing_keys)
     
     return quotes_sample, rejected_quotes, counts

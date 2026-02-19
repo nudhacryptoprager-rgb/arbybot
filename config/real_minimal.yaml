@@ -49,9 +49,9 @@ dexes:
   - uniswap_v3
   - sushiswap_v3
 
-# M5 pairs: ONLY pairs with verified pool addresses on BOTH DEXes
-# NOTE: POOL_MISSING is a silent skip (v2.3.0), not a reject. See pool_missing_count in stats.
-# All pool addresses verified via factory.getPool() on 2026-02-07
+# M5 pairs: Mostly cross-dex pairs, some Uniswap-only (GMX/USDC, UNI/WETH)
+# NOTE: POOL_MISSING is a silent skip (v2.3.0), not a reject. See pool_missing_count/pool_missing_keys in stats.
+# Pool addresses verified via factory.getPool() (dates vary: 2026-02-07 to 2026-02-19)
 pairs:
   # Major pairs with high liquidity on both DEXes
   - token_in: WETH
@@ -98,8 +98,12 @@ pairs:
   - token_in: UNI
     token_out: WETH
     fee_tiers: [3000]
+  # v2.3.1: WETH/DAI cross-dex pair (verified on both Uni+Sushi 2026-02-19)
+  - token_in: WETH
+    token_out: DAI
+    fee_tiers: [500, 3000]
 
-# Pool addresses (verified on Arbitrum via factory.getPool() on 2026-02-07)
+# Pool addresses (verified on Arbitrum via factory.getPool() - dates vary)
 # Uniswap V3 Factory: 0x1F98431c8aD98523631AE4a59f267346ea31F984
 # SushiSwap V3 Factory: 0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e
 pools:
@@ -154,6 +158,12 @@ pools:
   # === UNI/WETH (v2.3.0 Step 5) ===
   # Verified via factory.getPool() on 2026-02-19 (SushiSwap has no UNI/WETH fee=3000)
   uniswap_v3_UNI_WETH_3000: "0xC24f7d8E51A64dc1238880BD00bb961D54cbeb29"
+  # === WETH/DAI (v2.3.1 cross-dex) ===
+  # Verified via factory.getPool() on 2026-02-19 (both DEXes have pools)
+  uniswap_v3_WETH_DAI_500: "0x31Fa55e03bAD93C7f8AFfdd2eC616EbFde246001"
+  uniswap_v3_WETH_DAI_3000: "0xA961F0473dA4864C5eD28e00FcC53a3AAb056c1b"
+  sushiswap_v3_WETH_DAI_100: "0x59311e6B9682eac59D8cAc796ab1D9E323b020C3"
+  sushiswap_v3_WETH_DAI_3000: "0x3370EA4a1640C657bDD94D71325541bA927f5Aef"
   # NOTE: Camelot V3 pools moved to real_expanded.yaml (need Algebra quoter integration)
 
 # Disabled pools (machine-readable quarantine, v2.1.0-fix)
@@ -201,6 +211,8 @@ tokens:
   LINK: "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4"
   GMX: "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
   wstETH: "0x5979D7b546E38E414F7E9822514be443A4800529"
+  DAI: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"
+  UNI: "0xFa7F8980b0f1E64A2062791cc3b0871572f1F7f0"
 
 # Token decimals for proper normalization
 quote_decimals:
@@ -212,6 +224,8 @@ quote_decimals:
   LINK: 18
   GMX: 18
   wstETH: 18
+  DAI: 18
+  UNI: 18
 
 # Anchor prices for each pair (used for price sanity checks)
 # Format: TOKEN_IN_TOKEN_OUT: expected_price
@@ -220,6 +234,7 @@ quote_decimals:
 tokens_anchor_price:
   WETH_USDC: 1980     # on-chain median ~1977 (2026-02-17)
   WETH_USDT: 1980     # on-chain median ~1978 (2026-02-17)
+  WETH_DAI: 1980      # DAI is stablecoin, same anchor as USDC
   WBTC_WETH: 35       # on-chain median ~34.4 (2026-02-17)
   ARB_WETH: 0.000058  # on-chain observed ~0.0000576 (2026-02-17)
   LINK_WETH: 0.0045   # on-chain median ~0.0044 (2026-02-17)
