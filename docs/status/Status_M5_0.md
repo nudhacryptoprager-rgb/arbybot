@@ -1,80 +1,70 @@
 # Status: M5_0 (Infrastructure Hardening)
 
-**Status**: ✅ **DONE** (frozen)  
-**Updated**: 2026-02-09  
-**Closure SHA**: `93c08b0`  
-**Gate Version**: `ci_m5_0_gate.py` v2.1.0  
-**Tests**: 553 passed
+**Status**: 🟡 **ACTIVE**  
+**Updated**: 2026-02-19  
+**Gate Version**: `ci_m5_0_gate.py` v2.3.0  
+**Tests**: 882 passed
 
 ---
 
 ## ⚠️ Core Truth Statement
 
-> **M5_0 не блокує M4-profit, але є обов'язковим для CI.**  
-> M5_0 валідує схеми/інваріанти артефактів.  
-> M4 execution gate є "core truth" для релізу.
+> **M5_0 є обов'язковим для CI та infra-proof.**  
+> M5_0 валідує схеми/інваріанти артефактів, multicall, failover, провенанс.  
+> M4 execution gate є окремим "core truth" для profit.
 
 ---
 
-## Closure Summary
+## v2.3.x Infra Changes (2026-02-19)
 
-M5_0 is **frozen**. Any future changes require a separate PR with clear ROI justification.
+| Step | Change | File | Description |
+|------|--------|------|-------------|
+| 1 | **multicall field_success_rates** | `core/multicall.py` | Per-field `call_success/call_fail` tracking |
+| 2 | **provenance unification** | `strategy/artifacts.py`, `run_scan_real.py` | `run_context.run_timestamp` unified |
+| 3 | **failover stress-test mode** | `scripts/ci_m5_0_gate.py`, `chains/providers.py` | `--failover-stress N` |
+| 4 | **failover_stress_active flag** | `strategy/infra.py` | In artifacts for proof |
+| 5 | **rolling isolation for stress** | `scripts/ci_m5_0_gate.py` | `--failover-stress` disables rolling refresh |
+| 6 | **endpoint_id metrics** | `chains/providers.py`, `strategy/infra.py` | `requests_by_endpoint`, `errors_by_endpoint` |
+| 7 | **pool_missing_keys observability** | `strategy/quotes.py`, `run_scan_real.py` | v2.3.2: `pool_missing_keys` in scan.stats |
+| 8 | **repo safety gate** | `scripts/check_repo_safety.py` | v2.3.2: check forbidden tracked files/keys |
 
 ---
 
 ## Canonical Commands
 
-```bash
+```powershell
 # 1 COMMAND = 1 GATE = PASS/FAIL
+# MUST use py -3.11 (Python 3.11.x required)
 
 # Offline gate (0 WARN, no secrets required)
-python scripts/ci_m5_0_gate.py --offline --strict
+py -3.11 scripts/ci_m5_0_gate.py --offline --strict
 # EXPECT: PASS
-# Example output:
-#   RESULT: PASS
-#   Run directory: data/runs/ci_m5_0_gate_offline_<timestamp>
-#   Exit code: 0
 
 # Online gate (requires RPC, real scan)
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1
 # EXPECT: PASS (if RPC available)
-# Example output:
-#   RESULT: PASS
-#   quotes_fetched: 6
-#   dexes_active: 2
-#   Exit code: 0
 
-# M4 execution gate (offline)
-python scripts/ci_m4_execution_gate.py --offline --profile smoke
+# Online gate with rolling refresh
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 3 --refresh-rolling --refresh-rolling-strict --prune-keep 50
 # EXPECT: PASS
-# Example output:
-#   RESULT: PASS (profile=smoke)
-#   simulations_passed: 1
-#   total_net_usdc: -0.29
 
-python scripts/ci_m4_execution_gate.py --offline --profile profit
-# EXPECT: PASS
-# Example output:
-#   RESULT: PASS (profile=profit)
-#   simulations_passed: 2
-#   total_net_usdc: 0.5
+# Failover stress test (isolated)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --failover-stress 3
+# EXPECT: PASS with endpoints_used_count >= 2
 
 # Unit tests
-python -m pytest tests/unit -q
-# EXPECT: 553 passed, 1 skipped
+py -3.11 -m pytest tests/unit -q
+# EXPECT: 882 passed, 1 skipped
 ```
 
 ---
 
-## Example RunDir
+## Evidence RunDirs
 
-```
-data/runs/ci_m5_0_gate_offline_20260209_105430/
-├── reports/
-│   ├── scan_20260209_105430.json
-│   ├── truth_report_20260209_105430.json
-│   └── reject_histogram_20260209_105430.json
-```
+| Type | RunDir | Key Evidence |
+|------|--------|--------------|
+| Normal | `ci_m5_gate_20260219_144126` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
+| Stress | `ci_m5_gate_20260219_103811` | `failover_stress_active=true`, `endpoints_used_count=2` |
 
 ---
 

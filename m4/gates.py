@@ -658,6 +658,10 @@ def run_online_gate(
         sign_rate = metrics.get("est_sign_correct_rate", 1.0)
         fragile_rate = metrics.get("fragile_rate", 0)
         
+        # v2.3.2: Extract profit truth semantics for DoD gate
+        profit_is_diagnostic = metrics.get("profit_is_diagnostic", True)
+        profit_truth_available = metrics.get("profit_truth_available", False)
+        
         # v2.0.4: Preserve upstream quality_warnings (don't lose them in recompute)
         upstream_quality_warnings = run_summary.get("quality_warnings", [])
         upstream_quality_reasons = run_summary.get("quality_reasons", [])
@@ -705,6 +709,23 @@ def run_online_gate(
         )
         if has_upstream_quality_issues and quality_status == "PASS" and status != "NO_DATA":
             quality_status = "WARN"  # v2.0.5: domain fix - WARN not WARN_QUALITY
+        
+        # v2.3.2: If profit_truth_available is False, profit cannot be proven for M4 DoD
+        # This means profit_status can be PASS (positive net_usdc), but it's DIAGNOSTIC only
+        if not profit_truth_available and profit_status == "PASS":
+            # Add WARN_PROFIT_DIAGNOSTIC to quality_reasons (does not fail, but important)
+            if "WARN_PROFIT_DIAGNOSTIC" not in merged_quality_reasons:
+                merged_quality_reasons.append("WARN_PROFIT_DIAGNOSTIC")
+            # Ensure quality_status is at least WARN when profit is diagnostic
+            if quality_status == "PASS" and status != "NO_DATA":
+                quality_status = "WARN"
+            # Add human-readable quality_warning
+            diag_warning = f"PROFIT_DIAGNOSTIC: profit_is_diagnostic={profit_is_diagnostic}, profit_truth_available={profit_truth_available}"
+            if "quality_warnings" not in run_summary:
+                run_summary["quality_warnings"] = []
+            upstream_quality_warnings = run_summary.get("quality_warnings", [])
+            if diag_warning not in upstream_quality_warnings:
+                upstream_quality_warnings.append(diag_warning)
         
         # Update run_summary with computed status
         run_summary["status"] = status

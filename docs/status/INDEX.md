@@ -13,7 +13,8 @@ _Last updated: 2026-02-13 (v2.x SHA-free)_
 | M1 — Real Gas Price + Paper Trading | ✅ Done | [Status_M1.md](Status_M1.md) |
 | M2 — Registry-driven scanning + Truth Report | ✅ Done | [Status_M2.md](Status_M2.md) |
 | M3 — Opportunity Engine + Quality & Contracts | ✅ Done | [Status_M3.md](Status_M3.md) |
-| M4 — DEX↔DEX Atomic Execution | 🔶 In Progress | [Status_M4.md](Status_M4.md) |
+| M4 — DEX↔DEX Atomic Execution | 🟡 In Progress | [Status_M4.md](Status_M4.md) |
+| M5_0 — Infrastructure Hardening | 🟡 Active | [Status_M5_0.md](Status_M5_0.md) |
 
 ## Current Focus
 

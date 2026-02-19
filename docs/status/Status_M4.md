@@ -1,71 +1,24 @@
 # Status: M4 (DEX<->DEX Atomic Execution)
 
-**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit proven, rolling quality gate WARN_QUALITY, roundtrip NOT_PROFITABLE)  
+**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate WARN_QUALITY, roundtrip NOT_PROFITABLE)  
 **Updated**: 2026-02-19  
-**Gate Version**: v2.3.0  
+**Gate Version**: v2.3.2  
 **Policy Version**: 2.0.8  
 **Engine Version**: v2.3.0  
-**Evidence**: M5_0 infra validated: `ws_connected=true` (ws_lag_ms=125-155), `preflight.passed=true`, `quarantine_stats` in artifacts. Rolling provenance via `run_context.run_timestamp` (unified across scan/truth/reject). v2.3.0: `field_success_rates` per-field multicall observability, `failover_stress_active` mode for failover proof, `profit_is_diagnostic/profit_truth_source` explicit semantics. Timestamp-based provenance, roundtrip leg2 real re-quote, unified gas model, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. truth_mode_m42=true for real_minimal.yaml. POOL_DISABLED semantics implemented.
+**Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL NOT AVAILABLE** (`execution_pnl.cost_model_available=false`)
 
-## v2.3.0 Fix Steps (2026-02-18)
+> ⚠️ **M4 НЕ ЗАКРИТО**: `net_usdc` з rolling є DIAGNOSTIC, не canonical DEX↔DEX truth. Потрібен `execution_pnl.cost_model_available=true` та `profit_truth_source=ROUNDTRIP_REAL`.
 
-| Step | Change | File | Description |
-|------|--------|------|-------------|
-| 1 | **multicall field_success_rates** | `core/multicall.py` | Per-field `call_success/call_fail` tracking in batch_token_info/batch_decimals |
-| 2 | **provenance unification** | `strategy/artifacts.py`, `run_scan_real.py` | `run_context.run_timestamp` unified across scan/truth/reject |
-| 3 | **failover stress-test mode** | `scripts/ci_m5_0_gate.py`, `chains/providers.py` | `--failover-stress N` + `ARBY_FAILOVER_STRESS_N` env |
-| 4 | **failover_stress_active flag** | `strategy/infra.py` | `provider_router.failover_stress_active` in artifacts |
-| 5 | **profit DIAGNOSTIC semantics** | `strategy/artifacts.py`, `m4/fixtures.py` | `profit_is_diagnostic/profit_truth_source` in truth_report + run_summary |
-| 6 | **rolling isolation for stress** | `scripts/ci_m5_0_gate.py` | `--failover-stress` disables rolling refresh by default |
-| 7 | **endpoint_id metrics** | `chains/providers.py`, `strategy/infra.py` | `requests_by_endpoint`, `errors_by_endpoint`, `endpoints_details` |
-| 8 | **version bump** | `scripts/ci_m5_0_gate.py` | `__version__ = "2.3.0"` |
-
-## v2.2.0 Fix Steps (2026-02-18)
+## v2.3.2 M4-specific Fixes (2026-02-19)
 
 | Step | Change | File | Description |
 |------|--------|------|-------------|
-| 2 | **provider_id semantics** | `chains/providers.py` | `extract_provider_name()` + `get_primary_provider_id()` – returns "alchemy" not "chain_42161" |
-| 3 | **multi-provider proof** | `strategy/infra.py` | `endpoints_count` + `provider_names` in provider_router payload |
-| 4 | **multicall contract** | `core/multicall.py` | `call_types` tracking + `requested_fields` in stats |
-| 5 | **truth-mode reporting** | `strategy/jobs/run_scan_real.py` | Conditional "one_leg_profitable (DIAGNOSTIC)" vs "profitable" |
-| 6 | **would_execute_count** | `strategy/jobs/run_scan_real.py` | Requires `roundtrip_profitable=True` when truth_mode_m42 |
-| 7 | **Appendix A integration** | `strategy/jobs/run_scan_real.py` | `universe_source=config\|intent\|intent_verified` flag |
-| 8 | **intent_loader tests** | `tests/unit/test_intent_loader.py` | 19 tests for IntentPair/IntentUniverse |
-| 9 | **discovery dry-run** | `discovery/index_factories.py` | `count_discovery_candidates()` + `discovery_dry_run` config flag |
+| 1 | **provenance hardened** | `m4/gates.py` | Init `run_timestamp=None`, fallback chain |
+| 2 | **WETH/DAI rollback** | `config/real_minimal.yaml` | DISABLED (SUSPECT_LIQUIDITY+PRICE_SANITY) |
+| 3 | **disabled_pools extended** | `config/real_minimal.yaml` | sushiswap_v3_WETH_DAI_3000 quarantined |
 
-## v2.2.0 Changes (2026-02-18)
-
-| Change | File | Description |
-|--------|------|-------------|
-| **MultiProviderRouter** | `strategy/infra.py` | Health-based provider selection with quarantine |
-| **MulticallBatcher** | `core/multicall.py` | Batch V3 pool reads (slot0/liquidity/token) |
-| **DynamicAnchorManager** | `strategy/dynamic_anchors.py` | Rolling median anchors with YAML fallback |
-| **M4.3 Preflight** | `execution/state_machine.py` | `run_preflight_check()` integrated in run_scan_real |
-| **Quarantine persistence** | `strategy/quarantine.py` | Cache to data/cache/quarantine_state.json |
-| **ws_lag_ms** | `strategy/infra.py` | WebSocket latency tracking in infra payload |
-| **execution_ready_count** | `strategy/jobs/run_scan_real.py` | Preflight pass count in stats |
-| **websocket-client** | `pyproject.toml` | Added WS dependency |
-
-## v2.1.0-fix Changes (2026-02-17)
-
-| Change | File | Description |
-|--------|------|-------------|
-| **POOL_DISABLED semantics** | `config/pairs.py`, `strategy/quotes.py` | `is_pool_disabled()` function, distinct from POOL_MISSING |
-| **pool_disabled_count** | `strategy/artifacts.py`, `run_scan_real.py` | Counter in reject_histogram |
-| **test_disabled_pools.py** | `tests/unit/` | 9 unit tests for disabled_pools behavior |
-| **WBTC_WETH anchor fix** | `config/real_minimal.yaml` | Updated anchor from 17 to 35 (on-chain median ~34.4) |
-| **WETH_USDC anchor fix** | `config/real_minimal.yaml` | Updated anchor from 2000 to 1980 (on-chain median ~1977) |
-| **slot0 PRICE_SANITY fix** | `strategy/quotes.py` | Fixed anchor key format (underscore + reversed_tag fallback) |
-| **ASCII normalization** | `tests/unit/test_slot0_price_sanity.py` | Replaced unicode chars with ASCII equivalents |
-| **Anchor prices from on-chain evidence** | `config/real_*.yaml` | All anchors updated from median valid quotes (2026-02-17) |
-| **--refresh-rolling-strict** | `scripts/ci_m5_0_gate.py` | M4 gate failures now fatal in strict mode |
-| **emit_rolling_artifacts docstring** | `m4/rolling_store.py` | Clarified manual tool vs --refresh-rolling |
-| **Deterministic run_summary selection** | `m4/rolling_store.py` | Sort by timestamp suffix, take latest |
-| **L1 cost with calldata** | `strategy/jobs/run_scan_real.py` | Pass representative swap calldata to NodeInterface |
-| **gas_override parameter** | `engine/roundtrip.py` | gas_override + gas_source tracking (NOT WIRED YET) |
-| **WBTC decimals fix** | `strategy/quotes.py` | `Decimal(10)**exp` prevents overflow for 8 vs 18 decimals |
-| **Universe expansion** | `config/real_minimal.yaml` | Re-enabled WBTC pairs, 10 pairs in config (6 in rolling) |
-| **M4.3 dry-run stub** | `execution/state_machine.py` | `simulate_trade_execution()` (unit-tested, NOT WIRED to pipeline) |
+> **NOTE**: M5_0 infra changes (multicall/failover/pool_missing_keys) moved to [Status_M5_0.md](Status_M5_0.md)
 
 ## Status Separation (v2.0.7)
 

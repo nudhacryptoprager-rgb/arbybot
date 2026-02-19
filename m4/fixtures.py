@@ -1006,6 +1006,13 @@ def generate_m4_from_online_inputs(
     # v2.3.0: Propagate profit semantics from truth_report
     profit_is_diagnostic = truth_data.get("profit_is_diagnostic", True)
     profit_truth_source = truth_data.get("profit_truth_source", "ONE_LEG_DIAGNOSTIC")
+    # v2.3.2: Extract cost_model_available from truth_report
+    # Priority: execution_pnl.cost_model_available (canonical), then paper_cost_model_available, then False
+    execution_pnl = truth_data.get("execution_pnl", {})
+    cost_model_available = execution_pnl.get("cost_model_available", False)
+    # Note: paper_cost_model_available=True doesn't satisfy M4 DoD (execution_cost_model_available must be True)
+    # v2.3.2: Compute profit_truth_available - only true when NOT diagnostic AND execution cost model exists
+    profit_truth_available = (not profit_is_diagnostic) and cost_model_available
     
     # v2.0: Evidence validation based on timestamp consistency only
     evidence_issues = []
@@ -1075,6 +1082,9 @@ def generate_m4_from_online_inputs(
             # v2.3.0: Explicit profit semantics (propagated from truth_report)
             "profit_is_diagnostic": profit_is_diagnostic,
             "profit_truth_source": profit_truth_source,
+            # v2.3.2: Profit truth availability (canonical for M4 DoD)
+            "cost_model_available": cost_model_available,
+            "profit_truth_available": profit_truth_available,
         },
         "thresholds": {
             "policy_version": POLICY_VERSION,  # v1.9.5: provenance
