@@ -578,5 +578,64 @@ class TestComputeExecutionPnl(unittest.TestCase):
         self.assertEqual(float(result["gross_pnl_usdc"]), 0.0)
 
 
+class TestExecutionPnlIncludedContract(unittest.TestCase):
+    """v2.3.2: execution_pnl_included filters excluded signals."""
+
+    def test_filter_excluded_true_excludes_suspect_spreads(self):
+        """filter_excluded=True must exclude is_excluded_spread=True signals."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        spread_signals = [
+            {"gross_pnl_usdc_est": 100.0, "net_pnl_usdc_est": 90.0, "is_net_positive_est": True, "is_excluded_spread": False},
+            {"gross_pnl_usdc_est": 500.0, "net_pnl_usdc_est": 400.0, "is_net_positive_est": True, "is_excluded_spread": True},  # Excluded
+            {"gross_pnl_usdc_est": 50.0, "net_pnl_usdc_est": 40.0, "is_net_positive_est": True, "is_excluded_spread": False},
+        ]
+        config = {"gas_usd_estimate": 0.1}
+        
+        # Without filter - should include all
+        result_all = _compute_execution_pnl(spread_signals, config, filter_excluded=False)
+        self.assertEqual(float(result_all["gross_pnl_usdc"]), 650.0)  # 100 + 500 + 50
+        self.assertEqual(float(result_all["would_execute_pnl_usdc"]), 530.0)  # 90 + 400 + 40
+        
+        # With filter - should exclude the 500/400 signal
+        result_included = _compute_execution_pnl(spread_signals, config, filter_excluded=True)
+        self.assertEqual(float(result_included["gross_pnl_usdc"]), 150.0)  # 100 + 50
+        self.assertEqual(float(result_included["would_execute_pnl_usdc"]), 130.0)  # 90 + 40
+
+    def test_filter_excluded_matches_run_summary_semantics(self):
+        """execution_pnl_included should match run_summary.total_net_usdc semantics."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        # Simulate a real scenario: some signals excluded
+        spread_signals = [
+            {"gross_pnl_usdc_est": 10.0, "net_pnl_usdc_est": 8.0, "is_net_positive_est": True, "is_excluded_spread": False},
+            {"gross_pnl_usdc_est": 800.0, "net_pnl_usdc_est": 750.0, "is_net_positive_est": True, "is_excluded_spread": True},  # SUSPECT_SPREAD
+        ]
+        config = {"gas_usd_estimate": 0.1}
+        
+        # Included-only should return the non-excluded sum
+        result = _compute_execution_pnl(spread_signals, config, filter_excluded=True)
+        
+        # This should match what run_summary.metrics.total_net_usdc would compute
+        expected_net = 8.0  # Only the included signal
+        self.assertEqual(float(result["would_execute_pnl_usdc"]), expected_net)
+
+    def test_filter_excluded_handles_missing_flag_as_included(self):
+        """Signals without is_excluded_spread flag should be treated as included."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        spread_signals = [
+            {"gross_pnl_usdc_est": 10.0, "net_pnl_usdc_est": 8.0, "is_net_positive_est": True},  # No flag
+            {"gross_pnl_usdc_est": 20.0, "net_pnl_usdc_est": 15.0, "is_net_positive_est": True, "is_excluded_spread": False},
+        ]
+        config = {"gas_usd_estimate": 0.1}
+        
+        result = _compute_execution_pnl(spread_signals, config, filter_excluded=True)
+        
+        # Both should be included (missing flag defaults to False)
+        self.assertEqual(float(result["gross_pnl_usdc"]), 30.0)
+        self.assertEqual(float(result["would_execute_pnl_usdc"]), 23.0)
+
+
 if __name__ == "__main__":
     unittest.main()

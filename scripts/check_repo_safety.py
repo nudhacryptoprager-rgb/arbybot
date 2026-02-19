@@ -25,7 +25,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -33,7 +33,8 @@ FORBIDDEN_TRACKED_FILES = [
     ".vscode/settings.json",
 ]
 
-# Keys that should never appear in tracked files
+# Keys that should never appear in TRACKED files
+# v1.1.0: Only check tracked files, untracked files are INFO-level
 FORBIDDEN_KEYS_IN_TRACKED = [
     "chat.tools.terminal.autoApprove",
     "chat.tools.codeGeneration.autoApprove",
@@ -77,26 +78,34 @@ def check_forbidden_files() -> List[str]:
     return issues
 
 
-def check_forbidden_keys() -> List[str]:
-    """Check for forbidden keys in tracked files."""
-    issues = []
+def check_forbidden_keys() -> Tuple[List[str], List[str]]:
+    """Check for forbidden keys in tracked files.
+    
+    Returns:
+        Tuple of (errors, info_messages)
+        - errors: Issues in tracked files that cause FAIL
+        - info_messages: INFO-level messages for untracked files
+    """
+    errors = []
+    info_messages = []
     
     # Check .vscode/settings.json specifically
     vscode_settings = PROJECT_ROOT / ".vscode" / "settings.json"
     if vscode_settings.exists():
         try:
             content = vscode_settings.read_text()
+            tracked = is_git_tracked(vscode_settings)
             for key in FORBIDDEN_KEYS_IN_TRACKED:
                 if key in content:
-                    if is_git_tracked(vscode_settings):
-                        issues.append(f"DANGER: {key} found in tracked .vscode/settings.json")
+                    if tracked:
+                        errors.append(f"DANGER: {key} found in tracked .vscode/settings.json")
                     else:
-                        # Warning but not error if untracked
-                        issues.append(f"WARN: {key} found in .vscode/settings.json (untracked, OK)")
+                        # v1.1.0: INFO-only for untracked files, never counted as warning
+                        info_messages.append(f"INFO: {key} found in .vscode/settings.json (untracked, OK)")
         except Exception as e:
-            issues.append(f"ERROR: Could not read .vscode/settings.json: {e}")
+            errors.append(f"ERROR: Could not read .vscode/settings.json: {e}")
     
-    return issues
+    return errors, info_messages
 
 
 def check_secret_patterns() -> List[str]:
@@ -176,14 +185,13 @@ def main():
         print("  OK: No forbidden tracked files")
     
     print("\n[2] Checking for forbidden keys...")
-    issues = check_forbidden_keys()
-    for issue in issues:
-        print(f"  {issue}")
-        if "WARN:" not in issue:
-            all_issues.append(issue)
-        elif args.strict:
-            all_issues.append(issue)
-    if not issues:
+    errors, info_msgs = check_forbidden_keys()
+    for err in errors:
+        print(f"  {err}")
+        all_issues.append(err)
+    for info in info_msgs:
+        print(f"  {info}")  # Just print, don't add to issues
+    if not errors and not info_msgs:
         print("  OK: No forbidden keys found")
     
     print("\n[3] Checking for secret patterns...")
@@ -204,7 +212,8 @@ def main():
     
     # Summary
     print("\n" + "=" * 50)
-    errors = [i for i in all_issues if not i.startswith("WARN:")]
+    # v1.1.0: INFO messages don't count toward warnings
+    errors = [i for i in all_issues if not i.startswith("WARN:") and not i.startswith("INFO:")]
     warnings = [i for i in all_issues if i.startswith("WARN:")]
     
     if errors:

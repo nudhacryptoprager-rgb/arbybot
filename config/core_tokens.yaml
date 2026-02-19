@@ -77,6 +77,18 @@ arbitrum_one:
     decimals: 18
     name: "Uniswap"
     note: "UNI governance token (v2.3.0)"
+  
+  PENDLE:
+    address: "0x0c880f6761F1af8d9Aa9C466984b80dAb9a8c9e8"
+    decimals: 18
+    name: "Pendle"
+    note: "v2.3.2: DeFi yield protocol token"
+  
+  RDNT:
+    address: "0x3082CC23568eA640225c2467653dB90e9250AaA0"
+    decimals: 18
+    name: "Radiant"
+    note: "v2.3.2: Radiant Capital token"
 
 # =============================================================================
 # BASE (chain_id: 8453)

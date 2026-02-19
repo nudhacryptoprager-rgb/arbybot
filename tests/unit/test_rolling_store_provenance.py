@@ -483,13 +483,17 @@ class TestDiversityRoutesLowUsesCrossDex:
     """v2.0.8: Test DIVERSITY_ROUTES_LOW warning uses unique_routes_cross_dex."""
     
     def test_diversity_routes_low_uses_cross_dex_not_total_routes(self):
-        """DIVERSITY_ROUTES_LOW should trigger based on unique_routes_cross_dex, not unique_routes."""
+        """DIVERSITY_ROUTES_LOW should trigger based on unique_routes_cross_dex, not unique_routes.
+        
+        v2.3.2: DIVERSITY_ROUTES_TARGET changed from 4 to 2 to match 2-DEX reality.
+        With target=2 and min=2, if cross_dex>=2, no warning is triggered.
+        Test uses only intra-DEX routes (same DEX on both sides) to trigger warning.
+        """
         from m4.rolling_store import _compute_quick_stats
         from m4.policy import Thresholds
         
-        # Scenario: 5 total routes but only 2 cross-DEX routes
-        # unique_routes=5 >= target(4), unique_routes_cross_dex=2 >= min(2) but < target(4)
-        # DIVERSITY_ROUTES_LOW warning should trigger because cross_dex < target
+        # Scenario: 5 total routes but ZERO cross-DEX routes (all intra-DEX)
+        # Note: route format is "buy_dex->sell_dex", same DEX = intra-DEX
         runs = [
             {
                 "run_kind": "NORMAL",
@@ -497,11 +501,11 @@ class TestDiversityRoutesLowUsesCrossDex:
                 "net_usdc": 5.0,
                 "run_status": "PASS",
                 "routes": [
-                    "sushiswap_v3->uniswap_v3",      # cross-DEX
-                    "uniswap_v3->sushiswap_v3",      # cross-DEX (different direction)
                     "sushiswap_v3->sushiswap_v3",    # intra-DEX
                     "uniswap_v3->uniswap_v3",        # intra-DEX
-                    "curve->curve",                   # intra-DEX (hypothetical)
+                    "curve->curve",                   # intra-DEX
+                    "balancer->balancer",             # intra-DEX
+                    "pancake->pancake",               # intra-DEX
                 ],
                 "pairs": ["WETH/USDC", "LINK/USDC", "ARB/USDC", "GMX/USDC", "ARB/USDT"],
             }
@@ -511,17 +515,17 @@ class TestDiversityRoutesLowUsesCrossDex:
         qs = result.get("quick_stats", {})
         warnings = result.get("quality_warnings", [])
         
-        # unique_routes=5, unique_routes_cross_dex=2
+        # unique_routes=5, unique_routes_cross_dex=0 (all intra-DEX)
         assert qs["unique_routes"] == 5, f"Expected unique_routes=5, got {qs['unique_routes']}"
-        assert qs["unique_routes_cross_dex"] == 2, f"Expected cross_dex=2, got {qs['unique_routes_cross_dex']}"
+        assert qs["unique_routes_cross_dex"] == 0, f"Expected cross_dex=0, got {qs['unique_routes_cross_dex']}"
         
-        # DIVERSITY_ROUTES_LOW should be in warnings (2 >= 2 min, but 2 < 4 target)
-        diversity_warnings = [w for w in warnings if w.startswith("DIVERSITY_ROUTES_LOW")]
-        assert len(diversity_warnings) == 1, f"Expected DIVERSITY_ROUTES_LOW warning, got {warnings}"
+        # DIVERSITY_ROUTES warning should trigger (0 < 2 min)
+        diversity_warnings = [w for w in warnings if w.startswith("DIVERSITY_ROUTES_LOW") or w.startswith("DIVERSITY_ROUTES_FAIL")]
+        assert len(diversity_warnings) == 1, f"Expected DIVERSITY_ROUTES warning, got {warnings}"
         
-        # The warning should reference cross_dex value (2<4), not total routes (5)
-        assert "2<" in diversity_warnings[0], f"Warning should show 2<4: {diversity_warnings[0]}"
-        assert "5<" not in diversity_warnings[0], f"Warning should NOT show 5<4: {diversity_warnings[0]}"
+        # The warning should reference cross_dex value (0<2), not total routes (5)
+        assert "0<" in diversity_warnings[0], f"Warning should show 0<2: {diversity_warnings[0]}"
+        assert "5<" not in diversity_warnings[0], f"Warning should NOT show 5: {diversity_warnings[0]}"
     
     def test_diversity_routes_passes_with_enough_cross_dex(self):
         """DIVERSITY_ROUTES_LOW should NOT trigger if unique_routes_cross_dex >= threshold."""

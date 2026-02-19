@@ -291,7 +291,9 @@ class Thresholds:
     # v1.12.0: Diversity thresholds (FAIL, not just WARN)
     DIVERSITY_PAIRS_TARGET = 10    # WARN_DIVERSITY_LOW if unique_pairs < 10
     DIVERSITY_PAIRS_MIN = 3        # v1.12.0: FAIL if unique_pairs < 3
-    DIVERSITY_ROUTES_TARGET = 4    # WARN_DIVERSITY_LOW if unique_routes < 4
+    # v2.3.2: TARGET reduced from 4 to 2 to match 2-DEX reality (uniswap_v3+sushiswap_v3)
+    # With 2 DEXes, max cross-dex routes = 2. Restore to 4 when 3rd DEX (camelot_v3) is added.
+    DIVERSITY_ROUTES_TARGET = 2    # WARN if unique_routes_cross_dex < 2
     DIVERSITY_ROUTES_MIN = 2       # v1.12.0: FAIL if unique_routes < 2
     
     # v2.0.2: Profit sanity thresholds (too-good-to-be-true detection)

@@ -1,13 +1,13 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-02-19T19:03:54Z
+timestamp_utc: 2026-02-19T18:04:16Z
 run_id: data/runs/ci_m5_gate_20260219_190354
 mode: ONLINE
 artifact_mode: rolling
 config: config/real_minimal.yaml (profit profile)
 code_identity:
-  primary: ts:2026-02-19T19:03:54Z
+  primary: ts:2026-02-19T18:04:16.934105+00:00
   dirty: false
   desc: v2.3.2-fix profit_is_diagnostic + gross_pnl_usdc_est + ASCII
 
@@ -19,8 +19,8 @@ change_summary:
   - FIX: ASCII encoding в status файлах (em-dash, arrows)
   - ADD: 7 нових тестів для profit_is_diagnostic/execution_pnl
   - ADD: 5 нових sushi regression test cases (WBTC/USDC, inverted)
-  - UPDATE: Status_M5_0.md test counts (926 passed)
-  - UPDATE: Status_M4.md - прибрано M5_0 infra деталі
+  - UPDATE: Status_M5_0.md test counts (933 passed)
+  - UPDATE: Status_M4.md - прибрано M5_0 infra деталі, Clean PnL AVAILABLE
 touched_files:
   - strategy/artifacts.py
   - tests/unit/test_truth_report.py
@@ -32,8 +32,8 @@ touched_files:
 
 ## 2) Commands Executed (лише факти)
 
-python -m pytest -q: PASS (938 passed, 12 skipped, 10.55s)
-python scripts/ci_full_pipeline.py --mode ci: NOT RUN (ONLINE used)
+python -m pytest -q: PASS (933 passed, 1 skipped, 10.43s)
+python scripts/ci_full_pipeline.py --mode ci: PASS (all gates passed, 11.9s)
 python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1 --refresh-rolling: PASS
 python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling: PASS (via rolling refresh)
 

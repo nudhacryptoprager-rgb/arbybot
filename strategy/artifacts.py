@@ -81,6 +81,7 @@ def write_artifacts(
 def _compute_execution_pnl(
     spread_signals: List[Dict[str, Any]],
     config: Dict[str, Any],
+    filter_excluded: bool = False,
 ) -> Dict[str, Any]:
     """
     Compute execution_pnl section with Clean PnL v1 (v2.3.2).
@@ -91,17 +92,24 @@ def _compute_execution_pnl(
     Args:
         spread_signals: List of spread signal dicts with net_pnl_usdc_est
         config: Config dict with gas_usd_estimate
+        filter_excluded: If True, only include signals with is_excluded_spread=False
         
     Returns:
         execution_pnl dict
     """
     gas_usd_estimate = config.get("gas_usd_estimate", 0.0)
     
-    # Compute totals from all signals
+    # v2.3.2: Optionally filter to included signals only
+    if filter_excluded:
+        signals_to_use = [s for s in spread_signals if not s.get("is_excluded_spread", False)]
+    else:
+        signals_to_use = spread_signals
+    
+    # Compute totals from filtered signals
     # v2.3.2 FIX: Use gross_pnl_usdc_est (actual field name from strategy/spreads.py)
-    total_gross_pnl = sum(s.get("gross_pnl_usdc_est", 0) for s in spread_signals)
-    total_net_pnl = sum(s.get("net_pnl_usdc_est", 0) for s in spread_signals if s.get("is_net_positive_est"))
-    signals_with_estimates = [s for s in spread_signals if s.get("net_pnl_usdc_est") is not None]
+    total_gross_pnl = sum(s.get("gross_pnl_usdc_est", 0) for s in signals_to_use)
+    total_net_pnl = sum(s.get("net_pnl_usdc_est", 0) for s in signals_to_use if s.get("is_net_positive_est"))
+    signals_with_estimates = [s for s in signals_to_use if s.get("net_pnl_usdc_est") is not None]
     
     # cost_model_available = True when we have gas estimate AND at least one signal
     # This is Clean PnL v1 (paper estimates), not real execution costs
@@ -193,7 +201,11 @@ def build_truth_data(
         "stats": stats,
         # v2.3.2: Clean PnL v1 - compute net_pnl from spread signals
         # cost_model_available=True when we have gas+slippage estimates
+        # execution_pnl: ALL spread signals (including excluded)
         "execution_pnl": _compute_execution_pnl(spread_signals, config),
+        # v2.3.2: execution_pnl_included: only non-excluded signals
+        # This should match run_summary.metrics.total_net_usdc
+        "execution_pnl_included": _compute_execution_pnl(spread_signals, config, filter_excluded=True),
         "pnl": {
             "_deprecated": True,
             "_migration": "Use 'execution_pnl' instead. This field will be removed in schema v3.3.",

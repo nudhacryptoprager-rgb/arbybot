@@ -6,9 +6,9 @@
 **Policy Version**: 2.0.8  
 **Engine Version**: v2.3.0  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL NOT AVAILABLE** (`execution_pnl.cost_model_available=false`)
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **M4 NOT CLOSED**: `net_usdc` from rolling is DIAGNOSTIC, not canonical DEX-DEX truth. Requires `execution_pnl.cost_model_available=true` and `profit_truth_source=ROUNDTRIP_REAL`.
+> [!] **M4 NOT CLOSED**: `net_usdc` from rolling is DIAGNOSTIC (`profit_is_diagnostic=true`), not canonical DEX-DEX truth. Clean PnL available (`cost_model_available=true`), but requires `profit_truth_source=ROUNDTRIP_REAL` (currently `ONE_LEG_DIAGNOSTIC`).
 
 ## v2.3.2 M4-specific Fixes (2026-02-19)
 
@@ -31,20 +31,20 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = WARN_QUALITY (acceptable for M4.1). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-19 v2.3.2)**: From `m4_stability_agg.json` (canonical source): runs_in_window=73, data_run_rate=0.9863, pass_rate=1.0, **total_net_usdc=$3998.20**, unique_pairs=8, **unique_routes=4** (**unique_routes_cross_dex=2** < target=4 -> WARN). POOL_DISABLED=6, POOL_MISSING=3 (UNI/WETH+GMX/USDC on Sushi - expected, pools don't exist). **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). Provenance: v2.3.2 fix - `run_timestamp` now read from runDir scan artifact (no more NEW timestamp generation in rolling). **pool_missing_keys** now in scan.stats for observability. **WETH/DAI DISABLED** (v2.3.2 - SUSPECT_LIQUIDITY + PRICE_SANITY_FAILED on Sushi, needs quoter path investigation). **Clean PnL NOT AVAILABLE** (`execution_pnl.cost_model_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode). For ws/multicall/failover see [Status_M5_0.md](Status_M5_0.md).
+**Snapshot (2026-02-19 v2.3.2)**: From `m4_stability_agg.json` (canonical source): runs_in_window=74, data_run_rate=0.9865, pass_rate=1.0, **total_net_usdc=$4041.92**, unique_pairs=8, **unique_routes=4** (**unique_routes_cross_dex=2** < target=4 -> WARN). POOL_DISABLED=6, POOL_MISSING=3 (UNI/WETH+GMX/USDC on Sushi - expected, pools don't exist). **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). Provenance: v2.3.2 fix - `run_timestamp` now read from runDir scan artifact (no more NEW timestamp generation in rolling). **pool_missing_keys** now in scan.stats for observability. **WETH/DAI DISABLED** (v2.3.2 - SUSPECT_LIQUIDITY + PRICE_SANITY_FAILED on Sushi, needs quoter path investigation). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, but `profit_truth_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode). For ws/multicall/failover see [Status_M5_0.md](Status_M5_0.md).
 
 > **NOTE: DIVERSITY_ROUTES_LOW (2 DEX limitation)**: With 2 active DEXes (uniswap_v3+sushiswap_v3), `unique_routes_cross_dex` maximum = 2. Policy target = 4 requires adding 3rd DEX with working quoter (camelot_v3 in real_expanded.yaml pending Algebra quoter integration).
 
-**Evidence (ci_m5_gate_20260219_144126 - v2.3.2 run)**:
+**Evidence (ci_m5_gate_20260219_190354 - v2.3.2 run)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
 - Counters: `execution_ready_count=0` (kill_switch_active=true), `would_execute_count=0`
-- Provenance: `run_timestamp=2026-02-19T13:41:47.819823+00:00`
+- Provenance: `run_timestamp=2026-02-19T18:04:16.934105+00:00`
 - See [Status_M5_0.md](Status_M5_0.md) for multicall/failover/infra evidence.
 
 **Quality Note**: 
-- **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_CRITICAL_REJECTS, WARN_TOP_PAIR_DOMINANCE`
+- **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_CRITICAL_REJECTS, WARN_PROFIT_DIAGNOSTIC`
 - **Window-level** (`_latest.agg_reasons`): `DIVERSITY_PAIRS_LOW` (unique_pairs=8 < 10), `DIVERSITY_ROUTES_LOW` (**unique_routes_cross_dex=2** < target=4)
-- **Clean PnL NOT AVAILABLE**: `execution_pnl.cost_model_available=false`
+- **Clean PnL AVAILABLE**: `execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`
 - **v2.3.2 deferred**: Sushi PRICE_SANITY_FAILED diagnostic, WETH/DAI rollback
 
 **Quarantined Pools (v2.1.0-fix, 2026-02-18):**

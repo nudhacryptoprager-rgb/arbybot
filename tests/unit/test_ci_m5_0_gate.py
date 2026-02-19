@@ -24,9 +24,9 @@ from scripts.ci_m5_0_gate import (
 
 
 class TestVersion(unittest.TestCase):
-    def test_version_is_2_3_0(self):
-        """v2.3.0: Updated version after multicall observability and provenance fixes."""
-        self.assertEqual(__version__, "2.3.0")
+    def test_version_is_2_3_2(self):
+        """v2.3.2: Updated version after profit_is_diagnostic and diversity fixes."""
+        self.assertEqual(__version__, "2.3.2")
 
 
 class TestModeExclusion(unittest.TestCase):

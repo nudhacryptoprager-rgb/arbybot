@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-19  
-**Gate Version**: `ci_m5_0_gate.py` v2.3.0  
-**Tests**: 926 passed
+**Gate Version**: `ci_m5_0_gate.py` v2.3.2  
+**Tests**: 933 passed, 1 skipped
 
 ---
 
@@ -54,7 +54,7 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --fa
 
 # Unit tests
 py -3.11 -m pytest tests/unit -q
-# EXPECT: 926 passed, 12 skipped
+# EXPECT: 933 passed, 1 skipped
 ```
 
 ---
@@ -63,7 +63,7 @@ py -3.11 -m pytest tests/unit -q
 
 | Type | RunDir | Key Evidence |
 |------|--------|--------------|
-| Normal | `ci_m5_gate_20260219_144126` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
+| Normal | `ci_m5_gate_20260219_190354` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
 | Stress | `ci_m5_gate_20260219_103811` | `failover_stress_active=true`, `endpoints_used_count=2` |
 
 ---
@@ -96,12 +96,12 @@ py -3.11 -m pytest tests/unit -q
 ## API Stability Policy
 
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+----------------------------------------------------------------
 PUBLIC SYMBOLS ONLY GROW, NEVER DISAPPEAR.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+----------------------------------------------------------------
 
-If renamed → MUST provide alias: OldName = NewName
-If deprecated → MUST keep alias for 2 milestones minimum
+If renamed -> MUST provide alias: OldName = NewName
+If deprecated -> MUST keep alias for 2 milestones minimum
 ```
 
 ---

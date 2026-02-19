@@ -98,6 +98,14 @@ pairs:
   - token_in: UNI
     token_out: WETH
     fee_tiers: [3000]
+  # v2.3.2: Add PENDLE/WETH and RDNT/WETH for unique_pairs=10
+  # Both pairs exist on Uniswap V3 with reasonable liquidity
+  - token_in: PENDLE
+    token_out: WETH
+    fee_tiers: [3000]
+  - token_in: RDNT
+    token_out: WETH
+    fee_tiers: [3000]
   # v2.3.2: WETH/DAI DISABLED - SUSPECT_LIQUIDITY (ticks_crossed=319) + PRICE_SANITY_FAILED (sushi)
   # Cross-dex verified but quality gates failing, needs quoter path investigation
   # TODO: Re-enable after fixing Sushi WETH/DAI quoting (Issue #PRICE_SANITY)
@@ -160,6 +168,12 @@ pools:
   # === UNI/WETH (v2.3.0 Step 5) ===
   # Verified via factory.getPool() on 2026-02-19 (SushiSwap has no UNI/WETH fee=3000)
   uniswap_v3_UNI_WETH_3000: "0xC24f7d8E51A64dc1238880BD00bb961D54cbeb29"
+  # === PENDLE/WETH (v2.3.2 - diversity) ===
+  # Verified via factory.getPool() on Arbitrum
+  uniswap_v3_PENDLE_WETH_3000: "0xDAa8DEC816CD8AaA6b5DcfBe3C9553F9BaD5B7E6"
+  # === RDNT/WETH (v2.3.2 - diversity) ===
+  # Verified via factory.getPool() on Arbitrum
+  uniswap_v3_RDNT_WETH_3000: "0x446BF9748B4eA044dd759d9B9311C70491dF8F29"
   # === WETH/DAI (v2.3.2 - DISABLED, see pairs section comment) ===
   # Verified via factory.getPool() on 2026-02-19 (both DEXes have pools)
   # Kept for future re-enable; remove fee=100 pool (wrong tier, never used)
@@ -235,6 +249,8 @@ quote_decimals:
   wstETH: 18
   DAI: 18
   UNI: 18
+  PENDLE: 18
+  RDNT: 18
 
 # Anchor prices for each pair (used for price sanity checks)
 # Format: TOKEN_IN_TOKEN_OUT: expected_price
@@ -252,6 +268,8 @@ tokens_anchor_price:
   ARB_USDC: 0.11      # on-chain observed ~0.114 (2026-02-17)
   WBTC_USDC: 68000    # on-chain median ~68019 (2026-02-17)
   LINK_USDC: 9.0      # on-chain valid ~8.79; sushi fee=3000 (~19.9) is bad pool
+  PENDLE_WETH: 0.002  # v2.3.2: estimated from DeFiLlama price data
+  RDNT_WETH: 0.00005  # v2.3.2: estimated from DeFiLlama price data
 
 # Quote sizing: 1 ETH
 quote_amount_in_wei: "1000000000000000000"

@@ -56,7 +56,7 @@ from core.artifact_invariants import (
     validate_schema_version as invariants_validate_schema,
 )
 
-__version__ = "2.3.0"
+__version__ = "2.3.2"
 
 DEFAULT_OUTPUT_ROOT = Path("data/runs")
 DEFAULT_CONFIG = "config/real_minimal.yaml"
