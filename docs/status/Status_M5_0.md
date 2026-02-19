@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-19  
-**Gate Version**: `ci_m5_0_gate.py` v2.3.2  
-**Tests**: 933 passed, 1 skipped
+**Gate Version**: `ci_m5_0_gate.py` v2.3.3  
+**Tests**: 940 passed, 1 skipped
 
 ---
 
@@ -21,10 +21,10 @@
 |------|--------|------|-------------|
 | 1 | **multicall field_success_rates** | `core/multicall.py` | Per-field `call_success/call_fail` tracking |
 | 2 | **provenance unification** | `strategy/artifacts.py`, `run_scan_real.py` | `run_context.run_timestamp` unified |
-| 3 | **failover stress-test mode** | `scripts/ci_m5_0_gate.py`, `chains/providers.py` | `--failover-stress N` |
-| 4 | **failover_stress_active flag** | `strategy/infra.py` | In artifacts for proof |
-| 5 | **rolling isolation for stress** | `scripts/ci_m5_0_gate.py` | `--failover-stress` disables rolling refresh |
-| 6 | **endpoint_id metrics** | `chains/providers.py`, `strategy/infra.py` | `requests_by_endpoint`, `errors_by_endpoint` |
+| 3 | **PENDLE/WETH pool verification** | `config/real_minimal.yaml` | v2.3.3: correct pool addresses from factory.getPool() |
+| 4 | **RDNT/WETH cross-DEX** | `config/real_minimal.yaml` | v2.3.3: both Uni+Sushi pool addresses |
+| 5 | **DIVERSITY_PAIRS_TARGET=8** | `m4/policy.py` | v2.3.3: reduced to match quoter coverage |
+| 6 | **check_repo_safety.py v1.1.0** | `scripts/check_repo_safety.py` | v2.3.2: untracked files INFO-only |
 | 7 | **pool_missing_keys observability** | `strategy/quotes.py`, `run_scan_real.py` | v2.3.2: `pool_missing_keys` in scan.stats |
 | 8 | **repo safety gate** | `scripts/check_repo_safety.py` | v2.3.2: check forbidden tracked files/keys |
 
@@ -63,8 +63,8 @@ py -3.11 -m pytest tests/unit -q
 
 | Type | RunDir | Key Evidence |
 |------|--------|--------------|
-| Normal | `ci_m5_gate_20260219_190354` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
-| Stress | `ci_m5_gate_20260219_103811` | `failover_stress_active=true`, `endpoints_used_count=2` |
+| Normal | `ci_m5_gate_20260219_201744` | `field_success_rates~1.0`, unique_pairs=8 |
+| v2.3.2 | `ci_m5_gate_20260219_190354` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
 
 ---
 

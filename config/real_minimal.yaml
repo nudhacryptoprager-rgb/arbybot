@@ -91,14 +91,9 @@ pairs:
   - token_in: LINK
     token_out: USDC
     fee_tiers: [3000]
-  # v2.3.0 Step 5: Additional pairs for unique_pairs >= 10
-  - token_in: GMX
-    token_out: USDC
-    fee_tiers: [3000]
-  - token_in: UNI
-    token_out: WETH
-    fee_tiers: [3000]
-  # v2.3.2: Add PENDLE/WETH and RDNT/WETH for unique_pairs=10
+  # v2.3.2: Cross-DEX pairs for unique_pairs >= 10
+  # NOTE: GMX/USDC and UNI/WETH moved to real_expanded.yaml (Uni-only, no Sushi pools)
+  # v2.3.3: PENDLE/WETH and RDNT/WETH verified cross-DEX
   # Both pairs exist on Uniswap V3 with reasonable liquidity
   - token_in: PENDLE
     token_out: WETH
@@ -168,12 +163,12 @@ pools:
   # === UNI/WETH (v2.3.0 Step 5) ===
   # Verified via factory.getPool() on 2026-02-19 (SushiSwap has no UNI/WETH fee=3000)
   uniswap_v3_UNI_WETH_3000: "0xC24f7d8E51A64dc1238880BD00bb961D54cbeb29"
-  # === PENDLE/WETH (v2.3.2 - diversity) ===
-  # Verified via factory.getPool() on Arbitrum
-  uniswap_v3_PENDLE_WETH_3000: "0xDAa8DEC816CD8AaA6b5DcfBe3C9553F9BaD5B7E6"
-  # === RDNT/WETH (v2.3.2 - diversity) ===
-  # Verified via factory.getPool() on Arbitrum
+  # === PENDLE/WETH (v2.3.3 - cross-DEX verified 2026-02-19) ===
+  uniswap_v3_PENDLE_WETH_3000: "0xdbaeB7f0DFe3a0AAFD798CCECB5b22E708f7852c"
+  sushiswap_v3_PENDLE_WETH_3000: "0xFf86f3Dbc7D289e786767f15Af8eDfcCDE313f99"
+  # === RDNT/WETH (v2.3.3 - cross-DEX verified 2026-02-19) ===
   uniswap_v3_RDNT_WETH_3000: "0x446BF9748B4eA044dd759d9B9311C70491dF8F29"
+  sushiswap_v3_RDNT_WETH_3000: "0x5Bc248a30B247Eb4A6f11081854CE8e2168E1EF9"
   # === WETH/DAI (v2.3.2 - DISABLED, see pairs section comment) ===
   # Verified via factory.getPool() on 2026-02-19 (both DEXes have pools)
   # Kept for future re-enable; remove fee=100 pool (wrong tier, never used)
@@ -268,8 +263,8 @@ tokens_anchor_price:
   ARB_USDC: 0.11      # on-chain observed ~0.114 (2026-02-17)
   WBTC_USDC: 68000    # on-chain median ~68019 (2026-02-17)
   LINK_USDC: 9.0      # on-chain valid ~8.79; sushi fee=3000 (~19.9) is bad pool
-  PENDLE_WETH: 0.002  # v2.3.2: estimated from DeFiLlama price data
-  RDNT_WETH: 0.00005  # v2.3.2: estimated from DeFiLlama price data
+  PENDLE_WETH: 0.0006  # v2.3.3: on-chain sqrtPriceX96 -> ~0.00061 (2026-02-19)
+  RDNT_WETH: 0.000003  # v2.3.3: on-chain sqrtPriceX96 -> ~0.000003 (2026-02-19)
 
 # Quote sizing: 1 ETH
 quote_amount_in_wei: "1000000000000000000"

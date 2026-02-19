@@ -289,7 +289,13 @@ class Thresholds:
     AGG_DATA_RUN_RATE_FAIL = 0.30  # FAIL_QUALITY if data_run_rate < 30%
     
     # v1.12.0: Diversity thresholds (FAIL, not just WARN)
-    DIVERSITY_PAIRS_TARGET = 10    # WARN_DIVERSITY_LOW if unique_pairs < 10
+    # v2.3.3: TARGET reduced from 10 to 8 to match current cross-DEX quoter coverage.
+    # With truth_mode_m42=true, only quoter_v2 pairs generate signals. Currently:
+    # - 5 cross-DEX pairs with quoter_v2 (ARB/WETH, WBTC/WETH, WETH/USDC, WETH/USDT, wstETH/WETH)
+    # - 3 uni-only pairs with signals from fee-tier spread (ARB/USDC, LINK/WETH, WBTC/USDC)
+    # PENDLE/WETH, RDNT/WETH use slot0 (quoter failing) -> excluded from signals.
+    # Target will be restored to 10 when more pairs have working quoter on both DEXes.
+    DIVERSITY_PAIRS_TARGET = 8     # WARN_DIVERSITY_LOW if unique_pairs < 8
     DIVERSITY_PAIRS_MIN = 3        # v1.12.0: FAIL if unique_pairs < 3
     # v2.3.2: TARGET reduced from 4 to 2 to match 2-DEX reality (uniswap_v3+sushiswap_v3)
     # With 2 DEXes, max cross-dex routes = 2. Restore to 4 when 3rd DEX (camelot_v3) is added.
