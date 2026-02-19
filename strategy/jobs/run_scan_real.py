@@ -224,15 +224,21 @@ def run_scan(
     dexes_list = config.get("dexes") or []
     chain_key = config.get("chain", "arbitrum_one")
     
-    # v2.2.0 Fix Step 7: universe_source=config|intent for Appendix A integration
+    # v2.2.0 Fix Step 7: universe_source=config|intent|intent_verified for Appendix A integration
+    # v2.3.0 Fix Step 4: intent_verified mode - reads from intent.txt, verified pairs only
     universe_source = config.get("universe_source", "config")
-    use_intent = (universe_source == "intent")
+    use_intent = (universe_source in ("intent", "intent_verified"))
     pairs_list = load_pairs(chain_key, config, use_intent=use_intent)
     
-    if use_intent:
+    if universe_source == "intent_verified":
+        logger.info("Using intent.txt universe with verification (universe_source=intent_verified)")
+        stats["universe_source"] = "intent_verified"
+    elif universe_source == "intent":
         logger.info("Using intent.txt universe (universe_source=intent)")
+        stats["universe_source"] = "intent"
     else:
         logger.debug("Using config pairs (universe_source=config)")
+        stats["universe_source"] = "config"
     
     # v2.2.0 Fix Step 9: discovery_dry_run flag - count candidates without RPC
     discovery_dry_run = config.get("discovery_dry_run", False)

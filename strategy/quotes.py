@@ -678,16 +678,10 @@ def collect_quotes(
                 pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)
                 
                 if not pool_addr:
-                    rejected_quotes.append({
-                        "pair": f"{token_in}/{token_out}",
-                        "dex_id": dex,
-                        "fee": fee_tier,
-                        "reason": "POOL_MISSING",
-                        "gate_passed": False,
-                        "error": f"No pool address configured for {dex}_{token_pair_tag}_{fee_tier}",
-                    })
+                    # v2.3.0: Silent skip (not reject) for unconfigured pools
+                    # POOL_MISSING is not actionable - just means this DEX/pair/fee combo isn't in config
                     counts["pool_missing"] += 1
-                    logger.warning("POOL_MISSING: %s %s/%s fee=%d", dex, token_in, token_out, fee_tier)
+                    logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config", dex, token_in, token_out, fee_tier)
                     continue
                 
                 # TODO(M4.2): Replace slot0 with QuoterV2 for executable quotes
