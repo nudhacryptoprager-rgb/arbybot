@@ -70,6 +70,63 @@ def get_git_sha() -> str:
 # VALIDATION HELPERS
 # ============================================================
 
+def compute_profit_truth_available(metrics: Dict[str, Any]) -> bool:
+    """
+    Compute profit_truth_available from run_summary metrics.
+    
+    v2.3.2: profit_truth_available = (NOT profit_is_diagnostic) AND cost_model_available
+    
+    Args:
+        metrics: run_summary.metrics dict
+        
+    Returns:
+        True if profit is canonical (real DEX-DEX), False if DIAGNOSTIC only
+    """
+    profit_is_diagnostic = metrics.get("profit_is_diagnostic", True)
+    cost_model_available = metrics.get("cost_model_available", False)
+    return (not profit_is_diagnostic) and cost_model_available
+
+
+def apply_profit_diagnostic_warning(
+    run_summary: Dict[str, Any],
+    profit_status: str,
+    profit_truth_available: bool,
+    profit_is_diagnostic: bool,
+    quality_status: str,
+    merged_quality_reasons: List[str],
+) -> Tuple[str, List[str], List[str]]:
+    """
+    Apply WARN_PROFIT_DIAGNOSTIC if profit is PASS but not canonical.
+    
+    v2.3.2: When profit_truth_available=False and profit_status=PASS:
+    - Add WARN_PROFIT_DIAGNOSTIC to quality_reasons
+    - Set quality_status to WARN
+    - Add human-readable warning to quality_warnings
+    
+    Args:
+        run_summary: Mutable run_summary dict to update quality_warnings
+        profit_status: Current profit_status (PASS/FAIL/NO_DATA)
+        profit_truth_available: Result of compute_profit_truth_available()
+        profit_is_diagnostic: Whether profit is diagnostic
+        quality_status: Current quality_status
+        merged_quality_reasons: List of quality reasons (mutated in place)
+        
+    Returns:
+        Tuple of (updated_quality_status, updated_quality_reasons, quality_warnings)
+    """
+    quality_warnings = run_summary.get("quality_warnings", [])
+    
+    if not profit_truth_available and profit_status == "PASS":
+        if "WARN_PROFIT_DIAGNOSTIC" not in merged_quality_reasons:
+            merged_quality_reasons.append("WARN_PROFIT_DIAGNOSTIC")
+        if quality_status == "PASS":
+            quality_status = "WARN"
+        diag_warning = f"PROFIT_DIAGNOSTIC: profit_is_diagnostic={profit_is_diagnostic}, profit_truth_available={profit_truth_available}"
+        if diag_warning not in quality_warnings:
+            quality_warnings.append(diag_warning)
+    
+    return quality_status, merged_quality_reasons, quality_warnings
+
 def validate_execution_report(
     data: Dict[str, Any], 
     profile: str = DoDProfile.SMOKE,
@@ -710,22 +767,16 @@ def run_online_gate(
         if has_upstream_quality_issues and quality_status == "PASS" and status != "NO_DATA":
             quality_status = "WARN"  # v2.0.5: domain fix - WARN not WARN_QUALITY
         
-        # v2.3.2: If profit_truth_available is False, profit cannot be proven for M4 DoD
-        # This means profit_status can be PASS (positive net_usdc), but it's DIAGNOSTIC only
-        if not profit_truth_available and profit_status == "PASS":
-            # Add WARN_PROFIT_DIAGNOSTIC to quality_reasons (does not fail, but important)
-            if "WARN_PROFIT_DIAGNOSTIC" not in merged_quality_reasons:
-                merged_quality_reasons.append("WARN_PROFIT_DIAGNOSTIC")
-            # Ensure quality_status is at least WARN when profit is diagnostic
-            if quality_status == "PASS" and status != "NO_DATA":
-                quality_status = "WARN"
-            # Add human-readable quality_warning
-            diag_warning = f"PROFIT_DIAGNOSTIC: profit_is_diagnostic={profit_is_diagnostic}, profit_truth_available={profit_truth_available}"
-            if "quality_warnings" not in run_summary:
-                run_summary["quality_warnings"] = []
-            upstream_quality_warnings = run_summary.get("quality_warnings", [])
-            if diag_warning not in upstream_quality_warnings:
-                upstream_quality_warnings.append(diag_warning)
+        # v2.3.2: Apply profit diagnostic warning using helper function
+        quality_status, merged_quality_reasons, updated_warnings = apply_profit_diagnostic_warning(
+            run_summary=run_summary,
+            profit_status=profit_status,
+            profit_truth_available=profit_truth_available,
+            profit_is_diagnostic=profit_is_diagnostic,
+            quality_status=quality_status,
+            merged_quality_reasons=merged_quality_reasons,
+        )
+        upstream_quality_warnings = updated_warnings
         
         # Update run_summary with computed status
         run_summary["status"] = status

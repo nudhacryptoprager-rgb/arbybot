@@ -78,6 +78,51 @@ def write_artifacts(
     return artifacts
 
 
+def _compute_execution_pnl(
+    spread_signals: List[Dict[str, Any]],
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Compute execution_pnl section with Clean PnL v1 (v2.3.2).
+    
+    Clean PnL v1 = paper estimates with gas + slippage.
+    cost_model_available=True when we have gas_usd_estimate in config.
+    
+    Args:
+        spread_signals: List of spread signal dicts with net_pnl_usdc_est
+        config: Config dict with gas_usd_estimate
+        
+    Returns:
+        execution_pnl dict
+    """
+    gas_usd_estimate = config.get("gas_usd_estimate", 0.0)
+    
+    # Compute totals from all signals
+    total_gross_pnl = sum(s.get("spread_usdc", 0) for s in spread_signals)
+    total_net_pnl = sum(s.get("net_pnl_usdc_est", 0) for s in spread_signals if s.get("is_net_positive_est"))
+    signals_with_estimates = [s for s in spread_signals if s.get("net_pnl_usdc_est") is not None]
+    
+    # cost_model_available = True when we have gas estimate AND at least one signal
+    # This is Clean PnL v1 (paper estimates), not real execution costs
+    cost_model_available = bool(gas_usd_estimate and signals_with_estimates)
+    
+    # Format as strings for money fields
+    return {
+        "signal_pnl_usdc": f"{total_gross_pnl:.6f}",
+        "would_execute_pnl_usdc": f"{total_net_pnl:.6f}" if total_net_pnl > 0 else "0.000000",
+        "gross_pnl_usdc": f"{total_gross_pnl:.6f}",
+        "net_pnl_usdc": f"{total_net_pnl:.6f}" if cost_model_available else None,
+        "net_pnl_bps": None,  # TODO: compute from notional when available
+        "cost_model_available": cost_model_available,
+        # v2.3.2: Clean PnL v1 notes
+        "cost_model_version": "paper_gas_slippage_v1" if cost_model_available else None,
+        "cost_model_components": {
+            "gas_usd": gas_usd_estimate,
+            "slippage_bps": config.get("paper_slippage_bps", 0),
+        } if cost_model_available else None,
+    }
+
+
 def build_truth_data(
     config: Dict[str, Any],
     stats: Dict[str, Any],
@@ -145,14 +190,9 @@ def build_truth_data(
             "rpc_success_rate": stats.get("rpc_success_rate"),
         },
         "stats": stats,
-        "execution_pnl": {
-            "signal_pnl_usdc": "0.000000",
-            "would_execute_pnl_usdc": "0.000000",
-            "gross_pnl_usdc": "0.000000",
-            "net_pnl_usdc": None,
-            "net_pnl_bps": None,
-            "cost_model_available": False,
-        },
+        # v2.3.2: Clean PnL v1 - compute net_pnl from spread signals
+        # cost_model_available=True when we have gas+slippage estimates
+        "execution_pnl": _compute_execution_pnl(spread_signals, config),
         "pnl": {
             "_deprecated": True,
             "_migration": "Use 'execution_pnl' instead. This field will be removed in schema v3.3.",

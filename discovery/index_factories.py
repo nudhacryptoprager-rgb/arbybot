@@ -443,3 +443,123 @@ def count_discovery_candidates(chain: str, dexes: Optional[List[str]] = None) ->
         "total_potential_queries": potential_v3_queries + potential_v2_queries,
         "discovery_candidates_count": len(resolvable_pairs),
     }
+
+
+# =============================================================================
+# TARGETED POOL VERIFICATION (v2.3.2)
+# =============================================================================
+
+def verify_pool_exists(
+    chain: str,
+    dex: str,
+    token_a: str,
+    token_b: str,
+    fee_tier: Optional[int] = None,
+    rpc_url: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Verify if a pool exists via factory.getPool() / factory.getPair().
+    
+    This is used to reduce pool_missing_keys by querying the factory
+    directly when a pool is not in the hardcoded whitelist.
+    
+    Args:
+        chain: Chain key (e.g., "arbitrum_one")
+        dex: DEX key (e.g., "uniswap_v3", "sushi")
+        token_a: Token A address (checksummed or lowercase)
+        token_b: Token B address (checksummed or lowercase)
+        fee_tier: Fee tier for V3 (required for V3, ignored for V2)
+        rpc_url: Optional RPC URL override
+        
+    Returns:
+        Pool address if exists, None otherwise
+        
+    CONTRACT:
+    - Returns lowercase pool address if found
+    - Returns None if pool does not exist or RPC fails
+    - Does NOT raise exceptions (fail-safe)
+    """
+    import os
+    from core.rpc_urls import get_rpc_url
+    
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+    
+    if rpc_url is None:
+        rpc_url = get_rpc_url(chain)
+    
+    if not rpc_url:
+        return None
+    
+    # Normalize dex key
+    dex_lower = dex.lower()
+    
+    # Map common aliases
+    dex_key = dex_lower
+    if dex_lower == "sushi":
+        dex_key = "sushiswap_v3"
+    elif dex_lower == "uni":
+        dex_key = "uniswap_v3"
+    
+    factory_addr = get_factory_address(chain, dex_key)
+    if not factory_addr:
+        # Try with _v2 suffix for V2 pools
+        dex_key_v2 = dex_key.replace("_v3", "_v2")
+        factory_addr = get_factory_address(chain, dex_key_v2)
+        if factory_addr:
+            # V2 pool
+            return query_v2_pair(rpc_url, factory_addr, token_a, token_b)
+        return None
+    
+    # V3 pool
+    if "v3" in dex_key:
+        if fee_tier is None:
+            # Try common fee tiers
+            for fee in V3_FEE_TIERS:
+                result = query_v3_pool(rpc_url, factory_addr, token_a, token_b, fee)
+                if result:
+                    return result
+            return None
+        return query_v3_pool(rpc_url, factory_addr, token_a, token_b, fee_tier)
+    
+    # V2 pool
+    return query_v2_pair(rpc_url, factory_addr, token_a, token_b)
+
+
+def validate_pool_address(
+    chain: str,
+    dex: str,
+    pool_address: str,
+    token_a: str,
+    token_b: str,
+    fee_tier: Optional[int] = None,
+    rpc_url: Optional[str] = None,
+) -> bool:
+    """
+    Validate that a pool address matches the factory-returned address.
+    
+    Args:
+        chain: Chain key
+        dex: DEX key
+        pool_address: Address to validate
+        token_a: Token A address
+        token_b: Token B address
+        fee_tier: Fee tier for V3
+        rpc_url: Optional RPC URL
+        
+    Returns:
+        True if pool_address matches factory result, False otherwise
+    """
+    factory_addr = verify_pool_exists(
+        chain=chain,
+        dex=dex,
+        token_a=token_a,
+        token_b=token_b,
+        fee_tier=fee_tier,
+        rpc_url=rpc_url,
+    )
+    
+    if factory_addr is None:
+        return False
+    
+    return factory_addr.lower() == pool_address.lower()

@@ -1,4 +1,4 @@
-# Status: M4 (DEX<->DEX Atomic Execution)
+# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate WARN_QUALITY, roundtrip NOT_PROFITABLE)  
 **Updated**: 2026-02-19  
@@ -8,7 +8,7 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL NOT AVAILABLE** (`execution_pnl.cost_model_available=false`)
 
-> ⚠️ **M4 НЕ ЗАКРИТО**: `net_usdc` з rolling є DIAGNOSTIC, не canonical DEX↔DEX truth. Потрібен `execution_pnl.cost_model_available=true` та `profit_truth_source=ROUNDTRIP_REAL`.
+> [!] **M4 NOT CLOSED**: `net_usdc` from rolling is DIAGNOSTIC, not canonical DEX-DEX truth. Requires `execution_pnl.cost_model_available=true` and `profit_truth_source=ROUNDTRIP_REAL`.
 
 ## v2.3.2 M4-specific Fixes (2026-02-19)
 
@@ -35,22 +35,17 @@
 
 > **NOTE: DIVERSITY_ROUTES_LOW (2 DEX limitation)**: With 2 active DEXes (uniswap_v3+sushiswap_v3), `unique_routes_cross_dex` maximum = 2. Policy target = 4 requires adding 3rd DEX with working quoter (camelot_v3 in real_expanded.yaml pending Algebra quoter integration).
 
-**Evidence (ci_m5_gate_20260219_144126 - v2.3.2 run)**: `scan.infra.provider_id=alchemy`, `scan.infra.multicall.requested_fields=[slot0, liquidity, token0, token1, decimals, fee]`, `scan.infra.multicall.field_success_rates={slot0:1.0, liquidity:1.0, token0:1.0, token1:1.0, decimals:1.0, fee:1.0}`, `scan.infra.provider_router.endpoints_used=[alchemy]`, `truth_report.execution_ready_count=0`, `truth_report.would_execute_count=0`, `truth_report.profit_is_diagnostic=true`, `truth_report.profit_truth_source=ONE_LEG_DIAGNOSTIC`, `truth_report.profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`, `run_context.run_timestamp=2026-02-19T13:41:47.819823+00:00`. **v2.3.2 additions**: `scan.stats.pool_missing_keys=[]`, `scan.stats.pool_missing_keys_total=0` (observability), provenance fix hardened (fallback chain). `intent_forced` runtime confirmed working (28 pairs with universe_source=intent_forced).
-
-**Failover Evidence (ci_m5_gate_20260219_103811 - stress run)**: `--failover-stress 3` mode. `endpoints_used_count=2`, `endpoints_used=[alchemy, arbitrum_public]`, `failover_stress_active=true`, `requests_by_endpoint={alchemy_3470f46a:1, arbitrum_public_9722a04c:1}`, `errors_by_endpoint={alchemy_3470f46a:1}`, `stress_test_fails(alchemy)=1`. **Proof**: Primary endpoint (alchemy) had simulated failure, router successfully failed over to secondary (arbitrum_public). `field_success_rates={slot0:0.9211, liquidity:0.9474, token0:0.9474, token1:0.9474, decimals:1.0, fee:0.9211}` (rates < 1.0 due to UNI/WETH wrong pool addresses at that time, fixed in v2.3.0).
+**Evidence (ci_m5_gate_20260219_144126 - v2.3.2 run)**:
+- M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
+- Counters: `execution_ready_count=0` (kill_switch_active=true), `would_execute_count=0`
+- Provenance: `run_timestamp=2026-02-19T13:41:47.819823+00:00`
+- See [Status_M5_0.md](Status_M5_0.md) for multicall/failover/infra evidence.
 
 **Quality Note**: 
 - **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_CRITICAL_REJECTS, WARN_TOP_PAIR_DOMINANCE`
-- **Window-level** (`_latest.agg_reasons`): `DIVERSITY_PAIRS_LOW` (unique_pairs=8 < 10), `DIVERSITY_ROUTES_LOW` (**unique_routes_cross_dex=2** < target=4, NOT unique_routes)
-- See `data/runs/_rolling/run_summary_latest.json` (runDir: ci_m5_gate_20260219_144126).
-- **Clean PnL NOT AVAILABLE**: `execution_pnl.cost_model_available=false`, cannot claim "canonical realized net PnL". `metrics.total_net_usdc` is diagnostic only.
-- **v2.3.2 deferred**: Sushi PRICE_SANITY_FAILED diagnostic, WETH/DAI rollback until quoter path investigation complete.
-
-**Anchor Discipline (v2.1.0-fix enforced):**
-> Anchors MUST come from on-chain evidence (median valid quotes from runDir artifacts), NOT from market intuition.
-> Bad pools get REMOVED/quarantined, NOT "fixed" by artificially raising anchors.
-> If a pool returns extreme prices (e.g., WBTC/WETH sushi fee=500 returns `price_exact~3.4e28` at tick=887271 vs anchor 35), it's a bad pool, not a bad anchor.
-> Evidence source: `data/runs/ci_m5_gate_*` scan artifacts → median price from valid quotes per pair.
+- **Window-level** (`_latest.agg_reasons`): `DIVERSITY_PAIRS_LOW` (unique_pairs=8 < 10), `DIVERSITY_ROUTES_LOW` (**unique_routes_cross_dex=2** < target=4)
+- **Clean PnL NOT AVAILABLE**: `execution_pnl.cost_model_available=false`
+- **v2.3.2 deferred**: Sushi PRICE_SANITY_FAILED diagnostic, WETH/DAI rollback
 
 **Quarantined Pools (v2.1.0-fix, 2026-02-18):**
 

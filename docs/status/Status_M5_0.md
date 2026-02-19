@@ -1,13 +1,13 @@
 # Status: M5_0 (Infrastructure Hardening)
 
-**Status**: 🟡 **ACTIVE**  
+**Status**: [ACTIVE]  
 **Updated**: 2026-02-19  
 **Gate Version**: `ci_m5_0_gate.py` v2.3.0  
-**Tests**: 882 passed
+**Tests**: 889 passed
 
 ---
 
-## ⚠️ Core Truth Statement
+## [!] Core Truth Statement
 
 > **M5_0 є обов'язковим для CI та infra-proof.**  
 > M5_0 валідує схеми/інваріанти артефактів, multicall, failover, провенанс.  

@@ -195,3 +195,43 @@ def resolve_rpc_ws(chain_id: Optional[int] = None, network: Optional[str] = None
     diagnostics["source"] = "none"
     return None, "unknown", diagnostics
 
+
+# =============================================================================
+# SIMPLE HELPERS (v2.3.2)
+# =============================================================================
+
+# Chain key to chain_id mapping
+_CHAIN_KEY_TO_ID = {
+    "arbitrum_one": 42161,
+    "arbitrum": 42161,
+    "base": 8453,
+    "linea": 59144,
+    "mantle": 5000,
+}
+
+
+def get_rpc_url(chain: str) -> Optional[str]:
+    """
+    Get RPC URL for a chain (simple helper).
+    
+    Args:
+        chain: Chain key (e.g., "arbitrum_one", "base")
+        
+    Returns:
+        RPC HTTP URL or None if unavailable
+        
+    CONTRACT:
+    - Uses resolve_rpc_http() with os.environ
+    - Returns None if no RPC available (never raises)
+    """
+    import os
+    
+    chain_id = _CHAIN_KEY_TO_ID.get(chain.lower())
+    url, _provider, _diag = resolve_rpc_http(
+        chain_id=chain_id,
+        network=chain,
+        env=dict(os.environ),
+    )
+    return url
+
+

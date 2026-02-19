@@ -60,7 +60,28 @@ N >= 5 consecutive online runs in m4_stability_agg.json.runs[] where:
 ```
 > Rolling window is canonical for provenance (not individual runDir).
 
-**Поки online DoD не виконано — "M4 profit" є математичною оцінкою, не доказом виконання.**
+**Поки online DoD не виконано - "M4 profit" є математичною оцінкою, не доказом виконання.**
+
+### v2.3.2: Profit Truth Semantics
+
+**Canonical Fields (v2.3.2):**
+```
+metrics.profit_is_diagnostic     # true = one-leg estimate, false = real profit
+metrics.profit_truth_source      # ONE_LEG_DIAGNOSTIC | ROUNDTRIP_CANONICAL
+metrics.cost_model_available     # execution_pnl.cost_model_available
+metrics.profit_truth_available   # (NOT profit_is_diagnostic) AND cost_model_available
+```
+
+| profit_truth_available | Meaning | M4 DoD Status |
+|------------------------|---------|---------------|
+| **true** | Real DEX-DEX profit with costs | Can close M4 |
+| **false** | Diagnostic only (one-leg or no cost model) | M4 NOT CLOSED |
+
+**Gate Behavior (v2.3.2):**
+- When `profit_truth_available=false` AND `profit_status=PASS`:
+  - `WARN_PROFIT_DIAGNOSTIC` added to `quality_reasons`
+  - `quality_status` set to `WARN`
+- This is MONITORING only, does not block CI (profit validation deferred to M5+)
 
 ### Canonical Runner (одна "релізна кнопка")
 
