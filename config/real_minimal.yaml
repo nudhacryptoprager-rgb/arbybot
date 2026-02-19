@@ -50,7 +50,7 @@ dexes:
   - sushiswap_v3
 
 # M5 pairs: ONLY pairs with verified pool addresses on BOTH DEXes
-# Pairs without pool addresses on all configured DEXes will be rejected as POOL_MISSING
+# NOTE: POOL_MISSING is a silent skip (v2.3.0), not a reject. See pool_missing_count in stats.
 # All pool addresses verified via factory.getPool() on 2026-02-07
 pairs:
   # Major pairs with high liquidity on both DEXes

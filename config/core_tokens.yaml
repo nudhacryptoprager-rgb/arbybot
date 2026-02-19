@@ -71,6 +71,12 @@ arbitrum_one:
     decimals: 18
     name: "GMX"
     note: "GMX governance token"
+  
+  UNI:
+    address: "0xFa7F8980b0f1E64A2062791cc3b0871572f1F7f0"
+    decimals: 18
+    name: "Uniswap"
+    note: "UNI governance token (v2.3.0)"
 
 # =============================================================================
 # BASE (chain_id: 8453)

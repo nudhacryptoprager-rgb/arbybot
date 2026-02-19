@@ -220,19 +220,23 @@ def run_scan(
     stats["pool_disabled_count"] = counts.get("pool_disabled", 0)
     stats["quarantined_count"] = counts.get("quarantined", 0)
     stats["v3_slot0_failed_count"] = counts["v3_slot0_failed"]
+    # v2.3.0: Track failed pool addresses for actionable diagnostics
+    stats["failed_pool_addresses"] = counts.get("failed_pool_addresses", [])
     
     dexes_list = config.get("dexes") or []
     chain_key = config.get("chain", "arbitrum_one")
     
     # v2.2.0 Fix Step 7: universe_source=config|intent|intent_verified for Appendix A integration
-    # v2.3.0 Fix Step 4: intent_verified mode - reads from intent.txt, verified pairs only
+    # v2.3.0 Fix Step 4: intent_verified mode - reads from intent.txt directly, bypassing config pairs
     universe_source = config.get("universe_source", "config")
-    use_intent = (universe_source in ("intent", "intent_verified"))
-    pairs_list = load_pairs(chain_key, config, use_intent=use_intent)
+    use_intent = (universe_source == "intent")
+    force_intent = (universe_source == "intent_verified")
+    pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
     
     if universe_source == "intent_verified":
-        logger.info("Using intent.txt universe with verification (universe_source=intent_verified)")
+        logger.info("Using intent.txt universe FORCED (universe_source=intent_verified, %d pairs)", len(pairs_list))
         stats["universe_source"] = "intent_verified"
+        stats["intent_pairs_count"] = len(pairs_list)
     elif universe_source == "intent":
         logger.info("Using intent.txt universe (universe_source=intent)")
         stats["universe_source"] = "intent"

@@ -541,6 +541,9 @@ def collect_quotes(
         "algebra_needs_quoter": 0,
     }
     
+    # v2.3.0: Track failed pool addresses for actionable diagnostics
+    failed_pool_addresses: List[Dict[str, str]] = []
+    
     # Get quarantine manager for runtime auto-quarantine
     qm = get_quarantine_manager()
     
@@ -918,8 +921,16 @@ def collect_quotes(
                                 "quoter_attempted": use_quoter_v2 and dex_cfg is not None,
                             })
                             counts["v3_slot0_failed"] += 1
-                            logger.warning("V3_SLOT0_FAILED: %s %s/%s fee=%d (quoter_attempted=%s)", 
-                                          dex, token_in, token_out, fee_tier, use_quoter_v2)
+                            # v2.3.0: Track failed pool address for actionable diagnostics
+                            failed_pool_addresses.append({
+                                "pool_address": pool_addr,
+                                "dex_id": dex,
+                                "pair": f"{token_in}/{token_out}",
+                                "fee": fee_tier,
+                                "reason": "V3_SLOT0_FAILED",
+                            })
+                            logger.warning("V3_SLOT0_FAILED: %s %s/%s fee=%d pool=%s (quoter_attempted=%s)", 
+                                          dex, token_in, token_out, fee_tier, pool_addr, use_quoter_v2)
                             # Record failure for auto-quarantine
                             qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "QUOTE_REVERT",
                                             details={"pool_address": pool_addr, "error": "slot0_failed"})
@@ -1157,5 +1168,8 @@ def collect_quotes(
                 # v2.2.0: Record valid quote for dynamic anchor calculation
                 if price_exact is not None and float(price_exact) > 0:
                     am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
+    
+    # v2.3.0: Add failed pool addresses to counts for artifact generation
+    counts["failed_pool_addresses"] = failed_pool_addresses
     
     return quotes_sample, rejected_quotes, counts

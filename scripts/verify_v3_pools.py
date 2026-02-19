@@ -4,9 +4,11 @@
 This script queries the Uniswap V3 and SushiSwap V3 factories to verify
 that pool addresses exist for given token pairs before adding them to config.
 
+v2.3.0: Tokens resolved from config/core_tokens.yaml (no hardcoding).
+
 Usage:
     python scripts/verify_v3_pools.py                    # Verify default pairs
-    python scripts/verify_v3_pools.py --pairs LINK/USDC ARB/USDT
+    python scripts/verify_v3_pools.py --pairs LINK/USDC ARB/USDT GMX/USDC UNI/WETH
     python scripts/verify_v3_pools.py --output pools.json
 """
 from __future__ import annotations
@@ -17,12 +19,18 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 try:
     from web3 import Web3
 except ImportError:
     print("ERROR: web3 not installed. Run: pip install web3")
+    sys.exit(1)
+
+try:
+    import yaml
+except ImportError:
+    print("ERROR: PyYAML not installed. Run: pip install pyyaml")
     sys.exit(1)
 
 # RPC
@@ -34,18 +42,34 @@ FACTORIES = {
     "sushiswap_v3": "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e",
 }
 
-# Tokens on Arbitrum (checksummed)
-TOKENS = {
-    "WETH": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
-    "USDC": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-    "USDT": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
-    "WBTC": "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
-    "ARB": "0x912CE59144191C1204E64559FE8253a0e49E6548",
-    "LINK": "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
-    "wstETH": "0x5979D7b546E38E414F7E9822514be443A4800529",
-    "GMX": "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a",
-    "DAI": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
-}
+
+def load_tokens_from_core_yaml(chain: str = "arbitrum_one") -> Dict[str, str]:
+    """
+    Load token addresses from config/core_tokens.yaml.
+    
+    v2.3.0: Tokens are no longer hardcoded - resolved from canonical config.
+    
+    Returns:
+        Dict mapping symbol -> checksummed address
+    """
+    config_path = Path(__file__).parent.parent / "config" / "core_tokens.yaml"
+    if not config_path.exists():
+        print(f"WARNING: core_tokens.yaml not found at {config_path}, using fallback")
+        return {}
+    
+    with open(config_path) as f:
+        data = yaml.safe_load(f)
+    
+    chain_tokens = data.get(chain, {})
+    result = {}
+    for symbol, token_info in chain_tokens.items():
+        if isinstance(token_info, dict) and "address" in token_info:
+            result[symbol] = token_info["address"]
+    return result
+
+
+# Load tokens from config (v2.3.0 - no hardcoding)
+TOKENS = load_tokens_from_core_yaml()
 
 # Default pairs to verify (expansion targets)
 DEFAULT_PAIRS = [
@@ -57,6 +81,8 @@ DEFAULT_PAIRS = [
     ("ARB", "USDC"),
     ("WETH", "USDC"),
     ("WETH", "USDT"),
+    ("GMX", "USDC"),   # v2.3.0: added for triangular closing
+    ("UNI", "WETH"),   # v2.3.0: added for DEX diversity
 ]
 
 # Fee tiers to check

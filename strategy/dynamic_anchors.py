@@ -328,14 +328,18 @@ class DynamicAnchorManager:
         active_pairs = 0
         total_samples = 0
         dynamic_ready_count = 0  # v2.3.0: Pairs with enough samples for dynamic anchor
+        pairs_not_ready: List[str] = []  # v2.3.0: Pairs still on yaml_fallback
         
-        for pair_data in self._pairs.values():
+        for pair, pair_data in self._pairs.items():
             valid_samples = pair_data.get_valid_samples(max_age)
             if valid_samples:
                 active_pairs += 1
                 total_samples += len(valid_samples)
                 if len(valid_samples) >= min_samples:
                     dynamic_ready_count += 1
+                else:
+                    # v2.3.0: Track pairs that need more samples
+                    pairs_not_ready.append(f"{pair} ({len(valid_samples)}/{min_samples})")
         
         # v2.3.0: Compute coverage rate (pairs ready for dynamic anchoring)
         coverage_rate = 0.0
@@ -348,6 +352,9 @@ class DynamicAnchorManager:
             "dynamic_ready_count": dynamic_ready_count,  # v2.3.0: Ready for dynamic anchor
             "coverage_rate": coverage_rate,  # v2.3.0: Fraction of pairs with dynamic data
             "total_samples": total_samples,
+            # v2.3.0: List pairs still on yaml_fallback (actionable)
+            "pairs_on_yaml_fallback": pairs_not_ready[:10],  # Limit to 10 for artifact size
+            "pairs_on_yaml_fallback_count": len(pairs_not_ready),
             "config": {
                 "min_samples": self.config.get("min_samples"),
                 "max_sample_age_seconds": self.config.get("max_sample_age_seconds"),

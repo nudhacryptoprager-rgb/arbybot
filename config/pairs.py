@@ -158,24 +158,51 @@ def load_pairs(
     chain: str,
     config: Optional[Dict[str, Any]] = None,
     use_intent: bool = False,
+    force_intent: bool = False,
 ) -> List[PairConfig]:
     """
     Load pairs for a chain with full token info.
     
     Priority:
-    1. If config has pairs section, use it (runtime override)
-    2. If use_intent=True, fallback to intent.txt
-    3. If neither, return empty list
+    1. If force_intent=True, use intent.txt directly (ignore config pairs)
+    2. If config has pairs section, use it (runtime override)
+    3. If use_intent=True, fallback to intent.txt
+    4. If neither, return empty list
     
     Args:
         chain: Chain key (e.g. "arbitrum_one")
         config: Optional YAML config dict with pairs section
         use_intent: Whether to fallback to intent.txt
+        force_intent: If True, use intent.txt directly (v2.3.0 intent_verified mode)
         
     Returns:
         List of PairConfig objects with resolved addresses/decimals
     """
     result = []
+    
+    # v2.3.0: force_intent bypasses config pairs entirely
+    if force_intent:
+        try:
+            from discovery.intent_loader import get_intent_universe
+            universe = get_intent_universe()
+            intent_pairs = universe.get_pairs_for_chain(chain)
+            for pair in intent_pairs:
+                in_addr, in_dec = resolve_token_info(chain, pair.token_a)
+                out_addr, out_dec = resolve_token_info(chain, pair.token_b)
+                
+                result.append(PairConfig(
+                    chain=chain,
+                    token_in=pair.token_a,
+                    token_out=pair.token_b,
+                    token_in_address=in_addr,
+                    token_out_address=out_addr,
+                    token_in_decimals=in_dec,
+                    token_out_decimals=out_dec,
+                    fee_tiers=[500, 3000],  # default for intent pairs
+                ))
+            return result
+        except ImportError:
+            pass  # Fall through to config pairs
     
     # Try config pairs first
     if config:
