@@ -43,10 +43,12 @@ rpc_timeout_seconds: 10
 rpc_retries: 3
 rpc_backoff_base_ms: 500
 
-# 2 DEXes for cross-DEX arbitrage
+# 3 DEXes for cross-DEX arbitrage (v2.3.0: camelot_v3 added for DIVERSITY_ROUTES_LOW fix)
+# camelot_v3 uses Algebra adapter (adapter_type: algebra in dexes.yaml)
 dexes:
   - uniswap_v3
   - sushiswap_v3
+  - camelot_v3
 
 # M5 pairs: ONLY pairs with verified pool addresses on BOTH DEXes
 # Pairs without pool addresses on all configured DEXes will be rejected as POOL_MISSING
@@ -139,6 +141,13 @@ pools:
   # === LINK/USDC (v2.1.0 Step 10) ===
   # Note: 500 tier had QUOTE_ZERO_OUT - use 3000 only
   uniswap_v3_LINK_USDC_3000: "0xbBe36e6f0331C6a36AB44Bc8421E28E1a1871C1e"
+  # === CAMELOT V3 (v2.3.0 - Algebra, dynamic fees, use fee=0) ===
+  # Verified via Camelot factory 0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B on 2026-02-19
+  camelot_v3_WETH_USDC_0: "0x8e295789c9465487074a65b1ae9Ce0351172393f"
+  camelot_v3_WETH_USDT_0: "0xc31E54c7a869B9FCBECC14363CF510d1c41fa443"
+  camelot_v3_ARB_WETH_0: "0xcDA53B1F66614552F834cEeF671A0aBa41d04c1e"
+  camelot_v3_LINK_WETH_0: "0x6Cb72EB0fEa821d4F7Ef6F3D09b6d36Ca8f57BF4"
+  camelot_v3_ARB_USDC_0: "0xfaE2AE0a9f87FD35b5b0E24B47BAC796A7EEfEa1"
 
 # Disabled pools (machine-readable quarantine, v2.1.0-fix)
 # Reason codes: PRICE_SANITY_FAILED, QUOTE_ZERO_OUT, SLOT0_EXTREME, LOW_LIQUIDITY

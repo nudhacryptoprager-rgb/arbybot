@@ -392,3 +392,176 @@ class TestFailoverRealistic:
         # Just verify it's importable - value depends on env
         assert isinstance(FAILOVER_STRESS_COUNT, int)
         assert FAILOVER_STRESS_COUNT >= 0
+
+
+class TestFailoverWithMockedErrors:
+    """Test v2.3.0: Realistic failover with mocked HTTP errors.
+    
+    These tests simulate actual timeout/429 failures and verify
+    the router correctly fails over to secondary endpoints.
+    """
+    
+    def test_rpc_provider_failover_on_timeout(self):
+        """RPC provider should fail over when primary times out (mock test)."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from chains.providers import RPCProvider
+        
+        # Create provider with 2 endpoints
+        provider = RPCProvider(
+            chain_id=42161,
+            rpc_urls=[
+                "https://primary.example.com/rpc",
+                "https://secondary.example.com/rpc",
+            ],
+            timeout_seconds=5,
+        )
+        
+        # Track which URLs were called
+        called_urls = []
+        
+        async def mock_post(url, **kwargs):
+            called_urls.append(url)
+            if "primary" in url:
+                # Primary times out
+                import httpx
+                raise httpx.TimeoutException("Connection timed out")
+            else:
+                # Secondary succeeds
+                mock_response = MagicMock()
+                mock_response.json = MagicMock(return_value={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": "0x12345"
+                })
+                return mock_response
+        
+        async def run_test():
+            # Mock the httpx client
+            mock_client = AsyncMock()
+            mock_client.post = mock_post
+            provider._client = mock_client
+            
+            result = await provider.call("eth_blockNumber")
+            
+            # Should have called both endpoints
+            assert len(called_urls) == 2
+            assert "primary" in called_urls[0]
+            assert "secondary" in called_urls[1]
+            
+            # Result should be from secondary
+            assert result.result == "0x12345"
+            
+            # Stats should reflect failover
+            primary_stats = provider.stats["https://primary.example.com/rpc"]
+            secondary_stats = provider.stats["https://secondary.example.com/rpc"]
+            
+            assert primary_stats.failed_requests == 1
+            assert secondary_stats.successful_requests == 1
+        
+        asyncio.get_event_loop().run_until_complete(run_test())
+    
+    def test_rpc_provider_failover_on_429(self):
+        """RPC provider should fail over when primary returns 429 (rate limit)."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from chains.providers import RPCProvider
+        
+        provider = RPCProvider(
+            chain_id=42161,
+            rpc_urls=[
+                "https://primary.example.com/rpc",
+                "https://secondary.example.com/rpc",
+            ],
+            timeout_seconds=5,
+        )
+        
+        called_urls = []
+        
+        async def mock_post(url, **kwargs):
+            called_urls.append(url)
+            if "primary" in url:
+                # Primary returns rate limit error
+                mock_response = MagicMock()
+                mock_response.json = MagicMock(return_value={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {
+                        "code": -32005,
+                        "message": "rate limit exceeded"
+                    }
+                })
+                return mock_response
+            else:
+                mock_response = MagicMock()
+                mock_response.json = MagicMock(return_value={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": "0xABCDEF"
+                })
+                return mock_response
+        
+        async def run_test():
+            mock_client = AsyncMock()
+            mock_client.post = mock_post
+            provider._client = mock_client
+            
+            result = await provider.call("eth_getBalance", ["0x123", "latest"])
+            
+            assert len(called_urls) == 2
+            assert result.result == "0xABCDEF"
+            
+            # Primary should show failed, secondary should show success
+            primary_stats = provider.stats["https://primary.example.com/rpc"]
+            secondary_stats = provider.stats["https://secondary.example.com/rpc"]
+            
+            assert primary_stats.failed_requests == 1
+            assert primary_stats.last_error == "rate limit exceeded"
+            assert secondary_stats.successful_requests == 1
+        
+        asyncio.get_event_loop().run_until_complete(run_test())
+    
+    def test_rpc_provider_tracks_endpoints_used(self):
+        """After failover, endpoints_used should include both attempted endpoints."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from chains.providers import RPCProvider
+        
+        provider = RPCProvider(
+            chain_id=42161,
+            rpc_urls=[
+                "https://alchemy.example.com/rpc",
+                "https://infura.example.com/rpc",
+            ],
+            timeout_seconds=5,
+        )
+        
+        async def mock_post(url, **kwargs):
+            if "alchemy" in url:
+                import httpx
+                raise httpx.TimeoutException("timeout")
+            else:
+                mock_response = MagicMock()
+                mock_response.json = MagicMock(return_value={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": "0x1"
+                })
+                return mock_response
+        
+        async def run_test():
+            mock_client = AsyncMock()
+            mock_client.post = mock_post
+            provider._client = mock_client
+            
+            await provider.call("eth_chainId")
+            
+            # Count endpoints with requests > 0
+            endpoints_used = [
+                url for url, stats in provider.stats.items()
+                if stats.total_requests > 0
+            ]
+            
+            assert len(endpoints_used) == 2, "Both endpoints should have been attempted"
+        
+        asyncio.get_event_loop().run_until_complete(run_test())
