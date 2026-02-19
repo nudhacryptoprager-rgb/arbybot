@@ -91,16 +91,22 @@ pairs:
   - token_in: LINK
     token_out: USDC
     fee_tiers: [3000]
-  # v2.3.2: Cross-DEX pairs for unique_pairs >= 10
-  # NOTE: GMX/USDC and UNI/WETH moved to real_expanded.yaml (Uni-only, no Sushi pools)
-  # v2.3.3: PENDLE/WETH and RDNT/WETH verified cross-DEX
-  # Both pairs exist on Uniswap V3 with reasonable liquidity
-  - token_in: PENDLE
-    token_out: WETH
-    fee_tiers: [3000]
-  - token_in: RDNT
-    token_out: WETH
-    fee_tiers: [3000]
+  # ============================================================================
+  # PENDLE/WETH, RDNT/WETH DISABLED (v2.3.4)
+  # ============================================================================
+  # Reason: QuoterV2 returns 0 on both DEXes (low liquidity or wrong quoter path)
+  #         Fallback to slot0 makes these pairs DIAGNOSTIC ONLY (excluded from signals)
+  #         Keeping them active wastes RPC calls and generates reject noise
+  # RESTORE WHEN: QuoterV2 returns valid amounts (liquidity restored or quoter fixed)
+  # Evidence: ci_m5_gate_20260219_203054 (both pairs slot0 fallback)
+  # Pool addresses verified cross-DEX (Uni+Sushi exist), but quoter failing
+  # ============================================================================
+  # - token_in: PENDLE
+  #   token_out: WETH
+  #   fee_tiers: [3000]
+  # - token_in: RDNT
+  #   token_out: WETH
+  #   fee_tiers: [3000]
   # v2.3.2: WETH/DAI DISABLED - SUSPECT_LIQUIDITY (ticks_crossed=319) + PRICE_SANITY_FAILED (sushi)
   # Cross-dex verified but quality gates failing, needs quoter path investigation
   # TODO: Re-enable after fixing Sushi WETH/DAI quoting (Issue #PRICE_SANITY)
@@ -129,13 +135,13 @@ pools:
   # === ARB/WETH ===
   uniswap_v3_ARB_WETH_500: "0xC6F780497A95e246EB9449f5e4770916DCd6396A"
   uniswap_v3_ARB_WETH_3000: "0x92c63d0e701CAAe670C9415d91C474F686298f00"
-  sushiswap_v3_ARB_WETH_500: "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11"
+  # sushiswap_v3_ARB_WETH_500: v2.3.4 DISABLED (PRICE_SANITY_FAILED)
   sushiswap_v3_ARB_WETH_3000: "0xB3942c9FFA04efBC1Fa746e146bE7565c76E3dC1"
   # === LINK/WETH ===
   uniswap_v3_LINK_WETH_500: "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907"
   uniswap_v3_LINK_WETH_3000: "0x468b88941e7Cc0B88c1869d68ab6b570bCEF62Ff"
   sushiswap_v3_LINK_WETH_500: "0x942E53ED315Db6451AdCd601D4D08f059F88C77f"
-  sushiswap_v3_LINK_WETH_3000: "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65"
+  # sushiswap_v3_LINK_WETH_3000: v2.3.4 DISABLED (PRICE_SANITY_FAILED)
   # === GMX/WETH (uniswap pools disabled - see disabled_pools) ===
   sushiswap_v3_GMX_WETH_500: "0xe7988687004933525734Da744102ea8E0e472A91"
   sushiswap_v3_GMX_WETH_3000: "0x2AB937e744B6E067c55329838A587d1Cf50C874f"
@@ -147,28 +153,29 @@ pools:
   # === ARB/USDC (sushi 3000 disabled - see disabled_pools) ===
   uniswap_v3_ARB_USDC_500: "0xb0f6cA40411360c03d41C5fFc5F179b8403CdcF8"
   uniswap_v3_ARB_USDC_3000: "0xaEBDcA1Bc8d89177EbE2308d62af5e74885DcCc3"
-  sushiswap_v3_ARB_USDC_500: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
+  # sushiswap_v3_ARB_USDC_500: v2.3.4 DISABLED (PRICE_SANITY_FAILED)
   # === WBTC/USDC ===
   uniswap_v3_WBTC_USDC_500: "0x0E4831319A50228B9e450861297aB92dee15B44F"
   uniswap_v3_WBTC_USDC_3000: "0x6985cb98CE393FCE8d6272127F39013f61e36166"
   sushiswap_v3_WBTC_USDC_500: "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"
-  sushiswap_v3_WBTC_USDC_3000: "0x4E5c883d6e9cCE0be8E464C3066bCFF036Da674a"
+  # sushiswap_v3_WBTC_USDC_3000: v2.3.4 DISABLED (PRICE_SANITY_FAILED)
   # === LINK/USDC (v2.1.0 Step 10) ===
   # Note: 500 tier had QUOTE_ZERO_OUT - use 3000 only
   uniswap_v3_LINK_USDC_3000: "0xbBe36e6f0331C6a36AB44Bc8421E28E1a1871C1e"
-  # === GMX/USDC (v2.3.0 Step 5) ===
-  # Note: GMX/WETH works on SushiSwap, GMX/USDC for triangular closing
-  # Verified via factory.getPool() on 2026-02-19 (SushiSwap has no GMX/USDC pool)
-  uniswap_v3_GMX_USDC_3000: "0x135E49cC315fED87F989e072ee11132686CF84F3"
-  # === UNI/WETH (v2.3.0 Step 5) ===
-  # Verified via factory.getPool() on 2026-02-19 (SushiSwap has no UNI/WETH fee=3000)
-  uniswap_v3_UNI_WETH_3000: "0xC24f7d8E51A64dc1238880BD00bb961D54cbeb29"
-  # === PENDLE/WETH (v2.3.3 - cross-DEX verified 2026-02-19) ===
-  uniswap_v3_PENDLE_WETH_3000: "0xdbaeB7f0DFe3a0AAFD798CCECB5b22E708f7852c"
-  sushiswap_v3_PENDLE_WETH_3000: "0xFf86f3Dbc7D289e786767f15Af8eDfcCDE313f99"
-  # === RDNT/WETH (v2.3.3 - cross-DEX verified 2026-02-19) ===
-  uniswap_v3_RDNT_WETH_3000: "0x446BF9748B4eA044dd759d9B9311C70491dF8F29"
-  sushiswap_v3_RDNT_WETH_3000: "0x5Bc248a30B247Eb4A6f11081854CE8e2168E1EF9"
+  # === GMX/USDC (REMOVED v2.3.4 - Uni-only, no cross-DEX) ===
+  # Moved to real_expanded.yaml - SushiSwap has no GMX/USDC pool
+  # uniswap_v3_GMX_USDC_3000: "0x135E49cC315fED87F989e072ee11132686CF84F3"
+  # === UNI/WETH (REMOVED v2.3.4 - Uni-only, no cross-DEX) ===
+  # Moved to real_expanded.yaml - SushiSwap has no UNI/WETH fee=3000
+  # uniswap_v3_UNI_WETH_3000: "0xC24f7d8E51A64dc1238880BD00bb961D54cbeb29"
+  # === PENDLE/WETH (DISABLED v2.3.4 - QuoterV2 returning 0) ===
+  # Kept for future re-enable when quoter fixed
+  # uniswap_v3_PENDLE_WETH_3000: "0xdbaeB7f0DFe3a0AAFD798CCECB5b22E708f7852c"
+  # sushiswap_v3_PENDLE_WETH_3000: "0xFf86f3Dbc7D289e786767f15Af8eDfcCDE313f99"
+  # === RDNT/WETH (DISABLED v2.3.4 - QuoterV2 returning 0) ===
+  # Kept for future re-enable when quoter fixed
+  # uniswap_v3_RDNT_WETH_3000: "0x446BF9748B4eA044dd759d9B9311C70491dF8F29"
+  # sushiswap_v3_RDNT_WETH_3000: "0x5Bc248a30B247Eb4A6f11081854CE8e2168E1EF9"
   # === WETH/DAI (v2.3.2 - DISABLED, see pairs section comment) ===
   # Verified via factory.getPool() on 2026-02-19 (both DEXes have pools)
   # Kept for future re-enable; remove fee=100 pool (wrong tier, never used)
@@ -218,6 +225,31 @@ disabled_pools:
     detail: "price_exact~60.96 vs anchor 1980 (scaling/path error)"
     evidence_run: "ci_m5_gate_20260219_140542"
     disabled_date: "2026-02-19"
+  # v2.3.4: Additional PRICE_SANITY_FAILED pools (fee=500 low liquidity)
+  sushiswap_v3_ARB_WETH_500:
+    address: "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11"
+    reason: "PRICE_SANITY_FAILED"
+    detail: "deviation 6641bps > max 5000bps, low liquidity fee tier"
+    evidence_run: "ci_m5_gate_20260219_203054"
+    disabled_date: "2026-02-19"
+  sushiswap_v3_ARB_USDC_500:
+    address: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
+    reason: "PRICE_SANITY_FAILED"
+    detail: "deviation >5000bps, low liquidity fee tier"
+    evidence_run: "ci_m5_gate_20260219_203054"
+    disabled_date: "2026-02-19"
+  sushiswap_v3_LINK_WETH_3000:
+    address: "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65"
+    reason: "PRICE_SANITY_FAILED"
+    detail: "deviation >5000bps vs anchor"
+    evidence_run: "ci_m5_gate_20260219_203054"
+    disabled_date: "2026-02-19"
+  sushiswap_v3_WBTC_USDC_3000:
+    address: "0x4E5c883d6e9cCE0be8E464C3066bCFF036Da674a"
+    reason: "PRICE_SANITY_FAILED"
+    detail: "deviation >5000bps vs anchor"
+    evidence_run: "ci_m5_gate_20260219_203054"
+    disabled_date: "2026-02-19"
 
 # Token addresses (Arbitrum)
 tokens:
@@ -263,8 +295,8 @@ tokens_anchor_price:
   ARB_USDC: 0.11      # on-chain observed ~0.114 (2026-02-17)
   WBTC_USDC: 68000    # on-chain median ~68019 (2026-02-17)
   LINK_USDC: 9.0      # on-chain valid ~8.79; sushi fee=3000 (~19.9) is bad pool
-  PENDLE_WETH: 0.0006  # v2.3.3: on-chain sqrtPriceX96 -> ~0.00061 (2026-02-19)
-  RDNT_WETH: 0.000003  # v2.3.3: on-chain sqrtPriceX96 -> ~0.000003 (2026-02-19)
+  # PENDLE_WETH: 0.0006  # v2.3.4: DISABLED (quoter returning 0)
+  # RDNT_WETH: 0.000003  # v2.3.4: DISABLED (quoter returning 0)
 
 # Quote sizing: 1 ETH
 quote_amount_in_wei: "1000000000000000000"

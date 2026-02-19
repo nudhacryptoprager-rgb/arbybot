@@ -265,6 +265,11 @@ def main() -> int:
     parser.add_argument("--pairs", nargs="+", help="Pairs to verify (e.g., LINK/USDC ARB/USDT)")
     parser.add_argument("--output", "-o", help="Output JSON file path")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    # v2.3.4: Cross-DEX requirement for minimal config
+    parser.add_argument(
+        "--require-cross-dex", action="store_true",
+        help="Fail if any pair lacks pools on BOTH Uniswap and SushiSwap"
+    )
     args = parser.parse_args()
     
     # Parse pairs
@@ -276,6 +281,8 @@ def main() -> int:
     print(f"Pool Verifier (V3 Factories on Arbitrum)")
     print(f"RPC: {RPC_URL}")
     print(f"Pairs to check: {len(pairs)}")
+    if args.require_cross_dex:
+        print(f"Mode: require-cross-dex (fail if any pair is single-DEX only)")
     print("=" * 50)
     
     results = verify_pools(pairs, verbose=args.verbose)
@@ -307,6 +314,24 @@ def main() -> int:
         for p in results["missing_pools"]:
             print(f"  - {p}")
     
+    # v2.3.4: Cross-DEX check
+    single_dex_pairs = []
+    if args.require_cross_dex:
+        # Check each pair has pools on BOTH uniswap_v3 AND sushiswap_v3
+        for pair_key in results["pairs_checked"]:
+            dexes_for_pair = set()
+            for pool in results["active_pools"]:
+                if pool["pair"] == pair_key:
+                    dexes_for_pair.add(pool["dex"])
+            if len(dexes_for_pair) < 2:
+                single_dex_pairs.append((pair_key, list(dexes_for_pair)))
+        
+        if single_dex_pairs:
+            print(f"\n[CROSS-DEX CHECK FAILED] The following pairs lack cross-DEX pools:")
+            for pair, dexes in single_dex_pairs:
+                dex_str = dexes[0] if dexes else "none"
+                print(f"  - {pair}: only {dex_str}")
+    
     # Output
     if args.output:
         output_path = Path(args.output)
@@ -324,11 +349,19 @@ def main() -> int:
         print(f"\nResults saved to: {default_path}")
     
     # Exit code based on results
+    if args.require_cross_dex and single_dex_pairs:
+        print("\n[FAIL] --require-cross-dex: some pairs are single-DEX only")
+        print("       These pairs should NOT be added to real_minimal.yaml")
+        return 1
+    
     if results["summary"]["pairs_missing_all"] > 0:
         print("\n[WARN] Some pairs have no pools on any DEX")
         return 0  # Still success, just warning
     
-    print("\n[OK] All pairs have at least one verified pool")
+    if args.require_cross_dex:
+        print("\n[OK] All pairs have cross-DEX pools (both Uniswap and SushiSwap)")
+    else:
+        print("\n[OK] All pairs have at least one verified pool")
     return 0
 
 

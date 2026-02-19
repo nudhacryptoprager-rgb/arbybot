@@ -2,8 +2,9 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-19  
-**Gate Version**: `ci_m5_0_gate.py` v2.3.3  
-**Tests**: 940 passed, 1 skipped
+**Gate Version**: `ci_m5_0_gate.py` v2.3.4  
+**Tests**: 940 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260219_210425`
 
 ---
 

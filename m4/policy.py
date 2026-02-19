@@ -289,16 +289,30 @@ class Thresholds:
     AGG_DATA_RUN_RATE_FAIL = 0.30  # FAIL_QUALITY if data_run_rate < 30%
     
     # v1.12.0: Diversity thresholds (FAIL, not just WARN)
-    # v2.3.3: TARGET reduced from 10 to 8 to match current cross-DEX quoter coverage.
-    # With truth_mode_m42=true, only quoter_v2 pairs generate signals. Currently:
-    # - 5 cross-DEX pairs with quoter_v2 (ARB/WETH, WBTC/WETH, WETH/USDC, WETH/USDT, wstETH/WETH)
-    # - 3 uni-only pairs with signals from fee-tier spread (ARB/USDC, LINK/WETH, WBTC/USDC)
-    # PENDLE/WETH, RDNT/WETH use slot0 (quoter failing) -> excluded from signals.
-    # Target will be restored to 10 when more pairs have working quoter on both DEXes.
+    # ============================================================================
+    # DIVERSITY_PAIRS_TARGET RESTORE CONTRACT (v2.3.4):
+    # ============================================================================
+    # Currently: 8 (reduced from 10 in v2.3.3)
+    # Reason: PENDLE/WETH, RDNT/WETH use slot0 fallback (quoter_v2 returning 0)
+    #         These pairs excluded from signals when truth_mode_m42=true
+    # RESTORE TO 10 WHEN:
+    #   (a) >= 10 pairs have working quoter_v2 on BOTH DEXes, OR
+    #   (b) PENDLE/RDNT quoter issues resolved (liquidity restored), OR
+    #   (c) 2+ new cross-DEX pairs added with quoter_v2 support
+    # TRACKING: GitHub issue or DEV REPORT for quoter investigation
+    # ============================================================================
+    # Current signal-generating pairs (8):
+    # - 5 cross-DEX quoter_v2: ARB/WETH, WBTC/WETH, WETH/USDC, WETH/USDT, wstETH/WETH
+    # - 3 uni-only fee-tier spread: ARB/USDC, LINK/WETH, WBTC/USDC
     DIVERSITY_PAIRS_TARGET = 8     # WARN_DIVERSITY_LOW if unique_pairs < 8
     DIVERSITY_PAIRS_MIN = 3        # v1.12.0: FAIL if unique_pairs < 3
-    # v2.3.2: TARGET reduced from 4 to 2 to match 2-DEX reality (uniswap_v3+sushiswap_v3)
-    # With 2 DEXes, max cross-dex routes = 2. Restore to 4 when 3rd DEX (camelot_v3) is added.
+    # ============================================================================
+    # DIVERSITY_ROUTES_TARGET RESTORE CONTRACT (v2.3.2):
+    # ============================================================================
+    # Currently: 2 (reduced from 4 in v2.3.2)
+    # Reason: Only 2 DEXes active (uniswap_v3, sushiswap_v3) = max 2 cross-dex routes
+    # RESTORE TO 4 WHEN: 3rd DEX (camelot_v3) integrated with Algebra quoter
+    # ============================================================================
     DIVERSITY_ROUTES_TARGET = 2    # WARN if unique_routes_cross_dex < 2
     DIVERSITY_ROUTES_MIN = 2       # v1.12.0: FAIL if unique_routes < 2
     
