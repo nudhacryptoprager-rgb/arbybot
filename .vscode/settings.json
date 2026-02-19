@@ -1,8 +1,0 @@
-{
-    "claudeCode.useTerminal": true,
-    "chat.tools.terminal.autoApprove": {
-        "ConvertFrom-Json": true,
-        "ConvertTo-Json": true,
-        "py": true
-    }
-}

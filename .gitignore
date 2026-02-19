@@ -101,6 +101,7 @@ Thumbs.db
 
 !.vscode/
 !.vscode/tasks.json
+.vscode/settings.json
 !.github/
 !.github/pull_request_template.md
 !.github/workflows/
