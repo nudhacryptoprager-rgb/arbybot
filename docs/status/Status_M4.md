@@ -1,8 +1,9 @@
 # Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
-**Updated**: 2026-02-19  
-**Gate Version**: v2.3.4  
+**Updated**: 2026-02-20  
+**Contract Version**: v2.3.4 (milestone docs/policy)  
+**Script Version**: `ci_m4_execution_gate.py` v1.9.3  
 **Policy Version**: 2.0.8 (updated DIVERSITY_PAIRS_TARGET=8)  
 **Engine Version**: v2.3.0  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
@@ -35,7 +36,8 @@
 
 **Snapshot (2026-02-19 v2.3.4)**: From `m4_stability_agg.json` (canonical source): runs_in_window=79, data_run_rate=1.0, pass_rate=1.0, **total_net_usdc=$4322.08**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=10, POOL_MISSING=1. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **PENDLE/WETH, RDNT/WETH DISABLED**: pairs disabled in config (quoter returning 0). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, but `profit_truth_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode). For ws/multicall/failover see [Status_M5_0.md](Status_M5_0.md).
 
-> **NOTE: DIVERSITY thresholds adjusted (v2.3.4)**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only). Target will be restored when more pairs have working quoter on both DEXes. See restore contract in `m4/policy.py`.
+> **NOTE: DIVERSITY thresholds adjusted (v2.3.4)**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
+> **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when ≥10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
 **Evidence (ci_m5_gate_20260219_210425 - v2.3.4 run)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
@@ -44,10 +46,23 @@
 - See [Status_M5_0.md](Status_M5_0.md) for multicall/failover/infra evidence.
 
 **Quality Note**: 
-- **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_CRITICAL_REJECTS, WARN_PROFIT_DIAGNOSTIC`
+- **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_PROFIT_DIAGNOSTIC`
+- **WARN_EXCLUDED_SIGNALS root cause**: 2 signals from WBTC/WETH, ARB/WETH excluded due to `MIXED_SOURCE` (one DEX quoter_v2, other slot0)
 - **Window-level** (`_latest.agg_reasons`): `[]` (no diversity warnings with updated thresholds)
 - **Clean PnL AVAILABLE**: `execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`
 - **v2.3.4 deferred**: PENDLE/RDNT quoter investigation (slot0 fallback, pairs DISABLED)
+
+## [!] M4 Close Plan (v2.3.4)
+
+> **Problem**: M4 close depends on `roundtrip.profitable_count > 0`, which requires market arb opportunity.  
+> **Current state**: `roundtrip.profitable_count=0`, best=-16.95 bps (no arb in market).
+
+**Deterministic M4 Close Criteria (choose one):**
+1. **Time-bound window**: N=100 consecutive runs with `agg_status=PASS` and `profit_is_diagnostic=true` is acceptable for simulate-only
+2. **Synthetic test**: Create fixture with profitable roundtrip to prove code path works (offline-only gate)
+3. **Expanded pairs**: Add 3rd DEX (camelot_v3) or more pairs to increase chance of arb opportunity
+
+**Recommended**: Option 1 (time-bound window) for simulate-only M4. Real execution (M4.3) requires actual profitable roundtrip.
 
 **Quarantined Pools (v2.1.0-fix, 2026-02-18):**
 
@@ -221,7 +236,8 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 | Track | Version | Scope | Notes |
 |-------|---------|-------|-------|
 | **Policy Version** | 2.0.8 | Thresholds, gates, DoD rules | v2.1.0-fix: WBTC pairs re-enabled (10 pairs total) |
-| **Gate Version** | 2.1.0 | ci_m4_execution_gate.py, ci_m5_0_gate.py | v2.1.0-fix: --refresh-rolling-strict |
+| **M4 Gate Version** | 1.9.3 | `ci_m4_execution_gate.py` | M4 execution profit gate |
+| **M5_0 Gate Version** | 2.3.2 | `ci_m5_0_gate.py` | See [Status_M5_0.md](Status_M5_0.md) |
 | **Engine Version** | 2.1.0-fix | quotes.py, run_scan_real.py, roundtrip.py | Decimal fix, gas_override, L1 calldata |
 | **Schema Version** | 3.2.0 | Artifact JSON structure | Backward compatible |
 
@@ -513,7 +529,7 @@ python -c "from core.rpc_urls import validate_chain_rpc_consistency; print(valid
 # 2. Reset rolling window
 python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window
 
-# 3. Re-run online M5_0 until quotes_fetched > 0
+# 3. Re-run online M5_0 (generates rolling artifacts) - see Status_M5_0.md for details
 python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 
 # 4. Run M4 profit gate on valid runDir

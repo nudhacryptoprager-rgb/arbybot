@@ -18,6 +18,8 @@ Exit codes:
 """
 
 import argparse
+import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -39,6 +41,13 @@ ALLOWED_DEV_REPORTS = [
     "docs/DEV_REPORT_LATEST.md",
     "docs/DEV_REPORT_CANONICAL_UA.md",
 ]
+
+# Script version mappings for Status file validation (v1.3.0)
+# Map: Status file -> (script file, version regex pattern in Status)
+STATUS_VERSION_MAPPINGS = {
+    "docs/status/Status_M5_0.md": ("scripts/ci_m5_0_gate.py", r"ci_m5_0_gate\.py.*v(\d+\.\d+\.\d+)"),
+    "docs/status/Status_M4.md": ("scripts/ci_m4_execution_gate.py", r"ci_m4_execution_gate\.py.*v(\d+\.\d+\.\d+)"),
+}
 
 # Keys that should never appear in TRACKED files
 # v1.1.0: Only check tracked files, untracked files are INFO-level
@@ -203,6 +212,94 @@ def check_dev_report_bloat() -> List[str]:
         issues.append(f"ERROR: Could not check DEV_REPORT files: {e}")
     
     return issues
+
+
+def extract_script_version(script_path: Path) -> str:
+    """Extract __version__ from a Python script."""
+    try:
+        content = script_path.read_text(encoding="utf-8")
+        match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+def check_status_version_consistency() -> List[str]:
+    """Check that Status files reference correct script versions (v1.3.0).
+    
+    Each Status file that references a script version must match the actual
+    __version__ in that script.
+    """
+    issues = []
+    
+    for status_file, (script_file, pattern) in STATUS_VERSION_MAPPINGS.items():
+        status_path = PROJECT_ROOT / status_file
+        script_path = PROJECT_ROOT / script_file
+        
+        if not status_path.exists() or not script_path.exists():
+            continue
+        
+        try:
+            status_content = status_path.read_text(encoding="utf-8")
+            match = re.search(pattern, status_content)
+            if match:
+                doc_version = match.group(1)
+                script_version = extract_script_version(script_path)
+                
+                if script_version and doc_version != script_version:
+                    issues.append(
+                        f"STATUS_VERSION_MISMATCH: {status_file} says {script_file} v{doc_version}, "
+                        f"but script has __version__={script_version}"
+                    )
+        except Exception as e:
+            issues.append(f"ERROR: Could not check {status_file}: {e}")
+    
+    return issues
+
+
+def check_dev_report_freshness() -> List[str]:
+    """Check that DEV_REPORT_LATEST.md contains current rolling timestamp (v1.3.0).
+    
+    The DEV_REPORT should contain the run_timestamp from run_summary_latest.json
+    to prevent stale reports.
+    """
+    issues = []
+    
+    dev_report_path = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
+    rolling_summary_path = PROJECT_ROOT / "data" / "runs" / "_rolling" / "run_summary_latest.json"
+    
+    if not dev_report_path.exists():
+        issues.append("DEV_REPORT_FRESHNESS: docs/DEV_REPORT_LATEST.md not found")
+        return issues
+    
+    if not rolling_summary_path.exists():
+        # No rolling artifacts = skip freshness check (offline-only mode)
+        return []
+    
+    try:
+        with open(rolling_summary_path, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+        
+        run_timestamp = summary.get("run_context", {}).get("run_timestamp", "")
+        if not run_timestamp:
+            return []  # No timestamp to check
+        
+        # Extract date portion (YYYY-MM-DD) for freshness check
+        timestamp_date = run_timestamp[:10]  # "2026-02-19"
+        
+        dev_report_content = dev_report_path.read_text(encoding="utf-8")
+        
+        # Check if the DEV_REPORT contains the timestamp date
+        if timestamp_date not in dev_report_content:
+            issues.append(
+                f"WARN: DEV_REPORT_FRESHNESS: docs/DEV_REPORT_LATEST.md may be stale "
+                f"(rolling timestamp {timestamp_date} not found)"
+            )
+            
+    except Exception as e:
+        issues.append(f"ERROR: Could not check DEV_REPORT freshness: {e}")
     
     return issues
 
@@ -259,6 +356,22 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: Only DEV_REPORT_LATEST.md tracked")
+    
+    print("\n[6] Checking Status version consistency...")
+    issues = check_status_version_consistency()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: Status files match script versions")
+    
+    print("\n[7] Checking DEV_REPORT freshness...")
+    issues = check_dev_report_freshness()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: DEV_REPORT_LATEST.md is fresh")
     
     # Summary
     print("\n" + "=" * 50)

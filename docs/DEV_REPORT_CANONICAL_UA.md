@@ -28,6 +28,33 @@ Provenance в DEV_REPORT_LATEST.md:
 - `code_identity.primary` копіюється з `run_summary_latest.run_context.code_identity`
 - НЕ використовувати локальний час або runDir timestamp
 
+## 0.1) UTF-8 Viewing (v2.3.4)
+
+PowerShell може показувати mojibake для українського тексту. Це **не пошкодження файлу**, а проблема кодування консолі.
+
+**Canonical viewing commands:**
+```powershell
+# Перегляд з правильним кодуванням (PowerShell 5.1)
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Get-Content docs/DEV_REPORT_LATEST.md -Encoding UTF8
+
+# Або через chcp
+chcp 65001 | Out-Null; Get-Content docs/DEV_REPORT_LATEST.md
+
+# VS Code (рекомендовано для review)
+code docs/DEV_REPORT_LATEST.md
+```
+
+**Перевірка чи є mojibake в файлі:**
+```powershell
+# Якщо це поверне 0 матчів - файл в порядку
+Get-ChildItem docs/*.md | ForEach-Object { 
+  $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+  $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+  if ($text -match 'Р|С|в') { Write-Host "POSSIBLE_MOJIBAKE: $($_.Name)" }
+}
+```
+
 ## 1) Вхідні дані, які обов'язково додаються до звіту
 
 Rolling (канонічний operational інтерфейс):

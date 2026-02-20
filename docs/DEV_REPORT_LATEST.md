@@ -12,47 +12,40 @@ config: config/real_minimal.yaml (profit profile)
 code_identity:
   primary: ts:2026-02-19T20:04:47.148356+00:00
   dirty: false
-  desc: v2.3.4 Rolling PASS + single DEV_REPORT policy
+  desc: v2.3.4 Version consistency + guardrails + M4-close plan
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4 simulate-only, v2.3.4 Rolling PASS confirmation
+goal (Roadmap пункт): M4 simulate-only, v2.3.4 version consistency and guardrails
 change_summary:
-  - UPDATE: Status_M4.md aligned with rolling facts (runDir=210425, runs=79, total=$4322.08)
-  - UPDATE: Gate Version bumped to v2.3.4
-  - FIX: PRICE_SANITY_FAILED pools disabled (sushi ARB/WETH, ARB/USDC, LINK/WETH, WBTC/USDC fee=500/3000)
-  - FIX: PENDLE/WETH, RDNT/WETH pairs disabled (quoter returning 0, slot0 fallback)
-  - FIX: UNI/WETH, GMX/USDC pools commented (Uni-only, no cross-DEX)
-  - ADD: DIVERSITY_PAIRS restore contract in m4/policy.py
-  - ADD: --require-cross-dex flag to verify_v3_pools.py
-  - VERIFIED: agg_status=PASS, agg_reasons=[] (no diversity warnings)
+  - FIX: Status_M5_0.md version contract (ci_m5_0_gate.py v2.3.2, not v2.3.4)
+  - ADD: check_repo_safety.py v1.3.0 - Status version consistency check
+  - ADD: check_repo_safety.py v1.3.0 - DEV_REPORT freshness check
+  - CLARIFY: Version semantics (Contract Version vs Script Version)
+  - ADD: M4-close plan (deterministic criteria, not luck-based)
+  - ADD: WARN_EXCLUDED_SIGNALS root cause (WBTC/WETH, ARB/WETH = MIXED_SOURCE)
+  - ADD: Diversity restore contract with verify_v3_pools.py --require-cross-dex
+  - ADD: UTF-8 viewing commands in DEV_REPORT_CANONICAL_UA.md
 touched_files:
-  - docs/status/Status_M4.md
-  - docs/status/Status_M5_0.md
-  - config/real_minimal.yaml
-  - m4/policy.py
-  - scripts/verify_v3_pools.py
-  - scripts/check_repo_safety.py (DEV_REPORT bloat guardrail)
+  - docs/status/Status_M4.md (version semantics, M4-close plan, WARN root cause)
+  - docs/status/Status_M5_0.md (version contract fix)
+  - scripts/check_repo_safety.py (v1.3.0: version + freshness checks)
+  - tests/unit/test_check_repo_safety.py (v1.3.0 tests)
+  - docs/DEV_REPORT_CANONICAL_UA.md (UTF-8 viewing)
   - docs/DEV_REPORT_LATEST.md
 
 ## 2) Commands Executed (лише факти)
 
-python -m pytest -q: PASS (940 passed, 1 skipped, 10.81s)
-python scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED (12.3s)
-python scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 3 --refresh-rolling --refresh-rolling-strict --prune-keep 50: PASS
-  - runDir: ci_m5_gate_20260219_210425
-  - run_timestamp: 2026-02-19T21:04:25+00:00
-  - quotes_total: 38
-  - quotes_fetched: 24
-  - pairs: 10 (cleaned minimal config)
-  - disabled_pools recognized: 10 (PRICE_SANITY_FAILED/quoter issues)
+python -m pytest tests/unit/test_check_repo_safety.py -v: PASS (11 passed, 0.15s)
+python scripts/check_repo_safety.py: PASS (v1.3.0, 7 checks, 0 warnings)
+  - [6] Status version consistency: OK
+  - [7] DEV_REPORT freshness: OK
 
 ## 3) Artifacts Attached (шляхи)
-rolling:
+rolling (unchanged from previous session):
   - data/runs/_rolling/_latest.json
   - data/runs/_rolling/run_summary_latest.json
   - data/runs/_rolling/m4_stability_agg.json
-run_dir_bundle (ONLINE):
+run_dir_bundle:
   - data/runs/ci_m5_gate_20260219_210425/reports
 
 ## 4) Key Results (числа з артефактів)

@@ -1,10 +1,14 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-02-19  
-**Gate Version**: `ci_m5_0_gate.py` v2.3.4  
-**Tests**: 940 passed, 1 skipped  
+**Updated**: 2026-02-20  
+**Script Version**: `ci_m5_0_gate.py` v2.3.2  
+**Contract Version**: v2.3.4 (milestone docs/policy)  
+**Tests**: 943 passed, 1 skipped  
 **Evidence runDir**: `ci_m5_gate_20260219_210425`
+
+> **Version Policy**: Script versions must match `__version__` in code (enforced by `check_repo_safety.py`).  
+> Contract Version = milestone policy version (docs/Roadmap alignment).
 
 ---
 
