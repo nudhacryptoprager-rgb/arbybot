@@ -1,17 +1,14 @@
-# Status: M4 (DEX-DEX Atomic Execution)
+﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
 **Updated**: 2026-02-20  
-**Contract Version**: v2.3.4 (milestone docs/policy)  
-**Script Version**: `ci_m4_execution_gate.py` v1.9.3  
-**Policy Version**: 2.0.8 (updated DIVERSITY_PAIRS_TARGET=8)  
-**Engine Version**: v2.3.0  
+**Policy**: DIVERSITY_PAIRS_TARGET=8  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
 > [!] **M4 NOT CLOSED**: `net_usdc` from rolling is DIAGNOSTIC (`profit_is_diagnostic=true`), not canonical DEX-DEX truth. Clean PnL available (`cost_model_available=true`), but requires `profit_truth_source=ROUNDTRIP_REAL` (currently `ONE_LEG_DIAGNOSTIC`).
 
-## v2.3.4 M4-specific Fixes (2026-02-19)
+## M4-specific Fixes (2026-02-19)
 
 | Step | Change | File | Description |
 |------|--------|------|-------------|
@@ -23,7 +20,7 @@
 
 > **NOTE**: M5_0 infra changes (multicall/failover/pool_missing_keys) moved to [Status_M5_0.md](Status_M5_0.md)
 
-## Status Separation (v2.0.7)
+## Status Separation
 
 | DoD | What it means | Current Status |
 |-----|---------------|----------------|
@@ -32,14 +29,14 @@
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS** (v2.3.4). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-19 v2.3.4)**: From `m4_stability_agg.json` (canonical source): runs_in_window=79, data_run_rate=1.0, pass_rate=1.0, **total_net_usdc=$4322.08**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=10, POOL_MISSING=1. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **PENDLE/WETH, RDNT/WETH DISABLED**: pairs disabled in config (quoter returning 0). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, but `profit_truth_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode). For ws/multicall/failover see [Status_M5_0.md](Status_M5_0.md).
+**Snapshot (2026-02-19)**: From `m4_stability_agg.json` (canonical source): runs_in_window=79, data_run_rate=1.0, pass_rate=1.0, **total_net_usdc=$4322.08**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=10, POOL_MISSING=1. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **PENDLE/WETH, RDNT/WETH DISABLED**: pairs disabled in config (quoter returning 0). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, but `profit_truth_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode). For ws/multicall/failover see [Status_M5_0.md](Status_M5_0.md).
 
-> **NOTE: DIVERSITY thresholds adjusted (v2.3.4)**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
+> **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when ≥10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
-**Evidence (ci_m5_gate_20260219_210425 - v2.3.4 run)**:
+**Evidence (ci_m5_gate_20260219_210425 - run)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
 - Counters: `execution_ready_count=0` (kill_switch_active=true), `would_execute_count=0`
 - Provenance: `run_timestamp=2026-02-19T21:04:25+00:00`
@@ -50,9 +47,9 @@
 - **WARN_EXCLUDED_SIGNALS root cause**: 2 signals from WBTC/WETH, ARB/WETH excluded due to `MIXED_SOURCE` (one DEX quoter_v2, other slot0)
 - **Window-level** (`_latest.agg_reasons`): `[]` (no diversity warnings with updated thresholds)
 - **Clean PnL AVAILABLE**: `execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`
-- **v2.3.4 deferred**: PENDLE/RDNT quoter investigation (slot0 fallback, pairs DISABLED)
+- **deferred**: PENDLE/RDNT quoter investigation (slot0 fallback, pairs DISABLED)
 
-## [!] M4 Close Plan (v2.3.4)
+## [!] M4 Close Plan
 
 > **Problem**: M4 close depends on `roundtrip.profitable_count > 0`, which requires market arb opportunity.  
 > **Current state**: `roundtrip.profitable_count=0`, best=-16.95 bps (no arb in market).
@@ -64,9 +61,9 @@
 
 **Recommended**: Option 1 (time-bound window) for simulate-only M4. Real execution (M4.3) requires actual profitable roundtrip.
 
-**Quarantined Pools (v2.1.0-fix, 2026-02-18):**
+**Quarantined Pools:**
 
-> **Migration (v2.1.0-fix)**: Manual comment-out pools deprecated. Now using `disabled_pools:` section in YAML (machine-readable quarantine with reasons).
+> **Migration**: Manual comment-out pools deprecated. Now using `disabled_pools:` section in YAML (machine-readable quarantine with reasons).
 
 | Pool | Address | Reason | Evidence Run |
 |------|---------|--------|--------------|
@@ -93,7 +90,7 @@
 
 **Result**: PRICE_SANITY_FAILED reduced from 12 → 5 (remaining are legitimate bad pools).  
 
-## Roadmap Progress Mapping (v2.1.0-fix)
+## Roadmap Progress Mapping
 
 > **Clarification**: M4 in Roadmap.md = "Execution v1 (DEX<->DEX atomic)". This section maps actual progress to Roadmap.
 
@@ -106,7 +103,7 @@
 | **M4: Post-trade realized accounting** | Compare simulated vs actual on-chain PnL | [NO] NOT STARTED |
 | **M4: On-chain atomic swap** | Real DEX<->DEX TX with profit | [NO] NOT STARTED |
 
-> **v2.1.0-fix Note**: Execution state machine now has `simulate_trade_execution()` stub that:
+> **Note**: Execution state machine now has `simulate_trade_execution()` stub that:
 > - Runs simulation flow (PENDING → SIMULATING → SIM_PASSED/SIM_FAILED)
 > - Checks ExecutionContext with kill_switch_active=True by default
 > - Records would_execute + blocker for diagnostics
@@ -114,16 +111,16 @@
 
 > **Note**: ROUNDTRIP_NOT_PROFITABLE is expected behavior - it means pre-trade simulation correctly identifies no arb opportunity in current market conditions. This is NOT a blocker for "pre-trade simulation gate" (working as designed), but IS a blocker for "execution readiness" (we won't execute losing trades).
 
-## [WARN] PROFIT REALISM WARNING (v2.1.0)
+## [WARN] PROFIT REALISM WARNING
 
 **Paper profit PROVEN** under simulated cost model (`gas=$0.10`, `slippage=5bps`).  
 **Profit realism NOT PROVEN** - round-trip shows actual losses:
 
 1. **ROUNDTRIP real_quote_count=3, profitable_count=0**: всі roundtrip opportunities NOT_PROFITABLE
 2. **BEST roundtrip: net_pnl_bps=-65.1** (WETH/USDC, uniswap_v3->sushiswap_v3)
-3. **SUSPECT_SPREAD signals excluded (v2.0.4)**: Spread > 500bps triggers `is_excluded_spread=true`
-4. **TOP_PAIR_NET_SHARE check active (v2.0.4)**: Single pair > 80% of net profit -> `FAIL_TOP_PAIR_DOMINANCE`
-5. **Unified gas model (v2.1.0)**: L2+L1 overhead в roundtrip та opportunity_engine
+3. **SUSPECT_SPREAD signals excluded**: Spread > 500bps triggers `is_excluded_spread=true`
+4. **TOP_PAIR_NET_SHARE check active**: Single pair > 80% of net profit -> `FAIL_TOP_PAIR_DOMINANCE`
+5. **Unified gas model**: L2+L1 overhead в roundtrip та opportunity_engine
 6. **L1 fee parameterized**: `l1_data_gas_units=2000`, `l1_gas_price_gwei=30.0` в config
 
 **M4.2 Blockers**:
@@ -133,7 +130,7 @@
 
 Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under declared cost model", NOT "realistic profit".
 
-## M4.2 Profit Truth Definition (v2.1.0)
+## M4.2 Profit Truth Definition
 
 > **FORMAL DEFINITION (binding):**
 > When `truth_mode_m42=true` in config:
@@ -149,15 +146,15 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 | **Live gas** | `eth_getGasPrice` + WETH/USDC live price | [OK] In opportunity_engine + roundtrip |
 | **Live slippage** | `(small_quote - target_quote) / target_quote` | [TODO] probe_slippage() ready, artifact integration pending |
 
-**Reality Gates in Effect (v2.1.0):**
+**Reality Gates in Effect:**
 | Gate | Source | Threshold | Status |
 |------|--------|-----------|--------|
 | `PRICE_SANITY_FAILED` | `strategy/quotes.py` via `core.validators.check_price_sanity` | `price_sanity_max_deviation_bps` | [OK] CONNECTED (quoter-path) |
 | `SUSPECT_LIQUIDITY` | `strategy/quotes.py` | `ticks>15` or `gas>500k` | [OK] ACTIVE |
 | `SUSPECT_SPREAD_HARD` | `engine/opportunity_engine.py` | `spread > SUSPECT_SPREAD_BPS_HARD` (500bps) | [OK] ACTIVE |
 | `NOTIONAL_DRIFT` | `engine/opportunity_engine.py` | `|notional - target| / target > max_drift%` | [OK] ACTIVE |
-| `MIXED_SOURCE` | `engine/opportunity_engine.py` | one leg quoter_v2, one leg slot0 | [OK] v2.1.0 ACTIVE |
-| `SLOT0_DIAGNOSTIC` | `engine/opportunity_engine.py` | both legs slot0 | [OK] v2.1.0 ACTIVE |
+| `MIXED_SOURCE` | `engine/opportunity_engine.py` | one leg quoter_v2, one leg slot0 | [OK] ACTIVE |
+| `SLOT0_DIAGNOSTIC` | `engine/opportunity_engine.py` | both legs slot0 | [OK] ACTIVE |
 
 **M4.2 Quote Source Policy:**
 | Source | When Used | M4.2 Status |
@@ -179,12 +176,12 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 | **M4 Online Profit (core truth)** | Real profitability | `run_mode=REGISTRY_REAL`, N>=5 runs with `total_net_usdc > 0` | [OK] PROVEN |
 | **Rolling Quality Gate** | Operational stability | `data_run_rate >= 0.30`, `agg_status != FAIL` | [OK] PASS |
 
-**Clarification (v2.0.6):**
+**Clarification:**
 > "Core Truth" (+PnL) != "Rolling Quality Gate". Core truth підтверджує що система генерує profit (paper).
 > Rolling quality gate перевіряє стабільність в операційному режимі.
 > agg_status=FAIL означає проблеми з якістю даних, НЕ відсутність profit.
 
-**RunMode Canonical (v2.0.1):**
+**RunMode Canonical:**
 > `REGISTRY_REAL` is the canonical run_mode for online scanning.
 > Legacy docs may use `REAL` as shorthand but artifacts MUST use `REGISTRY_REAL`.
 
@@ -193,10 +190,10 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 > Quick ref: N>=5 runs in `m4_stability_agg.json.runs[]` with:
 > `run_mode=REGISTRY_REAL`, `pinned_block!=429900000`, `block_is_synthetic=false`, `total_net_usdc>0`
 
-**Evidence for M4 online-profit (v2.3.4 rolling snapshot, 2026-02-19):**
+**Evidence for M4 online-profit (rolling snapshot, 2026-02-19):**
 
 > **CORE TRUTH: PROVEN** (+PnL confirmed in N>=5 runs)
-> **ROLLING QUALITY: PASS** (agg_status=PASS, agg_reasons=[] after v2.3.3 DIVERSITY threshold adjustment)
+> **ROLLING QUALITY: PASS** (agg_status=PASS, agg_reasons=[] after DIVERSITY threshold adjustment)
 
 | Metric | Value | Source |
 |--------|-------|--------|
@@ -212,17 +209,17 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 | agg_status | PASS | `_latest.json` |
 | agg_reasons | [] | no diversity warnings |
 
-> **v2.3.4 VERIFIED**:
+> **VERIFIED**:
 > - `quotes_total >= quotes_fetched` in scan_*.json: OK
-> - `unique_pairs=8` >= target=8: OK (v2.3.3 threshold reduced from 10)
-> - `unique_routes_cross_dex=2` >= target=2: OK (v2.3.2 threshold reduced from 4)
+> - `unique_pairs=8` >= target=8: OK (threshold reduced from 10)
+> - `unique_routes_cross_dex=2` >= target=2: OK (threshold reduced from 4)
 > - `policy_version=2.0.8` in rolling: OK
 
-> **DIVERSITY thresholds (v2.3.3)**: Adjusted to match current quoter_v2 cross-DEX coverage.
+> **DIVERSITY thresholds**: Adjusted to match current quoter_v2 cross-DEX coverage.
 > PENDLE/WETH and RDNT/WETH use slot0 fallback (quoter returning 0) - excluded from signals.
 > Target will be restored when more pairs have working quoter on both DEXes.
 
-> **Rolling PASS (v2.3.4)**:
+> **Rolling PASS**:
 > - 78 runs in window, all PASS
 > - total_net_usdc=$4264.02 (paper profit under declared cost model)
 > - profit_is_diagnostic=true (no roundtrip opportunities)
@@ -231,23 +228,10 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 > Source: `data/runs/_rolling/_latest.json`, `data/runs/_rolling/m4_stability_agg.json`
 > Policy Version: 2.0.8 | Status Domain: status=NO_DATA|PASS|FAIL; quality_status=NO_DATA|PASS|WARN|FAIL_QUALITY
 
-## Version Discipline (v2.1.0-fix)
+## Version Discipline
 
-| Track | Version | Scope | Notes |
-|-------|---------|-------|-------|
-| **Policy Version** | 2.0.8 | Thresholds, gates, DoD rules | v2.1.0-fix: WBTC pairs re-enabled (10 pairs total) |
-| **M4 Gate Version** | 1.9.3 | `ci_m4_execution_gate.py` | M4 execution profit gate |
-| **M5_0 Gate Version** | 2.3.2 | `ci_m5_0_gate.py` | See [Status_M5_0.md](Status_M5_0.md) |
-| **Engine Version** | 2.1.0-fix | quotes.py, run_scan_real.py, roundtrip.py | Decimal fix, gas_override, L1 calldata |
-| **Schema Version** | 3.2.0 | Artifact JSON structure | Backward compatible |
-
-> **v2.1.0-fix Engine Changes**:
-> - `calculate_price_from_sqrt()`: `Decimal(10)**exp` prevents overflow for WBTC (8 decimals)
-> - `simulate_roundtrip()`: `gas_override` parameter, `gas_source` field in result
-> - `get_l1_cost_with_source()`: Pass representative swap calldata for accurate L1 estimate
-> - `simulate_trade_execution()`: M4.3 dry-run stub with kill_switch=True default
-> - `emit_rolling_artifacts()`: Deterministic run_summary selection (sort by timestamp)
-> - Config: WBTC/WETH and WBTC/USDC re-enabled, 10 pairs total
+> **NOTE**: Per docs policy, version tracking moved to `docs/DEV_REPORT_LATEST.md`.
+> See `docs/DOCS_POLICY.md` for canonical documentation rules.
 
 ## Docs Truth Map
 
@@ -258,14 +242,14 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 | `docs/m4/ROLLING_CONTRACT.md` | Rolling artifact schemas | JSON structure, field semantics |
 | `data/runs/_rolling/*` | Operational artifacts | Runtime metrics, provenance |
 
-## Workflow (v2.0.0 - SHA-free)
+## Workflow (SHA-free)
 
 | Mode | Description | Provenance |
 |------|-------------|------------|
 | **DEV** | Fast iteration cycle | run_timestamp only |
 | **RELEASE** | Public proof | run_timestamp + rolling artifacts |
 
-**Provenance Policy (v2.0.0):**
+**Provenance Policy:**
 > SHA tracking completely removed.  
 > `run_context.run_timestamp` is the primary provenance field.  
 > `code_sha`, `evidence_sha` fields are None (deprecated).
@@ -280,7 +264,7 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 - Rolling artifacts with run_timestamp
 - Use for milestone claims
 
-## Docs Freeze Rules (v2.0.1)
+## Docs Freeze Rules
 
 **Зміни DoD/контрактів дозволені лише при:**
 1. Зміні коду/скриптів, що вимагає нового контракту
@@ -292,7 +276,7 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 - `policy_version` у rolling артефактах MUST дорівнювати `policy.py`
 - Розбіжність = FAIL для release gates  
 
-## Taxonomy Contract (v1.12.0)
+## Taxonomy Contract
 
 | Reason Prefix | Status Required | Semantic |
 |---------------|-----------------|----------|
@@ -302,7 +286,7 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 
 **Invariant**: If `FAIL_*` appears in reasons, status MUST be FAIL. Enforced by `compute_status()`.
 
-## Status Contract (v1.11.0+)
+## Status Contract
 
 | Condition | Status | Semantic |
 |-----------|--------|----------|
@@ -313,7 +297,7 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 
 **Rule**: NO_DATA only when signals_count == 0. Low sample -> WARN, not NO_DATA.
 
-## Run Kinds (v1.11.0)
+## Run Kinds
 
 | Kind | Description | Counted in KPIs |
 |------|-------------|-----------------|
@@ -326,35 +310,35 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 
 | Metric | Target | FAIL | Description |
 |--------|--------|------|-------------|
-| `data_run_rate` | >= 0.50 | < 0.30 | % NORMAL runs with >=MIN_SIGNALS_FOR_PASS signals (v2.0.1: 3) |
-| `fail_rate` | <= 0.10 | > 0.15 | % FAIL runs (v1.12.0 bites) |
+| `data_run_rate` | >= 0.50 | < 0.30 | % NORMAL runs with >=MIN_SIGNALS_FOR_PASS signals (currently 3) |
+| `fail_rate` | <= 0.10 | > 0.15 | % FAIL runs |
 | `fragile_rate_p90` | <= 0.30 | > 0.50 | p90 fragile rate |
 | `unique_pairs` | >= 10 | < 3 | Pair diversity |
 | `unique_routes` | >= 4* | < 2 | Route diversity |
 
-**Diversity Targets Decision (v2.0.1, 2026-02-13):**
+**Diversity Targets Decision:**
 > `unique_routes >= 4` структурно недосяжно з 2 DEX (Uniswap V3 + SushiSwap V3).
 > - **M4 online profit DoD**: `unique_routes=2` прийнято як достатнє (WARN_QUALITY допускається)
 > - **M5 target**: `unique_routes >= 4` вимагає 3-й DEX adapter (Camelot, Curve, або інший)
 > - **unique_pairs >= 10**: досяжно через верифікацію додаткових пулів (LINK/USDC, ARB/USDT, LINK/USDT)
 
-## Thresholds (v2.0.1)
+## Thresholds
 
 | Threshold | Value | Description |
 |-----------|-------|-------------|
-| `MIN_SIGNALS_FOR_PASS` | 3 | v2.0.1: lowered from 5 (real market ~3 signals) |
-| `MIN_SIGNALS_WARN` | 2 | v2.0.1: lowered to match |
+| `MIN_SIGNALS_FOR_PASS` | 3 | lowered from 5 (real market ~3 signals) |
+| `MIN_SIGNALS_WARN` | 2 | lowered to match |
 | `MAE_WARN` | 0.55 | MAE warning |
 | `MAE_FAIL` | 0.80 | MAE failure |
 | `SIGN_RATE_MIN` | 0.60 | Min sign correct rate |
-| `AGG_FAIL_RATE_FAIL` | 0.15 | v1.12.0: fail_rate > 15% -> FAIL |
-| `DIVERSITY_PAIRS_MIN` | 3 | v1.12.0: < 3 pairs -> FAIL |
-| `DIVERSITY_ROUTES_MIN` | 2 | v1.12.0: < 2 routes -> FAIL |
+| `AGG_FAIL_RATE_FAIL` | 0.15 | : fail_rate > 15% -> FAIL |
+| `DIVERSITY_PAIRS_MIN` | 3 | : < 3 pairs -> FAIL |
+| `DIVERSITY_ROUTES_MIN` | 2 | : < 2 routes -> FAIL |
 
-### Policy Version Note (v2.0.1, 2026-02-12)
-**BREAKING CHANGE**: З 2026-02-12 (v2.0.1) `MIN_SIGNALS_FOR_PASS=3` (було 5). Це означає:
+### Policy Version Note
+**BREAKING CHANGE**: З 2026-02-12 `MIN_SIGNALS_FOR_PASS=3` (було 5). Це означає:
 - KPI `data_run_rate` та `low_sample_rate` рахуються від нового порогу
-- Попередні значення (до v2.0.1) **несумісні** без перерахунку
+- Попередні значення (до) **несумісні** без перерахунку
 
 ### Acceptable States (agg_status)
 
@@ -373,7 +357,7 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 >
 > Це НЕ застосовується до M4.2 real execution DoD.
 >
-> **M4 Exit criteria (v2.0.6, 2026-02-13 - 42 runs in window):**
+> **M4 Exit criteria (2026-02-13 - 42 runs in window):**
 > - `unique_pairs`: 3/10 - потребує більше verified pools (LINK/USDT, GMX/USDC тощо)
 > - `unique_routes`: 2/4 - затверджено як M4-ціль (з 2 DEX більше неможливо)
 > - `data_run_rate`: 0.4878 >= 0.30 (threshold met, target 0.50 pending)
@@ -432,18 +416,18 @@ Location: `data/runs/_rolling/`
 - [x] Paper profit confirmed under declared cost model
 - [x] total_net_usdc (window): $416.18
 
-**Rolling Quality Gate -- [OK] PASS (v2.3.4, 2026-02-19):**
+**Rolling Quality Gate -- [OK] PASS:**
 - [x] data_run_rate >= 0.30 (current: 1.0 [OK])
 - [x] agg_status != FAIL (current: PASS [OK])
 - [x] unique_pairs >= target=8 (current: 8 [OK])
 - [x] unique_routes_cross_dex >= target=2 (current: 2 [OK])
 - [x] agg_reasons = [] (no diversity warnings)
 
-**Historical WARN причини (resolved in v2.3.3/v2.3.4):**
+**Historical WARN причини (resolved):**
 > - ~~DIVERSITY_PAIRS_LOW~~ - resolved: target reduced from 10 to 8 to match quoter coverage
 > - ~~DIVERSITY_ROUTES_LOW~~ - resolved: target reduced from 4 to 2 to match 2-DEX reality
 >
-> All other WARNs (FRAGILE_P90, LOW_SAMPLE_RATE, DATA_RUN_RATE) were below threshold pre-v2.3.3
+> All other WARNs (FRAGILE_P90, LOW_SAMPLE_RATE, DATA_RUN_RATE) were resolved
 
 **Наступна ціль (M5 target):**
 > 1. data_run_rate >= 0.50
@@ -471,19 +455,19 @@ Location: `data/runs/_rolling/`
 2. ~~**Chain/provider mismatch**~~: FIXED - `.env` NETWORK=mantle corrected to arbitrum
 3. ~~**Online scan unusable**~~: FIXED - quotes=10, dexes=2, spreads=2 achieved
 4. ~~**Rolling artifacts need reset**~~: FIXED - v2.0 schema with timestamp-based provenance
-5. ~~**Provenance fixes in v1.12.2**~~: REPLACED by v2.0.0 timestamp provenance
-6. ~~**M4.1 quality thresholds**~~: RESOLVED (v2.0.6) - data_run_rate=0.4878, low_sample_rate=0.5122 with MIN_SIGNALS_FOR_PASS=3
+5. ~~**Provenance fixes**~~: REPLACED by timestamp provenance
+6. ~~**M4.1 quality thresholds**~~: RESOLVED - data_run_rate=0.4878, low_sample_rate=0.5122 with MIN_SIGNALS_FOR_PASS=3
 7. ~~**M4 online profit DoD**~~: PROVEN (2026-02-13) - 42 real runs with total_net_usdc=$300.87
 8. **DIVERSITY targets**: unique_pairs=3 (<10 target), unique_routes=2 (<4 target) - causes WARN_QUALITY
-   - **Decision (v2.0.6)**: Accept `unique_routes=2` as M4.1 minimum. Target of 4 requires 3rd DEX (e.g., Curve, Camelot).
+   - **Decision**: Accept `unique_routes=2` as M4.1 minimum. Target of 4 requires 3rd DEX (e.g., Curve, Camelot).
    - Pairs expansion: Add verified pairs (LINK/USDC, ARB/USDT) to `config/real_expanded.yaml` once pools verified.
    - Full diversity targets deferred to M5 when 3rd DEX adapter available.
-9. **[WARN] PROFIT REALISM NOT PROVEN (v2.0.3)**:
+9. **[WARN] PROFIT REALISM NOT PROVEN**:
    - Current paper model uses `gross_pnl = size_usd * spread_bps / 10000` -- **no price impact**.
    - **Evidence of bug**: LINK/WETH spread ~1133 bps (11.3%) between UniV3 and SushiV3 same block.
    - **Root cause**: SushiV3 LINK/WETH pool has ~8 million times less liquidity than UniV3 (7.8e14 vs 6.6e21).
    - **Impact**: $1000 trade on SushiV3 would have catastrophic slippage, but model shows +$113 profit.
-   - **Mitigation (v2.0.3)**: `SUSPECT_SPREAD` flag for spreads > 300 bps, excluded from DoD at > 500 bps.
+   - **Mitigation**: `SUSPECT_SPREAD` flag for spreads > 300 bps, excluded from DoD at > 500 bps.
    - **Required for M4.2**: quoter-based PnL model with real `amountOut` queries.
    - **DO NOT proceed to M4.2 execution until quoter/impact model validated.**
 
@@ -491,7 +475,7 @@ Location: `data/runs/_rolling/`
 
 **Next engineering focus**: Diversity expansion (unique_pairs -> 10, unique_routes -> 4 via 3rd DEX) + pool verification for LINK/USDC, ARB/USDT.
 
-### v2.0.0 Provenance Model
+### Provenance Model
 - SHA tracking completely removed (`code_sha`, `evidence_sha` = None)
 - `run_timestamp` (ISO-8601) is the primary provenance field
 - `code_identity` format: `ts:<ISO-8601>` (deterministic code ref)

@@ -11,7 +11,7 @@
 - Не надсилати секрети, API-ключі, `.env` вміст.
 - Не пропонувати комітити runtime `data/runs/**` у git.
 
-## 0) Output Path + Retention (v2.3.4)
+## 0) Output Path + Retention
 
 **Правило**: У репо завжди рівно 1 актуальний DEV REPORT: `docs/DEV_REPORT_LATEST.md` (overwritten).
 
@@ -28,7 +28,7 @@ Provenance в DEV_REPORT_LATEST.md:
 - `code_identity.primary` копіюється з `run_summary_latest.run_context.code_identity`
 - НЕ використовувати локальний час або runDir timestamp
 
-## 0.1) UTF-8 Viewing (v2.3.4)
+## 0.1) UTF-8 Viewing
 
 PowerShell може показувати mojibake для українського тексту. Це **не пошкодження файлу**, а проблема кодування консолі.
 
@@ -66,11 +66,11 @@ Rolling (канонічний operational інтерфейс):
 - `data/runs/<run_id>/reports/`
 - `data/runs/<run_id>/snapshots/` (якщо існує)
 
-## 2) Provenance (v2.0+)
+## 2) Provenance
 
 Канонічний provenance:
 - `run_context.run_timestamp` (ISO-8601) - primary identifier для конкретного run
-- `run_context.code_identity` (v2.0.1+) - `ts:<ISO-8601>` (SHA-free, детермінований формат рядка)
+- `run_context.code_identity` - `ts:<ISO-8601>` (SHA-free, детермінований формат рядка)
 - `run_context.code_sha` / `run_context.evidence_sha` - `null` (deprecated)
 
 Rolling агрегатор:
@@ -121,7 +121,7 @@ run_dir_bundle (ONLINE):
 
 ## 4) Key Results (числа з артефактів)
 
-**Де брати метрики (v2.0.1):**
+**Де брати метрики:**
 - `signals_count` → `run_summary_latest.metrics.signals_count`
 - `total_net_usdc` (run) → `run_summary_latest.metrics.total_net_usdc`
 - `total_net_usdc` (window) → `m4_stability_agg.quick_stats.total_net_usdc`

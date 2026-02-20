@@ -1,14 +1,9 @@
-# Status: M5_0 (Infrastructure Hardening)
+﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-20  
-**Script Version**: `ci_m5_0_gate.py` v2.3.2  
-**Contract Version**: v2.3.4 (milestone docs/policy)  
 **Tests**: 943 passed, 1 skipped  
 **Evidence runDir**: `ci_m5_gate_20260219_210425`
-
-> **Version Policy**: Script versions must match `__version__` in code (enforced by `check_repo_safety.py`).  
-> Contract Version = milestone policy version (docs/Roadmap alignment).
 
 ---
 
@@ -26,13 +21,13 @@
 |------|--------|------|-------------|
 | 1 | **multicall field_success_rates** | `core/multicall.py` | Per-field `call_success/call_fail` tracking |
 | 2 | **provenance unification** | `strategy/artifacts.py`, `run_scan_real.py` | `run_context.run_timestamp` unified |
-| 3 | **PENDLE/WETH DISABLED** | `config/real_minimal.yaml` | v2.3.4: pair disabled (quoter_v2 returning 0) |
-| 4 | **RDNT/WETH DISABLED** | `config/real_minimal.yaml` | v2.3.4: pair disabled (quoter_v2 returning 0) |
-| 5 | **DIVERSITY_PAIRS_TARGET=8** | `m4/policy.py` | v2.3.3: reduced to match quoter coverage |
-| 6 | **check_repo_safety.py v1.2.0** | `scripts/check_repo_safety.py` | v2.3.4: DEV_REPORT bloat guardrail added |
-| 7 | **pool_missing_keys observability** | `strategy/quotes.py`, `run_scan_real.py` | v2.3.2: `pool_missing_keys` in scan.stats |
-| 8 | **repo safety gate** | `scripts/check_repo_safety.py` | v2.3.2: check forbidden tracked files/keys |
-| 9 | **Single DEV_REPORT policy** | `docs/DEV_REPORT_LATEST.md` | v2.3.4: only 1 DEV_REPORT tracked, versioned files forbidden |
+| 3 | **PENDLE/WETH DISABLED** | `config/real_minimal.yaml` |: pair disabled (quoter_v2 returning 0) |
+| 4 | **RDNT/WETH DISABLED** | `config/real_minimal.yaml` |: pair disabled (quoter_v2 returning 0) |
+| 5 | **DIVERSITY_PAIRS_TARGET=8** | `m4/policy.py` |: reduced to match quoter coverage |
+| 6 | **check_repo_safety.py** | `scripts/check_repo_safety.py` | DEV_REPORT bloat guardrail added |
+| 7 | **pool_missing_keys observability** | `strategy/quotes.py`, `run_scan_real.py` |: `pool_missing_keys` in scan.stats |
+| 8 | **repo safety gate** | `scripts/check_repo_safety.py` |: check forbidden tracked files/keys |
+| 9 | **Single DEV_REPORT policy** | `docs/DEV_REPORT_LATEST.md` |: only 1 DEV_REPORT tracked, versioned files forbidden |
 
 ---
 
@@ -70,7 +65,7 @@ py -3.11 -m pytest tests/unit -q
 | Type | RunDir | Key Evidence |
 |------|--------|--------------|
 | Normal | `ci_m5_gate_20260219_201744` | `field_success_rates~1.0`, unique_pairs=8 |
-| v2.3.2 | `ci_m5_gate_20260219_190354` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
+| Reference | `ci_m5_gate_20260219_190354` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
 
 ---
 
@@ -155,7 +150,7 @@ CURRENT_EXECUTION_BLOCKER, SCHEMA_VERSION, CHAIN_IDS, DEX_IDS
 
 | File | Purpose |
 |------|---------|
-| `scripts/ci_m5_0_gate.py` | M5_0 acceptance gate v2.1.0 |
+| `scripts/ci_m5_0_gate.py` | M5_0 acceptance gate |
 | `scripts/ci_full_pipeline.py` | Full CI pipeline |
 | `core/artifact_invariants.py` | Cross-artifact validation |
 | `tests/unit/test_imports_contract.py` | API stability test |

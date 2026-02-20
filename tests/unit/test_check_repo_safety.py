@@ -1,14 +1,15 @@
 # PATH: tests/unit/test_check_repo_safety.py
 """
-Unit tests for scripts/check_repo_safety.py v1.3.0
+Unit tests for scripts/check_repo_safety.py v1.4.0
 
 Tests:
 1. INFO messages for untracked files don't count as warnings
 2. DANGER messages for tracked files cause FAIL
 3. Untracked settings.json with autoApprove is INFO-only
 4. DEV_REPORT bloat detection (v1.2.0)
-5. Status version consistency (v1.3.0)
+5. Status version consistency (v1.3.0) - DISABLED per DOCS_POLICY
 6. DEV_REPORT freshness check (v1.3.0)
+7. Docs lint - version policy (v1.4.0)
 """
 
 import unittest
@@ -134,7 +135,11 @@ class TestDevReportBloat(unittest.TestCase):
 
 
 class TestStatusVersionConsistency(unittest.TestCase):
-    """Test Status version consistency check (v1.3.0)."""
+    """Test Status version consistency check (v1.3.0).
+    
+    NOTE: v1.4.0 - Version checking disabled per DOCS_POLICY.md.
+    Versions now tracked only in DEV_REPORT_LATEST.md.
+    """
 
     def test_extract_script_version(self):
         """extract_script_version should parse __version__ correctly."""
@@ -149,13 +154,12 @@ __version__ = "2.3.2"
         
         self.assertEqual(version, "2.3.2")
 
-    def test_status_version_mismatch_detected(self):
-        """Mismatched version should be detected."""
-        from scripts.check_repo_safety import check_status_version_consistency, STATUS_VERSION_MAPPINGS
+    def test_status_version_mappings_disabled(self):
+        """v1.4.0: STATUS_VERSION_MAPPINGS should be empty (disabled per DOCS_POLICY)."""
+        from scripts.check_repo_safety import STATUS_VERSION_MAPPINGS
         
-        # This test verifies the function exists and has correct structure
-        self.assertIn("docs/status/Status_M5_0.md", STATUS_VERSION_MAPPINGS)
-        self.assertIn("docs/status/Status_M4.md", STATUS_VERSION_MAPPINGS)
+        # v1.4.0: Mappings disabled - versions now only in DEV_REPORT_LATEST.md
+        self.assertEqual(len(STATUS_VERSION_MAPPINGS), 0)
 
 
 class TestDevReportFreshness(unittest.TestCase):
@@ -194,6 +198,39 @@ class TestDevReportFreshness(unittest.TestCase):
                 # This should not raise and return empty
                 # Note: we need more specific mocking here
                 pass
+
+
+class TestDocsLint(unittest.TestCase):
+    """Test docs-lint version policy enforcement (v1.4.0)."""
+
+    def test_exempt_files_list_correct(self):
+        """Exempt files should include DEV_REPORT_LATEST.md and policy docs."""
+        from scripts.check_repo_safety import DOCS_VERSION_EXEMPT
+        
+        self.assertIn("docs/DEV_REPORT_LATEST.md", DOCS_VERSION_EXEMPT)
+        self.assertIn("docs/DOCS_POLICY.md", DOCS_VERSION_EXEMPT)
+        self.assertIn("docs/m4/ROLLING_CONTRACT.md", DOCS_VERSION_EXEMPT)
+
+    def test_version_pattern_matches_semver(self):
+        """Version pattern should match semantic versions like v1.2.3."""
+        import re
+        version_pattern = re.compile(r'\bv\d+\.\d+\.\d+\b')
+        
+        # Should match
+        self.assertIsNotNone(version_pattern.search("v1.2.3"))
+        self.assertIsNotNone(version_pattern.search("v2.3.4"))
+        self.assertIsNotNone(version_pattern.search("This is v1.0.0 version"))
+        
+        # Should NOT match
+        self.assertIsNone(version_pattern.search("v1.2"))  # Only 2 parts
+        self.assertIsNone(version_pattern.search("version 1.2.3"))  # No v prefix
+        self.assertIsNone(version_pattern.search("v1"))  # Only 1 part
+
+    def test_check_docs_lint_exists(self):
+        """check_docs_lint function should exist and be callable."""
+        from scripts.check_repo_safety import check_docs_lint
+        
+        self.assertTrue(callable(check_docs_lint))
 
 
 if __name__ == "__main__":

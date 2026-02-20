@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -44,9 +44,11 @@ ALLOWED_DEV_REPORTS = [
 
 # Script version mappings for Status file validation (v1.3.0)
 # Map: Status file -> (script file, version regex pattern in Status)
+# NOTE: v1.4.0 - versions removed from Status headers per DOCS_POLICY.md
 STATUS_VERSION_MAPPINGS = {
-    "docs/status/Status_M5_0.md": ("scripts/ci_m5_0_gate.py", r"ci_m5_0_gate\.py.*v(\d+\.\d+\.\d+)"),
-    "docs/status/Status_M4.md": ("scripts/ci_m4_execution_gate.py", r"ci_m4_execution_gate\.py.*v(\d+\.\d+\.\d+)"),
+    # Disabled: versions now tracked only in DEV_REPORT_LATEST.md
+    # "docs/status/Status_M5_0.md": ("scripts/ci_m5_0_gate.py", r"ci_m5_0_gate\.py.*v(\d+\.\d+\.\d+)"),
+    # "docs/status/Status_M4.md": ("scripts/ci_m4_execution_gate.py", r"ci_m4_execution_gate\.py.*v(\d+\.\d+\.\d+)"),
 }
 
 # Keys that should never appear in TRACKED files
@@ -214,6 +216,78 @@ def check_dev_report_bloat() -> List[str]:
     return issues
 
 
+# Files where versions are ALLOWED (exempt from docs-lint)
+DOCS_VERSION_EXEMPT = [
+    "docs/DEV_REPORT_LATEST.md",           # Canonical version tracking file
+    "docs/DOCS_POLICY.md",                  # Describes policy, version examples OK
+    "docs/m4/ROLLING_CONTRACT.md",          # Schema version definitions (API contract)
+    "docs/m4/M4_POLICY.md",                 # Policy thresholds (API contract)
+]
+
+
+def check_docs_lint() -> List[str]:
+    """Check docs for forbidden version patterns (v1.4.0).
+    
+    Per DOCS_POLICY.md:
+    - Version strings (vX.Y.Z) are forbidden except in DEV_REPORT_LATEST.md
+    - Real dates (YYYY-MM-DD) are forbidden in headers except Status_*.md
+    """
+    issues = []
+    
+    # Pattern for semantic versions: v1.2.3, v2.3.4-fix, etc.
+    version_pattern = re.compile(r'\bv\d+\.\d+\.\d+\b')
+    
+    docs_dir = PROJECT_ROOT / "docs"
+    if not docs_dir.exists():
+        return issues
+    
+    try:
+        # Get all tracked markdown files in docs/
+        result = subprocess.run(
+            ["git", "ls-files", "docs/**/*.md", "docs/*.md"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True
+        )
+        
+        tracked_docs = [f for f in result.stdout.strip().split("\n") if f and f.endswith(".md")]
+        
+        for doc_path in tracked_docs:
+            # Skip exempt files
+            if doc_path in DOCS_VERSION_EXEMPT:
+                continue
+            
+            # Skip Status files (they can have timestamps in Updated field)
+            if "Status_" in doc_path:
+                continue
+            
+            full_path = PROJECT_ROOT / doc_path
+            if not full_path.exists():
+                continue
+            
+            try:
+                content = full_path.read_text(encoding="utf-8")
+                
+                # Check for forbidden version patterns
+                matches = version_pattern.findall(content)
+                if matches:
+                    unique_versions = set(matches)
+                    issues.append(
+                        f"DOCS_LINT: {doc_path} contains version string(s): {', '.join(sorted(unique_versions))} "
+                        f"(versions only allowed in DEV_REPORT_LATEST.md)"
+                    )
+                    
+            except Exception:
+                pass  # Skip unreadable files
+                
+    except Exception as e:
+        issues.append(f"ERROR: Could not run docs-lint: {e}")
+    
+    return issues
+    
+    return issues
+
+
 def extract_script_version(script_path: Path) -> str:
     """Extract __version__ from a Python script."""
     try:
@@ -372,6 +446,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: DEV_REPORT_LATEST.md is fresh")
+    
+    print("\n[8] Checking docs lint (version policy)...")
+    issues = check_docs_lint()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: Docs comply with DOCS_POLICY.md")
     
     # Summary
     print("\n" + "=" * 50)

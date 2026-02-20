@@ -1,8 +1,6 @@
 # ARBY3 Workflow (ChatGPT ↔ Claude ↔ VSCode ↔ GitHub)
 
-_Last updated: 2026-02-13 (v2.x SHA-free)_
-
-> **v2.0+ Provenance**: SHA tracking removed. Evidence based on `run_timestamp` + rolling artifacts.
+> **Provenance**: SHA tracking removed. Evidence based on `run_timestamp` + rolling artifacts.
 > See `docs/DEV_REPORT_CANONICAL_UA.md` for canonical report format.
 > See `docs/status/Status_M4.md` for current milestone status.
 
@@ -149,7 +147,7 @@ For continuous/rolling operations:
 
 ### Rule #4: Retention policy
 
-v2.1.0 CANONICAL SEMANTICS for `--prune-keep N`:
+**Canonical semantics** for `--prune-keep N`:
 - **N=50 means 50 runDirs** (directories like `ci_m5_gate_20260215_140031`)
 - Protected directories are NOT counted toward N (they stay forever)
 - Deletion order: oldest first by timestamp in directory name

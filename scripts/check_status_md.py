@@ -31,11 +31,13 @@ from pathlib import Path
 
 
 # Required patterns for Status*.md files (v2.x - no SHA)
+# NOTE: v1.4.0 DOCS_POLICY - versions tracked in DEV_REPORT_LATEST.md only
 REQUIRED_PATTERNS = [
     # Metadata header - v2.x format (no SHA required)
     (r"\*\*(Оновлено|Updated)\*\*:", "Metadata: Updated timestamp"),
     (r"\*\*(Статус|Status)\*\*:", "Metadata: Status indicator"),
-    (r"\*\*(Policy Version|Gate Version)\*\*:", "Metadata: Policy/Gate Version"),
+    # v1.4.0: Policy/Gate Version no longer required in Status files (moved to DEV_REPORT_LATEST.md)
+    # (r"\*\*(Policy Version|Gate Version)\*\*:", "Metadata: Policy/Gate Version"),
     # DoD-commands section - either format
     (r"#{1,3}\s*(DoD-commands|канонічн[іа] команд|Canonical Commands)", "Section: Canonical Commands"),
     # Risks/Blockers/Evidence section - either format

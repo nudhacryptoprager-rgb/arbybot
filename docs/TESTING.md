@@ -1,6 +1,6 @@
 # ARBY Testing Guide
 
-## M5_0 CI Gate v2.0.0
+## M5_0 CI Gate
 
 ### Two Canonical Commands
 

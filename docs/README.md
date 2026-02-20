@@ -1,9 +1,7 @@
 # ARBY3 Docs Index
 
-> **⚠️ ARCHIVE (v2.0+)**: Цей файл може містити застарілі SHA-based references.
-> Primary provenance тепер `run_timestamp` (див. `docs/status/Status_M4.md`).
-
-_Last cleaned: 2026-01-21_
+> Primary provenance: `run_timestamp` (див. `docs/status/Status_M4.md`).
+> For documentation policy see `docs/DOCS_POLICY.md`.
 
 ## What lives in /docs
 This folder is the “human layer” of the repo:

@@ -1,9 +1,7 @@
 # Status Index
 
-_Last updated: 2026-02-19 (v2.3.2)_
-
-> **v2.0+ Provenance**: Evidence based on `run_timestamp` + rolling artifacts, not SHA.
-> See `docs/DEV_REPORT_CANONICAL_UA.md` for canonical report format.
+> Timeless index of milestone status files.  
+> See [DOCS_POLICY.md](../DOCS_POLICY.md) for documentation rules.
 
 ## Active Milestones
 
@@ -18,19 +16,18 @@ _Last updated: 2026-02-19 (v2.3.2)_
 
 ## Current Focus
 
-**M4 - DEX<->DEX Atomic Execution**: M4.1 simulate-only PROVEN; M4 online profit DoD NOT PROVEN.
+**M4 - DEX<->DEX Atomic Execution**: See [Status_M4.md](Status_M4.md) for latest evidence.
 
-See `Roadmap.md` Core Truth for release criteria.
+## Related
 
-## Archive
-
-- [Status_M4_legacy.md](Status_M4_legacy.md) - ARCHIVE (SHA-based, deprecated)
-- See [archive/](archive/) folder for historical status documents.
+- [Roadmap.md](../../Roadmap.md) - Milestone definitions and DoD
+- [DEV_REPORT_LATEST.md](../DEV_REPORT_LATEST.md) - Current session report (with versions/timestamps)
+- [ARCHIVE_MAP.md](ARCHIVE_MAP.md) - Map to archived status files
 
 ## Rules
 
 1. One active Status file per milestone (`Status_M0.md`, `Status_M1.md`, etc.)
 2. New patches = new section in existing milestone file, NOT new file
-3. Old versions go to `archive/` folder (mark as ARCHIVE)
+3. Old versions go to `archive/` folder (git history)
 4. No files with spaces in names
 5. Evidence: rolling artifacts (`_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`)

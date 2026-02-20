@@ -1,7 +1,5 @@
 # Status Archive Map
 
-_Last cleaned: 2026-02-12_
-
 ## Keep (active, clean)
 - `docs/status/Status_M0.md`
 - `docs/status/Status_M1.md`
@@ -15,7 +13,7 @@ _Last cleaned: 2026-02-12_
 ## Archive (keep history, but not "source of truth")
 These files are archived under `docs/status/archive/`:
 
-- `Status_M4_legacy.md` - SHA-based provenance documentation (deprecated v2.0.0)
+- `Status_M4_legacy.md` - SHA-based provenance documentation (deprecated)
 - `Status_10step_fix_v2.md`
 - `Status_10step_fix_v3.md`
 - `Status_M0.md`
