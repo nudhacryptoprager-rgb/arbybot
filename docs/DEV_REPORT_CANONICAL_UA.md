@@ -11,6 +11,23 @@
 - Не надсилати секрети, API-ключі, `.env` вміст.
 - Не пропонувати комітити runtime `data/runs/**` у git.
 
+## 0) Output Path + Retention (v2.3.4)
+
+**Правило**: У репо завжди рівно 1 актуальний DEV REPORT: `docs/DEV_REPORT_LATEST.md` (overwritten).
+
+Дозволені файли:
+- `docs/DEV_REPORT_LATEST.md` - єдиний DEV REPORT що трекається в git
+- `docs/DEV_REPORT_CANONICAL_UA.md` - цей документ (шаблон формату)
+
+Заборонені файли (автоматичний FAIL в check_repo_safety.py):
+- `docs/DEV_REPORT_YYYY-MM-DD_v*.md` або будь-які версійні DEV_REPORT файли
+- Кілька DEV_REPORT файлів одночасно (bloat)
+
+Provenance в DEV_REPORT_LATEST.md:
+- `timestamp_utc` копіюється з `run_summary_latest.run_context.run_timestamp` (UTC)
+- `code_identity.primary` копіюється з `run_summary_latest.run_context.code_identity`
+- НЕ використовувати локальний час або runDir timestamp
+
 ## 1) Вхідні дані, які обов'язково додаються до звіту
 
 Rolling (канонічний operational інтерфейс):

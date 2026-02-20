@@ -10,14 +10,15 @@
 
 > [!] **M4 NOT CLOSED**: `net_usdc` from rolling is DIAGNOSTIC (`profit_is_diagnostic=true`), not canonical DEX-DEX truth. Clean PnL available (`cost_model_available=true`), but requires `profit_truth_source=ROUNDTRIP_REAL` (currently `ONE_LEG_DIAGNOSTIC`).
 
-## v2.3.3 M4-specific Fixes (2026-02-19)
+## v2.3.4 M4-specific Fixes (2026-02-19)
 
 | Step | Change | File | Description |
 |------|--------|------|-------------|
 | 1 | **DIVERSITY_PAIRS_TARGET=8** | `m4/policy.py` | Reduced from 10 to 8 to match current quoter coverage |
-| 2 | **PENDLE/WETH pool fixed** | `config/real_minimal.yaml` | Correct pool address, added Sushi pool |
-| 3 | **RDNT/WETH pool fixed** | `config/real_minimal.yaml` | Added Sushi pool address |
+| 2 | **PENDLE/WETH DISABLED** | `config/real_minimal.yaml` | Pair disabled (quoter_v2 returning 0, slot0 fallback) |
+| 3 | **RDNT/WETH DISABLED** | `config/real_minimal.yaml` | Pair disabled (quoter_v2 returning 0, slot0 fallback) |
 | 4 | **Uni-only pairs removed** | `config/real_minimal.yaml` | GMX/USDC, UNI/WETH moved to real_expanded.yaml |
+| 5 | **Single DEV_REPORT policy** | `docs/DEV_REPORT_LATEST.md` | Only 1 DEV_REPORT tracked, guardrail in check_repo_safety.py |
 
 > **NOTE**: M5_0 infra changes (multicall/failover/pool_missing_keys) moved to [Status_M5_0.md](Status_M5_0.md)
 
@@ -30,11 +31,11 @@
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS** (v2.3.3). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS** (v2.3.4). Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
 **Snapshot (2026-02-19 v2.3.4)**: From `m4_stability_agg.json` (canonical source): runs_in_window=79, data_run_rate=1.0, pass_rate=1.0, **total_net_usdc=$4322.08**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=10, POOL_MISSING=1. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **PENDLE/WETH, RDNT/WETH DISABLED**: pairs disabled in config (quoter returning 0). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, but `profit_truth_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode). For ws/multicall/failover see [Status_M5_0.md](Status_M5_0.md).
 
-> **NOTE: DIVERSITY thresholds adjusted (v2.3.3)**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH use slot0 fallback (quoter_v2 failures) and are excluded from signal computation when truth_mode_m42=true. Target will be restored when more pairs have working quoter on both DEXes.
+> **NOTE: DIVERSITY thresholds adjusted (v2.3.4)**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only). Target will be restored when more pairs have working quoter on both DEXes. See restore contract in `m4/policy.py`.
 
 **Evidence (ci_m5_gate_20260219_210425 - v2.3.4 run)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
@@ -46,7 +47,7 @@
 - **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_CRITICAL_REJECTS, WARN_PROFIT_DIAGNOSTIC`
 - **Window-level** (`_latest.agg_reasons`): `[]` (no diversity warnings with updated thresholds)
 - **Clean PnL AVAILABLE**: `execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`
-- **v2.3.3 deferred**: PENDLE/RDNT quoter investigation (slot0 fallback)
+- **v2.3.4 deferred**: PENDLE/RDNT quoter investigation (slot0 fallback, pairs DISABLED)
 
 **Quarantined Pools (v2.1.0-fix, 2026-02-18):**
 

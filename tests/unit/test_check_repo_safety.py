@@ -1,11 +1,12 @@
 # PATH: tests/unit/test_check_repo_safety.py
 """
-Unit tests for scripts/check_repo_safety.py v1.1.0
+Unit tests for scripts/check_repo_safety.py v1.2.0
 
 Tests:
 1. INFO messages for untracked files don't count as warnings
 2. DANGER messages for tracked files cause FAIL
 3. Untracked settings.json with autoApprove is INFO-only
+4. DEV_REPORT bloat detection (v1.2.0)
 """
 
 import unittest
@@ -84,6 +85,50 @@ class TestInfoNotCountedAsWarning(unittest.TestCase):
         self.assertEqual(len(errors), 0)
         self.assertEqual(len(warnings), 1)
         self.assertIn("WARN:", warnings[0])
+
+
+class TestDevReportBloat(unittest.TestCase):
+    """Test DEV_REPORT bloat detection (v1.2.0)."""
+
+    def test_allowed_dev_reports_pass(self):
+        """Only DEV_REPORT_LATEST.md and DEV_REPORT_CANONICAL_UA.md allowed."""
+        from scripts.check_repo_safety import ALLOWED_DEV_REPORTS
+        
+        self.assertIn("docs/DEV_REPORT_LATEST.md", ALLOWED_DEV_REPORTS)
+        self.assertIn("docs/DEV_REPORT_CANONICAL_UA.md", ALLOWED_DEV_REPORTS)
+        self.assertEqual(len(ALLOWED_DEV_REPORTS), 2)
+
+    def test_versioned_dev_report_detected(self):
+        """Versioned DEV_REPORT files should be detected as bloat."""
+        from scripts.check_repo_safety import check_dev_report_bloat
+        
+        # Mock git ls-files to return versioned file
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="docs/DEV_REPORT_LATEST.md\ndocs/DEV_REPORT_2026-02-19_v2.3.4.md\n",
+                returncode=0
+            )
+            issues = check_dev_report_bloat()
+        
+        # Should detect the versioned file
+        self.assertTrue(len(issues) >= 1)
+        self.assertTrue(any("DEV_REPORT_BLOAT" in i for i in issues))
+        self.assertTrue(any("v2.3.4" in i for i in issues))
+
+    def test_only_latest_is_ok(self):
+        """Only DEV_REPORT_LATEST.md should pass."""
+        from scripts.check_repo_safety import check_dev_report_bloat
+        
+        # Mock git ls-files to return only allowed files
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="docs/DEV_REPORT_LATEST.md\ndocs/DEV_REPORT_CANONICAL_UA.md\n",
+                returncode=0
+            )
+            issues = check_dev_report_bloat()
+        
+        # Should have no issues
+        self.assertEqual(len(issues), 0)
 
 
 if __name__ == "__main__":

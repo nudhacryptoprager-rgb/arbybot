@@ -25,12 +25,19 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
     # VS Code settings with potential auto-approve keys
     ".vscode/settings.json",
+]
+
+# DEV_REPORT files allowed in repo (v1.2.0)
+# Only these exact files are allowed, no versioned DEV_REPORT files
+ALLOWED_DEV_REPORTS = [
+    "docs/DEV_REPORT_LATEST.md",
+    "docs/DEV_REPORT_CANONICAL_UA.md",
 ]
 
 # Keys that should never appear in TRACKED files
@@ -165,6 +172,41 @@ def check_runtime_artifacts() -> List[str]:
     return issues
 
 
+def check_dev_report_bloat() -> List[str]:
+    """Check for versioned DEV_REPORT files (v1.2.0).
+    
+    Only docs/DEV_REPORT_LATEST.md and docs/DEV_REPORT_CANONICAL_UA.md are allowed.
+    Any versioned DEV_REPORT_YYYY-MM-DD_v*.md files cause FAIL.
+    """
+    issues = []
+    
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "docs/DEV_REPORT*.md"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True
+        )
+        tracked_reports = [f for f in result.stdout.strip().split("\n") if f]
+        
+        # Check each tracked file against allowed list
+        for report in tracked_reports:
+            if report not in ALLOWED_DEV_REPORTS:
+                issues.append(f"DEV_REPORT_BLOAT: {report} is tracked (only DEV_REPORT_LATEST.md allowed)")
+        
+        # Also check for multiple DEV_REPORT files (excluding canonical)
+        non_canonical = [r for r in tracked_reports if r != "docs/DEV_REPORT_CANONICAL_UA.md"]
+        if len(non_canonical) > 1:
+            issues.append(f"DEV_REPORT_BLOAT: {len(non_canonical)} DEV_REPORT files tracked (should be exactly 1)")
+            
+    except Exception as e:
+        issues.append(f"ERROR: Could not check DEV_REPORT files: {e}")
+    
+    return issues
+    
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
@@ -209,6 +251,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: Runtime artifacts not tracked")
+    
+    print("\n[5] Checking DEV_REPORT bloat...")
+    issues = check_dev_report_bloat()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: Only DEV_REPORT_LATEST.md tracked")
     
     # Summary
     print("\n" + "=" * 50)

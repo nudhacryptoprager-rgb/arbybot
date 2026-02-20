@@ -22,12 +22,13 @@
 |------|--------|------|-------------|
 | 1 | **multicall field_success_rates** | `core/multicall.py` | Per-field `call_success/call_fail` tracking |
 | 2 | **provenance unification** | `strategy/artifacts.py`, `run_scan_real.py` | `run_context.run_timestamp` unified |
-| 3 | **PENDLE/WETH pool verification** | `config/real_minimal.yaml` | v2.3.3: correct pool addresses from factory.getPool() |
-| 4 | **RDNT/WETH cross-DEX** | `config/real_minimal.yaml` | v2.3.3: both Uni+Sushi pool addresses |
+| 3 | **PENDLE/WETH DISABLED** | `config/real_minimal.yaml` | v2.3.4: pair disabled (quoter_v2 returning 0) |
+| 4 | **RDNT/WETH DISABLED** | `config/real_minimal.yaml` | v2.3.4: pair disabled (quoter_v2 returning 0) |
 | 5 | **DIVERSITY_PAIRS_TARGET=8** | `m4/policy.py` | v2.3.3: reduced to match quoter coverage |
-| 6 | **check_repo_safety.py v1.1.0** | `scripts/check_repo_safety.py` | v2.3.2: untracked files INFO-only |
+| 6 | **check_repo_safety.py v1.2.0** | `scripts/check_repo_safety.py` | v2.3.4: DEV_REPORT bloat guardrail added |
 | 7 | **pool_missing_keys observability** | `strategy/quotes.py`, `run_scan_real.py` | v2.3.2: `pool_missing_keys` in scan.stats |
 | 8 | **repo safety gate** | `scripts/check_repo_safety.py` | v2.3.2: check forbidden tracked files/keys |
+| 9 | **Single DEV_REPORT policy** | `docs/DEV_REPORT_LATEST.md` | v2.3.4: only 1 DEV_REPORT tracked, versioned files forbidden |
 
 ---
 

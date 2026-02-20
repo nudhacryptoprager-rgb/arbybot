@@ -1,15 +1,18 @@
 # DEV REPORT
 
+> **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
+> Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
+
 ## 0) Meta
-timestamp_utc: 2026-02-19T21:04:25Z
+timestamp_utc: 2026-02-19T20:04:47Z
 run_id: data/runs/ci_m5_gate_20260219_210425
 mode: ONLINE
 artifact_mode: rolling
 config: config/real_minimal.yaml (profit profile)
 code_identity:
-  primary: ts:2026-02-19T21:04:25.644000+00:00
+  primary: ts:2026-02-19T20:04:47.148356+00:00
   dirty: false
-  desc: v2.3.4 Rolling PASS + disabled pools cleanup + Status sync
+  desc: v2.3.4 Rolling PASS + single DEV_REPORT policy
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): M4 simulate-only, v2.3.4 Rolling PASS confirmation
@@ -28,7 +31,8 @@ touched_files:
   - config/real_minimal.yaml
   - m4/policy.py
   - scripts/verify_v3_pools.py
-  - docs/DEV_REPORT_2026-02-19_v2.3.4.md
+  - scripts/check_repo_safety.py (DEV_REPORT bloat guardrail)
+  - docs/DEV_REPORT_LATEST.md
 
 ## 2) Commands Executed (лише факти)
 
