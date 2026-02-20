@@ -130,3 +130,21 @@ ENV-змінні допускаються, але:
 - але не починай “архітектурний редизайн” без явного запиту.
 
 Ключове: краще маленький, точний, backward-compatible фікс, ніж “краща архітектура”, яка ламає систему.
+---
+
+## 8) Документаційна дисципліна (Docs discipline)
+Per `docs/DOCS_POLICY.md`:
+
+**Заборонено:**
+- Створювати версіоновані DEV_REPORT файли (`DEV_REPORT_2026-02-20_v2.3.4.md`)
+- Додавати версії (`vX.Y.Z`) в будь-який документ крім `docs/DEV_REPORT_LATEST.md`
+- Додавати ISO timestamps в документи крім `docs/status/Status_*.md` та `docs/DEV_REPORT_LATEST.md`
+
+**Обов'язково:**
+- Завжди перезаписувати `docs/DEV_REPORT_LATEST.md` (а не створювати нові файли)
+- Формат звіту - строго за `docs/DEV_REPORT_CANONICAL_UA.md`
+- Після редагування docs завжди запускати: `py -3.11 scripts/check_repo_safety.py`
+
+**Архівна політика:**
+- Історичні файли живуть у `archive/` (не в `docs/`)
+- `docs/status/archive/` має бути порожня

@@ -31,7 +31,7 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-19)**: From `m4_stability_agg.json` (canonical source): runs_in_window=79, data_run_rate=1.0, pass_rate=1.0, **total_net_usdc=$4322.08**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=10, POOL_MISSING=1. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **PENDLE/WETH, RDNT/WETH DISABLED**: pairs disabled in config (quoter returning 0). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, but `profit_truth_available=false`). **profit_is_diagnostic=true** (M5_0 simulate_only mode). For ws/multicall/failover see [Status_M5_0.md](Status_M5_0.md).
+**Snapshot (2026-02-19)**: From `m4_stability_agg.json` (canonical source): runs_in_window=79, data_run_rate=1.0, pass_rate=1.0, **total_net_usdc=$4322.08**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=10, POOL_MISSING=1. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **PENDLE/WETH, RDNT/WETH DISABLED**: pairs disabled in config (quoter returning 0). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). For infra evidence see [Status_M5_0.md](Status_M5_0.md).
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when ≥10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
@@ -40,7 +40,7 @@
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
 - Counters: `execution_ready_count=0` (kill_switch_active=true), `would_execute_count=0`
 - Provenance: `run_timestamp=2026-02-19T21:04:25+00:00`
-- See [Status_M5_0.md](Status_M5_0.md) for multicall/failover/infra evidence.
+- See [Status_M5_0.md](Status_M5_0.md) for infra evidence.
 
 **Quality Note**: 
 - **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_PROFIT_DIAGNOSTIC`
@@ -73,7 +73,7 @@
 | uniswap_v3_GMX_WETH_3000 | 0x1aEE... | price_exact~0.00327 vs anchor 0.008 | ci_m5_gate_20260217_113317 |
 | sushiswap_v3_ARB_USDC_3000 | 0x14716... | price_exact~1.009 vs anchor 0.11 (inverted) | ci_m5_gate_20260217_113317 |
 
-**Next Focus**: M5_0 always-online data-plane (WS + Alchemy + multicall) + dynamic anchors + runtime auto-quarantine via `strategy/quarantine.py`.
+**Next Focus**: Always-online data-plane + dynamic anchors + runtime auto-quarantine via `strategy/quarantine.py`.
 
 **Anchor values (from on-chain evidence 2026-02-17):**
 | Pair | Old Anchor | New Anchor | Evidence |

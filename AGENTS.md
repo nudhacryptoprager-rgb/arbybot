@@ -49,8 +49,8 @@ Rolling artifacts **must be overwritten**, not multiplied per run.
 
 ---
 
-## 2) Provenance discipline (v2.0.0)
-As of v2.0.0, SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
+## 2) Provenance discipline (SHA-free)
+SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
 
 You MUST understand this workflow:
 - A run produces rolling artifacts with:
@@ -60,7 +60,7 @@ You MUST understand this workflow:
   - `run_context.code_desc` = None (deprecated)
   - `run_context.evidence_sha` = None (deprecated)
 - Rolling aggregator uses `runs_since_timestamp` instead of `runs_since_sha`
-- No `attach_evidence.py` script (deleted in v2.0.0)
+- No `attach_evidence.py` script (deleted)
 
 The `run_timestamp` is the canonical identifier for provenance.
 
@@ -137,3 +137,12 @@ Keep the response short and operational. No fluff.
 - Never request secrets or `.env` contents.
 - Never instruct committing `.env` or runtime `data/runs/**`.
 - Prefer reproducible verification over assumptions.
+
+---
+
+## 9) Documentation discipline
+Per `docs/DOCS_POLICY.md`:
+- **Never create versioned DEV_REPORT files** - always overwrite `docs/DEV_REPORT_LATEST.md`
+- **Never add version strings** (`vX.Y.Z`) to docs outside `docs/DEV_REPORT_LATEST.md`
+- **Never add timestamps** to docs except `docs/status/Status_*.md` and `docs/DEV_REPORT_LATEST.md`
+- See `docs/DEV_REPORT_CANONICAL_UA.md` for the canonical report format

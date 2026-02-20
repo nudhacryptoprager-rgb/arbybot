@@ -4,15 +4,18 @@ This document defines the **canonical rules** for documentation in the ARBY3/arb
 
 ## 1. Version Strings
 
-**Rule**: Version strings (`vX.Y.Z`, `v2.3.4`, etc.) are allowed **ONLY** in:
+**Rule**: Version strings (`vX.Y.Z`) are allowed **ONLY** in:
 - `docs/DEV_REPORT_LATEST.md` (the single canonical DEV REPORT)
 
 **Forbidden in**:
 - `docs/status/Status_*.md` (use evidence runDir/run_timestamp instead)
 - `docs/status/INDEX.md` (must be timeless)
 - `docs/WORKFLOW.md`, `docs/TESTING.md`, `docs/REPORT_TEMPLATE.md`
-- `docs/m4/*.md`
 - Any other `docs/**/*.md`
+
+**Exception - API Contract Docs**:
+- `docs/m4/ROLLING_CONTRACT.md` and `docs/m4/M4_POLICY.md` may contain schema version identifiers (e.g., `m4:latest:v2.0`) as they define API contracts
+- Use placeholder timestamps (e.g., `<ISO8601>` or `2026-XX-XXTXX:XX:XXZ`) in examples
 
 **Exception**: Script `__version__` references are allowed when documenting script behavior, but only as `script.py __version__` (not milestone versions).
 
@@ -25,8 +28,10 @@ This document defines the **canonical rules** for documentation in the ARBY3/arb
 **Forbidden in**:
 - `docs/status/INDEX.md` (must be timeless index)
 - `docs/WORKFLOW.md`, `docs/TESTING.md`, `docs/REPORT_TEMPLATE.md`
-- `docs/m4/*.md` (use placeholder `<ISO8601>` for examples)
 - Any "Last updated:" patterns outside Status files
+
+**Exception - API Contract Docs**:
+- `docs/m4/*.md` may use placeholder timestamps in JSON examples (e.g., `<ISO8601>` or `2026-XX-XXTXX:XX:XXZ`)
 
 ## 3. Archive Policy
 
@@ -61,7 +66,7 @@ Active `docs/status/Status_*.md` files contain:
 
 ## 6. Enforcement
 
-`scripts/check_repo_safety.py` v1.4.0+ enforces:
+`scripts/check_repo_safety.py` enforces:
 - No version strings in forbidden docs (regex: `\bv\d+\.\d+\.\d+\b`)
 - No timestamps in forbidden docs (regex: ISO-8601 pattern)
 - No "Last updated:" outside Status files

@@ -5,7 +5,7 @@ Validates that all Status*.md files in docs/status/ contain the required section
 for v2.x provenance model (timestamp-based, no SHA).
 
 Required sections:
-1. Metadata header (Updated, Status, Policy Version OR Gate Version)
+1. Metadata header (Updated, Status)
 2. DoD-commands (canonical commands) OR Canonical Commands
 3. Risks/Blockers OR Evidence Links
 4. Next steps/focus OR Stage Clarification
@@ -14,7 +14,9 @@ Evidence Completeness (v2.x - for M4):
 - Updated timestamp
 - RunDir or run_id
 - run_mode (REGISTRY_REAL/FIXTURE_OFFLINE)
-- Policy/Gate version
+
+NOTE: Per DOCS_POLICY.md, version strings (vX.Y.Z) are forbidden in Status files.
+Versions are tracked only in docs/DEV_REPORT_LATEST.md.
 
 Legacy/Archive files (containing 'ARCHIVE' or '_legacy' in name/header) are skipped.
 

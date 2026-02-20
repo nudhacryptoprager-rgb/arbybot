@@ -60,7 +60,7 @@ run_scanner(mode=ScannerMode.SMOKE, cycles=1, output_dir=Path(...))
 run_scanner(mode=ScannerMode.REAL, cycles=1, output_dir=Path(...))
 ```
 
-### TruthReport CONTRACT (schema v3.0.0)
+### TruthReport CONTRACT (schema 3.x)
 
 ```json
 {

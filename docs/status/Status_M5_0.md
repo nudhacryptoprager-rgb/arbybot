@@ -167,3 +167,10 @@ CURRENT_EXECUTION_BLOCKER, SCHEMA_VERSION, CHAIN_IDS, DEX_IDS
 
 All gates use shared invariants from `core/artifact_invariants.py`.
 
+---
+
+## Next steps/focus
+
+- Docs drift closure: enforce DOCS_POLICY on Status + archive map fixed (see `docs/DOCS_POLICY.md`, `docs/status/ARCHIVE_MAP.md`)
+- Continue M5_0 infra hardening with multicall/failover stability
+

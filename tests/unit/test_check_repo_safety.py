@@ -204,12 +204,13 @@ class TestDocsLint(unittest.TestCase):
     """Test docs-lint version policy enforcement (v1.4.0)."""
 
     def test_exempt_files_list_correct(self):
-        """Exempt files should include DEV_REPORT_LATEST.md and policy docs."""
+        """Exempt files should include DEV_REPORT_LATEST.md and API contract docs."""
         from scripts.check_repo_safety import DOCS_VERSION_EXEMPT
         
         self.assertIn("docs/DEV_REPORT_LATEST.md", DOCS_VERSION_EXEMPT)
-        self.assertIn("docs/DOCS_POLICY.md", DOCS_VERSION_EXEMPT)
         self.assertIn("docs/m4/ROLLING_CONTRACT.md", DOCS_VERSION_EXEMPT)
+        self.assertIn("docs/m4/M4_POLICY.md", DOCS_VERSION_EXEMPT)
+        # DOCS_POLICY.md is NOT exempt - it must not contain version strings
 
     def test_version_pattern_matches_semver(self):
         """Version pattern should match semantic versions like v1.2.3."""

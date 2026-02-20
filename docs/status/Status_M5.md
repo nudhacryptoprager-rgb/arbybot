@@ -2,7 +2,6 @@
 
 **Status**: ✅ **DONE** (feature-complete), ⏳ **BLOCKED** by M4 online  
 **Updated**: 2026-02-09  
-**Gate Version**: `ci_m5_gate.py` v1.0.0 (when created)  
 **Tests**: 553 passed
 
 ---

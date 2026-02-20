@@ -219,23 +219,32 @@ def check_dev_report_bloat() -> List[str]:
 # Files where versions are ALLOWED (exempt from docs-lint)
 DOCS_VERSION_EXEMPT = [
     "docs/DEV_REPORT_LATEST.md",           # Canonical version tracking file
-    "docs/DOCS_POLICY.md",                  # Describes policy, version examples OK
     "docs/m4/ROLLING_CONTRACT.md",          # Schema version definitions (API contract)
     "docs/m4/M4_POLICY.md",                 # Policy thresholds (API contract)
 ]
 
+# Files where ISO timestamps are allowed
+DOCS_TIMESTAMP_EXEMPT = [
+    "docs/DEV_REPORT_LATEST.md",           # Contains rolling provenance
+    "docs/m4/ROLLING_CONTRACT.md",          # JSON examples with timestamps
+    "docs/m4/M4_POLICY.md",                 # JSON examples with timestamps
+]
+
 
 def check_docs_lint() -> List[str]:
-    """Check docs for forbidden version patterns (v1.4.0).
+    """Check docs for forbidden version and timestamp patterns.
     
     Per DOCS_POLICY.md:
-    - Version strings (vX.Y.Z) are forbidden except in DEV_REPORT_LATEST.md
-    - Real dates (YYYY-MM-DD) are forbidden in headers except Status_*.md
+    - Version strings (vX.Y.Z) are forbidden except in exempt files
+    - Status_*.md files may have timestamps but NOT version strings
+    - ISO timestamps forbidden in most docs except Status_*.md and exempt files
     """
     issues = []
     
     # Pattern for semantic versions: v1.2.3, v2.3.4-fix, etc.
     version_pattern = re.compile(r'\bv\d+\.\d+\.\d+\b')
+    # Pattern for ISO timestamps: 2026-02-19T10:00:00
+    timestamp_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}')
     
     docs_dir = PROJECT_ROOT / "docs"
     if not docs_dir.exists():
@@ -253,37 +262,45 @@ def check_docs_lint() -> List[str]:
         tracked_docs = [f for f in result.stdout.strip().split("\n") if f and f.endswith(".md")]
         
         for doc_path in tracked_docs:
-            # Skip exempt files
-            if doc_path in DOCS_VERSION_EXEMPT:
-                continue
-            
-            # Skip Status files (they can have timestamps in Updated field)
-            if "Status_" in doc_path:
-                continue
-            
             full_path = PROJECT_ROOT / doc_path
             if not full_path.exists():
                 continue
             
             try:
                 content = full_path.read_text(encoding="utf-8")
+                is_status_file = "Status_" in doc_path
                 
-                # Check for forbidden version patterns
-                matches = version_pattern.findall(content)
-                if matches:
-                    unique_versions = set(matches)
-                    issues.append(
-                        f"DOCS_LINT: {doc_path} contains version string(s): {', '.join(sorted(unique_versions))} "
-                        f"(versions only allowed in DEV_REPORT_LATEST.md)"
-                    )
+                # Check VERSION strings
+                # Status files must NOT have versions (they have timestamps instead)
+                # Exempt files can have versions
+                if doc_path not in DOCS_VERSION_EXEMPT:
+                    matches = version_pattern.findall(content)
+                    if matches:
+                        unique_versions = set(matches)
+                        issues.append(
+                            f"DOCS_LINT: {doc_path} contains version string(s): {', '.join(sorted(unique_versions))} "
+                            f"(versions only allowed in DEV_REPORT_LATEST.md)"
+                        )
+                
+                # Check TIMESTAMP patterns
+                # Status files can have timestamps, exempt files can have timestamps
+                # Other docs should not have real ISO timestamps
+                if not is_status_file and doc_path not in DOCS_TIMESTAMP_EXEMPT:
+                    ts_matches = timestamp_pattern.findall(content)
+                    if ts_matches:
+                        # Only flag if more than 1 unique timestamp (could be a placeholder example)
+                        unique_ts = set(ts_matches)
+                        if len(unique_ts) > 1:
+                            issues.append(
+                                f"DOCS_LINT: {doc_path} contains ISO timestamp(s): {', '.join(sorted(list(unique_ts)[:3]))}... "
+                                f"(timestamps only allowed in Status_*.md and DEV_REPORT_LATEST.md)"
+                            )
                     
             except Exception:
                 pass  # Skip unreadable files
                 
     except Exception as e:
         issues.append(f"ERROR: Could not run docs-lint: {e}")
-    
-    return issues
     
     return issues
 
