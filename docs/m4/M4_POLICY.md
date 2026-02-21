@@ -57,7 +57,6 @@ Note: Thresholds are exclusive (`>` not `>=`).
 | `WARN_DRIFT_MAE` | MAE above warn threshold | Investigate |
 | `FAIL_DRIFT_MAE` | MAE above fail threshold | Block |
 | `FAIL_UNPROFITABLE` | Net PnL <= 0 | Block |
-| `DIRTY_WORKTREE_PRECOMMIT` | Uncommitted changes | Weaker evidence |
 | `WARMUP_MIN_RUNS` | Runs < 10 | In warmup |
 | `WARMUP_MIN_SIGNALS` | Signals < 30 | In warmup |
 
@@ -85,10 +84,15 @@ Signals with low profit margin are "fragile" (easy to flip to loss):
 
 ## Evidence Policy
 
-For **PROVEN** status:
-1. At least one run with `code_dirty = false`
-2. `evidence_sha` attached post-commit
+This repo is **SHA-free** for provenance. Evidence is identified by `run_context.run_timestamp`.
+
+For **PROVEN** status (v2.x SHA-free):
+1. Rolling artifacts exist and include `run_context.run_timestamp` (canonical provenance)
+2. Rolling artifacts reference an evidence runDir (`run_summary_latest.inputs.run_dir_name`)
 3. `evidence.ok = true` (no blocking issues)
 
+Deprecated fields:
+- `run_context.code_sha` / `run_context.evidence_sha` must be `null` (kept for schema compatibility only)
+
 Evidence issues:
-- `DIRTY_WORKTREE_PRECOMMIT`: Run made with uncommitted changes (weak evidence)
+- Use local `git status` for reproducibility context; dirty state is not part of SHA-free provenance (v2.x)

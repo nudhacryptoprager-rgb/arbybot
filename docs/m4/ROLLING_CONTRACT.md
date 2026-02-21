@@ -10,7 +10,7 @@ Schema and data contract for M4 execution gate rolling artifacts.
 | `run_summary_latest.json` | `m4:run_summary` | v2.0 | Full run summary |
 | `m4_stability_agg.json` | `m4:stability_agg` | v2.0 | Rolling aggregator |
 
-**Де брати ключові метрики:**
+**Where to get key metrics:**
 - `signals_count` -> `run_summary_latest.metrics.signals_count`
 - `total_net_usdc` -> `run_summary_latest.metrics.total_net_usdc` (per run) / `m4_stability_agg.quick_stats.total_net_usdc` (window)
 - `low_sample_rate` -> `m4_stability_agg.quick_stats.low_sample_rate`
@@ -31,11 +31,11 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
 {
   "schema_version": "m4:latest:v2.0",
   "updated_at": "ISO8601",
-  "latest_run_timestamp": "2026-02-11T10:05:45Z",  // Primary provenance
-  "code_identity": "ts:2026-02-11T10:05:45Z",      // v2.0.1
+  "latest_run_timestamp": "<ISO8601>",  // Primary provenance (placeholder)
+  "code_identity": "ts:<ISO8601>",      // Deterministic code ref (placeholder)
   "run_context": {
-    "run_timestamp": "2026-02-11T10:05:45Z",  // Primary provenance
-    "code_identity": "ts:2026-02-11T10:05:45Z", // v2.0.1
+    "run_timestamp": "<ISO8601>",  // Primary provenance (placeholder)
+    "code_identity": "ts:<ISO8601>", // Deterministic code ref (placeholder)
     "code_sha": null,                         // v2.0: deprecated
     "code_dirty": null,                       // v2.0: deprecated
     "code_desc": null,                        // v2.0: deprecated
@@ -73,8 +73,8 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
   "timestamp": "ISO8601",
   "run_id": "manual_run_20260209_120000",
   "run_context": {
-    "run_timestamp": "2026-02-09T12:00:00Z",  // Primary provenance
-    "code_identity": "ts:2026-02-09T12:00:00Z",  // v2.0.1: deterministic code ref
+    "run_timestamp": "<ISO8601>",  // Primary provenance (placeholder)
+    "code_identity": "ts:<ISO8601>",  // Deterministic code ref (placeholder)
     "code_sha": null,                         // v2.0: deprecated
     "code_dirty": null,                       // v2.0: deprecated
     "code_desc": null,                        // v2.0: deprecated
@@ -120,8 +120,8 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
     {
       "run_id": "...",
       "timestamp": "ISO8601",
-      "run_timestamp": "2026-02-09T12:00:00Z",  // Primary provenance
-      "code_identity": "ts:2026-02-09T12:00:00Z",  // v2.0.1: deterministic code ref
+      "run_timestamp": "<ISO8601>",  // Primary provenance (placeholder)
+      "code_identity": "ts:<ISO8601>",  // Deterministic code ref (placeholder)
       "code_sha": null,                         // v2.0: deprecated
       "net_usdc": 5.00,
       "mae": 0.25,
@@ -134,7 +134,7 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
     }
   ],
   "runs_by_date": {                            // v2.0: replaces runs_by_code_sha
-    "2026-02-09": 10
+    "2026-XX-XX": 10
   },
   "rolling_window": {
     "max": 200,

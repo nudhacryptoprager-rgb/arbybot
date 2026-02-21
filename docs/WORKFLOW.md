@@ -1,4 +1,4 @@
-# ARBY3 Workflow (ChatGPT ↔ Claude ↔ VSCode ↔ GitHub)
+# ARBY3 Workflow (ChatGPT <-> Claude <-> VSCode <-> GitHub)
 
 > **Provenance**: SHA tracking removed. Evidence based on `run_timestamp` + rolling artifacts.
 > See `docs/DEV_REPORT_CANONICAL_UA.md` for canonical report format.
@@ -29,8 +29,8 @@ python -c "from monitoring import calculate_confidence; print('import ok')"
 - Work via rolling artifacts + latest Status as source of truth (v2.x: no SHA binding)
 - Small PRs (1-2 commits). Every PR must have:
   - Updated Status file (with Updated timestamp, run_id)
-  - `python -m pytest -q` green
-  - `python scripts/ci_m4_execution_gate.py --offline --profile profit` green
+  - `py -3.11 -m pytest -q` green
+  - `py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit` green
   - No emojis in subprocess output (ASCII only)
 - Do not commit runtime run directories (`data/runs/...`) unless explicitly marked as **golden**
 
@@ -106,11 +106,11 @@ py -3.11 -c "import json; d=json.load(open('data/runs/_rolling/run_summary_lates
 ```
 
 Expected output when Truth Engine works correctly:
-- `real_quote_count>0` — we're getting real callback quotes
-- `profitable_count=0` + `best_net_pnl_bps<0` — no profitable arb = ROUNDTRIP_NOT_PROFITABLE (expected behavior)
-- `profitable_count>0` + `best>0` — found profitable arb = ROUNDTRIP_PROFITABLE (ready for execution)
+- `real_quote_count>0` - we're getting real callback quotes
+- `profitable_count=0` + `best_net_pnl_bps<0` - no profitable arb = ROUNDTRIP_NOT_PROFITABLE (expected behavior)
+- `profitable_count>0` + `best>0` - found profitable arb = ROUNDTRIP_PROFITABLE (ready for execution)
 
-**Interpretation**: ROUNDTRIP_NOT_PROFITABLE is NOT a bug — it's proof Truth Engine correctly identifies non-profitable conditions.
+**Interpretation**: ROUNDTRIP_NOT_PROFITABLE is NOT a bug - it's proof Truth Engine correctly identifies non-profitable conditions.
 
 ---
 
@@ -141,8 +141,8 @@ Golden fixtures live under `docs/artifacts/golden/` only:
 ### Rule #3: Continuous scan storage
 
 For continuous/rolling operations:
-- `data/runs/_rolling/m4_stability_agg.json` — overwritten on each emit
-- `data/runs/_rolling/_latest.json` — overwritten pointer
+- `data/runs/_rolling/m4_stability_agg.json` - overwritten on each emit
+- `data/runs/_rolling/_latest.json` - overwritten pointer
 - No dated copies of latest/agg in runtime
 
 ### Rule #4: Retention policy
@@ -172,7 +172,7 @@ py -3.11 scripts/prune_run_dirs.py --keep 50 --yes
 
 **M5 gate integration**: `--prune-keep 50` in M5 gate automatically prunes after scan.
 
-- **NEVER manually delete** `data/runs/ci_*` directories — use `prune_run_dirs.py` only
+- **NEVER manually delete** `data/runs/ci_*` directories - use `prune_run_dirs.py` only
 - CI: save runtime artifacts as GitHub Actions artifacts (7-30 day retention)
 
 ### Rule #5: Pre-commit guard

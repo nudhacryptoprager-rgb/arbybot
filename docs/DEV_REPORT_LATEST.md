@@ -12,33 +12,34 @@ config: config/real_minimal.yaml (profit profile)
 code_identity:
   primary: ts:2026-02-19T20:04:47.148356+00:00
   dirty: false
-  desc: v2.3.4 Version consistency + guardrails + M4-close plan
+  desc: docs refactor - SHA-free clarity + canonical py -3.11 commands + contract placeholders
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4 simulate-only, v2.3.4 version consistency and guardrails
+goal (Roadmap пункт): Documentation discipline (remove ambiguity; keep SHA-free provenance explicit)
 change_summary:
-  - FIX: Status_M5_0.md version contract (ci_m5_0_gate.py v2.3.2, not v2.3.4)
-  - ADD: check_repo_safety.py v1.3.0 - Status version consistency check
-  - ADD: check_repo_safety.py v1.3.0 - DEV_REPORT freshness check
-  - CLARIFY: Version semantics (Contract Version vs Script Version)
-  - ADD: M4-close plan (deterministic criteria, not luck-based)
-  - ADD: WARN_EXCLUDED_SIGNALS root cause (WBTC/WETH, ARB/WETH = MIXED_SOURCE)
-  - ADD: Diversity restore contract with verify_v3_pools.py --require-cross-dex
-  - ADD: UTF-8 viewing commands in DEV_REPORT_CANONICAL_UA.md
+  - FIX: removed SHA-era proof from Status_M3 (SHA-free; frozen milestone status)
+  - FIX: contract examples use placeholders (no real timestamps in docs/m4/ROLLING_CONTRACT.md)
+  - FIX: canonical commands use `py -3.11` (AGENTS.md, docs/WORKFLOW.md, docs/TESTING.md, docs/DEV_REPORT_CANONICAL_UA.md)
+  - CLARIFY: status index rules (frozen CLOSED milestones; archive lives outside docs/)
+  - CLARIFY: setting_claude.md scope is subordinate to AGENTS.md + DOCS_POLICY.md
+  - FIX: removed misleading DIRTY_WORKTREE_PRECOMMIT from docs/m4/M4_POLICY.md (not part of SHA-free provenance)
 touched_files:
-  - docs/status/Status_M4.md (version semantics, M4-close plan, WARN root cause)
-  - docs/status/Status_M5_0.md (version contract fix)
-  - scripts/check_repo_safety.py (v1.3.0: version + freshness checks)
-  - tests/unit/test_check_repo_safety.py (v1.3.0 tests)
-  - docs/DEV_REPORT_CANONICAL_UA.md (UTF-8 viewing)
+  - AGENTS.md
+  - docs/README.md
+  - docs/DEV_REPORT_CANONICAL_UA.md
+  - docs/WORKFLOW.md
+  - docs/TESTING.md
+  - docs/m4/M4_POLICY.md
+  - docs/m4/ROLLING_CONTRACT.md
+  - docs/status/INDEX.md
+  - docs/status/Status_M3.md
+  - setting_claude.md
   - docs/DEV_REPORT_LATEST.md
 
 ## 2) Commands Executed (лише факти)
 
-python -m pytest tests/unit/test_check_repo_safety.py -v: PASS (11 passed, 0.15s)
-python scripts/check_repo_safety.py: PASS (v1.3.0, 7 checks, 0 warnings)
-  - [6] Status version consistency: OK
-  - [7] DEV_REPORT freshness: OK
+py -3.11 scripts/check_repo_safety.py: PASS (v1.4.0, 8 checks, 0 warnings)
+py -3.11 -m pytest -q: PASS (955 passed, 12 skipped, 1 warning, 12.16s)
 
 ## 3) Artifacts Attached (шляхи)
 rolling (unchanged from previous session):
@@ -58,9 +59,10 @@ _latest.json:
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
-  run_id: ci_m5_gate_20260219_210425
-  run_timestamp: 2026-02-19T21:04:25+00:00
   status: PASS
+  run_context.run_timestamp: 2026-02-19T20:04:47.148356+00:00
+  run_context.code_identity: ts:2026-02-19T20:04:47.148356+00:00
+  inputs.run_dir_name: ci_m5_gate_20260219_210425
   metrics:
     signals_count: 8
     included_signals_count: 6
@@ -90,7 +92,7 @@ truth_report_20260219_203119.json:
   profit_realism_status: ROUNDTRIP_NOT_PROFITABLE
   profit_is_diagnostic: true
 
-## 5) Diversity Analysis (v2.3.4)
+## 5) Diversity Analysis (from rolling artifacts)
 
 unique_pairs: 8 (target=8) -> OK
   - ARB/USDC, ARB/WETH, LINK/WETH, WBTC/USDC, WBTC/WETH, WETH/USDC, WETH/USDT, wstETH/WETH

@@ -6,10 +6,10 @@
 
 ```powershell
 # 1. OFFLINE (always works, ignores ALL ENV)
-python scripts/ci_m5_0_gate.py --offline
+py -3.11 scripts/ci_m5_0_gate.py --offline
 
 # 2. ONLINE (runs real scan, ignores ARBY_RUN_DIR)
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 ```
 
 ### Mode Semantics
@@ -34,16 +34,16 @@ python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 
 ```powershell
 # 1. Import smoke tests (catch ImportError early)
-python -m pytest tests/unit/test_imports_contract.py -v
+py -3.11 -m pytest tests/unit/test_imports_contract.py -v
 
 # 2. All unit tests
-python -m pytest tests/unit -q
+py -3.11 -m pytest tests/unit -q
 
 # 3. Offline gate
-python scripts/ci_m5_0_gate.py --offline
+py -3.11 scripts/ci_m5_0_gate.py --offline
 
 # 4. Online gate (requires RPC)
-python scripts/ci_m5_0_gate.py --online --config config/real_m5_0_golden.yaml
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_m5_0_golden.yaml
 ```
 
 ---
@@ -52,19 +52,19 @@ python scripts/ci_m5_0_gate.py --online --config config/real_m5_0_golden.yaml
 
 ```powershell
 # Import contract tests
-python -m pytest tests/unit/test_imports_contract.py -v
+py -3.11 -m pytest tests/unit/test_imports_contract.py -v
 
 # Price sanity tests
-python -m pytest tests/unit/test_price_sanity_inversion.py -v
+py -3.11 -m pytest tests/unit/test_price_sanity_inversion.py -v
 
 # Gate tests
-python -m pytest tests/unit/test_ci_m5_0_gate.py -v
+py -3.11 -m pytest tests/unit/test_ci_m5_0_gate.py -v
 
 # Adapter tests
-python -m pytest tests/unit/test_algebra_adapter.py -v
+py -3.11 -m pytest tests/unit/test_algebra_adapter.py -v
 
 # All unit tests
-python -m pytest tests/unit -q
+py -3.11 -m pytest tests/unit -q
 ```
 
 ---
@@ -84,11 +84,11 @@ For backward compatibility only:
 
 ```powershell
 # Explicit run directory
-python scripts/ci_m5_0_gate.py --run-dir data/runs/real_xxx
+py -3.11 scripts/ci_m5_0_gate.py --run-dir data/runs/real_xxx
 
 # With ENV (deprecated)
 $env:ARBY_RUN_DIR = "data\runs\real_xxx"
-python scripts/ci_m5_0_gate.py
+py -3.11 scripts/ci_m5_0_gate.py
 ```
 
 **Note**: Prefer `--offline` or `--online` for new workflows.
@@ -104,14 +104,14 @@ python scripts/ci_m5_0_gate.py
 - `ALCHEMY_API_KEY` (recommended): single API key used to generate Alchemy HTTP/WS endpoints when explicit URLs are not provided.
 - `ALCHEMY_RPC_HTTP` / `ALCHEMY_RPC_WS` (optional): explicit endpoints. If present, they take priority over `ALCHEMY_API_KEY`.
 - `ARBY_RPC_HTTP_PRIMARY` / `ARBY_RPC_WS_PRIMARY`: internal env keys that the gate may inject into the scanner subprocess to pin a resolved provider.
-- `NETWORK`: canonical network name (e.g., `arbitrum`, `base`, `linea`, `mantle`) — used when building Alchemy URLs from `ALCHEMY_API_KEY`.
+- `NETWORK`: canonical network name (e.g., `arbitrum`, `base`, `linea`, `mantle`) - used when building Alchemy URLs from `ALCHEMY_API_KEY`.
 - `TENDERLY_USER`, `TENDERLY_PROJECT`, `TENDERLY_ACCESS_KEY` (optional): when present `infra.tenderly_enabled=true` is written to artifacts; secrets are never logged.
 
 Rules the gate follows to resolve RPC endpoints (single source of truth):
 
-1. If `ALCHEMY_RPC_HTTP` (or `ARBY_RPC_HTTP_PRIMARY`) is set → use it (provider inferred from URL).
-2. Else if `ALCHEMY_API_KEY` + `NETWORK`/`chain_id` → build Alchemy HTTP and WS URLs via `core.rpc_urls` and use those.
-3. Else → fall back to a public RPC URL for the canonical network (e.g., `https://arb1.arbitrum.io/rpc`).
+1. If `ALCHEMY_RPC_HTTP` (or `ARBY_RPC_HTTP_PRIMARY`) is set -> use it (provider inferred from URL).
+2. Else if `ALCHEMY_API_KEY` + `NETWORK`/`chain_id` -> build Alchemy HTTP and WS URLs via `core.rpc_urls` and use those.
+3. Else -> fall back to a public RPC URL for the canonical network (e.g., `https://arb1.arbitrum.io/rpc`).
 
 WS is optional: the gate/scanner will attempt to resolve a WS URL but will not fail if none is available unless `--ws-required` is passed to the gate.
 

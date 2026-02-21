@@ -4,7 +4,7 @@
 
 Пріоритет source-of-truth:
 1) `Roadmap.md`
-2) `docs/status/Status_M4.md`
+2) Status файли в `docs/status/` (див. `docs/status/INDEX.md`)
 3) rolling артефакти в `data/runs/_rolling/` і runDir bundle в `data/runs/<run_id>/...`
 
 Обмеження безпеки:
@@ -102,13 +102,13 @@ touched_files:
 
 ## 2) Commands Executed (лише факти)
 
-**RULE**: Завжди використовуй повний шлях `python scripts/...` (не `python ci_*.py`).
+**RULE**: Завжди використовуй повний шлях `py -3.11 scripts/...` (не `py -3.11 ci_*.py`).
 
-python -m pytest -q: <PASS|FAIL> (duration: <...>)
-python scripts/ci_full_pipeline.py --mode ci: <PASS|FAIL|NOT RUN> (reason: <...>)
-python scripts/ci_m4_execution_gate.py --offline --profile profit --strict: <PASS|FAIL>
-python scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: <PASS|FAIL|NOT RUN> (reason)
-python scripts/ci_m4_execution_gate.py --online --profile profit --run-dir data/runs/<DIR>: <PASS|FAIL|NOT RUN> (reason)
+py -3.11 -m pytest -q: <PASS|FAIL> (duration: <...>)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: <PASS|FAIL|NOT RUN> (reason: <...>)
+py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: <PASS|FAIL>
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: <PASS|FAIL|NOT RUN> (reason)
+py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit --run-dir data/runs/<DIR>: <PASS|FAIL|NOT RUN> (reason)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -185,4 +185,3 @@ request_1: <...>
 - Звіт має бути українською мовою.
 - Уникай “інтерпретацій”: у Key Results вставляй цифри/статуси з артефактів.
 - Звіт має бути в одному вікні, в одному полі без розділення на окремі секції для зручного копіпасту для рев'юера.
-

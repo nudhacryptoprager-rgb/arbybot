@@ -27,7 +27,8 @@
 ## Rules
 
 1. One active Status file per milestone (`Status_M0.md`, `Status_M1.md`, etc.)
-2. New patches = new section in existing milestone file, NOT new file
-3. Old versions go to `archive/` folder (git history)
-4. No files with spaces in names
-5. Evidence: rolling artifacts (`_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`)
+2. When a milestone is CLOSED per `Roadmap.md`, its Status file is FROZEN (do not keep appending unrelated work)
+3. New patches = new section in the existing milestone file, NOT a new variant file
+4. Historical variants live outside `docs/` in `archive/status/**` (use `docs/status/ARCHIVE_MAP.md` as the map)
+5. No files with spaces in names
+6. Evidence: rolling artifacts (`_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`)

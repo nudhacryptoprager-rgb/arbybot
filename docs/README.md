@@ -1,10 +1,10 @@
 # ARBY3 Docs Index
 
-> Primary provenance: `run_timestamp` (див. `docs/status/Status_M4.md`).
+> Primary provenance: `run_timestamp` (see `docs/status/INDEX.md`).
 > For documentation policy see `docs/DOCS_POLICY.md`.
 
 ## What lives in /docs
-This folder is the “human layer” of the repo:
+This folder is the "human layer" of the repo:
 - **Status**: progress + contracts + evidence per milestone (see `docs/status/`).
 - **Workflow**: how we develop, review, and accept changes (`docs/WORKFLOW.md`).
 - **Testing**: how to run tests and generate artifacts (`docs/TESTING.md`).
@@ -12,10 +12,11 @@ This folder is the “human layer” of the repo:
 
 ## Status policy (important)
 - Keep **one** active status file per milestone/subphase.
-- Older variants are archived (do not delete history until the clean pack is merged).
+- Historical variants live outside `docs/` in `archive/` (see `docs/status/ARCHIVE_MAP.md`).
 - Every status should reference:
-  - HEAD SHA / branch (when applicable)
-  - Evidence (artifacts path + test command used)
+  - Evidence provenance (rolling `run_timestamp` + evidence `runDir`)
+  - Proof commands used (pytest + relevant gates)
+  - Optional: repo revision (branch/commit) for reproducibility only (**NOT** evidence)
 
 ## Artifacts policy (golden fixtures)
 We store **golden fixtures** only when they are needed for reproducible testing or schema verification.

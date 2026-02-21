@@ -1,5 +1,9 @@
 # setting_claude.md
 
+> Scope: instructions for using Claude as a code-executor helper.
+> Canonical repo rules live in `AGENTS.md` and `docs/DOCS_POLICY.md`.
+> If anything here conflicts with those files, this file is subordinate.
+
 ## 0) Хто ти і яка твоя роль
 Ти — Claude Opus 4.5, “виконавець змін у коді” (code executor) у ланцюгу роботи над проєктом ARBY3 / arbybot.
 
@@ -136,7 +140,7 @@ ENV-змінні допускаються, але:
 Per `docs/DOCS_POLICY.md`:
 
 **Заборонено:**
-- Створювати версіоновані DEV_REPORT файли (`DEV_REPORT_2026-02-20_v2.3.4.md`)
+- Створювати версіоновані DEV_REPORT файли (`DEV_REPORT_YYYY-MM-DD_vX.Y.Z.md`)
 - Додавати версії (`vX.Y.Z`) в будь-який документ крім `docs/DEV_REPORT_LATEST.md`
 - Додавати ISO timestamps в документи крім `docs/status/Status_*.md` та `docs/DEV_REPORT_LATEST.md`
 
