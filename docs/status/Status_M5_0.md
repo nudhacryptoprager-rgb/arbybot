@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-02-20  
-**Tests**: 943 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260219_210425`
+**Updated**: 2026-02-21  
+**Tests**: 955 passed, 12 skipped  
+**Evidence runDir**: `ci_m5_gate_20260221_105949`
 
 ---
 
@@ -15,7 +15,7 @@
 
 ---
 
-## v2.3.x Infra Changes (2026-02-19)
+## v2.4.x Infra Changes (2026-02-21)
 
 | Step | Change | File | Description |
 |------|--------|------|-------------|
@@ -28,6 +28,9 @@
 | 7 | **pool_missing_keys observability** | `strategy/quotes.py`, `run_scan_real.py` |: `pool_missing_keys` in scan.stats |
 | 8 | **repo safety gate** | `scripts/check_repo_safety.py` |: check forbidden tracked files/keys |
 | 9 | **Single DEV_REPORT policy** | `docs/DEV_REPORT_LATEST.md` |: only 1 DEV_REPORT tracked, versioned files forbidden |
+| 10 | **WBTC/WETH fee=500 removed** | `config/real_minimal.yaml` | Cross-DEX only 3000 (MIXED_SOURCE fix) |
+| 11 | **ARB/WETH fee=500 removed** | `config/real_minimal.yaml` | Cross-DEX only 3000 (MIXED_SOURCE fix) |
+| 12 | **M4.1 deterministic close plan** | `Roadmap.md` | Time-bound window (N=100) for simulate-only |
 
 ---
 
@@ -64,8 +67,8 @@ py -3.11 -m pytest tests/unit -q
 
 | Type | RunDir | Key Evidence |
 |------|--------|--------------|
-| Normal | `ci_m5_gate_20260219_201744` | `field_success_rates~1.0`, unique_pairs=8 |
-| Reference | `ci_m5_gate_20260219_190354` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
+| Normal | `ci_m5_gate_20260221_105949` | `field_success_rates~1.0`, unique_pairs=8, excluded_signals=1 |
+| Reference | `ci_m5_gate_20260219_210425` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
 
 ---
 

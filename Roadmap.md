@@ -123,6 +123,29 @@ N = 5 (на реальних блоках, не fixture)
 
 **Тільки після цього:** M4 закрито по суті, можна повертатись до M5.
 
+### M4.1 Simulate-Only Close Plan (deterministic)
+
+> **Problem**: M4 full close requires `profit_truth_available=true`, which depends on market conditions (roundtrip profitable_count > 0). This is non-deterministic.
+
+**M4.1 (simulate-only) Deterministic Close Criteria:**
+```
+M4.1 CLOSED when:
+  - N >= 100 consecutive runs in m4_stability_agg.json.runs[] with:
+    - run_mode = "REGISTRY_REAL"
+    - agg_status = PASS
+    - profit_is_diagnostic = true (accepted for simulate-only)
+  - code_path_proven = true (via offline synthetic fixture with profitable roundtrip)
+  - execution_preflight (eth_call/estimateGas) artifacts captured for top-N signals
+```
+
+| Sub-milestone | Description | Criterion |
+|---------------|-------------|-----------|
+| **M4.1 paper** | Paper profit + rolling stability | N>=100 runs, agg_status=PASS, profit_is_diagnostic=true |
+| **M4.2 roundtrip** | Roundtrip profitable_count > 0 | Requires market arb opportunity |
+| **M4.3 execution** | Real on-chain TX with profit | kill_switch=false, actual execution |
+
+**M4.1 ACCEPTED** when time-bound window (N=100) achieved. M4.2/M4.3 can be completed later when market or infrastructure allows.
+
 ### Priority Rule
 
 > Не шліфувати M5, поки M4 online-profit не стабільний.  

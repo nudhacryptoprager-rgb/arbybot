@@ -1,14 +1,14 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
-**Updated**: 2026-02-20  
+**Updated**: 2026-02-21  
 **Policy**: DIVERSITY_PAIRS_TARGET=8  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
 > [!] **M4 NOT CLOSED**: `net_usdc` from rolling is DIAGNOSTIC (`profit_is_diagnostic=true`), not canonical DEX-DEX truth. Clean PnL available (`cost_model_available=true`), but requires `profit_truth_source=ROUNDTRIP_REAL` (currently `ONE_LEG_DIAGNOSTIC`).
 
-## M4-specific Fixes (2026-02-19)
+## M4-specific Fixes (2026-02-21)
 
 | Step | Change | File | Description |
 |------|--------|------|-------------|
@@ -17,6 +17,8 @@
 | 3 | **RDNT/WETH DISABLED** | `config/real_minimal.yaml` | Pair disabled (quoter_v2 returning 0, slot0 fallback) |
 | 4 | **Uni-only pairs removed** | `config/real_minimal.yaml` | GMX/USDC, UNI/WETH moved to real_expanded.yaml |
 | 5 | **Single DEV_REPORT policy** | `docs/DEV_REPORT_LATEST.md` | Only 1 DEV_REPORT tracked, guardrail in check_repo_safety.py |
+| 6 | **WBTC/WETH fee=500 removed** | `config/real_minimal.yaml` | Sushi has no liquidity at fee=500 (MIXED_SOURCE fix) |
+| 7 | **ARB/WETH fee=500 removed** | `config/real_minimal.yaml` | Sushi disabled at fee=500 (PRICE_SANITY_FAILED, MIXED_SOURCE fix) |
 
 > **NOTE**: M5_0 infra changes (multicall/failover/pool_missing_keys) moved to [Status_M5_0.md](Status_M5_0.md)
 
@@ -31,20 +33,20 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-19)**: From `m4_stability_agg.json` (canonical source): runs_in_window=79, data_run_rate=1.0, pass_rate=1.0, **total_net_usdc=$4322.08**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=10, POOL_MISSING=1. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **PENDLE/WETH, RDNT/WETH DISABLED**: pairs disabled in config (quoter returning 0). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). For infra evidence see [Status_M5_0.md](Status_M5_0.md).
+**Snapshot (2026-02-21)**: From `m4_stability_agg.json` (canonical source): runs_in_window=80, data_runs_count=79, no_data_count=1, data_run_rate=0.9875, pass_rate=1.0, **total_net_usdc=$4359.51**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=10, POOL_MISSING=1. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **PENDLE/WETH, RDNT/WETH DISABLED**: pairs disabled in config (quoter returning 0). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). For infra evidence see [Status_M5_0.md](Status_M5_0.md).
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when ≥10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
-**Evidence (ci_m5_gate_20260219_210425 - run)**:
+**Evidence (ci_m5_gate_20260221_105949 - run)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
 - Counters: `execution_ready_count=0` (kill_switch_active=true), `would_execute_count=0`
-- Provenance: `run_timestamp=2026-02-19T21:04:25+00:00`
+- Provenance: `run_timestamp=2026-02-21T10:00:09.828466+00:00`
 - See [Status_M5_0.md](Status_M5_0.md) for infra evidence.
 
 **Quality Note**: 
 - **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_PROFIT_DIAGNOSTIC`
-- **WARN_EXCLUDED_SIGNALS root cause**: 2 signals from WBTC/WETH, ARB/WETH excluded due to `MIXED_SOURCE` (one DEX quoter_v2, other slot0)
+- **WARN_EXCLUDED_SIGNALS root cause**: 1 signal excluded due to `MIXED_SOURCE`/diagnostic (down from 2 after fee_tier fix)
 - **Window-level** (`_latest.agg_reasons`): `[]` (no diversity warnings with updated thresholds)
 - **Clean PnL AVAILABLE**: `execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`
 - **deferred**: PENDLE/RDNT quoter investigation (slot0 fallback, pairs DISABLED)
@@ -197,12 +199,12 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| runs_in_window | 79 | `m4_stability_agg.json` |
-| data_runs_count | 79 | computed from runs |
-| pass_count | 79 | all runs PASS |
-| total_net_usdc (window) | $4322.08 | computed from runs |
-| avg_net_usdc | $54.71 | total/runs |
-| data_run_rate | 1.0 | all runs are data runs |
+| runs_in_window | 80 | `m4_stability_agg.json` |
+| data_runs_count | 79 | 80 - 1 NO_DATA |
+| pass_count | 79 | all data runs PASS |
+| total_net_usdc (window) | $4359.51 | computed from runs |
+| avg_net_usdc | $55.18 | total/data_runs |
+| data_run_rate | 0.9875 | 79/80 |
 | pass_rate | 1.0 | 100% pass rate |
 | unique_pairs | 8 | meets target=8 |
 | unique_routes_cross_dex | 2 | meets target=2 |
@@ -220,8 +222,8 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 > Target will be restored when more pairs have working quoter on both DEXes.
 
 > **Rolling PASS**:
-> - 78 runs in window, all PASS
-> - total_net_usdc=$4264.02 (paper profit under declared cost model)
+> - 80 runs in window (79 data runs, 1 NO_DATA), all data runs PASS
+> - total_net_usdc=$4359.51 (paper profit under declared cost model)
 > - profit_is_diagnostic=true (no roundtrip opportunities)
 > - M4 NOT CLOSED: requires profit_truth_available=true (roundtrip.profitable_count > 0)
 

@@ -62,12 +62,14 @@ pairs:
     fee_tiers: [500, 3000]
   # v2.1.0-fix: WBTC pairs re-enabled after Decimal(10)**exp fix
   # Previously caused decimal.InvalidOperation with 8 vs 18 decimals
+  # v2.4.0: fee=500 removed - Sushi has no liquidity (sushiswap_v3_WBTC_WETH_500 disabled)
   - token_in: WBTC
     token_out: WETH
-    fee_tiers: [500, 3000]
+    fee_tiers: [3000]
+  # v2.4.0: fee=500 removed - Sushi has PRICE_SANITY_FAILED (sushiswap_v3_ARB_WETH_500 disabled)
   - token_in: ARB
     token_out: WETH
-    fee_tiers: [500, 3000]
+    fee_tiers: [3000]
   # NOTE: LINK re-enabled for signals diversity (quality gate requirement)
   - token_in: LINK
     token_out: WETH
