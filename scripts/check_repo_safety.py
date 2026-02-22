@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -395,6 +395,60 @@ def check_dev_report_freshness() -> List[str]:
     return issues
 
 
+def check_dev_report_alignment() -> List[str]:
+    """Check that DEV_REPORT_LATEST.md aligns with rolling artifacts (v1.6.0).
+    
+    Verifies that:
+    1. run_context.run_timestamp in DEV_REPORT matches run_summary_latest.json
+    2. inputs.run_dir_name in DEV_REPORT matches run_summary_latest.json
+    
+    This prevents evidence drift where DEV_REPORT references old/stale artifacts.
+    """
+    issues = []
+    
+    dev_report_path = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
+    rolling_summary_path = PROJECT_ROOT / "data" / "runs" / "_rolling" / "run_summary_latest.json"
+    
+    if not dev_report_path.exists():
+        return []  # No DEV_REPORT = skip
+    
+    if not rolling_summary_path.exists():
+        return []  # No rolling artifacts = skip (offline-only mode)
+    
+    try:
+        with open(rolling_summary_path, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+        
+        rolling_timestamp = summary.get("run_context", {}).get("run_timestamp", "")
+        rolling_run_dir = summary.get("inputs", {}).get("run_dir_name", "")
+        
+        if not rolling_timestamp or not rolling_run_dir:
+            return []  # Incomplete rolling data = skip
+        
+        dev_report_content = dev_report_path.read_text(encoding="utf-8")
+        
+        # Check run_dir_name alignment
+        if rolling_run_dir and rolling_run_dir not in dev_report_content:
+            issues.append(
+                f"WARN: DEV_REPORT_ALIGNMENT: run_dir_name mismatch. "
+                f"Rolling: {rolling_run_dir}, DEV_REPORT: does not contain this run_dir"
+            )
+        
+        # Check run_timestamp alignment (full timestamp, not just date)
+        # Extract just the date+time portion for comparison (YYYY-MM-DDTHH:MM:SS)
+        rolling_ts_short = rolling_timestamp[:19]  # "2026-02-21T10:36:46"
+        if rolling_ts_short not in dev_report_content:
+            issues.append(
+                f"WARN: DEV_REPORT_ALIGNMENT: run_timestamp mismatch. "
+                f"Rolling: {rolling_ts_short}, DEV_REPORT: does not contain this timestamp"
+            )
+            
+    except Exception as e:
+        issues.append(f"ERROR: Could not check DEV_REPORT alignment: {e}")
+    
+    return issues
+
+
 def check_roadmap_governance(allow_edit: bool = False) -> List[str]:
     """Check that Roadmap.md is not modified without explicit permission (v1.5.0).
     
@@ -535,6 +589,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: Roadmap.md not modified without explicit permission")
+    
+    print("\n[10] Checking DEV_REPORT alignment...")
+    issues = check_dev_report_alignment()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: DEV_REPORT_LATEST.md aligned with rolling artifacts")
     
     # Summary
     print("\n" + "=" * 50)

@@ -38,18 +38,20 @@
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when ≥10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
-**Evidence (ci_m5_gate_20260221_113627 - run)**:
+**Evidence (ci_m5_gate_20260222_100945 - run)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
 - Counters: `execution_ready_count=0` (kill_switch_active=true), `would_execute_count=0`
-- Provenance: `run_timestamp=2026-02-21T10:36:46.297599+00:00`
-- **M4.1 CLOSED**: N=100 consecutive runs with `agg_status=PASS`
+- Provenance: `run_timestamp=2026-02-22T09:10:03.859524+00:00`
+- **M4.1 CLOSED**: N=103 consecutive runs with `agg_status=PASS` (exceeds N=100 target)
+- **excluded_signals_count=0**: WBTC/WETH_3000 and ARB/WETH_3000 Sushi pools disabled (SUSPECT_SPREAD_EXCLUDED)
 - See [Status_M5_0.md](Status_M5_0.md) for infra evidence.
 
 **Quality Note**: 
-- **Per-run** (`run_summary_latest.quality_reasons`): `WARN_EXCLUDED_SIGNALS, WARN_PROFIT_DIAGNOSTIC`
-- **WARN_EXCLUDED_SIGNALS root cause**: 1 signal excluded (WBTC/WETH) due to `SUSPECT_SPREAD_EXCLUDED` (down from 2 after fee_tier fix)
+- **Per-run** (`run_summary_latest.quality_reasons`): `WARN_PROFIT_DIAGNOSTIC` (only)
+- **WARN_EXCLUDED_SIGNALS RESOLVED**: excluded_signals_count=0 after disabling WBTC/WETH_3000 and ARB/WETH_3000 Sushi pools
 - **Window-level** (`_latest.agg_reasons`): `[]` (no diversity warnings with updated thresholds)
 - **Clean PnL AVAILABLE**: `execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`
+- **Clean PnL golden tests**: 10 tests in `tests/unit/test_execution_pnl_golden.py` lock cost model invariants
 - **deferred**: PENDLE/RDNT quoter investigation (slot0 fallback, pairs DISABLED)
 
 ## [!] M4 Close Plan
@@ -71,6 +73,8 @@
 | Pool | Address | Reason | Evidence Run |
 |------|---------|--------|--------------|
 | sushiswap_v3_WBTC_WETH_500 | 0xf790... | tick=887271, price_exact~3.4e28 | ci_m5_gate_20260217_103807 |
+| sushiswap_v3_WBTC_WETH_3000 | 0x6F106... | SUSPECT_SPREAD_EXCLUDED 7560 bps | ci_m5_gate_20260222_100945 |
+| sushiswap_v3_ARB_WETH_3000 | 0xB3942... | SUSPECT_SPREAD_EXCLUDED 722 bps | ci_m5_gate_20260222_100945 |
 | sushiswap_v3_LINK_USDC_3000 | 0x7e039... | price_exact~19.9 vs anchor 9.0 | ci_m5_gate_20260217_103807 |
 | uniswap_v3_GMX_WETH_500 | 0xb435... | price_exact~0.00323 vs anchor 0.008 | ci_m5_gate_20260217_113317 |
 | uniswap_v3_GMX_WETH_3000 | 0x1aEE... | price_exact~0.00327 vs anchor 0.008 | ci_m5_gate_20260217_113317 |
