@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -395,9 +395,65 @@ def check_dev_report_freshness() -> List[str]:
     return issues
 
 
+def check_roadmap_governance(allow_edit: bool = False) -> List[str]:
+    """Check that Roadmap.md is not modified without explicit permission (v1.5.0).
+    
+    This prevents accidental Roadmap drift. Agent must have --allow-roadmap-edit flag
+    to modify Roadmap.md.
+    
+    Args:
+        allow_edit: If True, skip this check (explicit permission granted)
+    
+    Returns:
+        List of error messages if Roadmap.md is modified without permission
+    """
+    if allow_edit:
+        return []  # Explicit permission granted
+    
+    issues = []
+    roadmap_path = PROJECT_ROOT / "Roadmap.md"
+    
+    if not roadmap_path.exists():
+        return []  # No Roadmap.md = skip
+    
+    try:
+        # Check if Roadmap.md has uncommitted changes (modified in working tree)
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "Roadmap.md"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True
+        )
+        if "Roadmap.md" in result.stdout:
+            issues.append(
+                "ROADMAP_GOVERNANCE: Roadmap.md has uncommitted changes. "
+                "Use --allow-roadmap-edit flag if this is intentional."
+            )
+        
+        # Also check staged changes
+        result_staged = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "Roadmap.md"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True
+        )
+        if "Roadmap.md" in result_staged.stdout:
+            issues.append(
+                "ROADMAP_GOVERNANCE: Roadmap.md has staged changes. "
+                "Use --allow-roadmap-edit flag if this is intentional."
+            )
+            
+    except Exception as e:
+        issues.append(f"ERROR: Could not check Roadmap governance: {e}")
+    
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
+    parser.add_argument("--allow-roadmap-edit", action="store_true", 
+                        help="Allow Roadmap.md modifications (explicit permission)")
     args = parser.parse_args()
     
     print(f"Repo Safety Gate v{__version__}")
@@ -471,6 +527,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: Docs comply with DOCS_POLICY.md")
+    
+    print("\n[9] Checking Roadmap governance...")
+    issues = check_roadmap_governance(args.allow_roadmap_edit)
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: Roadmap.md not modified without explicit permission")
     
     # Summary
     print("\n" + "=" * 50)

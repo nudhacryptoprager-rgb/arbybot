@@ -1,6 +1,6 @@
 # PATH: tests/unit/test_check_repo_safety.py
 """
-Unit tests for scripts/check_repo_safety.py v1.4.0
+Unit tests for scripts/check_repo_safety.py v1.5.0
 
 Tests:
 1. INFO messages for untracked files don't count as warnings
@@ -10,6 +10,7 @@ Tests:
 5. Status version consistency (v1.3.0) - DISABLED per DOCS_POLICY
 6. DEV_REPORT freshness check (v1.3.0)
 7. Docs lint - version policy (v1.4.0)
+8. Roadmap governance - controlled document policy (v1.5.0)
 """
 
 import unittest
@@ -232,6 +233,69 @@ class TestDocsLint(unittest.TestCase):
         from scripts.check_repo_safety import check_docs_lint
         
         self.assertTrue(callable(check_docs_lint))
+
+
+class TestRoadmapGovernance(unittest.TestCase):
+    """Test Roadmap governance check (v1.5.0).
+    
+    Roadmap.md is a controlled document - agents cannot modify without
+    explicit Lead directive (--allow-roadmap-edit flag).
+    """
+
+    def test_unmodified_roadmap_passes(self):
+        """Unmodified Roadmap.md should PASS even without allow_edit flag."""
+        from scripts.check_repo_safety import check_roadmap_governance
+        
+        # Mock: no staged changes
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="",  # Nothing in diff --cached
+                returncode=0
+            )
+            issues = check_roadmap_governance(allow_edit=False)
+        
+        self.assertEqual(len(issues), 0)
+
+    def test_modified_roadmap_fails_without_flag(self):
+        """Modified Roadmap.md should FAIL without --allow-roadmap-edit flag."""
+        from scripts.check_repo_safety import check_roadmap_governance
+        
+        # Mock: Roadmap.md is staged (only staged, not working tree)
+        def mock_subprocess_run(cmd, **kwargs):
+            result = MagicMock(returncode=0)
+            # Only return Roadmap.md for --cached (staged) check
+            if "--cached" in cmd:
+                result.stdout = "Roadmap.md\n"
+            else:
+                result.stdout = ""
+            return result
+        
+        with patch('subprocess.run', side_effect=mock_subprocess_run):
+            issues = check_roadmap_governance(allow_edit=False)
+        
+        self.assertEqual(len(issues), 1)
+        self.assertIn("ROADMAP_GOVERNANCE:", issues[0])
+        self.assertIn("Roadmap.md", issues[0])
+
+    def test_modified_roadmap_passes_with_flag(self):
+        """Modified Roadmap.md should PASS with --allow-roadmap-edit flag."""
+        from scripts.check_repo_safety import check_roadmap_governance
+        
+        # Mock: Roadmap.md is staged but allow_edit=True
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="Roadmap.md\n",
+                returncode=0
+            )
+            issues = check_roadmap_governance(allow_edit=True)
+        
+        self.assertEqual(len(issues), 0)
+
+    def test_check_roadmap_governance_exists(self):
+        """check_roadmap_governance function should exist and be callable."""
+        from scripts.check_repo_safety import check_roadmap_governance
+        
+        self.assertTrue(callable(check_roadmap_governance))
 
 
 if __name__ == "__main__":

@@ -4,39 +4,36 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-21T10:00:09Z
-run_id: data/runs/ci_m5_gate_20260221_105949
+timestamp_utc: 2026-02-21T10:36:46Z
+run_id: data/runs/ci_m5_gate_20260221_113627
 mode: ONLINE
 artifact_mode: rolling
 config: config/real_minimal.yaml (profit profile)
 code_identity:
-  primary: ts:2026-02-21T10:00:09.828466+00:00
+  primary: ts:2026-02-21T10:36:46.297599+00:00
   dirty: true
-  desc: M4 fee_tier fix + M4.1 deterministic close plan + status normalization
+  desc: M4.1 N=100 ACHIEVED + Roadmap governance check + roadmap tests
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4 stability + MIXED_SOURCE elimination + deterministic close plan
+goal (Roadmap пункт): M4.1 deterministic close (N=100) + Roadmap governance enforcement
 change_summary:
-  - FIX: WBTC/WETH fee_tiers changed to [3000] only (Sushi fee=500 has no liquidity)
-  - FIX: ARB/WETH fee_tiers changed to [3000] only (Sushi fee=500 PRICE_SANITY_FAILED)
-  - ADD: M4.1 deterministic close plan in Roadmap.md (N=100 time-bound window)
-  - FIX: Status_M4.md data_run_rate corrected (0.9873 → 0.9875 with new run)
-  - FIX: Status_M4.md provenance timestamp corrected
-  - RESULT: excluded_signals_count dropped from 2 to 1 (MIXED_SOURCE partly fixed)
+  - ACHIEVED: M4.1 N=100 consecutive runs with agg_status=PASS
+  - ADD: Roadmap governance check (check_repo_safety.py v1.5.0)
+  - ADD: Unit tests for Roadmap governance (4 test cases)
+  - FIX: Status_M4.md artifact numbers (POOL_DISABLED=7, POOL_MISSING=0)
+  - FIX: Status_M4.md contract wording (ROUNDTRIP_CANONICAL)
+  - RESULT: total_net_usdc=$5198.71 (up from $4359.51)
 touched_files:
-  - Roadmap.md
-  - config/real_minimal.yaml
+  - scripts/check_repo_safety.py
+  - tests/unit/test_check_repo_safety.py
   - docs/status/Status_M4.md
-  - docs/status/Status_M5_0.md
   - docs/DEV_REPORT_LATEST.md
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (v1.4.0, 8 checks, 0 warnings)
-py -3.11 -m pytest -q: PASS (955 passed, 12 skipped, 1 warning, 11.03s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (12.3s, all required gates passed)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1 --refresh-rolling: PASS
-py -3.11 scripts/verify_v3_pools.py --pairs WBTC/WETH ARB/WETH --require-cross-dex --verbose: PASS (13 active pools)
+py -3.11 scripts/check_repo_safety.py: PASS (v1.5.0, 9 checks, 0 warnings)
+py -3.11 -m pytest -q: PASS (954 passed, 1 skipped, 1 warning, 11.81s)
+py -3.11 scripts/ci_m5_0_gate.py --online x20: PASS (20 runs executed to reach N=100)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -44,7 +41,7 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json
   - data/runs/_rolling/m4_stability_agg.json
 run_dir_bundle (ONLINE):
-  - data/runs/ci_m5_gate_20260221_105949/reports
+  - data/runs/ci_m5_gate_20260221_113627/reports
 
 ## 4) Key Results (числа з артефактів)
 
@@ -78,9 +75,9 @@ run_summary_latest.json:
   quality_reasons: ['WARN_EXCLUDED_SIGNALS', 'WARN_PROFIT_DIAGNOSTIC']
 
 m4_stability_agg.json:
-  runs_in_window: 80
-  last_run: ci_m5_gate_20260221_105949
-  computed_total_net_usdc: 4359.51
+  runs_in_window: 100 (M4.1 N=100 ACHIEVED)
+  last_run: ci_m5_gate_20260221_113627
+  computed_total_net_usdc: 5198.71
   agg_status: PASS
   agg_reasons: []
 
@@ -100,15 +97,15 @@ excluded_from_signals (MIXED_SOURCE/slot0 fallback):
 
 | DoD | Status | Evidence |
 |-----|--------|----------|
-| Core Truth (paper +PnL) | [OK] PROVEN | N=79 runs, total_net_usdc=$4359.51 |
+| Core Truth (paper +PnL) | [OK] PROVEN | N=100 runs, total_net_usdc=$5198.71 |
 | Rolling Quality Gate | [OK] PASS | agg_status=PASS, agg_reasons=[] |
 | M4.2 Roundtrip Profit | [NO] NOT_PROFITABLE | profitable_count=0 |
 | M4.2 Real Execution | [NO] NOT STARTED | kill_switch_active=true |
-| M4.1 Time-Bound Window | [IN PROGRESS] | 80/100 runs (80% complete) |
+| M4.1 Time-Bound Window | [OK] CLOSED | 100/100 runs (100% complete) |
 
-> **M4 NOT CLOSED**: profit_truth_available=false (no roundtrip opportunities).
-> Paper profit PROVEN under declared cost model.
-> M4.1 deterministic close plan: N=100 runs with agg_status=PASS (currently at 80).
+> **M4.1 CLOSED**: N=100 consecutive runs with agg_status=PASS.
+> Paper profit PROVEN under declared cost model ($5198.71 cumulative).
+> M4 full close requires M4.2 profitable roundtrip (market-dependent).
 
 ## 7) Contract Checks (коротко)
 status/reasons consistency: OK (no FAIL_* with PASS status)
@@ -123,13 +120,13 @@ runtime artifacts not committed: OK
 - PENDLE/RDNT quoter_v2 failures (slot0 fallback - pairs DISABLED)
 
 ## 9) Lead's 10 Steps: Execution Map
-step_01 (Deterministic M4 close plan): DONE - added M4.1 section to Roadmap.md
-step_02 (MIXED_SOURCE fix for WBTC/WETH, ARB/WETH): DONE - fee_tiers changed to [3000]
-step_03 (intent→pool runtime contract): NO - deferred
-step_04 (Discovery→runtime integration): NO - deferred
-step_05 (3rd DEX track): NO - deferred (Algebra quoter needs integration)
-step_06 (M4.3 preflight evidence): NO - deferred
-step_07 (Execution plan dry-run): NO - deferred
-step_08 (Clean PnL audit test): NO - deferred
-step_09 (Normalize Status facts): DONE - Status_M4.md and Status_M5_0.md updated
+step_01 (Roadmap governance): DONE - check_repo_safety.py v1.5.0 + unit tests
+step_02 (M4.1 N=100): DONE - 100 runs achieved with agg_status=PASS
+step_03 (Artifact number accuracy): DONE - Status_M4.md numbers verified
+step_04 (Excluded signal root cause): DONE - WBTC/WETH SUSPECT_SPREAD_EXCLUDED
+step_05 (Clean PnL golden test): NO - deferred
+step_06 (PENDLE/RDNT investigation): NO - deferred (pairs disabled)
+step_07 (3rd DEX Algebra): NO - deferred
+step_08 (M4.3 preflight evidence): NO - deferred
+step_09 (Normalize Status facts): DONE - Status_M4.md updated
 step_10 (Canonical DEV REPORT): DONE - this report
