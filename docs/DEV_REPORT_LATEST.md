@@ -33,8 +33,8 @@ touched_files:
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (v1.6.0, 10 checks, 0 warnings)
-py -3.11 -m pytest -q: PASS (978 passed, 1 skipped, 1 warning)
+py -3.11 scripts/check_repo_safety.py: PASS (v1.6.1, 10 checks, 0 warnings)
+py -3.11 -m pytest -q: PASS (994 passed, 1 skipped, 1 warning)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS
 py -3.11 scripts/inspect_rolling.py: excluded_signals_count=0
 
@@ -44,7 +44,7 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json
   - data/runs/_rolling/m4_stability_agg.json
 run_dir_bundle (ONLINE):
-  - data/runs/ci_m5_gate_20260222_100945/reports
+  - data/runs/ci_m5_gate_20260222_111023/reports
 
 ## 4) Key Results (числа з артефактів)
 
@@ -59,9 +59,9 @@ _latest.json:
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-02-22T09:10:03.859524+00:00
-  run_context.code_identity: ts:2026-02-22T09:10:03.859524+00:00
-  inputs.run_dir_name: ci_m5_gate_20260222_100945
+  run_context.run_timestamp: 2026-02-22T10:10:42.000000+00:00
+  run_context.code_identity: ts:2026-02-22T10:10:42.000000+00:00
+  inputs.run_dir_name: ci_m5_gate_20260222_111023
   inputs.run_mode: REGISTRY_REAL
   metrics:
     signals_count: 5
@@ -78,24 +78,23 @@ run_summary_latest.json:
   quality_reasons: ['WARN_PROFIT_DIAGNOSTIC']
 
 m4_stability_agg.json:
-  runs_in_window: 103 (M4.1 N=100+ maintained)
-  last_run: ci_m5_gate_20260222_100945
-  computed_total_net_usdc: 5347.64
+  runs_in_window: 104 (M4.1 N=100+ maintained)
+  last_run: ci_m5_gate_20260222_111023
+  computed_total_net_usdc: 5394.31
   agg_status: PASS
   agg_reasons: []
 
 ## 5) Diversity Analysis (from rolling artifacts)
 
-unique_pairs: 6 (target=8) -> WARN (reduced after pool disabling)
-  - ARB/USDC, LINK/WETH, WBTC/USDC, WETH/USDC, WETH/USDT, wstETH/WETH
-  - Note: WBTC/WETH and ARB/WETH have limited pools after Sushi disabling
+unique_pairs: 8 (target=8) -> OK (from m4_stability_agg.json quick_stats)
+  - ARB/USDC, ARB/WETH, LINK/WETH, WBTC/USDC, WBTC/WETH, WETH/USDC, WETH/USDT, wstETH/WETH
 
 unique_routes_cross_dex: 2 (target=2) -> OK
   - sushiswap_v3->uniswap_v3
   - uniswap_v3->uniswap_v3
 
 excluded_from_signals: **NONE** (FIXED)
-  - Previously: WBTC/WETH, ARB/WETH Sushi pools causing SUSPECT_SPREAD_EXCLUDED
+  - Previously: WBTC/WETH_3000, ARB/WETH_3000 Sushi pools causing SUSPECT_SPREAD_EXCLUDED
   - Fix: Both pools added to disabled_pools in real_minimal.yaml
   - Result: WARN_EXCLUDED_SIGNALS eliminated
 
@@ -103,14 +102,14 @@ excluded_from_signals: **NONE** (FIXED)
 
 | DoD | Status | Evidence |
 |-----|--------|----------|
-| Core Truth (paper +PnL) | [OK] PROVEN | N=103 runs, total_net_usdc=$5347.64 |
+| Core Truth (paper +PnL) | [OK] PROVEN | N=104 runs, total_net_usdc=$5394.31 |
 | Rolling Quality Gate | [OK] PASS | agg_status=PASS, agg_reasons=[] |
 | M4.2 Roundtrip Profit | [NO] NOT_PROFITABLE | profitable_count=0 |
 | M4.2 Real Execution | [NO] NOT STARTED | kill_switch_active=true |
-| M4.1 Time-Bound Window | [OK] CLOSED | 103/100 runs (100%+ maintained) |
+| M4.1 Time-Bound Window | [OK] CLOSED | 104/100 runs (100%+ maintained) |
 
-> **M4.1 CLOSED**: N=103 consecutive runs with agg_status=PASS.
-> Paper profit PROVEN under declared cost model ($5347.64 cumulative).
+> **M4.1 CLOSED**: N=104 consecutive runs with agg_status=PASS.
+> Paper profit PROVEN under declared cost model ($5394.31 cumulative).
 > Excluded signals ELIMINATED - quality_reasons now only WARN_PROFIT_DIAGNOSTIC.
 > M4 full close requires M4.2 profitable roundtrip (market-dependent).
 
@@ -124,7 +123,7 @@ runtime artifacts not committed: OK
 - roundtrip.profitable_count=0 (market has no arb opportunity)
 - profit_truth_available=false (requires profitable roundtrip for M4 full close)
 - PENDLE/RDNT quoter_v2 failures (slot0 fallback - pairs DISABLED)
-- unique_pairs reduced from 8 to 6 after pool disabling (monitor diversity)
+- eth_estimateGas fails on all preflight legs (fallback gas used, eth_call OK)
 
 ## 9) Lead's 10 Steps: Execution Map
 step_01 (Realign DEV_REPORT): DONE - synced with rolling ci_m5_gate_20260222_100945
@@ -133,8 +132,8 @@ step_03 (inspect_rolling.py): DONE - new script for rolling inspection
 step_04 (Disable WBTC/WETH Sushi): DONE - added to disabled_pools
 step_05 (Verify excluded=0): DONE - WARN_EXCLUDED_SIGNALS eliminated
 step_06 (Clean PnL golden test): DONE - 10 tests in test_execution_pnl_golden.py
-step_07 (M4.3 preflight evidence): NO - deferred (requires execution pipeline changes)
-step_08 (Discovery dry-run): NO - deferred (requires runtime integration)
+step_07 (M4.3 preflight evidence): DONE - execution/preflight.py v1.0.1, 3/3 candidates passed
+step_08 (Discovery dry-run): DONE - integrated in run_scan_real.py (discovery_dry_run flag)
 step_09 (Intent→pool resolver): NO - deferred (requires new module)
 step_10 (Final verification): DONE - this report
 step_09 (Normalize Status facts): DONE - Status_M4.md updated

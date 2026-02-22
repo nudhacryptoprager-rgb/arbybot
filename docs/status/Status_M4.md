@@ -1,7 +1,7 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
-**Updated**: 2026-02-21  
+**Updated**: 2026-02-22  
 **Policy**: DIVERSITY_PAIRS_TARGET=8  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
@@ -33,16 +33,17 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-21)**: From `m4_stability_agg.json` (canonical source): **runs_in_window=100** (M4.1 N=100 ACHIEVED), data_run_rate=0.99, pass_rate=1.0, **total_net_usdc=$5198.71**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=7 (from `reject_histogram`), POOL_MISSING=0. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). For infra evidence see [Status_M5_0.md](Status_M5_0.md).
+**Snapshot (2026-02-22)**: From `m4_stability_agg.json` (canonical source): **runs_in_window=104** (M4.1 N=100+ ACHIEVED), data_run_rate=0.9904, pass_rate=1.0, **total_net_usdc=$5394.31**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=9 (from `disabled_pools`), POOL_MISSING=0. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). **M4.3 Preflight Evidence AVAILABLE**: `preflight_evidence.enabled=true`, 3/3 candidates passed (eth_call OK). For infra evidence see [Status_M5_0.md](Status_M5_0.md).
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when ≥10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
-**Evidence (ci_m5_gate_20260222_100945 - run)**:
+**Evidence (ci_m5_gate_20260222_111023 - run)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
 - Counters: `execution_ready_count=0` (kill_switch_active=true), `would_execute_count=0`
-- Provenance: `run_timestamp=2026-02-22T09:10:03.859524+00:00`
-- **M4.1 CLOSED**: N=103 consecutive runs with `agg_status=PASS` (exceeds N=100 target)
+- Provenance: `run_timestamp=2026-02-22T10:10:42.000000+00:00`
+- **M4.1 CLOSED**: N=104 consecutive runs with `agg_status=PASS` (exceeds N=100 target)
+- **M4.3 Preflight**: `preflight_evidence.enabled=true`, 3/3 candidates passed, eth_call_ok=true on all legs
 - **excluded_signals_count=0**: WBTC/WETH_3000 and ARB/WETH_3000 Sushi pools disabled (SUSPECT_SPREAD_EXCLUDED)
 - See [Status_M5_0.md](Status_M5_0.md) for infra evidence.
 
@@ -461,7 +462,7 @@ Location: `data/runs/_rolling/`
 1. **Python version**: Pipelines running under Python 3.14, repo requires 3.11
 2. ~~**Chain/provider mismatch**~~: FIXED - `.env` NETWORK=mantle corrected to arbitrum
 3. ~~**Online scan unusable**~~: FIXED - quotes=10, dexes=2, spreads=2 achieved
-4. ~~**Rolling artifacts need reset**~~: FIXED - v2.0 schema with timestamp-based provenance
+4. ~~**Rolling artifacts need reset**~~: FIXED - schema 2.0 with timestamp-based provenance
 5. ~~**Provenance fixes**~~: REPLACED by timestamp provenance
 6. ~~**M4.1 quality thresholds**~~: RESOLVED - data_run_rate=0.4878, low_sample_rate=0.5122 with MIN_SIGNALS_FOR_PASS=3
 7. ~~**M4 online profit DoD**~~: PROVEN (2026-02-13) - 42 real runs with total_net_usdc=$300.87
@@ -490,8 +491,8 @@ Location: `data/runs/_rolling/`
 - `attach_evidence.py` script deleted (no longer needed)
 - `runs_by_code_sha` replaced with `runs_by_date`
 
-### v2.0 Migration Policy
-**CRITICAL**: v2.0 migration requires clearing rolling window to remove legacy `code_sha` entries and ensure metrics reflect timestamp-based provenance only.
+### Schema 2.0 Migration Policy
+**CRITICAL**: Schema 2.0 migration requires clearing rolling window to remove legacy `code_sha` entries and ensure metrics reflect timestamp-based provenance only.
 
 ### Warmup Period (post-reset)
 After reset rolling window, `PASS_WARMUP` is expected until >=10 runs accumulate. KPIs are only valid after exiting warmup. Quality thresholds (`data_run_rate`, `low_sample_rate`, diversity) apply only after warmup completes.
@@ -500,7 +501,7 @@ After reset rolling window, `PASS_WARMUP` is expected until >=10 runs accumulate
 |--------|---------|
 | Reset window | `python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window` |
 | Verify clean | Check aggregator has no legacy `code_sha` entries |
-| Fresh start | Run 10+ NORMAL runs to populate new v2.0 metrics |
+| Fresh start | Run 10+ NORMAL runs to populate new schema 2.0 metrics |
 
 ### DEV vs RELEASE Provenance
 

@@ -215,19 +215,55 @@ class TestDocsLint(unittest.TestCase):
         # DOCS_POLICY.md is NOT exempt - it must not contain version strings
 
     def test_version_pattern_matches_semver(self):
-        """Version pattern should match semantic versions like v1.2.3."""
+        """Version pattern should match semantic versions like v1.2.3, v2.4.x, v1.2."""
         import re
-        version_pattern = re.compile(r'\bv\d+\.\d+\.\d+\b')
+        # Expanded pattern to catch vX.Y.Z, vX.Y.x, vX.Y, and suffixes
+        version_pattern = re.compile(r'\bv\d+\.\d+(?:\.[0-9xX]+)?(?:-\w+)?\b')
         
-        # Should match
+        # Should match - standard semver
         self.assertIsNotNone(version_pattern.search("v1.2.3"))
         self.assertIsNotNone(version_pattern.search("v2.3.4"))
         self.assertIsNotNone(version_pattern.search("This is v1.0.0 version"))
         
+        # Should match - wildcard versions (new loophole fix)
+        self.assertIsNotNone(version_pattern.search("v2.4.x"))
+        self.assertIsNotNone(version_pattern.search("## v2.4.x Infra Changes"))
+        self.assertIsNotNone(version_pattern.search("v1.2.X"))  # uppercase X
+        
+        # Should match - two-part versions
+        self.assertIsNotNone(version_pattern.search("v1.2"))
+        self.assertIsNotNone(version_pattern.search("policy: v2.0"))
+        
+        # Should match - versions with suffix
+        self.assertIsNotNone(version_pattern.search("v1.2.3-fix"))
+        self.assertIsNotNone(version_pattern.search("v2.0-beta"))
+        
         # Should NOT match
-        self.assertIsNone(version_pattern.search("v1.2"))  # Only 2 parts
         self.assertIsNone(version_pattern.search("version 1.2.3"))  # No v prefix
         self.assertIsNone(version_pattern.search("v1"))  # Only 1 part
+        self.assertIsNone(version_pattern.search("sv1.2.3"))  # prefix before v
+
+    def test_namespaced_version_pattern(self):
+        """Namespaced schema identifiers like m4:signals:v1.1 should be exempt."""
+        import re
+        # Namespaced schema pattern
+        namespaced_pattern = re.compile(r'\w+:\w+:v\d+\.\d+(?:\.[0-9xX]+)?')
+        
+        # Should match namespaced patterns
+        self.assertIsNotNone(namespaced_pattern.search("m4:signals:v1.1"))
+        self.assertIsNotNone(namespaced_pattern.search("m4:execution:v1.1"))
+        self.assertIsNotNone(namespaced_pattern.search("namespace:component:v2.0"))
+        self.assertIsNotNone(namespaced_pattern.search("m4:latest:v2.0"))
+        
+        # Should NOT match standalone versions
+        self.assertIsNone(namespaced_pattern.search("v1.2.3"))  # No namespace
+        self.assertIsNone(namespaced_pattern.search("## v2.4.x Infra"))  # Standalone
+        
+    def test_version_exempt_prefixes_list(self):
+        """DOCS_VERSION_EXEMPT_PREFIXES should include artifacts path."""
+        from scripts.check_repo_safety import DOCS_VERSION_EXEMPT_PREFIXES
+        
+        self.assertIn("docs/artifacts/", DOCS_VERSION_EXEMPT_PREFIXES)
 
     def test_check_docs_lint_exists(self):
         """check_docs_lint function should exist and be callable."""
@@ -406,6 +442,82 @@ class TestDevReportAlignment(unittest.TestCase):
             with patch.object(Path, 'exists', side_effect=lambda: True if 'DEV_REPORT' in str(self) else False):
                 # This is complex to mock correctly, just verify no exception
                 pass
+
+    def test_metrics_mismatch_runs_in_window(self):
+        """DEV_REPORT with mismatched runs_in_window should warn (v1.6.1)."""
+        from scripts.check_repo_safety import check_dev_report_alignment
+        import json
+        
+        mock_summary = {
+            "run_context": {"run_timestamp": "2026-02-22T09:10:03.859524+00:00"},
+            "inputs": {"run_dir_name": "ci_m5_gate_20260222_100945"}
+        }
+        mock_latest = {
+            "runs_in_window": 103,
+            "quick_stats": {"total_net_usdc": 5347.64, "unique_pairs": 8}
+        }
+        
+        # DEV_REPORT with wrong runs_in_window
+        mock_report = """
+        run_context.run_timestamp: 2026-02-22T09:10:03.859524+00:00
+        inputs.run_dir_name: ci_m5_gate_20260222_100945
+        runs_in_window: 100
+        computed_total_net_usdc: 5347.64
+        unique_pairs: 8
+        """
+        
+        def mock_open_handler(path, *args, **kwargs):
+            if "run_summary_latest" in str(path):
+                return unittest.mock.mock_open(read_data=json.dumps(mock_summary))()
+            elif "_latest.json" in str(path):
+                return unittest.mock.mock_open(read_data=json.dumps(mock_latest))()
+            raise FileNotFoundError()
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    with patch('builtins.open', side_effect=mock_open_handler):
+                        issues = check_dev_report_alignment()
+        
+        self.assertTrue(any("runs_in_window mismatch" in i for i in issues))
+
+    def test_metrics_mismatch_unique_pairs(self):
+        """DEV_REPORT with mismatched unique_pairs should warn (v1.6.1)."""
+        from scripts.check_repo_safety import check_dev_report_alignment
+        import json
+        
+        mock_summary = {
+            "run_context": {"run_timestamp": "2026-02-22T09:10:03.859524+00:00"},
+            "inputs": {"run_dir_name": "ci_m5_gate_20260222_100945"}
+        }
+        mock_latest = {
+            "runs_in_window": 103,
+            "quick_stats": {"total_net_usdc": 5347.64, "unique_pairs": 8}
+        }
+        
+        # DEV_REPORT with wrong unique_pairs
+        mock_report = """
+        run_context.run_timestamp: 2026-02-22T09:10:03.859524+00:00
+        inputs.run_dir_name: ci_m5_gate_20260222_100945
+        runs_in_window: 103
+        computed_total_net_usdc: 5347.64
+        unique_pairs: 6
+        """
+        
+        def mock_open_handler(path, *args, **kwargs):
+            if "run_summary_latest" in str(path):
+                return unittest.mock.mock_open(read_data=json.dumps(mock_summary))()
+            elif "_latest.json" in str(path):
+                return unittest.mock.mock_open(read_data=json.dumps(mock_latest))()
+            raise FileNotFoundError()
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    with patch('builtins.open', side_effect=mock_open_handler):
+                        issues = check_dev_report_alignment()
+        
+        self.assertTrue(any("unique_pairs mismatch" in i for i in issues))
 
 
 if __name__ == "__main__":

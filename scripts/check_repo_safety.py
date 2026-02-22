@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.6.0"
+__version__ = "1.6.1"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -219,8 +219,14 @@ def check_dev_report_bloat() -> List[str]:
 # Files where versions are ALLOWED (exempt from docs-lint)
 DOCS_VERSION_EXEMPT = [
     "docs/DEV_REPORT_LATEST.md",           # Canonical version tracking file
+    "docs/DOCS_POLICY.md",                  # Policy doc describing the rules (meta-description)
     "docs/m4/ROLLING_CONTRACT.md",          # Schema version definitions (API contract)
     "docs/m4/M4_POLICY.md",                 # Policy thresholds (API contract)
+]
+
+# Path prefixes where versions are allowed (golden fixtures, artifacts)
+DOCS_VERSION_EXEMPT_PREFIXES = [
+    "docs/artifacts/",                      # Golden fixtures may have schema versions
 ]
 
 # Files where ISO timestamps are allowed
@@ -235,14 +241,18 @@ def check_docs_lint() -> List[str]:
     """Check docs for forbidden version and timestamp patterns.
     
     Per DOCS_POLICY.md:
-    - Version strings (vX.Y.Z) are forbidden except in exempt files
+    - Version strings (vX.Y.Z, vX.Y.x, vX.Y) are forbidden except in exempt files
     - Status_*.md files may have timestamps but NOT version strings
     - ISO timestamps forbidden in most docs except Status_*.md and exempt files
     """
     issues = []
     
-    # Pattern for semantic versions: v1.2.3, v2.3.4-fix, etc.
-    version_pattern = re.compile(r'\bv\d+\.\d+\.\d+\b')
+    # Pattern for semantic versions: v1.2.3, v2.4.x, v2.4-fix, etc.
+    # Catches: vX.Y.Z, vX.Y.x, vX.Y (with optional suffix)
+    version_pattern = re.compile(r'\bv\d+\.\d+(?:\.[0-9xX]+)?(?:-\w+)?\b')
+    # Pattern for namespaced schema identifiers: m4:signals:v1.1, namespace:component:vX.Y
+    # These are ALLOWED in all docs as they describe JSON schema versions
+    namespaced_version_pattern = re.compile(r'\w+:\w+:v\d+\.\d+(?:\.[0-9xX]+)?')
     # Pattern for ISO timestamps: 2026-02-19T10:00:00
     timestamp_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}')
     
@@ -272,15 +282,28 @@ def check_docs_lint() -> List[str]:
                 
                 # Check VERSION strings
                 # Status files must NOT have versions (they have timestamps instead)
-                # Exempt files can have versions
-                if doc_path not in DOCS_VERSION_EXEMPT:
+                # Exempt files and paths can have versions
+                # Namespaced schema identifiers (m4:signals:v1.1) are ALWAYS allowed
+                is_exempt = doc_path in DOCS_VERSION_EXEMPT or any(
+                    doc_path.startswith(prefix) for prefix in DOCS_VERSION_EXEMPT_PREFIXES
+                )
+                if not is_exempt:
                     matches = version_pattern.findall(content)
                     if matches:
-                        unique_versions = set(matches)
-                        issues.append(
-                            f"DOCS_LINT: {doc_path} contains version string(s): {', '.join(sorted(unique_versions))} "
-                            f"(versions only allowed in DEV_REPORT_LATEST.md)"
-                        )
+                        # Filter out versions that are part of namespaced schema identifiers
+                        namespaced_matches = set(namespaced_version_pattern.findall(content))
+                        standalone_versions = set()
+                        for v in matches:
+                            # Check if this version is part of any namespaced schema
+                            is_namespaced = any(v in ns for ns in namespaced_matches)
+                            if not is_namespaced:
+                                standalone_versions.add(v)
+                        
+                        if standalone_versions:
+                            issues.append(
+                                f"DOCS_LINT: {doc_path} contains version string(s): {', '.join(sorted(standalone_versions))} "
+                                f"(versions only allowed in DEV_REPORT_LATEST.md)"
+                            )
                 
                 # Check TIMESTAMP patterns
                 # Status files can have timestamps, exempt files can have timestamps
@@ -396,11 +419,12 @@ def check_dev_report_freshness() -> List[str]:
 
 
 def check_dev_report_alignment() -> List[str]:
-    """Check that DEV_REPORT_LATEST.md aligns with rolling artifacts (v1.6.0).
+    """Check that DEV_REPORT_LATEST.md aligns with rolling artifacts (v1.6.1).
     
     Verifies that:
     1. run_context.run_timestamp in DEV_REPORT matches run_summary_latest.json
     2. inputs.run_dir_name in DEV_REPORT matches run_summary_latest.json
+    3. KEY METRICS: runs_in_window, total_net_usdc, unique_pairs match _latest.json
     
     This prevents evidence drift where DEV_REPORT references old/stale artifacts.
     """
@@ -408,6 +432,7 @@ def check_dev_report_alignment() -> List[str]:
     
     dev_report_path = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
     rolling_summary_path = PROJECT_ROOT / "data" / "runs" / "_rolling" / "run_summary_latest.json"
+    rolling_latest_path = PROJECT_ROOT / "data" / "runs" / "_rolling" / "_latest.json"
     
     if not dev_report_path.exists():
         return []  # No DEV_REPORT = skip
@@ -442,6 +467,52 @@ def check_dev_report_alignment() -> List[str]:
                 f"WARN: DEV_REPORT_ALIGNMENT: run_timestamp mismatch. "
                 f"Rolling: {rolling_ts_short}, DEV_REPORT: does not contain this timestamp"
             )
+        
+        # ===== KEY METRICS CHECK (v1.6.1) =====
+        # Load _latest.json for quick_stats
+        if rolling_latest_path.exists():
+            with open(rolling_latest_path, "r", encoding="utf-8") as f:
+                latest = json.load(f)
+            
+            quick_stats = latest.get("quick_stats", {})
+            rolling_runs = latest.get("runs_in_window", 0)
+            rolling_total_net = quick_stats.get("total_net_usdc", 0)
+            rolling_unique_pairs = quick_stats.get("unique_pairs", 0)
+            
+            # Extract values from DEV_REPORT using regex
+            # runs_in_window: 103
+            runs_match = re.search(r'runs_in_window[:\s]+(\d+)', dev_report_content)
+            if runs_match:
+                dev_runs = int(runs_match.group(1))
+                if dev_runs != rolling_runs:
+                    issues.append(
+                        f"WARN: DEV_REPORT_ALIGNMENT: runs_in_window mismatch. "
+                        f"Rolling: {rolling_runs}, DEV_REPORT: {dev_runs}"
+                    )
+            
+            # computed_total_net_usdc: 5347.64 (aggregate value, not single-run total_net_usdc)
+            # Look for "computed_total_net_usdc" specifically to avoid matching single-run metrics
+            net_match = re.search(r'computed_total_net_usdc[:\s]*\$?([\d,]+\.?\d*)', dev_report_content)
+            if net_match:
+                dev_net_str = net_match.group(1).replace(',', '')
+                dev_net = float(dev_net_str)
+                # Allow 1% tolerance for rounding
+                tolerance = abs(rolling_total_net) * 0.01
+                if abs(dev_net - rolling_total_net) > tolerance:
+                    issues.append(
+                        f"WARN: DEV_REPORT_ALIGNMENT: total_net_usdc mismatch. "
+                        f"Rolling: {rolling_total_net:.2f}, DEV_REPORT: {dev_net:.2f}"
+                    )
+            
+            # unique_pairs: 8
+            pairs_match = re.search(r'unique_pairs[:\s]+(\d+)', dev_report_content)
+            if pairs_match:
+                dev_pairs = int(pairs_match.group(1))
+                if dev_pairs != rolling_unique_pairs:
+                    issues.append(
+                        f"WARN: DEV_REPORT_ALIGNMENT: unique_pairs mismatch. "
+                        f"Rolling: {rolling_unique_pairs}, DEV_REPORT: {dev_pairs}"
+                    )
             
     except Exception as e:
         issues.append(f"ERROR: Could not check DEV_REPORT alignment: {e}")

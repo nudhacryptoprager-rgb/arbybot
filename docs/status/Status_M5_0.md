@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-02-21  
-**Tests**: 955 passed, 12 skipped  
-**Evidence runDir**: `ci_m5_gate_20260221_105949`
+**Updated**: 2026-02-22  
+**Tests**: 994 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260222_111023`
 
 ---
 
@@ -15,7 +15,7 @@
 
 ---
 
-## v2.4.x Infra Changes (2026-02-21)
+## Infra Changes (2026-02-21)
 
 | Step | Change | File | Description |
 |------|--------|------|-------------|
@@ -58,7 +58,7 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --fa
 
 # Unit tests
 py -3.11 -m pytest tests/unit -q
-# EXPECT: 933 passed, 1 skipped
+# EXPECT: 994 passed, 1 skipped
 ```
 
 ---
@@ -67,8 +67,8 @@ py -3.11 -m pytest tests/unit -q
 
 | Type | RunDir | Key Evidence |
 |------|--------|--------------|
-| Normal | `ci_m5_gate_20260221_105949` | `field_success_rates~1.0`, unique_pairs=8, excluded_signals=1 |
-| Reference | `ci_m5_gate_20260219_210425` | `field_success_rates=1.0`, `endpoints_used=[alchemy]` |
+| Normal | `ci_m5_gate_20260222_111023` | `field_success_rates~1.0`, unique_pairs=8, excluded_signals=0, preflight_evidence=3/3 |
+| Reference | `ci_m5_gate_20260222_100945` | `field_success_rates=1.0`, unique_pairs=8 |
 
 ---
 

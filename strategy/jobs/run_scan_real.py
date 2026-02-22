@@ -251,23 +251,6 @@ def run_scan(
         logger.debug("Using config pairs (universe_source=config)")
         stats["universe_source"] = "config"
     
-    # v2.2.0 Fix Step 9: discovery_dry_run flag - count candidates without RPC
-    discovery_dry_run = config.get("discovery_dry_run", False)
-    if discovery_dry_run:
-        try:
-            from discovery.index_factories import count_discovery_candidates
-            dexes_list_cfg = config.get("dexes") or []
-            candidates = count_discovery_candidates(chain_key, dexes_list_cfg if dexes_list_cfg else None)
-            stats["discovery_candidates_count"] = candidates.get("discovery_candidates_count", 0)
-            logger.info(
-                "Discovery dry-run: %d candidates (resolvable pairs), %d total queries possible",
-                candidates["discovery_candidates_count"],
-                candidates["total_potential_queries"],
-            )
-        except Exception as e:
-            logger.warning("Discovery dry-run failed: %s", e)
-            stats["discovery_candidates_count"] = 0
-    
     # v2.0.8: quotes_total = attempted quotes (valid + rejected), accounts for fee_tiers
     stats["quotes_total"] = len(quotes_sample) + len(rejected_quotes)
     stats["quotes_fetched"] = len(quotes_sample)
@@ -619,6 +602,82 @@ def run_scan(
         stats["preflight"] = {"enabled": False, "error": str(pf_err)}
         stats["execution_ready_count"] = 0
         stats["would_execute_count"] = 0
+    
+    # v2.4.1: M4.3 Preflight EVIDENCE (eth_call/eth_estimateGas for top-N)
+    # Collects actual RPC evidence without executing any transactions
+    # Uses opps_list (gated opportunities) instead of spread_signals
+    try:
+        from execution.preflight import (
+            collect_top_n_preflight,
+            preflight_disabled_stub,
+            adapt_opportunity_to_preflight_input,
+        )
+        
+        # Check if we have opportunities and a web3 instance
+        if opps_list and len(opps_list) > 0 and w3_instance:
+            # Convert opportunities to preflight input format
+            preflight_candidates = [
+                adapt_opportunity_to_preflight_input(opp, chain_key=chain_key)
+                for opp in opps_list[:3]  # Top-3 candidates
+            ]
+            
+            preflight_evidence = collect_top_n_preflight(
+                w3=w3_instance,
+                spread_signals=preflight_candidates,
+                n=3,
+                current_block=current_block,
+            )
+            stats["preflight_evidence"] = preflight_evidence
+            logger.info(
+                "M4.3 Preflight Evidence: %d/%d candidates passed",
+                preflight_evidence["passed_count"],
+                preflight_evidence["candidates_count"],
+            )
+        elif not w3_instance:
+            # No w3 available - use stub
+            stats["preflight_evidence"] = preflight_disabled_stub()
+            stats["preflight_evidence"]["error"] = "no_w3_instance"
+        else:
+            stats["preflight_evidence"] = preflight_disabled_stub()
+            stats["preflight_evidence"]["error"] = "no_opportunities"
+    except Exception as pf_ev_err:
+        logger.debug("Preflight evidence collection skipped: %s", pf_ev_err)
+        stats["preflight_evidence"] = {
+            "enabled": False,
+            "error": str(pf_ev_err),
+        }
+    
+    # v2.4.1: Discovery dry-run (count candidates without changing universe)
+    # Uses chain_key (already resolved) and config.dexes for consistency
+    discovery_dry_run = config.get("discovery_dry_run", False)
+    if discovery_dry_run:
+        try:
+            from discovery.index_factories import count_discovery_candidates
+            
+            dexes_list = config.get("dexes") or None  # None = all known for chain
+            
+            discovery_stats = count_discovery_candidates(chain=chain_key, dexes=dexes_list)
+            stats["discovery"] = {
+                "enabled": True,
+                "dry_run": True,
+                "chain": chain_key,
+                "resolvable_pairs": discovery_stats["resolvable_pairs"],
+                "unresolvable_pairs": discovery_stats["unresolvable_pairs"],
+                "dexes_available": discovery_stats["dexes_available"],
+                "potential_v3_queries": discovery_stats["potential_v3_queries"],
+                "potential_v2_queries": discovery_stats["potential_v2_queries"],
+                "total_potential_queries": discovery_stats["total_potential_queries"],
+            }
+            logger.info(
+                "Discovery dry-run: %d resolvable pairs, %d potential queries",
+                discovery_stats["resolvable_pairs"],
+                discovery_stats["total_potential_queries"],
+            )
+        except Exception as disc_err:
+            logger.debug("Discovery dry-run failed: %s", disc_err)
+            stats["discovery"] = {"enabled": False, "error": str(disc_err)}
+    else:
+        stats["discovery"] = {"enabled": False, "dry_run": False}
     
     # Build artifact data structures
     # v2.3.0: Unified run_timestamp for provenance across all artifacts
