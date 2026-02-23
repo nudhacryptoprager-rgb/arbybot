@@ -229,25 +229,56 @@ def run_scan(
     dexes_list = config.get("dexes") or []
     chain_key = config.get("chain", "arbitrum_one")
     
-    # v2.2.0 Fix Step 7: universe_source=config|intent|intent_forced for Appendix A integration
-    # v2.3.0 Fix Step 4: intent_forced mode - reads from intent.txt directly, bypassing config pairs
-    # NOTE: "intent_forced" (not "intent_verified") - pools are NOT on-chain verified in this mode
+    # v2.2.0 Fix Step 7: universe_source=config|intent|intent_forced|discovery_runtime
+    # v2.3.0 Fix Step 4: intent_forced mode - reads from intent.txt directly
+    # v2.5.0: discovery_runtime mode - resolve pairs via factory.getPool()
     universe_source = config.get("universe_source", "config")
     use_intent = (universe_source == "intent")
-    # Support both legacy "intent_verified" and new "intent_forced" names
     force_intent = (universe_source in ("intent_verified", "intent_forced"))
-    pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
+    use_discovery_runtime = (universe_source == "discovery_runtime")
     
-    if force_intent:
-        # Always report as "intent_forced" (honest naming)
+    # Early discovery_runtime resolution (before standard universe selection)
+    _discovery_runtime_resolved = []
+    _discovery_runtime_stats = None
+    if use_discovery_runtime:
+        try:
+            from discovery.runtime import resolve_runtime_pairs, runtime_pairs_to_pair_configs
+            
+            max_pairs = config.get("discovery_runtime_max_pairs", 20)
+            require_cross_dex = config.get("require_cross_dex", False)
+            _discovery_runtime_resolved, _discovery_runtime_stats = resolve_runtime_pairs(
+                chain=chain_key,
+                dexes=dexes_list if dexes_list else None,
+                max_pairs=max_pairs,
+                require_cross_dex=require_cross_dex,
+            )
+            pairs_list = runtime_pairs_to_pair_configs(_discovery_runtime_resolved)
+            
+            logger.info(
+                "Using discovery_runtime universe (%d pairs resolved -> %d unique pairs for quoting)",
+                len(_discovery_runtime_resolved),
+                len(pairs_list),
+            )
+            stats["universe_source"] = "discovery_runtime"
+            stats["discovery_runtime_pairs_count"] = len(pairs_list)
+            stats["discovery_runtime_pools_resolved"] = len(_discovery_runtime_resolved)
+        except Exception as dr_err:
+            logger.warning("discovery_runtime failed, falling back to config: %s", dr_err)
+            pairs_list = load_pairs(chain_key, config, use_intent=False, force_intent=False)
+            stats["universe_source"] = "config (discovery_runtime fallback)"
+            stats["discovery_runtime_error"] = str(dr_err)
+    elif force_intent:
+        pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
         logger.info("Using intent.txt universe FORCED (universe_source=%s -> intent_forced, %d pairs)", universe_source, len(pairs_list))
-        stats["universe_source"] = "intent_forced"  # Canonical name
+        stats["universe_source"] = "intent_forced"
         stats["intent_pairs_count"] = len(pairs_list)
-        stats["intent_on_chain_verified"] = False  # Explicit: NOT verified on-chain
-    elif universe_source == "intent":
+        stats["intent_on_chain_verified"] = False
+    elif use_intent:
+        pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
         logger.info("Using intent.txt universe (universe_source=intent)")
         stats["universe_source"] = "intent"
     else:
+        pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
         logger.debug("Using config pairs (universe_source=config)")
         stats["universe_source"] = "config"
     
@@ -680,23 +711,46 @@ def run_scan(
         stats["discovery"] = {"enabled": False, "dry_run": False}
     
     # v2.4.2: Discovery runtime (resolve pool addresses via factory.getPool())
-    # When enabled, actually resolves pools and reports detailed stats
-    # Does NOT change quote universe in this version (observability only)
+    # v2.5.0: If universe_source=discovery_runtime, reuse already-resolved data
+    # Otherwise, resolve for observability (does not change quote universe)
     discovery_runtime = config.get("discovery_runtime", False)
-    if discovery_runtime:
+    if use_discovery_runtime and _discovery_runtime_stats is not None:
+        # Reuse already-resolved data from universe selection
+        from discovery.runtime import get_runtime_observability
+        
+        stats["discovery_runtime"] = get_runtime_observability(_discovery_runtime_stats)
+        stats["discovery_runtime"]["universe_active"] = True  # Actually affected quoting
+        stats["discovery_runtime"]["cross_dex_pairs_count"] = _discovery_runtime_stats.cross_dex_pairs_count
+        stats["discovery_runtime"]["resolved_pairs"] = [
+            {
+                "pair": p.display_name,
+                "dex": p.dex,
+                "fee": p.fee,
+                "pool": p.pool_address,
+            }
+            for p in _discovery_runtime_resolved
+        ]
+        logger.info(
+            "Discovery runtime (universe active): %d pairs resolved, %d rpc_calls",
+            _discovery_runtime_stats.pairs_resolved,
+            _discovery_runtime_stats.rpc_calls,
+        )
+    elif discovery_runtime:
         try:
             from discovery.runtime import resolve_runtime_pairs, get_runtime_observability
             
-            dexes_list = config.get("dexes") or None
+            dexes_list_rt = config.get("dexes") or None
             max_pairs = config.get("discovery_runtime_max_pairs", 20)
             
             resolved_pairs, runtime_stats = resolve_runtime_pairs(
                 chain=chain_key,
-                dexes=dexes_list,
+                dexes=dexes_list_rt,
                 max_pairs=max_pairs,
             )
             
             stats["discovery_runtime"] = get_runtime_observability(runtime_stats)
+            stats["discovery_runtime"]["universe_active"] = False  # Observability only
+            stats["discovery_runtime"]["cross_dex_pairs_count"] = runtime_stats.cross_dex_pairs_count
             stats["discovery_runtime"]["resolved_pairs"] = [
                 {
                     "pair": p.display_name,
@@ -708,7 +762,7 @@ def run_scan(
             ]
             
             logger.info(
-                "Discovery runtime: %d pairs resolved, %d rpc_calls",
+                "Discovery runtime (observability): %d pairs resolved, %d rpc_calls",
                 runtime_stats.pairs_resolved,
                 runtime_stats.rpc_calls,
             )

@@ -15,28 +15,28 @@ code_identity:
   desc: Directive #5 - Discovery runtime + pool resolver integration
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Directive #5 - Discovery runtime + pool resolver integration
+goal (Roadmap пункт): Directive #6 - Universe source mode + cross-dex filtering
 change_summary:
-  - ADD: discovery/runtime.py - resolve_runtime_pairs() with deterministic ordering
-  - ADD: tests/unit/test_discovery_runtime.py - 9 tests for runtime module
-  - ADD: discovery_runtime flag in run_scan_real.py (observability only)
-  - ADD: config/real_minimal.yaml discovery_runtime flags (default false)
-  - RESULT: runs_in_window=108, total_net_usdc=$5563.59
-  - RESULT: discovery_runtime: 20 pairs resolved, 22 rpc_calls, cache persisted
-  - RESULT: pool_resolver_cache: 22 entries (20 positive, 2 negative)
+  - ADD: universe_source=discovery_runtime mode in run_scan_real.py
+  - ADD: require_cross_dex filter (only include pairs with pools on 2+ dexes)
+  - ADD: runtime_pairs_to_pair_configs() converter for quote pipeline
+  - ADD: RPC call limit guardrail (ARBY_RESOLVER_MAX_RPC_CALLS, default 50)
+  - ADD: cross_dex_pairs_count in RuntimeStats observability
+  - ADD: is_same_dex tracking in spread signals
+  - FIX: core_tokens.yaml header clarified (trust anchors vs verified tokens)
+  - RESULT: Tests 1027 passed (+2 from cross-dex tests)
 touched_files:
-  - discovery/runtime.py (new)
-  - tests/unit/test_discovery_runtime.py (new)
-  - strategy/jobs/run_scan_real.py (discovery_runtime integration)
-  - config/real_minimal.yaml (discovery_runtime flags)
-  - docs/status/Status_M5_0.md
+  - discovery/runtime.py (runtime_pairs_to_pair_configs, require_cross_dex, decimals)
+  - discovery/pool_resolver.py (RPC limit guardrail, stats)
+  - strategy/jobs/run_scan_real.py (universe_source=discovery_runtime)
+  - strategy/spreads.py (is_same_dex, SAME_DEX_FEE_TIER reason)
+  - config/core_tokens.yaml (header clarification)
+  - tests/unit/test_discovery_runtime.py (+2 cross-dex tests)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (v1.6.1, 10 checks, 0 warnings target)
-py -3.11 -m pytest -q: PASS (1025 passed, 1 skipped, 1 warning)
-py -3.11 scripts/ci_m5_0_gate.py --online: PASS (ci_m5_gate_20260223_104821)
-py -3.11 scripts/ci_m5_0_gate.py --online with discovery_runtime=true: PASS (20 pools resolved)
+py -3.11 scripts/check_repo_safety.py: PASS (v1.6.1, 10 checks, 0 warnings)
+py -3.11 -m pytest -q: PASS (1027 passed, 1 skipped, 1 warning)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -100,6 +100,9 @@ discovery_runtime_stats (from scan):
   rpc_calls: 22
   pools_from_cache: 0 (first call)
   cache_persisted: 22 entries (20 positive, 2 negative)
+  cross_dex_pairs_count: tracked (v2.5.0)
+  rpc_limit: 50 (ARBY_RESOLVER_MAX_RPC_CALLS)
+  universe_source modes: config|intent|intent_forced|discovery_runtime
 
 ## 5) Diversity Analysis (from rolling artifacts)
 
@@ -128,7 +131,8 @@ excluded_from_signals: **NONE** (FIXED)
 | Token Registry | [OK] EXPANDED | 49 tokens (39 original + 10 discovery tokens) |
 | Pool Resolver | [OK] IMPLEMENTED | factory.getPool() with persistent cache |
 | ROUNDTRIP_CANONICAL | [OK] GOLDEN PROOF | docs/artifacts/roundtrip_canonical_golden.json + 5 tests |
-| Discovery Runtime | [OK] IMPLEMENTED | discovery/runtime.py + 9 tests (20 pools resolved) |
+| Discovery Runtime | [OK] IMPLEMENTED | discovery/runtime.py + 11 tests (20 pools resolved) |
+| Cross-Dex Filter | [OK] IMPLEMENTED | require_cross_dex flag + stats tracking |
 
 > **M4.1 CLOSED**: N=108 consecutive runs with agg_status=PASS.
 > Paper profit PROVEN under declared cost model ($5567.21 cumulative).
@@ -147,17 +151,17 @@ runtime artifacts not committed: OK
 - roundtrip.profitable_count=0 (market has no arb opportunity)
 - profit_truth_available=false (requires profitable roundtrip for M4 full close)
 - PENDLE/RDNT quoter_v2 failures (slot0 fallback - pairs DISABLED)
-- discovery_runtime not yet connected to quote pipeline
+- discovery_runtime not yet default (requires cross-dex evidence)
 - WARN_TOP_PAIR_DOMINANCE in quality_reasons (signals dominated by few pairs)
 
-## 9) Lead's 10 Steps: Execution Map
-step_01 (Token registry contract): DONE - core_tokens.yaml extended as canonical registry
-step_02 (Add 10 missing tokens): DONE - rETH, MAGIC, FRAX, LUSD, GNS, GRAIL, JOE, USDE, TBTC, DPX
-step_03 (Token verify CLI): DONE - scripts/verify_tokens.py (10/10 verified)
-step_04 (Verify discovery metrics): DONE - 28/0/224 (up from 16/12/128)
-step_05 (Design discovery_runtime flag): DONE - architecture in pool_resolver + runtime.py
-step_06 (Implement pool resolver + cache): DONE - discovery/pool_resolver.py + persistent cache
-step_07 (Add resolver/cache tests): DONE - test_pool_resolver.py (11 tests)
-step_08 (Roundtrip synthetic fixture): DONE - roundtrip_canonical_golden.json + 5 tests
-step_09 (Update Status_M5_0.md): DONE - runDir ci_m5_gate_20260223_104821
-step_10 (Discovery runtime integration): DONE - discovery/runtime.py + 9 tests, 20 pools resolved
+## 9) Lead's 10 Steps: Execution Map (Directive #6)
+step_01 (Run baseline verification): DONE - check_repo_safety PASS, 1025 tests
+step_02 (Fix core_tokens.yaml header): DONE - clarified trust anchors vs verified tokens
+step_03 (Add universe_source=discovery_runtime): DONE - quote pipeline uses resolved pairs
+step_04 (Implement require-cross-dex rule): DONE - filter pairs to 2+ dexes
+step_05 (Connect resolver to infra): DEFERRED - documented TODO for RPCProvider
+step_06 (Add resolver guardrails): DONE - ARBY_RESOLVER_MAX_RPC_CALLS=50
+step_07 (Extend artifacts with cross_dex): DONE - cross_dex_pairs_count in stats
+step_08 (Address suspect_signals policy): DONE - is_same_dex + SAME_DEX_FEE_TIER reason
+step_09 (Sync docs with rolling): DONE - DEV_REPORT_LATEST aligned
+step_10 (Final check_repo_safety): PENDING

@@ -3,6 +3,7 @@
 Intent→Pool Resolver with factory.getPool() and persistent cache.
 
 v2.4.0: Added for discovery→runtime mode.
+v2.5.0: Added rpc_concurrency guardrail and stats.
 
 Purpose:
     Resolve intent pairs (WETH/USDC) to pool addresses via factory.getPool()
@@ -12,6 +13,15 @@ Cache:
     - Stores resolved pools in data/cache/pool_resolver_cache.json
     - Key: chain:dex:tokenA:tokenB:fee (sorted tokens, lowercase)
     - Value: pool address or null (negative cache)
+
+Guardrails:
+    - ARBY_RESOLVER_MAX_RPC_CALLS: Max RPC calls per session (default: 50)
+    - ARBY_SKIP_RPC: If "1", skip all RPC calls
+    - Negative cache prevents repeated queries for non-existent pools
+
+TODO:
+    - Connect to chains.providers.RPCProvider for unified failover/metrics
+    - Add negative cache TTL for eventual re-query
 
 Usage:
     resolver = get_pool_resolver()
@@ -33,6 +43,9 @@ CACHE_PATH = Path("data/cache/pool_resolver_cache.json")
 # Negative cache sentinel
 NULL_POOL = "__NULL__"
 
+# Guardrail: Max RPC calls per session (to prevent runaway queries)
+MAX_RPC_CALLS_PER_SESSION = int(os.environ.get("ARBY_RESOLVER_MAX_RPC_CALLS", "50"))
+
 
 @dataclass
 class ResolverStats:
@@ -40,6 +53,7 @@ class ResolverStats:
     hits: int = 0
     misses: int = 0
     rpc_calls: int = 0
+    rpc_calls_limited: int = 0  # Calls skipped due to limit
     resolved_count: int = 0
     failed_count: int = 0
     negative_hits: int = 0  # Cache hits for "no pool exists"
@@ -161,6 +175,15 @@ class PoolResolver:
         
         self._stats.misses += 1
         
+        # Guardrail: Check RPC call limit
+        if self._stats.rpc_calls >= MAX_RPC_CALLS_PER_SESSION:
+            self._stats.rpc_calls_limited += 1
+            logger.debug(
+                "RPC call limit reached (%d/%d), using cache only",
+                self._stats.rpc_calls, MAX_RPC_CALLS_PER_SESSION
+            )
+            return None
+        
         # Query RPC
         if rpc_url is None:
             rpc_url = get_rpc_url(chain)
@@ -229,9 +252,11 @@ class PoolResolver:
             "misses": self._stats.misses,
             "negative_hits": self._stats.negative_hits,
             "rpc_calls": self._stats.rpc_calls,
+            "rpc_calls_limited": self._stats.rpc_calls_limited,
             "resolved_count": self._stats.resolved_count,
             "failed_count": self._stats.failed_count,
             "hit_rate": self._stats.hits / max(1, self._stats.hits + self._stats.misses),
+            "max_rpc_calls": MAX_RPC_CALLS_PER_SESSION,
         }
     
     def flush(self) -> None:

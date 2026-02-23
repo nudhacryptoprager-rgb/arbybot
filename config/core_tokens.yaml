@@ -1,16 +1,26 @@
 # =============================================================================
-# config/core_tokens.yaml - Core Token Addresses (TRUST ANCHORS)
+# config/core_tokens.yaml - Token Registry
 # =============================================================================
 #
-# Core tokens are the ONLY tokens with hardcoded addresses.
-# These are verified, canonical addresses that we trust absolutely.
+# This file serves two purposes:
 #
-# All other token addresses are discovered dynamically and verified on-chain.
+# 1) TRUST ANCHORS (first ~10 tokens per chain):
+#    WETH, USDC, USDC_E, USDT, DAI, WBTC, ARB, GMX, LINK, UNI
+#    These are core tokens with hardcoded addresses that we trust absolutely.
+#    They anchor the discovery system and are never auto-removed.
+#
+# 2) VERIFIED TOKENS (remaining tokens):
+#    Tokens discovered by the intent system and verified on-chain via
+#    scripts/verify_tokens.py. These can be added/rotated based on
+#    discovery metrics but should remain stable once verified.
 #
 # Format: symbol -> {address, decimals, name}
 # Addresses MUST be checksummed.
 #
-# Last updated: 2026-01-04
+# Contract: Do not remove TRUST ANCHOR tokens without explicit approval.
+# Verified tokens may be rotated if discovery metrics degrade.
+#
+# Last updated: 2026-02-23
 # =============================================================================
 
 # =============================================================================

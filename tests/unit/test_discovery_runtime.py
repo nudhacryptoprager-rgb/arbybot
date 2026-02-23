@@ -24,6 +24,8 @@ class TestRuntimeStats:
         assert stats.pairs_skipped_no_tokens == 0
         assert stats.pairs_skipped_no_pool == 0
         assert stats.pairs_skipped_max_cap == 0
+        assert stats.pairs_skipped_single_dex == 0
+        assert stats.cross_dex_pairs_count == 0
         assert stats.pools_from_cache == 0
         assert stats.pools_from_rpc == 0
         assert stats.rpc_calls == 0
@@ -136,6 +138,7 @@ class TestResolveRuntimePairs:
         """max_pairs limits resolved pairs."""
         from discovery.runtime import resolve_runtime_pairs, RuntimePair
         from discovery.intent_loader import IntentPair
+        from discovery.verify import TokenInfo
         
         # Create mock intent pairs
         mock_pairs = [
@@ -144,6 +147,9 @@ class TestResolveRuntimePairs:
             IntentPair("arbitrum_one", "LINK", "WETH"),
         ]
         
+        # Create mock token info
+        mock_token = TokenInfo(symbol="WETH", address="0xWETH", decimals=18)
+        
         with patch("discovery.intent_loader.get_intent_universe") as mock_universe:
             mock_univ = MagicMock()
             mock_univ.get_pairs_for_chain.return_value = mock_pairs
@@ -151,7 +157,7 @@ class TestResolveRuntimePairs:
             
             with patch("discovery.verify.get_token_registry") as mock_registry:
                 mock_reg = MagicMock()
-                mock_reg.get_address.return_value = "0xAddress"
+                mock_reg.get_token.return_value = mock_token
                 mock_registry.return_value = mock_reg
                 
                 with patch("discovery.pool_resolver.get_pool_resolver") as mock_resolver:
@@ -246,3 +252,74 @@ class TestDiscoveryRuntimeIntegration:
         # Should be sorted alphabetically by canonical key
         # ARB/WETH, LINK/WETH, USDC/WETH (sorted tokens)
         assert len(call_order) >= 1
+
+class TestCrossDexFiltering:
+    """Tests for require_cross_dex functionality."""
+    
+    def test_cross_dex_stats_tracked(self):
+        """cross_dex_pairs_count is tracked in stats."""
+        from discovery.runtime import RuntimeStats
+        
+        stats = RuntimeStats()
+        stats.cross_dex_pairs_count = 5
+        stats.pairs_skipped_single_dex = 3
+        
+        d = stats.to_dict()
+        assert d["cross_dex_pairs_count"] == 5
+        assert d["pairs_skipped_single_dex"] == 3
+    
+    @patch.dict(os.environ, {"ARBY_SKIP_RPC": "0"})
+    def test_require_cross_dex_filters_single_dex(self):
+        """require_cross_dex=True filters pairs with only one dex."""
+        from discovery.runtime import resolve_runtime_pairs
+        from discovery.intent_loader import IntentPair
+        from discovery.verify import TokenInfo
+        
+        # Create mock intent pair
+        mock_pairs = [
+            IntentPair("arbitrum_one", "WETH", "USDC"),
+        ]
+        
+        mock_token = TokenInfo(symbol="WETH", address="0xWETH", decimals=18)
+        
+        with patch("discovery.intent_loader.get_intent_universe") as mock_universe:
+            mock_univ = MagicMock()
+            mock_univ.get_pairs_for_chain.return_value = mock_pairs
+            mock_universe.return_value = mock_univ
+            
+            with patch("discovery.verify.get_token_registry") as mock_registry:
+                mock_reg = MagicMock()
+                mock_reg.get_token.return_value = mock_token
+                mock_registry.return_value = mock_reg
+                
+                with patch("discovery.pool_resolver.get_pool_resolver") as mock_resolver:
+                    resolver = MagicMock()
+                    # Only uniswap_v3 has pool, sushiswap_v3 returns None
+                    def mock_resolve(**kwargs):
+                        if kwargs.get("dex") == "uniswap_v3":
+                            return "0xPoolAddress"
+                        return None
+                    resolver.resolve.side_effect = mock_resolve
+                    resolver.get_stats.return_value = {
+                        "hits": 0, "misses": 2, "negative_hits": 0, "rpc_calls": 2
+                    }
+                    mock_resolver.return_value = resolver
+                    
+                    with patch("discovery.index_factories.FACTORY_ADDRESSES", {
+                        "arbitrum_one": {
+                            "uniswap_v3": "0xUniFactory",
+                            "sushiswap_v3": "0xSushiFactory",
+                        }
+                    }):
+                        # With require_cross_dex=True, should filter out single-dex pairs
+                        resolved, stats = resolve_runtime_pairs(
+                            "arbitrum_one",
+                            dexes=["uniswap_v3", "sushiswap_v3"],
+                            fee_tiers=[500],
+                            require_cross_dex=True,
+                        )
+        
+        # Pair only exists on uniswap_v3, so should be filtered out
+        assert len(resolved) == 0
+        assert stats.pairs_skipped_single_dex == 1
+        assert stats.cross_dex_pairs_count == 0
