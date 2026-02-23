@@ -311,6 +311,7 @@ def runtime_pairs_to_pair_configs(resolved_pairs: List[RuntimePair]) -> List:
     
     This function enables discovery_runtime to affect the quote universe.
     Aggregates fee_tiers from all pools per pair across DEXes.
+    Stores pool_info with (dex, fee, address) mapping for quote pipeline.
     
     Args:
         resolved_pairs: List of RuntimePair objects from resolve_runtime_pairs()
@@ -332,6 +333,7 @@ def runtime_pairs_to_pair_configs(resolved_pairs: List[RuntimePair]) -> List:
         "decimals_b": None,
         "fee_tiers": set(),
         "pool_addresses": [],
+        "pool_info": [],  # v2.6.0: [{dex, fee, address}, ...]
         "dexes": set(),
     })
     
@@ -352,6 +354,11 @@ def runtime_pairs_to_pair_configs(resolved_pairs: List[RuntimePair]) -> List:
         if rp.fee:
             data["fee_tiers"].add(rp.fee)
         data["pool_addresses"].append(rp.pool_address)
+        data["pool_info"].append({
+            "dex": rp.dex,
+            "fee": rp.fee,
+            "address": rp.pool_address,
+        })
         data["dexes"].add(rp.dex)
     
     result = []
@@ -369,6 +376,7 @@ def runtime_pairs_to_pair_configs(resolved_pairs: List[RuntimePair]) -> List:
             token_out_decimals=data["decimals_b"],
             fee_tiers=fee_tiers,
             pool_addresses=data["pool_addresses"],  # Pre-resolved for slot0/liquidity prefetch
+            pool_info=data["pool_info"],  # v2.6.0: dex/fee/address mapping for quote pipeline
         ))
     
     return result

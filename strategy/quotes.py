@@ -515,6 +515,7 @@ def collect_quotes(
     config: Dict[str, Any],
     current_block: int,
     rpc_latency: int = 0,
+    pairs_list: Optional[List[PairConfig]] = None,  # v2.6.0: Allow passing pre-resolved pairs
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, int]]:
     """
     Collect quotes from DEX pools.
@@ -523,6 +524,7 @@ def collect_quotes(
         config: Configuration dict
         current_block: Current block number
         rpc_latency: RPC latency in ms
+        pairs_list: Optional pre-resolved pairs (for discovery_runtime mode)
         
     Returns:
         (quotes_sample, rejected_quotes, counts)
@@ -557,13 +559,15 @@ def collect_quotes(
     pools_cfg = config.get("pools", {}) or {}
     token_addresses = config.get("tokens", {}) or {}
     
-    # Load pairs from config
-    # v2.3.1 FIX: Respect universe_source from config
+    # Load pairs from config or use pre-resolved pairs
+    # v2.6.0: Allow passing pre-resolved pairs for discovery_runtime mode
     chain_key = config.get("chain", "arbitrum_one")
-    universe_source = config.get("universe_source", "config")
-    use_intent = (universe_source == "intent")
-    force_intent = (universe_source in ("intent_verified", "intent_forced"))
-    pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
+    if pairs_list is None:
+        # v2.3.1 FIX: Respect universe_source from config
+        universe_source = config.get("universe_source", "config")
+        use_intent = (universe_source == "intent")
+        force_intent = (universe_source in ("intent_verified", "intent_forced"))
+        pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
     
     if not pairs_list:
         from config.pairs import get_pair_info
@@ -584,22 +588,27 @@ def collect_quotes(
         # Collect all pool addresses that will be queried
         all_pool_addrs: List[str] = []
         for pair_cfg in pairs_list:
-            token_pair_tag = pair_cfg.pair_tag
-            fee_tiers = pair_cfg.fee_tiers or [500, 3000]
-            for dex in dexes_list:
-                from dex.registry import get_dex_config
-                dex_cfg = get_dex_config(chain_key, dex)
-                adapter_type = dex_cfg.adapter_type if dex_cfg else None
-                
-                if adapter_type == "algebra":
-                    effective_fees = [0]
-                else:
-                    effective_fees = fee_tiers
-                
-                for fee in effective_fees:
-                    pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee)
-                    if pool_addr:
-                        all_pool_addrs.append(pool_addr)
+            # v2.6.0: Use pre-resolved pool_addresses if available (discovery_runtime)
+            if pair_cfg.pool_addresses:
+                all_pool_addrs.extend(pair_cfg.pool_addresses)
+            else:
+                # Fall back to config lookup
+                token_pair_tag = pair_cfg.pair_tag
+                fee_tiers = pair_cfg.fee_tiers or [500, 3000]
+                for dex in dexes_list:
+                    from dex.registry import get_dex_config
+                    dex_cfg = get_dex_config(chain_key, dex)
+                    adapter_type = dex_cfg.adapter_type if dex_cfg else None
+                    
+                    if adapter_type == "algebra":
+                        effective_fees = [0]
+                    else:
+                        effective_fees = fee_tiers
+                    
+                    for fee in effective_fees:
+                        pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee)
+                        if pool_addr:
+                            all_pool_addrs.append(pool_addr)
         
         # Unique pool addresses
         unique_pools = list(set(all_pool_addrs))
@@ -634,432 +643,175 @@ def collect_quotes(
         
         # v2.0.7: Iterate over fee_tiers from pair config
         fee_tiers = pair_cfg.fee_tiers or [500, 3000]
+        chain_name = config.get("chain", "arbitrum_one")
         
-        for dex in dexes_list:
-            # M4.2 FIX: Get adapter_type to determine fee handling
-            from dex.registry import get_dex_config
-            chain_name = config.get("chain", "arbitrum_one")
-            dex_cfg = get_dex_config(chain_name, dex)
-            adapter_type = dex_cfg.adapter_type if dex_cfg else None
-            
-            # M4.2 FIX: Algebra DEXes use dynamic fees, use fee=0 for pool lookup
-            if adapter_type == "algebra":
-                effective_fee_tiers = [0]  # Dynamic fee - lookup with fee=0
-            else:
-                effective_fee_tiers = fee_tiers
-            
-            for fee_tier in effective_fee_tiers:
-                # v2.1.0-fix: Check disabled_pools FIRST (before pool lookup)
-                disabled_info = is_pool_disabled(config, dex, token_pair_tag, fee_tier)
-                if disabled_info:
-                    rejected_quotes.append({
-                        "pair": f"{token_in}/{token_out}",
-                        "dex_id": dex,
-                        "fee": fee_tier,
-                        "reason": "POOL_DISABLED",
-                        "gate_passed": False,
-                        "error": f"Pool disabled: {disabled_info.get('reason', 'DISABLED')} - {disabled_info.get('detail', '')}",
-                        "disabled_info": disabled_info,
-                    })
-                    counts["pool_disabled"] += 1
-                    logger.info("POOL_DISABLED: %s %s/%s fee=%d reason=%s", 
-                               dex, token_in, token_out, fee_tier, disabled_info.get('reason', 'DISABLED'))
-                    continue
+        # v2.4.0: Build pool work items from either pool_info (discovery_runtime) or dex/fee iteration (config)
+        from dex.registry import get_dex_config
+        pool_work_items = []
+        
+        if pair_cfg.pool_info:
+            # discovery_runtime mode: use pre-resolved pools with exact (dex, fee, address)
+            for pi in pair_cfg.pool_info:
+                pi_dex = pi["dex"]
+                pi_fee = pi["fee"]
+                pi_addr = pi["address"]
+                pi_dex_cfg = get_dex_config(chain_name, pi_dex)
+                pi_adapter = pi_dex_cfg.adapter_type if pi_dex_cfg else None
+                pool_work_items.append((pi_dex, pi_fee, pi_addr, pi_dex_cfg, pi_adapter))
+        else:
+            # config mode: iterate over dexes and fee_tiers, lookup pool addresses
+            for dex in dexes_list:
+                dex_cfg = get_dex_config(chain_name, dex)
+                adapter_type = dex_cfg.adapter_type if dex_cfg else None
                 
-                # v2.1.0-fix: Check runtime quarantine (auto-quarantine for failing pools)
-                pair_tag = f"{token_in}/{token_out}"
-                if qm.is_quarantined(dex, pair_tag, fee_tier):
-                    remaining = qm.get_quarantine_remaining(dex, pair_tag, fee_tier)
-                    rejected_quotes.append({
-                        "pair": pair_tag,
-                        "dex_id": dex,
-                        "fee": fee_tier,
-                        "reason": "QUARANTINED",
-                        "gate_passed": False,
-                        "error": f"Pool quarantined (remaining: {remaining:.0f}s)",
-                    })
-                    counts["quarantined"] += 1
-                    logger.info("QUARANTINED: %s %s fee=%d (remaining: %.0fs)", 
-                               dex, pair_tag, fee_tier, remaining)
-                    continue
-                
-                # v2.0.8: STRICT fee-tier lookup - no fallback, use enforcement_mode="warn"
-                # get_pool_address returns None if fee_tier specified but pool not found
-                pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)
-                
-                if not pool_addr:
-                    # v2.3.0: Silent skip (not reject) for unconfigured pools
-                    # v2.3.1: Track pool_missing_keys for observability
-                    counts["pool_missing"] += 1
-                    pool_key = f"{dex}_{token_pair_tag}_{fee_tier}"
-                    pool_missing_keys.append(pool_key)
-                    logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config (key=%s)", dex, token_in, token_out, fee_tier, pool_key)
-                    continue
-                
-                # TODO(M4.2): Replace slot0 with QuoterV2 for executable quotes
-                # See dex/adapters/uniswap_v3.py UniswapV3Adapter
-                # Quoter addresses in config/dexes.yaml: quoter_v2
-                # This would give: amountOut, ticksCrossed, gasEstimate
-                
-                # M4.2 Preview: Try QuoterV2 if configured (optional feature flag)
-                use_quoter_v2 = config.get("use_quoter_v2", False)
-                quoter_result = None
-                
-                # M4.2: Calculate amount_in_wei using USD-notional sizing
-                if use_usd_notional:
-                    amount_in_wei = calculate_amount_in_wei(
-                        token_in, decimals_in, target_usd_notional, tokens_usd_price
-                    )
+                # M4.2 FIX: Algebra DEXes use dynamic fees, use fee=0 for pool lookup
+                if adapter_type == "algebra":
+                    effective_fee_tiers = [0]  # Dynamic fee - lookup with fee=0
                 else:
-                    amount_in_wei = 10 ** decimals_in  # Legacy: 1 token
+                    effective_fee_tiers = fee_tiers
                 
-                # M4.2 FIX: Use adapter_type for branching (reuse from outer loop)
-                is_v3_dex = adapter_type in ("uniswap_v3", "algebra")
-                is_algebra = adapter_type == "algebra"
-                
-                if use_quoter_v2 and dex_cfg:
-                    quoter_addr = dex_cfg.get_quoter_address()
-                    if quoter_addr:
-                        token_in_addr = token_addresses.get(token_in, "")
-                        token_out_addr = token_addresses.get(token_out, "")
-                        
-                        if adapter_type == "uniswap_v3":
-                            # UniswapV3 QuoterV2
-                            quoter_result = read_quoter_v2(
-                                quoter_addr, token_in_addr, token_out_addr,
-                                amount_in_wei, fee_tier, rpc_url, current_block
-                            )
-                        elif adapter_type == "algebra":
-                            # Algebra quoter (Camelot) - use fee=0 for dynamic fees
-                            quoter_result = read_algebra_quoter(
-                                quoter_addr, token_in_addr, token_out_addr,
-                                amount_in_wei, rpc_url, current_block
-                            )
-                
-                # M4.2 FIX: If quoter_result is successful, we DON'T need slot0 at all
-                # quoter_result gives executable amount_out, price derived from amount_out/amount_in
-                tick_val, sqrt_price_val = None, None
-                quoter_success = quoter_result and quoter_result.get("amount_out", 0) > 0
-                
-                # Path A: quoter canonical - skip slot0 for v3/algebra when quoter succeeds
-                if quoter_success:
-                    # Use quoter data directly - no slot0 needed
-                    amount_out_wei_val = quoter_result["amount_out"]
-                    amount_out_human_val = float(Decimal(amount_out_wei_val) / Decimal(10 ** decimals_out))
-                    amount_out_human_str = str(round(amount_out_human_val, 6))
-                    amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
-                    # Price from quoter amounts
-                    amount_in_tokens = float(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
-                    price_exact = Decimal(str(amount_out_human_val)) / Decimal(str(amount_in_tokens)) if amount_in_tokens > 0 else Decimal(0)
-                    price_str = str(round(float(price_exact), 6))
-                    quote_source = "quoter_v2"
-                    gas_estimate = quoter_result.get("gas_estimate")
-                    ticks_crossed = quoter_result.get("ticks_crossed")
-                    
-                    # v2.0.9: SUSPECT_LIQUIDITY gate - reject high-impact quotes early
-                    from core.constants import QUOTER_MAX_TICKS_CROSSED, QUOTER_MAX_GAS_ESTIMATE
-                    suspect_liquidity_reason = None
-                    if ticks_crossed is not None and ticks_crossed > QUOTER_MAX_TICKS_CROSSED:
-                        suspect_liquidity_reason = f"ticks_crossed={ticks_crossed}>{QUOTER_MAX_TICKS_CROSSED}"
-                    elif gas_estimate is not None and gas_estimate > QUOTER_MAX_GAS_ESTIMATE:
-                        suspect_liquidity_reason = f"gas_estimate={gas_estimate}>{QUOTER_MAX_GAS_ESTIMATE}"
-                    
-                    if suspect_liquidity_reason:
-                        rejected_quotes.append({
-                            "pair": f"{token_in}/{token_out}",
-                            "dex_id": dex,
-                            "fee": fee_tier,
-                            "pool_address": pool_addr,
-                            "reason": "SUSPECT_LIQUIDITY",
-                            "gate_passed": False,
-                            "error": suspect_liquidity_reason,
-                            "ticks_crossed": ticks_crossed,
-                            "gas_estimate": gas_estimate,
-                        })
-                        counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
-                        counts["suspect_liquidity"] = counts.get("suspect_liquidity", 0) + 1
-                        logger.debug("SUSPECT_LIQUIDITY: %s %s/%s fee=%d: %s", 
-                                    dex, token_in, token_out, fee_tier, suspect_liquidity_reason)
-                        continue  # Skip this quote
-                    
-                    # v2.1.0: PRICE_SANITY gate (per-quote)
-                    price_sanity_enabled = config.get("price_sanity_enabled", True)
-                    price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
-                    if price_sanity_enabled and anchor_price:
-                        from decimal import Decimal as _Decimal
-                        from core.validators import check_price_sanity
-                        sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
-                            price=_Decimal(str(price_exact)),
-                            anchor_price=_Decimal(str(anchor_price)),
-                            pair=f"{token_in}/{token_out}",
-                            dex_id=dex,
-                            fee_tier=fee_tier,
-                            max_deviation_bps=price_sanity_max_bps,
-                            anchor_source="tokens_anchor_price",
-                            pool_address=pool_addr,
-                        )
-                        if not sanity_passed:
-                            # v2.1.0 Step 8: Enhanced price_sanity reject logging
-                            try:
-                                ratio = float(price_exact) / float(anchor_price) if anchor_price else 0.0
-                            except (TypeError, ZeroDivisionError):
-                                ratio = 0.0
-                            
-                            rejected_quotes.append({
-                                "pair": f"{token_in}/{token_out}",
-                                "dex_id": dex,
-                                "fee": fee_tier,
-                                "pool_address": pool_addr,
-                                "reason": "PRICE_SANITY_FAILED",  # v2.1.0: Match ErrorCode canonical
-                                "gate_passed": False,
-                                "error": sanity_err,
-                                "deviation_bps": sanity_dev_bps,
-                                "anchor_price": str(anchor_price),
-                                "price_exact": str(price_exact),
-                                # v2.1.0 Step 8: Enhanced diagnostics
-                                "price_ratio": round(ratio, 4),
-                                "anchor_source": anchor_source,  # v2.2.0: dynamic or yaml_fallback
-                                "amount_in_wei": amount_in_wei,
-                                "notional_usd_target": target_usd_notional if use_usd_notional else None,
-                                "diagnostics": sanity_diag,
-                            })
-                            counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
-                            counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
-                            # v2.1.0: Log at INFO level for visibility of price sanity failures
-                            logger.info(
-                                "PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s ratio=%.4f",
-                                dex, token_in, token_out, fee_tier, sanity_dev_bps,
-                                str(anchor_price)[:12], str(price_exact)[:12], ratio
-                            )
-                            continue  # Skip this quote
-                    
-                    # Build quote directly from quoter data
-                    q = QuoteCompat(
-                        dex_id=dex,
-                        pool_address=pool_addr,
-                        token_in=token_in,
-                        token_out=token_out,
-                        fee=fee_tier,
-                        amount_in_wei=amount_in_wei,
-                        amount_out_wei=amount_out_wei_val,
-                        amount_in_human=amount_in_human_str,
-                        amount_out_human=amount_out_human_str,
-                        price=price_str,
-                        latency_ms=rpc_latency or 10,
-                        block_number=current_block,
-                        rpc_success=True,
-                        gate_passed=True,
-                        tick=tick_val,  # None - quoter doesn't give tick
-                        sqrt_price_x96=sqrt_price_val,  # None - quoter doesn't give sqrt
-                    )
-                    q_dict = q.__dict__
-                    q_dict["price_exact"] = str(price_exact)
-                    q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
-                    
-                    # v2.1.0: Enhanced USD-notional tracking (Step 7)
-                    q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
-                    token_out_price = tokens_usd_price.get(token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
-                    notional_usd_actual = round(amount_out_human_val * token_out_price, 2)
-                    q_dict["notional_usd_actual"] = notional_usd_actual
-                    
-                    # NOTIONAL_DRIFT logging
-                    if use_usd_notional and target_usd_notional > 0 and notional_usd_actual > 0:
-                        drift_pct = abs(notional_usd_actual - target_usd_notional) / target_usd_notional * 100
-                        q_dict["notional_drift_pct"] = round(drift_pct, 2)
-                        if drift_pct > 10.0:
-                            logger.warning(
-                                "NOTIONAL_DRIFT: %s/%s %s target=$%.0f actual=$%.2f drift=%.1f%%",
-                                token_in, token_out, dex, target_usd_notional, notional_usd_actual, drift_pct
-                            )
-                    
-                    q_dict["quote_source"] = quote_source
-                    q_dict["gas_estimate"] = gas_estimate
-                    q_dict["ticks_crossed"] = ticks_crossed
-                    q_dict["anchor_source"] = anchor_source  # v2.2.0: track dynamic vs yaml
-                    # v2.1.0: Add sqrt_price_after for measured slippage calculation
-                    q_dict["sqrt_price_after"] = quoter_result.get("sqrt_price_after") if quoter_result else None
-                    # v2.2.0 Fix Step 5: quoter_v2 quotes are executable, not diagnostic
-                    q_dict["is_diagnostic_only"] = False
-                    quotes_sample.append(q_dict)
-                    counts["quotes_fetched"] += 1
-                    # Record success to reset quarantine failure counter
-                    qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
-                    # v2.2.0: Record valid quote for dynamic anchor calculation
-                    if price_exact is not None and float(price_exact) > 0:
-                        am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
-                    logger.debug("QuoterV2 canonical: %s %s/%s fee=%d amount_out=%s", 
-                                dex, token_in, token_out, fee_tier, amount_out_wei_val)
-                    continue  # Skip slot0 path entirely
-                
-                # M4.2 FIX: Algebra DEXes require quoter - slot0() ABI is incompatible
-                if is_algebra and not quoter_success:
-                    rejected_quotes.append({
-                        "pair": f"{token_in}/{token_out}",
-                        "dex_id": dex,
-                        "fee": fee_tier,
-                        "pool_address": pool_addr,
-                        "reason": "ALGEBRA_NEEDS_QUOTER",
-                        "gate_passed": False,
-                        "error": "Algebra/Camelot DEX requires use_quoter_v2=true (slot0 ABI incompatible)",
-                        "use_quoter_v2": use_quoter_v2,
-                    })
-                    counts["algebra_needs_quoter"] = counts.get("algebra_needs_quoter", 0) + 1
-                    logger.warning("ALGEBRA_NEEDS_QUOTER: %s %s/%s fee=%d (enable use_quoter_v2)", 
-                                  dex, token_in, token_out, fee_tier)
-                    continue
-                
-                # Path B: slot0 fallback - only for uniswap_v3 when no quoter
-                if is_v3_dex and not is_algebra:
-                    tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url, current_block)
-                    
-                    if tick_val is None or sqrt_price_val is None:
-                        if skip_rpc and anchor_price is not None:
-                            tick_val, sqrt_price_val = synthesize_sqrt_price_from_anchor(
-                                anchor_price, decimals_in, decimals_out
-                            )
-                        else:
-                            rejected_quotes.append({
-                                "pair": f"{token_in}/{token_out}",
-                                "dex_id": dex,
-                                "fee": fee_tier,
-                                "pool_address": pool_addr,
-                                "reason": "V3_SLOT0_FAILED",
-                                "gate_passed": False,
-                                "error": f"Failed to read slot0 from pool {pool_addr}",
-                                # M4.2: Add diagnostic - was quoter attempted?
-                                "quoter_attempted": use_quoter_v2 and dex_cfg is not None,
-                            })
-                            counts["v3_slot0_failed"] += 1
-                            # v2.3.0: Track failed pool address for actionable diagnostics
-                            failed_pool_addresses.append({
-                                "pool_address": pool_addr,
-                                "dex_id": dex,
-                                "pair": f"{token_in}/{token_out}",
-                                "fee": fee_tier,
-                                "reason": "V3_SLOT0_FAILED",
-                            })
-                            logger.warning("V3_SLOT0_FAILED: %s %s/%s fee=%d pool=%s (quoter_attempted=%s)", 
-                                          dex, token_in, token_out, fee_tier, pool_addr, use_quoter_v2)
-                            # Record failure for auto-quarantine
-                            qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "QUOTE_REVERT",
-                                            details={"pool_address": pool_addr, "error": "slot0_failed"})
-                            continue
-                
-                # Calculate price from sqrtPriceX96
-                if sqrt_price_val is not None and sqrt_price_val > 0:
+                for fee_tier in effective_fee_tiers:
+                    pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)
+                    if pool_addr:
+                        pool_work_items.append((dex, fee_tier, pool_addr, dex_cfg, adapter_type))
+                    else:
+                        # v2.3.0: Silent skip (not reject) for unconfigured pools
+                        counts["pool_missing"] += 1
+                        pool_key = f"{dex}_{token_pair_tag}_{fee_tier}"
+                        pool_missing_keys.append(pool_key)
+                        logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config (key=%s)", 
+                                    dex, token_in, token_out, fee_tier, pool_key)
+        
+        for dex, fee_tier, pool_addr, dex_cfg, adapter_type in pool_work_items:
+            # v2.1.0-fix: Check disabled_pools FIRST (before pool lookup)
+            disabled_info = is_pool_disabled(config, dex, token_pair_tag, fee_tier)
+            if disabled_info:
+                rejected_quotes.append({
+                    "pair": f"{token_in}/{token_out}",
+                    "dex_id": dex,
+                    "fee": fee_tier,
+                    "reason": "POOL_DISABLED",
+                    "gate_passed": False,
+                    "error": f"Pool disabled: {disabled_info.get('reason', 'DISABLED')} - {disabled_info.get('detail', '')}",
+                    "disabled_info": disabled_info,
+                })
+                counts["pool_disabled"] += 1
+                logger.info("POOL_DISABLED: %s %s/%s fee=%d reason=%s", 
+                           dex, token_in, token_out, fee_tier, disabled_info.get('reason', 'DISABLED'))
+                continue
+            
+            # v2.1.0-fix: Check runtime quarantine (auto-quarantine for failing pools)
+            pair_tag = f"{token_in}/{token_out}"
+            if qm.is_quarantined(dex, pair_tag, fee_tier):
+                remaining = qm.get_quarantine_remaining(dex, pair_tag, fee_tier)
+                rejected_quotes.append({
+                    "pair": pair_tag,
+                    "dex_id": dex,
+                    "fee": fee_tier,
+                    "reason": "QUARANTINED",
+                    "gate_passed": False,
+                    "error": f"Pool quarantined (remaining: {remaining:.0f}s)",
+                })
+                counts["quarantined"] += 1
+                logger.info("QUARANTINED: %s %s fee=%d (remaining: %.0fs)", 
+                           dex, pair_tag, fee_tier, remaining)
+                continue
+            
+            # TODO(M4.2): Replace slot0 with QuoterV2 for executable quotes
+            # See dex/adapters/uniswap_v3.py UniswapV3Adapter
+            # Quoter addresses in config/dexes.yaml: quoter_v2
+            # This would give: amountOut, ticksCrossed, gasEstimate
+            
+            # M4.2 Preview: Try QuoterV2 if configured (optional feature flag)
+            use_quoter_v2 = config.get("use_quoter_v2", False)
+            quoter_result = None
+            
+            # M4.2: Calculate amount_in_wei using USD-notional sizing
+            if use_usd_notional:
+                amount_in_wei = calculate_amount_in_wei(
+                    token_in, decimals_in, target_usd_notional, tokens_usd_price
+                )
+            else:
+                amount_in_wei = 10 ** decimals_in  # Legacy: 1 token
+            
+            # M4.2 FIX: Use adapter_type for branching (reuse from outer loop)
+            is_v3_dex = adapter_type in ("uniswap_v3", "algebra")
+            is_algebra = adapter_type == "algebra"
+            
+            if use_quoter_v2 and dex_cfg:
+                quoter_addr = dex_cfg.get_quoter_address()
+                if quoter_addr:
                     token_in_addr = token_addresses.get(token_in, "")
                     token_out_addr = token_addresses.get(token_out, "")
-                    price_exact = calculate_price_from_sqrt(
-                        sqrt_price_val, token_in_addr, token_out_addr, decimals_in, decimals_out
-                    )
                     
-                    if price_exact is None:
-                        rejected_quotes.append({
-                            "pair": f"{token_in}/{token_out}",
-                            "dex_id": dex,
-                            "fee": fee_tier,
-                            "pool_address": pool_addr,
-                            "reason": "PRICE_CALC_FAILED",
-                            "gate_passed": False,
-                            "error": "Failed to calculate price from sqrtPriceX96",
-                        })
-                        counts["price_calc_failed"] += 1
-                        continue
-                    
-                    # v2.1.0-fix: Use localcontext to avoid InvalidOperation trap on round()
-                    # Some Decimal values (extreme precision) can trigger trap
-                    try:
-                        with localcontext() as ctx:
-                            ctx.traps[InvalidOperation] = False
-                            price_str = str(round(price_exact, 6))
-                    except Exception:
-                        price_str = str(price_exact)[:20]  # Fallback to truncation
-                    # M4.2 FIX: amount_out must scale with amount_in_wei (USD-notional)
-                    # For slot0: price_exact = amount_out per 1 token_in
-                    # amount_out = price_exact * (amount_in_wei / 10^decimals_in)
-                    # amount_out_wei = amount_out * 10^decimals_out
-                    price_exact_dec = Decimal(str(price_exact)) if not isinstance(price_exact, Decimal) else price_exact
-                    amount_in_tokens = Decimal(amount_in_wei) / Decimal(10 ** decimals_in)
-                    amount_out_human_dec = price_exact_dec * amount_in_tokens
-                    amount_out_wei_val = int(price_exact_dec * Decimal(amount_in_wei) * Decimal(10 ** decimals_out) / Decimal(10 ** decimals_in))
-                    try:
-                        amount_out_human_str = str(round(float(amount_out_human_dec), 6))
-                    except (OverflowError, ValueError):
-                        amount_out_human_str = "0.0"
-                    
-                    # v2.0.8: Enhanced QUOTE_ZERO_OUT gate with diagnostics
-                    # Detect: zero output, micro-liquidity, token0/token1 mismatch
-                    # token_in_addr / token_out_addr already looked up above
-                    token_in_is_token0 = (
-                        token_in_addr.lower() < token_out_addr.lower()
-                        if token_in_addr and token_out_addr else None
-                    )
-                    
-                    # Micro-price threshold: 1e-18 is suspiciously small
-                    is_micro_price = price_exact is not None and price_exact < 1e-18
-                    
-                    if amount_out_wei_val <= 0 or is_micro_price:
-                        # Build diagnostic payload
-                        diag = {
-                            "pair": f"{token_in}/{token_out}",
-                            "dex_id": dex,
-                            "fee": fee_tier,
-                            "pool_address": pool_addr,
-                            "reason": "QUOTE_ZERO_OUT",
-                            "gate_passed": False,
-                            "error": f"amount_out_wei={amount_out_wei_val} <= 0" if amount_out_wei_val <= 0 else f"micro_price={price_exact}",
-                            "price_exact": str(price_exact) if price_exact else None,
-                            # v2.0.8: Enhanced diagnostics
-                            "diag_token_in_is_token0": token_in_is_token0,
-                            "diag_sqrt_price_x96": str(sqrt_price_val) if sqrt_price_val else None,
-                            "diag_tick": tick_val,
-                            "diag_decimals": f"{decimals_in}/{decimals_out}",
-                        }
-                        
-                        # Detect potential token0/token1 mismatch
-                        if is_micro_price and price_exact < 1e-20:
-                            diag["diag_suspect"] = "TOKEN_ORDER_MISMATCH_OR_UNINITIALIZED"
-                        
-                        rejected_quotes.append(diag)
-                        counts["quote_zero_out"] = counts.get("quote_zero_out", 0) + 1
-                        logger.warning(
-                            "QUOTE_ZERO_OUT: %s %s/%s fee=%d price=%s token_in_is_token0=%s",
-                            dex, token_in, token_out, fee_tier, price_exact, token_in_is_token0
+                    if adapter_type == "uniswap_v3":
+                        # UniswapV3 QuoterV2
+                        quoter_result = read_quoter_v2(
+                            quoter_addr, token_in_addr, token_out_addr,
+                            amount_in_wei, fee_tier, rpc_url, current_block
                         )
-                        continue
-                else:
+                    elif adapter_type == "algebra":
+                        # Algebra quoter (Camelot) - use fee=0 for dynamic fees
+                        quoter_result = read_algebra_quoter(
+                            quoter_addr, token_in_addr, token_out_addr,
+                            amount_in_wei, rpc_url, current_block
+                        )
+            
+            # M4.2 FIX: If quoter_result is successful, we DON'T need slot0 at all
+            # quoter_result gives executable amount_out, price derived from amount_out/amount_in
+            tick_val, sqrt_price_val = None, None
+            quoter_success = quoter_result and quoter_result.get("amount_out", 0) > 0
+            
+            # Path A: quoter canonical - skip slot0 for v3/algebra when quoter succeeds
+            if quoter_success:
+                # Use quoter data directly - no slot0 needed
+                amount_out_wei_val = quoter_result["amount_out"]
+                amount_out_human_val = float(Decimal(amount_out_wei_val) / Decimal(10 ** decimals_out))
+                amount_out_human_str = str(round(amount_out_human_val, 6))
+                amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                # Price from quoter amounts
+                amount_in_tokens = float(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                price_exact = Decimal(str(amount_out_human_val)) / Decimal(str(amount_in_tokens)) if amount_in_tokens > 0 else Decimal(0)
+                price_str = str(round(float(price_exact), 6))
+                quote_source = "quoter_v2"
+                gas_estimate = quoter_result.get("gas_estimate")
+                ticks_crossed = quoter_result.get("ticks_crossed")
+                
+                # v2.0.9: SUSPECT_LIQUIDITY gate - reject high-impact quotes early
+                from core.constants import QUOTER_MAX_TICKS_CROSSED, QUOTER_MAX_GAS_ESTIMATE
+                suspect_liquidity_reason = None
+                if ticks_crossed is not None and ticks_crossed > QUOTER_MAX_TICKS_CROSSED:
+                    suspect_liquidity_reason = f"ticks_crossed={ticks_crossed}>{QUOTER_MAX_TICKS_CROSSED}"
+                elif gas_estimate is not None and gas_estimate > QUOTER_MAX_GAS_ESTIMATE:
+                    suspect_liquidity_reason = f"gas_estimate={gas_estimate}>{QUOTER_MAX_GAS_ESTIMATE}"
+                
+                if suspect_liquidity_reason:
                     rejected_quotes.append({
                         "pair": f"{token_in}/{token_out}",
                         "dex_id": dex,
                         "fee": fee_tier,
                         "pool_address": pool_addr,
-                        "reason": "NO_ONCHAIN_PRICE",
+                        "reason": "SUSPECT_LIQUIDITY",
                         "gate_passed": False,
-                        "error": "No on-chain price available",
+                        "error": suspect_liquidity_reason,
+                        "ticks_crossed": ticks_crossed,
+                        "gas_estimate": gas_estimate,
                     })
-                    counts["no_onchain_price"] += 1
-                    continue
+                    counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                    counts["suspect_liquidity"] = counts.get("suspect_liquidity", 0) + 1
+                    logger.debug("SUSPECT_LIQUIDITY: %s %s/%s fee=%d: %s", 
+                                dex, token_in, token_out, fee_tier, suspect_liquidity_reason)
+                    continue  # Skip this quote
                 
-                # Build quote with actual fee_tier (v2.0.7: no more hardcoded fee=3000)
-                # M4.2: Use USD-notional sizing for amount_in_wei
-                amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
-                
-                # v2.1.0-fix: PRICE_SANITY gate for slot0 path (parity with quoter path)
-                # Issue #3: slot0 quotes were bypassing PRICE_SANITY check, allowing outliers
+                # v2.1.0: PRICE_SANITY gate (per-quote)
                 price_sanity_enabled = config.get("price_sanity_enabled", True)
                 price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
-                # Note: tokens_anchor_price uses underscore format (WBTC_WETH), not slash
-                slot0_anchor_price = tokens_anchor_price.get(f"{token_in}_{token_out}")
-                if not slot0_anchor_price:
-                    reversed_tag = f"{token_out}_{token_in}"
-                    slot0_anchor_price = tokens_anchor_price.get(reversed_tag)
-                    if slot0_anchor_price:
-                        slot0_anchor_price = 1.0 / slot0_anchor_price
-                if price_sanity_enabled and slot0_anchor_price and price_exact is not None:
+                if price_sanity_enabled and anchor_price:
+                    from decimal import Decimal as _Decimal
                     from core.validators import check_price_sanity
                     sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
-                        price=Decimal(str(price_exact)),
-                        anchor_price=Decimal(str(slot0_anchor_price)),
+                        price=_Decimal(str(price_exact)),
+                        anchor_price=_Decimal(str(anchor_price)),
                         pair=f"{token_in}/{token_out}",
                         dex_id=dex,
                         fee_tier=fee_tier,
@@ -1068,9 +820,10 @@ def collect_quotes(
                         pool_address=pool_addr,
                     )
                     if not sanity_passed:
+                        # v2.1.0 Step 8: Enhanced price_sanity reject logging
                         try:
-                            ratio = float(price_exact) / float(slot0_anchor_price) if slot0_anchor_price else 0.0
-                        except (TypeError, ZeroDivisionError, OverflowError):
+                            ratio = float(price_exact) / float(anchor_price) if anchor_price else 0.0
+                        except (TypeError, ZeroDivisionError):
                             ratio = 0.0
                         
                         rejected_quotes.append({
@@ -1078,39 +831,37 @@ def collect_quotes(
                             "dex_id": dex,
                             "fee": fee_tier,
                             "pool_address": pool_addr,
-                            "reason": "PRICE_SANITY_FAILED",
+                            "reason": "PRICE_SANITY_FAILED",  # v2.1.0: Match ErrorCode canonical
                             "gate_passed": False,
                             "error": sanity_err,
                             "deviation_bps": sanity_dev_bps,
-                            "anchor_price": str(slot0_anchor_price),
+                            "anchor_price": str(anchor_price),
                             "price_exact": str(price_exact),
-                            "price_ratio": round(ratio, 4) if abs(ratio) < 1e20 else None,
-                            "anchor_source": "tokens_anchor_price",
-                            "quote_source": "slot0",
-                            "tick": tick_val,
+                            # v2.1.0 Step 8: Enhanced diagnostics
+                            "price_ratio": round(ratio, 4),
+                            "anchor_source": anchor_source,  # v2.2.0: dynamic or yaml_fallback
+                            "amount_in_wei": amount_in_wei,
+                            "notional_usd_target": target_usd_notional if use_usd_notional else None,
                             "diagnostics": sanity_diag,
                         })
                         counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
                         counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                        # v2.1.0: Log at INFO level for visibility of price sanity failures
                         logger.info(
-                            "PRICE_SANITY_FAILED (slot0): %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s",
+                            "PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s ratio=%.4f",
                             dex, token_in, token_out, fee_tier, sanity_dev_bps,
-                            str(slot0_anchor_price)[:12], str(price_exact)[:20]
+                            str(anchor_price)[:12], str(price_exact)[:12], ratio
                         )
-                        continue
+                        continue  # Skip this quote
                 
-                # M4.2: This path is only reached via slot0 (quoter success continues early above)
-                quote_source = "slot0"
-                gas_estimate = None
-                ticks_crossed = None
-                
+                # Build quote directly from quoter data
                 q = QuoteCompat(
                     dex_id=dex,
                     pool_address=pool_addr,
                     token_in=token_in,
                     token_out=token_out,
-                    fee=fee_tier,  # v2.0.7: actual fee tier from config
-                    amount_in_wei=amount_in_wei,  # M4.2: USD-notional sizing
+                    fee=fee_tier,
+                    amount_in_wei=amount_in_wei,
                     amount_out_wei=amount_out_wei_val,
                     amount_in_human=amount_in_human_str,
                     amount_out_human=amount_out_human_str,
@@ -1119,28 +870,20 @@ def collect_quotes(
                     block_number=current_block,
                     rpc_success=True,
                     gate_passed=True,
-                    tick=tick_val,
-                    sqrt_price_x96=sqrt_price_val,
+                    tick=tick_val,  # None - quoter doesn't give tick
+                    sqrt_price_x96=sqrt_price_val,  # None - quoter doesn't give sqrt
                 )
                 q_dict = q.__dict__
-                if price_exact is not None:
-                    q_dict["price_exact"] = str(price_exact)
-                
-                # M4.2: Add USD-notional metadata
+                q_dict["price_exact"] = str(price_exact)
                 q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
                 
                 # v2.1.0: Enhanced USD-notional tracking (Step 7)
-                # notional_usd_target: what we asked for
-                # notional_usd_actual: what we got (amount_out * token_out_price)
                 q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
-                
-                # Calculate actual USD value of amount_out
                 token_out_price = tokens_usd_price.get(token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
-                amount_out_val = float(amount_out_human_str) if amount_out_human_str else 0.0
-                notional_usd_actual = round(amount_out_val * token_out_price, 2)
+                notional_usd_actual = round(amount_out_human_val * token_out_price, 2)
                 q_dict["notional_usd_actual"] = notional_usd_actual
                 
-                # NOTIONAL_DRIFT: log when target vs actual differs significantly (>10%)
+                # NOTIONAL_DRIFT logging
                 if use_usd_notional and target_usd_notional > 0 and notional_usd_actual > 0:
                     drift_pct = abs(notional_usd_actual - target_usd_notional) / target_usd_notional * 100
                     q_dict["notional_drift_pct"] = round(drift_pct, 2)
@@ -1150,33 +893,311 @@ def collect_quotes(
                             token_in, token_out, dex, target_usd_notional, notional_usd_actual, drift_pct
                         )
                 
-                # M4.2: Quote source and quoter diagnostics (canonical now)
                 q_dict["quote_source"] = quote_source
                 q_dict["gas_estimate"] = gas_estimate
                 q_dict["ticks_crossed"] = ticks_crossed
                 q_dict["anchor_source"] = anchor_source  # v2.2.0: track dynamic vs yaml
-                
-                # v2.2.0 Fix Step 5: truth_mode_m42 behavior
-                # When truth_mode_m42=true, slot0-only quotes are diagnostic only
-                # These should be excluded from opportunity evaluation
-                truth_mode = config.get("truth_mode_m42", False)
-                if truth_mode and quote_source == "slot0":
-                    q_dict["is_diagnostic_only"] = True
-                    q_dict["diagnostic_reason"] = "SLOT0_DIAGNOSTIC"
-                    logger.debug(
-                        "SLOT0_DIAGNOSTIC: %s %s/%s (truth_mode requires quoter for executable quotes)",
-                        dex, token_in, token_out
-                    )
-                else:
-                    q_dict["is_diagnostic_only"] = False
-                
+                # v2.1.0: Add sqrt_price_after for measured slippage calculation
+                q_dict["sqrt_price_after"] = quoter_result.get("sqrt_price_after") if quoter_result else None
+                # v2.2.0 Fix Step 5: quoter_v2 quotes are executable, not diagnostic
+                q_dict["is_diagnostic_only"] = False
                 quotes_sample.append(q_dict)
-                counts["quotes_fetched"] = counts.get("quotes_fetched", 0) + 1
+                counts["quotes_fetched"] += 1
                 # Record success to reset quarantine failure counter
                 qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
                 # v2.2.0: Record valid quote for dynamic anchor calculation
                 if price_exact is not None and float(price_exact) > 0:
                     am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
+                logger.debug("QuoterV2 canonical: %s %s/%s fee=%d amount_out=%s", 
+                            dex, token_in, token_out, fee_tier, amount_out_wei_val)
+                continue  # Skip slot0 path entirely
+            
+            # M4.2 FIX: Algebra DEXes require quoter - slot0() ABI is incompatible
+            if is_algebra and not quoter_success:
+                rejected_quotes.append({
+                    "pair": f"{token_in}/{token_out}",
+                    "dex_id": dex,
+                    "fee": fee_tier,
+                    "pool_address": pool_addr,
+                    "reason": "ALGEBRA_NEEDS_QUOTER",
+                    "gate_passed": False,
+                    "error": "Algebra/Camelot DEX requires use_quoter_v2=true (slot0 ABI incompatible)",
+                    "use_quoter_v2": use_quoter_v2,
+                })
+                counts["algebra_needs_quoter"] = counts.get("algebra_needs_quoter", 0) + 1
+                logger.warning("ALGEBRA_NEEDS_QUOTER: %s %s/%s fee=%d (enable use_quoter_v2)", 
+                              dex, token_in, token_out, fee_tier)
+                continue
+            
+            # Path B: slot0 fallback - only for uniswap_v3 when no quoter
+            if is_v3_dex and not is_algebra:
+                tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url, current_block)
+                
+                if tick_val is None or sqrt_price_val is None:
+                    if skip_rpc and anchor_price is not None:
+                        tick_val, sqrt_price_val = synthesize_sqrt_price_from_anchor(
+                            anchor_price, decimals_in, decimals_out
+                        )
+                    else:
+                        rejected_quotes.append({
+                            "pair": f"{token_in}/{token_out}",
+                            "dex_id": dex,
+                            "fee": fee_tier,
+                            "pool_address": pool_addr,
+                            "reason": "V3_SLOT0_FAILED",
+                            "gate_passed": False,
+                            "error": f"Failed to read slot0 from pool {pool_addr}",
+                            # M4.2: Add diagnostic - was quoter attempted?
+                            "quoter_attempted": use_quoter_v2 and dex_cfg is not None,
+                        })
+                        counts["v3_slot0_failed"] += 1
+                        # v2.3.0: Track failed pool address for actionable diagnostics
+                        failed_pool_addresses.append({
+                            "pool_address": pool_addr,
+                            "dex_id": dex,
+                            "pair": f"{token_in}/{token_out}",
+                            "fee": fee_tier,
+                            "reason": "V3_SLOT0_FAILED",
+                        })
+                        logger.warning("V3_SLOT0_FAILED: %s %s/%s fee=%d pool=%s (quoter_attempted=%s)", 
+                                      dex, token_in, token_out, fee_tier, pool_addr, use_quoter_v2)
+                        # Record failure for auto-quarantine
+                        qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "QUOTE_REVERT",
+                                        details={"pool_address": pool_addr, "error": "slot0_failed"})
+                        continue
+            
+            # Calculate price from sqrtPriceX96
+            if sqrt_price_val is not None and sqrt_price_val > 0:
+                token_in_addr = token_addresses.get(token_in, "")
+                token_out_addr = token_addresses.get(token_out, "")
+                price_exact = calculate_price_from_sqrt(
+                    sqrt_price_val, token_in_addr, token_out_addr, decimals_in, decimals_out
+                )
+                
+                if price_exact is None:
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "PRICE_CALC_FAILED",
+                        "gate_passed": False,
+                        "error": "Failed to calculate price from sqrtPriceX96",
+                    })
+                    counts["price_calc_failed"] += 1
+                    continue
+                
+                # v2.1.0-fix: Use localcontext to avoid InvalidOperation trap on round()
+                # Some Decimal values (extreme precision) can trigger trap
+                try:
+                    with localcontext() as ctx:
+                        ctx.traps[InvalidOperation] = False
+                        price_str = str(round(price_exact, 6))
+                except Exception:
+                    price_str = str(price_exact)[:20]  # Fallback to truncation
+                # M4.2 FIX: amount_out must scale with amount_in_wei (USD-notional)
+                # For slot0: price_exact = amount_out per 1 token_in
+                # amount_out = price_exact * (amount_in_wei / 10^decimals_in)
+                # amount_out_wei = amount_out * 10^decimals_out
+                price_exact_dec = Decimal(str(price_exact)) if not isinstance(price_exact, Decimal) else price_exact
+                amount_in_tokens = Decimal(amount_in_wei) / Decimal(10 ** decimals_in)
+                amount_out_human_dec = price_exact_dec * amount_in_tokens
+                amount_out_wei_val = int(price_exact_dec * Decimal(amount_in_wei) * Decimal(10 ** decimals_out) / Decimal(10 ** decimals_in))
+                try:
+                    amount_out_human_str = str(round(float(amount_out_human_dec), 6))
+                except (OverflowError, ValueError):
+                    amount_out_human_str = "0.0"
+                
+                # v2.0.8: Enhanced QUOTE_ZERO_OUT gate with diagnostics
+                # Detect: zero output, micro-liquidity, token0/token1 mismatch
+                # token_in_addr / token_out_addr already looked up above
+                token_in_is_token0 = (
+                    token_in_addr.lower() < token_out_addr.lower()
+                    if token_in_addr and token_out_addr else None
+                )
+                
+                # Micro-price threshold: 1e-18 is suspiciously small
+                is_micro_price = price_exact is not None and price_exact < 1e-18
+                
+                if amount_out_wei_val <= 0 or is_micro_price:
+                    # Build diagnostic payload
+                    diag = {
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "QUOTE_ZERO_OUT",
+                        "gate_passed": False,
+                        "error": f"amount_out_wei={amount_out_wei_val} <= 0" if amount_out_wei_val <= 0 else f"micro_price={price_exact}",
+                        "price_exact": str(price_exact) if price_exact else None,
+                        # v2.0.8: Enhanced diagnostics
+                        "diag_token_in_is_token0": token_in_is_token0,
+                        "diag_sqrt_price_x96": str(sqrt_price_val) if sqrt_price_val else None,
+                        "diag_tick": tick_val,
+                        "diag_decimals": f"{decimals_in}/{decimals_out}",
+                    }
+                    
+                    # Detect potential token0/token1 mismatch
+                    if is_micro_price and price_exact < 1e-20:
+                        diag["diag_suspect"] = "TOKEN_ORDER_MISMATCH_OR_UNINITIALIZED"
+                    
+                    rejected_quotes.append(diag)
+                    counts["quote_zero_out"] = counts.get("quote_zero_out", 0) + 1
+                    logger.warning(
+                        "QUOTE_ZERO_OUT: %s %s/%s fee=%d price=%s token_in_is_token0=%s",
+                        dex, token_in, token_out, fee_tier, price_exact, token_in_is_token0
+                    )
+                    continue
+            else:
+                rejected_quotes.append({
+                    "pair": f"{token_in}/{token_out}",
+                    "dex_id": dex,
+                    "fee": fee_tier,
+                    "pool_address": pool_addr,
+                    "reason": "NO_ONCHAIN_PRICE",
+                    "gate_passed": False,
+                    "error": "No on-chain price available",
+                })
+                counts["no_onchain_price"] += 1
+                continue
+            
+            # Build quote with actual fee_tier (v2.0.7: no more hardcoded fee=3000)
+            # M4.2: Use USD-notional sizing for amount_in_wei
+            amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+            
+            # v2.1.0-fix: PRICE_SANITY gate for slot0 path (parity with quoter path)
+            # Issue #3: slot0 quotes were bypassing PRICE_SANITY check, allowing outliers
+            price_sanity_enabled = config.get("price_sanity_enabled", True)
+            price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
+            # Note: tokens_anchor_price uses underscore format (WBTC_WETH), not slash
+            slot0_anchor_price = tokens_anchor_price.get(f"{token_in}_{token_out}")
+            if not slot0_anchor_price:
+                reversed_tag = f"{token_out}_{token_in}"
+                slot0_anchor_price = tokens_anchor_price.get(reversed_tag)
+                if slot0_anchor_price:
+                    slot0_anchor_price = 1.0 / slot0_anchor_price
+            if price_sanity_enabled and slot0_anchor_price and price_exact is not None:
+                from core.validators import check_price_sanity
+                sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
+                    price=Decimal(str(price_exact)),
+                    anchor_price=Decimal(str(slot0_anchor_price)),
+                    pair=f"{token_in}/{token_out}",
+                    dex_id=dex,
+                    fee_tier=fee_tier,
+                    max_deviation_bps=price_sanity_max_bps,
+                    anchor_source="tokens_anchor_price",
+                    pool_address=pool_addr,
+                )
+                if not sanity_passed:
+                    try:
+                        ratio = float(price_exact) / float(slot0_anchor_price) if slot0_anchor_price else 0.0
+                    except (TypeError, ZeroDivisionError, OverflowError):
+                        ratio = 0.0
+                    
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "PRICE_SANITY_FAILED",
+                        "gate_passed": False,
+                        "error": sanity_err,
+                        "deviation_bps": sanity_dev_bps,
+                        "anchor_price": str(slot0_anchor_price),
+                        "price_exact": str(price_exact),
+                        "price_ratio": round(ratio, 4) if abs(ratio) < 1e20 else None,
+                        "anchor_source": "tokens_anchor_price",
+                        "quote_source": "slot0",
+                        "tick": tick_val,
+                        "diagnostics": sanity_diag,
+                    })
+                    counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                    counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                    logger.info(
+                        "PRICE_SANITY_FAILED (slot0): %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s",
+                        dex, token_in, token_out, fee_tier, sanity_dev_bps,
+                        str(slot0_anchor_price)[:12], str(price_exact)[:20]
+                    )
+                    continue
+            
+            # M4.2: This path is only reached via slot0 (quoter success continues early above)
+            quote_source = "slot0"
+            gas_estimate = None
+            ticks_crossed = None
+            
+            q = QuoteCompat(
+                dex_id=dex,
+                pool_address=pool_addr,
+                token_in=token_in,
+                token_out=token_out,
+                fee=fee_tier,  # v2.0.7: actual fee tier from config
+                amount_in_wei=amount_in_wei,  # M4.2: USD-notional sizing
+                amount_out_wei=amount_out_wei_val,
+                amount_in_human=amount_in_human_str,
+                amount_out_human=amount_out_human_str,
+                price=price_str,
+                latency_ms=rpc_latency or 10,
+                block_number=current_block,
+                rpc_success=True,
+                gate_passed=True,
+                tick=tick_val,
+                sqrt_price_x96=sqrt_price_val,
+            )
+            q_dict = q.__dict__
+            if price_exact is not None:
+                q_dict["price_exact"] = str(price_exact)
+            
+            # M4.2: Add USD-notional metadata
+            q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
+            
+            # v2.1.0: Enhanced USD-notional tracking (Step 7)
+            # notional_usd_target: what we asked for
+            # notional_usd_actual: what we got (amount_out * token_out_price)
+            q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
+            
+            # Calculate actual USD value of amount_out
+            token_out_price = tokens_usd_price.get(token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
+            amount_out_val = float(amount_out_human_str) if amount_out_human_str else 0.0
+            notional_usd_actual = round(amount_out_val * token_out_price, 2)
+            q_dict["notional_usd_actual"] = notional_usd_actual
+            
+            # NOTIONAL_DRIFT: log when target vs actual differs significantly (>10%)
+            if use_usd_notional and target_usd_notional > 0 and notional_usd_actual > 0:
+                drift_pct = abs(notional_usd_actual - target_usd_notional) / target_usd_notional * 100
+                q_dict["notional_drift_pct"] = round(drift_pct, 2)
+                if drift_pct > 10.0:
+                    logger.warning(
+                        "NOTIONAL_DRIFT: %s/%s %s target=$%.0f actual=$%.2f drift=%.1f%%",
+                        token_in, token_out, dex, target_usd_notional, notional_usd_actual, drift_pct
+                    )
+            
+            # M4.2: Quote source and quoter diagnostics (canonical now)
+            q_dict["quote_source"] = quote_source
+            q_dict["gas_estimate"] = gas_estimate
+            q_dict["ticks_crossed"] = ticks_crossed
+            q_dict["anchor_source"] = anchor_source  # v2.2.0: track dynamic vs yaml
+            
+            # v2.2.0 Fix Step 5: truth_mode_m42 behavior
+            # When truth_mode_m42=true, slot0-only quotes are diagnostic only
+            # These should be excluded from opportunity evaluation
+            truth_mode = config.get("truth_mode_m42", False)
+            if truth_mode and quote_source == "slot0":
+                q_dict["is_diagnostic_only"] = True
+                q_dict["diagnostic_reason"] = "SLOT0_DIAGNOSTIC"
+                logger.debug(
+                    "SLOT0_DIAGNOSTIC: %s %s/%s (truth_mode requires quoter for executable quotes)",
+                    dex, token_in, token_out
+                )
+            else:
+                q_dict["is_diagnostic_only"] = False
+            
+            quotes_sample.append(q_dict)
+            counts["quotes_fetched"] = counts.get("quotes_fetched", 0) + 1
+            # Record success to reset quarantine failure counter
+            qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
+            # v2.2.0: Record valid quote for dynamic anchor calculation
+            if price_exact is not None and float(price_exact) > 0:
+                am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
     
     # v2.3.0: Add failed pool addresses to counts for artifact generation
     counts["failed_pool_addresses"] = failed_pool_addresses

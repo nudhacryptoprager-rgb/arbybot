@@ -36,6 +36,8 @@ class PairConfig:
     token_out_decimals: int = 18
     fee_tiers: List[int] = None
     pool_addresses: Optional[List[str]] = None  # Optional: pre-resolved pool addresses
+    # v2.6.0: pool_info stores dex/fee/address mapping for discovery_runtime
+    pool_info: Optional[List[Dict[str, Any]]] = None  # [{dex, fee, address}, ...]
     
     def __post_init__(self):
         if self.fee_tiers is None:
@@ -67,6 +69,8 @@ class PairConfig:
         }
         if self.pool_addresses:
             result["pool_addresses"] = self.pool_addresses
+        if self.pool_info:
+            result["pool_info"] = self.pool_info
         return result
 
 

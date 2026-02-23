@@ -211,21 +211,7 @@ def run_scan(
         "cycles_completed": cycles,
     }
     
-    # Collect quotes
-    quotes_sample, rejected_quotes, counts = collect_quotes(config, current_block, rpc_latency)
-    
-    # Update stats from counts
-    stats["quotes_rejected"] = len(rejected_quotes)
-    stats["pool_missing_count"] = counts["pool_missing"]
-    stats["pool_disabled_count"] = counts.get("pool_disabled", 0)
-    stats["quarantined_count"] = counts.get("quarantined", 0)
-    stats["v3_slot0_failed_count"] = counts["v3_slot0_failed"]
-    # v2.3.0: Track failed pool addresses for actionable diagnostics
-    stats["failed_pool_addresses"] = counts.get("failed_pool_addresses", [])
-    # v2.3.2: Track pool_missing_keys for observability (what pools were skipped)
-    stats["pool_missing_keys"] = counts.get("pool_missing_keys", [])
-    stats["pool_missing_keys_total"] = counts.get("pool_missing_keys_total", 0)
-    
+    # v2.6.0: Resolve universe BEFORE collect_quotes() so resolved pairs are used
     dexes_list = config.get("dexes") or []
     chain_key = config.get("chain", "arbitrum_one")
     
@@ -237,9 +223,11 @@ def run_scan(
     force_intent = (universe_source in ("intent_verified", "intent_forced"))
     use_discovery_runtime = (universe_source == "discovery_runtime")
     
-    # Early discovery_runtime resolution (before standard universe selection)
+    # Resolve pairs based on universe_source BEFORE quoting
     _discovery_runtime_resolved = []
     _discovery_runtime_stats = None
+    pairs_list = None
+    
     if use_discovery_runtime:
         try:
             from discovery.runtime import resolve_runtime_pairs, runtime_pairs_to_pair_configs
@@ -255,13 +243,15 @@ def run_scan(
             pairs_list = runtime_pairs_to_pair_configs(_discovery_runtime_resolved)
             
             logger.info(
-                "Using discovery_runtime universe (%d pairs resolved -> %d unique pairs for quoting)",
+                "Using discovery_runtime universe (%d pools resolved -> %d unique pairs for quoting)",
                 len(_discovery_runtime_resolved),
                 len(pairs_list),
             )
             stats["universe_source"] = "discovery_runtime"
             stats["discovery_runtime_pairs_count"] = len(pairs_list)
             stats["discovery_runtime_pools_resolved"] = len(_discovery_runtime_resolved)
+            if _discovery_runtime_stats:
+                stats["discovery_runtime"] = _discovery_runtime_stats.to_dict()
         except Exception as dr_err:
             logger.warning("discovery_runtime failed, falling back to config: %s", dr_err)
             pairs_list = load_pairs(chain_key, config, use_intent=False, force_intent=False)
@@ -278,9 +268,25 @@ def run_scan(
         logger.info("Using intent.txt universe (universe_source=intent)")
         stats["universe_source"] = "intent"
     else:
-        pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
+        # Default: config pairs (let collect_quotes load them)
+        pairs_list = None
         logger.debug("Using config pairs (universe_source=config)")
         stats["universe_source"] = "config"
+    
+    # Collect quotes with resolved pairs
+    quotes_sample, rejected_quotes, counts = collect_quotes(config, current_block, rpc_latency, pairs_list=pairs_list)
+    
+    # Update stats from counts
+    stats["quotes_rejected"] = len(rejected_quotes)
+    stats["pool_missing_count"] = counts["pool_missing"]
+    stats["pool_disabled_count"] = counts.get("pool_disabled", 0)
+    stats["quarantined_count"] = counts.get("quarantined", 0)
+    stats["v3_slot0_failed_count"] = counts["v3_slot0_failed"]
+    # v2.3.0: Track failed pool addresses for actionable diagnostics
+    stats["failed_pool_addresses"] = counts.get("failed_pool_addresses", [])
+    # v2.3.2: Track pool_missing_keys for observability (what pools were skipped)
+    stats["pool_missing_keys"] = counts.get("pool_missing_keys", [])
+    stats["pool_missing_keys_total"] = counts.get("pool_missing_keys_total", 0)
     
     # v2.0.8: quotes_total = attempted quotes (valid + rejected), accounts for fee_tiers
     stats["quotes_total"] = len(quotes_sample) + len(rejected_quotes)

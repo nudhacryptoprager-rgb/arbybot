@@ -44,26 +44,56 @@ require_cross_dex: true
 
 # ========== STANDARD SETTINGS ==========
 
-# Quote config
-quote_amount_usd: 1000
-quote_batch_delay_ms: 250
-price_tolerance_bps: 5000
-
 # Gas config (Arbitrum)
 gas_price_gwei: 0.1
 max_gas_price_gwei: 1.0
 l2_gas_limit: 1000000
 
-# Gates (M4 bootstrap)
-spread_threshold_bps: 5
-confidence_threshold: 0.5
+# Price sanity
 price_sanity_max_deviation_bps: 5000
 
 # M4 simulate_only (no real execution)
-execution_enabled: false
 kill_switch_active: true
 simulate_only: true
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_M4
 
-# Monitoring
-truth_report_enabled: true
-reject_histogram_enabled: true
+# v2.2.0: truth_mode_m42 - roundtrip is canonical, one-leg is diagnostic only
+truth_mode_m42: true
+
+# v2.2.0: use_quoter_v2 enables QuoterV2 calls for executable pricing
+use_quoter_v2: true
+
+# Paper trading settings
+paper_size_usd: 1000
+paper_slippage_bps: 0
+
+# Spread threshold
+min_spread_bps: 5
+
+# Token addresses (Arbitrum One)
+tokens:
+  WETH:
+    address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+    decimals: 18
+  USDC:
+    address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+    decimals: 6
+  USDT:
+    address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+    decimals: 6
+  ARB:
+    address: "0x912CE59144191C1204E64559FE8253a0e49E6548"
+    decimals: 18
+  DAI:
+    address: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"
+    decimals: 18
+
+# Anchor prices for discovery_runtime tokens
+tokens_anchor_price:
+  WETH_USDC: 1980
+  WETH_USDT: 1980
+  WETH_DAI: 1980
+  ARB_USDC: 0.11
+  ARB_WETH: 0.000058
+  ARB_DAI: 0.11

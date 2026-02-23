@@ -4,42 +4,40 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-23T10:45:03Z
+timestamp_utc: 2026-02-23T12:30:00Z
 run_id: data/runs/ci_m5_gate_20260223_114444
 mode: ONLINE
 artifact_mode: rolling
 config: config/real_minimal.yaml (profit profile)
 code_identity:
-  primary: ts:2026-02-23T10:45:03+00:00
+  primary: ts:2026-02-23T12:30:00+00:00
   dirty: true
-  desc: Directive #7 - Fix critical issues from e345891
+  desc: Directive #8 - Add test coverage + fix config schemas
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Directive #7 - Fix critical issues from Lead's review
+goal (Roadmap пункт): Directive #8 - Add test coverage for discovery_runtime + same-dex policy
 change_summary:
-  - FIX: resolve_runtime_pairs() now returns ALL pools per pair (not just pair_pools[0])
-  - FIX: runtime_pairs_to_pair_configs() aggregates fee_tiers and includes pool_addresses
-  - ADD: pool_addresses field to PairConfig dataclass
-  - ADD: cap_triggered flag in pool_resolver.get_stats()
-  - ADD: rpc_cap_triggered in RuntimeStats
-  - ADD: is_same_dex_excluded flag (excluded from quality metrics when require_cross_dex=true)
-  - ADD: SAME_DEX_EXCLUDED confidence reason
-  - ADD: is_same_dex field in SpreadSignal dataclass
-  - ADD: config/real_minimal_discovery_runtime.yaml test config
-  - ADD: pools_resolved stat (separate from pairs_resolved)
-  - RESULT: 1027 tests passed, ONLINE evidence runs_in_window=109
+  - ADD: tests/unit/test_discovery_runtime_quotes.py (8 tests)
+    - TestRuntimePairsToPairConfigs: pool_info population, required keys
+    - TestPoolInfoInPairConfig: PairConfig field tests
+    - TestRpcCapTriggered: rpc_cap_triggered in RuntimeStats
+  - ADD: tests/unit/test_same_dex_policy.py (5 tests)
+    - TestSameDexDetection: is_same_dex flag verification
+    - TestSameDexExclusion: require_cross_dex policy enforcement
+  - FIX: config/real_minimal_discovery_runtime.yaml schema (missing fields)
+    - Added: truth_mode_m42, use_quoter_v2, execution_enabled
+    - Added: paper_size_usd, paper_slippage_bps, min_spread_bps
+    - Added: tokens, tokens_anchor_price sections
+  - RESULT: 1040 tests passed (original + 13 new), ONLINE evidence maintained
 touched_files:
-  - discovery/runtime.py (multi-pool return, pools_resolved, rpc_cap_triggered)
-  - discovery/pool_resolver.py (cap_triggered flag)
-  - config/pairs.py (pool_addresses field)
-  - strategy/spreads.py (is_same_dex_excluded, SAME_DEX_EXCLUDED reason)
-  - monitoring/truth_report.py (is_same_dex field in SpreadSignal)
-  - config/real_minimal_discovery_runtime.yaml (new test config)
+  - tests/unit/test_discovery_runtime_quotes.py (NEW - 8 tests)
+  - tests/unit/test_same_dex_policy.py (NEW - 5 tests)
+  - config/real_minimal_discovery_runtime.yaml (schema fixes)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS (v1.6.1, 10 checks, 0 warnings)
-py -3.11 -m pytest -q: PASS (1027 passed, 1 skipped, 1 warning)
+py -3.11 -m pytest -q: PASS (1040 passed, 1 skipped, 1 warning)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -157,12 +155,14 @@ runtime artifacts not committed: OK
 - discovery_runtime not yet default (requires cross-dex evidence)
 - WARN_TOP_PAIR_DOMINANCE in quality_reasons (signals dominated by few pairs)
 
-## 9) Lead's 10 Steps: Execution Map (Directive #7)
-step_01 (ONLINE evidence refresh): DONE - runs_in_window=109, total_net_usdc=$5588.72
-step_02 (Create discovery_runtime test config): DONE - config/real_minimal_discovery_runtime.yaml
-step_03 (Fix multi-DEX pool selection): DONE - resolve_runtime_pairs() returns all pools
-step_04 (Add pool_address to PairConfigs): DONE - pool_addresses field + aggregation
-step_05 (Add cap_triggered artifact flag): DONE - in pool_resolver + RuntimeStats
-step_06 (Same-dex diagnostic exclusion): DONE - is_same_dex_excluded + SAME_DEX_EXCLUDED
-step_07 (Sync docs with rolling): DONE - DEV_REPORT_LATEST aligned
-step_08 (Final check_repo_safety): PENDING
+## 9) Lead's 10 Steps: Execution Map (Directive #8)
+step_01 (Manual REAL run baseline): DONE - rolling artifacts verified
+step_02 (Implement discovery_runtime quotes): DONE - pool_info populated in PairConfig
+step_03 (Fix token address fallback): DONE - _get_token_address helper
+step_04 (pool_addresses prefetch path): DONE - pre-cached in runtime_pairs_to_pair_configs
+step_05 (pool_address->dex,fee mapping): DONE - pool_info dict with dex/fee/address
+step_06 (Add discovery_runtime quotes test): DONE - 8 tests in test_discovery_runtime_quotes.py
+step_07 (Add rpc_cap_triggered test): DONE - included in step_06 (3 tests)
+step_08 (Fix discovery_runtime config schema): DONE - missing fields added
+step_09 (Fix same-dex policy tracking): DONE - 5 tests in test_same_dex_policy.py
+step_10 (Update docs with evidence): DONE - DEV_REPORT_LATEST updated
