@@ -4,15 +4,15 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-23T12:30:00Z
-run_id: data/runs/ci_m5_gate_20260223_114444
+timestamp_utc: 2026-02-23T12:29:40Z
+run_id: data/runs/ci_m5_gate_20260223_132921
 mode: ONLINE
 artifact_mode: rolling
 config: config/real_minimal.yaml (profit profile)
 code_identity:
-  primary: ts:2026-02-23T12:30:00+00:00
-  dirty: true
-  desc: Directive #8 - Add test coverage + fix config schemas
+  primary: ts:2026-02-23T12:29:40+00:00
+  dirty: false
+  desc: Directive #8 - commit 13dd09c
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Directive #8 - Add test coverage for discovery_runtime + same-dex policy
@@ -45,7 +45,9 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json
   - data/runs/_rolling/m4_stability_agg.json
 run_dir_bundle (ONLINE):
-  - data/runs/ci_m5_gate_20260223_104821/reports
+  - data/runs/ci_m5_gate_20260223_132921/reports
+discovery_runtime_evidence:
+  - data/runs/manual_run_20260223_133004/reports (universe_source=discovery_runtime)
 
 ## 4) Key Results (числа з артефактів)
 
@@ -54,21 +56,21 @@ _latest.json:
   run_status: PASS
   agg_status: PASS
   agg_reasons: []
-  data_run_rate: 0.9906
+  data_run_rate: 0.9909
   low_sample_rate: 0.0
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-02-23T09:48:51+00:00
-  run_context.code_identity: ts:2026-02-23T09:48:51+00:00
-  inputs.run_dir_name: ci_m5_gate_20260223_104821
+  run_context.run_timestamp: 2026-02-23T12:29:40+00:00
+  run_context.code_identity: ts:2026-02-23T12:29:40+00:00
+  inputs.run_dir_name: ci_m5_gate_20260223_132921
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 6
-    included_signals_count: 6
+    signals_count: 5
+    included_signals_count: 5
     excluded_signals_count: 0
-    total_net_usdc: 49.32 (single run)
+    total_net_usdc: 17.03 (single run)
     mae_net_usdc: 0.5
     est_sign_correct_rate: 1.0
     profit_is_diagnostic: true
@@ -84,9 +86,9 @@ run_summary_latest.json:
     gas_estimate_source: quoter_v2 (all legs)
 
 m4_stability_agg.json:
-  runs_in_window: 109 (M4.1 N=100+ maintained)
-  last_run: ci_m5_gate_20260223_114444
-  computed_total_net_usdc: 5588.72
+  runs_in_window: 110 (M4.1 N=100+ maintained)
+  last_run: ci_m5_gate_20260223_132921
+  computed_total_net_usdc: 5605.75
   agg_status: PASS
   agg_reasons: []
 
@@ -123,7 +125,7 @@ excluded_from_signals: **NONE** (FIXED)
 
 | DoD | Status | Evidence |
 |-----|--------|----------|
-| Core Truth (paper +PnL) | [OK] PROVEN | N=109 runs, total_net_usdc=$5588.72 |
+| Core Truth (paper +PnL) | [OK] PROVEN | N=110 runs, total_net_usdc=$5605.75 |
 | Rolling Quality Gate | [OK] PASS | agg_status=PASS, agg_reasons=[] |
 | M4.2 Roundtrip Profit | [NO] NOT_PROFITABLE | profitable_count=0 |
 | M4.2 Real Execution | [NO] NOT STARTED | kill_switch_active=true |

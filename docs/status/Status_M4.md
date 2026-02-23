@@ -33,17 +33,17 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-23)**: From `m4_stability_agg.json` (canonical source): **runs_in_window=107** (M4.1 N=100+ ACHIEVED), data_run_rate=0.9907, pass_rate=1.0, **total_net_usdc=$5517.89**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=9 (from `disabled_pools`), POOL_MISSING=0. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). **M4.3 Preflight Evidence AVAILABLE**: `preflight_evidence.enabled=true`, 2/2 candidates passed, `gas_estimate_source=quoter_v2` on all legs (preflight_v1.0.2 VERIFIED in scan AND truth_report). **Discovery**: 28 resolvable pairs, 0 unresolvable, 224 potential V3 queries. 49 tokens in core_tokens.yaml. For infra evidence see [Status_M5_0.md](Status_M5_0.md).
+**Snapshot (2026-02-23)**: From `m4_stability_agg.json` (canonical source): **runs_in_window=110** (M4.1 N=100+ ACHIEVED), data_run_rate=0.9909, pass_rate=1.0, **total_net_usdc=$5605.75**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=9 (from `disabled_pools`), POOL_MISSING=0. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). **M4.3 Preflight Evidence AVAILABLE**: `preflight_evidence.enabled=true`, 3/3 candidates passed, `gas_estimate_source=quoter_v2` on all legs (preflight_v1.0.2 VERIFIED in scan AND truth_report). **Discovery**: 28 resolvable pairs, 0 unresolvable, 224 potential V3 queries. 49 tokens in core_tokens.yaml. For infra evidence see [Status_M5_0.md](Status_M5_0.md).
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when ≥10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
-**Evidence (ci_m5_gate_20260223_101208 - run)**:
+**Evidence (ci_m5_gate_20260223_132921 - run)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
 - Counters: `execution_ready_count=0` (kill_switch_active=true), `would_execute_count=0`
-- Provenance: `run_timestamp=2026-02-23T09:12:27.790159+00:00`
-- **M4.1 CLOSED**: N=107 consecutive runs with `agg_status=PASS` (exceeds N=100 target)
-- **M4.3 Preflight**: `preflight_evidence.enabled=true`, 2/2 candidates passed, `gas_estimate_source=quoter_v2`, evidence_source=preflight_v1.0.2 (VERIFIED cross-artifact)
+- Provenance: `run_timestamp=2026-02-23T12:29:40+00:00`
+- **M4.1 CLOSED**: N=110 consecutive runs with `agg_status=PASS` (exceeds N=100 target)
+- **M4.3 Preflight**: `preflight_evidence.enabled=true`, 3/3 candidates passed, `gas_estimate_source=quoter_v2`, evidence_source=preflight_v1.0.2 (VERIFIED cross-artifact)
 - **Discovery**: 28 resolvable pairs, 0 unresolvable (10 missing tokens added), 224 potential V3 queries
 - **Token registry**: core_tokens.yaml expanded (49 tokens: 39 original + 10 discovery)
 - **Pool resolver**: discovery/pool_resolver.py implemented with persistent cache

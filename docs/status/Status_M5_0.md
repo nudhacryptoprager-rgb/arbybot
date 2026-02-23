@@ -2,8 +2,9 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-23  
-**Tests**: 1025 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260223_104821`
+**Tests**: 1040 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260223_132921`  
+**discovery_runtime evidence**: `manual_run_20260223_133004` (universe_source=discovery_runtime, quotes_fetched=7)
 
 ---
 
@@ -64,7 +65,7 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --fa
 
 # Unit tests
 py -3.11 -m pytest tests/unit -q
-# EXPECT: 1025 passed, 1 skipped
+# EXPECT: 1040 passed, 1 skipped
 ```
 
 ---
@@ -73,8 +74,9 @@ py -3.11 -m pytest tests/unit -q
 
 | Type | RunDir | Key Evidence |
 |------|--------|--------------|
-| Normal | `ci_m5_gate_20260223_104821` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 3/3, discovery_runtime 20 pools |
-| Reference | `ci_m5_gate_20260223_101208` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 2/2 |
+| ONLINE | `ci_m5_gate_20260223_132921` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 3/3, runs_in_window=110 |
+| discovery_runtime | `manual_run_20260223_133004` | universe_source=discovery_runtime, quotes_fetched=7, pools_resolved=20, cross_dex_pairs_count=3 |
+| Reference | `ci_m5_gate_20260223_104821` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 3/3, discovery_runtime 20 pools |
 
 ---
 
