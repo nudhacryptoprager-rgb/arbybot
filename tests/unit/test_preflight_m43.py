@@ -390,15 +390,20 @@ class TestRunEthCallQuote:
     """Test run_eth_call_quote function."""
 
     def test_successful_quote(self):
-        """Successful eth_call should return amount_out."""
+        """Successful eth_call should return amount_out and gas_estimate."""
         from execution.preflight import run_eth_call_quote
         
         mock_w3 = MagicMock()
-        mock_w3.eth.call.return_value = (10**20).to_bytes(32, "big")
+        # QuoterV2 returns 4 x 32 bytes: amountOut, sqrtPriceX96After, ticksCrossed, gasEstimate
+        amount_out_bytes = (10**20).to_bytes(32, "big")
+        sqrt_price_bytes = (10**24).to_bytes(32, "big")
+        ticks_bytes = (3).to_bytes(32, "big")
+        gas_estimate_bytes = (150000).to_bytes(32, "big")
+        mock_w3.eth.call.return_value = amount_out_bytes + sqrt_price_bytes + ticks_bytes + gas_estimate_bytes
         mock_w3.to_checksum_address.side_effect = lambda x: x
         
         # Use valid hex addresses
-        ok, amount_out, err = run_eth_call_quote(
+        ok, amount_out, gas_estimate, err = run_eth_call_quote(
             w3=mock_w3,
             quoter_address="0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
             token_in="0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",  # WETH
@@ -409,6 +414,7 @@ class TestRunEthCallQuote:
         
         assert ok is True
         assert amount_out == 10**20
+        assert gas_estimate == 150000
         assert err is None
 
     def test_failed_quote(self):
@@ -419,7 +425,7 @@ class TestRunEthCallQuote:
         mock_w3.eth.call.side_effect = Exception("Revert: insufficient liquidity")
         mock_w3.to_checksum_address.side_effect = lambda x: x
         
-        ok, amount_out, err = run_eth_call_quote(
+        ok, amount_out, gas_estimate, err = run_eth_call_quote(
             w3=mock_w3,
             quoter_address="0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
             token_in="0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
@@ -430,6 +436,7 @@ class TestRunEthCallQuote:
         
         assert ok is False
         assert amount_out is None
+        assert gas_estimate is None
         assert "insufficient liquidity" in err
 
 
@@ -767,3 +774,153 @@ class TestAdaptOpportunityToPreflightInput:
         
         assert result["leg1"]["pool_address"] == ""
         assert result["leg2"]["pool_address"] == ""
+
+
+class TestPreflightInvariants:
+    """Test preflight artifact shape invariants."""
+
+    def test_artifact_results_count_matches_candidates_count(self):
+        """results length MUST equal candidates_count."""
+        from execution.preflight import collect_top_n_preflight, preflight_disabled_stub
+        
+        mock_w3 = MagicMock()
+        # Return 128-byte QuoterV2 response
+        mock_w3.eth.call.return_value = (
+            (10**18).to_bytes(32, "big") +
+            (10**24).to_bytes(32, "big") +
+            (3).to_bytes(32, "big") +
+            (150000).to_bytes(32, "big")
+        )
+        mock_w3.to_checksum_address.side_effect = lambda x: x
+        
+        signals = [
+            {"spread_id": f"s{i}", "pair": "WETH/USDC", "spread_bps": 10 - i,
+             "leg1": {"dex_id": "uniswap_v3", "token_in": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                     "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "fee_tier": 500, "amount_in": 10**18},
+             "leg2": {"dex_id": "sushi_v3", "token_in": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                     "token_out": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", "fee_tier": 500, "amount_in": 10**18}}
+            for i in range(5)
+        ]
+        
+        result = collect_top_n_preflight(w3=mock_w3, spread_signals=signals, n=3)
+        
+        assert result["candidates_count"] == 3
+        assert len(result["results"]) == result["candidates_count"]
+
+    def test_leg_structure_has_required_fields(self):
+        """Each leg MUST have eth_call_ok, gas_estimate, gas_estimate_source."""
+        from execution.preflight import collect_preflight_evidence
+        
+        mock_w3 = MagicMock()
+        mock_w3.eth.call.return_value = (
+            (10**18).to_bytes(32, "big") +
+            (10**24).to_bytes(32, "big") +
+            (3).to_bytes(32, "big") +
+            (150000).to_bytes(32, "big")
+        )
+        mock_w3.to_checksum_address.side_effect = lambda x: x
+        
+        signal = {
+            "spread_id": "test_spread",
+            "pair": "WETH/USDC",
+            "spread_bps": 50,
+            "leg1": {"dex_id": "uniswap_v3", "pool_address": "0x1234",
+                    "token_in": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                    "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                    "fee_tier": 500, "amount_in": 10**18},
+            "leg2": {"dex_id": "sushi_v3", "pool_address": "0x5678",
+                    "token_in": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                    "token_out": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                    "fee_tier": 500, "amount_in": 10**18}
+        }
+        
+        evidence = collect_preflight_evidence(w3=mock_w3, spread_signal=signal)
+        d = evidence.to_dict()
+        
+        # Check leg1 structure
+        assert d["leg1"] is not None
+        assert "eth_call_ok" in d["leg1"]
+        assert "gas_estimate" in d["leg1"]
+        assert "gas_estimate_source" in d["leg1"]
+        
+        # Check leg2 structure
+        assert d["leg2"] is not None
+        assert "eth_call_ok" in d["leg2"]
+        assert "gas_estimate" in d["leg2"]
+        assert "gas_estimate_source" in d["leg2"]
+
+    def test_gas_estimate_source_whitelist(self):
+        """gas_estimate_source MUST be in allowed values."""
+        from execution.preflight import LegPreflightResult
+        
+        allowed_sources = {"none", "quoter_v2", "eth_estimateGas", "fallback"}
+        
+        leg = LegPreflightResult(
+            dex_id="test", pool_address="0x123",
+            token_in="0xA", token_out="0xB",
+            fee_tier=500, amount_in=10**18,
+        )
+        
+        # Default should be in whitelist
+        assert leg.gas_estimate_source in allowed_sources
+        
+        # Test all allowed values
+        for source in allowed_sources:
+            leg.gas_estimate_source = source
+            assert leg.gas_estimate_source in allowed_sources
+
+    def test_quoter_v2_gas_is_primary(self):
+        """QuoterV2 gas estimate should be used when available."""
+        from execution.preflight import collect_preflight_evidence
+        
+        mock_w3 = MagicMock()
+        # Return 128-byte QuoterV2 response with gasEstimate=123456
+        mock_w3.eth.call.return_value = (
+            (10**18).to_bytes(32, "big") +  # amountOut
+            (10**24).to_bytes(32, "big") +  # sqrtPriceX96After
+            (3).to_bytes(32, "big") +       # ticksCrossed
+            (123456).to_bytes(32, "big")    # gasEstimate
+        )
+        mock_w3.to_checksum_address.side_effect = lambda x: x
+        
+        signal = {
+            "spread_id": "test_spread",
+            "pair": "WETH/USDC",
+            "spread_bps": 50,
+            "leg1": {"dex_id": "uniswap_v3", "pool_address": "0x1234",
+                    "token_in": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                    "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                    "fee_tier": 500, "amount_in": 10**18},
+            "leg2": {"dex_id": "uniswap_v3", "pool_address": "0x5678",
+                    "token_in": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                    "token_out": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                    "fee_tier": 500, "amount_in": 10**18}
+        }
+        
+        evidence = collect_preflight_evidence(w3=mock_w3, spread_signal=signal)
+        
+        # QuoterV2 gas should be primary source
+        assert evidence.leg1.gas_estimate == 123456
+        assert evidence.leg1.gas_estimate_source == "quoter_v2"
+        assert evidence.leg2.gas_estimate == 123456
+        assert evidence.leg2.gas_estimate_source == "quoter_v2"
+        
+        # eth_estimateGas should NOT have been called (no error)
+        assert evidence.leg1.gas_estimate_error is None
+        assert evidence.leg2.gas_estimate_error is None
+
+    def test_evidence_source_version_format(self):
+        """evidence_source should follow preflight_vX.Y.Z format."""
+        from execution.preflight import PreflightEvidence
+        import re
+        
+        evidence = PreflightEvidence(
+            spread_id="test",
+            pair="WETH/USDC",
+            route="test",
+            spread_bps=50,
+        )
+        
+        # Check version format
+        pattern = r"^preflight_v\d+\.\d+\.\d+$"
+        assert re.match(pattern, evidence.evidence_source), f"Invalid version format: {evidence.evidence_source}"

@@ -2,6 +2,7 @@
 """
 M4.3 Preflight Evidence Module.
 
+v1.0.2: Use QuoterV2 gasEstimate as primary gas source (no allowance needed)
 v1.0.1: Stricter passed criteria (fallback gas doesn't count as pass)
 v1.0.0: Provides eth_call / eth_estimateGas based preflight evidence
 for top-N execution candidates before any actual transaction submission.
@@ -9,8 +10,8 @@ for top-N execution candidates before any actual transaction submission.
 CONTRACT:
 =========
 - NEVER executes real transactions
-- Uses eth_call for quoter simulation
-- Uses eth_estimateGas for gas estimation
+- Uses eth_call for quoter simulation (extracts gasEstimate from QuoterV2)
+- Falls back to eth_estimateGas only if QuoterV2 doesn't return gas
 - Collects evidence of execution readiness
 - Operates under kill_switch_active=True
 
@@ -19,7 +20,7 @@ OUTPUT:
 Returns PreflightEvidence with:
 - leg1_eth_call_ok: bool (quoter simulation passed)
 - leg2_eth_call_ok: bool
-- leg1_gas_estimate: int | None
+- leg1_gas_estimate: int | None (source: quoter_v2 or eth_estimateGas or fallback)
 - leg2_gas_estimate: int | None
 - errors: List[str]
 - warnings: List[str]
@@ -158,7 +159,7 @@ class PreflightEvidence:
     warnings: List[str] = field(default_factory=list)
     
     # Evidence collection metadata
-    evidence_source: str = "preflight_v1.0.0"
+    evidence_source: str = "preflight_v1.0.2"
     block_number: Optional[int] = None
     
     def to_dict(self) -> Dict[str, Any]:
@@ -185,7 +186,7 @@ def run_eth_call_quote(
     fee: int,
     amount_in: int,
     sqrt_price_limit: int = 0,
-) -> Tuple[bool, Optional[int], Optional[str]]:
+) -> Tuple[bool, Optional[int], Optional[int], Optional[str]]:
     """
     Run eth_call to simulate a quote.
     
@@ -201,7 +202,8 @@ def run_eth_call_quote(
         sqrt_price_limit: Price limit (0 for no limit)
         
     Returns:
-        (success, amount_out, error_message)
+        (success, amount_out, gas_estimate, error_message)
+        gas_estimate comes from QuoterV2 response (4th return value)
     """
     try:
         # QuoterV2.quoteExactInputSingle selector: 0xc6a5026a
@@ -242,18 +244,24 @@ def run_eth_call_quote(
         })
         
         # Decode result: returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)
-        if len(result) >= 32:
+        if len(result) >= 128:  # 4 x 32 bytes
             amount_out = int.from_bytes(result[:32], "big")
-            return True, amount_out, None
+            # gas_estimate is at offset 96 (4th value)
+            gas_estimate = int.from_bytes(result[96:128], "big")
+            return True, amount_out, gas_estimate, None
+        elif len(result) >= 32:
+            # Fallback: old quoter that only returns amountOut
+            amount_out = int.from_bytes(result[:32], "big")
+            return True, amount_out, None, None
         
-        return False, None, "Invalid response length"
+        return False, None, None, "Invalid response length"
         
     except Exception as e:
         error_msg = str(e)
         # Truncate long error messages
         if len(error_msg) > 200:
             error_msg = error_msg[:200] + "..."
-        return False, None, error_msg
+        return False, None, None, error_msg
 
 
 def run_eth_estimate_gas_swap(
@@ -367,9 +375,10 @@ def collect_preflight_evidence(
             amount_in=leg1_raw.get("amount_in", 0),
         )
         
-        # eth_call quote
+        # eth_call quote (also extracts gasEstimate from QuoterV2)
+        quoter_gas = None
         if leg1.token_in and leg1.token_out and leg1.amount_in > 0:
-            ok, amount_out, err = run_eth_call_quote(
+            ok, amount_out, quoter_gas, err = run_eth_call_quote(
                 w3=w3,
                 quoter_address=QUOTER_V2_ADDRESS,
                 token_in=leg1.token_in,
@@ -381,30 +390,36 @@ def collect_preflight_evidence(
             leg1.quoted_amount_out = amount_out
             leg1.eth_call_error = err
             
+            # v1.0.2: Use QuoterV2 gasEstimate as primary gas source
+            if ok and quoter_gas and quoter_gas > 0:
+                leg1.gas_estimate = quoter_gas
+                leg1.gas_estimate_source = "quoter_v2"
+            
             if not ok:
                 warnings.append(f"LEG1_QUOTE_FAILED: {err}")
         
-        # eth_estimateGas
-        from execution.gas_estimate import get_router_address
-        router = get_router_address(leg1.dex_id)
-        if router and leg1.token_in and leg1.token_out:
-            gas, err, source = run_eth_estimate_gas_swap(
-                w3=w3,
-                router_address=router,
-                token_in=leg1.token_in,
-                token_out=leg1.token_out,
-                fee=leg1.fee_tier,
-                amount_in=leg1.amount_in if leg1.amount_in > 0 else 10**18,
-                sender_address=sender_address,
-            )
-            leg1.gas_estimate = gas
-            leg1.gas_estimate_error = err
-            leg1.gas_estimate_source = source
-            
-            if err:
-                warnings.append(f"LEG1_GAS_FALLBACK: {source}")
-        else:
-            warnings.append(f"LEG1_NO_ROUTER: {leg1.dex_id}")
+        # eth_estimateGas (fallback if quoter_v2 didn't provide gas)
+        if leg1.gas_estimate is None:
+            from execution.gas_estimate import get_router_address
+            router = get_router_address(leg1.dex_id)
+            if router and leg1.token_in and leg1.token_out:
+                gas, err, source = run_eth_estimate_gas_swap(
+                    w3=w3,
+                    router_address=router,
+                    token_in=leg1.token_in,
+                    token_out=leg1.token_out,
+                    fee=leg1.fee_tier,
+                    amount_in=leg1.amount_in if leg1.amount_in > 0 else 10**18,
+                    sender_address=sender_address,
+                )
+                leg1.gas_estimate = gas
+                leg1.gas_estimate_error = err
+                leg1.gas_estimate_source = source
+                
+                if err:
+                    warnings.append(f"LEG1_GAS_FALLBACK: {source}")
+            else:
+                warnings.append(f"LEG1_NO_ROUTER: {leg1.dex_id}")
         
         evidence.leg1 = leg1
         
@@ -422,9 +437,10 @@ def collect_preflight_evidence(
             amount_in=leg2_raw.get("amount_in", 0),
         )
         
-        # eth_call quote
+        # eth_call quote (also extracts gasEstimate from QuoterV2)
+        quoter_gas = None
         if leg2.token_in and leg2.token_out and leg2.amount_in > 0:
-            ok, amount_out, err = run_eth_call_quote(
+            ok, amount_out, quoter_gas, err = run_eth_call_quote(
                 w3=w3,
                 quoter_address=QUOTER_V2_ADDRESS,
                 token_in=leg2.token_in,
@@ -436,30 +452,36 @@ def collect_preflight_evidence(
             leg2.quoted_amount_out = amount_out
             leg2.eth_call_error = err
             
+            # v1.0.2: Use QuoterV2 gasEstimate as primary gas source
+            if ok and quoter_gas and quoter_gas > 0:
+                leg2.gas_estimate = quoter_gas
+                leg2.gas_estimate_source = "quoter_v2"
+            
             if not ok:
                 warnings.append(f"LEG2_QUOTE_FAILED: {err}")
         
-        # eth_estimateGas
-        from execution.gas_estimate import get_router_address
-        router = get_router_address(leg2.dex_id)
-        if router and leg2.token_in and leg2.token_out:
-            gas, err, source = run_eth_estimate_gas_swap(
-                w3=w3,
-                router_address=router,
-                token_in=leg2.token_in,
-                token_out=leg2.token_out,
-                fee=leg2.fee_tier,
-                amount_in=leg2.amount_in if leg2.amount_in > 0 else 10**18,
-                sender_address=sender_address,
-            )
-            leg2.gas_estimate = gas
-            leg2.gas_estimate_error = err
-            leg2.gas_estimate_source = source
-            
-            if err:
-                warnings.append(f"LEG2_GAS_FALLBACK: {source}")
-        else:
-            warnings.append(f"LEG2_NO_ROUTER: {leg2.dex_id}")
+        # eth_estimateGas (fallback if quoter_v2 didn't provide gas)
+        if leg2.gas_estimate is None:
+            from execution.gas_estimate import get_router_address
+            router = get_router_address(leg2.dex_id)
+            if router and leg2.token_in and leg2.token_out:
+                gas, err, source = run_eth_estimate_gas_swap(
+                    w3=w3,
+                    router_address=router,
+                    token_in=leg2.token_in,
+                    token_out=leg2.token_out,
+                    fee=leg2.fee_tier,
+                    amount_in=leg2.amount_in if leg2.amount_in > 0 else 10**18,
+                    sender_address=sender_address,
+                )
+                leg2.gas_estimate = gas
+                leg2.gas_estimate_error = err
+                leg2.gas_estimate_source = source
+                
+                if err:
+                    warnings.append(f"LEG2_GAS_FALLBACK: {source}")
+            else:
+                warnings.append(f"LEG2_NO_ROUTER: {leg2.dex_id}")
         
         evidence.leg2 = leg2
         
@@ -467,13 +489,13 @@ def collect_preflight_evidence(
         errors.append(f"LEG2_ERROR: {e}")
     
     # Determine overall pass
-    # v1.0.1: Passed means: both legs have eth_call_ok=True OR real eth_estimateGas (not fallback)
+    # v1.0.2: Passed means: both legs have eth_call_ok=True OR real gas estimate (quoter_v2/eth_estimateGas, not fallback)
     def leg_ok(leg: Optional[LegPreflightResult]) -> bool:
         if not leg:
             return False
         if leg.eth_call_ok:
             return True
-        if leg.gas_estimate is not None and leg.gas_estimate_source == "eth_estimateGas":
+        if leg.gas_estimate is not None and leg.gas_estimate_source in ("eth_estimateGas", "quoter_v2"):
             return True
         return False
     
@@ -538,7 +560,7 @@ def collect_top_n_preflight(
         "results": results,
         "errors": errors_total,
         "warnings": warnings_total,
-        "evidence_source": "preflight_v1.0.0",
+        "evidence_source": "preflight_v1.0.2",
         "block_number": current_block,
     }
 
@@ -552,6 +574,6 @@ def preflight_disabled_stub() -> Dict[str, Any]:
         "results": [],
         "errors": [],
         "warnings": [],
-        "evidence_source": "preflight_v1.0.0",
+        "evidence_source": "preflight_v1.0.2",
         "block_number": None,
     }

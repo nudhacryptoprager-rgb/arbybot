@@ -1,7 +1,7 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
-**Updated**: 2026-02-22  
+**Updated**: 2026-02-23  
 **Policy**: DIVERSITY_PAIRS_TARGET=8  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
@@ -33,17 +33,18 @@
 
 **Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
 
-**Snapshot (2026-02-22)**: From `m4_stability_agg.json` (canonical source): **runs_in_window=104** (M4.1 N=100+ ACHIEVED), data_run_rate=0.9904, pass_rate=1.0, **total_net_usdc=$5394.31**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=9 (from `disabled_pools`), POOL_MISSING=0. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). **M4.3 Preflight Evidence AVAILABLE**: `preflight_evidence.enabled=true`, 3/3 candidates passed (eth_call OK). For infra evidence see [Status_M5_0.md](Status_M5_0.md).
+**Snapshot (2026-02-23)**: From `m4_stability_agg.json` (canonical source): **runs_in_window=105** (M4.1 N=100+ ACHIEVED), data_run_rate=0.9904, pass_rate=1.0, **total_net_usdc=$5439.08**, unique_pairs=8 (matches target=8), **unique_routes=4** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=9 (from `disabled_pools`), POOL_MISSING=0. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). **M4.3 Preflight Evidence AVAILABLE**: `preflight_evidence.enabled=true`, 3/3 candidates passed, `gas_estimate_source=quoter_v2` on all legs (preflight_v1.0.2). **Discovery dry-run**: 16 resolvable pairs, 128 potential queries. For infra evidence see [Status_M5_0.md](Status_M5_0.md).
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when ≥10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
-**Evidence (ci_m5_gate_20260222_111023 - run)**:
+**Evidence (ci_m5_gate_20260223_091650 - run)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
 - Counters: `execution_ready_count=0` (kill_switch_active=true), `would_execute_count=0`
-- Provenance: `run_timestamp=2026-02-22T10:10:42.000000+00:00`
-- **M4.1 CLOSED**: N=104 consecutive runs with `agg_status=PASS` (exceeds N=100 target)
-- **M4.3 Preflight**: `preflight_evidence.enabled=true`, 3/3 candidates passed, eth_call_ok=true on all legs
+- Provenance: `run_timestamp=2026-02-23T08:17:10.501985+00:00`
+- **M4.1 CLOSED**: N=105 consecutive runs with `agg_status=PASS` (exceeds N=100 target)
+- **M4.3 Preflight**: `preflight_evidence.enabled=true`, 3/3 candidates passed, `gas_estimate_source=quoter_v2`, evidence_source=preflight_v1.0.2
+- **Discovery dry-run**: 16 resolvable pairs, 128 potential V3 queries
 - **excluded_signals_count=0**: WBTC/WETH_3000 and ARB/WETH_3000 Sushi pools disabled (SUSPECT_SPREAD_EXCLUDED)
 - See [Status_M5_0.md](Status_M5_0.md) for infra evidence.
 

@@ -373,6 +373,10 @@ truth_mode_m42: true
 # Required for truth_mode_m42 to produce executable quotes
 use_quoter_v2: true
 
+# v2.4.1: Discovery dry-run - count candidates without changing universe
+# When true, emits stats["discovery"] with resolvable_pairs/potential_queries
+discovery_dry_run: true
+
 # M4 markers - execution disabled
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4
