@@ -56,7 +56,71 @@ from core.artifact_invariants import (
     validate_schema_version as invariants_validate_schema,
 )
 
-__version__ = "2.3.2"
+__version__ = "2.4.0"
+
+
+# =============================================================================
+# v2.4.0: Non-stop loop helpers
+# =============================================================================
+
+def check_roundtrip_profitable(run_dir: Path) -> Tuple[bool, int, str]:
+    """
+    Check if the run produced a profitable roundtrip.
+    
+    Returns:
+        Tuple[is_profitable, profitable_count, profit_realism_status]
+    """
+    try:
+        reports_dir = run_dir / "reports"
+        truth_reports = sorted(reports_dir.glob("truth_report_*.json"))
+        if not truth_reports:
+            return False, 0, "NO_TRUTH_REPORT"
+        
+        with open(truth_reports[-1], "r", encoding="utf-8") as f:
+            truth = json.load(f)
+        
+        profit_realism_status = truth.get("profit_realism_status", "UNKNOWN")
+        roundtrip_summary = truth.get("roundtrip_summary", {})
+        profitable_count = roundtrip_summary.get("profitable_count", 0)
+        
+        is_profitable = profitable_count > 0
+        return is_profitable, profitable_count, profit_realism_status
+    except Exception as e:
+        return False, 0, f"ERROR: {e}"
+
+
+def emit_roundtrip_alert(run_dir: Path, profitable_count: int, profit_realism_status: str) -> None:
+    """
+    Emit alert when profitable roundtrip is detected.
+    Writes to rolling directory (runtime-only, gitignored).
+    """
+    print(f"\n{'='*60}")
+    print(f"[ALERT] ROUNDTRIP_PROFITABLE detected!")
+    print(f"  profitable_count: {profitable_count}")
+    print(f"  profit_realism_status: {profit_realism_status}")
+    print(f"  runDir: {run_dir}")
+    print(f"{'='*60}\n")
+    
+    # Write alert file to rolling directory
+    try:
+        rolling_dir = Path("data/runs/_rolling")
+        rolling_dir.mkdir(parents=True, exist_ok=True)
+        alert_path = rolling_dir / "last_roundtrip_profitable.json"
+        
+        alert_data = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "run_dir": str(run_dir),
+            "run_dir_name": run_dir.name,
+            "profitable_count": profitable_count,
+            "profit_realism_status": profit_realism_status,
+        }
+        
+        with open(alert_path, "w", encoding="utf-8") as f:
+            json.dump(alert_data, f, indent=2)
+        
+        print(f"[ALERT] Written: {alert_path}")
+    except Exception as e:
+        print(f"[ALERT] WARN: Failed to write alert file: {e}")
 
 DEFAULT_OUTPUT_ROOT = Path("data/runs")
 DEFAULT_CONFIG = "config/real_minimal.yaml"
@@ -1006,6 +1070,14 @@ ENV VARIABLES:
     parser.add_argument("--failover-stress", type=int, default=0, metavar="N",
                         help="Simulate N failures on primary endpoint to prove failover (sets ARBY_FAILOVER_STRESS_N)")
     
+    # v2.4.0: Non-stop loop mode
+    parser.add_argument("--loop", action="store_true",
+                        help="Run in continuous loop mode (non-stop scan demo)")
+    parser.add_argument("--sleep-seconds", type=int, default=20,
+                        help="Sleep interval between scans in loop mode (default: 20)")
+    parser.add_argument("--max-consecutive-failures", type=int, default=5,
+                        help="Max consecutive failures before exponential backoff maxes out (default: 5)")
+    
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     
     args = parser.parse_args()
@@ -1076,36 +1148,64 @@ ENV VARIABLES:
     # ONLINE MODE
     # =========================================================================
     if args.online:
-        print(f"\n{'='*60}")
-        print(f"M5_0 GATE v{__version__} - ONLINE")
-        print(f"{'='*60}")
-        print("\n[ONLINE] IGNORING ARBY_RUN_DIR (creating new run directory)")
+        # v2.4.0: Loop mode for non-stop scanning
+        loop_mode = args.loop
+        sleep_seconds = args.sleep_seconds
+        max_consecutive_failures = args.max_consecutive_failures
+        consecutive_failures = 0
+        iteration_count = 0
         
-        run_dir = args.output_root / f"ci_m5_gate_{timestamp}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+        if loop_mode:
+            print(f"\n{'='*60}")
+            print(f"M5_0 GATE v{__version__} - ONLINE (LOOP MODE)")
+            print(f"{'='*60}")
+            print(f"\n[LOOP] Non-stop scan mode enabled")
+            print(f"[LOOP] Sleep interval: {sleep_seconds}s")
+            print(f"[LOOP] Max consecutive failures: {max_consecutive_failures}")
+            print(f"[LOOP] Press Ctrl+C to stop")
         
-        print(f"[ONLINE] RunDir: {run_dir}")
-        print(f"[ONLINE] Config: {args.config}")
-        print(f"[ONLINE] Cycles: {args.cycles}")
-        
-        # v1.12.2: Chain/RPC validation precheck
-        # Detect mismatches like chain_id=42161 with Mantle RPC host
-        try:
-            import yaml
-            from core.rpc_urls import validate_chain_rpc_consistency, resolve_rpc_http
+        while True:
+            iteration_count += 1
             
-            cfg_path = Path(args.config)
-            if cfg_path.exists():
-                with open(cfg_path, "r", encoding="utf8") as f:
-                    cfg = yaml.safe_load(f)
-                cfg_chain_id = cfg.get("chain_id", 42161)
+            # Generate new timestamp for each iteration
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            if loop_mode and iteration_count > 1:
+                print(f"\n{'='*60}")
+                print(f"[LOOP] Iteration #{iteration_count}")
+                print(f"{'='*60}")
+            elif not loop_mode:
+                print(f"\n{'='*60}")
+                print(f"M5_0 GATE v{__version__} - ONLINE")
+                print(f"{'='*60}")
+            
+            print("\n[ONLINE] IGNORING ARBY_RUN_DIR (creating new run directory)")
+            
+            run_dir = args.output_root / f"ci_m5_gate_{timestamp}"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            
+            print(f"[ONLINE] RunDir: {run_dir}")
+            print(f"[ONLINE] Config: {args.config}")
+            print(f"[ONLINE] Cycles: {args.cycles}")
+            
+            # v1.12.2: Chain/RPC validation precheck
+            # Detect mismatches like chain_id=42161 with Mantle RPC host
+            try:
+                import yaml
+                from core.rpc_urls import validate_chain_rpc_consistency, resolve_rpc_http
                 
-                # Resolve RPC URL to check host
-                rpc_url, _, _ = resolve_rpc_http(chain_id=cfg_chain_id, env=dict(os.environ))
-                if rpc_url:
-                    from urllib.parse import urlparse
-                    rpc_host = urlparse(rpc_url).netloc
-                    is_valid, error_msg = validate_chain_rpc_consistency(cfg_chain_id, rpc_host)
+                cfg_path = Path(args.config)
+                if cfg_path.exists():
+                    with open(cfg_path, "r", encoding="utf8") as f:
+                        cfg = yaml.safe_load(f)
+                    cfg_chain_id = cfg.get("chain_id", 42161)
+                    
+                    # Resolve RPC URL to check host
+                    rpc_url, _, _ = resolve_rpc_http(chain_id=cfg_chain_id, env=dict(os.environ))
+                    if rpc_url:
+                        from urllib.parse import urlparse
+                        rpc_host = urlparse(rpc_url).netloc
+                        is_valid, error_msg = validate_chain_rpc_consistency(cfg_chain_id, rpc_host)
                     
                     if not is_valid:
                         print(f"\n{'='*60}")
@@ -1116,8 +1216,8 @@ ENV VARIABLES:
                         return 3
                     else:
                         print(f"[ONLINE] Chain/RPC validated: chain_id={cfg_chain_id}, host={rpc_host}")
-        except Exception as e:
-            print(f"[ONLINE] WARN: Chain/RPC validation skipped: {e}")
+            except Exception as e:
+                print(f"[ONLINE] WARN: Chain/RPC validation skipped: {e}")
         
         # Export WS preference flags into the environment so run_real_scan picks them up
         if args.ws:
@@ -1269,7 +1369,35 @@ ENV VARIABLES:
         if args.refresh_rolling_strict and not refresh_rolling_ok:
             final_pass = False
         
-        return 0 if final_pass else 1
+        # v2.4.0: Check for roundtrip profitable and emit alert
+        if final_pass:
+            is_profitable, profitable_count, profit_status = check_roundtrip_profitable(run_dir)
+            if is_profitable:
+                emit_roundtrip_alert(run_dir, profitable_count, profit_status)
+        
+        # v2.4.0: Loop mode handling
+        if not loop_mode:
+            # Single run mode - return immediately
+            return 0 if final_pass else 1
+        
+        # Loop mode continues here
+        if final_pass:
+            consecutive_failures = 0
+            sleep_seconds_actual = sleep_seconds
+            print(f"\n[LOOP] Iteration #{iteration_count} PASS - sleeping {sleep_seconds}s...")
+        else:
+            consecutive_failures += 1
+            # Exponential backoff: base * 2^failures, capped at 5 minutes
+            sleep_seconds_actual = min(sleep_seconds * (2 ** consecutive_failures), 300)
+            print(f"\n[LOOP] Iteration #{iteration_count} FAIL (consecutive: {consecutive_failures})")
+            print(f"[LOOP] Backoff: sleeping {sleep_seconds_actual}s...")
+        
+        try:
+            import time
+            time.sleep(sleep_seconds_actual)
+        except KeyboardInterrupt:
+            print(f"\n[LOOP] Interrupted by user after {iteration_count} iterations")
+            return 0 if final_pass else 1
     
     # =========================================================================
     # ADVANCED MODE (uses ARBY_RUN_DIR or --run-dir)

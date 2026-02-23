@@ -810,6 +810,9 @@ def collect_quotes(
                     counts["suspect_liquidity"] = counts.get("suspect_liquidity", 0) + 1
                     logger.debug("SUSPECT_LIQUIDITY: %s %s/%s fee=%d: %s", 
                                 dex, token_in, token_out, fee_tier, suspect_liquidity_reason)
+                    # v2.4.0: Record failure for auto-quarantine
+                    qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "SUSPECT_LIQUIDITY",
+                                     details={"pool_address": pool_addr, "error": suspect_liquidity_reason})
                     continue  # Skip this quote
                 
                 # v2.1.0: PRICE_SANITY gate (per-quote)

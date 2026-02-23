@@ -114,6 +114,66 @@ Expected output when Truth Engine works correctly:
 
 ---
 
+## Non-stop Scan Demo
+
+Canonical command for continuous scanning with rolling artifact refresh. This demonstrates real-time arbitrage detection capability.
+
+### Basic Non-stop Loop (PowerShell wrapper)
+
+```powershell
+# Non-stop scan with 20-second interval
+while ($true) {
+  py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --refresh-rolling --refresh-rolling-strict --prune-keep 50
+  py -3.11 scripts/inspect_rolling.py
+  Start-Sleep -Seconds 20
+}
+```
+
+### Native Loop Mode (recommended)
+
+```powershell
+# Built-in loop with backoff and roundtrip alerting
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --loop --sleep-seconds 20
+```
+
+### Discovery Runtime Mode
+
+For dynamic pair discovery across DEXes:
+
+```powershell
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal_discovery_runtime.yaml --loop --sleep-seconds 20
+```
+
+### Monitoring During Non-stop Run
+
+Check rolling artifact status:
+```powershell
+py -3.11 scripts/inspect_rolling.py
+```
+
+Quick roundtrip profitability check:
+```powershell
+py -3.11 -c "import json,glob; rs=json.load(open('data/runs/_rolling/run_summary_latest.json','r',encoding='utf-8')); rd=rs['inputs']['run_dir_name']; trp=sorted(glob.glob(f'data/runs/{rd}/reports/truth_report_*.json'))[-1]; tr=json.load(open(trp,'r',encoding='utf-8')); print('runDir',rd,'profit_realism_status',tr.get('profit_realism_status'),'roundtrip_profitable_count',(tr.get('roundtrip_summary') or {}).get('profitable_count'))"
+```
+
+### Alert Conditions
+
+When `roundtrip_summary.profitable_count > 0`:
+- Console prints `[ALERT] ROUNDTRIP_PROFITABLE detected!`
+- `data/runs/_rolling/last_roundtrip_profitable.json` is created (runtime-only, gitignored)
+- RunDir is auto-protected from pruning
+
+### Interpretation
+
+| Metric | Meaning |
+|--------|---------|
+| `ROUNDTRIP_NOT_PROFITABLE` | No arbitrage opportunity found (expected most of the time) |
+| `ROUNDTRIP_PROFITABLE` | Profitable arbitrage detected! Check truth_report for details |
+| `data_run_rate > 0.90` | System has good data quality |
+| `agg_status=PASS` | Rolling quality gate passing |
+
+---
+
 ## Artifacts Policy
 
 ### Rule #1: Runtime artifacts are NEVER committed

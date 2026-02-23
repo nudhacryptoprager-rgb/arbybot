@@ -36,7 +36,8 @@ dexes:
 universe_source: discovery_runtime
 
 # Limit runtime pairs (prevents excessive RPC load)
-discovery_runtime_max_pairs: 15
+# Set to match ARBY_RESOLVER_MAX_RPC_CALLS env default (50) for maximum coverage
+discovery_runtime_max_pairs: 50
 
 # Only include pairs with pools on multiple DEXes
 # (filters out single-DEX pairs which cannot produce cross-DEX arb)
