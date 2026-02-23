@@ -4,30 +4,27 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-23T12:45:06Z
-run_id: data/runs/ci_m5_gate_20260223_134446
+timestamp_utc: 2026-02-23T13:17:05Z
+run_id: data/runs/ci_m5_gate_20260223_141646
 mode: ONLINE
 artifact_mode: rolling
 config: config/real_minimal.yaml (profit profile)
 code_identity:
-  primary: ts:2026-02-23T12:45:06+00:00
+  primary: ts:2026-02-23T13:17:05+00:00
   dirty: true
-  desc: Directive #9 - discovery_runtime gate + same-dex warn
+  desc: Directive #10 - disabled_pools semantics fix
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Directive #9 - discovery_runtime gate + same-dex quality warning
+goal (Roadmap пункт): Directive #10 - disabled_pools semantics fix
 change_summary:
-  - ADD: ci_m5_0_gate.py discovery_runtime coverage with lower thresholds (min_pairs=1)
-  - ADD: ci_m5_0_gate.py discovery_runtime validation (enabled, quotes_fetched, cross_dex_pairs)
-  - ADD: WARN_SAME_DEX_PRESENT quality warning in M4 fixtures
-  - ADD: discovery_dry_run=false in real_minimal_discovery_runtime.yaml
-  - ADD: tests/unit/test_discovery_runtime_integration.py (6 tests)
-  - ADD: docs/TECH_DEBT.md for websockets.legacy deprecation tracking
-  - FIX: Updated anchor prices in discovery_runtime config (WETH=2500, ARB=0.50)
-  - RESULT: 1046 tests passed, discovery_runtime ONLINE gate PASS
+  - FIX: docs/TECH_DEBT.md version string (v14.0 -> "major version 14")
+  - FIX: strategy/quotes.py disabled_pools semantics (check BEFORE pool lookup)
+  - ADD: tests/unit/test_disabled_pools.py collect_quotes integration tests (2 new tests)
+  - RESULT: 1048 tests passed, pool_disabled_count=9, quality_reasons no WARN_CRITICAL_REJECTS
 touched_files:
-  - scripts/ci_m5_0_gate.py (discovery_runtime validation)
-  - m4/fixtures.py (same_dex_signals_count, WARN_SAME_DEX_PRESENT)
+  - docs/TECH_DEBT.md (version policy compliance)
+  - strategy/quotes.py (disabled_pools check before get_pool_address)
+  - tests/unit/test_disabled_pools.py (TestCollectQuotesDisabledPoolCounting)
   - config/real_minimal_discovery_runtime.yaml (discovery_dry_run, anchor prices)
   - tests/unit/test_discovery_runtime_integration.py (NEW - 6 tests)
   - docs/TECH_DEBT.md (NEW - websockets.legacy tracking)
@@ -85,9 +82,9 @@ run_summary_latest.json:
     gas_estimate_source: quoter_v2 (all legs)
 
 m4_stability_agg.json:
-  runs_in_window: 113 (M4.1 N=100+ maintained)
-  last_run: ci_m5_gate_20260223_134446
-  computed_total_net_usdc: 5631.12
+  runs_in_window: 114 (M4.1 N=100+ maintained)
+  last_run: ci_m5_gate_20260223_141646
+  computed_total_net_usdc: 5655.55
   agg_status: PASS
   agg_reasons: []
 

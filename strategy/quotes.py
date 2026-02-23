@@ -671,6 +671,15 @@ def collect_quotes(
                     effective_fee_tiers = fee_tiers
                 
                 for fee_tier in effective_fee_tiers:
+                    # v2.6.1 FIX: Check disabled_pools BEFORE pool lookup
+                    # If pool is explicitly disabled, count as POOL_DISABLED not POOL_MISSING
+                    disabled_info = is_pool_disabled(config, dex, token_pair_tag, fee_tier)
+                    if disabled_info:
+                        counts["pool_disabled"] += 1
+                        logger.debug("POOL_DISABLED (config): %s %s/%s fee=%d reason=%s", 
+                                   dex, token_in, token_out, fee_tier, disabled_info.get('reason', 'DISABLED'))
+                        continue
+                    
                     pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)
                     if pool_addr:
                         pool_work_items.append((dex, fee_tier, pool_addr, dex_cfg, adapter_type))

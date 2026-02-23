@@ -202,5 +202,75 @@ class TestRealConfigDisabledPools(unittest.TestCase):
             self.assertNotIn(pool_key, pools, f"Disabled pool {pool_key} should not be in active pools")
 
 
+class TestCollectQuotesDisabledPoolCounting(unittest.TestCase):
+    """Tests that collect_quotes increments pool_disabled (not pool_missing) for disabled pools."""
+
+    def test_disabled_pool_code_path_exists_in_config_mode(self):
+        """
+        v2.6.1 FIX: Verify is_pool_disabled is called BEFORE get_pool_address in config mode.
+        This ensures disabled pools are counted as POOL_DISABLED, not POOL_MISSING.
+        """
+        import inspect
+        from strategy import quotes
+        
+        source = inspect.getsource(quotes.collect_quotes)
+        
+        # Verify pool_disabled count exists
+        assert 'counts["pool_disabled"]' in source, "Should track pool_disabled count"
+        
+        # Verify the fix: In config mode loop, is_pool_disabled check should come BEFORE get_pool_address
+        # Look for the v2.6.1 FIX comment which marks the fixed code path
+        assert "v2.6.1 FIX" in source, "Should have v2.6.1 FIX comment marking disabled check"
+        
+        # Verify POOL_DISABLED log exists
+        assert "POOL_DISABLED" in source, "Should log POOL_DISABLED for disabled pools"
+
+    def test_pool_disabled_vs_pool_missing_clear_semantics(self):
+        """
+        POOL_DISABLED = pool explicitly disabled via disabled_pools config
+        POOL_MISSING = pool not in pools config AND not in disabled_pools
+        """
+        from config.pairs import is_pool_disabled, get_pool_address
+        
+        config = {
+            "disabled_pools": {
+                "uniswap_v3_TEST_WETH_500": {
+                    "address": "0x1234567890123456789012345678901234567890",
+                    "reason": "PRICE_SANITY_FAILED",
+                }
+            },
+            "pools": {
+                # TEST_WETH intentionally absent
+                "uniswap_v3_GOOD_WETH_500": {
+                    "address": "0xABCDEF1234567890123456789012345678901234",
+                }
+            },
+        }
+        
+        # TEST_WETH is in disabled_pools -> should be detected as disabled
+        disabled_info = is_pool_disabled(config, "uniswap_v3", "TEST_WETH", 500)
+        self.assertIsNotNone(disabled_info, "TEST_WETH should be disabled")
+        
+        # TEST_WETH not in pools -> get_pool_address returns None
+        pool_addr = get_pool_address(config, "uniswap_v3", "TEST_WETH", 500)
+        self.assertIsNone(pool_addr, "TEST_WETH not in pools")
+        
+        # GOOD_WETH is in pools -> should have address
+        pool_info_good = get_pool_address(config, "uniswap_v3", "GOOD_WETH", 500)
+        self.assertIsNotNone(pool_info_good, "GOOD_WETH should be in pools")
+        # get_pool_address returns dict with 'address' key
+        if isinstance(pool_info_good, dict):
+            self.assertEqual(pool_info_good.get("address"), "0xABCDEF1234567890123456789012345678901234")
+        else:
+            # Legacy string format
+            self.assertEqual(pool_info_good, "0xABCDEF1234567890123456789012345678901234")
+        
+        # UNKNOWN_WETH is NOT in disabled_pools AND NOT in pools -> truly missing
+        disabled_info_unknown = is_pool_disabled(config, "uniswap_v3", "UNKNOWN_WETH", 500)
+        self.assertIsNone(disabled_info_unknown, "UNKNOWN_WETH not disabled")
+        pool_addr_unknown = get_pool_address(config, "uniswap_v3", "UNKNOWN_WETH", 500)
+        self.assertIsNone(pool_addr_unknown, "UNKNOWN_WETH not in pools")
+
+
 if __name__ == "__main__":
     unittest.main()

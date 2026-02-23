@@ -11,7 +11,7 @@
 **Category**: Dependencies
 
 **Description**:
-`websockets.legacy` is deprecated in websockets v14.0. Test runs show warning:
+`websockets.legacy` is deprecated in websockets major version 14. Test runs show warning:
 ```
 websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html
 ```
@@ -19,7 +19,7 @@ websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable
 **Impact**: None currently (tests pass), but may break in future websockets versions.
 
 **Resolution Options**:
-1. Pin websockets < 14.0 in requirements.txt
+1. Pin websockets to version below 14 in requirements.txt
 2. Upgrade websockets usage to non-legacy API
 3. Suppress warning temporarily
 
