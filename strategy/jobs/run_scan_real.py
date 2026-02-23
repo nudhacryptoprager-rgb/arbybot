@@ -679,6 +679,45 @@ def run_scan(
     else:
         stats["discovery"] = {"enabled": False, "dry_run": False}
     
+    # v2.4.2: Discovery runtime (resolve pool addresses via factory.getPool())
+    # When enabled, actually resolves pools and reports detailed stats
+    # Does NOT change quote universe in this version (observability only)
+    discovery_runtime = config.get("discovery_runtime", False)
+    if discovery_runtime:
+        try:
+            from discovery.runtime import resolve_runtime_pairs, get_runtime_observability
+            
+            dexes_list = config.get("dexes") or None
+            max_pairs = config.get("discovery_runtime_max_pairs", 20)
+            
+            resolved_pairs, runtime_stats = resolve_runtime_pairs(
+                chain=chain_key,
+                dexes=dexes_list,
+                max_pairs=max_pairs,
+            )
+            
+            stats["discovery_runtime"] = get_runtime_observability(runtime_stats)
+            stats["discovery_runtime"]["resolved_pairs"] = [
+                {
+                    "pair": p.display_name,
+                    "dex": p.dex,
+                    "fee": p.fee,
+                    "pool": p.pool_address,
+                }
+                for p in resolved_pairs
+            ]
+            
+            logger.info(
+                "Discovery runtime: %d pairs resolved, %d rpc_calls",
+                runtime_stats.pairs_resolved,
+                runtime_stats.rpc_calls,
+            )
+        except Exception as rt_err:
+            logger.warning("Discovery runtime failed: %s", rt_err)
+            stats["discovery_runtime"] = {"enabled": False, "error": str(rt_err)}
+    else:
+        stats["discovery_runtime"] = {"enabled": False}
+    
     # Build artifact data structures
     # v2.3.0: Unified run_timestamp for provenance across all artifacts
     from datetime import timezone

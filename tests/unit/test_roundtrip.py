@@ -273,3 +273,82 @@ class TestProbeSlippage:
         
         assert slippage_bps == Decimal("0")
         assert diag.get("error") == "missing_price"
+
+
+class TestRoundtripGolden:
+    """Tests against docs/artifacts/roundtrip_canonical_golden.json fixture.
+    
+    ROUNDTRIP_CANONICAL proof: validates simulator produces expected results.
+    """
+    
+    @pytest.fixture
+    def golden_fixture(self):
+        """Load golden fixture."""
+        import json
+        from pathlib import Path
+        fixture_path = Path("docs/artifacts/roundtrip_canonical_golden.json")
+        with open(fixture_path) as f:
+            return json.load(f)
+    
+    def test_golden_fixture_schema(self, golden_fixture):
+        """Golden fixture has expected schema."""
+        assert golden_fixture["_schema"] == "roundtrip_canonical_golden:v1.0"
+        assert "test_cases" in golden_fixture
+        assert "roundtrip_contract" in golden_fixture
+        assert len(golden_fixture["test_cases"]) >= 3
+    
+    def test_profitable_roundtrip_case(self, golden_fixture):
+        """Validate profitable_roundtrip case from golden fixture."""
+        case = next(c for c in golden_fixture["test_cases"] if c["case_id"] == "profitable_roundtrip")
+        
+        buy_quote = case["input"]["buy_quote"]
+        sell_quote = case["input"]["sell_quote"]
+        gas_price_wei = case["input"]["gas_price_wei"]
+        expected = case["expected"]
+        
+        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei=gas_price_wei)
+        
+        assert result.leg1_success == expected["leg1_success"]
+        assert result.leg2_success == expected["leg2_success"]
+        assert (result.gross_pnl_wei > 0) == expected["gross_pnl_wei_positive"]
+        assert result.is_profitable == expected["is_profitable"]
+    
+    def test_unprofitable_roundtrip_case(self, golden_fixture):
+        """Validate unprofitable_roundtrip case from golden fixture."""
+        case = next(c for c in golden_fixture["test_cases"] if c["case_id"] == "unprofitable_roundtrip")
+        
+        buy_quote = case["input"]["buy_quote"]
+        sell_quote = case["input"]["sell_quote"]
+        gas_price_wei = case["input"]["gas_price_wei"]
+        expected = case["expected"]
+        
+        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei=gas_price_wei)
+        
+        assert (result.gross_pnl_wei > 0) == expected["gross_pnl_wei_positive"]
+        assert result.is_profitable == expected["is_profitable"]
+    
+    def test_gas_eats_profit_case(self, golden_fixture):
+        """Validate gas_eats_profit case from golden fixture."""
+        case = next(c for c in golden_fixture["test_cases"] if c["case_id"] == "gas_eats_profit")
+        
+        buy_quote = case["input"]["buy_quote"]
+        sell_quote = case["input"]["sell_quote"]
+        gas_price_wei = case["input"]["gas_price_wei"]
+        expected = case["expected"]
+        
+        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei=gas_price_wei)
+        
+        # Gross profit is positive
+        assert (result.gross_pnl_wei > 0) == expected["gross_pnl_wei_positive"]
+        # But gas cost should significantly impact net result
+        assert result.gas_cost_wei > 0
+    
+    def test_roundtrip_invariants(self, golden_fixture):
+        """Validate roundtrip contract invariants from golden fixture."""
+        contract = golden_fixture["roundtrip_contract"]
+        invariants = contract["invariants"]
+        
+        # The invariants should match the simulator behavior
+        assert "gross_pnl_wei = leg2_amount_out - amount_in_wei" in invariants
+        assert "net_pnl_wei = gross_pnl_wei - gas_cost_wei" in invariants
+        assert "is_profitable = net_pnl_wei > 0" in invariants

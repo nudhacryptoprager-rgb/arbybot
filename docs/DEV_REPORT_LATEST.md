@@ -4,41 +4,39 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-23T08:36:42Z
-run_id: data/runs/ci_m5_gate_20260223_093625
+timestamp_utc: 2026-02-23T09:48:51Z
+run_id: data/runs/ci_m5_gate_20260223_104821
 mode: ONLINE
 artifact_mode: rolling
 config: config/real_minimal.yaml (profit profile)
 code_identity:
-  primary: ts:2026-02-23T08:36:42.318085+00:00
+  primary: ts:2026-02-23T09:48:51+00:00
   dirty: true
-  desc: Directive #3.1 - Cross-artifact consistency + fresh evidence + beabbc6
+  desc: Directive #5 - Discovery runtime + pool resolver integration
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Directive #3 - QuoterV2 gas evidence + discovery dry-run
+goal (Roadmap пункт): Directive #5 - Discovery runtime + pool resolver integration
 change_summary:
-  - FIX: preflight.py extracts gasEstimate from QuoterV2 eth_call (bytes 96-127)
-  - FIX: gas_estimate_source now "quoter_v2" instead of "fallback" on all legs
-  - ADD: discovery_dry_run=true in real_minimal.yaml
-  - ADD: 6 preflight invariant tests (test_preflight_m43.py TestPreflightInvariants)
-  - ADD: cross-artifact consistency test for preflight evidence
-  - FIX: preflight version aligned v1.0.0 -> v1.0.2 across all evidence structures
-  - VERIFY: beabbc6 evidence confirms preflight_v1.0.2 in both scan AND truth_report
-  - RESULT: runs_in_window=106, total_net_usdc=$5472.19
-  - RESULT: discovery dry-run: 16 resolvable pairs, 12 unresolvable, 128 potential queries
-  - NOTE: 10 missing tokens identified (DPX, FRAX, GNS, GRAIL, JOE, LUSD, MAGIC, RETH, TBTC, USDE)
+  - ADD: discovery/runtime.py - resolve_runtime_pairs() with deterministic ordering
+  - ADD: tests/unit/test_discovery_runtime.py - 9 tests for runtime module
+  - ADD: discovery_runtime flag in run_scan_real.py (observability only)
+  - ADD: config/real_minimal.yaml discovery_runtime flags (default false)
+  - RESULT: runs_in_window=108, total_net_usdc=$5563.59
+  - RESULT: discovery_runtime: 20 pairs resolved, 22 rpc_calls, cache persisted
+  - RESULT: pool_resolver_cache: 22 entries (20 positive, 2 negative)
 touched_files:
-  - execution/preflight.py (v1.0.2 - QuoterV2 gas extraction)
-  - config/real_minimal.yaml (discovery_dry_run)
-  - tests/unit/test_preflight_m43.py (6 invariant tests)
-  - docs/DEV_REPORT_LATEST.md
-  - docs/status/Status_M4.md
+  - discovery/runtime.py (new)
+  - tests/unit/test_discovery_runtime.py (new)
+  - strategy/jobs/run_scan_real.py (discovery_runtime integration)
+  - config/real_minimal.yaml (discovery_runtime flags)
+  - docs/status/Status_M5_0.md
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (v1.6.1, 10 checks, 0 warnings)
-py -3.11 -m pytest -q: PASS (1000 passed, 1 skipped, 1 warning)
-py -3.11 scripts/ci_m5_0_gate.py --online: PASS (ci_m5_gate_20260223_093625)
+py -3.11 scripts/check_repo_safety.py: PASS (v1.6.1, 10 checks, 0 warnings target)
+py -3.11 -m pytest -q: PASS (1025 passed, 1 skipped, 1 warning)
+py -3.11 scripts/ci_m5_0_gate.py --online: PASS (ci_m5_gate_20260223_104821)
+py -3.11 scripts/ci_m5_0_gate.py --online with discovery_runtime=true: PASS (20 pools resolved)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -46,7 +44,7 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json
   - data/runs/_rolling/m4_stability_agg.json
 run_dir_bundle (ONLINE):
-  - data/runs/ci_m5_gate_20260223_093625/reports
+  - data/runs/ci_m5_gate_20260223_104821/reports
 
 ## 4) Key Results (числа з артефактів)
 
@@ -61,15 +59,15 @@ _latest.json:
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-02-23T08:36:42.318085+00:00
-  run_context.code_identity: ts:2026-02-23T08:36:42.318085+00:00
-  inputs.run_dir_name: ci_m5_gate_20260223_093625
+  run_context.run_timestamp: 2026-02-23T09:48:51+00:00
+  run_context.code_identity: ts:2026-02-23T09:48:51+00:00
+  inputs.run_dir_name: ci_m5_gate_20260223_104821
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 5
-    included_signals_count: 5
+    signals_count: 6
+    included_signals_count: 6
     excluded_signals_count: 0
-    total_net_usdc: 33.11 (single run)
+    total_net_usdc: 49.32 (single run)
     mae_net_usdc: 0.5
     est_sign_correct_rate: 1.0
     profit_is_diagnostic: true
@@ -80,16 +78,28 @@ run_summary_latest.json:
   quality_reasons: ['WARN_TOP_PAIR_DOMINANCE', 'WARN_PROFIT_DIAGNOSTIC']
   preflight_evidence:
     evidence_source: preflight_v1.0.2 (VERIFIED in scan AND truth_report)
-    candidates_count: 1
-    passed_count: 1
+    candidates_count: 3
+    passed_count: 3
     gas_estimate_source: quoter_v2 (all legs)
 
 m4_stability_agg.json:
-  runs_in_window: 106 (M4.1 N=100+ maintained)
-  last_run: ci_m5_gate_20260223_093625
-  computed_total_net_usdc: 5472.19
+  runs_in_window: 108 (M4.1 N=100+ maintained)
+  last_run: ci_m5_gate_20260223_104821
+  computed_total_net_usdc: 5567.21
   agg_status: PASS
   agg_reasons: []
+
+discovery_stats (from scan):
+  resolvable_pairs: 28
+  unresolvable_pairs: 0
+  potential_v3_queries: 224
+  core_tokens_loaded: 49
+
+discovery_runtime_stats (from scan):
+  pairs_resolved: 20
+  rpc_calls: 22
+  pools_from_cache: 0 (first call)
+  cache_persisted: 22 entries (20 positive, 2 negative)
 
 ## 5) Diversity Analysis (from rolling artifacts)
 
@@ -109,17 +119,22 @@ excluded_from_signals: **NONE** (FIXED)
 
 | DoD | Status | Evidence |
 |-----|--------|----------|
-| Core Truth (paper +PnL) | [OK] PROVEN | N=106 runs, total_net_usdc=$5472.19 |
+| Core Truth (paper +PnL) | [OK] PROVEN | N=108 runs, total_net_usdc=$5567.21 |
 | Rolling Quality Gate | [OK] PASS | agg_status=PASS, agg_reasons=[] |
 | M4.2 Roundtrip Profit | [NO] NOT_PROFITABLE | profitable_count=0 |
 | M4.2 Real Execution | [NO] NOT STARTED | kill_switch_active=true |
-| M4.1 Time-Bound Window | [OK] CLOSED | 106/100 runs (100%+ maintained) |
+| M4.1 Time-Bound Window | [OK] CLOSED | 108/100 runs (100%+ maintained) |
 | M4.3 Preflight Evidence | [OK] VERIFIED | preflight_v1.0.2 in BOTH scan AND truth_report (cross-artifact) |
+| Token Registry | [OK] EXPANDED | 49 tokens (39 original + 10 discovery tokens) |
+| Pool Resolver | [OK] IMPLEMENTED | factory.getPool() with persistent cache |
+| ROUNDTRIP_CANONICAL | [OK] GOLDEN PROOF | docs/artifacts/roundtrip_canonical_golden.json + 5 tests |
+| Discovery Runtime | [OK] IMPLEMENTED | discovery/runtime.py + 9 tests (20 pools resolved) |
 
-> **M4.1 CLOSED**: N=106 consecutive runs with agg_status=PASS.
-> Paper profit PROVEN under declared cost model ($5472.19 cumulative).
+> **M4.1 CLOSED**: N=108 consecutive runs with agg_status=PASS.
+> Paper profit PROVEN under declared cost model ($5567.21 cumulative).
 > M4.3 Preflight: QuoterV2 gas evidence on all legs (no fallback), cross-artifact verified.
-> Discovery dry-run: 16 resolvable, 12 unresolvable (10 missing tokens).
+> Discovery: 28 resolvable, 0 unresolvable (all missing tokens added).
+> Discovery runtime: 20 pools resolved via factory.getPool(), cache persisted.
 > M4 full close requires M4.2 profitable roundtrip (market-dependent).
 
 ## 7) Contract Checks (коротко)
@@ -132,17 +147,17 @@ runtime artifacts not committed: OK
 - roundtrip.profitable_count=0 (market has no arb opportunity)
 - profit_truth_available=false (requires profitable roundtrip for M4 full close)
 - PENDLE/RDNT quoter_v2 failures (slot0 fallback - pairs DISABLED)
-- 10 missing tokens block 12 unresolvable pairs in discovery
+- discovery_runtime not yet connected to quote pipeline
 - WARN_TOP_PAIR_DOMINANCE in quality_reasons (signals dominated by few pairs)
 
 ## 9) Lead's 10 Steps: Execution Map
-step_01 (ONLINE with beabbc6): DONE - ci_m5_gate_20260223_093625
-step_02 (Verify preflight_v1.0.2): DONE - confirmed in BOTH scan AND truth_report
-step_03 (Cross-artifact test): DONE - test_cross_artifact_preflight_consistency added
-step_04 (Discovery runtime flag): PENDING - dry-run only, deferred
-step_05 (Intent pool resolver): PENDING - deferred
-step_06 (Resolver cache): PENDING - deferred
-step_07 (Unresolvable pairs list): DONE - 10 missing tokens identified
-step_08 (Gas evidence contract): PENDING - QuoterV2 gasEstimate sufficient for now
-step_09 (Roundtrip fixture): PENDING - deferred
-step_10 (Update docs): DONE - this report
+step_01 (Token registry contract): DONE - core_tokens.yaml extended as canonical registry
+step_02 (Add 10 missing tokens): DONE - rETH, MAGIC, FRAX, LUSD, GNS, GRAIL, JOE, USDE, TBTC, DPX
+step_03 (Token verify CLI): DONE - scripts/verify_tokens.py (10/10 verified)
+step_04 (Verify discovery metrics): DONE - 28/0/224 (up from 16/12/128)
+step_05 (Design discovery_runtime flag): DONE - architecture in pool_resolver + runtime.py
+step_06 (Implement pool resolver + cache): DONE - discovery/pool_resolver.py + persistent cache
+step_07 (Add resolver/cache tests): DONE - test_pool_resolver.py (11 tests)
+step_08 (Roundtrip synthetic fixture): DONE - roundtrip_canonical_golden.json + 5 tests
+step_09 (Update Status_M5_0.md): DONE - runDir ci_m5_gate_20260223_104821
+step_10 (Discovery runtime integration): DONE - discovery/runtime.py + 9 tests, 20 pools resolved

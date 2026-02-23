@@ -1,0 +1,122 @@
+{
+  "_schema": "roundtrip_canonical_golden:v1.0",
+  "_purpose": "Golden fixture for ROUNDTRIP_CANONICAL proof - validates roundtrip simulator produces correct results",
+  "_created": "2026-02-23",
+  "_usage": "Used by tests/unit/test_roundtrip.py::TestRoundtripGolden to validate simulator invariants",
+  
+  "test_cases": [
+    {
+      "case_id": "profitable_roundtrip",
+      "description": "Round-trip returning more than input is profitable",
+      "input": {
+        "buy_quote": {
+          "token_in": "WETH",
+          "token_out": "USDC",
+          "amount_in_wei": 1000000000000000000,
+          "amount_out_wei": 2000000000,
+          "dex_id": "uniswap_v3",
+          "quote_source": "quoter_v2",
+          "quoter_gas_estimate": 150000,
+          "ticks_crossed": 5
+        },
+        "sell_quote": {
+          "token_in": "USDC",
+          "token_out": "WETH",
+          "amount_in_wei": 2000000000,
+          "amount_out_wei": 1010000000000000000,
+          "dex_id": "sushiswap_v3",
+          "quote_source": "quoter_v2",
+          "quoter_gas_estimate": 150000,
+          "ticks_crossed": 3
+        },
+        "gas_price_wei": 100000000
+      },
+      "expected": {
+        "leg1_success": true,
+        "leg2_success": true,
+        "gross_pnl_wei_positive": true,
+        "is_profitable": true
+      }
+    },
+    {
+      "case_id": "unprofitable_roundtrip",
+      "description": "Round-trip returning less than input is not profitable",
+      "input": {
+        "buy_quote": {
+          "token_in": "WETH",
+          "token_out": "USDC",
+          "amount_in_wei": 1000000000000000000,
+          "amount_out_wei": 2000000000,
+          "dex_id": "uniswap_v3",
+          "quote_source": "quoter_v2",
+          "quoter_gas_estimate": 150000,
+          "ticks_crossed": 5
+        },
+        "sell_quote": {
+          "token_in": "USDC",
+          "token_out": "WETH",
+          "amount_in_wei": 2000000000,
+          "amount_out_wei": 990000000000000000,
+          "dex_id": "sushiswap_v3",
+          "quote_source": "quoter_v2",
+          "quoter_gas_estimate": 150000,
+          "ticks_crossed": 3
+        },
+        "gas_price_wei": 100000000
+      },
+      "expected": {
+        "gross_pnl_wei_positive": false,
+        "is_profitable": false
+      }
+    },
+    {
+      "case_id": "gas_eats_profit",
+      "description": "High gas can turn gross-profitable trade net-unprofitable",
+      "input": {
+        "buy_quote": {
+          "token_in": "WETH",
+          "token_out": "USDC",
+          "amount_in_wei": 1000000000000000000,
+          "amount_out_wei": 2000000000,
+          "dex_id": "uniswap_v3",
+          "quote_source": "quoter_v2",
+          "quoter_gas_estimate": 300000,
+          "ticks_crossed": 5
+        },
+        "sell_quote": {
+          "token_in": "USDC",
+          "token_out": "WETH",
+          "amount_in_wei": 2000000000,
+          "amount_out_wei": 1005000000000000000,
+          "dex_id": "sushiswap_v3",
+          "quote_source": "quoter_v2",
+          "quoter_gas_estimate": 300000,
+          "ticks_crossed": 3
+        },
+        "gas_price_wei": 1000000000000
+      },
+      "expected": {
+        "gross_pnl_wei_positive": true,
+        "comment": "net_pnl may be negative due to gas consuming small gross profit"
+      }
+    }
+  ],
+  
+  "roundtrip_contract": {
+    "description": "M4.2 roundtrip is the CANONICAL profit source",
+    "invariants": [
+      "gross_pnl_wei = leg2_amount_out - amount_in_wei",
+      "net_pnl_wei = gross_pnl_wei - gas_cost_wei",
+      "is_profitable = net_pnl_wei > 0",
+      "One-leg spread is DIAGNOSTIC only in truth_mode_m42",
+      "ROUNDTRIP_NOT_PROFITABLE must block 'profit proven' claims"
+    ],
+    "gating_logic": {
+      "truth_mode_m42_true": {
+        "roundtrip_evaluated_profitable": "ROUNDTRIP_PROFITABLE",
+        "roundtrip_evaluated_none_profitable": "ROUNDTRIP_NOT_PROFITABLE",
+        "no_roundtrip_evaluated": "ONE_LEG_ONLY_DIAGNOSTIC"
+      }
+    }
+  }
+}

@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-02-22  
-**Tests**: 994 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260222_111023`
+**Updated**: 2026-02-23  
+**Tests**: 1025 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260223_104821`
 
 ---
 
@@ -31,6 +31,12 @@
 | 10 | **WBTC/WETH fee=500 removed** | `config/real_minimal.yaml` | Cross-DEX only 3000 (MIXED_SOURCE fix) |
 | 11 | **ARB/WETH fee=500 removed** | `config/real_minimal.yaml` | Cross-DEX only 3000 (MIXED_SOURCE fix) |
 | 12 | **M4.1 deterministic close plan** | `Roadmap.md` | Time-bound window (N=100) for simulate-only |
+| 13 | **Token registry expansion** | `config/core_tokens.yaml` | +10 discovery tokens (MAGIC, FRAX, etc.) |
+| 14 | **Pool resolver + cache** | `discovery/pool_resolver.py` | factory.getPool() with persistent cache |
+| 15 | **Token verify CLI** | `scripts/verify_tokens.py` | On-chain token verification |
+| 16 | **Roundtrip golden fixture** | `docs/artifacts/roundtrip_canonical_golden.json` | ROUNDTRIP_CANONICAL proof |
+| 17 | **Discovery runtime module** | `discovery/runtime.py` | factory.getPool() resolver at runtime |
+| 18 | **Discovery runtime tests** | `tests/unit/test_discovery_runtime.py` | 9 tests for runtime module |
 
 ---
 
@@ -58,7 +64,7 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --fa
 
 # Unit tests
 py -3.11 -m pytest tests/unit -q
-# EXPECT: 994 passed, 1 skipped
+# EXPECT: 1025 passed, 1 skipped
 ```
 
 ---
@@ -67,8 +73,8 @@ py -3.11 -m pytest tests/unit -q
 
 | Type | RunDir | Key Evidence |
 |------|--------|--------------|
-| Normal | `ci_m5_gate_20260222_111023` | `field_success_rates~1.0`, unique_pairs=8, excluded_signals=0, preflight_evidence=3/3 |
-| Reference | `ci_m5_gate_20260222_100945` | `field_success_rates=1.0`, unique_pairs=8 |
+| Normal | `ci_m5_gate_20260223_104821` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 3/3, discovery_runtime 20 pools |
+| Reference | `ci_m5_gate_20260223_101208` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 2/2 |
 
 ---
 

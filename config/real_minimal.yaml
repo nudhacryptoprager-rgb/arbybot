@@ -377,6 +377,12 @@ use_quoter_v2: true
 # When true, emits stats["discovery"] with resolvable_pairs/potential_queries
 discovery_dry_run: true
 
+# v2.4.2: Discovery runtime - resolve pool addresses via factory.getPool()
+# When true, emits stats["discovery_runtime"] with resolved pairs and resolver stats
+# NOTE: Observability only - does NOT change quote universe in this version
+discovery_runtime: false
+discovery_runtime_max_pairs: 20
+
 # M4 markers - execution disabled
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4

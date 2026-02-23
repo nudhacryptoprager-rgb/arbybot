@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Script to identify unresolvable pairs and missing tokens."""
 
+import sys
+import os
+
+# Add project root to path for module imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from discovery.index_factories import count_discovery_candidates
 from discovery.intent_loader import get_intent_universe
 from discovery.verify import get_token_registry
