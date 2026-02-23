@@ -140,6 +140,7 @@ class SpreadSignal:
     spread_bps: int
     is_profitable: bool
     confidence: str = "medium"
+    is_same_dex: bool = False  # Same DEX (fee-tier arb only) - diagnostic, exclude from quality metrics
 
 
 @dataclass

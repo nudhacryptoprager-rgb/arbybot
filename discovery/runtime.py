@@ -75,6 +75,7 @@ class RuntimeStats:
     enabled: bool = True
     pairs_evaluated: int = 0
     pairs_resolved: int = 0
+    pools_resolved: int = 0  # Total pools (may be > pairs_resolved)
     pairs_skipped_no_tokens: int = 0
     pairs_skipped_no_pool: int = 0
     pairs_skipped_max_cap: int = 0
@@ -82,6 +83,7 @@ class RuntimeStats:
     pools_from_cache: int = 0
     pools_from_rpc: int = 0
     rpc_calls: int = 0
+    rpc_cap_triggered: bool = False  # True if ARBY_RESOLVER_MAX_RPC_CALLS limited queries
     dexes_queried: List[str] = field(default_factory=list)
     cross_dex_pairs_count: int = 0  # Pairs with pools on 2+ dexes
     error: Optional[str] = None
@@ -92,6 +94,7 @@ class RuntimeStats:
             "enabled": self.enabled,
             "pairs_evaluated": self.pairs_evaluated,
             "pairs_resolved": self.pairs_resolved,
+            "pools_resolved": self.pools_resolved,
             "pairs_skipped_no_tokens": self.pairs_skipped_no_tokens,
             "pairs_skipped_no_pool": self.pairs_skipped_no_pool,
             "pairs_skipped_max_cap": self.pairs_skipped_max_cap,
@@ -99,6 +102,7 @@ class RuntimeStats:
             "pools_from_cache": self.pools_from_cache,
             "pools_from_rpc": self.pools_from_rpc,
             "rpc_calls": self.rpc_calls,
+            "rpc_cap_triggered": self.rpc_cap_triggered,
             "dexes_queried": self.dexes_queried,
             "cross_dex_pairs_count": self.cross_dex_pairs_count,
             "error": self.error,
@@ -261,26 +265,28 @@ def resolve_runtime_pairs(
             )
             continue
         
-        # Add first pool to results (or all pools if we want multi-pool support later)
-        # For now, just add the first one to match old behavior but with cross-dex validation
+        # Add ALL pools for this pair (one per DEX/fee combination)
+        # This preserves route coverage for cross-DEX arbitrage
         seen_pairs.add(canonical_pair)
-        resolved.append(pair_pools[0])
+        resolved.extend(pair_pools)
         stats.pairs_resolved += 1
+        stats.pools_resolved += len(pair_pools)
     
     # Collect resolver stats
     resolver_stats = resolver.get_stats()
     stats.pools_from_cache = resolver_stats["hits"] + resolver_stats["negative_hits"]
     stats.pools_from_rpc = resolver_stats["misses"]
     stats.rpc_calls = resolver_stats["rpc_calls"]
+    stats.rpc_cap_triggered = resolver_stats.get("cap_triggered", False)
     
     # Save resolver cache for persistence
     resolver.flush()
     
     logger.info(
-        "Discovery runtime: %d pairs resolved (%d cross-dex), %d skipped (tokens=%d, pool=%d, single_dex=%d, cap=%d)",
+        "Discovery runtime: %d pairs (%d pools, %d cross-dex), skipped: tokens=%d, pool=%d, single_dex=%d, cap=%d",
         stats.pairs_resolved,
+        stats.pools_resolved,
         stats.cross_dex_pairs_count,
-        stats.pairs_skipped_no_tokens + stats.pairs_skipped_no_pool + stats.pairs_skipped_single_dex + stats.pairs_skipped_max_cap,
         stats.pairs_skipped_no_tokens,
         stats.pairs_skipped_no_pool,
         stats.pairs_skipped_single_dex,
@@ -304,7 +310,7 @@ def runtime_pairs_to_pair_configs(resolved_pairs: List[RuntimePair]) -> List:
     Convert RuntimePairs to PairConfig objects for quoting.
     
     This function enables discovery_runtime to affect the quote universe.
-    Only pairs with valid pool addresses are included.
+    Aggregates fee_tiers from all pools per pair across DEXes.
     
     Args:
         resolved_pairs: List of RuntimePair objects from resolve_runtime_pairs()
@@ -313,26 +319,56 @@ def runtime_pairs_to_pair_configs(resolved_pairs: List[RuntimePair]) -> List:
         List of PairConfig objects usable by the quoting pipeline
     """
     from config.pairs import PairConfig
+    from collections import defaultdict
     
-    result = []
-    seen_pairs = set()  # Dedupe by chain:token_a/token_b
+    # Group pools by pair key to aggregate fee_tiers and pool_addresses
+    pair_data = defaultdict(lambda: {
+        "chain": None,
+        "token_a": None,
+        "token_b": None,
+        "addr_a": None,
+        "addr_b": None,
+        "decimals_a": None,
+        "decimals_b": None,
+        "fee_tiers": set(),
+        "pool_addresses": [],
+        "dexes": set(),
+    })
     
     for rp in resolved_pairs:
-        # Dedupe by pair (same pair may appear with multiple fees)
+        # Canonical pair key
         pair_key = f"{rp.chain}:{sorted([rp.token_a, rp.token_b])[0]}/{sorted([rp.token_a, rp.token_b])[1]}"
-        if pair_key in seen_pairs:
-            continue
-        seen_pairs.add(pair_key)
+        
+        data = pair_data[pair_key]
+        if data["chain"] is None:
+            data["chain"] = rp.chain
+            data["token_a"] = rp.token_a
+            data["token_b"] = rp.token_b
+            data["addr_a"] = rp.addr_a
+            data["addr_b"] = rp.addr_b
+            data["decimals_a"] = rp.decimals_a
+            data["decimals_b"] = rp.decimals_b
+        
+        if rp.fee:
+            data["fee_tiers"].add(rp.fee)
+        data["pool_addresses"].append(rp.pool_address)
+        data["dexes"].add(rp.dex)
+    
+    result = []
+    for pair_key, data in sorted(pair_data.items()):
+        # Default fee tiers if none collected
+        fee_tiers = sorted(data["fee_tiers"]) if data["fee_tiers"] else [500, 3000]
         
         result.append(PairConfig(
-            chain=rp.chain,
-            token_in=rp.token_a,
-            token_out=rp.token_b,
-            token_in_address=rp.addr_a,
-            token_out_address=rp.addr_b,
-            token_in_decimals=rp.decimals_a,
-            token_out_decimals=rp.decimals_b,
-            fee_tiers=[rp.fee] if rp.fee else [500, 3000],
+            chain=data["chain"],
+            token_in=data["token_a"],
+            token_out=data["token_b"],
+            token_in_address=data["addr_a"],
+            token_out_address=data["addr_b"],
+            token_in_decimals=data["decimals_a"],
+            token_out_decimals=data["decimals_b"],
+            fee_tiers=fee_tiers,
+            pool_addresses=data["pool_addresses"],  # Pre-resolved for slot0/liquidity prefetch
         ))
     
     return result

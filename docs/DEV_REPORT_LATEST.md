@@ -4,34 +4,37 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-23T09:48:51Z
-run_id: data/runs/ci_m5_gate_20260223_104821
+timestamp_utc: 2026-02-23T10:45:03Z
+run_id: data/runs/ci_m5_gate_20260223_114444
 mode: ONLINE
 artifact_mode: rolling
 config: config/real_minimal.yaml (profit profile)
 code_identity:
-  primary: ts:2026-02-23T09:48:51+00:00
+  primary: ts:2026-02-23T10:45:03+00:00
   dirty: true
-  desc: Directive #5 - Discovery runtime + pool resolver integration
+  desc: Directive #7 - Fix critical issues from e345891
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Directive #6 - Universe source mode + cross-dex filtering
+goal (Roadmap пункт): Directive #7 - Fix critical issues from Lead's review
 change_summary:
-  - ADD: universe_source=discovery_runtime mode in run_scan_real.py
-  - ADD: require_cross_dex filter (only include pairs with pools on 2+ dexes)
-  - ADD: runtime_pairs_to_pair_configs() converter for quote pipeline
-  - ADD: RPC call limit guardrail (ARBY_RESOLVER_MAX_RPC_CALLS, default 50)
-  - ADD: cross_dex_pairs_count in RuntimeStats observability
-  - ADD: is_same_dex tracking in spread signals
-  - FIX: core_tokens.yaml header clarified (trust anchors vs verified tokens)
-  - RESULT: Tests 1027 passed (+2 from cross-dex tests)
+  - FIX: resolve_runtime_pairs() now returns ALL pools per pair (not just pair_pools[0])
+  - FIX: runtime_pairs_to_pair_configs() aggregates fee_tiers and includes pool_addresses
+  - ADD: pool_addresses field to PairConfig dataclass
+  - ADD: cap_triggered flag in pool_resolver.get_stats()
+  - ADD: rpc_cap_triggered in RuntimeStats
+  - ADD: is_same_dex_excluded flag (excluded from quality metrics when require_cross_dex=true)
+  - ADD: SAME_DEX_EXCLUDED confidence reason
+  - ADD: is_same_dex field in SpreadSignal dataclass
+  - ADD: config/real_minimal_discovery_runtime.yaml test config
+  - ADD: pools_resolved stat (separate from pairs_resolved)
+  - RESULT: 1027 tests passed, ONLINE evidence runs_in_window=109
 touched_files:
-  - discovery/runtime.py (runtime_pairs_to_pair_configs, require_cross_dex, decimals)
-  - discovery/pool_resolver.py (RPC limit guardrail, stats)
-  - strategy/jobs/run_scan_real.py (universe_source=discovery_runtime)
-  - strategy/spreads.py (is_same_dex, SAME_DEX_FEE_TIER reason)
-  - config/core_tokens.yaml (header clarification)
-  - tests/unit/test_discovery_runtime.py (+2 cross-dex tests)
+  - discovery/runtime.py (multi-pool return, pools_resolved, rpc_cap_triggered)
+  - discovery/pool_resolver.py (cap_triggered flag)
+  - config/pairs.py (pool_addresses field)
+  - strategy/spreads.py (is_same_dex_excluded, SAME_DEX_EXCLUDED reason)
+  - monitoring/truth_report.py (is_same_dex field in SpreadSignal)
+  - config/real_minimal_discovery_runtime.yaml (new test config)
 
 ## 2) Commands Executed (лише факти)
 
@@ -83,9 +86,9 @@ run_summary_latest.json:
     gas_estimate_source: quoter_v2 (all legs)
 
 m4_stability_agg.json:
-  runs_in_window: 108 (M4.1 N=100+ maintained)
-  last_run: ci_m5_gate_20260223_104821
-  computed_total_net_usdc: 5567.21
+  runs_in_window: 109 (M4.1 N=100+ maintained)
+  last_run: ci_m5_gate_20260223_114444
+  computed_total_net_usdc: 5588.72
   agg_status: PASS
   agg_reasons: []
 
@@ -122,11 +125,11 @@ excluded_from_signals: **NONE** (FIXED)
 
 | DoD | Status | Evidence |
 |-----|--------|----------|
-| Core Truth (paper +PnL) | [OK] PROVEN | N=108 runs, total_net_usdc=$5567.21 |
+| Core Truth (paper +PnL) | [OK] PROVEN | N=109 runs, total_net_usdc=$5588.72 |
 | Rolling Quality Gate | [OK] PASS | agg_status=PASS, agg_reasons=[] |
 | M4.2 Roundtrip Profit | [NO] NOT_PROFITABLE | profitable_count=0 |
 | M4.2 Real Execution | [NO] NOT STARTED | kill_switch_active=true |
-| M4.1 Time-Bound Window | [OK] CLOSED | 108/100 runs (100%+ maintained) |
+| M4.1 Time-Bound Window | [OK] CLOSED | 109/100 runs (100%+ maintained) |
 | M4.3 Preflight Evidence | [OK] VERIFIED | preflight_v1.0.2 in BOTH scan AND truth_report (cross-artifact) |
 | Token Registry | [OK] EXPANDED | 49 tokens (39 original + 10 discovery tokens) |
 | Pool Resolver | [OK] IMPLEMENTED | factory.getPool() with persistent cache |
@@ -134,8 +137,8 @@ excluded_from_signals: **NONE** (FIXED)
 | Discovery Runtime | [OK] IMPLEMENTED | discovery/runtime.py + 11 tests (20 pools resolved) |
 | Cross-Dex Filter | [OK] IMPLEMENTED | require_cross_dex flag + stats tracking |
 
-> **M4.1 CLOSED**: N=108 consecutive runs with agg_status=PASS.
-> Paper profit PROVEN under declared cost model ($5567.21 cumulative).
+> **M4.1 CLOSED**: N=109 consecutive runs with agg_status=PASS.
+> Paper profit PROVEN under declared cost model ($5588.72 cumulative).
 > M4.3 Preflight: QuoterV2 gas evidence on all legs (no fallback), cross-artifact verified.
 > Discovery: 28 resolvable, 0 unresolvable (all missing tokens added).
 > Discovery runtime: 20 pools resolved via factory.getPool(), cache persisted.
@@ -154,14 +157,12 @@ runtime artifacts not committed: OK
 - discovery_runtime not yet default (requires cross-dex evidence)
 - WARN_TOP_PAIR_DOMINANCE in quality_reasons (signals dominated by few pairs)
 
-## 9) Lead's 10 Steps: Execution Map (Directive #6)
-step_01 (Run baseline verification): DONE - check_repo_safety PASS, 1025 tests
-step_02 (Fix core_tokens.yaml header): DONE - clarified trust anchors vs verified tokens
-step_03 (Add universe_source=discovery_runtime): DONE - quote pipeline uses resolved pairs
-step_04 (Implement require-cross-dex rule): DONE - filter pairs to 2+ dexes
-step_05 (Connect resolver to infra): DEFERRED - documented TODO for RPCProvider
-step_06 (Add resolver guardrails): DONE - ARBY_RESOLVER_MAX_RPC_CALLS=50
-step_07 (Extend artifacts with cross_dex): DONE - cross_dex_pairs_count in stats
-step_08 (Address suspect_signals policy): DONE - is_same_dex + SAME_DEX_FEE_TIER reason
-step_09 (Sync docs with rolling): DONE - DEV_REPORT_LATEST aligned
-step_10 (Final check_repo_safety): PENDING
+## 9) Lead's 10 Steps: Execution Map (Directive #7)
+step_01 (ONLINE evidence refresh): DONE - runs_in_window=109, total_net_usdc=$5588.72
+step_02 (Create discovery_runtime test config): DONE - config/real_minimal_discovery_runtime.yaml
+step_03 (Fix multi-DEX pool selection): DONE - resolve_runtime_pairs() returns all pools
+step_04 (Add pool_address to PairConfigs): DONE - pool_addresses field + aggregation
+step_05 (Add cap_triggered artifact flag): DONE - in pool_resolver + RuntimeStats
+step_06 (Same-dex diagnostic exclusion): DONE - is_same_dex_excluded + SAME_DEX_EXCLUDED
+step_07 (Sync docs with rolling): DONE - DEV_REPORT_LATEST aligned
+step_08 (Final check_repo_safety): PENDING

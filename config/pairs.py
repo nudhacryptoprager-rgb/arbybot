@@ -35,6 +35,7 @@ class PairConfig:
     token_in_decimals: int = 18
     token_out_decimals: int = 18
     fee_tiers: List[int] = None
+    pool_addresses: Optional[List[str]] = None  # Optional: pre-resolved pool addresses
     
     def __post_init__(self):
         if self.fee_tiers is None:
@@ -52,7 +53,7 @@ class PairConfig:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for serialization."""
-        return {
+        result = {
             "chain": self.chain,
             "token_in": self.token_in,
             "token_out": self.token_out,
@@ -64,6 +65,9 @@ class PairConfig:
             "pair_tag": self.pair_tag,
             "display_name": self.display_name,
         }
+        if self.pool_addresses:
+            result["pool_addresses"] = self.pool_addresses
+        return result
 
 
 def parse_intent_file(chain_filter: Optional[str] = None) -> List[Tuple[str, str, str]]:

@@ -1,0 +1,69 @@
+# PATH: config/real_minimal_discovery_runtime.yaml
+#
+# M4+ REAL Pipeline - Discovery Runtime Test Config
+#
+# Purpose: Test universe_source=discovery_runtime mode which:
+# - Loads tokens from core_tokens.yaml (trust anchors)
+# - Resolves pools dynamically from on-chain factories
+# - Filters to only cross-DEX pairs (require_cross_dex=true)
+# - Caps queries with ARBY_RESOLVER_MAX_RPC_CALLS (default: 50)
+#
+# This config demonstrates the "discovery_runtime" universe flow
+# as an alternative to static pairs: [...] in YAML.
+
+# Chain: Arbitrum One
+chain: arbitrum_one
+chain_id: 42161
+
+# RPC endpoints with fallback
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+  - "https://rpc.ankr.com/arbitrum"
+
+# RPC settings
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# 2 DEXes for cross-DEX arbitrage
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+
+# ========== DISCOVERY RUNTIME MODE ==========
+# Instead of using static pairs, discover pools at runtime
+universe_source: discovery_runtime
+
+# Limit runtime pairs (prevents excessive RPC load)
+discovery_runtime_max_pairs: 15
+
+# Only include pairs with pools on multiple DEXes
+# (filters out single-DEX pairs which cannot produce cross-DEX arb)
+require_cross_dex: true
+
+# ========== STANDARD SETTINGS ==========
+
+# Quote config
+quote_amount_usd: 1000
+quote_batch_delay_ms: 250
+price_tolerance_bps: 5000
+
+# Gas config (Arbitrum)
+gas_price_gwei: 0.1
+max_gas_price_gwei: 1.0
+l2_gas_limit: 1000000
+
+# Gates (M4 bootstrap)
+spread_threshold_bps: 5
+confidence_threshold: 0.5
+price_sanity_max_deviation_bps: 5000
+
+# M4 simulate_only (no real execution)
+execution_enabled: false
+kill_switch_active: true
+simulate_only: true
+
+# Monitoring
+truth_report_enabled: true
+reject_histogram_enabled: true

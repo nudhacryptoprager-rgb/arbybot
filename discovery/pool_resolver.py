@@ -257,6 +257,7 @@ class PoolResolver:
             "failed_count": self._stats.failed_count,
             "hit_rate": self._stats.hits / max(1, self._stats.hits + self._stats.misses),
             "max_rpc_calls": MAX_RPC_CALLS_PER_SESSION,
+            "cap_triggered": self._stats.rpc_calls_limited > 0,  # True if limit caused skips
         }
     
     def flush(self) -> None:

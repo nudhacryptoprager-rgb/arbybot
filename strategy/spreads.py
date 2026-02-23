@@ -253,8 +253,11 @@ def _build_spread_signal(
     
     # v2.5.0: Same-dex detection (fee-tier arb within same DEX)
     is_same_dex = buy_dex == sell_dex
+    is_same_dex_excluded = is_same_dex and config.get("require_cross_dex", False)
     if is_same_dex:
         confidence_reasons.append("SAME_DEX_FEE_TIER")
+    if is_same_dex_excluded:
+        confidence_reasons.append("SAME_DEX_EXCLUDED")
     
     # v2.1.0: Mark slot0/mixed-source as diagnostic only when truth_mode_m42=true
     is_diagnostic_only = (
@@ -308,10 +311,11 @@ def _build_spread_signal(
         "net_negative_reason": net_negative_reason,
         # v2.0.3: Suspect spread flags (unrealistic arb detection)
         "is_suspect_spread": is_suspect_spread,
-        "is_excluded_spread": is_excluded_spread,
+        "is_excluded_spread": is_excluded_spread or is_same_dex_excluded,  # v2.5.0: also exclude same-dex when require_cross_dex
         "suspect_spread_threshold_bps": suspect_spread_bps,
         # v2.5.0: Same-dex detection (potential fee-tier arb)
-        "is_same_dex": buy_dex == sell_dex,
+        "is_same_dex": is_same_dex,
+        "is_same_dex_excluded": is_same_dex_excluded,
         "buy_dex_id": buy_dex,
         "sell_dex_id": sell_dex,
         # v2.1.0: Quote source tracking for truth_mode_m42
@@ -321,8 +325,8 @@ def _build_spread_signal(
         "is_slot0_only": is_slot0_only,
         "is_mixed_source": is_mixed_source,
         "is_diagnostic_only": is_diagnostic_only,
-        # Confidence downgrades if suspect
-        "confidence": "suspect" if is_excluded_spread else (
+        # Confidence downgrades if suspect or same-dex-excluded
+        "confidence": "suspect" if (is_excluded_spread or is_same_dex_excluded) else (
             "low" if not config.get("execution_enabled", False) or is_suspect_spread else (
                 "high" if abs(spread_bps) >= 20 else "medium" if abs(spread_bps) >= 10 else "low"
             )
