@@ -1174,7 +1174,7 @@ ENV VARIABLES:
                 print(f"\n{'='*60}")
                 print(f"[LOOP] Iteration #{iteration_count}")
                 print(f"{'='*60}")
-            elif not loop_mode:
+            elif not loop_mode and iteration_count == 1:
                 print(f"\n{'='*60}")
                 print(f"M5_0 GATE v{__version__} - ONLINE")
                 print(f"{'='*60}")
@@ -1207,197 +1207,197 @@ ENV VARIABLES:
                         rpc_host = urlparse(rpc_url).netloc
                         is_valid, error_msg = validate_chain_rpc_consistency(cfg_chain_id, rpc_host)
                     
-                    if not is_valid:
-                        print(f"\n{'='*60}")
-                        print(f"RESULT: FAIL - Chain/RPC mismatch")
-                        print(f"  {error_msg}")
-                        print(f"  RPC URL: {rpc_url}")
-                        print(f"{'='*60}")
-                        return 3
-                    else:
-                        print(f"[ONLINE] Chain/RPC validated: chain_id={cfg_chain_id}, host={rpc_host}")
+                        if not is_valid:
+                            print(f"\n{'='*60}")
+                            print(f"RESULT: FAIL - Chain/RPC mismatch")
+                            print(f"  {error_msg}")
+                            print(f"  RPC URL: {rpc_url}")
+                            print(f"{'='*60}")
+                            return 3
+                        else:
+                            print(f"[ONLINE] Chain/RPC validated: chain_id={cfg_chain_id}, host={rpc_host}")
             except Exception as e:
                 print(f"[ONLINE] WARN: Chain/RPC validation skipped: {e}")
         
-        # Export WS preference flags into the environment so run_real_scan picks them up
-        if args.ws:
-            os.environ.setdefault("ARBY_PREFER_WS", "1")
-        if args.ws_required:
-            os.environ.setdefault("ARBY_WS_REQUIRED", "1")
+            # Export WS preference flags into the environment so run_real_scan picks them up
+            if args.ws:
+                os.environ.setdefault("ARBY_PREFER_WS", "1")
+            if args.ws_required:
+                os.environ.setdefault("ARBY_WS_REQUIRED", "1")
         
-        # v2.3.0: Failover stress-test mode
-        # When stress-test is active, disable rolling refresh by default to avoid polluting
-        # rolling artifacts with artificial failures (unless explicitly requested)
-        failover_stress_active = args.failover_stress > 0
-        if failover_stress_active:
-            os.environ["ARBY_FAILOVER_STRESS_N"] = str(args.failover_stress)
-            print(f"[ONLINE] FAILOVER-STRESS: Will simulate {args.failover_stress} failures on primary endpoint")
-            # v2.3.0: Disable rolling refresh unless explicitly requested
-            if not args.refresh_rolling:
-                print("[ONLINE] FAILOVER-STRESS: Rolling refresh disabled (use --refresh-rolling to override)")
-                args._rolling_defaults_set = True  # Prevent auto-enable below
+            # v2.3.0: Failover stress-test mode
+            # When stress-test is active, disable rolling refresh by default to avoid polluting
+            # rolling artifacts with artificial failures (unless explicitly requested)
+            failover_stress_active = args.failover_stress > 0
+            if failover_stress_active:
+                os.environ["ARBY_FAILOVER_STRESS_N"] = str(args.failover_stress)
+                print(f"[ONLINE] FAILOVER-STRESS: Will simulate {args.failover_stress} failures on primary endpoint")
+                # v2.3.0: Disable rolling refresh unless explicitly requested
+                if not args.refresh_rolling:
+                    print("[ONLINE] FAILOVER-STRESS: Rolling refresh disabled (use --refresh-rolling to override)")
+                    args._rolling_defaults_set = True  # Prevent auto-enable below
 
-        # For M5_0 DoD: make infra-hosts and cross-artifact checks strict by default in online runs
-        # These can still be overridden by explicit flags if needed.
-        args.require_infra_hosts = True
-        args.require_cross_artifact = True
-        
-        # v2.2.0: Rolling freshness enforcement — default for online runs
-        # Ensures rolling artifacts are always refreshed when scanning online
-        # Prevents stale rolling evidence (Issue: rolling not matching latest runDir)
-        # v2.3.0: Skip if failover-stress disables it
-        if not hasattr(args, '_rolling_defaults_set'):
-            args.refresh_rolling = True
-            args.refresh_rolling_strict = True
-            if args.prune_keep == 0:
-                args.prune_keep = 50
-            args._rolling_defaults_set = True
+            # For M5_0 DoD: make infra-hosts and cross-artifact checks strict by default in online runs
+            # These can still be overridden by explicit flags if needed.
+            args.require_infra_hosts = True
+            args.require_cross_artifact = True
+            
+            # v2.2.0: Rolling freshness enforcement — default for online runs
+            # Ensures rolling artifacts are always refreshed when scanning online
+            # Prevents stale rolling evidence (Issue: rolling not matching latest runDir)
+            # v2.3.0: Skip if failover-stress disables it
+            if not hasattr(args, '_rolling_defaults_set'):
+                args.refresh_rolling = True
+                args.refresh_rolling_strict = True
+                if args.prune_keep == 0:
+                    args.prune_keep = 50
+                args._rolling_defaults_set = True
 
-        success, message = run_real_scan(run_dir, args.config, args.cycles)
-        
-        print(f"\n[ONLINE] {message}")
-        
-        if not success:
-            print(f"\n{'='*60}")
-            print(f"RESULT: FAIL - Scanner error")
-            return 3
-        
-        # Generate daily_report with cost model
-        try:
-            from scripts.generate_daily_report import aggregate_run
-            import yaml
+            success, message = run_real_scan(run_dir, args.config, args.cycles)
             
-            # Determine gas_usd_estimate: CLI > config
-            gas_estimate = args.gas_usd_estimate
-            slippage_estimate = args.slippage_usd_estimate
-            if gas_estimate is None:
-                try:
-                    cfg_path = Path(args.config)
-                    if cfg_path.exists():
-                        with open(cfg_path, "r", encoding="utf8") as f:
-                            cfg = yaml.safe_load(f)
-                        gas_estimate = cfg.get("gas_usd_estimate")
-                        if slippage_estimate == 0.0:
-                            slippage_estimate = cfg.get("slippage_usd_estimate", 0.0)
-                except Exception:
-                    pass
+            print(f"\n[ONLINE] {message}")
+        
+            if not success:
+                print(f"\n{'='*60}")
+                print(f"RESULT: FAIL - Scanner error")
+                return 3
             
-            report = aggregate_run(run_dir, gas_usd_estimate=gas_estimate, slippage_usd_estimate=slippage_estimate)
-            
-            # Write daily_report
-            report_dir = run_dir / "reports"
-            report_dir.mkdir(parents=True, exist_ok=True)
-            from datetime import date
-            report_path = report_dir / f"daily_report_{date.today().isoformat()}.json"
-            with open(report_path, "w", encoding="utf8") as f:
-                json.dump(report, f, indent=2, ensure_ascii=False)
-            print(f"[ONLINE] Generated: {report_path}")
-        except Exception as e:
-            print(f"[ONLINE] WARN: daily_report generation failed: {e}")
-        
-        artifacts = discover_artifacts(run_dir)
-        missing = [name for name, path in artifacts.items() if path is None]
-        if missing:
-            print(f"\n{'='*60}")
-            print(f"RESULT: FAIL - Missing artifacts: {missing}")
-            return 2
-        
-        print(f"\n{'='*60}")
-        print("VALIDATION")
-        print(f"{'='*60}\n")
-        
-        passed, messages = validate_artifacts(
-            artifacts,
-            require_real=True,
-            require_infra_hosts=args.require_infra_hosts,
-            require_cross_artifact=args.require_cross_artifact,
-            require_tenderly=args.require_tenderly,
-        )
-        for msg in messages:
-            print(f"  {msg}")
-        
-        print(f"\n{'='*60}")
-        print(f"RESULT: {'PASS' if passed else 'FAIL'}")
-        print(f"RunDir: {run_dir}")
-        
-        # v2.1.0: Auto-refresh rolling artifacts if enabled
-        # Must run M4 gate first to generate run_summary, then emit rolling
-        refresh_rolling_ok = True
-        if passed and args.refresh_rolling:
+            # Generate daily_report with cost model
             try:
-                print(f"\n[ONLINE] Running M4 gate to generate run_summary...")
-                import subprocess
-                m4_cmd = [
-                    sys.executable,
-                    "scripts/ci_m4_execution_gate.py",
-                    "--online",
-                    "--profile", "profit",
-                    "--artifact-mode", "rolling",
-                    "--run-dir", str(run_dir),
-                ]
-                m4_result = subprocess.run(m4_cmd, capture_output=True, text=True, timeout=180)
-                if m4_result.returncode == 0:
-                    print(f"[ONLINE] M4 gate passed, rolling artifacts updated")
-                else:
-                    print(f"[ONLINE] M4 gate returned {m4_result.returncode}")
+                from scripts.generate_daily_report import aggregate_run
+                import yaml
+                
+                # Determine gas_usd_estimate: CLI > config
+                gas_estimate = args.gas_usd_estimate
+                slippage_estimate = args.slippage_usd_estimate
+                if gas_estimate is None:
+                    try:
+                        cfg_path = Path(args.config)
+                        if cfg_path.exists():
+                            with open(cfg_path, "r", encoding="utf8") as f:
+                                cfg = yaml.safe_load(f)
+                            gas_estimate = cfg.get("gas_usd_estimate")
+                            if slippage_estimate == 0.0:
+                                slippage_estimate = cfg.get("slippage_usd_estimate", 0.0)
+                    except Exception:
+                        pass
+                
+                report = aggregate_run(run_dir, gas_usd_estimate=gas_estimate, slippage_usd_estimate=slippage_estimate)
+                
+                # Write daily_report
+                report_dir = run_dir / "reports"
+                report_dir.mkdir(parents=True, exist_ok=True)
+                from datetime import date
+                report_path = report_dir / f"daily_report_{date.today().isoformat()}.json"
+                with open(report_path, "w", encoding="utf8") as f:
+                    json.dump(report, f, indent=2, ensure_ascii=False)
+                print(f"[ONLINE] Generated: {report_path}")
+            except Exception as e:
+                print(f"[ONLINE] WARN: daily_report generation failed: {e}")
+            
+            artifacts = discover_artifacts(run_dir)
+            missing = [name for name, path in artifacts.items() if path is None]
+            if missing:
+                print(f"\n{'='*60}")
+                print(f"RESULT: FAIL - Missing artifacts: {missing}")
+                return 2
+            
+            print(f"\n{'='*60}")
+            print("VALIDATION")
+            print(f"{'='*60}\n")
+            
+            passed, messages = validate_artifacts(
+                artifacts,
+                require_real=True,
+                require_infra_hosts=args.require_infra_hosts,
+                require_cross_artifact=args.require_cross_artifact,
+                require_tenderly=args.require_tenderly,
+            )
+            for msg in messages:
+                print(f"  {msg}")
+            
+            print(f"\n{'='*60}")
+            print(f"RESULT: {'PASS' if passed else 'FAIL'}")
+            print(f"RunDir: {run_dir}")
+            
+            # v2.1.0: Auto-refresh rolling artifacts if enabled
+            # Must run M4 gate first to generate run_summary, then emit rolling
+            refresh_rolling_ok = True
+            if passed and args.refresh_rolling:
+                try:
+                    print(f"\n[ONLINE] Running M4 gate to generate run_summary...")
+                    import subprocess
+                    m4_cmd = [
+                        sys.executable,
+                        "scripts/ci_m4_execution_gate.py",
+                        "--online",
+                        "--profile", "profit",
+                        "--artifact-mode", "rolling",
+                        "--run-dir", str(run_dir),
+                    ]
+                    m4_result = subprocess.run(m4_cmd, capture_output=True, text=True, timeout=180)
+                    if m4_result.returncode == 0:
+                        print(f"[ONLINE] M4 gate passed, rolling artifacts updated")
+                    else:
+                        print(f"[ONLINE] M4 gate returned {m4_result.returncode}")
+                        refresh_rolling_ok = False
+                        if args.refresh_rolling_strict:
+                            print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate failed")
+                except subprocess.TimeoutExpired:
+                    print(f"[ONLINE] M4 gate timeout (180s)")
                     refresh_rolling_ok = False
                     if args.refresh_rolling_strict:
-                        print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate failed")
-            except subprocess.TimeoutExpired:
-                print(f"[ONLINE] M4 gate timeout (180s)")
-                refresh_rolling_ok = False
-                if args.refresh_rolling_strict:
-                    print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate timeout")
-            except Exception as e:
-                print(f"[ONLINE] WARN: M4 gate refresh failed: {e}")
-                refresh_rolling_ok = False
-                if args.refresh_rolling_strict:
-                    print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate exception")
-        
-        # v2.1.0: Auto-prune if enabled and scan passed
-        if passed and args.prune_keep > 0:
+                        print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate timeout")
+                except Exception as e:
+                    print(f"[ONLINE] WARN: M4 gate refresh failed: {e}")
+                    refresh_rolling_ok = False
+                    if args.refresh_rolling_strict:
+                        print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate exception")
+            
+            # v2.1.0: Auto-prune if enabled and scan passed
+            if passed and args.prune_keep > 0:
+                try:
+                    from scripts.prune_run_dirs import prune_run_dirs
+                    print(f"\n[ONLINE] Pruning runDirs (keeping {args.prune_keep} most recent)...")
+                    prune_result = prune_run_dirs(keep=args.prune_keep, dry_run=False, yes=True)
+                    print(f"[ONLINE] Pruned {prune_result.get('delete_count', 0)} old directories")
+                except Exception as e:
+                    print(f"[ONLINE] WARN: Prune failed: {e}")
+            
+            # v2.1.0: Determine final status considering rolling refresh
+            final_pass = passed
+            if args.refresh_rolling_strict and not refresh_rolling_ok:
+                final_pass = False
+            
+            # v2.4.0: Check for roundtrip profitable and emit alert
+            if final_pass:
+                is_profitable, profitable_count, profit_status = check_roundtrip_profitable(run_dir)
+                if is_profitable:
+                    emit_roundtrip_alert(run_dir, profitable_count, profit_status)
+            
+            # v2.4.0: Loop mode handling
+            if not loop_mode:
+                # Single run mode - return immediately
+                return 0 if final_pass else 1
+            
+            # Loop mode continues here
+            if final_pass:
+                consecutive_failures = 0
+                sleep_seconds_actual = sleep_seconds
+                print(f"\n[LOOP] Iteration #{iteration_count} PASS - sleeping {sleep_seconds}s...")
+            else:
+                consecutive_failures += 1
+                # Exponential backoff: base * 2^failures, capped at 5 minutes
+                sleep_seconds_actual = min(sleep_seconds * (2 ** consecutive_failures), 300)
+                print(f"\n[LOOP] Iteration #{iteration_count} FAIL (consecutive: {consecutive_failures})")
+                print(f"[LOOP] Backoff: sleeping {sleep_seconds_actual}s...")
+            
             try:
-                from scripts.prune_run_dirs import prune_run_dirs
-                print(f"\n[ONLINE] Pruning runDirs (keeping {args.prune_keep} most recent)...")
-                prune_result = prune_run_dirs(keep=args.prune_keep, dry_run=False, yes=True)
-                print(f"[ONLINE] Pruned {prune_result.get('delete_count', 0)} old directories")
-            except Exception as e:
-                print(f"[ONLINE] WARN: Prune failed: {e}")
-        
-        # v2.1.0: Determine final status considering rolling refresh
-        final_pass = passed
-        if args.refresh_rolling_strict and not refresh_rolling_ok:
-            final_pass = False
-        
-        # v2.4.0: Check for roundtrip profitable and emit alert
-        if final_pass:
-            is_profitable, profitable_count, profit_status = check_roundtrip_profitable(run_dir)
-            if is_profitable:
-                emit_roundtrip_alert(run_dir, profitable_count, profit_status)
-        
-        # v2.4.0: Loop mode handling
-        if not loop_mode:
-            # Single run mode - return immediately
-            return 0 if final_pass else 1
-        
-        # Loop mode continues here
-        if final_pass:
-            consecutive_failures = 0
-            sleep_seconds_actual = sleep_seconds
-            print(f"\n[LOOP] Iteration #{iteration_count} PASS - sleeping {sleep_seconds}s...")
-        else:
-            consecutive_failures += 1
-            # Exponential backoff: base * 2^failures, capped at 5 minutes
-            sleep_seconds_actual = min(sleep_seconds * (2 ** consecutive_failures), 300)
-            print(f"\n[LOOP] Iteration #{iteration_count} FAIL (consecutive: {consecutive_failures})")
-            print(f"[LOOP] Backoff: sleeping {sleep_seconds_actual}s...")
-        
-        try:
-            import time
-            time.sleep(sleep_seconds_actual)
-        except KeyboardInterrupt:
-            print(f"\n[LOOP] Interrupted by user after {iteration_count} iterations")
-            return 0 if final_pass else 1
+                import time
+                time.sleep(sleep_seconds_actual)
+            except KeyboardInterrupt:
+                print(f"\n[LOOP] Interrupted by user after {iteration_count} iterations")
+                return 0 if final_pass else 1
     
     # =========================================================================
     # ADVANCED MODE (uses ARBY_RUN_DIR or --run-dir)
