@@ -42,6 +42,9 @@ discovery_runtime_max_pairs: 15
 # (filters out single-DEX pairs which cannot produce cross-DEX arb)
 require_cross_dex: true
 
+# Fail-fast: discovery must actually quote (not just metrics)
+discovery_dry_run: false
+
 # ========== STANDARD SETTINGS ==========
 
 # Gas config (Arbitrum)
@@ -91,9 +94,9 @@ tokens:
 
 # Anchor prices for discovery_runtime tokens
 tokens_anchor_price:
-  WETH_USDC: 1980
-  WETH_USDT: 1980
-  WETH_DAI: 1980
-  ARB_USDC: 0.11
-  ARB_WETH: 0.000058
-  ARB_DAI: 0.11
+  WETH_USDC: 2500
+  WETH_USDT: 2500
+  WETH_DAI: 2500
+  ARB_USDC: 0.50
+  ARB_WETH: 0.0002
+  ARB_DAI: 0.50

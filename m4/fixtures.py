@@ -580,18 +580,22 @@ def generate_m4_from_online_inputs(
     # v2.0.3: Track excluded/suspect signals (for metrics exclusion)
     excluded_signals_count = 0  # is_excluded_spread=true (NOT counted in metrics)
     suspect_signals_count = 0   # is_suspect_spread=true (includes excluded)
+    same_dex_signals_count = 0  # v2.6.0: is_same_dex=true (quality warning trigger)
     included_signals_count = 0  # Actually counted in metrics
     
     for sig in m4_signals:
         signal_id = sig["signal_id"]
         is_excluded = sig.get("is_excluded_spread", False)
         is_suspect = sig.get("is_suspect_spread", False)
+        is_same_dex = sig.get("is_same_dex", False)
         
         # Track suspect/excluded counts
         if is_suspect:
             suspect_signals_count += 1
         if is_excluded:
             excluded_signals_count += 1
+        if is_same_dex:
+            same_dex_signals_count += 1
         
         # ORIGINAL estimate from truth_report (usually with paper_slippage_bps=0)
         est_net = sig["truth_net_usdc"]  # From truth_report, NOT recalculated
@@ -894,6 +898,13 @@ def generate_m4_from_online_inputs(
         elif top_pair_share > Thresholds.TOP_PAIR_NET_SHARE_WARN:
             quality_warnings.append(f"TOP_PAIR_DOMINANCE_WARN({top_pair}:{top_pair_share:.2f}>{Thresholds.TOP_PAIR_NET_SHARE_WARN})")
             quality_reasons.append("WARN_TOP_PAIR_DOMINANCE")
+    
+    # v2.6.0: Same-dex quality warning (fee-tier arb noise, even if not excluded)
+    # Warns when same-dex signals exist, regardless of require_cross_dex setting
+    if same_dex_signals_count > 0:
+        quality_warnings.append(f"SAME_DEX_PRESENT({same_dex_signals_count} signals)")
+        if "WARN_SAME_DEX_PRESENT" not in quality_reasons:
+            quality_reasons.append("WARN_SAME_DEX_PRESENT")
     
     # v1.10.0: Determine quality_status (contract alignment)
     # v2.0.5 FIX: NO_DATA only when included_signals_count == 0

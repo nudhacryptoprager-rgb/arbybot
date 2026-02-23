@@ -582,12 +582,38 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                 
                 # Coverage validation for online runs
                 if require_real:
-                    ok_cov, msg_cov = validate_coverage(data, min_pairs=5, min_pools=6)
+                    # discovery_runtime mode has lower coverage expectations (intentional limited universe)
+                    stats = data.get("stats", {})
+                    universe_source = stats.get("universe_source", "config")
+                    if universe_source == "discovery_runtime":
+                        # discovery_runtime: min 1 pair, 2 pools (cross-dex requires at least 2)
+                        ok_cov, msg_cov = validate_coverage(data, min_pairs=1, min_pools=2)
+                    else:
+                        # standard mode: min 5 pairs, 6 pools
+                        ok_cov, msg_cov = validate_coverage(data, min_pairs=5, min_pools=6)
                     if ok_cov:
                         messages.append(f"OK: {name} - {msg_cov}")
                     else:
                         messages.append(f"FAIL: {name} - {msg_cov}")
                         all_passed = False
+                    
+                    # discovery_runtime specific validation
+                    if universe_source == "discovery_runtime":
+                        dr_stats = stats.get("discovery_runtime", {})
+                        dr_enabled = dr_stats.get("enabled", False)
+                        dr_quotes = stats.get("quotes_fetched", 0)
+                        dr_cross_dex = dr_stats.get("cross_dex_pairs_count", 0)
+                        if not dr_enabled:
+                            messages.append(f"FAIL: {name} - discovery_runtime.enabled=false but universe_source=discovery_runtime")
+                            all_passed = False
+                        elif dr_quotes < 1:
+                            messages.append(f"FAIL: {name} - discovery_runtime quotes_fetched={dr_quotes} < 1")
+                            all_passed = False
+                        elif dr_cross_dex < 1:
+                            messages.append(f"FAIL: {name} - discovery_runtime cross_dex_pairs_count={dr_cross_dex} < 1")
+                            all_passed = False
+                        else:
+                            messages.append(f"OK: {name} - discovery_runtime (enabled=true, quotes={dr_quotes}, cross_dex={dr_cross_dex})")
             
             # Additional check: validate reject histogram cap semantics
             if name == "reject_histogram":

@@ -4,40 +4,38 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-23T12:29:40Z
-run_id: data/runs/ci_m5_gate_20260223_132921
+timestamp_utc: 2026-02-23T12:45:06Z
+run_id: data/runs/ci_m5_gate_20260223_134446
 mode: ONLINE
 artifact_mode: rolling
 config: config/real_minimal.yaml (profit profile)
 code_identity:
-  primary: ts:2026-02-23T12:29:40+00:00
-  dirty: false
-  desc: Directive #8 - commit 13dd09c
+  primary: ts:2026-02-23T12:45:06+00:00
+  dirty: true
+  desc: Directive #9 - discovery_runtime gate + same-dex warn
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Directive #8 - Add test coverage for discovery_runtime + same-dex policy
+goal (Roadmap пункт): Directive #9 - discovery_runtime gate + same-dex quality warning
 change_summary:
-  - ADD: tests/unit/test_discovery_runtime_quotes.py (8 tests)
-    - TestRuntimePairsToPairConfigs: pool_info population, required keys
-    - TestPoolInfoInPairConfig: PairConfig field tests
-    - TestRpcCapTriggered: rpc_cap_triggered in RuntimeStats
-  - ADD: tests/unit/test_same_dex_policy.py (5 tests)
-    - TestSameDexDetection: is_same_dex flag verification
-    - TestSameDexExclusion: require_cross_dex policy enforcement
-  - FIX: config/real_minimal_discovery_runtime.yaml schema (missing fields)
-    - Added: truth_mode_m42, use_quoter_v2, execution_enabled
-    - Added: paper_size_usd, paper_slippage_bps, min_spread_bps
-    - Added: tokens, tokens_anchor_price sections
-  - RESULT: 1040 tests passed (original + 13 new), ONLINE evidence maintained
+  - ADD: ci_m5_0_gate.py discovery_runtime coverage with lower thresholds (min_pairs=1)
+  - ADD: ci_m5_0_gate.py discovery_runtime validation (enabled, quotes_fetched, cross_dex_pairs)
+  - ADD: WARN_SAME_DEX_PRESENT quality warning in M4 fixtures
+  - ADD: discovery_dry_run=false in real_minimal_discovery_runtime.yaml
+  - ADD: tests/unit/test_discovery_runtime_integration.py (6 tests)
+  - ADD: docs/TECH_DEBT.md for websockets.legacy deprecation tracking
+  - FIX: Updated anchor prices in discovery_runtime config (WETH=2500, ARB=0.50)
+  - RESULT: 1046 tests passed, discovery_runtime ONLINE gate PASS
 touched_files:
-  - tests/unit/test_discovery_runtime_quotes.py (NEW - 8 tests)
-  - tests/unit/test_same_dex_policy.py (NEW - 5 tests)
-  - config/real_minimal_discovery_runtime.yaml (schema fixes)
+  - scripts/ci_m5_0_gate.py (discovery_runtime validation)
+  - m4/fixtures.py (same_dex_signals_count, WARN_SAME_DEX_PRESENT)
+  - config/real_minimal_discovery_runtime.yaml (discovery_dry_run, anchor prices)
+  - tests/unit/test_discovery_runtime_integration.py (NEW - 6 tests)
+  - docs/TECH_DEBT.md (NEW - websockets.legacy tracking)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS (v1.6.1, 10 checks, 0 warnings)
-py -3.11 -m pytest -q: PASS (1040 passed, 1 skipped, 1 warning)
+py -3.11 -m pytest -q: PASS (1046 passed, 1 skipped, 1 warning)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -45,9 +43,10 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json
   - data/runs/_rolling/m4_stability_agg.json
 run_dir_bundle (ONLINE):
-  - data/runs/ci_m5_gate_20260223_132921/reports
+  - data/runs/ci_m5_gate_20260223_134446/reports
 discovery_runtime_evidence:
-  - data/runs/manual_run_20260223_133004/reports (universe_source=discovery_runtime)
+  - data/runs/ci_m5_gate_20260223_133801/reports (universe_source=discovery_runtime, PASS)
+  - data/runs/manual_run_20260223_133953/reports (rpc_cap_triggered=true, stress-test)
 
 ## 4) Key Results (числа з артефактів)
 
@@ -62,15 +61,15 @@ _latest.json:
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-02-23T12:29:40+00:00
-  run_context.code_identity: ts:2026-02-23T12:29:40+00:00
-  inputs.run_dir_name: ci_m5_gate_20260223_132921
+  run_context.run_timestamp: 2026-02-23T12:45:06+00:00
+  run_context.code_identity: ts:2026-02-23T12:45:06+00:00
+  inputs.run_dir_name: ci_m5_gate_20260223_134446
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 5
-    included_signals_count: 5
+    signals_count: 6
+    included_signals_count: 6
     excluded_signals_count: 0
-    total_net_usdc: 17.03 (single run)
+    total_net_usdc: 25.37 (single run)
     mae_net_usdc: 0.5
     est_sign_correct_rate: 1.0
     profit_is_diagnostic: true
@@ -86,9 +85,9 @@ run_summary_latest.json:
     gas_estimate_source: quoter_v2 (all legs)
 
 m4_stability_agg.json:
-  runs_in_window: 110 (M4.1 N=100+ maintained)
-  last_run: ci_m5_gate_20260223_132921
-  computed_total_net_usdc: 5605.75
+  runs_in_window: 113 (M4.1 N=100+ maintained)
+  last_run: ci_m5_gate_20260223_134446
+  computed_total_net_usdc: 5631.12
   agg_status: PASS
   agg_reasons: []
 
@@ -125,7 +124,7 @@ excluded_from_signals: **NONE** (FIXED)
 
 | DoD | Status | Evidence |
 |-----|--------|----------|
-| Core Truth (paper +PnL) | [OK] PROVEN | N=110 runs, total_net_usdc=$5605.75 |
+| Core Truth (paper +PnL) | [OK] PROVEN | N=113 runs, total_net_usdc=$5631.12 |
 | Rolling Quality Gate | [OK] PASS | agg_status=PASS, agg_reasons=[] |
 | M4.2 Roundtrip Profit | [NO] NOT_PROFITABLE | profitable_count=0 |
 | M4.2 Real Execution | [NO] NOT STARTED | kill_switch_active=true |

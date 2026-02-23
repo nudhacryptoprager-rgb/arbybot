@@ -2,9 +2,9 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-23  
-**Tests**: 1040 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260223_132921`  
-**discovery_runtime evidence**: `manual_run_20260223_133004` (universe_source=discovery_runtime, quotes_fetched=7)
+**Tests**: 1046 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260223_134446`  
+**discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
 
 ---
 
@@ -74,9 +74,10 @@ py -3.11 -m pytest tests/unit -q
 
 | Type | RunDir | Key Evidence |
 |------|--------|--------------|
-| ONLINE | `ci_m5_gate_20260223_132921` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 3/3, runs_in_window=110 |
-| discovery_runtime | `manual_run_20260223_133004` | universe_source=discovery_runtime, quotes_fetched=7, pools_resolved=20, cross_dex_pairs_count=3 |
-| Reference | `ci_m5_gate_20260223_104821` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 3/3, discovery_runtime 20 pools |
+| ONLINE | `ci_m5_gate_20260223_134446` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 3/3, runs_in_window=113 |
+| discovery_runtime | `ci_m5_gate_20260223_133801` | universe_source=discovery_runtime, quotes_fetched=7, PASS |
+| stress-test | `manual_run_20260223_133953` | rpc_cap_triggered=true, rpc_calls=5, pools_from_rpc=224 |
+| Reference | `ci_m5_gate_20260223_132921` | discovery=28 pairs, runs_in_window=110 |
 
 ---
 
