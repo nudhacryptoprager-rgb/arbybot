@@ -924,3 +924,43 @@ class TestPreflightInvariants:
         # Check version format
         pattern = r"^preflight_v\d+\.\d+\.\d+$"
         assert re.match(pattern, evidence.evidence_source), f"Invalid version format: {evidence.evidence_source}"
+
+    def test_cross_artifact_preflight_consistency(self):
+        """Preflight evidence MUST be consistent between scan and truth_report artifacts."""
+        from execution.preflight import collect_top_n_preflight
+        
+        # Mock web3 for preflight collection
+        mock_w3 = MagicMock()
+        mock_w3.eth.call.return_value = (
+            (10**18).to_bytes(32, "big") +
+            (10**24).to_bytes(32, "big") +
+            (3).to_bytes(32, "big") +
+            (150000).to_bytes(32, "big")
+        )
+        mock_w3.to_checksum_address.side_effect = lambda x: x
+        
+        signals = [
+            {"spread_id": f"s{i}", "pair": "WETH/USDC", "spread_bps": 10 - i,
+             "leg1": {"dex_id": "uniswap_v3", "token_in": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                     "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "fee_tier": 500, "amount_in": 10**18},
+             "leg2": {"dex_id": "sushi_v3", "token_in": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                     "token_out": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", "fee_tier": 500, "amount_in": 10**18}}
+            for i in range(3)
+        ]
+        
+        # Collect preflight evidence twice (simulating scan and truth_report)
+        preflight_for_scan = collect_top_n_preflight(w3=mock_w3, spread_signals=signals, n=3)
+        preflight_for_truth = collect_top_n_preflight(w3=mock_w3, spread_signals=signals, n=3)
+        
+        # Both must have same evidence_source version
+        assert preflight_for_scan["evidence_source"] == preflight_for_truth["evidence_source"], \
+            "Cross-artifact preflight evidence_source MUST match"
+        
+        # Both must have same candidates_count and passed_count
+        assert preflight_for_scan["candidates_count"] == preflight_for_truth["candidates_count"], \
+            "Cross-artifact candidates_count MUST match"
+        assert preflight_for_scan["passed_count"] == preflight_for_truth["passed_count"], \
+            "Cross-artifact passed_count MUST match"
+        
+        # Evidence source should be current version
+        assert preflight_for_scan["evidence_source"] == "preflight_v1.0.2"
