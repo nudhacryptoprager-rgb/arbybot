@@ -963,4 +963,203 @@ class TestPreflightInvariants:
             "Cross-artifact passed_count MUST match"
         
         # Evidence source should be current version
-        assert preflight_for_scan["evidence_source"] == "preflight_v1.0.2"
+        assert preflight_for_scan["evidence_source"] == "preflight_v1.0.3"
+
+
+class TestPreflightV103ChainAwareAndGasSanity:
+    """
+    v1.0.3 FIX tests:
+    1. leg2.amount_in = leg1.quoted_amount_out (chain-aware flow)
+    2. gas_estimate > 1.5M rejects candidate (sanity check)
+    """
+    
+    def test_leg2_amount_in_uses_leg1_quoted_output(self):
+        """v1.0.3: leg2.amount_in MUST equal leg1.quoted_amount_out for chain-aware preflight."""
+        from unittest.mock import MagicMock, patch
+        from execution.preflight import collect_preflight_evidence
+        
+        mock_w3 = MagicMock()
+        mock_w3.to_checksum_address.side_effect = lambda x: x
+        
+        # Simulate QuoterV2 returning specific output for leg1
+        leg1_output = 2500 * 10**6  # 2500 USDC (6 decimals)
+        leg1_gas = 150000
+        
+        # Encode return value: amountOut, sqrtPriceX96After, tickAfter, gasEstimate
+        leg1_return = (
+            leg1_output.to_bytes(32, "big") +
+            (10**24).to_bytes(32, "big") +
+            (3).to_bytes(32, "big") +
+            leg1_gas.to_bytes(32, "big")
+        )
+        
+        # leg2 will get different output (eth return)
+        leg2_output = 10**18  # 1 ETH
+        leg2_gas = 160000
+        leg2_return = (
+            leg2_output.to_bytes(32, "big") +
+            (10**24).to_bytes(32, "big") +
+            (3).to_bytes(32, "big") +
+            leg2_gas.to_bytes(32, "big")
+        )
+        
+        # Mock eth_call to return different values per call
+        call_count = [0]
+        def mock_eth_call(call_dict, block="latest"):
+            call_count[0] += 1
+            return leg1_return if call_count[0] == 1 else leg2_return
+        
+        mock_w3.eth.call.side_effect = mock_eth_call
+        
+        spread_signal = {
+            "spread_id": "test_chain_aware",
+            "pair": "WETH/USDC",
+            "route": "uniswap_v3:500 -> sushi_v3:500",
+            "spread_bps": 15.0,
+            "leg1": {
+                "dex_id": "uniswap_v3",
+                "pool_address": "0x123",
+                "token_in": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",  # WETH
+                "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",  # USDC
+                "fee_tier": 500,
+                "amount_in": 10**18,  # 1 WETH
+            },
+            "leg2": {
+                "dex_id": "sushi_v3",
+                "pool_address": "0x456",
+                "token_in": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",  # USDC
+                "token_out": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",  # WETH
+                "fee_tier": 500,
+                "amount_in": 10**18,  # This is the "simplified" value from adapt_opportunity
+            },
+        }
+        
+        evidence = collect_preflight_evidence(
+            w3=mock_w3,
+            spread_signal=spread_signal,
+            current_block=100,
+        )
+        
+        # v1.0.3 invariant: leg2.amount_in MUST equal leg1.quoted_amount_out
+        assert evidence.leg1 is not None
+        assert evidence.leg2 is not None
+        assert evidence.leg1.quoted_amount_out == leg1_output, "leg1 should have quoted_amount_out"
+        assert evidence.leg2.amount_in == leg1_output, \
+            f"v1.0.3 FIX: leg2.amount_in ({evidence.leg2.amount_in}) MUST equal leg1.quoted_amount_out ({leg1_output})"
+    
+    def test_gas_estimate_sanity_rejects_unrealistic_values(self):
+        """v1.0.3: gas_estimate > 1.5M MUST reject candidate with warning."""
+        from unittest.mock import MagicMock
+        from execution.preflight import collect_preflight_evidence, MAX_REALISTIC_GAS_ESTIMATE
+        
+        mock_w3 = MagicMock()
+        mock_w3.to_checksum_address.side_effect = lambda x: x
+        
+        # Simulate QuoterV2 returning unrealistic gas for leg2
+        leg1_output = 2500 * 10**6
+        leg1_gas = 150000  # Normal gas
+        
+        leg2_output = 10**18
+        leg2_gas = 50_000_000  # Unrealistic: 50M gas
+        
+        leg1_return = (
+            leg1_output.to_bytes(32, "big") +
+            (10**24).to_bytes(32, "big") +
+            (3).to_bytes(32, "big") +
+            leg1_gas.to_bytes(32, "big")
+        )
+        
+        leg2_return = (
+            leg2_output.to_bytes(32, "big") +
+            (10**24).to_bytes(32, "big") +
+            (3).to_bytes(32, "big") +
+            leg2_gas.to_bytes(32, "big")
+        )
+        
+        call_count = [0]
+        def mock_eth_call(call_dict, block="latest"):
+            call_count[0] += 1
+            return leg1_return if call_count[0] == 1 else leg2_return
+        
+        mock_w3.eth.call.side_effect = mock_eth_call
+        
+        spread_signal = {
+            "spread_id": "test_gas_sanity",
+            "pair": "WETH/USDC",
+            "route": "uniswap_v3:500 -> sushi_v3:500",
+            "spread_bps": 15.0,
+            "leg1": {
+                "dex_id": "uniswap_v3",
+                "pool_address": "0x123",
+                "token_in": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                "fee_tier": 500,
+                "amount_in": 10**18,
+            },
+            "leg2": {
+                "dex_id": "sushi_v3",
+                "pool_address": "0x456",
+                "token_in": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                "token_out": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                "fee_tier": 500,
+                "amount_in": 10**18,
+            },
+        }
+        
+        evidence = collect_preflight_evidence(
+            w3=mock_w3,
+            spread_signal=spread_signal,
+            current_block=100,
+        )
+        
+        # v1.0.3: Unrealistic gas MUST cause passed=False
+        assert evidence.passed is False, \
+            f"v1.0.3 FIX: gas_estimate={leg2_gas} > {MAX_REALISTIC_GAS_ESTIMATE} MUST reject candidate"
+        
+        # Should have warning about unrealistic gas
+        assert any("GAS_ESTIMATE_UNREALISTIC" in w for w in evidence.warnings), \
+            f"Should have GAS_ESTIMATE_UNREALISTIC warning, got: {evidence.warnings}"
+    
+    def test_missing_leg1_output_adds_warning(self):
+        """v1.0.3: If leg1.quoted_amount_out is missing, warning MUST be added."""
+        from unittest.mock import MagicMock
+        from execution.preflight import collect_preflight_evidence
+        
+        mock_w3 = MagicMock()
+        mock_w3.to_checksum_address.side_effect = lambda x: x
+        
+        # Simulate leg1 quote failing (returns no output)
+        mock_w3.eth.call.side_effect = Exception("quota exceeded")
+        
+        spread_signal = {
+            "spread_id": "test_missing_output",
+            "pair": "WETH/USDC",
+            "route": "uniswap_v3:500 -> sushi_v3:500",
+            "spread_bps": 15.0,
+            "leg1": {
+                "dex_id": "uniswap_v3",
+                "pool_address": "0x123",
+                "token_in": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                "token_out": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                "fee_tier": 500,
+                "amount_in": 10**18,
+            },
+            "leg2": {
+                "dex_id": "sushi_v3",
+                "pool_address": "0x456",
+                "token_in": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                "token_out": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+                "fee_tier": 500,
+                "amount_in": 10**18,
+            },
+        }
+        
+        evidence = collect_preflight_evidence(
+            w3=mock_w3,
+            spread_signal=spread_signal,
+            current_block=100,
+        )
+        
+        # Should have warning about missing leg1 output
+        assert any("MISSING_LEG1_OUTPUT_FOR_LEG2" in w for w in evidence.warnings), \
+            f"Should have MISSING_LEG1_OUTPUT_FOR_LEG2 warning, got: {evidence.warnings}"

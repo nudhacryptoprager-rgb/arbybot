@@ -2,6 +2,7 @@
 """
 M4.3 Preflight Evidence Module.
 
+v1.0.3: Chain-aware leg2 (uses leg1.quoted_amount_out) + gas_estimate sanity check
 v1.0.2: Use QuoterV2 gasEstimate as primary gas source (no allowance needed)
 v1.0.1: Stricter passed criteria (fallback gas doesn't count as pass)
 v1.0.0: Provides eth_call / eth_estimateGas based preflight evidence
@@ -14,6 +15,8 @@ CONTRACT:
 - Falls back to eth_estimateGas only if QuoterV2 doesn't return gas
 - Collects evidence of execution readiness
 - Operates under kill_switch_active=True
+- v1.0.3: leg2.amount_in = leg1.quoted_amount_out (proper chain flow)
+- v1.0.3: gas_estimate > 1.5M rejects candidate (sanity check)
 
 OUTPUT:
 =======
@@ -37,6 +40,9 @@ MAX_PREFLIGHT_CANDIDATES = 3
 
 # Default addresses (Arbitrum One)
 QUOTER_V2_ADDRESS = "0x61fFE014bA17989E743c5F6cB21bF9697530B21e"  # Uniswap V3 QuoterV2
+
+# v1.0.3: Gas estimate sanity limit (anything above this is unrealistic for a single swap)
+MAX_REALISTIC_GAS_ESTIMATE = 1_500_000
 
 
 def adapt_opportunity_to_preflight_input(
@@ -159,7 +165,7 @@ class PreflightEvidence:
     warnings: List[str] = field(default_factory=list)
     
     # Evidence collection metadata
-    evidence_source: str = "preflight_v1.0.2"
+    evidence_source: str = "preflight_v1.0.3"
     block_number: Optional[int] = None
     
     def to_dict(self) -> Dict[str, Any]:
@@ -427,14 +433,27 @@ def collect_preflight_evidence(
         errors.append(f"LEG1_ERROR: {e}")
     
     # Collect leg2 evidence
+    # v1.0.3 FIX: Use leg1.quoted_amount_out as leg2.amount_in (chain-aware preflight)
     try:
+        # Determine leg2 amount_in from leg1 output or fall back to raw value
+        leg2_amount_in = leg2_raw.get("amount_in", 0)
+        leg1_output_used = False
+        
+        if evidence.leg1 and evidence.leg1.quoted_amount_out and evidence.leg1.quoted_amount_out > 0:
+            # v1.0.3: Use the actual leg1 output for leg2 input (proper chain-aware flow)
+            leg2_amount_in = evidence.leg1.quoted_amount_out
+            leg1_output_used = True
+        else:
+            # No leg1 output available - this makes leg2 evidence less accurate
+            warnings.append("MISSING_LEG1_OUTPUT_FOR_LEG2: leg2.amount_in uses raw value, not chained")
+        
         leg2 = LegPreflightResult(
             dex_id=leg2_raw.get("dex_id", "unknown"),
             pool_address=leg2_raw.get("pool_address", ""),
             token_in=leg2_raw.get("token_in", ""),
             token_out=leg2_raw.get("token_out", ""),
             fee_tier=leg2_raw.get("fee_tier", 3000),
-            amount_in=leg2_raw.get("amount_in", 0),
+            amount_in=leg2_amount_in,
         )
         
         # eth_call quote (also extracts gasEstimate from QuoterV2)
@@ -490,6 +509,7 @@ def collect_preflight_evidence(
     
     # Determine overall pass
     # v1.0.2: Passed means: both legs have eth_call_ok=True OR real gas estimate (quoter_v2/eth_estimateGas, not fallback)
+    # v1.0.3: Added gas_estimate sanity check - reject unrealistic gas values
     def leg_ok(leg: Optional[LegPreflightResult]) -> bool:
         if not leg:
             return False
@@ -499,9 +519,23 @@ def collect_preflight_evidence(
             return True
         return False
     
+    # v1.0.3: Check for unrealistic gas estimates
+    def gas_sanity_ok(leg: Optional[LegPreflightResult], leg_name: str) -> bool:
+        if not leg:
+            return True  # No leg = can't check gas
+        if leg.gas_estimate is not None and leg.gas_estimate > MAX_REALISTIC_GAS_ESTIMATE:
+            warnings.append(f"GAS_ESTIMATE_UNREALISTIC: {leg_name} gas_estimate={leg.gas_estimate} > {MAX_REALISTIC_GAS_ESTIMATE}")
+            return False
+        return True
+    
     leg1_ok = leg_ok(evidence.leg1)
     leg2_ok = leg_ok(evidence.leg2)
-    evidence.passed = bool(leg1_ok and leg2_ok and len(errors) == 0)
+    
+    # v1.0.3: Enforce gas sanity
+    leg1_gas_sane = gas_sanity_ok(evidence.leg1, "leg1")
+    leg2_gas_sane = gas_sanity_ok(evidence.leg2, "leg2")
+    
+    evidence.passed = bool(leg1_ok and leg2_ok and leg1_gas_sane and leg2_gas_sane and len(errors) == 0)
     
     evidence.errors = errors
     evidence.warnings = warnings
@@ -560,7 +594,7 @@ def collect_top_n_preflight(
         "results": results,
         "errors": errors_total,
         "warnings": warnings_total,
-        "evidence_source": "preflight_v1.0.2",
+        "evidence_source": "preflight_v1.0.3",
         "block_number": current_block,
     }
 
@@ -574,6 +608,6 @@ def preflight_disabled_stub() -> Dict[str, Any]:
         "results": [],
         "errors": [],
         "warnings": [],
-        "evidence_source": "preflight_v1.0.2",
+        "evidence_source": "preflight_v1.0.3",
         "block_number": None,
     }

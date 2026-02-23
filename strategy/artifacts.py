@@ -296,6 +296,36 @@ def build_reject_data(
         reason = r.get("reason", "UNKNOWN")
         reason_histogram[reason] = reason_histogram.get(reason, 0) + 1
     
+    # v2.6.2: Build reason_keys_top for observability (pool keys per reason)
+    # Groups rejected quotes by reason and extracts top-N pool_key/pool_address for each
+    reason_keys_top = {}
+    reason_rejects_by_key = {}
+    for r in rejected_quotes:
+        reason = r.get("reason", "UNKNOWN")
+        dex_id = r.get("dex_id", "unknown")
+        pair = r.get("pair", "unknown")
+        fee = r.get("fee", 0)
+        pool_addr = r.get("pool_address", "")
+        pool_key = f"{dex_id}_{pair.replace('/', '_')}_{fee}"
+        
+        if reason not in reason_rejects_by_key:
+            reason_rejects_by_key[reason] = {}
+        if pool_key not in reason_rejects_by_key[reason]:
+            reason_rejects_by_key[reason][pool_key] = {
+                "pool_key": pool_key,
+                "pool_address": pool_addr,
+                "dex_id": dex_id,
+                "pair": pair,
+                "fee": fee,
+                "count": 0,
+            }
+        reason_rejects_by_key[reason][pool_key]["count"] += 1
+    
+    # Extract top-5 pool_keys for each reason
+    for reason, keys_dict in reason_rejects_by_key.items():
+        sorted_keys = sorted(keys_dict.values(), key=lambda x: -x["count"])
+        reason_keys_top[reason] = sorted_keys[:5]
+    
     # v2.1.0 Step 8: Extract PRICE_SANITY_FAILED samples with anchor/observed details
     price_sanity_samples = []
     for r in rejected_quotes:
@@ -337,6 +367,8 @@ def build_reject_data(
         "price_outlier_count": sum(1 for r in rejected_quotes if r.get("reason") == "PRICE_OUTLIER"),
         # v2.1.0 Step 8: Enhanced histogram and samples
         "reason_histogram": reason_histogram,
+        # v2.6.2: Per-reason top pool keys for observability (quarantine/debug)
+        "reason_keys_top": reason_keys_top,
         "price_sanity_samples": price_sanity_samples,
         "quarantine_stats": get_quarantine_manager().to_dict(),
         "infra": infra_payload,

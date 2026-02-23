@@ -50,6 +50,7 @@ QUARANTINE_CONFIG = {
         "QUOTE_TIMEOUT",
         "RPC_ERROR",
         "PRICE_SANITY_FAILED",  # v2.3.2: Auto-quarantine price sanity failures (Step 7)
+        "SUSPECT_LIQUIDITY",  # v2.6.2: Auto-quarantine suspect liquidity pools
     ],
     
     # Error codes that immediately quarantine (no threshold)
