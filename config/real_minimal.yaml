@@ -334,7 +334,8 @@ notion_capital_usdc: "10000.000000"
 gas_usd_estimate: 0.10
 
 # Paper trading settings (M5)
-paper_size_usd: 1000
+# v2.5.2: Reduced from 1000 to 250 to lower ticks_crossed and reduce SUSPECT_LIQUIDITY rejects
+paper_size_usd: 250
 paper_slippage_bps: 0  # 0 bps default - conservative for micro-spreads
 
 # Autosize configuration (M5)
@@ -383,10 +384,11 @@ discovery_dry_run: true
 discovery_runtime: false
 discovery_runtime_max_pairs: 20
 
-# v2.5.1: Cross-DEX requirement - prefer cross-DEX spreads over same-DEX fee-tier arb
-# When true, spreads.py will select buy/sell from different DEXes when possible
-# Same-DEX spreads will only be used if no cross-DEX alternative exists
-require_cross_dex: true
+# v2.5.1: Cross-DEX preference - prefer cross-DEX spreads over same-DEX fee-tier arb
+# When true, same-DEX signals are EXCLUDED (reduces included_pairs)
+# When false, cross-DEX is still PREFERRED but same-DEX signals remain INCLUDED
+# v2.5.2: Changed to false to preserve included_pairs diversity while keeping cross-DEX preference
+require_cross_dex: false
 
 # M4 markers - execution disabled
 execution_enabled: false

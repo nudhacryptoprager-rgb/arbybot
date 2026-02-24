@@ -216,3 +216,38 @@ class TestCrossDexPreference:
         assert sig["buy_dex"] == "uniswap_v3"
         assert sig["sell_dex"] == "sushiswap_v3"
         assert sig["is_same_dex"] is False
+    
+    def test_dual_cross_dex_routes_emitted(self):
+        """
+        v2.5.2: When emit_dual_routes=True (default), emit BOTH cross-DEX directions
+        (A->B and B->A) for each pair to boost route diversity.
+        """
+        from strategy.spreads import compute_spread_signals
+        
+        # Two DEXs with different prices - both directions should be profitable
+        # Uni: 1918 to 1925  |  Sushi: 1920 to 1932
+        # Direction 1: Buy Uni 1918, Sell Sushi 1932 = ~73 bps
+        # Direction 2: Buy Sushi 1920, Sell Uni 1925 = ~26 bps
+        quotes = [
+            make_quote("uniswap_v3", "1918.00", fee=500),
+            make_quote("uniswap_v3", "1925.00", fee=3000),
+            make_quote("sushiswap_v3", "1920.00", fee=500),
+            make_quote("sushiswap_v3", "1932.00", fee=3000),
+        ]
+        config = {"require_cross_dex": False, "min_spread_bps": 5, "emit_dual_routes": True}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        # Filter for cross-DEX signals only
+        cross_dex_signals = [s for s in signals if not s["is_same_dex"]]
+        
+        # Should have at least 2 cross-DEX signals (both directions)
+        assert len(cross_dex_signals) >= 2, \
+            f"Expected at least 2 cross-DEX signals, got {len(cross_dex_signals)}"
+        
+        # Verify both directions exist
+        routes = {(s["buy_dex"], s["sell_dex"]) for s in cross_dex_signals}
+        assert ("uniswap_v3", "sushiswap_v3") in routes, \
+            f"Missing Uni->Sushi route in {routes}"
+        assert ("sushiswap_v3", "uniswap_v3") in routes, \
+            f"Missing Sushi->Uni route in {routes}"

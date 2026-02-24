@@ -106,12 +106,13 @@ def compute_spread_signals(
             if len(quotes_for_pair) < 2:
                 continue
             
-            signal = _compute_pair_spread(
+            # v2.5.2: _compute_pair_spread returns a LIST of signals (0-2)
+            # This enables dual cross-DEX routes for diversity
+            signals = _compute_pair_spread(
                 pair, quotes_for_pair, config, current_block,
                 spread_threshold_bps, max_spread_bps_sanity, rejected_quotes
             )
-            if signal:
-                spread_signals.append(signal)
+            spread_signals.extend(signals)
         
         logger.info("Computed %d spread signals (threshold: %d bps)", 
                     len(spread_signals), spread_threshold_bps)
@@ -128,6 +129,7 @@ def _get_price(q: Dict[str, Any]) -> Decimal:
     return Decimal(str(q.get("price") or "0"))
 
 
+
 def _compute_pair_spread(
     pair: str,
     quotes_for_pair: List[Dict[str, Any]],
@@ -136,46 +138,61 @@ def _compute_pair_spread(
     spread_threshold_bps: int,
     max_spread_bps_sanity: int,
     rejected_quotes: List[Dict[str, Any]],
-) -> Dict[str, Any] | None:
+) -> List[Dict[str, Any]]:
     """
-    Compute spread signal for a single pair.
+    Compute spread signals for a single pair.
     
-    v2.5.1: When require_cross_dex=True, prefer cross-DEX combinations.
-    Will select best buy/sell pair from different DEXes when possible.
+    v2.5.2: ALWAYS prefer cross-DEX combinations. Returns a LIST of signals.
+    When emit_dual_routes=true (default), emits BOTH cross-DEX directions
+    if both are net-positive, enabling unique_routes_cross_dex >= 2.
     
     Returns:
-        Spread signal dict or None if no valid spread found
+        List of spread signal dicts (0-2 signals per pair)
     """
-    require_cross_dex = config.get("require_cross_dex", False)
+    signals = []
+    emit_dual_routes = config.get("emit_dual_routes", True)  # Default: emit both directions
     
-    # v2.5.1: Try cross-DEX first when required
-    if require_cross_dex:
-        cross_dex_result = _find_best_cross_dex_spread(quotes_for_pair, config)
-        if cross_dex_result:
-            best_buy, best_sell, buy_price, sell_price = cross_dex_result
+    # v2.5.2: ALWAYS try cross-DEX first (not just when require_cross_dex=True)
+    all_cross_dex = _find_all_cross_dex_spreads(quotes_for_pair, config, spread_threshold_bps)
+    
+    if all_cross_dex:
+        for result in all_cross_dex:
+            best_buy, best_sell, buy_price, sell_price = result
             spread_bps_decimal = (sell_price - buy_price) / buy_price * Decimal("10000")
             
-            # Only use cross-DEX if spread is positive and meaningful
-            if spread_bps_decimal >= spread_threshold_bps:
-                # Check pool addresses
-                buy_pool = best_buy.get("pool_address")
-                sell_pool = best_sell.get("pool_address")
-                if buy_pool and sell_pool:
-                    # Check sanity
-                    if abs(spread_bps_decimal) <= max_spread_bps_sanity:
-                        spread_bps = int(spread_bps_decimal)
-                        logger.info(
-                            "Spread calc (CROSS-DEX): %s buy=%s@%s sell=%s@%s spread_bps=%s threshold=%s",
-                            pair, buy_price, best_buy.get("dex_id"), 
-                            sell_price, best_sell.get("dex_id"),
-                            spread_bps_decimal, spread_threshold_bps
-                        )
-                        return _build_spread_signal(
-                            pair, best_buy, best_sell, buy_price, sell_price,
-                            spread_bps_decimal, spread_bps, config, current_block
-                        )
+            # Check sanity
+            if abs(spread_bps_decimal) > max_spread_bps_sanity:
+                continue
+            
+            # Check pool addresses
+            buy_pool = best_buy.get("pool_address")
+            sell_pool = best_sell.get("pool_address")
+            if not buy_pool or not sell_pool:
+                continue
+            
+            spread_bps = int(spread_bps_decimal)
+            route = f"{best_buy.get('dex_id')}->{best_sell.get('dex_id')}"
+            logger.info(
+                "Spread calc (CROSS-DEX %s): %s buy=%s@%s sell=%s@%s spread_bps=%s",
+                route, pair, buy_price, best_buy.get("dex_id"), 
+                sell_price, best_sell.get("dex_id"), spread_bps_decimal
+            )
+            
+            signal = _build_spread_signal(
+                pair, best_buy, best_sell, buy_price, sell_price,
+                spread_bps_decimal, spread_bps, config, current_block
+            )
+            signals.append(signal)
+            
+            # If not emitting dual routes, stop after first cross-DEX signal
+            if not emit_dual_routes:
+                break
+        
+        # If we got any cross-DEX signals, return them (don't fall back to same-DEX)
+        if signals:
+            return signals
     
-    # Fallback: standard logic (min/max regardless of DEX)
+    # Fallback: standard logic (min/max regardless of DEX) - only if no cross-DEX found
     sorted_by_price = sorted(quotes_for_pair, key=_get_price)
     best_buy = sorted_by_price[0]
     best_sell = sorted_by_price[-1]
@@ -184,14 +201,14 @@ def _compute_pair_spread(
     sell_price = _get_price(best_sell)
     
     if buy_price <= 0 or sell_price <= 0:
-        return None
+        return []
     
     # Verify pool addresses
     buy_pool = best_buy.get("pool_address")
     sell_pool = best_sell.get("pool_address")
     if not buy_pool or not sell_pool:
         logger.warning("INVALID_SPREAD: %s - missing pool address", pair)
-        return None
+        return []
     
     # Calculate spread in bps
     spread_bps_decimal = (sell_price - buy_price) / buy_price * Decimal("10000")
@@ -211,39 +228,38 @@ def _compute_pair_spread(
             "max_allowed_bps": max_spread_bps_sanity,
             "error": f"Spread {spread_bps_decimal} bps exceeds sanity limit",
         })
-        return None
+        return []
     
     logger.info(
-        "Spread calc: %s buy=%s sell=%s spread_bps=%s threshold=%s",
+        "Spread calc (FALLBACK): %s buy=%s sell=%s spread_bps=%s threshold=%s",
         pair, buy_price, sell_price, spread_bps_decimal, spread_threshold_bps
     )
     
     # Only record if spread exceeds threshold
     if abs(spread_bps_decimal) < spread_threshold_bps:
-        return None
+        return []
     
-    return _build_spread_signal(
+    signal = _build_spread_signal(
         pair, best_buy, best_sell, buy_price, sell_price,
         spread_bps_decimal, spread_bps, config, current_block
     )
+    return [signal]
 
 
-def _find_best_cross_dex_spread(
+def _find_all_cross_dex_spreads(
     quotes_for_pair: List[Dict[str, Any]],
     config: Dict[str, Any],
-) -> Tuple[Dict[str, Any], Dict[str, Any], Decimal, Decimal] | None:
+    spread_threshold_bps: int,
+) -> List[Tuple[Dict[str, Any], Dict[str, Any], Decimal, Decimal]]:
     """
-    Find the best cross-DEX spread combination.
+    Find ALL profitable cross-DEX spread combinations.
     
-    v2.5.1: Returns (best_buy, best_sell, buy_price, sell_price) where
-    best_buy and best_sell are from different DEXes.
-    
-    Strategy: For each unique DEX pair (dex_a, dex_b where dex_a != dex_b),
-    find min price in dex_a and max price in dex_b, compute spread.
-    Return the combination with the highest spread.
+    v2.5.2: Returns a list of (best_buy, best_sell, buy_price, sell_price) tuples
+    for BOTH directions (A->B and B->A) when both are profitable.
+    This enables unique_routes_cross_dex >= 2 in rolling metrics.
     
     Returns:
-        Tuple of (best_buy, best_sell, buy_price, sell_price) or None
+        List of tuples, each representing a profitable cross-DEX spread
     """
     # Group quotes by DEX
     quotes_by_dex: Dict[str, List[Dict[str, Any]]] = {}
@@ -256,7 +272,50 @@ def _find_best_cross_dex_spread(
     # Need at least 2 different DEXes for cross-DEX
     dex_ids = list(quotes_by_dex.keys())
     if len(dex_ids) < 2:
-        return None
+        return []
+    
+    results = []
+    seen_routes = set()
+    
+    # Find all profitable cross-DEX combinations (both directions)
+    for buy_dex in dex_ids:
+        for sell_dex in dex_ids:
+            if buy_dex == sell_dex:
+                continue
+            
+            route = f"{buy_dex}->{sell_dex}"
+            if route in seen_routes:
+                continue
+            
+            # Find min price in buy_dex (where we buy)
+            buy_quotes = quotes_by_dex[buy_dex]
+            buy_quote = min(buy_quotes, key=_get_price)
+            buy_price = _get_price(buy_quote)
+            
+            # Find max price in sell_dex (where we sell)
+            sell_quotes = quotes_by_dex[sell_dex]
+            sell_quote = max(sell_quotes, key=_get_price)
+            sell_price = _get_price(sell_quote)
+            
+            if buy_price <= 0 or sell_price <= 0:
+                continue
+            
+            # Check pool addresses
+            if not buy_quote.get("pool_address") or not sell_quote.get("pool_address"):
+                continue
+            
+            # Calculate spread
+            spread = (sell_price - buy_price) / buy_price * Decimal("10000")
+            
+            # Only include if spread is positive and above threshold
+            if spread >= spread_threshold_bps:
+                results.append((buy_quote, sell_quote, buy_price, sell_price))
+                seen_routes.add(route)
+    
+    # Sort by spread (highest first)
+    results.sort(key=lambda r: (r[3] - r[2]) / r[2], reverse=True)
+    
+    return results
     
     best_result = None
     best_spread = Decimal("-999999")
