@@ -96,37 +96,46 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
     
     def test_run_dirs_pruned_to_limit(self):
         """
-        Verify that pruning logic keeps run directories under limit.
-        
-        With --prune-keep 50, there should never be more than 50 + N protected dirs.
+        Verify retention logic (prune_run_dirs.py) keeps run directories under the keep limit.
+
+        This must be deterministic and must NOT depend on the developer's local runtime artifacts
+        under data/runs/**.
         """
-        runs_dir = Path("data/runs")
-        
-        if not runs_dir.exists():
-            self.skipTest("Runs directory does not exist")
-        
-        # Count ci_m5_gate_* directories
-        scan_dirs = [d for d in runs_dir.iterdir() 
-                     if d.is_dir() and d.name.startswith("ci_m5_gate_")
-                     and not d.name.endswith("_offline")]
-        
-        # Offline dirs are separate
-        offline_dirs = [d for d in runs_dir.iterdir()
-                        if d.is_dir() and d.name.startswith("ci_m5_gate_offline")]
-        
-        # Protected directories
-        protected = ["_rolling", "_incidents", "_cache"]
-        
-        # After pruning with --prune-keep 50, we expect at most ~55-60 dirs
-        # (allowing for protected + some margin)
-        max_expected = 70  # Conservative limit
-        
-        if len(scan_dirs) > max_expected:
-            self.fail(
-                f"Too many scan directories: {len(scan_dirs)}. "
-                f"Expected <= {max_expected} with --prune-keep 50. "
-                f"Check if pruning is working correctly."
-            )
+        from scripts import prune_run_dirs as pruner
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_dir = Path(tmpdir) / "data" / "runs"
+            runs_dir.mkdir(parents=True)
+
+            # Protected directories (never deleted)
+            for name in ("_rolling", "_incidents", "_cache"):
+                (runs_dir / name).mkdir(parents=True, exist_ok=True)
+
+            # Create 60 dummy runDirs with deterministic mtimes.
+            base_ts = 1_700_000_000
+            for i in range(60):
+                d = runs_dir / f"ci_m5_gate_20260223_{i:06d}"
+                d.mkdir(parents=True, exist_ok=True)
+                ts = base_ts + i
+                os.utime(d, (ts, ts))
+
+            # Patch RUNS_DIR so we never touch the real data/runs/** during unit tests.
+            with patch.object(pruner, "RUNS_DIR", runs_dir), \
+                 patch.object(pruner, "get_protected_from_latest", return_value=set()), \
+                 patch.object(pruner, "get_protected_from_status_md", return_value=set()):
+                result = pruner.prune_run_dirs(keep=50, dry_run=False, yes=True)
+
+            remaining = [
+                d for d in runs_dir.iterdir()
+                if d.is_dir() and d.name.startswith("ci_m5_gate_")
+            ]
+
+            self.assertEqual(result["kept_count"], 50)
+            self.assertEqual(result["delete_count"], 10)
+            self.assertLessEqual(len(remaining), 50)
+            self.assertTrue((runs_dir / "_rolling").exists())
+            self.assertTrue((runs_dir / "_incidents").exists())
+            self.assertTrue((runs_dir / "_cache").exists())
 
 
 class TestRoundtripAlertFile(unittest.TestCase):
