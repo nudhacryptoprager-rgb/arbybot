@@ -164,3 +164,26 @@ All gates validate using `core/artifact_invariants.py`:
 | `scripts/make_golden_daily_report.py` | Golden update script |
 | `core/artifact_invariants.py` | Cross-artifact validation |
 | `docs/artifacts/m5_golden/` | Golden reference artifacts |
+
+---
+
+## Risks
+
+**Evidence (ci_m5_gate_20260224_141638 - capstone)**:
+- `daily_report_*.json` generated with `schema_version=3.2.0`
+- `health` section present, `autosize` enabled
+- cross-artifact invariants validated
+
+**Blockers**:
+- M5 is blocked by M4 online proof (M5 is reporting layer, not judgment)
+
+---
+
+## Next Steps
+
+**Current Stage**: DONE (feature-complete), BLOCKED by M4 online
+
+**Next Steps**:
+1. Wait for M4.2 roundtrip profit to unblock
+2. Add optional alerting (Telegram/Slack) when profitable roundtrip observed
+3. Add optional dashboard via simple metrics endpoint

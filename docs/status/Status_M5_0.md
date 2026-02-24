@@ -181,6 +181,20 @@ All gates use shared invariants from `core/artifact_invariants.py`.
 
 ---
 
+## Risks
+
+**Evidence (ci_m5_gate_20260224_141638 - capstone)**:
+- M5_0 gate: PASS (offline and online)
+- `runs_in_window=184`, `agg_status=PASS`
+- `multicall field_success_rates` validated
+- `preflight_evidence.enabled=true`, `gas_estimate_source=quoter_v2`
+
+**Blockers**:
+- None for M5_0 gate itself
+- discovery_runtime mode requires anchor/quoter updates before production use
+
+---
+
 ## Next steps/focus
 
 - Docs drift closure: enforce DOCS_POLICY on Status + archive map fixed (see `docs/DOCS_POLICY.md`, `docs/status/ARCHIVE_MAP.md`)
