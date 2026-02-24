@@ -342,15 +342,20 @@ def evaluate_roundtrip_candidates(
             logger.debug("Missing quotes for roundtrip: buy=%s sell=%s", buy_key, sell_key)
             continue
         
-        # v2.1.0: Create leg2 callback if factory provided
+        # v2.2.0 FIX: Correct roundtrip direction
+        # For profitable arbitrage:
+        # - Leg1: Sell token_in on sell_dex (HIGHER price = get MORE quote tokens)
+        # - Leg2: Buy token_in on buy_dex (LOWER price = get MORE base tokens per quote)
+        # So use sell_quote for leg1, buy_quote for leg2 callback
         leg2_callback = None
         if leg2_quote_callback_factory:
             try:
-                leg2_callback = leg2_quote_callback_factory(sell_quote)
+                leg2_callback = leg2_quote_callback_factory(buy_quote)  # v2.2.0: Use buy_quote for leg2
             except Exception as e:
                 logger.debug("Leg2 callback factory failed: %s", e)
         
-        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei, leg2_quote_callback=leg2_callback, l1_cost_wei=l1_cost_wei, l1_cost_source=l1_cost_source)
+        # v2.2.0: Swap order - sell_quote for leg1, buy_quote for fallback leg2defensively
+        result = simulate_roundtrip(sell_quote, buy_quote, gas_price_wei, leg2_quote_callback=leg2_callback, l1_cost_wei=l1_cost_wei, l1_cost_source=l1_cost_source)
         results.append(result)
     
     return results

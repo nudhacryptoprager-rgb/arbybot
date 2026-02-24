@@ -4,31 +4,27 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-24T15:50:23Z
-run_id: data/runs/ci_m5_gate_20260224_164942
-mode: ONLINE (2h continuous scan)
+timestamp_utc: 2026-02-24T21:15:00Z
+run_id: data/runs/ci_m5_gate_20260224_210152
+mode: ONLINE (roundtrip fix verification)
 artifact_mode: rolling
-config: config/real_minimal.yaml
+config: config/real_nonstop.yaml
 code_identity:
-  primary: ts:2026-02-24T15:50:23+00:00
+  primary: ts:2026-02-24T21:15:00+00:00
   dirty: true
-  desc: 2h scan completed - 200 runs, paper profit $991.84, roundtrip=NOT_PROFITABLE
+  desc: v2.2.0 FIX - roundtrip direction corrected, LP fees identified as root cause
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): 2h continuous scan to build rolling window + analyze roundtrip profitability
+goal (Roadmap пункт): Fix roundtrip evaluation direction bug + identify LP fee root cause
 change_summary:
-  - SCAN: 2h scan completed (200 runs in rolling window)
-  - PAPER: total_net_usdc=$991.84, avg=$4.96/run, 199/200 runs profitable
-  - ROUNDTRIP: NOT_PROFITABLE (no real arb opportunity found)
-  - SPREADS: avg ~22 bps, typical signal net profit ~$0.46
-  - ANALYSIS: Root cause analysis of why roundtrip is unprofitable added
+  - BUG FIX: engine/roundtrip.py v2.2.0 - roundtrip was evaluating BACKWARDS
+  - ANALYSIS: LP fees (60 bps on 0.3% pools) exceed typical spreads (25-35 bps)
+  - SOLUTION: Target 0.05% or 0.01% fee tier pools where 20 bps spread is profitable
+  - CONFIG: real_nonstop.yaml (paper_size=1000, min_spread=20)
+  - TESTS: All 1063 tests pass after fix
 touched_files:
+  - engine/roundtrip.py (v2.2.0 fix - swap sell_quote/buy_quote order)
   - docs/DEV_REPORT_LATEST.md (analysis update)
-  - docs/status/Status_M5.md, Status_M5_0.md (section fixes)
-touched_files:
-  - config/real_minimal.yaml (fee_tiers expansion)
-  - strategy/spreads.py (v2.5.2 dual cross-dex routes)
-  - tests/unit/test_same_dex_policy.py (dual-route test)
 
 ## 2) Commands Executed (лише факти)
 
@@ -141,79 +137,106 @@ pair diversity: RESOLVED (8 pairs >= 8 target)
 
 ## 8) Blockers / Root Cause Analysis
 
-**Why ROUNDTRIP is NOT_PROFITABLE (0 profitable after 200 runs, 2h scan):**
+### v2.2.0 BUG FIX: Roundtrip Direction Was BACKWARDS
+
+**Problem Found:** The roundtrip simulation was using DEXes in the WRONG order:
+- **Old (broken):** Leg1 on buy_dex (cheap), Leg2 on sell_dex (expensive)  
+  - Result: WETH → USDC @ $1846 (sell low) → USDC → WETH @ $1851 (buy high) = **LOSS**
+- **Fixed (v2.2.0):** Leg1 on sell_dex (expensive), Leg2 on buy_dex (cheap)
+  - Result: WETH → USDC @ $1851 (sell high) → USDC → WETH @ $1846 (buy low) = **PROFIT**
+
+**Code Fix:** `engine/roundtrip.py` lines 348-358:
+```python
+# v2.2.0 FIX: Correct roundtrip direction
+# - Leg1: sell on sell_dex (HIGHER price = get MORE quote tokens)
+# - Leg2: buy on buy_dex (LOWER price = get MORE base tokens per quote)
+leg2_callback = leg2_quote_callback_factory(buy_quote)  # was sell_quote
+result = simulate_roundtrip(sell_quote, buy_quote, ...)  # swapped args
+```
+
+### NEW ROOT CAUSE: LP Fees Exceed Spreads
+
+After fixing the direction bug, roundtrip STILL shows negative profit. Root cause:
+
+**LP Fee Math:**
+- V3 Pool fee tier 3000 = 0.30% per swap
+- Roundtrip incurs fee on BOTH legs: 2 × 0.30% = 0.60% = **60 bps**
+- Typical spread observed: 25-35 bps
+- Net after fees: 25 - 60 = **-35 bps** (LOSS)
+
+**Verification:**
+- WETH/USDC spread: 25.4 bps
+- Roundtrip gross_pnl observed: -37.69 bps  
+- Matches: 25 bps spread - 60 bps fees = -35 bps ± slippage ✓
+
+**Profitability Threshold:**
+```
+MIN_PROFITABLE_SPREAD = 2 × pool_fee_bps + gas_bps + margin
+For 0.30% pools: MIN = 60 + 5 + 5 = ~70 bps
+For 0.05% pools: MIN = 10 + 5 + 5 = ~20 bps
+```
+
+### Original Root Causes (Still Valid):
 
 1. **Insufficient Spread Magnitude**
-   - Typical spread: ~22 bps ($0.56 gross on $250)
-   - After leg1 gas ($0.10): $0.46 net
-   - Leg2 re-quote would add: gas ($0.10) + slippage (~5 bps = $0.125)
-   - Roundtrip net: ~$0.23 - but market slippage variance often wipes this out
-   - **Root**: Spreads 20-30 bps are marginal; need 50+ bps for robust roundtrip profit
+   - Typical spread: ~22-35 bps
+   - Minimum for profitability: ~70 bps on standard fee pools
+   - **Root**: Need spreads 2x larger than observed
 
-2. **Trade Size Too Small**
-   - paper_size_usd=250 → small absolute profit even at good spreads
-   - 22 bps × $250 = $0.55, insufficient to cover 2-leg execution costs
-   - **Root**: Profitable arb requires size $1000-5000+ or higher spread
+2. **Trade Size Too Small** (partially addressed)
+   - Increased from $250 → $1000 in real_nonstop.yaml
+   - Impact: Higher absolute profit per trade
+   
+3. **Market Efficiency (Arbitrum L2)**
+   - Low gas makes arb competitive
+   - MEV bots capture opportunities quickly
 
-3. **Same-DEX Route Dilution**
-   - Route `uniswap_v3->uniswap_v3` is fee-tier arb (500↔3000)
-   - These are NOT cross-DEX and have lower profit potential
-   - 1 of 3 routes is same-dex, inflating paper signals
-
-4. **Market Efficiency (Arbitrum L2)**
-   - Arbitrum has low gas (~$0.01/tx) making arb very competitive
-   - MEV bots capture most opportunities within 1-2 blocks
-   - By the time scanner observes spread, it may already be closed
-
-5. **Quoter Accuracy vs On-Chain Reality**
-   - quoter_v2 gives accurate estimates but market moves between quote and execution
-   - ~12.5% of signals have sign_mismatch (est positive → sim negative)
-   - **Root**: latency between observation and execution
-
-**Current Status:**
-- Paper profit: PROVEN ($991.84 / 200 runs)
-- Roundtrip profit: NOT_PROFITABLE (0/200)
-- M4.2 requires: profitable_count > 0 with ROUNDTRIP_CANONICAL
+4. **Pool Fee Tier Selection**
+   - Most pairs use 3000 fee tier (0.30%)
+   - Could target 500 fee tier pools (0.05%) for lower cost
+   - Need: 20 bps spread vs 70 bps
 
 ## 9) Solutions / Proposals (M4.2 Path Forward)
 
-**Option A: Increase Trade Size (Highest ROI)**
+### CRITICAL: Target Low-Fee Pools (Highest Priority)
+
+**Option A: Target 0.05% Fee Tier Pools (RECOMMENDED)**
+- Change pool discovery to prioritize fee_tier=500 pools
+- Profitability threshold drops from ~70 bps to ~20 bps
+- Impact: Many more opportunities become viable
+- Implementation: Modify pair configs to prefer fee_tier 500
+- Evidence: WBTC/WETH already has 500 tier active → check if profitable
+
+**Option B: Multi-Hop Routes via 0.01% Pools**
+- WETH/USDC has 0.01% (100) tier pools with deep liquidity
+- Roundtrip fee: 2 × 0.01% = 2 bps total
+- 25 bps spread - 2 bps fee = +23 bps profit!
+- Implementation: Add fee_tier 100 to config, verify pool liquidity
+- Risk: Concentrated liquidity pools may have higher slippage
+
+### Other Options (Lower Priority)
+
+**Option C: Increase Trade Size** (already done: $1000)
 - Change `paper_size_usd: 250` → `paper_size_usd: 1000`
-- Impact: Same spread (22 bps) yields $2.20 instead of $0.55
-- After 2-leg costs (~$0.35): ~$1.85 net profit
-- Risk: Higher capital at risk, but more robust signals
-- Implementation: 1 line in `config/real_minimal.yaml`
+- Impact: Higher absolute profit, better signal/noise
+- Status: IMPLEMENTED in real_nonstop.yaml
 
-**Option B: Add 3rd DEX (Camelot V3)**
-- Camelot is popular Arbitrum native DEX with different liquidity
-- May have price discrepancy vs Uni/Sushi
-- Implementation: ~2-3 days (adapter + config + tests)
-- Impact: More routes, higher chance of cross-DEX spread
-
-**Option C: Expand Pair Universe**
-- Add volatile pairs: PENDLE/WETH, MAGIC/WETH, GMX/WETH
-- Higher volatility = higher spread probability
-- Risk: Need to fix quoter_v2 for these pairs (currently slot0 fallback)
-- Implementation: Fix quoter + add pairs to config
-
-**Option D: Lower Spread Threshold**
-- Current: 5 bps minimum
-- Lower to 3 bps to capture more marginal opportunities
-- Risk: More noise, lower hit rate
-- Impact: Unlikely to help for roundtrip (still gas-bound)
+**Option D: Add 3rd DEX (Camelot V3)**
+- May have different liquidity profiles
+- Implementation: ~2-3 days
+- Impact: More routes, may find untapped spreads
 
 **Option E: Real Execution Test (M4.3)**
-- Skip waiting for profitable roundtrip simulation
-- Execute 1 real trade with tiny size ($10) to prove execution path
-- Measure actual on-chain slippage and gas
-- Risk: Lose ~$0.20-$0.50 on unprofitable trade
-- Benefit: Proves execution layer, moves to M4.3
+- Skip waiting for sim-profitable roundtrip
+- Execute 1 real tiny trade ($10) to prove execution path
+- Risk: Lose ~$0.50 max
+- Benefit: Proves execution layer works
 
 **Recommended Path:**
-1. Implement Option A (paper_size_usd=1000) - quick win
-2. Run 1h scan with new size
-3. If roundtrip still unprofitable, consider Option E (real execution test)
-4. Parallel: Start Option B (Camelot adapter) for more routes
+1. **IMMEDIATE:** Enable 500 fee tier pools for all pairs
+2. **IMMEDIATE:** Check if any 100 fee tier pools are available
+3. **RUN:** 30min scan with low-fee pools
+4. **IF STILL NO PROFIT:** Consider Option E (real execution test)
 
 ## 10) 2h Scan Summary (ci_m5_gate_20260224_164942)
 
