@@ -383,6 +383,11 @@ discovery_dry_run: true
 discovery_runtime: false
 discovery_runtime_max_pairs: 20
 
+# v2.5.1: Cross-DEX requirement - prefer cross-DEX spreads over same-DEX fee-tier arb
+# When true, spreads.py will select buy/sell from different DEXes when possible
+# Same-DEX spreads will only be used if no cross-DEX alternative exists
+require_cross_dex: true
+
 # M4 markers - execution disabled
 execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4

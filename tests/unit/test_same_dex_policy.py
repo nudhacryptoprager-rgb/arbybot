@@ -126,3 +126,93 @@ class TestSameDexExclusion:
         assert sig["is_same_dex"] is False
         assert sig["is_same_dex_excluded"] is False
         assert "SAME_DEX_EXCLUDED" not in sig["confidence_reasons"]
+
+
+class TestCrossDexPreference:
+    """Tests for cross-dex preference when require_cross_dex=True.
+    
+    v2.5.1: When require_cross_dex=True, the spread computation should
+    actively prefer cross-DEX combinations over same-DEX fee-tier arbs.
+    """
+    
+    def test_cross_dex_chosen_over_same_dex_when_both_exist(self):
+        """
+        When require_cross_dex=True and both same-dex and cross-dex alternatives exist,
+        the cross-dex combination should be chosen (buy_dex != sell_dex).
+        """
+        from strategy.spreads import compute_spread_signals
+        
+        # Create quotes where:
+        # - Same-DEX spread (uniswap 500->3000): 1920->1930 = 52 bps
+        # - Cross-DEX spread (uniswap->sushiswap): 1920->1928 = 41 bps
+        # With require_cross_dex=True, should choose cross-DEX even if smaller spread
+        quotes = [
+            make_quote("uniswap_v3", "1920.00", fee=500),    # Best buy
+            make_quote("uniswap_v3", "1930.00", fee=3000),   # Best sell (same-dex)
+            make_quote("sushiswap_v3", "1922.00", fee=500),  # Sushi buy
+            make_quote("sushiswap_v3", "1928.00", fee=3000), # Sushi sell (cross-dex option)
+        ]
+        config = {"require_cross_dex": True, "min_spread_bps": 5}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        assert len(signals) >= 1
+        sig = signals[0]
+        
+        # Should be cross-DEX
+        assert sig["buy_dex"] != sig["sell_dex"], \
+            f"Expected cross-DEX but got buy_dex={sig['buy_dex']}, sell_dex={sig['sell_dex']}"
+        assert sig["is_same_dex"] is False
+        assert sig["is_same_dex_excluded"] is False
+        assert "SAME_DEX_EXCLUDED" not in sig["confidence_reasons"]
+    
+    def test_same_dex_used_when_no_cross_dex_alternative(self):
+        """
+        When require_cross_dex=True but only one DEX has quotes,
+        same-DEX spread is used but marked as excluded.
+        """
+        from strategy.spreads import compute_spread_signals
+        
+        # Only uniswap quotes - no cross-dex possible
+        quotes = [
+            make_quote("uniswap_v3", "1920.00", fee=500),
+            make_quote("uniswap_v3", "1930.00", fee=3000),
+        ]
+        config = {"require_cross_dex": True, "min_spread_bps": 5}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        assert len(signals) >= 1
+        sig = signals[0]
+        
+        # Falls back to same-DEX, marked as excluded
+        assert sig["is_same_dex"] is True
+        assert sig["is_same_dex_excluded"] is True
+        assert sig["is_excluded_spread"] is True
+    
+    def test_cross_dex_best_spread_selected(self):
+        """
+        When require_cross_dex=True, selects the best cross-DEX spread
+        (buy from lowest price DEX, sell to highest price DEX).
+        """
+        from strategy.spreads import compute_spread_signals
+        
+        # Uniswap has lower buy price (1918), Sushi has higher sell price (1932)
+        # Best cross-DEX: Uniswap buy -> Sushi sell
+        quotes = [
+            make_quote("uniswap_v3", "1918.00", fee=500),    # Best buy (Uni)
+            make_quote("uniswap_v3", "1925.00", fee=3000),
+            make_quote("sushiswap_v3", "1920.00", fee=500),
+            make_quote("sushiswap_v3", "1932.00", fee=3000), # Best sell (Sushi)
+        ]
+        config = {"require_cross_dex": True, "min_spread_bps": 5}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        assert len(signals) >= 1
+        sig = signals[0]
+        
+        # Best cross-DEX: buy from uniswap_v3 at 1918, sell to sushiswap_v3 at 1932
+        assert sig["buy_dex"] == "uniswap_v3"
+        assert sig["sell_dex"] == "sushiswap_v3"
+        assert sig["is_same_dex"] is False

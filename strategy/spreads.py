@@ -140,9 +140,42 @@ def _compute_pair_spread(
     """
     Compute spread signal for a single pair.
     
+    v2.5.1: When require_cross_dex=True, prefer cross-DEX combinations.
+    Will select best buy/sell pair from different DEXes when possible.
+    
     Returns:
         Spread signal dict or None if no valid spread found
     """
+    require_cross_dex = config.get("require_cross_dex", False)
+    
+    # v2.5.1: Try cross-DEX first when required
+    if require_cross_dex:
+        cross_dex_result = _find_best_cross_dex_spread(quotes_for_pair, config)
+        if cross_dex_result:
+            best_buy, best_sell, buy_price, sell_price = cross_dex_result
+            spread_bps_decimal = (sell_price - buy_price) / buy_price * Decimal("10000")
+            
+            # Only use cross-DEX if spread is positive and meaningful
+            if spread_bps_decimal >= spread_threshold_bps:
+                # Check pool addresses
+                buy_pool = best_buy.get("pool_address")
+                sell_pool = best_sell.get("pool_address")
+                if buy_pool and sell_pool:
+                    # Check sanity
+                    if abs(spread_bps_decimal) <= max_spread_bps_sanity:
+                        spread_bps = int(spread_bps_decimal)
+                        logger.info(
+                            "Spread calc (CROSS-DEX): %s buy=%s@%s sell=%s@%s spread_bps=%s threshold=%s",
+                            pair, buy_price, best_buy.get("dex_id"), 
+                            sell_price, best_sell.get("dex_id"),
+                            spread_bps_decimal, spread_threshold_bps
+                        )
+                        return _build_spread_signal(
+                            pair, best_buy, best_sell, buy_price, sell_price,
+                            spread_bps_decimal, spread_bps, config, current_block
+                        )
+    
+    # Fallback: standard logic (min/max regardless of DEX)
     sorted_by_price = sorted(quotes_for_pair, key=_get_price)
     best_buy = sorted_by_price[0]
     best_sell = sorted_by_price[-1]
@@ -193,6 +226,72 @@ def _compute_pair_spread(
         pair, best_buy, best_sell, buy_price, sell_price,
         spread_bps_decimal, spread_bps, config, current_block
     )
+
+
+def _find_best_cross_dex_spread(
+    quotes_for_pair: List[Dict[str, Any]],
+    config: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any], Decimal, Decimal] | None:
+    """
+    Find the best cross-DEX spread combination.
+    
+    v2.5.1: Returns (best_buy, best_sell, buy_price, sell_price) where
+    best_buy and best_sell are from different DEXes.
+    
+    Strategy: For each unique DEX pair (dex_a, dex_b where dex_a != dex_b),
+    find min price in dex_a and max price in dex_b, compute spread.
+    Return the combination with the highest spread.
+    
+    Returns:
+        Tuple of (best_buy, best_sell, buy_price, sell_price) or None
+    """
+    # Group quotes by DEX
+    quotes_by_dex: Dict[str, List[Dict[str, Any]]] = {}
+    for q in quotes_for_pair:
+        dex_id = q.get("dex_id", "unknown")
+        if dex_id not in quotes_by_dex:
+            quotes_by_dex[dex_id] = []
+        quotes_by_dex[dex_id].append(q)
+    
+    # Need at least 2 different DEXes for cross-DEX
+    dex_ids = list(quotes_by_dex.keys())
+    if len(dex_ids) < 2:
+        return None
+    
+    best_result = None
+    best_spread = Decimal("-999999")
+    
+    # Find best cross-DEX combination
+    for buy_dex in dex_ids:
+        for sell_dex in dex_ids:
+            if buy_dex == sell_dex:
+                continue
+            
+            # Find min price in buy_dex (where we buy)
+            buy_quotes = quotes_by_dex[buy_dex]
+            buy_quote = min(buy_quotes, key=_get_price)
+            buy_price = _get_price(buy_quote)
+            
+            # Find max price in sell_dex (where we sell)
+            sell_quotes = quotes_by_dex[sell_dex]
+            sell_quote = max(sell_quotes, key=_get_price)
+            sell_price = _get_price(sell_quote)
+            
+            if buy_price <= 0 or sell_price <= 0:
+                continue
+            
+            # Check pool addresses
+            if not buy_quote.get("pool_address") or not sell_quote.get("pool_address"):
+                continue
+            
+            # Calculate spread
+            spread = (sell_price - buy_price) / buy_price * Decimal("10000")
+            
+            if spread > best_spread:
+                best_spread = spread
+                best_result = (buy_quote, sell_quote, buy_price, sell_price)
+    
+    return best_result
 
 
 def _build_spread_signal(
