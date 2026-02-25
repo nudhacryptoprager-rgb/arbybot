@@ -38,6 +38,12 @@ FACTORY_ADDRESSES: Dict[str, Dict[str, str]] = {
         "uniswap_v3": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
         "uniswap_v2": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
     },
+    "linea": {
+        "lynex_v3": "0x622b2c98123D303ae067DB4925CD6282B3A08D0F",  # Algebra adapter
+    },
+    "mantle": {
+        "agni_v3": "0x25780dc8Fc3cfBD75F33bFDAB65e969b603b2035",  # Uniswap V3 fork
+    },
 }
 
 

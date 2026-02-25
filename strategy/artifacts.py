@@ -181,6 +181,9 @@ def build_truth_data(
             "gas_usd_estimate": config.get("gas_usd_estimate", 0.10),
             "paper_slippage_bps": config.get("paper_slippage_bps", 0),
             "autosize": config.get("autosize", {}),
+            # v2.2.1: Config transparency for reproducibility
+            "require_cross_dex": config.get("require_cross_dex", False),
+            "config_path": config.get("_config_path", None),
         },
         "quotes_total": stats["quotes_total"],
         "quotes_fetched": stats["quotes_fetched"],

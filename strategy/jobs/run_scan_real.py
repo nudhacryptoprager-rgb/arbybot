@@ -537,24 +537,35 @@ def run_scan(
             # v2.2.0: Filter opportunities where gross spread covers LP fees
             # LP fee per leg = fee_tier / 100 (e.g., 500 -> 5 bps)
             # Roundtrip LP cost = buy_fee/100 + sell_fee/100
-            def lp_fee_viable(opp) -> bool:
+            # NOTE: opps_list contains dicts (from to_dict()), not Opportunity objects
+            def lp_fee_viable(opp: dict) -> bool:
                 """Check if gross spread covers roundtrip LP fees."""
                 try:
-                    lp_bps = (opp.buy_fee + opp.sell_fee) / 100
-                    return float(opp.gross_spread_bps) > lp_bps
+                    lp_bps = (opp.get("buy_fee", 0) + opp.get("sell_fee", 0)) / 100
+                    return float(opp.get("gross_spread_bps", 0)) > lp_bps
                 except Exception:
                     return True  # Allow on error (conservative)
             
-            # Consider more candidates (10), filter by LP fee viability, take top 5
-            lp_viable_opps = [o for o in opps_list[:10] if lp_fee_viable(o)][:5]
+            # v2.2.1: Roundtrip MUST be cross-DEX (same-DEX fee-tier arb not viable as roundtrip)
+            def is_cross_dex(opp: dict) -> bool:
+                """Check if opportunity is cross-DEX (buy_dex != sell_dex)."""
+                return opp.get("buy_dex") != opp.get("sell_dex")
+            
+            # v2.2.1: Combined filter: cross-DEX AND LP fee viable
+            def roundtrip_eligible(opp: dict) -> bool:
+                return is_cross_dex(opp) and lp_fee_viable(opp)
+            
+            # Consider more candidates (10), filter by eligibility, take top 5
+            eligible_opps = [o for o in opps_list[:10] if roundtrip_eligible(o)][:5]
             stats["roundtrip_lp_filter"] = {
                 "candidates_considered": min(10, len(opps_list)),
+                "cross_dex_count": len([o for o in opps_list[:10] if is_cross_dex(o)]),
                 "lp_viable_count": len([o for o in opps_list[:10] if lp_fee_viable(o)]),
-                "passed_to_roundtrip": len(lp_viable_opps),
+                "passed_to_roundtrip": len(eligible_opps),
             }
             
             roundtrip_results = evaluate_roundtrip_candidates(
-                opportunities=lp_viable_opps,
+                opportunities=eligible_opps,
                 buy_quotes_by_key=quotes_by_key,
                 sell_quotes_by_key=quotes_by_key,
                 gas_price_wei=live_gas_price_wei,
@@ -871,6 +882,8 @@ def run_scanner(
                 with open(cfgp, "r", encoding="utf-8") as f:
                     file_cfg = yaml.safe_load(f) or {}
                 config.update(file_cfg)
+                # v2.2.1: Preserve config path for artifact transparency
+                config["_config_path"] = str(cfgp)
             except Exception as e:
                 logger.warning(f"Could not load config {cfgp}: {e}")
     
@@ -913,6 +926,8 @@ def main() -> int:
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     file_cfg = yaml.safe_load(f) or {}
                 config.update(file_cfg)
+                # v2.2.1: Preserve config path for artifact transparency
+                config["_config_path"] = str(cfg_path)
             except Exception as e:
                 logger.warning(f"Could not load config {cfg_path}: {e}")
     

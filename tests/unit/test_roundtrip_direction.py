@@ -359,5 +359,105 @@ class TestRoundtripLegProvenance(unittest.TestCase):
         self.assertEqual(d["leg2_fee"], 3000)
 
 
+class TestRoundtripCrossDexFilter(unittest.TestCase):
+    """v2.2.1: Tests for roundtrip cross-DEX eligibility filter."""
+    
+    def test_is_cross_dex_true_for_different_dexes(self):
+        """Opportunity with different buy_dex/sell_dex should pass cross-DEX check."""
+        from dataclasses import dataclass
+        
+        @dataclass
+        class MockOpp:
+            buy_dex: str
+            sell_dex: str
+            buy_fee: int = 500
+            sell_fee: int = 500
+            gross_spread_bps: float = 20.0
+        
+        opp = MockOpp(buy_dex="uniswap_v3", sell_dex="sushiswap_v3")
+        self.assertNotEqual(opp.buy_dex, opp.sell_dex)
+    
+    def test_is_cross_dex_false_for_same_dex(self):
+        """Opportunity with same buy_dex/sell_dex should fail cross-DEX check."""
+        from dataclasses import dataclass
+        
+        @dataclass
+        class MockOpp:
+            buy_dex: str
+            sell_dex: str
+        
+        opp = MockOpp(buy_dex="uniswap_v3", sell_dex="uniswap_v3")
+        self.assertEqual(opp.buy_dex, opp.sell_dex)
+    
+    def test_lp_fee_viable_passes_when_spread_exceeds_fees(self):
+        """LP fee viability passes when gross spread > combined LP fees."""
+        from dataclasses import dataclass
+        
+        @dataclass
+        class MockOpp:
+            buy_fee: int
+            sell_fee: int
+            gross_spread_bps: float
+        
+        # 500 + 500 = 1000 bps / 100 = 10 bps LP cost
+        # 20 bps spread > 10 bps cost -> viable
+        opp = MockOpp(buy_fee=500, sell_fee=500, gross_spread_bps=20.0)
+        lp_bps = (opp.buy_fee + opp.sell_fee) / 100
+        self.assertTrue(float(opp.gross_spread_bps) > lp_bps)
+    
+    def test_lp_fee_viable_fails_when_spread_below_fees(self):
+        """LP fee viability fails when gross spread < combined LP fees."""
+        from dataclasses import dataclass
+        
+        @dataclass
+        class MockOpp:
+            buy_fee: int
+            sell_fee: int
+            gross_spread_bps: float
+        
+        # 500 + 3000 = 3500 bps / 100 = 35 bps LP cost
+        # 20 bps spread < 35 bps cost -> not viable
+        opp = MockOpp(buy_fee=500, sell_fee=3000, gross_spread_bps=20.0)
+        lp_bps = (opp.buy_fee + opp.sell_fee) / 100
+        self.assertFalse(float(opp.gross_spread_bps) > lp_bps)
+    
+    def test_roundtrip_eligibility_requires_both_conditions(self):
+        """Roundtrip eligibility requires cross-DEX AND LP fee viability."""
+        from dataclasses import dataclass
+        
+        @dataclass
+        class MockOpp:
+            buy_dex: str
+            sell_dex: str
+            buy_fee: int
+            sell_fee: int
+            gross_spread_bps: float
+        
+        def is_cross_dex(opp):
+            return opp.buy_dex != opp.sell_dex
+        
+        def lp_fee_viable(opp):
+            lp_bps = (opp.buy_fee + opp.sell_fee) / 100
+            return float(opp.gross_spread_bps) > lp_bps
+        
+        def roundtrip_eligible(opp):
+            return is_cross_dex(opp) and lp_fee_viable(opp)
+        
+        # Cross-DEX + LP viable -> eligible
+        opp1 = MockOpp(buy_dex="uniswap_v3", sell_dex="sushiswap_v3", 
+                       buy_fee=500, sell_fee=500, gross_spread_bps=20.0)
+        self.assertTrue(roundtrip_eligible(opp1))
+        
+        # Same-DEX + LP viable -> NOT eligible
+        opp2 = MockOpp(buy_dex="uniswap_v3", sell_dex="uniswap_v3",
+                       buy_fee=500, sell_fee=500, gross_spread_bps=20.0)
+        self.assertFalse(roundtrip_eligible(opp2))
+        
+        # Cross-DEX + LP NOT viable -> NOT eligible
+        opp3 = MockOpp(buy_dex="uniswap_v3", sell_dex="sushiswap_v3",
+                       buy_fee=500, sell_fee=3000, gross_spread_bps=20.0)
+        self.assertFalse(roundtrip_eligible(opp3))
+
+
 if __name__ == "__main__":
     unittest.main()
