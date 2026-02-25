@@ -409,6 +409,16 @@ def _build_spread_signal(
     is_slot0_only = buy_quote_source == "slot0" or sell_quote_source == "slot0"
     is_quoter_v2_both = buy_quote_source == "quoter_v2" and sell_quote_source == "quoter_v2"
     
+    # v2.2.0: LP fee tracking for roundtrip estimation
+    # Fee tier: 500 = 0.05% = 5 bps, 3000 = 0.30% = 30 bps, 100 = 0.01% = 1 bps
+    buy_fee = best_buy.get("fee", 3000)  # default to 3000 if not specified
+    sell_fee = best_sell.get("fee", 3000)
+    lp_fee_bps_roundtrip = float(buy_fee + sell_fee) / 100  # roundtrip touches both pools
+    lp_fee_usdc_est = float(paper_size_usd) * lp_fee_bps_roundtrip / 10000
+    
+    # v2.2.0: Updated net estimate includes LP fees (more realistic for roundtrip)
+    net_pnl_after_lp_fee_usdc = net_pnl_usdc_estimate - lp_fee_usdc_est
+    
     # v2.5.0: Same-dex detection (fee-tier arb within same DEX)
     is_same_dex = buy_dex == sell_dex
     is_same_dex_excluded = is_same_dex and config.get("require_cross_dex", False)
@@ -448,6 +458,9 @@ def _build_spread_signal(
         "sell_price": str(round(sell_price, 6)),
         "buy_pool": best_buy.get("pool_address"),
         "sell_pool": best_sell.get("pool_address"),
+        # v2.2.0: Buy/sell fee tiers for LP fee estimation
+        "buy_fee": buy_fee,
+        "sell_fee": sell_fee,
         "price_direction": "quote_out_per_1_base_in",
         "price_note": f"1 {token_in} = X {token_out}",
         "spread_bps_exact": round(float(spread_bps_decimal), 4),
@@ -466,6 +479,11 @@ def _build_spread_signal(
         "slippage_source": slippage_source,
         "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
         "is_net_positive_est": net_pnl_usdc_estimate > 0,
+        # v2.2.0: LP fee estimation for roundtrip-aware filtering
+        "lp_fee_bps_roundtrip": round(lp_fee_bps_roundtrip, 2),
+        "lp_fee_usdc_est": round(lp_fee_usdc_est, 4),
+        "net_pnl_after_lp_fee_usdc": round(net_pnl_after_lp_fee_usdc, 4),
+        "is_net_positive_after_lp_fee": net_pnl_after_lp_fee_usdc > 0,
         "net_negative_reason": net_negative_reason,
         # v2.0.3: Suspect spread flags (unrealistic arb detection)
         "is_suspect_spread": is_suspect_spread,

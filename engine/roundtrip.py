@@ -78,6 +78,14 @@ class RoundTripResult:
     # v2.1.0-fix: L2 gas source for traceability
     gas_source: str = "quoter"  # "quoter" | "eth_estimateGas" | "default"
     
+    # v2.2.0: Leg provenance for fee/pool observability
+    leg1_dex: str = ""
+    leg2_dex: str = ""
+    leg1_pool: str = ""
+    leg2_pool: str = ""
+    leg1_fee: int = 0
+    leg2_fee: int = 0
+    
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for JSON output."""
         return {
@@ -109,6 +117,13 @@ class RoundTripResult:
             "slippage_source": self.slippage_source,
             "l1_cost_source": self.l1_cost_source,
             "gas_source": self.gas_source,
+            # v2.2.0: Leg provenance for fee/pool observability
+            "leg1_dex": self.leg1_dex,
+            "leg2_dex": self.leg2_dex,
+            "leg1_pool": self.leg1_pool,
+            "leg2_pool": self.leg2_pool,
+            "leg1_fee": self.leg1_fee,
+            "leg2_fee": self.leg2_fee,
         }
 
 
@@ -165,6 +180,13 @@ def simulate_roundtrip(
         token_out=buy_quote.get("token_out", ""),
         leg1_amount_out=0,
         l1_cost_source=l1_cost_source,  # v2.1.0: source tracking
+        # v2.2.0: Leg provenance for fee/pool observability
+        leg1_dex=buy_quote.get("dex_id", ""),
+        leg2_dex=sell_quote.get("dex_id", ""),
+        leg1_pool=buy_quote.get("pool_address", ""),
+        leg2_pool=sell_quote.get("pool_address", ""),
+        leg1_fee=buy_quote.get("fee", 0),
+        leg2_fee=sell_quote.get("fee", 0),
     )
     
     # Leg 1: Extract from buy quote
