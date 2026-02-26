@@ -341,7 +341,7 @@ gas_usd_estimate: 0.10
 
 # Paper trading settings (M5)
 # v2.5.2: Reduced from 1000 to 250 to lower ticks_crossed and reduce SUSPECT_LIQUIDITY rejects
-paper_size_usd: 1000
+paper_size_usd: 250
 paper_slippage_bps: 0  # 0 bps default - conservative for micro-spreads
 
 # Autosize configuration (M5)
@@ -389,6 +389,12 @@ discovery_dry_run: true
 # NOTE: Observability only - does NOT change quote universe in this version
 discovery_runtime: false
 discovery_runtime_max_pairs: 20
+
+# v2.2.2: Universe source selection
+# config = use pairs from config YAML
+# intent = use pairs from intent.txt  
+# discovery_runtime = dynamically resolve from factory.getPool()
+universe_source: discovery_runtime
 
 # v2.5.1: Cross-DEX preference - prefer cross-DEX spreads over same-DEX fee-tier arb
 # When true, same-DEX signals are EXCLUDED (reduces included_pairs)

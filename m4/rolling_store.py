@@ -579,8 +579,9 @@ def _compute_quick_stats(
         fail_rate > Thresholds.AGG_FAIL_RATE_FAIL or
         data_run_rate < Thresholds.AGG_DATA_RUN_RATE_FAIL  # v1.12.1: data_run_rate as FAIL gate
     )
+    # v2.2.2: Include "_WARN" suffix in quality_warnings detection (e.g., DATA_RUN_RATE_WARN)
     has_warn_threshold = (
-        any("ELEVATED" in w or "LOW" in w for w in quality_warnings) or
+        any("ELEVATED" in w or "LOW" in w or "_WARN" in w for w in quality_warnings) or
         warn_rate_core > Thresholds.AGG_WARN_RATE_FAIL
     )
     

@@ -459,7 +459,7 @@ class TestFailoverWithMockedErrors:
             assert primary_stats.failed_requests == 1
             assert secondary_stats.successful_requests == 1
         
-        asyncio.get_event_loop().run_until_complete(run_test())
+        asyncio.run(run_test())
     
     def test_rpc_provider_failover_on_429(self):
         """RPC provider should fail over when primary returns 429 (rate limit)."""
@@ -519,7 +519,7 @@ class TestFailoverWithMockedErrors:
             assert primary_stats.last_error == "rate limit exceeded"
             assert secondary_stats.successful_requests == 1
         
-        asyncio.get_event_loop().run_until_complete(run_test())
+        asyncio.run(run_test())
     
     def test_rpc_provider_tracks_endpoints_used(self):
         """After failover, endpoints_used should include both attempted endpoints."""
@@ -564,4 +564,4 @@ class TestFailoverWithMockedErrors:
             
             assert len(endpoints_used) == 2, "Both endpoints should have been attempted"
         
-        asyncio.get_event_loop().run_until_complete(run_test())
+        asyncio.run(run_test())

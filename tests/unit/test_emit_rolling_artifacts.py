@@ -282,3 +282,98 @@ class TestProvenanceFallback(TestCase):
                 expected_ts,
                 "Should use run_summary.run_context.run_timestamp when no scan exists"
             )
+
+
+class TestDataRunRateWarnStatus(TestCase):
+    """v2.2.2: Test that DATA_RUN_RATE_WARN triggers WARN_QUALITY agg_status."""
+    
+    def test_data_run_rate_warn_triggers_warn_quality(self):
+        """DATA_RUN_RATE_WARN(0.47<0.5) must set agg_status=WARN_QUALITY."""
+        from m4.rolling_store import _compute_quick_stats
+        from m4.policy import Thresholds
+        
+        # Create runs where data_run_rate would be 0.47 (below WARN threshold)
+        # We need 100 total runs, 47 with data (status != NO_DATA)
+        # Add diversity to avoid DIVERSITY_*_FAIL thresholds
+        pairs = ["WETH/USDC", "ARB/WETH", "LINK/WETH", "wstETH/WETH"]
+        # Use correct format: "buy_dex->sell_dex"
+        routes = [
+            "uniswap_v3->sushiswap_v3",
+            "sushiswap_v3->uniswap_v3",
+        ]
+        
+        runs = []
+        for i in range(47):
+            runs.append({
+                "run_id": f"run_{i:03d}",
+                "status": "PASS",
+                "run_timestamp": f"2026-02-25T{10+i//60:02d}:{i%60:02d}:00Z",
+                "net_usdc": 10.0 + (i % 10) * 5 - 20,  # Vary net_usdc to avoid sanity check
+                "signals_count": 5,
+                "direction_correct": i % 3 != 0,  # Some incorrect to avoid sanity check
+                "run_mode": "REGISTRY_REAL",
+                # Use correct field names: "pairs" (list) and "routes" (list)
+                "pairs": [pairs[i % len(pairs)]],
+                "routes": [routes[i % len(routes)]],
+                "included_pairs": [pairs[i % len(pairs)]],
+                "included_routes": [routes[i % len(routes)]],
+            })
+        for i in range(53):
+            runs.append({
+                "run_id": f"run_no_data_{i:03d}",
+                "status": "NO_DATA",
+                "run_timestamp": f"2026-02-25T{12+i//60:02d}:{i%60:02d}:00Z",
+                "net_usdc": 0.0,
+                "signals_count": 0,
+                "direction_correct": None,
+                "run_mode": "REGISTRY_REAL",
+            })
+        
+        # Build minimal agg_data structure
+        agg_data = {
+            "runs": runs,
+            "quick_stats": {},
+            "policy_version": "test",
+        }
+        
+        # Minimal run_summary (not used for aggregation in this test)
+        run_summary = {
+            "metrics": {
+                "signals_count": 5,
+                "included_signals_count": 5,
+                "total_net_usdc": 10.0,
+                "mae_net_usdc": 0.5,
+                "est_sign_correct_rate": 0.8,
+            },
+        }
+        
+        # Verify data_run_rate calculation: 47/(47+53) = 0.47
+        data_run_count = len([r for r in runs if r["status"] != "NO_DATA"])
+        self.assertEqual(data_run_count, 47)
+        data_run_rate = data_run_count / len(runs)
+        self.assertAlmostEqual(data_run_rate, 0.47, places=2)
+        
+        # Verify this is below WARN threshold but above FAIL threshold
+        self.assertLess(data_run_rate, Thresholds.AGG_DATA_RUN_RATE_WARN)
+        self.assertGreaterEqual(data_run_rate, Thresholds.AGG_DATA_RUN_RATE_FAIL)
+        
+        # Compute aggregation
+        result = _compute_quick_stats(agg_data, run_summary=run_summary, target_sha=None)
+        
+        # Verify agg_status is WARN_QUALITY (not PASS)
+        self.assertEqual(
+            result["agg_status"], "WARN_QUALITY",
+            f"DATA_RUN_RATE_WARN should trigger WARN_QUALITY, got {result['agg_status']}. "
+            f"agg_reasons={result['agg_reasons']}, quality_warnings={result.get('quality_warnings', [])}"
+        )
+        
+        # Verify agg_reasons includes DATA_RUN_RATE_WARN
+        self.assertIn(
+            "DATA_RUN_RATE_WARN", result["agg_reasons"],
+            f"agg_reasons should include DATA_RUN_RATE_WARN, got {result['agg_reasons']}"
+        )
+        
+        # Verify quality_warnings has the full message
+        warn_msgs = [w for w in result.get("quality_warnings", []) if "DATA_RUN_RATE_WARN" in w]
+        self.assertEqual(len(warn_msgs), 1, "Should have exactly one DATA_RUN_RATE_WARN message")
+        self.assertIn("0.47", warn_msgs[0])

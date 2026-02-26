@@ -293,6 +293,10 @@ def run_scan(
     stats["quotes_fetched"] = len(quotes_sample)
     stats["gates_passed"] = sum(1 for q in quotes_sample if q.get("gate_passed", True))
     
+    # v2.2.2: Config transparency - propagate to scan.stats for cross-artifact consistency
+    stats["require_cross_dex"] = config.get("require_cross_dex", False)
+    stats["config_path"] = config.get("_config_path", None)
+    
     total_attempts = stats["quotes_total"]
     if total_attempts > 0:
         rpc_failures = stats.get("rpc_errors", 0) + counts["pool_missing"] + counts["v3_slot0_failed"]
