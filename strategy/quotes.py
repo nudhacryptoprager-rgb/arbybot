@@ -858,6 +858,10 @@ def collect_quotes(
                         })
                         counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
                         counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                        # v2.2.2: Record failure for auto-quarantine (same as SUSPECT_LIQUIDITY)
+                        qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "PRICE_SANITY_FAILED",
+                                         details={"pool_address": pool_addr, "deviation_bps": sanity_dev_bps,
+                                                  "anchor_price": str(anchor_price), "price_exact": str(price_exact)})
                         # v2.1.0: Log at INFO level for visibility of price sanity failures
                         logger.info(
                             "PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s ratio=%.4f",
