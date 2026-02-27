@@ -4,13 +4,13 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-27T09:19:46Z
-run_id: data/runs/ci_m5_gate_20260227_101931
+timestamp_utc: 2026-02-27T10:15:58Z
+run_id: data/runs/ci_m5_gate_20260227_111542
 mode: ONLINE (v2.3.1 - signal validation + cost_model alignment)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-27T09:19:46+00:00
+  primary: ts:2026-02-27T10:15:58+00:00
   dirty: true
   desc: v2.3.1 - spread signal invariants, quote_block_skew, cross-DEX only, cost_model fix
 
@@ -44,37 +44,38 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json (200 runs)
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260227_101931/reports
+  - data/runs/ci_m5_gate_20260227_111542/reports
 preflight_evidence:
   - enabled: true
   - candidates_count: 8
-  - cross_dex_signals: 4
-  - sim_ok_netpos: 7 (87.5%)
+  - cross_dex_signals: 4 (included)
+  - same_dex_excluded: 4 (SAME_DEX_EXCLUDED)
+  - total_net_usdc: $1544.07
   - evidence_source: preflight_v1.0.3
 
 ## 4) Key Results (числа з артефактів)
 
 _latest.json:
   schema_version: m4:latest:v2.0
-  run_status: PASS
-  agg_status: PASS
+  run_status: WARN
+  agg_status: WARN
   agg_reasons: []
-  quality_warnings: [WARN_PROFIT_DIAGNOSTIC]
-  data_run_rate: 0.815
+  quality_warnings: [WARN_EXCLUDED_SIGNALS, WARN_PROFIT_DIAGNOSTIC]
+  data_run_rate: 0.9
   low_sample_rate: 0.0
   runs_in_window: 200
   in_warmup: false
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
-  status: PASS
-  run_context.run_timestamp: 2026-02-27T09:19:46+00:00
-  inputs.run_dir_name: ci_m5_gate_20260227_101931
+  status: WARN
+  run_context.run_timestamp: 2026-02-27T10:15:58+00:00
+  inputs.run_dir_name: ci_m5_gate_20260227_111542
   inputs.run_mode: REGISTRY_REAL
   metrics:
     signals_count: 8
-    included_signals_count: 8
-    excluded_signals_count: 0
+    included_signals_count: 4 (cross-DEX only)
+    excluded_signals_count: 4 (SAME_DEX_EXCLUDED)
     sim_profitable_count: 7 (paper)
     total_net_usdc: $1373.90 (rolling)
     profit_is_diagnostic: true
