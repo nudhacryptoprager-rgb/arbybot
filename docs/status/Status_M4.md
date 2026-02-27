@@ -41,6 +41,15 @@
 
 **Snapshot (2026-02-27)**: From `ci_m5_gate_20260227_162412` (120-min scan): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), data_run_rate=1.0, **agg_status=WARN_QUALITY** (FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW), **total_net_usdc=$569.47** (rolling window), signals_included=3, signals_excluded=4. **gated_count=5**, **roundtrip.evaluated_count=4**, **roundtrip.profitable_count=0**, **profit_realism_status=ROUNDTRIP_NOT_PROFITABLE**. rejected_reasons: {MIXED_SOURCE: 2, NET_PROFIT_TOO_LOW: 5}. **execution_ready_count=0** (kill_switch_active=true). Discovery: 28 resolvable pairs, 49 tokens. For infra evidence see [Status_M5_0.md](Status_M5_0.md).
 
+### Roundtrip Window Reality (2026-02-27, 200 runs)
+- **best_roundtrip_net_pnl_bps_in_window = -10.85 bps** (top over 200 runs, `ci_m5_gate_20260227_144328`)
+- **latest best_net_pnl_bps = -52.91 bps** (runDir `ci_m5_gate_20260227_162412`)
+- **Thesis**: Мінус у `gross_pnl_bps` (swap rates), **gas не домінує** (<0.4 bps contribution)
+- **Best pair**: WETH/USDC sushiswap_v3_500 -> uniswap_v3_3000 (`buyback_penalty_bps=10.54`)
+- **Worst pairs**: WETH/USDT with higher fee pools (`buyback_penalty_bps=52-108 bps`)
+- **Conclusion**: One-leg paper edge (~40-86 bps spread) does NOT survive roundtrip due to buyback price impact. Need to either find lower-impact pools OR wait for larger market dislocations.
+- See `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` across all 200 runs.
+
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when >=10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
