@@ -138,16 +138,9 @@ def emit_to_aggregator_light(
     reasons = run_summary.get("reasons", [])
     total_net = metrics.get("total_net_usdc", 0)
     
-    # v1.11.0: Determine run_kind from run_id/context
-    run_kind = "NORMAL"  # default
-    if "offline" in run_id.lower() or "fixture" in run_id.lower():
-        run_kind = "OFFLINE"
-    elif "coverage" in run_id.lower():
-        run_kind = "COVERAGE"
-    elif "smoke" in run_id.lower():
-        run_kind = "SMOKE"
-    # Override from run_summary if explicitly set
-    run_kind = run_summary.get("run_kind", run_kind)
+    # v2.6.1: run_kind from run_summary only (no string matching on run_id)
+    # Emitter must set run_kind explicitly; default is "NORMAL"
+    run_kind = run_summary.get("run_kind", "NORMAL")
     
     # v1.11.0: STATUS CONTRACT - NO_DATA ONLY when signals_count == 0
     # For signals > 0: status based on profit/quality independently

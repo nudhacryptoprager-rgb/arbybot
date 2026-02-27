@@ -23,9 +23,10 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 
-# Import CostModelRegistry if available (optional for backwards compat)
+# Import CostModelRegistry from m4.policy (canonical location)
+# v2.6.1: Moved from scripts.ci_m4_execution_gate to avoid CLI-as-library pattern
 try:
-    from scripts.ci_m4_execution_gate import CostModelRegistry, CostModelConfig
+    from m4.policy import CostModelRegistry, CostModelConfig
     COST_MODEL_REGISTRY_AVAILABLE = True
 except ImportError:
     COST_MODEL_REGISTRY_AVAILABLE = False

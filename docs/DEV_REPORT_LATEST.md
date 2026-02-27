@@ -4,15 +4,15 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-27T10:15:58Z
-run_id: data/runs/ci_m5_gate_20260227_111542
-mode: ONLINE (v2.3.1 - signal validation + cost_model alignment)
+timestamp_utc: 2026-02-27T11:58:50Z
+run_id: data/runs/ci_m5_gate_20260227_125834
+mode: ONLINE (v2.6.1 - quality_reasons fix, route field, CostModel refactor)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-27T10:15:58+00:00
+  primary: ts:2026-02-27T11:58:50+00:00
   dirty: true
-  desc: v2.3.1 - spread signal invariants, quote_block_skew, cross-DEX only, cost_model fix
+  desc: v2.6.1 - WARN_SAME_DEX_PRESENT, route field, is_same_dex propagation, CostModel to m4.policy
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Validation infrastructure + artifact consistency + cross-DEX signals
@@ -44,37 +44,37 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json (200 runs)
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260227_111542/reports
+  - data/runs/ci_m5_gate_20260227_125834/reports
 preflight_evidence:
   - enabled: true
-  - candidates_count: 8
-  - cross_dex_signals: 4 (included)
+  - candidates_count: 9
+  - cross_dex_signals: 5 (included)
   - same_dex_excluded: 4 (SAME_DEX_EXCLUDED)
-  - total_net_usdc: $1544.07
+  - total_net_usdc: $1480.68
   - evidence_source: preflight_v1.0.3
 
 ## 4) Key Results (числа з артефактів)
 
 _latest.json:
   schema_version: m4:latest:v2.0
-  run_status: WARN
-  agg_status: WARN
+  run_status: WARN_QUALITY
+  agg_status: WARN_QUALITY
   agg_reasons: []
-  quality_warnings: [WARN_EXCLUDED_SIGNALS, WARN_PROFIT_DIAGNOSTIC]
-  data_run_rate: 0.9
+  quality_warnings: [WARN_FRAGILE_ELEVATED, WARN_SAME_DEX_PRESENT, WARN_FRAGILE_HIGH, WARN_PROFIT_DIAGNOSTIC]
+  data_run_rate: 1.0
   low_sample_rate: 0.0
   runs_in_window: 200
   in_warmup: false
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
-  status: WARN
-  run_context.run_timestamp: 2026-02-27T10:15:58+00:00
-  inputs.run_dir_name: ci_m5_gate_20260227_111542
+  status: WARN_QUALITY
+  run_context.run_timestamp: 2026-02-27T11:58:50+00:00
+  inputs.run_dir_name: ci_m5_gate_20260227_125834
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 8
-    included_signals_count: 4 (cross-DEX only)
+    signals_count: 9
+    included_signals_count: 5 (cross-DEX only)
     excluded_signals_count: 4 (SAME_DEX_EXCLUDED)
     sim_profitable_count: 7 (paper)
     total_net_usdc: $1373.90 (rolling)

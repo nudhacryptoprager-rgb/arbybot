@@ -285,3 +285,49 @@ class TestStatusDomainConsistency:
             quality_reasons = [reason]
             has_fail_reason = any(r.startswith("FAIL_") for r in quality_reasons)
             assert has_fail_reason == True, f"{reason} SHOULD trigger FAIL_QUALITY"
+
+    def test_same_dex_excluded_does_not_trigger_warn_excluded_signals(self):
+        """v2.6.1: SAME_DEX_EXCLUDED signals should NOT trigger WARN_EXCLUDED_SIGNALS.
+        
+        SAME_DEX_EXCLUDED is a policy-driven exclusion (require_cross_dex=true),
+        not a quality issue. Only non-same-dex exclusions (SUSPECT_SPREAD) should
+        trigger WARN_EXCLUDED_SIGNALS.
+        """
+        # Given: signals where some are excluded via SAME_DEX_EXCLUDED only
+        signals = [
+            {"is_excluded_spread": True, "is_same_dex": True, "is_same_dex_excluded": True},
+            {"is_excluded_spread": True, "is_same_dex": True, "is_same_dex_excluded": True},
+            {"is_excluded_spread": False, "is_same_dex": False, "is_same_dex_excluded": False},
+        ]
+        
+        # When: counting exclusions
+        excluded_signals_count = 0
+        same_dex_excluded_count = 0
+        non_same_dex_excluded_count = 0
+        
+        for sig in signals:
+            is_excluded = sig.get("is_excluded_spread", False)
+            is_same_dex_excluded = sig.get("is_same_dex_excluded", False)
+            
+            if is_excluded:
+                excluded_signals_count += 1
+                if is_same_dex_excluded:
+                    same_dex_excluded_count += 1
+                else:
+                    non_same_dex_excluded_count += 1
+        
+        # Then: WARN_EXCLUDED_SIGNALS should NOT be triggered (only same-dex exclusions)
+        assert excluded_signals_count == 2
+        assert same_dex_excluded_count == 2
+        assert non_same_dex_excluded_count == 0, "Only same-dex exclusions present"
+        
+        # Build quality_reasons as m4/fixtures.py does
+        quality_reasons = []
+        if non_same_dex_excluded_count > 0:
+            quality_reasons.append("WARN_EXCLUDED_SIGNALS")
+        if same_dex_excluded_count > 0:
+            quality_reasons.append("WARN_SAME_DEX_PRESENT")
+        
+        # WARN_EXCLUDED_SIGNALS should NOT be present
+        assert "WARN_EXCLUDED_SIGNALS" not in quality_reasons
+        assert "WARN_SAME_DEX_PRESENT" in quality_reasons

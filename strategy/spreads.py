@@ -539,6 +539,8 @@ def _build_spread_signal(
         # v2.5.0: Same-dex detection (potential fee-tier arb)
         "is_same_dex": is_same_dex,
         "is_same_dex_excluded": is_same_dex_excluded,
+        # v2.5.1: Route string for debugging and aggregation
+        "route": f"{buy_dex}->{sell_dex}",
         "buy_dex_id": buy_dex,
         "sell_dex_id": sell_dex,
         # v2.1.0: Quote source tracking for truth_mode_m42

@@ -510,6 +510,10 @@ def generate_m4_from_online_inputs(
             "is_excluded_spread": sig.get("is_excluded_spread", False),
             "suspect_spread_threshold_bps": sig.get("suspect_spread_threshold_bps", 300),
             "confidence_reasons": sig.get("confidence_reasons", []),
+            # v2.6.1: Same-DEX fields for policy vs quality distinction
+            "is_same_dex": sig.get("is_same_dex", False),
+            "is_same_dex_excluded": sig.get("is_same_dex_excluded", False),
+            "route": sig.get("route") or f"{buy_dex}->{sell_dex}",
         }
         m4_signals.append(m4_signal)
     
@@ -581,6 +585,8 @@ def generate_m4_from_online_inputs(
     excluded_signals_count = 0  # is_excluded_spread=true (NOT counted in metrics)
     suspect_signals_count = 0   # is_suspect_spread=true (includes excluded)
     same_dex_signals_count = 0  # v2.6.0: is_same_dex=true (quality warning trigger)
+    same_dex_excluded_count = 0  # v2.6.1: is_same_dex_excluded=true (policy exclusion, not quality issue)
+    non_same_dex_excluded_count = 0  # v2.6.1: excluded but NOT same-dex (actual quality issue)
     included_signals_count = 0  # Actually counted in metrics
     
     for sig in m4_signals:
@@ -588,12 +594,18 @@ def generate_m4_from_online_inputs(
         is_excluded = sig.get("is_excluded_spread", False)
         is_suspect = sig.get("is_suspect_spread", False)
         is_same_dex = sig.get("is_same_dex", False)
+        is_same_dex_excluded = sig.get("is_same_dex_excluded", False)
         
         # Track suspect/excluded counts
         if is_suspect:
             suspect_signals_count += 1
         if is_excluded:
             excluded_signals_count += 1
+            # v2.6.1: Distinguish policy exclusion (same-dex) from quality exclusion (suspect)
+            if is_same_dex_excluded:
+                same_dex_excluded_count += 1
+            else:
+                non_same_dex_excluded_count += 1
         if is_same_dex:
             same_dex_signals_count += 1
         
@@ -849,9 +861,14 @@ def generate_m4_from_online_inputs(
     quality_reasons = []  # Canonical tokens for reasons array
     
     # v2.0.3: EXCLUDED_PRESENT warning when signals were excluded due to SUSPECT_SPREAD
-    if excluded_signals_count > 0:
-        quality_warnings.append(f"EXCLUDED_PRESENT({excluded_signals_count})")
+    # v2.6.1: Only count non-same-dex exclusions as quality issues
+    # Same-DEX exclusions are policy-driven (require_cross_dex=true) not quality issues
+    if non_same_dex_excluded_count > 0:
+        quality_warnings.append(f"EXCLUDED_PRESENT({non_same_dex_excluded_count})")
         quality_reasons.append("WARN_EXCLUDED_SIGNALS")
+    if same_dex_excluded_count > 0:
+        quality_warnings.append(f"SAME_DEX_EXCLUDED({same_dex_excluded_count})")
+        quality_reasons.append("WARN_SAME_DEX_PRESENT")
     
     # v2.0.4: CRITICAL_REJECTS warning when reject_histogram has data quality issues
     if critical_rejects:

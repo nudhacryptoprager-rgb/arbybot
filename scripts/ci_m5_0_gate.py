@@ -1263,26 +1263,14 @@ ENV VARIABLES:
                 return 3
             
             # Generate daily_report with cost model
+            # v2.6.1: Use CostModelRegistry from m4.policy (single source of truth)
+            # aggregate_run() auto-loads paper_realistic model when available
             try:
                 from scripts.generate_daily_report import aggregate_run
-                import yaml
                 
-                # Determine gas_usd_estimate: CLI > config
-                gas_estimate = args.gas_usd_estimate
-                slippage_estimate = args.slippage_usd_estimate
-                if gas_estimate is None:
-                    try:
-                        cfg_path = Path(args.config)
-                        if cfg_path.exists():
-                            with open(cfg_path, "r", encoding="utf8") as f:
-                                cfg = yaml.safe_load(f)
-                            gas_estimate = cfg.get("gas_usd_estimate")
-                            if slippage_estimate == 0.0:
-                                slippage_estimate = cfg.get("slippage_usd_estimate", 0.0)
-                    except Exception:
-                        pass
-                
-                report = aggregate_run(run_dir, gas_usd_estimate=gas_estimate, slippage_usd_estimate=slippage_estimate)
+                # v2.6.1: Let aggregate_run use CostModelRegistry internally
+                # No need to pass gas_usd_estimate/slippage_usd_estimate manually
+                report = aggregate_run(run_dir)
                 
                 # Write daily_report
                 report_dir = run_dir / "reports"
@@ -1354,8 +1342,9 @@ ENV VARIABLES:
                     if args.refresh_rolling_strict:
                         print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate exception")
             
-            # v2.1.0: Auto-prune if enabled and scan passed
-            if passed and args.prune_keep > 0:
+            # v2.1.0: Auto-prune if enabled
+            # v2.6.1: Prune on every iteration (not just PASS) to prevent disk fill on RPC/drift failures
+            if args.prune_keep > 0:
                 try:
                     from scripts.prune_run_dirs import prune_run_dirs
                     print(f"\n[ONLINE] Pruning runDirs (keeping {args.prune_keep} most recent)...")
