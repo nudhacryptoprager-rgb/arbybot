@@ -300,6 +300,14 @@ def run_scan(
     stats["use_usd_notional"] = config.get("use_usd_notional", False)
     stats["target_usd_notional"] = config.get("target_usd_notional", None)
     
+    # v2.3.1: Quote block skew for snapshot consistency validation
+    # Measures how many blocks elapsed during quote collection
+    quote_blocks = [q.get("block_number") for q in quotes_sample if q.get("block_number")]
+    if quote_blocks:
+        stats["quote_block_skew"] = max(quote_blocks) - min(quote_blocks)
+    else:
+        stats["quote_block_skew"] = 0
+    
     total_attempts = stats["quotes_total"]
     if total_attempts > 0:
         rpc_failures = stats.get("rpc_errors", 0) + counts["pool_missing"] + counts["v3_slot0_failed"]
@@ -835,13 +843,17 @@ def run_scan(
     artifacts = write_artifacts(output_dir, timestamp, scan_data, truth_data, reject_data, artifact_mode=artifact_mode)
     
     # v2.2.0: Flush quarantine and dynamic anchors state to disk
+    # v2.3.1: Only flush anchors when running with live RPC to avoid polluting cache with stale/synthetic data
     try:
         from strategy.quarantine import flush_quarantine_manager
         from strategy.dynamic_anchors import get_anchor_manager
         
         flush_quarantine_manager()
-        get_anchor_manager().flush()
-        logger.debug("Quarantine and dynamic anchors state flushed to disk")
+        if w3_instance is not None:
+            get_anchor_manager().flush()
+            logger.debug("Quarantine and dynamic anchors state flushed to disk")
+        else:
+            logger.debug("Quarantine flushed; anchors skipped (no live RPC)")
     except Exception as flush_err:
         logger.debug("State flush skipped: %s", flush_err)
     

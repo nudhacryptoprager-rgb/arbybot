@@ -404,8 +404,8 @@ discovery_runtime_max_pairs: 20
 # v2.5.1: Cross-DEX preference - prefer cross-DEX spreads over same-DEX fee-tier arb
 # When true, same-DEX signals are EXCLUDED (reduces included_pairs)
 # When false, cross-DEX is still PREFERRED but same-DEX signals remain INCLUDED
-# v2.5.2: Changed to false to preserve included_pairs diversity while keeping cross-DEX preference
-require_cross_dex: false
+# v2.5.3: Set true for clean DEX↔DEX signals (same-DEX fee-tier arb excluded from spread_signals)
+require_cross_dex: true
 
 # M4 markers - execution disabled
 execution_enabled: false

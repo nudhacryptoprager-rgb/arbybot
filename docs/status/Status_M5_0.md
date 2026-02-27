@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-02-23  
-**Tests**: 1046 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260223_134446`  
+**Updated**: 2026-02-27  
+**Tests**: 1088 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260227_101931`  
 **discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
 
 ---

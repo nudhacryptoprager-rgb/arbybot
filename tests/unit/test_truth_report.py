@@ -637,5 +637,100 @@ class TestExecutionPnlIncludedContract(unittest.TestCase):
         self.assertEqual(float(result["would_execute_pnl_usdc"]), 23.0)
 
 
+class TestSpreadSignalInvariants(unittest.TestCase):
+    """Test spread_signal schema invariants for audit trail.
+    
+    v2.3.0: Validates that spread signals have required fields for
+    DEX selection verification and price direction correctness.
+    """
+
+    def test_spread_signal_has_signal_id(self):
+        """signal_id must be present for correlation with execution_report."""
+        from strategy.spreads import compute_spread_signals
+        
+        quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price": 2000.0, "price_exact": "2000.0",
+             "dex_id": "uniswap_v3", "pool_address": "0x111", "fee": 500, "quote_source": "quoter_v2"},
+            {"token_in": "WETH", "token_out": "USDC", "price": 2010.0, "price_exact": "2010.0",
+             "dex_id": "sushiswap_v3", "pool_address": "0x222", "fee": 500, "quote_source": "quoter_v2"},
+        ]
+        config = {"min_spread_bps": 0, "paper_size_usd": 250}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        self.assertGreater(len(signals), 0)
+        for sig in signals:
+            self.assertIn("signal_id", sig)
+            self.assertTrue(sig["signal_id"].startswith("signal_"))
+
+    def test_spread_signal_has_exact_prices(self):
+        """buy_price_exact and sell_price_exact must be present for audit."""
+        from strategy.spreads import compute_spread_signals
+        
+        quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price": 2000.0, "price_exact": "2000.123456789",
+             "dex_id": "uniswap_v3", "pool_address": "0x111", "fee": 500, "quote_source": "quoter_v2"},
+            {"token_in": "WETH", "token_out": "USDC", "price": 2010.0, "price_exact": "2010.987654321",
+             "dex_id": "sushiswap_v3", "pool_address": "0x222", "fee": 500, "quote_source": "quoter_v2"},
+        ]
+        config = {"min_spread_bps": 0, "paper_size_usd": 250}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        self.assertGreater(len(signals), 0)
+        for sig in signals:
+            self.assertIn("buy_price_exact", sig)
+            self.assertIn("sell_price_exact", sig)
+            # Exact prices should preserve full precision
+            self.assertIn(".", sig["buy_price_exact"])
+            self.assertIn(".", sig["sell_price_exact"])
+
+    def test_spread_signal_price_direction_correct(self):
+        """buy_price must be less than sell_price for positive spread."""
+        from strategy.spreads import compute_spread_signals
+        from decimal import Decimal
+        
+        quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price": 2000.0, "price_exact": "2000.0",
+             "dex_id": "uniswap_v3", "pool_address": "0x111", "fee": 500, "quote_source": "quoter_v2"},
+            {"token_in": "WETH", "token_out": "USDC", "price": 2010.0, "price_exact": "2010.0",
+             "dex_id": "sushiswap_v3", "pool_address": "0x222", "fee": 500, "quote_source": "quoter_v2"},
+        ]
+        config = {"min_spread_bps": 0, "paper_size_usd": 250}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        self.assertGreater(len(signals), 0)
+        for sig in signals:
+            buy = Decimal(sig["buy_price_exact"])
+            sell = Decimal(sig["sell_price_exact"])
+            spread_bps = sig.get("spread_bps_exact", 0)
+            # For positive spread, sell > buy
+            if spread_bps > 0:
+                self.assertGreater(sell, buy, f"sell_price should > buy_price for positive spread: {sig['pair']}")
+
+    def test_spread_signal_has_notional_drift_fields(self):
+        """buy_notional_drift_pct and sell_notional_drift_pct must be present when quotes have drift."""
+        from strategy.spreads import compute_spread_signals
+        
+        quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price": 2000.0, "price_exact": "2000.0",
+             "dex_id": "uniswap_v3", "pool_address": "0x111", "fee": 500, "quote_source": "quoter_v2",
+             "notional_drift_pct": 5.0},
+            {"token_in": "WETH", "token_out": "USDC", "price": 2010.0, "price_exact": "2010.0",
+             "dex_id": "sushiswap_v3", "pool_address": "0x222", "fee": 500, "quote_source": "quoter_v2",
+             "notional_drift_pct": 3.0},
+        ]
+        config = {"min_spread_bps": 0, "paper_size_usd": 250}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        self.assertGreater(len(signals), 0)
+        for sig in signals:
+            # When quotes have drift, signals should propagate it
+            self.assertIn("buy_notional_drift_pct", sig)
+            self.assertIn("sell_notional_drift_pct", sig)
+
+
 if __name__ == "__main__":
     unittest.main()

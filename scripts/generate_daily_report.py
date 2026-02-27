@@ -389,7 +389,17 @@ def aggregate_run(
         top_quotes.append(quote_sample)
 
     # Build cost_model block for transparency (v1.4.0: unified with CostModelRegistry)
-    if cost_model_config:
+    # v1.5.1: cost_model now shows both gas_only and realistic for dual PnL transparency
+    if paper_realistic_model:
+        cost_model = {
+            "name": paper_realistic_model.name,
+            "description": paper_realistic_model.description,
+            "gas_usd": paper_realistic_model.gas_usd,
+            "slippage_bps": paper_realistic_model.slippage_bps,
+            "source": "CostModelRegistry",
+            "pnl_field": "paper_net_pnl_usdc_realistic",
+        }
+    elif cost_model_config:
         cost_model = {
             "name": cost_model_config.name,
             "description": cost_model_config.description,

@@ -4,56 +4,53 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-26T10:43:00Z
-run_id: data/runs/ci_m5_gate_20260226_114309
-mode: ONLINE (NOTIONAL_DRIFT filter + USD sizing fix)
+timestamp_utc: 2026-02-27T09:19:46Z
+run_id: data/runs/ci_m5_gate_20260227_101931
+mode: ONLINE (v2.3.1 - signal validation + cost_model alignment)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-26T10:43:00+00:00
+  primary: ts:2026-02-27T09:19:46+00:00
   dirty: true
-  desc: v2.2.3 FIX - NOTIONAL_DRIFT filter, USD sizing config, truth_report schema
+  desc: v2.3.1 - spread signal invariants, quote_block_skew, cross-DEX only, cost_model fix
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Fix NOTIONAL_DRIFT issues + warm up rolling + add drift filter
+goal (Roadmap пункт): Validation infrastructure + artifact consistency + cross-DEX signals
 change_summary:
-  - CONFIG: Added tokens_usd_price and target_usd_notional=250 to real_minimal.yaml
-  - FEATURE: NOTIONAL_DRIFT filter in spreads.py (excludes quotes with drift > 50%)
-  - FEATURE: USD_PRICE_FALLBACK_USED warning in quotes.py
-  - SCHEMA: Added buy_notional_drift_pct, sell_notional_drift_pct, signal_id to SpreadSignal
-  - WARM-UP: 60min scan raised data_run_rate from 0.465 to 0.725
-  - TESTS: All 1080 tests pass (3 new drift filter tests)
+  - TEST: Added TestSpreadSignalInvariants (signal_id, exact prices, price direction, drift fields)
+  - FEATURE: Added quote_block_skew to scan.stats for snapshot consistency validation
+  - FIX: Conditional anchor cache flush (only with live RPC to avoid stale data)
+  - CONFIG: require_cross_dex=true in real_minimal.yaml (clean DEX↔DEX signals)
+  - FIX: daily_report cost_model now shows paper_realistic (matches paper_net_pnl_usdc_realistic)
+  - SCHEMA: Dynamic anchor sanity filter (bounds [1e-12, 1e9])
 touched_files:
-  - config/real_minimal.yaml (tokens_usd_price, target_usd_notional)
-  - strategy/quotes.py (USD_PRICE_FALLBACK_USED warning)
-  - strategy/spreads.py (NOTIONAL_DRIFT filter)
-  - monitoring/truth_report.py (SpreadSignal schema)
-  - tests/unit/test_spread_signals.py (drift filter tests)
+  - tests/unit/test_truth_report.py (TestSpreadSignalInvariants)
+  - strategy/jobs/run_scan_real.py (quote_block_skew, conditional anchor flush)
+  - config/real_minimal.yaml (require_cross_dex: true)
+  - scripts/generate_daily_report.py (cost_model alignment)
+  - strategy/dynamic_anchors.py (sanity filter)
   - docs/DEV_REPORT_LATEST.md (state update)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: PASS (1080 passed, 1 skipped)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (ALL REQUIRED GATES PASSED)
-py -3.11 start.py --config config/real_minimal.yaml --minutes 60 --max-runs 160: warm-up completed
+py -3.11 -m pytest tests/unit -q: PASS (1088 passed, 1 skipped)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 3: PASS
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit: PASS
+py -3.11 start.py --config config/real_minimal.yaml --minutes 10 --max-runs 30: warm-up completed
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
   - data/runs/_rolling/_latest.json
   - data/runs/_rolling/run_summary_latest.json  
-  - data/runs/_rolling/m4_stability_agg.json (184 runs)
+  - data/runs/_rolling/m4_stability_agg.json (200 runs)
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260224_141638/reports
+  - data/runs/ci_m5_gate_20260227_101931/reports
 preflight_evidence:
   - enabled: true
-  - candidates_count: 2
-  - passed_count: 2 (100%)
+  - candidates_count: 8
+  - cross_dex_signals: 4
+  - sim_ok_netpos: 7 (87.5%)
   - evidence_source: preflight_v1.0.3
-  - leg1.gas_estimate_source: quoter_v2
-  - leg2.gas_estimate_source: quoter_v2
 
 ## 4) Key Results (числа з артефактів)
 
@@ -63,7 +60,7 @@ _latest.json:
   agg_status: PASS
   agg_reasons: []
   quality_warnings: [WARN_PROFIT_DIAGNOSTIC]
-  data_run_rate: 0.725
+  data_run_rate: 0.815
   low_sample_rate: 0.0
   runs_in_window: 200
   in_warmup: false
@@ -71,12 +68,12 @@ _latest.json:
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-02-26T10:43:26+00:00
-  inputs.run_dir_name: ci_m5_gate_20260226_114309
+  run_context.run_timestamp: 2026-02-27T09:19:46+00:00
+  inputs.run_dir_name: ci_m5_gate_20260227_101931
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 7
-    included_signals_count: 7
+    signals_count: 8
+    included_signals_count: 8
     excluded_signals_count: 0
     sim_profitable_count: 7 (paper)
     total_net_usdc: $1373.90 (rolling)
