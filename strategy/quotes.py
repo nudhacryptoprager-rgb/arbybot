@@ -774,8 +774,15 @@ def collect_quotes(
             
             # M4.2 FIX: If quoter_result is successful, we DON'T need slot0 at all
             # quoter_result gives executable amount_out, price derived from amount_out/amount_in
+            # v2.8.0: But we DO want sqrt_price_x96 for slippage measurement (before-price)
             tick_val, sqrt_price_val = None, None
             quoter_success = quoter_result and quoter_result.get("amount_out", 0) > 0
+            
+            # v2.8.0: Try to get sqrt_price_x96 from multicall cache for slippage measurement
+            # This is the "before" price - quoter gives us "after" price via sqrt_price_after
+            cached_slot0 = _multicall_slot0_cache.get(pool_addr.lower())
+            if cached_slot0:
+                tick_val, sqrt_price_val = cached_slot0
             
             # Path A: quoter canonical - skip slot0 for v3/algebra when quoter succeeds
             if quoter_success:
@@ -892,8 +899,8 @@ def collect_quotes(
                     block_number=current_block,
                     rpc_success=True,
                     gate_passed=True,
-                    tick=tick_val,  # None - quoter doesn't give tick
-                    sqrt_price_x96=sqrt_price_val,  # None - quoter doesn't give sqrt
+                    tick=tick_val,  # v2.8.0: From multicall cache for slippage measurement
+                    sqrt_price_x96=sqrt_price_val,  # v2.8.0: From multicall cache (before price)
                 )
                 q_dict = q.__dict__
                 q_dict["price_exact"] = str(price_exact)

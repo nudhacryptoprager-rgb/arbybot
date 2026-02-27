@@ -58,6 +58,12 @@ class RoundTripResult:
     gas_cost_wei: int = 0
     net_pnl_wei: int = 0
     
+    # v2.8.0: USD-denominated PnL for cross-token correctness
+    # When token_in != WETH, wei-based subtraction is incorrect
+    gross_pnl_usd: float = 0.0
+    gas_cost_usd: float = 0.0
+    net_pnl_usd: float = 0.0
+    
     # Quality flags
     is_profitable: bool = False
     reject_reason: Optional[str] = None
@@ -124,6 +130,10 @@ class RoundTripResult:
             "leg2_pool": self.leg2_pool,
             "leg1_fee": self.leg1_fee,
             "leg2_fee": self.leg2_fee,
+            # v2.8.0: USD-denominated PnL for cross-token correctness
+            "gross_pnl_usd": round(self.gross_pnl_usd, 4),
+            "gas_cost_usd": round(self.gas_cost_usd, 4),
+            "net_pnl_usd": round(self.net_pnl_usd, 4),
         }
 
 
@@ -136,6 +146,9 @@ def simulate_roundtrip(
     l1_cost_wei: int = 60_000_000_000_000,  # v2.1.0: L1 overhead (~$0.12 at 2000 gas * 30 gwei)
     l1_cost_source: str = "default",  # v2.1.0: "config" | "onchain" | "default"
     gas_override: Optional[Tuple[int, int]] = None,  # v2.1.0-fix: (leg1_gas, leg2_gas) from eth_estimateGas
+    eth_usd_price: float = 2000.0,  # v2.8.0: For USD gas conversion
+    token_in_usd_price: Optional[float] = None,  # v2.8.0: For non-WETH token_in
+    token_in_decimals: int = 18,  # v2.8.0: For wei conversion
 ) -> RoundTripResult:
     """
     Simulate round-trip arbitrage.
@@ -282,6 +295,15 @@ def simulate_roundtrip(
         result.gross_pnl_bps = float(result.gross_pnl_wei) / float(amount_in) * 10000
         result.net_pnl_bps = float(result.net_pnl_wei) / float(amount_in) * 10000
     
+    # v2.8.0: USD-denominated PnL for cross-token correctness
+    # gas_cost is always in ETH wei, convert to USD
+    result.gas_cost_usd = (result.gas_cost_wei / 1e18) * eth_usd_price
+    
+    # gross_pnl is in token_in wei - use token_in price if provided, else assume ETH
+    effective_token_price = token_in_usd_price if token_in_usd_price else eth_usd_price
+    result.gross_pnl_usd = (result.gross_pnl_wei / (10 ** token_in_decimals)) * effective_token_price
+    result.net_pnl_usd = result.gross_pnl_usd - result.gas_cost_usd
+    
     # v2.1.0: Calculate slippage - prefer sqrtPriceAfter when available
     # Check for sqrt_price_after in quotes (from QuoterV2)
     buy_sqrt_before = buy_quote.get("sqrt_price_x96")
@@ -311,7 +333,14 @@ def simulate_roundtrip(
         result.estimated_slippage_bps = float(result.total_ticks) * 0.5
         result.slippage_source = "ticks_heuristic"
     
-    result.is_profitable = result.net_pnl_wei > 0
+    # v2.8.0: Use USD-based profitability when token_in != WETH (gas units mismatch)
+    # For WETH, wei-based comparison is fine; for others, use USD
+    if token_in_usd_price is not None:
+        # Non-WETH token_in: use USD for correctness
+        result.is_profitable = result.net_pnl_usd > 0
+    else:
+        # WETH token_in: wei comparison is valid
+        result.is_profitable = result.net_pnl_wei > 0
     
     # v2.1.0-fix: Set gas source for traceability
     result.gas_source = gas_source
@@ -331,6 +360,9 @@ def evaluate_roundtrip_candidates(
     leg2_quote_callback_factory: Optional[callable] = None,
     l1_cost_wei: int = 60_000_000_000_000,  # v2.1.0: L1 overhead for unified gas model
     l1_cost_source: str = "default",  # v2.1.0: "config" | "onchain" | "default"
+    eth_usd_price: float = 2000.0,  # v2.8.0: For USD gas conversion
+    token_usd_prices: Optional[Dict[str, float]] = None,  # v2.8.0: {"WBTC": 68000, "USDC": 1.0, ...}
+    token_decimals: Optional[Dict[str, int]] = None,  # v2.8.0: {"WBTC": 8, "USDC": 6, ...}
 ) -> list[RoundTripResult]:
     """
     Evaluate top-N one-leg opportunities with round-trip simulation.
@@ -377,7 +409,24 @@ def evaluate_roundtrip_candidates(
                 logger.debug("Leg2 callback factory failed: %s", e)
         
         # v2.2.0: Swap order - sell_quote for leg1, buy_quote for fallback leg2defensively
-        result = simulate_roundtrip(sell_quote, buy_quote, gas_price_wei, leg2_quote_callback=leg2_callback, l1_cost_wei=l1_cost_wei, l1_cost_source=l1_cost_source)
+        # v2.8.0: Pass USD prices for cross-token correctness
+        token_in = sell_quote.get("token_in", "WETH")
+        token_in_price = None
+        token_in_dec = 18
+        if token_usd_prices and token_in in token_usd_prices:
+            token_in_price = token_usd_prices[token_in]
+        if token_decimals and token_in in token_decimals:
+            token_in_dec = token_decimals[token_in]
+        
+        result = simulate_roundtrip(
+            sell_quote, buy_quote, gas_price_wei,
+            leg2_quote_callback=leg2_callback,
+            l1_cost_wei=l1_cost_wei,
+            l1_cost_source=l1_cost_source,
+            eth_usd_price=eth_usd_price,
+            token_in_usd_price=token_in_price,
+            token_in_decimals=token_in_dec,
+        )
         results.append(result)
     
     return results

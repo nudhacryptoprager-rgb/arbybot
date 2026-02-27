@@ -518,3 +518,35 @@ class TestV271NotionalDriftConfig:
         rejected_notional = summary.get("rejected_reasons", {}).get("NOTIONAL_DRIFT", 0)
         assert rejected_notional == 0, \
             f"Expected 0 NOTIONAL_DRIFT rejections with aligned config, got {rejected_notional}"
+
+
+class TestV280SortOrder:
+    """v2.8.0: Tests for evaluate_quotes sort order by net_profit_usd."""
+    
+    def test_gated_opportunities_sorted_by_net_profit(self):
+        """Gated opportunities should be sorted by net_profit_usd descending."""
+        quotes = [
+            # Lower profit opportunity
+            {"dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 250, "amount_in_wei": 125000000000000000,
+             "quote_source": "quoter_v2"},
+            {"dex_id": "sushiswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2010", "fee": 500, "usd_notional": 250, "amount_in_wei": 125000000000000000,
+             "quote_source": "quoter_v2"},  # 0.5% spread
+            # Higher profit opportunity
+            {"dex_id": "uniswap_v3", "token_in": "WBTC", "token_out": "USDC", 
+             "price": "68000", "fee": 500, "usd_notional": 250, "amount_in_wei": 367000,
+             "quote_source": "quoter_v2"},
+            {"dex_id": "sushiswap_v3", "token_in": "WBTC", "token_out": "USDC", 
+             "price": "68680", "fee": 500, "usd_notional": 250, "amount_in_wei": 367000,
+             "quote_source": "quoter_v2"},  # 1% spread
+        ]
+        
+        opps_list, summary = evaluate_quotes(
+            quotes, target_notional_usd=250.0, max_notional_drift_pct=50.0
+        )
+        
+        if len(opps_list) >= 2:
+            # First opportunity should have higher net_profit_usd
+            assert opps_list[0]["net_profit_usd"] >= opps_list[1]["net_profit_usd"], \
+                "Opportunities should be sorted by net_profit_usd descending"

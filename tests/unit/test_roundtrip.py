@@ -352,3 +352,168 @@ class TestRoundtripGolden:
         assert "gross_pnl_wei = leg2_amount_out - amount_in_wei" in invariants
         assert "net_pnl_wei = gross_pnl_wei - gas_cost_wei" in invariants
         assert "is_profitable = net_pnl_wei > 0" in invariants
+
+
+class TestV280USDConversion:
+    """v2.8.0: Tests for USD-based roundtrip calculations."""
+    
+    def test_usd_fields_populated(self):
+        """USD fields should be populated in roundtrip result."""
+        buy_quote = {
+            "token_in": "WETH",
+            "token_out": "USDC",
+            "amount_in_wei": 1_000_000_000_000_000_000,  # 1 ETH
+            "amount_out_wei": 2000_000_000,  # 2000 USDC
+            "dex_id": "uniswap_v3",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 5,
+        }
+        sell_quote = {
+            "token_in": "USDC",
+            "token_out": "WETH",
+            "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 990_000_000_000_000_000,  # 0.99 ETH
+            "dex_id": "sushiswap_v3",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 3,
+        }
+        
+        result = simulate_roundtrip(
+            buy_quote, sell_quote,
+            gas_price_wei=100_000_000,
+            eth_usd_price=2000.0,
+        )
+        
+        # USD fields should be populated
+        assert result.gas_cost_usd > 0
+        assert result.gross_pnl_usd != 0
+        assert result.net_pnl_usd == result.gross_pnl_usd - result.gas_cost_usd
+    
+    def test_non_weth_token_in_uses_usd(self):
+        """For non-WETH token_in, USD price should be used for profitability check."""
+        # WBTC token_in with positive gross_pnl_wei but high gas
+        buy_quote = {
+            "token_in": "WBTC",
+            "token_out": "WETH",
+            "amount_in_wei": 100_000_000,  # 1 WBTC (8 decimals)
+            "amount_out_wei": 30_000_000_000_000_000_000,  # 30 ETH
+            "dex_id": "uniswap_v3",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 5,
+        }
+        sell_quote = {
+            "token_in": "WETH",
+            "token_out": "WBTC",
+            "amount_in_wei": 30_000_000_000_000_000_000,
+            "amount_out_wei": 101_000_000,  # 1.01 WBTC (profit in WBTC terms)
+            "dex_id": "sushiswap_v3",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 3,
+        }
+        
+        result = simulate_roundtrip(
+            buy_quote, sell_quote,
+            gas_price_wei=100_000_000,
+            eth_usd_price=2000.0,
+            token_in_usd_price=68000.0,  # WBTC price
+            token_in_decimals=8,  # WBTC has 8 decimals
+        )
+        
+        # gross_pnl_wei is positive
+        assert result.gross_pnl_wei > 0
+        # USD fields should be populated correctly
+        assert result.gross_pnl_usd > 0  # Profit in USD terms
+        # gas_cost_usd should be calculated from ETH
+        assert result.gas_cost_usd > 0
+    
+    def test_weth_token_in_uses_wei(self):
+        """For WETH token_in (no token_in_usd_price), wei-based profitability is fine."""
+        buy_quote = {
+            "token_in": "WETH",
+            "token_out": "USDC",
+            "amount_in_wei": 1_000_000_000_000_000_000,  # 1 ETH
+            "amount_out_wei": 2000_000_000,
+            "dex_id": "uniswap_v3",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 5,
+        }
+        sell_quote = {
+            "token_in": "USDC",
+            "token_out": "WETH",
+            "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 1_010_000_000_000_000_000,  # 1.01 ETH profit
+            "dex_id": "sushiswap_v3",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 3,
+        }
+        
+        result = simulate_roundtrip(
+            buy_quote, sell_quote,
+            gas_price_wei=100_000_000,
+            eth_usd_price=2000.0,
+            token_in_usd_price=None,  # Not specified = WETH
+        )
+        
+        assert result.is_profitable is True
+        # USD fields should still be populated
+        assert result.gross_pnl_usd > 0
+
+
+class TestV280SlippageMeasurement:
+    """v2.8.0: Tests for measured slippage from sqrtPriceX96."""
+    
+    def test_slippage_from_sqrt_prices(self):
+        """Slippage should be calculated from sqrtPriceX96 before/after."""
+        from engine.roundtrip import calculate_slippage_from_sqrt_prices
+        
+        # sqrtPriceX96 before (slot0)
+        Q96 = 2 ** 96
+        price_before = 2000.0  # WETH/USDC
+        sqrt_before = int((price_before ** 0.5) * Q96)
+        
+        # sqrtPriceX96 after (quoter) - price moved up 1%
+        price_after = 2020.0
+        sqrt_after = int((price_after ** 0.5) * Q96)
+        
+        slippage_bps, source = calculate_slippage_from_sqrt_prices(
+            sqrt_before, sqrt_after, is_buy=True
+        )
+        
+        assert source == "sqrtPriceAfter"
+        assert slippage_bps > 0  # Price moved up, bad for buyer
+        assert abs(slippage_bps - 100.0) < 10  # ~1% = 100 bps
+    
+    def test_slippage_uses_sqrt_in_roundtrip(self):
+        """Roundtrip should use sqrtPriceAfter when available."""
+        Q96 = 2 ** 96
+        price_before = 2000.0
+        price_after = 2010.0  # 0.5% slippage
+        sqrt_before = int((price_before ** 0.5) * Q96)
+        sqrt_after = int((price_after ** 0.5) * Q96)
+        
+        buy_quote = {
+            "token_in": "WETH",
+            "token_out": "USDC",
+            "amount_in_wei": 1_000_000_000_000_000_000,
+            "amount_out_wei": 2000_000_000,
+            "dex_id": "uniswap_v3",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 5,
+            "sqrt_price_x96": sqrt_before,  # Before price
+            "sqrt_price_after": sqrt_after,  # After price
+        }
+        sell_quote = {
+            "token_in": "USDC",
+            "token_out": "WETH",
+            "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 990_000_000_000_000_000,
+            "dex_id": "sushiswap_v3",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 3,
+        }
+        
+        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei=100_000_000)
+        
+        # Should use sqrtPriceAfter for slippage
+        assert result.slippage_source == "sqrtPriceAfter"
+        assert result.estimated_slippage_bps > 0

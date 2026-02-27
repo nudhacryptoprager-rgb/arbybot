@@ -6,7 +6,7 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ROUNDTRIP_NOT_PROFITABLE`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **M4.2 PIPELINE WORKING**: Notional drift config alignment fix. Roundtrip now evaluating (`gated_count=6`, `evaluated_count=3`). Current `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` - M4.2 pipeline working, awaiting profitable market conditions.
+> [!] **M4.2 PIPELINE WORKING**: Observability improvements deployed. `slippage_source=sqrtPriceAfter`, USD fields added, best-per-pair selection. `evaluated_count=3`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` - awaiting profitable market conditions.
 
 ## M4-specific Fixes (2026-02-21)
 
@@ -27,7 +27,7 @@
 | DoD | What it means | Current Status |
 |-----|---------------|----------------|
 | **Core Truth (paper +PnL)** | N>=5 REGISTRY_REAL runs with total_net_usdc > 0 | [OK] PROVEN |
-| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [WARN] WARN_QUALITY (FRAGILE_P90_ELEVATED) |
+| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [WARN] WARN_QUALITY (SAME_DEX, DIAGNOSTIC) |
 | **M4.2 Roundtrip Pipeline** | gated_count > 0, roundtrip evaluated | [OK] WORKING |
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
@@ -39,16 +39,18 @@
 - Breakdown: `same_dex_excluded_count=4`, `non_same_dex_excluded_count=0`
 - Це НЕ quality issue - очікувана поведінка з `require_cross_dex: true`
 
-**Snapshot (2026-02-27)**: From `ci_m5_gate_20260227_162412` (120-min scan): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), data_run_rate=1.0, **agg_status=WARN_QUALITY** (FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW), **total_net_usdc=$569.47** (rolling window), signals_included=3, signals_excluded=4. **gated_count=5**, **roundtrip.evaluated_count=4**, **roundtrip.profitable_count=0**, **profit_realism_status=ROUNDTRIP_NOT_PROFITABLE**. rejected_reasons: {MIXED_SOURCE: 2, NET_PROFIT_TOO_LOW: 5}. **execution_ready_count=0** (kill_switch_active=true). Discovery: 28 resolvable pairs, 49 tokens. For infra evidence see [Status_M5_0.md](Status_M5_0.md).
+**Snapshot (2026-02-27)**: From `ci_m5_gate_20260227_190042` (observability validation): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), data_run_rate=~0.75, **agg_status=WARN_QUALITY** (WARN_SAME_DEX_PRESENT, WARN_PROFIT_DIAGNOSTIC), **total_net_usdc=$587.47** (rolling window), signals_included=5, signals_excluded=2. **unique_pairs_considered=3**, **roundtrip.evaluated_count=3**, **roundtrip.profitable_count=0**, **roundtrip.best_net_pnl_bps=-22.40**, **profit_realism_status=ROUNDTRIP_NOT_PROFITABLE**. rejected_reasons: {MIXED_SOURCE: 2, NET_PROFIT_TOO_LOW: 3}. **execution_ready_count=0** (kill_switch_active=true). **Features**: slippage_source=sqrtPriceAfter, USD fields (gross_pnl_usd, gas_cost_usd, net_pnl_usd). **FRAGILE_P90_ELEVATED RESOLVED** - no longer in quality_reasons!
 
-### Roundtrip Window Reality (2026-02-27, 200 runs)
-- **best_roundtrip_net_pnl_bps_in_window = -10.85 bps** (top over 200 runs, `ci_m5_gate_20260227_144328`)
-- **latest best_net_pnl_bps = -52.91 bps** (runDir `ci_m5_gate_20260227_162412`)
+### Roundtrip Window Reality (2026-02-27)
+- **best_roundtrip_net_pnl_bps_in_window = -10.85 bps** (top over 200 runs, historical)
+- **latest best_net_pnl_bps = -22.40 bps** (runDir `ci_m5_gate_20260227_190042`)
+- **slippage measurement**: `slippage_source=sqrtPriceAfter` (all 3 roundtrips)
+- **USD conversion verified**: gross_pnl_usd, gas_cost_usd, net_pnl_usd fields populated
+- **best-per-pair selection**: unique_pairs_considered=3 (WETH/USDT, WBTC/USDC, WETH/USDC)
 - **Thesis**: Мінус у `gross_pnl_bps` (swap rates), **gas не домінує** (<0.4 bps contribution)
-- **Best pair**: WETH/USDC sushiswap_v3_500 -> uniswap_v3_3000 (`buyback_penalty_bps=10.54`)
-- **Worst pairs**: WETH/USDT with higher fee pools (`buyback_penalty_bps=52-108 bps`)
-- **Conclusion**: One-leg paper edge (~40-86 bps spread) does NOT survive roundtrip due to buyback price impact. Need to either find lower-impact pools OR wait for larger market dislocations.
-- See `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` across all 200 runs.
+- **Best pair**: WBTC/USDC uniswap_v3_500 -> sushiswap_v3_500 (`net_pnl_bps=-0.47`)
+- **FRAGILE_P90_ELEVATED**: **RESOLVED** - no longer in quality_reasons!
+- **Conclusion**: Observability proves roundtrip-minus is in LP fees, not gas. One-leg paper edge does NOT survive roundtrip. Need larger market dislocations.
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when >=10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.

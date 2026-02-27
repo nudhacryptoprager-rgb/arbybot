@@ -539,8 +539,11 @@ def evaluate_quotes(
         "quality_warnings": quality_warnings,  # v2.0.9
     }
     
+    # v2.8.0: Sort by net_profit_usd descending so roundtrip evaluates best candidates first
+    gated_sorted = sorted(gated, key=lambda o: o.net_profit_usd, reverse=True)
+    
     # Return only gated opportunities (excludes PRICE_OUTLIER, etc.)
-    return [o.to_dict() for o in gated], summary
+    return [o.to_dict() for o in gated_sorted], summary
 
 
 def _count_reject_reasons(opportunities: List[Opportunity]) -> Dict[str, int]:

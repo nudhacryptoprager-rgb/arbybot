@@ -573,12 +573,27 @@ def run_scan(
             def roundtrip_eligible(opp: dict) -> bool:
                 return is_cross_dex(opp) and lp_fee_viable(opp)
             
-            # Consider more candidates (10), filter by eligibility, take top 5
-            eligible_opps = [o for o in opps_list[:10] if roundtrip_eligible(o)][:5]
+            # v2.8.0: Best-per-pair selection to improve coverage across pairs
+            # Instead of taking top-N overall (which often clusters on one pair),
+            # select best candidate per unique pair, then take top-5
+            def best_per_pair(opps, max_candidates=10):
+                """Select best opportunity per pair by net_profit_usd."""
+                pairs_best = {}
+                for o in opps[:max_candidates]:
+                    pair = o.get("pair", "unknown")
+                    if pair not in pairs_best or o.get("net_profit_usd", 0) > pairs_best[pair].get("net_profit_usd", 0):
+                        pairs_best[pair] = o
+                # Return sorted by net_profit_usd descending
+                return sorted(pairs_best.values(), key=lambda x: x.get("net_profit_usd", 0), reverse=True)
+            
+            # Apply best-per-pair, filter by eligibility, take top 5
+            per_pair_best = best_per_pair(opps_list, max_candidates=20)
+            eligible_opps = [o for o in per_pair_best if roundtrip_eligible(o)][:5]
             stats["roundtrip_lp_filter"] = {
-                "candidates_considered": min(10, len(opps_list)),
-                "cross_dex_count": len([o for o in opps_list[:10] if is_cross_dex(o)]),
-                "lp_viable_count": len([o for o in opps_list[:10] if lp_fee_viable(o)]),
+                "candidates_considered": min(20, len(opps_list)),
+                "cross_dex_count": len([o for o in opps_list[:20] if is_cross_dex(o)]),
+                "lp_viable_count": len([o for o in opps_list[:20] if lp_fee_viable(o)]),
+                "unique_pairs_considered": len(per_pair_best),  # v2.8.0: Track pair diversity
                 "passed_to_roundtrip": len(eligible_opps),
             }
             
@@ -591,6 +606,10 @@ def run_scan(
                 leg2_quote_callback_factory=make_leg2_callback,
                 l1_cost_wei=l1_cost_wei,
                 l1_cost_source=l1_cost_source,
+                # v2.8.0: Pass USD prices for cross-token correctness
+                eth_usd_price=eth_usd,
+                token_usd_prices=config.get("tokens_usd_price") or {},
+                token_decimals=None,  # TODO: Add token_decimals to config
             )
         
         # Summarize round-trip results
