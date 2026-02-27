@@ -74,6 +74,28 @@ def canonicalize_pair(pair: str) -> str:
     return f"{sorted_tokens[0]}/{sorted_tokens[1]}"
 
 
+# v2.2.3: Sanity bounds for anchor prices (reject obvious outliers)
+# These are conservative bounds - real prices rarely exceed these
+ANCHOR_PRICE_MIN = 1e-12  # Smallest reasonable price (e.g., wei/ETH)
+ANCHOR_PRICE_MAX = 1e9   # Largest reasonable price (e.g., BTC/wei absurd)
+
+
+def is_valid_anchor_price(price: float) -> bool:
+    """
+    Check if a price is within reasonable bounds.
+    
+    v2.2.3: Rejects NaN, Inf, zero, negative, and obvious outliers.
+    """
+    import math
+    if not math.isfinite(price):
+        return False
+    if price <= 0:
+        return False
+    if price < ANCHOR_PRICE_MIN or price > ANCHOR_PRICE_MAX:
+        return False
+    return True
+
+
 @dataclass
 class AnchorSample:
     """Single price sample for anchor calculation."""
@@ -143,22 +165,34 @@ class DynamicAnchorManager:
             with open(self.cache_path) as f:
                 data = json.load(f)
             
+            filtered_count = 0
             for pair, pair_data in data.get("pairs", {}).items():
-                samples = [
-                    AnchorSample(
-                        timestamp=s["timestamp"],
-                        price=s["price"],
-                        dex_id=s["dex_id"],
-                        fee_tier=s["fee_tier"],
-                        block=s.get("block", 0),
+                # v2.2.3: Filter out invalid samples on load
+                valid_samples = []
+                for s in pair_data.get("samples", []):
+                    price = s["price"]
+                    if is_valid_anchor_price(price):
+                        valid_samples.append(
+                            AnchorSample(
+                                timestamp=s["timestamp"],
+                                price=price,
+                                dex_id=s["dex_id"],
+                                fee_tier=s["fee_tier"],
+                                block=s.get("block", 0),
+                            )
+                        )
+                    else:
+                        filtered_count += 1
+                
+                if valid_samples:
+                    self._pairs[pair] = PairAnchorData(
+                        pair=pair,
+                        samples=valid_samples,
+                        last_updated=pair_data.get("last_updated", 0.0),
                     )
-                    for s in pair_data.get("samples", [])
-                ]
-                self._pairs[pair] = PairAnchorData(
-                    pair=pair,
-                    samples=samples,
-                    last_updated=pair_data.get("last_updated", 0.0),
-                )
+            
+            if filtered_count > 0:
+                logger.warning("Filtered %d invalid samples from anchor cache", filtered_count)
             
             logger.info(f"Loaded {len(self._pairs)} pairs from anchor cache")
         except Exception as e:
@@ -215,6 +249,14 @@ class DynamicAnchorManager:
         
         if canonical_pair not in self._pairs:
             self._pairs[canonical_pair] = PairAnchorData(pair=canonical_pair)
+        
+        # v2.2.3: Sanity check - reject outlier prices
+        if not is_valid_anchor_price(price):
+            logger.warning(
+                "ANCHOR_SAMPLE_REJECTED: %s price=%s (outside valid range [%s, %s])",
+                pair, price, ANCHOR_PRICE_MIN, ANCHOR_PRICE_MAX
+            )
+            return
         
         sample = AnchorSample(
             timestamp=time.time(),

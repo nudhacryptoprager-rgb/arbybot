@@ -38,6 +38,11 @@ QUARANTINE_CONFIG = {
     # How many consecutive failures before quarantine
     "failure_threshold": 3,
     
+    # v2.3.0: Per-error-code threshold overrides (lower = more aggressive quarantine)
+    "failure_threshold_overrides": {
+        "SUSPECT_LIQUIDITY": 2,  # SUSPECT_LIQUIDITY is a strong signal, quarantine after 2 failures
+    },
+    
     # How long to quarantine (seconds)
     "quarantine_duration_seconds": 300,  # 5 minutes
     
@@ -180,12 +185,15 @@ class QuarantineManager:
         
         # Threshold-based quarantine
         elif error_code in self.config.get("trackable_errors", []):
-            threshold = self.config.get("failure_threshold", 3)
+            # v2.3.0: Support per-error-code threshold overrides
+            default_threshold = self.config.get("failure_threshold", 3)
+            overrides = self.config.get("failure_threshold_overrides", {})
+            threshold = overrides.get(error_code, default_threshold)
             if record.consecutive_failures >= threshold:
                 should_quarantine = True
                 logger.warning(
                     f"Threshold quarantine for {key}: "
-                    f"{record.consecutive_failures} consecutive failures",
+                    f"{record.consecutive_failures} consecutive failures (threshold={threshold})",
                     extra={"context": details}
                 )
         

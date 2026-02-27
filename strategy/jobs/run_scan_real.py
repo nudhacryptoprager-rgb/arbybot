@@ -296,6 +296,9 @@ def run_scan(
     # v2.2.2: Config transparency - propagate to scan.stats for cross-artifact consistency
     stats["require_cross_dex"] = config.get("require_cross_dex", False)
     stats["config_path"] = config.get("_config_path", None)
+    # v2.3.0: Sizing params for audit trail
+    stats["use_usd_notional"] = config.get("use_usd_notional", False)
+    stats["target_usd_notional"] = config.get("target_usd_notional", None)
     
     total_attempts = stats["quotes_total"]
     if total_attempts > 0:

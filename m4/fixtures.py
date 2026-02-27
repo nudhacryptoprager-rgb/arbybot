@@ -652,6 +652,9 @@ def generate_m4_from_online_inputs(
         
         simulation = {
             "signal_id": signal_id,
+            # v2.3.0: Add pair/route for audit trail
+            "pair": sig.get("pair"),
+            "route": f"{sig.get('buy_dex', 'unknown')}->{sig.get('sell_dex', 'unknown')}",
             "simulation_status": "OK" if is_profitable else "FAIL",
             "simulation_mode": "paper_realistic",  # Paper simulation with realistic costs
             "cost_model": "paper_realistic",

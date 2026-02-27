@@ -9,6 +9,8 @@ Contains functions for computing spread signals from quotes.
 from __future__ import annotations
 
 import logging
+import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Tuple
 
@@ -142,6 +144,11 @@ def compute_spread_signals(
                     len(spread_signals), spread_threshold_bps)
     except Exception as e:
         logger.warning("Failed to compute spread signals: %s", e)
+    
+    # v2.3.0: Generate unique signal_id for each signal for audit trail
+    ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    for idx, sig in enumerate(spread_signals):
+        sig["signal_id"] = f"signal_{ts_str}_{current_block}_{idx}"
     
     return spread_signals
 
@@ -443,6 +450,16 @@ def _build_spread_signal(
     # v2.2.0: Updated net estimate includes LP fees (more realistic for roundtrip)
     net_pnl_after_lp_fee_usdc = net_pnl_usdc_estimate - lp_fee_usdc_est
     
+    # v2.3.0: Notional drift tracking from underlying quotes
+    buy_notional_drift_pct = best_buy.get("notional_drift_pct")
+    sell_notional_drift_pct = best_sell.get("notional_drift_pct")
+    # Add confidence reason if either leg has significant drift (>20%)
+    drift_warning_threshold = config.get("drift_warning_pct", 20.0)
+    if buy_notional_drift_pct is not None and abs(float(buy_notional_drift_pct)) > drift_warning_threshold:
+        confidence_reasons.append("BUY_NOTIONAL_DRIFT")
+    if sell_notional_drift_pct is not None and abs(float(sell_notional_drift_pct)) > drift_warning_threshold:
+        confidence_reasons.append("SELL_NOTIONAL_DRIFT")
+    
     # v2.5.0: Same-dex detection (fee-tier arb within same DEX)
     is_same_dex = buy_dex == sell_dex
     is_same_dex_excluded = is_same_dex and config.get("require_cross_dex", False)
@@ -480,6 +497,9 @@ def _build_spread_signal(
         "sell_dex": best_sell.get("dex_id"),
         "buy_price": str(round(buy_price, 6)),
         "sell_price": str(round(sell_price, 6)),
+        # v2.3.0: Exact prices for audit/verification (no rounding)
+        "buy_price_exact": str(buy_price),
+        "sell_price_exact": str(sell_price),
         "buy_pool": best_buy.get("pool_address"),
         "sell_pool": best_sell.get("pool_address"),
         # v2.2.0: Buy/sell fee tiers for LP fee estimation
@@ -509,6 +529,9 @@ def _build_spread_signal(
         "net_pnl_after_lp_fee_usdc": round(net_pnl_after_lp_fee_usdc, 4),
         "is_net_positive_after_lp_fee": net_pnl_after_lp_fee_usdc > 0,
         "net_negative_reason": net_negative_reason,
+        # v2.3.0: Notional drift tracking from underlying quotes
+        "buy_notional_drift_pct": round(float(buy_notional_drift_pct), 2) if buy_notional_drift_pct is not None else None,
+        "sell_notional_drift_pct": round(float(sell_notional_drift_pct), 2) if sell_notional_drift_pct is not None else None,
         # v2.0.3: Suspect spread flags (unrealistic arb detection)
         "is_suspect_spread": is_suspect_spread,
         "is_excluded_spread": is_excluded_spread or is_same_dex_excluded,  # v2.5.0: also exclude same-dex when require_cross_dex
