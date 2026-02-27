@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-27  
-**Tests**: 1085 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260227_125834`  
+**Tests**: 1093 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260227_133451`  
 **discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
 
 ---
@@ -13,6 +13,12 @@
 > **M5_0 є обов'язковим для CI та infra-proof.**  
 > M5_0 валідує схеми/інваріанти артефактів, multicall, failover, провенанс.  
 > M4 execution gate є окремим "core truth" для profit.
+
+### Signals Excluded Policy
+- `signals_excluded` у rolling складається з `SAME_DEX_EXCLUDED` — це policy-семантика (fee-tier noise в межах одного DEX)
+- Це НЕ quality issue, а очікувана поведінка з `require_cross_dex: true`
+- Корисна метрика для крос-DEX прогресу: `signals_included` та `unique_routes_cross_dex`
+- `WARN_SAME_DEX_PRESENT` — інформативний токен (не блокує PASS)
 
 ---
 

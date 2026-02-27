@@ -747,6 +747,9 @@ def generate_m4_from_online_inputs(
         "signals_count": len(m4_signals),
         "included_signals_count": included_signals_count,  # For DoD metrics
         "excluded_signals_count": excluded_signals_count,  # SUSPECT_SPREAD excluded
+        # v2.7.0: Breakdown of exclusion reasons
+        "same_dex_excluded_count": same_dex_excluded_count,        # Policy exclusion (fee-tier noise)
+        "non_same_dex_excluded_count": non_same_dex_excluded_count,  # Quality issue exclusion
         "suspect_signals_count": suspect_signals_count,    # SUSPECT_SPREAD flagged (superset of excluded)
         "simulations_count": len(simulations),
         "simulations_passed": sim_profitable_count,  # Based on included signals only
@@ -771,6 +774,9 @@ def generate_m4_from_online_inputs(
             "signals_total": len(m4_signals),
             "signals_included": included_signals_count,
             "signals_excluded": excluded_signals_count,
+            # v2.7.0: Exclusion breakdown for policy vs quality analysis
+            "same_dex_excluded": same_dex_excluded_count,
+            "non_same_dex_excluded": non_same_dex_excluded_count,
             "simulations_total": len(simulations),
         },
         "health": {
@@ -881,25 +887,21 @@ def generate_m4_from_online_inputs(
         quality_warnings.append(f"LOW_SAMPLE({included_signals_count}<{Thresholds.MIN_SIGNALS_FOR_PASS})")
         quality_reasons.append(FailReason.WARN_LOW_SAMPLE)
     
-    # v1.10.0: FAIL_FRAGILE_HIGH when fragile_rate violates limits
-    # Priority: profile.fragile_rate_max (e.g., 0.20 for profit) -> FAIL
-    # Fallback: universal threshold 0.50 -> FAIL (not just WARN)
+    # v2.7.0: Fragile rate thresholds aligned with rolling policy
+    # FAIL_FRAGILE_HIGH: frag_rate > 0.50 (AGG_FRAGILE_P90_FAIL)
+    # WARN_FRAGILE_ELEVATED: frag_rate > 0.30 (AGG_FRAGILE_P90_WARN)
+    # profile.fragile_rate_max retained for config but treated as WARN boundary
     # v2.0.3: Use included_signals_count (excluded signals not counted)
+    from m4.policy import Thresholds as PolicyThresholds
     frag_rate = fragile_count / included_signals_count if included_signals_count else 0
-    from m4.policy import get_profile
-    try:
-        profile_config = get_profile(profile)
-        fragile_rate_max = profile_config.fragile_rate_max
-    except (ValueError, NameError):
-        fragile_rate_max = 0.50  # v1.10.0: universal fail threshold (was 1.0)
     
-    if not is_low_sample and frag_rate > fragile_rate_max:
-        # v1.10.0: Hard filter - profile-specific or universal 0.50
-        quality_warnings.append(f"FAIL_FRAGILE_RATE({frag_rate:.2f}>{fragile_rate_max})")
+    if not is_low_sample and frag_rate > PolicyThresholds.AGG_FRAGILE_P90_FAIL:
+        # v2.7.0: Hard FAIL only at 0.50 (policy-aligned)
+        quality_warnings.append(f"FAIL_FRAGILE_RATE({frag_rate:.2f}>{PolicyThresholds.AGG_FRAGILE_P90_FAIL})")
         quality_reasons.append("FAIL_FRAGILE_HIGH")
-    elif not is_low_sample and frag_rate >= 0.30:
-        # v1.10.0: WARN at 0.30 (early warning, before 0.50 cutoff)
-        quality_warnings.append(f"WARN_FRAGILE_RATE({frag_rate:.2f}>=0.30)")
+    elif not is_low_sample and frag_rate > PolicyThresholds.AGG_FRAGILE_P90_WARN:
+        # v2.7.0: WARN at 0.30 (aligned with rolling)
+        quality_warnings.append(f"WARN_FRAGILE_RATE({frag_rate:.2f}>{PolicyThresholds.AGG_FRAGILE_P90_WARN})")
         quality_reasons.append("WARN_FRAGILE_ELEVATED")
     
     # v2.0.3: TOP_PAIR_NET_SHARE concentration check

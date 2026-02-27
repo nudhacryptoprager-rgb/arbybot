@@ -4,39 +4,35 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-27T11:58:50Z
-run_id: data/runs/ci_m5_gate_20260227_125834
-mode: ONLINE (v2.6.1 - quality_reasons fix, route field, CostModel refactor)
+timestamp_utc: 2026-02-27T12:35:08Z
+run_id: data/runs/ci_m5_gate_20260227_133451
+mode: ONLINE (v2.7.0 - fragile thresholds aligned, canonical WARN tokens, runDir sync)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-27T11:58:50+00:00
+  primary: ts:2026-02-27T12:35:08+00:00
   dirty: true
-  desc: v2.6.1 - WARN_SAME_DEX_PRESENT, route field, is_same_dex propagation, CostModel to m4.policy
+  desc: v2.7.0 - FAIL_FRAGILE_HIGH >0.50, WARN_FRAGILE_ELEVATED >0.30, canonical mappings, runDir/rolling sync
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Validation infrastructure + artifact consistency + cross-DEX signals
 change_summary:
-  - TEST: Added TestSpreadSignalInvariants (signal_id, exact prices, price direction, drift fields)
-  - FEATURE: Added quote_block_skew to scan.stats for snapshot consistency validation
-  - FIX: Conditional anchor cache flush (only with live RPC to avoid stale data)
-  - CONFIG: require_cross_dex=true in real_minimal.yaml (clean DEX↔DEX signals)
-  - FIX: daily_report cost_model now shows paper_realistic (matches paper_net_pnl_usdc_realistic)
-  - SCHEMA: Dynamic anchor sanity filter (bounds [1e-12, 1e9])
+  - FIX: Fragile thresholds aligned with rolling policy (0.30→WARN, 0.50→FAIL)
+  - FIX: Canonical WARN token mapping (FAIL_FRAGILE_HIGH→WARN_FRAGILE_ELEVATED)
+  - FIX: runDir run_summary synced with rolling (no divergence)
+  - SCHEMA: Added same_dex_excluded_count, non_same_dex_excluded_count breakdowns
+  - TEST: Added TestFragileRateThresholds, TestCanonicalWarnTokenMapping, TestPruneOnEveryIteration
 touched_files:
-  - tests/unit/test_truth_report.py (TestSpreadSignalInvariants)
-  - strategy/jobs/run_scan_real.py (quote_block_skew, conditional anchor flush)
-  - config/real_minimal.yaml (require_cross_dex: true)
-  - scripts/generate_daily_report.py (cost_model alignment)
-  - strategy/dynamic_anchors.py (sanity filter)
+  - m4/fixtures.py (fragile threshold alignment, excluded count breakdowns)
+  - m4/gates.py (canonical WARN mapping, runDir sync)
+  - tests/unit/test_suspect_spread_exclusion.py (new test classes)
   - docs/DEV_REPORT_LATEST.md (state update)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: PASS (1088 passed, 1 skipped)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 3: PASS
-py -3.11 start.py --config config/real_minimal.yaml --minutes 10 --max-runs 30: warm-up completed
+py -3.11 -m pytest tests/unit -q: PASS (1093 passed, 1 skipped)
+py -3.11 start.py --config config/real_minimal.yaml --minutes 10 --max-runs 40: evidence scan completed
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -44,13 +40,13 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json (200 runs)
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260227_125834/reports
+  - data/runs/ci_m5_gate_20260227_133451/reports
 preflight_evidence:
   - enabled: true
-  - candidates_count: 9
-  - cross_dex_signals: 5 (included)
-  - same_dex_excluded: 4 (SAME_DEX_EXCLUDED)
-  - total_net_usdc: $1480.68
+  - candidates_count: 7
+  - cross_dex_signals: 4 (included)
+  - same_dex_excluded: 3 (SAME_DEX_EXCLUDED)
+  - total_net_usdc: $1376.21
   - evidence_source: preflight_v1.0.3
 
 ## 4) Key Results (числа з артефактів)
@@ -60,7 +56,7 @@ _latest.json:
   run_status: WARN_QUALITY
   agg_status: WARN_QUALITY
   agg_reasons: []
-  quality_warnings: [WARN_FRAGILE_ELEVATED, WARN_SAME_DEX_PRESENT, WARN_FRAGILE_HIGH, WARN_PROFIT_DIAGNOSTIC]
+  quality_warnings: [WARN_SAME_DEX_PRESENT, WARN_PROFIT_DIAGNOSTIC]
   data_run_rate: 1.0
   low_sample_rate: 0.0
   runs_in_window: 200
@@ -69,13 +65,15 @@ _latest.json:
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: WARN_QUALITY
-  run_context.run_timestamp: 2026-02-27T11:58:50+00:00
-  inputs.run_dir_name: ci_m5_gate_20260227_125834
+  run_context.run_timestamp: 2026-02-27T12:35:08+00:00
+  inputs.run_dir_name: ci_m5_gate_20260227_133451
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 9
-    included_signals_count: 5 (cross-DEX only)
-    excluded_signals_count: 4 (SAME_DEX_EXCLUDED)
+    signals_count: 7
+    included_signals_count: 4 (cross-DEX only)
+    excluded_signals_count: 3 (SAME_DEX_EXCLUDED)
+    same_dex_excluded_count: 3 (policy exclusion)
+    non_same_dex_excluded_count: 0
     sim_profitable_count: 7 (paper)
     total_net_usdc: $1373.90 (rolling)
     profit_is_diagnostic: true

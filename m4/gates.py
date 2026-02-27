@@ -745,16 +745,23 @@ def run_online_gate(
         computed_quality_reasons = [r for r in reasons if r in (FailReason.WARN_LOW_SAMPLE, FailReason.FAIL_FRAGILE_HIGH, FailReason.WARN_FRAGILE_ELEVATED)]
         
         # v2.0.5 FIX: Filter out FAIL_* tokens from upstream - they can't coexist with status=PASS
-        # FAIL_* at run-level must imply status=FAIL; if status!=FAIL, downgrade to WARN_*
+        # FAIL_* at run-level must imply status=FAIL; if status!=FAIL, downgrade to canonical WARN_*
+        # v2.7.0: Use canonical mappings instead of string replacement to avoid non-canonical tokens
+        FAIL_TO_WARN_MAP = {
+            "FAIL_FRAGILE_HIGH": "WARN_FRAGILE_ELEVATED",  # Canonical mapping
+            "FAIL_DRIFT_MAE": "WARN_DRIFT_MAE",            # Canonical mapping
+            # Other FAIL_* tokens have no WARN equivalent - drop them if status!=FAIL
+        }
         merged_quality_reasons = list(computed_quality_reasons)
         for ur in upstream_quality_reasons:
             if ur not in merged_quality_reasons:
-                # v2.0.5: Never merge FAIL_* if status is PASS
+                # v2.7.0: Never merge FAIL_* if status is PASS - use canonical mapping
                 if ur.startswith("FAIL_") and status not in ("FAIL", "FAIL_QUALITY"):
-                    # Downgrade to WARN variant
-                    warn_variant = ur.replace("FAIL_", "WARN_")
-                    if warn_variant not in merged_quality_reasons:
+                    # Downgrade to canonical WARN variant if exists
+                    warn_variant = FAIL_TO_WARN_MAP.get(ur)
+                    if warn_variant and warn_variant not in merged_quality_reasons:
                         merged_quality_reasons.append(warn_variant)
+                    # If no canonical mapping, drop the FAIL_* token entirely
                 else:
                     merged_quality_reasons.append(ur)
         
@@ -832,6 +839,12 @@ def run_online_gate(
         
         with open(run_summary_path, "w") as f:
             json.dump(run_summary, f, indent=2)
+        
+        # v2.7.0: Also update the runDir's run_summary to ensure consistency
+        # This prevents runDir vs rolling status divergence
+        if summary_path.exists():
+            with open(summary_path, "w") as f:
+                json.dump(run_summary, f, indent=2)
         
         # STEP 3: Incident bundle persistence (only for real incidents)
         incident_dir = None

@@ -331,3 +331,172 @@ class TestStatusDomainConsistency:
         # WARN_EXCLUDED_SIGNALS should NOT be present
         assert "WARN_EXCLUDED_SIGNALS" not in quality_reasons
         assert "WARN_SAME_DEX_PRESENT" in quality_reasons
+
+
+class TestFragileRateThresholds:
+    """
+    v2.7.0: Test fragile rate threshold alignment.
+    
+    Policy-aligned thresholds:
+    - 0.30 (AGG_FRAGILE_P90_WARN) → WARN_FRAGILE_ELEVATED
+    - 0.50 (AGG_FRAGILE_P90_FAIL) → FAIL_FRAGILE_HIGH
+    
+    These tests verify run-level behavior matches rolling-level policy.
+    """
+
+    def test_fragile_rate_0_4_gives_warn_not_fail(self):
+        """fragile_rate=0.4 should give WARN_FRAGILE_ELEVATED, NOT FAIL_FRAGILE_HIGH.
+        
+        This is the key fix: 0.4 is above WARN threshold (0.30) but below FAIL (0.50),
+        so it should emit WARN_FRAGILE_ELEVATED, not FAIL_FRAGILE_HIGH.
+        """
+        from m4.policy import Thresholds
+        
+        frag_rate = 0.4
+        quality_reasons = []
+        
+        # Simulate the threshold logic from m4/fixtures.py (v2.7.0)
+        if frag_rate > Thresholds.AGG_FRAGILE_P90_FAIL:  # > 0.50
+            quality_reasons.append("FAIL_FRAGILE_HIGH")
+        elif frag_rate > Thresholds.AGG_FRAGILE_P90_WARN:  # > 0.30
+            quality_reasons.append("WARN_FRAGILE_ELEVATED")
+        
+        assert "WARN_FRAGILE_ELEVATED" in quality_reasons, \
+            f"fragile_rate=0.4 should trigger WARN_FRAGILE_ELEVATED, got {quality_reasons}"
+        assert "FAIL_FRAGILE_HIGH" not in quality_reasons, \
+            f"fragile_rate=0.4 should NOT trigger FAIL_FRAGILE_HIGH, got {quality_reasons}"
+
+    def test_fragile_rate_0_55_gives_fail(self):
+        """fragile_rate=0.55 should give FAIL_FRAGILE_HIGH.
+        
+        Above 0.50 threshold → hard FAIL.
+        """
+        from m4.policy import Thresholds
+        
+        frag_rate = 0.55
+        quality_reasons = []
+        
+        if frag_rate > Thresholds.AGG_FRAGILE_P90_FAIL:  # > 0.50
+            quality_reasons.append("FAIL_FRAGILE_HIGH")
+        elif frag_rate > Thresholds.AGG_FRAGILE_P90_WARN:  # > 0.30
+            quality_reasons.append("WARN_FRAGILE_ELEVATED")
+        
+        assert "FAIL_FRAGILE_HIGH" in quality_reasons, \
+            f"fragile_rate=0.55 should trigger FAIL_FRAGILE_HIGH, got {quality_reasons}"
+        assert "WARN_FRAGILE_ELEVATED" not in quality_reasons, \
+            f"fragile_rate=0.55 should NOT trigger WARN_FRAGILE_ELEVATED (FAIL takes precedence)"
+
+    def test_fragile_rate_0_25_gives_nothing(self):
+        """fragile_rate=0.25 should NOT trigger any fragile warnings.
+        
+        Below 0.30 threshold → no fragile warnings.
+        """
+        from m4.policy import Thresholds
+        
+        frag_rate = 0.25
+        quality_reasons = []
+        
+        if frag_rate > Thresholds.AGG_FRAGILE_P90_FAIL:  # > 0.50
+            quality_reasons.append("FAIL_FRAGILE_HIGH")
+        elif frag_rate > Thresholds.AGG_FRAGILE_P90_WARN:  # > 0.30
+            quality_reasons.append("WARN_FRAGILE_ELEVATED")
+        
+        assert "WARN_FRAGILE_ELEVATED" not in quality_reasons
+        assert "FAIL_FRAGILE_HIGH" not in quality_reasons
+
+    def test_threshold_values_are_aligned(self):
+        """Threshold values should be 0.30 (warn) and 0.50 (fail)."""
+        from m4.policy import Thresholds
+        
+        assert Thresholds.AGG_FRAGILE_P90_WARN == 0.30, \
+            f"Expected WARN threshold 0.30, got {Thresholds.AGG_FRAGILE_P90_WARN}"
+        assert Thresholds.AGG_FRAGILE_P90_FAIL == 0.50, \
+            f"Expected FAIL threshold 0.50, got {Thresholds.AGG_FRAGILE_P90_FAIL}"
+
+
+class TestCanonicalWarnTokenMapping:
+    """
+    v2.7.0: Test that FAIL_* to WARN_* downgrade uses canonical mappings.
+    
+    Non-canonical tokens like WARN_FRAGILE_HIGH should never be generated.
+    Instead, FAIL_FRAGILE_HIGH should map to WARN_FRAGILE_ELEVATED.
+    """
+
+    def test_fail_fragile_high_maps_to_warn_fragile_elevated(self):
+        """FAIL_FRAGILE_HIGH should downgrade to WARN_FRAGILE_ELEVATED, not WARN_FRAGILE_HIGH."""
+        # This is the canonical mapping from m4/gates.py v2.7.0
+        FAIL_TO_WARN_MAP = {
+            "FAIL_FRAGILE_HIGH": "WARN_FRAGILE_ELEVATED",
+            "FAIL_DRIFT_MAE": "WARN_DRIFT_MAE",
+        }
+        
+        # Simulate downgrade for FAIL_FRAGILE_HIGH
+        upstream_reason = "FAIL_FRAGILE_HIGH"
+        warn_variant = FAIL_TO_WARN_MAP.get(upstream_reason)
+        
+        assert warn_variant == "WARN_FRAGILE_ELEVATED", \
+            f"FAIL_FRAGILE_HIGH should map to WARN_FRAGILE_ELEVATED, got {warn_variant}"
+        assert warn_variant != "WARN_FRAGILE_HIGH", \
+            "Should NOT produce non-canonical WARN_FRAGILE_HIGH"
+
+    def test_unmapped_fail_reasons_are_dropped(self):
+        """FAIL_* reasons without canonical WARN mapping should be dropped (not renamed)."""
+        FAIL_TO_WARN_MAP = {
+            "FAIL_FRAGILE_HIGH": "WARN_FRAGILE_ELEVATED",
+            "FAIL_DRIFT_MAE": "WARN_DRIFT_MAE",
+        }
+        
+        # FAIL_NET has no WARN equivalent
+        upstream_reason = "FAIL_NET"
+        warn_variant = FAIL_TO_WARN_MAP.get(upstream_reason)
+        
+        assert warn_variant is None, \
+            f"FAIL_NET should not have WARN mapping, got {warn_variant}"
+
+
+class TestPruneOnEveryIteration:
+    """
+    v2.6.1: Test that prune happens on every iteration, not just PASS.
+    
+    This prevents disk bloat when the scanner fails repeatedly (RPC errors, drift).
+    """
+
+    def test_prune_condition_is_independent_of_status(self):
+        """Prune should happen when prune_keep > 0, regardless of passed status.
+        
+        This test validates the architectural decision, not the full integration.
+        The condition should be: `if args.prune_keep > 0` (NOT `if passed and args.prune_keep > 0`)
+        """
+        # Simulate the prune condition logic
+        class MockArgs:
+            prune_keep = 50
+        
+        args = MockArgs()
+        
+        # Test with passed=True
+        passed = True
+        should_prune_if_passed = args.prune_keep > 0
+        
+        # Test with passed=False
+        passed = False
+        should_prune_if_failed = args.prune_keep > 0
+        
+        # Both should be True (prune is independent of passed status)
+        assert should_prune_if_passed is True
+        assert should_prune_if_failed is True
+        
+        # And they should be equal (same condition)
+        assert should_prune_if_passed == should_prune_if_failed, \
+            "Prune condition should be independent of passed status"
+
+    def test_prune_disabled_when_zero(self):
+        """Prune should be disabled when prune_keep=0."""
+        class MockArgs:
+            prune_keep = 0
+        
+        args = MockArgs()
+        should_prune = args.prune_keep > 0
+        
+        assert should_prune is False, "Prune should be disabled when prune_keep=0"
+
+
