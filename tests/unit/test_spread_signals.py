@@ -303,3 +303,79 @@ def test_spread_pct_semantics():
     # But we need to add this field to the test helper
     expected_spread_pct = sig["spread_bps_exact"] / 100
     assert abs(expected_spread_pct - 0.1) < 0.001, f"Expected 0.1%, got {expected_spread_pct}"
+
+
+class TestNotionalDriftFilter:
+    """Tests for NOTIONAL_DRIFT filtering in spread evaluation (v2.2.3)."""
+    
+    def test_high_drift_excluded(self):
+        """Quote with drift=86% (>50%) should be excluded from spread evaluation."""
+        from strategy.spreads import compute_spread_signals
+        
+        quotes = [
+            # Low drift - should be included
+            {"dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price_exact": "2000.0", "notional_drift_pct": 3.0,
+             "pool_address": "0x1111111111111111111111111111111111111111"},
+            # High drift - should be excluded
+            {"dex_id": "sushiswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price_exact": "2010.0", "notional_drift_pct": 86.0,
+             "pool_address": "0x2222222222222222222222222222222222222222"},
+        ]
+        config = {"truth_mode_m42": False, "notional_drift_max_pct": 50.0}
+        rejected = []
+        
+        signals = compute_spread_signals(quotes, config, 1000, rejected)
+        
+        # Only 1 quote remains after drift filter - not enough for spread calc
+        assert len(signals) == 0, "Should have no signals - one quote excluded by drift"
+        assert len(rejected) == 1, "Should have 1 rejected quote"
+        assert rejected[0]["reject_reason"] == "NOTIONAL_DRIFT_EXCLUDED"
+        assert rejected[0]["notional_drift_pct"] == 86.0
+    
+    def test_low_drift_included(self):
+        """Quotes with drift=3% (<50%) should be included in spread evaluation."""
+        from strategy.spreads import compute_spread_signals
+        
+        quotes = [
+            {"dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price_exact": "2000.0", "notional_drift_pct": 3.0,
+             "pool_address": "0x1111111111111111111111111111111111111111"},
+            {"dex_id": "sushiswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price_exact": "2010.0", "notional_drift_pct": 5.0,
+             "pool_address": "0x2222222222222222222222222222222222222222"},
+        ]
+        config = {"truth_mode_m42": False, "notional_drift_max_pct": 50.0}
+        rejected = []
+        
+        signals = compute_spread_signals(quotes, config, 1000, rejected)
+        
+        # Both quotes included - spread signal generated
+        assert len(signals) >= 1, "Should have signal - both quotes under drift threshold"
+        assert len(rejected) == 0, "Should have no rejected quotes"
+    
+    def test_drift_threshold_configurable(self):
+        """notional_drift_max_pct should be configurable."""
+        from strategy.spreads import compute_spread_signals
+        
+        quotes = [
+            {"dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price_exact": "2000.0", "notional_drift_pct": 30.0,
+             "pool_address": "0x1111111111111111111111111111111111111111"},
+            {"dex_id": "sushiswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price_exact": "2010.0", "notional_drift_pct": 40.0,
+             "pool_address": "0x2222222222222222222222222222222222222222"},
+        ]
+        
+        # With threshold=50%, both included
+        config_50 = {"truth_mode_m42": False, "notional_drift_max_pct": 50.0}
+        rejected_50 = []
+        signals_50 = compute_spread_signals(quotes, config_50, 1000, rejected_50)
+        assert len(signals_50) >= 1, "With 50% threshold, both quotes should be included"
+        
+        # With threshold=25%, both excluded
+        config_25 = {"truth_mode_m42": False, "notional_drift_max_pct": 25.0}
+        rejected_25 = []
+        signals_25 = compute_spread_signals(quotes, config_25, 1000, rejected_25)
+        assert len(signals_25) == 0, "With 25% threshold, both quotes should be excluded"
+        assert len(rejected_25) == 2, "Should have 2 rejected quotes"

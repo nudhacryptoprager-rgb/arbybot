@@ -88,6 +88,30 @@ def compute_spread_signals(
             logger.info("truth_mode_m42: excluded %d diagnostic-only (slot0) quotes from spread evaluation",
                        diagnostic_count)
     
+    # v2.2.3: Filter out quotes with excessive NOTIONAL_DRIFT (>50%)
+    # These quotes have unreliable sizing due to stale USD prices
+    notional_drift_max_pct = config.get("notional_drift_max_pct", 50.0)
+    drift_excluded_count = 0
+    filtered_quotes = []
+    for q in executable_quotes:
+        drift_pct = q.get("notional_drift_pct") or 0
+        if abs(float(drift_pct)) > notional_drift_max_pct:
+            drift_excluded_count += 1
+            if rejected_quotes is not None:
+                rejected_quotes.append({
+                    **q,
+                    "reject_reason": "NOTIONAL_DRIFT_EXCLUDED",
+                    "notional_drift_pct": drift_pct,
+                    "notional_drift_max_pct": notional_drift_max_pct,
+                })
+        else:
+            filtered_quotes.append(q)
+    
+    if drift_excluded_count > 0:
+        logger.info("notional_drift: excluded %d quotes with drift > %.0f%% from spread evaluation",
+                   drift_excluded_count, notional_drift_max_pct)
+    executable_quotes = filtered_quotes
+    
     logger.info("Starting spread signal computation: %d quotes (%d diagnostic excluded), threshold=%s bps", 
                 len(executable_quotes), diagnostic_count, spread_threshold_bps)
     

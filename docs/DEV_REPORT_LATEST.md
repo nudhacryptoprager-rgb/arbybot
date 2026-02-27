@@ -4,36 +4,40 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-26T09:10:00Z
-run_id: data/runs/ci_m5_gate_20260226_100942
-mode: ONLINE (warm-up + PRICE_SANITY quarantine fix)
+timestamp_utc: 2026-02-26T10:43:00Z
+run_id: data/runs/ci_m5_gate_20260226_114309
+mode: ONLINE (NOTIONAL_DRIFT filter + USD sizing fix)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-26T09:10:00+00:00
+  primary: ts:2026-02-26T10:43:00+00:00
   dirty: true
-  desc: v2.2.2 FIX - PRICE_SANITY_FAILED auto-quarantine, rolling warm-up
+  desc: v2.2.3 FIX - NOTIONAL_DRIFT filter, USD sizing config, truth_report schema
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Warm up rolling + enable PRICE_SANITY auto-quarantine + rolling WARN_QUALITY fix
+goal (Roadmap пункт): Fix NOTIONAL_DRIFT issues + warm up rolling + add drift filter
 change_summary:
-  - BUG FIX: rolling_store.py - WARN suffix detection in has_warn_threshold
-  - BUG FIX: strategy/quotes.py - PRICE_SANITY_FAILED now triggers auto-quarantine
-  - WARM-UP: 30min scan to push out historical NO_DATA runs
-  - DYNAMIC ANCHORS: Working correctly (price_sanity_failed=0)
-  - TESTS: All 1077 tests pass
+  - CONFIG: Added tokens_usd_price and target_usd_notional=250 to real_minimal.yaml
+  - FEATURE: NOTIONAL_DRIFT filter in spreads.py (excludes quotes with drift > 50%)
+  - FEATURE: USD_PRICE_FALLBACK_USED warning in quotes.py
+  - SCHEMA: Added buy_notional_drift_pct, sell_notional_drift_pct, signal_id to SpreadSignal
+  - WARM-UP: 60min scan raised data_run_rate from 0.465 to 0.725
+  - TESTS: All 1080 tests pass (3 new drift filter tests)
 touched_files:
-  - m4/rolling_store.py (WARN suffix detection fix)
-  - strategy/quotes.py (record_failure for PRICE_SANITY_FAILED)
+  - config/real_minimal.yaml (tokens_usd_price, target_usd_notional)
+  - strategy/quotes.py (USD_PRICE_FALLBACK_USED warning)
+  - strategy/spreads.py (NOTIONAL_DRIFT filter)
+  - monitoring/truth_report.py (SpreadSignal schema)
+  - tests/unit/test_spread_signals.py (drift filter tests)
   - docs/DEV_REPORT_LATEST.md (state update)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (3 warnings)
-py -3.11 -m pytest tests/unit -q: PASS (1077 passed, 1 skipped)
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
+py -3.11 -m pytest tests/unit -q: PASS (1080 passed, 1 skipped)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (ALL REQUIRED GATES PASSED)
-py -3.11 start.py --config config/real_minimal.yaml --minutes 30 --max-runs 80: warm-up completed
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1: PASS
+py -3.11 start.py --config config/real_minimal.yaml --minutes 60 --max-runs 160: warm-up completed
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 3: PASS
 py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit: PASS
 
 ## 3) Artifacts Attached (шляхи)
@@ -56,10 +60,10 @@ preflight_evidence:
 _latest.json:
   schema_version: m4:latest:v2.0
   run_status: PASS
-  agg_status: WARN_QUALITY
+  agg_status: PASS
   agg_reasons: []
   quality_warnings: [WARN_PROFIT_DIAGNOSTIC]
-  data_run_rate: 0.465
+  data_run_rate: 0.725
   low_sample_rate: 0.0
   runs_in_window: 200
   in_warmup: false
@@ -67,29 +71,29 @@ _latest.json:
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-02-26T09:10:03+00:00
-  inputs.run_dir_name: ci_m5_gate_20260226_100942
+  run_context.run_timestamp: 2026-02-26T10:43:26+00:00
+  inputs.run_dir_name: ci_m5_gate_20260226_114309
   inputs.run_mode: REGISTRY_REAL
   metrics:
     signals_count: 7
     included_signals_count: 7
     excluded_signals_count: 0
     sim_profitable_count: 7 (paper)
-    total_net_usdc: $1280.68 (rolling)
+    total_net_usdc: $1373.90 (rolling)
     profit_is_diagnostic: true
     profit_truth_source: ONE_LEG_DIAGNOSTIC
     profit_truth_available: false
 
 m4_stability_agg.json:
   runs_in_window: 200
-  pass_count: 93 (107 NO_DATA - historical)
-  data_run_rate: 0.465
-  total_net_usdc: $1280.68 (200-run window)
-  avg_net_usdc: $6.40/run (estimate)
+  pass_count: 145 (55 NO_DATA - improved)
+  data_run_rate: 0.725
+  total_net_usdc: $1373.90 (200-run window)
+  avg_net_usdc: $6.87/run (estimate)
   unique_pairs: 8
   unique_routes: 3 (2 cross-DEX)
-  agg_status: WARN_QUALITY
-  agg_reasons: [WARN_PROFIT_DIAGNOSTIC]
+  agg_status: PASS
+  agg_reasons: []
 
 ## 5) Pair Diversity Expansion (v2.5.2)
 
@@ -113,8 +117,8 @@ diversity_resolution:
 
 | DoD | Status | Evidence |
 |-----|--------|----------|
-| Core Truth (paper +PnL) | [OK] PROVEN | N=200 runs, total_net_usdc=$1280.68 |
-| Rolling Quality Gate | [WARN] WARN_QUALITY | agg_status=WARN_QUALITY, data_run_rate=0.465 (historical NO_DATA) |
+| Core Truth (paper +PnL) | [OK] PROVEN | N=200 runs, total_net_usdc=$1373.90 |
+| Rolling Quality Gate | [OK] PASS | agg_status=PASS, data_run_rate=0.725 |
 | M4.2 Roundtrip Profit | [NO] NOT_PROFITABLE | profitable_count=0, see Section 8 analysis |
 | M4.2 Real Execution | [NO] NOT STARTED | kill_switch_active=true |
 | M4.1 Time-Bound Window | [OK] ACHIEVED | runs_in_window=200 >= 100 |
@@ -123,9 +127,9 @@ diversity_resolution:
 | Diversity Routes | [OK] PASS | unique_routes_cross_dex=2 >= 2 |
 | Diversity Pairs | [OK] PASS | unique_pairs=8 >= 8 |
 
-> **WARM-UP NEEDED**: data_run_rate=0.465 < 0.5 due to historical NO_DATA runs in 200-run window.
-> Recent scans: 100% PASS, price_sanity_failed=0, dynamic anchors working correctly.
-> Resolution: Continue scanning to push out NO_DATA runs from window.
+> **NOTIONAL_DRIFT v2.2.3**: Added target_usd_notional=250 and tokens_usd_price to config.
+> NOTIONAL_DRIFT filter in spreads excludes quotes with >50% drift from spread evaluation.
+> data_run_rate improved from 0.465 to 0.725 after 60min warm-up.
 
 ## 7) Contract Checks (коротко)
 status/reasons consistency: OK (no FAIL_* with PASS status)

@@ -338,6 +338,23 @@ gas_usd_estimate: 0.10
 paper_size_usd: 250
 paper_slippage_bps: 0  # 0 bps default - conservative for micro-spreads
 
+# M4.2 USD-notional sizing (v2.2.3)
+# target_usd_notional: Target USD value for quote sizing (matches paper_size_usd)
+# tokens_usd_price: Override default prices to reduce NOTIONAL_DRIFT warnings
+target_usd_notional: 250
+use_usd_notional: true
+tokens_usd_price:
+  WBTC: 68000    # on-chain ~68000 (2026-02-26)
+  WETH: 2050     # on-chain ~2050 (2026-02-26)
+  ETH: 2050      # alias for WETH
+  USDC: 1.0
+  USDT: 1.0
+  DAI: 1.0
+  ARB: 0.10      # on-chain ~0.10 (2026-02-26), was 0.70 default
+  LINK: 16.0     # on-chain ~16 (2026-02-26), was 11.0 default
+  GMX: 17.0      # on-chain ~17 (2026-02-26), was 24.0 default
+  wstETH: 2500   # on-chain ~2500 (2026-02-26)
+
 # Autosize configuration (M5)
 # Auto-reduces position size when impact/ticksCrossed grows
 autosize:

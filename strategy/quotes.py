@@ -246,6 +246,12 @@ def calculate_amount_in_wei(
     # Get token USD price
     token_price = prices.get(token_symbol, 1.0)  # Default $1 if unknown
     
+    # v2.2.3: Warn if using default fallback price (not from config)
+    if tokens_usd_price and token_symbol not in tokens_usd_price:
+        if token_symbol in DEFAULT_TOKEN_USD_PRICES:
+            logger.warning("USD_PRICE_FALLBACK_USED: %s using default $%.2f (not in config)", 
+                          token_symbol, token_price)
+    
     if token_price <= 0:
         logger.warning("Invalid token price for %s: %s, using $1", token_symbol, token_price)
         token_price = 1.0

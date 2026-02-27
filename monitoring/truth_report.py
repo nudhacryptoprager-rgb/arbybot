@@ -141,6 +141,11 @@ class SpreadSignal:
     is_profitable: bool
     confidence: str = "medium"
     is_same_dex: bool = False  # Same DEX (fee-tier arb only) - diagnostic, exclude from quality metrics
+    # v2.2.3: Notional drift tracking for spread quality assessment
+    buy_notional_drift_pct: Optional[float] = None
+    sell_notional_drift_pct: Optional[float] = None
+    # v2.2.3: Signal ID for correlation with execution_report
+    signal_id: Optional[str] = None
 
 
 @dataclass
