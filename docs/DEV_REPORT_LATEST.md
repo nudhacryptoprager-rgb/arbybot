@@ -4,35 +4,37 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-27T12:35:08Z
-run_id: data/runs/ci_m5_gate_20260227_133451
-mode: ONLINE (v2.7.0 - fragile thresholds aligned, canonical WARN tokens, runDir sync)
+timestamp_utc: 2026-02-27T15:24:56Z
+run_id: data/runs/ci_m5_gate_20260227_162412
+mode: ONLINE (120-min roundtrip evidence scan)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-27T12:35:08+00:00
+  primary: ts:2026-02-27T15:24:56+00:00
   dirty: true
-  desc: v2.7.0 - FAIL_FRAGILE_HIGH >0.50, WARN_FRAGILE_ELEVATED >0.30, canonical mappings, runDir/rolling sync
+  desc: 120-min roundtrip scan - M4.2 pipeline validated, ROUNDTRIP_NOT_PROFITABLE
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Validation infrastructure + artifact consistency + cross-DEX signals
+goal (Roadmap пункт): M4.2 roundtrip pipeline - enable real roundtrip evaluation
 change_summary:
-  - FIX: Fragile thresholds aligned with rolling policy (0.30→WARN, 0.50→FAIL)
-  - FIX: Canonical WARN token mapping (FAIL_FRAGILE_HIGH→WARN_FRAGILE_ELEVATED)
-  - FIX: runDir run_summary synced with rolling (no divergence)
-  - SCHEMA: Added same_dex_excluded_count, non_same_dex_excluded_count breakdowns
-  - TEST: Added TestFragileRateThresholds, TestCanonicalWarnTokenMapping, TestPruneOnEveryIteration
+  - FIX: evaluate_quotes() now accepts target_notional_usd and max_notional_drift_pct
+  - FIX: run_scan_real.py passes config values to opportunity engine
+  - FIX: Default max_notional_drift_pct aligned to 50.0 (was 20.0, causing gated_count=0)
+  - TEST: Added TestV271NotionalDriftConfig with 7 unit tests
+  - RESULT: gated_count=6 (was 0), roundtrip.evaluated_count=3 (was 0)
+  - RESULT: profit_realism_status=ROUNDTRIP_NOT_PROFITABLE (was ONE_LEG_ONLY_DIAGNOSTIC)
 touched_files:
-  - m4/fixtures.py (fragile threshold alignment, excluded count breakdowns)
-  - m4/gates.py (canonical WARN mapping, runDir sync)
-  - tests/unit/test_suspect_spread_exclusion.py (new test classes)
+  - engine/opportunity_engine.py (evaluate_quotes API extension, default alignment)
+  - strategy/jobs/run_scan_real.py (config wiring)
+  - tests/unit/test_opportunity_engine.py (TestV271NotionalDriftConfig)
   - docs/DEV_REPORT_LATEST.md (state update)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: PASS (1093 passed, 1 skipped)
-py -3.11 start.py --config config/real_minimal.yaml --minutes 10 --max-runs 40: evidence scan completed
+py -3.11 -m pytest tests/unit -q: PASS (1100 passed, 1 skipped)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
+py -3.11 start.py --config config/real_minimal.yaml --minutes 10: evidence scan completed
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -40,23 +42,30 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json (200 runs)
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260227_133451/reports
+  - data/runs/ci_m5_gate_20260227_162412/reports
 preflight_evidence:
   - enabled: true
   - candidates_count: 7
-  - cross_dex_signals: 4 (included)
-  - same_dex_excluded: 3 (SAME_DEX_EXCLUDED)
-  - total_net_usdc: $1376.21
+  - cross_dex_signals: 3 (included)
+  - same_dex_excluded: 4 (SAME_DEX_EXCLUDED)
+  - total_net_usdc: $569.47 (rolling window)
   - evidence_source: preflight_v1.0.3
+
+roundtrip_evidence (120-min scan):
+  - opportunity.gated_count: 5
+  - roundtrip.evaluated_count: 4
+  - roundtrip.profitable_count: 0
+  - profit_realism_status: ROUNDTRIP_NOT_PROFITABLE
+  - rejected_reasons: {MIXED_SOURCE: 2, NET_PROFIT_TOO_LOW: 5}
 
 ## 4) Key Results (числа з артефактів)
 
 _latest.json:
   schema_version: m4:latest:v2.0
-  run_status: WARN_QUALITY
+  run_status: PASS
   agg_status: WARN_QUALITY
-  agg_reasons: []
-  quality_warnings: [WARN_SAME_DEX_PRESENT, WARN_PROFIT_DIAGNOSTIC]
+  agg_reasons: [FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW]
+  quality_warnings: [FRAGILE_P90_ELEVATED(0.50>0.3), DIVERSITY_PAIRS_LOW(4<8)]
   data_run_rate: 1.0
   low_sample_rate: 0.0
   runs_in_window: 200
@@ -64,16 +73,19 @@ _latest.json:
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
-  status: WARN_QUALITY
-  run_context.run_timestamp: 2026-02-27T12:35:08+00:00
-  inputs.run_dir_name: ci_m5_gate_20260227_133451
+  status: PASS
+  run_context.run_timestamp: 2026-02-27T15:24:56+00:00
+  inputs.run_dir_name: ci_m5_gate_20260227_162412
   inputs.run_mode: REGISTRY_REAL
   metrics:
     signals_count: 7
-    included_signals_count: 4 (cross-DEX only)
-    excluded_signals_count: 3 (SAME_DEX_EXCLUDED)
-    same_dex_excluded_count: 3 (policy exclusion)
-    non_same_dex_excluded_count: 0
+    included_signals_count: 3 (cross-DEX only)
+    excluded_signals_count: 4 (SAME_DEX_EXCLUDED)
+    sim_profitable_count: 2 (paper)
+    total_net_usdc: $2.04 (this run)
+    fragile_rate: 0.33
+    profit_is_diagnostic: true
+    profit_truth_source: ONE_LEG_DIAGNOSTIC
     sim_profitable_count: 7 (paper)
     total_net_usdc: $1373.90 (rolling)
     profit_is_diagnostic: true

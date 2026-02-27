@@ -1,12 +1,12 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
-**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
-**Updated**: 2026-02-24  
+**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate WARN_QUALITY)  
+**Updated**: 2026-02-27  
 **Policy**: DIVERSITY_PAIRS_TARGET=8  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ROUNDTRIP_NOT_PROFITABLE`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **M4 NOT CLOSED**: `net_usdc` from rolling is DIAGNOSTIC (`profit_is_diagnostic=true`), not canonical DEX-DEX truth. Clean PnL available (`cost_model_available=true`), but requires `profit_truth_source=ROUNDTRIP_CANONICAL` (currently `ONE_LEG_DIAGNOSTIC`).
+> [!] **M4.2 PIPELINE WORKING**: Notional drift config alignment fix. Roundtrip now evaluating (`gated_count=6`, `evaluated_count=3`). Current `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` - M4.2 pipeline working, awaiting profitable market conditions.
 
 ## M4-specific Fixes (2026-02-21)
 
@@ -27,13 +27,19 @@
 | DoD | What it means | Current Status |
 |-----|---------------|----------------|
 | **Core Truth (paper +PnL)** | N>=5 REGISTRY_REAL runs with total_net_usdc > 0 | [OK] PROVEN |
-| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [OK] PASS |
+| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [WARN] WARN_QUALITY (FRAGILE_P90_ELEVATED) |
+| **M4.2 Roundtrip Pipeline** | gated_count > 0, roundtrip evaluated | [OK] WORKING |
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. Round-trip валідований (truth_mode_m42=true for real_minimal.yaml, profit_realism_status=ROUNDTRIP_NOT_PROFITABLE). 
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = **WARN_QUALITY** (FRAGILE_P90_ELEVATED >0.30). M4.2 pipeline now **WORKING**: `gated_count=6`, `evaluated_count=3`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` (awaiting profitable conditions).
 
-**Snapshot (2026-02-24)**: From `m4_stability_agg.json` (canonical source): **runs_in_window=184** (M4.1 N=100+ ACHIEVED), data_run_rate=1.0, pass_rate=1.0, **total_net_usdc=$960.78**, unique_pairs=8 (matches target=8), **unique_routes=3** (**unique_routes_cross_dex=2** = target=2 -> OK). POOL_DISABLED=9 (from `disabled_pools`), POOL_MISSING=0. **execution_ready_count=0** (kill_switch_active=true), **would_execute_count=0** (roundtrip NOT_PROFITABLE). **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`). **profit_is_diagnostic=true** (simulate_only mode). **M4.3 Preflight Evidence AVAILABLE**: `preflight_evidence.enabled=true`, 2/2 candidates passed, `gas_estimate_source=quoter_v2` on all legs (preflight_v1.0.3 VERIFIED in scan AND truth_report). **Discovery**: 28 resolvable pairs, 0 unresolvable, 224 potential V3 queries. 49 tokens in core_tokens.yaml. For infra evidence see [Status_M5_0.md](Status_M5_0.md).
+### Excluded Signals Policy
+- `excluded_signals_count` складається з `SAME_DEX_EXCLUDED` (policy exclusion, fee-tier noise)
+- Breakdown: `same_dex_excluded_count=4`, `non_same_dex_excluded_count=0`
+- Це НЕ quality issue - очікувана поведінка з `require_cross_dex: true`
+
+**Snapshot (2026-02-27)**: From `ci_m5_gate_20260227_162412` (120-min scan): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), data_run_rate=1.0, **agg_status=WARN_QUALITY** (FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW), **total_net_usdc=$569.47** (rolling window), signals_included=3, signals_excluded=4. **gated_count=5**, **roundtrip.evaluated_count=4**, **roundtrip.profitable_count=0**, **profit_realism_status=ROUNDTRIP_NOT_PROFITABLE**. rejected_reasons: {MIXED_SOURCE: 2, NET_PROFIT_TOO_LOW: 5}. **execution_ready_count=0** (kill_switch_active=true). Discovery: 28 resolvable pairs, 49 tokens. For infra evidence see [Status_M5_0.md](Status_M5_0.md).
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when >=10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.

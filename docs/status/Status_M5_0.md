@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-27  
-**Tests**: 1093 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260227_133451`  
+**Tests**: 1100 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260227_162412`  
 **discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
 
 ---

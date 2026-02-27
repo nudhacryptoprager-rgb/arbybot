@@ -427,3 +427,94 @@ class TestV210PolicyUnification:
         engine = OpportunityEngine(max_gross_spread_bps=1000.0)
         
         assert engine.max_gross_spread_bps == 1000.0
+
+
+class TestV271NotionalDriftConfig:
+    """
+    v2.7.1: NotionalDrift gate is config-driven.
+    
+    The issue: opportunity_engine used hardcoded max_notional_drift_pct=20 and target_notional_usd=1000,
+    while spreads.py used notional_drift_max_pct=50 from config.
+    This caused NOTIONAL_DRIFT rejections that blocked roundtrip evaluation (gated_count=0).
+    """
+
+    def test_notional_drift_default_is_50(self):
+        """Default max_notional_drift_pct is 50 (aligned with spreads.py)."""
+        engine = OpportunityEngine()
+        assert engine.max_notional_drift_pct == 50.0, \
+            f"Expected 50.0, got {engine.max_notional_drift_pct}"
+
+    def test_notional_drift_accepts_config(self):
+        """max_notional_drift_pct can be set via constructor."""
+        engine = OpportunityEngine(max_notional_drift_pct=25.0)
+        assert engine.max_notional_drift_pct == 25.0
+
+    def test_target_notional_default_is_1000(self):
+        """Default target_notional_usd is 1000."""
+        engine = OpportunityEngine()
+        assert engine.target_notional_usd == 1000.0
+
+    def test_target_notional_accepts_config(self):
+        """target_notional_usd can be set via constructor."""
+        engine = OpportunityEngine(target_notional_usd=250.0)
+        assert engine.target_notional_usd == 250.0
+
+    def test_notional_drift_250_vs_250_passes(self):
+        """When usd_notional=250 and target=250, drift=0%, should NOT be rejected."""
+        engine = OpportunityEngine(target_notional_usd=250.0, max_notional_drift_pct=50.0)
+        quotes = [
+            {"dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 250, "amount_in_wei": 125000000000000000,
+             "quote_source": "quoter_v2"},
+            {"dex_id": "sushiswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 500, "usd_notional": 250, "amount_in_wei": 125000000000000000,
+             "quote_source": "quoter_v2"},
+        ]
+        opps = engine.build_opportunities(quotes)
+        assert len(opps) == 1
+        opp = opps[0]
+        
+        # Should NOT have NOTIONAL_DRIFT reject
+        assert opp.reject_reason is None or "NOTIONAL_DRIFT" not in opp.reject_reason, \
+            f"Unexpected NOTIONAL_DRIFT rejection: {opp.reject_reason}"
+
+    def test_notional_drift_250_vs_1000_rejects_with_old_default(self):
+        """When usd_notional=250 and target=1000, drift=75%, should be rejected."""
+        engine = OpportunityEngine(target_notional_usd=1000.0, max_notional_drift_pct=20.0)
+        quotes = [
+            {"dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 250, "amount_in_wei": 125000000000000000,
+             "quote_source": "quoter_v2"},
+            {"dex_id": "sushiswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 500, "usd_notional": 250, "amount_in_wei": 125000000000000000,
+             "quote_source": "quoter_v2"},
+        ]
+        opps = engine.build_opportunities(quotes)
+        assert len(opps) == 1
+        opp = opps[0]
+        
+        # Should have NOTIONAL_DRIFT reject with old strict settings
+        assert opp.reject_reason is not None and "NOTIONAL_DRIFT" in opp.reject_reason, \
+            f"Expected NOTIONAL_DRIFT rejection with target=1000, got: {opp.reject_reason}"
+
+    def test_evaluate_quotes_passes_notional_config(self):
+        """evaluate_quotes passes target_notional_usd and max_notional_drift_pct to engine."""
+        quotes = [
+            {"dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 250, "amount_in_wei": 125000000000000000,
+             "quote_source": "quoter_v2"},
+            {"dex_id": "sushiswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2020", "fee": 500, "usd_notional": 250, "amount_in_wei": 125000000000000000,
+             "quote_source": "quoter_v2"},
+        ]
+        
+        # With aligned config (target=250), should pass drift gate
+        opps_list, summary = evaluate_quotes(
+            quotes, target_notional_usd=250.0, max_notional_drift_pct=50.0
+        )
+        
+        # Should have at least 1 gated opportunity (may be rejected for other reasons)
+        # The key is NOTIONAL_DRIFT should not be the reject reason
+        rejected_notional = summary.get("rejected_reasons", {}).get("NOTIONAL_DRIFT", 0)
+        assert rejected_notional == 0, \
+            f"Expected 0 NOTIONAL_DRIFT rejections with aligned config, got {rejected_notional}"
