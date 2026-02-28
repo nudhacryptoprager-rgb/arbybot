@@ -223,6 +223,14 @@ def _compute_pair_spread(
         if signals:
             return signals
     
+    # v2.9.6: When require_cross_dex=true, do NOT generate same-DEX signals at all
+    # They would just be excluded anyway, creating noise in excluded_signals_count
+    require_cross_dex = config.get("require_cross_dex", False)
+    if require_cross_dex:
+        # No cross-DEX found and cross-DEX is required - return empty (no same-DEX fallback)
+        logger.debug("SKIP_SAME_DEX: %s - require_cross_dex=true, no cross-DEX signal found", pair)
+        return []
+    
     # Fallback: standard logic (min/max regardless of DEX) - only if no cross-DEX found
     sorted_by_price = sorted(quotes_for_pair, key=_get_price)
     best_buy = sorted_by_price[0]

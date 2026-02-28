@@ -611,3 +611,79 @@ class TestRejectSchemaConsistency:
             f"UNKNOWN should NOT appear when reason key is correct, got {reason_histogram}"
         assert reason_histogram["NOTIONAL_DRIFT_EXCLUDED"] == 1
 
+
+class TestRequireCrossDexNoSameDex:
+    """v2.9.6: Test that require_cross_dex=true prevents same-DEX signals entirely."""
+    
+    def test_require_cross_dex_true_no_same_dex_signals(self):
+        """When require_cross_dex=true, same-DEX signals should NOT be generated at all.
+        
+        v2.9.6 contract: Instead of generating same-DEX signals and then excluding them
+        (which creates excluded_signals_count > 0), we should not generate them at all.
+        """
+        from strategy.spreads import _compute_pair_spread
+        
+        # Given: quotes only from ONE dex (no cross-DEX possible)
+        quotes_same_dex = [
+            {"dex_id": "uniswap_v3", "price": "2000.0", "price_exact": "2000.0",
+             "pool_address": "0x111", "fee": 500, "token_in": "WETH", "token_out": "USDC"},
+            {"dex_id": "uniswap_v3", "price": "2010.0", "price_exact": "2010.0",
+             "pool_address": "0x222", "fee": 100, "token_in": "WETH", "token_out": "USDC"},
+        ]
+        
+        # With require_cross_dex=true
+        config_cross_dex = {
+            "require_cross_dex": True,
+            "min_spread_bps": 0,
+            "max_spread_bps_sanity": 10000,
+        }
+        
+        rejected_quotes = []
+        signals = _compute_pair_spread(
+            "WETH/USDC",
+            quotes_same_dex,
+            config_cross_dex,
+            current_block=123456,
+            spread_threshold_bps=0,
+            max_spread_bps_sanity=10000,
+            rejected_quotes=rejected_quotes,
+        )
+        
+        # Then: NO signals should be generated (not even excluded ones)
+        assert len(signals) == 0, \
+            f"Expected 0 signals when require_cross_dex=true and no cross-DEX, got {len(signals)}"
+    
+    def test_require_cross_dex_false_allows_same_dex(self):
+        """When require_cross_dex=false, same-DEX signals CAN be generated."""
+        from strategy.spreads import _compute_pair_spread
+        
+        # Given: quotes only from ONE dex
+        quotes_same_dex = [
+            {"dex_id": "uniswap_v3", "price": "2000.0", "price_exact": "2000.0",
+             "pool_address": "0x111", "fee": 500, "token_in": "WETH", "token_out": "USDC"},
+            {"dex_id": "uniswap_v3", "price": "2010.0", "price_exact": "2010.0",
+             "pool_address": "0x222", "fee": 100, "token_in": "WETH", "token_out": "USDC"},
+        ]
+        
+        # With require_cross_dex=false (default)
+        config_same_ok = {
+            "require_cross_dex": False,
+            "min_spread_bps": 0,
+            "max_spread_bps_sanity": 10000,
+        }
+        
+        rejected_quotes = []
+        signals = _compute_pair_spread(
+            "WETH/USDC",
+            quotes_same_dex,
+            config_same_ok,
+            current_block=123456,
+            spread_threshold_bps=0,
+            max_spread_bps_sanity=10000,
+            rejected_quotes=rejected_quotes,
+        )
+        
+        # Then: signal CAN be generated (same-DEX allowed)
+        assert len(signals) == 1, \
+            f"Expected 1 signal when require_cross_dex=false, got {len(signals)}"
+

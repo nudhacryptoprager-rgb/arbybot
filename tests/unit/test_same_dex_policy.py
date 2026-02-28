@@ -68,8 +68,12 @@ class TestSameDexDetection:
 class TestSameDexExclusion:
     """Tests for is_same_dex_excluded with require_cross_dex=True."""
     
-    def test_same_dex_excluded_when_require_cross_dex(self):
-        """is_same_dex_excluded=True when same-dex and require_cross_dex=True."""
+    def test_same_dex_not_generated_when_require_cross_dex(self):
+        """v2.9.6: When require_cross_dex=True, same-DEX signals are NOT generated at all.
+        
+        This is a change from previous behavior where they were generated and excluded.
+        Now they are simply not produced, avoiding excluded_signals_count noise.
+        """
         from strategy.spreads import compute_spread_signals
         
         quotes = [
@@ -80,14 +84,9 @@ class TestSameDexExclusion:
         
         signals = compute_spread_signals(quotes, config, 1000, [])
         
-        assert len(signals) >= 1
-        sig = signals[0]
-        
-        assert sig["is_same_dex"] is True
-        assert sig["is_same_dex_excluded"] is True
-        assert sig["is_excluded_spread"] is True  # Should be excluded
-        assert "SAME_DEX_EXCLUDED" in sig["confidence_reasons"]
-        assert sig["confidence"] == "suspect"
+        # v2.9.6: NO signals generated (same-DEX prevented at source)
+        assert len(signals) == 0, \
+            f"Expected 0 signals when require_cross_dex=true and only same-DEX, got {len(signals)}"
     
     def test_same_dex_not_excluded_when_require_cross_dex_false(self):
         """is_same_dex_excluded=False when require_cross_dex=False."""
@@ -166,10 +165,12 @@ class TestCrossDexPreference:
         assert sig["is_same_dex_excluded"] is False
         assert "SAME_DEX_EXCLUDED" not in sig["confidence_reasons"]
     
-    def test_same_dex_used_when_no_cross_dex_alternative(self):
-        """
-        When require_cross_dex=True but only one DEX has quotes,
-        same-DEX spread is used but marked as excluded.
+    def test_no_signal_when_no_cross_dex_alternative(self):
+        """v2.9.6: When require_cross_dex=True and only one DEX has quotes,
+        NO signal is generated (not even an excluded one).
+        
+        Previous behavior: same-DEX signal generated but excluded.
+        New behavior: no signal at all (reduces excluded_signals_count noise).
         """
         from strategy.spreads import compute_spread_signals
         
@@ -182,13 +183,9 @@ class TestCrossDexPreference:
         
         signals = compute_spread_signals(quotes, config, 1000, [])
         
-        assert len(signals) >= 1
-        sig = signals[0]
-        
-        # Falls back to same-DEX, marked as excluded
-        assert sig["is_same_dex"] is True
-        assert sig["is_same_dex_excluded"] is True
-        assert sig["is_excluded_spread"] is True
+        # v2.9.6: NO signals generated
+        assert len(signals) == 0, \
+            f"Expected 0 signals when require_cross_dex=true and no cross-DEX, got {len(signals)}"
     
     def test_cross_dex_best_spread_selected(self):
         """

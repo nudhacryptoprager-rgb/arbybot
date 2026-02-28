@@ -297,6 +297,27 @@ disabled_pools:
     detail: "GMX/WETH pair removed - only Sushi pools available, no cross-DEX arb"
     evidence_run: "ci_m5_gate_20260228_124742"
     disabled_date: "2026-02-28"
+  # v2.9.6: POOL_MISSING fix - Sushi fee=100 pool does not exist (asymmetric fee tier)
+  sushiswap_v3_WETH_USDC_100:
+    address: null
+    reason: "POOL_NOT_EXIST"
+    detail: "fee=100 only available on Uniswap; Sushi has no fee=100 WETH/USDC pool"
+    evidence_run: "ci_m5_gate_20260228_203126"
+    disabled_date: "2026-02-28"
+  # v2.9.6: POOL_MISSING fix - Sushi WBTC/USDT 3000 returns bad quotes (PRICE_SANITY_FAILED in quarantine_state)
+  sushiswap_v3_WBTC_USDT_3000:
+    address: null
+    reason: "PRICE_SANITY_FAILED"
+    detail: "pool in quarantine_state for PRICE_SANITY_FAILED; disable to avoid pool_missing noise"
+    evidence_run: "ci_m5_gate_20260228_203126"
+    disabled_date: "2026-02-28"
+  # v2.9.6: POOL_MISSING fix - Sushi ARB/USDT 3000 returns bad quotes (PRICE_SANITY_FAILED in quarantine_state)
+  sushiswap_v3_ARB_USDT_3000:
+    address: null
+    reason: "PRICE_SANITY_FAILED"
+    detail: "pool in quarantine_state for PRICE_SANITY_FAILED; disable to avoid pool_missing noise"
+    evidence_run: "ci_m5_gate_20260228_203126"
+    disabled_date: "2026-02-28"
 
 # Token addresses (Arbitrum)
 tokens:
