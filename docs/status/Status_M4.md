@@ -39,18 +39,18 @@
 - Breakdown: `same_dex_excluded_count=2`, `non_same_dex_excluded_count=0`
 - Це НЕ quality issue - очікувана поведінка з `require_cross_dex: true`
 
-**Snapshot (2026-02-28)**: From `ci_m5_gate_20260228_182059` (10-min scan): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), **agg_status=WARN_QUALITY** (FRAGILE_P90_ELEVATED), **drift_status=PASS** (sign_mismatch=0, sign_rate=1.0), **data_run_rate=1.0**, **total_net_usdc=$1706.18** (rolling window). signals_included=6, signals_excluded=1. **Config changes**: WETH/USDC fee_tiers=[100, 500] (uni fee=100 only). **Root cause finding**: slot0 diagnostic shows Sushi pools return VALID prices; "inverted quotes" bug is in direction-aware price_sanity logic. **DIVERSITY_PAIRS_TARGET=6** (was 8) documented in RESTORE CONTRACT.
+**Snapshot (2026-02-28)**: From `ci_m5_gate_20260228_200026` (multi-scan convergence): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), **agg_status=WARN_QUALITY** (FRAGILE_P90_ELEVATED - convergence in progress), **drift_status=PASS** (sign_mismatch=0, sign_rate=1.0), **data_run_rate=1.0**, **total_net_usdc=$1777.73** (rolling window). signals_included=6, signals_excluded=1. **BUG FIXES**: fragile logic now uses est_gross_usdc (was truth_net_usdc = double-counted gas); reject schema uses 'reason' key (was 'reject_reason' = UNKNOWN in histogram). **New runs fragile_rate: 0.14-0.20** (fix verified). **Old runs at 0.33: 36/200** (aging out naturally).
 
 ### Drift Status (2026-02-28)
 - **drift_status: PASS** (was FAIL in previous 200-run window)
 - **sign_mismatch_count: 0** (was 1-2 from marginal signals)
 - **est_sign_correct_rate: 1.0** (100%, exceeds 80% threshold)
 - **Root cause fix**: min_spread_bps raised to 20 bps filters marginal signals (wstETH/WETH was 7.85 bps)
-- **agg_status**: WARN_QUALITY (FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW still present)
-- **Conclusion**: Drift stabilized by filtering marginal signals. Roundtrip-minus is in LP fees, not gas.
+- **agg_status**: WARN_QUALITY (FRAGILE_P90_ELEVATED - convergence in progress)
+- **Conclusion**: Drift stabilized. Fragile fix deployed, rolling converging.
 
-> **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
-> **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when >=10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
+> **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced to 6 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
+> **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 8 when direction-aware price_sanity bug fixed OR >=8 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
 **Evidence (ci_m5_gate_20260224_141638 - M4.1 CAPSTONE)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`

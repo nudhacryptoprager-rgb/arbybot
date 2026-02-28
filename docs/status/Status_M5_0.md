@@ -2,8 +2,9 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-28  
-**Tests**: 1120 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260228_182059`  
+**Tests**: 1123 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260228_200026`  
+**Code commit**: `488c9c6` (fixes: fragile logic + reject schema)  
 **discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
 
 ---

@@ -4,40 +4,38 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-28T17:21:19Z
-run_id: data/runs/ci_m5_gate_20260228_182059
-mode: ONLINE (10-min continuous scan with fee=100 pool experiment)
+timestamp_utc: 2026-02-28T19:00:46Z
+run_id: data/runs/ci_m5_gate_20260228_200026
+mode: ONLINE (multi-scan convergence with fragile/reject fixes)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-28T17:21:19+00:00
+  primary: ts:2026-02-28T19:00:46+00:00
   dirty: false
-  desc: v2.9.4 fee=100 WETH/USDC uni-only (sushi SUSPECT_LIQUIDITY)
+  desc: v2.9.5 fix fragile double-gas + reject schema consistency
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4 rolling quality - add fee=100 pools for lower LP fee floor
+goal (Roadmap пункт): M4 rolling quality - fix FRAGILE_P90_ELEVATED and WARN_CRITICAL_REJECTS
 change_summary:
-  - DIAGNOSTIC: slot0 shows Sushi pools return VALID prices (not "broken pools")
-  - ROOT CAUSE: "inverted quotes" bug is in OUR direction-aware price_sanity logic
-  - CONFIG: Added uniswap_v3_WETH_USDC_100 (high liq=3.6e15)
-  - CONFIG: Disabled sushiswap_v3_WETH_USDC_100 (SUSPECT_LIQUIDITY, liq=3e10)
-  - CONFIG: Disabled WETH_USDT fee=100 pools (both DEXes: SUSPECT_LIQUIDITY)
-  - POLICY: Updated RESTORE CONTRACT documenting direction-logic as root cause
-  - RESULT: agg_status: WARN_QUALITY (FRAGILE_P90_ELEVATED from quarantine noise)
-  - RESULT: data_run_rate: 1.0 (improved from 0.89)
+  - BUG FIX: fragile logic used truth_net_usdc (already minus gas); now uses est_gross_usdc
+  - BUG FIX: reject schema used 'reject_reason' key; artifacts.py expected 'reason' -> UNKNOWN
+  - TESTS: Added TestFragileInvariant, TestRejectSchemaConsistency (3 new tests)
+  - RESULT: reason_histogram now shows NOTIONAL_DRIFT_EXCLUDED (not UNKNOWN)
+  - RESULT: New runs have fragile_rate ~0.14-0.20 (fix working)
+  - CONVERGENCE: Rolling window still has 36 old runs at 0.33, aging out naturally
 touched_files:
-  - config/real_minimal.yaml (added fee=100 pools, disabled low-liq ones)
-  - m4/policy.py (updated RESTORE CONTRACT with slot0 diagnostic finding)
+  - m4/fixtures.py (fragile uses est_gross_usdc, not truth_net_usdc)
+  - strategy/spreads.py (reject schema: reject_reason -> reason)
+  - tests/unit/test_suspect_spread_exclusion.py (TestFragileInvariant, TestRejectSchemaConsistency)
+  - tests/unit/test_spread_signals.py (updated test to use 'reason' key)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 scripts/inspect_rolling.py --excluded: captured baseline (signals_included=6, data_run_rate=0.89)
-slot0 diagnostic (2 ARB Sushi pools): token0/token1 ordering confirmed VALID
-py -3.11 scripts/verify_v3_pools.py --pairs WETH/USDC WETH/USDT: 4 fee=100 pools verified active
-py -3.11 -m pytest -q: PASS (1120 passed)
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS
-py -3.11 start.py --config config/real_minimal.yaml --minutes 10: PASS (30 runs)
+py -3.11 scripts/inspect_rolling.py --excluded: baseline captured
+py -3.11 -m pytest -q: PASS (1123 passed, 3 new tests)
+py -3.11 start.py --config config/real_minimal.yaml --minutes 10: PASS (6 scans)
+git commit -m "fix(fragile): use est_gross_usdc; fix reject schema to use reason key": 488c9c6
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -45,13 +43,18 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260228_182059/reports
+  - data/runs/ci_m5_gate_20260228_200026/reports
 quality_achievement:
-  - agg_status: WARN_QUALITY (FRAGILE_P90_ELEVATED from fee=100 quarantine noise)
+  - agg_status: WARN_QUALITY (FRAGILE_P90_ELEVATED - 36 old runs aging out)
   - quality_warnings: [FRAGILE_P90_ELEVATED(0.33>0.3)]
-  - data_run_rate: 1.0 (improved from 0.89)
+  - data_run_rate: 1.0
   - pass_rate: 1.0
   - unique_pairs: 6
+  - total_net_usdc: $1777.73
+convergence_note:
+  - New runs fragile_rate: 0.14-0.20 (fix verified)
+  - Old runs at 0.33: 36/200 (will age out in ~3-4 more 10-min scans)
+  - Expected PASS after convergence
 
 ## 4) Key Results (числа з артефактів)
 
@@ -67,17 +70,22 @@ _latest.json:
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-02-28T17:21:19+00:00
-  inputs.run_dir_name: ci_m5_gate_20260228_182059
+  run_context.run_timestamp: 2026-02-28T19:00:46+00:00
   inputs.run_mode: REGISTRY_REAL
   metrics:
     signals_count: 7
     included_signals_count: 6
-    total_rejects: 4 (1 notional_drift, 3 pool_missing)
+    fragile_rate: 0.17 (new runs with fix)
 
 m4_stability_agg.json:
   policy_version: 2.0.8
   quick_stats:
+    fragile_rate_p90: 0.3333 (convergence in progress)
+    fragile_rate_p50: 0.1667
+    data_run_rate: 1.0
+    unique_pairs: 6
+    pass_rate: 1.0
+    total_net_usdc: 1777.73
     data_run_rate: 1.0
     fragile_rate_p90: 0.3333
     fragile_rate_p50: 0.20
