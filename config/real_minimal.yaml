@@ -92,6 +92,14 @@ pairs:
   - token_in: WBTC
     token_out: USDC
     fee_tiers: [500, 3000]
+  # v2.9.3: WBTC/USDT added for diversity (cross-DEX verified)
+  - token_in: WBTC
+    token_out: USDT
+    fee_tiers: [3000]
+  # v2.9.3: ARB/USDT added for diversity (cross-DEX verified)
+  - token_in: ARB
+    token_out: USDT
+    fee_tiers: [3000]
   # v2.9.0: LINK/USDC DISABLED - both DEXes unavailable
   # Uniswap quarantined (PRICE_SCALE_VIOLATION), Sushiswap disabled (PRICE_SANITY_FAILED)
   # - token_in: LINK
@@ -169,6 +177,12 @@ pools:
   uniswap_v3_WBTC_USDC_3000: "0x6985cb98CE393FCE8d6272127F39013f61e36166"
   sushiswap_v3_WBTC_USDC_500: "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"
   # sushiswap_v3_WBTC_USDC_3000: v2.3.4 DISABLED (PRICE_SANITY_FAILED)
+  # === WBTC/USDT (v2.9.3: Sushi PRICE_SANITY_FAILED - uni-only, no cross-DEX) ===
+  uniswap_v3_WBTC_USDT_3000: "0x53C6ca2597711Ca7a73b6921fAf4031EeDf71339"
+  # sushiswap_v3_WBTC_USDT_3000: v2.9.3 DISABLED (PRICE_SANITY_FAILED ratio=0.03)
+  # === ARB/USDT (v2.9.3: Sushi PRICE_SANITY_FAILED - uni-only, no cross-DEX) ===
+  uniswap_v3_ARB_USDT_3000: "0x97bca422Ec0Ee4851F2110eA743C1cd0a14835a1"
+  # sushiswap_v3_ARB_USDT_3000: v2.9.3 DISABLED (PRICE_SANITY_FAILED ratio=0.01)
   # === LINK/USDC (v2.1.0 Step 10) ===
   # Note: 500 tier had QUOTE_ZERO_OUT - use 3000 only
   uniswap_v3_LINK_USDC_3000: "0xbBe36e6f0331C6a36AB44Bc8421E28E1a1871C1e"
@@ -322,6 +336,8 @@ tokens_anchor_price:
   wstETH_WETH: 1.20   # on-chain median ~1.22 (2026-02-17)
   ARB_USDC: 0.11      # on-chain observed ~0.114 (2026-02-17)
   WBTC_USDC: 68000    # on-chain median ~68019 (2026-02-17)
+  WBTC_USDT: 68000    # v2.9.3: same as WBTC_USDC (stablecoin)
+  ARB_USDT: 0.11      # v2.9.3: same as ARB_USDC (stablecoin)
   LINK_USDC: 9.0      # on-chain valid ~8.79; sushi fee=3000 (~19.9) is bad pool
   # PENDLE_WETH: 0.0006  # v2.3.4: DISABLED (quoter returning 0)
   # RDNT_WETH: 0.000003  # v2.3.4: DISABLED (quoter returning 0)

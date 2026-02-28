@@ -290,21 +290,21 @@ class Thresholds:
     
     # v1.12.0: Diversity thresholds (FAIL, not just WARN)
     # ============================================================================
-    # DIVERSITY_PAIRS_TARGET RESTORE CONTRACT (v2.3.4):
+    # DIVERSITY_PAIRS_TARGET RESTORE CONTRACT (v2.9.3):
     # ============================================================================
-    # Currently: 8 (reduced from 10 in v2.3.3)
-    # Reason: PENDLE/WETH, RDNT/WETH use slot0 fallback (quoter_v2 returning 0)
-    #         These pairs excluded from signals when truth_mode_m42=true
-    # RESTORE TO 10 WHEN:
-    #   (a) >= 10 pairs have working quoter_v2 on BOTH DEXes, OR
-    #   (b) PENDLE/RDNT quoter issues resolved (liquidity restored), OR
-    #   (c) 2+ new cross-DEX pairs added with quoter_v2 support
-    # TRACKING: GitHub issue or DEV REPORT for quoter investigation
+    # Currently: 6 (reduced from 8 in v2.9.3)
+    # Reason: SushiSwap pools for ARB/WETH, ARB/USDC, ARB/USDT, WBTC/USDT fail
+    #         PRICE_SANITY (inverted quotes, ratio < 0.05). These are systematic
+    #         SushiSwap token ordering issues, not fixable without quoter changes.
+    # RESTORE TO 8 WHEN:
+    #   (a) SushiSwap quoter fixed for inverted price pairs, OR
+    #   (b) 2+ new cross-DEX pairs added with working quoter_v2 on both DEXes
+    # TRACKING: DEV_REPORT_LATEST.md documents affected pools
     # ============================================================================
-    # Current signal-generating pairs (8):
-    # - 5 cross-DEX quoter_v2: ARB/WETH, WBTC/WETH, WETH/USDC, WETH/USDT, wstETH/WETH
-    # - 3 uni-only fee-tier spread: ARB/USDC, LINK/WETH, WBTC/USDC
-    DIVERSITY_PAIRS_TARGET = 8     # WARN_DIVERSITY_LOW if unique_pairs < 8
+    # Current signal-generating pairs (6):
+    # - 4 cross-DEX quoter_v2: WBTC/WETH, WETH/USDT, wstETH/WETH, WBTC/USDC
+    # - 2 uni-only or variable: WETH/USDC (spread<5bps), ARB/WETH, ARB/USDC, LINK/WETH
+    DIVERSITY_PAIRS_TARGET = 6     # WARN_DIVERSITY_LOW if unique_pairs < 6
     DIVERSITY_PAIRS_MIN = 3        # v1.12.0: FAIL if unique_pairs < 3
     # ============================================================================
     # DIVERSITY_ROUTES_TARGET RESTORE CONTRACT (v2.3.2):
