@@ -134,20 +134,23 @@ pools:
   uniswap_v3_WETH_USDT_3000: "0xc82819F72A9e77E2c0c3A69B3196478f44303cf4"
   sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
   sushiswap_v3_WETH_USDT_3000: "0x92d543A8a158A6bC2C7018ae17803819Cb9150B2"
-  # === WBTC/WETH ===
+  # === WBTC/WETH (v2.9.1: sushi 3000 re-enabled after anchor direction fix) ===
   uniswap_v3_WBTC_WETH_500: "0x2f5e87C9312fa29aed5c179E456625D79015299c"
   uniswap_v3_WBTC_WETH_3000: "0x149e36E72726e0BceA5c59d40df2c43F60f5A22D"
-  # sushiswap_v3_WBTC_WETH_3000: v2.3.5 DISABLED (SUSPECT_SPREAD_EXCLUDED 7560bps)
+  sushiswap_v3_WBTC_WETH_3000: "0x6F10667F314498649eb2f80da244e8c6E9f031d5"
+  # sushiswap_v3_WBTC_WETH_500: DISABLED (liq=0 - empty pool)
   # === ARB/WETH ===
   uniswap_v3_ARB_WETH_500: "0xC6F780497A95e246EB9449f5e4770916DCd6396A"
   uniswap_v3_ARB_WETH_3000: "0x92c63d0e701CAAe670C9415d91C474F686298f00"
-  # sushiswap_v3_ARB_WETH_500: v2.3.4 DISABLED (PRICE_SANITY_FAILED)
-  # sushiswap_v3_ARB_WETH_3000: v2.3.5 DISABLED (SUSPECT_SPREAD_EXCLUDED 722bps)
+  # v2.9.1: Re-enabled fee=3000 after anchor direction fix; fee=500 has token ordering issue
+  # sushiswap_v3_ARB_WETH_500: v2.9.2 DISABLED (PRICE_SANITY_FAILED - pool returns inverted quotes)
+  sushiswap_v3_ARB_WETH_3000: "0xB3942c9FFA04efBC1Fa746e146bE7565c76E3dC1"
   # === LINK/WETH ===
   uniswap_v3_LINK_WETH_500: "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907"
   uniswap_v3_LINK_WETH_3000: "0x468b88941e7Cc0B88c1869d68ab6b570bCEF62Ff"
-  # sushiswap_v3_LINK_WETH_500: v2.9.0 DISABLED (SUSPECT_LIQUIDITY)
-  # sushiswap_v3_LINK_WETH_3000: v2.3.4 DISABLED (PRICE_SANITY_FAILED)
+  # v2.9.1: Re-enabled after anchor direction fix
+  sushiswap_v3_LINK_WETH_3000: "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65"
+  # sushiswap_v3_LINK_WETH_500: v2.9.0 DISABLED (SUSPECT_LIQUIDITY - low liq=782296978045208)
   # === GMX/WETH (all pools disabled - no cross-DEX possible) ===
   # sushiswap_v3_GMX_WETH_500: v2.9.0 DISABLED (pair removed - no cross-DEX)
   # sushiswap_v3_GMX_WETH_3000: v2.9.0 DISABLED (SUSPECT_LIQUIDITY)
@@ -156,10 +159,11 @@ pools:
   uniswap_v3_wstETH_WETH_500: "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13"
   sushiswap_v3_wstETH_WETH_100: "0x8BD39fA8608fd949C253987767540c26a0D974CF"
   sushiswap_v3_wstETH_WETH_500: "0xc60f4760a70Bb900776DBBfcce9eF1a109a185B0"
-  # === ARB/USDC (sushi 3000 disabled - see disabled_pools) ===
+  # === ARB/USDC (v2.9.2: both sushi pools disabled - price inversion issues) ===
   uniswap_v3_ARB_USDC_500: "0xb0f6cA40411360c03d41C5fFc5F179b8403CdcF8"
   uniswap_v3_ARB_USDC_3000: "0xaEBDcA1Bc8d89177EbE2308d62af5e74885DcCc3"
-  # sushiswap_v3_ARB_USDC_500: v2.3.4 DISABLED (PRICE_SANITY_FAILED)
+  # sushiswap_v3_ARB_USDC_3000: v2.9.2 DISABLED (PRICE_SANITY_FAILED - pool returns inverted quotes ratio~0.01)
+  # sushiswap_v3_ARB_USDC_500: v2.3.4 DISABLED (low liquidity fee tier)
   # === WBTC/USDC ===
   uniswap_v3_WBTC_USDC_500: "0x0E4831319A50228B9e450861297aB92dee15B44F"
   uniswap_v3_WBTC_USDC_3000: "0x6985cb98CE393FCE8d6272127F39013f61e36166"
@@ -219,55 +223,42 @@ disabled_pools:
     detail: "price_exact~0.00327 vs anchor 0.008"
     evidence_run: "ci_m5_gate_20260217_113317"
     disabled_date: "2026-02-18"
+  # v2.9.2: sushiswap_v3_ARB_USDC_3000 re-disabled - pool returns inverted quotes (ratio~0.01)
   sushiswap_v3_ARB_USDC_3000:
     address: "0x14716A16ef9eeAaDa7E266bcF023b71D2c9ADbf3"
     reason: "PRICE_SANITY_FAILED"
-    detail: "price_exact~1.009 vs anchor 0.11 (inverted ratio)"
-    evidence_run: "ci_m5_gate_20260217_113317"
-    disabled_date: "2026-02-18"
+    detail: "pool returns inverted quotes (ratio~0.01), likely token order issue"
+    evidence_run: "ci_m5_gate_20260228_134708"
+    disabled_date: "2026-02-28"
   sushiswap_v3_WETH_DAI_3000:
     address: "0x3370EA4a1640C657bDD94D71325541bA927f5Aef"
     reason: "PRICE_SANITY_FAILED"
     detail: "price_exact~60.96 vs anchor 1980 (scaling/path error)"
     evidence_run: "ci_m5_gate_20260219_140542"
     disabled_date: "2026-02-19"
-  # v2.3.4: Additional PRICE_SANITY_FAILED pools (fee=500 low liquidity)
+  # v2.9.2: sushiswap_v3_ARB_WETH_500 re-disabled - pool returns inverted quotes (token order issue)
   sushiswap_v3_ARB_WETH_500:
     address: "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11"
     reason: "PRICE_SANITY_FAILED"
-    detail: "deviation 6641bps > max 5000bps, low liquidity fee tier"
-    evidence_run: "ci_m5_gate_20260219_203054"
-    disabled_date: "2026-02-19"
+    detail: "pool returns inverted quotes (ratio~0.31), likely token order issue"
+    evidence_run: "ci_m5_gate_20260228_134708"
+    disabled_date: "2026-02-28"
+  # v2.9.1: REMOVED sushiswap_v3_ARB_WETH_3000 - re-enabled after anchor direction fix
+  # v2.3.4: Additional PRICE_SANITY_FAILED pools (fee=500 low liquidity)
   sushiswap_v3_ARB_USDC_500:
     address: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
     reason: "PRICE_SANITY_FAILED"
     detail: "deviation >5000bps, low liquidity fee tier"
     evidence_run: "ci_m5_gate_20260219_203054"
     disabled_date: "2026-02-19"
-  sushiswap_v3_LINK_WETH_3000:
-    address: "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65"
-    reason: "PRICE_SANITY_FAILED"
-    detail: "deviation >5000bps vs anchor"
-    evidence_run: "ci_m5_gate_20260219_203054"
-    disabled_date: "2026-02-19"
+  # v2.9.1: REMOVED sushiswap_v3_LINK_WETH_3000 - re-enabled after anchor direction fix
   sushiswap_v3_WBTC_USDC_3000:
     address: "0x4E5c883d6e9cCE0be8E464C3066bCFF036Da674a"
     reason: "PRICE_SANITY_FAILED"
     detail: "deviation >5000bps vs anchor"
     evidence_run: "ci_m5_gate_20260219_203054"
     disabled_date: "2026-02-19"
-  sushiswap_v3_WBTC_WETH_3000:
-    address: "0x6F10667F314498649eb2f80da244e8c6E9f031d5"
-    reason: "SUSPECT_SPREAD_EXCLUDED"
-    detail: "spread_bps=7560 vs threshold=300, tick extreme"
-    evidence_run: "ci_m5_gate_20260221_113627"
-    disabled_date: "2026-02-22"
-  sushiswap_v3_ARB_WETH_3000:
-    address: "0xB3942c9FFA04efBC1Fa746e146bE7565c76E3dC1"
-    reason: "SUSPECT_SPREAD_EXCLUDED"
-    detail: "spread_bps=722 vs threshold=300"
-    evidence_run: "ci_m5_gate_20260222_100525"
-    disabled_date: "2026-02-22"
+  # v2.9.1: REMOVED sushiswap_v3_WBTC_WETH_3000 - re-enabled after anchor direction fix
   # v2.9.0: Added SUSPECT_LIQUIDITY pools
   sushiswap_v3_LINK_WETH_500:
     address: "0x942E53ED315Db6451AdCd601D4D08f059F88C77f"
@@ -399,7 +390,7 @@ autosize:
 # Signals with spread_bps_exact < this are filtered out
 # Production: 20 bps minimum (filters marginal signals where sign can flip from slippage)
 # Debug: 5 bps (default), 0 = any positive spread
-min_spread_bps: 20  # 20 bps = drift-safe threshold
+min_spread_bps: 5  # 5 bps = lower threshold for more signal diversity
 
 # Net PnL threshold for daily_report top_opportunities (M5)
 # Signals with net_pnl_usdc_est < this are excluded from top_opportunities

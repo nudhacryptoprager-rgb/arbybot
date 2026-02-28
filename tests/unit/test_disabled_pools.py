@@ -171,12 +171,15 @@ class TestRealConfigDisabledPools(unittest.TestCase):
         disabled_pools = config.get("disabled_pools", {})
         self.assertGreaterEqual(len(disabled_pools), 5, f"Expected at least 5 disabled pools, got {len(disabled_pools)}")
 
-        # Verify all 5 expected pools are disabled
+        # Verify expected pools are disabled
+        # v2.9.2: sushiswap_v3_ARB_WETH_500 and sushiswap_v3_ARB_USDC_3000 re-disabled (price inversion)
         expected_disabled = [
             "sushiswap_v3_WBTC_WETH_500",
             "sushiswap_v3_LINK_USDC_3000",
             "uniswap_v3_GMX_WETH_500",
             "uniswap_v3_GMX_WETH_3000",
+            "sushiswap_v3_WETH_DAI_3000",
+            "sushiswap_v3_ARB_WETH_500",
             "sushiswap_v3_ARB_USDC_3000",
         ]
         for pool_key in expected_disabled:
