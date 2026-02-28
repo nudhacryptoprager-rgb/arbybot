@@ -4,42 +4,36 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-27T18:00:59Z
-run_id: data/runs/ci_m5_gate_20260227_190042
-mode: ONLINE (v2.8.0 validation scan)
+timestamp_utc: 2026-02-28T09:59:39Z
+run_id: data/runs/ci_m5_gate_20260228_105926
+mode: ONLINE (10-min continuous scan)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-27T18:00:59+00:00
+  primary: ts:2026-02-28T09:59:39+00:00
   dirty: true
-  desc: v2.8.0 - USD conversion, sqrtPriceAfter slippage, best-per-pair selection
+  desc: config changes - min_spread_bps=20, fee_tiers=[500] for WETH pairs
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4.2 roundtrip pipeline - improved slippage measurement and USD conversion
+goal (Roadmap пункт): M4.2 roundtrip pipeline - drift-safe thresholds
 change_summary:
-  - FIX: evaluate_quotes() sorts gated opportunities by net_profit_usd descending
-  - FIX: best-per-pair selection in roundtrip (unique_pairs_considered=3)
-  - FIX: sqrt_price_x96 from multicall cache for slippage measurement
-  - FIX: slippage_source now "sqrtPriceAfter" (was "ticks_heuristic")
-  - FIX: USD fields (gross_pnl_usd, gas_cost_usd, net_pnl_usd) added to roundtrip
-  - FIX: is_profitable uses USD when token_in != WETH
-  - TEST: Added TestV280USDConversion (3 tests), TestV280SlippageMeasurement (2 tests), TestV280SortOrder (1 test)
-  - RESULT: 3 different pairs evaluated (WETH/USDT, WBTC/USDC, WETH/USDC)
-  - RESULT: FRAGILE_P90_ELEVATED resolved (no longer in quality_reasons)
+  - CONFIG: min_spread_bps raised to 20 (was 5) - filters marginal signals with sign flip risk
+  - CONFIG: WETH/USDC, WETH/USDT fee_tiers=[500] (was [500, 3000]) - lower LP fee floor
+  - CONFIG: real_nonstop.yaml normalized (universe_source=config, discovery_runtime=false, comments aligned)
+  - RESULT: drift_status=PASS, sign_mismatch_count=0, est_sign_correct_rate=1.0
+  - RESULT: included_signals=1 (reduced from 5 by higher min_spread_bps)
+  - RESULT: agg_status=WARN_QUALITY (FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW)
 touched_files:
-  - engine/opportunity_engine.py (sort by net_profit_usd)
-  - engine/roundtrip.py (USD fields, sqrtPriceAfter slippage)
-  - strategy/jobs/run_scan_real.py (best-per-pair, USD config wiring)
-  - strategy/quotes.py (sqrt_price_x96 from cache)
-  - tests/unit/test_roundtrip.py (TestV280USDConversion, TestV280SlippageMeasurement)
-  - tests/unit/test_opportunity_engine.py (TestV280SortOrder)
+  - config/real_minimal.yaml (min_spread_bps, fee_tiers)
+  - config/real_nonstop.yaml (universe_source, comments)
   - docs/DEV_REPORT_LATEST.md (state update)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (1 warning - unique_pairs alignment)
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
 py -3.11 -m pytest tests/unit -q: PASS (1106 passed, 1 skipped)
-py -3.11 start.py --config config/real_minimal.yaml --minutes 10: v2.8.0 validation scan
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
+py -3.11 start.py --config config/real_minimal.yaml --minutes 10: 10-min scan (runDir=ci_m5_gate_20260228_105926)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -47,24 +41,20 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json (200 runs)
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260227_190042/reports
+  - data/runs/ci_m5_gate_20260228_105926/reports
 preflight_evidence:
   - enabled: true
-  - candidates_count: 7
-  - cross_dex_signals: 5 (included)
+  - candidates_count: 1
+  - cross_dex_signals: 1 (included)
   - same_dex_excluded: 2 (SAME_DEX_EXCLUDED)
-  - total_net_usdc: $587.47 (rolling window)
   - evidence_source: preflight_v1.0.3
 
-roundtrip_evidence (v2.8.0 validation):
-  - unique_pairs_considered: 3
-  - roundtrip.evaluated_count: 3
-  - roundtrip.profitable_count: 0
-  - roundtrip.best_net_pnl_bps: -22.40
-  - slippage_source: sqrtPriceAfter (all 3)
-  - profit_realism_status: ROUNDTRIP_NOT_PROFITABLE
-  - rejected_reasons: {MIXED_SOURCE: 2, NET_PROFIT_TOO_LOW: 3}
-  - pairs_evaluated: [WETH/USDT, WBTC/USDC, WETH/USDC]
+drift_evidence (10-min scan):
+  - drift_status: PASS
+  - sign_mismatch_count: 0
+  - est_sign_correct_rate: 1.0 (100%)
+  - included_signals_count: 1
+  - excluded_signals_count: 2 (SAME_DEX_EXCLUDED)
 
 ## 4) Key Results (числа з артефактів)
 
@@ -73,36 +63,34 @@ _latest.json:
   run_status: PASS
   agg_status: WARN_QUALITY
   agg_reasons: [FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW]
-  quality_warnings: [FRAGILE_P90_ELEVATED(0.50>0.3), DIVERSITY_PAIRS_LOW(4<8)]
-  data_run_rate: 1.0
-  low_sample_rate: 0.0
   runs_in_window: 200
   in_warmup: false
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-02-27T18:00:59+00:00
-  inputs.run_dir_name: ci_m5_gate_20260227_190042
+  drift_status: PASS
+  drift_reasons: []
+  run_context.run_timestamp: 2026-02-28T09:59:39+00:00
+  inputs.run_dir_name: ci_m5_gate_20260228_105926
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 7
-    included_signals_count: 5 (cross-DEX only)
+    signals_count: 3
+    included_signals_count: 1 (cross-DEX only)
     excluded_signals_count: 2 (SAME_DEX_EXCLUDED)
+    sign_mismatch_count: 0
+    est_sign_correct_rate: 1.0 (100%)
     profit_is_diagnostic: true
     profit_truth_source: ONE_LEG_DIAGNOSTIC
-    profit_truth_available: false
 
 m4_stability_agg.json:
   runs_in_window: 200
-  pass_count: ~150 (FRAGILE_P90_ELEVATED resolved)
-  data_run_rate: ~0.75
-  total_net_usdc: $587.47 (200-run window)
-  avg_net_usdc: $2.94/run (estimate)
-  unique_pairs: 8
-  unique_routes: 3 (2 cross-DEX)
   agg_status: WARN_QUALITY
-  agg_reasons: [WARN_SAME_DEX_PRESENT, WARN_PROFIT_DIAGNOSTIC]
+  agg_reasons: [FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW]
+  data_run_rate: 0.905
+  total_net_usdc: $553.94 (rolling window)
+  unique_pairs: 4
+  note: unique_pairs reduced from 8 due to min_spread_bps=20 filtering marginal signals
 
 ## 5) Pair Diversity Expansion (v2.5.2)
 

@@ -4,8 +4,9 @@
 #
 # Based on: config/real_minimal.yaml (2026-02-24)
 # Changes:
-#   - paper_size_usd: 1000 (was 250) - higher notional for meaningful profit
-#   - min_spread_bps: 20 (was 5) - filter marginal/noise signals
+#   - paper_size_usd: 250 (v2.5.2 default)
+#   - min_spread_bps: 20 (filters marginal/noise signals)
+#   - universe_source: config (stable pair set)
 #
 # METRICS CONTRACT (STEP 1):
 # - quotes_total = attempted quote calls
@@ -391,16 +392,15 @@ discovery_runtime: false
 discovery_runtime_max_pairs: 20
 
 # v2.2.2: Universe source selection
-# config = use pairs from config YAML
+# config = use pairs from config YAML (RECOMMENDED for stability)
 # intent = use pairs from intent.txt  
 # discovery_runtime = dynamically resolve from factory.getPool()
-universe_source: discovery_runtime
+universe_source: config
 
 # v2.5.1: Cross-DEX preference - prefer cross-DEX spreads over same-DEX fee-tier arb
 # When true, same-DEX signals are EXCLUDED (reduces included_pairs)
 # When false, cross-DEX is still PREFERRED but same-DEX signals remain INCLUDED
-# v2.5.2: Changed to false to preserve included_pairs diversity while keeping cross-DEX preference
-# v2.2.0: Enable cross-DEX only to eliminate same-DEX fee-tier arb noise
+# v2.8.0: require_cross_dex=true to eliminate same-DEX fee-tier noise
 require_cross_dex: true
 
 # M4 markers - execution disabled

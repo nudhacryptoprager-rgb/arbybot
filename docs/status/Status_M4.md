@@ -36,21 +36,18 @@
 
 ### Excluded Signals Policy
 - `excluded_signals_count` складається з `SAME_DEX_EXCLUDED` (policy exclusion, fee-tier noise)
-- Breakdown: `same_dex_excluded_count=4`, `non_same_dex_excluded_count=0`
+- Breakdown: `same_dex_excluded_count=2`, `non_same_dex_excluded_count=0`
 - Це НЕ quality issue - очікувана поведінка з `require_cross_dex: true`
 
-**Snapshot (2026-02-27)**: From `ci_m5_gate_20260227_190042` (observability validation): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), data_run_rate=~0.75, **agg_status=WARN_QUALITY** (WARN_SAME_DEX_PRESENT, WARN_PROFIT_DIAGNOSTIC), **total_net_usdc=$587.47** (rolling window), signals_included=5, signals_excluded=2. **unique_pairs_considered=3**, **roundtrip.evaluated_count=3**, **roundtrip.profitable_count=0**, **roundtrip.best_net_pnl_bps=-22.40**, **profit_realism_status=ROUNDTRIP_NOT_PROFITABLE**. rejected_reasons: {MIXED_SOURCE: 2, NET_PROFIT_TOO_LOW: 3}. **execution_ready_count=0** (kill_switch_active=true). **Features**: slippage_source=sqrtPriceAfter, USD fields (gross_pnl_usd, gas_cost_usd, net_pnl_usd). **FRAGILE_P90_ELEVATED RESOLVED** - no longer in quality_reasons!
+**Snapshot (2026-02-28)**: From `ci_m5_gate_20260228_105926` (10-min scan): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), **agg_status=WARN_QUALITY** (FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW), **drift_status=PASS** (sign_mismatch=0, sign_rate=1.0), **data_run_rate=0.905**, **total_net_usdc=$553.94** (rolling window). signals_included=1, signals_excluded=2. **Config changes**: min_spread_bps=20 (was 5), WETH pairs fee_tiers=[500] (was [500, 3000]). **profit_realism_status=ROUNDTRIP_NOT_PROFITABLE**. **execution_ready_count=0** (kill_switch_active=true).
 
-### Roundtrip Window Reality (2026-02-27)
-- **best_roundtrip_net_pnl_bps_in_window = -10.85 bps** (top over 200 runs, historical)
-- **latest best_net_pnl_bps = -22.40 bps** (runDir `ci_m5_gate_20260227_190042`)
-- **slippage measurement**: `slippage_source=sqrtPriceAfter` (all 3 roundtrips)
-- **USD conversion verified**: gross_pnl_usd, gas_cost_usd, net_pnl_usd fields populated
-- **best-per-pair selection**: unique_pairs_considered=3 (WETH/USDT, WBTC/USDC, WETH/USDC)
-- **Thesis**: Мінус у `gross_pnl_bps` (swap rates), **gas не домінує** (<0.4 bps contribution)
-- **Best pair**: WBTC/USDC uniswap_v3_500 -> sushiswap_v3_500 (`net_pnl_bps=-0.47`)
-- **FRAGILE_P90_ELEVATED**: **RESOLVED** - no longer in quality_reasons!
-- **Conclusion**: Observability proves roundtrip-minus is in LP fees, not gas. One-leg paper edge does NOT survive roundtrip. Need larger market dislocations.
+### Drift Status (2026-02-28)
+- **drift_status: PASS** (was FAIL in previous 200-run window)
+- **sign_mismatch_count: 0** (was 1-2 from marginal signals)
+- **est_sign_correct_rate: 1.0** (100%, exceeds 80% threshold)
+- **Root cause fix**: min_spread_bps raised to 20 bps filters marginal signals (wstETH/WETH was 7.85 bps)
+- **agg_status**: WARN_QUALITY (FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW still present)
+- **Conclusion**: Drift stabilized by filtering marginal signals. Roundtrip-minus is in LP fees, not gas.
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced from 10 to 8 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 10 when >=10 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
