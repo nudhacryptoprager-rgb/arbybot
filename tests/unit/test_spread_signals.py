@@ -330,7 +330,8 @@ class TestNotionalDriftFilter:
         # Only 1 quote remains after drift filter - not enough for spread calc
         assert len(signals) == 0, "Should have no signals - one quote excluded by drift"
         assert len(rejected) == 1, "Should have 1 rejected quote"
-        assert rejected[0]["reject_reason"] == "NOTIONAL_DRIFT_EXCLUDED"
+        # v2.9.5: Changed from 'reject_reason' to 'reason' for schema consistency
+        assert rejected[0]["reason"] == "NOTIONAL_DRIFT_EXCLUDED"
         assert rejected[0]["notional_drift_pct"] == 86.0
     
     def test_low_drift_included(self):

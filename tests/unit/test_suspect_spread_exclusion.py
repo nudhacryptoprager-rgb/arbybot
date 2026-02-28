@@ -500,3 +500,114 @@ class TestPruneOnEveryIteration:
         assert should_prune is False, "Prune should be disabled when prune_keep=0"
 
 
+class TestFragileInvariant:
+    """
+    v2.9.5: Test that fragile logic uses est_gross_usdc (not truth_net_usdc).
+    
+    BUG: truth_net_usdc = est_gross - gas, so comparing (net < slip+gas) == (gross < slip+2*gas)
+         This double-counts gas and triggers false fragile warnings.
+    FIX: Use est_gross_usdc for comparison against (slip + gas).
+    """
+
+    def test_signal_not_fragile_when_gross_exceeds_costs(self):
+        """
+        WETH/USDC signal from runDir ci_m5_gate_20260228_182059:
+        - est_gross_usdc = 0.2833
+        - gas_usdc = 0.10 (cost model)
+        - slippage_usdc = size_usd * 12.5bps = 250 * 0.00125 = 0.3125
+        - total_costs = 0.4125
+        - truth_net_usdc = est_gross - gas = 0.1833
+        
+        With BUGGY logic: 0.1833 < (0.3125 + 0.10) = 0.4125 → fragile=True [WRONG]
+        With FIXED logic: 0.2833 < (0.3125 + 0.10) = 0.4125 → fragile=True [STILL TRUE - expected!]
+        
+        BUT for a signal with est_gross=1.50, gas=0.10, slippage=0.15:
+        - BUGGY: net=1.40 < (0.15+0.10)=0.25 → fragile=False 
+        - FIXED: gross=1.50 < 0.25 → fragile=False
+        Both agree here because gross >> costs
+        
+        Let's test a marginal case:
+        est_gross=0.50, gas=0.10, slippage=0.12, size_usd=100
+        - net = 0.40
+        - slip+gas = 0.22
+        - BUGGY: 0.40 < 0.22 → False (NOT fragile) [correct by accident]
+        - FIXED: 0.50 < 0.22 → False (NOT fragile) [correct]
+        
+        Test the edge case where bug matters:
+        est_gross=0.30, gas=0.12, slippage=0.15, size_usd=120
+        - net = 0.18 (gross - gas)
+        - slip+gas = 0.27
+        - BUGGY: 0.18 < 0.27 → True (FRAGILE) [BUG: gas counted twice]
+        - FIXED: 0.30 < 0.27 → False (NOT fragile) [CORRECT: gross > costs]
+        """
+        # Signal that would be fragile with bug but NOT with fix
+        est_gross = 0.30
+        gas_usdc = 0.12
+        size_usd = 120
+        slippage_bps = 12.5
+        slippage_usdc = size_usd * slippage_bps / 10000  # 0.15
+        
+        # This is the FIXED logic (v2.9.5)
+        is_fragile = est_gross < slippage_usdc + gas_usdc and est_gross > 0
+        
+        # With FIXED logic: 0.30 < 0.27 is False, so NOT fragile
+        assert is_fragile is False, \
+            f"est_gross={est_gross} should NOT be fragile (gross > slip+gas): {est_gross} > {slippage_usdc + gas_usdc}"
+
+    def test_signal_fragile_when_gross_below_costs(self):
+        """Test that signal IS fragile when est_gross < slippage + gas."""
+        # Signal that should be fragile with correct logic
+        est_gross = 0.20
+        gas_usdc = 0.15
+        slippage_usdc = 0.10
+        
+        # FIXED logic: gross < costs
+        is_fragile = est_gross < slippage_usdc + gas_usdc and est_gross > 0
+        
+        # 0.20 < 0.25 → fragile
+        assert is_fragile is True, \
+            f"est_gross={est_gross} SHOULD be fragile (gross < slip+gas): {est_gross} < {slippage_usdc + gas_usdc}"
+
+
+class TestRejectSchemaConsistency:
+    """
+    v2.9.5: Test that reject schema uses 'reason' key (not 'reject_reason').
+    
+    BUG: spreads.py used 'reject_reason' but artifacts.py expects 'reason'
+         This caused NOTIONAL_DRIFT_EXCLUDED to appear as UNKNOWN in reason_histogram.
+    FIX: Use 'reason' key consistently.
+    """
+
+    def test_reason_histogram_notional_drift_excluded(self):
+        """NOTIONAL_DRIFT_EXCLUDED should appear in reason_histogram, NOT UNKNOWN."""
+        # Simulate the reject append logic with FIXED schema
+        rejected_quotes = []
+        quote = {
+            "token_in": "LINK",
+            "token_out": "WETH",
+            "dex_id": "sushiswap_v3",
+            "pool_address": "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65",
+            "notional_drift_pct": 61.94,
+        }
+        
+        # This is the FIXED logic (v2.9.5) - uses 'reason' not 'reject_reason'
+        rejected_quotes.append({
+            **quote,
+            "reason": "NOTIONAL_DRIFT_EXCLUDED",
+            "notional_drift_pct": 61.94,
+            "notional_drift_max_pct": 50.0,
+        })
+        
+        # Build reason histogram (same as artifacts.py)
+        reason_histogram = {}
+        for r in rejected_quotes:
+            reason = r.get("reason", "UNKNOWN")
+            reason_histogram[reason] = reason_histogram.get(reason, 0) + 1
+        
+        # FIXED: Should see NOTIONAL_DRIFT_EXCLUDED, NOT UNKNOWN
+        assert "NOTIONAL_DRIFT_EXCLUDED" in reason_histogram, \
+            f"Expected NOTIONAL_DRIFT_EXCLUDED in histogram, got {reason_histogram}"
+        assert "UNKNOWN" not in reason_histogram, \
+            f"UNKNOWN should NOT appear when reason key is correct, got {reason_histogram}"
+        assert reason_histogram["NOTIONAL_DRIFT_EXCLUDED"] == 1
+

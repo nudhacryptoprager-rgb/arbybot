@@ -836,7 +836,8 @@ def generate_m4_from_online_inputs(
     ) if m4_signals else 0.0
     mae_no_slippage = round(max(0, mae_net_usdc - slippage_contribution_per_signal), 4)
     
-    # Count fragile signals: est_net < slippage + gas (at risk of sign flip) (v1.5.0)
+    # Count fragile signals: est_gross < slippage + gas (at risk of sign flip) (v1.5.0)
+    # v2.9.5 FIX: Use est_gross_usdc, NOT truth_net_usdc (net is already minus gas)
     # Fragile = at risk of sign flip due to cost model changes
     fragile_count = 0
     fragile_signals = []
@@ -844,18 +845,20 @@ def generate_m4_from_online_inputs(
         # v2.0.3: Skip excluded signals for fragile calculation
         if sig.get("is_excluded_spread", False):
             continue
-        est_net = sig.get("truth_net_usdc", 0)
+        # v2.9.5: Use est_gross_usdc to avoid double-counting gas
+        # truth_net_usdc = est_gross - gas, so comparing (net < slip+gas) == (gross < slip+2*gas)
+        est_gross = sig.get("est_gross_usdc", 0)
         size_usd = sig.get("size_usd", 0)
         slippage_usdc = size_usd * cost_model.slippage_bps / 10000
         gas_usdc = cost_model.gas_usd
-        # Fragile: est_net < total_costs, so sim could flip to negative
-        if est_net < slippage_usdc + gas_usdc and est_net > 0:
+        # Fragile: est_gross < total_costs, so sim could flip to negative
+        if est_gross < slippage_usdc + gas_usdc and est_gross > 0:
             fragile_count += 1
             fragile_signals.append({
                 "signal_id": sig.get("signal_id", "unknown"),
-                "est_net_usdc": est_net,
-                "cost_margin_usdc": round(slippage_usdc + gas_usdc - est_net, 4),
-                "reason": "est_net < slippage + gas"
+                "est_gross_usdc": est_gross,
+                "cost_margin_usdc": round(slippage_usdc + gas_usdc - est_gross, 4),
+                "reason": "est_gross < slippage + gas"
             })
     
     # v1.9.7: Unified sample threshold
