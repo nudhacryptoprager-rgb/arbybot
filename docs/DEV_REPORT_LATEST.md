@@ -4,42 +4,41 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-28T11:17:42Z
-run_id: data/runs/ci_m5_gate_20260228_121725
-mode: ONLINE (single scan)
+timestamp_utc: 2026-02-28T12:08:23Z
+run_id: data/runs/ci_m5_gate_20260228_130809
+mode: ONLINE (10-min continuous scan)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-28T11:17:42+00:00
+  primary: ts:2026-02-28T12:08:23+00:00
   dirty: false
-  desc: fix(roundtrip): compute net_pnl_bps from USD not mixed wei
+  desc: fix(anchors): direction-aware dynamic anchors + config cleanup
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4.2 roundtrip USD-canonical metrics
+goal (Roadmap пункт): M4.2 anchor direction fix + universe cleanup
 change_summary:
-  - FIX: net_pnl_bps now computed from USD values (not mixed token-wei/ETH-wei)
-  - FIX: token_decimals passed to roundtrip from core_tokens (was None → default 18)
-  - TEST: Added test_net_pnl_bps_uses_usd_not_mixed_wei to lock fix
-  - CONFIG: LINK/USDC removed from real_hunting.yaml (uniswap-only, price issues)
-  - CONFIG: WSTETH alias added to core_tokens.yaml (symbol normalization)
-  - RESULT: net_pnl_bps now reasonable (~-36 bps vs -203B before)
-  - RESULT: roundtrip still < 0, cause: slippage/impact eats edge
+  - FIX: dynamic anchors now direction-aware (canonicalize_pair_with_direction)
+  - FIX: record_quote stores prices in canonical direction (inverted if needed)
+  - FIX: get_anchor returns prices in requested direction (inverts if needed)
+  - TEST: Added 13 tests for anchor direction awareness in test_dynamic_anchors.py
+  - CONFIG: disabled sushiswap_v3_LINK_WETH_500, GMX_WETH pools (SUSPECT_LIQUIDITY)
+  - CONFIG: removed LINK/USDC, GMX/WETH pairs (no cross-DEX available)
+  - RESULT: PRICE_SANITY_FAILED=0 (was 4)
+  - RESULT: WARN_CRITICAL_REJECTS gone from run_summary
 touched_files:
-  - engine/roundtrip.py (net_pnl_bps USD calculation)
-  - strategy/jobs/run_scan_real.py (token_decimals from core_tokens)
-  - tests/unit/test_roundtrip.py (decimals bug test)
-  - config/core_tokens.yaml (WSTETH alias)
-  - config/real_hunting.yaml (LINK/USDC removed, discovery_runtime disabled)
+  - strategy/dynamic_anchors.py (direction-aware canonicalization)
+  - tests/unit/test_dynamic_anchors.py (new test file, 13 tests)
+  - config/real_minimal.yaml (disabled pools, removed non-cross-DEX pairs)
 
 ## 2) Commands Executed (лише факти)
 
-git add engine/roundtrip.py strategy/jobs/run_scan_real.py tests/unit/test_roundtrip.py
-git commit -m "fix(roundtrip): compute net_pnl_bps from USD not mixed wei": COMMIT bcf0d5f
-git push: OK (split/code -> split/code)
-py -3.11 scripts/check_repo_safety.py: PASS (2 warnings - DEV_REPORT_ALIGNMENT)
-py -3.11 -m pytest tests/unit -q: PASS (1107 passed, 1 skipped)
+py -3.11 -m pytest tests/unit/test_dynamic_anchors.py -v: PASS (13 passed)
+py -3.11 -m pytest tests/unit -q: PASS (1120 passed, 1 skipped)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
+git commit -m "fix(anchors): direction-aware dynamic anchors + config cleanup": 462f5e1
+git push: OK (split/code -> split/code)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: PASS
+py -3.11 start.py --config config/real_minimal.yaml --minutes 10: PASS (30 cycles)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -47,11 +46,11 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260228_121725/reports
-roundtrip_evidence:
-  - best_net_pnl_bps: -36.53 (WBTC/USDC)
-  - before_fix: net_pnl_bps=-203668019316.38 (trillions - bug!)
-  - after_fix: net_pnl_bps=-36.53 (sensible negative ~-36 bps)
+  - data/runs/ci_m5_gate_20260228_130809/reports
+anchor_direction_fix:
+  - PRICE_SANITY_FAILED: 0 (was 4)
+  - WARN_CRITICAL_REJECTS: gone (was present)
+  - anchor_source: dynamic (direction-normalized)
 
 ## 4) Key Results (числа з артефактів)
 
@@ -60,13 +59,16 @@ _latest.json:
   run_status: PASS
   agg_status: WARN_QUALITY
   agg_reasons: [FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW]
+  runs_in_window: 200
+  in_warmup: false
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
   drift_status: PASS
-  run_context.run_timestamp: 2026-02-28T11:17:42+00:00
-  inputs.run_dir_name: ci_m5_gate_20260228_121725
+  reasons: [WARN_LOW_SAMPLE]
+  run_context.run_timestamp: 2026-02-28T12:08:23+00:00
+  inputs.run_dir_name: ci_m5_gate_20260228_130809
   inputs.run_mode: REGISTRY_REAL
   metrics:
     signals_count: 3
