@@ -458,6 +458,66 @@ class TestV280USDConversion:
         # USD fields should still be populated
         assert result.gross_pnl_usd > 0
 
+    def test_net_pnl_bps_uses_usd_not_mixed_wei(self):
+        """net_pnl_bps must be derived from USD, not mixed token-wei/ETH-wei.
+        
+        Bug reproduction: When token_in has non-18 decimals (e.g., WBTC=8),
+        the calculation `net_pnl_bps = net_pnl_wei / amount_in * 10000` produces
+        absurdly large values (trillions) because:
+        - gross_pnl_wei is in token units (8 decimals)
+        - gas_cost_wei is in ETH units (18 decimals)
+        - Subtracting them creates nonsense
+        
+        Fix: net_pnl_bps should be calculated from USD:
+        net_pnl_bps = (net_pnl_usd / notional_usd) * 10000
+        """
+        # WBTC arbitrage with small gross profit but significant gas cost
+        buy_quote = {
+            "token_in": "WBTC",
+            "token_out": "WETH",
+            "amount_in_wei": 100_000_000,  # 1 WBTC (8 decimals)
+            "amount_out_wei": 16_500_000_000_000_000_000,  # ~16.5 WETH
+            "dex_id": "uniswap_v3",
+            "gas_estimate": 200_000,
+            "ticks_crossed": 5,
+        }
+        sell_quote = {
+            "token_in": "WETH",
+            "token_out": "WBTC",
+            "amount_in_wei": 16_500_000_000_000_000_000,
+            "amount_out_wei": 100_050_000,  # 1.0005 WBTC (+5 bps gross)
+            "dex_id": "sushiswap_v3",
+            "gas_estimate": 200_000,
+            "ticks_crossed": 3,
+        }
+        
+        result = simulate_roundtrip(
+            buy_quote, sell_quote,
+            gas_price_wei=30_000_000_000,  # 30 gwei - significant gas cost
+            eth_usd_price=4000.0,
+            token_in_usd_price=100_000.0,  # WBTC ~$100k
+            token_in_decimals=8,  # WBTC has 8 decimals
+        )
+        
+        # Key assertions:
+        # 1. gross_pnl_bps should be ~5 bps (50000 / 100_000_000 * 10000)
+        assert 4 < result.gross_pnl_bps < 6, f"gross_pnl_bps={result.gross_pnl_bps} should be ~5"
+        
+        # 2. net_pnl_bps MUST NOT be trillions (bug signature)
+        # Before fix: net_pnl_bps=-1205999999995.0 (trillions!)
+        # After fix: should be ~0.18 bps (from USD: $1.76 / $100k * 10000)
+        assert abs(result.net_pnl_bps) < 1000, f"net_pnl_bps={result.net_pnl_bps} is absurdly large (bug!)"
+        
+        # 3. net_pnl_bps should be derived from USD values
+        # Expected: net_pnl_usd / notional_usd * 10000
+        notional_usd = (100_000_000 / 10**8) * 100_000.0  # 1 WBTC * $100k = $100k
+        expected_net_pnl_bps = (result.net_pnl_usd / notional_usd) * 10000
+        assert abs(result.net_pnl_bps - expected_net_pnl_bps) < 0.1, \
+            f"net_pnl_bps={result.net_pnl_bps} should equal USD-derived value {expected_net_pnl_bps}"
+        
+        # 4. gross_pnl_usd should be positive ($50 = 50000 / 1e8 * $100k)
+        assert result.gross_pnl_usd > 0, f"gross_pnl_usd={result.gross_pnl_usd} should be >0"
+
 
 class TestV280SlippageMeasurement:
     """v2.8.0: Tests for measured slippage from sqrtPriceX96."""

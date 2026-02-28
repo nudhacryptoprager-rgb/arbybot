@@ -29,6 +29,7 @@ import yaml
 from core.constants import SCHEMA_VERSION, FAKE_BLOCK_SENTINELS
 from core.validators import calculate_deviation_bps
 from config.pairs import load_pairs
+from config import load_core_tokens
 
 # Import extracted modules
 from strategy.compat import QuoteCompat, Quote
@@ -597,6 +598,24 @@ def run_scan(
                 "passed_to_roundtrip": len(eligible_opps),
             }
             
+            # v2.8.1: Build token_decimals dict for correct net_pnl_bps calculation
+            # Source: pairs_list (if available) or core_tokens.yaml
+            token_decimals = {}
+            if pairs_list:
+                for p in pairs_list:
+                    token_decimals[p.token_in] = p.token_in_decimals
+                    token_decimals[p.token_out] = p.token_out_decimals
+            else:
+                # Fallback: load from core_tokens.yaml
+                try:
+                    core_tokens = load_core_tokens()
+                    chain_tokens = core_tokens.get(chain_key, {})
+                    for symbol, token_data in chain_tokens.items():
+                        if isinstance(token_data, dict) and "decimals" in token_data:
+                            token_decimals[symbol] = token_data["decimals"]
+                except Exception as e:
+                    logger.warning("Failed to load token_decimals from core_tokens: %s", e)
+            
             roundtrip_results = evaluate_roundtrip_candidates(
                 opportunities=eligible_opps,
                 buy_quotes_by_key=quotes_by_key,
@@ -609,7 +628,7 @@ def run_scan(
                 # v2.8.0: Pass USD prices for cross-token correctness
                 eth_usd_price=eth_usd,
                 token_usd_prices=config.get("tokens_usd_price") or {},
-                token_decimals=None,  # TODO: Add token_decimals to config
+                token_decimals=token_decimals,  # v2.8.1: Fix decimals bug
             )
         
         # Summarize round-trip results

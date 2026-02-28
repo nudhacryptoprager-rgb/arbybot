@@ -288,12 +288,13 @@ def simulate_roundtrip(
     # v2.1.0: Unified gas model - L2 execution + L1 data overhead
     l2_gas_cost = result.total_gas * gas_price_wei
     result.gas_cost_wei = l2_gas_cost + l1_cost_wei
+    # NOTE: net_pnl_wei mixes token-wei with ETH-wei for non-ETH tokens - 
+    # use net_pnl_usd and net_pnl_bps for correct cross-token comparisons
     result.net_pnl_wei = result.gross_pnl_wei - result.gas_cost_wei
     
-    # Calculate bps for comparison
+    # Calculate gross_pnl_bps (token-wei based, valid for same-unit comparison)
     if amount_in > 0:
         result.gross_pnl_bps = float(result.gross_pnl_wei) / float(amount_in) * 10000
-        result.net_pnl_bps = float(result.net_pnl_wei) / float(amount_in) * 10000
     
     # v2.8.0: USD-denominated PnL for cross-token correctness
     # gas_cost is always in ETH wei, convert to USD
@@ -303,6 +304,18 @@ def simulate_roundtrip(
     effective_token_price = token_in_usd_price if token_in_usd_price else eth_usd_price
     result.gross_pnl_usd = (result.gross_pnl_wei / (10 ** token_in_decimals)) * effective_token_price
     result.net_pnl_usd = result.gross_pnl_usd - result.gas_cost_usd
+    
+    # v2.8.1: Calculate net_pnl_bps from USD values (fixes mixed-decimals bug)
+    # net_pnl_bps = (net_pnl_usd / notional_usd) * 10000
+    # This is the canonical profitability metric for cross-token comparisons
+    if amount_in > 0 and effective_token_price > 0:
+        notional_usd = (amount_in / (10 ** token_in_decimals)) * effective_token_price
+        if notional_usd > 0:
+            result.net_pnl_bps = (result.net_pnl_usd / notional_usd) * 10000
+        else:
+            result.net_pnl_bps = 0.0
+    else:
+        result.net_pnl_bps = 0.0
     
     # v2.1.0: Calculate slippage - prefer sqrtPriceAfter when available
     # Check for sqrt_price_after in quotes (from QuoterV2)
