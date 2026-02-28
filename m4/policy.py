@@ -290,20 +290,25 @@ class Thresholds:
     
     # v1.12.0: Diversity thresholds (FAIL, not just WARN)
     # ============================================================================
-    # DIVERSITY_PAIRS_TARGET RESTORE CONTRACT (v2.9.3):
+    # DIVERSITY_PAIRS_TARGET RESTORE CONTRACT (v2.9.4):
     # ============================================================================
     # Currently: 6 (reduced from 8 in v2.9.3)
-    # Reason: SushiSwap pools for ARB/WETH, ARB/USDC, ARB/USDT, WBTC/USDT fail
-    #         PRICE_SANITY (inverted quotes, ratio < 0.05). These are systematic
-    #         SushiSwap token ordering issues, not fixable without quoter changes.
+    # 
+    # ROOT CAUSE ANALYSIS (2026-02-28 slot0 diagnostic):
+    # SushiSwap pools return VALID prices via slot0. E.g.:
+    #   - sushi ARB/WETH fee=500: token0=WETH, token1=ARB
+    #   - slot0 price: ~20555 ARB/WETH (correct: 1 WETH = 20,555 ARB)
+    # The "inverted quotes" issue is in OUR direction-aware price_sanity logic,
+    # NOT in the pools themselves. Fix: dex/adapters/<sushi> slot0 interpretation.
+    #
     # RESTORE TO 8 WHEN:
-    #   (a) SushiSwap quoter fixed for inverted price pairs, OR
+    #   (a) Fix direction-aware slot0/price_sanity interpretation bug, OR
     #   (b) 2+ new cross-DEX pairs added with working quoter_v2 on both DEXes
     # TRACKING: DEV_REPORT_LATEST.md documents affected pools
     # ============================================================================
-    # Current signal-generating pairs (6):
-    # - 4 cross-DEX quoter_v2: WBTC/WETH, WETH/USDT, wstETH/WETH, WBTC/USDC
-    # - 2 uni-only or variable: WETH/USDC (spread<5bps), ARB/WETH, ARB/USDC, LINK/WETH
+    # Current signal-generating pairs (6+):
+    # - cross-DEX quoter_v2: WBTC/WETH, WETH/USDT, WETH/USDC, wstETH/WETH, WBTC/USDC
+    # - uni-only or variable: ARB/WETH, ARB/USDC, LINK/WETH
     DIVERSITY_PAIRS_TARGET = 6     # WARN_DIVERSITY_LOW if unique_pairs < 6
     DIVERSITY_PAIRS_MIN = 3        # v1.12.0: FAIL if unique_pairs < 3
     # ============================================================================

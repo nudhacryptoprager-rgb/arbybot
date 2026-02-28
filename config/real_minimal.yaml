@@ -54,10 +54,11 @@ dexes:
 # Pool addresses verified via factory.getPool() (dates vary: 2026-02-07 to 2026-02-19)
 pairs:
   # Major pairs with high liquidity on both DEXes
-  # v2.8.0: fee_tiers=[500] only for WETH pairs - lower LP fee floor for roundtrip profitability
+  # v2.9.4: fee_tiers=[100, 500] for WETH/USDC - uni fee=100 has high liq (3.6e15)
+  # v2.9.4: WETH/USDT stays [500] - fee=100 pools have low liq (SUSPECT_LIQUIDITY)
   - token_in: WETH
     token_out: USDC
-    fee_tiers: [500]
+    fee_tiers: [100, 500]
   - token_in: WETH
     token_out: USDT
     fee_tiers: [500]
@@ -132,14 +133,18 @@ pairs:
 # Uniswap V3 Factory: 0x1F98431c8aD98523631AE4a59f267346ea31F984
 # SushiSwap V3 Factory: 0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e
 pools:
-  # === WETH/USDC ===
+  # === WETH/USDC (fee=100 added v2.9.4, uni-only) ===
+  uniswap_v3_WETH_USDC_100: "0x6f38e884725a116C9C7fBF208e79FE8828a2595F"
   uniswap_v3_WETH_USDC_500: "0xC6962004f452bE9203591991D15f6b388e09E8D0"
   uniswap_v3_WETH_USDC_3000: "0xc473e2aEE3441BF9240Be85eb122aBB059A3B57c"
+  # sushiswap_v3_WETH_USDC_100: v2.9.4 DISABLED (SUSPECT_LIQUIDITY, liq=3e10 too low)
   sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
   sushiswap_v3_WETH_USDC_3000: "0xC96525298419f7E00dA8826B733Ee52e271662b5"
-  # === WETH/USDT ===
+  # === WETH/USDT (fee=500 only - fee=100 pools have low liq) ===
+  # uniswap_v3_WETH_USDT_100: v2.9.4 DISABLED (SUSPECT_LIQUIDITY, liq=2.5e14 quarantined)
   uniswap_v3_WETH_USDT_500: "0x641C00A822e8b671738d32a431a4Fb6074E5c79d"
   uniswap_v3_WETH_USDT_3000: "0xc82819F72A9e77E2c0c3A69B3196478f44303cf4"
+  # sushiswap_v3_WETH_USDT_100: v2.9.4 DISABLED (SUSPECT_LIQUIDITY, liq=8e13 too low)
   sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
   sushiswap_v3_WETH_USDT_3000: "0x92d543A8a158A6bC2C7018ae17803819Cb9150B2"
   # === WBTC/WETH (v2.9.1: sushi 3000 re-enabled after anchor direction fix) ===

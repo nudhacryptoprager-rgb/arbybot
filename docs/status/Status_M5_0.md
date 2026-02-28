@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-02-28  
-**Tests**: 1106 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260228_105926`  
+**Tests**: 1120 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260228_182059`  
 **discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
 
 ---
@@ -30,7 +30,7 @@
 | 2 | **provenance unification** | `strategy/artifacts.py`, `run_scan_real.py` | `run_context.run_timestamp` unified |
 | 3 | **PENDLE/WETH DISABLED** | `config/real_minimal.yaml` |: pair disabled (quoter_v2 returning 0) |
 | 4 | **RDNT/WETH DISABLED** | `config/real_minimal.yaml` |: pair disabled (quoter_v2 returning 0) |
-| 5 | **DIVERSITY_PAIRS_TARGET=8** | `m4/policy.py` |: reduced to match quoter coverage |
+| 5 | **DIVERSITY_PAIRS_TARGET=6** | `m4/policy.py` |: reduced to match quoter coverage (was 8) |
 | 6 | **check_repo_safety.py** | `scripts/check_repo_safety.py` | DEV_REPORT bloat guardrail added |
 | 7 | **pool_missing_keys observability** | `strategy/quotes.py`, `run_scan_real.py` |: `pool_missing_keys` in scan.stats |
 | 8 | **repo safety gate** | `scripts/check_repo_safety.py` |: check forbidden tracked files/keys |

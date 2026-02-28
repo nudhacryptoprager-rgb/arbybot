@@ -1,8 +1,8 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate WARN_QUALITY)  
-**Updated**: 2026-02-27  
-**Policy**: DIVERSITY_PAIRS_TARGET=8  
+**Updated**: 2026-02-28  
+**Policy**: DIVERSITY_PAIRS_TARGET=6 (was 8; Sushi pool direction-logic bug)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ROUNDTRIP_NOT_PROFITABLE`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
@@ -39,7 +39,7 @@
 - Breakdown: `same_dex_excluded_count=2`, `non_same_dex_excluded_count=0`
 - Це НЕ quality issue - очікувана поведінка з `require_cross_dex: true`
 
-**Snapshot (2026-02-28)**: From `ci_m5_gate_20260228_105926` (10-min scan): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), **agg_status=WARN_QUALITY** (FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW), **drift_status=PASS** (sign_mismatch=0, sign_rate=1.0), **data_run_rate=0.905**, **total_net_usdc=$553.94** (rolling window). signals_included=1, signals_excluded=2. **Config changes**: min_spread_bps=20 (was 5), WETH pairs fee_tiers=[500] (was [500, 3000]). **profit_realism_status=ROUNDTRIP_NOT_PROFITABLE**. **execution_ready_count=0** (kill_switch_active=true).
+**Snapshot (2026-02-28)**: From `ci_m5_gate_20260228_182059` (10-min scan): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), **agg_status=WARN_QUALITY** (FRAGILE_P90_ELEVATED), **drift_status=PASS** (sign_mismatch=0, sign_rate=1.0), **data_run_rate=1.0**, **total_net_usdc=$1706.18** (rolling window). signals_included=6, signals_excluded=1. **Config changes**: WETH/USDC fee_tiers=[100, 500] (uni fee=100 only). **Root cause finding**: slot0 diagnostic shows Sushi pools return VALID prices; "inverted quotes" bug is in direction-aware price_sanity logic. **DIVERSITY_PAIRS_TARGET=6** (was 8) documented in RESTORE CONTRACT.
 
 ### Drift Status (2026-02-28)
 - **drift_status: PASS** (was FAIL in previous 200-run window)
