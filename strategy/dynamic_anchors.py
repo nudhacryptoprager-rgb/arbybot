@@ -74,6 +74,35 @@ def canonicalize_pair(pair: str) -> str:
     return f"{sorted_tokens[0]}/{sorted_tokens[1]}"
 
 
+def canonicalize_pair_with_direction(pair: str) -> Tuple[str, bool]:
+    """
+    Canonicalize pair key and detect if input was inverted relative to canonical.
+    
+    v2.9.0: Direction-aware anchors - fixes PRICE_SANITY_FAILED bug where
+    prices were stored without direction normalization.
+    
+    Args:
+        pair: Pair string like "WETH/USDC" or "USDC/WETH"
+        
+    Returns:
+        (canonical_pair, is_inverted) where:
+        - canonical_pair: alphabetically sorted pair like "USDC/WETH"
+        - is_inverted: True if input direction was inverted relative to canonical
+          (e.g., input "WETH/USDC" → canonical "USDC/WETH" → is_inverted=True)
+    """
+    if "/" not in pair:
+        return pair, False
+    tokens = pair.split("/")
+    if len(tokens) != 2:
+        return pair, False
+    # Sort alphabetically
+    sorted_tokens = sorted(tokens)
+    canonical = f"{sorted_tokens[0]}/{sorted_tokens[1]}"
+    # Inverted if first token moved position during sort
+    is_inverted = tokens[0] != sorted_tokens[0]
+    return canonical, is_inverted
+
+
 # v2.2.3: Sanity bounds for anchor prices (reject obvious outliers)
 # These are conservative bounds - real prices rarely exceed these
 ANCHOR_PRICE_MIN = 1e-12  # Smallest reasonable price (e.g., wei/ETH)
@@ -243,24 +272,31 @@ class DynamicAnchorManager:
         
         Only call this for quotes that passed price sanity validation.
         v2.3.0: Uses canonical pair key (sorted tokens).
+        v2.9.0: Direction-aware - inverts price when storing if input pair
+                was inverted relative to canonical direction.
         """
-        # v2.3.0: Canonicalize pair key for consistent lookup
-        canonical_pair = canonicalize_pair(pair)
+        # v2.9.0: Canonicalize pair key AND track direction
+        canonical_pair, is_inverted = canonicalize_pair_with_direction(pair)
         
         if canonical_pair not in self._pairs:
             self._pairs[canonical_pair] = PairAnchorData(pair=canonical_pair)
         
+        # v2.9.0: Normalize price to canonical direction
+        # If input pair was inverted (e.g., WETH/ARB → ARB/WETH canonical),
+        # the price must be inverted too (price was token_out/token_in, needs token_in/token_out)
+        normalized_price = 1.0 / price if is_inverted else price
+        
         # v2.2.3: Sanity check - reject outlier prices
-        if not is_valid_anchor_price(price):
+        if not is_valid_anchor_price(normalized_price):
             logger.warning(
-                "ANCHOR_SAMPLE_REJECTED: %s price=%s (outside valid range [%s, %s])",
-                pair, price, ANCHOR_PRICE_MIN, ANCHOR_PRICE_MAX
+                "ANCHOR_SAMPLE_REJECTED: %s price=%s normalized=%s (outside valid range [%s, %s])",
+                pair, price, normalized_price, ANCHOR_PRICE_MIN, ANCHOR_PRICE_MAX
             )
             return
         
         sample = AnchorSample(
             timestamp=time.time(),
-            price=price,
+            price=normalized_price,  # v2.9.0: Store in canonical direction
             dex_id=dex_id,
             fee_tier=fee_tier,
             block=block,
@@ -285,9 +321,11 @@ class DynamicAnchorManager:
             (anchor_price, anchor_source) where anchor_source is "dynamic" or "yaml_fallback"
         
         v2.3.0: Uses canonical pair key for lookup.
+        v2.9.0: Direction-aware - inverts returned price when requested pair
+                direction differs from canonical.
         """
-        # v2.3.0: Canonicalize pair for lookup
-        canonical_pair = canonicalize_pair(pair)
+        # v2.9.0: Canonicalize pair AND track direction for inversion
+        canonical_pair, is_inverted = canonicalize_pair_with_direction(pair)
         
         # Check if we have enough dynamic samples
         if canonical_pair in self._pairs:
@@ -297,6 +335,9 @@ class DynamicAnchorManager:
             
             median = pair_data.calculate_median(max_age, min_samples)
             if median is not None:
+                # v2.9.0: Invert anchor if requested pair direction differs from canonical
+                if is_inverted:
+                    median = 1.0 / median
                 # v2.2.0: Check for anchor drift from YAML baseline
                 if yaml_fallback is not None and yaml_fallback > 0:
                     drift_pct = abs(median - yaml_fallback) / yaml_fallback * 100
@@ -325,6 +366,8 @@ class DynamicAnchorManager:
         
         Returns dict with: anchor_value, anchor_source, anchor_age_seconds, sample_count
         v2.3.0: Uses canonical pair key for lookup.
+        v2.9.0: Direction-aware - inverts returned value when requested pair
+                direction differs from canonical.
         """
         result = {
             "anchor_value": None,
@@ -333,8 +376,8 @@ class DynamicAnchorManager:
             "sample_count": 0,
         }
         
-        # v2.3.0: Canonicalize pair for lookup
-        canonical_pair = canonicalize_pair(pair)
+        # v2.9.0: Canonicalize pair AND track direction for inversion
+        canonical_pair, is_inverted = canonicalize_pair_with_direction(pair)
         
         if canonical_pair in self._pairs:
             pair_data = self._pairs[canonical_pair]
@@ -347,7 +390,8 @@ class DynamicAnchorManager:
             if valid_samples and len(valid_samples) >= min_samples:
                 median = pair_data.calculate_median(max_age, min_samples)
                 if median is not None:
-                    result["anchor_value"] = median
+                    # v2.9.0: Invert anchor if requested pair direction differs from canonical
+                    result["anchor_value"] = 1.0 / median if is_inverted else median
                     result["anchor_source"] = "dynamic"
                     # Age is time since newest sample
                     newest_ts = max(s.timestamp for s in valid_samples)

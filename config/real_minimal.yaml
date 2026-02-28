@@ -72,13 +72,16 @@ pairs:
     token_out: WETH
     fee_tiers: [500, 3000]
   # NOTE: LINK re-enabled for signals diversity (quality gate requirement)
+  # NOTE: LINK/WETH - fee 500 disabled on Sushiswap (SUSPECT_LIQUIDITY)
   - token_in: LINK
     token_out: WETH
-    fee_tiers: [500, 3000]
-  # NOTE: GMX re-enabled for signals diversity (quality gate requirement)
-  - token_in: GMX
-    token_out: WETH
-    fee_tiers: [500, 3000]
+    fee_tiers: [3000]
+  # NOTE: GMX - fee 3000 disabled on Sushiswap (SUSPECT_LIQUIDITY), Uniswap pools disabled
+  # Only fee 500 Sushiswap available - this is a single-pool pair now (non-cross-DEX)
+  # v2.9.0: DISABLED - no cross-DEX arb possible
+  # - token_in: GMX
+  #   token_out: WETH
+  #   fee_tiers: [500]
   - token_in: wstETH
     token_out: WETH
     fee_tiers: [100, 500]
@@ -89,11 +92,11 @@ pairs:
   - token_in: WBTC
     token_out: USDC
     fee_tiers: [500, 3000]
-  # v2.1.0: LINK/USDC added for stablecoin diversity (Step 10)
-  # Note: Only 3000 tier - 500 tier had QUOTE_ZERO_OUT
-  - token_in: LINK
-    token_out: USDC
-    fee_tiers: [3000]
+  # v2.9.0: LINK/USDC DISABLED - both DEXes unavailable
+  # Uniswap quarantined (PRICE_SCALE_VIOLATION), Sushiswap disabled (PRICE_SANITY_FAILED)
+  # - token_in: LINK
+  #   token_out: USDC
+  #   fee_tiers: [3000]
   # ============================================================================
   # PENDLE/WETH, RDNT/WETH DISABLED (v2.3.4)
   # ============================================================================
@@ -143,11 +146,11 @@ pools:
   # === LINK/WETH ===
   uniswap_v3_LINK_WETH_500: "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907"
   uniswap_v3_LINK_WETH_3000: "0x468b88941e7Cc0B88c1869d68ab6b570bCEF62Ff"
-  sushiswap_v3_LINK_WETH_500: "0x942E53ED315Db6451AdCd601D4D08f059F88C77f"
+  # sushiswap_v3_LINK_WETH_500: v2.9.0 DISABLED (SUSPECT_LIQUIDITY)
   # sushiswap_v3_LINK_WETH_3000: v2.3.4 DISABLED (PRICE_SANITY_FAILED)
-  # === GMX/WETH (uniswap pools disabled - see disabled_pools) ===
-  sushiswap_v3_GMX_WETH_500: "0xe7988687004933525734Da744102ea8E0e472A91"
-  sushiswap_v3_GMX_WETH_3000: "0x2AB937e744B6E067c55329838A587d1Cf50C874f"
+  # === GMX/WETH (all pools disabled - no cross-DEX possible) ===
+  # sushiswap_v3_GMX_WETH_500: v2.9.0 DISABLED (pair removed - no cross-DEX)
+  # sushiswap_v3_GMX_WETH_3000: v2.9.0 DISABLED (SUSPECT_LIQUIDITY)
   # === wstETH/WETH ===
   uniswap_v3_wstETH_WETH_100: "0x35218a1cbaC5Bbc3E57fd9Bd38219D37571b3537"
   uniswap_v3_wstETH_WETH_500: "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13"
@@ -265,6 +268,25 @@ disabled_pools:
     detail: "spread_bps=722 vs threshold=300"
     evidence_run: "ci_m5_gate_20260222_100525"
     disabled_date: "2026-02-22"
+  # v2.9.0: Added SUSPECT_LIQUIDITY pools
+  sushiswap_v3_LINK_WETH_500:
+    address: "0x942E53ED315Db6451AdCd601D4D08f059F88C77f"
+    reason: "SUSPECT_LIQUIDITY"
+    detail: "ticks_crossed extremely high, low liquidity"
+    evidence_run: "ci_m5_gate_20260228_124742"
+    disabled_date: "2026-02-28"
+  sushiswap_v3_GMX_WETH_3000:
+    address: "0x2AB937e744B6E067c55329838A587d1Cf50C874f"
+    reason: "SUSPECT_LIQUIDITY"
+    detail: "ticks_crossed extremely high, low liquidity"
+    evidence_run: "ci_m5_gate_20260228_124742"
+    disabled_date: "2026-02-28"
+  sushiswap_v3_GMX_WETH_500:
+    address: "0xe7988687004933525734Da744102ea8E0e472A91"
+    reason: "NO_CROSS_DEX"
+    detail: "GMX/WETH pair removed - only Sushi pools available, no cross-DEX arb"
+    evidence_run: "ci_m5_gate_20260228_124742"
+    disabled_date: "2026-02-28"
 
 # Token addresses (Arbitrum)
 tokens:
