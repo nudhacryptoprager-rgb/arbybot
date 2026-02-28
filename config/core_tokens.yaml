@@ -76,6 +76,12 @@ arbitrum_one:
     name: "Wrapped stETH"
     note: "Lido wrapped staked ETH"
   
+  WSTETH:
+    address: "0x5979D7b546E38E414F7E9822514be443A4800529"
+    decimals: 18
+    name: "Wrapped stETH"
+    note: "Alias for wstETH - symbol normalization compatibility"
+  
   GMX:
     address: "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
     decimals: 18

@@ -66,20 +66,18 @@ pairs:
   - token_in: WBTC
     token_out: USDC
     fee_tiers: [500, 3000]
-  - token_in: LINK
-    token_out: USDC
-    fee_tiers: [3000]
+  # NOTE: LINK/USDC removed - uniswap-only (no sushiswap pool), triggers SAME_DEX_EXCLUDED
 
 # =============================================================================
-# HUNTING CONFIG - DISCOVERY_RUNTIME ENABLED
+# HUNTING CONFIG - CONFIG PAIRS (discovery_runtime disabled)
 # =============================================================================
-# universe_source: discovery_runtime enables dynamic pair discovery
-# discovery_runtime_max_pairs: 50 expands search to more pairs
-# require_cross_dex: true ensures DEX↔DEX arbitrage only
+# discovery_runtime disabled due to finding toxic pairs with price issues
+# (GRAIL/WETH, ARB/DAI, DPX/WETH with extreme notional drifts)
+# Using static config pairs for stability
 # =============================================================================
-universe_source: discovery_runtime
-discovery_runtime: true
-discovery_runtime_max_pairs: 50
+universe_source: config
+discovery_runtime: false
+# discovery_runtime_max_pairs: 50  # disabled
 
 # v2.5.3: Cross-DEX preference - prefer cross-DEX spreads over same-DEX fee-tier arb
 require_cross_dex: true
@@ -112,7 +110,7 @@ target_usd_notional: 250
 use_usd_notional: true
 
 # Spread signal threshold
-min_spread_bps: 5
+min_spread_bps: 20
 min_net_pnl_usdc_est: 0.0
 
 # v2.2.0: truth_mode_m42 - roundtrip is canonical

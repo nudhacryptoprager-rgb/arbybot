@@ -4,57 +4,54 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-28T09:59:39Z
-run_id: data/runs/ci_m5_gate_20260228_105926
-mode: ONLINE (10-min continuous scan)
+timestamp_utc: 2026-02-28T11:17:42Z
+run_id: data/runs/ci_m5_gate_20260228_121725
+mode: ONLINE (single scan)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-02-28T09:59:39+00:00
-  dirty: true
-  desc: config changes - min_spread_bps=20, fee_tiers=[500] for WETH pairs
+  primary: ts:2026-02-28T11:17:42+00:00
+  dirty: false
+  desc: fix(roundtrip): compute net_pnl_bps from USD not mixed wei
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4.2 roundtrip pipeline - drift-safe thresholds
+goal (Roadmap пункт): M4.2 roundtrip USD-canonical metrics
 change_summary:
-  - CONFIG: min_spread_bps raised to 20 (was 5) - filters marginal signals with sign flip risk
-  - CONFIG: WETH/USDC, WETH/USDT fee_tiers=[500] (was [500, 3000]) - lower LP fee floor
-  - CONFIG: real_nonstop.yaml normalized (universe_source=config, discovery_runtime=false, comments aligned)
-  - RESULT: drift_status=PASS, sign_mismatch_count=0, est_sign_correct_rate=1.0
-  - RESULT: included_signals=1 (reduced from 5 by higher min_spread_bps)
-  - RESULT: agg_status=WARN_QUALITY (FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW)
+  - FIX: net_pnl_bps now computed from USD values (not mixed token-wei/ETH-wei)
+  - FIX: token_decimals passed to roundtrip from core_tokens (was None → default 18)
+  - TEST: Added test_net_pnl_bps_uses_usd_not_mixed_wei to lock fix
+  - CONFIG: LINK/USDC removed from real_hunting.yaml (uniswap-only, price issues)
+  - CONFIG: WSTETH alias added to core_tokens.yaml (symbol normalization)
+  - RESULT: net_pnl_bps now reasonable (~-36 bps vs -203B before)
+  - RESULT: roundtrip still < 0, cause: slippage/impact eats edge
 touched_files:
-  - config/real_minimal.yaml (min_spread_bps, fee_tiers)
-  - config/real_nonstop.yaml (universe_source, comments)
-  - docs/DEV_REPORT_LATEST.md (state update)
+  - engine/roundtrip.py (net_pnl_bps USD calculation)
+  - strategy/jobs/run_scan_real.py (token_decimals from core_tokens)
+  - tests/unit/test_roundtrip.py (decimals bug test)
+  - config/core_tokens.yaml (WSTETH alias)
+  - config/real_hunting.yaml (LINK/USDC removed, discovery_runtime disabled)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: PASS (1106 passed, 1 skipped)
+git add engine/roundtrip.py strategy/jobs/run_scan_real.py tests/unit/test_roundtrip.py
+git commit -m "fix(roundtrip): compute net_pnl_bps from USD not mixed wei": COMMIT bcf0d5f
+git push: OK (split/code -> split/code)
+py -3.11 scripts/check_repo_safety.py: PASS (2 warnings - DEV_REPORT_ALIGNMENT)
+py -3.11 -m pytest tests/unit -q: PASS (1107 passed, 1 skipped)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
-py -3.11 start.py --config config/real_minimal.yaml --minutes 10: 10-min scan (runDir=ci_m5_gate_20260228_105926)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: PASS
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
   - data/runs/_rolling/_latest.json
   - data/runs/_rolling/run_summary_latest.json  
-  - data/runs/_rolling/m4_stability_agg.json (200 runs)
+  - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260228_105926/reports
-preflight_evidence:
-  - enabled: true
-  - candidates_count: 1
-  - cross_dex_signals: 1 (included)
-  - same_dex_excluded: 2 (SAME_DEX_EXCLUDED)
-  - evidence_source: preflight_v1.0.3
-
-drift_evidence (10-min scan):
-  - drift_status: PASS
-  - sign_mismatch_count: 0
-  - est_sign_correct_rate: 1.0 (100%)
-  - included_signals_count: 1
-  - excluded_signals_count: 2 (SAME_DEX_EXCLUDED)
+  - data/runs/ci_m5_gate_20260228_121725/reports
+roundtrip_evidence:
+  - best_net_pnl_bps: -36.53 (WBTC/USDC)
+  - before_fix: net_pnl_bps=-203668019316.38 (trillions - bug!)
+  - after_fix: net_pnl_bps=-36.53 (sensible negative ~-36 bps)
 
 ## 4) Key Results (числа з артефактів)
 
@@ -63,41 +60,71 @@ _latest.json:
   run_status: PASS
   agg_status: WARN_QUALITY
   agg_reasons: [FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW]
-  runs_in_window: 200
-  in_warmup: false
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
   drift_status: PASS
-  drift_reasons: []
-  run_context.run_timestamp: 2026-02-28T09:59:39+00:00
-  inputs.run_dir_name: ci_m5_gate_20260228_105926
+  run_context.run_timestamp: 2026-02-28T11:17:42+00:00
+  inputs.run_dir_name: ci_m5_gate_20260228_121725
   inputs.run_mode: REGISTRY_REAL
   metrics:
     signals_count: 3
-    included_signals_count: 1 (cross-DEX only)
-    excluded_signals_count: 2 (SAME_DEX_EXCLUDED)
-    sign_mismatch_count: 0
-    est_sign_correct_rate: 1.0 (100%)
-    profit_is_diagnostic: true
-    profit_truth_source: ONE_LEG_DIAGNOSTIC
+    included_signals_count: 2
+    est_sign_correct_rate: 1.0
 
-m4_stability_agg.json:
-  runs_in_window: 200
-  agg_status: WARN_QUALITY
-  agg_reasons: [FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW]
-  data_run_rate: 0.905
-  total_net_usdc: $553.94 (rolling window)
-  unique_pairs: 4
-  note: unique_pairs reduced from 8 due to min_spread_bps=20 filtering marginal signals
+roundtrip_breakdown ($250 sizing):
+  | pair | net_pnl_bps | gross_pnl_bps | slippage_bps | gas_usd | fees |
+  |------|-------------|---------------|--------------|---------|------|
+  | WETH/USDT | -67.98 | -67.68 | 111.21 | $0.0077 | 500/500 |
+  | WBTC/USDC | -36.53 | -36.01 | 68.43 | $0.013 | 500/500 |
 
-## 5) Pair Diversity Expansion (v2.5.2)
+## 5) Roundtrip Fix Details (v2.8.1)
 
-fee_tiers_expansion:
-  - WBTC/WETH: fee_tiers [3000] -> [500, 3000] (Uniswap fee-tier arb enabled)
-  - ARB/WETH: fee_tiers [3000] -> [500, 3000] (Uniswap fee-tier arb enabled)
-  - Pool verification: uniswap_v3_WBTC_WETH_500 liq=428657338564977205
+### Bug Identified
+```
+BEFORE: net_pnl_bps = (gross_pnl_wei - gas_cost_wei) / amount_in * 10000
+        = (50000 - 6057621785286) / 367647 * 10000
+        = -203668019316.38 bps (trillions!)
+        
+PROBLEM: gross_pnl_wei is WBTC-wei (8 decimals)
+         gas_cost_wei is ETH-wei (18 decimals)
+         Subtracting them produces nonsense
+```
+
+### Fix Applied
+```python
+# engine/roundtrip.py line 298-307
+# v2.8.1: net_pnl_bps from USD (not mixed wei)
+notional_usd = (amount_in / (10 ** token_in_decimals)) * effective_token_price
+result.net_pnl_bps = (result.net_pnl_usd / notional_usd) * 10000
+
+# strategy/jobs/run_scan_real.py line 600-615
+# v2.8.1: Build token_decimals from pairs_list or core_tokens
+token_decimals = {}
+if pairs_list:
+    for p in pairs_list:
+        token_decimals[p.token_in] = p.token_in_decimals
+```
+
+### Test Added
+```python
+# tests/unit/test_roundtrip.py
+def test_net_pnl_bps_uses_usd_not_mixed_wei(self):
+    """net_pnl_bps must be derived from USD, not mixed token-wei/ETH-wei."""
+    # WBTC with 8 decimals
+    # Before fix: net_pnl_bps=-1205999999995.0 (trillions!)
+    # After fix: ~0.18 bps (from USD calculation)
+    assert abs(result.net_pnl_bps) < 1000  # Key check: not billions
+```
+
+## 6) Quality Notes
+
+- roundtrip net_pnl_bps тепер USD-канонічний (decimals-safe)
+- roundtrip все ще < 0, причина: impact/fees (slippage 68-111 bps eats edge)
+- $50 sizing test: no roundtrip candidates (spreads too narrow at lower size)
+- LINK/USDC removed from hunting (inverted direction, price 1e23 nonsense)
+- WSTETH alias added to core_tokens (symbol normalization for discovery/CLI)
   - Pool verification: uniswap_v3_ARB_WETH_500 liq=684124252408873178675578
 
 log_evidence:
@@ -262,35 +289,36 @@ For 0.05% pools: MIN = 10 + 5 + 5 = ~20 bps
 
 **Results:**
 - runs_in_window: 200
-- agg_status: PASS
-- data_run_rate: 0.995 (199/200 runs had data)
-- total_net_usdc: $991.84 (paper profit)
-- avg_net_usdc: $4.96/run
-- max_net_usdc: $7.44/run
-- min_net_usdc: $0.00/run (1 NO_DATA run)
+- agg_status: WARN_QUALITY
+- agg_reasons: [FRAGILE_P90_ELEVATED, DIVERSITY_PAIRS_LOW]
+- data_run_rate: 0.905
+- total_net_usdc: $553.94 (rolling window)
 
 **Signal Distribution:**
-- signals_per_run: 8 (avg)
-- unique_pairs: 8 (ARB/USDC, ARB/WETH, LINK/WETH, WBTC/USDC, WBTC/WETH, WETH/USDC, WETH/USDT, wstETH/WETH)
+- signals_per_run: 3 (avg after min_spread_bps=20 filter)
+- unique_pairs: 4 (WBTC/USDC, WBTC/WETH, WETH/USDC, WETH/USDT)
 - unique_routes: 3 (uniswap_v3->sushiswap_v3, sushiswap_v3->uniswap_v3, uniswap_v3->uniswap_v3)
 - unique_routes_cross_dex: 2
+- note: unique_pairs reduced from 8 by min_spread_bps=20 filtering marginal signals
 
 **Sample Signal (typical):**
-- pair: WETH/USDC
+- pair: WBTC/USDC
 - route: uniswap_v3 -> sushiswap_v3
-- spread_bps: 22.29
+- spread_bps: ~25
 - size_usd: $250
-- est_gross_usdc: $0.56
-- truth_net_usdc: $0.46 (after gas)
+- est_gross_usdc: $0.79
+- truth_net_usdc: $0.79 (after gas)
 - confidence: low
 
-**Roundtrip Status:**
+**Roundtrip Status (v2.8.1 fix deployed):**
 - profit_truth_source: ONE_LEG_DIAGNOSTIC
-- profit_truth_available: false
-- profitable_count: 0 (roundtrip simulation not implemented yet)
+- roundtrip_enabled: true (simulated)
+- best_net_pnl_bps: -36.53 (WBTC/USDC)
+- note: roundtrip still < 0; slippage/impact (68-111 bps) eats edge
 
 **Conclusion:**
-Paper profit is consistently positive (~$5/run) but represents ONE_LEG estimates only.
+Paper profit positive (~$2.8/run) on ONE_LEG. Roundtrip unprofitable (-36 bps) due to impact costs.
+net_pnl_bps calculation now USD-canonical (decimals-safe fix deployed).
 Real roundtrip profitability requires leg2 re-quote which is likely to reduce/eliminate profit due to execution costs.
 See Section 8 for root cause analysis and Section 9 for solutions.
 
