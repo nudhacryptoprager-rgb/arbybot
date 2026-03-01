@@ -56,14 +56,16 @@ from core.reject_reasons import SimRejectReason
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def get_git_sha() -> str:
+def get_git_sha() -> None:
     """
-    Get current git HEAD SHA (short form).
+    DEPRECATED (v2.0.3): SHA tracking removed.
     
-    DEPRECATED (v2.0.2): SHA tracking removed. Returns "deprecated" always.
-    Kept for backwards compatibility with old tooling.
+    RESTORE CONTRACT: Use m4.evidence.get_git_sha() as canonical source.
+    This is a thin wrapper for backward compatibility only.
     """
-    return "deprecated"
+    # v2.0.3: Import from canonical source
+    from m4.evidence import get_git_sha as _get_git_sha
+    return _get_git_sha()
 
 
 # ============================================================

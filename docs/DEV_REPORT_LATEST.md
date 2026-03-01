@@ -4,39 +4,46 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T10:35:00Z
-run_id: data/runs/ci_m5_gate_20260301_101401
-mode: ONLINE (economics gate validation)
+timestamp_utc: 2026-03-01T12:00:00Z
+run_id: data/runs/ci_m5_gate_20260301_120000
+mode: OFFLINE (refactoring validation)
 artifact_mode: rolling
-config: config/real_hunting_lowfee.yaml
+config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-03-01T10:35:00+00:00
+  primary: ts:2026-03-01T12:00:00+00:00
   dirty: false
-  desc: v2.9.9 economics gate + signal enrichment
+  desc: v2.0.4 deduplication refactor (SHA, timestamp, fee_tiers, pool_key)
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4.2 economics gate - reduce bug surface, add canonical cost calculations
+goal (Roadmap пункт): M4 maintenance - remove duplicate implementations to reduce logic drift
 change_summary:
-  - NEW MODULE: execution/economics.py - canonical min_required_spread_bps() calculations
-  - SIGNAL ENRICHMENT: min_required_spread_bps, spread_minus_required_bps, is_roundtrip_viable fields
-  - ROUNDTRIP GATING: engine/roundtrip.py filters candidates with spread_minus_required_bps <= 0
-  - CONFIG: config/real_hunting_lowfee.yaml - low-fee pool hunting (fee_tiers 100/500)
-  - TESTS: 25 economics tests including contract tests for signal fields
-  - RESULT: agg_status=PASS, fragile_rate_p90=0.0, economics gate operational
+  - DEDUP: SHA-free provenance - m4/evidence.py is single source of truth
+  - DEDUP: core/time.py:get_run_timestamp() - canonical timestamp format (Z suffix)
+  - DEDUP: discovery/index_factories.V3_FEE_TIERS - single list for all modules
+  - DEDUP: discovery/index_factories.V3_FACTORY_ABI - single ABI definition
+  - NEW: core/pool_keys.py - canonical make_pool_key() and make_pair_tag()
+  - REFACTOR: scripts/find_sushi_pools.py - loads tokens from core_tokens.yaml
+  - REFACTOR: scripts/verify_v3_pools.py - imports from discovery/index_factories
+  - TESTS: All 1160 tests pass
 touched_files:
-  - execution/economics.py (NEW - canonical cost calculations)
-  - execution/__init__.py (exports for economics functions)
-  - strategy/spreads.py (signal enrichment with economics fields)
-  - engine/roundtrip.py (gating filter for unprofitable roundtrips)
-  - tests/unit/test_economics.py (NEW - 25 tests)
-  - config/real_hunting_lowfee.yaml (NEW - low-fee hunting config)
+  - core/time.py (added get_run_timestamp)
+  - core/pool_keys.py (NEW - canonical pool_key helpers)
+  - m4/evidence.py (imports from core/time.py)
+  - m4/gates.py (imports from m4/evidence)
+  - m4/fixtures.py (uses get_run_timestamp)
+  - scripts/ci_m4_execution_gate.py (imports from m4/evidence)
+  - scripts/verify_v3_pools.py (imports from discovery/index_factories)
+  - scripts/find_sushi_pools.py (loads tokens from config, canonical imports)
+  - discovery/runtime.py (imports V3_FEE_TIERS)
+  - discovery/index_factories.py (V3_FACTORY_ABI at module level)
+  - config/pairs.py (uses make_pool_key)
+  - strategy/jobs/run_scan_real.py (uses get_run_timestamp)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: PASS (1160 passed, 25 new economics tests)
+py -3.11 -m pytest tests/unit -q: PASS (1160 passed, 13.27s)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (12.9s)
-py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10: completed (economics gate test)
 py -3.11 scripts/inspect_rolling.py: agg_status=PASS, runs_in_window=14, total_net_usdc=$95.11
 
 ## 3) Artifacts Attached (шляхи)

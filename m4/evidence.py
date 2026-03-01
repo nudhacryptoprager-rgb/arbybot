@@ -14,18 +14,11 @@ Usage:
     # {'code_sha': None, 'code_dirty': None, 'code_desc': None, 'run_timestamp': '2026-02-11T...'}
 """
 
-from datetime import datetime, timezone
 from typing import Optional
 
-
-def get_run_timestamp() -> str:
-    """
-    Get current UTC timestamp for artifact provenance.
-    
-    Returns:
-        ISO-8601 timestamp string with Z suffix.
-    """
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+# v2.0.4: Import canonical timestamp helper from core/time.py
+# RESTORE CONTRACT: core.time.get_run_timestamp() is the single source of truth
+from core.time import get_run_timestamp
 
 
 def get_git_head_sha() -> Optional[str]:

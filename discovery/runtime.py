@@ -109,8 +109,9 @@ class RuntimeStats:
         }
 
 
-# V3 fee tiers to query for each pair
-V3_FEE_TIERS = [100, 500, 3000, 10000]
+# v2.0.4: Import V3_FEE_TIERS from canonical source (discovery/index_factories.py)
+# RESTORE CONTRACT: discovery/index_factories.V3_FEE_TIERS is the single source of truth
+from discovery.index_factories import V3_FEE_TIERS
 
 # Default max pairs to resolve per cycle
 DEFAULT_MAX_PAIRS = 20

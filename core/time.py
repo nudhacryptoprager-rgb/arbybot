@@ -29,6 +29,22 @@ def now_iso() -> str:
     return now_utc().isoformat()
 
 
+def get_run_timestamp() -> str:
+    """
+    Get canonical run timestamp for artifact provenance.
+    
+    Returns ISO-8601 UTC timestamp with Z suffix.
+    This is the single source of truth for run_timestamp formatting.
+    
+    RESTORE CONTRACT: All artifact timestamps should use this function.
+    Format: YYYY-MM-DDTHH:MM:SS.ffffffZ
+    
+    Returns:
+        str: ISO-8601 timestamp with Z suffix (e.g., "2026-03-01T10:30:00.123456Z")
+    """
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def now_timestamp() -> float:
     """Get current Unix timestamp."""
     return time.time()

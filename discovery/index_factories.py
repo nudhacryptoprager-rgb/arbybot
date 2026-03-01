@@ -21,6 +21,22 @@ logger = logging.getLogger("discovery.index_factories")
 # Standard fee tiers for Uniswap V3 and forks
 V3_FEE_TIERS = [100, 500, 3000, 10000]  # 0.01%, 0.05%, 0.3%, 1%
 
+# v2.0.4: V3 Factory ABI for getPool() queries - single source of truth
+# RESTORE CONTRACT: This is the canonical ABI for all V3 factory getPool() calls
+V3_FACTORY_ABI = [
+    {
+        "inputs": [
+            {"internalType": "address", "name": "", "type": "address"},
+            {"internalType": "address", "name": "", "type": "address"},
+            {"internalType": "uint24", "name": "", "type": "uint24"},
+        ],
+        "name": "getPool",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
 # Known factory addresses per (chain, dex)
 FACTORY_ADDRESSES: Dict[str, Dict[str, str]] = {
     "arbitrum_one": {
@@ -147,19 +163,7 @@ def query_v3_pool(
         logger.warning("web3 not installed")
         return None
     
-    V3_FACTORY_ABI = [
-        {
-            "inputs": [
-                {"internalType": "address", "name": "", "type": "address"},
-                {"internalType": "address", "name": "", "type": "address"},
-                {"internalType": "uint24", "name": "", "type": "uint24"},
-            ],
-            "name": "getPool",
-            "outputs": [{"internalType": "address", "name": "", "type": "address"}],
-            "stateMutability": "view",
-            "type": "function",
-        }
-    ]
+    # v2.0.4: Use module-level V3_FACTORY_ABI (single source of truth)
     
     try:
         w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))

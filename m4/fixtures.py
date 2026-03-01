@@ -23,6 +23,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Set
 
+# v2.0.4: Import canonical timestamp helper
+from core.time import get_run_timestamp
+
 # Import from m4 policy module
 from .policy import (
     CostModelConfig,
@@ -266,7 +269,7 @@ def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE)
         "quote_ccy": "USDC",              # All monetary values in USDC
         "price_format": "decimal_str",    # All prices are string decimals
         "spread_format": "micro_bps",     # spread_bps_micro is integer (1 bps = 10000)
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "generated_at": get_run_timestamp(),
         "chain_id": chain_id,
         "pinned_block": pinned_block,
         "signals": fixture_signals,
@@ -301,7 +304,7 @@ def generate_m4_fixture(run_dir: Path, ts: str, profile: str = DoDProfile.SMOKE)
         "price_in": "quote_per_base",       # From signals schema  
         "slippage_format": "bps",           # slippage_bps_actual is real bps (0-10000)
         "est_error_definition": "sim_net_usdc - est_net_usdc",  # Negative = sim worse
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "generated_at": get_run_timestamp(),
         "chain_id": chain_id,
         "pinned_block": pinned_block,
         "execution_enabled": False,         # INVARIANT: must be false in M4
@@ -542,7 +545,7 @@ def generate_m4_from_online_inputs(
     signals_path = reports_dir / f"signals_{ts}.json"
     signals_data = {
         "schema_version": "m4:signals:v2.0",  # v2.0.2: SHA-free provenance
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": get_run_timestamp(),
         "run_mode": source_run_mode,  # Inherit from truth_report
         # Provenance fields (v2.0.2: SHA-free)
         "run_timestamp": run_timestamp,
@@ -718,7 +721,7 @@ def generate_m4_from_online_inputs(
     exec_path = reports_dir / f"execution_report_{ts}.json"
     exec_data = {
         "schema_version": "m4:execution:v2.0",  # v2.0.2: SHA-free provenance
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": get_run_timestamp(),
         "run_mode": source_run_mode,  # REGISTRY_REAL from truth_report
         # Provenance fields (v2.0.2: SHA-free)
         "run_timestamp": run_timestamp,
@@ -968,7 +971,7 @@ def generate_m4_from_online_inputs(
     
     stability_data = {
         "schema_version": "m4:stability:v2.0",  # v2.0.2: SHA-free provenance
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": get_run_timestamp(),
         # Provenance fields (v2.0.2: SHA-free)
         "run_timestamp": run_timestamp,
         "code_identity": code_identity,
@@ -1037,7 +1040,7 @@ def generate_m4_from_online_inputs(
     # v2.3.0: Use truth_report's run_context.run_timestamp for unified provenance across runDir bundle
     git_ctx = get_git_context()
     truth_run_context = truth_data.get("run_context", {})
-    run_timestamp = truth_run_context.get("run_timestamp") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    run_timestamp = truth_run_context.get("run_timestamp") or get_run_timestamp()
     
     # v2.3.0: Propagate profit semantics from truth_report
     profit_is_diagnostic = truth_data.get("profit_is_diagnostic", True)

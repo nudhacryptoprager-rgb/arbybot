@@ -866,8 +866,9 @@ def run_scan(
     
     # Build artifact data structures
     # v2.3.0: Unified run_timestamp for provenance across all artifacts
-    from datetime import timezone
-    run_timestamp = datetime.now(timezone.utc).isoformat()
+    # v2.0.4: Use canonical timestamp helper from core/time.py
+    from core.time import get_run_timestamp
+    run_timestamp = get_run_timestamp()
     
     scan_data = build_scan_data(config, current_block, stats, quotes_sample, infra_payload, run_timestamp=run_timestamp)
     

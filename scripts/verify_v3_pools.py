@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+# v2.0.4: Import canonical timestamp helper
+from core.time import get_run_timestamp
+
 try:
     from web3 import Web3
 except ImportError:
@@ -85,21 +88,13 @@ DEFAULT_PAIRS = [
     ("UNI", "WETH"),   # v2.3.0: added for DEX diversity
 ]
 
-# Fee tiers to check
-FEE_TIERS = [100, 500, 3000, 10000]
+# v2.0.4: Import V3_FEE_TIERS from canonical source
+# RESTORE CONTRACT: discovery/index_factories.V3_FEE_TIERS is the single source of truth
+from discovery.index_factories import V3_FEE_TIERS, V3_FACTORY_ABI
 
-# Factory ABI (getPool function)
-FACTORY_ABI = [{
-    "inputs": [
-        {"name": "tokenA", "type": "address"},
-        {"name": "tokenB", "type": "address"},
-        {"name": "fee", "type": "uint24"}
-    ],
-    "name": "getPool",
-    "outputs": [{"name": "pool", "type": "address"}],
-    "stateMutability": "view",
-    "type": "function"
-}]
+# Alias for backward compatibility (used locally as FEE_TIERS and FACTORY_ABI)
+FEE_TIERS = V3_FEE_TIERS
+FACTORY_ABI = V3_FACTORY_ABI
 
 # Pool ABI (liquidity check)
 # v2.0.2: Added liquidity/slot0 queries to verify pool is active, not just exists
@@ -153,7 +148,7 @@ def verify_pools(
         return {"error": f"Cannot connect to RPC: {RPC_URL}"}
     
     results = {
-        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "verified_at": get_run_timestamp(),
         "rpc": RPC_URL,
         "chain_id": w3.eth.chain_id,
         "factories": FACTORIES,

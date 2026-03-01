@@ -23,6 +23,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config import CONFIG_DIR, load_core_tokens
 
+# v2.0.4: Import canonical pool_key builder
+# RESTORE CONTRACT: Use core.pool_keys.make_pool_key() for all pool key generation
+from core.pool_keys import make_pool_key
+
 
 @dataclass
 class PairConfig:
@@ -324,7 +328,8 @@ def is_pool_disabled(
         The dict contains: address, reason, detail, evidence_run, disabled_date
     """
     disabled_pools = config.get("disabled_pools", {})
-    key = f"{dex}_{pair_tag}_{fee_tier}"
+    # v2.0.4: Use canonical pool_key builder
+    key = make_pool_key(dex, pair_tag, fee_tier)
     
     if key in disabled_pools:
         info = disabled_pools[key]
@@ -368,7 +373,8 @@ def get_pool_address(
     
     # v2.0.8: STRICT fee-tier lookup - no fallback when fee_tier is specified
     if fee_tier is not None:
-        key = f"{dex}_{pair_tag}_{fee_tier}"
+        # v2.0.4: Use canonical pool_key builder
+        key = make_pool_key(dex, pair_tag, fee_tier)
         if key in pools:
             addr = pools[key]
             # Skip null/zero addresses

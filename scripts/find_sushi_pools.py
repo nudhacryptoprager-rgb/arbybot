@@ -7,6 +7,9 @@ This script queries factory contracts for pre-defined pairs and generates
 a comprehensive whitelist. For production config updates, use verify_v3_pools.py
 to verify specific pairs before adding to real_expanded.yaml.
 
+v2.0.4: Refactored to use canonical imports from discovery/index_factories.py
+and load tokens from config/core_tokens.yaml.
+
 Usage:
   python scripts/find_sushi_pools.py                    # Save to docs/artifacts/pool_whitelist.json
   python scripts/find_sushi_pools.py --output FILE     # Save to custom JSON file
@@ -18,38 +21,51 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    import yaml
+except ImportError:
+    print("ERROR: PyYAML not installed. Run: pip install pyyaml")
+    import sys
+    sys.exit(1)
+
+# v2.0.4: Import from canonical sources (no hardcoding)
+from discovery.index_factories import V3_FACTORY_ABI, V3_FEE_TIERS, get_factory_address, FACTORY_ADDRESSES
+
 # RPC
 rpc = os.environ.get('ARBY_RPC_HTTP_PRIMARY', 'https://arb1.arbitrum.io/rpc')
 w3 = Web3(Web3.HTTPProvider(rpc))
 
-# SushiSwap V3 Factory on Arbitrum
-FACTORY = '0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e'
+# v2.0.4: Load factory address from canonical source
+FACTORY = get_factory_address("arbitrum_one", "sushiswap_v3")
 
-# Tokens on Arbitrum
-TOKENS = {
-    'WETH': '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
-    'USDC': '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-    'USDT': '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
-    'WBTC': '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
-    'ARB': '0x912CE59144191C1204E64559FE8253a0e49E6548',
-    'LINK': '0xf97f4df75117a78c1A5a0DBb814Af92458539FB4',
-    'wstETH': '0x5979D7b546E38E414F7E9822514be443A4800529',
-    'GMX': '0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a',
-    'DAI': '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',
-}
 
-# Factory ABI (getPool function)
-ABI = [{
-    'inputs': [
-        {'name': 'tokenA', 'type': 'address'},
-        {'name': 'tokenB', 'type': 'address'},
-        {'name': 'fee', 'type': 'uint24'}
-    ],
-    'name': 'getPool',
-    'outputs': [{'name': 'pool', 'type': 'address'}],
-    'stateMutability': 'view',
-    'type': 'function'
-}]
+def load_tokens_from_core_yaml(chain: str = "arbitrum_one") -> dict:
+    """
+    Load tokens from config/core_tokens.yaml.
+    
+    RESTORE CONTRACT: This is the canonical source for token addresses.
+    """
+    config_path = Path(__file__).parent.parent / "config" / "core_tokens.yaml"
+    if not config_path.exists():
+        print(f"WARNING: core_tokens.yaml not found at {config_path}, using fallback")
+        return {}
+    
+    with open(config_path) as f:
+        data = yaml.safe_load(f)
+    
+    chain_tokens = data.get(chain, {})
+    result = {}
+    for symbol, token_info in chain_tokens.items():
+        if isinstance(token_info, dict) and "address" in token_info:
+            result[symbol] = token_info["address"]
+    return result
+
+
+# v2.0.4: Load tokens from canonical config
+TOKENS = load_tokens_from_core_yaml()
+
+# v2.0.4: Use canonical ABI
+ABI = V3_FACTORY_ABI
 
 factory = w3.eth.contract(address=Web3.to_checksum_address(FACTORY), abi=ABI)
 
@@ -67,7 +83,8 @@ PAIRS = [
     ('DAI', 'USDC'),
 ]
 
-FEES = [100, 500, 3000, 10000]
+# v2.0.4: Use canonical fee tiers (already imported at top)
+FEES = V3_FEE_TIERS
 
 print('SushiSwap V3 Pools on Arbitrum:')
 print('=' * 60)

@@ -104,16 +104,9 @@ from m4.gates import (
 from m4.cli import main, run_dry_run
 
 
-# v2.0.3: Legacy SHA aliases removed - SHA tracking deprecated
-# These functions return None to break any accidental usage
-def get_git_sha() -> None:
-    """DEPRECATED (v2.0.3): SHA tracking removed."""
-    return None
-
-
-def get_source_sha() -> None:
-    """DEPRECATED (v2.0.3): SHA tracking removed."""
-    return None
+# v2.0.3: SHA tracking deprecated - import from canonical source
+# RESTORE CONTRACT: m4.evidence is the single source of truth for SHA-free provenance
+from m4.evidence import get_git_sha, get_source_sha
 
 
 if __name__ == "__main__":
