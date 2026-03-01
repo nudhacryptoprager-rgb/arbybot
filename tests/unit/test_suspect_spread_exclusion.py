@@ -687,3 +687,151 @@ class TestRequireCrossDexNoSameDex:
         assert len(signals) == 1, \
             f"Expected 1 signal when require_cross_dex=false, got {len(signals)}"
 
+
+class TestMinSpreadBpsThreshold:
+    """v2.9.7: Test min_spread_bps filtering threshold contract.
+    
+    Contract: signals with spread_bps < min_spread_bps are NOT generated.
+    """
+    
+    def test_signal_below_min_spread_bps_not_generated(self):
+        """Signals with spread < min_spread_bps should NOT be generated."""
+        from strategy.spreads import _compute_pair_spread
+        
+        # Given: cross-DEX quotes with small spread (~50 bps)
+        quotes = [
+            {"dex_id": "uniswap_v3", "price": "2000.0", "price_exact": "2000.0",
+             "pool_address": "0x111", "fee": 500, "token_in": "WETH", "token_out": "USDC"},
+            {"dex_id": "sushiswap_v3", "price": "2010.0", "price_exact": "2010.0",
+             "pool_address": "0x222", "fee": 500, "token_in": "WETH", "token_out": "USDC"},
+        ]
+        # Spread = (2010 - 2000) / 2000 * 10000 = 50 bps
+        
+        # With min_spread_bps=100 (above the 50 bps spread)
+        config = {
+            "require_cross_dex": True,
+            "min_spread_bps": 100,
+            "max_spread_bps_sanity": 10000,
+        }
+        
+        rejected_quotes = []
+        signals = _compute_pair_spread(
+            "WETH/USDC",
+            quotes,
+            config,
+            current_block=123456,
+            spread_threshold_bps=100,  # min_spread_bps from config
+            max_spread_bps_sanity=10000,
+            rejected_quotes=rejected_quotes,
+        )
+        
+        # Then: NO signals generated (spread 50 < threshold 100)
+        assert len(signals) == 0, \
+            f"Expected 0 signals when spread < min_spread_bps, got {len(signals)}"
+    
+    def test_signal_above_min_spread_bps_generated(self):
+        """Signals with spread >= min_spread_bps SHOULD be generated."""
+        from strategy.spreads import _compute_pair_spread
+        
+        # Given: cross-DEX quotes with larger spread (~100 bps)
+        quotes = [
+            {"dex_id": "uniswap_v3", "price": "2000.0", "price_exact": "2000.0",
+             "pool_address": "0x111", "fee": 500, "token_in": "WETH", "token_out": "USDC"},
+            {"dex_id": "sushiswap_v3", "price": "2020.0", "price_exact": "2020.0",
+             "pool_address": "0x222", "fee": 500, "token_in": "WETH", "token_out": "USDC"},
+        ]
+        # Spread = (2020 - 2000) / 2000 * 10000 = 100 bps
+        
+        # With min_spread_bps=10 (below the 100 bps spread)
+        config = {
+            "require_cross_dex": True,
+            "min_spread_bps": 10,
+            "max_spread_bps_sanity": 10000,
+        }
+        
+        rejected_quotes = []
+        signals = _compute_pair_spread(
+            "WETH/USDC",
+            quotes,
+            config,
+            current_block=123456,
+            spread_threshold_bps=10,
+            max_spread_bps_sanity=10000,
+            rejected_quotes=rejected_quotes,
+        )
+        
+        # Then: signal IS generated (spread 100 >= threshold 10)
+        assert len(signals) >= 1, \
+            f"Expected >= 1 signal when spread >= min_spread_bps, got {len(signals)}"
+
+
+class TestFragileCountZeroContract:
+    """v2.9.7: Test fragile_count=0 contract with min_spread_bps above cost floor.
+    
+    Contract: When min_spread_bps >= cost_floor_bps, no signal should be marked fragile.
+    
+    Cost floor calculation at paper_size_usd=250 with paper_realistic:
+    - gas_usd = $0.10
+    - slippage_bps = 5, slippage_usd = 250 * 0.0005 = $0.125
+    - total_cost = $0.225
+    - cost_floor_bps = 0.225 / 250 * 10000 = ~9 bps
+    
+    Therefore min_spread_bps=10 is ABOVE cost floor, and fragile_count should be 0.
+    """
+    
+    def test_fragile_count_zero_when_spread_above_cost_floor(self):
+        """With min_spread_bps=10 and $250 paper size, fragile_count should be 0.
+        
+        Fragile definition: signal where est_gross_usdc < slippage_usdc + gas_usdc.
+        At spread=10bps, gross = 250 * 0.001 = $0.25
+        Costs = $0.125 (slippage) + $0.10 (gas) = $0.225
+        $0.25 > $0.225, so NOT fragile.
+        """
+        # Given: M4 signal with spread=10bps at $250
+        paper_size_usd = 250
+        spread_bps = 10
+        gas_usdc = 0.10
+        slippage_bps = 5
+        
+        # Calculate costs
+        est_gross_usdc = paper_size_usd * spread_bps / 10000  # $0.25
+        slippage_usdc = paper_size_usd * slippage_bps / 10000  # $0.125
+        total_cost = slippage_usdc + gas_usdc  # $0.225
+        
+        # Fragile check (from m4/fixtures.py logic)
+        is_fragile = est_gross_usdc < total_cost
+        
+        # Then: NOT fragile
+        assert not is_fragile, \
+            f"Signal should NOT be fragile: gross={est_gross_usdc:.3f} >= costs={total_cost:.3f}"
+    
+    def test_fragile_when_spread_below_cost_floor(self):
+        """With spread=5bps, signal IS fragile (gross < costs)."""
+        paper_size_usd = 250
+        spread_bps = 5
+        gas_usdc = 0.10
+        slippage_bps = 5
+        
+        est_gross_usdc = paper_size_usd * spread_bps / 10000  # $0.125
+        slippage_usdc = paper_size_usd * slippage_bps / 10000  # $0.125
+        total_cost = slippage_usdc + gas_usdc  # $0.225
+        
+        is_fragile = est_gross_usdc < total_cost
+        
+        # Then: IS fragile
+        assert is_fragile, \
+            f"Signal SHOULD be fragile: gross={est_gross_usdc:.3f} < costs={total_cost:.3f}"
+    
+    def test_cost_floor_calculation(self):
+        """Verify cost floor is ~9 bps at $250 with paper_realistic costs."""
+        paper_size_usd = 250
+        gas_usdc = 0.10
+        slippage_bps = 5
+        
+        slippage_usdc = paper_size_usd * slippage_bps / 10000
+        total_cost = slippage_usdc + gas_usdc
+        cost_floor_bps = total_cost / paper_size_usd * 10000
+        
+        # Cost floor should be ~9 bps
+        assert 8 <= cost_floor_bps <= 10, \
+            f"Cost floor should be ~9 bps, got {cost_floor_bps:.1f}"

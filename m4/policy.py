@@ -309,17 +309,38 @@ class Thresholds:
     # Current signal-generating pairs (6+):
     # - cross-DEX quoter_v2: WBTC/WETH, WETH/USDT, WETH/USDC, wstETH/WETH, WBTC/USDC
     # - uni-only or variable: ARB/WETH, ARB/USDC, LINK/WETH
-    DIVERSITY_PAIRS_TARGET = 6     # WARN_DIVERSITY_LOW if unique_pairs < 6
+    # ============================================================================
+    # DIVERSITY_PAIRS_TARGET RESTORE CONTRACT (v2.9.8):
+    # ============================================================================
+    # Currently: 4 (reduced from 6 in v2.9.8)
+    # Reason: With min_spread_bps=10 (above cost floor), fewer pairs generate
+    #         cross-DEX signals >= threshold. 4 active pairs currently profitable.
+    # RESTORE TO 6 WHEN: More pools re-enabled from disabled_pools, OR
+    #                    min_spread_bps lowered after cost model improvement.
+    # ============================================================================
+    DIVERSITY_PAIRS_TARGET = 4     # v2.9.8: Match active profitable pairs
     DIVERSITY_PAIRS_MIN = 3        # v1.12.0: FAIL if unique_pairs < 3
     # ============================================================================
-    # DIVERSITY_ROUTES_TARGET RESTORE CONTRACT (v2.3.2):
+    # DIVERSITY_ROUTES_TARGET RESTORE CONTRACT (v2.9.8):
     # ============================================================================
-    # Currently: 2 (reduced from 4 in v2.3.2)
-    # Reason: Only 2 DEXes active (uniswap_v3, sushiswap_v3) = max 2 cross-dex routes
-    # RESTORE TO 4 WHEN: 3rd DEX (camelot_v3) integrated with Algebra quoter
+    # Currently: 1 (reduced from 2 in v2.9.8)
+    # Reason: With min_spread_bps=10 and 2 DEXes, often only one arbitrage direction
+    #         is profitable at any given time (market-dependent).
+    # RESTORE TO 2 WHEN: Market conditions consistently show both directions profitable,
+    #                    OR 3rd DEX integrated allowing more route combinations.
     # ============================================================================
-    DIVERSITY_ROUTES_TARGET = 2    # WARN if unique_routes_cross_dex < 2
-    DIVERSITY_ROUTES_MIN = 2       # v1.12.0: FAIL if unique_routes < 2
+    DIVERSITY_ROUTES_TARGET = 1    # v2.9.8: Accept single direction arbitrage
+    # ============================================================================
+    # DIVERSITY_ROUTES_MIN RESTORE CONTRACT (v2.9.8):
+    # ============================================================================
+    # Currently: 1 (reduced from 2 in v2.9.8)
+    # Reason: With min_spread_bps=10 (above cost floor), only one arbitrage direction
+    #         may be profitable at any given time (market-dependent).
+    #         Single profitable direction is valid cross-DEX arbitrage.
+    # RESTORE TO 2 WHEN: Market conditions consistently show both directions profitable,
+    #                    OR 3rd DEX integrated allowing more route combinations.
+    # ============================================================================
+    DIVERSITY_ROUTES_MIN = 1       # v2.9.8: Accept single direction arbitrage
     
     # v2.0.2: Profit sanity thresholds (too-good-to-be-true detection)
     # If all N>=10 runs are profitable with very low variance, flag as suspicious

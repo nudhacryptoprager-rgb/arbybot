@@ -86,21 +86,25 @@ pairs:
   - token_in: wstETH
     token_out: WETH
     fee_tiers: [100, 500]
-  - token_in: ARB
-    token_out: USDC
-    fee_tiers: [500, 3000]
+  # v2.9.7: ARB/USDC DISABLED - uni-only (all Sushi pools in disabled_pools)
+  # RESTORE WHEN: sushiswap_v3_ARB_USDC_3000 or _500 re-enabled
+  # - token_in: ARB
+  #   token_out: USDC
+  #   fee_tiers: [500, 3000]
   # v2.1.0-fix: WBTC/USDC re-enabled after Decimal(10)**exp fix
   - token_in: WBTC
     token_out: USDC
     fee_tiers: [500, 3000]
-  # v2.9.3: WBTC/USDT added for diversity (cross-DEX verified)
-  - token_in: WBTC
-    token_out: USDT
-    fee_tiers: [3000]
-  # v2.9.3: ARB/USDT added for diversity (cross-DEX verified)
-  - token_in: ARB
-    token_out: USDT
-    fee_tiers: [3000]
+  # v2.9.7: WBTC/USDT DISABLED - uni-only (sushiswap_v3_WBTC_USDT_3000 in disabled_pools)
+  # RESTORE WHEN: sushiswap_v3_WBTC_USDT_3000 re-enabled
+  # - token_in: WBTC
+  #   token_out: USDT
+  #   fee_tiers: [3000]
+  # v2.9.7: ARB/USDT DISABLED - uni-only (sushiswap_v3_ARB_USDT_3000 in disabled_pools)
+  # RESTORE WHEN: sushiswap_v3_ARB_USDT_3000 re-enabled
+  # - token_in: ARB
+  #   token_out: USDT
+  #   fee_tiers: [3000]
   # v2.9.0: LINK/USDC DISABLED - both DEXes unavailable
   # Uniswap quarantined (PRICE_SCALE_VIOLATION), Sushiswap disabled (PRICE_SANITY_FAILED)
   # - token_in: LINK
@@ -432,7 +436,10 @@ autosize:
 # Signals with spread_bps_exact < this are filtered out
 # Production: 20 bps minimum (filters marginal signals where sign can flip from slippage)
 # Debug: 5 bps (default), 0 = any positive spread
-min_spread_bps: 5  # 5 bps = lower threshold for more signal diversity
+# v2.9.7 RESTORE CONTRACT: min_spread_bps=10 is REQUIRED for fragile_rate=0 with paper_size_usd=250
+# Cost floor at $250 with paper_realistic: gas=$0.10 + slippage=5bps (~$0.125) = ~9 bps
+# LOWER TO 5 ONLY WHEN: paper_size_usd >= 500 OR cost model produces lower cost floor
+min_spread_bps: 10  # 10 bps = above cost floor for $250 paper_size
 
 # Net PnL threshold for daily_report top_opportunities (M5)
 # Signals with net_pnl_usdc_est < this are excluded from top_opportunities
