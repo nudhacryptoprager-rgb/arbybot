@@ -4,57 +4,46 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T10:32:37Z
-run_id: data/runs/ci_m5_gate_20260301_113221
-mode: ONLINE (deduplication validation)
+timestamp_utc: 2026-03-01T11:16:53Z
+run_id: data/runs/ci_m5_gate_20260301_121636
+mode: ONLINE (M4.2 roundtrip visibility)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-03-01T10:32:37+00:00
+  primary: ts:2026-03-01T11:16:53+00:00
   dirty: false
-  desc: v2.0.5 deduplication complete (pool_key, token_yaml, economics fields verified)
+  desc: v3.0.0 roundtrip aggregation visibility (gated_by_economics, rejected_reasons)
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4 maintenance - complete deduplication, verify economics fields in artifacts
+goal (Roadmap пункт): M4.2 hunting - add visibility into roundtrip evaluation pipeline
 change_summary:
-  - DEDUP: SHA-free provenance - m4/evidence.py is single source of truth
-  - DEDUP: core/time.py:get_run_timestamp() - canonical timestamp format (Z suffix)
-  - DEDUP: discovery/index_factories.V3_FEE_TIERS - single list for all modules
-  - DEDUP: discovery/index_factories.V3_FACTORY_ABI - single ABI definition
-  - DEDUP: core/pool_keys.py - canonical make_pool_key() and make_pair_tag()
-  - DEDUP: config/__init__.py - added get_all_token_addresses() canonical helper
-  - REFACTOR: strategy/quotes.py - uses make_pool_key() from core.pool_keys
-  - REFACTOR: strategy/artifacts.py - uses make_pool_key() from core.pool_keys
-  - REFACTOR: scripts/find_sushi_pools.py - uses get_all_token_addresses()
-  - REFACTOR: scripts/verify_v3_pools.py - uses get_all_token_addresses(), get_factory_address()
-  - REFACTOR: tests/unit/test_config_pool_coverage.py - uses make_pool_key(), make_pair_tag()
-  - VERIFIED: economics fields (min_required_spread_bps, spread_minus_required_bps, is_roundtrip_viable) present in truth_report.spread_signals
-  - TESTS: All 1160 tests pass
+  - NEW: RoundtripEvaluationStats dataclass (candidates_total, gated_by_economics, evaluated_count, results_count, rejected_reasons)
+  - REFACTOR: evaluate_roundtrip_candidates() returns Tuple[List[RoundTripResult], RoundtripEvaluationStats]
+  - WIRED: stats["roundtrip"] in truth_report now includes gated_by_economics, rejected_reasons
+  - CONFIG: paper_slippage_bps: 5 in real_minimal.yaml (v3.0.0 realistic economics)
+  - CONFIG: paper_size_usd: 100 in real_hunting_lowfee.yaml (reduced slippage impact)
+  - TESTS: TestRoundtripEvaluationStats (3 tests) in test_roundtrip.py
+  - TESTS: TestEconomicsFieldsInSpreadSignals (2 tests) in test_truth_report.py
+  - VERIFIED: economics fields present in spread_signals (min_required_spread_bps, spread_minus_required_bps, is_roundtrip_viable)
+  - VERIFIED: roundtrip.rejected_reasons shows {"NOT_PROFITABLE": 4} in ONLINE run
+  - TESTS: All 1165 tests pass
 touched_files:
-  - core/time.py (added get_run_timestamp)
-  - core/pool_keys.py (NEW - canonical pool_key helpers)
-  - config/__init__.py (added get_all_token_addresses)
-  - strategy/quotes.py (uses make_pool_key)
-  - strategy/artifacts.py (uses make_pool_key)
-  - tests/unit/test_config_pool_coverage.py (uses make_pool_key, make_pair_tag)
-  - scripts/find_sushi_pools.py (uses get_all_token_addresses, removed yaml import)
-  - scripts/verify_v3_pools.py (uses get_all_token_addresses, get_factory_address)
-  - m4/evidence.py (imports from core/time.py)
-  - m4/gates.py (imports from m4/evidence)
-  - m4/fixtures.py (uses get_run_timestamp)
-  - scripts/ci_m4_execution_gate.py (imports from m4/evidence)
-  - discovery/runtime.py (imports V3_FEE_TIERS)
-  - discovery/index_factories.py (V3_FACTORY_ABI at module level)
-  - config/pairs.py (uses make_pool_key)
-  - strategy/jobs/run_scan_real.py (uses get_run_timestamp)
+  - engine/roundtrip.py (RoundtripEvaluationStats, tuple return)
+  - strategy/jobs/run_scan_real.py (unpack tuple, wire gated_by_economics/rejected_reasons)
+  - config/real_minimal.yaml (paper_slippage_bps: 5)
+  - config/real_hunting_lowfee.yaml (paper_size_usd: 100)
+  - tests/unit/test_roundtrip.py (TestRoundtripEvaluationStats)
+  - tests/unit/test_truth_report.py (TestEconomicsFieldsInSpreadSignals)
+  - tests/unit/test_economics.py (updated for tuple return)
+  - tests/unit/test_roundtrip_direction.py (updated for tuple return)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: PASS (1160 passed, 13.40s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (14.9s)
+py -3.11 -m pytest tests/unit -q: PASS (1165 passed, 12.73s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (13.9s)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: PASS
-py -3.11 scripts/inspect_rolling.py: agg_status=PASS, runs_in_window=15, total_net_usdc=$102.64
+py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10: FAIL (PRICE_SCALE_VIOLATION on LINK/USDC pools)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -62,7 +51,7 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260301_113221/reports
+  - data/runs/ci_m5_gate_20260301_121636/reports
 quality_achievement:
   - agg_status: PASS
   - fragile_rate_p90: 0.0
@@ -71,7 +60,9 @@ quality_achievement:
   - pass_rate: 1.0
   - unique_pairs: 4
   - unique_routes: 1
-  - total_net_usdc: ≈$102.64 (15 runs in window)
+  - roundtrip.candidates_total: 4
+  - roundtrip.gated_by_economics: 0
+  - roundtrip.rejected_reasons: {"NOT_PROFITABLE": 4}
 
 ## 4) Key Results (числа з артефактів)
 
@@ -80,33 +71,33 @@ _latest.json:
   run_status: PASS
   agg_status: PASS
   agg_reasons: []
-  quality_warnings: []
-  runs_in_window: 15
+  quality_warnings: ["WARN_PROFIT_DIAGNOSTIC"]
+  runs_in_window: 16
   in_warmup: false
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-03-01T10:32:37+00:00
+  run_context.run_timestamp: 2026-03-01T11:16:53+00:00
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 5
-    included_signals_count: 5
+    signals_count: 4
+    included_signals_count: 4
     excluded_signals_count: 0
     fragile_count: 0
     fragile_rate: 0.0
+    sim_profitable_count: 4
+    total_net_usdc: 7.58
 
-m4_stability_agg.json:
-  policy_version: 2.0.8
-  quick_stats:
-    agg_status: PASS
-    fragile_rate_p90: 0.0
-    fragile_rate_p50: 0.0
-    data_run_rate: 1.0
-    unique_pairs: 4
-    unique_routes: 1
-    pass_rate: 1.0
-    total_net_usdc: ≈102.64
+truth_report.stats.roundtrip (NEW v3.0.0):
+  enabled: true
+  candidates_total: 4
+  gated_by_economics: 0
+  evaluated_count: 4
+  profitable_count: 0
+  rejected_reasons: {"NOT_PROFITABLE": 4}
+  best_net_pnl_bps: -38.01
+  NOTE: All 4 candidates unprofitable due to real slippage (82-283 bps)
 
 ECONOMICS FIELDS VERIFIED:
   - Location: truth_report.spread_signals[*]

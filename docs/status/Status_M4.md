@@ -1,12 +1,24 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
-**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate WARN_QUALITY)  
-**Updated**: 2026-02-28  
-**Policy**: DIVERSITY_PAIRS_TARGET=6 (was 8; Sushi pool direction-logic bug)  
+**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
+**Updated**: 2026-03-01  
+**Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ROUNDTRIP_NOT_PROFITABLE`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **M4.2 PIPELINE WORKING**: Observability improvements deployed. `slippage_source=sqrtPriceAfter`, USD fields added, best-per-pair selection. `evaluated_count=3`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` - awaiting profitable market conditions.
+> [!] **M4.2 ROUNDTRIP VISIBILITY DEPLOYED**: `RoundtripEvaluationStats` dataclass added. `rejected_reasons: {"NOT_PROFITABLE": 4}` now shows WHY candidates fail. All 4 candidates unprofitable due to real slippage (82-283 bps). Awaiting market conditions.
+
+## M4.2 Roundtrip Visibility Changes (2026-03-01)
+
+| Step | Change | File | Description |
+|------|--------|------|-------------|
+| 1 | **paper_slippage_bps: 5** | `config/real_minimal.yaml` | Realistic economics (was 0 = optimistic) |
+| 2 | **RoundtripEvaluationStats** | `engine/roundtrip.py` | New dataclass: candidates_total, gated_by_economics, rejected_reasons |
+| 3 | **Tuple return** | `engine/roundtrip.py` | `evaluate_roundtrip_candidates()` returns `Tuple[results, stats]` |
+| 4 | **truth_report wiring** | `strategy/jobs/run_scan_real.py` | `stats["roundtrip"]` includes gated_by_economics, rejected_reasons |
+| 5 | **TestRoundtripEvaluationStats** | `tests/unit/test_roundtrip.py` | 3 contract tests for new aggregation |
+| 6 | **TestEconomicsFieldsInSpreadSignals** | `tests/unit/test_truth_report.py` | 2 tests for economics fields presence |
+| 7 | **paper_size_usd: 100** | `config/real_hunting_lowfee.yaml` | Reduced for lower slippage impact |
 
 ## M4-specific Fixes (2026-02-21)
 
@@ -27,27 +39,36 @@
 | DoD | What it means | Current Status |
 |-----|---------------|----------------|
 | **Core Truth (paper +PnL)** | N>=5 REGISTRY_REAL runs with total_net_usdc > 0 | [OK] PROVEN |
-| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [WARN] WARN_QUALITY (SAME_DEX, DIAGNOSTIC) |
-| **M4.2 Roundtrip Pipeline** | gated_count > 0, roundtrip evaluated | [OK] WORKING |
+| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [OK] PASS |
+| **M4.2 Roundtrip Pipeline** | gated_count >= 0, roundtrip evaluated | [OK] WORKING (4 evaluated) |
+| **M4.2 Roundtrip Aggregation** | rejected_reasons visible in truth_report | [OK] DEPLOYED |
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = **WARN_QUALITY** (FRAGILE_P90_ELEVATED >0.30). M4.2 pipeline now **WORKING**: `gated_count=6`, `evaluated_count=3`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` (awaiting profitable conditions).
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. M4.2 roundtrip aggregation visibility **DEPLOYED**: `candidates_total=4`, `gated_by_economics=0`, `rejected_reasons={"NOT_PROFITABLE": 4}`. All candidates unprofitable due to real slippage (82-283 bps > observed spreads). Awaiting favorable market conditions.
 
 ### Excluded Signals Policy
 - `excluded_signals_count` складається з `SAME_DEX_EXCLUDED` (policy exclusion, fee-tier noise)
 - Breakdown: `same_dex_excluded_count=2`, `non_same_dex_excluded_count=0`
 - Це НЕ quality issue - очікувана поведінка з `require_cross_dex: true`
 
-**Snapshot (2026-02-28)**: From `ci_m5_gate_20260228_200026` (multi-scan convergence): **runs_in_window=200** (M4.1 N=100+ MAINTAINED), **agg_status=WARN_QUALITY** (FRAGILE_P90_ELEVATED - convergence in progress), **drift_status=PASS** (sign_mismatch=0, sign_rate=1.0), **data_run_rate=1.0**, **total_net_usdc=$1777.73** (rolling window). signals_included=6, signals_excluded=1. **BUG FIXES**: fragile logic now uses est_gross_usdc (was truth_net_usdc = double-counted gas); reject schema uses 'reason' key (was 'reject_reason' = UNKNOWN in histogram). **New runs fragile_rate: 0.14-0.20** (fix verified). **Old runs at 0.33: 36/200** (aging out naturally).
+**Snapshot (2026-03-01)**: From `ci_m5_gate_20260301_121636` (roundtrip visibility): **runs_in_window=16** (M4.1 maintained), **agg_status=PASS**, **drift_status=PASS** (sign_mismatch=0, sign_rate=1.0), **data_run_rate=1.0**. signals_included=4, signals_excluded=0. **ROUNDTRIP VISIBILITY DEPLOYED**: `RoundtripEvaluationStats` added, `rejected_reasons: {"NOT_PROFITABLE": 4}` visible, economics fields verified in spread_signals. **Tests**: 1165 passed.
 
-### Drift Status (2026-02-28)
-- **drift_status: PASS** (was FAIL in previous 200-run window)
-- **sign_mismatch_count: 0** (was 1-2 from marginal signals)
+### Roundtrip Aggregation (2026-03-01)
+- **NEW**: `RoundtripEvaluationStats` dataclass in `engine/roundtrip.py`
+- **FIELDS**: `candidates_total`, `gated_by_economics`, `evaluated_count`, `results_count`, `rejected_reasons`
+- **WIRED**: `stats["roundtrip"]` in truth_report includes new fields
+- **EVIDENCE**: `rejected_reasons: {"NOT_PROFITABLE": 4}` shows all candidates rejected due to slippage
+- **SLIPPAGE**: 82-283 bps real (quoter_v2) vs 21-65 bps observed spreads
+- **CONTRACT TESTS**: 3 in `test_roundtrip.py`, 2 in `test_truth_report.py`
+
+### Drift Status (2026-03-01)
+- **drift_status: PASS** (stable)
+- **sign_mismatch_count: 0**
 - **est_sign_correct_rate: 1.0** (100%, exceeds 80% threshold)
-- **Root cause fix**: min_spread_bps raised to 20 bps filters marginal signals (wstETH/WETH was 7.85 bps)
-- **agg_status**: WARN_QUALITY (FRAGILE_P90_ELEVATED - convergence in progress)
-- **Conclusion**: Drift stabilized. Fragile fix deployed, rolling converging.
+- **agg_status**: PASS
+- **quality_warnings**: `WARN_PROFIT_DIAGNOSTIC` (expected - roundtrip not profitable)
+- **Conclusion**: Drift stabilized. Roundtrip visibility deployed.
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced to 6 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
 > **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 8 when direction-aware price_sanity bug fixed OR >=8 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.

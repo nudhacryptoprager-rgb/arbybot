@@ -396,7 +396,7 @@ gas_usd_estimate: 0.10
 # Paper trading settings (M5)
 # v2.5.2: Reduced from 1000 to 250 to lower ticks_crossed and reduce SUSPECT_LIQUIDITY rejects
 paper_size_usd: 250
-paper_slippage_bps: 0  # 0 bps default - conservative for micro-spreads
+paper_slippage_bps: 5  # v3.0.0: 5 bps for realistic economics (was 0 - too optimistic)
 
 # M4.2 USD-notional sizing (v2.2.3)
 # target_usd_notional: Target USD value for quote sizing (matches paper_size_usd)

@@ -217,7 +217,7 @@ class TestRoundtripDirectionV220(unittest.TestCase):
                 }
             return callback
         
-        results = evaluate_roundtrip_candidates(
+        results, stats = evaluate_roundtrip_candidates(
             opportunities=opportunities,
             buy_quotes_by_key=buy_quotes,
             sell_quotes_by_key=sell_quotes,

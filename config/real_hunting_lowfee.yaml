@@ -50,7 +50,7 @@ default_fee_tiers:
 
 # ========== ECONOMICS PARAMETERS ==========
 # These are used by execution/economics.py for min_required_spread_bps calculation
-paper_size_usd: 250
+paper_size_usd: 100  # Reduced from 250 for lower slippage impact
 gas_usd_estimate: 0.10  # Arbitrum gas is cheap
 paper_slippage_bps: 5   # Conservative slippage
 

@@ -732,5 +732,64 @@ class TestSpreadSignalInvariants(unittest.TestCase):
             self.assertIn("sell_notional_drift_pct", sig)
 
 
+class TestEconomicsFieldsInSpreadSignals(unittest.TestCase):
+    """
+    v3.0.0: Economics fields must be present in spread_signals.
+    
+    These fields enable roundtrip profitability analysis and economics-based gating.
+    """
+    
+    def test_spread_signal_has_economics_fields(self):
+        """spread_signals must contain min_required_spread_bps, spread_minus_required_bps, is_roundtrip_viable."""
+        from strategy.spreads import compute_spread_signals
+        
+        quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price": 2000.0, "price_exact": "2000.0",
+             "dex_id": "uniswap_v3", "pool_address": "0x111", "fee": 500, "quote_source": "quoter_v2"},
+            {"token_in": "WETH", "token_out": "USDC", "price": 2020.0, "price_exact": "2020.0",
+             "dex_id": "sushiswap_v3", "pool_address": "0x222", "fee": 500, "quote_source": "quoter_v2"},
+        ]
+        config = {"min_spread_bps": 0, "paper_size_usd": 250, "gas_usd_estimate": 0.10, "paper_slippage_bps": 5}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        self.assertGreater(len(signals), 0, "Should have at least one signal")
+        
+        for sig in signals:
+            # v3.0.0 Contract: economics fields are mandatory
+            self.assertIn("min_required_spread_bps", sig, "min_required_spread_bps must be present")
+            self.assertIn("spread_minus_required_bps", sig, "spread_minus_required_bps must be present")
+            self.assertIn("is_roundtrip_viable", sig, "is_roundtrip_viable must be present")
+            
+            # Type checks
+            self.assertIsInstance(sig["min_required_spread_bps"], (int, float))
+            self.assertIsInstance(sig["spread_minus_required_bps"], (int, float))
+            self.assertIsInstance(sig["is_roundtrip_viable"], bool)
+    
+    def test_roundtrip_viable_semantics(self):
+        """is_roundtrip_viable must be True when spread_minus_required_bps > 0."""
+        from strategy.spreads import compute_spread_signals
+        
+        # Large spread to ensure profitability
+        quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price": 1900.0, "price_exact": "1900.0",
+             "dex_id": "uniswap_v3", "pool_address": "0x111", "fee": 500, "quote_source": "quoter_v2"},
+            {"token_in": "WETH", "token_out": "USDC", "price": 2000.0, "price_exact": "2000.0",
+             "dex_id": "sushiswap_v3", "pool_address": "0x222", "fee": 500, "quote_source": "quoter_v2"},
+        ]
+        config = {"min_spread_bps": 0, "paper_size_usd": 250, "gas_usd_estimate": 0.10, "paper_slippage_bps": 5}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        for sig in signals:
+            # When spread_minus_required > 0, is_roundtrip_viable should be True
+            if sig["spread_minus_required_bps"] > 0:
+                self.assertTrue(sig["is_roundtrip_viable"], 
+                    f"is_roundtrip_viable should be True when spread_minus_required={sig['spread_minus_required_bps']}")
+            else:
+                self.assertFalse(sig["is_roundtrip_viable"],
+                    f"is_roundtrip_viable should be False when spread_minus_required={sig['spread_minus_required_bps']}")
+
+
 if __name__ == "__main__":
     unittest.main()

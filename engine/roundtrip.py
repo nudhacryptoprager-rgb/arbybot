@@ -137,6 +137,34 @@ class RoundTripResult:
         }
 
 
+@dataclass
+class RoundtripEvaluationStats:
+    """
+    v3.0.0: Aggregation stats from evaluate_roundtrip_candidates.
+    
+    Provides visibility into WHY opportunities were filtered/rejected,
+    not just the results that were evaluated.
+    """
+    candidates_total: int = 0          # Total opportunities passed in
+    gated_by_economics: int = 0        # Filtered by is_roundtrip_viable=False or spread_minus_required<=0
+    evaluated_count: int = 0           # Actually evaluated (not gated)
+    results_count: int = 0             # Results returned (may be < evaluated if errors)
+    rejected_reasons: Dict[str, int] = None  # Counter of reject reasons
+    
+    def __post_init__(self):
+        if self.rejected_reasons is None:
+            self.rejected_reasons = {}
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "candidates_total": self.candidates_total,
+            "gated_by_economics": self.gated_by_economics,
+            "evaluated_count": self.evaluated_count,
+            "results_count": self.results_count,
+            "rejected_reasons": dict(self.rejected_reasons),
+        }
+
+
 def simulate_roundtrip(
     buy_quote: Dict[str, Any],
     sell_quote: Dict[str, Any],
@@ -376,7 +404,7 @@ def evaluate_roundtrip_candidates(
     eth_usd_price: float = 2000.0,  # v2.8.0: For USD gas conversion
     token_usd_prices: Optional[Dict[str, float]] = None,  # v2.8.0: {"WBTC": 68000, "USDC": 1.0, ...}
     token_decimals: Optional[Dict[str, int]] = None,  # v2.8.0: {"WBTC": 8, "USDC": 6, ...}
-) -> list[RoundTripResult]:
+) -> Tuple[list[RoundTripResult], RoundtripEvaluationStats]:
     """
     Evaluate top-N one-leg opportunities with round-trip simulation.
     
@@ -384,6 +412,11 @@ def evaluate_roundtrip_candidates(
     - If `leg2_quote_callback_factory` is provided, leg2 uses ACTUAL QuoterV2 re-quote
     - Factory signature: (sell_quote: Dict) -> callable(amount_in_wei: int) -> Optional[Dict]
     - This enables CANONICAL round-trip profit (vs ratio estimate)
+    
+    v3.0.0 CONTRACT:
+    - Returns (results, stats) tuple with aggregation visibility
+    - stats.gated_by_economics: count of candidates filtered before evaluation
+    - stats.rejected_reasons: Counter of reject reasons from results
     
     Args:
         opportunities: List of one-leg opportunity dicts (from opportunity_engine)
@@ -394,11 +427,12 @@ def evaluate_roundtrip_candidates(
         leg2_quote_callback_factory: Optional factory to create leg2 re-quote callbacks
         
     Returns:
-        List of RoundTripResult for top candidates
+        Tuple of (List[RoundTripResult], RoundtripEvaluationStats)
     """
     results = []
     gated_count = 0  # v2.9.8: Count opportunities filtered by economics
     evaluated_count = 0  # v2.9.8: Count opportunities actually evaluated
+    rejected_reasons: Dict[str, int] = {}  # v3.0.0: Track rejection reasons
     
     for opp in opportunities[:top_n]:
         # v2.9.8: Economics gate - skip if spread_minus_required_bps <= 0
@@ -466,6 +500,12 @@ def evaluate_roundtrip_candidates(
             token_in_decimals=token_in_dec,
         )
         results.append(result)
+        
+        # v3.0.0: Track reject reasons
+        if result.reject_reason:
+            # Extract reason category (e.g., "NOT_PROFITABLE" from "NOT_PROFITABLE: net_pnl_bps=-42.15")
+            reason_key = result.reject_reason.split(":")[0] if ":" in result.reject_reason else result.reject_reason
+            rejected_reasons[reason_key] = rejected_reasons.get(reason_key, 0) + 1
     
     # v2.9.8: Log economics gating stats
     if gated_count > 0 or evaluated_count > 0:
@@ -476,7 +516,16 @@ def evaluate_roundtrip_candidates(
             len(results),
         )
     
-    return results
+    # v3.0.0: Build aggregation stats
+    stats = RoundtripEvaluationStats(
+        candidates_total=min(len(opportunities), top_n),
+        gated_by_economics=gated_count,
+        evaluated_count=evaluated_count,
+        results_count=len(results),
+        rejected_reasons=rejected_reasons,
+    )
+    
+    return results, stats
 
 
 def estimate_slippage_bps(

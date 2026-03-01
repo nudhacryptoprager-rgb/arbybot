@@ -616,7 +616,7 @@ def run_scan(
                 except Exception as e:
                     logger.warning("Failed to load token_decimals from core_tokens: %s", e)
             
-            roundtrip_results = evaluate_roundtrip_candidates(
+            roundtrip_results, roundtrip_stats = evaluate_roundtrip_candidates(
                 opportunities=eligible_opps,
                 buy_quotes_by_key=quotes_by_key,
                 sell_quotes_by_key=quotes_by_key,
@@ -648,6 +648,10 @@ def run_scan(
             "l1_cost_wei": l1_cost_wei_used,  # v2.1.0: L1 cost tracking
             "l1_cost_source": l1_cost_source_used,  # v2.1.0: "onchain" | "config" | "default"
             "results": [r.to_dict() for r in roundtrip_results[:3]],
+            # v3.0.0: Aggregation stats for visibility
+            "candidates_total": roundtrip_stats.candidates_total,
+            "gated_by_economics": roundtrip_stats.gated_by_economics,
+            "rejected_reasons": roundtrip_stats.rejected_reasons,
         }
         
         # v2.1.0: FIX issue #8 - best_net_pnl_bps should show actual best, not 0.0 when all negative

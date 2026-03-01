@@ -577,3 +577,63 @@ class TestV280SlippageMeasurement:
         # Should use sqrtPriceAfter for slippage
         assert result.slippage_source == "sqrtPriceAfter"
         assert result.estimated_slippage_bps > 0
+
+
+class TestRoundtripEvaluationStats:
+    """v3.0.0: Tests for roundtrip evaluation aggregation stats."""
+    
+    def test_stats_contains_gated_by_economics(self):
+        """evaluate_roundtrip_candidates must return stats with gated_by_economics count."""
+        from engine.roundtrip import evaluate_roundtrip_candidates, RoundtripEvaluationStats
+        
+        opportunities = [
+            {"pair": "A/B", "is_roundtrip_viable": False, "spread_minus_required_bps": -10,
+             "buy_dex": "uni", "sell_dex": "sushi", "buy_fee": 500, "sell_fee": 500,
+             "diagnostics": {"buy_pool": "0x1", "sell_pool": "0x2"}},
+            {"pair": "C/D", "is_roundtrip_viable": True, "spread_minus_required_bps": 50,
+             "buy_dex": "uni", "sell_dex": "sushi", "buy_fee": 500, "sell_fee": 500,
+             "diagnostics": {"buy_pool": "0x3", "sell_pool": "0x4"}},
+        ]
+        
+        results, stats = evaluate_roundtrip_candidates(
+            opportunities=opportunities,
+            buy_quotes_by_key={},
+            sell_quotes_by_key={},
+            top_n=5,
+        )
+        
+        assert isinstance(stats, RoundtripEvaluationStats)
+        assert stats.candidates_total == 2
+        assert stats.gated_by_economics == 1
+        assert stats.evaluated_count == 1  # One viable, but no quotes so still evaluated
+    
+    def test_stats_contains_rejected_reasons(self):
+        """Aggregation stats must contain rejected_reasons counter."""
+        from engine.roundtrip import evaluate_roundtrip_candidates
+        
+        results, stats = evaluate_roundtrip_candidates(
+            opportunities=[],
+            buy_quotes_by_key={},
+            sell_quotes_by_key={},
+            top_n=5,
+        )
+        
+        assert hasattr(stats, "rejected_reasons")
+        assert isinstance(stats.rejected_reasons, dict)
+    
+    def test_stats_to_dict(self):
+        """Stats dataclass must have to_dict() for JSON serialization."""
+        from engine.roundtrip import RoundtripEvaluationStats
+        
+        stats = RoundtripEvaluationStats(
+            candidates_total=5,
+            gated_by_economics=2,
+            evaluated_count=3,
+            results_count=3,
+            rejected_reasons={"NOT_PROFITABLE": 2, "MISSING_QUOTES": 1},
+        )
+        
+        d = stats.to_dict()
+        assert d["candidates_total"] == 5
+        assert d["gated_by_economics"] == 2
+        assert d["rejected_reasons"]["NOT_PROFITABLE"] == 2

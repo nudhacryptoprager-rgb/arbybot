@@ -420,7 +420,7 @@ class TestRoundtripGatingContract:
         sell_quotes = {}
         
         # Call evaluate - should only try to evaluate the viable one
-        results = evaluate_roundtrip_candidates(
+        results, stats = evaluate_roundtrip_candidates(
             opportunities=opportunities,
             buy_quotes_by_key=buy_quotes,
             sell_quotes_by_key=sell_quotes,
@@ -430,6 +430,8 @@ class TestRoundtripGatingContract:
         # No results because quotes are empty, but the function should not crash
         # and should have skipped the non-viable opportunity
         assert len(results) == 0  # No quotes = no results
+        # v3.0.0: Stats should show 1 gated by economics
+        assert stats.gated_by_economics == 1
     
     def test_all_non_viable_produces_no_evaluations(self):
         """If all opportunities are non-viable, no roundtrip is evaluated."""
@@ -452,7 +454,7 @@ class TestRoundtripGatingContract:
             },
         ]
         
-        results = evaluate_roundtrip_candidates(
+        results, stats = evaluate_roundtrip_candidates(
             opportunities=opportunities,
             buy_quotes_by_key={},
             sell_quotes_by_key={},
@@ -461,3 +463,6 @@ class TestRoundtripGatingContract:
         
         # All gated by economics, no evaluations
         assert len(results) == 0
+        # v3.0.0: Stats should show all 2 gated by economics
+        assert stats.gated_by_economics == 2
+        assert stats.evaluated_count == 0
