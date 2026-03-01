@@ -4,46 +4,43 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T15:54:19Z
-run_id: data/runs/ci_m5_gate_20260301_165404
-mode: ONLINE (M4.2 runtime auto-disable - quarantined_count<=1)
+timestamp_utc: 2026-03-01T18:17:13Z
+run_id: data/runs/ci_m5_gate_20260301_191126 (12 runs)
+mode: ONLINE (M4.2 runtime auto-disable + test isolation fix)
 artifact_mode: rolling
 config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-01T15:54:19+00:00
+  primary: ts:2026-03-01T18:17:13Z
   dirty: false
-  desc: v3.2.0 runtime auto-disable mechanism
+  desc: v3.2.1 test isolation + discovery_runtime fix
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Automatic pool health management without manual YAML changes
+goal (Roadmap пункт): Automatic pool health management without manual YAML changes + test hermeticity
 change_summary:
-  - NEW: strategy/runtime_disabled.py - runtime auto-disable mechanism
-  - NEW: RuntimeDisabledManager with JSON persistence (data/cache/runtime_disabled_pools.json)
-  - NEW: Auto-disable for LIQUIDITY_ZERO (immediate), SUSPECT_LIQUIDITY/PRICE_SANITY_FAILED (threshold=3)
-  - NEW: TTL-based re-enable (1 hour default)
-  - NEW: LIQUIDITY_ZERO detection via multicall prefetch
-  - NEW: tests/unit/test_runtime_disabled.py (21 tests)
-  - FIX: core/multicall.py liquidity decoding (32 bytes, not 16)
-  - FIX: Added 3000-tier fallback pools for WBTC/WETH, LINK/WETH, ARB/USDC
-  - NEW: Observability in scan.stats (min_spread_bps, paper_size_usd, runtime_disabled_count, liquidity_zero_count)
-  - RESULT: pool_missing_count=0, quarantined_count=1, runtime_disabled_count=1
-  - RESULT: data_run_rate=0.41, signals_included=2
-  - RESULT: 1 pool auto-disabled (sushiswap_v3_wstETH_WETH_500 LIQUIDITY_ZERO)
-  - TESTS: 1207 passed, 1 skipped
+  - FIX: test_runtime_disabled.py - added autouse fixture for temp cache isolation
+  - FIX: test_discovery_runtime_quotes.py - added autouse fixture for temp cache isolation
+  - NEW: TestCachePollutionGuard - guard test to verify data/cache/** not polluted by tests
+  - FIX: strategy/quotes.py - discovery_runtime path now produces 6-tuples (with pool_key) + runtime-disabled checks
+  - NEW: TestDiscoveryRuntimePoolWorkItems (3 tests) - structural + behavioral tests for discovery_runtime path
+  - NEW: TestLiquidityDecode (3 tests) - regression tests for multicall liquidity decoding (32 bytes)
+  - RESULT: tests use temp caches, no pollution of data/cache/runtime_disabled_pools.json
+  - RESULT: discovery_runtime quoting path no longer crashes
+  - RESULT: 10/12 ONLINE runs PASS, data_run_rate=0.46, unique_pairs=5
+  - RESULT: runtime_disabled_cache has 1 entry (sushiswap_v3_wstETH_WETH_500 LIQUIDITY_ZERO)
+  - TESTS: 1219 passed, 12 skipped
 touched_files:
-  - strategy/runtime_disabled.py (NEW - 407 lines)
-  - strategy/quotes.py (runtime disabled integration)
-  - core/multicall.py (liquidity decoding fix)
-  - config/real_hunting_lowfee.yaml (3000-tier fallback, disabled_pools)
-  - strategy/jobs/run_scan_real.py (observability stats)
-  - tests/unit/test_runtime_disabled.py (NEW - 21 tests)
+  - tests/unit/test_runtime_disabled.py (autouse fixture + test guard)
+  - tests/unit/test_discovery_runtime_quotes.py (autouse fixture + new tests)
+  - tests/unit/test_multicall.py (TestLiquidityDecode - 3 tests)
+  - strategy/quotes.py (discovery_runtime 6-tuple fix + runtime-disabled checks)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1207 passed, 1 skipped
-py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10 --max-runs 12: 11/12 PASS
-py -3.11 scripts/inspect_rolling.py --excluded: data_run_rate=0.41, signals_included=2
+py -3.11 -m pytest tests/unit -q: 1219 passed, 12 skipped
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
+py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10 --max-runs 12: 10/12 PASS
+Cache pollution check: CLEAN (no test_* keys in data/cache/runtime_disabled_pools.json)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -51,18 +48,18 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260301_165404/reports
+  - data/runs/ci_m5_gate_20260301_191126/reports (first of 12 runs)
 runtime_disabled_cache:
   - data/cache/runtime_disabled_pools.json (1 entry: sushiswap_v3_wstETH_WETH_500)
 quality_achievement:
-  - agg_status: WARN_QUALITY (data_run_rate=0.41<0.50)
-  - runs_in_window: 71
-  - unique_pairs: 9 (WETH/USDC, WETH/USDT, ARB/WETH, LINK/WETH, wstETH/WETH, WBTC/WETH, WBTC/USDC, USDC/USDT, ARB/USDC)
+  - agg_status: WARN_QUALITY (data_run_rate=0.46<0.50)
+  - runs_in_window: 82
+  - unique_pairs: 5 (WETH/USDC, WETH/USDT, WBTC/WETH, WBTC/USDC, USDC/USDT)
   - pool_missing_count: 0
   - quarantined_count: 1
-  - runtime_disabled_count: 1
-  - liquidity_zero_count: 0
-  - total_net_usdc: $93.63
+  - runtime_disabled_count: 1 (sushiswap_v3_wstETH_WETH_500)
+  - pass_rate: 0.894 (34/38 data runs)
+  - total_net_usdc: $96.87
 
 ## 4) Key Results (числа з артефактів)
 

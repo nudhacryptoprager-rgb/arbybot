@@ -244,3 +244,78 @@ class TestMulticallFieldSuccessRates:
         for field in fields:
             assert fsr.get(field, 0) > 0, f"field_success_rates[{field}] should be > 0 when calls succeed"
             assert fsr[field] == 1.0, f"field_success_rates[{field}] should be 1.0 when all calls succeed"
+
+
+class TestLiquidityDecode:
+    """Test liquidity() ABI decoding.
+    
+    v3.2.1: Regression test for liquidity decode fix (32 bytes, not 16).
+    """
+    
+    def test_liquidity_decode_32_bytes(self):
+        """
+        Verify batch_liquidity correctly decodes ABI-encoded uint128.
+        
+        uint128 is ABI-encoded as 32 bytes (left-padded with zeros).
+        This test ensures we read all 32 bytes, not just 16.
+        
+        The bug was reading only 16 bytes which would fail on shorter data
+        or misinterpret the value.
+        """
+        from unittest.mock import patch, MagicMock
+        
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        
+        # Create ABI-encoded uint128 value: 1000000000000000000 (1e18)
+        # uint128 is padded to 32 bytes (left-padded with zeros)
+        test_value = 1000000000000000000  # 1e18
+        test_data = test_value.to_bytes(32, "big")
+        
+        # Mock the multicall response
+        mock_results = [
+            (True, test_data),  # Pool 1: success with valid data
+        ]
+        
+        with patch.object(batcher, "_execute_multicall", return_value=mock_results):
+            result = batcher.batch_liquidity(["0x1234567890123456789012345678901234567890"])
+        
+        # Should decode to correct value
+        assert result["0x1234567890123456789012345678901234567890"] == test_value
+    
+    def test_liquidity_decode_short_data_returns_none(self):
+        """Data shorter than 32 bytes should return None."""
+        from unittest.mock import patch
+        
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        
+        # Only 16 bytes - too short for ABI-encoded uint128
+        short_data = (12345).to_bytes(16, "big")
+        
+        mock_results = [
+            (True, short_data),
+        ]
+        
+        with patch.object(batcher, "_execute_multicall", return_value=mock_results):
+            result = batcher.batch_liquidity(["0x1234567890123456789012345678901234567890"])
+        
+        # Should return None for short data
+        assert result["0x1234567890123456789012345678901234567890"] is None
+    
+    def test_liquidity_decode_zero_value(self):
+        """Zero liquidity should decode correctly (not be confused with None)."""
+        from unittest.mock import patch
+        
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        
+        # Zero encoded as 32 bytes
+        zero_data = (0).to_bytes(32, "big")
+        
+        mock_results = [
+            (True, zero_data),
+        ]
+        
+        with patch.object(batcher, "_execute_multicall", return_value=mock_results):
+            result = batcher.batch_liquidity(["0x1234567890123456789012345678901234567890"])
+        
+        # Should return 0, not None
+        assert result["0x1234567890123456789012345678901234567890"] == 0

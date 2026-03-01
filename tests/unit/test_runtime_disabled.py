@@ -2,6 +2,7 @@
 Tests for strategy/runtime_disabled.py - Runtime auto-disable mechanism.
 
 v3.2.0: Implements automatic pool disabling based on persistent failures.
+v3.2.1: Fixed test isolation - all tests use temp cache paths, no pollution of data/cache/.
 """
 
 import json
@@ -22,6 +23,32 @@ from strategy.runtime_disabled import (
     get_runtime_disabled_manager,
     clear_runtime_disabled_manager,
 )
+
+
+# =============================================================================
+# TEST ISOLATION FIXTURE
+# =============================================================================
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_cache(tmp_path):
+    """
+    Ensure all runtime_disabled tests use an isolated temp cache.
+    
+    This fixture:
+    1. Clears any existing global manager
+    2. Creates a new manager with a temp cache path
+    3. Yields for the test
+    4. Cleans up after
+    
+    This prevents tests from polluting data/cache/runtime_disabled_pools.json.
+    """
+    clear_runtime_disabled_manager()
+    temp_cache = tmp_path / "runtime_disabled_test.json"
+    # Force new manager with temp cache - this sets the global singleton
+    get_runtime_disabled_manager(cache_path=str(temp_cache), force_new=True)
+    yield str(temp_cache)
+    # Cleanup - clear the manager state and singleton
+    clear_runtime_disabled_manager()
 
 
 class TestRuntimeDisabledEntry:
@@ -73,13 +100,7 @@ class TestRuntimeDisabledEntry:
 class TestRuntimeDisabledManager:
     """Tests for RuntimeDisabledManager."""
 
-    def setup_method(self):
-        """Reset manager state before each test."""
-        clear_runtime_disabled_manager()
-
-    def teardown_method(self):
-        """Clean up after each test."""
-        clear_runtime_disabled_manager()
+    # NOTE: setup/teardown handled by autouse fixture 'isolated_runtime_cache'
 
     def test_singleton_pattern(self):
         """Test manager singleton pattern."""
@@ -229,13 +250,7 @@ class TestRuntimeDisabledManager:
 class TestModuleLevelFunctions:
     """Tests for module-level convenience functions."""
 
-    def setup_method(self):
-        """Reset manager state before each test."""
-        clear_runtime_disabled_manager()
-
-    def teardown_method(self):
-        """Clean up after each test."""
-        clear_runtime_disabled_manager()
+    # NOTE: setup/teardown handled by autouse fixture 'isolated_runtime_cache'
 
     def test_is_runtime_disabled_not_disabled(self):
         """Test is_runtime_disabled returns None for non-disabled pool."""
@@ -278,13 +293,7 @@ class TestModuleLevelFunctions:
 class TestIntegrationWithQuotes:
     """Integration tests for quotes.py integration."""
 
-    def setup_method(self):
-        """Reset manager state before each test."""
-        clear_runtime_disabled_manager()
-
-    def teardown_method(self):
-        """Clean up after each test."""
-        clear_runtime_disabled_manager()
+    # NOTE: setup/teardown handled by autouse fixture 'isolated_runtime_cache'
 
     def test_disabled_pool_skipped_in_quoting(self):
         """Test that runtime-disabled pools are skipped in quoting.
@@ -324,13 +333,7 @@ class TestIntegrationWithQuotes:
 class TestEdgeCases:
     """Edge case and error handling tests."""
 
-    def setup_method(self):
-        """Reset manager state before each test."""
-        clear_runtime_disabled_manager()
-
-    def teardown_method(self):
-        """Clean up after each test."""
-        clear_runtime_disabled_manager()
+    # NOTE: setup/teardown handled by autouse fixture 'isolated_runtime_cache'
 
     def test_empty_pool_key(self):
         """Test handling of empty pool key."""
@@ -367,3 +370,60 @@ class TestEdgeCases:
             t.join()
         
         assert len(results) == 5
+
+
+# =============================================================================
+# TEST ISOLATION GUARD
+# =============================================================================
+
+class TestCachePollutionGuard:
+    """
+    Guard test to verify that no tests pollute the production cache.
+    
+    This test verifies that data/cache/runtime_disabled_pools.json
+    does not contain test-specific pool keys after running the test suite.
+    
+    If this test fails, it means the autouse fixture is not working correctly.
+    """
+
+    def test_production_cache_not_polluted(self):
+        """
+        Verify data/cache/runtime_disabled_pools.json is not polluted by tests.
+        
+        Test keys that should NEVER appear in production cache:
+        - test_pool, threshold_pool, immediate_pool, expire_pool, skip_pool
+        - concurrent_*, none_error_pool, reset_test_pool, etc.
+        """
+        cache_path = Path("data/cache/runtime_disabled_pools.json")
+        
+        if not cache_path.exists():
+            # No cache file - no pollution
+            return
+        
+        try:
+            with open(cache_path, "r") as f:
+                data = json.load(f)
+        except json.JSONDecodeError:
+            # Invalid JSON - not our concern here
+            return
+        
+        entries = data.get("entries", [])
+        test_patterns = [
+            "test_pool", "threshold_pool", "immediate_pool", "expire_pool",
+            "skip_pool", "concurrent_", "none_error_pool", "reset_test_pool",
+            "success_pool", "preexisting_pool", "persistent_pool",
+            "threshold_test_pool",
+        ]
+        
+        polluted_keys = []
+        for entry in entries:
+            pool_key = entry.get("pool_key", "")
+            for pattern in test_patterns:
+                if pattern in pool_key:
+                    polluted_keys.append(pool_key)
+                    break
+        
+        assert not polluted_keys, (
+            f"Production cache polluted with test keys: {polluted_keys}. "
+            f"The autouse fixture 'isolated_runtime_cache' should prevent this."
+        )

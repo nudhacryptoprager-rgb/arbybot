@@ -673,7 +673,27 @@ def collect_quotes(
                 pi_addr = pi["address"]
                 pi_dex_cfg = get_dex_config(chain_name, pi_dex)
                 pi_adapter = pi_dex_cfg.adapter_type if pi_dex_cfg else None
-                pool_work_items.append((pi_dex, pi_fee, pi_addr, pi_dex_cfg, pi_adapter))
+                
+                # v3.2.1 FIX: Generate pool_key for discovery_runtime items
+                pool_key = make_pool_key(pi_dex, token_pair_tag, pi_fee)
+                
+                # v3.2.1 FIX: Check disabled_pools for discovery_runtime items
+                disabled_info = is_pool_disabled(config, pi_dex, token_pair_tag, pi_fee)
+                if disabled_info:
+                    counts["pool_disabled"] += 1
+                    logger.debug("POOL_DISABLED (config): %s %s/%s fee=%d reason=%s", 
+                               pi_dex, token_in, token_out, pi_fee, disabled_info.get('reason', 'DISABLED'))
+                    continue
+                
+                # v3.2.1 FIX: Check runtime-disabled for discovery_runtime items
+                runtime_info = is_runtime_disabled(pool_key)
+                if runtime_info and not runtime_info.get("expired", False):
+                    counts["runtime_disabled"] += 1
+                    logger.debug("RUNTIME_DISABLED: %s reason=%s remaining=%ds",
+                               pool_key, runtime_info.get('reason'), runtime_info.get('remaining_seconds', 0))
+                    continue
+                
+                pool_work_items.append((pi_dex, pi_fee, pi_addr, pi_dex_cfg, pi_adapter, pool_key))
         else:
             # config mode: iterate over dexes and fee_tiers, lookup pool addresses
             for dex in dexes_list:
