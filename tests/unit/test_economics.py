@@ -652,6 +652,10 @@ class TestSpreadViabilityWithMeasuredSlippage:
             # This should dwarf the 30 bps gross spread
             assert sig["has_measured_slippage"] is True
             assert sig["total_measured_slippage_bps"] > 400  # Significant
-            assert sig["slippage_source"] == "measured"
+            # v3.1.1: slippage_source is always paper (for drift), 
+            # effective_slippage_source is "measured" when high
+            assert sig["slippage_source"] == "config", "slippage_bps uses paper for drift consistency"
+            assert sig["effective_slippage_source"] == "measured"
+            assert sig["effective_slippage_bps"] > 400  # Uses measured for viability
             # The viability should be FALSE due to high slippage
             assert sig["is_roundtrip_viable"] is False

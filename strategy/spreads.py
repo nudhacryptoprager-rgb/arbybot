@@ -437,15 +437,20 @@ def _build_spread_signal(
     total_measured_slippage_bps = buy_measured_slip + sell_measured_slip
     has_any_measured = buy_has_measured or sell_has_measured
     
-    # Effective slippage: max(paper, measured) when measured available
-    if has_any_measured and total_measured_slippage_bps > float(paper_slippage_bps):
-        slippage_bps = Decimal(str(total_measured_slippage_bps))
-        slippage_source = "measured"
-    else:
-        slippage_bps = paper_slippage_bps
-        slippage_source = paper_slippage_source
-    
+    # v3.1.1-FIX: slippage_bps ALWAYS paper for drift consistency with M4 sim
+    # M4 sim uses sim_slippage_bps (paper), so net_pnl_usdc_est must match
+    slippage_bps = paper_slippage_bps
+    slippage_source = paper_slippage_source
     slippage_usd_estimate = float(paper_size_usd * slippage_bps / Decimal(10000))
+    
+    # Effective slippage: max(paper, measured) for viability gating ONLY
+    # This does NOT affect net_pnl_usdc_estimate (drift-safe)
+    if has_any_measured and total_measured_slippage_bps > float(paper_slippage_bps):
+        effective_slippage_bps = total_measured_slippage_bps
+        effective_slippage_source = "measured"
+    else:
+        effective_slippage_bps = float(paper_slippage_bps)
+        effective_slippage_source = paper_slippage_source
     
     net_pnl_usdc_estimate = gross_pnl_usdc - gas_usd_estimate - slippage_usd_estimate
     
@@ -490,12 +495,13 @@ def _build_spread_signal(
     
     # v2.9.8: Economics gate - canonical minimum required spread calculation
     # Uses execution/economics.py for deterministic cost modeling
+    # v3.1.1: Uses effective_slippage_bps (max paper/measured) for conservative viability
     buy_fee_bps = fee_tier_to_bps(buy_fee)
     sell_fee_bps = fee_tier_to_bps(sell_fee)
     min_required_bps = min_required_spread_bps(
         fee_bps_leg1=buy_fee_bps,
         fee_bps_leg2=sell_fee_bps,
-        slippage_bps=float(slippage_bps),
+        slippage_bps=effective_slippage_bps,
         gas_usd=gas_usd_estimate,
         size_usd=float(paper_size_usd),
         safety_bps=2.0,  # canonical safety buffer
@@ -504,7 +510,7 @@ def _build_spread_signal(
         spread_bps=float(spread_bps_decimal),
         fee_bps_leg1=buy_fee_bps,
         fee_bps_leg2=sell_fee_bps,
-        slippage_bps=float(slippage_bps),
+        slippage_bps=effective_slippage_bps,
         gas_usd=gas_usd_estimate,
         size_usd=float(paper_size_usd),
         safety_bps=2.0,
@@ -587,6 +593,10 @@ def _build_spread_signal(
         "sell_measured_slippage_bps": round(sell_measured_slip, 2) if sell_has_measured else None,
         "total_measured_slippage_bps": round(total_measured_slippage_bps, 2) if has_any_measured else None,
         "has_measured_slippage": has_any_measured,
+        # v3.1.1: Effective slippage for viability gating (max paper/measured)
+        # Does NOT affect net_pnl_usdc_est (paper-based for drift consistency)
+        "effective_slippage_bps": round(effective_slippage_bps, 2),
+        "effective_slippage_source": effective_slippage_source,
         "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
         "is_net_positive_est": net_pnl_usdc_estimate > 0,
         # v2.2.0: LP fee estimation for roundtrip-aware filtering

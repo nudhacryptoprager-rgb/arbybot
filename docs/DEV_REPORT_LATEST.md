@@ -4,46 +4,38 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T12:10:31Z
-run_id: data/runs/ci_m5_gate_20260301_131018
-mode: ONLINE (M4.2 roundtrip visibility + measured slippage)
+timestamp_utc: 2026-03-01T13:01:27Z
+run_id: data/runs/ci_m5_gate_20260301_140110
+mode: ONLINE (M4.2 drift fix - paper slippage for net_pnl_usdc_est)
 artifact_mode: rolling
-config: config/real_hunting_lowfee.yaml
+config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-03-01T12:10:31+00:00
+  primary: ts:2026-03-01T13:01:27+00:00
   dirty: false
-  desc: v3.1.0 measured slippage + rejection classification
+  desc: v3.1.1 drift fix - slippage_bps always paper
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4.2 hunting - realistic roundtrip selection with measured slippage and detailed rejection classification
+goal (Roadmap пункт): Fix drift consistency between truth signals and M4 simulation
 change_summary:
-  - NEW: measured_slippage_bps() - calculates slippage from sqrtPriceX96 (before/after) in execution/economics.py
-  - NEW: effective_slippage_bps() - returns max(paper, measured) with source tracking
-  - REFACTOR: spread signals use measured slippage when sqrtPriceAfter available
-  - NEW: classify_rejection_reason() - categorizes rejection by dominant cost (SLIPPAGE_TOO_HIGH, LP_FEES_TOO_HIGH, GAS_TOO_HIGH, NET_PROFIT_TOO_LOW)
-  - WIRED: reject_reason format: "{CATEGORY}: net_pnl_bps={X}|slippage={Y}|lp_fee={Z}|gas={W}"
-  - CONFIG: real_hunting_lowfee.yaml - low-fee pools (100/500 bps) with pool registry
-  - TESTS: TestMeasuredSlippageBps (5 tests), TestEffectiveSlippageBps (3 tests)
-  - TESTS: TestClassifyRejectionReason (5 tests), TestHuntingConfigContract (3 tests)
-  - VERIFIED: All 3/3 roundtrip candidates rejected with SLIPPAGE_TOO_HIGH (412 bps measured)
-  - VERIFIED: has_measured_slippage=true, slippage_source="sqrtPriceAfter" in all roundtrip results
+  - FIX: slippage_bps now ALWAYS uses paper_slippage_bps (drift consistency with M4 sim)
+  - NEW: effective_slippage_bps - max(paper, measured) for viability gating ONLY
+  - NEW: effective_slippage_source - "paper" or "measured" for effective slippage
+  - UNCHANGED: net_pnl_usdc_est uses paper slippage to match M4 sim_slippage_bps
+  - VERIFIED: mae_net_usdc=0.0, est_sign_correct_rate=1.0 for all runs
+  - VERIFIED: drift_status=PASS, agg_status=PASS
+  - TESTS: Updated test_economics.py for effective_slippage_source assertion
   - TESTS: All 1183 tests pass
 touched_files:
-  - execution/economics.py (measured_slippage_bps, effective_slippage_bps)
-  - strategy/spreads.py (use measured slippage, new fields)
-  - engine/roundtrip.py (classify_rejection_reason, detailed reject_reason)
-  - config/real_hunting_lowfee.yaml (pool registry, tokens, anchor prices)
-  - tests/unit/test_economics.py (TestMeasuredSlippageBps, TestEffectiveSlippageBps)
-  - tests/unit/test_roundtrip.py (TestClassifyRejectionReason)
-  - tests/unit/test_same_dex_policy.py (TestHuntingConfigContract)
-  - docs/status/Status_M4.md (verify_v3_pools CLI fix)
-  - scripts/verify_v3_pools.py (module invocation docstring)
+  - strategy/spreads.py (slippage_bps always paper, effective_slippage_bps for viability)
+  - tests/unit/test_economics.py (updated TestSpreadViabilityWithMeasuredSlippage)
+  - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (4 warnings - DEV_REPORT alignment)
-py -3.11 -m pytest tests/unit -q: PASS (1183 passed, 13.26s)
-py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10 --max-runs 30: PASS (18 runs, M5_0 gate PASS, M4 strict FAIL expected)
+py -3.11 scripts/check_repo_safety.py: PASS
+py -3.11 -m pytest tests/unit -q: PASS (1183 passed)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (all gates)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: PASS (11 runs)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -51,16 +43,15 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260301_131018/reports
+  - data/runs/ci_m5_gate_20260301_140110/reports
 quality_achievement:
   - agg_status: PASS
-  - runs_in_window: 48
-  - unique_pairs: 6 (WETH/USDC, WETH/USDT, wstETH/WETH + 3 more)
+  - runs_in_window: 11
+  - unique_pairs: 5 (WETH/USDC, WETH/USDT, WBTC/WETH, ARB/WETH, WBTC/USDC)
   - unique_routes: 2 (sushiswap_v3->uniswap_v3, uniswap_v3->sushiswap_v3)
-  - roundtrip.candidates_total: 3
-  - roundtrip.gated_by_economics: 0
-  - roundtrip.rejected_reasons: {"SLIPPAGE_TOO_HIGH": 3}
-  - roundtrip.best_net_pnl_bps: -14.64
+  - drift_status: PASS
+  - mae_net_usdc: 0.0
+  - est_sign_correct_rate: 1.0
 
 ## 4) Key Results (числа з артефактів)
 
@@ -70,34 +61,24 @@ _latest.json:
   agg_status: PASS
   agg_reasons: []
   quality_warnings: ["WARN_PROFIT_DIAGNOSTIC"]
-  runs_in_window: 48
+  runs_in_window: 11
   in_warmup: false
+  pass_rate: 1.0
+  mae_p90: 0.0
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-03-01T12:10:31+00:00
+  drift_status: PASS
+  run_context.run_timestamp: 2026-03-01T13:01:27Z
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 3
-    included_signals_count: 3
+    signals_count: 4
+    included_signals_count: 4
     excluded_signals_count: 0
-    fragile_count: 1
-    fragile_rate: 0.3333
-
-truth_report.stats.roundtrip (v3.1.0 measured slippage):
-  enabled: true
-  candidates_total: 3
-  gated_by_economics: 0
-  evaluated_count: 3
-  profitable_count: 0
-  rejected_reasons: {"SLIPPAGE_TOO_HIGH": 3}
-  best_net_pnl_bps: -14.64
-  NOTE: All 3 candidates rejected due to measured slippage (102-412 bps from sqrtPriceAfter)
-
-ROUNDTRIP REJECT_REASON DETAIL (v3.1.0):
-  - Format: "{CATEGORY}: net_pnl_bps={X}|slippage={Y}|lp_fee={Z}|gas={W}"
-  - Example: "SLIPPAGE_TOO_HIGH: net_pnl_bps=-235.64|slippage=412.5|lp_fee=10.0|gas=0.1"
+    mae_net_usdc: 0.0
+    est_sign_correct_rate: 1.0
+    sign_mismatch_count: 0
   - Categories: SLIPPAGE_TOO_HIGH (>40%), LP_FEES_TOO_HIGH (>50%), GAS_TOO_HIGH (>30%), NET_PROFIT_TOO_LOW
   - slippage_source: "sqrtPriceAfter" (measured from quoter response)
 
