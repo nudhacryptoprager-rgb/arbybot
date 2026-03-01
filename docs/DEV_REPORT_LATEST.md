@@ -4,46 +4,46 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T11:16:53Z
-run_id: data/runs/ci_m5_gate_20260301_121636
-mode: ONLINE (M4.2 roundtrip visibility)
+timestamp_utc: 2026-03-01T12:10:31Z
+run_id: data/runs/ci_m5_gate_20260301_131018
+mode: ONLINE (M4.2 roundtrip visibility + measured slippage)
 artifact_mode: rolling
-config: config/real_minimal.yaml
+config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-01T11:16:53+00:00
+  primary: ts:2026-03-01T12:10:31+00:00
   dirty: false
-  desc: v3.0.0 roundtrip aggregation visibility (gated_by_economics, rejected_reasons)
+  desc: v3.1.0 measured slippage + rejection classification
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4.2 hunting - add visibility into roundtrip evaluation pipeline
+goal (Roadmap пункт): M4.2 hunting - realistic roundtrip selection with measured slippage and detailed rejection classification
 change_summary:
-  - NEW: RoundtripEvaluationStats dataclass (candidates_total, gated_by_economics, evaluated_count, results_count, rejected_reasons)
-  - REFACTOR: evaluate_roundtrip_candidates() returns Tuple[List[RoundTripResult], RoundtripEvaluationStats]
-  - WIRED: stats["roundtrip"] in truth_report now includes gated_by_economics, rejected_reasons
-  - CONFIG: paper_slippage_bps: 5 in real_minimal.yaml (v3.0.0 realistic economics)
-  - CONFIG: paper_size_usd: 100 in real_hunting_lowfee.yaml (reduced slippage impact)
-  - TESTS: TestRoundtripEvaluationStats (3 tests) in test_roundtrip.py
-  - TESTS: TestEconomicsFieldsInSpreadSignals (2 tests) in test_truth_report.py
-  - VERIFIED: economics fields present in spread_signals (min_required_spread_bps, spread_minus_required_bps, is_roundtrip_viable)
-  - VERIFIED: roundtrip.rejected_reasons shows {"NOT_PROFITABLE": 4} in ONLINE run
-  - TESTS: All 1165 tests pass
+  - NEW: measured_slippage_bps() - calculates slippage from sqrtPriceX96 (before/after) in execution/economics.py
+  - NEW: effective_slippage_bps() - returns max(paper, measured) with source tracking
+  - REFACTOR: spread signals use measured slippage when sqrtPriceAfter available
+  - NEW: classify_rejection_reason() - categorizes rejection by dominant cost (SLIPPAGE_TOO_HIGH, LP_FEES_TOO_HIGH, GAS_TOO_HIGH, NET_PROFIT_TOO_LOW)
+  - WIRED: reject_reason format: "{CATEGORY}: net_pnl_bps={X}|slippage={Y}|lp_fee={Z}|gas={W}"
+  - CONFIG: real_hunting_lowfee.yaml - low-fee pools (100/500 bps) with pool registry
+  - TESTS: TestMeasuredSlippageBps (5 tests), TestEffectiveSlippageBps (3 tests)
+  - TESTS: TestClassifyRejectionReason (5 tests), TestHuntingConfigContract (3 tests)
+  - VERIFIED: All 3/3 roundtrip candidates rejected with SLIPPAGE_TOO_HIGH (412 bps measured)
+  - VERIFIED: has_measured_slippage=true, slippage_source="sqrtPriceAfter" in all roundtrip results
+  - TESTS: All 1183 tests pass
 touched_files:
-  - engine/roundtrip.py (RoundtripEvaluationStats, tuple return)
-  - strategy/jobs/run_scan_real.py (unpack tuple, wire gated_by_economics/rejected_reasons)
-  - config/real_minimal.yaml (paper_slippage_bps: 5)
-  - config/real_hunting_lowfee.yaml (paper_size_usd: 100)
-  - tests/unit/test_roundtrip.py (TestRoundtripEvaluationStats)
-  - tests/unit/test_truth_report.py (TestEconomicsFieldsInSpreadSignals)
-  - tests/unit/test_economics.py (updated for tuple return)
-  - tests/unit/test_roundtrip_direction.py (updated for tuple return)
+  - execution/economics.py (measured_slippage_bps, effective_slippage_bps)
+  - strategy/spreads.py (use measured slippage, new fields)
+  - engine/roundtrip.py (classify_rejection_reason, detailed reject_reason)
+  - config/real_hunting_lowfee.yaml (pool registry, tokens, anchor prices)
+  - tests/unit/test_economics.py (TestMeasuredSlippageBps, TestEffectiveSlippageBps)
+  - tests/unit/test_roundtrip.py (TestClassifyRejectionReason)
+  - tests/unit/test_same_dex_policy.py (TestHuntingConfigContract)
+  - docs/status/Status_M4.md (verify_v3_pools CLI fix)
+  - scripts/verify_v3_pools.py (module invocation docstring)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: PASS (1165 passed, 12.73s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (13.9s)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: PASS
-py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10: FAIL (PRICE_SCALE_VIOLATION on LINK/USDC pools)
+py -3.11 scripts/check_repo_safety.py: PASS (4 warnings - DEV_REPORT alignment)
+py -3.11 -m pytest tests/unit -q: PASS (1183 passed, 13.26s)
+py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10 --max-runs 30: PASS (18 runs, M5_0 gate PASS, M4 strict FAIL expected)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -51,18 +51,16 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260301_121636/reports
+  - data/runs/ci_m5_gate_20260301_131018/reports
 quality_achievement:
   - agg_status: PASS
-  - fragile_rate_p90: 0.0
-  - signals_excluded_count: 0
-  - data_run_rate: 1.0
-  - pass_rate: 1.0
-  - unique_pairs: 4
-  - unique_routes: 1
-  - roundtrip.candidates_total: 4
+  - runs_in_window: 48
+  - unique_pairs: 6 (WETH/USDC, WETH/USDT, wstETH/WETH + 3 more)
+  - unique_routes: 2 (sushiswap_v3->uniswap_v3, uniswap_v3->sushiswap_v3)
+  - roundtrip.candidates_total: 3
   - roundtrip.gated_by_economics: 0
-  - roundtrip.rejected_reasons: {"NOT_PROFITABLE": 4}
+  - roundtrip.rejected_reasons: {"SLIPPAGE_TOO_HIGH": 3}
+  - roundtrip.best_net_pnl_bps: -14.64
 
 ## 4) Key Results (числа з артефактів)
 
@@ -72,32 +70,50 @@ _latest.json:
   agg_status: PASS
   agg_reasons: []
   quality_warnings: ["WARN_PROFIT_DIAGNOSTIC"]
-  runs_in_window: 16
+  runs_in_window: 48
   in_warmup: false
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-03-01T11:16:53+00:00
+  run_context.run_timestamp: 2026-03-01T12:10:31+00:00
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 4
-    included_signals_count: 4
+    signals_count: 3
+    included_signals_count: 3
     excluded_signals_count: 0
-    fragile_count: 0
-    fragile_rate: 0.0
-    sim_profitable_count: 4
-    total_net_usdc: 7.58
+    fragile_count: 1
+    fragile_rate: 0.3333
 
-truth_report.stats.roundtrip (NEW v3.0.0):
+truth_report.stats.roundtrip (v3.1.0 measured slippage):
   enabled: true
-  candidates_total: 4
+  candidates_total: 3
   gated_by_economics: 0
-  evaluated_count: 4
+  evaluated_count: 3
   profitable_count: 0
-  rejected_reasons: {"NOT_PROFITABLE": 4}
-  best_net_pnl_bps: -38.01
-  NOTE: All 4 candidates unprofitable due to real slippage (82-283 bps)
+  rejected_reasons: {"SLIPPAGE_TOO_HIGH": 3}
+  best_net_pnl_bps: -14.64
+  NOTE: All 3 candidates rejected due to measured slippage (102-412 bps from sqrtPriceAfter)
+
+ROUNDTRIP REJECT_REASON DETAIL (v3.1.0):
+  - Format: "{CATEGORY}: net_pnl_bps={X}|slippage={Y}|lp_fee={Z}|gas={W}"
+  - Example: "SLIPPAGE_TOO_HIGH: net_pnl_bps=-235.64|slippage=412.5|lp_fee=10.0|gas=0.1"
+  - Categories: SLIPPAGE_TOO_HIGH (>40%), LP_FEES_TOO_HIGH (>50%), GAS_TOO_HIGH (>30%), NET_PROFIT_TOO_LOW
+  - slippage_source: "sqrtPriceAfter" (measured from quoter response)
+
+MEASURED SLIPPAGE FIELDS (v3.1.0):
+  - Location: truth_report.spread_signals[*]
+  - buy_measured_slippage_bps: 102.16
+  - sell_measured_slippage_bps: 9.92
+  - total_measured_slippage_bps: 112.08
+  - has_measured_slippage: true
+  - slippage_source: "measured" (max of paper vs measured)
+
+VIABILITY UPDATE (v3.1.0):
+  - is_roundtrip_viable: false (correctly predicts unprofitable roundtrip)
+  - Reason: measured slippage (112 bps) > paper slippage (5 bps)
+  - Before: is_roundtrip_viable=true when paper slippage was low
+  - After: is_roundtrip_viable uses max(paper, measured) for realistic economics
 
 ECONOMICS FIELDS VERIFIED:
   - Location: truth_report.spread_signals[*]

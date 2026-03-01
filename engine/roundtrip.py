@@ -17,6 +17,12 @@ This inherently includes:
 - LP fees (via quoter amount_out)
 - Price impact/slippage (via quoter amount_out)
 - Liquidity constraints (detected via ticks_crossed)
+
+v3.1.0: Detailed rejection classification:
+- SLIPPAGE_TOO_HIGH: slippage_bps > lp_fee_bps + gas_bps
+- LP_FEES_TOO_HIGH: lp_fee_bps dominates (>50% of spread consumed)
+- GAS_TOO_HIGH: gas_bps dominates (>30% of spread consumed)
+- NET_PROFIT_TOO_LOW: general unprofitable (none dominates)
 """
 
 from __future__ import annotations
@@ -387,7 +393,26 @@ def simulate_roundtrip(
     result.gas_source = gas_source
     
     if not result.is_profitable:
-        result.reject_reason = f"NOT_PROFITABLE: net_pnl_bps={result.net_pnl_bps:.2f}"
+        # v3.1.0: Detailed rejection classification
+        # Calculate LP fee in bps (fee tier / 100)
+        lp_fee_bps = (result.leg1_fee + result.leg2_fee) / 100.0
+        
+        # Calculate gas as bps of notional
+        if amount_in > 0 and effective_token_price > 0:
+            notional_usd = (amount_in / (10 ** token_in_decimals)) * effective_token_price
+            gas_bps = (result.gas_cost_usd / notional_usd) * 10000 if notional_usd > 0 else 0
+        else:
+            gas_bps = 0
+        
+        # Classify the rejection reason
+        reason = classify_rejection_reason(
+            gross_pnl_bps=result.gross_pnl_bps,
+            net_pnl_bps=result.net_pnl_bps,
+            estimated_slippage_bps=result.estimated_slippage_bps,
+            lp_fee_bps=lp_fee_bps,
+            gas_bps=gas_bps,
+        )
+        result.reject_reason = f"{reason}: net_pnl_bps={result.net_pnl_bps:.2f}|slippage={result.estimated_slippage_bps:.1f}|lp_fee={lp_fee_bps:.1f}|gas={gas_bps:.1f}"
     
     return result
 
@@ -672,3 +697,57 @@ def calculate_slippage_from_sqrt_prices(
         
     except Exception:
         return 0.0, "none"
+
+
+def classify_rejection_reason(
+    gross_pnl_bps: float,
+    net_pnl_bps: float,
+    estimated_slippage_bps: float,
+    lp_fee_bps: float,
+    gas_bps: float,
+) -> str:
+    """
+    v3.1.0: Classify why a roundtrip is unprofitable.
+    
+    Given the cost breakdown, determine which factor dominates:
+    - SLIPPAGE_TOO_HIGH: slippage > 50% of cost and is the largest factor
+    - LP_FEES_TOO_HIGH: LP fees > 50% of cost and is the largest factor
+    - GAS_TOO_HIGH: gas > 30% of cost and is significant
+    - NET_PROFIT_TOO_LOW: general unprofitable (balanced costs)
+    
+    Args:
+        gross_pnl_bps: Gross profit in bps (before gas)
+        net_pnl_bps: Net profit in bps (after gas)
+        estimated_slippage_bps: Estimated slippage in bps
+        lp_fee_bps: LP fee in bps (leg1_fee + leg2_fee) / 100
+        gas_bps: Gas cost as bps of notional
+        
+    Returns:
+        Classification string: SLIPPAGE_TOO_HIGH, LP_FEES_TOO_HIGH, GAS_TOO_HIGH, or NET_PROFIT_TOO_LOW
+    """
+    # Total cost = what ate into the gross spread (or made it negative)
+    total_cost_bps = abs(estimated_slippage_bps) + lp_fee_bps + gas_bps
+    
+    if total_cost_bps == 0:
+        return "NET_PROFIT_TOO_LOW"
+    
+    # Calculate cost proportions
+    slippage_pct = abs(estimated_slippage_bps) / total_cost_bps * 100
+    lp_fee_pct = lp_fee_bps / total_cost_bps * 100
+    gas_pct = gas_bps / total_cost_bps * 100
+    
+    # Classification logic: which cost component dominates?
+    # Slippage dominates if > 40% and biggest single factor
+    if slippage_pct > 40 and abs(estimated_slippage_bps) >= max(lp_fee_bps, gas_bps):
+        return "SLIPPAGE_TOO_HIGH"
+    
+    # LP fees dominate if > 50%
+    if lp_fee_pct > 50 and lp_fee_bps >= max(abs(estimated_slippage_bps), gas_bps):
+        return "LP_FEES_TOO_HIGH"
+    
+    # Gas dominates if > 30% and significant
+    if gas_pct > 30 and gas_bps >= max(abs(estimated_slippage_bps), lp_fee_bps):
+        return "GAS_TOO_HIGH"
+    
+    # Balanced costs - general unprofitable
+    return "NET_PROFIT_TOO_LOW"

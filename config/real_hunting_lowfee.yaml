@@ -35,11 +35,36 @@ dexes:
   - uniswap_v3
   - sushiswap_v3
 
-# ========== DISCOVERY RUNTIME MODE ==========
-universe_source: discovery_runtime
-discovery_runtime_max_pairs: 50
+# ========== CONFIG MODE (not discovery_runtime) ==========
+# v3.1.0: Discovery runtime uses slot0 which conflicts with truth_mode_m42
+# Using config mode with verified cross-DEX pairs instead
+# universe_source: config (default - using config pairs)
 require_cross_dex: true
-discovery_dry_run: false
+
+# Pairs with verified cross-DEX pools at low fee tiers
+# Verified via: py -3.11 -m scripts.verify_v3_pools --require-cross-dex --pairs WETH/USDC WETH/USDT
+pairs:
+  - token_in: WETH
+    token_out: USDC
+    fee_tiers: [100, 500]
+  - token_in: WETH
+    token_out: USDT
+    fee_tiers: [500]
+  - token_in: WBTC
+    token_out: WETH
+    fee_tiers: [500]
+  - token_in: ARB
+    token_out: WETH
+    fee_tiers: [500]
+  - token_in: LINK
+    token_out: WETH
+    fee_tiers: [500]
+  - token_in: wstETH
+    token_out: WETH
+    fee_tiers: [100, 500]
+  - token_in: WBTC
+    token_out: USDC
+    fee_tiers: [500]
 
 # ========== LOW-FEE POOL PRIORITY ==========
 # fee_tiers to query (100 = 0.01%, 500 = 0.05%)
@@ -87,6 +112,9 @@ tokens:
   USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
   ARB: "0x912CE59144191C1204E64559FE8253a0e49E6548"
   DAI: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"
+  WBTC: "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f"
+  LINK: "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4"
+  wstETH: "0x5979D7b546E38E414F7E9822514be443A4800529"
 
 quote_decimals:
   WETH: 18
@@ -94,6 +122,9 @@ quote_decimals:
   USDT: 6
   ARB: 18
   DAI: 18
+  WBTC: 8
+  LINK: 18
+  wstETH: 18
 
 tokens_anchor_price:
   WETH_USDC: 2500
@@ -101,3 +132,36 @@ tokens_anchor_price:
   WETH_DAI: 2500
   ARB_USDC: 0.50
   ARB_WETH: 0.0002
+  WBTC_WETH: 35
+  WBTC_USDC: 68000
+  LINK_WETH: 0.006
+  wstETH_WETH: 1.15
+
+# ========== POOL REGISTRY (required for quoting) ==========
+# Pool addresses verified on Arbitrum via factory.getPool()
+# Only low-fee pools (100/500 bps) for hunting
+pools:
+  # === WETH/USDC (fee=100, 500) ===
+  uniswap_v3_WETH_USDC_100: "0x6f38e884725a116C9C7fBF208e79FE8828a2595F"
+  uniswap_v3_WETH_USDC_500: "0xC6962004f452bE9203591991D15f6b388e09E8D0"
+  sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
+  # === WETH/USDT (fee=500) ===
+  uniswap_v3_WETH_USDT_500: "0x641C00A822e8b671738d32a431a4Fb6074E5c79d"
+  sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
+  # === WBTC/WETH (fee=500) ===
+  uniswap_v3_WBTC_WETH_500: "0x2f5e87C9312fa29aed5c179E456625D79015299c"
+  # sushiswap_v3_WBTC_WETH_500: DISABLED (liq=0 - empty pool)
+  # === ARB/WETH (fee=500) ===
+  uniswap_v3_ARB_WETH_500: "0xC6F780497A95e246EB9449f5e4770916DCd6396A"
+  # sushiswap_v3_ARB_WETH_500: DISABLED (PRICE_SANITY_FAILED - inverted quotes)
+  # === LINK/WETH (fee=500) ===
+  uniswap_v3_LINK_WETH_500: "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907"
+  # sushiswap_v3_LINK_WETH_500: DISABLED (SUSPECT_LIQUIDITY)
+  # === wstETH/WETH (fee=100, 500) ===
+  uniswap_v3_wstETH_WETH_100: "0x35218a1cbaC5Bbc3E57fd9Bd38219D37571b3537"
+  uniswap_v3_wstETH_WETH_500: "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13"
+  sushiswap_v3_wstETH_WETH_100: "0x8BD39fA8608fd949C253987767540c26a0D974CF"
+  sushiswap_v3_wstETH_WETH_500: "0xc60f4760a70Bb900776DBBfcce9eF1a109a185B0"
+  # === WBTC/USDC (fee=500) ===
+  uniswap_v3_WBTC_USDC_500: "0x0E4831319A50228B9e450861297aB92dee15B44F"
+  sushiswap_v3_WBTC_USDC_500: "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"

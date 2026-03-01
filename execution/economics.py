@@ -5,6 +5,7 @@ ARBY M4 Economics Module.
 This module provides canonical calculations for arbitrage economics:
 - Minimum required spread calculation (LP fees + slippage + gas + safety margin)
 - Roundtrip profitability thresholds
+- Measured slippage from sqrtPriceX96 (QuoterV2)
 
 The economics module centralizes cost calculations to ensure consistent
 gating across the codebase and eliminate redundant calculations.
@@ -14,7 +15,95 @@ RESTORE CONTRACT:
 - Any changes to fee/cost formulas must update this module first
 - Tests in tests/unit/test_economics.py validate the contract
 """
-from typing import Optional
+from typing import Optional, Tuple
+
+
+def measured_slippage_bps(
+    sqrt_price_before: Optional[int],
+    sqrt_price_after: Optional[int],
+) -> Tuple[float, bool]:
+    """
+    Calculate measured slippage from sqrtPriceX96 before/after.
+    
+    This is used for early viability gating in spread signals -
+    when we have sqrt_price_after from QuoterV2, we can use the
+    actual measured slippage instead of the paper_slippage_bps estimate.
+    
+    sqrtPriceX96 = sqrt(price) * 2^96
+    price = (sqrtPriceX96 / 2^96)^2
+    
+    Slippage = abs(price_after - price_before) / price_before * 10000 bps
+    
+    Args:
+        sqrt_price_before: sqrtPriceX96 before swap (from slot0)
+        sqrt_price_after: sqrtPriceX96 after swap (from quoter)
+        
+    Returns:
+        Tuple of (slippage_bps, is_measured)
+        - slippage_bps: Absolute slippage in basis points (always positive)
+        - is_measured: True if calculated from real data, False if data missing
+        
+    Contract:
+        - Returns (0.0, False) if data is missing or invalid
+        - Returns absolute value (direction-agnostic for viability)
+        - Works for both buys and sells (abs value)
+    """
+    if sqrt_price_before is None or sqrt_price_after is None:
+        return 0.0, False
+    
+    if sqrt_price_before == 0:
+        return 0.0, False
+    
+    try:
+        # Convert to floats for calculation
+        Q96 = 2 ** 96
+        
+        price_before = (sqrt_price_before / Q96) ** 2
+        price_after = (sqrt_price_after / Q96) ** 2
+        
+        if price_before == 0:
+            return 0.0, False
+        
+        # Calculate absolute slippage in bps (direction-agnostic)
+        slippage_bps = abs(price_after - price_before) / price_before * 10000
+        
+        return round(slippage_bps, 2), True
+        
+    except Exception:
+        return 0.0, False
+
+
+def effective_slippage_bps(
+    paper_slippage_bps: float,
+    sqrt_price_before: Optional[int] = None,
+    sqrt_price_after: Optional[int] = None,
+) -> Tuple[float, str]:
+    """
+    Get effective slippage: max(paper, measured) when measured available.
+    
+    This is the canonical function for spread viability calculation.
+    Uses measured slippage when available, falls back to paper estimate.
+    
+    Args:
+        paper_slippage_bps: Config-based slippage estimate
+        sqrt_price_before: sqrtPriceX96 before swap (optional)
+        sqrt_price_after: sqrtPriceX96 after swap (optional)
+        
+    Returns:
+        Tuple of (effective_slippage_bps, source)
+        - effective_slippage_bps: max(paper, measured) or paper if no measurement
+        - source: "measured" | "paper" | "max(paper,measured)"
+    """
+    measured, is_valid = measured_slippage_bps(sqrt_price_before, sqrt_price_after)
+    
+    if not is_valid:
+        return paper_slippage_bps, "paper"
+    
+    if measured > paper_slippage_bps:
+        return measured, "max(paper,measured)"
+    
+    # Paper is higher - use paper but note we have measurement
+    return paper_slippage_bps, "paper"
 
 
 def min_required_spread_bps(

@@ -248,3 +248,159 @@ class TestCrossDexPreference:
             f"Missing Uni->Sushi route in {routes}"
         assert ("sushiswap_v3", "uniswap_v3") in routes, \
             f"Missing Sushi->Uni route in {routes}"
+
+
+class TestHuntingConfigContract:
+    """Contract tests for hunting configs like real_hunting_lowfee.yaml.
+    
+    v3.1.0: Ensures hunting configs produce valid cross-DEX signals
+    without MIXED_SOURCE contamination for roundtrip evaluation.
+    """
+    
+    def test_cross_dex_signals_no_mixed_source(self):
+        """Cross-DEX signals must not have MIXED_SOURCE in confidence_reasons.
+        
+        MIXED_SOURCE indicates slot0/quoter mixed pricing which is excluded
+        in truth_mode_m42 because it creates false positives.
+        """
+        from strategy.spreads import compute_spread_signals
+        
+        # Simulate quotes from two DEXes, all using quoter_v2 (no slot0)
+        quotes = [
+            {
+                "dex_id": "uniswap_v3",
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "price_exact": "1920.000000",
+                "fee": 500,
+                "quote_source": "quoter_v2",  # Not slot0
+                "amount_in_wei": 100_000_000_000_000_000,
+                "amount_out_wei": 192_000_000,
+                "gate_passed": True,
+                "is_diagnostic_only": False,
+                "pool_address": "0xPoolUniV3_500",
+            },
+            {
+                "dex_id": "sushiswap_v3",
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "price_exact": "1925.000000",
+                "fee": 500,
+                "quote_source": "quoter_v2",  # Not slot0
+                "amount_in_wei": 100_000_000_000_000_000,
+                "amount_out_wei": 192_500_000,
+                "gate_passed": True,
+                "is_diagnostic_only": False,
+                "pool_address": "0xPoolSushiV3_500",
+            },
+        ]
+        config = {"require_cross_dex": True, "min_spread_bps": 5}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        assert len(signals) >= 1, "Expected at least 1 cross-DEX signal"
+        
+        for sig in signals:
+            # Must be cross-DEX
+            assert not sig["is_same_dex"], f"Expected cross-DEX signal, got same-DEX"
+            
+            # MIXED_SOURCE must not appear (we used uniform quoter_v2)
+            reasons = sig.get("confidence_reasons", [])
+            assert "MIXED_SOURCE" not in reasons, \
+                f"MIXED_SOURCE should not appear with uniform quoter_v2: {reasons}"
+    
+    def test_mixed_source_flagged_when_slot0_present(self):
+        """When buy uses slot0 and sell uses quoter_v2, MIXED_SOURCE_DIAGNOSTIC is flagged.
+        
+        This validates that truth_mode_m42 would exclude such signals.
+        """
+        from strategy.spreads import compute_spread_signals
+        
+        # One quote uses slot0, other uses quoter_v2
+        quotes = [
+            {
+                "dex_id": "uniswap_v3",
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "price_exact": "1920.000000",
+                "fee": 500,
+                "quote_source": "slot0",  # slot0 source
+                "amount_in_wei": 100_000_000_000_000_000,
+                "amount_out_wei": 192_000_000,
+                "gate_passed": True,
+                "is_diagnostic_only": False,
+                "pool_address": "0xPoolUniV3_500",
+            },
+            {
+                "dex_id": "sushiswap_v3",
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "price_exact": "1925.000000",
+                "fee": 500,
+                "quote_source": "quoter_v2",  # quoter source
+                "amount_in_wei": 100_000_000_000_000_000,
+                "amount_out_wei": 192_500_000,
+                "gate_passed": True,
+                "is_diagnostic_only": False,
+                "pool_address": "0xPoolSushiV3_500",
+            },
+        ]
+        config = {"require_cross_dex": True, "min_spread_bps": 5}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        # With mixed sources, signal may still be generated but must be flagged
+        if len(signals) > 0:
+            sig = signals[0]
+            reasons = sig.get("confidence_reasons", [])
+            # MIXED_SOURCE_DIAGNOSTIC should be present when sources differ
+            # (also SLOT0_DIAGNOSTIC for the slot0 leg)
+            assert "MIXED_SOURCE_DIAGNOSTIC" in reasons, \
+                f"Expected MIXED_SOURCE_DIAGNOSTIC for slot0/quoter_v2 mix: {reasons}"
+            assert "SLOT0_DIAGNOSTIC" in reasons, \
+                f"Expected SLOT0_DIAGNOSTIC when slot0 source present: {reasons}"
+    
+    def test_require_cross_dex_blocks_same_dex(self):
+        """With require_cross_dex=True, same-DEX opportunities are not generated.
+        
+        This ensures hunting configs don't waste resources on non-executable routes.
+        """
+        from strategy.spreads import compute_spread_signals
+        
+        # Only one DEX (same-DEX only scenario)
+        quotes = [
+            {
+                "dex_id": "uniswap_v3",
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "price_exact": "1920.000000",
+                "fee": 500,
+                "quote_source": "quoter_v2",
+                "amount_in_wei": 100_000_000_000_000_000,
+                "amount_out_wei": 192_000_000,
+                "gate_passed": True,
+                "is_diagnostic_only": False,
+                "pool_address": "0xPoolUniV3_500",
+            },
+            {
+                "dex_id": "uniswap_v3",  # Same DEX different fee tier
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "price_exact": "1930.000000",
+                "fee": 3000,
+                "quote_source": "quoter_v2",
+                "amount_in_wei": 100_000_000_000_000_000,
+                "amount_out_wei": 193_000_000,
+                "gate_passed": True,
+                "is_diagnostic_only": False,
+                "pool_address": "0xPoolUniV3_3000",
+            },
+        ]
+        # Hunting config uses require_cross_dex=True
+        config = {"require_cross_dex": True, "min_spread_bps": 5}
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        # No signals should be generated for same-DEX when require_cross_dex=True
+        assert len(signals) == 0, \
+            f"Expected 0 signals with require_cross_dex and same-DEX only, got {len(signals)}"

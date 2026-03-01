@@ -18,6 +18,8 @@ from execution.economics import (
     min_required_spread_bps,
     spread_minus_required,
     fee_tier_to_bps,
+    effective_slippage_bps,
+    measured_slippage_bps,
 )
 from m4.policy import Thresholds
 
@@ -418,8 +420,31 @@ def _build_spread_signal(
     gas_usd_estimate = float(config.get("gas_usd_estimate", 0.10))
     gas_source = "config" if "gas_usd_estimate" in config else "default"
     
-    slippage_bps = Decimal(str(config.get("paper_slippage_bps", 0)))
-    slippage_source = "config" if "paper_slippage_bps" in config else "default"
+    paper_slippage_bps = Decimal(str(config.get("paper_slippage_bps", 0)))
+    paper_slippage_source = "config" if "paper_slippage_bps" in config else "default"
+    
+    # v3.1.0: Measure slippage from sqrtPriceAfter when available (QuoterV2)
+    # Use max(paper, measured) for more realistic viability gating
+    buy_sqrt_before = best_buy.get("sqrt_price_x96")
+    buy_sqrt_after = best_buy.get("sqrt_price_after")
+    sell_sqrt_before = best_sell.get("sqrt_price_x96")
+    sell_sqrt_after = best_sell.get("sqrt_price_after")
+    
+    buy_measured_slip, buy_has_measured = measured_slippage_bps(buy_sqrt_before, buy_sqrt_after)
+    sell_measured_slip, sell_has_measured = measured_slippage_bps(sell_sqrt_before, sell_sqrt_after)
+    
+    # Total measured slippage from both legs
+    total_measured_slippage_bps = buy_measured_slip + sell_measured_slip
+    has_any_measured = buy_has_measured or sell_has_measured
+    
+    # Effective slippage: max(paper, measured) when measured available
+    if has_any_measured and total_measured_slippage_bps > float(paper_slippage_bps):
+        slippage_bps = Decimal(str(total_measured_slippage_bps))
+        slippage_source = "measured"
+    else:
+        slippage_bps = paper_slippage_bps
+        slippage_source = paper_slippage_source
+    
     slippage_usd_estimate = float(paper_size_usd * slippage_bps / Decimal(10000))
     
     net_pnl_usdc_estimate = gross_pnl_usdc - gas_usd_estimate - slippage_usd_estimate
@@ -557,6 +582,11 @@ def _build_spread_signal(
         "slippage_bps": float(slippage_bps),
         "slippage_usd_estimate": round(slippage_usd_estimate, 4),
         "slippage_source": slippage_source,
+        # v3.1.0: Measured slippage from sqrtPriceAfter (QuoterV2)
+        "buy_measured_slippage_bps": round(buy_measured_slip, 2) if buy_has_measured else None,
+        "sell_measured_slippage_bps": round(sell_measured_slip, 2) if sell_has_measured else None,
+        "total_measured_slippage_bps": round(total_measured_slippage_bps, 2) if has_any_measured else None,
+        "has_measured_slippage": has_any_measured,
         "net_pnl_usdc_est": round(net_pnl_usdc_estimate, 4),
         "is_net_positive_est": net_pnl_usdc_estimate > 0,
         # v2.2.0: LP fee estimation for roundtrip-aware filtering

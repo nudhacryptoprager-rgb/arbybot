@@ -637,3 +637,98 @@ class TestRoundtripEvaluationStats:
         assert d["candidates_total"] == 5
         assert d["gated_by_economics"] == 2
         assert d["rejected_reasons"]["NOT_PROFITABLE"] == 2
+
+
+class TestClassifyRejectionReason:
+    """v3.1.0: Tests for detailed rejection classification."""
+    
+    def test_slippage_dominates(self):
+        """When slippage is largest cost, returns SLIPPAGE_TOO_HIGH."""
+        from engine.roundtrip import classify_rejection_reason
+        
+        reason = classify_rejection_reason(
+            gross_pnl_bps=50,
+            net_pnl_bps=-100,
+            estimated_slippage_bps=100,  # 100 bps slippage - dominates
+            lp_fee_bps=10,  # 10 bps LP fee
+            gas_bps=5,  # 5 bps gas
+        )
+        assert reason == "SLIPPAGE_TOO_HIGH"
+    
+    def test_lp_fees_dominate(self):
+        """When LP fees are largest cost, returns LP_FEES_TOO_HIGH."""
+        from engine.roundtrip import classify_rejection_reason
+        
+        reason = classify_rejection_reason(
+            gross_pnl_bps=30,
+            net_pnl_bps=-50,
+            estimated_slippage_bps=5,  # 5 bps slippage
+            lp_fee_bps=60,  # 60 bps LP fee (dominates)
+            gas_bps=5,  # 5 bps gas
+        )
+        assert reason == "LP_FEES_TOO_HIGH"
+    
+    def test_gas_dominates(self):
+        """When gas is largest cost, returns GAS_TOO_HIGH."""
+        from engine.roundtrip import classify_rejection_reason
+        
+        reason = classify_rejection_reason(
+            gross_pnl_bps=10,
+            net_pnl_bps=-20,
+            estimated_slippage_bps=2,  # 2 bps slippage
+            lp_fee_bps=5,  # 5 bps LP fee
+            gas_bps=30,  # 30 bps gas (dominates)
+        )
+        assert reason == "GAS_TOO_HIGH"
+    
+    def test_balanced_costs(self):
+        """When no cost dominates, returns NET_PROFIT_TOO_LOW."""
+        from engine.roundtrip import classify_rejection_reason
+        
+        reason = classify_rejection_reason(
+            gross_pnl_bps=30,
+            net_pnl_bps=-10,
+            estimated_slippage_bps=10,  # Similar costs
+            lp_fee_bps=15,
+            gas_bps=10,
+        )
+        assert reason == "NET_PROFIT_TOO_LOW"
+    
+    def test_zero_total_cost_returns_net_profit(self):
+        """Edge case: zero total cost."""
+        from engine.roundtrip import classify_rejection_reason
+        
+        reason = classify_rejection_reason(
+            gross_pnl_bps=-5,
+            net_pnl_bps=-5,
+            estimated_slippage_bps=0,
+            lp_fee_bps=0,
+            gas_bps=0,
+        )
+        assert reason == "NET_PROFIT_TOO_LOW"
+
+
+class TestRejectedReasonsInStats:
+    """v3.1.0: Tests that rejected_reasons contains detailed categories."""
+    
+    def test_rejected_reasons_uses_detailed_keys(self):
+        """Stats must aggregate detailed rejection reason keys."""
+        from engine.roundtrip import RoundtripEvaluationStats
+        
+        # With new classification, stats should have detailed keys
+        stats = RoundtripEvaluationStats(
+            candidates_total=4,
+            gated_by_economics=0,
+            evaluated_count=4,
+            results_count=4,
+            rejected_reasons={
+                "SLIPPAGE_TOO_HIGH": 2,
+                "LP_FEES_TOO_HIGH": 1,
+                "NET_PROFIT_TOO_LOW": 1,
+            },
+        )
+        
+        d = stats.to_dict()
+        assert "SLIPPAGE_TOO_HIGH" in d["rejected_reasons"]
+        assert "LP_FEES_TOO_HIGH" in d["rejected_reasons"]
+        assert d["rejected_reasons"]["SLIPPAGE_TOO_HIGH"] == 2

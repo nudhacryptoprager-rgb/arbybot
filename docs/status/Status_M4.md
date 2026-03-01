@@ -6,9 +6,23 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **M4.2 ROUNDTRIP VISIBILITY DEPLOYED**: `RoundtripEvaluationStats` dataclass added. `rejected_reasons: {"NOT_PROFITABLE": 4}` now shows WHY candidates fail. All 4 candidates unprofitable due to real slippage (82-283 bps). Awaiting market conditions.
+> [!] **M4.2 MEASURED SLIPPAGE DEPLOYED**: `measured_slippage_bps()` from sqrtPriceAfter, `classify_rejection_reason()` categorizes failures. `rejected_reasons: {"SLIPPAGE_TOO_HIGH": 3}` shows dominant cost factor. All candidates unprofitable due to measured slippage (102-412 bps from quoter sqrtPriceAfter). Awaiting market conditions.
 
-## M4.2 Roundtrip Visibility Changes (2026-03-01)
+## M4.2 Measured Slippage + Rejection Classification (2026-03-01)
+
+| Step | Change | File | Description |
+|------|--------|------|-------------|
+| 1 | **measured_slippage_bps()** | `execution/economics.py` | Calculates slippage from sqrtPriceX96 (before/after) |
+| 2 | **effective_slippage_bps()** | `execution/economics.py` | Returns max(paper, measured) with source tracking |
+| 3 | **Spread uses measured** | `strategy/spreads.py` | New fields: buy/sell/total_measured_slippage_bps, has_measured_slippage |
+| 4 | **classify_rejection_reason()** | `engine/roundtrip.py` | Categories: SLIPPAGE_TOO_HIGH, LP_FEES_TOO_HIGH, GAS_TOO_HIGH, NET_PROFIT_TOO_LOW |
+| 5 | **Detailed reject_reason** | `engine/roundtrip.py` | Format: `{CATEGORY}: net_pnl_bps={X}\|slippage={Y}\|lp_fee={Z}\|gas={W}` |
+| 6 | **real_hunting_lowfee.yaml** | `config/real_hunting_lowfee.yaml` | Pool registry for low-fee hunting (100/500 bps) |
+| 7 | **TestMeasuredSlippageBps** | `tests/unit/test_economics.py` | 5 tests for measured slippage calculation |
+| 8 | **TestClassifyRejectionReason** | `tests/unit/test_roundtrip.py` | 5 tests for rejection classification |
+| 9 | **TestHuntingConfigContract** | `tests/unit/test_same_dex_policy.py` | 3 tests for hunting config validation |
+
+## M4.2 Roundtrip Visibility Changes (2026-03-01 earlier)
 
 | Step | Change | File | Description |
 |------|--------|------|-------------|
@@ -52,9 +66,19 @@
 - Breakdown: `same_dex_excluded_count=2`, `non_same_dex_excluded_count=0`
 - Це НЕ quality issue - очікувана поведінка з `require_cross_dex: true`
 
-**Snapshot (2026-03-01)**: From `ci_m5_gate_20260301_121636` (roundtrip visibility): **runs_in_window=16** (M4.1 maintained), **agg_status=PASS**, **drift_status=PASS** (sign_mismatch=0, sign_rate=1.0), **data_run_rate=1.0**. signals_included=4, signals_excluded=0. **ROUNDTRIP VISIBILITY DEPLOYED**: `RoundtripEvaluationStats` added, `rejected_reasons: {"NOT_PROFITABLE": 4}` visible, economics fields verified in spread_signals. **Tests**: 1165 passed.
+**Snapshot (2026-03-01)**: From `ci_m5_gate_20260301_131018` (measured slippage + rejection classification): **runs_in_window=48** (M4.1 maintained), **agg_status=PASS**, **drift_status=PASS**. signals_included=3, signals_excluded=0. **MEASURED SLIPPAGE DEPLOYED**: `measured_slippage_bps()` from sqrtPriceAfter, `rejected_reasons: {"SLIPPAGE_TOO_HIGH": 3}` shows dominant cost category, `has_measured_slippage=true` in all spread signals. **Tests**: 1183 passed.
 
-### Roundtrip Aggregation (2026-03-01)
+### Measured Slippage + Rejection Classification (2026-03-01)
+- **NEW**: `measured_slippage_bps()` in `execution/economics.py` - calculates from sqrtPriceX96 before/after
+- **NEW**: `effective_slippage_bps()` - returns max(paper, measured) with source tracking
+- **NEW**: `classify_rejection_reason()` in `engine/roundtrip.py` - categorizes by dominant cost
+- **CATEGORIES**: SLIPPAGE_TOO_HIGH (>40%), LP_FEES_TOO_HIGH (>50%), GAS_TOO_HIGH (>30%), NET_PROFIT_TOO_LOW
+- **FORMAT**: `{CATEGORY}: net_pnl_bps={X}|slippage={Y}|lp_fee={Z}|gas={W}`
+- **SPREAD FIELDS**: `buy_measured_slippage_bps`, `sell_measured_slippage_bps`, `total_measured_slippage_bps`, `has_measured_slippage`
+- **EVIDENCE**: `rejected_reasons: {"SLIPPAGE_TOO_HIGH": 3}`, slippage_source="sqrtPriceAfter"
+- **CONTRACT TESTS**: 5 in `test_economics.py` (measured slippage), 5 in `test_roundtrip.py` (classification), 3 in `test_same_dex_policy.py` (hunting config)
+
+### Roundtrip Aggregation (2026-03-01 earlier)
 - **NEW**: `RoundtripEvaluationStats` dataclass in `engine/roundtrip.py`
 - **FIELDS**: `candidates_total`, `gated_by_economics`, `evaluated_count`, `results_count`, `rejected_reasons`
 - **WIRED**: `stats["roundtrip"]` in truth_report includes new fields
@@ -71,7 +95,7 @@
 - **Conclusion**: Drift stabilized. Roundtrip visibility deployed.
 
 > **NOTE: DIVERSITY thresholds adjusted**: DIVERSITY_PAIRS_TARGET reduced to 6 to match current quoter_v2 coverage. PENDLE/WETH and RDNT/WETH **DISABLED** (quoter_v2 returning 0, use slot0 fallback for DIAGNOSTIC only).  
-> **Restore Contract**: Run `scripts/verify_v3_pools.py --require-cross-dex` before adding new pairs. Restore to 8 when direction-aware price_sanity bug fixed OR >=8 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
+> **Restore Contract**: Run `py -3.11 -m scripts.verify_v3_pools --require-cross-dex` before adding new pairs. Restore to 8 when direction-aware price_sanity bug fixed OR >=8 pairs have quoter_v2 on BOTH DEXes. See `m4/policy.py` for detailed conditions.
 
 **Evidence (ci_m5_gate_20260224_141638 - M4.1 CAPSTONE)**:
 - M4-specific: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`
@@ -496,7 +520,7 @@ Location: `data/runs/_rolling/`
 > 1. **Sanity-check cost model**: перевірити чому `net_usdc` однаковий у всіх 11 runs (~123 USDC)
 > 2. **Reject breakdown analysis**: перегляд `reject_histogram` для прихованих edge cases
 > 3. **Fragile/MAE distribution**: переконатися що MAE=0.5 реальний, а не артефакт фікстур
-> 4. **Pool verification**: запустити `python scripts/verify_v3_pools.py` для всіх production pairs
+> 4. **Pool verification**: запустити `py -3.11 -m scripts.verify_v3_pools` для всіх production pairs
 > 5. **Gas estimation validation**: порівняти `estimated_gas` vs `actual_gas` з Tenderly trace
 >
 > Цей чек-ліст прив'язаний до Roadmap: M4 -> Execution v1 -> "Pre-trade simulation gate"

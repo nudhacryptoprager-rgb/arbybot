@@ -6,10 +6,11 @@ that pool addresses exist for given token pairs before adding them to config.
 
 v2.3.0: Tokens resolved from config/core_tokens.yaml (no hardcoding).
 
-Usage:
-    python scripts/verify_v3_pools.py                    # Verify default pairs
-    python scripts/verify_v3_pools.py --pairs LINK/USDC ARB/USDT GMX/USDC UNI/WETH
-    python scripts/verify_v3_pools.py --output pools.json
+Usage (from repo root):
+    py -3.11 -m scripts.verify_v3_pools                  # Verify default pairs
+    py -3.11 -m scripts.verify_v3_pools --pairs LINK/USDC ARB/USDT
+    py -3.11 -m scripts.verify_v3_pools --output pools.json
+    py -3.11 -m scripts.verify_v3_pools --require-cross-dex
 """
 from __future__ import annotations
 

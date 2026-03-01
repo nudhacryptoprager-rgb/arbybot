@@ -1,10 +1,10 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-02-28  
-**Tests**: 1123 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260228_200026`  
-**Code commit**: `488c9c6` (fixes: fragile logic + reject schema)  
+**Updated**: 2026-03-01  
+**Tests**: 1183 passed, 1 skipped  
+**Evidence runDir**: `ci_m5_gate_20260301_131018`  
+**Code commit**: measured slippage + rejection classification  
 **discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
 
 ---
@@ -72,7 +72,7 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --fa
 
 # Unit tests
 py -3.11 -m pytest tests/unit -q
-# EXPECT: 1040 passed, 1 skipped
+# EXPECT: 1183 passed, 1 skipped
 ```
 
 ---

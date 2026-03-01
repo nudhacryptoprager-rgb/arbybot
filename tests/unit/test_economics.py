@@ -466,3 +466,192 @@ class TestRoundtripGatingContract:
         # v3.0.0: Stats should show all 2 gated by economics
         assert stats.gated_by_economics == 2
         assert stats.evaluated_count == 0
+
+
+class TestMeasuredSlippageBps:
+    """Tests for measured_slippage_bps function from sqrtPriceX96."""
+    
+    def test_no_data_returns_zero_and_false(self):
+        """Missing data returns (0.0, False)."""
+        from execution.economics import measured_slippage_bps
+        
+        result, is_valid = measured_slippage_bps(None, None)
+        assert result == 0.0
+        assert is_valid is False
+        
+        result, is_valid = measured_slippage_bps(12345, None)
+        assert result == 0.0
+        assert is_valid is False
+        
+        result, is_valid = measured_slippage_bps(None, 12345)
+        assert result == 0.0
+        assert is_valid is False
+    
+    def test_zero_before_returns_false(self):
+        """Zero before price returns (0.0, False)."""
+        from execution.economics import measured_slippage_bps
+        
+        result, is_valid = measured_slippage_bps(0, 12345)
+        assert result == 0.0
+        assert is_valid is False
+    
+    def test_calculates_slippage_correctly(self):
+        """Calculate slippage from sqrt prices (1% move = 100 bps)."""
+        from execution.economics import measured_slippage_bps
+        
+        # sqrtPriceX96 = sqrt(price) * 2^96
+        # If price moves from 1.0 to 1.01, sqrt moves from 1.0 to ~1.00499
+        # price_after/price_before = 1.01 -> slippage = 1% = 100 bps
+        Q96 = 2 ** 96
+        
+        # price_before = 1.0, sqrt = 1.0 * 2^96
+        sqrt_before = Q96
+        
+        # price_after = 1.01, sqrt = sqrt(1.01) * 2^96
+        import math
+        sqrt_after = int(math.sqrt(1.01) * Q96)
+        
+        slippage, is_valid = measured_slippage_bps(sqrt_before, sqrt_after)
+        
+        assert is_valid is True
+        # Should be approximately 100 bps (1%)
+        assert 99 < slippage < 101
+    
+    def test_large_slippage_detection(self):
+        """Detect large slippage (>100 bps)."""
+        from execution.economics import measured_slippage_bps
+        import math
+        
+        Q96 = 2 ** 96
+        sqrt_before = Q96  # price = 1.0
+        
+        # 5% slippage: price_after = 1.05
+        sqrt_after = int(math.sqrt(1.05) * Q96)
+        
+        slippage, is_valid = measured_slippage_bps(sqrt_before, sqrt_after)
+        
+        assert is_valid is True
+        # Should be approximately 500 bps (5%)
+        assert 495 < slippage < 505
+    
+    def test_returns_absolute_value(self):
+        """Always returns absolute slippage (direction-agnostic)."""
+        from execution.economics import measured_slippage_bps
+        import math
+        
+        Q96 = 2 ** 96
+        
+        # Price down scenario: before = 1.0, after = 0.99
+        sqrt_before = Q96
+        sqrt_after = int(math.sqrt(0.99) * Q96)
+        
+        slippage, is_valid = measured_slippage_bps(sqrt_before, sqrt_after)
+        
+        assert is_valid is True
+        # Should be approximately 100 bps (abs of -1%)
+        assert slippage > 0
+        assert 99 < slippage < 101
+
+
+class TestEffectiveSlippageBps:
+    """Tests for effective_slippage_bps function."""
+    
+    def test_no_measurement_returns_paper(self):
+        """Without measurement, returns paper slippage."""
+        from execution.economics import effective_slippage_bps
+        
+        eff, source = effective_slippage_bps(5.0, None, None)
+        assert eff == 5.0
+        assert source == "paper"
+    
+    def test_measured_higher_uses_measured(self):
+        """When measured > paper, uses measured."""
+        from execution.economics import effective_slippage_bps
+        import math
+        
+        Q96 = 2 ** 96
+        sqrt_before = Q96
+        sqrt_after = int(math.sqrt(1.03) * Q96)  # 3% slippage = 300 bps
+        
+        eff, source = effective_slippage_bps(5.0, sqrt_before, sqrt_after)
+        
+        # 300 bps > 5 bps, should use measured
+        assert eff > 200  # approximately 300
+        assert source == "max(paper,measured)"
+    
+    def test_paper_higher_uses_paper(self):
+        """When paper > measured, returns paper."""
+        from execution.economics import effective_slippage_bps
+        import math
+        
+        Q96 = 2 ** 96
+        sqrt_before = Q96
+        sqrt_after = int(math.sqrt(1.0001) * Q96)  # 0.01% = 1 bps
+        
+        eff, source = effective_slippage_bps(50.0, sqrt_before, sqrt_after)
+        
+        # 50 bps > 1 bps, should use paper
+        assert eff == 50.0
+        assert source == "paper"
+
+
+class TestSpreadViabilityWithMeasuredSlippage:
+    """Tests that high measured slippage makes is_roundtrip_viable=false."""
+    
+    def test_high_measured_slippage_makes_not_viable(self):
+        """High measured slippage (>spread) should make is_roundtrip_viable=False."""
+        from strategy.spreads import compute_spread_signals
+        import math
+        
+        Q96 = 2 ** 96
+        sqrt_before = Q96
+        # 5% slippage (500 bps) - huge
+        sqrt_after = int(math.sqrt(1.05) * Q96)
+        
+        # Create quotes with 30 bps gross spread but 500 bps measured slippage
+        quotes = [
+            {
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "price": 2000.0,
+                "price_exact": "2000.0",
+                "dex_id": "uniswap_v3",
+                "pool_address": "0x111",
+                "fee": 500,
+                "quote_source": "quoter_v2",
+                "sqrt_price_x96": sqrt_before,
+                "sqrt_price_after": sqrt_after,  # 5% slippage
+            },
+            {
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "price": 2006.0,  # ~30 bps higher
+                "price_exact": "2006.0",
+                "dex_id": "sushiswap_v3",
+                "pool_address": "0x222",
+                "fee": 500,
+                "quote_source": "quoter_v2",
+                "sqrt_price_x96": sqrt_before,
+                "sqrt_price_after": sqrt_after,  # 5% slippage
+            },
+        ]
+        
+        config = {
+            "min_spread_bps": 0,
+            "paper_size_usd": 250,
+            "gas_usd_estimate": 0.10,
+            "paper_slippage_bps": 5,  # Paper says 5 bps, but measured is 500!
+        }
+        
+        signals = compute_spread_signals(quotes, config, 1000, [])
+        
+        # Should have signals but they should NOT be viable due to high slippage
+        assert len(signals) > 0
+        for sig in signals:
+            # With 500 bps slippage on each leg, total ~1000 bps slippage
+            # This should dwarf the 30 bps gross spread
+            assert sig["has_measured_slippage"] is True
+            assert sig["total_measured_slippage_bps"] > 400  # Significant
+            assert sig["slippage_source"] == "measured"
+            # The viability should be FALSE due to high slippage
+            assert sig["is_roundtrip_viable"] is False
