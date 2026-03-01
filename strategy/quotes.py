@@ -20,6 +20,9 @@ from strategy.compat import QuoteCompat
 from strategy.quarantine import get_quarantine_manager
 from strategy.dynamic_anchors import get_anchor_manager
 
+# v2.0.4: Import canonical pool_key builder
+from core.pool_keys import make_pool_key
+
 logger = logging.getLogger("strategy.quotes")
 
 # =============================================================================
@@ -692,7 +695,8 @@ def collect_quotes(
                     else:
                         # v2.3.0: Silent skip (not reject) for unconfigured pools
                         counts["pool_missing"] += 1
-                        pool_key = f"{dex}_{token_pair_tag}_{fee_tier}"
+                        # v2.0.4: Use canonical pool_key builder
+                        pool_key = make_pool_key(dex, token_pair_tag, fee_tier)
                         pool_missing_keys.append(pool_key)
                         logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config (key=%s)", 
                                     dex, token_in, token_out, fee_tier, pool_key)

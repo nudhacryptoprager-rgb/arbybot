@@ -21,15 +21,9 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    import yaml
-except ImportError:
-    print("ERROR: PyYAML not installed. Run: pip install pyyaml")
-    import sys
-    sys.exit(1)
-
 # v2.0.4: Import from canonical sources (no hardcoding)
 from discovery.index_factories import V3_FACTORY_ABI, V3_FEE_TIERS, get_factory_address, FACTORY_ADDRESSES
+from config import get_all_token_addresses
 
 # RPC
 rpc = os.environ.get('ARBY_RPC_HTTP_PRIMARY', 'https://arb1.arbitrum.io/rpc')
@@ -38,31 +32,8 @@ w3 = Web3(Web3.HTTPProvider(rpc))
 # v2.0.4: Load factory address from canonical source
 FACTORY = get_factory_address("arbitrum_one", "sushiswap_v3")
 
-
-def load_tokens_from_core_yaml(chain: str = "arbitrum_one") -> dict:
-    """
-    Load tokens from config/core_tokens.yaml.
-    
-    RESTORE CONTRACT: This is the canonical source for token addresses.
-    """
-    config_path = Path(__file__).parent.parent / "config" / "core_tokens.yaml"
-    if not config_path.exists():
-        print(f"WARNING: core_tokens.yaml not found at {config_path}, using fallback")
-        return {}
-    
-    with open(config_path) as f:
-        data = yaml.safe_load(f)
-    
-    chain_tokens = data.get(chain, {})
-    result = {}
-    for symbol, token_info in chain_tokens.items():
-        if isinstance(token_info, dict) and "address" in token_info:
-            result[symbol] = token_info["address"]
-    return result
-
-
-# v2.0.4: Load tokens from canonical config
-TOKENS = load_tokens_from_core_yaml()
+# v2.0.4: Load tokens from canonical config helper
+TOKENS = get_all_token_addresses("arbitrum_one")
 
 # v2.0.4: Use canonical ABI
 ABI = V3_FACTORY_ABI

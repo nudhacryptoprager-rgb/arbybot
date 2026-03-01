@@ -4,36 +4,45 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T12:00:00Z
-run_id: data/runs/ci_m5_gate_20260301_120000
-mode: OFFLINE (refactoring validation)
+timestamp_utc: 2026-03-01T10:32:37Z
+run_id: data/runs/ci_m5_gate_20260301_113221
+mode: ONLINE (deduplication validation)
 artifact_mode: rolling
 config: config/real_minimal.yaml
 code_identity:
-  primary: ts:2026-03-01T12:00:00+00:00
+  primary: ts:2026-03-01T10:32:37+00:00
   dirty: false
-  desc: v2.0.4 deduplication refactor (SHA, timestamp, fee_tiers, pool_key)
+  desc: v2.0.5 deduplication complete (pool_key, token_yaml, economics fields verified)
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4 maintenance - remove duplicate implementations to reduce logic drift
+goal (Roadmap пункт): M4 maintenance - complete deduplication, verify economics fields in artifacts
 change_summary:
   - DEDUP: SHA-free provenance - m4/evidence.py is single source of truth
   - DEDUP: core/time.py:get_run_timestamp() - canonical timestamp format (Z suffix)
   - DEDUP: discovery/index_factories.V3_FEE_TIERS - single list for all modules
   - DEDUP: discovery/index_factories.V3_FACTORY_ABI - single ABI definition
-  - NEW: core/pool_keys.py - canonical make_pool_key() and make_pair_tag()
-  - REFACTOR: scripts/find_sushi_pools.py - loads tokens from core_tokens.yaml
-  - REFACTOR: scripts/verify_v3_pools.py - imports from discovery/index_factories
+  - DEDUP: core/pool_keys.py - canonical make_pool_key() and make_pair_tag()
+  - DEDUP: config/__init__.py - added get_all_token_addresses() canonical helper
+  - REFACTOR: strategy/quotes.py - uses make_pool_key() from core.pool_keys
+  - REFACTOR: strategy/artifacts.py - uses make_pool_key() from core.pool_keys
+  - REFACTOR: scripts/find_sushi_pools.py - uses get_all_token_addresses()
+  - REFACTOR: scripts/verify_v3_pools.py - uses get_all_token_addresses(), get_factory_address()
+  - REFACTOR: tests/unit/test_config_pool_coverage.py - uses make_pool_key(), make_pair_tag()
+  - VERIFIED: economics fields (min_required_spread_bps, spread_minus_required_bps, is_roundtrip_viable) present in truth_report.spread_signals
   - TESTS: All 1160 tests pass
 touched_files:
   - core/time.py (added get_run_timestamp)
   - core/pool_keys.py (NEW - canonical pool_key helpers)
+  - config/__init__.py (added get_all_token_addresses)
+  - strategy/quotes.py (uses make_pool_key)
+  - strategy/artifacts.py (uses make_pool_key)
+  - tests/unit/test_config_pool_coverage.py (uses make_pool_key, make_pair_tag)
+  - scripts/find_sushi_pools.py (uses get_all_token_addresses, removed yaml import)
+  - scripts/verify_v3_pools.py (uses get_all_token_addresses, get_factory_address)
   - m4/evidence.py (imports from core/time.py)
   - m4/gates.py (imports from m4/evidence)
   - m4/fixtures.py (uses get_run_timestamp)
   - scripts/ci_m4_execution_gate.py (imports from m4/evidence)
-  - scripts/verify_v3_pools.py (imports from discovery/index_factories)
-  - scripts/find_sushi_pools.py (loads tokens from config, canonical imports)
   - discovery/runtime.py (imports V3_FEE_TIERS)
   - discovery/index_factories.py (V3_FACTORY_ABI at module level)
   - config/pairs.py (uses make_pool_key)
@@ -42,9 +51,10 @@ touched_files:
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: PASS (1160 passed, 13.27s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (12.9s)
-py -3.11 scripts/inspect_rolling.py: agg_status=PASS, runs_in_window=14, total_net_usdc=$95.11
+py -3.11 -m pytest tests/unit -q: PASS (1160 passed, 13.40s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (14.9s)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: PASS
+py -3.11 scripts/inspect_rolling.py: agg_status=PASS, runs_in_window=15, total_net_usdc=$102.64
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -52,16 +62,16 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260228_223528/reports
+  - data/runs/ci_m5_gate_20260301_113221/reports
 quality_achievement:
-  - agg_status: PASS (was WARN_QUALITY)
-  - fragile_rate_p90: 0.0 (was 0.3333, goal <=0.30)
+  - agg_status: PASS
+  - fragile_rate_p90: 0.0
   - signals_excluded_count: 0
   - data_run_rate: 1.0
   - pass_rate: 1.0
-  - unique_pairs: 4 (reduced due to min_spread_bps=10 filtering)
-  - unique_routes: 1 (market condition - one direction profitable)
-  - total_net_usdc: $95.11 (14 runs in window after reset)
+  - unique_pairs: 4
+  - unique_routes: 1
+  - total_net_usdc: ≈$102.64 (15 runs in window)
 
 ## 4) Key Results (числа з артефактів)
 
@@ -71,17 +81,17 @@ _latest.json:
   agg_status: PASS
   agg_reasons: []
   quality_warnings: []
-  runs_in_window: 14
+  runs_in_window: 15
   in_warmup: false
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_context.run_timestamp: 2026-02-28T21:35:45+00:00
+  run_context.run_timestamp: 2026-03-01T10:32:37+00:00
   inputs.run_mode: REGISTRY_REAL
   metrics:
-    signals_count: 4
-    included_signals_count: 4
+    signals_count: 5
+    included_signals_count: 5
     excluded_signals_count: 0
     fragile_count: 0
     fragile_rate: 0.0
@@ -90,13 +100,20 @@ m4_stability_agg.json:
   policy_version: 2.0.8
   quick_stats:
     agg_status: PASS
-    fragile_rate_p90: 0.0 (DONE: was 0.3333, goal <=0.30)
+    fragile_rate_p90: 0.0
     fragile_rate_p50: 0.0
     data_run_rate: 1.0
     unique_pairs: 4
     unique_routes: 1
     pass_rate: 1.0
-    total_net_usdc: 95.11
+    total_net_usdc: ≈102.64
+
+ECONOMICS FIELDS VERIFIED:
+  - Location: truth_report.spread_signals[*]
+  - min_required_spread_bps: present (e.g., 16.0, 41.0)
+  - spread_minus_required_bps: present (e.g., 38.08, -27.79)
+  - is_roundtrip_viable: present (true/false)
+  - Example artifact: data/runs/ci_m5_gate_20260301_113221/reports/truth_report_20260301_113234.json
 
 FRAGILE FIX EVIDENCE:
   - BEFORE: min_spread_bps=5 allowed signals with 6-9 bps spreads

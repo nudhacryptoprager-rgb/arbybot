@@ -13,6 +13,9 @@ import os
 import pytest
 import yaml
 
+# v2.0.4: Import canonical pool_key builder
+from core.pool_keys import make_pool_key, make_pair_tag
+
 
 class TestConfigPoolCoverage:
     """Validate that config has complete pool coverage."""
@@ -40,11 +43,12 @@ class TestConfigPoolCoverage:
             token_in = pair_cfg.get("token_in")
             token_out = pair_cfg.get("token_out")
             fee_tiers = pair_cfg.get("fee_tiers", [500, 3000])
-            pair_tag = f"{token_in}_{token_out}"
+            pair_tag = make_pair_tag(token_in, token_out)
             
             for dex in dexes:
                 for fee_tier in fee_tiers:
-                    pool_key = f"{dex}_{pair_tag}_{fee_tier}"
+                    # v2.0.4: Use canonical pool_key builder
+                    pool_key = make_pool_key(dex, pair_tag, fee_tier)
                     
                     in_pools = pool_key in pools
                     in_disabled = pool_key in disabled_pools
@@ -90,12 +94,13 @@ class TestConfigPoolCoverage:
             token_in = pair_cfg.get("token_in")
             token_out = pair_cfg.get("token_out")
             fee_tiers = pair_cfg.get("fee_tiers", [500, 3000])
-            pair_tag = f"{token_in}_{token_out}"
+            pair_tag = make_pair_tag(token_in, token_out)
             
             for dex in dexes:
                 for fee_tier in fee_tiers:
                     total_expected += 1
-                    pool_key = f"{dex}_{pair_tag}_{fee_tier}"
+                    # v2.0.4: Use canonical pool_key builder
+                    pool_key = make_pool_key(dex, pair_tag, fee_tier)
                     if pool_key in pools or pool_key in disabled_pools:
                         covered += 1
         

@@ -17,6 +17,9 @@ from typing import Any, Dict, List
 from core.constants import SCHEMA_VERSION, CURRENT_EXECUTION_BLOCKER
 from strategy.quarantine import get_quarantine_manager
 
+# v2.0.4: Import canonical pool_key builder
+from core.pool_keys import make_pool_key
+
 logger = logging.getLogger("strategy.artifacts")
 
 
@@ -309,7 +312,8 @@ def build_reject_data(
         pair = r.get("pair", "unknown")
         fee = r.get("fee", 0)
         pool_addr = r.get("pool_address", "")
-        pool_key = f"{dex_id}_{pair.replace('/', '_')}_{fee}"
+        # v2.0.4: Use canonical pool_key builder
+        pool_key = make_pool_key(dex_id, pair, fee)
         
         if reason not in reason_rejects_by_key:
             reason_rejects_by_key[reason] = {}

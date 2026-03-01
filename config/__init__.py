@@ -103,3 +103,24 @@ def get_token_address(chain_key: str, symbol: str) -> Optional[str]:
     if symbol not in tokens[chain_key]:
         return None
     return tokens[chain_key][symbol].get("address")
+
+
+def get_all_token_addresses(chain_key: str) -> Dict[str, str]:
+    """
+    Get all token addresses for a chain as {symbol: address} dict.
+    
+    v2.0.4: CANONICAL helper - use this instead of duplicating YAML load logic.
+    
+    Args:
+        chain_key: Chain identifier (e.g., 'arbitrum_one')
+        
+    Returns:
+        Dict mapping symbol -> address (only tokens with address field)
+    """
+    tokens = load_core_tokens()
+    chain_tokens = tokens.get(chain_key, {})
+    result = {}
+    for symbol, token_info in chain_tokens.items():
+        if isinstance(token_info, dict) and "address" in token_info:
+            result[symbol] = token_info["address"]
+    return result

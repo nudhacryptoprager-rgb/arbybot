@@ -21,8 +21,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-# v2.0.4: Import canonical timestamp helper
+# v2.0.4: Import canonical helpers
 from core.time import get_run_timestamp
+from config import get_all_token_addresses
+from discovery.index_factories import get_factory_address
 
 try:
     from web3 import Web3
@@ -30,49 +32,17 @@ except ImportError:
     print("ERROR: web3 not installed. Run: pip install web3")
     sys.exit(1)
 
-try:
-    import yaml
-except ImportError:
-    print("ERROR: PyYAML not installed. Run: pip install pyyaml")
-    sys.exit(1)
-
 # RPC
 RPC_URL = os.environ.get('ARBY_RPC_HTTP_PRIMARY', 'https://arb1.arbitrum.io/rpc')
 
-# Factory addresses on Arbitrum
+# Factory addresses on Arbitrum (v2.0.4: use canonical source)
 FACTORIES = {
-    "uniswap_v3": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
-    "sushiswap_v3": "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e",
+    "uniswap_v3": get_factory_address("arbitrum_one", "uniswap_v3"),
+    "sushiswap_v3": get_factory_address("arbitrum_one", "sushiswap_v3"),
 }
 
-
-def load_tokens_from_core_yaml(chain: str = "arbitrum_one") -> Dict[str, str]:
-    """
-    Load token addresses from config/core_tokens.yaml.
-    
-    v2.3.0: Tokens are no longer hardcoded - resolved from canonical config.
-    
-    Returns:
-        Dict mapping symbol -> checksummed address
-    """
-    config_path = Path(__file__).parent.parent / "config" / "core_tokens.yaml"
-    if not config_path.exists():
-        print(f"WARNING: core_tokens.yaml not found at {config_path}, using fallback")
-        return {}
-    
-    with open(config_path) as f:
-        data = yaml.safe_load(f)
-    
-    chain_tokens = data.get(chain, {})
-    result = {}
-    for symbol, token_info in chain_tokens.items():
-        if isinstance(token_info, dict) and "address" in token_info:
-            result[symbol] = token_info["address"]
-    return result
-
-
-# Load tokens from config (v2.3.0 - no hardcoding)
-TOKENS = load_tokens_from_core_yaml()
+# Load tokens from config (v2.3.0 - canonical helper)
+TOKENS = get_all_token_addresses("arbitrum_one")
 
 # Default pairs to verify (expansion targets)
 DEFAULT_PAIRS = [
