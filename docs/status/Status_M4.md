@@ -1,12 +1,29 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
-**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
+**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate WARN)  
 **Updated**: 2026-03-01  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **DRIFT FIX DEPLOYED (2026-03-01)**: `slippage_bps` тепер ЗАВЖДИ paper (drift consistency). `effective_slippage_bps` для viability gating. **mae_net_usdc=0.0**, **est_sign_correct_rate=100%**, **agg_status=PASS**.
+> [!] **POOL COVERAGE FIX (2026-03-01)**: `pool_missing_count=0` achieved. Added `tokens_usd_price` section, 6 SushiSwap pool addresses. 3 Sushi pools quarantined (persistent quote failures). `unique_pairs=4`.
+
+## Pool Coverage Fix (2026-03-01)
+
+| Step | Change | File | Description |
+|------|--------|------|-------------|
+| 1 | **tokens_usd_price** | `config/real_hunting_lowfee.yaml` | Market prices for notional sizing (ARB: 0.10, WBTC: 66000) |
+| 2 | **6 Sushi pool addresses** | `config/real_hunting_lowfee.yaml` | WETH/USDC:100, ARB/WETH:500, LINK/WETH:500, WBTC/WETH:500, ARB/USDC:500 |
+| 3 | **disabled_pools** | `config/real_hunting_lowfee.yaml` | sushiswap_v3_WBTC_WETH_500 (liq=0) |
+| 4 | **tokens_anchor_price** | `config/real_hunting_lowfee.yaml` | ARB_USDC: 0.10, ARB_WETH: 0.00005 |
+| 5 | **target_usd_notional=100** | `config/real_hunting_lowfee.yaml` | Match paper_size_usd for sizing consistency |
+| 6 | **TestHuntingConfigPoolCoverage** | `tests/unit/test_config_pool_coverage.py` | 3 tests for hunting config validation |
+
+**Problem**: `pool_missing_count=4` blocked cross-DEX quotes for several pairs. SushiSwap pool addresses not in config registry.
+
+**Fix**: Added all verified SushiSwap pool addresses. Added `tokens_usd_price` to fix NOTIONAL_DRIFT (was 85% for ARB).
+
+**Result**: `pool_missing_count=0`, `unique_pairs=4`. 3 Sushi pools quarantined due to persistent quote failures.
 
 ## Drift Fix (2026-03-01)
 

@@ -69,6 +69,10 @@ pairs:
   - token_in: USDC
     token_out: USDT
     fee_tiers: [100]
+  # === ARB/USDC (fee=500) - cross-DEX for diversity ===
+  - token_in: ARB
+    token_out: USDC
+    fee_tiers: [500]
 
 # ========== LOW-FEE POOL PRIORITY ==========
 # fee_tiers to query (100 = 0.01%, 500 = 0.05%)
@@ -84,8 +88,8 @@ gas_usd_estimate: 0.10  # Arbitrum gas is cheap
 paper_slippage_bps: 5   # Conservative slippage
 
 # Trade sizing: target USD notional per trade (affects slippage)
-# Testing showed slippage impact: 1000→-15bps, 500→-10bps, 350→-6.5bps
-target_usd_notional: 400  # Balance: maintains 3 candidates, minimizes slippage
+# MUST match paper_size_usd for consistent slippage measurement
+target_usd_notional: 100  # Equal to paper_size_usd (sizing consistency)
 use_usd_notional: true
 
 # Spread threshold: lowered to 10 bps to see more opportunities
@@ -137,12 +141,25 @@ quote_decimals:
   wstETH: 18
   USDE: 18
 
+# ========== TOKEN USD PRICES (for notional sizing) ==========
+# These override DEFAULT_TOKEN_USD_PRICES in quotes.py
+# Used to calculate amount_in_wei for target_usd_notional
+tokens_usd_price:
+  WETH: 2000       # Market ~$2000 (ANCHOR_DRIFT: dynamic may differ)
+  WBTC: 66000      # Market ~$66000 (was 34000 default)
+  ARB: 0.10        # Market ~$0.10 (was 0.70 default - caused 85% NOTIONAL_DRIFT)
+  LINK: 8.8        # Market ~$8.80 (was 11.0 default)
+  wstETH: 2300     # ~$2300
+  USDC: 1.0
+  USDT: 1.0
+  DAI: 1.0
+
 tokens_anchor_price:
-  WETH_USDC: 2500
-  WETH_USDT: 2500
+  WETH_USDC: 2500  # Market price (ANCHOR_DRIFT fixed)
+  WETH_USDT: 2500  # Market price (ANCHOR_DRIFT fixed)
   WETH_DAI: 2500
-  ARB_USDC: 0.50
-  ARB_WETH: 0.0002
+  ARB_USDC: 0.10   # Market ~0.10 (was 0.50, caused PRICE_SANITY_FAILED)
+  ARB_WETH: 0.00005  # Market ~0.00005 (was 0.0002, caused PRICE_SANITY_FAILED)
   WBTC_WETH: 35
   WBTC_USDC: 68000
   LINK_WETH: 0.006
@@ -158,19 +175,20 @@ pools:
   # === WETH/USDC (fee=100, 500) ===
   uniswap_v3_WETH_USDC_100: "0x6f38e884725a116C9C7fBF208e79FE8828a2595F"
   uniswap_v3_WETH_USDC_500: "0xC6962004f452bE9203591991D15f6b388e09E8D0"
+  sushiswap_v3_WETH_USDC_100: "0xB658eE5c63922d2852f24458efFA2Bfa2cBA3574"  # Re-added (ACTIVE liq)
   sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
   # === WETH/USDT (fee=500) ===
   uniswap_v3_WETH_USDT_500: "0x641C00A822e8b671738d32a431a4Fb6074E5c79d"
   sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
   # === WBTC/WETH (fee=500) ===
   uniswap_v3_WBTC_WETH_500: "0x2f5e87C9312fa29aed5c179E456625D79015299c"
-  # sushiswap_v3_WBTC_WETH_500: DISABLED (liq=0 - empty pool)
+  sushiswap_v3_WBTC_WETH_500: "0xf79099596045A41bB2ae53fa6677576687242455"  # Exists but liq=0 (see disabled_pools)
   # === ARB/WETH (fee=500) ===
   uniswap_v3_ARB_WETH_500: "0xC6F780497A95e246EB9449f5e4770916DCd6396A"
-  # sushiswap_v3_ARB_WETH_500: DISABLED (PRICE_SANITY_FAILED - inverted quotes)
+  sushiswap_v3_ARB_WETH_500: "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11"  # Re-enabled (ACTIVE liq)
   # === LINK/WETH (fee=500) ===
   uniswap_v3_LINK_WETH_500: "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907"
-  # sushiswap_v3_LINK_WETH_500: DISABLED (SUSPECT_LIQUIDITY)
+  sushiswap_v3_LINK_WETH_500: "0x942E53ED315Db6451AdCd601D4D08f059F88C77f"  # Re-enabled (ACTIVE liq)
   # === wstETH/WETH (fee=100, 500) ===
   uniswap_v3_wstETH_WETH_100: "0x35218a1cbaC5Bbc3E57fd9Bd38219D37571b3537"
   uniswap_v3_wstETH_WETH_500: "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13"
@@ -182,5 +200,15 @@ pools:
   # === USDC/USDT (fee=100) - cross-DEX verified ===
   uniswap_v3_USDC_USDT_100: "0xbE3aD6a5669Dc0B8b12FeBC03608860C31E2eef6"
   sushiswap_v3_USDC_USDT_100: "0xD1E1Ac29B31B35646EaBD77163E212b76fE3b6A2"
-  # === Non-viable pairs REMOVED (no SushiSwap liquidity):
-  # WETH/DAI, DAI/USDC, USDE/USDC - Sushi pools have <$1 liquidity
+  # === ARB/USDC (fee=500) - cross-DEX for diversity ===
+  uniswap_v3_ARB_USDC_500: "0xb0f6cA40411360c03d41C5fFc5F179b8403CdcF8"
+  sushiswap_v3_ARB_USDC_500: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
+
+# ========== DISABLED POOLS (explicit) ==========
+# Pools that exist but are disabled for specific reasons
+# Having them here prevents POOL_MISSING errors while explaining why they're not used
+disabled_pools:
+  sushiswap_v3_WBTC_WETH_500: "LIQUIDITY_ZERO (verified liq=0)"
+
+  # Non-viable pairs (Sushi pools have <$1 liquidity):
+  # WETH/DAI, DAI/USDC, USDE/USDC

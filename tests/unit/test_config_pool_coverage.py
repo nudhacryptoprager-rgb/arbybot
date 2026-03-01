@@ -109,3 +109,93 @@ class TestConfigPoolCoverage:
             f"Pool coverage is {coverage_rate:.1%}, expected 100%."
             f" {total_expected - covered} keys missing."
         )
+
+class TestHuntingConfigPoolCoverage:
+    """Validate that hunting configs have complete pool coverage."""
+    
+    @pytest.fixture
+    def real_hunting_lowfee_config(self):
+        """Load real_hunting_lowfee.yaml for testing."""
+        config_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "config", "real_hunting_lowfee.yaml"
+        )
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)
+    
+    def test_lowfee_all_pool_keys_covered(self, real_hunting_lowfee_config):
+        """Every pool_key from pairs×dexes×fee_tiers must be in pools or disabled_pools."""
+        config = real_hunting_lowfee_config
+        dexes = config.get("dexes", [])
+        pairs = config.get("pairs", [])
+        pools = config.get("pools", {})
+        disabled_pools = config.get("disabled_pools", {})
+        
+        missing_keys = []
+        
+        for pair_cfg in pairs:
+            token_in = pair_cfg.get("token_in")
+            token_out = pair_cfg.get("token_out")
+            fee_tiers = pair_cfg.get("fee_tiers", [100, 500])  # Low-fee default
+            pair_tag = make_pair_tag(token_in, token_out)
+            
+            for dex in dexes:
+                for fee_tier in fee_tiers:
+                    pool_key = make_pool_key(dex, pair_tag, fee_tier)
+                    
+                    in_pools = pool_key in pools
+                    in_disabled = pool_key in disabled_pools
+                    
+                    if not in_pools and not in_disabled:
+                        missing_keys.append(pool_key)
+        
+        if missing_keys:
+            missing_keys.sort()
+            msg = (
+                f"Found {len(missing_keys)} pool_keys not covered by pools or disabled_pools:\n"
+                + "\n".join(f"  - {k}" for k in missing_keys[:20])
+            )
+            if len(missing_keys) > 20:
+                msg += f"\n  ... and {len(missing_keys) - 20} more"
+            pytest.fail(msg)
+    
+    def test_lowfee_sizing_consistency(self, real_hunting_lowfee_config):
+        """target_usd_notional must equal paper_size_usd for consistent slippage."""
+        config = real_hunting_lowfee_config
+        paper_size = config.get("paper_size_usd", 100)
+        target_notional = config.get("target_usd_notional", 1000)
+        
+        assert paper_size == target_notional, (
+            f"Sizing inconsistency: paper_size_usd={paper_size} != "
+            f"target_usd_notional={target_notional}. "
+            "This causes slippage to be measured at wrong notional."
+        )
+    
+    def test_lowfee_pool_missing_count_zero_contract(self, real_hunting_lowfee_config):
+        """With complete coverage, pool_missing_count should be 0 at runtime."""
+        config = real_hunting_lowfee_config
+        dexes = config.get("dexes", [])
+        pairs = config.get("pairs", [])
+        pools = config.get("pools", {})
+        disabled_pools = config.get("disabled_pools", {})
+        
+        total_expected = 0
+        covered = 0
+        
+        for pair_cfg in pairs:
+            token_in = pair_cfg.get("token_in")
+            token_out = pair_cfg.get("token_out")
+            fee_tiers = pair_cfg.get("fee_tiers", [100, 500])
+            pair_tag = make_pair_tag(token_in, token_out)
+            
+            for dex in dexes:
+                for fee_tier in fee_tiers:
+                    total_expected += 1
+                    pool_key = make_pool_key(dex, pair_tag, fee_tier)
+                    if pool_key in pools or pool_key in disabled_pools:
+                        covered += 1
+        
+        coverage_rate = covered / total_expected if total_expected > 0 else 0
+        assert coverage_rate == 1.0, (
+            f"Pool coverage is {coverage_rate:.1%}, expected 100%."
+            f" {total_expected - covered} keys missing."
+        )

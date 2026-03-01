@@ -4,37 +4,38 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T14:07:15Z
-run_id: data/runs/ci_m5_gate_20260301_150700
-mode: ONLINE (M4.2 surface expansion - lowfee hunting)
+timestamp_utc: 2026-03-01T15:04:41Z
+run_id: data/runs/ci_m5_gate_20260301_160426
+mode: ONLINE (M4.2 pool coverage fix - pool_missing_count=0)
 artifact_mode: rolling
 config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-01T14:07:15+00:00
+  primary: ts:2026-03-01T15:04:41+00:00
   dirty: false
-  desc: v3.1.2 surface expansion - target_usd_notional optimization
+  desc: v3.1.3 pool coverage fix - added tokens_usd_price, sushi pools
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Expand hunting surface to increase roundtrip candidates
+goal (Roadmap пункт): Fix POOL_MISSING errors and expand hunting surface
 change_summary:
-  - NEW: config/real_hunting_lowfee.yaml - target_usd_notional=400 (slippage optimization)
-  - TESTED: WETH/DAI, DAI/USDC, USDE/USDC - SushiSwap pools <$100 TVL (NOT VIABLE)
-  - TESTED: USDC/USDT fee=100 - spread 0.23 bps (below threshold, NOT VIABLE)
-  - RESULT: unique_pairs=3 (WETH/USDC, WETH/USDT, wstETH/WETH)
-  - RESULT: best roundtrip PnL = -7.16 bps (improved from -15 bps with 1000 USD notional)
-  - STATUS: drift_status=PASS, quality_status=FAIL_QUALITY (fragile_rate=0.67)
-  - TESTS: All 1183 tests pass
+  - NEW: tokens_usd_price section in config (ARB: 0.10, WBTC: 66000)
+  - FIX: Added 6 missing SushiSwap pool addresses
+  - FIX: target_usd_notional=100 (match paper_size_usd for sizing consistency)
+  - FIX: tokens_anchor_price updated (ARB_USDC: 0.10, ARB_WETH: 0.00005)
+  - RESULT: pool_missing_count=0 (was 4)
+  - RESULT: unique_pairs=4 (WETH/USDT, ARB/WETH, WBTC/USDC, WBTC/WETH)
+  - BLOCKER: 3 SushiSwap pools quarantined (persistent quote failures)
+  - STATUS: agg_status=FAIL (data_run_rate=0.28<0.30), pool coverage PASS
+  - TESTS: All 6 pool_coverage tests pass
 touched_files:
-  - config/real_hunting_lowfee.yaml (target_usd_notional=400, removed non-viable pairs)
-  - config/core_tokens.yaml (RETH alias)
+  - config/real_hunting_lowfee.yaml (tokens_usd_price, sushi pools, anchors)
+  - tests/unit/test_config_pool_coverage.py (TestHuntingConfigPoolCoverage)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 scripts/check_repo_safety.py: PASS
-py -3.11 -m pytest tests/unit -q: PASS (1183 passed)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (all gates)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: PASS (11 runs)
+py -3.11 -m pytest tests/unit/test_config_pool_coverage.py -v: PASS (6 tests)
+py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10: PASS (pool_missing_count=0)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -42,15 +43,16 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260301_150700/reports
+  - data/runs/ci_m5_gate_20260301_160426/reports
 quality_achievement:
-  - agg_status: WARN_QUALITY
-  - runs_in_window: 20
-  - unique_pairs: 3 (WETH/USDC, WETH/USDT, wstETH/WETH)
-  - unique_routes: 2 (sushiswap_v3->uniswap_v3, uniswap_v3->sushiswap_v3)
-  - drift_status: PASS
-  - quality_status: FAIL_QUALITY (fragile_rate=0.67>0.5, TOP_PAIR_DOMINANCE_HIGH)
-  - roundtrip_best_pnl_bps: -7.16 (all rejected: SLIPPAGE_TOO_HIGH)
+  - agg_status: FAIL (data_run_rate=0.28<0.30)
+  - runs_in_window: 57
+  - unique_pairs: 4 (WETH/USDT, ARB/WETH, WBTC/USDC, WBTC/WETH)
+  - unique_routes: 2 (sushiswap_v3->uniswap_v3)
+  - pool_missing_count: 0 (FIXED from 4)
+  - pool_disabled_count: 1 (sushiswap_v3_WBTC_WETH_500 liq=0)
+  - quarantined_count: 3 (sushi pools with quote failures)
+  - total_net_usdc: $88.62 (across 16 data runs)
 
 ## 4) Key Results (числа з артефактів)
 

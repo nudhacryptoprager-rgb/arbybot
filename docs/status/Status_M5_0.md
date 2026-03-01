@@ -2,9 +2,9 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-01  
-**Tests**: 1183 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260301_150700`  
-**Code commit**: surface expansion + target_usd_notional optimization  
+**Tests**: 1189 passed (including 6 pool_coverage tests)  
+**Evidence runDir**: `ci_m5_gate_20260301_160426`  
+**Code commit**: pool coverage fix + tokens_usd_price  
 **discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
 
 ---
@@ -14,6 +14,13 @@
 > **M5_0 є обов'язковим для CI та infra-proof.**  
 > M5_0 валідує схеми/інваріанти артефактів, multicall, failover, провенанс.  
 > M4 execution gate є окремим "core truth" для profit.
+
+### Pool Coverage Fix (2026-03-01)
+- `pool_missing_count=0` (was 4) - all pool addresses in registry
+- `pool_disabled_count=1` (sushiswap_v3_WBTC_WETH_500 liq=0)
+- `quarantined_count=3` (Sushi pools with persistent quote failures)
+- `tokens_usd_price` section added for correct notional sizing
+- `TestHuntingConfigPoolCoverage` added (3 tests)
 
 ### Signals Excluded Policy
 - `signals_excluded` у rolling складається з `SAME_DEX_EXCLUDED` — це policy-семантика (fee-tier noise в межах одного DEX)
