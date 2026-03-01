@@ -52,13 +52,13 @@ pairs:
     fee_tiers: [500]
   - token_in: WBTC
     token_out: WETH
-    fee_tiers: [500]
+    fee_tiers: [500, 3000]  # 3000 fallback (sushi 500 has liq=0)
   - token_in: ARB
     token_out: WETH
     fee_tiers: [500]
   - token_in: LINK
     token_out: WETH
-    fee_tiers: [500]
+    fee_tiers: [500, 3000]  # 3000 fallback for cross-DEX stability
   - token_in: wstETH
     token_out: WETH
     fee_tiers: [100, 500]
@@ -69,10 +69,10 @@ pairs:
   - token_in: USDC
     token_out: USDT
     fee_tiers: [100]
-  # === ARB/USDC (fee=500) - cross-DEX for diversity ===
+  # === ARB/USDC (fee=500,3000) - cross-DEX for diversity ===
   - token_in: ARB
     token_out: USDC
-    fee_tiers: [500]
+    fee_tiers: [500, 3000]  # 3000 fallback for cross-DEX stability
 
 # ========== LOW-FEE POOL PRIORITY ==========
 # fee_tiers to query (100 = 0.01%, 500 = 0.05%)
@@ -203,12 +203,24 @@ pools:
   # === ARB/USDC (fee=500) - cross-DEX for diversity ===
   uniswap_v3_ARB_USDC_500: "0xb0f6cA40411360c03d41C5fFc5F179b8403CdcF8"
   sushiswap_v3_ARB_USDC_500: "0xfa1cC0caE7779B214B1112322A2d1Cf0B511C3bC"
+  # === 3000-TIER FALLBACK POOLS (verified via verify_v3_pools) ===
+  uniswap_v3_WBTC_WETH_3000: "0x149e36E72726e0BceA5c59d40df2c43F60f5A22D"
+  sushiswap_v3_WBTC_WETH_3000: "0x6F10667F314498649eb2f80da244e8c6E9f031d5"
+  uniswap_v3_LINK_WETH_3000: "0x468b88941e7Cc0B88c1869d68ab6b570bCEF62Ff"
+  sushiswap_v3_LINK_WETH_3000: "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65"
+  uniswap_v3_ARB_USDC_3000: "0xaEBDcA1Bc8d89177EbE2308d62af5e74885DcCc3"
+  sushiswap_v3_ARB_USDC_3000: "0x14716A16ef9eeAaDa7E266bcF023b71D2c9ADbf3"
 
 # ========== DISABLED POOLS (explicit) ==========
 # Pools that exist but are disabled for specific reasons
 # Having them here prevents POOL_MISSING errors while explaining why they're not used
+# NOTE: Runtime auto-disable extends this via data/cache/runtime_disabled_pools.json
 disabled_pools:
+  # LIQUIDITY_ZERO (verified liq=0)
   sushiswap_v3_WBTC_WETH_500: "LIQUIDITY_ZERO (verified liq=0)"
-
-  # Non-viable pairs (Sushi pools have <$1 liquidity):
-  # WETH/DAI, DAI/USDC, USDE/USDC
+  sushiswap_v3_WBTC_WETH_100: "LIQUIDITY_ZERO (verified liq=0)"
+  sushiswap_v3_ARB_USDC_100: "LIQUIDITY_ZERO (verified liq=0)"
+  # SUSPECT_LIQUIDITY / PRICE_SANITY_FAILED (auto-disable seed)
+  sushiswap_v3_WETH_USDC_100: "SUSPECT_LIQUIDITY (auto-disable seed)"
+  sushiswap_v3_LINK_WETH_500: "SUSPECT_LIQUIDITY (auto-disable seed)"
+  sushiswap_v3_ARB_USDC_500: "PRICE_SANITY_FAILED (auto-disable seed)"

@@ -300,6 +300,12 @@ def run_scan(
     # v2.3.0: Sizing params for audit trail
     stats["use_usd_notional"] = config.get("use_usd_notional", False)
     stats["target_usd_notional"] = config.get("target_usd_notional", None)
+    # v3.2.0: Enhanced observability - config transparency
+    stats["min_spread_bps"] = config.get("min_spread_bps", config.get("spread_threshold_bps", 0))
+    stats["paper_size_usd"] = config.get("paper_size_usd", None)
+    stats["default_fee_tiers"] = config.get("default_fee_tiers", [])
+    stats["runtime_disabled_count"] = counts.get("runtime_disabled", 0)
+    stats["liquidity_zero_count"] = counts.get("liquidity_zero", 0)
     
     # v2.3.1: Quote block skew for snapshot consistency validation
     # Measures how many blocks elapsed during quote collection

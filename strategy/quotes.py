@@ -19,6 +19,11 @@ from config.pairs import load_pairs, get_pool_address, is_pool_disabled, PairCon
 from strategy.compat import QuoteCompat
 from strategy.quarantine import get_quarantine_manager
 from strategy.dynamic_anchors import get_anchor_manager
+from strategy.runtime_disabled import (
+    is_runtime_disabled,
+    auto_disable_pool,
+    record_quote_success,
+)
 
 # v2.0.4: Import canonical pool_key builder
 from core.pool_keys import make_pool_key
@@ -545,6 +550,8 @@ def collect_quotes(
         "quotes_fetched": 0,
         "pool_missing": 0,
         "pool_disabled": 0,
+        "runtime_disabled": 0,  # v3.2.0: Runtime auto-disabled pools
+        "liquidity_zero": 0,    # v3.2.0: Zero liquidity pools (auto-disabled)
         "quarantined": 0,
         "v3_slot0_failed": 0,
         "price_calc_failed": 0,
@@ -680,6 +687,9 @@ def collect_quotes(
                     effective_fee_tiers = fee_tiers
                 
                 for fee_tier in effective_fee_tiers:
+                    # v2.0.4: Use canonical pool_key builder for all checks
+                    pool_key = make_pool_key(dex, token_pair_tag, fee_tier)
+                    
                     # v2.6.1 FIX: Check disabled_pools BEFORE pool lookup
                     # If pool is explicitly disabled, count as POOL_DISABLED not POOL_MISSING
                     disabled_info = is_pool_disabled(config, dex, token_pair_tag, fee_tier)
@@ -689,19 +699,25 @@ def collect_quotes(
                                    dex, token_in, token_out, fee_tier, disabled_info.get('reason', 'DISABLED'))
                         continue
                     
+                    # v3.2.0: Check runtime-disabled pools (auto-disabled)
+                    runtime_info = is_runtime_disabled(pool_key)
+                    if runtime_info and not runtime_info.get("expired", False):
+                        counts["runtime_disabled"] += 1
+                        logger.debug("RUNTIME_DISABLED: %s reason=%s remaining=%ds",
+                                   pool_key, runtime_info.get('reason'), runtime_info.get('remaining_seconds', 0))
+                        continue
+                    
                     pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)
                     if pool_addr:
-                        pool_work_items.append((dex, fee_tier, pool_addr, dex_cfg, adapter_type))
+                        pool_work_items.append((dex, fee_tier, pool_addr, dex_cfg, adapter_type, pool_key))
                     else:
                         # v2.3.0: Silent skip (not reject) for unconfigured pools
                         counts["pool_missing"] += 1
-                        # v2.0.4: Use canonical pool_key builder
-                        pool_key = make_pool_key(dex, token_pair_tag, fee_tier)
                         pool_missing_keys.append(pool_key)
                         logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config (key=%s)", 
                                     dex, token_in, token_out, fee_tier, pool_key)
         
-        for dex, fee_tier, pool_addr, dex_cfg, adapter_type in pool_work_items:
+        for dex, fee_tier, pool_addr, dex_cfg, adapter_type, pool_key in pool_work_items:
             # v2.1.0-fix: Check disabled_pools FIRST (before pool lookup)
             disabled_info = is_pool_disabled(config, dex, token_pair_tag, fee_tier)
             if disabled_info:
@@ -734,6 +750,24 @@ def collect_quotes(
                 counts["quarantined"] += 1
                 logger.info("QUARANTINED: %s %s fee=%d (remaining: %.0fs)", 
                            dex, pair_tag, fee_tier, remaining)
+                continue
+            
+            # v3.2.0: Check prefetched liquidity for LIQUIDITY_ZERO auto-disable
+            cached_liq = get_cached_liquidity(pool_addr)
+            if cached_liq is not None and cached_liq == 0:
+                auto_disable_pool(pool_key, "LIQUIDITY_ZERO",
+                                 {"pool_address": pool_addr, "liquidity": 0})
+                rejected_quotes.append({
+                    "pair": f"{token_in}/{token_out}",
+                    "dex_id": dex,
+                    "fee": fee_tier,
+                    "pool_address": pool_addr,
+                    "reason": "LIQUIDITY_ZERO",
+                    "gate_passed": False,
+                    "error": "Pool has zero liquidity (prefetch check)",
+                })
+                counts["liquidity_zero"] = counts.get("liquidity_zero", 0) + 1
+                logger.info("LIQUIDITY_ZERO: %s (auto-disabled)", pool_key)
                 continue
             
             # TODO(M4.2): Replace slot0 with QuoterV2 for executable quotes
@@ -830,6 +864,9 @@ def collect_quotes(
                     # v2.4.0: Record failure for auto-quarantine
                     qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "SUSPECT_LIQUIDITY",
                                      details={"pool_address": pool_addr, "error": suspect_liquidity_reason})
+                    # v3.2.0: Record failure for runtime auto-disable
+                    auto_disable_pool(pool_key, "SUSPECT_LIQUIDITY", 
+                                     {"pool_address": pool_addr, "error": suspect_liquidity_reason})
                     continue  # Skip this quote
                 
                 # v2.1.0: PRICE_SANITY gate (per-quote)
@@ -879,6 +916,9 @@ def collect_quotes(
                         qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "PRICE_SANITY_FAILED",
                                          details={"pool_address": pool_addr, "deviation_bps": sanity_dev_bps,
                                                   "anchor_price": str(anchor_price), "price_exact": str(price_exact)})
+                        # v3.2.0: Record failure for runtime auto-disable
+                        auto_disable_pool(pool_key, "PRICE_SANITY_FAILED",
+                                         {"pool_address": pool_addr, "deviation_bps": sanity_dev_bps})
                         # v2.1.0: Log at INFO level for visibility of price sanity failures
                         logger.info(
                             "PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s ratio=%.4f",
@@ -938,6 +978,8 @@ def collect_quotes(
                 counts["quotes_fetched"] += 1
                 # Record success to reset quarantine failure counter
                 qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
+                # v3.2.0: Record success to potentially re-enable runtime-disabled pool
+                record_quote_success(pool_key)
                 # v2.2.0: Record valid quote for dynamic anchor calculation
                 if price_exact is not None and float(price_exact) > 0:
                     am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)

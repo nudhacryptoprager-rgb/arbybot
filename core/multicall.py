@@ -224,9 +224,12 @@ class MulticallBatcher:
         output = {}
         for i, addr in enumerate(pool_addresses):
             success, data = results[i]
-            if success and len(data) >= 16:
+            if success and len(data) >= 32:
                 try:
-                    liquidity = int.from_bytes(data[0:16], "big")
+                    # liquidity() returns uint128, ABI-encoded as 32 bytes (left-padded)
+                    # The actual value is in bytes [0:32] as big-endian, but due to
+                    # left-padding for uint128, we read the full 32 bytes
+                    liquidity = int.from_bytes(data[0:32], "big")
                     output[addr] = liquidity
                     self.call_success["liquidity"] += 1  # v2.3.0
                 except Exception:

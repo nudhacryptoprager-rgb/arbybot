@@ -4,38 +4,46 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T15:04:41Z
-run_id: data/runs/ci_m5_gate_20260301_160426
-mode: ONLINE (M4.2 pool coverage fix - pool_missing_count=0)
+timestamp_utc: 2026-03-01T15:54:19Z
+run_id: data/runs/ci_m5_gate_20260301_165404
+mode: ONLINE (M4.2 runtime auto-disable - quarantined_count<=1)
 artifact_mode: rolling
 config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-01T15:04:41+00:00
+  primary: ts:2026-03-01T15:54:19+00:00
   dirty: false
-  desc: v3.1.3 pool coverage fix - added tokens_usd_price, sushi pools
+  desc: v3.2.0 runtime auto-disable mechanism
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Fix POOL_MISSING errors and expand hunting surface
+goal (Roadmap пункт): Automatic pool health management without manual YAML changes
 change_summary:
-  - NEW: tokens_usd_price section in config (ARB: 0.10, WBTC: 66000)
-  - FIX: Added 6 missing SushiSwap pool addresses
-  - FIX: target_usd_notional=100 (match paper_size_usd for sizing consistency)
-  - FIX: tokens_anchor_price updated (ARB_USDC: 0.10, ARB_WETH: 0.00005)
-  - RESULT: pool_missing_count=0 (was 4)
-  - RESULT: unique_pairs=4 (WETH/USDT, ARB/WETH, WBTC/USDC, WBTC/WETH)
-  - BLOCKER: 3 SushiSwap pools quarantined (persistent quote failures)
-  - STATUS: agg_status=FAIL (data_run_rate=0.28<0.30), pool coverage PASS
-  - TESTS: All 6 pool_coverage tests pass
+  - NEW: strategy/runtime_disabled.py - runtime auto-disable mechanism
+  - NEW: RuntimeDisabledManager with JSON persistence (data/cache/runtime_disabled_pools.json)
+  - NEW: Auto-disable for LIQUIDITY_ZERO (immediate), SUSPECT_LIQUIDITY/PRICE_SANITY_FAILED (threshold=3)
+  - NEW: TTL-based re-enable (1 hour default)
+  - NEW: LIQUIDITY_ZERO detection via multicall prefetch
+  - NEW: tests/unit/test_runtime_disabled.py (21 tests)
+  - FIX: core/multicall.py liquidity decoding (32 bytes, not 16)
+  - FIX: Added 3000-tier fallback pools for WBTC/WETH, LINK/WETH, ARB/USDC
+  - NEW: Observability in scan.stats (min_spread_bps, paper_size_usd, runtime_disabled_count, liquidity_zero_count)
+  - RESULT: pool_missing_count=0, quarantined_count=1, runtime_disabled_count=1
+  - RESULT: data_run_rate=0.41, signals_included=2
+  - RESULT: 1 pool auto-disabled (sushiswap_v3_wstETH_WETH_500 LIQUIDITY_ZERO)
+  - TESTS: 1207 passed, 1 skipped
 touched_files:
-  - config/real_hunting_lowfee.yaml (tokens_usd_price, sushi pools, anchors)
-  - tests/unit/test_config_pool_coverage.py (TestHuntingConfigPoolCoverage)
+  - strategy/runtime_disabled.py (NEW - 407 lines)
+  - strategy/quotes.py (runtime disabled integration)
+  - core/multicall.py (liquidity decoding fix)
+  - config/real_hunting_lowfee.yaml (3000-tier fallback, disabled_pools)
+  - strategy/jobs/run_scan_real.py (observability stats)
+  - tests/unit/test_runtime_disabled.py (NEW - 21 tests)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS
-py -3.11 -m pytest tests/unit/test_config_pool_coverage.py -v: PASS (6 tests)
-py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10: PASS (pool_missing_count=0)
+py -3.11 -m pytest tests/unit -q: 1207 passed, 1 skipped
+py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10 --max-runs 12: 11/12 PASS
+py -3.11 scripts/inspect_rolling.py --excluded: data_run_rate=0.41, signals_included=2
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -43,16 +51,18 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260301_160426/reports
+  - data/runs/ci_m5_gate_20260301_165404/reports
+runtime_disabled_cache:
+  - data/cache/runtime_disabled_pools.json (1 entry: sushiswap_v3_wstETH_WETH_500)
 quality_achievement:
-  - agg_status: FAIL (data_run_rate=0.28<0.30)
-  - runs_in_window: 57
-  - unique_pairs: 4 (WETH/USDT, ARB/WETH, WBTC/USDC, WBTC/WETH)
-  - unique_routes: 2 (sushiswap_v3->uniswap_v3)
-  - pool_missing_count: 0 (FIXED from 4)
-  - pool_disabled_count: 1 (sushiswap_v3_WBTC_WETH_500 liq=0)
-  - quarantined_count: 3 (sushi pools with quote failures)
-  - total_net_usdc: $88.62 (across 16 data runs)
+  - agg_status: WARN_QUALITY (data_run_rate=0.41<0.50)
+  - runs_in_window: 71
+  - unique_pairs: 9 (WETH/USDC, WETH/USDT, ARB/WETH, LINK/WETH, wstETH/WETH, WBTC/WETH, WBTC/USDC, USDC/USDT, ARB/USDC)
+  - pool_missing_count: 0
+  - quarantined_count: 1
+  - runtime_disabled_count: 1
+  - liquidity_zero_count: 0
+  - total_net_usdc: $93.63
 
 ## 4) Key Results (числа з артефактів)
 
