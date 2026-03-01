@@ -81,7 +81,7 @@
 - Breakdown: `same_dex_excluded_count=2`, `non_same_dex_excluded_count=0`
 - Це НЕ quality issue - очікувана поведінка з `require_cross_dex: true`
 
-**Snapshot (2026-03-01)**: From `ci_m5_gate_20260301_140110` (drift fix): **runs_in_window=11** (fresh window after fix), **agg_status=PASS**, **drift_status=PASS**, **mae_net_usdc=0.0**, **est_sign_correct_rate=1.0**. signals_included=4, signals_excluded=0. **DRIFT FIX DEPLOYED**: slippage_bps always paper for net_pnl_usdc_est (drift consistency), effective_slippage_bps for viability gating. **Tests**: 1183 passed.
+**Snapshot (2026-03-01)**: From `ci_m5_gate_20260301_150700` (surface expansion): **runs_in_window=20**, **agg_status=WARN_QUALITY**, **drift_status=PASS**, **quality_status=FAIL_QUALITY** (fragile_rate=0.67>0.5, TOP_PAIR_DOMINANCE_HIGH). unique_pairs=3 (WETH/USDC, WETH/USDT, wstETH/WETH). **SURFACE EXPANSION TESTED**: WETH/DAI, DAI/USDC, USDE/USDC pools have <$100 TVL on SushiSwap (NOT VIABLE). USDC/USDT spread=0.23bps (below threshold). **Trade size optimization**: target_usd_notional 1000→400 improved best roundtrip from -15 to -7 bps (still SLIPPAGE_TOO_HIGH). **Tests**: 1183 passed.
 
 ### Measured Slippage + Rejection Classification (2026-03-01)
 - **NEW**: `measured_slippage_bps()` in `execution/economics.py` - calculates from sqrtPriceX96 before/after

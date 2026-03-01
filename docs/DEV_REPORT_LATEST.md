@@ -4,30 +4,29 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T13:01:27Z
-run_id: data/runs/ci_m5_gate_20260301_140110
-mode: ONLINE (M4.2 drift fix - paper slippage for net_pnl_usdc_est)
+timestamp_utc: 2026-03-01T14:07:15Z
+run_id: data/runs/ci_m5_gate_20260301_150700
+mode: ONLINE (M4.2 surface expansion - lowfee hunting)
 artifact_mode: rolling
-config: config/real_minimal.yaml
+config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-01T13:01:27+00:00
+  primary: ts:2026-03-01T14:07:15+00:00
   dirty: false
-  desc: v3.1.1 drift fix - slippage_bps always paper
+  desc: v3.1.2 surface expansion - target_usd_notional optimization
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Fix drift consistency between truth signals and M4 simulation
+goal (Roadmap пункт): Expand hunting surface to increase roundtrip candidates
 change_summary:
-  - FIX: slippage_bps now ALWAYS uses paper_slippage_bps (drift consistency with M4 sim)
-  - NEW: effective_slippage_bps - max(paper, measured) for viability gating ONLY
-  - NEW: effective_slippage_source - "paper" or "measured" for effective slippage
-  - UNCHANGED: net_pnl_usdc_est uses paper slippage to match M4 sim_slippage_bps
-  - VERIFIED: mae_net_usdc=0.0, est_sign_correct_rate=1.0 for all runs
-  - VERIFIED: drift_status=PASS, agg_status=PASS
-  - TESTS: Updated test_economics.py for effective_slippage_source assertion
+  - NEW: config/real_hunting_lowfee.yaml - target_usd_notional=400 (slippage optimization)
+  - TESTED: WETH/DAI, DAI/USDC, USDE/USDC - SushiSwap pools <$100 TVL (NOT VIABLE)
+  - TESTED: USDC/USDT fee=100 - spread 0.23 bps (below threshold, NOT VIABLE)
+  - RESULT: unique_pairs=3 (WETH/USDC, WETH/USDT, wstETH/WETH)
+  - RESULT: best roundtrip PnL = -7.16 bps (improved from -15 bps with 1000 USD notional)
+  - STATUS: drift_status=PASS, quality_status=FAIL_QUALITY (fragile_rate=0.67)
   - TESTS: All 1183 tests pass
 touched_files:
-  - strategy/spreads.py (slippage_bps always paper, effective_slippage_bps for viability)
-  - tests/unit/test_economics.py (updated TestSpreadViabilityWithMeasuredSlippage)
+  - config/real_hunting_lowfee.yaml (target_usd_notional=400, removed non-viable pairs)
+  - config/core_tokens.yaml (RETH alias)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
@@ -43,15 +42,15 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260301_140110/reports
+  - data/runs/ci_m5_gate_20260301_150700/reports
 quality_achievement:
-  - agg_status: PASS
-  - runs_in_window: 11
-  - unique_pairs: 5 (WETH/USDC, WETH/USDT, WBTC/WETH, ARB/WETH, WBTC/USDC)
+  - agg_status: WARN_QUALITY
+  - runs_in_window: 20
+  - unique_pairs: 3 (WETH/USDC, WETH/USDT, wstETH/WETH)
   - unique_routes: 2 (sushiswap_v3->uniswap_v3, uniswap_v3->sushiswap_v3)
   - drift_status: PASS
-  - mae_net_usdc: 0.0
-  - est_sign_correct_rate: 1.0
+  - quality_status: FAIL_QUALITY (fragile_rate=0.67>0.5, TOP_PAIR_DOMINANCE_HIGH)
+  - roundtrip_best_pnl_bps: -7.16 (all rejected: SLIPPAGE_TOO_HIGH)
 
 ## 4) Key Results (числа з артефактів)
 

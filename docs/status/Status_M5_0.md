@@ -3,8 +3,8 @@
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-01  
 **Tests**: 1183 passed, 1 skipped  
-**Evidence runDir**: `ci_m5_gate_20260301_131018`  
-**Code commit**: measured slippage + rejection classification  
+**Evidence runDir**: `ci_m5_gate_20260301_150700`  
+**Code commit**: surface expansion + target_usd_notional optimization  
 **discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
 
 ---
