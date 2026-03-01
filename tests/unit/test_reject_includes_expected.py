@@ -20,6 +20,9 @@ def test_reject_includes_expected_price(monkeypatch):
             # v2.0.8: strict fee_tier lookup requires exact pool key with fee suffix
             "sushiswap_v3_WETH_USDC_500": "0x1234567890123456789012345678901234567890",
         },
+        # v3.2.2: Set higher drift threshold to avoid NOTIONAL_DRIFT rejects in this test
+        # The test focuses on expected_price field, not notional drift
+        "drift_warning_pct": 50.0,
     }
     stats = run_scan(cfg, tmp, cycles=1)
     reports = tmp / "reports"

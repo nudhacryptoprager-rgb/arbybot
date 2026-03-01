@@ -92,9 +92,11 @@ paper_slippage_bps: 5   # Conservative slippage
 target_usd_notional: 100  # Equal to paper_size_usd (sizing consistency)
 use_usd_notional: true
 
-# Spread threshold: lowered to 10 bps to see more opportunities
-# (economics gate handles profitability filtering)
-min_spread_bps: 10
+# Spread threshold: 16 bps ensures gross profit > cost floor (gas+slippage)
+# v3.2.2: min_spread_bps must satisfy: spread × size >= gas + slippage
+# With size=$100, slippage=5bps ($0.05), gas=$0.10 → cost_floor=$0.15
+# 16 bps × $100 = $0.16 > $0.15 → NOT FRAGILE
+min_spread_bps: 16
 
 # ========== STANDARD SETTINGS ==========
 

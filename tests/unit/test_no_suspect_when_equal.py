@@ -20,6 +20,9 @@ def test_no_suspect_when_implied_equals_expected(monkeypatch):
         },
         "quote_decimals": {"WETH": 18, "USDC": 6},
         "tokens_anchor_price": {"WETH_USDC": 2600},
+        # v3.2.2: Set higher drift threshold to avoid NOTIONAL_DRIFT rejects in this test
+        # The test focuses on price sanity, not notional drift
+        "drift_warning_pct": 50.0,
     }
     stats = run_scan(cfg, tmp, cycles=1)
     # suspect_quotes should be zero when implied == expected

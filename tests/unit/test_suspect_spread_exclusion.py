@@ -590,12 +590,12 @@ class TestRejectSchemaConsistency:
             "notional_drift_pct": 61.94,
         }
         
-        # This is the FIXED logic (v2.9.5) - uses 'reason' not 'reject_reason'
+        # v3.2.2: Updated to use drift_exclude_pct (was notional_drift_max_pct)
         rejected_quotes.append({
             **quote,
             "reason": "NOTIONAL_DRIFT_EXCLUDED",
             "notional_drift_pct": 61.94,
-            "notional_drift_max_pct": 50.0,
+            "drift_exclude_pct": 20.0,  # v3.2.2: Now uses drift_warning_pct default of 20%
         })
         
         # Build reason histogram (same as artifacts.py)

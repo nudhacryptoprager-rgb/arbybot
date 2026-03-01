@@ -212,7 +212,7 @@ class OpportunityEngine:
         max_gas_cost_usd: float = 5.00,     # Maximum acceptable gas
         min_gross_spread_bps: float = 5.0,  # Minimum raw spread
         max_gross_spread_bps: Optional[float] = None,  # v2.1.0: PRICE_OUTLIER cap (from Thresholds)
-        max_notional_drift_pct: float = 50.0,  # v2.7.1: Aligned with spreads.py default
+        max_notional_drift_pct: float = 20.0,  # v3.2.2: Aligned with spreads.py drift_warning_pct
         target_notional_usd: float = 1000.0,   # v2.1.0: Target notional for drift calc
         suspect_spread_bps: Optional[float] = None,  # v2.1.0: SUSPECT_SPREAD threshold (from Thresholds)
     ):
@@ -489,13 +489,14 @@ def evaluate_quotes(
     min_net_profit_usd: float = 0.50,
     gas_config: Optional[GasConfig] = None,
     target_notional_usd: float = 1000.0,  # v2.7.1: Config-driven
-    max_notional_drift_pct: float = 50.0,  # v2.7.1: Aligned with spreads.py default
+    max_notional_drift_pct: float = 20.0,  # v3.2.2: Aligned with spreads.py drift_warning_pct
 ) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     Convenience function to evaluate quotes and return opportunities.
     
     v2.1.0: Accepts optional gas_config for live gas pricing.
     v2.7.1: Accepts target_notional_usd and max_notional_drift_pct for config alignment.
+    v3.2.2: Default max_notional_drift_pct reduced to 20% (was 50%).
     
     Returns:
         (opportunities_as_dicts, summary_stats)

@@ -432,17 +432,18 @@ class TestV210PolicyUnification:
 class TestV271NotionalDriftConfig:
     """
     v2.7.1: NotionalDrift gate is config-driven.
+    v3.2.2: Default changed from 50% to 20% (aligned with spreads.py drift_warning_pct).
     
     The issue: opportunity_engine used hardcoded max_notional_drift_pct=20 and target_notional_usd=1000,
     while spreads.py used notional_drift_max_pct=50 from config.
-    This caused NOTIONAL_DRIFT rejections that blocked roundtrip evaluation (gated_count=0).
+    v3.2.2: Both now default to 20% via drift_warning_pct.
     """
 
-    def test_notional_drift_default_is_50(self):
-        """Default max_notional_drift_pct is 50 (aligned with spreads.py)."""
+    def test_notional_drift_default_is_20(self):
+        """Default max_notional_drift_pct is 20 (aligned with spreads.py drift_warning_pct)."""
         engine = OpportunityEngine()
-        assert engine.max_notional_drift_pct == 50.0, \
-            f"Expected 50.0, got {engine.max_notional_drift_pct}"
+        assert engine.max_notional_drift_pct == 20.0, \
+            f"Expected 20.0, got {engine.max_notional_drift_pct}"
 
     def test_notional_drift_accepts_config(self):
         """max_notional_drift_pct can be set via constructor."""

@@ -430,9 +430,9 @@ def run_scan(
             quotes_sample, cycle=0, timestamp=timestamp,
             eth_usd_price=eth_usd, min_net_profit_usd=0.10,
             gas_config=gas_config,
-            # v2.7.1: Pass notional config to align opportunity gates with spreads policy
+            # v3.2.2: Use drift_warning_pct to align opportunity gates with spreads policy
             target_notional_usd=config.get("target_usd_notional", 1000.0),
-            max_notional_drift_pct=config.get("notional_drift_max_pct", 50.0),
+            max_notional_drift_pct=config.get("drift_warning_pct", 20.0),
         )
         stats["opportunity_engine"] = {
             "enabled": True,

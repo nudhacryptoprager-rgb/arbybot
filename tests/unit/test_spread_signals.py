@@ -309,7 +309,7 @@ class TestNotionalDriftFilter:
     """Tests for NOTIONAL_DRIFT filtering in spread evaluation (v2.2.3)."""
     
     def test_high_drift_excluded(self):
-        """Quote with drift=86% (>50%) should be excluded from spread evaluation."""
+        """Quote with drift=86% (>20% default) should be excluded from spread evaluation."""
         from strategy.spreads import compute_spread_signals
         
         quotes = [
@@ -317,12 +317,13 @@ class TestNotionalDriftFilter:
             {"dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC", 
              "price_exact": "2000.0", "notional_drift_pct": 3.0,
              "pool_address": "0x1111111111111111111111111111111111111111"},
-            # High drift - should be excluded
+            # High drift - should be excluded (>20%)
             {"dex_id": "sushiswap_v3", "token_in": "WETH", "token_out": "USDC", 
              "price_exact": "2010.0", "notional_drift_pct": 86.0,
              "pool_address": "0x2222222222222222222222222222222222222222"},
         ]
-        config = {"truth_mode_m42": False, "notional_drift_max_pct": 50.0}
+        # v3.2.2: Now uses drift_warning_pct (default 20%) instead of notional_drift_max_pct (was 50%)
+        config = {"truth_mode_m42": False, "drift_warning_pct": 20.0}
         rejected = []
         
         signals = compute_spread_signals(quotes, config, 1000, rejected)
@@ -335,7 +336,7 @@ class TestNotionalDriftFilter:
         assert rejected[0]["notional_drift_pct"] == 86.0
     
     def test_low_drift_included(self):
-        """Quotes with drift=3% (<50%) should be included in spread evaluation."""
+        """Quotes with drift=3-5% (<20% default) should be included in spread evaluation."""
         from strategy.spreads import compute_spread_signals
         
         quotes = [
@@ -346,7 +347,8 @@ class TestNotionalDriftFilter:
              "price_exact": "2010.0", "notional_drift_pct": 5.0,
              "pool_address": "0x2222222222222222222222222222222222222222"},
         ]
-        config = {"truth_mode_m42": False, "notional_drift_max_pct": 50.0}
+        # v3.2.2: Now uses drift_warning_pct (default 20%)
+        config = {"truth_mode_m42": False, "drift_warning_pct": 20.0}
         rejected = []
         
         signals = compute_spread_signals(quotes, config, 1000, rejected)
@@ -356,7 +358,7 @@ class TestNotionalDriftFilter:
         assert len(rejected) == 0, "Should have no rejected quotes"
     
     def test_drift_threshold_configurable(self):
-        """notional_drift_max_pct should be configurable."""
+        """drift_warning_pct should be configurable."""
         from strategy.spreads import compute_spread_signals
         
         quotes = [
@@ -368,14 +370,14 @@ class TestNotionalDriftFilter:
              "pool_address": "0x2222222222222222222222222222222222222222"},
         ]
         
-        # With threshold=50%, both included
-        config_50 = {"truth_mode_m42": False, "notional_drift_max_pct": 50.0}
+        # v3.2.2: With threshold=50%, both included (drift_warning_pct now controls this)
+        config_50 = {"truth_mode_m42": False, "drift_warning_pct": 50.0}
         rejected_50 = []
         signals_50 = compute_spread_signals(quotes, config_50, 1000, rejected_50)
         assert len(signals_50) >= 1, "With 50% threshold, both quotes should be included"
         
         # With threshold=25%, both excluded
-        config_25 = {"truth_mode_m42": False, "notional_drift_max_pct": 25.0}
+        config_25 = {"truth_mode_m42": False, "drift_warning_pct": 25.0}
         rejected_25 = []
         signals_25 = compute_spread_signals(quotes, config_25, 1000, rejected_25)
         assert len(signals_25) == 0, "With 25% threshold, both quotes should be excluded"

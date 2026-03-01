@@ -142,10 +142,16 @@ class RuntimeDisabledManager:
             logger.warning("Failed to load runtime-disabled cache: %s", e)
     
     def _save_cache(self) -> None:
-        """Persist runtime-disabled entries to cache file."""
+        """Persist runtime-disabled entries to cache file.
+        
+        v3.2.2: Uses atomic write (temp file + replace) to prevent corruption
+        if the process crashes during write.
+        """
+        import tempfile
         try:
             # Ensure directory exists
-            os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
+            cache_dir = os.path.dirname(self.cache_path)
+            os.makedirs(cache_dir, exist_ok=True)
             
             data = {
                 "schema_version": "1.0.0",
@@ -153,8 +159,22 @@ class RuntimeDisabledManager:
                 "entries": [e.to_dict() for e in self._entries.values()],
             }
             
-            with open(self.cache_path, "w") as f:
-                json.dump(data, f, indent=2)
+            # v3.2.2: Atomic write - write to temp file then replace
+            # This prevents corruption if process crashes during write
+            fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f, indent=2)
+                # Atomic replace (on Windows, need to delete first if exists)
+                if os.path.exists(self.cache_path):
+                    os.replace(tmp_path, self.cache_path)
+                else:
+                    os.rename(tmp_path, self.cache_path)
+            except Exception:
+                # Clean up temp file on failure
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
             
             logger.debug("Saved %d runtime-disabled entries to cache", len(self._entries))
         except Exception as e:

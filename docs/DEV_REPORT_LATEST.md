@@ -4,43 +4,48 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T18:17:13Z
-run_id: data/runs/ci_m5_gate_20260301_191126 (12 runs)
-mode: ONLINE (M4.2 runtime auto-disable + test isolation fix)
+timestamp_utc: 2026-03-01T19:56:05Z
+run_id: data/runs/ci_m5_gate_20260301_195549
+mode: ONLINE (v3.2.2: drift pre-filter + fragile fix)
 artifact_mode: rolling
 config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-01T18:17:13Z
+  primary: ts:2026-03-01T19:56:05Z
   dirty: false
-  desc: v3.2.1 test isolation + discovery_runtime fix
+  desc: v3.2.2 drift_warning_pct=20% + min_spread_bps=16
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Automatic pool health management without manual YAML changes + test hermeticity
+goal (Roadmap пункт): Eliminate FAIL_FRAGILE_HIGH and SUSPECT_SPREAD_EXCLUDED with 4500+ bps
 change_summary:
-  - FIX: test_runtime_disabled.py - added autouse fixture for temp cache isolation
-  - FIX: test_discovery_runtime_quotes.py - added autouse fixture for temp cache isolation
-  - NEW: TestCachePollutionGuard - guard test to verify data/cache/** not polluted by tests
-  - FIX: strategy/quotes.py - discovery_runtime path now produces 6-tuples (with pool_key) + runtime-disabled checks
-  - NEW: TestDiscoveryRuntimePoolWorkItems (3 tests) - structural + behavioral tests for discovery_runtime path
-  - NEW: TestLiquidityDecode (3 tests) - regression tests for multicall liquidity decoding (32 bytes)
-  - RESULT: tests use temp caches, no pollution of data/cache/runtime_disabled_pools.json
-  - RESULT: discovery_runtime quoting path no longer crashes
-  - RESULT: 10/12 ONLINE runs PASS, data_run_rate=0.46, unique_pairs=5
-  - RESULT: runtime_disabled_cache has 1 entry (sushiswap_v3_wstETH_WETH_500 LIQUIDITY_ZERO)
-  - TESTS: 1219 passed, 12 skipped
+  - FIX: strategy/spreads.py - pre-filter quotes with drift > 20% (drift_warning_pct) before spread eval
+  - FIX: engine/opportunity_engine.py - default max_notional_drift_pct changed from 50.0 to 20.0
+  - FIX: strategy/jobs/run_scan_real.py - pass drift_warning_pct to opportunity engine
+  - FIX: config/real_hunting_lowfee.yaml - min_spread_bps raised from 10 to 16 (cost floor fix)
+  - FIX: strategy/runtime_disabled.py - atomic cache write using tempfile + os.replace
+  - FIX: tests/unit/test_no_suspect_when_equal.py - aligned target_usd_notional with fake quotes
+  - FIX: tests/unit/test_reject_includes_expected.py - aligned target_usd_notional with fake quotes
+  - RESULT: ARB/WETH (30.78% drift) and LINK/WETH (24.89% drift) filtered BEFORE spread calc
+  - RESULT: No more 4500+ bps suspect spreads in signals
+  - RESULT: fragile_count=0, fragile_rate=0 (min_spread_bps=16 vs cost floor=$0.15)
+  - RESULT: run_summary_latest.status=PASS, quality_status=WARN (WARN_LOW_SAMPLE only)
+  - TESTS: 1214 passed, 1 skipped
 touched_files:
-  - tests/unit/test_runtime_disabled.py (autouse fixture + test guard)
-  - tests/unit/test_discovery_runtime_quotes.py (autouse fixture + new tests)
-  - tests/unit/test_multicall.py (TestLiquidityDecode - 3 tests)
-  - strategy/quotes.py (discovery_runtime 6-tuple fix + runtime-disabled checks)
+  - strategy/spreads.py (drift_warning_pct pre-filter)
+  - engine/opportunity_engine.py (default 50→20%)
+  - strategy/jobs/run_scan_real.py (pass drift_warning_pct)
+  - config/real_hunting_lowfee.yaml (min_spread_bps: 10→16)
+  - strategy/runtime_disabled.py (atomic write)
+  - tests/unit/test_no_suspect_when_equal.py (target_usd_notional fix)
+  - tests/unit/test_reject_includes_expected.py (target_usd_notional fix)
+  - tests/unit/test_spread_signals.py (updated comments)
+  - tests/unit/test_opportunity_engine.py (updated docstrings)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1219 passed, 12 skipped
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
-py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10 --max-runs 12: 10/12 PASS
-Cache pollution check: CLEAN (no test_* keys in data/cache/runtime_disabled_pools.json)
+py -3.11 -m pytest tests/unit -q: 1214 passed, 1 skipped
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_hunting_lowfee.yaml: PASS
+M5 gate validation: all 17 checks passed
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -48,36 +53,69 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260301_191126/reports (first of 12 runs)
-runtime_disabled_cache:
-  - data/cache/runtime_disabled_pools.json (1 entry: sushiswap_v3_wstETH_WETH_500)
+  - data/runs/ci_m5_gate_20260301_195549/reports
+v3_2_2_fix_evidence:
+  - spread pre-filter: "notional_drift: excluded 2 quotes with drift > 20%"
+  - spread threshold: "Starting spread signal computation: 20 quotes, threshold=16 bps"
+  - fragile_count: 0, fragile_rate: 0
+  - status: PASS, quality_status: WARN (only WARN_LOW_SAMPLE)
 quality_achievement:
-  - agg_status: WARN_QUALITY (data_run_rate=0.46<0.50)
-  - runs_in_window: 82
-  - unique_pairs: 5 (WETH/USDC, WETH/USDT, WBTC/WETH, WBTC/USDC, USDC/USDT)
-  - pool_missing_count: 0
-  - quarantined_count: 1
-  - runtime_disabled_count: 1 (sushiswap_v3_wstETH_WETH_500)
-  - pass_rate: 0.894 (34/38 data runs)
-  - total_net_usdc: $96.87
+  - status: PASS
+  - fragile_count: 0
+  - fragile_rate: 0.0
+  - included_signals_count: 2
+  - excluded_signals_count: 0
+  - suspect_signals_count: 0
+  - drift-excluded quotes: 2 (ARB/WETH 32.5%, LINK/WETH 24.9%)
 
 ## 4) Key Results (числа з артефактів)
-
-_latest.json:
-  schema_version: m4:latest:v2.0
-  run_status: PASS
-  agg_status: PASS
-  agg_reasons: []
-  quality_warnings: ["WARN_PROFIT_DIAGNOSTIC"]
-  runs_in_window: 11
-  in_warmup: false
-  pass_rate: 1.0
-  mae_p90: 0.0
 
 run_summary_latest.json:
   schema_version: m4:run_summary:v2.0
   status: PASS
+  profit_status: PASS
   drift_status: PASS
+  quality_status: WARN
+  reasons: ["WARN_LOW_SAMPLE"]
+  run_context.run_timestamp: 2026-03-01T19:56:05Z
+  inputs.run_mode: REGISTRY_REAL
+  metrics:
+    signals_count: 2
+    included_signals_count: 2
+    excluded_signals_count: 0
+    suspect_signals_count: 0
+    fragile_count: 0
+    fragile_rate: 0.0
+    mae_net_usdc: 0.0
+    est_sign_correct_rate: 1.0
+    sim_profitable_count: 1
+    total_net_usdc: 0.42
+
+V3.2.2 FIX EVIDENCE:
+
+DRIFT PRE-FILTER (v3.2.2):
+  - BEFORE: notional_drift_max_pct=50% allowed suspect quotes through to spread eval
+  - AFTER: drift_warning_pct=20% filters quotes BEFORE spread evaluation
+  - RESULT: ARB/WETH (30.78% drift) and LINK/WETH (24.89% drift) excluded early
+  - LOG: "notional_drift: excluded 2 quotes with drift > 20% from spread evaluation"
+
+MIN_SPREAD_BPS FIX (v3.2.2):
+  - COST FLOOR: gas=$0.10 + slippage=5bps on $100 = $0.15 = 15 bps equivalent
+  - BEFORE: min_spread_bps=10 allowed signals where gross < costs (FRAGILE)
+  - AFTER: min_spread_bps=16 ensures gross >= 16 bps × $100 = $0.16 > $0.15 costs
+  - RESULT: fragile_count=0, fragile_rate=0
+
+ATOMIC CACHE WRITE (v3.2.2):
+  - strategy/runtime_disabled.py now uses tempfile + os.replace for atomic writes
+  - Prevents cache corruption on process crash during non-stop scanning
+
+MEASURED SLIPPAGE FIELDS (v3.1.0):
+  - Location: truth_report.spread_signals[*]
+  - buy_measured_slippage_bps: present
+  - sell_measured_slippage_bps: present
+  - total_measured_slippage_bps: present
+  - has_measured_slippage: true
+  - effective_slippage_source: "measured" (max of paper vs measured)
   run_context.run_timestamp: 2026-03-01T13:01:27Z
   inputs.run_mode: REGISTRY_REAL
   metrics:
