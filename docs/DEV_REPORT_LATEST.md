@@ -4,37 +4,40 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-02-28T21:35:45Z
-run_id: data/runs/ci_m5_gate_20260228_223528
-mode: ONLINE (rolling PASS validation)
+timestamp_utc: 2026-03-01T10:35:00Z
+run_id: data/runs/ci_m5_gate_20260301_101401
+mode: ONLINE (economics gate validation)
 artifact_mode: rolling
-config: config/real_minimal.yaml
+config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-02-28T21:35:45+00:00
+  primary: ts:2026-03-01T10:35:00+00:00
   dirty: false
-  desc: v2.9.8 min_spread_bps=10 + diversity threshold fix
+  desc: v2.9.9 economics gate + signal enrichment
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4 rolling agg_status=PASS with fragile_rate_p90 <= 0.30
+goal (Roadmap пункт): M4.2 economics gate - reduce bug surface, add canonical cost calculations
 change_summary:
-  - CONFIG: min_spread_bps raised from 5 to 10 (above cost floor of ~9 bps)
-  - CONFIG: 3 uni-only pairs commented out (ARB/USDC, WBTC/USDT, ARB/USDT - all Sushi pools disabled)
-  - POLICY: DIVERSITY_PAIRS_TARGET lowered 6→4, DIVERSITY_ROUTES_TARGET/MIN lowered 2→1
-  - TESTS: Added TestMinSpreadBpsThreshold, TestFragileCountZeroContract (5 new tests)
-  - RESULT: agg_status=PASS, fragile_rate_p90=0.0 (goal was <=0.30)
+  - NEW MODULE: execution/economics.py - canonical min_required_spread_bps() calculations
+  - SIGNAL ENRICHMENT: min_required_spread_bps, spread_minus_required_bps, is_roundtrip_viable fields
+  - ROUNDTRIP GATING: engine/roundtrip.py filters candidates with spread_minus_required_bps <= 0
+  - CONFIG: config/real_hunting_lowfee.yaml - low-fee pool hunting (fee_tiers 100/500)
+  - TESTS: 25 economics tests including contract tests for signal fields
+  - RESULT: agg_status=PASS, fragile_rate_p90=0.0, economics gate operational
 touched_files:
-  - config/real_minimal.yaml (min_spread_bps=10, 3 pairs commented out)
-  - m4/policy.py (diversity thresholds adjusted with restore contracts)
-  - tests/unit/test_suspect_spread_exclusion.py (2 new test classes)
+  - execution/economics.py (NEW - canonical cost calculations)
+  - execution/__init__.py (exports for economics functions)
+  - strategy/spreads.py (signal enrichment with economics fields)
+  - engine/roundtrip.py (gating filter for unprofitable roundtrips)
+  - tests/unit/test_economics.py (NEW - 25 tests)
+  - config/real_hunting_lowfee.yaml (NEW - low-fee hunting config)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: PASS (4 warnings - DEV_REPORT alignment pending)
-py -3.11 -m pytest tests/unit -q: PASS (1135 passed, 5 new tests)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (14.1s)
-py -3.11 start.py --config config/real_minimal.yaml --minutes 10: PASS (control runs)
-py -3.11 scripts/ci_m4_execution_gate.py --reset-window: completed (fresh rolling)
-py -3.11 scripts/inspect_rolling.py --excluded: agg_status=PASS verified
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
+py -3.11 -m pytest tests/unit -q: PASS (1160 passed, 25 new economics tests)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (12.9s)
+py -3.11 start.py --config config/real_hunting_lowfee.yaml --minutes 10: completed (economics gate test)
+py -3.11 scripts/inspect_rolling.py: agg_status=PASS, runs_in_window=14, total_net_usdc=$95.11
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -94,6 +97,23 @@ FRAGILE FIX EVIDENCE:
   - FRAGILE DEFINITION: est_gross < slippage_usd + gas_usd
   - FIX: min_spread_bps=10 ensures all signals are ABOVE cost floor
   - RESULT: fragile_count=0 on all recent runs, fragile_rate_p90=0.0
+
+ECONOMICS GATE (v2.9.9):
+  - NEW MODULE: execution/economics.py
+  - FORMULA: min_required_spread_bps = LP_fees + slippage + gas_bps + safety_margin
+    - LP_fees: fee_bps_leg1 + fee_bps_leg2 (e.g., 5+5=10 bps for 500 fee tier pools)
+    - gas_bps: (gas_usd / size_usd) * 10000 (e.g., $0.10/$250 = 4 bps)
+    - safety_margin: 2 bps (account for execution variance)
+  - SIGNAL FIELDS:
+    - min_required_spread_bps: canonical threshold for profitability
+    - spread_minus_required_bps: observed_spread - min_required (margin)
+    - is_roundtrip_viable: True if spread_minus_required > 0
+  - ROUNDTRIP GATING: evaluate_roundtrip_candidates() skips if is_roundtrip_viable=False
+  - ECONOMICS EXAMPLES:
+    - 30 bps pools (fee=3000): min_required ≈ 71 bps (very hard)
+    - 5 bps pools (fee=500):   min_required ≈ 21 bps (achievable)
+    - 1 bps pools (fee=100):   min_required ≈ 13 bps (best chance)
+  - TESTS: 25 tests in test_economics.py (contract tests for signal fields, roundtrip gating)
 
 DIVERSITY THRESHOLD FIX:
   - PAIRS: With min_spread_bps=10, only 4 pairs generate signals >= threshold

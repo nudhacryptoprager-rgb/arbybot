@@ -14,6 +14,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Tuple
 
+from execution.economics import (
+    min_required_spread_bps,
+    spread_minus_required,
+    fee_tier_to_bps,
+)
 from m4.policy import Thresholds
 
 logger = logging.getLogger("strategy.spreads")
@@ -458,6 +463,29 @@ def _build_spread_signal(
     # v2.2.0: Updated net estimate includes LP fees (more realistic for roundtrip)
     net_pnl_after_lp_fee_usdc = net_pnl_usdc_estimate - lp_fee_usdc_est
     
+    # v2.9.8: Economics gate - canonical minimum required spread calculation
+    # Uses execution/economics.py for deterministic cost modeling
+    buy_fee_bps = fee_tier_to_bps(buy_fee)
+    sell_fee_bps = fee_tier_to_bps(sell_fee)
+    min_required_bps = min_required_spread_bps(
+        fee_bps_leg1=buy_fee_bps,
+        fee_bps_leg2=sell_fee_bps,
+        slippage_bps=float(slippage_bps),
+        gas_usd=gas_usd_estimate,
+        size_usd=float(paper_size_usd),
+        safety_bps=2.0,  # canonical safety buffer
+    )
+    spread_minus_req_bps = spread_minus_required(
+        spread_bps=float(spread_bps_decimal),
+        fee_bps_leg1=buy_fee_bps,
+        fee_bps_leg2=sell_fee_bps,
+        slippage_bps=float(slippage_bps),
+        gas_usd=gas_usd_estimate,
+        size_usd=float(paper_size_usd),
+        safety_bps=2.0,
+    )
+    is_roundtrip_viable = spread_minus_req_bps > 0
+    
     # v2.3.0: Notional drift tracking from underlying quotes
     buy_notional_drift_pct = best_buy.get("notional_drift_pct")
     sell_notional_drift_pct = best_sell.get("notional_drift_pct")
@@ -536,6 +564,10 @@ def _build_spread_signal(
         "lp_fee_usdc_est": round(lp_fee_usdc_est, 4),
         "net_pnl_after_lp_fee_usdc": round(net_pnl_after_lp_fee_usdc, 4),
         "is_net_positive_after_lp_fee": net_pnl_after_lp_fee_usdc > 0,
+        # v2.9.8: Economics gate - canonical minimum required spread for roundtrip
+        "min_required_spread_bps": round(min_required_bps, 2),
+        "spread_minus_required_bps": round(spread_minus_req_bps, 2),
+        "is_roundtrip_viable": is_roundtrip_viable,
         "net_negative_reason": net_negative_reason,
         # v2.3.0: Notional drift tracking from underlying quotes
         "buy_notional_drift_pct": round(float(buy_notional_drift_pct), 2) if buy_notional_drift_pct is not None else None,

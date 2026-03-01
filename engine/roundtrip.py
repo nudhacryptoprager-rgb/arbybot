@@ -397,8 +397,33 @@ def evaluate_roundtrip_candidates(
         List of RoundTripResult for top candidates
     """
     results = []
+    gated_count = 0  # v2.9.8: Count opportunities filtered by economics
+    evaluated_count = 0  # v2.9.8: Count opportunities actually evaluated
     
     for opp in opportunities[:top_n]:
+        # v2.9.8: Economics gate - skip if spread_minus_required_bps <= 0
+        # This filters candidates that are mathematically unprofitable
+        spread_minus_required = opp.get("spread_minus_required_bps")
+        is_roundtrip_viable = opp.get("is_roundtrip_viable", True)  # default True for backward compat
+        
+        if spread_minus_required is not None and spread_minus_required <= 0:
+            gated_count += 1
+            logger.debug(
+                "Economics gate: skipping %s (spread_minus_required=%.2f bps)",
+                opp.get("pair", "?"),
+                spread_minus_required,
+            )
+            continue
+        
+        if not is_roundtrip_viable:
+            gated_count += 1
+            logger.debug(
+                "Economics gate: skipping %s (is_roundtrip_viable=False)",
+                opp.get("pair", "?"),
+            )
+            continue
+        
+        evaluated_count += 1
         buy_key = f"{opp.get('buy_dex')}:{opp.get('diagnostics', {}).get('buy_pool')}:{opp.get('buy_fee')}"
         sell_key = f"{opp.get('sell_dex')}:{opp.get('diagnostics', {}).get('sell_pool')}:{opp.get('sell_fee')}"
         
@@ -441,6 +466,15 @@ def evaluate_roundtrip_candidates(
             token_in_decimals=token_in_dec,
         )
         results.append(result)
+    
+    # v2.9.8: Log economics gating stats
+    if gated_count > 0 or evaluated_count > 0:
+        logger.info(
+            "Roundtrip candidates: gated_by_economics=%d, evaluated=%d, results=%d",
+            gated_count,
+            evaluated_count,
+            len(results),
+        )
     
     return results
 

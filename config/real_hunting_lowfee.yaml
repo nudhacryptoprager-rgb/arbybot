@@ -1,0 +1,103 @@
+# PATH: config/real_hunting_lowfee.yaml
+#
+# M4.2 REAL Pipeline - Low-Fee Hunting Config
+#
+# PURPOSE: Hunt for profitable arb opportunities in LOW-FEE pools (100/500 bps tiers)
+# - Economics gate ensures only profitable roundtrips evaluated
+# - Cross-DEX only (require_cross_dex=true)
+# - Discovery runtime for expanded search surface
+# - Priority fee tiers: 100 (0.01%), 500 (0.05%)
+#
+# ECONOMICS RATIONALE:
+# - 30 bps pools: min_required_spread ≈ 71 bps (very hard)
+# - 5 bps pools:  min_required_spread ≈ 21 bps (achievable)
+# - 1 bps pools:  min_required_spread ≈ 13 bps (best chance)
+#
+# This config prioritizes low-fee pools where economics are favorable.
+
+# Chain: Arbitrum One
+chain: arbitrum_one
+chain_id: 42161
+
+# RPC endpoints with fallback
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+  - "https://rpc.ankr.com/arbitrum"
+
+# RPC settings
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# 2 DEXes for cross-DEX arbitrage
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+
+# ========== DISCOVERY RUNTIME MODE ==========
+universe_source: discovery_runtime
+discovery_runtime_max_pairs: 50
+require_cross_dex: true
+discovery_dry_run: false
+
+# ========== LOW-FEE POOL PRIORITY ==========
+# fee_tiers to query (100 = 0.01%, 500 = 0.05%)
+# Excluding 3000 (0.30%) and 10000 (1.00%) which have worse economics
+default_fee_tiers:
+  - 100
+  - 500
+
+# ========== ECONOMICS PARAMETERS ==========
+# These are used by execution/economics.py for min_required_spread_bps calculation
+paper_size_usd: 250
+gas_usd_estimate: 0.10  # Arbitrum gas is cheap
+paper_slippage_bps: 5   # Conservative slippage
+
+# Spread threshold: lowered to 10 bps to see more opportunities
+# (economics gate handles profitability filtering)
+min_spread_bps: 10
+
+# ========== STANDARD SETTINGS ==========
+
+# Gas config (Arbitrum)
+gas_price_gwei: 0.1
+max_gas_price_gwei: 1.0
+l2_gas_limit: 1000000
+
+# Price sanity
+price_sanity_max_deviation_bps: 5000
+
+# M4 simulate_only (no real execution)
+kill_switch_active: true
+simulate_only: true
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_M4
+
+# v2.2.0: truth_mode_m42 - roundtrip is canonical, one-leg is diagnostic only
+truth_mode_m42: true
+
+# v2.2.0: use_quoter_v2 enables QuoterV2 calls for executable pricing
+use_quoter_v2: true
+
+# ========== TOKEN UNIVERSE ==========
+tokens:
+  WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+  USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+  USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+  ARB: "0x912CE59144191C1204E64559FE8253a0e49E6548"
+  DAI: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"
+
+quote_decimals:
+  WETH: 18
+  USDC: 6
+  USDT: 6
+  ARB: 18
+  DAI: 18
+
+tokens_anchor_price:
+  WETH_USDC: 2500
+  WETH_USDT: 2500
+  WETH_DAI: 2500
+  ARB_USDC: 0.50
+  ARB_WETH: 0.0002

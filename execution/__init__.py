@@ -31,6 +31,12 @@ from execution.dex_dex_executor import (
     ExecutorConfig,
     DexDexExecutor,
 )
+from execution.economics import (
+    min_required_spread_bps,
+    spread_minus_required,
+    fee_tier_to_bps,
+    is_roundtrip_candidate,
+)
 
 __all__ = [
     # State machine
@@ -50,4 +56,9 @@ __all__ = [
     "ExecutionResult",
     "ExecutorConfig",
     "DexDexExecutor",
+    # Economics
+    "min_required_spread_bps",
+    "spread_minus_required",
+    "fee_tier_to_bps",
+    "is_roundtrip_candidate",
 ]
