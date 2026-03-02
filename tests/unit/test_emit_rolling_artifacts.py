@@ -120,6 +120,75 @@ class TestEmitRollingArtifactsFunctional(TestCase):
             self.assertEqual(latest_data["run_status"], "PASS")
             self.assertIn("updated_at", latest_data)
     
+    def test_run_dir_name_in_latest_json(self):
+        """v3.2.3: _latest.json must include run_dir_name in run_context and inputs."""
+        from m4.rolling_store import emit_rolling_artifacts
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runs_dir = Path(tmpdir) / "data" / "runs"
+            runs_dir.mkdir(parents=True)
+            
+            run_dir = runs_dir / "ci_m5_gate_provenance_test"
+            run_dir.mkdir()
+            reports_dir = run_dir / "reports"
+            reports_dir.mkdir()
+            
+            # Create run_summary with run_dir_name
+            run_summary = {
+                "schema_version": "m4:run_summary:v2.0",
+                "run_id": "ci_m5_gate_provenance_test",
+                "status": "PASS",
+                "run_context": {
+                    "run_timestamp": "2026-03-01T12:00:00Z",
+                    "code_identity": "ts:2026-03-01T12:00:00Z",
+                },
+                "metrics": {
+                    "signals_count": 3,
+                    "included_signals_count": 3,
+                    "total_net_usdc": 25.0,
+                    "mae_net_usdc": 0.2,
+                    "est_sign_correct_rate": 1.0,
+                },
+                "inputs": {
+                    "run_mode": "REGISTRY_REAL",
+                    "run_dir_name": "ci_m5_gate_provenance_test",  # KEY FIELD
+                    "config_path": "config/test.yaml",
+                },
+                "thresholds": {
+                    "threshold_profile_name": "profit",
+                },
+            }
+            
+            run_summary_path = reports_dir / "run_summary_20260301_120000.json"
+            with open(run_summary_path, "w") as f:
+                json.dump(run_summary, f)
+            
+            # Call emit_rolling_artifacts
+            emit_rolling_artifacts(run_dir)
+            
+            # Verify _latest.json has run_dir_name in run_context
+            rolling_dir = runs_dir / "_rolling"
+            latest_path = rolling_dir / "_latest.json"
+            
+            with open(latest_path) as f:
+                latest_data = json.load(f)
+            
+            # v3.2.3: run_dir_name must be in run_context
+            self.assertIn("run_context", latest_data)
+            self.assertEqual(
+                latest_data["run_context"].get("run_dir_name"),
+                "ci_m5_gate_provenance_test",
+                "run_context.run_dir_name must match inputs.run_dir_name"
+            )
+            
+            # v3.2.3: inputs section must also exist with run_dir_name
+            self.assertIn("inputs", latest_data)
+            self.assertEqual(
+                latest_data["inputs"].get("run_dir_name"),
+                "ci_m5_gate_provenance_test",
+                "inputs.run_dir_name must match from run_summary"
+            )
+
     def test_validates_run_summary_fields(self):
         """emit_rolling_artifacts must raise ValueError for invalid run_summary."""
         from m4.rolling_store import emit_rolling_artifacts

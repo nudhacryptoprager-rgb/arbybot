@@ -188,3 +188,55 @@ class TestScanRejectInvariants:
         assert len(reject_data["rejects"]) == 0
         assert reject_data["price_sanity_failed"] == 0
         assert reject_data["no_rejects"] is True
+
+    def test_runtime_disabled_count_synced_with_stats(self):
+        """v3.2.3: reject_histogram.runtime_disabled_count must equal scan.stats.runtime_disabled_count."""
+        # Arrange
+        config = {"chain_id": 42161}
+        current_block = 123456
+        
+        rejected_quotes = [
+            {"pair": "WETH/USDC", "reason": "PRICE_SANITY_FAILED"},
+        ]
+        sanity_rejects = [r for r in rejected_quotes if r.get("reason") == "PRICE_SANITY_FAILED"]
+        
+        # Test with runtime_disabled_count present in stats
+        stats = {
+            "quotes_rejected": 1,
+            "price_sanity_failed": 1,
+            "runtime_disabled_count": 3,  # v3.2.3: Should be propagated to reject_data
+        }
+        
+        infra_payload = {}
+        
+        # Act
+        reject_data = build_reject_data(
+            config, current_block, sanity_rejects, rejected_quotes, stats, infra_payload
+        )
+        
+        # Assert: runtime_disabled_count must be present and match stats
+        assert "runtime_disabled_count" in reject_data, (
+            "v3.2.3 INVARIANT: runtime_disabled_count field must be present in reject_histogram"
+        )
+        assert reject_data["runtime_disabled_count"] == 3, (
+            f"v3.2.3 INVARIANT VIOLATED: reject_histogram.runtime_disabled_count="
+            f"{reject_data['runtime_disabled_count']} != scan.stats.runtime_disabled_count=3"
+        )
+
+    def test_runtime_disabled_count_defaults_to_zero(self):
+        """v3.2.3: runtime_disabled_count defaults to 0 when not in stats."""
+        config = {"chain_id": 42161}
+        current_block = 123456
+        
+        rejected_quotes = []
+        sanity_rejects = []
+        # No runtime_disabled_count in stats
+        stats = {"quotes_rejected": 0, "price_sanity_failed": 0}
+        
+        reject_data = build_reject_data(
+            config, current_block, sanity_rejects, rejected_quotes, stats, {}
+        )
+        
+        assert reject_data["runtime_disabled_count"] == 0, (
+            "runtime_disabled_count should default to 0 when not in stats"
+        )

@@ -911,10 +911,18 @@ def run_online_gate(
                 # v2.0: SHA fields deprecated (None), run_timestamp is primary
                 "run_timestamp": run_summary.get("run_context", {}).get("run_timestamp", now_utc.isoformat()),
                 "code_identity": run_summary.get("run_context", {}).get("code_identity", f"ts:{now_utc.isoformat()}"),  # v2.0.1
+                # v3.2.3: Add run_dir_name for complete provenance
+                "run_dir_name": run_summary.get("inputs", {}).get("run_dir_name"),
                 "code_sha": None,  # DEPRECATED
                 "code_dirty": None,  # DEPRECATED
                 "code_desc": None,  # DEPRECATED
                 "evidence_sha": None,  # DEPRECATED
+            },
+            # v3.2.3: Add inputs reference for observability
+            "inputs": {
+                "run_dir_name": run_summary.get("inputs", {}).get("run_dir_name"),
+                "run_mode": run_summary.get("inputs", {}).get("run_mode"),
+                "config_path": run_summary.get("inputs", {}).get("config_path"),
             },
             "latest_mode": "ONLINE" if is_online else "OFFLINE",
             "latest_kind": "INCIDENT" if is_incident else "NORMAL",

@@ -371,6 +371,8 @@ def build_reject_data(
         "pool_disabled_count": stats.get("pool_disabled_count", 0),
         "quarantined_count": stats.get("quarantined_count", 0),
         "v3_slot0_failed_count": stats.get("v3_slot0_failed_count", 0),
+        # v3.2.3: runtime_disabled_count for observability sync with scan.stats
+        "runtime_disabled_count": stats.get("runtime_disabled_count", 0),
         "price_outlier_count": sum(1 for r in rejected_quotes if r.get("reason") == "PRICE_OUTLIER"),
         # v2.1.0 Step 8: Enhanced histogram and samples
         "reason_histogram": reason_histogram,

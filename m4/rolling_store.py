@@ -719,6 +719,8 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
         "run_context": {
             "run_timestamp": run_context.get("run_timestamp", now_utc.isoformat()),
             "code_identity": run_context.get("code_identity", f"ts:{now_utc.isoformat()}"),
+            # v3.2.3: Add run_dir_name for complete provenance
+            "run_dir_name": run_summary.get("inputs", {}).get("run_dir_name"),
             "code_sha": None,
             "code_dirty": None,
             "code_desc": None,
@@ -728,6 +730,12 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
         "latest_kind": "NORMAL",
         "run_status": run_summary.get("status", "UNKNOWN"),
         "threshold_profile_name": run_summary.get("thresholds", {}).get("threshold_profile_name", "profit"),
+        # v3.2.3: Add inputs reference for observability
+        "inputs": {
+            "run_dir_name": run_summary.get("inputs", {}).get("run_dir_name"),
+            "run_mode": run_summary.get("inputs", {}).get("run_mode"),
+            "config_path": run_summary.get("inputs", {}).get("config_path"),
+        },
         "agg_status": agg_data.get("agg_status", "UNKNOWN"),
         "agg_reasons": agg_data.get("agg_reasons", []),
         "quality_warnings": agg_data.get("quality_warnings", []),

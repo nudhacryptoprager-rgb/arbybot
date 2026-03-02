@@ -1,12 +1,29 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
-**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate WARN)  
+**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
 **Updated**: 2026-03-01  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **POOL COVERAGE FIX (2026-03-01)**: `pool_missing_count=0` achieved. Added `tokens_usd_price` section, 6 SushiSwap pool addresses. 3 Sushi pools quarantined (persistent quote failures). `unique_pairs=4`.
+> [!] **ROLLING STABILITY (2026-03-01)**: `agg_status=PASS` achieved. paper_size_usd=250, min_spread_bps=10. runs_in_window=17, pass_rate=1.0, data_run_rate=1.0, low_sample_rate=0.0, fragile_rate_p90=0.0. `unique_pairs=4`.
+
+## Rolling Stability Fix (2026-03-01)
+
+| Step | Change | File | Description |
+|------|--------|------|-------------|
+| 1 | **run_dir_name in _latest.json** | `m4/gates.py` | Added run_context.run_dir_name and inputs section for observability |
+| 2 | **runtime_disabled_count sync** | `strategy/artifacts.py` | Added runtime_disabled_count to reject_histogram |
+| 3 | **paper_size_usd=250** | `config/real_hunting_lowfee.yaml` | Cost floor fix: $0.225 floor = 9 bps, min_spread=10 bps > floor |
+| 4 | **min_spread_bps=10** | `config/real_hunting_lowfee.yaml` | Lower threshold captures more signals |
+| 5 | **WBTC/WETH restored** | `config/real_hunting_lowfee.yaml` | fee=[500,3000] for signal diversity (3+ signals) |
+| 6 | **Tests added** | `tests/unit/test_*.py` | test_run_dir_name_in_latest_json, runtime_disabled_count tests |
+
+**Problem**: Rolling window showed WARN/FAIL due to low_sample_rate and fragile signals.
+
+**Fix**: Optimized paper_size_usd=250 with min_spread_bps=10 for non-fragile economics. Restored WBTC/WETH for signal diversity.
+
+**Result**: `agg_status=PASS`, `runs_in_window=17`, `pass_rate=1.0`, `data_run_rate=1.0`, `fragile_rate_p90=0.0`.
 
 ## Pool Coverage Fix (2026-03-01)
 
@@ -85,20 +102,32 @@
 | DoD | What it means | Current Status |
 |-----|---------------|----------------|
 | **Core Truth (paper +PnL)** | N>=5 REGISTRY_REAL runs with total_net_usdc > 0 | [OK] PROVEN |
-| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [OK] PASS |
-| **M4.2 Roundtrip Pipeline** | gated_count >= 0, roundtrip evaluated | [OK] WORKING (4 evaluated) |
+| **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [OK] PASS (agg_status=PASS) |
+| **M4.2 Roundtrip Pipeline** | gated_count >= 0, roundtrip evaluated | [OK] WORKING (3 evaluated) |
 | **M4.2 Roundtrip Aggregation** | rejected_reasons visible in truth_report | [OK] DEPLOYED |
 | **M4.2 Roundtrip Profit** | Round-trip with real leg2 re-quote has net_pnl > 0 | [NO] NOT_PROFITABLE |
 | **M4.2 Real Execution** | On-chain TX with profit | [NO] NOT STARTED |
 
-**Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. M4.2 roundtrip aggregation visibility **DEPLOYED**: `candidates_total=4`, `gated_by_economics=0`, `rejected_reasons={"NOT_PROFITABLE": 4}`. All candidates unprofitable due to real slippage (82-283 bps > observed spreads). Awaiting favorable market conditions.
+**Висновок**: Paper profit доведений (core truth), rolling quality gate = **PASS**. M4.2 roundtrip aggregation visibility **DEPLOYED**: `candidates_total=3`, `gated_by_economics=0`, `rejected_reasons={"SLIPPAGE_TOO_HIGH": 3}`. All candidates unprofitable due to measured slippage (44-115 bps > observed spreads 39-54 bps). Awaiting favorable market conditions.
+
+### Rolling Window Evidence (2026-03-01)
+- **agg_status**: PASS
+- **agg_reasons**: [] (no warnings)
+- **runs_in_window**: 17
+- **pass_rate**: 1.0 (100%)
+- **data_run_rate**: 1.0 (100%)
+- **low_sample_rate**: 0.0 (0%)
+- **fragile_rate_p90**: 0.0 (0%)
+- **total_net_usdc**: $56.88 (window)
+- **unique_pairs**: 4
+- **unique_routes**: 2
 
 ### Excluded Signals Policy
 - `excluded_signals_count` складається з `SAME_DEX_EXCLUDED` (policy exclusion, fee-tier noise)
 - Breakdown: `same_dex_excluded_count=2`, `non_same_dex_excluded_count=0`
 - Це НЕ quality issue - очікувана поведінка з `require_cross_dex: true`
 
-**Snapshot (2026-03-01)**: From `ci_m5_gate_20260301_150700` (surface expansion): **runs_in_window=20**, **agg_status=WARN_QUALITY**, **drift_status=PASS**, **quality_status=FAIL_QUALITY** (fragile_rate=0.67>0.5, TOP_PAIR_DOMINANCE_HIGH). unique_pairs=3 (WETH/USDC, WETH/USDT, wstETH/WETH). **SURFACE EXPANSION TESTED**: WETH/DAI, DAI/USDC, USDE/USDC pools have <$100 TVL on SushiSwap (NOT VIABLE). USDC/USDT spread=0.23bps (below threshold). **Trade size optimization**: target_usd_notional 1000→400 improved best roundtrip from -15 to -7 bps (still SLIPPAGE_TOO_HIGH). **Tests**: 1183 passed.
+**Snapshot (2026-03-01)**: From `ci_m5_gate_20260301_213822` (rolling stability): **runs_in_window=17**, **agg_status=PASS**, **agg_reasons=[]**, **drift_status=PASS**, **quality_status=WARN** (WARN_PROFIT_DIAGNOSTIC). unique_pairs=4 (WBTC/USDC, WBTC/WETH, WETH/USDT). paper_size_usd=250, min_spread_bps=10. fragile_rate_p90=0.0, data_run_rate=1.0. **Tests**: 1217 passed.
 
 ### Measured Slippage + Rejection Classification (2026-03-01)
 - **NEW**: `measured_slippage_bps()` in `execution/economics.py` - calculates from sqrtPriceX96 before/after

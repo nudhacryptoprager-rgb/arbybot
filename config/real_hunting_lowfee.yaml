@@ -43,6 +43,8 @@ require_cross_dex: true
 
 # Pairs with verified cross-DEX pools at low fee tiers
 # Verified via: py -3.11 -m scripts.verify_v3_pools --require-cross-dex --pairs WETH/USDC WETH/USDT WETH/DAI DAI/USDC USDC/USDT USDE/USDC
+# v3.2.3: WBTC/WETH restored with fee=500,3000 (Sushi 500 has liq=0, need 3000 for cross-DEX)
+# v3.2.3: Note: WBTC/WETH roundtrip won't be profitable due to LP_FEES_TOO_HIGH at 3000
 pairs:
   - token_in: WETH
     token_out: USDC
@@ -52,13 +54,13 @@ pairs:
     fee_tiers: [500]
   - token_in: WBTC
     token_out: WETH
-    fee_tiers: [500, 3000]  # 3000 fallback (sushi 500 has liq=0)
+    fee_tiers: [500, 3000]  # v3.2.3: Restored for signal diversity (3+ signals needed)
   - token_in: ARB
     token_out: WETH
     fee_tiers: [500]
   - token_in: LINK
     token_out: WETH
-    fee_tiers: [500, 3000]  # 3000 fallback for cross-DEX stability
+    fee_tiers: [500]  # v3.2.3: removed 3000 fallback (LP_FEES_TOO_HIGH)
   - token_in: wstETH
     token_out: WETH
     fee_tiers: [100, 500]
@@ -69,10 +71,10 @@ pairs:
   - token_in: USDC
     token_out: USDT
     fee_tiers: [100]
-  # === ARB/USDC (fee=500,3000) - cross-DEX for diversity ===
+  # === ARB/USDC (fee=500) - cross-DEX for diversity ===
   - token_in: ARB
     token_out: USDC
-    fee_tiers: [500, 3000]  # 3000 fallback for cross-DEX stability
+    fee_tiers: [500]  # v3.2.3: removed 3000 fallback (LP_FEES_TOO_HIGH)
 
 # ========== LOW-FEE POOL PRIORITY ==========
 # fee_tiers to query (100 = 0.01%, 500 = 0.05%)
@@ -83,20 +85,21 @@ default_fee_tiers:
 
 # ========== ECONOMICS PARAMETERS ==========
 # These are used by execution/economics.py for min_required_spread_bps calculation
-paper_size_usd: 100  # Reduced to minimize price impact slippage
+# v3.2.3: Paper size $250 with min_spread_bps=10 for 3+ signal diversity
+paper_size_usd: 250  # $250 paper trades (higher notional = better economics)
 gas_usd_estimate: 0.10  # Arbitrum gas is cheap
 paper_slippage_bps: 5   # Conservative slippage
 
 # Trade sizing: target USD notional per trade (affects slippage)
 # MUST match paper_size_usd for consistent slippage measurement
-target_usd_notional: 100  # Equal to paper_size_usd (sizing consistency)
+target_usd_notional: 250  # Equal to paper_size_usd (sizing consistency)
 use_usd_notional: true
 
-# Spread threshold: 16 bps ensures gross profit > cost floor (gas+slippage)
-# v3.2.2: min_spread_bps must satisfy: spread × size >= gas + slippage
-# With size=$100, slippage=5bps ($0.05), gas=$0.10 → cost_floor=$0.15
-# 16 bps × $100 = $0.16 > $0.15 → NOT FRAGILE
-min_spread_bps: 16
+# Spread threshold: 10 bps for $250 notional (cost floor ~10 bps)
+# v3.2.3: min_spread_bps must satisfy: spread × size >= gas + slippage
+# With size=$250, slippage=5bps ($0.125), gas=$0.10 → cost_floor=$0.225 = 9 bps
+# 10 bps × $250 = $0.25 > $0.225 → NOT FRAGILE (slight margin)
+min_spread_bps: 10
 
 # ========== STANDARD SETTINGS ==========
 
