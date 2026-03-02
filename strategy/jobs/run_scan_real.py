@@ -434,6 +434,32 @@ def run_scan(
             target_notional_usd=config.get("target_usd_notional", 1000.0),
             max_notional_drift_pct=config.get("drift_warning_pct", 20.0),
         )
+        
+        # v3.2.5: Link opportunities to spread_signals and copy economics
+        # Build lookup: (pair, buy_dex, sell_dex) -> spread_signal (with correct economics)
+        spread_signal_lookup = {}
+        for sig in spread_signals:
+            key = (sig.get("pair"), sig.get("buy_dex"), sig.get("sell_dex"))
+            spread_signal_lookup[key] = sig
+        
+        # Patch each opportunity with economics from corresponding spread_signal
+        for opp in opps_list:
+            if isinstance(opp, dict):
+                key = (opp.get("pair"), opp.get("buy_dex"), opp.get("sell_dex"))
+                sig = spread_signal_lookup.get(key)
+                if sig:
+                    # Copy economics fields from spread_signal (uses measured slippage)
+                    opp["min_required_spread_bps"] = sig.get("min_required_spread_bps", opp.get("min_required_spread_bps", 0))
+                    opp["spread_minus_required_bps"] = sig.get("spread_minus_required_bps", opp.get("spread_minus_required_bps", 0))
+                    opp["is_roundtrip_viable"] = sig.get("is_roundtrip_viable", False)
+                    # Add route and spread_bps for traceability
+                    opp["route"] = sig.get("route")
+                    opp["spread_bps"] = sig.get("spread_bps") or sig.get("spread_bps_ui")
+                    logger.debug(
+                        "Linked opp %s to spread_signal: min_req=%.1f, spread_minus=%.1f, viable=%s",
+                        key, opp["min_required_spread_bps"], opp["spread_minus_required_bps"], opp["is_roundtrip_viable"]
+                    )
+        
         stats["opportunity_engine"] = {
             "enabled": True,
             "summary": opps_summary,
@@ -537,6 +563,7 @@ def run_scan(
             evaluated_count=0,
             results_count=0,
             rejected_reasons={},
+            warnings=[],  # v3.2.5: Initialize warnings
         )
         
         # v3.2.4: Initialize l1_cost variables with defaults
@@ -692,6 +719,8 @@ def run_scan(
             "candidates_total": roundtrip_stats.candidates_total,
             "gated_by_economics": roundtrip_stats.gated_by_economics,
             "rejected_reasons": roundtrip_stats.rejected_reasons,
+            # v3.2.5: Warnings from roundtrip evaluation (L1 cost source, etc.)
+            "warnings": roundtrip_stats.warnings or [],
         }
         
         # v2.1.0: FIX issue #8 - best_net_pnl_bps should show actual best, not 0.0 when all negative

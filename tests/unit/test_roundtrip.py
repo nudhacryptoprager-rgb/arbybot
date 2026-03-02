@@ -828,3 +828,83 @@ class TestEconomicsGatingInvariants:
             "Viable opportunity with is_roundtrip_viable=True must NOT be gated"
         assert stats.evaluated_count >= 1, \
             "Viable opportunity must be evaluated (even if no quotes)"
+
+
+class TestRoundtripStatsWarnings:
+    """v3.2.5: Tests for roundtrip stats warnings field."""
+
+    def test_stats_has_warnings_field(self):
+        """RoundtripEvaluationStats must have warnings field."""
+        from engine.roundtrip import RoundtripEvaluationStats
+        
+        stats = RoundtripEvaluationStats()
+        
+        assert hasattr(stats, "warnings")
+        assert isinstance(stats.warnings, list)
+
+    def test_stats_warnings_in_to_dict(self):
+        """warnings must appear in to_dict() output."""
+        from engine.roundtrip import RoundtripEvaluationStats
+        
+        stats = RoundtripEvaluationStats(
+            candidates_total=1,
+            warnings=["L1_COST_SOURCE_NONE: L1 cost unavailable"],
+        )
+        
+        d = stats.to_dict()
+        assert "warnings" in d
+        assert d["warnings"] == ["L1_COST_SOURCE_NONE: L1 cost unavailable"]
+
+    def test_stats_empty_warnings_by_default(self):
+        """Default warnings should be empty list, not None."""
+        from engine.roundtrip import RoundtripEvaluationStats
+        
+        stats = RoundtripEvaluationStats()
+        
+        assert stats.warnings is not None
+        assert stats.warnings == []
+
+    def test_evaluate_adds_warnings_for_l1_cost_none(self):
+        """evaluate_roundtrip_candidates adds warning when l1_cost_source='none'."""
+        from engine.roundtrip import evaluate_roundtrip_candidates
+        
+        results, stats = evaluate_roundtrip_candidates(
+            opportunities=[],
+            buy_quotes_by_key={},
+            sell_quotes_by_key={},
+            top_n=5,
+            l1_cost_source="none",
+        )
+        
+        assert any("L1_COST_SOURCE_NONE" in w for w in stats.warnings), \
+            "Should warn when l1_cost_source='none'"
+
+    def test_evaluate_adds_warnings_for_l1_cost_default(self):
+        """evaluate_roundtrip_candidates adds warning when l1_cost_source='default'."""
+        from engine.roundtrip import evaluate_roundtrip_candidates
+        
+        results, stats = evaluate_roundtrip_candidates(
+            opportunities=[],
+            buy_quotes_by_key={},
+            sell_quotes_by_key={},
+            top_n=5,
+            l1_cost_source="default",
+        )
+        
+        assert any("L1_COST_SOURCE_DEFAULT" in w for w in stats.warnings), \
+            "Should warn when l1_cost_source='default'"
+
+    def test_evaluate_no_warning_for_l1_cost_onchain(self):
+        """evaluate_roundtrip_candidates should NOT warn when l1_cost_source='onchain'."""
+        from engine.roundtrip import evaluate_roundtrip_candidates
+        
+        results, stats = evaluate_roundtrip_candidates(
+            opportunities=[],
+            buy_quotes_by_key={},
+            sell_quotes_by_key={},
+            top_n=5,
+            l1_cost_source="onchain",
+        )
+        
+        assert not any("L1_COST_SOURCE" in w for w in stats.warnings), \
+            "Should NOT warn when l1_cost_source='onchain'"

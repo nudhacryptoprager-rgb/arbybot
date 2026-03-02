@@ -52,13 +52,13 @@ pairs:
     fee_tiers: [100, 500]  # Both DEXes have liq at 100
   - token_in: WETH
     token_out: USDT
-    fee_tiers: [100, 500]  # v3.2.4: Both DEXes have liq at 100
+    fee_tiers: [500]  # v3.2.5: fee=100 removed - measured_slippage=170bps at $100 notional
   - token_in: wstETH
     token_out: WETH
     fee_tiers: [100, 500]  # Both DEXes have liq at 100
   - token_in: ARB
     token_out: WETH
-    fee_tiers: [100, 500]  # v3.2.4: Both DEXes have liq at 100
+    fee_tiers: [500]  # v3.2.5: fee=100 removed - low liquidity causes high slippage
   # === MEDIUM-FEE CANDIDATES (100/500 mixed or 500 only) ===
   - token_in: LINK
     token_out: WETH

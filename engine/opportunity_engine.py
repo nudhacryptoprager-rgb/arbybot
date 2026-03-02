@@ -165,6 +165,10 @@ class Opportunity:
     spread_minus_required_bps: float = 0.0
     is_roundtrip_viable: bool = False  # Default False to gate unknowns
     
+    # v3.2.5: Route and spread_bps for tracing spread_signal origin
+    route: Optional[str] = None  # "{buy_dex}->{sell_dex}" format
+    spread_bps: Optional[int] = None  # Canonical integer bps from spread_signal
+    
     diagnostics: Dict[str, Any] = field(default_factory=dict)
     
     @property
@@ -199,6 +203,9 @@ class Opportunity:
             "min_required_spread_bps": round(self.min_required_spread_bps, 2),
             "spread_minus_required_bps": round(self.spread_minus_required_bps, 2),
             "is_roundtrip_viable": self.is_roundtrip_viable,
+            # v3.2.5: Route and spread_bps for tracing
+            "route": self.route,
+            "spread_bps": self.spread_bps,
             "diagnostics": self.diagnostics,
         }
 

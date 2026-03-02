@@ -72,12 +72,18 @@ SPREAD_SIGNAL_REQUIRED_KEYS = {
     "sell_dex",
     "buy_price",
     "sell_price",
+    "spread_bps",  # v3.2.5: Canonical integer bps
     "spread_bps_exact",
     "is_gross_positive",
     "gross_pnl_usdc_est",
     "net_pnl_usdc_est",
     "is_net_positive_est",
     "confidence",
+    # v3.2.5: Economics fields for roundtrip viability
+    "min_required_spread_bps",
+    "spread_minus_required_bps",
+    "is_roundtrip_viable",
+    "route",
 }
 
 # M4 artifacts
@@ -492,3 +498,57 @@ class TestCrossArtifactConfigConsistency:
                 # If RPC not available, test passes (offline scenario)
                 if "ARBY_OFFLINE" in os.environ or "RPC" in str(e).upper():
                     pytest.skip(f"RPC not available: {e}")
+
+
+class TestRoundtripStatsWarningsInArtifact:
+    """v3.2.5: Tests that roundtrip stats warnings field appears in artifacts."""
+    
+    def test_roundtrip_stats_has_warnings_key(self):
+        """truth_report.stats.roundtrip must contain 'warnings' key."""
+        from scripts.ci_m5_0_gate import generate_fixture_artifacts
+        import tempfile
+        from pathlib import Path
+        import json
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            ts = "20260209_120000"
+            generate_fixture_artifacts(output_dir, ts)
+            
+            path = output_dir / "reports" / f"truth_report_{ts}.json"
+            with open(path) as f:
+                data = json.load(f)
+            
+            stats = data.get("stats", {})
+            roundtrip = stats.get("roundtrip", {})
+            
+            # Roundtrip stats must have warnings (can be empty list)
+            assert "warnings" in roundtrip, \
+                "truth_report.stats.roundtrip must contain 'warnings' key"
+            assert isinstance(roundtrip["warnings"], list), \
+                "warnings must be a list"
+
+
+class TestOpportunityHasRouteAndSpreadBps:
+    """v3.2.5: Tests that top_opportunities have route and spread_bps."""
+    
+    def test_opportunity_has_route_field(self):
+        """top_opportunity should have a 'route' field."""
+        from engine.opportunity_engine import Opportunity
+        
+        opp = Opportunity(
+            spread_id="test",
+            pair="WETH/USDC",
+            buy_dex="uni",
+            sell_dex="sushi",
+            buy_fee=500,
+            sell_fee=500,
+            buy_price=100.0,
+            sell_price=100.1,
+            amount_in_wei=1000,
+        )
+        
+        d = opp.to_dict()
+        # Route and spread_bps should be in to_dict output
+        assert "route" in d, "Opportunity to_dict() must include 'route'"
+        assert "spread_bps" in d, "Opportunity to_dict() must include 'spread_bps'"

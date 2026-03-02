@@ -180,6 +180,20 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
             "dexes_active": 2, "price_sanity_passed": 3, "price_sanity_failed": 1,
             "rpc_success_rate": 1.0,
         },
+        # Nested stats (v3.2.5: includes roundtrip)
+        "stats": {
+            "quotes_total": 4, "quotes_fetched": 4, "gates_passed": 3,
+            "dexes_active": 2, "price_sanity_passed": 3, "price_sanity_failed": 1,
+            "roundtrip": {
+                "enabled": True,
+                "evaluated_count": 0,
+                "profitable_count": 0,
+                "candidates_total": 0,
+                "gated_by_economics": 0,
+                "rejected_reasons": {},
+                "warnings": [],  # v3.2.5: Always present
+            },
+        },
         # Spread signals (empty for fixture)
         "spread_signals": [],
     }
