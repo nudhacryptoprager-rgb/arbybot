@@ -575,6 +575,8 @@ def _build_spread_signal(
         "sell_fee": sell_fee,
         "price_direction": "quote_out_per_1_base_in",
         "price_note": f"1 {token_in} = X {token_out}",
+        # v3.2.4: spread_bps is canonical alias for schema consistency (integer bps)
+        "spread_bps": spread_bps_ui_display,
         "spread_bps_exact": round(float(spread_bps_decimal), 4),
         "spread_bps_ui": spread_bps_ui_display,
         "spread_pct": round(float(spread_bps_decimal) / 100, 6),

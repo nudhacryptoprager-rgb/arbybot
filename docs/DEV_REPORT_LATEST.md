@@ -4,45 +4,40 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-02T09:05:11Z
-run_id: data/runs/ci_m5_gate_20260302_100458
-mode: ONLINE (v3.2.4: economics fields + viability gating + bug fixes)
+timestamp_utc: 2026-03-02T09:39:04Z
+run_id: data/runs/ci_m5_gate_20260302_103848
+mode: ONLINE (v3.2.4: low-fee pool optimization + L1 warnings + spread_bps alias)
 artifact_mode: rolling
 config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-02T09:05:11Z
+  primary: ts:2026-03-02T09:39:04Z
   dirty: false
-  desc: v3.2.4 economics fields + roundtrip gating + L1 cost exception fix
+  desc: v3.2.4 low-fee pool optimization + roundtrip evaluated_count=1 achieved
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Add economics fields to Opportunity for roundtrip viability filtering
+goal (Roadmap пункт): Get at least 1 roundtrip candidate with evaluated_count>=1
 change_summary:
-  - ADD: engine/opportunity_engine.py - economics fields (min_required_spread_bps, spread_minus_required_bps, is_roundtrip_viable)
-  - ADD: engine/opportunity_engine.py - calculate economics using execution/economics.py formulas
-  - FIX: engine/roundtrip.py - change default is_roundtrip_viable from True to False (gate unknowns)
-  - FIX: strategy/jobs/run_scan_real.py - sort best_per_pair by spread_minus_required_bps (viability-first)
-  - FIX: strategy/jobs/run_scan_real.py - margin_viable filter (spread_minus > -5 bps)
-  - FIX: strategy/jobs/run_scan_real.py - catch ALL exceptions for L1 cost (not just ImportError)
-  - FIX: strategy/jobs/run_scan_real.py - initialize roundtrip_stats and l1_cost before if block
-  - ADD: tests/unit/test_opportunity_engine.py - invariant tests for economics fields
-  - ADD: tests/unit/test_roundtrip.py - invariant tests for gated_by_economics counter
-  - CONFIG: config/real_hunting_lowfee.yaml - paper_size_usd=100, min_spread_bps=10 (signal diversity)
-  - RESULT: runs_in_window=21, agg_status=PASS
-  - RESULT: No roundtrip error (bug fixed)
+  - FIX: config/real_hunting_lowfee.yaml - add fee=100 to WETH/USDT, ARB/WETH (verified both DEX active)
+  - FIX: config/real_hunting_lowfee.yaml - add pool addresses for fee=100 pools (4 new pools)
+  - ADD: engine/roundtrip.py - RoundtripEvaluationStats.warnings field for L1 cost alerts
+  - ADD: engine/roundtrip.py - warning when l1_cost_source='none' or 'default'
+  - ADD: strategy/spreads.py - spread_bps canonical alias for schema consistency
+  - VERIFY: scripts/verify_v3_pools.py - verified 8 pairs × 4 fee tiers × 2 DEX = 60 pools
+  - RESULT: roundtrip.evaluated_count=1 ✅ (goal achieved)
+  - RESULT: roundtrip.l1_cost_source=onchain ✅ (proper L1 cost)
+  - RESULT: runs_in_window=22, agg_status=PASS
   - TESTS: 1222 passed, 1 skipped
 touched_files:
-  - engine/opportunity_engine.py (economics fields + calculation)
-  - engine/roundtrip.py (default is_roundtrip_viable=False)
-  - strategy/jobs/run_scan_real.py (margin filter, exception fix, variable init)
-  - config/real_hunting_lowfee.yaml (paper_size_usd=100, min_spread_bps=10)
-  - tests/unit/test_roundtrip_direction.py (add economics fields to test opportunity)
-  - tests/unit/test_opportunity_engine.py (economics fields invariant tests)
-  - tests/unit/test_roundtrip.py (gated_by_economics invariant tests)
+  - config/real_hunting_lowfee.yaml (fee=100 pools + verified addresses)
+  - engine/roundtrip.py (warnings field + L1 cost alerts)
+  - strategy/spreads.py (spread_bps alias)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1222 passed, 1 skipped (13.94s)
+py -3.11 scripts/inspect_rolling.py: runs_in_window=21 → 22
+py -3.11 -m scripts.verify_v3_pools --pairs WETH/USDC WETH/USDT WBTC/USDC WBTC/WETH wstETH/WETH ARB/WETH ARB/USDC LINK/WETH --require-cross-dex --verbose --output data/tmp/v3_pools_verified.json: 60 pools verified
+py -3.11 -m pytest tests/unit -q: 1222 passed, 1 skipped (14.12s)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_hunting_lowfee.yaml --cycles 1 --refresh-rolling --refresh-rolling-strict --prune-keep 200: PASS
 
@@ -52,12 +47,12 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260302_100458/reports
+  - data/runs/ci_m5_gate_20260302_103848/reports
 v3_2_4_evidence:
-  - runs_in_window: 21
+  - runs_in_window: 22
   - agg_status: PASS
-  - data_run_rate: 0.8571
-  - total_net_usdc: 57.34
+  - data_run_rate: 0.8636
+  - total_net_usdc: 57.87
   - signals_included: 2
   - paper_size_usd: 100 (config)
   - min_spread_bps: 10 (config)

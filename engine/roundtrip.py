@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("engine.roundtrip")
 
@@ -150,16 +150,20 @@ class RoundtripEvaluationStats:
     
     Provides visibility into WHY opportunities were filtered/rejected,
     not just the results that were evaluated.
+    v3.2.4: Added warnings field for L1 cost source alerts.
     """
     candidates_total: int = 0          # Total opportunities passed in
     gated_by_economics: int = 0        # Filtered by is_roundtrip_viable=False or spread_minus_required<=0
     evaluated_count: int = 0           # Actually evaluated (not gated)
     results_count: int = 0             # Results returned (may be < evaluated if errors)
     rejected_reasons: Dict[str, int] = None  # Counter of reject reasons
+    warnings: List[str] = None         # v3.2.4: Warnings for data quality issues
     
     def __post_init__(self):
         if self.rejected_reasons is None:
             self.rejected_reasons = {}
+        if self.warnings is None:
+            self.warnings = []
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -168,6 +172,7 @@ class RoundtripEvaluationStats:
             "evaluated_count": self.evaluated_count,
             "results_count": self.results_count,
             "rejected_reasons": dict(self.rejected_reasons),
+            "warnings": list(self.warnings),
         }
 
 
@@ -542,12 +547,20 @@ def evaluate_roundtrip_candidates(
         )
     
     # v3.0.0: Build aggregation stats
+    # v3.2.4: Add warnings for L1 cost source issues
+    warnings = []
+    if l1_cost_source == "none":
+        warnings.append("L1_COST_SOURCE_NONE: L1 cost unavailable, gas estimates may be inaccurate")
+    elif l1_cost_source == "default":
+        warnings.append("L1_COST_SOURCE_DEFAULT: Using fallback L1 cost, gas estimates may be inaccurate")
+    
     stats = RoundtripEvaluationStats(
         candidates_total=min(len(opportunities), top_n),
         gated_by_economics=gated_count,
         evaluated_count=evaluated_count,
         results_count=len(results),
         rejected_reasons=rejected_reasons,
+        warnings=warnings,
     )
     
     return results, stats

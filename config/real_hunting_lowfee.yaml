@@ -42,39 +42,41 @@ dexes:
 require_cross_dex: true
 
 # Pairs with verified cross-DEX pools at low fee tiers
-# Verified via: py -3.11 -m scripts.verify_v3_pools --require-cross-dex --pairs WETH/USDC WETH/USDT WETH/DAI DAI/USDC USDC/USDT USDE/USDC
-# v3.2.3: WBTC/WETH restored with fee=500,3000 (Sushi 500 has liq=0, need 3000 for cross-DEX)
-# v3.2.3: Note: WBTC/WETH roundtrip won't be profitable due to LP_FEES_TOO_HIGH at 3000
+# Verified via: py -3.11 -m scripts.verify_v3_pools --pairs WETH/USDC WETH/USDT WBTC/USDC WBTC/WETH wstETH/WETH ARB/WETH ARB/USDC LINK/WETH --require-cross-dex --verbose
+# v3.2.4: Updated based on fresh pool verification (2026-03-02)
+# Priority: fee=100 when both DEXes have liquidity, else fee=500
 pairs:
+  # === BEST LOW-FEE CANDIDATES (100 bps on BOTH DEXes) ===
   - token_in: WETH
     token_out: USDC
-    fee_tiers: [100, 500]
+    fee_tiers: [100, 500]  # Both DEXes have liq at 100
   - token_in: WETH
     token_out: USDT
-    fee_tiers: [500]
-  - token_in: WBTC
-    token_out: WETH
-    fee_tiers: [500, 3000]  # v3.2.3: Restored for signal diversity (3+ signals needed)
-  - token_in: ARB
-    token_out: WETH
-    fee_tiers: [500]
-  - token_in: LINK
-    token_out: WETH
-    fee_tiers: [500]  # v3.2.3: removed 3000 fallback (LP_FEES_TOO_HIGH)
+    fee_tiers: [100, 500]  # v3.2.4: Both DEXes have liq at 100
   - token_in: wstETH
     token_out: WETH
-    fee_tiers: [100, 500]
+    fee_tiers: [100, 500]  # Both DEXes have liq at 100
+  - token_in: ARB
+    token_out: WETH
+    fee_tiers: [100, 500]  # v3.2.4: Both DEXes have liq at 100
+  # === MEDIUM-FEE CANDIDATES (100/500 mixed or 500 only) ===
+  - token_in: LINK
+    token_out: WETH
+    fee_tiers: [500]  # Sushi fee=100 doesn't exist, use 500
   - token_in: WBTC
     token_out: USDC
-    fee_tiers: [500]
-  # === USDC/USDT (fee=100) - cross-DEX verified ===
+    fee_tiers: [500]  # Uni fee=100 has liq=0, use 500
+  - token_in: ARB
+    token_out: USDC
+    fee_tiers: [500]  # Sushi fee=100 has liq=0, use 500
+  # === USDC/USDT (fee=100) - stablecoin cross-DEX ===
   - token_in: USDC
     token_out: USDT
     fee_tiers: [100]
-  # === ARB/USDC (fee=500) - cross-DEX for diversity ===
-  - token_in: ARB
-    token_out: USDC
-    fee_tiers: [500]  # v3.2.3: removed 3000 fallback (LP_FEES_TOO_HIGH)
+  # === HIGH-FEE FALLBACK (for signal diversity only) ===
+  - token_in: WBTC
+    token_out: WETH
+    fee_tiers: [3000]  # v3.2.4: Sushi 100/500 both liq=0, need 3000 for cross-DEX
 
 # ========== LOW-FEE POOL PRIORITY ==========
 # fee_tiers to query (100 = 0.01%, 500 = 0.05%)
@@ -182,14 +184,18 @@ pools:
   uniswap_v3_WETH_USDC_500: "0xC6962004f452bE9203591991D15f6b388e09E8D0"
   sushiswap_v3_WETH_USDC_100: "0xB658eE5c63922d2852f24458efFA2Bfa2cBA3574"  # Re-added (ACTIVE liq)
   sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
-  # === WETH/USDT (fee=500) ===
+  # === WETH/USDT (fee=100, 500) - v3.2.4: fee=100 verified both DEX active ===
+  uniswap_v3_WETH_USDT_100: "0x42161084d0672e1d3F26a9B53E653bE2084ff19C"
   uniswap_v3_WETH_USDT_500: "0x641C00A822e8b671738d32a431a4Fb6074E5c79d"
+  sushiswap_v3_WETH_USDT_100: "0x824D9bc425C599F46C700AFDcAe0867596f48cE2"
   sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
   # === WBTC/WETH (fee=500) ===
   uniswap_v3_WBTC_WETH_500: "0x2f5e87C9312fa29aed5c179E456625D79015299c"
   sushiswap_v3_WBTC_WETH_500: "0xf79099596045A41bB2ae53fa6677576687242455"  # Exists but liq=0 (see disabled_pools)
-  # === ARB/WETH (fee=500) ===
+  # === ARB/WETH (fee=100, 500) - v3.2.4: fee=100 verified both DEX active ===
+  uniswap_v3_ARB_WETH_100: "0x89A4026E9aDE251C67b7fb38054931a39936D9C5"
   uniswap_v3_ARB_WETH_500: "0xC6F780497A95e246EB9449f5e4770916DCd6396A"
+  sushiswap_v3_ARB_WETH_100: "0x011cc642ae74315001eeb541C1d2D225e92Ece3d"
   sushiswap_v3_ARB_WETH_500: "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11"  # Re-enabled (ACTIVE liq)
   # === LINK/WETH (fee=500) ===
   uniswap_v3_LINK_WETH_500: "0x91308bC9Ce8Ca2db82aA30C65619856cC939d907"
