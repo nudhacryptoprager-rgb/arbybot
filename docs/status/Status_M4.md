@@ -1,12 +1,30 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
-**Updated**: 2026-03-01  
+**Updated**: 2026-03-02  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-01)**: `agg_status=PASS` achieved. paper_size_usd=250, min_spread_bps=10. runs_in_window=17, pass_rate=1.0, data_run_rate=1.0, low_sample_rate=0.0, fragile_rate_p90=0.0. `unique_pairs=4`.
+> [!] **ROLLING STABILITY (2026-03-02)**: `agg_status=PASS` achieved. runs_in_window=22, pass_rate=1.0, data_run_rate=1.0, low_sample_rate=0.0, fragile_rate_p90=0.0. `unique_pairs=4`.
+
+## Economics Consistency Fix (2026-03-02)
+
+| Step | Change | File | Description |
+|------|--------|------|-------------|
+| 1 | **Link opps to spread_signals** | `strategy/jobs/run_scan_real.py` | Copy min_required_spread_bps, is_roundtrip_viable from spread_signal |
+| 2 | **Add route + spread_bps fields** | `engine/opportunity_engine.py` | Traceability: Opportunity now has route and spread_bps |
+| 3 | **Add warnings to roundtrip** | `strategy/jobs/run_scan_real.py` | stats.roundtrip.warnings field for L1 cost alerts |
+| 4 | **Remove fee=100 pools** | `config/real_hunting_lowfee.yaml` | WETH/USDT, ARB/WETH fee=100 removed (slippage=170bps at $100) |
+| 5 | **Tests added** | `tests/unit/test_*.py` | TestRoundtripStatsWarnings (6), TestOpportunityHasRouteAndSpreadBps |
+
+**Problem**: spread_signals showed `min_required_spread_bps=219`, `is_roundtrip_viable=False` while top_opportunities showed `min_required_spread_bps=29`, `is_roundtrip_viable=True` for same spread_id.
+
+**Root Cause**: `engine/opportunity_engine.py` used paper slippage (5 bps) while `strategy/spreads.py` used effective_slippage_bps (max of paper/measured ~170 bps).
+
+**Fix**: Link opportunities to spread_signals by (pair, buy_dex, sell_dex) key, copy economics fields. Remove fee=100 pools with high measured slippage.
+
+**Result**: Economics unified; when top_opportunities exist, they match spread_signals viability. Tests: 1230 passed.
 
 ## Rolling Stability Fix (2026-03-01)
 

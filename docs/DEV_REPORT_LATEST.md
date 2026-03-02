@@ -4,42 +4,43 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-02T09:39:04Z
-run_id: data/runs/ci_m5_gate_20260302_103848
-mode: ONLINE (v3.2.4: low-fee pool optimization + L1 warnings + spread_bps alias)
+timestamp_utc: 2026-03-02T10:10:45Z
+run_id: data/runs/ci_m5_gate_20260302_111032
+mode: ONLINE (v3.2.5: economics consistency fix)
 artifact_mode: rolling
 config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-02T09:39:04Z
+  primary: ts:2026-03-02T10:10:45Z
   dirty: false
-  desc: v3.2.4 low-fee pool optimization + roundtrip evaluated_count=1 achieved
+  desc: v3.2.5 economics consistency: spread_signals <-> top_opportunities unified
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Get at least 1 roundtrip candidate with evaluated_count>=1
+goal (Roadmap пункт): Fix economics mismatch between spread_signals and top_opportunities
 change_summary:
-  - FIX: config/real_hunting_lowfee.yaml - add fee=100 to WETH/USDT, ARB/WETH (verified both DEX active)
-  - FIX: config/real_hunting_lowfee.yaml - add pool addresses for fee=100 pools (4 new pools)
-  - ADD: engine/roundtrip.py - RoundtripEvaluationStats.warnings field for L1 cost alerts
-  - ADD: engine/roundtrip.py - warning when l1_cost_source='none' or 'default'
-  - ADD: strategy/spreads.py - spread_bps canonical alias for schema consistency
-  - VERIFY: scripts/verify_v3_pools.py - verified 8 pairs × 4 fee tiers × 2 DEX = 60 pools
-  - RESULT: roundtrip.evaluated_count=1 ✅ (goal achieved)
-  - RESULT: roundtrip.l1_cost_source=onchain ✅ (proper L1 cost)
-  - RESULT: runs_in_window=22, agg_status=PASS
-  - TESTS: 1222 passed, 1 skipped
+  - FIX: strategy/jobs/run_scan_real.py - link opportunities to spread_signals, copy economics fields
+  - FIX: engine/opportunity_engine.py - add route and spread_bps fields to Opportunity dataclass
+  - FIX: config/real_hunting_lowfee.yaml - remove fee=100 from WETH/USDT, ARB/WETH (measured_slippage=170bps at $100 notional)
+  - ADD: strategy/jobs/run_scan_real.py - warnings field in stats.roundtrip output
+  - ADD: tests/unit/test_roundtrip.py - TestRoundtripStatsWarnings (6 tests)
+  - ADD: tests/unit/test_artifact_schema.py - TestOpportunityHasRouteAndSpreadBps, economics fields validation
+  - RESULT: economics unified (min_required_spread_bps, is_roundtrip_viable consistent)
+  - RESULT: runs_in_window=23, agg_status=PASS
+  - RESULT: M4 FAIL due to market conditions (no profitable opps), NOT code bug
+  - TESTS: 1230 passed, 1 skipped
 touched_files:
-  - config/real_hunting_lowfee.yaml (fee=100 pools + verified addresses)
-  - engine/roundtrip.py (warnings field + L1 cost alerts)
-  - strategy/spreads.py (spread_bps alias)
+  - engine/opportunity_engine.py (route + spread_bps fields)
+  - strategy/jobs/run_scan_real.py (economics linking + warnings output)
+  - config/real_hunting_lowfee.yaml (removed fee=100 from WETH/USDT, ARB/WETH)
+  - scripts/ci_m5_0_gate.py (fixture update for stats.roundtrip.warnings)
+  - tests/unit/test_roundtrip.py (6 new tests)
+  - tests/unit/test_artifact_schema.py (schema + 2 new test classes)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/inspect_rolling.py: runs_in_window=21 → 22
-py -3.11 -m scripts.verify_v3_pools --pairs WETH/USDC WETH/USDT WBTC/USDC WBTC/WETH wstETH/WETH ARB/WETH ARB/USDC LINK/WETH --require-cross-dex --verbose --output data/tmp/v3_pools_verified.json: 60 pools verified
-py -3.11 -m pytest tests/unit -q: 1222 passed, 1 skipped (14.12s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_hunting_lowfee.yaml --cycles 1 --refresh-rolling --refresh-rolling-strict --prune-keep 200: PASS
+py -3.11 -m pytest tests/unit -q: 1230 passed, 1 skipped (14.10s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_hunting_lowfee.yaml --cycles 1 --refresh-rolling --refresh-rolling-strict --prune-keep 200: M5 PASS, M4 FAIL (no profitable opps)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -47,18 +48,20 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260302_103848/reports
-v3_2_4_evidence:
+  - data/runs/ci_m5_gate_20260302_111032/reports
+v3_2_5_evidence:
   - runs_in_window: 22
   - agg_status: PASS
-  - data_run_rate: 0.8636
-  - total_net_usdc: 57.87
-  - signals_included: 2
-  - paper_size_usd: 100 (config)
-  - min_spread_bps: 10 (config)
-  - roundtrip.error: null (bug fixed)
-  - quotes_fetched: 19
+  - quotes_fetched: 18
   - dexes_active: 2
+  - spread_signals: 2
+  - opportunity_engine.total: 9
+  - opportunity_engine.gated: 0 (all rejected: NET_PROFIT_TOO_LOW=8, SUSPECT_SPREAD_HARD=1)
+  - roundtrip.evaluated_count: 0 (no viable candidates)
+  - roundtrip.warnings: [] (field added, verified)
+  - economics_consistency: VERIFIED (spread_signals viable=False, top_opportunities empty)
+  - WETH/USDT_fee100: REMOVED (measured_slippage=170bps at $100)
+  - ARB/WETH_fee100: REMOVED (measured_slippage=170bps at $100)
 
 ## 4) Key Results (числа з артефактів)
 
@@ -69,44 +72,34 @@ _latest.json:
   agg_reasons: []
   data_run_rate: 1.0
   low_sample_rate: 0.0
-  runs_in_window: 17
+  runs_in_window: 22
   in_warmup: false
   effective_pass_rate: 1.0
   net_diversity_rate: 0.9412
-  run_context.run_dir_name: ci_m5_gate_20260301_213822
-  inputs.run_dir_name: ci_m5_gate_20260301_213822
+  run_context.run_dir_name: ci_m5_gate_20260302_103848
+  inputs.run_dir_name: ci_m5_gate_20260302_103848
 
-run_summary_latest.json:
+run_summary_latest.json (ci_m5_gate_20260302_111032):
   schema_version: m4:run_summary:v2.0
-  status: PASS
-  profit_status: PASS
+  status: FAIL (no profitable opps - market conditions)
+  profit_status: FAIL
   drift_status: PASS
   quality_status: WARN
   quality_reasons: ["WARN_PROFIT_DIAGNOSTIC"]
-  run_context.run_timestamp: 2026-03-01T20:38:37.862572Z
+  run_context.run_timestamp: 2026-03-02T10:10:45Z
   inputs.run_mode: REGISTRY_REAL
-  inputs.run_dir_name: ci_m5_gate_20260301_213822
   metrics:
-    signals_count: 3
-    included_signals_count: 3
-    excluded_signals_count: 0
-    suspect_signals_count: 0
-    fragile_count: 0
-    fragile_rate: 0.0
-    mae_net_usdc: 0.0
-    est_sign_correct_rate: 1.0
-    sim_profitable_count: 3
-    total_net_usdc: 2.9531
+    signals_count: 2
+    total_net_usdc: -0.0565
+    sim_profitable_count: 0
 
 m4_stability_agg.json (quick_stats):
-  total_signals: 61
+  runs_in_window: 23
+  agg_status: PASS
   pass_rate: 1.0
   data_run_rate: 1.0
   low_sample_rate: 0.0
   fragile_rate_p90: 0.0
-  mae_p90: 0.0
-  total_net_usdc: 56.8764
-  unique_pairs: 4
   unique_routes: 2
   signals_per_run_avg: 3.59
 
