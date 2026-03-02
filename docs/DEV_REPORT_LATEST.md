@@ -4,15 +4,15 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-02T09:36:58Z
-run_id: data/runs/ci_m5_gate_20260302_093644
-mode: ONLINE (v3.2.4: economics fields in Opportunity + viability gating)
+timestamp_utc: 2026-03-02T09:05:11Z
+run_id: data/runs/ci_m5_gate_20260302_100458
+mode: ONLINE (v3.2.4: economics fields + viability gating + bug fixes)
 artifact_mode: rolling
 config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-02T09:36:58Z
+  primary: ts:2026-03-02T09:05:11Z
   dirty: false
-  desc: v3.2.4 economics fields in Opportunity + roundtrip candidate gating
+  desc: v3.2.4 economics fields + roundtrip gating + L1 cost exception fix
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Add economics fields to Opportunity for roundtrip viability filtering
@@ -21,21 +21,29 @@ change_summary:
   - ADD: engine/opportunity_engine.py - calculate economics using execution/economics.py formulas
   - FIX: engine/roundtrip.py - change default is_roundtrip_viable from True to False (gate unknowns)
   - FIX: strategy/jobs/run_scan_real.py - sort best_per_pair by spread_minus_required_bps (viability-first)
-  - CONFIG: config/real_hunting_lowfee.yaml - paper_size_usd=100, min_spread_bps=30 (tighter economics)
-  - RESULT: gated_by_economics=1 (candidates without viable economics now filtered)
-  - RESULT: spread_bps=46.19 (WBTC/WETH sushiswap_v3→uniswap_v3 signal)
-  - TESTS: 1217 passed, 1 skipped
+  - FIX: strategy/jobs/run_scan_real.py - margin_viable filter (spread_minus > -5 bps)
+  - FIX: strategy/jobs/run_scan_real.py - catch ALL exceptions for L1 cost (not just ImportError)
+  - FIX: strategy/jobs/run_scan_real.py - initialize roundtrip_stats and l1_cost before if block
+  - ADD: tests/unit/test_opportunity_engine.py - invariant tests for economics fields
+  - ADD: tests/unit/test_roundtrip.py - invariant tests for gated_by_economics counter
+  - CONFIG: config/real_hunting_lowfee.yaml - paper_size_usd=100, min_spread_bps=10 (signal diversity)
+  - RESULT: runs_in_window=21, agg_status=PASS
+  - RESULT: No roundtrip error (bug fixed)
+  - TESTS: 1222 passed, 1 skipped
 touched_files:
   - engine/opportunity_engine.py (economics fields + calculation)
   - engine/roundtrip.py (default is_roundtrip_viable=False)
-  - strategy/jobs/run_scan_real.py (sort by spread_minus_required_bps)
-  - config/real_hunting_lowfee.yaml (paper_size_usd=100, min_spread_bps=30)
+  - strategy/jobs/run_scan_real.py (margin filter, exception fix, variable init)
+  - config/real_hunting_lowfee.yaml (paper_size_usd=100, min_spread_bps=10)
   - tests/unit/test_roundtrip_direction.py (add economics fields to test opportunity)
+  - tests/unit/test_opportunity_engine.py (economics fields invariant tests)
+  - tests/unit/test_roundtrip.py (gated_by_economics invariant tests)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1217 passed, 1 skipped (13.91s)
+py -3.11 -m pytest tests/unit -q: 1222 passed, 1 skipped (13.94s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_hunting_lowfee.yaml --cycles 1 --refresh-rolling --refresh-rolling-strict --prune-keep 200: PASS
 
 ## 3) Artifacts Attached (шляхи)
@@ -44,13 +52,16 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260302_093644/reports
+  - data/runs/ci_m5_gate_20260302_100458/reports
 v3_2_4_evidence:
-  - gated_by_economics: 1 (economics gate working)
-  - spread_bps: 46.19 (WBTC/WETH cross-dex signal)
-  - min_spread_bps: 30 (config updated)
-  - paper_size_usd: 100 (config updated)
-  - one_leg_profitable: 3 (diagnostic)
+  - runs_in_window: 21
+  - agg_status: PASS
+  - data_run_rate: 0.8571
+  - total_net_usdc: 57.34
+  - signals_included: 2
+  - paper_size_usd: 100 (config)
+  - min_spread_bps: 10 (config)
+  - roundtrip.error: null (bug fixed)
   - quotes_fetched: 19
   - dexes_active: 2
 

@@ -732,3 +732,99 @@ class TestRejectedReasonsInStats:
         assert "SLIPPAGE_TOO_HIGH" in d["rejected_reasons"]
         assert "LP_FEES_TOO_HIGH" in d["rejected_reasons"]
         assert d["rejected_reasons"]["SLIPPAGE_TOO_HIGH"] == 2
+
+
+class TestEconomicsGatingInvariants:
+    """v3.2.4: Invariants for economics gating.
+    
+    These tests ensure that:
+    1. Opportunities without economics fields are gated (not silently passed)
+    2. Opportunities with spread_minus_required_bps <= 0 are gated
+    3. gated_by_economics counter always increments for non-viable candidates
+    """
+    
+    def test_missing_economics_fields_gates_opportunity(self):
+        """Opportunity WITHOUT is_roundtrip_viable field should be gated (default=False)."""
+        from engine.roundtrip import evaluate_roundtrip_candidates
+        
+        # Opportunity missing all economics fields
+        opportunities = [{
+            "pair": "WETH/USDC",
+            "buy_dex": "uniswap_v3",
+            "sell_dex": "sushiswap_v3",
+            "buy_fee": 500,
+            "sell_fee": 500,
+            "diagnostics": {"buy_pool": "0x1", "sell_pool": "0x2"},
+            # NO economics fields: is_roundtrip_viable, spread_minus_required_bps, min_required_spread_bps
+        }]
+        
+        results, stats = evaluate_roundtrip_candidates(
+            opportunities=opportunities,
+            buy_quotes_by_key={},
+            sell_quotes_by_key={},
+            top_n=5,
+        )
+        
+        # Must be gated, not evaluated
+        assert stats.gated_by_economics == 1, \
+            "Opportunity without economics fields must be gated (default is_roundtrip_viable=False)"
+        assert stats.evaluated_count == 0, \
+            "Opportunity without economics fields must NOT be evaluated"
+    
+    def test_negative_spread_minus_increments_gated_counter(self):
+        """Opportunity with spread_minus_required_bps <= 0 increments gated_by_economics."""
+        from engine.roundtrip import evaluate_roundtrip_candidates
+        
+        opportunities = [{
+            "pair": "WBTC/WETH",
+            "buy_dex": "uniswap_v3",
+            "sell_dex": "sushiswap_v3",
+            "buy_fee": 3000,
+            "sell_fee": 3000,
+            "diagnostics": {"buy_pool": "0x1", "sell_pool": "0x2"},
+            # Economics: negative margin = not viable
+            "min_required_spread_bps": 58.0,
+            "spread_minus_required_bps": -12.0,  # Negative: not viable
+            "is_roundtrip_viable": False,
+        }]
+        
+        results, stats = evaluate_roundtrip_candidates(
+            opportunities=opportunities,
+            buy_quotes_by_key={},
+            sell_quotes_by_key={},
+            top_n=5,
+        )
+        
+        assert stats.gated_by_economics == 1, \
+            "Negative spread_minus_required_bps must increment gated_by_economics"
+        assert stats.evaluated_count == 0
+    
+    def test_viable_opportunity_not_gated(self):
+        """Opportunity with is_roundtrip_viable=True and positive margin is NOT gated."""
+        from engine.roundtrip import evaluate_roundtrip_candidates
+        
+        opportunities = [{
+            "pair": "WETH/USDC",
+            "buy_dex": "uniswap_v3",
+            "sell_dex": "sushiswap_v3",
+            "buy_fee": 100,
+            "sell_fee": 100,
+            "diagnostics": {"buy_pool": "0xAAA", "sell_pool": "0xBBB"},
+            # Economics: positive margin = viable
+            "min_required_spread_bps": 15.0,
+            "spread_minus_required_bps": 10.0,  # Positive: viable
+            "is_roundtrip_viable": True,
+        }]
+        
+        results, stats = evaluate_roundtrip_candidates(
+            opportunities=opportunities,
+            buy_quotes_by_key={},
+            sell_quotes_by_key={},
+            top_n=5,
+        )
+        
+        # Should NOT be gated (but may fail later due to missing quotes)
+        assert stats.gated_by_economics == 0, \
+            "Viable opportunity with is_roundtrip_viable=True must NOT be gated"
+        assert stats.evaluated_count >= 1, \
+            "Viable opportunity must be evaluated (even if no quotes)"

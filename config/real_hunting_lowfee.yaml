@@ -85,8 +85,8 @@ default_fee_tiers:
 
 # ========== ECONOMICS PARAMETERS ==========
 # These are used by execution/economics.py for min_required_spread_bps calculation
-# v3.2.4: Paper size $100 with min_spread_bps=30 for robust economics gating
-# Lower notional = tighter slippage; higher min_spread = fewer but viable candidates
+# v3.2.4: Paper size $100 with min_spread_bps=10 for signal diversity
+# v3.2.4: Economics gating in roundtrip.py handles viability filtering
 paper_size_usd: 100  # $100 paper trades (tighter slippage)
 gas_usd_estimate: 0.10  # Arbitrum gas is cheap
 paper_slippage_bps: 5   # Conservative slippage
@@ -96,11 +96,10 @@ paper_slippage_bps: 5   # Conservative slippage
 target_usd_notional: 100  # Equal to paper_size_usd (sizing consistency)
 use_usd_notional: true
 
-# Spread threshold: 30 bps for $100 notional (economics-first gating)
-# v3.2.4: min_spread_bps=30 ensures spread_minus_required > 0 for viable candidates
-# With size=$100, slippage=5bps ($0.05), gas=$0.10 → cost_floor=$0.15 = 15 bps
-# 30 bps × $100 = $0.30 > $0.15 → margin=15bps → NOT FRAGILE
-min_spread_bps: 30
+# Spread threshold: 10 bps for signal diversity, economics gate filters viable
+# v3.2.4: Keep min_spread_bps=10 for signal coverage; roundtrip economics gating
+# handles filtering candidates with spread_minus_required_bps <= 0
+min_spread_bps: 10
 
 # ========== STANDARD SETTINGS ==========
 

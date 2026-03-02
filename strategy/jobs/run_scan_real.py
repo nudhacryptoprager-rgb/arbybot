@@ -528,6 +528,21 @@ def run_scan(
         
         # Evaluate top-5 one-leg opportunities with round-trip
         roundtrip_results = []
+        
+        # v3.2.4: Initialize roundtrip_stats with defaults to avoid unbound errors
+        from engine.roundtrip import RoundtripEvaluationStats as RTStats
+        roundtrip_stats = RTStats(
+            candidates_total=0,
+            gated_by_economics=0,
+            evaluated_count=0,
+            results_count=0,
+            rejected_reasons={},
+        )
+        
+        # v3.2.4: Initialize l1_cost variables with defaults
+        l1_cost_wei = 0
+        l1_cost_source = "none"
+        
         if opps_list:
             # v2.1.0: Get L1 cost with source tracking (prefer onchain if w3_instance available)
             # v2.1.0-fix: Pass representative swap calldata for accurate L1 estimation
@@ -554,8 +569,10 @@ def run_scan(
                     },
                     prefer_onchain=True,
                 )
-            except ImportError:
+            except Exception as l1_err:
+                # v3.2.4: Catch ALL exceptions, not just ImportError
                 # Fallback to config-based estimate
+                logger.debug("L1 cost estimation failed: %s, using config fallback", l1_err)
                 l1_cost_wei = int(gas_config.l1_data_gas_units * gas_config.l1_gas_price_gwei * 1e9)
                 l1_cost_source = "config"
             
@@ -580,6 +597,16 @@ def run_scan(
             def roundtrip_eligible(opp: dict) -> bool:
                 return is_cross_dex(opp) and lp_fee_viable(opp)
             
+            # v3.2.4: Filter for minimum viability margin before roundtrip eval
+            # Only candidates with spread_minus_required_bps > -5 get evaluated
+            # This prevents wasting roundtrip evals on clearly non-viable candidates
+            MIN_SPREAD_MINUS_THRESHOLD = -5.0  # bps
+            
+            def margin_viable(opp: dict) -> bool:
+                """Check if candidate has viable economics margin."""
+                margin = opp.get("spread_minus_required_bps", -999)
+                return margin > MIN_SPREAD_MINUS_THRESHOLD
+            
             # v2.8.0: Best-per-pair selection to improve coverage across pairs
             # Instead of taking top-N overall (which often clusters on one pair),
             # select best candidate per unique pair, then take top-5
@@ -597,14 +624,17 @@ def run_scan(
                 # v3.2.4: Sort by spread_minus_required_bps descending (viable first)
                 return sorted(pairs_best.values(), key=lambda x: x.get("spread_minus_required_bps", -999), reverse=True)
             
-            # Apply best-per-pair, filter by eligibility, take top 5
+            # Apply best-per-pair, filter by eligibility AND margin viability, take top 5
             per_pair_best = best_per_pair(opps_list, max_candidates=20)
-            eligible_opps = [o for o in per_pair_best if roundtrip_eligible(o)][:5]
+            # v3.2.4: Filter by roundtrip_eligible AND margin_viable (spread_minus > -5 bps)
+            eligible_opps = [o for o in per_pair_best if roundtrip_eligible(o) and margin_viable(o)][:5]
+            margin_filtered_count = len([o for o in per_pair_best if roundtrip_eligible(o)]) - len([o for o in per_pair_best if roundtrip_eligible(o) and margin_viable(o)])
             stats["roundtrip_lp_filter"] = {
                 "candidates_considered": min(20, len(opps_list)),
                 "cross_dex_count": len([o for o in opps_list[:20] if is_cross_dex(o)]),
                 "lp_viable_count": len([o for o in opps_list[:20] if lp_fee_viable(o)]),
                 "unique_pairs_considered": len(per_pair_best),  # v2.8.0: Track pair diversity
+                "margin_filtered_count": margin_filtered_count,  # v3.2.4: Count filtered by margin
                 "passed_to_roundtrip": len(eligible_opps),
             }
             

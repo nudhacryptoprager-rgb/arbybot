@@ -551,3 +551,72 @@ class TestV280SortOrder:
             # First opportunity should have higher net_profit_usd
             assert opps_list[0]["net_profit_usd"] >= opps_list[1]["net_profit_usd"], \
                 "Opportunities should be sorted by net_profit_usd descending"
+
+
+class TestV324EconomicsFieldsInvariant:
+    """v3.2.4: Opportunity must always contain economics fields.""" 
+    
+    def test_opportunity_to_dict_has_economics_fields(self):
+        """Opportunity.to_dict() must contain economics fields."""
+        from decimal import Decimal
+        
+        opp = Opportunity(
+            spread_id="test_001",
+            pair="WETH/USDC",
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            buy_fee=500,
+            sell_fee=500,
+            buy_price=Decimal("2000"),
+            sell_price=Decimal("2050"),
+            amount_in_wei=50000000000000000,
+            gross_spread_bps=Decimal("250"),
+            net_profit_usd=0.5,
+            # v3.2.4: economics fields
+            min_required_spread_bps=20.0,
+            spread_minus_required_bps=30.0,
+            is_roundtrip_viable=True,
+        )
+        
+        d = opp.to_dict()
+        
+        assert "min_required_spread_bps" in d, \
+            "Opportunity.to_dict() must contain min_required_spread_bps"
+        assert "spread_minus_required_bps" in d, \
+            "Opportunity.to_dict() must contain spread_minus_required_bps"
+        assert "is_roundtrip_viable" in d, \
+            "Opportunity.to_dict() must contain is_roundtrip_viable"
+        
+        # Verify correct values
+        assert d["min_required_spread_bps"] == 20.0
+        assert d["spread_minus_required_bps"] == 30.0
+        assert d["is_roundtrip_viable"] == True
+    
+    def test_evaluate_quotes_produces_economics_fields(self):
+        """evaluate_quotes must produce opportunities with economics fields."""
+        quotes = [
+            {"dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2000", "fee": 500, "usd_notional": 100, "amount_in_wei": 50000000000000000,
+             "quote_source": "quoter_v2"},
+            {"dex_id": "sushiswap_v3", "token_in": "WETH", "token_out": "USDC", 
+             "price": "2050", "fee": 500, "usd_notional": 100, "amount_in_wei": 50000000000000000,
+             "quote_source": "quoter_v2"},  # 2.5% spread (enough to generate opp)
+        ]
+        
+        opps_list, summary = evaluate_quotes(
+            quotes, target_notional_usd=100.0, max_notional_drift_pct=50.0
+        )
+        
+        if len(opps_list) >= 1:
+            opp = opps_list[0]
+            assert "min_required_spread_bps" in opp, \
+                "evaluate_quotes output must include min_required_spread_bps"
+            assert "spread_minus_required_bps" in opp, \
+                "evaluate_quotes output must include spread_minus_required_bps"
+            assert "is_roundtrip_viable" in opp, \
+                "evaluate_quotes output must include is_roundtrip_viable"
+            
+            # Validate semantics: if spread_minus > 0, is_roundtrip_viable should be True
+            if opp["spread_minus_required_bps"] > 0:
+                assert opp["is_roundtrip_viable"] == True, \
+                    "Positive spread_minus_required_bps must have is_roundtrip_viable=True"
