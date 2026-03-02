@@ -463,7 +463,7 @@ def evaluate_roundtrip_candidates(
         # v2.9.8: Economics gate - skip if spread_minus_required_bps <= 0
         # This filters candidates that are mathematically unprofitable
         spread_minus_required = opp.get("spread_minus_required_bps")
-        is_roundtrip_viable = opp.get("is_roundtrip_viable", True)  # default True for backward compat
+        is_roundtrip_viable = opp.get("is_roundtrip_viable", False)  # v3.2.4: default False to gate unknowns
         
         if spread_minus_required is not None and spread_minus_required <= 0:
             gated_count += 1

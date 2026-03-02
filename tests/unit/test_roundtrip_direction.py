@@ -171,6 +171,10 @@ class TestRoundtripDirectionV220(unittest.TestCase):
                 "buy_pool": "0xBuyPool",
                 "sell_pool": "0xSellPool",
             },
+            # v3.2.4: Economics fields required for roundtrip evaluation
+            "is_roundtrip_viable": True,
+            "min_required_spread_bps": 10.0,
+            "spread_minus_required_bps": 20.0,
         }]
         
         buy_quotes = {

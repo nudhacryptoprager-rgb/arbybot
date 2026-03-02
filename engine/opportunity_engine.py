@@ -20,6 +20,11 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from m4.policy import Thresholds  # v2.1.0: Policy-unified thresholds
+from execution.economics import (
+    min_required_spread_bps as calc_min_required,
+    spread_minus_required as calc_spread_minus,
+    fee_tier_to_bps,
+)
 
 logger = logging.getLogger("engine.opportunity_engine")
 
@@ -155,6 +160,11 @@ class Opportunity:
     buy_gas_estimate: Optional[int] = None
     sell_gas_estimate: Optional[int] = None
     
+    # v3.2.4: Economics fields for roundtrip gating
+    min_required_spread_bps: float = 0.0
+    spread_minus_required_bps: float = 0.0
+    is_roundtrip_viable: bool = False  # Default False to gate unknowns
+    
     diagnostics: Dict[str, Any] = field(default_factory=dict)
     
     @property
@@ -185,6 +195,10 @@ class Opportunity:
             "reject_reason": self.reject_reason,
             "buy_quote_source": self.buy_quote_source,
             "sell_quote_source": self.sell_quote_source,
+            # v3.2.4: Economics fields
+            "min_required_spread_bps": round(self.min_required_spread_bps, 2),
+            "spread_minus_required_bps": round(self.spread_minus_required_bps, 2),
+            "is_roundtrip_viable": self.is_roundtrip_viable,
             "diagnostics": self.diagnostics,
         }
 
@@ -427,6 +441,32 @@ class OpportunityEngine:
                     gate_passed = False
                     reject_reason = f"NOTIONAL_DRIFT: {notional_drift_pct:.1f}% > {self.max_notional_drift_pct:.1f}%"
             
+            # v3.2.4: Calculate economics fields for roundtrip gating
+            # Use the same formula as strategy/spreads.py for consistency
+            buy_fee_bps = fee_tier_to_bps(buy_fee)
+            sell_fee_bps = fee_tier_to_bps(sell_fee)
+            slippage_bps_est = 5.0  # Default paper slippage
+            size_usd_calc = float(usd_notional) if usd_notional else 250.0
+            
+            opp_min_required_bps = calc_min_required(
+                fee_bps_leg1=buy_fee_bps,
+                fee_bps_leg2=sell_fee_bps,
+                slippage_bps=slippage_bps_est,
+                gas_usd=gas_cost_usd,
+                size_usd=size_usd_calc,
+                safety_bps=2.0,
+            )
+            opp_spread_minus_req = calc_spread_minus(
+                spread_bps=float(gross_spread_bps),
+                fee_bps_leg1=buy_fee_bps,
+                fee_bps_leg2=sell_fee_bps,
+                slippage_bps=slippage_bps_est,
+                gas_usd=gas_cost_usd,
+                size_usd=size_usd_calc,
+                safety_bps=2.0,
+            )
+            opp_is_viable = opp_spread_minus_req > 0
+            
             return Opportunity(
                 spread_id=spread_id,
                 pair=pair,
@@ -450,6 +490,10 @@ class OpportunityEngine:
                 sell_quote_source=sell_quote.get("quote_source", "slot0"),
                 buy_gas_estimate=buy_gas,
                 sell_gas_estimate=sell_gas,
+                # v3.2.4: Economics fields
+                min_required_spread_bps=opp_min_required_bps,
+                spread_minus_required_bps=opp_spread_minus_req,
+                is_roundtrip_viable=opp_is_viable,
                 diagnostics={
                     "buy_pool": buy_quote.get("pool_address"),
                     "sell_pool": sell_quote.get("pool_address"),

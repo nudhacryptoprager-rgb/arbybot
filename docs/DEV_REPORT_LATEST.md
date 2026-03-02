@@ -4,45 +4,39 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-01T20:38:37Z
-run_id: data/runs/ci_m5_gate_20260301_213822
-mode: ONLINE (v3.2.3: observability + rolling stability)
+timestamp_utc: 2026-03-02T09:36:58Z
+run_id: data/runs/ci_m5_gate_20260302_093644
+mode: ONLINE (v3.2.4: economics fields in Opportunity + viability gating)
 artifact_mode: rolling
 config: config/real_hunting_lowfee.yaml
 code_identity:
-  primary: ts:2026-03-01T20:38:37Z
+  primary: ts:2026-03-02T09:36:58Z
   dirty: false
-  desc: v3.2.3 observability fixes + agg_status=PASS
+  desc: v3.2.4 economics fields in Opportunity + roundtrip candidate gating
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Complete rolling window stability with agg_status=PASS
+goal (Roadmap пункт): Add economics fields to Opportunity for roundtrip viability filtering
 change_summary:
-  - FIX: m4/gates.py - add run_dir_name to _latest.json run_context and inputs sections
-  - FIX: m4/rolling_store.py - add run_dir_name to emit_rolling_artifacts for consistency
-  - FIX: strategy/artifacts.py - add runtime_disabled_count to reject_histogram for observability sync
-  - CONFIG: config/real_hunting_lowfee.yaml - paper_size_usd=250, min_spread_bps=10, target_usd_notional=250
-  - CONFIG: WBTC/WETH restored with fee=[500,3000] for signal diversity (3+ signals per run)
-  - RESULT: agg_status=PASS, agg_reasons=[] (no WARN/FAIL)
-  - RESULT: runs_in_window=17, pass_rate=1.0, data_run_rate=1.0
-  - RESULT: fragile_count=0, fragile_rate_p90=0, low_sample_rate=0
-  - RESULT: total_net_usdc=56.88 (window), unique_pairs=4, unique_routes=2
+  - ADD: engine/opportunity_engine.py - economics fields (min_required_spread_bps, spread_minus_required_bps, is_roundtrip_viable)
+  - ADD: engine/opportunity_engine.py - calculate economics using execution/economics.py formulas
+  - FIX: engine/roundtrip.py - change default is_roundtrip_viable from True to False (gate unknowns)
+  - FIX: strategy/jobs/run_scan_real.py - sort best_per_pair by spread_minus_required_bps (viability-first)
+  - CONFIG: config/real_hunting_lowfee.yaml - paper_size_usd=100, min_spread_bps=30 (tighter economics)
+  - RESULT: gated_by_economics=1 (candidates without viable economics now filtered)
+  - RESULT: spread_bps=46.19 (WBTC/WETH sushiswap_v3→uniswap_v3 signal)
   - TESTS: 1217 passed, 1 skipped
 touched_files:
-  - m4/gates.py (run_dir_name in _latest.json)
-  - m4/rolling_store.py (run_dir_name in emit_rolling_artifacts)
-  - strategy/artifacts.py (runtime_disabled_count in reject_histogram)
-  - config/real_hunting_lowfee.yaml (paper_size_usd, min_spread_bps, WBTC/WETH restored)
-  - tests/unit/test_emit_rolling_artifacts.py (test_run_dir_name_in_latest_json)
-  - tests/unit/test_scan_reject_invariants.py (runtime_disabled_count tests)
+  - engine/opportunity_engine.py (economics fields + calculation)
+  - engine/roundtrip.py (default is_roundtrip_viable=False)
+  - strategy/jobs/run_scan_real.py (sort by spread_minus_required_bps)
+  - config/real_hunting_lowfee.yaml (paper_size_usd=100, min_spread_bps=30)
+  - tests/unit/test_roundtrip_direction.py (add economics fields to test opportunity)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1217 passed, 1 skipped (17.44s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --artifact-mode rolling: PASS
-py -3.11 scripts/ci_m5_0_gate.py --offline: PASS
-start.py ONLINE 10-min runs: 17 runs, all PASS
+py -3.11 -m pytest tests/unit -q: 1217 passed, 1 skipped (13.91s)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_hunting_lowfee.yaml --cycles 1 --refresh-rolling --refresh-rolling-strict --prune-keep 200: PASS
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -50,17 +44,15 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260301_213822/reports
-v3_2_3_evidence:
-  - agg_status: PASS
-  - agg_reasons: []
-  - runs_in_window: 17
-  - pass_rate: 1.0
-  - data_run_rate: 1.0
-  - low_sample_rate: 0.0
-  - fragile_rate_p90: 0.0
-  - run_dir_name in _latest.json: ci_m5_gate_20260301_213822
-  - runtime_disabled_count in reject_histogram: synced
+  - data/runs/ci_m5_gate_20260302_093644/reports
+v3_2_4_evidence:
+  - gated_by_economics: 1 (economics gate working)
+  - spread_bps: 46.19 (WBTC/WETH cross-dex signal)
+  - min_spread_bps: 30 (config updated)
+  - paper_size_usd: 100 (config updated)
+  - one_leg_profitable: 3 (diagnostic)
+  - quotes_fetched: 19
+  - dexes_active: 2
 
 ## 4) Key Results (числа з артефактів)
 

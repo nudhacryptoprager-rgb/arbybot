@@ -583,15 +583,19 @@ def run_scan(
             # v2.8.0: Best-per-pair selection to improve coverage across pairs
             # Instead of taking top-N overall (which often clusters on one pair),
             # select best candidate per unique pair, then take top-5
+            # v3.2.4: Sort by spread_minus_required_bps (desc) for viability-first selection
             def best_per_pair(opps, max_candidates=10):
-                """Select best opportunity per pair by net_profit_usd."""
+                """Select best opportunity per pair by spread_minus_required_bps."""
                 pairs_best = {}
                 for o in opps[:max_candidates]:
                     pair = o.get("pair", "unknown")
-                    if pair not in pairs_best or o.get("net_profit_usd", 0) > pairs_best[pair].get("net_profit_usd", 0):
+                    # v3.2.4: Prioritize by spread_minus_required_bps (viability margin)
+                    curr_margin = o.get("spread_minus_required_bps", -999)
+                    best_margin = pairs_best[pair].get("spread_minus_required_bps", -999) if pair in pairs_best else -999
+                    if pair not in pairs_best or curr_margin > best_margin:
                         pairs_best[pair] = o
-                # Return sorted by net_profit_usd descending
-                return sorted(pairs_best.values(), key=lambda x: x.get("net_profit_usd", 0), reverse=True)
+                # v3.2.4: Sort by spread_minus_required_bps descending (viable first)
+                return sorted(pairs_best.values(), key=lambda x: x.get("spread_minus_required_bps", -999), reverse=True)
             
             # Apply best-per-pair, filter by eligibility, take top 5
             per_pair_best = best_per_pair(opps_list, max_candidates=20)
