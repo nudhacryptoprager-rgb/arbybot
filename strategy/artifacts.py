@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from core.constants import SCHEMA_VERSION, CURRENT_EXECUTION_BLOCKER
+# v3.2.7: Atomic JSON writes for artifacts
+from core.json_io import atomic_write_json
+# v3.2.7: Path canonicalization for OS-independent artifacts
+from core.no_data import canonicalize_config_path
 from strategy.quarantine import get_quarantine_manager
 
 # v2.0.4: Import canonical pool_key builder
@@ -57,24 +61,21 @@ def write_artifacts(
     # Otherwise (incident or full mode): write to disk
     reports_dir = output_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
+    # v3.2.7: Use atomic writes for artifacts
     scan_path = reports_dir / f"scan_{timestamp}.json"
-    with open(scan_path, "w") as f:
-        json.dump(scan_data, f, indent=2, default=str)
+    atomic_write_json(scan_path, scan_data, default=str)
     artifacts["scan"] = scan_path
     truth_path = reports_dir / f"truth_report_{timestamp}.json"
-    with open(truth_path, "w") as f:
-        json.dump(truth_data, f, indent=2, default=str)
+    atomic_write_json(truth_path, truth_data, default=str)
     artifacts["truth_report"] = truth_path
     reject_path = reports_dir / f"reject_histogram_{timestamp}.json"
-    with open(reject_path, "w") as f:
-        json.dump(reject_data, f, indent=2, default=str)
+    atomic_write_json(reject_path, reject_data, default=str)
     artifacts["reject_histogram"] = reject_path
     # LEGACY: snapshots/ (backward compat)
     snapshots_dir = output_dir / "snapshots"
     snapshots_dir.mkdir(parents=True, exist_ok=True)
     snapshot_scan = snapshots_dir / f"scan_{timestamp}.json"
-    with open(snapshot_scan, "w") as f:
-        json.dump(scan_data, f, indent=2, default=str)
+    atomic_write_json(snapshot_scan, scan_data, default=str)
     scan_log = output_dir / "scan.log"
     with open(scan_log, "w") as f:
         f.write(f"scan completed: {timestamp}\n")
@@ -176,6 +177,8 @@ def build_truth_data(
             "run_timestamp": now,
         },
         "chain_id": config.get("chain_id", 42161),
+        # v3.2.7: chain_key for multi-chain observability (strict contract: 'unknown' if missing)
+        "chain_key": config.get("chain", "unknown"),
         "current_block": current_block,
         "config_params": {
             "min_spread_bps": spread_threshold_bps,
@@ -186,7 +189,8 @@ def build_truth_data(
             "autosize": config.get("autosize", {}),
             # v2.2.1: Config transparency for reproducibility
             "require_cross_dex": config.get("require_cross_dex", False),
-            "config_path": config.get("_config_path", None),
+            # v3.2.7: POSIX-canonical config_path
+            "config_path": canonicalize_config_path(config.get("_config_path")),
         },
         "quotes_total": stats["quotes_total"],
         "quotes_fetched": stats["quotes_fetched"],
@@ -359,6 +363,8 @@ def build_reject_data(
             "run_timestamp": now,
         },
         "chain_id": config.get("chain_id", 42161),
+        # v3.2.7: chain_key for multi-chain observability (strict contract: 'unknown' if missing)
+        "chain_key": config.get("chain", "unknown"),
         "current_block": current_block,
         "rejects": rejected_quotes,  # canonical list (includes sanity_rejects)
         "sample_rejects": rejected_quotes[:10] if rejected_quotes else [],
@@ -412,6 +418,8 @@ def build_scan_data(
             "run_timestamp": now,
         },
         "chain_id": config.get("chain_id", 42161),
+        # v3.2.7: chain_key for multi-chain observability (strict contract: 'unknown' if missing)
+        "chain_key": config.get("chain", "unknown"),
         "current_block": current_block,
         "quotes_total": stats["quotes_total"],
         "quotes_fetched": stats["quotes_fetched"],

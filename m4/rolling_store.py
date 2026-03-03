@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+# v3.2.7: Atomic JSON writes for rolling artifacts
+from core.json_io import atomic_write_json
 from .evidence import get_git_context
 
 
@@ -221,9 +223,8 @@ def emit_to_aggregator_light(
     # Compute quick stats
     agg_data = _compute_quick_stats(agg_data, run_summary=run_summary, target_sha=target_sha)
     
-    # Write to disk
-    with open(agg_path, "w") as f:
-        json.dump(agg_data, f, indent=2)
+    # v3.2.7: Use atomic write for aggregator
+    atomic_write_json(agg_path, agg_data)
     
     print(f"[EMIT-AGG] Updated: {agg_path} (runs={len(runs)}, "
           f"data_runs={agg_data['quick_stats']['pass_count'] + agg_data['quick_stats']['fail_count']}, "
@@ -375,12 +376,17 @@ def _compute_quick_stats(
     all_routes = set()
     included_pairs_set = set()  # v2.0.4: only pairs with included signals
     included_routes_set = set()  # v2.0.4: only routes with included signals
+    all_chain_keys = set()  # v3.2.7: track chain_keys for MIXED_CHAIN_KEYS guardrail
     for r in runs:
         all_pairs.update(r.get("pairs", []))
         all_routes.update(r.get("routes", []))
         # Use included_pairs/routes if available, else fall back to all
         included_pairs_set.update(r.get("included_pairs", r.get("pairs", [])))
         included_routes_set.update(r.get("included_routes", r.get("routes", [])))
+        # v3.2.7: Collect chain_keys from inputs
+        inputs = r.get("inputs", {})
+        if inputs.get("chain_key"):
+            all_chain_keys.add(inputs.get("chain_key"))
     unique_pairs = len(included_pairs_set)  # v2.0.4: DoD uses included-only
     unique_routes = len(included_routes_set)  # v2.0.4: DoD uses included-only
     unique_pairs_all = len(all_pairs)  # For backwards compat / debugging
@@ -560,6 +566,16 @@ def _compute_quick_stats(
             )
             agg_reasons.append("PROFIT_SANITY_WARN")
     
+    # v3.2.7: Mixed chain_key guardrail for multi-chain correctness
+    # If rolling window contains runs from different chains, aggregate metrics are invalid
+    if len(all_chain_keys) > 1:
+        chains_str = ",".join(sorted(all_chain_keys))
+        quality_warnings.append(f"MIXED_CHAIN_KEYS({chains_str})")
+        agg_reasons.append("MIXED_CHAIN_KEYS")
+    
+    # Store chain_key info in agg_data
+    agg_data["chain_keys"] = list(sorted(all_chain_keys)) if all_chain_keys else []
+    
     # Store quality warnings and reasons
     agg_data["quality_warnings"] = quality_warnings
     agg_data["policy_version"] = POLICY_VERSION
@@ -691,14 +707,13 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
     # STEP 1: Emit to aggregator
     agg_data = emit_to_aggregator_light(run_summary, agg_path)
     
+    # v3.2.7: Use atomic writes for rolling artifacts
     # Save aggregator
-    with open(agg_path, "w") as f:
-        json.dump(agg_data, f, indent=2)
+    atomic_write_json(agg_path, agg_data)
     
     # STEP 2: Write run_summary_latest.json
     run_summary_latest_path = rolling_dir / "run_summary_latest.json"
-    with open(run_summary_latest_path, "w") as f:
-        json.dump(run_summary, f, indent=2)
+    atomic_write_json(run_summary_latest_path, run_summary)
     
     # STEP 3: Write _latest.json
     now_utc = datetime.now(timezone.utc)
@@ -731,10 +746,16 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
         "run_status": run_summary.get("status", "UNKNOWN"),
         "threshold_profile_name": run_summary.get("thresholds", {}).get("threshold_profile_name", "profit"),
         # v3.2.3: Add inputs reference for observability
+        # v3.2.7: Extended with chain_key and config params
         "inputs": {
             "run_dir_name": run_summary.get("inputs", {}).get("run_dir_name"),
             "run_mode": run_summary.get("inputs", {}).get("run_mode"),
             "config_path": run_summary.get("inputs", {}).get("config_path"),
+            "chain_key": run_summary.get("inputs", {}).get("chain_key"),
+            "chain_id": run_summary.get("inputs", {}).get("chain_id"),
+            "require_cross_dex": run_summary.get("inputs", {}).get("require_cross_dex"),
+            "paper_size_usd": run_summary.get("inputs", {}).get("paper_size_usd"),
+            "min_spread_bps": run_summary.get("inputs", {}).get("min_spread_bps"),
         },
         "agg_status": agg_data.get("agg_status", "UNKNOWN"),
         "agg_reasons": agg_data.get("agg_reasons", []),
@@ -759,8 +780,8 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
     }
     
     latest_path = rolling_dir / "_latest.json"
-    with open(latest_path, "w") as f:
-        json.dump(latest_data, f, indent=2)
+    # v3.2.7: Use atomic write for _latest.json
+    atomic_write_json(latest_path, latest_data)
     
     print(f"[ROLLING-REFRESH] Updated rolling artifacts from {run_dir.name}")
     print(f"[ROLLING-REFRESH] _latest.json updated_at: {latest_data['updated_at']}")

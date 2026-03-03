@@ -28,6 +28,7 @@ import yaml
 
 from core.constants import SCHEMA_VERSION, FAKE_BLOCK_SENTINELS
 from core.validators import calculate_deviation_bps
+from core.no_data import compute_no_data_reason, canonicalize_config_path
 from config.pairs import load_pairs
 from config import load_core_tokens
 
@@ -214,7 +215,15 @@ def run_scan(
     
     # v2.6.0: Resolve universe BEFORE collect_quotes() so resolved pairs are used
     dexes_list = config.get("dexes") or []
-    chain_key = config.get("chain", "arbitrum_one")
+    
+    # v3.2.7: Strict chain_key contract - warn if missing in ONLINE mode
+    chain_key = config.get("chain")
+    if chain_key is None:
+        chain_key = "unknown"
+        logger.warning("chain_key not specified in config - using 'unknown'. Set config['chain'] for multi-chain observability.")
+    
+    # v3.2.7: Include chain_key in stats for artifact observability
+    stats["chain_key"] = chain_key
     
     # v2.2.0 Fix Step 7: universe_source=config|intent|intent_forced|discovery_runtime
     # v2.3.0 Fix Step 4: intent_forced mode - reads from intent.txt directly
@@ -296,7 +305,8 @@ def run_scan(
     
     # v2.2.2: Config transparency - propagate to scan.stats for cross-artifact consistency
     stats["require_cross_dex"] = config.get("require_cross_dex", False)
-    stats["config_path"] = config.get("_config_path", None)
+    # v3.2.7: Canonicalize to POSIX format for OS-independent comparison
+    stats["config_path"] = canonicalize_config_path(config.get("_config_path", None))
     # v2.3.0: Sizing params for audit trail
     stats["use_usd_notional"] = config.get("use_usd_notional", False)
     stats["target_usd_notional"] = config.get("target_usd_notional", None)
@@ -373,6 +383,14 @@ def run_scan(
     except Exception:
         price_stability_factor = 1.0
     stats["price_stability_factor"] = price_stability_factor
+    
+    # v3.2.7: Compute no_data_reason for deterministic NO_DATA classification
+    # Uses centralized helper from core/no_data.py to avoid logic duplication
+    stats["no_data_reason"] = compute_no_data_reason(
+        quotes_total=stats["quotes_total"],
+        quotes_fetched=stats["quotes_fetched"],
+        spread_signals_count=len(spread_signals),
+    )
     
     # Build infra payload
     primary_http = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or resolved_http

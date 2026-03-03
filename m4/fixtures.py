@@ -25,6 +25,8 @@ from typing import Any, Dict, Set
 
 # v2.0.4: Import canonical timestamp helper
 from core.time import get_run_timestamp
+# v3.2.7: Path canonicalization for OS-independent artifacts
+from core.no_data import canonicalize_config_path
 
 # Import from m4 policy module
 from .policy import (
@@ -437,8 +439,15 @@ def generate_m4_from_online_inputs(
     source_run_mode = truth_data.get("run_mode", "UNKNOWN")
     source_block = truth_data.get("current_block", 0)
     chain_id = truth_data.get("chain_id", DEFAULT_CHAIN_ID)
+    # v3.2.7: Extract chain_key for multi-chain observability (strict contract: 'unknown' if missing)
+    chain_key = truth_data.get("chain_key", "unknown")
     source_timestamp = truth_data.get("timestamp", "")
     spread_signals = truth_data.get("spread_signals", [])
+    # v3.2.7: Extract config_params for run_summary inputs
+    config_params = truth_data.get("config_params", {})
+    # v3.2.7: Extract no_data_reason from truth_report.stats
+    truth_stats = truth_data.get("stats", {})
+    no_data_reason = truth_stats.get("no_data_reason")
     
     # Get cost model from registry (passed via argument)
     # This allows switching between paper_realistic and paper_conservative
@@ -1097,6 +1106,12 @@ def generate_m4_from_online_inputs(
             "truth_report": truth_path.name,
             "pinned_block": source_block,
             "chain_id": chain_id,
+            # v3.2.7: chain_key and config params for observability
+            "chain_key": chain_key,
+            "config_path": config_params.get("config_path"),
+            "require_cross_dex": config_params.get("require_cross_dex", False),
+            "paper_size_usd": config_params.get("paper_size_usd"),
+            "min_spread_bps": config_params.get("min_spread_bps"),
             "cost_model": cost_model.name,
             # v1.9.9: pairs/routes for diversity tracking (all signals)
             "pairs": list(signals_by_pair.keys()),
@@ -1124,6 +1139,8 @@ def generate_m4_from_online_inputs(
             # v2.3.2: Profit truth availability (canonical for M4 DoD)
             "cost_model_available": cost_model_available,
             "profit_truth_available": profit_truth_available,
+            # v3.2.7: Deterministic NO_DATA classification
+            "no_data_reason": no_data_reason,
         },
         "thresholds": {
             "policy_version": POLICY_VERSION,  # v1.9.5: provenance

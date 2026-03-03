@@ -33,6 +33,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# v3.2.7: Atomic JSON writes for rolling artifacts
+from core.json_io import atomic_write_json
+
 # Import from m4 modules
 from .policy import (
     CostModelConfig,
@@ -839,14 +842,13 @@ def run_online_gate(
         run_summary_path = rolling_dir / f"run_summary_latest{mode_suffix}.json"
         latest_file = f"_latest{mode_suffix}.json"
         
-        with open(run_summary_path, "w") as f:
-            json.dump(run_summary, f, indent=2)
+        # v3.2.7: Use atomic writes for rolling artifacts
+        atomic_write_json(run_summary_path, run_summary)
         
         # v2.7.0: Also update the runDir's run_summary to ensure consistency
         # This prevents runDir vs rolling status divergence
         if summary_path.exists():
-            with open(summary_path, "w") as f:
-                json.dump(run_summary, f, indent=2)
+            atomic_write_json(summary_path, run_summary)
         
         # STEP 3: Incident bundle persistence (only for real incidents)
         incident_dir = None
@@ -919,10 +921,16 @@ def run_online_gate(
                 "evidence_sha": None,  # DEPRECATED
             },
             # v3.2.3: Add inputs reference for observability
+            # v3.2.7: Extended with chain_key and config params
             "inputs": {
                 "run_dir_name": run_summary.get("inputs", {}).get("run_dir_name"),
                 "run_mode": run_summary.get("inputs", {}).get("run_mode"),
                 "config_path": run_summary.get("inputs", {}).get("config_path"),
+                "chain_key": run_summary.get("inputs", {}).get("chain_key"),
+                "chain_id": run_summary.get("inputs", {}).get("chain_id"),
+                "require_cross_dex": run_summary.get("inputs", {}).get("require_cross_dex"),
+                "paper_size_usd": run_summary.get("inputs", {}).get("paper_size_usd"),
+                "min_spread_bps": run_summary.get("inputs", {}).get("min_spread_bps"),
             },
             "latest_mode": "ONLINE" if is_online else "OFFLINE",
             "latest_kind": "INCIDENT" if is_incident else "NORMAL",
@@ -950,8 +958,8 @@ def run_online_gate(
                 "last_incident": rel_path(incident_dir / "run_summary.json") if incident_dir else None,
             },
         }
-        with open(latest_path, "w") as f:
-            json.dump(latest_data, f, indent=2)
+        # v3.2.7: Use atomic write for _latest.json
+        atomic_write_json(latest_path, latest_data)
         
         # v2.0.0: SHA tracking removed - no more code_dirty warnings
         # Provenance is now based on run_timestamp alone

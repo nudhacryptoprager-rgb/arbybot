@@ -577,7 +577,8 @@ def collect_quotes(
     
     # Load pairs from config or use pre-resolved pairs
     # v2.6.0: Allow passing pre-resolved pairs for discovery_runtime mode
-    chain_key = config.get("chain", "arbitrum_one")
+    # v3.2.7: Strict chain_key contract - 'unknown' if missing (warning issued in run_scan_real)
+    chain_key = config.get("chain", "unknown")
     if pairs_list is None:
         # v2.3.1 FIX: Respect universe_source from config
         universe_source = config.get("universe_source", "config")
