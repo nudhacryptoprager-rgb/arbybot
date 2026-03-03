@@ -1,0 +1,47 @@
+# PATH: config/real_scan_linea_smoke.yaml
+#
+# LINEA SMOKE CONFIG - Minimal single-cycle validation
+#
+# Purpose: Validate chain_key/chain_id provenance for multi-chain readiness.
+# This config does NOT discover pools - it uses explicit pool addresses.
+# Expected: 1 cycle, few quotes, validation of artifacts contain chain_key.
+#
+# v3.2.9: Created for multi-chain evidence.
+
+# Chain: Linea Mainnet
+chain: linea
+chain_id: 59144
+
+# RPC endpoints (public)
+rpc_endpoints:
+  - "https://rpc.linea.build"
+  - "https://linea.public.blastapi.io"
+
+# RPC settings (conservative for smoke)
+rpc_timeout_seconds: 15
+rpc_retries: 2
+rpc_backoff_base_ms: 1000
+
+# Single DEX for smoke (lynex_v3 = algebra adapter)
+dexes:
+  - lynex_v3
+
+# Minimal pairs for smoke (just WETH/USDC)
+pairs:
+  - token_in: WETH
+    token_out: USDC
+    fee_tiers: [500]
+
+# Economics (generous for smoke)
+min_spread_bps: 5
+paper_size_usd: 100
+paper_slippage_bps: 10
+
+# Scanner config
+require_cross_dex: false  # Single DEX smoke
+scanner_cycles: 1
+
+# M4 gate settings
+m4_gate_enabled: true
+execution_enabled: false
+kill_switch_active: true

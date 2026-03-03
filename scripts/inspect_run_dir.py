@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # PATH: scripts/inspect_run_dir.py
 """
-RunDir inspection tool (v3.2.7).
+RunDir inspection tool (v3.2.9).
 
 Prints a concise summary of a runDir's scan pipeline:
 - Status and no_data_reason
@@ -90,6 +90,8 @@ def inspect_run_dir(run_dir: Path) -> dict:
     
     result = {
         "run_dir": run_dir.name,
+        "run_dir_name": None,
+        "run_timestamp": None,
         "artifacts_present": [],
         "artifacts_missing": [],
     }
@@ -148,6 +150,11 @@ def inspect_run_dir(run_dir: Path) -> dict:
         result["profit_status"] = run_summary.get("profit_status", "UNKNOWN")
         result["drift_status"] = run_summary.get("drift_status", "UNKNOWN")
         result["quality_status"] = run_summary.get("quality_status", "UNKNOWN")
+        
+        # v3.2.9: Extract run_context for provenance
+        run_context = run_summary.get("run_context", {})
+        result["run_timestamp"] = run_context.get("run_timestamp")
+        result["run_dir_name"] = run_context.get("run_dir_name")
         result["reasons"] = run_summary.get("reasons", [])
         
         # Metrics 
@@ -180,6 +187,11 @@ def print_summary(info: dict, as_json: bool = False):
     print("=" * 60)
     print(f"RunDir: {info['run_dir']}")
     print("=" * 60)
+    
+    # Provenance section (v3.2.9)
+    print(f"\nPROVENANCE:")
+    print(f"  run_timestamp: {info.get('run_timestamp', 'N/A')}")
+    print(f"  run_dir_name: {info.get('run_dir_name', 'N/A')}")
     
     # Status section
     print(f"\nSTATUS: {info.get('status', 'UNKNOWN')}")

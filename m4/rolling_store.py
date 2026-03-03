@@ -207,6 +207,7 @@ def emit_to_aggregator_light(
         # v2.0.2: Full provenance fields for DoD verification
         "run_mode": run_inputs.get("run_mode", "UNKNOWN"),
         "chain_id": run_inputs.get("chain_id", None),
+        "chain_key": run_inputs.get("chain_key", None),  # v3.2.9: chain_key for multi-chain guardrail
         "pinned_block": run_inputs.get("pinned_block", None),
         "block_is_synthetic": run_inputs.get("block_is_synthetic", None),
     })
@@ -383,10 +384,10 @@ def _compute_quick_stats(
         # Use included_pairs/routes if available, else fall back to all
         included_pairs_set.update(r.get("included_pairs", r.get("pairs", [])))
         included_routes_set.update(r.get("included_routes", r.get("routes", [])))
-        # v3.2.7: Collect chain_keys from inputs
-        inputs = r.get("inputs", {})
-        if inputs.get("chain_key"):
-            all_chain_keys.add(inputs.get("chain_key"))
+        # v3.2.9: Collect chain_key directly from run (not inputs sub-dict)
+        chain_key = r.get("chain_key")
+        if chain_key:
+            all_chain_keys.add(chain_key)
     unique_pairs = len(included_pairs_set)  # v2.0.4: DoD uses included-only
     unique_routes = len(included_routes_set)  # v2.0.4: DoD uses included-only
     unique_pairs_all = len(all_pairs)  # For backwards compat / debugging
@@ -450,6 +451,8 @@ def _compute_quick_stats(
         "signals_per_run_p50": percentile(signals_per_run, 50),
         "signals_per_run_p90": percentile(signals_per_run, 90),
         "signals_per_run_avg": round(sum(signals_per_run) / len(signals_per_run), 2) if signals_per_run else 0,
+        # v3.2.9: chain_key in quick_stats (single value or "MIXED" if multiple chains in window)
+        "chain_key": (list(all_chain_keys)[0] if len(all_chain_keys) == 1 else ("MIXED" if len(all_chain_keys) > 1 else "unknown")),
     }
     
     # v2.0: runs_since_timestamp (replaces runs_since_sha)
@@ -760,6 +763,7 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
         "agg_status": agg_data.get("agg_status", "UNKNOWN"),
         "agg_reasons": agg_data.get("agg_reasons", []),
         "quality_warnings": agg_data.get("quality_warnings", []),
+        "chain_keys": agg_data.get("chain_keys", []),  # v3.2.9: chain_keys for multi-chain guardrail
         "policy_version": agg_data.get("policy_version", "unknown"),
         "agg_updated_at": agg_data.get("updated_at"),
         "agg_lag_seconds": 0.0,

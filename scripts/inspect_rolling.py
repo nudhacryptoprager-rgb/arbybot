@@ -21,7 +21,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"  # v3.2.9: Added unique_pairs, unique_routes_cross_dex, agg_reasons, chain_key
 
 
 def load_rolling_artifacts():
@@ -69,14 +69,20 @@ def get_excluded_signals(run_dir: str):
 def print_summary(artifacts, excluded, as_json=False):
     """Print summary of rolling state."""
     if as_json:
+        agg_qs = artifacts.get("agg", {}).get("quick_stats", {})
         output = {
             "rolling": {
                 "run_dir_name": artifacts.get("run_summary", {}).get("inputs", {}).get("run_dir_name"),
                 "run_timestamp": artifacts.get("run_summary", {}).get("run_context", {}).get("run_timestamp"),
                 "runs_in_window": artifacts.get("agg", {}).get("runs_in_window"),
                 "agg_status": artifacts.get("agg", {}).get("agg_status"),
+                "agg_reasons": artifacts.get("agg", {}).get("agg_reasons", []),
                 "data_run_rate": artifacts.get("latest", {}).get("data_run_rate"),
-                "total_net_usdc": artifacts.get("agg", {}).get("quick_stats", {}).get("total_net_usdc"),
+                "total_net_usdc": agg_qs.get("total_net_usdc"),
+                "unique_pairs": agg_qs.get("unique_pairs"),
+                "unique_routes_cross_dex": agg_qs.get("unique_routes_cross_dex"),
+                "chain_key": artifacts.get("latest", {}).get("inputs", {}).get("chain_key"),
+                "chain_keys": artifacts.get("latest", {}).get("chain_keys", []),
             },
             "signals": {
                 "included_count": artifacts.get("run_summary", {}).get("metrics", {}).get("included_signals_count"),
@@ -107,8 +113,13 @@ def print_summary(artifacts, excluded, as_json=False):
     run_timestamp = rs.get("run_context", {}).get("run_timestamp", "N/A")
     runs_in_window = agg.get("runs_in_window", "N/A")
     agg_status = agg.get("agg_status", "N/A")
+    agg_reasons = agg.get("agg_reasons", [])
     data_run_rate = latest.get("data_run_rate", "N/A")
     total_net_usdc = agg.get("quick_stats", {}).get("total_net_usdc", "N/A")
+    unique_pairs = agg.get("quick_stats", {}).get("unique_pairs", "N/A")
+    unique_routes_cross_dex = agg.get("quick_stats", {}).get("unique_routes_cross_dex", "N/A")
+    chain_key = latest.get("inputs", {}).get("chain_key", "N/A")
+    chain_keys = latest.get("chain_keys", [])
     
     metrics = rs.get("metrics", {})
     included_count = metrics.get("included_signals_count", 0)
@@ -123,8 +134,18 @@ def print_summary(artifacts, excluded, as_json=False):
     print(f"run_timestamp:     {run_timestamp}")
     print(f"runs_in_window:    {runs_in_window}")
     print(f"agg_status:        {agg_status}")
+    if agg_reasons:
+        print(f"agg_reasons:       {agg_reasons}")
     print(f"data_run_rate:     {data_run_rate}")
     print(f"total_net_usdc:    ${total_net_usdc:.2f}" if isinstance(total_net_usdc, (int, float)) else f"total_net_usdc:    {total_net_usdc}")
+    print(f"unique_pairs:      {unique_pairs}")
+    print(f"unique_routes_cross_dex: {unique_routes_cross_dex}")
+    print()
+    print(f"chain_key:         {chain_key}")
+    if len(chain_keys) > 1:
+        print(f"chain_keys:        {chain_keys} (MIXED_CHAIN_KEYS)")
+    elif chain_keys:
+        print(f"chain_keys:        {chain_keys}")
     print()
     print(f"signals_included:  {included_count}")
     print(f"signals_excluded:  {excluded_count}")

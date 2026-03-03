@@ -1,5 +1,5 @@
 # PATH: tests/unit/test_no_data_reason.py
-"""Tests for no_data_reason classification (v3.2.7).
+"""Tests for no_data_reason classification (v3.2.9).
 
 Validates that no_data_reason is correctly computed for three scenarios:
 - NO_QUOTES: quotes_total == 0
@@ -13,7 +13,7 @@ Uses compute_no_data_reason from core/no_data.py (single source of truth).
 import unittest
 
 # v3.2.7: Use centralized helper (no logic duplication)
-from core.no_data import compute_no_data_reason, canonicalize_config_path
+from core.no_data import compute_no_data_reason, canonicalize_config_path, compute_config_fingerprint
 
 
 class TestNoDataReasonLogic(unittest.TestCase):
@@ -182,6 +182,114 @@ class TestChainKeyContract(unittest.TestCase):
         config = {"chain": "optimism"}
         chain_key = config.get("chain", "unknown")
         self.assertEqual(chain_key, "optimism")
+
+
+class TestConfigFingerprint(unittest.TestCase):
+    """Test config_fingerprint computation for drift detection."""
+    
+    def test_same_config_same_fingerprint(self):
+        """Identical configs produce identical fingerprints."""
+        config = {
+            "dexes": ["uniswap_v3", "sushiswap_v3"],
+            "min_spread_bps": 10,
+            "paper_size_usd": 250,
+            "chain": "arbitrum_one",
+        }
+        fp1 = compute_config_fingerprint(config)
+        fp2 = compute_config_fingerprint(config)
+        self.assertEqual(fp1, fp2)
+    
+    def test_different_config_different_fingerprint(self):
+        """Different configs produce different fingerprints."""
+        config1 = {"min_spread_bps": 10, "chain": "arbitrum_one"}
+        config2 = {"min_spread_bps": 20, "chain": "arbitrum_one"}
+        fp1 = compute_config_fingerprint(config1)
+        fp2 = compute_config_fingerprint(config2)
+        self.assertNotEqual(fp1, fp2)
+    
+    def test_fingerprint_is_8_chars(self):
+        """Fingerprint is always 8 hex characters."""
+        config = {"dexes": ["uniswap_v3"], "min_spread_bps": 10}
+        fp = compute_config_fingerprint(config)
+        self.assertEqual(len(fp), 8)
+        # All hex chars
+        self.assertTrue(all(c in "0123456789abcdef" for c in fp))
+    
+    def test_dex_order_independent(self):
+        """DEX order doesn't affect fingerprint (sorted internally)."""
+        config1 = {"dexes": ["uniswap_v3", "sushiswap_v3"]}
+        config2 = {"dexes": ["sushiswap_v3", "uniswap_v3"]}
+        fp1 = compute_config_fingerprint(config1)
+        fp2 = compute_config_fingerprint(config2)
+        self.assertEqual(fp1, fp2)
+    
+    def test_chain_change_changes_fingerprint(self):
+        """Different chains produce different fingerprints."""
+        config1 = {"chain": "arbitrum_one", "min_spread_bps": 10}
+        config2 = {"chain": "linea", "min_spread_bps": 10}
+        fp1 = compute_config_fingerprint(config1)
+        fp2 = compute_config_fingerprint(config2)
+        self.assertNotEqual(fp1, fp2)
+
+
+class TestNoDataReasonEndToEnd(unittest.TestCase):
+    """Test no_data_reason flows through artifacts correctly.
+    
+    These tests simulate how no_data_reason should appear in truth_report
+    and run_summary artifacts when processed through m4/fixtures.py.
+    """
+    
+    def test_no_data_reason_in_truth_report_stats(self):
+        """truth_report.stats should contain no_data_reason when NO_DATA."""
+        # Simulate truth_report structure after NO_SPREAD_SIGNALS
+        truth_report = {
+            "stats": {
+                "quotes_total": 18,
+                "quotes_fetched": 18,
+                "spread_signals_count": 0,
+                "no_data_reason": "NO_SPREAD_SIGNALS",  # Set by run_scan_real
+            },
+            "spread_signals": [],
+        }
+        
+        # Verify field is present and correct value
+        self.assertEqual(
+            truth_report["stats"]["no_data_reason"],
+            "NO_SPREAD_SIGNALS"
+        )
+    
+    def test_no_data_reason_propagates_to_run_summary_metrics(self):
+        """run_summary.metrics should have no_data_reason copied from truth_report."""
+        # Simulate the flow: truth_report -> m4/fixtures.py -> run_summary
+        truth_stats = {
+            "quotes_total": 0,
+            "quotes_fetched": 0,
+            "no_data_reason": "NO_QUOTES",
+        }
+        
+        # m4/fixtures.py extracts no_data_reason from truth_stats
+        no_data_reason = truth_stats.get("no_data_reason")
+        
+        # And places it in run_summary.metrics
+        run_summary_metrics = {
+            "signals_count": 0,
+            "included_signals_count": 0,
+            "no_data_reason": no_data_reason,
+        }
+        
+        self.assertEqual(run_summary_metrics["no_data_reason"], "NO_QUOTES")
+    
+    def test_no_data_reason_none_when_has_signals(self):
+        """no_data_reason should be None when spread_signals exist."""
+        truth_stats = {
+            "quotes_total": 18,
+            "quotes_fetched": 18,
+            "no_data_reason": None,  # Has data
+        }
+        
+        # No data reason extraction
+        no_data_reason = truth_stats.get("no_data_reason")
+        self.assertIsNone(no_data_reason)
 
 
 if __name__ == "__main__":

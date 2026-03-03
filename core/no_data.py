@@ -80,3 +80,58 @@ def canonicalize_config_path(path: Optional[str]) -> Optional[str]:
     if path is None:
         return None
     return path.replace("\\", "/")
+
+
+def compute_config_fingerprint(config: dict) -> str:
+    """
+    Compute a fingerprint hash from key configuration parameters.
+    
+    This allows detecting when config has changed between runs,
+    making comparisons meaningful. Two runs with different fingerprints
+    should not be compared for drift analysis.
+    
+    Key parameters included:
+    - pairs (sorted, as JSON)
+    - dexes (sorted)
+    - min_spread_bps
+    - paper_size_usd
+    - require_cross_dex
+    - universe_source
+    
+    Args:
+        config: Configuration dictionary
+    
+    Returns:
+        8-character hex fingerprint (first 8 chars of SHA-256)
+    
+    Examples:
+        >>> compute_config_fingerprint({"min_spread_bps": 10, "dexes": ["uniswap_v3"]})
+        'a1b2c3d4'  # Example, actual value depends on config
+    """
+    import hashlib
+    import json
+    
+    # Extract key parameters that affect economics/behavior
+    key_params = {
+        "dexes": sorted(config.get("dexes", [])),
+        "min_spread_bps": config.get("min_spread_bps"),
+        "paper_size_usd": config.get("paper_size_usd"),
+        "paper_slippage_bps": config.get("paper_slippage_bps"),
+        "require_cross_dex": config.get("require_cross_dex", False),
+        "chain": config.get("chain", "unknown"),
+    }
+    
+    # Handle pairs specially (list of dicts needs stable serialization)
+    pairs = config.get("pairs", [])
+    if pairs:
+        # Extract just token_in/token_out for fingerprint
+        pairs_key = sorted([
+            f"{p.get('token_in', '')}_{p.get('token_out', '')}"
+            for p in pairs if isinstance(p, dict)
+        ])
+        key_params["pairs_key"] = pairs_key
+    
+    # Stable JSON serialization for hashing
+    json_str = json.dumps(key_params, sort_keys=True, separators=(",", ":"))
+    hash_obj = hashlib.sha256(json_str.encode("utf-8"))
+    return hash_obj.hexdigest()[:8]

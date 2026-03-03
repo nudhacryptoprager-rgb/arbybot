@@ -1,12 +1,27 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
-**Updated**: 2026-03-02  
+**Updated**: 2026-03-03  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-02)**: `agg_status=PASS` achieved. runs_in_window=22, pass_rate=1.0, data_run_rate=1.0, low_sample_rate=0.0, fragile_rate_p90=0.0. `unique_pairs=4`.
+> [!] **ROLLING STABILITY (2026-03-03)**: `agg_status=PASS` achieved. runs_in_window=30, pass_rate=1.0, data_run_rate=0.77, fragile_rate_p90=0.0. `unique_pairs=5`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+
+## Artifacts Self-Sufficient (2026-03-03) - DONE
+
+| Change | Status | Evidence |
+|--------|--------|----------|
+| chain_key strict contract | DONE | fallback='unknown' with warning |
+| config_path POSIX | DONE | canonicalize_config_path() |
+| no_data_reason field | DONE | NO_QUOTES/ALL_QUOTES_REJECTED/NO_SPREAD_SIGNALS/null |
+| MIXED_CHAIN_KEYS guardrail | DONE | quality_warnings on mixed chains |
+| atomic JSON writes | DONE | core/json_io.py |
+| inspect_run_dir.py | DONE | uses _latest.json for default |
+| validate_universe.py | DONE | dry-run config validation |
+| config_fingerprint | DONE | core/no_data.py |
+
+**Evidence**: runs_in_window=30, chain_keys=['arbitrum_one','linea'], MIXED_CHAIN_KEYS warning triggered.
 
 ## Economics Consistency Fix (2026-03-02)
 

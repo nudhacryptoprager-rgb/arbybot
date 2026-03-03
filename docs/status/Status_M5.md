@@ -127,6 +127,36 @@ All gates validate using `core/artifact_invariants.py`:
 
 ---
 
+## DEX/Chain Expansion Matrix
+
+Multi-chain readiness tracking. This matrix shows which DEX/chain combinations
+are validated and which are next for expansion.
+
+| Chain | DEX | Adapter | Status | Evidence |
+|-------|-----|---------|--------|----------|
+| arbitrum_one | uniswap_v3 | uniswap_v3 | ✅ LIVE | rolling N=26+ |
+| arbitrum_one | sushiswap_v3 | uniswap_v3 | ✅ LIVE | rolling N=26+ |
+| arbitrum_one | camelot_v3 | algebra | ⚠️ NEEDS_QUOTER | ALGEBRA_NEEDS_QUOTER |
+| linea | lynex_v3 | algebra | 🔜 NEXT | config/real_scan_linea_smoke.yaml ready |
+| mantle | agni_v3 | uniswap_v3 | 📋 PLANNED | factory/quoter in dexes.yaml |
+| base | uniswap_v3 | uniswap_v3 | 📋 PLANNED | chain in chains.yaml |
+
+**Multi-chain Guardrails:**
+- `chain_key` in all artifacts (strict fallback to `"unknown"`)
+- `MIXED_CHAIN_KEYS` quality_warning when rolling window has multiple chains
+- `config_fingerprint` to detect config drift across runs
+
+**Next Control Runs:**
+1. `py -3.11 -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml --cycles 1` (arb)
+2. `py -3.11 -m strategy.jobs.run_scan --mode real --config config/real_scan_linea_smoke.yaml --cycles 1` (linea)
+
+**Evidence Required:**
+- Both runs produce artifacts with correct `chain_key`
+- `inspect_run_dir.py` shows distinct chain_keys
+- Rolling aggregator shows `MIXED_CHAIN_KEYS` if both added to window
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |
