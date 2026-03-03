@@ -520,5 +520,131 @@ class TestDevReportAlignment(unittest.TestCase):
         self.assertTrue(any("unique_pairs mismatch" in i for i in issues))
 
 
+class TestRollingConsistency(unittest.TestCase):
+    """Test rolling artifact consistency check (v1.7.0)."""
+
+    def test_pass_when_all_artifacts_match(self):
+        """Rolling consistency PASS when all 3 artifacts have matching timestamps."""
+        from scripts.check_repo_safety import check_rolling_consistency
+        import json
+        from unittest.mock import mock_open
+        
+        mock_latest = {
+            "run_context": {
+                "run_timestamp": "2026-03-02T10:10:45.916168Z",
+                "run_dir_name": "ci_m5_gate_20260302_111032"
+            },
+            "runs_in_window": 22,
+            "data_run_rate": 0.85
+        }
+        mock_summary = {
+            "run_context": {"run_timestamp": "2026-03-02T10:10:45.916168Z"},
+            "inputs": {"run_dir_name": "ci_m5_gate_20260302_111032"}
+        }
+        mock_agg = {
+            "runs_since_timestamp": {"runs_count": 22},
+            "quick_stats": {"data_run_rate": 0.85}
+        }
+        
+        def custom_open(path, *args, **kwargs):
+            path_str = str(path)
+            # Order matters: check more specific patterns first
+            if "run_summary_latest" in path_str:
+                return mock_open(read_data=json.dumps(mock_summary))()
+            if "_latest.json" in path_str:
+                return mock_open(read_data=json.dumps(mock_latest))()
+            if "m4_stability_agg" in path_str:
+                return mock_open(read_data=json.dumps(mock_agg))()
+            raise FileNotFoundError(f"No mock for {path_str}")
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch('builtins.open', side_effect=custom_open):
+                    issues = check_rolling_consistency()
+        
+        self.assertEqual(len(issues), 0, f"Expected no issues, got: {issues}")
+
+    def test_fail_when_run_timestamp_mismatch(self):
+        """Rolling consistency FAIL when _latest and run_summary have different timestamps."""
+        from scripts.check_repo_safety import check_rolling_consistency
+        import json
+        from unittest.mock import mock_open
+        
+        mock_latest = {
+            "run_context": {
+                "run_timestamp": "2026-03-02T09:39:04.988143Z",  # older
+                "run_dir_name": "ci_m5_gate_20260302_103848"
+            },
+            "runs_in_window": 22,
+            "data_run_rate": 0.85
+        }
+        mock_summary = {
+            "run_context": {"run_timestamp": "2026-03-02T10:10:45.916168Z"},  # newer
+            "inputs": {"run_dir_name": "ci_m5_gate_20260302_111032"}
+        }
+        mock_agg = {
+            "runs_since_timestamp": {"runs_count": 22},
+            "quick_stats": {"data_run_rate": 0.85}
+        }
+        
+        def custom_open(path, *args, **kwargs):
+            path_str = str(path)
+            if "run_summary_latest" in path_str:
+                return mock_open(read_data=json.dumps(mock_summary))()
+            if "_latest.json" in path_str:
+                return mock_open(read_data=json.dumps(mock_latest))()
+            if "m4_stability_agg" in path_str:
+                return mock_open(read_data=json.dumps(mock_agg))()
+            raise FileNotFoundError(f"No mock for {path_str}")
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch('builtins.open', side_effect=custom_open):
+                    issues = check_rolling_consistency()
+        
+        self.assertTrue(any("run_timestamp mismatch" in i for i in issues), f"Issues: {issues}")
+        self.assertTrue(any("run_dir_name mismatch" in i for i in issues), f"Issues: {issues}")
+
+    def test_fail_when_runs_in_window_mismatch(self):
+        """Rolling consistency FAIL when _latest and m4_stability_agg.runs_in_window diverge >1."""
+        from scripts.check_repo_safety import check_rolling_consistency
+        import json
+        from unittest.mock import mock_open
+        
+        mock_latest = {
+            "run_context": {
+                "run_timestamp": "2026-03-02T10:10:45.916168Z",
+                "run_dir_name": "ci_m5_gate_20260302_111032"
+            },
+            "runs_in_window": 22,
+            "data_run_rate": 0.85
+        }
+        mock_summary = {
+            "run_context": {"run_timestamp": "2026-03-02T10:10:45.916168Z"},
+            "inputs": {"run_dir_name": "ci_m5_gate_20260302_111032"}
+        }
+        mock_agg = {
+            "runs_since_timestamp": {"runs_count": 30},  # big mismatch
+            "quick_stats": {"data_run_rate": 0.85}
+        }
+        
+        def custom_open(path, *args, **kwargs):
+            path_str = str(path)
+            if "run_summary_latest" in path_str:
+                return mock_open(read_data=json.dumps(mock_summary))()
+            if "_latest.json" in path_str:
+                return mock_open(read_data=json.dumps(mock_latest))()
+            if "m4_stability_agg" in path_str:
+                return mock_open(read_data=json.dumps(mock_agg))()
+            raise FileNotFoundError(f"No mock for {path_str}")
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch('builtins.open', side_effect=custom_open):
+                    issues = check_rolling_consistency()
+        
+        self.assertTrue(any("runs_in_window mismatch" in i for i in issues), f"Issues: {issues}")
+
+
 if __name__ == "__main__":
     unittest.main()

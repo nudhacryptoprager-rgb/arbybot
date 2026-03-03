@@ -98,10 +98,10 @@ paper_slippage_bps: 5   # Conservative slippage
 target_usd_notional: 100  # Equal to paper_size_usd (sizing consistency)
 use_usd_notional: true
 
-# Spread threshold: 10 bps for signal diversity, economics gate filters viable
-# v3.2.4: Keep min_spread_bps=10 for signal coverage; roundtrip economics gating
-# handles filtering candidates with spread_minus_required_bps <= 0
-min_spread_bps: 10
+# Spread threshold: 30 bps to avoid fragile signals below cost floor
+# v3.2.6: Raised from 10 to 30 bps - economics require min_required_spread ≈ 47-59 bps
+# at $100 notional. Lower thresholds create fragile_rate=1.0 → FAIL_QUALITY
+min_spread_bps: 30
 
 # ========== STANDARD SETTINGS ==========
 

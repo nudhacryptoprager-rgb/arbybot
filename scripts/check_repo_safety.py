@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.6.1"
+__version__ = "1.7.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -520,6 +520,98 @@ def check_dev_report_alignment() -> List[str]:
     return issues
 
 
+def check_rolling_consistency() -> List[str]:
+    """Check internal consistency between all 3 rolling artifacts (v1.7.0).
+    
+    Rolling artifacts must be internally consistent:
+    1. _latest.json.run_context.run_timestamp == run_summary_latest.json.run_context.run_timestamp
+    2. _latest.json.run_context.run_dir_name == run_summary_latest.json.inputs.run_dir_name
+    3. _latest.json.runs_in_window approx == m4_stability_agg.json.runs_since_timestamp.runs_count
+    4. _latest.json.data_run_rate approx == m4_stability_agg.json.quick_stats.data_run_rate
+    
+    This prevents drift where rolling artifacts reference different runs.
+    """
+    issues = []
+    
+    rolling_dir = PROJECT_ROOT / "data" / "runs" / "_rolling"
+    latest_path = rolling_dir / "_latest.json"
+    summary_path = rolling_dir / "run_summary_latest.json"
+    agg_path = rolling_dir / "m4_stability_agg.json"
+    
+    # All 3 files must exist for consistency check
+    if not latest_path.exists():
+        return []  # No rolling artifacts = skip
+    if not summary_path.exists():
+        return []
+    if not agg_path.exists():
+        return []
+    
+    try:
+        with open(latest_path, "r", encoding="utf-8") as f:
+            latest = json.load(f)
+        with open(summary_path, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+        with open(agg_path, "r", encoding="utf-8") as f:
+            agg = json.load(f)
+        
+        # 1. Check run_timestamp match
+        latest_ts = latest.get("run_context", {}).get("run_timestamp", "")
+        summary_ts = summary.get("run_context", {}).get("run_timestamp", "")
+        
+        if latest_ts and summary_ts:
+            # Compare first 19 chars (YYYY-MM-DDTHH:MM:SS)
+            latest_ts_short = latest_ts[:19]
+            summary_ts_short = summary_ts[:19]
+            if latest_ts_short != summary_ts_short:
+                issues.append(
+                    f"ROLLING_DRIFT: run_timestamp mismatch. "
+                    f"_latest: {latest_ts_short}, run_summary_latest: {summary_ts_short}"
+                )
+        
+        # 2. Check run_dir_name match
+        latest_run_dir = latest.get("run_context", {}).get("run_dir_name", "")
+        summary_run_dir = summary.get("inputs", {}).get("run_dir_name", "")
+        
+        if latest_run_dir and summary_run_dir:
+            if latest_run_dir != summary_run_dir:
+                issues.append(
+                    f"ROLLING_DRIFT: run_dir_name mismatch. "
+                    f"_latest: {latest_run_dir}, run_summary_latest: {summary_run_dir}"
+                )
+        
+        # 3. Check runs_in_window consistency
+        latest_runs = latest.get("runs_in_window", 0)
+        # m4_stability_agg structure: runs_since_timestamp.runs_count or direct runs_in_window
+        agg_runs = agg.get("runs_since_timestamp", {}).get("runs_count")
+        if agg_runs is None:
+            agg_runs = agg.get("runs_in_window", 0)
+        
+        if latest_runs and agg_runs:
+            # Allow difference of 1 (due to timing of when counts are taken)
+            if abs(latest_runs - agg_runs) > 1:
+                issues.append(
+                    f"ROLLING_DRIFT: runs_in_window mismatch. "
+                    f"_latest: {latest_runs}, m4_stability_agg: {agg_runs}"
+                )
+        
+        # 4. Check data_run_rate consistency
+        latest_drr = latest.get("data_run_rate", 0.0)
+        agg_drr = agg.get("quick_stats", {}).get("data_run_rate", 0.0)
+        
+        if latest_drr and agg_drr:
+            # Allow 5% tolerance
+            if abs(latest_drr - agg_drr) > 0.05:
+                issues.append(
+                    f"ROLLING_DRIFT: data_run_rate mismatch. "
+                    f"_latest: {latest_drr:.4f}, m4_stability_agg: {agg_drr:.4f}"
+                )
+        
+    except Exception as e:
+        issues.append(f"ERROR: Could not check rolling consistency: {e}")
+    
+    return issues
+
+
 def check_roadmap_governance(allow_edit: bool = False) -> List[str]:
     """Check that Roadmap.md is not modified without explicit permission (v1.5.0).
     
@@ -661,7 +753,15 @@ def main():
     if not issues:
         print("  OK: Roadmap.md not modified without explicit permission")
     
-    print("\n[10] Checking DEV_REPORT alignment...")
+    print("\n[10] Checking rolling artifact consistency...")
+    issues = check_rolling_consistency()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: Rolling artifacts internally consistent")
+    
+    print("\n[11] Checking DEV_REPORT alignment...")
     issues = check_dev_report_alignment()
     all_issues.extend(issues)
     for issue in issues:
