@@ -1,0 +1,233 @@
+# PATH: config/real_roundtrip_probe.yaml
+#
+# M4.2 ROUNDTRIP PROBE CONFIG (v3.2.14)
+#
+# PURPOSE: Achieve profit_truth_available=true (is_roundtrip_viable=true for >= 1 signal)
+# 
+# KEY DIFFERENCES FROM real_minimal.yaml:
+# - Lower paper_size_usd (100) - reduces ticks_crossed for better LP viability
+# - Lower min_spread_bps (5) - catches more signals
+# - Focus on highest-liquidity STRICT cross-DEX pairs only
+# - Smaller target_usd_notional (100) - matches paper_size_usd
+#
+# M4.2 TRUTH-PROGRESS CRITERIA (primary - must pass):
+# 1. roundtrip_lp_filter.passed_to_roundtrip >= 1
+# 2. roundtrip.evaluated_count >= 1
+#
+# QUALITY/STRETCH CRITERIA (secondary - nice to have):
+# 3. window_chain_key != MIXED (arbitrum_one only)
+# 4. agg_status = PASS
+# 5. unique_pairs >= 8
+#
+# Usage: py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_roundtrip_probe.yaml
+
+# v3.2.14: Explicit run_kind for predictable rolling updates
+run_kind: NORMAL
+
+# Chain: Arbitrum One ONLY (avoid MIXED rolling window)
+chain: arbitrum_one
+chain_id: 42161
+
+# RPC endpoints with fallback
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+  - "https://rpc.ankr.com/arbitrum"
+
+# RPC settings
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# 2 DEXes for cross-DEX arbitrage
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+
+# HIGHEST-LIQUIDITY CROSS-DEX PAIRS ONLY
+# Selected for LP viability (lowest ticks_crossed, highest liquidity)
+pairs:
+  # WETH/USDC - highest liquidity on both DEXes
+  - token_in: WETH
+    token_out: USDC
+    fee_tiers: [100, 500]
+  # WETH/USDT - high liquidity
+  - token_in: WETH
+    token_out: USDT
+    fee_tiers: [500]
+  # WBTC/WETH - high liq cross-DEX
+  - token_in: WBTC
+    token_out: WETH
+    fee_tiers: [500, 3000]
+  # ARB/WETH - cross-DEX viable
+  - token_in: ARB
+    token_out: WETH
+    fee_tiers: [500, 3000]
+  # LINK/WETH - cross-DEX (fee=3000)
+  - token_in: LINK
+    token_out: WETH
+    fee_tiers: [3000]
+  # wstETH/WETH - LST pair, high liq
+  - token_in: wstETH
+    token_out: WETH
+    fee_tiers: [100, 500]
+  # WBTC/USDC - cross-DEX (fee=500)
+  - token_in: WBTC
+    token_out: USDC
+    fee_tiers: [500]
+  # v3.2.14: WETH/DAI REMOVED - Sushi pool disabled (PRICE_SANITY_FAILED), no cross-DEX
+  # with require_cross_dex=true this pair would generate 0 signals (false expectation)
+  # RESTORE WHEN: sushiswap_v3_WETH_DAI_* re-enabled
+
+# Pool addresses (verified on Arbitrum via factory.getPool())
+# Only include pools with proven cross-DEX availability
+pools:
+  # === WETH/USDC ===
+  uniswap_v3_WETH_USDC_100: "0x6f38e884725a116C9C7fBF208e79FE8828a2595F"
+  uniswap_v3_WETH_USDC_500: "0xC6962004f452bE9203591991D15f6b388e09E8D0"
+  sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
+  # === WETH/USDT ===
+  uniswap_v3_WETH_USDT_500: "0x641C00A822e8b671738d32a431a4Fb6074E5c79d"
+  sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
+  # === WBTC/WETH ===
+  uniswap_v3_WBTC_WETH_500: "0x2f5e87C9312fa29aed5c179E456625D79015299c"
+  uniswap_v3_WBTC_WETH_3000: "0x149e36E72726e0BceA5c59d40df2c43F60f5A22D"
+  sushiswap_v3_WBTC_WETH_3000: "0x6F10667F314498649eb2f80da244e8c6E9f031d5"
+  # === ARB/WETH ===
+  uniswap_v3_ARB_WETH_500: "0xC6F780497A95e246EB9449f5e4770916DCd6396A"
+  uniswap_v3_ARB_WETH_3000: "0x92c63d0e701CAAe670C9415d91C474F686298f00"
+  sushiswap_v3_ARB_WETH_3000: "0xB3942c9FFA04efBC1Fa746e146bE7565c76E3dC1"
+  # === LINK/WETH ===
+  uniswap_v3_LINK_WETH_3000: "0x468b88941e7Cc0B88c1869d68ab6b570bCEF62Ff"
+  sushiswap_v3_LINK_WETH_3000: "0x55A7E0ab34038D75d0E2118254Fd84FdedCd4E65"
+  # === wstETH/WETH ===
+  uniswap_v3_wstETH_WETH_100: "0x35218a1cbaC5Bbc3E57fd9Bd38219D37571b3537"
+  uniswap_v3_wstETH_WETH_500: "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13"
+  sushiswap_v3_wstETH_WETH_100: "0x8BD39fA8608fd949C253987767540c26a0D974CF"
+  sushiswap_v3_wstETH_WETH_500: "0xc60f4760a70Bb900776DBBfcce9eF1a109a185B0"
+  # === WBTC/USDC ===
+  uniswap_v3_WBTC_USDC_500: "0x0E4831319A50228B9e450861297aB92dee15B44F"
+  sushiswap_v3_WBTC_USDC_500: "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"
+  # v3.2.14: WETH/DAI pool removed (pair disabled - no cross-DEX)
+  # uniswap_v3_WETH_DAI_500: "0x31Fa55e03bAD93C7f8AFfdd2eC616EbFde246001"
+
+# Disabled pools (inherit from real_minimal)
+disabled_pools:
+  sushiswap_v3_WBTC_WETH_500:
+    address: "0xf79099596045A41bB2ae53fa6677576687242455"
+    reason: "PRICE_SANITY_FAILED"
+  sushiswap_v3_ARB_WETH_500:
+    address: "0x99543bF98Ca1830Aa20d3Eb12c1b9962f8eaDC11"
+    reason: "PRICE_SANITY_FAILED"
+  sushiswap_v3_WETH_DAI_3000:
+    address: "0x3370EA4a1640C657bDD94D71325541bA927f5Aef"
+    reason: "PRICE_SANITY_FAILED"
+
+# Token addresses (Arbitrum)
+tokens:
+  WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+  USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+  USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+  WBTC: "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f"
+  ARB: "0x912CE59144191C1204E64559FE8253a0e49E6548"
+  LINK: "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4"
+  wstETH: "0x5979D7b546E38E414F7E9822514be443A4800529"
+  DAI: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"
+
+# Token decimals for proper normalization
+quote_decimals:
+  WETH: 18
+  USDC: 6
+  USDT: 6
+  WBTC: 8
+  ARB: 18
+  LINK: 18
+  wstETH: 18
+  DAI: 18
+
+# Anchor prices (2026-02 on-chain evidence)
+tokens_anchor_price:
+  WETH_USDC: 1980
+  WETH_USDT: 1980
+  WETH_DAI: 1980
+  WBTC_WETH: 35
+  ARB_WETH: 0.000058
+  LINK_WETH: 0.0045
+  wstETH_WETH: 1.20
+  WBTC_USDC: 68000
+
+# Quote sizing: 1 ETH
+quote_amount_in_wei: "1000000000000000000"
+
+# Gate thresholds
+max_slippage_bps: 100
+min_net_bps: 5
+
+# Price sanity gate (M4 bootstrap thresholds)
+price_sanity_enabled: true
+price_sanity_max_deviation_bps: 5000  # 50% for bootstrap
+
+# Paper trading - REDUCED SIZE FOR ROUNDTRIP VIABILITY
+cooldown_seconds: 60
+notion_capital_usdc: "10000.000000"
+
+# M5 Cost model (gas-only)
+gas_usd_estimate: 0.10
+
+# ROUNDTRIP PROBE: Lower sizes for better LP viability
+paper_size_usd: 100  # REDUCED from 250 - lowers ticks_crossed
+paper_slippage_bps: 5
+
+# M4.2 USD-notional sizing (matches paper_size_usd)
+target_usd_notional: 100  # REDUCED from 250 - smaller notional
+use_usd_notional: true
+tokens_usd_price:
+  WBTC: 68000
+  WETH: 2050
+  ETH: 2050
+  USDC: 1.0
+  USDT: 1.0
+  DAI: 1.0
+  ARB: 0.10
+  LINK: 16.0
+  wstETH: 2500
+
+# Autosize configuration
+autosize:
+  enabled: true
+  base_size_usd: 500   # Lower base for probe
+  min_size_usd: 50     # Lower floor
+  max_size_usd: 2000   # Lower ceiling
+  impact_threshold_bps: 50
+  ticks_crossed_threshold: 5
+  reduction_factor: 0.5
+  cooldown_seconds: 300
+  reason_codes:
+    - "high_impact"
+    - "ticks_crossed"
+    - "volatility"
+    - "cooldown_active"
+
+# ROUNDTRIP PROBE: Lower min_spread_bps to catch more signals
+min_spread_bps: 5  # REDUCED from 10 - catches more signals for viability testing
+
+# Net PnL threshold
+min_net_pnl_usdc_est: 0.0
+
+# v2.2.0: truth_mode_m42 - roundtrip is canonical
+truth_mode_m42: true
+
+# v2.2.0: QuoterV2 for executable pricing
+use_quoter_v2: true
+
+# Discovery settings
+discovery_dry_run: true
+discovery_runtime: false
+discovery_runtime_max_pairs: 20
+
+# Cross-DEX requirement
+require_cross_dex: true
+
+# M4 markers - execution disabled
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_M4

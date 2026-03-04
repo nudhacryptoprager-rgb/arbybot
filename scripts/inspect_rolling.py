@@ -77,6 +77,8 @@ def print_summary(artifacts, excluded, as_json=False):
                 "runs_in_window": artifacts.get("agg", {}).get("runs_in_window"),
                 "agg_status": artifacts.get("agg", {}).get("agg_status"),
                 "agg_reasons": artifacts.get("agg", {}).get("agg_reasons", []),
+                # v3.2.13: quality_warnings for reviewer diagnostics
+                "quality_warnings": artifacts.get("agg", {}).get("quality_warnings", []),
                 "data_run_rate": artifacts.get("latest", {}).get("data_run_rate"),
                 "total_net_usdc": agg_qs.get("total_net_usdc"),
                 "unique_pairs": agg_qs.get("unique_pairs"),

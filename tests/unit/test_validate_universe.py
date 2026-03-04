@@ -158,3 +158,96 @@ class TestRunKindGating:
         # Should not have VIABILITY_FAIL errors
         viability_fails = [e for e in result["errors"] if "VIABILITY_FAIL" in e]
         assert len(viability_fails) == 0, f"Valid config should pass, got: {viability_fails}"
+
+
+class TestChainValidation:
+    """Tests for chain field validation (v3.2.13)."""
+    
+    @pytest.fixture
+    def make_temp_config(self, tmp_path):
+        """Create temporary config file."""
+        import yaml
+        
+        def _make_config(config_dict):
+            config_path = tmp_path / "test_config.yaml"
+            with open(config_path, "w") as f:
+                yaml.dump(config_dict, f)
+            return config_path
+        
+        return _make_config
+    
+    def test_normal_run_fail_on_missing_chain(self, make_temp_config):
+        """NORMAL run with missing 'chain' should FAIL."""
+        config_path = make_temp_config({
+            "run_kind": "NORMAL",
+            # No 'chain' field
+            "dexes": ["uniswap_v3", "sushiswap_v3"],
+            "pairs": [{"token_in": "WETH", "token_out": "USDC"}],
+        })
+        
+        result = validate_universe(config_path)
+        
+        assert any("chain" in e.lower() for e in result["errors"]), \
+            f"Expected FAIL for missing chain, got: {result['errors']}"
+    
+    def test_normal_run_fail_on_unknown_chain(self, make_temp_config):
+        """NORMAL run with chain='unknown' should FAIL."""
+        config_path = make_temp_config({
+            "run_kind": "NORMAL",
+            "chain": "unknown",  # Invalid
+            "dexes": ["uniswap_v3", "sushiswap_v3"],
+            "pairs": [{"token_in": "WETH", "token_out": "USDC"}],
+        })
+        
+        result = validate_universe(config_path)
+        
+        assert any("chain" in e.lower() for e in result["errors"]), \
+            f"Expected FAIL for unknown chain, got: {result['errors']}"
+    
+    def test_coverage_run_fail_on_missing_chain(self, make_temp_config):
+        """COVERAGE run with missing 'chain' should FAIL (same as NORMAL)."""
+        config_path = make_temp_config({
+            "run_kind": "COVERAGE",
+            # No 'chain' field
+            "dexes": ["uniswap_v3", "sushiswap_v3"],
+            "pairs": [{"token_in": "WETH", "token_out": "USDC"}],
+        })
+        
+        result = validate_universe(config_path)
+        
+        assert any("chain" in e.lower() for e in result["errors"]), \
+            f"Expected FAIL for COVERAGE missing chain, got: {result['errors']}"
+    
+    def test_smoke_run_warn_on_missing_chain(self, make_temp_config):
+        """SMOKE run with missing 'chain' should WARN, not FAIL."""
+        config_path = make_temp_config({
+            "run_kind": "SMOKE",
+            # No 'chain' field
+            "dexes": ["uniswap_v3", "sushiswap_v3"],
+            "pairs": [{"token_in": "WETH", "token_out": "USDC"}],
+        })
+        
+        result = validate_universe(config_path)
+        
+        # Should NOT have error for missing chain
+        assert not any("chain" in e.lower() and "viability" in e.lower() for e in result["errors"]), \
+            f"SMOKE should not FAIL on missing chain, got: {result['errors']}"
+        # Should have warning instead
+        assert any("chain" in w.lower() for w in result["warnings"]), \
+            f"Expected warning about missing chain, got: {result['warnings']}"
+    
+    def test_valid_chain_passes(self, make_temp_config):
+        """Config with valid chain should pass chain validation."""
+        config_path = make_temp_config({
+            "run_kind": "NORMAL",
+            "chain": "arbitrum_one",
+            "chain_id": 42161,  # Required for chain_id mismatch check
+            "dexes": ["uniswap_v3", "sushiswap_v3"],
+            "pairs": [{"token_in": "WETH", "token_out": "USDC"}],
+        })
+        
+        result = validate_universe(config_path)
+        
+        # Should NOT have chain-related errors
+        chain_errors = [e for e in result["errors"] if "chain" in e.lower()]
+        assert len(chain_errors) == 0, f"Valid chain should pass, got: {chain_errors}"

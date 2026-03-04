@@ -152,6 +152,19 @@ def validate_universe(config_path: Path) -> dict:
     strict_run_kinds = ("NORMAL", "COVERAGE")
     is_strict_run = (run_kind in strict_run_kinds)
     
+    # v3.2.13: chain validation - FAIL if chain missing/unknown for strict runs
+    # This prevents CHAIN_KEY_UNKNOWN warning and legacy cache path usage
+    if chain_key in (None, "", "unknown"):
+        if is_strict_run:
+            result["errors"].append(
+                "VIABILITY_FAIL: 'chain' field missing or unknown in config - "
+                "required for chain-scoped cache isolation"
+            )
+        else:
+            result["warnings"].append(
+                f"'chain' field missing/unknown (run_kind={run_kind})"
+            )
+    
     # v3.2.11 FIX: require_cross_dex=true with <2 DEX
     # Cross-DEX arbitrage requires at least 2 DEXes to function
     if len(dexes) < 2 and config.get("require_cross_dex", True):

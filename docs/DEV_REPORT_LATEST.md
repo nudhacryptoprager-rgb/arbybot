@@ -3,46 +3,70 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
+## SESSION GOAL + DONE CRITERIA (v3.2.14)
+**Goal**: Move from `profit_is_diagnostic=true` to `profit_truth_available=true` (M4.2 roundtrip).
+
+### M4.2 TRUTH-PROGRESS CRITERIA (primary - must pass)
+| # | Criterion | Target | Current | Status |
+|---|-----------|--------|---------|--------|
+| 1 | `roundtrip_lp_filter.passed_to_roundtrip` | >= 1 | 0 | ❌ |
+| 2 | `roundtrip.evaluated_count` | >= 1 | 0 | ❌ |
+
+### QUALITY/STRETCH CRITERIA (secondary - nice to have)
+| # | Criterion | Target | Current | Status |
+|---|-----------|--------|---------|--------|
+| 3 | `window_chain_key` | != MIXED | MIXED | ❌ |
+| 4 | `agg_status` | PASS | PASS | ✅ |
+| 5 | `unique_pairs` | >= 8 | 5 | ❌ |
+
+**RCA (v3.2.14)**:
+- Best opportunity: WETH/USDT with `spread_bps=23`, `min_required_spread_bps=68.8`
+- Spread deficit: `-45.42 bps` (improved from `-71 bps` in v3.2.13)
+- Root cause: cost floor (LP fees + gas + slippage) exceeds available market spreads
+- ARB/WETH has 133 bps spread, but min_required=218 bps (fee_tiers=[500,3000] is expensive)
+
+**Next actions** (M4.2 viability):
+1. Explore lower fee-tier pools (fee=100 bps) where available
+2. Consider larger paper_size_usd to reduce gas-bps impact
+3. Monitor for higher-spread market conditions
+
+**Config updates (v3.2.14)**:
+- `config/real_roundtrip_probe.yaml`: explicit `run_kind: NORMAL`, removed uni-only WETH/DAI pair
+- `scripts/inspect_run_dir.py`: added `best_spread_economics` for RCA
+
 ## 0) Meta
-timestamp_utc: 2026-03-04T11:13:58Z
-run_id: data/runs/ci_m5_gate_20260304_121344
-mode: ONLINE (v3.2.12: test cache isolation + COVERAGE policy fix)
+timestamp_utc: 2026-03-04T12:13:08Z
+run_id: data/runs/ci_m5_gate_20260304_131254
+mode: ONLINE (v3.2.14: best_spread_economics + DONE CRITERIA separation)
 artifact_mode: rolling
-config: config/real_minimal.yaml (arbitrum_one, run_kind=NORMAL)
+config: config/real_roundtrip_probe.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-04T11:13:58.916590Z
+  primary: ts:2026-03-04T12:13:08Z
   dirty: false
-  desc: v3.2.12 test cache isolation (no writes to data/cache during pytest)
+  desc: v3.2.14 best_spread_economics + DONE CRITERIA types
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Chain-scoped persistence test isolation + COVERAGE policy
+goal (Roadmap пункт): M4.2 roundtrip viability - enable profit truth
 change_summary:
-  - ADD: tests/conftest.py autouse fixture to redirect all cache paths to tmp_path
-  - FIX: test_chain_scoped_cache.py uses tmp_path (no more pollution of data/cache/)
-  - FIX: runtime_disabled/quarantine/anchors log WARN when using legacy path
-  - FIX: quotes.py logs WARN when chain_key='unknown' (misconfig detection)
-  - FIX: validate_universe.py treats COVERAGE same as NORMAL (strict gating)
-  - ADD: tests/unit/test_validate_universe.py (8 tests: run_kind gating)
-  - TESTS: 1317 passed (31 chain-scoped + 8 validate_universe)
+  - UPD: config/real_roundtrip_probe.yaml (run_kind: NORMAL, removed WETH/DAI uni-only)
+  - ADD: scripts/inspect_run_dir.py best_spread_economics field for RCA
+  - ADD: tests/unit/test_inspect_run_dir.py best_spread_economics tests (2 tests)
+  - DOC: Separated DONE CRITERIA into M4.2 truth-progress vs quality/stretch
+  - TESTS: 1324 passed (2 new best_spread_economics tests)
 touched_files:
-  - tests/conftest.py (autouse cache isolation fixture)
-  - tests/unit/test_chain_scoped_cache.py (tmp_path isolation + content assertions)
-  - tests/unit/test_validate_universe.py (new file, 8 tests)
-  - strategy/dynamic_anchors.py (LEGACY_CACHE_PATH WARN log)
-  - strategy/quarantine.py (LEGACY_CACHE_PATH WARN log)
-  - strategy/runtime_disabled.py (LEGACY_CACHE_PATH WARN log)
-  - strategy/quotes.py (CHAIN_KEY_UNKNOWN WARN log)
-  - scripts/validate_universe.py (COVERAGE strict gating)
+  - config/real_roundtrip_probe.yaml (run_kind + removed uni-only pair)
+  - scripts/inspect_run_dir.py (best_spread_economics field)
+  - tests/unit/test_inspect_run_dir.py (2 new tests)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1317 passed, 1 skipped
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
 py -3.11 scripts/check_repo_safety.py: RESULT: PASS (0 warnings)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1 --strict: PASS
-py -3.11 scripts/inspect_run_dir.py --json: opportunity_engine.total=11, quality_reasons=['WARN_TOP_PAIR_DOMINANCE', 'WARN_PROFIT_DIAGNOSTIC']
-py -3.11 scripts/inspect_rolling.py --json: agg_status=PASS, runs_in_window=33, chain_keys=['arbitrum_one','linea']
+py -3.11 -m pytest tests/unit -q: 1324 passed, 1 skipped
+py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_roundtrip_probe.yaml --cycles 1: PASS
+py -3.11 scripts/inspect_run_dir.py --json: best_spread_economics.spread_minus_required_bps=-45.42
+py -3.11 scripts/inspect_rolling.py --json: runs_in_window=34, agg_status=PASS
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -50,25 +74,28 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260304_121344/reports (arbitrum_one, run_kind=NORMAL)
-chain_scoped_cache_files:
-  - data/cache/quarantine_state_{chain_key}.json
-  - data/cache/runtime_disabled_pools_{chain_key}.json
-  - data/cache/dynamic_anchors_{chain_key}.json
+  - data/runs/ci_m5_gate_20260304_131254/reports (arbitrum_one, run_kind=NORMAL)
+probe_config:
+  - config/real_roundtrip_probe.yaml (paper_size_usd=100, min_spread_bps=5)
 evidence:
-  - runs_in_window: 33
+  - runs_in_window: 34
   - agg_status: PASS
-  - data_run_rate: 0.7879
-  - total_net_usdc: 103.8238
+  - data_run_rate: 0.7941
+  - total_net_usdc: 105.2637
   - chain_keys: ['arbitrum_one', 'linea']
   - window_chain_key: MIXED
   - latest_chain_key: arbitrum_one
   - quality_status: WARN
-  - quality_reasons: ['WARN_TOP_PAIR_DOMINANCE', 'WARN_PROFIT_DIAGNOSTIC']
-  - opportunity_engine.total: 11
-  - opportunity_engine.profitable: 9
-  - opportunity_engine.gated: 6
-  - one_leg_profit_is_diagnostic: true
+  - quality_reasons: ['WARN_CRITICAL_REJECTS', 'WARN_TOP_PAIR_DOMINANCE_HIGH', 'WARN_PROFIT_DIAGNOSTIC']
+  - roundtrip_lp_filter.passed_to_roundtrip: 0
+  - roundtrip_lp_filter.lp_viable_count: 4
+  - roundtrip_lp_filter.margin_filtered_count: 3 (failed spread_minus > -5)
+  - best_spread_economics.spread_minus_required_bps: -45.42 (improved from -71)
+  - best_spread_economics.pair: WETH/USDT
+  - best_spread_economics.spread_bps: 23
+  - best_spread_economics.min_required_spread_bps: 68.8 (cost floor)
+  - profit_is_diagnostic: true
+  - unique_pairs: 5
 
 ## 4) Key Results (числа з артефактів)
 
@@ -79,10 +106,10 @@ _latest.json:
   agg_reasons: []
   quality_warnings: ['MIXED_CHAIN_KEYS(arbitrum_one,linea)']
   chain_keys: ['arbitrum_one', 'linea']
-  data_run_rate: 0.7879
-  runs_in_window: 33
+  data_run_rate: 0.7941
+  runs_in_window: 34
   in_warmup: false
-  effective_pass_rate: 0.7879
+  effective_pass_rate: 0.7941
   run_context.run_dir_name: ci_m5_gate_20260304_121344
   inputs.chain_key: arbitrum_one
   inputs.run_kind: NORMAL

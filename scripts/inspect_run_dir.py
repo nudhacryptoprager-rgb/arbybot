@@ -143,6 +143,33 @@ def inspect_run_dir(run_dir: Path) -> dict:
             "one_leg_profit_is_diagnostic": opp_engine.get("one_leg_profit_is_diagnostic", False),
         }
         
+        # v3.2.14: best_spread_minus_required_bps for "0 passed_to_roundtrip" RCA
+        # Source: truth_report.stats.opportunity_engine.top_opportunities[0]
+        top_opps = opp_engine.get("top_opportunities", [])
+        best_opp = None
+        best_margin = -999.0
+        for opp in top_opps:
+            margin = opp.get("spread_minus_required_bps")
+            if margin is not None and margin > best_margin:
+                best_margin = margin
+                best_opp = opp
+        
+        if best_opp:
+            result["best_spread_economics"] = {
+                "spread_minus_required_bps": best_opp.get("spread_minus_required_bps"),
+                "spread_bps": best_opp.get("spread_bps"),
+                "min_required_spread_bps": best_opp.get("min_required_spread_bps"),
+                "pair": best_opp.get("pair"),
+                "route": best_opp.get("route"),
+                "is_roundtrip_viable": best_opp.get("is_roundtrip_viable", False),
+                # v3.2.14: Cost breakdown fields (if available in opportunity)
+                "gas_bps": best_opp.get("gas_bps"),
+                "lp_fee_bps_roundtrip": best_opp.get("lp_fee_bps_roundtrip"),
+                "effective_slippage_bps": best_opp.get("effective_slippage_bps"),
+            }
+        else:
+            result["best_spread_economics"] = None
+        
         # Roundtrip stats
         rt_stats = stats.get("roundtrip", {})
         result["roundtrip"] = {
@@ -150,6 +177,18 @@ def inspect_run_dir(run_dir: Path) -> dict:
             "profitable_count": rt_stats.get("profitable_count", 0),
             "best_net_pnl_bps": rt_stats.get("best_net_pnl_bps"),
         }
+        
+        # v3.2.13: roundtrip_lp_filter for viability diagnostics
+        lp_filter = stats.get("roundtrip_lp_filter", {})
+        result["roundtrip_lp_filter"] = {
+            "candidates_considered": lp_filter.get("candidates_considered", 0),
+            "cross_dex_count": lp_filter.get("cross_dex_count", 0),
+            "lp_viable_count": lp_filter.get("lp_viable_count", 0),
+            "passed_to_roundtrip": lp_filter.get("passed_to_roundtrip", 0),
+        }
+        
+        # v3.2.13: profit_is_diagnostic flag (critical for reviewer)
+        result["profit_is_diagnostic"] = opp_engine.get("one_leg_profit_is_diagnostic", False)
     
     # Extract from run_summary
     if run_summary:

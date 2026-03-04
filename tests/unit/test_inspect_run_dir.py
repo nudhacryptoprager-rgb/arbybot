@@ -175,3 +175,127 @@ def test_inspect_run_dir_missing_artifacts():
         assert "scan" in result["artifacts_missing"]
         assert "reject_histogram" in result["artifacts_missing"]
         assert "run_summary" in result["artifacts_missing"]
+
+
+def test_inspect_run_dir_best_spread_economics():
+    """
+    v3.2.14: Contract: inspect_run_dir must extract best_spread_economics
+    from truth_report.stats.opportunity_engine.top_opportunities.
+    
+    This provides RCA data when passed_to_roundtrip=0 (e.g., best spread_minus_required_bps).
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    from scripts.inspect_run_dir import inspect_run_dir
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        run_dir = Path(tmpdir)
+        reports_dir = run_dir / "reports"
+        reports_dir.mkdir()
+
+        # Truth report with top_opportunities having spread_minus_required_bps
+        truth_report = {
+            "schema_version": "3.0.0",
+            "chain_key": "arbitrum_one",
+            "chain_id": 42161,
+            "current_block": 123456,
+            "spread_signals": [],
+            "stats": {
+                "quotes_total": 10,
+                "quotes_fetched": 8,
+                "dexes_active": 2,
+                "opportunity_engine": {
+                    "enabled": True,
+                    "one_leg_profit_is_diagnostic": True,
+                    "summary": {
+                        "total_opportunities": 3,
+                        "profitable_count": 2,
+                        "gated_count": 1,
+                    },
+                    "top_opportunities": [
+                        {
+                            "pair": "WETH/USDC",
+                            "route": "uniswap_v3 -> sushiswap_v3",
+                            "spread_bps": 15.5,
+                            "min_required_spread_bps": 25.0,
+                            "spread_minus_required_bps": -9.5,
+                            "is_roundtrip_viable": False,
+                            "gas_bps": 8.0,
+                            "lp_fee_bps_roundtrip": 10.0,
+                        },
+                        {
+                            "pair": "WBTC/WETH",
+                            "route": "sushiswap_v3 -> uniswap_v3",
+                            "spread_bps": 30.0,
+                            "min_required_spread_bps": 22.0,
+                            "spread_minus_required_bps": 8.0,  # Best margin
+                            "is_roundtrip_viable": True,
+                        },
+                        {
+                            "pair": "ARB/WETH",
+                            "route": "uniswap_v3 -> sushiswap_v3",
+                            "spread_bps": 5.0,
+                            "min_required_spread_bps": 25.0,
+                            "spread_minus_required_bps": -20.0,
+                            "is_roundtrip_viable": False,
+                        },
+                    ],
+                },
+            },
+            "config_params": {},
+        }
+        (reports_dir / "truth_report_20260101_120000.json").write_text(
+            json.dumps(truth_report)
+        )
+
+        result = inspect_run_dir(run_dir)
+
+        # Best spread economics must be the one with highest spread_minus_required_bps
+        best = result.get("best_spread_economics")
+        assert best is not None, "best_spread_economics must be present"
+        assert best["pair"] == "WBTC/WETH", f"Expected WBTC/WETH (best margin), got {best['pair']}"
+        assert best["spread_minus_required_bps"] == 8.0
+        assert best["spread_bps"] == 30.0
+        assert best["min_required_spread_bps"] == 22.0
+        assert best["is_roundtrip_viable"] is True
+
+
+def test_inspect_run_dir_best_spread_economics_none():
+    """
+    v3.2.14: Contract: best_spread_economics=None when no top_opportunities.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    from scripts.inspect_run_dir import inspect_run_dir
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        run_dir = Path(tmpdir)
+        reports_dir = run_dir / "reports"
+        reports_dir.mkdir()
+
+        truth_report = {
+            "schema_version": "3.0.0",
+            "chain_key": "arbitrum_one",
+            "chain_id": 42161,
+            "current_block": 123456,
+            "spread_signals": [],
+            "stats": {
+                "quotes_total": 5,
+                "quotes_fetched": 3,
+                "dexes_active": 1,
+                "opportunity_engine": {
+                    "enabled": True,
+                    "summary": {"total_opportunities": 0},
+                    "top_opportunities": [],  # Empty
+                },
+            },
+            "config_params": {},
+        }
+        (reports_dir / "truth_report_20260101_120000.json").write_text(
+            json.dumps(truth_report)
+        )
+
+        result = inspect_run_dir(run_dir)
+
+        assert result.get("best_spread_economics") is None, \
+            "best_spread_economics must be None when no top_opportunities"
