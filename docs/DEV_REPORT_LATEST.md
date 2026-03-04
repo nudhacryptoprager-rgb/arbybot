@@ -3,8 +3,8 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.17)
-**Goal**: Intent-driven universe enablement + safe rollout infrastructure.
+## SESSION GOAL + DONE CRITERIA (v3.2.18)
+**Goal**: Config contract fix + intent-driven universe hardening.
 
 ### M4.2 TRUTH-PROGRESS CRITERIA (primary - must pass)
 | # | Criterion | Target | Current | Status |
@@ -17,62 +17,49 @@
 |---|-----------|--------|---------|--------|
 | 3 | `window_chain_key` | != MIXED | MIXED | ❌ |
 | 4 | `agg_status` | PASS | PASS | ✅ |
-| 5 | `unique_pairs` | >= 8 | 5 | ❌ |
+| 5 | `unique_pairs` | >= 8 | 6 | ❌ |
 
-### v3.2.17 CHANGES SUMMARY
+### v3.2.18 CHANGES SUMMARY
 
-**Intent-Driven Universe Enablement:**
-1. **dexes.yaml as single source of truth** - `get_factory_address()` prefers dexes.yaml over FACTORY_ADDRESSES
-2. **Per-DEX fee_tiers** - `get_dex_fee_tiers(chain, dex)` returns fee_tiers from dexes.yaml
-3. **Algebra adapter support** - `query_algebra_pool()` using `poolByPair()` for dynamic-fee DEXes
-4. **pool_resolver adapter routing** - Uses `get_dex_adapter_type()` instead of substring matching
+**Config Contract Fixes:**
+1. **Canonical keys enforcement** - `run_kind` (not `run_kind_hint`), `discovery_runtime_max_pairs` (not `max_pairs`)
+2. **M4.2 truth-semantics** - Added `truth_mode_m42: true`, `execution_enabled: false`, `kill_switch_active: true`
+3. **Coverage sizing fix** - `target_usd_notional=100` (coverage) / `250` (NORMAL) to reduce NOTIONAL_DRIFT_EXCLUDED
 
-**Bug Fixes:**
-5. **Cap logic fix** - `resolve_runtime_pairs()` now counts unique pairs, not total pools
-6. **Token address resolution** - `resolve_token_address()` with 3-tier fallback (pair_cfg → config.tokens → core_tokens.yaml)
+**Infrastructure Hardening:**
+4. **validate_universe.py** - Support `universe_source=discovery_runtime`, detect non-canonical keys
+5. **ci_m5_0_gate guardrails** - FAIL if `--refresh-rolling` without explicit `run_kind`, FAIL if `run_kind!=NORMAL` with rolling refresh
 
-**Safe Rollout Infrastructure:**
-7. **Rolling refresh run_kind enforcement** - NORM-only policy with stricter warnings for COVERAGE/SMOKE
-8. **Intent rollout configs** - `coverage_intent_arbitrum_one.yaml` (COVERAGE) + `real_intent_arbitrum_one.yaml` (NORMAL)
+**Evidence runs:**
+- NORMAL: `ci_m5_gate_20260304_184754` (PASS, signals=5, rolling updated)
+- COVERAGE: `ci_m5_gate_20260304_184827` (PASS, cross_dex=9, rolling NOT updated)
 
-**Evidence run** (intent-driven coverage):
-- Run: `ci_m5_gate_20260304_150635` (PASS)
-- `universe_source=discovery_runtime`, quotes_fetched=15, dexes_active=3
-- `opportunity_engine.best_net_profit_usd=$42.11`
-- `roundtrip.evaluated_count=1` (first time!)
-
-**Tests**: 1337 passed
+**Tests**: 1337 passed, CI pipeline PASS
 
 ## 0) Meta
-timestamp_utc: 2026-03-04T15:07:24Z
-run_id: data/runs/ci_m5_gate_20260304_150635
-mode: ONLINE (v3.2.17: intent-driven universe + Algebra support)
+timestamp_utc: 2026-03-04T17:48:08Z
+run_id: data/runs/ci_m5_gate_20260304_184754
+mode: ONLINE (v3.2.18: config contract fix + intent hardening)
 artifact_mode: rolling
-config: config/coverage_intent_arbitrum_one.yaml (arbitrum_one, run_kind=COVERAGE)
+config: config/real_roundtrip_probe.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-04T15:07:24Z
+  primary: ts:2026-03-04T17:48:08Z
   dirty: false
-  desc: v3.2.17 intent-driven universe + Algebra adapter + safe rollout configs
+  desc: v3.2.18 config contract fix + validate_universe discovery_runtime support
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M5 Intent-driven universe enablement with safe rollout infrastructure
-change_summary:
-  - ADD: discovery/index_factories.py (get_factory_address, get_dex_fee_tiers, get_dex_adapter_type, get_chain_dexes, query_algebra_pool)
-  - FIX: discovery/runtime.py (cap logic: count pairs not pools, per-DEX fee_tiers)
-  - FIX: discovery/pool_resolver.py (adapter_type routing: algebra→poolByPair, uniswap_v3→getPool)
-  - ADD: strategy/quotes.py (resolve_token_address: pair_cfg → config.tokens → core_tokens.yaml fallback)
-  - UPD: scripts/ci_m5_0_gate.py (stricter NORM-only rolling warnings)
-  - ADD: config/coverage_intent_arbitrum_one.yaml (run_kind=COVERAGE, universe_source=discovery_runtime)
-  - ADD: config/real_intent_arbitrum_one.yaml (run_kind=NORMAL, universe_source=discovery_runtime)
+goal (Roadmap пункт): M5 Config contract fix + intent-driven universe hardening
+change_summary (v3.2.18):
+  - FIX: config/coverage_intent_arbitrum_one.yaml (canonical keys: run_kind, discovery_runtime_max_pairs + M4.2 semantics)
+  - FIX: config/real_intent_arbitrum_one.yaml (canonical keys + M4.2 truth-semantics + sizing fix)
+  - UPD: scripts/validate_universe.py (discovery_runtime support + non-canonical key detection)
+  - UPD: scripts/ci_m5_0_gate.py (FAIL guardrails for explicit run_kind + NORM-only rolling enforcement)
   - TESTS: 1337 passed
-touched_files:
-  - discovery/index_factories.py (dexes.yaml as source of truth + query_algebra_pool)
-  - discovery/runtime.py (cap logic fix + per-DEX fee_tiers)
-  - discovery/pool_resolver.py (adapter_type routing)
-  - strategy/quotes.py (resolve_token_address helper)
-  - scripts/ci_m5_0_gate.py (NORM-only warnings)
-  - config/coverage_intent_arbitrum_one.yaml (new)
-  - config/real_intent_arbitrum_one.yaml (new)
+touched_files (v3.2.18):
+  - config/coverage_intent_arbitrum_one.yaml (canonical keys + M4.2 semantics + sizing=100)
+  - config/real_intent_arbitrum_one.yaml (canonical keys + M4.2 semantics + sizing=250)
+  - scripts/validate_universe.py (discovery_runtime + non-canonical key warnings)
+  - scripts/ci_m5_0_gate.py (FAIL guardrails for run_kind requirement)
   - docs/DEV_REPORT_LATEST.md (this file)
   - docs/status/Status_M4.md (updated)
 
@@ -80,10 +67,10 @@ touched_files:
 
 py -3.11 -m pytest tests/unit -q: 1337 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_arbitrum_one.yaml --cycles 1: PASS (scan), M4 gate 2 (expected for COVERAGE)
-py -3.11 scripts/inspect_run_dir.py --run-dir data/runs/ci_m5_gate_20260304_150635 --json: opportunity_engine.best_net_profit_usd=$42.11, roundtrip.evaluated_count=1
-py -3.11 scripts/inspect_rolling.py --json: runs_in_window=37, agg_status=PASS
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_roundtrip_probe.yaml --refresh-rolling: PASS (NORMAL run, rolling updated)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_arbitrum_one.yaml --cycles 1: PASS (Rolling refresh disabled)
+py -3.11 scripts/inspect_rolling.py --json: runs_in_window=39, agg_status=PASS, unique_pairs=6
+py -3.11 scripts/check_repo_safety.py: PASS (4 warnings - expected, DEV_REPORT alignment)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -91,29 +78,24 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260304_150635/reports (arbitrum_one, run_kind=COVERAGE, v3.2.17 intent-driven)
+  - data/runs/ci_m5_gate_20260304_184754/reports (arbitrum_one, run_kind=NORMAL, v3.2.18 config fix)
 intent_configs:
-  - config/coverage_intent_arbitrum_one.yaml (universe_source=discovery_runtime, run_kind=COVERAGE)
-  - config/real_intent_arbitrum_one.yaml (universe_source=discovery_runtime, run_kind=NORMAL)
-evidence (intent-driven run v3.2.17):
-  - universe_source: discovery_runtime
-  - pairs_count: 3 (cross-dex only, max_pairs=30)
-  - quotes_fetched: 15
+  - config/coverage_intent_arbitrum_one.yaml (fixed: canonical keys + M4.2 semantics)
+  - config/real_intent_arbitrum_one.yaml (fixed: canonical keys + M4.2 semantics)
+evidence (NORMAL rolling run v3.2.18):
+  - run_dir_name: ci_m5_gate_20260304_184754
+  - run_timestamp: 2026-03-04T17:48:08.331970Z
+  - spread_signals: 5
+  - unique_pairs: 6
+  - runs_in_window: 39
+  - agg_status: PASS
+evidence (COVERAGE test run - rolling NOT updated):
+  - run_dir_name: ci_m5_gate_20260304_184827
+  - pairs_scanned: 8
+  - quotes_fetched: 19
   - dexes_active: 3 (uniswap_v3, sushiswap_v3, camelot_v3)
-  - opportunity_engine.total: 24
-  - opportunity_engine.profitable: 24
-  - opportunity_engine.best_net_profit_usd: $42.11
-  - roundtrip.evaluated_count: 1 (FIRST TIME!)
-  - roundtrip_lp_filter.unique_pairs_considered: 2
-  - profit_is_diagnostic: true
-best_spread_economics (WETH/USDT):
-  - lp_fee_bps_roundtrip: 10 (500 tier)
-  - effective_slippage_bps: 46.87 (measured)
-  - gas_bps: 10.0
-  - safety_bps: 2.0
-  - min_required_spread_bps: 68.87
-  - spread_bps: 26
-  - spread_minus_required_bps: -42.25
+  - cross_dex_spreads: 9
+  - Rolling refresh disabled: COVERAGE run_kind enforced
 
 ## 4) Key Results (числа з артефактів)
 
@@ -124,25 +106,25 @@ _latest.json:
   agg_reasons: []
   quality_warnings: ['MIXED_CHAIN_KEYS(arbitrum_one,linea)']
   chain_keys: ['arbitrum_one', 'linea']
-  data_run_rate: 0.7838
-  runs_in_window: 37
+  data_run_rate: 0.7949
+  runs_in_window: 39
   in_warmup: false
-  effective_pass_rate: 0.7838
-  run_context.run_dir_name: ci_m5_gate_20260304_150635
-  run_context.run_timestamp: 2026-03-04T14:07:24Z
+  effective_pass_rate: 0.7949
+  run_context.run_dir_name: ci_m5_gate_20260304_184754
+  run_context.run_timestamp: 2026-03-04T17:48:08Z
   inputs.chain_key: arbitrum_one
-  inputs.run_kind: COVERAGE
-  inputs.config_path: config/coverage_intent_arbitrum_one.yaml (POSIX)
+  inputs.run_kind: NORMAL
+  inputs.config_path: config/real_roundtrip_probe.yaml (POSIX)
 
-run_summary_latest.json (ci_m5_gate_20260304_150635):
+run_summary_latest.json (ci_m5_gate_20260304_184754):
   schema_version: m4:run_summary:v2.0
-  status: NO_DATA
-  profit_status: NO_DATA
-  drift_status: NO_DATA
-  quality_status: NO_DATA
-  quality_reasons: ['NO_DATA']
-  run_context.run_timestamp: 2026-03-04T14:07:24Z
-  run_kind: COVERAGE
+  status: PASS
+  profit_status: PASS
+  drift_status: PASS
+  quality_status: PASS
+  quality_reasons: []
+  run_context.run_timestamp: 2026-03-04T17:48:08Z
+  run_kind: NORMAL
   inputs.run_mode: REGISTRY_REAL
   inputs.chain_key: arbitrum_one
   inputs.chain_id: 42161

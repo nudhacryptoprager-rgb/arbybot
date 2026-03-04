@@ -6,7 +6,32 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=37, pass_rate=1.0, data_run_rate=0.78, fragile_rate_p90=0.0. `unique_pairs=5`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=39, pass_rate=1.0, data_run_rate=0.79, fragile_rate_p90=0.0. `unique_pairs=6`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+
+## Config Contract Canonical Keys (Fixes 2026-03-04)
+
+**Canonical Keys** (MUST use these, not aliases):
+- `run_kind` (not `run_kind_hint`) - determines rolling policy
+- `discovery_runtime_max_pairs` (not `max_pairs`) - discovery contract
+- `price_sanity_max_deviation_bps` (not `max_deviation_bps`) - sanity checks
+
+**M4.2 Truth-Semantics** (required for intent configs):
+```yaml
+truth_mode_m42: true
+execution_enabled: false
+execution_block_reason: "EXECUTION_DISABLED_M4"
+kill_switch_active: true
+simulate_only: true
+```
+
+**validate_universe.py Updates**:
+- Now supports `universe_source: discovery_runtime`
+- Warns on non-canonical keys
+- Requires explicit `run_kind` (not default to NORMAL)
+
+**ci_m5_0_gate.py Guardrails**:
+- FAIL if `--refresh-rolling` without explicit `run_kind`
+- FAIL if `run_kind != NORMAL` with `--refresh-rolling`
 
 ## Intent-Driven Universe Changes (2026-03-04)
 
@@ -42,33 +67,42 @@
 
 6. **config/coverage_intent_arbitrum_one.yaml** (COVERAGE, safe testing)
    - `universe_source: discovery_runtime`
-   - `run_kind_hint: COVERAGE`
+   - `run_kind: COVERAGE` (canonical key)
+   - `discovery_runtime_max_pairs: 30` (canonical key)
+   - `target_usd_notional: 100.0` (sizing to avoid NOTIONAL_DRIFT_EXCLUDED)
+   - `truth_mode_m42: true`, `simulate_only: true`
    - `dexes: [uniswap_v3, sushiswap_v3, camelot_v3, pancakeswap_v3]`
-   - `max_pairs: 30`, `require_cross_dex: true`
 
 7. **config/real_intent_arbitrum_one.yaml** (NORMAL, production)
    - `universe_source: discovery_runtime`
-   - `run_kind_hint: NORMAL`
-   - `max_pairs: 50`, `require_cross_dex: true`
+   - `run_kind: NORMAL` (canonical key)
+   - `discovery_runtime_max_pairs: 50` (canonical key)
+   - `target_usd_notional: 250.0` (production sizing)
+   - `truth_mode_m42: true`, `simulate_only: true`
 
-### Evidence Run
+### Evidence Runs (2026-03-04)
 
-**RunDir**: `ci_m5_gate_20260304_150635` (intent-driven COVERAGE)
+**NORMAL Rolling Run**: `ci_m5_gate_20260304_184754`
 
 | Metric | Value |
 |--------|-------|
-| universe_source | discovery_runtime |
-| quotes_total | 38 |
-| quotes_fetched | 15 |
-| dexes_active | 3 (uniswap_v3, sushiswap_v3, camelot_v3) |
-| opportunity_engine.total | 24 |
-| opportunity_engine.profitable | 24 |
-| opportunity_engine.best_net_profit_usd | $42.11 |
-| roundtrip.evaluated_count | 1 (**FIRST TIME!**) |
-| cross_dex_pairs | 3 |
+| run_kind | NORMAL |
+| spread_signals | 5 |
+| unique_pairs | 6 |
+| runs_in_window | 39 |
+| agg_status | PASS |
 
-### Tests
-- **1337 tests passed** (46 discovery tests verified)
+**COVERAGE Test Run**: `ci_m5_gate_20260304_184827`
+
+| Metric | Value |
+|--------|-------|
+| run_kind | COVERAGE |
+| pairs_scanned | 8 |
+| quotes_fetched | 19 |
+| cross_dex_spreads | 9 |
+| rolling_updated | false (COVERAGE policy) |
+
+---
 
 ## M4.2 Economics Gap (2026-03-04)
 

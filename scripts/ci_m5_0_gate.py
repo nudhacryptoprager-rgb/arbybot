@@ -1254,13 +1254,30 @@ ENV VARIABLES:
             # v3.2.11: NORM-only rolling policy - disable rolling refresh for non-NORMAL runs
             # SMOKE and COVERAGE runs should not update rolling artifacts
             # v3.2.17: Stricter enforcement - even if --refresh-rolling was explicitly passed
+            # v3.2.18: FAIL if explicit run_kind is missing (no defaulting for strict runs)
             try:
                 cfg_path = Path(args.config)
                 if cfg_path.exists():
                     import yaml
                     with open(cfg_path, "r", encoding="utf8") as f:
                         cfg_for_run_kind = yaml.safe_load(f) or {}
+                    
+                    # v3.2.18: Check for explicit run_kind (no defaulting)
+                    has_explicit_run_kind = ("run_kind" in cfg_for_run_kind)
                     run_kind = cfg_for_run_kind.get("run_kind", "NORMAL")
+                    
+                    # v3.2.18: FAIL if refresh-rolling is requested but run_kind is missing
+                    if args.refresh_rolling and not has_explicit_run_kind:
+                        print(f"[ONLINE] ERROR: --refresh-rolling requested but config missing explicit 'run_kind'")
+                        print(f"[ONLINE] ERROR: Add 'run_kind: NORMAL' to config to enable rolling refresh")
+                        return 1
+                    
+                    # v3.2.18: FAIL if refresh-rolling is requested but run_kind != NORMAL
+                    if args.refresh_rolling and run_kind != "NORMAL":
+                        print(f"[ONLINE] ERROR: --refresh-rolling requested but run_kind={run_kind}")
+                        print(f"[ONLINE] ERROR: NORM-only rolling policy: only run_kind=NORMAL can update rolling")
+                        return 1
+                    
                     if run_kind != "NORMAL":
                         # v3.2.17: Warn if user explicitly requested refresh_rolling for non-NORMAL
                         if args.refresh_rolling:

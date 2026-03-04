@@ -141,9 +141,30 @@ def validate_universe(config_path: Path) -> dict:
     result["summary"]["unique_pairs"] = list(sorted(unique_pairs))
     result["summary"]["unique_pairs_count"] = len(unique_pairs)
     
-    # Check run_kind (SMOKE runs won't update rolling)
+    # v3.2.18: Check for non-canonical keys (config contract violations)
+    non_canonical_keys = []
+    if "run_kind_hint" in config:
+        non_canonical_keys.append(("run_kind_hint", "run_kind", "determines rolling policy"))
+    if "max_pairs" in config:
+        non_canonical_keys.append(("max_pairs", "discovery_runtime_max_pairs", "discovery contract"))
+    if "max_deviation_bps" in config:
+        non_canonical_keys.append(("max_deviation_bps", "price_sanity_max_deviation_bps", "price sanity contract"))
+    
+    for old_key, canonical_key, reason in non_canonical_keys:
+        result["warnings"].append(
+            f"NON_CANONICAL_KEY: '{old_key}' should be '{canonical_key}' ({reason})"
+        )
+    
+    # v3.2.18: Check universe_source=discovery_runtime
+    universe_source = config.get("universe_source", "config")
+    result["summary"]["universe_source"] = universe_source
+    is_discovery_runtime = (universe_source == "discovery_runtime")
+    
+    # v3.2.18: Check explicit run_kind for strict runs (no defaulting)
+    has_explicit_run_kind = ("run_kind" in config)
     run_kind = config.get("run_kind", "NORMAL")
     result["summary"]["run_kind"] = run_kind
+    result["summary"]["has_explicit_run_kind"] = has_explicit_run_kind
     
     # 5. Check for potential issues
     # v3.2.12: run_kind-aware viability gating
@@ -178,14 +199,33 @@ def validate_universe(config_path: Path) -> dict:
                 f"require_cross_dex=true but <2 DEXes (run_kind={run_kind}, allowed as warning)"
             )
     
-    # v3.2.11: pairs_count==0 is a FAIL for strict runs (misconfig)
-    if not pairs:
-        if is_strict_run:
+    # v3.2.18: For discovery_runtime, validate max_pairs instead of pairs
+    if is_discovery_runtime:
+        discovery_max_pairs = config.get("discovery_runtime_max_pairs", 0)
+        result["summary"]["discovery_runtime_max_pairs"] = discovery_max_pairs
+        
+        if discovery_max_pairs <= 0 and is_strict_run:
             result["errors"].append(
-                "VIABILITY_FAIL: no pairs configured - cannot generate quotes"
+                "VIABILITY_FAIL: universe_source=discovery_runtime but "
+                "discovery_runtime_max_pairs not set or <=0"
             )
-        else:
-            result["warnings"].append(f"No pairs configured (run_kind={run_kind})")
+        
+        # For discovery_runtime, pairs from config are not used, so skip pairs check
+        # But still require explicit run_kind
+        if not has_explicit_run_kind and is_strict_run:
+            result["errors"].append(
+                "VIABILITY_FAIL: discovery_runtime config missing explicit 'run_kind' - "
+                "required for rolling policy enforcement"
+            )
+    else:
+        # v3.2.11: pairs_count==0 is a FAIL for strict runs (misconfig)
+        if not pairs:
+            if is_strict_run:
+                result["errors"].append(
+                    "VIABILITY_FAIL: no pairs configured - cannot generate quotes"
+                )
+            else:
+                result["warnings"].append(f"No pairs configured (run_kind={run_kind})")
     
     # v3.2.10: Check for pool resolution capability (NO_QUOTES prevention)
     # If pairs_count > 0 but dexes is empty, quotes can't be fetched

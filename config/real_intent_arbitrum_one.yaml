@@ -47,10 +47,10 @@ dexes:
   - camelot_v3
   - pancakeswap_v3
 
-# Discovery settings
-# max_pairs: Higher cap for production (more coverage)
+# Discovery settings (CANONICAL KEYS per discovery/runtime.py contract)
+# discovery_runtime_max_pairs: Higher cap for production (more coverage)
 # require_cross_dex: Only include pairs found on 2+ DEXes (better arb candidates)
-max_pairs: 50
+discovery_runtime_max_pairs: 50
 require_cross_dex: true
 
 # Quoter V2 for executable quotes (required for accurate pricing)
@@ -59,9 +59,15 @@ use_quoter_v2: true
 # Multicall batching (default ON, reduces RPC calls)
 use_multicall: true
 
-# USD-notional sizing (M4.2)
+# USD-notional sizing (M4.2) - use moderate notional for production
 use_usd_notional: true
-target_usd_notional: 1000.0
+target_usd_notional: 250.0
+
+# Spread economics
+min_spread_bps: 5
+paper_size_usd: 250
+paper_slippage_bps: 5
+gas_usd_estimate: 0.10
 
 # Token USD prices (for notional sizing)
 # NOTE: These should be updated periodically or fetched dynamically in future
@@ -80,7 +86,7 @@ tokens_usd_price:
   RDNT: 0.1
 
 # Price sanity gates (M5 tighter thresholds)
-max_deviation_bps: 3000  # 30% - tighter than M4 bootstrap
+price_sanity_max_deviation_bps: 3000  # 30% - tighter than M4 bootstrap
 
 # Anchor prices for sanity checks
 tokens_anchor_price:
@@ -92,5 +98,12 @@ tokens_anchor_price:
   UNI_WETH: 0.003
   wstETH_WETH: 1.15
 
-# Run kind hint (NORMAL = production, can update rolling)
-run_kind_hint: NORMAL
+# M4.2 Truth-Semantics (MANDATORY for profit interpretation)
+truth_mode_m42: true
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_M4
+kill_switch_active: true
+simulate_only: true
+
+# Run kind (CANONICAL KEY - determines rolling policy)
+run_kind: NORMAL
