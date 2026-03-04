@@ -39,22 +39,24 @@
 9. **coverage_intent_zksync.yaml** - zkSync chain (324) with izumi_v3
 
 **Evidence runs:**
-- NORMAL: `ci_m5_gate_20260304_205812` (PASS, signals=2, rolling updated)
-- COVERAGE (Linea): `ci_m5_gate_20260304_205626` (NO_DATA: discovery_runtime 0 pairs)
-- COVERAGE (Mantle): `ci_m5_gate_20260304_205651` (NO_DATA: discovery_runtime 0 pairs)
+- NORMAL: `ci_m5_gate_20260304_211447` (PASS, signals=2, rolling updated)
+- COVERAGE (Linea): `ci_m5_gate_20260304_205626` (NO_DATA: 11 no_tokens, 6 no_pool)
+- COVERAGE (Mantle): `ci_m5_gate_20260304_205651` (NO_DATA: 6 no_tokens, 10 no_pool)
+- COVERAGE (Scroll): `ci_m5_gate_20260304_211217` (NO_DATA: 9 no_tokens, 5 no_pool)
+- COVERAGE (zkSync): `ci_m5_gate_20260304_211250` (NO_DATA: 10 no_tokens, 5 no_pool)
 
 **Tests**: 1341 passed, CI pipeline PASS
 
 ## 0) Meta
-timestamp_utc: 2026-03-04T19:59:10.422928Z
-run_id: data/runs/ci_m5_gate_20260304_205812
-mode: ONLINE (v3.2.20: per-DEX quoter + NO_USD_PRICE + _pre_routing bucket)
+timestamp_utc: 2026-03-04T20:15:44.786838Z
+run_id: data/runs/ci_m5_gate_20260304_211447
+mode: ONLINE (v3.2.20: multi-chain coverage + onboarding checklist)
 artifact_mode: rolling
 config: config/real_intent_arbitrum_one.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-04T19:59:10.422928Z
+  primary: ts:2026-03-04T20:15:44.786838Z
   dirty: false
-  desc: v3.2.20 exclude_reason + _pre_routing + multi-chain rollout
+  desc: v3.2.20 multi-chain coverage runs + executor onboarding
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Per-DEX quoter mode + viability filters + multi-chain rollout (scroll/zksync)
@@ -90,7 +92,7 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_intent_arbitrum_one.yaml --refresh-rolling: PASS
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml: FAIL (NO_DATA)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml: FAIL (NO_DATA)
-py -3.11 scripts/inspect_rolling.py --json: runs_in_window=44, agg_status=PASS, unique_pairs=7
+py -3.11 scripts/inspect_rolling.py --json: runs_in_window=45, agg_status=PASS, unique_pairs=7
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -98,7 +100,7 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260304_205812/reports (arbitrum_one, run_kind=NORMAL, v3.2.20)
+  - data/runs/ci_m5_gate_20260304_211447/reports (arbitrum_one, run_kind=NORMAL, v3.2.20)
 intent_configs:
   - config/coverage_intent_arbitrum_one.yaml (arbitrum_one + camelot_v3 for testing)
   - config/real_intent_arbitrum_one.yaml (arbitrum_one - no camelot_v3)
@@ -107,22 +109,22 @@ intent_configs:
   - config/coverage_intent_scroll.yaml (Scroll rollout)
   - config/coverage_intent_zksync.yaml (zkSync rollout)
 evidence (NORMAL rolling run v3.2.20):
-  - run_dir_name: ci_m5_gate_20260304_205812
-  - run_timestamp: 2026-03-04T19:59:10.422928Z
+  - run_dir_name: ci_m5_gate_20260304_211447
+  - run_timestamp: 2026-03-04T20:15:44.786838Z
   - spread_signals: 2
   - quotes_fetched: 42
   - unique_pairs: 7
-  - runs_in_window: 44
+  - runs_in_window: 45
   - agg_status: PASS
-  - data_run_rate: 0.7273
+  - data_run_rate: 0.7111
 
 ## 4) Key Results (числа з артефактів)
 
 _latest.json:
   schema_version: m4:latest:v2.0
   run_status: PASS
-  run_dir_name: ci_m5_gate_20260304_205812
-  run_timestamp: 2026-03-04T19:59:10.422928Z
+  run_dir_name: ci_m5_gate_20260304_211447
+  run_timestamp: 2026-03-04T20:15:44.786838Z
   metrics:
     signals_count: 2
     signals_included: 1
@@ -150,10 +152,10 @@ run_summary_latest.json:
 
 m4_stability_agg.json:
   agg_status: PASS
-  runs_in_window: 44
+  runs_in_window: 45
   unique_pairs: 7
   unique_routes_cross_dex: 3
-  data_run_rate: 0.7273
+  data_run_rate: 0.7111
   total_net_usdc: 114.7858
   window_chain_key: MIXED (arbitrum_one + linea)
 
@@ -195,12 +197,12 @@ best_net_pnl_bps: -170.36 (negative = not profitable after gas)
 
 ## 8) Multi-Chain Rollout Verdict (v3.2.20)
 
-| Config | Chain | ONLINE Status | Verdict | Notes |
-|--------|-------|---------------|---------|-------|
-| coverage_intent_linea.yaml | Linea (59144) | **NO_DATA** | ⚠️ | discovery_runtime 0 pairs (lynex_v3 pool resolution failed) |
-| coverage_intent_mantle.yaml | Mantle (5000) | **NO_DATA** | ⚠️ | discovery_runtime 0 pairs (agni_v3 pool resolution failed) |
-| coverage_intent_scroll.yaml | Scroll (534352) | NOT_TESTED | ❓ | Config valid, RPC not tested |
-| coverage_intent_zksync.yaml | zkSync (324) | NOT_TESTED | ❓ | Config valid, RPC not tested |
+| Config | Chain | ONLINE Status | Verdict | no_tokens | no_pool |
+|--------|-------|---------------|---------|-----------|---------|
+| coverage_intent_linea.yaml | Linea (59144) | **NO_DATA** | ⚠️ | 11 | 6 |
+| coverage_intent_mantle.yaml | Mantle (5000) | **NO_DATA** | ⚠️ | 6 | 10 |
+| coverage_intent_scroll.yaml | Scroll (534352) | **NO_DATA** | ⚠️ | 9 | 5 |
+| coverage_intent_zksync.yaml | zkSync (324) | **NO_DATA** | ⚠️ | 10 | 5 |
 
 **Root Cause**: Multi-chain discovery requires:
 1. Proper token addresses in `core_tokens.yaml` for each chain
@@ -220,6 +222,6 @@ ci_full_pipeline: ALL REQUIRED GATES PASSED
 4. **Roundtrip profitability** - Wait for lower gas or better spreads
 
 ---
-*Generated: 2026-03-04T20:58:12Z*
-*Evidence: ci_m5_gate_20260304_205812 (arbitrum_one, NORMAL)*
+*Generated: 2026-03-04T21:15:44Z*
+*Evidence: ci_m5_gate_20260304_211447 (arbitrum_one, NORMAL)*
 

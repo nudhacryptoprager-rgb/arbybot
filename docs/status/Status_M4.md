@@ -8,6 +8,28 @@
 
 > [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=44, pass_rate=1.0, data_run_rate=0.7273, fragile_rate_p90=0.0. `unique_pairs=7`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
 
+## Executor Onboarding Checklist (2026-03-04)
+
+**Pre-session reading (MANDATORY for Claude executor):**
+
+| Document | Path | Purpose |
+|----------|------|---------|
+| Agent Rules | `AGENTS.md` | Role, output format, artifact policy |
+| Roadmap | `Roadmap.md` | Milestone goals, priorities |
+| Docs Policy | `docs/DOCS_POLICY.md` | Version/timestamp rules |
+| Workflow | `docs/WORKFLOW.md` | Commands, CI gates, review loop |
+| DEV Report Format | `docs/DEV_REPORT_CANONICAL_UA.md` | Canonical report structure |
+| Rolling Contract | `docs/m4/ROLLING_CONTRACT.md` | Artifact schemas, provenance |
+| Status Index | `docs/status/INDEX.md` | Status file navigation |
+| M4 Status | `docs/status/Status_M4.md` | Current milestone state |
+| M5_0 Status | `docs/status/Status_M5_0.md` | Infra evidence |
+
+**Key rules:**
+1. Evidence = `run_timestamp` + rolling artifacts (NOT code SHAs)
+2. COVERAGE runDir without `run_summary` is invalid evidence
+3. Version strings (`vX.Y.Z`) forbidden in Status files (use dates)
+4. Do NOT reference `setting_timlid.md` (Codex-only)
+
 ## Per-DEX Promotion Metrics (2026-03-04)
 
 **Per-DEX Health Breakdown** (from `per_dex_stats` in scan artifacts):
