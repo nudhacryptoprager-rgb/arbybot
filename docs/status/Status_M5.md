@@ -148,10 +148,16 @@ are validated and which are next for expansion.
 
 **NORM-only Rolling Policy:**
 - Rolling artifacts ONLY updated by `run_kind=NORMAL` runs
-- SMOKE runs (connectivity checks) excluded from `emit_to_aggregator_light()`
-- `ci_m5_0_gate.py` detects `run_kind=SMOKE` in config, sets `refresh_rolling=False`
-- Purpose: Prevent experimental/smoke runs from polluting production metrics
-- Test evidence: `tests/unit/test_smoke_run_isolation.py` (6 tests)
+- SMOKE and COVERAGE runs excluded from `emit_to_aggregator_light()`
+- `ci_m5_0_gate.py` detects `run_kind != NORMAL` in config, sets `refresh_rolling=False`
+- Purpose: Prevent experimental/smoke/coverage runs from polluting production metrics
+- Test evidence: `tests/unit/test_smoke_run_isolation.py` (10 tests)
+
+**Rolling Window Contract:**
+- Window is **N-run based** (max 200 runs), NOT time-based
+- Old runs are displaced only when `runs_in_window > max_runs=200`
+- Historical runs with different chain_key stay in window until displaced
+- To force clean state: use `reset_rolling_window()` or wait for 200 new NORMAL runs
 
 **run_kind Values:**
 | Value | Purpose | Updates Rolling? |

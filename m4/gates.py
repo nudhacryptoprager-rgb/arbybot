@@ -928,6 +928,8 @@ def run_online_gate(
                 "config_path": run_summary.get("inputs", {}).get("config_path"),
                 "chain_key": run_summary.get("inputs", {}).get("chain_key"),
                 "chain_id": run_summary.get("inputs", {}).get("chain_id"),
+                # v3.2.11: Add run_kind to _latest.json.inputs for operational clarity
+                "run_kind": run_summary.get("run_kind", "NORMAL"),
                 "require_cross_dex": run_summary.get("inputs", {}).get("require_cross_dex"),
                 "paper_size_usd": run_summary.get("inputs", {}).get("paper_size_usd"),
                 "min_spread_bps": run_summary.get("inputs", {}).get("min_spread_bps"),

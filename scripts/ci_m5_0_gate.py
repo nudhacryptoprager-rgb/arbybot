@@ -1251,8 +1251,8 @@ ENV VARIABLES:
                     print("[ONLINE] FAILOVER-STRESS: Rolling refresh disabled (use --refresh-rolling to override)")
                     args._rolling_defaults_set = True  # Prevent auto-enable below
 
-            # v3.2.10: SMOKE run isolation - disable rolling refresh for SMOKE runs
-            # NORM-only rolling policy: SMOKE runs should not update rolling artifacts
+            # v3.2.11: NORM-only rolling policy - disable rolling refresh for non-NORMAL runs
+            # SMOKE and COVERAGE runs should not update rolling artifacts
             try:
                 cfg_path = Path(args.config)
                 if cfg_path.exists():
@@ -1260,8 +1260,8 @@ ENV VARIABLES:
                     with open(cfg_path, "r", encoding="utf8") as f:
                         cfg_for_run_kind = yaml.safe_load(f) or {}
                     run_kind = cfg_for_run_kind.get("run_kind", "NORMAL")
-                    if run_kind == "SMOKE":
-                        print(f"[ONLINE] run_kind=SMOKE: Rolling refresh disabled (NORM-only rolling policy)")
+                    if run_kind != "NORMAL":
+                        print(f"[ONLINE] run_kind={run_kind}: Rolling refresh disabled (NORM-only rolling policy)")
                         args.refresh_rolling = False
                         args._rolling_defaults_set = True  # Prevent auto-enable below
             except Exception as rk_err:

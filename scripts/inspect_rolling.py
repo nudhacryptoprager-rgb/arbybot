@@ -21,7 +21,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "2.1.0"  # v3.2.10: window_chain_key vs latest_chain_key separation
+__version__ = "2.2.0"  # v3.2.11: chain_keys from agg.quick_stats (canonical source)
 
 
 def load_rolling_artifacts():
@@ -81,10 +81,11 @@ def print_summary(artifacts, excluded, as_json=False):
                 "total_net_usdc": agg_qs.get("total_net_usdc"),
                 "unique_pairs": agg_qs.get("unique_pairs"),
                 "unique_routes_cross_dex": agg_qs.get("unique_routes_cross_dex"),
-                # v3.2.10: Distinguish window vs latest chain_key
+                # v3.2.11: Distinguish window vs latest chain_key
                 "window_chain_key": agg_qs.get("chain_key"),  # Aggregate: single chain or "MIXED"
                 "latest_chain_key": artifacts.get("latest", {}).get("inputs", {}).get("chain_key"),
-                "chain_keys": artifacts.get("latest", {}).get("chain_keys", []),  # List of unique chains in window
+                # v3.2.11 FIX: Read chain_keys from agg.quick_stats (canonical source), not _latest
+                "chain_keys": agg_qs.get("chain_keys", []),  # List of unique chains in window
             },
             "signals": {
                 "included_count": artifacts.get("run_summary", {}).get("metrics", {}).get("included_signals_count"),

@@ -84,8 +84,8 @@ def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
         old_data["archive_reason"] = reason
         old_data["archive_run_timestamp"] = run_timestamp  # v2.0: timestamp instead of SHA
         
-        with open(archive_path, "w") as f:
-            json.dump(old_data, f, indent=2)
+        # v3.2.11: Use atomic write for archive (consistency with fresh aggregator)
+        atomic_write_json(archive_path, old_data)
         
         print(f"[ROLLING-RESET] Archived: {archive_name} (runs={len(old_data.get('runs', []))})")
     
@@ -98,8 +98,8 @@ def reset_rolling_window(agg_path: Path, reason: str = "manual_reset") -> dict:
         "runs": [],
     }
     
-    with open(agg_path, "w") as f:
-        json.dump(fresh, f, indent=2)
+    # v3.2.11: Use atomic write for fresh aggregator
+    atomic_write_json(agg_path, fresh)
     
     print(f"[ROLLING-RESET] Fresh aggregator created at {agg_path.name}")
     return fresh
@@ -169,11 +169,11 @@ def emit_to_aggregator_light(
         print(f"[EMIT-AGG] SKIP duplicate run_id={run_id}")
         return agg_data
     
-    # v3.2.10: SMOKE isolation - SMOKE runs excluded from rolling window
-    # NORM-only rolling policy: only NORMAL runs affect rolling KPIs
-    # SMOKE runs are logged but not added to aggregator runs list
-    if run_kind == "SMOKE":
-        print(f"[EMIT-AGG] SKIP SMOKE run_id={run_id} (NORM-only rolling policy)")
+    # v3.2.11: NORM-only rolling policy - only NORMAL runs affect rolling KPIs
+    # SMOKE and COVERAGE runs are logged but not added to aggregator runs list
+    # This prevents experimental/coverage runs from polluting production metrics
+    if run_kind != "NORMAL":
+        print(f"[EMIT-AGG] SKIP run_kind={run_kind} run_id={run_id} (NORM-only rolling policy)")
         return agg_data
     
     # v2.0: SHA tracking removed - use run_timestamp from run_context
@@ -765,6 +765,8 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
             "config_path": run_summary.get("inputs", {}).get("config_path"),
             "chain_key": run_summary.get("inputs", {}).get("chain_key"),
             "chain_id": run_summary.get("inputs", {}).get("chain_id"),
+            # v3.2.11: Add run_kind to _latest.json.inputs for operational clarity
+            "run_kind": run_summary.get("run_kind", "NORMAL"),
             "require_cross_dex": run_summary.get("inputs", {}).get("require_cross_dex"),
             "paper_size_usd": run_summary.get("inputs", {}).get("paper_size_usd"),
             "min_spread_bps": run_summary.get("inputs", {}).get("min_spread_bps"),

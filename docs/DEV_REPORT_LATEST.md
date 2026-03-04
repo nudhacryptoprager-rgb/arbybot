@@ -4,50 +4,43 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-04T08:35:45Z
-run_id: data/runs/ci_m5_gate_20260304_093531
-mode: ONLINE (v3.2.10: SMOKE run isolation + NORM-only rolling policy)
+timestamp_utc: 2026-03-04T09:00:08Z
+run_id: data/runs/ci_m5_gate_20260304_095954
+mode: ONLINE (v3.2.11: NORM-only rolling complete + chain_keys fix)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-04T08:35:45.125798Z
+  primary: ts:2026-03-04T09:00:08.990091Z
   dirty: false
-  desc: v3.2.10 SMOKE isolation: run_kind segmentation, NORM-only rolling, inspect_rolling v2.1.0
+  desc: v3.2.11 NORM-only rolling: SMOKE+COVERAGE excluded, chain_keys from agg.quick_stats, run_kind in _latest.inputs
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): SMOKE run isolation - prevent non-production runs from polluting rolling metrics
+goal (Roadmap пункт): Complete NORM-only rolling policy - prevent SMOKE/COVERAGE runs from polluting rolling metrics
 change_summary:
-  - ADD: run_kind field (NORMAL|SMOKE|COVERAGE) to configs, artifacts, aggregator
-  - ADD: NORM-only rolling policy - SMOKE runs excluded from emit_to_aggregator_light()
-  - ADD: ci_m5_0_gate.py detects run_kind=SMOKE in config, sets refresh_rolling=False
-  - ADD: scripts/inspect_rolling.py v2.1.0 - window_chain_key vs latest_chain_key separation
-  - ADD: quick_stats.chain_keys as sorted list for automation
-  - ADD: tests/unit/test_smoke_run_isolation.py (6 tests)
-  - FIX: config/real_scan_linea_smoke.yaml - pure connectivity (pairs: [], run_kind: SMOKE)
-  - FIX: validate_universe.py - pool resolution warnings, run_kind display
-  - EVIDENCE: ONLINE NORMAL run (ci_m5_gate_20260304_093531) updates rolling correctly
-  - RESULT: 31 runs in window, 24 data runs, agg_status=PASS
-  - TESTS: 1279 passed (includes 6 new SMOKE isolation tests)
+  - FIX: inspect_rolling.py v2.2.0 - chain_keys from agg.quick_stats (canonical source, not _latest)
+  - FIX: NORM-only policy now excludes ALL non-NORMAL runs (SMOKE + COVERAGE)
+  - ADD: run_kind to _latest.json.inputs and gates.py (operational clarity)
+  - ADD: Atomic writes for reset_rolling_window() archive and fresh files
+  - ADD: tests/unit/test_smoke_run_isolation.py (10 tests: +4 for COVERAGE + inspect_rolling)
+  - FIX: ci_m5_0_gate.py checks run_kind != NORMAL (not just == SMOKE)
+  - NOTE: Rolling window = N-run based (max 200 runs), NOT time-based
+  - EVIDENCE: ONLINE NORMAL run (ci_m5_gate_20260304_095954) updates rolling correctly
+  - RESULT: 32 runs in window, 25 data runs, agg_status=PASS
+  - TESTS: 1283 passed (includes 10 SMOKE/COVERAGE isolation tests)
 touched_files:
-  - config/real_scan_linea_smoke.yaml (run_kind: SMOKE, pairs: [])
-  - strategy/jobs/run_scan_real.py (run_kind extraction)
-  - strategy/artifacts.py (run_kind in config_params)
-  - m4/fixtures.py (run_kind in run_summary_data)
-  - m4/rolling_store.py (SMOKE exclusion, chain_keys in quick_stats)
-  - scripts/ci_m5_0_gate.py (SMOKE detection, refresh_rolling=False)
-  - scripts/inspect_rolling.py (v2.1.0 - chain_key separation)
-  - scripts/validate_universe.py (pool checks, run_kind display)
-  - tests/unit/test_smoke_run_isolation.py (NEW - 6 tests)
+  - scripts/inspect_rolling.py (v2.2.0 - chain_keys from agg.quick_stats)
+  - m4/rolling_store.py (NORM-only: skip all non-NORMAL, atomic reset, run_kind in _latest.inputs)
+  - m4/gates.py (run_kind in _latest.json.inputs)
+  - scripts/ci_m5_0_gate.py (run_kind != NORMAL detection)
+  - tests/unit/test_smoke_run_isolation.py (+4 tests for COVERAGE + inspect_rolling)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1279 passed, 1 skipped
+py -3.11 -m pytest tests/unit -q: 1283 passed, 1 skipped
 py -3.11 scripts/check_repo_safety.py: RESULT: PASS (0 warnings)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1: RESULT: PASS
-py -3.11 scripts/inspect_rolling.py --json: agg_status=PASS, runs_in_window=31, latest_chain_key=arbitrum_one
-py -3.11 scripts/validate_universe.py --config config/real_minimal.yaml: STATUS: PASS (7 pairs, 2 DEXes)
-py -3.11 scripts/validate_universe.py --config config/real_scan_linea_smoke.yaml: STATUS: PASS (0 pairs, SMOKE)
+py -3.11 scripts/inspect_rolling.py --json: agg_status=PASS, runs_in_window=32, chain_keys=['arbitrum_one','linea']
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -55,18 +48,19 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260304_093531/reports (arbitrum_one, run_kind=NORMAL)
-v3_2_10_evidence:
-  - runs_in_window: 31
+  - data/runs/ci_m5_gate_20260304_095954/reports (arbitrum_one, run_kind=NORMAL)
+v3_2_11_evidence:
+  - runs_in_window: 32
   - agg_status: PASS
-  - data_runs: 24
-  - chain_keys: ['arbitrum_one', 'linea'] (linea from historical, will age out)
-  - window_chain_key: MIXED (historical pollution, expected)
-  - latest_chain_key: arbitrum_one (new run correct)
-  - latest run: run_kind=NORMAL, chain_id=42161
-  - inspect_rolling v2.1.0: window_chain_key vs latest_chain_key separation
-  - SMOKE isolation: emit_to_aggregator_light() skips SMOKE runs
-  - tests: 1279 passed (6 new SMOKE isolation tests)
+  - data_run_rate: 0.7812
+  - total_net_usdc: 94.1064
+  - chain_keys: ['arbitrum_one', 'linea'] (linea historical, displaced at max_runs=200)
+  - window_chain_key: MIXED (historical runs in N-run window)
+  - latest_chain_key: arbitrum_one
+  - _latest.inputs.run_kind: NORMAL (NEW: operational clarity)
+  - inspect_rolling v2.2.0: chain_keys from agg.quick_stats (FIX)
+  - NORM-only rolling: SMOKE and COVERAGE runs excluded
+  - tests: 1283 passed (10 SMOKE/COVERAGE isolation tests)
 
 ## 4) Key Results (числа з артефактів)
 
@@ -75,18 +69,18 @@ _latest.json:
   run_status: PASS
   agg_status: PASS
   agg_reasons: []
-  quality_warnings: ['MIXED_CHAIN_KEYS(arbitrum_one,linea)'] (historical, will age out)
+  quality_warnings: ['MIXED_CHAIN_KEYS(arbitrum_one,linea)'] (N-run window, displaced at max_runs=200)
   chain_keys: ['arbitrum_one', 'linea']
-  data_run_rate: 0.7742
-  runs_in_window: 31
+  data_run_rate: 0.7812
+  runs_in_window: 32
   in_warmup: false
-  effective_pass_rate: 0.7742
-  run_context.run_dir_name: ci_m5_gate_20260304_093531
+  effective_pass_rate: 0.7812
+  run_context.run_dir_name: ci_m5_gate_20260304_095954
   inputs.chain_key: arbitrum_one
   inputs.run_kind: NORMAL
   inputs.config_path: config/real_minimal.yaml (POSIX)
 
-run_summary_latest.json (ci_m5_gate_20260304_093531):
+run_summary_latest.json (ci_m5_gate_20260304_095954):
   schema_version: m4:run_summary:v2.0
   status: PASS
   profit_status: PASS
