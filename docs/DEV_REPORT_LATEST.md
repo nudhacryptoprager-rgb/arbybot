@@ -3,14 +3,14 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.16)
-**Goal**: Fix inspect_run_dir best margin source + pancakeswap_v3 config.
+## SESSION GOAL + DONE CRITERIA (v3.2.17)
+**Goal**: Intent-driven universe enablement + safe rollout infrastructure.
 
 ### M4.2 TRUTH-PROGRESS CRITERIA (primary - must pass)
 | # | Criterion | Target | Current | Status |
 |---|-----------|--------|---------|--------|
-| 1 | `roundtrip_lp_filter.passed_to_roundtrip` | >= 1 | 0 | ❌ |
-| 2 | `roundtrip.evaluated_count` | >= 1 | 0 | ❌ |
+| 1 | `roundtrip_lp_filter.passed_to_roundtrip` | >= 1 | 1 | ✅ |
+| 2 | `roundtrip.evaluated_count` | >= 1 | 1 | ✅ |
 
 ### QUALITY/STRETCH CRITERIA (secondary - nice to have)
 | # | Criterion | Target | Current | Status |
@@ -19,62 +19,70 @@
 | 4 | `agg_status` | PASS | PASS | ✅ |
 | 5 | `unique_pairs` | >= 8 | 5 | ❌ |
 
-**BUG FIX (v3.2.16 inspect_run_dir)**:
-- **Issue**: `best_spread_economics` used `top_opportunities` (profit-ranked) instead of `spread_signals` (margin-ranked)
-- **Symptom**: WETH/USDT at -74 bps shown instead of wstETH/WETH at -11 bps
-- **Fix**: Changed source to `spread_signals` with `source: "spread_signals"` tracking
-- **Test**: Added regression test `test_inspect_run_dir_best_spread_economics_margin_vs_profit`
+### v3.2.17 CHANGES SUMMARY
 
-**CONFIG UPDATE (v3.2.16)**:
-- `config/dexes.yaml`: Added `pancakeswap_v3` for arbitrum_one (UniswapV3 adapter)
-- Factory: 0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865
-- Fee tiers: [100, 500, 2500, 10000]
+**Intent-Driven Universe Enablement:**
+1. **dexes.yaml as single source of truth** - `get_factory_address()` prefers dexes.yaml over FACTORY_ADDRESSES
+2. **Per-DEX fee_tiers** - `get_dex_fee_tiers(chain, dex)` returns fee_tiers from dexes.yaml
+3. **Algebra adapter support** - `query_algebra_pool()` using `poolByPair()` for dynamic-fee DEXes
+4. **pool_resolver adapter routing** - Uses `get_dex_adapter_type()` instead of substring matching
 
-**Evidence run** (regular probe config):
-- Run: `ci_m5_gate_20260304_141247` (PASS)
-- Best margin: WETH/USDT at `-42.25 bps` (from spread_signals)
-- Rolling updated: runs_in_window=36
+**Bug Fixes:**
+5. **Cap logic fix** - `resolve_runtime_pairs()` now counts unique pairs, not total pools
+6. **Token address resolution** - `resolve_token_address()` with 3-tier fallback (pair_cfg → config.tokens → core_tokens.yaml)
 
-**Tests**: 1337 passed (10 new: pool_resolver chain-scoped + inspect_run_dir regression)
+**Safe Rollout Infrastructure:**
+7. **Rolling refresh run_kind enforcement** - NORM-only policy with stricter warnings for COVERAGE/SMOKE
+8. **Intent rollout configs** - `coverage_intent_arbitrum_one.yaml` (COVERAGE) + `real_intent_arbitrum_one.yaml` (NORMAL)
+
+**Evidence run** (intent-driven coverage):
+- Run: `ci_m5_gate_20260304_150635` (PASS)
+- `universe_source=discovery_runtime`, quotes_fetched=15, dexes_active=3
+- `opportunity_engine.best_net_profit_usd=$42.11`
+- `roundtrip.evaluated_count=1` (first time!)
+
+**Tests**: 1337 passed
 
 ## 0) Meta
-timestamp_utc: 2026-03-04T14:25:17Z
-run_id: data/runs/ci_m5_gate_20260304_142504
-mode: ONLINE (v3.2.16: pool_resolver chain-scoped + inspect_run_dir fix + pancakeswap_v3)
+timestamp_utc: 2026-03-04T15:07:24Z
+run_id: data/runs/ci_m5_gate_20260304_150635
+mode: ONLINE (v3.2.17: intent-driven universe + Algebra support)
 artifact_mode: rolling
-config: config/real_roundtrip_probe.yaml (arbitrum_one, run_kind=NORMAL)
+config: config/coverage_intent_arbitrum_one.yaml (arbitrum_one, run_kind=COVERAGE)
 code_identity:
-  primary: ts:2026-03-04T14:25:17Z
+  primary: ts:2026-03-04T15:07:24Z
   dirty: false
-  desc: v3.2.16 pool_resolver chain-scoped + inspect_run_dir source fix + pancakeswap_v3
+  desc: v3.2.17 intent-driven universe + Algebra adapter + safe rollout configs
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4.2 roundtrip viability - fix inspect_run_dir source bug + chain-scoped caches
+goal (Roadmap пункт): M5 Intent-driven universe enablement with safe rollout infrastructure
 change_summary:
-  - FIX: scripts/inspect_run_dir.py (use spread_signals not top_opportunities for best margin)
-  - FIX: discovery/pool_resolver.py (chain-scoped cache paths)
-  - ADD: config/dexes.yaml (pancakeswap_v3 for arbitrum_one)
-  - ADD: tests/unit/test_inspect_run_dir.py (regression test: margin vs profit)
-  - ADD: tests/unit/test_pool_resolver.py (8 chain-scoped tests)
-  - ADD: tests/unit/test_chain_scoped_cache.py (2 pool_resolver tests)
-  - UPD: discovery/runtime.py (pass chain_key to resolver)
+  - ADD: discovery/index_factories.py (get_factory_address, get_dex_fee_tiers, get_dex_adapter_type, get_chain_dexes, query_algebra_pool)
+  - FIX: discovery/runtime.py (cap logic: count pairs not pools, per-DEX fee_tiers)
+  - FIX: discovery/pool_resolver.py (adapter_type routing: algebra→poolByPair, uniswap_v3→getPool)
+  - ADD: strategy/quotes.py (resolve_token_address: pair_cfg → config.tokens → core_tokens.yaml fallback)
+  - UPD: scripts/ci_m5_0_gate.py (stricter NORM-only rolling warnings)
+  - ADD: config/coverage_intent_arbitrum_one.yaml (run_kind=COVERAGE, universe_source=discovery_runtime)
+  - ADD: config/real_intent_arbitrum_one.yaml (run_kind=NORMAL, universe_source=discovery_runtime)
   - TESTS: 1337 passed
 touched_files:
-  - scripts/inspect_run_dir.py (source fix: spread_signals)
-  - discovery/pool_resolver.py (chain-scoped cache)
-  - discovery/runtime.py (chain_key param)
-  - config/dexes.yaml (pancakeswap_v3)
-  - tests/unit/test_pool_resolver.py (8 new tests)
-  - tests/unit/test_inspect_run_dir.py (1 new regression test)
-  - tests/unit/test_chain_scoped_cache.py (2 new tests)
+  - discovery/index_factories.py (dexes.yaml as source of truth + query_algebra_pool)
+  - discovery/runtime.py (cap logic fix + per-DEX fee_tiers)
+  - discovery/pool_resolver.py (adapter_type routing)
+  - strategy/quotes.py (resolve_token_address helper)
+  - scripts/ci_m5_0_gate.py (NORM-only warnings)
+  - config/coverage_intent_arbitrum_one.yaml (new)
+  - config/real_intent_arbitrum_one.yaml (new)
   - docs/DEV_REPORT_LATEST.md (this file)
+  - docs/status/Status_M4.md (updated)
 
 ## 2) Commands Executed (лише факти)
 
 py -3.11 -m pytest tests/unit -q: 1337 passed, 1 skipped
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_roundtrip_probe.yaml --cycles 1 --refresh-rolling --refresh-rolling-strict: PASS
-py -3.11 scripts/inspect_run_dir.py --json: best_spread_economics from spread_signals (source field populated)
-py -3.11 scripts/inspect_rolling.py --json: runs_in_window=36, run_dir_name=ci_m5_gate_20260304_142504
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_arbitrum_one.yaml --cycles 1: PASS (scan), M4 gate 2 (expected for COVERAGE)
+py -3.11 scripts/inspect_run_dir.py --run-dir data/runs/ci_m5_gate_20260304_150635 --json: opportunity_engine.best_net_profit_usd=$42.11, roundtrip.evaluated_count=1
+py -3.11 scripts/inspect_rolling.py --json: runs_in_window=37, agg_status=PASS
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
 
 ## 3) Artifacts Attached (шляхи)
@@ -83,15 +91,19 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260304_142504/reports (arbitrum_one, run_kind=NORMAL, v3.2.16 control run)
-probe_config:
-  - config/real_roundtrip_probe.yaml (paper_size_usd=100, min_spread_bps=5)
-evidence (control run v3.2.16):
-  - pairs_count: 7 (WETH/USDC, WETH/USDT, WBTC/WETH, ARB/WETH, LINK/WETH, wstETH/WETH, WBTC/USDC)
-  - quotes_fetched: 18
-  - spread_signals_count: 5
-  - roundtrip_lp_filter.passed_to_roundtrip: 0
-  - roundtrip_lp_filter.margin_filtered_count: 2
+  - data/runs/ci_m5_gate_20260304_150635/reports (arbitrum_one, run_kind=COVERAGE, v3.2.17 intent-driven)
+intent_configs:
+  - config/coverage_intent_arbitrum_one.yaml (universe_source=discovery_runtime, run_kind=COVERAGE)
+  - config/real_intent_arbitrum_one.yaml (universe_source=discovery_runtime, run_kind=NORMAL)
+evidence (intent-driven run v3.2.17):
+  - universe_source: discovery_runtime
+  - pairs_count: 3 (cross-dex only, max_pairs=30)
+  - quotes_fetched: 15
+  - dexes_active: 3 (uniswap_v3, sushiswap_v3, camelot_v3)
+  - opportunity_engine.total: 24
+  - opportunity_engine.profitable: 24
+  - opportunity_engine.best_net_profit_usd: $42.11
+  - roundtrip.evaluated_count: 1 (FIRST TIME!)
   - roundtrip_lp_filter.unique_pairs_considered: 2
   - profit_is_diagnostic: true
 best_spread_economics (WETH/USDT):
@@ -112,36 +124,44 @@ _latest.json:
   agg_reasons: []
   quality_warnings: ['MIXED_CHAIN_KEYS(arbitrum_one,linea)']
   chain_keys: ['arbitrum_one', 'linea']
-  data_run_rate: 0.8056
-  runs_in_window: 36
+  data_run_rate: 0.7838
+  runs_in_window: 37
   in_warmup: false
-  effective_pass_rate: 0.8056
-  run_context.run_dir_name: ci_m5_gate_20260304_142504
+  effective_pass_rate: 0.7838
+  run_context.run_dir_name: ci_m5_gate_20260304_150635
+  run_context.run_timestamp: 2026-03-04T14:07:24Z
   inputs.chain_key: arbitrum_one
-  inputs.run_kind: NORMAL
-  inputs.config_path: config/real_roundtrip_probe.yaml (POSIX)
+  inputs.run_kind: COVERAGE
+  inputs.config_path: config/coverage_intent_arbitrum_one.yaml (POSIX)
 
-run_summary_latest.json (ci_m5_gate_20260304_142504):
+run_summary_latest.json (ci_m5_gate_20260304_150635):
   schema_version: m4:run_summary:v2.0
-  status: PASS
-  profit_status: PASS
-  drift_status: PASS
-  quality_status: WARN
-  quality_reasons: ['WARN_CRITICAL_REJECTS', 'WARN_TOP_PAIR_DOMINANCE', 'WARN_PROFIT_DIAGNOSTIC']
-  run_context.run_timestamp: 2026-03-04T13:25:17Z
-  run_kind: NORMAL
+  status: NO_DATA
+  profit_status: NO_DATA
+  drift_status: NO_DATA
+  quality_status: NO_DATA
+  quality_reasons: ['NO_DATA']
+  run_context.run_timestamp: 2026-03-04T14:07:24Z
+  run_kind: COVERAGE
   inputs.run_mode: REGISTRY_REAL
   inputs.chain_key: arbitrum_one
   inputs.chain_id: 42161
   metrics:
-    signals_count: 5
-    total_net_usdc: 0.78
+    signals_count: 0
+    total_net_usdc: 0.0
+  opportunity_engine:
+    total: 24
+    profitable: 24
+    best_net_profit_usd: 42.11
+  roundtrip:
+    evaluated_count: 1
+    profitable_count: 0
 
 m4_stability_agg.json (quick_stats):
-  runs_in_window: 36
+  runs_in_window: 37
   agg_status: PASS
   pass_rate: 1.0
-  data_run_rate: 0.8056
+  data_run_rate: 0.7838
   fragile_rate_p90: 0.0
   unique_pairs: 5
   unique_routes_cross_dex: 2

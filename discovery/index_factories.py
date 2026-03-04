@@ -18,8 +18,86 @@ from discovery.verify import get_token_registry
 
 logger = logging.getLogger("discovery.index_factories")
 
-# Standard fee tiers for Uniswap V3 and forks
+# Standard fee tiers for Uniswap V3 and forks (default fallback)
 V3_FEE_TIERS = [100, 500, 3000, 10000]  # 0.01%, 0.05%, 0.3%, 1%
+
+
+def get_dex_fee_tiers(chain: str, dex: str) -> List[int]:
+    """Get fee tiers for a specific DEX from dexes.yaml.
+    
+    v3.2.17: Per-DEX fee tiers to handle pancakeswap_v3 fee=2500 etc.
+    
+    Args:
+        chain: Chain key (e.g., "arbitrum_one")
+        dex: DEX key (e.g., "pancakeswap_v3")
+        
+    Returns:
+        List of fee tiers for the DEX, or V3_FEE_TIERS as fallback
+    """
+    try:
+        from config import load_dexes
+        dexes_config = load_dexes()
+        chain_dexes = dexes_config.get(chain, {})
+        dex_config = chain_dexes.get(dex, {})
+        fee_tiers = dex_config.get("fee_tiers")
+        if fee_tiers and isinstance(fee_tiers, list):
+            return fee_tiers
+    except Exception:
+        pass
+    return V3_FEE_TIERS
+
+
+def get_dex_adapter_type(chain: str, dex: str) -> Optional[str]:
+    """Get adapter type for a DEX from dexes.yaml.
+    
+    v3.2.17: Needed for Algebra vs UniswapV3 factory discovery.
+    
+    Args:
+        chain: Chain key
+        dex: DEX key
+        
+    Returns:
+        Adapter type string (e.g., "uniswap_v3", "algebra", "ve33")
+    """
+    try:
+        from config import load_dexes
+        dexes_config = load_dexes()
+        chain_dexes = dexes_config.get(chain, {})
+        dex_config = chain_dexes.get(dex, {})
+        return dex_config.get("adapter_type")
+    except Exception:
+        return None
+
+
+def get_chain_dexes(chain: str, adapter_types: Optional[List[str]] = None) -> List[str]:
+    """Get all configured DEXes for a chain from dexes.yaml.
+    
+    v3.2.17: Single source of truth for discovery DEX list.
+    
+    Args:
+        chain: Chain key
+        adapter_types: Optional filter for adapter types (e.g., ["uniswap_v3", "algebra"])
+        
+    Returns:
+        List of DEX keys configured for the chain
+    """
+    try:
+        from config import load_dexes
+        dexes_config = load_dexes()
+        chain_dexes = dexes_config.get(chain, {})
+        
+        if not adapter_types:
+            return list(chain_dexes.keys())
+        
+        # Filter by adapter type
+        result = []
+        for dex_key, dex_cfg in chain_dexes.items():
+            if dex_cfg.get("adapter_type") in adapter_types:
+                result.append(dex_key)
+        return result
+    except Exception:
+        # Fallback to FACTORY_ADDRESSES
+        return list(FACTORY_ADDRESSES.get(chain, {}).keys())
 
 # v2.0.4: V3 Factory ABI for getPool() queries - single source of truth
 # RESTORE CONTRACT: This is the canonical ABI for all V3 factory getPool() calls
@@ -135,7 +213,23 @@ class PoolIndex:
 
 
 def get_factory_address(chain: str, dex: str) -> Optional[str]:
-    """Get factory address for chain/dex combo."""
+    """Get factory address for chain/dex combo.
+    
+    v3.2.17: Prefers config/dexes.yaml, falls back to FACTORY_ADDRESSES.
+    """
+    # v3.2.17: Try dexes.yaml first (single source of truth)
+    try:
+        from config import load_dexes
+        dexes_config = load_dexes()
+        chain_dexes = dexes_config.get(chain, {})
+        dex_config = chain_dexes.get(dex, {})
+        factory = dex_config.get("factory")
+        if factory:
+            return factory
+    except Exception:
+        pass  # Fall back to hardcoded
+    
+    # Legacy fallback
     chain_factories = FACTORY_ADDRESSES.get(chain, {})
     return chain_factories.get(dex)
 
@@ -245,6 +339,69 @@ def query_v2_pair(
         
     except Exception as e:
         logger.debug("getPair failed: %s", e)
+        return None
+
+
+# v3.2.17: Algebra factory ABI for poolByPair() - dynamic fee pools (Camelot, etc.)
+ALGEBRA_FACTORY_ABI = [
+    {
+        "inputs": [
+            {"internalType": "address", "name": "tokenA", "type": "address"},
+            {"internalType": "address", "name": "tokenB", "type": "address"},
+        ],
+        "name": "poolByPair",
+        "outputs": [{"internalType": "address", "name": "pool", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+
+def query_algebra_pool(
+    rpc_url: str,
+    factory_address: str,
+    token_a: str,
+    token_b: str,
+) -> Optional[str]:
+    """
+    Query Algebra factory.poolByPair(tokenA, tokenB).
+    
+    v3.2.17: Algebra DEXes (Camelot, THENA, etc.) use dynamic fees
+    and have a single pool per pair (no fee tiers).
+    
+    Returns pool address or None if not found.
+    """
+    import os
+    
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+    
+    try:
+        from web3 import Web3
+    except ImportError:
+        logger.warning("web3 not installed")
+        return None
+    
+    try:
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        factory = w3.eth.contract(
+            address=Web3.to_checksum_address(factory_address),
+            abi=ALGEBRA_FACTORY_ABI,
+        )
+        
+        pool_addr = factory.functions.poolByPair(
+            Web3.to_checksum_address(token_a),
+            Web3.to_checksum_address(token_b),
+        ).call()
+        
+        # Zero address means pool doesn't exist
+        if pool_addr == "0x0000000000000000000000000000000000000000":
+            return None
+        
+        return pool_addr.lower()
+        
+    except Exception as e:
+        logger.debug("poolByPair failed: %s", e)
         return None
 
 

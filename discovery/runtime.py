@@ -111,7 +111,8 @@ class RuntimeStats:
 
 # v2.0.4: Import V3_FEE_TIERS from canonical source (discovery/index_factories.py)
 # RESTORE CONTRACT: discovery/index_factories.V3_FEE_TIERS is the single source of truth
-from discovery.index_factories import V3_FEE_TIERS
+# v3.2.17: Added get_chain_dexes and get_dex_fee_tiers for dexes.yaml as single source
+from discovery.index_factories import V3_FEE_TIERS, get_chain_dexes, get_dex_fee_tiers
 
 # Default max pairs to resolve per cycle
 DEFAULT_MAX_PAIRS = 20
@@ -153,7 +154,7 @@ def resolve_runtime_pairs(
         from discovery.intent_loader import get_intent_universe
         from discovery.verify import get_token_registry
         from discovery.pool_resolver import get_pool_resolver
-        from discovery.index_factories import FACTORY_ADDRESSES
+        # v3.2.17: Removed FACTORY_ADDRESSES import - now uses get_chain_dexes()
     except ImportError as e:
         logger.warning("Discovery runtime dependencies not available: %s", e)
         stats.enabled = False
@@ -172,16 +173,13 @@ def resolve_runtime_pairs(
         stats.error = f"no_intent_pairs_for_{chain}"
         return [], stats
     
-    # Determine dexes to query
-    chain_factories = FACTORY_ADDRESSES.get(chain, {})
+    # v3.2.17: Determine dexes to query from dexes.yaml (single source of truth)
     if dexes is None:
-        # Default to V3 dexes only
-        dexes = [d for d in chain_factories.keys() if "v3" in d.lower()]
+        # Default to V3-compatible dexes (uniswap_v3 and algebra adapters)
+        dexes = get_chain_dexes(chain, adapter_types=["uniswap_v3", "algebra"])
     stats.dexes_queried = dexes
     
-    # Determine fee tiers
-    if fee_tiers is None:
-        fee_tiers = V3_FEE_TIERS
+    # v3.2.17: fee_tiers now handled per-DEX inside the loop (see below)
     
     # Sort pairs deterministically for consistent ordering
     sorted_pairs = sorted(intent_pairs, key=lambda p: p.canonical_key)
@@ -190,7 +188,8 @@ def resolve_runtime_pairs(
     seen_pairs: Set[str] = set()  # Dedupe by canonical pair key (without dex/fee)
     
     for pair in sorted_pairs:
-        if len(resolved) >= max_pairs:
+        # v3.2.17: Fix cap logic - max_pairs means unique PAIRS, not pools
+        if len(seen_pairs) >= max_pairs:
             stats.pairs_skipped_max_cap += len(sorted_pairs) - len(seen_pairs) - stats.pairs_skipped_max_cap
             break
         
@@ -223,7 +222,11 @@ def resolve_runtime_pairs(
         dexes_with_pools: Set[str] = set()
         
         for dex in dexes:
-            for fee in fee_tiers:
+            # v3.2.17: Get per-DEX fee_tiers from dexes.yaml
+            # If fee_tiers was explicitly passed, use it; else get from config
+            dex_fee_tiers = fee_tiers if fee_tiers is not None else get_dex_fee_tiers(chain, dex)
+            
+            for fee in dex_fee_tiers:
                 # Query pool resolver
                 pool_addr = resolver.resolve(
                     chain=chain,

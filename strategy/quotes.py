@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config.pairs import load_pairs, get_pool_address, is_pool_disabled, PairConfig
+from config import get_token_address  # v3.2.17: core_tokens.yaml fallback
 from strategy.compat import QuoteCompat
 from strategy.quarantine import get_quarantine_manager
 from strategy.dynamic_anchors import get_anchor_manager
@@ -27,6 +28,52 @@ from strategy.runtime_disabled import (
 
 # v2.0.4: Import canonical pool_key builder
 from core.pool_keys import make_pool_key
+
+
+# =============================================================================
+# TOKEN ADDRESS RESOLUTION (v3.2.17)
+# =============================================================================
+
+def resolve_token_address(
+    symbol: str,
+    pair_cfg: Optional[PairConfig],
+    config_tokens: Dict[str, str],
+    chain_key: str,
+    is_token_in: bool = True,
+) -> str:
+    """
+    Resolve token address with fallback chain: pair_cfg -> config.tokens -> core_tokens.yaml.
+    
+    v3.2.17: Intent-driven discovery sets pair_cfg.token_in_address / token_out_address.
+    This function ensures those addresses are used first, with graceful fallbacks.
+    
+    Args:
+        symbol: Token symbol (e.g., 'WETH')
+        pair_cfg: PairConfig object (may have token_in_address/token_out_address)
+        config_tokens: config.get("tokens", {}) from YAML
+        chain_key: Chain identifier for core_tokens.yaml lookup
+        is_token_in: True for token_in, False for token_out
+        
+    Returns:
+        Token address or empty string if not found
+    """
+    # Priority 1: pair_cfg from discovery_runtime (intent-driven)
+    if pair_cfg is not None:
+        addr = pair_cfg.token_in_address if is_token_in else pair_cfg.token_out_address
+        if addr:
+            return addr
+    
+    # Priority 2: config["tokens"] from YAML
+    addr = config_tokens.get(symbol, "")
+    if addr:
+        return addr
+    
+    # Priority 3: core_tokens.yaml canonical addresses
+    addr = get_token_address(chain_key, symbol)
+    if addr:
+        return addr
+    
+    return ""
 
 logger = logging.getLogger("strategy.quotes")
 
@@ -825,8 +872,9 @@ def collect_quotes(
             if use_quoter_v2 and dex_cfg:
                 quoter_addr = dex_cfg.get_quoter_address()
                 if quoter_addr:
-                    token_in_addr = token_addresses.get(token_in, "")
-                    token_out_addr = token_addresses.get(token_out, "")
+                    # v3.2.17: Use resolve_token_address with fallback chain
+                    token_in_addr = resolve_token_address(token_in, pair_cfg, token_addresses, chain_name, is_token_in=True)
+                    token_out_addr = resolve_token_address(token_out, pair_cfg, token_addresses, chain_name, is_token_in=False)
                     
                     if adapter_type == "uniswap_v3":
                         # UniswapV3 QuoterV2
@@ -1074,8 +1122,9 @@ def collect_quotes(
             
             # Calculate price from sqrtPriceX96
             if sqrt_price_val is not None and sqrt_price_val > 0:
-                token_in_addr = token_addresses.get(token_in, "")
-                token_out_addr = token_addresses.get(token_out, "")
+                # v3.2.17: Use resolve_token_address with fallback chain
+                token_in_addr = resolve_token_address(token_in, pair_cfg, token_addresses, chain_name, is_token_in=True)
+                token_out_addr = resolve_token_address(token_out, pair_cfg, token_addresses, chain_name, is_token_in=False)
                 price_exact = calculate_price_from_sqrt(
                     sqrt_price_val, token_in_addr, token_out_addr, decimals_in, decimals_out
                 )

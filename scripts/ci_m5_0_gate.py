@@ -1253,6 +1253,7 @@ ENV VARIABLES:
 
             # v3.2.11: NORM-only rolling policy - disable rolling refresh for non-NORMAL runs
             # SMOKE and COVERAGE runs should not update rolling artifacts
+            # v3.2.17: Stricter enforcement - even if --refresh-rolling was explicitly passed
             try:
                 cfg_path = Path(args.config)
                 if cfg_path.exists():
@@ -1261,6 +1262,10 @@ ENV VARIABLES:
                         cfg_for_run_kind = yaml.safe_load(f) or {}
                     run_kind = cfg_for_run_kind.get("run_kind", "NORMAL")
                     if run_kind != "NORMAL":
+                        # v3.2.17: Warn if user explicitly requested refresh_rolling for non-NORMAL
+                        if args.refresh_rolling:
+                            print(f"[ONLINE] WARN: --refresh-rolling ignored for run_kind={run_kind}")
+                            print(f"[ONLINE] WARN: NORM-only rolling policy: _latest.json protected from non-NORMAL runs")
                         print(f"[ONLINE] run_kind={run_kind}: Rolling refresh disabled (NORM-only rolling policy)")
                         args.refresh_rolling = False
                         args._rolling_defaults_set = True  # Prevent auto-enable below

@@ -6,27 +6,69 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=36, pass_rate=1.0, data_run_rate=0.81, fragile_rate_p90=0.0. `unique_pairs=5`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=37, pass_rate=1.0, data_run_rate=0.78, fragile_rate_p90=0.0. `unique_pairs=5`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
 
-## Recent Fixes (2026-03-04)
+## Intent-Driven Universe Changes (2026-03-04)
 
-### Bug Fixes
-1. **inspect_run_dir source fix**: `best_spread_economics` now uses `spread_signals` (margin-ranked) instead of `top_opportunities` (profit-ranked)
-   - **Symptom**: WETH/USDT at -74 bps shown instead of wstETH/WETH at -11 bps
-   - **Fix**: Changed source to `spread_signals` with `source: "spread_signals"` tracking
-   - **Test**: `test_inspect_run_dir_best_spread_economics_margin_vs_profit` added
+### Core Infrastructure
 
-2. **Pool resolver chain-scoped cache**: `discovery/pool_resolver.py` now uses chain-scoped caching like quarantine/runtime_disabled/dynamic_anchors
-   - **Path**: `data/cache/pool_resolver_cache_{chain_key}.json`
-   - **Tests**: 8 new tests in `test_pool_resolver.py`, 2 in `test_chain_scoped_cache.py`
+1. **dexes.yaml as Single Source of Truth** (`discovery/index_factories.py`)
+   - `get_factory_address(chain, dex)` prefers dexes.yaml over hardcoded FACTORY_ADDRESSES
+   - `get_dex_fee_tiers(chain, dex)` returns per-DEX fee_tiers from dexes.yaml
+   - `get_dex_adapter_type(chain, dex)` returns adapter_type (uniswap_v3, algebra, ve33)
+   - `get_chain_dexes(chain, adapter_types)` returns configured DEXes for chain
 
-### Config Updates
-3. **pancakeswap_v3 added**: `config/dexes.yaml` now includes PancakeSwap V3 for arbitrum_one
-   - Factory: `0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865`
-   - Fee tiers: [100, 500, 2500, 10000]
+2. **Algebra Adapter Support** (`discovery/index_factories.py`, `discovery/pool_resolver.py`)
+   - Added `query_algebra_pool()` using `poolByPair(token0, token1)` for dynamic-fee DEXes
+   - Pool resolver now uses adapter_type routing instead of substring matching
+   - Camelot V3, THENA, QuickSwap V3 (Algebra) now supported
+
+3. **Cap Logic Fix** (`discovery/runtime.py`)
+   - `resolve_runtime_pairs()` now correctly counts unique pairs, not total pools
+   - `max_pairs=30` means 30 unique pairs, not 30 total DEX/fee combinations
+
+4. **Token Address Resolution** (`strategy/quotes.py`)
+   - Added `resolve_token_address()` with 3-tier fallback:
+     - `pair_cfg.token_in_address` / `token_out_address` (from intent discovery)
+     - `config.tokens` (from YAML)
+     - `core_tokens.yaml` (canonical)
+   - Enables intent-driven scanning without `tokens:` section in config
+
+5. **Rolling Refresh NORM-only Enforcement** (`scripts/ci_m5_0_gate.py`)
+   - Stricter warnings when COVERAGE/SMOKE runs attempt --refresh-rolling
+   - `_latest.json` protected from non-NORMAL runs
+
+### Intent Rollout Configs
+
+6. **config/coverage_intent_arbitrum_one.yaml** (COVERAGE, safe testing)
+   - `universe_source: discovery_runtime`
+   - `run_kind_hint: COVERAGE`
+   - `dexes: [uniswap_v3, sushiswap_v3, camelot_v3, pancakeswap_v3]`
+   - `max_pairs: 30`, `require_cross_dex: true`
+
+7. **config/real_intent_arbitrum_one.yaml** (NORMAL, production)
+   - `universe_source: discovery_runtime`
+   - `run_kind_hint: NORMAL`
+   - `max_pairs: 50`, `require_cross_dex: true`
+
+### Evidence Run
+
+**RunDir**: `ci_m5_gate_20260304_150635` (intent-driven COVERAGE)
+
+| Metric | Value |
+|--------|-------|
+| universe_source | discovery_runtime |
+| quotes_total | 38 |
+| quotes_fetched | 15 |
+| dexes_active | 3 (uniswap_v3, sushiswap_v3, camelot_v3) |
+| opportunity_engine.total | 24 |
+| opportunity_engine.profitable | 24 |
+| opportunity_engine.best_net_profit_usd | $42.11 |
+| roundtrip.evaluated_count | 1 (**FIRST TIME!**) |
+| cross_dex_pairs | 3 |
 
 ### Tests
-- **1337 tests passed** (10 new: 8 pool_resolver chain-scoped + 2 chain_scoped_cache)
+- **1337 tests passed** (46 discovery tests verified)
 
 ## M4.2 Economics Gap (2026-03-04)
 

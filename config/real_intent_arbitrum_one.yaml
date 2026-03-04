@@ -1,0 +1,96 @@
+# PATH: config/real_intent_arbitrum_one.yaml
+#
+# M5 REAL Config - Intent-Driven Universe (arbitrum_one)
+#
+# PURPOSE:
+#   Production-ready intent-driven scanning for arbitrum_one.
+#   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
+#   via factory.getPool() calls instead of hardcoded pool addresses.
+#
+# RUN_KIND: NORMAL
+#   - Can update rolling artifacts when --refresh-rolling is passed
+#   - Suitable for production rolling deployment
+#
+# WORKFLOW:
+#   # Testing (no rolling update):
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_intent_arbitrum_one.yaml --cycles 1
+#
+#   # Production (updates rolling):
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_intent_arbitrum_one.yaml --cycles 3 --refresh-rolling
+#
+# v3.2.17: Initial config for intent-driven production scanning
+
+# Chain: Arbitrum One
+chain: arbitrum_one
+chain_id: 42161
+
+# RPC endpoints with fallback (production-grade)
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+  - "https://rpc.ankr.com/arbitrum"
+
+# RPC settings (tighter for production)
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# Intent-driven universe: resolve pairs from intent.txt
+# v3.2.17: Enables factory.getPool() discovery via resolve_runtime_pairs()
+universe_source: discovery_runtime
+
+# DEXes to scan (production set - well-tested adapters)
+# v3.2.17: Includes Algebra adapter (camelot_v3) and PancakeSwap V3
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+  - camelot_v3
+  - pancakeswap_v3
+
+# Discovery settings
+# max_pairs: Higher cap for production (more coverage)
+# require_cross_dex: Only include pairs found on 2+ DEXes (better arb candidates)
+max_pairs: 50
+require_cross_dex: true
+
+# Quoter V2 for executable quotes (required for accurate pricing)
+use_quoter_v2: true
+
+# Multicall batching (default ON, reduces RPC calls)
+use_multicall: true
+
+# USD-notional sizing (M4.2)
+use_usd_notional: true
+target_usd_notional: 1000.0
+
+# Token USD prices (for notional sizing)
+# NOTE: These should be updated periodically or fetched dynamically in future
+tokens_usd_price:
+  WETH: 3000.0
+  WBTC: 60000.0
+  ARB: 1.5
+  GMX: 30.0
+  LINK: 15.0
+  UNI: 10.0
+  DAI: 1.0
+  USDC: 1.0
+  USDT: 1.0
+  wstETH: 3500.0
+  PENDLE: 5.0
+  RDNT: 0.1
+
+# Price sanity gates (M5 tighter thresholds)
+max_deviation_bps: 3000  # 30% - tighter than M4 bootstrap
+
+# Anchor prices for sanity checks
+tokens_anchor_price:
+  WETH_USDC: 3000.0
+  WBTC_WETH: 20.0
+  ARB_WETH: 0.0005
+  GMX_WETH: 0.01
+  LINK_WETH: 0.005
+  UNI_WETH: 0.003
+  wstETH_WETH: 1.15
+
+# Run kind hint (NORMAL = production, can update rolling)
+run_kind_hint: NORMAL

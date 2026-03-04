@@ -233,14 +233,32 @@ class PoolResolver:
         
         self._stats.rpc_calls += 1
         
-        # Query factory
-        if "v3" in dex.lower():
+        # v3.2.17: Use adapter_type-based routing instead of substring matching
+        from discovery.index_factories import get_dex_adapter_type, query_algebra_pool
+        adapter_type = get_dex_adapter_type(chain, dex)
+        
+        # Query factory based on adapter_type
+        if adapter_type == "algebra":
+            # Algebra DEXes use poolByPair() - no fee parameter
+            pool_addr = query_algebra_pool(rpc_url, factory_addr, addr_a, addr_b)
+        elif adapter_type == "uniswap_v3":
+            # Uniswap V3 and forks use getPool(token0, token1, fee)
             if fee is None:
                 logger.debug("V3 resolver requires fee tier")
                 return None
             pool_addr = query_v3_pool(rpc_url, factory_addr, addr_a, addr_b, fee)
-        else:
+        elif adapter_type in ("uniswap_v2", "ve33"):
+            # V2-style DEXes use getPair(token0, token1)
             pool_addr = query_v2_pair(rpc_url, factory_addr, addr_a, addr_b)
+        else:
+            # Fallback: use substring heuristic for unknown adapter types
+            if "v3" in dex.lower():
+                if fee is None:
+                    logger.debug("V3 resolver requires fee tier")
+                    return None
+                pool_addr = query_v3_pool(rpc_url, factory_addr, addr_a, addr_b, fee)
+            else:
+                pool_addr = query_v2_pair(rpc_url, factory_addr, addr_a, addr_b)
         
         # Update cache
         if pool_addr:
