@@ -1,12 +1,25 @@
 # PATH: config/real_scan_linea_smoke.yaml
 #
-# LINEA SMOKE CONFIG - Minimal single-cycle validation
+# LINEA SMOKE CONFIG - Connectivity-only validation
 #
-# Purpose: Validate chain_key/chain_id provenance for multi-chain readiness.
-# This config does NOT discover pools - it uses explicit pool addresses.
-# Expected: 1 cycle, few quotes, validation of artifacts contain chain_key.
+# Purpose:
+#   - Validate chain_key/chain_id provenance for multi-chain readiness
+#   - Pure connectivity check: verifies RPC reachability and chain handshake
+#   - Does NOT quote or produce profitable signals
 #
-# v3.2.9: Created for multi-chain evidence.
+# Expected outcome:
+#   - run_kind=SMOKE (excluded from rolling window per AGENTS.md policy)
+#   - status=NO_DATA with no_data_reason=NO_QUOTES (no pairs configured)
+#   - Artifacts contain chain_key=linea, chain_id=59144
+#
+# SMOKE runs do NOT update rolling artifacts (NORM-only rolling policy).
+#
+# v3.2.10: Pure connectivity smoke (pairs: [], run_kind: SMOKE).
+
+# =============================================================================
+# Run kind: SMOKE runs are excluded from rolling statistics
+# =============================================================================
+run_kind: SMOKE
 
 # Chain: Linea Mainnet
 chain: linea
@@ -22,23 +35,20 @@ rpc_timeout_seconds: 15
 rpc_retries: 2
 rpc_backoff_base_ms: 1000
 
-# Single DEX for smoke (lynex_v3 = algebra adapter)
-dexes:
-  - lynex_v3
+# No DEXes for pure connectivity smoke
+dexes: []
 
-# Minimal pairs for smoke (just WETH/USDC)
-pairs:
-  - token_in: WETH
-    token_out: USDC
-    fee_tiers: [500]
+# No pairs for pure connectivity smoke
+# Expected: NO_QUOTES (no quotes attempted, no pool_missing_count)
+pairs: []
 
-# Economics (generous for smoke)
+# Economics (placeholder - not used without pairs)
 min_spread_bps: 5
 paper_size_usd: 100
 paper_slippage_bps: 10
 
 # Scanner config
-require_cross_dex: false  # Single DEX smoke
+require_cross_dex: false
 scanner_cycles: 1
 
 # M4 gate settings

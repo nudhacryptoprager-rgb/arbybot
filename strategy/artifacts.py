@@ -191,6 +191,8 @@ def build_truth_data(
             "require_cross_dex": config.get("require_cross_dex", False),
             # v3.2.7: POSIX-canonical config_path
             "config_path": canonicalize_config_path(config.get("_config_path")),
+            # v3.2.10: run_kind for smoke run isolation (NORM-only rolling policy)
+            "run_kind": config.get("run_kind", "NORMAL"),
         },
         "quotes_total": stats["quotes_total"],
         "quotes_fetched": stats["quotes_fetched"],

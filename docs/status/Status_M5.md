@@ -146,6 +146,20 @@ are validated and which are next for expansion.
 - `MIXED_CHAIN_KEYS` quality_warning when rolling window has multiple chains
 - `config_fingerprint` to detect config drift across runs
 
+**NORM-only Rolling Policy:**
+- Rolling artifacts ONLY updated by `run_kind=NORMAL` runs
+- SMOKE runs (connectivity checks) excluded from `emit_to_aggregator_light()`
+- `ci_m5_0_gate.py` detects `run_kind=SMOKE` in config, sets `refresh_rolling=False`
+- Purpose: Prevent experimental/smoke runs from polluting production metrics
+- Test evidence: `tests/unit/test_smoke_run_isolation.py` (6 tests)
+
+**run_kind Values:**
+| Value | Purpose | Updates Rolling? |
+|-------|---------|------------------|
+| NORMAL | Production scanning | ✅ YES |
+| SMOKE | Connectivity checks | ❌ NO |
+| COVERAGE | Pair discovery | ❌ NO |
+
 **Next Control Runs:**
 1. `py -3.11 -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml --cycles 1` (arb)
 2. `py -3.11 -m strategy.jobs.run_scan --mode real --config config/real_scan_linea_smoke.yaml --cycles 1` (linea)

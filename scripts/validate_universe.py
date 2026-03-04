@@ -148,6 +148,35 @@ def validate_universe(config_path: Path) -> dict:
     if not pairs:
         result["warnings"].append("No pairs configured")
     
+    # v3.2.10: Check for pool resolution capability (NO_QUOTES prevention)
+    # If pairs_count > 0 but dexes is empty, quotes can't be fetched
+    if len(pairs) > 0 and len(dexes) == 0:
+        result["warnings"].append(
+            "POOL_RESOLUTION_UNLIKELY: pairs configured but no DEXes - expect NO_QUOTES"
+        )
+    
+    # Check if any pair has explicit pool address (alternative to DEX discovery)
+    explicit_pools = []
+    for pair in pairs:
+        if isinstance(pair, dict):
+            pool_addr = pair.get("pool_address") or pair.get("pool")
+            if pool_addr:
+                explicit_pools.append(pool_addr)
+    
+    if len(pairs) > 0 and len(dexes) == 0 and not explicit_pools:
+        result["warnings"].append(
+            "NO_POOL_MAPPING: no DEXes and no explicit pool_address in pairs - "
+            "quotes will fail with POOL_MISSING"
+        )
+    
+    # Check run_kind (SMOKE runs won't update rolling)
+    run_kind = config.get("run_kind", "NORMAL")
+    result["summary"]["run_kind"] = run_kind
+    if run_kind == "SMOKE":
+        result["warnings"].append(
+            "run_kind=SMOKE: this run will NOT update rolling artifacts (NORM-only policy)"
+        )
+    
     # Finalize status
     if result["errors"]:
         result["status"] = "FAIL"
@@ -171,6 +200,7 @@ def print_summary(result: dict, as_json: bool = False):
     print(f"  chain_key: {summary.get('chain_key', 'N/A')}")
     print(f"  chain_id: {summary.get('chain_id', 0)}")
     print(f"  chain_name: {summary.get('chain_name', 'N/A')}")
+    print(f"  run_kind: {summary.get('run_kind', 'NORMAL')}")
     
     print(f"\nDEXes ({summary.get('dexes_count', 0)}):")
     for dex, adapter in summary.get("dex_adapters", {}).items():

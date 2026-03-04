@@ -21,7 +21,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "2.0.0"  # v3.2.9: Added unique_pairs, unique_routes_cross_dex, agg_reasons, chain_key
+__version__ = "2.1.0"  # v3.2.10: window_chain_key vs latest_chain_key separation
 
 
 def load_rolling_artifacts():
@@ -81,8 +81,10 @@ def print_summary(artifacts, excluded, as_json=False):
                 "total_net_usdc": agg_qs.get("total_net_usdc"),
                 "unique_pairs": agg_qs.get("unique_pairs"),
                 "unique_routes_cross_dex": agg_qs.get("unique_routes_cross_dex"),
-                "chain_key": artifacts.get("latest", {}).get("inputs", {}).get("chain_key"),
-                "chain_keys": artifacts.get("latest", {}).get("chain_keys", []),
+                # v3.2.10: Distinguish window vs latest chain_key
+                "window_chain_key": agg_qs.get("chain_key"),  # Aggregate: single chain or "MIXED"
+                "latest_chain_key": artifacts.get("latest", {}).get("inputs", {}).get("chain_key"),
+                "chain_keys": artifacts.get("latest", {}).get("chain_keys", []),  # List of unique chains in window
             },
             "signals": {
                 "included_count": artifacts.get("run_summary", {}).get("metrics", {}).get("included_signals_count"),
@@ -118,7 +120,9 @@ def print_summary(artifacts, excluded, as_json=False):
     total_net_usdc = agg.get("quick_stats", {}).get("total_net_usdc", "N/A")
     unique_pairs = agg.get("quick_stats", {}).get("unique_pairs", "N/A")
     unique_routes_cross_dex = agg.get("quick_stats", {}).get("unique_routes_cross_dex", "N/A")
-    chain_key = latest.get("inputs", {}).get("chain_key", "N/A")
+    # v3.2.10: Distinguish window vs latest chain_key
+    window_chain_key = agg.get("quick_stats", {}).get("chain_key", "N/A")
+    latest_chain_key = latest.get("inputs", {}).get("chain_key", "N/A")
     chain_keys = latest.get("chain_keys", [])
     
     metrics = rs.get("metrics", {})
@@ -141,7 +145,9 @@ def print_summary(artifacts, excluded, as_json=False):
     print(f"unique_pairs:      {unique_pairs}")
     print(f"unique_routes_cross_dex: {unique_routes_cross_dex}")
     print()
-    print(f"chain_key:         {chain_key}")
+    # v3.2.10: Show both window and latest chain_key
+    print(f"window_chain_key:  {window_chain_key}")
+    print(f"latest_chain_key:  {latest_chain_key}")
     if len(chain_keys) > 1:
         print(f"chain_keys:        {chain_keys} (MIXED_CHAIN_KEYS)")
     elif chain_keys:

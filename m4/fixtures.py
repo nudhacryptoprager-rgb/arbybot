@@ -1084,11 +1084,16 @@ def generate_m4_from_online_inputs(
     # Provenance is now based on run_timestamp only
     is_dirty_proof = False
     
+    # v3.2.10: Extract run_kind from config_params for smoke run isolation
+    run_kind = config_params.get("run_kind", "NORMAL")
+    
     run_summary_data = {
         "schema_version": "m4:run_summary:v2.0",  # v2.0: timestamp-based provenance
         "policy_version": POLICY_VERSION,
         "timestamp": run_timestamp,
         "run_id": run_id,
+        # v3.2.10: run_kind for NORM-only rolling policy (SMOKE excluded from rolling)
+        "run_kind": run_kind,
         # v2.0.0: run_context with timestamp-based provenance (SHA tracking removed)
         "run_context": {
             "run_timestamp": run_timestamp,
@@ -1100,6 +1105,8 @@ def generate_m4_from_online_inputs(
         },
         "inputs": {
             "run_mode": source_run_mode,
+            # v3.2.10: run_kind for smoke run isolation
+            "run_kind": run_kind,
             "run_dir_rel": str(run_dir.relative_to(REPO_ROOT)) if run_dir.is_relative_to(REPO_ROOT) else run_dir.name,  # v1.9.6: relative canonical
             "run_dir_name": run_dir.name,  # v1.9.4: basename for portability
             "run_dir_abs": str(run_dir),  # v1.9.6: debug only

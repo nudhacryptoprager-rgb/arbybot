@@ -1251,6 +1251,22 @@ ENV VARIABLES:
                     print("[ONLINE] FAILOVER-STRESS: Rolling refresh disabled (use --refresh-rolling to override)")
                     args._rolling_defaults_set = True  # Prevent auto-enable below
 
+            # v3.2.10: SMOKE run isolation - disable rolling refresh for SMOKE runs
+            # NORM-only rolling policy: SMOKE runs should not update rolling artifacts
+            try:
+                cfg_path = Path(args.config)
+                if cfg_path.exists():
+                    import yaml
+                    with open(cfg_path, "r", encoding="utf8") as f:
+                        cfg_for_run_kind = yaml.safe_load(f) or {}
+                    run_kind = cfg_for_run_kind.get("run_kind", "NORMAL")
+                    if run_kind == "SMOKE":
+                        print(f"[ONLINE] run_kind=SMOKE: Rolling refresh disabled (NORM-only rolling policy)")
+                        args.refresh_rolling = False
+                        args._rolling_defaults_set = True  # Prevent auto-enable below
+            except Exception as rk_err:
+                print(f"[ONLINE] WARN: run_kind check failed: {rk_err}")
+
             # For M5_0 DoD: make infra-hosts and cross-artifact checks strict by default in online runs
             # These can still be overridden by explicit flags if needed.
             args.require_infra_hosts = True

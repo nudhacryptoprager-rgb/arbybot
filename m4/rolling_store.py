@@ -169,6 +169,13 @@ def emit_to_aggregator_light(
         print(f"[EMIT-AGG] SKIP duplicate run_id={run_id}")
         return agg_data
     
+    # v3.2.10: SMOKE isolation - SMOKE runs excluded from rolling window
+    # NORM-only rolling policy: only NORMAL runs affect rolling KPIs
+    # SMOKE runs are logged but not added to aggregator runs list
+    if run_kind == "SMOKE":
+        print(f"[EMIT-AGG] SKIP SMOKE run_id={run_id} (NORM-only rolling policy)")
+        return agg_data
+    
     # v2.0: SHA tracking removed - use run_timestamp from run_context
     run_context = run_summary.get("run_context", {})
     run_timestamp = run_context.get("run_timestamp", run_summary.get("timestamp", ""))
@@ -453,6 +460,8 @@ def _compute_quick_stats(
         "signals_per_run_avg": round(sum(signals_per_run) / len(signals_per_run), 2) if signals_per_run else 0,
         # v3.2.9: chain_key in quick_stats (single value or "MIXED" if multiple chains in window)
         "chain_key": (list(all_chain_keys)[0] if len(all_chain_keys) == 1 else ("MIXED" if len(all_chain_keys) > 1 else "unknown")),
+        # v3.2.10: chain_keys as sorted list for automation/machine readability
+        "chain_keys": sorted(all_chain_keys) if all_chain_keys else [],
     }
     
     # v2.0: runs_since_timestamp (replaces runs_since_sha)

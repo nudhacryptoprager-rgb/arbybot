@@ -225,6 +225,14 @@ def run_scan(
     # v3.2.7: Include chain_key in stats for artifact observability
     stats["chain_key"] = chain_key
     
+    # v3.2.10: run_kind for smoke run isolation (NORM-only rolling policy)
+    # Valid values: NORMAL, SMOKE, COVERAGE (see m4.policy.RunKind)
+    # SMOKE runs are excluded from rolling window to avoid polluting KPIs
+    run_kind = config.get("run_kind", "NORMAL")
+    stats["run_kind"] = run_kind
+    if run_kind == "SMOKE":
+        logger.info("run_kind=SMOKE: this run will be excluded from rolling window")
+    
     # v2.2.0 Fix Step 7: universe_source=config|intent|intent_forced|discovery_runtime
     # v2.3.0 Fix Step 4: intent_forced mode - reads from intent.txt directly
     # v2.5.0: discovery_runtime mode - resolve pairs via factory.getPool()
