@@ -24,7 +24,7 @@ class TestQuoterCanonical:
         # v3.2.11: Monkeypatch cache paths to avoid loading stale data from disk
         from pathlib import Path
         fake_cache = tmp_path / "cache"
-        fake_cache.mkdir()
+        fake_cache.mkdir(exist_ok=True)  # v3.2.14: exist_ok=True to fix FileExistsError
         monkeypatch.setattr(
             "strategy.dynamic_anchors._get_anchor_cache_path",
             lambda chain_key=None: fake_cache / f"dynamic_anchors_{chain_key or 'legacy'}.json"

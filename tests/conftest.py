@@ -53,21 +53,33 @@ def isolate_cache_paths(monkeypatch, tmp_path):
     fake_cache.mkdir(exist_ok=True)
     
     # Redirect dynamic_anchors cache path
+    # v3.2.14: Treat chain_key="unknown" same as None (legacy fallback)
+    def _fake_anchor_path(chain_key=None):
+        key = chain_key if chain_key and chain_key != "unknown" else "legacy"
+        return fake_cache / f"dynamic_anchors_{key}.json"
     monkeypatch.setattr(
         "strategy.dynamic_anchors._get_anchor_cache_path",
-        lambda chain_key=None: fake_cache / f"dynamic_anchors_{chain_key or 'legacy'}.json"
+        _fake_anchor_path
     )
     
     # Redirect quarantine cache path
+    # v3.2.14: Treat chain_key="unknown" same as None (legacy fallback)
+    def _fake_quarantine_path(chain_key=None):
+        key = chain_key if chain_key and chain_key != "unknown" else "legacy"
+        return fake_cache / f"quarantine_{key}.json"
     monkeypatch.setattr(
         "strategy.quarantine._get_quarantine_cache_path",
-        lambda chain_key=None: fake_cache / f"quarantine_{chain_key or 'legacy'}.json"
+        _fake_quarantine_path
     )
     
     # Redirect runtime_disabled cache path (returns str, not Path)
+    # v3.2.14: Treat chain_key="unknown" same as None (legacy fallback)
+    def _fake_runtime_disabled_path(chain_key=None):
+        key = chain_key if chain_key and chain_key != "unknown" else "legacy"
+        return str(fake_cache / f"runtime_disabled_{key}.json")
     monkeypatch.setattr(
         "strategy.runtime_disabled._get_runtime_disabled_cache_path",
-        lambda chain_key=None: str(fake_cache / f"runtime_disabled_{chain_key or 'legacy'}.json")
+        _fake_runtime_disabled_path
     )
     
     # Reset all singletons to ensure clean state per test
