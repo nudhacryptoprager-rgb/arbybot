@@ -55,3 +55,31 @@ mantle:
   ws_endpoints: []
   block_time_ms: 2000
   confirmations: 1
+
+# v3.2.20: Scroll (L2 on Ethereum)
+scroll:
+  chain_id: 534352
+  name: "Scroll"
+  native_symbol: "ETH"
+  wrapped_native: "0x5300000000000000000000000000000000000004"  # WETH
+  explorer: "https://scrollscan.com"
+  rpc_endpoints:
+    - "https://rpc.scroll.io"
+    - "https://scroll.public.blastapi.io"
+  ws_endpoints: []
+  block_time_ms: 3000
+  confirmations: 1
+
+# v3.2.20: zkSync Era (ZK-rollup on Ethereum)
+zksync:
+  chain_id: 324
+  name: "zkSync Era"
+  native_symbol: "ETH"
+  wrapped_native: "0x5AEa5775959fBC2557Cc8789bC1bf90A239D9a91"  # WETH
+  explorer: "https://explorer.zksync.io"
+  rpc_endpoints:
+    - "https://mainnet.era.zksync.io"
+    - "https://zksync.public.blastapi.io"
+  ws_endpoints: []
+  block_time_ms: 1000
+  confirmations: 1

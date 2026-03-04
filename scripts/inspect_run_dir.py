@@ -146,40 +146,63 @@ def inspect_run_dir(run_dir: Path) -> dict:
         # v3.2.16: best_spread_economics for "0 passed_to_roundtrip" RCA
         # Source: truth_report.spread_signals (NOT top_opportunities!)
         # Reason: top_opportunities is profit-ranked, but RCA needs margin-ranked (closest to viability)
+        # v3.2.20: Also track best_included_spread_economics (excludes SUSPECT_SPREAD signals)
         spread_signals = truth.get("spread_signals", [])
         best_signal = None
         best_margin = -999.0
+        best_included_signal = None  # v3.2.20: Best signal that is NOT excluded
+        best_included_margin = -999.0
+        
         for sig in spread_signals:
             margin = sig.get("spread_minus_required_bps")
+            is_excluded = sig.get("is_excluded_spread", False) or sig.get("exclude_reason") is not None
+            
             if margin is not None and margin > best_margin:
                 best_margin = margin
                 best_signal = sig
+            
+            # Track best NON-excluded signal separately  
+            if margin is not None and margin > best_included_margin and not is_excluded:
+                best_included_margin = margin
+                best_included_signal = sig
         
-        if best_signal:
+        def build_spread_economics(signal, tag: str = "spread_signals"):
+            """Build spread_economics dict from signal with cost breakdown."""
+            if signal is None:
+                return None
             # v3.2.15: Compute gas_bps if gas_usd and size_usd available
-            gas_usd = best_signal.get("gas_usd_estimate") or best_signal.get("gas_usd")
-            size_usd = best_signal.get("size_usd") or best_signal.get("paper_size_usd")
+            gas_usd = signal.get("gas_usd_estimate") or signal.get("gas_usd")
+            size_usd = signal.get("size_usd") or signal.get("paper_size_usd")
             computed_gas_bps = None
             if gas_usd is not None and size_usd and size_usd > 0:
                 computed_gas_bps = round((gas_usd / size_usd) * 10000, 2)
             
-            result["best_spread_economics"] = {
-                "spread_minus_required_bps": best_signal.get("spread_minus_required_bps"),
-                "spread_bps": best_signal.get("spread_bps") or best_signal.get("spread_bps_ui"),
-                "min_required_spread_bps": best_signal.get("min_required_spread_bps"),
-                "pair": best_signal.get("pair"),
-                "route": best_signal.get("route"),
-                "is_roundtrip_viable": best_signal.get("is_roundtrip_viable", False),
+            is_excluded = signal.get("is_excluded_spread", False) or signal.get("exclude_reason") is not None
+            exclude_reason = signal.get("exclude_reason")
+            
+            return {
+                "spread_minus_required_bps": signal.get("spread_minus_required_bps"),
+                "spread_bps": signal.get("spread_bps") or signal.get("spread_bps_ui"),
+                "min_required_spread_bps": signal.get("min_required_spread_bps"),
+                "pair": signal.get("pair"),
+                "route": signal.get("route"),
+                "is_roundtrip_viable": signal.get("is_roundtrip_viable", False),
                 # v3.2.15: Cost breakdown fields for RCA
-                "gas_bps": best_signal.get("gas_bps") or computed_gas_bps,
-                "lp_fee_bps_roundtrip": best_signal.get("lp_fee_bps_roundtrip"),
-                "effective_slippage_bps": best_signal.get("effective_slippage_bps"),
-                "safety_bps": best_signal.get("safety_bps", 2.0),  # Default from min_required formula
+                "gas_bps": signal.get("gas_bps") or computed_gas_bps,
+                "lp_fee_bps_roundtrip": signal.get("lp_fee_bps_roundtrip"),
+                "effective_slippage_bps": signal.get("effective_slippage_bps"),
+                "safety_bps": signal.get("safety_bps", 2.0),  # Default from min_required formula
                 # v3.2.16: Source tracking for debugging
-                "source": "spread_signals",
+                "source": tag,
+                # v3.2.20: Exclusion flag for evidence clarity
+                "is_excluded_signal": is_excluded,
+                "exclude_reason": exclude_reason,
             }
-        else:
-            result["best_spread_economics"] = None
+        
+        result["best_spread_economics"] = build_spread_economics(best_signal, "spread_signals")
+        # v3.2.20: Separate field for best INCLUDED signal (not affected by SUSPECT_SPREAD)
+        # This helps reviewers see actual viable signals without confusion
+        result["best_included_spread_economics"] = build_spread_economics(best_included_signal, "spread_signals_included")
         
         # Roundtrip stats
         rt_stats = stats.get("roundtrip", {})

@@ -60,3 +60,24 @@ mantle:
     router: "0x319B69888b0d11cEC22caA5034e25FfFBDc88421"
     quoter_v2: "0xb1E835Dc2785b52265711e17fCCb0fd018226a6e"
     fee_tiers: [100, 500, 2500, 10000]
+
+# v3.2.20: Scroll (chain_id: 534352)
+# Scroll uses native Uniswap V3 + Ambient/CrocSwap for concentrated liquidity
+scroll:
+  uniswap_v3:
+    adapter_type: "uniswap_v3"
+    factory: "0x70C62C8b8e801124A4Aa81ce07b637A3e83cb919"
+    router: "0xfc30937f5cDe93Df8d48aCAE8778ed25267dd938"
+    quoter_v2: "0x2dc614a35d23c33b6510db8e7f7c64eBbfDd04fd"
+    fee_tiers: [100, 500, 3000, 10000]
+
+# v3.2.20: zkSync Era (chain_id: 324)
+# Note: zkSync has different VM, SyncSwap is dominant but uses custom ABI
+# Using iZiSwap which is Uniswap V3 compatible
+zksync:
+  izumi_v3:
+    adapter_type: "uniswap_v3"
+    factory: "0x8c7d3063579BdB0b90997e18A770eaE32E1eBd7f"
+    router: "0x943ac2310D9BC703d6AB5e5e76876e212100f894"
+    quoter_v2: "0xbE4ad6D44C24e3e7DDCCa7E6C4d8Eb4c4e6F2a20"
+    fee_tiers: [100, 400, 2000, 10000]

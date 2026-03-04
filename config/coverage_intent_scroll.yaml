@@ -1,9 +1,9 @@
-# PATH: config/coverage_intent_mantle.yaml
+# PATH: config/coverage_intent_scroll.yaml
 #
-# M5 COVERAGE Config - Intent-Driven Universe (mantle)
+# M5 COVERAGE Config - Intent-Driven Universe (Scroll)
 #
 # PURPOSE:
-#   Test intent.txt → discovery_runtime → pool resolution pipeline on Mantle.
+#   Test intent.txt → discovery_runtime → pool resolution pipeline on Scroll.
 #   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
 #   via factory.getPool() calls instead of hardcoded pool addresses.
 #
@@ -12,18 +12,18 @@
 #   - Safe for testing without affecting production rolling state
 #
 # WORKFLOW:
-#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 1
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 1
 #
-# v3.2.19: Initial config for Mantle multi-chain rollout
+# v3.2.20: Initial config for Scroll multi-chain rollout
 
-# Chain: Mantle
-chain: mantle
-chain_id: 5000
+# Chain: Scroll
+chain: scroll
+chain_id: 534352
 
 # RPC endpoints with fallback
 rpc_endpoints:
-  - "https://rpc.mantle.xyz"
-  - "https://mantle.public.blastapi.io"
+  - "https://rpc.scroll.io"
+  - "https://scroll.public.blastapi.io"
 
 # RPC settings
 rpc_timeout_seconds: 10
@@ -31,19 +31,17 @@ rpc_retries: 3
 rpc_backoff_base_ms: 500
 
 # Intent-driven universe: resolve pairs from intent.txt
+# v3.2.17: Enables factory.getPool() discovery via resolve_runtime_pairs()
 universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
-# v3.2.19: Mantle has agni_v3 (Uniswap V3 adapter with quoter_v2)
+# v3.2.20: Scroll has Uniswap V3 native
 dexes:
-  - agni_v3
+  - uniswap_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-require_cross_dex: false  # Single DEX on Mantle
-
-# Quoter V2 for executable quotes (agni_v3 has quoter_v2)
-use_quoter_v2: true
+require_cross_dex: false  # Single DEX on Scroll
 
 # Multicall batching (default ON)
 use_multicall: true
@@ -56,17 +54,18 @@ target_usd_notional: 100.0
 min_spread_bps: 5
 paper_size_usd: 100
 paper_slippage_bps: 5
-gas_usd_estimate: 0.02  # Mantle is very cheap (MNT gas)
+gas_usd_estimate: 0.05  # Scroll is relatively cheap
 
 # Token USD prices (for notional sizing)
 tokens_usd_price:
   WETH: 3000.0
-  WMNT: 0.80
+  WBTC: 60000.0
   USDC: 1.0
   USDT: 1.0
-  mUSD: 1.0
-  mETH: 3100.0
-  cmETH: 3100.0
+  wstETH: 3500.0
+  SCR: 0.50       # Scroll token
+  STONE: 3100.0
+  weETH: 3100.0
 
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000

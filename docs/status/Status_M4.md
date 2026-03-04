@@ -6,7 +6,21 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=41, pass_rate=1.0, data_run_rate=0.78, fragile_rate_p90=0.0. `unique_pairs=6`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=43, pass_rate=1.0, data_run_rate=0.7442, fragile_rate_p90=0.0. `unique_pairs=7`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+
+## Per-DEX Promotion Metrics (v3.2.20)
+
+**Per-DEX Health Breakdown** (from `per_dex_stats` in scan artifacts):
+
+| DEX | Success Rate | Health | Top Reasons | Action |
+|-----|--------------|--------|-------------|--------|
+| uniswap_v3 | 31.0% | WARNING | NOTIONAL_DRIFT, PRICE_SANITY | Monitor |
+| sushiswap_v3 | 13.5% | CRITICAL | PRICE_SANITY, SUSPECT_LIQUIDITY | Consider removal |
+| pancakeswap_v3 | 27.0% | WARNING | PRICE_SANITY, NOTIONAL_DRIFT | Monitor |
+
+**DEX_HEALTH_CRITICAL quality warning**: M4 fixtures now emit `quality_warning: DEX_HEALTH_CRITICAL` when per_dex_stats shows CRITICAL health (<20% success rate).
+
+**Per-DEX Quoter Mode** (v3.2.20): Algebra DEXes now automatically use quoter-based amountOut (`use_quoter_for_dex = is_algebra or use_quoter_global`).
 
 ## Evidence Discipline (2026-03-04)
 

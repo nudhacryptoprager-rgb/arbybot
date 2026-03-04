@@ -435,6 +435,24 @@ def generate_m4_from_online_inputs(
         except Exception:
             pass  # If reject_histogram is missing or invalid, continue without it
     
+    # v3.2.20: Load per_dex_stats from scan file to check for CRITICAL DEX health
+    critical_dex_health = []  # List of DEXes with CRITICAL health
+    scan_files = sorted(reports_dir.glob("scan_*.json"), reverse=True)
+    if scan_files:
+        try:
+            with open(scan_files[0]) as f:
+                scan_data = json.load(f)
+            per_dex_stats = scan_data.get("per_dex_stats", {})
+            for dex_id, stats in per_dex_stats.items():
+                if stats.get("health_status") == "CRITICAL":
+                    critical_dex_health.append({
+                        "dex_id": dex_id,
+                        "quote_success_rate": stats.get("quote_success_rate", 0),
+                        "top_reject_reasons": stats.get("top_reject_reasons", []),
+                    })
+        except Exception:
+            pass  # If scan file is missing or invalid, continue without it
+    
     # Extract key metadata from truth_report
     source_run_mode = truth_data.get("run_mode", "UNKNOWN")
     source_block = truth_data.get("current_block", 0)
@@ -896,6 +914,16 @@ def generate_m4_from_online_inputs(
         for cr in critical_rejects:
             quality_warnings.append(f"CRITICAL_REJECT({cr['reason']}:{cr['count']})")
         quality_reasons.append("WARN_CRITICAL_REJECTS")
+    
+    # v3.2.20: DEX_HEALTH_CRITICAL warning when per_dex_stats shows CRITICAL health
+    # This is a production guardrail: CRITICAL DEXes should not be promoted to NORMAL
+    if critical_dex_health:
+        for dex_info in critical_dex_health:
+            dex_id = dex_info["dex_id"]
+            rate = dex_info["quote_success_rate"]
+            reasons = ",".join(dex_info["top_reject_reasons"][:2])
+            quality_warnings.append(f"DEX_HEALTH_CRITICAL({dex_id}:{rate:.0%},reasons=[{reasons}])")
+        quality_reasons.append("WARN_DEX_HEALTH_CRITICAL")
     
     if is_low_sample and included_signals_count > 0:
         # Has signals but too few for statistical validity

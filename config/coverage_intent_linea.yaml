@@ -82,5 +82,10 @@ drift_warning_pct: 30.0
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 
-# M4.2 truth mode
+# M4.2 Truth-Semantics (MANDATORY for profit interpretation)
+# v3.2.20: Full M4.2 semantics for contractual uniformity
 truth_mode_m42: true
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_M4_COVERAGE
+kill_switch_active: true
+simulate_only: true

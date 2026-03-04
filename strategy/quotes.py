@@ -603,6 +603,7 @@ def collect_quotes(
         "v3_slot0_failed": 0,
         "price_calc_failed": 0,
         "no_onchain_price": 0,
+        "no_usd_price": 0,      # v3.2.20: Viability filter - no USD price for token_in
         "algebra_needs_quoter": 0,
     }
     
@@ -702,6 +703,26 @@ def collect_quotes(
         token_out = pair_cfg.token_out
         decimals_in = pair_cfg.token_in_decimals
         decimals_out = pair_cfg.token_out_decimals
+        
+        # v3.2.20: Viability filter - if use_usd_notional and no USD price for token_in,
+        # skip with deterministic reason (not NOTIONAL_DRIFT_EXCLUDED which is downstream)
+        if use_usd_notional:
+            # Check if token_in has a USD price (config > DEFAULT_TOKEN_USD_PRICES)
+            merged_prices = dict(DEFAULT_TOKEN_USD_PRICES)
+            merged_prices.update(tokens_usd_price)
+            if token_in not in merged_prices or merged_prices.get(token_in, 0) <= 0:
+                rejected_quotes.append({
+                    "pair": f"{token_in}/{token_out}",
+                    "dex_id": "ALL",
+                    "fee": 0,
+                    "reason": "NO_USD_PRICE",
+                    "gate_passed": False,
+                    "error": f"Token {token_in} has no USD price in config or defaults (use_usd_notional=true)",
+                })
+                counts["no_usd_price"] = counts.get("no_usd_price", 0) + 1
+                logger.warning("NO_USD_PRICE: %s pair %s/%s skipped (add %s to tokens_usd_price)",
+                              "VIABILITY_FILTER", token_in, token_out, token_in)
+                continue  # Skip this pair entirely
         
         # Get anchor price for this pair (v2.2.0: prefer dynamic over YAML)
         yaml_anchor = tokens_anchor_price.get(token_pair_tag)
@@ -848,15 +869,6 @@ def collect_quotes(
                 logger.info("LIQUIDITY_ZERO: %s (auto-disabled)", pool_key)
                 continue
             
-            # TODO(M4.2): Replace slot0 with QuoterV2 for executable quotes
-            # See dex/adapters/uniswap_v3.py UniswapV3Adapter
-            # Quoter addresses in config/dexes.yaml: quoter_v2
-            # This would give: amountOut, ticksCrossed, gasEstimate
-            
-            # M4.2 Preview: Try QuoterV2 if configured (optional feature flag)
-            use_quoter_v2 = config.get("use_quoter_v2", False)
-            quoter_result = None
-            
             # M4.2: Calculate amount_in_wei using USD-notional sizing
             if use_usd_notional:
                 amount_in_wei = calculate_amount_in_wei(
@@ -869,7 +881,14 @@ def collect_quotes(
             is_v3_dex = adapter_type in ("uniswap_v3", "algebra")
             is_algebra = adapter_type == "algebra"
             
-            if use_quoter_v2 and dex_cfg:
+            # v3.2.20: Per-DEX quoter mode decision
+            # - Algebra DEXes ALWAYS need quoter (slot0 ABI incompatible)
+            # - UniswapV3 uses quoter_v2 when config flag is set
+            use_quoter_global = config.get("use_quoter_v2", False)
+            use_quoter_for_dex = is_algebra or use_quoter_global
+            quoter_result = None
+            
+            if use_quoter_for_dex and dex_cfg:
                 quoter_addr = dex_cfg.get_quoter_address()
                 if quoter_addr:
                     # v3.2.17: Use resolve_token_address with fallback chain
@@ -1067,7 +1086,15 @@ def collect_quotes(
                 continue  # Skip slot0 path entirely
             
             # M4.2 FIX: Algebra DEXes require quoter - slot0() ABI is incompatible
+            # v3.2.20: Quoter is now auto-enabled for Algebra, so this means quoter call failed
             if is_algebra and not quoter_success:
+                # Determine root cause: no quoter address or quoter call failed
+                quoter_addr = dex_cfg.get_quoter_address() if dex_cfg else None
+                reject_error = (
+                    f"Algebra quoter call failed (quoter={quoter_addr[:16] + '...' if quoter_addr else 'NONE'})"
+                    if quoter_addr else
+                    "Algebra DEX has no quoter address in dexes.yaml"
+                )
                 rejected_quotes.append({
                     "pair": f"{token_in}/{token_out}",
                     "dex_id": dex,
@@ -1075,12 +1102,13 @@ def collect_quotes(
                     "pool_address": pool_addr,
                     "reason": "ALGEBRA_NEEDS_QUOTER",
                     "gate_passed": False,
-                    "error": "Algebra/Camelot DEX requires use_quoter_v2=true (slot0 ABI incompatible)",
-                    "use_quoter_v2": use_quoter_v2,
+                    "error": reject_error,
+                    "quoter_configured": bool(quoter_addr),
+                    "quoter_result": quoter_result,  # Include result for debugging
                 })
                 counts["algebra_needs_quoter"] = counts.get("algebra_needs_quoter", 0) + 1
-                logger.warning("ALGEBRA_NEEDS_QUOTER: %s %s/%s fee=%d (enable use_quoter_v2)", 
-                              dex, token_in, token_out, fee_tier)
+                logger.warning("ALGEBRA_NEEDS_QUOTER: %s %s/%s fee=%d: %s", 
+                              dex, token_in, token_out, fee_tier, reject_error)
                 continue
             
             # Path B: slot0 fallback - only for uniswap_v3 when no quoter
