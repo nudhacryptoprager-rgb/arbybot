@@ -178,7 +178,15 @@ def inspect_run_dir(run_dir: Path) -> dict:
                 computed_gas_bps = round((gas_usd / size_usd) * 10000, 2)
             
             is_excluded = signal.get("is_excluded_spread", False) or signal.get("exclude_reason") is not None
+            # v3.2.20: Infer exclude_reason from signal fields if not explicitly set
             exclude_reason = signal.get("exclude_reason")
+            if exclude_reason is None and is_excluded:
+                if signal.get("is_suspect_spread", False):
+                    exclude_reason = "SUSPECT_SPREAD"
+                elif signal.get("is_same_dex_excluded", False):
+                    exclude_reason = "SAME_DEX"
+                elif signal.get("is_excluded_spread", False):
+                    exclude_reason = "EXCLUDED_UNKNOWN"  # Fallback for debugging
             
             return {
                 "spread_minus_required_bps": signal.get("spread_minus_required_bps"),

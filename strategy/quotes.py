@@ -713,7 +713,7 @@ def collect_quotes(
             if token_in not in merged_prices or merged_prices.get(token_in, 0) <= 0:
                 rejected_quotes.append({
                     "pair": f"{token_in}/{token_out}",
-                    "dex_id": "ALL",
+                    "dex_id": "_pre_routing",  # v3.2.20: Special bucket for pre-DEX viability rejections
                     "fee": 0,
                     "reason": "NO_USD_PRICE",
                     "gate_passed": False,

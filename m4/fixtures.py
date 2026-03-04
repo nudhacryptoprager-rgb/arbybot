@@ -444,6 +444,9 @@ def generate_m4_from_online_inputs(
                 scan_data = json.load(f)
             per_dex_stats = scan_data.get("per_dex_stats", {})
             for dex_id, stats in per_dex_stats.items():
+                # v3.2.20: Skip pseudo-DEX buckets (pre-routing rejections like NO_USD_PRICE)
+                if dex_id in ("ALL", "_pre_routing"):
+                    continue
                 if stats.get("health_status") == "CRITICAL":
                     critical_dex_health.append({
                         "dex_id": dex_id,
