@@ -419,12 +419,13 @@ def check_dev_report_freshness() -> List[str]:
 
 
 def check_dev_report_alignment() -> List[str]:
-    """Check that DEV_REPORT_LATEST.md aligns with rolling artifacts (v1.6.1).
+    """Check that DEV_REPORT_LATEST.md aligns with rolling artifacts (v1.6.1 / v3.2.19).
     
     Verifies that:
     1. run_context.run_timestamp in DEV_REPORT matches run_summary_latest.json
     2. inputs.run_dir_name in DEV_REPORT matches run_summary_latest.json
-    3. KEY METRICS: runs_in_window, total_net_usdc, unique_pairs match _latest.json
+    3. KEY METRICS: runs_in_window, total_net_usdc, unique_pairs, data_run_rate match _latest.json
+    4. v3.2.19: signals_count, agg_status validation
     
     This prevents evidence drift where DEV_REPORT references old/stale artifacts.
     """
@@ -468,7 +469,7 @@ def check_dev_report_alignment() -> List[str]:
                 f"Rolling: {rolling_ts_short}, DEV_REPORT: does not contain this timestamp"
             )
         
-        # ===== KEY METRICS CHECK (v1.6.1) =====
+        # ===== KEY METRICS CHECK (v1.6.1 / v3.2.19) =====
         # Load _latest.json for quick_stats
         if rolling_latest_path.exists():
             with open(rolling_latest_path, "r", encoding="utf-8") as f:
@@ -478,6 +479,13 @@ def check_dev_report_alignment() -> List[str]:
             rolling_runs = latest.get("runs_in_window", 0)
             rolling_total_net = quick_stats.get("total_net_usdc", 0)
             rolling_unique_pairs = quick_stats.get("unique_pairs", 0)
+            rolling_data_run_rate = latest.get("data_run_rate", 0)
+            rolling_agg_status = latest.get("agg_status", "UNKNOWN")
+            
+            # v3.2.19: signals_count from summary metrics
+            rolling_signals_count = summary.get("metrics", {}).get("included_signals_count", 0)
+            if rolling_signals_count == 0:
+                rolling_signals_count = summary.get("metrics", {}).get("signals_count", 0)
             
             # Extract values from DEV_REPORT using regex
             # runs_in_window: 103
@@ -513,6 +521,28 @@ def check_dev_report_alignment() -> List[str]:
                         f"WARN: DEV_REPORT_ALIGNMENT: unique_pairs mismatch. "
                         f"Rolling: {rolling_unique_pairs}, DEV_REPORT: {dev_pairs}"
                     )
+            
+            # v3.2.19: data_run_rate check (tolerance 0.02)
+            rate_match = re.search(r'data_run_rate[:\s]*(0\.\d+)', dev_report_content)
+            if rate_match:
+                dev_rate = float(rate_match.group(1))
+                if abs(dev_rate - rolling_data_run_rate) > 0.02:
+                    issues.append(
+                        f"WARN: DEV_REPORT_ALIGNMENT: data_run_rate mismatch. "
+                        f"Rolling: {rolling_data_run_rate:.4f}, DEV_REPORT: {dev_rate:.4f}"
+                    )
+            
+            # v3.2.19: agg_status check
+            if rolling_agg_status != "UNKNOWN":
+                # Regex requires colon to avoid matching "agg_status checks" in prose
+                agg_match = re.search(r'agg_status:\s*(\w+)', dev_report_content)
+                if agg_match:
+                    dev_agg = agg_match.group(1)
+                    if dev_agg != rolling_agg_status:
+                        issues.append(
+                            f"WARN: DEV_REPORT_ALIGNMENT: agg_status mismatch. "
+                            f"Rolling: {rolling_agg_status}, DEV_REPORT: {dev_agg}"
+                        )
             
     except Exception as e:
         issues.append(f"ERROR: Could not check DEV_REPORT alignment: {e}")

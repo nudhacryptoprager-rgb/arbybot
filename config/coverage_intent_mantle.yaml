@@ -1,0 +1,81 @@
+# PATH: config/coverage_intent_mantle.yaml
+#
+# M5 COVERAGE Config - Intent-Driven Universe (mantle)
+#
+# PURPOSE:
+#   Test intent.txt → discovery_runtime → pool resolution pipeline on Mantle.
+#   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
+#   via factory.getPool() calls instead of hardcoded pool addresses.
+#
+# RUN_KIND: COVERAGE
+#   - Will NOT update rolling artifacts (NORM-only policy)
+#   - Safe for testing without affecting production rolling state
+#
+# WORKFLOW:
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 1
+#
+# v3.2.19: Initial config for Mantle multi-chain rollout
+
+# Chain: Mantle
+chain: mantle
+chain_id: 5000
+
+# RPC endpoints with fallback
+rpc_endpoints:
+  - "https://rpc.mantle.xyz"
+  - "https://mantle.public.blastapi.io"
+
+# RPC settings
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# Intent-driven universe: resolve pairs from intent.txt
+universe_source: discovery_runtime
+
+# DEXes to scan (must have factory addresses in dexes.yaml)
+# v3.2.19: Mantle has agni_v3 (Uniswap V3 adapter with quoter_v2)
+dexes:
+  - agni_v3
+
+# Discovery settings
+discovery_runtime_max_pairs: 20
+require_cross_dex: false  # Single DEX on Mantle
+
+# Quoter V2 for executable quotes (agni_v3 has quoter_v2)
+use_quoter_v2: true
+
+# Multicall batching (default ON)
+use_multicall: true
+
+# USD-notional sizing (M4.2)
+use_usd_notional: true
+target_usd_notional: 100.0
+
+# Spread economics
+min_spread_bps: 5
+paper_size_usd: 100
+paper_slippage_bps: 5
+gas_usd_estimate: 0.02  # Mantle is very cheap (MNT gas)
+
+# Token USD prices (for notional sizing)
+tokens_usd_price:
+  WETH: 3000.0
+  WMNT: 0.80
+  USDC: 1.0
+  USDT: 1.0
+  mUSD: 1.0
+  mETH: 3100.0
+  cmETH: 3100.0
+
+# Price sanity gates (relaxed for bootstrap)
+price_sanity_max_deviation_bps: 10000
+
+# Drift tolerance (relaxed for bootstrap)
+drift_warning_pct: 30.0
+
+# Run kind: COVERAGE (won't update rolling)
+run_kind: COVERAGE
+
+# M4.2 truth mode
+truth_mode_m42: true

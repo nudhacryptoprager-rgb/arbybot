@@ -104,6 +104,31 @@ def validate_universe(config_path: Path) -> dict:
                 result["warnings"].append(f"DEX '{dex}' missing factory address")
             adapter_type = dex_def.get("adapter_type", "unknown")
             result["summary"].setdefault("dex_adapters", {})[dex] = adapter_type
+            
+            # v3.2.19: Validate required anchors per adapter_type for executable quotes
+            # Different adapters require different contract addresses to produce quotes
+            missing_anchors = []
+            if adapter_type == "uniswap_v3":
+                # V3 requires factory (pool lookup) + quoter_v2 (executable quotes)
+                if not dex_def.get("factory"):
+                    missing_anchors.append("factory")
+                if not dex_def.get("quoter_v2"):
+                    missing_anchors.append("quoter_v2")
+            elif adapter_type == "algebra":
+                # Algebra requires factory + quoter for dynamic-fee pools
+                if not dex_def.get("factory"):
+                    missing_anchors.append("factory")
+                if not dex_def.get("quoter"):
+                    missing_anchors.append("quoter (Algebra needs quoter for executable quotes)")
+            elif adapter_type in ("ve33", "uniswap_v2", "solidly"):
+                # V2/ve33 requires router for swaps
+                if not dex_def.get("router"):
+                    missing_anchors.append("router")
+            
+            if missing_anchors:
+                result["warnings"].append(
+                    f"DEX '{dex}' ({adapter_type}) missing anchors: {', '.join(missing_anchors)}"
+                )
     
     # 3. Validate tokens
     chain_tokens = tokens_config.get(chain_key, {})

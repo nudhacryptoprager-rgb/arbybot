@@ -40,11 +40,11 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (production set - well-tested adapters)
-# v3.2.17: Includes Algebra adapter (camelot_v3) and PancakeSwap V3
+# v3.2.18: Removed camelot_v3 until Algebra executable quoting is implemented
+# camelot_v3 causes ALGEBRA_NEEDS_QUOTER rejections - keep only in COVERAGE for testing
 dexes:
   - uniswap_v3
   - sushiswap_v3
-  - camelot_v3
   - pancakeswap_v3
 
 # Discovery settings (CANONICAL KEYS per discovery/runtime.py contract)

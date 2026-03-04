@@ -503,3 +503,173 @@ def test_inspect_run_dir_best_spread_economics_cost_breakdown():
         assert best["safety_bps"] == 2.0  # Default from min_required formula
         # gas_bps computed: 0.125 / 250 * 10000 = 5.0
         assert best["gas_bps"] == 5.0, f"Expected gas_bps=5.0, got {best['gas_bps']}"
+
+
+class TestRunSummaryContract:
+    """
+    Contract tests for run_summary presence in runDir.
+    
+    v3.2.19: All ONLINE PASS runs must generate run_summary.
+    COVERAGE evidence is valid ONLY if runDir contains run_summary with run_timestamp.
+    """
+    
+    def test_run_summary_missing_reports_unknown_status(self):
+        """
+        Contract: runDir without run_summary must report status as UNKNOWN.
+        This validates that inspect_run_dir correctly identifies missing run_summary.
+        """
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from scripts.inspect_run_dir import inspect_run_dir
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            reports_dir = run_dir / "reports"
+            reports_dir.mkdir()
+            
+            # Create minimal truth_report WITHOUT run_summary
+            truth_report = {
+                "schema_version": "3.0.0",
+                "chain_key": "arbitrum_one",
+                "chain_id": 42161,
+                "current_block": 123456,
+                "spread_signals": [],
+                "stats": {
+                    "quotes_total": 10,
+                    "quotes_fetched": 5,
+                    "dexes_active": 2,
+                },
+                "config_params": {},
+            }
+            (reports_dir / "truth_report_20260101_120000.json").write_text(
+                json.dumps(truth_report)
+            )
+            
+            result = inspect_run_dir(run_dir)
+            
+            # Contract: run_summary missing must be reported
+            assert "run_summary" in result.get("artifacts_missing", []), \
+                "run_summary should be in artifacts_missing"
+            assert result.get("run_timestamp") is None, \
+                "run_timestamp should be None when run_summary missing"
+            # Status should indicate unknown/missing run_summary
+            status = result.get("status", "")
+            assert "UNKNOWN" in status or "no run_summary" in status.lower(), \
+                f"Status should indicate UNKNOWN, got: {status}"
+    
+    def test_run_summary_present_reports_timestamp(self):
+        """
+        Contract: runDir with run_summary must report run_timestamp.
+        This is required for evidence tracking and provenance.
+        """
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from scripts.inspect_run_dir import inspect_run_dir
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            reports_dir = run_dir / "reports"
+            reports_dir.mkdir()
+            
+            # Create truth_report
+            truth_report = {
+                "schema_version": "3.0.0",
+                "chain_key": "arbitrum_one",
+                "chain_id": 42161,
+                "current_block": 123456,
+                "spread_signals": [{"id": 1}],
+                "stats": {
+                    "quotes_total": 10,
+                    "quotes_fetched": 5,
+                    "dexes_active": 2,
+                },
+                "config_params": {},
+            }
+            (reports_dir / "truth_report_20260101_120000.json").write_text(
+                json.dumps(truth_report)
+            )
+            
+            # Create run_summary WITH run_timestamp (required for evidence)
+            expected_timestamp = "2026-01-01T12:00:00.123456Z"
+            run_summary = {
+                "status": "PASS",
+                "profit_status": "PASS",
+                "drift_status": "PASS",
+                "quality_status": "PASS",
+                "reasons": [],
+                "quality_reasons": [],
+                "run_context": {
+                    "run_timestamp": expected_timestamp,
+                    "run_dir_name": "test_run_dir",
+                },
+            }
+            (reports_dir / "run_summary_20260101_120000.json").write_text(
+                json.dumps(run_summary)
+            )
+            
+            result = inspect_run_dir(run_dir)
+            
+            # Contract: run_summary present means run_timestamp available
+            assert "run_summary" in result.get("artifacts_present", []), \
+                "run_summary should be in artifacts_present"
+            assert result.get("run_timestamp") == expected_timestamp, \
+                f"run_timestamp should be {expected_timestamp}, got: {result.get('run_timestamp')}"
+    
+    def test_run_summary_required_fields_contract(self):
+        """
+        Contract: run_summary must have these fields for evidence validity:
+        - run_context.run_timestamp (provenance)
+        - status (PASS/FAIL/NO_DATA)
+        - profit_status, drift_status, quality_status
+        """
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from scripts.inspect_run_dir import inspect_run_dir
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            reports_dir = run_dir / "reports"
+            reports_dir.mkdir()
+            
+            # Minimal truth_report
+            (reports_dir / "truth_report_20260101_120000.json").write_text(
+                json.dumps({
+                    "schema_version": "3.0.0",
+                    "chain_key": "arbitrum_one",
+                    "chain_id": 42161,
+                    "current_block": 123456,
+                    "spread_signals": [],
+                    "stats": {"quotes_total": 0, "quotes_fetched": 0, "dexes_active": 0},
+                    "config_params": {},
+                })
+            )
+            
+            # run_summary with all required fields
+            run_summary = {
+                "schema_version": "m4:run_summary:v2.0",
+                "status": "PASS",
+                "profit_status": "PASS",
+                "drift_status": "PASS",
+                "quality_status": "WARN",
+                "reasons": [],
+                "quality_reasons": ["WARN_PROFIT_DIAGNOSTIC"],
+                "run_context": {
+                    "run_timestamp": "2026-01-01T12:00:00Z",
+                    "run_dir_name": "test_run_dir",
+                    "code_identity": "ts:2026-01-01T12:00:00Z",
+                },
+                "metrics": {
+                    "signals_count": 5,
+                    "total_net_usdc": 1.88,
+                    "profit_is_diagnostic": True,
+                },
+            }
+            (reports_dir / "run_summary_20260101_120000.json").write_text(
+                json.dumps(run_summary)
+            )
+            
+            result = inspect_run_dir(run_dir)
+            
+            # Contract: these fields must be extractable
+            assert result.get("run_timestamp") is not None, "run_timestamp required"
+            assert result.get("status") is not None, "status required"

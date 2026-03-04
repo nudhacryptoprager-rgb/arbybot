@@ -152,6 +152,25 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
             "quotes_total": 4, "quotes_fetched": 4, "gates_passed": 3,
             "dexes_active": 2, "price_sanity_passed": 3, "price_sanity_failed": 1,
         },
+        # v3.2.19: Per-DEX promotion metrics
+        "per_dex_stats": {
+            "uniswap_v3": {
+                "quotes_fetched": 2,
+                "quotes_rejected": 0,
+                "quotes_total": 2,
+                "quote_success_rate": 1.0,
+                "top_reject_reasons": [],
+                "health_status": "HEALTHY",
+            },
+            "sushiswap_v3": {
+                "quotes_fetched": 2,
+                "quotes_rejected": 1,
+                "quotes_total": 3,
+                "quote_success_rate": 0.6667,
+                "top_reject_reasons": ["PRICE_SANITY_FAILED"],
+                "health_status": "HEALTHY",
+            },
+        },
     }
     scan_path = reports_dir / f"scan_{timestamp}.json"
     with open(scan_path, "w") as f:
@@ -222,6 +241,25 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         "total_rejects": 1,      # Deprecated alias
         "price_sanity_failed": 1,  # Aggregate metric (may differ from rejects_total)
         "no_rejects": False,
+        # v3.2.19: Per-DEX promotion metrics
+        "per_dex_stats": {
+            "uniswap_v3": {
+                "quotes_fetched": 2,
+                "quotes_rejected": 0,
+                "quotes_total": 2,
+                "quote_success_rate": 1.0,
+                "top_reject_reasons": [],
+                "health_status": "HEALTHY",
+            },
+            "sushiswap_v3": {
+                "quotes_fetched": 2,
+                "quotes_rejected": 1,
+                "quotes_total": 3,
+                "quote_success_rate": 0.6667,
+                "top_reject_reasons": ["PRICE_SANITY_FAILED"],
+                "health_status": "HEALTHY",
+            },
+        },
     }
     reject_path = reports_dir / f"reject_histogram_{timestamp}.json"
     with open(reject_path, "w") as f:
@@ -1360,37 +1398,52 @@ ENV VARIABLES:
             print(f"RESULT: {'PASS' if passed else 'FAIL'}")
             print(f"RunDir: {run_dir}")
             
-            # v2.1.0: Auto-refresh rolling artifacts if enabled
-            # Must run M4 gate first to generate run_summary, then emit rolling
+            # v3.2.19: Always run M4 gate for ONLINE PASS to generate run_summary
+            # This ensures every runDir has provenance artifacts for evidence tracking
+            # artifact-mode controls whether rolling is updated:
+            #   - "full": generate run_summary in runDir only (no rolling update)
+            #   - "rolling": generate run_summary AND update rolling artifacts
             refresh_rolling_ok = True
-            if passed and args.refresh_rolling:
+            m4_gate_ok = True
+            if passed:
                 try:
-                    print(f"\n[ONLINE] Running M4 gate to generate run_summary...")
+                    artifact_mode = "rolling" if args.refresh_rolling else "full"
+                    purpose = "generate run_summary + update rolling" if args.refresh_rolling else "generate run_summary"
+                    print(f"\n[ONLINE] Running M4 gate to {purpose}...")
                     import subprocess
                     m4_cmd = [
                         sys.executable,
                         "scripts/ci_m4_execution_gate.py",
                         "--online",
                         "--profile", "profit",
-                        "--artifact-mode", "rolling",
+                        "--artifact-mode", artifact_mode,
                         "--run-dir", str(run_dir),
                     ]
                     m4_result = subprocess.run(m4_cmd, capture_output=True, text=True, timeout=180)
                     if m4_result.returncode == 0:
-                        print(f"[ONLINE] M4 gate passed, rolling artifacts updated")
+                        if args.refresh_rolling:
+                            print(f"[ONLINE] M4 gate passed, rolling artifacts updated")
+                        else:
+                            print(f"[ONLINE] M4 gate passed, run_summary generated (rolling not updated)")
                     else:
                         print(f"[ONLINE] M4 gate returned {m4_result.returncode}")
-                        refresh_rolling_ok = False
+                        m4_gate_ok = False
+                        if args.refresh_rolling:
+                            refresh_rolling_ok = False
                         if args.refresh_rolling_strict:
                             print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate failed")
                 except subprocess.TimeoutExpired:
                     print(f"[ONLINE] M4 gate timeout (180s)")
-                    refresh_rolling_ok = False
+                    m4_gate_ok = False
+                    if args.refresh_rolling:
+                        refresh_rolling_ok = False
                     if args.refresh_rolling_strict:
                         print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate timeout")
                 except Exception as e:
-                    print(f"[ONLINE] WARN: M4 gate refresh failed: {e}")
-                    refresh_rolling_ok = False
+                    print(f"[ONLINE] WARN: M4 gate failed: {e}")
+                    m4_gate_ok = False
+                    if args.refresh_rolling:
+                        refresh_rolling_ok = False
                     if args.refresh_rolling_strict:
                         print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate exception")
             

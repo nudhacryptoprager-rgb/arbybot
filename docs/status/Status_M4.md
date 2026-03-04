@@ -6,7 +6,15 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=39, pass_rate=1.0, data_run_rate=0.79, fragile_rate_p90=0.0. `unique_pairs=6`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=41, pass_rate=1.0, data_run_rate=0.78, fragile_rate_p90=0.0. `unique_pairs=6`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+
+## Evidence Discipline (2026-03-04)
+
+**COVERAGE evidence validity rule**: COVERAGE runDir is valid evidence ONLY if it contains `run_summary` (with `run_timestamp`). Without run_summary, the runDir cannot be referenced for metrics.
+
+**run_summary generation**: All ONLINE PASS runs now generate run_summary regardless of `--refresh-rolling` flag (via M4 gate with `--artifact-mode full`).
+
+**Algebra DEX safety**: `camelot_v3` removed from NORMAL intent configs until Algebra executable quoting is implemented. Keep in COVERAGE only for safe testing.
 
 ## Config Contract Canonical Keys (Fixes 2026-03-04)
 

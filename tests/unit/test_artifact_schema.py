@@ -26,6 +26,7 @@ SCAN_REQUIRED_KEYS = {
     "price_sanity_failed",
     "infra",
     "stats",
+    "per_dex_stats",  # v3.2.19: Per-DEX promotion metrics
 }
 
 TRUTH_REPORT_REQUIRED_KEYS = {
@@ -57,6 +58,7 @@ REJECT_HISTOGRAM_REQUIRED_KEYS = {
     # "no_rejects",  # Optional
     "price_sanity_failed",
     # "infra",  # Optional in some fixtures
+    "per_dex_stats",  # v3.2.19: Per-DEX promotion metrics
 }
 
 INFRA_REQUIRED_KEYS = {
@@ -254,6 +256,50 @@ class TestRejectHistogramSchema:
             
             errors = validate_keys(data, REJECT_HISTOGRAM_REQUIRED_KEYS, "reject_histogram")
             assert not errors, f"Schema errors: {errors}"
+
+    def test_per_dex_stats_structure(self):
+        """v3.2.19: Verify per_dex_stats has correct structure per DEX."""
+        from scripts.ci_m5_0_gate import generate_fixture_artifacts
+        import tempfile
+        from pathlib import Path
+        import json
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            ts = "20260209_120000"
+            generate_fixture_artifacts(output_dir, ts)
+            
+            path = output_dir / "reports" / f"reject_histogram_{ts}.json"
+            with open(path) as f:
+                data = json.load(f)
+            
+            per_dex = data.get("per_dex_stats", {})
+            
+            # Required fields per DEX entry
+            PER_DEX_REQUIRED_FIELDS = {
+                "quotes_fetched",
+                "quotes_rejected",
+                "quotes_total",
+                "quote_success_rate",
+                "top_reject_reasons",
+                "health_status",
+            }
+            
+            errors = []
+            for dex_id, stats in per_dex.items():
+                for field in PER_DEX_REQUIRED_FIELDS:
+                    if field not in stats:
+                        errors.append(f"per_dex_stats[{dex_id}] missing '{field}'")
+                
+                # Validate types
+                if not isinstance(stats.get("quotes_fetched"), int):
+                    errors.append(f"per_dex_stats[{dex_id}].quotes_fetched should be int")
+                if not isinstance(stats.get("top_reject_reasons"), list):
+                    errors.append(f"per_dex_stats[{dex_id}].top_reject_reasons should be list")
+                if stats.get("health_status") not in ("HEALTHY", "WARNING", "CRITICAL"):
+                    errors.append(f"per_dex_stats[{dex_id}].health_status invalid: {stats.get('health_status')}")
+            
+            assert not errors, f"per_dex_stats schema errors: {errors}"
 
 
 class TestInfraSchema:

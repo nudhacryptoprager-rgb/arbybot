@@ -974,7 +974,7 @@ def run_scan(
     from core.time import get_run_timestamp
     run_timestamp = get_run_timestamp()
     
-    scan_data = build_scan_data(config, current_block, stats, quotes_sample, infra_payload, run_timestamp=run_timestamp)
+    scan_data = build_scan_data(config, current_block, stats, quotes_sample, infra_payload, run_timestamp=run_timestamp, rejected_quotes=rejected_quotes)
     
     truth_data = build_truth_data(
         config, stats, current_block, spread_signals, suspect_examples,
@@ -982,7 +982,7 @@ def run_scan(
     )
     
     reject_data = build_reject_data(
-        config, current_block, sanity_rejects, rejected_quotes, stats, infra_payload, run_timestamp=run_timestamp
+        config, current_block, sanity_rejects, rejected_quotes, stats, infra_payload, run_timestamp=run_timestamp, quotes_sample=quotes_sample
     )
     
     # Write artifacts (timestamp already set before opportunity_engine)

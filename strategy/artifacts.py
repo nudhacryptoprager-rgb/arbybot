@@ -27,6 +27,88 @@ from core.pool_keys import make_pool_key
 logger = logging.getLogger("strategy.artifacts")
 
 
+def _compute_per_dex_stats(
+    quotes_sample: List[Dict[str, Any]],
+    rejected_quotes: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    v3.2.19: Compute per-DEX promotion metrics for DEX safety decisions.
+    
+    Returns:
+        Dict mapping dex_id -> {
+            quotes_fetched: int,
+            quotes_rejected: int,
+            quotes_total: int,
+            quote_success_rate: float,
+            top_reject_reasons: List[str],  # Top 3 reasons
+            health_status: str,  # HEALTHY/WARNING/CRITICAL
+        }
+    """
+    per_dex: Dict[str, Dict[str, Any]] = {}
+    
+    # Count fetched quotes per DEX
+    for q in quotes_sample:
+        dex_id = q.get("dex_id", "unknown")
+        if dex_id not in per_dex:
+            per_dex[dex_id] = {
+                "quotes_fetched": 0,
+                "quotes_rejected": 0,
+                "reject_reasons": {},
+            }
+        per_dex[dex_id]["quotes_fetched"] += 1
+    
+    # Count rejected quotes and reasons per DEX
+    for r in rejected_quotes:
+        dex_id = r.get("dex_id", "unknown")
+        reason = r.get("reason", "UNKNOWN")
+        if dex_id not in per_dex:
+            per_dex[dex_id] = {
+                "quotes_fetched": 0,
+                "quotes_rejected": 0,
+                "reject_reasons": {},
+            }
+        per_dex[dex_id]["quotes_rejected"] += 1
+        per_dex[dex_id]["reject_reasons"][reason] = per_dex[dex_id]["reject_reasons"].get(reason, 0) + 1
+    
+    # Compute derived metrics
+    results: Dict[str, Dict[str, Any]] = {}
+    for dex_id, stats in per_dex.items():
+        fetched = stats["quotes_fetched"]
+        rejected = stats["quotes_rejected"]
+        total = fetched + rejected
+        
+        # Quote success rate (0-1)
+        success_rate = fetched / total if total > 0 else 0.0
+        
+        # Top 3 reject reasons
+        reasons_sorted = sorted(
+            stats["reject_reasons"].items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+        top_reasons = [r[0] for r in reasons_sorted[:3]]
+        
+        # Health status based on success rate
+        # HEALTHY: >= 50% success, WARNING: 20-50%, CRITICAL: < 20%
+        if success_rate >= 0.5:
+            health_status = "HEALTHY"
+        elif success_rate >= 0.2:
+            health_status = "WARNING"
+        else:
+            health_status = "CRITICAL"
+        
+        results[dex_id] = {
+            "quotes_fetched": fetched,
+            "quotes_rejected": rejected,
+            "quotes_total": total,
+            "quote_success_rate": round(success_rate, 4),
+            "top_reject_reasons": top_reasons,
+            "health_status": health_status,
+        }
+    
+    return results
+
+
 def write_artifacts(
     output_dir: Path,
     timestamp: str,
@@ -285,6 +367,7 @@ def build_reject_data(
     stats: Dict[str, Any],
     infra_payload: Dict[str, Any],
     run_timestamp: Optional[str] = None,  # v2.3.0: Unified provenance
+    quotes_sample: Optional[List[Dict[str, Any]]] = None,  # v3.2.19: For per-DEX metrics
 ) -> Dict[str, Any]:
     """
     Build reject histogram data structure.
@@ -389,6 +472,8 @@ def build_reject_data(
         "price_sanity_samples": price_sanity_samples,
         # v3.2.11: chain_key from config for chain-scoped quarantine stats
         "quarantine_stats": get_quarantine_manager(config.get("chain")).to_dict(),
+        # v3.2.19: Per-DEX promotion metrics (requires quotes_sample)
+        "per_dex_stats": _compute_per_dex_stats(quotes_sample or [], rejected_quotes),
         "infra": infra_payload,
     }
 
@@ -400,6 +485,7 @@ def build_scan_data(
     quotes_sample: List[Dict[str, Any]],
     infra_payload: Dict[str, Any],
     run_timestamp: Optional[str] = None,  # v2.3.0: Unified provenance
+    rejected_quotes: Optional[List[Dict[str, Any]]] = None,  # v3.2.19: For per-DEX metrics
 ) -> Dict[str, Any]:
     """
     Build scan data structure.
@@ -433,5 +519,7 @@ def build_scan_data(
         "stats": stats,
         "quotes": quotes_sample,
         "quotes_sample": quotes_sample,
+        # v3.2.19: Per-DEX promotion metrics
+        "per_dex_stats": _compute_per_dex_stats(quotes_sample, rejected_quotes or []),
         "infra": infra_payload,
     }
