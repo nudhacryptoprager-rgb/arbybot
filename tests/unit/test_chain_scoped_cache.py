@@ -52,7 +52,8 @@ class TestQuarantineChainScoped:
         path = _get_quarantine_cache_path("unknown")
         # 'unknown' should NOT produce a path with "_unknown" suffix
         # It should use the same legacy path as None
-        assert "_unknown" not in str(path)
+        # v3.2.14: Check only filename, not full path (tmp_path may contain test name)
+        assert "_unknown" not in path.name, f"Filename should not contain _unknown: {path.name}"
     
     def test_manager_record_and_flush_chain_a(self, tmp_path):
         """Manager records and flushes to chain-scoped file."""
