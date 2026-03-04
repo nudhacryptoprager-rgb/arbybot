@@ -1,0 +1,195 @@
+# PATH: config/real_roundtrip_probe_lowfee.yaml
+#
+# M4.2 LOW-FEE ROUNDTRIP PROBE CONFIG (v3.2.15)
+#
+# PURPOSE: Minimize LP fee component of min_required_spread_bps
+# 
+# KEY INSIGHT:
+# - With 3000 fee tier: LP fee = 30+30 = 60 bps roundtrip
+# - With 500 fee tier:  LP fee = 5+5 = 10 bps roundtrip  
+# - With 100 fee tier:  LP fee = 1+1 = 2 bps roundtrip
+#
+# By using ONLY 100/500 fee tier pools where BOTH DEXes have them,
+# we reduce min_required from ~70 bps to ~17 bps.
+#
+# LOW-FEE PAIR SELECTION (verified cross-DEX availability):
+# - wstETH/WETH: Uni 100+500, Sushi 100+500 -> use 100 (2 bps LP fee!)
+# - WETH/USDC:   Uni 100+500, Sushi 500     -> use 500 (10 bps LP fee)
+# - WETH/USDT:   Uni 500, Sushi 500         -> use 500 (10 bps LP fee)
+# - WBTC/USDC:   Uni 500, Sushi 500         -> use 500 (10 bps LP fee)
+#
+# EXCLUDED (3000-tier only cross-DEX):
+# - LINK/WETH, WBTC/WETH, ARB/WETH (Sushi 500 pools disabled/PRICE_SANITY_FAILED)
+#
+# M4.2 TRUTH-PROGRESS CRITERIA:
+# 1. roundtrip_lp_filter.passed_to_roundtrip >= 1
+# 2. roundtrip.evaluated_count >= 1
+#
+# Usage: py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_roundtrip_probe_lowfee.yaml
+
+# v3.2.15: Explicit run_kind
+run_kind: NORMAL
+
+# Chain: Arbitrum One ONLY
+chain: arbitrum_one
+chain_id: 42161
+
+# RPC endpoints
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+  - "https://rpc.ankr.com/arbitrum"
+
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+# 2 DEXes for cross-DEX arbitrage
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+
+# LOW-FEE PAIRS ONLY (100/500 tier on BOTH DEXes)
+# No 3000 tier = no 60 bps LP floor
+pairs:
+  # wstETH/WETH - ULTRA LOW FEE (100 tier on both!)
+  # LP fee roundtrip = 1+1 = 2 bps
+  - token_in: wstETH
+    token_out: WETH
+    fee_tiers: [100]
+  
+  # WETH/USDC - 500 tier cross-DEX
+  # LP fee roundtrip = 5+5 = 10 bps
+  - token_in: WETH
+    token_out: USDC
+    fee_tiers: [100, 500]
+  
+  # WETH/USDT - 500 tier cross-DEX
+  # LP fee roundtrip = 5+5 = 10 bps
+  - token_in: WETH
+    token_out: USDT
+    fee_tiers: [500]
+  
+  # WBTC/USDC - 500 tier cross-DEX
+  # LP fee roundtrip = 5+5 = 10 bps
+  - token_in: WBTC
+    token_out: USDC
+    fee_tiers: [500]
+
+# Pool addresses (verified 100/500 tier only)
+pools:
+  # === wstETH/WETH (100 tier - ultra low fee) ===
+  uniswap_v3_wstETH_WETH_100: "0x35218a1cbaC5Bbc3E57fd9Bd38219D37571b3537"
+  uniswap_v3_wstETH_WETH_500: "0xb93F8a075509e71325c1c2fc8FA6a75f2d536A13"
+  sushiswap_v3_wstETH_WETH_100: "0x8BD39fA8608fd949C253987767540c26a0D974CF"
+  sushiswap_v3_wstETH_WETH_500: "0xc60f4760a70Bb900776DBBfcce9eF1a109a185B0"
+  
+  # === WETH/USDC (100/500 tier) ===
+  uniswap_v3_WETH_USDC_100: "0x6f38e884725a116C9C7fBF208e79FE8828a2595F"
+  uniswap_v3_WETH_USDC_500: "0xC6962004f452bE9203591991D15f6b388e09E8D0"
+  sushiswap_v3_WETH_USDC_500: "0xf3Eb87C1F6020982173C908E7eB31aA66c1f0296"
+  
+  # === WETH/USDT (500 tier) ===
+  uniswap_v3_WETH_USDT_500: "0x641C00A822e8b671738d32a431a4Fb6074E5c79d"
+  sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
+  
+  # === WBTC/USDC (500 tier) ===
+  uniswap_v3_WBTC_USDC_500: "0x0E4831319A50228B9e450861297aB92dee15B44F"
+  sushiswap_v3_WBTC_USDC_500: "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"
+
+# Token addresses (Arbitrum)
+tokens:
+  WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+  USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+  USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+  WBTC: "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f"
+  wstETH: "0x5979D7b546E38E414F7E9822514be443A4800529"
+
+# Token decimals
+quote_decimals:
+  WETH: 18
+  USDC: 6
+  USDT: 6
+  WBTC: 8
+  wstETH: 18
+
+# Anchor prices (2026-02)
+tokens_anchor_price:
+  WETH_USDC: 1980
+  WETH_USDT: 1980
+  WBTC_USDC: 68000
+  wstETH_WETH: 1.20
+
+# Quote sizing (1 ETH)
+quote_amount_in_wei: "1000000000000000000"
+
+# Thresholds
+max_slippage_bps: 100
+min_net_bps: 5
+
+# Price sanity
+price_sanity_enabled: true
+price_sanity_max_deviation_bps: 5000
+
+# Paper trading
+cooldown_seconds: 60
+notion_capital_usdc: "10000.000000"
+
+# Gas estimate (Arbitrum)
+gas_usd_estimate: 0.10
+
+# LOWFEE PROBE: Larger size for better signal quality 
+# (gas_bps = 0.10 / 250 * 10000 = 4 bps at $250)
+paper_size_usd: 250
+paper_slippage_bps: 5
+
+# USD-notional sizing
+target_usd_notional: 250
+use_usd_notional: true
+tokens_usd_price:
+  WBTC: 68000
+  WETH: 2050
+  ETH: 2050
+  USDC: 1.0
+  USDT: 1.0
+  wstETH: 2500
+
+# Autosize
+autosize:
+  enabled: true
+  base_size_usd: 500
+  min_size_usd: 50
+  max_size_usd: 2000
+  impact_threshold_bps: 50
+  ticks_crossed_threshold: 5
+  reduction_factor: 0.5
+  cooldown_seconds: 300
+  reason_codes:
+    - "high_impact"
+    - "ticks_crossed"
+    - "volatility"
+    - "cooldown_active"
+
+# LOWFEE: Very low min_spread_bps to catch any viable signals
+min_spread_bps: 1
+
+# Net PnL threshold
+min_net_pnl_usdc_est: 0.0
+
+# M4.2 truth mode
+truth_mode_m42: true
+
+# QuoterV2 for executable pricing
+use_quoter_v2: true
+
+# Discovery
+discovery_dry_run: true
+discovery_runtime: false
+discovery_runtime_max_pairs: 20
+
+# Cross-DEX requirement
+require_cross_dex: true
+
+# M4 markers - execution disabled
+execution_enabled: false
+execution_block_reason: EXECUTION_DISABLED_M4

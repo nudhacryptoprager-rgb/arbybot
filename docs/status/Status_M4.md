@@ -1,14 +1,52 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
-**Updated**: 2026-03-03  
+**Updated**: 2026-03-04  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
 > [!] **ROLLING STABILITY (2026-03-03)**: `agg_status=PASS` achieved. runs_in_window=30, pass_rate=1.0, data_run_rate=0.77, fragile_rate_p90=0.0. `unique_pairs=5`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
 
+## M4.2 Economics Gap (2026-03-04)
+
+**RunDir**: `ci_m5_gate_20260304_134217` (`run_timestamp=2026-03-04T13:42:17Z`)  
+**Config**: `config/real_roundtrip_probe_lowfee.yaml` (100/500 fee-tier only)
+
+### Low-Fee Strategy Results
+
+| Pair | spread_bps | min_required_bps | margin_bps | LP_fee | slippage | viable |
+|------|------------|------------------|------------|--------|----------|--------|
+| wstETH/WETH | 1 | **13** | -11.25 | 2 | 5 | ❌ |
+| WETH/USDC | 7 | **36** | -29.03 | 6 | 24 | ❌ |
+| WETH/USDT | 58 | 132 | -74.23 | 10 | 116 | ❌ |
+| WBTC/USDC | 66 | 142 | -75.67 | 10 | 126 | ❌ |
+
+### Key Findings
+
+1. **Low-fee strategy WORKS**: wstETH/WETH has cost floor of **13 bps** (2 LP + 5 slip + 4 gas + 2 safety)
+2. **Gap is small for ultra low-fee pairs**: wstETH/WETH only -11.25 bps from viability
+3. **Slippage dominates high-spread pairs**: WETH/USDT and WBTC/USDC have 116-126 bps measured slippage (QuoterV2 ticks crossed)
+4. **Market spread is the blocker now**: Current spreads (1-66 bps) are below even the lowest cost floor (13 bps on wstETH/WETH)
+
+### Cost Floor Breakdown (wstETH/WETH 100-tier)
+
+| Component | bps | Source |
+|-----------|-----|--------|
+| LP fee | 2 | 100 tier = 1 bps each leg |
+| Slippage | 5 | Paper (measured = 160.2 bps at $250, but paper used) |
+| Gas | 4 | $0.10 / $250 * 10000 |
+| Safety | 2 | Fixed buffer |
+| **Total** | **13** | - |
+
+### Next Steps
+
+1. **Wait for market volatility**: wstETH/WETH needs spread >= 13 bps for viability
+2. **Consider smaller notional**: Reduce `paper_size_usd` to ~$100 to lower measured slippage
+3. **Universe expansion**: Add Camelot V3 (Algebra) for more 100-tier pools
+
 ## Artifacts Self-Sufficient (2026-03-03) - DONE
+
 
 | Change | Status | Evidence |
 |--------|--------|----------|

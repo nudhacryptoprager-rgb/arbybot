@@ -299,3 +299,120 @@ def test_inspect_run_dir_best_spread_economics_none():
 
         assert result.get("best_spread_economics") is None, \
             "best_spread_economics must be None when no top_opportunities"
+
+
+def test_inspect_run_dir_roundtrip_lp_filter_extended_fields():
+    """
+    v3.2.15: Contract: roundtrip_lp_filter must include margin_filtered_count
+    and unique_pairs_considered for reviewer RCA.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    from scripts.inspect_run_dir import inspect_run_dir
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        run_dir = Path(tmpdir)
+        reports_dir = run_dir / "reports"
+        reports_dir.mkdir()
+
+        truth_report = {
+            "schema_version": "3.0.0",
+            "chain_key": "arbitrum_one",
+            "chain_id": 42161,
+            "current_block": 123456,
+            "spread_signals": [],
+            "stats": {
+                "quotes_total": 20,
+                "quotes_fetched": 18,
+                "dexes_active": 3,
+                "roundtrip_lp_filter": {
+                    "candidates_considered": 15,
+                    "cross_dex_count": 10,
+                    "lp_viable_count": 6,
+                    "passed_to_roundtrip": 2,
+                    "margin_filtered_count": 4,
+                    "unique_pairs_considered": 8,
+                },
+                "opportunity_engine": {
+                    "enabled": True,
+                    "summary": {"total_opportunities": 5},
+                    "top_opportunities": [],
+                },
+            },
+            "config_params": {},
+        }
+        (reports_dir / "truth_report_20260101_120000.json").write_text(
+            json.dumps(truth_report)
+        )
+
+        result = inspect_run_dir(run_dir)
+
+        lp_filter = result.get("roundtrip_lp_filter")
+        assert lp_filter is not None
+        assert lp_filter["margin_filtered_count"] == 4
+        assert lp_filter["unique_pairs_considered"] == 8
+        assert lp_filter["passed_to_roundtrip"] == 2
+
+
+def test_inspect_run_dir_best_spread_economics_cost_breakdown():
+    """
+    v3.2.15: Contract: best_spread_economics must include cost breakdown
+    (gas_bps, lp_fee_bps_roundtrip, effective_slippage_bps, safety_bps).
+    
+    gas_bps should be computed from gas_usd_estimate/size_usd if not present directly.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    from scripts.inspect_run_dir import inspect_run_dir
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        run_dir = Path(tmpdir)
+        reports_dir = run_dir / "reports"
+        reports_dir.mkdir()
+
+        truth_report = {
+            "schema_version": "3.0.0",
+            "chain_key": "arbitrum_one",
+            "chain_id": 42161,
+            "current_block": 123456,
+            "spread_signals": [],
+            "stats": {
+                "quotes_total": 10,
+                "quotes_fetched": 8,
+                "dexes_active": 2,
+                "opportunity_engine": {
+                    "enabled": True,
+                    "summary": {"total_opportunities": 2},
+                    "top_opportunities": [
+                        {
+                            "pair": "WETH/USDC",
+                            "route": "uniswap_v3 -> sushiswap_v3",
+                            "spread_bps": 25.0,
+                            "min_required_spread_bps": 70.0,
+                            "spread_minus_required_bps": -45.0,
+                            "is_roundtrip_viable": False,
+                            # Cost breakdown fields (from spread_signal)
+                            "lp_fee_bps_roundtrip": 60.0,  # 30+30 bps for 3000 tier
+                            "effective_slippage_bps": 5.0,
+                            "gas_usd_estimate": 0.125,  # $0.125 gas cost
+                            "size_usd": 250.0,  # $250 notional
+                            # gas_bps not present - should be computed: 0.125/250*10000 = 5 bps
+                        },
+                    ],
+                },
+            },
+            "config_params": {},
+        }
+        (reports_dir / "truth_report_20260101_120000.json").write_text(
+            json.dumps(truth_report)
+        )
+
+        result = inspect_run_dir(run_dir)
+
+        best = result.get("best_spread_economics")
+        assert best is not None
+        assert best["lp_fee_bps_roundtrip"] == 60.0
+        assert best["effective_slippage_bps"] == 5.0
+        assert best["safety_bps"] == 2.0  # Default from min_required formula
+        # gas_bps computed: 0.125 / 250 * 10000 = 5.0
+        assert best["gas_bps"] == 5.0, f"Expected gas_bps=5.0, got {best['gas_bps']}"

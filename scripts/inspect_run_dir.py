@@ -155,6 +155,13 @@ def inspect_run_dir(run_dir: Path) -> dict:
                 best_opp = opp
         
         if best_opp:
+            # v3.2.15: Compute gas_bps if gas_usd and size_usd available
+            gas_usd = best_opp.get("gas_usd_estimate") or best_opp.get("gas_usd")
+            size_usd = best_opp.get("size_usd") or best_opp.get("paper_size_usd")
+            computed_gas_bps = None
+            if gas_usd is not None and size_usd and size_usd > 0:
+                computed_gas_bps = round((gas_usd / size_usd) * 10000, 2)
+            
             result["best_spread_economics"] = {
                 "spread_minus_required_bps": best_opp.get("spread_minus_required_bps"),
                 "spread_bps": best_opp.get("spread_bps"),
@@ -162,10 +169,11 @@ def inspect_run_dir(run_dir: Path) -> dict:
                 "pair": best_opp.get("pair"),
                 "route": best_opp.get("route"),
                 "is_roundtrip_viable": best_opp.get("is_roundtrip_viable", False),
-                # v3.2.14: Cost breakdown fields (if available in opportunity)
-                "gas_bps": best_opp.get("gas_bps"),
+                # v3.2.15: Cost breakdown fields for RCA (populated from spread_signal)
+                "gas_bps": best_opp.get("gas_bps") or computed_gas_bps,
                 "lp_fee_bps_roundtrip": best_opp.get("lp_fee_bps_roundtrip"),
                 "effective_slippage_bps": best_opp.get("effective_slippage_bps"),
+                "safety_bps": best_opp.get("safety_bps", 2.0),  # Default from min_required formula
             }
         else:
             result["best_spread_economics"] = None
@@ -185,6 +193,9 @@ def inspect_run_dir(run_dir: Path) -> dict:
             "cross_dex_count": lp_filter.get("cross_dex_count", 0),
             "lp_viable_count": lp_filter.get("lp_viable_count", 0),
             "passed_to_roundtrip": lp_filter.get("passed_to_roundtrip", 0),
+            # v3.2.15: Additional fields for reviewer RCA
+            "margin_filtered_count": lp_filter.get("margin_filtered_count", 0),
+            "unique_pairs_considered": lp_filter.get("unique_pairs_considered", 0),
         }
         
         # v3.2.13: profit_is_diagnostic flag (critical for reviewer)

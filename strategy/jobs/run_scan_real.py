@@ -481,6 +481,11 @@ def run_scan(
                     # Add route and spread_bps for traceability
                     opp["route"] = sig.get("route")
                     opp["spread_bps"] = sig.get("spread_bps") or sig.get("spread_bps_ui")
+                    # v3.2.15: Copy cost breakdown fields for RCA in inspect_run_dir
+                    opp["lp_fee_bps_roundtrip"] = sig.get("lp_fee_bps_roundtrip")
+                    opp["effective_slippage_bps"] = sig.get("effective_slippage_bps")
+                    opp["gas_usd_estimate"] = sig.get("gas_usd_estimate")
+                    opp["size_usd"] = sig.get("size_usd")
                     logger.debug(
                         "Linked opp %s to spread_signal: min_req=%.1f, spread_minus=%.1f, viable=%s",
                         key, opp["min_required_spread_bps"], opp["spread_minus_required_bps"], opp["is_roundtrip_viable"]
