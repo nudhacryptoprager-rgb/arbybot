@@ -194,16 +194,16 @@ class TestPoolResolverPersistence:
     
     def test_save_load_roundtrip(self):
         """Cache should survive save/load cycle."""
-        from discovery.pool_resolver import CACHE_PATH
+        from discovery.pool_resolver import CACHE_PATH_LEGACY
         import discovery.pool_resolver as pr_module
         
         # Use temp file
         with tempfile.TemporaryDirectory() as tmpdir:
             test_cache_path = Path(tmpdir) / "test_cache.json"
             
-            # Patch CACHE_PATH
-            original_path = pr_module.CACHE_PATH
-            pr_module.CACHE_PATH = test_cache_path
+            # Patch CACHE_PATH_LEGACY
+            original_path = pr_module.CACHE_PATH_LEGACY
+            pr_module.CACHE_PATH_LEGACY = test_cache_path
             
             try:
                 from discovery.pool_resolver import PoolResolver
@@ -221,4 +221,92 @@ class TestPoolResolverPersistence:
                 assert "test:key" in resolver2._cache
                 assert resolver2._cache["test:key"] == "0xpool123"
             finally:
-                pr_module.CACHE_PATH = original_path
+                pr_module.CACHE_PATH_LEGACY = original_path
+
+
+class TestPoolResolverChainScoped:
+    """v3.2.16: Tests for chain-scoped caching."""
+    
+    def test_get_cache_path_with_chain_key(self):
+        """Chain-scoped path must include chain_key suffix."""
+        from discovery.pool_resolver import _get_cache_path
+        
+        path = _get_cache_path("arbitrum_one")
+        assert "pool_resolver_cache_arbitrum_one.json" in str(path)
+    
+    def test_get_cache_path_linea(self):
+        """Chain-scoped path for linea."""
+        from discovery.pool_resolver import _get_cache_path
+        
+        path = _get_cache_path("linea")
+        assert "pool_resolver_cache_linea.json" in str(path)
+    
+    def test_get_cache_path_legacy_fallback(self):
+        """No chain_key should use legacy path."""
+        from discovery.pool_resolver import _get_cache_path, CACHE_PATH_LEGACY
+        
+        path = _get_cache_path(None)
+        assert path == CACHE_PATH_LEGACY
+    
+    def test_get_cache_path_unknown_falls_back(self):
+        """chain_key='unknown' should use legacy path."""
+        from discovery.pool_resolver import _get_cache_path, CACHE_PATH_LEGACY
+        
+        path = _get_cache_path("unknown")
+        assert path == CACHE_PATH_LEGACY
+    
+    def test_resolver_with_chain_key_uses_scoped_path(self):
+        """PoolResolver with chain_key should use chain-scoped cache path."""
+        from discovery.pool_resolver import PoolResolver
+        
+        resolver = PoolResolver(_chain_key="arbitrum_one")
+        
+        assert resolver._chain_key == "arbitrum_one"
+        assert "pool_resolver_cache_arbitrum_one.json" in str(resolver._cache_path)
+    
+    def test_different_chains_different_paths(self):
+        """Different chains should use different cache paths."""
+        from discovery.pool_resolver import PoolResolver
+        
+        resolver_arb = PoolResolver(_chain_key="arbitrum_one")
+        resolver_linea = PoolResolver(_chain_key="linea")
+        
+        assert resolver_arb._cache_path != resolver_linea._cache_path
+        assert "arbitrum_one" in str(resolver_arb._cache_path)
+        assert "linea" in str(resolver_linea._cache_path)
+    
+    def test_chain_scoped_cache_isolation(self):
+        """Caches for different chains should be isolated."""
+        from discovery.pool_resolver import PoolResolver
+        
+        resolver_arb = PoolResolver(_chain_key="arbitrum_one")
+        resolver_linea = PoolResolver(_chain_key="linea")
+        
+        # Set cache entry in arbitrum resolver
+        resolver_arb._cache["test:key"] = "0xarb_pool"
+        
+        # Linea resolver should not see it
+        assert "test:key" not in resolver_linea._cache
+    
+    def test_get_pool_resolver_chain_scoped_singleton(self):
+        """get_pool_resolver should return chain-scoped singletons."""
+        import discovery.pool_resolver as pr_module
+        
+        # Clear singleton cache
+        original_resolvers = pr_module._resolvers.copy()
+        pr_module._resolvers = {}
+        
+        try:
+            from discovery.pool_resolver import get_pool_resolver
+            
+            resolver_arb1 = get_pool_resolver("arbitrum_one")
+            resolver_arb2 = get_pool_resolver("arbitrum_one")
+            resolver_linea = get_pool_resolver("linea")
+            
+            # Same chain should return same instance
+            assert resolver_arb1 is resolver_arb2
+            
+            # Different chains should return different instances
+            assert resolver_arb1 is not resolver_linea
+        finally:
+            pr_module._resolvers = original_resolvers

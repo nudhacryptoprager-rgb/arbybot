@@ -332,3 +332,13 @@ class TestChainScopedPathDetermination:
         from strategy.dynamic_anchors import _get_anchor_cache_path
         path = _get_anchor_cache_path(chain_key)
         assert expected_suffix in str(path)
+    
+    @pytest.mark.parametrize("chain_key,expected_suffix", [
+        ("arbitrum_one", "arbitrum_one"),
+        ("linea", "linea"),
+    ])
+    def test_pool_resolver_path_suffix(self, chain_key, expected_suffix, tmp_path):
+        """v3.2.16: Pool resolver cache path must contain chain_key."""
+        from discovery.pool_resolver import _get_cache_path
+        path = _get_cache_path(chain_key)
+        assert expected_suffix in str(path)

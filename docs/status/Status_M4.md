@@ -6,7 +6,27 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-03)**: `agg_status=PASS` achieved. runs_in_window=30, pass_rate=1.0, data_run_rate=0.77, fragile_rate_p90=0.0. `unique_pairs=5`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=36, pass_rate=1.0, data_run_rate=0.81, fragile_rate_p90=0.0. `unique_pairs=5`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+
+## Recent Fixes (2026-03-04)
+
+### Bug Fixes
+1. **inspect_run_dir source fix**: `best_spread_economics` now uses `spread_signals` (margin-ranked) instead of `top_opportunities` (profit-ranked)
+   - **Symptom**: WETH/USDT at -74 bps shown instead of wstETH/WETH at -11 bps
+   - **Fix**: Changed source to `spread_signals` with `source: "spread_signals"` tracking
+   - **Test**: `test_inspect_run_dir_best_spread_economics_margin_vs_profit` added
+
+2. **Pool resolver chain-scoped cache**: `discovery/pool_resolver.py` now uses chain-scoped caching like quarantine/runtime_disabled/dynamic_anchors
+   - **Path**: `data/cache/pool_resolver_cache_{chain_key}.json`
+   - **Tests**: 8 new tests in `test_pool_resolver.py`, 2 in `test_chain_scoped_cache.py`
+
+### Config Updates
+3. **pancakeswap_v3 added**: `config/dexes.yaml` now includes PancakeSwap V3 for arbitrum_one
+   - Factory: `0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865`
+   - Fee tiers: [100, 500, 2500, 10000]
+
+### Tests
+- **1337 tests passed** (10 new: 8 pool_resolver chain-scoped + 2 chain_scoped_cache)
 
 ## M4.2 Economics Gap (2026-03-04)
 

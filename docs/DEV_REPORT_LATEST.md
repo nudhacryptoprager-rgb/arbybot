@@ -3,8 +3,8 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.15)
-**Goal**: Move from `profit_is_diagnostic=true` to `profit_truth_available=true` (M4.2 roundtrip).
+## SESSION GOAL + DONE CRITERIA (v3.2.16)
+**Goal**: Fix inspect_run_dir best margin source + pancakeswap_v3 config.
 
 ### M4.2 TRUTH-PROGRESS CRITERIA (primary - must pass)
 | # | Criterion | Target | Current | Status |
@@ -17,61 +17,65 @@
 |---|-----------|--------|---------|--------|
 | 3 | `window_chain_key` | != MIXED | MIXED | ❌ |
 | 4 | `agg_status` | PASS | PASS | ✅ |
-| 5 | `unique_pairs` | >= 8 | 4 | ❌ |
+| 5 | `unique_pairs` | >= 8 | 5 | ❌ |
 
-**RCA (v3.2.15 lowfee evidence)**:
-- **Best opportunity** (100-tier): wstETH/WETH with `spread_bps=1`, `min_required_spread_bps=13`
-- **Spread deficit**: `-11.25 bps` (IMPROVED from -45 bps in v3.2.14 with 3000-tier pairs)
-- **Cost floor breakdown** (wstETH/WETH): LP=2bps + slip=5bps + gas=4bps + safety=2bps = **13bps total**
-- **Root cause**: Market spreads (1-7 bps) below even lowest cost floor (13 bps on wstETH/WETH)
-- **Finding**: Low-fee strategy WORKS - 100-tier pools have cost floor 13 bps (vs 70+ bps on 3000-tier)
+**BUG FIX (v3.2.16 inspect_run_dir)**:
+- **Issue**: `best_spread_economics` used `top_opportunities` (profit-ranked) instead of `spread_signals` (margin-ranked)
+- **Symptom**: WETH/USDT at -74 bps shown instead of wstETH/WETH at -11 bps
+- **Fix**: Changed source to `spread_signals` with `source: "spread_signals"` tracking
+- **Test**: Added regression test `test_inspect_run_dir_best_spread_economics_margin_vs_profit`
 
-**Next actions** (M4.2 viability):
-1. Wait for market volatility (wstETH/WETH needs spread >= 13 bps)
-2. Reduce `paper_size_usd` to $100 to lower measured slippage impact
-3. Universe expansion: Camelot V3 (Algebra) for more 100-tier pools
+**CONFIG UPDATE (v3.2.16)**:
+- `config/dexes.yaml`: Added `pancakeswap_v3` for arbitrum_one (UniswapV3 adapter)
+- Factory: 0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865
+- Fee tiers: [100, 500, 2500, 10000]
 
-**Config updates (v3.2.15)**:
-- `config/real_roundtrip_probe_lowfee.yaml`: NEW - 100/500 tier only, no 3000-tier
-- `scripts/inspect_run_dir.py`: added cost breakdown (gas_bps, lp_fee, slip, safety)
-- `strategy/jobs/run_scan_real.py`: copy cost breakdown to top_opportunities
-- Tests: 1326 passed (2 new tests for cost breakdown)
+**Evidence run** (regular probe config):
+- Run: `ci_m5_gate_20260304_141247` (PASS)
+- Best margin: WETH/USDT at `-42.25 bps` (from spread_signals)
+- Rolling updated: runs_in_window=36
+
+**Tests**: 1337 passed (10 new: pool_resolver chain-scoped + inspect_run_dir regression)
 
 ## 0) Meta
-timestamp_utc: 2026-03-04T13:42:17Z
-run_id: data/runs/ci_m5_gate_20260304_134217
-mode: ONLINE (v3.2.15: lowfee config + cost breakdown)
+timestamp_utc: 2026-03-04T14:25:17Z
+run_id: data/runs/ci_m5_gate_20260304_142504
+mode: ONLINE (v3.2.16: pool_resolver chain-scoped + inspect_run_dir fix + pancakeswap_v3)
 artifact_mode: rolling
-config: config/real_roundtrip_probe_lowfee.yaml (arbitrum_one, run_kind=NORMAL, 100/500 tier only)
+config: config/real_roundtrip_probe.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-04T13:42:17Z
+  primary: ts:2026-03-04T14:25:17Z
   dirty: false
-  desc: v3.2.15 lowfee probe + cost breakdown RCA
+  desc: v3.2.16 pool_resolver chain-scoped + inspect_run_dir source fix + pancakeswap_v3
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M4.2 roundtrip viability - enable profit truth via low-fee pairs
+goal (Roadmap пункт): M4.2 roundtrip viability - fix inspect_run_dir source bug + chain-scoped caches
 change_summary:
-  - ADD: config/real_roundtrip_probe_lowfee.yaml (100/500 tier only, no 3000)
-  - UPD: scripts/inspect_run_dir.py (cost breakdown: gas_bps, lp_fee, slip, safety)
-  - UPD: strategy/jobs/run_scan_real.py (copy cost breakdown to top_opportunities)
-  - ADD: tests/unit/test_inspect_run_dir.py (2 new tests: roundtrip_lp_filter_extended_fields, cost_breakdown)
-  - DOC: Status_M4.md M4.2 Economics Gap section added
-  - TESTS: 1326 passed
+  - FIX: scripts/inspect_run_dir.py (use spread_signals not top_opportunities for best margin)
+  - FIX: discovery/pool_resolver.py (chain-scoped cache paths)
+  - ADD: config/dexes.yaml (pancakeswap_v3 for arbitrum_one)
+  - ADD: tests/unit/test_inspect_run_dir.py (regression test: margin vs profit)
+  - ADD: tests/unit/test_pool_resolver.py (8 chain-scoped tests)
+  - ADD: tests/unit/test_chain_scoped_cache.py (2 pool_resolver tests)
+  - UPD: discovery/runtime.py (pass chain_key to resolver)
+  - TESTS: 1337 passed
 touched_files:
-  - config/real_roundtrip_probe_lowfee.yaml (NEW)
-  - scripts/inspect_run_dir.py (cost breakdown)
-  - strategy/jobs/run_scan_real.py (copy cost fields)
-  - tests/unit/test_inspect_run_dir.py (2 new tests)
-  - docs/status/Status_M4.md (economics gap section)
+  - scripts/inspect_run_dir.py (source fix: spread_signals)
+  - discovery/pool_resolver.py (chain-scoped cache)
+  - discovery/runtime.py (chain_key param)
+  - config/dexes.yaml (pancakeswap_v3)
+  - tests/unit/test_pool_resolver.py (8 new tests)
+  - tests/unit/test_inspect_run_dir.py (1 new regression test)
+  - tests/unit/test_chain_scoped_cache.py (2 new tests)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 scripts/check_repo_safety.py: RESULT: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: 1326 passed, 1 skipped
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_roundtrip_probe_lowfee.yaml --cycles 1: FAIL (pairs_count=4 < 5)
-py -3.11 scripts/inspect_run_dir.py --run-dir data/runs/ci_m5_gate_20260304_134217 --json: cost breakdown populated
+py -3.11 -m pytest tests/unit -q: 1337 passed, 1 skipped
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_roundtrip_probe.yaml --cycles 1 --refresh-rolling --refresh-rolling-strict: PASS
+py -3.11 scripts/inspect_run_dir.py --json: best_spread_economics from spread_signals (source field populated)
+py -3.11 scripts/inspect_rolling.py --json: runs_in_window=36, run_dir_name=ci_m5_gate_20260304_142504
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -79,24 +83,25 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260304_134217/reports (arbitrum_one, run_kind=NORMAL, lowfee config)
+  - data/runs/ci_m5_gate_20260304_142504/reports (arbitrum_one, run_kind=NORMAL, v3.2.16 control run)
 probe_config:
-  - config/real_roundtrip_probe_lowfee.yaml (paper_size_usd=250, min_spread_bps=1, 100/500 tier)
-evidence (lowfee run):
-  - pairs_count: 4 (wstETH/WETH, WETH/USDC, WETH/USDT, WBTC/USDC)
-  - spread_signals_count: 4
+  - config/real_roundtrip_probe.yaml (paper_size_usd=100, min_spread_bps=5)
+evidence (control run v3.2.16):
+  - pairs_count: 7 (WETH/USDC, WETH/USDT, WBTC/WETH, ARB/WETH, LINK/WETH, wstETH/WETH, WBTC/USDC)
+  - quotes_fetched: 18
+  - spread_signals_count: 5
   - roundtrip_lp_filter.passed_to_roundtrip: 0
   - roundtrip_lp_filter.margin_filtered_count: 2
   - roundtrip_lp_filter.unique_pairs_considered: 2
   - profit_is_diagnostic: true
-cost_breakdown (wstETH/WETH 100-tier):
-  - lp_fee_bps_roundtrip: 2 (1+1 from 100 tier)
-  - effective_slippage_bps: 5 (paper)
-  - gas_bps: 4 (computed: 0.10/250*10000)
-  - safety_bps: 2 (fixed)
-  - min_required_spread_bps: 13
-  - spread_bps: 1
-  - spread_minus_required_bps: -11.25 (closest to viability!)
+best_spread_economics (WETH/USDT):
+  - lp_fee_bps_roundtrip: 10 (500 tier)
+  - effective_slippage_bps: 46.87 (measured)
+  - gas_bps: 10.0
+  - safety_bps: 2.0
+  - min_required_spread_bps: 68.87
+  - spread_bps: 26
+  - spread_minus_required_bps: -42.25
 
 ## 4) Key Results (числа з артефактів)
 
@@ -107,40 +112,40 @@ _latest.json:
   agg_reasons: []
   quality_warnings: ['MIXED_CHAIN_KEYS(arbitrum_one,linea)']
   chain_keys: ['arbitrum_one', 'linea']
-  data_run_rate: 0.7941
-  runs_in_window: 34
+  data_run_rate: 0.8056
+  runs_in_window: 36
   in_warmup: false
-  effective_pass_rate: 0.7941
-  run_context.run_dir_name: ci_m5_gate_20260304_121344
+  effective_pass_rate: 0.8056
+  run_context.run_dir_name: ci_m5_gate_20260304_142504
   inputs.chain_key: arbitrum_one
   inputs.run_kind: NORMAL
-  inputs.config_path: config/real_minimal.yaml (POSIX)
+  inputs.config_path: config/real_roundtrip_probe.yaml (POSIX)
 
-run_summary_latest.json (ci_m5_gate_20260304_121344):
+run_summary_latest.json (ci_m5_gate_20260304_142504):
   schema_version: m4:run_summary:v2.0
   status: PASS
   profit_status: PASS
   drift_status: PASS
-  quality_status: PASS
-  quality_reasons: []
-  run_context.run_timestamp: 2026-03-04T11:13:58Z
+  quality_status: WARN
+  quality_reasons: ['WARN_CRITICAL_REJECTS', 'WARN_TOP_PAIR_DOMINANCE', 'WARN_PROFIT_DIAGNOSTIC']
+  run_context.run_timestamp: 2026-03-04T13:25:17Z
   run_kind: NORMAL
   inputs.run_mode: REGISTRY_REAL
   inputs.chain_key: arbitrum_one
   inputs.chain_id: 42161
   metrics:
-    signals_count: 4
-    total_net_usdc: 6.54
+    signals_count: 5
+    total_net_usdc: 0.78
 
 m4_stability_agg.json (quick_stats):
-  runs_in_window: 31
+  runs_in_window: 36
   agg_status: PASS
   pass_rate: 1.0
-  data_run_rate: 0.7742
+  data_run_rate: 0.8056
   fragile_rate_p90: 0.0
   unique_pairs: 5
   unique_routes_cross_dex: 2
-  total_net_usdc: 87.50
+  total_net_usdc: 106.68
   chain_key: MIXED (historical linea runs in window)
   chain_keys: ['arbitrum_one', 'linea']
 
@@ -195,16 +200,16 @@ m4_stability_agg.json (quick_stats):
 ## 6) Roundtrip Status (current run)
 
 roundtrip_summary:
-  spread_signals: 4
-  threshold_bps: 10
+  spread_signals: 5
+  threshold_bps: 5
   pairs: WETH/USDT, WBTC/WETH, ARB/WETH, WBTC/USDC
 
 Analysis:
   - 18 valid quotes fetched from 7 pairs
-  - 4 spread signals passed 10bps threshold
-  - Best spread: ARB/WETH 157.98bps (sushiswap_v3->uniswap_v3)
-  - PASS status with positive PnL: total_net_usdc=6.54
-  - Aggregate maintains: agg_status=PASS, pass_rate=1.0, runs_in_window=31
+  - 5 spread signals passed 5bps threshold
+  - Best spread: ARB/WETH 74.41bps (sushiswap_v3->uniswap_v3)
+  - PASS status with positive PnL: total_net_usdc=0.78
+  - Aggregate maintains: agg_status=PASS, pass_rate=1.0, runs_in_window=36
 
 ## 7) Rolling Window Final State
 
@@ -213,9 +218,9 @@ Analysis:
 | agg_status | PASS | != FAIL | OK |
 | agg_reasons | [] | - | OK |
 | quality_warnings | ['MIXED_CHAIN_KEYS'] | - | OK (historical, will age out) |
-| runs_in_window | 31 | >= 5 | OK |
+| runs_in_window | 36 | >= 5 | OK |
 | pass_rate | 1.0 | >= 0.8 | OK |
-| data_run_rate | 0.7742 | >= 0.3 | OK |
+| data_run_rate | 0.8056 | >= 0.3 | OK |
 | fragile_rate_p90 | 0.0 | <= 0.5 | OK |
 | unique_pairs | 5 | >= 3 | OK |
 | unique_routes_cross_dex | 2 | >= 2 | OK |

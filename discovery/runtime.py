@@ -163,7 +163,7 @@ def resolve_runtime_pairs(
     # Get intent universe
     universe = get_intent_universe()
     registry = get_token_registry()
-    resolver = get_pool_resolver()
+    resolver = get_pool_resolver(chain)  # v3.2.16: Chain-scoped cache
     
     # Get pairs for chain
     intent_pairs = universe.get_pairs_for_chain(chain)

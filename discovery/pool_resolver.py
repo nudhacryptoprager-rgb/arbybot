@@ -24,7 +24,7 @@ TODO:
     - Add negative cache TTL for eventual re-query
 
 Usage:
-    resolver = get_pool_resolver()
+    resolver = get_pool_resolver("arbitrum_one")  # v3.2.16: chain-scoped
     pool = resolver.resolve("arbitrum_one", "uniswap_v3", "WETH", "USDC", 500)
 """
 
@@ -37,14 +37,38 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("discovery.pool_resolver")
 
-# Cache file path
-CACHE_PATH = Path("data/cache/pool_resolver_cache.json")
+# Legacy cache file path (use _get_cache_path() for chain-scoped)
+CACHE_PATH_LEGACY = Path("data/cache/pool_resolver_cache.json")
+# v3.2.16: Backwards compatibility alias
+CACHE_PATH = CACHE_PATH_LEGACY
 
 # Negative cache sentinel
 NULL_POOL = "__NULL__"
 
 # Guardrail: Max RPC calls per session (to prevent runaway queries)
 MAX_RPC_CALLS_PER_SESSION = int(os.environ.get("ARBY_RESOLVER_MAX_RPC_CALLS", "50"))
+
+
+# v3.2.16: Chain-scoped path helper
+def _get_cache_path(chain_key: str | None = None) -> Path:
+    """Get chain-scoped pool resolver cache path.
+    
+    v3.2.16: Chain-scoped paths to prevent arbitrum_one <-> linea pollution.
+    
+    Args:
+        chain_key: Chain identifier (e.g., "arbitrum_one", "linea")
+        
+    Returns:
+        Path to chain-scoped cache file, or legacy path if no chain_key
+    """
+    if chain_key and chain_key != "unknown":
+        return Path(f"data/cache/pool_resolver_cache_{chain_key}.json")
+    # Legacy path for backwards compatibility
+    logger.warning(
+        "LEGACY_CACHE_PATH: pool_resolver using legacy path (chain_key=%s)",
+        chain_key,
+    )
+    return CACHE_PATH_LEGACY
 
 
 @dataclass
@@ -65,12 +89,19 @@ class PoolResolver:
     Resolves intent pairs to pool addresses via factory.getPool().
     
     Caches results to minimize RPC calls.
+    
+    v3.2.16: Chain-scoped caching to prevent cross-chain pollution.
     """
     _cache: Dict[str, str] = field(default_factory=dict)
     _stats: ResolverStats = field(default_factory=ResolverStats)
     _dirty: bool = False
+    _chain_key: str | None = None
+    _cache_path: Path | None = None
     
     def __post_init__(self):
+        # v3.2.16: Use chain-scoped path if chain_key provided
+        if self._cache_path is None:
+            self._cache_path = _get_cache_path(self._chain_key)
         self._load_cache()
     
     def _cache_key(
@@ -89,14 +120,15 @@ class PoolResolver:
     
     def _load_cache(self) -> None:
         """Load cache from disk."""
-        if CACHE_PATH.exists():
+        cache_path = self._cache_path or CACHE_PATH_LEGACY
+        if cache_path.exists():
             try:
-                with open(CACHE_PATH, "r") as f:
+                with open(cache_path, "r") as f:
                     data = json.load(f)
                     self._cache = data.get("pools", {})
-                    logger.info("Loaded %d cached pools", len(self._cache))
+                    logger.info("Loaded %d cached pools from %s", len(self._cache), cache_path)
             except Exception as e:
-                logger.warning("Failed to load pool cache: %s", e)
+                logger.warning("Failed to load pool cache from %s: %s", cache_path, e)
                 self._cache = {}
         else:
             self._cache = {}
@@ -106,11 +138,13 @@ class PoolResolver:
         if not self._dirty:
             return
         
+        cache_path = self._cache_path or CACHE_PATH_LEGACY
         try:
-            CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(CACHE_PATH, "w") as f:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "w") as f:
                 json.dump({
-                    "schema_version": "pool_resolver:v1.0",
+                    "schema_version": "pool_resolver:v1.1",
+                    "chain_key": self._chain_key,
                     "pools": self._cache,
                     "stats": {
                         "total_entries": len(self._cache),
@@ -119,9 +153,9 @@ class PoolResolver:
                     },
                 }, f, indent=2)
             self._dirty = False
-            logger.debug("Saved pool cache (%d entries)", len(self._cache))
+            logger.debug("Saved pool cache (%d entries) to %s", len(self._cache), cache_path)
         except Exception as e:
-            logger.warning("Failed to save pool cache: %s", e)
+            logger.warning("Failed to save pool cache to %s: %s", cache_path, e)
     
     def resolve(
         self,
@@ -271,16 +305,26 @@ class PoolResolver:
         self._save_cache()
 
 
-# Module-level singleton
-_resolver: Optional[PoolResolver] = None
+# v3.2.16: Chain-scoped singletons
+_resolvers: Dict[str, PoolResolver] = {}
 
 
-def get_pool_resolver() -> PoolResolver:
-    """Get the singleton pool resolver."""
-    global _resolver
-    if _resolver is None:
-        _resolver = PoolResolver()
-    return _resolver
+def get_pool_resolver(chain_key: str | None = None) -> PoolResolver:
+    """Get the chain-scoped pool resolver singleton.
+    
+    v3.2.16: Chain-scoped resolvers to prevent cross-chain pollution.
+    
+    Args:
+        chain_key: Chain identifier for scoped caching (e.g., "arbitrum_one")
+        
+    Returns:
+        PoolResolver instance for the specified chain
+    """
+    global _resolvers
+    key = chain_key or "__legacy__"
+    if key not in _resolvers:
+        _resolvers[key] = PoolResolver(_chain_key=chain_key if chain_key else None)
+    return _resolvers[key]
 
 
 def resolve_intent_pool(
@@ -293,6 +337,8 @@ def resolve_intent_pool(
     """
     Convenience function to resolve an intent pair to pool address.
     
-    Uses the singleton resolver with caching.
+    Uses the chain-scoped singleton resolver with caching.
+    
+    v3.2.16: Uses chain parameter for chain-scoped caching.
     """
-    return get_pool_resolver().resolve(chain, dex, symbol_a, symbol_b, fee)
+    return get_pool_resolver(chain).resolve(chain, dex, symbol_a, symbol_b, fee)

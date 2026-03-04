@@ -143,37 +143,40 @@ def inspect_run_dir(run_dir: Path) -> dict:
             "one_leg_profit_is_diagnostic": opp_engine.get("one_leg_profit_is_diagnostic", False),
         }
         
-        # v3.2.14: best_spread_minus_required_bps for "0 passed_to_roundtrip" RCA
-        # Source: truth_report.stats.opportunity_engine.top_opportunities[0]
-        top_opps = opp_engine.get("top_opportunities", [])
-        best_opp = None
+        # v3.2.16: best_spread_economics for "0 passed_to_roundtrip" RCA
+        # Source: truth_report.spread_signals (NOT top_opportunities!)
+        # Reason: top_opportunities is profit-ranked, but RCA needs margin-ranked (closest to viability)
+        spread_signals = truth.get("spread_signals", [])
+        best_signal = None
         best_margin = -999.0
-        for opp in top_opps:
-            margin = opp.get("spread_minus_required_bps")
+        for sig in spread_signals:
+            margin = sig.get("spread_minus_required_bps")
             if margin is not None and margin > best_margin:
                 best_margin = margin
-                best_opp = opp
+                best_signal = sig
         
-        if best_opp:
+        if best_signal:
             # v3.2.15: Compute gas_bps if gas_usd and size_usd available
-            gas_usd = best_opp.get("gas_usd_estimate") or best_opp.get("gas_usd")
-            size_usd = best_opp.get("size_usd") or best_opp.get("paper_size_usd")
+            gas_usd = best_signal.get("gas_usd_estimate") or best_signal.get("gas_usd")
+            size_usd = best_signal.get("size_usd") or best_signal.get("paper_size_usd")
             computed_gas_bps = None
             if gas_usd is not None and size_usd and size_usd > 0:
                 computed_gas_bps = round((gas_usd / size_usd) * 10000, 2)
             
             result["best_spread_economics"] = {
-                "spread_minus_required_bps": best_opp.get("spread_minus_required_bps"),
-                "spread_bps": best_opp.get("spread_bps"),
-                "min_required_spread_bps": best_opp.get("min_required_spread_bps"),
-                "pair": best_opp.get("pair"),
-                "route": best_opp.get("route"),
-                "is_roundtrip_viable": best_opp.get("is_roundtrip_viable", False),
-                # v3.2.15: Cost breakdown fields for RCA (populated from spread_signal)
-                "gas_bps": best_opp.get("gas_bps") or computed_gas_bps,
-                "lp_fee_bps_roundtrip": best_opp.get("lp_fee_bps_roundtrip"),
-                "effective_slippage_bps": best_opp.get("effective_slippage_bps"),
-                "safety_bps": best_opp.get("safety_bps", 2.0),  # Default from min_required formula
+                "spread_minus_required_bps": best_signal.get("spread_minus_required_bps"),
+                "spread_bps": best_signal.get("spread_bps") or best_signal.get("spread_bps_ui"),
+                "min_required_spread_bps": best_signal.get("min_required_spread_bps"),
+                "pair": best_signal.get("pair"),
+                "route": best_signal.get("route"),
+                "is_roundtrip_viable": best_signal.get("is_roundtrip_viable", False),
+                # v3.2.15: Cost breakdown fields for RCA
+                "gas_bps": best_signal.get("gas_bps") or computed_gas_bps,
+                "lp_fee_bps_roundtrip": best_signal.get("lp_fee_bps_roundtrip"),
+                "effective_slippage_bps": best_signal.get("effective_slippage_bps"),
+                "safety_bps": best_signal.get("safety_bps", 2.0),  # Default from min_required formula
+                # v3.2.16: Source tracking for debugging
+                "source": "spread_signals",
             }
         else:
             result["best_spread_economics"] = None

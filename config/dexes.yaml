@@ -24,6 +24,15 @@ arbitrum_one:
     # Camelot V3 quoter - https://arbiscan.io/address/0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E
     quoter: "0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E"
 
+  # v3.2.16: PancakeSwap V3 (adapter_type=uniswap_v3, uses same interfaces)
+  # Verified on Arbiscan: https://arbiscan.io/address/0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865
+  pancakeswap_v3:
+    adapter_type: "uniswap_v3"
+    factory: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"
+    router: "0x32226588378236Fd0c7c4053999F88aC0e5cAc77"
+    quoter_v2: "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997"
+    fee_tiers: [100, 500, 2500, 10000]
+
 base:
   uniswap_v3:
     adapter_type: "uniswap_v3"
