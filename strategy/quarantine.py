@@ -380,9 +380,15 @@ def _get_quarantine_cache_path(chain_key: str | None = None) -> Path:
     """Get chain-scoped quarantine state path.
     
     v3.2.11: Chain-scoped paths to prevent arbitrum_one <-> linea pollution.
+    v3.2.12: WARN log when legacy path used for debug visibility.
     """
     if chain_key and chain_key != "unknown":
         return Path(f"data/cache/quarantine_state_{chain_key}.json")
+    # v3.2.12: Log when falling back to legacy path
+    logger.warning(
+        "LEGACY_CACHE_PATH: quarantine using legacy path (chain_key=%s)",
+        chain_key,
+    )
     return QUARANTINE_CACHE_PATH_LEGACY
 
 

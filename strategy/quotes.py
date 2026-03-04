@@ -568,6 +568,13 @@ def collect_quotes(
     # v3.2.7: Strict chain_key contract - 'unknown' if missing (warning issued in run_scan_real)
     chain_key = config.get("chain", "unknown")
     
+    # v3.2.12: Guardrail - log WARN if chain_key is 'unknown' (misconfig protection)
+    if chain_key == "unknown":
+        logger.warning(
+            "CHAIN_KEY_UNKNOWN: config missing 'chain' field - persistence will use legacy paths. "
+            "For proper chain-scoped caching, set 'chain' in config (e.g., 'arbitrum_one', 'linea')."
+        )
+    
     # v3.2.11: Get chain-scoped managers to prevent cross-chain cache pollution
     # Get quarantine manager for runtime auto-quarantine
     qm = get_quarantine_manager(chain_key=chain_key)

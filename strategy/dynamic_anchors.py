@@ -26,9 +26,15 @@ def _get_anchor_cache_path(chain_key: str | None = None) -> Path:
     """Get chain-scoped dynamic anchors cache path.
     
     v3.2.11: Chain-scoped paths to prevent arbitrum_one <-> linea pollution.
+    v3.2.12: WARN log when legacy path used for debug visibility.
     """
     if chain_key and chain_key != "unknown":
         return Path(f"data/cache/dynamic_anchors_{chain_key}.json")
+    # v3.2.12: Log when falling back to legacy path
+    logger.warning(
+        "LEGACY_CACHE_PATH: dynamic_anchors using legacy path (chain_key=%s)",
+        chain_key,
+    )
     return DEFAULT_CACHE_PATH
 
 # v2.3.0: Configurable TTL and sample settings

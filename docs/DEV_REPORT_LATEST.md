@@ -4,45 +4,45 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-04T09:00:08Z
-run_id: data/runs/ci_m5_gate_20260304_095954
-mode: ONLINE (v3.2.11: chain-scoped persistence wired into runtime)
+timestamp_utc: 2026-03-04T11:13:58Z
+run_id: data/runs/ci_m5_gate_20260304_121344
+mode: ONLINE (v3.2.12: test cache isolation + COVERAGE policy fix)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-04T09:00:08.990091Z
+  primary: ts:2026-03-04T11:13:58.916590Z
   dirty: false
-  desc: v3.2.11 chain-scoped cache wired-in + validate_universe run_kind gating
+  desc: v3.2.12 test cache isolation (no writes to data/cache during pytest)
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Chain-scoped persistence wired into runtime pipeline
+goal (Roadmap пункт): Chain-scoped persistence test isolation + COVERAGE policy
 change_summary:
-  - WIRE: quotes.py now initializes chain-scoped managers (quarantine, anchors, runtime_disabled)
-  - WIRE: artifacts.py uses chain_key for quarantine_stats
-  - WIRE: infra.py uses chain_key for dynamic_anchors stats
-  - WIRE: run_scan_real.py flushes with chain_key parameter
-  - FIX: validate_universe.py run_kind-aware gating (<2 DEX = FAIL only for NORMAL, WARN for SMOKE)
-  - FIX: validate_universe.py pairs_count==0 = FAIL for NORMAL runs
-  - ADD: tests/unit/test_chain_scoped_cache.py (20 tests: path suffix, legacy fallback, chain switch)
-  - FIX: test_quoter_canonical.py fixture monkeypatches cache paths to avoid stale data pollution
-  - TESTS: 1306 passed (includes 20 new chain-scoped cache tests)
+  - ADD: tests/conftest.py autouse fixture to redirect all cache paths to tmp_path
+  - FIX: test_chain_scoped_cache.py uses tmp_path (no more pollution of data/cache/)
+  - FIX: runtime_disabled/quarantine/anchors log WARN when using legacy path
+  - FIX: quotes.py logs WARN when chain_key='unknown' (misconfig detection)
+  - FIX: validate_universe.py treats COVERAGE same as NORMAL (strict gating)
+  - ADD: tests/unit/test_validate_universe.py (8 tests: run_kind gating)
+  - TESTS: 1317 passed (31 chain-scoped + 8 validate_universe)
 touched_files:
-  - strategy/quotes.py (get_quarantine_manager/get_anchor_manager/get_runtime_disabled_manager with chain_key)
-  - strategy/artifacts.py (quarantine_stats chain-scoped)
-  - strategy/infra.py (anchor_stats chain-scoped)
-  - strategy/jobs/run_scan_real.py (flush with chain_key)
-  - scripts/validate_universe.py (run_kind-aware viability gating)
-  - tests/unit/test_chain_scoped_cache.py (new file, 20 tests)
-  - tests/unit/test_quoter_canonical.py (mock_env fixture updated)
+  - tests/conftest.py (autouse cache isolation fixture)
+  - tests/unit/test_chain_scoped_cache.py (tmp_path isolation + content assertions)
+  - tests/unit/test_validate_universe.py (new file, 8 tests)
+  - strategy/dynamic_anchors.py (LEGACY_CACHE_PATH WARN log)
+  - strategy/quarantine.py (LEGACY_CACHE_PATH WARN log)
+  - strategy/runtime_disabled.py (LEGACY_CACHE_PATH WARN log)
+  - strategy/quotes.py (CHAIN_KEY_UNKNOWN WARN log)
+  - scripts/validate_universe.py (COVERAGE strict gating)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1306 passed, 1 skipped
+py -3.11 -m pytest tests/unit -q: 1317 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
-py -3.11 scripts/check_repo_safety.py: RESULT: PASS (0 warnings after docs update)
-py -3.11 scripts/inspect_run_dir.py --json: opportunity_engine.total=11, quality_reasons=['WARN_PROFIT_DIAGNOSTIC']
-py -3.11 scripts/inspect_rolling.py --json: agg_status=PASS, runs_in_window=32, chain_keys=['arbitrum_one','linea']
+py -3.11 scripts/check_repo_safety.py: RESULT: PASS (0 warnings)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1 --strict: PASS
+py -3.11 scripts/inspect_run_dir.py --json: opportunity_engine.total=11, quality_reasons=['WARN_TOP_PAIR_DOMINANCE', 'WARN_PROFIT_DIAGNOSTIC']
+py -3.11 scripts/inspect_rolling.py --json: agg_status=PASS, runs_in_window=33, chain_keys=['arbitrum_one','linea']
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -50,24 +50,24 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260304_095954/reports (arbitrum_one, run_kind=NORMAL)
+  - data/runs/ci_m5_gate_20260304_121344/reports (arbitrum_one, run_kind=NORMAL)
 chain_scoped_cache_files:
   - data/cache/quarantine_state_{chain_key}.json
   - data/cache/runtime_disabled_pools_{chain_key}.json
   - data/cache/dynamic_anchors_{chain_key}.json
 evidence:
-  - runs_in_window: 32
+  - runs_in_window: 33
   - agg_status: PASS
-  - data_run_rate: 0.7812
-  - total_net_usdc: 94.1064
+  - data_run_rate: 0.7879
+  - total_net_usdc: 103.8238
   - chain_keys: ['arbitrum_one', 'linea']
   - window_chain_key: MIXED
   - latest_chain_key: arbitrum_one
   - quality_status: WARN
-  - quality_reasons: ['WARN_PROFIT_DIAGNOSTIC']
+  - quality_reasons: ['WARN_TOP_PAIR_DOMINANCE', 'WARN_PROFIT_DIAGNOSTIC']
   - opportunity_engine.total: 11
   - opportunity_engine.profitable: 9
-  - opportunity_engine.gated: 7
+  - opportunity_engine.gated: 6
   - one_leg_profit_is_diagnostic: true
 
 ## 4) Key Results (числа з артефактів)
@@ -79,23 +79,23 @@ _latest.json:
   agg_reasons: []
   quality_warnings: ['MIXED_CHAIN_KEYS(arbitrum_one,linea)']
   chain_keys: ['arbitrum_one', 'linea']
-  data_run_rate: 0.7812
-  runs_in_window: 32
+  data_run_rate: 0.7879
+  runs_in_window: 33
   in_warmup: false
-  effective_pass_rate: 0.7812
-  run_context.run_dir_name: ci_m5_gate_20260304_095954
+  effective_pass_rate: 0.7879
+  run_context.run_dir_name: ci_m5_gate_20260304_121344
   inputs.chain_key: arbitrum_one
   inputs.run_kind: NORMAL
   inputs.config_path: config/real_minimal.yaml (POSIX)
 
-run_summary_latest.json (ci_m5_gate_20260304_095954):
+run_summary_latest.json (ci_m5_gate_20260304_121344):
   schema_version: m4:run_summary:v2.0
   status: PASS
   profit_status: PASS
   drift_status: PASS
   quality_status: PASS
   quality_reasons: []
-  run_context.run_timestamp: 2026-03-04T08:35:45Z
+  run_context.run_timestamp: 2026-03-04T11:13:58Z
   run_kind: NORMAL
   inputs.run_mode: REGISTRY_REAL
   inputs.chain_key: arbitrum_one

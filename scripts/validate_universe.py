@@ -146,15 +146,16 @@ def validate_universe(config_path: Path) -> dict:
     result["summary"]["run_kind"] = run_kind
     
     # 5. Check for potential issues
-    # v3.2.11: run_kind-aware viability gating
-    # - NORMAL runs: FAIL on misconfig (prevents NO_DATA/LOW_SAMPLE)
+    # v3.2.12: run_kind-aware viability gating
+    # - NORMAL/COVERAGE runs: FAIL on misconfig (prevents NO_DATA/LOW_SAMPLE)
     # - SMOKE/other: WARN only (allow special test configs)
-    is_normal_run = (run_kind == "NORMAL")
+    strict_run_kinds = ("NORMAL", "COVERAGE")
+    is_strict_run = (run_kind in strict_run_kinds)
     
     # v3.2.11 FIX: require_cross_dex=true with <2 DEX
     # Cross-DEX arbitrage requires at least 2 DEXes to function
     if len(dexes) < 2 and config.get("require_cross_dex", True):
-        if is_normal_run:
+        if is_strict_run:
             result["errors"].append(
                 "VIABILITY_FAIL: require_cross_dex=true but <2 DEXes configured - "
                 "cross-DEX arbitrage not possible"
@@ -164,9 +165,9 @@ def validate_universe(config_path: Path) -> dict:
                 f"require_cross_dex=true but <2 DEXes (run_kind={run_kind}, allowed as warning)"
             )
     
-    # v3.2.11: pairs_count==0 is a FAIL for NORMAL runs (misconfig)
+    # v3.2.11: pairs_count==0 is a FAIL for strict runs (misconfig)
     if not pairs:
-        if is_normal_run:
+        if is_strict_run:
             result["errors"].append(
                 "VIABILITY_FAIL: no pairs configured - cannot generate quotes"
             )
