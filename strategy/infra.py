@@ -359,9 +359,11 @@ def build_infra_payload(
         logger.debug("Provider stats unavailable: %s", e)
     
     # v2.2.0: Add dynamic anchor stats
+    # v3.2.11: chain_key from config for chain-scoped anchor stats
     try:
         from strategy.dynamic_anchors import get_anchor_manager
-        am = get_anchor_manager()
+        chain_key = config.get("chain") if config else None
+        am = get_anchor_manager(chain_key=chain_key)
         anchor_stats = am.get_stats()
         if anchor_stats.get("total_pairs", 0) > 0:
             payload["dynamic_anchors"] = anchor_stats

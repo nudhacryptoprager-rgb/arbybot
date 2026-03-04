@@ -387,7 +387,8 @@ def build_reject_data(
         # v2.6.2: Per-reason top pool keys for observability (quarantine/debug)
         "reason_keys_top": reason_keys_top,
         "price_sanity_samples": price_sanity_samples,
-        "quarantine_stats": get_quarantine_manager().to_dict(),
+        # v3.2.11: chain_key from config for chain-scoped quarantine stats
+        "quarantine_stats": get_quarantine_manager(config.get("chain")).to_dict(),
         "infra": infra_payload,
     }
 

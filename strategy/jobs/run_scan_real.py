@@ -985,14 +985,15 @@ def run_scan(
     
     # v2.2.0: Flush quarantine and dynamic anchors state to disk
     # v2.3.1: Only flush anchors when running with live RPC to avoid polluting cache with stale/synthetic data
+    # v3.2.11: Chain-scoped flush - pass chain_key to persist to correct cache file
     try:
         from strategy.quarantine import flush_quarantine_manager
         from strategy.dynamic_anchors import get_anchor_manager
         
-        flush_quarantine_manager()
+        flush_quarantine_manager(chain_key=chain_key)
         if w3_instance is not None:
-            get_anchor_manager().flush()
-            logger.debug("Quarantine and dynamic anchors state flushed to disk")
+            get_anchor_manager(chain_key=chain_key).flush()
+            logger.debug("Quarantine and dynamic anchors state flushed to disk (chain_key=%s)", chain_key)
         else:
             logger.debug("Quarantine flushed; anchors skipped (no live RPC)")
     except Exception as flush_err:

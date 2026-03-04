@@ -565,20 +565,23 @@ def collect_quotes(
     # v2.3.1: Track pool_missing_keys for observability (what pools were skipped)
     pool_missing_keys: List[str] = []
     
+    # v3.2.7: Strict chain_key contract - 'unknown' if missing (warning issued in run_scan_real)
+    chain_key = config.get("chain", "unknown")
+    
+    # v3.2.11: Get chain-scoped managers to prevent cross-chain cache pollution
     # Get quarantine manager for runtime auto-quarantine
-    qm = get_quarantine_manager()
+    qm = get_quarantine_manager(chain_key=chain_key)
     
     # Get dynamic anchor manager
-    am = get_anchor_manager()
+    am = get_anchor_manager(chain_key=chain_key)
+    
+    # v3.2.11: Get runtime disabled manager with chain scope
+    from strategy.runtime_disabled import get_runtime_disabled_manager
+    get_runtime_disabled_manager(chain_key=chain_key)  # Initialize chain-scoped singleton
     
     dexes_list = config.get("dexes") or []
     pools_cfg = config.get("pools", {}) or {}
     token_addresses = config.get("tokens", {}) or {}
-    
-    # Load pairs from config or use pre-resolved pairs
-    # v2.6.0: Allow passing pre-resolved pairs for discovery_runtime mode
-    # v3.2.7: Strict chain_key contract - 'unknown' if missing (warning issued in run_scan_real)
-    chain_key = config.get("chain", "unknown")
     if pairs_list is None:
         # v2.3.1 FIX: Respect universe_source from config
         universe_source = config.get("universe_source", "config")

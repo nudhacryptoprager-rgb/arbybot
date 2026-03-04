@@ -141,16 +141,37 @@ def validate_universe(config_path: Path) -> dict:
     result["summary"]["unique_pairs"] = list(sorted(unique_pairs))
     result["summary"]["unique_pairs_count"] = len(unique_pairs)
     
+    # Check run_kind (SMOKE runs won't update rolling)
+    run_kind = config.get("run_kind", "NORMAL")
+    result["summary"]["run_kind"] = run_kind
+    
     # 5. Check for potential issues
-    # v3.2.11 FIX: require_cross_dex=true with <2 DEX is a FAIL (viability gate)
+    # v3.2.11: run_kind-aware viability gating
+    # - NORMAL runs: FAIL on misconfig (prevents NO_DATA/LOW_SAMPLE)
+    # - SMOKE/other: WARN only (allow special test configs)
+    is_normal_run = (run_kind == "NORMAL")
+    
+    # v3.2.11 FIX: require_cross_dex=true with <2 DEX
     # Cross-DEX arbitrage requires at least 2 DEXes to function
     if len(dexes) < 2 and config.get("require_cross_dex", True):
-        result["errors"].append(
-            "VIABILITY_FAIL: require_cross_dex=true but <2 DEXes configured - "
-            "cross-DEX arbitrage not possible"
-        )
+        if is_normal_run:
+            result["errors"].append(
+                "VIABILITY_FAIL: require_cross_dex=true but <2 DEXes configured - "
+                "cross-DEX arbitrage not possible"
+            )
+        else:
+            result["warnings"].append(
+                f"require_cross_dex=true but <2 DEXes (run_kind={run_kind}, allowed as warning)"
+            )
+    
+    # v3.2.11: pairs_count==0 is a FAIL for NORMAL runs (misconfig)
     if not pairs:
-        result["warnings"].append("No pairs configured")
+        if is_normal_run:
+            result["errors"].append(
+                "VIABILITY_FAIL: no pairs configured - cannot generate quotes"
+            )
+        else:
+            result["warnings"].append(f"No pairs configured (run_kind={run_kind})")
     
     # v3.2.10: Check for pool resolution capability (NO_QUOTES prevention)
     # If pairs_count > 0 but dexes is empty, quotes can't be fetched
@@ -173,9 +194,7 @@ def validate_universe(config_path: Path) -> dict:
             "quotes will fail with POOL_MISSING"
         )
     
-    # Check run_kind (SMOKE runs won't update rolling)
-    run_kind = config.get("run_kind", "NORMAL")
-    result["summary"]["run_kind"] = run_kind
+    # Check run_kind for rolling-related warnings
     if run_kind == "SMOKE":
         result["warnings"].append(
             "run_kind=SMOKE: this run will NOT update rolling artifacts (NORM-only policy)"

@@ -16,15 +16,35 @@ class TestQuoterCanonical:
     """Test quoter is canonical source when available."""
     
     @pytest.fixture
-    def mock_env(self, monkeypatch):
+    def mock_env(self, monkeypatch, tmp_path):
         """Set up test environment."""
         monkeypatch.setenv("ARBY_SKIP_RPC", "1")
         monkeypatch.setenv("ARBY_FAKE_BLOCK", "123")
+        
+        # v3.2.11: Monkeypatch cache paths to avoid loading stale data from disk
+        from pathlib import Path
+        fake_cache = tmp_path / "cache"
+        fake_cache.mkdir()
+        monkeypatch.setattr(
+            "strategy.dynamic_anchors._get_anchor_cache_path",
+            lambda chain_key=None: fake_cache / f"dynamic_anchors_{chain_key or 'legacy'}.json"
+        )
+        monkeypatch.setattr(
+            "strategy.quarantine._get_quarantine_cache_path",
+            lambda chain_key=None: fake_cache / f"quarantine_{chain_key or 'legacy'}.json"
+        )
+        monkeypatch.setattr(
+            "strategy.runtime_disabled._get_runtime_disabled_cache_path",
+            lambda chain_key=None: str(fake_cache / f"runtime_disabled_{chain_key or 'legacy'}.json")
+        )
+        
         # v2.2.0: Reset anchor manager to avoid pollution from other tests
         from strategy.dynamic_anchors import reset_anchor_manager
         from strategy.quarantine import reset_quarantine_manager
+        from strategy.runtime_disabled import clear_runtime_disabled_manager
         reset_anchor_manager()
         reset_quarantine_manager()
+        clear_runtime_disabled_manager()
         
     def test_quoter_success_bypasses_slot0(self, mock_env, monkeypatch):
         """When quoter succeeds, slot0 is not even called for that quote."""

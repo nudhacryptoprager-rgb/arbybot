@@ -4,44 +4,45 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-04T10:30:00Z
+timestamp_utc: 2026-03-04T09:00:08Z
 run_id: data/runs/ci_m5_gate_20260304_095954
-mode: ONLINE (v3.2.11: artifact self-sufficiency + chain-scoped persistence)
+mode: ONLINE (v3.2.11: chain-scoped persistence wired into runtime)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-04T10:30:00Z
-  dirty: true
-  desc: v3.2.11 artifact self-sufficiency: inspect_run_dir fixes, chain-scoped cache, viability gate
+  primary: ts:2026-03-04T09:00:08.990091Z
+  dirty: false
+  desc: v3.2.11 chain-scoped cache wired-in + validate_universe run_kind gating
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Artifact self-sufficiency - fix inspector schema mismatch, chain-scoped persistence
+goal (Roadmap пункт): Chain-scoped persistence wired into runtime pipeline
 change_summary:
-  - FIX: inspect_run_dir.py v3.2.11 - opportunity_engine from stats.opportunity_engine.summary.* (was 0/0/0, now 11/9/7)
-  - ADD: quality_reasons to inspect_run_dir output (e.g., WARN_PROFIT_DIAGNOSTIC)
-  - FIX: run_dir_name fallback to run_dir.name when null in run_context
-  - ADD: tests/unit/test_inspect_run_dir.py (3 tests: opportunity_engine parsing, quality_reasons, run_dir_name fallback)
-  - FIX: validate_universe.py viability gate - require_cross_dex=true with <2 DEX = FAIL (not warning)
-  - ADD: Chain-scoped persistence for quarantine.py, runtime_disabled.py, dynamic_anchors.py
-    - New paths: data/cache/{file}_{chain_key}.json (prevents arbitrum_one <-> linea pollution)
-    - Backward compatible: no chain_key = legacy path
-  - FIX: Status_M4.md - "PROVEN profit" → "DIAGNOSTIC profit" (one_leg_profit_is_diagnostic=true)
-  - TESTS: 1286 passed (includes 3 new inspect_run_dir tests)
+  - WIRE: quotes.py now initializes chain-scoped managers (quarantine, anchors, runtime_disabled)
+  - WIRE: artifacts.py uses chain_key for quarantine_stats
+  - WIRE: infra.py uses chain_key for dynamic_anchors stats
+  - WIRE: run_scan_real.py flushes with chain_key parameter
+  - FIX: validate_universe.py run_kind-aware gating (<2 DEX = FAIL only for NORMAL, WARN for SMOKE)
+  - FIX: validate_universe.py pairs_count==0 = FAIL for NORMAL runs
+  - ADD: tests/unit/test_chain_scoped_cache.py (20 tests: path suffix, legacy fallback, chain switch)
+  - FIX: test_quoter_canonical.py fixture monkeypatches cache paths to avoid stale data pollution
+  - TESTS: 1306 passed (includes 20 new chain-scoped cache tests)
 touched_files:
-  - scripts/inspect_run_dir.py (v3.2.11 - opportunity_engine.summary fix, quality_reasons, run_dir_name fallback)
-  - scripts/validate_universe.py (viability gate: <2 DEX = FAIL)
-  - strategy/quarantine.py (chain-scoped persistence: _get_quarantine_cache_path)
-  - strategy/runtime_disabled.py (chain-scoped persistence: _get_runtime_disabled_cache_path)
-  - strategy/dynamic_anchors.py (chain-scoped persistence: _get_anchor_cache_path)
-  - tests/unit/test_inspect_run_dir.py (new file)
-  - docs/status/Status_M4.md (PROVEN → DIAGNOSTIC clarification)
+  - strategy/quotes.py (get_quarantine_manager/get_anchor_manager/get_runtime_disabled_manager with chain_key)
+  - strategy/artifacts.py (quarantine_stats chain-scoped)
+  - strategy/infra.py (anchor_stats chain-scoped)
+  - strategy/jobs/run_scan_real.py (flush with chain_key)
+  - scripts/validate_universe.py (run_kind-aware viability gating)
+  - tests/unit/test_chain_scoped_cache.py (new file, 20 tests)
+  - tests/unit/test_quoter_canonical.py (mock_env fixture updated)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1286 passed, 1 skipped
+py -3.11 -m pytest tests/unit -q: 1306 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
-py -3.11 scripts/inspect_run_dir.py --json: opportunity_engine.total=11 (was 0), quality_reasons=['WARN_PROFIT_DIAGNOSTIC']
+py -3.11 scripts/check_repo_safety.py: RESULT: PASS (0 warnings after docs update)
+py -3.11 scripts/inspect_run_dir.py --json: opportunity_engine.total=11, quality_reasons=['WARN_PROFIT_DIAGNOSTIC']
+py -3.11 scripts/inspect_rolling.py --json: agg_status=PASS, runs_in_window=32, chain_keys=['arbitrum_one','linea']
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -50,18 +51,24 @@ rolling:
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
   - data/runs/ci_m5_gate_20260304_095954/reports (arbitrum_one, run_kind=NORMAL)
-v3_2_11_evidence:
+chain_scoped_cache_files:
+  - data/cache/quarantine_state_{chain_key}.json
+  - data/cache/runtime_disabled_pools_{chain_key}.json
+  - data/cache/dynamic_anchors_{chain_key}.json
+evidence:
   - runs_in_window: 32
   - agg_status: PASS
   - data_run_rate: 0.7812
   - total_net_usdc: 94.1064
-  - chain_keys: ['arbitrum_one', 'linea'] (linea historical, displaced at max_runs=200)
-  - window_chain_key: MIXED (historical runs in N-run window)
+  - chain_keys: ['arbitrum_one', 'linea']
+  - window_chain_key: MIXED
   - latest_chain_key: arbitrum_one
-  - _latest.inputs.run_kind: NORMAL (NEW: operational clarity)
-  - inspect_rolling v2.2.0: chain_keys from agg.quick_stats (FIX)
-  - NORM-only rolling: SMOKE and COVERAGE runs excluded
-  - tests: 1283 passed (10 SMOKE/COVERAGE isolation tests)
+  - quality_status: WARN
+  - quality_reasons: ['WARN_PROFIT_DIAGNOSTIC']
+  - opportunity_engine.total: 11
+  - opportunity_engine.profitable: 9
+  - opportunity_engine.gated: 7
+  - one_leg_profit_is_diagnostic: true
 
 ## 4) Key Results (числа з артефактів)
 
@@ -70,7 +77,7 @@ _latest.json:
   run_status: PASS
   agg_status: PASS
   agg_reasons: []
-  quality_warnings: ['MIXED_CHAIN_KEYS(arbitrum_one,linea)'] (N-run window, displaced at max_runs=200)
+  quality_warnings: ['MIXED_CHAIN_KEYS(arbitrum_one,linea)']
   chain_keys: ['arbitrum_one', 'linea']
   data_run_rate: 0.7812
   runs_in_window: 32
