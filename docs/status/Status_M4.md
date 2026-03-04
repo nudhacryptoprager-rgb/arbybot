@@ -6,7 +6,7 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=44, pass_rate=1.0, data_run_rate=0.7273, fragile_rate_p90=0.0. `unique_pairs=7`. Multi-chain evidence: `chain_keys=['arbitrum_one','linea']`.
+> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=45, pass_rate=1.0, data_run_rate=0.7111, fragile_rate_p90=0.0. `unique_pairs=7`. **WARNING**: `MIXED_CHAIN_KEYS(arbitrum_one,linea)` — linea bring-up runs leaked into rolling; see "M4 vs M5_0 Boundary" below.
 
 ## Executor Onboarding Checklist (2026-03-04)
 
@@ -29,6 +29,33 @@
 2. COVERAGE runDir without `run_summary` is invalid evidence
 3. Version strings (`vX.Y.Z`) forbidden in Status files (use dates)
 4. Do NOT reference `setting_timlid.md` (Codex-only)
+
+## M4 vs M5_0 Boundary (2026-03-04)
+
+**Critical distinction**: M4 rolling evidence ≠ M5_0 infra work.
+
+| Scope | M4 (Execution Gate) | M5_0 (Infra Rollout) |
+|-------|---------------------|----------------------|
+| Purpose | Prove stable simulate-only profit | Expand chains, DEX coverage |
+| Rolling | NORMAL only, primary chain | No rolling (COVERAGE/bring-up) |
+| Primary Chain | `arbitrum_one` | Any (bring-up) |
+| Artifacts | `_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json` | runDir bundles only |
+| Evidence | Counted toward M4.1/M4.2 DoD | Not counted |
+
+**Rolling Chain Discipline**:
+- NORMAL+`--refresh-rolling` = `arbitrum_one` ONLY
+- Multi-chain bring-up = COVERAGE mode, NO `--refresh-rolling`
+- `MIXED_CHAIN_KEYS` warning = rolling contamination from non-primary chains
+
+**M4 NOT CLOSED while**:
+- `profit_truth_available=false` (no real execution)
+- `profit_is_diagnostic=true` (paper-only)
+- Any PASS is simulate-only monitoring, not "real profit"
+
+**Multi-chain runs must use**:
+- `run_kind: COVERAGE` (not NORMAL)
+- No `--refresh-rolling` flag
+- Separate runDir analysis (not rolling metrics)
 
 ## Per-DEX Promotion Metrics (2026-03-04)
 

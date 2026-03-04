@@ -92,7 +92,7 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_intent_arbitrum_one.yaml --refresh-rolling: PASS
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml: FAIL (NO_DATA)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml: FAIL (NO_DATA)
-py -3.11 scripts/inspect_rolling.py --json: runs_in_window=45, agg_status=PASS, unique_pairs=7
+py -3.11 scripts/inspect_rolling.py --json: runs_in_window=46, agg_status=PASS, unique_pairs=7, quality_warnings=[MIXED_CHAIN_KEYS(arbitrum_one,linea)]
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -100,7 +100,7 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260304_211447/reports (arbitrum_one, run_kind=NORMAL, v3.2.20)
+  - data/runs/ci_m5_gate_20260304_214251/reports (arbitrum_one, run_kind=NORMAL, v3.2.20)
 intent_configs:
   - config/coverage_intent_arbitrum_one.yaml (arbitrum_one + camelot_v3 for testing)
   - config/real_intent_arbitrum_one.yaml (arbitrum_one - no camelot_v3)
@@ -109,22 +109,23 @@ intent_configs:
   - config/coverage_intent_scroll.yaml (Scroll rollout)
   - config/coverage_intent_zksync.yaml (zkSync rollout)
 evidence (NORMAL rolling run v3.2.20):
-  - run_dir_name: ci_m5_gate_20260304_211447
-  - run_timestamp: 2026-03-04T20:15:44.786838Z
+  - run_dir_name: ci_m5_gate_20260304_214251
+  - run_timestamp: 2026-03-04T20:43:47.692188Z
   - spread_signals: 2
   - quotes_fetched: 42
   - unique_pairs: 7
-  - runs_in_window: 45
+  - runs_in_window: 46
   - agg_status: PASS
-  - data_run_rate: 0.7111
+  - data_run_rate: 0.6957
+  - quality_warnings: [MIXED_CHAIN_KEYS(arbitrum_one,linea)]
 
 ## 4) Key Results (числа з артефактів)
 
 _latest.json:
   schema_version: m4:latest:v2.0
   run_status: PASS
-  run_dir_name: ci_m5_gate_20260304_211447
-  run_timestamp: 2026-03-04T20:15:44.786838Z
+  run_dir_name: ci_m5_gate_20260304_214251
+  run_timestamp: 2026-03-04T20:43:47.692188Z
   metrics:
     signals_count: 2
     signals_included: 1
@@ -152,12 +153,13 @@ run_summary_latest.json:
 
 m4_stability_agg.json:
   agg_status: PASS
-  runs_in_window: 45
+  runs_in_window: 46
   unique_pairs: 7
   unique_routes_cross_dex: 3
-  data_run_rate: 0.7111
-  total_net_usdc: 114.7858
+  data_run_rate: 0.6957
+  total_net_usdc: 115.1317
   window_chain_key: MIXED (arbitrum_one + linea)
+  quality_warnings: [MIXED_CHAIN_KEYS(arbitrum_one,linea)]
 
 ## 5) Per-DEX Health (v3.2.20)
 
@@ -216,12 +218,14 @@ ci_full_pipeline: ALL REQUIRED GATES PASSED
 
 ## 10) Next Steps
 
-1. **Add Linea/Mantle tokens to core_tokens.yaml** - WETH, USDC, etc. for each chain
-2. **Debug pool resolution for lynex_v3/agni_v3** - Check factory calls and fee_tiers
-3. **Monitor sushiswap_v3** - Consider removal from NORMAL if CRITICAL persists
-4. **Roundtrip profitability** - Wait for lower gas or better spreads
+1. **Fix MIXED_CHAIN_KEYS** - Old linea bring-up runs in rolling; will age out naturally or reset rolling
+2. **Add Linea/Mantle tokens to core_tokens.yaml** - WETH, USDC, etc. for each chain
+3. **Debug pool resolution for lynex_v3/agni_v3** - Check factory calls and fee_tiers
+4. **Monitor sushiswap_v3** - Consider removal from NORMAL if CRITICAL persists
+5. **Roundtrip profitability** - Wait for lower gas or better spreads
 
 ---
-*Generated: 2026-03-04T21:15:44Z*
-*Evidence: ci_m5_gate_20260304_211447 (arbitrum_one, NORMAL)*
+*Generated: 2026-03-04T21:44:00Z*
+*Evidence: ci_m5_gate_20260304_214251 (arbitrum_one, NORMAL)*
+*WARNING: MIXED_CHAIN_KEYS(arbitrum_one,linea) - legacy linea runs in rolling window*
 
