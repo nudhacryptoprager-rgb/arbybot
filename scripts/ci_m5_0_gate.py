@@ -48,6 +48,10 @@ load_root_dotenv()
 # Import canonical PRICE_SCALE_BOUNDS from core.constants
 from core.constants import PRICE_SCALE_BOUNDS as CORE_PRICE_SCALE_BOUNDS
 
+# v3.2.21: Primary rolling chain - only this chain can update rolling artifacts
+# This prevents MIXED_CHAIN_KEYS contamination from multi-chain bring-up runs
+PRIMARY_ROLLING_CHAIN = "arbitrum_one"
+
 # Import artifact invariants for unified validation
 from core.artifact_invariants import (
     RunMode,
@@ -1316,6 +1320,15 @@ ENV VARIABLES:
                         print(f"[ONLINE] ERROR: NORM-only rolling policy: only run_kind=NORMAL can update rolling")
                         return 1
                     
+                    # v3.2.21: FAIL if refresh-rolling is requested but chain != PRIMARY_ROLLING_CHAIN
+                    # This prevents MIXED_CHAIN_KEYS contamination from multi-chain bring-up runs
+                    config_chain = cfg_for_run_kind.get("chain", "arbitrum_one")
+                    if args.refresh_rolling and config_chain != PRIMARY_ROLLING_CHAIN:
+                        print(f"[ONLINE] ERROR: --refresh-rolling requested but chain={config_chain}")
+                        print(f"[ONLINE] ERROR: Rolling chain discipline: only chain={PRIMARY_ROLLING_CHAIN} can update rolling")
+                        print(f"[ONLINE] ERROR: Multi-chain bring-up must use COVERAGE mode without --refresh-rolling")
+                        return 1
+                    
                     if run_kind != "NORMAL":
                         # v3.2.17: Warn if user explicitly requested refresh_rolling for non-NORMAL
                         if args.refresh_rolling:
@@ -1446,6 +1459,59 @@ ENV VARIABLES:
                         refresh_rolling_ok = False
                     if args.refresh_rolling_strict:
                         print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate exception")
+            else:
+                # v3.2.21: Generate minimal run_summary for NO_DATA/FAIL runs
+                # This ensures every ONLINE runDir has provenance (run_timestamp) for triage
+                try:
+                    print(f"\n[ONLINE] Generating minimal run_summary for NO_DATA/FAIL run...")
+                    reports_dir = run_dir / "reports"
+                    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    run_summary_path = reports_dir / f"run_summary_{ts}.json"
+                    
+                    # Load truth_report for run_context if available
+                    run_timestamp = datetime.now(timezone.utc).isoformat() + "Z"
+                    no_data_reason = "validation_failed"
+                    chain_key = "unknown"
+                    
+                    truth_files = list(reports_dir.glob("truth_report_*.json"))
+                    if truth_files:
+                        with open(truth_files[0]) as f:
+                            truth_data = json.load(f)
+                        truth_ctx = truth_data.get("run_context", {})
+                        run_timestamp = truth_ctx.get("run_timestamp", run_timestamp)
+                        truth_stats = truth_data.get("stats", {})
+                        no_data_reason = truth_stats.get("no_data_reason", "NO_QUOTES")
+                        chain_key = truth_data.get("chain_key", "unknown")
+                    
+                    run_summary_data = {
+                        "schema_version": "m4:run_summary:v2.0",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "run_context": {
+                            "run_timestamp": run_timestamp,
+                            "run_dir_name": run_dir.name,
+                        },
+                        "status": "NO_DATA",
+                        "profit_status": "NO_DATA",
+                        "drift_status": "NO_DATA",
+                        "quality_status": "NO_DATA",
+                        "reasons": ["NO_DATA"],
+                        "metrics": {
+                            "signals_count": 0,
+                            "included_signals_count": 0,
+                            "total_net_usdc": 0.0,
+                            "no_data_reason": no_data_reason,
+                        },
+                        "inputs": {
+                            "chain_key": chain_key,
+                        },
+                    }
+                    
+                    with open(run_summary_path, "w") as f:
+                        json.dump(run_summary_data, f, indent=2)
+                    
+                    print(f"[ONLINE] Generated minimal: {run_summary_path.name} (NO_DATA)")
+                except Exception as e:
+                    print(f"[ONLINE] WARN: Failed to generate minimal run_summary: {e}")
             
             # v2.1.0: Auto-prune if enabled
             # v2.6.1: Prune on every iteration (not just PASS) to prevent disk fill on RPC/drift failures

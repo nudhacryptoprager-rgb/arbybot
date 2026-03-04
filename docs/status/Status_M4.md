@@ -6,7 +6,7 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=45, pass_rate=1.0, data_run_rate=0.7111, fragile_rate_p90=0.0. `unique_pairs=7`. **WARNING**: `MIXED_CHAIN_KEYS(arbitrum_one,linea)` — linea bring-up runs leaked into rolling; see "M4 vs M5_0 Boundary" below.
+> [!] **ROLLING STABILITY (2026-03-04)**: `agg_status=PASS` achieved. runs_in_window=46, pass_rate=1.0, data_run_rate=0.6957, fragile_rate_p90=0.0. `unique_pairs=7`. **MIXED_CHAIN_KEYS RESOLVED** via `scripts/cleanup_rolling.py` + chain guard in `ci_m5_0_gate.py`. NO_DATA runs now generate minimal `run_summary` for provenance tracking.
 
 ## Executor Onboarding Checklist (2026-03-04)
 

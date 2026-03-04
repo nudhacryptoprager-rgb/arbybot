@@ -263,6 +263,15 @@ def inspect_run_dir(run_dir: Path) -> dict:
         result["status"] = "UNKNOWN (no run_summary)"
         # v3.2.11 FIX: Fallback run_dir_name even without run_summary
         result["run_dir_name"] = run_dir.name
+        
+        # v3.2.21 FIX: Fallback run_timestamp from truth_report.run_context when run_summary missing
+        # This enables provenance tracking for NO_DATA runs without run_summary
+        if truth:
+            truth_run_ctx = truth.get("run_context", {})
+            result["run_timestamp"] = truth_run_ctx.get("run_timestamp")
+        elif scan:
+            scan_run_ctx = scan.get("run_context", {})
+            result["run_timestamp"] = scan_run_ctx.get("run_timestamp")
     
     # Extract rejection reasons from reject_histogram
     if reject:
