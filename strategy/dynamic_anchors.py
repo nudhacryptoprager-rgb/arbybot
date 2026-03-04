@@ -18,8 +18,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("strategy.dynamic_anchors")
 
-# Default cache file location
+# Default cache file location (legacy, use _get_anchor_cache_path() for chain-scoped)
 DEFAULT_CACHE_PATH = Path("data/cache/dynamic_anchors.json")
+
+
+def _get_anchor_cache_path(chain_key: str | None = None) -> Path:
+    """Get chain-scoped dynamic anchors cache path.
+    
+    v3.2.11: Chain-scoped paths to prevent arbitrum_one <-> linea pollution.
+    """
+    if chain_key and chain_key != "unknown":
+        return Path(f"data/cache/dynamic_anchors_{chain_key}.json")
+    return DEFAULT_CACHE_PATH
 
 # v2.3.0: Configurable TTL and sample settings
 # Override via: ARBY_ANCHOR_MAX_AGE_SECONDS, ARBY_ANCHOR_MIN_SAMPLES
@@ -458,24 +468,43 @@ class DynamicAnchorManager:
 
 
 # =============================================================================
-# SINGLETON INSTANCE
+# SINGLETON INSTANCE (v3.2.11: chain-scoped)
 # =============================================================================
 
 _anchor_manager: DynamicAnchorManager | None = None
+_current_chain_key: str | None = None
 
 
-def get_anchor_manager() -> DynamicAnchorManager:
-    """Get the singleton anchor manager."""
-    global _anchor_manager
+def get_anchor_manager(chain_key: str | None = None) -> DynamicAnchorManager:
+    """Get the singleton anchor manager.
+    
+    v3.2.11: chain_key parameter for chain-scoped persistence.
+    If chain_key differs from current, flushes and reloads from new chain's cache.
+    """
+    global _anchor_manager, _current_chain_key
+    
+    # v3.2.11: If switching chains, save current and reload from new chain's cache
+    if chain_key is not None and chain_key != _current_chain_key:
+        if _anchor_manager is not None:
+            # Save current state before switching
+            _anchor_manager.flush()
+            _anchor_manager = None
+        _current_chain_key = chain_key
+    
     if _anchor_manager is None:
-        _anchor_manager = DynamicAnchorManager()
+        cache_path = _get_anchor_cache_path(_current_chain_key)
+        _anchor_manager = DynamicAnchorManager(cache_path=cache_path)
     return _anchor_manager
 
 
 def reset_anchor_manager() -> None:
-    """Reset the singleton (for testing). Does NOT load from cache."""
-    global _anchor_manager
+    """Reset the singleton (for testing). Does NOT load from cache.
+    
+    v3.2.11: Also resets chain_key tracking.
+    """
+    global _anchor_manager, _current_chain_key
     if _anchor_manager is not None:
         _anchor_manager.clear()
     # Create fresh manager without loading cache
     _anchor_manager = DynamicAnchorManager(load_cache=False)
+    _current_chain_key = None

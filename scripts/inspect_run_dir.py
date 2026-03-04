@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # PATH: scripts/inspect_run_dir.py
 """
-RunDir inspection tool (v3.2.9).
+RunDir inspection tool (v3.2.11).
 
 Prints a concise summary of a runDir's scan pipeline:
 - Status and no_data_reason
 - Quotes: total/fetched/rejected
 - Spread signals count
-- Opportunity engine stats
+- Opportunity engine stats (from truth_report.stats.opportunity_engine.summary)
 - Roundtrip evaluation results
 - Top rejection reasons
+- Quality reasons (WARN_PROFIT_DIAGNOSTIC, etc.)
 
 Usage:
     py -3.11 scripts/inspect_run_dir.py [--run-dir <path>] [--json]
@@ -128,12 +129,18 @@ def inspect_run_dir(run_dir: Path) -> dict:
         result["paper_size_usd"] = config_params.get("paper_size_usd")
         result["config_path"] = config_params.get("config_path")
         
-        # Opportunity engine stats
-        opp_stats = stats.get("opportunity_engine", {})
+        # v3.2.11 FIX: Opportunity engine stats from summary sub-object
+        # Contract: truth_report.stats.opportunity_engine.summary.{total_opportunities, profitable_count, gated_count, ...}
+        opp_engine = stats.get("opportunity_engine", {})
+        opp_summary = opp_engine.get("summary", {})
         result["opportunity_engine"] = {
-            "total": opp_stats.get("total", 0),
-            "profitable": opp_stats.get("profitable", 0),
-            "gated": opp_stats.get("gated", 0),
+            "total": opp_summary.get("total_opportunities", 0),
+            "profitable": opp_summary.get("profitable_count", 0),
+            "gated": opp_summary.get("gated_count", 0),
+            # v3.2.11: Additional fields for triage
+            "rejected": opp_summary.get("rejected_count", 0),
+            "best_net_profit_usd": opp_summary.get("best_net_profit_usd"),
+            "one_leg_profit_is_diagnostic": opp_engine.get("one_leg_profit_is_diagnostic", False),
         }
         
         # Roundtrip stats
@@ -154,8 +161,12 @@ def inspect_run_dir(run_dir: Path) -> dict:
         # v3.2.9: Extract run_context for provenance
         run_context = run_summary.get("run_context", {})
         result["run_timestamp"] = run_context.get("run_timestamp")
-        result["run_dir_name"] = run_context.get("run_dir_name")
+        # v3.2.11 FIX: run_dir_name fallback to run_dir.name if not in run_context
+        result["run_dir_name"] = run_context.get("run_dir_name") or run_dir.name
         result["reasons"] = run_summary.get("reasons", [])
+        
+        # v3.2.11: Extract quality_reasons for reviewer triage (e.g., WARN_PROFIT_DIAGNOSTIC)
+        result["quality_reasons"] = run_summary.get("quality_reasons", [])
         
         # Metrics 
         metrics = run_summary.get("metrics", {})
@@ -166,6 +177,8 @@ def inspect_run_dir(run_dir: Path) -> dict:
             result["no_data_reason"] = metrics.get("no_data_reason")
     else:
         result["status"] = "UNKNOWN (no run_summary)"
+        # v3.2.11 FIX: Fallback run_dir_name even without run_summary
+        result["run_dir_name"] = run_dir.name
     
     # Extract rejection reasons from reject_histogram
     if reject:
@@ -200,6 +213,9 @@ def print_summary(info: dict, as_json: bool = False):
     print(f"  profit: {info.get('profit_status', 'N/A')}, drift: {info.get('drift_status', 'N/A')}, quality: {info.get('quality_status', 'N/A')}")
     if info.get("reasons"):
         print(f"  reasons: {info['reasons']}")
+    # v3.2.11: Display quality_reasons for reviewer triage
+    if info.get("quality_reasons"):
+        print(f"  quality_reasons: {info['quality_reasons']}")
     
     # Chain/config section
     print(f"\nCONFIG:")
@@ -223,7 +239,11 @@ def print_summary(info: dict, as_json: bool = False):
     # Opportunity engine
     opp = info.get("opportunity_engine", {})
     print(f"\nOPPORTUNITY ENGINE:")
-    print(f"  total: {opp.get('total', 0)}, profitable: {opp.get('profitable', 0)}, gated: {opp.get('gated', 0)}")
+    print(f"  total: {opp.get('total', 0)}, profitable: {opp.get('profitable', 0)}, gated: {opp.get('gated', 0)}, rejected: {opp.get('rejected', 0)}")
+    if opp.get("best_net_profit_usd") is not None:
+        print(f"  best_net_profit_usd: ${opp['best_net_profit_usd']:.4f}")
+    if opp.get("one_leg_profit_is_diagnostic"):
+        print(f"  [DIAGNOSTIC] one_leg_profit is diagnostic (not proven)")
     
     # Roundtrip
     rt = info.get("roundtrip", {})

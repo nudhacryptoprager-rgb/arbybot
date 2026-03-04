@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 RUNTIME_DISABLED_CONFIG = {
-    # Cache file path (relative to workspace root)
+    # Cache file path (relative to workspace root) - legacy, use _get_cache_path() for chain-scoped
     "cache_file": "data/cache/runtime_disabled_pools.json",
     
     # Auto-disable threshold (consecutive failures)
@@ -325,32 +325,61 @@ class RuntimeDisabledManager:
 
 
 # =============================================================================
-# SINGLETON
+# CHAIN-SCOPED PATH HELPER (v3.2.11)
+# =============================================================================
+
+def _get_runtime_disabled_cache_path(chain_key: str | None = None) -> str:
+    """Get chain-scoped runtime-disabled cache path.
+    
+    v3.2.11: Chain-scoped paths to prevent arbitrum_one <-> linea pollution.
+    """
+    if chain_key and chain_key != "unknown":
+        return f"data/cache/runtime_disabled_pools_{chain_key}.json"
+    return RUNTIME_DISABLED_CONFIG["cache_file"]
+
+
+# =============================================================================
+# SINGLETON (v3.2.11: chain-scoped)
 # =============================================================================
 
 _manager_instance: Optional[RuntimeDisabledManager] = None
+_current_chain_key: Optional[str] = None
 
 
 def get_runtime_disabled_manager(
     config: dict | None = None,
     cache_path: str | None = None,
     force_new: bool = False,
+    chain_key: str | None = None,
 ) -> RuntimeDisabledManager:
     """
     Get the singleton RuntimeDisabledManager.
     
     Args:
         config: Optional config override
-        cache_path: Optional cache path override
+        cache_path: Optional cache path override (takes priority over chain_key)
         force_new: Force create new instance (for testing)
+        chain_key: v3.2.11: Chain key for chain-scoped persistence
         
     Returns:
         RuntimeDisabledManager instance
     """
-    global _manager_instance
+    global _manager_instance, _current_chain_key
+    
+    # v3.2.11: If switching chains, reset and reload from new chain's cache
+    if chain_key is not None and chain_key != _current_chain_key and not force_new:
+        if _manager_instance is not None:
+            # Save current state before switching
+            _manager_instance._save_cache()
+            _manager_instance = None
+        _current_chain_key = chain_key
     
     if force_new or _manager_instance is None:
-        _manager_instance = RuntimeDisabledManager(config, cache_path)
+        # Use explicit cache_path if provided, else use chain-scoped path
+        resolved_path = cache_path or _get_runtime_disabled_cache_path(_current_chain_key or chain_key)
+        _manager_instance = RuntimeDisabledManager(config, resolved_path)
+        if chain_key:
+            _current_chain_key = chain_key
     
     return _manager_instance
 
@@ -360,12 +389,14 @@ def clear_runtime_disabled_manager() -> None:
     Clear the singleton RuntimeDisabledManager (for testing).
     
     This resets the manager state and clears the global instance.
+    v3.2.11: Also resets chain_key tracking.
     """
-    global _manager_instance
+    global _manager_instance, _current_chain_key
     if _manager_instance is not None:
         _manager_instance._entries.clear()
         _manager_instance._failure_counts.clear()
     _manager_instance = None
+    _current_chain_key = None
 
 
 # =============================================================================

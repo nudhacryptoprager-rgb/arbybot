@@ -142,9 +142,13 @@ def validate_universe(config_path: Path) -> dict:
     result["summary"]["unique_pairs_count"] = len(unique_pairs)
     
     # 5. Check for potential issues
+    # v3.2.11 FIX: require_cross_dex=true with <2 DEX is a FAIL (viability gate)
+    # Cross-DEX arbitrage requires at least 2 DEXes to function
     if len(dexes) < 2 and config.get("require_cross_dex", True):
-        result["warnings"].append("require_cross_dex=true but only 1 DEX configured")
-    
+        result["errors"].append(
+            "VIABILITY_FAIL: require_cross_dex=true but <2 DEXes configured - "
+            "cross-DEX arbitrage not possible"
+        )
     if not pairs:
         result["warnings"].append("No pairs configured")
     

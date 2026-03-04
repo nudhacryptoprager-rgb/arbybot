@@ -365,25 +365,41 @@ class QuarantineManager:
 
 
 # =============================================================================
-# PERSISTENCE (v2.2.0)
+# PERSISTENCE (v2.2.0, v3.2.11 chain-scoped)
 # =============================================================================
 
 import json
 from pathlib import Path
 
-QUARANTINE_CACHE_PATH = Path("data/cache/quarantine_state.json")
+# v3.2.11: Chain-scoped persistence to prevent cross-chain pollution
+# Legacy path for backwards compatibility when no chain_key specified
+QUARANTINE_CACHE_PATH_LEGACY = Path("data/cache/quarantine_state.json")
 
 
-def save_quarantine_state(manager: "QuarantineManager") -> bool:
+def _get_quarantine_cache_path(chain_key: str | None = None) -> Path:
+    """Get chain-scoped quarantine state path.
+    
+    v3.2.11: Chain-scoped paths to prevent arbitrum_one <-> linea pollution.
+    """
+    if chain_key and chain_key != "unknown":
+        return Path(f"data/cache/quarantine_state_{chain_key}.json")
+    return QUARANTINE_CACHE_PATH_LEGACY
+
+
+def save_quarantine_state(manager: "QuarantineManager", chain_key: str | None = None) -> bool:
     """
     Save quarantine state to disk cache.
+    
+    v3.2.11: chain_key parameter for chain-scoped persistence.
     
     Returns True if saved successfully.
     """
     try:
-        QUARANTINE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        cache_path = _get_quarantine_cache_path(chain_key)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
         state = {
-            "version": "2.2.0",
+            "version": "3.2.11",  # v3.2.11: chain-scoped
+            "chain_key": chain_key,
             "saved_at": time.time(),
             "records": {}
         }
@@ -400,25 +416,28 @@ def save_quarantine_state(manager: "QuarantineManager") -> bool:
                 "quarantined_until": record.quarantined_until,
                 "quarantine_count": record.quarantine_count,
             }
-        QUARANTINE_CACHE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        logger.debug("Quarantine state saved to %s", QUARANTINE_CACHE_PATH)
+        cache_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        logger.debug("Quarantine state saved to %s", cache_path)
         return True
     except Exception as e:
         logger.warning("Failed to save quarantine state: %s", e)
         return False
 
 
-def load_quarantine_state(manager: "QuarantineManager") -> bool:
+def load_quarantine_state(manager: "QuarantineManager", chain_key: str | None = None) -> bool:
     """
     Load quarantine state from disk cache.
+    
+    v3.2.11: chain_key parameter for chain-scoped persistence.
     
     Returns True if loaded successfully.
     """
     try:
-        if not QUARANTINE_CACHE_PATH.exists():
+        cache_path = _get_quarantine_cache_path(chain_key)
+        if not cache_path.exists():
             return False
         
-        state = json.loads(QUARANTINE_CACHE_PATH.read_text(encoding="utf-8"))
+        state = json.loads(cache_path.read_text(encoding="utf-8"))
         now = time.time()
         loaded_count = 0
         
@@ -453,32 +472,53 @@ def load_quarantine_state(manager: "QuarantineManager") -> bool:
 
 
 # =============================================================================
-# SINGLETON INSTANCE
+# SINGLETON INSTANCE (v3.2.11: chain-scoped)
 # =============================================================================
 
 _quarantine_manager: QuarantineManager | None = None
+_current_chain_key: str | None = None
 
 
-def get_quarantine_manager() -> QuarantineManager:
-    """Get the singleton quarantine manager (loads from cache if exists)."""
-    global _quarantine_manager
+def get_quarantine_manager(chain_key: str | None = None) -> QuarantineManager:
+    """Get the singleton quarantine manager (loads from cache if exists).
+    
+    v3.2.11: chain_key parameter for chain-scoped persistence.
+    If chain_key differs from current, resets and loads from new chain's cache.
+    """
+    global _quarantine_manager, _current_chain_key
+    
+    # v3.2.11: If switching chains, reset and reload
+    if chain_key is not None and chain_key != _current_chain_key:
+        if _quarantine_manager is not None:
+            # Save current before switching (if we had a chain)
+            if _current_chain_key is not None:
+                save_quarantine_state(_quarantine_manager, _current_chain_key)
+            _quarantine_manager = None
+        _current_chain_key = chain_key
+    
     if _quarantine_manager is None:
         _quarantine_manager = QuarantineManager()
-        load_quarantine_state(_quarantine_manager)
+        load_quarantine_state(_quarantine_manager, _current_chain_key)
     return _quarantine_manager
 
 
 def reset_quarantine_manager() -> None:
     """Reset the singleton (for testing)."""
-    global _quarantine_manager
+    global _quarantine_manager, _current_chain_key
     if _quarantine_manager is not None:
         _quarantine_manager.clear()
     _quarantine_manager = None
+    _current_chain_key = None
 
 
-def flush_quarantine_manager() -> bool:
-    """Save current quarantine state to disk."""
-    global _quarantine_manager
+def flush_quarantine_manager(chain_key: str | None = None) -> bool:
+    """Save current quarantine state to disk.
+    
+    v3.2.11: chain_key parameter for chain-scoped persistence.
+    """
+    global _quarantine_manager, _current_chain_key
     if _quarantine_manager is not None:
-        return save_quarantine_state(_quarantine_manager)
+        # Use provided chain_key or fall back to current
+        target_chain = chain_key or _current_chain_key
+        return save_quarantine_state(_quarantine_manager, target_chain)
     return False

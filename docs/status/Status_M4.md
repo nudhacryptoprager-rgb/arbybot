@@ -134,7 +134,7 @@
 
 | DoD | What it means | Current Status |
 |-----|---------------|----------------|
-| **Core Truth (paper +PnL)** | N>=5 REGISTRY_REAL runs with total_net_usdc > 0 | [OK] PROVEN |
+| **Core Truth (paper +PnL)** | N>=5 REGISTRY_REAL runs with total_net_usdc > 0 | [OK] DIAGNOSTIC (simulated cost model) |
 | **Rolling Quality Gate** | data_run_rate >= 0.30, agg_status != FAIL | [OK] PASS (agg_status=PASS) |
 | **M4.2 Roundtrip Pipeline** | gated_count >= 0, roundtrip evaluated | [OK] WORKING (3 evaluated) |
 | **M4.2 Roundtrip Aggregation** | rejected_reasons visible in truth_report | [OK] DEPLOYED |
@@ -346,12 +346,13 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 
 | DoD Level | Criterion | Evidence Required | Status |
 |-----------|-----------|-------------------|--------|
-| **M4.1 Simulate-only** | Code/schema/invariants | FIXTURE_OFFLINE or REAL with simulate_only=true | [OK] PROVEN |
-| **M4 Online Profit (core truth)** | Real profitability | `run_mode=REGISTRY_REAL`, N>=5 runs with `total_net_usdc > 0` | [OK] PROVEN |
+| **M4.1 Simulate-only** | Code/schema/invariants | FIXTURE_OFFLINE or REAL with simulate_only=true | [OK] PASS |
+| **M4 Online Profit (core truth)** | Paper profitability | `run_mode=REGISTRY_REAL`, N>=5 runs with `total_net_usdc > 0` | [OK] DIAGNOSTIC (one_leg_profit) |
 | **Rolling Quality Gate** | Operational stability | `data_run_rate >= 0.30`, `agg_status != FAIL` | [OK] PASS |
 
 **Clarification:**
-> "Core Truth" (+PnL) != "Rolling Quality Gate". Core truth підтверджує що система генерує profit (paper).
+> "Core Truth" (+PnL) != "Rolling Quality Gate". Core truth підтверджує що система генерує profit (paper, simulated cost).
+> **IMPORTANT**: `one_leg_profit_is_diagnostic=true` means profit is simulated, NOT proven on-chain.
 > Rolling quality gate перевіряє стабільність в операційному режимі.
 > agg_status=FAIL означає проблеми з якістю даних, НЕ відсутність profit.
 
@@ -366,7 +367,8 @@ Until roundtrip shows profitable_count > 0, M4.2 profit = "paper profit under de
 
 **Evidence for M4 online-profit (rolling snapshot, 2026-02-19):**
 
-> **CORE TRUTH: PROVEN** (+PnL confirmed in N>=5 runs)
+> **CORE TRUTH: DIAGNOSTIC PROFIT** (+PnL confirmed in N>=5 runs under simulated cost model)
+> **NOTE**: `one_leg_profit_is_diagnostic=true` - paper profit shown, on-chain profit NOT yet proven
 > **ROLLING QUALITY: PASS** (agg_status=PASS, agg_reasons=[] after DIVERSITY threshold adjustment)
 
 | Metric | Value | Source |
@@ -576,19 +578,20 @@ Location: `data/runs/_rolling/`
 
 ## Definition of Done
 
-### M4.1: Simulate-Only -- [OK] PROVEN
+### M4.1: Simulate-Only -- [OK] PASS
 - [x] Online scan generates signals
 - [x] Simulator calculates PnL
 - [x] Rolling artifacts persist
 - [x] Evidence workflow works
 - [x] agg_status = WARN_QUALITY (only DIVERSITY_*) accepted per Acceptable States table
 
-### M4 Online Profit (core truth) -- [OK] PROVEN
+### M4 Online Profit (core truth) -- [OK] DIAGNOSTIC (simulated)
 - [x] N>=5 consecutive online runs with run_mode=REGISTRY_REAL (52 runs total, 24 data runs)
 - [x] All data runs have total_net_usdc > 0 (pass_count=24, fail_count=0)
 - [x] All runs use real pinned_block (not 429900000)
 - [x] Paper profit confirmed under declared cost model
 - [x] total_net_usdc (window): $416.18
+- [ ] **NOTE**: `one_leg_profit_is_diagnostic=true` - on-chain profit NOT yet proven
 
 **Rolling Quality Gate -- [OK] PASS:**
 - [x] data_run_rate >= 0.30 (current: 1.0 [OK])
@@ -631,7 +634,7 @@ Location: `data/runs/_rolling/`
 4. ~~**Rolling artifacts need reset**~~: FIXED - schema 2.0 with timestamp-based provenance
 5. ~~**Provenance fixes**~~: REPLACED by timestamp provenance
 6. ~~**M4.1 quality thresholds**~~: RESOLVED - data_run_rate=0.4878, low_sample_rate=0.5122 with MIN_SIGNALS_FOR_PASS=3
-7. ~~**M4 online profit DoD**~~: PROVEN (2026-02-13) - 42 real runs with total_net_usdc=$300.87
+7. ~~**M4 online profit DoD**~~: DIAGNOSTIC (2026-02-13) - 42 real runs with total_net_usdc=$300.87 (simulated cost model)
 8. **DIVERSITY targets**: unique_pairs=3 (<10 target), unique_routes=2 (<4 target) - causes WARN_QUALITY
    - **Decision**: Accept `unique_routes=2` as M4.1 minimum. Target of 4 requires 3rd DEX (e.g., Curve, Camelot).
    - Pairs expansion: Add verified pairs (LINK/USDC, ARB/USDT) to `config/real_expanded.yaml` once pools verified.

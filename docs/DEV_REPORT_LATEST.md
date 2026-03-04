@@ -4,43 +4,44 @@
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
 ## 0) Meta
-timestamp_utc: 2026-03-04T09:00:08Z
+timestamp_utc: 2026-03-04T10:30:00Z
 run_id: data/runs/ci_m5_gate_20260304_095954
-mode: ONLINE (v3.2.11: NORM-only rolling complete + chain_keys fix)
+mode: ONLINE (v3.2.11: artifact self-sufficiency + chain-scoped persistence)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-04T09:00:08.990091Z
-  dirty: false
-  desc: v3.2.11 NORM-only rolling: SMOKE+COVERAGE excluded, chain_keys from agg.quick_stats, run_kind in _latest.inputs
+  primary: ts:2026-03-04T10:30:00Z
+  dirty: true
+  desc: v3.2.11 artifact self-sufficiency: inspect_run_dir fixes, chain-scoped cache, viability gate
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): Complete NORM-only rolling policy - prevent SMOKE/COVERAGE runs from polluting rolling metrics
+goal (Roadmap пункт): Artifact self-sufficiency - fix inspector schema mismatch, chain-scoped persistence
 change_summary:
-  - FIX: inspect_rolling.py v2.2.0 - chain_keys from agg.quick_stats (canonical source, not _latest)
-  - FIX: NORM-only policy now excludes ALL non-NORMAL runs (SMOKE + COVERAGE)
-  - ADD: run_kind to _latest.json.inputs and gates.py (operational clarity)
-  - ADD: Atomic writes for reset_rolling_window() archive and fresh files
-  - ADD: tests/unit/test_smoke_run_isolation.py (10 tests: +4 for COVERAGE + inspect_rolling)
-  - FIX: ci_m5_0_gate.py checks run_kind != NORMAL (not just == SMOKE)
-  - NOTE: Rolling window = N-run based (max 200 runs), NOT time-based
-  - EVIDENCE: ONLINE NORMAL run (ci_m5_gate_20260304_095954) updates rolling correctly
-  - RESULT: 32 runs in window, 25 data runs, agg_status=PASS
-  - TESTS: 1283 passed (includes 10 SMOKE/COVERAGE isolation tests)
+  - FIX: inspect_run_dir.py v3.2.11 - opportunity_engine from stats.opportunity_engine.summary.* (was 0/0/0, now 11/9/7)
+  - ADD: quality_reasons to inspect_run_dir output (e.g., WARN_PROFIT_DIAGNOSTIC)
+  - FIX: run_dir_name fallback to run_dir.name when null in run_context
+  - ADD: tests/unit/test_inspect_run_dir.py (3 tests: opportunity_engine parsing, quality_reasons, run_dir_name fallback)
+  - FIX: validate_universe.py viability gate - require_cross_dex=true with <2 DEX = FAIL (not warning)
+  - ADD: Chain-scoped persistence for quarantine.py, runtime_disabled.py, dynamic_anchors.py
+    - New paths: data/cache/{file}_{chain_key}.json (prevents arbitrum_one <-> linea pollution)
+    - Backward compatible: no chain_key = legacy path
+  - FIX: Status_M4.md - "PROVEN profit" → "DIAGNOSTIC profit" (one_leg_profit_is_diagnostic=true)
+  - TESTS: 1286 passed (includes 3 new inspect_run_dir tests)
 touched_files:
-  - scripts/inspect_rolling.py (v2.2.0 - chain_keys from agg.quick_stats)
-  - m4/rolling_store.py (NORM-only: skip all non-NORMAL, atomic reset, run_kind in _latest.inputs)
-  - m4/gates.py (run_kind in _latest.json.inputs)
-  - scripts/ci_m5_0_gate.py (run_kind != NORMAL detection)
-  - tests/unit/test_smoke_run_isolation.py (+4 tests for COVERAGE + inspect_rolling)
+  - scripts/inspect_run_dir.py (v3.2.11 - opportunity_engine.summary fix, quality_reasons, run_dir_name fallback)
+  - scripts/validate_universe.py (viability gate: <2 DEX = FAIL)
+  - strategy/quarantine.py (chain-scoped persistence: _get_quarantine_cache_path)
+  - strategy/runtime_disabled.py (chain-scoped persistence: _get_runtime_disabled_cache_path)
+  - strategy/dynamic_anchors.py (chain-scoped persistence: _get_anchor_cache_path)
+  - tests/unit/test_inspect_run_dir.py (new file)
+  - docs/status/Status_M4.md (PROVEN → DIAGNOSTIC clarification)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1283 passed, 1 skipped
-py -3.11 scripts/check_repo_safety.py: RESULT: PASS (0 warnings)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1: RESULT: PASS
-py -3.11 scripts/inspect_rolling.py --json: agg_status=PASS, runs_in_window=32, chain_keys=['arbitrum_one','linea']
+py -3.11 -m pytest tests/unit -q: 1286 passed, 1 skipped
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
+py -3.11 scripts/inspect_run_dir.py --json: opportunity_engine.total=11 (was 0), quality_reasons=['WARN_PROFIT_DIAGNOSTIC']
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
