@@ -3,50 +3,52 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.24)
-**Goal**: Fix PRICE_SANITY_FAILED domination by updating stale anchor prices and adding case-insensitive lookup.
+## SESSION GOAL + DONE CRITERIA (v3.2.25)
+**Goal**: Fix PRICE_SANITY_FAILED domination using EVIDENCE-BASED anchor prices (not market assumptions).
 
 ### M4.2 TRUTH-PROGRESS CRITERIA (primary - must pass)
 | # | Criterion | Target | Current | Status |
 |---|-----------|--------|---------|--------|
-| 1 | `roundtrip_lp_filter.passed_to_roundtrip` | >= 1 | 3 | ✅ |
-| 2 | `roundtrip.evaluated_count` | >= 1 | 3 | ✅ |
+| 1 | `roundtrip_lp_filter.passed_to_roundtrip` | >= 1 | 2 | ✅ |
+| 2 | `roundtrip.evaluated_count` | >= 1 | 2 | ✅ |
 
 ### QUALITY/STRETCH CRITERIA (secondary - nice to have)
 | # | Criterion | Target | Current | Status |
 |---|-----------|--------|---------|--------|
 | 3 | `window_chain_key` | != MIXED | arbitrum_one | ✅ |
 | 4 | `agg_status` | PASS | PASS | ✅ |
-| 5 | `unique_pairs` | >= 8 | 7 | ❌ |
+| 5 | `unique_pairs` | >= 8 | 12 | ✅ |
 
-### v3.2.24 CHANGES SUMMARY
+### v3.2.25 CHANGES SUMMARY
 
-**Anchor Price Fixes:**
-1. **Updated tokens_anchor_price** - Fixed stale values (WETH: 3000→2100, ARB: 1.5→0.40)
-2. **Updated tokens_usd_price** - Synced with anchor prices for consistency
-3. **Case-insensitive lookup** - Added `lookup_anchor_price_ci()` to handle wstETH/WSTETH variants
-4. **Expanded anchor coverage** - Added WETH_DAI, ARB_USDC, WETH_ARB, WETH_LINK, WBTC_USDC, etc.
+**Evidence-Based Anchor Fixes (correcting v3.2.24 market assumptions):**
+1. **Extract anchors from FULL rejects** - Used reject_histogram.rejects (63 records) not price_sanity_samples (5)
+2. **Corrected anchor values from PASS quotes** - ARB: $0.40→$0.105, GMX: $30→$7.37, LINK: $15→$9.29
+3. **Updated tokens_anchor_price** - 50+ pairs with evidence-based median values
+4. **Case-insensitive lookup everywhere** - Added lookup_token_usd_price_ci(), applied to slot0 sanity path
+5. **Token casing normalization** - Uppercase in canonicalize_pair() to prevent wstETH/WSTETH fragmentation
 
-**Tooling Improvements:**
-5. **suggest_anchor_updates.py** - New script to extract evidence-based anchor prices from runDir
-6. **lint_readiness.py anchor check** - Extended with anchor coverage validation for --config mode
-7. **Unit tests** - Added test_quotes_anchor_lookup.py for case-insensitive matching
+**Tooling Fixes:**
+6. **suggest_anchor_updates.py rewrite** - Process full rejects list, PASS/FAIL separation, outlier filter, strict JSON
+7. **lint_readiness.py --strict-anchors** - Fail if anchor coverage < 100%
+8. **Unit tests** - 19 new tests for suggest_anchor_updates, 4 for lookup_token_usd_price_ci
 
-**Evidence runs:**
-- NORMAL: `ci_m5_gate_20260305_105825` (PASS, signals=1, rolling updated, runs_in_window=50)
+**ONLINE Evidence:**
+- PRICE_SANITY_FAILED: 63 → **29** (-54% reduction)
+- Capstone: `ci_m5_gate_20260305_123559` (PASS, signals=17, rolling updated, runs_in_window=52)
 
-**Tests**: 1362 passed, CI pipeline PASS
+**Tests**: 1385 passed, CI pipeline PASS
 
 ## 0) Meta
-timestamp_utc: 2026-03-05T09:59:24.533891Z
-run_id: data/runs/ci_m5_gate_20260305_105825
-mode: ONLINE (v3.2.22: rolling discipline hardening)
+timestamp_utc: 2026-03-05T11:37:00.563309Z
+run_id: data/runs/ci_m5_gate_20260305_123559
+mode: ONLINE (v3.2.25: evidence-based anchor fixes)
 artifact_mode: rolling
 config: config/real_intent_arbitrum_one.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-05T09:59:24.533891Z
+  primary: ts:2026-03-05T11:37:00.563309Z
   dirty: false
-  desc: v3.2.22 rolling discipline hardening
+  desc: v3.2.25 evidence-based anchor fixes
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Per-DEX quoter mode + viability filters + multi-chain rollout (scroll/zksync)
@@ -62,20 +64,22 @@ change_summary (v3.2.20):
   - UPD: config/chains.yaml (scroll, zksync chains)
   - UPD: config/dexes.yaml (scroll:uniswap_v3, zksync:izumi_v3)
   - TESTS: 1341 passed
-touched_files (v3.2.24):
-  - config/real_intent_arbitrum_one.yaml (anchor/USD price sync v3.2.24)
-  - strategy/quotes.py (lookup_anchor_price_ci)
-  - scripts/lint_readiness.py (anchor coverage check)
-  - scripts/suggest_anchor_updates.py (NEW)
-  - tests/unit/test_quotes_anchor_lookup.py (NEW)
-  - tests/unit/test_lint_readiness.py (4-value unpack fix)
+touched_files (v3.2.25):
+  - config/real_intent_arbitrum_one.yaml (evidence-based anchors - ARB=$0.105, GMX=$7.37)
+  - strategy/quotes.py (lookup_token_usd_price_ci, slot0 CI lookup)
+  - strategy/dynamic_anchors.py (uppercase in canonicalize_pair)
+  - scripts/suggest_anchor_updates.py (full rewrite: full rejects, PASS/FAIL, outlier filter, strict JSON)
+  - scripts/lint_readiness.py (--strict-anchors flag)
+  - tests/unit/test_suggest_anchor_updates.py (NEW: 19 tests)
+  - tests/unit/test_quotes_anchor_lookup.py (extended: lookup_token_usd_price_ci)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1362 passed, 1 skipped
+py -3.11 -m pytest tests/unit -q: 1385 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
 py -3.11 scripts/ci_m5_0_gate.py --offline: PASS
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_intent_arbitrum_one.yaml: PASS (PRICE_SANITY_FAILED: 63->29)
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
 
 ## 3) Artifacts Attached (шляхи)
@@ -84,69 +88,66 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260305_105825/reports (arbitrum_one, run_kind=NORMAL)
+  - data/runs/ci_m5_gate_20260305_123559/reports (arbitrum_one, run_kind=NORMAL)
 intent_configs:
   - config/coverage_intent_arbitrum_one.yaml (arbitrum_one + camelot_v3 for testing)
-  - config/real_intent_arbitrum_one.yaml (arbitrum_one - no camelot_v3)
+  - config/real_intent_arbitrum_one.yaml (arbitrum_one - evidence-based anchors v3.2.25)
   - config/coverage_intent_linea.yaml (Linea rollout)
   - config/coverage_intent_mantle.yaml (Mantle rollout)
   - config/coverage_intent_scroll.yaml (Scroll rollout)
   - config/coverage_intent_zksync.yaml (zkSync rollout)
 evidence (NORMAL rolling run):
-  - run_dir_name: ci_m5_gate_20260305_105825
-  - run_timestamp: 2026-03-05T09:59:24.533891Z
-  - spread_signals: 2
-  - quotes_fetched: 15
-  - unique_pairs: 7
-  - runs_in_window: 50
+  - run_dir_name: ci_m5_gate_20260305_123559
+  - run_timestamp: 2026-03-05T11:37:00.563309Z
+  - spread_signals: 17
+  - quotes_fetched: 46
+  - unique_pairs: 12
+  - runs_in_window: 52
   - agg_status: PASS
   - data_run_rate: 0.64
-  - quality_warnings: [] (MIXED_CHAIN_KEYS resolved via cleanup)
+  - PRICE_SANITY_FAILED: 29 (down from 63, -54%)
+  - quality_warnings: [EXCLUDED_PRESENT, CRITICAL_REJECT, PROFIT_DIAGNOSTIC]
 
 ## 4) Key Results (числа з артефактів)
 
 _latest.json:
   schema_version: m4:latest:v2.0
   run_status: PASS
-  run_dir_name: ci_m5_gate_20260305_105825
-  run_timestamp: 2026-03-05T09:59:24.533891Z
-  run_quality_status: WARN  # now propagated to _latest.json
-  run_quality_warnings:     # now propagated to _latest.json
-    - EXCLUDED_PRESENT(1)
-    - CRITICAL_REJECT(PRICE_SANITY_FAILED:63)
-    - DEX_HEALTH_CRITICAL(uniswap_v3:16%)
-    - DEX_HEALTH_CRITICAL(pancakeswap_v3:16%)
-    - DEX_HEALTH_CRITICAL(sushiswap_v3:4%)
-    - LOW_SAMPLE(1<3)
+  run_dir_name: ci_m5_gate_20260305_123559
+  run_timestamp: 2026-03-05T11:37:00.563309Z
+  run_quality_status: WARN
+  run_quality_warnings:
+    - EXCLUDED_PRESENT(3)
+    - CRITICAL_REJECT(PRICE_SANITY_FAILED:29)  # down from 63 (-54%)
     - PROFIT_DIAGNOSTIC
   metrics:
-    signals_count: 2
-    signals_included: 1
-    signals_excluded: 1
-    total_net_usdc: 116.92
+    signals_count: 17
+    signals_included: 14
+    signals_excluded: 3
+    total_net_usdc: 49.76
   run_context:
     chain_key: arbitrum_one
     config_path: config/real_intent_arbitrum_one.yaml
   rolling:
-    runs_in_window: 50
+    runs_in_window: 52
     data_run_rate: 0.64
-    quality_warnings: []  # aggregator-level (MIXED_CHAIN_KEYS resolved)
+    quality_warnings: []
 
 run_summary_latest.json:
   status: PASS
   profit_status: PASS
   drift_status: PASS
   quality_status: WARN
-  reasons: [WARN_LOW_SAMPLE, WARN_DEX_HEALTH_CRITICAL]
+  reasons: [WARN_EXCLUDED_SIGNALS, WARN_CRITICAL_REJECTS, WARN_PROFIT_DIAGNOSTIC]
   roundtrip:
-    evaluated_count: 3
+    evaluated_count: 2
     profitable_count: 0
-    best_net_pnl_bps: -170.36
-  per_dex_stats:
-    uniswap_v3: CRITICAL (16% success)
-    sushiswap_v3: CRITICAL (4% success)
-    pancakeswap_v3: CRITICAL (16% success)
-    _pre_routing: CRITICAL (0% - NO_USD_PRICE bucket, not a DEX)
+    best_net_pnl_bps: -68.07
+  rejection_summary:
+    SUSPECT_LIQUIDITY: 34
+    PRICE_SANITY_FAILED: 29  # down from 63 (-54%)
+    NO_USD_PRICE: 4
+    NOTIONAL_DRIFT_EXCLUDED: 1
 
 m4_stability_agg.json:
   agg_status: PASS

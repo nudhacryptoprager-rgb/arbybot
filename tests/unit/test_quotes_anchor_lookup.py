@@ -3,10 +3,11 @@
 Tests for case-insensitive anchor price lookup in quotes.py.
 
 v3.2.24: Added to verify wstETH/WSTETH case normalization fix.
+v3.2.25: Extended with lookup_token_usd_price_ci tests.
 """
 
 import pytest
-from strategy.quotes import lookup_anchor_price_ci
+from strategy.quotes import lookup_anchor_price_ci, lookup_token_usd_price_ci
 
 
 class TestLookupAnchorPriceCI:
@@ -50,3 +51,35 @@ class TestLookupAnchorPriceCI:
         result = lookup_anchor_price_ci(anchors, "weth_usdc")
         assert result == 2100.12345
         assert isinstance(result, float)
+
+
+class TestLookupTokenUsdPriceCI:
+    """Tests for lookup_token_usd_price_ci function (v3.2.25)."""
+    
+    def test_direct_match(self):
+        """Test direct key match (fast path)."""
+        usd_prices = {"WETH": 2100.0, "ARB": 0.105}
+        
+        assert lookup_token_usd_price_ci(usd_prices, "WETH") == 2100.0
+        assert lookup_token_usd_price_ci(usd_prices, "ARB") == 0.105
+    
+    def test_case_insensitive_match(self):
+        """Test case-insensitive matching for wstETH variants."""
+        usd_prices = {"wstETH": 2444.0, "rETH": 2295.0}
+        
+        # Uppercase lookup should match mixed-case key
+        assert lookup_token_usd_price_ci(usd_prices, "WSTETH") == 2444.0
+        assert lookup_token_usd_price_ci(usd_prices, "wsteth") == 2444.0
+        assert lookup_token_usd_price_ci(usd_prices, "RETH") == 2295.0
+    
+    def test_no_match_with_default(self):
+        """Test when no matching key exists, returns default."""
+        usd_prices = {"WETH": 2100.0}
+        
+        assert lookup_token_usd_price_ci(usd_prices, "UNKNOWN", default=1.0) == 1.0
+        assert lookup_token_usd_price_ci(usd_prices, "ARB") is None  # No default = None
+    
+    def test_empty_dict(self):
+        """Test empty USD price dictionary."""
+        assert lookup_token_usd_price_ci({}, "WETH") is None
+        assert lookup_token_usd_price_ci({}, "WETH", default=2100.0) == 2100.0

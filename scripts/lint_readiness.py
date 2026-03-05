@@ -262,6 +262,8 @@ def main():
     parser.add_argument("--chain", help="Specific chain to check (default: all from intent.txt)")
     parser.add_argument("--config", help="Coverage config YAML to check (e.g., config/coverage_intent_linea.yaml)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--strict-anchors", action="store_true", 
+                        help="v3.2.25: Fail if anchor coverage < 100%% for pairs in config (prevents skip-sanity without explicit decision)")
     args = parser.parse_args()
     
     # Load data
@@ -297,6 +299,14 @@ def main():
         result = check_chain_readiness(chain, symbols, tokens, dexes, anchor_prices, pairs_list)
         result["config"] = str(config_path)
         result["required_dexes"] = required_dex_ids
+        
+        # v3.2.25: --strict-anchors mode
+        if args.strict_anchors:
+            ac = result.get("anchor_coverage", {})
+            if ac.get("missing", 0) > 0:
+                result["ready"] = False
+                result["issues"].append(f"STRICT: {ac['missing']} pairs missing anchors (--strict-anchors enforced)")
+        
         results.append(result)
     else:
         # Load from intent.txt

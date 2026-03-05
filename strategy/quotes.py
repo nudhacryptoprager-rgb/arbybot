@@ -31,7 +31,7 @@ from core.pool_keys import make_pool_key
 
 
 # =============================================================================
-# CASE-INSENSITIVE ANCHOR LOOKUP (v3.2.24)
+# CASE-INSENSITIVE LOOKUP HELPERS (v3.2.24+)
 # =============================================================================
 
 def lookup_anchor_price_ci(
@@ -62,6 +62,38 @@ def lookup_anchor_price_ci(
             return value
     
     return None
+
+
+def lookup_token_usd_price_ci(
+    usd_dict: Dict[str, float],
+    symbol: str,
+    default: Optional[float] = None,
+) -> Optional[float]:
+    """
+    Case-insensitive lookup for tokens_usd_price.
+    
+    v3.2.25: Fixes wstETH/WSTETH case mismatch issue where config uses
+    'wstETH' but runtime may generate 'WSTETH'.
+    
+    Args:
+        usd_dict: The tokens_usd_price dict from config
+        symbol: Token symbol to lookup (e.g., "WSTETH")
+        default: Default value if not found
+        
+    Returns:
+        USD price if found, else default
+    """
+    # Direct lookup first (fast path)
+    if symbol in usd_dict:
+        return usd_dict[symbol]
+    
+    # Case-insensitive lookup
+    symbol_upper = symbol.upper()
+    for key, value in usd_dict.items():
+        if key.upper() == symbol_upper:
+            return value
+    
+    return default
 
 
 # =============================================================================
@@ -1085,7 +1117,8 @@ def collect_quotes(
                 
                 # v2.1.0: Enhanced USD-notional tracking (Step 7)
                 q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
-                token_out_price = tokens_usd_price.get(token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
+                # v3.2.25: Case-insensitive USD price lookup
+                token_out_price = lookup_token_usd_price_ci(tokens_usd_price, token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
                 notional_usd_actual = round(amount_out_human_val * token_out_price, 2)
                 q_dict["notional_usd_actual"] = notional_usd_actual
                 
@@ -1287,11 +1320,11 @@ def collect_quotes(
             # Issue #3: slot0 quotes were bypassing PRICE_SANITY check, allowing outliers
             price_sanity_enabled = config.get("price_sanity_enabled", True)
             price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
-            # Note: tokens_anchor_price uses underscore format (WBTC_WETH), not slash
-            slot0_anchor_price = tokens_anchor_price.get(f"{token_in}_{token_out}")
+            # v3.2.25: Case-insensitive anchor lookup (same as quoter path)
+            slot0_anchor_price = lookup_anchor_price_ci(tokens_anchor_price, f"{token_in}_{token_out}")
             if not slot0_anchor_price:
                 reversed_tag = f"{token_out}_{token_in}"
-                slot0_anchor_price = tokens_anchor_price.get(reversed_tag)
+                slot0_anchor_price = lookup_anchor_price_ci(tokens_anchor_price, reversed_tag)
                 if slot0_anchor_price:
                     slot0_anchor_price = 1.0 / slot0_anchor_price
             if price_sanity_enabled and slot0_anchor_price and price_exact is not None:
@@ -1373,8 +1406,8 @@ def collect_quotes(
             # notional_usd_actual: what we got (amount_out * token_out_price)
             q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
             
-            # Calculate actual USD value of amount_out
-            token_out_price = tokens_usd_price.get(token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
+            # v3.2.25: Case-insensitive USD price lookup
+            token_out_price = lookup_token_usd_price_ci(tokens_usd_price, token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
             amount_out_val = float(amount_out_human_str) if amount_out_human_str else 0.0
             notional_usd_actual = round(amount_out_val * token_out_price, 2)
             q_dict["notional_usd_actual"] = notional_usd_actual

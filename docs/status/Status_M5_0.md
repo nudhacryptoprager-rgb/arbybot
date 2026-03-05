@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-05  
-**Tests**: 1357 passed (including lint_readiness, cleanup_rolling tests)  
-**Evidence runDir**: `ci_m5_gate_20260305_105825`  
+**Tests**: 1385 passed (including lint_readiness, cleanup_rolling, suggest_anchor_updates tests)  
+**Evidence runDir**: `ci_m5_gate_20260305_123559`  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -60,30 +60,29 @@ These fields are documented in `docs/m4/ROLLING_CONTRACT.md` → "run_quality fi
 ### Evidence Pointers
 
 - Rolling triplet: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json}`
-- Latest runDir: `data/runs/ci_m5_gate_20260305_105825/reports/`
-- run_timestamp: `2026-03-05T09:59:24.533891Z`
-- Scripts: `cleanup_rolling.py`, `lint_readiness.py --config`
+- Latest runDir: `data/runs/ci_m5_gate_20260305_123559/reports/`
+- run_timestamp: `2026-03-05T11:37:00.563309Z`
+- Scripts: `cleanup_rolling.py`, `lint_readiness.py --config`, `suggest_anchor_updates.py`
 
 ### Latest Rolling Snapshot (2026-03-05)
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| `runs_in_window` | 50 | Window full |
+| `runs_in_window` | 52 | Window full |
 | `agg_status` | PASS | Aggregator healthy |
 | `run_status` | PASS | Latest run passed |
 | `run_quality_status` | WARN | Quality warnings present |
 | `data_run_rate` | 0.64 | 64% data runs |
 | `effective_pass_rate` | 0.64 | Same as data_run_rate |
-| `unique_pairs` | 7 | Target: ≥8 |
+| `unique_pairs` | 12 | Target: ≥8 ✅ |
 | `low_sample_rate` | 0.26 | 26% low sample runs |
 
 **run_quality_warnings** (current run):
-- `CRITICAL_REJECT(PRICE_SANITY_FAILED:63)` — stale anchors (WETH/ARB, WETH/GMX, etc.)
-- `DEX_HEALTH_CRITICAL(uniswap_v3:16%)`, `DEX_HEALTH_CRITICAL(sushiswap_v3:4%)`, `DEX_HEALTH_CRITICAL(pancakeswap_v3:16%)`
-- `LOW_SAMPLE(1<3)` — only 1 included signal (min=3 for pass)
+- `CRITICAL_REJECT(PRICE_SANITY_FAILED:29)` — down from 63 (-54%), remaining are dead pools
+- `EXCLUDED_PRESENT(3)` — same-DEX fee tiers excluded
 - `PROFIT_DIAGNOSTIC: profit_is_diagnostic=True, profit_truth_available=False`
 
-**Next priority**: Update stale anchors in `config/strategy.yaml` and `config/pairs.py` to reduce PRICE_SANITY_FAILED rejects.
+**Anchor fix evidence (2026-03-05)**: PRICE_SANITY_FAILED reduced 63→29 via evidence-based anchors from reject_histogram.
 
 ---
 

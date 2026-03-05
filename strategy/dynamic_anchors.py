@@ -73,20 +73,21 @@ def canonicalize_pair(pair: str) -> str:
     
     v2.3.0: Sorts token symbols alphabetically to ensure
     WETH/USDC and USDC/WETH map to the same anchor.
+    v3.2.25: Also normalizes case (wstETH → WSTETH) to prevent key fragmentation.
     
     Args:
         pair: Pair string like "WETH/USDC" or "USDC/WETH"
         
     Returns:
-        Canonical pair like "USDC/WETH" (alphabetically sorted)
+        Canonical pair like "USDC/WETH" (alphabetically sorted, uppercased)
     """
     if "/" not in pair:
-        return pair
+        return pair.upper()
     tokens = pair.split("/")
     if len(tokens) != 2:
-        return pair
-    # Sort alphabetically
-    sorted_tokens = sorted(tokens)
+        return pair.upper()
+    # v3.2.25: Uppercase tokens before sorting to prevent case fragmentation
+    sorted_tokens = sorted([t.strip().upper() for t in tokens])
     return f"{sorted_tokens[0]}/{sorted_tokens[1]}"
 
 
@@ -96,26 +97,28 @@ def canonicalize_pair_with_direction(pair: str) -> Tuple[str, bool]:
     
     v2.9.0: Direction-aware anchors - fixes PRICE_SANITY_FAILED bug where
     prices were stored without direction normalization.
+    v3.2.25: Also normalizes case (wstETH → WSTETH) to prevent key fragmentation.
     
     Args:
         pair: Pair string like "WETH/USDC" or "USDC/WETH"
         
     Returns:
         (canonical_pair, is_inverted) where:
-        - canonical_pair: alphabetically sorted pair like "USDC/WETH"
+        - canonical_pair: alphabetically sorted pair like "USDC/WETH" (uppercased)
         - is_inverted: True if input direction was inverted relative to canonical
           (e.g., input "WETH/USDC" → canonical "USDC/WETH" → is_inverted=True)
     """
     if "/" not in pair:
-        return pair, False
+        return pair.upper(), False
     tokens = pair.split("/")
     if len(tokens) != 2:
-        return pair, False
-    # Sort alphabetically
-    sorted_tokens = sorted(tokens)
+        return pair.upper(), False
+    # v3.2.25: Uppercase tokens before sorting to prevent case fragmentation
+    normalized_tokens = [t.strip().upper() for t in tokens]
+    sorted_tokens = sorted(normalized_tokens)
     canonical = f"{sorted_tokens[0]}/{sorted_tokens[1]}"
     # Inverted if first token moved position during sort
-    is_inverted = tokens[0] != sorted_tokens[0]
+    is_inverted = normalized_tokens[0] != sorted_tokens[0]
     return canonical, is_inverted
 
 
