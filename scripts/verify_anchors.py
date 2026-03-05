@@ -96,7 +96,10 @@ def get_rpc_urls(chain_config: dict) -> list[str]:
     api_key = os.getenv("ALCHEMY_API_KEY", "")
     
     urls = []
-    for url in chain_config.get("rpc_urls", []):
+    # Canonical key is rpc_endpoints (per config/chains.yaml contract).
+    # Keep rpc_urls as legacy alias for backwards compatibility.
+    rpc_list = chain_config.get("rpc_endpoints") or chain_config.get("rpc_urls") or []
+    for url in rpc_list:
         resolved = url.replace("${ALCHEMY_API_KEY}", api_key)
         # Only include if API key present or not needed
         if api_key or "alchemy" not in resolved.lower():
@@ -452,7 +455,7 @@ async def verify_chain(
 
 async def main(chain_filter: str | None = None):
     """Run verification."""
-    setup_logging(level="INFO", json_output=False)
+    setup_logging(level="INFO", json_format=False)
     
     chains, dexes, tokens = load_config()
     
@@ -487,8 +490,8 @@ async def main(chain_filter: str | None = None):
         print(f"{'='*60}")
         print(f"Chain ID (config): {result['chain_id_config']}")
         print(f"Chain ID (RPC):    {result['chain_id_rpc']}")
-        print(f"Chain ID match:    {'✅' if result['chain_id_match'] else '❌'}")
-        print(f"RPC reachable:     {'✅' if result['rpc_reachable'] else '❌'}")
+        print(f"Chain ID match:    {'OK' if result['chain_id_match'] else 'FAIL'}")
+        print(f"RPC reachable:     {'OK' if result['rpc_reachable'] else 'FAIL'}")
         print(f"RPC used:          {result['rpc_used']}")
         print(f"Status:            {result['status']}")
         
@@ -500,17 +503,17 @@ async def main(chain_filter: str | None = None):
             for dex_key, dex_result in result["dexes"].items():
                 status = dex_result["status"]
                 if status == "FULLY_VERIFIED":
-                    icon = "✅"
+                    icon = "[OK]"
                 elif status == "QUOTING_ONLY":
-                    icon = "⚠️"
+                    icon = "[WARN]"
                 else:
-                    icon = "❌"
+                    icon = "[FAIL]"
                 
                 print(f"  {dex_key}: {icon} {status}")
                 
                 if dex_result["issues"]:
                     for issue in dex_result["issues"]:
-                        print(f"      ⚠ {issue}")
+                        print(f"      - {issue}")
                 
                 if dex_result.get("sample_pool"):
                     print(f"      Sample pool: {dex_result['sample_pool']}")
@@ -526,7 +529,7 @@ async def main(chain_filter: str | None = None):
     
     # Recommendations
     if chains_needing_disable:
-        print(f"\n⚠️  RECOMMENDATION: Disable these chains until fixed:")
+        print(f"\n[WARN] RECOMMENDATION: Disable these chains until fixed:")
         for chain in chains_needing_disable:
             print(f"   - {chain}")
     
