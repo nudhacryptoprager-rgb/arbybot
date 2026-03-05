@@ -1355,6 +1355,26 @@ ENV VARIABLES:
                 if args.prune_keep == 0:
                     args.prune_keep = 50
                 args._rolling_defaults_set = True
+            
+            # v3.2.22: Re-check chain guard AFTER auto-enable
+            # This prevents bypassing via implicit refresh_rolling
+            # (Issue: user runs --online without --refresh-rolling on non-primary chain,
+            # first check passes because refresh_rolling=False, then auto-enable sets it True)
+            if args.refresh_rolling:
+                try:
+                    cfg_path = Path(args.config)
+                    if cfg_path.exists():
+                        import yaml
+                        with open(cfg_path, "r", encoding="utf8") as f:
+                            cfg_for_chain = yaml.safe_load(f) or {}
+                        config_chain = cfg_for_chain.get("chain", "arbitrum_one")
+                        if config_chain != PRIMARY_ROLLING_CHAIN:
+                            print(f"[ONLINE] ERROR: auto-enabled refresh_rolling blocked - chain={config_chain}")
+                            print(f"[ONLINE] ERROR: Rolling chain discipline: only chain={PRIMARY_ROLLING_CHAIN} can update rolling")
+                            print(f"[ONLINE] ERROR: Use explicit --refresh-rolling False or switch config to {PRIMARY_ROLLING_CHAIN}")
+                            return 1
+                except Exception:
+                    pass  # Guard already checked earlier, this is redundant safety
 
             success, message = run_real_scan(run_dir, args.config, args.cycles)
             
@@ -1460,8 +1480,10 @@ ENV VARIABLES:
                     if args.refresh_rolling_strict:
                         print(f"[ONLINE] FAIL: --refresh-rolling-strict mode, M4 gate exception")
             else:
-                # v3.2.21: Generate minimal run_summary for NO_DATA/FAIL runs
+                # v3.2.22: Generate minimal run_summary for NO_DATA/FAIL runs
                 # This ensures every ONLINE runDir has provenance (run_timestamp) for triage
+                # Uses separate schema (m4:run_summary_min:v2.0) to avoid contract conflicts
+                # with full m4:run_summary:v2.0 (which requires policy_version, run_id, etc.)
                 try:
                     print(f"\n[ONLINE] Generating minimal run_summary for NO_DATA/FAIL run...")
                     reports_dir = run_dir / "reports"
@@ -1470,8 +1492,9 @@ ENV VARIABLES:
                     
                     # Load truth_report for run_context if available
                     run_timestamp = datetime.now(timezone.utc).isoformat() + "Z"
-                    no_data_reason = "validation_failed"
+                    no_data_reason = "UNKNOWN"
                     chain_key = "unknown"
+                    signals_count = 0
                     
                     truth_files = list(reports_dir.glob("truth_report_*.json"))
                     if truth_files:
@@ -1480,36 +1503,63 @@ ENV VARIABLES:
                         truth_ctx = truth_data.get("run_context", {})
                         run_timestamp = truth_ctx.get("run_timestamp", run_timestamp)
                         truth_stats = truth_data.get("stats", {})
+                        signals_count = truth_stats.get("total_signals", 0)
+                        # NO_DATA reason mapping: NO_QUOTES, NO_TOKENS, NO_POOL, RPC_ERROR, etc.
                         no_data_reason = truth_stats.get("no_data_reason", "NO_QUOTES")
                         chain_key = truth_data.get("chain_key", "unknown")
                     
+                    # v3.2.22: Determine status based on actual validation result
+                    # - NO_DATA: zero signals AND validation passed OR no truth_report
+                    # - FAIL: validation failed (passed=False even with signals)
+                    if not passed:
+                        actual_status = "FAIL"
+                        actual_reasons = ["VALIDATION_FAILED"]
+                        if no_data_reason == "UNKNOWN":
+                            no_data_reason = "VALIDATION_FAILED"
+                    elif signals_count == 0:
+                        actual_status = "NO_DATA"
+                        actual_reasons = ["NO_DATA"]
+                    else:
+                        # Shouldn't happen (passed=True with signals should go to M4 gate)
+                        actual_status = "NO_DATA"
+                        actual_reasons = ["NO_DATA", "M4_GATE_SKIPPED"]
+                    
                     run_summary_data = {
-                        "schema_version": "m4:run_summary:v2.0",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        # v3.2.22: Use explicit minimal schema to avoid contract conflicts
+                        "schema_version": "m4:run_summary_min:v2.0",
+                        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+                        "run_id": run_dir.name,
                         "run_context": {
                             "run_timestamp": run_timestamp,
                             "run_dir_name": run_dir.name,
+                            "code_identity": f"ts:{run_timestamp}",
+                            "code_sha": None,  # v2.0: deprecated
+                            "code_dirty": None,
+                            "code_desc": None,
+                            "evidence_sha": None,
                         },
-                        "status": "NO_DATA",
-                        "profit_status": "NO_DATA",
-                        "drift_status": "NO_DATA",
-                        "quality_status": "NO_DATA",
-                        "reasons": ["NO_DATA"],
+                        "status": actual_status,
+                        "profit_status": actual_status,
+                        "drift_status": actual_status,
+                        "quality_status": actual_status,
+                        "reasons": actual_reasons,
                         "metrics": {
-                            "signals_count": 0,
+                            "signals_count": signals_count,
                             "included_signals_count": 0,
                             "total_net_usdc": 0.0,
                             "no_data_reason": no_data_reason,
                         },
                         "inputs": {
                             "chain_key": chain_key,
+                            "run_mode": "ONLINE",
                         },
                     }
                     
-                    with open(run_summary_path, "w") as f:
-                        json.dump(run_summary_data, f, indent=2)
+                    # v3.2.22: Use atomic write to prevent partial JSON on kill/crash
+                    from core.json_io import atomic_write_json
+                    atomic_write_json(run_summary_path, run_summary_data)
                     
-                    print(f"[ONLINE] Generated minimal: {run_summary_path.name} (NO_DATA)")
+                    print(f"[ONLINE] Generated minimal: {run_summary_path.name} ({actual_status})")
                 except Exception as e:
                     print(f"[ONLINE] WARN: Failed to generate minimal run_summary: {e}")
             

@@ -774,6 +774,11 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
         "agg_status": agg_data.get("agg_status", "UNKNOWN"),
         "agg_reasons": agg_data.get("agg_reasons", []),
         "quality_warnings": agg_data.get("quality_warnings", []),
+        # v3.2.22: Propagate run-level quality to _latest.json for complete monitoring
+        # run_quality_warnings: from run_summary_latest.json (DEX_HEALTH_CRITICAL, etc.)
+        # quality_warnings: from aggregator (MIXED_CHAIN_KEYS, DATA_RUN_RATE_LOW, etc.)
+        "run_quality_status": run_summary.get("quality_status", "UNKNOWN"),
+        "run_quality_warnings": run_summary.get("quality_warnings", []),
         "chain_keys": agg_data.get("chain_keys", []),  # v3.2.9: chain_keys for multi-chain guardrail
         "policy_version": agg_data.get("policy_version", "unknown"),
         "agg_updated_at": agg_data.get("updated_at"),

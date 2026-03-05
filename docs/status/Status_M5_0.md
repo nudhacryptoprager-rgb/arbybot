@@ -1,11 +1,10 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-01  
-**Tests**: 1189 passed (including 6 pool_coverage tests)  
-**Evidence runDir**: `ci_m5_gate_20260301_160426`  
-**Code commit**: pool coverage fix + tokens_usd_price  
-**discovery_runtime evidence**: `ci_m5_gate_20260223_133801` (universe_source=discovery_runtime, PASS)
+**Updated**: 2026-03-05  
+**Tests**: 1341 passed (including pool_coverage tests)  
+**Evidence runDir**: `ci_m5_gate_20260304_221101`  
+**Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
 
@@ -14,6 +13,50 @@
 > **M5_0 є обов'язковим для CI та infra-proof.**  
 > M5_0 валідує схеми/інваріанти артефактів, multicall, failover, провенанс.  
 > M4 execution gate є окремим "core truth" для profit.
+
+---
+
+## Rolling Discipline (2026-03-05)
+
+### Chain Guard Policy
+
+**PRIMARY_ROLLING_CHAIN**: `arbitrum_one`
+
+| Rule | Behavior |
+|------|----------|
+| `--refresh-rolling` + `chain != arbitrum_one` | **FAIL** with error message |
+| Auto-enable `refresh_rolling` + non-primary chain | **BLOCKED** by re-check after auto-enable |
+| Unknown `chain_key` in cleanup | **REMOVED** (not kept as backdoor) |
+
+### Minimal run_summary for NO_DATA/FAIL
+
+All ONLINE runs generate `run_summary_*.json` for provenance:
+- **Schema**: `m4:run_summary_min:v2.0` (separate from full `m4:run_summary:v2.0`)
+- **Fields**: `run_timestamp`, `run_id`, `status`, `reasons`, `no_data_reason`, `chain_key`
+- **Status mapping**: `NO_DATA` for zero signals, `FAIL` for validation failures
+- **Atomic write**: Uses `core.json_io.atomic_write_json`
+
+### Quality Warnings Propagation
+
+`_latest.json` now contains both aggregator and run-level quality:
+- `quality_warnings`: Aggregator warnings (MIXED_CHAIN_KEYS, DATA_RUN_RATE_LOW, etc.)
+- `run_quality_status`: Latest run quality status (PASS, WARN, FAIL)
+- `run_quality_warnings`: Latest run warnings (DEX_HEALTH_CRITICAL, CRITICAL_REJECT, etc.)
+
+### Archive Policy
+
+`cleanup_rolling.py` prunes archive files:
+- Default: keep last 5 archives
+- Archives created on cleanup: `m4_stability_agg_archive_*_cleanup.json`
+- Prevents artifact explosion in `data/runs/_rolling/`
+
+### Evidence Pointers
+
+- Rolling triplet: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json}`
+- Latest runDir: `data/runs/ci_m5_gate_20260304_221101/reports/`
+- Scripts: `cleanup_rolling.py`, `lint_readiness.py --config`
+
+---
 
 ### Pool Coverage Fix (2026-03-01)
 - `pool_missing_count=0` (was 4) - all pool addresses in registry

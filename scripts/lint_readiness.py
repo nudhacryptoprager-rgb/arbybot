@@ -8,11 +8,14 @@ Checks whether a chain is ready for scanning by comparing:
 2. dexes.yaml anchors (factory, quoter) per chain
 
 USAGE:
-  # Check all chains
+  # Check all chains (from intent.txt)
   py -3.11 scripts/lint_readiness.py
 
   # Check specific chain
   py -3.11 scripts/lint_readiness.py --chain linea
+
+  # Check from coverage config (v3.2.22)
+  py -3.11 scripts/lint_readiness.py --config config/coverage_intent_linea.yaml
 
   # JSON output
   py -3.11 scripts/lint_readiness.py --json
@@ -58,6 +61,42 @@ def load_intent() -> dict[str, set[str]]:
                     chain_symbols[chain].add(quote.strip())
     
     return dict(chain_symbols)
+
+
+def load_coverage_config(config_path: Path) -> tuple[str, set[str], list[str]]:
+    """
+    Load a coverage config YAML and return (chain, symbols, dex_ids).
+    
+    v3.2.22: Supports coverage_intent_*.yaml configs for multi-chain bring-up.
+    
+    Expected config format:
+    ```yaml
+    chain: linea
+    pairs:
+      - WETH/USDC
+      - WETH/USDT
+    dexes:
+      - lynex_v3
+    ```
+    """
+    import yaml
+    
+    with open(config_path) as f:
+        data = yaml.safe_load(f)
+    
+    chain = data.get("chain", "unknown")
+    symbols: set[str] = set()
+    dex_ids: list[str] = data.get("dexes", [])
+    
+    # Parse pairs
+    pairs = data.get("pairs", [])
+    for pair in pairs:
+        if "/" in pair:
+            base, quote = pair.split("/", 1)
+            symbols.add(base.strip())
+            symbols.add(quote.strip())
+    
+    return chain, symbols, dex_ids
 
 
 def load_core_tokens() -> dict[str, dict[str, str]]:
@@ -175,31 +214,56 @@ def check_chain_readiness(
 
 def main():
     parser = argparse.ArgumentParser(description="Check chain readiness for scanning")
-    parser.add_argument("--chain", help="Specific chain to check (default: all)")
+    parser.add_argument("--chain", help="Specific chain to check (default: all from intent.txt)")
+    parser.add_argument("--config", help="Coverage config YAML to check (e.g., config/coverage_intent_linea.yaml)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
     
     # Load data
-    intent_symbols = load_intent()
     core_tokens = load_core_tokens()
     dexes_by_chain = load_dexes()
     
-    # Get chains to check
-    if args.chain:
-        chains = [args.chain]
-    else:
-        # All chains from intent.txt
-        chains = sorted(intent_symbols.keys())
-    
     results = []
     
-    for chain in chains:
-        symbols = intent_symbols.get(chain, set())
+    # v3.2.22: Support --config for coverage config YAMLs
+    if args.config:
+        config_path = Path(args.config)
+        if not config_path.exists():
+            print(f"ERROR: Config not found: {config_path}")
+            return 1
+        
+        chain, symbols, required_dex_ids = load_coverage_config(config_path)
         tokens = core_tokens.get(chain, {})
-        dexes = dexes_by_chain.get(chain, [])
+        
+        # Filter dexes to only those in config
+        all_dexes = dexes_by_chain.get(chain, [])
+        if required_dex_ids:
+            dexes = [d for d in all_dexes if d.get("dex_id") in required_dex_ids]
+        else:
+            dexes = all_dexes
         
         result = check_chain_readiness(chain, symbols, tokens, dexes)
+        result["config"] = str(config_path)
+        result["required_dexes"] = required_dex_ids
         results.append(result)
+    else:
+        # Load from intent.txt
+        intent_symbols = load_intent()
+        
+        # Get chains to check
+        if args.chain:
+            chains = [args.chain]
+        else:
+            # All chains from intent.txt
+            chains = sorted(intent_symbols.keys())
+        
+        for chain in chains:
+            symbols = intent_symbols.get(chain, set())
+            tokens = core_tokens.get(chain, {})
+            dexes = dexes_by_chain.get(chain, [])
+            
+            result = check_chain_readiness(chain, symbols, tokens, dexes)
+            results.append(result)
     
     # Output
     if args.json:

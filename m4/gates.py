@@ -941,6 +941,9 @@ def run_online_gate(
             "agg_status": agg_data.get("agg_status", "UNKNOWN"),
             "agg_reasons": agg_reasons if agg_reasons else [],
             "quality_warnings": agg_data.get("quality_warnings", []),  # v1.9.5
+            # v3.2.22: Propagate run-level quality to _latest.json for complete monitoring
+            "run_quality_status": run_summary.get("quality_status", "UNKNOWN"),
+            "run_quality_warnings": run_summary.get("quality_warnings", []),
             "policy_version": agg_data.get("policy_version", "unknown"),  # v1.9.5
             "agg_updated_at": agg_updated_at,  # v1.9.4: agg last update
             "agg_lag_seconds": agg_lag_seconds,  # v1.9.4: lag detection

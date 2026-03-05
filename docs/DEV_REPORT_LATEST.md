@@ -3,8 +3,8 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.20)
-**Goal**: Per-DEX quoter mode (Algebra), NO_USD_PRICE viability filter, multi-chain rollout (scroll/zksync).
+## SESSION GOAL + DONE CRITERIA (v3.2.22)
+**Goal**: Rolling discipline hardening - chain guard, minimal run_summary, quality warnings propagation.
 
 ### M4.2 TRUTH-PROGRESS CRITERIA (primary - must pass)
 | # | Criterion | Target | Current | Status |
@@ -15,48 +15,45 @@
 ### QUALITY/STRETCH CRITERIA (secondary - nice to have)
 | # | Criterion | Target | Current | Status |
 |---|-----------|--------|---------|--------|
-| 3 | `window_chain_key` | != MIXED | MIXED | ❌ |
+| 3 | `window_chain_key` | != MIXED | arbitrum_one | ✅ |
 | 4 | `agg_status` | PASS | PASS | ✅ |
 | 5 | `unique_pairs` | >= 8 | 7 | ❌ |
 
-### v3.2.20 CHANGES SUMMARY
+### v3.2.22 CHANGES SUMMARY
 
-**Per-DEX Quoter Mode (Algebra auto-quoting):**
-1. **Per-DEX quoter branching** - `use_quoter_for_dex = is_algebra or use_quoter_global` auto-enables quoter for Algebra DEXes
-2. **ALGEBRA_NEEDS_QUOTER rejection** - Now reports `quoter_configured` and `quoter_result` for debugging
+**Chain Guard Hardening:**
+1. **Re-check after auto-enable** - Chain guard re-checked AFTER auto-enable of refresh_rolling to prevent bypass
+2. **unknown chain_key removal** - cleanup_rolling.py now removes unknown chain_key runs (not kept as backdoor)
+3. **Archive prune policy** - cleanup_rolling.py keeps only last 5 archives (prevents artifact explosion)
 
-**Viability Filters:**
-3. **NO_USD_PRICE** - Early filter skips pairs where token_in has no USD price configured (deterministic rejection)
-4. **tokens_usd_price sync** - Added rETH, MAGIC, TBTC, GNS, GRAIL, JOE to arbitrum config
+**Minimal run_summary for NO_DATA/FAIL:**
+4. **Separate schema** - Uses `m4:run_summary_min:v2.0` to avoid contract conflicts
+5. **Status/reasons mapping** - `NO_DATA` for zero signals, `FAIL` for validation failures (not always NO_DATA)
+6. **Atomic write** - Uses `core.json_io.atomic_write_json` for crash safety
 
-**DEX Health Guardrail:**
-5. **DEX_HEALTH_CRITICAL** - Quality warning when per_dex_stats shows CRITICAL health (<20% success rate)
-6. **best_included_spread_economics** - New field separating best signal from best NON-excluded signal
+**Quality Warnings Propagation:**
+7. **run_quality_status** - Now propagated to `_latest.json` from `run_summary.quality_status`
+8. **run_quality_warnings** - Now propagated to `_latest.json` from `run_summary.quality_warnings`
 
-**Multi-Chain Rollout:**
-7. **M4.2 semantics for Linea/Mantle** - Added execution_enabled, kill_switch_active, simulate_only
-8. **coverage_intent_scroll.yaml** - Scroll chain (534352) with uniswap_v3
-9. **coverage_intent_zksync.yaml** - zkSync chain (324) with izumi_v3
+**Other Improvements:**
+9. **lint_readiness.py** - Extended with `--config` flag for coverage config YAMLs
+10. **KPI sync in cleanup** - cleanup_rolling.py syncs ALL KPI fields (data_run_rate, effective_pass_rate, etc.)
 
 **Evidence runs:**
-- NORMAL: `ci_m5_gate_20260304_211447` (PASS, signals=2, rolling updated)
-- COVERAGE (Linea): `ci_m5_gate_20260304_205626` (NO_DATA: 11 no_tokens, 6 no_pool)
-- COVERAGE (Mantle): `ci_m5_gate_20260304_205651` (NO_DATA: 6 no_tokens, 10 no_pool)
-- COVERAGE (Scroll): `ci_m5_gate_20260304_211217` (NO_DATA: 9 no_tokens, 5 no_pool)
-- COVERAGE (zkSync): `ci_m5_gate_20260304_211250` (NO_DATA: 10 no_tokens, 5 no_pool)
+- NORMAL: `ci_m5_gate_20260305_102541` (PASS, signals=1, rolling updated, runs_in_window=49)
 
-**Tests**: 1341 passed, CI pipeline PASS
+**Tests**: 1346 passed, CI pipeline PASS
 
 ## 0) Meta
-timestamp_utc: 2026-03-04T20:15:44.786838Z
-run_id: data/runs/ci_m5_gate_20260304_211447
-mode: ONLINE (v3.2.20: multi-chain coverage + onboarding checklist)
+timestamp_utc: 2026-03-05T09:26:40.641494Z
+run_id: data/runs/ci_m5_gate_20260305_102541
+mode: ONLINE (v3.2.22: rolling discipline hardening)
 artifact_mode: rolling
 config: config/real_intent_arbitrum_one.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-04T20:15:44.786838Z
+  primary: ts:2026-03-05T09:26:40.641494Z
   dirty: false
-  desc: v3.2.20 multi-chain coverage runs + executor onboarding
+  desc: v3.2.22 rolling discipline hardening
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Per-DEX quoter mode + viability filters + multi-chain rollout (scroll/zksync)
@@ -87,12 +84,10 @@ touched_files (v3.2.20):
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1341 passed, 1 skipped
+py -3.11 -m pytest tests/unit -q: 1346 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_intent_arbitrum_one.yaml --refresh-rolling: PASS
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml: FAIL (NO_DATA)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml: FAIL (NO_DATA)
-py -3.11 scripts/inspect_rolling.py --json: runs_in_window=46, agg_status=PASS, unique_pairs=7, quality_warnings=[] (MIXED_CHAIN_KEYS RESOLVED)
+py -3.11 scripts/inspect_rolling.py --json: runs_in_window=49, agg_status=PASS, unique_pairs=7, quality_warnings=[] (v3.2.22 evidence)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -100,7 +95,7 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260304_221101/reports (arbitrum_one, run_kind=NORMAL, v3.2.21)
+  - data/runs/ci_m5_gate_20260305_102541/reports (arbitrum_one, run_kind=NORMAL, v3.2.22)
 intent_configs:
   - config/coverage_intent_arbitrum_one.yaml (arbitrum_one + camelot_v3 for testing)
   - config/real_intent_arbitrum_one.yaml (arbitrum_one - no camelot_v3)
@@ -108,15 +103,15 @@ intent_configs:
   - config/coverage_intent_mantle.yaml (Mantle rollout)
   - config/coverage_intent_scroll.yaml (Scroll rollout)
   - config/coverage_intent_zksync.yaml (zkSync rollout)
-evidence (NORMAL rolling run v3.2.21):
-  - run_dir_name: ci_m5_gate_20260304_221101
-  - run_timestamp: 2026-03-04T21:11:57.356128Z
+evidence (NORMAL rolling run v3.2.22):
+  - run_dir_name: ci_m5_gate_20260305_102541
+  - run_timestamp: 2026-03-05T09:26:40.641494Z
   - spread_signals: 2
-  - quotes_fetched: 42
+  - quotes_fetched: 139
   - unique_pairs: 7
-  - runs_in_window: 46
+  - runs_in_window: 49
   - agg_status: PASS
-  - data_run_rate: 0.6957
+  - data_run_rate: 0.6531
   - quality_warnings: [] (MIXED_CHAIN_KEYS resolved via cleanup)
 
 ## 4) Key Results (числа з артефактів)
@@ -124,16 +119,29 @@ evidence (NORMAL rolling run v3.2.21):
 _latest.json:
   schema_version: m4:latest:v2.0
   run_status: PASS
-  run_dir_name: ci_m5_gate_20260304_221101
-  run_timestamp: 2026-03-04T21:11:57.356128Z
+  run_dir_name: ci_m5_gate_20260305_102541
+  run_timestamp: 2026-03-05T09:26:40.641494Z
+  run_quality_status: WARN  # v3.2.22: now propagated to _latest.json
+  run_quality_warnings:     # v3.2.22: now propagated to _latest.json
+    - EXCLUDED_PRESENT(1)
+    - CRITICAL_REJECT(PRICE_SANITY_FAILED:63)
+    - DEX_HEALTH_CRITICAL(uniswap_v3:16%)
+    - DEX_HEALTH_CRITICAL(pancakeswap_v3:16%)
+    - DEX_HEALTH_CRITICAL(sushiswap_v3:4%)
+    - LOW_SAMPLE(1<3)
+    - PROFIT_DIAGNOSTIC
   metrics:
     signals_count: 2
     signals_included: 1
     signals_excluded: 1
-    total_net_usdc: 0.9362
+    total_net_usdc: 116.92
   run_context:
     chain_key: arbitrum_one
     config_path: config/real_intent_arbitrum_one.yaml
+  rolling:
+    runs_in_window: 49
+    data_run_rate: 0.6531
+    quality_warnings: []  # aggregator-level (MIXED_CHAIN_KEYS resolved)
 
 run_summary_latest.json:
   status: PASS
@@ -145,19 +153,19 @@ run_summary_latest.json:
     evaluated_count: 3
     profitable_count: 0
     best_net_pnl_bps: -170.36
-  per_dex_stats (v3.2.20):
-    uniswap_v3: WARNING (34.2% success)
-    sushiswap_v3: CRITICAL (17.2% success)
-    pancakeswap_v3: WARNING (32.3% success)
+  per_dex_stats:
+    uniswap_v3: CRITICAL (16% success)
+    sushiswap_v3: CRITICAL (4% success)
+    pancakeswap_v3: CRITICAL (16% success)
     _pre_routing: CRITICAL (0% - NO_USD_PRICE bucket, not a DEX)
 
 m4_stability_agg.json:
   agg_status: PASS
-  runs_in_window: 46
+  runs_in_window: 49
   unique_pairs: 7
   unique_routes_cross_dex: 3
-  data_run_rate: 0.6957
-  total_net_usdc: 115.1815
+  data_run_rate: 0.6531
+  total_net_usdc: 116.92
   window_chain_key: arbitrum_one (MIXED_CHAIN_KEYS RESOLVED)
   quality_warnings: []
 

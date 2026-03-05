@@ -50,9 +50,14 @@ def load_aggregator() -> dict:
         return json.load(f)
 
 
-def analyze_runs(agg: dict, primary_chain: str) -> tuple[list, list]:
+def analyze_runs(agg: dict, primary_chain: str, remove_unknown: bool = True) -> tuple[list, list]:
     """
     Analyze runs and split into keep/remove lists.
+    
+    Args:
+        agg: Aggregator data
+        primary_chain: Chain to keep
+        remove_unknown: If True, remove runs with unknown chain_key (v3.2.22 default)
     
     Returns:
         (runs_to_keep, runs_to_remove)
@@ -81,8 +86,13 @@ def analyze_runs(agg: dict, primary_chain: str) -> tuple[list, list]:
             else:
                 chain_key = "unknown"
         
-        if chain_key == primary_chain or chain_key == "unknown":
+        # v3.2.22: Unknown chain_key policy
+        # remove_unknown=True (default): Remove unknown to prevent contamination backdoor
+        # remove_unknown=False: Keep unknown (legacy behavior)
+        if chain_key == primary_chain:
             keep.append(run)
+        elif chain_key == "unknown" and not remove_unknown:
+            keep.append(run)  # Legacy: keep unknown
         else:
             remove.append(run)
     
@@ -134,13 +144,15 @@ def regenerate_quick_stats(runs: list, primary_chain: str) -> dict:
     }
 
 
-def cleanup_rolling(primary_chain: str, dry_run: bool = True) -> int:
+def cleanup_rolling(primary_chain: str, dry_run: bool = True, remove_unknown: bool = True, archive_keep: int = 5) -> int:
     """
     Clean up rolling artifacts by removing non-primary chain runs.
     
     Args:
         primary_chain: The chain to keep (default: arbitrum_one)
         dry_run: If True, only show what would be removed
+        remove_unknown: If True, remove runs with unknown chain_key (v3.2.22 default)
+        archive_keep: Number of archive files to keep (default: 5)
         
     Returns:
         Exit code (0=success, 1=error)
@@ -148,11 +160,12 @@ def cleanup_rolling(primary_chain: str, dry_run: bool = True) -> int:
     print(f"Rolling Cleanup Script")
     print(f"=" * 50)
     print(f"Primary chain: {primary_chain}")
+    print(f"Remove unknown: {remove_unknown}")
     print(f"Mode: {'DRY-RUN' if dry_run else 'CLEANUP'}")
     print()
     
     agg = load_aggregator()
-    runs_to_keep, runs_to_remove = analyze_runs(agg, primary_chain)
+    runs_to_keep, runs_to_remove = analyze_runs(agg, primary_chain, remove_unknown)
     
     print(f"Current runs in window: {len(agg.get('runs', []))}")
     print(f"Runs to keep ({primary_chain}): {len(runs_to_keep)}")
@@ -180,9 +193,19 @@ def cleanup_rolling(primary_chain: str, dry_run: bool = True) -> int:
     atomic_write_json(archive_path, agg)
     print(f"[ARCHIVED] {archive_path}")
     
+    # v3.2.22: Prune old archives (keep last N)
+    archive_files = sorted(ROLLING_DIR.glob("m4_stability_agg_archive_*.json"))
+    if len(archive_files) > archive_keep:
+        to_delete = archive_files[:-archive_keep]
+        for old_archive in to_delete:
+            old_archive.unlink()
+            print(f"[PRUNED] {old_archive.name}")
+        print(f"[PRUNE] Kept {archive_keep} most recent archives")
+    
     # Update aggregator
     agg["runs"] = runs_to_keep
-    agg["quick_stats"] = regenerate_quick_stats(runs_to_keep, primary_chain)
+    quick_stats = regenerate_quick_stats(runs_to_keep, primary_chain)
+    agg["quick_stats"] = quick_stats
     agg["cleanup_at"] = datetime.now(timezone.utc).isoformat()
     agg["cleanup_reason"] = f"remove_non_{primary_chain}_runs"
     agg["cleanup_removed_count"] = len(runs_to_remove)
@@ -191,14 +214,21 @@ def cleanup_rolling(primary_chain: str, dry_run: bool = True) -> int:
     print(f"[UPDATED] {AGG_PATH}")
     print(f"[OK] Removed {len(runs_to_remove)} runs, {len(runs_to_keep)} remaining")
     
-    # Update _latest.json quick reference
+    # v3.2.22: Update _latest.json with ALL KPI fields from aggregator
+    # Ensures consistency between _latest.json and m4_stability_agg.json
     if LATEST_PATH.exists():
         with open(LATEST_PATH) as f:
             latest = json.load(f)
         
-        # Update fields that depend on aggregator
-        latest["runs_in_window"] = len(runs_to_keep)
-        latest["quick_stats"] = agg["quick_stats"]
+        # Sync all KPI fields from quick_stats
+        latest["runs_in_window"] = quick_stats.get("runs_in_window", len(runs_to_keep))
+        latest["data_run_rate"] = quick_stats.get("data_run_rate", 0.0)
+        latest["effective_pass_rate"] = quick_stats.get("pass_count", 0) / quick_stats.get("runs_in_window", 1) if quick_stats.get("runs_in_window", 0) > 0 else 0.0
+        latest["low_sample_rate"] = quick_stats.get("low_sample_rate", 0.0)
+        # net_diversity_rate: unique_routes / runs_in_window (if available)
+        if quick_stats.get("unique_routes_cross_dex", 0) > 0 and quick_stats.get("runs_in_window", 0) > 0:
+            latest["net_diversity_rate"] = quick_stats.get("unique_routes_cross_dex", 0) / quick_stats.get("runs_in_window", 1)
+        latest["quick_stats"] = quick_stats
         
         # Clear MIXED_CHAIN_KEYS warning if applicable
         agg_reasons = latest.get("agg_reasons", [])
@@ -207,7 +237,7 @@ def cleanup_rolling(primary_chain: str, dry_run: bool = True) -> int:
         latest["agg_reasons"] = agg_reasons
         
         atomic_write_json(LATEST_PATH, latest)
-        print(f"[UPDATED] {LATEST_PATH}")
+        print(f"[UPDATED] {LATEST_PATH} (synced all KPI fields)")
     
     return 0
 
@@ -220,10 +250,15 @@ def main():
                         help="Show what would be removed without making changes (default)")
     parser.add_argument("--confirm", action="store_true",
                         help="Actually apply the cleanup")
+    parser.add_argument("--keep-unknown", action="store_true", default=False,
+                        help="Keep runs with unknown chain_key (default: remove)")
+    parser.add_argument("--archive-keep", type=int, default=5,
+                        help="Number of archive files to keep (default: 5)")
     args = parser.parse_args()
     
     dry_run = not args.confirm
-    return cleanup_rolling(args.primary_chain, dry_run)
+    remove_unknown = not args.keep_unknown
+    return cleanup_rolling(args.primary_chain, dry_run, remove_unknown, args.archive_keep)
 
 
 if __name__ == "__main__":
