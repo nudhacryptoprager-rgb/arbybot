@@ -217,6 +217,9 @@ def emit_to_aggregator_light(
         "chain_key": run_inputs.get("chain_key", None),  # v3.2.9: chain_key for multi-chain guardrail
         "pinned_block": run_inputs.get("pinned_block", None),
         "block_is_synthetic": run_inputs.get("block_is_synthetic", None),
+        # v3.2.30: Roundtrip metrics for M4.2 progress tracking
+        "roundtrip_evaluated_count": metrics.get("roundtrip", {}).get("evaluated_count", 0),
+        "roundtrip_profitable_count": metrics.get("roundtrip", {}).get("profitable_count", 0),
     })
     
     # Clean legacy: keep only light-format runs
@@ -458,6 +461,11 @@ def _compute_quick_stats(
         "signals_per_run_p50": percentile(signals_per_run, 50),
         "signals_per_run_p90": percentile(signals_per_run, 90),
         "signals_per_run_avg": round(sum(signals_per_run) / len(signals_per_run), 2) if signals_per_run else 0,
+        # v3.2.30: Roundtrip aggregate stats for M4.2 progress tracking
+        "roundtrip_runs_evaluated": sum(1 for r in normal_runs if r.get("roundtrip_evaluated_count", 0) > 0),
+        "roundtrip_runs_profitable": sum(1 for r in normal_runs if r.get("roundtrip_profitable_count", 0) > 0),
+        "roundtrip_total_evaluated": sum(r.get("roundtrip_evaluated_count", 0) for r in normal_runs),
+        "roundtrip_total_profitable": sum(r.get("roundtrip_profitable_count", 0) for r in normal_runs),
         # v3.2.9: chain_key in quick_stats (single value or "MIXED" if multiple chains in window)
         "chain_key": (list(all_chain_keys)[0] if len(all_chain_keys) == 1 else ("MIXED" if len(all_chain_keys) > 1 else "unknown")),
         # v3.2.10: chain_keys as sorted list for automation/machine readability

@@ -1093,6 +1093,14 @@ def generate_m4_from_online_inputs(
     # v2.3.2: Compute profit_truth_available - only true when NOT diagnostic AND execution cost model exists
     profit_truth_available = (not profit_is_diagnostic) and cost_model_available
     
+    # v3.2.30: Extract roundtrip_summary from truth_report for M4.2 progress tracking
+    roundtrip_summary = truth_data.get("roundtrip_summary", {})
+    roundtrip = {
+        "evaluated_count": roundtrip_summary.get("evaluated_count", 0),
+        "profitable_count": roundtrip_summary.get("profitable_count", 0),
+        "best_net_pnl_bps": roundtrip_summary.get("best_net_pnl_bps"),
+    }
+    
     # v2.0: Evidence validation based on timestamp consistency only
     evidence_issues = []
     
@@ -1179,6 +1187,8 @@ def generate_m4_from_online_inputs(
             "profit_truth_available": profit_truth_available,
             # v3.2.7: Deterministic NO_DATA classification
             "no_data_reason": no_data_reason,
+            # v3.2.30: Roundtrip metrics for M4.2 progress tracking
+            "roundtrip": roundtrip,
         },
         "thresholds": {
             "policy_version": POLICY_VERSION,  # v1.9.5: provenance

@@ -3,16 +3,24 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.30)
-**Goal**: M4.1 Simulate-Only DoD CLOSED (N≥100 REGISTRY_REAL runs with profit).
+## SESSION GOAL + DONE CRITERIA (v3.2.31)
+**Goal**: M4.2 Roundtrip → `roundtrip.profitable_count > 0` + exit diagnostic profit
 
 ### M4.1 DoD CRITERIA (ACHIEVED)
 | # | Criterion | Target | Current | Status |
 |---|-----------|--------|---------|--------|
-| 1 | REGISTRY_REAL runs with net_usdc > 0 | >= 100 | 100 | ✅ |
+| 1 | REGISTRY_REAL runs with net_usdc > 0 | >= 100 | 108 | ✅ |
 | 2 | `agg_status` | PASS | PASS | ✅ |
 | 3 | `profit_is_diagnostic` | true (simulate-only) | true | ✅ |
-| 4 | `total_net_usdc` | > 0 | $870.31 | ✅ |
+| 4 | `computed_total_net_usdc` | > 0 | $890.98 | ✅ |
+
+### M4.2 DoD CRITERIA (IN PROGRESS)
+| # | Criterion | Target | Current | Status |
+|---|-----------|--------|---------|--------|
+| 1 | `roundtrip.profitable_count` | >= 1 | 0 | ⬜ |
+| 2 | `profit_truth_available` | true | false | ⬜ |
+| 3 | `profit_is_diagnostic` (exit) | false | true | ⬜ |
+| 4 | Roundtrip metrics in rolling | present | ✓ | ✅ |
 
 ### QUALITY/STRETCH CRITERIA (secondary - nice to have)
 | # | Criterion | Target | Current | Status |
@@ -21,30 +29,29 @@
 | 4 | `agg_status` | PASS | PASS | + |
 | 5 | `unique_pairs` | >= 8 | 13 | + |
 
-### v3.2.30 CHANGES SUMMARY
+### v3.2.31 CHANGES SUMMARY
 
-**M4.1 DoD ACHIEVED (per Roadmap.md L130-145):**
-- N = 100 REGISTRY_REAL runs with `net_usdc > 0`
-- `agg_status = PASS` sustained
-- `total_net_usdc = $870.31` cumulative paper profit
-- Evidence: `ci_m5_gate_20260305_181243`
+**M4.2 Progress (roundtrip metrics in rolling):**
+- ADD: `m4/fixtures.py` - roundtrip extraction from truth_report
+- ADD: `m4/rolling_store.py` - roundtrip aggregate stats (runs_evaluated, runs_profitable, total_*)
+- ADD: `scripts/doc_sync_helper.py` - evidence extraction for DEV_REPORT/Status
+- ADD: `scripts/check_repo_safety.py` v1.8.0 - intent.txt protection guardrail
+- ARCHIVE: `_patch.diff`, `_WIP_diff.patch` moved to `archive/`
 
-**Policy (v3.2.29):**
-- `intent.txt` = business intent → pairs restored (RDNT, MAGIC, GRAIL)
-- Pool-level filtering via `runtime_disabled`/quarantine handles bad pools
+**Evidence runDir**: `ci_m5_gate_20260305_184929`
 
 **Tests**: 1385 passed, CI pipeline PASS, M4 gate profit PASS
 
 ## 0) Meta
-timestamp_utc: 2026-03-05T17:12:56Z
-run_id: data/runs/ci_m5_gate_20260305_181243
-mode: ONLINE (v3.2.30: M4.1 DoD CLOSED - N>=100 REGISTRY_REAL with profit)
+timestamp_utc: 2026-03-05T17:49:43Z
+run_id: data/runs/ci_m5_gate_20260305_184929
+mode: ONLINE (v3.2.31: roundtrip metrics added to rolling canon)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-05T17:12:56Z
+  primary: ts:2026-03-05T17:49:43Z
   dirty: false
-  desc: v3.2.30 M4.1 simulate-only DoD CLOSED
+  desc: v3.2.31 roundtrip metrics in rolling, doc-sync helper, intent protection
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Per-DEX quoter mode + viability filters + multi-chain rollout (scroll/zksync)
@@ -88,34 +95,34 @@ intent_configs:
   - config/coverage_intent_scroll.yaml (Scroll rollout)
   - config/coverage_intent_zksync.yaml (zkSync rollout)
 evidence (NORMAL rolling run):
-  - run_dir_name: ci_m5_gate_20260305_181243
-  - run_timestamp: 2026-03-05T17:12:56Z
-  - spread_signals: ~
+  - run_dir_name: ci_m5_gate_20260305_184929
+  - run_timestamp: 2026-03-05T17:49:43Z
+  - spread_signals: 4
   - quotes_fetched: ~
   - unique_pairs: 13
-  - runs_in_window: 106
+  - runs_in_window: 108
   - agg_status: PASS
-  - quality_warnings: []
+  - quality_warnings: [TOP_PAIR_DOMINANCE_WARN, PROFIT_DIAGNOSTIC]
 
 ## 4) Key Results (числа з артефактів)
 
 _latest.json:
   schema_version: m4:latest:v2.0
   run_status: PASS
-  run_dir_name: ci_m5_gate_20260305_181243
-  run_timestamp: 2026-03-05T17:12:56Z
-  run_quality_status: PASS
-  run_quality_warnings: []
+  run_dir_name: ci_m5_gate_20260305_184929
+  run_timestamp: 2026-03-05T17:49:43Z
+  run_quality_status: WARN
+  run_quality_warnings: [TOP_PAIR_DOMINANCE_WARN, PROFIT_DIAGNOSTIC]
   metrics:
-    signals_count: ~
-    signals_included: ~
-    signals_excluded: ~
-    total_net_usdc: 870.31
+    signals_count: 4
+    signals_included: 4
+    signals_excluded: 0
+    total_net_usdc: 10.74
   run_context:
     chain_key: arbitrum_one
     config_path: config/real_minimal.yaml
   rolling:
-    runs_in_window: 106
+    runs_in_window: 108
     quality_warnings: []
 
 run_summary_latest.json:
@@ -125,8 +132,13 @@ run_summary_latest.json:
   quality_status: WARN
   reasons: [WARN_EXCLUDED_SIGNALS, WARN_CRITICAL_REJECTS, WARN_PROFIT_DIAGNOSTIC]
   roundtrip:
-    evaluated_count: 2
+    evaluated_count: 0
     profitable_count: 0
+    best_net_pnl_bps: null
+  profit_truth:
+    profit_is_diagnostic: true
+    profit_truth_available: false
+    profit_truth_source: ONE_LEG_DIAGNOSTIC
   rejection_summary:
     SUSPECT_LIQUIDITY: 43      # Pool-level quarantine candidate
     LIQUIDITY_ZERO: 40         # Auto-disabled (working!)
@@ -136,11 +148,17 @@ run_summary_latest.json:
 
 m4_stability_agg.json:
   agg_status: PASS
-  runs_in_window: 106
+  runs_in_window: 108
   unique_pairs: 13
   window_chain_key: arbitrum_one
   quality_warnings: []
-  total_net_usdc: 870.31
+  computed_total_net_usdc: 890.98
+  roundtrip_stats:
+    roundtrip_runs_evaluated: 0
+    roundtrip_runs_profitable: 0
+    roundtrip_total_evaluated: 0
+    roundtrip_total_profitable: 0
+  data_run_rate: 0.8333
 
 ## 5) Per-DEX Health
 
@@ -155,13 +173,23 @@ m4_stability_agg.json:
 - sushiswap_v3 has CRITICAL health (17.2% success). Consider monitoring or removal.
 - `_pre_routing` bucket contains pre-DEX viability rejections (NO_USD_PRICE) - not counted for DEX health.
 
-## 6) Roundtrip Analysis
+## 6) Roundtrip Analysis (M4.2 Progress)
 
-evaluated_count: 3
+evaluated_count: 0
 profitable_count: 0
-best_net_pnl_bps: -170.36 (negative = not profitable after gas)
+best_net_pnl_bps: null (no roundtrips evaluated)
 
-**Interpretation**: No roundtrip opportunities profitable at current gas prices.
+**M4.2 Status**: NOT MET
+- Target: `roundtrip.profitable_count >= 1`
+- Current: 0 (all signals have `is_roundtrip_viable=false`)
+
+**Root Cause**: Market spreads (2-5 bps) < min_required (20-40 bps)
+- wstETH/WETH spread ~0 bps (same prices across DEXes)
+- WETH/USDC spread ~3 bps vs min_required ~36 bps
+
+**Roundtrip Metrics Now Tracked in Rolling** (v3.2.31):
+- `run_summary_latest.json.metrics.roundtrip.*`
+- `m4_stability_agg.json.quick_stats.roundtrip_*`
 
 ## 7) GPT Reviewer Steps (v3.2.20)
 

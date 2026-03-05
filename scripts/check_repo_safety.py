@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -696,11 +696,67 @@ def check_roadmap_governance(allow_edit: bool = False) -> List[str]:
     return issues
 
 
+def check_intent_protection(allow_edit: bool = False) -> List[str]:
+    """Check that config/intent.txt is not modified without explicit permission (v1.8.0).
+    
+    intent.txt defines the stable pair discovery intent for M4+.
+    Accidental modifications can break discovery contracts.
+    
+    Args:
+        allow_edit: If True, skip this check (explicit permission granted)
+    
+    Returns:
+        List of error messages if intent.txt is modified without permission
+    """
+    if allow_edit:
+        return []  # Explicit permission granted
+    
+    issues = []
+    intent_path = PROJECT_ROOT / "config" / "intent.txt"
+    
+    if not intent_path.exists():
+        return []  # No intent.txt = skip
+    
+    try:
+        # Check if intent.txt has uncommitted changes (modified in working tree)
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "config/intent.txt"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True
+        )
+        if "intent.txt" in result.stdout:
+            issues.append(
+                "INTENT_PROTECTION: config/intent.txt has uncommitted changes. "
+                "Use --allow-intent-edit flag if this is intentional."
+            )
+        
+        # Also check staged changes
+        result_staged = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "config/intent.txt"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True
+        )
+        if "intent.txt" in result_staged.stdout:
+            issues.append(
+                "INTENT_PROTECTION: config/intent.txt has staged changes. "
+                "Use --allow-intent-edit flag if this is intentional."
+            )
+            
+    except Exception as e:
+        issues.append(f"ERROR: Could not check intent protection: {e}")
+    
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
     parser.add_argument("--allow-roadmap-edit", action="store_true", 
                         help="Allow Roadmap.md modifications (explicit permission)")
+    parser.add_argument("--allow-intent-edit", action="store_true",
+                        help="Allow config/intent.txt modifications (explicit permission)")
     args = parser.parse_args()
     
     print(f"Repo Safety Gate v{__version__}")
@@ -798,6 +854,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: DEV_REPORT_LATEST.md aligned with rolling artifacts")
+    
+    print("\n[12] Checking intent.txt protection...")
+    issues = check_intent_protection(args.allow_intent_edit)
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: config/intent.txt not modified without explicit permission")
     
     # Summary
     print("\n" + "=" * 50)
