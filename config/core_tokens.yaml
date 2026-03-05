@@ -207,6 +207,41 @@ base:
     address: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
     decimals: 8
     name: "Coinbase Wrapped BTC"
+  
+  AERO:
+    address: "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
+    decimals: 18
+    name: "Aerodrome"
+    note: "Aerodrome DEX native token"
+  
+  BRETT:
+    address: "0x532f27101965dd16442E59d40670FaF5eBB142E4"
+    decimals: 18
+    name: "Brett"
+    note: "Meme token"
+  
+  DEGEN:
+    address: "0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed"
+    decimals: 18
+    name: "Degen"
+    note: "Meme token"
+  
+  TOSHI:
+    address: "0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4"
+    decimals: 18
+    name: "Toshi"
+    note: "Meme token"
+  
+  VIRTUAL:
+    address: "0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b"
+    decimals: 18
+    name: "Virtual Protocol"
+  
+  WELL:
+    address: "0xA88594D404727625A9437C3f886C7643872296AE"
+    decimals: 18
+    name: "WELL"
+    note: "Moonwell governance token"
 
 # =============================================================================
 # LINEA (chain_id: 59144)
@@ -236,6 +271,12 @@ linea:
     address: "0x3aAB2285ddcDdaD8edf438C1bAB47e1a9D05a9b4"
     decimals: 8
     name: "Wrapped BTC"
+  
+  LYNX:
+    address: "0x1a51b19CE03dbE0Cb44C1528E34a7edD7771e9af"
+    decimals: 18
+    name: "Lynex"
+    note: "Lynex DEX governance token"
 
 # =============================================================================
 # SCROLL (chain_id: 534352)
@@ -265,6 +306,12 @@ scroll:
     address: "0x3C1BCa5a656e69edCD0D4E36BEbb3FcDAcA60Cf1"
     decimals: 8
     name: "Wrapped BTC"
+  
+  SCR:
+    address: "0xd29687c813D741E2F938F4aC377128810E217b1b"
+    decimals: 18
+    name: "Scroll"
+    note: "Scroll native token"
 
 # =============================================================================
 # MANTLE (chain_id: 5000)
@@ -295,6 +342,12 @@ mantle:
     address: "0xcDA86A272531e8640cD7F1a92c01839911B90bb0"
     decimals: 18
     name: "Mantle Staked Ether"
+  
+  PUFF:
+    address: "0x26a6b0dcdCfB981362aFa56D581e4A7DBa3Be140"
+    decimals: 18
+    name: "Puff The Dragon"
+    note: "Mantle native meme token"
 
 # =============================================================================
 # ZKSYNC ERA (chain_id: 324)
@@ -324,3 +377,26 @@ zksync:
     address: "0xBBeB516fb02a01611cBBE0453Fe3c580D7281011"
     decimals: 8
     name: "Wrapped BTC"
+  
+  ZK:
+    address: "0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E"
+    decimals: 18
+    name: "ZKsync"
+    note: "zkSync native token"
+  
+  wstETH:
+    address: "0x703b52F2b28fEbcB60E1372858AF5b18849FE867"
+    decimals: 18
+    name: "Wrapped stETH"
+    note: "zkSync bridged wstETH"
+  
+  HOLD:
+    address: "0xed4040fD47629e7c8FBB7DA76bb50B3e7695F0f2"
+    decimals: 18
+    name: "Holdstation"
+  
+  CHEEMS:
+    address: "0x9Db6BF8B0215A02BEA9beF28A92D829FD008D480"
+    decimals: 18
+    name: "Cheems"
+    note: "Meme token"

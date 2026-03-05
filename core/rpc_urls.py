@@ -12,6 +12,8 @@ _NETWORK_ALIASES = {
     "base": "base",
     "linea": "linea",
     "mantle": "mantle",
+    "scroll": "scroll",
+    "zksync": "zksync",
 }
 
 # Alchemy subdomain mapping (best-effort); these are the subdomain prefixes
@@ -29,6 +31,8 @@ _PUBLIC_FALLBACKS = {
     "base": "https://mainnet.base.org",
     "linea": "https://rpc.linea.build",
     "mantle": "https://rpc.mantle.xyz",
+    "scroll": "https://rpc.scroll.io",
+    "zksync": "https://mainnet.era.zksync.io",
 }
 
 
@@ -80,6 +84,8 @@ _CHAIN_ID_TO_NETWORK = {
     8453: "base",
     59144: "linea",
     5000: "mantle",
+    534352: "scroll",
+    324: "zksync",
 }
 
 # v1.12.2: Host patterns for chain validation
@@ -88,6 +94,8 @@ _CHAIN_ID_HOST_PATTERNS = {
     8453: ["base"],
     59144: ["linea"],
     5000: ["mantle"],
+    534352: ["scroll"],
+    324: ["zksync"],
 }
 
 
@@ -207,6 +215,8 @@ _CHAIN_KEY_TO_ID = {
     "base": 8453,
     "linea": 59144,
     "mantle": 5000,
+    "scroll": 534352,
+    "zksync": 324,
 }
 
 

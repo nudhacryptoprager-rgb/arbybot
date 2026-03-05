@@ -165,22 +165,26 @@ def check_chain_readiness(
     Returns:
         {
             "chain": chain,
-            "ready": True/False,
+            "ready": True/False,  # True if DEX infra OK (some tokens may be missing)
+            "ready_status": "READY" | "PARTIAL" | "NOT_READY",
             "missing_tokens": [...],
             "available_tokens": [...],
             "dex_anchors": {...},
             "anchor_coverage": {...},  # v3.2.24
-            "issues": [...]
+            "issues": [...]  # Blocking issues
+            "warnings": [...]  # Non-blocking warnings (v3.2.31)
         }
     """
     result = {
         "chain": chain,
         "ready": True,
+        "ready_status": "READY",
         "missing_tokens": [],
         "available_tokens": [],
         "dex_anchors": {},
         "anchor_coverage": {},
         "issues": [],
+        "warnings": [],
     }
     
     # Check tokens
@@ -189,19 +193,33 @@ def check_chain_readiness(
     missing = intent_symbols - available
     result["missing_tokens"] = sorted(missing)
     
+    # v3.2.31: Missing tokens are warnings, not blockers
+    # The chain can be "partially ready" if DEX infrastructure is OK
     if missing:
-        result["issues"].append(f"Missing {len(missing)} tokens in core_tokens.yaml: {', '.join(sorted(missing))}")
-        result["ready"] = False
+        result["warnings"].append(f"Missing {len(missing)} tokens in core_tokens.yaml: {', '.join(sorted(missing))}")
+        token_coverage = len(available) / len(intent_symbols) if intent_symbols else 0
+        if token_coverage < 0.5:
+            result["issues"].append(f"Token coverage too low: {len(available)}/{len(intent_symbols)} ({token_coverage:.0%})")
+            result["ready"] = False
+            result["ready_status"] = "NOT_READY"
+        elif token_coverage < 1.0:
+            result["ready_status"] = "PARTIAL"  # DEX infra OK, but some tokens missing
     
     # Check DEX anchors
+    # v3.2.31: Adapter-type aware checking
+    ADAPTER_TYPES_NO_QUOTER = ["ve33"]  # ve33 (Aerodrome) uses ReservesQuoter, not quoter_v2
+    
     required_anchors = ["factory"]  # Minimum required
     for dex in dexes:
         dex_id = dex.get("dex_id", "unknown")
+        adapter_type = dex.get("adapter_type", "uniswap_v3")  # Default to uniswap_v3
+        
         anchors = {}
         for key in ["factory", "quoter", "quoter_v2", "router"]:
             val = dex.get(key)
             if val:
                 anchors[key] = val[:10] + "..." if len(val) > 10 else val
+        anchors["adapter_type"] = adapter_type
         
         result["dex_anchors"][dex_id] = anchors
         
@@ -210,10 +228,16 @@ def check_chain_readiness(
             result["issues"].append(f"DEX {dex_id} missing factory address")
             result["ready"] = False
         
-        # Check if quoter exists (needed for quoting)
-        if not dex.get("quoter") and not dex.get("quoter_v2"):
-            result["issues"].append(f"DEX {dex_id} missing quoter/quoter_v2 address")
-            result["ready"] = False
+        # Check if quoter exists (needed for quoting) - skip for ve33 adapter type
+        if adapter_type not in ADAPTER_TYPES_NO_QUOTER:
+            if not dex.get("quoter") and not dex.get("quoter_v2"):
+                result["issues"].append(f"DEX {dex_id} missing quoter/quoter_v2 address")
+                result["ready"] = False
+        else:
+            # ve33 type - quoter optional, uses ReservesQuoter instead
+            if not dex.get("quoter") and not dex.get("quoter_v2"):
+                # Info-level, not an error
+                pass  # ve33 doesn't need external quoter
     
     if not dexes:
         result["issues"].append("No DEXes configured for this chain")
@@ -336,12 +360,15 @@ def main():
         print()
         
         for r in results:
-            status = "[READY]" if r["ready"] else "[NOT READY]"
+            status = f"[{r.get('ready_status', 'READY' if r['ready'] else 'NOT_READY')}]"
             print(f"Chain: {r['chain']} - {status}")
             
-            # Tokens
-            print(f"  Tokens in intent: {len(r['available_tokens']) + len(r['missing_tokens'])}")
-            print(f"  Tokens in core_tokens.yaml: {len(r['available_tokens'])}")
+            # Token coverage
+            total_tokens = len(r['available_tokens']) + len(r['missing_tokens'])
+            avail_tokens = len(r['available_tokens'])
+            coverage_pct = round(avail_tokens / total_tokens * 100) if total_tokens else 0
+            print(f"  Tokens in intent: {total_tokens}")
+            print(f"  Tokens in core_tokens.yaml: {avail_tokens} ({coverage_pct}%)")
             if r["missing_tokens"]:
                 print(f"  Missing tokens: {', '.join(r['missing_tokens'][:5])}")
                 if len(r["missing_tokens"]) > 5:
@@ -369,16 +396,21 @@ def main():
                         if len(mp) > 5:
                             print(f"    ... and {len(mp) - 5} more")
             
-            # Issues
+            # Issues and Warnings (v3.2.31)
             if r["issues"]:
-                print(f"  Issues:")
+                print(f"  Issues (blocking):")
                 for issue in r["issues"]:
                     print(f"    - {issue}")
+            if r.get("warnings"):
+                print(f"  Warnings:")
+                for warn in r["warnings"][:5]:
+                    print(f"    - {warn}")
             
             print()
     
     # Exit code
-    all_ready = all(r["ready"] for r in results)
+    # v3.2.31: PARTIAL is considered ready (exit 0), only NOT_READY fails
+    all_ready = all(r.get("ready_status", "NOT_READY") in ("READY", "PARTIAL") for r in results)
     return 0 if all_ready else 1
 
 

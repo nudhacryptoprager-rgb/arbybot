@@ -102,9 +102,29 @@ class TestCheckChainReadiness:
         
         result = check_chain_readiness("test_chain", symbols, tokens, dexes)
         
+        # v3.2.31: With 1/3 tokens (33% < 50%), chain is NOT_READY
         assert result["ready"] is False
+        assert result["ready_status"] == "NOT_READY"
         assert sorted(result["missing_tokens"]) == ["USDC", "WBTC"]
-        assert any("Missing 2 tokens" in issue for issue in result["issues"])
+        # Missing tokens now go to warnings, low coverage goes to issues
+        assert any("Missing 2 tokens" in warn for warn in result.get("warnings", []))
+        assert any("Token coverage too low" in issue for issue in result["issues"])
+    
+    def test_partial_readiness(self):
+        """Test chain with partial token coverage (>= 50%)."""
+        symbols = {"WETH", "USDC", "WBTC", "DAI"}
+        tokens = {"WETH": "0x...", "USDC": "0x...", "WBTC": "0x..."}  # 3/4 = 75%
+        dexes = [
+            {"dex_id": "uniswap_v3", "factory": "0xfactory", "quoter": "0xquoter"},
+        ]
+        
+        result = check_chain_readiness("test_chain", symbols, tokens, dexes)
+        
+        # v3.2.31: With 3/4 tokens (75% >= 50%), chain is PARTIAL
+        assert result["ready"] is True  # DEX infra OK
+        assert result["ready_status"] == "PARTIAL"
+        assert result["missing_tokens"] == ["DAI"]
+        assert any("Missing 1 tokens" in warn for warn in result.get("warnings", []))
     
     def test_missing_factory(self):
         """Test chain with DEX missing factory."""

@@ -3,8 +3,8 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.31)
-**Goal**: M4.2 Roundtrip → `roundtrip.profitable_count > 0` + exit diagnostic profit
+## SESSION GOAL + DONE CRITERIA (v3.2.32)
+**Goal**: Multi-chain universe lift (Roadmap A4/A5) — bring up all chains from intent.txt
 
 ### M4.1 DoD CRITERIA (ACHIEVED)
 | # | Criterion | Target | Current | Status |
@@ -14,33 +14,45 @@
 | 3 | `profit_is_diagnostic` | true (simulate-only) | true | ✅ |
 | 4 | `computed_total_net_usdc` | > 0 | $890.98 | ✅ |
 
-### M4.2 DoD CRITERIA (IN PROGRESS)
+### M4.2 DoD CRITERIA (IN PROGRESS - market-blocked)
 | # | Criterion | Target | Current | Status |
 |---|-----------|--------|---------|--------|
-| 1 | `roundtrip.profitable_count` | >= 1 | 0 | ⬜ |
+| 1 | `roundtrip.profitable_count` | >= 1 | 0 | ⬜ (market) |
 | 2 | `profit_truth_available` | true | false | ⬜ |
 | 3 | `profit_is_diagnostic` (exit) | false | true | ⬜ |
 | 4 | Roundtrip metrics in rolling | present | ✓ | ✅ |
 
-### QUALITY/STRETCH CRITERIA (secondary - nice to have)
-| # | Criterion | Target | Current | Status |
-|---|-----------|--------|---------|--------|
-| 3 | `window_chain_key` | != MIXED | arbitrum_one | + |
-| 4 | `agg_status` | PASS | PASS | + |
-| 5 | `unique_pairs` | >= 8 | 13 | + |
+### Multi-chain Universe Lift (A4/A5) - BRING-UP
+| Chain | lint_readiness | Tokens | COVERAGE Run | Pools |
+|-------|---------------|--------|--------------|-------|
+| arbitrum_one | READY (100%) | 25/25 | N/A (production) | OK |
+| base | READY (100%) | 12/12 | FAIL (pool=16) | 0 |
+| linea | PARTIAL (50%) | 6/12 | FAIL (tokens=9,pool=8) | 0 |
+| mantle | PARTIAL (67%) | 6/9 | N/A | backlog |
+| scroll | PARTIAL (55%) | 6/11 | FAIL (tokens=6,pool=8) | 0 |
+| zksync | PARTIAL (82%) | 9/11 | FAIL (tokens=2,pool=13) | 0 |
 
-### v3.2.31 CHANGES SUMMARY
+**Bring-up Summary:**
+- All chains have working RPC + discovery infrastructure
+- Pool lookups returning 0 pools on non-Arbitrum chains (different fee tiers / no pools deployed)
+- Next: Pool factory fee tier enumeration, DEX-specific getPool() logic
 
-**M4.2 Progress (roundtrip metrics in rolling):**
-- ADD: `m4/fixtures.py` - roundtrip extraction from truth_report
-- ADD: `m4/rolling_store.py` - roundtrip aggregate stats (runs_evaluated, runs_profitable, total_*)
-- ADD: `scripts/doc_sync_helper.py` - evidence extraction for DEV_REPORT/Status
-- ADD: `scripts/check_repo_safety.py` v1.8.0 - intent.txt protection guardrail
-- ARCHIVE: `_patch.diff`, `_WIP_diff.patch` moved to `archive/`
+### v3.2.32 CHANGES SUMMARY
 
-**Evidence runDir**: `ci_m5_gate_20260305_184929`
+**Multi-chain bring-up (A4/A5):**
+- ADD: `core/rpc_urls.py` - scroll/zksync RPC fallbacks (chain_ids 534352, 324)
+- ADD: `config/core_tokens.yaml` - BASE (AERO,BRETT,DEGEN,TOSHI,VIRTUAL,WELL), LINEA (LYNX), SCROLL (SCR), MANTLE (PUFF), ZKSYNC (ZK,wstETH,HOLD,CHEEMS)
+- ADD: `config/coverage_intent_base.yaml` - Base bring-up config
+- UPD: `scripts/lint_readiness.py` - adapter_type semantics (ve33 no quoter), PARTIAL status (>50% tokens OK)
+- ADD: `tests/unit/test_lint_readiness.py::test_partial_readiness` - new test
 
-**Tests**: 1385 passed, CI pipeline PASS, M4 gate profit PASS
+**Evidence runDirs (COVERAGE):**
+- linea: `ci_m5_gate_20260305_193431` (FAIL: pool=8)
+- base: `ci_m5_gate_20260305_193446` (FAIL: pool=16)
+- scroll: `ci_m5_gate_20260305_193531` (FAIL: pool=8)
+- zksync: `ci_m5_gate_20260305_193551` (FAIL: pool=13)
+
+**Tests**: 1386 passed, CI pipeline PASS, repo safety PASS
 
 ## 0) Meta
 timestamp_utc: 2026-03-05T17:49:43Z
