@@ -3,7 +3,7 @@
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-05  
 **Tests**: 1385 passed (including lint_readiness, cleanup_rolling, suggest_anchor_updates tests)  
-**Evidence runDir**: `ci_m5_gate_20260305_123559`  
+**Evidence runDir**: `ci_m5_gate_20260305_142122`  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -60,9 +60,13 @@ These fields are documented in `docs/m4/ROLLING_CONTRACT.md` → "run_quality fi
 ### Evidence Pointers
 
 - Rolling triplet: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json}`
-- Latest runDir: `data/runs/ci_m5_gate_20260305_123559/reports/`
-- run_timestamp: `2026-03-05T11:37:00.563309Z`
+- Latest runDir: `data/runs/ci_m5_gate_20260305_142122/reports/`
+- run_timestamp: `2026-03-05T12:22:17Z`
 - Scripts: `cleanup_rolling.py`, `lint_readiness.py --config`, `suggest_anchor_updates.py`
+
+### lint_readiness Note (2026-03-05)
+
+`lint_readiness.py` text output now uses ASCII badges (`[READY]`, `[OK]`, `[FAIL]`) instead of emojis to avoid `UnicodeEncodeError` on Windows terminals with cp1251 encoding. Use `--json` for programmatic access.
 
 ### Latest Rolling Snapshot (2026-03-05)
 

@@ -38,16 +38,16 @@ def load_artifacts(run_dir: Path) -> tuple[dict, dict]:
     """Load scan and reject_histogram from runDir."""
     reports = run_dir / "reports"
     
-    scan_files = list(reports.glob("scan_*.json"))
-    rh_files = list(reports.glob("reject_histogram_*.json"))
+    scan_files = sorted(reports.glob("scan_*.json"), key=lambda p: p.name, reverse=True)
+    rh_files = sorted(reports.glob("reject_histogram_*.json"), key=lambda p: p.name, reverse=True)
     
     if not scan_files:
         raise FileNotFoundError(f"No scan_*.json in {reports}")
     if not rh_files:
         raise FileNotFoundError(f"No reject_histogram_*.json in {reports}")
     
-    scan = json.load(open(scan_files[0]))
-    rh = json.load(open(rh_files[0]))
+    scan = json.load(open(scan_files[0], encoding='utf-8'))
+    rh = json.load(open(rh_files[0], encoding='utf-8'))
     
     return scan, rh
 
@@ -328,10 +328,6 @@ def main():
         print(format_yaml_snippet(anchors, usd_prices))
     
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
 
 
 if __name__ == "__main__":

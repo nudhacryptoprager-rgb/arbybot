@@ -336,7 +336,7 @@ def main():
         print()
         
         for r in results:
-            status = "✅ READY" if r["ready"] else "❌ NOT READY"
+            status = "[READY]" if r["ready"] else "[NOT READY]"
             print(f"Chain: {r['chain']} - {status}")
             
             # Tokens
@@ -357,8 +357,8 @@ def main():
             if r.get("anchor_coverage"):
                 ac = r["anchor_coverage"]
                 pct = ac.get("coverage_pct", 0)
-                status_emoji = "✅" if pct >= 80 else ("⚠️" if pct >= 50 else "❌")
-                print(f"  Anchor coverage: {status_emoji} {ac['covered']}/{ac['total_pairs']} pairs ({pct}%)")
+                status_badge = "OK" if pct >= 80 else ("WARN" if pct >= 50 else "FAIL")
+                print(f"  Anchor coverage: [{status_badge}] {ac['covered']}/{ac['total_pairs']} pairs ({pct}%)")
                 if ac.get("missing_pairs"):
                     mp = ac["missing_pairs"]
                     print(f"    Missing: {', '.join(mp[:5])}")

@@ -83,8 +83,7 @@ tokens_usd_price:
   DAI: 1.0
   USDC: 1.0
   USDT: 1.0
-  wstETH: 2444.0        # WETH*1.15
-  WSTETH: 2444.0        # Case variant
+  WSTETH: 2444.0        # WETH*1.15 (case-insensitive lookup handles variants)
   rETH: 2295.0          # WETH*1.08
   PENDLE: 1.19          # PENDLE/WETH=0.000559 → 2125*0.000559
   RDNT: 0.00005         # RDNT/USDC PASS median
@@ -129,9 +128,8 @@ tokens_anchor_price:
   UNI_USDC: 4.21            # 2125/505.04
   WETH_UNI: 505.0           # FAIL median
   # LST pairs (estimates based on WETH)
-  wstETH_WETH: 1.15
-  wstETH_USDC: 2444.0
-  WSTETH_WETH: 1.15         # Case variant
+  WSTETH_WETH: 1.15       # Case-insensitive lookup handles wstETH variants
+  WSTETH_USDC: 2444.0
   rETH_WETH: 1.08
   rETH_USDC: 2295.0
   # PENDLE pairs (FAIL evidence: PENDLE/WETH median=0.000559)
