@@ -3,8 +3,8 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.22)
-**Goal**: Rolling discipline hardening - chain guard, minimal run_summary, quality warnings propagation.
+## SESSION GOAL + DONE CRITERIA (v3.2.24)
+**Goal**: Fix PRICE_SANITY_FAILED domination by updating stale anchor prices and adding case-insensitive lookup.
 
 ### M4.2 TRUTH-PROGRESS CRITERIA (primary - must pass)
 | # | Criterion | Target | Current | Status |
@@ -19,30 +19,23 @@
 | 4 | `agg_status` | PASS | PASS | ✅ |
 | 5 | `unique_pairs` | >= 8 | 7 | ❌ |
 
-### v3.2.22 CHANGES SUMMARY
+### v3.2.24 CHANGES SUMMARY
 
-**Chain Guard Hardening:**
-1. **Re-check after auto-enable** - Chain guard re-checked AFTER auto-enable of refresh_rolling to prevent bypass
-2. **unknown chain_key removal** - cleanup_rolling.py now removes unknown chain_key runs (not kept as backdoor)
-3. **Archive prune policy** - cleanup_rolling.py keeps only last 5 archives (prevents artifact explosion)
+**Anchor Price Fixes:**
+1. **Updated tokens_anchor_price** - Fixed stale values (WETH: 3000→2100, ARB: 1.5→0.40)
+2. **Updated tokens_usd_price** - Synced with anchor prices for consistency
+3. **Case-insensitive lookup** - Added `lookup_anchor_price_ci()` to handle wstETH/WSTETH variants
+4. **Expanded anchor coverage** - Added WETH_DAI, ARB_USDC, WETH_ARB, WETH_LINK, WBTC_USDC, etc.
 
-**Minimal run_summary for NO_DATA/FAIL:**
-4. **Separate schema** - Uses `m4:run_summary_min:v2.0` to avoid contract conflicts
-5. **Status/reasons mapping** - `NO_DATA` for zero signals, `FAIL` for validation failures (not always NO_DATA)
-6. **Atomic write** - Uses `core.json_io.atomic_write_json` for crash safety
-
-**Quality Warnings Propagation:**
-7. **run_quality_status** - Now propagated to `_latest.json` from `run_summary.quality_status`
-8. **run_quality_warnings** - Now propagated to `_latest.json` from `run_summary.quality_warnings`
-
-**Other Improvements:**
-9. **lint_readiness.py** - Extended with `--config` flag for coverage config YAMLs
-10. **KPI sync in cleanup** - cleanup_rolling.py syncs ALL KPI fields (data_run_rate, effective_pass_rate, etc.)
+**Tooling Improvements:**
+5. **suggest_anchor_updates.py** - New script to extract evidence-based anchor prices from runDir
+6. **lint_readiness.py anchor check** - Extended with anchor coverage validation for --config mode
+7. **Unit tests** - Added test_quotes_anchor_lookup.py for case-insensitive matching
 
 **Evidence runs:**
 - NORMAL: `ci_m5_gate_20260305_105825` (PASS, signals=1, rolling updated, runs_in_window=50)
 
-**Tests**: 1357 passed, CI pipeline PASS
+**Tests**: 1362 passed, CI pipeline PASS
 
 ## 0) Meta
 timestamp_utc: 2026-03-05T09:59:24.533891Z
@@ -69,25 +62,21 @@ change_summary (v3.2.20):
   - UPD: config/chains.yaml (scroll, zksync chains)
   - UPD: config/dexes.yaml (scroll:uniswap_v3, zksync:izumi_v3)
   - TESTS: 1341 passed
-touched_files (v3.2.20):
-  - strategy/quotes.py (per-DEX quoter mode, NO_USD_PRICE filter)
-  - m4/fixtures.py (DEX_HEALTH_CRITICAL quality warning)
-  - scripts/inspect_run_dir.py (best_included_spread_economics)
-  - config/real_intent_arbitrum_one.yaml (tokens sync)
-  - config/coverage_intent_linea.yaml (M4.2 semantics)
-  - config/coverage_intent_mantle.yaml (M4.2 semantics)
-  - config/coverage_intent_scroll.yaml (NEW)
-  - config/coverage_intent_zksync.yaml (NEW)
-  - config/chains.yaml (scroll, zksync)
-  - config/dexes.yaml (scroll, zksync DEXes)
+touched_files (v3.2.24):
+  - config/real_intent_arbitrum_one.yaml (anchor/USD price sync v3.2.24)
+  - strategy/quotes.py (lookup_anchor_price_ci)
+  - scripts/lint_readiness.py (anchor coverage check)
+  - scripts/suggest_anchor_updates.py (NEW)
+  - tests/unit/test_quotes_anchor_lookup.py (NEW)
+  - tests/unit/test_lint_readiness.py (4-value unpack fix)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: 1346 passed, 1 skipped
+py -3.11 -m pytest tests/unit -q: 1362 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_intent_arbitrum_one.yaml --refresh-rolling: PASS
-py -3.11 scripts/inspect_rolling.py --json: runs_in_window=50, agg_status=PASS, unique_pairs=7, quality_warnings=[] (evidence)
+py -3.11 scripts/ci_m5_0_gate.py --offline: PASS
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:

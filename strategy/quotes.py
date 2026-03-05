@@ -31,6 +31,40 @@ from core.pool_keys import make_pool_key
 
 
 # =============================================================================
+# CASE-INSENSITIVE ANCHOR LOOKUP (v3.2.24)
+# =============================================================================
+
+def lookup_anchor_price_ci(
+    anchor_dict: Dict[str, float],
+    pair_tag: str,
+) -> Optional[float]:
+    """
+    Case-insensitive lookup for tokens_anchor_price.
+    
+    v3.2.24: Fixes wstETH/WSTETH case mismatch issue where config uses
+    'wstETH_WETH' but runtime may generate 'WSTETH_WETH'.
+    
+    Args:
+        anchor_dict: The tokens_anchor_price dict from config
+        pair_tag: Pair tag to lookup (e.g., "WSTETH_WETH")
+        
+    Returns:
+        Anchor price if found, None otherwise
+    """
+    # Direct lookup first (fast path)
+    if pair_tag in anchor_dict:
+        return anchor_dict[pair_tag]
+    
+    # Case-insensitive lookup
+    pair_upper = pair_tag.upper()
+    for key, value in anchor_dict.items():
+        if key.upper() == pair_upper:
+            return value
+    
+    return None
+
+
+# =============================================================================
 # TOKEN ADDRESS RESOLUTION (v3.2.17)
 # =============================================================================
 
@@ -725,10 +759,11 @@ def collect_quotes(
                 continue  # Skip this pair entirely
         
         # Get anchor price for this pair (v2.2.0: prefer dynamic over YAML)
-        yaml_anchor = tokens_anchor_price.get(token_pair_tag)
+        # v3.2.24: Use case-insensitive lookup to handle wstETH/WSTETH variants
+        yaml_anchor = lookup_anchor_price_ci(tokens_anchor_price, token_pair_tag)
         if not yaml_anchor:
             reversed_tag = f"{token_out}_{token_in}"
-            yaml_anchor = tokens_anchor_price.get(reversed_tag)
+            yaml_anchor = lookup_anchor_price_ci(tokens_anchor_price, reversed_tag)
             if yaml_anchor:
                 yaml_anchor = 1.0 / yaml_anchor
         

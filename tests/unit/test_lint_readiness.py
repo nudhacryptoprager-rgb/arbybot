@@ -34,11 +34,12 @@ dexes:
   - sushiswap
 """)
         
-        chain, symbols, dex_ids = load_coverage_config(config)
+        chain, symbols, dex_ids, anchor_prices = load_coverage_config(config)
         
         assert chain == "test_chain"
         assert symbols == {"WETH", "USDC", "WBTC", "USDT"}
         assert dex_ids == ["uniswap_v3", "sushiswap"]
+        assert anchor_prices == {}
     
     def test_load_config_empty_pairs(self, tmp_path: Path):
         """Test loading config with no pairs."""
@@ -50,11 +51,12 @@ dexes:
   - lynex_v3
 """)
         
-        chain, symbols, dex_ids = load_coverage_config(config)
+        chain, symbols, dex_ids, anchor_prices = load_coverage_config(config)
         
         assert chain == "linea"
         assert symbols == set()
         assert dex_ids == ["lynex_v3"]
+        assert anchor_prices == {}
     
     def test_load_config_no_dexes(self, tmp_path: Path):
         """Test loading config without dexes key."""
@@ -65,11 +67,12 @@ pairs:
   - WMNT/USDC
 """)
         
-        chain, symbols, dex_ids = load_coverage_config(config)
+        chain, symbols, dex_ids, anchor_prices = load_coverage_config(config)
         
         assert chain == "mantle"
         assert symbols == {"WMNT", "USDC"}
         assert dex_ids == []
+        assert anchor_prices == {}
 
 
 class TestCheckChainReadiness:

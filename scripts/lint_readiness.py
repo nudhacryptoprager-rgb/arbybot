@@ -63,11 +63,12 @@ def load_intent() -> dict[str, set[str]]:
     return dict(chain_symbols)
 
 
-def load_coverage_config(config_path: Path) -> tuple[str, set[str], list[str]]:
+def load_coverage_config(config_path: Path) -> tuple[str, set[str], list[str], dict]:
     """
-    Load a coverage config YAML and return (chain, symbols, dex_ids).
+    Load a coverage config YAML and return (chain, symbols, dex_ids, anchor_prices).
     
     v3.2.22: Supports coverage_intent_*.yaml configs for multi-chain bring-up.
+    v3.2.24: Also extracts tokens_anchor_price for anchor coverage check.
     
     Expected config format:
     ```yaml
@@ -77,6 +78,8 @@ def load_coverage_config(config_path: Path) -> tuple[str, set[str], list[str]]:
       - WETH/USDT
     dexes:
       - lynex_v3
+    tokens_anchor_price:
+      WETH_USDC: 2100.0
     ```
     """
     import yaml
@@ -87,6 +90,7 @@ def load_coverage_config(config_path: Path) -> tuple[str, set[str], list[str]]:
     chain = data.get("chain", "unknown")
     symbols: set[str] = set()
     dex_ids: list[str] = data.get("dexes", [])
+    anchor_prices: dict = data.get("tokens_anchor_price", {})
     
     # Parse pairs
     pairs = data.get("pairs", [])
@@ -96,7 +100,7 @@ def load_coverage_config(config_path: Path) -> tuple[str, set[str], list[str]]:
             symbols.add(base.strip())
             symbols.add(quote.strip())
     
-    return chain, symbols, dex_ids
+    return chain, symbols, dex_ids, anchor_prices
 
 
 def load_core_tokens() -> dict[str, dict[str, str]]:
@@ -149,10 +153,14 @@ def check_chain_readiness(
     chain: str,
     intent_symbols: set[str],
     core_tokens: dict[str, str],
-    dexes: list[dict]
+    dexes: list[dict],
+    anchor_prices: dict[str, float] | None = None,
+    pairs: list[str] | None = None
 ) -> dict:
     """
     Check readiness for a single chain.
+    
+    v3.2.24: Added anchor_prices and pairs parameters for anchor coverage check.
     
     Returns:
         {
@@ -161,6 +169,7 @@ def check_chain_readiness(
             "missing_tokens": [...],
             "available_tokens": [...],
             "dex_anchors": {...},
+            "anchor_coverage": {...},  # v3.2.24
             "issues": [...]
         }
     """
@@ -170,6 +179,7 @@ def check_chain_readiness(
         "missing_tokens": [],
         "available_tokens": [],
         "dex_anchors": {},
+        "anchor_coverage": {},
         "issues": [],
     }
     
@@ -209,6 +219,41 @@ def check_chain_readiness(
         result["issues"].append("No DEXes configured for this chain")
         result["ready"] = False
     
+    # v3.2.24: Check anchor price coverage
+    if anchor_prices is not None and pairs is not None:
+        # Normalize anchor keys to uppercase for case-insensitive matching
+        anchor_keys_upper = {k.upper() for k in anchor_prices.keys()}
+        
+        covered_pairs: list[str] = []
+        missing_pairs: list[str] = []
+        
+        for pair in pairs:
+            if "/" not in pair:
+                continue
+            base, quote = pair.split("/", 1)
+            base, quote = base.strip(), quote.strip()
+            
+            # Generate both directions for this pair
+            key1 = f"{base}_{quote}".upper()
+            key2 = f"{quote}_{base}".upper()
+            
+            if key1 in anchor_keys_upper or key2 in anchor_keys_upper:
+                covered_pairs.append(pair)
+            else:
+                missing_pairs.append(pair)
+        
+        result["anchor_coverage"] = {
+            "total_pairs": len(pairs),
+            "covered": len(covered_pairs),
+            "missing": len(missing_pairs),
+            "missing_pairs": missing_pairs,
+            "coverage_pct": round(len(covered_pairs) / len(pairs) * 100, 1) if pairs else 0,
+        }
+        
+        if missing_pairs:
+            result["issues"].append(f"Missing {len(missing_pairs)} anchor prices: {', '.join(missing_pairs[:5])}")
+            # Don't fail readiness for missing anchors (soft warning)
+    
     return result
 
 
@@ -226,14 +271,21 @@ def main():
     results = []
     
     # v3.2.22: Support --config for coverage config YAMLs
+    # v3.2.24: Extended with anchor coverage check
     if args.config:
         config_path = Path(args.config)
         if not config_path.exists():
             print(f"ERROR: Config not found: {config_path}")
             return 1
         
-        chain, symbols, required_dex_ids = load_coverage_config(config_path)
+        chain, symbols, required_dex_ids, anchor_prices = load_coverage_config(config_path)
         tokens = core_tokens.get(chain, {})
+        
+        # Load pairs list from config for anchor coverage
+        import yaml
+        with open(config_path) as f:
+            config_data = yaml.safe_load(f)
+        pairs_list = config_data.get("pairs", [])
         
         # Filter dexes to only those in config
         all_dexes = dexes_by_chain.get(chain, [])
@@ -242,7 +294,7 @@ def main():
         else:
             dexes = all_dexes
         
-        result = check_chain_readiness(chain, symbols, tokens, dexes)
+        result = check_chain_readiness(chain, symbols, tokens, dexes, anchor_prices, pairs_list)
         result["config"] = str(config_path)
         result["required_dexes"] = required_dex_ids
         results.append(result)
@@ -290,6 +342,18 @@ def main():
             for dex_id, anchors in r["dex_anchors"].items():
                 anchor_list = ", ".join(f"{k}" for k in anchors.keys())
                 print(f"    {dex_id}: {anchor_list}")
+            
+            # Anchor coverage (v3.2.24)
+            if r.get("anchor_coverage"):
+                ac = r["anchor_coverage"]
+                pct = ac.get("coverage_pct", 0)
+                status_emoji = "✅" if pct >= 80 else ("⚠️" if pct >= 50 else "❌")
+                print(f"  Anchor coverage: {status_emoji} {ac['covered']}/{ac['total_pairs']} pairs ({pct}%)")
+                if ac.get("missing_pairs"):
+                    mp = ac["missing_pairs"]
+                    print(f"    Missing: {', '.join(mp[:5])}")
+                    if len(mp) > 5:
+                        print(f"    ... and {len(mp) - 5} more")
             
             # Issues
             if r["issues"]:

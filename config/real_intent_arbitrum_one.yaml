@@ -71,55 +71,82 @@ gas_usd_estimate: 0.10
 
 # Token USD prices (for notional sizing)
 # NOTE: These should be updated periodically or fetched dynamically in future
-# v3.2.20: Synced with intent.txt token universe to reduce NO_USD_PRICE rejections
+# v3.2.24: Updated from evidence (ci_m5_gate_20260305_105825)
 tokens_usd_price:
-  WETH: 3000.0
+  WETH: 2100.0
   WBTC: 60000.0
-  ARB: 1.5
+  ARB: 0.40
   GMX: 30.0
   LINK: 15.0
-  UNI: 10.0
+  UNI: 8.0
   DAI: 1.0
   USDC: 1.0
   USDT: 1.0
-  wstETH: 3500.0
-  rETH: 3100.0       # Rocket Pool ETH LST
-  PENDLE: 5.0
-  RDNT: 0.1
-  MAGIC: 0.5         # TreasureDAO
-  TBTC: 60000.0      # tBTC
-  GNS: 3.5           # Gains Network
-  GRAIL: 1500.0      # Camelot
-  JOE: 0.4           # Trader Joe
+  wstETH: 2415.0
+  WSTETH: 2415.0      # Case variant
+  rETH: 2268.0        # Rocket Pool ETH LST
+  PENDLE: 4.0
+  RDNT: 0.05
+  MAGIC: 0.50         # TreasureDAO
+  TBTC: 60000.0       # tBTC
+  GNS: 3.5            # Gains Network
+  GRAIL: 1500.0       # Camelot
+  JOE: 0.40           # Trader Joe
 
 # Price sanity gates (M5 tighter thresholds)
 price_sanity_max_deviation_bps: 3000  # 30% - tighter than M4 bootstrap
 
 # Anchor prices for sanity checks
-# v3.2.20: Synced with intent.txt token pairs to reduce PRICE_SANITY_FAILED
+# v3.2.24: Updated from evidence (ci_m5_gate_20260305_105825)
+# Based on WETH~$2100, ARB~$0.40, LINK~$15, GMX~$30
 tokens_anchor_price:
-  WETH_USDC: 3000.0
-  WBTC_WETH: 20.0
-  ARB_WETH: 0.0005
-  GMX_WETH: 0.01
+  # Stablecoin pairs
+  WETH_USDC: 2100.0
+  WETH_DAI: 2100.0
+  WETH_USDT: 2100.0
+  # BTC pairs
+  WBTC_WETH: 28.5          # 60000/2100
+  WBTC_USDC: 60000.0
+  WBTC_TBTC: 1.0           # 1:1 peg ideally
+  # ARB pairs
+  ARB_WETH: 0.00019        # 0.40/2100
+  ARB_USDC: 0.40
+  ARB_DAI: 0.40
+  WETH_ARB: 5250.0         # 2100/0.40
+  # GMX pairs
+  GMX_WETH: 0.0143         # 30/2100
   GMX_USDC: 30.0
-  LINK_WETH: 0.005
+  # LINK pairs
+  LINK_WETH: 0.0071        # 15/2100
   LINK_USDC: 15.0
-  UNI_WETH: 0.003
-  UNI_USDC: 10.0
+  WETH_LINK: 140.0         # 2100/15
+  # UNI pairs
+  UNI_WETH: 0.0038         # 8/2100
+  UNI_USDC: 8.0
+  # LST pairs
   wstETH_WETH: 1.15
-  wstETH_USDC: 3500.0
-  rETH_WETH: 1.03         # Slight premium
-  PENDLE_WETH: 0.0017
-  PENDLE_USDC: 5.0
-  RDNT_WETH: 0.00003
-  MAGIC_WETH: 0.00017
-  GNS_WETH: 0.0012
+  wstETH_USDC: 2415.0      # 2100*1.15
+  WSTETH_WETH: 1.15        # Case variant
+  rETH_WETH: 1.08
+  rETH_USDC: 2268.0        # 2100*1.08
+  # PENDLE pairs
+  PENDLE_WETH: 0.0019      # 4/2100
+  PENDLE_USDC: 4.0
+  # RDNT pairs
+  RDNT_WETH: 0.000024      # 0.05/2100
+  RDNT_USDC: 0.05
+  # MAGIC pairs
+  MAGIC_WETH: 0.00024      # 0.50/2100
+  MAGIC_USDC: 0.50
+  # GNS pairs
+  GNS_WETH: 0.0017         # 3.5/2100
   GNS_USDC: 3.5
-  GRAIL_WETH: 0.5
-  JOE_WETH: 0.00013
-  WBTC_TBTC: 1.0          # 1:1 peg ideally
-  ARB_DAI: 1.5
+  # GRAIL pairs
+  GRAIL_WETH: 0.71         # 1500/2100
+  GRAIL_USDC: 1500.0
+  # JOE pairs
+  JOE_WETH: 0.00019        # 0.40/2100
+  JOE_USDC: 0.40
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 truth_mode_m42: true
