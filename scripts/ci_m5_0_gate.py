@@ -872,6 +872,7 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                     all_passed = False
 
             # Heuristic: chain_id vs rpc host mismatch (blocker)
+            # v3.2.33: Use validate_chain_rpc_consistency() for all chains
             try:
                 chain_id_s = s.get("chain_id")
                 chain_id_t = t.get("chain_id")
@@ -879,8 +880,18 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                 chain_id_val = chain_id_s or chain_id_t
                 if chain_id_val is not None:
                     try:
+                        from core.rpc_urls import validate_chain_rpc_consistency
                         cid = int(chain_id_val)
-                        # Quick heuristic for known mismatch: Arbitrum chain_id (42161) must not point to Mantle host
+                        
+                        # v3.2.33: Validate all chains using consistent function
+                        for artifact_name, host in [("scan", host_s), ("truth_report", host_t)]:
+                            if host:
+                                is_valid, error_msg = validate_chain_rpc_consistency(cid, host)
+                                if not is_valid:
+                                    messages.append(f"FAIL: {artifact_name} infra chain/RPC mismatch: {error_msg}")
+                                    all_passed = False
+                    except ImportError:
+                        # Fallback to legacy heuristic if import fails
                         if cid == 42161:
                             hs = (host_s or "").lower()
                             ht = (host_t or "").lower()
@@ -1246,6 +1257,7 @@ ENV VARIABLES:
             
             # v1.12.2: Chain/RPC validation precheck
             # Detect mismatches like chain_id=42161 with Mantle RPC host
+            # v3.2.32: Use config rpc_endpoints as primary source (multi-chain safety)
             try:
                 import yaml
                 from core.rpc_urls import validate_chain_rpc_consistency, resolve_rpc_http
@@ -1256,8 +1268,15 @@ ENV VARIABLES:
                         cfg = yaml.safe_load(f)
                     cfg_chain_id = cfg.get("chain_id", 42161)
                     
-                    # Resolve RPC URL to check host
-                    rpc_url, _, _ = resolve_rpc_http(chain_id=cfg_chain_id, env=dict(os.environ))
+                    # v3.2.32: Config rpc_endpoints take highest priority
+                    config_rpc_endpoints = cfg.get("rpc_endpoints") or []
+                    if config_rpc_endpoints:
+                        rpc_url = config_rpc_endpoints[0]
+                        print(f"[ONLINE] Using config rpc_endpoint (highest priority): {rpc_url}")
+                    else:
+                        # Fall back to resolve_rpc_http (which now has chain-safety)
+                        rpc_url, _, _ = resolve_rpc_http(chain_id=cfg_chain_id, env=dict(os.environ))
+                    
                     if rpc_url:
                         from urllib.parse import urlparse
                         rpc_host = urlparse(rpc_url).netloc

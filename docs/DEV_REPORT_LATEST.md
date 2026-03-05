@@ -3,7 +3,7 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.32)
+## SESSION GOAL + DONE CRITERIA (v3.2.34)
 **Goal**: Multi-chain universe lift (Roadmap A4/A5) — bring up all chains from intent.txt
 
 ### M4.1 DoD CRITERIA (ACHIEVED)
@@ -22,37 +22,49 @@
 | 3 | `profit_is_diagnostic` (exit) | false | true | ⬜ |
 | 4 | Roundtrip metrics in rolling | present | ✓ | ✅ |
 
-### Multi-chain Universe Lift (A4/A5) - BRING-UP
-| Chain | lint_readiness | Tokens | COVERAGE Run | Pools |
-|-------|---------------|--------|--------------|-------|
-| arbitrum_one | READY (100%) | 25/25 | N/A (production) | OK |
-| base | READY (100%) | 12/12 | FAIL (pool=16) | 0 |
-| linea | PARTIAL (50%) | 6/12 | FAIL (tokens=9,pool=8) | 0 |
-| mantle | PARTIAL (67%) | 6/9 | N/A | backlog |
-| scroll | PARTIAL (55%) | 6/11 | FAIL (tokens=6,pool=8) | 0 |
-| zksync | PARTIAL (82%) | 9/11 | FAIL (tokens=2,pool=13) | 0 |
+### Multi-chain Universe Lift (A4/A5) - BRING-UP v3.2.34
+| Chain | lint_readiness | Tokens | COVERAGE Run | Pairs | Pools | Quotes | infra.rpc_http_host |
+|-------|---------------|--------|--------------|-------|-------|--------|---------------------|
+| arbitrum_one | READY (100%) | 25/25 | N/A (production) | 13 | OK | OK | arb-mainnet |
+| base | READY (100%) | 12/12 | DATA ✅ | 4 | 12 | 9 | mainnet.base.org ✅ |
+| linea | READY (92%) | 11/12 | QUOTER ❌ | 6 | 24 | 0 | rpc.linea.build ✅ |
+| mantle | PARTIAL (78%) | 7/9 | N/A | - | - | - | backlog |
+| scroll | PARTIAL (82%) | 9/11 | PARTIAL 🟡 | 2 | 4 | 0 | rpc.scroll.io ✅ |
+| zksync | PARTIAL (82%) | 9/11 | BLOCKED ❌ | 0 | 0 | 0 | mainnet.era.zksync.io ✅ |
 
-**Bring-up Summary:**
-- All chains have working RPC + discovery infrastructure
-- Pool lookups returning 0 pools on non-Arbitrum chains (different fee tiers / no pools deployed)
-- Next: Pool factory fee tier enumeration, DEX-specific getPool() logic
+**v3.2.34 Fixes (RPC Chain-Safety + Case-Insensitive USD Prices):**
+- FIX: `strategy/jobs/run_scan_real.py` - resolved_http priority over env var
+- FIX: `strategy/infra.py` - OVERWRITE env vars when config has rpc_endpoints (not setdefault)
+- FIX: `strategy/quotes.py` - case-insensitive USD price lookup (WEETH/weETH, WSTETH/wstETH)
+- FIX: `scripts/ci_m5_0_gate.py` - validate_chain_rpc_consistency() for all chains in infra check
 
-### v3.2.32 CHANGES SUMMARY
+**Multi-chain Blockers (remaining):**
+- Linea: ALGEBRA_NEEDS_QUOTER - lynex_v3 quoter uses different ABI than Camelot
+- zkSync: iZumi adapter pool lookup failing (0 pairs resolved)
+- All non-Arbitrum: Single DEX = no cross-DEX arb opportunity
 
-**Multi-chain bring-up (A4/A5):**
-- ADD: `core/rpc_urls.py` - scroll/zksync RPC fallbacks (chain_ids 534352, 324)
-- ADD: `config/core_tokens.yaml` - BASE (AERO,BRETT,DEGEN,TOSHI,VIRTUAL,WELL), LINEA (LYNX), SCROLL (SCR), MANTLE (PUFF), ZKSYNC (ZK,wstETH,HOLD,CHEEMS)
-- ADD: `config/coverage_intent_base.yaml` - Base bring-up config
-- UPD: `scripts/lint_readiness.py` - adapter_type semantics (ve33 no quoter), PARTIAL status (>50% tokens OK)
-- ADD: `tests/unit/test_lint_readiness.py::test_partial_readiness` - new test
+### v3.2.34 CHANGES SUMMARY
 
-**Evidence runDirs (COVERAGE):**
-- linea: `ci_m5_gate_20260305_193431` (FAIL: pool=8)
-- base: `ci_m5_gate_20260305_193446` (FAIL: pool=16)
-- scroll: `ci_m5_gate_20260305_193531` (FAIL: pool=8)
-- zksync: `ci_m5_gate_20260305_193551` (FAIL: pool=13)
+**RPC Priority Fix (critical):**
+- FIX: `strategy/jobs/run_scan_real.py:404` - `primary_http = resolved_http or env` (not env or resolved)
+- FIX: `strategy/infra.py:137-139` - `os.environ["..."] = ...` (OVERWRITE, not setdefault)
+- Result: `infra.rpc_http_host` now correctly shows chain-specific host (e.g., `mainnet.base.org` for Base)
 
-**Tests**: 1386 passed, CI pipeline PASS, repo safety PASS
+**Case-Insensitive USD Price Lookup:**
+- FIX: `strategy/quotes.py:780` - use `lookup_token_usd_price_ci()` for viability filter
+- FIX: `strategy/quotes.py:369` - use `lookup_token_usd_price_ci()` in `calculate_amount_in_wei()`
+- Result: NO_USD_PRICE no longer blocks WEETH/WSTETH/EZETH pairs
+
+**Gate Chain Validation:**
+- FIX: `scripts/ci_m5_0_gate.py:880-895` - use `validate_chain_rpc_consistency()` for all chains
+
+**Evidence runDirs (COVERAGE v3.2.34):**
+- base: `ci_m5_gate_20260305_204126` (4 pairs, 12 pools, 9 quotes, rpc_http_host=mainnet.base.org ✅)
+- linea: `ci_m5_gate_20260305_204005` (6 pairs, 24 pools, ALGEBRA_NEEDS_QUOTER)
+- scroll: `ci_m5_gate_20260305_201601` (2 pairs, 4 pools, NO_USD_PRICE)
+- zksync: `ci_m5_gate_20260305_200637` (0 pairs, adapter issue)
+
+**Tests**: 1386 passed, CI pipeline PASS
 
 ## 0) Meta
 timestamp_utc: 2026-03-05T17:49:43Z

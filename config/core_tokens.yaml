@@ -277,6 +277,36 @@ linea:
     decimals: 18
     name: "Lynex"
     note: "Lynex DEX governance token"
+  
+  wstETH:
+    address: "0xB5beDd42000b71FddE22D3eE8a79Bd49A568fC8F"
+    decimals: 18
+    name: "Wrapped stETH"
+    note: "v3.2.32: Verified via DexScreener"
+  
+  STONE:
+    address: "0x93F4d0ab6a8B4271f4a28Db399b5E30612D21116"
+    decimals: 18
+    name: "StakeStone Ether"
+    note: "v3.2.32: LST verified via DexScreener"
+  
+  ezETH:
+    address: "0x2416092f143378750bb29b79eD961ab195CcEea5"
+    decimals: 18
+    name: "Renzo Restaked ETH"
+    note: "v3.2.32: LRT verified via CoinGecko/DexScreener"
+  
+  weETH:
+    address: "0x1Bf74C010E6320bab11e2e5A532b5AC15e0b8aA6"
+    decimals: 18
+    name: "Wrapped eETH"
+    note: "v3.2.32: EtherFi LST verified via DexScreener"
+  
+  NILE:
+    address: "0xAAAac83751090C6ea42379626435f805DDF54DC8"
+    decimals: 18
+    name: "NILE Token"
+    note: "v3.2.32: Verified via CoinGecko/DexScreener"
 
 # =============================================================================
 # SCROLL (chain_id: 534352)
@@ -312,6 +342,24 @@ scroll:
     decimals: 18
     name: "Scroll"
     note: "Scroll native token"
+  
+  wstETH:
+    address: "0xf610A9dfB7C89644979b4A0f27063E9e7d7Cda32"
+    decimals: 18
+    name: "Wrapped stETH"
+    note: "v3.2.32: Scroll bridged wstETH verified via DexScreener"
+  
+  STONE:
+    address: "0x80137510979822322193FC997d400D5A6C747bf7"
+    decimals: 18
+    name: "StakeStone Ether"
+    note: "v3.2.32: LST verified via DexScreener"
+  
+  weETH:
+    address: "0x01f0a31698C4d065659b9bdC21B3610292a1c506"
+    decimals: 18
+    name: "Wrapped eETH"
+    note: "v3.2.32: EtherFi LST verified via DexScreener"
 
 # =============================================================================
 # MANTLE (chain_id: 5000)
@@ -348,6 +396,12 @@ mantle:
     decimals: 18
     name: "Puff The Dragon"
     note: "Mantle native meme token"
+  
+  cmETH:
+    address: "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA"
+    decimals: 18
+    name: "Cook mETH"
+    note: "v3.2.32: Verified via DexScreener"
 
 # =============================================================================
 # ZKSYNC ERA (chain_id: 324)

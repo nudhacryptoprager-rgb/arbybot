@@ -401,8 +401,9 @@ def run_scan(
     )
     
     # Build infra payload
-    primary_http = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or resolved_http
-    primary_ws = os.environ.get("ARBY_RPC_WS_PRIMARY") or resolved_ws
+    # v3.2.33: resolved_http takes priority over env var (config rpc_endpoints contract)
+    primary_http = resolved_http or os.environ.get("ARBY_RPC_HTTP_PRIMARY")
+    primary_ws = resolved_ws or os.environ.get("ARBY_RPC_WS_PRIMARY")
     
     ws_connected, ws_handshake_ms, ws_error = False, None, None
     if primary_ws:

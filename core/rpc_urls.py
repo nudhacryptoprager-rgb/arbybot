@@ -148,15 +148,32 @@ def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = No
     """Resolve an HTTP RPC URL from environment or Alchemy API key.
 
     Returns tuple (url_or_none, provider_name, diagnostics_dict).
+    
+    v3.2.32: Chain-safety validation - explicit env vars are only used if they
+    match the requested chain_id. This prevents multi-chain scans from using
+    wrong-chain endpoints (e.g., Arbitrum endpoint for Base scan).
     """
     env = env or {}
     diagnostics = {}
 
-    # Prefer explicit env var
+    # Prefer explicit env var ONLY if it matches the requested chain_id
     http = env.get("ALCHEMY_RPC_HTTP") or env.get("ARBY_RPC_HTTP_PRIMARY")
     if http:
-        diagnostics["source"] = "explicit"
-        return http, ("alchemy" if "alchemy" in http else "public"), diagnostics
+        # v3.2.32: Validate chain_id consistency before using explicit env var
+        if chain_id is not None:
+            from urllib.parse import urlparse
+            host = urlparse(http).netloc
+            is_valid, error_msg = validate_chain_rpc_consistency(chain_id, host)
+            if not is_valid:
+                diagnostics["skipped_explicit"] = error_msg
+                # Fall through to chain-aware resolution below
+            else:
+                diagnostics["source"] = "explicit"
+                return http, ("alchemy" if "alchemy" in http else "public"), diagnostics
+        else:
+            # No chain_id specified, use explicit env var as-is
+            diagnostics["source"] = "explicit"
+            return http, ("alchemy" if "alchemy" in http else "public"), diagnostics
 
     # Build from api key if present
     api = env.get("ALCHEMY_API_KEY")
@@ -186,10 +203,22 @@ def resolve_rpc_ws(chain_id: Optional[int] = None, network: Optional[str] = None
     env = env or {}
     diagnostics = {}
 
+    # v3.2.32: Validate chain_id consistency for WS too
     ws = env.get("ALCHEMY_RPC_WS") or env.get("ARBY_RPC_WS_PRIMARY")
     if ws:
-        diagnostics["source"] = "explicit"
-        return ws, ("alchemy" if "alchemy" in ws else "public"), diagnostics
+        if chain_id is not None:
+            from urllib.parse import urlparse
+            host = urlparse(ws).netloc
+            is_valid, error_msg = validate_chain_rpc_consistency(chain_id, host)
+            if not is_valid:
+                diagnostics["skipped_explicit"] = error_msg
+                # Fall through to chain-aware resolution below
+            else:
+                diagnostics["source"] = "explicit"
+                return ws, ("alchemy" if "alchemy" in ws else "public"), diagnostics
+        else:
+            diagnostics["source"] = "explicit"
+            return ws, ("alchemy" if "alchemy" in ws else "public"), diagnostics
 
     api = env.get("ALCHEMY_API_KEY")
     net = _normalize_network_from_chain(chain_id, env.get("NETWORK") or network)

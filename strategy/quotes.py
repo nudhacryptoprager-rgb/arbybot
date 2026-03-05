@@ -365,10 +365,12 @@ def calculate_amount_in_wei(
         prices.update(tokens_usd_price)
     
     # Get token USD price
-    token_price = prices.get(token_symbol, 1.0)  # Default $1 if unknown
+    # v3.2.33: Use case-insensitive lookup (WEETH/weETH, WSTETH/wstETH)
+    token_price = lookup_token_usd_price_ci(prices, token_symbol, default=1.0)
     
     # v2.2.3: Warn if using default fallback price (not from config)
-    if tokens_usd_price and token_symbol not in tokens_usd_price:
+    # v3.2.33: Use case-insensitive check for this warning too
+    if tokens_usd_price and lookup_token_usd_price_ci(tokens_usd_price, token_symbol) is None:
         if token_symbol in DEFAULT_TOKEN_USD_PRICES:
             logger.warning("USD_PRICE_FALLBACK_USED: %s using default $%.2f (not in config)", 
                           token_symbol, token_price)
@@ -719,7 +721,8 @@ def collect_quotes(
     logger.info("Scanning %d pairs: %s", len(pairs_list), [p.display_name for p in pairs_list])
     
     # RPC URL for slot0 reads
-    rpc_url = os.environ.get("ARBY_RPC_HTTP_PRIMARY") or (config.get("rpc_endpoints") or [None])[0]
+    # v3.2.32: Config rpc_endpoints take priority over env (multi-chain safety)
+    rpc_url = (config.get("rpc_endpoints") or [None])[0] or os.environ.get("ARBY_RPC_HTTP_PRIMARY")
     skip_rpc = os.environ.get("ARBY_SKIP_RPC") == "1"
     tokens_anchor_price = config.get("tokens_anchor_price") or {}
     
@@ -774,9 +777,11 @@ def collect_quotes(
         # skip with deterministic reason (not NOTIONAL_DRIFT_EXCLUDED which is downstream)
         if use_usd_notional:
             # Check if token_in has a USD price (config > DEFAULT_TOKEN_USD_PRICES)
+            # v3.2.33: Use case-insensitive lookup (WEETH/weETH, WSTETH/wstETH)
             merged_prices = dict(DEFAULT_TOKEN_USD_PRICES)
             merged_prices.update(tokens_usd_price)
-            if token_in not in merged_prices or merged_prices.get(token_in, 0) <= 0:
+            token_in_price = lookup_token_usd_price_ci(merged_prices, token_in)
+            if token_in_price is None or token_in_price <= 0:
                 rejected_quotes.append({
                     "pair": f"{token_in}/{token_out}",
                     "dex_id": "_pre_routing",  # v3.2.20: Special bucket for pre-DEX viability rejections

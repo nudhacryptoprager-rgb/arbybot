@@ -36,12 +36,11 @@ def get_current_block_via_rpc(config: Dict[str, Any]) -> Tuple[int, int]:
     
     rpc_urls = config.get("rpc_endpoints") or []
     
-    # Prefer resolved_http if available
-    resolved_http_env = os.environ.get("ARBY_RPC_HTTP_PRIMARY")
-    if resolved_http_env:
-        if rpc_urls and rpc_urls[0] != resolved_http_env:
-            rpc_urls = [resolved_http_env] + [u for u in rpc_urls if u != resolved_http_env]
-        elif not rpc_urls:
+    # v3.2.32: Config rpc_endpoints take priority (multi-chain safety)
+    # Only add env var if config doesn't have endpoints
+    if not rpc_urls:
+        resolved_http_env = os.environ.get("ARBY_RPC_HTTP_PRIMARY")
+        if resolved_http_env:
             rpc_urls = [resolved_http_env]
     
     provider = register_provider(
@@ -110,6 +109,9 @@ def resolve_rpc_endpoints(config: Dict[str, Any]) -> Tuple[Optional[str], Option
         
     Returns:
         (http_url, ws_url, http_provider, ws_provider)
+        
+    v3.2.32: Config rpc_endpoints take highest priority over env vars.
+    This ensures multi-chain configs are self-contained and reproducible.
     """
     try:
         from core.rpc_urls import resolve_rpc_http, resolve_rpc_ws
@@ -123,6 +125,21 @@ def resolve_rpc_endpoints(config: Dict[str, Any]) -> Tuple[Optional[str], Option
     
     chain_id = config.get("chain_id")
     network = os.environ.get("NETWORK")
+    
+    # v3.2.32: Config rpc_endpoints take HIGHEST priority (for multi-chain bring-up)
+    # v3.2.33: OVERWRITE env vars to prevent env pollution from prior runs
+    config_rpc_endpoints = config.get("rpc_endpoints") or []
+    if config_rpc_endpoints:
+        # Use first config endpoint as HTTP
+        resolved_http = config_rpc_endpoints[0]
+        provider_http = "config"
+        if resolved_http:
+            from urllib.parse import urlparse
+            # v3.2.33: OVERWRITE (not setdefault) to ensure config wins
+            os.environ["ARBY_RPC_HTTP_PRIMARY"] = resolved_http
+            os.environ["ARBY_RPC_PROVIDER"] = "config"
+            os.environ["ARBY_RPC_HTTP_HOST"] = urlparse(resolved_http).netloc
+        return resolved_http, resolved_ws, provider_http, provider_ws
     
     if resolve_rpc_http:
         try:
