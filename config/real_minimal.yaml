@@ -32,6 +32,9 @@
 chain: arbitrum_one
 chain_id: 42161
 
+# Run kind for rolling aggregator (NORMAL = production run)
+run_kind: NORMAL
+
 # RPC endpoints with fallback
 rpc_endpoints:
   - "https://arb1.arbitrum.io/rpc"

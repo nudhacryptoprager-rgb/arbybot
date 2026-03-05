@@ -1,38 +1,41 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
-**Status**: M4 SIMULATE-ONLY ACTIVE (paper profit DIAGNOSTIC, rolling quality gate PASS)  
+**Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
 **Updated**: 2026-03-05  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-## [!] M4 Online-Profit DoD Focus
+## [!] M4.1 Simulate-Only DoD **MET**
 
-**DoD NOT MET**: `profit_truth_available=false` (no real execution yet).
+**M4.1 DoD ACHIEVED** (per Roadmap.md L130-145):
+- ✅ N = 100 REGISTRY_REAL runs with `net_usdc > 0`
+- ✅ `agg_status = PASS` sustained
+- ✅ `profit_is_diagnostic = true` (accepted for simulate-only)
+- ✅ `total_net_usdc = $870.31` (cumulative paper profit)
 
 **Current State**:
-- Rolling PASS sustained (runs_in_window=57)
-- Rejection quality improved: -30% total rejects (55 vs 78)
-- Dead pairs disabled: RDNT, MAGIC, GRAIL (collapsed tokens)
-- Anchor prices updated from evidence
+- Rolling: runs_in_window=106, unique_pairs=13
+- Policy: `intent.txt` = business intent (per Roadmap.md:680); pool-level quarantine/runtime_disabled handles filtering
+- Pairs restored: RDNT, MAGIC, GRAIL (with evidence-based USD prices/anchors)
+- LIQUIDITY_ZERO auto-disable working
 
-**Next Steps for DoD**:
-1. Continue reducing SUSPECT_LIQUIDITY/PRICE_SANITY via quarantine/anchor sync
-2. Enable execution (`execution_enabled=true`) when rejection quality acceptable
-3. Achieve N≥5 consecutive runs with `total_net_usdc > 0` and `profit_truth_available=true`
+**M4.2 (roundtrip) Remains**:
+- Requires market arb opportunity (`roundtrip.profitable_count > 0`)
+- Non-deterministic, depends on market conditions
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-05)**: `agg_status=PASS` sustained. runs_in_window=57, unique_pairs=13. **run_quality_status=WARN** due to: `CRITICAL_REJECT(PRICE_SANITY_FAILED:22)`, `EXCLUDED_PRESENT(2)`, `PROFIT_DIAGNOSTIC`. Latest evidence: `ci_m5_gate_20260305_153431`.
+> [!] **ROLLING STABILITY (2026-03-05)**: `agg_status=PASS` sustained. runs_in_window=106, unique_pairs=13. **M4.1 DoD MET**: 100 REGISTRY_REAL runs with profit. Latest evidence: `ci_m5_gate_20260305_181243`.
 
 **Rejection Breakdown (2026-03-05):**
-| Reason | Count | Change | Notes |
-|--------|-------|--------|-------|
-| SUSPECT_LIQUIDITY | 32 | -11 (-26%) | Dead pairs removed |
-| PRICE_SANITY_FAILED | 22 | -11 (-33%) | Anchors updated |
-| NOTIONAL_DRIFT_EXCLUDED | 1 | -1 | Drift filter working |
-| NO_USD_PRICE | 0 | - | Clean |
-| Total | 55 | -23 (-30%) | Significant improvement |
+| Reason | Count | Notes |
+|--------|-------|-------|
+| SUSPECT_LIQUIDITY | 43 | Pool-level quarantine candidate |
+| LIQUIDITY_ZERO | 40 | Auto-disabled pools (working!) |
+| PRICE_SANITY_FAILED | 34 | Anchors stabilizing |
+| NOTIONAL_DRIFT_EXCLUDED | 2 | Drift filter working |
+| Total | 119 | Intent restored, pool-level filtering active |
 
 ## Executor Onboarding Checklist (2026-03-04)
 
@@ -73,10 +76,12 @@
 - Multi-chain bring-up = COVERAGE mode, NO `--refresh-rolling`
 - `MIXED_CHAIN_KEYS` warning = rolling contamination from non-primary chains
 
-**M4 NOT CLOSED while**:
-- `profit_truth_available=false` (no real execution)
+**M4.1 CLOSED (simulate-only)** - achieved via N≥100 REGISTRY_REAL runs with profit.
+
+**M4.2/M4.3 NOT CLOSED** (require real execution):
+- `profit_truth_available=false` (no real execution yet)
 - `profit_is_diagnostic=true` (paper-only)
-- Any PASS is simulate-only monitoring, not "real profit"
+- Requires `roundtrip.profitable_count > 0` (market-dependent)
 
 **Multi-chain runs must use**:
 - `run_kind: COVERAGE` (not NORMAL)

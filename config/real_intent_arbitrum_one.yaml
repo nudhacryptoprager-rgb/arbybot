@@ -71,8 +71,8 @@ gas_usd_estimate: 0.10
 
 # Token USD prices (for notional sizing)
 # NOTE: These should be updated periodically or fetched dynamically in future
-# v3.2.27: Evidence-based from ci_m5_gate_20260305_151229 PASS quotes
-# Baseline: WETH/USDC PASS median = 2120.24
+# Evidence-based from ci_m5_gate runs. Baseline: WETH/USDC median ~ 2120
+# Policy: all tokens in intent have prices; pool-level quarantine/runtime_disabled handles filtering
 tokens_usd_price:
   WETH: 2120.0
   WBTC: 72430.0         # WETH/WBTC=0.0293 → 2120/0.0293
@@ -90,18 +90,18 @@ tokens_usd_price:
   PENDLE: 1.31          # PENDLE/WETH=0.000617 → 2120*0.000617
   TBTC: 72430.0         # Same as WBTC
   DPX: 0.20             # DPX/WETH=0.000096 → 2120*0.000096
-  # DISABLED: collapsed tokens (kept for reference)
-  # RDNT: ~0.00002      # Collapsed
-  # MAGIC: ~0.000001    # Collapsed
-  # GRAIL: ~4.55        # Collapsed from $250
+  # Low-value tokens (pool-level quarantine handles; prices kept for viability filter)
+  RDNT: 0.00002         # Collapsed from ~$0.05
+  MAGIC: 0.000001       # Collapsed from ~$0.50
+  GRAIL: 4.55           # Collapsed from ~$250
 
 # Price sanity gates (M5 tighter thresholds)
 price_sanity_max_deviation_bps: 3000  # 30% - tighter than M4 bootstrap
 
 # Anchor prices for sanity checks
-# v3.2.27: Evidence-based from ci_m5_gate_20260305_151229
-# Baseline: WETH/USDC PASS median = 2120.24
-# Dead tokens (RDNT, MAGIC, GRAIL) removed - disabled in intent.txt
+# Evidence-based from ci_m5_gate runs
+# Baseline: WETH/USDC median ~ 2120
+# Policy: all tokens have anchors; pool-level quarantine handles bad pools
 tokens_anchor_price:
   # Stablecoin pairs (PASS evidence)
   WETH_USDC: 2120.2         # PASS median=2120.24
@@ -144,6 +144,13 @@ tokens_anchor_price:
   # DPX pairs (PASS evidence)
   DPX_WETH: 0.0000960       # PASS median
   DPX_USDC: 0.20            # 2120*0.000096
+  # Low-value token pairs (evidence-based; pool-level quarantine handles)
+  RDNT_WETH: 0.0000000065   # RDNT collapsed
+  RDNT_USDC: 0.00002        # Evidence-based
+  MAGIC_WETH: 0.0000002362  # MAGIC collapsed
+  MAGIC_USDC: 0.000001      # Evidence-based
+  GRAIL_WETH: 0.002148      # GRAIL collapsed from ~0.12
+  GRAIL_USDC: 4.55          # 2120*0.002148
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 truth_mode_m42: true
