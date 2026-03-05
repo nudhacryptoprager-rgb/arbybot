@@ -23,6 +23,8 @@ _ALCHEMY_SUBDOMAINS = {
     "base": "base-mainnet",
     "linea": "linea-mainnet",
     "mantle": "mantle-mainnet",
+    "scroll": "scroll-mainnet",
+    "zksync": "zksync-mainnet",
 }
 
 # Simple public fallbacks when Alchemy isn't available for a supported network.

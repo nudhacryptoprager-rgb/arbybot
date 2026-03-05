@@ -115,6 +115,22 @@ V3_FACTORY_ABI = [
     }
 ]
 
+# ve33 / Solidly-style factory ABI (Aerodrome/Velodrome)
+# NOTE: Stable/volatile pools are selected by `stable` bool (not fee tiers).
+VE33_FACTORY_ABI = [
+    {
+        "inputs": [
+            {"internalType": "address", "name": "tokenA", "type": "address"},
+            {"internalType": "address", "name": "tokenB", "type": "address"},
+            {"internalType": "bool", "name": "stable", "type": "bool"},
+        ],
+        "name": "getPool",
+        "outputs": [{"internalType": "address", "name": "pool", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
 # Known factory addresses per (chain, dex)
 FACTORY_ADDRESSES: Dict[str, Dict[str, str]] = {
     "arbitrum_one": {
@@ -339,6 +355,55 @@ def query_v2_pair(
         
     except Exception as e:
         logger.debug("getPair failed: %s", e)
+        return None
+
+
+def query_ve33_pool(
+    rpc_url: str,
+    factory_address: str,
+    token_a: str,
+    token_b: str,
+    stable: bool,
+) -> Optional[str]:
+    """
+    Query ve33 / Solidly-style factory.getPool(tokenA, tokenB, stable).
+    
+    Used for Aerodrome/Velodrome-style AMMs where pools are stable/volatile,
+    not fee-tiered.
+    
+    Returns pool address or None if not found.
+    """
+    import os
+    
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+    
+    try:
+        from web3 import Web3
+    except ImportError:
+        logger.warning("web3 not installed")
+        return None
+    
+    try:
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        factory = w3.eth.contract(
+            address=Web3.to_checksum_address(factory_address),
+            abi=VE33_FACTORY_ABI,
+        )
+        
+        pool_addr = factory.functions.getPool(
+            Web3.to_checksum_address(token_a),
+            Web3.to_checksum_address(token_b),
+            stable,
+        ).call()
+        
+        if pool_addr == "0x0000000000000000000000000000000000000000":
+            return None
+        
+        return pool_addr.lower()
+        
+    except Exception as e:
+        logger.debug("ve33 getPool failed: %s", e)
         return None
 
 

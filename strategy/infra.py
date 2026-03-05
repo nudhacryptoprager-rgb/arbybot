@@ -36,7 +36,23 @@ def get_current_block_via_rpc(config: Dict[str, Any]) -> Tuple[int, int]:
     
     rpc_urls = config.get("rpc_endpoints") or []
     
-    # v3.2.32: Config rpc_endpoints take priority (multi-chain safety)
+    # If Require-Alchemy is set, prefer Alchemy endpoints for non-Base chains
+    # (do NOT embed keys in configs; use ALCHEMY_API_KEY env).
+    require_alchemy = os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
+    try:
+        chain_id = int(config.get("chain_id", 42161))
+    except Exception:
+        chain_id = 42161
+    if require_alchemy and chain_id != 8453:
+        try:
+            from core.rpc_urls import resolve_rpc_http
+            url, provider, _diag = resolve_rpc_http(chain_id=chain_id, network=os.environ.get("NETWORK"), env=os.environ)
+            if url and provider == "alchemy":
+                rpc_urls = [url]
+        except Exception:
+            pass
+    
+    # v3.2.32: Config rpc_endpoints take priority by default (multi-chain safety)
     # Only add env var if config doesn't have endpoints
     if not rpc_urls:
         resolved_http_env = os.environ.get("ARBY_RPC_HTTP_PRIMARY")
@@ -125,6 +141,27 @@ def resolve_rpc_endpoints(config: Dict[str, Any]) -> Tuple[Optional[str], Option
     
     chain_id = config.get("chain_id")
     network = os.environ.get("NETWORK")
+    
+    # If Require-Alchemy is set, prefer Alchemy endpoints for non-Base chains.
+    # This keeps configs key-free while honoring infra policy.
+    require_alchemy = os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
+    try:
+        chain_id_int = int(chain_id) if chain_id is not None else None
+    except Exception:
+        chain_id_int = None
+    if require_alchemy and chain_id_int is not None and chain_id_int != 8453 and resolve_rpc_http:
+        try:
+            url, prov, _diag = resolve_rpc_http(chain_id=chain_id_int, network=network, env=os.environ)
+            if url and prov == "alchemy":
+                resolved_http = url
+                provider_http = "alchemy"
+                from urllib.parse import urlparse
+                os.environ["ARBY_RPC_HTTP_PRIMARY"] = resolved_http
+                os.environ["ARBY_RPC_PROVIDER"] = provider_http
+                os.environ["ARBY_RPC_HTTP_HOST"] = urlparse(resolved_http).netloc
+                return resolved_http, resolved_ws, provider_http, provider_ws
+        except Exception:
+            pass
     
     # v3.2.32: Config rpc_endpoints take HIGHEST priority (for multi-chain bring-up)
     # v3.2.33: OVERWRITE env vars to prevent env pollution from prior runs

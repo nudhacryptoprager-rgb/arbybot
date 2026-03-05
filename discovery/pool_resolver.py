@@ -115,7 +115,8 @@ class PoolResolver:
         """Generate deterministic cache key."""
         # Sort tokens for consistency
         tokens = sorted([token_a_addr.lower(), token_b_addr.lower()])
-        fee_str = str(fee) if fee else "v2"
+        # NOTE: fee can be 0 for "no-fee-tier" pools (algebra dynamic fee, ve33 variants).
+        fee_str = str(fee) if fee is not None else "v2"
         return f"{chain}:{dex}:{tokens[0]}:{tokens[1]}:{fee_str}"
     
     def _load_cache(self) -> None:
@@ -183,7 +184,12 @@ class PoolResolver:
             Pool address or None if not found
         """
         from discovery.verify import get_token_registry
-        from discovery.index_factories import query_v3_pool, query_v2_pair, get_factory_address
+        from discovery.index_factories import (
+            query_v3_pool,
+            query_v2_pair,
+            query_ve33_pool,
+            get_factory_address,
+        )
         from core.rpc_urls import get_rpc_url
         
         registry = get_token_registry()
@@ -247,7 +253,11 @@ class PoolResolver:
                 logger.debug("V3 resolver requires fee tier")
                 return None
             pool_addr = query_v3_pool(rpc_url, factory_addr, addr_a, addr_b, fee)
-        elif adapter_type in ("uniswap_v2", "ve33"):
+        elif adapter_type == "ve33":
+            # ve33/Solidly-style DEXes use getPool(token0, token1, stable)
+            stable = (fee == 1)
+            pool_addr = query_ve33_pool(rpc_url, factory_addr, addr_a, addr_b, stable=stable)
+        elif adapter_type == "uniswap_v2":
             # V2-style DEXes use getPair(token0, token1)
             pool_addr = query_v2_pair(rpc_url, factory_addr, addr_a, addr_b)
         else:

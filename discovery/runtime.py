@@ -112,7 +112,12 @@ class RuntimeStats:
 # v2.0.4: Import V3_FEE_TIERS from canonical source (discovery/index_factories.py)
 # RESTORE CONTRACT: discovery/index_factories.V3_FEE_TIERS is the single source of truth
 # v3.2.17: Added get_chain_dexes and get_dex_fee_tiers for dexes.yaml as single source
-from discovery.index_factories import V3_FEE_TIERS, get_chain_dexes, get_dex_fee_tiers
+from discovery.index_factories import (
+    V3_FEE_TIERS,
+    get_chain_dexes,
+    get_dex_adapter_type,
+    get_dex_fee_tiers,
+)
 
 # Default max pairs to resolve per cycle
 DEFAULT_MAX_PAIRS = 20
@@ -222,9 +227,21 @@ def resolve_runtime_pairs(
         dexes_with_pools: Set[str] = set()
         
         for dex in dexes:
-            # v3.2.17: Get per-DEX fee_tiers from dexes.yaml
-            # If fee_tiers was explicitly passed, use it; else get from config
-            dex_fee_tiers = fee_tiers if fee_tiers is not None else get_dex_fee_tiers(chain, dex)
+            adapter_type = get_dex_adapter_type(chain, dex) or "unknown"
+            
+            # Per-adapter fee/variant semantics:
+            # - uniswap_v3: real fee tiers (100/500/3000/10000, etc.)
+            # - algebra: dynamic fee pools -> use fee=0 sentinel (canonical)
+            # - ve33: stable/volatile variants -> use fee=0 (volatile), fee=1 (stable)
+            # - v2/unknown: use fee=0 sentinel (canonical)
+            if adapter_type == "uniswap_v3":
+                dex_fee_tiers = fee_tiers if fee_tiers is not None else get_dex_fee_tiers(chain, dex)
+            elif adapter_type == "algebra":
+                dex_fee_tiers = [0]
+            elif adapter_type == "ve33":
+                dex_fee_tiers = fee_tiers if fee_tiers is not None else [0, 1]
+            else:
+                dex_fee_tiers = [0]
             
             for fee in dex_fee_tiers:
                 # Query pool resolver
@@ -355,7 +372,7 @@ def runtime_pairs_to_pair_configs(resolved_pairs: List[RuntimePair]) -> List:
             data["decimals_a"] = rp.decimals_a
             data["decimals_b"] = rp.decimals_b
         
-        if rp.fee:
+        if rp.fee is not None:
             data["fee_tiers"].add(rp.fee)
         data["pool_addresses"].append(rp.pool_address)
         data["pool_info"].append({

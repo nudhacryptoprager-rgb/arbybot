@@ -866,10 +866,22 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                     messages.append(f"WARN: truth_report.infra missing rpc_http_host (provider={prov_t})")
 
             # If env required Alchemy, ensure provider is alchemy
-            if os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1":
-                if prov_s != "alchemy" or prov_t != "alchemy":
-                    messages.append(f"FAIL: REQUIRE_ALCHEMY set but provider != alchemy (scan={prov_s} truth={prov_t})")
-                    all_passed = False
+            # Team policy: Base is allowed to use public RPC endpoints (non-Alchemy).
+            require_alchemy_env = (
+                os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
+            )
+            if require_alchemy_env:
+                chain_id_val = s.get("chain_id") or t.get("chain_id")
+                try:
+                    chain_id_int = int(chain_id_val) if chain_id_val is not None else None
+                except Exception:
+                    chain_id_int = None
+                if chain_id_int not in {8453}:
+                    if prov_s != "alchemy" or prov_t != "alchemy":
+                        messages.append(
+                            f"FAIL: REQUIRE_ALCHEMY set but provider != alchemy (scan={prov_s} truth={prov_t})"
+                        )
+                        all_passed = False
 
             # Heuristic: chain_id vs rpc host mismatch (blocker)
             # v3.2.33: Use validate_chain_rpc_consistency() for all chains
@@ -1043,8 +1055,21 @@ def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool,
 
     # Enforce Require-Alchemy behavior if requested
     require_alchemy = os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
-    if require_alchemy and provider_http != "alchemy":
-        print(f"FAIL: Alchemy expected but resolved provider={provider_http} (host={env_for_run.get('ARBY_RPC_HTTP_HOST')})")
+    # Team policy: Base is allowed to use public RPC endpoints (non-Alchemy).
+    alchemy_optional_chain_ids = {8453}
+    config_chain_id = None
+    try:
+        if config:
+            import yaml
+            with open(config, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            config_chain_id = cfg.get("chain_id")
+    except Exception:
+        config_chain_id = None
+    if require_alchemy and provider_http != "alchemy" and int(config_chain_id or 0) not in alchemy_optional_chain_ids:
+        print(
+            f"FAIL: Alchemy expected but resolved provider={provider_http} (host={env_for_run.get('ARBY_RPC_HTTP_HOST')})"
+        )
         return False, "Alchemy expected but public fallback used"
 
     # NOTE: WS preference flags are read from the calling process env by the scanner.

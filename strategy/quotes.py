@@ -561,6 +561,63 @@ def read_algebra_quoter(
         return None
 
 
+def read_ve33_amount_out(
+    pool_address: str,
+    token_in: str,
+    amount_in: int,
+    rpc_url: Optional[str],
+    block_num: int,
+) -> Optional[int]:
+    """
+    Get executable quote from ve33 / Solidly-style pool via getAmountOut().
+    
+    Aerodrome/Velodrome-style pools expose:
+      getAmountOut(uint256 amountIn, address tokenIn) -> uint256 amountOut
+    """
+    if not pool_address or not token_in or not rpc_url:
+        return None
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+    
+    try:
+        from web3 import Web3
+    except ImportError:
+        logger.debug("ve33 quote skipped: web3 not installed")
+        return None
+    
+    try:
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        pool = w3.eth.contract(
+            address=Web3.to_checksum_address(pool_address),
+            abi=[
+                {
+                    "inputs": [
+                        {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
+                        {"internalType": "address", "name": "tokenIn", "type": "address"},
+                    ],
+                    "name": "getAmountOut",
+                    "outputs": [{"internalType": "uint256", "name": "amountOut", "type": "uint256"}],
+                    "stateMutability": "view",
+                    "type": "function",
+                }
+            ],
+        )
+        
+        amount_out = pool.functions.getAmountOut(
+            amount_in,
+            Web3.to_checksum_address(token_in),
+        ).call(block_identifier=block_num)
+        
+        if amount_out is None:
+            return None
+        amount_out_int = int(amount_out)
+        return amount_out_int if amount_out_int > 0 else None
+        
+    except Exception as e:
+        logger.debug("ve33 getAmountOut failed: %s", e)
+        return None
+
+
 def synthesize_sqrt_price_from_anchor(
     anchor_price: float,
     decimals_in: int,
@@ -669,6 +726,7 @@ def collect_quotes(
         "liquidity_zero": 0,    # v3.2.0: Zero liquidity pools (auto-disabled)
         "quarantined": 0,
         "v3_slot0_failed": 0,
+        "ve33_quote_failed": 0,
         "price_calc_failed": 0,
         "no_onchain_price": 0,
         "no_usd_price": 0,      # v3.2.20: Viability filter - no USD price for token_in
@@ -949,9 +1007,178 @@ def collect_quotes(
             else:
                 amount_in_wei = 10 ** decimals_in  # Legacy: 1 token
             
+            # Resolve token addresses once (used by all adapter types)
+            token_in_addr = resolve_token_address(token_in, pair_cfg, token_addresses, chain_name, is_token_in=True)
+            token_out_addr = resolve_token_address(token_out, pair_cfg, token_addresses, chain_name, is_token_in=False)
+            
             # M4.2 FIX: Use adapter_type for branching (reuse from outer loop)
             is_v3_dex = adapter_type in ("uniswap_v3", "algebra")
             is_algebra = adapter_type == "algebra"
+            is_ve33 = adapter_type == "ve33"
+            
+            # ve33 executable quote path (Aerodrome/Velodrome)
+            if is_ve33:
+                amount_out_wei_val = read_ve33_amount_out(
+                    pool_address=pool_addr,
+                    token_in=token_in_addr,
+                    amount_in=amount_in_wei,
+                    rpc_url=rpc_url,
+                    block_num=current_block,
+                )
+                if amount_out_wei_val is None or amount_out_wei_val <= 0:
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "VE33_QUOTE_FAILED",
+                        "gate_passed": False,
+                        "error": "pool.getAmountOut() failed or returned zero",
+                    })
+                    counts["ve33_quote_failed"] += 1
+                    failed_pool_addresses.append({
+                        "pool_address": pool_addr,
+                        "dex_id": dex,
+                        "pair": f"{token_in}/{token_out}",
+                        "fee": fee_tier,
+                        "reason": "VE33_QUOTE_FAILED",
+                    })
+                    qm.record_failure(
+                        dex,
+                        f"{token_in}/{token_out}",
+                        fee_tier,
+                        "QUOTE_REVERT",
+                        details={"pool_address": pool_addr, "error": "getAmountOut_failed"},
+                    )
+                    continue
+                
+                amount_out_human_val = float(Decimal(amount_out_wei_val) / Decimal(10 ** decimals_out))
+                amount_out_human_str = str(round(amount_out_human_val, 6))
+                amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                
+                amount_in_tokens = float(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                price_exact = (
+                    Decimal(str(amount_out_human_val)) / Decimal(str(amount_in_tokens))
+                    if amount_in_tokens > 0
+                    else Decimal(0)
+                )
+                price_str = str(round(float(price_exact), 6))
+                
+                # PRICE_SANITY gate (same as quoter path)
+                price_sanity_enabled = config.get("price_sanity_enabled", True)
+                price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
+                if price_sanity_enabled and anchor_price:
+                    from decimal import Decimal as _Decimal
+                    from core.validators import check_price_sanity
+                    sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
+                        price=_Decimal(str(price_exact)),
+                        anchor_price=_Decimal(str(anchor_price)),
+                        pair=f"{token_in}/{token_out}",
+                        dex_id=dex,
+                        fee_tier=fee_tier,
+                        max_deviation_bps=price_sanity_max_bps,
+                        anchor_source="tokens_anchor_price",
+                        pool_address=pool_addr,
+                    )
+                    if not sanity_passed:
+                        try:
+                            ratio = float(price_exact) / float(anchor_price) if anchor_price else 0.0
+                        except (TypeError, ZeroDivisionError):
+                            ratio = 0.0
+                        
+                        rejected_quotes.append({
+                            "pair": f"{token_in}/{token_out}",
+                            "dex_id": dex,
+                            "fee": fee_tier,
+                            "pool_address": pool_addr,
+                            "reason": "PRICE_SANITY_FAILED",
+                            "gate_passed": False,
+                            "error": sanity_err,
+                            "deviation_bps": sanity_dev_bps,
+                            "anchor_price": str(anchor_price),
+                            "price_exact": str(price_exact),
+                            "price_ratio": round(ratio, 4),
+                            "anchor_source": anchor_source,
+                            "amount_in_wei": amount_in_wei,
+                            "notional_usd_target": target_usd_notional if use_usd_notional else None,
+                            "diagnostics": sanity_diag,
+                        })
+                        counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                        counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                        qm.record_failure(
+                            dex,
+                            f"{token_in}/{token_out}",
+                            fee_tier,
+                            "PRICE_SANITY_FAILED",
+                            details={
+                                "pool_address": pool_addr,
+                                "deviation_bps": sanity_dev_bps,
+                                "anchor_price": str(anchor_price),
+                                "price_exact": str(price_exact),
+                            },
+                        )
+                        auto_disable_pool(
+                            pool_key,
+                            "PRICE_SANITY_FAILED",
+                            {"pool_address": pool_addr, "deviation_bps": sanity_dev_bps},
+                        )
+                        logger.info(
+                            "PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s ratio=%.4f",
+                            dex, token_in, token_out, fee_tier, sanity_dev_bps,
+                            str(anchor_price)[:12], str(price_exact)[:12], ratio
+                        )
+                        continue
+                
+                q = QuoteCompat(
+                    dex_id=dex,
+                    pool_address=pool_addr,
+                    token_in=token_in,
+                    token_out=token_out,
+                    fee=fee_tier,
+                    amount_in_wei=amount_in_wei,
+                    amount_out_wei=amount_out_wei_val,
+                    amount_in_human=amount_in_human_str,
+                    amount_out_human=amount_out_human_str,
+                    price=price_str,
+                    latency_ms=rpc_latency or 10,
+                    block_number=current_block,
+                    rpc_success=True,
+                    gate_passed=True,
+                    tick=None,
+                    sqrt_price_x96=None,
+                )
+                q_dict = q.__dict__
+                q_dict["price_exact"] = str(price_exact)
+                q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
+                q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
+                
+                token_out_price = lookup_token_usd_price_ci(tokens_usd_price, token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
+                notional_usd_actual = round(amount_out_human_val * token_out_price, 2)
+                q_dict["notional_usd_actual"] = notional_usd_actual
+                
+                if use_usd_notional and target_usd_notional > 0 and notional_usd_actual > 0:
+                    drift_pct = abs(notional_usd_actual - target_usd_notional) / target_usd_notional * 100
+                    q_dict["notional_drift_pct"] = round(drift_pct, 2)
+                    if drift_pct > 10.0:
+                        logger.warning(
+                            "NOTIONAL_DRIFT: %s/%s %s target=$%.0f actual=$%.2f drift=%.1f%%",
+                            token_in, token_out, dex, target_usd_notional, notional_usd_actual, drift_pct
+                        )
+                
+                q_dict["quote_source"] = "ve33_getAmountOut"
+                q_dict["gas_estimate"] = None
+                q_dict["ticks_crossed"] = None
+                q_dict["anchor_source"] = anchor_source
+                q_dict["sqrt_price_after"] = None
+                q_dict["is_diagnostic_only"] = False
+                
+                quotes_sample.append(q_dict)
+                counts["quotes_fetched"] += 1
+                qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
+                record_quote_success(pool_key)
+                if price_exact is not None and float(price_exact) > 0:
+                    am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
+                continue
             
             # v3.2.20: Per-DEX quoter mode decision
             # - Algebra DEXes ALWAYS need quoter (slot0 ABI incompatible)
@@ -963,10 +1190,6 @@ def collect_quotes(
             if use_quoter_for_dex and dex_cfg:
                 quoter_addr = dex_cfg.get_quoter_address()
                 if quoter_addr:
-                    # v3.2.17: Use resolve_token_address with fallback chain
-                    token_in_addr = resolve_token_address(token_in, pair_cfg, token_addresses, chain_name, is_token_in=True)
-                    token_out_addr = resolve_token_address(token_out, pair_cfg, token_addresses, chain_name, is_token_in=False)
-                    
                     if adapter_type == "uniswap_v3":
                         # UniswapV3 QuoterV2
                         quoter_result = read_quoter_v2(
