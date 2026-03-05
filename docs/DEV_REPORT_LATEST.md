@@ -40,18 +40,18 @@
 10. **KPI sync in cleanup** - cleanup_rolling.py syncs ALL KPI fields (data_run_rate, effective_pass_rate, etc.)
 
 **Evidence runs:**
-- NORMAL: `ci_m5_gate_20260305_102541` (PASS, signals=1, rolling updated, runs_in_window=49)
+- NORMAL: `ci_m5_gate_20260305_105825` (PASS, signals=1, rolling updated, runs_in_window=50)
 
-**Tests**: 1346 passed, CI pipeline PASS
+**Tests**: 1357 passed, CI pipeline PASS
 
 ## 0) Meta
-timestamp_utc: 2026-03-05T09:26:40.641494Z
-run_id: data/runs/ci_m5_gate_20260305_102541
+timestamp_utc: 2026-03-05T09:59:24.533891Z
+run_id: data/runs/ci_m5_gate_20260305_105825
 mode: ONLINE (v3.2.22: rolling discipline hardening)
 artifact_mode: rolling
 config: config/real_intent_arbitrum_one.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-05T09:26:40.641494Z
+  primary: ts:2026-03-05T09:59:24.533891Z
   dirty: false
   desc: v3.2.22 rolling discipline hardening
 
@@ -87,7 +87,7 @@ touched_files (v3.2.20):
 py -3.11 -m pytest tests/unit -q: 1346 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_intent_arbitrum_one.yaml --refresh-rolling: PASS
-py -3.11 scripts/inspect_rolling.py --json: runs_in_window=49, agg_status=PASS, unique_pairs=7, quality_warnings=[] (v3.2.22 evidence)
+py -3.11 scripts/inspect_rolling.py --json: runs_in_window=50, agg_status=PASS, unique_pairs=7, quality_warnings=[] (evidence)
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -95,7 +95,7 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260305_102541/reports (arbitrum_one, run_kind=NORMAL, v3.2.22)
+  - data/runs/ci_m5_gate_20260305_105825/reports (arbitrum_one, run_kind=NORMAL)
 intent_configs:
   - config/coverage_intent_arbitrum_one.yaml (arbitrum_one + camelot_v3 for testing)
   - config/real_intent_arbitrum_one.yaml (arbitrum_one - no camelot_v3)
@@ -103,15 +103,15 @@ intent_configs:
   - config/coverage_intent_mantle.yaml (Mantle rollout)
   - config/coverage_intent_scroll.yaml (Scroll rollout)
   - config/coverage_intent_zksync.yaml (zkSync rollout)
-evidence (NORMAL rolling run v3.2.22):
-  - run_dir_name: ci_m5_gate_20260305_102541
-  - run_timestamp: 2026-03-05T09:26:40.641494Z
+evidence (NORMAL rolling run):
+  - run_dir_name: ci_m5_gate_20260305_105825
+  - run_timestamp: 2026-03-05T09:59:24.533891Z
   - spread_signals: 2
-  - quotes_fetched: 139
+  - quotes_fetched: 15
   - unique_pairs: 7
-  - runs_in_window: 49
+  - runs_in_window: 50
   - agg_status: PASS
-  - data_run_rate: 0.6531
+  - data_run_rate: 0.64
   - quality_warnings: [] (MIXED_CHAIN_KEYS resolved via cleanup)
 
 ## 4) Key Results (числа з артефактів)
@@ -119,10 +119,10 @@ evidence (NORMAL rolling run v3.2.22):
 _latest.json:
   schema_version: m4:latest:v2.0
   run_status: PASS
-  run_dir_name: ci_m5_gate_20260305_102541
-  run_timestamp: 2026-03-05T09:26:40.641494Z
-  run_quality_status: WARN  # v3.2.22: now propagated to _latest.json
-  run_quality_warnings:     # v3.2.22: now propagated to _latest.json
+  run_dir_name: ci_m5_gate_20260305_105825
+  run_timestamp: 2026-03-05T09:59:24.533891Z
+  run_quality_status: WARN  # now propagated to _latest.json
+  run_quality_warnings:     # now propagated to _latest.json
     - EXCLUDED_PRESENT(1)
     - CRITICAL_REJECT(PRICE_SANITY_FAILED:63)
     - DEX_HEALTH_CRITICAL(uniswap_v3:16%)
@@ -139,8 +139,8 @@ _latest.json:
     chain_key: arbitrum_one
     config_path: config/real_intent_arbitrum_one.yaml
   rolling:
-    runs_in_window: 49
-    data_run_rate: 0.6531
+    runs_in_window: 50
+    data_run_rate: 0.64
     quality_warnings: []  # aggregator-level (MIXED_CHAIN_KEYS resolved)
 
 run_summary_latest.json:
@@ -161,15 +161,15 @@ run_summary_latest.json:
 
 m4_stability_agg.json:
   agg_status: PASS
-  runs_in_window: 49
+  runs_in_window: 50
   unique_pairs: 7
   unique_routes_cross_dex: 3
-  data_run_rate: 0.6531
+  data_run_rate: 0.64
   total_net_usdc: 116.92
   window_chain_key: arbitrum_one (MIXED_CHAIN_KEYS RESOLVED)
   quality_warnings: []
 
-## 5) Per-DEX Health (v3.2.20)
+## 5) Per-DEX Health
 
 | DEX | Fetched | Rejected | Success Rate | Health | Top Reasons |
 |-----|---------|----------|--------------|--------|-------------|

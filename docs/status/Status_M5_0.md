@@ -64,7 +64,7 @@ These fields are documented in `docs/m4/ROLLING_CONTRACT.md` → "run_quality fi
 - run_timestamp: `2026-03-05T09:59:24.533891Z`
 - Scripts: `cleanup_rolling.py`, `lint_readiness.py --config`
 
-### Latest Rolling Snapshot (v3.2.23)
+### Latest Rolling Snapshot (2026-03-05)
 
 | Metric | Value | Notes |
 |--------|-------|-------|

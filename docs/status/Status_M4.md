@@ -6,7 +6,7 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-05 v3.2.23)**: `agg_status=PASS` sustained. runs_in_window=50, effective_pass_rate=0.64, data_run_rate=0.64, unique_pairs=7, low_sample_rate=0.26. **run_quality_status=WARN** due to: `CRITICAL_REJECT(PRICE_SANITY_FAILED:63)`, `DEX_HEALTH_CRITICAL(uniswap_v3:16%,sushiswap_v3:4%,pancakeswap_v3:16%)`, `LOW_SAMPLE(1<3)`. Latest evidence: `ci_m5_gate_20260305_105825`.
+> [!] **ROLLING STABILITY (2026-03-05)**: `agg_status=PASS` sustained. runs_in_window=50, effective_pass_rate=0.64, data_run_rate=0.64, unique_pairs=7, low_sample_rate=0.26. **run_quality_status=WARN** due to: `CRITICAL_REJECT(PRICE_SANITY_FAILED:63)`, `DEX_HEALTH_CRITICAL(uniswap_v3:16%,sushiswap_v3:4%,pancakeswap_v3:16%)`, `LOW_SAMPLE(1<3)`. Latest evidence: `ci_m5_gate_20260305_105825`.
 
 ## Executor Onboarding Checklist (2026-03-04)
 
