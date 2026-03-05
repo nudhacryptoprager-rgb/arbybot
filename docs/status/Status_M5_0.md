@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-05  
-**Tests**: 1341 passed (including pool_coverage tests)  
-**Evidence runDir**: `ci_m5_gate_20260304_221101`  
+**Tests**: 1357 passed (including lint_readiness, cleanup_rolling tests)  
+**Evidence runDir**: `ci_m5_gate_20260305_102541`  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -38,10 +38,17 @@ All ONLINE runs generate `run_summary_*.json` for provenance:
 
 ### Quality Warnings Propagation
 
-`_latest.json` now contains both aggregator and run-level quality:
-- `quality_warnings`: Aggregator warnings (MIXED_CHAIN_KEYS, DATA_RUN_RATE_LOW, etc.)
-- `run_quality_status`: Latest run quality status (PASS, WARN, FAIL)
-- `run_quality_warnings`: Latest run warnings (DEX_HEALTH_CRITICAL, CRITICAL_REJECT, etc.)
+`_latest.json` contains both aggregator-level and run-level quality fields:
+
+**Aggregator-level (window-wide):**
+- `quality_warnings`: Warnings affecting the entire rolling window (MIXED_CHAIN_KEYS, DATA_RUN_RATE_LOW, WARMUP_MIN_RUNS)
+- `agg_status`, `agg_reasons`: Overall aggregator status
+
+**Run-level (current run only):**
+- `run_quality_status`: Quality status of the **current run** (PASS, WARN, FAIL)
+- `run_quality_warnings`: Warnings for the **current run** (DEX_HEALTH_CRITICAL, CRITICAL_REJECT, WARN_LOW_SAMPLE)
+
+These fields are documented in `docs/m4/ROLLING_CONTRACT.md` → "run_quality fields" section.
 
 ### Archive Policy
 

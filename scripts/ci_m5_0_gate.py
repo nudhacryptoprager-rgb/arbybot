@@ -1371,7 +1371,7 @@ ENV VARIABLES:
                         if config_chain != PRIMARY_ROLLING_CHAIN:
                             print(f"[ONLINE] ERROR: auto-enabled refresh_rolling blocked - chain={config_chain}")
                             print(f"[ONLINE] ERROR: Rolling chain discipline: only chain={PRIMARY_ROLLING_CHAIN} can update rolling")
-                            print(f"[ONLINE] ERROR: Use explicit --refresh-rolling False or switch config to {PRIMARY_ROLLING_CHAIN}")
+                            print(f"[ONLINE] ERROR: Omit --refresh-rolling or switch config to chain={PRIMARY_ROLLING_CHAIN}")
                             return 1
                 except Exception:
                     pass  # Guard already checked earlier, this is redundant safety
@@ -1502,9 +1502,10 @@ ENV VARIABLES:
                             truth_data = json.load(f)
                         truth_ctx = truth_data.get("run_context", {})
                         run_timestamp = truth_ctx.get("run_timestamp", run_timestamp)
-                        truth_stats = truth_data.get("stats", {})
-                        signals_count = truth_stats.get("total_signals", 0)
+                        # v3.2.23: Use len(spread_signals) instead of stats.total_signals (doesn't exist)
+                        signals_count = len(truth_data.get("spread_signals", []))
                         # NO_DATA reason mapping: NO_QUOTES, NO_TOKENS, NO_POOL, RPC_ERROR, etc.
+                        truth_stats = truth_data.get("stats", {})
                         no_data_reason = truth_stats.get("no_data_reason", "NO_QUOTES")
                         chain_key = truth_data.get("chain_key", "unknown")
                     
@@ -1551,7 +1552,8 @@ ENV VARIABLES:
                         },
                         "inputs": {
                             "chain_key": chain_key,
-                            "run_mode": "ONLINE",
+                            "run_mode": getattr(args, 'mode', 'online').upper(),  # v3.2.23: actual value
+                            "config_path": getattr(args, 'config', None),
                         },
                     }
                     

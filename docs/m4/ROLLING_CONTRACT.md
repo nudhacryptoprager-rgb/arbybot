@@ -64,6 +64,62 @@ SHA tracking is completely removed. Provenance is based on `run_timestamp` only.
 }
 ```
 
+### run_quality fields (v3.2.23)
+
+Within `_latest.json`, **run-specific** quality fields track the quality state of the most recent run:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `run_quality_status` | string | Quality status of the **current run** (PASS, WARN, FAIL) |
+| `run_quality_warnings` | array | Quality warnings for the **current run** (e.g., `["WARN_LOW_SAMPLE", "WARN_DRIFT_MAE"]`) |
+
+**Difference from aggregator fields:**
+- `run_quality_status` / `run_quality_warnings` → current run only
+- `quality_warnings` (aggregator-level) → warnings affecting the entire rolling window
+
+These fields are populated by `refresh_rolling_artifacts()` after each run when M4 gate is invoked.
+
+## run_summary_min (m4:run_summary_min:v2.0)
+
+Minimal run_summary generated for NO_DATA or FAIL runs that did not trigger full M4 gate.
+
+```json
+{
+  "schema_version": "m4:run_summary_min:v2.0",
+  "timestamp": "<ISO8601>",
+  "run_id": "ci_m5_gate_YYYYMMDD_HHMMSS",
+  "run_context": {
+    "run_timestamp": "<ISO8601>",
+    "run_dir_name": "ci_m5_gate_YYYYMMDD_HHMMSS",
+    "code_identity": "ts:<ISO8601>",
+    "code_sha": null,
+    "code_dirty": null,
+    "code_desc": null,
+    "evidence_sha": null
+  },
+  "status": "NO_DATA | FAIL",
+  "profit_status": "<same as status>",
+  "drift_status": "<same as status>",
+  "quality_status": "<same as status>",
+  "reasons": ["NO_DATA | VALIDATION_FAILED"],
+  "metrics": {
+    "signals_count": 0,
+    "included_signals_count": 0,
+    "total_net_usdc": 0.0,
+    "no_data_reason": "NO_QUOTES | VALIDATION_FAILED | RPC_ERROR"
+  },
+  "inputs": {
+    "chain_key": "arbitrum_one",
+    "run_mode": "ONLINE | OFFLINE",
+    "config_path": "config/real_minimal.yaml"
+  }
+}
+```
+
+**Status mapping:**
+- `status=NO_DATA` + `reasons=["NO_DATA"]` → zero signals, scan succeeded
+- `status=FAIL` + `reasons=["VALIDATION_FAILED"]` → scan or validation failed
+
 ## run_summary (m4:run_summary:v2.0)
 
 ```json
