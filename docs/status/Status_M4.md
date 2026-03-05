@@ -6,16 +6,33 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-05)**: `agg_status=PASS` sustained. runs_in_window=55, effective_pass_rate=0.6727, data_run_rate=0.6727, unique_pairs=13, low_sample_rate=0.26. **run_quality_status=WARN** due to: `CRITICAL_REJECT(PRICE_SANITY_FAILED:33)`, `EXCLUDED_PRESENT(3)`, `PROFIT_DIAGNOSTIC`. Latest evidence: `ci_m5_gate_20260305_151229`.
+## [!] M4 Online-Profit DoD Focus
+
+**DoD NOT MET**: `profit_truth_available=false` (no real execution yet).
+
+**Current State**:
+- Rolling PASS sustained (runs_in_window=57)
+- Rejection quality improved: -30% total rejects (55 vs 78)
+- Dead pairs disabled: RDNT, MAGIC, GRAIL (collapsed tokens)
+- Anchor prices updated from evidence
+
+**Next Steps for DoD**:
+1. Continue reducing SUSPECT_LIQUIDITY/PRICE_SANITY via quarantine/anchor sync
+2. Enable execution (`execution_enabled=true`) when rejection quality acceptable
+3. Achieve N≥5 consecutive runs with `total_net_usdc > 0` and `profit_truth_available=true`
+
+---
+
+> [!] **ROLLING STABILITY (2026-03-05)**: `agg_status=PASS` sustained. runs_in_window=57, unique_pairs=13. **run_quality_status=WARN** due to: `CRITICAL_REJECT(PRICE_SANITY_FAILED:22)`, `EXCLUDED_PRESENT(2)`, `PROFIT_DIAGNOSTIC`. Latest evidence: `ci_m5_gate_20260305_153431`.
 
 **Rejection Breakdown (2026-03-05):**
-| Reason | Count | Notes |
-|--------|-------|-------|
-| SUSPECT_LIQUIDITY | 43 | Low-liquidity pools, monitoring |
-| PRICE_SANITY_FAILED | 33 | Stable |
-| NOTIONAL_DRIFT_EXCLUDED | 2 | Drift filter working |
-| NO_USD_PRICE | 0 | FIXED (was 4: DPX, LUSD, RETH, USDE) |
-| LIQUIDITY_ZERO | 0 | FIXED (was 34) |
+| Reason | Count | Change | Notes |
+|--------|-------|--------|-------|
+| SUSPECT_LIQUIDITY | 32 | -11 (-26%) | Dead pairs removed |
+| PRICE_SANITY_FAILED | 22 | -11 (-33%) | Anchors updated |
+| NOTIONAL_DRIFT_EXCLUDED | 1 | -1 | Drift filter working |
+| NO_USD_PRICE | 0 | - | Clean |
+| Total | 55 | -23 (-30%) | Significant improvement |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

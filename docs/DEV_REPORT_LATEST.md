@@ -3,8 +3,8 @@
 > **Policy**: Only `docs/DEV_REPORT_LATEST.md` tracked. Versioned `DEV_REPORT_YYYY-MM-DD_v*.md` files forbidden.
 > Provenance: `timestamp_utc` and `code_identity.primary` copied from `run_summary_latest.run_context.*` (UTC).
 
-## SESSION GOAL + DONE CRITERIA (v3.2.27)
-**Goal**: Data quality completion - NO_USD_PRICE=0, LIQUIDITY_ZERO=0, check_repo_safety PASS with 0 warnings.
+## SESSION GOAL + DONE CRITERIA (v3.2.28)
+**Goal**: M4 online-profit quality - reduce SUSPECT_LIQUIDITY/PRICE_SANITY_FAILED rejections, disable dead pairs.
 
 ### M4.2 TRUTH-PROGRESS CRITERIA (primary - must pass)
 | # | Criterion | Target | Current | Status |
@@ -19,33 +19,33 @@
 | 4 | `agg_status` | PASS | PASS | + |
 | 5 | `unique_pairs` | >= 8 | 13 | + |
 
-### v3.2.27 CHANGES SUMMARY
+### v3.2.28 CHANGES SUMMARY
 
-**Data Quality Fixes:**
-1. **config/real_intent_arbitrum_one.yaml** - Added LUSD, USDE, DPX to tokens_usd_price; fixed rETH->RETH case; added LUSD_USDC, USDE_USDC anchors
-2. **scripts/lint_readiness.py** - Anchor coverage shows [N/A] instead of [FAIL] when total_pairs==0
+**Rejection Quality Improvements:**
+1. **config/intent.txt** - Disabled dead pairs: RDNT/WETH, RDNT/USDC, MAGIC/WETH, MAGIC/USDC, GRAIL/WETH (collapsed tokens)
+2. **config/real_intent_arbitrum_one.yaml** - Evidence-based anchor updates from ci_m5_gate_20260305_151229
 
-**Rejection Analysis (ci_m5_gate_20260305_151229):**
-| Reason | Count | Notes |
-|--------|-------|-------|
-| SUSPECT_LIQUIDITY | 43 | Monitoring |
-| PRICE_SANITY_FAILED | 33 | Stable |
-| NOTIONAL_DRIFT_EXCLUDED | 2 | Expected |
-| NO_USD_PRICE | 0 | FIXED (was 4) |
-| LIQUIDITY_ZERO | 0 | FIXED (was 34) |
+**Rejection Analysis (ci_m5_gate_20260305_153431):**
+| Reason | Count | Change | Notes |
+|--------|-------|--------|-------|
+| SUSPECT_LIQUIDITY | 32 | -11 (-26%) | Dead pairs removed |
+| PRICE_SANITY_FAILED | 22 | -11 (-33%) | Anchors updated |
+| NOTIONAL_DRIFT_EXCLUDED | 1 | -1 | Expected |
+| NO_USD_PRICE | 0 | - | Clean |
+| Total | 55 | -23 (-30%) | Significant improvement |
 
 **Tests**: 1385 passed, CI pipeline PASS
 
 ## 0) Meta
-timestamp_utc: 2026-03-05T14:13:40Z
-run_id: data/runs/ci_m5_gate_20260305_151229
-mode: ONLINE (v3.2.27: data quality completion)
+timestamp_utc: 2026-03-05T14:35:30Z
+run_id: data/runs/ci_m5_gate_20260305_153431
+mode: ONLINE (v3.2.28: rejection quality improvements)
 artifact_mode: rolling
 config: config/real_intent_arbitrum_one.yaml (arbitrum_one, run_kind=NORMAL)
 code_identity:
-  primary: ts:2026-03-05T14:13:40Z
+  primary: ts:2026-03-05T14:35:30Z
   dirty: false
-  desc: v3.2.27 data quality completion
+  desc: v3.2.28 rejection quality improvements
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Per-DEX quoter mode + viability filters + multi-chain rollout (scroll/zksync)
@@ -61,9 +61,9 @@ change_summary (v3.2.20):
   - UPD: config/chains.yaml (scroll, zksync chains)
   - UPD: config/dexes.yaml (scroll:uniswap_v3, zksync:izumi_v3)
   - TESTS: 1341 passed
-touched_files (v3.2.27):
-  - config/real_intent_arbitrum_one.yaml (added USD prices: LUSD, USDE, DPX; fixed rETH->RETH; added anchors)
-  - scripts/lint_readiness.py (anchor coverage [N/A] for 0 pairs)
+touched_files (v3.2.28):
+  - config/intent.txt (disabled dead pairs: RDNT, MAGIC, GRAIL)
+  - config/real_intent_arbitrum_one.yaml (evidence-based anchor updates)
 
 ## 2) Commands Executed (лише факти)
 
@@ -80,7 +80,7 @@ rolling:
   - data/runs/_rolling/run_summary_latest.json  
   - data/runs/_rolling/m4_stability_agg.json
 capstone_run_dir:
-  - data/runs/ci_m5_gate_20260305_151229/reports (arbitrum_one, run_kind=NORMAL)
+  - data/runs/ci_m5_gate_20260305_153431/reports (arbitrum_one, run_kind=NORMAL)
 intent_configs:
   - config/coverage_intent_arbitrum_one.yaml (arbitrum_one + camelot_v3 for testing)
   - config/real_intent_arbitrum_one.yaml (arbitrum_one - no duplicate case variants)
@@ -89,14 +89,13 @@ intent_configs:
   - config/coverage_intent_scroll.yaml (Scroll rollout)
   - config/coverage_intent_zksync.yaml (zkSync rollout)
 evidence (NORMAL rolling run):
-  - run_dir_name: ci_m5_gate_20260305_151229
-  - run_timestamp: 2026-03-05T14:13:40Z
+  - run_dir_name: ci_m5_gate_20260305_153431
+  - run_timestamp: 2026-03-05T14:35:30Z
   - spread_signals: 17
-  - quotes_fetched: 46
+  - quotes_fetched: 49
   - unique_pairs: 13
-  - runs_in_window: 55
+  - runs_in_window: 57
   - agg_status: PASS
-  - data_run_rate: 0.6727
   - quality_warnings: [EXCLUDED_PRESENT, CRITICAL_REJECT, PROFIT_DIAGNOSTIC]
 
 ## 4) Key Results (числа з артефактів)
@@ -104,24 +103,23 @@ evidence (NORMAL rolling run):
 _latest.json:
   schema_version: m4:latest:v2.0
   run_status: PASS
-  run_dir_name: ci_m5_gate_20260305_151229
-  run_timestamp: 2026-03-05T14:13:40Z
+  run_dir_name: ci_m5_gate_20260305_153431
+  run_timestamp: 2026-03-05T14:35:30Z
   run_quality_status: WARN
   run_quality_warnings:
-    - EXCLUDED_PRESENT(3)
-    - CRITICAL_REJECT(PRICE_SANITY_FAILED:33)
+    - EXCLUDED_PRESENT(2)
+    - CRITICAL_REJECT(PRICE_SANITY_FAILED:22)
     - PROFIT_DIAGNOSTIC
   metrics:
     signals_count: 17
-    signals_included: 14
-    signals_excluded: 3
+    signals_included: 15
+    signals_excluded: 2
     total_net_usdc: ~50
   run_context:
     chain_key: arbitrum_one
     config_path: config/real_intent_arbitrum_one.yaml
   rolling:
-    runs_in_window: 55
-    data_run_rate: 0.6727
+    runs_in_window: 57
     quality_warnings: []
 
 run_summary_latest.json:
@@ -134,18 +132,16 @@ run_summary_latest.json:
     evaluated_count: 2
     profitable_count: 0
   rejection_summary:
-    SUSPECT_LIQUIDITY: 43      # Monitoring
-    PRICE_SANITY_FAILED: 33    # Stable
-    NOTIONAL_DRIFT_EXCLUDED: 2 # Expected
-    NO_USD_PRICE: 0            # FIXED
-    LIQUIDITY_ZERO: 0          # FIXED
+    SUSPECT_LIQUIDITY: 32      # -26% (dead pairs removed)
+    PRICE_SANITY_FAILED: 22    # -33% (anchors updated)
+    NOTIONAL_DRIFT_EXCLUDED: 1 # Expected
+    NO_USD_PRICE: 0            # Clean
+    Total: 55                  # -30% improvement
 
 m4_stability_agg.json:
   agg_status: PASS
-  runs_in_window: 55
+  runs_in_window: 57
   unique_pairs: 13
-  unique_routes_cross_dex: 5
-  data_run_rate: 0.6727
   window_chain_key: arbitrum_one
   quality_warnings: []
 

@@ -3,7 +3,7 @@
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-05  
 **Tests**: 1385 passed (including lint_readiness, cleanup_rolling, suggest_anchor_updates tests)  
-**Evidence runDir**: `ci_m5_gate_20260305_151229`  
+**Evidence runDir**: `ci_m5_gate_20260305_153431`  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---

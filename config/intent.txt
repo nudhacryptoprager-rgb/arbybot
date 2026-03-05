@@ -47,8 +47,9 @@ arbitrum_one:wstETH/USDC
 
 # Other DeFi (working)
 arbitrum_one:ARB/DAI
-arbitrum_one:RDNT/WETH
-arbitrum_one:MAGIC/WETH
+# DISABLED: collapsed tokens (discovery budget waste + SUSPECT_LIQUIDITY rejections)
+# arbitrum_one:RDNT/WETH    # RDNT collapsed to ~$0.00002
+# arbitrum_one:MAGIC/WETH   # MAGIC collapsed to ~$0.000001
 arbitrum_one:WBTC/TBTC
 
 # NEW: DeFi governance (high volatility, price discrepancies)
@@ -56,7 +57,7 @@ arbitrum_one:PENDLE/WETH
 arbitrum_one:PENDLE/USDC
 arbitrum_one:GNS/WETH
 arbitrum_one:GNS/USDC
-arbitrum_one:GRAIL/WETH
+# arbitrum_one:GRAIL/WETH   # GRAIL collapsed from ~$250 to ~$4.55
 arbitrum_one:JOE/WETH
 
 # NEW: Stablecoin arbitrage (peg deviations)
@@ -65,9 +66,9 @@ arbitrum_one:FRAX/USDC
 arbitrum_one:LUSD/USDC
 
 # NEW: Gaming/DeFi volatile tokens
-arbitrum_one:MAGIC/USDC
+# arbitrum_one:MAGIC/USDC  # MAGIC collapsed to ~$0.000001
 arbitrum_one:DPX/WETH
-arbitrum_one:RDNT/USDC
+# arbitrum_one:RDNT/USDC   # RDNT collapsed to ~$0.00002
 
 # ============================================================
 # LINEA - SECONDARY (All base pairs working well)
