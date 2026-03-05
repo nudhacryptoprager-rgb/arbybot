@@ -83,8 +83,10 @@ tokens_usd_price:
   DAI: 1.0
   USDC: 1.0
   USDT: 1.0
+  LUSD: 1.0             # Stablecoin
+  USDE: 1.0             # Stablecoin
   WSTETH: 2444.0        # WETH*1.15 (case-insensitive lookup handles variants)
-  rETH: 2295.0          # WETH*1.08
+  RETH: 2295.0          # WETH*1.08 (uppercase for CI lookup)
   PENDLE: 1.19          # PENDLE/WETH=0.000559 → 2125*0.000559
   RDNT: 0.00005         # RDNT/USDC PASS median
   MAGIC: 0.0005         # MAGIC/USDC PASS median
@@ -92,6 +94,7 @@ tokens_usd_price:
   GNS: 3.5              # No evidence, keep estimate
   GRAIL: 250.0          # GRAIL/WETH=0.000118 → 2125*0.000118
   JOE: 0.40             # No evidence, keep estimate
+  DPX: 15.0             # Conservative estimate - no evidence
 
 # Price sanity gates (M5 tighter thresholds)
 price_sanity_max_deviation_bps: 3000  # 30% - tighter than M4 bootstrap
@@ -130,8 +133,11 @@ tokens_anchor_price:
   # LST pairs (estimates based on WETH)
   WSTETH_WETH: 1.15       # Case-insensitive lookup handles wstETH variants
   WSTETH_USDC: 2444.0
-  rETH_WETH: 1.08
-  rETH_USDC: 2295.0
+  RETH_WETH: 1.08
+  RETH_USDC: 2295.0
+  # Stablecoin pairs
+  LUSD_USDC: 1.0
+  USDE_USDC: 1.0
   # PENDLE pairs (FAIL evidence: PENDLE/WETH median=0.000559)
   PENDLE_WETH: 0.000559     # FAIL median
   PENDLE_USDC: 1.19         # 2125*0.000559

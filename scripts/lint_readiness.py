@@ -356,14 +356,18 @@ def main():
             # Anchor coverage (v3.2.24)
             if r.get("anchor_coverage"):
                 ac = r["anchor_coverage"]
-                pct = ac.get("coverage_pct", 0)
-                status_badge = "OK" if pct >= 80 else ("WARN" if pct >= 50 else "FAIL")
-                print(f"  Anchor coverage: [{status_badge}] {ac['covered']}/{ac['total_pairs']} pairs ({pct}%)")
-                if ac.get("missing_pairs"):
-                    mp = ac["missing_pairs"]
-                    print(f"    Missing: {', '.join(mp[:5])}")
-                    if len(mp) > 5:
-                        print(f"    ... and {len(mp) - 5} more")
+                total = ac.get("total_pairs", 0)
+                if total == 0:
+                    print(f"  Anchor coverage: [N/A] no pairs in config")
+                else:
+                    pct = ac.get("coverage_pct", 0)
+                    status_badge = "OK" if pct >= 80 else ("WARN" if pct >= 50 else "FAIL")
+                    print(f"  Anchor coverage: [{status_badge}] {ac['covered']}/{total} pairs ({pct}%)")
+                    if ac.get("missing_pairs"):
+                        mp = ac["missing_pairs"]
+                        print(f"    Missing: {', '.join(mp[:5])}")
+                        if len(mp) > 5:
+                            print(f"    ... and {len(mp) - 5} more")
             
             # Issues
             if r["issues"]:

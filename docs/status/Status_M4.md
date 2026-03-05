@@ -6,16 +6,16 @@
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
 
-> [!] **ROLLING STABILITY (2026-03-05)**: `agg_status=PASS` sustained. runs_in_window=52+, effective_pass_rate=0.64, data_run_rate=0.64, unique_pairs=12, low_sample_rate=0.26. **run_quality_status=WARN** due to: `CRITICAL_REJECT(PRICE_SANITY_FAILED:29)`, `EXCLUDED_PRESENT(3)`, `PROFIT_DIAGNOSTIC`. Latest evidence: `ci_m5_gate_20260305_142122`.
+> [!] **ROLLING STABILITY (2026-03-05)**: `agg_status=PASS` sustained. runs_in_window=55, effective_pass_rate=0.6727, data_run_rate=0.6727, unique_pairs=13, low_sample_rate=0.26. **run_quality_status=WARN** due to: `CRITICAL_REJECT(PRICE_SANITY_FAILED:33)`, `EXCLUDED_PRESENT(3)`, `PROFIT_DIAGNOSTIC`. Latest evidence: `ci_m5_gate_20260305_151229`.
 
 **Rejection Breakdown (2026-03-05):**
 | Reason | Count | Notes |
 |--------|-------|-------|
-| SUSPECT_LIQUIDITY | 34 | Low-liquidity pools, next quality target |
-| LIQUIDITY_ZERO | 34 | Auto-disabled pools |
-| PRICE_SANITY_FAILED | 29 | Reduced from 63 (-54%) |
-| NO_USD_PRICE | 4 | DPX, LUSD, RETH, USDE - config fix needed |
-| NOTIONAL_DRIFT_EXCLUDED | 1 | Drift filter working |
+| SUSPECT_LIQUIDITY | 43 | Low-liquidity pools, monitoring |
+| PRICE_SANITY_FAILED | 33 | Stable |
+| NOTIONAL_DRIFT_EXCLUDED | 2 | Drift filter working |
+| NO_USD_PRICE | 0 | FIXED (was 4: DPX, LUSD, RETH, USDE) |
+| LIQUIDITY_ZERO | 0 | FIXED (was 34) |
 
 ## Executor Onboarding Checklist (2026-03-04)
 
