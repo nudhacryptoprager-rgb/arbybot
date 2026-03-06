@@ -51,33 +51,36 @@ linea:
     adapter_type: "algebra"
     factory: "0x622b2c98123D303ae067DB4925CD6282B3A08D0F"
     router: "0x3921e8cb45B17fC029A0a6dE958330ca4e583390"
-    quoter: "0x3Af3a539A11C8c52f96E16Db7B1c1e5b8F5C5F5F"
+    quoter: "0xcE829655b864E56fc34B783874cf9590053A0640"
+    note: "v3.2.34: Fixed quoter address from lineascan.build (Lynex: Quoter V2)"
 
 mantle:
   agni_v3:
     adapter_type: "uniswap_v3"
     factory: "0x25780dc8Fc3cfBD75F33bFDAB65e969b603b2035"
     router: "0x319B69888b0d11cEC22caA5034e25FfFBDc88421"
-    quoter_v2: "0xb1E835Dc2785b52265711e17fCCb0fd018226a6e"
+    quoter_v2: "0xc4aaDc921E1cdb66c5300Bc158a313292923C0cb"
     fee_tiers: [100, 500, 2500, 10000]
+    note: "v3.2.34: Verified quoter_v2 address from mantlescan.xyz"
 
 # v3.2.20: Scroll (chain_id: 534352)
-# Scroll uses native Uniswap V3 + Ambient/CrocSwap for concentrated liquidity
+# v3.2.35: Replaced non-functional official UniV3 with Nuri Exchange
+#          Official UniV3 factory 0x1F98... has only 2 txs and doesn't work
 scroll:
-  uniswap_v3:
+  nuri_v3:
     adapter_type: "uniswap_v3"
-    factory: "0x70C62C8b8e801124A4Aa81ce07b637A3e83cb919"
-    router: "0xfc30937f5cDe93Df8d48aCAE8778ed25267dd938"
-    quoter_v2: "0x2dc614a35d23c33b6510db8e7f7c64eBbfDd04fd"
+    factory: "0xAAA32926fcE6bE95ea2c51cB4Fcb60836D320C42"
+    router: "0xAAA45c8F5ef92a000a121d102F4e89278a711Faa"
+    quoter_v2: "0xAAAEA10b0e6FBe566FE27c3A023DC5D8cA6Bca3d"
     fee_tiers: [100, 500, 3000, 10000]
+    note: "Nuri Exchange - uses getPool(a,a,fee) UniV3-style - verified from scrollscan.build"
 
 # v3.2.20: zkSync Era (chain_id: 324)
-# Note: zkSync has different VM, SyncSwap is dominant but uses custom ABI
-# Using iZiSwap which is Uniswap V3 compatible
+# v3.2.34: Using official Uniswap V3 deployment (verified from docs.uniswap.org)
 zksync:
-  izumi_v3:
+  uniswap_v3:
     adapter_type: "uniswap_v3"
-    factory: "0x8c7d3063579BdB0b90997e18A770eaE32E1eBd7f"
-    router: "0x943ac2310D9BC703d6AB5e5e76876e212100f894"
-    quoter_v2: "0xbE4ad6D44C24e3e7DDCCa7E6C4d8Eb4c4e6F2a20"
-    fee_tiers: [100, 400, 2000, 10000]
+    factory: "0x8FdA5a7a8dCA67BBcDd10F02Fa0649A937215422"
+    router: "0x99c56385daBCE3E81d8499d0b8d0257aBC07E8A3"
+    quoter_v2: "0x8Cb537fc92E26d8EBBb760E632c95484b6Ea3e28"
+    fee_tiers: [100, 500, 3000, 10000]

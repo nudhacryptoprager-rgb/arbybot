@@ -485,11 +485,15 @@ def read_algebra_quoter(
     block_num: int,
 ) -> Optional[Dict[str, Any]]:
     """
-    Get executable quote from Algebra (Camelot) quoter contract.
+    Get executable quote from Algebra (Camelot/Lynex) quoter contract.
     
     Algebra quoter uses different signature than UniswapV3 QuoterV2:
     - No fee parameter (Algebra has dynamic fees)
     - Different return values
+    
+    Supports two Algebra quoter styles:
+    1. quoteExactInputSingle(address,address,uint256,uint160) - Camelot style
+    2. quoteExactInput(bytes path, uint256 amountIn) - Lynex style
     
     Args:
         quoter_address: Algebra quoter contract address
@@ -514,51 +518,74 @@ def read_algebra_quoter(
         logger.debug("Algebra quoter skipped: web3 not installed")
         return None
     
+    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+    
+    # Try Style 1: quoteExactInputSingle(address,address,uint256,uint160) - Camelot
     try:
-        # Algebra quoteExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint160 limitSqrtPrice)
-        # Returns (uint256 amountOut, uint16 fee)
-        # Selector: 0x2d58eb1d
-        SELECTOR = "0x2d58eb1d"
+        SELECTOR_SINGLE = "0x2d58eb1d"
         
         token_in_padded = token_in[2:].lower().zfill(64)
         token_out_padded = token_out[2:].lower().zfill(64)
         amount_in_hex = hex(amount_in)[2:].zfill(64)
         sqrt_price_limit = hex(0)[2:].zfill(64)  # 0 = no limit
         
-        call_data = f"{SELECTOR}{token_in_padded}{token_out_padded}{amount_in_hex}{sqrt_price_limit}"
+        call_data = f"{SELECTOR_SINGLE}{token_in_padded}{token_out_padded}{amount_in_hex}{sqrt_price_limit}"
         
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
         result_hex = w3.eth.call(
             {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
             block_identifier=block_num,
         ).hex()
         
-        if not result_hex or result_hex == "0x":
-            logger.debug("Algebra quoter empty response")
-            return None
-        
-        data = result_hex[2:] if result_hex.startswith("0x") else result_hex
-        if len(data) < 64:
-            logger.debug("Algebra quoter response too short: %d", len(data))
-            return None
-        
-        amount_out = int(data[0:64], 16)
-        # dynamic_fee = int(data[64:128], 16) if len(data) >= 128 else None
-        
-        logger.debug(
-            "Algebra quoter success: %s -> %s, amountOut=%d",
-            token_in[:10], token_out[:10], amount_out
-        )
-        
-        return {
-            "amount_out": amount_out,
-            "sqrt_price_after": None,  # Algebra doesn't return this
-            "ticks_crossed": None,
-            "gas_estimate": 200_000,  # Conservative estimate for Algebra
-        }
+        if result_hex and result_hex != "0x" and len(result_hex) >= 66:
+            data = result_hex[2:] if result_hex.startswith("0x") else result_hex
+            amount_out = int(data[0:64], 16)
+            if amount_out > 0:
+                logger.debug(
+                    "Algebra quoter (single) success: %s -> %s, amountOut=%d",
+                    token_in[:10], token_out[:10], amount_out
+                )
+                return {
+                    "amount_out": amount_out,
+                    "sqrt_price_after": None,
+                    "ticks_crossed": None,
+                    "gas_estimate": 200_000,
+                }
     except Exception as e:
-        logger.debug("Algebra quoter failed: %s", e)
-        return None
+        logger.debug("Algebra quoter (single) failed: %s", e)
+    
+    # Try Style 2: quoteExactInput(bytes path, uint256 amountIn) - Lynex
+    try:
+        from eth_abi import encode
+        
+        # Algebra path: 20 bytes tokenIn + 20 bytes tokenOut (no fee)
+        path = bytes.fromhex(token_in[2:]) + bytes.fromhex(token_out[2:])
+        params = encode(['bytes', 'uint256'], [path, amount_in])
+        call_data = "0xcdca1753" + params.hex()
+        
+        result_hex = w3.eth.call(
+            {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
+            block_identifier=block_num,
+        ).hex()
+        
+        if result_hex and result_hex != "0x" and len(result_hex) >= 66:
+            data = result_hex[2:] if result_hex.startswith("0x") else result_hex
+            amount_out = int(data[0:64], 16)
+            if amount_out > 0:
+                logger.debug(
+                    "Algebra quoter (path) success: %s -> %s, amountOut=%d",
+                    token_in[:10], token_out[:10], amount_out
+                )
+                return {
+                    "amount_out": amount_out,
+                    "sqrt_price_after": None,
+                    "ticks_crossed": None,
+                    "gas_estimate": 200_000,
+                }
+    except Exception as e:
+        logger.debug("Algebra quoter (path) failed: %s", e)
+    
+    logger.debug("Algebra quoter: both styles failed for %s/%s", token_in[:10], token_out[:10])
+    return None
 
 
 def read_ve33_amount_out(

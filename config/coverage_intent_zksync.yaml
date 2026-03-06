@@ -36,9 +36,9 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
-# v3.2.20: zkSync has iZiSwap (Uniswap V3 compatible)
+# v3.2.34: zkSync uses official Uniswap V3 deployment
 dexes:
-  - izumi_v3
+  - uniswap_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 20

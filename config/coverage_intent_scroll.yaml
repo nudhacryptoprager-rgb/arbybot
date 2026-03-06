@@ -35,9 +35,9 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
-# v3.2.20: Scroll has Uniswap V3 native
+# v3.2.35: Using Nuri Exchange (Algebra) - UniV3 factory doesn't work on Scroll
 dexes:
-  - uniswap_v3
+  - nuri_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
