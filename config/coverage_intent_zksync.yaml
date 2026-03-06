@@ -36,13 +36,14 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
-# v3.2.34: zkSync uses official Uniswap V3 deployment
+# v3.2.36: zkSync now has 2 DEXes - uniswap_v3 + pancakeswap_v3
 dexes:
   - uniswap_v3
+  - pancakeswap_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-require_cross_dex: false  # Single DEX on zkSync
+require_cross_dex: true  # 2 DEXes on zkSync
 
 # Multicall batching (default ON)
 use_multicall: true

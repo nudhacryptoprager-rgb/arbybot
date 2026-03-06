@@ -366,10 +366,14 @@ def query_ve33_pool(
     stable: bool,
 ) -> Optional[str]:
     """
-    Query ve33 / Solidly-style factory.getPool(tokenA, tokenB, stable).
+    Query ve33 / Solidly-style factory for pool address.
     
     Used for Aerodrome/Velodrome-style AMMs where pools are stable/volatile,
     not fee-tiered.
+    
+    Supports two variants:
+    - getPool(tokenA, tokenB, stable) - Aerodrome/Velodrome
+    - getPair(tokenA, tokenB, stable) - Stratum and other forks
     
     Returns pool address or None if not found.
     """
@@ -384,8 +388,10 @@ def query_ve33_pool(
         logger.warning("web3 not installed")
         return None
     
+    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+    
+    # Try getPool first (Aerodrome/Velodrome)
     try:
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
         factory = w3.eth.contract(
             address=Web3.to_checksum_address(factory_address),
             abi=VE33_FACTORY_ABI,
@@ -397,14 +403,47 @@ def query_ve33_pool(
             stable,
         ).call()
         
-        if pool_addr == "0x0000000000000000000000000000000000000000":
-            return None
-        
-        return pool_addr.lower()
-        
+        if pool_addr != "0x0000000000000000000000000000000000000000":
+            return pool_addr.lower()
+            
     except Exception as e:
-        logger.debug("ve33 getPool failed: %s", e)
-        return None
+        logger.debug("ve33 getPool failed, trying getPair: %s", e)
+    
+    # Try getPair (Stratum and other forks)
+    try:
+        # getPair(address,address,bool) ABI
+        getPair_abi = [
+            {
+                "inputs": [
+                    {"internalType": "address", "name": "tokenA", "type": "address"},
+                    {"internalType": "address", "name": "tokenB", "type": "address"},
+                    {"internalType": "bool", "name": "stable", "type": "bool"},
+                ],
+                "name": "getPair",
+                "outputs": [{"internalType": "address", "name": "pair", "type": "address"}],
+                "stateMutability": "view",
+                "type": "function",
+            }
+        ]
+        
+        factory = w3.eth.contract(
+            address=Web3.to_checksum_address(factory_address),
+            abi=getPair_abi,
+        )
+        
+        pair_addr = factory.functions.getPair(
+            Web3.to_checksum_address(token_a),
+            Web3.to_checksum_address(token_b),
+            stable,
+        ).call()
+        
+        if pair_addr != "0x0000000000000000000000000000000000000000":
+            return pair_addr.lower()
+            
+    except Exception as e:
+        logger.debug("ve33 getPair also failed: %s", e)
+    
+    return None
 
 
 # v3.2.17: Algebra factory ABI for poolByPair() - dynamic fee pools (Camelot, etc.)

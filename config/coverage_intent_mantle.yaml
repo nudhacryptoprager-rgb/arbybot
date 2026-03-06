@@ -34,13 +34,14 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
-# v3.2.19: Mantle has agni_v3 (Uniswap V3 adapter with quoter_v2)
+# v3.2.36: Mantle now has 2 DEXes - agni_v3 (UniV3) + stratum (ve33)
 dexes:
   - agni_v3
+  - stratum
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-require_cross_dex: false  # Single DEX on Mantle
+require_cross_dex: true  # 2 DEXes on Mantle
 
 # Quoter V2 for executable quotes (agni_v3 has quoter_v2)
 use_quoter_v2: true

@@ -35,13 +35,14 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
-# v3.2.19: Linea has Algebra-based DEXes (lynex_v3)
+# v3.2.36: Linea now has 2 DEXes for cross-DEX arbitrage
 dexes:
   - lynex_v3
+  - pancakeswap_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-require_cross_dex: false  # Single DEX on Linea
+require_cross_dex: true  # 2 DEXes on Linea
 
 # Quoter for executable quotes (Algebra DEXes use quoter, not quoter_v2)
 # Note: lynex_v3 is Algebra adapter, uses quoter field from dexes.yaml
