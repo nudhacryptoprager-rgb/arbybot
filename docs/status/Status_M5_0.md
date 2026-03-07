@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-07  
-**Tests**: 1391 passed, 12 skipped (including lint_readiness, cleanup_rolling, suggest_anchor_updates tests)  
-**Evidence runDirs**: `ci_m5_gate_20260307_094744` (Base), `ci_m5_gate_20260307_094812` (Linea), `ci_m5_gate_20260307_094844` (Mantle), `ci_m5_gate_20260307_094933` (zkSync), `ci_m5_gate_20260307_094947` (Scroll)  
+**Tests**: 1402 passed, 12 skipped (including lint_readiness, cleanup_rolling, suggest_anchor_updates tests)  
+**Evidence runDirs**: `ci_m5_gate_20260307_110131` (Base), `ci_m5_gate_20260307_110206` (Linea), `ci_m5_gate_20260307_111454` (Mantle), `ci_m5_gate_20260307_110332` (zkSync), `ci_m5_gate_20260307_110346` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -20,7 +20,10 @@
 
 ### Infra Gate Results
 
-Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.status=NO_DATA` is expected when no profitable spreads found — this is NOT an infra failure.
+Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.status` semantics:
+- `NO_DATA`: signals_count == 0 (no raw signals at all)
+- `FAIL`: signals_count > 0 but no profitable results (includes all-excluded case: FAIL_ALL_EXCLUDED)
+- `PASS`: signals > 0 and profitable
 
 | Chain | Infra Gate | pairs | pools | quotes | cross_dex | dexes_active | Notes |
 |-------|------------|-------|-------|--------|-----------|--------------|-------|
@@ -59,7 +62,7 @@ When 2nd DEX becomes available:
   - `generated_at`: UTC ISO timestamp
   - `status`, `reasons`, `chain_key`, `quotes_fetched`, `cross_dex_pairs_count`
 
-**Note (2026-03-07 post-fix)**: Original evidence runDirs (`ci_m5_gate_20260307_09*`) were generated before NO_DATA contract fix and gate_result ISO-8601 alignment. These runDirs contain stale artifacts and must be regenerated before being cited as canonical M5_0 evidence.
+**2026-03-07 fix**: NO_DATA status contract aligned with Status_M4.md: `NO_DATA` only when `signals_count == 0`. All-excluded case now returns `FAIL` with `FAIL_ALL_EXCLUDED` reason.
 
 ### ve33 Adapter Fix
 

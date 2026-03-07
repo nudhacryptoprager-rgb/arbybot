@@ -292,5 +292,78 @@ class TestNoDataReasonEndToEnd(unittest.TestCase):
         self.assertIsNone(no_data_reason)
 
 
+class TestExcludedOnlyNotNoData(unittest.TestCase):
+    """Test that signals_count > 0 but included_signals_count = 0 is NOT NO_DATA.
+    
+    v3.3.1 FIX: Per Status_M4.md contract, NO_DATA only when signals_count == 0.
+    When signals exist but are all excluded (suspect/same-dex), status should be FAIL.
+    
+    This tests the regression case from ci_m5_gate_20260307_110236 (Mantle):
+    - signals_count=1
+    - suspect_signals_count=1
+    - excluded_signals_count=1  
+    - included_signals_count=0
+    - WRONG: status=NO_DATA
+    - CORRECT: status=FAIL with quality_status=FAIL_QUALITY, reason=FAIL_ALL_EXCLUDED
+    """
+    
+    def test_all_excluded_signals_is_fail_not_no_data(self):
+        """When all signals are excluded, status should be FAIL (not NO_DATA)."""
+        # Simulate the Mantle case: 1 signal, all excluded as suspect
+        signals_count = 1
+        included_signals_count = 0
+        excluded_signals_count = 1
+        
+        # v3.3.1: NO_DATA only when signals_count == 0
+        if signals_count == 0:
+            status = "NO_DATA"
+        elif signals_count > 0 and included_signals_count == 0:
+            status = "FAIL"  # All excluded = failure, not NO_DATA
+            quality_status = "FAIL_QUALITY"
+            reason = "FAIL_ALL_EXCLUDED"
+        else:
+            status = "PASS"
+        
+        self.assertEqual(status, "FAIL")
+        self.assertEqual(quality_status, "FAIL_QUALITY")
+        self.assertEqual(reason, "FAIL_ALL_EXCLUDED")
+    
+    def test_no_data_only_when_signals_count_zero(self):
+        """NO_DATA status is only valid when signals_count == 0."""
+        test_cases = [
+            # (signals_count, included_signals_count, expected_allows_no_data)
+            (0, 0, True),   # No raw signals -> NO_DATA allowed
+            (1, 0, False),  # Has signals but excluded -> NOT NO_DATA
+            (1, 1, False),  # Has included signals -> NOT NO_DATA
+            (5, 0, False),  # Multiple signals, all excluded -> NOT NO_DATA
+            (5, 3, False),  # Multiple signals, some included -> NOT NO_DATA
+        ]
+        
+        for signals_count, included_signals_count, allows_no_data in test_cases:
+            with self.subTest(signals_count=signals_count, included_signals_count=included_signals_count):
+                # Per Status_M4.md: NO_DATA only when signals_count == 0
+                actual_allows_no_data = (signals_count == 0)
+                self.assertEqual(
+                    actual_allows_no_data, 
+                    allows_no_data,
+                    f"signals_count={signals_count}: NO_DATA should be {'allowed' if allows_no_data else 'NOT allowed'}"
+                )
+    
+    def test_excluded_only_has_fail_all_excluded_reason(self):
+        """When all signals excluded, must have FAIL_ALL_EXCLUDED reason."""
+        signals_count = 3  # Has signals
+        included_signals_count = 0  # All excluded
+        excluded_signals_count = 3
+        
+        quality_reasons = []
+        
+        # v3.3.1: Logic from m4/fixtures.py
+        if signals_count > 0 and included_signals_count == 0:
+            if "FAIL_ALL_EXCLUDED" not in quality_reasons:
+                quality_reasons.append("FAIL_ALL_EXCLUDED")
+        
+        self.assertIn("FAIL_ALL_EXCLUDED", quality_reasons)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -975,13 +975,21 @@ def generate_m4_from_online_inputs(
             quality_reasons.append("WARN_SAME_DEX_PRESENT")
     
     # v1.10.0: Determine quality_status (contract alignment)
-    # v2.0.5 FIX: NO_DATA only when included_signals_count == 0
+    # v3.3.1 FIX: NO_DATA only when signals_count == 0 (per Status_M4.md contract)
     # Domain: NO_DATA | PASS | WARN | FAIL_QUALITY (not WARN_QUALITY)
     # For 1-2 signals: WARN (not NO_DATA)
     # v2.0.3: Use included_signals_count (excluded signals not counted for DoD)
     # v2.0.7 FIX: FAIL_QUALITY only from FAIL_* prefixed reasons, not from substring matching
-    if included_signals_count == 0:
-        quality_status = "NO_DATA"  # v2.0.5: only when truly NO data
+    # v3.3.1: signals_count (raw total), not included_signals_count, defines NO_DATA
+    signals_count = len(m4_signals)
+    
+    if signals_count == 0:
+        quality_status = "NO_DATA"  # v3.3.1: truly NO data (no raw signals)
+    elif signals_count > 0 and included_signals_count == 0:
+        # v3.3.1: All signals excluded (suspect/same-dex) - FAIL_QUALITY, not NO_DATA
+        quality_status = "FAIL_QUALITY"
+        if "FAIL_ALL_EXCLUDED" not in quality_reasons:
+            quality_reasons.append("FAIL_ALL_EXCLUDED")
     elif included_signals_count < Thresholds.MIN_SIGNALS_FOR_PASS:
         quality_status = "WARN"  # v2.0.5: LOW_SAMPLE -> WARN (not NO_DATA)
         if "WARN_LOW_SAMPLE" not in quality_reasons:
@@ -997,11 +1005,12 @@ def generate_m4_from_online_inputs(
     # v2.0.6: status domain is NO_DATA | PASS | FAIL only (WARN belongs in quality_status)
     all_reasons = profit_reasons + drift_reasons + quality_reasons
     
-    # v2.0.6 FIX: combined_status domain aligned with compute_status()
+    # v3.3.1 FIX: combined_status domain aligned with compute_status()
     # status: NO_DATA | PASS | FAIL (no WARN, no FAIL_QUALITY at top-level)
     # quality_status: NO_DATA | PASS | WARN | FAIL_QUALITY
-    if included_signals_count == 0:
-        combined_status = "NO_DATA"  # v2.0.5: truly NO data
+    # v3.3.1: NO_DATA only when signals_count == 0 (per Status_M4.md contract)
+    if signals_count == 0:
+        combined_status = "NO_DATA"  # v3.3.1: truly NO data (no raw signals)
         # v3.3.0: CONTRACT FIX - status=NO_DATA must have reasons=["NO_DATA"]
         # FAIL_* tokens are invalid with NO_DATA status; details go in metrics.no_data_reason
         all_reasons = ["NO_DATA"]
@@ -1009,7 +1018,10 @@ def generate_m4_from_online_inputs(
         profit_reasons = ["NO_DATA"]
         drift_status = "NO_DATA"
         drift_reasons = ["NO_DATA"]
-        # quality_status already set above (NO_DATA when data_run_rate == 0, etc.)
+        # quality_status already set above (NO_DATA when signals_count == 0)
+        # v3.3.1: Ensure no_data_reason is set for deterministic triage
+        if no_data_reason is None:
+            no_data_reason = "NO_SPREAD_SIGNALS"  # fallback when truth_report didn't set it
     elif profit_status == "FAIL" or drift_status == "FAIL":
         combined_status = "FAIL"
     elif quality_status == "FAIL_QUALITY":
