@@ -598,3 +598,80 @@ class TestOpportunityHasRouteAndSpreadBps:
         # Route and spread_bps should be in to_dict output
         assert "route" in d, "Opportunity to_dict() must include 'route'"
         assert "spread_bps" in d, "Opportunity to_dict() must include 'spread_bps'"
+
+
+class TestScrollDexAuditGoldenArtifact:
+    """Tests for docs/artifacts/scroll_dex_audit.json golden artifact."""
+    
+    def test_scroll_dex_audit_exists(self):
+        """Verify scroll_dex_audit.json exists in docs/artifacts."""
+        from pathlib import Path
+        
+        audit_path = Path("docs/artifacts/scroll_dex_audit.json")
+        assert audit_path.exists(), \
+            "docs/artifacts/scroll_dex_audit.json must exist for Scroll BLOCKED_BY evidence"
+    
+    def test_scroll_dex_audit_schema_version(self):
+        """scroll_dex_audit.json MUST have schema_version."""
+        from pathlib import Path
+        import json
+        
+        audit_path = Path("docs/artifacts/scroll_dex_audit.json")
+        with open(audit_path) as f:
+            data = json.load(f)
+        
+        assert "schema_version" in data, "scroll_dex_audit.json must have schema_version"
+        assert data["schema_version"].startswith("dex_audit:")
+    
+    def test_scroll_dex_audit_required_fields(self):
+        """scroll_dex_audit.json MUST have required fields."""
+        from pathlib import Path
+        import json
+        
+        audit_path = Path("docs/artifacts/scroll_dex_audit.json")
+        with open(audit_path) as f:
+            data = json.load(f)
+        
+        required_fields = {
+            "schema_version",
+            "chain",
+            "chain_id",
+            "status",
+            "summary",
+            "active_dexes",
+            "candidate_dexes",
+        }
+        
+        missing = required_fields - set(data.keys())
+        assert not missing, f"scroll_dex_audit.json missing required fields: {missing}"
+    
+    def test_scroll_dex_audit_chain_is_scroll(self):
+        """scroll_dex_audit.json must be for chain=scroll."""
+        from pathlib import Path
+        import json
+        
+        audit_path = Path("docs/artifacts/scroll_dex_audit.json")
+        with open(audit_path) as f:
+            data = json.load(f)
+        
+        assert data["chain"] == "scroll"
+        assert data["chain_id"] == 534352
+    
+    def test_scroll_dex_audit_has_active_dexes(self):
+        """scroll_dex_audit.json must have at least one active DEX."""
+        from pathlib import Path
+        import json
+        
+        audit_path = Path("docs/artifacts/scroll_dex_audit.json")
+        with open(audit_path) as f:
+            data = json.load(f)
+        
+        active_dexes = data.get("active_dexes", [])
+        assert len(active_dexes) >= 1, "Scroll must have at least 1 active DEX (nuri_v3)"
+        
+        # Check active DEX structure
+        for dex in active_dexes:
+            assert "name" in dex, "active_dex must have name"
+            assert "adapter_type" in dex, "active_dex must have adapter_type"
+            assert "factory" in dex, "active_dex must have factory"
+            assert "status" in dex, "active_dex must have status"

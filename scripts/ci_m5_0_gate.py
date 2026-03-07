@@ -1250,7 +1250,8 @@ ENV VARIABLES:
         try:
             from datetime import timezone
             utc_now = datetime.now(timezone.utc)
-            run_timestamp = utc_now.strftime("%Y%m%dT%H%M%SZ")
+            # v3.3.1: Use ISO-8601 format for consistency
+            run_timestamp = utc_now.isoformat()
             
             fail_reasons = [m.replace("FAIL: ", "") for m in messages if m.startswith("FAIL:")]
             
@@ -1546,19 +1547,23 @@ ENV VARIABLES:
                 scan_path = artifacts.get("scan")
                 quotes_fetched = 0
                 cross_dex_pairs_count = 0
+                scan_run_timestamp = None
                 if scan_path and scan_path.exists():
                     with open(scan_path) as f:
                         scan_data = json.load(f)
                     quotes_fetched = scan_data.get("stats", {}).get("quotes_fetched", 0)
                     cross_dex_pairs_count = scan_data.get("stats", {}).get("discovery_runtime", {}).get("cross_dex_pairs_count", 0)
+                    # v3.3.1: Extract run_timestamp from scan artifact (ISO-8601)
+                    scan_run_timestamp = scan_data.get("run_context", {}).get("run_timestamp")
                 
                 # Build fail_reasons from messages
                 fail_reasons = [m.replace("FAIL: ", "") for m in messages if m.startswith("FAIL:")]
                 
-                # v3.3.0: Use UTC timestamp + proper schema + run_context
+                # v3.3.1: Use run_timestamp from scan artifact (ISO-8601) for provenance alignment
                 from datetime import timezone
                 utc_now = datetime.now(timezone.utc)
-                run_timestamp = utc_now.strftime("%Y%m%dT%H%M%SZ")
+                # Prefer scan artifact's run_timestamp; fallback to UTC ISO format
+                run_timestamp = scan_run_timestamp if scan_run_timestamp else utc_now.isoformat()
                 
                 gate_result = {
                     "schema_version": "m5_0:gate_result:v1.0",

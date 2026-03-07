@@ -55,9 +55,11 @@ When 2nd DEX becomes available:
   - Uses `adapter_type` from dexes.yaml for fee tier detection (not name-based)
 - `gate_result.json` — Each runDir now contains canonical gate result in `reports/`:
   - `schema_version: "m5_0:gate_result:v1.0"`
-  - `run_context.run_timestamp`: UTC timestamp (YYYYMMDDTHHMMSSZ)
+  - `run_context.run_timestamp`: ISO-8601 UTC timestamp (extracted from scan artifact's run_context)
   - `generated_at`: UTC ISO timestamp
   - `status`, `reasons`, `chain_key`, `quotes_fetched`, `cross_dex_pairs_count`
+
+**Note (2026-03-07 post-fix)**: Original evidence runDirs (`ci_m5_gate_20260307_09*`) were generated before NO_DATA contract fix and gate_result ISO-8601 alignment. These runDirs contain stale artifacts and must be regenerated before being cited as canonical M5_0 evidence.
 
 ### ve33 Adapter Fix
 

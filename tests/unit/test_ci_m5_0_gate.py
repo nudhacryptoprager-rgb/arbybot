@@ -273,7 +273,7 @@ class TestGateResultJson(unittest.TestCase):
             self.assertEqual(data["schema_version"], "m5_0:gate_result:v1.0")
     
     def test_gate_result_run_context(self):
-        """gate_result.json MUST have run_context.run_timestamp."""
+        """gate_result.json MUST have run_context.run_timestamp in ISO-8601."""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_root = Path(tmpdir)
             
@@ -291,9 +291,11 @@ class TestGateResultJson(unittest.TestCase):
             
             self.assertIn("run_context", data)
             self.assertIn("run_timestamp", data["run_context"])
-            # Timestamp should be in format YYYYMMDDTHHMMSSZ
+            # v3.3.1: Timestamp should be ISO-8601 format (e.g., 2026-03-07T10:44:46.123456+00:00)
             ts = data["run_context"]["run_timestamp"]
-            self.assertRegex(ts, r"^\d{8}T\d{6}Z$", f"Invalid run_timestamp format: {ts}")
+            # ISO-8601 contains dashes and colons
+            self.assertIn("-", ts, f"run_timestamp should be ISO-8601: {ts}")
+            self.assertIn(":", ts, f"run_timestamp should be ISO-8601: {ts}")
     
     def test_gate_result_generated_at_utc(self):
         """gate_result.json MUST have generated_at in UTC."""

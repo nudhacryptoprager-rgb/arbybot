@@ -3,6 +3,7 @@
 """
 Warm Pool Cache CLI - Pre-populate pool resolver caches from intent.txt.
 
+v1.2.0: Fixed MulticallBatcher import, added pair diagnostics to JSON output.
 v1.1.0: Added --check-liquidity, --dex audit mode, adapter_type-based fee tiers.
 
 PURPOSE:
@@ -60,7 +61,7 @@ from discovery.verify import get_token_registry
 
 logger = logging.getLogger("scripts.warm_pool_cache")
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 
 @dataclass
@@ -288,13 +289,17 @@ def warm_chain(
     
     # Get DEXes for this chain
     dexes = get_chain_dexes(chain)
+    configured_dexes = set(dexes)  # DEXes actually configured in dexes.yaml
     
     # Add extra DEXes from --dex flag (for auditing candidates not in dexes.yaml)
+    # Note: Extra DEXes without config in dexes.yaml will fail pool resolution
     if extra_dexes:
         for dex in extra_dexes:
             if dex not in dexes:
                 dexes.append(dex)
-                logger.info(f"  Added extra DEX for audit: {dex}")
+                if dex not in configured_dexes:
+                    logger.warning(f"  WARN: DEX '{dex}' not in dexes.yaml for chain '{chain}' - "
+                                   f"add factory/quoter config or expect NO_POOL results")
     
     if not dexes:
         logger.warning(f"No DEXes configured for chain {chain}")
@@ -342,11 +347,10 @@ def warm_chain(
     if check_liquidity and pool_addresses_map:
         logger.info(f"Checking liquidity for {len(pool_addresses_map)} pools...")
         try:
-            from core.multicall import MulticallClient
-            from chains.providers import get_web3
+            from core.multicall import MulticallBatcher
             
-            w3 = get_web3(chain)
-            mc = MulticallClient(w3)
+            # Use block 0 (latest) for liquidity check
+            mc = MulticallBatcher(rpc_url, 0)
             
             liquidities = mc.batch_liquidity(list(pool_addresses_map.keys()))
             
@@ -540,6 +544,21 @@ def main():
                     "coverage_rate": s.coverage_rate,
                     "cross_dex_rate": s.cross_dex_rate,
                     "dex_coverage": s.dex_coverage,
+                    # v1.1.1: Include pair-level diagnostics for audit artifact generation
+                    "pair_diagnostics": [
+                        {
+                            "pair": d.pair,
+                            "status": d.status,
+                            "dex_count": d.dex_count,
+                            "pool_found": d.pool_found,
+                            "no_token": d.no_token,
+                            "no_pool": d.no_pool,
+                            "no_quoter": d.no_quoter,
+                            "zero_liquidity": d.zero_liquidity,
+                            "dex_results": d.dex_results,
+                        }
+                        for d in s.pair_diagnostics
+                    ],
                 }
                 for s in summaries
             ],
