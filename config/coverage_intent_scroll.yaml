@@ -36,12 +36,16 @@ universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
 # v3.2.35: Using Nuri Exchange (Algebra) - UniV3 factory doesn't work on Scroll
+# STATUS: BLOCKED_BY SECOND_DEX - only 1 DEX available, no cross-DEX arb possible
+# Candidates: PancakeSwap (0 liquidity), SushiSwap (no quoter), iZiSwap (no factory)
 dexes:
   - nuri_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-require_cross_dex: false  # Single DEX on Scroll
+# v3.2.36: BLOCKED_BY SECOND_DEX - set false to allow infra validation without cross-dex
+# When 2nd DEX is added, change to true and remove BLOCKED_BY comments
+require_cross_dex: false
 
 # Multicall batching (default ON)
 use_multicall: true

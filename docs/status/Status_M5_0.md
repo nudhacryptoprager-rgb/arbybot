@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-05  
-**Tests**: 1385 passed (including lint_readiness, cleanup_rolling, suggest_anchor_updates tests)  
-**Evidence runDir**: `ci_m5_gate_20260305_181243`  
+**Updated**: 2026-03-07  
+**Tests**: 1391 passed, 12 skipped (including lint_readiness, cleanup_rolling, suggest_anchor_updates tests)  
+**Evidence runDirs**: `ci_m5_gate_20260307_094744` (Base), `ci_m5_gate_20260307_094812` (Linea), `ci_m5_gate_20260307_094844` (Mantle), `ci_m5_gate_20260307_094933` (zkSync), `ci_m5_gate_20260307_094947` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -13,6 +13,45 @@
 > **M5_0 є обов'язковим для CI та infra-proof.**  
 > M5_0 валідує схеми/інваріанти артефактів, multicall, failover, провенанс.  
 > M4 execution gate є окремим "core truth" для profit.
+
+---
+
+## Multi-Chain Bring-up (2026-03-07)
+
+### Infra Gate Results
+
+Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.status=NO_DATA` is expected when no profitable spreads found — this is NOT an infra failure.
+
+| Chain | Infra Gate | pairs | pools | quotes | cross_dex | dexes_active | Notes |
+|-------|------------|-------|-------|--------|-----------|--------------|-------|
+| Base | ✅ PASS | 4 | 15 | 15 | 4 | 2 | uniswap_v3 + aerodrome |
+| Linea | ✅ PASS | 10 | 27 | 27 | 12 | 2 | lynex_v3 + pancakeswap_v3 |
+| Mantle | ✅ PASS | 4 | 15 | 15 | 5 | 2 | agni_v3 + stratum (ve33) |
+| zkSync | ✅ PASS | 9 | 49 | 49 | 10 | 2 | uniswap_v3 + pancakeswap_v3 |
+| Scroll | ✅ PASS* | 6 | 10 | 10 | 0 | 1 | nuri_v3 only, BLOCKED_BY SECOND_DEX |
+
+*Scroll passes infra validation with `require_cross_dex=false`. Cannot do cross-DEX arb until 2nd DEX added.
+
+### Scroll BLOCKED_BY SECOND_DEX
+
+Scroll has no viable 2nd DEX for cross-DEX arbitrage:
+- **PancakeSwap V3**: Factory deployed but WETH/USDC pool has 0 liquidity
+- **SushiSwap V3**: No quoter_v2 deployed
+- **iZiSwap**: Different factory interface, no adapter
+
+When 2nd DEX becomes available:
+1. Add to `config/dexes.yaml` under `scroll:`
+2. Update `config/coverage_intent_scroll.yaml` to set `require_cross_dex: true`
+3. Remove BLOCKED_BY comments
+
+### New Tools
+
+- `scripts/warm_pool_cache.py` — Pre-populate pool resolver caches from intent.txt, diagnose missing tokens/pools/quoters, rank DEXes by coverage
+- `gate_result.json` — Each runDir now contains canonical gate result with status, reasons, chain_key, quotes_fetched, cross_dex_pairs_count
+
+### ve33 Adapter Fix
+
+Stratum (Mantle) uses `getPair(tokenA, tokenB, stable)` instead of `getPool()`. Fixed `query_ve33_pool()` to try both methods.
 
 ---
 

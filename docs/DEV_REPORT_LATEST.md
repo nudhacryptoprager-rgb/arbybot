@@ -22,60 +22,45 @@
 | 3 | `profit_is_diagnostic` (exit) | false | true | ⬜ |
 | 4 | Roundtrip metrics in rolling | present | ✓ | ✅ |
 
-### Multi-chain Universe Lift (A4/A5) - BRING-UP v3.2.34
-| Chain | lint_readiness | Tokens | COVERAGE Run | Pairs | Pools | Quotes | infra.rpc_http_host |
-|-------|---------------|--------|--------------|-------|-------|--------|---------------------|
-| arbitrum_one | READY (100%) | 25/25 | N/A (production) | 13 | OK | OK | arb-mainnet |
-| base | READY (100%) | 12/12 | DATA ✅ | 4 | 12 | 9 | mainnet.base.org ✅ |
-| linea | READY (92%) | 11/12 | QUOTER ❌ | 6 | 24 | 0 | rpc.linea.build ✅ |
-| mantle | PARTIAL (78%) | 7/9 | N/A | - | - | - | backlog |
-| scroll | PARTIAL (82%) | 9/11 | PARTIAL 🟡 | 2 | 4 | 0 | rpc.scroll.io ✅ |
-| zksync | PARTIAL (82%) | 9/11 | BLOCKED ❌ | 0 | 0 | 0 | mainnet.era.zksync.io ✅ |
+### Multi-chain Universe Lift (A4/A5) - BRING-UP v3.2.36
+| Chain | M5_0 Infra Gate | Pairs | Pools | Quotes | Cross-DEX | DEXes Active | Notes |
+|-------|-----------------|-------|-------|--------|-----------|--------------|-------|
+| arbitrum_one | ✅ PASS | 13 | OK | OK | OK | 4 | production (rolling) |
+| base | ✅ PASS | 4 | 15 | 15 | 4 | 2 | uniswap_v3 + aerodrome |
+| linea | ✅ PASS | 10 | 27 | 27 | 12 | 2 | lynex_v3 + pancakeswap_v3 |
+| mantle | ✅ PASS | 4 | 15 | 15 | 5 | 2 | agni_v3 + stratum (ve33) |
+| zksync | ✅ PASS | 9 | 49 | 49 | 10 | 2 | uniswap_v3 + pancakeswap_v3 |
+| scroll | ✅ PASS* | 6 | 10 | 10 | 0 | 1 | nuri_v3 only, BLOCKED_BY SECOND_DEX |
 
-**v3.2.34 Fixes (RPC Chain-Safety + Case-Insensitive USD Prices):**
-- FIX: `strategy/jobs/run_scan_real.py` - resolved_http priority over env var
-- FIX: `strategy/infra.py` - OVERWRITE env vars when config has rpc_endpoints (not setdefault)
-- FIX: `strategy/quotes.py` - case-insensitive USD price lookup (WEETH/weETH, WSTETH/wstETH)
-- FIX: `scripts/ci_m5_0_gate.py` - validate_chain_rpc_consistency() for all chains in infra check
+*Scroll passes infra validation with `require_cross_dex=false`. Cannot do cross-DEX arb until 2nd DEX added.
 
-**Multi-chain Blockers (remaining):**
-- Linea: ALGEBRA_NEEDS_QUOTER - lynex_v3 quoter uses different ABI than Camelot
-- zkSync: iZumi adapter pool lookup failing (0 pairs resolved)
-- All non-Arbitrum: Single DEX = no cross-DEX arb opportunity
+**v3.2.36 Fixes (Multi-chain Bring-up):**
+- FIX: `discovery/index_factories.py` - ve33 `query_ve33_pool()` now supports both `getPool()` and `getPair()` (Stratum)
+- ADD: `scripts/warm_pool_cache.py` - CLI to pre-populate pool caches from intent.txt, diagnose issues
+- ADD: `gate_result.json` - Canonical gate result artifact in each runDir
+- FIX: `scripts/ci_m5_0_gate.py` - `require_cross_dex` config support (BLOCKED_BY chains can pass infra)
+- ADD: `config/dexes.yaml` - pancakeswap_v3 for Linea/zkSync, stratum for Mantle
+- UPD: Config files - `require_cross_dex: true` for all chains with 2 DEXes
 
-### v3.2.34 CHANGES SUMMARY
+**Evidence runDirs (2026-03-07):**
+- base: `ci_m5_gate_20260307_094744` (4 pairs, 15 pools, 15 quotes, 4 cross-dex)
+- linea: `ci_m5_gate_20260307_094812` (10 pairs, 27 pools, 27 quotes, 12 cross-dex)
+- mantle: `ci_m5_gate_20260307_094844` (4 pairs, 15 pools, 15 quotes, 5 cross-dex)
+- zksync: `ci_m5_gate_20260307_094933` (9 pairs, 49 pools, 49 quotes, 10 cross-dex)
+- scroll: `ci_m5_gate_20260307_094947` (6 pairs, 10 pools, 10 quotes, BLOCKED_BY SECOND_DEX)
 
-**RPC Priority Fix (critical):**
-- FIX: `strategy/jobs/run_scan_real.py:404` - `primary_http = resolved_http or env` (not env or resolved)
-- FIX: `strategy/infra.py:137-139` - `os.environ["..."] = ...` (OVERWRITE, not setdefault)
-- Result: `infra.rpc_http_host` now correctly shows chain-specific host (e.g., `mainnet.base.org` for Base)
-
-**Case-Insensitive USD Price Lookup:**
-- FIX: `strategy/quotes.py:780` - use `lookup_token_usd_price_ci()` for viability filter
-- FIX: `strategy/quotes.py:369` - use `lookup_token_usd_price_ci()` in `calculate_amount_in_wei()`
-- Result: NO_USD_PRICE no longer blocks WEETH/WSTETH/EZETH pairs
-
-**Gate Chain Validation:**
-- FIX: `scripts/ci_m5_0_gate.py:880-895` - use `validate_chain_rpc_consistency()` for all chains
-
-**Evidence runDirs (COVERAGE v3.2.34):**
-- base: `ci_m5_gate_20260305_204126` (4 pairs, 12 pools, 9 quotes, rpc_http_host=mainnet.base.org ✅)
-- linea: `ci_m5_gate_20260305_204005` (6 pairs, 24 pools, ALGEBRA_NEEDS_QUOTER)
-- scroll: `ci_m5_gate_20260305_201601` (2 pairs, 4 pools, NO_USD_PRICE)
-- zksync: `ci_m5_gate_20260305_200637` (0 pairs, adapter issue)
-
-**Tests**: 1386 passed, CI pipeline PASS
+**Tests**: 1391 passed, 12 skipped, CI pipeline PASS
 
 ## 0) Meta
-timestamp_utc: 2026-03-05T17:49:43Z
-run_id: data/runs/ci_m5_gate_20260305_184929
-mode: ONLINE (v3.2.31: roundtrip metrics added to rolling canon)
-artifact_mode: rolling
-config: config/real_minimal.yaml (arbitrum_one, run_kind=NORMAL)
+timestamp_utc: 2026-03-07T09:50:00Z
+run_id: data/runs/ci_m5_gate_20260307_094933 (zkSync latest)
+mode: ONLINE (v3.2.36: Multi-chain bring-up)
+artifact_mode: full (COVERAGE runs do not update rolling)
+config: config/coverage_intent_*.yaml (multi-chain)
 code_identity:
-  primary: ts:2026-03-05T17:49:43Z
+  primary: ts:2026-03-07T09:50:00Z
   dirty: false
-  desc: v3.2.31 roundtrip metrics in rolling, doc-sync helper, intent protection
+  desc: v3.2.36 multi-chain bring-up, gate_result.json, warm_pool_cache.py
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): Per-DEX quoter mode + viability filters + multi-chain rollout (scroll/zksync)

@@ -629,8 +629,14 @@ def validate_health_metrics(data: Dict[str, Any]) -> Tuple[bool, str]:
 def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool = False,
                        require_infra_hosts: bool = False,
                        require_cross_artifact: bool = False,
-                       require_tenderly: bool = False) -> Tuple[bool, List[str]]:
-    """Validate all artifacts."""
+                       require_tenderly: bool = False,
+                       require_cross_dex: bool = True) -> Tuple[bool, List[str]]:
+    """Validate all artifacts.
+    
+    Args:
+        require_cross_dex: If True (default), discovery_runtime must have cross_dex_pairs_count >= 1.
+                           If False (e.g. Scroll with single DEX), allows cross_dex_pairs_count=0.
+    """
     messages = []
     all_passed = True
     
@@ -729,9 +735,14 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                         elif dr_quotes < 1:
                             messages.append(f"FAIL: {name} - discovery_runtime quotes_fetched={dr_quotes} < 1")
                             all_passed = False
-                        elif dr_cross_dex < 1:
+                        elif require_cross_dex and dr_cross_dex < 1:
+                            # v3.2.36: Only fail on cross_dex < 1 if require_cross_dex=True
+                            # BLOCKED_BY chains (e.g. Scroll) can pass infra validation with single DEX
                             messages.append(f"FAIL: {name} - discovery_runtime cross_dex_pairs_count={dr_cross_dex} < 1")
                             all_passed = False
+                        elif not require_cross_dex and dr_cross_dex < 1:
+                            # v3.2.36: BLOCKED_BY chain - warn but don't fail
+                            messages.append(f"WARN: {name} - discovery_runtime cross_dex_pairs_count={dr_cross_dex} (require_cross_dex=false, BLOCKED_BY SECOND_DEX)")
                         else:
                             messages.append(f"OK: {name} - discovery_runtime (enabled=true, quotes={dr_quotes}, cross_dex={dr_cross_dex})")
             
@@ -1457,6 +1468,23 @@ ENV VARIABLES:
                 print(f"RESULT: FAIL - Missing artifacts: {missing}")
                 return 2
             
+            # v3.2.36: Load require_cross_dex from config for validation
+            # BLOCKED_BY chains (e.g. Scroll) can set require_cross_dex=false
+            config_require_cross_dex = True  # default: require cross-dex
+            config_chain_key = None
+            try:
+                cfg_path = Path(args.config)
+                if cfg_path.exists():
+                    import yaml
+                    with open(cfg_path, "r", encoding="utf8") as f:
+                        cfg_for_validation = yaml.safe_load(f) or {}
+                    config_require_cross_dex = cfg_for_validation.get("require_cross_dex", True)
+                    config_chain_key = cfg_for_validation.get("chain")
+                    if not config_require_cross_dex:
+                        print(f"[ONLINE] require_cross_dex=false (chain={config_chain_key}, BLOCKED_BY SECOND_DEX)")
+            except Exception as e:
+                print(f"[ONLINE] WARN: Could not load require_cross_dex from config: {e}")
+            
             print(f"\n{'='*60}")
             print("VALIDATION")
             print(f"{'='*60}\n")
@@ -1467,6 +1495,7 @@ ENV VARIABLES:
                 require_infra_hosts=args.require_infra_hosts,
                 require_cross_artifact=args.require_cross_artifact,
                 require_tenderly=args.require_tenderly,
+                require_cross_dex=config_require_cross_dex,
             )
             for msg in messages:
                 print(f"  {msg}")
@@ -1474,6 +1503,42 @@ ENV VARIABLES:
             print(f"\n{'='*60}")
             print(f"RESULT: {'PASS' if passed else 'FAIL'}")
             print(f"RunDir: {run_dir}")
+            
+            # v3.2.36: Write gate_result.json for canonical provenance
+            # Contains status, reasons, config_path, chain_key, quotes_fetched, cross_dex_pairs_count
+            try:
+                # Extract key metrics from scan artifact
+                scan_path = artifacts.get("scan")
+                quotes_fetched = 0
+                cross_dex_pairs_count = 0
+                if scan_path and scan_path.exists():
+                    with open(scan_path) as f:
+                        scan_data = json.load(f)
+                    quotes_fetched = scan_data.get("stats", {}).get("quotes_fetched", 0)
+                    cross_dex_pairs_count = scan_data.get("stats", {}).get("discovery_runtime", {}).get("cross_dex_pairs_count", 0)
+                
+                # Build fail_reasons from messages
+                fail_reasons = [m.replace("FAIL: ", "") for m in messages if m.startswith("FAIL:")]
+                
+                gate_result = {
+                    "gate": "ci_m5_0_gate",
+                    "version": __version__,
+                    "status": "PASS" if passed else "FAIL",
+                    "reasons": fail_reasons,
+                    "config_path": str(args.config),
+                    "chain_key": config_chain_key,
+                    "require_cross_dex": config_require_cross_dex,
+                    "quotes_fetched": quotes_fetched,
+                    "cross_dex_pairs_count": cross_dex_pairs_count,
+                    "timestamp": datetime.now().isoformat(),
+                }
+                
+                gate_result_path = run_dir / "gate_result.json"
+                with open(gate_result_path, "w", encoding="utf8") as f:
+                    json.dump(gate_result, f, indent=2, ensure_ascii=False)
+                print(f"[ONLINE] Generated: {gate_result_path}")
+            except Exception as e:
+                print(f"[ONLINE] WARN: gate_result.json generation failed: {e}")
             
             # v3.2.19: Always run M4 gate for ONLINE PASS to generate run_summary
             # This ensures every runDir has provenance artifacts for evidence tracking
