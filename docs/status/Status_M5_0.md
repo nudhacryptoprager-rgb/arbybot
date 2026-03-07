@@ -39,15 +39,25 @@ Scroll has no viable 2nd DEX for cross-DEX arbitrage:
 - **SushiSwap V3**: No quoter_v2 deployed
 - **iZiSwap**: Different factory interface, no adapter
 
+**Audit artifact**: [`docs/artifacts/scroll_dex_audit.json`](../artifacts/scroll_dex_audit.json)
+
 When 2nd DEX becomes available:
 1. Add to `config/dexes.yaml` under `scroll:`
 2. Update `config/coverage_intent_scroll.yaml` to set `require_cross_dex: true`
 3. Remove BLOCKED_BY comments
+4. Update the audit artifact with new DEX status
 
 ### New Tools
 
 - `scripts/warm_pool_cache.py` — Pre-populate pool resolver caches from intent.txt, diagnose missing tokens/pools/quoters, rank DEXes by coverage
-- `gate_result.json` — Each runDir now contains canonical gate result with status, reasons, chain_key, quotes_fetched, cross_dex_pairs_count
+  - `--check-liquidity`: Check pool liquidity via multicall (slower, requires RPC)
+  - `--dex <name>`: Audit specific DEX candidates not yet in dexes.yaml
+  - Uses `adapter_type` from dexes.yaml for fee tier detection (not name-based)
+- `gate_result.json` — Each runDir now contains canonical gate result in `reports/`:
+  - `schema_version: "m5_0:gate_result:v1.0"`
+  - `run_context.run_timestamp`: UTC timestamp (YYYYMMDDTHHMMSSZ)
+  - `generated_at`: UTC ISO timestamp
+  - `status`, `reasons`, `chain_key`, `quotes_fetched`, `cross_dex_pairs_count`
 
 ### ve33 Adapter Fix
 

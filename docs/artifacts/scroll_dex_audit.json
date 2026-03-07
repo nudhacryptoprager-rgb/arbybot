@@ -1,0 +1,70 @@
+{
+  "schema_version": "dex_audit:v1.0",
+  "chain": "scroll",
+  "chain_id": 534352,
+  "audit_date": "2026-03-07",
+  "status": "BLOCKED_BY_SECOND_DEX",
+  "summary": "Scroll has only 1 functional DEX (Nuri). Cross-DEX arbitrage not possible until 2nd DEX with liquidity is added.",
+  
+  "active_dexes": [
+    {
+      "name": "nuri_v3",
+      "adapter_type": "uniswap_v3",
+      "factory": "0xAAA32926fcE6bE95ea2c51cB4Fcb60836D320C42",
+      "quoter_v2": "0xAAAEa10b0e6FBe566FE27c3A023DC5D8cA6Bca3d",
+      "status": "ACTIVE",
+      "note": "Nuri Exchange - functional quoter, pools have liquidity"
+    }
+  ],
+  
+  "candidate_dexes": [
+    {
+      "name": "uniswap_v3",
+      "adapter_type": "uniswap_v3",
+      "factory": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+      "status": "REJECTED",
+      "rejection_reason": "NON_FUNCTIONAL",
+      "note": "Official Uniswap V3 factory has only 2 txs on scrollscan, doesn't work. Possibly never deployed properly.",
+      "evidence_url": "https://scrollscan.com/address/0x1F98431c8aD98523631AE4a59f267346ea31F984"
+    },
+    {
+      "name": "pancakeswap_v3",
+      "adapter_type": "uniswap_v3",
+      "factory": "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+      "quoter_v2": null,
+      "status": "REJECTED",
+      "rejection_reason": "ZERO_LIQUIDITY",
+      "note": "PancakeSwap V3 factory exists but pools have 0 liquidity on major pairs (WETH/USDC, etc.)",
+      "pools_checked": [
+        {"pair": "WETH/USDC", "fee": 500, "liquidity": 0},
+        {"pair": "WETH/USDT", "fee": 500, "liquidity": 0}
+      ]
+    },
+    {
+      "name": "sushiswap_v3",
+      "adapter_type": "uniswap_v3",
+      "factory": null,
+      "status": "REJECTED",
+      "rejection_reason": "NO_QUOTER",
+      "note": "SushiSwap V3 may have factory but no quoter contract found on scrollscan"
+    },
+    {
+      "name": "iziswap",
+      "adapter_type": "iziswap",
+      "factory": null,
+      "status": "REJECTED",
+      "rejection_reason": "NO_FACTORY",
+      "note": "iZiSwap may be present but factory address not found/verified on scrollscan"
+    }
+  ],
+  
+  "next_steps": [
+    "Monitor PancakeSwap for liquidity growth",
+    "Check for new DEX deployments on scrollscan.com",
+    "Re-audit when Arbitrum/Base style liquidity is observed"
+  ],
+  
+  "audit_command": "py -3.11 scripts/warm_pool_cache.py --chain scroll --rank-dexes --check-liquidity",
+  
+  "generated_by": "manual audit + warm_pool_cache.py"
+}

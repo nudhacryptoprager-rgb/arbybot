@@ -1002,6 +1002,14 @@ def generate_m4_from_online_inputs(
     # quality_status: NO_DATA | PASS | WARN | FAIL_QUALITY
     if included_signals_count == 0:
         combined_status = "NO_DATA"  # v2.0.5: truly NO data
+        # v3.3.0: CONTRACT FIX - status=NO_DATA must have reasons=["NO_DATA"]
+        # FAIL_* tokens are invalid with NO_DATA status; details go in metrics.no_data_reason
+        all_reasons = ["NO_DATA"]
+        profit_status = "NO_DATA"
+        profit_reasons = ["NO_DATA"]
+        drift_status = "NO_DATA"
+        drift_reasons = ["NO_DATA"]
+        # quality_status already set above (NO_DATA when data_run_rate == 0, etc.)
     elif profit_status == "FAIL" or drift_status == "FAIL":
         combined_status = "FAIL"
     elif quality_status == "FAIL_QUALITY":

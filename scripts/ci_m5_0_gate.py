@@ -1245,6 +1245,41 @@ ENV VARIABLES:
         print(f"\n{'='*60}")
         print(f"RESULT: {'PASS' if passed else 'FAIL'}")
         print(f"RunDir: {run_dir}")
+        
+        # v3.3.0: Generate gate_result.json for offline mode as well
+        try:
+            from datetime import timezone
+            utc_now = datetime.now(timezone.utc)
+            run_timestamp = utc_now.strftime("%Y%m%dT%H%M%SZ")
+            
+            fail_reasons = [m.replace("FAIL: ", "") for m in messages if m.startswith("FAIL:")]
+            
+            gate_result = {
+                "schema_version": "m5_0:gate_result:v1.0",
+                "gate": "ci_m5_0_gate",
+                "version": __version__,
+                "run_context": {
+                    "run_timestamp": run_timestamp,
+                },
+                "status": "PASS" if passed else "FAIL",
+                "reasons": fail_reasons,
+                "config_path": None,  # Offline mode has no config
+                "chain_key": None,
+                "require_cross_dex": False,
+                "quotes_fetched": 0,
+                "cross_dex_pairs_count": 0,
+                "generated_at": utc_now.isoformat(),
+            }
+            
+            reports_dir = run_dir / "reports"
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            gate_result_path = reports_dir / "gate_result.json"
+            with open(gate_result_path, "w", encoding="utf8") as f:
+                json.dump(gate_result, f, indent=2, ensure_ascii=False)
+            print(f"[OFFLINE] Generated: {gate_result_path}")
+        except Exception as e:
+            print(f"[OFFLINE] WARN: gate_result.json generation failed: {e}")
+        
         return 0 if passed else 1
     
     # =========================================================================
@@ -1520,9 +1555,18 @@ ENV VARIABLES:
                 # Build fail_reasons from messages
                 fail_reasons = [m.replace("FAIL: ", "") for m in messages if m.startswith("FAIL:")]
                 
+                # v3.3.0: Use UTC timestamp + proper schema + run_context
+                from datetime import timezone
+                utc_now = datetime.now(timezone.utc)
+                run_timestamp = utc_now.strftime("%Y%m%dT%H%M%SZ")
+                
                 gate_result = {
+                    "schema_version": "m5_0:gate_result:v1.0",
                     "gate": "ci_m5_0_gate",
                     "version": __version__,
+                    "run_context": {
+                        "run_timestamp": run_timestamp,
+                    },
                     "status": "PASS" if passed else "FAIL",
                     "reasons": fail_reasons,
                     "config_path": str(args.config),
@@ -1530,10 +1574,13 @@ ENV VARIABLES:
                     "require_cross_dex": config_require_cross_dex,
                     "quotes_fetched": quotes_fetched,
                     "cross_dex_pairs_count": cross_dex_pairs_count,
-                    "timestamp": datetime.now().isoformat(),
+                    "generated_at": utc_now.isoformat(),
                 }
                 
-                gate_result_path = run_dir / "gate_result.json"
+                # v3.3.0: Write to reports/ directory for schema compliance
+                reports_dir = run_dir / "reports"
+                reports_dir.mkdir(parents=True, exist_ok=True)
+                gate_result_path = reports_dir / "gate_result.json"
                 with open(gate_result_path, "w", encoding="utf8") as f:
                     json.dump(gate_result, f, indent=2, ensure_ascii=False)
                 print(f"[ONLINE] Generated: {gate_result_path}")

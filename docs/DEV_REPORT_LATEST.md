@@ -215,19 +215,25 @@ best_net_pnl_bps: null (no roundtrips evaluated)
 
 **Completed: 8/8**
 
-## 8) Multi-Chain Rollout Verdict (v3.2.20)
+## 8) Multi-Chain Rollout Verdict (v3.2.36)
 
-| Config | Chain | ONLINE Status | Verdict | no_tokens | no_pool |
-|--------|-------|---------------|---------|-----------|---------|
-| coverage_intent_linea.yaml | Linea (59144) | **NO_DATA** | ! | 11 | 6 |
-| coverage_intent_mantle.yaml | Mantle (5000) | **NO_DATA** | ! | 6 | 10 |
-| coverage_intent_scroll.yaml | Scroll (534352) | **NO_DATA** | ! | 9 | 5 |
-| coverage_intent_zksync.yaml | zkSync (324) | **NO_DATA** | ! | 10 | 5 |
+| Config | Chain | ONLINE Status | Cross-DEX | DEXes | Verdict |
+|--------|-------|---------------|-----------|-------|---------|
+| coverage_intent_base.yaml | Base (8453) | **PASS** | 4 | 2 | ✅ |
+| coverage_intent_linea.yaml | Linea (59144) | **PASS** | 12 | 2 | ✅ |
+| coverage_intent_mantle.yaml | Mantle (5000) | **PASS** | 5 | 2 | ✅ |
+| coverage_intent_zksync.yaml | zkSync (324) | **PASS** | 10 | 2 | ✅ |
+| coverage_intent_scroll.yaml | Scroll (534352) | **PASS*** | 0 | 1 | BLOCKED_BY |
 
-**Root Cause**: Multi-chain discovery requires:
-1. Proper token addresses in `core_tokens.yaml` for each chain
-2. Pool resolution working for each DEX adapter
-3. DEX protocol anchors (factory, quoter_v2, router) in `dexes.yaml`
+*Scroll passes infra validation with `require_cross_dex=false` but only has 1 DEX (Nuri).
+See `docs/artifacts/scroll_dex_audit.json` for candidate DEX audit.
+
+**v3.2.36+ Fixes Applied:**
+- FIX: ve33 adapter supports both `getPool()` and `getPair()` (Stratum on Mantle)
+- ADD: gate_result.json with schema_version + run_context.run_timestamp
+- ADD: warm_pool_cache.py --check-liquidity, --dex audit mode
+- FIX: adapter_type from dexes.yaml (not name-based matching)
+- FIX: NO_DATA/FAIL_* contract violation in run_summary generation
 
 ## 9) CI Pipeline Status
 

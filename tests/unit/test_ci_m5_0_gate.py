@@ -243,5 +243,79 @@ class TestCurrentBlockValidation(unittest.TestCase):
             self.assertNotEqual(result, 0)
 
 
+class TestGateResultJson(unittest.TestCase):
+    """Tests for gate_result.json artifact generation (v3.3.0)."""
+    
+    def test_gate_result_schema_version(self):
+        """gate_result.json MUST have schema_version."""
+        # Run an offline gate to generate gate_result.json
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            with patch('sys.argv', ['ci_m5_0_gate.py', '--offline', '--output-root', str(output_root)]):
+                result = main()
+            
+            self.assertEqual(result, 0)
+            
+            # Find the run_dir
+            run_dirs = list(output_root.glob("ci_m5_gate_offline_*"))
+            self.assertEqual(len(run_dirs), 1)
+            run_dir = run_dirs[0]
+            
+            # Check gate_result.json is in reports/
+            gate_result_path = run_dir / "reports" / "gate_result.json"
+            self.assertTrue(gate_result_path.exists(), f"gate_result.json not found in reports/")
+            
+            with open(gate_result_path) as f:
+                data = json.load(f)
+            
+            self.assertIn("schema_version", data)
+            self.assertEqual(data["schema_version"], "m5_0:gate_result:v1.0")
+    
+    def test_gate_result_run_context(self):
+        """gate_result.json MUST have run_context.run_timestamp."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            with patch('sys.argv', ['ci_m5_0_gate.py', '--offline', '--output-root', str(output_root)]):
+                result = main()
+            
+            self.assertEqual(result, 0)
+            
+            run_dirs = list(output_root.glob("ci_m5_gate_offline_*"))
+            run_dir = run_dirs[0]
+            gate_result_path = run_dir / "reports" / "gate_result.json"
+            
+            with open(gate_result_path) as f:
+                data = json.load(f)
+            
+            self.assertIn("run_context", data)
+            self.assertIn("run_timestamp", data["run_context"])
+            # Timestamp should be in format YYYYMMDDTHHMMSSZ
+            ts = data["run_context"]["run_timestamp"]
+            self.assertRegex(ts, r"^\d{8}T\d{6}Z$", f"Invalid run_timestamp format: {ts}")
+    
+    def test_gate_result_generated_at_utc(self):
+        """gate_result.json MUST have generated_at in UTC."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            
+            with patch('sys.argv', ['ci_m5_0_gate.py', '--offline', '--output-root', str(output_root)]):
+                result = main()
+            
+            self.assertEqual(result, 0)
+            
+            run_dirs = list(output_root.glob("ci_m5_gate_offline_*"))
+            run_dir = run_dirs[0]
+            gate_result_path = run_dir / "reports" / "gate_result.json"
+            
+            with open(gate_result_path) as f:
+                data = json.load(f)
+            
+            self.assertIn("generated_at", data)
+            # Should be ISO format with timezone
+            self.assertIn("+00:00", data["generated_at"])
+
+
 if __name__ == "__main__":
     unittest.main()
