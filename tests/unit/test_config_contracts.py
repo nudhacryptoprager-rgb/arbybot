@@ -1,0 +1,241 @@
+# PATH: tests/unit/test_config_contracts.py
+"""
+Config contract tests for coverage configs and DEX configurations.
+
+v3.2.37: Validates that coverage configs have required fields and reference
+valid DEXes from dexes.yaml with proper factory/quoter addresses.
+This ensures the config/code contract is not broken by ad-hoc changes.
+"""
+
+import pytest
+import yaml
+from pathlib import Path
+from datetime import datetime, timezone
+import re
+
+
+# =============================================================================
+# PATHS
+# =============================================================================
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+CONFIG_DIR = PROJECT_ROOT / "config"
+DEXES_YAML = CONFIG_DIR / "dexes.yaml"
+
+# Coverage config files that must be validated
+COVERAGE_CONFIGS = [
+    "coverage_intent_base.yaml",
+    "coverage_intent_scroll.yaml",
+    "coverage_intent_linea.yaml",
+    "coverage_intent_mantle.yaml",
+    "coverage_intent_zksync.yaml",
+    "coverage_intent_arbitrum_one.yaml",
+]
+
+# Required fields for coverage configs
+COVERAGE_REQUIRED_FIELDS = {
+    "chain",
+    "chain_id",
+    "rpc_endpoints",
+    "universe_source",
+    "dexes",
+    "min_spread_bps",
+}
+
+# Required DEX fields for UniswapV3-style adapters
+DEX_REQUIRED_FIELDS_V3 = {
+    "adapter_type",
+    "factory",
+}
+
+# DEX types that require quoter
+DEX_TYPES_REQUIRING_QUOTER = {"uniswap_v3", "algebra"}
+
+
+# =============================================================================
+# FIXTURES
+# =============================================================================
+
+@pytest.fixture
+def dexes_config():
+    """Load dexes.yaml configuration."""
+    with open(DEXES_YAML) as f:
+        return yaml.safe_load(f)
+
+
+# =============================================================================
+# COVERAGE CONFIG TESTS
+# =============================================================================
+
+class TestCoverageConfigContracts:
+    """Contract tests for coverage config files."""
+    
+    @pytest.mark.parametrize("config_name", COVERAGE_CONFIGS)
+    def test_coverage_config_has_required_fields(self, config_name):
+        """All coverage configs must have required fields."""
+        config_path = CONFIG_DIR / config_name
+        if not config_path.exists():
+            pytest.skip(f"{config_name} does not exist")
+        
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        
+        missing = COVERAGE_REQUIRED_FIELDS - set(config.keys())
+        assert not missing, f"{config_name} missing required fields: {missing}"
+    
+    @pytest.mark.parametrize("config_name", COVERAGE_CONFIGS)
+    def test_coverage_config_dexes_exist_in_dexes_yaml(self, config_name, dexes_config):
+        """All DEXes referenced in coverage configs must exist in dexes.yaml."""
+        config_path = CONFIG_DIR / config_name
+        if not config_path.exists():
+            pytest.skip(f"{config_name} does not exist")
+        
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        
+        chain = config.get("chain")
+        dexes_list = config.get("dexes", [])
+        
+        if chain not in dexes_config:
+            pytest.skip(f"Chain '{chain}' not in dexes.yaml")
+        
+        chain_dexes = dexes_config[chain]
+        for dex in dexes_list:
+            assert dex in chain_dexes, \
+                f"{config_name}: DEX '{dex}' not found in dexes.yaml for chain '{chain}'"
+    
+    @pytest.mark.parametrize("config_name", COVERAGE_CONFIGS)
+    def test_coverage_config_has_at_least_two_dexes_for_cross_dex(self, config_name):
+        """Coverage configs with require_cross_dex=true must have >=2 DEXes."""
+        config_path = CONFIG_DIR / config_name
+        if not config_path.exists():
+            pytest.skip(f"{config_name} does not exist")
+        
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        
+        require_cross_dex = config.get("require_cross_dex", True)
+        dexes_list = config.get("dexes", [])
+        
+        if require_cross_dex:
+            assert len(dexes_list) >= 2, \
+                f"{config_name}: require_cross_dex=true but only {len(dexes_list)} DEX(es) configured"
+
+
+# =============================================================================
+# DEX CONFIG TESTS
+# =============================================================================
+
+class TestDexConfigContracts:
+    """Contract tests for dexes.yaml configuration."""
+    
+    def test_dexes_yaml_exists(self):
+        """dexes.yaml must exist."""
+        assert DEXES_YAML.exists(), f"dexes.yaml not found at {DEXES_YAML}"
+    
+    def test_all_dexes_have_factory(self, dexes_config):
+        """All DEXes must have a factory address."""
+        for chain, dexes in dexes_config.items():
+            if not isinstance(dexes, dict):
+                continue
+            for dex_name, dex_config in dexes.items():
+                if not isinstance(dex_config, dict):
+                    continue
+                assert "factory" in dex_config, \
+                    f"DEX '{chain}.{dex_name}' missing 'factory' address"
+    
+    def test_v3_dexes_have_quoter(self, dexes_config):
+        """UniswapV3/Algebra DEXes must have quoter or quoter_v2."""
+        for chain, dexes in dexes_config.items():
+            if not isinstance(dexes, dict):
+                continue
+            for dex_name, dex_config in dexes.items():
+                if not isinstance(dex_config, dict):
+                    continue
+                adapter_type = dex_config.get("adapter_type", "")
+                if adapter_type in DEX_TYPES_REQUIRING_QUOTER:
+                    has_quoter = "quoter" in dex_config or "quoter_v2" in dex_config
+                    assert has_quoter, \
+                        f"DEX '{chain}.{dex_name}' (adapter_type={adapter_type}) missing quoter/quoter_v2"
+    
+    def test_factory_addresses_are_valid_hex(self, dexes_config):
+        """Factory addresses must be valid 0x-prefixed hex strings."""
+        hex_pattern = re.compile(r"^0x[a-fA-F0-9]{40}$")
+        
+        for chain, dexes in dexes_config.items():
+            if not isinstance(dexes, dict):
+                continue
+            for dex_name, dex_config in dexes.items():
+                if not isinstance(dex_config, dict):
+                    continue
+                factory = dex_config.get("factory", "")
+                if factory:  # Only validate if present
+                    assert hex_pattern.match(factory), \
+                        f"DEX '{chain}.{dex_name}' has invalid factory address: {factory}"
+
+
+# =============================================================================
+# ISO-8601 TIMESTAMP TESTS
+# =============================================================================
+
+class TestTimestampContracts:
+    """Contract tests for ISO-8601 timestamp formatting."""
+    
+    def test_utc_isoformat_with_z_suffix_is_valid(self):
+        """UTC timestamps with Z suffix must be valid ISO-8601."""
+        # Correct format: 2026-03-08T09:06:52.611725Z
+        ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        
+        # Must not have both +00:00 and Z
+        assert "+00:00Z" not in ts, f"Malformed timestamp: {ts}"
+        
+        # Must end with Z
+        assert ts.endswith("Z"), f"UTC timestamp must end with Z: {ts}"
+        
+        # Must be parseable (strip Z for fromisoformat)
+        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        assert parsed.tzinfo is not None, f"Timestamp must have timezone info"
+    
+    def test_malformed_timestamp_detection(self):
+        """Detect malformed +00:00Z timestamps."""
+        # WRONG: isoformat() already has +00:00, appending Z creates malformed string
+        malformed = datetime.now(timezone.utc).isoformat() + "Z"
+        assert "+00:00Z" in malformed, "Test setup: expected malformed timestamp"
+        
+        # CORRECT: replace +00:00 with Z
+        correct = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        assert "+00:00Z" not in correct, f"Correct timestamp should not have +00:00Z"
+
+
+# =============================================================================
+# CROSS-CHAIN COVERAGE TESTS
+# =============================================================================
+
+class TestMultiChainCoverageReadiness:
+    """Tests for multi-chain coverage readiness."""
+    
+    def test_all_coverage_chains_have_dex_config(self, dexes_config):
+        """All chains with coverage configs must have DEX configurations."""
+        for config_name in COVERAGE_CONFIGS:
+            config_path = CONFIG_DIR / config_name
+            if not config_path.exists():
+                continue
+            
+            with open(config_path) as f:
+                config = yaml.safe_load(f)
+            
+            chain = config.get("chain")
+            assert chain in dexes_config, \
+                f"Coverage config {config_name} references chain '{chain}' not in dexes.yaml"
+    
+    def test_base_has_minimum_three_dexes(self, dexes_config):
+        """Base chain must have at least 3 DEXes for good cross-DEX coverage."""
+        base_dexes = dexes_config.get("base", {})
+        assert len(base_dexes) >= 3, \
+            f"Base should have >=3 DEXes for good coverage, has {len(base_dexes)}"
+    
+    def test_scroll_has_minimum_two_dexes(self, dexes_config):
+        """Scroll chain must have at least 2 DEXes (no longer blocked)."""
+        scroll_dexes = dexes_config.get("scroll", {})
+        assert len(scroll_dexes) >= 2, \
+            f"Scroll should have >=2 DEXes (no longer BLOCKED_BY_SECOND_DEX), has {len(scroll_dexes)}"

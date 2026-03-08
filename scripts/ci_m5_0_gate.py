@@ -1652,7 +1652,8 @@ ENV VARIABLES:
                     run_summary_path = reports_dir / f"run_summary_{ts}.json"
                     
                     # Load truth_report for run_context if available
-                    run_timestamp = datetime.now(timezone.utc).isoformat() + "Z"
+                    # v3.2.37: Fix malformed timestamp - use replace(+00:00, Z) instead of appending Z
+                    run_timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                     no_data_reason = "UNKNOWN"
                     chain_key = "unknown"
                     signals_count = 0
@@ -1689,7 +1690,8 @@ ENV VARIABLES:
                     run_summary_data = {
                         # v3.2.22: Use explicit minimal schema to avoid contract conflicts
                         "schema_version": "m4:run_summary_min:v2.0",
-                        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+                        # v3.2.37: Fix malformed timestamp - use replace(+00:00, Z) instead of appending Z
+                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                         "run_id": run_dir.name,
                         "run_context": {
                             "run_timestamp": run_timestamp,

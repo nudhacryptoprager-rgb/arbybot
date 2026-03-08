@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-08  
-**Tests**: 1402 passed, 12 skipped (including lint_readiness, cleanup_rolling, suggest_anchor_updates tests)  
-**Evidence runDirs**: `ci_m5_gate_20260308_091657` (Base), `ci_m5_gate_20260308_091717` (Linea), `ci_m5_gate_20260308_091743` (Mantle), `ci_m5_gate_20260308_091800` (zkSync), `ci_m5_gate_20260308_091812` (Scroll)  
+**Tests**: 1397 passed, 1 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260308_100732` (Base), `ci_m5_gate_20260308_100612` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -16,7 +16,21 @@
 
 ---
 
-## Multi-Chain Bring-up (2026-03-07)
+## Multi-Chain Bring-up (2026-03-08)
+
+### Practical Bring-up Progress
+
+**2026-03-08**: Base and Scroll upgraded with additional DEXes:
+- **Base**: Added SushiSwap V3 (3 DEXes total). Fresh PASS with 1 included signal (CBETH/WETH 49.2 bps via aerodrome→sushiswap_v3)
+- **Scroll**: Added SushiSwap V3 (2 DEXes total). Structurally unblocked, but fresh run still FAIL due to PRICE_SCALE validation
+
+**Code changes**:
+- `config/dexes.yaml`: Added SushiSwap V3 for Base and Scroll with verified factory/quoter addresses
+- `config/coverage_intent_base.yaml`: Added sushiswap_v3, enabled use_quoter_v2
+- `config/coverage_intent_scroll.yaml`: Added sushiswap_v3, set require_cross_dex=true
+- `strategy/quotes.py`: Fixed use_quoter_v2 → use_quoter_global variable bug
+- `scripts/ci_m5_0_gate.py`: Fixed malformed ISO-8601 timestamp (+00:00Z → Z)
+- `tests/unit/test_config_contracts.py`: Added 27 config contract tests
 
 ### Infra Gate Results
 
@@ -27,28 +41,20 @@ Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.s
 
 | Chain | Infra Gate | pairs | pools | quotes | cross_dex | dexes_active | Notes |
 |-------|------------|-------|-------|--------|-----------|--------------|-------|
-| Base | ✅ PASS | 4 | 15 | 15 | 4 | 2 | uniswap_v3 + aerodrome |
+| Base | ✅ PASS | 11 | 62 | 30 | 11 | 3 | uniswap_v3 + aerodrome + sushiswap_v3, **1 signal** |
 | Linea | ✅ PASS | 10 | 27 | 27 | 12 | 2 | lynex_v3 + pancakeswap_v3 |
-| Mantle | ✅ PASS | 4 | 15 | 15 | 5 | 2 | agni_v3 + stratum (ve33) |
+| Mantle | ✅ PASS | 4 | 15 | 15 | 5 | 2 | agni_v3 + stratum (ve33), FAIL_ALL_EXCLUDED |
 | zkSync | ✅ PASS | 9 | 49 | 49 | 10 | 2 | uniswap_v3 + pancakeswap_v3 |
-| Scroll | ✅ PASS* | 6 | 10 | 10 | 0 | 1 | nuri_v3 only, BLOCKED_BY SECOND_DEX |
+| Scroll | ⚠️ FAIL | 8 | 39 | 11 | 8 | 2 | nuri_v3 + sushiswap_v3 (structural unblock, quality FAIL) |
 
-*Scroll passes infra validation with `require_cross_dex=false`. Cannot do cross-DEX arb until 2nd DEX added.
+### Scroll Status Update
 
-### Scroll BLOCKED_BY SECOND_DEX
+Scroll is **no longer BLOCKED_BY_SECOND_DEX**:
+- SushiSwap V3 added with verified factory `0x46B3fDF7b5...` and quoter `0xe43ca1D...`
+- Fresh run resolves 8 cross-dex pairs across 2 DEXes
+- Current blocker: PRICE_SCALE validation failure (quality issue, not structural)
 
-Scroll has no viable 2nd DEX for cross-DEX arbitrage:
-- **PancakeSwap V3**: Factory deployed but WETH/USDC pool has 0 liquidity
-- **SushiSwap V3**: No quoter_v2 deployed
-- **iZiSwap**: Different factory interface, no adapter
-
-**Audit artifact**: [`docs/artifacts/scroll_dex_audit.json`](../artifacts/scroll_dex_audit.json)
-
-When 2nd DEX becomes available:
-1. Add to `config/dexes.yaml` under `scroll:`
-2. Update `config/coverage_intent_scroll.yaml` to set `require_cross_dex: true`
-3. Remove BLOCKED_BY comments
-4. Update the audit artifact with new DEX status
+**Audit artifact**: [`docs/artifacts/scroll_dex_audit.json`](../artifacts/scroll_dex_audit.json) - updated 2026-03-08
 
 ### New Tools
 

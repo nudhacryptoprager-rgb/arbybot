@@ -1,19 +1,28 @@
 {
-  "schema_version": "dex_audit:v1.0",
+  "schema_version": "dex_audit:v1.1",
   "chain": "scroll",
   "chain_id": 534352,
-  "audit_date": "2026-03-07",
-  "status": "BLOCKED_BY_SECOND_DEX",
-  "summary": "Scroll has only 1 functional DEX (Nuri). Cross-DEX arbitrage not possible until 2nd DEX with liquidity is added.",
+  "audit_date": "2026-03-08",
+  "status": "STRUCTURALLY_UNBLOCKED",
+  "summary": "Scroll now has 2 functional DEXes (Nuri + SushiSwap V3). Cross-DEX arbitrage enabled. Quality hardening in progress.",
   
   "active_dexes": [
     {
       "name": "nuri_v3",
       "adapter_type": "uniswap_v3",
       "factory": "0xAAA32926fcE6bE95ea2c51cB4Fcb60836D320C42",
-      "quoter_v2": "0xAAAEa10b0e6FBe566FE27c3A023DC5D8cA6Bca3d",
+      "quoter_v2": "0xAAAEA10b0e6FBe566FE27c3A023DC5D8cA6Bca3d",
       "status": "ACTIVE",
       "note": "Nuri Exchange - functional quoter, pools have liquidity"
+    },
+    {
+      "name": "sushiswap_v3",
+      "adapter_type": "uniswap_v3",
+      "factory": "0x46B3fDF7b5CDe91Ac049936bF0bDb12c5d22202e",
+      "quoter_v2": "0xe43ca1Dee3F0fc1e2df73A0745674545F11A59F5",
+      "router": "0x33d91116e0370970444B0281AB117e161fEbFcdD",
+      "status": "ACTIVE",
+      "note": "SushiSwap V3 - 48k+ txs on Position Manager, verified quoter on scrollscan"
     }
   ],
   
@@ -41,14 +50,6 @@
       ]
     },
     {
-      "name": "sushiswap_v3",
-      "adapter_type": "uniswap_v3",
-      "factory": null,
-      "status": "REJECTED",
-      "rejection_reason": "NO_QUOTER",
-      "note": "SushiSwap V3 may have factory but no quoter contract found on scrollscan"
-    },
-    {
       "name": "iziswap",
       "adapter_type": "iziswap",
       "factory": null,
@@ -58,13 +59,19 @@
     }
   ],
   
+  "quality_notes": [
+    "SushiSwap V3 pools have variable liquidity - some pairs show LIQUIDITY_ZERO",
+    "Fresh run ci_m5_gate_20260308_100612 shows 8 cross-dex pairs resolved",
+    "Gate currently FAIL due to PRICE_SCALE validation, not structural block"
+  ],
+  
   "next_steps": [
-    "Monitor PancakeSwap for liquidity growth",
-    "Check for new DEX deployments on scrollscan.com",
-    "Re-audit when Arbitrum/Base style liquidity is observed"
+    "Fix PRICE_SCALE validation failures",
+    "Disable low-liquidity pools via runtime_disabled",
+    "Achieve first PASS gate with signals"
   ],
   
   "audit_command": "py -3.11 scripts/warm_pool_cache.py --chain scroll --rank-dexes --check-liquidity",
   
-  "generated_by": "manual audit + warm_pool_cache.py"
+  "generated_by": "manual audit + warm_pool_cache.py + ci_m5_0_gate.py coverage run"
 }
