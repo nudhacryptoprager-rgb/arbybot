@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-08  
-**Tests**: 1397 passed, 1 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260308_100732` (Base), `ci_m5_gate_20260308_100612` (Scroll)  
+**Tests**: 1424 passed, 1 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260308_103805` (Base), `ci_m5_gate_20260308_103953` (Linea), `ci_m5_gate_20260308_104024` (Mantle), `ci_m5_gate_20260308_104108` (zkSync), `ci_m5_gate_20260308_103930` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -41,11 +41,11 @@ Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.s
 
 | Chain | Infra Gate | pairs | pools | quotes | cross_dex | dexes_active | Notes |
 |-------|------------|-------|-------|--------|-----------|--------------|-------|
-| Base | ✅ PASS | 11 | 62 | 30 | 11 | 3 | uniswap_v3 + aerodrome + sushiswap_v3, **1 signal** |
-| Linea | ✅ PASS | 10 | 27 | 27 | 12 | 2 | lynex_v3 + pancakeswap_v3 |
-| Mantle | ✅ PASS | 4 | 15 | 15 | 5 | 2 | agni_v3 + stratum (ve33), FAIL_ALL_EXCLUDED |
-| zkSync | ✅ PASS | 9 | 49 | 49 | 10 | 2 | uniswap_v3 + pancakeswap_v3 |
-| Scroll | ⚠️ FAIL | 8 | 39 | 11 | 8 | 2 | nuri_v3 + sushiswap_v3 (structural unblock, quality FAIL) |
+| Base | ✅ PASS | 11 | 36 | 45 | 11 | 3 | uniswap_v3 + aerodrome + sushiswap_v3 |
+| Linea | ✅ PASS | 10 | 27 | 42 | 12 | 2 | lynex_v3 + pancakeswap_v3 |
+| Mantle | ✅ PASS | 4 | 14 | 22 | 5 | 2 | agni_v3 + stratum (ve33) |
+| zkSync | ✅ PASS | 9 | 49 | 62 | 10 | 2 | uniswap_v3 + pancakeswap_v3 |
+| Scroll | ⚠️ FAIL | 5 | 11 | 23 | 8 | 2 | nuri_v3 + sushiswap_v3 (PRICE_SCALE quality fail) |
 
 ### Scroll Status Update
 

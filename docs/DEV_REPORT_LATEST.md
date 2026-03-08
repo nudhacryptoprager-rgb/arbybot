@@ -9,28 +9,31 @@
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, canonical rolling on arbitrum_one.
 
 ## SESSION GOAL (2026-03-08)
-**Goal**: Practical bring-up - expand DEX coverage on Base and Scroll to produce signals
+**Goal**: Practical bring-up - expand DEX coverage on Base and Scroll + establish workflow contract
 
-### Multi-chain Coverage Results (2026-03-08)
-| Chain | RunDir | Infra Gate | run_summary.status | signals | included | Notes |
-|-------|--------|------------|-------------------|---------|----------|-------|
-| Base | `ci_m5_gate_20260308_100732` | PASS | PASS | 1 | 1 | **CBETH/WETH 49.2bps** aerodrome→sushiswap_v3 |
-| Linea | `ci_m5_gate_20260308_091717` | PASS | NO_DATA | 0 | 0 | infra up, universe needs expansion |
-| Mantle | `ci_m5_gate_20260308_091743` | PASS | FAIL | 1 | 0 | FAIL_ALL_EXCLUDED (contract correct) |
-| zkSync | `ci_m5_gate_20260308_091800` | PASS | NO_DATA | 0 | 0 | infra up, universe needs expansion |
-| Scroll | `ci_m5_gate_20260308_100612` | FAIL | N/A | 0 | 0 | structural unblock, PRICE_SCALE quality fail |
+### Workflow Contract (enforced 2026-03-08)
+> **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
+> Any report generated before final reruns is non-canonical by process.
+
+### Multi-chain Coverage Results (2026-03-08 final)
+| Chain | RunDir | Infra Gate | DEXes | Quotes | Cross-dex | Notes |
+|-------|--------|------------|-------|--------|-----------|-------|
+| Base | `ci_m5_gate_20260308_103805` | **PASS** | 3 | 45 | 11 | uniswap_v3 + aerodrome + sushiswap_v3 |
+| Linea | `ci_m5_gate_20260308_103953` | **PASS** | 2 | 42 | 12 | lynex_v3 + pancakeswap_v3 |
+| Mantle | `ci_m5_gate_20260308_104024` | **PASS** | 2 | 22 | 5 | agni_v3 + stratum (ve33) |
+| zkSync | `ci_m5_gate_20260308_104108` | **PASS** | 2 | 62 | 10 | uniswap_v3 + pancakeswap_v3 |
+| Scroll | `ci_m5_gate_20260308_103930` | FAIL | 2 | 23 | 8 | nuri_v3 + sushiswap_v3 (PRICE_SCALE quality fail) |
 
 **Practical changes made**:
 - Added SushiSwap V3 to Base (factory+quoter from sushi.com deployment)
 - Added SushiSwap V3 to Scroll (unblocked SECOND_DEX)
-- Added PancakeSwap V3 to Base config (later removed - pools have no liquidity)
 - Fixed `use_quoter_v2` variable bug in `strategy/quotes.py`
 - Fixed malformed ISO-8601 timestamp in `ci_m5_0_gate.py` (+00:00Z → Z)
 - Added 27 config contract tests (`tests/unit/test_config_contracts.py`)
 - Updated `scroll_dex_audit.json` to reflect SushiSwap V3 availability
 
 ## 0) Meta
-timestamp_utc: 2026-03-08T10:30:00Z  
+timestamp_utc: 2026-03-08T10:42:00Z  
 rolling_provenance: 2026-03-05T17:49:43Z (arbitrum_one, ci_m5_gate_20260305_184929)  
 mode: ONLINE (multi-chain coverage refresh + practical bring-up)
 
@@ -38,16 +41,23 @@ mode: ONLINE (multi-chain coverage refresh + practical bring-up)
 
 ```
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest -q: 1397 passed, 1 skipped
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 1: PASS (1 signal)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 1: FAIL (quality)
+py -3.11 -m pytest -q: 1424 passed, 1 skipped
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml: PASS
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml: PASS
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml: PASS
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml: PASS
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml: FAIL (quality)
 ```
 
 ## 2) Evidence Artifacts
 
-**Fresh multi-chain coverage (2026-03-08)**:
-- `ci_m5_gate_20260308_100732` (Base) - **infra PASS, status PASS, 1 signal**
-- `ci_m5_gate_20260308_100612` (Scroll) - structural unblock (2 DEXes, 8 cross-dex), quality FAIL
+**Fresh multi-chain coverage (2026-03-08 final verification)**:
+- `ci_m5_gate_20260308_103805` (Base) - PASS, 3 DEXes, 45 quotes
+- `ci_m5_gate_20260308_103953` (Linea) - PASS, 2 DEXes, 42 quotes
+- `ci_m5_gate_20260308_104024` (Mantle) - PASS, 2 DEXes, 22 quotes
+- `ci_m5_gate_20260308_104108` (zkSync) - PASS, 2 DEXes, 62 quotes
+- `ci_m5_gate_20260308_103930` (Scroll) - FAIL (quality), 2 DEXes, 23 quotes
 
 **Code changes**:
 - `config/dexes.yaml`: +sushiswap_v3 for base, scroll
@@ -63,9 +73,8 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll
 ## 3) Next Steps
 
 1. Fix Scroll PRICE_SCALE validation errors (anchor/price data quality)
-2. Expand Base to get more than 1 signal (currently WARN_LOW_SAMPLE)
-3. Re-run Linea/zkSync with expanded DEX configs
-4. Do NOT update rolling canonical until coverage runs are repeatable
+2. Continue Base signal expansion beyond LOW_SAMPLE
+3. Maintain strict workflow: code→runs→docs
 
 ---
 *Generated: 2026-03-08T10:30:00Z*
