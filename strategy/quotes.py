@@ -1453,7 +1453,7 @@ def collect_quotes(
                             "gate_passed": False,
                             "error": f"Failed to read slot0 from pool {pool_addr}",
                             # M4.2: Add diagnostic - was quoter attempted?
-                            "quoter_attempted": use_quoter_v2 and dex_cfg is not None,
+                            "quoter_attempted": use_quoter_global and dex_cfg is not None,
                         })
                         counts["v3_slot0_failed"] += 1
                         # v2.3.0: Track failed pool address for actionable diagnostics
@@ -1465,7 +1465,7 @@ def collect_quotes(
                             "reason": "V3_SLOT0_FAILED",
                         })
                         logger.warning("V3_SLOT0_FAILED: %s %s/%s fee=%d pool=%s (quoter_attempted=%s)", 
-                                      dex, token_in, token_out, fee_tier, pool_addr, use_quoter_v2)
+                                      dex, token_in, token_out, fee_tier, pool_addr, use_quoter_global)
                         # Record failure for auto-quarantine
                         qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "QUOTE_REVERT",
                                         details={"pool_address": pool_addr, "error": "slot0_failed"})

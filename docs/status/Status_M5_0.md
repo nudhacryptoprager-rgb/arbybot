@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-07  
+**Updated**: 2026-03-08  
 **Tests**: 1402 passed, 12 skipped (including lint_readiness, cleanup_rolling, suggest_anchor_updates tests)  
-**Evidence runDirs**: `ci_m5_gate_20260307_110131` (Base), `ci_m5_gate_20260307_110206` (Linea), `ci_m5_gate_20260307_111454` (Mantle), `ci_m5_gate_20260307_110332` (zkSync), `ci_m5_gate_20260307_110346` (Scroll)  
+**Evidence runDirs**: `ci_m5_gate_20260308_091657` (Base), `ci_m5_gate_20260308_091717` (Linea), `ci_m5_gate_20260308_091743` (Mantle), `ci_m5_gate_20260308_091800` (zkSync), `ci_m5_gate_20260308_091812` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---

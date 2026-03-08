@@ -35,9 +35,12 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
+# v3.2.37: Added SushiSwap V3 for better cross-DEX coverage
+# NOTE: PancakeSwap V3 excluded - pool slot0 calls failing (low/no liquidity)
 dexes:
   - uniswap_v3
   - aerodrome
+  - sushiswap_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
@@ -45,6 +48,9 @@ require_cross_dex: true  # Enforce cross-DEX pairs (UniswapV3 <-> Aerodrome)
 
 # Multicall batching (default ON)
 use_multicall: true
+
+# v3.2.37: Use QuoterV2 for executable pricing (better quote quality)
+use_quoter_v2: true
 
 # USD-notional sizing (M4.2)
 use_usd_notional: true
