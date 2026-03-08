@@ -3,8 +3,8 @@
   "chain": "scroll",
   "chain_id": 534352,
   "audit_date": "2026-03-08",
-  "status": "STRUCTURALLY_UNBLOCKED",
-  "summary": "Scroll now has 2 functional DEXes (Nuri + SushiSwap V3). Cross-DEX arbitrage enabled. Quality hardening in progress.",
+  "status": "FULLY_PASSING",
+  "summary": "Scroll has 2 functional DEXes (Nuri + SushiSwap V3) and passes infra gate. 2 low-liquidity pools quarantined via disabled_pools.",
   
   "active_dexes": [
     {
@@ -59,16 +59,31 @@
     }
   ],
   
+  "quarantined_pools": [
+    {
+      "pool_key": "sushiswap_v3_WETH_USDC_10000",
+      "address": "0x523c4f9be45b6e44074f66b835ed40e4f263a20f",
+      "reason": "PRICE_SCALE_VIOLATION",
+      "detail": "price=50.3 (expected 100-50000), notional_drift=98%"
+    },
+    {
+      "pool_key": "sushiswap_v3_WETH_USDT_500",
+      "address": "0xef7d24bed8f30913756b309006508552fecde538",
+      "reason": "PRICE_SCALE_VIOLATION",
+      "detail": "price=7.65 (expected 100-50000), notional_drift=99.7%"
+    }
+  ],
+  
   "quality_notes": [
-    "SushiSwap V3 pools have variable liquidity - some pairs show LIQUIDITY_ZERO",
-    "Fresh run ci_m5_gate_20260308_100612 shows 8 cross-dex pairs resolved",
-    "Gate currently FAIL due to PRICE_SCALE validation, not structural block"
+    "SushiSwap V3 pools have variable liquidity - 2 pools quarantined",
+    "Fresh run ci_m5_gate_20260308_105504 shows 8 cross-dex pairs resolved",
+    "Gate now PASS after quarantine of low-liquidity pools"
   ],
   
   "next_steps": [
-    "Fix PRICE_SCALE validation failures",
-    "Disable low-liquidity pools via runtime_disabled",
-    "Achieve first PASS gate with signals"
+    "Monitor quarantined pools - re-enable if liquidity improves",
+    "Expand pair universe for more cross-DEX opportunities",
+    "Track signal quality metrics"
   ],
   
   "audit_command": "py -3.11 scripts/warm_pool_cache.py --chain scroll --rank-dexes --check-liquidity",

@@ -18,22 +18,23 @@
 ### Multi-chain Coverage Results (2026-03-08 final)
 | Chain | RunDir | Infra Gate | DEXes | Quotes | Cross-dex | Notes |
 |-------|--------|------------|-------|--------|-----------|-------|
-| Base | `ci_m5_gate_20260308_103805` | **PASS** | 3 | 45 | 11 | uniswap_v3 + aerodrome + sushiswap_v3 |
-| Linea | `ci_m5_gate_20260308_103953` | **PASS** | 2 | 42 | 12 | lynex_v3 + pancakeswap_v3 |
-| Mantle | `ci_m5_gate_20260308_104024` | **PASS** | 2 | 22 | 5 | agni_v3 + stratum (ve33) |
-| zkSync | `ci_m5_gate_20260308_104108` | **PASS** | 2 | 62 | 10 | uniswap_v3 + pancakeswap_v3 |
-| Scroll | `ci_m5_gate_20260308_103930` | FAIL | 2 | 23 | 8 | nuri_v3 + sushiswap_v3 (PRICE_SCALE quality fail) |
+| Base | `ci_m5_gate_20260308_105531` | **PASS** | 3 | 42 | 11 | uniswap_v3 + aerodrome + sushiswap_v3 |
+| Linea | `ci_m5_gate_20260308_105701` | **PASS** | 2 | 28 | 12 | lynex_v3 + pancakeswap_v3 |
+| Mantle | `ci_m5_gate_20260308_105732` | **PASS** | 2 | 22 | 5 | agni_v3 + stratum (ve33) |
+| zkSync | `ci_m5_gate_20260308_105810` | **PASS** | 2 | 49 | 10 | uniswap_v3 + pancakeswap_v3 |
+| Scroll | `ci_m5_gate_20260308_105504` | **PASS** | 2 | 21 | 8 | nuri_v3 + sushiswap_v3 (quarantined low-liq) |
 
 **Practical changes made**:
 - Added SushiSwap V3 to Base (factory+quoter from sushi.com deployment)
 - Added SushiSwap V3 to Scroll (unblocked SECOND_DEX)
+- **Quarantined 2 low-liquidity pools on Scroll** (`disabled_pools` in config)
 - Fixed `use_quoter_v2` variable bug in `strategy/quotes.py`
 - Fixed malformed ISO-8601 timestamp in `ci_m5_0_gate.py` (+00:00Z → Z)
-- Added 27 config contract tests (`tests/unit/test_config_contracts.py`)
-- Updated `scroll_dex_audit.json` to reflect SushiSwap V3 availability
+- Added 46 config contract tests (incl. disabled_pools validation)
+- Added workflow contract to `docs/DOCS_POLICY.md`
 
 ## 0) Meta
-timestamp_utc: 2026-03-08T10:42:00Z  
+timestamp_utc: 2026-03-08T10:58:00Z  
 rolling_provenance: 2026-03-05T17:49:43Z (arbitrum_one, ci_m5_gate_20260305_184929)  
 mode: ONLINE (multi-chain coverage refresh + practical bring-up)
 
@@ -41,23 +42,23 @@ mode: ONLINE (multi-chain coverage refresh + practical bring-up)
 
 ```
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest -q: 1424 passed, 1 skipped
+py -3.11 -m pytest tests/unit -q: 1443 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml: PASS
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml: PASS (roundtrip profitable!)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml: PASS
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml: PASS
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml: PASS
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml: FAIL (quality)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml: PASS (quarantine fixed PRICE_SCALE)
 ```
 
 ## 2) Evidence Artifacts
 
 **Fresh multi-chain coverage (2026-03-08 final verification)**:
-- `ci_m5_gate_20260308_103805` (Base) - PASS, 3 DEXes, 45 quotes
-- `ci_m5_gate_20260308_103953` (Linea) - PASS, 2 DEXes, 42 quotes
-- `ci_m5_gate_20260308_104024` (Mantle) - PASS, 2 DEXes, 22 quotes
-- `ci_m5_gate_20260308_104108` (zkSync) - PASS, 2 DEXes, 62 quotes
-- `ci_m5_gate_20260308_103930` (Scroll) - FAIL (quality), 2 DEXes, 23 quotes
+- `ci_m5_gate_20260308_105531` (Base) - PASS, 3 DEXes, 42 quotes, roundtrip profitable
+- `ci_m5_gate_20260308_105701` (Linea) - PASS, 2 DEXes, 28 quotes
+- `ci_m5_gate_20260308_105732` (Mantle) - PASS, 2 DEXes, 22 quotes
+- `ci_m5_gate_20260308_105810` (zkSync) - PASS, 2 DEXes, 49 quotes
+- `ci_m5_gate_20260308_105504` (Scroll) - **PASS**, 2 DEXes, 21 quotes (quarantine fix)
 
 **Code changes**:
 - `config/dexes.yaml`: +sushiswap_v3 for base, scroll
@@ -72,9 +73,9 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll
 
 ## 3) Next Steps
 
-1. Fix Scroll PRICE_SCALE validation errors (anchor/price data quality)
-2. Continue Base signal expansion beyond LOW_SAMPLE
+1. Expand Base signal quality beyond LOW_SAMPLE threshold
+2. Monitor Scroll stability with quarantined pools
 3. Maintain strict workflow: code→runs→docs
 
 ---
-*Generated: 2026-03-08T10:30:00Z*
+*Generated: 2026-03-08T10:58:00Z*

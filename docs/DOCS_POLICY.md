@@ -79,7 +79,31 @@ Active `docs/status/Status_*.md` files contain:
 - Links to Roadmap.md and DEV_REPORT_LATEST.md
 - **NO** dates, versions, or "_Last updated:" patterns
 
-## 8. How to Update
+## 8. Workflow Contract (MANDATORY)
+
+**Rule**: Documentation updates MUST follow this strict order:
+
+```
+1. code/config/tests  →  2. verification runs  →  3. docs/artifacts
+```
+
+**Rationale**: Documentation must reflect verified evidence. Updating docs before verification runs creates stale/invalid evidence.
+
+**Steps**:
+1. **Code Phase**: Make all code, config, and test changes
+2. **Verification Phase**: Run ALL verification commands:
+   - `py -3.11 scripts/check_repo_safety.py`
+   - `py -3.11 -m pytest tests/unit -q`
+   - `py -3.11 scripts/ci_full_pipeline.py --mode ci`
+   - Online coverage runs for affected chains
+3. **Docs Phase**: Update docs using ONLY runDirs/evidence from step 2
+
+**Forbidden**:
+- Updating `Status_*.md` or `DEV_REPORT_LATEST.md` before verification runs complete
+- Using runDirs from previous sessions as "fresh evidence"
+- Mixing evidence from different verification sessions
+
+## 9. How to Update
 
 1. Run online scan: generates rolling artifacts
 2. Update `docs/status/Status_*.md` with evidence from `run_summary_latest.json`

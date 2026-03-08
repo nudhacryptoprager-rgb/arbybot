@@ -89,3 +89,22 @@ execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4_COVERAGE
 kill_switch_active: true
 simulate_only: true
+
+# =============================================================================
+# Disabled pools (machine-readable quarantine)
+# v3.2.40: Quarantine low-liquidity pools causing PRICE_SCALE failures
+# Format: pool_key: {address, reason, detail, evidence_run, disabled_date}
+# =============================================================================
+disabled_pools:
+  sushiswap_v3_WETH_USDC_10000:
+    address: "0x523c4f9be45b6e44074f66b835ed40e4f263a20f"
+    reason: "PRICE_SCALE_VIOLATION"
+    detail: "price=50.3 (expected 100-50000), notional_drift=98%, low liquidity"
+    evidence_run: "ci_m5_gate_20260308_103930"
+    disabled_date: "2026-03-08"
+  sushiswap_v3_WETH_USDT_500:
+    address: "0xef7d24bed8f30913756b309006508552fecde538"
+    reason: "PRICE_SCALE_VIOLATION"
+    detail: "price=7.65 (expected 100-50000), notional_drift=99.7%, low liquidity"
+    evidence_run: "ci_m5_gate_20260308_103930"
+    disabled_date: "2026-03-08"

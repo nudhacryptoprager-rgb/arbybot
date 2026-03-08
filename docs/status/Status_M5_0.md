@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-08  
-**Tests**: 1424 passed, 1 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260308_103805` (Base), `ci_m5_gate_20260308_103953` (Linea), `ci_m5_gate_20260308_104024` (Mantle), `ci_m5_gate_20260308_104108` (zkSync), `ci_m5_gate_20260308_103930` (Scroll)  
+**Tests**: 1443 passed, 1 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260308_105531` (Base), `ci_m5_gate_20260308_105701` (Linea), `ci_m5_gate_20260308_105732` (Mantle), `ci_m5_gate_20260308_105810` (zkSync), `ci_m5_gate_20260308_105504` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -21,8 +21,8 @@
 ### Practical Bring-up Progress
 
 **2026-03-08**: Base and Scroll upgraded with additional DEXes:
-- **Base**: Added SushiSwap V3 (3 DEXes total). Fresh PASS with 1 included signal (CBETH/WETH 49.2 bps via aerodrome→sushiswap_v3)
-- **Scroll**: Added SushiSwap V3 (2 DEXes total). Structurally unblocked, but fresh run still FAIL due to PRICE_SCALE validation
+- **Base**: Added SushiSwap V3 (3 DEXes total). Fresh PASS with 1 roundtrip profitable signal
+- **Scroll**: Added SushiSwap V3 (2 DEXes total) + quarantined 2 low-liquidity pools. **NOW PASSING**
 
 **Code changes**:
 - `config/dexes.yaml`: Added SushiSwap V3 for Base and Scroll with verified factory/quoter addresses
@@ -41,18 +41,20 @@ Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.s
 
 | Chain | Infra Gate | pairs | pools | quotes | cross_dex | dexes_active | Notes |
 |-------|------------|-------|-------|--------|-----------|--------------|-------|
-| Base | ✅ PASS | 11 | 36 | 45 | 11 | 3 | uniswap_v3 + aerodrome + sushiswap_v3 |
-| Linea | ✅ PASS | 10 | 27 | 42 | 12 | 2 | lynex_v3 + pancakeswap_v3 |
+| Base | ✅ PASS | 11 | 33 | 42 | 11 | 3 | uniswap_v3 + aerodrome + sushiswap_v3 |
+| Linea | ✅ PASS | 10 | 27 | 28 | 12 | 2 | lynex_v3 + pancakeswap_v3 |
 | Mantle | ✅ PASS | 4 | 14 | 22 | 5 | 2 | agni_v3 + stratum (ve33) |
-| zkSync | ✅ PASS | 9 | 49 | 62 | 10 | 2 | uniswap_v3 + pancakeswap_v3 |
-| Scroll | ⚠️ FAIL | 5 | 11 | 23 | 8 | 2 | nuri_v3 + sushiswap_v3 (PRICE_SCALE quality fail) |
+| zkSync | ✅ PASS | 9 | 49 | 49 | 10 | 2 | uniswap_v3 + pancakeswap_v3 |
+| Scroll | ✅ PASS | 4 | 9 | 21 | 8 | 2 | nuri_v3 + sushiswap_v3 (quarantined low-liq pools) |
 
 ### Scroll Status Update
 
-Scroll is **no longer BLOCKED_BY_SECOND_DEX**:
+Scroll is **FULLY PASSING** (2026-03-08):
 - SushiSwap V3 added with verified factory `0x46B3fDF7b5...` and quoter `0xe43ca1D...`
 - Fresh run resolves 8 cross-dex pairs across 2 DEXes
-- Current blocker: PRICE_SCALE validation failure (quality issue, not structural)
+- 2 low-liquidity pools quarantined via `disabled_pools` in coverage config:
+  - `sushiswap_v3_WETH_USDC_10000` (price=50.3, expected 100-50000)
+  - `sushiswap_v3_WETH_USDT_500` (price=7.65, expected 100-50000)
 
 **Audit artifact**: [`docs/artifacts/scroll_dex_audit.json`](../artifacts/scroll_dex_audit.json) - updated 2026-03-08
 

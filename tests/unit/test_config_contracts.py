@@ -239,3 +239,93 @@ class TestMultiChainCoverageReadiness:
         scroll_dexes = dexes_config.get("scroll", {})
         assert len(scroll_dexes) >= 2, \
             f"Scroll should have >=2 DEXes (no longer BLOCKED_BY_SECOND_DEX), has {len(scroll_dexes)}"
+
+
+# =============================================================================
+# DISABLED POOLS CONTRACT TESTS
+# =============================================================================
+
+class TestDisabledPoolsContracts:
+    """Contract tests for disabled_pools configuration."""
+    
+    # Required fields in disabled_pools entries
+    DISABLED_POOL_REQUIRED_FIELDS = {"address", "reason", "disabled_date"}
+    
+    @pytest.mark.parametrize("config_name", COVERAGE_CONFIGS)
+    def test_disabled_pools_have_required_fields(self, config_name):
+        """All disabled_pools entries must have required fields."""
+        config_path = CONFIG_DIR / config_name
+        if not config_path.exists():
+            pytest.skip(f"{config_name} does not exist")
+        
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        
+        disabled_pools = config.get("disabled_pools", {})
+        for pool_key, pool_info in disabled_pools.items():
+            if not isinstance(pool_info, dict):
+                continue
+            missing = self.DISABLED_POOL_REQUIRED_FIELDS - set(pool_info.keys())
+            assert not missing, \
+                f"{config_name}: disabled_pool '{pool_key}' missing fields: {missing}"
+    
+    @pytest.mark.parametrize("config_name", COVERAGE_CONFIGS)
+    def test_disabled_pools_addresses_are_valid_hex(self, config_name):
+        """Disabled pool addresses must be valid 0x-prefixed hex strings."""
+        config_path = CONFIG_DIR / config_name
+        if not config_path.exists():
+            pytest.skip(f"{config_name} does not exist")
+        
+        hex_pattern = re.compile(r"^0x[a-fA-F0-9]{40}$")
+        
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        
+        disabled_pools = config.get("disabled_pools", {})
+        for pool_key, pool_info in disabled_pools.items():
+            if not isinstance(pool_info, dict):
+                continue
+            address = pool_info.get("address", "")
+            assert hex_pattern.match(address), \
+                f"{config_name}: disabled_pool '{pool_key}' has invalid address: {address}"
+    
+    @pytest.mark.parametrize("config_name", COVERAGE_CONFIGS)
+    def test_disabled_pools_keys_match_format(self, config_name):
+        """Disabled pool keys must follow {dex}_{token0}_{token1}_{fee} format."""
+        config_path = CONFIG_DIR / config_name
+        if not config_path.exists():
+            pytest.skip(f"{config_name} does not exist")
+        
+        # Pattern: dex_TOKEN0_TOKEN1_fee (e.g., sushiswap_v3_WETH_USDC_500)
+        key_pattern = re.compile(r"^[a-z_0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d+$")
+        
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        
+        disabled_pools = config.get("disabled_pools", {})
+        for pool_key in disabled_pools.keys():
+            assert key_pattern.match(pool_key), \
+                f"{config_name}: disabled_pool key '{pool_key}' does not match expected format"
+    
+    def test_scroll_has_price_scale_quarantine(self):
+        """Scroll config must have PRICE_SCALE violating pools quarantined."""
+        config_path = CONFIG_DIR / "coverage_intent_scroll.yaml"
+        if not config_path.exists():
+            pytest.skip("coverage_intent_scroll.yaml does not exist")
+        
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        
+        disabled_pools = config.get("disabled_pools", {})
+        
+        # Known PRICE_SCALE violating pools that must be quarantined
+        required_quarantines = [
+            "sushiswap_v3_WETH_USDC_10000",  # price=50.3, low liquidity
+            "sushiswap_v3_WETH_USDT_500",    # price=7.65, low liquidity
+        ]
+        
+        for pool_key in required_quarantines:
+            assert pool_key in disabled_pools, \
+                f"Scroll config missing quarantined pool: {pool_key}"
+            assert disabled_pools[pool_key].get("reason") == "PRICE_SCALE_VIOLATION", \
+                f"Pool {pool_key} should have reason PRICE_SCALE_VIOLATION"
