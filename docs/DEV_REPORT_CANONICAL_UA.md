@@ -165,7 +165,32 @@ rolling discipline (3 files only): <OK|NOT OK>
 v2.x provenance contract: <OK|NOT OK> (run_timestamp, code_identity, no runs_by_code_sha)
 runtime artifacts not committed: <OK|NOT OK>
 
-## 6) Blockers / Risks (max 5)
+## 6) Blocker Classification (обов'язково для multi-chain)
+
+**ВАЖЛИВО**: Infra gate PASS ≠ run_summary PASS. Розрізняй три рівні:
+
+| Blocker Type | Level | Meaning |
+|--------------|-------|---------|
+| `CODE` | LOW/MED/HIGH | Tests/CI/safety failing, code bugs blocking execution |
+| `DATA_COLLECTION` | LOW/MED/HIGH | Runtime disables, quarantines, thin pool coverage |
+| `MARKET_WINDOW` | LOW/MED/HIGH | No usable spreads in current market conditions |
+
+**Формат reporting:**
+```
+code_blocker: LOW (pytest PASS, CI green, safety PASS)
+data_collection_blocker: MEDIUM (N pools quarantined, M% quotes rejected)
+market_window_blocker: HIGH (K/5 chains have NO_DATA despite quotes_fetched>0)
+```
+
+**Semantics:**
+- `infra_gate: PASS` = quotes_fetched > 0, artifacts schema OK, no structural errors
+- `run_summary.status: NO_DATA` = signals_count == 0 (no spreads above min_spread_bps)
+- `run_summary.status: FAIL*` = signals exist but all rejected/excluded
+- `run_summary.status: PASS` = at least 1 usable/profitable signal
+
+**Contract**: Include blocker classification in every multi-chain status update.
+
+## 6.1) Blockers / Risks (max 5)
 - <blocker 1>
 - ...
 

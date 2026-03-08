@@ -3,7 +3,7 @@
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-08  
 **Tests**: 1443 passed, 1 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260308_105531` (Base), `ci_m5_gate_20260308_105701` (Linea), `ci_m5_gate_20260308_105732` (Mantle), `ci_m5_gate_20260308_105810` (zkSync), `ci_m5_gate_20260308_105504` (Scroll)  
+**Evidence runDirs**: `ci_m5_gate_20260308_110956` (Base), `ci_m5_gate_20260308_111208` (Linea), `ci_m5_gate_20260308_111245` (Mantle), `ci_m5_gate_20260308_111334` (zkSync), `ci_m5_gate_20260308_111137` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -32,6 +32,26 @@
 - `scripts/ci_m5_0_gate.py`: Fixed malformed ISO-8601 timestamp (+00:00Z → Z)
 - `tests/unit/test_config_contracts.py`: Added 27 config contract tests
 
+### Terminology Contract
+
+| Metric | Source | Meaning |
+|--------|--------|---------|
+| `quotes_total` | `scan.json stats.quotes_total` | All quote requests attempted |
+| `quotes_fetched` | `scan.json stats.quotes_fetched` | Quotes successfully received |
+| `infra_gate` | `gate_result.json status` | Artifacts valid, schema OK, quotes_fetched > 0 |
+| `run_summary.status` | `run_summary.json status` | Signal flow: NO_DATA/FAIL/PASS |
+| `signals_count` | `run_summary.json metrics.signals_count` | Raw spread signals detected |
+
+**ВАЖЛИВО**: `infra_gate: PASS` ≠ `run_summary.status: PASS`. Infra gate validates infrastructure; run_summary shows actual opportunity flow.
+
+### Blocker Classification (2026-03-08)
+
+```
+code_blocker: LOW (pytest 1443 passed, CI green, safety PASS)
+data_collection_blocker: MEDIUM (quarantines active, some quotes rejected)
+market_window_blocker: HIGH (4/5 chains NO_DATA/FAIL despite infra PASS)
+```
+
 ### Infra Gate Results
 
 Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.status` semantics:
@@ -39,13 +59,13 @@ Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.s
 - `FAIL`: signals_count > 0 but no profitable results (includes all-excluded case: FAIL_ALL_EXCLUDED)
 - `PASS`: signals > 0 and profitable
 
-| Chain | Infra Gate | pairs | pools | quotes | cross_dex | dexes_active | Notes |
-|-------|------------|-------|-------|--------|-----------|--------------|-------|
-| Base | ✅ PASS | 11 | 33 | 42 | 11 | 3 | uniswap_v3 + aerodrome + sushiswap_v3 |
-| Linea | ✅ PASS | 10 | 27 | 28 | 12 | 2 | lynex_v3 + pancakeswap_v3 |
-| Mantle | ✅ PASS | 4 | 14 | 22 | 5 | 2 | agni_v3 + stratum (ve33) |
-| zkSync | ✅ PASS | 9 | 49 | 49 | 10 | 2 | uniswap_v3 + pancakeswap_v3 |
-| Scroll | ✅ PASS | 4 | 9 | 21 | 8 | 2 | nuri_v3 + sushiswap_v3 (quarantined low-liq pools) |
+| Chain | Infra Gate | run_summary | pairs | pools | quotes_fetched | cross_dex | dexes | Notes |
+|-------|------------|-------------|-------|-------|----------------|-----------|-------|-------|
+| Base | ✅ PASS | **PASS** (1 sig) | 10 | 28 | 28 | 11 | 3 | 0.342 USDC profit |
+| Linea | ✅ PASS | NO_DATA | 10 | 27 | 27 | 12 | 2 | quotes OK, no spreads |
+| Mantle | ✅ PASS | FAIL | 4 | 14 | 14 | 5 | 2 | 1 signal, not profitable |
+| zkSync | ✅ PASS | NO_DATA | 9 | 49 | 49 | 10 | 2 | quotes OK, no spreads |
+| Scroll | ✅ PASS | NO_DATA | 4 | 9 | 9 | 8 | 2 | quarantined low-liq pools |
 
 ### Scroll Status Update
 

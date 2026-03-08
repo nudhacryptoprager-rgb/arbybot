@@ -15,14 +15,23 @@
 > **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
 > Any report generated before final reruns is non-canonical by process.
 
-### Multi-chain Coverage Results (2026-03-08 final)
-| Chain | RunDir | Infra Gate | DEXes | Quotes | Cross-dex | Notes |
-|-------|--------|------------|-------|--------|-----------|-------|
-| Base | `ci_m5_gate_20260308_105531` | **PASS** | 3 | 42 | 11 | uniswap_v3 + aerodrome + sushiswap_v3 |
-| Linea | `ci_m5_gate_20260308_105701` | **PASS** | 2 | 28 | 12 | lynex_v3 + pancakeswap_v3 |
-| Mantle | `ci_m5_gate_20260308_105732` | **PASS** | 2 | 22 | 5 | agni_v3 + stratum (ve33) |
-| zkSync | `ci_m5_gate_20260308_105810` | **PASS** | 2 | 49 | 10 | uniswap_v3 + pancakeswap_v3 |
-| Scroll | `ci_m5_gate_20260308_105504` | **PASS** | 2 | 21 | 8 | nuri_v3 + sushiswap_v3 (quarantined low-liq) |
+### Blocker Classification (2026-03-08)
+```
+code_blocker: LOW (pytest 1443 passed, CI green, safety PASS)
+data_collection_blocker: MEDIUM (quarantines active, some quotes rejected)
+market_window_blocker: HIGH (4/5 chains NO_DATA/FAIL despite infra PASS)
+```
+
+**ВАЖЛИВО**: `infra_gate: PASS` ≠ `run_summary.status: PASS`. See [Status_M5_0.md](docs/status/Status_M5_0.md) for terminology.
+
+### Multi-chain Coverage Results (2026-03-08 --cycles 3)
+| Chain | RunDir | Infra Gate | run_summary | signals | Quotes | Notes |
+|-------|--------|------------|-------------|---------|--------|-------|
+| Base | `ci_m5_gate_20260308_110956` | PASS | **PASS** | 1 | 28 | 0.342 USDC profit |
+| Linea | `ci_m5_gate_20260308_111208` | PASS | NO_DATA | 0 | 27 | quotes OK, no spreads |
+| Mantle | `ci_m5_gate_20260308_111245` | PASS | FAIL | 1 | 14 | signal not profitable |
+| zkSync | `ci_m5_gate_20260308_111334` | PASS | NO_DATA | 0 | 49 | quotes OK, no spreads |
+| Scroll | `ci_m5_gate_20260308_111137` | PASS | NO_DATA | 0 | 9 | quarantined low-liq |
 
 **Practical changes made**:
 - Added SushiSwap V3 to Base (factory+quoter from sushi.com deployment)
@@ -34,9 +43,9 @@
 - Added workflow contract to `docs/DOCS_POLICY.md`
 
 ## 0) Meta
-timestamp_utc: 2026-03-08T10:58:00Z  
+timestamp_utc: 2026-03-08T11:15:00Z  
 rolling_provenance: 2026-03-05T17:49:43Z (arbitrum_one, ci_m5_gate_20260305_184929)  
-mode: ONLINE (multi-chain coverage refresh + practical bring-up)
+mode: ONLINE (multi-chain cycles=3 verification)
 
 ## 1) Commands Executed (This Session)
 
@@ -44,21 +53,21 @@ mode: ONLINE (multi-chain coverage refresh + practical bring-up)
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
 py -3.11 -m pytest tests/unit -q: 1443 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml: PASS (roundtrip profitable!)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml: PASS
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml: PASS
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml: PASS
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml: PASS (quarantine fixed PRICE_SCALE)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 3: PASS
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: PASS (infra)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: PASS (infra)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 3: PASS (infra)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: PASS (infra)
 ```
 
 ## 2) Evidence Artifacts
 
-**Fresh multi-chain coverage (2026-03-08 final verification)**:
-- `ci_m5_gate_20260308_105531` (Base) - PASS, 3 DEXes, 42 quotes, roundtrip profitable
-- `ci_m5_gate_20260308_105701` (Linea) - PASS, 2 DEXes, 28 quotes
-- `ci_m5_gate_20260308_105732` (Mantle) - PASS, 2 DEXes, 22 quotes
-- `ci_m5_gate_20260308_105810` (zkSync) - PASS, 2 DEXes, 49 quotes
-- `ci_m5_gate_20260308_105504` (Scroll) - **PASS**, 2 DEXes, 21 quotes (quarantine fix)
+**Fresh multi-chain coverage (2026-03-08 --cycles 3 verification)**:
+- `ci_m5_gate_20260308_110956` (Base) - **PASS** (infra+signals), 1 signal, 0.342 USDC
+- `ci_m5_gate_20260308_111137` (Scroll) - PASS (infra), NO_DATA (signals)
+- `ci_m5_gate_20260308_111208` (Linea) - PASS (infra), NO_DATA (signals)
+- `ci_m5_gate_20260308_111245` (Mantle) - PASS (infra), FAIL (signals not profitable)
+- `ci_m5_gate_20260308_111334` (zkSync) - PASS (infra), NO_DATA (signals)
 
 **Code changes**:
 - `config/dexes.yaml`: +sushiswap_v3 for base, scroll
@@ -73,9 +82,10 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll
 
 ## 3) Next Steps
 
-1. Expand Base signal quality beyond LOW_SAMPLE threshold
-2. Monitor Scroll stability with quarantined pools
-3. Maintain strict workflow: code→runs→docs
+1. **Signal flow**: Primary blocker is now market/window, not code. Need wider scan windows or different market conditions.
+2. **Mantle**: FAIL due to unprofitable signal - needs route/pair optimization
+3. **Linea/zkSync/Scroll**: NO_DATA despite quotes - explore additional DEXes or lower min_spread_bps
+4. **Rolling**: Canonical rolling remains arbitrum_one; multi-chain is coverage-only for now
 
 ---
-*Generated: 2026-03-08T10:58:00Z*
+*Generated: 2026-03-08T11:15:00Z*
