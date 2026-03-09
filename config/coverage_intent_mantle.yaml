@@ -2,16 +2,23 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (mantle)
 #
-# PURPOSE:
-#   Test intent.txt → discovery_runtime → pool resolution pipeline on Mantle.
-#   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
-#   via factory.getPool() calls instead of hardcoded pool addresses.
+# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
+#   Classification: LOW_SAMPLE (same-DEX fallback producing minimal signals)
+#   Evidence: runDir 200756 - signals=3, included=1, net_usdc=$0.03
+#   Blocker: Low volume - minimal but positive profit
+#   Root cause: Cross-DEX routes trigger MIXED_SOURCE, same-DEX fallback active
+#   Action: Monitor - this is working as expected for same-DEX mode
 #
-# CHAIN STATUS (2026-03-09): SIGNAL_PRODUCING via same-DEX fallback
+# CHAIN STATUS (historical): SIGNAL_PRODUCING via same-DEX fallback
 #   - require_cross_dex=false because ALL cross-dex routes trigger MIXED_SOURCE
 #   - stratum (ve33) uses getAmountOut, agni_v3 (uniswap_v3) uses quoter_v2
 #   - Single-DEX fee-tier arbitrage (agni_v3→agni_v3) is the only viable path
 #   - NOT cross-DEX-ready until FusionX V3 or similar quoter_v2 DEX added
+#
+# PURPOSE:
+#   Test intent.txt → discovery_runtime → pool resolution pipeline on Mantle.
+#   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
+#   via factory.getPool() calls instead of hardcoded pool addresses.
 #
 # RUN_KIND: COVERAGE
 #   - Will NOT update rolling artifacts (NORM-only policy)

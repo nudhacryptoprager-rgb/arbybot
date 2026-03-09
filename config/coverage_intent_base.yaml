@@ -2,6 +2,13 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (Base)
 #
+# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
+#   Classification: ALL_OPPORTUNITIES_REJECTED (signal production blocked)
+#   Evidence: runDir 200710 - 16 opportunities, 4 gated, 0 signals
+#   Blocker: MIXED_SOURCE (6), SUSPECT_SPREAD_HARD (3), NET_PROFIT_TOO_LOW (2)
+#   Root cause: DEX quote source mixing (quoter_v2 vs slot0) and thin liquidity
+#   Action: Keep monitoring - Base has potential but needs more DEX options
+#
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline on Base.
 #   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt

@@ -5,16 +5,23 @@
 # v3.2.58 FROZEN: This config is stable for same-DEX fallback mode.
 # Changes require explicit approval due to MIXED_SOURCE constraints.
 #
-# PURPOSE:
-#   Test intent.txt → discovery_runtime → pool resolution pipeline on Linea.
-#   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
-#   via factory.getPool() calls instead of hardcoded pool addresses.
+# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
+#   Classification: SIGNAL_NOT_INCLUDED (single DEX, M5.0 gate FAIL)
+#   Evidence: runDir 200642 - signals=1, included=0 (filtered by require_cross_dex)
+#   Blocker: Only 1 DEX active (PancakeSwap V3), require_cross_dex=true filters signal
+#   Root cause: Single DEX ecosystem - no cross-DEX arbitrage possible
+#   Action: Keep require_cross_dex=false for same-DEX fallback, or accept FAIL status
 #
-# CHAIN STATUS (2026-03-09): FALLBACK-ONLY (no cross-DEX readiness)
+# CHAIN STATUS (historical): FALLBACK-ONLY (no cross-DEX readiness)
 #   - lynex_v3 (algebra/quoter) is NOT quoter_v2-compatible
 #   - pancakeswap_v3 (uniswap_v3/quoter_v2) is compatible but single-DEX only
 #   - BLOCKED_BY: lack of second quoter_v2 DEX for cross-DEX arbitrage
 #   - Same-DEX fee-tier arbitrage (pancakeswap_v3→pancakeswap_v3) is the only viable path
+#
+# PURPOSE:
+#   Test intent.txt → discovery_runtime → pool resolution pipeline on Linea.
+#   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
+#   via factory.getPool() calls instead of hardcoded pool addresses.
 #
 # RUN_KIND: COVERAGE
 #   - Will NOT update rolling artifacts (NORM-only policy)

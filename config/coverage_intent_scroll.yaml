@@ -2,22 +2,23 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (Scroll)
 #
-# PURPOSE:
-#   Test intent.txt → discovery_runtime → pool resolution pipeline on Scroll.
-#   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
-#   via factory.getPool() calls instead of hardcoded pool addresses.
+# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
+#   Classification: NO_SPREAD_SIGNALS (MARKET_BLOCKED)
+#   Evidence: runDir 200624 - signals=0, opportunities=0, LIQUIDITY_ZERO dominant
+#   Blocker: Zero liquidity in most pools (SushiSwap V3 pools empty)
+#   Root cause: Market doesn't have arbitrageable liquidity
+#   Action: Probe-only monitoring - not arbitrage-ready
 #
-# CHAIN STATUS (2026-03-09): **THIN FALLBACK-ONLY** (NOT cross-DEX ready)
+# CHAIN STATUS (historical): **THIN FALLBACK-ONLY** (NOT cross-DEX ready)
 #   - nuri_v3 (algebra/quoter) is NOT quoter_v2-compatible
 #   - sushiswap_v3 (uniswap_v3/quoter_v2) is compatible but single-DEX only
 #   - BLOCKED_BY: lack of second quoter_v2 DEX for cross-DEX arbitrage
 #   - Same-DEX fee-tier arbitrage (sushiswap_v3→sushiswap_v3) is the only viable path
 #
-# MARKET CONSTRAINT (2026-03-09 runDir 185703):
-#   - Most pools have LIQUIDITY_ZERO (SCR/USDC, SCR/USDT, SCR/WETH, STONE/WETH, etc.)
-#   - PRICE_SANITY_FAILED on WETH/WBTC (700x anchor deviation)
-#   - NOTIONAL_DRIFT: remaining quotes drift >30%
-#   - This is a market constraint, not a config/code issue
+# PURPOSE:
+#   Test intent.txt → discovery_runtime → pool resolution pipeline on Scroll.
+#   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
+#   via factory.getPool() calls instead of hardcoded pool addresses.
 #
 # RUN_KIND: COVERAGE
 #   - Will NOT update rolling artifacts (NORM-only policy)

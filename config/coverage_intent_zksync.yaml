@@ -2,6 +2,13 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (zkSync Era)
 #
+# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
+#   Classification: INFRA_READY (infrastructure works, market unprofitable)
+#   Evidence: runDir 200403 - 34 opportunities, 7 gated, 0 signals
+#   Blocker: Roundtrip unprofitable - one-leg spreads exist but closing
+#            position costs more than the spread
+#   Root cause: Thin liquidity, max_gated_spread=623bps but roundtrip=0 profitable
+#
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline on zkSync Era.
 #   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
@@ -92,13 +99,26 @@ l1_data_gas_units: 0
 l1_gas_price_gwei: 0
 
 # Token USD prices (for notional sizing)
+# v3.2.66: Removed meme tokens that consistently have zero liquidity or bad data
+# Removed: HOLD, CHEEMS, MUTE, SPACE (LIQUIDITY_ZERO or >10% spreads)
 tokens_usd_price:
   WETH: 3000.0
   WBTC: 60000.0
   USDC: 1.0
   USDT: 1.0
   ZK: 0.15         # zkSync token
-  HOLD: 0.001
+  wstETH: 3500.0   # LST premium
+
+# v3.2.66: Pair exclusions for zkSync
+# These pairs consistently produce bad data (SUSPECT_SPREAD_HARD >1000bps)
+# or zero liquidity (LIQUIDITY_ZERO) - removing from discovery reduces noise
+# NOTE: These are still in intent.txt but won't match tokens_usd_price
+#       Missing price = pair skipped during notional sizing
+excluded_pair_hints:
+  - "HOLD/*"       # LIQUIDITY_ZERO on all HOLD pools
+  - "CHEEMS/*"     # Meme token, stale prices
+  - "MUTE/*"       # Meme token, stale prices
+  - "SPACE/*"      # Meme token, stale prices
 
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000

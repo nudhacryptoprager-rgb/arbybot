@@ -77,10 +77,10 @@ dex_compatibility_blocker:
 7. **WS host validation**: Added validate_chain_rpc_consistency() in ci_m5_0_gate.py
 
 ## 0) Meta
-timestamp_utc: 2026-03-09T19:50:00Z  
-rolling_provenance: 2026-03-05T17:49:43Z (arbitrum_one, ci_m5_gate_20260305_184929)  
+timestamp_utc: 2026-03-09T19:55:00Z  
+rolling_provenance: 2026-03-09T19:03:39Z (arbitrum_one, ci_m5_gate_20260309_200317)  
 mode: ONLINE (multi-chain quality investigation + config fix verification)
-test_count: 1506 passed, 2 skipped
+test_count: 1520 passed, 2 skipped
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
@@ -107,12 +107,19 @@ test_count: 1506 passed, 2 skipped
 | Base | 200710 | PASS | 0 | $0 | ⚠️ ALL_OPPORTUNITIES_REJECTED |
 | Mantle | 200756 | PASS | 3 | $0.03 | ⚠️ LOW_SAMPLE |
 
-**Code changes (v3.2.64)**:
+**Code changes (v3.2.64-v3.2.66)**:
 - ✅ `engine/opportunity_engine.py`: Added `suspect_spread_bps_hard_threshold` to summary artifact
 - ✅ `strategy/artifacts.py`: Added `suspect_spread_bps_hard` to config_params
-- ✅ Tests: 8 new tests for config propagation and claim consistency
-- ✅ `scripts/check_repo_safety.py`: Added DEV_REPORT claim consistency check
+- ✅ Tests: 8 new tests for config propagation and claim consistency (now 1520 total)
+- ✅ `scripts/check_repo_safety.py`: Added DEV_REPORT runtime claims check [15]
 - ✅ `AGENTS.md`: Added Session Closure Contract
+- ✅ **v3.2.66**: All 6 coverage configs updated with CHAIN QUALITY STATUS headers:
+  - `config/coverage_intent_arbitrum_one.yaml`: SIGNAL_PRODUCING (primary chain)
+  - `config/coverage_intent_zksync.yaml`: INFRA_READY + removed meme tokens (HOLD/CHEEMS/MUTE/SPACE)
+  - `config/coverage_intent_base.yaml`: ALL_OPPORTUNITIES_REJECTED (MIXED_SOURCE)
+  - `config/coverage_intent_scroll.yaml`: NO_SPREAD_SIGNALS (MARKET_BLOCKED)
+  - `config/coverage_intent_linea.yaml`: SIGNAL_NOT_INCLUDED (single DEX)
+  - `config/coverage_intent_mantle.yaml`: LOW_SAMPLE (same-DEX fallback)
 
 ## 1) Commands Executed (This Session)
 
@@ -173,11 +180,12 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle
 
 ## 3) Next Steps
 
-1. **Session IN_PROGRESS**: Fresh evidence gathered (6 chains, 2026-03-09 20:03-20:08)
-2. **v3.2.65 complete**: Daily report profit fix + runtime claims validation added
+1. **Session IN_PROGRESS**: All 10 audit steps addressed (config updates + verification + docs)
+2. **v3.2.65-v3.2.66 complete**: Daily report profit fix + runtime claims validation + config honesty
 3. **Arbitrum only SIGNAL_PRODUCING**: 5 signals, 4 included, $3.66 net_usdc (runDir 200317)
-4. **Other chains blocked**: zkSync/Base gated (SUSPECT_SPREAD_HARD); Scroll (LIQUIDITY_ZERO); Linea (1 DEX); Mantle (NO_SIGNALS)
-5. **Next action**: Update rolling artifacts with fresh Arbitrum run, or expand to new chains with better liquidity
+4. **Other chains market-constrained**: zkSync INFRA_READY (roundtrip unprofitable); Scroll MARKET_BLOCKED (LIQUIDITY_ZERO); Linea DEX_BLOCKED (1 DEX only); Base MIXED_SOURCE; Mantle LOW_SAMPLE
+5. **Action required**: Re-run all 6 online coverage gates to regenerate artifacts with v3.2.66 config fixes
+6. **Final verification**: Fresh runDirs will confirm daily_report.net_pnl_usdc matches execution_report.total_net_usdc
 
 ---
-*Generated: 2026-03-09T20:10:00Z*
+*Generated: 2026-03-09T19:55:00Z*

@@ -2,6 +2,12 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (arbitrum_one)
 #
+# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
+#   Classification: SIGNAL_PRODUCING (primary working chain)
+#   Evidence: runDir 200317 - signals=5, included=4, net_usdc=$3.66
+#   Status: Infrastructure proven, consistent profit across runs
+#   Action: Primary chain for M4 execution testing
+#
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline.
 #   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
