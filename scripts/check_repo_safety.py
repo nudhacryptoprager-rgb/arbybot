@@ -785,15 +785,24 @@ def check_session_completion_gate() -> List[str]:
                 break
         
         if has_completion_language:
-            # Check for goal_status field
-            if "goal_status:" not in content:
+            # Check for goal_status field (YAML format or Markdown table format)
+            # YAML: "goal_status: REACHED"
+            # Markdown table: "| goal_status | **REACHED** |" or "| goal_status | REACHED |"
+            has_goal_status = "goal_status:" in content or re.search(r"\|\s*goal_status\s*\|", content)
+            has_reached = (
+                "goal_status: REACHED" in content 
+                or "goal_status:REACHED" in content
+                or re.search(r"\|\s*goal_status\s*\|.*\*?\*?REACHED\*?\*?\s*\|", content, re.IGNORECASE)
+            )
+            
+            if not has_goal_status:
                 issues.append(
-                    "SESSION_COMPLETION: DEV_REPORT contains completion language but no 'goal_status:' field. "
+                    "SESSION_COMPLETION: DEV_REPORT contains completion language but no 'goal_status' field. "
                     "Per DOCS_POLICY.md section 9, add 'goal_status: REACHED' to confirm completion."
                 )
-            elif "goal_status: REACHED" not in content and "goal_status:REACHED" not in content:
+            elif not has_reached:
                 # Has goal_status but not REACHED
-                if re.search(r"goal_status:\s*(IN_PROGRESS|BLOCKED)", content, re.IGNORECASE):
+                if re.search(r"goal_status[:\s|]+\s*(IN_PROGRESS|BLOCKED)", content, re.IGNORECASE):
                     issues.append(
                         "SESSION_COMPLETION: DEV_REPORT contains completion language but goal_status is not REACHED. "
                         "Remove completion language or set goal_status: REACHED with valid evidence."

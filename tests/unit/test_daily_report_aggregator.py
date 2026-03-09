@@ -75,3 +75,90 @@ def test_aggregate_minimal(tmp_path):
     assert top_signal.get("spread_bps_exact") == 75.0  # best one
     assert top_signal.get("spread_bps_ui") == 75
     assert isinstance(rpt["top_reject_reasons"], list)
+
+
+def test_session_context_propagation(tmp_path):
+    """Test that session_context is properly propagated to the report."""
+    run = make_minimal_run(tmp_path)
+    session_context = {
+        "session_goal": "Test session goal",
+        "goal_status": "REACHED",
+        "close_allowed": True,
+        "remaining_blockers": [],
+        "evidence_session_run_dirs": ["run1", "run2"],
+    }
+    rpt = aggregate_run(run, session_context=session_context)
+    
+    session = rpt.get("session")
+    assert session is not None
+    assert session["session_goal"] == "Test session goal"
+    assert session["goal_status"] == "REACHED"
+    assert session["close_allowed"] is True
+    assert session["remaining_blockers"] == []
+    assert session["evidence_session_run_dirs"] == ["run1", "run2"]
+
+
+def test_session_context_defaults_when_none(tmp_path):
+    """Test that session defaults are used when session_context is None."""
+    run = make_minimal_run(tmp_path)
+    rpt = aggregate_run(run)
+    
+    session = rpt.get("session")
+    assert session is not None
+    assert session["session_goal"] is None
+    assert session["goal_status"] == "IN_PROGRESS"
+    assert session["close_allowed"] is False
+    assert session["remaining_blockers"] == []
+    # Default evidence_session_run_dirs should contain the run directory name
+    assert "run1" in session["evidence_session_run_dirs"][0]
+
+
+def test_session_context_blocked_state(tmp_path):
+    """Test session context with BLOCKED state."""
+    run = make_minimal_run(tmp_path)
+    session_context = {
+        "session_goal": "Blocked session",
+        "goal_status": "BLOCKED",
+        "close_allowed": False,
+        "remaining_blockers": ["RPC unreachable", "DEX offline"],
+    }
+    rpt = aggregate_run(run, session_context=session_context)
+    
+    session = rpt.get("session")
+    assert session["goal_status"] == "BLOCKED"
+    assert session["close_allowed"] is False
+    assert len(session["remaining_blockers"]) == 2
+    assert "RPC unreachable" in session["remaining_blockers"]
+
+
+def test_theoretical_net_profit_m4_sim_field(tmp_path):
+    """Test that m4_sim_net_usdc field is present (None when no execution_report)."""
+    run = make_minimal_run(tmp_path)
+    rpt = aggregate_run(run)
+    
+    tnp = rpt.get("theoretical_net_profit")
+    assert tnp is not None
+    # m4_sim_net_usdc should be present (None when no execution_report exists)
+    assert "m4_sim_net_usdc" in tnp
+    assert "m4_execution_report_path" in tnp
+
+
+def test_m4_sim_net_usdc_with_execution_report(tmp_path):
+    """Test that m4_sim_net_usdc is populated when execution_report exists."""
+    run = make_minimal_run(tmp_path)
+    
+    # Add an execution_report
+    exec_report = {
+        "schema_version": "m4:execution:v1",
+        "total_net_usdc": 3.0586,
+        "simulations_count": 1,
+        "simulations_passed": 1,
+    }
+    (run / "execution_report_20260309.json").write_text(json.dumps(exec_report))
+    
+    rpt = aggregate_run(run)
+    
+    tnp = rpt.get("theoretical_net_profit")
+    assert tnp is not None
+    assert tnp["m4_sim_net_usdc"] == 3.0586
+    assert tnp["m4_execution_report_path"] is not None

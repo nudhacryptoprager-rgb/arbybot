@@ -46,6 +46,7 @@ def aggregate_run(
     gas_usd_estimate: float | None = None, 
     slippage_usd_estimate: float = 0.0,
     cost_model_name: Optional[str] = None,
+    session_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Aggregate a single run directory into a daily report.
@@ -56,8 +57,14 @@ def aggregate_run(
         slippage_usd_estimate: Slippage cost in USD (legacy)
         cost_model_name: Cost model from CostModelRegistry (v1.4.0)
             Available: paper_realistic, paper_conservative, gas_only
+        session_context: Optional dict with session completion fields (v1.7.1):
+            - session_goal: Short description of session goal
+            - goal_status: REACHED | BLOCKED | IN_PROGRESS
+            - close_allowed: True only if goal_status != IN_PROGRESS
+            - remaining_blockers: List of blockers if not REACHED
     
     v1.5.0: Dual PnL - both gas_only and paper_realistic
+    v1.7.1: Added session_context parameter for session completion gate
     """
     # Load both cost models for dual PnL (v1.5.0)
     gas_only_model = None
@@ -421,8 +428,15 @@ def aggregate_run(
     # v3.2.57: Theoretical Net Profit block (mandatory cost-aware reporting)
     # Reads from truth_report.execution_pnl for full cost breakdown
     # Shows: gross, gas, slippage, L1, total_cost, net
+    # v1.7.1: Also reads execution_report for M4 sim_net_usdc cross-verification
     execution_pnl = truth.get("execution_pnl") or {}
     cost_components = execution_pnl.get("cost_model_components") or {}
+    
+    # Try to read M4 execution_report for cross-verification
+    exec_report_path = find_first("execution_report_*.json")
+    exec_report = json.loads(exec_report_path.read_text(encoding="utf8")) if exec_report_path else {}
+    m4_sim_net_usdc = exec_report.get("total_net_usdc")  # M4 simulation net (uses CostModelRegistry)
+    
     theoretical_net_profit = {
         "gross_pnl_usdc": float(execution_pnl.get("gross_pnl_usdc") or 0),
         "gas_usd": cost_components.get("gas_usd", 0),
@@ -435,6 +449,11 @@ def aggregate_run(
         "net_pnl_usdc": float(execution_pnl.get("net_pnl_usdc") or 0),
         "cost_model_available": execution_pnl.get("cost_model_available", False),
         "cost_model_version": execution_pnl.get("cost_model_version"),
+        # v1.7.1: M4 simulation net for cross-verification (separate cost model)
+        # Note: M4 uses CostModelRegistry (paper_realistic), truth uses config params
+        # Difference is expected when gas_usd or l1_cost differs between models
+        "m4_sim_net_usdc": m4_sim_net_usdc,
+        "m4_execution_report_path": str(exec_report_path) if exec_report_path else None,
         # Mode/source to clarify this is paper/simulated, not real execution
         "mode": "paper_simulated",
         "source": "truth_report.execution_pnl",
@@ -550,13 +569,15 @@ def aggregate_run(
         "top_quotes": top_quotes,
         "health": health,
         # v3.2.58: Session completion fields (MANDATORY per DOCS_POLICY.md section 9)
-        # These are placeholders - actual values should be set by the caller or CI gate
+        # v1.7.1: Now respects session_context parameter from caller
         "session": {
-            "session_goal": None,  # Set by caller: short description of session goal
-            "goal_status": "IN_PROGRESS",  # REACHED | BLOCKED | IN_PROGRESS
-            "close_allowed": False,  # True only if goal_status != IN_PROGRESS
-            "remaining_blockers": [],  # List of blockers if goal_status != REACHED
-            "evidence_session_run_dirs": [str(run_dir.name)],  # RunDirs from this session
+            "session_goal": (session_context or {}).get("session_goal"),
+            "goal_status": (session_context or {}).get("goal_status", "IN_PROGRESS"),
+            "close_allowed": (session_context or {}).get("close_allowed", False),
+            "remaining_blockers": (session_context or {}).get("remaining_blockers", []),
+            "evidence_session_run_dirs": (session_context or {}).get(
+                "evidence_session_run_dirs", [str(run_dir.name)]
+            ),
         },
     }
     return report

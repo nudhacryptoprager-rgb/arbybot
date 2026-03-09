@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-09 15:00  
-**Tests**: 1488 passed, 2 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260309_140901` (zkSync), `ci_m5_gate_20260309_141019` (Linea), `ci_m5_gate_20260309_141050` (Scroll)  
+**Updated**: 2026-03-09 15:37  
+**Tests**: 1499 passed, 2 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260309_153512` (zkSync), `ci_m5_gate_20260309_153620` (Scroll), `ci_m5_gate_20260309_153636` (Linea)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -73,12 +73,12 @@
 
 4. `tests/unit/test_execution_pnl_golden.py`: Added 6 new tests for cost breakdown invariants
 
-**Online verification (2026-03-09 14:10)**:
-- zkSync: M5.0 PASS (quotes=30, pairs=9, l1_cost_usd=0)
-- Linea: M5.0 PASS + M4 PASS (quotes=12, pairs=7, l1_cost_usd=$0.003)
-- Scroll: M5.0 PASS (quotes=7, pairs=5, l1_cost_usd=0)
+**Online verification (2026-03-09 15:35-15:37)**:
+- zkSync: M5.0 PASS (quotes_fetched=32, pairs=9, run_summary=NO_DATA, PRICE_SCALE WARN)
+- Scroll: M5.0 PASS (quotes_fetched=7, pairs=5, run_summary=NO_DATA, BLOCKED_BY SECOND_DEX)
+- Linea: M5.0 PASS + **M4 PASS** (quotes_fetched=14, pairs=7)
 
-**Sample output** (`ci_m5_gate_20260309_141019` Linea, corrected):
+**Sample output** (`ci_m5_gate_20260309_153636` Linea):
 ```json
 "theoretical_net_profit": {
   "gross_pnl_usdc": 3.2086,
