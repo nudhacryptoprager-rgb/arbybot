@@ -170,10 +170,19 @@ def _compute_execution_pnl(
     filter_excluded: bool = False,
 ) -> Dict[str, Any]:
     """
-    Compute execution_pnl section with Clean PnL v1 (v2.3.2).
+    Compute execution_pnl section with Clean PnL v2 (v3.2.57).
     
-    Clean PnL v1 = paper estimates with gas + slippage.
+    Clean PnL v2 = paper estimates with gas + slippage + L1 cost.
     cost_model_available=True when we have gas_usd_estimate in config.
+    
+    v3.2.57: Extended cost_model_components with full cost breakdown:
+    - gas_usd: L2 execution gas cost
+    - slippage_bps: Slippage in basis points
+    - slippage_usd: Slippage in USD (computed from gross_pnl * slippage_bps)
+    - l1_data_gas_units: L1 data gas units from config
+    - l1_gas_price_gwei: L1 gas price from config
+    - l1_cost_usd: L1 data cost in USD (l1_data_gas_units * l1_gas_price_gwei * eth_price / 1e9)
+    - total_cost_usd: gas_usd + slippage_usd + l1_cost_usd
     
     Args:
         spread_signals: List of spread signal dicts with net_pnl_usdc_est
@@ -181,7 +190,7 @@ def _compute_execution_pnl(
         filter_excluded: If True, only include signals with is_excluded_spread=False
         
     Returns:
-        execution_pnl dict
+        execution_pnl dict with full cost breakdown
     """
     gas_usd_estimate = config.get("gas_usd_estimate", 0.0)
     
@@ -198,8 +207,24 @@ def _compute_execution_pnl(
     signals_with_estimates = [s for s in signals_to_use if s.get("net_pnl_usdc_est") is not None]
     
     # cost_model_available = True when we have gas estimate AND at least one signal
-    # This is Clean PnL v1 (paper estimates), not real execution costs
+    # This is Clean PnL v2 (paper estimates with full cost breakdown)
     cost_model_available = bool(gas_usd_estimate and signals_with_estimates)
+    
+    # v3.2.57: Compute full cost breakdown
+    slippage_bps = config.get("paper_slippage_bps", 0)
+    # Slippage applies to gross_pnl: slippage_usd = gross_pnl * slippage_bps / 10000
+    slippage_usd = total_gross_pnl * slippage_bps / 10000.0 if slippage_bps > 0 else 0.0
+    
+    # L1 cost: computed from config parameters
+    l1_data_gas_units = config.get("l1_data_gas_units", 0)
+    l1_gas_price_gwei = config.get("l1_gas_price_gwei", 0)
+    # Get ETH price from config (default 3000 for consistency with other configs)
+    eth_price_usd = config.get("tokens_usd_price", {}).get("WETH", 3000.0)
+    # L1 cost in USD: (gas_units * gwei * 1e-9) * eth_price
+    l1_cost_usd = (l1_data_gas_units * l1_gas_price_gwei * 1e-9) * eth_price_usd if l1_data_gas_units > 0 else 0.0
+    
+    # Total cost: gas + slippage + L1
+    total_cost_usd = gas_usd_estimate + slippage_usd + l1_cost_usd
     
     # Format as strings for money fields
     return {
@@ -209,11 +234,17 @@ def _compute_execution_pnl(
         "net_pnl_usdc": f"{total_net_pnl:.6f}" if cost_model_available else None,
         "net_pnl_bps": None,  # TODO: compute from notional when available
         "cost_model_available": cost_model_available,
-        # v2.3.2: Clean PnL v1 notes
-        "cost_model_version": "paper_gas_slippage_v1" if cost_model_available else None,
+        # v3.2.57: Clean PnL v2 with full cost breakdown
+        "cost_model_version": "paper_gas_slippage_l1_v2" if cost_model_available else None,
         "cost_model_components": {
             "gas_usd": gas_usd_estimate,
-            "slippage_bps": config.get("paper_slippage_bps", 0),
+            "slippage_bps": slippage_bps,
+            "slippage_usd": round(slippage_usd, 6),
+            "l1_data_gas_units": l1_data_gas_units,
+            "l1_gas_price_gwei": l1_gas_price_gwei,
+            "l1_cost_usd": round(l1_cost_usd, 6),
+            "total_cost_usd": round(total_cost_usd, 6),
+            "eth_price_usd": eth_price_usd,  # v3.2.57: For cost verification
         } if cost_model_available else None,
     }
 

@@ -8,9 +8,10 @@ to prevent regressions in cost model breakdown.
 Test coverage:
 1. cost_model_available correctly set based on gas_usd_estimate and signals
 2. Breakdown fields (gross_pnl_usdc, net_pnl_usdc) are computed correctly
-3. cost_model_components includes gas_usd and slippage_bps
+3. cost_model_components includes gas_usd, slippage, L1 cost, and total_cost
 4. Invariant: signal_pnl_usdc == gross_pnl_usdc (same field, different name for migration)
 5. filter_excluded behavior (execution_pnl vs execution_pnl_included)
+6. v3.2.57: Cost breakdown invariant: total_cost_usd = gas_usd + slippage_usd + l1_cost_usd
 """
 
 import unittest
@@ -33,7 +34,7 @@ class TestExecutionPnLGolden(unittest.TestCase):
         result = _compute_execution_pnl(signals, config)
         
         self.assertTrue(result["cost_model_available"])
-        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_v1")
+        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_l1_v2")
         self.assertIsNotNone(result["cost_model_components"])
         self.assertEqual(result["cost_model_components"]["gas_usd"], 0.05)
         self.assertEqual(result["cost_model_components"]["slippage_bps"], 10)
@@ -135,6 +136,7 @@ class TestExecutionPnLGolden(unittest.TestCase):
         """Golden fixture: specific input should produce specific output.
         
         This is a regression lock - if this test fails, the cost model changed.
+        v3.2.57: Updated for paper_gas_slippage_l1_v2 cost model.
         """
         from strategy.artifacts import _compute_execution_pnl
         
@@ -153,9 +155,137 @@ class TestExecutionPnLGolden(unittest.TestCase):
         self.assertEqual(result["net_pnl_usdc"], "22.777777")  # 15.123456 + 7.654321
         self.assertEqual(result["would_execute_pnl_usdc"], "22.777777")
         self.assertTrue(result["cost_model_available"])
-        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_v1")
+        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_l1_v2")
         self.assertEqual(result["cost_model_components"]["gas_usd"], 0.03)
         self.assertEqual(result["cost_model_components"]["slippage_bps"], 5)
+
+
+class TestCostBreakdownInvariants(unittest.TestCase):
+    """v3.2.57: Tests for full cost breakdown invariants."""
+
+    def test_total_cost_invariant(self):
+        """total_cost_usd = gas_usd + slippage_usd + l1_cost_usd."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        signals = [
+            {"net_pnl_usdc_est": 10.0, "gross_pnl_usdc_est": 15.0, "is_net_positive_est": True},
+        ]
+        config = {
+            "gas_usd_estimate": 0.05,
+            "paper_slippage_bps": 10,  # 0.1% of gross
+            "l1_data_gas_units": 2000,
+            "l1_gas_price_gwei": 30,
+            "tokens_usd_price": {"WETH": 3000.0},
+        }
+        
+        result = _compute_execution_pnl(signals, config)
+        
+        components = result["cost_model_components"]
+        # Verify invariant: total = gas + slippage + l1
+        expected_total = components["gas_usd"] + components["slippage_usd"] + components["l1_cost_usd"]
+        self.assertAlmostEqual(components["total_cost_usd"], expected_total, places=6)
+        
+    def test_slippage_usd_calculation(self):
+        """slippage_usd = gross_pnl * slippage_bps / 10000."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        signals = [
+            {"net_pnl_usdc_est": 10.0, "gross_pnl_usdc_est": 100.0, "is_net_positive_est": True},
+        ]
+        config = {
+            "gas_usd_estimate": 0.01,
+            "paper_slippage_bps": 50,  # 0.5%
+        }
+        
+        result = _compute_execution_pnl(signals, config)
+        
+        components = result["cost_model_components"]
+        # slippage_usd = 100.0 * 50 / 10000 = 0.5
+        self.assertAlmostEqual(components["slippage_usd"], 0.5, places=6)
+
+    def test_l1_cost_usd_calculation(self):
+        """l1_cost_usd = (l1_data_gas_units * l1_gas_price_gwei * 1e-9) * eth_price."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        signals = [
+            {"net_pnl_usdc_est": 10.0, "gross_pnl_usdc_est": 15.0, "is_net_positive_est": True},
+        ]
+        config = {
+            "gas_usd_estimate": 0.01,
+            "l1_data_gas_units": 2000,
+            "l1_gas_price_gwei": 30,
+            "tokens_usd_price": {"WETH": 3000.0},
+        }
+        
+        result = _compute_execution_pnl(signals, config)
+        
+        components = result["cost_model_components"]
+        # l1_cost_usd = (2000 * 30 * 1e-9) * 3000 = 0.00006 * 3000 = 0.18
+        expected_l1_cost = (2000 * 30 * 1e-9) * 3000.0
+        self.assertAlmostEqual(components["l1_cost_usd"], expected_l1_cost, places=6)
+
+    def test_zero_l1_cost_when_not_configured(self):
+        """l1_cost_usd = 0 when l1_data_gas_units not in config."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        signals = [
+            {"net_pnl_usdc_est": 10.0, "gross_pnl_usdc_est": 15.0, "is_net_positive_est": True},
+        ]
+        config = {
+            "gas_usd_estimate": 0.05,
+            # No l1_data_gas_units or l1_gas_price_gwei
+        }
+        
+        result = _compute_execution_pnl(signals, config)
+        
+        components = result["cost_model_components"]
+        self.assertEqual(components["l1_cost_usd"], 0.0)
+
+    def test_explicit_zero_l1_for_zkrollups(self):
+        """zk-rollups should have l1_cost_usd = 0 when explicitly configured."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        signals = [
+            {"net_pnl_usdc_est": 10.0, "gross_pnl_usdc_est": 15.0, "is_net_positive_est": True},
+        ]
+        # zkSync/Scroll config pattern: l1_data_gas_units: 0
+        config = {
+            "gas_usd_estimate": 0.01,
+            "l1_data_gas_units": 0,
+            "l1_gas_price_gwei": 0,
+        }
+        
+        result = _compute_execution_pnl(signals, config)
+        
+        components = result["cost_model_components"]
+        self.assertEqual(components["l1_cost_usd"], 0.0)
+        self.assertEqual(components["l1_data_gas_units"], 0)
+        self.assertEqual(components["l1_gas_price_gwei"], 0)
+
+    def test_full_cost_breakdown_fields_present(self):
+        """All cost breakdown fields must be present in cost_model_components."""
+        from strategy.artifacts import _compute_execution_pnl
+        
+        signals = [
+            {"net_pnl_usdc_est": 10.0, "gross_pnl_usdc_est": 15.0, "is_net_positive_est": True},
+        ]
+        config = {"gas_usd_estimate": 0.05}
+        
+        result = _compute_execution_pnl(signals, config)
+        
+        required_fields = [
+            "gas_usd",
+            "slippage_bps",
+            "slippage_usd",
+            "l1_data_gas_units",
+            "l1_gas_price_gwei",
+            "l1_cost_usd",
+            "total_cost_usd",
+            "eth_price_usd",
+        ]
+        components = result["cost_model_components"]
+        for field in required_fields:
+            self.assertIn(field, components, f"Missing required field: {field}")
 
 
 class TestBuildTruthDataExecutionPnL(unittest.TestCase):

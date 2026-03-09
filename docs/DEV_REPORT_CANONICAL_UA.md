@@ -159,6 +159,40 @@ stability_agg:
   runs_by_date: <...>
 ```
 
+## 4.1) Theoretical Net Profit (cost-aware reporting)
+
+**RULE**: Кожен report із сигналами (signals_count > 0) **обов'язково** повинен показувати **теоретичний net profit** з повною розбивкою витрат і позначати, що це **paper/simulated**, а не real execution.
+
+**Формат обов'язкового блоку:**
+```md
+theoretical_net_profit:
+  mode: paper_simulated
+  gross_pnl_usdc: <...>
+  cost_breakdown:
+    gas_usd: <...>
+    slippage_bps: <...>
+    slippage_usd: <...>
+    l1_cost_usd: <...>           # для L2 chains (zkSync, Linea, Scroll, Mantle)
+    total_cost_usd: <...>        # = gas_usd + slippage_usd + l1_cost_usd
+  net_pnl_usdc: <...>            # = gross_pnl_usdc - total_cost_usd
+  disclaimer: "Theoretical profit based on simulated execution. No real trades were executed."
+```
+
+**Контракт:**
+- `total_cost_usd = gas_usd + slippage_usd + l1_cost_usd` (invariant)
+- `net_pnl_usdc = gross_pnl_usdc - total_cost_usd`
+- `mode` завжди `paper_simulated` до milestone M6 (real execution)
+- Для L1 chains (mainnet, bnb): `l1_cost_usd = 0.0`
+- Для L2 chains: `l1_cost_usd` обчислюється з `l1_data_gas_units * l1_gas_price_gwei * 1e-9 * eth_price_usd`
+
+**Де брати дані:**
+- `gross_pnl_usdc` → `truth_report.execution_pnl.gross_pnl_usdc`
+- `gas_usd` → `truth_report.execution_pnl.cost_model_components.gas_usd`
+- `slippage_usd` → `truth_report.execution_pnl.cost_model_components.slippage_usd`
+- `l1_cost_usd` → `truth_report.execution_pnl.cost_model_components.l1_cost_usd`
+- `total_cost_usd` → `truth_report.execution_pnl.cost_model_components.total_cost_usd`
+- `net_pnl_usdc` → `truth_report.execution_pnl.net_pnl_usdc`
+
 ## 5) Contract Checks (коротко)
 status/reasons consistency: <OK|NOT OK> + 1 рядок
 rolling discipline (3 files only): <OK|NOT OK>

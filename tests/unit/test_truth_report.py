@@ -546,7 +546,7 @@ class TestComputeExecutionPnl(unittest.TestCase):
         result = _compute_execution_pnl(spread_signals, config)
         
         self.assertTrue(result["cost_model_available"])
-        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_v1")
+        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_l1_v2")
 
     def test_cost_model_available_false_without_gas_estimate(self):
         """cost_model_available=False when gas_usd_estimate is 0."""

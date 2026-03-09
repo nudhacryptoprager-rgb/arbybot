@@ -418,6 +418,29 @@ def aggregate_run(
             "source": "legacy_params",
         }
 
+    # v3.2.57: Theoretical Net Profit block (mandatory cost-aware reporting)
+    # Reads from truth_report.execution_pnl for full cost breakdown
+    # Shows: gross, gas, slippage, L1, total_cost, net
+    execution_pnl = truth.get("execution_pnl") or {}
+    cost_components = execution_pnl.get("cost_model_components") or {}
+    theoretical_net_profit = {
+        "gross_pnl_usdc": float(execution_pnl.get("gross_pnl_usdc") or 0),
+        "gas_usd": cost_components.get("gas_usd", 0),
+        "slippage_bps": cost_components.get("slippage_bps", 0),
+        "slippage_usd": cost_components.get("slippage_usd", 0),
+        "l1_data_gas_units": cost_components.get("l1_data_gas_units", 0),
+        "l1_gas_price_gwei": cost_components.get("l1_gas_price_gwei", 0),
+        "l1_cost_usd": cost_components.get("l1_cost_usd", 0),
+        "total_cost_usd": cost_components.get("total_cost_usd", 0),
+        "net_pnl_usdc": float(execution_pnl.get("net_pnl_usdc") or 0),
+        "cost_model_available": execution_pnl.get("cost_model_available", False),
+        "cost_model_version": execution_pnl.get("cost_model_version"),
+        # Mode/source to clarify this is paper/simulated, not real execution
+        "mode": "paper_simulated",
+        "source": "truth_report.execution_pnl",
+        "disclaimer": "Theoretical profit estimate based on paper cost model. Not real execution.",
+    }
+
     # Extract gates_passed and quotes_fetched for explicit surfacing
     gates_passed = stats.get("gates_passed") or 0
     quotes_fetched = stats.get("quotes_fetched") or scan.get("quotes_fetched") or 0
@@ -478,7 +501,7 @@ def aggregate_run(
     }
 
     report = {
-        "schema_version": "m5:daily:v1.1",  # Bumped for dual PnL (v1.5.0)
+        "schema_version": "m5:daily:v1.2",  # v3.2.57: Added theoretical_net_profit
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "timezone": "UTC",
         "run_id": str(run_dir.name),
@@ -497,6 +520,8 @@ def aggregate_run(
         "pnl_available": pnl_available,
         "pnl_reason": pnl_reason,
         "cost_model": cost_model,
+        # v3.2.57: Theoretical Net Profit with full cost breakdown (MANDATORY)
+        "theoretical_net_profit": theoretical_net_profit,
         # Rates
         "quote_sanity_rate": quote_sanity_rate,  # price_sanity_passed / quotes_total
         "signal_win_rate": signal_win_rate,  # net_positive / signals_total

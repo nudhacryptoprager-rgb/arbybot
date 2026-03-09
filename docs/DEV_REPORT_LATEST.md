@@ -9,27 +9,31 @@
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, canonical rolling on arbitrum_one.
 
 ## SESSION GOAL (2026-03-09)
-**Goal**: Config tuning for MIXED_SOURCE/SUSPECT_SPREAD_HARD rejection reduction + QUALITY_RAISED path enhancement
+**Goal**: Cost-aware reporting standardization + L1 cost model verification for L2 chains
 
 ### Workflow Contract (enforced 2026-03-09)
 > **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
 > Any report generated before final reruns is non-canonical by process.
 
-### Blocker Classification (2026-03-09 14:00)
+### Blocker Classification (2026-03-09 14:15)
 ```
-code_blocker: LOW (pytest 1476 passed, CI green, safety PASS)
+code_blocker: LOW (pytest 1482 passed, CI green, safety PASS)
 multicall_blocker: LOW (success_rate=1.0 all chains)
 websocket_blocker: LOW (ws_connected=true, ALL 6 chains chain-correct hosts)
-dex_compatibility_blocker: MED (zkSync/Linea/Scroll configs tuned, awaiting verification runs)
+cost_reporting_blocker: RESOLVED (theoretical_net_profit block added, schema v1.2)
+dex_compatibility_blocker: MED (zkSync/Linea/Scroll same-DEX fallback active)
 ```
 
-**Config tuning summary (2026-03-09 v3.2.56)**:
-1. **zkSync**: Raised `suspect_spread_bps_hard: 800` (default 500 too aggressive for thin liquidity)
-2. **Linea**: Removed lynex_v3 (algebra/quoter) - NOT quoter_v2-compatible, kept only pancakeswap_v3
-3. **Scroll**: Removed nuri_v3 (algebra/quoter) - NOT quoter_v2-compatible, kept only sushiswap_v3
-4. **Base**: Removed aerodrome (ve33) - NOT quoter_v2-compatible, increased max_pairs to 30
-5. **Arbitrum**: Removed camelot_v3 (algebra) - NOT quoter_v2-compatible, increased max_pairs to 40
-6. **m4/policy.py**: Enhanced QUALITY_RAISED path with quality metrics (fragile_rate, unique_pairs, net_profit)
+**Cost-aware reporting summary (2026-03-09 v3.2.57)**:
+1. `strategy/artifacts.py`: Extended `_compute_execution_pnl` with full cost breakdown:
+   - `cost_model_version: "paper_gas_slippage_l1_v2"` (upgraded from v1)
+   - `slippage_usd`, `l1_cost_usd`, `total_cost_usd` fields added
+   - Total cost invariant: `total_cost_usd = gas_usd + slippage_usd + l1_cost_usd`
+2. `scripts/generate_daily_report.py`: Added mandatory `theoretical_net_profit` block
+   - Schema bumped from v1.1 to v1.2
+   - `mode: "paper_simulated"` + disclaimer
+3. `docs/DEV_REPORT_CANONICAL_UA.md`: Added section 4.1 Theoretical Net Profit rules
+4. `tests/unit/test_execution_pnl_golden.py`: Added 6 new cost breakdown invariant tests
 
 **ВАЖЛИВО**: `infra_gate: PASS` ≠ `run_summary.status: PASS`. See [Status_M5_0.md](status/Status_M5_0.md) for terminology.
 
@@ -53,50 +57,50 @@ dex_compatibility_blocker: MED (zkSync/Linea/Scroll configs tuned, awaiting veri
 7. **WS host validation**: Added validate_chain_rpc_consistency() in ci_m5_0_gate.py
 
 ## 0) Meta
-timestamp_utc: 2026-03-09T12:45:00Z  
+timestamp_utc: 2026-03-09T14:15:00Z  
 rolling_provenance: 2026-03-05T17:49:43Z (arbitrum_one, ci_m5_gate_20260305_184929)  
-mode: ONLINE (multi-chain full verification, all 6 chains x 3 cycles)
+mode: ONLINE (L2 chains verification, zkSync/Linea/Scroll x 3 cycles)
 
 ## 1) Commands Executed (This Session)
 
 ```
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: 1471 passed, 2 skipped
+py -3.11 -m pytest tests/unit -q: 1482 passed, 2 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_arbitrum_one.yaml --cycles 3: PASS (runDir 123641)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 3: PASS (runDir 123829)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 3: PASS (runDir 124009)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: PASS (runDir 124137)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: PASS (runDir 124320)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: PASS (runDir 124403)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: PASS (runDir 140901)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: PASS (runDir 141019, M4 PASS)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: PASS (runDir 141050)
 ```
 
 ## 2) Evidence Artifacts
 
-**Fresh verification (2026-03-09 12:45, ALL 6 chains x 3 cycles)**:
-- `ci_m5_gate_20260309_123641` (Arbitrum) - **PASS**, signals=9, opps=78, WS=arb-mainnet.g.alchemy.com ✅
-- `ci_m5_gate_20260309_123829` (Base) - **PASS**, signals=1, opps=47, WS=base-mainnet.g.alchemy.com ✅
-- `ci_m5_gate_20260309_124009` (Mantle) - **PASS**, signals=3, opps=9, WS=mantle-mainnet.g.alchemy.com ✅
-- `ci_m5_gate_20260309_124137` (zkSync) - NO_DATA, signals=0, opps=22, no_data_reason=ALL_OPPORTUNITIES_REJECTED, WS=zksync-mainnet.g.alchemy.com ✅
-- `ci_m5_gate_20260309_124320` (Linea) - NO_DATA, signals=0, opps=17, no_data_reason=ALL_OPPORTUNITIES_REJECTED, WS=linea-mainnet.g.alchemy.com ✅
-- `ci_m5_gate_20260309_124403` (Scroll) - NO_DATA, signals=0, opps=6, no_data_reason=ALL_OPPORTUNITIES_REJECTED, WS=scroll-mainnet.g.alchemy.com ✅
+**Fresh verification (2026-03-09 14:10, L2 chains x 3 cycles)**:
+- `ci_m5_gate_20260309_140901` (zkSync) - **M5.0 PASS**, quotes=30, pairs=9, l1_cost_usd=0 ✅
+- `ci_m5_gate_20260309_141019` (Linea) - **M5.0 PASS**, M4 PASS, quotes=12, pairs=7, l1_cost_usd=$0.003 ✅
+- `ci_m5_gate_20260309_141050` (Scroll) - **M5.0 PASS**, quotes=7, pairs=5, l1_cost_usd=0 ✅
 
-**Code changes (v3.2.56)**:
-- `config/coverage_intent_zksync.yaml`: Added `suspect_spread_bps_hard: 800` (default 500 too aggressive)
-- `config/coverage_intent_linea.yaml`: Removed lynex_v3 (algebra), kept only pancakeswap_v3 (quoter_v2)
-- `config/coverage_intent_scroll.yaml`: Removed nuri_v3 (algebra), kept only sushiswap_v3 (quoter_v2)
-- `config/coverage_intent_base.yaml`: Removed aerodrome (ve33), increased max_pairs to 30
-- `config/coverage_intent_arbitrum_one.yaml`: Removed camelot_v3 (algebra), increased max_pairs to 40
-- `m4/policy.py`: Enhanced `classify_chain_quality()` with quality metrics for QUALITY_RAISED path
+**theoretical_net_profit sample** (Linea run):
+```json
+{
+  "gross_pnl_usdc": 3.2086,
+  "gas_usd": 0.05,
+  "slippage_bps": 5,
+  "slippage_usd": 0.001604,
+  "l1_cost_usd": 0.003,
+  "total_cost_usd": 0.054604,
+  "net_pnl_usdc": 3.1086,
+  "cost_model_version": "paper_gas_slippage_l1_v2",
+  "mode": "paper_simulated"
+}
+```
 
-**Code changes (v3.2.55, previous)**:
-- `scripts/ci_m5_0_gate.py`: Read chain_id from config for WS resolution; added WS host validation with validate_chain_rpc_consistency()
-- `strategy/infra.py`: Clear stale WS env vars, use OVERWRITE not setdefault; extract provider_id_ws from URL when "unknown"
-- `strategy/jobs/run_scan_real.py`: Fixed ALL_OPPORTUNITIES_REJECTED condition (triggers when total_opps > 0, not dependent on profitable_count)
-- `core/no_data.py`: Deprecated profitable_accepted param; simplified compute_no_data_reason()
-- `config/coverage_intent_zksync.yaml`: Added `use_quoter_v2: true`
-- `config/coverage_intent_linea.yaml`: Set `require_cross_dex: false` (MIXED_SOURCE workaround)
-- `config/coverage_intent_scroll.yaml`: Set `require_cross_dex: false` (MIXED_SOURCE workaround)
+**Code changes (v3.2.57)**:
+- `strategy/artifacts.py`: Extended `_compute_execution_pnl` with slippage_usd, l1_cost_usd, total_cost_usd
+- `scripts/generate_daily_report.py`: Added `theoretical_net_profit` block, schema v1.2
+- `docs/DEV_REPORT_CANONICAL_UA.md`: Added section 4.1 with cost-aware reporting rules
+- `tests/unit/test_execution_pnl_golden.py`: Added 6 cost breakdown invariant tests
+- `tests/unit/test_daily_report_aggregator.py`: Updated schema version expectation to v1.2
+- `tests/unit/test_truth_report.py`: Updated cost_model_version expectation to v2
 
 **Tests added (v3.2.56)**:
 - `tests/unit/test_chain_quality_level.py`: TestEnhancedQualityRaised (5 tests for quality metrics path)

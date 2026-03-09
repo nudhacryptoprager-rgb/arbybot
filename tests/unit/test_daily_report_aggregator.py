@@ -51,7 +51,7 @@ def make_minimal_run(tmp_path: Path) -> Path:
 def test_aggregate_minimal(tmp_path):
     run = make_minimal_run(tmp_path)
     rpt = aggregate_run(run)
-    assert rpt["schema_version"] == "m5:daily:v1.1"  # v1.5.0: bumped for dual PnL
+    assert rpt["schema_version"] == "m5:daily:v1.2"  # v1.6.0: bumped for theoretical_net_profit
     assert rpt["runs_included"] == 1
     # M5 reports use paper_net_pnl_usdc calculated from spread_signals
     # gross = 5 + 7.5 = 12.5, gas_only gas = 0.10 → net = 12.40

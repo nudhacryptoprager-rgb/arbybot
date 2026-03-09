@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-09 13:30  
-**Tests**: 1471 passed, 2 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260309_131742` (zkSync), `ci_m5_gate_20260309_132252` (Mantle), `ci_m5_gate_20260309_132444` (Linea), `ci_m5_gate_20260309_132536` (Scroll)  
+**Updated**: 2026-03-09 14:15  
+**Tests**: 1482 passed, 2 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260309_140901` (zkSync), `ci_m5_gate_20260309_141019` (Linea), `ci_m5_gate_20260309_141050` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -27,6 +27,46 @@
 - **Linea**: `l1_data_gas_units: 100, l1_gas_price_gwei: 10` (minimal L1 overhead)
 - **Scroll**: `l1_data_gas_units: 0, l1_gas_price_gwei: 0` (zk-rollup)
 - **Mantle**: `l1_data_gas_units: 0, l1_gas_price_gwei: 0` (EigenDA, off-chain DA)
+
+### Cost-Aware Reporting Standardization (2026-03-09 14:10)
+
+**Implementation**: Full cost breakdown now mandatory in all reports with signals.
+
+**Changes applied**:
+1. `strategy/artifacts.py`: Extended `_compute_execution_pnl` with full cost breakdown:
+   - `cost_model_version`: `"paper_gas_slippage_l1_v2"` (upgraded from v1)
+   - `slippage_usd`: `gross_pnl * slippage_bps / 10000`
+   - `l1_cost_usd`: `(l1_data_gas_units * l1_gas_price_gwei * 1e-9) * eth_price_usd`
+   - `total_cost_usd`: `gas_usd + slippage_usd + l1_cost_usd` (invariant)
+
+2. `scripts/generate_daily_report.py`: Added `theoretical_net_profit` block:
+   - Schema bumped to `m5:daily:v1.2`
+   - Block includes: gross_pnl_usdc, gas_usd, slippage_bps/usd, l1_cost_usd, total_cost_usd, net_pnl_usdc
+   - `mode: "paper_simulated"` + disclaimer
+
+3. `docs/DEV_REPORT_CANONICAL_UA.md`: Added section 4.1 requiring theoretical_net_profit in all reports
+
+4. `tests/unit/test_execution_pnl_golden.py`: Added 6 new tests for cost breakdown invariants
+
+**Online verification (2026-03-09 14:10)**:
+- zkSync: M5.0 PASS (quotes=30, pairs=9, l1_cost_usd=0)
+- Linea: M5.0 PASS + M4 PASS (quotes=12, pairs=7, l1_cost_usd=$0.003)
+- Scroll: M5.0 PASS (quotes=7, pairs=5, l1_cost_usd=0)
+
+**Sample output** (`ci_m5_gate_20260309_141019` Linea):
+```json
+"theoretical_net_profit": {
+  "gross_pnl_usdc": 3.2086,
+  "gas_usd": 0.05,
+  "slippage_bps": 5,
+  "slippage_usd": 0.001604,
+  "l1_cost_usd": 0.003,
+  "total_cost_usd": 0.054604,
+  "net_pnl_usdc": 3.1086,
+  "cost_model_version": "paper_gas_slippage_l1_v2",
+  "mode": "paper_simulated"
+}
+```
 
 **Fresh scan results (2026-03-09 13:25)**:
 
@@ -201,21 +241,23 @@
 - Signals: 0 (quotes blocked at SUSPECT_LIQUIDITY gate)
 - **Status**: NO_DATA improved (1 gated opp!) - liquidity gates blocking
 
-**Action items** (updated 2026-03-09 13:30):
+**Action items** (updated 2026-03-09 14:15):
 1. ✅ DONE: L1 cost model fix for zkSync/Linea/Scroll/Mantle
 2. ✅ DONE: Mantle M4 execution gate PASS (total_net_usdc=$0.03)
 3. ✅ DONE: zkSync improved from 5→6 gated opps, NET_PROFIT_TOO_LOW reduced
 4. ✅ DONE: Scroll improved from 0→1 gated opp
-5. TODO: Relax SUSPECT_LIQUIDITY thresholds for zkSync (gas_estimate limit)
-6. TODO: Add FusionX V3 or another quoter_v2 DEX on Mantle for true cross-DEX
-7. TODO: Add Algebra-compatible DEX on Linea OR remove Algebra DEX
+5. ✅ DONE: Cost-aware reporting standardization (theoretical_net_profit block, v1.2 schema)
+6. TODO: Relax SUSPECT_LIQUIDITY thresholds for zkSync (gas_estimate limit)
+7. TODO: Add FusionX V3 or another quoter_v2 DEX on Mantle for true cross-DEX
+8. TODO: Add Algebra-compatible DEX on Linea OR remove Algebra DEX
 
-### Blocker Classification (2026-03-09 13:30)
+### Blocker Classification (2026-03-09 14:15)
 
 ```
-code_blocker:           LOW    (pytest 1471 passed, CI green, safety PASS)
+code_blocker:           LOW    (pytest 1482 passed, CI green, safety PASS)
 multicall_blocker:      LOW    (success_rate=1.0 all chains, 4 RPC calls)
 websocket_blocker:      LOW    (ws_connected=true, ALL chains chain-correct hosts, provider_id_ws=alchemy)
+cost_reporting_blocker: RESOLVED (cost-aware reporting standardized, theoretical_net_profit in all reports)
 dex_compatibility_blocker:
   - Mantle:     **RESOLVED** (M4 PASS, signals=3, total_net_usdc=$0.03)
   - Linea:      MED    (L1 fix applied, no signals, all opps MIXED_SOURCE - need quoter-compatible DEX)
