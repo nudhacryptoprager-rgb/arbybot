@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.11.0"
+__version__ = "1.12.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -469,6 +469,18 @@ def check_dev_report_alignment() -> List[str]:
                 f"Rolling: {rolling_ts_short}, DEV_REPORT: does not contain this timestamp"
             )
         
+        # v3.2.69: Check timestamp_utc field specifically matches rolling run_timestamp
+        # The Meta section has "timestamp_utc: YYYY-MM-DDTHH:MM:SSZ" which must match rolling
+        timestamp_utc_match = re.search(r'timestamp_utc:\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})', dev_report_content)
+        if timestamp_utc_match:
+            dev_timestamp_utc = timestamp_utc_match.group(1)
+            if dev_timestamp_utc != rolling_ts_short:
+                issues.append(
+                    f"TIMESTAMP_PROPAGATION: timestamp_utc in DEV_REPORT ({dev_timestamp_utc}) "
+                    f"does not match run_summary_latest.run_context.run_timestamp ({rolling_ts_short}). "
+                    f"Per DEV_REPORT_CANONICAL_UA.md, timestamp_utc must be propagated from rolling artifacts."
+                )
+        
         # ===== KEY METRICS CHECK (v1.6.1 / v3.2.19) =====
         # Load _latest.json for quick_stats
         if rolling_latest_path.exists():
@@ -816,7 +828,23 @@ def check_session_completion_gate() -> List[str]:
             or re.search(r"\|\s*close_allowed\s*\|.*\*?\*?true\*?\*?\s*\|", content, re.IGNORECASE)
         )
         
+        # v3.2.69: Extract goal_status for contract checks
+        goal_status_match = re.search(
+            r'\|\s*goal_status\s*\|\s*\*?\*?(REACHED|IN_PROGRESS|BLOCKED)',
+            content, re.IGNORECASE
+        )
+        has_goal_in_progress = (
+            goal_status_match and goal_status_match.group(1).upper() == "IN_PROGRESS"
+        )
+        
         if has_close_allowed_true:
+            # v3.2.69: Check goal_status contract - cannot close if goal not reached
+            if has_goal_in_progress:
+                issues.append(
+                    "SESSION_CONTRACT: goal_status=IN_PROGRESS but close_allowed=true. "
+                    "Per DEV_REPORT_CANONICAL_UA.md, session cannot close with goal still in progress."
+                )
+            
             # Check blocker_status_after
             has_blocker_resolved = (
                 "blocker_status_after: RESOLVED" in content
@@ -847,6 +875,21 @@ def check_session_completion_gate() -> List[str]:
                         "PRIMARY_BLOCKER: close_allowed=true but missing blocker_status_after field. "
                         "Per WORKFLOW.md Primary Blocker Contract, add blocker_status_after: RESOLVED or BLOCKED."
                     )
+        
+        # v3.2.69: Check for "Session REACHED" text with IN_PROGRESS goal_status
+        if has_goal_in_progress:
+            session_reached_patterns = [
+                r"session\s+REACHED",
+                r"Session\s+REACHED",
+                r"\*\*REACHED\*\*.*all.*steps",
+            ]
+            for pattern in session_reached_patterns:
+                if re.search(pattern, content):
+                    issues.append(
+                        "SESSION_CONTRACT: Text contains 'Session REACHED' but goal_status=IN_PROGRESS. "
+                        "Per DEV_REPORT_CANONICAL_UA.md, these fields must be consistent."
+                    )
+                    break
     except Exception as e:
         issues.append(f"ERROR: Could not check session completion gate: {e}")
     

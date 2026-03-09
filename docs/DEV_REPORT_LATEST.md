@@ -24,8 +24,8 @@ cost_reporting_blocker:  RESOLVED (cost_model_version v3)
 profit_contract_blocker: RESOLVED (v3.2.68 invariant fix + fresh evidence 0.03=0.03=0.03 Mantle)
 dex_compatibility_blocker:
   Arbitrum: SIGNAL_PRODUCING (4 signals, $3.96, runDir 220644) ✅
-  zkSync:   MARKET_CONSTRAINED (0 signals, runDir 220720, ALL_OPPORTUNITIES_REJECTED)
-  Base:     MARKET_CONSTRAINED (0 signals, runDir 220828, ALL_OPPORTUNITIES_REJECTED)
+  zkSync:   POLICY_REJECTED (0 signals, runDir 220720, SUSPECT_SPREAD_HARD=22, profitable_count=28)
+  Base:     DATA_QUALITY (0 signals, runDir 220828, MIXED_SOURCE=8, profitable_count=6)
   Mantle:   SIGNAL_PRODUCING (3 signals, net=$0.03, runDir 220920) ✅
   Scroll:   NO_DATA (0 signals, runDir 220959, BLOCKED_BY_SECOND_DEX)
   Linea:    FAIL (PRICE_SCALE 14.3%, runDir 221018, 1 DEX only)
@@ -96,18 +96,18 @@ dex_compatibility_blocker:
 7. **WS host validation**: Added validate_chain_rpc_consistency() in ci_m5_0_gate.py
 
 ## 0) Meta
-timestamp_utc: 2026-03-09T22:10:00Z  
+timestamp_utc: 2026-03-09T21:07:05Z  
 rolling_provenance: 2026-03-09T21:07:05Z (arbitrum_one, ci_m5_gate_20260309_220644)  
-mode: ONLINE (v3.2.69 honest operational semantics + placeholder detection)
-test_count: 1524 passed, 2 skipped
+mode: ONLINE (v3.2.69 session contract enforcement + cross_dex fallback)
+test_count: 1530 passed, 2 skipped
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
 | session_goal | Multi-chain quality stabilization - honest operational semantics (v3.2.69) |
-| goal_status | **IN_PROGRESS** (2/6 chains SIGNAL_PRODUCING, 4/6 MARKET_CONSTRAINED) |
-| close_allowed | true |
+| goal_status | **IN_PROGRESS** (2/6 chains SIGNAL_PRODUCING, 4/6 blocked) |
+| close_allowed | false |
 | remaining_blockers | zkSync: LIQUIDITY_ZERO; Scroll/Linea: BLOCKED_BY_SECOND_DEX (1 DEX only) |
 | evidence_session_run_dirs | **ci_m5_gate_20260309_220644** (Arbitrum ✅), ci_m5_gate_20260309_220720 (zkSync), ci_m5_gate_20260309_220828 (Base), **ci_m5_gate_20260309_220920** (Mantle ✅), ci_m5_gate_20260309_220959 (Scroll), ci_m5_gate_20260309_221018 (Linea FAIL) |
 | primary_blocker_of_session | profit contract mismatch (daily_report 0.1091 vs execution_report 0.0291 on Mantle) |
@@ -120,8 +120,8 @@ test_count: 1524 passed, 2 skipped
 | Chain | RunDir | M5 Gate | signals | net_usdc | Status |
 |-------|--------|---------|---------|----------|--------|
 | **Arbitrum** | **220644** | PASS | 4 | $3.96 | ✅ SIGNAL_PRODUCING |
-| zkSync | 220720 | NO_DATA | 0 | $0 | ⚠️ MARKET_CONSTRAINED |
-| Base | 220828 | NO_DATA | 0 | $0 | ⚠️ MARKET_CONSTRAINED |
+| zkSync | 220720 | NO_DATA | 0 | $0 | ⚠️ POLICY_REJECTED (SUSPECT_SPREAD_HARD) |
+| Base | 220828 | NO_DATA | 0 | $0 | ⚠️ DATA_QUALITY (MIXED_SOURCE) |
 | **Mantle** | **220920** | PASS | 3 | **$0.03** | ✅ SIGNAL_PRODUCING |
 | Scroll | 220959 | NO_DATA | 0 | $0 | ❌ BLOCKED_BY_SECOND_DEX (1 DEX) |
 | Linea | 221018 | FAIL | 1 | $0 | ❌ PRICE_SCALE 14.3% + 1 DEX |
@@ -178,8 +178,8 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.
 | RunDir | Chain | M5.0 Gate | signals | net_usdc | Status |
 |--------|-------|-----------|---------|----------|--------|
 | **220644** | **Arbitrum** | PASS | 4 | $3.96 | ✅ SIGNAL_PRODUCING |
-| 220720 | zkSync | NO_DATA | 0 | $0 | ⚠️ MARKET_CONSTRAINED |
-| 220828 | Base | NO_DATA | 0 | $0 | ⚠️ MARKET_CONSTRAINED |
+| 220720 | zkSync | NO_DATA | 0 | $0 | ⚠️ POLICY_REJECTED |
+| 220828 | Base | NO_DATA | 0 | $0 | ⚠️ DATA_QUALITY |
 | **220920** | **Mantle** | PASS | 3 | **$0.03** | ✅ SIGNAL_PRODUCING |
 | 220959 | Scroll | NO_DATA | 0 | $0 | ❌ BLOCKED_BY_SECOND_DEX |
 | 221018 | Linea | FAIL | 1 | $0 | ❌ PRICE_SCALE 14.3% |
@@ -210,15 +210,15 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.
 
 ## 3) Next Steps
 
-1. **Session REACHED**: All 11 audit steps completed - profit invariant fixed, session propagation fixed ✅
+1. **Session IN_PROGRESS**: Multi-chain quality stabilization ongoing, 2/6 chains producing signals
 2. **v3.2.68 complete**: 
    - `daily_report.net_pnl_usdc` now uses `execution_report.total_net_usdc` as canonical
    - `truth_net_pnl_usdc` preserved for transparency
    - CI runs explicitly set `run_type: "automated"` and `primary_blocker_of_session: "CI_AUTOMATED_RUN"`
 3. **2 chains SIGNAL_PRODUCING**: Arbitrum, Mantle ($0.03)
-4. **4 chains market-constrained**: zkSync (LIQUIDITY_ZERO), Scroll/Linea (BLOCKED_BY_SECOND_DEX), Base (needs investigation)
+4. **4 chains blocked**: zkSync (POLICY_REJECTED), Base (DATA_QUALITY), Scroll/Linea (BLOCKED_BY_SECOND_DEX)
 5. **Profit invariant FIXED**: Mantle 220920 shows net_pnl_usdc=0.03=execution_report.total_net_usdc (was 0.11 vs 0.03)
 6. **Next session**: Investigate Base signal production; consider adding more DEXes to Scroll/Linea
 
 ---
-*Generated: 2026-03-09T22:30:00Z v3.2.69*
+*Generated: 2026-03-09T21:07:05Z v3.2.69*

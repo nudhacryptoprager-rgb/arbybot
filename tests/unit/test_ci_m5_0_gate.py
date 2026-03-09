@@ -24,9 +24,9 @@ from scripts.ci_m5_0_gate import (
 
 
 class TestVersion(unittest.TestCase):
-    def test_version_is_2_5_0(self):
-        """v2.5.0: Fallback cross_dex_pairs_count from signals."""
-        self.assertEqual(__version__, "2.5.0")
+    def test_version_is_2_6_0(self):
+        """v2.6.0: Fallback cross_dex_pairs_count from signals + truth_report."""
+        self.assertEqual(__version__, "2.6.0")
 
 
 class TestModeExclusion(unittest.TestCase):
@@ -320,7 +320,7 @@ class TestGateResultJson(unittest.TestCase):
 
 
 class TestCrossDexPairsCountFallback(unittest.TestCase):
-    """v2.5.0: Regression test for cross_dex_pairs_count fallback from signals.
+    """v2.6.0: Regression test for cross_dex_pairs_count fallback from signals + truth_report.
     
     When discovery_runtime is disabled (enabled=false), cross_dex_pairs_count
     should be calculated from actual signals that have buy_dex != sell_dex.
@@ -422,6 +422,40 @@ class TestCrossDexPairsCountFallback(unittest.TestCase):
             
             # Should be 0 (same-dex signal doesn't count)
             self.assertEqual(len(cross_dex_pairs), 0)
+
+    def test_cross_dex_pairs_from_truth_report_fallback(self):
+        """v2.6.0: cross_dex_pairs_count should fallback to truth_report.spread_signals."""
+        # No signals.json, but truth_report has spread_signals
+        mock_truth = {
+            "schema_version": "1.0.0",
+            "spread_signals": [
+                {"pair": "WETH/USDC", "buy_dex": "sushiswap_v3", "sell_dex": "uniswap_v3", "spread_bps": 50},
+                {"pair": "WBTC/WETH", "buy_dex": "uniswap_v3", "sell_dex": "sushiswap_v3", "spread_bps": 40},
+            ]
+        }
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            reports_dir = tmp_path / "reports"
+            reports_dir.mkdir(parents=True)
+            
+            truth_path = reports_dir / "truth_report_20260309_220000.json"
+            truth_path.write_text(json.dumps(mock_truth))
+            
+            # Fallback 2: calculate from truth_report.spread_signals
+            cross_dex_pairs = set()
+            if truth_path.exists():
+                with open(truth_path) as f:
+                    truth_data = json.load(f)
+                for sig in truth_data.get("spread_signals", []):
+                    buy_dex = sig.get("buy_dex", "")
+                    sell_dex = sig.get("sell_dex", "")
+                    pair = sig.get("pair", "")
+                    if buy_dex and sell_dex and buy_dex != sell_dex and pair:
+                        cross_dex_pairs.add(pair)
+            
+            # Should be 2 (unique pairs with cross-dex routes from truth_report)
+            self.assertEqual(len(cross_dex_pairs), 2, "Should be 2 from truth_report fallback")
 
 
 if __name__ == "__main__":

@@ -519,6 +519,90 @@ class TestDevReportAlignment(unittest.TestCase):
         
         self.assertTrue(any("unique_pairs mismatch" in i for i in issues))
 
+    def test_timestamp_utc_propagation_mismatch_fails(self):
+        """v3.2.69: timestamp_utc field mismatch with rolling run_timestamp should fail."""
+        from scripts.check_repo_safety import check_dev_report_alignment
+        import json
+        
+        mock_summary = {
+            "run_context": {"run_timestamp": "2026-03-09T21:07:05.524114Z"},
+            "inputs": {"run_dir_name": "ci_m5_gate_20260309_220644"}
+        }
+        mock_latest = {
+            "quick_stats": {},
+            "runs_in_window": 1,
+            "data_run_rate": 1.0
+        }
+        
+        # DEV_REPORT has wrong timestamp_utc (22:10:00 instead of 21:07:05)
+        mock_report = """
+        # DEV REPORT
+        ## 0) Meta
+        timestamp_utc: 2026-03-09T22:10:00Z
+        rolling_provenance: 2026-03-09T21:07:05Z (arbitrum_one, ci_m5_gate_20260309_220644)
+        """
+        
+        def mock_open_handler(path, *args, **kwargs):
+            path_str = str(path)
+            if "run_summary_latest" in path_str:
+                return unittest.mock.mock_open(read_data=json.dumps(mock_summary))()
+            elif "_latest.json" in path_str:
+                return unittest.mock.mock_open(read_data=json.dumps(mock_latest))()
+            raise FileNotFoundError()
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    with patch('builtins.open', side_effect=mock_open_handler):
+                        issues = check_dev_report_alignment()
+        
+        # Should have TIMESTAMP_PROPAGATION error
+        ts_issues = [i for i in issues if "TIMESTAMP_PROPAGATION" in i]
+        self.assertEqual(len(ts_issues), 1)
+        self.assertIn("2026-03-09T22:10:00", ts_issues[0])
+        self.assertIn("2026-03-09T21:07:05", ts_issues[0])
+
+    def test_timestamp_utc_propagation_match_passes(self):
+        """v3.2.69: timestamp_utc field matching rolling run_timestamp should pass."""
+        from scripts.check_repo_safety import check_dev_report_alignment
+        import json
+        
+        mock_summary = {
+            "run_context": {"run_timestamp": "2026-03-09T21:07:05.524114Z"},
+            "inputs": {"run_dir_name": "ci_m5_gate_20260309_220644"}
+        }
+        mock_latest = {
+            "quick_stats": {},
+            "runs_in_window": 1,
+            "data_run_rate": 1.0
+        }
+        
+        # DEV_REPORT has correct timestamp_utc matching rolling
+        mock_report = """
+        # DEV REPORT
+        ## 0) Meta
+        timestamp_utc: 2026-03-09T21:07:05Z
+        rolling_provenance: 2026-03-09T21:07:05Z (arbitrum_one, ci_m5_gate_20260309_220644)
+        """
+        
+        def mock_open_handler(path, *args, **kwargs):
+            path_str = str(path)
+            if "run_summary_latest" in path_str:
+                return unittest.mock.mock_open(read_data=json.dumps(mock_summary))()
+            elif "_latest.json" in path_str:
+                return unittest.mock.mock_open(read_data=json.dumps(mock_latest))()
+            raise FileNotFoundError()
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    with patch('builtins.open', side_effect=mock_open_handler):
+                        issues = check_dev_report_alignment()
+        
+        # Should NOT have TIMESTAMP_PROPAGATION error
+        ts_issues = [i for i in issues if "TIMESTAMP_PROPAGATION" in i]
+        self.assertEqual(len(ts_issues), 0)
+
 
 class TestRollingConsistency(unittest.TestCase):
     """Test rolling artifact consistency check (v1.7.0)."""
@@ -834,6 +918,68 @@ class TestSessionCompletionGate(unittest.TestCase):
                     issues = check_session_completion_gate()
         
         self.assertEqual(len(issues), 0)
+
+    def test_goal_in_progress_with_close_allowed_true_fails(self):
+        """v3.2.69: goal_status=IN_PROGRESS with close_allowed=true should fail."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        | goal_status | **IN_PROGRESS** (2/6 chains active) |
+        | close_allowed | true |
+        | blocker_status_after | **RESOLVED** |
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertGreaterEqual(len(issues), 1)
+        contract_issues = [i for i in issues if "SESSION_CONTRACT" in i and "IN_PROGRESS" in i]
+        self.assertEqual(len(contract_issues), 1)
+        self.assertIn("close_allowed=true", contract_issues[0])
+
+    def test_session_reached_text_with_in_progress_fails(self):
+        """v3.2.69: 'Session REACHED' text with goal_status=IN_PROGRESS should fail."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        | goal_status | **IN_PROGRESS** |
+        | close_allowed | false |
+        
+        1. **Session REACHED**: All audit steps completed.
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertGreaterEqual(len(issues), 1)
+        reached_issues = [i for i in issues if "SESSION_CONTRACT" in i and "Session REACHED" in i]
+        self.assertEqual(len(reached_issues), 1)
+
+    def test_goal_reached_with_close_allowed_true_passes(self):
+        """v3.2.69: goal_status=REACHED with close_allowed=true should pass."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        | goal_status | **REACHED** |
+        | close_allowed | true |
+        | blocker_status_after | **RESOLVED** |
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        # Should pass - no contract violations
+        contract_issues = [i for i in issues if "SESSION_CONTRACT" in i]
+        self.assertEqual(len(contract_issues), 0)
 
 
 class TestDevReportClaimConsistency(unittest.TestCase):

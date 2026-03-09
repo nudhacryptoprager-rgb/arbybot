@@ -60,7 +60,7 @@ from core.artifact_invariants import (
     validate_schema_version as invariants_validate_schema,
 )
 
-__version__ = "2.5.0"  # v3.2.69: Fallback cross_dex_pairs_count from signals
+__version__ = "2.6.0"  # v3.2.69: Fallback cross_dex_pairs_count from signals + truth_report
 
 
 # =============================================================================
@@ -1594,24 +1594,41 @@ ENV VARIABLES:
                 
                 # v3.2.69: Fallback - calculate cross_dex_pairs_count from signals if discovery_runtime disabled
                 if cross_dex_pairs_count == 0:
+                    cross_dex_pairs = set()
+                    
+                    # Fallback 1: Try signals.json
                     signals_path = artifacts.get("signals")
                     if signals_path and signals_path.exists():
                         try:
                             with open(signals_path) as f:
                                 signals_data = json.load(f)
-                            signals_list = signals_data.get("signals", [])
-                            # Count unique pairs with different buy_dex and sell_dex
-                            cross_dex_pairs = set()
-                            for sig in signals_list:
+                            for sig in signals_data.get("signals", []):
                                 buy_dex = sig.get("buy_dex", "")
                                 sell_dex = sig.get("sell_dex", "")
                                 pair = sig.get("pair", "")
                                 if buy_dex and sell_dex and buy_dex != sell_dex and pair:
                                     cross_dex_pairs.add(pair)
-                            if cross_dex_pairs:
-                                cross_dex_pairs_count = len(cross_dex_pairs)
                         except (json.JSONDecodeError, IOError):
-                            pass  # Keep 0 on read failure
+                            pass
+                    
+                    # Fallback 2: Try truth_report.spread_signals
+                    if not cross_dex_pairs:
+                        truth_path = artifacts.get("truth")
+                        if truth_path and truth_path.exists():
+                            try:
+                                with open(truth_path) as f:
+                                    truth_data = json.load(f)
+                                for sig in truth_data.get("spread_signals", []):
+                                    buy_dex = sig.get("buy_dex", "")
+                                    sell_dex = sig.get("sell_dex", "")
+                                    pair = sig.get("pair", "")
+                                    if buy_dex and sell_dex and buy_dex != sell_dex and pair:
+                                        cross_dex_pairs.add(pair)
+                            except (json.JSONDecodeError, IOError):
+                                pass
+                    
+                    if cross_dex_pairs:
+                        cross_dex_pairs_count = len(cross_dex_pairs)
                 
                 # Build fail_reasons from messages
                 fail_reasons = [m.replace("FAIL: ", "") for m in messages if m.startswith("FAIL:")]
