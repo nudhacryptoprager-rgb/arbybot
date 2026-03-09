@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.10.0"
+__version__ = "1.11.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -1022,6 +1022,99 @@ def check_dev_report_runtime_claims() -> List[str]:
     return issues
 
 
+def check_dev_report_placeholders() -> List[str]:
+    """v3.2.69: Check DEV_REPORT for placeholder text in tables.
+    
+    Detects:
+    1. Placeholder text like 'signals' or 'net' instead of actual numbers in tables
+    2. Stale version footer (e.g., 'v3.2.67' in footer but 'v3.2.68' in body)
+    3. Claiming 'PASS' for chain when run_summary.status = NO_DATA
+    
+    Returns:
+        List of warning/error messages
+    """
+    issues = []
+    dev_report = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
+    runs_dir = PROJECT_ROOT / "data" / "runs"
+    
+    if not dev_report.exists():
+        return []
+    
+    try:
+        import re
+        content = dev_report.read_text(encoding='utf-8')
+        
+        # Check 1: Placeholder text in table cells (| signals | or | net | instead of numbers)
+        # Match table rows with placeholder words instead of numbers in signal/net columns
+        placeholder_pattern = re.compile(
+            r'\|\s*\*?\*?(\w+)\*?\*?\s*\|\s*\*?\*?(\d{6})\*?\*?\s*\|\s*(PASS|FAIL)\s*\|\s*(signals?|net|tbd|xxx|placeholder)\s*\|',
+            re.IGNORECASE
+        )
+        placeholder_matches = list(placeholder_pattern.finditer(content))
+        for match in placeholder_matches:
+            chain = match.group(1)
+            issues.append(
+                f"DEV_REPORT_PLACEHOLDER: {chain} table row contains placeholder text '{match.group(4)}' "
+                f"instead of actual numerical value"
+            )
+        
+        # Check 2: Version mismatch between body and footer
+        # Find all version strings in body (vX.Y.Z format)
+        body_versions = re.findall(r'\bv3\.2\.(\d+)\b', content)
+        if body_versions:
+            max_body_version = max(int(v) for v in body_versions)
+            # Check footer for older version
+            footer_match = re.search(r'Generated:.*v3\.2\.(\d+)', content, re.IGNORECASE)
+            if footer_match:
+                footer_version = int(footer_match.group(1))
+                if footer_version < max_body_version:
+                    issues.append(
+                        f"DEV_REPORT_STALE_FOOTER: Footer has v3.2.{footer_version} but body references "
+                        f"v3.2.{max_body_version} - footer needs update"
+                    )
+        
+        # Check 3: PASS claimed for chain but run_summary.status = NO_DATA
+        # Parse Evidence table for PASS claims
+        pass_pattern = re.compile(
+            r'\|\s*\*?\*?(\d{6})\*?\*?\s*\|\s*\*?\*?(\w+)\*?\*?\s*\|\s*(PASS)\s*\|',
+            re.IGNORECASE
+        )
+        for match in pass_pattern.finditer(content):
+            run_dir_suffix = match.group(1)
+            chain = match.group(2)
+            
+            # Find the actual run directory
+            run_dirs = list(runs_dir.glob(f"*_{run_dir_suffix}"))
+            if not run_dirs:
+                continue
+            
+            run_dir_path = run_dirs[0]
+            reports_dir = run_dir_path / "reports"
+            run_summaries = list(reports_dir.glob("run_summary_*.json"))
+            
+            if not run_summaries:
+                continue
+            
+            try:
+                import json
+                run_summary = json.loads(run_summaries[0].read_text(encoding='utf-8'))
+                status = run_summary.get("status", "")
+                no_data_reason = run_summary.get("metrics", {}).get("no_data_reason", "")
+                
+                if status == "NO_DATA":
+                    issues.append(
+                        f"DEV_REPORT_PASS_MISMATCH: {chain} ({run_dir_suffix}) claims 'PASS' but "
+                        f"run_summary.status='NO_DATA' (no_data_reason={no_data_reason})"
+                    )
+            except (json.JSONDecodeError, FileNotFoundError):
+                continue
+                
+    except Exception as e:
+        issues.append(f"ERROR: Could not check DEV_REPORT placeholders: {e}")
+    
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
@@ -1158,6 +1251,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: DEV_REPORT claims match runtime artifacts")
+    
+    print("\n[16] Checking DEV_REPORT placeholders...")
+    issues = check_dev_report_placeholders()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: DEV_REPORT has no placeholder text")
     
     # Summary
     print("\n" + "=" * 50)

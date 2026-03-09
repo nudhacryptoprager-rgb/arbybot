@@ -1081,5 +1081,163 @@ class TestDevReportRuntimeClaims(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestDevReportPlaceholders(unittest.TestCase):
+    """Test DEV_REPORT placeholder detection (v1.11.0).
+    
+    Tests:
+    1. Placeholder text detection in tables (e.g., 'signals' instead of numbers)
+    2. Stale footer detection (v3.2.67 footer but v3.2.68 in body)
+    3. PASS claim when run_summary.status = NO_DATA
+    """
+
+    def test_detects_placeholder_text_in_table(self):
+        """Should detect placeholder text 'signals' instead of actual number."""
+        from scripts.check_repo_safety import check_dev_report_placeholders
+        import tempfile
+        
+        # DEV_REPORT with placeholder 'signals' instead of number
+        mock_report = """
+        | Chain | RunDir | Gate | signals | net_usdc | Status |
+        | **Arbitrum** | 220644 | PASS | signals | net | ✅ SIGNAL_PRODUCING |
+        """
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            runs_dir = tmp_path / "data" / "runs"
+            runs_dir.mkdir(parents=True)
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_dev_report_placeholders()
+        
+        # Should detect placeholder
+        self.assertTrue(len(issues) >= 1)
+        self.assertTrue(any("DEV_REPORT_PLACEHOLDER" in i for i in issues))
+        self.assertTrue(any("signals" in i.lower() for i in issues))
+
+    def test_detects_stale_footer_version(self):
+        """Should detect when footer has older version than body."""
+        from scripts.check_repo_safety import check_dev_report_placeholders
+        import tempfile
+        
+        # DEV_REPORT with v3.2.68 in body but v3.2.67 in footer
+        mock_report = """
+        **v3.2.68 Fix**: Fixed profit invariant
+        
+        | Chain | RunDir | Gate | signals | net_usdc | Status |
+        | **Arbitrum** | 220644 | PASS | **5** | **$3.66** | ✅ SIGNAL_PRODUCING |
+        
+        ---
+        Generated: 2026-03-09 v3.2.67
+        """
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            runs_dir = tmp_path / "data" / "runs"
+            runs_dir.mkdir(parents=True)
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_dev_report_placeholders()
+        
+        # Should detect stale footer
+        self.assertTrue(len(issues) >= 1)
+        self.assertTrue(any("DEV_REPORT_STALE_FOOTER" in i for i in issues))
+
+    def test_detects_pass_with_no_data_status(self):
+        """Should detect PASS claim when run_summary.status = NO_DATA."""
+        from scripts.check_repo_safety import check_dev_report_placeholders
+        import json
+        import tempfile
+        
+        # DEV_REPORT claims PASS
+        mock_report = """
+        | RunDir | Chain | Gate | signals | net_usdc | Status |
+        | 220720 | zkSync | PASS | **0** | **$0** | ⚠️ LIQUIDITY_ZERO |
+        """
+        
+        # run_summary has status=NO_DATA
+        mock_run_summary = {
+            "status": "NO_DATA",
+            "metrics": {
+                "signals_count": 0,
+                "total_net_usdc": 0,
+                "no_data_reason": "ALL_OPPORTUNITIES_REJECTED"
+            }
+        }
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            runs_dir = tmp_path / "data" / "runs" / "ci_m5_gate_20260309_220720" / "reports"
+            runs_dir.mkdir(parents=True)
+            (runs_dir / "run_summary_20260309_210720.json").write_text(
+                json.dumps(mock_run_summary), encoding='utf-8'
+            )
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_dev_report_placeholders()
+        
+        # Should detect PASS/NO_DATA mismatch
+        self.assertTrue(len(issues) >= 1)
+        self.assertTrue(any("DEV_REPORT_PASS_MISMATCH" in i for i in issues))
+        self.assertTrue(any("NO_DATA" in i for i in issues))
+
+    def test_no_issues_when_clean(self):
+        """Should return no issues when DEV_REPORT is clean."""
+        from scripts.check_repo_safety import check_dev_report_placeholders
+        import json
+        import tempfile
+        
+        # Clean DEV_REPORT with actual numbers
+        mock_report = """
+        **v3.2.68 Fix**: Fixed profit invariant
+        
+        | RunDir | Chain | Gate | signals | net_usdc | Status |
+        | 220644 | Arbitrum | PASS | **5** | **$3.66** | ✅ SIGNAL_PRODUCING |
+        """
+        
+        # run_summary has status=PASS (not NO_DATA)
+        mock_run_summary = {
+            "status": "PASS",
+            "metrics": {
+                "signals_count": 5,
+                "total_net_usdc": 3.66
+            }
+        }
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            runs_dir = tmp_path / "data" / "runs" / "ci_m5_gate_20260309_220644" / "reports"
+            runs_dir.mkdir(parents=True)
+            (runs_dir / "run_summary_20260309_210644.json").write_text(
+                json.dumps(mock_run_summary), encoding='utf-8'
+            )
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_dev_report_placeholders()
+        
+        # Should have no placeholder issues (PASS claim with PASS status is OK)
+        placeholder_issues = [i for i in issues if "PLACEHOLDER" in i or "PASS_MISMATCH" in i]
+        self.assertEqual(len(placeholder_issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

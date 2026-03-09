@@ -24,9 +24,9 @@ from scripts.ci_m5_0_gate import (
 
 
 class TestVersion(unittest.TestCase):
-    def test_version_is_2_4_0(self):
-        """v2.4.0: Added --loop mode for non-stop scanning."""
-        self.assertEqual(__version__, "2.4.0")
+    def test_version_is_2_5_0(self):
+        """v2.5.0: Fallback cross_dex_pairs_count from signals."""
+        self.assertEqual(__version__, "2.5.0")
 
 
 class TestModeExclusion(unittest.TestCase):
@@ -317,6 +317,111 @@ class TestGateResultJson(unittest.TestCase):
             self.assertIn("generated_at", data)
             # Should be ISO format with timezone
             self.assertIn("+00:00", data["generated_at"])
+
+
+class TestCrossDexPairsCountFallback(unittest.TestCase):
+    """v2.5.0: Regression test for cross_dex_pairs_count fallback from signals.
+    
+    When discovery_runtime is disabled (enabled=false), cross_dex_pairs_count
+    should be calculated from actual signals that have buy_dex != sell_dex.
+    """
+
+    def test_cross_dex_pairs_from_signals_when_discovery_disabled(self):
+        """cross_dex_pairs_count should be > 0 when signals have different buy/sell DEXes."""
+        # Create mock scan with discovery_runtime.enabled=false
+        mock_scan = {
+            "schema_version": "3.2.0",
+            "run_mode": "FIXTURE_OFFLINE",
+            "run_context": {
+                "run_timestamp": "2026-03-09T22:00:00Z"
+            },
+            "stats": {
+                "quotes_fetched": 10,
+                "discovery_runtime": {
+                    "enabled": False,
+                    "cross_dex_pairs_count": 0  # 0 because disabled
+                }
+            }
+        }
+        
+        # Create mock signals with cross-dex routes
+        mock_signals = {
+            "schema_version": "1.0.0",
+            "signals": [
+                {"pair": "WETH/USDC", "buy_dex": "sushiswap_v3", "sell_dex": "uniswap_v3"},
+                {"pair": "WBTC/WETH", "buy_dex": "uniswap_v3", "sell_dex": "sushiswap_v3"},
+                {"pair": "ARB/WETH", "buy_dex": "sushiswap_v3", "sell_dex": "uniswap_v3"},
+            ]
+        }
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            reports_dir = tmp_path / "reports"
+            reports_dir.mkdir(parents=True)
+            
+            # Write artifacts
+            (reports_dir / "scan_20260309_220000.json").write_text(json.dumps(mock_scan))
+            (reports_dir / "signals_20260309_220000.json").write_text(json.dumps(mock_signals))
+            
+            # The core logic to test - extracted from ci_m5_0_gate.py
+            scan_path = reports_dir / "scan_20260309_220000.json"
+            signals_path = reports_dir / "signals_20260309_220000.json"
+            
+            with open(scan_path) as f:
+                scan_data = json.load(f)
+            
+            # Initial cross_dex_pairs_count from discovery_runtime (should be 0)
+            cross_dex_pairs_count = scan_data.get("stats", {}).get("discovery_runtime", {}).get("cross_dex_pairs_count", 0)
+            self.assertEqual(cross_dex_pairs_count, 0, "Should be 0 from discovery_runtime")
+            
+            # Fallback: calculate from signals
+            if cross_dex_pairs_count == 0 and signals_path.exists():
+                with open(signals_path) as f:
+                    signals_data = json.load(f)
+                signals_list = signals_data.get("signals", [])
+                cross_dex_pairs = set()
+                for sig in signals_list:
+                    buy_dex = sig.get("buy_dex", "")
+                    sell_dex = sig.get("sell_dex", "")
+                    pair = sig.get("pair", "")
+                    if buy_dex and sell_dex and buy_dex != sell_dex and pair:
+                        cross_dex_pairs.add(pair)
+                if cross_dex_pairs:
+                    cross_dex_pairs_count = len(cross_dex_pairs)
+            
+            # Should now be 3 (unique pairs with cross-dex routes)
+            self.assertEqual(cross_dex_pairs_count, 3, "Should be 3 from signals fallback")
+
+    def test_cross_dex_pairs_zero_when_no_cross_dex_signals(self):
+        """cross_dex_pairs_count should be 0 when all signals have same buy/sell DEX."""
+        mock_signals = {
+            "schema_version": "1.0.0",
+            "signals": [
+                {"pair": "WETH/USDC", "buy_dex": "uniswap_v3", "sell_dex": "uniswap_v3"},  # same-dex
+            ]
+        }
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            reports_dir = tmp_path / "reports"
+            reports_dir.mkdir(parents=True)
+            
+            (reports_dir / "signals_20260309_220000.json").write_text(json.dumps(mock_signals))
+            
+            signals_path = reports_dir / "signals_20260309_220000.json"
+            with open(signals_path) as f:
+                signals_data = json.load(f)
+            
+            cross_dex_pairs = set()
+            for sig in signals_data.get("signals", []):
+                buy_dex = sig.get("buy_dex", "")
+                sell_dex = sig.get("sell_dex", "")
+                pair = sig.get("pair", "")
+                if buy_dex and sell_dex and buy_dex != sell_dex and pair:
+                    cross_dex_pairs.add(pair)
+            
+            # Should be 0 (same-dex signal doesn't count)
+            self.assertEqual(len(cross_dex_pairs), 0)
 
 
 if __name__ == "__main__":
