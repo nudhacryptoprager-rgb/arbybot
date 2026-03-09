@@ -299,11 +299,14 @@ def make_run_with_execution_pnl(tmp_path: Path) -> Path:
 
 
 def test_theoretical_net_profit_uses_execution_pnl_included(tmp_path):
-    """v3.2.65: theoretical_net_profit.net_pnl_usdc uses execution_pnl_included (not execution_pnl).
+    """v3.2.68: theoretical_net_profit.net_pnl_usdc uses execution_report.total_net_usdc.
     
     This ensures daily_report aligns with M4 execution_report semantics.
-    The old behavior used execution_pnl (all signals), which inflated profits
-    by including excluded signals with huge spreads.
+    The old behavior used truth_report.execution_pnl_included, which could differ
+    from execution_report when different cost models were used.
+    
+    v3.2.68 change: Now uses execution_report.total_net_usdc as canonical,
+    preserving truth_net_pnl_usdc for transparency.
     """
     run = make_run_with_execution_pnl(tmp_path)
     rpt = aggregate_run(run)
@@ -311,15 +314,15 @@ def test_theoretical_net_profit_uses_execution_pnl_included(tmp_path):
     theoretical = rpt.get("theoretical_net_profit")
     assert theoretical is not None
     
-    # net_pnl_usdc should be 3.65 (from execution_pnl_included), NOT 34.0 (from execution_pnl)
+    # net_pnl_usdc should be 3.65 (from execution_report.total_net_usdc)
     assert theoretical["net_pnl_usdc"] == 3.65
     assert theoretical["gross_pnl_usdc"] == 3.75  # From execution_pnl_included
     
     # all_signals_net_pnl_usdc should have the full value for transparency
     assert theoretical["all_signals_net_pnl_usdc"] == 34.0
     
-    # Source should indicate execution_pnl_included
-    assert theoretical["source"] == "truth_report.execution_pnl_included"
+    # v3.2.68: Source should indicate execution_report (canonical)
+    assert theoretical["source"] == "execution_report.total_net_usdc"
 
 
 def test_net_pnl_matches_m4_sim_net_usdc(tmp_path):
@@ -485,6 +488,7 @@ def test_session_context_propagation(tmp_path):
     run = make_run_with_all_profit_artifacts(tmp_path)
     
     # Call WITH session_context (simulates human session)
+    # v3.2.68: Must explicitly set run_type="manual" for human sessions
     session_context = {
         "session_goal": "Multi-chain quality stabilization",
         "goal_status": "REACHED",
@@ -494,6 +498,7 @@ def test_session_context_propagation(tmp_path):
         "blocker_status_before": "ACTIVE",
         "blocker_status_after": "RESOLVED",
         "docs_reread_confirmed": True,
+        "run_type": "manual",  # v3.2.68: Explicit marker for human sessions
     }
     
     rpt = aggregate_run(run, session_context=session_context)
@@ -510,5 +515,178 @@ def test_session_context_propagation(tmp_path):
     assert session["blocker_status_before"] == "ACTIVE"
     assert session["blocker_status_after"] == "RESOLVED"
     assert session["docs_reread_confirmed"] == True
-    # v3.2.67: run_type should be "manual" when session_context is provided
+    # v3.2.68: run_type explicitly set in session_context
     assert session["run_type"] == "manual"
+
+
+# v3.2.68: Mantle-case test - different gas configs between truth_report and execution_report
+def make_run_with_different_gas_configs(tmp_path: Path) -> Path:
+    """Create a run simulating Mantle scenario where truth uses chain-specific gas (0.02)
+    but execution_report uses paper_realistic (0.10).
+    
+    This tests that daily_report uses execution_report.total_net_usdc as canonical,
+    NOT truth_report.execution_pnl_included.net_pnl_usdc.
+    """
+    run = tmp_path / "run_mantle_gas_mismatch"
+    run.mkdir()
+    reports = run / "reports"
+    reports.mkdir()
+    
+    # Truth report uses chain-specific gas_usd: 0.02 (Mantle config)
+    # gross = 0.1791, gas = 0.02, slippage = 0.05 → net = 0.1091
+    truth = {
+        "schema_version": "3.2.0",
+        "quotes_total": 24,
+        "quotes_fetched": 24,
+        "price_sanity_passed": 24,
+        "health": {"rpc": {"success_rate": 1.0}},
+        "stats": {"gates_passed": 24, "quotes_fetched": 24},
+        "config_params": {
+            "gas_usd_estimate": 0.02,  # Chain-specific (Mantle)
+        },
+        "spread_signals": [
+            {"pair": "CMETH/METH", "spread_bps_exact": 100.0, "is_included": True},
+        ],
+        "execution_pnl_included": {
+            "gross_pnl_usdc": "0.1791",
+            "net_pnl_usdc": "0.1091",  # Using gas_usd=0.02 from config
+            "cost_model_available": True,
+            "cost_model_version": "paper_gas_slippage_l1_v3",
+            "cost_model_components": {
+                "gas_usd": 0.02,  # Mantle chain-specific gas
+                "slippage_bps": 5,
+                "slippage_usd": 0.05,
+                "l1_data_gas_units": 0,
+                "l1_gas_price_gwei": 0,
+                "l1_cost_usd": 0,
+            },
+        },
+        "execution_pnl": {
+            "gross_pnl_usdc": "52.626",
+            "net_pnl_usdc": "52.416",  # Includes excluded signals
+            "cost_model_available": True,
+        },
+    }
+    
+    # Execution report uses CostModelRegistry paper_realistic: gas_usd=0.10
+    # gross = 0.1791, gas = 0.10, slippage = 0.05 → net = 0.0291
+    execution_report = {
+        "schema_version": "m4:execution:v2.0",
+        "signals_count": 3,
+        "included_signals_count": 1,
+        "total_net_usdc": 0.0291,  # Using gas_usd=0.10 from paper_realistic
+        "cost_model": {
+            "name": "paper_realistic",
+            "gas_usd": 0.1,  # CostModelRegistry hardcoded
+            "slippage_bps": 5,
+        },
+    }
+    
+    # Run summary matches execution_report
+    run_summary = {
+        "schema_version": "m4:run_summary:v2.0",
+        "status": "PASS",
+        "metrics": {
+            "signals_count": 3,
+            "included_signals_count": 1,
+            "total_net_usdc": 0.0291,  # Matches execution_report
+        },
+    }
+    
+    (reports / "truth_report_1.json").write_text(json.dumps(truth))
+    (reports / "execution_report_1.json").write_text(json.dumps(execution_report))
+    (reports / "run_summary_1.json").write_text(json.dumps(run_summary))
+    (reports / "scan_1.json").write_text(json.dumps({"quotes_total": 24}))
+    (reports / "reject_histogram_1.json").write_text(json.dumps({"rejects": []}))
+    
+    return run
+
+
+def test_mantle_case_invariant_with_different_gas_configs(tmp_path):
+    """v3.2.68: Mantle-case invariant - daily_report uses execution_report as canonical.
+    
+    When truth_report uses chain-specific gas (0.02) but execution_report uses
+    paper_realistic (0.10), the invariant must still hold:
+    
+    daily_report.theoretical_net_profit.net_pnl_usdc == execution_report.total_net_usdc
+    
+    This was the root cause of Issue #1 from the audit:
+    - Mantle daily_report: net_pnl_usdc = 0.1091 (truth gas: 0.02)
+    - Mantle execution_report: total_net_usdc = 0.0291 (paper_realistic gas: 0.10)
+    - 3.75x discrepancy broke the invariant
+    
+    Fix (v3.2.68): daily_report.net_pnl_usdc now uses execution_report.total_net_usdc
+    as canonical, not truth_report.execution_pnl_included.net_pnl_usdc.
+    """
+    run = make_run_with_different_gas_configs(tmp_path)
+    rpt = aggregate_run(run)
+    
+    # Load execution_report for comparison
+    reports = run / "reports"
+    exec_report = json.loads((reports / "execution_report_1.json").read_text())
+    run_summary = json.loads((reports / "run_summary_1.json").read_text())
+    
+    theoretical = rpt.get("theoretical_net_profit")
+    assert theoretical is not None
+    
+    # CANONICAL INVARIANT: daily_report.net_pnl_usdc == execution_report.total_net_usdc
+    daily_net = theoretical["net_pnl_usdc"]
+    exec_net = exec_report["total_net_usdc"]
+    summary_net = run_summary["metrics"]["total_net_usdc"]
+    
+    assert daily_net == exec_net, \
+        f"INVARIANT VIOLATED (Mantle-case): daily_report.net_pnl_usdc ({daily_net}) != execution_report.total_net_usdc ({exec_net})"
+    
+    # Also check m4_sim_net_usdc matches (cross-verification field)
+    assert theoretical["m4_sim_net_usdc"] == exec_net
+    
+    # Run summary should also match
+    assert daily_net == summary_net, \
+        f"INVARIANT VIOLATED: daily_report.net_pnl_usdc ({daily_net}) != run_summary.total_net_usdc ({summary_net})"
+    
+    # truth_net_pnl_usdc should preserve the original truth value for transparency
+    assert theoretical.get("truth_net_pnl_usdc") == 0.1091, \
+        "truth_net_pnl_usdc should preserve original truth_report value for transparency"
+    
+    # Source should indicate execution_report (not truth_report)
+    assert "execution_report" in theoretical.get("source", ""), \
+        f"Source should indicate execution_report, got: {theoretical.get('source')}"
+
+
+def test_automated_session_with_ci_marker(tmp_path):
+    """v3.2.68: CI automated runs should have proper session markers.
+    
+    When ci_m5_0_gate.py runs, it passes session_context with:
+    - run_type = "automated"
+    - primary_blocker_of_session = "CI_AUTOMATED_RUN"
+    - blocker_status_before/after = "N/A"
+    """
+    run = make_run_with_all_profit_artifacts(tmp_path)
+    
+    # Simulate what ci_m5_0_gate.py passes
+    session_context = {
+        "session_goal": "M5 online scan (config/coverage_intent_mantle.yaml)",
+        "goal_status": "IN_PROGRESS",
+        "close_allowed": False,
+        "remaining_blockers": [],
+        "evidence_session_run_dirs": ["ci_m5_gate_20260309_213848"],
+        "primary_blocker_of_session": "CI_AUTOMATED_RUN",
+        "blocker_status_before": "N/A",
+        "blocker_status_after": "N/A",
+        "docs_reread_confirmed": False,
+        "run_type": "automated",
+    }
+    
+    rpt = aggregate_run(run, session_context=session_context)
+    
+    session = rpt.get("session")
+    assert session is not None
+    
+    # Verify CI markers
+    assert session["run_type"] == "automated"
+    assert session["primary_blocker_of_session"] == "CI_AUTOMATED_RUN"
+    assert session["blocker_status_before"] == "N/A"
+    assert session["blocker_status_after"] == "N/A"
+    assert session["docs_reread_confirmed"] == False
+    assert session["goal_status"] == "IN_PROGRESS"
+    assert session["close_allowed"] == False

@@ -5,12 +5,13 @@
 # v3.2.58 FROZEN: This config is stable for same-DEX fallback mode.
 # Changes require explicit approval due to MIXED_SOURCE constraints.
 #
-# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
-#   Classification: SIGNAL_NOT_INCLUDED (single DEX, M5.0 gate FAIL)
-#   Evidence: runDir 200642 - signals=1, included=0 (filtered by require_cross_dex)
-#   Blocker: Only 1 DEX active (PancakeSwap V3), require_cross_dex=true filters signal
-#   Root cause: Single DEX ecosystem - no cross-DEX arbitrage possible
-#   Action: Keep require_cross_dex=false for same-DEX fallback, or accept FAIL status
+# CHAIN QUALITY STATUS (2026-03-09 v3.2.68):
+#   Classification: PRICE_SCALE_FAIL (M5.0 gate FAIL)
+#   Evidence: runDir 213948 - signals=1, PRICE_SCALE 14.3%
+#   Blocker: Price scale check fails (14.3% > 10% threshold)
+#   Root cause: Single DEX ecosystem with stale/thin liquidity
+#   Action: Gate FAIL status expected - not arbitrage-ready
+#   Operational mode: PROBE_ONLY (no signals expected)
 #
 # CHAIN STATUS (historical): FALLBACK-ONLY (no cross-DEX readiness)
 #   - lynex_v3 (algebra/quoter) is NOT quoter_v2-compatible

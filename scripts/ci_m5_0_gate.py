@@ -1505,16 +1505,20 @@ ENV VARIABLES:
                 # v2.6.1: Let aggregate_run use CostModelRegistry internally
                 # No need to pass gas_usd_estimate/slippage_usd_estimate manually
                 # v1.8.0: Pass session_context for session completion gate
+                # v3.2.68: Automated CI runs explicitly mark run_type="automated"
                 session_context = {
                     "session_goal": f"M5 online scan ({args.config})",
                     "goal_status": "IN_PROGRESS",
                     "close_allowed": False,
                     "remaining_blockers": [],
                     "evidence_session_run_dirs": [run_dir.name],
-                    "primary_blocker_of_session": None,
-                    "blocker_status_before": None,
-                    "blocker_status_after": None,
+                    # v3.2.68: Automated runs have no human-defined blocker
+                    "primary_blocker_of_session": "CI_AUTOMATED_RUN",
+                    "blocker_status_before": "N/A",
+                    "blocker_status_after": "N/A",
                     "docs_reread_confirmed": False,
+                    # v3.2.68: Explicit marker that this is an automated CI run
+                    "run_type": "automated",
                 }
                 report = aggregate_run(run_dir, session_context=session_context)
                 
@@ -1655,16 +1659,20 @@ ENV VARIABLES:
                         # First daily_report generation (line ~1507) happens before M4 creates execution_report
                         try:
                             from scripts.generate_daily_report import aggregate_run
+                            # v3.2.68: Automated CI runs explicitly mark run_type="automated"
                             session_context = {
                                 "session_goal": f"M5 online scan ({args.config})",
                                 "goal_status": "IN_PROGRESS",
                                 "close_allowed": False,
                                 "remaining_blockers": [],
                                 "evidence_session_run_dirs": [run_dir.name],
-                                "primary_blocker_of_session": None,
-                                "blocker_status_before": None,
-                                "blocker_status_after": None,
+                                # v3.2.68: Automated runs have no human-defined blocker
+                                "primary_blocker_of_session": "CI_AUTOMATED_RUN",
+                                "blocker_status_before": "N/A",
+                                "blocker_status_after": "N/A",
                                 "docs_reread_confirmed": False,
+                                # v3.2.68: Explicit marker that this is an automated CI run
+                                "run_type": "automated",
                             }
                             report = aggregate_run(run_dir, session_context=session_context)
                             from datetime import date

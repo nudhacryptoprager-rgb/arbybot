@@ -445,28 +445,55 @@ def aggregate_run(
     exec_report = json.loads(exec_report_path.read_text(encoding="utf8")) if exec_report_path else {}
     m4_sim_net_usdc = exec_report.get("total_net_usdc")  # M4 simulation net (uses CostModelRegistry)
     
+    # v3.2.68: INVARIANT FIX - net_pnl_usdc MUST equal execution_report.total_net_usdc
+    # The canonical profit value comes from M4 execution_report (uses CostModelRegistry paper_realistic)
+    # truth_report.execution_pnl_included uses per-chain gas config which may differ
+    # To satisfy invariant: net_pnl_usdc == execution_report.total_net_usdc == run_summary.total_net_usdc
+    # Use m4_sim_net_usdc as canonical net_pnl_usdc when available
+    canonical_net_pnl = m4_sim_net_usdc if m4_sim_net_usdc is not None else float(execution_pnl_included.get("net_pnl_usdc") or 0)
+    truth_net_pnl = float(execution_pnl_included.get("net_pnl_usdc") or 0)  # Keep for transparency
+    
+    # Also read M4 cost components for consistency
+    exec_cost_model = exec_report.get("cost_model") or {}
+    # Use execution_report cost model when available (canonical M4 semantics)
+    if exec_cost_model:
+        gas_usd_canonical = exec_cost_model.get("gas_usd", 0.1)
+        slippage_bps_canonical = exec_cost_model.get("slippage_bps", 5)
+    else:
+        gas_usd_canonical = cost_components.get("gas_usd", 0)
+        slippage_bps_canonical = cost_components.get("slippage_bps", 0)
+    
+    # Calculate total_cost from canonical values
+    included_signals_count = exec_report.get("included_signals_count", 1) if exec_report else 1
+    canonical_gas_total = gas_usd_canonical * included_signals_count
+    canonical_slippage_total = cost_components.get("slippage_usd", 0)  # Keep per-signal slippage from truth
+    canonical_l1_cost = cost_components.get("l1_cost_usd", 0)
+    canonical_total_cost = canonical_gas_total + canonical_slippage_total + canonical_l1_cost
+    
     theoretical_net_profit = {
         "gross_pnl_usdc": float(execution_pnl_included.get("gross_pnl_usdc") or 0),
-        "gas_usd": cost_components.get("gas_usd", 0),
-        "slippage_bps": cost_components.get("slippage_bps", 0),
-        "slippage_usd": cost_components.get("slippage_usd", 0),
+        # v3.2.68: Use M4 cost model for consistency with execution_report
+        "gas_usd": canonical_gas_total,
+        "slippage_bps": slippage_bps_canonical,
+        "slippage_usd": canonical_slippage_total,
         "l1_data_gas_units": cost_components.get("l1_data_gas_units", 0),
         "l1_gas_price_gwei": cost_components.get("l1_gas_price_gwei", 0),
-        "l1_cost_usd": cost_components.get("l1_cost_usd", 0),
-        "total_cost_usd": cost_components.get("total_cost_usd", 0),
-        "net_pnl_usdc": float(execution_pnl_included.get("net_pnl_usdc") or 0),
+        "l1_cost_usd": canonical_l1_cost,
+        "total_cost_usd": canonical_total_cost,
+        # v3.2.68: CANONICAL net_pnl = execution_report.total_net_usdc (invariant enforced)
+        "net_pnl_usdc": canonical_net_pnl,
+        # Keep truth value for transparency/debugging
+        "truth_net_pnl_usdc": truth_net_pnl,
         # v3.2.65: Add all_signals_net_pnl_usdc for transparency
         "all_signals_net_pnl_usdc": float(execution_pnl_all.get("net_pnl_usdc") or 0),
         "cost_model_available": execution_pnl_included.get("cost_model_available", False),
-        "cost_model_version": execution_pnl_included.get("cost_model_version"),
-        # v1.7.1: M4 simulation net for cross-verification (separate cost model)
-        # Note: M4 uses CostModelRegistry (paper_realistic), truth uses config params
-        # Should now match net_pnl_usdc since both use execution_pnl_included semantics
+        "cost_model_version": "paper_realistic" if m4_sim_net_usdc is not None else execution_pnl_included.get("cost_model_version"),
+        # v3.2.68: m4_sim_net_usdc is now identical to net_pnl_usdc (invariant)
         "m4_sim_net_usdc": m4_sim_net_usdc,
         "m4_execution_report_path": str(exec_report_path) if exec_report_path else None,
         # Mode/source to clarify this is paper/simulated, not real execution
         "mode": "paper_simulated",
-        "source": "truth_report.execution_pnl_included",
+        "source": "execution_report.total_net_usdc" if m4_sim_net_usdc is not None else "truth_report.execution_pnl_included",
         "disclaimer": "Theoretical profit estimate based on paper cost model. Not real execution.",
     }
 
@@ -581,7 +608,7 @@ def aggregate_run(
         # v3.2.58: Session completion fields (MANDATORY per DOCS_POLICY.md section 9)
         # v1.7.1: Now respects session_context parameter from caller
         # v1.8.0: Added primary_blocker_of_session and blocker status fields
-        # v3.2.67: Added run_type to distinguish automated vs human sessions
+        # v3.2.68: run_type is now passed explicitly from caller
         "session": {
             "session_goal": (session_context or {}).get("session_goal"),
             "goal_status": (session_context or {}).get("goal_status", "IN_PROGRESS"),
@@ -598,8 +625,9 @@ def aggregate_run(
             "docs_reread_confirmed": (session_context or {}).get(
                 "docs_reread_confirmed", False
             ),
-            # v3.2.67: Explicit run type marker (automated = CI/gate, manual = human session)
-            "run_type": "manual" if session_context else "automated",
+            # v3.2.68: run_type from session_context, default "automated" if not provided
+            # "automated" = CI/gate run, "manual" = human session via generate_daily_report CLI
+            "run_type": (session_context or {}).get("run_type", "automated"),
         },
     }
     return report

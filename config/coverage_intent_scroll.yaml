@@ -2,12 +2,13 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (Scroll)
 #
-# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
-#   Classification: NO_SPREAD_SIGNALS (MARKET_BLOCKED)
-#   Evidence: runDir 200624 - signals=0, opportunities=0, LIQUIDITY_ZERO dominant
-#   Blocker: Zero liquidity in most pools (SushiSwap V3 pools empty)
-#   Root cause: Market doesn't have arbitrageable liquidity
+# CHAIN QUALITY STATUS (2026-03-09 v3.2.68):
+#   Classification: BLOCKED_BY_SECOND_DEX (probe-only)
+#   Evidence: runDir 213927 - signals=0, cross_dex_pairs_count=0
+#   Blocker: Only 1 DEX active (SushiSwap V3), no cross-DEX pairs possible
+#   Root cause: Market doesn't have second quoter_v2-compatible DEX
 #   Action: Probe-only monitoring - not arbitrage-ready
+#   Operational mode: PROBE_ONLY (no signals expected, require_cross_dex=false)
 #
 # CHAIN STATUS (historical): **THIN FALLBACK-ONLY** (NOT cross-DEX ready)
 #   - nuri_v3 (algebra/quoter) is NOT quoter_v2-compatible

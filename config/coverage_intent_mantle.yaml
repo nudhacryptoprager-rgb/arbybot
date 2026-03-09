@@ -2,11 +2,12 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (mantle)
 #
-# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
-#   Classification: LOW_SAMPLE (same-DEX fallback producing minimal signals)
-#   Evidence: runDir 200756 - signals=3, included=1, net_usdc=$0.03
+# CHAIN QUALITY STATUS (2026-03-12 v3.2.68):
+#   Classification: LOW_SAMPLE (same-DEX fallback producing positive signals)
+#   Evidence: runDir 213848 - signals produced, net_usdc=$0.0291 (paper_realistic)
 #   Blocker: Low volume - minimal but positive profit
 #   Root cause: Cross-DEX routes trigger MIXED_SOURCE, same-DEX fallback active
+#   Note: v3.2.68 fixed profit invariant (daily_report.net_pnl_usdc = execution_report)
 #   Action: Monitor - this is working as expected for same-DEX mode
 #
 # CHAIN STATUS (historical): SIGNAL_PRODUCING via same-DEX fallback
