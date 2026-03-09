@@ -65,6 +65,11 @@ paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.05  # Scroll is relatively cheap
 
+# L1 cost model: Scroll is a zk-rollup with proof-based batching
+# v3.2.55: L1 cost per-txn is minimal compared to Arbitrum's calldata model
+l1_data_gas_units: 0   # zk-rollup - no per-txn L1 data posting
+l1_gas_price_gwei: 0   # Costs are amortized in proofs
+
 # Token USD prices (for notional sizing)
 tokens_usd_price:
   WETH: 3000.0

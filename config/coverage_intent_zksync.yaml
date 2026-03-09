@@ -65,6 +65,12 @@ paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.01  # zkSync is very cheap
 
+# L1 cost model: zkSync uses zk-proofs, NOT Arbitrum-style L1 data posting
+# v3.2.55: Disable Arbitrum L1 cost model for zkSync Era
+# zkSync batches txns via validity proofs, so per-txn L1 cost is ~0
+l1_data_gas_units: 0
+l1_gas_price_gwei: 0
+
 # Token USD prices (for notional sizing)
 tokens_usd_price:
   WETH: 3000.0

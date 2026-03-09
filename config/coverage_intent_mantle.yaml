@@ -72,6 +72,11 @@ paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.02  # Mantle is very cheap (MNT gas)
 
+# L1 cost model: Mantle uses EigenDA/modular DA (not Ethereum L1 calldata)
+# v3.2.55: Per-txn L1 overhead is minimal
+l1_data_gas_units: 0   # EigenDA - no per-txn L1 data posting
+l1_gas_price_gwei: 0   # DA costs are off-chain
+
 # Token USD prices (for notional sizing)
 # v3.2.52: Removed AUSD (not on DEXes), kept mUSD, PUFF
 tokens_usd_price:

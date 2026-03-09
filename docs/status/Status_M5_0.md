@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-09 12:45  
+**Updated**: 2026-03-09 13:30  
 **Tests**: 1471 passed, 2 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260309_123641` (Arbitrum), `ci_m5_gate_20260309_123829` (Base), `ci_m5_gate_20260309_124009` (Mantle), `ci_m5_gate_20260309_124137` (zkSync), `ci_m5_gate_20260309_124320` (Linea), `ci_m5_gate_20260309_124403` (Scroll)  
+**Evidence runDirs**: `ci_m5_gate_20260309_131742` (zkSync), `ci_m5_gate_20260309_132252` (Mantle), `ci_m5_gate_20260309_132444` (Linea), `ci_m5_gate_20260309_132536` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -17,6 +17,32 @@
 ---
 
 ## Multi-Chain Bring-up (2026-03-09)
+
+### L1 Cost Model Fix (2026-03-09 13:00)
+
+**Root cause identified**: Roundtrip evaluator uses Arbitrum-style `l1_cost_wei = 60_000_000_000_000` (~$0.18) as default for all chains. This is incorrect for zk-rollups and alt-DA chains.
+
+**Fixes applied**:
+- **zkSync**: `l1_data_gas_units: 0, l1_gas_price_gwei: 0` (zk-proofs, no per-txn L1 data posting)
+- **Linea**: `l1_data_gas_units: 100, l1_gas_price_gwei: 10` (minimal L1 overhead)
+- **Scroll**: `l1_data_gas_units: 0, l1_gas_price_gwei: 0` (zk-rollup)
+- **Mantle**: `l1_data_gas_units: 0, l1_gas_price_gwei: 0` (EigenDA, off-chain DA)
+
+**Fresh scan results (2026-03-09 13:25)**:
+
+| Chain | Signals | Opp.Gated | M4 Gate | Notes |
+|-------|---------|-----------|---------|-------|
+| **Mantle** | **3** | 0 | **PASS** | 2 same-DEX fee-tier, 1 cross-DEX. total_net_usdc=$0.03 |
+| zkSync | 0 | 6 | N/A | L1 cost=0 working. SUSPECT_LIQUIDITY blocks signals (gas_estimate > 500k) |
+| Scroll | 0 | 1 | N/A | Improved from 0 gated. Signals blocked by quote-level rejects |
+| Linea | 0 | 0 | N/A | All 17 opps MIXED_SOURCE. No same-DEX fee-tiers available |
+
+**Mantle M4 Execution Gate PASS (2026-03-09 13:26)**:
+- `simulations_count=3`, `sim_profitable_count=1`
+- `total_net_usdc=0.0291` (profitable)
+- `mae_net_usdc=0.08` ≤ 0.3 (within drift tolerance)
+- `est_sign_correct_rate=100%` ≥ 70%
+- RunDir: `ci_m5_gate_20260309_132252`
 
 ### Session Fixes Applied (2026-03-09 12:00)
 
@@ -152,73 +178,73 @@
 - Opportunities: 9 total, 9 profitable, 9 rejected
 - Signals: 3 (same-DEX fee-tier arbitrage)
 - WS: mantle-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
-- **Status**: **PASS** same-DEX fallback
+- **Status**: **PASS** same-DEX fallback, **M4 PASS** (total_net_usdc=$0.03)
 
-**zkSync** (`coverage_intent_zksync.yaml`, runDir `124137`):
-- Quotes: 49 total → 31 fetched (63% fetch rate)
-- DEXes: 2 (pancakeswap_v3, uniswap_v3)
-- Opportunities: 22 total, 20 profitable, 17 rejected
-- Signals: 0 (all rejected: SUSPECT_SPREAD_HARD, MIXED_SOURCE, NET_PROFIT_TOO_LOW)
-- WS: zksync-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
-- **Status**: NO_DATA (ALL_OPPORTUNITIES_REJECTED) INFRA_READY
+**zkSync** (`coverage_intent_zksync.yaml`, runDir `131742`):
+- Quotes: L1 cost fix applied (l1_cost_wei=0)
+- L1 cost source: config (was using Arbitrum-style $0.18 default)
+- Opportunities: 22 total, 21 profitable, 6 gated (up from 5!)
+- Signals: 0 (quotes rejected for SUSPECT_LIQUIDITY: gas_estimate > 500k)
+- **Status**: NO_DATA (quotes blocked at SUSPECT_LIQUIDITY gate) INFRA_READY
 
-**Linea** (`coverage_intent_linea.yaml`, runDir `124320`):
+**Linea** (`coverage_intent_linea.yaml`, runDir `132444`):
 - Quotes: 30 total → 29 fetched (97% fetch rate) ✅
-- DEXes: 2 (lynex_v3, pancakeswap_v3)
-- Opportunities: 17 total, 7 profitable, 17 rejected
-- Signals: 0 (all rejected by policy)
-- WS: linea-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
-- **Status**: NO_DATA (ALL_OPPORTUNITIES_REJECTED) same-DEX fallback
+- L1 cost fix applied (minimal overhead)
+- Opportunities: 17 total, 11 profitable, 0 gated (all MIXED_SOURCE)
+- Signals: 0 (no same-DEX fee-tier opportunities exist)
+- **Status**: NO_DATA (ALL_OPPORTUNITIES_REJECTED) - need quoter-compatible DEX pair
 
-**Scroll** (`coverage_intent_scroll.yaml`, runDir `124403`):
+**Scroll** (`coverage_intent_scroll.yaml`, runDir `132536`):
 - Quotes: 24 total → 10 fetched (42% fetch rate)
-- DEXes: 2 (nuri_v3, sushiswap_v3)
-- Opportunities: 6 total, 4 profitable, 6 rejected
-- Signals: 0 (all rejected by policy)
-- WS: scroll-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
-- **Status**: NO_DATA (ALL_OPPORTUNITIES_REJECTED) same-DEX fallback
+- L1 cost fix applied (l1_cost_wei=0)
+- Opportunities: 6 total, 6 profitable, 1 gated (up from 0!)
+- Signals: 0 (quotes blocked at SUSPECT_LIQUIDITY gate)
+- **Status**: NO_DATA improved (1 gated opp!) - liquidity gates blocking
 
-**Action items** (updated 2026-03-09 12:45):
-1. ✅ DONE: mUSD added to `core_tokens.yaml` for Mantle
-2. ✅ DONE: AUSD removed from intent.txt (zero liquidity on DEXes)
-3. ✅ DONE: PAPER/SYN removed from intent.txt Scroll (no token addresses)
-4. ✅ DONE: zkSync quoter_v2 enabled (was SLOT0_DIAGNOSTIC)
-5. ✅ DONE: WebSocket endpoint resolution fixed (chain-correct hosts)
+**Action items** (updated 2026-03-09 13:30):
+1. ✅ DONE: L1 cost model fix for zkSync/Linea/Scroll/Mantle
+2. ✅ DONE: Mantle M4 execution gate PASS (total_net_usdc=$0.03)
+3. ✅ DONE: zkSync improved from 5→6 gated opps, NET_PROFIT_TOO_LOW reduced
+4. ✅ DONE: Scroll improved from 0→1 gated opp
+5. TODO: Relax SUSPECT_LIQUIDITY thresholds for zkSync (gas_estimate limit)
 6. TODO: Add FusionX V3 or another quoter_v2 DEX on Mantle for true cross-DEX
-7. TODO: Add Algebra-compatible DEX on Linea/Scroll OR remove Algebra DEX
+7. TODO: Add Algebra-compatible DEX on Linea OR remove Algebra DEX
 
-### Blocker Classification (2026-03-09 12:45)
+### Blocker Classification (2026-03-09 13:30)
 
 ```
 code_blocker:           LOW    (pytest 1471 passed, CI green, safety PASS)
 multicall_blocker:      LOW    (success_rate=1.0 all chains, 4 RPC calls)
 websocket_blocker:      LOW    (ws_connected=true, ALL chains chain-correct hosts, provider_id_ws=alchemy)
 dex_compatibility_blocker:
-  - Mantle:     MED    (same-DEX working, signals=3, no cross-DEX due to MIXED_SOURCE)
-  - Linea:      MED    (same-DEX working, no signals, all opps rejected as MIXED_SOURCE)
-  - Scroll:     MED    (same-DEX working, no signals, all opps rejected as MIXED_SOURCE)
-  - zkSync:     MED    (quoter_v2 working, no signals, opps rejected as SUSPECT_SPREAD_HARD)
+  - Mantle:     **RESOLVED** (M4 PASS, signals=3, total_net_usdc=$0.03)
+  - Linea:      MED    (L1 fix applied, no signals, all opps MIXED_SOURCE - need quoter-compatible DEX)
+  - Scroll:     LOW→MED (L1 fix, 1 gated opp, blocked by SUSPECT_LIQUIDITY)
+  - zkSync:     LOW→MED (L1 fix, 6 gated opps, blocked by SUSPECT_LIQUIDITY gas thresholds)
   - Base:       LOW    (uniswap↔aerodrome↔sushi all quoter_v2, signals=1)
   - Arbitrum:   LOW    (all DEXes quoter_v2 compatible, signals=9)
 ```
 
-**Main blocker (2026-03-09 12:45)**: DEX ecosystem compatibility. Chains with mixed quoter interfaces (algebra + uniswap) cannot do cross-DEX arbitrage without MIXED_SOURCE rejection. Same-DEX fee-tier arb is the current workaround. **ALL_OPPORTUNITIES_REJECTED** now accurately tracks opportunities that are generated but filtered by policy. zkSync has profitable opportunities (20/22) but rejected due to SUSPECT_SPREAD_HARD.
+**Main blocker (2026-03-09 13:30)**: 
+1. **L1 cost model fixed** for all zk-rollup chains (zkSync, Scroll, Linea, Mantle)
+2. **Mantle M4 PASS** with `total_net_usdc=$0.03` demonstrates profitable same-DEX fee-tier arb
+3. **Remaining blockers**: SUSPECT_LIQUIDITY (zkSync/Scroll gas>500k), MIXED_SOURCE (Linea no same-DEX pairs)
 
-### Infra Gate Results (2026-03-09 12:45)
+### Infra Gate Results (2026-03-09 13:30)
 
 Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.status` semantics:
 - `NO_DATA`: signals_count == 0 (no raw signals at all)
 - `FAIL`: signals_count > 0 but no profitable results (includes all-excluded case: FAIL_ALL_EXCLUDED)
 - `PASS`: signals > 0 and profitable
 
-| Chain | Infra Gate | run_summary | chain_quality_level | quotes | fetch% | signals | opps | dexes | runDir | WS Host |
-|-------|------------|-------------|---------------------|--------|--------|---------|------|-------|--------|---------|
-| Arbitrum | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 40/122 | 33% | 9 | 78 | 4 | 123641 | arb-mainnet.g.alchemy.com |
-| Base | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 34/54 | 63% | 1 | 47 | 3 | 123829 | base-mainnet.g.alchemy.com |
-| Mantle | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 24/50 | 48% | 3 | 9 | 2 | 124009 | mantle-mainnet.g.alchemy.com |
-| zkSync | ✅ PASS | NO_DATA | INFRA_READY | 31/49 | 63% | 0 | 22 | 2 | 124137 | zksync-mainnet.g.alchemy.com |
-| Linea | ✅ PASS | NO_DATA | INFRA_READY | 29/30 | 97% | 0 | 17 | 2 | 124320 | linea-mainnet.g.alchemy.com |
-| Scroll | ✅ PASS | NO_DATA | INFRA_READY | 10/24 | 42% | 0 | 6 | 2 | 124403 | scroll-mainnet.g.alchemy.com |
+| Chain | Infra Gate | run_summary | M4 Gate | Notes | runDir |
+|-------|------------|-------------|---------|-------|--------|
+| **Mantle** | ✅ PASS | **PASS** | **PASS** | 3 signals, $0.03 profit | 132252 |
+| Arbitrum | ✅ PASS | **PASS** | - | 9 signals, rolling canonical | 123641 |
+| Base | ✅ PASS | **PASS** | - | 1 signal | 123829 |
+| zkSync | ✅ PASS | NO_DATA | - | 6 gated opps, SUSPECT_LIQUIDITY | 131742 |
+| Scroll | ✅ PASS | NO_DATA | - | 1 gated opp, SUSPECT_LIQUIDITY | 132536 |
+| Linea | ✅ PASS | NO_DATA | - | All MIXED_SOURCE, no same-DEX | 132444 |
 
 ### Scroll Status Update
 
