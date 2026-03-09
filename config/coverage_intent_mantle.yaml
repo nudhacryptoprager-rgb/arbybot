@@ -54,12 +54,15 @@ use_usd_notional: true
 target_usd_notional: 100.0
 
 # Spread economics
-min_spread_bps: 5
+# v3.2.50: min_spread_bps lowered from 5 to 3 for better signal capture
+# Rationale: Mantle gas_usd_estimate=0.02 means 3bps spread is highly profitable
+min_spread_bps: 3
 paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.02  # Mantle is very cheap (MNT gas)
 
 # Token USD prices (for notional sizing)
+# v3.2.50: Added PUFF, AUSD prices to prevent NO_USD_PRICE rejects
 tokens_usd_price:
   WETH: 3000.0
   WMNT: 0.80
@@ -68,6 +71,8 @@ tokens_usd_price:
   mUSD: 1.0
   mETH: 3100.0
   cmETH: 3100.0
+  PUFF: 0.001     # Meme token - low value
+  AUSD: 1.0       # Stablecoin
 
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000

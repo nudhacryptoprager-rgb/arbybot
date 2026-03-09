@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-08  
-**Tests**: 1443 passed, 1 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260308_110956` (Base), `ci_m5_gate_20260308_111208` (Linea), `ci_m5_gate_20260308_111245` (Mantle), `ci_m5_gate_20260308_111334` (zkSync), `ci_m5_gate_20260308_111137` (Scroll)  
+**Updated**: 2026-03-08 11:35  
+**Tests**: 1457 passed, 1 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260308_112739` (Base), `ci_m5_gate_20260308_112927` (Linea), `ci_m5_gate_20260308_113028` (Mantle), `ci_m5_gate_20260308_113052` (zkSync), `ci_m5_gate_20260308_113003` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -20,17 +20,23 @@
 
 ### Practical Bring-up Progress
 
-**2026-03-08**: Base and Scroll upgraded with additional DEXes:
+**2026-03-08 (session 2)**: Config optimization for all chains:
+- **All chains**: `min_spread_bps` lowered from 5 to 3 (still profitable with low L2 gas)
+- **Base**: AERO token price corrected ($1.5→$0.35 market correction). **PASS with 1 signal**
+- **Mantle**: Added PUFF/AUSD token prices. FAIL (signal excluded)
+- **Linea/zkSync/Scroll**: NO_DATA (infra PASS but no cross-DEX spread > 3bps)
+- **ChainQualityLevel**: New policy contract (INFRA_READY → SIGNAL_PRODUCING → QUALITY_RAISED)
+
+**2026-03-08 (session 1)**: Base and Scroll upgraded with additional DEXes:
 - **Base**: Added SushiSwap V3 (3 DEXes total). Fresh PASS with 1 roundtrip profitable signal
 - **Scroll**: Added SushiSwap V3 (2 DEXes total) + quarantined 2 low-liquidity pools. **NOW PASSING**
 
-**Code changes**:
-- `config/dexes.yaml`: Added SushiSwap V3 for Base and Scroll with verified factory/quoter addresses
-- `config/coverage_intent_base.yaml`: Added sushiswap_v3, enabled use_quoter_v2
-- `config/coverage_intent_scroll.yaml`: Added sushiswap_v3, set require_cross_dex=true
-- `strategy/quotes.py`: Fixed use_quoter_v2 → use_quoter_global variable bug
-- `scripts/ci_m5_0_gate.py`: Fixed malformed ISO-8601 timestamp (+00:00Z → Z)
-- `tests/unit/test_config_contracts.py`: Added 27 config contract tests
+**Code changes (session 2)**:
+- `m4/policy.py`: Added `ChainQualityLevel` (INFRA_READY/SIGNAL_PRODUCING/QUALITY_RAISED)
+- `m4/policy.py`: Added `classify_chain_quality()` function
+- `m4/policy.py`: Added `MIN_CYCLES_FOR_QUALITY_RAISED = 3` threshold
+- `tests/unit/test_chain_quality_level.py`: 14 tests for ChainQualityLevel
+- `config/coverage_intent_*.yaml`: min_spread_bps 5→3, token price fixes
 
 ### Terminology Contract
 
@@ -41,13 +47,14 @@
 | `infra_gate` | `gate_result.json status` | Artifacts valid, schema OK, quotes_fetched > 0 |
 | `run_summary.status` | `run_summary.json status` | Signal flow: NO_DATA/FAIL/PASS |
 | `signals_count` | `run_summary.json metrics.signals_count` | Raw spread signals detected |
+| `ChainQualityLevel` | `m4/policy.py` | Chain maturity: INFRA_READY/SIGNAL_PRODUCING/QUALITY_RAISED |
 
 **ВАЖЛИВО**: `infra_gate: PASS` ≠ `run_summary.status: PASS`. Infra gate validates infrastructure; run_summary shows actual opportunity flow.
 
 ### Blocker Classification (2026-03-08)
 
 ```
-code_blocker: LOW (pytest 1443 passed, CI green, safety PASS)
+code_blocker: LOW (pytest 1457 passed, CI green, safety PASS)
 data_collection_blocker: MEDIUM (quarantines active, some quotes rejected)
 market_window_blocker: HIGH (4/5 chains NO_DATA/FAIL despite infra PASS)
 ```
@@ -61,11 +68,11 @@ Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.s
 
 | Chain | Infra Gate | run_summary | pairs | pools | quotes_fetched | cross_dex | dexes | Notes |
 |-------|------------|-------------|-------|-------|----------------|-----------|-------|-------|
-| Base | ✅ PASS | **PASS** (1 sig) | 10 | 28 | 28 | 11 | 3 | 0.342 USDC profit |
-| Linea | ✅ PASS | NO_DATA | 10 | 27 | 27 | 12 | 2 | quotes OK, no spreads |
-| Mantle | ✅ PASS | FAIL | 4 | 14 | 14 | 5 | 2 | 1 signal, not profitable |
-| zkSync | ✅ PASS | NO_DATA | 9 | 49 | 49 | 10 | 2 | quotes OK, no spreads |
-| Scroll | ✅ PASS | NO_DATA | 4 | 9 | 9 | 8 | 2 | quarantined low-liq pools |
+| Base | ✅ PASS | **PASS** | 10 | 31 | 31 | 11 | 3 | 1 sig, spread 49bps |
+| Linea | ✅ PASS | NO_DATA | 10 | 27 | 27 | 12 | 2 | quotes OK, no spreads ≥3bps |
+| Mantle | ✅ PASS | FAIL | 4 | 14 | 14 | 5 | 2 | 1 signal excluded |
+| zkSync | ✅ PASS | NO_DATA | 10 | 49 | 49 | 10 | 2 | quotes OK, no spreads ≥3bps |
+| Scroll | ✅ PASS | NO_DATA | 4 | 9 | 9 | 8 | 2 | quotes OK, no spreads ≥3bps |
 
 ### Scroll Status Update
 

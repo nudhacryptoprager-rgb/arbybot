@@ -37,6 +37,79 @@ class RunKind:
     OFFLINE = "OFFLINE"    # Offline fixture
 
 
+class ChainQualityLevel:
+    """
+    Chain quality classification based on operational maturity.
+    
+    v2.0.9: Quality-raised chain contract for multi-chain readiness assessment.
+    
+    Levels (ascending order):
+    - INFRA_READY: Infra gate PASS (artifacts valid, quotes_fetched > 0)
+    - SIGNAL_PRODUCING: At least 1 signal in current run (not NO_DATA)
+    - QUALITY_RAISED: Repeated non-NO_DATA results across MIN_CYCLES_FOR_QUALITY_RAISED cycles
+    
+    TERMINOLOGY CONTRACT:
+    - infra_gate: Artifacts schema valid, quotes_fetched > 0 -> INFRA_READY
+    - run_summary.status != NO_DATA -> SIGNAL_PRODUCING
+    - Consecutive non-NO_DATA cycles >= 3 -> QUALITY_RAISED
+    
+    USAGE:
+        level = classify_chain_quality(signals_count=5, consecutive_non_nodata_cycles=3)
+        # level == ChainQualityLevel.QUALITY_RAISED
+    """
+    INFRA_READY = "INFRA_READY"            # Gate PASS, but NO_DATA (0 signals)
+    SIGNAL_PRODUCING = "SIGNAL_PRODUCING"  # >=1 signal, but not yet stable
+    QUALITY_RAISED = "QUALITY_RAISED"      # Repeated non-NO_DATA across cycles
+
+
+# Chain quality classification thresholds
+MIN_CYCLES_FOR_QUALITY_RAISED = 3  # v2.0.9: Minimum consecutive non-NO_DATA cycles
+
+
+def classify_chain_quality(
+    signals_count: int,
+    consecutive_non_nodata_cycles: int = 1,
+    infra_gate_pass: bool = True,
+) -> str:
+    """
+    Classify chain quality level based on signal production maturity.
+    
+    Args:
+        signals_count: Number of signals in current run
+        consecutive_non_nodata_cycles: Number of consecutive runs with signals_count > 0
+        infra_gate_pass: Whether infra gate passed (artifacts valid, quotes fetched)
+        
+    Returns:
+        ChainQualityLevel constant
+        
+    Examples:
+        # Chain just passed infra gate but no signals
+        classify_chain_quality(signals_count=0, consecutive_non_nodata_cycles=0)
+        # -> INFRA_READY
+        
+        # Chain produced signal but first time
+        classify_chain_quality(signals_count=2, consecutive_non_nodata_cycles=1)
+        # -> SIGNAL_PRODUCING
+        
+        # Chain consistently produces signals
+        classify_chain_quality(signals_count=5, consecutive_non_nodata_cycles=3)
+        # -> QUALITY_RAISED
+    """
+    if not infra_gate_pass:
+        # Infra gate failed - shouldn't reach here but return lowest level
+        return ChainQualityLevel.INFRA_READY
+    
+    if signals_count == 0:
+        # NO_DATA run - infra works but no signals
+        return ChainQualityLevel.INFRA_READY
+    
+    # signals_count > 0
+    if consecutive_non_nodata_cycles >= MIN_CYCLES_FOR_QUALITY_RAISED:
+        return ChainQualityLevel.QUALITY_RAISED
+    
+    return ChainQualityLevel.SIGNAL_PRODUCING
+
+
 class FailReason:
     """
     Explicit fail reason codes for M4 execution gate.
@@ -211,7 +284,8 @@ def compute_status(
 # v2.0.2: SHA-free provenance (run_timestamp + code_identity replaces source_sha)
 # v2.0.1: MIN_SIGNALS_FOR_PASS=3, MIN_SAMPLE_SIZE=3, MIN_SIGNALS_WARN=2
 # v2.0.8: fee_tier strict lookup, quotes_total=attempted, unique_routes_cross_dex, price_stability order fix
-POLICY_VERSION = "2.0.8"
+# v2.0.9: ChainQualityLevel classification (INFRA_READY/SIGNAL_PRODUCING/QUALITY_RAISED)
+POLICY_VERSION = "2.0.9"
 
 class Thresholds:
     """

@@ -57,13 +57,16 @@ use_usd_notional: true
 target_usd_notional: 100.0
 
 # Spread economics
-min_spread_bps: 5
+# v3.2.50: min_spread_bps lowered from 5 to 3 for better signal capture
+# Rationale: Base gas_usd_estimate=0.01 means 3bps spread is highly profitable
+min_spread_bps: 3
 paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.01  # Base is very cheap (L2)
 
 # Token USD prices (for notional sizing)
 # All tokens from config/core_tokens.yaml for base chain
+# v3.2.50: Updated AERO price from 1.5 to 0.35 (market correction)
 tokens_usd_price:
   WETH: 3000.0
   USDC: 1.0
@@ -71,7 +74,7 @@ tokens_usd_price:
   DAI: 1.0
   cbETH: 3200.0  # Premium over ETH
   cbBTC: 60000.0
-  AERO: 1.5
+  AERO: 0.35     # Updated from 1.5 (market correction)
   BRETT: 0.15
   DEGEN: 0.01
   TOSHI: 0.0003

@@ -53,7 +53,10 @@ use_usd_notional: true
 target_usd_notional: 100.0
 
 # Spread economics
-min_spread_bps: 5
+# v3.2.50: min_spread_bps lowered from 5 to 3 for better signal capture
+# Rationale: zkSync gas_usd_estimate=0.01 means 3bps spread is highly profitable
+#            on 100 USD notional (0.03 USD spread >> 0.01 USD gas)
+min_spread_bps: 3
 paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.01  # zkSync is very cheap
