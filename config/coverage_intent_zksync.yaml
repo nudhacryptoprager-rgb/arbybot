@@ -69,6 +69,12 @@ gas_usd_estimate: 0.01  # zkSync is very cheap
 # zkSync has thinner liquidity than Arbitrum, so larger spreads are common
 # Evidence from runDir 185400: max_gated_spread=398bps, 33 rejects at 500bps threshold
 # v3.2.63: Raised to 1000bps to allow more signal capture
+# v3.2.64 THIN LIQUIDITY STATUS (runDir 194223):
+#   - 34 opportunities total, 8 gated, 26 rejected SUSPECT_SPREAD_HARD
+#   - max_gated_spread=623bps (OK, within 1000 threshold)
+#   - 26 rejects have >1000bps (>10%) spreads - indicates stale prices/bad data
+#   - This is MARKET_CONSTRAINED, not code bug: infrastructure works, liquidity doesn't
+#   - Pairs with >10% spreads: likely HOLD/*, ZK/USDT, thin stablecoin crossing
 suspect_spread_bps_hard: 1000  # Default 500 too aggressive for zkSync
 suspect_spread_bps: 400       # Diagnostic warning threshold
 

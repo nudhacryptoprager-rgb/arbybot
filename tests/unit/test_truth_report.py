@@ -882,5 +882,133 @@ class TestNoDataReasonArtifactContract(unittest.TestCase):
             self.assertEqual(no_data_reason, "NO_SPREAD_SIGNALS")
 
 
+class TestSuspectSpreadConfigPropagation(unittest.TestCase):
+    """v3.2.64: Test suspect_spread_bps_hard config propagation to artifacts."""
+
+    def test_build_truth_data_includes_suspect_spread_bps_hard(self):
+        """build_truth_data должен включать suspect_spread_bps_hard в config_params."""
+        from strategy.artifacts import build_truth_data
+        
+        config = {
+            "chain": "zksync",
+            "chain_id": 324,
+            "suspect_spread_bps_hard": 1000,  # Custom threshold
+            "paper_size_usd": 100,
+        }
+        stats = {
+            "quotes_total": 10,
+            "quotes_fetched": 8,
+            "dexes_active": 2,
+            "price_sanity_passed": 7,
+            "price_sanity_failed": 1,
+            "gates_passed": 7,
+        }
+        
+        truth_data = build_truth_data(
+            config=config,
+            stats=stats,
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=100,
+            spread_threshold_bps=3,
+        )
+        
+        # Перевіряємо, що suspect_spread_bps_hard є в config_params
+        self.assertIn("suspect_spread_bps_hard", truth_data["config_params"])
+        self.assertEqual(truth_data["config_params"]["suspect_spread_bps_hard"], 1000)
+
+    def test_build_truth_data_suspect_spread_bps_hard_none_when_not_set(self):
+        """suspect_spread_bps_hard має бути None, коли не встановлено в config."""
+        from strategy.artifacts import build_truth_data
+        
+        config = {
+            "chain": "arbitrum_one",
+            "chain_id": 42161,
+            # No suspect_spread_bps_hard - uses default
+        }
+        stats = {
+            "quotes_total": 10,
+            "quotes_fetched": 8,
+            "dexes_active": 2,
+            "price_sanity_passed": 7,
+            "price_sanity_failed": 1,
+            "gates_passed": 7,
+        }
+        
+        truth_data = build_truth_data(
+            config=config,
+            stats=stats,
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=100,
+            spread_threshold_bps=3,
+        )
+        
+        # suspect_spread_bps_hard має бути None (default з policy)
+        self.assertIsNone(truth_data["config_params"]["suspect_spread_bps_hard"])
+
+    def test_opportunity_engine_summary_includes_threshold(self):
+        """OpportunityEngine summary має включати suspect_spread_bps_hard_threshold."""
+        from engine.opportunity_engine import evaluate_quotes, GasConfig
+        
+        quotes = [
+            {
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "dex": "uniswap_v3",
+                "amount_in": 1000000000000000000,
+                "amount_out": 2500000000,
+                "fee_tier": 3000,
+                "source": "quoter_v2",
+            },
+            {
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "dex": "pancakeswap_v3",
+                "amount_in": 1000000000000000000,
+                "amount_out": 2510000000,
+                "fee_tier": 2500,
+                "source": "quoter_v2",
+            },
+        ]
+        
+        gas_config = GasConfig(eth_usd_price=3000.0)
+        
+        # Test with custom threshold
+        _, summary = evaluate_quotes(
+            quotes,
+            max_gross_spread_bps=1000,
+            gas_config=gas_config,
+        )
+        
+        self.assertIn("suspect_spread_bps_hard_threshold", summary)
+        self.assertEqual(summary["suspect_spread_bps_hard_threshold"], 1000)
+
+    def test_opportunity_engine_uses_default_threshold_when_none(self):
+        """OpportunityEngine повинен використовувати default з policy, коли threshold=None."""
+        from engine.opportunity_engine import evaluate_quotes, GasConfig
+        from m4.policy import Thresholds
+        
+        quotes = []  # Empty for simplicity
+        gas_config = GasConfig(eth_usd_price=3000.0)
+        
+        # Test with None - should use default
+        _, summary = evaluate_quotes(
+            quotes,
+            max_gross_spread_bps=None,
+            gas_config=gas_config,
+        )
+        
+        self.assertIn("suspect_spread_bps_hard_threshold", summary)
+        self.assertEqual(
+            summary["suspect_spread_bps_hard_threshold"],
+            float(Thresholds.SUSPECT_SPREAD_BPS_HARD)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

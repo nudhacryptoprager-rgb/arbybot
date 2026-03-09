@@ -15,24 +15,26 @@
 > **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
 > Any report generated before final reruns is non-canonical by process.
 
-### Blocker Classification (2026-03-09 19:45 CORRECTED)
+### Blocker Classification (2026-03-09 20:10 FRESH)
 ```
-code_blocker:            LOW (pytest 1506 passed, CI green, safety PASS)
+code_blocker:            LOW (pytest 1514 passed, 2 skipped; CI green, safety PASS 2 warnings)
 multicall_blocker:       LOW (success_rate=1.0 all chains)
 websocket_blocker:       LOW (ws_connected=true, ALL 6 chains)
 cost_reporting_blocker:  RESOLVED (cost_model_version v3)
 dex_compatibility_blocker:
-  zkSync:   MARKET_CONSTRAINED + POLICY_FIXED (thin liquidity + raised suspect_spread_bps_hard to 1000)
-  Scroll:   MARKET_CONSTRAINED (pools LIQUIDITY_ZERO/NOTIONAL_DRIFT)
-  Linea:    DEX_BLOCKED (only 1 DEX active, require_cross_dex fails)
-  Arbitrum: SIGNAL_PRODUCING (4 signals, $3.13 net)
-  Base:     SIGNAL_PRODUCING (historical)
-  Mantle:   SIGNAL_PRODUCING (historical)
+  Arbitrum: SIGNAL_PRODUCING (6 signals, $3.66 net, runDir 200317)
+  zkSync:   ALL_OPPORTUNITIES_REJECTED (7 signals gated, runDir 200403, SUSPECT_SPREAD_HARD)
+  Scroll:   NO_SPREAD_SIGNALS (0 signals, runDir 200624, LIQUIDITY_ZERO)
+  Linea:    NO_SIGNALS (0 signals, runDir 200642, only 1 DEX)
+  Base:     ALL_OPPORTUNITIES_REJECTED (4 signals gated, runDir 200710)
+  Mantle:   NO_SIGNALS ($0.03 net_usdc, runDir 200756)
 ```
 
-**v3.2.63 Fix (2026-03-09 19:45)**: `suspect_spread_bps_hard` config propagation
-- FIXED: `engine/opportunity_engine.py` now accepts `max_gross_spread_bps` parameter
-- FIXED: `strategy/jobs/run_scan_real.py` passes `config.get("suspect_spread_bps_hard")` to `evaluate_quotes()`
+**v3.2.64 Fix (2026-03-09 20:10)**: Policy threshold transparency + claim consistency lint
+- ADDED: `suspect_spread_bps_hard_threshold` in engine summary (opportunity_engine.py)
+- ADDED: `suspect_spread_bps_hard` in config_params (artifacts.py)
+- ADDED: DEV_REPORT claim consistency check in check_repo_safety.py
+- ADDED: 8 new tests (config propagation + claim consistency)
 - CONFIG: zkSync `suspect_spread_bps_hard: 1000` (was 800, default was 500 - too aggressive)
 - CONFIG: Scroll `suspect_spread_bps_hard: 1000` + market constraint documentation
 - RESULT: zkSync now gates 8 opportunities (was over-rejecting before), 26 legitimate SUSPECT_SPREAD_HARD rejects remain (>10% spreads = bad data/stale prices)
@@ -86,57 +88,68 @@ test_count: 1506 passed, 2 skipped
 | Field | Value |
 |-------|-------|
 | session_goal | Multi-chain quality stabilization (zkSync/Scroll/Linea signal production) |
-| goal_status | **IN_PROGRESS** (config fix applied, need fresh verification) |
+| goal_status | **IN_PROGRESS** (config fix verified, market constraints remain) |
 | close_allowed | false |
-| remaining_blockers | zkSync: MARKET_CONSTRAINED (thin liquidity, 26/34 opps >10% spread), Scroll: MARKET_CONSTRAINED, Linea: DEX_BLOCKED |
-| evidence_session_run_dirs | ci_m5_gate_20260309_194223 (zkSync fresh), ci_m5_gate_20260309_185400 (zkSync stale), ci_m5_gate_20260309_185703 (Scroll), ci_m5_gate_20260309_185726 (Linea) |
-| primary_blocker_of_session | suspect_spread_bps_hard config propagation |
-| blocker_status_before | ACTIVE (500 bps default too aggressive for L2s) |
-| blocker_status_after | **FIXED** (config now propagates to OpportunityEngine) |
+| remaining_blockers | zkSync: ALL_OPPORTUNITIES_REJECTED (7 gated), Base: ALL_OPPORTUNITIES_REJECTED (4 gated), Scroll/Mantle: NO_SPREAD_SIGNALS, Linea: FAIL (1 DEX) |
+| evidence_session_run_dirs | ci_m5_gate_20260309_200317 (Arbitrum), ci_m5_gate_20260309_200403 (zkSync), ci_m5_gate_20260309_200624 (Scroll), ci_m5_gate_20260309_200642 (Linea), ci_m5_gate_20260309_200710 (Base), ci_m5_gate_20260309_200756 (Mantle) |
+| primary_blocker_of_session | multi-chain signal production quality |
+| blocker_status_before | ACTIVE (zkSync/Base ALL_OPPORTUNITIES_REJECTED, others NO_SIGNALS) |
+| blocker_status_after | **IN_PROGRESS** (config fix applied, market constraints remain) |
 | docs_reread_confirmed | true |
 
-**Session Correction (2026-03-09 19:45)**:
-- ❌ Previous report incorrectly claimed `goal_status: REACHED` with `MARKET_BLOCKED`
-- ✅ Corrected: zkSync was BOTH market-constrained AND policy-blocked
-- ✅ Fixed `engine/opportunity_engine.py`: added `max_gross_spread_bps` parameter
-- ✅ Fixed `strategy/jobs/run_scan_real.py`: passes `suspect_spread_bps_hard` from config
-- ✅ Updated `AGENTS.md`: Added Session Closure Contract with hard rules
-- ⏳ Remaining: zkSync thin liquidity is genuine market constraint (26/34 opps have >10% spread)
+**Session Progress (2026-03-09 20:10)** - Fresh same-session evidence:
+
+| Chain | RunDir | M5 Gate | signals | net_usdc | Status |
+|-------|--------|---------|---------|----------|--------|
+| **Arbitrum** | 200317 | PASS | **6** | **$3.66** | ✅ SIGNAL_PRODUCING |
+| zkSync | 200403 | PASS | 7 | $0 | ⚠️ ALL_OPPORTUNITIES_REJECTED |
+| Scroll | 200624 | PASS | 0 | $0 | ❌ NO_SPREAD_SIGNALS |
+| Linea | 200642 | FAIL | 0 | $0 | ❌ NO_SIGNALS (1 DEX) |
+| Base | 200710 | PASS | 4 | $0 | ⚠️ ALL_OPPORTUNITIES_REJECTED |
+| Mantle | 200756 | PASS | 0 | $0.03 | ⚠️ NO_SIGNALS |
+
+**Code changes (v3.2.64)**:
+- ✅ `engine/opportunity_engine.py`: Added `suspect_spread_bps_hard_threshold` to summary artifact
+- ✅ `strategy/artifacts.py`: Added `suspect_spread_bps_hard` to config_params
+- ✅ Tests: 8 new tests for config propagation and claim consistency
+- ✅ `scripts/check_repo_safety.py`: Added DEV_REPORT claim consistency check
+- ✅ `AGENTS.md`: Added Session Closure Contract
 
 ## 1) Commands Executed (This Session)
 
 ```
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: 1506 passed, 2 skipped
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED (elapsed 20.8s)
+py -3.11 scripts/check_repo_safety.py: PASS (2 warnings - run_dir/timestamp alignment)
+py -3.11 -m pytest tests/unit -q: 1514 passed, 2 skipped
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED (elapsed 21.8s)
 
-# Config tuning applied:
-# zkSync: quoter_max_gas_estimate 1M→30M, quoter_max_ticks_crossed: 50
-# Scroll: quoter_max_gas_estimate 800k→3M, quoter_max_ticks_crossed: 40
-# Linea:  quoter_max_gas_estimate 800k→3M, quoter_max_ticks_crossed: 30
+# v3.2.64 Code fixes:
+# engine/opportunity_engine.py: Added suspect_spread_bps_hard_threshold to summary
+# strategy/artifacts.py: Added suspect_spread_bps_hard to config_params
+# scripts/check_repo_safety.py: Added DEV_REPORT claim consistency check
+# tests/unit/test_truth_report.py: 4 new tests for config propagation
+# tests/unit/test_check_repo_safety.py: 4 new tests for claim consistency
 
-# cost_model_version aligned:
-# strategy/artifacts.py: v2 → v3
-# tests/unit/test_execution_pnl_golden.py: 2 assertions fixed
-# tests/unit/test_truth_report.py: 1 assertion fixed
-
-# Online verification runs (fresh evidence):
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 3: PASS, 4 signals, $3.13 (185759)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: M5.0 PASS, 0 signals (185400)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: M5.0 PASS, 0 signals (185703)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: M5.0 PASS, 1 signal (185726)
+# Fresh same-session online evidence (2026-03-09 20:03-20:08):
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 3: PASS, 6 signals, $3.66 (200317)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: PASS, 7 gated, $0 (200403)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: PASS, 0 signals (200624)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: FAIL, 0 signals (200642)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 3: PASS, 4 gated, $0 (200710)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 3: PASS, 0 signals, $0.03 (200756)
 ```
 
 ## 2) Evidence Artifacts
 
-**Fresh verification (2026-03-09 18:57-18:59, 4 chains x 3 cycles)**:
+**Fresh same-session verification (2026-03-09 20:03-20:08, 6 chains x 3 cycles)**:
 
-| RunDir | Chain | M5.0 Infra | signals | net_usdc | Root Cause |
-|--------|-------|------------|---------|----------|------------|
-| **185759** | **Arbitrum** | PASS | **4** | **$3.13** | Baseline (working) |
-| 185400 | zkSync | PASS | 0 | $0 | PRICE_SANITY, LIQUIDITY_ZERO |
-| 185703 | Scroll | PASS | 0 | $0 | LIQUIDITY_ZERO (all pools) |
-| 185726 | Linea | PASS | 1 | $0 | Only 1 DEX (no cross-DEX) |
+| RunDir | Chain | M5.0 Gate | signals | net_usdc | Status |
+|--------|-------|-----------|---------|----------|--------|
+| **200317** | **Arbitrum** | PASS | **6** | **$3.66** | ✅ SIGNAL_PRODUCING |
+| 200403 | zkSync | PASS | 7 gated | $0 | ⚠️ ALL_OPPORTUNITIES_REJECTED |
+| 200624 | Scroll | PASS | 0 | $0 | ❌ NO_SPREAD_SIGNALS |
+| 200642 | Linea | FAIL | 0 | $0 | ❌ NO_SIGNALS (1 DEX) |
+| 200710 | Base | PASS | 4 gated | $0 | ⚠️ ALL_OPPORTUNITIES_REJECTED |
+| 200756 | Mantle | PASS | 0 | $0.03 | ⚠️ NO_SIGNALS |
 
 **Key distinction**: `M5.0 PASS` = infrastructure/schema/coverage OK. `signals_count` shows actual signal production.
 
@@ -147,23 +160,23 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.
 - **Linea**: DEX_BLOCKED (only PancakeSwap active, no second DEX)
 
 **Code changes (this session)**:
-- `config/coverage_intent_zksync.yaml`: `quoter_max_gas_estimate: 30000000`, `quoter_max_ticks_crossed: 50`
-- `config/coverage_intent_scroll.yaml`: `quoter_max_gas_estimate: 3000000`, `quoter_max_ticks_crossed: 40`
-- `config/coverage_intent_linea.yaml`: `quoter_max_gas_estimate: 3000000`, `quoter_max_ticks_crossed: 30`
-- `strategy/artifacts.py`: `cost_model_version` v2 → v3
-- `tests/unit/test_execution_pnl_golden.py`: 2 assertions updated for v3
-- `tests/unit/test_truth_report.py`: 1 assertion updated for v3
-- `docs/status/Status_M5_0.md`: Updated with investigation findings
+- `engine/opportunity_engine.py`: Added `suspect_spread_bps_hard_threshold` to summary dict
+- `strategy/artifacts.py`: Added `suspect_spread_bps_hard` to config_params
+- `scripts/check_repo_safety.py`: Added DEV_REPORT claim consistency check [14]
+- `tests/unit/test_truth_report.py`: 4 new tests for config propagation
+- `tests/unit/test_check_repo_safety.py`: 4 new tests for claim consistency
+- `config/coverage_intent_zksync.yaml`: Added THIN LIQUIDITY STATUS documentation
 
 **Rolling canonical** (unchanged):
 - `data/runs/_rolling/run_summary_latest.json` (2026-03-05T17:49:43Z, arbitrum_one)
 
 ## 3) Next Steps
 
-1. **Session complete**: multi-chain quality investigation done; zkSync/Scroll classified as MARKET_BLOCKED
-2. **Path forward**: Accept 3-chain coverage (Arbitrum, Base, Mantle) until L2 DEX ecosystems mature
-3. **Linea**: Consider adding second DEX (SushiSwap V3 or PancakeSwap compliant) for cross-DEX capability
-4. **zkSync/Scroll**: Monitor monthly for liquidity improvements; re-test when TVL increases
+1. **Session IN_PROGRESS**: Fresh evidence gathered (6 chains, 2026-03-09 20:03-20:08)
+2. **v3.2.64 complete**: Policy threshold transparency + claim consistency lint added
+3. **Arbitrum only SIGNAL_PRODUCING**: 6 signals, $3.66 net_usdc (runDir 200317)
+4. **Other chains blocked**: zkSync/Base gated (SUSPECT_SPREAD_HARD); Scroll (LIQUIDITY_ZERO); Linea (1 DEX); Mantle (NO_SIGNALS)
+5. **Next action**: Update rolling artifacts with fresh Arbitrum run, or expand to new chains with better liquidity
 
 ---
-*Generated: 2026-03-09T19:00:00Z*
+*Generated: 2026-03-09T20:10:00Z*

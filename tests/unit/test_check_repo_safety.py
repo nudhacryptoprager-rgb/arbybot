@@ -836,5 +836,90 @@ class TestSessionCompletionGate(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestDevReportClaimConsistency(unittest.TestCase):
+    """v3.2.64: Tests for check_dev_report_claim_consistency function."""
+
+    def test_session_complete_with_in_progress_fails(self):
+        """'Session complete' text with goal_status=IN_PROGRESS should fail."""
+        from scripts.check_repo_safety import check_dev_report_claim_consistency
+        
+        mock_report = """
+        # DEV REPORT
+        | goal_status | **IN_PROGRESS** |
+        | close_allowed | true |
+        
+        Session complete - all fixes applied.
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_dev_report_claim_consistency()
+        
+        # Should have at least 1 issue about Session complete with IN_PROGRESS
+        self.assertGreaterEqual(len(issues), 1)
+        session_complete_issue = [i for i in issues if "Session complete" in i and "IN_PROGRESS" in i]
+        self.assertEqual(len(session_complete_issue), 1)
+
+    def test_close_allowed_false_with_session_complete_fails(self):
+        """close_allowed=false with 'Session complete' text should fail."""
+        from scripts.check_repo_safety import check_dev_report_claim_consistency
+        
+        mock_report = """
+        # DEV REPORT
+        | goal_status | **REACHED** |
+        | close_allowed | false |
+        
+        Session closure justification: All work done.
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_dev_report_claim_consistency()
+        
+        self.assertEqual(len(issues), 1)
+        self.assertIn("DEV_REPORT_CONFLICT", issues[0])
+        self.assertIn("close_allowed=false", issues[0])
+
+    def test_consistent_in_progress_session_passes(self):
+        """IN_PROGRESS with no completion language should pass."""
+        from scripts.check_repo_safety import check_dev_report_claim_consistency
+        
+        mock_report = """
+        # DEV REPORT
+        | goal_status | **IN_PROGRESS** |
+        | close_allowed | false |
+        
+        Work continues on multi-chain stabilization.
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_dev_report_claim_consistency()
+        
+        self.assertEqual(len(issues), 0)
+
+    def test_consistent_reached_session_passes(self):
+        """REACHED with completion language and close_allowed=true should pass."""
+        from scripts.check_repo_safety import check_dev_report_claim_consistency
+        
+        mock_report = """
+        # DEV REPORT
+        | goal_status | **REACHED** |
+        | close_allowed | true |
+        
+        Session complete - all tasks done.
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_dev_report_claim_consistency()
+        
+        self.assertEqual(len(issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -321,6 +321,8 @@ def build_truth_data(
             "config_path": canonicalize_config_path(config.get("_config_path")),
             # v3.2.10: run_kind for smoke run isolation (NORM-only rolling policy)
             "run_kind": config.get("run_kind", "NORMAL"),
+            # v3.2.64: Policy threshold transparency for runtime evidence
+            "suspect_spread_bps_hard": config.get("suspect_spread_bps_hard"),
         },
         "quotes_total": stats["quotes_total"],
         "quotes_fetched": stats["quotes_fetched"],

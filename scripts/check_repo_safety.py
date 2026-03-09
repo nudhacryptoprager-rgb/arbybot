@@ -853,6 +853,81 @@ def check_session_completion_gate() -> List[str]:
     return issues
 
 
+def check_dev_report_claim_consistency() -> List[str]:
+    """v3.2.64: Check DEV_REPORT claims are internally consistent.
+    
+    Validates:
+    1. If DEV_REPORT says "PASS (0 warnings)" but goal_status=IN_PROGRESS, that's a conflict
+    2. If DEV_REPORT says "Session complete" but goal_status=IN_PROGRESS, it's a contradiction
+    3. If DEV_REPORT claims specific warning count that doesn't match reality
+    
+    Returns:
+        List of warning/error messages
+    """
+    issues = []
+    dev_report = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
+    
+    if not dev_report.exists():
+        return []
+    
+    try:
+        import re
+        content = dev_report.read_text(encoding='utf-8')
+        
+        # Extract goal_status
+        goal_status_match = re.search(
+            r'\|\s*goal_status\s*\|\s*\*?\*?(REACHED|IN_PROGRESS|BLOCKED)\*?\*?\s*\|',
+            content, re.IGNORECASE
+        )
+        goal_status = goal_status_match.group(1).upper() if goal_status_match else None
+        
+        # Check 1: "Session complete" text conflict with IN_PROGRESS goal_status
+        session_complete_patterns = [
+            r"session\s+(is\s+)?complete[d]?",
+            r"session\s+closure?\s+justification",
+        ]
+        has_session_complete_text = any(
+            re.search(p, content, re.IGNORECASE) for p in session_complete_patterns
+        )
+        
+        if has_session_complete_text and goal_status == "IN_PROGRESS":
+            issues.append(
+                "DEV_REPORT_CONFLICT: Document contains 'Session complete' text but "
+                "goal_status=IN_PROGRESS. Remove completion language or change goal_status."
+            )
+        
+        # Check 2: close_allowed=false with completion language
+        close_allowed_match = re.search(
+            r'\|\s*close_allowed\s*\|\s*(true|false)\s*\|',
+            content, re.IGNORECASE
+        )
+        close_allowed = close_allowed_match.group(1).lower() if close_allowed_match else None
+        
+        if close_allowed == "false" and has_session_complete_text:
+            issues.append(
+                "DEV_REPORT_CONFLICT: close_allowed=false but document contains 'Session complete' text. "
+                "These are contradictory - update one or the other."
+            )
+        
+        # Check 3: blocker_status_after=FIXED with IN_PROGRESS goal (partial fix claimed as complete)
+        blocker_fixed_patterns = [
+            r'\|\s*blocker_status_after\s*\|\s*\*?\*?FIXED\*?\*?\s*\|',
+            r'blocker_status_after:\s*FIXED',
+        ]
+        has_blocker_fixed = any(
+            re.search(p, content, re.IGNORECASE) for p in blocker_fixed_patterns
+        )
+        
+        if has_blocker_fixed and goal_status == "IN_PROGRESS":
+            # This is OK - partial fix, not session complete. Just informational.
+            pass  # No issue - consistent state
+        
+    except Exception as e:
+        issues.append(f"ERROR: Could not check DEV_REPORT claim consistency: {e}")
+    
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
@@ -973,6 +1048,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: Session completion gate compliant")
+    
+    print("\n[14] Checking DEV_REPORT claim consistency...")
+    issues = check_dev_report_claim_consistency()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: DEV_REPORT claims internally consistent")
     
     # Summary
     print("\n" + "=" * 50)

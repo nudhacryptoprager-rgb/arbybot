@@ -592,6 +592,8 @@ def evaluate_quotes(
         "rejected_reasons": _count_reject_reasons(opportunities),
         "max_gated_spread_bps": max_gated_spread,  # v2.0.9: for quality monitoring
         "quality_warnings": quality_warnings,  # v2.0.9
+        # v3.2.64: Policy threshold transparency for runtime evidence
+        "suspect_spread_bps_hard_threshold": engine.max_gross_spread_bps,
     }
     
     # v2.8.0: Sort by net_profit_usd descending so roundtrip evaluates best candidates first
