@@ -45,6 +45,10 @@ dexes:
 discovery_runtime_max_pairs: 20
 require_cross_dex: true  # 2 DEXes on zkSync
 
+# Quoter V2: Required for M4.2 truth mode
+# Both uniswap_v3 and pancakeswap_v3 on zkSync support quoter_v2
+use_quoter_v2: true
+
 # Multicall batching (default ON)
 use_multicall: true
 

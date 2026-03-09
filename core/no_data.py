@@ -5,6 +5,7 @@ This module provides deterministic classification of WHY a scan produced no data
 Centralizes the logic to avoid duplication between run_scan_real.py and tests.
 
 v3.2.7: Initial implementation for artifact self-sufficiency.
+v3.2.54: Added ALL_OPPORTUNITIES_REJECTED for opportunity-level rejection tracking.
 """
 
 from typing import Optional
@@ -14,12 +15,15 @@ from typing import Optional
 NO_QUOTES = "NO_QUOTES"
 ALL_QUOTES_REJECTED = "ALL_QUOTES_REJECTED"
 NO_SPREAD_SIGNALS = "NO_SPREAD_SIGNALS"
+ALL_OPPORTUNITIES_REJECTED = "ALL_OPPORTUNITIES_REJECTED"
 
 
 def compute_no_data_reason(
     quotes_total: int,
     quotes_fetched: int,
     spread_signals_count: int,
+    total_opportunities: int = 0,
+    profitable_accepted: int = 0,
 ) -> Optional[str]:
     """
     Compute the no_data_reason field for artifacts.
@@ -31,12 +35,15 @@ def compute_no_data_reason(
         quotes_total: Total quotes attempted (before rejection)
         quotes_fetched: Valid quotes after rejection
         spread_signals_count: Number of spread signals passing threshold
+        total_opportunities: Total opportunities evaluated (from opportunity_engine)
+        profitable_accepted: Profitable opportunities not rejected (signal flow)
     
     Returns:
         - "NO_QUOTES": No quotes were fetched at all
         - "ALL_QUOTES_REJECTED": Quotes fetched but all rejected
-        - "NO_SPREAD_SIGNALS": Quotes valid but no spreads passed threshold
-        - None: Data is present (spread_signals_count > 0)
+        - "ALL_OPPORTUNITIES_REJECTED": Quotes valid, opportunities found, but all rejected
+        - "NO_SPREAD_SIGNALS": Quotes valid but no opportunities found at all
+        - None: Data is present (spread_signals_count > 0 or profitable_accepted > 0)
     
     Examples:
         >>> compute_no_data_reason(0, 0, 0)
@@ -45,6 +52,8 @@ def compute_no_data_reason(
         'ALL_QUOTES_REJECTED'
         >>> compute_no_data_reason(10, 8, 0)
         'NO_SPREAD_SIGNALS'
+        >>> compute_no_data_reason(10, 8, 0, total_opportunities=5, profitable_accepted=0)
+        'ALL_OPPORTUNITIES_REJECTED'
         >>> compute_no_data_reason(10, 8, 3)
         None
     """
@@ -52,7 +61,11 @@ def compute_no_data_reason(
         return NO_QUOTES
     if quotes_fetched == 0 and quotes_total > 0:
         return ALL_QUOTES_REJECTED
+    # v3.2.54: Check for opportunity-level rejection BEFORE "no spreads"
+    # If opportunities were found but all rejected, that's different from "no spreads at all"
     if spread_signals_count == 0:
+        if total_opportunities > 0 and profitable_accepted == 0:
+            return ALL_OPPORTUNITIES_REJECTED
         return NO_SPREAD_SIGNALS
     return None
 

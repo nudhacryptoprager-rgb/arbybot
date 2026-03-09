@@ -63,6 +63,28 @@ class TestNoDataReasonLogic(unittest.TestCase):
             spread_signals_count=1,
         )
         self.assertIsNone(reason)
+    
+    def test_all_opportunities_rejected_scenario(self):
+        """When opportunities exist but all were rejected, reason is ALL_OPPORTUNITIES_REJECTED."""
+        reason = compute_no_data_reason(
+            quotes_total=49,
+            quotes_fetched=49,
+            spread_signals_count=0,
+            total_opportunities=66,  # zkSync-like scenario
+            profitable_accepted=0,
+        )
+        self.assertEqual(reason, "ALL_OPPORTUNITIES_REJECTED")
+    
+    def test_no_spread_signals_with_no_opportunities(self):
+        """When no opportunities found at all, reason is NO_SPREAD_SIGNALS (not ALL_OPPORTUNITIES_REJECTED)."""
+        reason = compute_no_data_reason(
+            quotes_total=10,
+            quotes_fetched=10,
+            spread_signals_count=0,
+            total_opportunities=0,
+            profitable_accepted=0,
+        )
+        self.assertEqual(reason, "NO_SPREAD_SIGNALS")
 
 
 class TestNoDataReasonInArtifacts(unittest.TestCase):

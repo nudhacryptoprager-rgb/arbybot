@@ -520,6 +520,22 @@ def run_scan(
         logger.debug("OpportunityEngine skipped: %s", e)
         stats["opportunity_engine"] = {"enabled": False, "error": str(e)}
     
+    # v3.2.54: Refine no_data_reason with opportunity-level info
+    # This catches cases where quotes exist, opportunities were found, but all rejected
+    if stats.get("no_data_reason") == "NO_SPREAD_SIGNALS":
+        opp_engine = stats.get("opportunity_engine", {})
+        if opp_engine.get("enabled"):
+            opp_summary = opp_engine.get("summary", {})
+            total_opps = opp_summary.get("total_opportunities", 0)
+            profitable_count = opp_summary.get("profitable_count", 0)
+            if total_opps > 0 and profitable_count == 0:
+                stats["no_data_reason"] = "ALL_OPPORTUNITIES_REJECTED"
+                logger.info("no_data_reason refined: ALL_OPPORTUNITIES_REJECTED (total_opps=%d)", total_opps)
+            elif total_opps > 0:
+                # Had profitable opportunities - check roundtrip summary later
+                # This is handled by roundtrip evaluation below
+                pass
+    
     # v2.1.0: Round-trip evaluation for CANONICAL profit (after one-leg diagnostic)
     try:
         from engine.roundtrip import simulate_roundtrip, evaluate_roundtrip_candidates

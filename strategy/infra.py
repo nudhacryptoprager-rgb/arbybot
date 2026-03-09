@@ -165,6 +165,7 @@ def resolve_rpc_endpoints(config: Dict[str, Any]) -> Tuple[Optional[str], Option
     
     # v3.2.32: Config rpc_endpoints take HIGHEST priority (for multi-chain bring-up)
     # v3.2.33: OVERWRITE env vars to prevent env pollution from prior runs
+    # v3.2.54: Continue to resolve WS even when HTTP comes from config (don't return early)
     config_rpc_endpoints = config.get("rpc_endpoints") or []
     if config_rpc_endpoints:
         # Use first config endpoint as HTTP
@@ -176,9 +177,12 @@ def resolve_rpc_endpoints(config: Dict[str, Any]) -> Tuple[Optional[str], Option
             os.environ["ARBY_RPC_HTTP_PRIMARY"] = resolved_http
             os.environ["ARBY_RPC_PROVIDER"] = "config"
             os.environ["ARBY_RPC_HTTP_HOST"] = urlparse(resolved_http).netloc
-        return resolved_http, resolved_ws, provider_http, provider_ws
+        # v3.2.54: Clear stale WS env vars before resolving chain-specific WS
+        for key in ["ARBY_RPC_WS_PRIMARY", "ARBY_RPC_WS_PROVIDER", "ARBY_RPC_WS_HOST"]:
+            os.environ.pop(key, None)
+        # v3.2.54: Fall through to WS resolution below (don't return early)
     
-    if resolve_rpc_http:
+    if resolve_rpc_http and not resolved_http:
         try:
             url, provider_http, diag = resolve_rpc_http(chain_id=chain_id, network=network, env=os.environ)
             resolved_http = url
@@ -196,9 +200,10 @@ def resolve_rpc_endpoints(config: Dict[str, Any]) -> Tuple[Optional[str], Option
             resolved_ws = urlw
             if resolved_ws:
                 from urllib.parse import urlparse
-                os.environ.setdefault("ARBY_RPC_WS_PRIMARY", resolved_ws)
-                os.environ.setdefault("ARBY_RPC_WS_PROVIDER", provider_ws)
-                os.environ.setdefault("ARBY_RPC_WS_HOST", urlparse(resolved_ws).netloc)
+                # v3.2.54: OVERWRITE (not setdefault) to prevent WS pollution from prior runs
+                os.environ["ARBY_RPC_WS_PRIMARY"] = resolved_ws
+                os.environ["ARBY_RPC_WS_PROVIDER"] = provider_ws
+                os.environ["ARBY_RPC_WS_HOST"] = urlparse(resolved_ws).netloc
         except Exception:
             resolved_ws = None
     

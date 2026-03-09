@@ -42,7 +42,9 @@ dexes:
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-require_cross_dex: true  # 2 DEXes on Linea
+# v3.2.54: Same-DEX fallback because lynex_v3 (algebra/quoter) and pancakeswap_v3 (uniswap/quoter_v2)
+# are source-incompatible (MIXED_SOURCE). Allows same-DEX fee-tier arbitrage.
+require_cross_dex: false
 
 # Quoter for executable quotes (Algebra DEXes use quoter, not quoter_v2)
 # Note: lynex_v3 is Algebra adapter, uses quoter field from dexes.yaml

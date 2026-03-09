@@ -43,8 +43,9 @@ dexes:
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-# v3.2.37: 2nd DEX (SushiSwap V3) added - cross-DEX now enabled
-require_cross_dex: true
+# v3.2.54: Same-DEX fallback because nuri_v3 (algebra) and sushiswap_v3 (uniswap_v3) are
+# source-incompatible (MIXED_SOURCE). Allows same-DEX fee-tier arbitrage on sushiswap_v3.
+require_cross_dex: false
 
 # Multicall batching (default ON)
 use_multicall: true

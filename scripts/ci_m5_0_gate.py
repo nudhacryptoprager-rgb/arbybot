@@ -1017,9 +1017,22 @@ def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool,
         resolve_rpc_http = resolve_rpc_ws = None
 
     env_for_run = os.environ.copy()
-    # Determine canonical network/chain: prefer ENV NETWORK, otherwise leave to scanner/config
-    network = os.environ.get("NETWORK") or os.environ.get("CHAIN")
-    chain_id = os.environ.get("CHAIN_ID")
+    # Determine canonical network/chain: prefer config chain_id, then ENV
+    # v3.2.54: Read chain_id from config file for correct WS resolution
+    config_chain_id = None
+    config_network = None
+    if config:
+        try:
+            import yaml
+            with open(config, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            config_chain_id = cfg.get("chain_id")
+            config_network = cfg.get("chain") or cfg.get("network")
+        except Exception:
+            pass
+    
+    network = config_network or os.environ.get("NETWORK") or os.environ.get("CHAIN")
+    chain_id = config_chain_id or os.environ.get("CHAIN_ID")
     try:
         chain_id_int = int(chain_id) if chain_id else None
     except Exception:
@@ -1046,38 +1059,35 @@ def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool,
         ws_diag = diagw or {}
 
     # Inject resolved endpoints into scanner env (do not log keys)
+    # v3.2.54: Use OVERWRITE (not setdefault) to prevent env pollution from prior chain runs
     if primary_http:
-        env_for_run.setdefault("ARBY_RPC_HTTP_PRIMARY", primary_http)
-        env_for_run.setdefault("ARBY_RPC_PROVIDER", provider_http)
+        env_for_run["ARBY_RPC_HTTP_PRIMARY"] = primary_http
+        env_for_run["ARBY_RPC_PROVIDER"] = provider_http
         # expose host only (no keys)
         try:
             from urllib.parse import urlparse
-            env_for_run.setdefault("ARBY_RPC_HTTP_HOST", urlparse(primary_http).netloc)
+            env_for_run["ARBY_RPC_HTTP_HOST"] = urlparse(primary_http).netloc
         except Exception:
             pass
     if primary_ws:
-        env_for_run.setdefault("ARBY_RPC_WS_PRIMARY", primary_ws)
-        env_for_run.setdefault("ARBY_RPC_WS_PROVIDER", provider_ws)
+        env_for_run["ARBY_RPC_WS_PRIMARY"] = primary_ws
+        env_for_run["ARBY_RPC_WS_PROVIDER"] = provider_ws
         try:
             from urllib.parse import urlparse
-            env_for_run.setdefault("ARBY_RPC_WS_HOST", urlparse(primary_ws).netloc)
+            env_for_run["ARBY_RPC_WS_HOST"] = urlparse(primary_ws).netloc
         except Exception:
             pass
+    else:
+        # v3.2.54: Clear stale WS env vars if no WS resolved for this chain
+        for key in ["ARBY_RPC_WS_PRIMARY", "ARBY_RPC_WS_PROVIDER", "ARBY_RPC_WS_HOST"]:
+            env_for_run.pop(key, None)
 
     # Enforce Require-Alchemy behavior if requested
     require_alchemy = os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
     # Team policy: Base is allowed to use public RPC endpoints (non-Alchemy).
     alchemy_optional_chain_ids = {8453}
-    config_chain_id = None
-    try:
-        if config:
-            import yaml
-            with open(config, "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f) or {}
-            config_chain_id = cfg.get("chain_id")
-    except Exception:
-        config_chain_id = None
-    if require_alchemy and provider_http != "alchemy" and int(config_chain_id or 0) not in alchemy_optional_chain_ids:
+    # v3.2.54: Use chain_id_int from config (already read above)
+    if require_alchemy and provider_http != "alchemy" and (chain_id_int or 0) not in alchemy_optional_chain_ids:
         print(
             f"FAIL: Alchemy expected but resolved provider={provider_http} (host={env_for_run.get('ARBY_RPC_HTTP_HOST')})"
         )
