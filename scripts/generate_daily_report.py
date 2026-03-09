@@ -501,7 +501,7 @@ def aggregate_run(
     }
 
     report = {
-        "schema_version": "m5:daily:v1.2",  # v3.2.57: Added theoretical_net_profit
+        "schema_version": "m5:daily:v1.3",  # v3.2.58: Added session completion fields
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "timezone": "UTC",
         "run_id": str(run_dir.name),
@@ -549,6 +549,15 @@ def aggregate_run(
         "coverage": coverage,  # Scan coverage (explains why signals may be 0)
         "top_quotes": top_quotes,
         "health": health,
+        # v3.2.58: Session completion fields (MANDATORY per DOCS_POLICY.md section 9)
+        # These are placeholders - actual values should be set by the caller or CI gate
+        "session": {
+            "session_goal": None,  # Set by caller: short description of session goal
+            "goal_status": "IN_PROGRESS",  # REACHED | BLOCKED | IN_PROGRESS
+            "close_allowed": False,  # True only if goal_status != IN_PROGRESS
+            "remaining_blockers": [],  # List of blockers if goal_status != REACHED
+            "evidence_session_run_dirs": [str(run_dir.name)],  # RunDirs from this session
+        },
     }
     return report
 

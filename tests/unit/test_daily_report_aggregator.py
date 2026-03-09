@@ -51,8 +51,12 @@ def make_minimal_run(tmp_path: Path) -> Path:
 def test_aggregate_minimal(tmp_path):
     run = make_minimal_run(tmp_path)
     rpt = aggregate_run(run)
-    assert rpt["schema_version"] == "m5:daily:v1.2"  # v1.6.0: bumped for theoretical_net_profit
+    assert rpt["schema_version"] == "m5:daily:v1.3"  # v1.7.0: bumped for session completion fields
     assert rpt["runs_included"] == 1
+    # v3.2.58: Session completion fields are now mandatory
+    assert "session" in rpt
+    assert rpt["session"]["goal_status"] == "IN_PROGRESS"
+    assert rpt["session"]["close_allowed"] is False
     # M5 reports use paper_net_pnl_usdc calculated from spread_signals
     # gross = 5 + 7.5 = 12.5, gas_only gas = 0.10 → net = 12.40
     assert rpt.get("paper_net_pnl_usdc") == 12.40  # gas_only: 12.5 - 0.10

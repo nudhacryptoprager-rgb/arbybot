@@ -41,6 +41,38 @@ python -c "from monitoring import calculate_confidence; print('import ok')"
 3. Reviewer provides max **10 critical issues + 10 fix steps**
 4. Repeat until green and contracts stable
 
+## Session Lifecycle
+
+A **session** is a working period with a declared goal. Sessions have explicit states:
+
+| State | Meaning | Allowed Actions |
+|-------|---------|-----------------|
+| `OPEN` | Session in progress, goal not yet reached | All work, no completion claims |
+| `BLOCKED` | Explicit blocker prevents goal completion | Document blocker, pause work |
+| `CLOSED` | Goal reached with fresh same-session evidence | Update docs with REACHED status |
+
+### Session Completion Rules
+
+1. **Cannot close on green CI alone**: Offline gates (pytest, ci_full_pipeline) prove code correctness but NOT session goal achievement
+2. **Requires fresh online evidence**: Session goal claims require online runDirs from current session, not previous sessions
+3. **REACHED requires verification**: All fix claims must map to actual artifact changes in fresh runDirs
+4. **BLOCKED requires documentation**: If blocked, document the blocker and unblock criteria explicitly
+
+### Session State Transitions
+
+```
+OPEN → CLOSED  : goal_status=REACHED (fresh evidence validates all claims)
+OPEN → BLOCKED : explicit blocker recorded (unblock criteria documented)
+BLOCKED → OPEN : blocker resolved (new evidence shows resolution)
+```
+
+### Forbidden Session Patterns
+
+- Declaring "session complete" without `goal_status=REACHED`
+- Using pre-session runDirs as "fresh evidence"
+- Closing session with fixes that lack online verification
+- Completion language ("All steps done") without REACHED status
+
 ## Artifact Handling
 
 - If an artifact is required for reproducibility, move/copy it into `docs/artifacts/<scope>/<date>/...` and commit

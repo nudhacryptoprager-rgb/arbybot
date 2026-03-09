@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.8.0"
+__version__ = "1.9.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -750,6 +750,60 @@ def check_intent_protection(allow_edit: bool = False) -> List[str]:
     return issues
 
 
+def check_session_completion_gate() -> List[str]:
+    """Check that DEV_REPORT_LATEST.md doesn't claim completion without goal_status=REACHED (v1.9.0).
+    
+    Session completion requires explicit goal_status field when completion language is detected.
+    Per DOCS_POLICY.md section 9: Session Completion Gate.
+    
+    Returns:
+        List of error messages if completion violations detected
+    """
+    issues = []
+    dev_report = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
+    
+    if not dev_report.exists():
+        return []  # No report = skip
+    
+    try:
+        content = dev_report.read_text(encoding='utf-8')
+        
+        # Detect completion language (case-insensitive)
+        completion_patterns = [
+            r"all\s+\d+\s+steps?\s+completed?",
+            r"session\s+(is\s+)?complete[d]?",
+            r"all\s+tasks?\s+(are\s+)?done",
+            r"goal\s+(is\s+)?reached",
+            r"fully\s+implemented",
+        ]
+        
+        import re
+        has_completion_language = False
+        for pattern in completion_patterns:
+            if re.search(pattern, content, re.IGNORECASE):
+                has_completion_language = True
+                break
+        
+        if has_completion_language:
+            # Check for goal_status field
+            if "goal_status:" not in content:
+                issues.append(
+                    "SESSION_COMPLETION: DEV_REPORT contains completion language but no 'goal_status:' field. "
+                    "Per DOCS_POLICY.md section 9, add 'goal_status: REACHED' to confirm completion."
+                )
+            elif "goal_status: REACHED" not in content and "goal_status:REACHED" not in content:
+                # Has goal_status but not REACHED
+                if re.search(r"goal_status:\s*(IN_PROGRESS|BLOCKED)", content, re.IGNORECASE):
+                    issues.append(
+                        "SESSION_COMPLETION: DEV_REPORT contains completion language but goal_status is not REACHED. "
+                        "Remove completion language or set goal_status: REACHED with valid evidence."
+                    )
+    except Exception as e:
+        issues.append(f"ERROR: Could not check session completion gate: {e}")
+    
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
@@ -862,6 +916,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: config/intent.txt not modified without explicit permission")
+    
+    print("\n[13] Checking session completion gate...")
+    issues = check_session_completion_gate()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: Session completion gate compliant")
     
     # Summary
     print("\n" + "=" * 50)

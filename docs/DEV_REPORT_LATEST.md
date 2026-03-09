@@ -62,27 +62,46 @@ suspect_liquidity_blocker: RESOLVED (per-chain quoter_max_gas_estimate v3.2.58)
 7. **WS host validation**: Added validate_chain_rpc_consistency() in ci_m5_0_gate.py
 
 ## 0) Meta
-timestamp_utc: 2026-03-09T15:00:00Z  
+timestamp_utc: 2026-03-09T15:20:00Z  
 rolling_provenance: 2026-03-05T17:49:43Z (arbitrum_one, ci_m5_gate_20260305_184929)  
 mode: ONLINE (L2 chains verification, zkSync/Linea/Scroll x 3 cycles)
+
+## 0.2) Session Completion Gate (MANDATORY)
+
+| Field | Value |
+|-------|-------|
+| session_goal | Session completion gate infrastructure + fresh online evidence for v3.2.58 |
+| goal_status | **REACHED** |
+| close_allowed | true |
+| remaining_blockers | — |
+| evidence_session_run_dirs | ci_m5_gate_20260309_151810 (zkSync), ci_m5_gate_20260309_151929 (Scroll), ci_m5_gate_20260309_151953 (Linea) |
+
+**Session Closure Justification**:
+- ✅ All 3 L2 chains M5.0 PASS with fresh online evidence
+- ✅ Linea M4 profit gate also PASS
+- ✅ Session Completion Gate docs (DOCS_POLICY, WORKFLOW, DEV_REPORT_CANONICAL_UA) added
+- ✅ generate_daily_report.py schema v1.3 with session block
+- ✅ check_repo_safety.py v1.9.0 with session completion lint (check [13])
+- ✅ 1494 unit tests pass including 6 new TestSessionCompletionGate tests
+- ✅ CI full pipeline PASS
 
 ## 1) Commands Executed (This Session)
 
 ```
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: 1482 passed, 2 skipped
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: PASS (runDir 140901)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: PASS (runDir 141019, M4 PASS)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: PASS (runDir 141050)
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings, check [13] Session Completion Gate OK)
+py -3.11 -m pytest tests/unit -q: 1494 passed, 2 skipped
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED (elapsed 24.0s)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: PASS (runDir 151810)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: PASS (runDir 151929)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: PASS (runDir 151953, M4 PASS)
 ```
 
 ## 2) Evidence Artifacts
 
-**Fresh verification (2026-03-09 14:10, L2 chains x 3 cycles)**:
-- `ci_m5_gate_20260309_140901` (zkSync) - **M5.0 PASS**, quotes=30, pairs=9, l1_cost_usd=0 ✅
-- `ci_m5_gate_20260309_141019` (Linea) - **M5.0 PASS**, M4 PASS, quotes=12, pairs=7, l1_cost_usd=$0.003 ✅
-- `ci_m5_gate_20260309_141050` (Scroll) - **M5.0 PASS**, quotes=7, pairs=5, l1_cost_usd=0 ✅
+**Fresh verification (2026-03-09 15:20, L2 chains x 3 cycles - Session Completion Gate evidence)**:
+- `ci_m5_gate_20260309_151810` (zkSync) - **M5.0 PASS**, quotes=62, pairs=9, PRICE_SCALE WARN (1/33) ✅
+- `ci_m5_gate_20260309_151929` (Scroll) - **M5.0 PASS**, quotes=23, pairs=5, BLOCKED_BY SECOND_DEX ✅
+- `ci_m5_gate_20260309_151953` (Linea) - **M5.0 PASS**, **M4 PASS**, quotes=30, pairs=7, BLOCKED_BY SECOND_DEX ✅
 
 **theoretical_net_profit sample** (Linea run):
 ```json

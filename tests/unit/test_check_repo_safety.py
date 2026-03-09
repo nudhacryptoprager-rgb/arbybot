@@ -646,5 +646,119 @@ class TestRollingConsistency(unittest.TestCase):
         self.assertTrue(any("runs_in_window mismatch" in i for i in issues), f"Issues: {issues}")
 
 
+class TestSessionCompletionGate(unittest.TestCase):
+    """Test session completion gate check (v1.9.0).
+    
+    Per DOCS_POLICY.md section 9: Session completion requires explicit
+    goal_status field when completion language is detected in DEV_REPORT.
+    """
+
+    def test_check_session_completion_gate_exists(self):
+        """check_session_completion_gate function should exist and be callable."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        self.assertTrue(callable(check_session_completion_gate))
+
+    def test_no_completion_language_passes(self):
+        """DEV_REPORT without completion language should pass."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        timestamp_utc: 2026-03-09T15:00:00Z
+        
+        ## Status
+        Work in progress. Implementing fixes.
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertEqual(len(issues), 0)
+
+    def test_completion_language_without_goal_status_fails(self):
+        """DEV_REPORT with completion language but no goal_status should fail."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        timestamp_utc: 2026-03-09T15:00:00Z
+        
+        ## Summary
+        All 10 steps completed. Session is complete.
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertEqual(len(issues), 1)
+        self.assertIn("SESSION_COMPLETION", issues[0])
+        self.assertIn("goal_status", issues[0])
+
+    def test_completion_language_with_goal_status_reached_passes(self):
+        """DEV_REPORT with completion language and goal_status: REACHED should pass."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        timestamp_utc: 2026-03-09T15:00:00Z
+        goal_status: REACHED
+        
+        ## Summary
+        All 10 steps completed. Session is complete.
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertEqual(len(issues), 0)
+
+    def test_completion_language_with_goal_status_in_progress_fails(self):
+        """DEV_REPORT with completion language but goal_status: IN_PROGRESS should fail."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        timestamp_utc: 2026-03-09T15:00:00Z
+        goal_status: IN_PROGRESS
+        
+        ## Summary
+        All tasks done. Fully implemented.
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertEqual(len(issues), 1)
+        self.assertIn("SESSION_COMPLETION", issues[0])
+        self.assertIn("not REACHED", issues[0])
+
+    def test_goal_reached_pattern_detected(self):
+        """'goal reached' pattern should trigger completion detection."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        Goal is reached!
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        # Should detect completion language but no goal_status field
+        self.assertEqual(len(issues), 1)
+        self.assertIn("SESSION_COMPLETION", issues[0])
+
+
 if __name__ == "__main__":
     unittest.main()

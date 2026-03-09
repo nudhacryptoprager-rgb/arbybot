@@ -55,6 +55,40 @@ Get-ChildItem docs/*.md | ForEach-Object {
 }
 ```
 
+## 0.2) Session Completion Gate (MANDATORY)
+
+**Rule**: Кожен DEV REPORT **обов'язково** містить session completion інформацію.
+
+**Обов'язкові поля:**
+```md
+## Session Completion
+session_goal: <Коротке формулювання мети сесії (з Roadmap або останнього audit)>
+goal_status: <REACHED|BLOCKED|IN_PROGRESS>
+close_allowed: <true|false>
+remaining_blockers: <список або "none">
+evidence_session_run_dirs: <список runDirs створених у цій сесії>
+```
+
+**Семантика полів:**
+| Field | Description |
+|-------|-------------|
+| `session_goal` | Одне речення: що має бути досягнуто в цій сесії |
+| `goal_status` | `REACHED` = мета досягнута з evidence; `BLOCKED` = explicit blocker; `IN_PROGRESS` = робота триває |
+| `close_allowed` | `true` тільки якщо `goal_status=REACHED` або `goal_status=BLOCKED` з документованим blocker |
+| `remaining_blockers` | Якщо `IN_PROGRESS` або `BLOCKED`, перерахувати що залишилось |
+| `evidence_session_run_dirs` | runDirs **із поточної сесії** (не з попередніх), які підтверджують claims |
+
+**Контракт:**
+- `goal_status=REACHED` вимагає: `evidence_session_run_dirs` містить fresh runDirs з поточного patch set
+- `goal_status=BLOCKED` вимагає: `remaining_blockers` не порожній, описує конкретний blocker
+- `goal_status=IN_PROGRESS` забороняє: completion language ("All done", "Session complete")
+- `close_allowed=true` дозволений ТІЛЬКИ якщо `goal_status != IN_PROGRESS`
+
+**Заборонені патерни:**
+- Оголошення "session complete" без `goal_status=REACHED`
+- Використання runDirs з попередніх сесій як "fresh evidence"
+- Порожній `remaining_blockers` при `goal_status=BLOCKED`
+
 ## 1) Вхідні дані, які обов'язково додаються до звіту
 
 Rolling (канонічний operational інтерфейс):

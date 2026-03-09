@@ -103,7 +103,37 @@ Active `docs/status/Status_*.md` files contain:
 - Using runDirs from previous sessions as "fresh evidence"
 - Mixing evidence from different verification sessions
 
-## 9. How to Update
+## 9. Session Completion Gate (MANDATORY)
+
+**Rule**: A session cannot be closed based solely on green CI/offline gates. Session closure requires:
+
+1. **REACHED**: Session goal achieved with fresh same-session online evidence, OR
+2. **BLOCKED**: Explicit blocker recorded with root cause and unblock criteria
+
+**Session States**:
+- `OPEN`: Session in progress, goal not yet reached
+- `BLOCKED`: Session paused due to explicit blocker (recorded in docs)
+- `CLOSED`: Session goal reached with valid evidence
+
+**Closure Criteria**:
+- `goal_status=REACHED` requires:
+  - Fresh online runDirs from current session (not previous sessions)
+  - All fix claims validated by actual artifacts (not just CI)
+  - Evidence timestamps within current working session
+- `goal_status=BLOCKED` requires:
+  - Explicit blocker description
+  - Unblock criteria documented
+  - No completion language in docs
+
+**Forbidden**:
+- Declaring session "complete" when `goal_status != REACHED`
+- Using offline CI as sole evidence for session completion
+- Closing session without `goal_status` field in DEV_REPORT
+- Using completion language ("All steps completed", "Session done") without REACHED status
+
+**Enforcement**: `scripts/check_repo_safety.py` validates that DEV_REPORT_LATEST.md contains `goal_status` field when session completion language is detected.
+
+## 10. How to Update
 
 1. Run online scan: generates rolling artifacts
 2. Update `docs/status/Status_*.md` with evidence from `run_summary_latest.json`
