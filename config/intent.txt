@@ -122,9 +122,7 @@ scroll:SCR/USDC
 scroll:STONE/WETH
 scroll:weETH/WETH
 
-# NEW: Native + Bridge tokens
-scroll:PAPER/WETH
-scroll:SYN/WETH
+# REMOVED: PAPER/WETH, SYN/WETH (no token addresses in core_tokens.yaml, zero liquidity)
 
 # NEW: Closing pairs for triangular
 scroll:SCR/USDT

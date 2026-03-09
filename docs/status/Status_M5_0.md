@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-09 10:35  
+**Updated**: 2026-03-09 11:00  
 **Tests**: 1463 passed, 1 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260309_102444` (Base), `ci_m5_gate_20260309_102629` (Mantle), `ci_m5_gate_20260309_102739` (Linea), `ci_m5_gate_20260309_102825` (zkSync), `ci_m5_gate_20260309_102807` (Scroll), `ci_m5_gate_20260309_102836` (Arbitrum)  
+**Evidence runDirs**: `ci_m5_gate_20260309_104548` (Base), `ci_m5_gate_20260309_104720` (Mantle), `ci_m5_gate_20260309_104751` (Linea), `ci_m5_gate_20260309_104838` (zkSync), `ci_m5_gate_20260309_104818` (Scroll), `ci_m5_gate_20260309_104851` (Arbitrum)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -22,6 +22,16 @@
 
 > **Next frontier**: Data collection quality + network stabilization, not raw infra PASS.  
 > Code blocker is LOW; the real work is raising quote success rate and making chains repeatably non-NO_DATA.
+
+### Mantle Routing Directive (2026-03-09)
+
+> **Status**: SIGNAL_PRODUCING via **same-DEX fallback** only.  
+> **Configuration**: `require_cross_dex=false` in `coverage_intent_mantle.yaml`  
+> **Reason**: ALL cross-DEX routes are stratum (ve33) ↔ agni_v3 (uniswap_v3) = **MIXED_SOURCE** rejection.  
+> **Current routing**: `agni_v3→agni_v3` fee-tier arbitrage (quoter_v2 source consistency).  
+> **Cross-DEX readiness**: `cross_dex_rate=36%` (5/14 pairs), but ALL cross-DEX routes blocked by MIXED_SOURCE.  
+> **Upgrade criterion**: Add FusionX V3 or another quoter_v2-compatible DEX for source-safe cross-DEX routing.  
+> **Do NOT** claim cross-DEX readiness until MIXED_SOURCE blocker is resolved.
 
 ### Practical Bring-up Progress
 
@@ -64,15 +74,47 @@
 | `ChainQualityLevel` | `m4/policy.py` | Chain maturity: INFRA_READY/SIGNAL_PRODUCING/QUALITY_RAISED |
 | `chain_quality_level` | `run_summary.metrics` | Runtime chain quality (v3.2.51+) |
 | `consecutive_non_nodata_cycles` | `run_summary.metrics` / `quick_stats` | Count for QUALITY_RAISED proof |
+| `ws_connected` | `truth_report.infra` | WebSocket connection status |
+| `ws_fallback_to_http` | `truth_report.infra` | True if WS failed, fell back to HTTP |
+| `ws_lag_ms` | `truth_report.infra` | WebSocket handshake latency |
+| `multicall.success_rate` | `truth_report.infra.multicall` | Multicall batching success rate |
 
 **ВАЖЛИВО**: `infra_gate: PASS` ≠ `run_summary.status: PASS`. Infra gate validates infrastructure; run_summary shows actual opportunity flow.
 
-### Data Collection Quality Contract (2026-03-09 10:35)
+### Transport Health Contract (2026-03-09 11:00)
+
+**Thresholds for satisfactory transport health**:
+- `ws_connected`: **true** (WebSocket active)
+- `ws_fallback_to_http`: **false** (no fallback)
+- `ws_lag_ms`: **< 300ms** (acceptable latency)
+- `multicall.success_rate`: **1.0** (all batched calls succeed)
+
+| Chain | ws_connected | ws_fallback | ws_lag_ms | mc_success | mc_rpc | Transport |
+|-------|--------------|-------------|-----------|------------|--------|-----------|
+| Arbitrum | ✅ true | ✅ false | 172 | 1.0 | 4 | **HEALTHY** |
+| Base | ✅ true | ✅ false | 140 | 1.0 | 4 | **HEALTHY** |
+| Mantle | ✅ true | ✅ false | 170 | 1.0 | 4 | **HEALTHY** |
+| Linea | ✅ true | ✅ false | 140 | 1.0 | 4 | **HEALTHY** |
+| zkSync | ✅ true | ✅ false | 155 | 1.0 | 4 | **HEALTHY** |
+| Scroll | ✅ true | ✅ false | 125 | 1.0 | 4 | **HEALTHY** |
+
+**Audit conclusion (2026-03-09)**: Multicall and WebSocket transport are healthy on all 6 chains. **Main blocker is NOT transport code**, but data collection yield and market window.
+
+### Data Collection Quality Contract (2026-03-09 11:00)
+
+| Chain | quotes | fetch% | slot0% | signals | Target 70% | Status |
+|-------|--------|--------|--------|---------|------------|--------|
+| Base | 29/42 | 69% | — | 2 | ⚠️ | SIGNAL_PRODUCING |
+| zkSync | 49/49 | 100% | — | 0 | ✅ | NO_DATA (market) |
+| Linea | 27/28 | 96% | — | 0 | ✅ | NO_DATA (market) |
+| Mantle | 24/50 | 48% | — | 3 | ❌ | same-DEX fallback |
+| Arbitrum | 42/101 | 42% | — | 9 | ❌ | SIGNAL_PRODUCING |
+| Scroll | 10/21 | 48% | — | 0 | ❌ | NO_DATA (market) |
 
 | Metric | Target | Base | Mantle | Arbitrum | Notes |
 |--------|--------|------|--------|----------|-------|
-| `quotes_fetched/quotes_total` | ≥70% | 37/42 (88%) ✅ | 24/47 (51%) | 51/122 (42%) | Base improved |
-| `signals_count` | ≥1 | 1 ✅ | 3 ✅ | 11 ✅ | All SIGNAL_PRODUCING |
+| `quotes_fetched/quotes_total` | ≥70% | 29/42 (69%) ⚠️ | 24/50 (48%) | 42/101 (42%) | zkSync/Linea ≥96% |
+| `signals_count` | ≥1 | 2 ✅ | 3 ✅ | 9 ✅ | Base/Mantle/Arb SIGNAL_PRODUCING |
 | `runtime_disabled_pools` | 0 | 0 | 0 | 0 | OK |
 | `cross_dex_ready` | true | true | **false** | true | Mantle = same-DEX fallback |
 
@@ -80,41 +122,66 @@
 
 ### Reject Surface Analysis (2026-03-09)
 
-**Base** (`coverage_intent_base.yaml`, runDir `102444`):
-- Discovery: 16 pairs evaluated → 11 resolved (68.75%)
-- Skipped: 4 single-DEX pairs (require_cross_dex=true), 1 no-pool pair
-- Quotes: 42 total → 37 fetched (88% fetch rate) ✅ **IMPROVED**
-- DEXes: uniswap_v3 (4 pairs), aerodrome (13), sushiswap_v3 (13)
-- Signals: 1 (ROUNDTRIP_PROFITABLE)
-- **Blocker**: PancakeSwap V3 excluded (slot0 failures)
+**Base** (`coverage_intent_base.yaml`, runDir `104548`):
+- Quotes: 42 total → 29 fetched (69% fetch rate) ⚠️
+- DEXes: uniswap_v3, aerodrome, sushiswap_v3
+- Signals: 2 (ROUNDTRIP_PROFITABLE)
+- **Status**: SIGNAL_PRODUCING
 
-**Mantle** (`coverage_intent_mantle.yaml`, runDir `102629`):
-- Discovery: 14 pairs evaluated → 13 resolved (93%)
-- Skipped: 0 no-token pairs ✅ **mUSD added, AUSD removed (zero liquidity)**
-- Quotes: 47 total → 24 fetched (51% fetch rate)
+**Mantle** (`coverage_intent_mantle.yaml`, runDir `104720`):
+- Quotes: 50 total → 24 fetched (48% fetch rate)
 - DEXes: agni_v3 (13 pairs), stratum (5)
 - Signals: 3 (same-DEX fee-tier arbitrage)
 - **Blocker**: Only 5 true cross-DEX pairs; using same-DEX fallback (require_cross_dex=false)
 
-**Arbitrum** (`coverage_intent_arbitrum_one.yaml`, runDir `102836`):
-- Quotes: 122 total → 51 fetched (42% fetch rate)
+**Arbitrum** (`coverage_intent_arbitrum_one.yaml`, runDir `104851`):
+- Quotes: 101 total → 42 fetched (42% fetch rate)
 - DEXes: 4 (uniswap_v3, sushiswap_v3, camelot, pancakeswap)
-- Signals: 11 (highest count)
+- Signals: 9 (highest count)
 - **Status**: SIGNAL_PRODUCING
 
-**Action items** (updated 2026-03-09 10:35):
+**zkSync** (`coverage_intent_zksync_era.yaml`, runDir `104838`):
+- Quotes: 49/49 (100% fetch rate) ✅ **EXCELLENT**
+- DEXes: syncswap_v2, pancakeswap_v3
+- Signals: 0
+- **Status**: INFRA_READY (NO_DATA - no arb market)
+
+**Linea** (`coverage_intent_linea.yaml`, runDir `104751`):
+- Quotes: 28 total → 27 fetched (96% fetch rate) ✅ **EXCELLENT**
+- DEXes: lynex_v3
+- Signals: 0
+- **Status**: INFRA_READY (NO_DATA - no arb market)
+
+**Scroll** (`coverage_intent_scroll.yaml`, runDir `104818`):
+- Quotes: 21 total → 10 fetched (48% fetch rate) ⚠️
+- DEXes: sushiswap_v3, nuri_v3
+- Signals: 0
+- **Status**: INFRA_READY (NO_DATA - no arb market)
+- **Note**: Improved from 24% after PAPER/SYN removal (no token addresses)
+
+**Action items** (updated 2026-03-09 11:00):
 1. ✅ DONE: mUSD added to `core_tokens.yaml` for Mantle
 2. ✅ DONE: AUSD removed from intent.txt (zero liquidity on DEXes)
-3. TODO: Fix PancakeSwap V3 slot0 failures on Base
+3. ✅ DONE: PAPER/SYN removed from intent.txt Scroll (no token addresses)
 4. TODO: Add FusionX V3 or another quoter_v2 DEX on Mantle for true cross-DEX
 
-### Blocker Classification (2026-03-09 v3.2.52)
+### Blocker Classification (2026-03-09 v3.2.53)
 
 ```
-code_blocker: LOW (pytest 1463 passed, CI green, safety PASS)
-data_collection_blocker: MEDIUM (Base 88%, Mantle 51%, Arbitrum 42% fetch rate)
-market_window_blocker: HIGH (3/6 chains NO_DATA despite infra PASS)
+code_blocker:           LOW    (pytest 1463 passed, CI green, safety PASS)
+multicall_blocker:      LOW    (success_rate=1.0 all chains, 4 RPC calls)
+websocket_blocker:      LOW    (ws_connected=true, no fallback, lag <200ms all chains)
+data_collection_blocker:
+  - zkSync:     LOW    (100% fetch rate ✅)
+  - Linea:      LOW    (96% fetch rate ✅)
+  - Base:       MEDIUM (69% fetch rate)
+  - Scroll:     MEDIUM (48% fetch rate, improved from 24%)
+  - Mantle:     MEDIUM (48% fetch rate, same-DEX fallback)
+  - Arbitrum:   MEDIUM (42% fetch rate despite 9 signals)
+market_window_blocker:  HIGH   (3/6 chains NO_DATA despite healthy transport)
 ```
+
+**Main blocker (2026-03-09)**: NOT transport code. Multicall and WebSocket are healthy on all 6 chains. Real blocker is market window (3/6 chains = NO_DATA due to lack of arbitrage opportunities, not transport failures).
 
 ### Infra Gate Results (2026-03-09 10:35)
 
