@@ -7,11 +7,17 @@
 #   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
 #   via factory.getPool() calls instead of hardcoded pool addresses.
 #
-# CHAIN STATUS (2026-03-09): FALLBACK-ONLY (no cross-DEX readiness)
+# CHAIN STATUS (2026-03-09): **THIN FALLBACK-ONLY** (NOT cross-DEX ready)
 #   - nuri_v3 (algebra/quoter) is NOT quoter_v2-compatible
 #   - sushiswap_v3 (uniswap_v3/quoter_v2) is compatible but single-DEX only
 #   - BLOCKED_BY: lack of second quoter_v2 DEX for cross-DEX arbitrage
 #   - Same-DEX fee-tier arbitrage (sushiswap_v3→sushiswap_v3) is the only viable path
+#
+# MARKET CONSTRAINT (2026-03-09 runDir 185703):
+#   - Most pools have LIQUIDITY_ZERO (SCR/USDC, SCR/USDT, SCR/WETH, STONE/WETH, etc.)
+#   - PRICE_SANITY_FAILED on WETH/WBTC (700x anchor deviation)
+#   - NOTIONAL_DRIFT: remaining quotes drift >30%
+#   - This is a market constraint, not a config/code issue
 #
 # RUN_KIND: COVERAGE
 #   - Will NOT update rolling artifacts (NORM-only policy)
@@ -77,6 +83,11 @@ gas_usd_estimate: 0.05  # Scroll is relatively cheap
 # Raising thresholds to allow signal production for coverage assessment
 quoter_max_gas_estimate: 3000000   # Scroll pools often exceed 2M gas estimate
 quoter_max_ticks_crossed: 40       # Allow up to 40 tick crossings
+
+# v3.2.63: Spread thresholds for thin-liquidity chains
+# Scroll has thinner liquidity than Arbitrum, so larger spreads are expected
+suspect_spread_bps_hard: 1000  # Default 500 too aggressive for fallback-only chain
+suspect_spread_bps: 400        # Diagnostic warning threshold
 
 # L1 cost model: Scroll is a zk-rollup with proof-based batching
 # v3.2.55: L1 cost per-txn is minimal compared to Arbitrum's calldata model

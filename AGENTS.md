@@ -36,6 +36,23 @@ Before starting any work session, the agent MUST:
 This ensures the agent operates with current project context, not stale assumptions.
 The agent must confirm `docs_reread_confirmed: true` in the session completion block.
 
+### Session Closure Contract (MANDATORY)
+The agent MUST NOT end a session until the session goal is either:
+1. **REACHED**: Goal achieved with fresh runtime evidence supporting claims
+2. **BLOCKED**: Goal cannot be achieved due to external constraints (market, infra, dependency)
+
+**Hard rules for session closure:**
+- Green CI alone is **insufficient** for session closure
+- All claims in `DEV_REPORT_LATEST.md` must match fresh runtime artifacts
+- If a claim says "PASS", the cited `gate_result.json` or `run_summary` must also say PASS
+- Any chain labeled "SIGNAL_PRODUCING" must have signals_count > 0 in fresh evidence
+- `goal_status: REACHED` requires blocker resolution evidence, not just process completion
+
+**Forbidden patterns:**
+- Claiming "MARKET_BLOCKED" when evidence shows policy rejects (e.g., SUSPECT_SPREAD_HARD)
+- Claiming "M4 PASS" when `m4_sim_net_usdc` is null in daily_report
+- Closing session with `goal_status: IN_PROGRESS` in runtime artifacts
+
 ---
 
 ## 1) Artifact policy (critical)

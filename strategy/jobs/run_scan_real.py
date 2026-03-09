@@ -460,6 +460,8 @@ def run_scan(
             # v3.2.2: Use drift_warning_pct to align opportunity gates with spreads policy
             target_notional_usd=config.get("target_usd_notional", 1000.0),
             max_notional_drift_pct=config.get("drift_warning_pct", 20.0),
+            # v3.2.63: Per-chain SUSPECT_SPREAD_HARD threshold from config
+            max_gross_spread_bps=config.get("suspect_spread_bps_hard"),
         )
         
         # v3.2.5: Link opportunities to spread_signals and copy economics

@@ -541,6 +541,7 @@ def evaluate_quotes(
     gas_config: Optional[GasConfig] = None,
     target_notional_usd: float = 1000.0,  # v2.7.1: Config-driven
     max_notional_drift_pct: float = 20.0,  # v3.2.2: Aligned with spreads.py drift_warning_pct
+    max_gross_spread_bps: Optional[float] = None,  # v3.2.63: Per-chain SUSPECT_SPREAD_HARD threshold
 ) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     Convenience function to evaluate quotes and return opportunities.
@@ -548,6 +549,7 @@ def evaluate_quotes(
     v2.1.0: Accepts optional gas_config for live gas pricing.
     v2.7.1: Accepts target_notional_usd and max_notional_drift_pct for config alignment.
     v3.2.2: Default max_notional_drift_pct reduced to 20% (was 50%).
+    v3.2.63: Accepts max_gross_spread_bps for per-chain SUSPECT_SPREAD_HARD threshold.
     
     Returns:
         (opportunities_as_dicts, summary_stats)
@@ -558,6 +560,7 @@ def evaluate_quotes(
         gas_config=gas_config,
         min_net_profit_usd=min_net_profit_usd,
         target_notional_usd=target_notional_usd,
+        max_gross_spread_bps=max_gross_spread_bps,
         max_notional_drift_pct=max_notional_drift_pct,
     )
     

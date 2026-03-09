@@ -15,20 +15,29 @@
 > **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
 > Any report generated before final reruns is non-canonical by process.
 
-### Blocker Classification (2026-03-09 19:00)
+### Blocker Classification (2026-03-09 19:45 CORRECTED)
 ```
 code_blocker:            LOW (pytest 1506 passed, CI green, safety PASS)
 multicall_blocker:       LOW (success_rate=1.0 all chains)
 websocket_blocker:       LOW (ws_connected=true, ALL 6 chains)
 cost_reporting_blocker:  RESOLVED (cost_model_version v3)
 dex_compatibility_blocker:
-  zkSync:   **MARKET_BLOCKED** (on-chain liquidity insufficient, not code/config)
-  Scroll:   **MARKET_BLOCKED** (pools LIQUIDITY_ZERO/NOTIONAL_DRIFT)
+  zkSync:   MARKET_CONSTRAINED + POLICY_FIXED (thin liquidity + raised suspect_spread_bps_hard to 1000)
+  Scroll:   MARKET_CONSTRAINED (pools LIQUIDITY_ZERO/NOTIONAL_DRIFT)
   Linea:    DEX_BLOCKED (only 1 DEX active, require_cross_dex fails)
   Arbitrum: SIGNAL_PRODUCING (4 signals, $3.13 net)
   Base:     SIGNAL_PRODUCING (historical)
   Mantle:   SIGNAL_PRODUCING (historical)
 ```
+
+**v3.2.63 Fix (2026-03-09 19:45)**: `suspect_spread_bps_hard` config propagation
+- FIXED: `engine/opportunity_engine.py` now accepts `max_gross_spread_bps` parameter
+- FIXED: `strategy/jobs/run_scan_real.py` passes `config.get("suspect_spread_bps_hard")` to `evaluate_quotes()`
+- CONFIG: zkSync `suspect_spread_bps_hard: 1000` (was 800, default was 500 - too aggressive)
+- CONFIG: Scroll `suspect_spread_bps_hard: 1000` + market constraint documentation
+- RESULT: zkSync now gates 8 opportunities (was over-rejecting before), 26 legitimate SUSPECT_SPREAD_HARD rejects remain (>10% spreads = bad data/stale prices)
+
+**CORRECTED**: Previous report incorrectly classified zkSync as purely "MARKET_BLOCKED". Truth: both market constraint (thin liquidity) AND policy was too aggressive (500 bps default). Now fixed.
 
 **Cost-aware reporting summary (2026-03-09 v3.2.58)**:
 1. `strategy/artifacts.py`: Extended `_compute_execution_pnl` with canonical cost formula:
@@ -67,9 +76,9 @@ dex_compatibility_blocker:
 7. **WS host validation**: Added validate_chain_rpc_consistency() in ci_m5_0_gate.py
 
 ## 0) Meta
-timestamp_utc: 2026-03-09T19:00:00Z  
+timestamp_utc: 2026-03-09T19:50:00Z  
 rolling_provenance: 2026-03-05T17:49:43Z (arbitrum_one, ci_m5_gate_20260305_184929)  
-mode: ONLINE (multi-chain quality investigation, all 6 chains x 3 cycles)
+mode: ONLINE (multi-chain quality investigation + config fix verification)
 test_count: 1506 passed, 2 skipped
 
 ## 0.2) Session Completion Gate (MANDATORY)
@@ -77,25 +86,22 @@ test_count: 1506 passed, 2 skipped
 | Field | Value |
 |-------|-------|
 | session_goal | Multi-chain quality stabilization (zkSync/Scroll/Linea signal production) |
-| goal_status | **REACHED** (market-blocked, not code-blocked) |
-| close_allowed | true |
-| remaining_blockers | zkSync/Scroll: MARKET_BLOCKED (external constraint) |
-| evidence_session_run_dirs | ci_m5_gate_20260309_185759 (Arbitrum), ci_m5_gate_20260309_185400 (zkSync), ci_m5_gate_20260309_185703 (Scroll), ci_m5_gate_20260309_185726 (Linea) |
-| primary_blocker_of_session | multi-chain chain quality stabilization |
-| blocker_status_before | ACTIVE |
-| blocker_status_after | **RESOLVED** (as MARKET_BLOCKED for zkSync/Scroll) |
+| goal_status | **IN_PROGRESS** (config fix applied, need fresh verification) |
+| close_allowed | false |
+| remaining_blockers | zkSync: MARKET_CONSTRAINED (thin liquidity, 26/34 opps >10% spread), Scroll: MARKET_CONSTRAINED, Linea: DEX_BLOCKED |
+| evidence_session_run_dirs | ci_m5_gate_20260309_194223 (zkSync fresh), ci_m5_gate_20260309_185400 (zkSync stale), ci_m5_gate_20260309_185703 (Scroll), ci_m5_gate_20260309_185726 (Linea) |
+| primary_blocker_of_session | suspect_spread_bps_hard config propagation |
+| blocker_status_before | ACTIVE (500 bps default too aggressive for L2s) |
+| blocker_status_after | **FIXED** (config now propagates to OpportunityEngine) |
 | docs_reread_confirmed | true |
 
-**Session Closure Justification**:
-- ✅ Primary blocker investigated: `multi-chain chain quality stabilization`
-- ✅ Config tuning exhausted: zkSync 30M gas (30x), Scroll/Linea 3M gas (4x), quoter_max_ticks_crossed added
-- ✅ Root cause identified: **MARKET_BLOCKED** (on-chain liquidity, not code/config)
-- ✅ cost_model_version aligned: v2 → v3 (artifacts.py, tests, docs)
-- ✅ Fresh evidence: 4 chains scanned online (Arbitrum, zkSync, Scroll, Linea)
-- ✅ Arbitrum baseline: 4 signals, $3.13 net_usdc (proves infrastructure works)
-- ✅ 1506 unit tests pass
-- ✅ CI full pipeline PASS (elapsed 20.8s)
-- ✅ Status_M5_0.md updated with investigation findings
+**Session Correction (2026-03-09 19:45)**:
+- ❌ Previous report incorrectly claimed `goal_status: REACHED` with `MARKET_BLOCKED`
+- ✅ Corrected: zkSync was BOTH market-constrained AND policy-blocked
+- ✅ Fixed `engine/opportunity_engine.py`: added `max_gross_spread_bps` parameter
+- ✅ Fixed `strategy/jobs/run_scan_real.py`: passes `suspect_spread_bps_hard` from config
+- ✅ Updated `AGENTS.md`: Added Session Closure Contract with hard rules
+- ⏳ Remaining: zkSync thin liquidity is genuine market constraint (26/34 opps have >10% spread)
 
 ## 1) Commands Executed (This Session)
 
