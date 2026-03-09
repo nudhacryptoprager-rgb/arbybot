@@ -15,25 +15,30 @@
 > **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
 > Any report generated before final reruns is non-canonical by process.
 
-### Blocker Classification (2026-03-09 14:15)
+### Blocker Classification (2026-03-09 15:00)
 ```
-code_blocker: LOW (pytest 1482 passed, CI green, safety PASS)
+code_blocker: LOW (pytest 1488 passed, CI green, safety PASS)
 multicall_blocker: LOW (success_rate=1.0 all chains)
 websocket_blocker: LOW (ws_connected=true, ALL 6 chains chain-correct hosts)
-cost_reporting_blocker: RESOLVED (theoretical_net_profit block added, schema v1.2)
+cost_reporting_blocker: RESOLVED (canonical slippage formula v3.2.58)
 dex_compatibility_blocker: MED (zkSync/Linea/Scroll same-DEX fallback active)
+suspect_liquidity_blocker: RESOLVED (per-chain quoter_max_gas_estimate v3.2.58)
 ```
 
-**Cost-aware reporting summary (2026-03-09 v3.2.57)**:
-1. `strategy/artifacts.py`: Extended `_compute_execution_pnl` with full cost breakdown:
-   - `cost_model_version: "paper_gas_slippage_l1_v2"` (upgraded from v1)
-   - `slippage_usd`, `l1_cost_usd`, `total_cost_usd` fields added
+**Cost-aware reporting summary (2026-03-09 v3.2.58)**:
+1. `strategy/artifacts.py`: Extended `_compute_execution_pnl` with canonical cost formula:
+   - `cost_model_version: "paper_gas_slippage_l1_v3"` (upgraded from v2)
+   - **FIXED**: `slippage_usd = paper_size_usd * slippage_bps / 10000 * num_signals` (position-based)
+   - **FIXED**: `gas_usd = gas_usd_estimate * num_signals` (per-signal aggregation)
    - Total cost invariant: `total_cost_usd = gas_usd + slippage_usd + l1_cost_usd`
-2. `scripts/generate_daily_report.py`: Added mandatory `theoretical_net_profit` block
-   - Schema bumped from v1.1 to v1.2
-   - `mode: "paper_simulated"` + disclaimer
-3. `docs/DEV_REPORT_CANONICAL_UA.md`: Added section 4.1 Theoretical Net Profit rules
-4. `tests/unit/test_execution_pnl_golden.py`: Added 6 new cost breakdown invariant tests
+2. `strategy/jobs/run_scan_real.py`: Same-DEX fallback artifact reconciliation
+   - Added `same_dex_fallback_mode`, `spread_signals_count`, `same_dex_signals_active`
+   - Prevents artifact mismatch when signals > 0 but total_opportunities = 0
+3. `strategy/quotes.py`: Per-chain SUSPECT_LIQUIDITY threshold
+   - New config keys: `quoter_max_gas_estimate`, `quoter_max_ticks_crossed`
+   - zkSync: 1M gas threshold (default 500k too aggressive)
+4. Config freezes: Linea frozen, zkSync/Scroll relaxed gas thresholds
+5. `tests/unit/test_same_dex_policy.py`: 6 new same-DEX fallback artifact tests
 
 **ВАЖЛИВО**: `infra_gate: PASS` ≠ `run_summary.status: PASS`. See [Status_M5_0.md](status/Status_M5_0.md) for terminology.
 
@@ -57,7 +62,7 @@ dex_compatibility_blocker: MED (zkSync/Linea/Scroll same-DEX fallback active)
 7. **WS host validation**: Added validate_chain_rpc_consistency() in ci_m5_0_gate.py
 
 ## 0) Meta
-timestamp_utc: 2026-03-09T14:15:00Z  
+timestamp_utc: 2026-03-09T15:00:00Z  
 rolling_provenance: 2026-03-05T17:49:43Z (arbitrum_one, ci_m5_gate_20260305_184929)  
 mode: ONLINE (L2 chains verification, zkSync/Linea/Scroll x 3 cycles)
 

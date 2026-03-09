@@ -170,23 +170,27 @@ def _compute_execution_pnl(
     filter_excluded: bool = False,
 ) -> Dict[str, Any]:
     """
-    Compute execution_pnl section with Clean PnL v2 (v3.2.57).
+    Compute execution_pnl section with Clean PnL v2 (v3.2.58).
     
     Clean PnL v2 = paper estimates with gas + slippage + L1 cost.
     cost_model_available=True when we have gas_usd_estimate in config.
     
-    v3.2.57: Extended cost_model_components with full cost breakdown:
-    - gas_usd: L2 execution gas cost
+    v3.2.58: Fixed slippage calculation to use position-based (paper_size_usd),
+    not profit-based, to match execution simulation accounting:
+    - gas_usd: L2 execution gas cost (from config.gas_usd_estimate)
     - slippage_bps: Slippage in basis points
-    - slippage_usd: Slippage in USD (computed from gross_pnl * slippage_bps)
+    - slippage_usd: Slippage in USD = paper_size_usd * slippage_bps / 10000
     - l1_data_gas_units: L1 data gas units from config
     - l1_gas_price_gwei: L1 gas price from config
     - l1_cost_usd: L1 data cost in USD (l1_data_gas_units * l1_gas_price_gwei * eth_price / 1e9)
     - total_cost_usd: gas_usd + slippage_usd + l1_cost_usd
     
+    IMPORTANT: Slippage is based on position size (notional), NOT gross profit.
+    This matches the canonical formula: slippage_usd = paper_size_usd * slippage_bps / 10000
+    
     Args:
         spread_signals: List of spread signal dicts with net_pnl_usdc_est
-        config: Config dict with gas_usd_estimate
+        config: Config dict with gas_usd_estimate, paper_size_usd, paper_slippage_bps
         filter_excluded: If True, only include signals with is_excluded_spread=False
         
     Returns:
@@ -210,10 +214,13 @@ def _compute_execution_pnl(
     # This is Clean PnL v2 (paper estimates with full cost breakdown)
     cost_model_available = bool(gas_usd_estimate and signals_with_estimates)
     
-    # v3.2.57: Compute full cost breakdown
+    # v3.2.58: Slippage based on position size (notional), NOT gross profit
+    # This matches execution simulation: slippage_usd = paper_size_usd * slippage_bps / 10000
+    paper_size_usd = config.get("paper_size_usd", 100.0)
     slippage_bps = config.get("paper_slippage_bps", 0)
-    # Slippage applies to gross_pnl: slippage_usd = gross_pnl * slippage_bps / 10000
-    slippage_usd = total_gross_pnl * slippage_bps / 10000.0 if slippage_bps > 0 else 0.0
+    # Position-based slippage per signal, times number of signals
+    num_signals = len(signals_with_estimates)
+    slippage_usd = (paper_size_usd * slippage_bps / 10000.0) * num_signals if slippage_bps > 0 else 0.0
     
     # L1 cost: computed from config parameters
     l1_data_gas_units = config.get("l1_data_gas_units", 0)
@@ -223,28 +230,34 @@ def _compute_execution_pnl(
     # L1 cost in USD: (gas_units * gwei * 1e-9) * eth_price
     l1_cost_usd = (l1_data_gas_units * l1_gas_price_gwei * 1e-9) * eth_price_usd if l1_data_gas_units > 0 else 0.0
     
-    # Total cost: gas + slippage + L1
-    total_cost_usd = gas_usd_estimate + slippage_usd + l1_cost_usd
+    # Total cost: gas + slippage + L1 (gas is also per-signal)
+    total_gas_usd = gas_usd_estimate * num_signals if num_signals > 0 else gas_usd_estimate
+    total_cost_usd = total_gas_usd + slippage_usd + l1_cost_usd
+    
+    # Net PnL: gross - total_cost (canonical invariant)
+    computed_net_pnl = total_gross_pnl - total_cost_usd if cost_model_available else None
     
     # Format as strings for money fields
     return {
         "signal_pnl_usdc": f"{total_gross_pnl:.6f}",
-        "would_execute_pnl_usdc": f"{total_net_pnl:.6f}" if total_net_pnl > 0 else "0.000000",
+        "would_execute_pnl_usdc": f"{computed_net_pnl:.6f}" if computed_net_pnl is not None and computed_net_pnl > 0 else "0.000000",
         "gross_pnl_usdc": f"{total_gross_pnl:.6f}",
-        "net_pnl_usdc": f"{total_net_pnl:.6f}" if cost_model_available else None,
+        "net_pnl_usdc": f"{computed_net_pnl:.6f}" if computed_net_pnl is not None else None,
         "net_pnl_bps": None,  # TODO: compute from notional when available
         "cost_model_available": cost_model_available,
-        # v3.2.57: Clean PnL v2 with full cost breakdown
+        # v3.2.58: Clean PnL v2 with position-based slippage
         "cost_model_version": "paper_gas_slippage_l1_v2" if cost_model_available else None,
         "cost_model_components": {
-            "gas_usd": gas_usd_estimate,
+            "gas_usd": total_gas_usd,
             "slippage_bps": slippage_bps,
             "slippage_usd": round(slippage_usd, 6),
             "l1_data_gas_units": l1_data_gas_units,
             "l1_gas_price_gwei": l1_gas_price_gwei,
             "l1_cost_usd": round(l1_cost_usd, 6),
             "total_cost_usd": round(total_cost_usd, 6),
-            "eth_price_usd": eth_price_usd,  # v3.2.57: For cost verification
+            "eth_price_usd": eth_price_usd,
+            "paper_size_usd": paper_size_usd,  # v3.2.58: Track position size for audit
+            "num_signals": num_signals,  # v3.2.58: Track signal count for verification
         } if cost_model_available else None,
     }
 

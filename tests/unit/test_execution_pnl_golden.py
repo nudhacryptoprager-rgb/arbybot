@@ -19,7 +19,11 @@ from decimal import Decimal
 
 
 class TestExecutionPnLGolden(unittest.TestCase):
-    """Golden tests for Clean PnL computation."""
+    """Golden tests for Clean PnL computation.
+    
+    v3.2.58: Updated for position-based slippage and per-signal cost aggregation.
+    Canonical cost model: gas and slippage are per-signal, net = gross - total_cost.
+    """
 
     def test_cost_model_available_with_gas_and_signals(self):
         """cost_model_available=True when gas_usd_estimate set and signals exist."""
@@ -29,15 +33,20 @@ class TestExecutionPnLGolden(unittest.TestCase):
             {"net_pnl_usdc_est": 10.5, "gross_pnl_usdc_est": 12.0, "is_net_positive_est": True},
             {"net_pnl_usdc_est": 5.2, "gross_pnl_usdc_est": 7.0, "is_net_positive_est": True},
         ]
-        config = {"gas_usd_estimate": 0.05, "paper_slippage_bps": 10}
+        # v3.2.58: paper_size_usd required for slippage calculation
+        config = {"gas_usd_estimate": 0.05, "paper_slippage_bps": 10, "paper_size_usd": 100}
         
         result = _compute_execution_pnl(signals, config)
         
         self.assertTrue(result["cost_model_available"])
         self.assertEqual(result["cost_model_version"], "paper_gas_slippage_l1_v2")
         self.assertIsNotNone(result["cost_model_components"])
-        self.assertEqual(result["cost_model_components"]["gas_usd"], 0.05)
+        # v3.2.58: gas_usd is per-signal total: 0.05 * 2 = 0.10
+        self.assertEqual(result["cost_model_components"]["gas_usd"], 0.10)
         self.assertEqual(result["cost_model_components"]["slippage_bps"], 10)
+        # v3.2.58: slippage is position-based: (100 * 10 / 10000) * 2 signals = $0.20
+        self.assertAlmostEqual(result["cost_model_components"]["slippage_usd"], 0.20, places=6)
+        self.assertEqual(result["cost_model_components"]["num_signals"], 2)
 
     def test_cost_model_unavailable_without_gas(self):
         """cost_model_available=False when no gas_usd_estimate."""
@@ -84,7 +93,11 @@ class TestExecutionPnLGolden(unittest.TestCase):
         self.assertEqual(result["signal_pnl_usdc"], result["gross_pnl_usdc"])
 
     def test_net_pnl_only_positive_signals(self):
-        """net_pnl_usdc = sum of only signals where is_net_positive_est=True."""
+        """v3.2.58: net_pnl_usdc = gross - total_cost (canonical formula).
+        
+        Unlike v3.2.57 which summed signal estimates, v3.2.58 uses:
+        net = gross - (gas * num_signals + slippage * num_signals + l1_cost)
+        """
         from strategy.artifacts import _compute_execution_pnl
         
         signals = [
@@ -92,11 +105,14 @@ class TestExecutionPnLGolden(unittest.TestCase):
             {"net_pnl_usdc_est": 5.2, "gross_pnl_usdc_est": 7.0, "is_net_positive_est": True},
             {"net_pnl_usdc_est": -2.0, "gross_pnl_usdc_est": 3.0, "is_net_positive_est": False},
         ]
-        config = {"gas_usd_estimate": 0.05}
+        config = {"gas_usd_estimate": 0.05, "paper_size_usd": 100, "paper_slippage_bps": 0}
         
         result = _compute_execution_pnl(signals, config)
         
-        expected_net = 10.5 + 5.2  # 15.7, excludes the negative one
+        # v3.2.58: gross = 22.0, total_cost = 0.05 * 3 + 0 = 0.15, net = 21.85
+        expected_gross = 12.0 + 7.0 + 3.0  # 22.0
+        expected_cost = 0.05 * 3  # 0.15 (gas only, no slippage)
+        expected_net = expected_gross - expected_cost  # 21.85
         self.assertAlmostEqual(float(result["net_pnl_usdc"]), expected_net, places=6)
 
     def test_filter_excluded_true(self):
@@ -119,24 +135,35 @@ class TestExecutionPnLGolden(unittest.TestCase):
         self.assertEqual(float(result_included["gross_pnl_usdc"]), 12.0)
 
     def test_would_execute_pnl_zero_when_no_positive(self):
-        """would_execute_pnl_usdc = 0 when no signals are net positive."""
+        """would_execute_pnl_usdc = 0 when net_pnl_usdc <= 0.
+        
+        v3.2.58: would_execute_pnl is 0 when computed net (gross - cost) is <= 0.
+        """
         from strategy.artifacts import _compute_execution_pnl
         
         signals = [
             {"net_pnl_usdc_est": -2.0, "gross_pnl_usdc_est": 3.0, "is_net_positive_est": False},
             {"net_pnl_usdc_est": -5.0, "gross_pnl_usdc_est": 2.0, "is_net_positive_est": False},
         ]
-        config = {"gas_usd_estimate": 0.05}
+        # High gas cost so net becomes negative: gross=5, cost=10*2=20, net=-15
+        config = {"gas_usd_estimate": 10.0, "paper_size_usd": 100, "paper_slippage_bps": 0}
         
         result = _compute_execution_pnl(signals, config)
         
+        # gross=5.0, cost=10*2=20, net=5-20=-15 -> would_execute=0
         self.assertEqual(result["would_execute_pnl_usdc"], "0.000000")
 
     def test_golden_fixture_values(self):
         """Golden fixture: specific input should produce specific output.
         
         This is a regression lock - if this test fails, the cost model changed.
-        v3.2.57: Updated for paper_gas_slippage_l1_v2 cost model.
+        v3.2.58: Updated for position-based slippage and per-signal cost aggregation.
+        
+        Canonical formula:
+        - gas_usd = gas_usd_estimate * num_signals = 0.03 * 2 = 0.06
+        - slippage_usd = (paper_size_usd * bps / 10000) * num_signals = (100 * 5 / 10000) * 2 = 0.10
+        - total_cost = gas + slippage + l1 = 0.06 + 0.10 + 0 = 0.16
+        - net = gross - total_cost = 28.641975 - 0.16 = 28.481975
         """
         from strategy.artifacts import _compute_execution_pnl
         
@@ -145,23 +172,28 @@ class TestExecutionPnLGolden(unittest.TestCase):
             {"net_pnl_usdc_est": 15.123456, "gross_pnl_usdc_est": 18.765432, "is_net_positive_est": True, "is_excluded_spread": False},
             {"net_pnl_usdc_est": 7.654321, "gross_pnl_usdc_est": 9.876543, "is_net_positive_est": True, "is_excluded_spread": False},
         ]
-        config = {"gas_usd_estimate": 0.03, "paper_slippage_bps": 5}
+        config = {"gas_usd_estimate": 0.03, "paper_slippage_bps": 5, "paper_size_usd": 100}
         
         result = _compute_execution_pnl(signals, config)
         
-        # Golden expected outputs (locked values)
+        # Golden expected outputs (locked values) v3.2.58
         self.assertEqual(result["gross_pnl_usdc"], "28.641975")
         self.assertEqual(result["signal_pnl_usdc"], "28.641975")
-        self.assertEqual(result["net_pnl_usdc"], "22.777777")  # 15.123456 + 7.654321
-        self.assertEqual(result["would_execute_pnl_usdc"], "22.777777")
+        # v3.2.58: net = gross - total_cost = 28.641975 - 0.16 = 28.481975
+        self.assertEqual(result["net_pnl_usdc"], "28.481975")
+        self.assertEqual(result["would_execute_pnl_usdc"], "28.481975")
         self.assertTrue(result["cost_model_available"])
         self.assertEqual(result["cost_model_version"], "paper_gas_slippage_l1_v2")
-        self.assertEqual(result["cost_model_components"]["gas_usd"], 0.03)
+        # v3.2.58: gas is per-signal total
+        self.assertEqual(result["cost_model_components"]["gas_usd"], 0.06)
         self.assertEqual(result["cost_model_components"]["slippage_bps"], 5)
+        # v3.2.58: slippage is position-based per-signal total
+        self.assertAlmostEqual(result["cost_model_components"]["slippage_usd"], 0.10, places=6)
+        self.assertEqual(result["cost_model_components"]["num_signals"], 2)
 
 
 class TestCostBreakdownInvariants(unittest.TestCase):
-    """v3.2.57: Tests for full cost breakdown invariants."""
+    """v3.2.58: Tests for full cost breakdown invariants with position-based slippage."""
 
     def test_total_cost_invariant(self):
         """total_cost_usd = gas_usd + slippage_usd + l1_cost_usd."""
@@ -172,7 +204,8 @@ class TestCostBreakdownInvariants(unittest.TestCase):
         ]
         config = {
             "gas_usd_estimate": 0.05,
-            "paper_slippage_bps": 10,  # 0.1% of gross
+            "paper_size_usd": 100,
+            "paper_slippage_bps": 10,  # 0.1% of position
             "l1_data_gas_units": 2000,
             "l1_gas_price_gwei": 30,
             "tokens_usd_price": {"WETH": 3000.0},
@@ -186,7 +219,7 @@ class TestCostBreakdownInvariants(unittest.TestCase):
         self.assertAlmostEqual(components["total_cost_usd"], expected_total, places=6)
         
     def test_slippage_usd_calculation(self):
-        """slippage_usd = gross_pnl * slippage_bps / 10000."""
+        """v3.2.58: slippage_usd = paper_size_usd * slippage_bps / 10000 * num_signals."""
         from strategy.artifacts import _compute_execution_pnl
         
         signals = [
@@ -194,13 +227,14 @@ class TestCostBreakdownInvariants(unittest.TestCase):
         ]
         config = {
             "gas_usd_estimate": 0.01,
+            "paper_size_usd": 100,  # Position size
             "paper_slippage_bps": 50,  # 0.5%
         }
         
         result = _compute_execution_pnl(signals, config)
         
         components = result["cost_model_components"]
-        # slippage_usd = 100.0 * 50 / 10000 = 0.5
+        # v3.2.58: slippage_usd = 100.0 * 50 / 10000 * 1 = 0.5
         self.assertAlmostEqual(components["slippage_usd"], 0.5, places=6)
 
     def test_l1_cost_usd_calculation(self):
@@ -212,6 +246,7 @@ class TestCostBreakdownInvariants(unittest.TestCase):
         ]
         config = {
             "gas_usd_estimate": 0.01,
+            "paper_size_usd": 100,
             "l1_data_gas_units": 2000,
             "l1_gas_price_gwei": 30,
             "tokens_usd_price": {"WETH": 3000.0},
@@ -269,10 +304,11 @@ class TestCostBreakdownInvariants(unittest.TestCase):
         signals = [
             {"net_pnl_usdc_est": 10.0, "gross_pnl_usdc_est": 15.0, "is_net_positive_est": True},
         ]
-        config = {"gas_usd_estimate": 0.05}
+        config = {"gas_usd_estimate": 0.05, "paper_size_usd": 100}
         
         result = _compute_execution_pnl(signals, config)
         
+        # v3.2.58: Added paper_size_usd and num_signals to required fields
         required_fields = [
             "gas_usd",
             "slippage_bps",
@@ -282,6 +318,8 @@ class TestCostBreakdownInvariants(unittest.TestCase):
             "l1_cost_usd",
             "total_cost_usd",
             "eth_price_usd",
+            "paper_size_usd",  # v3.2.58
+            "num_signals",  # v3.2.58
         ]
         components = result["cost_model_components"]
         for field in required_fields:

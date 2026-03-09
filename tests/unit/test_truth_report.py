@@ -518,21 +518,25 @@ class TestComputeExecutionPnl(unittest.TestCase):
     """v2.3.2: _compute_execution_pnl tests."""
 
     def test_uses_gross_pnl_usdc_est_field(self):
-        """_compute_execution_pnl uses gross_pnl_usdc_est (not spread_usdc)."""
+        """_compute_execution_pnl uses gross_pnl_usdc_est (not spread_usdc).
+        
+        v3.2.58: would_execute_pnl_usdc is now computed as gross - total_cost,
+        not the sum of net_pnl_usdc_est from signals.
+        """
         from strategy.artifacts import _compute_execution_pnl
         
         spread_signals = [
             {"gross_pnl_usdc_est": 1.5, "net_pnl_usdc_est": 1.2, "is_net_positive_est": True},
             {"gross_pnl_usdc_est": 0.8, "net_pnl_usdc_est": 0.5, "is_net_positive_est": True},
         ]
-        config = {"gas_usd_estimate": 0.1}
+        config = {"gas_usd_estimate": 0.1, "paper_size_usd": 100, "paper_slippage_bps": 0}
         
         result = _compute_execution_pnl(spread_signals, config)
         
         # Total gross should be 1.5 + 0.8 = 2.3
         self.assertEqual(float(result["gross_pnl_usdc"]), 2.3)
-        # Total net should be 1.2 + 0.5 = 1.7
-        self.assertEqual(float(result["would_execute_pnl_usdc"]), 1.7)
+        # v3.2.58: net = gross - total_cost = 2.3 - (0.1 * 2) = 2.1
+        self.assertEqual(float(result["would_execute_pnl_usdc"]), 2.1)
 
     def test_cost_model_available_true_with_gas_estimate(self):
         """cost_model_available=True when gas_usd_estimate > 0 and signals exist."""
@@ -579,10 +583,16 @@ class TestComputeExecutionPnl(unittest.TestCase):
 
 
 class TestExecutionPnlIncludedContract(unittest.TestCase):
-    """v2.3.2: execution_pnl_included filters excluded signals."""
+    """v2.3.2: execution_pnl_included filters excluded signals.
+    
+    v3.2.58: Updated for position-based cost model where net = gross - total_cost.
+    """
 
     def test_filter_excluded_true_excludes_suspect_spreads(self):
-        """filter_excluded=True must exclude is_excluded_spread=True signals."""
+        """filter_excluded=True must exclude is_excluded_spread=True signals.
+        
+        v3.2.58: would_execute_pnl = gross - (gas * num_signals).
+        """
         from strategy.artifacts import _compute_execution_pnl
         
         spread_signals = [
@@ -590,20 +600,25 @@ class TestExecutionPnlIncludedContract(unittest.TestCase):
             {"gross_pnl_usdc_est": 500.0, "net_pnl_usdc_est": 400.0, "is_net_positive_est": True, "is_excluded_spread": True},  # Excluded
             {"gross_pnl_usdc_est": 50.0, "net_pnl_usdc_est": 40.0, "is_net_positive_est": True, "is_excluded_spread": False},
         ]
-        config = {"gas_usd_estimate": 0.1}
+        config = {"gas_usd_estimate": 0.1, "paper_size_usd": 100, "paper_slippage_bps": 0}
         
         # Without filter - should include all
         result_all = _compute_execution_pnl(spread_signals, config, filter_excluded=False)
         self.assertEqual(float(result_all["gross_pnl_usdc"]), 650.0)  # 100 + 500 + 50
-        self.assertEqual(float(result_all["would_execute_pnl_usdc"]), 530.0)  # 90 + 400 + 40
+        # v3.2.58: would_execute = 650 - (0.1 * 3) = 649.7
+        self.assertAlmostEqual(float(result_all["would_execute_pnl_usdc"]), 649.7, places=2)
         
         # With filter - should exclude the 500/400 signal
         result_included = _compute_execution_pnl(spread_signals, config, filter_excluded=True)
         self.assertEqual(float(result_included["gross_pnl_usdc"]), 150.0)  # 100 + 50
-        self.assertEqual(float(result_included["would_execute_pnl_usdc"]), 130.0)  # 90 + 40
+        # v3.2.58: would_execute = 150 - (0.1 * 2) = 149.8
+        self.assertAlmostEqual(float(result_included["would_execute_pnl_usdc"]), 149.8, places=2)
 
     def test_filter_excluded_matches_run_summary_semantics(self):
-        """execution_pnl_included should match run_summary.total_net_usdc semantics."""
+        """execution_pnl_included should match run_summary.total_net_usdc semantics.
+        
+        v3.2.58: Net is now computed from gross - cost, not signal estimates.
+        """
         from strategy.artifacts import _compute_execution_pnl
         
         # Simulate a real scenario: some signals excluded
@@ -611,30 +626,34 @@ class TestExecutionPnlIncludedContract(unittest.TestCase):
             {"gross_pnl_usdc_est": 10.0, "net_pnl_usdc_est": 8.0, "is_net_positive_est": True, "is_excluded_spread": False},
             {"gross_pnl_usdc_est": 800.0, "net_pnl_usdc_est": 750.0, "is_net_positive_est": True, "is_excluded_spread": True},  # SUSPECT_SPREAD
         ]
-        config = {"gas_usd_estimate": 0.1}
+        config = {"gas_usd_estimate": 0.1, "paper_size_usd": 100, "paper_slippage_bps": 0}
         
         # Included-only should return the non-excluded sum
         result = _compute_execution_pnl(spread_signals, config, filter_excluded=True)
         
-        # This should match what run_summary.metrics.total_net_usdc would compute
-        expected_net = 8.0  # Only the included signal
-        self.assertEqual(float(result["would_execute_pnl_usdc"]), expected_net)
+        # v3.2.58: net = gross - cost = 10 - 0.1 = 9.9 (1 signal)
+        expected_net = 10.0 - 0.1  # 9.9
+        self.assertAlmostEqual(float(result["would_execute_pnl_usdc"]), expected_net, places=2)
 
     def test_filter_excluded_handles_missing_flag_as_included(self):
-        """Signals without is_excluded_spread flag should be treated as included."""
+        """Signals without is_excluded_spread flag should be treated as included.
+        
+        v3.2.58: Updated for position-based cost model.
+        """
         from strategy.artifacts import _compute_execution_pnl
         
         spread_signals = [
             {"gross_pnl_usdc_est": 10.0, "net_pnl_usdc_est": 8.0, "is_net_positive_est": True},  # No flag
             {"gross_pnl_usdc_est": 20.0, "net_pnl_usdc_est": 15.0, "is_net_positive_est": True, "is_excluded_spread": False},
         ]
-        config = {"gas_usd_estimate": 0.1}
+        config = {"gas_usd_estimate": 0.1, "paper_size_usd": 100, "paper_slippage_bps": 0}
         
         result = _compute_execution_pnl(spread_signals, config, filter_excluded=True)
         
         # Both should be included (missing flag defaults to False)
         self.assertEqual(float(result["gross_pnl_usdc"]), 30.0)
-        self.assertEqual(float(result["would_execute_pnl_usdc"]), 23.0)
+        # v3.2.58: net = 30 - (0.1 * 2) = 29.8
+        self.assertAlmostEqual(float(result["would_execute_pnl_usdc"]), 29.8, places=2)
 
 
 class TestSpreadSignalInvariants(unittest.TestCase):

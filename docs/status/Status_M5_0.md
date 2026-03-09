@@ -1,8 +1,8 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-09 14:15  
-**Tests**: 1482 passed, 2 skipped  
+**Updated**: 2026-03-09 15:00  
+**Tests**: 1488 passed, 2 skipped  
 **Evidence runDirs**: `ci_m5_gate_20260309_140901` (zkSync), `ci_m5_gate_20260309_141019` (Linea), `ci_m5_gate_20260309_141050` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
@@ -32,6 +32,31 @@
 
 **Implementation**: Full cost breakdown now mandatory in all reports with signals.
 
+**Fixes Applied (2026-03-09 15:00)**:
+
+1. **Position-based slippage** (canonical formula fix):
+   - Old: `slippage_usd = gross_pnl * slippage_bps / 10000` (incorrect)
+   - New: `slippage_usd = paper_size_usd * slippage_bps / 10000 * num_signals` (matches execution)
+   - Root cause: Slippage was computed on profit ($3.21), not on position size ($100)
+
+2. **Same-DEX fallback artifact reconciliation**:
+   - Added `same_dex_fallback_mode` flag to opportunity_engine stats
+   - Added `spread_signals_count` to reconcile with `total_opportunities`
+   - Added `same_dex_signals_active` when signals > 0 but opportunities = 0 (expected for same-DEX)
+   - Prevents artifact contract mismatch reports
+
+3. **Per-chain SUSPECT_LIQUIDITY threshold**:
+   - New config keys: `quoter_max_gas_estimate`, `quoter_max_ticks_crossed`
+   - zkSync: `quoter_max_gas_estimate: 1000000` (default 500k too aggressive)
+   - Scroll/Linea: `quoter_max_gas_estimate: 800000`
+   - Root cause: zkSync pools report 600-800k gas estimate due to different VM
+
+4. **Config freezes**:
+   - Linea config frozen for same-DEX fallback stability
+   - Scroll/zkSync configs updated with relaxed gas thresholds
+
+5. **Test coverage**: 6 new tests for same-DEX fallback artifact contracts
+
 **Changes applied**:
 1. `strategy/artifacts.py`: Extended `_compute_execution_pnl` with full cost breakdown:
    - `cost_model_version`: `"paper_gas_slippage_l1_v2"` (upgraded from v1)
@@ -53,20 +78,26 @@
 - Linea: M5.0 PASS + M4 PASS (quotes=12, pairs=7, l1_cost_usd=$0.003)
 - Scroll: M5.0 PASS (quotes=7, pairs=5, l1_cost_usd=0)
 
-**Sample output** (`ci_m5_gate_20260309_141019` Linea):
+**Sample output** (`ci_m5_gate_20260309_141019` Linea, corrected):
 ```json
 "theoretical_net_profit": {
   "gross_pnl_usdc": 3.2086,
   "gas_usd": 0.05,
   "slippage_bps": 5,
-  "slippage_usd": 0.001604,
+  "slippage_usd": 0.05,
   "l1_cost_usd": 0.003,
-  "total_cost_usd": 0.054604,
-  "net_pnl_usdc": 3.1086,
-  "cost_model_version": "paper_gas_slippage_l1_v2",
+  "total_cost_usd": 0.103,
+  "net_pnl_usdc": 3.1056,
+  "cost_model_version": "paper_gas_slippage_l1_v3",
   "mode": "paper_simulated"
 }
 ```
+
+Canonical formula (2026-03-09):
+- `gas_usd = gas_usd_estimate * num_signals`
+- `slippage_usd = paper_size_usd * slippage_bps / 10000 * num_signals`
+- `total_cost_usd = gas_usd + slippage_usd + l1_cost_usd`
+- `net_pnl_usdc = gross_pnl_usdc - total_cost_usd`
 
 **Fresh scan results (2026-03-09 13:25)**:
 

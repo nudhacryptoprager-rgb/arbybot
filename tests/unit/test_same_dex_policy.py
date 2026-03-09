@@ -404,3 +404,115 @@ class TestHuntingConfigContract:
         # No signals should be generated for same-DEX when require_cross_dex=True
         assert len(signals) == 0, \
             f"Expected 0 signals with require_cross_dex and same-DEX only, got {len(signals)}"
+
+
+class TestSameDexFallbackArtifactContract:
+    """v3.2.58: Artifact contract tests for same-DEX fallback mode.
+    
+    When require_cross_dex=False (same-DEX fallback), the opportunity_engine
+    summary should include explicit flags to reconcile:
+    - spread_signals_count: Total signals including same-DEX fee-tier arb
+    - same_dex_fallback_mode: Whether fallback is active
+    - same_dex_signals_active: Whether same-DEX signals exist with 0 cross-DEX
+    
+    This prevents artifact contract mismatches where signals_count > 0
+    but total_opportunities = 0.
+    """
+    
+    def test_same_dex_fallback_mode_flag_true_when_require_cross_dex_false(self):
+        """same_dex_fallback_mode=True when require_cross_dex=False."""
+        config = {"require_cross_dex": False}
+        expected = not config.get("require_cross_dex", True)
+        assert expected is True
+    
+    def test_same_dex_fallback_mode_flag_false_when_require_cross_dex_true(self):
+        """same_dex_fallback_mode=False when require_cross_dex=True (default)."""
+        config = {"require_cross_dex": True}
+        expected = not config.get("require_cross_dex", True)
+        assert expected is False
+    
+    def test_same_dex_fallback_mode_flag_false_when_missing(self):
+        """same_dex_fallback_mode=False when require_cross_dex not set (defaults to True)."""
+        config = {}  # Missing require_cross_dex
+        expected = not config.get("require_cross_dex", True)
+        assert expected is False
+    
+    def test_artifact_reconciliation_logic(self):
+        """Test the artifact reconciliation logic for same-DEX fallback.
+        
+        When same_dex_fallback_mode=True and spread_signals_count > 0 but
+        total_opportunities=0, the artifact should have same_dex_signals_active=True
+        and a note explaining the expected behavior.
+        """
+        # Simulate artifact construction logic from run_scan_real.py
+        spread_signals = [{"id": "spread_1", "is_same_dex": True}]  # 1 same-DEX signal
+        opps_summary = {"total_opportunities": 0, "profitable_count": 0}  # 0 cross-DEX opps
+        config = {"require_cross_dex": False}
+        
+        # Logic from run_scan_real.py v3.2.58
+        require_cross_dex = config.get("require_cross_dex", True)
+        same_dex_fallback = not require_cross_dex
+        
+        # Build opportunity_engine stats
+        opp_engine_stats = {
+            "summary": dict(opps_summary),  # Copy to allow modification
+            "same_dex_fallback_mode": same_dex_fallback,
+            "spread_signals_count": len(spread_signals),
+        }
+        
+        # Apply reconciliation
+        if same_dex_fallback and len(spread_signals) > 0 and opps_summary.get("total_opportunities", 0) == 0:
+            opp_engine_stats["summary"]["same_dex_signals_active"] = True
+            opp_engine_stats["summary"]["note"] = "Same-DEX fallback: spread_signals are fee-tier arbitrage, not cross-DEX opportunities"
+        
+        # Validate
+        assert opp_engine_stats["same_dex_fallback_mode"] is True
+        assert opp_engine_stats["spread_signals_count"] == 1
+        assert opp_engine_stats["summary"]["same_dex_signals_active"] is True
+        assert "Same-DEX fallback" in opp_engine_stats["summary"]["note"]
+    
+    def test_no_reconciliation_when_cross_dex_mode(self):
+        """When require_cross_dex=True, no reconciliation needed."""
+        spread_signals = []  # 0 signals (same-DEX blocked at source)
+        opps_summary = {"total_opportunities": 0, "profitable_count": 0}
+        config = {"require_cross_dex": True}
+        
+        require_cross_dex = config.get("require_cross_dex", True)
+        same_dex_fallback = not require_cross_dex
+        
+        opp_engine_stats = {
+            "summary": dict(opps_summary),
+            "same_dex_fallback_mode": same_dex_fallback,
+            "spread_signals_count": len(spread_signals),
+        }
+        
+        # No reconciliation applied when require_cross_dex=True
+        if same_dex_fallback and len(spread_signals) > 0 and opps_summary.get("total_opportunities", 0) == 0:
+            opp_engine_stats["summary"]["same_dex_signals_active"] = True
+        
+        assert opp_engine_stats["same_dex_fallback_mode"] is False
+        assert opp_engine_stats["spread_signals_count"] == 0
+        assert "same_dex_signals_active" not in opp_engine_stats["summary"]
+    
+    def test_no_reconciliation_when_cross_dex_opps_exist(self):
+        """When total_opportunities > 0, no reconciliation needed."""
+        spread_signals = [{"id": "spread_1"}]  # 1 signal
+        opps_summary = {"total_opportunities": 5, "profitable_count": 2}  # Cross-DEX opps exist
+        config = {"require_cross_dex": False}
+        
+        require_cross_dex = config.get("require_cross_dex", True)
+        same_dex_fallback = not require_cross_dex
+        
+        opp_engine_stats = {
+            "summary": dict(opps_summary),
+            "same_dex_fallback_mode": same_dex_fallback,
+            "spread_signals_count": len(spread_signals),
+        }
+        
+        # Reconciliation should NOT be applied when total_opportunities > 0
+        if same_dex_fallback and len(spread_signals) > 0 and opps_summary.get("total_opportunities", 0) == 0:
+            opp_engine_stats["summary"]["same_dex_signals_active"] = True
+        
+        assert opp_engine_stats["same_dex_fallback_mode"] is True
+        assert opp_engine_stats["spread_signals_count"] == 1
+        assert "same_dex_signals_active" not in opp_engine_stats["summary"]

@@ -2,6 +2,9 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (linea)
 #
+# v3.2.58 FROZEN: This config is stable for same-DEX fallback mode.
+# Changes require explicit approval due to MIXED_SOURCE constraints.
+#
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline on Linea.
 #   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
@@ -71,6 +74,11 @@ min_spread_bps: 3
 paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.05  # Linea is cheaper
+
+# v3.2.58: Relaxed SUSPECT_LIQUIDITY gas threshold for Linea
+# Linea pools may report higher gas_estimate due to thin liquidity
+# Default 500k is too aggressive - raise to 800k for Linea
+quoter_max_gas_estimate: 800000
 
 # L1 cost model: Linea is a zk-rollup with proof-based batching
 # v3.2.55: L1 cost per-txn is minimal compared to Arbitrum

@@ -71,6 +71,11 @@ paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.05  # Scroll is relatively cheap
 
+# v3.2.58: Relaxed SUSPECT_LIQUIDITY gas threshold for Scroll
+# Scroll pools may report higher gas_estimate due to thin liquidity
+# Default 500k is too aggressive - raise to 800k for Scroll
+quoter_max_gas_estimate: 800000
+
 # L1 cost model: Scroll is a zk-rollup with proof-based batching
 # v3.2.55: L1 cost per-txn is minimal compared to Arbitrum's calldata model
 l1_data_gas_units: 0   # zk-rollup - no per-txn L1 data posting

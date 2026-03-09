@@ -1258,12 +1258,15 @@ def collect_quotes(
                 ticks_crossed = quoter_result.get("ticks_crossed")
                 
                 # v2.0.9: SUSPECT_LIQUIDITY gate - reject high-impact quotes early
+                # v3.2.58: Config-level overrides for per-chain tuning
                 from core.constants import QUOTER_MAX_TICKS_CROSSED, QUOTER_MAX_GAS_ESTIMATE
+                max_ticks = config.get("quoter_max_ticks_crossed", QUOTER_MAX_TICKS_CROSSED)
+                max_gas = config.get("quoter_max_gas_estimate", QUOTER_MAX_GAS_ESTIMATE)
                 suspect_liquidity_reason = None
-                if ticks_crossed is not None and ticks_crossed > QUOTER_MAX_TICKS_CROSSED:
-                    suspect_liquidity_reason = f"ticks_crossed={ticks_crossed}>{QUOTER_MAX_TICKS_CROSSED}"
-                elif gas_estimate is not None and gas_estimate > QUOTER_MAX_GAS_ESTIMATE:
-                    suspect_liquidity_reason = f"gas_estimate={gas_estimate}>{QUOTER_MAX_GAS_ESTIMATE}"
+                if ticks_crossed is not None and ticks_crossed > max_ticks:
+                    suspect_liquidity_reason = f"ticks_crossed={ticks_crossed}>{max_ticks}"
+                elif gas_estimate is not None and gas_estimate > max_gas:
+                    suspect_liquidity_reason = f"gas_estimate={gas_estimate}>{max_gas}"
                 
                 if suspect_liquidity_reason:
                     rejected_quotes.append({

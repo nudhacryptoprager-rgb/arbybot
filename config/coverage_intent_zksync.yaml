@@ -71,6 +71,11 @@ gas_usd_estimate: 0.01  # zkSync is very cheap
 suspect_spread_bps_hard: 800  # Default 500 too aggressive for zkSync
 suspect_spread_bps: 400       # Diagnostic warning threshold
 
+# v3.2.58: Relaxed SUSPECT_LIQUIDITY gas threshold for zkSync Era
+# zkSync pools report higher gas_estimate (600-800k) due to different VM
+# Default 500k is too aggressive - raise to 1M for zkSync
+quoter_max_gas_estimate: 1000000  # Default 500k too low for zkSync
+
 # L1 cost model: zkSync uses zk-proofs, NOT Arbitrum-style L1 data posting
 # v3.2.55: Disable Arbitrum L1 cost model for zkSync Era
 # zkSync batches txns via validity proofs, so per-txn L1 cost is ~0

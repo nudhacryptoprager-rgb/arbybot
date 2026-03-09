@@ -500,6 +500,20 @@ def run_scan(
             # v2.2.1 Fix Step 8: Explicit flag when one-leg profits are DIAGNOSTIC only
             "one_leg_profit_is_diagnostic": truth_mode_m42,  # When true, profitable_count is NOT real profit
         }
+        
+        # v3.2.58: Reconcile opportunity_engine with spread_signals for same-DEX fallback
+        # When require_cross_dex=false (same-DEX fallback), spread_signals can have signals
+        # even when total_opportunities=0 (because OpportunityEngine is for cross-DEX only).
+        # Add explicit fields to avoid artifact contract mismatch.
+        require_cross_dex = config.get("require_cross_dex", True)
+        same_dex_fallback = not require_cross_dex
+        stats["opportunity_engine"]["same_dex_fallback_mode"] = same_dex_fallback
+        stats["opportunity_engine"]["spread_signals_count"] = len(spread_signals)
+        if same_dex_fallback and len(spread_signals) > 0 and opps_summary.get("total_opportunities", 0) == 0:
+            # Same-DEX signals exist but no cross-DEX opportunities - this is expected
+            stats["opportunity_engine"]["summary"]["same_dex_signals_active"] = True
+            stats["opportunity_engine"]["summary"]["note"] = "Same-DEX fallback: spread_signals are fee-tier arbitrage, not cross-DEX opportunities"
+        
         # v2.2.0 Fix Step 5: Normalize truth-mode reporting
         # When truth_mode=true, one-leg profits are diagnostic only
         if truth_mode_m42:
