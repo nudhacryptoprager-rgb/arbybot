@@ -520,21 +520,21 @@ def run_scan(
         logger.debug("OpportunityEngine skipped: %s", e)
         stats["opportunity_engine"] = {"enabled": False, "error": str(e)}
     
-    # v3.2.54: Refine no_data_reason with opportunity-level info
-    # This catches cases where quotes exist, opportunities were found, but all rejected
+    # v3.2.55: Refine no_data_reason with opportunity-level info
+    # If opportunities were evaluated but NO signals passed through, that's a reject-driven outcome.
+    # profitable_count is DIAGNOSTIC in truth_mode, so we don't condition on it.
     if stats.get("no_data_reason") == "NO_SPREAD_SIGNALS":
         opp_engine = stats.get("opportunity_engine", {})
         if opp_engine.get("enabled"):
             opp_summary = opp_engine.get("summary", {})
             total_opps = opp_summary.get("total_opportunities", 0)
-            profitable_count = opp_summary.get("profitable_count", 0)
-            if total_opps > 0 and profitable_count == 0:
+            if total_opps > 0:
+                # Opportunities were found and evaluated, but all rejected (0 spread signals passed)
                 stats["no_data_reason"] = "ALL_OPPORTUNITIES_REJECTED"
-                logger.info("no_data_reason refined: ALL_OPPORTUNITIES_REJECTED (total_opps=%d)", total_opps)
-            elif total_opps > 0:
-                # Had profitable opportunities - check roundtrip summary later
-                # This is handled by roundtrip evaluation below
-                pass
+                logger.info(
+                    "no_data_reason refined: ALL_OPPORTUNITIES_REJECTED (total_opps=%d, profitable=%d diagnostic)",
+                    total_opps, opp_summary.get("profitable_count", 0)
+                )
     
     # v2.1.0: Round-trip evaluation for CANONICAL profit (after one-leg diagnostic)
     try:

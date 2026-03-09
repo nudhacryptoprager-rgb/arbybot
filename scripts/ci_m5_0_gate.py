@@ -913,6 +913,16 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                                 if not is_valid:
                                     messages.append(f"FAIL: {artifact_name} infra chain/RPC mismatch: {error_msg}")
                                     all_passed = False
+                        
+                        # v3.2.55: Validate WS hosts as well (prevent WS pollution between chains)
+                        ws_host_s = infra_s.get("rpc_ws_host")
+                        ws_host_t = infra_t.get("rpc_ws_host")
+                        for artifact_name, ws_host in [("scan", ws_host_s), ("truth_report", ws_host_t)]:
+                            if ws_host:
+                                is_valid_ws, error_msg_ws = validate_chain_rpc_consistency(cid, ws_host)
+                                if not is_valid_ws:
+                                    messages.append(f"FAIL: {artifact_name} infra WS chain/RPC mismatch: {error_msg_ws}")
+                                    all_passed = False
                     except ImportError:
                         # Fallback to legacy heuristic if import fails
                         if cid == 42161:

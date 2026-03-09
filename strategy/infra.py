@@ -315,6 +315,16 @@ def build_infra_payload(
         ws_enabled = True
         rpc_ws_host = urlparse(resolved_ws).netloc
         transport = "ws+http"
+        # v3.2.55: Extract provider from URL if not already set
+        if provider_ws == "unknown" and rpc_ws_host:
+            if "alchemy" in rpc_ws_host:
+                provider_ws = "alchemy"
+            elif "infura" in rpc_ws_host:
+                provider_ws = "infura"
+            elif "quicknode" in rpc_ws_host:
+                provider_ws = "quicknode"
+            else:
+                provider_ws = "public"
     
     payload = {
         "rpc_provider": rpc_provider,

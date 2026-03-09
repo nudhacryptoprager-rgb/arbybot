@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-09 12:00  
-**Tests**: 1465 passed, 1 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260309_112122` (zkSync), `ci_m5_gate_20260309_112235` (Linea)  
+**Updated**: 2026-03-09 12:45  
+**Tests**: 1471 passed, 2 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260309_123641` (Arbitrum), `ci_m5_gate_20260309_123829` (Base), `ci_m5_gate_20260309_124009` (Mantle), `ci_m5_gate_20260309_124137` (zkSync), `ci_m5_gate_20260309_124320` (Linea), `ci_m5_gate_20260309_124403` (Scroll)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -108,16 +108,16 @@
 
 **Audit conclusion (2026-03-09 12:00)**: Multicall and WebSocket transport are chain-correct and healthy on all 6 chains. **Main blocker is NOT transport code**, but DEX ecosystem compatibility (MIXED_SOURCE on 3 chains due to algebra↔uniswap quoter mismatch).
 
-### Data Collection Quality Contract (2026-03-09 12:00)
+### Data Collection Quality Contract (2026-03-09 12:45)
 
-| Chain | quotes | fetch% | signals | no_data_reason | Status |
-|-------|--------|--------|---------|----------------|--------|
-| Base | 29/42 | 69% | 2 | — | SIGNAL_PRODUCING |
-| zkSync | 49/49 | 100% | 0 | NO_SPREAD_SIGNALS | INFRA_READY (quoter_v2 FIX applied) |
-| Linea | 30/30 | 100% | 0 | MIXED_SOURCE | same-DEX fallback |
-| Mantle | 24/50 | 48% | 3 | — | same-DEX fallback |
-| Arbitrum | 42/101 | 42% | 9 | — | SIGNAL_PRODUCING |
-| Scroll | 21/21 | 100% | 0 | MIXED_SOURCE | same-DEX fallback |
+| Chain | RunDir | quotes | fetch% | signals | opps | no_data_reason | Status |
+|-------|--------|--------|--------|---------|------|----------------|--------|
+| Arbitrum | 123641 | 40/122 | 33% | 9 | 78 | — | **PASS** SIGNAL_PRODUCING |
+| Base | 123829 | 34/54 | 63% | 1 | 47 | — | **PASS** SIGNAL_PRODUCING |
+| Mantle | 124009 | 24/50 | 48% | 3 | 9 | — | **PASS** same-DEX fallback |
+| zkSync | 124137 | 31/49 | 63% | 0 | 22 | ALL_OPPORTUNITIES_REJECTED | NO_DATA INFRA_READY |
+| Linea | 124320 | 29/30 | 97% | 0 | 17 | ALL_OPPORTUNITIES_REJECTED | NO_DATA same-DEX fallback |
+| Scroll | 124403 | 10/24 | 42% | 0 | 6 | ALL_OPPORTUNITIES_REJECTED | NO_DATA same-DEX fallback |
 
 | Metric | Target | Base | Mantle | Arbitrum | Notes |
 |--------|--------|------|--------|----------|-------|
@@ -128,46 +128,57 @@
 
 **Stabilization criterion**: Chain is stable when it repeatably produces non-NO_DATA across 3+ consecutive cycles, not just single-run PASS.
 
-### Reject Surface Analysis (2026-03-09)
+### Reject Surface Analysis (2026-03-09 12:45)
 
-**Base** (`coverage_intent_base.yaml`, runDir `104548`):
-- Quotes: 42 total → 29 fetched (69% fetch rate) ⚠️
-- DEXes: uniswap_v3, aerodrome, sushiswap_v3
-- Signals: 2 (ROUNDTRIP_PROFITABLE)
-- **Status**: SIGNAL_PRODUCING
+**Arbitrum** (`coverage_intent_arbitrum_one.yaml`, runDir `123641`):
+- Quotes: 122 total → 40 fetched (33% fetch rate)
+- DEXes: 4 (camelot_v3, pancakeswap_v3, sushiswap_v3, uniswap_v3)
+- Opportunities: 78 total, 40 profitable, 56 rejected
+- Signals: 9
+- WS: arb-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
+- **Status**: **PASS** SIGNAL_PRODUCING
 
-**Mantle** (`coverage_intent_mantle.yaml`, runDir `104720`):
+**Base** (`coverage_intent_base.yaml`, runDir `123829`):
+- Quotes: 54 total → 34 fetched (63% fetch rate)
+- DEXes: 3 (aerodrome, sushiswap_v3, uniswap_v3)
+- Opportunities: 47 total, 33 profitable, 41 rejected
+- Signals: 1
+- WS: base-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
+- **Status**: **PASS** SIGNAL_PRODUCING
+
+**Mantle** (`coverage_intent_mantle.yaml`, runDir `124009`):
 - Quotes: 50 total → 24 fetched (48% fetch rate)
-- DEXes: agni_v3 (13 pairs), stratum (5)
+- DEXes: 2 (agni_v3, stratum)
+- Opportunities: 9 total, 9 profitable, 9 rejected
 - Signals: 3 (same-DEX fee-tier arbitrage)
-- **Blocker**: Only 5 true cross-DEX pairs; using same-DEX fallback (require_cross_dex=false)
+- WS: mantle-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
+- **Status**: **PASS** same-DEX fallback
 
-**Arbitrum** (`coverage_intent_arbitrum_one.yaml`, runDir `104851`):
-- Quotes: 101 total → 42 fetched (42% fetch rate)
-- DEXes: 4 (uniswap_v3, sushiswap_v3, camelot, pancakeswap)
-- Signals: 9 (highest count)
-- **Status**: SIGNAL_PRODUCING
+**zkSync** (`coverage_intent_zksync.yaml`, runDir `124137`):
+- Quotes: 49 total → 31 fetched (63% fetch rate)
+- DEXes: 2 (pancakeswap_v3, uniswap_v3)
+- Opportunities: 22 total, 20 profitable, 17 rejected
+- Signals: 0 (all rejected: SUSPECT_SPREAD_HARD, MIXED_SOURCE, NET_PROFIT_TOO_LOW)
+- WS: zksync-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
+- **Status**: NO_DATA (ALL_OPPORTUNITIES_REJECTED) INFRA_READY
 
-**zkSync** (`coverage_intent_zksync_era.yaml`, runDir `104838`):
-- Quotes: 49/49 (100% fetch rate) ✅ **EXCELLENT**
-- DEXes: syncswap_v2, pancakeswap_v3
-- Signals: 0
-- **Status**: INFRA_READY (NO_DATA - no arb market)
+**Linea** (`coverage_intent_linea.yaml`, runDir `124320`):
+- Quotes: 30 total → 29 fetched (97% fetch rate) ✅
+- DEXes: 2 (lynex_v3, pancakeswap_v3)
+- Opportunities: 17 total, 7 profitable, 17 rejected
+- Signals: 0 (all rejected by policy)
+- WS: linea-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
+- **Status**: NO_DATA (ALL_OPPORTUNITIES_REJECTED) same-DEX fallback
 
-**Linea** (`coverage_intent_linea.yaml`, runDir `104751`):
-- Quotes: 28 total → 27 fetched (96% fetch rate) ✅ **EXCELLENT**
-- DEXes: lynex_v3
-- Signals: 0
-- **Status**: INFRA_READY (NO_DATA - no arb market)
+**Scroll** (`coverage_intent_scroll.yaml`, runDir `124403`):
+- Quotes: 24 total → 10 fetched (42% fetch rate)
+- DEXes: 2 (nuri_v3, sushiswap_v3)
+- Opportunities: 6 total, 4 profitable, 6 rejected
+- Signals: 0 (all rejected by policy)
+- WS: scroll-mainnet.g.alchemy.com, provider_id_ws=alchemy ✅
+- **Status**: NO_DATA (ALL_OPPORTUNITIES_REJECTED) same-DEX fallback
 
-**Scroll** (`coverage_intent_scroll.yaml`, runDir `104818`):
-- Quotes: 21 total → 10 fetched (48% fetch rate) ⚠️
-- DEXes: sushiswap_v3, nuri_v3
-- Signals: 0
-- **Status**: INFRA_READY (NO_DATA - no arb market)
-- **Note**: Improved from 24% after PAPER/SYN removal (no token addresses)
-
-**Action items** (updated 2026-03-09 12:00):
+**Action items** (updated 2026-03-09 12:45):
 1. ✅ DONE: mUSD added to `core_tokens.yaml` for Mantle
 2. ✅ DONE: AUSD removed from intent.txt (zero liquidity on DEXes)
 3. ✅ DONE: PAPER/SYN removed from intent.txt Scroll (no token addresses)
@@ -176,38 +187,38 @@
 6. TODO: Add FusionX V3 or another quoter_v2 DEX on Mantle for true cross-DEX
 7. TODO: Add Algebra-compatible DEX on Linea/Scroll OR remove Algebra DEX
 
-### Blocker Classification (2026-03-09 12:00)
+### Blocker Classification (2026-03-09 12:45)
 
 ```
-code_blocker:           LOW    (pytest 1465 passed, CI green, safety PASS)
+code_blocker:           LOW    (pytest 1471 passed, CI green, safety PASS)
 multicall_blocker:      LOW    (success_rate=1.0 all chains, 4 RPC calls)
-websocket_blocker:      LOW    (ws_connected=true, chain-correct hosts, lag <200ms)
+websocket_blocker:      LOW    (ws_connected=true, ALL chains chain-correct hosts, provider_id_ws=alchemy)
 dex_compatibility_blocker:
-  - Mantle:     HIGH   (stratum ve33 ↔ agni_v3 uniswap = MIXED_SOURCE)
-  - Linea:      HIGH   (lynex algebra ↔ pancakeswap uniswap = MIXED_SOURCE)
-  - Scroll:     HIGH   (nuri algebra ↔ sushiswap uniswap = MIXED_SOURCE)
-  - zkSync:     FIXED  (quoter_v2 enabled, was SLOT0_DIAGNOSTIC)
-  - Base:       LOW    (uniswap↔aerodrome↔sushi all quoter_v2)
-  - Arbitrum:   LOW    (all DEXes quoter_v2 compatible)
+  - Mantle:     MED    (same-DEX working, signals=3, no cross-DEX due to MIXED_SOURCE)
+  - Linea:      MED    (same-DEX working, no signals, all opps rejected as MIXED_SOURCE)
+  - Scroll:     MED    (same-DEX working, no signals, all opps rejected as MIXED_SOURCE)
+  - zkSync:     MED    (quoter_v2 working, no signals, opps rejected as SUSPECT_SPREAD_HARD)
+  - Base:       LOW    (uniswap↔aerodrome↔sushi all quoter_v2, signals=1)
+  - Arbitrum:   LOW    (all DEXes quoter_v2 compatible, signals=9)
 ```
 
-**Main blocker (2026-03-09 12:00)**: DEX ecosystem compatibility. Chains with mixed quoter interfaces (algebra + uniswap) cannot do cross-DEX arbitrage without MIXED_SOURCE rejection. Same-DEX fee-tier arb is the current workaround.
+**Main blocker (2026-03-09 12:45)**: DEX ecosystem compatibility. Chains with mixed quoter interfaces (algebra + uniswap) cannot do cross-DEX arbitrage without MIXED_SOURCE rejection. Same-DEX fee-tier arb is the current workaround. **ALL_OPPORTUNITIES_REJECTED** now accurately tracks opportunities that are generated but filtered by policy. zkSync has profitable opportunities (20/22) but rejected due to SUSPECT_SPREAD_HARD.
 
-### Infra Gate Results (2026-03-09 10:35)
+### Infra Gate Results (2026-03-09 12:45)
 
 Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.status` semantics:
 - `NO_DATA`: signals_count == 0 (no raw signals at all)
 - `FAIL`: signals_count > 0 but no profitable results (includes all-excluded case: FAIL_ALL_EXCLUDED)
 - `PASS`: signals > 0 and profitable
 
-| Chain | Infra Gate | run_summary | chain_quality_level | quotes | fetch% | signals | dexes | runDir | Notes |
-|-------|------------|-------------|---------------------|--------|--------|---------|-------|--------|-------|
-| Arbitrum | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 51/122 | 42% | 11 | 4 | 102836 | Best signals |
-| Base | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 37/42 | 88% | 1 | 3 | 102444 | **IMPROVED** |
-| Mantle | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 24/47 | 51% | 3 | 2 | 102629 | same-DEX fallback |
-| Linea | ✅ PASS | NO_DATA | INFRA_READY | 27/42 | 64% | 0 | 2 | 102739 | no spreads ≥3bps |
-| zkSync | ✅ PASS | NO_DATA | INFRA_READY | 49/62 | 79% | 0 | 2 | 102825 | no spreads ≥3bps |
-| Scroll | ✅ PASS | NO_DATA | INFRA_READY | 9/37 | 24% | 0 | 2 | 102807 | no spreads ≥3bps |
+| Chain | Infra Gate | run_summary | chain_quality_level | quotes | fetch% | signals | opps | dexes | runDir | WS Host |
+|-------|------------|-------------|---------------------|--------|--------|---------|------|-------|--------|---------|
+| Arbitrum | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 40/122 | 33% | 9 | 78 | 4 | 123641 | arb-mainnet.g.alchemy.com |
+| Base | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 34/54 | 63% | 1 | 47 | 3 | 123829 | base-mainnet.g.alchemy.com |
+| Mantle | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 24/50 | 48% | 3 | 9 | 2 | 124009 | mantle-mainnet.g.alchemy.com |
+| zkSync | ✅ PASS | NO_DATA | INFRA_READY | 31/49 | 63% | 0 | 22 | 2 | 124137 | zksync-mainnet.g.alchemy.com |
+| Linea | ✅ PASS | NO_DATA | INFRA_READY | 29/30 | 97% | 0 | 17 | 2 | 124320 | linea-mainnet.g.alchemy.com |
+| Scroll | ✅ PASS | NO_DATA | INFRA_READY | 10/24 | 42% | 0 | 6 | 2 | 124403 | scroll-mainnet.g.alchemy.com |
 
 ### Scroll Status Update
 
@@ -383,14 +394,17 @@ py -3.11 -m pytest tests/unit -q
 
 ---
 
-## Evidence RunDirs
+## Evidence RunDirs (2026-03-09 12:45)
 
 | Type | RunDir | Key Evidence |
 |------|--------|--------------|
-| ONLINE | `ci_m5_gate_20260223_134446` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 3/3, runs_in_window=113 |
-| discovery_runtime | `ci_m5_gate_20260223_133801` | universe_source=discovery_runtime, quotes_fetched=7, PASS |
-| stress-test | `manual_run_20260223_133953` | rpc_cap_triggered=true, rpc_calls=5, pools_from_rpc=224 |
-| Reference | `ci_m5_gate_20260223_132921` | discovery=28 pairs, runs_in_window=110 |
+| Arbitrum ONLINE | `ci_m5_gate_20260309_123641` | quotes=40/122, signals=9, opps=78, status=**PASS**, WS=arb-mainnet.g.alchemy.com |
+| Base ONLINE | `ci_m5_gate_20260309_123829` | quotes=34/54, signals=1, opps=47, status=**PASS**, WS=base-mainnet.g.alchemy.com |
+| Mantle ONLINE | `ci_m5_gate_20260309_124009` | quotes=24/50, signals=3, opps=9, status=**PASS**, WS=mantle-mainnet.g.alchemy.com |
+| zkSync ONLINE | `ci_m5_gate_20260309_124137` | quotes=31/49, signals=0, opps=22, status=NO_DATA, no_data_reason=ALL_OPPORTUNITIES_REJECTED, WS=zksync-mainnet.g.alchemy.com |
+| Linea ONLINE | `ci_m5_gate_20260309_124320` | quotes=29/30, signals=0, opps=17, status=NO_DATA, no_data_reason=ALL_OPPORTUNITIES_REJECTED, WS=linea-mainnet.g.alchemy.com |
+| Scroll ONLINE | `ci_m5_gate_20260309_124403` | quotes=10/24, signals=0, opps=6, status=NO_DATA, no_data_reason=ALL_OPPORTUNITIES_REJECTED, WS=scroll-mainnet.g.alchemy.com |
+| Reference | `ci_m5_gate_20260223_134446` | discovery=28 pairs, 224 V3 queries, 49 tokens, preflight 3/3, runs_in_window=113 |
 
 ---
 

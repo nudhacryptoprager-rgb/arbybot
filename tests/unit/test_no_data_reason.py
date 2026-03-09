@@ -75,6 +75,22 @@ class TestNoDataReasonLogic(unittest.TestCase):
         )
         self.assertEqual(reason, "ALL_OPPORTUNITIES_REJECTED")
     
+    def test_all_opportunities_rejected_with_profitable(self):
+        """When opportunities exist and some are profitable but none accepted, still ALL_OPPORTUNITIES_REJECTED.
+        
+        This covers the truth_mode scenario where profitable_count is DIAGNOSTIC only,
+        so even with profitable_accepted > 0, if spread_signals_count=0 and total_opportunities > 0,
+        the reason is still ALL_OPPORTUNITIES_REJECTED (system/economics reject, not market absence).
+        """
+        reason = compute_no_data_reason(
+            quotes_total=49,
+            quotes_fetched=49,
+            spread_signals_count=0,
+            total_opportunities=66,
+            profitable_accepted=5,  # Diagnostic profitable, but still all rejected from signal flow
+        )
+        self.assertEqual(reason, "ALL_OPPORTUNITIES_REJECTED")
+    
     def test_no_spread_signals_with_no_opportunities(self):
         """When no opportunities found at all, reason is NO_SPREAD_SIGNALS (not ALL_OPPORTUNITIES_REJECTED)."""
         reason = compute_no_data_reason(

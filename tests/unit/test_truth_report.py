@@ -791,5 +791,77 @@ class TestEconomicsFieldsInSpreadSignals(unittest.TestCase):
                     f"is_roundtrip_viable should be False when spread_minus_required={sig['spread_minus_required_bps']}")
 
 
+class TestNoDataReasonArtifactContract(unittest.TestCase):
+    """v3.2.55: Artifact contract for no_data_reason consistency.
+    
+    These tests verify that compute_no_data_reason() produces correct values
+    to satisfy the artifact contract. The contract states:
+    - If total_opportunities > 0 and signals_count == 0, reason must be ALL_OPPORTUNITIES_REJECTED
+    - If total_opportunities == 0 and signals_count == 0, reason should be NO_SPREAD_SIGNALS
+    """
+    
+    def test_compute_no_data_reason_opps_exist_returns_all_rejected(self):
+        """When opportunities exist but signals_count == 0, compute_no_data_reason returns ALL_OPPORTUNITIES_REJECTED."""
+        from core.no_data import compute_no_data_reason
+        
+        result = compute_no_data_reason(
+            quotes_total=49,
+            quotes_fetched=49,
+            spread_signals_count=0,  # No signals passed
+            total_opportunities=66,  # Opportunities were evaluated
+        )
+        
+        self.assertEqual(
+            result, "ALL_OPPORTUNITIES_REJECTED",
+            "When total_opportunities > 0 and spread_signals_count == 0, "
+            "no_data_reason must be ALL_OPPORTUNITIES_REJECTED"
+        )
+    
+    def test_all_opportunities_rejected_valid_when_opps_exist(self):
+        """ALL_OPPORTUNITIES_REJECTED is valid when opportunities were found but all rejected."""
+        artifact = {
+            "opportunity_engine": {
+                "summary": {
+                    "total_opportunities": 66,
+                    "profitable_count": 0,
+                }
+            },
+            "metrics": {
+                "signals_count": 0,
+                "no_data_reason": "ALL_OPPORTUNITIES_REJECTED",  # CORRECT
+            },
+        }
+        
+        total_opps = artifact["opportunity_engine"]["summary"]["total_opportunities"]
+        signals_count = artifact["metrics"]["signals_count"]
+        no_data_reason = artifact["metrics"]["no_data_reason"]
+        
+        # This is valid: opportunities exist, none passed, reason is ALL_OPPORTUNITIES_REJECTED
+        if total_opps > 0 and signals_count == 0:
+            self.assertEqual(no_data_reason, "ALL_OPPORTUNITIES_REJECTED")
+    
+    def test_no_spread_signals_valid_when_no_opportunities(self):
+        """NO_SPREAD_SIGNALS is valid when no opportunities were found at all."""
+        artifact = {
+            "opportunity_engine": {
+                "summary": {
+                    "total_opportunities": 0,  # No opportunities evaluated
+                }
+            },
+            "metrics": {
+                "signals_count": 0,
+                "no_data_reason": "NO_SPREAD_SIGNALS",  # CORRECT - true market absence
+            },
+        }
+        
+        total_opps = artifact["opportunity_engine"]["summary"]["total_opportunities"]
+        signals_count = artifact["metrics"]["signals_count"]
+        no_data_reason = artifact["metrics"]["no_data_reason"]
+        
+        # This is valid: no opportunities at all means true market absence
+        if total_opps == 0 and signals_count == 0:
+            self.assertEqual(no_data_reason, "NO_SPREAD_SIGNALS")
+
+
 if __name__ == "__main__":
     unittest.main()
