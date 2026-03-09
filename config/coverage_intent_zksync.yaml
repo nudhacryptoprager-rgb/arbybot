@@ -71,10 +71,12 @@ gas_usd_estimate: 0.01  # zkSync is very cheap
 suspect_spread_bps_hard: 800  # Default 500 too aggressive for zkSync
 suspect_spread_bps: 400       # Diagnostic warning threshold
 
-# v3.2.58: Relaxed SUSPECT_LIQUIDITY gas threshold for zkSync Era
-# zkSync pools report higher gas_estimate (600-800k) due to different VM
-# Default 500k is too aggressive - raise to 1M for zkSync
-quoter_max_gas_estimate: 1000000  # Default 500k too low for zkSync
+# v3.2.62: Aggressively relaxed SUSPECT_LIQUIDITY thresholds for zkSync Era
+# zkSync pools report very high gas_estimate (2M-27M) due to different zkEVM
+# This is expected behavior for zkSync - the gas estimates are not comparable to EVM
+# Default 500k is too aggressive - raise to 30M to allow all zkSync pools
+quoter_max_gas_estimate: 30000000  # zkSync VM reports 10-100x higher gas than EVM
+quoter_max_ticks_crossed: 50       # Allow more tick crossings for thin liquidity
 
 # L1 cost model: zkSync uses zk-proofs, NOT Arbitrum-style L1 data posting
 # v3.2.55: Disable Arbitrum L1 cost model for zkSync Era

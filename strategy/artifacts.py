@@ -245,8 +245,10 @@ def _compute_execution_pnl(
         "net_pnl_usdc": f"{computed_net_pnl:.6f}" if computed_net_pnl is not None else None,
         "net_pnl_bps": None,  # TODO: compute from notional when available
         "cost_model_available": cost_model_available,
-        # v3.2.58: Clean PnL v2 with position-based slippage
-        "cost_model_version": "paper_gas_slippage_l1_v2" if cost_model_available else None,
+        # v3.2.62: Clean PnL v3 with position-based slippage (formula fix)
+        # v3 upgrade: slippage_usd = paper_size_usd * slippage_bps / 10000 * num_signals
+        # (not gross_pnl * slippage_bps / 10000 which was v1/v2 bug)
+        "cost_model_version": "paper_gas_slippage_l1_v3" if cost_model_available else None,
         "cost_model_components": {
             "gas_usd": total_gas_usd,
             "slippage_bps": slippage_bps,

@@ -39,7 +39,7 @@ class TestExecutionPnLGolden(unittest.TestCase):
         result = _compute_execution_pnl(signals, config)
         
         self.assertTrue(result["cost_model_available"])
-        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_l1_v2")
+        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_l1_v3")
         self.assertIsNotNone(result["cost_model_components"])
         # v3.2.58: gas_usd is per-signal total: 0.05 * 2 = 0.10
         self.assertEqual(result["cost_model_components"]["gas_usd"], 0.10)
@@ -183,7 +183,7 @@ class TestExecutionPnLGolden(unittest.TestCase):
         self.assertEqual(result["net_pnl_usdc"], "28.481975")
         self.assertEqual(result["would_execute_pnl_usdc"], "28.481975")
         self.assertTrue(result["cost_model_available"])
-        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_l1_v2")
+        self.assertEqual(result["cost_model_version"], "paper_gas_slippage_l1_v3")
         # v3.2.58: gas is per-signal total
         self.assertEqual(result["cost_model_components"]["gas_usd"], 0.06)
         self.assertEqual(result["cost_model_components"]["slippage_bps"], 5)
