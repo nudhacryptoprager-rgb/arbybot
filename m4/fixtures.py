@@ -31,9 +31,11 @@ from core.no_data import canonicalize_config_path
 # Import from m4 policy module
 from .policy import (
     CostModelConfig,
+    ChainQualityLevel,
     DoDProfile,
     FailReason,
     Thresholds,
+    classify_chain_quality,
     get_cost_model,
     DEFAULT_CHAIN_ID,
     DEFAULT_PINNED_BLOCK,
@@ -1146,6 +1148,16 @@ def generate_m4_from_online_inputs(
     # v3.2.10: Extract run_kind from config_params for smoke run isolation
     run_kind = config_params.get("run_kind", "NORMAL")
     
+    # v3.2.51: Chain quality level classification
+    # Uses included_signals_count to determine signal-producing status
+    # consecutive_non_nodata_cycles defaults to 1 (single run context)
+    # TODO: Add rolling tracking for consecutive_non_nodata_cycles in step 5
+    chain_quality_level = classify_chain_quality(
+        signals_count=included_signals_count,
+        consecutive_non_nodata_cycles=1,  # Single run - no history tracking yet
+        infra_gate_pass=True,  # Reaching this code means infra passed
+    )
+    
     run_summary_data = {
         "schema_version": "m4:run_summary:v2.0",  # v2.0: timestamp-based provenance
         "policy_version": POLICY_VERSION,
@@ -1207,6 +1219,9 @@ def generate_m4_from_online_inputs(
             "profit_truth_available": profit_truth_available,
             # v3.2.7: Deterministic NO_DATA classification
             "no_data_reason": no_data_reason,
+            # v3.2.51: Chain quality level (INFRA_READY/SIGNAL_PRODUCING/QUALITY_RAISED)
+            "chain_quality_level": chain_quality_level,
+            "consecutive_non_nodata_cycles": 1,  # Single run context, no history yet
             # v3.2.30: Roundtrip metrics for M4.2 progress tracking
             "roundtrip": roundtrip,
         },

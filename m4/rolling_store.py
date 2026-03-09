@@ -421,6 +421,16 @@ def _compute_quick_stats(
     current_sha_no_data = sum(1 for r in current_sha_runs 
                              if get_included_signals(r) == 0)  # v2.0.4: included-based
     
+    # v3.2.51: Compute consecutive_non_nodata_cycles for chain quality level
+    # Count consecutive runs (most recent first) with included_signals_count > 0
+    # This is used to determine QUALITY_RAISED status (MIN_CYCLES_FOR_QUALITY_RAISED=3)
+    consecutive_non_nodata_cycles = 0
+    for r in reversed(normal_runs):
+        if get_included_signals(r) > 0:
+            consecutive_non_nodata_cycles += 1
+        else:
+            break  # Stop at first NO_DATA run
+    
     agg_data["quick_stats"] = {
         "pass_count": pass_count,
         "fail_count": fail_count,
@@ -470,6 +480,8 @@ def _compute_quick_stats(
         "chain_key": (list(all_chain_keys)[0] if len(all_chain_keys) == 1 else ("MIXED" if len(all_chain_keys) > 1 else "unknown")),
         # v3.2.10: chain_keys as sorted list for automation/machine readability
         "chain_keys": sorted(all_chain_keys) if all_chain_keys else [],
+        # v3.2.51: Consecutive non-NO_DATA cycles for chain quality level
+        "consecutive_non_nodata_cycles": consecutive_non_nodata_cycles,
     }
     
     # v2.0: runs_since_timestamp (replaces runs_since_sha)

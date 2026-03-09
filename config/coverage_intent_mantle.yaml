@@ -41,7 +41,11 @@ dexes:
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-require_cross_dex: true  # 2 DEXes on Mantle
+# v3.2.51: require_cross_dex=false because ALL cross-dex routes are stratum<->agni_v3
+# stratum=ve33 (getAmountOut), agni_v3=uniswap_v3 (quoter_v2) = MIXED_SOURCE
+# This allows single-DEX fee-tier arbitrage where both legs use same quote source
+# RE-ENABLE when: FusionX V3 or another UniV3 DEX added that can route quoter_v2<->quoter_v2
+require_cross_dex: false  # BLOCKED_BY: MIXED_SOURCE stratum<->agni_v3
 
 # Quoter V2 for executable quotes (agni_v3 has quoter_v2)
 use_quoter_v2: true

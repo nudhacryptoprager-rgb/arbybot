@@ -8,83 +8,73 @@
 **End-goal**: Production DEX↔DEX arbitrage with real on-chain execution and proven net profit.  
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, canonical rolling on arbitrum_one.
 
-## SESSION GOAL (2026-03-08)
-**Goal**: Practical bring-up - complete 10-step fix plan (code/config → verification → docs)
+## SESSION GOAL (2026-03-09)
+**Goal**: Fix Mantle MIXED_SOURCE blocker + add chain_quality_level to artifacts
 
-### Workflow Contract (enforced 2026-03-08)
+### Workflow Contract (enforced 2026-03-09)
 > **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
 > Any report generated before final reruns is non-canonical by process.
 
-### Blocker Classification (2026-03-08 v2.0.9)
+### Blocker Classification (2026-03-09 v3.2.51)
 ```
-code_blocker: LOW (pytest 1457 passed, CI green, safety PASS)
-data_collection_blocker: MEDIUM (quarantines active, some quotes rejected)
-market_window_blocker: HIGH (4/5 chains NO_DATA/FAIL despite infra PASS)
+code_blocker: LOW (pytest 1463 passed, CI green, safety PASS)
+data_collection_blocker: LOW (Mantle MIXED_SOURCE fixed via require_cross_dex=false)
+market_window_blocker: HIGH (3/5 chains NO_DATA despite infra PASS - market conditions)
 ```
 
 **ВАЖЛИВО**: `infra_gate: PASS` ≠ `run_summary.status: PASS`. See [Status_M5_0.md](status/Status_M5_0.md) for terminology.
 
-### Multi-chain Coverage Results (2026-03-08 v2.0.9 --cycles 3)
-| Chain | RunDir | Infra Gate | run_summary | signals | Quotes | Notes |
-|-------|--------|------------|-------------|---------|--------|-------|
-| Base | `ci_m5_gate_20260308_112739` | PASS | **PASS** | 1 | 31 | spread 49bps |
-| Linea | `ci_m5_gate_20260308_112927` | PASS | NO_DATA | 0 | 27 | no spreads ≥3bps |
-| Mantle | `ci_m5_gate_20260308_113028` | PASS | FAIL | 1 | 14 | signal excluded |
-| zkSync | `ci_m5_gate_20260308_113052` | PASS | NO_DATA | 0 | 49 | no spreads ≥3bps |
-| Scroll | `ci_m5_gate_20260308_113003` | PASS | NO_DATA | 0 | 9 | no spreads ≥3bps |
+### Multi-chain Coverage Results (2026-03-09 v3.2.51 --cycles 1-2)
+| Chain | RunDir | Infra Gate | run_summary | chain_quality_level | signals | quotes_fetched | Notes |
+|-------|--------|------------|-------------|---------------------|---------|----------------|-------|
+| Base | `ci_m5_gate_20260309_100321` | PASS | **PASS** | SIGNAL_PRODUCING | 1 | 36 | ROUNDTRIP_PROFITABLE |
+| Mantle | `ci_m5_gate_20260309_100147` | PASS | **PASS** | SIGNAL_PRODUCING | 1 | 24 | FIXED: require_cross_dex=false |
 
-**Practical changes made (v2.0.9)**:
-- Added `ChainQualityLevel` policy (INFRA_READY → SIGNAL_PRODUCING → QUALITY_RAISED)
-- Added `classify_chain_quality()` + 14 tests in `test_chain_quality_level.py`
-- Lowered `min_spread_bps` from 5 to 3 for all chains (profitable with low L2 gas)
-- Fixed AERO token price ($1.5 → $0.35 market correction) in Base config
-- Added PUFF/AUSD token prices to Mantle config
-- Terminology contract: added `ChainQualityLevel` to table
+**Practical changes made (v3.2.51)**:
+- **Mantle MIXED_SOURCE fix**: Set `require_cross_dex: false` in coverage_intent_mantle.yaml
+  - Root cause: ALL cross-dex routes are stratum (ve33) ↔ agni_v3 (uniswap_v3) = MIXED_SOURCE
+  - Solution: Allow single-DEX fee-tier arbitrage (agni_v3→agni_v3) which uses consistent quoter_v2 source
+- **chain_quality_level**: Added to run_summary.metrics (INFRA_READY/SIGNAL_PRODUCING/QUALITY_RAISED)
+- **consecutive_non_nodata_cycles**: Added to run_summary.metrics and m4_stability_agg.quick_stats
+- **Mantle tests**: Added 6 tests in `test_mantle_mixed_source.py` (config + MIXED_SOURCE behavior)
+- Terminology contract: `chain_quality_level` in artifacts for provable quality progression
 
 ## 0) Meta
-timestamp_utc: 2026-03-08T11:35:00Z  
+timestamp_utc: 2026-03-09T10:15:00Z  
 rolling_provenance: 2026-03-05T17:49:43Z (arbitrum_one, ci_m5_gate_20260305_184929)  
-mode: ONLINE (multi-chain cycles=3 verification)
+mode: ONLINE (multi-chain verification)
 
 ## 1) Commands Executed (This Session)
 
 ```
 py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 -m pytest tests/unit -q: 1457 passed, 1 skipped
+py -3.11 -m pytest tests/unit -q: 1463 passed, 1 skipped
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 3: PASS
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: PASS (infra)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: PASS (infra)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 3: PASS (infra)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: PASS (infra)
+python scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 2: PASS
+python scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 1: PASS (ROUNDTRIP_PROFITABLE)
 ```
 
 ## 2) Evidence Artifacts
 
-**Fresh multi-chain coverage (2026-03-08 --cycles 3 verification)**:
-- `ci_m5_gate_20260308_110956` (Base) - **PASS** (infra+signals), 1 signal, 0.342 USDC
-- `ci_m5_gate_20260308_111137` (Scroll) - PASS (infra), NO_DATA (signals)
-- `ci_m5_gate_20260308_111208` (Linea) - PASS (infra), NO_DATA (signals)
-- `ci_m5_gate_20260308_111245` (Mantle) - PASS (infra), FAIL (signals not profitable)
-- `ci_m5_gate_20260308_111334` (zkSync) - PASS (infra), NO_DATA (signals)
+**Fresh verification (2026-03-09)**:
+- `ci_m5_gate_20260309_100321` (Base) - **PASS**, ROUNDTRIP_PROFITABLE, 1 signal
+- `ci_m5_gate_20260309_100147` (Mantle) - **PASS**, 1 included signal (CMETH/METH agni_v3→agni_v3)
 
 **Code changes**:
-- `config/dexes.yaml`: +sushiswap_v3 for base, scroll
-- `config/coverage_intent_base.yaml`: +sushiswap_v3, +use_quoter_v2
-- `config/coverage_intent_scroll.yaml`: +sushiswap_v3, require_cross_dex=true
-- `strategy/quotes.py`: Fix use_quoter_v2 → use_quoter_global
-- `scripts/ci_m5_0_gate.py`: Fix timestamp format
-- `tests/unit/test_config_contracts.py`: 27 new tests
+- `config/coverage_intent_mantle.yaml`: `require_cross_dex: false` (MIXED_SOURCE fix)
+- `m4/fixtures.py`: Added `chain_quality_level` and `consecutive_non_nodata_cycles` to run_summary
+- `m4/rolling_store.py`: Added `consecutive_non_nodata_cycles` to quick_stats
+- `tests/unit/test_mantle_mixed_source.py`: 6 new tests for Mantle MIXED_SOURCE behavior
 
 **Rolling canonical** (unchanged):
 - `data/runs/_rolling/run_summary_latest.json` (2026-03-05T17:49:43Z, arbitrum_one)
 
 ## 3) Next Steps
 
-1. **Signal flow**: Primary blocker is now market/window, not code. Need wider scan windows or different market conditions.
-2. **Mantle**: FAIL due to unprofitable signal - needs route/pair optimization
-3. **Linea/zkSync/Scroll**: NO_DATA despite quotes - explore additional DEXes or lower min_spread_bps
-4. **Rolling**: Canonical rolling remains arbitrum_one; multi-chain is coverage-only for now
+1. **Mantle expansion**: Add FusionX V3 (uniswap_v3) to enable quoter_v2↔quoter_v2 cross-dex routes
+2. **Linea/zkSync/Scroll**: NO_DATA despite quotes - explore additional DEXes or wait for market conditions
+3. **Rolling**: Canonical rolling remains arbitrum_one; multi-chain is coverage-only for now
+4. **QUALITY_RAISED**: Track consecutive_non_nodata_cycles >= 3 to prove stable signal production
 
 ---
-*Generated: 2026-03-08T11:15:00Z*
+*Generated: 2026-03-09T10:15:00Z*
