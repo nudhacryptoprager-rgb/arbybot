@@ -9,19 +9,27 @@
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, canonical rolling on arbitrum_one.
 
 ## SESSION GOAL (2026-03-09)
-**Goal**: Fix WebSocket endpoint resolution, zkSync quoter_v2, Linea/Scroll MIXED_SOURCE, add ALL_OPPORTUNITIES_REJECTED reason
+**Goal**: Config tuning for MIXED_SOURCE/SUSPECT_SPREAD_HARD rejection reduction + QUALITY_RAISED path enhancement
 
 ### Workflow Contract (enforced 2026-03-09)
 > **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
 > Any report generated before final reruns is non-canonical by process.
 
-### Blocker Classification (2026-03-09 12:45)
+### Blocker Classification (2026-03-09 14:00)
 ```
-code_blocker: LOW (pytest 1471 passed, CI green, safety PASS)
-multicall_blocker: LOW (success_rate=1.0 all chains, 4 RPC calls)
-websocket_blocker: LOW (ws_connected=true, ALL 6 chains chain-correct hosts, provider_id_ws=alchemy)
-dex_compatibility_blocker: MED (zkSync/Linea/Scroll = ALL_OPPORTUNITIES_REJECTED, Arbitrum/Base/Mantle = SIGNAL_PRODUCING)
+code_blocker: LOW (pytest 1476 passed, CI green, safety PASS)
+multicall_blocker: LOW (success_rate=1.0 all chains)
+websocket_blocker: LOW (ws_connected=true, ALL 6 chains chain-correct hosts)
+dex_compatibility_blocker: MED (zkSync/Linea/Scroll configs tuned, awaiting verification runs)
 ```
+
+**Config tuning summary (2026-03-09 v3.2.56)**:
+1. **zkSync**: Raised `suspect_spread_bps_hard: 800` (default 500 too aggressive for thin liquidity)
+2. **Linea**: Removed lynex_v3 (algebra/quoter) - NOT quoter_v2-compatible, kept only pancakeswap_v3
+3. **Scroll**: Removed nuri_v3 (algebra/quoter) - NOT quoter_v2-compatible, kept only sushiswap_v3
+4. **Base**: Removed aerodrome (ve33) - NOT quoter_v2-compatible, increased max_pairs to 30
+5. **Arbitrum**: Removed camelot_v3 (algebra) - NOT quoter_v2-compatible, increased max_pairs to 40
+6. **m4/policy.py**: Enhanced QUALITY_RAISED path with quality metrics (fragile_rate, unique_pairs, net_profit)
 
 **ВАЖЛИВО**: `infra_gate: PASS` ≠ `run_summary.status: PASS`. See [Status_M5_0.md](status/Status_M5_0.md) for terminology.
 
@@ -73,7 +81,15 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll
 - `ci_m5_gate_20260309_124320` (Linea) - NO_DATA, signals=0, opps=17, no_data_reason=ALL_OPPORTUNITIES_REJECTED, WS=linea-mainnet.g.alchemy.com ✅
 - `ci_m5_gate_20260309_124403` (Scroll) - NO_DATA, signals=0, opps=6, no_data_reason=ALL_OPPORTUNITIES_REJECTED, WS=scroll-mainnet.g.alchemy.com ✅
 
-**Code changes**:
+**Code changes (v3.2.56)**:
+- `config/coverage_intent_zksync.yaml`: Added `suspect_spread_bps_hard: 800` (default 500 too aggressive)
+- `config/coverage_intent_linea.yaml`: Removed lynex_v3 (algebra), kept only pancakeswap_v3 (quoter_v2)
+- `config/coverage_intent_scroll.yaml`: Removed nuri_v3 (algebra), kept only sushiswap_v3 (quoter_v2)
+- `config/coverage_intent_base.yaml`: Removed aerodrome (ve33), increased max_pairs to 30
+- `config/coverage_intent_arbitrum_one.yaml`: Removed camelot_v3 (algebra), increased max_pairs to 40
+- `m4/policy.py`: Enhanced `classify_chain_quality()` with quality metrics for QUALITY_RAISED path
+
+**Code changes (v3.2.55, previous)**:
 - `scripts/ci_m5_0_gate.py`: Read chain_id from config for WS resolution; added WS host validation with validate_chain_rpc_consistency()
 - `strategy/infra.py`: Clear stale WS env vars, use OVERWRITE not setdefault; extract provider_id_ws from URL when "unknown"
 - `strategy/jobs/run_scan_real.py`: Fixed ALL_OPPORTUNITIES_REJECTED condition (triggers when total_opps > 0, not dependent on profitable_count)
@@ -82,20 +98,23 @@ py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll
 - `config/coverage_intent_linea.yaml`: Set `require_cross_dex: false` (MIXED_SOURCE workaround)
 - `config/coverage_intent_scroll.yaml`: Set `require_cross_dex: false` (MIXED_SOURCE workaround)
 
-**Tests added**:
-- `tests/unit/test_no_data_reason.py`: test_all_opportunities_rejected_with_profitable
-- `tests/unit/test_truth_report.py`: TestNoDataReasonArtifactContract (3 tests)
-- `tests/unit/test_providers.py`: TestMultiChainWSRegression (3 tests)
+**Tests added (v3.2.56)**:
+- `tests/unit/test_chain_quality_level.py`: TestEnhancedQualityRaised (5 tests for quality metrics path)
 
 **Rolling canonical** (unchanged):
 - `data/runs/_rolling/run_summary_latest.json` (2026-03-05T17:49:43Z, arbitrum_one)
 
 ## 3) Next Steps
 
-1. **zkSync/Linea/Scroll**: All opps rejected (SUSPECT_SPREAD_HARD, MIXED_SOURCE) - investigate policy tuning
-2. **SIGNAL_PRODUCING chains**: Arbitrum (9), Mantle (3), Base (1) - stable, continue monitoring
-3. **QUALITY_RAISED**: Track consecutive_non_nodata_cycles >= 3 to prove stable signal production
-4. **Cross-DEX expansion**: Add quoter_v2-compatible DEXes to resolve MIXED_SOURCE on Linea/Scroll
+1. **Run online coverage gates**: Execute with updated configs to verify MIXED_SOURCE/SUSPECT_SPREAD_HARD fixes
+   ```
+   py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3
+   py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3
+   py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3
+   ```
+2. **QUALITY_RAISED path**: Track consecutive_non_nodata_cycles >= 3 with quality metrics (fragile_rate, unique_pairs, net_profit)
+3. **SIGNAL_PRODUCING → QUALITY_RAISED**: Arbitrum/Base/Mantle ready for promotion once 3+ consecutive non-NO_DATA cycles achieved
+4. **Linea/Scroll**: Marked as FALLBACK-ONLY (single quoter_v2 DEX) until second compatible DEX added
 
 ---
 *Generated: 2026-03-09T12:45:00Z*

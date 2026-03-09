@@ -36,17 +36,17 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (all must have factory addresses in dexes.yaml)
-# v3.2.17: Includes Algebra adapter (camelot_v3) and PancakeSwap V3
+# v3.2.56: Only quoter_v2-compatible DEXes for M4.2 compliance
+# NOTE: camelot_v3 (algebra) excluded - quoter source, causes MIXED_SOURCE with quoter_v2
 dexes:
   - uniswap_v3
   - sushiswap_v3
-  - camelot_v3
   - pancakeswap_v3
 
 # Discovery settings (CANONICAL KEYS per discovery/runtime.py contract)
 # discovery_runtime_max_pairs: Cap on unique pairs to resolve (protects RPC budget)
 # require_cross_dex: Only include pairs found on 2+ DEXes (better arb candidates)
-discovery_runtime_max_pairs: 30
+discovery_runtime_max_pairs: 40  # v3.2.56: Increased from 30 for better pair diversity
 require_cross_dex: true
 
 # Quoter V2 for executable quotes

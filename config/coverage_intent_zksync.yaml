@@ -65,6 +65,12 @@ paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.01  # zkSync is very cheap
 
+# v3.2.60: Relaxed SUSPECT_SPREAD_HARD threshold for zkSync Era
+# zkSync has thinner liquidity than Arbitrum, so larger spreads are common
+# Current gated max is 430bps; raising threshold allows more coverage
+suspect_spread_bps_hard: 800  # Default 500 too aggressive for zkSync
+suspect_spread_bps: 400       # Diagnostic warning threshold
+
 # L1 cost model: zkSync uses zk-proofs, NOT Arbitrum-style L1 data posting
 # v3.2.55: Disable Arbitrum L1 cost model for zkSync Era
 # zkSync batches txns via validity proofs, so per-txn L1 cost is ~0

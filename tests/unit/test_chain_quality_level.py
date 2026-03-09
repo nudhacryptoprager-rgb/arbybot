@@ -154,3 +154,67 @@ class TestChainQualityLevelOrdering:
             ChainQualityLevel.SIGNAL_PRODUCING,
             ChainQualityLevel.QUALITY_RAISED,
         ]
+
+
+class TestEnhancedQualityRaised:
+    """Tests for v3.2.56 enhanced QUALITY_RAISED path with quality metrics."""
+
+    def test_quality_raised_with_quality_metrics_all_pass(self):
+        """QUALITY_RAISED when all quality metrics pass."""
+        from m4.policy import (
+            MIN_SIGNALS_FOR_QUALITY_RAISED,
+            MAX_FRAGILE_RATE_FOR_QUALITY_RAISED,
+            MIN_DIVERSITY_FOR_QUALITY_RAISED,
+        )
+        result = classify_chain_quality(
+            signals_count=MIN_SIGNALS_FOR_QUALITY_RAISED,
+            consecutive_non_nodata_cycles=MIN_CYCLES_FOR_QUALITY_RAISED,
+            fragile_rate=0.20,
+            unique_pairs=MIN_DIVERSITY_FOR_QUALITY_RAISED,
+            net_profit_usdc=0.10,
+        )
+        assert result == ChainQualityLevel.QUALITY_RAISED
+
+    def test_signal_producing_when_fragile_rate_too_high(self):
+        """SIGNAL_PRODUCING when fragile_rate exceeds threshold."""
+        result = classify_chain_quality(
+            signals_count=5,
+            consecutive_non_nodata_cycles=MIN_CYCLES_FOR_QUALITY_RAISED,
+            fragile_rate=0.70,  # > 0.50
+            unique_pairs=3,
+            net_profit_usdc=0.10,
+        )
+        assert result == ChainQualityLevel.SIGNAL_PRODUCING
+
+    def test_signal_producing_when_diversity_too_low(self):
+        """SIGNAL_PRODUCING when unique_pairs below threshold."""
+        result = classify_chain_quality(
+            signals_count=5,
+            consecutive_non_nodata_cycles=MIN_CYCLES_FOR_QUALITY_RAISED,
+            fragile_rate=0.20,
+            unique_pairs=1,  # < 2
+            net_profit_usdc=0.10,
+        )
+        assert result == ChainQualityLevel.SIGNAL_PRODUCING
+
+    def test_signal_producing_when_not_profitable(self):
+        """SIGNAL_PRODUCING when net_profit_usdc <= 0."""
+        result = classify_chain_quality(
+            signals_count=5,
+            consecutive_non_nodata_cycles=MIN_CYCLES_FOR_QUALITY_RAISED,
+            fragile_rate=0.20,
+            unique_pairs=3,
+            net_profit_usdc=-0.05,
+        )
+        assert result == ChainQualityLevel.SIGNAL_PRODUCING
+
+    def test_signal_producing_when_signals_below_min(self):
+        """SIGNAL_PRODUCING when signals_count < MIN_SIGNALS_FOR_QUALITY_RAISED."""
+        result = classify_chain_quality(
+            signals_count=2,  # < 3
+            consecutive_non_nodata_cycles=MIN_CYCLES_FOR_QUALITY_RAISED,
+            fragile_rate=0.20,
+            unique_pairs=3,
+            net_profit_usdc=0.10,
+        )
+        assert result == ChainQualityLevel.SIGNAL_PRODUCING

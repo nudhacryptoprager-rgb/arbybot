@@ -7,6 +7,12 @@
 #   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
 #   via factory.getPool() calls instead of hardcoded pool addresses.
 #
+# CHAIN STATUS (2026-03-09): FALLBACK-ONLY (no cross-DEX readiness)
+#   - lynex_v3 (algebra/quoter) is NOT quoter_v2-compatible
+#   - pancakeswap_v3 (uniswap_v3/quoter_v2) is compatible but single-DEX only
+#   - BLOCKED_BY: lack of second quoter_v2 DEX for cross-DEX arbitrage
+#   - Same-DEX fee-tier arbitrage (pancakeswap_v3→pancakeswap_v3) is the only viable path
+#
 # RUN_KIND: COVERAGE
 #   - Will NOT update rolling artifacts (NORM-only policy)
 #   - Safe for testing without affecting production rolling state
@@ -14,6 +20,7 @@
 # WORKFLOW:
 #   py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 1
 #
+# v3.2.56: Removed lynex_v3 (algebra) - NOT quoter_v2-compatible, causes MIXED_SOURCE
 # v3.2.19: Initial config for Linea multi-chain rollout
 
 # Chain: Linea
@@ -35,19 +42,19 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
-# v3.2.36: Linea now has 2 DEXes for cross-DEX arbitrage
+# v3.2.56: Only pancakeswap_v3 - lynex_v3 (algebra) is NOT quoter_v2-compatible
+# Same-DEX fee-tier arbitrage across 100/500/2500/10000 bps tiers
 dexes:
-  - lynex_v3
   - pancakeswap_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-# v3.2.54: Same-DEX fallback because lynex_v3 (algebra/quoter) and pancakeswap_v3 (uniswap/quoter_v2)
-# are source-incompatible (MIXED_SOURCE). Allows same-DEX fee-tier arbitrage.
+# v3.2.56: require_cross_dex=false because only 1 DEX (pancakeswap_v3) - same-DEX fee-tier arbitrage
+# BLOCKED_BY: lack of second quoter_v2 DEX (lynex_v3 is algebra/quoter, incompatible)
 require_cross_dex: false
 
-# Quoter for executable quotes (Algebra DEXes use quoter, not quoter_v2)
-# Note: lynex_v3 is Algebra adapter, uses quoter field from dexes.yaml
+# Quoter V2 for executable quotes (pancakeswap_v3 is uniswap_v3 with quoter_v2)
+use_quoter_v2: true
 
 # Multicall batching (default ON)
 use_multicall: true

@@ -64,20 +64,38 @@ class ChainQualityLevel:
 
 # Chain quality classification thresholds
 MIN_CYCLES_FOR_QUALITY_RAISED = 3  # v2.0.9: Minimum consecutive non-NO_DATA cycles
+MIN_SIGNALS_FOR_QUALITY_RAISED = 3  # v3.2.56: Minimum signals per cycle for QUALITY_RAISED
+MAX_FRAGILE_RATE_FOR_QUALITY_RAISED = 0.50  # v3.2.56: Max fragile_rate for QUALITY_RAISED
+MIN_DIVERSITY_FOR_QUALITY_RAISED = 2  # v3.2.56: Min unique pairs for QUALITY_RAISED
 
 
 def classify_chain_quality(
     signals_count: int,
     consecutive_non_nodata_cycles: int = 1,
     infra_gate_pass: bool = True,
+    fragile_rate: float = 0.0,
+    unique_pairs: int = 0,
+    net_profit_usdc: float = 0.0,
 ) -> str:
     """
     Classify chain quality level based on signal production maturity.
+    
+    v3.2.56: Enhanced with quality metrics for QUALITY_RAISED path.
+    
+    QUALITY_RAISED REQUIREMENTS (all must be met):
+    1. consecutive_non_nodata_cycles >= MIN_CYCLES_FOR_QUALITY_RAISED (3)
+    2. signals_count >= MIN_SIGNALS_FOR_QUALITY_RAISED (3)
+    3. fragile_rate <= MAX_FRAGILE_RATE_FOR_QUALITY_RAISED (0.50)
+    4. unique_pairs >= MIN_DIVERSITY_FOR_QUALITY_RAISED (2)
+    5. net_profit_usdc > 0 (must be profitable)
     
     Args:
         signals_count: Number of signals in current run
         consecutive_non_nodata_cycles: Number of consecutive runs with signals_count > 0
         infra_gate_pass: Whether infra gate passed (artifacts valid, quotes fetched)
+        fragile_rate: Fraction of simulations that are fragile (0.0-1.0)
+        unique_pairs: Number of unique token pairs producing signals
+        net_profit_usdc: Total net profit in USDC
         
     Returns:
         ChainQualityLevel constant
@@ -91,9 +109,25 @@ def classify_chain_quality(
         classify_chain_quality(signals_count=2, consecutive_non_nodata_cycles=1)
         # -> SIGNAL_PRODUCING
         
-        # Chain consistently produces signals
-        classify_chain_quality(signals_count=5, consecutive_non_nodata_cycles=3)
+        # Chain consistently produces signals with quality
+        classify_chain_quality(
+            signals_count=5, 
+            consecutive_non_nodata_cycles=3,
+            fragile_rate=0.20,
+            unique_pairs=3,
+            net_profit_usdc=0.10
+        )
         # -> QUALITY_RAISED
+        
+        # Chain produces signals but too fragile
+        classify_chain_quality(
+            signals_count=5, 
+            consecutive_non_nodata_cycles=3,
+            fragile_rate=0.70,  # > 0.50
+            unique_pairs=3,
+            net_profit_usdc=0.10
+        )
+        # -> SIGNAL_PRODUCING (fragile_rate too high)
     """
     if not infra_gate_pass:
         # Infra gate failed - shouldn't reach here but return lowest level
@@ -104,10 +138,29 @@ def classify_chain_quality(
         return ChainQualityLevel.INFRA_READY
     
     # signals_count > 0
-    if consecutive_non_nodata_cycles >= MIN_CYCLES_FOR_QUALITY_RAISED:
-        return ChainQualityLevel.QUALITY_RAISED
+    # Basic criterion (v2.0.9): consecutive non-NO_DATA cycles
+    if consecutive_non_nodata_cycles < MIN_CYCLES_FOR_QUALITY_RAISED:
+        return ChainQualityLevel.SIGNAL_PRODUCING
     
-    return ChainQualityLevel.SIGNAL_PRODUCING
+    # v3.2.56: Enhanced QUALITY_RAISED path (opt-in when quality metrics provided)
+    # If quality metrics are tracked (non-default values), enforce additional criteria
+    quality_metrics_tracked = (
+        fragile_rate > 0.0 or 
+        unique_pairs > 0 or 
+        net_profit_usdc != 0.0
+    )
+    
+    if quality_metrics_tracked:
+        quality_criteria_met = (
+            signals_count >= MIN_SIGNALS_FOR_QUALITY_RAISED and
+            fragile_rate <= MAX_FRAGILE_RATE_FOR_QUALITY_RAISED and
+            unique_pairs >= MIN_DIVERSITY_FOR_QUALITY_RAISED and
+            net_profit_usdc > 0
+        )
+        if not quality_criteria_met:
+            return ChainQualityLevel.SIGNAL_PRODUCING
+    
+    return ChainQualityLevel.QUALITY_RAISED
 
 
 class FailReason:
