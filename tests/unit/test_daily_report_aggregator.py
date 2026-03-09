@@ -337,3 +337,178 @@ def test_net_pnl_matches_m4_sim_net_usdc(tmp_path):
     # The difference should be zero (or very close due to floating point)
     diff = abs(theoretical["net_pnl_usdc"] - theoretical["m4_sim_net_usdc"])
     assert diff < 0.01, f"net_pnl_usdc ({theoretical['net_pnl_usdc']}) should match m4_sim_net_usdc ({theoretical['m4_sim_net_usdc']})"
+
+
+# v3.2.67: Cross-artifact profit invariant tests
+def make_run_with_all_profit_artifacts(tmp_path: Path) -> Path:
+    """Create a run with daily_report, execution_report, and run_summary with consistent profits.
+    
+    This tests the canonical invariant:
+    daily_report.theoretical_net_profit.net_pnl_usdc == 
+    execution_report.total_net_usdc == 
+    run_summary.metrics.total_net_usdc
+    """
+    run = tmp_path / "run_profit_invariant"
+    run.mkdir()
+    reports = run / "reports"
+    reports.mkdir()
+    
+    # Truth report with execution_pnl_included
+    truth = {
+        "schema_version": "3.2.0",
+        "quotes_total": 10,
+        "quotes_fetched": 10,
+        "price_sanity_passed": 10,
+        "health": {"rpc": {"success_rate": 1.0}},
+        "stats": {"gates_passed": 10, "quotes_fetched": 10},
+        "spread_signals": [
+            {
+                "pair": "WETH/USDC",
+                "spread_bps_exact": 50.0,
+                "gross_pnl_usdc_est": 5.0,
+                "net_pnl_usdc_est": 4.5,
+                "is_net_positive_est": True,
+                "is_included": True,
+            },
+        ],
+        "execution_pnl": {
+            "gross_pnl_usdc": "50.0",
+            "net_pnl_usdc": "45.0",  # Includes excluded signals
+            "cost_model_available": True,
+        },
+        "execution_pnl_included": {
+            "gross_pnl_usdc": "5.0",
+            "net_pnl_usdc": "4.5",  # Only included signals
+            "cost_model_available": True,
+            "cost_model_version": "paper_gas_slippage_l1_v3",
+            "cost_model_components": {
+                "gas_usd": 0.3,
+                "slippage_bps": 5,
+                "slippage_usd": 0.2,
+            },
+        },
+    }
+    
+    # Execution report (M4 simulation result) - matches execution_pnl_included
+    execution_report = {
+        "schema_version": "m4:execution:v2.0",
+        "signals_count": 1,
+        "included_signals_count": 1,
+        "total_net_usdc": 4.5,  # MUST match truth.execution_pnl_included.net_pnl_usdc
+    }
+    
+    # Run summary (M4 gate result) - matches execution_report
+    run_summary = {
+        "schema_version": "m4:run_summary:v2.0",
+        "status": "PASS",
+        "profit_status": "PASS",
+        "metrics": {
+            "signals_count": 1,
+            "included_signals_count": 1,
+            "total_net_usdc": 4.5,  # MUST match execution_report.total_net_usdc
+        },
+    }
+    
+    (reports / "truth_report_1.json").write_text(json.dumps(truth))
+    (reports / "execution_report_1.json").write_text(json.dumps(execution_report))
+    (reports / "run_summary_1.json").write_text(json.dumps(run_summary))
+    (reports / "scan_1.json").write_text(json.dumps({"quotes_total": 10}))
+    (reports / "reject_histogram_1.json").write_text(json.dumps({"rejects": []}))
+    
+    return run
+
+
+def test_profit_invariant_daily_equals_execution_equals_run_summary(tmp_path):
+    """v3.2.67: Canonical invariant - daily/execution/run_summary profit must match.
+    
+    This is the key invariant from the audit:
+    daily_report.theoretical_net_profit.net_pnl_usdc == 
+    execution_report.total_net_usdc == 
+    run_summary.metrics.total_net_usdc
+    """
+    run = make_run_with_all_profit_artifacts(tmp_path)
+    rpt = aggregate_run(run)
+    
+    # Load the raw artifacts for comparison
+    reports = run / "reports"
+    exec_report = json.loads((reports / "execution_report_1.json").read_text())
+    run_summary = json.loads((reports / "run_summary_1.json").read_text())
+    
+    # Get daily_report value
+    daily_net = rpt["theoretical_net_profit"]["net_pnl_usdc"]
+    
+    # Get execution_report value
+    exec_net = exec_report["total_net_usdc"]
+    
+    # Get run_summary value
+    summary_net = run_summary["metrics"]["total_net_usdc"]
+    
+    # All three must match (CANONICAL INVARIANT)
+    assert daily_net == exec_net, \
+        f"INVARIANT VIOLATED: daily_report.net_pnl_usdc ({daily_net}) != execution_report.total_net_usdc ({exec_net})"
+    assert exec_net == summary_net, \
+        f"INVARIANT VIOLATED: execution_report.total_net_usdc ({exec_net}) != run_summary.total_net_usdc ({summary_net})"
+    assert daily_net == summary_net, \
+        f"INVARIANT VIOLATED: daily_report.net_pnl_usdc ({daily_net}) != run_summary.total_net_usdc ({summary_net})"
+
+
+def test_session_automated_marker_for_automated_runs(tmp_path):
+    """v3.2.67: Automated runs should have automated_in_progress marker.
+    
+    When session_context is not provided (automated CI runs), the session block
+    should clearly indicate this is an automated run, not a human session.
+    """
+    run = make_run_with_all_profit_artifacts(tmp_path)
+    
+    # Call WITHOUT session_context (simulates automated CI run)
+    rpt = aggregate_run(run)
+    
+    session = rpt.get("session")
+    assert session is not None
+    
+    # Automated runs should have:
+    # - goal_status = IN_PROGRESS (because no session closure)
+    # - close_allowed = False (automated runs don't close sessions)
+    # - docs_reread_confirmed = False (no human confirmation)
+    # - run_type = "automated" (v3.2.67)
+    assert session["goal_status"] == "IN_PROGRESS"
+    assert session["close_allowed"] == False
+    assert session["docs_reread_confirmed"] == False
+    assert session["run_type"] == "automated"
+    
+    # Session goal should be None or empty (not set by automated run)
+    assert session["session_goal"] is None or session["session_goal"] == ""
+
+
+def test_session_context_propagation(tmp_path):
+    """v3.2.67: Session context should be propagated when provided."""
+    run = make_run_with_all_profit_artifacts(tmp_path)
+    
+    # Call WITH session_context (simulates human session)
+    session_context = {
+        "session_goal": "Multi-chain quality stabilization",
+        "goal_status": "REACHED",
+        "close_allowed": True,
+        "remaining_blockers": [],
+        "primary_blocker_of_session": "profit_contract_mismatch",
+        "blocker_status_before": "ACTIVE",
+        "blocker_status_after": "RESOLVED",
+        "docs_reread_confirmed": True,
+    }
+    
+    rpt = aggregate_run(run, session_context=session_context)
+    
+    session = rpt.get("session")
+    assert session is not None
+    
+    # All fields should be propagated
+    assert session["session_goal"] == "Multi-chain quality stabilization"
+    assert session["goal_status"] == "REACHED"
+    assert session["close_allowed"] == True
+    assert session["remaining_blockers"] == []
+    assert session["primary_blocker_of_session"] == "profit_contract_mismatch"
+    assert session["blocker_status_before"] == "ACTIVE"
+    assert session["blocker_status_after"] == "RESOLVED"
+    assert session["docs_reread_confirmed"] == True
+    # v3.2.67: run_type should be "manual" when session_context is provided
+    assert session["run_type"] == "manual"

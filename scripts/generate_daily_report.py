@@ -581,6 +581,7 @@ def aggregate_run(
         # v3.2.58: Session completion fields (MANDATORY per DOCS_POLICY.md section 9)
         # v1.7.1: Now respects session_context parameter from caller
         # v1.8.0: Added primary_blocker_of_session and blocker status fields
+        # v3.2.67: Added run_type to distinguish automated vs human sessions
         "session": {
             "session_goal": (session_context or {}).get("session_goal"),
             "goal_status": (session_context or {}).get("goal_status", "IN_PROGRESS"),
@@ -597,6 +598,8 @@ def aggregate_run(
             "docs_reread_confirmed": (session_context or {}).get(
                 "docs_reread_confirmed", False
             ),
+            # v3.2.67: Explicit run type marker (automated = CI/gate, manual = human session)
+            "run_type": "manual" if session_context else "automated",
         },
     }
     return report

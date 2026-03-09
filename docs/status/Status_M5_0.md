@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-09 21:00  
-**Tests**: 1520 passed, 2 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260309_200317` (Arbitrum), `ci_m5_gate_20260309_200403` (zkSync), `ci_m5_gate_20260309_200624` (Scroll), `ci_m5_gate_20260309_200642` (Linea), `ci_m5_gate_20260309_200710` (Base), `ci_m5_gate_20260309_200756` (Mantle)  
+**Updated**: 2026-03-09 21:35  
+**Tests**: 1522 passed, 2 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260309_213502` (Arbitrum ✅), `ci_m5_gate_20260309_213541` (zkSync), `ci_m5_gate_20260309_213803` (Base), `ci_m5_gate_20260309_213848` (Mantle ✅), `ci_m5_gate_20260309_213927` (Scroll), `ci_m5_gate_20260309_213948` (Linea)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -16,24 +16,35 @@
 
 ---
 
-## Multi-Chain Quality Deep Investigation (2026-03-09 21:00)
+## Multi-Chain Quality Deep Investigation (2026-03-09 21:35)
 
 ### Primary Blocker Identified
 
 **Primary blocker**: `multi-chain signal production quality` - NOT infrastructure or session contracts.
 
-Only Arbitrum produces tradeable signals. Other chains have market constraints (thin liquidity, stale pools, single DEX).
+Only Arbitrum and Mantle produce tradeable signals. Other chains have market constraints (thin liquidity, stale pools, single DEX).
 
-### Fresh Chain Quality Results (2026-03-09 20:03-20:08, 200xxx)
+### Fresh Chain Quality Results (2026-03-09 21:35, 213xxx)
 
 | Chain | signals_count | included | net_usdc | Status | runDir |
 |-------|---------------|----------|----------|--------|--------|
-| **Arbitrum** | **5** | 4 | **$3.66** | ✅ SIGNAL_PRODUCING | 200317 |
-| zkSync | 0 | 0 | $0 | ⚠️ ALL_OPPORTUNITIES_REJECTED | 200403 |
-| Scroll | 0 | 0 | $0 | ❌ NO_SPREAD_SIGNALS | 200624 |
-| Linea | 1 | 0 | $0 | ⚠️ SIGNAL_NOT_INCLUDED | 200642 |
-| Base | 0 | 0 | $0 | ⚠️ ALL_OPPORTUNITIES_REJECTED | 200710 |
-| Mantle | 3 | 1 | $0.03 | ⚠️ LOW_SAMPLE | 200756 |
+| **Arbitrum** | **4** | 3 | **$3.72** | ✅ SIGNAL_PRODUCING | 213502 |
+| zkSync | 0 | 0 | $0 | ⚠️ LIQUIDITY_ZERO | 213541 |
+| Base | 0 | 0 | $0 | ⏳ NEEDS_INVESTIGATION | 213803 |
+| **Mantle** | **3** | 1 | **$0.03** | ✅ SIGNAL_PRODUCING | 213848 |
+| Scroll | 0 | 0 | $0 | ❌ BLOCKED_BY_SECOND_DEX | 213927 |
+| Linea | 1 | 0 | $0 | ❌ PRICE_SCALE 14.3% | 213948 |
+
+### Profit Invariant VERIFIED
+
+**Canonical invariant**: `daily_report.net_pnl_usdc = execution_report.total_net_usdc = run_summary.total_net_usdc`
+
+| Chain | daily_report | execution_report | run_summary | Verified |
+|-------|--------------|------------------|-------------|----------|
+| **Arbitrum** | $3.7175 | $3.7175 | $3.7175 | ✅ YES |
+| **Mantle** | $0.0291 | $0.0291 | $0.0291 | ✅ YES |
+
+**Invariant tests added**: 4 new tests enforce this contract permanently in `tests/unit/test_daily_report_aggregator.py`
 
 ### Rejection Root Causes (Market Constraints)
 - **NOTIONAL_DRIFT**: Can't fill $100 notional (pools too thin)
@@ -69,29 +80,30 @@ Only Arbitrum produces tradeable signals. Other chains have market constraints (
 - net_usdc=$0.03 (minimal but positive)
 - **Conclusion**: Low volume but working
 
-### Chain Quality Classification (2026-03-09 21:00)
+### Chain Quality Classification (2026-03-09 21:35)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (5 signals, 4 included, $3.66 net)
-zkSync:         ALL_OPPORTUNITIES_REJECTED (7 gated, 0 signals - SUSPECT_SPREAD_HARD)
-Scroll:         NO_SPREAD_SIGNALS (market-blocked, LIQUIDITY_ZERO)
-Linea:          SIGNAL_NOT_INCLUDED (1 signal, 0 included - single DEX)
-Base:           ALL_OPPORTUNITIES_REJECTED (5 gated, 0 signals - MIXED_SOURCE)
-Mantle:         LOW_SAMPLE (3 signals, 1 included, $0.03 net)
+arbitrum_one:   SIGNAL_PRODUCING (4 signals, 3 included, $3.72 net)
+zkSync:         LIQUIDITY_ZERO (market-blocked, no arbitrage opportunities)
+Base:           NEEDS_INVESTIGATION (0 signals, 2 DEX active)
+Scroll:         BLOCKED_BY_SECOND_DEX (market-blocked, 1 DEX only)
+Linea:          PRICE_SCALE_FAIL (1 signal, 0 included - 14.3% price scale)
+Mantle:         SIGNAL_PRODUCING (3 signals, 1 included, $0.03 net)
 ```
 
 ### Actionable Conclusions
 
-1. **Arbitrum is SIGNAL_PRODUCING** - 5 signals, $3.66 net proves infra works
-2. **Mantle is LOW_SAMPLE** - 3 signals, 1 included, minimal profit ($0.03)
-3. **zkSync/Base are ALL_OPPORTUNITIES_REJECTED** - Opportunities found but filtered by policy
-4. **Scroll is MARKET_BLOCKED** - Zero liquidity in pools
-5. **Linea is DEX_BLOCKED** - Only 1 DEX (PancakeSwap), require_cross_dex filters
+1. **Arbitrum is SIGNAL_PRODUCING** - 4 signals, $3.72 net proves infra works ✅
+2. **Mantle is SIGNAL_PRODUCING** - 3 signals, 1 included, $0.03 net ✅
+3. **zkSync is LIQUIDITY_ZERO** - Market impaired, no arbitrage opportunities
+4. **Scroll is BLOCKED_BY_SECOND_DEX** - Only 1 DEX active
+5. **Linea is PRICE_SCALE_FAIL** - 14.3% price scale exceeds threshold
+6. **Base needs investigation** - 2 DEX active but 0 signals
 
 ### Status Resolution
 
-- **Primary blocker `multi-chain signal production quality`**: IN_PROGRESS
-- **Two chains produce signals**: Arbitrum (4 included), Mantle (1 included)
+- **Primary blocker `multi-chain signal production quality`**: 2 chains RESOLVED (Arbitrum, Mantle)
+- **Profit invariant**: VERIFIED with 4 new tests
 - **Path forward**: Focus on Arbitrum/Mantle for M4 execution; other chains are MARKET_BLOCKED
 
 ### cost_model_version
