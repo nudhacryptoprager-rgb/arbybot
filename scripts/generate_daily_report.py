@@ -431,11 +431,14 @@ def aggregate_run(
         }
 
     # v3.2.57: Theoretical Net Profit block (mandatory cost-aware reporting)
-    # Reads from truth_report.execution_pnl for full cost breakdown
+    # Reads from truth_report.execution_pnl_included for included-only cost breakdown
     # Shows: gross, gas, slippage, L1, total_cost, net
+    # v3.2.65: CHANGED from execution_pnl (all signals) to execution_pnl_included (only tradeable)
+    # This aligns with M4 execution_report.total_net_usdc semantics
     # v1.7.1: Also reads execution_report for M4 sim_net_usdc cross-verification
-    execution_pnl = truth.get("execution_pnl") or {}
-    cost_components = execution_pnl.get("cost_model_components") or {}
+    execution_pnl_included = truth.get("execution_pnl_included") or {}
+    execution_pnl_all = truth.get("execution_pnl") or {}  # For transparency
+    cost_components = execution_pnl_included.get("cost_model_components") or {}
     
     # Try to read M4 execution_report for cross-verification
     exec_report_path = find_first("execution_report_*.json")
@@ -443,7 +446,7 @@ def aggregate_run(
     m4_sim_net_usdc = exec_report.get("total_net_usdc")  # M4 simulation net (uses CostModelRegistry)
     
     theoretical_net_profit = {
-        "gross_pnl_usdc": float(execution_pnl.get("gross_pnl_usdc") or 0),
+        "gross_pnl_usdc": float(execution_pnl_included.get("gross_pnl_usdc") or 0),
         "gas_usd": cost_components.get("gas_usd", 0),
         "slippage_bps": cost_components.get("slippage_bps", 0),
         "slippage_usd": cost_components.get("slippage_usd", 0),
@@ -451,17 +454,19 @@ def aggregate_run(
         "l1_gas_price_gwei": cost_components.get("l1_gas_price_gwei", 0),
         "l1_cost_usd": cost_components.get("l1_cost_usd", 0),
         "total_cost_usd": cost_components.get("total_cost_usd", 0),
-        "net_pnl_usdc": float(execution_pnl.get("net_pnl_usdc") or 0),
-        "cost_model_available": execution_pnl.get("cost_model_available", False),
-        "cost_model_version": execution_pnl.get("cost_model_version"),
+        "net_pnl_usdc": float(execution_pnl_included.get("net_pnl_usdc") or 0),
+        # v3.2.65: Add all_signals_net_pnl_usdc for transparency
+        "all_signals_net_pnl_usdc": float(execution_pnl_all.get("net_pnl_usdc") or 0),
+        "cost_model_available": execution_pnl_included.get("cost_model_available", False),
+        "cost_model_version": execution_pnl_included.get("cost_model_version"),
         # v1.7.1: M4 simulation net for cross-verification (separate cost model)
         # Note: M4 uses CostModelRegistry (paper_realistic), truth uses config params
-        # Difference is expected when gas_usd or l1_cost differs between models
+        # Should now match net_pnl_usdc since both use execution_pnl_included semantics
         "m4_sim_net_usdc": m4_sim_net_usdc,
         "m4_execution_report_path": str(exec_report_path) if exec_report_path else None,
         # Mode/source to clarify this is paper/simulated, not real execution
         "mode": "paper_simulated",
-        "source": "truth_report.execution_pnl",
+        "source": "truth_report.execution_pnl_included",
         "disclaimer": "Theoretical profit estimate based on paper cost model. Not real execution.",
     }
 

@@ -222,3 +222,118 @@ def test_session_blocker_blocked_state(tmp_path):
     assert session["blocker_status_after"] == "BLOCKED"
     # Even when blocked, docs_reread_confirmed should be true
     assert session["docs_reread_confirmed"] is True
+
+
+# v3.2.65: Tests for execution_pnl_included alignment
+def make_run_with_execution_pnl(tmp_path: Path) -> Path:
+    """Create a run with both execution_pnl (all) and execution_pnl_included (included only).
+    
+    This tests that daily_report uses execution_pnl_included for net_pnl_usdc 
+    to match M4 execution_report semantics.
+    """
+    run = tmp_path / "run_exec_pnl"
+    run.mkdir()
+    reports = run / "reports"
+    reports.mkdir()
+    
+    # Truth report with both execution_pnl and execution_pnl_included
+    truth = {
+        "schema_version": "3.2.0",
+        "quotes_total": 10,
+        "quotes_fetched": 10,
+        "price_sanity_passed": 10,
+        "health": {"rpc": {"success_rate": 1.0}},
+        "stats": {"gates_passed": 10, "quotes_fetched": 10},
+        "spread_signals": [
+            {
+                "pair": "WETH/USDC",
+                "spread_bps_exact": 50.0,
+                "spread_bps_ui": 50,
+                "size_usd": 250,
+                "gross_pnl_usdc_est": 1.25,
+                "net_pnl_usdc_est": 1.0,
+                "is_gross_positive": True,
+                "is_net_positive_est": True,
+                "is_included": True,
+            },
+        ],
+        # execution_pnl includes ALL signals (including excluded with huge spreads)
+        "execution_pnl": {
+            "gross_pnl_usdc": "35.0",  # INFLATED by excluded signals
+            "net_pnl_usdc": "34.0",
+            "cost_model_available": True,
+            "cost_model_version": "paper_gas_slippage_l1_v3",
+            "cost_model_components": {
+                "gas_usd": 0.5,
+                "slippage_bps": 5,
+                "slippage_usd": 0.5,
+            },
+        },
+        # execution_pnl_included has only the INCLUDED signals (tradeable)
+        "execution_pnl_included": {
+            "gross_pnl_usdc": "3.75",  # Only included signals
+            "net_pnl_usdc": "3.65",  # This should match M4
+            "cost_model_available": True,
+            "cost_model_version": "paper_gas_slippage_l1_v3",
+            "cost_model_components": {
+                "gas_usd": 0.05,
+                "slippage_bps": 5,
+                "slippage_usd": 0.05,
+            },
+        },
+    }
+    
+    # M4 execution_report (should match execution_pnl_included semantics)
+    execution_report = {
+        "signals_count": 1,
+        "included_signals_count": 1,
+        "total_net_usdc": 3.65,  # M4 simulation net
+    }
+    
+    (reports / "truth_report_1.json").write_text(json.dumps(truth))
+    (reports / "execution_report_1.json").write_text(json.dumps(execution_report))
+    (reports / "scan_1.json").write_text(json.dumps({"quotes_total": 10}))
+    (reports / "reject_histogram_1.json").write_text(json.dumps({"rejects": []}))
+    
+    return run
+
+
+def test_theoretical_net_profit_uses_execution_pnl_included(tmp_path):
+    """v3.2.65: theoretical_net_profit.net_pnl_usdc uses execution_pnl_included (not execution_pnl).
+    
+    This ensures daily_report aligns with M4 execution_report semantics.
+    The old behavior used execution_pnl (all signals), which inflated profits
+    by including excluded signals with huge spreads.
+    """
+    run = make_run_with_execution_pnl(tmp_path)
+    rpt = aggregate_run(run)
+    
+    theoretical = rpt.get("theoretical_net_profit")
+    assert theoretical is not None
+    
+    # net_pnl_usdc should be 3.65 (from execution_pnl_included), NOT 34.0 (from execution_pnl)
+    assert theoretical["net_pnl_usdc"] == 3.65
+    assert theoretical["gross_pnl_usdc"] == 3.75  # From execution_pnl_included
+    
+    # all_signals_net_pnl_usdc should have the full value for transparency
+    assert theoretical["all_signals_net_pnl_usdc"] == 34.0
+    
+    # Source should indicate execution_pnl_included
+    assert theoretical["source"] == "truth_report.execution_pnl_included"
+
+
+def test_net_pnl_matches_m4_sim_net_usdc(tmp_path):
+    """v3.2.65: net_pnl_usdc should now match m4_sim_net_usdc (both use included signals)."""
+    run = make_run_with_execution_pnl(tmp_path)
+    rpt = aggregate_run(run)
+    
+    theoretical = rpt.get("theoretical_net_profit")
+    assert theoretical is not None
+    
+    # Both should be 3.65 since they now use the same semantics
+    assert theoretical["net_pnl_usdc"] == 3.65
+    assert theoretical["m4_sim_net_usdc"] == 3.65
+    
+    # The difference should be zero (or very close due to floating point)
+    diff = abs(theoretical["net_pnl_usdc"] - theoretical["m4_sim_net_usdc"])
+    assert diff < 0.01, f"net_pnl_usdc ({theoretical['net_pnl_usdc']}) should match m4_sim_net_usdc ({theoretical['m4_sim_net_usdc']})"

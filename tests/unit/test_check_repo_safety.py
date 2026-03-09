@@ -921,5 +921,165 @@ class TestDevReportClaimConsistency(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestDevReportRuntimeClaims(unittest.TestCase):
+    """v3.2.65: Test check_dev_report_runtime_claims function for signals/net_usdc validation."""
+
+    def test_catches_signals_count_mismatch(self):
+        """Should catch when DEV_REPORT claims different signals than run_summary shows."""
+        from scripts.check_repo_safety import check_dev_report_runtime_claims
+        import json
+        import tempfile
+        import os
+        
+        # Create mock DEV_REPORT with claim: Arbitrum 200317 has 6 signals
+        mock_report = """
+        | Chain | RunDir | Gate | signals | net_usdc | Status |
+        | **Arbitrum** | 200317 | PASS | **6** | **$3.66** | ✅ SIGNAL_PRODUCING |
+        """
+        
+        # Create mock run_summary with actual: 5 signals
+        mock_run_summary = {
+            "metrics": {
+                "signals_count": 5,
+                "included_signals_count": 4,
+                "total_net_usdc": 3.66
+            }
+        }
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            
+            # Create DEV_REPORT
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            # Create run_summary in expected location
+            runs_dir = tmp_path / "data" / "runs" / "ci_m5_gate_20260309_200317" / "reports"
+            runs_dir.mkdir(parents=True)
+            (runs_dir / "run_summary_20260309_190339.json").write_text(
+                json.dumps(mock_run_summary), encoding='utf-8'
+            )
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_dev_report_runtime_claims()
+        
+        # Should have one mismatch error
+        self.assertEqual(len(issues), 1)
+        self.assertIn("DEV_REPORT_RUNTIME_MISMATCH", issues[0])
+        self.assertIn("signals=6", issues[0])
+        self.assertIn("signals_count=5", issues[0])
+
+    def test_matching_values_pass(self):
+        """When DEV_REPORT claims match run_summary, should pass."""
+        from scripts.check_repo_safety import check_dev_report_runtime_claims
+        import json
+        import tempfile
+        
+        # Create mock DEV_REPORT with correct claim
+        mock_report = """
+        | Chain | RunDir | Gate | signals | net_usdc | Status |
+        | **Arbitrum** | 200317 | PASS | **5** | **$3.66** | ✅ SIGNAL_PRODUCING |
+        """
+        
+        # Create mock run_summary with matching values
+        mock_run_summary = {
+            "metrics": {
+                "signals_count": 5,
+                "included_signals_count": 4,
+                "total_net_usdc": 3.66
+            }
+        }
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            
+            # Create DEV_REPORT
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            # Create run_summary
+            runs_dir = tmp_path / "data" / "runs" / "ci_m5_gate_20260309_200317" / "reports"
+            runs_dir.mkdir(parents=True)
+            (runs_dir / "run_summary_20260309_190339.json").write_text(
+                json.dumps(mock_run_summary), encoding='utf-8'
+            )
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_dev_report_runtime_claims()
+        
+        # Should have no issues
+        self.assertEqual(len(issues), 0)
+
+    def test_catches_net_usdc_mismatch(self):
+        """Should catch when DEV_REPORT claims different net_usdc than run_summary shows."""
+        from scripts.check_repo_safety import check_dev_report_runtime_claims
+        import json
+        import tempfile
+        
+        # Create mock DEV_REPORT with wrong net_usdc
+        mock_report = """
+        | Chain | RunDir | Gate | signals | net_usdc | Status |
+        | **Arbitrum** | 200317 | PASS | **5** | **$34.02** | ✅ SIGNAL_PRODUCING |
+        """
+        
+        # Create mock run_summary with actual: $3.66
+        mock_run_summary = {
+            "metrics": {
+                "signals_count": 5,
+                "total_net_usdc": 3.66
+            }
+        }
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            runs_dir = tmp_path / "data" / "runs" / "ci_m5_gate_20260309_200317" / "reports"
+            runs_dir.mkdir(parents=True)
+            (runs_dir / "run_summary_20260309_190339.json").write_text(
+                json.dumps(mock_run_summary), encoding='utf-8'
+            )
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_dev_report_runtime_claims()
+        
+        # Should have mismatch error
+        self.assertEqual(len(issues), 1)
+        self.assertIn("net_usdc", issues[0].lower())
+
+    def test_missing_rundir_skipped(self):
+        """When runDir in DEV_REPORT doesn't exist in data/runs, should skip (not error)."""
+        from scripts.check_repo_safety import check_dev_report_runtime_claims
+        import tempfile
+        
+        # Create mock DEV_REPORT with non-existent runDir
+        mock_report = """
+        | Chain | RunDir | Gate | signals | net_usdc | Status |
+        | **Arbitrum** | 999999 | PASS | **5** | **$3.66** | ✅ SIGNAL_PRODUCING |
+        """
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            # Create runs dir but not the specific runDir
+            runs_dir = tmp_path / "data" / "runs"
+            runs_dir.mkdir(parents=True)
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_dev_report_runtime_claims()
+        
+        # Should have no issues (missing runDir is skipped, not an error)
+        self.assertEqual(len(issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

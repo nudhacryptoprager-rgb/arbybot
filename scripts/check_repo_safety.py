@@ -27,7 +27,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.9.0"
+__version__ = "1.10.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -928,6 +928,100 @@ def check_dev_report_claim_consistency() -> List[str]:
     return issues
 
 
+def check_dev_report_runtime_claims() -> List[str]:
+    """v3.2.65: Check DEV_REPORT claims match runtime artifacts.
+    
+    Parses the Session Progress table to extract runDir -> claimed values,
+    then validates against actual run_summary.json in those runDirs.
+    
+    Validates:
+    1. signals count: DEV_REPORT 'signals' column vs run_summary.metrics.signals_count
+    2. net_usdc: DEV_REPORT 'net_usdc' column vs run_summary.metrics.total_net_usdc
+    
+    Returns:
+        List of warning/error messages
+    """
+    issues = []
+    dev_report = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
+    runs_dir = PROJECT_ROOT / "data" / "runs"
+    
+    if not dev_report.exists():
+        return []
+    
+    if not runs_dir.exists():
+        return []  # No runtime artifacts to validate against
+    
+    try:
+        import re
+        content = dev_report.read_text(encoding='utf-8')
+        
+        # Parse Session Progress table for claims
+        # Format: | Chain | RunDir | M5 Gate | signals | net_usdc | Status |
+        # Example: | **Arbitrum** | 200317 | PASS | **6** | **$3.66** | ✅ SIGNAL_PRODUCING |
+        # Note: Handles **$3.66** format where stars surround the dollar sign
+        
+        table_pattern = re.compile(
+            r'\|\s*\*?\*?(\w+)\*?\*?\s*\|\s*(\d{6})\s*\|\s*(PASS|FAIL)\s*\|\s*\*?\*?(\d+)(?:\s*gated)?\*?\*?\s*\|\s*\*?\*?\$?([\d.]+)\*?\*?\s*\|',
+            re.IGNORECASE
+        )
+        
+        claims = list(table_pattern.finditer(content))
+        
+        for match in claims:
+            chain = match.group(1)
+            run_dir_suffix = match.group(2)
+            claimed_signals = int(match.group(4))
+            claimed_net_usdc = float(match.group(5))
+            
+            # Find the actual run directory (e.g., ci_m5_gate_20260309_200317)
+            run_dirs = list(runs_dir.glob(f"*_{run_dir_suffix}"))
+            
+            if not run_dirs:
+                # RunDir not found - skip (may be old/deleted)
+                continue
+            
+            run_dir = run_dirs[0]
+            reports_dir = run_dir / "reports"
+            
+            # Find run_summary file
+            run_summaries = list(reports_dir.glob("run_summary_*.json"))
+            
+            if not run_summaries:
+                continue
+            
+            run_summary_path = run_summaries[0]
+            
+            try:
+                run_summary = json.loads(run_summary_path.read_text(encoding='utf-8'))
+                metrics = run_summary.get("metrics", {})
+                
+                actual_signals = metrics.get("signals_count", 0)
+                actual_net_usdc = round(metrics.get("total_net_usdc", 0), 2)
+                
+                # Check signals count mismatch
+                if claimed_signals != actual_signals:
+                    issues.append(
+                        f"DEV_REPORT_RUNTIME_MISMATCH: {chain} ({run_dir_suffix}) claims "
+                        f"signals={claimed_signals} but run_summary has signals_count={actual_signals}. "
+                        f"(included_signals_count={metrics.get('included_signals_count', 0)})"
+                    )
+                
+                # Check net_usdc mismatch (within $0.01 tolerance for rounding)
+                if abs(claimed_net_usdc - actual_net_usdc) > 0.01:
+                    issues.append(
+                        f"DEV_REPORT_RUNTIME_MISMATCH: {chain} ({run_dir_suffix}) claims "
+                        f"net_usdc=${claimed_net_usdc} but run_summary has total_net_usdc=${actual_net_usdc}"
+                    )
+                    
+            except json.JSONDecodeError:
+                continue  # Skip malformed files
+                
+    except Exception as e:
+        issues.append(f"ERROR: Could not check DEV_REPORT runtime claims: {e}")
+    
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
@@ -1056,6 +1150,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: DEV_REPORT claims internally consistent")
+    
+    print("\n[15] Checking DEV_REPORT runtime claims...")
+    issues = check_dev_report_runtime_claims()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: DEV_REPORT claims match runtime artifacts")
     
     # Summary
     print("\n" + "=" * 50)
