@@ -24,6 +24,18 @@ If there is a conflict between code/comments and Status/Roadmap, **Status/Roadma
 - Be direct. Do not "agree automatically". Challenge weak logic.
 - Do not propose large refactors unless explicitly requested or required for correctness/safety.
 
+### Session Start Contract (MANDATORY)
+Before starting any work session, the agent MUST:
+1. Reread `AGENTS.md` (this file)
+2. Reread `Roadmap.md`
+3. Reread relevant `docs/status/Status_*.md` for the current milestone
+4. Reread `docs/DOCS_POLICY.md`
+5. Reread `docs/WORKFLOW.md`
+6. Reread `docs/DEV_REPORT_CANONICAL_UA.md`
+
+This ensures the agent operates with current project context, not stale assumptions.
+The agent must confirm `docs_reread_confirmed: true` in the session completion block.
+
 ---
 
 ## 1) Artifact policy (critical)

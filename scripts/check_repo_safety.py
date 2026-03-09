@@ -807,6 +807,46 @@ def check_session_completion_gate() -> List[str]:
                         "SESSION_COMPLETION: DEV_REPORT contains completion language but goal_status is not REACHED. "
                         "Remove completion language or set goal_status: REACHED with valid evidence."
                     )
+        
+        # v1.8.0: Check Primary Blocker Contract
+        # If close_allowed=true, blocker_status_after must be RESOLVED or BLOCKED
+        has_close_allowed_true = (
+            "close_allowed: true" in content.lower()
+            or "close_allowed:true" in content.lower()
+            or re.search(r"\|\s*close_allowed\s*\|.*\*?\*?true\*?\*?\s*\|", content, re.IGNORECASE)
+        )
+        
+        if has_close_allowed_true:
+            # Check blocker_status_after
+            has_blocker_resolved = (
+                "blocker_status_after: RESOLVED" in content
+                or re.search(r"\|\s*blocker_status_after\s*\|.*\*?\*?RESOLVED\*?\*?\s*\|", content, re.IGNORECASE)
+            )
+            has_blocker_blocked = (
+                "blocker_status_after: BLOCKED" in content
+                or re.search(r"\|\s*blocker_status_after\s*\|.*\*?\*?BLOCKED\*?\*?\s*\|", content, re.IGNORECASE)
+            )
+            has_blocker_in_progress = (
+                "blocker_status_after: IN_PROGRESS" in content
+                or re.search(r"\|\s*blocker_status_after\s*\|.*\*?\*?IN_PROGRESS\*?\*?\s*\|", content, re.IGNORECASE)
+            )
+            
+            if has_blocker_in_progress:
+                issues.append(
+                    "PRIMARY_BLOCKER: close_allowed=true but blocker_status_after=IN_PROGRESS. "
+                    "Per WORKFLOW.md Primary Blocker Contract, session cannot close with blocker in progress."
+                )
+            elif not has_blocker_resolved and not has_blocker_blocked:
+                # Missing blocker_status_after field entirely
+                has_blocker_field = (
+                    "blocker_status_after" in content
+                    or re.search(r"\|\s*blocker_status_after\s*\|", content, re.IGNORECASE)
+                )
+                if not has_blocker_field:
+                    issues.append(
+                        "PRIMARY_BLOCKER: close_allowed=true but missing blocker_status_after field. "
+                        "Per WORKFLOW.md Primary Blocker Contract, add blocker_status_after: RESOLVED or BLOCKED."
+                    )
     except Exception as e:
         issues.append(f"ERROR: Could not check session completion gate: {e}")
     

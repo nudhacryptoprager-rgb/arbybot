@@ -58,6 +58,27 @@ A **session** is a working period with a declared goal. Sessions have explicit s
 3. **REACHED requires verification**: All fix claims must map to actual artifact changes in fresh runDirs
 4. **BLOCKED requires documentation**: If blocked, document the blocker and unblock criteria explicitly
 
+### Primary Blocker Contract (MANDATORY)
+
+Every session MUST have one `primary_blocker_of_session` - the main project blocker this session aims to resolve.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `primary_blocker_of_session` | YES | The main blocker this session addresses |
+| `blocker_status_before` | YES | Status at session start (e.g., `ACTIVE`, `UNRESOLVED`) |
+| `blocker_status_after` | YES | Status at session end (`RESOLVED` or `BLOCKED`) |
+| `resolution_evidence` | YES if RESOLVED | Fresh runDir(s) proving blocker is resolved |
+| `block_reason` | YES if BLOCKED | Why blocker cannot be resolved this session |
+
+**Session closure requires**:
+- `blocker_status_after` = `RESOLVED` with fresh evidence, OR
+- `blocker_status_after` = `BLOCKED` with explicit block_reason
+
+**Forbidden**:
+- Closing session while `blocker_status_after` = `IN_PROGRESS`
+- Closing on infra/reporting improvements without addressing primary blocker
+- Green CI gates alone are NOT sufficient for session closure
+
 ### Session State Transitions
 
 ```

@@ -1504,7 +1504,19 @@ ENV VARIABLES:
                 
                 # v2.6.1: Let aggregate_run use CostModelRegistry internally
                 # No need to pass gas_usd_estimate/slippage_usd_estimate manually
-                report = aggregate_run(run_dir)
+                # v1.8.0: Pass session_context for session completion gate
+                session_context = {
+                    "session_goal": f"M5 online scan ({args.config})",
+                    "goal_status": "IN_PROGRESS",
+                    "close_allowed": False,
+                    "remaining_blockers": [],
+                    "evidence_session_run_dirs": [run_dir.name],
+                    "primary_blocker_of_session": None,
+                    "blocker_status_before": None,
+                    "blocker_status_after": None,
+                    "docs_reread_confirmed": False,
+                }
+                report = aggregate_run(run_dir, session_context=session_context)
                 
                 # Write daily_report
                 report_dir = run_dir / "reports"
@@ -1639,6 +1651,30 @@ ENV VARIABLES:
                             print(f"[ONLINE] M4 gate passed, rolling artifacts updated")
                         else:
                             print(f"[ONLINE] M4 gate passed, run_summary generated (rolling not updated)")
+                        # v1.8.0: Regenerate daily_report AFTER M4 gate to pick up execution_report
+                        # First daily_report generation (line ~1507) happens before M4 creates execution_report
+                        try:
+                            from scripts.generate_daily_report import aggregate_run
+                            session_context = {
+                                "session_goal": f"M5 online scan ({args.config})",
+                                "goal_status": "IN_PROGRESS",
+                                "close_allowed": False,
+                                "remaining_blockers": [],
+                                "evidence_session_run_dirs": [run_dir.name],
+                                "primary_blocker_of_session": None,
+                                "blocker_status_before": None,
+                                "blocker_status_after": None,
+                                "docs_reread_confirmed": False,
+                            }
+                            report = aggregate_run(run_dir, session_context=session_context)
+                            from datetime import date
+                            report_path = reports_dir / f"daily_report_{date.today().isoformat()}.json"
+                            with open(report_path, "w", encoding="utf8") as f:
+                                json.dump(report, f, indent=2, ensure_ascii=False)
+                            m4_net = report.get("theoretical_net_profit", {}).get("m4_sim_net_usdc")
+                            print(f"[ONLINE] Regenerated daily_report with m4_sim_net_usdc={m4_net}")
+                        except Exception as e:
+                            print(f"[ONLINE] WARN: daily_report regeneration failed: {e}")
                     else:
                         print(f"[ONLINE] M4 gate returned {m4_result.returncode}")
                         m4_gate_ok = False

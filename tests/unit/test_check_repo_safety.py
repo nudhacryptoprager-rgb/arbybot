@@ -759,6 +759,82 @@ class TestSessionCompletionGate(unittest.TestCase):
         self.assertEqual(len(issues), 1)
         self.assertIn("SESSION_COMPLETION", issues[0])
 
+    def test_close_allowed_true_with_blocker_resolved_passes(self):
+        """close_allowed=true with blocker_status_after: RESOLVED should pass."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        goal_status: REACHED
+        close_allowed: true
+        blocker_status_after: RESOLVED
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertEqual(len(issues), 0)
+
+    def test_close_allowed_true_with_blocker_in_progress_fails(self):
+        """close_allowed=true with blocker_status_after: IN_PROGRESS should fail."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        goal_status: REACHED
+        close_allowed: true
+        blocker_status_after: IN_PROGRESS
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertEqual(len(issues), 1)
+        self.assertIn("PRIMARY_BLOCKER", issues[0])
+        self.assertIn("blocker_status_after=IN_PROGRESS", issues[0])
+
+    def test_close_allowed_true_without_blocker_field_fails(self):
+        """close_allowed=true without blocker_status_after field should fail."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        goal_status: REACHED
+        close_allowed: true
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertEqual(len(issues), 1)
+        self.assertIn("PRIMARY_BLOCKER", issues[0])
+        self.assertIn("missing blocker_status_after", issues[0])
+
+    def test_close_allowed_true_with_blocker_blocked_passes(self):
+        """close_allowed=true with blocker_status_after: BLOCKED should pass."""
+        from scripts.check_repo_safety import check_session_completion_gate
+        
+        mock_report = """
+        # DEV REPORT
+        goal_status: BLOCKED
+        close_allowed: true
+        blocker_status_after: BLOCKED
+        remaining_blockers: ["RPC unreliable"]
+        """
+        
+        with patch('scripts.check_repo_safety.PROJECT_ROOT', Path('/fake')):
+            with patch.object(Path, 'exists', return_value=True):
+                with patch.object(Path, 'read_text', return_value=mock_report):
+                    issues = check_session_completion_gate()
+        
+        self.assertEqual(len(issues), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

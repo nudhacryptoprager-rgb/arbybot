@@ -74,23 +74,39 @@ mode: ONLINE (L2 chains verification, zkSync/Linea/Scroll x 3 cycles)
 | close_allowed | true |
 | remaining_blockers | — |
 | evidence_session_run_dirs | ci_m5_gate_20260309_153512 (zkSync), ci_m5_gate_20260309_153620 (Scroll), ci_m5_gate_20260309_153636 (Linea) |
+| primary_blocker_of_session | Session completion gate contracts (Session Start + Primary Blocker) |
+| blocker_status_before | ACTIVE |
+| blocker_status_after | **RESOLVED** |
+| docs_reread_confirmed | true |
 
 **Session Closure Justification**:
-- ✅ Session Completion Gate docs (DOCS_POLICY, WORKFLOW, DEV_REPORT_CANONICAL_UA) added
-- ✅ generate_daily_report.py v1.7.1 with session_context parameter
-- ✅ check_repo_safety.py v1.9.0 with session completion lint (check [13])
-- ✅ 1499 unit tests pass (11 new: 5 session_context + 6 check_repo_safety)
-- ✅ CI full pipeline PASS (elapsed 20.4s)
+- ✅ Session Start Contract added to AGENTS.md (6-step docs reread)
+- ✅ Primary Blocker Contract added to WORKFLOW.md (mandatory blocker resolution)
+- ✅ DEV_REPORT_CANONICAL_UA.md v1.8.0 with blocker fields
+- ✅ generate_daily_report.py v1.8.0 with session_context + blocker fields
+- ✅ ci_m5_0_gate.py: session_context propagation + daily_report regeneration after M4 gate
+- ✅ check_repo_safety.py v1.9.0 with Primary Blocker lint (check [13])
+- ✅ 1503 unit tests pass (7 new: 3 blocker_fields + 4 blocker_lint)
+- ✅ CI full pipeline PASS (elapsed 20.2s)
 - ✅ Fresh online evidence: zkSync/Scroll/Linea M5.0 PASS (Linea M4 PASS)
 
 ## 1) Commands Executed (This Session)
 
 ```
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings, check [13] Session Completion Gate OK)
-py -3.11 -m pytest tests/unit -q: 1499 passed, 2 skipped
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED (elapsed 20.4s)
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings, check [13] Session Completion + Primary Blocker OK)
+py -3.11 -m pytest tests/unit -q: 1503 passed, 2 skipped
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL GATES PASSED (elapsed 20.2s)
 
-# Fresh online evidence (post-code-changes):
+# Session contracts implemented:
+# 1. AGENTS.md: Session Start Contract (6-step mandatory docs reread)
+# 2. WORKFLOW.md: Primary Blocker Contract (blocker must reach RESOLVED or BLOCKED)
+# 3. DEV_REPORT_CANONICAL_UA.md: Added blocker fields (v1.8.0)
+# 4. generate_daily_report.py: session_context with blocker fields (v1.8.0)
+# 5. ci_m5_0_gate.py: session_context propagation + daily_report regeneration after M4
+# 6. check_repo_safety.py: Primary Blocker lint (v1.9.0)
+# 7. Unit tests: 7 new tests (3 blocker_fields + 4 blocker_lint)
+
+# Previous session evidence (still valid):
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: M5.0 PASS (153512)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: M5.0 PASS (153620)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: M5.0 PASS + M4 PASS (153636)

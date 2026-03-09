@@ -162,3 +162,63 @@ def test_m4_sim_net_usdc_with_execution_report(tmp_path):
     assert tnp is not None
     assert tnp["m4_sim_net_usdc"] == 3.0586
     assert tnp["m4_execution_report_path"] is not None
+
+
+def test_session_blocker_fields_propagation(tmp_path):
+    """Test that v1.8.0 blocker fields are properly propagated to the report."""
+    run = make_minimal_run(tmp_path)
+    session_context = {
+        "session_goal": "Resolve multi-chain signals",
+        "goal_status": "REACHED",
+        "close_allowed": True,
+        "remaining_blockers": [],
+        "evidence_session_run_dirs": ["run1"],
+        "primary_blocker_of_session": "multi-chain signal production",
+        "blocker_status_before": "ACTIVE",
+        "blocker_status_after": "RESOLVED",
+        "docs_reread_confirmed": True,
+    }
+    rpt = aggregate_run(run, session_context=session_context)
+    
+    session = rpt.get("session")
+    assert session is not None
+    assert session["primary_blocker_of_session"] == "multi-chain signal production"
+    assert session["blocker_status_before"] == "ACTIVE"
+    assert session["blocker_status_after"] == "RESOLVED"
+    assert session["docs_reread_confirmed"] is True
+
+
+def test_session_blocker_fields_defaults_when_none(tmp_path):
+    """Test that blocker fields default to None/False when session_context is None."""
+    run = make_minimal_run(tmp_path)
+    rpt = aggregate_run(run)
+    
+    session = rpt.get("session")
+    assert session is not None
+    assert session["primary_blocker_of_session"] is None
+    assert session["blocker_status_before"] is None
+    assert session["blocker_status_after"] is None
+    assert session["docs_reread_confirmed"] is False
+
+
+def test_session_blocker_blocked_state(tmp_path):
+    """Test blocker fields with BLOCKED status (session cannot close yet)."""
+    run = make_minimal_run(tmp_path)
+    session_context = {
+        "session_goal": "Resolve zkSync NO_DATA",
+        "goal_status": "BLOCKED",
+        "close_allowed": False,
+        "remaining_blockers": ["zkSync RPC unreliable"],
+        "primary_blocker_of_session": "zkSync signal production",
+        "blocker_status_before": "ACTIVE",
+        "blocker_status_after": "BLOCKED",
+        "docs_reread_confirmed": True,
+    }
+    rpt = aggregate_run(run, session_context=session_context)
+    
+    session = rpt.get("session")
+    assert session["goal_status"] == "BLOCKED"
+    assert session["close_allowed"] is False
+    assert session["blocker_status_after"] == "BLOCKED"
+    # Even when blocked, docs_reread_confirmed should be true
+    assert session["docs_reread_confirmed"] is True

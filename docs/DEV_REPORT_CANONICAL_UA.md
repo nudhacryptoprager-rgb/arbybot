@@ -67,6 +67,10 @@ goal_status: <REACHED|BLOCKED|IN_PROGRESS>
 close_allowed: <true|false>
 remaining_blockers: <список або "none">
 evidence_session_run_dirs: <список runDirs створених у цій сесії>
+primary_blocker_of_session: <головний blocker який вирішує ця сесія>
+blocker_status_before: <ACTIVE|UNRESOLVED>
+blocker_status_after: <RESOLVED|BLOCKED|IN_PROGRESS>
+docs_reread_confirmed: <true|false>
 ```
 
 **Семантика полів:**
@@ -77,17 +81,28 @@ evidence_session_run_dirs: <список runDirs створених у цій с
 | `close_allowed` | `true` тільки якщо `goal_status=REACHED` або `goal_status=BLOCKED` з документованим blocker |
 | `remaining_blockers` | Якщо `IN_PROGRESS` або `BLOCKED`, перерахувати що залишилось |
 | `evidence_session_run_dirs` | runDirs **із поточної сесії** (не з попередніх), які підтверджують claims |
+| `primary_blocker_of_session` | Головний project blocker цієї сесії (один!) |
+| `blocker_status_before` | Статус primary blocker на початку сесії |
+| `blocker_status_after` | Статус на кінець: `RESOLVED` (з evidence) або `BLOCKED` (з причиною) |
+| `docs_reread_confirmed` | Agent підтвердив перечитання AGENTS.md, Roadmap.md, Status, WORKFLOW.md |
 
 **Контракт:**
 - `goal_status=REACHED` вимагає: `evidence_session_run_dirs` містить fresh runDirs з поточного patch set
 - `goal_status=BLOCKED` вимагає: `remaining_blockers` не порожній, описує конкретний blocker
 - `goal_status=IN_PROGRESS` забороняє: completion language ("All done", "Session complete")
 - `close_allowed=true` дозволений ТІЛЬКИ якщо `goal_status != IN_PROGRESS`
+- `close_allowed=true` вимагає: `blocker_status_after` = `RESOLVED` або `BLOCKED`
+- `blocker_status_after=RESOLVED` вимагає: `evidence_session_run_dirs` підтверджує fix
+- `blocker_status_after=IN_PROGRESS` забороняє: `close_allowed=true`
+- `docs_reread_confirmed=true` обов'язково для кожної сесії
 
 **Заборонені патерни:**
 - Оголошення "session complete" без `goal_status=REACHED`
 - Використання runDirs з попередніх сесій як "fresh evidence"
 - Порожній `remaining_blockers` при `goal_status=BLOCKED`
+- `close_allowed=true` з `blocker_status_after=IN_PROGRESS`
+- Закриття сесії без зміни `blocker_status_before` → `blocker_status_after`
+- `docs_reread_confirmed=false` при спробі закрити сесію
 
 ## 1) Вхідні дані, які обов'язково додаються до звіту
 

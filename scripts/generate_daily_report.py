@@ -62,9 +62,14 @@ def aggregate_run(
             - goal_status: REACHED | BLOCKED | IN_PROGRESS
             - close_allowed: True only if goal_status != IN_PROGRESS
             - remaining_blockers: List of blockers if not REACHED
+            - primary_blocker_of_session: Main blocker this session addresses (v1.8.0)
+            - blocker_status_before: Status at session start (v1.8.0)
+            - blocker_status_after: Status at session end (v1.8.0)
+            - docs_reread_confirmed: Agent confirmed reread of docs (v1.8.0)
     
     v1.5.0: Dual PnL - both gas_only and paper_realistic
     v1.7.1: Added session_context parameter for session completion gate
+    v1.8.0: Added primary_blocker_of_session and blocker status fields
     """
     # Load both cost models for dual PnL (v1.5.0)
     gas_only_model = None
@@ -570,6 +575,7 @@ def aggregate_run(
         "health": health,
         # v3.2.58: Session completion fields (MANDATORY per DOCS_POLICY.md section 9)
         # v1.7.1: Now respects session_context parameter from caller
+        # v1.8.0: Added primary_blocker_of_session and blocker status fields
         "session": {
             "session_goal": (session_context or {}).get("session_goal"),
             "goal_status": (session_context or {}).get("goal_status", "IN_PROGRESS"),
@@ -577,6 +583,14 @@ def aggregate_run(
             "remaining_blockers": (session_context or {}).get("remaining_blockers", []),
             "evidence_session_run_dirs": (session_context or {}).get(
                 "evidence_session_run_dirs", [str(run_dir.name)]
+            ),
+            "primary_blocker_of_session": (session_context or {}).get(
+                "primary_blocker_of_session"
+            ),
+            "blocker_status_before": (session_context or {}).get("blocker_status_before"),
+            "blocker_status_after": (session_context or {}).get("blocker_status_after"),
+            "docs_reread_confirmed": (session_context or {}).get(
+                "docs_reread_confirmed", False
             ),
         },
     }
