@@ -7,6 +7,12 @@
 #   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt
 #   via factory.getPool() calls instead of hardcoded pool addresses.
 #
+# CHAIN STATUS (2026-03-09): SIGNAL_PRODUCING via same-DEX fallback
+#   - require_cross_dex=false because ALL cross-dex routes trigger MIXED_SOURCE
+#   - stratum (ve33) uses getAmountOut, agni_v3 (uniswap_v3) uses quoter_v2
+#   - Single-DEX fee-tier arbitrage (agni_v3→agni_v3) is the only viable path
+#   - NOT cross-DEX-ready until FusionX V3 or similar quoter_v2 DEX added
+#
 # RUN_KIND: COVERAGE
 #   - Will NOT update rolling artifacts (NORM-only policy)
 #   - Safe for testing without affecting production rolling state
@@ -14,6 +20,7 @@
 # WORKFLOW:
 #   py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 1
 #
+# v3.2.51: require_cross_dex=false (MIXED_SOURCE fix, same-DEX fallback)
 # v3.2.19: Initial config for Mantle multi-chain rollout
 
 # Chain: Mantle
@@ -66,7 +73,7 @@ paper_slippage_bps: 5
 gas_usd_estimate: 0.02  # Mantle is very cheap (MNT gas)
 
 # Token USD prices (for notional sizing)
-# v3.2.50: Added PUFF, AUSD prices to prevent NO_USD_PRICE rejects
+# v3.2.52: Removed AUSD (not on DEXes), kept mUSD, PUFF
 tokens_usd_price:
   WETH: 3000.0
   WMNT: 0.80
@@ -76,7 +83,6 @@ tokens_usd_price:
   mETH: 3100.0
   cmETH: 3100.0
   PUFF: 0.001     # Meme token - low value
-  AUSD: 1.0       # Stablecoin
 
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000

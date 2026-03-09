@@ -402,6 +402,12 @@ mantle:
     decimals: 18
     name: "Cook mETH"
     note: "v3.2.32: Verified via DexScreener"
+  
+  mUSD:
+    address: "0xab575258d37eaa5c8956efabe71f4ee8f6397cf3"
+    decimals: 18
+    name: "Mantle USD"
+    note: "v3.2.52: Added via CoinGecko lookup"
 
 # =============================================================================
 # ZKSYNC ERA (chain_id: 324)

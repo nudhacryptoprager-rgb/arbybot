@@ -1150,11 +1150,17 @@ def generate_m4_from_online_inputs(
     
     # v3.2.51: Chain quality level classification
     # Uses included_signals_count to determine signal-producing status
-    # consecutive_non_nodata_cycles defaults to 1 (single run context)
-    # TODO: Add rolling tracking for consecutive_non_nodata_cycles in step 5
+    # 
+    # LIMITATION: consecutive_non_nodata_cycles defaults to 1 for single-run context.
+    # For COVERAGE runs, this cannot be tracked because they don't update rolling.
+    # For NORMAL runs, see m4_stability_agg.quick_stats.consecutive_non_nodata_cycles
+    # which IS computed from rolling history.
+    #
+    # QUALITY_RAISED proof requires: run_kind=NORMAL + rolling updates + 3+ consecutive
+    # non-NO_DATA runs. Coverage chains can only achieve SIGNAL_PRODUCING at best.
     chain_quality_level = classify_chain_quality(
         signals_count=included_signals_count,
-        consecutive_non_nodata_cycles=1,  # Single run - no history tracking yet
+        consecutive_non_nodata_cycles=1,  # Single run context; rolling tracks history
         infra_gate_pass=True,  # Reaching this code means infra passed
     )
     

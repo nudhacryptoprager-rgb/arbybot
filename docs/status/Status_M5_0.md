@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]  
-**Updated**: 2026-03-08 11:35  
-**Tests**: 1457 passed, 1 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260308_112739` (Base), `ci_m5_gate_20260308_112927` (Linea), `ci_m5_gate_20260308_113028` (Mantle), `ci_m5_gate_20260308_113052` (zkSync), `ci_m5_gate_20260308_113003` (Scroll)  
+**Updated**: 2026-03-09 10:35  
+**Tests**: 1463 passed, 1 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260309_102444` (Base), `ci_m5_gate_20260309_102629` (Mantle), `ci_m5_gate_20260309_102739` (Linea), `ci_m5_gate_20260309_102825` (zkSync), `ci_m5_gate_20260309_102807` (Scroll), `ci_m5_gate_20260309_102836` (Arbitrum)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -16,9 +16,23 @@
 
 ---
 
-## Multi-Chain Bring-up (2026-03-08)
+## Multi-Chain Bring-up (2026-03-09)
+
+### Operational Directive (2026-03-09)
+
+> **Next frontier**: Data collection quality + network stabilization, not raw infra PASS.  
+> Code blocker is LOW; the real work is raising quote success rate and making chains repeatably non-NO_DATA.
 
 ### Practical Bring-up Progress
+
+**2026-03-09**: Mantle MIXED_SOURCE fix + artifact enhancements:
+- **Mantle**: Set `require_cross_dex=false` to allow single-DEX fee-tier arbitrage. **NOW PASSING** (same-DEX fallback)
+  - Root cause: ALL cross-dex routes are stratum (ve33) ↔ agni_v3 (uniswap_v3) = MIXED_SOURCE
+  - Solution: `agni_v3→agni_v3` routes use consistent quoter_v2 source
+  - **Note**: This is NOT cross-DEX readiness; Mantle is SIGNAL_PRODUCING via same-DEX fallback only
+- **Artifacts**: Added `chain_quality_level` and `consecutive_non_nodata_cycles` to run_summary.metrics
+- **Rolling**: Added `consecutive_non_nodata_cycles` to m4_stability_agg.quick_stats
+- **Tests**: Added 6 new tests in `test_mantle_mixed_source.py`
 
 **2026-03-08 (session 2)**: Config optimization for all chains:
 - **All chains**: `min_spread_bps` lowered from 5 to 3 (still profitable with low L2 gas)
@@ -48,31 +62,75 @@
 | `run_summary.status` | `run_summary.json status` | Signal flow: NO_DATA/FAIL/PASS |
 | `signals_count` | `run_summary.json metrics.signals_count` | Raw spread signals detected |
 | `ChainQualityLevel` | `m4/policy.py` | Chain maturity: INFRA_READY/SIGNAL_PRODUCING/QUALITY_RAISED |
+| `chain_quality_level` | `run_summary.metrics` | Runtime chain quality (v3.2.51+) |
+| `consecutive_non_nodata_cycles` | `run_summary.metrics` / `quick_stats` | Count for QUALITY_RAISED proof |
 
 **ВАЖЛИВО**: `infra_gate: PASS` ≠ `run_summary.status: PASS`. Infra gate validates infrastructure; run_summary shows actual opportunity flow.
 
-### Blocker Classification (2026-03-08)
+### Data Collection Quality Contract (2026-03-09 10:35)
+
+| Metric | Target | Base | Mantle | Arbitrum | Notes |
+|--------|--------|------|--------|----------|-------|
+| `quotes_fetched/quotes_total` | ≥70% | 37/42 (88%) ✅ | 24/47 (51%) | 51/122 (42%) | Base improved |
+| `signals_count` | ≥1 | 1 ✅ | 3 ✅ | 11 ✅ | All SIGNAL_PRODUCING |
+| `runtime_disabled_pools` | 0 | 0 | 0 | 0 | OK |
+| `cross_dex_ready` | true | true | **false** | true | Mantle = same-DEX fallback |
+
+**Stabilization criterion**: Chain is stable when it repeatably produces non-NO_DATA across 3+ consecutive cycles, not just single-run PASS.
+
+### Reject Surface Analysis (2026-03-09)
+
+**Base** (`coverage_intent_base.yaml`, runDir `102444`):
+- Discovery: 16 pairs evaluated → 11 resolved (68.75%)
+- Skipped: 4 single-DEX pairs (require_cross_dex=true), 1 no-pool pair
+- Quotes: 42 total → 37 fetched (88% fetch rate) ✅ **IMPROVED**
+- DEXes: uniswap_v3 (4 pairs), aerodrome (13), sushiswap_v3 (13)
+- Signals: 1 (ROUNDTRIP_PROFITABLE)
+- **Blocker**: PancakeSwap V3 excluded (slot0 failures)
+
+**Mantle** (`coverage_intent_mantle.yaml`, runDir `102629`):
+- Discovery: 14 pairs evaluated → 13 resolved (93%)
+- Skipped: 0 no-token pairs ✅ **mUSD added, AUSD removed (zero liquidity)**
+- Quotes: 47 total → 24 fetched (51% fetch rate)
+- DEXes: agni_v3 (13 pairs), stratum (5)
+- Signals: 3 (same-DEX fee-tier arbitrage)
+- **Blocker**: Only 5 true cross-DEX pairs; using same-DEX fallback (require_cross_dex=false)
+
+**Arbitrum** (`coverage_intent_arbitrum_one.yaml`, runDir `102836`):
+- Quotes: 122 total → 51 fetched (42% fetch rate)
+- DEXes: 4 (uniswap_v3, sushiswap_v3, camelot, pancakeswap)
+- Signals: 11 (highest count)
+- **Status**: SIGNAL_PRODUCING
+
+**Action items** (updated 2026-03-09 10:35):
+1. ✅ DONE: mUSD added to `core_tokens.yaml` for Mantle
+2. ✅ DONE: AUSD removed from intent.txt (zero liquidity on DEXes)
+3. TODO: Fix PancakeSwap V3 slot0 failures on Base
+4. TODO: Add FusionX V3 or another quoter_v2 DEX on Mantle for true cross-DEX
+
+### Blocker Classification (2026-03-09 v3.2.52)
 
 ```
-code_blocker: LOW (pytest 1457 passed, CI green, safety PASS)
-data_collection_blocker: MEDIUM (quarantines active, some quotes rejected)
-market_window_blocker: HIGH (4/5 chains NO_DATA/FAIL despite infra PASS)
+code_blocker: LOW (pytest 1463 passed, CI green, safety PASS)
+data_collection_blocker: MEDIUM (Base 88%, Mantle 51%, Arbitrum 42% fetch rate)
+market_window_blocker: HIGH (3/6 chains NO_DATA despite infra PASS)
 ```
 
-### Infra Gate Results
+### Infra Gate Results (2026-03-09 10:35)
 
 Note: M5_0 gate validates **infra** (artifacts, schemas, quotes). `run_summary.status` semantics:
 - `NO_DATA`: signals_count == 0 (no raw signals at all)
 - `FAIL`: signals_count > 0 but no profitable results (includes all-excluded case: FAIL_ALL_EXCLUDED)
 - `PASS`: signals > 0 and profitable
 
-| Chain | Infra Gate | run_summary | pairs | pools | quotes_fetched | cross_dex | dexes | Notes |
-|-------|------------|-------------|-------|-------|----------------|-----------|-------|-------|
-| Base | ✅ PASS | **PASS** | 10 | 31 | 31 | 11 | 3 | 1 sig, spread 49bps |
-| Linea | ✅ PASS | NO_DATA | 10 | 27 | 27 | 12 | 2 | quotes OK, no spreads ≥3bps |
-| Mantle | ✅ PASS | FAIL | 4 | 14 | 14 | 5 | 2 | 1 signal excluded |
-| zkSync | ✅ PASS | NO_DATA | 10 | 49 | 49 | 10 | 2 | quotes OK, no spreads ≥3bps |
-| Scroll | ✅ PASS | NO_DATA | 4 | 9 | 9 | 8 | 2 | quotes OK, no spreads ≥3bps |
+| Chain | Infra Gate | run_summary | chain_quality_level | quotes | fetch% | signals | dexes | runDir | Notes |
+|-------|------------|-------------|---------------------|--------|--------|---------|-------|--------|-------|
+| Arbitrum | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 51/122 | 42% | 11 | 4 | 102836 | Best signals |
+| Base | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 37/42 | 88% | 1 | 3 | 102444 | **IMPROVED** |
+| Mantle | ✅ PASS | **PASS** | SIGNAL_PRODUCING | 24/47 | 51% | 3 | 2 | 102629 | same-DEX fallback |
+| Linea | ✅ PASS | NO_DATA | INFRA_READY | 27/42 | 64% | 0 | 2 | 102739 | no spreads ≥3bps |
+| zkSync | ✅ PASS | NO_DATA | INFRA_READY | 49/62 | 79% | 0 | 2 | 102825 | no spreads ≥3bps |
+| Scroll | ✅ PASS | NO_DATA | INFRA_READY | 9/37 | 24% | 0 | 2 | 102807 | no spreads ≥3bps |
 
 ### Scroll Status Update
 

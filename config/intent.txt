@@ -154,8 +154,7 @@ mantle:PUFF/WMNT
 mantle:PUFF/WETH
 
 # NEW: Stablecoin variants (peg arbitrage)
-mantle:AUSD/USDT
-mantle:AUSD/USDC
+# REMOVED: AUSD/USDT, AUSD/USDC - AUSD token not found on DEXes (zero liquidity)
 
 # NEW: Closing pairs for triangular
 mantle:mETH/USDC
