@@ -201,6 +201,11 @@ def new_chain_stats() -> dict[str, Any]:
         "sweep_best_net_pnl_bps": None,
         "sweep_best_size_usd": None,
         "sweep_best_pair": None,
+        "sweep_gap_to_zero_bps": None,
+        "sweep_measured_gas_bps": None,
+        "sweep_measured_fee_bps": None,
+        "sweep_measured_slippage_bps": None,
+        "sweep_measured_total_cost_bps": None,
         "last_run_timestamp": None,
         "last_run_dir": None,
         # Richer per-chain fields (last-run snapshot)
@@ -243,13 +248,19 @@ def update_chain_stats(
             prev_gap = stats.get("best_measured_spread_gap_bps")
             stats["best_measured_spread_gap_bps"] = run_gap if prev_gap is None else max(prev_gap, run_gap)
         sweep = rt.get("dynamic_sweep", {})
-        sweep_pnl = sweep.get("best_net_pnl_bps")
+        sweep_pnl = sweep.get("best_net_pnl_bps") or sweep.get("sweep_best_net_pnl_bps")
         if sweep_pnl is not None:
             prev_sweep = stats.get("sweep_best_net_pnl_bps")
             if prev_sweep is None or sweep_pnl > prev_sweep:
                 stats["sweep_best_net_pnl_bps"] = sweep_pnl
-                stats["sweep_best_size_usd"] = sweep.get("best_size_usd")
-                stats["sweep_best_pair"] = sweep.get("best_pair")
+                stats["sweep_best_size_usd"] = sweep.get("best_size_usd") or sweep.get("sweep_best_size_usd")
+                stats["sweep_best_pair"] = sweep.get("best_pair") or sweep.get("frontier_pair")
+                gap = sweep.get("gap_to_zero_bps")
+                stats["sweep_gap_to_zero_bps"] = gap
+                stats["sweep_measured_gas_bps"] = sweep.get("measured_gas_bps") or sweep.get("best_gas_bps")
+                stats["sweep_measured_fee_bps"] = sweep.get("measured_fee_bps") or sweep.get("best_fee_bps")
+                stats["sweep_measured_slippage_bps"] = sweep.get("measured_slippage_bps") or sweep.get("best_slippage_bps")
+                stats["sweep_measured_total_cost_bps"] = sweep.get("measured_total_cost_bps") or sweep.get("best_total_cost_bps")
         ctx = summary.get("run_context", {})
         stats["last_run_timestamp"] = ctx.get("run_timestamp", stats["last_run_timestamp"])
         # Richer snapshot fields
@@ -351,7 +362,32 @@ def build_summary(
         "probe_only_chains": probe_only_chains,
         "per_chain": per_chain,
         "warnings": warnings,
+        "frontier_ranking": _compute_frontier_ranking(per_chain),
     }
+
+
+def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rank chains by sweep frontier economics (lower gap_to_zero = better)."""
+    ranked = []
+    for chain, s in per_chain.items():
+        gap = s.get("sweep_gap_to_zero_bps")
+        pnl = s.get("sweep_best_net_pnl_bps")
+        if pnl is None:
+            continue
+        ranked.append({
+            "chain": chain,
+            "gap_to_zero_bps": gap,
+            "sweep_best_net_pnl_bps": pnl,
+            "sweep_best_size_usd": s.get("sweep_best_size_usd"),
+            "frontier_pair": s.get("sweep_best_pair"),
+            "measured_gas_bps": s.get("sweep_measured_gas_bps"),
+            "measured_fee_bps": s.get("sweep_measured_fee_bps"),
+            "measured_slippage_bps": s.get("sweep_measured_slippage_bps"),
+            "measured_total_cost_bps": s.get("sweep_measured_total_cost_bps"),
+            "frontier_ready": gap is not None and gap < 30,
+        })
+    ranked.sort(key=lambda x: x.get("gap_to_zero_bps") or 9999)
+    return ranked
 
 
 def print_summary(summary: dict[str, Any]) -> None:
@@ -414,6 +450,22 @@ def print_summary(summary: dict[str, Any]) -> None:
         print("\n--- WARNINGS ---")
         for w in summary["warnings"]:
             print(f"  [!] {w}")
+
+    ranking = summary.get("frontier_ranking", [])
+    if ranking:
+        print("\n--- FRONTIER RANKING (by gap_to_zero_bps) ---")
+        for i, r in enumerate(ranking):
+            gap = r.get("gap_to_zero_bps")
+            gap_s = f"{gap:.1f}" if gap is not None else "n/a"
+            pnl = r.get("sweep_best_net_pnl_bps", 0)
+            cost = r.get("measured_total_cost_bps")
+            cost_s = f"cost={cost:.1f}" if cost is not None else "cost=n/a"
+            ready = "READY" if r.get("frontier_ready") else "-"
+            print(
+                f"  #{i+1} {r['chain']:16s}  gap={gap_s:>6s} bps  "
+                f"pnl={pnl:+.1f} bps  {cost_s} bps  "
+                f"pair={r.get('frontier_pair', 'n/a')}  {ready}"
+            )
 
     print("=" * 70)
 

@@ -1117,11 +1117,27 @@ def generate_m4_from_online_inputs(
     
     # v3.2.30: Extract roundtrip_summary from truth_report for M4.2 progress tracking
     roundtrip_summary = truth_data.get("roundtrip_summary", {})
+    ds = roundtrip_summary.get("dynamic_sweep", {})
     roundtrip = {
         "evaluated_count": roundtrip_summary.get("evaluated_count", 0),
         "profitable_count": roundtrip_summary.get("profitable_count", 0),
         "best_net_pnl_bps": roundtrip_summary.get("best_net_pnl_bps"),
+        "best_measured_spread_gap_bps": roundtrip_summary.get("best_measured_spread_gap_bps"),
     }
+    # Surface sweep frontier in run_summary so rolling aggregator can see it
+    if ds.get("enabled"):
+        roundtrip["dynamic_sweep"] = {
+            "sweep_best_net_pnl_bps": ds.get("sweep_best_net_pnl_bps"),
+            "sweep_best_size_usd": ds.get("sweep_best_size_usd"),
+            "sweep_best_frontier_reason": ds.get("sweep_best_frontier_reason", "NO_DATA"),
+            "frontier_pair": ds.get("frontier_pair"),
+            "gap_to_zero_bps": ds.get("gap_to_zero_bps"),
+            "routes_swept": ds.get("routes_swept", 0),
+            "measured_gas_bps": ds.get("measured_gas_bps"),
+            "measured_fee_bps": ds.get("measured_fee_bps"),
+            "measured_slippage_bps": ds.get("measured_slippage_bps"),
+            "measured_total_cost_bps": ds.get("measured_total_cost_bps"),
+        }
     
     # v2.0: Evidence validation based on timestamp consistency only
     evidence_issues = []

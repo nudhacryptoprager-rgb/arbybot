@@ -671,5 +671,46 @@ class TestAcceptedFailChains(unittest.TestCase):
         self.assertEqual(rc, 1, "arb is unexpected fail, should cause exit 1")
 
 
+class TestFrontierRanking(unittest.TestCase):
+    """Contract: _compute_frontier_ranking ranks chains by gap_to_zero_bps ascending."""
+
+    def test_ranking_order(self):
+        per_chain = {
+            "arb": {"sweep_gap_to_zero_bps": 12.5, "sweep_best_net_pnl_bps": -12.5,
+                     "sweep_measured_gas_bps": 3.0,
+                     "sweep_measured_fee_bps": 60.0, "sweep_measured_slippage_bps": 1.0,
+                     "sweep_measured_total_cost_bps": 64.0},
+            "base": {"sweep_gap_to_zero_bps": 8.0, "sweep_best_net_pnl_bps": -8.0,
+                      "sweep_measured_gas_bps": 1.0,
+                      "sweep_measured_fee_bps": 30.0, "sweep_measured_slippage_bps": 0.5,
+                      "sweep_measured_total_cost_bps": 31.5},
+            "scroll": {"sweep_gap_to_zero_bps": None},
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        # base (8.0) before arb (12.5), scroll excluded (None gap)
+        self.assertEqual(ranking[0]["chain"], "base")
+        self.assertEqual(ranking[1]["chain"], "arb")
+        self.assertEqual(len(ranking), 2)
+
+    def test_frontier_ready_flag(self):
+        per_chain = {
+            "arb": {"sweep_gap_to_zero_bps": 25.0, "sweep_best_net_pnl_bps": -25.0},
+            "base": {"sweep_gap_to_zero_bps": 35.0, "sweep_best_net_pnl_bps": -35.0},
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        arb_entry = [r for r in ranking if r["chain"] == "arb"][0]
+        base_entry = [r for r in ranking if r["chain"] == "base"][0]
+        self.assertTrue(arb_entry["frontier_ready"])  # 25 < 30
+        self.assertFalse(base_entry["frontier_ready"])  # 35 >= 30
+
+    def test_frontier_ranking_in_summary(self):
+        per_chain = {
+            "arb": start.new_chain_stats(),
+        }
+        per_chain["arb"]["sweep_gap_to_zero_bps"] = 15.0
+        summary = start.build_summary(per_chain, 60.0, [])
+        self.assertIn("frontier_ranking", summary)
+
+
 if __name__ == "__main__":
     unittest.main()

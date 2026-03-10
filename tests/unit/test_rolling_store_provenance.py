@@ -563,3 +563,139 @@ class TestDiversityRoutesLowUsesCrossDex:
         # DIVERSITY_ROUTES_LOW should NOT be in warnings (4 >= 4)
         diversity_warnings = [w for w in warnings if w.startswith("DIVERSITY_ROUTES_LOW")]
         assert len(diversity_warnings) == 0, f"Unexpected DIVERSITY_ROUTES_LOW: {warnings}"
+
+
+class TestSweepFrontierInRolling:
+    """Contract: sweep frontier metrics must propagate through rolling pipeline."""
+
+    def _make_run_summary(self, *, sweep_best_net_pnl_bps=-17.13, gap_to_zero_bps=17.13,
+                          sweep_best_frontier_reason="BEST_NEG", sweep_best_size_usd=50):
+        return {
+            "run_id": "sweep_test_001",
+            "timestamp": "2026-03-10T20:00:00Z",
+            "run_context": {
+                "code_sha": None, "code_dirty": None, "code_desc": None,
+                "run_timestamp": "2026-03-10T20:00:00Z",
+            },
+            "status": "PASS",
+            "metrics": {
+                "signals_count": 5, "total_net_usdc": 1.0,
+                "mae_net_usdc": 0.3, "est_sign_correct_rate": 1.0, "fragile_rate": 0,
+                "roundtrip": {
+                    "evaluated_count": 3, "profitable_count": 0,
+                    "best_net_pnl_bps": -29.96,
+                    "dynamic_sweep": {
+                        "sweep_best_net_pnl_bps": sweep_best_net_pnl_bps,
+                        "sweep_best_size_usd": sweep_best_size_usd,
+                        "sweep_best_frontier_reason": sweep_best_frontier_reason,
+                        "gap_to_zero_bps": gap_to_zero_bps,
+                        "routes_swept": 3,
+                    },
+                },
+            },
+            "reasons": [],
+            "inputs": {"pairs": ["WETH/USDC"], "routes": ["uniswap_v3->sushiswap_v3"]},
+        }
+
+    def test_emit_carries_sweep_per_run_fields(self):
+        """emit_to_aggregator_light must record sweep fields in per-run entry."""
+        from m4.rolling_store import emit_to_aggregator_light
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agg_path = Path(tmpdir) / "test_agg.json"
+            run_summary = self._make_run_summary()
+            result = emit_to_aggregator_light(run_summary, agg_path)
+
+            run_entry = result["runs"][0]
+            assert run_entry["sweep_best_net_pnl_bps"] == -17.13
+            assert run_entry["sweep_gap_to_zero_bps"] == 17.13
+            assert run_entry["sweep_frontier_reason"] == "BEST_NEG"
+
+    def test_quick_stats_aggregates_sweep(self):
+        """_compute_quick_stats must aggregate sweep metrics across runs."""
+        from m4.rolling_store import _compute_quick_stats
+
+        runs = [
+            {"run_kind": "NORMAL", "signals_count": 5,
+             "sweep_best_net_pnl_bps": -17.13, "sweep_gap_to_zero_bps": 17.13,
+             "sweep_frontier_reason": "BEST_NEG"},
+            {"run_kind": "NORMAL", "signals_count": 3,
+             "sweep_best_net_pnl_bps": -10.0, "sweep_gap_to_zero_bps": 10.0,
+             "sweep_frontier_reason": "BEST_NEG"},
+        ]
+
+        result = _compute_quick_stats({"runs": runs})
+        qs = result.get("quick_stats", {})
+
+        assert qs["sweep_runs_count"] == 2
+        # max of (-17.13, -10.0) = -10.0 (closer to zero = better)
+        assert qs["sweep_best_pnl_bps_ever"] == -10.0
+        # min of (17.13, 10.0) = 10.0 (closer to zero = better)
+        assert qs["sweep_gap_to_zero_min"] == 10.0
+
+    def test_quick_stats_sweep_absent_graceful(self):
+        """_compute_quick_stats handles runs without sweep fields gracefully."""
+        from m4.rolling_store import _compute_quick_stats
+
+        runs = [
+            {"run_kind": "NORMAL", "signals_count": 5},  # no sweep fields
+        ]
+        result = _compute_quick_stats({"runs": runs})
+        qs = result.get("quick_stats", {})
+
+        assert qs["sweep_runs_count"] == 0
+        assert qs["sweep_best_pnl_bps_ever"] is None
+        assert qs["sweep_gap_to_zero_min"] is None
+
+    def test_emit_carries_measured_cost_fields(self):
+        """emit_to_aggregator_light must record measured cost decomposition per run."""
+        from m4.rolling_store import emit_to_aggregator_light
+        from pathlib import Path
+        import tempfile
+
+        run_summary = self._make_run_summary()
+        ds = run_summary["metrics"]["roundtrip"]["dynamic_sweep"]
+        ds["measured_gas_bps"] = 3.2
+        ds["measured_fee_bps"] = 60.0
+        ds["measured_slippage_bps"] = 1.5
+        ds["measured_total_cost_bps"] = 64.7
+        ds["frontier_pair"] = "WETH/USDC"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agg_path = Path(tmpdir) / "test_agg.json"
+            result = emit_to_aggregator_light(run_summary, agg_path)
+
+            entry = result["runs"][0]
+            assert entry.get("sweep_measured_gas_bps") == 3.2
+            assert entry.get("sweep_measured_fee_bps") == 60.0
+            assert entry.get("sweep_measured_slippage_bps") == 1.5
+            assert entry.get("sweep_measured_total_cost_bps") == 64.7
+            assert entry.get("sweep_frontier_pair") == "WETH/USDC"
+
+    def test_quick_stats_median_and_frontier_latest(self):
+        """_compute_quick_stats includes median gap/pnl and frontier_pair/chain_latest."""
+        from m4.rolling_store import _compute_quick_stats
+
+        runs = [
+            {"run_kind": "NORMAL", "signals_count": 5,
+             "sweep_best_net_pnl_bps": -17.0, "sweep_gap_to_zero_bps": 17.0,
+             "sweep_frontier_reason": "BEST_NEG",
+             "sweep_measured_gas_bps": 2.0, "sweep_measured_fee_bps": 50.0,
+             "sweep_frontier_pair": "WETH/USDC"},
+            {"run_kind": "NORMAL", "signals_count": 3,
+             "sweep_best_net_pnl_bps": -10.0, "sweep_gap_to_zero_bps": 10.0,
+             "sweep_frontier_reason": "BEST_NEG",
+             "sweep_measured_gas_bps": 1.5, "sweep_measured_fee_bps": 30.0,
+             "sweep_frontier_pair": "WBTC/USDC"},
+        ]
+
+        result = _compute_quick_stats({"runs": runs})
+        qs = result.get("quick_stats", {})
+
+        # Medians of [17.0, 10.0] → p50 ≈ 10.0..17.0 range
+        assert qs.get("sweep_median_gap_to_zero_bps") is not None
+        assert qs.get("sweep_median_net_pnl_bps") is not None
+        # frontier_pair_latest = last run's frontier pair
+        assert qs.get("frontier_pair_latest") == "WBTC/USDC"

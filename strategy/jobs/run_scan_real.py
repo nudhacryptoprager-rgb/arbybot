@@ -952,6 +952,11 @@ def run_scan(
                     "best_size_usd": best_sweep.best_size_usd,
                     "best_net_pnl_bps": best_sweep.best_net_pnl_bps,
                     "best_frontier_reason": best_sweep.frontier_reason,
+                    "gap_to_zero_bps": best_sweep.gap_to_zero_bps,
+                    "best_gas_bps": best_sweep.best_gas_bps,
+                    "best_fee_bps": best_sweep.best_fee_bps,
+                    "best_slippage_bps": best_sweep.best_slippage_bps,
+                    "best_total_cost_bps": best_sweep.best_total_cost_bps,
                     "results": [s.to_dict() for s in sweep_results],
                 }
             else:

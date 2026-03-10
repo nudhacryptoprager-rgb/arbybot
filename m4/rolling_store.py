@@ -220,6 +220,16 @@ def emit_to_aggregator_light(
         # v3.2.30: Roundtrip metrics for M4.2 progress tracking
         "roundtrip_evaluated_count": metrics.get("roundtrip", {}).get("evaluated_count", 0),
         "roundtrip_profitable_count": metrics.get("roundtrip", {}).get("profitable_count", 0),
+        # v3.3.1: Sweep frontier metrics for M4.2 blocker tracking
+        "sweep_best_net_pnl_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("sweep_best_net_pnl_bps"),
+        "sweep_gap_to_zero_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("gap_to_zero_bps"),
+        "sweep_frontier_reason": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("sweep_best_frontier_reason"),
+        "sweep_frontier_pair": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("frontier_pair"),
+        # v3.4.0: Measured cost decomposition at best sweep point
+        "sweep_measured_gas_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("measured_gas_bps"),
+        "sweep_measured_fee_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("measured_fee_bps"),
+        "sweep_measured_slippage_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("measured_slippage_bps"),
+        "sweep_measured_total_cost_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("measured_total_cost_bps"),
     })
     
     # Clean legacy: keep only light-format runs
@@ -476,6 +486,15 @@ def _compute_quick_stats(
         "roundtrip_runs_profitable": sum(1 for r in normal_runs if r.get("roundtrip_profitable_count", 0) > 0),
         "roundtrip_total_evaluated": sum(r.get("roundtrip_evaluated_count", 0) for r in normal_runs),
         "roundtrip_total_profitable": sum(r.get("roundtrip_profitable_count", 0) for r in normal_runs),
+        # v3.3.1: Sweep frontier aggregates for M4.2 blocker tracking
+        "sweep_runs_count": sum(1 for r in normal_runs if r.get("sweep_best_net_pnl_bps") is not None),
+        "sweep_best_pnl_bps_ever": max((r.get("sweep_best_net_pnl_bps") for r in normal_runs if r.get("sweep_best_net_pnl_bps") is not None), default=None),
+        "sweep_gap_to_zero_min": min((r.get("sweep_gap_to_zero_bps") for r in normal_runs if r.get("sweep_gap_to_zero_bps") is not None), default=None),
+        # v3.4.0: Median aggregates + frontier provenance for dynamic economics ranking
+        "sweep_median_gap_to_zero_bps": percentile([r["sweep_gap_to_zero_bps"] for r in normal_runs if r.get("sweep_gap_to_zero_bps") is not None], 50),
+        "sweep_median_net_pnl_bps": percentile([r["sweep_best_net_pnl_bps"] for r in normal_runs if r.get("sweep_best_net_pnl_bps") is not None], 50),
+        "frontier_pair_latest": next((r.get("sweep_frontier_pair") for r in reversed(normal_runs) if r.get("sweep_frontier_pair")), None),
+        "frontier_chain_latest": next((r.get("chain_key") for r in reversed(normal_runs) if r.get("sweep_frontier_pair")), None),
         # v3.2.9: chain_key in quick_stats (single value or "MIXED" if multiple chains in window)
         "chain_key": (list(all_chain_keys)[0] if len(all_chain_keys) == 1 else ("MIXED" if len(all_chain_keys) > 1 else "unknown")),
         # v3.2.10: chain_keys as sorted list for automation/machine readability

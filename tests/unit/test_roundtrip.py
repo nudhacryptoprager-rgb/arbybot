@@ -1215,3 +1215,120 @@ class TestCanonicalSweep:
         # gas_bps but same gross_bps.  Best is the largest size (lowest gas %).
         assert result.best_size_usd is not None
         assert result.sizes_evaluated == 3
+
+    def test_gap_to_zero_bps_computed(self):
+        """gap_to_zero_bps = abs(best_net_pnl_bps) when negative."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q = {
+            "dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC",
+            "fee": 3000, "amount_in_wei": 1_000_000_000_000_000_000,
+            "amount_out_wei": 2000_000_000, "gas_estimate": 150_000,
+            "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+        sell_q = {
+            "dex_id": "sushiswap_v3", "token_in": "USDC", "token_out": "WETH",
+            "fee": 3000, "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 1_010_000_000_000_000_000,
+            "gas_estimate": 150_000, "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+
+        def requote_ok(amount_in_wei):
+            return {
+                "amount_out_wei": int(amount_in_wei * 0.999),
+                "gas_estimate": 150_000, "ticks_crossed": 0,
+            }
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q, sell_quote_base=sell_q,
+            requote_leg1=requote_ok, requote_leg2=requote_ok,
+            sizes_usd=[100], token_in_usd_price=2000.0,
+        )
+        assert result.frontier_reason == "BEST_NEG"
+        assert result.gap_to_zero_bps is not None
+        assert result.gap_to_zero_bps == abs(result.best_net_pnl_bps)
+        assert result.gap_to_zero_bps > 0
+
+    def test_gap_to_zero_in_to_dict(self):
+        """gap_to_zero_bps appears in to_dict() output."""
+        from engine.roundtrip import SizeSweepResult
+
+        r = SizeSweepResult(pair="A/B", buy_dex="d1", sell_dex="d2",
+                            best_net_pnl_bps=-5.0, gap_to_zero_bps=5.0,
+                            frontier_reason="BEST_NEG")
+        d = r.to_dict()
+        assert d["gap_to_zero_bps"] == 5.0
+
+    def test_fee_bps_in_sweep_point(self):
+        """fee_bps is computed from leg fees and appears in SizeSweepPoint."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q = {
+            "dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC",
+            "fee": 3000, "amount_in_wei": 1_000_000_000_000_000_000,
+            "amount_out_wei": 2000_000_000, "gas_estimate": 150_000,
+            "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+        sell_q = {
+            "dex_id": "sushiswap_v3", "token_in": "USDC", "token_out": "WETH",
+            "fee": 500, "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 1_010_000_000_000_000_000,
+            "gas_estimate": 150_000, "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+
+        def requote_ok(amount_in_wei):
+            return {"amount_out_wei": int(amount_in_wei * 0.999),
+                    "gas_estimate": 150_000, "ticks_crossed": 0}
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q, sell_quote_base=sell_q,
+            requote_leg1=requote_ok, requote_leg2=requote_ok,
+            sizes_usd=[100], token_in_usd_price=2000.0,
+        )
+        assert len(result.points) == 1
+        p = result.points[0]
+        # fee = (3000 + 500) / 100 = 35 bps
+        assert p.fee_bps == 35.0
+        # fee_bps in to_dict
+        d = result.to_dict()
+        assert d["points"][0]["fee_bps"] == 35.0
+
+    def test_cost_decomposition_at_best_point(self):
+        """SizeSweepResult captures cost decomposition at best sweep point."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q = {
+            "dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC",
+            "fee": 3000, "amount_in_wei": 1_000_000_000_000_000_000,
+            "amount_out_wei": 2000_000_000, "gas_estimate": 150_000,
+            "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+        sell_q = {
+            "dex_id": "sushiswap_v3", "token_in": "USDC", "token_out": "WETH",
+            "fee": 3000, "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 1_010_000_000_000_000_000,
+            "gas_estimate": 150_000, "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+
+        def requote_ok(amount_in_wei):
+            return {"amount_out_wei": int(amount_in_wei * 0.999),
+                    "gas_estimate": 150_000, "ticks_crossed": 0}
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q, sell_quote_base=sell_q,
+            requote_leg1=requote_ok, requote_leg2=requote_ok,
+            sizes_usd=[50, 100], token_in_usd_price=2000.0,
+        )
+        assert result.best_fee_bps is not None
+        assert result.best_gas_bps is not None
+        assert result.best_slippage_bps is not None
+        assert result.best_total_cost_bps is not None
+        # total_cost = gas + fee + slippage
+        expected_total = result.best_gas_bps + result.best_fee_bps + result.best_slippage_bps
+        assert abs(result.best_total_cost_bps - expected_total) < 0.01
+        # to_dict exposes these
+        d = result.to_dict()
+        assert d["best_gas_bps"] is not None
+        assert d["best_fee_bps"] is not None
+        assert d["best_slippage_bps"] is not None
+        assert d["best_total_cost_bps"] is not None

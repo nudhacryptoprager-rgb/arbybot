@@ -1085,6 +1085,89 @@ class TestBuildRoundtripSummary(unittest.TestCase):
         ]:
             self.assertIn(key, summary, f"Missing baseline field: {key}")
 
+    def test_gap_to_zero_bps_in_sweep_block(self):
+        """gap_to_zero_bps surfaces in roundtrip_summary.dynamic_sweep."""
+        from strategy.artifacts import _build_roundtrip_summary
+
+        stats = {
+            "roundtrip": {
+                "enabled": True,
+                "dynamic_sweep": {
+                    "enabled": True,
+                    "routes_swept": 1,
+                    "best_pair": "A/B",
+                    "best_size_usd": 50,
+                    "best_net_pnl_bps": -10.0,
+                    "best_frontier_reason": "BEST_NEG",
+                    "gap_to_zero_bps": 10.0,
+                    "results": [{"sizes_evaluated": 3}],
+                },
+            }
+        }
+        summary = _build_roundtrip_summary(stats)
+        self.assertEqual(summary["dynamic_sweep"]["gap_to_zero_bps"], 10.0)
+
+    def test_measured_economics_in_sweep_block(self):
+        """Measured cost decomposition surfaces in roundtrip_summary.dynamic_sweep."""
+        from strategy.artifacts import _build_roundtrip_summary
+
+        stats = {
+            "roundtrip": {
+                "enabled": True,
+                "dynamic_sweep": {
+                    "enabled": True,
+                    "routes_swept": 1,
+                    "best_pair": "WBTC/USDC",
+                    "best_size_usd": 50,
+                    "best_net_pnl_bps": -12.5,
+                    "best_frontier_reason": "BEST_NEG",
+                    "gap_to_zero_bps": 12.5,
+                    "best_gas_bps": 3.2,
+                    "best_fee_bps": 60.0,
+                    "best_slippage_bps": 1.5,
+                    "best_total_cost_bps": 64.7,
+                    "results": [{"sizes_evaluated": 7}],
+                },
+            }
+        }
+        summary = _build_roundtrip_summary(stats)
+        ds = summary["dynamic_sweep"]
+        self.assertEqual(ds["measured_gas_bps"], 3.2)
+        self.assertEqual(ds["measured_fee_bps"], 60.0)
+        self.assertEqual(ds["measured_slippage_bps"], 1.5)
+        self.assertEqual(ds["measured_total_cost_bps"], 64.7)
+
+    def test_frontier_curves_in_truth_report(self):
+        """Full frontier curves stored in truth_report dynamic_sweep."""
+        from strategy.artifacts import _build_roundtrip_summary
+
+        results = [
+            {"pair": "A/B", "buy_dex": "d1", "sell_dex": "d2",
+             "sizes_evaluated": 3, "points": [
+                 {"size_usd": 50, "net_pnl_bps": -10, "fee_bps": 30.0},
+                 {"size_usd": 100, "net_pnl_bps": -15, "fee_bps": 30.0},
+             ]},
+        ]
+        stats = {
+            "roundtrip": {
+                "enabled": True,
+                "dynamic_sweep": {
+                    "enabled": True,
+                    "routes_swept": 1,
+                    "best_pair": "A/B",
+                    "best_size_usd": 50,
+                    "best_net_pnl_bps": -10,
+                    "best_frontier_reason": "BEST_NEG",
+                    "gap_to_zero_bps": 10.0,
+                    "results": results,
+                },
+            }
+        }
+        summary = _build_roundtrip_summary(stats)
+        self.assertIn("frontier_curves", summary["dynamic_sweep"])
+        self.assertEqual(len(summary["dynamic_sweep"]["frontier_curves"]), 1)
+        self.assertEqual(summary["dynamic_sweep"]["frontier_curves"][0]["pair"], "A/B")
+
 
 if __name__ == "__main__":
     unittest.main()

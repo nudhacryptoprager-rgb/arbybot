@@ -785,6 +785,7 @@ class SizeSweepPoint:
     gross_pnl_bps: Optional[float] = None
     measured_slippage_bps: Optional[float] = None
     gas_bps: Optional[float] = None
+    fee_bps: Optional[float] = None
     error: Optional[str] = None
 
 
@@ -799,6 +800,12 @@ class SizeSweepResult:
     best_net_pnl_bps: Optional[float] = None
     best_gross_pnl_bps: Optional[float] = None
     frontier_reason: str = "NO_DATA"
+    gap_to_zero_bps: Optional[float] = None
+    # Cost decomposition at the best point
+    best_gas_bps: Optional[float] = None
+    best_fee_bps: Optional[float] = None
+    best_slippage_bps: Optional[float] = None
+    best_total_cost_bps: Optional[float] = None
     points: Optional[List[SizeSweepPoint]] = None
 
     def __post_init__(self):
@@ -815,6 +822,11 @@ class SizeSweepResult:
             "best_net_pnl_bps": round(self.best_net_pnl_bps, 2) if self.best_net_pnl_bps is not None else None,
             "best_gross_pnl_bps": round(self.best_gross_pnl_bps, 2) if self.best_gross_pnl_bps is not None else None,
             "frontier_reason": self.frontier_reason,
+            "gap_to_zero_bps": round(self.gap_to_zero_bps, 2) if self.gap_to_zero_bps is not None else None,
+            "best_gas_bps": round(self.best_gas_bps, 2) if self.best_gas_bps is not None else None,
+            "best_fee_bps": round(self.best_fee_bps, 2) if self.best_fee_bps is not None else None,
+            "best_slippage_bps": round(self.best_slippage_bps, 2) if self.best_slippage_bps is not None else None,
+            "best_total_cost_bps": round(self.best_total_cost_bps, 2) if self.best_total_cost_bps is not None else None,
             "points": [
                 {
                     "size_usd": p.size_usd,
@@ -822,6 +834,7 @@ class SizeSweepResult:
                     "gross_pnl_bps": round(p.gross_pnl_bps, 2) if p.gross_pnl_bps is not None else None,
                     "measured_slippage_bps": round(p.measured_slippage_bps, 2) if p.measured_slippage_bps is not None else None,
                     "gas_bps": round(p.gas_bps, 2) if p.gas_bps is not None else None,
+                    "fee_bps": round(p.fee_bps, 2) if p.fee_bps is not None else None,
                     "error": p.error,
                 }
                 for p in (self.points or [])
@@ -944,6 +957,8 @@ def sweep_roundtrip_sizes(
 
         # Gas as bps of notional
         gas_bps_val = (rt.gas_cost_usd / size_usd) * 10000 if size_usd > 0 else 0
+        # LP fee as bps (fee tier is in ppm: 3000 = 30 bps)
+        fee_bps_val = (rt.leg1_fee + rt.leg2_fee) / 100.0
 
         point = SizeSweepPoint(
             size_usd=size_usd,
@@ -951,6 +966,7 @@ def sweep_roundtrip_sizes(
             gross_pnl_bps=rt.gross_pnl_bps,
             measured_slippage_bps=rt.estimated_slippage_bps,
             gas_bps=gas_bps_val,
+            fee_bps=fee_bps_val,
         )
         result.points.append(point)
 
@@ -959,13 +975,19 @@ def sweep_roundtrip_sizes(
             result.best_size_usd = size_usd
             result.best_net_pnl_bps = rt.net_pnl_bps
             result.best_gross_pnl_bps = rt.gross_pnl_bps
+            result.best_gas_bps = gas_bps_val
+            result.best_fee_bps = fee_bps_val
+            result.best_slippage_bps = rt.estimated_slippage_bps
+            result.best_total_cost_bps = gas_bps_val + fee_bps_val + rt.estimated_slippage_bps
 
     result.sizes_evaluated = len([p for p in result.points if p.error is None])
 
     if result.best_net_pnl_bps is not None and result.best_net_pnl_bps > 0:
         result.frontier_reason = "PROFITABLE"
+        result.gap_to_zero_bps = 0.0
     elif result.best_net_pnl_bps is not None:
         result.frontier_reason = "BEST_NEG"
+        result.gap_to_zero_bps = abs(result.best_net_pnl_bps)
     elif result.sizes_evaluated == 0:
         result.frontier_reason = "ALL_FAILED"
 

@@ -293,7 +293,16 @@ def _build_roundtrip_summary(stats: Dict[str, Any]) -> Dict[str, Any]:
             "sweep_best_net_pnl_bps": ds.get("best_net_pnl_bps"),
             "sweep_best_frontier_reason": ds.get("best_frontier_reason", "NO_DATA"),
             "frontier_pair": ds.get("best_pair"),
+            "gap_to_zero_bps": ds.get("gap_to_zero_bps"),
+            "measured_gas_bps": ds.get("best_gas_bps"),
+            "measured_fee_bps": ds.get("best_fee_bps"),
+            "measured_slippage_bps": ds.get("best_slippage_bps"),
+            "measured_total_cost_bps": ds.get("best_total_cost_bps"),
         }
+        # Full frontier curve per route (truth_report only, not propagated to rolling)
+        raw_results = ds.get("results")
+        if raw_results:
+            summary["dynamic_sweep"]["frontier_curves"] = raw_results
     return summary
 
 

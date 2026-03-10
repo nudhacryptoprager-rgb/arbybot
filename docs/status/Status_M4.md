@@ -1,7 +1,7 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-05  
+**Updated**: 2026-03-10  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
@@ -124,7 +124,7 @@ simulate_only: true
 ## [!] M4 Close Plan
 
 > **Problem**: M4 close depends on `roundtrip.profitable_count > 0`, which requires market arb opportunity.  
-> **Current state**: `roundtrip.profitable_count=0`, best=-17.92 bps (no arb in market).
+> **Current state**: `roundtrip.profitable_count=0`, baseline best=-29.96 bps @ $150, sweep best=-17.13 bps @ $50 (no arb in market).
 
 **Deterministic M4 Close Criteria (choose one):**
 1. ✅ **Time-bound window**: N=100 consecutive runs with `agg_status=PASS` and `profit_is_diagnostic=true` is acceptable for simulate-only - **ACHIEVED 2026-02-21**
@@ -136,8 +136,36 @@ simulate_only: true
 ## [WARN] PROFIT REALISM WARNING
 
 **Paper profit PROVEN** under simulated cost model (`gas=$0.10`, `slippage=5bps`).
-**Profit realism NOT PROVEN** — round-trip shows actual losses (`profitable_count=0`, best=-17.92 bps).
+**Profit realism NOT PROVEN** — round-trip shows actual losses (`profitable_count=0`, baseline best=-29.96 bps @ $150, sweep best=-17.13 bps @ $50).
 M4.2 requires `roundtrip.profitable_count > 0` with real quoter-based economics.
+
+## M4.2 Economics Frontier (2026-03-10)
+
+**Primary blocker**: `gap_to_zero_bps` (distance from breakeven in sweep best).
+
+| Metric | R8 | R9 | R10 | Delta R9→R10 |
+|--------|----|----|-----|--------------|
+| `best_measured_spread_gap_bps` | -76.5 | -12.8 | -12.78 | stable |
+| `sweep_best_net_pnl_bps` | -66.65 @ $50 | -17.13 @ $50 | -19.04 @ $50 | -1.9 bps |
+| `baseline best_net_pnl_bps` | n/a | -29.96 @ $150 | -29.96 @ $150 | stable |
+| `gap_to_zero_bps` | n/a | 17.13 | 19.04 | +1.9 bps |
+| `profitable_count` | 0 | 0 | 0 | — |
+| `frontier_pair` | — | WBTC/USDC | WBTC/USDC | stable |
+| `measured_gas_bps` | n/a | n/a | 1.63 | NEW |
+| `measured_fee_bps` | n/a | n/a | 10.0 | NEW |
+| `measured_slippage_bps` | n/a | n/a | 17.31 | NEW |
+| `measured_total_cost_bps` | n/a | n/a | 28.94 | NEW |
+| `test_count` | 1612 | 1618 | 1627 | +9 |
+
+**Cost decomposition (arb WBTC/USDC fee=500 @ $50):**
+- LP fee: 10.0 bps (2×500 tier) — **dominant controllable cost**
+- Slippage: 17.31 bps (QuoterV2 impact) — **dominant variable cost**
+- Gas: 1.63 bps (L2 negligible)
+- Total: 28.94 bps cost vs ~10 bps gross spread = -19.04 bps net
+
+**Evidence**: `ci_m5_gate_20260310_220502`, run_summary roundtrip_summary.dynamic_sweep.
+
+**Pipeline status**: Full measured economics (gas/fee/slippage/total_cost_bps) canonical in: truth_report → run_summary → m4_stability_agg → _latest.json. Rolling includes: median_gap_to_zero_bps, median_net_pnl_bps, frontier_pair_latest, frontier_chain_latest. Per-chain frontier ranking in start.py summary.
 
 ## M4.2 Profit Truth Definition
 
