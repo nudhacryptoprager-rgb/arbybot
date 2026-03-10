@@ -571,6 +571,15 @@ def aggregate_run(
         "runs_included": 1,
         "pnl_mode": "paper",
         "gross_spread_usdc": round(gross_spread_usdc, 6),
+        # v3.2.72: Profit truth flags (propagated from truth_report)
+        # These flags are critical for distinguishing diagnostic vs real profit:
+        # - profit_is_diagnostic=True means prices are one-leg paper estimates
+        # - profit_truth_available=False means no roundtrip-validated profit exists
+        # Consumers MUST check these before treating any PnL value as actionable.
+        "profit_is_diagnostic": truth.get("profit_is_diagnostic", True),
+        "profit_truth_available": not truth.get("profit_is_diagnostic", True),
+        "profit_truth_source": truth.get("profit_truth_source", "UNKNOWN"),
+        "profit_realism_status": truth.get("profit_realism_status", "UNKNOWN"),
         # Dual PnL (v1.5.0)
         "paper_net_pnl_usdc": round(paper_net, 6),  # Legacy: gas_only
         "paper_net_pnl_usdc_gas_only": round(paper_net_gas_only, 6),  # Truth estimate (no slippage)
@@ -692,6 +701,11 @@ def main() -> None:
             "source_run_dirs": [r.get("source_run_dir") for r in reports],
             "runs_included": len(reports),
             "pnl_mode": "paper",
+            # v3.2.72: Profit truth flags (always diagnostic in multi-run merge)
+            "profit_is_diagnostic": True,
+            "profit_truth_available": False,
+            "profit_truth_source": "MULTI_RUN_MERGE",
+            "profit_realism_status": "DIAGNOSTIC_ONLY",
             "paper_net_pnl_usdc": sum((r.get("paper_net_pnl_usdc") or 0) for r in reports),
             "paper_win_rate": None,
             "checks_count": sum((r.get("checks_count") or 0) for r in reports),

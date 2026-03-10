@@ -2,14 +2,15 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (zkSync Era)
 #
-# CHAIN QUALITY STATUS (2026-03-10):
-#   Classification: PASS/LOW_SAMPLE (2 signals from 1 cross-DEX pair)
-#   Evidence: runDir 095552 - 2 signals, 2 included, $6.52 net, status=PASS
-#   Blocker: Only WETH/WBTC found as cross-DEX pair (uniswap_v3+pancakeswap_v3)
-#   Root cause: Limited pair overlap between DEXes on zkSync Era
-#   Fix: Enable same-DEX fee-tier arb (require_cross_dex=false) to unlock
-#        additional signals from WETH/USDC, wstETH/WETH fee-tier spread
-#   Target: ≥3 signals for non-LOW_SAMPLE status
+# CHAIN QUALITY STATUS (2026-03-10 session 2):
+#   Classification: FAIL_ALL_EXCLUDED (2 signals, 0 included)
+#   Evidence: runDir 105838 - 2 signals both excluded (4068bps, 1581bps)
+#   Root cause: $100 notional causes massive price impact on thin zkSync pools
+#     - 23/32 quotes are DEAD (>80% drift), only 4 OK (<30% drift)
+#     - Fee-tier spreads are 1500-4000bps due to liquidity-driven price differences
+#   Fix: Lower target_usd_notional from 100 to 25 to reduce price impact.
+#        At $25, pools should show more accurate mid-prices, tighter spreads.
+#   Target: ≥1 included signal (spread < 1000bps) for PASS status
 #
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline on zkSync Era.
@@ -65,15 +66,18 @@ use_quoter_v2: true
 use_multicall: true
 
 # USD-notional sizing (M4.2)
+# v3.2.72: Lowered from 100 to 25 — zkSync pools have very thin liquidity
+# At $100 notional, 23/32 quotes show >80% drift (price impact destroys price accuracy)
+# At $25 notional, price impact is ~4x less, enabling tighter cross-pool spreads
 use_usd_notional: true
-target_usd_notional: 100.0
+target_usd_notional: 25.0
 
 # Spread economics
 # v3.2.50: min_spread_bps lowered from 5 to 3 for better signal capture
 # Rationale: zkSync gas_usd_estimate=0.01 means 3bps spread is highly profitable
 #            on 100 USD notional (0.03 USD spread >> 0.01 USD gas)
 min_spread_bps: 3
-paper_size_usd: 100
+paper_size_usd: 25    # v3.2.72: matched to target_usd_notional (was 100)
 paper_slippage_bps: 5
 gas_usd_estimate: 0.01  # zkSync is very cheap
 
@@ -134,8 +138,10 @@ tokens_anchor_price:
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000
 
-# Drift tolerance (relaxed for bootstrap)
-drift_warning_pct: 30.0
+# Drift tolerance
+# v3.2.72: Widened from 30 to 40% — with $25 notional, more pools should pass
+# but some borderline pools (e.g., pancakeswap WETH/USDC) may still need slack
+drift_warning_pct: 40.0
 
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE

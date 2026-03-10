@@ -2,13 +2,14 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (Base)
 #
-# CHAIN QUALITY STATUS (2026-03-10):
-#   Classification: SIGNAL_PRODUCING / quality FAIL (FAIL_FRAGILE_HIGH)
-#   Evidence: runDir 095028 - 8 signals, 5 included, fragile_rate=0.60, status=FAIL
-#   Root cause: VIRTUAL/WETH produces fragile signals (thin liquidity)
-#              TOP_PAIR_DOMINANCE_HIGH(WETH/USDC:1.06>0.8) - VIRTUAL net-negative
-#   Fix: Remove VIRTUAL/WELL from scanning (thin/fragile tokens)
-#   Target: fragile_rate < 0.50 on WETH/USDC + WETH/cbBTC routes
+# CHAIN QUALITY STATUS (2026-03-10 session 2):
+#   Classification: TOP_PAIR_DOMINANCE_HIGH (WETH/USDC 91.7% of net share)
+#   Evidence: runDir 105655 - 8 signals, 5 included (4 WETH/USDC + 1 cbETH/WETH)
+#   Root cause: WETH/USDC has deepest cross-dex liquidity, dominates net PNL
+#   Fix: Add wstETH/WETH, rETH/WETH to intent.txt + tokens_usd_price.
+#        These LST pairs have cross-dex pools (UNI+SUSHI+PCSWAP) on Base.
+#        Additional non-WETH/USDC signals should dilute dominance below 80%.
+#   Target: top_pair_share < 0.80 (currently 0.917)
 #
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline on Base.
@@ -87,6 +88,8 @@ tokens_usd_price:
   BRETT: 0.15
   DEGEN: 0.01
   TOSHI: 0.0003
+  wstETH: 2500.0     # v3.2.72: ~1.22x WETH (Lido bridged to Base)
+  rETH: 2300.0       # v3.2.72: ~1.12x WETH (Rocketpool bridged to Base)
   # VIRTUAL: removed — thin liquidity, produces fragile signals (fragile_rate=0.60)
   # WELL: removed — thin liquidity (drift 95.6%), no stable quotes
 
@@ -96,6 +99,8 @@ tokens_anchor_price:
   WETH_USDC: 2050.0    # aligned with tokens_usd_price
   cbETH_WETH: 1.07
   cbBTC_WETH: 33.2     # 68000/2050
+  wstETH_WETH: 1.22    # v3.2.72: ~1.22 WETH per wstETH
+  rETH_WETH: 1.12      # v3.2.72: ~1.12 WETH per rETH
 
 # Pair exclusions: thin-liquidity tokens producing fragile/suspect signals
 # v3.2.70: VIRTUAL/WELL removed — fragile source (runDir 095028 evidence)

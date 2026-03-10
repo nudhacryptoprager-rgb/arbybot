@@ -223,6 +223,11 @@ base:cbETH/USDC
 base:cbBTC/USDT
 base:AERO/USDT
 
+# NEW: LST/LRT tokens for pair diversity (v3.2.72)
+# wstETH/rETH have cross-dex pools on Base → reduces WETH/USDC dominance
+base:wstETH/WETH
+base:rETH/WETH
+
 # ============================================================
 # CROSS-CHAIN ARBITRAGE SUMMARY
 # ============================================================

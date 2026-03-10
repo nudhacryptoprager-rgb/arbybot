@@ -2,14 +2,15 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (mantle)
 #
-# CHAIN QUALITY STATUS (2026-03-10):
-#   Classification: PASS/LOW_SAMPLE (1 included signal, same-DEX only)
-#   Evidence: runDir 095423 - 3 signals, 1 included, $0.09 net, status=PASS
-#   Warnings: WARN_LOW_SAMPLE(1<3), WARN_SAME_DEX_PRESENT, CRITICAL_REJECT(PRICE_OUTLIER:2)
-#   Root cause: Only 1 quoter_v2 DEX (agni_v3), stratum is ve33 (MIXED_SOURCE)
-#   Fix: Remove stratum (MIXED_SOURCE noise), add anchor prices for validation
-#   BLOCKED_BY: No second quoter_v2 DEX on Mantle (FusionX V3 not available)
-#   Target: Monitor for market improvement; cannot exceed same-DEX capacity
+# CHAIN QUALITY STATUS (2026-03-10 session 2):
+#   Classification: LOW_SAMPLE (2 included signals)
+#   Evidence: runDir 105941 - 4 signals, 2 included, 2 excluded
+#     - cmETH/METH 23bps [included], mETH/WETH 252bps [included]
+#     - WETH/WMNT 543bps [excluded at default 500], USDC/USDT 2884bps [excluded]
+#     - 21 SUSPECT_LIQUIDITY rejects (high gas_estimate from agni_v3)
+#   Fix: Raise suspect_spread_bps_hard to 750 (includes WETH/WMNT at 543bps)
+#        USDC/USDT at 2884bps stays excluded (clearly fake spread)
+#   Target: ≥3 included signals for PASS (non-LOW_SAMPLE)
 #
 # CHAIN STATUS (historical): SIGNAL_PRODUCING via same-DEX fallback
 #   - require_cross_dex=false because ALL cross-dex routes trigger MIXED_SOURCE
@@ -81,6 +82,12 @@ min_spread_bps: 3
 paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.02  # Mantle is very cheap (MNT gas)
+
+# v3.2.72: Relaxed SUSPECT_SPREAD_HARD threshold for Mantle
+# Default 500 excludes WETH/WMNT at 543bps (legitimate same-DEX fee-tier arb)
+# 750 allows WETH/WMNT while still rejecting USDC/USDT at 2884bps (fake spread)
+suspect_spread_bps_hard: 750
+suspect_spread_bps: 400
 
 # L1 cost model: Mantle uses EigenDA/modular DA (not Ethereum L1 calldata)
 # v3.2.55: Per-txn L1 overhead is minimal

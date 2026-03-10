@@ -227,3 +227,35 @@ def test_all_signals_net_pnl_usdc_is_diagnostic():
         assert pnl["all_signals_net_pnl_usdc_is_diagnostic"] is True, (
             "all_signals_net_pnl_usdc_is_diagnostic must be True"
         )
+
+
+def test_profit_truth_flags_propagated():
+    """v3.2.72: profit_is_diagnostic and profit_truth_available must be in daily report.
+
+    These flags from truth_report are critical for distinguishing diagnostic
+    (paper/simulated) profit from real execution profit. Consumers MUST check
+    these before treating any PnL value as actionable.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        run_path, truth = make_consistent_run(Path(tmp))
+
+        # Default: no profit_is_diagnostic in truth → defaults to True (safe)
+        report = aggregate_run(run_path)
+        assert "profit_is_diagnostic" in report, (
+            "Missing profit_is_diagnostic in daily report. "
+            "This flag is required to prevent misinterpreting paper PnL as real profit."
+        )
+        assert report["profit_is_diagnostic"] is True
+        assert report["profit_truth_available"] is False
+
+        # With explicit truth flags
+        truth["profit_is_diagnostic"] = True
+        truth["profit_truth_source"] = "ONE_LEG_DIAGNOSTIC"
+        truth["profit_realism_status"] = "ROUNDTRIP_NOT_PROFITABLE"
+        (run_path / "truth_report_1.json").write_text(json.dumps(truth))
+        report2 = aggregate_run(run_path)
+        assert report2["profit_is_diagnostic"] is True
+        assert report2["profit_truth_available"] is False
+        assert report2["profit_truth_source"] == "ONE_LEG_DIAGNOSTIC"
+        assert report2["profit_realism_status"] == "ROUNDTRIP_NOT_PROFITABLE"

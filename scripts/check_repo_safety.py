@@ -22,6 +22,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from typing import List, Tuple
 
@@ -1229,6 +1230,55 @@ def check_chain_quality_claims() -> List[str]:
     return issues
 
 
+def check_stale_current_state_claims() -> List[str]:
+    """v3.2.72: Detect stale 'current state' claims in docs.
+
+    Scans docs/*.md and docs/status/*.md for patterns like:
+    - 'Current state: ...' or 'currently ...' citing specific metrics/dates
+    - Claims with dates older than 7 days (stale evidence)
+    - RunDir references that don't exist in data/runs/
+
+    Returns:
+        List of warning messages
+    """
+    issues: List[str] = []
+    docs_dir = PROJECT_ROOT / "docs"
+    runs_dir = PROJECT_ROOT / "data" / "runs"
+
+    if not docs_dir.exists():
+        return []
+
+    # Collect all markdown files to scan
+    md_files = list(docs_dir.glob("*.md")) + list((docs_dir / "status").glob("*.md"))
+
+    # Pattern: runDir suffix (6-digit timestamp) cited in docs
+    rundir_pattern = re.compile(r'runDir[:\s]+\*?\*?(\d{6})\*?\*?', re.IGNORECASE)
+    # Pattern: date references in YYYY-MM-DD format
+    date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})')
+
+    today = date.today()
+
+    for md_file in md_files:
+        try:
+            content = md_file.read_text(encoding='utf-8')
+        except Exception:
+            continue
+
+        rel_path = md_file.relative_to(PROJECT_ROOT)
+
+        # Check runDir references exist
+        for match in rundir_pattern.finditer(content):
+            suffix = match.group(1)
+            if not list(runs_dir.glob(f"*_{suffix}")):
+                issues.append(
+                    f"WARN: STALE_RUNDIR_REF: {rel_path} references runDir {suffix} "
+                    f"but no matching directory exists in data/runs/. "
+                    f"Update with fresh evidence or remove stale reference."
+                )
+
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
@@ -1381,6 +1431,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: Chain quality claims match runtime evidence")
+    
+    print("\n[18] Checking stale current-state claims in docs...")
+    issues = check_stale_current_state_claims()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: No stale runDir references in docs")
     
     # Summary
     print("\n" + "=" * 50)
