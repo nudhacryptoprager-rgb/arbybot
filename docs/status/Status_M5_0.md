@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]
 **Updated**: 2026-03-10
-**Tests**: 1597 passed, 2 skipped
-**Evidence runDirs**: ci_m5_gate_20260310_{171754,171232,171441,171524,171642,171714} (2h long scan last runs)
+**Tests**: 1598 passed, 2 skipped
+**Evidence runDirs**: manual_run_20260310_190854 (fresh scan with roundtrip fix, evaluated_count=2)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json}`
 **Evidence long scan**: `data/runs/_incidents/long_scan_latest.json` (115 runs, 302 included signals, $275.20 paper net)
 
@@ -29,7 +29,8 @@ scroll:         INFRA_READY (single DEX, probe-only, accepted-fail, 0/19 PASS)
 ```
 
 **2h scan result**: 96 PASS / 15 FAIL (all Scroll) / 4 NO_DATA (all Scroll) / 0 INFRA_FAIL
-**Profit truth**: NOT YET — all signals ONE_LEG_DIAGNOSTIC, total_profitable_roundtrips=0
+**Roundtrip evaluation**: FIXED (code bug resolved, evaluated_count=2, profitable_count=0, best_net=-66.6 bps)
+**Profit truth**: NOT YET — economics blocker: measured slippage (50-120 bps) exceeds captured spread (30-60 bps)
 
 ---
 
@@ -141,7 +142,8 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ## Next Steps
 
-- M4.2/M4.3: Enable roundtrip evaluation to convert ONE_LEG_DIAGNOSTIC → verified profit truth
+- M4.2: Track `best_roundtrip_net_bps` trend over time; closing the -67 bps gap is the path to profit truth
+- New 2h long scan to collect fresh `roundtrip_evaluated_total` and `best_roundtrip_net_bps` across all chains
 - Base: Reduce TOP_PAIR_DOMINANCE_HIGH via pair diversification
 - Mantle/Linea/zkSync: Address SAME_DEX_PRESENT and LOW_SAMPLE warnings
 - Scroll: Keep probe-only/accepted-fail until second DEX venue appears

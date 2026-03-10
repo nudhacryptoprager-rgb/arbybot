@@ -196,6 +196,7 @@ def new_chain_stats() -> dict[str, Any]:
         "net_usdc_total": 0.0,
         "profitable_roundtrips_total": 0,
         "roundtrip_evaluated_total": 0,
+        "best_roundtrip_net_bps": None,
         "last_run_timestamp": None,
         "last_run_dir": None,
         # Richer per-chain fields (last-run snapshot)
@@ -229,6 +230,10 @@ def update_chain_stats(
         rt = metrics.get("roundtrip", {}) or summary.get("roundtrip_summary", {})
         stats["profitable_roundtrips_total"] += int(rt.get("profitable_count", 0) or 0)
         stats["roundtrip_evaluated_total"] = stats.get("roundtrip_evaluated_total", 0) + int(rt.get("evaluated_count", 0) or 0)
+        run_best = rt.get("best_net_pnl_bps")
+        if run_best is not None:
+            prev = stats.get("best_roundtrip_net_bps")
+            stats["best_roundtrip_net_bps"] = run_best if prev is None else max(prev, run_best)
         ctx = summary.get("run_context", {})
         stats["last_run_timestamp"] = ctx.get("run_timestamp", stats["last_run_timestamp"])
         # Richer snapshot fields
@@ -303,6 +308,10 @@ def build_summary(
         "total_net_usdc": round(sum(s["net_usdc_total"] for s in per_chain.values()), 4),
         "total_profitable_roundtrips": sum(s["profitable_roundtrips_total"] for s in per_chain.values()),
         "total_roundtrip_evaluated": sum(s.get("roundtrip_evaluated_total", 0) for s in per_chain.values()),
+        "best_roundtrip_net_bps": max(
+            (s["best_roundtrip_net_bps"] for s in per_chain.values() if s.get("best_roundtrip_net_bps") is not None),
+            default=None,
+        ),
         "pass_chains": pass_chains,
         "fail_chains": fail_chains,
         "accepted_fail_chains": accepted_fail_chains,
@@ -325,7 +334,9 @@ def print_summary(summary: dict[str, Any]) -> None:
     )
     print(f"Signals total:  {summary['total_included_signals']}")
     print(f"Net USDC total: ${summary['total_net_usdc']:.4f}")
-    print(f"Profitable RTs: {summary.get('total_profitable_roundtrips', 0)}  (evaluated: {summary.get('total_roundtrip_evaluated', 0)})")
+    best_bps = summary.get('best_roundtrip_net_bps')
+    best_str = f"{best_bps:+.2f} bps" if best_bps is not None else "n/a"
+    print(f"Profitable RTs: {summary.get('total_profitable_roundtrips', 0)}  (evaluated: {summary.get('total_roundtrip_evaluated', 0)}, best: {best_str})")
 
     pass_c = summary.get("pass_chains", [])
     fail_c = summary.get("fail_chains", [])

@@ -258,6 +258,7 @@ class TestBuildSummary(unittest.TestCase):
             "net_usdc_total": 10.5,
             "profitable_roundtrips_total": 0,
             "roundtrip_evaluated_total": 0,
+            "best_roundtrip_net_bps": None,
             "last_run_timestamp": "2026-03-10T10:00:00Z",
             "last_run_dir": "ci_m5_gate_20260310_100000",
             "last_run_summary_status": "PASS",
@@ -302,15 +303,13 @@ class TestBuildSummary(unittest.TestCase):
 
     def test_summary_profitable_roundtrips(self):
         per_chain = {
-            "arb": self._make_per_chain(profitable_roundtrips_total=3),
-            "base": self._make_per_chain(profitable_roundtrips_total=1),
+            "arb": self._make_per_chain(profitable_roundtrips_total=3, roundtrip_evaluated_total=10, best_roundtrip_net_bps=5.2),
+            "base": self._make_per_chain(profitable_roundtrips_total=1, roundtrip_evaluated_total=4, best_roundtrip_net_bps=-12.0),
         }
         summary = start.build_summary(per_chain, 60.0, [])
         self.assertEqual(summary["total_profitable_roundtrips"], 4)
-
-
-        summary = start.build_summary(per_chain, 60.0, [])
-        self.assertEqual(summary["total_profitable_roundtrips"], 4)
+        self.assertEqual(summary["total_roundtrip_evaluated"], 14)
+        self.assertAlmostEqual(summary["best_roundtrip_net_bps"], 5.2)
 
 
 class TestExitPolicy(unittest.TestCase):
@@ -553,6 +552,7 @@ class TestAcceptedFailChains(unittest.TestCase):
             "net_usdc_total": 10.5,
             "profitable_roundtrips_total": 0,
             "roundtrip_evaluated_total": 0,
+            "best_roundtrip_net_bps": None,
             "last_run_timestamp": "2026-03-10T10:00:00Z",
             "last_run_dir": "ci_m5_gate_20260310_100000",
             "last_run_summary_status": "PASS",
