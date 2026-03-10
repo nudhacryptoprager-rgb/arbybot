@@ -1089,18 +1089,33 @@ def check_dev_report_placeholders() -> List[str]:
         content = dev_report.read_text(encoding='utf-8')
         
         # Check 1: Placeholder text in table cells (| signals | or | net | instead of numbers)
-        # Match table rows with placeholder words instead of numbers in signal/net columns
-        placeholder_pattern = re.compile(
-            r'\|\s*\*?\*?(\w+)\*?\*?\s*\|\s*\*?\*?(\d{6})\*?\*?\s*\|\s*(PASS|FAIL)\s*\|\s*(signals?|net|tbd|xxx|placeholder)\s*\|',
-            re.IGNORECASE
+        # Scan every markdown table row for bare word placeholders in columns that should be numeric.
+        # Forbidden bare-word placeholders in table cells: signals, included, net, tbd, xxx, placeholder, cross-dex
+        placeholder_words = re.compile(
+            r'^(signals?|included|net|tbd|xxx|placeholder|cross-dex)$',
+            re.IGNORECASE,
         )
-        placeholder_matches = list(placeholder_pattern.finditer(content))
-        for match in placeholder_matches:
-            chain = match.group(1)
-            issues.append(
-                f"DEV_REPORT_PLACEHOLDER: {chain} table row contains placeholder text '{match.group(4)}' "
-                f"instead of actual numerical value"
-            )
+        # Match markdown table data rows (after the |---| separator)
+        in_data_rows = False
+        for line_no, line in enumerate(content.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped.startswith('|'):
+                in_data_rows = False
+                continue
+            # Detect header separator rows like |---|---|---|
+            if re.match(r'^\|[\s\-:|]+\|$', stripped):
+                in_data_rows = True
+                continue
+            if not in_data_rows:
+                # This is a header row (before separator) — skip
+                continue
+            cells = [c.strip().strip('*') for c in stripped.split('|')]
+            for cell in cells:
+                if placeholder_words.match(cell):
+                    issues.append(
+                        f"DEV_REPORT_PLACEHOLDER: Line {line_no} contains placeholder text '{cell}' "
+                        f"instead of actual numerical value"
+                    )
         
         # Check 2: Version mismatch between body and footer
         # Find all version strings in body (vX.Y.Z format)

@@ -1630,6 +1630,27 @@ ENV VARIABLES:
                     if cross_dex_pairs:
                         cross_dex_pairs_count = len(cross_dex_pairs)
                 
+                # v3.2.70: Safety assertion — if truth_report has cross-dex spread_signals,
+                # cross_dex_pairs_count must not remain 0 (catches fallback failures).
+                if cross_dex_pairs_count == 0:
+                    truth_path = artifacts.get("truth_report")
+                    if truth_path and truth_path.exists():
+                        try:
+                            with open(truth_path) as f:
+                                truth_check = json.load(f)
+                            truth_cross = set()
+                            for sig in truth_check.get("spread_signals", []):
+                                bd = sig.get("buy_dex", "")
+                                sd = sig.get("sell_dex", "")
+                                p = sig.get("pair", "")
+                                if bd and sd and bd != sd and p:
+                                    truth_cross.add(p)
+                            if truth_cross:
+                                cross_dex_pairs_count = len(truth_cross)
+                                print(f"  [SAFETY] cross_dex_pairs_count recovered from truth_report: {cross_dex_pairs_count}")
+                        except (json.JSONDecodeError, IOError):
+                            pass
+                
                 # Build fail_reasons from messages
                 fail_reasons = [m.replace("FAIL: ", "") for m in messages if m.startswith("FAIL:")]
                 

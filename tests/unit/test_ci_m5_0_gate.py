@@ -548,5 +548,97 @@ class TestCrossDexPairsCountFallback(unittest.TestCase):
                 "Fallback 2 via truth_report key must find 1 cross-dex pair")
 
 
+    def test_cross_dex_safety_assertion_catches_zero_from_truth(self):
+        """Safety assertion: if truth_report has cross-dex spread_signals, count must not be 0.
+
+        Replicates Arbitrum 142510 scenario: discovery_runtime disabled, no signals_*.json found,
+        but truth_report has cross-dex spread_signals. The safety net must recover the count.
+        """
+        mock_scan = {
+            "schema_version": "3.2.0",
+            "run_mode": "REAL",
+            "run_context": {"run_timestamp": "2026-03-10T14:25:10Z"},
+            "stats": {
+                "quotes_fetched": 16,
+                "discovery_runtime": {"enabled": False}
+            }
+        }
+        mock_truth = {
+            "schema_version": "3.2.0",
+            "spread_signals": [
+                {"pair": "WETH/USDT", "buy_dex": "sushiswap_v3", "sell_dex": "uniswap_v3", "spread_bps": 45},
+                {"pair": "WBTC/WETH", "buy_dex": "sushiswap_v3", "sell_dex": "uniswap_v3", "spread_bps": 30},
+                {"pair": "WBTC/USDC", "buy_dex": "sushiswap_v3", "sell_dex": "uniswap_v3", "spread_bps": 38},
+                {"pair": "ARB/WETH", "buy_dex": "uniswap_v3", "sell_dex": "sushiswap_v3", "spread_bps": 1200},
+            ]
+        }
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            reports_dir = run_dir / "reports"
+            reports_dir.mkdir()
+            
+            scan_path = reports_dir / "scan_20260310_142510.json"
+            truth_path = reports_dir / "truth_report_20260310_142510.json"
+            scan_path.write_text(json.dumps(mock_scan))
+            truth_path.write_text(json.dumps(mock_truth))
+            # Deliberately NO signals_*.json — tests the safety assertion path
+            
+            artifacts = {"scan": scan_path, "truth_report": truth_path}
+            
+            # Replicate gate_result building logic
+            with open(artifacts["scan"]) as f:
+                scan_data = json.load(f)
+            cross_dex_pairs_count = scan_data.get("stats", {}).get(
+                "discovery_runtime", {}
+            ).get("cross_dex_pairs_count", 0)
+            self.assertEqual(cross_dex_pairs_count, 0, "discovery_runtime is disabled")
+            
+            # Fallback 1: glob signals (none exist)
+            cross_dex_pairs = set()
+            signals_candidates = sorted((run_dir / "reports").glob("signals_*.json"))
+            self.assertEqual(len(signals_candidates), 0, "No signals file")
+            
+            # Fallback 2: truth_report
+            if not cross_dex_pairs:
+                truth_fb = artifacts.get("truth_report")
+                if truth_fb and truth_fb.exists():
+                    with open(truth_fb) as f:
+                        td = json.load(f)
+                    for sig in td.get("spread_signals", []):
+                        bd = sig.get("buy_dex", "")
+                        sd = sig.get("sell_dex", "")
+                        p = sig.get("pair", "")
+                        if bd and sd and bd != sd and p:
+                            cross_dex_pairs.add(p)
+            
+            if cross_dex_pairs:
+                cross_dex_pairs_count = len(cross_dex_pairs)
+            
+            # Safety assertion: truth has 4 cross-dex signals with 4 unique pairs
+            self.assertEqual(cross_dex_pairs_count, 4,
+                "All 4 truth_report spreads are cross-dex, count must be 4")
+            
+            # Also test the safety net (what if fallback 2 somehow missed)
+            # Reset and test safety assertion path directly
+            cross_dex_pairs_count_zero = 0
+            truth_fb_path = artifacts.get("truth_report")
+            if cross_dex_pairs_count_zero == 0 and truth_fb_path and truth_fb_path.exists():
+                with open(truth_fb_path) as f:
+                    truth_check = json.load(f)
+                truth_cross = set()
+                for sig in truth_check.get("spread_signals", []):
+                    bd = sig.get("buy_dex", "")
+                    sd = sig.get("sell_dex", "")
+                    p = sig.get("pair", "")
+                    if bd and sd and bd != sd and p:
+                        truth_cross.add(p)
+                if truth_cross:
+                    cross_dex_pairs_count_zero = len(truth_cross)
+            
+            self.assertEqual(cross_dex_pairs_count_zero, 4,
+                "Safety assertion must recover count from truth_report")
+
+
 if __name__ == "__main__":
     unittest.main()

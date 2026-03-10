@@ -35,7 +35,7 @@ test_count: 1593 passed, 2 skipped
 | goal_status | **IN_PROGRESS** |
 | close_allowed | false |
 | remaining_blockers | Verification gates pending after code changes |
-| evidence_session_run_dirs | ci_m5_gate_20260310_{142510,142534,142714,142825,142925,142937} (previous smoke) |
+| evidence_session_run_dirs | ci_m5_gate_20260310_{142510,142534,142715,142825,142925,142937} (6-chain smoke) |
 | primary_blocker_of_session | cross_dex_pairs_count=0 despite real cross-dex signals |
 | blocker_status_before | ACTIVE |
 | blocker_status_after | RESOLVED (artifact key fix + regression test) |
@@ -54,12 +54,12 @@ test_count: 1593 passed, 2 skipped
 
 | Chain | RunDir | M5 Gate | run_summary | Quality | Signals | Included | Net USD |
 |-------|--------|---------|-------------|---------|---------|----------|---------|
-| **Arbitrum** | 142510 | PASS | PASS | WARN | 4+ | 4 | cross-dex |
-| **Base** | 142534 | PASS | PASS | WARN | signals | included | net |
-| **Mantle** | 142714 | PASS | PASS | WARN | signals | included | net |
-| **Linea** | 142825 | PASS | PASS | WARN | signals | included | net |
-| **zkSync** | 142925 | PASS | PASS | WARN | signals | included | net |
-| Scroll | 142937 | PASS | FAIL | FAIL | 0 | 0 | $0.00 |
+| **Arbitrum** | 142510 | PASS | PASS | WARN | 4 | 4 | $3.84 |
+| **Base** | 142534 | PASS | PASS | WARN | 9 | 6 | $4.23 |
+| **Mantle** | 142715 | PASS | PASS | WARN | 4 | 3 | $6.96 |
+| **zkSync** | 142825 | PASS | PASS | WARN | 4 | 1 | $0.74 |
+| **Linea** | 142937 | PASS | PASS | WARN | 3 | 2 | $2.83 |
+| Scroll | 142925 | PASS | FAIL | FAIL | 1 | 0 | $0.00 |
 
 **Result**: 5 PASS / 1 FAIL (Scroll) / 0 INFRA_FAIL
 

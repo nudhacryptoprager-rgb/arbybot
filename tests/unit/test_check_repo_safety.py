@@ -1244,6 +1244,7 @@ class TestDevReportPlaceholders(unittest.TestCase):
         # DEV_REPORT with placeholder 'signals' instead of number
         mock_report = """
         | Chain | RunDir | Gate | signals | net_usdc | Status |
+        |-------|--------|------|---------|----------|--------|
         | **Arbitrum** | 220644 | PASS | signals | net | ✅ SIGNAL_PRODUCING |
         """
         
@@ -1525,6 +1526,91 @@ class TestCheckDocsContentBloat(unittest.TestCase):
                 issues = check_docs_content_bloat()
         session = [i for i in issues if "DOCS_SESSION_BLOAT" in i]
         self.assertTrue(len(session) >= 1, f"Expected session bloat warning, got: {issues}")
+
+
+class TestDevReportPlaceholderCells(unittest.TestCase):
+    """Regression: check_dev_report_placeholders must catch bare-word table cells."""
+
+    def test_catches_placeholder_signals(self):
+        """Table cells with 'signals', 'included', 'net' must be flagged."""
+        import tempfile
+        from scripts.check_repo_safety import check_dev_report_placeholders
+
+        content = "\n".join([
+            "# DEV REPORT",
+            "## 0) Meta",
+            "timestamp_utc: 2026-03-10T13:25:33Z",
+            "test_count: 1593 passed",
+            "",
+            "| Chain | RunDir | Gate | Signals | Included | Net USD |",
+            "|-------|--------|------|---------|----------|---------|",
+            "| **Base** | 142534 | PASS | signals | included | net |",
+            "| Scroll | 142925 | FAIL | 0 | 0 | $0.00 |",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = Path(tmp) / "docs"
+            docs.mkdir()
+            (docs / "DEV_REPORT_LATEST.md").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", Path(tmp)):
+                issues = check_dev_report_placeholders()
+
+        placeholder_issues = [i for i in issues if "PLACEHOLDER" in i]
+        # Must catch 'signals', 'included', 'net' = 3 placeholders
+        self.assertGreaterEqual(len(placeholder_issues), 3,
+            f"Expected >=3 placeholder issues, got {len(placeholder_issues)}: {placeholder_issues}")
+
+    def test_no_false_positive_on_numbers(self):
+        """Numeric cells must not be flagged."""
+        import tempfile
+        from scripts.check_repo_safety import check_dev_report_placeholders
+
+        content = "\n".join([
+            "# DEV REPORT",
+            "## 0) Meta",
+            "timestamp_utc: 2026-03-10T13:25:33Z",
+            "test_count: 1593 passed",
+            "",
+            "| Chain | RunDir | Gate | Signals | Included | Net USD |",
+            "|-------|--------|------|---------|----------|---------|",
+            "| **Arbitrum** | 142510 | PASS | 4 | 4 | $3.84 |",
+            "| Scroll | 142925 | FAIL | 1 | 0 | $0.00 |",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = Path(tmp) / "docs"
+            docs.mkdir()
+            (docs / "DEV_REPORT_LATEST.md").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", Path(tmp)):
+                issues = check_dev_report_placeholders()
+
+        placeholder_issues = [i for i in issues if "PLACEHOLDER" in i]
+        self.assertEqual(len(placeholder_issues), 0,
+            f"Expected 0 placeholder issues for numeric cells, got: {placeholder_issues}")
+
+    def test_catches_cross_dex_placeholder(self):
+        """The word 'cross-dex' in a table cell must be flagged."""
+        import tempfile
+        from scripts.check_repo_safety import check_dev_report_placeholders
+
+        content = "\n".join([
+            "# DEV REPORT",
+            "## 0) Meta",
+            "timestamp_utc: 2026-03-10T13:25:33Z",
+            "test_count: 1593 passed",
+            "",
+            "| Chain | Signals | Net |",
+            "|-------|---------|-----|",
+            "| **Arb** | 4+ | cross-dex |",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = Path(tmp) / "docs"
+            docs.mkdir()
+            (docs / "DEV_REPORT_LATEST.md").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", Path(tmp)):
+                issues = check_dev_report_placeholders()
+
+        placeholder_issues = [i for i in issues if "cross-dex" in i.lower()]
+        self.assertGreaterEqual(len(placeholder_issues), 1,
+            f"Expected cross-dex placeholder flag, got: {issues}")
 
 
 if __name__ == "__main__":

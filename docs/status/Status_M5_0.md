@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]
 **Updated**: 2026-03-10
-**Tests**: 1588+ passed, 2 skipped
-**Evidence runDirs**: ci_m5_gate_20260310_{142510,142534,142714,142825,142925,142937} (6-chain smoke)
+**Tests**: 1593 passed, 2 skipped
+**Evidence runDirs**: ci_m5_gate_20260310_{142510,142534,142715,142825,142925,142937} (6-chain smoke)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json}`
 
 ---
