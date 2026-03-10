@@ -177,6 +177,7 @@ class TestRoundtripCanonicalGating(unittest.TestCase):
                 "l1_cost_wei": 123456789,
                 "l1_cost_source": "onchain",
                 "gas_price_wei_used": 100000000,
+                "best_measured_spread_gap_bps": -42.3,
             }
         )
         
@@ -203,6 +204,8 @@ class TestRoundtripCanonicalGating(unittest.TestCase):
         self.assertEqual(rs["l1_cost_wei"], 123456789)
         self.assertEqual(rs["l1_cost_source"], "onchain")
         self.assertEqual(rs["gas_price_wei_used"], 100000000)
+        # M4.2 blocker metric
+        self.assertAlmostEqual(rs["best_measured_spread_gap_bps"], -42.3)
 
 
 class TestRoundtripResultSlippageSource(unittest.TestCase):

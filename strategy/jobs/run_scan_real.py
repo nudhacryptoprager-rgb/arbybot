@@ -813,6 +813,16 @@ def run_scan(
         else:
             stats["roundtrip"]["best_net_pnl_bps"] = None
             logger.info("Roundtrip: no candidates evaluated")
+        
+        # Blocker metric: best measured_spread_minus_required_bps across evaluated opportunities
+        # This tracks the gap between spread captured and real roundtrip cost.
+        # As this approaches 0, we approach M4.2 closure.
+        measured_gaps = [
+            opp.get("measured_spread_minus_required_bps")
+            for opp in opps_list
+            if isinstance(opp, dict) and opp.get("measured_spread_minus_required_bps") is not None
+        ]
+        stats["roundtrip"]["best_measured_spread_gap_bps"] = max(measured_gaps) if measured_gaps else None
             
     except Exception as rt_err:
         logger.debug("Roundtrip evaluation skipped: %s", rt_err)

@@ -380,6 +380,8 @@ def build_truth_data(
             "l1_cost_wei": stats.get("roundtrip", {}).get("l1_cost_wei", 0),
             "l1_cost_source": stats.get("roundtrip", {}).get("l1_cost_source", "none"),
             "gas_price_wei_used": stats.get("roundtrip", {}).get("gas_price_wei_used", 0),
+            # M4.2 blocker metric: best gap across evaluated opportunities
+            "best_measured_spread_gap_bps": stats.get("roundtrip", {}).get("best_measured_spread_gap_bps"),
         },
         # v2.1.0: truth_mode_m42 - when true, one-leg PnL is DIAGNOSTIC only, roundtrip is canonical
         "truth_mode_m42": config.get("truth_mode_m42", False),

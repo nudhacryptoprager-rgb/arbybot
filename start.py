@@ -197,6 +197,7 @@ def new_chain_stats() -> dict[str, Any]:
         "profitable_roundtrips_total": 0,
         "roundtrip_evaluated_total": 0,
         "best_roundtrip_net_bps": None,
+        "best_measured_spread_gap_bps": None,
         "last_run_timestamp": None,
         "last_run_dir": None,
         # Richer per-chain fields (last-run snapshot)
@@ -234,6 +235,10 @@ def update_chain_stats(
         if run_best is not None:
             prev = stats.get("best_roundtrip_net_bps")
             stats["best_roundtrip_net_bps"] = run_best if prev is None else max(prev, run_best)
+        run_gap = rt.get("best_measured_spread_gap_bps")
+        if run_gap is not None:
+            prev_gap = stats.get("best_measured_spread_gap_bps")
+            stats["best_measured_spread_gap_bps"] = run_gap if prev_gap is None else max(prev_gap, run_gap)
         ctx = summary.get("run_context", {})
         stats["last_run_timestamp"] = ctx.get("run_timestamp", stats["last_run_timestamp"])
         # Richer snapshot fields
@@ -312,6 +317,10 @@ def build_summary(
             (s["best_roundtrip_net_bps"] for s in per_chain.values() if s.get("best_roundtrip_net_bps") is not None),
             default=None,
         ),
+        "best_measured_spread_gap_bps": max(
+            (s["best_measured_spread_gap_bps"] for s in per_chain.values() if s.get("best_measured_spread_gap_bps") is not None),
+            default=None,
+        ),
         "pass_chains": pass_chains,
         "fail_chains": fail_chains,
         "accepted_fail_chains": accepted_fail_chains,
@@ -336,7 +345,10 @@ def print_summary(summary: dict[str, Any]) -> None:
     print(f"Net USDC total: ${summary['total_net_usdc']:.4f}")
     best_bps = summary.get('best_roundtrip_net_bps')
     best_str = f"{best_bps:+.2f} bps" if best_bps is not None else "n/a"
+    gap_bps = summary.get('best_measured_spread_gap_bps')
+    gap_str = f"{gap_bps:+.2f} bps" if gap_bps is not None else "n/a"
     print(f"Profitable RTs: {summary.get('total_profitable_roundtrips', 0)}  (evaluated: {summary.get('total_roundtrip_evaluated', 0)}, best: {best_str})")
+    print(f"Spread gap:     {gap_str}  (measured, target: >=0)")
 
     pass_c = summary.get("pass_chains", [])
     fail_c = summary.get("fail_chains", [])

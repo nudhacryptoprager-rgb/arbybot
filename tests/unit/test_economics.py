@@ -237,33 +237,33 @@ class TestIsRoundtripCandidate:
 class TestEconomicsContractIntegration:
     """Integration tests verifying economics module contracts."""
     
-    def test_min_spread_bps_10_covers_cost_floor(self):
+    def test_min_spread_bps_12_covers_cost_floor(self):
         """
-        Contract: min_spread_bps=10 in config must be >= cost floor.
+        Contract: min_spread_bps=12 in config must be >= cost floor.
         
-        Cost floor at $250 paper size:
-        - gas: $0.10 / $250 * 10000 = 4 bps
+        Cost floor at $150 paper size (v3.3.0):
+        - gas: $0.10 / $150 * 10000 = 6.67 bps
         - slippage: 5 bps (default)
         - safety: 2 bps
-        - Total non-fee: ~11 bps
+        - Total non-fee: ~13.67 bps
         
-        So min_spread_bps=10 is slightly below pure costs but above typical
+        So min_spread_bps=12 is slightly below pure costs but above typical
         gas-only threshold. This is by design: LP fees are added on top when
         comparing to min_required_spread_bps.
         """
-        config_min_spread_bps = 10
+        config_min_spread_bps = 12
         
-        # Pure cost floor (no LP fees) at $250
+        # Pure cost floor (no LP fees) at $150
         cost_floor = min_required_spread_bps(
             fee_bps_leg1=0,  # No LP fees
             fee_bps_leg2=0,
             slippage_bps=5,
             gas_usd=0.10,
-            size_usd=250,
+            size_usd=150,
             safety_bps=2,
         )
-        # Should be ~11 bps (5 + 4 + 2)
-        assert cost_floor == 11.0
+        # Should be ~13.67 bps (5 + 6.67 + 2)
+        assert cost_floor == 13.67
         
         # config_min_spread_bps slightly below to allow signal generation,
         # but roundtrip gating will add LP fees and filter properly

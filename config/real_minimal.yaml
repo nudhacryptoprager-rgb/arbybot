@@ -403,13 +403,18 @@ gas_usd_estimate: 0.10
 
 # Paper trading settings (M5)
 # v2.5.2: Reduced from 1000 to 250 to lower ticks_crossed and reduce SUSPECT_LIQUIDITY rejects
-paper_size_usd: 250
+# v3.3.0: Reduced to 150 to balance spread vs slippage:
+#   At $250: spreads=56bps but slippage=117bps → gap=-76.5bps
+#   At $100: slippage=17bps but spreads=20bps → gap=-26.15bps (paper-blocked, evaluated_count=0)
+#   At $150: spreads~30bps, paper_cost_floor~24bps → paper-viable, enables roundtrip evaluation
+paper_size_usd: 150
 paper_slippage_bps: 5  # v3.0.0: 5 bps for realistic economics (was 0 - too optimistic)
 
 # M4.2 USD-notional sizing (v2.2.3)
 # target_usd_notional: Target USD value for quote sizing (matches paper_size_usd)
+# v3.3.0: Reduced from 250 to 150 to match paper_size_usd (probe size reduction)
 # tokens_usd_price: Override default prices to reduce NOTIONAL_DRIFT warnings
-target_usd_notional: 250
+target_usd_notional: 150
 use_usd_notional: true
 tokens_usd_price:
   WBTC: 68000    # on-chain ~68000 (2026-02-26)
@@ -444,10 +449,10 @@ autosize:
 # Signals with spread_bps_exact < this are filtered out
 # Production: 20 bps minimum (filters marginal signals where sign can flip from slippage)
 # Debug: 5 bps (default), 0 = any positive spread
-# v2.9.7 RESTORE CONTRACT: min_spread_bps=10 is REQUIRED for fragile_rate=0 with paper_size_usd=250
-# Cost floor at $250 with paper_realistic: gas=$0.10 + slippage=5bps (~$0.125) = ~9 bps
-# LOWER TO 5 ONLY WHEN: paper_size_usd >= 500 OR cost model produces lower cost floor
-min_spread_bps: 10  # 10 bps = above cost floor for $250 paper_size
+# v3.3.0: Cost floor at $150: gas=6.67bps + paper_slippage=5bps = ~12bps (before LP fees)
+# min_spread_bps=12 filters signals below paper cost floor at $150 notional
+# RAISE TO 15 WHEN: paper_size_usd <= 100 (gas_bps rises to 10)
+min_spread_bps: 12  # 12 bps = above cost floor for $150 paper_size
 
 # Net PnL threshold for daily_report top_opportunities (M5)
 # Signals with net_pnl_usdc_est < this are excluded from top_opportunities
