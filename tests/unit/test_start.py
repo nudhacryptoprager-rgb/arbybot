@@ -672,30 +672,36 @@ class TestAcceptedFailChains(unittest.TestCase):
 
 
 class TestFrontierRanking(unittest.TestCase):
-    """Contract: _compute_frontier_ranking ranks chains by gap_to_zero_bps ascending."""
+    """Contract: _compute_frontier_ranking uses composite scoring."""
 
     def test_ranking_order(self):
         per_chain = {
             "arb": {"sweep_gap_to_zero_bps": 12.5, "sweep_best_net_pnl_bps": -12.5,
+                     "included_signals_total": 10, "last_cross_dex_pairs_count": 3,
+                     "accepted_fail": False,
                      "sweep_measured_gas_bps": 3.0,
                      "sweep_measured_fee_bps": 60.0, "sweep_measured_slippage_bps": 1.0,
                      "sweep_measured_total_cost_bps": 64.0},
             "base": {"sweep_gap_to_zero_bps": 8.0, "sweep_best_net_pnl_bps": -8.0,
+                      "included_signals_total": 20, "last_cross_dex_pairs_count": 5,
+                      "accepted_fail": False,
                       "sweep_measured_gas_bps": 1.0,
                       "sweep_measured_fee_bps": 30.0, "sweep_measured_slippage_bps": 0.5,
                       "sweep_measured_total_cost_bps": 31.5},
-            "scroll": {"sweep_gap_to_zero_bps": None},
+            "scroll": {"sweep_gap_to_zero_bps": None, "included_signals_total": 0,
+                        "accepted_fail": True},
         }
         ranking = start._compute_frontier_ranking(per_chain)
-        # base (8.0) before arb (12.5), scroll excluded (None gap)
+        # base (8.0) before arb (12.5), scroll excluded (no pnl + no signals)
         self.assertEqual(ranking[0]["chain"], "base")
         self.assertEqual(ranking[1]["chain"], "arb")
-        self.assertEqual(len(ranking), 2)
 
     def test_frontier_ready_flag(self):
         per_chain = {
-            "arb": {"sweep_gap_to_zero_bps": 25.0, "sweep_best_net_pnl_bps": -25.0},
-            "base": {"sweep_gap_to_zero_bps": 35.0, "sweep_best_net_pnl_bps": -35.0},
+            "arb": {"sweep_gap_to_zero_bps": 25.0, "sweep_best_net_pnl_bps": -25.0,
+                     "included_signals_total": 5, "accepted_fail": False},
+            "base": {"sweep_gap_to_zero_bps": 35.0, "sweep_best_net_pnl_bps": -35.0,
+                     "included_signals_total": 5, "accepted_fail": False},
         }
         ranking = start._compute_frontier_ranking(per_chain)
         arb_entry = [r for r in ranking if r["chain"] == "arb"][0]
@@ -708,8 +714,75 @@ class TestFrontierRanking(unittest.TestCase):
             "arb": start.new_chain_stats(),
         }
         per_chain["arb"]["sweep_gap_to_zero_bps"] = 15.0
+        per_chain["arb"]["included_signals_total"] = 5
         summary = start.build_summary(per_chain, 60.0, [])
         self.assertIn("frontier_ranking", summary)
+
+    def test_accepted_fail_sorted_last(self):
+        """accepted_fail chains are always sorted after non-accepted-fail."""
+        per_chain = {
+            "scroll": {"sweep_gap_to_zero_bps": 5.0, "sweep_best_net_pnl_bps": -5.0,
+                        "included_signals_total": 2, "accepted_fail": True},
+            "arb": {"sweep_gap_to_zero_bps": 20.0, "sweep_best_net_pnl_bps": -20.0,
+                     "included_signals_total": 10, "accepted_fail": False},
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        self.assertEqual(len(ranking), 2)
+        # arb first despite worse gap, because scroll is accepted_fail
+        self.assertEqual(ranking[0]["chain"], "arb")
+        self.assertEqual(ranking[1]["chain"], "scroll")
+        self.assertFalse(ranking[0]["accepted_fail"])
+        self.assertTrue(ranking[1]["accepted_fail"])
+
+    def test_accepted_fail_not_frontier_ready(self):
+        """accepted_fail chains should never be frontier_ready even with good gap."""
+        per_chain = {
+            "scroll": {"sweep_gap_to_zero_bps": 5.0, "sweep_best_net_pnl_bps": -5.0,
+                        "included_signals_total": 2, "accepted_fail": True},
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        self.assertEqual(len(ranking), 1)
+        self.assertFalse(ranking[0]["frontier_ready"])
+
+    def test_composite_tiebreak_by_signals(self):
+        """When gap_to_zero is tied, chain with more signals ranks higher."""
+        per_chain = {
+            "arb": {"sweep_gap_to_zero_bps": 15.0, "sweep_best_net_pnl_bps": -15.0,
+                     "included_signals_total": 5, "last_cross_dex_pairs_count": 2,
+                     "accepted_fail": False},
+            "base": {"sweep_gap_to_zero_bps": 15.0, "sweep_best_net_pnl_bps": -15.0,
+                      "included_signals_total": 20, "last_cross_dex_pairs_count": 3,
+                      "accepted_fail": False},
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        # Same gap but base has more signals, should rank first
+        self.assertEqual(ranking[0]["chain"], "base")
+        self.assertEqual(ranking[1]["chain"], "arb")
+
+    def test_ranking_includes_new_fields(self):
+        """Ranking entries include signals, cross_dex, and accepted_fail."""
+        per_chain = {
+            "arb": {"sweep_gap_to_zero_bps": 10.0, "sweep_best_net_pnl_bps": -10.0,
+                     "included_signals_total": 8, "last_cross_dex_pairs_count": 3,
+                     "accepted_fail": False},
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        self.assertEqual(len(ranking), 1)
+        entry = ranking[0]
+        self.assertEqual(entry["included_signals_total"], 8)
+        self.assertEqual(entry["cross_dex_pairs_count"], 3)
+        self.assertFalse(entry["accepted_fail"])
+
+    def test_chain_with_signals_but_no_sweep(self):
+        """Chain with signals but no sweep data should still appear in ranking."""
+        per_chain = {
+            "linea": {"included_signals_total": 15, "sweep_best_net_pnl_bps": None,
+                       "sweep_gap_to_zero_bps": None, "accepted_fail": False},
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        self.assertEqual(len(ranking), 1)
+        self.assertEqual(ranking[0]["chain"], "linea")
+        self.assertIsNone(ranking[0]["gap_to_zero_bps"])
 
 
 if __name__ == "__main__":

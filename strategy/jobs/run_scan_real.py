@@ -940,14 +940,32 @@ def run_scan(
                     sr.pair, sr.best_size_usd, sr.best_net_pnl_bps or 0.0, sr.frontier_reason,
                 )
 
-            if sweep_results:
+            # SUSPECT_ROUNDTRIP_OUTLIER: filter out sweep results with
+            # extreme positive PnL, which indicates illiquid/garbage pool data.
+            # Threshold aligned with SUSPECT_SPREAD_BPS_HARD (500 bps).
+            SUSPECT_ROUNDTRIP_OUTLIER_BPS = 500
+            suspect_outlier_count = 0
+            clean_results = []
+            for sr in sweep_results:
+                if sr.best_net_pnl_bps is not None and sr.best_net_pnl_bps > SUSPECT_ROUNDTRIP_OUTLIER_BPS:
+                    suspect_outlier_count += 1
+                    logger.warning(
+                        "SUSPECT_ROUNDTRIP_OUTLIER: %s pnl=%.1f bps > %d threshold",
+                        sr.pair, sr.best_net_pnl_bps, SUSPECT_ROUNDTRIP_OUTLIER_BPS,
+                    )
+                else:
+                    clean_results.append(sr)
+
+            if clean_results:
                 best_sweep = max(
-                    sweep_results,
+                    clean_results,
                     key=lambda s: s.best_net_pnl_bps if s.best_net_pnl_bps is not None else -9999,
                 )
                 stats["roundtrip"]["dynamic_sweep"] = {
                     "enabled": True,
                     "routes_swept": len(sweep_results),
+                    "routes_clean": len(clean_results),
+                    "suspect_outlier_count": suspect_outlier_count,
                     "best_pair": best_sweep.pair,
                     "best_size_usd": best_sweep.best_size_usd,
                     "best_net_pnl_bps": best_sweep.best_net_pnl_bps,
@@ -957,6 +975,16 @@ def run_scan(
                     "best_fee_bps": best_sweep.best_fee_bps,
                     "best_slippage_bps": best_sweep.best_slippage_bps,
                     "best_total_cost_bps": best_sweep.best_total_cost_bps,
+                    "results": [s.to_dict() for s in sweep_results],
+                }
+            elif sweep_results:
+                # All results were suspect outliers
+                stats["roundtrip"]["dynamic_sweep"] = {
+                    "enabled": True,
+                    "routes_swept": len(sweep_results),
+                    "routes_clean": 0,
+                    "suspect_outlier_count": suspect_outlier_count,
+                    "best_frontier_reason": "ALL_SUSPECT_OUTLIER",
                     "results": [s.to_dict() for s in sweep_results],
                 }
             else:

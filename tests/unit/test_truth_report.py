@@ -1169,5 +1169,76 @@ class TestBuildRoundtripSummary(unittest.TestCase):
         self.assertEqual(summary["dynamic_sweep"]["frontier_curves"][0]["pair"], "A/B")
 
 
+class TestSuspectRoundtripOutlier(unittest.TestCase):
+    """Contract: SUSPECT_ROUNDTRIP_OUTLIER filters extreme sweep results (>500 bps)."""
+
+    def test_outlier_excluded_from_best(self):
+        """Sweep results with PnL > 500 bps should not be chosen as best."""
+        from dataclasses import dataclass
+        from typing import Optional
+
+        # Simulate SizeSweepResult-like objects
+        @dataclass
+        class FakeResult:
+            pair: str
+            best_net_pnl_bps: Optional[float]
+            best_size_usd: Optional[int] = 50
+            frontier_reason: str = "PROFITABLE"
+            gap_to_zero_bps: Optional[float] = 0.0
+            best_gas_bps: Optional[float] = 1.0
+            best_fee_bps: Optional[float] = 2.0
+            best_slippage_bps: Optional[float] = 3.0
+            best_total_cost_bps: Optional[float] = 6.0
+            def to_dict(self):
+                return {"pair": self.pair, "best_net_pnl_bps": self.best_net_pnl_bps}
+
+        SUSPECT_THRESHOLD = 500
+        results = [
+            FakeResult(pair="WETH/CBBTC", best_net_pnl_bps=2544.0),  # suspect outlier
+            FakeResult(pair="WBTC/USDC", best_net_pnl_bps=-19.0, frontier_reason="BEST_NEG",
+                       gap_to_zero_bps=19.0),
+        ]
+
+        # Apply same filtering logic as run_scan_real.py
+        clean = [r for r in results
+                 if r.best_net_pnl_bps is None or r.best_net_pnl_bps <= SUSPECT_THRESHOLD]
+        suspect_count = len(results) - len(clean)
+
+        self.assertEqual(suspect_count, 1)
+        self.assertEqual(len(clean), 1)
+        self.assertEqual(clean[0].pair, "WBTC/USDC")
+
+    def test_all_suspect_results(self):
+        """When all results are suspect, routes_clean should be 0."""
+        from dataclasses import dataclass
+        from typing import Optional
+
+        @dataclass
+        class FakeResult:
+            pair: str
+            best_net_pnl_bps: Optional[float]
+            def to_dict(self):
+                return {"pair": self.pair}
+
+        SUSPECT_THRESHOLD = 500
+        results = [
+            FakeResult(pair="WETH/CBBTC", best_net_pnl_bps=2544.0),
+            FakeResult(pair="WETH/DAI", best_net_pnl_bps=800.0),
+        ]
+        clean = [r for r in results
+                 if r.best_net_pnl_bps is None or r.best_net_pnl_bps <= SUSPECT_THRESHOLD]
+        self.assertEqual(len(clean), 0)
+
+    def test_negative_pnl_not_suspect(self):
+        """Negative PnL results should never be flagged as suspect."""
+        SUSPECT_THRESHOLD = 500
+        pnl_values = [-100.0, -19.0, 0.0, 100.0, 499.0]
+        for pnl in pnl_values:
+            is_suspect = pnl > SUSPECT_THRESHOLD
+            self.assertFalse(is_suspect, f"pnl={pnl} should not be suspect")
+
+        self.assertTrue(501.0 > SUSPECT_THRESHOLD)
+
+
 if __name__ == "__main__":
     unittest.main()

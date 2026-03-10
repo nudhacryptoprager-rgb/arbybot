@@ -68,9 +68,11 @@ pairs:
   # v2.1.0-fix: WBTC pairs re-enabled after Decimal(10)**exp fix
   # Previously caused decimal.InvalidOperation with 8 vs 18 decimals
   # v2.5.2: fee=500 re-enabled for Uniswap fee-tier arbitrage (Sushi pool still disabled)
+  # R11: fee=100 added for fee-hunt (8 bps deterministic saving vs fee=500 roundtrip).
+  #   Pool addresses need discovery; POOL_MISSING is silent skip.
   - token_in: WBTC
     token_out: WETH
-    fee_tiers: [500, 3000]
+    fee_tiers: [100, 500, 3000]
   # v2.5.2: fee=500 re-enabled for Uniswap fee-tier arbitrage (Sushi pool still disabled)
   # v3.2.73: ARB/WETH DISABLED — one-leg outlier with $32+ sim_net
   # Consistently produces suspect spread (1359bps) that inflates all_signals metrics
@@ -100,9 +102,11 @@ pairs:
   #   token_out: USDC
   #   fee_tiers: [500, 3000]
   # v2.1.0-fix: WBTC/USDC re-enabled after Decimal(10)**exp fix
+  # R11: fee=100 added for fee-hunt (8 bps deterministic saving vs fee=500 roundtrip).
+  #   Pool addresses need discovery; POOL_MISSING is silent skip.
   - token_in: WBTC
     token_out: USDC
-    fee_tiers: [500, 3000]
+    fee_tiers: [100, 500, 3000]
   # v2.9.7: WBTC/USDT DISABLED - uni-only (sushiswap_v3_WBTC_USDT_3000 in disabled_pools)
   # RESTORE WHEN: sushiswap_v3_WBTC_USDT_3000 re-enabled
   # - token_in: WBTC
@@ -316,6 +320,31 @@ disabled_pools:
     detail: "fee=100 only available on Uniswap; Sushi has no fee=100 WETH/USDC pool"
     evidence_run: "ci_m5_gate_20260228_203126"
     disabled_date: "2026-02-28"
+  # R11: fee=100 hunt candidates — addresses need on-chain discovery via factory.getPool()
+  uniswap_v3_WBTC_WETH_100:
+    address: null
+    reason: "FEE_HUNT_CANDIDATE"
+    detail: "fee=100 pool address needs discovery; if it exists, 8 bps roundtrip saving vs fee=500"
+    evidence_run: "R11_fee_hunt"
+    disabled_date: "2026-03-10"
+  sushiswap_v3_WBTC_WETH_100:
+    address: null
+    reason: "FEE_HUNT_CANDIDATE"
+    detail: "fee=100 pool address needs discovery; Sushi may not have fee=100 tier"
+    evidence_run: "R11_fee_hunt"
+    disabled_date: "2026-03-10"
+  uniswap_v3_WBTC_USDC_100:
+    address: null
+    reason: "FEE_HUNT_CANDIDATE"
+    detail: "fee=100 pool address needs discovery; if it exists, 8 bps roundtrip saving vs fee=500"
+    evidence_run: "R11_fee_hunt"
+    disabled_date: "2026-03-10"
+  sushiswap_v3_WBTC_USDC_100:
+    address: null
+    reason: "FEE_HUNT_CANDIDATE"
+    detail: "fee=100 pool address needs discovery; Sushi may not have fee=100 tier"
+    evidence_run: "R11_fee_hunt"
+    disabled_date: "2026-03-10"
   # v2.9.6: POOL_MISSING fix - Sushi WBTC/USDT 3000 returns bad quotes (PRICE_SANITY_FAILED in quarantine_state)
   sushiswap_v3_WBTC_USDT_3000:
     address: null
@@ -449,9 +478,10 @@ autosize:
 # Sweeps multiple notional sizes per route to find optimal roundtrip PnL.
 # Runs AFTER the fixed-baseline roundtrip evaluation for regression safety.
 # Each route requires 2 RPC calls per size (leg1 + leg2 re-quote).
+# R11: $25 added as additional lower probe point (dust-edge guard: don't draw conclusions from $25 alone).
 dynamic_probe:
   enabled: true
-  sizes_usd: [50, 75, 100, 125, 150, 200, 250]
+  sizes_usd: [25, 50, 75, 100, 125, 150, 200, 250]
   top_routes: 3         # Sweep only top-3 eligible routes (RPC budget)
 
 # Spread signal threshold (M5)

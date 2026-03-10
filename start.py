@@ -367,12 +367,24 @@ def build_summary(
 
 
 def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rank chains by sweep frontier economics (lower gap_to_zero = better)."""
+    """Rank chains by composite frontier score.
+
+    Sort order (ascending tuple):
+      1. accepted_fail (False < True — non-accepted first)
+      2. gap_to_zero_bps (lower = closer to breakeven)
+      3. -included_signals_total (more signals = higher confidence)
+      4. -cross_dex_pairs_count (more venues = more opportunity)
+
+    gap_to_zero_bps is a WARN / frontier KPI only, NOT a hard pass/fail gate.
+    """
     ranked = []
     for chain, s in per_chain.items():
         gap = s.get("sweep_gap_to_zero_bps")
         pnl = s.get("sweep_best_net_pnl_bps")
-        if pnl is None:
+        signals = s.get("included_signals_total", 0)
+        xdex = s.get("last_cross_dex_pairs_count") or 0
+        is_af = s.get("accepted_fail", False)
+        if pnl is None and signals == 0:
             continue
         ranked.append({
             "chain": chain,
@@ -384,9 +396,17 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             "measured_fee_bps": s.get("sweep_measured_fee_bps"),
             "measured_slippage_bps": s.get("sweep_measured_slippage_bps"),
             "measured_total_cost_bps": s.get("sweep_measured_total_cost_bps"),
-            "frontier_ready": gap is not None and gap < 30,
+            "included_signals_total": signals,
+            "cross_dex_pairs_count": xdex,
+            "accepted_fail": is_af,
+            "frontier_ready": gap is not None and gap < 30 and not is_af,
         })
-    ranked.sort(key=lambda x: x.get("gap_to_zero_bps") or 9999)
+    ranked.sort(key=lambda x: (
+        x.get("accepted_fail", False),
+        x.get("gap_to_zero_bps") if x.get("gap_to_zero_bps") is not None else 9999,
+        -(x.get("included_signals_total", 0)),
+        -(x.get("cross_dex_pairs_count", 0)),
+    ))
     return ranked
 
 
@@ -453,17 +473,21 @@ def print_summary(summary: dict[str, Any]) -> None:
 
     ranking = summary.get("frontier_ranking", [])
     if ranking:
-        print("\n--- FRONTIER RANKING (by gap_to_zero_bps) ---")
+        print("\n--- FRONTIER RANKING (composite: gap + signals + xdex) ---")
         for i, r in enumerate(ranking):
             gap = r.get("gap_to_zero_bps")
             gap_s = f"{gap:.1f}" if gap is not None else "n/a"
-            pnl = r.get("sweep_best_net_pnl_bps", 0)
+            pnl = r.get("sweep_best_net_pnl_bps") or 0
             cost = r.get("measured_total_cost_bps")
             cost_s = f"cost={cost:.1f}" if cost is not None else "cost=n/a"
-            ready = "READY" if r.get("frontier_ready") else "-"
+            sigs = r.get("included_signals_total", 0)
+            xdex = r.get("cross_dex_pairs_count", 0)
+            is_af = r.get("accepted_fail", False)
+            ready = "READY" if r.get("frontier_ready") else "AF" if is_af else "-"
             print(
                 f"  #{i+1} {r['chain']:16s}  gap={gap_s:>6s} bps  "
                 f"pnl={pnl:+.1f} bps  {cost_s} bps  "
+                f"sig={sigs}  xdex={xdex}  "
                 f"pair={r.get('frontier_pair', 'n/a')}  {ready}"
             )
 

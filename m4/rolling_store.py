@@ -487,6 +487,7 @@ def _compute_quick_stats(
         "roundtrip_total_evaluated": sum(r.get("roundtrip_evaluated_count", 0) for r in normal_runs),
         "roundtrip_total_profitable": sum(r.get("roundtrip_profitable_count", 0) for r in normal_runs),
         # v3.3.1: Sweep frontier aggregates for M4.2 blocker tracking
+        # POLICY: gap_to_zero_bps is a WARN/frontier KPI only, NOT a hard pass/fail gate.
         "sweep_runs_count": sum(1 for r in normal_runs if r.get("sweep_best_net_pnl_bps") is not None),
         "sweep_best_pnl_bps_ever": max((r.get("sweep_best_net_pnl_bps") for r in normal_runs if r.get("sweep_best_net_pnl_bps") is not None), default=None),
         "sweep_gap_to_zero_min": min((r.get("sweep_gap_to_zero_bps") for r in normal_runs if r.get("sweep_gap_to_zero_bps") is not None), default=None),
