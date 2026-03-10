@@ -171,30 +171,28 @@ Expected output when Truth Engine works correctly:
 
 Canonical command for continuous scanning with rolling artifact refresh. This demonstrates real-time arbitrage detection capability.
 
-### Basic Non-stop Loop (PowerShell wrapper)
+### Single-chain Non-stop Loop
 
 ```powershell
-# Non-stop scan with 20-second interval
-while ($true) {
-  py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --refresh-rolling --refresh-rolling-strict --prune-keep 50
-  py -3.11 scripts/inspect_rolling.py
-  Start-Sleep -Seconds 20
-}
+# Single-chain scan with rolling refresh (primary chain only)
+py -3.11 start.py --config config/real_minimal.yaml --hours 2 --sleep-seconds 20
 ```
 
-### Native Loop Mode (recommended)
+### Multi-chain Long Scan (recommended)
+
+Round-robins all 6 chains. Only the primary `run_kind=NORMAL` chain gets `--refresh-rolling`;
+coverage configs skip rolling refresh to respect the rolling-discipline guardrail.
 
 ```powershell
-# Built-in loop with backoff and roundtrip alerting
+py -3.11 start.py --config-list config/real_minimal.yaml,config/coverage_intent_base.yaml,config/coverage_intent_mantle.yaml,config/coverage_intent_zksync.yaml,config/coverage_intent_scroll.yaml,config/coverage_intent_linea.yaml --hours 3 --cycles 1 --sleep-seconds 20 --prune-keep 200 --summary-file data/runs/_incidents/long_scan_latest.json
+```
+
+Summary output goes to `data/runs/_incidents/long_scan_latest.json` (overwritten, never committed).
+
+### Native Loop Mode (single config, no per-chain summary)
+
+```powershell
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --loop --sleep-seconds 20
-```
-
-### Discovery Runtime Mode
-
-For dynamic pair discovery across DEXes:
-
-```powershell
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal_discovery_runtime.yaml --loop --sleep-seconds 20
 ```
 
 ### Monitoring During Non-stop Run
