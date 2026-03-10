@@ -450,7 +450,14 @@ def aggregate_run(
     # truth_report.execution_pnl_included uses per-chain gas config which may differ
     # To satisfy invariant: net_pnl_usdc == execution_report.total_net_usdc == run_summary.total_net_usdc
     # Use m4_sim_net_usdc as canonical net_pnl_usdc when available
-    canonical_net_pnl = m4_sim_net_usdc if m4_sim_net_usdc is not None else float(execution_pnl_included.get("net_pnl_usdc") or 0)
+    # v3.2.73: canonical_net_pnl is None when no M4 execution data exists (fallback to paper_net)
+    _truth_exec_pnl = execution_pnl_included.get("net_pnl_usdc")
+    if m4_sim_net_usdc is not None:
+        canonical_net_pnl = m4_sim_net_usdc
+    elif _truth_exec_pnl is not None:
+        canonical_net_pnl = float(_truth_exec_pnl)
+    else:
+        canonical_net_pnl = None  # No M4/execution data → will fall back to paper_net
     truth_net_pnl = float(execution_pnl_included.get("net_pnl_usdc") or 0)  # Keep for transparency
     
     # Also read M4 cost components for consistency
@@ -481,7 +488,7 @@ def aggregate_run(
         "l1_cost_usd": canonical_l1_cost,
         "total_cost_usd": canonical_total_cost,
         # v3.2.68: CANONICAL net_pnl = execution_report.total_net_usdc (invariant enforced)
-        "net_pnl_usdc": canonical_net_pnl,
+        "net_pnl_usdc": canonical_net_pnl if canonical_net_pnl is not None else 0.0,
         # Keep truth value for transparency/debugging
         "truth_net_pnl_usdc": truth_net_pnl,
         # v3.2.70: DIAGNOSTIC ONLY — includes excluded/suspect signals' theoretical pnl.
@@ -581,9 +588,11 @@ def aggregate_run(
         "profit_truth_source": truth.get("profit_truth_source", "UNKNOWN"),
         "profit_realism_status": truth.get("profit_realism_status", "UNKNOWN"),
         # Dual PnL (v1.5.0)
-        "paper_net_pnl_usdc": round(paper_net, 6),  # Legacy: gas_only
-        "paper_net_pnl_usdc_gas_only": round(paper_net_gas_only, 6),  # Truth estimate (no slippage)
-        "paper_net_pnl_usdc_realistic": round(paper_net_realistic, 6),  # M4 sim (with slippage)
+        # v3.2.73: paper_net_pnl_usdc now uses canonical m4_sim_net_usdc (included-only)
+        # Previously used gross_spread_usdc (all signals), which inflated by outlier suspect signals
+        "paper_net_pnl_usdc": round(canonical_net_pnl if canonical_net_pnl is not None else paper_net, 6),
+        "paper_net_pnl_usdc_gas_only": round(paper_net_gas_only, 6),  # Truth estimate (no slippage) — ALL signals
+        "paper_net_pnl_usdc_realistic": round(paper_net_realistic, 6),  # M4 sim (with slippage) — ALL signals
         "slippage_usdc_realistic": round(slippage_usdc_realistic, 6),  # Slippage component
         "pnl_available": pnl_available,
         "pnl_reason": pnl_reason,

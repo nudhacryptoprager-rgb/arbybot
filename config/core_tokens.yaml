@@ -243,6 +243,18 @@ base:
     name: "WELL"
     note: "Moonwell governance token"
 
+  wstETH:
+    address: "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452"
+    decimals: 18
+    name: "Wrapped stETH"
+    note: "Lido wstETH bridged to Base"
+
+  rETH:
+    address: "0xB6fe221Fe9EeF5aBa221c348bA20A1Bf5e73624c"
+    decimals: 18
+    name: "Rocket Pool ETH"
+    note: "Rocketpool rETH bridged to Base"
+
 # =============================================================================
 # LINEA (chain_id: 59144)
 # =============================================================================

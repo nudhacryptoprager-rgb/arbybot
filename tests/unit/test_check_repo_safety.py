@@ -1464,5 +1464,68 @@ class TestChainQualityClaims(unittest.TestCase):
         self.assertEqual(len(mismatch_issues), 0)
 
 
+class TestCheckDocsContentBloat(unittest.TestCase):
+    """Test check_docs_content_bloat (check [19])."""
+
+    def test_detects_oversized_status_file(self):
+        """Should warn when a Status file exceeds line-count limit."""
+        from scripts.check_repo_safety import check_docs_content_bloat
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            docs_dir = tmp_path / "docs" / "status"
+            docs_dir.mkdir(parents=True)
+            # Create a bloated Status file (>300 lines default limit)
+            (docs_dir / "Status_M5_0.md").write_text(
+                "\n".join([f"line {i}" for i in range(500)]), encoding="utf-8"
+            )
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", tmp_path):
+                issues = check_docs_content_bloat()
+        bloat = [i for i in issues if "DOCS_CONTENT_BLOAT" in i and "Status_M5_0" in i]
+        self.assertTrue(len(bloat) >= 1, f"Expected bloat warning, got: {issues}")
+
+    def test_no_warning_for_small_status_file(self):
+        """Should NOT warn when Status file is within limits."""
+        from scripts.check_repo_safety import check_docs_content_bloat
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            docs_dir = tmp_path / "docs" / "status"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "Status_M5_0.md").write_text(
+                "\n".join([f"line {i}" for i in range(50)]), encoding="utf-8"
+            )
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", tmp_path):
+                issues = check_docs_content_bloat()
+        bloat = [i for i in issues if "DOCS_CONTENT_BLOAT" in i]
+        self.assertEqual(len(bloat), 0)
+
+    def test_detects_session_narrative_bloat(self):
+        """Should warn when DEV_REPORT references many distinct sessions."""
+        from scripts.check_repo_safety import check_docs_content_bloat
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            docs_dir = tmp_path / "docs"
+            status_dir = docs_dir / "status"
+            status_dir.mkdir(parents=True)
+            # DEV_REPORT referencing many sessions
+            content = "\n".join([
+                "# DEV REPORT",
+                "session 1 did X",
+                "session 2 did Y",
+                "session 3 did Z",
+                "session 4 did W",
+            ])
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", tmp_path):
+                issues = check_docs_content_bloat()
+        session = [i for i in issues if "DOCS_SESSION_BLOAT" in i]
+        self.assertTrue(len(session) >= 1, f"Expected session bloat warning, got: {issues}")
+
+
 if __name__ == "__main__":
     unittest.main()

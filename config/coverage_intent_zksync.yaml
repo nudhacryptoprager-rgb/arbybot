@@ -2,15 +2,15 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (zkSync Era)
 #
-# CHAIN QUALITY STATUS (2026-03-10 session 2):
-#   Classification: FAIL_ALL_EXCLUDED (2 signals, 0 included)
-#   Evidence: runDir 105838 - 2 signals both excluded (4068bps, 1581bps)
-#   Root cause: $100 notional causes massive price impact on thin zkSync pools
-#     - 23/32 quotes are DEAD (>80% drift), only 4 OK (<30% drift)
-#     - Fee-tier spreads are 1500-4000bps due to liquidity-driven price differences
-#   Fix: Lower target_usd_notional from 100 to 25 to reduce price impact.
-#        At $25, pools should show more accurate mid-prices, tighter spreads.
-#   Target: ≥1 included signal (spread < 1000bps) for PASS status
+# CHAIN QUALITY STATUS (2026-03-10 session 3):
+#   Classification: REJECT_DOMINANT (49 rejects, 22 fetched, suspect 2/3)
+#   Evidence: runDir 120608 - 3 signals, 1 included (380bps WETH/USDC), $0.84
+#   Root cause: ZK/* pairs consistently PRICE_SANITY_FAILED + LIQUIDITY_ZERO
+#     USDC/USDT, WETH/WBTC, WETH/USDT all fail sanity (no anchors provided)
+#   Fix (session 3): Exclude ZK/*, add anchors for USDC/USDT + WETH/WBTC.
+#     Also exclude */USDT (WETH/USDT, ZK/USDT all PRICE_SANITY_FAILED).
+#   Remaining universe: WETH/USDC, wstETH/WETH, WBTC/USDC (with anchor).
+#   Target: suspect_count/total_count < 0.50
 #
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline on zkSync Era.
@@ -128,11 +128,15 @@ excluded_pair_hints:
   - "CHEEMS/*"     # Meme token, stale prices
   - "MUTE/*"       # Meme token, stale prices
   - "SPACE/*"      # Meme token, stale prices
+  - "ZK/*"         # Session 3: consistently PRICE_SANITY_FAILED + LIQUIDITY_ZERO
+  - "*/USDT"       # Session 3: WETH/USDT, ZK/USDT all fail PRICE_SANITY on zkSync
 
 # Price anchor overrides for sanity checking
 tokens_anchor_price:
   WETH_USDC: 2050.0     # aligned with tokens_usd_price
   WETH_WBTC: 0.030      # 2050/68000
+  USDC_USDT: 1.0        # Session 3: stablecoin anchor for sanity check
+  WBTC_USDC: 68000.0    # Session 3: BTC anchor for sanity check
   wstETH_WETH: 1.22     # ~1.22 WETH per wstETH
 
 # Price sanity gates (relaxed for bootstrap)

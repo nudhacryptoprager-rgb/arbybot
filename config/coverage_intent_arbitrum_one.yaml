@@ -2,13 +2,14 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (arbitrum_one)
 #
-# CHAIN QUALITY STATUS (2026-03-10 session 2):
-#   Classification: PASS (primary working chain)
-#   Evidence: runDir 110227 - 4 signals, 3 included, 1 excluded (ARB/WETH 1359bps)
-#     - WETH/USDT, WBTC/WETH, WBTC/USDC all included (cross-dex, 32-57bps)
-#     - ARB/WETH at 1359bps correctly excluded by suspect_spread_bps_hard=500
-#   Rolling: agg_status=PASS, 98/116 data runs, $917.36 total_net_usdc
-#   No action needed — Arbitrum coverage is stable
+# CHAIN QUALITY STATUS (2026-03-10 session 3):
+#   Classification: PASS (primary working chain, clean after ARB/WETH isolation)
+#   Evidence: runDir 120509 - 5 signals, 4 included, 1 excluded (ARB/WETH $32.48)
+#     - WETH/USDC $0.10, WETH/USDT $1.22, WBTC/WETH $0.94, WBTC/USDC $1.21
+#     - ARB/WETH excluded by suspect_spread_bps_hard=500 (inflated one-leg signal)
+#   Fix (session 3): ARB/WETH also disabled in real_minimal.yaml for cleaner M4 metrics
+#   Rolling: agg_status=PASS, stable
+#   No further action needed
 #
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline.

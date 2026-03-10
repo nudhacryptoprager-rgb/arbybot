@@ -2,15 +2,15 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (mantle)
 #
-# CHAIN QUALITY STATUS (2026-03-10 session 2):
-#   Classification: LOW_SAMPLE (2 included signals)
-#   Evidence: runDir 105941 - 4 signals, 2 included, 2 excluded
-#     - cmETH/METH 23bps [included], mETH/WETH 252bps [included]
-#     - WETH/WMNT 543bps [excluded at default 500], USDC/USDT 2884bps [excluded]
-#     - 21 SUSPECT_LIQUIDITY rejects (high gas_estimate from agni_v3)
-#   Fix: Raise suspect_spread_bps_hard to 750 (includes WETH/WMNT at 543bps)
-#        USDC/USDT at 2884bps stays excluded (clearly fake spread)
-#   Target: ≥3 included signals for PASS (non-LOW_SAMPLE)
+# CHAIN QUALITY STATUS (2026-03-10 session 3):
+#   Classification: TOP_PAIR_DOMINANCE_WARN (WETH/WMNT 67% > 60%)
+#   Evidence: runDir 121135 - 4 signals, 3 included ($7.53)
+#     - cmETH/METH 23bps [$0.09], mETH/WETH 252bps [$2.37], WETH/WMNT 522bps [$5.07]
+#     - USDC/USDT 2884bps excluded (>750 suspect threshold, clearly stale)
+#   Fix (session 3): Add WETH_WMNT anchor for sanity check.
+#     Add USDC/USDT to excluded_pair_hints (consistently stale 2884bps).
+#     SAME_DEX_PRESENT expected (single DEX agni_v3 only).
+#   Target: TOP_PAIR_DOMINANCE_WARN ≤ 0.60 (add more non-WETH/WMNT breadth)
 #
 # CHAIN STATUS (historical): SIGNAL_PRODUCING via same-DEX fallback
 #   - require_cross_dex=false because ALL cross-dex routes trigger MIXED_SOURCE
@@ -111,6 +111,7 @@ tokens_anchor_price:
   METH_WETH: 1.024       # mETH ~1.024x WETH (staked ETH)
   CMETH_METH: 1.0        # cmETH ~1.0x mETH (wrapper)
   WETH_USDC: 2050.0      # aligned with tokens_usd_price
+  WETH_WMNT: 2562.5      # Session 3: 2050/0.80 — helps PRICE_SANITY on WMNT pools
   USDC_USDT: 1.0         # stablecoin peg
 
 # Price sanity gates (relaxed for bootstrap)
@@ -118,6 +119,11 @@ price_sanity_max_deviation_bps: 10000
 
 # Drift tolerance (relaxed for bootstrap)
 drift_warning_pct: 30.0
+
+# Session 3: Exclude consistently stale pairs
+excluded_pair_hints:
+  - "USDC/USDT"    # 2884bps consistently — stale/bad quote on agni_v3
+  - "PUFF/*"       # Meme token, thin liquidity
 
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE

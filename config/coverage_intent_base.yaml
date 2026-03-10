@@ -2,14 +2,14 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (Base)
 #
-# CHAIN QUALITY STATUS (2026-03-10 session 2):
-#   Classification: TOP_PAIR_DOMINANCE_HIGH (WETH/USDC 91.7% of net share)
-#   Evidence: runDir 105655 - 8 signals, 5 included (4 WETH/USDC + 1 cbETH/WETH)
-#   Root cause: WETH/USDC has deepest cross-dex liquidity, dominates net PNL
-#   Fix: Add wstETH/WETH, rETH/WETH to intent.txt + tokens_usd_price.
-#        These LST pairs have cross-dex pools (UNI+SUSHI+PCSWAP) on Base.
-#        Additional non-WETH/USDC signals should dilute dominance below 80%.
-#   Target: top_pair_share < 0.80 (currently 0.917)
+# CHAIN QUALITY STATUS (2026-03-10 session 3):
+#   Classification: TOP_PAIR_DOMINANCE_HIGH (WETH/USDC 93% of net share)
+#   Evidence: runDir 121237 - 10 signals, 7 included (4 WETH/USDC dominate)
+#   Root cause: wstETH/rETH missing from core_tokens.yaml → pairs_skipped_no_tokens=2
+#   Fix (session 3): Added wstETH + rETH to config/core_tokens.yaml base section.
+#        Discovery now resolves wstETH/WETH and rETH/WETH via factory.getPool().
+#        Cross-DEX pools (UNI+SUSHI+PCSWAP) should add 2+ non-WETH/USDC signals.
+#   Target: top_pair_share < 0.80 (was 0.93)
 #
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline on Base.

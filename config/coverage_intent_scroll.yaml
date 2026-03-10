@@ -2,14 +2,15 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (Scroll)
 #
-# CHAIN QUALITY STATUS (2026-03-10 session 2):
-#   Classification: PROBE_ONLY (1 signal, 0 included, 3709bps excluded)
-#   Evidence: runDir 110012 - 12 quotes (3 OK, 1 DRIFT, 8 DEAD)
-#     - 1 signal: WETH/USDC sushiswap_v3→sushiswap_v3 at 3709bps → excluded
-#     - 9 LIQUIDITY_ZERO + 6 NOTIONAL_DRIFT + 1 PRICE_SANITY_FAILED rejects
-#   Root cause: Only 1 DEX (SushiSwap V3) with quoter_v2. Very thin liquidity.
-#   Action: PROBE_ONLY — NOT arbitrage-ready. Do NOT claim SIGNAL_PRODUCING.
+# CHAIN QUALITY STATUS (2026-03-10 session 3):
+#   Classification: MARKET_BLOCKED / PROBE_ONLY
+#   Evidence: runDir 121521 - 1 signal, 0 included (SAME_DEX 3709bps excluded)
+#     - Only 1 DEX (sushiswap_v3) with quoter_v2 compatibility on Scroll
+#     - nuri_v3 is algebra/quoter, NOT quoter_v2-compatible
+#     - All signals are same-DEX fee-tier arb → excluded by policy
+#   Status: FAIL (expected). NOT arbitrage-ready. NOT SIGNAL_PRODUCING.
 #   BLOCKED_BY: Lack of second quoter_v2-compatible DEX on Scroll.
+#   Resolution: Monitor Scroll DEX ecosystem. Re-evaluate when 2nd DEX deploys.
 #
 # CHAIN STATUS (historical): **THIN FALLBACK-ONLY** (NOT cross-DEX ready)
 #   - nuri_v3 (algebra/quoter) is NOT quoter_v2-compatible

@@ -259,3 +259,36 @@ def test_profit_truth_flags_propagated():
         assert report2["profit_truth_available"] is False
         assert report2["profit_truth_source"] == "ONE_LEG_DIAGNOSTIC"
         assert report2["profit_realism_status"] == "ROUNDTRIP_NOT_PROFITABLE"
+
+
+def test_paper_net_pnl_usdc_uses_canonical_m4_sim():
+    """v3.2.73: paper_net_pnl_usdc must use m4_sim_net_usdc (included-only) when available.
+
+    Previously paper_net_pnl_usdc was computed from all signals' gross spread,
+    which inflated the value by outlier suspect signals (e.g. ARB/WETH at $32).
+    Now paper_net_pnl_usdc uses execution_report.total_net_usdc (included-only).
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        run_path, truth = make_consistent_run(Path(tmp))
+
+        # Create execution_report with known total_net_usdc
+        exec_report = {
+            "schema_version": "m4:execution:v2.0",
+            "total_net_usdc": 3.4633,
+            "included_signals_count": 4,
+            "excluded_signals_count": 1,
+            "simulations": [],
+            "cost_model": {"gas_usd": 0.10, "slippage_bps": 5},
+        }
+        (run_path / "execution_report_1.json").write_text(json.dumps(exec_report))
+
+        report = aggregate_run(run_path)
+        # paper_net_pnl_usdc should match the canonical m4 value, not gross-based
+        assert report["paper_net_pnl_usdc"] == round(3.4633, 6), (
+            f"paper_net_pnl_usdc should use m4_sim_net_usdc (3.4633), "
+            f"got {report['paper_net_pnl_usdc']}"
+        )
+        pnl = report.get("theoretical_net_profit", {})
+        assert pnl["m4_sim_net_usdc"] == 3.4633
+        assert pnl["net_pnl_usdc"] == 3.4633

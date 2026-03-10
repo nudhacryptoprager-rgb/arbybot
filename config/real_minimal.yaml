@@ -72,9 +72,14 @@ pairs:
     token_out: WETH
     fee_tiers: [500, 3000]
   # v2.5.2: fee=500 re-enabled for Uniswap fee-tier arbitrage (Sushi pool still disabled)
-  - token_in: ARB
-    token_out: WETH
-    fee_tiers: [500, 3000]
+  # v3.2.73: ARB/WETH DISABLED — one-leg outlier with $32+ sim_net
+  # Consistently produces suspect spread (1359bps) that inflates all_signals metrics
+  # Evidence: runDir 120509 - $32.48 excluded signal vs $3.46 included total
+  # Coverage config already excludes ARB/* via excluded_pair_hints
+  # RESTORE WHEN: M4.2 roundtrip truth validates ARB/WETH spread is real
+  # - token_in: ARB
+  #   token_out: WETH
+  #   fee_tiers: [500, 3000]
   # NOTE: LINK re-enabled for signals diversity (quality gate requirement)
   # NOTE: LINK/WETH - fee 500 disabled on Sushiswap (SUSPECT_LIQUIDITY)
   - token_in: LINK

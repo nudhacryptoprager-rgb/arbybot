@@ -28,7 +28,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.12.0"
+__version__ = "1.13.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -1279,6 +1279,86 @@ def check_stale_current_state_claims() -> List[str]:
     return issues
 
 
+# Thresholds for docs content bloat detection (check [19])
+DOCS_BLOAT_LINE_LIMITS = {
+    "docs/DEV_REPORT_LATEST.md": 250,
+    "docs/status/Status_M5_0.md": 400,
+    "docs/status/Status_M4.md": 500,
+}
+DOCS_BLOAT_DEFAULT_STATUS_LIMIT = 300  # for any Status_*.md not listed above
+
+
+def check_docs_content_bloat() -> List[str]:
+    """v1.13.0: Detect accumulated narrative bloat in docs.
+
+    Checks for:
+    - Docs files exceeding line-count thresholds (historical cruft accumulation)
+    - Multiple session narrative blocks in a single file (should be consolidated)
+
+    Returns:
+        List of warning messages
+    """
+    issues: List[str] = []
+    docs_dir = PROJECT_ROOT / "docs"
+
+    if not docs_dir.exists():
+        return []
+
+    # 1. Line-count checks for specific files
+    for rel_str, limit in DOCS_BLOAT_LINE_LIMITS.items():
+        fpath = PROJECT_ROOT / rel_str
+        if fpath.exists():
+            try:
+                line_count = len(fpath.read_text(encoding="utf-8").splitlines())
+                if line_count > limit:
+                    issues.append(
+                        f"WARN: DOCS_CONTENT_BLOAT: {rel_str} has {line_count} lines "
+                        f"(limit {limit}). Consolidate historical narrative or move to archive."
+                    )
+            except Exception:
+                pass
+
+    # Also check any Status_*.md not in the explicit map
+    status_dir = docs_dir / "status"
+    if status_dir.exists():
+        for md_file in status_dir.glob("Status_*.md"):
+            rel_str = str(md_file.relative_to(PROJECT_ROOT)).replace("\\", "/")
+            if rel_str not in DOCS_BLOAT_LINE_LIMITS:
+                try:
+                    line_count = len(md_file.read_text(encoding="utf-8").splitlines())
+                    if line_count > DOCS_BLOAT_DEFAULT_STATUS_LIMIT:
+                        issues.append(
+                            f"WARN: DOCS_CONTENT_BLOAT: {rel_str} has {line_count} lines "
+                            f"(limit {DOCS_BLOAT_DEFAULT_STATUS_LIMIT}). "
+                            f"Consolidate or move historical sections to archive."
+                        )
+                except Exception:
+                    pass
+
+    # 2. Session narrative accumulation in DEV_REPORT and active Status files
+    session_pattern = re.compile(r"session\s+\d+", re.IGNORECASE)
+    check_files = [
+        docs_dir / "DEV_REPORT_LATEST.md",
+        status_dir / "Status_M5_0.md" if status_dir.exists() else None,
+    ]
+    for fpath in check_files:
+        if fpath is None or not fpath.exists():
+            continue
+        try:
+            content = fpath.read_text(encoding="utf-8")
+            sessions_mentioned = set(session_pattern.findall(content.lower()))
+            if len(sessions_mentioned) > 3:
+                rel_str = str(fpath.relative_to(PROJECT_ROOT)).replace("\\", "/")
+                issues.append(
+                    f"WARN: DOCS_SESSION_BLOAT: {rel_str} references {len(sessions_mentioned)} "
+                    f"distinct sessions. Consolidate to latest session only."
+                )
+        except Exception:
+            pass
+
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
@@ -1439,6 +1519,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: No stale runDir references in docs")
+    
+    print("\n[19] Checking docs content bloat...")
+    issues = check_docs_content_bloat()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: Docs within size limits")
     
     # Summary
     print("\n" + "=" * 50)

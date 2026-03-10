@@ -5,14 +5,16 @@
 # v3.2.58 FROZEN: This config is stable for same-DEX fallback mode.
 # Changes require explicit approval due to MIXED_SOURCE constraints.
 #
-# CHAIN QUALITY STATUS (2026-03-10 session 2):
-#   Classification: LOW_SAMPLE (1 included signal)
-#   Evidence: runDir 105605 - 2 signals, 1 included (wstETH/WETH 322bps)
-#     - WETH/USDT excluded at 823bps > default suspect_spread_bps_hard=500
-#     - WETH/WBTC fee=100 excluded at 33.3% drift > drift_warning_pct=30%
-#   Fix: Raise suspect_spread_bps_hard to 1000 (includes WETH/USDT 823bps)
-#        Widen drift_warning_pct to 40% (includes WETH/WBTC fee=100 at 33.3%)
-#   Target: ≥3 included signals for PASS status
+# CHAIN QUALITY STATUS (2026-03-10 session 3):
+#   Classification: LOW_SAMPLE (2 included signals, need ≥3)
+#   Evidence: runDir 121004 - 3 signals, 2 included ($11.03)
+#     - WETH/USDT 810bps included (within 1000 suspect threshold)
+#     - wstETH/WETH 322bps included
+#     - WETH/WBTC 3949bps excluded (>1000 suspect threshold)
+#   Fix (session 3): Add WETH_WBTC anchor for price sanity. Lower notional
+#     from 100→50 to reduce price impact on thin pools, especially WETH/WBTC.
+#   Single DEX (pancakeswap_v3): SAME_DEX fee-tier arb only.
+#   Target: ≥3 included signals for PASS without LOW_SAMPLE
 #
 # CHAIN STATUS (historical): FALLBACK-ONLY (no cross-DEX readiness)
 #   - lynex_v3 (algebra/quoter) is NOT quoter_v2-compatible
@@ -72,15 +74,17 @@ use_quoter_v2: true
 use_multicall: true
 
 # USD-notional sizing (M4.2)
+# v3.2.73: Lowered from 100 to 50 — thin Linea pools have high price impact
+# WETH/WBTC at $100 shows 3949bps spread; at $50, impact should be ~2x less
 use_usd_notional: true
-target_usd_notional: 100.0
+target_usd_notional: 50.0
 
 # Spread economics
 # v3.2.50: min_spread_bps lowered from 5 to 3 for better signal capture
 # Rationale: Linea gas_usd_estimate=0.05 means 3bps spread is still profitable
 #            on 100 USD notional (0.03 USD spread > 0.05 USD gas)
 min_spread_bps: 3
-paper_size_usd: 100
+paper_size_usd: 50
 paper_slippage_bps: 5
 gas_usd_estimate: 0.05  # Linea is cheaper
 
@@ -119,6 +123,7 @@ tokens_usd_price:
 tokens_anchor_price:
   WETH_USDC: 2050.0     # aligned with tokens_usd_price
   WETH_USDT: 2050.0     # aligned with tokens_usd_price
+  WETH_WBTC: 0.030      # Session 3: 2050/68000, helps PRICE_SANITY for WBTC pools
   wstETH_WETH: 1.22     # ~1.22 WETH per wstETH
 
 # Price sanity gates (relaxed for bootstrap)
