@@ -2,9 +2,10 @@
 
 **Status**: [ACTIVE]
 **Updated**: 2026-03-10
-**Tests**: 1593 passed, 2 skipped
-**Evidence runDirs**: ci_m5_gate_20260310_{142510,142534,142715,142825,142925,142937} (6-chain smoke)
+**Tests**: 1597 passed, 2 skipped
+**Evidence runDirs**: ci_m5_gate_20260310_{171754,171232,171441,171524,171642,171714} (2h long scan last runs)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json}`
+**Evidence long scan**: `data/runs/_incidents/long_scan_latest.json` (115 runs, 302 included signals, $275.20 paper net)
 
 ---
 
@@ -19,15 +20,16 @@
 ## Chain Quality Classification (current)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling stable, cross-dex signals confirmed)
-Base:           PASS/WARN (TOP_PAIR_DOMINANCE_HIGH)
-Mantle:         PASS/WARN (TOP_PAIR_DOMINANCE_WARN)
-Linea:          PASS/WARN (LOW_SAMPLE)
-zkSync:         PASS/WARN (LOW_SAMPLE)
-Scroll:         MARKET_BLOCKED (single DEX, probe-only, accepted-fail)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, cross-dex=3, 20/20 PASS in 2h scan)
+base:           SIGNAL_PRODUCING (cross-dex=15, TOP_PAIR_DOMINANCE_HIGH, 19/19 PASS)
+mantle:         SIGNAL_PRODUCING (same-dex, LOW_SAMPLE, SAME_DEX_PRESENT, 19/19 PASS)
+zksync:         SIGNAL_PRODUCING (cross-dex=10, LOW_SAMPLE, SAME_DEX_PRESENT, 19/19 PASS)
+linea:          SIGNAL_PRODUCING (same-dex, LOW_SAMPLE, SAME_DEX_PRESENT, 19/19 PASS)
+scroll:         INFRA_READY (single DEX, probe-only, accepted-fail, 0/19 PASS)
 ```
 
-**Result**: 5 PASS / 1 FAIL (Scroll) / 0 INFRA_FAIL
+**2h scan result**: 96 PASS / 15 FAIL (all Scroll) / 4 NO_DATA (all Scroll) / 0 INFRA_FAIL
+**Profit truth**: NOT YET — all signals ONE_LEG_DIAGNOSTIC, total_profitable_roundtrips=0
 
 ---
 
@@ -139,7 +141,7 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ## Next Steps
 
-- Verify cross_dex_pairs_count fix with fresh online scan
-- Long scan with `--accepted-fail-chains scroll`
-- M4.2/M4.3: profit truth via real execution
-- Base: wstETH/rETH pool discovery
+- M4.2/M4.3: Enable roundtrip evaluation to convert ONE_LEG_DIAGNOSTIC → verified profit truth
+- Base: Reduce TOP_PAIR_DOMINANCE_HIGH via pair diversification
+- Mantle/Linea/zkSync: Address SAME_DEX_PRESENT and LOW_SAMPLE warnings
+- Scroll: Keep probe-only/accepted-fail until second DEX venue appears
