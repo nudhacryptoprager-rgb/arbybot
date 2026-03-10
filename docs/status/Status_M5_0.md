@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]  
 **Updated**: 2026-03-10  
-**Tests**: 1536 passed, 2 skipped  
-**Evidence runDirs**: `ci_m5_gate_20260310_095332` (Arbitrum ✅), `ci_m5_gate_20260310_095028` (Base ✅ NEW), `ci_m5_gate_20260310_095552` (zkSync ✅ NEW), `ci_m5_gate_20260310_095423` (Mantle ✅), `ci_m5_gate_20260310_095638` (Scroll), `ci_m5_gate_20260310_095806` (Linea)  
+**Tests**: 1543 passed, 2 skipped  
+**Evidence runDirs**: `ci_m5_gate_20260310_110227` (Arbitrum ✅), `ci_m5_gate_20260310_110030` (Arbitrum cov ✅), `ci_m5_gate_20260310_105655` (Base ✅), `ci_m5_gate_20260310_105838` (zkSync ❌), `ci_m5_gate_20260310_105941` (Mantle ✅), `ci_m5_gate_20260310_110012` (Scroll ❌), `ci_m5_gate_20260310_105605` (Linea ✅)  
 **Evidence rolling**: `data/runs/_rolling/_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ---
@@ -24,16 +24,23 @@
 
 **Resolution (2026-03-10)**: Updated all configs with current market prices. Base + zkSync upgraded to SIGNAL_PRODUCING.
 
-### Fresh Chain Quality Results (2026-03-10, 09:50xx)
+### Fresh Chain Quality Results (2026-03-10, 11:00 — post-review)
 
-| Chain | signals_count | included | net_usdc | Status | runDir |
-|-------|---------------|----------|----------|--------|--------|
-| **Arbitrum** | **5** | 4 | **$2.93** | ✅ SIGNAL_PRODUCING | 095332 |
-| **Base** | **8** | 5 | **$2.80** | ✅ SIGNAL_PRODUCING (NEW) | 095028 |
-| **zkSync** | **2** | 2 | **$6.52** | ✅ SIGNAL_PRODUCING (NEW) | 095552 |
-| **Mantle** | **3** | 1 | **$0.09** | ✅ SIGNAL_PRODUCING | 095423 |
-| Scroll | 1 | 0 | $0 | ⚠️ INFRA_READY | 095638 |
-| Linea | 2 | 0 | $0 | ❌ PRICE_SCALE_FAIL | 095806 |
+| Chain | M5 Gate | run_summary.status | quality_status | Key Issues | runDir |
+|-------|---------|-------------------|----------------|------------|--------|
+| **Arbitrum** | PASS | **PASS** | WARN | WARN_PROFIT_DIAGNOSTIC | 110227 |
+| **Arbitrum (cov)** | PASS | **PASS** | WARN | WARN_CRITICAL_REJECTS | 110030 |
+| **Base** | PASS | **PASS** | WARN | WARN_TOP_PAIR_DOMINANCE_HIGH | 105655 |
+| **Mantle** | PASS | **PASS** | WARN | WARN_LOW_SAMPLE, WARN_SAME_DEX | 105941 |
+| **Linea** | PASS | **PASS** | WARN | WARN_DEX_HEALTH_CRITICAL | 105605 |
+| zkSync | PASS | **FAIL** | FAIL_QUALITY | FAIL_ALL_EXCLUDED | 105838 |
+| Scroll | PASS | **FAIL** | FAIL_QUALITY | FAIL_ALL_EXCLUDED | 110012 |
+
+**Previous session over-claims corrected**:
+- Base: was SIGNAL_PRODUCING (run_summary=FAIL, fragile_rate=0.60). FIX: removed VIRTUAL/WELL → PASS
+- zkSync: was SIGNAL_PRODUCING (2 signals). Now honestly FAIL (FAIL_ALL_EXCLUDED)
+- Linea: was PRICE_SCALE_FAIL. FIX: disabled 2 pools → PASS
+- Mantle: was SIGNAL_PRODUCING. FIX: removed stratum (MIXED_SOURCE noise) → PASS/WARN
 
 ### Profit Invariant VERIFIED
 
@@ -80,31 +87,37 @@
 - net_usdc=$0.03 (minimal but positive)
 - **Conclusion**: Low volume but working
 
-### Chain Quality Classification (2026-03-10)
+### Chain Quality Classification (2026-03-10 11:00 honest)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (5 signals, 4 included, $2.93 net)
-Base:           SIGNAL_PRODUCING (8 signals, 5 included, $2.80 net) ← NEW
-zkSync:         SIGNAL_PRODUCING (2 signals, 2 included, $6.52 net) ← NEW
-Mantle:         SIGNAL_PRODUCING (3 signals, 1 included, $0.09 net)
-Scroll:         INFRA_READY (1 signal, 0 included - market thin)
-Linea:          PRICE_SCALE_FAIL (2 signals, 0 included - 1 effective DEX)
+arbitrum_one:   PASS/WARN (rolling stable, m4_sim_net_usdc=$2.86)
+Base:           PASS/WARN (was FAIL, fixed: VIRTUAL/WELL removed)
+Mantle:         PASS/WARN (stratum removed, single-DEX fee-tier arb)
+Linea:          PASS/WARN (was FAIL, fixed: 2 PRICE_SCALE pools disabled)
+zkSync:         FAIL (FAIL_ALL_EXCLUDED, infra works, no tradeable signals)
+Scroll:         FAIL (FAIL_ALL_EXCLUDED, 1 DEX only, market thin)
 ```
 
 ### Actionable Conclusions
 
-1. **Arbitrum is SIGNAL_PRODUCING** - 4 signals, $3.72 net proves infra works ✅
-2. **Mantle is SIGNAL_PRODUCING** - 3 signals, 1 included, $0.03 net ✅
-3. **zkSync is LIQUIDITY_ZERO** - Market impaired, no arbitrage opportunities
-4. **Scroll is BLOCKED_BY_SECOND_DEX** - Only 1 DEX active
-5. **Linea is PRICE_SCALE_FAIL** - 14.3% price scale exceeds threshold
-6. **Base needs investigation** - 2 DEX active but 0 signals
+1. **Arbitrum is PASS/WARN** - rolling stable, $2.86 m4_sim_net_usdc ✅
+2. **Base is PASS/WARN** - VIRTUAL/WELL removed, fragile_rate dropped ✅
+3. **Mantle is PASS/WARN** - stratum removed (MIXED_SOURCE), single-DEX fee-tier arb ✅
+4. **Linea is PASS/WARN** - 2 PRICE_SCALE pools disabled, gate now PASS ✅
+5. **zkSync is FAIL** - FAIL_ALL_EXCLUDED despite relaxed policy; market has no tradeable signals
+6. **Scroll is FAIL** - FAIL_ALL_EXCLUDED, 1 DEX only, needs 2nd DEX or acceptance as MARKET_BLOCKED
+
+### Guardrails Added (2026-03-10)
+- `check_repo_safety.py` check [17]: warns when SIGNAL_PRODUCING claim contradicts run_summary.status=FAIL
+- `all_signals_net_pnl_usdc_is_diagnostic: true` in daily_report (prevents misuse as real profit)
+- Linea PRICE_SCALE regression test: 4 tests in test_ci_m5_gate_negative_price_scale.py
+- Mantle test updated: expects 1 DEX (stratum removed)
 
 ### Status Resolution
 
-- **Primary blocker `multi-chain signal production quality`**: 2 chains RESOLVED (Arbitrum, Mantle)
-- **Profit invariant**: VERIFIED with 4 new tests
-- **Path forward**: Focus on Arbitrum/Mantle for M4 execution; other chains are MARKET_BLOCKED
+- **Over-claim correction**: Previous session labeled 4/6 as SIGNAL_PRODUCING; honest review shows 4/6 PASS, 2/6 FAIL
+- **Config fixes applied**: Base (VIRTUAL/WELL), Linea (disabled_pools), Mantle (stratum), zkSync (cross_dex), Arbitrum (suspect_spread), Scroll (comment-only)
+- **Path forward**: Arbitrum/Base/Mantle/Linea are PASS; zkSync/Scroll are MARKET_BLOCKED (accept or find 2nd DEX)
 
 ### cost_model_version
 

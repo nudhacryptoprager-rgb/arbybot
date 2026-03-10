@@ -1,18 +1,14 @@
 # tests/unit/test_mantle_mixed_source.py
 """
-Tests for Mantle MIXED_SOURCE behavior and single-DEX fallback.
+Tests for Mantle MIXED_SOURCE behavior and single-DEX config.
 
-Mantle has two DEXes:
+Mantle previously had two DEXes:
 - agni_v3 (uniswap_v3 adapter) → uses quoter_v2
 - stratum (ve33 adapter) → uses getAmountOut (ve33_getAmountOut)
 
-Cross-dex routes (stratum<->agni_v3) trigger MIXED_SOURCE because
-the quote sources are different. This is by design.
-
-Solution: Set require_cross_dex=false to allow single-DEX fee-tier
-arbitrage (agni_v3->agni_v3), which uses consistent quoter_v2 source.
-
-v3.2.51: Initial implementation
+Cross-dex routes (stratum<->agni_v3) triggered MIXED_SOURCE because
+the quote sources are different. stratum was removed to eliminate
+MIXED_SOURCE noise; Mantle now runs agni_v3 only with fee-tier arb.
 """
 
 import pytest
@@ -35,15 +31,14 @@ class TestMantleMixedSourcePolicy:
             "(ve33_getAmountOut vs quoter_v2)."
         )
 
-    def test_mantle_has_two_dexes(self):
-        """Mantle should have exactly 2 DEXes configured."""
+    def test_mantle_has_one_dex(self):
+        """Mantle should have exactly 1 DEX (agni_v3) after stratum removal."""
         with open("config/coverage_intent_mantle.yaml") as f:
             config = yaml.safe_load(f)
         
         dexes = config.get("dexes", [])
-        assert len(dexes) == 2, f"Expected 2 DEXes, got {len(dexes)}"
+        assert len(dexes) == 1, f"Expected 1 DEX (stratum removed), got {len(dexes)}"
         assert "agni_v3" in dexes, "agni_v3 (uniswap_v3) required"
-        assert "stratum" in dexes, "stratum (ve33) required"
 
     def test_mantle_dexes_yaml_has_correct_adapter_types(self):
         """Verify dexes.yaml has correct adapter types for Mantle DEXes."""

@@ -484,8 +484,11 @@ def aggregate_run(
         "net_pnl_usdc": canonical_net_pnl,
         # Keep truth value for transparency/debugging
         "truth_net_pnl_usdc": truth_net_pnl,
-        # v3.2.65: Add all_signals_net_pnl_usdc for transparency
+        # v3.2.70: DIAGNOSTIC ONLY — includes excluded/suspect signals' theoretical pnl.
+        # NOT tradeable profit. Use net_pnl_usdc for canonical included-only net.
+        # Can be much higher than net_pnl_usdc due to outlier suspect signals (e.g. ARB/WETH).
         "all_signals_net_pnl_usdc": float(execution_pnl_all.get("net_pnl_usdc") or 0),
+        "all_signals_net_pnl_usdc_is_diagnostic": True,
         "cost_model_available": execution_pnl_included.get("cost_model_available", False),
         "cost_model_version": "paper_realistic" if m4_sim_net_usdc is not None else execution_pnl_included.get("cost_model_version"),
         # v3.2.68: m4_sim_net_usdc is now identical to net_pnl_usdc (invariant)

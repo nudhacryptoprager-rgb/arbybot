@@ -169,5 +169,64 @@ class TestPriceScale_Bounds(unittest.TestCase):
                 self.assertIn(pair, PRICE_SCALE_BOUNDS, f"Missing bounds for {pair}")
 
 
+class TestPriceScale_LineaRegression(unittest.TestCase):
+    """Regression: Linea PRICE_SCALE 11.8% violation (runDir 095809).
+    
+    Linea pancakeswap_v3 produced:
+    - WETH/USDC fee=2500: price=0.001476 (inverted, expected ~2050)
+    - WETH/USDT fee=500: price=93.0456 (below [100, 50000] range)
+    2/17 quotes = 11.8% > 10% threshold → FAIL.
+    """
+    
+    def test_linea_inverted_weth_usdc_fails(self):
+        """WETH/USDC=0.001476 (inverted) → violation detected."""
+        data = {
+            "quotes_sample": [
+                {"token_in": "WETH", "token_out": "USDC", "price_exact": "0.001476"},
+            ]
+        }
+        ok, msg = validate_price_scale(data, require_real=True)
+        self.assertFalse(ok)
+        self.assertIn("WETH/USDC", msg)
+    
+    def test_linea_weth_usdt_below_range_fails(self):
+        """WETH/USDT=93.0456 (below 100 min) → violation detected."""
+        data = {
+            "quotes_sample": [
+                {"token_in": "WETH", "token_out": "USDT", "price_exact": "93.0456"},
+            ]
+        }
+        ok, msg = validate_price_scale(data, require_real=True)
+        self.assertFalse(ok)
+        self.assertIn("WETH/USDT", msg)
+    
+    def test_linea_violation_rate_above_10pct(self):
+        """2 bad quotes out of 17 = 11.8% > 10% threshold → FAIL in real mode."""
+        good_quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price_exact": "2050.0"},
+        ] * 15
+        bad_quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price_exact": "0.001476"},
+            {"token_in": "WETH", "token_out": "USDT", "price_exact": "93.0456"},
+        ]
+        data = {"quotes_sample": good_quotes + bad_quotes}
+        ok, msg = validate_price_scale(data, require_real=True)
+        self.assertFalse(ok)
+        self.assertIn("PRICE_SCALE VIOLATION", msg)
+    
+    def test_linea_violation_rate_at_10pct_passes(self):
+        """Exactly 10% violation rate (2/20) → PASS (≤10% tolerant)."""
+        good_quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price_exact": "2050.0"},
+        ] * 18
+        bad_quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price_exact": "0.001476"},
+            {"token_in": "WETH", "token_out": "USDT", "price_exact": "93.0456"},
+        ]
+        data = {"quotes_sample": good_quotes + bad_quotes}
+        ok, msg = validate_price_scale(data, require_real=True)
+        self.assertTrue(ok)
+
+
 if __name__ == "__main__":
     unittest.main()

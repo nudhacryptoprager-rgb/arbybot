@@ -1385,5 +1385,84 @@ class TestDevReportPlaceholders(unittest.TestCase):
         self.assertEqual(len(placeholder_issues), 0)
 
 
+class TestChainQualityClaims(unittest.TestCase):
+    """v3.2.70: Test check_chain_quality_claims function.
+    
+    Validates that SIGNAL_PRODUCING claims are backed by run_summary.status=PASS.
+    """
+    
+    def test_signal_producing_with_fail_status_warns(self):
+        """SIGNAL_PRODUCING claim + run_summary.status=FAIL → warning."""
+        import json
+        import tempfile
+        from scripts.check_repo_safety import check_chain_quality_claims
+        
+        mock_report = """
+| Chain | RunDir | M5 Gate | signals | net_usdc | Status |
+|-------|--------|---------|---------|----------|--------|
+| **Base** | 095028 | PASS | 8 | $2.80 | ✅ SIGNAL_PRODUCING |
+"""
+        mock_run_summary = {
+            "status": "FAIL",
+            "quality_status": "FAIL_QUALITY",
+            "reasons": ["FAIL_FRAGILE_HIGH", "WARN_TOP_PAIR_DOMINANCE_HIGH"],
+        }
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            runs_dir = tmp_path / "data" / "runs" / "ci_m5_gate_20260310_095028" / "reports"
+            runs_dir.mkdir(parents=True)
+            (runs_dir / "run_summary_20260310_085220.json").write_text(
+                json.dumps(mock_run_summary), encoding='utf-8'
+            )
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_chain_quality_claims()
+        
+        mismatch_issues = [i for i in issues if "CHAIN_QUALITY_CLAIM_MISMATCH" in i]
+        self.assertEqual(len(mismatch_issues), 1)
+        self.assertIn("Base", mismatch_issues[0])
+        self.assertIn("FAIL", mismatch_issues[0])
+    
+    def test_signal_producing_with_pass_status_ok(self):
+        """SIGNAL_PRODUCING claim + run_summary.status=PASS → no issues."""
+        import json
+        import tempfile
+        from scripts.check_repo_safety import check_chain_quality_claims
+        
+        mock_report = """
+| Chain | RunDir | M5 Gate | signals | net_usdc | Status |
+|-------|--------|---------|---------|----------|--------|
+| **Arbitrum** | 095332 | PASS | 5 | $2.93 | ✅ SIGNAL_PRODUCING |
+"""
+        mock_run_summary = {
+            "status": "PASS",
+            "quality_status": "WARN",
+            "reasons": [],
+        }
+        
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (docs_dir / "DEV_REPORT_LATEST.md").write_text(mock_report, encoding='utf-8')
+            
+            runs_dir = tmp_path / "data" / "runs" / "ci_m5_gate_20260310_095332" / "reports"
+            runs_dir.mkdir(parents=True)
+            (runs_dir / "run_summary_20260310_085354.json").write_text(
+                json.dumps(mock_run_summary), encoding='utf-8'
+            )
+            
+            with patch('scripts.check_repo_safety.PROJECT_ROOT', tmp_path):
+                issues = check_chain_quality_claims()
+        
+        mismatch_issues = [i for i in issues if "CHAIN_QUALITY_CLAIM_MISMATCH" in i]
+        self.assertEqual(len(mismatch_issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

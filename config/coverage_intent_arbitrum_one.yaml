@@ -2,11 +2,11 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (arbitrum_one)
 #
-# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
+# CHAIN QUALITY STATUS (2026-03-10):
 #   Classification: SIGNAL_PRODUCING (primary working chain)
-#   Evidence: runDir 200317 - signals=5, included=4, net_usdc=$3.66
-#   Status: Infrastructure proven, consistent profit across runs
-#   Action: Primary chain for M4 execution testing
+#   Evidence: runDir 095332 - signals=5, included=4, net_usdc=$2.93, status=PASS
+#   Note: ARB/WETH excluded as suspect (large theoretical pnl inflates all_signals)
+#   Action: Exclude ARB/WETH from coverage scanning (thin/outlier pair)
 #
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline.
@@ -71,6 +71,12 @@ paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.10
 
+# v3.2.70: Spread thresholds for coverage mode
+# ARB/WETH has large theoretical spreads that inflate all_signals_net_pnl_usdc
+# Keep 500bps default (not relaxed like thin chains)
+suspect_spread_bps_hard: 500
+suspect_spread_bps: 300
+
 # Token USD prices (for notional sizing)
 tokens_usd_price:
   WETH: 2050.0       # on-chain ~2050 (2026-03-10, aligned with real_minimal.yaml)
@@ -85,6 +91,12 @@ tokens_usd_price:
 
 # Price sanity gates (M4 bootstrap - relaxed)
 price_sanity_max_deviation_bps: 5000  # 50% - will tighten in M5
+
+# v3.2.70: Pair exclusions for coverage mode
+# ARB/WETH produces outlier suspect signals with huge theoretical pnl
+# that inflate all_signals_net_pnl_usdc vs included net (2.93 vs 37.07)
+excluded_pair_hints:
+  - "ARB/WETH"   # Outlier: suspect spreads from thin ARB liquidity
 
 # Anchor prices for sanity checks (discovery_runtime resolves from quotes)
 tokens_anchor_price:

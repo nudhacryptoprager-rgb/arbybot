@@ -15,22 +15,21 @@
 > **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
 > Any report generated before final reruns is non-canonical by process.
 
-### Blocker Classification (2026-03-10 FRESH)
+### Blocker Classification (2026-03-10 11:00 FRESH — post-review fixes)
 ```
-code_blocker:            RESOLVED (pytest 1536 passed, M4 offline PASS)
+code_blocker:            RESOLVED (pytest 1543 passed, M4 offline PASS, ci_full_pipeline PASS)
 multicall_blocker:       RESOLVED (success_rate=1.0 all chains)
 websocket_blocker:       RESOLVED (all 6 chains)
 cost_reporting_blocker:  RESOLVED (cost_model_version v3)
-profit_contract_blocker: RESOLVED (invariant verified)
+profit_contract_blocker: RESOLVED (invariant verified, all_signals_net_pnl_usdc marked DIAGNOSTIC)
 notional_drift_blocker:  RESOLVED (all 6 coverage configs updated WETH 3000→2050)
 dex_compatibility_blocker:
-  Arbitrum: SIGNAL_PRODUCING (5 signals, $2.93, runDir 095332) ✅
-  Base:     SIGNAL_PRODUCING (8 signals, $2.80, runDir 095028) ✅ NEW
-  zkSync:   SIGNAL_PRODUCING (2 signals, $6.52, runDir 095552) ✅ NEW
-  Mantle:   SIGNAL_PRODUCING (3 signals, $0.09, runDir 095423) ✅
-  Scroll:   INFRA_READY (1 signal, 0 included, runDir 095638)
-  Linea:    PRICE_SCALE_FAIL (2 signals, 0 included, FAIL gate)
-  Linea:    FAIL (PRICE_SCALE 14.3%, runDir 221018, 1 DEX only)
+  Arbitrum: PASS/WARN (runDir 110030, M5 PASS, quality=WARN, WARN_CRITICAL_REJECTS)
+  Base:     PASS/WARN (runDir 105655, M5 PASS, quality=WARN, WARN_TOP_PAIR_DOMINANCE_HIGH)
+  Mantle:   PASS/WARN (runDir 105941, M5 PASS, quality=WARN, WARN_LOW_SAMPLE/SAME_DEX)
+  Linea:    PASS/WARN (runDir 105605, M5 PASS, quality=WARN, PRICE_SCALE fixed via disabled_pools)
+  zkSync:   FAIL (runDir 105838, M5 PASS, run_summary FAIL, FAIL_ALL_EXCLUDED)
+  Scroll:   FAIL (runDir 110012, M5 PASS, run_summary FAIL, FAIL_ALL_EXCLUDED)
 ```
 
 **v3.2.68 Fix (2026-03-09 22:10)**: Profit invariant fix + session propagation
@@ -98,47 +97,49 @@ dex_compatibility_blocker:
 7. **WS host validation**: Added validate_chain_rpc_consistency() in ci_m5_0_gate.py
 
 ## 0) Meta
-timestamp_utc: 2026-03-10T08:53:54Z  
-rolling_provenance: 2026-03-10T08:53:54Z (arbitrum_one, ci_m5_gate_20260310_095332)  
+timestamp_utc: 2026-03-10T10:02:49Z  
+rolling_provenance: 2026-03-10T10:02:49Z (arbitrum_one, ci_m5_gate_20260310_110227)  
 mode: ONLINE
-test_count: 1536 passed, 2 skipped
+test_count: 1543 passed, 2 skipped
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | Multi-chain signal production - fix stale tokens_usd_price causing NOTIONAL_DRIFT |
-| goal_status | **IN_PROGRESS** (4/6 chains SIGNAL_PRODUCING, 2/6 blocked) |
+| session_goal | Multi-chain signal production quality - fix over-claimed chain statuses, add guardrails |
+| goal_status | **IN_PROGRESS** (4/6 chains PASS, 2/6 FAIL) |
 | close_allowed | false |
-| remaining_blockers | Scroll: INFRA_READY (1 signal, 0 included); Linea: PRICE_SCALE_FAIL |
-| evidence_session_run_dirs | **ci_m5_gate_20260310_095332** (Arbitrum ✅), **ci_m5_gate_20260310_095028** (Base ✅ NEW), **ci_m5_gate_20260310_095552** (zkSync ✅ NEW), **ci_m5_gate_20260310_095423** (Mantle ✅), ci_m5_gate_20260310_095638 (Scroll), ci_m5_gate_20260310_095806 (Linea) |
-| primary_blocker_of_session | stale tokens_usd_price causing NOTIONAL_DRIFT (WETH=3000 vs real~2050) across all coverage configs |
-| blocker_status_before | ACTIVE (2/6 chains SIGNAL_PRODUCING, 4/6 blocked by drift/data quality) |
-| blocker_status_after | **RESOLVED** (4/6 SIGNAL_PRODUCING: Base, zkSync upgraded from 0 signals) |
+| remaining_blockers | zkSync: FAIL (FAIL_ALL_EXCLUDED); Scroll: FAIL (FAIL_ALL_EXCLUDED) |
+| evidence_session_run_dirs | **ci_m5_gate_20260310_110227** (Arbitrum ✅), **ci_m5_gate_20260310_110030** (Arbitrum cov ✅), **ci_m5_gate_20260310_105655** (Base ✅), **ci_m5_gate_20260310_105838** (zkSync ❌), **ci_m5_gate_20260310_105941** (Mantle ✅), **ci_m5_gate_20260310_110012** (Scroll ❌), **ci_m5_gate_20260310_105605** (Linea ✅) |
+| primary_blocker_of_session | over-claimed chain statuses (Base/zkSync labeled SIGNAL_PRODUCING but run_summary=FAIL) |
+| blocker_status_before | ACTIVE (agent over-claimed 4/6 as SIGNAL_PRODUCING; Base/Linea actually FAIL) |
+| blocker_status_after | **PARTIALLY RESOLVED** (Base+Linea upgraded FAIL→PASS, zkSync downgraded PASS→FAIL) |
 | docs_reread_confirmed | true |
 
-**Session Progress (2026-03-10 FRESH)** - Fresh same-session evidence:
+**Session Progress (2026-03-10 11:00 FRESH)** - Post-review honest evidence:
 
-| Chain | RunDir | M5 Gate | signals | net_usdc | Status |
-|-------|--------|---------|---------|----------|--------|
-| **Arbitrum** | **095332** | PASS | 5 | $2.93 | ✅ SIGNAL_PRODUCING |
-| **Base** | **095028** | PASS | 8 | **$2.80** | ✅ SIGNAL_PRODUCING (NEW) |
-| **zkSync** | **095552** | PASS | 2 | **$6.52** | ✅ SIGNAL_PRODUCING (NEW) |
-| **Mantle** | **095423** | PASS | 3 | **$0.09** | ✅ SIGNAL_PRODUCING |
-| Scroll | 095638 | PASS | 1 | $0 | ⚠️ INFRA_READY (1 signal, 0 included) |
-| Linea | 095806 | FAIL | 2 | $0 | ❌ PRICE_SCALE_FAIL |
+| Chain | RunDir | M5 Gate | run_summary.status | quality_status | Key Issues |
+|-------|--------|---------|-------------------|----------------|------------|
+| **Arbitrum** | **110227** | PASS | PASS | WARN | WARN_PROFIT_DIAGNOSTIC |
+| **Arbitrum (cov)** | **110030** | PASS | PASS | WARN | WARN_CRITICAL_REJECTS |
+| **Base** | **105655** | PASS | **PASS** | WARN | WARN_TOP_PAIR_DOMINANCE_HIGH |
+| **Mantle** | **105941** | PASS | PASS | WARN | WARN_LOW_SAMPLE, WARN_SAME_DEX |
+| **Linea** | **105605** | PASS | **PASS** | WARN | WARN_DEX_HEALTH_CRITICAL, WARN_LOW_SAMPLE |
+| zkSync | **105838** | PASS | **FAIL** | FAIL_QUALITY | FAIL_ALL_EXCLUDED |
+| Scroll | **110012** | PASS | **FAIL** | FAIL_QUALITY | FAIL_ALL_EXCLUDED |
 
-**Profit Contract Fix Verification (v3.2.68 FIXED)**:
-| Chain | daily_report.net_pnl | execution_report.total_net | Aligned? | Source Field |
-|-------|----------------------|---------------------------|----------|--------------|
-| **Mantle** | $0.03 | $0.03 | ✅ YES | execution_report.total_net_usdc |
+**Key corrections from previous session (reviewer-identified over-claims)**:
+- Base: was labeled SIGNAL_PRODUCING but run_summary.status=FAIL (fragile_rate=0.60). FIX: removed VIRTUAL/WELL tokens → PASS
+- zkSync: was labeled SIGNAL_PRODUCING (2 signals). FIX: honest downgrade, FAIL_ALL_EXCLUDED
+- Mantle: was labeled SIGNAL_PRODUCING. FIX: removed stratum (MIXED_SOURCE noise) → PASS/WARN
+- Linea: was PRICE_SCALE_FAIL. FIX: disabled 2 problematic pools → PASS/WARN
+- Scroll: was INFRA_READY. Remains FAIL (FAIL_ALL_EXCLUDED, market thin)
 
-**Root cause** (v3.2.67→v3.2.68): truth_report uses chain-specific gas_usd_estimate (e.g., 0.02 for Mantle), but execution_report uses CostModelRegistry `paper_realistic` (gas_usd=0.10). Fix: daily_report.net_pnl_usdc now uses execution_report.total_net_usdc as canonical.
-
-**Code changes (v3.2.64-v3.2.67)**:
-- ✅ `engine/opportunity_engine.py`: Added `suspect_spread_bps_hard_threshold` to summary artifact
-- ✅ `strategy/artifacts.py`: Added `suspect_spread_bps_hard` to config_params
-- ✅ Tests: 12 new tests (8 config/claim + 4 invariant tests, now 1522 total)
+**Guardrails added**:
+- `check_repo_safety.py` check [17]: cross-references SIGNAL_PRODUCING claims with run_summary.status
+- `all_signals_net_pnl_usdc_is_diagnostic: true` flag in daily_report to prevent misuse as real profit
+- Linea PRICE_SCALE regression test (4 tests)
+- Mantle test updated: 1 DEX (stratum removed)
 - ✅ `scripts/check_repo_safety.py`: Added DEV_REPORT runtime claims check [15]
 - ✅ `AGENTS.md`: Added Session Closure Contract
 - ✅ `scripts/generate_daily_report.py`: Added `run_type: "automated"|"manual"` session marker
@@ -154,65 +155,68 @@ test_count: 1536 passed, 2 skipped
 ## 1) Commands Executed (This Session 2026-03-10)
 
 ```
-# Verification suite (2026-03-10)
-py -3.11 -m pytest tests/unit -q: 1536 passed, 2 skipped ✅
-py -3.11 scripts/check_repo_safety.py: WARN (DEV_REPORT freshness - updating now)
+# Post-review verification suite (2026-03-10 11:00)
+py -3.11 -m pytest tests/unit -q: 1543 passed, 2 skipped ✅
+py -3.11 scripts/check_repo_safety.py: PASS (1 WARN: Base over-claim in DEV_REPORT)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED ✅
 py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS ✅
 
-# Fresh same-session online evidence (2026-03-10, 6 chains):
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1 --refresh-rolling: PASS (095332) ✅ $2.93
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 1: PASS (095028) ✅ $2.80 8 signals
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 1: PASS (095552) ✅ $6.52 2 signals
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 1: PASS (095423) ✅ $0.09
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 1: PASS (095638) 1 signal, 0 included
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 1: FAIL, PRICE_SCALE (095806)
+# Fresh post-review online evidence (2026-03-10 11:00, 6 chains x 3 cycles):
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 3: PASS (110227) ✅ $2.86
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_arbitrum_one.yaml --cycles 3: PASS (110030) ✅
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 3: PASS (105655) ✅ was FAIL
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 3: PASS gate, FAIL run_summary (105838)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 3: PASS (105941) ✅
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 3: PASS gate, FAIL run_summary (110012)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 3: PASS (105605) ✅ was FAIL
 ```
 
 ## 2) Evidence Artifacts
 
-**Fresh same-session verification (2026-03-10, 6 chains x 1 cycle)**:
+**Fresh post-review verification (2026-03-10 11:00, all 6 chains x 3 cycles)**:
 
-| RunDir | Chain | M5.0 Gate | signals | net_usdc | Status |
-|--------|-------|-----------|---------|----------|--------|
-| **095332** | **Arbitrum** | PASS | 5 | $2.93 | ✅ SIGNAL_PRODUCING |
-| **095028** | **Base** | PASS | 8 | $2.80 | ✅ SIGNAL_PRODUCING (NEW) |
-| **095552** | **zkSync** | PASS | 2 | $6.52 | ✅ SIGNAL_PRODUCING (NEW) |
-| **095423** | **Mantle** | PASS | 3 | $0.09 | ✅ SIGNAL_PRODUCING |
-| 095638 | Scroll | PASS | 1 | $0 | ⚠️ INFRA_READY |
-| 095806 | Linea | FAIL | 2 | $0 | ❌ PRICE_SCALE |
+| RunDir | Chain | M5.0 Gate | run_summary.status | quality_status | Key Issues |
+|--------|-------|-----------|-------------------|----------------|------------|
+| **110227** | **Arbitrum (rm)** | PASS | PASS | WARN | WARN_PROFIT_DIAGNOSTIC |
+| **110030** | **Arbitrum (cov)** | PASS | PASS | WARN | WARN_CRITICAL_REJECTS |
+| **105655** | **Base** | PASS | **PASS** | WARN | WARN_TOP_PAIR_DOMINANCE_HIGH (was FAIL) |
+| **105941** | **Mantle** | PASS | PASS | WARN | WARN_LOW_SAMPLE, WARN_SAME_DEX |
+| **105605** | **Linea** | PASS | **PASS** | WARN | WARN_DEX_HEALTH_CRITICAL (was FAIL) |
+| 105838 | zkSync | PASS | **FAIL** | FAIL_QUALITY | FAIL_ALL_EXCLUDED |
+| 110012 | Scroll | PASS | **FAIL** | FAIL_QUALITY | FAIL_ALL_EXCLUDED |
 
-**Root cause fixed**: All 6 coverage configs had stale `tokens_usd_price` (WETH=3000 vs real ~2050).
-- This caused NOTIONAL_DRIFT > 30% on ALL quotes, excluding them from spread evaluation
-- Fix: Updated WETH→2050, WBTC→68000, wstETH→2500, LST→2100, plus chain-specific token corrections
-- Added pancakeswap_v3 to Base config (3 quoter_v2-compatible DEXes now)
-- Result: 2/6 → 4/6 chains SIGNAL_PRODUCING
+**Config fixes applied this session**:
+- Base: Removed VIRTUAL/WELL (fragile tokens), added excluded_pair_hints → fragile_rate dropped, PASS
+- Linea: Disabled 2 PRICE_SCALE pools (0x904c..fee=10000, 0xc014..fee=500), added anchor prices → PASS
+- Mantle: Removed stratum DEX (MIXED_SOURCE noise), added anchor prices → PASS
+- zkSync: Set require_cross_dex=false, added anchor prices → still FAIL (FAIL_ALL_EXCLUDED)
+- Arbitrum: Added suspect_spread_bps_hard=500, excluded ARB/WETH → stable PASS
+- Scroll: Comment-only update, remains FAIL
 
 **Rolling state** (Arbitrum NORMAL, fresh 2026-03-10):
-- runs_in_window: 114, agg_status: PASS
+- runs_in_window: 116, agg_status: PASS
 - total_net_usdc: $911.63, data_run_rate: 0.8421
 
-**Chain quality classification (2026-03-10 fresh)**:
-- **Arbitrum**: SIGNAL_PRODUCING (signals producing profit) ✅
-- **Mantle**: SIGNAL_PRODUCING (signals, $0.03 net) ✅
-- **zkSync**: LIQUIDITY_ZERO (market impaired - no arbitrage opportunities)
-- **Base**: PASS infra, 0 signals (needs investigation)
-- **Scroll**: BLOCKED_BY_SECOND_DEX (only 1 active DEX)
-- **Linea**: FAIL (PRICE_SCALE 14.3% + only 1 active DEX)
+**Chain quality classification (2026-03-10 11:00 fresh, honest)**:
+- **Arbitrum**: PASS/WARN (rolling stable, $2.86 m4_sim_net_usdc) ✅
+- **Base**: PASS/WARN (WARN_TOP_PAIR_DOMINANCE_HIGH — was FAIL, fixed) ✅
+- **Mantle**: PASS/WARN (WARN_LOW_SAMPLE, WARN_SAME_DEX — stratum removed) ✅
+- **Linea**: PASS/WARN (WARN_DEX_HEALTH_CRITICAL — was FAIL, PRICE_SCALE fixed) ✅
+- **zkSync**: FAIL (FAIL_ALL_EXCLUDED — infra works, no tradeable signals)
+- **Scroll**: FAIL (FAIL_ALL_EXCLUDED — 1 DEX, market thin)
 
 **Rolling canonical** (updated to 220644):
 - `data/runs/_rolling/run_summary_latest.json` (2026-03-09T21:07:05Z, arbitrum_one)
 
 ## 3) Next Steps
 
-1. **Session IN_PROGRESS**: Multi-chain quality stabilization ongoing, 2/6 chains producing signals
-2. **v3.2.68 complete**: 
-   - `daily_report.net_pnl_usdc` now uses `execution_report.total_net_usdc` as canonical
-   - `truth_net_pnl_usdc` preserved for transparency
-   - CI runs explicitly set `run_type: "automated"` and `primary_blocker_of_session: "CI_AUTOMATED_RUN"`
-3. **2 chains SIGNAL_PRODUCING**: Arbitrum, Mantle ($0.03)
-4. **4 chains blocked**: zkSync (POLICY_REJECTED), Base (DATA_QUALITY), Scroll/Linea (BLOCKED_BY_SECOND_DEX)
-5. **Profit invariant FIXED**: Mantle 220920 shows net_pnl_usdc=0.03=execution_report.total_net_usdc (was 0.11 vs 0.03)
-6. **Next session**: Investigate Base signal production; consider adding more DEXes to Scroll/Linea
+1. **Session IN_PROGRESS**: 4/6 chains PASS, 2/6 FAIL (zkSync, Scroll)
+2. **zkSync**: FAIL_ALL_EXCLUDED despite require_cross_dex=false. Needs investigation: are all signals being excluded by policy?
+3. **Scroll**: FAIL_ALL_EXCLUDED, 1 DEX only. Market too thin for arbitrage; consider adding DEX or accepting as MARKET_BLOCKED
+4. **Base**: PASS/WARN but WARN_TOP_PAIR_DOMINANCE_HIGH. May need more pair diversity
+5. **Linea**: PASS/WARN but WARN_DEX_HEALTH_CRITICAL. Single DEX limits quality
+6. **check_repo_safety check [17]**: Now warns when SIGNAL_PRODUCING label contradicts run_summary.status — update DEV_REPORT labels to match fresh runs
+7. **all_signals_net_pnl_usdc**: Marked as DIAGNOSTIC ONLY — do not use for profit claims
 
 ---
-*Generated: 2026-03-09T21:07:05Z v3.2.69*
+*Generated: 2026-03-10T11:02:49Z*

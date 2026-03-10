@@ -1158,6 +1158,77 @@ def check_dev_report_placeholders() -> List[str]:
     return issues
 
 
+def check_chain_quality_claims() -> List[str]:
+    """v3.2.70: Check that SIGNAL_PRODUCING claims match run_summary.status.
+    
+    If DEV_REPORT or Status docs label a chain as SIGNAL_PRODUCING,
+    but the cited run_summary.status != PASS, this is a misleading claim.
+    
+    Validates:
+    1. DEV_REPORT chain table: if Status column contains 'SIGNAL_PRODUCING',
+       the cited runDir's run_summary.status must be PASS.
+    2. Chains with run_summary.status=FAIL should NOT be labeled SIGNAL_PRODUCING
+       without mentioning the FAIL caveat.
+    
+    Returns:
+        List of warning messages
+    """
+    issues = []
+    dev_report = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
+    runs_dir = PROJECT_ROOT / "data" / "runs"
+    
+    if not dev_report.exists() or not runs_dir.exists():
+        return []
+    
+    try:
+        content = dev_report.read_text(encoding='utf-8')
+        
+        # Parse table rows claiming SIGNAL_PRODUCING for a chain with a runDir suffix
+        # Format: | **Chain** | RunDir | ... | ✅ SIGNAL_PRODUCING |
+        # or: | **Chain** | RunDir | ... | SIGNAL_PRODUCING |
+        signal_producing_pattern = re.compile(
+            r'\|\s*\*?\*?(\w+)\*?\*?\s*\|\s*\*?\*?(\d{6})\*?\*?\s*\|.*?SIGNAL_PRODUCING',
+            re.IGNORECASE
+        )
+        
+        for match in signal_producing_pattern.finditer(content):
+            chain = match.group(1)
+            run_dir_suffix = match.group(2)
+            
+            # Find actual run directory
+            run_dirs = list(runs_dir.glob(f"*_{run_dir_suffix}"))
+            if not run_dirs:
+                continue
+            
+            run_dir_path = run_dirs[0]
+            reports_dir = run_dir_path / "reports"
+            run_summaries = list(reports_dir.glob("run_summary_*.json"))
+            
+            if not run_summaries:
+                continue
+            
+            try:
+                run_summary = json.loads(run_summaries[0].read_text(encoding='utf-8'))
+                status = run_summary.get("status", "")
+                
+                if status == "FAIL":
+                    quality_status = run_summary.get("quality_status", "")
+                    reasons = run_summary.get("reasons", [])
+                    issues.append(
+                        f"WARN: CHAIN_QUALITY_CLAIM_MISMATCH: {chain} ({run_dir_suffix}) "
+                        f"labeled 'SIGNAL_PRODUCING' but run_summary.status=FAIL "
+                        f"(quality_status={quality_status}, reasons={reasons[:3]}). "
+                        f"Add caveat or downgrade classification."
+                    )
+            except (json.JSONDecodeError, FileNotFoundError):
+                continue
+    
+    except Exception as e:
+        issues.append(f"ERROR: Could not check chain quality claims: {e}")
+    
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
@@ -1302,6 +1373,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: DEV_REPORT has no placeholder text")
+    
+    print("\n[17] Checking chain quality claims consistency...")
+    issues = check_chain_quality_claims()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: Chain quality claims match runtime evidence")
     
     # Summary
     print("\n" + "=" * 50)

@@ -204,3 +204,26 @@ def test_cycles_propagation_in_truth_report():
         loaded_truth = json.loads((run / "truth_report_1.json").read_text())
         assert loaded_truth["stats"]["requested_cycles"] == requested_cycles
         assert loaded_truth["stats"]["cycles_completed"] == requested_cycles
+
+
+def test_all_signals_net_pnl_usdc_is_diagnostic():
+    """v3.2.70: all_signals_net_pnl_usdc must be flagged as diagnostic-only.
+    
+    This field includes excluded/suspect signals' theoretical pnl and can be
+    much higher than net_pnl_usdc. It must have a companion boolean flag
+    all_signals_net_pnl_usdc_is_diagnostic=True to prevent misuse.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        run_path, _truth = make_consistent_run(Path(tmp))
+        report = aggregate_run(run_path)
+        
+        pnl = report.get("theoretical_net_profit", {})
+        # The diagnostic flag must be present
+        assert "all_signals_net_pnl_usdc_is_diagnostic" in pnl, (
+            "Missing all_signals_net_pnl_usdc_is_diagnostic flag in theoretical_net_profit. "
+            "This field is required to prevent confusing diagnostic-only pnl with canonical net."
+        )
+        assert pnl["all_signals_net_pnl_usdc_is_diagnostic"] is True, (
+            "all_signals_net_pnl_usdc_is_diagnostic must be True"
+        )

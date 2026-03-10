@@ -5,13 +5,15 @@
 # v3.2.58 FROZEN: This config is stable for same-DEX fallback mode.
 # Changes require explicit approval due to MIXED_SOURCE constraints.
 #
-# CHAIN QUALITY STATUS (2026-03-09 v3.2.68):
-#   Classification: PRICE_SCALE_FAIL (M5.0 gate FAIL)
-#   Evidence: runDir 213948 - signals=1, PRICE_SCALE 14.3%
-#   Blocker: Price scale check fails (14.3% > 10% threshold)
-#   Root cause: Single DEX ecosystem with stale/thin liquidity
-#   Action: Gate FAIL status expected - not arbitrage-ready
-#   Operational mode: PROBE_ONLY (no signals expected)
+# CHAIN QUALITY STATUS (2026-03-10):
+#   Classification: PRICE_SCALE_FAIL (M5.0 gate FAIL at 11.8%)
+#   Evidence: runDir 095809 - 2 signals, 0 included, status=FAIL
+#   Reasons: PRICE_SCALE VIOLATION 2/17 quotes (11.8% > 10% threshold)
+#     - WETH/USDC fee=2500: price=0.001476 (inverted, expected 100-50000)
+#     - WETH/USDT fee=500: price=93.0456 (below 100 minimum, thin liquidity)
+#   Fix: Disable problematic fee-tier pools via disabled_pools
+#   Root cause: Thin pools on pancakeswap_v3 Linea with bad prices
+#   BLOCKED_BY: Single DEX (pancakeswap_v3) + thin liquidity pools
 #
 # CHAIN STATUS (historical): FALLBACK-ONLY (no cross-DEX readiness)
 #   - lynex_v3 (algebra/quoter) is NOT quoter_v2-compatible
@@ -108,6 +110,12 @@ tokens_usd_price:
   LYNX: 0.01
   NILE: 0.01
 
+# Price anchor overrides for sanity checking
+tokens_anchor_price:
+  WETH_USDC: 2050.0     # aligned with tokens_usd_price
+  WETH_USDT: 2050.0     # aligned with tokens_usd_price
+  wstETH_WETH: 1.22     # ~1.22 WETH per wstETH
+
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000
 
@@ -124,3 +132,22 @@ execution_enabled: false
 execution_block_reason: EXECUTION_DISABLED_M4_COVERAGE
 kill_switch_active: true
 simulate_only: true
+
+# =============================================================================
+# Disabled pools (machine-readable quarantine)
+# v3.2.70: Disable fee tiers producing PRICE_SCALE violations
+# Evidence: runDir 095809 - WETH/USDC inverted, WETH/USDT below range
+# =============================================================================
+disabled_pools:
+  pancakeswap_v3_WETH_USDC_10000:
+    address: "0x904c0172cf5cfd2a5c4f37dc9a7605e5b23c1827"
+    reason: "PRICE_SCALE_VIOLATION"
+    detail: "price=0.001476 inverted (expected 100-50000), zero effective liquidity"
+    evidence_run: "ci_m5_gate_20260310_095809"
+    disabled_date: "2026-03-10"
+  pancakeswap_v3_WETH_USDT_500:
+    address: "0xc014414696f332c96c471634620344143325d2c0"
+    reason: "PRICE_SCALE_VIOLATION"
+    detail: "price=93.05 below [100, 50000] range, thin liquidity on Linea"
+    evidence_run: "ci_m5_gate_20260310_095809"
+    disabled_date: "2026-03-10"
