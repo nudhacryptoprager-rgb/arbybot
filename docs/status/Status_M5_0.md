@@ -299,6 +299,8 @@ All gates use shared invariants from `core/artifact_invariants.py`.
 
 ## Next steps/focus
 
-- Docs drift closure: enforce DOCS_POLICY on Status + archive map fixed (see `docs/DOCS_POLICY.md`, `docs/status/ARCHIVE_MAP.md`)
+- **start.py session 4 hardening**: ASCII-safe output, richer per-chain summary (quality_status, chain_quality_level, profit_truth_available, cross_dex_pairs_count), aggregate chain lists, strict exit mode (--max-fail-chains), updated summary schema
+- **Long scan semantics**: A multi-chain long scan is a market/data probe confirming infra + data quality, not proof of constant profit
+- Docs drift closure: enforce DOCS_POLICY on Status + archive map fixed
 - Continue M5_0 infra hardening with multicall/failover stability
 

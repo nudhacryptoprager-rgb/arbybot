@@ -97,10 +97,10 @@ dex_compatibility_blocker:
 7. **WS host validation**: Added validate_chain_rpc_consistency() in ci_m5_0_gate.py
 
 ## 0) Meta
-timestamp_utc: 2026-03-10T11:05:30Z  
-rolling_provenance: 2026-03-10T11:05:30Z (arbitrum_one, ci_m5_gate_20260310_120509)  
+timestamp_utc: 2026-03-10T12:59:29Z  
+rolling_provenance: 2026-03-10T12:59:29Z (arbitrum_one, ci_m5_gate_20260310_135910)  
 mode: ONLINE
-test_count: 1544 passed, 2 skipped
+test_count: 1588 passed, 2 skipped
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
@@ -194,7 +194,7 @@ py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit --run-dir dat
 - check_repo_safety: check [18] stale runDir references
 
 **Rolling state** (Arbitrum NORMAL, fresh 2026-03-10):
-- runs_in_window: 117, agg_status: PASS
+- runs_in_window: 119, agg_status: PASS
 - M4 profit gate: PASS (online)
 
 **Chain quality classification (2026-03-10 12:20 fresh)**:
@@ -210,12 +210,12 @@ py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit --run-dir dat
 
 ## 3) Next Steps
 
-1. **Session REACHED**: 5/6 chains PASS, 1/6 FAIL (Scroll only — probe-only, MARKET_BLOCKED)
-2. **Base TOP_PAIR_DOMINANCE**: wstETH/rETH added to intent.txt + tokens_usd_price, but pools not yet in pool_resolver cache. Need pool discovery run or manual cache seed. wstETH/rETH may also need core_tokens.yaml entries for Base chain.
+1. **Session 4 fixes applied**: start.py orchestrator hardened: ASCII-safe output (no more cp1251 crash), richer per-chain summary (quality_status, chain_quality_level, profit_truth_available, cross_dex_pairs_count), aggregate chain lists (pass/fail/probe-only), strict exit mode (--max-fail-chains), schema v1.1.
+2. **Long scan is a market/data probe**: A 3-hour multi-chain scan confirms infrastructure stability, data quality, and signal coverage. It is NOT proof of constant profit. Profitable roundtrips require real on-chain execution (M4.2+).
 3. **Scroll**: Accepted as MARKET_BLOCKED. Single DEX (SushiSwap V3), no cross-DEX possible. Upgrade path: deploy/discover 2nd DEX adapter.
-4. **M4.2/M4.3 profit truth**: Added profit_truth flags to daily_report. profit_truth_available=false until real execution enabled.
-5. **check_repo_safety check [18]**: Detects stale runDir references in docs.
-6. **zkSync/Linea/Mantle**: All now PASS but with LOW_SAMPLE/SAME_DEX warnings. Increasing cycles or adding DEX diversity would improve quality.
+4. **M4.2/M4.3 profit truth**: profit_truth_available=false until real execution enabled.
+5. **Base TOP_PAIR_DOMINANCE**: wstETH/rETH added but pools not yet in pool_resolver cache.
+6. **zkSync/Linea/Mantle**: All PASS but with LOW_SAMPLE/SAME_DEX warnings — improving with more DEX diversity.
 
 ---
 *Generated: 2026-03-10T12:20:00Z*

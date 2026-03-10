@@ -33,7 +33,7 @@ CI_GATE = Path("scripts") / "ci_m5_0_gate.py"
 RUN_DIR_RE = re.compile(r"^\[ONLINE\] RunDir:\s*(.+)\s*$")
 CI_M5_DIR_RE = re.compile(r"^ci_m5_gate_\d{8}_\d{6}$")
 
-# ── config introspection ────────────────────────────────────────────────
+# -- config introspection -------------------------------------------------
 
 
 def read_config_meta(config_path: str) -> dict[str, Any]:
@@ -53,7 +53,7 @@ def is_primary_rolling_config(meta: dict[str, Any]) -> bool:
     return meta["run_kind"] == "NORMAL"
 
 
-# ── child process ───────────────────────────────────────────────────────
+# -- child process -------------------------------------------------------
 
 
 def run_gate_once(
@@ -112,7 +112,7 @@ def run_gate_once(
     return rc, run_dir
 
 
-# ── run_summary extraction ──────────────────────────────────────────────
+# -- run_summary extraction -----------------------------------------------
 
 
 def extract_run_summary(run_dir: Path | None) -> dict[str, Any] | None:
@@ -132,6 +132,20 @@ def extract_run_summary(run_dir: Path | None) -> dict[str, Any] | None:
         return None
 
 
+def extract_gate_result(run_dir: Path | None) -> dict[str, Any] | None:
+    """Read gate_result.json from a runDir."""
+    if run_dir is None or not run_dir.exists():
+        return None
+    path = run_dir / "reports" / "gate_result.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 def classify_run(exit_code: int, summary: dict[str, Any] | None) -> str:
     """Return PASS / NO_DATA / FAIL / INFRA_FAIL for a single run."""
     if summary is None:
@@ -144,7 +158,7 @@ def classify_run(exit_code: int, summary: dict[str, Any] | None) -> str:
     return "FAIL"
 
 
-# ── housekeeping ────────────────────────────────────────────────────────
+# -- housekeeping ---------------------------------------------------------
 
 
 def delete_if_empty_run_dir(run_dir: Path) -> bool:
@@ -166,7 +180,7 @@ def prune_run_dirs(keep: int) -> None:
     )
 
 
-# ── per-chain aggregation ──────────────────────────────────────────────
+# -- per-chain aggregation ------------------------------------------------
 
 
 def new_chain_stats() -> dict[str, Any]:
@@ -183,6 +197,13 @@ def new_chain_stats() -> dict[str, Any]:
         "profitable_roundtrips_total": 0,
         "last_run_timestamp": None,
         "last_run_dir": None,
+        # Richer per-chain fields (last-run snapshot)
+        "last_run_summary_status": None,
+        "last_quality_status": None,
+        "last_chain_quality_level": None,
+        "last_profit_truth_available": None,
+        "run_kind": None,
+        "last_cross_dex_pairs_count": None,
     }
 
 
@@ -191,6 +212,7 @@ def update_chain_stats(
     exit_code: int,
     run_dir: Path | None,
     summary: dict[str, Any] | None,
+    gate_result: dict[str, Any] | None = None,
 ) -> None:
     stats["runs"] += 1
     cls = classify_run(exit_code, summary)
@@ -206,12 +228,21 @@ def update_chain_stats(
         stats["profitable_roundtrips_total"] += int(rt.get("profitable_count", 0) or 0)
         ctx = summary.get("run_context", {})
         stats["last_run_timestamp"] = ctx.get("run_timestamp", stats["last_run_timestamp"])
+        # Richer snapshot fields
+        stats["last_run_summary_status"] = summary.get("status")
+        stats["last_quality_status"] = summary.get("quality_status")
+        stats["last_chain_quality_level"] = metrics.get("chain_quality_level")
+        stats["last_profit_truth_available"] = metrics.get("profit_truth_available")
+        stats["run_kind"] = summary.get("run_kind", stats["run_kind"])
+
+    if gate_result:
+        stats["last_cross_dex_pairs_count"] = gate_result.get("cross_dex_pairs_count")
 
     if run_dir:
         stats["last_run_dir"] = str(run_dir.name)
 
 
-# ── guardrails ──────────────────────────────────────────────────────────
+# -- guardrails -----------------------------------------------------------
 
 
 def check_guardrails(per_chain: dict[str, dict[str, Any]]) -> list[str]:
@@ -224,14 +255,14 @@ def check_guardrails(per_chain: dict[str, dict[str, Any]]) -> list[str]:
 
     if total_runs >= 5 and total_fail == 0 and total_no_data == 0:
         warnings.append(
-            "ALL_POSITIVE: Every run PASS, zero FAIL/NO_DATA — "
+            "ALL_POSITIVE: Every run PASS, zero FAIL/NO_DATA -- "
             "verify against Roadmap.md Truth Engine expectation"
         )
 
     for chain, s in per_chain.items():
         if s["runs"] >= 3 and s["pass"] > 0 and s["fail"] == 0 and s["no_data"] == 0:
             warnings.append(
-                f"CHAIN_ALL_POSITIVE [{chain}]: {s['runs']} runs all PASS — "
+                f"CHAIN_ALL_POSITIVE [{chain}]: {s['runs']} runs all PASS -- "
                 "check if data quality is real"
             )
         if s["runs"] >= 3 and s["infra_fail"] > s["runs"] * 0.5:
@@ -242,7 +273,7 @@ def check_guardrails(per_chain: dict[str, dict[str, Any]]) -> list[str]:
     return warnings
 
 
-# ── summary output ──────────────────────────────────────────────────────
+# -- summary output -------------------------------------------------------
 
 
 def build_summary(
@@ -250,8 +281,12 @@ def build_summary(
     wall_seconds: float,
     warnings: list[str],
 ) -> dict[str, Any]:
+    pass_chains = [c for c, s in per_chain.items() if s["runs"] > 0 and s["fail"] == 0 and s["infra_fail"] == 0 and s["pass"] > 0]
+    fail_chains = [c for c, s in per_chain.items() if s["fail"] > 0 or s["infra_fail"] > 0]
+    probe_only_chains = [c for c, s in per_chain.items() if s["runs"] > 0 and s["pass"] == 0 and s["fail"] == 0]
+
     return {
-        "schema": "start:long_scan_summary:v1.0",
+        "schema": "start:long_scan_summary:v1.1",
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "wall_seconds": round(wall_seconds, 1),
         "total_runs": sum(s["runs"] for s in per_chain.values()),
@@ -261,6 +296,10 @@ def build_summary(
         "total_infra_fail": sum(s["infra_fail"] for s in per_chain.values()),
         "total_included_signals": sum(s["included_signals_total"] for s in per_chain.values()),
         "total_net_usdc": round(sum(s["net_usdc_total"] for s in per_chain.values()), 4),
+        "total_profitable_roundtrips": sum(s["profitable_roundtrips_total"] for s in per_chain.values()),
+        "pass_chains": pass_chains,
+        "fail_chains": fail_chains,
+        "probe_only_chains": probe_only_chains,
         "per_chain": per_chain,
         "warnings": warnings,
     }
@@ -278,6 +317,17 @@ def print_summary(summary: dict[str, Any]) -> None:
     )
     print(f"Signals total:  {summary['total_included_signals']}")
     print(f"Net USDC total: ${summary['total_net_usdc']:.4f}")
+    print(f"Profitable RTs: {summary.get('total_profitable_roundtrips', 0)}")
+
+    pass_c = summary.get("pass_chains", [])
+    fail_c = summary.get("fail_chains", [])
+    probe_c = summary.get("probe_only_chains", [])
+    if pass_c:
+        print(f"Pass chains:    {', '.join(pass_c)}")
+    if fail_c:
+        print(f"Fail chains:    {', '.join(fail_c)}")
+    if probe_c:
+        print(f"Probe-only:     {', '.join(probe_c)}")
 
     print("\n--- Per-chain breakdown ---")
     for chain, s in summary["per_chain"].items():
@@ -286,6 +336,16 @@ def print_summary(summary: dict[str, Any]) -> None:
             f"PASS={s['pass']}  NO_DATA={s['no_data']}  FAIL={s['fail']}  "
             f"INFRA_FAIL={s['infra_fail']}  signals={s['included_signals_total']}  "
             f"net_usdc=${s['net_usdc_total']:.4f}"
+        )
+        quality = s.get("last_quality_status") or "-"
+        level = s.get("last_chain_quality_level") or "-"
+        truth = s.get("last_profit_truth_available")
+        truth_s = str(truth) if truth is not None else "-"
+        xdex = s.get("last_cross_dex_pairs_count")
+        xdex_s = str(xdex) if xdex is not None else "-"
+        print(
+            f"  {'':16s}  quality={quality}  level={level}  "
+            f"truth={truth_s}  cross_dex={xdex_s}"
         )
 
     if summary["warnings"]:
@@ -306,7 +366,7 @@ def write_summary_file(summary: dict[str, Any], path: str) -> None:
     print(f"Summary written to {out}")
 
 
-# ── main ────────────────────────────────────────────────────────────────
+# -- main -----------------------------------------------------------------
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -338,6 +398,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--summary-file",
         default="data/runs/_incidents/long_scan_latest.json",
         help="Path to overwrite with session summary JSON",
+    )
+    ap.add_argument(
+        "--max-fail-chains",
+        type=int,
+        default=-1,
+        help="Max chains allowed to have failures. -1=permissive (exit 0 if any PASS), "
+             "0=strict (all must PASS)",
     )
     return ap.parse_args(argv)
 
@@ -394,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
         refresh = is_primary_rolling_config(meta)
 
         total_runs += 1
-        print(f"\n{'─'*60}")
+        print(f"\n{'-'*60}")
         print(f"[run {total_runs}] chain={chain}  config={cfg}  rolling={'YES' if refresh else 'no'}")
 
         rc, run_dir = run_gate_once(
@@ -404,9 +471,10 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         summary = extract_run_summary(run_dir)
+        gate_res = extract_gate_result(run_dir)
         cls = classify_run(rc, summary)
 
-        update_chain_stats(per_chain[chain], rc, run_dir, summary)
+        update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res)
         print(f"[run {total_runs}] result={cls}  exit_code={rc}  run_dir={run_dir.name if run_dir else 'N/A'}")
 
         if run_dir and run_dir.exists():
@@ -431,8 +499,22 @@ def main(argv: list[str] | None = None) -> int:
 
     write_summary_file(summary_obj, args.summary_file)
 
+    # Exit semantics
+    fail_chain_count = len(summary_obj.get("fail_chains", []))
     has_any_pass = summary_obj["total_pass"] > 0
-    return 0 if has_any_pass else 1
+
+    if args.max_fail_chains >= 0:
+        # Strict mode: exit 1 if too many chains failed
+        if fail_chain_count > args.max_fail_chains:
+            print(f"EXIT 1: {fail_chain_count} chain(s) with failures > --max-fail-chains={args.max_fail_chains}")
+            return 1
+        if not has_any_pass:
+            print("EXIT 1: no PASS runs at all")
+            return 1
+        return 0
+    else:
+        # Permissive (default): exit 0 if any PASS
+        return 0 if has_any_pass else 1
 
 
 if __name__ == "__main__":

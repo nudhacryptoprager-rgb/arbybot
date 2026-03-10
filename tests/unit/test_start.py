@@ -98,10 +98,12 @@ class TestRoundRobinConfigList(unittest.TestCase):
 class TestRollingFlagsOnlyForPrimary(unittest.TestCase):
     """Verify rolling flags dispatched only for run_kind=NORMAL."""
 
+    @patch("start.extract_gate_result")
+    @patch("start.extract_run_summary")
     @patch("start.run_gate_once")
     @patch("start.read_config_meta")
     @patch("start.prune_run_dirs")
-    def test_rolling_only_for_normal(self, mock_prune, mock_meta, mock_gate):
+    def test_rolling_only_for_normal(self, mock_prune, mock_meta, mock_gate, mock_summary, mock_gate_res):
         """Round-robin 2 configs: NORMAL gets rolling, COVERAGE does not."""
         normal_yaml = "config/real_minimal.yaml"
         coverage_yaml = "config/coverage_intent_base.yaml"
@@ -112,9 +114,9 @@ class TestRollingFlagsOnlyForPrimary(unittest.TestCase):
             return {"chain": "base", "run_kind": "COVERAGE"}
 
         mock_meta.side_effect = meta_side
-
-        # Each run returns exit_code=0, dummy runDir=None
         mock_gate.return_value = (0, None)
+        mock_summary.return_value = {"status": "PASS", "metrics": {}, "run_context": {}}
+        mock_gate_res.return_value = None
 
         rc = start.main([
             "--config-list", f"{normal_yaml},{coverage_yaml}",
@@ -231,26 +233,214 @@ class TestGuardrails(unittest.TestCase):
 class TestBuildSummary(unittest.TestCase):
     """Test JSON summary structure."""
 
-    def test_summary_schema(self):
-        per_chain = {
-            "arb": {
-                "config": "real_minimal.yaml",
-                "runs": 2, "pass": 1, "no_data": 1, "fail": 0, "infra_fail": 0,
-                "infra_pass": 2,
-                "included_signals_total": 3,
-                "net_usdc_total": 10.5,
-                "profitable_roundtrips_total": 0,
-                "last_run_timestamp": "2026-03-10T10:00:00Z",
-                "last_run_dir": "ci_m5_gate_20260310_100000",
-            },
+    def _make_per_chain(self, **overrides):
+        base = {
+            "config": "real_minimal.yaml",
+            "runs": 2, "pass": 1, "no_data": 1, "fail": 0, "infra_fail": 0,
+            "infra_pass": 2,
+            "included_signals_total": 3,
+            "net_usdc_total": 10.5,
+            "profitable_roundtrips_total": 0,
+            "last_run_timestamp": "2026-03-10T10:00:00Z",
+            "last_run_dir": "ci_m5_gate_20260310_100000",
+            "last_run_summary_status": "PASS",
+            "last_quality_status": "PASS",
+            "last_chain_quality_level": "SIGNAL_PRODUCING",
+            "last_profit_truth_available": True,
+            "run_kind": "NORMAL",
+            "last_cross_dex_pairs_count": 5,
         }
+        base.update(overrides)
+        return base
+
+    def test_summary_schema(self):
+        per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.0")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.1")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
         self.assertIn("WARN_TEST", summary["warnings"])
         self.assertIn("arb", summary["per_chain"])
+
+    def test_summary_has_aggregate_chain_lists(self):
+        per_chain = {
+            "arb": self._make_per_chain(runs=3, fail=0, infra_fail=0, pass_=2, no_data=1),
+            "scroll": self._make_per_chain(runs=3, fail=1, infra_fail=0),
+        }
+        # Fix: pass key not pass_ (dict update)
+        per_chain["arb"]["pass"] = 2
+        summary = start.build_summary(per_chain, 100.0, [])
+        self.assertIn("arb", summary["pass_chains"])
+        self.assertIn("scroll", summary["fail_chains"])
+
+    def test_summary_probe_only(self):
+        per_chain = {
+            "linea": self._make_per_chain(runs=2, fail=0, infra_fail=0),
+        }
+        per_chain["linea"]["pass"] = 0
+        per_chain["linea"]["no_data"] = 2
+        summary = start.build_summary(per_chain, 50.0, [])
+        self.assertIn("linea", summary["probe_only_chains"])
+
+    def test_summary_profitable_roundtrips(self):
+        per_chain = {
+            "arb": self._make_per_chain(profitable_roundtrips_total=3),
+            "base": self._make_per_chain(profitable_roundtrips_total=1),
+        }
+        summary = start.build_summary(per_chain, 60.0, [])
+        self.assertEqual(summary["total_profitable_roundtrips"], 4)
+
+
+        summary = start.build_summary(per_chain, 60.0, [])
+        self.assertEqual(summary["total_profitable_roundtrips"], 4)
+
+
+class TestExitPolicy(unittest.TestCase):
+    """Test --max-fail-chains exit semantics."""
+
+    @patch("start.extract_gate_result")
+    @patch("start.extract_run_summary")
+    @patch("start.run_gate_once")
+    @patch("start.read_config_meta")
+    @patch("start.prune_run_dirs")
+    def test_permissive_default_any_pass_exits_0(self, mock_prune, mock_meta, mock_gate, mock_summary, mock_gate_res):
+        mock_meta.return_value = {"chain": "arb", "run_kind": "NORMAL"}
+        mock_gate.return_value = (0, None)
+        mock_summary.return_value = {"status": "PASS", "metrics": {}, "run_context": {}}
+        mock_gate_res.return_value = None
+        rc = start.main([
+            "--config", "x.yaml", "--max-runs", "1", "--minutes", "1",
+            "--sleep-seconds", "0", "--child-timeout", "0",
+            "--summary-file", os.path.join(tempfile.mkdtemp(), "test.json"),
+        ])
+        self.assertEqual(rc, 0)
+
+    @patch("start.extract_gate_result")
+    @patch("start.extract_run_summary")
+    @patch("start.run_gate_once")
+    @patch("start.read_config_meta")
+    @patch("start.prune_run_dirs")
+    def test_strict_zero_rejects_any_failure(self, mock_prune, mock_meta, mock_gate, mock_summary, mock_gate_res):
+        """--max-fail-chains=0 means zero chains can have failures."""
+        call_count = [0]
+        def gate_side(*args, **kwargs):
+            call_count[0] += 1
+            return (0, None)
+
+        def summary_side(run_dir):
+            # arb PASS, base FAIL
+            call_count_s = getattr(summary_side, '_c', 0)
+            summary_side._c = call_count_s + 1
+            if call_count_s % 2 == 0:
+                return {"status": "PASS", "metrics": {}, "run_context": {}}
+            return {"status": "FAIL", "metrics": {}, "run_context": {}}
+
+        def meta_side(path):
+            if "a.yaml" in path:
+                return {"chain": "arb", "run_kind": "NORMAL"}
+            return {"chain": "base", "run_kind": "COVERAGE"}
+
+        mock_meta.side_effect = meta_side
+        mock_gate.side_effect = gate_side
+        mock_summary.side_effect = summary_side
+        mock_gate_res.return_value = None
+        rc = start.main([
+            "--config-list", "a.yaml,b.yaml", "--max-runs", "2", "--minutes", "1",
+            "--sleep-seconds", "0", "--child-timeout", "0",
+            "--max-fail-chains", "0",
+            "--summary-file", os.path.join(tempfile.mkdtemp(), "test.json"),
+        ])
+        self.assertEqual(rc, 1, "Should fail when a chain has failures and --max-fail-chains=0")
+
+    @patch("start.extract_gate_result")
+    @patch("start.extract_run_summary")
+    @patch("start.run_gate_once")
+    @patch("start.read_config_meta")
+    @patch("start.prune_run_dirs")
+    def test_strict_one_allows_single_failure(self, mock_prune, mock_meta, mock_gate, mock_summary, mock_gate_res):
+        """--max-fail-chains=1 allows exactly one chain with failures."""
+        call_count = [0]
+        def gate_side(*args, **kwargs):
+            return (0, None)
+
+        def summary_side(run_dir):
+            call_count_s = getattr(summary_side, '_c', 0)
+            summary_side._c = call_count_s + 1
+            if call_count_s == 1:
+                return {"status": "FAIL", "metrics": {}, "run_context": {}}  # base fails
+            return {"status": "PASS", "metrics": {}, "run_context": {}}  # arb passes
+
+        def meta_side(path):
+            if "a.yaml" in path:
+                return {"chain": "arb", "run_kind": "NORMAL"}
+            return {"chain": "base", "run_kind": "COVERAGE"}
+
+        mock_meta.side_effect = meta_side
+        mock_gate.side_effect = gate_side
+        mock_summary.side_effect = summary_side
+        mock_gate_res.return_value = None
+        rc = start.main([
+            "--config-list", "a.yaml,b.yaml", "--max-runs", "2", "--minutes", "1",
+            "--sleep-seconds", "0", "--child-timeout", "0",
+            "--max-fail-chains", "1",
+            "--summary-file", os.path.join(tempfile.mkdtemp(), "test.json"),
+        ])
+        self.assertEqual(rc, 0, "Should pass when 1 fail chain <= --max-fail-chains=1")
+
+
+class TestRicherChainFields(unittest.TestCase):
+    """Test that richer per-chain fields are populated from run_summary and gate_result."""
+
+    def test_update_chain_stats_with_richer_fields(self):
+        stats = start.new_chain_stats()
+        summary = {
+            "status": "PASS",
+            "quality_status": "PASS",
+            "run_kind": "NORMAL",
+            "metrics": {
+                "included_signals_count": 5,
+                "total_net_usdc": 10.0,
+                "chain_quality_level": "SIGNAL_PRODUCING",
+                "profit_truth_available": True,
+            },
+            "run_context": {"run_timestamp": "2026-03-10T10:00:00Z"},
+        }
+        gate_result = {"cross_dex_pairs_count": 7}
+        start.update_chain_stats(stats, 0, Path("data/runs/test"), summary, gate_result)
+        self.assertEqual(stats["last_run_summary_status"], "PASS")
+        self.assertEqual(stats["last_quality_status"], "PASS")
+        self.assertEqual(stats["last_chain_quality_level"], "SIGNAL_PRODUCING")
+        self.assertTrue(stats["last_profit_truth_available"])
+        self.assertEqual(stats["run_kind"], "NORMAL")
+        self.assertEqual(stats["last_cross_dex_pairs_count"], 7)
+
+    def test_update_chain_stats_without_gate_result(self):
+        stats = start.new_chain_stats()
+        summary = {
+            "status": "NO_DATA",
+            "metrics": {"included_signals_count": 0, "total_net_usdc": 0},
+            "run_context": {},
+        }
+        start.update_chain_stats(stats, 0, None, summary)
+        self.assertIsNone(stats["last_cross_dex_pairs_count"])
+        self.assertEqual(stats["last_run_summary_status"], "NO_DATA")
+
+    def test_extract_gate_result_missing_dir(self):
+        self.assertIsNone(start.extract_gate_result(None))
+        self.assertIsNone(start.extract_gate_result(Path("/nonexistent")))
+
+    def test_extract_gate_result_reads_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td)
+            reports = run_dir / "reports"
+            reports.mkdir()
+            data = {"cross_dex_pairs_count": 12, "status": "PASS"}
+            with open(reports / "gate_result.json", "w") as f:
+                json.dump(data, f)
+            result = start.extract_gate_result(run_dir)
+            self.assertIsNotNone(result)
+            self.assertEqual(result["cross_dex_pairs_count"], 12)
 
 
 class TestExtractRunSummary(unittest.TestCase):
@@ -282,6 +472,39 @@ class TestExtractRunSummary(unittest.TestCase):
                     json.dump({"status": status}, f)
             result = start.extract_run_summary(run_dir)
             self.assertEqual(result["status"], "PASS")
+
+
+class TestAsciiSafeOutput(unittest.TestCase):
+    """Regression: all print_summary output must be ASCII-encodable (Windows cp1251 safe)."""
+
+    def test_print_summary_ascii_only(self):
+        """Simulate encoding to ASCII; catches any box-drawing or em-dash chars."""
+        per_chain = {
+            "arb": {
+                "config": "real_minimal.yaml",
+                "runs": 3, "pass": 2, "no_data": 0, "fail": 1, "infra_fail": 0,
+                "infra_pass": 2,
+                "included_signals_total": 5,
+                "net_usdc_total": 10.0,
+                "profitable_roundtrips_total": 0,
+                "last_run_timestamp": "2026-03-10T10:00:00Z",
+                "last_run_dir": "ci_m5_gate_20260310_100000",
+            },
+        }
+        summary = start.build_summary(per_chain, 100.0, ["WARN_TEST"])
+
+        import io
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            start.print_summary(summary)
+        text = buf.getvalue()
+        # Must encode to ASCII without errors (cp1251 is a superset of ASCII)
+        text.encode("ascii")
+
+    def test_round_robin_log_lines_ascii(self):
+        """Separator lines printed during round-robin must be ASCII."""
+        separator = "-" * 60
+        separator.encode("ascii")
 
 
 class TestDeleteIfEmptyRunDir(unittest.TestCase):
