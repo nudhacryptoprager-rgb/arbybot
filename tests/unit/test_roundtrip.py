@@ -908,3 +908,230 @@ class TestRoundtripStatsWarnings:
         
         assert not any("L1_COST_SOURCE" in w for w in stats.warnings), \
             "Should NOT warn when l1_cost_source='onchain'"
+
+
+# ---------------------------------------------------------------------------
+# v3.3.0: Dynamic size sweep tests
+# ---------------------------------------------------------------------------
+
+class TestSizeSweep:
+    """Tests for sweep_roundtrip_sizes()."""
+
+    def _make_base_quotes(self):
+        """Build minimal buy/sell quote pair for sweep testing."""
+        buy_quote = {
+            "token_in": "WETH",
+            "token_out": "USDC",
+            "dex_id": "uniswap_v3",
+            "pool_address": "0xBUY",
+            "fee": 500,
+            "amount_in_wei": 1_000_000_000_000_000_000,
+            "amount_out_wei": 2000_000_000,
+            "gas_estimate": 150_000,
+            "ticks_crossed": 2,
+            "sqrt_price_x96": 100,
+        }
+        sell_quote = {
+            "token_in": "USDC",
+            "token_out": "WETH",
+            "dex_id": "sushiswap_v3",
+            "pool_address": "0xSELL",
+            "fee": 500,
+            "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 1_010_000_000_000_000_000,
+            "gas_estimate": 150_000,
+            "ticks_crossed": 2,
+            "sqrt_price_x96": 100,
+        }
+        return buy_quote, sell_quote
+
+    def test_sweep_returns_result_dataclass(self):
+        """sweep_roundtrip_sizes returns SizeSweepResult."""
+        from engine.roundtrip import sweep_roundtrip_sizes, SizeSweepResult
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        # Simple requote: returns fixed amounts regardless of input
+        def requote_ok(amount_in_wei):
+            return {
+                "amount_out_wei": int(amount_in_wei * 0.999),
+                "gas_estimate": 150_000,
+                "ticks_crossed": 2,
+            }
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=requote_ok,
+            requote_leg2=requote_ok,
+            sizes_usd=[100, 200],
+            token_in_usd_price=2000.0,
+            token_in_decimals=18,
+        )
+
+        assert isinstance(result, SizeSweepResult)
+        assert result.pair == "WETH/USDC"
+        assert result.sizes_evaluated >= 1
+        assert len(result.points) == 2
+
+    def test_sweep_finds_best_size(self):
+        """Best size is the one with highest net_pnl_bps."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        # Simulate: small sizes are profitable, large ones lose to slippage
+        def requote_leg1(amount_in_wei):
+            # Leg1 output: modest slippage proportional to size
+            return {
+                "amount_out_wei": int(amount_in_wei * 0.999),
+                "gas_estimate": 150_000,
+                "ticks_crossed": 1,
+            }
+
+        def requote_leg2(amount_in_wei):
+            # Leg2: returns slightly more than input (profitable roundtrip)
+            return {
+                "amount_out_wei": int(amount_in_wei * 1.005),
+                "gas_estimate": 150_000,
+                "ticks_crossed": 1,
+            }
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=requote_leg1,
+            requote_leg2=requote_leg2,
+            sizes_usd=[50, 100, 200],
+            token_in_usd_price=2000.0,
+            token_in_decimals=18,
+            gas_price_wei=100_000_000,
+            l1_cost_wei=0,  # No L1 cost for cleaner test
+        )
+
+        assert result.best_size_usd is not None
+        assert result.best_net_pnl_bps is not None
+        assert result.sizes_evaluated == 3
+
+    def test_sweep_handles_requote_failure(self):
+        """Points with failed re-quotes are logged as errors."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        def requote_fail(_):
+            return None
+
+        def requote_ok(amount_in_wei):
+            return {
+                "amount_out_wei": int(amount_in_wei * 0.999),
+                "gas_estimate": 150_000,
+                "ticks_crossed": 1,
+            }
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=requote_fail,
+            requote_leg2=requote_ok,
+            sizes_usd=[100, 200],
+            token_in_usd_price=2000.0,
+        )
+
+        assert result.sizes_evaluated == 0
+        assert all(p.error == "LEG1_QUOTE_FAIL" for p in result.points)
+        assert result.frontier_reason == "ALL_FAILED"
+
+    def test_sweep_token_price_zero(self):
+        """Token price <= 0 returns early with TOKEN_PRICE_ZERO."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=lambda _: None,
+            requote_leg2=lambda _: None,
+            sizes_usd=[100],
+            token_in_usd_price=0.0,
+        )
+
+        assert result.frontier_reason == "TOKEN_PRICE_ZERO"
+        assert len(result.points) == 0
+
+    def test_sweep_to_dict(self):
+        """SizeSweepResult.to_dict() serializes correctly."""
+        from engine.roundtrip import SizeSweepResult, SizeSweepPoint
+
+        result = SizeSweepResult(
+            pair="WETH/USDC",
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap_v3",
+            sizes_evaluated=2,
+            best_size_usd=100,
+            best_net_pnl_bps=5.123,
+            best_gross_pnl_bps=12.456,
+            frontier_reason="PROFITABLE",
+            points=[
+                SizeSweepPoint(size_usd=100, net_pnl_bps=5.123, gross_pnl_bps=12.456, gas_bps=3.5),
+                SizeSweepPoint(size_usd=200, net_pnl_bps=-2.1, gross_pnl_bps=8.0, gas_bps=1.7),
+            ],
+        )
+
+        d = result.to_dict()
+        assert d["pair"] == "WETH/USDC"
+        assert d["best_size_usd"] == 100
+        assert d["best_net_pnl_bps"] == 5.12
+        assert d["frontier_reason"] == "PROFITABLE"
+        assert len(d["points"]) == 2
+        assert d["points"][0]["size_usd"] == 100
+        assert d["points"][0]["net_pnl_bps"] == 5.12
+
+    def test_sweep_frontier_profitable(self):
+        """PROFITABLE frontier when best pnl > 0."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        # Leg2 returns more than started with = profitable roundtrip
+        def requote_leg1(amount_in_wei):
+            return {"amount_out_wei": int(amount_in_wei * 0.999), "gas_estimate": 100_000, "ticks_crossed": 0}
+
+        def requote_leg2(amount_in_wei):
+            return {"amount_out_wei": int(amount_in_wei * 1.01), "gas_estimate": 100_000, "ticks_crossed": 0}
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=requote_leg1,
+            requote_leg2=requote_leg2,
+            sizes_usd=[50, 100],
+            token_in_usd_price=2000.0,
+            gas_price_wei=100_000_000,
+            l1_cost_wei=0,
+        )
+
+        assert result.frontier_reason == "PROFITABLE"
+        assert result.best_net_pnl_bps > 0
+
+    def test_sweep_exception_in_requote_handled(self):
+        """RuntimeError in requote callback is caught gracefully."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        def requote_raises(_):
+            raise RuntimeError("RPC timeout")
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=requote_raises,
+            requote_leg2=lambda _: None,
+            sizes_usd=[100],
+            token_in_usd_price=2000.0,
+        )
+
+        assert result.sizes_evaluated == 0
+        assert result.points[0].error == "LEG1_QUOTE_FAIL"

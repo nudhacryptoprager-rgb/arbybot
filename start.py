@@ -198,6 +198,9 @@ def new_chain_stats() -> dict[str, Any]:
         "roundtrip_evaluated_total": 0,
         "best_roundtrip_net_bps": None,
         "best_measured_spread_gap_bps": None,
+        "sweep_best_net_pnl_bps": None,
+        "sweep_best_size_usd": None,
+        "sweep_best_pair": None,
         "last_run_timestamp": None,
         "last_run_dir": None,
         # Richer per-chain fields (last-run snapshot)
@@ -239,6 +242,14 @@ def update_chain_stats(
         if run_gap is not None:
             prev_gap = stats.get("best_measured_spread_gap_bps")
             stats["best_measured_spread_gap_bps"] = run_gap if prev_gap is None else max(prev_gap, run_gap)
+        sweep = rt.get("dynamic_sweep", {})
+        sweep_pnl = sweep.get("best_net_pnl_bps")
+        if sweep_pnl is not None:
+            prev_sweep = stats.get("sweep_best_net_pnl_bps")
+            if prev_sweep is None or sweep_pnl > prev_sweep:
+                stats["sweep_best_net_pnl_bps"] = sweep_pnl
+                stats["sweep_best_size_usd"] = sweep.get("best_size_usd")
+                stats["sweep_best_pair"] = sweep.get("best_pair")
         ctx = summary.get("run_context", {})
         stats["last_run_timestamp"] = ctx.get("run_timestamp", stats["last_run_timestamp"])
         # Richer snapshot fields
@@ -321,6 +332,18 @@ def build_summary(
             (s["best_measured_spread_gap_bps"] for s in per_chain.values() if s.get("best_measured_spread_gap_bps") is not None),
             default=None,
         ),
+        "sweep_best_net_pnl_bps": max(
+            (s["sweep_best_net_pnl_bps"] for s in per_chain.values() if s.get("sweep_best_net_pnl_bps") is not None),
+            default=None,
+        ),
+        "sweep_best_size_usd": next(
+            (
+                s["sweep_best_size_usd"]
+                for s in sorted(per_chain.values(), key=lambda x: x.get("sweep_best_net_pnl_bps") or -9999, reverse=True)
+                if s.get("sweep_best_size_usd") is not None
+            ),
+            None,
+        ),
         "pass_chains": pass_chains,
         "fail_chains": fail_chains,
         "accepted_fail_chains": accepted_fail_chains,
@@ -349,6 +372,10 @@ def print_summary(summary: dict[str, Any]) -> None:
     gap_str = f"{gap_bps:+.2f} bps" if gap_bps is not None else "n/a"
     print(f"Profitable RTs: {summary.get('total_profitable_roundtrips', 0)}  (evaluated: {summary.get('total_roundtrip_evaluated', 0)}, best: {best_str})")
     print(f"Spread gap:     {gap_str}  (measured, target: >=0)")
+    sw_bps = summary.get('sweep_best_net_pnl_bps')
+    sw_size = summary.get('sweep_best_size_usd')
+    if sw_bps is not None:
+        print(f"Sweep best:     {sw_bps:+.2f} bps @ ${sw_size}")
 
     pass_c = summary.get("pass_chains", [])
     fail_c = summary.get("fail_chains", [])

@@ -260,6 +260,9 @@ class TestBuildSummary(unittest.TestCase):
             "roundtrip_evaluated_total": 0,
             "best_roundtrip_net_bps": None,
             "best_measured_spread_gap_bps": None,
+            "sweep_best_net_pnl_bps": None,
+            "sweep_best_size_usd": None,
+            "sweep_best_pair": None,
             "last_run_timestamp": "2026-03-10T10:00:00Z",
             "last_run_dir": "ci_m5_gate_20260310_100000",
             "last_run_summary_status": "PASS",
@@ -311,6 +314,15 @@ class TestBuildSummary(unittest.TestCase):
         self.assertEqual(summary["total_profitable_roundtrips"], 4)
         self.assertEqual(summary["total_roundtrip_evaluated"], 14)
         self.assertAlmostEqual(summary["best_roundtrip_net_bps"], 5.2)
+
+    def test_summary_sweep_fields(self):
+        per_chain = {
+            "arb": self._make_per_chain(sweep_best_net_pnl_bps=3.5, sweep_best_size_usd=100, sweep_best_pair="WETH/USDC"),
+            "base": self._make_per_chain(sweep_best_net_pnl_bps=-5.0, sweep_best_size_usd=200, sweep_best_pair="WBTC/USDC"),
+        }
+        summary = start.build_summary(per_chain, 60.0, [])
+        self.assertAlmostEqual(summary["sweep_best_net_pnl_bps"], 3.5)
+        self.assertEqual(summary["sweep_best_size_usd"], 100)
 
 
 class TestExitPolicy(unittest.TestCase):
@@ -555,6 +567,9 @@ class TestAcceptedFailChains(unittest.TestCase):
             "roundtrip_evaluated_total": 0,
             "best_roundtrip_net_bps": None,
             "best_measured_spread_gap_bps": None,
+            "sweep_best_net_pnl_bps": None,
+            "sweep_best_size_usd": None,
+            "sweep_best_pair": None,
             "last_run_timestamp": "2026-03-10T10:00:00Z",
             "last_run_dir": "ci_m5_gate_20260310_100000",
             "last_run_summary_status": "PASS",

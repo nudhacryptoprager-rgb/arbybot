@@ -445,6 +445,15 @@ autosize:
     - "volatility"              # price moved > X% in window
     - "cooldown_active"         # within cooldown period
 
+# v3.3.0: Dynamic size sweep (truth-probe)
+# Sweeps multiple notional sizes per route to find optimal roundtrip PnL.
+# Runs AFTER the fixed-baseline roundtrip evaluation for regression safety.
+# Each route requires 2 RPC calls per size (leg1 + leg2 re-quote).
+dynamic_probe:
+  enabled: true
+  sizes_usd: [50, 75, 100, 125, 150, 200, 250]
+  top_routes: 3         # Sweep only top-3 eligible routes (RPC budget)
+
 # Spread signal threshold (M5)
 # Signals with spread_bps_exact < this are filtered out
 # Production: 20 bps minimum (filters marginal signals where sign can flip from slippage)

@@ -823,6 +823,139 @@ def run_scan(
             if isinstance(opp, dict) and opp.get("measured_spread_minus_required_bps") is not None
         ]
         stats["roundtrip"]["best_measured_spread_gap_bps"] = max(measured_gaps) if measured_gaps else None
+        
+        # v3.3.0: Dynamic size sweep — find optimal notional per route
+        dynamic_probe_cfg = config.get("dynamic_probe", {})
+        if dynamic_probe_cfg.get("enabled") and eligible_opps:
+            from engine.roundtrip import sweep_roundtrip_sizes
+
+            sweep_sizes = dynamic_probe_cfg.get("sizes_usd", [50, 100, 150, 200, 250])
+            max_routes = dynamic_probe_cfg.get("top_routes", 3)
+
+            # Factory: re-quote leg1 on sell_dex (token_in → token_out, same direction)
+            def _make_leg1_requote(quote: Dict):
+                _dex_id = quote.get("dex_id", "")
+                _dex_cfg = get_dex_config(chain_key, _dex_id)
+                _quoter = _dex_cfg.get_quoter_address() if _dex_cfg else None
+                _ti_sym = quote.get("token_in", "")
+                _to_sym = quote.get("token_out", "")
+                _fee = quote.get("fee", 3000)
+                _ti_addr = get_token_address(chain_key, _ti_sym)
+                _to_addr = get_token_address(chain_key, _to_sym)
+                if not _quoter or not _ti_addr or not _to_addr:
+                    return None
+
+                def _requote(amount_in_wei: int) -> Optional[Dict]:
+                    r = read_quoter_v2(
+                        quoter_address=_quoter,
+                        token_in=_ti_addr,
+                        token_out=_to_addr,
+                        amount_in=amount_in_wei,
+                        fee=_fee,
+                        rpc_url=resolved_http,
+                        block_num=current_block,
+                    )
+                    if r:
+                        return {
+                            "amount_out_wei": r["amount_out"],
+                            "gas_estimate": r.get("gas_estimate", 150000),
+                            "ticks_crossed": r.get("ticks_crossed", 0),
+                            "sqrt_price_after": r.get("sqrt_price_after"),
+                        }
+                    return None
+                return _requote
+
+            # Factory: re-quote leg2 on buy_dex (token_out → token_in, REVERSE)
+            def _make_leg2_requote(quote: Dict):
+                _dex_id = quote.get("dex_id", "")
+                _dex_cfg = get_dex_config(chain_key, _dex_id)
+                _quoter = _dex_cfg.get_quoter_address() if _dex_cfg else None
+                _to_sym = quote.get("token_out", "")
+                _ti_sym = quote.get("token_in", "")
+                _fee = quote.get("fee", 3000)
+                _to_addr = get_token_address(chain_key, _to_sym)
+                _ti_addr = get_token_address(chain_key, _ti_sym)
+                if not _quoter or not _ti_addr or not _to_addr:
+                    return None
+
+                def _requote(amount_in_wei: int) -> Optional[Dict]:
+                    r = read_quoter_v2(
+                        quoter_address=_quoter,
+                        token_in=_to_addr,   # REVERSE: token_out → token_in
+                        token_out=_ti_addr,
+                        amount_in=amount_in_wei,
+                        fee=_fee,
+                        rpc_url=resolved_http,
+                        block_num=current_block,
+                    )
+                    if r:
+                        return {
+                            "amount_out_wei": r["amount_out"],
+                            "gas_estimate": r.get("gas_estimate", 150000),
+                            "ticks_crossed": r.get("ticks_crossed", 0),
+                            "sqrt_price_after": r.get("sqrt_price_after"),
+                        }
+                    return None
+                return _requote
+
+            sweep_results = []
+            for opp in eligible_opps[:max_routes]:
+                buy_key = f"{opp.get('buy_dex')}:{opp.get('diagnostics', {}).get('buy_pool')}:{opp.get('buy_fee')}"
+                sell_key = f"{opp.get('sell_dex')}:{opp.get('diagnostics', {}).get('sell_pool')}:{opp.get('sell_fee')}"
+                bq = quotes_by_key.get(buy_key)
+                sq = quotes_by_key.get(sell_key)
+                if not bq or not sq:
+                    continue
+
+                leg1_rq = _make_leg1_requote(sq)   # leg1 on sell_dex
+                leg2_rq = _make_leg2_requote(bq)   # leg2 on buy_dex
+                if not leg1_rq or not leg2_rq:
+                    continue
+
+                _ti = sq.get("token_in", "WETH")
+                _ti_price = (config.get("tokens_usd_price") or {}).get(_ti)
+                if not _ti_price:
+                    _ti_price = eth_usd if _ti in ("WETH", "ETH") else None
+                if not _ti_price:
+                    continue
+
+                _ti_dec = token_decimals.get(_ti, 18)
+
+                sr = sweep_roundtrip_sizes(
+                    buy_quote_base=sq,   # leg1 base (sell_dex quote)
+                    sell_quote_base=bq,  # leg2 base (buy_dex quote)
+                    requote_leg1=leg1_rq,
+                    requote_leg2=leg2_rq,
+                    sizes_usd=sweep_sizes,
+                    token_in_usd_price=_ti_price,
+                    token_in_decimals=_ti_dec,
+                    gas_price_wei=live_gas_price_wei,
+                    l1_cost_wei=l1_cost_wei,
+                    l1_cost_source=l1_cost_source,
+                    eth_usd_price=eth_usd,
+                )
+                sweep_results.append(sr)
+                logger.info(
+                    "Sweep %s: best=$%s, pnl=%.2f bps, frontier=%s",
+                    sr.pair, sr.best_size_usd, sr.best_net_pnl_bps or 0.0, sr.frontier_reason,
+                )
+
+            if sweep_results:
+                best_sweep = max(
+                    sweep_results,
+                    key=lambda s: s.best_net_pnl_bps if s.best_net_pnl_bps is not None else -9999,
+                )
+                stats["roundtrip"]["dynamic_sweep"] = {
+                    "enabled": True,
+                    "routes_swept": len(sweep_results),
+                    "best_pair": best_sweep.pair,
+                    "best_size_usd": best_sweep.best_size_usd,
+                    "best_net_pnl_bps": best_sweep.best_net_pnl_bps,
+                    "best_frontier_reason": best_sweep.frontier_reason,
+                    "results": [s.to_dict() for s in sweep_results],
+                }
+            else:
+                stats["roundtrip"]["dynamic_sweep"] = {"enabled": True, "routes_swept": 0}
             
     except Exception as rt_err:
         logger.debug("Roundtrip evaluation skipped: %s", rt_err)

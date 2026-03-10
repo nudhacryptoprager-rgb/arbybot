@@ -764,3 +764,210 @@ def classify_rejection_reason(
     
     # Balanced costs - general unprofitable
     return "NET_PROFIT_TOO_LOW"
+
+
+# ---------------------------------------------------------------------------
+# v3.3.0: Dynamic size sweep — find optimal notional per route
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SizeSweepPoint:
+    """Result of one notional step in the sweep."""
+    size_usd: float
+    net_pnl_bps: Optional[float] = None
+    gross_pnl_bps: Optional[float] = None
+    measured_slippage_bps: Optional[float] = None
+    gas_bps: Optional[float] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class SizeSweepResult:
+    """Aggregated result from sweeping multiple notional sizes."""
+    pair: str
+    buy_dex: str
+    sell_dex: str
+    sizes_evaluated: int = 0
+    best_size_usd: Optional[float] = None
+    best_net_pnl_bps: Optional[float] = None
+    best_gross_pnl_bps: Optional[float] = None
+    frontier_reason: str = "NO_DATA"
+    points: Optional[List[SizeSweepPoint]] = None
+
+    def __post_init__(self):
+        if self.points is None:
+            self.points = []
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pair": self.pair,
+            "buy_dex": self.buy_dex,
+            "sell_dex": self.sell_dex,
+            "sizes_evaluated": self.sizes_evaluated,
+            "best_size_usd": self.best_size_usd,
+            "best_net_pnl_bps": round(self.best_net_pnl_bps, 2) if self.best_net_pnl_bps is not None else None,
+            "best_gross_pnl_bps": round(self.best_gross_pnl_bps, 2) if self.best_gross_pnl_bps is not None else None,
+            "frontier_reason": self.frontier_reason,
+            "points": [
+                {
+                    "size_usd": p.size_usd,
+                    "net_pnl_bps": round(p.net_pnl_bps, 2) if p.net_pnl_bps is not None else None,
+                    "gross_pnl_bps": round(p.gross_pnl_bps, 2) if p.gross_pnl_bps is not None else None,
+                    "measured_slippage_bps": round(p.measured_slippage_bps, 2) if p.measured_slippage_bps is not None else None,
+                    "gas_bps": round(p.gas_bps, 2) if p.gas_bps is not None else None,
+                    "error": p.error,
+                }
+                for p in (self.points or [])
+            ],
+        }
+
+
+def sweep_roundtrip_sizes(
+    buy_quote_base: Dict[str, Any],
+    sell_quote_base: Dict[str, Any],
+    requote_leg1,
+    requote_leg2,
+    sizes_usd: List[float],
+    token_in_usd_price: float,
+    token_in_decimals: int = 18,
+    gas_price_wei: int = 100_000_000,
+    l1_cost_wei: int = 60_000_000_000_000,
+    l1_cost_source: str = "default",
+    eth_usd_price: float = 2000.0,
+) -> SizeSweepResult:
+    """Sweep multiple notional sizes for a single opportunity route.
+
+    For each size, re-quotes both legs via *requote_leg1* / *requote_leg2*
+    and runs ``simulate_roundtrip`` to find the best net_pnl_bps.
+
+    Args:
+        buy_quote_base: Leg-1 quote dict (token_in → token_out, lower-price DEX).
+        sell_quote_base: Leg-2 quote dict (token_out → token_in, higher-price DEX).
+        requote_leg1: ``(amount_in_wei: int) -> Optional[Dict]``
+            Must return ``{amount_out_wei, gas_estimate, ticks_crossed,
+            sqrt_price_x96?, sqrt_price_after?}`` or ``None``.
+        requote_leg2: ``(amount_in_wei: int) -> Optional[Dict]``  Same shape.
+        sizes_usd: Ordered list of USD notionals to probe.
+        token_in_usd_price: USD price of token_in (for wei conversion).
+        token_in_decimals: Decimals of token_in.
+        gas_price_wei / l1_cost_wei / l1_cost_source / eth_usd_price: gas params.
+
+    Returns:
+        SizeSweepResult with per-size points and best discovery.
+    """
+    pair = f"{buy_quote_base.get('token_in', '')}/{buy_quote_base.get('token_out', '')}"
+    result = SizeSweepResult(
+        pair=pair,
+        buy_dex=buy_quote_base.get("dex_id", ""),
+        sell_dex=sell_quote_base.get("dex_id", ""),
+    )
+
+    if token_in_usd_price <= 0:
+        result.frontier_reason = "TOKEN_PRICE_ZERO"
+        return result
+
+    best_net: Optional[float] = None
+
+    for size_usd in sizes_usd:
+        # Convert USD → token_in wei
+        amount_in_wei = int(
+            (Decimal(str(size_usd)) / Decimal(str(token_in_usd_price)))
+            * (Decimal(10) ** token_in_decimals)
+        )
+        if amount_in_wei <= 0:
+            result.points.append(SizeSweepPoint(size_usd=size_usd, error="AMOUNT_ZERO"))
+            continue
+
+        # Re-quote leg1 at this size
+        try:
+            leg1_q = requote_leg1(amount_in_wei)
+        except Exception as e:
+            logger.warning("Sweep leg1 requote failed at $%s: %s", size_usd, e)
+            result.points.append(SizeSweepPoint(size_usd=size_usd, error="LEG1_QUOTE_FAIL"))
+            continue
+        if not leg1_q or not leg1_q.get("amount_out_wei"):
+            result.points.append(SizeSweepPoint(size_usd=size_usd, error="LEG1_QUOTE_FAIL"))
+            continue
+
+        leg1_amount_out = leg1_q["amount_out_wei"]
+
+        # Re-quote leg2 using leg1's actual output as input
+        try:
+            leg2_q = requote_leg2(leg1_amount_out)
+        except Exception as e:
+            logger.warning("Sweep leg2 requote failed at $%s: %s", size_usd, e)
+            result.points.append(SizeSweepPoint(size_usd=size_usd, error="LEG2_QUOTE_FAIL"))
+            continue
+        if not leg2_q or not leg2_q.get("amount_out_wei"):
+            result.points.append(SizeSweepPoint(size_usd=size_usd, error="LEG2_QUOTE_FAIL"))
+            continue
+
+        # Build synthetic quote dicts for simulate_roundtrip
+        synth_buy = {
+            **buy_quote_base,
+            "amount_in_wei": amount_in_wei,
+            "amount_out_wei": leg1_q["amount_out_wei"],
+            "gas_estimate": leg1_q.get("gas_estimate", 150_000),
+            "ticks_crossed": leg1_q.get("ticks_crossed", 0),
+            "sqrt_price_x96": leg1_q.get("sqrt_price_x96") or buy_quote_base.get("sqrt_price_x96"),
+            "sqrt_price_after": leg1_q.get("sqrt_price_after"),
+        }
+        synth_sell = {
+            **sell_quote_base,
+            "amount_in_wei": leg1_amount_out,
+            "amount_out_wei": leg2_q["amount_out_wei"],
+            "gas_estimate": leg2_q.get("gas_estimate", 150_000),
+            "ticks_crossed": leg2_q.get("ticks_crossed", 0),
+            "sqrt_price_x96": leg2_q.get("sqrt_price_x96") or sell_quote_base.get("sqrt_price_x96"),
+            "sqrt_price_after": leg2_q.get("sqrt_price_after"),
+        }
+
+        # Capture leg2_q for lambda closure
+        _leg2_out = leg2_q["amount_out_wei"]
+        _leg2_gas = leg2_q.get("gas_estimate", 150_000)
+        _leg2_ticks = leg2_q.get("ticks_crossed", 0)
+
+        rt = simulate_roundtrip(
+            buy_quote=synth_buy,
+            sell_quote=synth_sell,
+            gas_price_wei=gas_price_wei,
+            l1_cost_wei=l1_cost_wei,
+            l1_cost_source=l1_cost_source,
+            eth_usd_price=eth_usd_price,
+            token_in_usd_price=token_in_usd_price,
+            token_in_decimals=token_in_decimals,
+            leg2_quote_callback=lambda _amt, _out=_leg2_out, _gas=_leg2_gas, _tc=_leg2_ticks: {
+                "amount_out_wei": _out,
+                "gas_estimate": _gas,
+                "ticks_crossed": _tc,
+            },
+        )
+
+        # Gas as bps of notional
+        gas_bps_val = (rt.gas_cost_usd / size_usd) * 10000 if size_usd > 0 else 0
+
+        point = SizeSweepPoint(
+            size_usd=size_usd,
+            net_pnl_bps=rt.net_pnl_bps,
+            gross_pnl_bps=rt.gross_pnl_bps,
+            measured_slippage_bps=rt.estimated_slippage_bps,
+            gas_bps=gas_bps_val,
+        )
+        result.points.append(point)
+
+        if best_net is None or rt.net_pnl_bps > best_net:
+            best_net = rt.net_pnl_bps
+            result.best_size_usd = size_usd
+            result.best_net_pnl_bps = rt.net_pnl_bps
+            result.best_gross_pnl_bps = rt.gross_pnl_bps
+
+    result.sizes_evaluated = len([p for p in result.points if p.error is None])
+
+    if result.best_net_pnl_bps is not None and result.best_net_pnl_bps > 0:
+        result.frontier_reason = "PROFITABLE"
+    elif result.best_net_pnl_bps is not None:
+        result.frontier_reason = "BEST_NEG"
+    elif result.sizes_evaluated == 0:
+        result.frontier_reason = "ALL_FAILED"
+
+    return result
