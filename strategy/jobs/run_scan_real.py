@@ -827,9 +827,9 @@ def run_scan(
         # v3.3.0: Dynamic size sweep — find optimal notional per route
         dynamic_probe_cfg = config.get("dynamic_probe", {})
         if dynamic_probe_cfg.get("enabled") and eligible_opps:
-            from engine.roundtrip import sweep_roundtrip_sizes
+            from engine.roundtrip import sweep_roundtrip_sizes, CANONICAL_SWEEP_SIZES_USD
 
-            sweep_sizes = dynamic_probe_cfg.get("sizes_usd", [50, 100, 150, 200, 250])
+            sweep_sizes = dynamic_probe_cfg.get("sizes_usd", None) or list(CANONICAL_SWEEP_SIZES_USD)
             max_routes = dynamic_probe_cfg.get("top_routes", 3)
 
             # Factory: re-quote leg1 on sell_dex (token_in → token_out, same direction)

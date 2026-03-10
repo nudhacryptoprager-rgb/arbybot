@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]
 **Updated**: 2026-03-10
-**Tests**: 1598 passed, 2 skipped
-**Evidence runDirs**: manual_run_20260310_190854 (fresh scan with roundtrip fix, evaluated_count=2)
+**Tests**: 1612 passed, 2 skipped
+**Evidence runDirs**: manual_run_20260310_205633 (sweep canonical: 3 routes x 7 sizes, truth_report includes dynamic_sweep)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json}`
 **Evidence long scan**: `data/runs/_incidents/long_scan_latest.json` (115 runs, 302 included signals, $275.20 paper net)
 
@@ -29,8 +29,8 @@ scroll:         INFRA_READY (single DEX, probe-only, accepted-fail, 0/19 PASS)
 ```
 
 **2h scan result**: 96 PASS / 15 FAIL (all Scroll) / 4 NO_DATA (all Scroll) / 0 INFRA_FAIL
-**Roundtrip evaluation**: FIXED (code bug resolved, evaluated_count=2, profitable_count=0, best_net=-66.6 bps)
-**Profit truth**: NOT YET — economics blocker: measured slippage (50-120 bps) exceeds captured spread (30-60 bps)
+**Roundtrip evaluation**: CANONICAL SWEEP (evaluated_count=3, profitable_count=0, baseline best_net=-29.96 bps, sweep_best=-17.13 bps @ $50)
+**Profit truth**: NOT YET — economics blocker: LP fees + slippage exceed captured spread at all sizes
 
 ---
 

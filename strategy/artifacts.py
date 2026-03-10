@@ -264,6 +264,39 @@ def _compute_execution_pnl(
     }
 
 
+def _build_roundtrip_summary(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the curated roundtrip_summary block for truth_report.
+
+    Includes the fixed-baseline fields plus the canonical dynamic_sweep
+    sub-block so gates/consumers see sweep results directly.
+    """
+    rt = stats.get("roundtrip", {})
+    ds = rt.get("dynamic_sweep", {})
+    summary: Dict[str, Any] = {
+        "enabled": rt.get("enabled", False),
+        "evaluated_count": rt.get("evaluated_count", 0),
+        "profitable_count": rt.get("profitable_count", 0),
+        "real_quote_count": rt.get("real_quote_count", 0),
+        "best_net_pnl_bps": rt.get("best_net_pnl_bps"),
+        "l1_cost_wei": rt.get("l1_cost_wei", 0),
+        "l1_cost_source": rt.get("l1_cost_source", "none"),
+        "gas_price_wei_used": rt.get("gas_price_wei_used", 0),
+        "best_measured_spread_gap_bps": rt.get("best_measured_spread_gap_bps"),
+    }
+    # v3.3.0: Canonical dynamic sweep sub-block
+    if ds.get("enabled"):
+        summary["dynamic_sweep"] = {
+            "enabled": True,
+            "routes_swept": ds.get("routes_swept", 0),
+            "sizes_evaluated": ds.get("results", [{}])[0].get("sizes_evaluated", 0) if ds.get("results") else 0,
+            "sweep_best_size_usd": ds.get("best_size_usd"),
+            "sweep_best_net_pnl_bps": ds.get("best_net_pnl_bps"),
+            "sweep_best_frontier_reason": ds.get("best_frontier_reason", "NO_DATA"),
+            "frontier_pair": ds.get("best_pair"),
+        }
+    return summary
+
+
 def build_truth_data(
     config: Dict[str, Any],
     stats: Dict[str, Any],
@@ -370,19 +403,7 @@ def build_truth_data(
         # M4.2: Opportunity engine integration
         "opportunity_engine": stats.get("opportunity_engine", {}),
         # v2.1.0: Roundtrip reality check (Step 4 - roundtrip in truth_report)
-        "roundtrip_summary": {
-            "enabled": stats.get("roundtrip", {}).get("enabled", False),
-            "evaluated_count": stats.get("roundtrip", {}).get("evaluated_count", 0),
-            "profitable_count": stats.get("roundtrip", {}).get("profitable_count", 0),
-            "real_quote_count": stats.get("roundtrip", {}).get("real_quote_count", 0),
-            "best_net_pnl_bps": stats.get("roundtrip", {}).get("best_net_pnl_bps"),
-            # v2.1.0-fix: Add L1 cost and gas source tracking for execution readiness
-            "l1_cost_wei": stats.get("roundtrip", {}).get("l1_cost_wei", 0),
-            "l1_cost_source": stats.get("roundtrip", {}).get("l1_cost_source", "none"),
-            "gas_price_wei_used": stats.get("roundtrip", {}).get("gas_price_wei_used", 0),
-            # M4.2 blocker metric: best gap across evaluated opportunities
-            "best_measured_spread_gap_bps": stats.get("roundtrip", {}).get("best_measured_spread_gap_bps"),
-        },
+        "roundtrip_summary": _build_roundtrip_summary(stats),
         # v2.1.0: truth_mode_m42 - when true, one-leg PnL is DIAGNOSTIC only, roundtrip is canonical
         "truth_mode_m42": config.get("truth_mode_m42", False),
         # v2.3.0: Explicit DIAGNOSTIC vs CANONICAL profit semantics

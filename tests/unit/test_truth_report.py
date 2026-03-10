@@ -1010,5 +1010,81 @@ class TestSuspectSpreadConfigPropagation(unittest.TestCase):
         )
 
 
+class TestBuildRoundtripSummary(unittest.TestCase):
+    """Contract tests for _build_roundtrip_summary sweep integration."""
+
+    def test_includes_sweep_when_enabled(self):
+        """roundtrip_summary includes dynamic_sweep sub-block when sweep ran."""
+        from strategy.artifacts import _build_roundtrip_summary
+
+        stats = {
+            "roundtrip": {
+                "enabled": True,
+                "evaluated_count": 2,
+                "profitable_count": 0,
+                "real_quote_count": 2,
+                "best_net_pnl_bps": -20.98,
+                "l1_cost_wei": 9550350000,
+                "l1_cost_source": "onchain",
+                "gas_price_wei_used": 20000000,
+                "best_measured_spread_gap_bps": -3.71,
+                "dynamic_sweep": {
+                    "enabled": True,
+                    "routes_swept": 3,
+                    "best_pair": "WBTC/WETH",
+                    "best_size_usd": 50,
+                    "best_net_pnl_bps": -13.44,
+                    "best_frontier_reason": "BEST_NEG",
+                    "results": [
+                        {"pair": "WBTC/WETH", "sizes_evaluated": 7, "best_size_usd": 50},
+                    ],
+                },
+            }
+        }
+        summary = _build_roundtrip_summary(stats)
+        self.assertIn("dynamic_sweep", summary)
+        ds = summary["dynamic_sweep"]
+        self.assertTrue(ds["enabled"])
+        self.assertEqual(ds["sweep_best_size_usd"], 50)
+        self.assertEqual(ds["sweep_best_net_pnl_bps"], -13.44)
+        self.assertEqual(ds["frontier_pair"], "WBTC/WETH")
+        self.assertEqual(ds["sizes_evaluated"], 7)
+        self.assertEqual(ds["sweep_best_frontier_reason"], "BEST_NEG")
+        self.assertEqual(ds["routes_swept"], 3)
+
+    def test_omits_sweep_when_not_enabled(self):
+        """roundtrip_summary has NO dynamic_sweep key when sweep didn't run."""
+        from strategy.artifacts import _build_roundtrip_summary
+
+        stats = {
+            "roundtrip": {
+                "enabled": True,
+                "evaluated_count": 1,
+                "profitable_count": 0,
+                "real_quote_count": 1,
+                "best_net_pnl_bps": -30.0,
+                "l1_cost_wei": 0,
+                "l1_cost_source": "none",
+                "gas_price_wei_used": 0,
+                "best_measured_spread_gap_bps": -10.0,
+            }
+        }
+        summary = _build_roundtrip_summary(stats)
+        self.assertNotIn("dynamic_sweep", summary)
+
+    def test_baseline_fields_always_present(self):
+        """Fixed-baseline fields are always in roundtrip_summary."""
+        from strategy.artifacts import _build_roundtrip_summary
+
+        stats = {"roundtrip": {"enabled": True, "evaluated_count": 0}}
+        summary = _build_roundtrip_summary(stats)
+        for key in [
+            "enabled", "evaluated_count", "profitable_count",
+            "real_quote_count", "best_net_pnl_bps", "l1_cost_wei",
+            "l1_cost_source", "gas_price_wei_used", "best_measured_spread_gap_bps",
+        ]:
+            self.assertIn(key, summary, f"Missing baseline field: {key}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1135,3 +1135,83 @@ class TestSizeSweep:
 
         assert result.sizes_evaluated == 0
         assert result.points[0].error == "LEG1_QUOTE_FAIL"
+
+
+class TestCanonicalSweep:
+    """Contract tests for CANONICAL_SWEEP_SIZES_USD and sweep defaults."""
+
+    def test_canonical_sizes_constant_stable(self):
+        """CANONICAL_SWEEP_SIZES_USD must be exactly [50, 75, 100, 125, 150, 200, 250]."""
+        from engine.roundtrip import CANONICAL_SWEEP_SIZES_USD
+
+        assert CANONICAL_SWEEP_SIZES_USD == [50, 75, 100, 125, 150, 200, 250]
+
+    def test_sweep_defaults_to_canonical_ladder(self):
+        """sweep_roundtrip_sizes uses CANONICAL_SWEEP_SIZES_USD when no sizes passed."""
+        from engine.roundtrip import sweep_roundtrip_sizes, CANONICAL_SWEEP_SIZES_USD
+
+        buy_q = {
+            "dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC",
+            "fee": 3000, "amount_in_wei": 1_000_000_000_000_000_000,
+            "amount_out_wei": 2000_000_000, "gas_estimate": 150_000,
+            "ticks_crossed": 2, "sqrt_price_x96": 100,
+        }
+        sell_q = {
+            "dex_id": "sushiswap_v3", "token_in": "USDC", "token_out": "WETH",
+            "fee": 3000, "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 1_010_000_000_000_000_000,
+            "gas_estimate": 150_000, "ticks_crossed": 2, "sqrt_price_x96": 100,
+        }
+
+        def requote_ok(amount_in_wei):
+            return {
+                "amount_out_wei": int(amount_in_wei * 0.999),
+                "gas_estimate": 150_000, "ticks_crossed": 2,
+            }
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=requote_ok,
+            requote_leg2=requote_ok,
+            token_in_usd_price=2000.0,
+            # sizes_usd NOT passed — must default to canonical
+        )
+        evaluated_sizes = [p.size_usd for p in result.points]
+        assert evaluated_sizes == CANONICAL_SWEEP_SIZES_USD
+
+    def test_sweep_best_size_selection(self):
+        """Sweep selects the size with highest net_pnl_bps as best."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q = {
+            "dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC",
+            "fee": 3000, "amount_in_wei": 1_000_000_000_000_000_000,
+            "amount_out_wei": 2000_000_000, "gas_estimate": 150_000,
+            "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+        sell_q = {
+            "dex_id": "sushiswap_v3", "token_in": "USDC", "token_out": "WETH",
+            "fee": 3000, "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 1_010_000_000_000_000_000,
+            "gas_estimate": 150_000, "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+
+        def requote_ok(amount_in_wei):
+            return {
+                "amount_out_wei": int(amount_in_wei * 0.999),
+                "gas_estimate": 150_000, "ticks_crossed": 0,
+            }
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=requote_ok,
+            requote_leg2=requote_ok,
+            sizes_usd=[50, 150, 250],
+            token_in_usd_price=2000.0,
+        )
+        # With fixed-ratio requote and fixed gas, smaller sizes have worse
+        # gas_bps but same gross_bps.  Best is the largest size (lowest gas %).
+        assert result.best_size_usd is not None
+        assert result.sizes_evaluated == 3

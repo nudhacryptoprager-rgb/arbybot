@@ -34,6 +34,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("engine.roundtrip")
 
+# ---------------------------------------------------------------------------
+# Canonical sweep size ladder — bounded, deterministic, session-independent.
+# Any change to this list requires a schema bump and test update.
+# ---------------------------------------------------------------------------
+CANONICAL_SWEEP_SIZES_USD: List[float] = [50, 75, 100, 125, 150, 200, 250]
+
 
 @dataclass
 class RoundTripResult:
@@ -767,7 +773,8 @@ def classify_rejection_reason(
 
 
 # ---------------------------------------------------------------------------
-# v3.3.0: Dynamic size sweep — find optimal notional per route
+# v3.3.0: Canonical dynamic size sweep — truth-probe mechanism for optimal
+# notional sizing.  Uses CANONICAL_SWEEP_SIZES_USD by default.
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -827,8 +834,8 @@ def sweep_roundtrip_sizes(
     sell_quote_base: Dict[str, Any],
     requote_leg1,
     requote_leg2,
-    sizes_usd: List[float],
-    token_in_usd_price: float,
+    sizes_usd: Optional[List[float]] = None,
+    token_in_usd_price: float = 0.0,
     token_in_decimals: int = 18,
     gas_price_wei: int = 100_000_000,
     l1_cost_wei: int = 60_000_000_000_000,
@@ -837,24 +844,16 @@ def sweep_roundtrip_sizes(
 ) -> SizeSweepResult:
     """Sweep multiple notional sizes for a single opportunity route.
 
+    This is the **canonical truth-probe mechanism** for finding the optimal
+    notional size.  By default ``sizes_usd`` falls back to
+    ``CANONICAL_SWEEP_SIZES_USD`` so the ladder is bounded, deterministic,
+    and identical across sessions.
+
     For each size, re-quotes both legs via *requote_leg1* / *requote_leg2*
     and runs ``simulate_roundtrip`` to find the best net_pnl_bps.
-
-    Args:
-        buy_quote_base: Leg-1 quote dict (token_in → token_out, lower-price DEX).
-        sell_quote_base: Leg-2 quote dict (token_out → token_in, higher-price DEX).
-        requote_leg1: ``(amount_in_wei: int) -> Optional[Dict]``
-            Must return ``{amount_out_wei, gas_estimate, ticks_crossed,
-            sqrt_price_x96?, sqrt_price_after?}`` or ``None``.
-        requote_leg2: ``(amount_in_wei: int) -> Optional[Dict]``  Same shape.
-        sizes_usd: Ordered list of USD notionals to probe.
-        token_in_usd_price: USD price of token_in (for wei conversion).
-        token_in_decimals: Decimals of token_in.
-        gas_price_wei / l1_cost_wei / l1_cost_source / eth_usd_price: gas params.
-
-    Returns:
-        SizeSweepResult with per-size points and best discovery.
     """
+    if sizes_usd is None:
+        sizes_usd = list(CANONICAL_SWEEP_SIZES_USD)
     pair = f"{buy_quote_base.get('token_in', '')}/{buy_quote_base.get('token_out', '')}"
     result = SizeSweepResult(
         pair=pair,
