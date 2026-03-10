@@ -524,5 +524,117 @@ class TestDeleteIfEmptyRunDir(unittest.TestCase):
             self.assertTrue(d.exists())
 
 
+class TestAcceptedFailChains(unittest.TestCase):
+    """Test --accepted-fail-chains feature: accepted failures excluded from exit policy."""
+
+    def _make_per_chain(self, **overrides):
+        base = {
+            "config": "real_minimal.yaml",
+            "runs": 2, "pass": 1, "no_data": 1, "fail": 0, "infra_fail": 0,
+            "infra_pass": 2,
+            "included_signals_total": 3,
+            "net_usdc_total": 10.5,
+            "profitable_roundtrips_total": 0,
+            "last_run_timestamp": "2026-03-10T10:00:00Z",
+            "last_run_dir": "ci_m5_gate_20260310_100000",
+            "last_run_summary_status": "PASS",
+            "last_quality_status": "PASS",
+            "last_chain_quality_level": "SIGNAL_PRODUCING",
+            "last_profit_truth_available": True,
+            "run_kind": "NORMAL",
+            "last_cross_dex_pairs_count": 5,
+            "accepted_fail": False,
+        }
+        base.update(overrides)
+        return base
+
+    def test_build_summary_separates_accepted_and_unexpected(self):
+        per_chain = {
+            "arb": self._make_per_chain(runs=2, fail=0, infra_fail=0),
+            "scroll": self._make_per_chain(runs=2, fail=1, accepted_fail=True),
+            "base": self._make_per_chain(runs=2, fail=1, accepted_fail=False),
+        }
+        per_chain["arb"]["pass"] = 2
+        summary = start.build_summary(per_chain, 100.0, [])
+        self.assertIn("scroll", summary["accepted_fail_chains"])
+        self.assertIn("base", summary["unexpected_fail_chains"])
+        self.assertNotIn("scroll", summary["unexpected_fail_chains"])
+        self.assertNotIn("base", summary["accepted_fail_chains"])
+        self.assertIn("arb", summary["pass_chains"])
+
+    def test_new_chain_stats_has_accepted_fail_field(self):
+        stats = start.new_chain_stats()
+        self.assertIn("accepted_fail", stats)
+        self.assertFalse(stats["accepted_fail"])
+
+    @patch("start.extract_gate_result")
+    @patch("start.extract_run_summary")
+    @patch("start.run_gate_once")
+    @patch("start.read_config_meta")
+    @patch("start.prune_run_dirs")
+    def test_accepted_fail_excluded_from_strict_exit(
+        self, mock_prune, mock_meta, mock_gate, mock_summary, mock_gate_res,
+    ):
+        """--max-fail-chains=0 + --accepted-fail-chains=scroll should pass if only scroll fails."""
+        def meta_side(path):
+            if "a.yaml" in path:
+                return {"chain": "arb", "run_kind": "NORMAL"}
+            return {"chain": "scroll", "run_kind": "COVERAGE"}
+
+        call_count = [0]
+        def summary_side(run_dir):
+            c = getattr(summary_side, "_c", 0)
+            summary_side._c = c + 1
+            # arb=PASS, scroll=FAIL
+            if c % 2 == 0:
+                return {"status": "PASS", "metrics": {}, "run_context": {}}
+            return {"status": "FAIL", "metrics": {}, "run_context": {}}
+
+        mock_meta.side_effect = meta_side
+        mock_gate.return_value = (0, None)
+        mock_summary.side_effect = summary_side
+        mock_gate_res.return_value = None
+        rc = start.main([
+            "--config-list", "a.yaml,b.yaml", "--max-runs", "2", "--minutes", "1",
+            "--sleep-seconds", "0", "--child-timeout", "0",
+            "--max-fail-chains", "0",
+            "--accepted-fail-chains", "scroll",
+            "--summary-file", os.path.join(tempfile.mkdtemp(), "test.json"),
+        ])
+        self.assertEqual(rc, 0, "scroll is accepted-fail, should not count toward fail limit")
+
+    @patch("start.extract_gate_result")
+    @patch("start.extract_run_summary")
+    @patch("start.run_gate_once")
+    @patch("start.read_config_meta")
+    @patch("start.prune_run_dirs")
+    def test_unexpected_fail_still_rejected_with_accepted_chains(
+        self, mock_prune, mock_meta, mock_gate, mock_summary, mock_gate_res,
+    ):
+        """--max-fail-chains=0 + --accepted-fail-chains=scroll should fail if arb also fails."""
+        call_count = [0]
+        def meta_side(path):
+            if "a.yaml" in path:
+                return {"chain": "arb", "run_kind": "NORMAL"}
+            return {"chain": "scroll", "run_kind": "COVERAGE"}
+
+        def summary_side(run_dir):
+            # Both arb and scroll FAIL
+            return {"status": "FAIL", "metrics": {}, "run_context": {}}
+
+        mock_meta.side_effect = meta_side
+        mock_gate.return_value = (0, None)
+        mock_summary.side_effect = summary_side
+        mock_gate_res.return_value = None
+        rc = start.main([
+            "--config-list", "a.yaml,b.yaml", "--max-runs", "2", "--minutes", "1",
+            "--sleep-seconds", "0", "--child-timeout", "0",
+            "--max-fail-chains", "0",
+            "--accepted-fail-chains", "scroll",
+            "--summary-file", os.path.join(tempfile.mkdtemp(), "test.json"),
+        ])
+        self.assertEqual(rc, 1, "arb is unexpected fail, should cause exit 1")
+
+
 if __name__ == "__main__":
     unittest.main()

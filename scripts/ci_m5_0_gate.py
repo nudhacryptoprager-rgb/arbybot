@@ -1596,11 +1596,11 @@ ENV VARIABLES:
                 if cross_dex_pairs_count == 0:
                     cross_dex_pairs = set()
                     
-                    # Fallback 1: Try signals.json
-                    signals_path = artifacts.get("signals")
-                    if signals_path and signals_path.exists():
+                    # Fallback 1: Try signals.json from reports dir
+                    signals_candidates = sorted((run_dir / "reports").glob("signals_*.json")) if run_dir else []
+                    if signals_candidates:
                         try:
-                            with open(signals_path) as f:
+                            with open(signals_candidates[-1]) as f:
                                 signals_data = json.load(f)
                             for sig in signals_data.get("signals", []):
                                 buy_dex = sig.get("buy_dex", "")
@@ -1613,7 +1613,7 @@ ENV VARIABLES:
                     
                     # Fallback 2: Try truth_report.spread_signals
                     if not cross_dex_pairs:
-                        truth_path = artifacts.get("truth")
+                        truth_path = artifacts.get("truth_report")
                         if truth_path and truth_path.exists():
                             try:
                                 with open(truth_path) as f:

@@ -457,6 +457,96 @@ class TestCrossDexPairsCountFallback(unittest.TestCase):
             # Should be 2 (unique pairs with cross-dex routes from truth_report)
             self.assertEqual(len(cross_dex_pairs), 2, "Should be 2 from truth_report fallback")
 
+    def test_cross_dex_fallback_uses_correct_artifact_keys(self):
+        """Regression: fallback must use actual artifact dict keys and run_dir glob.
+        
+        The original bug: artifacts dict uses "truth_report" not "truth",
+        and "signals" key is never registered. Fallback should resolve
+        signals from run_dir/reports/signals_*.json glob.
+        """
+        mock_scan = {
+            "schema_version": "3.2.0",
+            "run_mode": "FIXTURE_OFFLINE",
+            "run_context": {"run_timestamp": "2026-03-10T14:00:00Z"},
+            "stats": {
+                "quotes_fetched": 16,
+                "discovery_runtime": {"enabled": False}
+            }
+        }
+        mock_signals = {
+            "schema_version": "1.0.0",
+            "signals": [
+                {"pair": "WETH/USDT", "buy_dex": "sushiswap_v3", "sell_dex": "uniswap_v3"},
+                {"pair": "WBTC/WETH", "buy_dex": "sushiswap_v3", "sell_dex": "uniswap_v3"},
+                {"pair": "WBTC/USDC", "buy_dex": "uniswap_v3", "sell_dex": "sushiswap_v3"},
+            ]
+        }
+        mock_truth = {
+            "schema_version": "3.2.0",
+            "spread_signals": [
+                {"pair": "WETH/USDT", "buy_dex": "sushiswap_v3", "sell_dex": "uniswap_v3"},
+            ]
+        }
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            reports_dir = run_dir / "reports"
+            reports_dir.mkdir()
+            
+            scan_path = reports_dir / "scan_20260310_140000.json"
+            signals_path = reports_dir / "signals_20260310_140000.json"
+            truth_path = reports_dir / "truth_report_20260310_140000.json"
+            scan_path.write_text(json.dumps(mock_scan))
+            signals_path.write_text(json.dumps(mock_signals))
+            truth_path.write_text(json.dumps(mock_truth))
+            
+            # Build artifacts dict exactly as ci_m5_0_gate.py does
+            # Note: "truth_report" not "truth", and no "signals" key
+            artifacts = {
+                "scan": scan_path,
+                "truth_report": truth_path,
+            }
+            
+            # Replicate the actual gate fallback logic (must match ci_m5_0_gate.py)
+            with open(artifacts["scan"]) as f:
+                scan_data = json.load(f)
+            cross_dex_pairs_count = scan_data.get("stats", {}).get(
+                "discovery_runtime", {}
+            ).get("cross_dex_pairs_count", 0)
+            self.assertEqual(cross_dex_pairs_count, 0)
+            
+            # Fallback 1: glob signals from run_dir
+            cross_dex_pairs = set()
+            signals_candidates = sorted((run_dir / "reports").glob("signals_*.json"))
+            if signals_candidates:
+                with open(signals_candidates[-1]) as f:
+                    sdata = json.load(f)
+                for sig in sdata.get("signals", []):
+                    bd = sig.get("buy_dex", "")
+                    sd = sig.get("sell_dex", "")
+                    p = sig.get("pair", "")
+                    if bd and sd and bd != sd and p:
+                        cross_dex_pairs.add(p)
+            
+            self.assertEqual(len(cross_dex_pairs), 3,
+                "Fallback 1 via glob must find 3 cross-dex pairs from signals_*.json")
+            
+            # Fallback 2: truth_report key (not "truth")
+            cross_dex_pairs_2 = set()
+            truth_fb = artifacts.get("truth_report")
+            self.assertIsNotNone(truth_fb, "artifacts must use 'truth_report' key")
+            if truth_fb and truth_fb.exists():
+                with open(truth_fb) as f:
+                    td = json.load(f)
+                for sig in td.get("spread_signals", []):
+                    bd = sig.get("buy_dex", "")
+                    sd = sig.get("sell_dex", "")
+                    p = sig.get("pair", "")
+                    if bd and sd and bd != sd and p:
+                        cross_dex_pairs_2.add(p)
+            self.assertEqual(len(cross_dex_pairs_2), 1,
+                "Fallback 2 via truth_report key must find 1 cross-dex pair")
+
 
 if __name__ == "__main__":
     unittest.main()

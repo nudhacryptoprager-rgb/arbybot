@@ -204,6 +204,7 @@ def new_chain_stats() -> dict[str, Any]:
         "last_profit_truth_available": None,
         "run_kind": None,
         "last_cross_dex_pairs_count": None,
+        "accepted_fail": False,
     }
 
 
@@ -284,6 +285,8 @@ def build_summary(
     pass_chains = [c for c, s in per_chain.items() if s["runs"] > 0 and s["fail"] == 0 and s["infra_fail"] == 0 and s["pass"] > 0]
     fail_chains = [c for c, s in per_chain.items() if s["fail"] > 0 or s["infra_fail"] > 0]
     probe_only_chains = [c for c, s in per_chain.items() if s["runs"] > 0 and s["pass"] == 0 and s["fail"] == 0]
+    accepted_fail_chains = [c for c in fail_chains if per_chain[c].get("accepted_fail")]
+    unexpected_fail_chains = [c for c in fail_chains if not per_chain[c].get("accepted_fail")]
 
     return {
         "schema": "start:long_scan_summary:v1.1",
@@ -299,6 +302,8 @@ def build_summary(
         "total_profitable_roundtrips": sum(s["profitable_roundtrips_total"] for s in per_chain.values()),
         "pass_chains": pass_chains,
         "fail_chains": fail_chains,
+        "accepted_fail_chains": accepted_fail_chains,
+        "unexpected_fail_chains": unexpected_fail_chains,
         "probe_only_chains": probe_only_chains,
         "per_chain": per_chain,
         "warnings": warnings,
@@ -321,11 +326,15 @@ def print_summary(summary: dict[str, Any]) -> None:
 
     pass_c = summary.get("pass_chains", [])
     fail_c = summary.get("fail_chains", [])
+    accepted_c = summary.get("accepted_fail_chains", [])
+    unexpected_c = summary.get("unexpected_fail_chains", [])
     probe_c = summary.get("probe_only_chains", [])
     if pass_c:
         print(f"Pass chains:    {', '.join(pass_c)}")
-    if fail_c:
-        print(f"Fail chains:    {', '.join(fail_c)}")
+    if unexpected_c:
+        print(f"Fail chains:    {', '.join(unexpected_c)}")
+    if accepted_c:
+        print(f"Accepted fail:  {', '.join(accepted_c)}")
     if probe_c:
         print(f"Probe-only:     {', '.join(probe_c)}")
 
@@ -406,6 +415,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Max chains allowed to have failures. -1=permissive (exit 0 if any PASS), "
              "0=strict (all must PASS)",
     )
+    ap.add_argument(
+        "--accepted-fail-chains",
+        default="",
+        help="Comma-separated chain names whose failures are expected/accepted "
+             "(e.g. 'scroll'). These do not count toward --max-fail-chains.",
+    )
     return ap.parse_args(argv)
 
 
@@ -437,6 +452,11 @@ def main(argv: list[str] | None = None) -> int:
         budget_seconds = max(1, args.minutes) * 60
     deadline = time.monotonic() + budget_seconds
 
+    # Accepted-fail chain set
+    accepted_fail_set = {
+        c.strip() for c in args.accepted_fail_chains.split(",") if c.strip()
+    }
+
     # Per-chain stats keyed by chain name
     per_chain: dict[str, dict[str, Any]] = {}
     for cfg in configs:
@@ -444,6 +464,7 @@ def main(argv: list[str] | None = None) -> int:
         if chain not in per_chain:
             per_chain[chain] = new_chain_stats()
             per_chain[chain]["config"] = cfg
+            per_chain[chain]["accepted_fail"] = chain in accepted_fail_set
 
     total_runs = 0
     empty_deleted = 0
@@ -499,14 +520,14 @@ def main(argv: list[str] | None = None) -> int:
 
     write_summary_file(summary_obj, args.summary_file)
 
-    # Exit semantics
-    fail_chain_count = len(summary_obj.get("fail_chains", []))
+    # Exit semantics — accepted-fail chains don't count toward limit
+    unexpected_fail_count = len(summary_obj.get("unexpected_fail_chains", []))
     has_any_pass = summary_obj["total_pass"] > 0
 
     if args.max_fail_chains >= 0:
-        # Strict mode: exit 1 if too many chains failed
-        if fail_chain_count > args.max_fail_chains:
-            print(f"EXIT 1: {fail_chain_count} chain(s) with failures > --max-fail-chains={args.max_fail_chains}")
+        # Strict mode: exit 1 if too many unexpected chains failed
+        if unexpected_fail_count > args.max_fail_chains:
+            print(f"EXIT 1: {unexpected_fail_count} unexpected fail chain(s) > --max-fail-chains={args.max_fail_chains}")
             return 1
         if not has_any_pass:
             print("EXIT 1: no PASS runs at all")
