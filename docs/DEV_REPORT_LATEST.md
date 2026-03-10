@@ -8,26 +8,28 @@
 **End-goal**: Production DEX↔DEX arbitrage with real on-chain execution and proven net profit.  
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, canonical rolling on arbitrum_one.
 
-## SESSION GOAL (2026-03-09 evening)
-**Goal**: Multi-chain quality stabilization - profit invariant fix + session propagation fix
+## SESSION GOAL (2026-03-10)
+**Goal**: Multi-chain signal production quality - fix stale tokens_usd_price causing NOTIONAL_DRIFT across all chains
 
-### Workflow Contract (enforced 2026-03-09)
+### Workflow Contract (enforced 2026-03-10)
 > **Order**: 1) code/config/tests → 2) verification runs → 3) docs/artifacts update
 > Any report generated before final reruns is non-canonical by process.
 
-### Blocker Classification (2026-03-09 22:10 FRESH v3.2.68)
+### Blocker Classification (2026-03-10 FRESH)
 ```
-code_blocker:            RESOLVED (pytest 1524 passed, CI ALL REQUIRED GATES PASSED)
+code_blocker:            RESOLVED (pytest 1536 passed, M4 offline PASS)
 multicall_blocker:       RESOLVED (success_rate=1.0 all chains)
-websocket_blocker:       RESOLVED (ws_connected=true, ALL 6 chains)
+websocket_blocker:       RESOLVED (all 6 chains)
 cost_reporting_blocker:  RESOLVED (cost_model_version v3)
-profit_contract_blocker: RESOLVED (v3.2.68 invariant fix + fresh evidence 0.03=0.03=0.03 Mantle)
+profit_contract_blocker: RESOLVED (invariant verified)
+notional_drift_blocker:  RESOLVED (all 6 coverage configs updated WETH 3000→2050)
 dex_compatibility_blocker:
-  Arbitrum: SIGNAL_PRODUCING (4 signals, $3.96, runDir 220644) ✅
-  zkSync:   POLICY_REJECTED (0 signals, runDir 220720, SUSPECT_SPREAD_HARD=22, profitable_count=28)
-  Base:     DATA_QUALITY (0 signals, runDir 220828, MIXED_SOURCE=8, profitable_count=6)
-  Mantle:   SIGNAL_PRODUCING (3 signals, net=$0.03, runDir 220920) ✅
-  Scroll:   NO_DATA (0 signals, runDir 220959, BLOCKED_BY_SECOND_DEX)
+  Arbitrum: SIGNAL_PRODUCING (5 signals, $2.93, runDir 095332) ✅
+  Base:     SIGNAL_PRODUCING (8 signals, $2.80, runDir 095028) ✅ NEW
+  zkSync:   SIGNAL_PRODUCING (2 signals, $6.52, runDir 095552) ✅ NEW
+  Mantle:   SIGNAL_PRODUCING (3 signals, $0.09, runDir 095423) ✅
+  Scroll:   INFRA_READY (1 signal, 0 included, runDir 095638)
+  Linea:    PRICE_SCALE_FAIL (2 signals, 0 included, FAIL gate)
   Linea:    FAIL (PRICE_SCALE 14.3%, runDir 221018, 1 DEX only)
 ```
 
@@ -96,35 +98,35 @@ dex_compatibility_blocker:
 7. **WS host validation**: Added validate_chain_rpc_consistency() in ci_m5_0_gate.py
 
 ## 0) Meta
-timestamp_utc: 2026-03-09T21:07:05Z  
-rolling_provenance: 2026-03-09T21:07:05Z (arbitrum_one, ci_m5_gate_20260309_220644)  
-mode: ONLINE (v3.2.69 session contract enforcement + cross_dex fallback)
-test_count: 1530 passed, 2 skipped
+timestamp_utc: 2026-03-10T08:53:54Z  
+rolling_provenance: 2026-03-10T08:53:54Z (arbitrum_one, ci_m5_gate_20260310_095332)  
+mode: ONLINE
+test_count: 1536 passed, 2 skipped
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | Multi-chain quality stabilization - honest operational semantics (v3.2.69) |
-| goal_status | **IN_PROGRESS** (2/6 chains SIGNAL_PRODUCING, 4/6 blocked) |
+| session_goal | Multi-chain signal production - fix stale tokens_usd_price causing NOTIONAL_DRIFT |
+| goal_status | **IN_PROGRESS** (4/6 chains SIGNAL_PRODUCING, 2/6 blocked) |
 | close_allowed | false |
-| remaining_blockers | zkSync: LIQUIDITY_ZERO; Scroll/Linea: BLOCKED_BY_SECOND_DEX (1 DEX only) |
-| evidence_session_run_dirs | **ci_m5_gate_20260309_220644** (Arbitrum ✅), ci_m5_gate_20260309_220720 (zkSync), ci_m5_gate_20260309_220828 (Base), **ci_m5_gate_20260309_220920** (Mantle ✅), ci_m5_gate_20260309_220959 (Scroll), ci_m5_gate_20260309_221018 (Linea FAIL) |
-| primary_blocker_of_session | profit contract mismatch (daily_report 0.1091 vs execution_report 0.0291 on Mantle) |
-| blocker_status_before | ACTIVE (Mantle 213848: net_pnl_usdc=0.1091 vs total_net_usdc=0.0291 - 3.75x discrepancy) |
-| blocker_status_after | **RESOLVED** (Mantle 220920: net_pnl_usdc=0.03=execution_report, source="execution_report.total_net_usdc") |
+| remaining_blockers | Scroll: INFRA_READY (1 signal, 0 included); Linea: PRICE_SCALE_FAIL |
+| evidence_session_run_dirs | **ci_m5_gate_20260310_095332** (Arbitrum ✅), **ci_m5_gate_20260310_095028** (Base ✅ NEW), **ci_m5_gate_20260310_095552** (zkSync ✅ NEW), **ci_m5_gate_20260310_095423** (Mantle ✅), ci_m5_gate_20260310_095638 (Scroll), ci_m5_gate_20260310_095806 (Linea) |
+| primary_blocker_of_session | stale tokens_usd_price causing NOTIONAL_DRIFT (WETH=3000 vs real~2050) across all coverage configs |
+| blocker_status_before | ACTIVE (2/6 chains SIGNAL_PRODUCING, 4/6 blocked by drift/data quality) |
+| blocker_status_after | **RESOLVED** (4/6 SIGNAL_PRODUCING: Base, zkSync upgraded from 0 signals) |
 | docs_reread_confirmed | true |
 
-**Session Progress (2026-03-09 22:10 v3.2.68, refreshed v3.2.69)** - Fresh same-session evidence:
+**Session Progress (2026-03-10 FRESH)** - Fresh same-session evidence:
 
 | Chain | RunDir | M5 Gate | signals | net_usdc | Status |
 |-------|--------|---------|---------|----------|--------|
-| **Arbitrum** | **220644** | PASS | 4 | $3.96 | ✅ SIGNAL_PRODUCING |
-| zkSync | 220720 | NO_DATA | 0 | $0 | ⚠️ POLICY_REJECTED (SUSPECT_SPREAD_HARD) |
-| Base | 220828 | NO_DATA | 0 | $0 | ⚠️ DATA_QUALITY (MIXED_SOURCE) |
-| **Mantle** | **220920** | PASS | 3 | **$0.03** | ✅ SIGNAL_PRODUCING |
-| Scroll | 220959 | NO_DATA | 0 | $0 | ❌ BLOCKED_BY_SECOND_DEX (1 DEX) |
-| Linea | 221018 | FAIL | 1 | $0 | ❌ PRICE_SCALE 14.3% + 1 DEX |
+| **Arbitrum** | **095332** | PASS | 5 | $2.93 | ✅ SIGNAL_PRODUCING |
+| **Base** | **095028** | PASS | 8 | **$2.80** | ✅ SIGNAL_PRODUCING (NEW) |
+| **zkSync** | **095552** | PASS | 2 | **$6.52** | ✅ SIGNAL_PRODUCING (NEW) |
+| **Mantle** | **095423** | PASS | 3 | **$0.09** | ✅ SIGNAL_PRODUCING |
+| Scroll | 095638 | PASS | 1 | $0 | ⚠️ INFRA_READY (1 signal, 0 included) |
+| Linea | 095806 | FAIL | 2 | $0 | ❌ PRICE_SCALE_FAIL |
 
 **Profit Contract Fix Verification (v3.2.68 FIXED)**:
 | Chain | daily_report.net_pnl | execution_report.total_net | Aligned? | Source Field |
@@ -149,55 +151,47 @@ test_count: 1530 passed, 2 skipped
   - `config/coverage_intent_linea.yaml`: SIGNAL_NOT_INCLUDED (single DEX)
   - `config/coverage_intent_mantle.yaml`: LOW_SAMPLE (same-DEX fallback)
 
-## 1) Commands Executed (This Session v3.2.68)
+## 1) Commands Executed (This Session 2026-03-10)
 
 ```
-# Verification suite (2026-03-09 22:10)
-py -3.11 -m pytest tests/unit -q: 1524 passed, 2 skipped ✅ (+2 tests)
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings) ✅
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED ✅
+# Verification suite (2026-03-10)
+py -3.11 -m pytest tests/unit -q: 1536 passed, 2 skipped ✅
+py -3.11 scripts/check_repo_safety.py: WARN (DEV_REPORT freshness - updating now)
 py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS ✅
 
-# Fresh same-session online evidence (2026-03-09 22:07-22:10):
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1: PASS (220644) ✅
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 1: PASS (220720) ⚠️
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 1: PASS (220828)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 1: PASS, $0.03 (220920) ✅
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 1: PASS (220959)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 1: FAIL, PRICE_SCALE 14.3% (221018)
-
-# Profit invariant verification (2026-03-09 22:10):
-# Mantle 220920: net_pnl_usdc=0.03, source="execution_report.total_net_usdc", truth_net_pnl_usdc=0.11 ✅ INVARIANT FIXED
-# Session propagation: run_type="automated", primary_blocker_of_session="CI_AUTOMATED_RUN" ✅
+# Fresh same-session online evidence (2026-03-10, 6 chains):
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1 --refresh-rolling: PASS (095332) ✅ $2.93
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_base.yaml --cycles 1: PASS (095028) ✅ $2.80 8 signals
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_zksync.yaml --cycles 1: PASS (095552) ✅ $6.52 2 signals
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_mantle.yaml --cycles 1: PASS (095423) ✅ $0.09
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 1: PASS (095638) 1 signal, 0 included
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_linea.yaml --cycles 1: FAIL, PRICE_SCALE (095806)
 ```
 
 ## 2) Evidence Artifacts
 
-**Fresh same-session verification (2026-03-09 22:07-22:10, 6 chains x 1 cycle)**:
+**Fresh same-session verification (2026-03-10, 6 chains x 1 cycle)**:
 
 | RunDir | Chain | M5.0 Gate | signals | net_usdc | Status |
 |--------|-------|-----------|---------|----------|--------|
-| **220644** | **Arbitrum** | PASS | 4 | $3.96 | ✅ SIGNAL_PRODUCING |
-| 220720 | zkSync | NO_DATA | 0 | $0 | ⚠️ POLICY_REJECTED |
-| 220828 | Base | NO_DATA | 0 | $0 | ⚠️ DATA_QUALITY |
-| **220920** | **Mantle** | PASS | 3 | **$0.03** | ✅ SIGNAL_PRODUCING |
-| 220959 | Scroll | NO_DATA | 0 | $0 | ❌ BLOCKED_BY_SECOND_DEX |
-| 221018 | Linea | FAIL | 1 | $0 | ❌ PRICE_SCALE 14.3% |
+| **095332** | **Arbitrum** | PASS | 5 | $2.93 | ✅ SIGNAL_PRODUCING |
+| **095028** | **Base** | PASS | 8 | $2.80 | ✅ SIGNAL_PRODUCING (NEW) |
+| **095552** | **zkSync** | PASS | 2 | $6.52 | ✅ SIGNAL_PRODUCING (NEW) |
+| **095423** | **Mantle** | PASS | 3 | $0.09 | ✅ SIGNAL_PRODUCING |
+| 095638 | Scroll | PASS | 1 | $0 | ⚠️ INFRA_READY |
+| 095806 | Linea | FAIL | 2 | $0 | ❌ PRICE_SCALE |
 
-**Key distinction**: `M5.0 PASS` = infrastructure/schema/coverage OK AND run_summary.status != NO_DATA. `NO_DATA` = infrastructure works but no signals produced.
+**Root cause fixed**: All 6 coverage configs had stale `tokens_usd_price` (WETH=3000 vs real ~2050).
+- This caused NOTIONAL_DRIFT > 30% on ALL quotes, excluding them from spread evaluation
+- Fix: Updated WETH→2050, WBTC→68000, wstETH→2500, LST→2100, plus chain-specific token corrections
+- Added pancakeswap_v3 to Base config (3 quoter_v2-compatible DEXes now)
+- Result: 2/6 → 4/6 chains SIGNAL_PRODUCING
 
-**Profit invariant FIXED (v3.2.68)**:
-- **Mantle 220920**: daily_report.net_pnl_usdc = 0.03 = execution_report.total_net_usdc ✅
-- **Source field**: `"source": "execution_report.total_net_usdc"` ✅ (was "truth_report.execution_pnl_included")
-- **Transparency**: `truth_net_pnl_usdc: 0.11` preserved for comparison
-- **Root cause fixed**: truth_report uses chain-specific gas (0.02), execution_report uses paper_realistic (0.10)
+**Rolling state** (Arbitrum NORMAL, fresh 2026-03-10):
+- runs_in_window: 114, agg_status: PASS
+- total_net_usdc: $911.63, data_run_rate: 0.8421
 
-**Session propagation FIXED (v3.2.68)**:
-- **run_type**: `"automated"` ✅ (CI automated marker)
-- **primary_blocker_of_session**: `"CI_AUTOMATED_RUN"` ✅ (explicit CI marker)
-- **blocker_status_before/after**: `"N/A"` ✅ (proper CI defaults)
-
-**Chain quality classification (v3.2.68 fresh)**:
+**Chain quality classification (2026-03-10 fresh)**:
 - **Arbitrum**: SIGNAL_PRODUCING (signals producing profit) ✅
 - **Mantle**: SIGNAL_PRODUCING (signals, $0.03 net) ✅
 - **zkSync**: LIQUIDITY_ZERO (market impaired - no arbitrage opportunities)

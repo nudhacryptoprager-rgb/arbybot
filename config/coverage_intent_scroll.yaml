@@ -98,14 +98,14 @@ l1_gas_price_gwei: 0   # Costs are amortized in proofs
 
 # Token USD prices (for notional sizing)
 tokens_usd_price:
-  WETH: 3000.0
-  WBTC: 60000.0
+  WETH: 2050.0       # on-chain ~2050 (2026-03-10)
+  WBTC: 68000.0      # on-chain ~68000 (2026-02-26)
   USDC: 1.0
   USDT: 1.0
-  wstETH: 3500.0
-  SCR: 0.50       # Scroll token
-  STONE: 3100.0
-  weETH: 3100.0
+  wstETH: 2500.0     # ~1.22x WETH
+  SCR: 0.50          # Scroll token
+  STONE: 2100.0      # ~1.02x WETH
+  weETH: 2100.0      # ~1.02x WETH
 
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000

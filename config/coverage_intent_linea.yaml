@@ -96,15 +96,15 @@ l1_gas_price_gwei: 10    # Conservative estimate
 
 # Token USD prices (for notional sizing)
 tokens_usd_price:
-  WETH: 3000.0
-  WBTC: 60000.0
+  WETH: 2050.0       # on-chain ~2050 (2026-03-10)
+  WBTC: 68000.0      # on-chain ~68000 (2026-02-26)
   LINEA: 0.05
   USDC: 1.0
   USDT: 1.0
-  wstETH: 3500.0
-  ezETH: 3100.0
-  weETH: 3100.0
-  STONE: 3100.0
+  wstETH: 2500.0     # ~1.22x WETH
+  ezETH: 2100.0      # ~1.02x WETH
+  weETH: 2100.0      # ~1.02x WETH
+  STONE: 2100.0      # ~1.02x WETH
   LYNX: 0.01
   NILE: 0.01
 

@@ -73,12 +73,12 @@ gas_usd_estimate: 0.10
 
 # Token USD prices (for notional sizing)
 tokens_usd_price:
-  WETH: 3000.0
-  WBTC: 60000.0
-  ARB: 1.5
-  GMX: 30.0
-  LINK: 15.0
-  UNI: 10.0
+  WETH: 2050.0       # on-chain ~2050 (2026-03-10, aligned with real_minimal.yaml)
+  WBTC: 68000.0      # on-chain ~68000 (2026-02-26)
+  ARB: 0.10          # on-chain ~0.10 (2026-02-26)
+  GMX: 17.0          # on-chain ~17 (2026-02-26)
+  LINK: 16.0         # on-chain ~16 (2026-02-26)
+  UNI: 7.0           # estimated ~7 (2026-03-10)
   DAI: 1.0
   USDC: 1.0
   USDT: 1.0
@@ -88,10 +88,10 @@ price_sanity_max_deviation_bps: 5000  # 50% - will tighten in M5
 
 # Anchor prices for sanity checks (discovery_runtime resolves from quotes)
 tokens_anchor_price:
-  WETH_USDC: 3000.0
-  WBTC_WETH: 20.0
-  ARB_WETH: 0.0005
-  GMX_WETH: 0.01
+  WETH_USDC: 2050.0     # aligned with tokens_usd_price
+  WBTC_WETH: 33.2       # 68000/2050
+  ARB_WETH: 0.000049    # 0.10/2050
+  GMX_WETH: 0.0083      # 17/2050
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 truth_mode_m42: true

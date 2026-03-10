@@ -102,12 +102,12 @@ l1_gas_price_gwei: 0
 # v3.2.66: Removed meme tokens that consistently have zero liquidity or bad data
 # Removed: HOLD, CHEEMS, MUTE, SPACE (LIQUIDITY_ZERO or >10% spreads)
 tokens_usd_price:
-  WETH: 3000.0
-  WBTC: 60000.0
+  WETH: 2050.0       # on-chain ~2050 (2026-03-10)
+  WBTC: 68000.0      # on-chain ~68000 (2026-02-26)
   USDC: 1.0
   USDT: 1.0
-  ZK: 0.15         # zkSync token
-  wstETH: 3500.0   # LST premium
+  ZK: 0.15           # zkSync token
+  wstETH: 2500.0     # ~1.22x WETH
 
 # v3.2.66: Pair exclusions for zkSync
 # These pairs consistently produce bad data (SUSPECT_SPREAD_HARD >1000bps)

@@ -2,12 +2,12 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (Base)
 #
-# CHAIN QUALITY STATUS (2026-03-09 v3.2.66):
-#   Classification: ALL_OPPORTUNITIES_REJECTED (signal production blocked)
-#   Evidence: runDir 200710 - 16 opportunities, 4 gated, 0 signals
-#   Blocker: MIXED_SOURCE (6), SUSPECT_SPREAD_HARD (3), NET_PROFIT_TOO_LOW (2)
-#   Root cause: DEX quote source mixing (quoter_v2 vs slot0) and thin liquidity
-#   Action: Keep monitoring - Base has potential but needs more DEX options
+# CHAIN QUALITY STATUS (2026-03-10):
+#   Classification: NOTIONAL_DRIFT_BLOCKED (all quotes drift >30% due to stale prices)
+#   Evidence: runDir 094543 - 15 opportunities, 4 gated, 0 signals
+#   Blocker: WETH price stale (3000 vs real ~2050) → all quotes excluded by drift filter
+#   Fix: Updated all tokens_usd_price to market prices (2026-03-10)
+#   Action: 3 quoter_v2 DEXes (uni/sushi/pancake) should produce cross-DEX signals
 #
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline on Base.
@@ -44,10 +44,11 @@ universe_source: discovery_runtime
 # DEXes to scan (must have factory addresses in dexes.yaml)
 # v3.2.56: Only quoter_v2-compatible DEXes for M4.2 compliance
 # NOTE: aerodrome (ve33) excluded - getAmountOut source, causes MIXED_SOURCE
-# NOTE: pancakeswap_v3 excluded - pool slot0 calls failing (low/no liquidity)
+# v3.2.70: pancakeswap_v3 re-added (quoter_v2-compatible, 3 cross-DEX routes)
 dexes:
   - uniswap_v3
   - sushiswap_v3
+  - pancakeswap_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 30  # v3.2.56: Increased from 20 for better sample size
@@ -75,25 +76,25 @@ gas_usd_estimate: 0.01  # Base is very cheap (L2)
 # All tokens from config/core_tokens.yaml for base chain
 # v3.2.50: Updated AERO price from 1.5 to 0.35 (market correction)
 tokens_usd_price:
-  WETH: 3000.0
+  WETH: 2050.0       # on-chain ~2050 (2026-03-10, aligned with real_minimal.yaml)
   USDC: 1.0
   USDT: 1.0
   DAI: 1.0
-  cbETH: 3200.0  # Premium over ETH
-  cbBTC: 60000.0
-  AERO: 0.35     # Updated from 1.5 (market correction)
+  cbETH: 2200.0      # ~1.07x WETH
+  cbBTC: 68000.0     # aligned with WBTC in real_minimal.yaml
+  AERO: 0.35
   BRETT: 0.15
   DEGEN: 0.01
   TOSHI: 0.0003
-  VIRTUAL: 3.0
-  WELL: 0.15
+  VIRTUAL: 1.0       # was 3.0, scan drift 66% → real ~$1.0
+  WELL: 0.007        # was 0.15, scan drift 95.6% → real ~$0.007
 
 # Price anchor overrides (v3.2.24)
 # For pairs that need explicit anchor instead of computed WETH/USDC
 tokens_anchor_price:
-  WETH_USDC: 3000.0
+  WETH_USDC: 2050.0    # aligned with tokens_usd_price
   cbETH_WETH: 1.07
-  cbBTC_WETH: 20.0
+  cbBTC_WETH: 33.2     # 68000/2050
 
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000

@@ -88,14 +88,14 @@ l1_gas_price_gwei: 0   # DA costs are off-chain
 # Token USD prices (for notional sizing)
 # v3.2.52: Removed AUSD (not on DEXes), kept mUSD, PUFF
 tokens_usd_price:
-  WETH: 3000.0
+  WETH: 2050.0       # on-chain ~2050 (2026-03-10)
   WMNT: 0.80
   USDC: 1.0
   USDT: 1.0
   mUSD: 1.0
-  mETH: 3100.0
-  cmETH: 3100.0
-  PUFF: 0.001     # Meme token - low value
+  mETH: 2100.0       # ~1.02x WETH
+  cmETH: 2100.0      # ~1.02x WETH
+  PUFF: 0.001        # Meme token - low value
 
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000
