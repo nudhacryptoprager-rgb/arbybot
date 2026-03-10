@@ -471,27 +471,36 @@ def run_scan(
             key = (sig.get("pair"), sig.get("buy_dex"), sig.get("sell_dex"))
             spread_signal_lookup[key] = sig
         
-        # Patch each opportunity with economics from corresponding spread_signal
+        # Patch each opportunity with traceability fields from spread_signal.
+        # IMPORTANT: Do NOT overwrite viability gate fields (min_required_spread_bps,
+        # spread_minus_required_bps, is_roundtrip_viable) because the opportunity
+        # engine calculated them with paper slippage (5 bps) which is correct for
+        # the roundtrip gate. The spread_signal uses measured slippage (often 50-120 bps)
+        # which makes the gate too conservative and blocks all roundtrip evaluation.
+        # Store measured-slippage economics as separate _measured fields for RCA.
         for opp in opps_list:
             if isinstance(opp, dict):
                 key = (opp.get("pair"), opp.get("buy_dex"), opp.get("sell_dex"))
                 sig = spread_signal_lookup.get(key)
                 if sig:
-                    # Copy economics fields from spread_signal (uses measured slippage)
-                    opp["min_required_spread_bps"] = sig.get("min_required_spread_bps", opp.get("min_required_spread_bps", 0))
-                    opp["spread_minus_required_bps"] = sig.get("spread_minus_required_bps", opp.get("spread_minus_required_bps", 0))
-                    opp["is_roundtrip_viable"] = sig.get("is_roundtrip_viable", False)
-                    # Add route and spread_bps for traceability
+                    # Traceability: route and spread
                     opp["route"] = sig.get("route")
                     opp["spread_bps"] = sig.get("spread_bps") or sig.get("spread_bps_ui")
-                    # v3.2.15: Copy cost breakdown fields for RCA in inspect_run_dir
+                    # Cost breakdown for RCA (informational, does NOT gate roundtrip)
                     opp["lp_fee_bps_roundtrip"] = sig.get("lp_fee_bps_roundtrip")
                     opp["effective_slippage_bps"] = sig.get("effective_slippage_bps")
                     opp["gas_usd_estimate"] = sig.get("gas_usd_estimate")
                     opp["size_usd"] = sig.get("size_usd")
+                    # Measured-slippage economics for truth reporting (does NOT overwrite gate)
+                    opp["measured_min_required_spread_bps"] = sig.get("min_required_spread_bps")
+                    opp["measured_spread_minus_required_bps"] = sig.get("spread_minus_required_bps")
+                    opp["measured_is_roundtrip_viable"] = sig.get("is_roundtrip_viable", False)
                     logger.debug(
-                        "Linked opp %s to spread_signal: min_req=%.1f, spread_minus=%.1f, viable=%s",
-                        key, opp["min_required_spread_bps"], opp["spread_minus_required_bps"], opp["is_roundtrip_viable"]
+                        "Linked opp %s: paper_gate(min_req=%.1f, surplus=%.1f, viable=%s) "
+                        "measured(min_req=%.1f, surplus=%.1f, viable=%s)",
+                        key,
+                        opp.get("min_required_spread_bps", 0), opp.get("spread_minus_required_bps", 0), opp.get("is_roundtrip_viable"),
+                        opp.get("measured_min_required_spread_bps", 0), opp.get("measured_spread_minus_required_bps", 0), opp.get("measured_is_roundtrip_viable"),
                     )
         
         stats["opportunity_engine"] = {

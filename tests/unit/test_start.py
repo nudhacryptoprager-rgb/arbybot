@@ -192,6 +192,22 @@ class TestPerChainAggregation(unittest.TestCase):
         start.update_chain_stats(stats, 0, None, summary)
         self.assertEqual(stats["profitable_roundtrips_total"], 1)
 
+    def test_roundtrip_from_metrics_roundtrip(self):
+        """Roundtrip data at metrics.roundtrip (canonical path) must be extracted."""
+        stats = start.new_chain_stats()
+        summary = {
+            "status": "PASS",
+            "metrics": {
+                "included_signals_count": 3,
+                "total_net_usdc": 2.0,
+                "roundtrip": {"evaluated_count": 5, "profitable_count": 2},
+            },
+            "run_context": {},
+        }
+        start.update_chain_stats(stats, 0, None, summary)
+        self.assertEqual(stats["profitable_roundtrips_total"], 2)
+        self.assertEqual(stats["roundtrip_evaluated_total"], 5)
+
 
 class TestGuardrails(unittest.TestCase):
     """Test 'too good to be true' and infra-unstable warnings."""
@@ -241,6 +257,7 @@ class TestBuildSummary(unittest.TestCase):
             "included_signals_total": 3,
             "net_usdc_total": 10.5,
             "profitable_roundtrips_total": 0,
+            "roundtrip_evaluated_total": 0,
             "last_run_timestamp": "2026-03-10T10:00:00Z",
             "last_run_dir": "ci_m5_gate_20260310_100000",
             "last_run_summary_status": "PASS",
@@ -256,7 +273,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.1")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.2")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -535,6 +552,7 @@ class TestAcceptedFailChains(unittest.TestCase):
             "included_signals_total": 3,
             "net_usdc_total": 10.5,
             "profitable_roundtrips_total": 0,
+            "roundtrip_evaluated_total": 0,
             "last_run_timestamp": "2026-03-10T10:00:00Z",
             "last_run_dir": "ci_m5_gate_20260310_100000",
             "last_run_summary_status": "PASS",

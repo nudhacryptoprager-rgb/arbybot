@@ -195,6 +195,7 @@ def new_chain_stats() -> dict[str, Any]:
         "included_signals_total": 0,
         "net_usdc_total": 0.0,
         "profitable_roundtrips_total": 0,
+        "roundtrip_evaluated_total": 0,
         "last_run_timestamp": None,
         "last_run_dir": None,
         # Richer per-chain fields (last-run snapshot)
@@ -225,8 +226,9 @@ def update_chain_stats(
         metrics = summary.get("metrics", {})
         stats["included_signals_total"] += metrics.get("included_signals_count", 0)
         stats["net_usdc_total"] += float(metrics.get("total_net_usdc", 0) or 0)
-        rt = summary.get("roundtrip_summary", {})
+        rt = metrics.get("roundtrip", {}) or summary.get("roundtrip_summary", {})
         stats["profitable_roundtrips_total"] += int(rt.get("profitable_count", 0) or 0)
+        stats["roundtrip_evaluated_total"] = stats.get("roundtrip_evaluated_total", 0) + int(rt.get("evaluated_count", 0) or 0)
         ctx = summary.get("run_context", {})
         stats["last_run_timestamp"] = ctx.get("run_timestamp", stats["last_run_timestamp"])
         # Richer snapshot fields
@@ -289,7 +291,7 @@ def build_summary(
     unexpected_fail_chains = [c for c in fail_chains if not per_chain[c].get("accepted_fail")]
 
     return {
-        "schema": "start:long_scan_summary:v1.1",
+        "schema": "start:long_scan_summary:v1.2",
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "wall_seconds": round(wall_seconds, 1),
         "total_runs": sum(s["runs"] for s in per_chain.values()),
@@ -300,6 +302,7 @@ def build_summary(
         "total_included_signals": sum(s["included_signals_total"] for s in per_chain.values()),
         "total_net_usdc": round(sum(s["net_usdc_total"] for s in per_chain.values()), 4),
         "total_profitable_roundtrips": sum(s["profitable_roundtrips_total"] for s in per_chain.values()),
+        "total_roundtrip_evaluated": sum(s.get("roundtrip_evaluated_total", 0) for s in per_chain.values()),
         "pass_chains": pass_chains,
         "fail_chains": fail_chains,
         "accepted_fail_chains": accepted_fail_chains,
@@ -322,7 +325,7 @@ def print_summary(summary: dict[str, Any]) -> None:
     )
     print(f"Signals total:  {summary['total_included_signals']}")
     print(f"Net USDC total: ${summary['total_net_usdc']:.4f}")
-    print(f"Profitable RTs: {summary.get('total_profitable_roundtrips', 0)}")
+    print(f"Profitable RTs: {summary.get('total_profitable_roundtrips', 0)}  (evaluated: {summary.get('total_roundtrip_evaluated', 0)})")
 
     pass_c = summary.get("pass_chains", [])
     fail_c = summary.get("fail_chains", [])
