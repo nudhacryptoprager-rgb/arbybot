@@ -187,15 +187,15 @@ A long scan is a **market/data probe** -- it confirms infrastructure stability, 
 and signal coverage across chains. It is not proof of constant profit.
 
 ```powershell
-py -3.11 start.py --config-list config/real_minimal.yaml,config/coverage_intent_base.yaml,config/coverage_intent_mantle.yaml,config/coverage_intent_zksync.yaml,config/coverage_intent_scroll.yaml,config/coverage_intent_linea.yaml --hours 3 --cycles 1 --sleep-seconds 20 --prune-keep 200 --summary-file data/runs/_incidents/long_scan_latest.json
+py -3.11 start.py --config-list config/real_minimal.yaml,config/coverage_intent_base.yaml,config/coverage_intent_mantle.yaml,config/coverage_intent_zksync.yaml,config/coverage_intent_scroll.yaml,config/coverage_intent_linea.yaml --hours 3 --cycles 1 --sleep-seconds 20 --prune-keep 200 --summary-file data/runs/_rolling/long_scan_latest.json
 ```
 
 Strict mode (exit 1 if any chain has failures):
 ```powershell
-py -3.11 start.py --config-list ... --hours 3 --max-fail-chains 0 --summary-file data/runs/_incidents/long_scan_latest.json
+py -3.11 start.py --config-list ... --hours 3 --max-fail-chains 0 --summary-file data/runs/_rolling/long_scan_latest.json
 ```
 
-Summary output goes to `data/runs/_incidents/long_scan_latest.json` (overwritten, never committed).
+Summary output goes to `data/runs/_rolling/long_scan_latest.json` (canonical rolling artifact, overwritten, never committed).
 
 ### Native Loop Mode (single config, no per-chain summary)
 

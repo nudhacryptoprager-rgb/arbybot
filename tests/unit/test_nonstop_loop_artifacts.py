@@ -19,12 +19,13 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
     
     def test_rolling_artifacts_are_three_canonical_files(self):
         """
-        Verify that rolling directory contains only 3 canonical files.
+        Verify that rolling directory contains only canonical files.
         
         Per AGENTS.md artifact policy:
         - _latest.json
         - run_summary_latest.json  
         - m4_stability_agg.json
+        - long_scan_latest.json (multi-chain frontier ranking)
         """
         rolling_dir = Path("data/runs/_rolling")
         
@@ -36,6 +37,7 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "_latest.json",
             "run_summary_latest.json",
             "m4_stability_agg.json",
+            "long_scan_latest.json",
         }
         
         # Optional files (runtime alerts, gitignored)

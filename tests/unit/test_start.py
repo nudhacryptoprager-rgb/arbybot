@@ -922,6 +922,57 @@ class TestFrontierRanking(unittest.TestCase):
         self.assertIsNone(ranking[0]["median_gap_to_zero_bps"])
         self.assertEqual(ranking[0]["runs_with_sweep"], 0)
 
+    def test_frontier_ranking_includes_measured_economics(self):
+        """Contract: frontier_ranking includes measured economics decomposition."""
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 12.5, "sweep_best_net_pnl_bps": -12.5,
+                "included_signals_total": 10, "accepted_fail": False,
+                "sweep_measured_gas_bps": 3.0, "sweep_measured_fee_bps": 60.0,
+                "sweep_measured_slippage_bps": 1.0, "sweep_measured_total_cost_bps": 64.0,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        self.assertEqual(len(ranking), 1)
+        entry = ranking[0]
+        # All measured economics fields must be in ranking entry
+        self.assertEqual(entry["measured_gas_bps"], 3.0)
+        self.assertEqual(entry["measured_fee_bps"], 60.0)
+        self.assertEqual(entry["measured_slippage_bps"], 1.0)
+        self.assertEqual(entry["measured_total_cost_bps"], 64.0)
+
+    def test_long_scan_summary_schema_v1_3(self):
+        """Contract: build_summary produces schema v1.3 with all required fields."""
+        per_chain = {
+            "arb": start.new_chain_stats(),
+            "base": start.new_chain_stats(),
+        }
+        per_chain["arb"]["sweep_gap_to_zero_bps"] = 15.0
+        per_chain["arb"]["included_signals_total"] = 5
+        per_chain["base"]["sweep_gap_to_zero_bps"] = 20.0
+        per_chain["base"]["included_signals_total"] = 3
+        summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
+        # Schema version check
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.3")
+        # Required top-level fields
+        self.assertIn("generated_at", summary)
+        self.assertIn("wall_seconds", summary)
+        self.assertIn("total_runs", summary)
+        self.assertIn("total_pass", summary)
+        self.assertIn("total_fail", summary)
+        self.assertIn("total_net_usdc", summary)
+        self.assertIn("gap_percentile_context", summary)
+        self.assertIn("frontier_ranking", summary)
+        self.assertIn("per_chain", summary)
+        self.assertIn("warnings", summary)
+        # Gap percentile context
+        ctx = summary["gap_percentile_context"]
+        self.assertIn("best_gap_to_zero_bps", ctx)
+        self.assertIn("median_gap_to_zero_bps", ctx)
+        self.assertIn("runs_with_sweep", ctx)
+        # Frontier ranking is a list
+        self.assertIsInstance(summary["frontier_ranking"], list)
+
 
 if __name__ == "__main__":
     unittest.main()

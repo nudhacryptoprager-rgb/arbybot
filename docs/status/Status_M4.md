@@ -1,7 +1,7 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-10  
+**Updated**: 2026-03-11  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
@@ -12,10 +12,10 @@
 - ✅ N = 100 REGISTRY_REAL runs with `net_usdc > 0`
 - ✅ `agg_status = PASS` sustained
 - ✅ `profit_is_diagnostic = true` (accepted for simulate-only)
-- ✅ `total_net_usdc = $870.31` (cumulative paper profit)
+- ✅ `total_net_usdc = $1054.23` (cumulative paper profit)
 
 **Current State**:
-- Rolling: runs_in_window=106, unique_pairs=13
+- Rolling: runs_in_window=168, unique_pairs=13
 - Policy: `intent.txt` = business intent (per Roadmap.md:680); pool-level quarantine/runtime_disabled handles filtering
 - Pairs restored: RDNT, MAGIC, GRAIL (with evidence-based USD prices/anchors)
 - LIQUIDITY_ZERO auto-disable working
@@ -26,17 +26,18 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-11)**: `agg_status=PASS` sustained. runs_in_window=161, unique_pairs=13, total_net_usdc=$1016. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: gap_to_zero=4.10 bps best. Latest evidence: `ci_m5_gate_20260310_234414`.
+> [!] **ROLLING STABILITY (2026-03-11)**: `agg_status=PASS` sustained. runs_in_window=168, unique_pairs=13, total_net_usdc=$1054.23. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: gap_to_zero=4.10 bps best. Latest evidence: `long_scan_latest.json` in `_rolling/`.
 
 **Economics Snapshot (2026-03-11):**
 | Metric | Value | Notes |
 |--------|-------|-------|
-| `gap_to_zero_bps (best)` | 4.10 | 78% improvement from R10 |
-| `gap_to_zero_bps (latest)` | 13.58 | Latest run |
-| `gap_to_zero_bps (median)` | 18.74 | Rolling median |
+| `gap_to_zero_bps (best)` | 4.10 | All-time best in rolling window |
+| `gap_to_zero_bps (latest)` | 14.29 | Latest run |
+| `gap_to_zero_bps (median)` | 17.69 | Rolling median |
 | `roundtrip_total_profitable` | 0 | Still market-blocked |
-| `sweep_runs_count` | 21 | Runs with sweep data |
-| `frontier_pair` | WBTC/USDC | Arbitrum top candidate |
+| `sweep_runs_count` | 28 | Runs with sweep data |
+| `frontier_pair` | WETH/USDT | Latest frontier candidate |
+| `frontier_ready` | True | arbitrum_one ready for execution |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

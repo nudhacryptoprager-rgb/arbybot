@@ -4,8 +4,8 @@
 **Updated**: 2026-03-10
 **Tests**: 1627 passed, 2 skipped
 **Evidence runDirs**: manual_run_20260310_205633 (sweep canonical: 3 routes x 7 sizes, truth_report includes dynamic_sweep)
-**Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json}`
-**Evidence long scan**: `data/runs/_incidents/long_scan_latest.json` (115 runs, 302 included signals, $275.20 paper net)
+**Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking)
 
 ---
 

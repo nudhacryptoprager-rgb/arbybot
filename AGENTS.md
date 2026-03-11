@@ -70,6 +70,7 @@ For continuous scanning, the canonical operational artifacts are:
 - `data/runs/_rolling/_latest.json`
 - `data/runs/_rolling/run_summary_latest.json`
 - `data/runs/_rolling/m4_stability_agg.json`
+- `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking)
 Optionally:
 - `data/runs/_rolling/_latest_offline.json`
 - `data/runs/_rolling/run_summary_latest_offline.json`

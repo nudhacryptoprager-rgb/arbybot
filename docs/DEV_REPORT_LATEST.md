@@ -8,8 +8,8 @@
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, canonical rolling on arbitrum_one.
 
-## SESSION GOAL (2026-03-11, Session 4 Round 12)
-**Goal**: Fee=100 pool activation + median-based frontier ranking + honest economics assessment.
+## SESSION GOAL (2026-03-11, Session 4 Round 13)
+**Goal**: Multi-chain frontier ranking promotion to canonical rolling artifacts + contract tests.
 
 ### Blocker Classification (current)
 ```
@@ -33,36 +33,36 @@ median_gap_tracking:     RESOLVED (_sweep_gap_values collection, _compute_median
 **IMPORTANT**: `infra_gate: PASS` != `run_summary.status: PASS`. See [Status_M5_0.md](status/Status_M5_0.md) for terminology.
 
 ## 0) Meta
-timestamp_utc: 2026-03-11T08:39:09Z
-rolling_provenance: 2026-03-11T08:39:09Z (arbitrum_one, ci_m5_gate_20260311_093830)
+timestamp_utc: 2026-03-11T09:44:34Z
+rolling_provenance: 2026-03-11T09:44:34Z (arbitrum_one, ci_m5_gate_20260311_104349)
 mode: ONLINE
-test_count: 1645 passed, 2 skipped
+test_count: 1647 passed, 2 skipped
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | Fee=100 pool activation + median-based frontier ranking + honest economics assessment |
+| session_goal | Multi-chain frontier ranking promotion to canonical rolling artifacts + contract tests |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | Market conditions: no 100↔100 cross-DEX spreads found |
-| evidence_session_run_dirs | manual_run_20260311_100246, ci_m5_gate_20260311_093830 |
-| primary_blocker_of_session | Fee=100 activation + median ranking |
-| blocker_status_before | Fee=100 pools in disabled_pools, no median tracking |
-| blocker_status_after | Fee=100 pools ACTIVE (queried buy_fee=100 in opportunities), median ranking live |
-| start_metric | R11: gap_to_zero=4.10 bps, 1635 tests, 4-field ranking |
-| end_metric | R12: gap_to_zero=4.10 bps, 1645 tests, 6-field ranking with median, fee=100 active |
-| delta | +10 tests, median_gap tracking, fee=100 activated (but 0 100↔100 opportunities) |
+| remaining_blockers | Market conditions: roundtrip_profitable=0 (M4.2 not closed) |
+| evidence_session_run_dirs | ci_m5_gate_20260311_104349, manual_run_20260311_095812 |
+| primary_blocker_of_session | Multi-chain frontier in rolling artifacts |
+| blocker_status_before | long_scan_latest.json in _incidents/, not canonical rolling |
+| blocker_status_after | long_scan_latest.json in _rolling/ (canonical), schema v1.3 with frontier_ranking |
+| start_metric | R12: long_scan in _incidents/, 1645 tests, 164 runs |
+| end_metric | R13: long_scan in _rolling/, 1647 tests, 168 runs, +$21.58 net |
+| delta | +2 tests (multi-chain contract tests), frontier ranking now canonical |
 | docs_reread_confirmed | true |
 
 ## 1) Changes This Session
 
-1. **Fee=100 pool activation** (`config/real_minimal.yaml`): Removed 4 FEE_HUNT_CANDIDATE entries from disabled_pools. Added actual pool addresses discovered via factory.getPool() cache: `uniswap_v3_WBTC_WETH_100: 0x03a3be7ab4aa...`, `sushiswap_v3_WBTC_WETH_100: 0xbb08872aec88...`, `uniswap_v3_WBTC_USDC_100: 0x889af944e957...`, `sushiswap_v3_WBTC_USDC_100: 0x2a7b1e308993...`. **Verified working**: opportunity_engine shows `buy_fee: 100` in opportunities.
-2. **Median-based frontier ranking** (`start.py`): Added `_sweep_gap_values: []`, `runs_with_sweep: 0` to `new_chain_stats()`. `update_chain_stats()` collects gap values. New `_compute_median()` helper. `_compute_frontier_ranking()` now uses 6-field sort: `(accepted_fail, median_gap, best_gap, -runs_with_sweep, -signals, -xdex)`. Schema bumped to v1.3 with `gap_percentile_context` in `build_summary()`.
-3. **Base cbBTC quarantine** (`config/coverage_intent_base.yaml`): Added `cbBTC/*` and `*/cbBTC` to excluded_pair_hints to prevent spurious 2544 bps outlier (>500 bps SUSPECT threshold).
-4. **Contract tests** (+10 tests): 4 median tests (`_compute_median_odd/even/empty/single`), 3 ranking tests (`median_gap_in_ranking_entry`, `median_ranking_overrides_best_gap`, `runs_with_sweep_tiebreak`), 2 summary tests (`gap_percentile_context_in_summary`, `no_median_when_no_sweep_data`), 1 aggregation test (`sweep_gap_values_collected`). Total: 1645 passed, 2 skipped.
-5. **Fee=100 market reality check**: Scans show fee=100 pools ARE queried but only mixed-tier opportunities exist (100→3000). No 100↔100 cross-DEX spreads in current market. Fee=100 pools have tight spreads (arb bot territory).
-6. **Status_M4.md frontier update**: Added R11 column to Economics Frontier table, updated ROLLING STABILITY section (runs=164, gap_best=4.10).
+1. **Multi-chain frontier promoted to rolling** (`start.py`): Changed default `--summary-file` from `data/runs/_incidents/long_scan_latest.json` to `data/runs/_rolling/long_scan_latest.json`. This makes multi-chain frontier ranking a canonical rolling artifact per AGENTS.md policy.
+2. **AGENTS.md updated**: Added `long_scan_latest.json` to the canonical rolling artifacts list with description "(multi-chain frontier ranking)".
+3. **WORKFLOW.md updated**: Updated all `--summary-file` references to use `_rolling/` path. Updated summary output documentation.
+4. **Status_M5_0.md updated**: Updated evidence references to new `_rolling/long_scan_latest.json` path.
+5. **Contract tests for multi-chain frontier** (`test_start.py`): Added `test_frontier_ranking_includes_measured_economics` and `test_long_scan_summary_schema_v1_3` tests to validate frontier_ranking schema with measured economics decomposition. Total: 1647 passed, 2 skipped.
+6. **Rolling artifact test updated** (`test_nonstop_loop_artifacts.py`): Added `long_scan_latest.json` to canonical_files set to prevent CI failure when file exists in `_rolling/`.
 
 ## 2) Evidence Artifacts
 
@@ -93,16 +93,16 @@ test_count: 1645 passed, 2 skipped
 - Total cost: 21.87 bps
 - Gross spread: ~15 bps → net = -6.78 bps
 
-**Rolling quick_stats (164 runs, after R12 scans):**
+**Rolling quick_stats (168 runs, after R13 scans):**
 ```
-sweep_runs_count: ~21
+sweep_runs_count: ~28
 sweep_best_pnl_bps_ever: -4.10
 sweep_gap_to_zero_min: 4.10
-sweep_median_gap_to_zero_bps: 18.89
-sweep_median_net_pnl_bps: -18.89
-frontier_pair_latest: WBTC/USDC
+sweep_median_gap_to_zero_bps: 17.69
+sweep_median_net_pnl_bps: -17.69
+frontier_pair_latest: WETH/USDT
 frontier_chain_latest: arbitrum_one
-total_net_usdc: 1032.65
+total_net_usdc: 1054.23
 pass_rate: 100%
 fee_100_status: QUERIED (buy_fee=100 in opportunities, but NO 100↔100 cross-DEX spreads)
 ```
@@ -132,24 +132,24 @@ fee_tier_combos: 100/3000=1, 500/500=2, 100/100=0 (no cross-DEX at fee=100)
 | linea | 19 | 19 | 0 | 0 | 39 | $53.28 | 0 | SIGNAL_PRODUCING | - |
 | **TOTAL** | **115** | **96** | **4** | **15** | **302** | **$275.20** | | | |
 
-### Before/After: R11 → R12
+### Before/After: R12 → R13
 
-| Metric | R11 (before) | R12 (after) | Status |
+| Metric | R12 (before) | R13 (after) | Status |
 |--------|-------------|-------------|--------|
 | gap_to_zero_bps (best) | 4.10 | **4.10** | Unchanged (market-limited) |
-| fee=100 status | disabled_pools | **ACTIVE + QUERIED** | **RESOLVED** |
-| fee=100 opportunities | N/A | **1 (100→3000 cross-tier)** | Working but no 100↔100 |
-| frontier_ranking | 4-field sort | **6-field sort (median first)** | ENHANCED |
-| median_gap tracking | Not tracked | **_sweep_gap_values + _compute_median** | NEW |
-| cbBTC quarantine | Not excluded | **excluded_pair_hints** | Base outlier filtered |
-| test_count | 1635 | **1645** | +10 |
-| schema_version | v1.2 | **v1.3** | gap_percentile_context |
+| gap_to_zero_bps (latest) | 13.58 | **14.29** | Within range |
+| gap_to_zero_bps (median) | 18.89 | **17.69** | Improved |
+| long_scan_latest location | _incidents/ | **_rolling/** | Canonical rolling artifact |
+| frontier_ranking schema | v1.3 | **v1.3** | Now in rolling artifacts |
+| test_count | 1645 | **1647** | +2 (multi-chain contract tests) |
+| runs_in_window | 164 | **168** | +4 runs |
+| total_net_usdc | $1032.65 | **$1054.23** | +$21.58 |
 
 ### Verification Gates
 
 | Gate | Result |
 |------|--------|
-| pytest | 1645 passed, 2 skipped |
+| pytest | 1647 passed, 2 skipped |
 | ci_full_pipeline --mode ci | PASS (after DEV_REPORT update) |
 | ci_m4 --offline --profile profit --strict | PASS |
 | check_repo_safety | PASS (0 warnings) |
@@ -163,12 +163,12 @@ latest:
   run_status: PASS
   agg_status: PASS
   data_run_rate: ~0.89
-  runs_in_window: 164
+  runs_in_window: 168
 run_summary_latest:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_id: ci_m5_gate_20260311_093830
-  run_timestamp: 2026-03-11T08:39:09Z
+  run_id: ci_m5_gate_20260311_104349
+  run_timestamp: 2026-03-11T09:44:34Z
   inputs.run_mode: REGISTRY_REAL
   profit_status: PASS
   drift_status: PASS
@@ -176,11 +176,11 @@ run_summary_latest:
 stability_agg:
   schema_version: m4:stability_agg:v2.0
   agg_status: PASS
-  quick_stats.total_net_usdc: 1032.65
+  quick_stats.total_net_usdc: 1054.23
   quick_stats.pass_rate: 100%
   quick_stats.sweep_best_pnl_bps_ever: -4.10
   quick_stats.sweep_gap_to_zero_min: 4.10
-  quick_stats.sweep_median_gap_to_zero_bps: 18.89
+  quick_stats.sweep_median_gap_to_zero_bps: 17.69
 ```
 
 ## 4) Honest Assessment

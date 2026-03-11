@@ -579,8 +579,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument(
         "--summary-file",
-        default="data/runs/_incidents/long_scan_latest.json",
-        help="Path to overwrite with session summary JSON",
+        default="data/runs/_rolling/long_scan_latest.json",
+        help="Path to overwrite with session summary JSON (canonical rolling artifact)",
     )
     ap.add_argument(
         "--max-fail-chains",
