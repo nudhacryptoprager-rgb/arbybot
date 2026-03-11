@@ -216,6 +216,9 @@ def new_chain_stats() -> dict[str, Any]:
         "run_kind": None,
         "last_cross_dex_pairs_count": None,
         "accepted_fail": False,
+        # R12: Frontier ranking metrics (robust selection)
+        "_sweep_gap_values": [],  # for median computation
+        "runs_with_sweep": 0,
     }
 
 
@@ -250,12 +253,16 @@ def update_chain_stats(
         sweep = rt.get("dynamic_sweep", {})
         sweep_pnl = sweep.get("best_net_pnl_bps") or sweep.get("sweep_best_net_pnl_bps")
         if sweep_pnl is not None:
+            # R12: collect gap for median computation
+            gap = sweep.get("gap_to_zero_bps")
+            if gap is not None:
+                stats["_sweep_gap_values"].append(gap)
+                stats["runs_with_sweep"] = stats.get("runs_with_sweep", 0) + 1
             prev_sweep = stats.get("sweep_best_net_pnl_bps")
             if prev_sweep is None or sweep_pnl > prev_sweep:
                 stats["sweep_best_net_pnl_bps"] = sweep_pnl
                 stats["sweep_best_size_usd"] = sweep.get("best_size_usd") or sweep.get("sweep_best_size_usd")
                 stats["sweep_best_pair"] = sweep.get("best_pair") or sweep.get("frontier_pair")
-                gap = sweep.get("gap_to_zero_bps")
                 stats["sweep_gap_to_zero_bps"] = gap
                 stats["sweep_measured_gas_bps"] = sweep.get("measured_gas_bps") or sweep.get("best_gas_bps")
                 stats["sweep_measured_fee_bps"] = sweep.get("measured_fee_bps") or sweep.get("best_fee_bps")
@@ -311,6 +318,17 @@ def check_guardrails(per_chain: dict[str, dict[str, Any]]) -> list[str]:
 # -- summary output -------------------------------------------------------
 
 
+def _compute_median(values: list[float]) -> float | None:
+    """Compute median of a list of floats."""
+    if not values:
+        return None
+    s = sorted(values)
+    n = len(s)
+    if n % 2 == 1:
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) / 2
+
+
 def build_summary(
     per_chain: dict[str, dict[str, Any]],
     wall_seconds: float,
@@ -322,8 +340,17 @@ def build_summary(
     accepted_fail_chains = [c for c in fail_chains if per_chain[c].get("accepted_fail")]
     unexpected_fail_chains = [c for c in fail_chains if not per_chain[c].get("accepted_fail")]
 
+    # R12: Compute cross-chain gap percentile context
+    all_gap_values = []
+    total_sweep_runs = 0
+    for s in per_chain.values():
+        all_gap_values.extend(s.get("_sweep_gap_values", []))
+        total_sweep_runs += s.get("runs_with_sweep", 0)
+    gap_best = min(all_gap_values) if all_gap_values else None
+    gap_median = _compute_median(all_gap_values)
+
     return {
-        "schema": "start:long_scan_summary:v1.2",
+        "schema": "start:long_scan_summary:v1.3",  # bumped for R12 fields
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "wall_seconds": round(wall_seconds, 1),
         "total_runs": sum(s["runs"] for s in per_chain.values()),
@@ -355,6 +382,13 @@ def build_summary(
             ),
             None,
         ),
+        # R12: Gap percentile context for frontier analysis
+        "gap_percentile_context": {
+            "best_gap_to_zero_bps": round(gap_best, 4) if gap_best is not None else None,
+            "median_gap_to_zero_bps": round(gap_median, 4) if gap_median is not None else None,
+            "runs_with_sweep": total_sweep_runs,
+            "sweep_values_count": len(all_gap_values),
+        },
         "pass_chains": pass_chains,
         "fail_chains": fail_chains,
         "accepted_fail_chains": accepted_fail_chains,
@@ -367,14 +401,17 @@ def build_summary(
 
 
 def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rank chains by composite frontier score.
+    """Rank chains by composite frontier score (R12: robust multi-metric selection).
 
     Sort order (ascending tuple):
       1. accepted_fail (False < True — non-accepted first)
-      2. gap_to_zero_bps (lower = closer to breakeven)
-      3. -included_signals_total (more signals = higher confidence)
-      4. -cross_dex_pairs_count (more venues = more opportunity)
+      2. median_gap_to_zero_bps (lower = more consistent near-breakeven)
+      3. gap_to_zero_bps (best - lower = closer tail-case)
+      4. -runs_with_sweep (more data = higher confidence)
+      5. -included_signals_total (more signals = better coverage)
+      6. -cross_dex_pairs_count (more venues = more opportunity)
 
+    This ensures top-2 candidate selection is robust, not based on one lucky run.
     gap_to_zero_bps is a WARN / frontier KPI only, NOT a hard pass/fail gate.
     """
     ranked = []
@@ -384,11 +421,16 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
         signals = s.get("included_signals_total", 0)
         xdex = s.get("last_cross_dex_pairs_count") or 0
         is_af = s.get("accepted_fail", False)
+        runs_sweep = s.get("runs_with_sweep", 0)
+        gap_values = s.get("_sweep_gap_values", [])
+        median_gap = _compute_median(gap_values)
         if pnl is None and signals == 0:
             continue
         ranked.append({
             "chain": chain,
             "gap_to_zero_bps": gap,
+            "median_gap_to_zero_bps": round(median_gap, 4) if median_gap is not None else None,
+            "runs_with_sweep": runs_sweep,
             "sweep_best_net_pnl_bps": pnl,
             "sweep_best_size_usd": s.get("sweep_best_size_usd"),
             "frontier_pair": s.get("sweep_best_pair"),
@@ -403,7 +445,9 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
         })
     ranked.sort(key=lambda x: (
         x.get("accepted_fail", False),
+        x.get("median_gap_to_zero_bps") if x.get("median_gap_to_zero_bps") is not None else 9999,
         x.get("gap_to_zero_bps") if x.get("gap_to_zero_bps") is not None else 9999,
+        -(x.get("runs_with_sweep", 0)),
         -(x.get("included_signals_total", 0)),
         -(x.get("cross_dex_pairs_count", 0)),
     ))
@@ -473,22 +517,23 @@ def print_summary(summary: dict[str, Any]) -> None:
 
     ranking = summary.get("frontier_ranking", [])
     if ranking:
-        print("\n--- FRONTIER RANKING (composite: gap + signals + xdex) ---")
+        print("\n--- FRONTIER RANKING (R12: median + best + runs) ---")
         for i, r in enumerate(ranking):
             gap = r.get("gap_to_zero_bps")
+            median_gap = r.get("median_gap_to_zero_bps")
             gap_s = f"{gap:.1f}" if gap is not None else "n/a"
+            median_s = f"{median_gap:.1f}" if median_gap is not None else "n/a"
             pnl = r.get("sweep_best_net_pnl_bps") or 0
-            cost = r.get("measured_total_cost_bps")
-            cost_s = f"cost={cost:.1f}" if cost is not None else "cost=n/a"
+            runs_sw = r.get("runs_with_sweep", 0)
             sigs = r.get("included_signals_total", 0)
             xdex = r.get("cross_dex_pairs_count", 0)
             is_af = r.get("accepted_fail", False)
             ready = "READY" if r.get("frontier_ready") else "AF" if is_af else "-"
             print(
-                f"  #{i+1} {r['chain']:16s}  gap={gap_s:>6s} bps  "
-                f"pnl={pnl:+.1f} bps  {cost_s} bps  "
-                f"sig={sigs}  xdex={xdex}  "
-                f"pair={r.get('frontier_pair', 'n/a')}  {ready}"
+                f"  #{i+1} {r['chain']:16s}  "
+                f"median={median_s:>6s}  best={gap_s:>6s} bps  "
+                f"pnl={pnl:+.1f} bps  runs={runs_sw}  "
+                f"sig={sigs}  xdex={xdex}  {ready}"
             )
 
     print("=" * 70)

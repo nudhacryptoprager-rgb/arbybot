@@ -164,6 +164,9 @@ pools:
   sushiswap_v3_WETH_USDT_500: "0x96aDA81328abCe21939A51D971A63077e16db26E"
   sushiswap_v3_WETH_USDT_3000: "0x92d543A8a158A6bC2C7018ae17803819Cb9150B2"
   # === WBTC/WETH (v2.9.1: sushi 3000 re-enabled after anchor direction fix) ===
+  # R12: fee=100 pools discovered via factory.getPool() (both DEXes have pools)
+  uniswap_v3_WBTC_WETH_100: "0x03a3be7ab4aa263d42d63b6cc594f4fb3d3f3951"
+  sushiswap_v3_WBTC_WETH_100: "0xbb08872aec88fa7bcda9faadccee8bfa806414f8"
   uniswap_v3_WBTC_WETH_500: "0x2f5e87C9312fa29aed5c179E456625D79015299c"
   uniswap_v3_WBTC_WETH_3000: "0x149e36E72726e0BceA5c59d40df2c43F60f5A22D"
   sushiswap_v3_WBTC_WETH_3000: "0x6F10667F314498649eb2f80da244e8c6E9f031d5"
@@ -194,6 +197,9 @@ pools:
   # sushiswap_v3_ARB_USDC_3000: v2.9.2 DISABLED (PRICE_SANITY_FAILED - pool returns inverted quotes ratio~0.01)
   # sushiswap_v3_ARB_USDC_500: v2.3.4 DISABLED (low liquidity fee tier)
   # === WBTC/USDC ===
+  # R12: fee=100 pools discovered via factory.getPool()
+  uniswap_v3_WBTC_USDC_100: "0x889af944e95788f770983062b13b5a52e367029b"
+  sushiswap_v3_WBTC_USDC_100: "0x2a7b1e3089938c9284999048bf58ea358e4c85b7"
   uniswap_v3_WBTC_USDC_500: "0x0E4831319A50228B9e450861297aB92dee15B44F"
   uniswap_v3_WBTC_USDC_3000: "0x6985cb98CE393FCE8d6272127F39013f61e36166"
   sushiswap_v3_WBTC_USDC_500: "0x699f628A8A1DE0f28cf9181C1F8ED848eBB0BBdF"
@@ -320,31 +326,12 @@ disabled_pools:
     detail: "fee=100 only available on Uniswap; Sushi has no fee=100 WETH/USDC pool"
     evidence_run: "ci_m5_gate_20260228_203126"
     disabled_date: "2026-02-28"
-  # R11: fee=100 hunt candidates — addresses need on-chain discovery via factory.getPool()
-  uniswap_v3_WBTC_WETH_100:
-    address: null
-    reason: "FEE_HUNT_CANDIDATE"
-    detail: "fee=100 pool address needs discovery; if it exists, 8 bps roundtrip saving vs fee=500"
-    evidence_run: "R11_fee_hunt"
-    disabled_date: "2026-03-10"
-  sushiswap_v3_WBTC_WETH_100:
-    address: null
-    reason: "FEE_HUNT_CANDIDATE"
-    detail: "fee=100 pool address needs discovery; Sushi may not have fee=100 tier"
-    evidence_run: "R11_fee_hunt"
-    disabled_date: "2026-03-10"
-  uniswap_v3_WBTC_USDC_100:
-    address: null
-    reason: "FEE_HUNT_CANDIDATE"
-    detail: "fee=100 pool address needs discovery; if it exists, 8 bps roundtrip saving vs fee=500"
-    evidence_run: "R11_fee_hunt"
-    disabled_date: "2026-03-10"
-  sushiswap_v3_WBTC_USDC_100:
-    address: null
-    reason: "FEE_HUNT_CANDIDATE"
-    detail: "fee=100 pool address needs discovery; Sushi may not have fee=100 tier"
-    evidence_run: "R11_fee_hunt"
-    disabled_date: "2026-03-10"
+  # R12: fee=100 pools ACTIVATED — discovered via factory.getPool() cache
+  # uniswap_v3 WBTC/WETH fee=100: 0x03a3be7ab4aa263d42d63b6cc594f4fb3d3f3951
+  # sushiswap_v3 WBTC/WETH fee=100: 0xbb08872aec88fa7bcda9faadccee8bfa806414f8
+  # uniswap_v3 WBTC/USDC fee=100: 0x889af944e95788f770983062b13b5a52e367029b
+  # sushiswap_v3 WBTC/USDC fee=100: 0x2a7b1e3089938c9284999048bf58ea358e4c85b7
+  # Expected saving: 8 bps roundtrip (2×fee_tier from 500→100 = 2×4 = 8 bps)
   # v2.9.6: POOL_MISSING fix - Sushi WBTC/USDT 3000 returns bad quotes (PRICE_SANITY_FAILED in quarantine_state)
   sushiswap_v3_WBTC_USDT_3000:
     address: null

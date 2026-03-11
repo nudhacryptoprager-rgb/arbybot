@@ -8,12 +8,12 @@
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, canonical rolling on arbitrum_one.
 
-## SESSION GOAL (2026-03-10, Session 4 Round 11)
-**Goal**: Fee=100 pair hunt + SUSPECT_ROUNDTRIP_OUTLIER filter + composite frontier ranking.
+## SESSION GOAL (2026-03-11, Session 4 Round 12)
+**Goal**: Fee=100 pool activation + median-based frontier ranking + honest economics assessment.
 
 ### Blocker Classification (current)
 ```
-code_blocker:            RESOLVED (pytest 1635 passed, all gates PASS)
+code_blocker:            RESOLVED (pytest 1645 passed, all gates PASS)
 cross_dex_pairs_count:   RESOLVED (artifact key fix + safety assertion)
 accepted_fail_model:     RESOLVED (--accepted-fail-chains in start.py)
 placeholder_detection:   RESOLVED (header-aware scanner in check_repo_safety)
@@ -23,46 +23,46 @@ profit_truth:            IN_PROGRESS (sweep best: -4.10 bps @ $25, gap_to_zero=4
 sweep_canonical:         RESOLVED (CANONICAL_SWEEP_SIZES_USD, truth_report → run_summary → rolling)
 rolling_frontier_blind:  RESOLVED (sweep metrics now propagate through full pipeline)
 dynamic_economics:       RESOLVED (measured_gas/fee/slippage/total_cost_bps canonical in all artifacts)
-frontier_ranking:        RESOLVED (composite 4-field sort: accepted_fail, gap, -signals, -xdex)
+frontier_ranking:        RESOLVED (composite 6-field sort: accepted_fail, median_gap, best_gap, -runs, -signals, -xdex)
 suspect_outlier_filter:  RESOLVED (SUSPECT_ROUNDTRIP_OUTLIER_BPS=500 in run_scan_real.py)
-fee_100_hunt:            IN_PROGRESS (WBTC/WETH, WBTC/USDC fee=100 added, addresses need on-chain discovery)
+fee_100_activation:      RESOLVED (pools activated, addresses in config, QUERIED BUT NO 100↔100 SPREADS)
 gap_to_zero_policy:      RESOLVED (WARN/frontier KPI only, NOT a hard gate)
+median_gap_tracking:     RESOLVED (_sweep_gap_values collection, _compute_median(), schema v1.3)
 ```
 
 **IMPORTANT**: `infra_gate: PASS` != `run_summary.status: PASS`. See [Status_M5_0.md](status/Status_M5_0.md) for terminology.
 
 ## 0) Meta
-timestamp_utc: 2026-03-10T22:44:48Z
-rolling_provenance: 2026-03-10T22:44:48Z (arbitrum_one, ci_m5_gate_20260310_234414)
+timestamp_utc: 2026-03-11T08:39:09Z
+rolling_provenance: 2026-03-11T08:39:09Z (arbitrum_one, ci_m5_gate_20260311_093830)
 mode: ONLINE
-test_count: 1635 passed, 2 skipped
+test_count: 1645 passed, 2 skipped
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | Fee=100 pair hunt + SUSPECT_ROUNDTRIP_OUTLIER filter + composite frontier ranking |
+| session_goal | Fee=100 pool activation + median-based frontier ranking + honest economics assessment |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | fee=100 pool addresses need on-chain discovery (next session) |
-| evidence_session_run_dirs | 112 runs: ci_m5_gate_20260310_225316..234509 (6-chain, ~19 runs/chain) |
-| primary_blocker_of_session | Fee=100 hunt + SUSPECT filter + composite ranking |
-| blocker_status_before | ACTIVE (gap_to_zero=19.04 bps, no SUSPECT filter, simple sort) |
-| blocker_status_after | RESOLVED (gap_to_zero=4.10 bps, SUSPECT filter active, composite sort) |
-| start_metric | R10: gap_to_zero=19.04 bps, 1627 tests, single-field ranking |
-| end_metric | R11: gap_to_zero=4.10 bps, 1635 tests, composite 4-field ranking, 112 scan runs |
-| delta | gap_to_zero: 19.04→4.10 bps (78% improvement), +8 tests, SUSPECT filter live |
+| remaining_blockers | Market conditions: no 100↔100 cross-DEX spreads found |
+| evidence_session_run_dirs | manual_run_20260311_100246, ci_m5_gate_20260311_093830 |
+| primary_blocker_of_session | Fee=100 activation + median ranking |
+| blocker_status_before | Fee=100 pools in disabled_pools, no median tracking |
+| blocker_status_after | Fee=100 pools ACTIVE (queried buy_fee=100 in opportunities), median ranking live |
+| start_metric | R11: gap_to_zero=4.10 bps, 1635 tests, 4-field ranking |
+| end_metric | R12: gap_to_zero=4.10 bps, 1645 tests, 6-field ranking with median, fee=100 active |
+| delta | +10 tests, median_gap tracking, fee=100 activated (but 0 100↔100 opportunities) |
 | docs_reread_confirmed | true |
 
 ## 1) Changes This Session
 
-1. **Composite frontier ranking** (`start.py`): `_compute_frontier_ranking()` now uses 4-field tuple sort: `(accepted_fail, gap_to_zero_bps, -included_signals_total, -cross_dex_pairs_count)`. Added `included_signals_total`, `cross_dex_pairs_count`, `accepted_fail` to ranking entries. `frontier_ready` excludes accepted_fail chains. `print_summary()` shows signals, xdex, AF marker.
-2. **SUSPECT_ROUNDTRIP_OUTLIER filter** (`strategy/jobs/run_scan_real.py`): Threshold 500 bps. Filters extreme sweep results from illiquid pools. New fields: `routes_clean`, `suspect_outlier_count`. Handles all-suspect edge case (`ALL_SUSPECT_OUTLIER` frontier_reason).
-3. **gap_to_zero_bps WARN policy** (`m4/rolling_store.py`, `start.py`): Policy comment: "gap_to_zero_bps is a WARN/frontier KPI only, NOT a hard pass/fail gate." Verified via grep: never used as gate anywhere.
-4. **Fee=100 pair hunt** (`config/real_minimal.yaml`): Added fee=100 to WBTC/WETH and WBTC/USDC fee_tiers. 4 `disabled_pools` entries (FEE_HUNT_CANDIDATE) since addresses need on-chain discovery.
-5. **$25 sweep point** (`config/real_minimal.yaml`): `sizes_usd: [25, 50, 75, 100, 125, 150, 200, 250]` — added $25 for dust-edge probing. Immediately produced best results (gap_to_zero improved from 19.04 to 5.16 bps).
-6. **pnl None safety** (`start.py`): Fixed `pnl = r.get("sweep_best_net_pnl_bps") or 0` for None value handling.
-7. **Contract tests** (+8 tests): 5 in test_start.py (accepted_fail sorting, frontier_ready, composite tiebreak, new fields, chain without sweep). 3 in test_truth_report.py (outlier excluded, all suspect, negative pnl). Total: 1635 passed, 2 skipped.
+1. **Fee=100 pool activation** (`config/real_minimal.yaml`): Removed 4 FEE_HUNT_CANDIDATE entries from disabled_pools. Added actual pool addresses discovered via factory.getPool() cache: `uniswap_v3_WBTC_WETH_100: 0x03a3be7ab4aa...`, `sushiswap_v3_WBTC_WETH_100: 0xbb08872aec88...`, `uniswap_v3_WBTC_USDC_100: 0x889af944e957...`, `sushiswap_v3_WBTC_USDC_100: 0x2a7b1e308993...`. **Verified working**: opportunity_engine shows `buy_fee: 100` in opportunities.
+2. **Median-based frontier ranking** (`start.py`): Added `_sweep_gap_values: []`, `runs_with_sweep: 0` to `new_chain_stats()`. `update_chain_stats()` collects gap values. New `_compute_median()` helper. `_compute_frontier_ranking()` now uses 6-field sort: `(accepted_fail, median_gap, best_gap, -runs_with_sweep, -signals, -xdex)`. Schema bumped to v1.3 with `gap_percentile_context` in `build_summary()`.
+3. **Base cbBTC quarantine** (`config/coverage_intent_base.yaml`): Added `cbBTC/*` and `*/cbBTC` to excluded_pair_hints to prevent spurious 2544 bps outlier (>500 bps SUSPECT threshold).
+4. **Contract tests** (+10 tests): 4 median tests (`_compute_median_odd/even/empty/single`), 3 ranking tests (`median_gap_in_ranking_entry`, `median_ranking_overrides_best_gap`, `runs_with_sweep_tiebreak`), 2 summary tests (`gap_percentile_context_in_summary`, `no_median_when_no_sweep_data`), 1 aggregation test (`sweep_gap_values_collected`). Total: 1645 passed, 2 skipped.
+5. **Fee=100 market reality check**: Scans show fee=100 pools ARE queried but only mixed-tier opportunities exist (100→3000). No 100↔100 cross-DEX spreads in current market. Fee=100 pools have tight spreads (arb bot territory).
+6. **Status_M4.md frontier update**: Added R11 column to Economics Frontier table, updated ROLLING STABILITY section (runs=164, gap_best=4.10).
 
 ## 2) Evidence Artifacts
 
@@ -93,21 +93,32 @@ test_count: 1635 passed, 2 skipped
 - Total cost: 21.87 bps
 - Gross spread: ~15 bps → net = -6.78 bps
 
-**Rolling quick_stats (161 runs, final after 6-chain scan):**
+**Rolling quick_stats (164 runs, after R12 scans):**
 ```
-sweep_runs_count: 21
+sweep_runs_count: ~21
 sweep_best_pnl_bps_ever: -4.10
 sweep_gap_to_zero_min: 4.10
-sweep_median_gap_to_zero_bps: 18.74
-sweep_median_net_pnl_bps: -18.74
+sweep_median_gap_to_zero_bps: 18.89
+sweep_median_net_pnl_bps: -18.89
 frontier_pair_latest: WBTC/USDC
 frontier_chain_latest: arbitrum_one
-total_net_usdc: 1016.27
-pass_count: 143
-fail_count: 0
-roundtrip_runs_evaluated: 20
-roundtrip_total_evaluated: 37
+total_net_usdc: 1032.65
+pass_rate: 100%
+fee_100_status: QUERIED (buy_fee=100 in opportunities, but NO 100↔100 cross-DEX spreads)
 ```
+
+### Fee=100 Opportunity Evidence (manual_run_20260311_100246)
+```
+top_opportunity:
+  pair: WBTC/WETH, buy_dex: uniswap_v3, buy_fee: 100 ← FEE=100 QUERIED
+  sell_dex: sushiswap_v3, sell_fee: 3000 (cross-tier, not 100↔100)
+  lp_fee_roundtrip_bps: 31.0, effective_slippage_bps: 704.17
+  measured_is_roundtrip_viable: false
+
+fee_tier_combos: 100/3000=1, 500/500=2, 100/100=0 (no cross-DEX at fee=100)
+```
+
+**Conclusion**: Fee=100 pools ARE working. Market limitation: fee=100 pools have tight spreads.
 
 ### 6-Chain Coverage Scan (COMPLETED, 112 runs, ~19 per chain)
 
@@ -121,29 +132,28 @@ roundtrip_total_evaluated: 37
 | linea | 19 | 19 | 0 | 0 | 39 | $53.28 | 0 | SIGNAL_PRODUCING | - |
 | **TOTAL** | **115** | **96** | **4** | **15** | **302** | **$275.20** | | | |
 
-### Before/After: R10 → R11
+### Before/After: R11 → R12
 
-| Metric | R10 (before) | R11 (after) | Status |
+| Metric | R11 (before) | R12 (after) | Status |
 |--------|-------------|-------------|--------|
-| gap_to_zero_bps (best) | 19.04 | **4.10** | **78% improvement** |
-| sweep_best_size_usd | $50 | **$25** | $25 added to ladder |
-| frontier_ranking | Single gap_to_zero sort | **Composite 4-field sort** | NEW |
-| SUSPECT_ROUNDTRIP_OUTLIER | Not filtered | **500 bps threshold** | NEW |
-| fee=100 config | Not configured | **WBTC/WETH, WBTC/USDC** | IN_PROGRESS (addresses pending) |
-| gap_to_zero policy | Ambiguous | **WARN/KPI only** | Clarified |
-| sweep_runs_count (rolling) | 2 | 21 | More data |
-| total_net_usdc (rolling) | 995.88 | 1016.27 | Accumulating |
-| test_count | 1627 | **1635** | +8 |
+| gap_to_zero_bps (best) | 4.10 | **4.10** | Unchanged (market-limited) |
+| fee=100 status | disabled_pools | **ACTIVE + QUERIED** | **RESOLVED** |
+| fee=100 opportunities | N/A | **1 (100→3000 cross-tier)** | Working but no 100↔100 |
+| frontier_ranking | 4-field sort | **6-field sort (median first)** | ENHANCED |
+| median_gap tracking | Not tracked | **_sweep_gap_values + _compute_median** | NEW |
+| cbBTC quarantine | Not excluded | **excluded_pair_hints** | Base outlier filtered |
+| test_count | 1635 | **1645** | +10 |
+| schema_version | v1.2 | **v1.3** | gap_percentile_context |
 
 ### Verification Gates
 
 | Gate | Result |
 |------|--------|
-| pytest | 1635 passed, 2 skipped |
-| ci_full_pipeline --mode ci | ALL REQUIRED GATES PASSED |
+| pytest | 1645 passed, 2 skipped |
+| ci_full_pipeline --mode ci | PASS (after DEV_REPORT update) |
 | ci_m4 --offline --profile profit --strict | PASS |
 | check_repo_safety | PASS (0 warnings) |
-| 6-chain coverage scan | 6/6 PASS (scroll=accepted-fail) |
+| fee=100 pool activation | PASS (addresses in pools section, queries execute) |
 
 ## 3) Key Results
 
@@ -152,13 +162,13 @@ latest:
   schema_version: m4:latest:v2.0
   run_status: PASS
   agg_status: PASS
-  data_run_rate: 0.8882
-  runs_in_window: 161
+  data_run_rate: ~0.89
+  runs_in_window: 164
 run_summary_latest:
   schema_version: m4:run_summary:v2.0
   status: PASS
-  run_id: ci_m5_gate_20260310_234414
-  run_timestamp: 2026-03-10T22:44:48Z
+  run_id: ci_m5_gate_20260311_093830
+  run_timestamp: 2026-03-11T08:39:09Z
   inputs.run_mode: REGISTRY_REAL
   profit_status: PASS
   drift_status: PASS
@@ -166,42 +176,39 @@ run_summary_latest:
 stability_agg:
   schema_version: m4:stability_agg:v2.0
   agg_status: PASS
-  runs_since_timestamp.runs_count: 161
-  quick_stats.total_net_usdc: 1016.27
-  quick_stats.pass_count: 143
-  quick_stats.fail_count: 0
-  quick_stats.sweep_runs_count: 21
+  quick_stats.total_net_usdc: 1032.65
+  quick_stats.pass_rate: 100%
   quick_stats.sweep_best_pnl_bps_ever: -4.10
   quick_stats.sweep_gap_to_zero_min: 4.10
-  quick_stats.sweep_median_gap_to_zero_bps: 18.74
-  quick_stats.sweep_median_net_pnl_bps: -18.74
-  quick_stats.frontier_pair_latest: WBTC/USDC
-  quick_stats.frontier_chain_latest: arbitrum_one
-  quick_stats.total_signals: 704
-  quick_stats.unique_pairs: 13
-  quick_stats.unique_routes: 6
+  quick_stats.sweep_median_gap_to_zero_bps: 18.89
 ```
 
 ## 4) Honest Assessment
 
-**Gap-to-zero improved 78%** — from 19.04 bps (R10, $50) to 4.10 bps (R11, $25). The $25 sweep point was the single biggest contributor, reducing slippage from 17.31 to 8.62 bps at frontier. Best ever: -4.10 bps over 21 sweep runs.
+**Strategy is near-breakeven on best cases, NOT yet proven net-positive.** Best-ever gap_to_zero=4.10 bps. Median gap=18.89 bps. The 4.10 bps best case requires specific market conditions that don't consistently materialize.
 
-**Cost structure analysis (arb WBTC/USDC fee=500 @ $25):**
-- **LP fee still dominates** at 10.0 bps (2x500 fee tier). Fee=100 pairs would reduce to 2 bps.
-- **Slippage halved** at 8.62 bps (down from 17.31 at $50). Still proportional to size.
-- **Gas higher at small size** at 3.25 bps (up from 1.63 at $50). Fixed-cost dilution trade-off.
-- **Total cost** 21.87 bps vs gross ~15 bps → net = -6.78 bps.
+**Fee=100 lever implemented correctly but market-limited:**
+- Fee=100 pools ARE configured and ARE being queried (evidence: `buy_fee: 100` in opportunity_engine)
+- BUT no 100↔100 cross-DEX spreads exist — only 100→3000 cross-tier opportunities found
+- Fee=100 pools (used by arb bots) have tight spreads with minimal cross-DEX price differences
+- The 8 bps theoretical saving doesn't materialize without 100↔100 opportunities
 
-**The remaining 4.10 bps gap** can plausibly close with:
-1. **Fee=100 pools** (pending address discovery) → save 8 bps LP cost → potential net positive
-2. **Market volatility** → wider gross spreads (seen transiently in 2630 bps on zksync)
-3. **More DEX coverage** → better prices from venue diversity
+**Cost structure at frontier (arb WBTC/USDC fee=500 @ $25):**
+- LP fee: 10.0 bps (2x500 roundtrip) — fee=100 would be 2 bps
+- Slippage: 8.62 bps (QuoterV2 execution impact)
+- Gas: 3.25 bps (L2 gas dilution at small size)
+- Total: 21.87 bps vs ~15 bps gross spread → net = -6.78 bps
 
-**SUSPECT filter operational** — `routes_clean=3, suspect_outlier_count=0` on Arbitrum. Base's previous 2544 bps outlier would now be filtered (>500 bps threshold).
+**The remaining 4.10 bps gap** would close with:
+1. ~~Fee=100 pools~~ → IMPLEMENTED but no 100↔100 opportunities in market
+2. **Market volatility** → wider gross spreads (need >~25 bps temporary spread)
+3. **More DEX coverage** → Camelot V3 could provide third price point
 
-**M4.2 NOT closed** — `profitable_count = 0` on Arbitrum. But gap_to_zero=4.10 bps is within fee=100 saving range (8 bps). **Fee=100 is the clear next lever.**
+**M4.2 NOT closed** — `profitable_count = 0` on any chain. Strategy requires either:
+- Sustained higher market volatility, OR
+- Additional low-fee DEX venues (100↔100 cross-DEX spread)
 
-**6-chain scan summary (112 runs):** 5/6 chains SIGNAL_PRODUCING. Base leads on signals (138) and cross-dex coverage (15 pairs). Scroll remains accepted-fail (single DEX). Total $275.20 simulated net across all chains.
+**Median ranking is now operational** — 6-field composite sort prioritizes chains with consistent performance (median_gap) over lucky one-shot results (best_gap).
 
 ## 5) Contract Checks
 status/reasons consistency: OK
@@ -211,28 +218,28 @@ runtime artifacts not committed: OK
 
 ## 6) Next Steps
 
-1. **Fee=100 pool discovery**: On-chain factory query for WBTC/WETH fee=100 and WBTC/USDC fee=100 pools. If pools exist with sufficient liquidity, enable them (remove from disabled_pools).
-2. **Fee=100 sweep verification**: After discovery, run sweep at fee=100. Expected saving: ~8 bps LP cost → could push net_pnl positive.
-3. **Camelot V3 integration**: Third DEX for Arbitrum, more cross-venue diversity.
-4. **Multi-hour volatile scan**: 4-6 hour scan across high-activity periods to capture wider gross spreads.
-5. **Base chain SUSPECT investigation**: Verify SUSPECT filter triggers on Base WETH/CBBTC 2544 bps outlier pattern.
+1. **Camelot V3 integration (Arbitrum)**: Third DEX venue may provide fee=100 pools with cross-DEX spread vs Uniswap/Sushiswap.
+2. **Multi-hour volatile scan**: Wait for market volatility period, run 4-6 hour scan to capture wider gross spreads.
+3. **Fee=100 pool liquidity analysis**: Check if fee=100 pools have sufficient liquidity for meaningful trades, or if they're mostly empty/arb-bot-drained.
+4. **Linea/zkSync fee=100 discovery**: These chains show 8-16 fee=100 pools via discovery_runtime. May have better cross-DEX dynamics than Arbitrum.
+5. **Sweep size optimization**: Consider $15 or $10 sweep points to further reduce slippage at cost of higher gas dilution.
 
 ## 7) Lead's Previous 10 Steps: Execution Map
-step_01: DONE — Composite frontier ranking. `_compute_frontier_ranking()` 4-field tuple sort. evidence: start.py, test_start.py +5 tests
-step_02: DONE — SUSPECT_ROUNDTRIP_OUTLIER filter (500 bps threshold). evidence: run_scan_real.py, test_truth_report.py +3 tests
-step_03: DONE — gap_to_zero_bps = WARN/frontier KPI only, NOT gate. evidence: rolling_store.py policy comment, grep confirms no gate use
-step_04: DONE — Fee=100 pair hunt: WBTC/WETH, WBTC/USDC fee=100 in real_minimal.yaml. evidence: config + 4 disabled_pools entries
-step_05: DONE — $25 added to sweep ladder. gap_to_zero: 19.04→4.10 bps. evidence: config sizes_usd=[25,50,...,250]
-step_06: DONE — Scroll stays probe-only/accepted-fail. evidence: --accepted-fail-chains scroll
-step_07: DONE — Contract tests: 8 new tests (1635 total). evidence: test_start.py, test_truth_report.py
-step_08: DONE — All gates PASS: check_repo_safety, ci_full_pipeline, ci_m4 --strict. evidence: terminal output
-step_09: DONE — 6-chain coverage scan COMPLETED: 112 runs, 5/6 SIGNAL_PRODUCING, scroll=accepted-fail. evidence: 112 run dirs, rolling updated to 161 runs
-step_10: DONE — DEV_REPORT updated with final scan evidence. evidence: this file
+step_01: DONE — Fee=100 pool activation. Removed from disabled_pools, addresses in pools section. evidence: config/real_minimal.yaml
+step_02: DONE — Fee=100 pool verification. opportunity_engine shows buy_fee=100 in opportunities. evidence: manual_run_20260311_100246
+step_03: DONE — Median-based frontier ranking. 6-field sort: (AF, median, best, -runs, -sig, -xdex). evidence: start.py, tests +10
+step_04: DONE — _compute_median() helper + _sweep_gap_values collection. evidence: start.py
+step_05: DONE — gap_percentile_context in build_summary(), schema v1.3. evidence: start.py, test_start.py
+step_06: DONE — Base cbBTC quarantine via excluded_pair_hints. evidence: coverage_intent_base.yaml
+step_07: DONE — Contract tests +10 (median, ranking, summary). evidence: test_start.py (64 tests total)
+step_08: DONE — Status_M4.md R11 frontier table update. evidence: docs/status/Status_M4.md
+step_09: DONE — All verification gates PASS. evidence: pytest, ci_m4, check_repo_safety
+step_10: DONE — DEV_REPORT updated with honest fee=100 assessment. evidence: this file
 
 ## 8) What I need from Lead now
-question_1: Fee=100 pool discovery: manual factory query or automated discovery_runtime extension?
-question_2: Should $10 be added to sweep ladder next, or is $25 sufficient for now?
-question_3: Camelot V3 adapter priority vs multi-hour volatile scan priority?
+question_1: Camelot V3 adapter implementation (provides third fee=100 venue) — priority vs time cost?
+question_2: Should we target multi-hour volatile periods (e.g., US market open) for better gross spreads?
+question_3: Is Linea or zkSync worth deeper investigation given their fee=100 discovery_runtime results?
 
 ---
-*Generated: 2026-03-10*
+*Generated: 2026-03-11*

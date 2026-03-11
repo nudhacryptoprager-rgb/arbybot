@@ -208,6 +208,30 @@ class TestPerChainAggregation(unittest.TestCase):
         self.assertEqual(stats["profitable_roundtrips_total"], 2)
         self.assertEqual(stats["roundtrip_evaluated_total"], 5)
 
+    def test_sweep_gap_values_collected(self):
+        """R12: update_chain_stats collects gap_to_zero values for median computation."""
+        stats = start.new_chain_stats()
+        for gap_val in [20.0, 15.0, 10.0]:
+            summary = {
+                "status": "PASS",
+                "metrics": {
+                    "included_signals_count": 2,
+                    "total_net_usdc": 1.0,
+                    "roundtrip": {
+                        "evaluated_count": 1,
+                        "dynamic_sweep": {
+                            "best_net_pnl_bps": -gap_val,
+                            "gap_to_zero_bps": gap_val,
+                        },
+                    },
+                },
+                "run_context": {},
+            }
+            start.update_chain_stats(stats, 0, None, summary)
+        self.assertEqual(stats["runs_with_sweep"], 3)
+        self.assertEqual(len(stats["_sweep_gap_values"]), 3)
+        self.assertAlmostEqual(stats["_sweep_gap_values"][-1], 10.0)
+
 
 class TestGuardrails(unittest.TestCase):
     """Test 'too good to be true' and infra-unstable warnings."""
@@ -278,7 +302,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.2")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.3")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -783,6 +807,120 @@ class TestFrontierRanking(unittest.TestCase):
         self.assertEqual(len(ranking), 1)
         self.assertEqual(ranking[0]["chain"], "linea")
         self.assertIsNone(ranking[0]["gap_to_zero_bps"])
+
+    # -- R12: median frontier ranking tests ---
+
+    def test_compute_median_odd(self):
+        """_compute_median returns middle element for odd-length list."""
+        self.assertEqual(start._compute_median([1.0, 3.0, 5.0]), 3.0)
+
+    def test_compute_median_even(self):
+        """_compute_median returns average of two middle elements for even-length."""
+        self.assertAlmostEqual(start._compute_median([1.0, 3.0, 5.0, 7.0]), 4.0)
+
+    def test_compute_median_empty(self):
+        """_compute_median returns None for empty list."""
+        self.assertIsNone(start._compute_median([]))
+
+    def test_compute_median_single(self):
+        """_compute_median returns the single element."""
+        self.assertEqual(start._compute_median([42.0]), 42.0)
+
+    def test_median_gap_in_ranking_entry(self):
+        """R12: ranking entries include median_gap_to_zero_bps and runs_with_sweep."""
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 10.0, "sweep_best_net_pnl_bps": -10.0,
+                "included_signals_total": 5, "last_cross_dex_pairs_count": 2,
+                "accepted_fail": False,
+                "_sweep_gap_values": [10.0, 15.0, 20.0],
+                "runs_with_sweep": 3,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        entry = ranking[0]
+        self.assertEqual(entry["median_gap_to_zero_bps"], 15.0)
+        self.assertEqual(entry["runs_with_sweep"], 3)
+
+    def test_median_ranking_overrides_best_gap(self):
+        """R12: chains ranked by median first, not best gap alone.
+
+        arb has better best (5) but worse median (20),
+        base has worse best (8) but better median (10).
+        Base should rank first (lower median wins).
+        """
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 5.0, "sweep_best_net_pnl_bps": -5.0,
+                "included_signals_total": 5, "accepted_fail": False,
+                "_sweep_gap_values": [5.0, 20.0, 35.0],
+                "runs_with_sweep": 3,
+            },
+            "base": {
+                "sweep_gap_to_zero_bps": 8.0, "sweep_best_net_pnl_bps": -8.0,
+                "included_signals_total": 5, "accepted_fail": False,
+                "_sweep_gap_values": [8.0, 10.0, 12.0],
+                "runs_with_sweep": 3,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        # base median=10 < arb median=20 → base first
+        self.assertEqual(ranking[0]["chain"], "base")
+        self.assertEqual(ranking[1]["chain"], "arb")
+
+    def test_runs_with_sweep_tiebreak(self):
+        """R12: when median and best are tied, more sweep runs wins."""
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 15.0, "sweep_best_net_pnl_bps": -15.0,
+                "included_signals_total": 5, "accepted_fail": False,
+                "_sweep_gap_values": [15.0, 15.0, 15.0, 15.0, 15.0],
+                "runs_with_sweep": 5,
+            },
+            "base": {
+                "sweep_gap_to_zero_bps": 15.0, "sweep_best_net_pnl_bps": -15.0,
+                "included_signals_total": 5, "accepted_fail": False,
+                "_sweep_gap_values": [15.0, 15.0],
+                "runs_with_sweep": 2,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        # Same median and gap, but arb has 5 sweep runs vs base 2 → arb first
+        self.assertEqual(ranking[0]["chain"], "arb")
+        self.assertEqual(ranking[1]["chain"], "base")
+
+    def test_gap_percentile_context_in_summary(self):
+        """R12: build_summary includes gap_percentile_context."""
+        per_chain = {
+            "arb": start.new_chain_stats(),
+            "base": start.new_chain_stats(),
+        }
+        per_chain["arb"]["_sweep_gap_values"] = [10.0, 20.0, 30.0]
+        per_chain["arb"]["runs_with_sweep"] = 3
+        per_chain["arb"]["included_signals_total"] = 5
+        per_chain["base"]["_sweep_gap_values"] = [15.0, 25.0]
+        per_chain["base"]["runs_with_sweep"] = 2
+        per_chain["base"]["included_signals_total"] = 3
+        summary = start.build_summary(per_chain, 60.0, [])
+        ctx = summary["gap_percentile_context"]
+        self.assertEqual(ctx["best_gap_to_zero_bps"], 10.0)
+        self.assertEqual(ctx["runs_with_sweep"], 5)  # 3 + 2
+        self.assertEqual(ctx["sweep_values_count"], 5)  # 3 + 2
+        # Median of [10, 15, 20, 25, 30] = 20
+        self.assertEqual(ctx["median_gap_to_zero_bps"], 20.0)
+
+    def test_no_median_when_no_sweep_data(self):
+        """R12: no sweep data → median is None, not error."""
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": None, "sweep_best_net_pnl_bps": None,
+                "included_signals_total": 5, "accepted_fail": False,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        self.assertEqual(len(ranking), 1)
+        self.assertIsNone(ranking[0]["median_gap_to_zero_bps"])
+        self.assertEqual(ranking[0]["runs_with_sweep"], 0)
 
 
 if __name__ == "__main__":

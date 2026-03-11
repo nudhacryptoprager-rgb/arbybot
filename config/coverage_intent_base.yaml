@@ -104,9 +104,14 @@ tokens_anchor_price:
 
 # Pair exclusions: thin-liquidity tokens producing fragile/suspect signals
 # v3.2.70: VIRTUAL/WELL removed — fragile source (runDir 095028 evidence)
+# R12: cbBTC/* added — WETH/cbBTC produces spurious profitability (>500 bps outlier)
+#   Runtime SUSPECT_ROUNDTRIP_OUTLIER filter catches it, but explicit exclusion
+#   prevents it from polluting frontier ranking and inflating signal counts.
 excluded_pair_hints:
   - "VIRTUAL/*"   # Fragile: thin liquidity, causes fragile_rate>0.50
   - "WELL/*"      # Thin: 95.6% drift, no stable quotes
+  - "cbBTC/*"     # R12: Spurious profitability (>500 bps outlier)
+  - "*/cbBTC"     # R12: Also exclude reverse direction
 
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000
