@@ -699,3 +699,79 @@ class TestSweepFrontierInRolling:
         assert qs.get("sweep_median_net_pnl_bps") is not None
         # frontier_pair_latest = last run's frontier pair
         assert qs.get("frontier_pair_latest") == "WBTC/USDC"
+
+
+class TestPerChainFrontierAggregates:
+    """R14: per_chain_frontier in quick_stats for multi-chain economics ranking."""
+
+    def test_per_chain_frontier_exists(self):
+        """quick_stats must include per_chain_frontier dict."""
+        from m4.rolling_store import _compute_quick_stats
+
+        runs = [
+            {"run_kind": "NORMAL", "signals_count": 5, "chain_key": "arbitrum_one",
+             "sweep_best_net_pnl_bps": -10.0, "sweep_gap_to_zero_bps": 10.0,
+             "sweep_frontier_pair": "WETH/USDT"},
+            {"run_kind": "NORMAL", "signals_count": 3, "chain_key": "base",
+             "sweep_best_net_pnl_bps": -15.0, "sweep_gap_to_zero_bps": 15.0,
+             "sweep_frontier_pair": "WETH/USDC"},
+        ]
+        result = _compute_quick_stats({"runs": runs})
+        qs = result.get("quick_stats", {})
+        assert "per_chain_frontier" in qs
+        pcf = qs["per_chain_frontier"]
+        assert "arbitrum_one" in pcf
+        assert "base" in pcf
+
+    def test_per_chain_frontier_gap_values(self):
+        """Per-chain gap_to_zero_min and gap_to_zero_median are computed correctly."""
+        from m4.rolling_store import _compute_quick_stats
+
+        runs = [
+            {"run_kind": "NORMAL", "signals_count": 5, "chain_key": "arbitrum_one",
+             "sweep_best_net_pnl_bps": -10.0, "sweep_gap_to_zero_bps": 10.0,
+             "sweep_frontier_pair": "WETH/USDT"},
+            {"run_kind": "NORMAL", "signals_count": 5, "chain_key": "arbitrum_one",
+             "sweep_best_net_pnl_bps": -20.0, "sweep_gap_to_zero_bps": 20.0,
+             "sweep_frontier_pair": "WETH/USDC"},
+            {"run_kind": "NORMAL", "signals_count": 3, "chain_key": "base",
+             "sweep_best_net_pnl_bps": -8.0, "sweep_gap_to_zero_bps": 8.0,
+             "sweep_frontier_pair": "WETH/USDC"},
+        ]
+        result = _compute_quick_stats({"runs": runs})
+        pcf = result["quick_stats"]["per_chain_frontier"]
+
+        arb = pcf["arbitrum_one"]
+        assert arb["normal_runs"] == 2
+        assert arb["sweep_runs"] == 2
+        assert arb["gap_to_zero_min"] == 10.0
+        assert arb["frontier_pair_latest"] == "WETH/USDC"
+
+        base = pcf["base"]
+        assert base["normal_runs"] == 1
+        assert base["sweep_runs"] == 1
+        assert base["gap_to_zero_min"] == 8.0
+
+    def test_per_chain_frontier_no_sweep_data(self):
+        """Chain with no sweep data has None gap values."""
+        from m4.rolling_store import _compute_quick_stats
+
+        runs = [
+            {"run_kind": "NORMAL", "signals_count": 5, "chain_key": "linea"},
+        ]
+        result = _compute_quick_stats({"runs": runs})
+        pcf = result["quick_stats"]["per_chain_frontier"]
+        assert pcf["linea"]["sweep_runs"] == 0
+        assert pcf["linea"]["gap_to_zero_min"] is None
+        assert pcf["linea"]["gap_to_zero_median"] is None
+
+    def test_per_chain_frontier_empty_when_no_chains(self):
+        """per_chain_frontier is empty dict when no chain_keys present."""
+        from m4.rolling_store import _compute_quick_stats
+
+        runs = [
+            {"run_kind": "NORMAL", "signals_count": 5},
+        ]
+        result = _compute_quick_stats({"runs": runs})
+        pcf = result["quick_stats"]["per_chain_frontier"]
+        assert pcf == {}

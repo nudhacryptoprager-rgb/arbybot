@@ -29,6 +29,9 @@
 # - confidence < 1.0 (dynamic)
 
 # Chain: Arbitrum One
+# NOTE: This config uses FIXED cost assumptions for regression baseline only.
+# Dynamic economics (measured gas/fee/slippage) come from QuoterV2 sweep at runtime.
+# Do NOT use this config's static fees to draw profit conclusions.
 chain: arbitrum_one
 chain_id: 42161
 

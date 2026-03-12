@@ -275,6 +275,26 @@ def is_cross_dex_route(route: str) -> bool:
     return parts[0].strip() != parts[1].strip()
 
 
+def _compute_per_chain_frontier(normal_runs, all_chain_keys, percentile_fn):
+    """Compute per-chain sweep frontier aggregates for multi-chain economics ranking."""
+    result = {}
+    for chain_key in sorted(all_chain_keys):
+        chain_runs = [r for r in normal_runs if r.get("chain_key") == chain_key]
+        sweep_runs = [r for r in chain_runs if r.get("sweep_gap_to_zero_bps") is not None]
+        gap_values = [r["sweep_gap_to_zero_bps"] for r in sweep_runs]
+        result[chain_key] = {
+            "normal_runs": len(chain_runs),
+            "sweep_runs": len(sweep_runs),
+            "gap_to_zero_min": min(gap_values) if gap_values else None,
+            "gap_to_zero_median": percentile_fn(gap_values, 50) if gap_values else None,
+            "frontier_pair_latest": next(
+                (r.get("sweep_frontier_pair") for r in reversed(chain_runs) if r.get("sweep_frontier_pair")),
+                None,
+            ),
+        }
+    return result
+
+
 def _compute_quick_stats(
     agg_data: dict,
     run_summary: dict = None,
@@ -502,6 +522,8 @@ def _compute_quick_stats(
         "chain_keys": sorted(all_chain_keys) if all_chain_keys else [],
         # v3.2.51: Consecutive non-NO_DATA cycles for chain quality level
         "consecutive_non_nodata_cycles": consecutive_non_nodata_cycles,
+        # v3.5.0: Per-chain frontier aggregates for multi-chain economics ranking
+        "per_chain_frontier": _compute_per_chain_frontier(normal_runs, all_chain_keys, percentile),
     }
     
     # v2.0: runs_since_timestamp (replaces runs_since_sha)

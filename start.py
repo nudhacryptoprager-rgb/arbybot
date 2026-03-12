@@ -451,6 +451,15 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
         -(x.get("included_signals_total", 0)),
         -(x.get("cross_dex_pairs_count", 0)),
     ))
+    # Annotate with rank and truth-probe target (top-2 non-accepted-fail)
+    truth_probe_count = 0
+    for i, entry in enumerate(ranked):
+        entry["frontier_rank"] = i + 1
+        if not entry.get("accepted_fail", False) and truth_probe_count < 2:
+            entry["target_for_truth_probe"] = True
+            truth_probe_count += 1
+        else:
+            entry["target_for_truth_probe"] = False
     return ranked
 
 
@@ -529,11 +538,12 @@ def print_summary(summary: dict[str, Any]) -> None:
             xdex = r.get("cross_dex_pairs_count", 0)
             is_af = r.get("accepted_fail", False)
             ready = "READY" if r.get("frontier_ready") else "AF" if is_af else "-"
+            probe = "PROBE" if r.get("target_for_truth_probe") else ""
             print(
                 f"  #{i+1} {r['chain']:16s}  "
                 f"median={median_s:>6s}  best={gap_s:>6s} bps  "
                 f"pnl={pnl:+.1f} bps  runs={runs_sw}  "
-                f"sig={sigs}  xdex={xdex}  {ready}"
+                f"sig={sigs}  xdex={xdex}  {ready}  {probe}"
             )
 
     print("=" * 70)

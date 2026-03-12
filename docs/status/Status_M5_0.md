@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-10
-**Tests**: 1627 passed, 2 skipped
-**Evidence runDirs**: manual_run_20260310_205633 (sweep canonical: 3 routes x 7 sizes, truth_report includes dynamic_sweep)
+**Updated**: 2026-03-11
+**Tests**: 1653 passed, 2 skipped
+**Evidence runDirs**: ci_m5_gate_20260311_111734 (arb, rolling), ci_m5_gate_20260311_111132 (base), ci_m5_gate_20260311_111334 (mantle), ci_m5_gate_20260311_111502 (zksync), ci_m5_gate_20260311_111621 (scroll), ci_m5_gate_20260311_111654 (linea)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
 **Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking)
 
@@ -28,8 +28,8 @@ linea:          SIGNAL_PRODUCING (same-dex, LOW_SAMPLE, SAME_DEX_PRESENT, 19/19 
 scroll:         INFRA_READY (single DEX, probe-only, accepted-fail, 0/19 PASS)
 ```
 
-**2h scan result**: 96 PASS / 15 FAIL (all Scroll) / 4 NO_DATA (all Scroll) / 0 INFRA_FAIL
-**Roundtrip evaluation**: CANONICAL SWEEP (evaluated_count=3, profitable_count=0, baseline best_net=-29.96 bps, sweep_best=-17.13 bps @ $50)
+**2h scan result**: 5 PASS / 1 NO_DATA (scroll, accepted-fail) / 0 INFRA_FAIL (R14 fresh 6-chain scan)
+**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero=9.03 bps latest, 4.10 bps best ever, WBTC/USDC frontier, 170 runs in window)
 **Profit truth**: NOT YET — economics blocker: LP fees + slippage exceed captured spread at all sizes
 
 ---
@@ -142,8 +142,8 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ## Next Steps
 
-- M4.2: Track `best_roundtrip_net_bps` trend over time; closing the -67 bps gap is the path to profit truth
-- New 2h long scan to collect fresh `roundtrip_evaluated_total` and `best_roundtrip_net_bps` across all chains
+- M4.2: Track `best_roundtrip_net_bps` trend; gap_to_zero=4.10 bps (best), 9.03 bps (latest), 16.26 bps (median)
+- New 2h long scan to collect fresh multi-chain `roundtrip_evaluated_total` and per-chain frontier updates
 - Base: Reduce TOP_PAIR_DOMINANCE_HIGH via pair diversification
 - Mantle/Linea/zkSync: Address SAME_DEX_PRESENT and LOW_SAMPLE warnings
 - Scroll: Keep probe-only/accepted-fail until second DEX venue appears

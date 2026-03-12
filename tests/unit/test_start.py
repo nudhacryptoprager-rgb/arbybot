@@ -973,6 +973,62 @@ class TestFrontierRanking(unittest.TestCase):
         # Frontier ranking is a list
         self.assertIsInstance(summary["frontier_ranking"], list)
 
+    def test_frontier_rank_and_truth_probe(self):
+        """R14: ranking entries include frontier_rank and target_for_truth_probe."""
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 10.0, "sweep_best_net_pnl_bps": -10.0,
+                "included_signals_total": 10, "accepted_fail": False,
+                "_sweep_gap_values": [10.0], "runs_with_sweep": 1,
+            },
+            "base": {
+                "sweep_gap_to_zero_bps": 15.0, "sweep_best_net_pnl_bps": -15.0,
+                "included_signals_total": 8, "accepted_fail": False,
+                "_sweep_gap_values": [15.0], "runs_with_sweep": 1,
+            },
+            "zksync": {
+                "sweep_gap_to_zero_bps": 20.0, "sweep_best_net_pnl_bps": -20.0,
+                "included_signals_total": 5, "accepted_fail": False,
+                "_sweep_gap_values": [20.0], "runs_with_sweep": 1,
+            },
+            "scroll": {
+                "sweep_gap_to_zero_bps": 5.0, "sweep_best_net_pnl_bps": -5.0,
+                "included_signals_total": 2, "accepted_fail": True,
+                "_sweep_gap_values": [5.0], "runs_with_sweep": 1,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        # frontier_rank is 1-based
+        self.assertEqual(ranking[0]["frontier_rank"], 1)
+        self.assertEqual(ranking[1]["frontier_rank"], 2)
+        self.assertEqual(ranking[2]["frontier_rank"], 3)
+        self.assertEqual(ranking[3]["frontier_rank"], 4)
+        # Top 2 non-accepted-fail are truth probe targets
+        self.assertTrue(ranking[0]["target_for_truth_probe"])   # arb
+        self.assertTrue(ranking[1]["target_for_truth_probe"])   # base
+        self.assertFalse(ranking[2]["target_for_truth_probe"])  # zksync (3rd)
+        self.assertFalse(ranking[3]["target_for_truth_probe"])  # scroll (AF)
+
+    def test_truth_probe_skips_accepted_fail(self):
+        """R14: accepted_fail chains never get target_for_truth_probe."""
+        per_chain = {
+            "scroll": {
+                "sweep_gap_to_zero_bps": 1.0, "sweep_best_net_pnl_bps": -1.0,
+                "included_signals_total": 5, "accepted_fail": True,
+                "_sweep_gap_values": [1.0], "runs_with_sweep": 1,
+            },
+            "arb": {
+                "sweep_gap_to_zero_bps": 20.0, "sweep_best_net_pnl_bps": -20.0,
+                "included_signals_total": 5, "accepted_fail": False,
+                "_sweep_gap_values": [20.0], "runs_with_sweep": 1,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        arb = [r for r in ranking if r["chain"] == "arb"][0]
+        scroll = [r for r in ranking if r["chain"] == "scroll"][0]
+        self.assertTrue(arb["target_for_truth_probe"])
+        self.assertFalse(scroll["target_for_truth_probe"])
+
 
 if __name__ == "__main__":
     unittest.main()
