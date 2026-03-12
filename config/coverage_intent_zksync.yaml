@@ -147,6 +147,12 @@ price_sanity_max_deviation_bps: 10000
 # but some borderline pools (e.g., pancakeswap WETH/USDC) may still need slack
 drift_warning_pct: 40.0
 
+# R17: Dynamic sweep for measured economics frontier (all-chain)
+dynamic_probe:
+  enabled: true
+  sizes_usd: [25, 50, 75, 100]
+  top_routes: 2
+
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 

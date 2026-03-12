@@ -125,6 +125,12 @@ excluded_pair_hints:
   - "USDC/USDT"    # 2884bps consistently — stale/bad quote on agni_v3
   - "PUFF/*"       # Meme token, thin liquidity
 
+# R17: Dynamic sweep for measured economics frontier (all-chain)
+dynamic_probe:
+  enabled: true
+  sizes_usd: [25, 50, 75, 100]
+  top_routes: 2
+
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 

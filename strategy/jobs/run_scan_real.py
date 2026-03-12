@@ -506,14 +506,22 @@ def run_scan(
         # v3.5.0: Collect compared fee tiers from actual quotes
         # This proves which fee tiers were really compared for each route.
         _compared_fee_tiers: set[int] = set()
+        _fee_tiers_per_route: dict[str, set[int]] = {}
         for opp in opps_list:
             if isinstance(opp, dict):
                 bf = opp.get("buy_fee")
                 sf = opp.get("sell_fee")
+                route_key = opp.get("route", "unknown")
                 if bf is not None:
                     _compared_fee_tiers.add(int(bf))
                 if sf is not None:
                     _compared_fee_tiers.add(int(sf))
+                if route_key not in _fee_tiers_per_route:
+                    _fee_tiers_per_route[route_key] = set()
+                if bf is not None:
+                    _fee_tiers_per_route[route_key].add(int(bf))
+                if sf is not None:
+                    _fee_tiers_per_route[route_key].add(int(sf))
 
         stats["opportunity_engine"] = {
             "enabled": True,
@@ -523,6 +531,10 @@ def run_scan(
             "one_leg_profit_is_diagnostic": truth_mode_m42,
             # v3.5.0: Runtime proof of which fee tiers were really compared
             "compared_fee_tiers": sorted(_compared_fee_tiers),
+            # R17: Per-route fee tier breakdown
+            "compared_fee_tiers_per_route": {
+                k: sorted(v) for k, v in sorted(_fee_tiers_per_route.items())
+            },
         }
         
         # v3.2.58: Reconcile opportunity_engine with spread_signals for same-DEX fallback

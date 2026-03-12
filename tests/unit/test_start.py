@@ -1064,6 +1064,37 @@ class TestFrontierRanking(unittest.TestCase):
         self.assertGreater(ranking[1]["candidate_score"], ranking[2]["candidate_score"])
         self.assertGreater(ranking[2]["candidate_score"], ranking[3]["candidate_score"])
 
+    def test_multi_chain_measured_economics_in_ranking(self):
+        """R17: all chains with sweep data include measured economics in ranking."""
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 10.0, "sweep_best_net_pnl_bps": -10.0,
+                "included_signals_total": 5, "accepted_fail": False,
+                "_sweep_gap_values": [10.0], "runs_with_sweep": 1,
+                "sweep_measured_gas_bps": 3.0, "sweep_measured_fee_bps": 10.0,
+                "sweep_measured_slippage_bps": 5.0, "sweep_measured_total_cost_bps": 18.0,
+            },
+            "base": {
+                "sweep_gap_to_zero_bps": 15.0, "sweep_best_net_pnl_bps": -15.0,
+                "included_signals_total": 8, "accepted_fail": False,
+                "_sweep_gap_values": [15.0], "runs_with_sweep": 1,
+                "sweep_measured_gas_bps": 0.5, "sweep_measured_fee_bps": 10.0,
+                "sweep_measured_slippage_bps": 3.0, "sweep_measured_total_cost_bps": 13.5,
+            },
+            "linea": {
+                "sweep_gap_to_zero_bps": None, "sweep_best_net_pnl_bps": None,
+                "included_signals_total": 3, "accepted_fail": False,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        # arb and base have measured_total_cost_bps; linea does not
+        arb = [r for r in ranking if r["chain"] == "arb"][0]
+        base = [r for r in ranking if r["chain"] == "base"][0]
+        linea = [r for r in ranking if r["chain"] == "linea"][0]
+        self.assertEqual(arb["measured_total_cost_bps"], 18.0)
+        self.assertEqual(base["measured_total_cost_bps"], 13.5)
+        self.assertIsNone(linea.get("measured_total_cost_bps"))
+
 
 if __name__ == "__main__":
     unittest.main()
