@@ -503,13 +503,26 @@ def run_scan(
                         opp.get("measured_min_required_spread_bps", 0), opp.get("measured_spread_minus_required_bps", 0), opp.get("measured_is_roundtrip_viable"),
                     )
         
+        # v3.5.0: Collect compared fee tiers from actual quotes
+        # This proves which fee tiers were really compared for each route.
+        _compared_fee_tiers: set[int] = set()
+        for opp in opps_list:
+            if isinstance(opp, dict):
+                bf = opp.get("buy_fee")
+                sf = opp.get("sell_fee")
+                if bf is not None:
+                    _compared_fee_tiers.add(int(bf))
+                if sf is not None:
+                    _compared_fee_tiers.add(int(sf))
+
         stats["opportunity_engine"] = {
             "enabled": True,
             "summary": opps_summary,
             "top_opportunities": opps_list[:5] if opps_list else [],
-            "truth_mode_m42": truth_mode_m42,  # v2.2.0: Track truth mode
-            # v2.2.1 Fix Step 8: Explicit flag when one-leg profits are DIAGNOSTIC only
-            "one_leg_profit_is_diagnostic": truth_mode_m42,  # When true, profitable_count is NOT real profit
+            "truth_mode_m42": truth_mode_m42,
+            "one_leg_profit_is_diagnostic": truth_mode_m42,
+            # v3.5.0: Runtime proof of which fee tiers were really compared
+            "compared_fee_tiers": sorted(_compared_fee_tiers),
         }
         
         # v3.2.58: Reconcile opportunity_engine with spread_signals for same-DEX fallback

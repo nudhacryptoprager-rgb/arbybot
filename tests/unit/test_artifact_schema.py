@@ -45,6 +45,9 @@ TRUTH_REPORT_REQUIRED_KEYS = {
     "health",
     "spread_signals",
     "infra",
+    # v3.2.20: measured economics and viability decision
+    "measured_economics",
+    "arbitrage_viability_decision",
 }
 
 REJECT_HISTOGRAM_REQUIRED_KEYS = {
@@ -86,6 +89,24 @@ SPREAD_SIGNAL_REQUIRED_KEYS = {
     "spread_minus_required_bps",
     "is_roundtrip_viable",
     "route",
+}
+
+# v3.2.20: Measured economics (post-sweep canonical truth)
+MEASURED_ECONOMICS_REQUIRED_KEYS = {
+    "gas_cost_bps",
+    "fee_cost_bps",
+    "slippage_cost_bps",
+    "total_cost_bps",
+    "gap_to_zero",
+    "frontier_pair",
+}
+
+# v3.2.20: Arbitrage viability decision (decision happens after sweep)
+ARBITRAGE_VIABILITY_DECISION_REQUIRED_KEYS = {
+    "decided",
+    "decision_point",
+    "is_profitable",
+    "gap_to_zero",
 }
 
 # M4 artifacts
@@ -233,6 +254,50 @@ class TestTruthReportSchema:
                 errors.extend(validate_keys(sig, SPREAD_SIGNAL_REQUIRED_KEYS, f"spread_signals[{i}]"))
             
             assert not errors, f"Schema errors: {errors}"
+
+    def test_truth_report_measured_economics_schema(self):
+        """v3.2.20: Verify measured_economics has required keys."""
+        from scripts.ci_m5_0_gate import generate_fixture_artifacts
+        import tempfile
+        from pathlib import Path
+        import json
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            ts = "20260209_120000"
+            generate_fixture_artifacts(output_dir, ts)
+            
+            path = output_dir / "reports" / f"truth_report_{ts}.json"
+            with open(path) as f:
+                data = json.load(f)
+            
+            measured = data.get("measured_economics", {})
+            errors = validate_keys(measured, MEASURED_ECONOMICS_REQUIRED_KEYS, "measured_economics")
+            assert not errors, f"Schema errors: {errors}"
+
+    def test_truth_report_arbitrage_viability_decision_schema(self):
+        """v3.2.20: Verify arbitrage_viability_decision has required keys."""
+        from scripts.ci_m5_0_gate import generate_fixture_artifacts
+        import tempfile
+        from pathlib import Path
+        import json
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            ts = "20260209_120000"
+            generate_fixture_artifacts(output_dir, ts)
+            
+            path = output_dir / "reports" / f"truth_report_{ts}.json"
+            with open(path) as f:
+                data = json.load(f)
+            
+            decision = data.get("arbitrage_viability_decision", {})
+            errors = validate_keys(decision, ARBITRAGE_VIABILITY_DECISION_REQUIRED_KEYS, "arbitrage_viability_decision")
+            assert not errors, f"Schema errors: {errors}"
+            
+            # Contract: decision_point must be "dynamic_sweep"
+            assert decision.get("decision_point") == "dynamic_sweep", \
+                f"Expected decision_point='dynamic_sweep', got {decision.get('decision_point')!r}"
 
 
 class TestRejectHistogramSchema:

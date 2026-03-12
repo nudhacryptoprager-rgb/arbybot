@@ -219,6 +219,22 @@ def generate_fixture_artifacts(output_dir: Path, timestamp: str) -> Dict[str, Pa
         },
         # Spread signals (empty for fixture)
         "spread_signals": [],
+        # v3.2.20: measured_economics - canonical operational truth (post-sweep)
+        "measured_economics": {
+            "gas_cost_bps": None,
+            "fee_cost_bps": None,
+            "slippage_cost_bps": None,
+            "total_cost_bps": None,
+            "gap_to_zero": None,
+            "frontier_pair": None,
+        },
+        # v3.2.20: arbitrage_viability_decision - shows decision is post-sweep
+        "arbitrage_viability_decision": {
+            "decided": False,
+            "decision_point": "dynamic_sweep",
+            "is_profitable": False,
+            "gap_to_zero": None,
+        },
     }
     truth_path = reports_dir / f"truth_report_{timestamp}.json"
     with open(truth_path, "w") as f:

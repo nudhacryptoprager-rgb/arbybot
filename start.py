@@ -451,10 +451,13 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
         -(x.get("included_signals_total", 0)),
         -(x.get("cross_dex_pairs_count", 0)),
     ))
-    # Annotate with rank and truth-probe target (top-2 non-accepted-fail)
+    # Annotate with rank, truth-probe target, and candidate score
     truth_probe_count = 0
+    total_ranked = len(ranked)
     for i, entry in enumerate(ranked):
         entry["frontier_rank"] = i + 1
+        # candidate_score: higher is better (inverse of rank normalized to 0-100)
+        entry["candidate_score"] = round(100.0 * (total_ranked - i) / max(total_ranked, 1), 2)
         if not entry.get("accepted_fail", False) and truth_probe_count < 2:
             entry["target_for_truth_probe"] = True
             truth_probe_count += 1

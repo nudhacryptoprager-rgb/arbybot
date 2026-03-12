@@ -79,8 +79,9 @@ def test_run_scan_real_line_count():
     line_count = len(content.splitlines())
     
     # Current: ~1313 lines (v3.3.0: +113 for dynamic size sweep)
+    # v3.3.1: +9 for compared_fee_tiers collection
     # For now, just warn if it grows significantly
-    max_lines = 1350  # Alert if it grows past this
+    max_lines = 1365  # Alert if it grows past this
     
     assert line_count <= max_lines, \
         f"run_scan_real.py has {line_count} lines (max: {max_lines}). Consider refactoring."

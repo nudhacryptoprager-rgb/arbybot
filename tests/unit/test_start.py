@@ -1029,6 +1029,41 @@ class TestFrontierRanking(unittest.TestCase):
         self.assertTrue(arb["target_for_truth_probe"])
         self.assertFalse(scroll["target_for_truth_probe"])
 
+    def test_frontier_ranking_candidate_score(self):
+        """R16: ranking entries include candidate_score based on rank."""
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 10.0, "sweep_best_net_pnl_bps": -10.0,
+                "included_signals_total": 10, "accepted_fail": False,
+                "_sweep_gap_values": [10.0], "runs_with_sweep": 1,
+            },
+            "base": {
+                "sweep_gap_to_zero_bps": 15.0, "sweep_best_net_pnl_bps": -15.0,
+                "included_signals_total": 8, "accepted_fail": False,
+                "_sweep_gap_values": [15.0], "runs_with_sweep": 1,
+            },
+            "zksync": {
+                "sweep_gap_to_zero_bps": 20.0, "sweep_best_net_pnl_bps": -20.0,
+                "included_signals_total": 5, "accepted_fail": False,
+                "_sweep_gap_values": [20.0], "runs_with_sweep": 1,
+            },
+            "scroll": {
+                "sweep_gap_to_zero_bps": 25.0, "sweep_best_net_pnl_bps": -25.0,
+                "included_signals_total": 2, "accepted_fail": False,
+                "_sweep_gap_values": [25.0], "runs_with_sweep": 1,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        # contract: candidate_score is present and 0-100
+        for entry in ranking:
+            self.assertIn("candidate_score", entry)
+            self.assertGreaterEqual(entry["candidate_score"], 0.0)
+            self.assertLessEqual(entry["candidate_score"], 100.0)
+        # rank 1 should have highest candidate_score
+        self.assertGreater(ranking[0]["candidate_score"], ranking[1]["candidate_score"])
+        self.assertGreater(ranking[1]["candidate_score"], ranking[2]["candidate_score"])
+        self.assertGreater(ranking[2]["candidate_score"], ranking[3]["candidate_score"])
+
 
 if __name__ == "__main__":
     unittest.main()

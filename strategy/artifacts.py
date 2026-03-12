@@ -264,6 +264,56 @@ def _compute_execution_pnl(
     }
 
 
+def _build_measured_economics(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Build top-level measured economics block from dynamic sweep results.
+
+    This is the canonical operational truth — all values come from
+    QuoterV2/live-gas path, NOT paper/baseline estimates.
+    """
+    ds = stats.get("roundtrip", {}).get("dynamic_sweep", {})
+    if not ds.get("enabled") or not ds.get("best_net_pnl_bps"):
+        return {"available": False, "source": "dynamic_sweep"}
+    return {
+        "available": True,
+        "source": "dynamic_sweep",
+        "frontier_pair": ds.get("best_pair"),
+        "best_size_usd": ds.get("best_size_usd"),
+        "best_net_pnl_bps": ds.get("best_net_pnl_bps"),
+        "gap_to_zero_bps": ds.get("gap_to_zero_bps"),
+        "measured_gas_bps": ds.get("best_gas_bps"),
+        "measured_fee_bps": ds.get("best_fee_bps"),
+        "measured_slippage_bps": ds.get("best_slippage_bps"),
+        "measured_total_cost_bps": ds.get("best_total_cost_bps"),
+    }
+
+
+def _build_viability_decision(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the arbitrage viability decision — answered AFTER dynamic sweep.
+
+    The canonical decision point is post-sweep: raw spread alone is
+    insufficient because LP fees, gas, and slippage can exceed gross spread.
+    """
+    ds = stats.get("roundtrip", {}).get("dynamic_sweep", {})
+    rt = stats.get("roundtrip", {})
+    if not ds.get("enabled"):
+        return {
+            "decided": False,
+            "decision_point": "dynamic_sweep",
+            "reason": "SWEEP_NOT_ENABLED",
+        }
+    gap = ds.get("gap_to_zero_bps")
+    profitable = rt.get("profitable_count", 0) > 0
+    return {
+        "decided": True,
+        "decision_point": "dynamic_sweep",
+        "is_profitable": profitable,
+        "gap_to_zero_bps": gap,
+        "frontier_pair": ds.get("best_pair"),
+        "frontier_reason": ds.get("best_frontier_reason", "NO_DATA"),
+        "routes_swept": ds.get("routes_swept", 0),
+    }
+
+
 def _build_roundtrip_summary(stats: Dict[str, Any]) -> Dict[str, Any]:
     """Build the curated roundtrip_summary block for truth_report.
 
@@ -413,6 +463,12 @@ def build_truth_data(
         "opportunity_engine": stats.get("opportunity_engine", {}),
         # v2.1.0: Roundtrip reality check (Step 4 - roundtrip in truth_report)
         "roundtrip_summary": _build_roundtrip_summary(stats),
+        # v3.5.0: Top-level measured economics — canonical operational truth block.
+        # Populated from dynamic_sweep (post-roundtrip, QuoterV2-based).
+        # Paper/baseline economics are NOT included here — see execution_pnl for those.
+        "measured_economics": _build_measured_economics(stats),
+        # v3.5.0: Canonical arbitrage viability decision — answered AFTER dynamic sweep.
+        "arbitrage_viability_decision": _build_viability_decision(stats),
         # v2.1.0: truth_mode_m42 - when true, one-leg PnL is DIAGNOSTIC only, roundtrip is canonical
         "truth_mode_m42": config.get("truth_mode_m42", False),
         # v2.3.0: Explicit DIAGNOSTIC vs CANONICAL profit semantics
