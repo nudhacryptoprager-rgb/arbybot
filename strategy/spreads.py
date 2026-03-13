@@ -110,6 +110,7 @@ def compute_spread_signals(
             if rejected_quotes is not None:
                 rejected_quotes.append({
                     **q,
+                    "pair": f"{q.get('token_in', '?')}/{q.get('token_out', '?')}",
                     "reason": "NOTIONAL_DRIFT_EXCLUDED",  # v2.9.5: Use 'reason' key (not reject_reason)
                     "notional_drift_pct": drift_pct,
                     "drift_exclude_pct": drift_exclude_pct,

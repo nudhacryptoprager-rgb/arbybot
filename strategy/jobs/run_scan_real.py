@@ -252,11 +252,13 @@ def run_scan(
             
             max_pairs = config.get("discovery_runtime_max_pairs", 20)
             require_cross_dex = config.get("require_cross_dex", False)
+            excluded_hints = config.get("excluded_pair_hints") or []
             _discovery_runtime_resolved, _discovery_runtime_stats = resolve_runtime_pairs(
                 chain=chain_key,
                 dexes=dexes_list if dexes_list else None,
                 max_pairs=max_pairs,
                 require_cross_dex=require_cross_dex,
+                excluded_pair_hints=excluded_hints,
             )
             pairs_list = runtime_pairs_to_pair_configs(_discovery_runtime_resolved)
             

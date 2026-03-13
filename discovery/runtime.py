@@ -80,6 +80,7 @@ class RuntimeStats:
     pairs_skipped_no_pool: int = 0
     pairs_skipped_max_cap: int = 0
     pairs_skipped_single_dex: int = 0  # Added for cross-dex filtering
+    pairs_skipped_excluded: int = 0  # R24: excluded_pair_hints enforcement
     pools_from_cache: int = 0
     pools_from_rpc: int = 0
     rpc_calls: int = 0
@@ -99,6 +100,7 @@ class RuntimeStats:
             "pairs_skipped_no_pool": self.pairs_skipped_no_pool,
             "pairs_skipped_max_cap": self.pairs_skipped_max_cap,
             "pairs_skipped_single_dex": self.pairs_skipped_single_dex,
+            "pairs_skipped_excluded": self.pairs_skipped_excluded,
             "pools_from_cache": self.pools_from_cache,
             "pools_from_rpc": self.pools_from_rpc,
             "rpc_calls": self.rpc_calls,
@@ -123,6 +125,33 @@ from discovery.index_factories import (
 DEFAULT_MAX_PAIRS = 20
 
 
+def _matches_excluded_hint(pair_display: str, hints: List[str]) -> bool:
+    """Check if a pair like 'WETH/USDT' matches any excluded_pair_hints glob.
+
+    Supported patterns:
+        'TOKEN_A/TOKEN_B' — exact match
+        'TOKEN/*'         — any pair where TOKEN is on the left
+        '*/TOKEN'         — any pair where TOKEN is on the right
+    """
+    a, _, b = pair_display.partition("/")
+    if not b:
+        return False
+    a_up, b_up = a.upper(), b.upper()
+    for hint in hints:
+        h = hint.strip()
+        if not h:
+            continue
+        ha, _, hb = h.partition("/")
+        ha_up, hb_up = ha.upper(), hb.upper()
+        if ha_up == "*" and hb_up == b_up:
+            return True
+        if hb_up == "*" and ha_up == a_up:
+            return True
+        if ha_up == a_up and hb_up == b_up:
+            return True
+    return False
+
+
 def resolve_runtime_pairs(
     chain: str,
     dexes: Optional[List[str]] = None,
@@ -130,6 +159,7 @@ def resolve_runtime_pairs(
     fee_tiers: Optional[List[int]] = None,
     rpc_url: Optional[str] = None,
     require_cross_dex: bool = False,
+    excluded_pair_hints: Optional[List[str]] = None,
 ) -> tuple[List[RuntimePair], RuntimeStats]:
     """
     Resolve intent.txt pairs to pool addresses via factory.getPool().
@@ -141,6 +171,7 @@ def resolve_runtime_pairs(
         fee_tiers: V3 fee tiers to query (default: [100, 500, 3000, 10000])
         rpc_url: RPC URL (optional, will use default if not provided)
         require_cross_dex: If True, only include pairs with pools on 2+ dexes
+        excluded_pair_hints: Glob patterns to exclude (e.g. ['cbBTC/*', '*/USDT'])
         
     Returns:
         Tuple of (resolved_pairs, stats)
@@ -204,6 +235,19 @@ def resolve_runtime_pairs(
             continue
         
         stats.pairs_evaluated += 1
+        
+        # R24: Enforce excluded_pair_hints BEFORE token/pool resolution
+        if excluded_pair_hints:
+            display_fwd = f"{pair.token_a}/{pair.token_b}"
+            display_rev = f"{pair.token_b}/{pair.token_a}"
+            if _matches_excluded_hint(display_fwd, excluded_pair_hints) or \
+               _matches_excluded_hint(display_rev, excluded_pair_hints):
+                stats.pairs_skipped_excluded += 1
+                logger.debug(
+                    "Skipping pair %s: matched excluded_pair_hints",
+                    display_fwd,
+                )
+                continue
         
         # Resolve token info (address + decimals)
         token_a_info = registry.get_token(chain, pair.token_a)
@@ -304,13 +348,14 @@ def resolve_runtime_pairs(
     resolver.flush()
     
     logger.info(
-        "Discovery runtime: %d pairs (%d pools, %d cross-dex), skipped: tokens=%d, pool=%d, single_dex=%d, cap=%d",
+        "Discovery runtime: %d pairs (%d pools, %d cross-dex), skipped: tokens=%d, pool=%d, single_dex=%d, excluded=%d, cap=%d",
         stats.pairs_resolved,
         stats.pools_resolved,
         stats.cross_dex_pairs_count,
         stats.pairs_skipped_no_tokens,
         stats.pairs_skipped_no_pool,
         stats.pairs_skipped_single_dex,
+        stats.pairs_skipped_excluded,
         stats.pairs_skipped_max_cap,
     )
     

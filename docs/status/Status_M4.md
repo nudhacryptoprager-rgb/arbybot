@@ -26,23 +26,23 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-13 R23)**: `agg_status=PASS` sustained. runs_in_window=184+, total_net_usdc=$1142.02+. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: gap_to_zero=11.2 bps (arb_one R23), zksync frontier=0.0 bps. base ROUNDTRIP_PROFITABLE is FALSE POSITIVE (SUSPECT_SPREAD from pancakeswap_v3). R23 blocker reclassification: MIXED (base, zksync), STRUCTURAL (mantle, linea), ECOSYSTEM_BLOCKED (scroll). Latest evidence: `long_scan_latest.json` (generated 2026-03-13T17:27:42Z).
+> [!] **ROLLING STABILITY (2026-03-13 R25)**: `agg_status=PASS` sustained. runs_in_window=200+, total_net_usdc=$1200+. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: zksync frontier=0.0 bps. R25 fixes: `discovery_coverage` now populated from scan_*.json stats, `_warn_missing_chains()` is FATAL, `monitoring_only_chains=['scroll']`. Schema LATEST. Latest evidence: `long_scan_latest.json` (generated 2026-03-13T20:40:48Z).
 
-**Economics Snapshot (2026-03-13, R23):**
+**Economics Snapshot (2026-03-13, R25):**
 | Metric | Value | Notes |
 |--------|-------|-------|
-| `gap_to_zero_bps (arb latest)` | 11.2 | R23 arb scan (frontier #2) |
-| `gap_to_zero_bps (zksync)` | 0.0 | Frontier #1, but 33.7% drift |
-| `gap_to_zero_bps (base)` | 83.3 | MIXED: strong signals + high cost |
+| `gap_to_zero_bps (zksync)` | 0.0 | Frontier #1, 6 signals |
+| `gap_to_zero_bps (base)` | n/a | 11 signals, 10 xdex |
 | `roundtrip_total_profitable` | 0 | Arb_one: still market-blocked |
-| `base_roundtrip_profitable` | 1+ | FALSE POSITIVE: SUSPECT_SPREAD |
 | `frontier_pair` | WETH/USDT | Latest frontier candidate |
-| `per_chain_frontier` | LIVE | 6 chains ranked with drift |
-| `runs_in_window` | 184+ | Total NORMAL runs (rolling) |
-| `total_net_usdc` | $1142.02+ | Cumulative paper profit |
+| `per_chain_frontier` | LIVE | 6 chains ranked |
+| `runs_in_window` | 200 | Total NORMAL runs (rolling) |
+| `total_net_usdc` | $1200+ | Cumulative paper profit |
 | `multi_chain_pass` | 5/6 | arb, base, mantle, linea, zksync |
-| `R23_scan_signals` | 48 | 14-run 6-chain scan, $46.63 net |
-| `blocker_types` | 4 | MIXED, STRUCTURAL, ECOSYSTEM_BLOCKED, — |
+| `R25_scan_signals` | 45 | 16-run 6-chain scan, $42.43 net |
+| `discovery_coverage` | POPULATED | R25: now from scan_*.json stats |
+| `monitoring_only_chains` | ['scroll'] | R25: accepted-fail enforced |
+| `schema_version` | LATEST | R25: bumped from previous |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

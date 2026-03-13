@@ -323,3 +323,123 @@ class TestCrossDexFiltering:
         assert len(resolved) == 0
         assert stats.pairs_skipped_single_dex == 1
         assert stats.cross_dex_pairs_count == 0
+
+
+class TestMatchesExcludedHint:
+    """R24: Tests for _matches_excluded_hint() glob matching."""
+
+    def test_exact_match(self):
+        from discovery.runtime import _matches_excluded_hint
+        assert _matches_excluded_hint("VIRTUAL/WETH", ["VIRTUAL/WETH"]) is True
+
+    def test_wildcard_right(self):
+        from discovery.runtime import _matches_excluded_hint
+        assert _matches_excluded_hint("cbBTC/WETH", ["cbBTC/*"]) is True
+        assert _matches_excluded_hint("cbBTC/USDC", ["cbBTC/*"]) is True
+        assert _matches_excluded_hint("WETH/cbBTC", ["cbBTC/*"]) is False
+
+    def test_wildcard_left(self):
+        from discovery.runtime import _matches_excluded_hint
+        assert _matches_excluded_hint("WETH/cbBTC", ["*/cbBTC"]) is True
+        assert _matches_excluded_hint("USDC/cbBTC", ["*/cbBTC"]) is True
+        assert _matches_excluded_hint("cbBTC/WETH", ["*/cbBTC"]) is False
+
+    def test_no_match(self):
+        from discovery.runtime import _matches_excluded_hint
+        assert _matches_excluded_hint("WETH/USDC", ["cbBTC/*"]) is False
+        assert _matches_excluded_hint("WETH/USDC", ["VIRTUAL/*"]) is False
+
+    def test_case_insensitive(self):
+        from discovery.runtime import _matches_excluded_hint
+        assert _matches_excluded_hint("cBbtc/WETH", ["cbBTC/*"]) is True
+        assert _matches_excluded_hint("WETH/USDT", ["*/usdt"]) is True
+
+    def test_multiple_hints(self):
+        from discovery.runtime import _matches_excluded_hint
+        hints = ["VIRTUAL/*", "WELL/*", "cbBTC/*", "*/cbBTC"]
+        assert _matches_excluded_hint("VIRTUAL/WETH", hints) is True
+        assert _matches_excluded_hint("WELL/USDC", hints) is True
+        assert _matches_excluded_hint("USDC/cbBTC", hints) is True
+        assert _matches_excluded_hint("WETH/USDC", hints) is False
+
+    def test_empty_hints(self):
+        from discovery.runtime import _matches_excluded_hint
+        assert _matches_excluded_hint("WETH/USDC", []) is False
+
+    def test_usdt_wildcard(self):
+        """zkSync: */USDT excludes all USDT quote pairs."""
+        from discovery.runtime import _matches_excluded_hint
+        hints = ["*/USDT"]
+        assert _matches_excluded_hint("WETH/USDT", hints) is True
+        assert _matches_excluded_hint("ZK/USDT", hints) is True
+        assert _matches_excluded_hint("USDT/WETH", hints) is False
+
+    def test_stablecoin_exact(self):
+        """Mantle: USDC/USDT exact exclusion."""
+        from discovery.runtime import _matches_excluded_hint
+        hints = ["USDC/USDT"]
+        assert _matches_excluded_hint("USDC/USDT", hints) is True
+        assert _matches_excluded_hint("USDT/USDC", hints) is False
+        assert _matches_excluded_hint("WETH/USDC", hints) is False
+
+
+class TestExcludedPairHintsPerChain:
+    """R24: Regression tests — specific chain exclusions from config."""
+
+    def test_base_exclusions(self):
+        """Base: VIRTUAL/*, WELL/*, cbBTC/*, */cbBTC."""
+        from discovery.runtime import _matches_excluded_hint
+        hints = ["VIRTUAL/*", "WELL/*", "cbBTC/*", "*/cbBTC"]
+        # Must exclude
+        assert _matches_excluded_hint("VIRTUAL/WETH", hints)
+        assert _matches_excluded_hint("WELL/USDC", hints)
+        assert _matches_excluded_hint("cbBTC/WETH", hints)
+        assert _matches_excluded_hint("USDC/cbBTC", hints)
+        assert _matches_excluded_hint("WETH/cbBTC", hints)
+        # Must NOT exclude
+        assert not _matches_excluded_hint("WETH/USDC", hints)
+        assert not _matches_excluded_hint("AERO/WETH", hints)
+
+    def test_zksync_exclusions(self):
+        """zkSync: HOLD/*, CHEEMS/*, MUTE/*, SPACE/*, ZK/*, */USDT."""
+        from discovery.runtime import _matches_excluded_hint
+        hints = ["HOLD/*", "CHEEMS/*", "MUTE/*", "SPACE/*", "ZK/*", "*/USDT"]
+        assert _matches_excluded_hint("HOLD/USDC", hints)
+        assert _matches_excluded_hint("HOLD/WETH", hints)
+        assert _matches_excluded_hint("ZK/USDC", hints)
+        assert _matches_excluded_hint("WETH/USDT", hints)
+        assert _matches_excluded_hint("ZK/USDT", hints)
+        assert not _matches_excluded_hint("WETH/USDC", hints)
+        assert not _matches_excluded_hint("WBTC/WETH", hints)
+
+    def test_mantle_exclusions(self):
+        """Mantle: USDC/USDT, PUFF/*."""
+        from discovery.runtime import _matches_excluded_hint
+        hints = ["USDC/USDT", "PUFF/*"]
+        assert _matches_excluded_hint("USDC/USDT", hints)
+        assert _matches_excluded_hint("PUFF/WETH", hints)
+        assert _matches_excluded_hint("PUFF/WMNT", hints)
+        assert not _matches_excluded_hint("WETH/WMNT", hints)
+
+    def test_arbitrum_exclusions(self):
+        """Arbitrum: ARB/WETH."""
+        from discovery.runtime import _matches_excluded_hint
+        hints = ["ARB/WETH"]
+        assert _matches_excluded_hint("ARB/WETH", hints)
+        assert not _matches_excluded_hint("WETH/ARB", hints)
+        assert not _matches_excluded_hint("ARB/USDC", hints)
+
+
+class TestRuntimeStatsExcluded:
+    """R24: RuntimeStats includes pairs_skipped_excluded."""
+
+    def test_stats_has_excluded_field(self):
+        from discovery.runtime import RuntimeStats
+        stats = RuntimeStats()
+        assert stats.pairs_skipped_excluded == 0
+
+    def test_stats_to_dict_has_excluded(self):
+        from discovery.runtime import RuntimeStats
+        stats = RuntimeStats(pairs_skipped_excluded=3)
+        d = stats.to_dict()
+        assert d["pairs_skipped_excluded"] == 3

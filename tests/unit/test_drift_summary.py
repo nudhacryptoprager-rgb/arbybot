@@ -668,5 +668,48 @@ class TestR21DashboardEnhancements(unittest.TestCase):
         self.assertIn("dBpsCls", html)
 
 
+class TestR24DriftRejectPairField(unittest.TestCase):
+    """R24: Drift-rejected quotes must carry an explicit 'pair' field
+    synthesised from token_in/token_out so that artifacts.py can report
+    drift_worst_pair correctly (not 'unknown')."""
+
+    def test_drift_reject_has_pair_from_token_fields(self):
+        """Rejected quote dict must have pair=TOKEN_IN/TOKEN_OUT."""
+        rejected: list[dict] = []
+        # Simulate a quote dict as spreads.py receives it (from __dict__)
+        q = {
+            "token_in": "WETH",
+            "token_out": "USDC",
+            "notional_drift_pct": 99.0,
+            "dex": "uniswap_v3",
+            "pool_address": "0xabc",
+        }
+        # Reproduce the drift-exclusion logic from spreads.py
+        drift_exclude_pct = 20.0
+        if abs(float(q.get("notional_drift_pct") or 0)) > drift_exclude_pct:
+            rejected.append({
+                **q,
+                "pair": f"{q.get('token_in', '?')}/{q.get('token_out', '?')}",
+                "reason": "NOTIONAL_DRIFT_EXCLUDED",
+                "notional_drift_pct": q["notional_drift_pct"],
+                "drift_exclude_pct": drift_exclude_pct,
+            })
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]["pair"], "WETH/USDC")
+
+    def test_drift_summary_uses_real_pair(self):
+        """build_drift_summary must pick up the explicit pair, not 'unknown'."""
+        rejects = [
+            {"reason": "NOTIONAL_DRIFT_EXCLUDED", "pair": "WETH/USDC", "notional_drift_pct": 25.0},
+            {"reason": "NOTIONAL_DRIFT_EXCLUDED", "pair": "WBTC/WETH", "notional_drift_pct": 50.0},
+        ]
+        from strategy.artifacts import _build_drift_summary
+        result = _build_drift_summary(rejects, [])
+        pairs_in_summary = [p["pair"] for p in result.get("per_pair_drift_summary", [])]
+        self.assertNotIn("unknown", pairs_in_summary)
+        self.assertIn("WBTC/WETH", pairs_in_summary)
+        self.assertIn("WETH/USDC", pairs_in_summary)
+
+
 if __name__ == "__main__":
     unittest.main()

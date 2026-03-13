@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-13 (R23)
-**Tests**: 1708 passed, 2 skipped
-**Schema**: start:long_scan_summary:v1.4
-**Evidence runDirs**: ci_m5_gate_20260313_182507 (arb rolling R23), 14 total runs across 6 chains
+**Updated**: 2026-03-13 (R25)
+**Tests**: 1735 passed, 2 skipped (+10 from R24)
+**Schema**: start:long_scan_summary (latest)
+**Evidence runDirs**: ci_m5_gate_20260313_213616 (arb rolling R25), 16 total runs across 6 chains
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking with drift metrics, generated 2026-03-13T17:27:42Z)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking with discovery_coverage, generated 2026-03-13T20:40:48Z)
 
 ---
 
@@ -15,43 +15,43 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
-> R23: operational_truth_source = "measured_economics" (sole truth for profit claims).
+> R25: `discovery_coverage` now populated from scan_*.json stats; `_warn_missing_chains()` is FATAL.
 
 ---
 
-## Chain Quality Classification (R23)
+## Chain Quality Classification (R25)
 
 ```
 arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, 3/3 PASS, blocker=NONE)
-base:           SIGNAL_PRODUCING (discovery, cross-dex=15, SUSPECT_SPREAD, 3/3 PASS, blocker=MIXED)
-mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, 2/2 PASS, blocker=STRUCTURAL)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, 33.7% drift, 2/2 PASS, blocker=MIXED)
+base:           SIGNAL_PRODUCING (discovery, cross-dex=10, 3/3 PASS, blocker=MIXED)
+mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, 3/3 PASS, blocker=STRUCTURAL)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=3, 3/3 PASS, blocker=MIXED)
 linea:          SIGNAL_PRODUCING (discovery, same-dex pancakeswap_v3, 2/2 PASS, blocker=STRUCTURAL)
-scroll:         INFRA_READY (monitoring_only, single DEX, accepted-fail, 0/2 PASS, blocker=ECOSYSTEM_BLOCKED)
+scroll:         INFRA_READY (monitoring_only=true, single DEX, accepted-fail=true, 0/2 PASS, blocker=ECOSYSTEM_BLOCKED)
 ```
 
-**Universe Split (R23)**:
-- **truth_probe**: arbitrum_one (frontier_ready, target_for_truth_probe=true)
-- **discovery**: base, linea, mantle, zksync (cross-dex work, not frontier_ready)
-- **monitoring_only**: scroll (PROBE_ONLY, accepted-fail)
+**Universe Split (R25)**:
+- **truth_probe**: arbitrum_one (config-based, target_for_truth_probe=true)
+- **discovery**: base, linea, mantle, zksync (discovery_coverage now populated)
+- **monitoring_only**: scroll (PROBE_ONLY, accepted-fail=true)
 
-**R23 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 14 total runs / 48 signals / $46.63 net
-**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero=11.2 bps latest arb, WETH/USDT frontier)
+**R25 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 16 total runs / 45 signals / $42.43 net
+**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero in frontier_ranking)
 **Profit truth**: NOT YET — economics blocker: LP fees + slippage exceed captured spread at all sizes
-**base anomaly**: ROUNDTRIP_PROFITABLE detected = FALSE POSITIVE (pancakeswap_v3 SUSPECT_SPREAD)
+**discovery_coverage**: FIXED (populated for zksync, base, mantle, linea from scan_*.json stats)
 
 ---
 
-## Per-Chain Drift Summary (R23)
+## Per-Chain Discovery Coverage (R25)
 
-| Chain | Drift Rej % | Median bps | Excluded | Blocker Class | Health |
-|-------|-------------|------------|----------|---------------|--------|
-| mantle | 6.2% | 315 | 4 | STRUCTURAL | HEALTHY |
-| linea | 11.5% | 326 | 6 | STRUCTURAL | OK |
-| arbitrum_one | 14.3% | 408 | 6 | — | OK |
-| base | 28.9% | 418 | 42 | MIXED | ELEVATED |
-| zksync | 33.7% | 1472 | 54 | MIXED | ELEVATED |
-| scroll | 35.2% | 2538 | 18 | ECOSYSTEM_BLOCKED | HIGH |
+| Chain | Pairs Evaluated | Pairs Resolved | Cross-DEX | Skipped Excluded |
+|-------|-----------------|----------------|-----------|------------------|
+| zksync | 15 | 4 | 3 | 11 |
+| base | 18 | 10 | 10 | 6 |
+| mantle | 14 | 10 | 0 | 3 |
+| linea | 17 | 12 | 0 | 0 |
+| arbitrum_one | n/a | n/a | n/a | n/a (config) |
+| scroll | blocked | blocked | blocked | blocked |
 
 ---
 
@@ -137,7 +137,7 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 | scan | `3.2.0` | M5 family |
 | truth_report | `3.2.0` | M5 family |
 | reject_histogram | `3.2.0` | reject samples (not aggregated counts) |
-| long_scan_summary | `v1.4` | R21: per_chain_drift_summary, universe_split, notional_drift_bps in frontier |
+| long_scan_summary | `latest` | R25: discovery_coverage populated from scan_*.json stats |
 
 ---
 
@@ -162,13 +162,12 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Next Steps (R24)
+## Next Steps (R25)
 
-- M4.2: Track `best_roundtrip_net_bps` trend; gap_to_zero=11.2 bps (arb latest)
-- Dashboard enhanced: Panels 1 ($/run, drift, blocker), 7 (cross-chain drift), 8 (rewritten blockers)
-- Frontier (R23): zksync #1 (gap=0.0, drift=33.7%), arb_one #2 (gap=11.2, drift=14.3%), base #3 (gap=83.3)
-- zksync: Pair-specific drift control — enforce max_per_pair_rejection_rate=0.40, quarantine worst pairs
-- Base: Investigate pancakeswap_v3 SUSPECT_SPREAD + fee=101 bps (MIXED blocker)
-- Mantle/Linea: Cross-dex enablement blocked by Algebra quoter incompatibility (drift HEALTHY: 6.2%, 11.5%)
-- Scroll: ECOSYSTEM_BLOCKED — do not invest engineering time until second DEX venue appears
-- drift_worst_pair: Fix "unknown" — propagate pair field through rejected quote path
+- M4.2: Track `best_roundtrip_net_bps` trend in frontier_ranking
+- discovery_coverage: Now populated from scan_*.json stats (FIXED in R25)
+- _warn_missing_chains: Now FATAL (hard fail) instead of WARNING
+- monitoring_only_chains: scroll properly marked (FIXED in R25)
+- Schema: LATEST (bumped from previous)
+- Scroll: ECOSYSTEM_BLOCKED — do not invest engineering time
+- Test delta: +10 tests (1725 → 1735)

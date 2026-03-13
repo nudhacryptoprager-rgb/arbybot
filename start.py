@@ -148,6 +148,28 @@ def extract_gate_result(run_dir: Path | None) -> dict[str, Any] | None:
         return None
 
 
+def extract_scan_stats(run_dir: Path | None) -> dict[str, Any] | None:
+    """Read the latest scan_*.json and return its stats sub-dict.
+
+    The scan JSON contains ``stats.discovery_runtime`` which is not present in
+    run_summary.  Used by ``update_chain_stats`` to populate discovery_coverage.
+    """
+    if run_dir is None or not run_dir.exists():
+        return None
+    reports = run_dir / "reports"
+    if not reports.exists():
+        return None
+    scans = sorted(reports.glob("scan_*.json"))
+    if not scans:
+        return None
+    try:
+        with open(scans[-1], encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("stats")
+    except Exception:
+        return None
+
+
 def classify_run(exit_code: int, summary: dict[str, Any] | None) -> str:
     """Return PASS / NO_DATA / FAIL / INFRA_FAIL for a single run."""
     if summary is None:
@@ -241,6 +263,7 @@ def update_chain_stats(
     run_dir: Path | None,
     summary: dict[str, Any] | None,
     gate_result: dict[str, Any] | None = None,
+    scan_stats: dict[str, Any] | None = None,
 ) -> None:
     stats["runs"] += 1
     cls = classify_run(exit_code, summary)
@@ -313,6 +336,20 @@ def update_chain_stats(
     if run_dir:
         stats["last_run_dir"] = str(run_dir.name)
 
+    # R24→R25: Discovery runtime coverage from scan_*.json stats (not run_summary)
+    if scan_stats:
+        dr = scan_stats.get("discovery_runtime")
+        if dr and dr.get("pairs_evaluated", 0) > 0:
+            stats["last_discovery_runtime"] = {
+                "pairs_evaluated": dr.get("pairs_evaluated", 0),
+                "pairs_resolved": dr.get("pairs_resolved", 0),
+                "cross_dex_pairs_count": dr.get("cross_dex_pairs_count", 0),
+                "pairs_skipped_no_tokens": dr.get("pairs_skipped_no_tokens", 0),
+                "pairs_skipped_no_pool": dr.get("pairs_skipped_no_pool", 0),
+                "pairs_skipped_single_dex": dr.get("pairs_skipped_single_dex", 0),
+                "pairs_skipped_excluded": dr.get("pairs_skipped_excluded", 0),
+            }
+
 
 # -- guardrails -----------------------------------------------------------
 
@@ -380,7 +417,7 @@ def build_summary(
     gap_median = _compute_median(all_gap_values)
 
     return {
-        "schema": "start:long_scan_summary:v1.4",  # bumped for R21 drift fields
+        "schema": "start:long_scan_summary:v1.6",  # R25: discovery_coverage from scan_stats, hard-fail missing chains
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "wall_seconds": round(wall_seconds, 1),
         "total_runs": sum(s["runs"] for s in per_chain.values()),
@@ -541,6 +578,8 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             # R22: Worst drift pair for operator analysis
             "drift_worst_pair": s.get("drift_worst_pair"),
             "drift_worst_pair_bps": s.get("drift_worst_pair_bps"),
+            # R24: Discovery runtime coverage (latest snapshot)
+            "discovery_coverage": s.get("last_discovery_runtime"),
         })
     ranked.sort(key=lambda x: (
         x.get("accepted_fail", False),
@@ -762,6 +801,28 @@ def main(argv: list[str] | None = None) -> int:
             print("Dashboard server stopped.")
 
 
+def _warn_missing_chains(config_meta: dict[str, dict[str, Any]]) -> None:
+    """R24→R25: Hard-fail if any chain from chains.yaml is not represented in config-list.
+
+    Prevents silent coverage gaps where a chain is defined but has no config in the scan.
+    """
+    chains_yaml = Path("config") / "chains.yaml"
+    if not chains_yaml.exists():
+        return
+    try:
+        with open(chains_yaml, encoding="utf-8") as f:
+            all_chains = set(yaml.safe_load(f) or {})
+    except Exception:
+        return
+    config_chains = {meta["chain"] for meta in config_meta.values()}
+    missing = sorted(all_chains - config_chains)
+    if missing:
+        print(f"  FATAL: chains.yaml defines {sorted(all_chains)} but config-list covers only {sorted(config_chains)}")
+        print(f"  FATAL: missing chains: {missing}")
+        print(f"  Add configs for missing chains or remove them from chains.yaml.")
+        sys.exit(1)
+
+
 def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
 
     # Pre-read config metadata
@@ -771,6 +832,9 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         config_meta[cfg] = meta
         rolling = "YES" if is_primary_rolling_config(meta) else "no"
         print(f"  [{meta['chain']:16s}] {cfg}  run_kind={meta['run_kind']}  rolling={rolling}")
+
+    # R24: Check config-list coverage against chains.yaml
+    _warn_missing_chains(config_meta)
 
     # Time budget
     if args.hours > 0:
@@ -822,9 +886,10 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
 
         summary = extract_run_summary(run_dir)
         gate_res = extract_gate_result(run_dir)
+        scan_st = extract_scan_stats(run_dir)
         cls = classify_run(rc, summary)
 
-        update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res)
+        update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res, scan_st)
         print(f"[run {total_runs}] result={cls}  exit_code={rc}  run_dir={run_dir.name if run_dir else 'N/A'}")
 
         # Live update: write summary after each chain for dashboard refresh
