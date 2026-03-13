@@ -156,22 +156,28 @@ dynamic_probe:
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 
-# R19: Machine-readable blocker classification for dashboard
-# SYSTEM = infra/config/adapter limitation (not market economics)
-# MARKET = economics barrier (gas, liquidity, spread) with working infra
-blocker_classification: SYSTEM
-blocker_reason: "mixed_blocker: strong frontier but drift_and_quality_heavy, 2 DEXes same-tier arb only"
-blocker_resolution: "Add third quoter_v2 DEX; pair-specific drift exclusion for worst offenders"
+# R23: Machine-readable blocker classification for dashboard
+# ZKsync is FRONTIER_READY — gap_to_zero=0.0 bps (18/18 sweep runs), best economics.
+# But: drift_rejection_rate=37.0% is highest of all PASS chains, worst_pair=9960 bps.
+# Classification: MIXED (frontier + drift) — strong breakeven signal, unreliable quote quality.
+# Evidence (R22 scan): 18/18 PASS, 18 signals, $10.88 net, gap=0.0 bps consistently.
+blocker_classification: MIXED
+blocker_reason: "frontier_ready_drift_heavy: gap=0.0 bps but 37.0% drift rejection, worst_pair=9960 bps"
+blocker_resolution: "Reduce drift rejection below 30% via pair-specific exclusion; stabilize for truth-probe promotion"
 stabilization_directive: >
-  R22: Mixed blocker (system+drift). Strong frontier metrics but drift rejection rate
-  and quality issues dominate. Concrete targets:
-  (1) target_usd_notional=25 to reduce price impact;
-  (2) drift_warning_pct=40 with pair-specific drift monitoring;
-  (3) exclude pairs with persistent >40% rejection_rate after 10 runs;
-  (4) require >=2 included signals per run for non-LOW_SAMPLE;
-  (5) if gap_to_zero <= 5 bps across 10+ runs with drift_rejection_rate < 0.30,
-      reclassify to NEAR_BREAKEVEN.
-  Currently SYSTEM blocker: same-DEX fee-tier arb only, need third quoter_v2 DEX.
+  R23: MIXED blocker (frontier + drift). Honest assessment:
+  STRONG: gap_to_zero=0.0 bps across all 18 sweep runs (BEST of all chains),
+  frontier_rank=#1, cross_dex=10 pairs, target_for_truth_probe=true.
+  WEAK: drift_rejection_rate_median=37.0% (worst of PASS chains),
+  notional_drift_median=1472 bps, drift_worst_pair=9960 bps (near 100%),
+  drift_excluded_total=308 (highest of all chains).
+  Concrete targets:
+  (1) target_usd_notional=25 kept — essential for pool depth;
+  (2) drift_warning_pct=40% — borderline ok but does NOT solve worst pairs;
+  (3) identify top-3 drift offenders from per_pair_drift_summary and exclude;
+  (4) max_per_pair_rejection_rate=0.40 — enforce: exclude pairs >40% rejection after 10 runs;
+  (5) once drift_rejection_rate < 0.30 sustained across 10+ runs, reclassify to NEAR_BREAKEVEN;
+  (6) keep as truth_probe target — economics are the best of any chain.
 stabilization_kpi_target:
   min_included_signals: 2
   max_drift_rejection_rate: 0.30

@@ -129,21 +129,32 @@ dynamic_probe:
 # Run settings
 run_kind: COVERAGE
 
-# R22: Chain blocker classification and stabilization directives
-# Base has 3 quoter_v2 DEXes (strong cross-dex) but high measured costs
-# and top_pair_dominance (WETH/USDC) historically 60-93% — needs diversification.
-blocker_classification: MARKET
-blocker_reason: "high_measured_cost_and_dominance"
-blocker_resolution: "reduce_top_pair_dominance below 60%, verify fee tier optimization"
+# R23: Chain blocker classification and stabilization directives
+# Base has 3 quoter_v2 DEXes (strong cross-dex=15 pairs), 110 signals in 18 runs,
+# but high measured costs (fee=101 bps on pancakeswap_v3, gap=22.6-89 bps).
+# Classification: MIXED — strong signal volume + cost/dominance blocker.
+# Evidence (R22 scan): 18/18 PASS, $109.18 net, drift_rej=29.5%, worst_pair=9908 bps.
+blocker_classification: MIXED
+blocker_reason: "strong_signals_high_cost: 3 DEXes, 15 xdex pairs, but fee=101 bps on frontier + 29.5% drift rejection"
+blocker_resolution: "reduce pancakeswap_v3 fee impact (fee=101 bps), lower drift rejection, diversify beyond WETH/USDC"
 stabilization_directive: |
-  1. Remove bogus/outlier paths (cbBTC already excluded)
-  2. Reduce WETH/USDC dominance below 60% via wstETH/rETH/cbETH pair coverage
-  3. Verify Uniswap V3 fee tier selection (100/500/3000) matches pool liquidity
-  4. Target: gap_to_zero < 15 bps with at least 3 cross-dex pair signals
+  R23: MIXED blocker — strong signal production but cost-blocked for profitability.
+  Evidence (R22 3h scan): 18/18 PASS, 110 signals, $109.18 net, gap=22.6 bps best.
+  Honest assessment: (1) cross_dex=15 pairs is strongest of all chains;
+  (2) but fee=101 bps on pancakeswap_v3 frontier makes gap_to_zero large;
+  (3) drift_rejection_rate_median=29.5% is second-worst (after zksync);
+  (4) drift_worst_pair_bps=9908 indicates bogus outlier pairs still present.
+  Concrete targets:
+  (1) investigate pancakeswap_v3 fee=101 bps — is this a fee tier or pricing artifact?
+  (2) reduce drift rejection below 25% by excluding pairs with >50% rejection;
+  (3) maintain cross-dex pair count ≥ 10 after cleanup;
+  (4) verify WETH/USDC dominance reduced via wstETH/rETH/cbETH coverage;
+  (5) if gap_to_zero < 15 bps achievable, promote to TRUTH_PROBE candidate.
 stabilization_kpi_target:
   max_top_pair_dominance: 0.60
   min_included_signals: 5
-  min_cross_dex_pairs: 3
+  min_cross_dex_pairs: 10
   max_drift_rejection_rate: 0.25
   gap_to_zero_target_bps: 15
   runs_for_assessment: 10
+  fee_101_investigation: true

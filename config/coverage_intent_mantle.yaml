@@ -134,27 +134,35 @@ dynamic_probe:
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 
-# R19: Machine-readable blocker classification for dashboard
-blocker_classification: SYSTEM
-blocker_reason: "structural: single_dex_only (agni_v3), LOW_SAMPLE dominant, same-dex fee-tier arb only"
-blocker_resolution: "Monitor Mantle for FusionX V3 or second quoter_v2 DEX deployment; address LOW_SAMPLE"
+# R23: Machine-readable blocker classification for dashboard
+# Mantle is STRUCTURAL — single DEX (agni_v3), same-dex fee-tier arb only.
+# However: signal volume is STRONG — 53 signals in 18 runs, $141.77 net, 18/18 PASS.
+# Drift is HEALTHIEST of all chains: drift_rejection_rate=6.3%, median=315 bps.
+# Evidence (R22 scan): 18/18 PASS, 53 signals, $141.77 net, 0 roundtrips (no cross-dex).
+blocker_classification: STRUCTURAL
+blocker_reason: "single_dex_only: agni_v3, same-dex fee-tier arb. Strong signals ($141.77) but no cross-DEX path."
+blocker_resolution: "Monitor Mantle for second quoter_v2-compatible DEX; keep scanning for ecosystem evolution"
 stabilization_directive: >
-  R22: Structural blocker — single DEX (agni_v3), same-dex fee-tier arb only.
-  LOW_SAMPLE is the dominant quality issue (not enough cross-DEX signals).
+  R23: STRUCTURAL blocker — honest assessment:
+  STRONG: 18/18 PASS, 53 signals, $141.77 net (second-highest after base),
+  drift_rejection_rate=6.3% (HEALTHIEST of all chains), drift_median=315 bps.
+  WEAK: zero roundtrip evaluation (no cross-dex routes), no sweep data,
+  single DEX (agni_v3) means SAME_DEX policy applies.
+  This chain is NOT deficit — it's structurally blocked from cross-DEX arb.
   Concrete targets:
-  (1) require >=3 included signals for non-LOW_SAMPLE;
-  (2) SAME_DEX expected (single DEX agni_v3) — not a code bug;
-  (3) monitor TOP_PAIR_DOMINANCE ratio (WETH/WMNT < 60% target);
-  (4) excluded_pair_hints prune stale USDC/USDT (2884bps consistently);
-  (5) if included_signals < 3 after 10+ runs, formalize as PROBE_ONLY;
-  (6) pair-specific drift monitoring: exclude pairs with >50% drift rejection.
-  Currently SYSTEM blocker: single DEX only (agni_v3), stratum incompatible.
+  (1) maintain current signal volume ≥ 40 per scan rotation;
+  (2) drift under control — no action needed (6.3% is excellent);
+  (3) investigate same-dex fee tier optimization (100/500/3000/10000 tiers);
+  (4) monitor Mantle DEX ecosystem for FusionX V3 or other quoter_v2 DEX;
+  (5) if second quoter_v2 DEX deploys, promote immediately to COVERAGE with cross-dex;
+  (6) LOW_SAMPLE: currently met (53 signals) — maintain threshold of ≥3 per run.
 stabilization_kpi_target:
   min_included_signals: 3
   max_top_pair_dominance: 0.60
-  max_drift_rejection_rate: 0.30
+  max_drift_rejection_rate: 0.15
   probe_only_threshold_runs: 10
   runs_for_assessment: 10
+  next_review_trigger: second_quoter_v2_dex_deployment
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity

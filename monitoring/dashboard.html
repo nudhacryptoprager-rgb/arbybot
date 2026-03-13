@@ -153,7 +153,7 @@ function render(data) {
   renderRoutes(rs);
   renderFees(rs);
   renderAlerts(rs, ls, qs);
-  renderDrift(rs, qs);
+  renderDrift(rs, qs, ls);
   renderBlockers(ls);
   renderRejects(rs);
   renderProbeTargets(ls);
@@ -163,19 +163,35 @@ function render(data) {
 function renderChainStatus(ls) {
   if (!ls?.per_chain) { $('chain-body').innerHTML = '<em class="na">No multi-chain data</em>'; return; }
   const pc = ls.per_chain;
-  let html = '<table><tr><th>Chain</th><th>Runs</th><th class="num">P/ND/F</th><th class="num">Signals</th><th class="num">Net USD</th><th>Quality</th><th>xDex</th></tr>';
+  const driftSummary = ls.per_chain_drift_summary || {};
+  let html = '<table><tr><th>Chain</th><th>Runs</th><th class="num">P/ND/F</th><th class="num">Signals</th><th class="num">Net USD</th><th class="num">$/run</th><th class="num">Drift Rej%</th><th>Quality</th><th>Blocker</th></tr>';
   for (const [chain, d] of Object.entries(pc)) {
     const qBadge = d.last_chain_quality_level === 'SIGNAL_PRODUCING' ? badge('SIGNAL','pass') :
                    d.last_chain_quality_level === 'INFRA_READY' ? badge('INFRA','warn') : badge(d.last_chain_quality_level||'?','fail');
     const afBadge = d.accepted_fail ? ' '+badge('AF','af') : '';
+    const runs = d.runs || 1;
+    const netPerRun = d.net_usdc_total != null ? (d.net_usdc_total / runs) : null;
+    const chainDrift = driftSummary[chain] || {};
+    const dRej = chainDrift.drift_rejection_rate_median;
+    const dRejStr = dRej != null ? (dRej*100).toFixed(1)+'%' : '—';
+    const dRejCls = dRej != null && dRej > 0.3 ? 'neg' : dRej != null && dRej > 0.15 ? 'warn-c' : '';
+    const blockerCls = d.blocker_classification;
+    const blockerBadge = blockerCls === 'ECOSYSTEM_BLOCKED' ? badge('ECO_BLOCK','fail') :
+                         blockerCls === 'STRUCTURAL' ? badge('STRUCT','warn') :
+                         blockerCls === 'MIXED' ? badge('MIXED','warn') :
+                         blockerCls === 'MARKET' ? badge('MARKET','warn') :
+                         blockerCls === 'SYSTEM' ? badge('SYSTEM','fail') :
+                         blockerCls ? badge(blockerCls,'pass') : '';
     html += `<tr>
       <td>${chain}${afBadge}</td>
       <td class="num">${d.runs||0}</td>
       <td class="num">${d.pass||0}/${d.no_data||0}/${d.fail||0}</td>
       <td class="num">${d.included_signals_total||0}</td>
       <td class="num">${fmtUsd(d.net_usdc_total)}</td>
+      <td class="num">${netPerRun != null ? fmtUsd(netPerRun) : '—'}</td>
+      <td class="num ${dRejCls}">${dRejStr}</td>
       <td>${qBadge}</td>
-      <td class="num">${d.last_cross_dex_pairs_count ?? '—'}</td>
+      <td>${blockerBadge}</td>
     </tr>`;
   }
   html += '</table>';
@@ -325,7 +341,7 @@ function renderAlerts(rs, ls, qs) {
 }
 
 // Panel 7: Notional Drift
-function renderDrift(rs, qs) {
+function renderDrift(rs, qs, ls) {
   const drift = rs?.metrics?.drift_summary || {};
   const excluded = drift.drift_excluded_count ?? 0;
   const rejRate = drift.drift_rejection_rate;
@@ -386,63 +402,89 @@ function renderDrift(rs, qs) {
   } else if (excluded === 0 && pairsData === 0) {
     html += '<div style="margin-top:8px;font-size:.8rem;color:#3fb950">No drift data — all quotes within threshold</div>';
   }
+
+  // R23: Cross-chain drift comparison from long_scan_latest
+  const driftSummary = ls?.per_chain_drift_summary;
+  if (driftSummary && Object.keys(driftSummary).length > 0) {
+    html += '<h3 style="font-size:.85rem;color:#58a6ff;margin-top:14px;padding-top:8px;border-top:1px solid #21262d">Cross-Chain Drift Comparison</h3>';
+    html += '<table><tr><th>Chain</th><th class="num">Drift Rej%</th><th class="num">Med bps</th><th class="num">Excluded</th><th class="num">Pairs w/Data</th><th>Health</th></tr>';
+    const sorted = Object.entries(driftSummary).sort((a,b) => (a[1].drift_rejection_rate_median||0) - (b[1].drift_rejection_rate_median||0));
+    for (const [chain, ds] of sorted) {
+      const dRej = ds.drift_rejection_rate_median;
+      const dMed = ds.notional_drift_median_bps;
+      const dRejStr = dRej != null ? (dRej*100).toFixed(1)+'%' : '—';
+      const dRejCls = dRej > 0.3 ? 'neg' : dRej > 0.15 ? 'warn-c' : 'pos';
+      const health = dRej <= 0.10 ? badge('HEALTHY','pass') : dRej <= 0.20 ? badge('OK','pass') : dRej <= 0.35 ? badge('ELEVATED','warn') : badge('HIGH','fail');
+      html += `<tr><td>${chain}</td><td class="num ${dRejCls}">${dRejStr}</td><td class="num">${fmt(dMed,1)}</td><td class="num">${ds.drift_excluded_total||0}</td><td class="num">${ds.drift_pairs_with_data_total||0}</td><td>${health}</td></tr>`;
+    }
+    html += '</table>';
+  }
   $('drift-body').innerHTML = html;
 }
 
-// Panel 8: Per-Chain Blocker Classification (R22: +drift context)
+// Panel 8: Per-Chain Blocker Classification (R23: honest classification types)
 function renderBlockers(ls) {
   if (!ls?.per_chain) { $('blockers-body').innerHTML = '<em class="na">No multi-chain data</em>'; return; }
   const pc = ls.per_chain;
   const driftSummary = ls.per_chain_drift_summary || {};
-  let html = '<table><tr><th>Chain</th><th>Blocker Type</th><th class="num">Drift bps</th><th class="num">Drift Rej%</th><th>Evidence</th></tr>';
+  let html = '<table><tr><th>Chain</th><th>Classification</th><th class="num">Drift bps</th><th class="num">Drift Rej%</th><th class="num">Gap bps</th><th>Reason</th></tr>';
   for (const [chain, d] of Object.entries(pc)) {
     const sigs = d.included_signals_total || 0;
-    const xdex = d.last_cross_dex_pairs_count;
+    const gap = d.sweep_gap_to_zero_bps;
     const af = d.accepted_fail;
     const fail = d.fail || 0;
     const pass = d.pass || 0;
-    const level = d.last_chain_quality_level || '?';
-    const gap = d.sweep_gap_to_zero_bps;
-    let blockerType, evidence;
-    const configBlocker = d.blocker_classification;
-    const configReason = d.blocker_reason;
-    // R22: drift context per chain
+    // R23: drift context per chain
     const chainDrift = driftSummary[chain] || {};
     const dBps = chainDrift.notional_drift_median_bps;
     const dRej = chainDrift.drift_rejection_rate_median;
     const dBpsStr = dBps != null ? fmt(dBps,1) : '—';
     const dRejStr = dRej != null ? (dRej*100).toFixed(1)+'%' : '—';
-    const dBpsCls = dBps != null && dBps > 500 ? 'neg' : dBps != null && dBps > 200 ? 'warn-c' : '';
-    const dRejCls = dRej != null && dRej > 0.3 ? 'neg' : dRej != null && dRej > 0.1 ? 'warn-c' : '';
+    const dBpsCls = dBps != null && dBps > 1000 ? 'neg' : dBps != null && dBps > 500 ? 'warn-c' : '';
+    const dRejCls = dRej != null && dRej > 0.3 ? 'neg' : dRej != null && dRej > 0.15 ? 'warn-c' : '';
+    const gapStr = gap != null ? fmt(gap,1) : '—';
+    const gapCls = gap != null && gap > 20 ? 'neg' : gap != null && gap > 5 ? 'warn-c' : gap != null ? 'pos' : '';
 
-    if (configBlocker === 'SYSTEM') {
-      blockerType = badge('SYSTEM', 'fail');
-      evidence = configReason || 'System/config limitation (from config)';
+    // R23: Use config blocker_classification with honest type badges
+    const configBlocker = d.blocker_classification;
+    const configReason = d.blocker_reason || '';
+    let blockerBadge, reason;
+    if (configBlocker === 'ECOSYSTEM_BLOCKED') {
+      blockerBadge = badge('ECO_BLOCKED', 'fail');
+      reason = configReason || 'No viable DEX venue — ecosystem limitation';
+    } else if (configBlocker === 'STRUCTURAL') {
+      blockerBadge = badge('STRUCTURAL', 'warn');
+      reason = configReason || 'Single DEX only — structural limitation';
+    } else if (configBlocker === 'MIXED') {
+      blockerBadge = badge('MIXED', 'warn');
+      reason = configReason || 'Working signals but blocked by cost/drift';
+    } else if (configBlocker === 'MARKET') {
+      blockerBadge = badge('MARKET', 'warn');
+      reason = configReason || 'Economics barrier (cost exceeds spread)';
+    } else if (configBlocker === 'SYSTEM') {
+      blockerBadge = badge('SYSTEM', 'fail');
+      reason = configReason || 'System/config limitation';
     } else if (af) {
-      blockerType = badge('ACCEPTED_FAIL', 'af');
-      evidence = 'Single-DEX only, expected to fail';
-    } else if (fail > 0 && sigs === 0) {
-      blockerType = badge('SYSTEM', 'fail');
-      evidence = 'FAIL with 0 signals — config/infra issue';
-    } else if (xdex != null && xdex === 0 && sigs > 0) {
-      blockerType = badge('SYSTEM', 'fail');
-      evidence = 'No cross-DEX pairs — single-DEX fallback mode';
-    } else if (level === 'INFRA_READY' && sigs === 0) {
-      blockerType = badge('SYSTEM', 'warn');
-      evidence = 'INFRA_READY but 0 signals — quoter/config mismatch';
-    } else if (pass > 0 && gap != null && gap > 10) {
-      blockerType = badge('MARKET', 'warn');
-      evidence = `Gap=${fmt(gap,1)} bps — economics not yet profitable`;
-    } else if (pass > 0 && gap != null && gap <= 10) {
-      blockerType = badge('NEAR_BREAKEVEN', 'pass');
-      evidence = `Gap=${fmt(gap,1)} bps — close to breakeven`;
+      blockerBadge = badge('ACCEPTED_FAIL', 'af');
+      reason = 'Expected failure — monitoring only';
+    } else if (pass > 0 && gap != null && gap <= 5) {
+      blockerBadge = badge('NEAR_BREAKEVEN', 'pass');
+      reason = `Gap=${fmt(gap,1)} bps — close to breakeven`;
     } else {
-      blockerType = badge('UNKNOWN', 'warn');
-      evidence = `level=${level}, signals=${sigs}`;
+      blockerBadge = badge(configBlocker || 'UNKNOWN', 'warn');
+      reason = configReason || `signals=${sigs}`;
     }
-    html += `<tr><td>${chain}</td><td>${blockerType}</td><td class="num ${dBpsCls}">${dBpsStr}</td><td class="num ${dRejCls}">${dRejStr}</td><td style="font-size:.75rem">${evidence}</td></tr>`;
+    // Truncate long reasons for table
+    const shortReason = reason.length > 80 ? reason.substring(0, 77) + '...' : reason;
+    html += `<tr><td>${chain}</td><td>${blockerBadge}</td><td class="num ${dBpsCls}">${dBpsStr}</td><td class="num ${dRejCls}">${dRejStr}</td><td class="num ${gapCls}">${gapStr}</td><td style="font-size:.72rem" title="${reason}">${shortReason}</td></tr>`;
   }
   html += '</table>';
+
+  // R23: Operational contract summary
+  const totalChains = Object.keys(pc).length;
+  const passChains = Object.values(pc).filter(d => (d.pass||0) > 0).length;
+  const signalChains = Object.values(pc).filter(d => (d.included_signals_total||0) > 0).length;
+  html += `<div style="margin-top:8px;font-size:.75rem;color:#8b949e">Operational: ${totalChains} chains scanned | ${passChains} PASS | ${signalChains} SIGNAL_PRODUCING</div>`;
   $('blockers-body').innerHTML = html;
 }
 

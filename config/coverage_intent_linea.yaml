@@ -143,29 +143,35 @@ dynamic_probe:
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 
-# R19: Machine-readable blocker classification for dashboard
-blocker_classification: SYSTEM
-blocker_reason: "structural: single_dex_only (pancakeswap_v3), same-dex fee-tier arb, health/outlier issues"
-blocker_resolution: "Monitor Linea for second quoter_v2-compatible DEX; address pool health issues"
+# R23: Machine-readable blocker classification for dashboard
+# Linea is STRUCTURAL — single DEX (pancakeswap_v3), same-dex fee-tier arb only.
+# Signal volume decent: 52 signals in 18 runs, $44.52 net, 18/18 PASS.
+# Drift healthy: drift_rejection_rate=15.4%, median=316 bps.
+# Evidence (R22 scan): 18/18 PASS, 52 signals, $44.52 net, 2 quarantined pools.
+blocker_classification: STRUCTURAL
+blocker_reason: "single_dex_only: pancakeswap_v3, same-dex fee-tier arb. Drift healthy (15.4%) but no cross-DEX."
+blocker_resolution: "Monitor Linea for second quoter_v2-compatible DEX; maintain pool health quarantine"
 stabilization_directive: >
-  R22: Structural blocker — single DEX (pancakeswap_v3), same-dex fee-tier arb only.
-  Health/outlier issues: 2 pools quarantined (PRICE_SCALE_VIOLATION).
+  R23: STRUCTURAL blocker — honest assessment:
+  STRONG: 18/18 PASS, 52 signals, $44.52 net, drift_rejection_rate=15.4% (healthy),
+  drift_median=316 bps (second-best after mantle).
+  WEAK: single DEX (pancakeswap_v3), zero roundtrips, no sweep data,
+  same-dex fee-tier arb only. 2 pools quarantined (PRICE_SCALE_VIOLATION).
   Concrete targets:
-  (1) target_usd_notional=50 to reduce WETH/WBTC price impact (was 100, 3949bps spread);
-  (2) drift_warning_pct=40 for borderline fee tiers;
-  (3) disabled_pools quarantine PRICE_SCALE_VIOLATION pools;
-  (4) require >=3 included signals for non-LOW_SAMPLE;
-  (5) WETH_WBTC anchor added for price sanity;
-  (6) monitor pair-level health: exclude pairs with >3 consecutive PRICE_SCALE_VIOLATION;
-  (7) if included_signals < 3 after 10+ runs, formalize as PROBE_ONLY.
-  Currently SYSTEM blocker: single DEX only (pancakeswap_v3), lynex_v3
-  algebra incompatible with quoter_v2.
+  (1) maintain signal volume ≥ 30 per scan rotation;
+  (2) keep drift under 20% — currently healthy at 15.4%;
+  (3) target_usd_notional=50 working well — no need to change;
+  (4) drift_warning_pct=40 gives adequate slack for borderline fee tiers;
+  (5) monitor disabled_pools: 2 quarantined — verify not expanding;
+  (6) if lynex_v3 or another DEX gets quoter_v2 support, promote to cross-DEX COVERAGE;
+  (7) WETH_WBTC anchor (0.030) providing price sanity — keep.
 stabilization_kpi_target:
   min_included_signals: 3
-  max_drift_rejection_rate: 0.30
+  max_drift_rejection_rate: 0.20
   disabled_pool_count: 2
   probe_only_threshold_runs: 10
   runs_for_assessment: 10
+  next_review_trigger: second_quoter_v2_dex_deployment
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity

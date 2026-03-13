@@ -133,21 +133,27 @@ dynamic_probe:
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 
-# R19: Machine-readable blocker classification for dashboard
-blocker_classification: SYSTEM
-blocker_reason: "single_dex_only: sushiswap_v3 only, nuri_v3 (algebra) incompatible with quoter_v2. PROBE_ONLY."
-blocker_resolution: "Monitor Scroll for second quoter_v2-compatible DEX deployment"
+# R23: Machine-readable blocker classification for dashboard
+# Scroll is ECOSYSTEM_BLOCKED — single DEX (sushiswap_v3), 0 included signals.
+# Honest assessment: 18/18 FAIL, 0 signals, $0.00 net. NOT arbitrage-ready.
+# Drift data is meaningless here (45.5% rejection on 0 signals).
+# Evidence (R22 scan): 18/18 FAIL, all expected. Keep for ecosystem monitoring ONLY.
+blocker_classification: ECOSYSTEM_BLOCKED
+blocker_reason: "no_viable_venue: sushiswap_v3 only, nuri_v3 algebra-incompatible, 0 included signals"
+blocker_resolution: "Monitor Scroll ecosystem quarterly for second quoter_v2-compatible DEX"
 stabilization_directive: >
-  R22: PROBE_ONLY — ecosystem-level blocker. Honest assessment:
-  single DEX (sushiswap_v3) with all signals same-DEX fee-tier arb → policy-excluded.
-  No viable cross-DEX venue exists on Scroll currently.
+  R23: ECOSYSTEM_BLOCKED — honest probe-only assessment:
+  Scroll has ONE DEX (sushiswap_v3) producing same-dex fee-tier signals only,
+  ALL excluded by policy → 0 included signals → 18/18 FAIL. This is expected.
+  This is NOT a regression, NOT a code bug, NOT fixable by config tuning.
+  It requires a second quoter_v2-compatible DEX to deploy on Scroll.
   Concrete actions:
   (1) keep in scan rotation for ecosystem monitoring ONLY;
-  (2) check Scroll DEX ecosystem quarterly for new quoter_v2 DEX deployment;
-  (3) do NOT count toward fail_chains (accepted_fail=true);
-  (4) disabled_pools quarantine PRICE_SCALE_VIOLATION pools (2 quarantined);
-  (5) if second quoter_v2 DEX deploys, re-evaluate and promote to COVERAGE.
-  Status: ECOSYSTEM_BLOCKED — no compatible venue for arbitrage.
+  (2) accepted_fail=true — do NOT count scroll failures toward max_fail_chains;
+  (3) check Scroll DEX ecosystem quarterly for new DEX deployment;
+  (4) 2 pools quarantined (PRICE_SCALE_VIOLATION) — maintenance only;
+  (5) if second quoter_v2 DEX deploys, re-evaluate immediately;
+  (6) do NOT invest engineering time in Scroll until ecosystem changes.
 stabilization_kpi_target:
   status: PROBE_ONLY
   expected_included_signals: 0

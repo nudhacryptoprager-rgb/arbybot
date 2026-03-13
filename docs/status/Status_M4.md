@@ -26,24 +26,23 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-13 R20)**: `agg_status=PASS` sustained. runs_in_window=184, unique_pairs=13, total_net_usdc=$1142.02. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: gap_to_zero=4.10 bps best (arb_one), zksync frontier=0.0 bps. base ROUNDTRIP_PROFITABLE=1 is FALSE POSITIVE (SUSPECT_SPREAD from pancakeswap_v3). Latest evidence: `long_scan_latest.json` + `run_summary_latest.json` in `_rolling/`.
+> [!] **ROLLING STABILITY (2026-03-13 R23)**: `agg_status=PASS` sustained. runs_in_window=184+, total_net_usdc=$1142.02+. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: gap_to_zero=11.2 bps (arb_one R23), zksync frontier=0.0 bps. base ROUNDTRIP_PROFITABLE is FALSE POSITIVE (SUSPECT_SPREAD from pancakeswap_v3). R23 blocker reclassification: MIXED (base, zksync), STRUCTURAL (mantle, linea), ECOSYSTEM_BLOCKED (scroll). Latest evidence: `long_scan_latest.json` (generated 2026-03-13T17:27:42Z).
 
-**Economics Snapshot (2026-03-13, R20):**
+**Economics Snapshot (2026-03-13, R23):**
 | Metric | Value | Notes |
 |--------|-------|-------|
-| `gap_to_zero_bps (best)` | 4.10 | Arb_one rolling best |
-| `gap_to_zero_bps (latest)` | 10.44 | Latest arb run (volatile) |
-| `gap_to_zero_bps (median)` | 17.32 | Rolling median |
+| `gap_to_zero_bps (arb latest)` | 11.2 | R23 arb scan (frontier #2) |
+| `gap_to_zero_bps (zksync)` | 0.0 | Frontier #1, but 33.7% drift |
+| `gap_to_zero_bps (base)` | 83.3 | MIXED: strong signals + high cost |
 | `roundtrip_total_profitable` | 0 | Arb_one: still market-blocked |
-| `base_roundtrip_profitable` | 1 | FALSE POSITIVE: SUSPECT_SPREAD (pancakeswap_v3 bad prices) |
-| `sweep_runs_count` | 44 | Runs with sweep data |
+| `base_roundtrip_profitable` | 1+ | FALSE POSITIVE: SUSPECT_SPREAD |
 | `frontier_pair` | WETH/USDT | Latest frontier candidate |
-| `drift_signal_median_bps_p50` | 373.5 | Rolling drift (arb) |
-| `per_chain_frontier` | LIVE | 6 chains in frontier ranking |
-| `runs_in_window` | 184 | Total NORMAL runs |
-| `total_net_usdc` | $1142.02 | Cumulative paper profit |
-| `multi_chain_pass` | 5/6 | arb_one, base, mantle, linea, zksync |
-| `long_scan_signals` | 39 | R20 8-run 6-chain scan |
+| `per_chain_frontier` | LIVE | 6 chains ranked with drift |
+| `runs_in_window` | 184+ | Total NORMAL runs (rolling) |
+| `total_net_usdc` | $1142.02+ | Cumulative paper profit |
+| `multi_chain_pass` | 5/6 | arb, base, mantle, linea, zksync |
+| `R23_scan_signals` | 48 | 14-run 6-chain scan, $46.63 net |
+| `blocker_types` | 4 | MIXED, STRUCTURAL, ECOSYSTEM_BLOCKED, — |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

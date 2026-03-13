@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-13 (R21)
-**Tests**: 1699 passed, 2 skipped
+**Updated**: 2026-03-13 (R23)
+**Tests**: 1708 passed, 2 skipped
 **Schema**: start:long_scan_summary:v1.4
-**Evidence runDirs**: ci_m5_gate_20260313_125401 (arb rolling R21), ci_m5_gate_20260313_124714 (base R21), ci_m5_gate_20260313_124927 (mantle R21), ci_m5_gate_20260313_125124 (zksync R21), ci_m5_gate_20260313_125250 (scroll R21), ci_m5_gate_20260313_125321 (linea R21)
+**Evidence runDirs**: ci_m5_gate_20260313_182507 (arb rolling R23), 14 total runs across 6 chains
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking with drift metrics)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking with drift metrics, generated 2026-03-13T17:27:42Z)
 
 ---
 
@@ -15,43 +15,43 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
-> R21: operational_truth_source = "measured_economics" (sole truth for profit claims).
+> R23: operational_truth_source = "measured_economics" (sole truth for profit claims).
 
 ---
 
-## Chain Quality Classification (R21)
+## Chain Quality Classification (R23)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, 3/3 PASS)
-base:           SIGNAL_PRODUCING (discovery, cross-dex=15, SUSPECT_SPREAD on pancakeswap_v3, 2/2 PASS)
-mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, LOW_SAMPLE, 2/2 PASS)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, 34.9% drift rejection, 2/2 PASS)
-linea:          SIGNAL_PRODUCING (discovery, same-dex pancakeswap_v3, LOW_SAMPLE, 2/2 PASS)
-scroll:         INFRA_READY (monitoring_only, single DEX, probe-only, accepted-fail, 0/2 PASS)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, 3/3 PASS, blocker=NONE)
+base:           SIGNAL_PRODUCING (discovery, cross-dex=15, SUSPECT_SPREAD, 3/3 PASS, blocker=MIXED)
+mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, 2/2 PASS, blocker=STRUCTURAL)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, 33.7% drift, 2/2 PASS, blocker=MIXED)
+linea:          SIGNAL_PRODUCING (discovery, same-dex pancakeswap_v3, 2/2 PASS, blocker=STRUCTURAL)
+scroll:         INFRA_READY (monitoring_only, single DEX, accepted-fail, 0/2 PASS, blocker=ECOSYSTEM_BLOCKED)
 ```
 
-**Universe Split (R21)**:
+**Universe Split (R23)**:
 - **truth_probe**: arbitrum_one (frontier_ready, target_for_truth_probe=true)
 - **discovery**: base, linea, mantle, zksync (cross-dex work, not frontier_ready)
 - **monitoring_only**: scroll (PROBE_ONLY, accepted-fail)
 
-**R21 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 13 total runs / 38 signals / $38.45 net
-**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero=23.23 bps latest, WETH/USDT frontier, 187+ runs in window)
+**R23 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 14 total runs / 48 signals / $46.63 net
+**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero=11.2 bps latest arb, WETH/USDT frontier)
 **Profit truth**: NOT YET — economics blocker: LP fees + slippage exceed captured spread at all sizes
-**base anomaly**: 2 ROUNDTRIP_PROFITABLE detected but is FALSE POSITIVE (pancakeswap_v3 SUSPECT_SPREAD, 2549 bps spread)
+**base anomaly**: ROUNDTRIP_PROFITABLE detected = FALSE POSITIVE (pancakeswap_v3 SUSPECT_SPREAD)
 
 ---
 
-## Per-Chain Drift Summary (R21 — new)
+## Per-Chain Drift Summary (R23)
 
-| Chain | Drift Rej Rate | Drift Median bps | Excluded | Pairs w/Data |
-|-------|----------------|------------------|----------|--------------|
-| arbitrum_one | 16.7% | 315 | 6 | 9 |
-| base | 30.3% | 338 | 33 | 10 |
-| mantle | 6.3% | 315 | 4 | 6 |
-| zksync | 34.9% | 1472 | 36 | 8 |
-| linea | 11.5% | 307 | 4 | 10 |
-| scroll | 35.2% | 2576 | 10 | 2 |
+| Chain | Drift Rej % | Median bps | Excluded | Blocker Class | Health |
+|-------|-------------|------------|----------|---------------|--------|
+| mantle | 6.2% | 315 | 4 | STRUCTURAL | HEALTHY |
+| linea | 11.5% | 326 | 6 | STRUCTURAL | OK |
+| arbitrum_one | 14.3% | 408 | 6 | — | OK |
+| base | 28.9% | 418 | 42 | MIXED | ELEVATED |
+| zksync | 33.7% | 1472 | 54 | MIXED | ELEVATED |
+| scroll | 35.2% | 2538 | 18 | ECOSYSTEM_BLOCKED | HIGH |
 
 ---
 
@@ -162,12 +162,13 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Next Steps (R21)
+## Next Steps (R24)
 
-- M4.2: Track `best_roundtrip_net_bps` trend; gap_to_zero=23.23 bps (latest), median=23.27 bps
-- Dashboard live at `py -3.11 -m monitoring.dashboard_server` (port 8099)
-- Frontier (R21): zksync #1 (gap=0.0, drift=1472 bps), arb_one #2 (gap=23.23, drift=315 bps), base #3 (gap=89.06)
-- zksync: Reduce 34.9% drift rejection rate (notional_drift_median=1472 bps)
-- Base: Investigate pancakeswap_v3 SUSPECT_SPREAD (fee=101 bps cost prohibitive)
-- Mantle/Linea: Cross-dex enablement blocked by Algebra quoter incompatibility (drift healthy: 6.3%, 11.5%)
-- Scroll: Keep monitoring_only until second DEX venue appears
+- M4.2: Track `best_roundtrip_net_bps` trend; gap_to_zero=11.2 bps (arb latest)
+- Dashboard enhanced: Panels 1 ($/run, drift, blocker), 7 (cross-chain drift), 8 (rewritten blockers)
+- Frontier (R23): zksync #1 (gap=0.0, drift=33.7%), arb_one #2 (gap=11.2, drift=14.3%), base #3 (gap=83.3)
+- zksync: Pair-specific drift control — enforce max_per_pair_rejection_rate=0.40, quarantine worst pairs
+- Base: Investigate pancakeswap_v3 SUSPECT_SPREAD + fee=101 bps (MIXED blocker)
+- Mantle/Linea: Cross-dex enablement blocked by Algebra quoter incompatibility (drift HEALTHY: 6.2%, 11.5%)
+- Scroll: ECOSYSTEM_BLOCKED — do not invest engineering time until second DEX venue appears
+- drift_worst_pair: Fix "unknown" — propagate pair field through rejected quote path
