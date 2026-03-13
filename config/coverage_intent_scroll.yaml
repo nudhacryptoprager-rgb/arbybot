@@ -138,18 +138,22 @@ blocker_classification: SYSTEM
 blocker_reason: "single_dex_only: sushiswap_v3 only, nuri_v3 (algebra) incompatible with quoter_v2. PROBE_ONLY."
 blocker_resolution: "Monitor Scroll for second quoter_v2-compatible DEX deployment"
 stabilization_directive: >
-  R21: PROBE_ONLY formalized. Chain is NOT arbitrage-ready — single DEX
-  (sushiswap_v3) with all signals same-DEX fee-tier arb → policy-excluded.
-  Concrete actions: (1) keep in scan rotation for ecosystem monitoring;
-  (2) check Scroll DEX ecosystem quarterly for new quoter_v2 DEX;
+  R22: PROBE_ONLY — ecosystem-level blocker. Honest assessment:
+  single DEX (sushiswap_v3) with all signals same-DEX fee-tier arb → policy-excluded.
+  No viable cross-DEX venue exists on Scroll currently.
+  Concrete actions:
+  (1) keep in scan rotation for ecosystem monitoring ONLY;
+  (2) check Scroll DEX ecosystem quarterly for new quoter_v2 DEX deployment;
   (3) do NOT count toward fail_chains (accepted_fail=true);
-  (4) disabled_pools quarantine PRICE_SCALE_VIOLATION pools.
-  Status: MARKET_BLOCKED + SYSTEM (no viable venue).
+  (4) disabled_pools quarantine PRICE_SCALE_VIOLATION pools (2 quarantined);
+  (5) if second quoter_v2 DEX deploys, re-evaluate and promote to COVERAGE.
+  Status: ECOSYSTEM_BLOCKED — no compatible venue for arbitrage.
 stabilization_kpi_target:
   status: PROBE_ONLY
   expected_included_signals: 0
   disabled_pool_count: 2
   next_review_trigger: second_quoter_v2_dex_deployment
+  ecosystem_check_interval: quarterly
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity

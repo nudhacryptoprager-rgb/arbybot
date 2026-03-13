@@ -240,6 +240,11 @@ def emit_to_aggregator_light(
         "drift_pairs_with_exclusions": metrics.get("drift_summary", {}).get("pairs_with_exclusions", 0),
         # R21: notional_drift_bps canonical alias
         "notional_drift_bps": metrics.get("drift_summary", {}).get("notional_drift_bps"),
+        # R22: Worst drift pair snapshot for per-pair operator analysis
+        "drift_worst_pair": (metrics.get("drift_summary", {}).get("per_pair_drift_summary", [{}])[0].get("pair")
+                             if metrics.get("drift_summary", {}).get("per_pair_drift_summary") else None),
+        "drift_worst_pair_bps": (metrics.get("drift_summary", {}).get("per_pair_drift_summary", [{}])[0].get("notional_drift_median_bps")
+                                 if metrics.get("drift_summary", {}).get("per_pair_drift_summary") else None),
     })
     
     # Clean legacy: keep only light-format runs
@@ -313,6 +318,15 @@ def _compute_per_chain_frontier(normal_runs, all_chain_keys, percentile_fn):
             "drift_signal_median_pct_p50": percentile_fn(drift_median_values, 50) if drift_median_values else None,
             # R21: notional_drift_bps canonical aggregate
             "notional_drift_median_bps": percentile_fn(drift_bps_values, 50) if drift_bps_values else None,
+            # R22: Worst drift pair snapshot (latest run with drift data)
+            "drift_worst_pair": next(
+                (r.get("drift_worst_pair") for r in reversed(chain_runs) if r.get("drift_worst_pair")),
+                None,
+            ),
+            "drift_worst_pair_bps": next(
+                (r.get("drift_worst_pair_bps") for r in reversed(chain_runs) if r.get("drift_worst_pair_bps") is not None),
+                None,
+            ),
         }
     return result
 

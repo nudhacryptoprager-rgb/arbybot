@@ -136,19 +136,24 @@ run_kind: COVERAGE
 
 # R19: Machine-readable blocker classification for dashboard
 blocker_classification: SYSTEM
-blocker_reason: "single_dex_only: agni_v3 only, stratum (ve33) incompatible with quoter_v2"
-blocker_resolution: "Monitor Mantle for FusionX V3 or similar quoter_v2 DEX deployment"
+blocker_reason: "structural: single_dex_only (agni_v3), LOW_SAMPLE dominant, same-dex fee-tier arb only"
+blocker_resolution: "Monitor Mantle for FusionX V3 or second quoter_v2 DEX deployment; address LOW_SAMPLE"
 stabilization_directive: >
-  R21: Concrete targets — (1) require >=3 included signals for non-LOW_SAMPLE;
+  R22: Structural blocker — single DEX (agni_v3), same-dex fee-tier arb only.
+  LOW_SAMPLE is the dominant quality issue (not enough cross-DEX signals).
+  Concrete targets:
+  (1) require >=3 included signals for non-LOW_SAMPLE;
   (2) SAME_DEX expected (single DEX agni_v3) — not a code bug;
   (3) monitor TOP_PAIR_DOMINANCE ratio (WETH/WMNT < 60% target);
   (4) excluded_pair_hints prune stale USDC/USDT (2884bps consistently);
-  (5) if signal_count < 3 after 10+ runs, formalize as probe-only.
+  (5) if included_signals < 3 after 10+ runs, formalize as PROBE_ONLY;
+  (6) pair-specific drift monitoring: exclude pairs with >50% drift rejection.
   Currently SYSTEM blocker: single DEX only (agni_v3), stratum incompatible.
 stabilization_kpi_target:
   min_included_signals: 3
   max_top_pair_dominance: 0.60
   max_drift_rejection_rate: 0.30
+  probe_only_threshold_runs: 10
   runs_for_assessment: 10
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)

@@ -357,12 +357,14 @@ function renderDrift(rs, qs) {
     html += `<div style="margin-top:8px;font-size:.75rem;color:#8b949e">Rolling: excluded_total=${driftExclTotal??'—'} | rej_rate_median=${driftRejMedian != null ? (driftRejMedian*100).toFixed(1)+'%' : '—'} | drift_bps_p50=${driftBpsP50 != null ? fmt(driftBpsP50,1) : '—'}</div>`;
   }
 
-  // Per-pair unified drift summary (R21)
+  // Per-pair unified drift summary (R21, R22: +rejection_rate)
   if (perPairSummary.length > 0) {
-    html += '<table style="margin-top:10px"><tr><th>Pair</th><th class="num">Med bps</th><th class="num">P90 bps</th><th class="num">Excl</th><th class="num">Incl</th></tr>';
+    html += '<table style="margin-top:10px"><tr><th>Pair</th><th class="num">Med bps</th><th class="num">P90 bps</th><th class="num">Rej%</th><th class="num">Excl</th><th class="num">Incl</th></tr>';
     for (const p of perPairSummary.slice(0, 10)) {
       const dCls = p.notional_drift_median_bps > 10 ? 'neg' : p.notional_drift_median_bps > 5 ? 'warn-c' : '';
-      html += `<tr><td>${p.pair||'?'}</td><td class="num ${dCls}">${fmt(p.notional_drift_median_bps,1)}</td><td class="num">${fmt(p.notional_drift_p90_bps,1)}</td><td class="num">${p.excluded_count||0}</td><td class="num">${p.included_count||0}</td></tr>`;
+      const rejPct = p.rejection_rate != null ? (p.rejection_rate*100).toFixed(0)+'%' : '—';
+      const rejCls = p.rejection_rate > 0.5 ? 'neg' : p.rejection_rate > 0.2 ? 'warn-c' : '';
+      html += `<tr><td>${p.pair||'?'}</td><td class="num ${dCls}">${fmt(p.notional_drift_median_bps,1)}</td><td class="num">${fmt(p.notional_drift_p90_bps,1)}</td><td class="num ${rejCls}">${rejPct}</td><td class="num">${p.excluded_count||0}</td><td class="num">${p.included_count||0}</td></tr>`;
     }
     html += '</table>';
   }
@@ -387,11 +389,12 @@ function renderDrift(rs, qs) {
   $('drift-body').innerHTML = html;
 }
 
-// Panel 8: Per-Chain Blocker Classification
+// Panel 8: Per-Chain Blocker Classification (R22: +drift context)
 function renderBlockers(ls) {
   if (!ls?.per_chain) { $('blockers-body').innerHTML = '<em class="na">No multi-chain data</em>'; return; }
   const pc = ls.per_chain;
-  let html = '<table><tr><th>Chain</th><th>Blocker Type</th><th>Evidence</th></tr>';
+  const driftSummary = ls.per_chain_drift_summary || {};
+  let html = '<table><tr><th>Chain</th><th>Blocker Type</th><th class="num">Drift bps</th><th class="num">Drift Rej%</th><th>Evidence</th></tr>';
   for (const [chain, d] of Object.entries(pc)) {
     const sigs = d.included_signals_total || 0;
     const xdex = d.last_cross_dex_pairs_count;
@@ -403,6 +406,14 @@ function renderBlockers(ls) {
     let blockerType, evidence;
     const configBlocker = d.blocker_classification;
     const configReason = d.blocker_reason;
+    // R22: drift context per chain
+    const chainDrift = driftSummary[chain] || {};
+    const dBps = chainDrift.notional_drift_median_bps;
+    const dRej = chainDrift.drift_rejection_rate_median;
+    const dBpsStr = dBps != null ? fmt(dBps,1) : '—';
+    const dRejStr = dRej != null ? (dRej*100).toFixed(1)+'%' : '—';
+    const dBpsCls = dBps != null && dBps > 500 ? 'neg' : dBps != null && dBps > 200 ? 'warn-c' : '';
+    const dRejCls = dRej != null && dRej > 0.3 ? 'neg' : dRej != null && dRej > 0.1 ? 'warn-c' : '';
 
     if (configBlocker === 'SYSTEM') {
       blockerType = badge('SYSTEM', 'fail');
@@ -429,7 +440,7 @@ function renderBlockers(ls) {
       blockerType = badge('UNKNOWN', 'warn');
       evidence = `level=${level}, signals=${sigs}`;
     }
-    html += `<tr><td>${chain}</td><td>${blockerType}</td><td style="font-size:.75rem">${evidence}</td></tr>`;
+    html += `<tr><td>${chain}</td><td>${blockerType}</td><td class="num ${dBpsCls}">${dBpsStr}</td><td class="num ${dRejCls}">${dRejStr}</td><td style="font-size:.75rem">${evidence}</td></tr>`;
   }
   html += '</table>';
   $('blockers-body').innerHTML = html;
@@ -470,7 +481,7 @@ function renderProbeTargets(ls) {
   const probes = ls.frontier_ranking.filter(r => r.target_for_truth_probe);
   if (probes.length === 0) { $('probes-body').innerHTML = '<em class="na">No truth-probe targets selected</em>'; return; }
 
-  let html = '<table><tr><th>#</th><th>Chain</th><th class="num">Gap bps</th><th class="num">PnL bps</th><th>Frontier Pair</th><th class="num">Cost bps</th><th>Classification</th></tr>';
+  let html = '<table><tr><th>#</th><th>Chain</th><th class="num">Gap bps</th><th class="num">PnL bps</th><th>Frontier Pair</th><th class="num">Cost bps</th><th class="num">Drift bps</th><th>Classification</th></tr>';
   for (const r of probes) {
     const pnlCls = cls(r.best_net_pnl_bps);
     // Get blocker from per_chain if available
@@ -478,6 +489,8 @@ function renderProbeTargets(ls) {
     const blockerCls = pc.blocker_classification;
     const blockerBadge = blockerCls === 'SYSTEM' ? badge('SYSTEM','fail') : blockerCls === 'MARKET' ? badge('MARKET','warn') : badge(blockerCls||'—','pass');
     const totalCost = r.measured_total_cost_bps;
+    const driftBps = r.notional_drift_median_bps;
+    const driftCls = driftBps != null && driftBps > 500 ? 'neg' : driftBps != null && driftBps > 200 ? 'warn-c' : '';
     html += `<tr>
       <td>${r.frontier_rank}</td>
       <td>${r.chain} ${badge('PROBE','probe')}</td>
@@ -485,6 +498,7 @@ function renderProbeTargets(ls) {
       <td class="num ${pnlCls}">${fmt(r.best_net_pnl_bps,1)}</td>
       <td style="font-size:.75rem">${r.frontier_pair||'—'}</td>
       <td class="num">${fmt(totalCost,1)}</td>
+      <td class="num ${driftCls}">${fmt(driftBps,1)}</td>
       <td>${blockerBadge}</td>
     </tr>`;
   }
@@ -494,8 +508,8 @@ function renderProbeTargets(ls) {
 
 // Auto-load on page open
 loadData();
-// Auto-refresh every 30 seconds
-setInterval(loadData, 30000);
+// Auto-refresh every 15 seconds (R22: shortened from 30s for better UX)
+setInterval(loadData, 15000);
 </script>
 </body>
 </html>

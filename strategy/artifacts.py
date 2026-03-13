@@ -444,10 +444,13 @@ def _build_drift_summary(
         s_all = sorted(all_drifts)
         med = s_all[len(s_all) // 2]
         p90 = s_all[int(len(s_all) * 0.9)]
+        total_for_pair = len(excl) + len(incl)
+        pair_rejection_rate = len(excl) / max(1, total_for_pair)
         per_pair_drift_summary.append({
             "pair": pair,
             "excluded_count": len(excl),
             "included_count": len(incl),
+            "rejection_rate": round(pair_rejection_rate, 4),
             "notional_drift_median_bps": round(med * 100, 1),
             "notional_drift_p90_bps": round(p90 * 100, 1),
             "notional_drift_max_bps": round(max(all_drifts) * 100, 1),

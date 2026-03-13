@@ -128,3 +128,22 @@ dynamic_probe:
 
 # Run settings
 run_kind: COVERAGE
+
+# R22: Chain blocker classification and stabilization directives
+# Base has 3 quoter_v2 DEXes (strong cross-dex) but high measured costs
+# and top_pair_dominance (WETH/USDC) historically 60-93% — needs diversification.
+blocker_classification: MARKET
+blocker_reason: "high_measured_cost_and_dominance"
+blocker_resolution: "reduce_top_pair_dominance below 60%, verify fee tier optimization"
+stabilization_directive: |
+  1. Remove bogus/outlier paths (cbBTC already excluded)
+  2. Reduce WETH/USDC dominance below 60% via wstETH/rETH/cbETH pair coverage
+  3. Verify Uniswap V3 fee tier selection (100/500/3000) matches pool liquidity
+  4. Target: gap_to_zero < 15 bps with at least 3 cross-dex pair signals
+stabilization_kpi_target:
+  max_top_pair_dominance: 0.60
+  min_included_signals: 5
+  min_cross_dex_pairs: 3
+  max_drift_rejection_rate: 0.25
+  gap_to_zero_target_bps: 15
+  runs_for_assessment: 10

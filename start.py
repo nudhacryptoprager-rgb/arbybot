@@ -229,6 +229,9 @@ def new_chain_stats() -> dict[str, Any]:
         "_drift_median_bps_values": [],
         "drift_excluded_total": 0,
         "drift_pairs_with_data_total": 0,
+        # R22: Worst drift pair (latest snapshot)
+        "drift_worst_pair": None,
+        "drift_worst_pair_bps": None,
     }
 
 
@@ -298,6 +301,11 @@ def update_chain_stats(
                 stats["_drift_median_bps_values"].append(med_bps)
             stats["drift_excluded_total"] += drift.get("drift_excluded_count", 0)
             stats["drift_pairs_with_data_total"] += drift.get("pairs_with_drift_data", 0)
+            # R22: Worst drift pair snapshot (always latest)
+            ppds = drift.get("per_pair_drift_summary", [])
+            if ppds:
+                stats["drift_worst_pair"] = ppds[0].get("pair")
+                stats["drift_worst_pair_bps"] = ppds[0].get("notional_drift_median_bps")
 
     if gate_result:
         stats["last_cross_dex_pairs_count"] = gate_result.get("cross_dex_pairs_count")
@@ -440,6 +448,9 @@ def _compute_per_chain_drift_summary(per_chain: dict[str, dict[str, Any]]) -> di
             "notional_drift_median_bps": round(drift_bps_med, 1) if drift_bps_med is not None else None,
             "drift_pairs_with_data_total": s.get("drift_pairs_with_data_total", 0),
             "runs_sampled": len(drift_rates),
+            # R22: Worst drift pair snapshot (from latest run)
+            "drift_worst_pair": s.get("drift_worst_pair"),
+            "drift_worst_pair_bps": s.get("drift_worst_pair_bps"),
         }
     return result
 
@@ -475,15 +486,16 @@ def _compute_universe_split(
 
 
 def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rank chains by composite frontier score (R12: robust multi-metric selection).
+    """Rank chains by composite frontier score (R12→R22: robust multi-metric selection).
 
     Sort order (ascending tuple):
       1. accepted_fail (False < True — non-accepted first)
       2. median_gap_to_zero_bps (lower = more consistent near-breakeven)
       3. gap_to_zero_bps (best - lower = closer tail-case)
-      4. -runs_with_sweep (more data = higher confidence)
-      5. -included_signals_total (more signals = better coverage)
-      6. -cross_dex_pairs_count (more venues = more opportunity)
+      4. drift_rejection_rate_median (R22: lower drift = more reliable signals)
+      5. -runs_with_sweep (more data = higher confidence)
+      6. -included_signals_total (more signals = better coverage)
+      7. -cross_dex_pairs_count (more venues = more opportunity)
 
     This ensures top-2 candidate selection is robust, not based on one lucky run.
     gap_to_zero_bps is a WARN / frontier KPI only, NOT a hard pass/fail gate.
@@ -526,11 +538,16 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             "notional_drift_median_bps": round(drift_bps_median, 1) if drift_bps_median is not None else None,
             "drift_excluded_total": s.get("drift_excluded_total", 0),
             "drift_pairs_with_data_total": s.get("drift_pairs_with_data_total", 0),
+            # R22: Worst drift pair for operator analysis
+            "drift_worst_pair": s.get("drift_worst_pair"),
+            "drift_worst_pair_bps": s.get("drift_worst_pair_bps"),
         })
     ranked.sort(key=lambda x: (
         x.get("accepted_fail", False),
         x.get("median_gap_to_zero_bps") if x.get("median_gap_to_zero_bps") is not None else 9999,
         x.get("gap_to_zero_bps") if x.get("gap_to_zero_bps") is not None else 9999,
+        # R22: drift as secondary factor — lower drift = more reliable signal
+        x.get("drift_rejection_rate_median") if x.get("drift_rejection_rate_median") is not None else 9999,
         -(x.get("runs_with_sweep", 0)),
         -(x.get("included_signals_total", 0)),
         -(x.get("cross_dex_pairs_count", 0)),
@@ -809,6 +826,12 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
 
         update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res)
         print(f"[run {total_runs}] result={cls}  exit_code={rc}  run_dir={run_dir.name if run_dir else 'N/A'}")
+
+        # Live update: write summary after each chain for dashboard refresh
+        interim_wall = time.monotonic() - wall_start
+        interim_warnings = check_guardrails(per_chain)
+        interim_summary = build_summary(per_chain, interim_wall, interim_warnings)
+        write_summary_file(interim_summary, args.summary_file)
 
         if run_dir and run_dir.exists():
             if delete_if_empty_run_dir(run_dir):

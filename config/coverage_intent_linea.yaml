@@ -145,20 +145,26 @@ run_kind: COVERAGE
 
 # R19: Machine-readable blocker classification for dashboard
 blocker_classification: SYSTEM
-blocker_reason: "single_dex_only: pancakeswap_v3 only, lynex_v3 (algebra) incompatible with quoter_v2"
-blocker_resolution: "Monitor Linea for second quoter_v2-compatible DEX deployment"
+blocker_reason: "structural: single_dex_only (pancakeswap_v3), same-dex fee-tier arb, health/outlier issues"
+blocker_resolution: "Monitor Linea for second quoter_v2-compatible DEX; address pool health issues"
 stabilization_directive: >
-  R21: Concrete targets — (1) target_usd_notional=50 to reduce WETH/WBTC
-  price impact (was 100, 3949bps spread); (2) drift_warning_pct=40 for
-  borderline fee tiers; (3) disabled_pools quarantine PRICE_SCALE_VIOLATION
-  pools; (4) require >=3 included signals for non-LOW_SAMPLE;
-  (5) WETH_WBTC anchor added for price sanity.
+  R22: Structural blocker — single DEX (pancakeswap_v3), same-dex fee-tier arb only.
+  Health/outlier issues: 2 pools quarantined (PRICE_SCALE_VIOLATION).
+  Concrete targets:
+  (1) target_usd_notional=50 to reduce WETH/WBTC price impact (was 100, 3949bps spread);
+  (2) drift_warning_pct=40 for borderline fee tiers;
+  (3) disabled_pools quarantine PRICE_SCALE_VIOLATION pools;
+  (4) require >=3 included signals for non-LOW_SAMPLE;
+  (5) WETH_WBTC anchor added for price sanity;
+  (6) monitor pair-level health: exclude pairs with >3 consecutive PRICE_SCALE_VIOLATION;
+  (7) if included_signals < 3 after 10+ runs, formalize as PROBE_ONLY.
   Currently SYSTEM blocker: single DEX only (pancakeswap_v3), lynex_v3
   algebra incompatible with quoter_v2.
 stabilization_kpi_target:
   min_included_signals: 3
   max_drift_rejection_rate: 0.30
   disabled_pool_count: 2
+  probe_only_threshold_runs: 10
   runs_for_assessment: 10
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)

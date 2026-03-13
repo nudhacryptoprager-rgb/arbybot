@@ -160,18 +160,22 @@ run_kind: COVERAGE
 # SYSTEM = infra/config/adapter limitation (not market economics)
 # MARKET = economics barrier (gas, liquidity, spread) with working infra
 blocker_classification: SYSTEM
-blocker_reason: "single_dex_fallback: 2 DEXes but only same-DEX fee-tier arbitrage viable"
-blocker_resolution: "Add third quoter_v2 DEX or fix cross-DEX routing"
+blocker_reason: "mixed_blocker: strong frontier but drift_and_quality_heavy, 2 DEXes same-tier arb only"
+blocker_resolution: "Add third quoter_v2 DEX; pair-specific drift exclusion for worst offenders"
 stabilization_directive: >
-  R21: Concrete targets — (1) target_usd_notional=25 to reduce price impact;
-  (2) drift_warning_pct=40 to keep borderline pools passing;
-  (3) require >=2 included signals per run for non-LOW_SAMPLE;
-  (4) if gap_to_zero <= 5 bps across 10+ runs, reclassify to NEAR_BREAKEVEN.
-  Currently SYSTEM blocker: single-DEX fallback, 2 DEXes but only same-DEX
-  fee-tier arb viable. Need third quoter_v2 DEX for cross-DEX.
+  R22: Mixed blocker (system+drift). Strong frontier metrics but drift rejection rate
+  and quality issues dominate. Concrete targets:
+  (1) target_usd_notional=25 to reduce price impact;
+  (2) drift_warning_pct=40 with pair-specific drift monitoring;
+  (3) exclude pairs with persistent >40% rejection_rate after 10 runs;
+  (4) require >=2 included signals per run for non-LOW_SAMPLE;
+  (5) if gap_to_zero <= 5 bps across 10+ runs with drift_rejection_rate < 0.30,
+      reclassify to NEAR_BREAKEVEN.
+  Currently SYSTEM blocker: same-DEX fee-tier arb only, need third quoter_v2 DEX.
 stabilization_kpi_target:
   min_included_signals: 2
-  max_drift_rejection_rate: 0.40
+  max_drift_rejection_rate: 0.30
+  max_per_pair_rejection_rate: 0.40
   gap_to_zero_reclassify_threshold_bps: 5
   runs_for_reclassify: 10
 

@@ -377,6 +377,112 @@ class TestR21PerPairDriftSummary(unittest.TestCase):
         self.assertIsNone(good["drift_reject_reason"])
 
 
+class TestR22PerPairRejectionRate(unittest.TestCase):
+    """R22: Test per-pair rejection_rate in per_pair_drift_summary."""
+
+    def _build(self, rejected_quotes=None, spread_signals=None):
+        from strategy.artifacts import _build_drift_summary
+        return _build_drift_summary(
+            rejected_quotes or [],
+            spread_signals or [],
+        )
+
+    def test_rejection_rate_present(self):
+        rejects = [
+            {"reason": "NOTIONAL_DRIFT_EXCLUDED", "pair": "WETH/USDC", "notional_drift_pct": 25.0},
+        ]
+        signals = [
+            {"pair": "WETH/USDC", "buy_notional_drift_pct": 5.0, "sell_notional_drift_pct": 8.0},
+        ]
+        result = self._build(rejected_quotes=rejects, spread_signals=signals)
+        summary = result["per_pair_drift_summary"]
+        weth = next(p for p in summary if p["pair"] == "WETH/USDC")
+        self.assertIn("rejection_rate", weth)
+
+    def test_rejection_rate_correct(self):
+        """rejection_rate = excluded / (excluded + included)."""
+        rejects = [
+            {"reason": "NOTIONAL_DRIFT_EXCLUDED", "pair": "WETH/USDC", "notional_drift_pct": 25.0},
+            {"reason": "NOTIONAL_DRIFT_EXCLUDED", "pair": "WETH/USDC", "notional_drift_pct": 30.0},
+        ]
+        signals = [
+            {"pair": "WETH/USDC", "buy_notional_drift_pct": 5.0, "sell_notional_drift_pct": 8.0},
+        ]
+        result = self._build(rejected_quotes=rejects, spread_signals=signals)
+        summary = result["per_pair_drift_summary"]
+        weth = next(p for p in summary if p["pair"] == "WETH/USDC")
+        # 2 excluded, 2 included → 2/4 = 0.5
+        self.assertAlmostEqual(weth["rejection_rate"], 0.5, places=2)
+
+    def test_rejection_rate_zero_for_included_only(self):
+        signals = [
+            {"pair": "GOOD/PAIR", "buy_notional_drift_pct": 2.0},
+        ]
+        result = self._build(spread_signals=signals)
+        summary = result["per_pair_drift_summary"]
+        good = next(p for p in summary if p["pair"] == "GOOD/PAIR")
+        self.assertEqual(good["rejection_rate"], 0.0)
+
+    def test_rejection_rate_one_for_excluded_only(self):
+        rejects = [
+            {"reason": "NOTIONAL_DRIFT_EXCLUDED", "pair": "BAD/PAIR", "notional_drift_pct": 50.0},
+        ]
+        result = self._build(rejected_quotes=rejects)
+        summary = result["per_pair_drift_summary"]
+        bad = next(p for p in summary if p["pair"] == "BAD/PAIR")
+        self.assertEqual(bad["rejection_rate"], 1.0)
+
+
+class TestR22DriftWorstPairRolling(unittest.TestCase):
+    """R22: Test drift_worst_pair fields in rolling aggregator."""
+
+    def test_rolling_per_run_has_drift_worst_pair(self):
+        import tempfile
+        from pathlib import Path
+        from m4.rolling_store import emit_to_aggregator_light
+        with tempfile.TemporaryDirectory() as td:
+            agg_path = Path(td) / "agg.json"
+            run_summary = {
+                "run_id": "test_r22_worst",
+                "timestamp": "2026-03-14T00:00:00Z",
+                "status": "PASS",
+                "metrics": {
+                    "total_net_usdc": 1.0,
+                    "included_signals_count": 3,
+                    "drift_summary": {
+                        "drift_excluded_count": 2,
+                        "drift_rejection_rate": 0.1,
+                        "signal_drift_median_pct": 5.0,
+                        "signal_drift_p90_pct": 12.0,
+                        "signal_drift_median_bps": 500.0,
+                        "pairs_with_drift_data": 3,
+                        "pairs_with_exclusions": 1,
+                        "per_pair_drift_summary": [
+                            {"pair": "WETH/USDC", "notional_drift_median_bps": 800.0},
+                            {"pair": "WBTC/WETH", "notional_drift_median_bps": 300.0},
+                        ],
+                    },
+                },
+                "inputs": {"run_mode": "REGISTRY_REAL", "chain_id": 42161, "chain_key": "arbitrum_one"},
+            }
+            result = emit_to_aggregator_light(run_summary, agg_path, max_runs=200)
+            run_entry = result["runs"][-1]
+            self.assertEqual(run_entry["drift_worst_pair"], "WETH/USDC")
+            self.assertEqual(run_entry["drift_worst_pair_bps"], 800.0)
+
+    def test_per_chain_frontier_has_drift_worst_pair(self):
+        from m4.rolling_store import _compute_per_chain_frontier
+        runs = [
+            {"chain_key": "arb", "sweep_gap_to_zero_bps": 5.0,
+             "drift_excluded_count": 1, "drift_rejection_rate": 0.05,
+             "drift_signal_median_pct": 3.0, "notional_drift_bps": 300.0,
+             "drift_worst_pair": "WETH/USDC", "drift_worst_pair_bps": 500.0},
+        ]
+        result = _compute_per_chain_frontier(runs, {"arb"}, lambda vals, p: sorted(vals)[len(vals)//2] if vals else None)
+        self.assertEqual(result["arb"]["drift_worst_pair"], "WETH/USDC")
+        self.assertEqual(result["arb"]["drift_worst_pair_bps"], 500.0)
+
+
 class TestR21OperationalTruth(unittest.TestCase):
     """R21: Test operational_truth_source field in truth_data."""
 
@@ -477,9 +583,58 @@ class TestR21FrontierDrift(unittest.TestCase):
         self.assertIn("notional_drift_median_bps", result["arb"])
         self.assertEqual(result["arb"]["notional_drift_median_bps"], 300.0)
 
+    def test_frontier_ranking_drift_as_sort_factor(self):
+        """R22: drift_rejection_rate_median should be a sort factor — lower drift ranks higher."""
+        from start import _compute_frontier_ranking
+        per_chain = {
+            "chain_a": {
+                "sweep_gap_to_zero_bps": 5.0,
+                "sweep_best_net_pnl_bps": -3.0,
+                "included_signals_total": 10,
+                "last_cross_dex_pairs_count": 2,
+                "accepted_fail": False,
+                "sweep_best_size_usd": 100,
+                "sweep_best_pair": "WETH/USDC",
+                "sweep_measured_gas_bps": 1.0,
+                "sweep_measured_fee_bps": 0.5,
+                "sweep_measured_slippage_bps": 1.0,
+                "sweep_measured_total_cost_bps": 2.5,
+                "_sweep_gap_values": [5.0],
+                "runs_with_sweep": 1,
+                "_drift_rejection_rates": [0.40],  # High drift — should rank lower
+                "_drift_median_bps_values": [500.0],
+                "drift_excluded_total": 5,
+                "drift_pairs_with_data_total": 3,
+            },
+            "chain_b": {
+                "sweep_gap_to_zero_bps": 5.0,
+                "sweep_best_net_pnl_bps": -3.0,
+                "included_signals_total": 10,
+                "last_cross_dex_pairs_count": 2,
+                "accepted_fail": False,
+                "sweep_best_size_usd": 100,
+                "sweep_best_pair": "WETH/USDC",
+                "sweep_measured_gas_bps": 1.0,
+                "sweep_measured_fee_bps": 0.5,
+                "sweep_measured_slippage_bps": 1.0,
+                "sweep_measured_total_cost_bps": 2.5,
+                "_sweep_gap_values": [5.0],
+                "runs_with_sweep": 1,
+                "_drift_rejection_rates": [0.05],  # Low drift — should rank higher
+                "_drift_median_bps_values": [50.0],
+                "drift_excluded_total": 1,
+                "drift_pairs_with_data_total": 3,
+            },
+        }
+        ranking = _compute_frontier_ranking(per_chain)
+        self.assertEqual(len(ranking), 2)
+        # chain_b should rank higher (lower drift)
+        self.assertEqual(ranking[0]["chain"], "chain_b")
+        self.assertEqual(ranking[1]["chain"], "chain_a")
+
 
 class TestR21DashboardEnhancements(unittest.TestCase):
-    """R21: Test dashboard enhancements."""
+    """R21/R22: Test dashboard enhancements."""
 
     def test_dashboard_has_drift_bps_in_frontier(self):
         from pathlib import Path
@@ -497,6 +652,20 @@ class TestR21DashboardEnhancements(unittest.TestCase):
         html = (Path(__file__).parent.parent.parent / "monitoring" / "dashboard.html").read_text(encoding="utf-8")
         self.assertIn("measured_total_cost_bps", html)
         self.assertIn("Cost bps", html)
+
+    def test_dashboard_has_rejection_rate_column(self):
+        """R22: Dashboard drift table must show per-pair rejection_rate."""
+        from pathlib import Path
+        html = (Path(__file__).parent.parent.parent / "monitoring" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn("rejection_rate", html)
+        self.assertIn("Rej%", html)
+
+    def test_dashboard_blockers_has_drift_context(self):
+        """R22: Blockers panel must show drift bps and rejection rate per chain."""
+        from pathlib import Path
+        html = (Path(__file__).parent.parent.parent / "monitoring" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn("per_chain_drift_summary", html)
+        self.assertIn("dBpsCls", html)
 
 
 if __name__ == "__main__":
