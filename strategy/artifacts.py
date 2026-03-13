@@ -432,6 +432,29 @@ def _build_drift_summary(
         signal_median = round(s[len(s) // 2], 2)
         signal_p90 = round(s[int(len(s) * 0.9)], 2)
 
+    # R21: Unified per-pair drift summary — merges excluded rejects + included signals
+    per_pair_drift_summary: List[Dict[str, Any]] = []
+    all_pairs = sorted(set(list(drift_rejects_by_pair.keys()) + list(signal_drift_by_pair.keys())))
+    for pair in all_pairs:
+        excl = drift_rejects_by_pair.get(pair, [])
+        incl = signal_drift_by_pair.get(pair, [])
+        all_drifts = excl + incl
+        if not all_drifts:
+            continue
+        s_all = sorted(all_drifts)
+        med = s_all[len(s_all) // 2]
+        p90 = s_all[int(len(s_all) * 0.9)]
+        per_pair_drift_summary.append({
+            "pair": pair,
+            "excluded_count": len(excl),
+            "included_count": len(incl),
+            "notional_drift_median_bps": round(med * 100, 1),
+            "notional_drift_p90_bps": round(p90 * 100, 1),
+            "notional_drift_max_bps": round(max(all_drifts) * 100, 1),
+            "drift_reject_reason": "NOTIONAL_DRIFT_EXCLUDED" if excl else None,
+        })
+    per_pair_drift_summary.sort(key=lambda x: -x["notional_drift_median_bps"])
+
     return {
         "drift_excluded_count": total_drift_excluded,
         "drift_rejection_rate": round(rejection_rate, 4),
@@ -439,8 +462,12 @@ def _build_drift_summary(
         "signal_drift_median_bps": round(signal_median * 100, 1),
         "signal_drift_p90_pct": signal_p90,
         "signal_drift_p90_bps": round(signal_p90 * 100, 1),
+        # R21: notional_drift_bps — canonical BPS-scale aggregate
+        "notional_drift_bps": round(signal_median * 100, 1),
         "worst_pairs_by_drift": per_pair[:5],
         "per_pair_signal_drift": per_pair_signal[:10],
+        # R21: Unified per-pair drift summary (all pairs with any drift data)
+        "per_pair_drift_summary": per_pair_drift_summary,
         "pairs_with_drift_data": len(signal_drift_by_pair),
         "pairs_with_exclusions": len(drift_rejects_by_pair),
     }
@@ -558,6 +585,9 @@ def build_truth_data(
         # Populated from dynamic_sweep (post-roundtrip, QuoterV2-based).
         # Paper/baseline economics are NOT included here — see execution_pnl for those.
         "measured_economics": _build_measured_economics(stats),
+        # R21: operational_truth designation — measured_economics is the SOLE
+        # source of truth for viability assessment. Paper PnL is diagnostic only.
+        "operational_truth_source": "measured_economics",
         # v3.5.0: Canonical arbitrage viability decision — answered AFTER dynamic sweep.
         "arbitrage_viability_decision": _build_viability_decision(stats),
         # Notional drift summary — per-pair drift stats and rejection rate

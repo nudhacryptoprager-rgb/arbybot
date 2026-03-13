@@ -238,6 +238,8 @@ def emit_to_aggregator_light(
         "drift_signal_median_bps": metrics.get("drift_summary", {}).get("signal_drift_median_bps"),
         "drift_pairs_with_data": metrics.get("drift_summary", {}).get("pairs_with_drift_data", 0),
         "drift_pairs_with_exclusions": metrics.get("drift_summary", {}).get("pairs_with_exclusions", 0),
+        # R21: notional_drift_bps canonical alias
+        "notional_drift_bps": metrics.get("drift_summary", {}).get("notional_drift_bps"),
     })
     
     # Clean legacy: keep only light-format runs
@@ -294,6 +296,8 @@ def _compute_per_chain_frontier(normal_runs, all_chain_keys, percentile_fn):
         drift_excluded_values = [r.get("drift_excluded_count", 0) for r in chain_runs]
         drift_rate_values = [r["drift_rejection_rate"] for r in chain_runs if r.get("drift_rejection_rate") is not None]
         drift_median_values = [r["drift_signal_median_pct"] for r in chain_runs if r.get("drift_signal_median_pct") is not None]
+        # R21: notional_drift_bps values (canonical BPS-scale)
+        drift_bps_values = [r["notional_drift_bps"] for r in chain_runs if r.get("notional_drift_bps") is not None]
         result[chain_key] = {
             "normal_runs": len(chain_runs),
             "sweep_runs": len(sweep_runs),
@@ -307,6 +311,8 @@ def _compute_per_chain_frontier(normal_runs, all_chain_keys, percentile_fn):
             "drift_excluded_total": sum(drift_excluded_values),
             "drift_rejection_rate_median": percentile_fn(drift_rate_values, 50) if drift_rate_values else None,
             "drift_signal_median_pct_p50": percentile_fn(drift_median_values, 50) if drift_median_values else None,
+            # R21: notional_drift_bps canonical aggregate
+            "notional_drift_median_bps": percentile_fn(drift_bps_values, 50) if drift_bps_values else None,
         }
     return result
 

@@ -224,6 +224,11 @@ def new_chain_stats() -> dict[str, Any]:
         # R12: Frontier ranking metrics (robust selection)
         "_sweep_gap_values": [],  # for median computation
         "runs_with_sweep": 0,
+        # R21: Per-chain drift tracking
+        "_drift_rejection_rates": [],
+        "_drift_median_bps_values": [],
+        "drift_excluded_total": 0,
+        "drift_pairs_with_data_total": 0,
     }
 
 
@@ -281,6 +286,18 @@ def update_chain_stats(
         stats["last_chain_quality_level"] = metrics.get("chain_quality_level")
         stats["last_profit_truth_available"] = metrics.get("profit_truth_available")
         stats["run_kind"] = summary.get("run_kind", stats["run_kind"])
+
+        # R21: Per-chain drift tracking from run_summary
+        drift = metrics.get("drift_summary", {})
+        if drift:
+            dr = drift.get("drift_rejection_rate")
+            if dr is not None:
+                stats["_drift_rejection_rates"].append(dr)
+            med_bps = drift.get("signal_drift_median_bps") or drift.get("notional_drift_bps")
+            if med_bps is not None:
+                stats["_drift_median_bps_values"].append(med_bps)
+            stats["drift_excluded_total"] += drift.get("drift_excluded_count", 0)
+            stats["drift_pairs_with_data_total"] += drift.get("pairs_with_drift_data", 0)
 
     if gate_result:
         stats["last_cross_dex_pairs_count"] = gate_result.get("cross_dex_pairs_count")
@@ -355,7 +372,7 @@ def build_summary(
     gap_median = _compute_median(all_gap_values)
 
     return {
-        "schema": "start:long_scan_summary:v1.3",  # bumped for R12 fields
+        "schema": "start:long_scan_summary:v1.4",  # bumped for R21 drift fields
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "wall_seconds": round(wall_seconds, 1),
         "total_runs": sum(s["runs"] for s in per_chain.values()),
@@ -402,6 +419,58 @@ def build_summary(
         "per_chain": per_chain,
         "warnings": warnings,
         "frontier_ranking": _compute_frontier_ranking(per_chain),
+        # R21: Top-level per-chain drift summary (extracted from per_chain stats)
+        "per_chain_drift_summary": _compute_per_chain_drift_summary(per_chain),
+        # R21: Explicit discovery vs truth-probe universe split
+        "universe_split": _compute_universe_split(per_chain, pass_chains, fail_chains),
+    }
+
+
+def _compute_per_chain_drift_summary(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """R21: Build top-level per-chain drift summary from accumulated per-chain stats."""
+    result = {}
+    for chain, s in per_chain.items():
+        drift_rates = s.get("_drift_rejection_rates", [])
+        drift_bps_vals = s.get("_drift_median_bps_values", [])
+        drift_rate_med = _compute_median(drift_rates)
+        drift_bps_med = _compute_median(drift_bps_vals)
+        result[chain] = {
+            "drift_excluded_total": s.get("drift_excluded_total", 0),
+            "drift_rejection_rate_median": round(drift_rate_med, 4) if drift_rate_med is not None else None,
+            "notional_drift_median_bps": round(drift_bps_med, 1) if drift_bps_med is not None else None,
+            "drift_pairs_with_data_total": s.get("drift_pairs_with_data_total", 0),
+            "runs_sampled": len(drift_rates),
+        }
+    return result
+
+
+def _compute_universe_split(
+    per_chain: dict[str, dict[str, Any]],
+    pass_chains: list[str],
+    fail_chains: list[str],
+) -> dict[str, Any]:
+    """R21: Compute explicit discovery vs truth-probe universe split.
+
+    Discovery chains: all chains in scan rotation (COVERAGE + NORMAL).
+    Truth-probe chains: chains with run_kind=NORMAL that update rolling artifacts.
+    Monitoring-only: accepted_fail chains kept for ecosystem monitoring.
+    """
+    discovery = []
+    truth_probe = []
+    monitoring_only = []
+    for chain, s in per_chain.items():
+        rk = s.get("run_kind")
+        if s.get("accepted_fail", False):
+            monitoring_only.append(chain)
+        elif rk == "NORMAL":
+            truth_probe.append(chain)
+        else:
+            discovery.append(chain)
+    return {
+        "discovery_chains": sorted(discovery),
+        "truth_probe_chains": sorted(truth_probe),
+        "monitoring_only_chains": sorted(monitoring_only),
+        "total_chains": len(per_chain),
     }
 
 
@@ -431,6 +500,11 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
         median_gap = _compute_median(gap_values)
         if pnl is None and signals == 0:
             continue
+        # R21: Per-chain drift aggregates
+        drift_rates = s.get("_drift_rejection_rates", [])
+        drift_bps_vals = s.get("_drift_median_bps_values", [])
+        drift_rate_median = _compute_median(drift_rates)
+        drift_bps_median = _compute_median(drift_bps_vals)
         ranked.append({
             "chain": chain,
             "gap_to_zero_bps": gap,
@@ -447,6 +521,11 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             "cross_dex_pairs_count": xdex,
             "accepted_fail": is_af,
             "frontier_ready": gap is not None and gap < 30 and not is_af,
+            # R21: Per-chain drift summary in frontier ranking
+            "drift_rejection_rate_median": round(drift_rate_median, 4) if drift_rate_median is not None else None,
+            "notional_drift_median_bps": round(drift_bps_median, 1) if drift_bps_median is not None else None,
+            "drift_excluded_total": s.get("drift_excluded_total", 0),
+            "drift_pairs_with_data_total": s.get("drift_pairs_with_data_total", 0),
         })
     ranked.sort(key=lambda x: (
         x.get("accepted_fail", False),

@@ -302,7 +302,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.3")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.4")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -941,8 +941,8 @@ class TestFrontierRanking(unittest.TestCase):
         self.assertEqual(entry["measured_slippage_bps"], 1.0)
         self.assertEqual(entry["measured_total_cost_bps"], 64.0)
 
-    def test_long_scan_summary_schema_v1_3(self):
-        """Contract: build_summary produces schema v1.3 with all required fields."""
+    def test_long_scan_summary_schema_v1_4(self):
+        """Contract: build_summary produces schema v1.4 with all required fields."""
         per_chain = {
             "arb": start.new_chain_stats(),
             "base": start.new_chain_stats(),
@@ -953,7 +953,7 @@ class TestFrontierRanking(unittest.TestCase):
         per_chain["base"]["included_signals_total"] = 3
         summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
         # Schema version check
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.3")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.4")
         # Required top-level fields
         self.assertIn("generated_at", summary)
         self.assertIn("wall_seconds", summary)

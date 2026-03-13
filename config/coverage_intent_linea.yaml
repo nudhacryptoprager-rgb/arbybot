@@ -148,9 +148,18 @@ blocker_classification: SYSTEM
 blocker_reason: "single_dex_only: pancakeswap_v3 only, lynex_v3 (algebra) incompatible with quoter_v2"
 blocker_resolution: "Monitor Linea for second quoter_v2-compatible DEX deployment"
 stabilization_directive: >
-  R20: Resolve DEX_HEALTH_CRITICAL and PRICE_OUTLIER warnings on active pairs.
-  Raise measured frontier to stable candidate (>=3 included signals, no fragile
-  quotes). If SAME_DEX_PRESENT persists, need second quoter_v2 DEX for real arb.
+  R21: Concrete targets — (1) target_usd_notional=50 to reduce WETH/WBTC
+  price impact (was 100, 3949bps spread); (2) drift_warning_pct=40 for
+  borderline fee tiers; (3) disabled_pools quarantine PRICE_SCALE_VIOLATION
+  pools; (4) require >=3 included signals for non-LOW_SAMPLE;
+  (5) WETH_WBTC anchor added for price sanity.
+  Currently SYSTEM blocker: single DEX only (pancakeswap_v3), lynex_v3
+  algebra incompatible with quoter_v2.
+stabilization_kpi_target:
+  min_included_signals: 3
+  max_drift_rejection_rate: 0.30
+  disabled_pool_count: 2
+  runs_for_assessment: 10
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity

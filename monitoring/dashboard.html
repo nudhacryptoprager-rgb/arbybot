@@ -190,18 +190,20 @@ function renderChainStatus(ls) {
 // Panel 2: Frontier Ranking
 function renderFrontier(ls) {
   if (!ls?.frontier_ranking) { $('frontier-body').innerHTML = '<em class="na">No frontier ranking data</em>'; return; }
-  let html = '<table><tr><th>#</th><th>Chain</th><th class="num">Median Gap</th><th class="num">Best Gap</th><th class="num">PnL bps</th><th class="num">Runs</th><th class="num">Sig</th><th class="num">Score</th></tr>';
+  let html = '<table><tr><th>#</th><th>Chain</th><th class="num">Median Gap</th><th class="num">Best Gap</th><th class="num">PnL bps</th><th class="num">Drift bps</th><th class="num">Runs</th><th class="num">Score</th></tr>';
   for (const r of ls.frontier_ranking) {
     const pnlCls = cls(r.best_net_pnl_bps);
     const probeBadge = r.target_for_truth_probe ? ' '+badge('PROBE','probe') : '';
+    const driftBps = r.notional_drift_median_bps;
+    const driftCls = driftBps != null && driftBps > 5 ? 'warn-c' : driftBps != null && driftBps > 10 ? 'neg' : '';
     html += `<tr>
       <td>${r.frontier_rank}</td>
       <td>${r.chain}${probeBadge}</td>
       <td class="num">${fmt(r.median_gap_to_zero_bps,1)}</td>
       <td class="num">${fmt(r.gap_to_zero_bps,1)}</td>
       <td class="num ${pnlCls}">${fmt(r.best_net_pnl_bps,1)}</td>
+      <td class="num ${driftCls}">${fmt(driftBps,1)}</td>
       <td class="num">${r.runs_with_sweep||0}</td>
-      <td class="num">${r.signals||0}</td>
       <td class="num">${fmt(r.candidate_score,0)}</td>
     </tr>`;
   }
@@ -328,11 +330,12 @@ function renderDrift(rs, qs) {
   const excluded = drift.drift_excluded_count ?? 0;
   const rejRate = drift.drift_rejection_rate;
   const medPct = drift.signal_drift_median_pct;
-  const medBps = drift.signal_drift_median_bps;
+  const medBps = drift.notional_drift_bps ?? drift.signal_drift_median_bps;
   const p90Pct = drift.signal_drift_p90_pct;
   const p90Bps = drift.signal_drift_p90_bps;
   const worst = drift.worst_pairs_by_drift || [];
   const perPairSig = drift.per_pair_signal_drift || [];
+  const perPairSummary = drift.per_pair_drift_summary || [];
   const pairsData = drift.pairs_with_drift_data ?? 0;
   const pairsExcl = drift.pairs_with_exclusions ?? 0;
 
@@ -352,6 +355,16 @@ function renderDrift(rs, qs) {
 
   if (driftExclTotal != null || driftRejMedian != null) {
     html += `<div style="margin-top:8px;font-size:.75rem;color:#8b949e">Rolling: excluded_total=${driftExclTotal??'—'} | rej_rate_median=${driftRejMedian != null ? (driftRejMedian*100).toFixed(1)+'%' : '—'} | drift_bps_p50=${driftBpsP50 != null ? fmt(driftBpsP50,1) : '—'}</div>`;
+  }
+
+  // Per-pair unified drift summary (R21)
+  if (perPairSummary.length > 0) {
+    html += '<table style="margin-top:10px"><tr><th>Pair</th><th class="num">Med bps</th><th class="num">P90 bps</th><th class="num">Excl</th><th class="num">Incl</th></tr>';
+    for (const p of perPairSummary.slice(0, 10)) {
+      const dCls = p.notional_drift_median_bps > 10 ? 'neg' : p.notional_drift_median_bps > 5 ? 'warn-c' : '';
+      html += `<tr><td>${p.pair||'?'}</td><td class="num ${dCls}">${fmt(p.notional_drift_median_bps,1)}</td><td class="num">${fmt(p.notional_drift_p90_bps,1)}</td><td class="num">${p.excluded_count||0}</td><td class="num">${p.included_count||0}</td></tr>`;
+    }
+    html += '</table>';
   }
 
   // Worst drift-excluded pairs
@@ -457,20 +470,21 @@ function renderProbeTargets(ls) {
   const probes = ls.frontier_ranking.filter(r => r.target_for_truth_probe);
   if (probes.length === 0) { $('probes-body').innerHTML = '<em class="na">No truth-probe targets selected</em>'; return; }
 
-  let html = '<table><tr><th>#</th><th>Chain</th><th class="num">Gap bps</th><th class="num">PnL bps</th><th>Frontier Pair</th><th class="num">Signals</th><th>Classification</th></tr>';
+  let html = '<table><tr><th>#</th><th>Chain</th><th class="num">Gap bps</th><th class="num">PnL bps</th><th>Frontier Pair</th><th class="num">Cost bps</th><th>Classification</th></tr>';
   for (const r of probes) {
     const pnlCls = cls(r.best_net_pnl_bps);
     // Get blocker from per_chain if available
     const pc = ls.per_chain?.[r.chain] || {};
     const blockerCls = pc.blocker_classification;
     const blockerBadge = blockerCls === 'SYSTEM' ? badge('SYSTEM','fail') : blockerCls === 'MARKET' ? badge('MARKET','warn') : badge(blockerCls||'—','pass');
+    const totalCost = r.measured_total_cost_bps;
     html += `<tr>
       <td>${r.frontier_rank}</td>
       <td>${r.chain} ${badge('PROBE','probe')}</td>
       <td class="num">${fmt(r.gap_to_zero_bps,1)}</td>
       <td class="num ${pnlCls}">${fmt(r.best_net_pnl_bps,1)}</td>
       <td style="font-size:.75rem">${r.frontier_pair||'—'}</td>
-      <td class="num">${r.signals||0}</td>
+      <td class="num">${fmt(totalCost,1)}</td>
       <td>${blockerBadge}</td>
     </tr>`;
   }

@@ -163,10 +163,17 @@ blocker_classification: SYSTEM
 blocker_reason: "single_dex_fallback: 2 DEXes but only same-DEX fee-tier arbitrage viable"
 blocker_resolution: "Add third quoter_v2 DEX or fix cross-DEX routing"
 stabilization_directive: >
-  R20: Prune low-sample/fragile fee-tier paths. Verify same-DEX fee-tier arb
-  is repeatable (not edge-only). If gap_to_zero stays <=5 bps across 10+ runs,
-  reclassify blocker to NEAR_BREAKEVEN. Otherwise remains SYSTEM until a real
-  second cross-DEX venue appears.
+  R21: Concrete targets — (1) target_usd_notional=25 to reduce price impact;
+  (2) drift_warning_pct=40 to keep borderline pools passing;
+  (3) require >=2 included signals per run for non-LOW_SAMPLE;
+  (4) if gap_to_zero <= 5 bps across 10+ runs, reclassify to NEAR_BREAKEVEN.
+  Currently SYSTEM blocker: single-DEX fallback, 2 DEXes but only same-DEX
+  fee-tier arb viable. Need third quoter_v2 DEX for cross-DEX.
+stabilization_kpi_target:
+  min_included_signals: 2
+  max_drift_rejection_rate: 0.40
+  gap_to_zero_reclassify_threshold_bps: 5
+  runs_for_reclassify: 10
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity
