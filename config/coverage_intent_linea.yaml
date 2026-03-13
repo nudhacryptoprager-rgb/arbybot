@@ -147,6 +147,10 @@ run_kind: COVERAGE
 blocker_classification: SYSTEM
 blocker_reason: "single_dex_only: pancakeswap_v3 only, lynex_v3 (algebra) incompatible with quoter_v2"
 blocker_resolution: "Monitor Linea for second quoter_v2-compatible DEX deployment"
+stabilization_directive: >
+  R20: Resolve DEX_HEALTH_CRITICAL and PRICE_OUTLIER warnings on active pairs.
+  Raise measured frontier to stable candidate (>=3 included signals, no fragile
+  quotes). If SAME_DEX_PRESENT persists, need second quoter_v2 DEX for real arb.
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity

@@ -137,6 +137,10 @@ run_kind: COVERAGE
 blocker_classification: SYSTEM
 blocker_reason: "single_dex_only: sushiswap_v3 only, nuri_v3 (algebra) incompatible with quoter_v2. PROBE_ONLY."
 blocker_resolution: "Monitor Scroll for second quoter_v2-compatible DEX deployment"
+stabilization_directive: >
+  R20: Formalized PROBE_ONLY/accepted-fail. No illusions about quick fix.
+  Keep in scan rotation for ecosystem monitoring only. Reclassify when
+  a real quoter_v2-compatible second DEX deploys on Scroll.
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity

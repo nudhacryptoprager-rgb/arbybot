@@ -614,9 +614,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
              "(e.g. 'scroll'). These do not count toward --max-fail-chains.",
     )
     ap.add_argument(
+        "--no-dashboard",
+        action="store_true",
+        default=False,
+        help="Disable the dashboard server (dashboard is launched by default)",
+    )
+    ap.add_argument(
         "--dashboard",
         action="store_true",
-        help="Co-launch the dashboard server (monitoring.dashboard_server) alongside the scan",
+        default=False,
+        help="(deprecated, now default-on) Kept for backward compatibility",
     )
     ap.add_argument(
         "--dashboard-port",
@@ -640,9 +647,9 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: No config files specified")
         return 1
 
-    # Co-launch dashboard server if requested
+    # Co-launch dashboard server (default-on; use --no-dashboard to disable)
     dashboard_proc: subprocess.Popen | None = None
-    if args.dashboard:
+    if not args.no_dashboard:
         dashboard_proc = subprocess.Popen(
             [sys.executable, "-m", "monitoring.dashboard_server", "--port", str(args.dashboard_port)],
             stdout=subprocess.DEVNULL,

@@ -162,6 +162,11 @@ run_kind: COVERAGE
 blocker_classification: SYSTEM
 blocker_reason: "single_dex_fallback: 2 DEXes but only same-DEX fee-tier arbitrage viable"
 blocker_resolution: "Add third quoter_v2 DEX or fix cross-DEX routing"
+stabilization_directive: >
+  R20: Prune low-sample/fragile fee-tier paths. Verify same-DEX fee-tier arb
+  is repeatable (not edge-only). If gap_to_zero stays <=5 bps across 10+ runs,
+  reclassify blocker to NEAR_BREAKEVEN. Otherwise remains SYSTEM until a real
+  second cross-DEX venue appears.
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity

@@ -108,6 +108,12 @@ tr:hover{background:#1c2128}
     <h2>9. Quality Rejects</h2>
     <div id="rejects-body"></div>
   </div>
+
+  <!-- Panel 10: Truth-Probe Targets -->
+  <div class="panel" id="p-probes">
+    <h2>10. Truth-Probe Targets</h2>
+    <div id="probes-body"></div>
+  </div>
 </div>
 
 <script>
@@ -150,6 +156,7 @@ function render(data) {
   renderDrift(rs, qs);
   renderBlockers(ls);
   renderRejects(rs);
+  renderProbeTargets(ls);
 }
 
 // Panel 1: Chain Status
@@ -321,31 +328,48 @@ function renderDrift(rs, qs) {
   const excluded = drift.drift_excluded_count ?? 0;
   const rejRate = drift.drift_rejection_rate;
   const medPct = drift.signal_drift_median_pct;
+  const medBps = drift.signal_drift_median_bps;
   const p90Pct = drift.signal_drift_p90_pct;
+  const p90Bps = drift.signal_drift_p90_bps;
   const worst = drift.worst_pairs_by_drift || [];
+  const perPairSig = drift.per_pair_signal_drift || [];
+  const pairsData = drift.pairs_with_drift_data ?? 0;
+  const pairsExcl = drift.pairs_with_exclusions ?? 0;
 
   // Rolling aggregates
   const driftExclTotal = qs.drift_excluded_total ?? null;
   const driftRejMedian = qs.drift_rejection_rate_median ?? null;
+  const driftBpsP50 = qs.drift_signal_median_bps_p50 ?? null;
 
   let html = `<div class="kpi">
     <div class="kpi-item"><div class="kpi-val">${excluded}</div><div class="kpi-lbl">Excluded (latest)</div></div>
     <div class="kpi-item"><div class="kpi-val">${rejRate != null ? (rejRate*100).toFixed(1)+'%' : '—'}</div><div class="kpi-lbl">Rejection Rate</div></div>
-    <div class="kpi-item"><div class="kpi-val">${fmt(medPct,1)}%</div><div class="kpi-lbl">Signal Median Drift</div></div>
-    <div class="kpi-item"><div class="kpi-val">${fmt(p90Pct,1)}%</div><div class="kpi-lbl">Signal P90 Drift</div></div>
+    <div class="kpi-item"><div class="kpi-val">${fmt(medBps,1)} bps</div><div class="kpi-lbl">Signal Median Drift</div></div>
+    <div class="kpi-item"><div class="kpi-val">${fmt(p90Bps,1)} bps</div><div class="kpi-lbl">Signal P90 Drift</div></div>
+    <div class="kpi-item"><div class="kpi-val">${pairsData}</div><div class="kpi-lbl">Pairs w/ Data</div></div>
+    <div class="kpi-item"><div class="kpi-val">${pairsExcl}</div><div class="kpi-lbl">Pairs w/ Excl</div></div>
   </div>`;
 
   if (driftExclTotal != null || driftRejMedian != null) {
-    html += `<div style="margin-top:8px;font-size:.75rem;color:#8b949e">Rolling: excluded_total=${driftExclTotal??'—'} | rejection_rate_median=${driftRejMedian != null ? (driftRejMedian*100).toFixed(1)+'%' : '—'}</div>`;
+    html += `<div style="margin-top:8px;font-size:.75rem;color:#8b949e">Rolling: excluded_total=${driftExclTotal??'—'} | rej_rate_median=${driftRejMedian != null ? (driftRejMedian*100).toFixed(1)+'%' : '—'} | drift_bps_p50=${driftBpsP50 != null ? fmt(driftBpsP50,1) : '—'}</div>`;
   }
 
+  // Worst drift-excluded pairs
   if (worst.length > 0) {
-    html += '<table style="margin-top:10px"><tr><th>Pair</th><th class="num">Avg Drift %</th><th class="num">Count</th></tr>';
+    html += '<table style="margin-top:10px"><tr><th>Pair (excluded)</th><th class="num">Med bps</th><th class="num">Max bps</th><th class="num">Count</th></tr>';
     for (const w of worst)
-      html += `<tr><td>${w.pair||'?'}</td><td class="num warn-c">${fmt(w.avg_drift_pct,1)}%</td><td class="num">${w.count||0}</td></tr>`;
+      html += `<tr><td>${w.pair||'?'}</td><td class="num warn-c">${fmt(w.median_drift_bps,1)}</td><td class="num neg">${fmt(w.max_drift_bps,1)}</td><td class="num">${w.excluded_count||0}</td></tr>`;
     html += '</table>';
-  } else if (excluded === 0) {
-    html += '<div style="margin-top:8px;font-size:.8rem;color:#3fb950">No drift exclusions — all quotes within 20% threshold</div>';
+  }
+
+  // Per-pair signal drift (included signals)
+  if (perPairSig.length > 0) {
+    html += '<table style="margin-top:10px"><tr><th>Pair (signals)</th><th class="num">Med bps</th><th class="num">P90 %</th><th class="num"># Signals</th></tr>';
+    for (const p of perPairSig)
+      html += `<tr><td>${p.pair||'?'}</td><td class="num">${fmt(p.median_drift_bps,1)}</td><td class="num">${fmt(p.p90_drift_pct,1)}</td><td class="num">${p.signal_count||0}</td></tr>`;
+    html += '</table>';
+  } else if (excluded === 0 && pairsData === 0) {
+    html += '<div style="margin-top:8px;font-size:.8rem;color:#3fb950">No drift data — all quotes within threshold</div>';
   }
   $('drift-body').innerHTML = html;
 }
@@ -425,6 +449,33 @@ function renderRejects(rs) {
     html += '<div style="margin-top:8px;font-size:.8rem;color:#3fb950">No quality issues in latest run</div>';
   }
   $('rejects-body').innerHTML = html;
+}
+
+// Panel 10: Truth-Probe Targets
+function renderProbeTargets(ls) {
+  if (!ls?.frontier_ranking) { $('probes-body').innerHTML = '<em class="na">No frontier data</em>'; return; }
+  const probes = ls.frontier_ranking.filter(r => r.target_for_truth_probe);
+  if (probes.length === 0) { $('probes-body').innerHTML = '<em class="na">No truth-probe targets selected</em>'; return; }
+
+  let html = '<table><tr><th>#</th><th>Chain</th><th class="num">Gap bps</th><th class="num">PnL bps</th><th>Frontier Pair</th><th class="num">Signals</th><th>Classification</th></tr>';
+  for (const r of probes) {
+    const pnlCls = cls(r.best_net_pnl_bps);
+    // Get blocker from per_chain if available
+    const pc = ls.per_chain?.[r.chain] || {};
+    const blockerCls = pc.blocker_classification;
+    const blockerBadge = blockerCls === 'SYSTEM' ? badge('SYSTEM','fail') : blockerCls === 'MARKET' ? badge('MARKET','warn') : badge(blockerCls||'—','pass');
+    html += `<tr>
+      <td>${r.frontier_rank}</td>
+      <td>${r.chain} ${badge('PROBE','probe')}</td>
+      <td class="num">${fmt(r.gap_to_zero_bps,1)}</td>
+      <td class="num ${pnlCls}">${fmt(r.best_net_pnl_bps,1)}</td>
+      <td style="font-size:.75rem">${r.frontier_pair||'—'}</td>
+      <td class="num">${r.signals||0}</td>
+      <td>${blockerBadge}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  $('probes-body').innerHTML = html;
 }
 
 // Auto-load on page open

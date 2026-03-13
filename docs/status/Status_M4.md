@@ -12,10 +12,10 @@
 - ✅ N = 100 REGISTRY_REAL runs with `net_usdc > 0`
 - ✅ `agg_status = PASS` sustained
 - ✅ `profit_is_diagnostic = true` (accepted for simulate-only)
-- ✅ `total_net_usdc = $1114.28` (cumulative paper profit)
+- ✅ `total_net_usdc = $1142.02` (cumulative paper profit)
 
 **Current State**:
-- Rolling: runs_in_window=179, unique_pairs=13
+- Rolling: runs_in_window=184, unique_pairs=13
 - Policy: `intent.txt` = business intent (per Roadmap.md:680); pool-level quarantine/runtime_disabled handles filtering
 - Pairs restored: RDNT, MAGIC, GRAIL (with evidence-based USD prices/anchors)
 - LIQUIDITY_ZERO auto-disable working
@@ -26,22 +26,24 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-13)**: `agg_status=PASS` sustained. runs_in_window=179, unique_pairs=13, total_net_usdc=$1114.28. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: gap_to_zero=4.10 bps best (arb_one), zksync frontier=0.0 bps. Latest evidence: `long_scan_latest.json` in `_rolling/`.
+> [!] **ROLLING STABILITY (2026-03-13 R20)**: `agg_status=PASS` sustained. runs_in_window=184, unique_pairs=13, total_net_usdc=$1142.02. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: gap_to_zero=4.10 bps best (arb_one), zksync frontier=0.0 bps. base ROUNDTRIP_PROFITABLE=1 is FALSE POSITIVE (SUSPECT_SPREAD from pancakeswap_v3). Latest evidence: `long_scan_latest.json` + `run_summary_latest.json` in `_rolling/`.
 
-**Economics Snapshot (2026-03-13, R18):**
+**Economics Snapshot (2026-03-13, R20):**
 | Metric | Value | Notes |
 |--------|-------|-------|
 | `gap_to_zero_bps (best)` | 4.10 | Arb_one rolling best |
-| `gap_to_zero_bps (median)` | 18.74 | Rolling median |
-| `roundtrip_total_profitable` | 0 | Still market-blocked |
-| `sweep_runs_count` | 39 | Runs with sweep data |
-| `frontier_pair` | WBTC/USDC | Latest frontier candidate |
-| `frontier_ready` | True | arb_one + zksync ready |
-| `per_chain_frontier` | LIVE | 5 chains in frontier ranking |
-| `runs_in_window` | 179 | Total NORMAL runs |
-| `total_net_usdc` | $1114.28 | Cumulative paper profit |
-| `multi_chain_pass` | 4/6 | arb_one, base, mantle, linea |
-| `long_scan_signals` | 53 | Fresh 15-min 6-chain scan |
+| `gap_to_zero_bps (latest)` | 10.44 | Latest arb run (volatile) |
+| `gap_to_zero_bps (median)` | 17.32 | Rolling median |
+| `roundtrip_total_profitable` | 0 | Arb_one: still market-blocked |
+| `base_roundtrip_profitable` | 1 | FALSE POSITIVE: SUSPECT_SPREAD (pancakeswap_v3 bad prices) |
+| `sweep_runs_count` | 44 | Runs with sweep data |
+| `frontier_pair` | WETH/USDT | Latest frontier candidate |
+| `drift_signal_median_bps_p50` | 373.5 | Rolling drift (arb) |
+| `per_chain_frontier` | LIVE | 6 chains in frontier ranking |
+| `runs_in_window` | 184 | Total NORMAL runs |
+| `total_net_usdc` | $1142.02 | Cumulative paper profit |
+| `multi_chain_pass` | 5/6 | arb_one, base, mantle, linea, zksync |
+| `long_scan_signals` | 39 | R20 8-run 6-chain scan |
 
 ## Executor Onboarding Checklist (2026-03-04)
 
@@ -155,35 +157,36 @@ M4.2 requires `roundtrip.profitable_count > 0` with real quoter-based economics.
 
 **Primary blocker**: `gap_to_zero_bps` (distance from breakeven in sweep best).
 
-| Metric | R11 | R14 | R18 | Delta R14→R18 |
+| Metric | R11 | R14 | R18 | **R20** | Delta R18→R20 |
 |--------|-----|-----|-----|---------------|
-| `sweep_best_net_pnl_bps` | -4.10 @ $25 | -4.10 @ $25 | -4.10 @ $25 | unchanged |
-| `sweep_latest_net_pnl_bps` | -13.58 @ $25 | -9.03 @ $25 | **-13.44 @ $25** | -4.41 bps |
-| `sweep_median_net_pnl_bps` | -18.74 | **-16.26** | **-18.74** | -2.48 bps |
-| `gap_to_zero_bps (best)` | **4.10** | **4.10** | **4.10** | unchanged |
-| `gap_to_zero_bps (latest)` | 13.58 | **9.03** | **13.44** | +4.41 bps |
-| `gap_to_zero_bps (median)` | 18.74 | **16.26** | **18.74** | +2.48 bps |
-| `profitable_count` | 0 | 0 | 0 | — |
-| `frontier_pair` | WBTC/USDC | WBTC/USDC | WBTC/USDC | stable |
-| `measured_gas_bps` | 3.25 | 3.31 | 3.37 | +0.06 |
-| `measured_fee_bps` | 10.0 | 10.0 | 10.0 | stable |
-| `measured_slippage_bps` | 8.62 | **8.61** | **8.06** | -0.55 |
-| `measured_total_cost_bps` | 21.87 | **21.92** | **21.43** | -0.49 |
-| `test_count` | 1635 | **1653** | **1661** | +8 |
-| `roundtrip_total_profitable` | 0 | 0 | 0 | — |
-| `runs_in_window` | 161 | **170** | **179** | +9 |
-| `total_net_usdc` | $1016 | **$1065** | **$1114** | +$49 |
+| `sweep_best_net_pnl_bps` | -4.10 @ $25 | -4.10 @ $25 | -4.10 @ $25 | **-4.10 @ $25** | unchanged |
+| `sweep_latest_net_pnl_bps` | -13.58 @ $25 | -9.03 @ $25 | -13.44 @ $25 | **-10.44 @ $25** | +3.0 bps |
+| `sweep_median_net_pnl_bps` | -18.74 | -16.26 | -18.74 | **-17.32** | +1.42 bps |
+| `gap_to_zero_bps (best)` | 4.10 | 4.10 | 4.10 | **4.10** | unchanged |
+| `gap_to_zero_bps (latest)` | 13.58 | 9.03 | 13.44 | **10.44** | -2.99 bps |
+| `gap_to_zero_bps (median)` | 18.74 | 16.26 | 18.74 | **17.32** | -1.42 bps |
+| `profitable_count` | 0 | 0 | 0 | 0 | — |
+| `frontier_pair` | WBTC/USDC | WBTC/USDC | WBTC/USDC | **WETH/USDT** | changed |
+| `measured_gas_bps` | 3.25 | 3.31 | 3.37 | **3.16** | -0.21 |
+| `measured_fee_bps` | 10.0 | 10.0 | 10.0 | **10.0** | stable |
+| `measured_slippage_bps` | 8.62 | 8.61 | 8.06 | **11.97** | +3.91 |
+| `measured_total_cost_bps` | 21.87 | 21.92 | 21.43 | **25.13** | +3.70 |
+| `test_count` | 1635 | 1653 | 1661 | **1685** | +24 |
+| `roundtrip_total_profitable` | 0 | 0 | 0 | 0 | — |
+| `runs_in_window` | 161 | 170 | 179 | **184** | +5 |
+| `total_net_usdc` | $1016 | $1065 | $1114 | **$1142** | +$28 |
 
-**Cost decomposition (arb WBTC/USDC fee=500 @ $25, R18 latest):**
+**Cost decomposition (arb WETH/USDT @ $25, R20 latest):**
 - LP fee: 10.0 bps (2x500 tier) — **main controllable cost, fee=100 would save 8 bps**
-- Slippage: 8.06 bps (QuoterV2 impact at $25)
-- Gas: 3.37 bps (L2, higher ratio at $25)
-- Total: 21.43 bps cost vs ~13 bps gross spread = -13.44 bps net (latest run)
+- Slippage: 11.97 bps (volatile run, median=8.06)
+- Gas: 3.16 bps (L2)
+- Total: 25.13 bps cost (fee=40% of cost)
 
 **Best-ever frontier**: -4.10 bps gap → only needs ~4 bps improvement to breakeven.
-**Fee=100 lever**: If WBTC/USDC fee=100 pool exists with liquidity, saves 8 bps → would cross breakeven.
+**Fee=100 lever**: If fee=100 pool exists with liquidity, saves 8 bps → would cross breakeven.
+**Slippage variance**: R20 latest=11.97 vs rolling median=8.06 — market volatility, not regression.
 
-**Evidence**: `ci_m5_gate_20260313_093456`, rolling `sweep_gap_to_zero_min=4.10`.
+**Evidence**: `ci_m5_gate_20260313_113747` (R20), rolling `sweep_gap_to_zero_min=4.10`.
 
 **Pipeline status**: Full measured economics (gas/fee/slippage/total_cost_bps) canonical in: truth_report → run_summary → m4_stability_agg → _latest.json. Rolling includes: median_gap_to_zero_bps, median_net_pnl_bps, frontier_pair_latest, frontier_chain_latest. Per-chain frontier ranking in start.py summary.
 

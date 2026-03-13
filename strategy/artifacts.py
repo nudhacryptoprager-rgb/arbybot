@@ -363,7 +363,8 @@ def _build_drift_summary(
     """
     Build first-class notional drift summary from rejected quotes and spread signals.
 
-    Returns per-pair drift stats, aggregate rejection rate, and worst offenders.
+    Returns per-pair drift stats (pct + bps), aggregate rejection rate,
+    worst offenders, and per-pair included signal drift.
     """
     # Count drift-excluded rejects per pair
     drift_rejects_by_pair: Dict[str, List[float]] = {}
@@ -378,26 +379,48 @@ def _build_drift_summary(
             if drift_pct:
                 drift_rejects_by_pair[pair].append(abs(float(drift_pct)))
 
-    # Extract drift from included spread signals
+    # Extract drift from included spread signals — per-pair
     signal_drifts: List[float] = []
+    signal_drift_by_pair: Dict[str, List[float]] = {}
     for sig in spread_signals:
-        buy_d = sig.get("buy_notional_drift_pct")
-        sell_d = sig.get("sell_notional_drift_pct")
-        if buy_d is not None:
-            signal_drifts.append(abs(float(buy_d)))
-        if sell_d is not None:
-            signal_drifts.append(abs(float(sell_d)))
+        pair = sig.get("pair", "unknown")
+        if pair not in signal_drift_by_pair:
+            signal_drift_by_pair[pair] = []
+        for field in ("buy_notional_drift_pct", "sell_notional_drift_pct"):
+            d = sig.get(field)
+            if d is not None:
+                v = abs(float(d))
+                signal_drifts.append(v)
+                signal_drift_by_pair[pair].append(v)
 
     total_quotes = len(rejected_quotes) + len(spread_signals) * 2  # approx
     rejection_rate = total_drift_excluded / max(1, total_quotes)
 
-    # Per-pair summary (worst offenders)
+    # Per-pair summary (worst offenders, sorted by excluded count)
     per_pair: List[Dict[str, Any]] = []
     for pair, drifts in sorted(drift_rejects_by_pair.items(), key=lambda x: -len(x[1])):
+        median_pct = round(sorted(drifts)[len(drifts) // 2], 2) if drifts else 0
         per_pair.append({
             "pair": pair,
             "excluded_count": len(drifts),
-            "median_drift_pct": round(sorted(drifts)[len(drifts) // 2], 2) if drifts else 0,
+            "median_drift_pct": median_pct,
+            "median_drift_bps": round(median_pct * 100, 1),
+            "max_drift_pct": round(max(drifts), 2) if drifts else 0,
+            "max_drift_bps": round(max(drifts) * 100, 1) if drifts else 0,
+            "drift_reject_reason": "NOTIONAL_DRIFT_EXCLUDED",
+        })
+
+    # Full per-pair drift (included signals): for all pairs with signal data
+    per_pair_signal: List[Dict[str, Any]] = []
+    for pair, drifts in sorted(signal_drift_by_pair.items(), key=lambda x: -len(x[1])):
+        s = sorted(drifts)
+        med = s[len(s) // 2] if s else 0
+        per_pair_signal.append({
+            "pair": pair,
+            "signal_count": len(drifts),
+            "median_drift_pct": round(med, 2),
+            "median_drift_bps": round(med * 100, 1),
+            "p90_drift_pct": round(s[int(len(s) * 0.9)], 2) if s else 0,
             "max_drift_pct": round(max(drifts), 2) if drifts else 0,
         })
 
@@ -413,8 +436,13 @@ def _build_drift_summary(
         "drift_excluded_count": total_drift_excluded,
         "drift_rejection_rate": round(rejection_rate, 4),
         "signal_drift_median_pct": signal_median,
+        "signal_drift_median_bps": round(signal_median * 100, 1),
         "signal_drift_p90_pct": signal_p90,
+        "signal_drift_p90_bps": round(signal_p90 * 100, 1),
         "worst_pairs_by_drift": per_pair[:5],
+        "per_pair_signal_drift": per_pair_signal[:10],
+        "pairs_with_drift_data": len(signal_drift_by_pair),
+        "pairs_with_exclusions": len(drift_rejects_by_pair),
     }
 
 

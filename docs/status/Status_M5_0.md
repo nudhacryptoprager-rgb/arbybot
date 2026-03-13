@@ -2,8 +2,8 @@
 
 **Status**: [ACTIVE]
 **Updated**: 2026-03-13
-**Tests**: 1661 passed, 2 skipped
-**Evidence runDirs**: ci_m5_gate_20260313_093456 (arb, rolling), ci_m5_gate_20260313_093558 (base), ci_m5_gate_20260313_093148 (mantle), ci_m5_gate_20260313_093229 (zksync), ci_m5_gate_20260313_093354 (scroll), ci_m5_gate_20260313_093421 (linea)
+**Tests**: 1685 passed, 2 skipped
+**Evidence runDirs**: ci_m5_gate_20260313_113747 (arb, rolling R20), ci_m5_gate_20260313_113853 (base R20), ci_m5_gate_20260313_113421 (mantle R20), ci_m5_gate_20260313_113506 (zksync R20), ci_m5_gate_20260313_113635 (scroll R20), ci_m5_gate_20260313_113707 (linea R20)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
 **Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking)
 
@@ -20,17 +20,18 @@
 ## Chain Quality Classification (current)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, cross-dex=3, 3/3 PASS in 15-min scan)
-base:           SIGNAL_PRODUCING (cross-dex=15, TOP_PAIR_DOMINANCE_HIGH, 3/3 PASS)
-mantle:         SIGNAL_PRODUCING (same-dex, LOW_SAMPLE, SAME_DEX_PRESENT, 2/2 PASS)
-zksync:         SIGNAL_PRODUCING (cross-dex=10, 1/2 PASS, 1 FAIL)
-linea:          SIGNAL_PRODUCING (same-dex, LOW_SAMPLE, SAME_DEX_PRESENT, 2/2 PASS)
-scroll:         INFRA_READY (single DEX, probe-only, accepted-fail, 0/2 PASS)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, cross-dex=3, 2/2 PASS in R20 scan)
+base:           SIGNAL_PRODUCING (cross-dex=15, SUSPECT_SPREAD on pancakeswap_v3 WETH/USDC, 2/2 PASS)
+mantle:         SIGNAL_PRODUCING (same-dex agni_v3, LOW_SAMPLE, 1/1 PASS)
+zksync:         SIGNAL_PRODUCING (cross-dex=10, 40.4% drift rejection, 1/1 PASS)
+linea:          SIGNAL_PRODUCING (same-dex pancakeswap_v3, LOW_SAMPLE, 1/1 PASS)
+scroll:         INFRA_READY (single DEX, probe-only, accepted-fail, 0/1 PASS)
 ```
 
-**15-min scan result (R18)**: 4 PASS chains / 1 accepted-fail (scroll) / 1 unexpected-fail (zksync) / 14 total runs / 53 signals / $39.16 net
-**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero=13.44 bps latest, 4.10 bps best ever, WBTC/USDC frontier, 179 runs in window)
+**R20 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 8 total runs / 39 signals / $27.46 net
+**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero=10.44 bps latest, 4.10 bps best ever, WETH/USDT frontier, 184 runs in window)
 **Profit truth**: NOT YET — economics blocker: LP fees + slippage exceed captured spread at all sizes
+**base anomaly**: 1 ROUNDTRIP_PROFITABLE detected but is FALSE POSITIVE (pancakeswap_v3 PRICE_OUTLIER, 2488 bps spread)
 
 ---
 
