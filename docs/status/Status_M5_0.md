@@ -1,9 +1,9 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-11
-**Tests**: 1653 passed, 2 skipped
-**Evidence runDirs**: ci_m5_gate_20260311_111734 (arb, rolling), ci_m5_gate_20260311_111132 (base), ci_m5_gate_20260311_111334 (mantle), ci_m5_gate_20260311_111502 (zksync), ci_m5_gate_20260311_111621 (scroll), ci_m5_gate_20260311_111654 (linea)
+**Updated**: 2026-03-13
+**Tests**: 1661 passed, 2 skipped
+**Evidence runDirs**: ci_m5_gate_20260313_093456 (arb, rolling), ci_m5_gate_20260313_093558 (base), ci_m5_gate_20260313_093148 (mantle), ci_m5_gate_20260313_093229 (zksync), ci_m5_gate_20260313_093354 (scroll), ci_m5_gate_20260313_093421 (linea)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
 **Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking)
 
@@ -20,16 +20,16 @@
 ## Chain Quality Classification (current)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, cross-dex=3, 20/20 PASS in 2h scan)
-base:           SIGNAL_PRODUCING (cross-dex=15, TOP_PAIR_DOMINANCE_HIGH, 19/19 PASS)
-mantle:         SIGNAL_PRODUCING (same-dex, LOW_SAMPLE, SAME_DEX_PRESENT, 19/19 PASS)
-zksync:         SIGNAL_PRODUCING (cross-dex=10, LOW_SAMPLE, SAME_DEX_PRESENT, 19/19 PASS)
-linea:          SIGNAL_PRODUCING (same-dex, LOW_SAMPLE, SAME_DEX_PRESENT, 19/19 PASS)
-scroll:         INFRA_READY (single DEX, probe-only, accepted-fail, 0/19 PASS)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, cross-dex=3, 3/3 PASS in 15-min scan)
+base:           SIGNAL_PRODUCING (cross-dex=15, TOP_PAIR_DOMINANCE_HIGH, 3/3 PASS)
+mantle:         SIGNAL_PRODUCING (same-dex, LOW_SAMPLE, SAME_DEX_PRESENT, 2/2 PASS)
+zksync:         SIGNAL_PRODUCING (cross-dex=10, 1/2 PASS, 1 FAIL)
+linea:          SIGNAL_PRODUCING (same-dex, LOW_SAMPLE, SAME_DEX_PRESENT, 2/2 PASS)
+scroll:         INFRA_READY (single DEX, probe-only, accepted-fail, 0/2 PASS)
 ```
 
-**2h scan result**: 5 PASS / 1 NO_DATA (scroll, accepted-fail) / 0 INFRA_FAIL (R14 fresh 6-chain scan)
-**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero=9.03 bps latest, 4.10 bps best ever, WBTC/USDC frontier, 170 runs in window)
+**15-min scan result (R18)**: 4 PASS chains / 1 accepted-fail (scroll) / 1 unexpected-fail (zksync) / 14 total runs / 53 signals / $39.16 net
+**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero=13.44 bps latest, 4.10 bps best ever, WBTC/USDC frontier, 179 runs in window)
 **Profit truth**: NOT YET — economics blocker: LP fees + slippage exceed captured spread at all sizes
 
 ---
@@ -142,8 +142,9 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ## Next Steps
 
-- M4.2: Track `best_roundtrip_net_bps` trend; gap_to_zero=4.10 bps (best), 9.03 bps (latest), 16.26 bps (median)
-- New 2h long scan to collect fresh multi-chain `roundtrip_evaluated_total` and per-chain frontier updates
+- M4.2: Track `best_roundtrip_net_bps` trend; gap_to_zero=4.10 bps (best), 13.44 bps (latest), 18.74 bps (median)
+- Dashboard live at `py -3.11 -m monitoring.dashboard_server` (port 8099)
+- Frontier: zksync #1 (gap=0.0), arb_one #2 (gap=13.44), base #3 (gap=59.38)
 - Base: Reduce TOP_PAIR_DOMINANCE_HIGH via pair diversification
 - Mantle/Linea/zkSync: Address SAME_DEX_PRESENT and LOW_SAMPLE warnings
 - Scroll: Keep probe-only/accepted-fail until second DEX venue appears

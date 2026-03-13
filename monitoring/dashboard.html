@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ARBY Rolling Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0d1117;color:#c9d1d9;padding:16px}
+h1{font-size:1.3rem;color:#58a6ff;margin-bottom:12px;display:flex;align-items:center;gap:10px}
+h1 .status{font-size:.85rem;padding:2px 8px;border-radius:4px}
+h1 .status.pass{background:#238636;color:#fff}
+h1 .status.warn{background:#9e6a03;color:#fff}
+h1 .status.fail{background:#da3633;color:#fff}
+.meta{font-size:.75rem;color:#8b949e;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px}
+.panel{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px}
+.panel h2{font-size:.95rem;color:#58a6ff;margin-bottom:10px;border-bottom:1px solid #21262d;padding-bottom:6px}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
+th{text-align:left;color:#8b949e;font-weight:500;padding:4px 8px;border-bottom:1px solid #21262d}
+td{padding:4px 8px;border-bottom:1px solid #161b22}
+tr:hover{background:#1c2128}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.pos{color:#3fb950}.neg{color:#f85149}.warn-c{color:#d29922}.na{color:#484f58}
+.badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.7rem;font-weight:600}
+.badge.pass{background:#238636;color:#fff}
+.badge.fail{background:#da3633;color:#fff}
+.badge.warn{background:#9e6a03;color:#fff}
+.badge.af{background:#6e40c9;color:#fff}
+.badge.probe{background:#1f6feb;color:#fff}
+.bar-bg{background:#21262d;border-radius:3px;height:16px;overflow:hidden;position:relative}
+.bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.bar-label{position:absolute;right:4px;top:0;line-height:16px;font-size:.65rem;color:#fff}
+.kpi{display:flex;flex-wrap:wrap;gap:12px}
+.kpi-item{flex:1;min-width:90px}
+.kpi-val{font-size:1.4rem;font-weight:700;line-height:1.2}
+.kpi-lbl{font-size:.7rem;color:#8b949e}
+.alert-list{list-style:none}
+.alert-list li{padding:4px 0;border-bottom:1px solid #21262d;font-size:.8rem}
+.alert-list li:last-child{border:none}
+.alert-icon{margin-right:4px}
+.refresh-btn{background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:.75rem}
+.refresh-btn:hover{background:#30363d}
+#error-msg{color:#f85149;font-size:.85rem;margin:8px 0}
+</style>
+</head>
+<body>
+
+<h1>
+  ARBY Rolling Dashboard
+  <span id="agg-status" class="status"></span>
+  <button class="refresh-btn" onclick="loadData()">&#x21bb; Refresh</button>
+</h1>
+<div class="meta" id="meta-line">Loading...</div>
+<div id="error-msg"></div>
+
+<div class="grid">
+  <!-- Panel 1: Chain Status -->
+  <div class="panel" id="p-chain">
+    <h2>1. Chain Status</h2>
+    <div id="chain-body"></div>
+  </div>
+
+  <!-- Panel 2: Frontier Ranking -->
+  <div class="panel" id="p-frontier">
+    <h2>2. Frontier Ranking</h2>
+    <div id="frontier-body"></div>
+  </div>
+
+  <!-- Panel 3: Measured Economics -->
+  <div class="panel" id="p-econ">
+    <h2>3. Measured Economics Decomposition</h2>
+    <div id="econ-body"></div>
+  </div>
+
+  <!-- Panel 4: Top Routes -->
+  <div class="panel" id="p-routes">
+    <h2>4. Top Routes</h2>
+    <div id="routes-body"></div>
+  </div>
+
+  <!-- Panel 5: Fee-Tier Comparison -->
+  <div class="panel" id="p-fees">
+    <h2>5. Fee-Tier Comparison</h2>
+    <div id="fees-body"></div>
+  </div>
+
+  <!-- Panel 6: Alerts -->
+  <div class="panel" id="p-alerts">
+    <h2>6. Alerts &amp; Probes</h2>
+    <div id="alerts-body"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, d=2) => v == null ? '—' : Number(v).toFixed(d);
+const fmtUsd = v => v == null ? '—' : '$' + Number(v).toFixed(2);
+const cls = v => v == null ? 'na' : v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+const badge = (text, c) => `<span class="badge ${c}">${text}</span>`;
+
+function loadData() {
+  $('error-msg').textContent = '';
+  fetch('/api/rolling')
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(render)
+    .catch(e => { $('error-msg').textContent = 'Failed to load: ' + e.message; });
+}
+
+function render(data) {
+  const rs = data.run_summary;
+  const agg = data.stability_agg;
+  const ls = data.long_scan;
+  const qs = agg?.quick_stats || {};
+
+  // Header
+  const aggSt = agg?.agg_status || 'N/A';
+  const el = $('agg-status');
+  el.textContent = aggSt;
+  el.className = 'status ' + (aggSt === 'PASS' ? 'pass' : aggSt === 'WARN' ? 'warn' : 'fail');
+
+  const ts = rs?.timestamp || agg?.updated_at || '?';
+  $('meta-line').textContent = `Rolling: ${qs.pass_count||0}+${qs.no_data_count||0}+${qs.fail_count||0} runs (P/ND/F) | ` +
+    `Net: ${fmtUsd(qs.total_net_usdc)} | Updated: ${ts.slice(0,19)}Z`;
+
+  renderChainStatus(ls);
+  renderFrontier(ls);
+  renderEconomics(rs, qs);
+  renderRoutes(rs);
+  renderFees(rs);
+  renderAlerts(rs, ls, qs);
+}
+
+// Panel 1: Chain Status
+function renderChainStatus(ls) {
+  if (!ls?.per_chain) { $('chain-body').innerHTML = '<em class="na">No multi-chain data</em>'; return; }
+  const pc = ls.per_chain;
+  let html = '<table><tr><th>Chain</th><th>Runs</th><th class="num">P/ND/F</th><th class="num">Signals</th><th class="num">Net USD</th><th>Quality</th><th>xDex</th></tr>';
+  for (const [chain, d] of Object.entries(pc)) {
+    const qBadge = d.last_chain_quality_level === 'SIGNAL_PRODUCING' ? badge('SIGNAL','pass') :
+                   d.last_chain_quality_level === 'INFRA_READY' ? badge('INFRA','warn') : badge(d.last_chain_quality_level||'?','fail');
+    const afBadge = d.accepted_fail ? ' '+badge('AF','af') : '';
+    html += `<tr>
+      <td>${chain}${afBadge}</td>
+      <td class="num">${d.runs||0}</td>
+      <td class="num">${d.pass||0}/${d.no_data||0}/${d.fail||0}</td>
+      <td class="num">${d.included_signals_total||0}</td>
+      <td class="num">${fmtUsd(d.net_usdc_total)}</td>
+      <td>${qBadge}</td>
+      <td class="num">${d.last_cross_dex_pairs_count ?? '—'}</td>
+    </tr>`;
+  }
+  html += '</table>';
+
+  // summary bar
+  const tot = ls.total_runs || 1;
+  const pPct = ((ls.total_pass||0)/tot*100).toFixed(0);
+  html += `<div style="margin-top:8px"><div class="bar-bg"><div class="bar-fill" style="width:${pPct}%;background:#238636"></div><div class="bar-label">${ls.total_pass||0}/${tot} PASS (${pPct}%)</div></div></div>`;
+  $('chain-body').innerHTML = html;
+}
+
+// Panel 2: Frontier Ranking
+function renderFrontier(ls) {
+  if (!ls?.frontier_ranking) { $('frontier-body').innerHTML = '<em class="na">No frontier ranking data</em>'; return; }
+  let html = '<table><tr><th>#</th><th>Chain</th><th class="num">Median Gap</th><th class="num">Best Gap</th><th class="num">PnL bps</th><th class="num">Runs</th><th class="num">Sig</th><th class="num">Score</th></tr>';
+  for (const r of ls.frontier_ranking) {
+    const pnlCls = cls(r.best_net_pnl_bps);
+    const probeBadge = r.target_for_truth_probe ? ' '+badge('PROBE','probe') : '';
+    html += `<tr>
+      <td>${r.frontier_rank}</td>
+      <td>${r.chain}${probeBadge}</td>
+      <td class="num">${fmt(r.median_gap_to_zero_bps,1)}</td>
+      <td class="num">${fmt(r.gap_to_zero_bps,1)}</td>
+      <td class="num ${pnlCls}">${fmt(r.best_net_pnl_bps,1)}</td>
+      <td class="num">${r.runs_with_sweep||0}</td>
+      <td class="num">${r.signals||0}</td>
+      <td class="num">${fmt(r.candidate_score,0)}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  $('frontier-body').innerHTML = html;
+}
+
+// Panel 3: Measured Economics
+function renderEconomics(rs, qs) {
+  const sweep = rs?.metrics?.roundtrip?.dynamic_sweep || {};
+  const html = `
+    <div class="kpi">
+      <div class="kpi-item"><div class="kpi-val ${cls(-1*(sweep.gap_to_zero_bps||99))}">${fmt(sweep.gap_to_zero_bps,2)} bps</div><div class="kpi-lbl">Gap to Zero (latest)</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(qs.sweep_gap_to_zero_min,2)} bps</div><div class="kpi-lbl">Gap to Zero (best ever)</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(qs.sweep_median_gap_to_zero_bps,2)} bps</div><div class="kpi-lbl">Gap to Zero (median)</div></div>
+    </div>
+    <table style="margin-top:10px">
+      <tr><th>Component</th><th class="num">Latest (bps)</th><th>Bar</th></tr>
+      ${econRow('LP Fee', sweep.measured_fee_bps, '#1f6feb')}
+      ${econRow('Slippage', sweep.measured_slippage_bps, '#d29922')}
+      ${econRow('Gas', sweep.measured_gas_bps, '#da3633')}
+      <tr style="font-weight:700"><td>Total Cost</td><td class="num">${fmt(sweep.measured_total_cost_bps,2)}</td><td></td></tr>
+    </table>
+    <div style="margin-top:8px;font-size:.75rem;color:#8b949e">Frontier: ${sweep.frontier_pair||'—'} @ $${sweep.sweep_best_size_usd||'?'} | ${sweep.routes_swept||0} routes swept</div>
+  `;
+  $('econ-body').innerHTML = html;
+}
+
+function econRow(label, val, color) {
+  const maxBps = 30;
+  const w = val != null ? Math.min(val / maxBps * 100, 100) : 0;
+  return `<tr><td>${label}</td><td class="num">${fmt(val,2)}</td><td><div class="bar-bg" style="width:120px"><div class="bar-fill" style="width:${w}%;background:${color}"></div></div></td></tr>`;
+}
+
+// Panel 4: Top Routes
+function renderRoutes(rs) {
+  const routes = rs?.inputs?.included_routes || rs?.inputs?.routes || [];
+  const pairs = rs?.inputs?.included_pairs || rs?.inputs?.pairs || [];
+  let html = '<table><tr><th>Routes</th></tr>';
+  for (const r of routes) html += `<tr><td>${r}</td></tr>`;
+  html += '</table>';
+  html += `<div style="margin-top:8px;font-size:.8rem"><strong>Pairs:</strong> ${pairs.join(', ') || '—'}</div>`;
+  html += `<div style="font-size:.75rem;color:#8b949e;margin-top:4px">Chain: ${rs?.inputs?.chain_key||'?'} | Block: ${rs?.inputs?.pinned_block||'?'}</div>`;
+  $('routes-body').innerHTML = html;
+}
+
+// Panel 5: Fee-Tier Comparison
+function renderFees(rs) {
+  const opStats = rs?.opportunity_engine_stats || {};
+  const perRoute = opStats.compared_fee_tiers_per_route || {};
+  const flat = opStats.compared_fee_tiers || [];
+
+  if (Object.keys(perRoute).length > 0) {
+    let html = '<table><tr><th>Route</th><th>Fee Tiers</th></tr>';
+    for (const [route, tiers] of Object.entries(perRoute)) {
+      const tierBadges = (tiers||[]).map(t => {
+        const c = t <= 100 ? 'pass' : t <= 500 ? 'warn' : 'fail';
+        return badge(t + ' bps', c);
+      }).join(' ');
+      html += `<tr><td>${route}</td><td>${tierBadges}</td></tr>`;
+    }
+    html += '</table>';
+    $('fees-body').innerHTML = html;
+  } else if (flat.length > 0) {
+    const tierBadges = flat.map(t => {
+      const c = t <= 100 ? 'pass' : t <= 500 ? 'warn' : 'fail';
+      return badge(t + ' bps', c);
+    }).join(' ');
+    $('fees-body').innerHTML = `<div>Compared tiers: ${tierBadges}</div>`;
+  } else {
+    $('fees-body').innerHTML = '<em class="na">No fee-tier data in latest run</em>';
+  }
+}
+
+// Panel 6: Alerts
+function renderAlerts(rs, ls, qs) {
+  const alerts = [];
+
+  // Profit truth
+  if (rs?.metrics?.profit_truth_available === false)
+    alerts.push({icon:'⚠️', text:'profit_truth_available=false (roundtrip not profitable yet)', cls:'warn-c'});
+  if ((qs.roundtrip_total_profitable||0) === 0)
+    alerts.push({icon:'📊', text:`roundtrip_total_profitable=0 across ${qs.roundtrip_total_evaluated||0} evaluated`, cls:'warn-c'});
+
+  // Quality warnings from run_summary
+  for (const w of (rs?.quality_warnings || []))
+    alerts.push({icon:'⚡', text: w, cls:'warn-c'});
+
+  // Accepted-fail chains
+  for (const c of (ls?.accepted_fail_chains || []))
+    alerts.push({icon:'🟣', text:`Accepted-fail: ${c}`, cls:''});
+
+  // Probe-only chains
+  for (const c of (ls?.probe_only_chains || []))
+    alerts.push({icon:'🔵', text:`Probe-only: ${c}`, cls:''});
+
+  // No-sweep chains
+  if (ls?.per_chain) {
+    for (const [chain, d] of Object.entries(ls.per_chain)) {
+      if (d.runs_with_sweep === 0 && !d.accepted_fail)
+        alerts.push({icon:'📉', text:`${chain}: no sweep data (dynamic_probe may not be active)`, cls:'warn-c'});
+    }
+  }
+
+  // Gap distance
+  const gap = qs.sweep_gap_to_zero_min;
+  if (gap != null && gap > 10)
+    alerts.push({icon:'📏', text:`Best gap to zero: ${fmt(gap,1)} bps (target: ≤0)`, cls:'neg'});
+  else if (gap != null && gap > 0)
+    alerts.push({icon:'🎯', text:`Best gap to zero: ${fmt(gap,1)} bps — NEAR BREAKEVEN`, cls:'pos'});
+
+  if (alerts.length === 0) alerts.push({icon:'✅', text:'No alerts', cls:'pos'});
+
+  let html = '<ul class="alert-list">';
+  for (const a of alerts)
+    html += `<li><span class="alert-icon">${a.icon}</span><span class="${a.cls}">${a.text}</span></li>`;
+  html += '</ul>';
+  $('alerts-body').innerHTML = html;
+}
+
+// Auto-load on page open
+loadData();
+// Auto-refresh every 30 seconds
+setInterval(loadData, 30000);
+</script>
+</body>
+</html>

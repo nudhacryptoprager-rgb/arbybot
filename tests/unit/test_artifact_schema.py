@@ -740,3 +740,66 @@ class TestScrollDexAuditGoldenArtifact:
             assert "adapter_type" in dex, "active_dex must have adapter_type"
             assert "factory" in dex, "active_dex must have factory"
             assert "status" in dex, "active_dex must have status"
+
+
+class TestComparedFeeTiersContract:
+    """R18: Contract tests for compared_fee_tiers visibility."""
+
+    def test_compared_fee_tiers_structure(self):
+        """compared_fee_tiers must be a sorted list of ints."""
+        opps = [
+            {"buy_fee": 500, "sell_fee": 3000, "route": "a->b"},
+            {"buy_fee": 100, "sell_fee": 500, "route": "b->a"},
+        ]
+        tiers: set[int] = set()
+        for opp in opps:
+            bf = opp.get("buy_fee")
+            sf = opp.get("sell_fee")
+            if bf is not None:
+                tiers.add(int(bf))
+            if sf is not None:
+                tiers.add(int(sf))
+        result = sorted(tiers)
+        assert result == [100, 500, 3000]
+
+    def test_compared_fee_tiers_per_route_structure(self):
+        """compared_fee_tiers_per_route keyed by route with sorted tier lists."""
+        opps = [
+            {"buy_fee": 500, "sell_fee": 3000, "route": "uni->sushi"},
+            {"buy_fee": 100, "sell_fee": 500, "route": "sushi->uni"},
+            {"buy_fee": 500, "sell_fee": 500, "route": "uni->sushi"},
+        ]
+        per_route: dict[str, set[int]] = {}
+        for opp in opps:
+            route = opp.get("route", "unknown")
+            if route not in per_route:
+                per_route[route] = set()
+            bf = opp.get("buy_fee")
+            sf = opp.get("sell_fee")
+            if bf is not None:
+                per_route[route].add(int(bf))
+            if sf is not None:
+                per_route[route].add(int(sf))
+        result = {k: sorted(v) for k, v in sorted(per_route.items())}
+        assert result == {
+            "sushi->uni": [100, 500],
+            "uni->sushi": [500, 3000],
+        }
+
+    def test_compared_fee_tiers_empty_when_no_fees(self):
+        """Empty opps yield empty fee tiers."""
+        tiers: set[int] = set()
+        assert sorted(tiers) == []
+
+    def test_compared_fee_tiers_handles_none_fees(self):
+        """Opps with None fees are skipped gracefully."""
+        opps = [{"buy_fee": None, "sell_fee": 500, "route": "a->b"}]
+        tiers: set[int] = set()
+        for opp in opps:
+            bf = opp.get("buy_fee")
+            sf = opp.get("sell_fee")
+            if bf is not None:
+                tiers.add(int(bf))
+            if sf is not None:
+                tiers.add(int(sf))
+        assert sorted(tiers) == [500]

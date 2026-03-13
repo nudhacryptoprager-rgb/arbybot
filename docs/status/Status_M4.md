@@ -1,7 +1,7 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-11  
+**Updated**: 2026-03-13  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)
@@ -12,10 +12,10 @@
 - ✅ N = 100 REGISTRY_REAL runs with `net_usdc > 0`
 - ✅ `agg_status = PASS` sustained
 - ✅ `profit_is_diagnostic = true` (accepted for simulate-only)
-- ✅ `total_net_usdc = $1065.16` (cumulative paper profit)
+- ✅ `total_net_usdc = $1114.28` (cumulative paper profit)
 
 **Current State**:
-- Rolling: runs_in_window=170, unique_pairs=13
+- Rolling: runs_in_window=179, unique_pairs=13
 - Policy: `intent.txt` = business intent (per Roadmap.md:680); pool-level quarantine/runtime_disabled handles filtering
 - Pairs restored: RDNT, MAGIC, GRAIL (with evidence-based USD prices/anchors)
 - LIQUIDITY_ZERO auto-disable working
@@ -26,21 +26,22 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-11)**: `agg_status=PASS` sustained. runs_in_window=170, unique_pairs=13, total_net_usdc=$1065.16. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: gap_to_zero=4.10 bps best (latest=9.03). Latest evidence: `long_scan_latest.json` in `_rolling/`.
+> [!] **ROLLING STABILITY (2026-03-13)**: `agg_status=PASS` sustained. runs_in_window=179, unique_pairs=13, total_net_usdc=$1114.28. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: gap_to_zero=4.10 bps best (arb_one), zksync frontier=0.0 bps. Latest evidence: `long_scan_latest.json` in `_rolling/`.
 
-**Economics Snapshot (2026-03-11, R15):**
+**Economics Snapshot (2026-03-13, R18):**
 | Metric | Value | Notes |
 |--------|-------|-------|
-| `gap_to_zero_bps (best)` | 4.10 | All-time best in rolling window |
-| `gap_to_zero_bps (latest)` | 9.03 | Latest run |
-| `gap_to_zero_bps (median)` | 16.26 | Rolling median |
+| `gap_to_zero_bps (best)` | 4.10 | Arb_one rolling best |
+| `gap_to_zero_bps (median)` | 18.74 | Rolling median |
 | `roundtrip_total_profitable` | 0 | Still market-blocked |
-| `sweep_runs_count` | 30 | Runs with sweep data |
+| `sweep_runs_count` | 39 | Runs with sweep data |
 | `frontier_pair` | WBTC/USDC | Latest frontier candidate |
-| `frontier_ready` | True | arbitrum_one ready for execution |
-| `per_chain_frontier` | LIVE | Per-chain aggregates in rolling |
-| `runs_in_window` | 170 | Total NORMAL runs |
-| `total_net_usdc` | $1065.16 | Cumulative paper profit |
+| `frontier_ready` | True | arb_one + zksync ready |
+| `per_chain_frontier` | LIVE | 5 chains in frontier ranking |
+| `runs_in_window` | 179 | Total NORMAL runs |
+| `total_net_usdc` | $1114.28 | Cumulative paper profit |
+| `multi_chain_pass` | 4/6 | arb_one, base, mantle, linea |
+| `long_scan_signals` | 53 | Fresh 15-min 6-chain scan |
 
 ## Executor Onboarding Checklist (2026-03-04)
 
@@ -129,12 +130,12 @@ simulate_only: true
 ## [!] M4 Close Plan
 
 > **Problem**: M4 close depends on `roundtrip.profitable_count > 0`, which requires market arb opportunity.  
-> **Current state (R11)**: `roundtrip.profitable_count=0`, best=-4.10 bps @ $25, latest=-13.58 bps @ $25, median=-18.74 bps.
+> **Current state (R18)**: `roundtrip.profitable_count=0`, best=-4.10 bps @ $25, latest=-13.44 bps @ $25, median=-18.74 bps.
 
-**Economics frontier progress (2026-03-11):**
-- **Best-ever gap**: 4.10 bps (78% improvement from R10's 19.04 bps)
+**Economics frontier progress (2026-03-13):**
+- **Best-ever gap**: 4.10 bps (arb_one), zksync frontier=0.0 bps (fresh scan)
 - **Fee=100 lever**: If exists with liquidity, saves 8 bps → immediately crosses breakeven
-- **Strategy near breakeven** on best cases, but not proven net-positive
+- **Multi-chain frontier**: 5 chains ranked, zksync #1, arb_one #2, base #3
 
 **Deterministic M4 Close Criteria (choose one):**
 1. ✅ **Time-bound window**: N=100 consecutive runs with `agg_status=PASS` and `profit_is_diagnostic=true` is acceptable for simulate-only - **ACHIEVED 2026-02-21**
@@ -154,35 +155,35 @@ M4.2 requires `roundtrip.profitable_count > 0` with real quoter-based economics.
 
 **Primary blocker**: `gap_to_zero_bps` (distance from breakeven in sweep best).
 
-| Metric | R9 | R10 | R11 | R14 | Delta R11→R14 |
-|--------|----|----|-----|-----|---------------|
-| `sweep_best_net_pnl_bps` | -17.13 @ $50 | -19.04 @ $50 | -4.10 @ $25 | -4.10 @ $25 | unchanged |
-| `sweep_latest_net_pnl_bps` | n/a | n/a | -13.58 @ $25 | **-9.03 @ $25** | **+4.55 bps** |
-| `sweep_median_net_pnl_bps` | n/a | n/a | -18.74 | **-16.26** | **+2.48 bps** |
-| `gap_to_zero_bps (best)` | 17.13 | 19.04 | **4.10** | **4.10** | unchanged |
-| `gap_to_zero_bps (latest)` | n/a | n/a | 13.58 | **9.03** | **-4.55 bps** |
-| `gap_to_zero_bps (median)` | n/a | n/a | 18.74 | **16.26** | **-2.48 bps** |
-| `profitable_count` | 0 | 0 | 0 | 0 | — |
-| `frontier_pair` | WBTC/USDC | WBTC/USDC | WBTC/USDC | WBTC/USDC | stable |
-| `measured_gas_bps` | n/a | 1.63 | 3.25 | 3.31 | +0.06 |
-| `measured_fee_bps` | n/a | 10.0 | 10.0 | 10.0 | stable |
-| `measured_slippage_bps` | n/a | 17.31 | 8.62 | **8.61** | -0.01 |
-| `measured_total_cost_bps` | n/a | 28.94 | 21.87 | **21.92** | +0.05 |
-| `test_count` | 1618 | 1627 | 1635 | **1653** | +18 |
-| `roundtrip_total_profitable` | 0 | 0 | 0 | 0 | — |
-| `runs_in_window` | n/a | 106 | 161 | **170** | +9 |
-| `total_net_usdc` | n/a | $870 | $1016 | **$1065** | +$49 |
+| Metric | R11 | R14 | R18 | Delta R14→R18 |
+|--------|-----|-----|-----|---------------|
+| `sweep_best_net_pnl_bps` | -4.10 @ $25 | -4.10 @ $25 | -4.10 @ $25 | unchanged |
+| `sweep_latest_net_pnl_bps` | -13.58 @ $25 | -9.03 @ $25 | **-13.44 @ $25** | -4.41 bps |
+| `sweep_median_net_pnl_bps` | -18.74 | **-16.26** | **-18.74** | -2.48 bps |
+| `gap_to_zero_bps (best)` | **4.10** | **4.10** | **4.10** | unchanged |
+| `gap_to_zero_bps (latest)` | 13.58 | **9.03** | **13.44** | +4.41 bps |
+| `gap_to_zero_bps (median)` | 18.74 | **16.26** | **18.74** | +2.48 bps |
+| `profitable_count` | 0 | 0 | 0 | — |
+| `frontier_pair` | WBTC/USDC | WBTC/USDC | WBTC/USDC | stable |
+| `measured_gas_bps` | 3.25 | 3.31 | 3.37 | +0.06 |
+| `measured_fee_bps` | 10.0 | 10.0 | 10.0 | stable |
+| `measured_slippage_bps` | 8.62 | **8.61** | **8.06** | -0.55 |
+| `measured_total_cost_bps` | 21.87 | **21.92** | **21.43** | -0.49 |
+| `test_count` | 1635 | **1653** | **1661** | +8 |
+| `roundtrip_total_profitable` | 0 | 0 | 0 | — |
+| `runs_in_window` | 161 | **170** | **179** | +9 |
+| `total_net_usdc` | $1016 | **$1065** | **$1114** | +$49 |
 
-**Cost decomposition (arb WBTC/USDC fee=500 @ $25, R14 latest):**
-- LP fee: 10.0 bps (2×500 tier) — **main controllable cost, fee=100 would save 8 bps**
-- Slippage: 8.61 bps (QuoterV2 impact at $25)
-- Gas: 3.31 bps (L2, higher ratio at $25)
-- Total: 21.92 bps cost vs ~13 bps gross spread = -9.03 bps net (latest run)
+**Cost decomposition (arb WBTC/USDC fee=500 @ $25, R18 latest):**
+- LP fee: 10.0 bps (2x500 tier) — **main controllable cost, fee=100 would save 8 bps**
+- Slippage: 8.06 bps (QuoterV2 impact at $25)
+- Gas: 3.37 bps (L2, higher ratio at $25)
+- Total: 21.43 bps cost vs ~13 bps gross spread = -13.44 bps net (latest run)
 
 **Best-ever frontier**: -4.10 bps gap → only needs ~4 bps improvement to breakeven.
 **Fee=100 lever**: If WBTC/USDC fee=100 pool exists with liquidity, saves 8 bps → would cross breakeven.
 
-**Evidence**: `ci_m5_gate_20260311_111734`, rolling `sweep_gap_to_zero_min=4.10`.
+**Evidence**: `ci_m5_gate_20260313_093456`, rolling `sweep_gap_to_zero_min=4.10`.
 
 **Pipeline status**: Full measured economics (gas/fee/slippage/total_cost_bps) canonical in: truth_report → run_summary → m4_stability_agg → _latest.json. Rolling includes: median_gap_to_zero_bps, median_net_pnl_bps, frontier_pair_latest, frontier_chain_latest. Per-chain frontier ranking in start.py summary.
 
