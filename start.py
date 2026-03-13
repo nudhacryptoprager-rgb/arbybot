@@ -416,9 +416,19 @@ def build_summary(
     gap_best = min(all_gap_values) if all_gap_values else None
     gap_median = _compute_median(all_gap_values)
 
+    # R26: run_context with run_timestamp for SHA-free provenance policy
+    now_utc = datetime.now(timezone.utc)
+    run_ts = now_utc.isoformat().replace("+00:00", "Z")
+
     return {
-        "schema": "start:long_scan_summary:v1.6",  # R25: discovery_coverage from scan_stats, hard-fail missing chains
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "schema": "start:long_scan_summary:v1.7",  # R26: run_context provenance + frontier triage fields
+        "generated_at": run_ts,
+        "run_context": {
+            "run_timestamp": run_ts,
+            "code_identity": f"ts:{run_ts}",
+            "code_sha": None,
+            "evidence_sha": None,
+        },
         "wall_seconds": round(wall_seconds, 1),
         "total_runs": sum(s["runs"] for s in per_chain.values()),
         "total_pass": sum(s["pass"] for s in per_chain.values()),
@@ -554,6 +564,16 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
         drift_bps_vals = s.get("_drift_median_bps_values", [])
         drift_rate_median = _compute_median(drift_rates)
         drift_bps_median = _compute_median(drift_bps_vals)
+        # R26: Derive triage status from chain metrics
+        chain_status = s.get("last_run_summary_status")
+        chain_quality = s.get("last_chain_quality_level")
+        blocker_cls = s.get("blocker_classification")
+        blocker_rsn = s.get("blocker_reason")
+        # route_health: ratio of pass runs to total runs (None if no runs)
+        total_runs = s.get("runs", 0)
+        pass_runs = s.get("pass", 0)
+        route_health = round(pass_runs / total_runs, 4) if total_runs > 0 else None
+
         ranked.append({
             "chain": chain,
             "gap_to_zero_bps": gap,
@@ -580,6 +600,12 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             "drift_worst_pair_bps": s.get("drift_worst_pair_bps"),
             # R24: Discovery runtime coverage (latest snapshot)
             "discovery_coverage": s.get("last_discovery_runtime"),
+            # R26: Triage fields for promotion decisions
+            "status": chain_status,
+            "route_health": route_health,
+            "chain_quality_level": chain_quality,
+            "blocker_classification": blocker_cls,
+            "blocker_reason": blocker_rsn,
         })
     ranked.sort(key=lambda x: (
         x.get("accepted_fail", False),

@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-13 (R25)
-**Tests**: 1735 passed, 2 skipped (+10 from R24)
-**Schema**: start:long_scan_summary (latest)
-**Evidence runDirs**: ci_m5_gate_20260313_213616 (arb rolling R25), 16 total runs across 6 chains
+**Updated**: 2026-03-13 (R26)
+**Tests**: 1740 collected / 1738 passed / 2 skipped
+**Schema**: start:long_scan_summary (latest, R26 bump)
+**Evidence runDirs**: ci_m5_gate_20260313_221453 (arb rolling R26), ci_m5_gate_20260313_223350 (arb rolling latest), 21 total runs across 6 chains
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking with discovery_coverage, generated 2026-03-13T20:40:48Z)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking with run_context provenance + triage fields, generated 2026-03-13T21:37:23Z)
 
 ---
 
@@ -15,34 +15,43 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R26: `run_context.run_timestamp` added to long_scan; frontier_ranking enriched with triage fields (status, route_health, blocker_reasons).
 > R25: `discovery_coverage` now populated from scan_*.json stats; `_warn_missing_chains()` is FATAL.
 
 ---
 
-## Chain Quality Classification (R25)
+## Chain Quality Classification (R26)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, 3/3 PASS, blocker=NONE)
-base:           SIGNAL_PRODUCING (discovery, cross-dex=10, 3/3 PASS, blocker=MIXED)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, 4/4 PASS, blocker=NONE)
+base:           SIGNAL_PRODUCING (discovery, cross-dex=10, 4/4 PASS, blocker=MIXED, rt_profitable=2)
 mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, 3/3 PASS, blocker=STRUCTURAL)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=3, 3/3 PASS, blocker=MIXED)
-linea:          SIGNAL_PRODUCING (discovery, same-dex pancakeswap_v3, 2/2 PASS, blocker=STRUCTURAL)
-scroll:         INFRA_READY (monitoring_only=true, single DEX, accepted-fail=true, 0/2 PASS, blocker=ECOSYSTEM_BLOCKED)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=3, 4/4 PASS, blocker=MIXED, gap=0.0 bps)
+linea:          SIGNAL_PRODUCING (discovery, same-dex pancakeswap_v3, 3/3 PASS, blocker=STRUCTURAL)
+scroll:         INFRA_READY (monitoring_only=true, single DEX, accepted-fail=true, 0/3 PASS, blocker=ECOSYSTEM_BLOCKED)
 ```
 
-**Universe Split (R25)**:
+**Rollout Queue (R26 — per lead directive)**:
+1. **arbitrum_one** (primary, NORMAL) — must pass exit gate before others promoted
+2. **zksync** — drift_rejection_rate_median must drop below 0.25
+3. **base** — quality/mixed-source noise cleanup, economics gap=67 bps
+4. **mantle/linea** — COVERAGE only (no cross-DEX surface)
+5. **scroll** — monitoring_only (ECOSYSTEM_BLOCKED)
+
+**Universe Split (R26)**:
 - **truth_probe**: arbitrum_one (config-based, target_for_truth_probe=true)
 - **discovery**: base, linea, mantle, zksync (discovery_coverage now populated)
 - **monitoring_only**: scroll (PROBE_ONLY, accepted-fail=true)
 
-**R25 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 16 total runs / 45 signals / $42.43 net
-**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero in frontier_ranking)
-**Profit truth**: NOT YET — economics blocker: LP fees + slippage exceed captured spread at all sizes
-**discovery_coverage**: FIXED (populated for zksync, base, mantle, linea from scan_*.json stats)
+**R26 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 21 total runs / 68 signals / $56.40 net / 2 roundtrip_profitable (base)
+**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero in frontier_ranking) + triage fields for promotion decisions
+**Profit truth**: NOT YET — Arbitrum profit-truth blocker remains (roundtrip.profitable_count=0)
+**Provenance**: `run_context.run_timestamp` now in long_scan_latest.json (R26 fix)
+**discovery_coverage**: populated (R25 fix preserved)
 
 ---
 
-## Per-Chain Discovery Coverage (R25)
+## Per-Chain Discovery Coverage (R26)
 
 | Chain | Pairs Evaluated | Pairs Resolved | Cross-DEX | Skipped Excluded |
 |-------|-----------------|----------------|-----------|------------------|
@@ -137,7 +146,7 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 | scan | `3.2.0` | M5 family |
 | truth_report | `3.2.0` | M5 family |
 | reject_histogram | `3.2.0` | reject samples (not aggregated counts) |
-| long_scan_summary | `latest` | R25: discovery_coverage populated from scan_*.json stats |
+| long_scan_summary | `LATEST` | R26: run_context provenance + frontier triage fields |
 
 ---
 
@@ -162,12 +171,12 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Next Steps (R25)
+## Next Steps (R26)
 
-- M4.2: Track `best_roundtrip_net_bps` trend in frontier_ranking
-- discovery_coverage: Now populated from scan_*.json stats (FIXED in R25)
-- _warn_missing_chains: Now FATAL (hard fail) instead of WARNING
-- monitoring_only_chains: scroll properly marked (FIXED in R25)
-- Schema: LATEST (bumped from previous)
+- **Arbitrum exit gate**: 5 consecutive online runs with signals>=4, cross_dex>=3, drift_rate<=0.20
+- **zksync promotion**: reduce drift_rejection_rate_median below 0.25 via pair quarantine
+- **base economics**: reduce gap_to_zero_bps from 67 bps (quality/mixed-source cleanup first)
+- **Provenance**: long_scan_latest now has run_context.run_timestamp (R26 fix)
+- **Frontier triage**: status, route_health, blocker_reasons now in frontier_ranking (R26 fix)
 - Scroll: ECOSYSTEM_BLOCKED — do not invest engineering time
-- Test delta: +10 tests (1725 → 1735)
+- Test delta: +5 tests (1733 → 1738 passed)

@@ -308,7 +308,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.6")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.7")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -963,7 +963,7 @@ class TestFrontierRanking(unittest.TestCase):
         self.assertEqual(entry["measured_total_cost_bps"], 64.0)
 
     def test_long_scan_summary_schema_v1_5(self):
-        """Contract: build_summary produces schema v1.6 with all required fields."""
+        """Contract: build_summary produces schema v1.7 with all required fields."""
         per_chain = {
             "arb": start.new_chain_stats(),
             "base": start.new_chain_stats(),
@@ -974,7 +974,7 @@ class TestFrontierRanking(unittest.TestCase):
         per_chain["base"]["included_signals_total"] = 3
         summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
         # Schema version check
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.6")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.7")
         # Required top-level fields
         self.assertIn("generated_at", summary)
         self.assertIn("wall_seconds", summary)
@@ -1209,6 +1209,84 @@ class TestDiscoveryCoverageFromScanStats(unittest.TestCase):
         dc = ranking[0]["discovery_coverage"]
         self.assertIsNotNone(dc)
         self.assertEqual(dc["pairs_evaluated"], 30)
+
+
+class TestRunContextProvenance(unittest.TestCase):
+    """R26: long_scan_latest.json must include run_context with run_timestamp."""
+
+    def test_build_summary_has_run_context(self):
+        per_chain = {"arb": start.new_chain_stats()}
+        per_chain["arb"]["included_signals_total"] = 3
+        summary = start.build_summary(per_chain, 60.0, [])
+        self.assertIn("run_context", summary)
+        rc = summary["run_context"]
+        self.assertIn("run_timestamp", rc)
+        self.assertIsNotNone(rc["run_timestamp"])
+        self.assertTrue(rc["run_timestamp"].endswith("Z"))
+        self.assertIn("code_identity", rc)
+        self.assertTrue(rc["code_identity"].startswith("ts:"))
+        self.assertIsNone(rc["code_sha"])
+        self.assertIsNone(rc["evidence_sha"])
+
+    def test_run_context_matches_generated_at(self):
+        per_chain = {"arb": start.new_chain_stats()}
+        summary = start.build_summary(per_chain, 30.0, [])
+        self.assertEqual(summary["run_context"]["run_timestamp"], summary["generated_at"])
+
+
+class TestFrontierTriageFields(unittest.TestCase):
+    """R26: frontier_ranking entries must include triage fields for promotion decisions."""
+
+    def test_frontier_ranking_has_triage_fields(self):
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 10.0, "sweep_best_net_pnl_bps": -10.0,
+                "included_signals_total": 8, "accepted_fail": False,
+                "last_run_summary_status": "PASS",
+                "last_chain_quality_level": "SIGNAL_PRODUCING",
+                "blocker_classification": None,
+                "blocker_reason": None,
+                "runs": 3, "pass": 3,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        self.assertEqual(len(ranking), 1)
+        entry = ranking[0]
+        self.assertEqual(entry["status"], "PASS")
+        self.assertAlmostEqual(entry["route_health"], 1.0)
+        self.assertEqual(entry["chain_quality_level"], "SIGNAL_PRODUCING")
+        self.assertIsNone(entry["blocker_classification"])
+        self.assertIsNone(entry["blocker_reason"])
+
+    def test_frontier_ranking_route_health_partial(self):
+        per_chain = {
+            "base": {
+                "sweep_gap_to_zero_bps": 20.0, "sweep_best_net_pnl_bps": -20.0,
+                "included_signals_total": 5, "accepted_fail": False,
+                "last_run_summary_status": "PASS",
+                "last_chain_quality_level": "SIGNAL_PRODUCING",
+                "blocker_classification": "MIXED",
+                "blocker_reason": "some mixed-source noise",
+                "runs": 4, "pass": 3,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        entry = ranking[0]
+        self.assertAlmostEqual(entry["route_health"], 0.75)
+        self.assertEqual(entry["blocker_classification"], "MIXED")
+        self.assertEqual(entry["blocker_reason"], "some mixed-source noise")
+
+    def test_frontier_ranking_route_health_zero_runs(self):
+        per_chain = {
+            "linea": {
+                "sweep_gap_to_zero_bps": None, "sweep_best_net_pnl_bps": -5.0,
+                "included_signals_total": 1, "accepted_fail": False,
+                "runs": 0, "pass": 0,
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        entry = ranking[0]
+        self.assertIsNone(entry["route_health"])
 
 
 class TestWarnMissingChainsHardFail(unittest.TestCase):
