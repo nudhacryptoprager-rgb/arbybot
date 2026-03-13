@@ -689,8 +689,8 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             per_chain[chain] = new_chain_stats()
             per_chain[chain]["config"] = cfg
             per_chain[chain]["accepted_fail"] = chain in accepted_fail_set
-            per_chain[chain]["blocker_classification"] = meta.get("blocker_classification")
-            per_chain[chain]["blocker_reason"] = meta.get("blocker_reason")
+            per_chain[chain]["blocker_classification"] = config_meta[cfg].get("blocker_classification")
+            per_chain[chain]["blocker_reason"] = config_meta[cfg].get("blocker_reason")
 
     total_runs = 0
     empty_deleted = 0
