@@ -1246,6 +1246,8 @@ def generate_m4_from_online_inputs(
             "consecutive_non_nodata_cycles": 1,  # Single run context, no history yet
             # v3.2.30: Roundtrip metrics for M4.2 progress tracking
             "roundtrip": roundtrip,
+            # v3.5.0: Notional drift summary (first-class artifact)
+            "drift_summary": truth_data.get("drift_summary", {}),
         },
         "thresholds": {
             "policy_version": POLICY_VERSION,  # v1.9.5: provenance

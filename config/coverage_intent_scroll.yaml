@@ -112,6 +112,15 @@ tokens_usd_price:
 # Price sanity gates (relaxed for bootstrap)
 price_sanity_max_deviation_bps: 10000
 
+# Price anchor overrides for sanity checking
+# R19: Adding anchors to reduce PRICE_SANITY_FAILED noise
+tokens_anchor_price:
+  WETH_USDC: 2050.0
+  WETH_USDT: 2050.0
+  WETH_WBTC: 0.030
+  wstETH_WETH: 1.22
+  USDC_USDT: 1.0
+
 # Drift tolerance (relaxed for bootstrap)
 drift_warning_pct: 30.0
 
@@ -123,6 +132,11 @@ dynamic_probe:
 
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
+
+# R19: Machine-readable blocker classification for dashboard
+blocker_classification: SYSTEM
+blocker_reason: "single_dex_only: sushiswap_v3 only, nuri_v3 (algebra) incompatible with quoter_v2. PROBE_ONLY."
+blocker_resolution: "Monitor Scroll for second quoter_v2-compatible DEX deployment"
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity

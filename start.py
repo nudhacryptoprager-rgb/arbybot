@@ -46,6 +46,8 @@ def read_config_meta(config_path: str) -> dict[str, Any]:
     return {
         "chain": data.get("chain", "unknown"),
         "run_kind": data.get("run_kind", "NORMAL"),
+        "blocker_classification": data.get("blocker_classification"),
+        "blocker_reason": data.get("blocker_reason"),
     }
 
 
@@ -216,6 +218,9 @@ def new_chain_stats() -> dict[str, Any]:
         "run_kind": None,
         "last_cross_dex_pairs_count": None,
         "accepted_fail": False,
+        # R19: Blocker classification from config
+        "blocker_classification": None,
+        "blocker_reason": None,
         # R12: Frontier ranking metrics (robust selection)
         "_sweep_gap_values": [],  # for median computation
         "runs_with_sweep": 0,
@@ -608,6 +613,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated chain names whose failures are expected/accepted "
              "(e.g. 'scroll'). These do not count toward --max-fail-chains.",
     )
+    ap.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Co-launch the dashboard server (monitoring.dashboard_server) alongside the scan",
+    )
+    ap.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=8099,
+        help="Port for the dashboard server (default: 8099)",
+    )
     return ap.parse_args(argv)
 
 
@@ -623,6 +639,27 @@ def main(argv: list[str] | None = None) -> int:
     if not configs:
         print("ERROR: No config files specified")
         return 1
+
+    # Co-launch dashboard server if requested
+    dashboard_proc: subprocess.Popen | None = None
+    if args.dashboard:
+        dashboard_proc = subprocess.Popen(
+            [sys.executable, "-m", "monitoring.dashboard_server", "--port", str(args.dashboard_port)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(f"Dashboard launched: http://127.0.0.1:{args.dashboard_port}")
+
+    try:
+        return _run_scan_loop(args, configs)
+    finally:
+        if dashboard_proc is not None:
+            dashboard_proc.terminate()
+            dashboard_proc.wait(timeout=5)
+            print("Dashboard server stopped.")
+
+
+def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
 
     # Pre-read config metadata
     config_meta: dict[str, dict[str, Any]] = {}
@@ -652,6 +689,8 @@ def main(argv: list[str] | None = None) -> int:
             per_chain[chain] = new_chain_stats()
             per_chain[chain]["config"] = cfg
             per_chain[chain]["accepted_fail"] = chain in accepted_fail_set
+            per_chain[chain]["blocker_classification"] = meta.get("blocker_classification")
+            per_chain[chain]["blocker_reason"] = meta.get("blocker_reason")
 
     total_runs = 0
     empty_deleted = 0

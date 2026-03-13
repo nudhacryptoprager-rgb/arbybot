@@ -90,6 +90,24 @@ tr:hover{background:#1c2128}
     <h2>6. Alerts &amp; Probes</h2>
     <div id="alerts-body"></div>
   </div>
+
+  <!-- Panel 7: Notional Drift -->
+  <div class="panel" id="p-drift">
+    <h2>7. Notional Drift Analysis</h2>
+    <div id="drift-body"></div>
+  </div>
+
+  <!-- Panel 8: Per-Chain Blocker Classification -->
+  <div class="panel" id="p-blockers">
+    <h2>8. Per-Chain Blocker Classification</h2>
+    <div id="blockers-body"></div>
+  </div>
+
+  <!-- Panel 9: Quality Rejects -->
+  <div class="panel" id="p-rejects">
+    <h2>9. Quality Rejects</h2>
+    <div id="rejects-body"></div>
+  </div>
 </div>
 
 <script>
@@ -129,6 +147,9 @@ function render(data) {
   renderRoutes(rs);
   renderFees(rs);
   renderAlerts(rs, ls, qs);
+  renderDrift(rs, qs);
+  renderBlockers(ls);
+  renderRejects(rs);
 }
 
 // Panel 1: Chain Status
@@ -292,6 +313,118 @@ function renderAlerts(rs, ls, qs) {
     html += `<li><span class="alert-icon">${a.icon}</span><span class="${a.cls}">${a.text}</span></li>`;
   html += '</ul>';
   $('alerts-body').innerHTML = html;
+}
+
+// Panel 7: Notional Drift
+function renderDrift(rs, qs) {
+  const drift = rs?.metrics?.drift_summary || {};
+  const excluded = drift.drift_excluded_count ?? 0;
+  const rejRate = drift.drift_rejection_rate;
+  const medPct = drift.signal_drift_median_pct;
+  const p90Pct = drift.signal_drift_p90_pct;
+  const worst = drift.worst_pairs_by_drift || [];
+
+  // Rolling aggregates
+  const driftExclTotal = qs.drift_excluded_total ?? null;
+  const driftRejMedian = qs.drift_rejection_rate_median ?? null;
+
+  let html = `<div class="kpi">
+    <div class="kpi-item"><div class="kpi-val">${excluded}</div><div class="kpi-lbl">Excluded (latest)</div></div>
+    <div class="kpi-item"><div class="kpi-val">${rejRate != null ? (rejRate*100).toFixed(1)+'%' : '—'}</div><div class="kpi-lbl">Rejection Rate</div></div>
+    <div class="kpi-item"><div class="kpi-val">${fmt(medPct,1)}%</div><div class="kpi-lbl">Signal Median Drift</div></div>
+    <div class="kpi-item"><div class="kpi-val">${fmt(p90Pct,1)}%</div><div class="kpi-lbl">Signal P90 Drift</div></div>
+  </div>`;
+
+  if (driftExclTotal != null || driftRejMedian != null) {
+    html += `<div style="margin-top:8px;font-size:.75rem;color:#8b949e">Rolling: excluded_total=${driftExclTotal??'—'} | rejection_rate_median=${driftRejMedian != null ? (driftRejMedian*100).toFixed(1)+'%' : '—'}</div>`;
+  }
+
+  if (worst.length > 0) {
+    html += '<table style="margin-top:10px"><tr><th>Pair</th><th class="num">Avg Drift %</th><th class="num">Count</th></tr>';
+    for (const w of worst)
+      html += `<tr><td>${w.pair||'?'}</td><td class="num warn-c">${fmt(w.avg_drift_pct,1)}%</td><td class="num">${w.count||0}</td></tr>`;
+    html += '</table>';
+  } else if (excluded === 0) {
+    html += '<div style="margin-top:8px;font-size:.8rem;color:#3fb950">No drift exclusions — all quotes within 20% threshold</div>';
+  }
+  $('drift-body').innerHTML = html;
+}
+
+// Panel 8: Per-Chain Blocker Classification
+function renderBlockers(ls) {
+  if (!ls?.per_chain) { $('blockers-body').innerHTML = '<em class="na">No multi-chain data</em>'; return; }
+  const pc = ls.per_chain;
+  let html = '<table><tr><th>Chain</th><th>Blocker Type</th><th>Evidence</th></tr>';
+  for (const [chain, d] of Object.entries(pc)) {
+    const sigs = d.included_signals_total || 0;
+    const xdex = d.last_cross_dex_pairs_count;
+    const af = d.accepted_fail;
+    const fail = d.fail || 0;
+    const pass = d.pass || 0;
+    const level = d.last_chain_quality_level || '?';
+    const gap = d.sweep_gap_to_zero_bps;
+    let blockerType, evidence;
+    const configBlocker = d.blocker_classification;
+    const configReason = d.blocker_reason;
+
+    if (configBlocker === 'SYSTEM') {
+      blockerType = badge('SYSTEM', 'fail');
+      evidence = configReason || 'System/config limitation (from config)';
+    } else if (af) {
+      blockerType = badge('ACCEPTED_FAIL', 'af');
+      evidence = 'Single-DEX only, expected to fail';
+    } else if (fail > 0 && sigs === 0) {
+      blockerType = badge('SYSTEM', 'fail');
+      evidence = 'FAIL with 0 signals — config/infra issue';
+    } else if (xdex != null && xdex === 0 && sigs > 0) {
+      blockerType = badge('SYSTEM', 'fail');
+      evidence = 'No cross-DEX pairs — single-DEX fallback mode';
+    } else if (level === 'INFRA_READY' && sigs === 0) {
+      blockerType = badge('SYSTEM', 'warn');
+      evidence = 'INFRA_READY but 0 signals — quoter/config mismatch';
+    } else if (pass > 0 && gap != null && gap > 10) {
+      blockerType = badge('MARKET', 'warn');
+      evidence = `Gap=${fmt(gap,1)} bps — economics not yet profitable`;
+    } else if (pass > 0 && gap != null && gap <= 10) {
+      blockerType = badge('NEAR_BREAKEVEN', 'pass');
+      evidence = `Gap=${fmt(gap,1)} bps — close to breakeven`;
+    } else {
+      blockerType = badge('UNKNOWN', 'warn');
+      evidence = `level=${level}, signals=${sigs}`;
+    }
+    html += `<tr><td>${chain}</td><td>${blockerType}</td><td style="font-size:.75rem">${evidence}</td></tr>`;
+  }
+  html += '</table>';
+  $('blockers-body').innerHTML = html;
+}
+
+// Panel 9: Quality Rejects
+function renderRejects(rs) {
+  const reasons = rs?.quality_reasons || [];
+  const warnings = rs?.quality_warnings || [];
+  const metrics = rs?.metrics || {};
+  const excluded = metrics.excluded_signals_count || 0;
+  const suspect = metrics.suspect_signals_count || 0;
+  const fragRate = metrics.fragile_rate;
+
+  let html = `<div class="kpi">
+    <div class="kpi-item"><div class="kpi-val">${excluded}</div><div class="kpi-lbl">Excluded Signals</div></div>
+    <div class="kpi-item"><div class="kpi-val">${suspect}</div><div class="kpi-lbl">Suspect Signals</div></div>
+    <div class="kpi-item"><div class="kpi-val ${fragRate != null && fragRate > 0.5 ? 'neg' : ''}">${fragRate != null ? (fragRate*100).toFixed(1)+'%' : '—'}</div><div class="kpi-lbl">Fragile Rate</div></div>
+  </div>`;
+
+  if (reasons.length > 0 || warnings.length > 0) {
+    html += '<table style="margin-top:10px"><tr><th>Reason/Warning</th></tr>';
+    for (const r of reasons) {
+      const c = r.startsWith('FAIL') ? 'neg' : r.startsWith('WARN') ? 'warn-c' : '';
+      html += `<tr><td class="${c}">${r}</td></tr>`;
+    }
+    for (const w of warnings) html += `<tr><td class="warn-c">⚡ ${w}</td></tr>`;
+    html += '</table>';
+  } else {
+    html += '<div style="margin-top:8px;font-size:.8rem;color:#3fb950">No quality issues in latest run</div>';
+  }
+  $('rejects-body').innerHTML = html;
 }
 
 // Auto-load on page open

@@ -134,6 +134,11 @@ dynamic_probe:
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 
+# R19: Machine-readable blocker classification for dashboard
+blocker_classification: SYSTEM
+blocker_reason: "single_dex_only: agni_v3 only, stratum (ve33) incompatible with quoter_v2"
+blocker_resolution: "Monitor Mantle for FusionX V3 or similar quoter_v2 DEX deployment"
+
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity
 truth_mode_m42: true

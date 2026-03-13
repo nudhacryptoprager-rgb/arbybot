@@ -1221,7 +1221,8 @@ def run_scan(
     
     truth_data = build_truth_data(
         config, stats, current_block, spread_signals, suspect_examples,
-        infra_payload, raw_bps, spread_threshold_bps, run_timestamp=run_timestamp
+        infra_payload, raw_bps, spread_threshold_bps, run_timestamp=run_timestamp,
+        rejected_quotes=rejected_quotes,
     )
     
     reject_data = build_reject_data(

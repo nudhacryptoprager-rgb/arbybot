@@ -230,6 +230,11 @@ def emit_to_aggregator_light(
         "sweep_measured_fee_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("measured_fee_bps"),
         "sweep_measured_slippage_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("measured_slippage_bps"),
         "sweep_measured_total_cost_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("measured_total_cost_bps"),
+        # v3.5.0: Notional drift summary for first-class drift analysis
+        "drift_excluded_count": metrics.get("drift_summary", {}).get("drift_excluded_count", 0),
+        "drift_rejection_rate": metrics.get("drift_summary", {}).get("drift_rejection_rate", 0.0),
+        "drift_signal_median_pct": metrics.get("drift_summary", {}).get("signal_drift_median_pct"),
+        "drift_signal_p90_pct": metrics.get("drift_summary", {}).get("signal_drift_p90_pct"),
     })
     
     # Clean legacy: keep only light-format runs
@@ -524,6 +529,10 @@ def _compute_quick_stats(
         "consecutive_non_nodata_cycles": consecutive_non_nodata_cycles,
         # v3.5.0: Per-chain frontier aggregates for multi-chain economics ranking
         "per_chain_frontier": _compute_per_chain_frontier(normal_runs, all_chain_keys, percentile),
+        # v3.5.0: Notional drift aggregate stats
+        "drift_excluded_total": sum(r.get("drift_excluded_count", 0) for r in normal_runs),
+        "drift_rejection_rate_median": percentile([r["drift_rejection_rate"] for r in normal_runs if r.get("drift_rejection_rate") is not None], 50),
+        "drift_signal_median_pct_p50": percentile([r["drift_signal_median_pct"] for r in normal_runs if r.get("drift_signal_median_pct") is not None], 50),
     }
     
     # v2.0: runs_since_timestamp (replaces runs_since_sha)

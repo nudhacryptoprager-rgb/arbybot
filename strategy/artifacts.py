@@ -356,6 +356,68 @@ def _build_roundtrip_summary(stats: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
+def _build_drift_summary(
+    rejected_quotes: List[Dict[str, Any]],
+    spread_signals: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Build first-class notional drift summary from rejected quotes and spread signals.
+
+    Returns per-pair drift stats, aggregate rejection rate, and worst offenders.
+    """
+    # Count drift-excluded rejects per pair
+    drift_rejects_by_pair: Dict[str, List[float]] = {}
+    total_drift_excluded = 0
+    for r in rejected_quotes:
+        if r.get("reason") == "NOTIONAL_DRIFT_EXCLUDED":
+            total_drift_excluded += 1
+            pair = r.get("pair", "unknown")
+            drift_pct = r.get("notional_drift_pct") or r.get("drift_pct", 0)
+            if pair not in drift_rejects_by_pair:
+                drift_rejects_by_pair[pair] = []
+            if drift_pct:
+                drift_rejects_by_pair[pair].append(abs(float(drift_pct)))
+
+    # Extract drift from included spread signals
+    signal_drifts: List[float] = []
+    for sig in spread_signals:
+        buy_d = sig.get("buy_notional_drift_pct")
+        sell_d = sig.get("sell_notional_drift_pct")
+        if buy_d is not None:
+            signal_drifts.append(abs(float(buy_d)))
+        if sell_d is not None:
+            signal_drifts.append(abs(float(sell_d)))
+
+    total_quotes = len(rejected_quotes) + len(spread_signals) * 2  # approx
+    rejection_rate = total_drift_excluded / max(1, total_quotes)
+
+    # Per-pair summary (worst offenders)
+    per_pair: List[Dict[str, Any]] = []
+    for pair, drifts in sorted(drift_rejects_by_pair.items(), key=lambda x: -len(x[1])):
+        per_pair.append({
+            "pair": pair,
+            "excluded_count": len(drifts),
+            "median_drift_pct": round(sorted(drifts)[len(drifts) // 2], 2) if drifts else 0,
+            "max_drift_pct": round(max(drifts), 2) if drifts else 0,
+        })
+
+    # Signal-level drift stats
+    signal_median = 0.0
+    signal_p90 = 0.0
+    if signal_drifts:
+        s = sorted(signal_drifts)
+        signal_median = round(s[len(s) // 2], 2)
+        signal_p90 = round(s[int(len(s) * 0.9)], 2)
+
+    return {
+        "drift_excluded_count": total_drift_excluded,
+        "drift_rejection_rate": round(rejection_rate, 4),
+        "signal_drift_median_pct": signal_median,
+        "signal_drift_p90_pct": signal_p90,
+        "worst_pairs_by_drift": per_pair[:5],
+    }
+
+
 def build_truth_data(
     config: Dict[str, Any],
     stats: Dict[str, Any],
@@ -366,6 +428,7 @@ def build_truth_data(
     raw_bps: int,
     spread_threshold_bps: int,
     run_timestamp: Optional[str] = None,  # v2.3.0: Unified provenance
+    rejected_quotes: Optional[List[Dict[str, Any]]] = None,  # For drift summary
 ) -> Dict[str, Any]:
     """
     Build truth report data structure.
@@ -469,6 +532,8 @@ def build_truth_data(
         "measured_economics": _build_measured_economics(stats),
         # v3.5.0: Canonical arbitrage viability decision — answered AFTER dynamic sweep.
         "arbitrage_viability_decision": _build_viability_decision(stats),
+        # Notional drift summary — per-pair drift stats and rejection rate
+        "drift_summary": _build_drift_summary(rejected_quotes or [], spread_signals),
         # v2.1.0: truth_mode_m42 - when true, one-leg PnL is DIAGNOSTIC only, roundtrip is canonical
         "truth_mode_m42": config.get("truth_mode_m42", False),
         # v2.3.0: Explicit DIAGNOSTIC vs CANONICAL profit semantics

@@ -156,6 +156,13 @@ dynamic_probe:
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 
+# R19: Machine-readable blocker classification for dashboard
+# SYSTEM = infra/config/adapter limitation (not market economics)
+# MARKET = economics barrier (gas, liquidity, spread) with working infra
+blocker_classification: SYSTEM
+blocker_reason: "single_dex_fallback: 2 DEXes but only same-DEX fee-tier arbitrage viable"
+blocker_resolution: "Add third quoter_v2 DEX or fix cross-DEX routing"
+
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity
 truth_mode_m42: true
