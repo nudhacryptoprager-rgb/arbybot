@@ -1,10 +1,10 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-14 (R27.4)
+**Updated**: 2026-03-14 (R28.1 — honesty correction)
 **Tests**: 1806 collected / 1803 passed / 3 skipped
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_20260314_211452 (R27.4 arb primary NORMAL, fresh), ci_m5_gate_20260314_192514 (R27.2 arb primary), ci_m5_gate_20260314_192713 (R27.2 arb 4-DEX candidate), ci_m5_gate_20260314_193000 (R27.2 scroll stage1), ci_m5_gate_20260314_193819 (R27.2 long_scan)
+**Evidence runDirs**: ci_m5_gate_20260314_223513 (R28.1 arb rolling-linked), ci_m5_gate_20260314_222606 (R28.1 arb primary), ci_m5_gate_20260314_222708 (R28.1 zksync), ci_m5_gate_20260314_222846 (R28.1 base, ROUNDTRIP_PROFITABLE=1), ci_m5_gate_20260314_223010 (R28.1 mantle)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
 **Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-14T18:40:26Z: 8 runs, 17 signals, $23.49)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 16 active files (R27.4).
@@ -39,7 +39,7 @@ scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 confirmed R27.
 
 **R27.4 changes to classification**: ve33 adapter IMPLEMENTED (R27.4) — mantle/base blockers changed from STRUCTURAL to NEEDS_ONLINE_VE33_TEST. arb gap regressed 15.77→20.41 bps (market). zksync drift 0.27→0.31.
 
-**Rollout Queue (R28 — architecture audit, needs fresh online evidence)**:
+**Rollout Queue (R28.1 — honesty correction, needs fresh online evidence)**:
 1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (R27.2: 14 sims). Gap=20.41 bps (R27.4). Exit gate: 5 consecutive. discovery_runtime is canonical successor (R28).
 2. **zksync** — drift_rejection_rate=0.31 (above 0.25 threshold), needs improvement
 3. **base** — ve33 adapter IMPLEMENTED (R27.4), needs online test with aerodrome. discovery_runtime path verified.

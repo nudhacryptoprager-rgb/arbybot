@@ -404,6 +404,67 @@ class TestBuildTruthDataExecutionPnL(unittest.TestCase):
         # execution_pnl_included excludes the excluded one (gross_pnl = 12)
         self.assertEqual(float(result["execution_pnl_included"]["gross_pnl_usdc"]), 12.0)
 
+    def test_net_pnl_bps_computed_when_cost_model_available(self):
+        """net_pnl_bps = (net_pnl_usdc / total_notional) * 10000."""
+        from strategy.artifacts import _compute_execution_pnl
+
+        signals = [
+            {"net_pnl_usdc_est": 10.0, "gross_pnl_usdc_est": 12.0, "is_net_positive_est": True},
+        ]
+        config = {"gas_usd_estimate": 0.05, "paper_slippage_bps": 0, "paper_size_usd": 100}
+
+        result = _compute_execution_pnl(signals, config)
+
+        self.assertTrue(result["cost_model_available"])
+        # gross = 12.0, cost = 0.05 (gas), net = 11.95
+        # total_notional = 100 * 1 = 100
+        # net_pnl_bps = (11.95 / 100) * 10000 = 1195.0
+        self.assertIsNotNone(result["net_pnl_bps"])
+        self.assertAlmostEqual(result["net_pnl_bps"], 1195.0, places=1)
+
+    def test_net_pnl_bps_none_when_cost_model_unavailable(self):
+        """net_pnl_bps=None when cost model is not available."""
+        from strategy.artifacts import _compute_execution_pnl
+
+        signals = [
+            {"net_pnl_usdc_est": 10.0, "gross_pnl_usdc_est": 12.0, "is_net_positive_est": True},
+        ]
+        config = {}  # No gas_usd_estimate
+
+        result = _compute_execution_pnl(signals, config)
+
+        self.assertFalse(result["cost_model_available"])
+        self.assertIsNone(result["net_pnl_bps"])
+
+    def test_net_pnl_bps_none_when_no_signals(self):
+        """net_pnl_bps=None when there are no signals (avoids division by zero)."""
+        from strategy.artifacts import _compute_execution_pnl
+
+        signals = []
+        config = {"gas_usd_estimate": 0.05}
+
+        result = _compute_execution_pnl(signals, config)
+
+        self.assertIsNone(result["net_pnl_bps"])
+
+    def test_net_pnl_bps_with_multiple_signals(self):
+        """net_pnl_bps correct with multiple signals and slippage."""
+        from strategy.artifacts import _compute_execution_pnl
+
+        signals = [
+            {"net_pnl_usdc_est": 5.0, "gross_pnl_usdc_est": 6.0, "is_net_positive_est": True},
+            {"net_pnl_usdc_est": 3.0, "gross_pnl_usdc_est": 4.0, "is_net_positive_est": True},
+        ]
+        config = {"gas_usd_estimate": 0.05, "paper_slippage_bps": 10, "paper_size_usd": 100}
+
+        result = _compute_execution_pnl(signals, config)
+
+        # gross = 6 + 4 = 10, gas = 0.05*2 = 0.10, slippage = (100*10/10000)*2 = 0.20
+        # total_cost = 0.10 + 0.20 = 0.30, net = 10 - 0.30 = 9.70
+        # total_notional = 100 * 2 = 200
+        # net_pnl_bps = (9.70 / 200) * 10000 = 485.0
+        self.assertAlmostEqual(result["net_pnl_bps"], 485.0, places=1)
+
 
 if __name__ == "__main__":
     unittest.main()

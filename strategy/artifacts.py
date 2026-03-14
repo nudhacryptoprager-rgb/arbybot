@@ -237,13 +237,17 @@ def _compute_execution_pnl(
     # Net PnL: gross - total_cost (canonical invariant)
     computed_net_pnl = total_gross_pnl - total_cost_usd if cost_model_available else None
     
+    # Net PnL in BPS relative to total notional (paper_size_usd * num_signals)
+    total_notional = paper_size_usd * num_signals if num_signals > 0 else 0.0
+    computed_net_pnl_bps = round((computed_net_pnl / total_notional) * 10000, 2) if (computed_net_pnl is not None and total_notional > 0) else None
+    
     # Format as strings for money fields
     return {
         "signal_pnl_usdc": f"{total_gross_pnl:.6f}",
         "would_execute_pnl_usdc": f"{computed_net_pnl:.6f}" if computed_net_pnl is not None and computed_net_pnl > 0 else "0.000000",
         "gross_pnl_usdc": f"{total_gross_pnl:.6f}",
         "net_pnl_usdc": f"{computed_net_pnl:.6f}" if computed_net_pnl is not None else None,
-        "net_pnl_bps": None,  # TODO: compute from notional when available
+        "net_pnl_bps": computed_net_pnl_bps,
         "cost_model_available": cost_model_available,
         # v3.2.62: Clean PnL v3 with position-based slippage (formula fix)
         # v3 upgrade: slippage_usd = paper_size_usd * slippage_bps / 10000 * num_signals

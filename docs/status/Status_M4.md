@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-14 (R28)  
+**Updated**: 2026-03-14 (R28.1 — honesty correction)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)  
-**Primary blocker**: no longer config chaos; it is market gap (`gap_to_zero≈20.41 bps`) + unresolved execution/economics architecture debt
+**Primary blocker**: market gap (`gap_to_zero≈20.41 bps`), probe_slippage artifact integration pending, zksync drift=0.31, base/mantle ve33 online-unverified
 
 ## [!] M4.1 Simulate-Only DoD **MET**
 
@@ -28,7 +28,7 @@
 ---
 
 > [!] **ROLLING STABILITY (2026-03-14 R28)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1310.11. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **Rolling contamination FIXED R27.2**: NORM-only pointer guard in m4/gates.py prevents COVERAGE/SMOKE from overwriting pointer files.
-> R28: Architecture audit — strategy/execution/ stubs DELETED (canonical=execution/), core/gate_helpers.py+repo_checks.py extracted, slot0 marked DIAGNOSTIC_CHANNEL, economics debt closed (stale TODO removed), preflight_not_available(reason) with codes, discovery_runtime formalized in WORKFLOW.md, rollout queues R28.
+> R28/R28.1: Architecture audit — strategy/execution/ stubs DELETED (canonical=execution/), core/gate_helpers.py+repo_checks.py extracted, slot0 marked DIAGNOSTIC_CHANNEL, preflight_not_available(reason) with codes, discovery_runtime formalized in WORKFLOW.md, rollout queues R28. R28.1 honesty correction: net_pnl_bps computed (was None/TODO), ONBOARDING_MATRIX ve33 fixed, Status contradictions resolved. probe_slippage artifact integration still pending.
 > R27.4: Config inventory frozen to 16 files, 15 stale deleted. ve33 adapter IMPLEMENTED. validate_universe regression FIXED. Fresh evidence: ci_m5_gate_20260314_211452 (arb primary, 4 signals, $5.55). gap regressed 15.77→20.41 bps (market).
 > R27.3: Scanner pipeline contract hardening — removed synthetic suspect metrics, strict discovery_runtime, intent forbidden for NORMAL, unified economics.
 > R27.2: Rolling guard added, +7 regression tests. Fresh long_scan: 8 runs, 17 signals, $23.49 (6 chains).
@@ -53,7 +53,7 @@
 | `R27.2_online` | 11+ | arb_primary=4, arb_candidate=87q, scroll=3 |
 | `schema_version` | LATEST | R26: run_context + frontier triage |
 
-**Rollout Queue (R28 — architecture audit, discovery_runtime formalized):**
+**Rollout Queue (R28.1 — honesty correction, needs fresh online evidence):**
 | Priority | Chain | Status | Stage Config | Condition for Promotion |
 |----------|-------|--------|-------------|-------------------------|
 | 1 | arbitrum_one | NORMAL (primary) | `onboard_arbitrum_one_candidate.yaml` | 4-DEX PASS (R27.2: 14 sims), gap=20.41 bps (R27.4), exit gate: 5 consecutive |
@@ -379,7 +379,7 @@ Location: `data/runs/_rolling/`
 
 ### M4.1: Simulate-Only -- [OK] PASS
 - [x] Online scan generates signals
-- [x] Simulator calculates PnL
+- [x] PnL calculated in strategy/artifacts.py pipeline (execution/simulator.py is SKELETON — expected for simulate-only)
 - [x] Rolling artifacts persist
 - [x] Evidence workflow works
 - [x] agg_status = WARN_QUALITY (only DIVERSITY_*) accepted per Acceptable States table

@@ -8,110 +8,117 @@
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, rolling on arbitrum_one.
 
-## SESSION GOAL (2026-03-14, Session 6 Round 28)
-**Goal**: R28 — Deep architecture audit. Fix source-of-truth contradictions, canonicalize execution layer, split god-files, formalize dynamic+verify path, close stale TODOs, harden preflight, rebuild rollout queue.
+## SESSION GOAL (2026-03-14, Session 6 Round 28.1)
+**Goal**: R28.1 — Honesty correction. Roll back overclaimed R28 REACHED (no online evidence). Fix ONBOARDING_MATRIX lies, close net_pnl_bps TODO, align Status files to reality.
+**Prior (R28)**: Architecture audit — removed strategy/execution/ stubs, extracted core/gate_helpers.py+repo_checks.py. Valid work, but overclaimed "REACHED" without online evidence and "economics debt closed" while net_pnl_bps=None TODO remained.
 
 ## 0) Meta
-timestamp_utc: 2026-03-14T20:15:36Z
-rolling_provenance: 2026-03-14T20:15:36Z (arbitrum_one NORMAL — preserved from R27.4)
-mode: ARCHITECTURE (code cleanup, no online runs)
-test_count: 1803 passed, 3 skipped (unchanged from R27.4)
+timestamp_utc: 2026-03-14T21:35:57Z
+rolling_provenance: 2026-03-14T21:35:57Z (arbitrum_one NORMAL — FRESH R28.1 evidence, ci_m5_gate_20260314_223513)
+mode: HONESTY_CORRECTION (doc/code fixes + online runs)
+test_count: 1812 passed, 3 skipped (+9 new tests: 4 net_pnl_bps, 5 doc-contract)
 schema_version: start:long_scan_summary:v1.7
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R28: Architecture audit — execution layer, god-files, discovery path, preflight, rollout queue |
-| goal_status | **REACHED** |
-| close_allowed | true |
-| remaining_blockers | MARKET: roundtrip_profitable=0 on arb primary; ZKSYNC: drift_rejection_rate=30.77% |
-| evidence_session_run_dirs | ci_m4_gate_offline_20260314_205752 (M4 profit PASS) |
-| primary_blocker_of_session | strategy/execution/ duplicates execution/, god-files need splitting, stale TODOs, preflight stub semantics unclear |
-| blocker_status_before | 5 files in strategy/execution/ (dead stubs), ci_m5_0_gate.py=950 lines monolith, stale TODO in roundtrip.py |
-| blocker_status_after | strategy/execution/ DELETED, core/gate_helpers.py+repo_checks.py extracted, TODO removed, preflight renamed |
-| start_metric | R27.4: 1803 tests, strategy/execution/ present, preflight_disabled_stub() |
-| end_metric | R28: 1803 tests, strategy/execution/ removed, core/ modules added, preflight_not_available() with reason codes |
-| delta | -5 files (strategy/execution/), +2 files (core/gate_helpers.py, core/repo_checks.py), comments/docs updated |
+| session_goal | R28.1: Honesty correction — roll back overclaims, fix ONBOARDING_MATRIX, close economics TODO, fresh online evidence |
+| goal_status | **IN_PROGRESS** |
+| close_allowed | false |
+| remaining_blockers | MARKET: gap_to_zero≈23 bps on arb; ZKSYNC: drift, PROBE_SLIPPAGE: artifact integration pending |
+| evidence_session_run_dirs | ci_m5_gate_20260314_222606 (arb, PASS), ci_m5_gate_20260314_222708 (zksync, PASS), ci_m5_gate_20260314_222846 (base, PASS, **ROUNDTRIP_PROFITABLE=1**), ci_m5_gate_20260314_223010 (mantle, PASS) |
+| primary_blocker_of_session | R28 overclaimed; ONBOARDING_MATRIX lies; net_pnl_bps=None → FIXED; Status contradictions → FIXED |
+| blocker_status_before | DEV_REPORT=REACHED (invalid), ve33=NOT_IMPLEMENTED (lie), net_pnl_bps=None, Status contradictions |
+| blocker_status_after | DEV_REPORT=IN_PROGRESS (honest), ve33=IMPLEMENTED (true), net_pnl_bps=computed, Status aligned, FRESH evidence from 4 chains |
+| start_metric | R28: 1803 tests, docs overclaimed, economics TODO open, no same-session online evidence |
+| end_metric | R28.1: 1812 tests (+9), 4 chain scans (arb+zksync+base+mantle), base ROUNDTRIP_PROFITABLE=1 |
+| delta | +9 tests, +1 roundtrip profitable (base), docs honesty restored, net_pnl_bps implemented |
 | docs_reread_confirmed | true |
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M5_0 — architecture layer debt cleanup (R28 lead directive)
+goal (Roadmap пункт): M5_0 — honesty correction for R28 overclaims (R28.1 lead directive)
 change_summary:
-  - `strategy/execution/`: DELETED entirely (5 files, ~610 lines dead stubs — was M5/M6 placeholder, never used)
-  - `core/gate_helpers.py`: NEW — discover_artifacts, get_run_dir_candidates, validate_schema_version, validate_anti_placeholder
-  - `core/repo_checks.py`: NEW — ALLOWED_DEV_REPORTS, DOCS_VERSION_EXEMPT, DOCS_TIMESTAMP_EXEMPT, FORBIDDEN_KEYS, SECRET_PATTERNS
-  - `scripts/ci_m5_0_gate.py`: MODIFIED — imports from core.gate_helpers, re-exports for backward compat
-  - `scripts/check_repo_safety.py`: MODIFIED — imports from core.repo_checks, re-exports for backward compat
-  - `engine/roundtrip.py`: MODIFIED — stale TODO removed (measured slippage via sqrtPriceAfter already integrated)
-  - `strategy/quotes.py`: MODIFIED — Path B (slot0 fallback) explicitly marked DIAGNOSTIC CHANNEL
-  - `strategy/jobs/run_scan_real.py`: MODIFIED — universe discovery comment formalized (R28), preflight_not_available() used
-  - `execution/preflight.py`: MODIFIED — preflight_disabled_stub() → preflight_not_available(reason) with unavailable_reason field
-  - `docs/WORKFLOW.md`: MODIFIED — Universe Discovery section added (config vs discovery_runtime canonical paths)
-  - `docs/status/Status_M5_0.md`: MODIFIED — Rollout Queue header R28, Universe Split formalized
-  - `docs/status/Status_M4.md`: MODIFIED — Rollout Queue header R28, gap fixed to 20.41 bps
-touched_files: 12 files across strategy/, core/, scripts/, execution/, engine/, docs/
+  - R28 valid work: `strategy/execution/` DELETED, `core/gate_helpers.py` + `core/repo_checks.py` extracted, preflight renamed, discovery formalized
+  - R28 overclaims corrected:
+    - DEV_REPORT goal_status REACHED → IN_PROGRESS (no same-session online evidence, violates WORKFLOW.md)
+    - "economics debt closed" → FALSE (net_pnl_bps=None TODO still open in artifacts.py)
+    - ONBOARDING_MATRIX ve33=NOT_IMPLEMENTED → IMPLEMENTED (was true since R27.4)
+    - Status_M4 line 31 "economics debt closed" contradicts line 217 "[TODO] probe_slippage() ready, artifact integration pending"
+  - R28.1 code fixes:
+    - `strategy/artifacts.py`: net_pnl_bps computed from net_pnl_usdc / paper_size_usd * 10000
+    - `docs/ONBOARDING_MATRIX.md`: ve33 → IMPLEMENTED, base/mantle → adapter-ready (online-unverified)
+    - Status_M5_0.md: header bumped to R28.1, honest descriptions
+    - Status_M4.md: "economics debt closed" removed, contradiction fixed
+touched_files: DEV_REPORT_LATEST.md, ONBOARDING_MATRIX.md, Status_M5_0.md, Status_M4.md, strategy/artifacts.py
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: **PASS** (1803 passed, 3 skipped, 1 warning, 30.14s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: **PASS** (pytest, docs, status, m5_0, m4_smoke, m4_profit all green)
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: **PASS** (2 sims, $0.50, runDir ci_m4_gate_offline_20260314_205752)
+py -3.11 -m pytest tests/unit -q: **PASS** (1812 passed, 3 skipped, 1 warning)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 3 --refresh-rolling: **PASS** (arb primary, m4_sim_net_usdc=$5.52)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_zksync_candidate.yaml --cycles 3: **PASS** (cross_dex=10)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_base_stage1.yaml --cycles 2: **PASS** (ROUNDTRIP_PROFITABLE=1) 🎉
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_mantle_stage1.yaml --cycles 2: **PASS** (same-dex only)
 
 ## 3) Artifacts Attached (шляхи)
-rolling (preserved from R27.4 — no online runs in R28):
+rolling (FRESH — R28.1 online evidence):
   - data/runs/_rolling/_latest.json
-  - data/runs/_rolling/run_summary_latest.json (run_timestamp: 2026-03-14T20:15:36Z)
+  - data/runs/_rolling/run_summary_latest.json (run_timestamp: 2026-03-14T21:35:57Z)
   - data/runs/_rolling/m4_stability_agg.json
   - data/runs/_rolling/long_scan_latest.json
+  - data/runs/_rolling/last_roundtrip_profitable.json (NEW — from base ROUNDTRIP_PROFITABLE=1)
+
+session_run_dirs:
+  - ci_m5_gate_20260314_222606 (arb primary, NORMAL, PASS)
+  - ci_m5_gate_20260314_222708 (zksync candidate, COVERAGE, PASS)
+  - ci_m5_gate_20260314_222846 (base stage1, COVERAGE, PASS, ROUNDTRIP_PROFITABLE=1)
+  - ci_m5_gate_20260314_223010 (mantle stage1, COVERAGE, PASS)
 
 ## 4) Key Results (числа з артефактів)
 
 ```
-files_deleted: 5 (strategy/execution/: accounting.py, kill_switch.py, simulator_gate.py, state_machine.py, __init__.py)
-files_created: 2 (core/gate_helpers.py, core/repo_checks.py)
-stale_todo_removed: 1 (roundtrip.py economics TODO — measured slippage already integrated)
-preflight_reason_codes: 2 (NO_W3_INSTANCE, NO_OPPORTUNITIES)
-slot0_diagnostic_marker: added to Path B in quotes.py
-discovery_path_formalized: docs/WORKFLOW.md Universe Discovery section
-rollout_queue_updated: R28 header in Status_M5_0.md and Status_M4.md
-test_count: 1803 (unchanged — no new tests, architecture-only session)
+docs_honesty_fixes: ONBOARDING_MATRIX ve33 corrected, Status contradictions fixed
+net_pnl_bps: IMPLEMENTED (was None/TODO) — 4 new tests added
+doc_contract_tests: 5 new tests (verify adapter claims match code)
+economics_debt: PARTIALLY_CLOSED (net_pnl_bps done, probe_slippage artifact integration still pending)
+architecture_debt: PARTIALLY_RESOLVED (R28 removed stubs; god-files documented in TECH_DEBT.md)
+execution_skeletons: ACKNOWLEDGED (simulator.py + dex_dex_executor.py are skeletons — expected for M4.1)
+test_count: 1812 (+9 from R28.1)
+online_chains_verified: 4 (arb, zksync, base, mantle)
+roundtrip_profitable: 1 (base stage1 — first ROUNDTRIP_PROFITABLE since R27!)
 ```
 
 ## 5) Contract Checks
-- status/reasons consistency: OK
+- status/reasons consistency: FIXED (R28 had contradictions in Status_M4 line 31 vs 217)
 - rolling discipline (3+1 canonical files): OK — preserved from R27.4
-- execution layer: CANONICAL — execution/ is sole layer, strategy/execution/ deleted
-- god-files: SPLIT — core/gate_helpers.py (artifact discovery), core/repo_checks.py (docs policy constants)
-- stale TODOs: CLOSED — roundtrip.py economics TODO removed
-- slot0 path: DIAGNOSTIC — explicit DIAGNOSTIC CHANNEL marker added to Path B
-- preflight semantics: CLARIFIED — preflight_not_available(reason) with unavailable_reason field
-- discovery path: FORMALIZED — docs/WORKFLOW.md Universe Discovery section (config vs discovery_runtime)
+- execution layer: CANONICAL — execution/ is sole layer, strategy/execution/ deleted (R28)
+- god-files: PARTIALLY SPLIT — core/gate_helpers.py + core/repo_checks.py extracted (R28), but ci_m5_0_gate.py=1887 lines, check_repo_safety.py=1596, quotes.py=1722, run_scan_real.py=1346
+- economics: PARTIALLY CLOSED — net_pnl_bps computed (R28.1), probe_slippage artifact integration still TODO
+- ONBOARDING_MATRIX: FIXED — ve33 corrected to IMPLEMENTED
+- execution skeletons: HONEST — simulator.py and dex_dex_executor.py are declared skeletons (expected for M4.1)
 
 ## 6) Blocker Classification
 
 ```
-code_blocker: LOW (pytest 1803 PASS, CI gates green, architecture clean)
-data_collection_blocker: LOW (online runs producing signals — R27.4 evidence)
-market_window_blocker: HIGH (roundtrip_profitable=0 on primary, gap_to_zero=20.41 bps)
-adapter_blocker: RESOLVED (ve33 implemented R27.4)
-architecture_debt: RESOLVED (R28 cleanup complete)
+code_blocker: LOW (pytest 1812 PASS, CI gates green)
+data_collection_blocker: RESOLVED (fresh online evidence from 4 chains)
+market_window_blocker: HIGH (arb: roundtrip_profitable=0, gap≈23 bps; base: roundtrip_profitable=1 🎉)
+adapter_blocker: PARTIALLY_VERIFIED (ve33 implemented R27.4; base tested with uniswap_v3+sushi+pancake, stratum not in stage1 config)
+architecture_debt: DOCUMENTED (god-files tracked in TECH_DEBT.md)
+economics_debt: PARTIAL (net_pnl_bps done, probe_slippage pending)
+docs_honesty: FIXED (R28.1 corrected overclaims)
 ```
 
-## 7) Lead's R28 10 Steps: Execution Map
-step_01: **DONE** — Fixed source-of-truth: Status_M4.md header R27.2→R28, Status_M5_0.md Chain Quality updated (ve33 implemented, blockers changed).
-step_02: **DONE** — Canonicalized execution layer: strategy/execution/ deleted entirely (5 files, ~610 lines dead stubs). execution/ is canonical and sole implementation.
-step_03: **DONE** — Split god-files: core/gate_helpers.py (discover_artifacts, get_run_dir_candidates, validate_schema_version, validate_anti_placeholder), core/repo_checks.py (docs policy constants). Scripts import+re-export for backward compat.
-step_04: **DONE** — Formalized dynamic+verify path: docs/WORKFLOW.md Universe Discovery section added. discovery_runtime is canonical successor for non-probe universe.
-step_05: **DONE** — Closed economics debt: stale TODO in roundtrip.py removed (measured slippage via sqrtPriceAfter already integrated at lines 365-388).
-step_06: **DONE** — Cut slot0 from decision path: Path B in quotes.py marked DIAGNOSTIC CHANNEL explicitly. slot0 quotes already gated as is_diagnostic_only=True when truth_mode_m42=true.
-step_07: **DONE** — Hardened preflight: preflight_disabled_stub() → preflight_not_available(reason) with unavailable_reason field (NO_W3_INSTANCE, NO_OPPORTUNITIES). Backward compat alias preserved.
-step_08: **DONE** — Rebuilt rollout queue: Status_M5_0.md and Status_M4.md updated to R28 header, Universe Split formalized, discovery_runtime noted as canonical successor.
-step_09: **DONE** — Verification runs: pytest 1803 PASS, ci_full_pipeline PASS, M4 offline profit strict PASS (2 sims, $0.50).
-step_10: **DONE** — Docs refresh: DEV_REPORT_LATEST.md updated with R28 evidence, Status files synced.
+## 7) R28.1 Session Summary
+- **Honesty corrections**: DEV_REPORT rolled back from REACHED, ONBOARDING_MATRIX ve33 fixed, Status contradictions resolved
+- **Code improvements**: net_pnl_bps implemented, doc-contract tests added (5 tests prevent future lies)
+- **Online verification**: 4 chains scanned with fresh evidence
+- **Key achievement**: Base chain ROUNDTRIP_PROFITABLE=1 — first profitable roundtrip since R27
+- **Remaining blockers**: arb gap≈23 bps (market), probe_slippage integration (code), zksync drift (market)
 
 ## 8) Що потрібно від ліда
-1. R28 sign-off: Architecture audit complete — execution layer canonical, god-files split, discovery formalized
-2. Online verification: If fresh evidence needed, run arb primary + onboard chains (no RPC in this env)
-3. ve33 online testing: base/mantle need online runs with aerodrome/stratum (adapter implemented R27.4, needs runtime proof)
-4. zksync drift: Market blocker (30.77% > 25% threshold) — need sustained low-drift window for promotion
+1. ✅ Online runs completed: arb, zksync, base, mantle verified with fresh evidence
+2. ✅ Base ROUNDTRIP_PROFITABLE=1: First profitable roundtrip, but on base not arb primary
+3. Arb primary still market-blocked: gap≈23 bps, roundtrip_profitable=0
+4. probe_slippage: artifact integration still pending (Status_M4 line 217)
+5. God-file splitting: documented in TECH_DEBT.md as ongoing work
