@@ -137,7 +137,7 @@ py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mo
 
 # M5 gate (online scan)
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_expanded.yaml --prune-keep 50
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_intent_arbitrum_one.yaml --prune-keep 50
 
 # Retention (preview then execute)
 py -3.11 scripts/prune_run_dirs.py --keep 50 --dry-run
@@ -187,7 +187,7 @@ A long scan is a **market/data probe** -- it confirms infrastructure stability, 
 and signal coverage across chains. It is not proof of constant profit.
 
 ```powershell
-py -3.11 start.py --config-list config/real_minimal.yaml,config/coverage_intent_base.yaml,config/coverage_intent_mantle.yaml,config/coverage_intent_zksync.yaml,config/coverage_intent_scroll.yaml,config/coverage_intent_linea.yaml --hours 3 --cycles 1 --sleep-seconds 20 --prune-keep 200 --summary-file data/runs/_rolling/long_scan_latest.json
+py -3.11 start.py --config-list config/real_minimal.yaml,config/onboard_base_stage1.yaml,config/onboard_mantle_stage1.yaml,config/onboard_zksync_candidate.yaml,config/onboard_scroll_stage1.yaml,config/onboard_linea_stage1.yaml --hours 3 --cycles 1 --sleep-seconds 20 --prune-keep 200 --summary-file data/runs/_rolling/long_scan_latest.json
 ```
 
 Strict mode (exit 1 if any chain has failures):

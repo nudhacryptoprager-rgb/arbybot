@@ -251,7 +251,7 @@ class TestCrossDexPreference:
 
 
 class TestHuntingConfigContract:
-    """Contract tests for hunting configs like real_hunting_lowfee.yaml.
+    """Contract tests for hunting-style configs (low fee tier arbitrage).
     
     v3.1.0: Ensures hunting configs produce valid cross-DEX signals
     without MIXED_SOURCE contamination for roundtrip evaluation.

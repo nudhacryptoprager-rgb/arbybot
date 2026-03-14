@@ -1,13 +1,13 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-14 (R27.2)
-**Tests**: 1800 collected / 1798 passed / 2 skipped
+**Updated**: 2026-03-14 (R27.4)
+**Tests**: 1806 collected / 1803 passed / 3 skipped
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_20260314_192514 (arb primary NORMAL), ci_m5_gate_20260314_192713 (arb 4-DEX candidate PASS), ci_m5_gate_20260314_193000 (scroll stage1 PASS), ci_m5_gate_20260314_193819 (long_scan arb, rolling updated)
+**Evidence runDirs**: ci_m5_gate_20260314_211452 (R27.4 arb primary NORMAL, fresh), ci_m5_gate_20260314_192514 (R27.2 arb primary), ci_m5_gate_20260314_192713 (R27.2 arb 4-DEX candidate), ci_m5_gate_20260314_193000 (R27.2 scroll stage1), ci_m5_gate_20260314_193819 (R27.2 long_scan)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
 **Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-14T18:40:26Z: 8 runs, 17 signals, $23.49)
-**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27)
+**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 16 active files (R27.4).
 
 ---
 
@@ -16,6 +16,8 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R27.4: Config layer audit — 15 stale YAMLs deleted, inventory frozen to 16 active files with TestConfigInventoryGuard. validate_universe.py regression FIXED (is_strict_run used before defined). ve33 adapter IMPLEMENTED (dex/adapters/ve33.py + registry). Fresh online evidence: ci_m5_gate_20260314_211452 (4 signals, $5.55).
+> R27.3: Scanner pipeline contract hardening — removed synthetic suspect metrics, strict discovery_runtime, intent forbidden for NORMAL, unified economics, pre-scan validation wired. +7 tests.
 > R27.2: Rolling contamination FIXED — NORM-only guard in m4/gates.py prevents COVERAGE/SMOKE runs from overwriting pointer files. check_repo_safety detects contamination (check [20]). +7 regression tests. Fresh online evidence: arb primary + 4-DEX candidate + scroll stage1 + long scan (6 chains, 8 runs, $23.49).
 > R27.1: Online proof — arb 4-DEX candidate PASS (14 signals, $14.61, dexes_active=4), scroll stage1 PASS (3 signals, $0.14, nuri_v3 quoter_v2 confirmed).
 > R27: Strategy shift — full universe preserved, staged chain onboarding via `onboard_<chain>_stageN.yaml` configs. Scroll nuri_v3 contract mismatch fixed (was incorrectly classified as algebra, actually uniswap_v3/quoter_v2). Coverage matrix: `docs/ONBOARDING_MATRIX.md`.
@@ -82,8 +84,25 @@ scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 confirmed R27.
 - ve33 gap explicitly documented (base/aerodrome, mantle/stratum)
 - `base roundtrip_profitable=2` is COVERAGE evidence, NOT promotion evidence
 
+**R27.4 config audit**:
+- validate_universe.py: FIXED — is_strict_run/run_kind moved above intent check block (R27.3 regression)
+- 15 stale YAMLs deleted: coverage_intent_* (6), real_debug, real_expanded, real_hunting, real_hunting_lowfee, real_nonstop, real_test_coverage, real_minimal_discovery_runtime, real_minimal_intent_forced, real_scan_linea_smoke
+- real_m5_0_golden.yaml: MOVED to docs/artifacts/golden/ (golden fixture, not a scanner config)
+- Active inventory frozen: 6 registry + 4 primary/probes + 6 onboard = 16 files
+- TestConfigInventoryGuard: ALLOWED_YAML_FILES (16 entries) + 2 tests (no unexpected + all exist)
+- ve33 adapter: dex/adapters/ve33.py (Ve33Adapter class), registered in dex/registry.py
+- All 10 scanner configs pass validate_universe
+- Online verification: ci_m5_gate_20260314_211452, PASS, 17 quotes, 4 signals, 3 cross-dex
+- Tests: 1803 passed, 3 skipped (-2 net: removed hunting tests, added inventory/adapter tests)
+
+**R27.3 code changes**:
+- `strategy/jobs/run_scan_real.py`: removed _compute_sanity_rejects() (synthetic suspect fabrication), replaced with _extract_suspect_from_rejects() (real data only); discovery_runtime strict-by-default; intent/intent_forced forbidden for NORMAL/COVERAGE; strategy_mode/same_dex_only encoded in stats; pre-scan validate_universe wired; paper_slippage_bps passed to opportunity_engine
+- `engine/opportunity_engine.py`: paper_slippage_bps parameter (was hardcoded 5.0)
+- `scripts/validate_universe.py`: intent forbidden for strict run_kinds, same_dex_mode warning
+- `tests/unit/test_suspect_provenance.py`: +7 tests (extract/purity validation)
+
 **Long scan (REFRESHED 2026-03-14)**: 5 PASS chains + 1 accepted-fail / 8 runs / 17 signals / $23.49 net / 2 profitable roundtrips
-**Profit truth**: NOT YET — Arbitrum profit-truth blocker remains (roundtrip.profitable_count=0 on primary chain, gap=15.77 bps)
+**Profit truth**: NOT YET — Arbitrum profit-truth blocker remains (roundtrip.profitable_count=0 on primary chain, gap=20.41 bps R27.4)
 
 ---
 

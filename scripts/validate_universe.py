@@ -11,7 +11,7 @@ Checks that:
 
 Usage:
     py -3.11 scripts/validate_universe.py --config config/real_minimal.yaml
-    py -3.11 scripts/validate_universe.py --config config/real_scan_linea_smoke.yaml --json
+    py -3.11 scripts/validate_universe.py --config config/real_minimal.yaml --json
 
 Exit codes:
   0 = PASS (all validations pass)
@@ -185,15 +185,6 @@ def validate_universe(config_path: Path) -> dict:
     result["summary"]["universe_source"] = universe_source
     is_discovery_runtime = (universe_source == "discovery_runtime")
     
-    # R27.3: Forbid intent/intent_forced for NORMAL/COVERAGE runs.
-    # intent paths skip on-chain verification and violate the "dynamic + verify" contract.
-    if universe_source in ("intent", "intent_forced") and is_strict_run:
-        result["errors"].append(
-            f"VIABILITY_FAIL: universe_source='{universe_source}' is forbidden for "
-            f"run_kind={run_kind}. Intent-based universes lack on-chain verification. "
-            "Use 'config' or 'discovery_runtime' for NORMAL/COVERAGE runs."
-        )
-    
     # v3.2.18: Check explicit run_kind for strict runs (no defaulting)
     has_explicit_run_kind = ("run_kind" in config)
     run_kind = config.get("run_kind", "NORMAL")
@@ -206,6 +197,15 @@ def validate_universe(config_path: Path) -> dict:
     # - SMOKE/other: WARN only (allow special test configs)
     strict_run_kinds = ("NORMAL", "COVERAGE")
     is_strict_run = (run_kind in strict_run_kinds)
+    
+    # R27.3: Forbid intent/intent_forced for NORMAL/COVERAGE runs.
+    # intent paths skip on-chain verification and violate the "dynamic + verify" contract.
+    if universe_source in ("intent", "intent_forced") and is_strict_run:
+        result["errors"].append(
+            f"VIABILITY_FAIL: universe_source='{universe_source}' is forbidden for "
+            f"run_kind={run_kind}. Intent-based universes lack on-chain verification. "
+            "Use 'config' or 'discovery_runtime' for NORMAL/COVERAGE runs."
+        )
     
     # v3.2.13: chain validation - FAIL if chain missing/unknown for strict runs
     # This prevents CHAIN_KEY_UNKNOWN warning and legacy cache path usage

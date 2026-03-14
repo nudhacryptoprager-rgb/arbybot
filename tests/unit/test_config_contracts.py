@@ -22,14 +22,14 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
 DEXES_YAML = CONFIG_DIR / "dexes.yaml"
 
-# Coverage config files that must be validated
+# Onboard/staged rollout config files that must be validated
 COVERAGE_CONFIGS = [
-    "coverage_intent_base.yaml",
-    "coverage_intent_scroll.yaml",
-    "coverage_intent_linea.yaml",
-    "coverage_intent_mantle.yaml",
-    "coverage_intent_zksync.yaml",
-    "coverage_intent_arbitrum_one.yaml",
+    "onboard_base_stage1.yaml",
+    "onboard_scroll_stage1.yaml",
+    "onboard_linea_stage1.yaml",
+    "onboard_mantle_stage1.yaml",
+    "onboard_zksync_candidate.yaml",
+    "onboard_arbitrum_one_candidate.yaml",
 ]
 
 # Required fields for coverage configs
@@ -309,14 +309,16 @@ class TestDisabledPoolsContracts:
     
     def test_scroll_has_price_scale_quarantine(self):
         """Scroll config must have PRICE_SCALE violating pools quarantined."""
-        config_path = CONFIG_DIR / "coverage_intent_scroll.yaml"
+        config_path = CONFIG_DIR / "onboard_scroll_stage1.yaml"
         if not config_path.exists():
-            pytest.skip("coverage_intent_scroll.yaml does not exist")
+            pytest.skip("onboard_scroll_stage1.yaml does not exist")
         
         with open(config_path) as f:
             config = yaml.safe_load(f)
         
         disabled_pools = config.get("disabled_pools", {})
+        if not disabled_pools:
+            pytest.skip("onboard_scroll_stage1.yaml has no disabled_pools (discovery_runtime mode)")
         
         # Known PRICE_SCALE violating pools that must be quarantined
         required_quarantines = [
@@ -329,3 +331,51 @@ class TestDisabledPoolsContracts:
                 f"Scroll config missing quarantined pool: {pool_key}"
             assert disabled_pools[pool_key].get("reason") == "PRICE_SCALE_VIOLATION", \
                 f"Pool {pool_key} should have reason PRICE_SCALE_VIOLATION"
+
+
+# =============================================================================
+# CONFIG INVENTORY GUARD (R27.4)
+# =============================================================================
+
+# Frozen active inventory: registry + primary/probes + staged rollout
+ALLOWED_YAML_FILES = {
+    # Registry / service configs
+    "cex.yaml",
+    "chains.yaml",
+    "core_tokens.yaml",
+    "dexes.yaml",
+    "fees.yaml",
+    "strategy.yaml",
+    # Primary + probes
+    "real_minimal.yaml",
+    "real_intent_arbitrum_one.yaml",
+    "real_roundtrip_probe.yaml",
+    "real_roundtrip_probe_lowfee.yaml",
+    # Staged rollout (onboard_ family)
+    "onboard_arbitrum_one_candidate.yaml",
+    "onboard_base_stage1.yaml",
+    "onboard_linea_stage1.yaml",
+    "onboard_mantle_stage1.yaml",
+    "onboard_scroll_stage1.yaml",
+    "onboard_zksync_candidate.yaml",
+}
+
+
+class TestConfigInventoryGuard:
+    """R27.4: Guard against config sprawl — only allowed YAML files in config/."""
+
+    def test_no_unexpected_yaml_files(self):
+        """config/*.yaml must only contain files from the frozen active inventory."""
+        actual = {p.name for p in CONFIG_DIR.glob("*.yaml")}
+        unexpected = actual - ALLOWED_YAML_FILES
+        assert not unexpected, (
+            f"Unexpected YAML files in config/: {sorted(unexpected)}. "
+            "If intentional, add to ALLOWED_YAML_FILES in test_config_contracts.py."
+        )
+
+    def test_all_allowed_configs_exist(self):
+        """Every file in the allowed inventory must actually exist."""
+        missing = {f for f in ALLOWED_YAML_FILES if not (CONFIG_DIR / f).exists()}
+        assert not missing, (
+            f"Allowed configs missing from config/: {sorted(missing)}"
+        )

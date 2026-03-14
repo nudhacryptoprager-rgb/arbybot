@@ -157,8 +157,8 @@ class TestPriceScale_Bounds(unittest.TestCase):
         self.assertIn("wstETH/WETH", PRICE_SCALE_BOUNDS)
     
     def test_bounds_exist_for_real_expanded_pairs(self):
-        """v2.0.9: All pairs from config/real_expanded.yaml must have bounds."""
-        # Pairs from config/real_expanded.yaml
+        """v2.0.9: All extended pairs must have bounds."""
+        # Extended pairs
         required_pairs = [
             "WETH/USDC", "WETH/USDT", "wstETH/WETH",
             "ARB/WETH", "LINK/WETH", "GMX/WETH",

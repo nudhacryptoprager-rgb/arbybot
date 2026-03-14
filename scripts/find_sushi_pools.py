@@ -5,7 +5,7 @@
 
 This script queries factory contracts for pre-defined pairs and generates
 a comprehensive whitelist. For production config updates, use verify_v3_pools.py
-to verify specific pairs before adding to real_expanded.yaml.
+to verify specific pairs before adding to scanner configs.
 
 v2.0.4: Refactored to use canonical imports from discovery/index_factories.py
 and load tokens from config/core_tokens.yaml.

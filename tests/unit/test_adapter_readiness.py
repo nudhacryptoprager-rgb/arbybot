@@ -22,12 +22,12 @@ CHAINS_YAML = Path(__file__).parent.parent.parent / "config" / "chains.yaml"
 ALL_CHAINS = ["arbitrum_one", "base", "linea", "mantle", "scroll", "zksync"]
 
 # adapter_types that have a registered class in dex/registry.py
-IMPLEMENTED_ADAPTERS = {"uniswap_v3", "algebra"}
+IMPLEMENTED_ADAPTERS = {"uniswap_v3", "algebra", "ve33"}
 
 # adapter_types that are known but NOT yet implemented
-UNIMPLEMENTED_ADAPTERS = {"ve33"}
+UNIMPLEMENTED_ADAPTERS = set()
 
-# DEXes that use ve33 (known gap) - these MUST fail readiness
+# DEXes that use ve33 (now implemented — R27.4)
 VE33_DEXES = {
     ("base", "aerodrome"),
     ("mantle", "stratum"),
@@ -69,11 +69,14 @@ class TestAdapterReadinessPerChain:
 
     @pytest.mark.parametrize("chain", ALL_CHAINS)
     def test_implemented_dexes_have_quoter(self, chain, dexes_config):
-        """DEXes with implemented adapters must have quoter_v2 or quoter address."""
+        """DEXes with implemented adapters must have quoter_v2/quoter (or router for ve33)."""
         chain_dexes = dexes_config.get(chain, {})
         for dex_name, dex_data in chain_dexes.items():
             adapter_type = dex_data.get("adapter_type", "")
             if adapter_type in IMPLEMENTED_ADAPTERS:
+                if adapter_type == "ve33":
+                    # ve33 quotes on-pool, router is optional
+                    continue
                 quoter = dex_data.get("quoter_v2") or dex_data.get("quoter")
                 assert quoter and quoter.startswith("0x"), (
                     f"{chain}/{dex_name}: implemented adapter but no quoter address"
@@ -90,15 +93,15 @@ class TestAdapterReadinessPerChain:
             )
 
 
-class TestVe33GapExplicit:
-    """ve33 adapter is NOT implemented — these tests document the gap."""
+class TestVe33AdapterRegistered:
+    """R27.4: ve33 adapter is now implemented and registered."""
 
-    def test_ve33_not_registered(self):
-        """ve33 adapter_type must NOT be in registry (not yet implemented)."""
+    def test_ve33_registered(self):
+        """ve33 adapter_type must be in registry."""
         from dex.registry import get_adapter_class
 
         cls = get_adapter_class("ve33")
-        assert cls is None, "ve33 adapter should not be registered yet"
+        assert cls is not None, "ve33 adapter should be registered after R27.4"
 
     @pytest.mark.parametrize("chain,dex_name", sorted(VE33_DEXES))
     def test_ve33_dexes_in_config(self, chain, dex_name, dexes_config):
@@ -185,23 +188,21 @@ class TestNarrativeConsistency:
     """Docs and configs must not contradict each other (R27 lead issue #6/#7/#10)."""
 
     MATRIX_PATH = Path(__file__).parent.parent.parent / "docs" / "ONBOARDING_MATRIX.md"
-    SCROLL_COVERAGE_PATH = Path(__file__).parent.parent.parent / "config" / "coverage_intent_scroll.yaml"
-    ARB_CANDIDATE_PATH = Path(__file__).parent.parent.parent / "config" / "onboard_arbitrum_one_candidate.yaml"
     SCROLL_STAGE1_PATH = Path(__file__).parent.parent.parent / "config" / "onboard_scroll_stage1.yaml"
+    ARB_CANDIDATE_PATH = Path(__file__).parent.parent.parent / "config" / "onboard_arbitrum_one_candidate.yaml"
 
-    def test_scroll_nuri_v3_enabled_in_coverage_config(self):
-        """If nuri_v3 is in coverage_intent_scroll.yaml dexes, docs cannot say excluded."""
-        with open(self.SCROLL_COVERAGE_PATH) as f:
+    def test_scroll_nuri_v3_enabled_in_stage_config(self):
+        """nuri_v3 must be in onboard_scroll_stage1.yaml dexes."""
+        with open(self.SCROLL_STAGE1_PATH) as f:
             data = yaml.safe_load(f)
         assert "nuri_v3" in data.get("dexes", []), (
-            "nuri_v3 must be in coverage_intent_scroll.yaml dexes list (R27 fix)"
+            "nuri_v3 must be in onboard_scroll_stage1.yaml dexes list"
         )
 
     def test_scroll_blocker_text_no_algebra_incompatible(self):
-        """coverage_intent_scroll.yaml blocker_reason must not claim algebra-incompatible."""
-        with open(self.SCROLL_COVERAGE_PATH) as f:
+        """onboard_scroll_stage1.yaml blocker_reason must not claim algebra-incompatible."""
+        with open(self.SCROLL_STAGE1_PATH) as f:
             content = f.read()
-        # Check machine-readable field
         data = yaml.safe_load(content)
         reason = data.get("blocker_reason", "")
         assert "algebra-incompatible" not in reason, (

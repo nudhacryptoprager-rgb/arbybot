@@ -2,6 +2,11 @@
 #
 # M5 REAL Config - Intent-Driven Universe (arbitrum_one)
 #
+# HIERARCHY (R27.4):
+#   real_minimal.yaml               = conservative proven primary (2 DEXes, static pairs)
+#   real_intent_arbitrum_one.yaml   = progressive successor (3 DEXes, discovery_runtime)
+#   onboard_arbitrum_one_candidate  = full 4-DEX candidate (COVERAGE, includes camelot_v3)
+#
 # PURPOSE:
 #   Production-ready intent-driven scanning for arbitrum_one.
 #   Uses `universe_source: discovery_runtime` to resolve pairs from intent.txt

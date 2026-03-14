@@ -107,7 +107,12 @@ def _register_adapters():
     except ImportError as e:
         logger.warning(f"Failed to import algebra adapter: {e}")
     
-    # Mark ve33 as not yet implemented
+    try:
+        from dex.adapters.ve33 import Ve33Adapter
+        _ADAPTER_REGISTRY["ve33"] = Ve33Adapter
+    except ImportError as e:
+        logger.warning(f"Failed to import ve33 adapter: {e}")
+    
     logger.debug(f"Registered adapters: {list(_ADAPTER_REGISTRY.keys())}")
 
 
@@ -150,6 +155,11 @@ def create_adapter(
     try:
         quoter_address = dex_config.get_quoter_address() or ""
         dex_id = dex_config.name
+        
+        # ve33 adapter uses router, not quoter
+        if dex_config.adapter_type == "ve33":
+            router_address = dex_config.router or ""
+            return adapter_class(rpc_provider, router_address, dex_id)
         
         # Both UniswapV3Adapter and AlgebraAdapter have signature:
         # __init__(self, provider/web3, quoter_address: str, dex_id: str = ...)

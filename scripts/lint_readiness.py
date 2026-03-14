@@ -15,7 +15,7 @@ USAGE:
   py -3.11 scripts/lint_readiness.py --chain linea
 
   # Check from coverage config (v3.2.22)
-  py -3.11 scripts/lint_readiness.py --config config/coverage_intent_linea.yaml
+  py -3.11 scripts/lint_readiness.py --config config/onboard_linea_stage1.yaml
 
   # JSON output
   py -3.11 scripts/lint_readiness.py --json
@@ -67,7 +67,7 @@ def load_coverage_config(config_path: Path) -> tuple[str, set[str], list[str], d
     """
     Load a coverage config YAML and return (chain, symbols, dex_ids, anchor_prices).
     
-    v3.2.22: Supports coverage_intent_*.yaml configs for multi-chain bring-up.
+    v3.2.22: Supports onboard_*.yaml configs for multi-chain bring-up.
     v3.2.24: Also extracts tokens_anchor_price for anchor coverage check.
     
     Expected config format:
@@ -284,7 +284,7 @@ def check_chain_readiness(
 def main():
     parser = argparse.ArgumentParser(description="Check chain readiness for scanning")
     parser.add_argument("--chain", help="Specific chain to check (default: all from intent.txt)")
-    parser.add_argument("--config", help="Coverage config YAML to check (e.g., config/coverage_intent_linea.yaml)")
+    parser.add_argument("--config", help="Coverage config YAML to check (e.g., config/onboard_linea_stage1.yaml)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument("--strict-anchors", action="store_true", 
                         help="v3.2.25: Fail if anchor coverage < 100%% for pairs in config (prevents skip-sanity without explicit decision)")

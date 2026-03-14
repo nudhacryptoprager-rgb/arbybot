@@ -50,7 +50,7 @@ rpc_retries: 3
 rpc_backoff_base_ms: 500
 
 # 2 DEXes for cross-DEX arbitrage
-# NOTE: camelot_v3 moved to real_expanded.yaml - needs Algebra quoter integration (ALGEBRA_NEEDS_QUOTER)
+# NOTE: camelot_v3 in onboard_arbitrum_one_candidate.yaml - needs Algebra quoter integration (ALGEBRA_NEEDS_QUOTER)
 dexes:
   - uniswap_v3
   - sushiswap_v3
@@ -217,10 +217,10 @@ pools:
   # Note: 500 tier had QUOTE_ZERO_OUT - use 3000 only
   uniswap_v3_LINK_USDC_3000: "0xbBe36e6f0331C6a36AB44Bc8421E28E1a1871C1e"
   # === GMX/USDC (REMOVED v2.3.4 - Uni-only, no cross-DEX) ===
-  # Moved to real_expanded.yaml - SushiSwap has no GMX/USDC pool
+  # Excluded - SushiSwap has no GMX/USDC pool
   # uniswap_v3_GMX_USDC_3000: "0x135E49cC315fED87F989e072ee11132686CF84F3"
   # === UNI/WETH (REMOVED v2.3.4 - Uni-only, no cross-DEX) ===
-  # Moved to real_expanded.yaml - SushiSwap has no UNI/WETH fee=3000
+  # Excluded - SushiSwap has no UNI/WETH fee=3000
   # uniswap_v3_UNI_WETH_3000: "0xC24f7d8E51A64dc1238880BD00bb961D54cbeb29"
   # === PENDLE/WETH (DISABLED v2.3.4 - QuoterV2 returning 0) ===
   # Kept for future re-enable when quoter fixed
@@ -237,7 +237,7 @@ pools:
   uniswap_v3_WETH_DAI_3000: "0xA961F0473dA4864C5eD28e00FcC53a3AAb056c1b"
   # sushiswap_v3_WETH_DAI_100 removed: fee=100 not in fee_tiers [500,3000]
   # sushiswap_v3_WETH_DAI_3000 moved to disabled_pools (PRICE_SANITY_FAILED)
-  # NOTE: Camelot V3 pools moved to real_expanded.yaml (need Algebra quoter integration)
+  # NOTE: Camelot V3 pools in onboard_arbitrum_one_candidate.yaml (need Algebra quoter integration)
 
 # Disabled pools (machine-readable quarantine, v2.1.0-fix)
 # Reason codes: PRICE_SANITY_FAILED, QUOTE_ZERO_OUT, SLOT0_EXTREME, LOW_LIQUIDITY

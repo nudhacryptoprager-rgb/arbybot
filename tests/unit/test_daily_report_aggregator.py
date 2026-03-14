@@ -665,7 +665,7 @@ def test_automated_session_with_ci_marker(tmp_path):
     
     # Simulate what ci_m5_0_gate.py passes
     session_context = {
-        "session_goal": "M5 online scan (config/coverage_intent_mantle.yaml)",
+        "session_goal": "M5 online scan (config/onboard_mantle_stage1.yaml)",
         "goal_status": "IN_PROGRESS",
         "close_allowed": False,
         "remaining_blockers": [],

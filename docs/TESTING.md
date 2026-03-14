@@ -43,7 +43,7 @@ py -3.11 -m pytest tests/unit -q
 py -3.11 scripts/ci_m5_0_gate.py --offline
 
 # 4. Online gate (requires RPC)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_m5_0_golden.yaml
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml
 ```
 
 ---

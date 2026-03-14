@@ -19,8 +19,8 @@ class TestMantleMixedSourcePolicy:
     """Test Mantle config handles MIXED_SOURCE correctly."""
 
     def test_mantle_config_has_require_cross_dex_false(self):
-        """Coverage config for Mantle should have require_cross_dex=false."""
-        with open("config/coverage_intent_mantle.yaml") as f:
+        """Stage config for Mantle should have require_cross_dex=false."""
+        with open("config/onboard_mantle_stage1.yaml") as f:
             config = yaml.safe_load(f)
         
         # Key assertion: require_cross_dex must be false for Mantle
@@ -33,7 +33,7 @@ class TestMantleMixedSourcePolicy:
 
     def test_mantle_has_one_dex(self):
         """Mantle should have exactly 1 DEX (agni_v3) after stratum removal."""
-        with open("config/coverage_intent_mantle.yaml") as f:
+        with open("config/onboard_mantle_stage1.yaml") as f:
             config = yaml.safe_load(f)
         
         dexes = config.get("dexes", [])

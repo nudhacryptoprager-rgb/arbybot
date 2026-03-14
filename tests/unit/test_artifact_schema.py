@@ -543,11 +543,11 @@ class TestCrossArtifactConfigConsistency:
         # Create mock scan and truth_report data
         scan_stats = {
             "require_cross_dex": True,
-            "config_path": "config/real_nonstop.yaml",
+            "config_path": "config/real_minimal.yaml",
         }
         truth_config_params = {
             "require_cross_dex": True,
-            "config_path": "config/real_nonstop.yaml",
+            "config_path": "config/real_minimal.yaml",
         }
         
         # Verify consistency
@@ -558,11 +558,11 @@ class TestCrossArtifactConfigConsistency:
         """Test that we can detect inconsistency between artifacts."""
         scan_stats = {
             "require_cross_dex": True,
-            "config_path": "config/real_nonstop.yaml",
+            "config_path": "config/real_minimal.yaml",
         }
         truth_config_params = {
             "require_cross_dex": False,  # Inconsistent!
-            "config_path": "config/real_nonstop.yaml",
+            "config_path": "config/real_minimal.yaml",
         }
         
         # This should NOT be equal - test that detection works

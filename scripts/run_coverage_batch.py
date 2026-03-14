@@ -19,7 +19,7 @@ Options:
     --count N               Number of scans to run (default: 3)
     --delay N               Delay between scans in seconds (default: 5)
     --profile P             Profile for M4 gate: smoke or profit (default: profit)
-    --config PATH           Config file path (default: config/real_test_coverage.yaml)
+    --config PATH           Config file path (default: config/real_minimal.yaml)
     --skip-gate             Skip M4 gate processing
     --min-signals-target N  Coverage-first: collect until N signals (default: 0 = disabled)
     --max-seconds T         Coverage-first: timeout in seconds (default: 600)
@@ -43,7 +43,7 @@ def run_coverage_batch(
     count: int = 3,
     delay: int = 5,
     profile: str = "profit",
-    config_path: str = "config/real_test_coverage.yaml",
+    config_path: str = "config/real_minimal.yaml",
     skip_gate: bool = False,
     min_signals_target: int = 0,
     max_seconds: int = 600,
@@ -185,7 +185,7 @@ def main():
     parser.add_argument("--count", type=int, default=3, help="Number of scans to run (standard mode)")
     parser.add_argument("--delay", type=int, default=5, help="Delay between scans (seconds)")
     parser.add_argument("--profile", default="profit", choices=["smoke", "profit"], help="M4 gate profile")
-    parser.add_argument("--config", default="config/real_test_coverage.yaml", help="Scanner config path")
+    parser.add_argument("--config", default="config/real_minimal.yaml", help="Scanner config path")
     parser.add_argument("--skip-gate", action="store_true", help="Skip M4 gate processing")
     parser.add_argument("--min-signals-target", type=int, default=0,
                         help="Coverage-first: collect until N signals (0 = disabled, use --count)")

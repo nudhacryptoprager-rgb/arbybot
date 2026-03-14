@@ -111,7 +111,7 @@ class TestRollingFlagsOnlyForPrimary(unittest.TestCase):
     def test_rolling_only_for_normal(self, mock_prune, mock_meta, mock_gate, mock_summary, mock_gate_res, mock_scan_stats, mock_warn):
         """Round-robin 2 configs: NORMAL gets rolling, COVERAGE does not."""
         normal_yaml = "config/real_minimal.yaml"
-        coverage_yaml = "config/coverage_intent_base.yaml"
+        coverage_yaml = "config/onboard_base_stage1.yaml"
 
         def meta_side(path):
             if "real_minimal" in path:

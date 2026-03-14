@@ -137,7 +137,7 @@ are validated and which are next for expansion.
 | arbitrum_one | uniswap_v3 | uniswap_v3 | ✅ LIVE | rolling N=26+ |
 | arbitrum_one | sushiswap_v3 | uniswap_v3 | ✅ LIVE | rolling N=26+ |
 | arbitrum_one | camelot_v3 | algebra | ⚠️ NEEDS_QUOTER | ALGEBRA_NEEDS_QUOTER |
-| linea | lynex_v3 | algebra | 🔜 NEXT | config/real_scan_linea_smoke.yaml ready |
+| linea | lynex_v3 | algebra | 🔜 NEXT | config/onboard_linea_stage1.yaml ready |
 | mantle | agni_v3 | uniswap_v3 | 📋 PLANNED | factory/quoter in dexes.yaml |
 | base | uniswap_v3 | uniswap_v3 | 📋 PLANNED | chain in chains.yaml |
 
@@ -168,7 +168,7 @@ are validated and which are next for expansion.
 
 **Next Control Runs:**
 1. `py -3.11 -m strategy.jobs.run_scan --mode real --config config/real_minimal.yaml --cycles 1` (arb)
-2. `py -3.11 -m strategy.jobs.run_scan --mode real --config config/real_scan_linea_smoke.yaml --cycles 1` (linea)
+2. `py -3.11 -m strategy.jobs.run_scan --mode real --config config/onboard_linea_stage1.yaml --cycles 1` (linea)
 
 **Evidence Required:**
 - Both runs produce artifacts with correct `chain_key`

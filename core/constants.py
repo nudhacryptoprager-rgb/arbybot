@@ -238,7 +238,7 @@ PRICE_SCALE_BOUNDS: Dict[str, Tuple[float, float]] = {
     "wstETH/WETH": (0.5, 2.0),        # ~1.15 WETH per wstETH
     "WBTC/USDC": (10000.0, 200000.0), # ~$90000 per BTC
     "WBTC/WETH": (10.0, 100.0),       # ~30 WETH per BTC
-    # v2.0.9: Added pairs from config/real_expanded.yaml
+    # v2.0.9: Extended pairs
     "ARB/USDT": (0.01, 10.0),         # ~$0.70 per ARB (same as ARB/USDC)
     "LINK/WETH": (0.001, 0.1),        # ~0.007 WETH per LINK
     "LINK/USDC": (1.0, 100.0),        # ~$15 per LINK
