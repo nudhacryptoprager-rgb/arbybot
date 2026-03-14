@@ -26,7 +26,10 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-13 R26)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1306.26. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: sweep_gap_to_zero_min=3.55 bps. R26 fixes: `run_context.run_timestamp` in long_scan, frontier_ranking enriched with triage fields (status, route_health, blocker_classification, blocker_reason). Schema bumped. Latest evidence: `long_scan_latest.json` (generated 2026-03-13T21:37:23Z).
+> [!] **ROLLING STABILITY (2026-03-14 R27)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1306.26. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: sweep_gap_to_zero_min=3.55 bps.
+> R27: Additive rollout model formalized — full universe preserved, staged chain onboarding via `onboard_<chain>_stageN.yaml` configs and adapter readiness (NOT by removing pairs/chains). Coverage matrix: `docs/ONBOARDING_MATRIX.md`. Scroll nuri_v3 contract mismatch fixed. +48 adapter readiness tests.
+> R26 closed observability/docs blocker (run_context, frontier triage fields, schema bump), NOT arb profit-truth blocker.
+> Latest evidence: `long_scan_latest.json` (generated 2026-03-13T21:37:23Z).
 
 **Economics Snapshot (2026-03-13, R26):**
 | Metric | Value | Notes |
@@ -45,15 +48,15 @@
 | `R26_scan_signals` | 68 | 21-run 6-chain scan, $56.40 net |
 | `schema_version` | LATEST | R26: run_context + frontier triage |
 
-**Rollout Queue (R26 — per lead directive):**
-| Priority | Chain | Status | Condition for Promotion |
-|----------|-------|--------|-------------------------|
-| 1 | arbitrum_one | NORMAL (primary) | Must pass exit gate before others |
-| 2 | zksync | Candidate | drift_rejection_rate_median < 0.25 |
-| 3 | base | Candidate | quality/mixed-source cleanup, gap=67 bps |
-| 4 | mantle | COVERAGE only | No cross-DEX surface |
-| 4 | linea | COVERAGE only | No cross-DEX surface |
-| 5 | scroll | monitoring_only | ECOSYSTEM_BLOCKED |
+**Rollout Queue (R27 — additive model, per lead directive):**
+| Priority | Chain | Status | Stage Config | Condition for Promotion |
+|----------|-------|--------|-------------|-------------------------|
+| 1 | arbitrum_one | NORMAL (primary) | `onboard_arbitrum_one_candidate.yaml` | Must pass exit gate before others |
+| 2 | zksync | Candidate | `onboard_zksync_candidate.yaml` | drift_rejection_rate_median < 0.25 |
+| 3 | base | Stage1 | `onboard_base_stage1.yaml` | ve33 adapter (aerodrome) needed, gap=67 bps |
+| 4 | mantle | Stage1 | `onboard_mantle_stage1.yaml` | ve33 adapter (stratum) needed |
+| 5 | linea | Stage1 | `onboard_linea_stage1.yaml` | lynex_v3 Algebra path stability |
+| 6 | scroll | monitoring_only | `onboard_scroll_stage1.yaml` | nuri_v3 online verification pending |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

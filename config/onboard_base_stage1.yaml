@@ -1,0 +1,80 @@
+# PATH: config/onboard_base_stage1.yaml
+#
+# ONBOARDING: base → STAGE 1 (known-good DEXes only)
+#
+# STATUS: 3 executable DEXes (uniswap_v3, sushiswap_v3, pancakeswap_v3).
+# aerodrome (ve33) NOT YET IMPLEMENTED — excluded until ve33 adapter exists.
+# gap_to_zero=67-90 bps. mixed-source noise cleanup needed before stage2.
+#
+# ADAPTER READINESS:
+#   uniswap_v3 → UniswapV3Adapter: PRODUCTION
+#   sushiswap_v3 → UniswapV3Adapter: PRODUCTION
+#   pancakeswap_v3 → UniswapV3Adapter: PRODUCTION
+#   aerodrome → ve33: NOT IMPLEMENTED (blocker for stage2)
+#
+# PURPOSE: Evaluate 3-DEX cross-DEX surface, identify mixed-source noise.
+# RUN_KIND: COVERAGE
+#
+# WORKFLOW:
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_base_stage1.yaml --cycles 1
+
+chain: base
+chain_id: 8453
+
+run_kind: COVERAGE
+
+rpc_endpoints:
+  - "https://mainnet.base.org"
+  - "https://base.public.blastapi.io"
+
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+universe_source: discovery_runtime
+
+# 3 executable DEXes (aerodrome excluded — ve33 not implemented)
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+  - pancakeswap_v3
+
+discovery_runtime_max_pairs: 25
+require_cross_dex: true
+
+use_multicall: true
+use_quoter_v2: true
+
+use_usd_notional: true
+target_usd_notional: 100.0
+
+min_spread_bps: 3
+paper_size_usd: 100
+paper_slippage_bps: 5
+gas_usd_estimate: 0.05
+
+truth_mode_m42: true
+execution_enabled: false
+execution_block_reason: "EXECUTION_DISABLED_M4"
+kill_switch_active: true
+simulate_only: true
+
+price_sanity_max_deviation_bps: 5000
+
+tokens_usd_price:
+  WETH: 2050.0
+  WBTC: 68000.0
+  USDC: 1.0
+  USDbC: 1.0
+  USDT: 1.0
+  cbETH: 2200.0
+  wstETH: 2500.0
+  AERO: 0.50
+  DAI: 1.0
+
+tokens_anchor_price:
+  WETH_USDC: 2050.0
+  WETH_USDbC: 2050.0
+  WBTC_WETH: 33.0
+  cbETH_WETH: 1.07
+  wstETH_WETH: 1.22

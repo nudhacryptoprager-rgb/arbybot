@@ -1,0 +1,73 @@
+# PATH: config/onboard_zksync_candidate.yaml
+#
+# ONBOARDING: zksync → CANDIDATE for promotion to NORMAL
+#
+# STATUS: Frontier #1 (gap_to_zero=0.0 bps), but drift_rejection_rate_median=0.3077.
+# Must reduce drift below 0.25 before promotion.
+#
+# ADAPTER READINESS:
+#   uniswap_v3 → UniswapV3Adapter: PRODUCTION
+#   pancakeswap_v3 → UniswapV3Adapter: PRODUCTION
+#
+# PURPOSE: Full 2-DEX universe with production thresholds, COVERAGE mode.
+# Promotion criteria: drift_rejection_rate_median < 0.25, 5 consecutive PASS.
+# RUN_KIND: COVERAGE
+#
+# WORKFLOW:
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_zksync_candidate.yaml --cycles 3
+
+chain: zksync
+chain_id: 324
+
+run_kind: COVERAGE
+
+rpc_endpoints:
+  - "https://mainnet.era.zksync.io"
+  - "https://zksync.public.blastapi.io"
+
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+universe_source: discovery_runtime
+
+dexes:
+  - uniswap_v3
+  - pancakeswap_v3
+
+discovery_runtime_max_pairs: 20
+require_cross_dex: true
+
+use_multicall: true
+use_quoter_v2: true
+
+use_usd_notional: true
+target_usd_notional: 100.0
+
+min_spread_bps: 3
+paper_size_usd: 100
+paper_slippage_bps: 5
+gas_usd_estimate: 0.10
+
+truth_mode_m42: true
+execution_enabled: false
+execution_block_reason: "EXECUTION_DISABLED_M4"
+kill_switch_active: true
+simulate_only: true
+
+price_sanity_max_deviation_bps: 5000
+
+tokens_usd_price:
+  WETH: 2050.0
+  WBTC: 68000.0
+  USDC: 1.0
+  USDT: 1.0
+  ZK: 0.10
+  wstETH: 2500.0
+
+tokens_anchor_price:
+  WETH_USDC: 2050.0
+  WETH_USDT: 2050.0
+  WBTC_USDC: 68000.0
+  USDC_USDT: 1.0
+  wstETH_WETH: 1.22

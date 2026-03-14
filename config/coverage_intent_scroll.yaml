@@ -2,21 +2,16 @@
 #
 # M5 COVERAGE Config - Intent-Driven Universe (Scroll)
 #
-# CHAIN QUALITY STATUS (2026-03-10 session 3):
-#   Classification: MARKET_BLOCKED / PROBE_ONLY
-#   Evidence: runDir 121521 - 1 signal, 0 included (SAME_DEX 3709bps excluded)
-#     - Only 1 DEX (sushiswap_v3) with quoter_v2 compatibility on Scroll
-#     - nuri_v3 is algebra/quoter, NOT quoter_v2-compatible
-#     - All signals are same-DEX fee-tier arb → excluded by policy
-#   Status: FAIL (expected). NOT arbitrage-ready. NOT SIGNAL_PRODUCING.
-#   BLOCKED_BY: Lack of second quoter_v2-compatible DEX on Scroll.
-#   Resolution: Monitor Scroll DEX ecosystem. Re-evaluate when 2nd DEX deploys.
-#
-# CHAIN STATUS (historical): **THIN FALLBACK-ONLY** (NOT cross-DEX ready)
-#   - nuri_v3 (algebra/quoter) is NOT quoter_v2-compatible
-#   - sushiswap_v3 (uniswap_v3/quoter_v2) is compatible but single-DEX only
-#   - BLOCKED_BY: lack of second quoter_v2 DEX for cross-DEX arbitrage
-#   - Same-DEX fee-tier arbitrage (sushiswap_v3→sushiswap_v3) is the only viable path
+# CHAIN QUALITY STATUS (2026-03-14 R27):
+#   Classification: ECOSYSTEM_BLOCKED / monitoring_only
+#   Evidence: long_scan R26 - 0/3 PASS, 0 signals, accepted-fail
+#   DEXes: nuri_v3 (uniswap_v3/quoter_v2) + sushiswap_v3 (uniswap_v3/quoter_v2)
+#   NOTE: dexes.yaml declares nuri_v3 as adapter_type=uniswap_v3/quoter_v2
+#         (verified getPool(a,a,fee) UniV3-style on scrollscan.build)
+#         Previous coverage config incorrectly excluded nuri_v3 as "algebra-incompatible".
+#         R27 fix: re-enabled nuri_v3 to align with trust anchor (dexes.yaml).
+#   Status: FAIL (expected). Cross-DEX now possible but not yet verified online.
+#   BLOCKED_BY: Thin liquidity, ecosystem maturity. Online verification pending.
 #
 # PURPOSE:
 #   Test intent.txt → discovery_runtime → pool resolution pipeline on Scroll.
@@ -30,7 +25,8 @@
 # WORKFLOW:
 #   py -3.11 scripts/ci_m5_0_gate.py --online --config config/coverage_intent_scroll.yaml --cycles 1
 #
-# v3.2.56: Removed nuri_v3 (algebra) - NOT quoter_v2-compatible, causes MIXED_SOURCE
+# R27: Re-enabled nuri_v3 — dexes.yaml says uniswap_v3/quoter_v2 (trust anchor)
+# v3.2.56: Previously removed nuri_v3 (incorrectly classified as algebra)
 # v3.2.20: Initial config for Scroll multi-chain rollout
 
 # Chain: Scroll
@@ -52,16 +48,16 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # DEXes to scan (must have factory addresses in dexes.yaml)
-# v3.2.56: Only sushiswap_v3 - nuri_v3 (algebra) is NOT quoter_v2-compatible
-# Same-DEX fee-tier arbitrage across 100/500/3000/10000 bps tiers
+# R27: nuri_v3 re-enabled — dexes.yaml declares adapter_type=uniswap_v3/quoter_v2
+# Cross-DEX arbitrage now possible: nuri_v3 <-> sushiswap_v3
 dexes:
   - sushiswap_v3
+  - nuri_v3
 
 # Discovery settings
 discovery_runtime_max_pairs: 20
-# v3.2.56: require_cross_dex=false because only 1 DEX (sushiswap_v3) - same-DEX fee-tier arbitrage
-# BLOCKED_BY: lack of second quoter_v2 DEX (nuri_v3 is algebra/quoter, incompatible)
-require_cross_dex: false
+# R27: require_cross_dex=true — now 2 DEXes available (nuri_v3 + sushiswap_v3)
+require_cross_dex: true
 
 # Multicall batching (default ON)
 use_multicall: true

@@ -1,0 +1,74 @@
+# PATH: config/onboard_linea_stage1.yaml
+#
+# ONBOARDING: linea → STAGE 1 (single known-good DEX + Algebra test)
+#
+# STATUS: pancakeswap_v3 is the sole stable executable DEX.
+# lynex_v3 (algebra) has adapter class but production path not stabilized.
+# STRUCTURAL blocker until lynex_v3 Algebra quoting is production-ready.
+#
+# ADAPTER READINESS:
+#   pancakeswap_v3 → UniswapV3Adapter: PRODUCTION
+#   lynex_v3 → AlgebraAdapter: PARTIAL (registered, not production-stable)
+#
+# PURPOSE: Test both DEXes in COVERAGE mode to stabilize lynex_v3 path.
+# RUN_KIND: COVERAGE
+#
+# WORKFLOW:
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_linea_stage1.yaml --cycles 1
+
+chain: linea
+chain_id: 59144
+
+run_kind: COVERAGE
+
+rpc_endpoints:
+  - "https://rpc.linea.build"
+  - "https://linea.public.blastapi.io"
+
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+universe_source: discovery_runtime
+
+# Both DEXes — stage1 tests lynex_v3 Algebra stability alongside pancakeswap_v3
+dexes:
+  - pancakeswap_v3
+  - lynex_v3
+
+discovery_runtime_max_pairs: 20
+require_cross_dex: true
+
+use_multicall: true
+use_quoter_v2: true
+
+use_usd_notional: true
+target_usd_notional: 100.0
+
+min_spread_bps: 3
+paper_size_usd: 100
+paper_slippage_bps: 5
+gas_usd_estimate: 0.05
+
+truth_mode_m42: true
+execution_enabled: false
+execution_block_reason: "EXECUTION_DISABLED_M4"
+kill_switch_active: true
+simulate_only: true
+
+price_sanity_max_deviation_bps: 10000
+
+tokens_usd_price:
+  WETH: 2050.0
+  WBTC: 68000.0
+  USDC: 1.0
+  USDT: 1.0
+  wstETH: 2500.0
+  weETH: 2100.0
+  BUSD: 1.0
+
+tokens_anchor_price:
+  WETH_USDC: 2050.0
+  WETH_USDT: 2050.0
+  WBTC_WETH: 33.0
+  wstETH_WETH: 1.22

@@ -1,12 +1,13 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-13 (R26)
-**Tests**: 1740 collected / 1738 passed / 2 skipped
+**Updated**: 2026-03-14 (R27)
+**Tests**: 1788 collected / 1786 passed / 2 skipped (pending verification)
 **Schema**: start:long_scan_summary (latest, R26 bump)
 **Evidence runDirs**: ci_m5_gate_20260313_221453 (arb rolling R26), ci_m5_gate_20260313_223350 (arb rolling latest), 21 total runs across 6 chains
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
 **Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking with run_context provenance + triage fields, generated 2026-03-13T21:37:23Z)
+**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27)
 
 ---
 
@@ -15,39 +16,54 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R27: Strategy shift — full universe preserved, staged chain onboarding via `onboard_<chain>_stageN.yaml` configs. Scroll nuri_v3 contract mismatch fixed (was incorrectly classified as algebra, actually uniswap_v3/quoter_v2). Coverage matrix: `docs/ONBOARDING_MATRIX.md`.
 > R26: `run_context.run_timestamp` added to long_scan; frontier_ranking enriched with triage fields (status, route_health, blocker_reasons).
 > R25: `discovery_coverage` now populated from scan_*.json stats; `_warn_missing_chains()` is FATAL.
 
 ---
 
-## Chain Quality Classification (R26)
+## Chain Quality Classification (R27)
 
 ```
 arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, 4/4 PASS, blocker=NONE)
-base:           SIGNAL_PRODUCING (discovery, cross-dex=10, 4/4 PASS, blocker=MIXED, rt_profitable=2)
-mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, 3/3 PASS, blocker=STRUCTURAL)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=3, 4/4 PASS, blocker=MIXED, gap=0.0 bps)
-linea:          SIGNAL_PRODUCING (discovery, same-dex pancakeswap_v3, 3/3 PASS, blocker=STRUCTURAL)
-scroll:         INFRA_READY (monitoring_only=true, single DEX, accepted-fail=true, 0/3 PASS, blocker=ECOSYSTEM_BLOCKED)
+base:           SIGNAL_PRODUCING (discovery, cross-dex=10, 4/4 PASS, blocker=MIXED, rt_profitable=2 — COVERAGE evidence only, NOT promotion evidence)
+mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, 3/3 PASS, blocker=STRUCTURAL — ve33 adapter not implemented)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=3, 4/4 PASS, blocker=MIXED, gap=0.0 bps — drift=0.3077, needs <0.25)
+linea:          SIGNAL_PRODUCING (discovery, same-dex pancakeswap_v3, 3/3 PASS, blocker=STRUCTURAL — lynex_v3 algebra path unstable)
+scroll:         INFRA_READY (monitoring_only=true, nuri_v3 re-enabled R27, accepted-fail=true, 0/3 PASS, blocker=ECOSYSTEM_BLOCKED)
 ```
 
-**Rollout Queue (R26 — per lead directive)**:
+**Rollout Queue (R27 — additive model, per lead directive)**:
 1. **arbitrum_one** (primary, NORMAL) — must pass exit gate before others promoted
 2. **zksync** — drift_rejection_rate_median must drop below 0.25
-3. **base** — quality/mixed-source noise cleanup, economics gap=67 bps
-4. **mantle/linea** — COVERAGE only (no cross-DEX surface)
-5. **scroll** — monitoring_only (ECOSYSTEM_BLOCKED)
+3. **base** — ve33 adapter (aerodrome) needed for full coverage, mixed-source cleanup
+4. **mantle** — COVERAGE only until ve33 adapter (stratum) implemented
+5. **linea** — COVERAGE only until lynex_v3 Algebra path stabilized
+6. **scroll** — monitoring_only (nuri_v3 contract aligned R27, online verification pending)
 
-**Universe Split (R26)**:
+**Onboard Stage Configs (R27)**:
+- `config/onboard_arbitrum_one_candidate.yaml` — 4-DEX additive (uni+sushi+camelot+pancakeswap)
+- `config/onboard_zksync_candidate.yaml` — 2-DEX candidate (uni+pancakeswap)
+- `config/onboard_base_stage1.yaml` — 3-DEX stage1 (uni+sushi+pancakeswap, aerodrome excluded)
+- `config/onboard_mantle_stage1.yaml` — 1-DEX stage1 (agni_v3 only, stratum excluded)
+- `config/onboard_linea_stage1.yaml` — 2-DEX stage1 (pancakeswap+lynex, algebra stability test)
+- `config/onboard_scroll_stage1.yaml` — 2-DEX stage1 (sushi+nuri, cross-DEX test)
+
+**Universe Split (R27)**:
 - **truth_probe**: arbitrum_one (config-based, target_for_truth_probe=true)
-- **discovery**: base, linea, mantle, zksync (discovery_coverage now populated)
-- **monitoring_only**: scroll (PROBE_ONLY, accepted-fail=true)
+- **discovery**: base, linea, mantle, zksync (discovery_coverage populated)
+- **monitoring_only**: scroll (nuri_v3 re-enabled R27, accepted-fail=true)
 
-**R26 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 21 total runs / 68 signals / $56.40 net / 2 roundtrip_profitable (base)
-**Roundtrip evaluation**: CANONICAL SWEEP (gap_to_zero in frontier_ranking) + triage fields for promotion decisions
+**R27 key changes**:
+- Strategy: full universe preserved, staged onboarding via `onboard_<chain>_stageN.yaml` configs
+- Scroll nuri_v3 contract mismatch FIXED (dexes.yaml=uniswap_v3/quoter_v2, was excluded as algebra)
+- Coverage matrix: `docs/ONBOARDING_MATRIX.md` — chain/dex/adapter/quoter/blocker
+- Adapter readiness tests: +48 tests (per-chain adapter/factory/quoter validation)
+- ve33 gap explicitly documented (base/aerodrome, mantle/stratum)
+- `base roundtrip_profitable=2` is COVERAGE evidence, NOT promotion evidence
+
+**R26 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 21 total runs / 68 signals / $56.40 net / 2 roundtrip_profitable (base, COVERAGE only)
 **Profit truth**: NOT YET — Arbitrum profit-truth blocker remains (roundtrip.profitable_count=0)
-**Provenance**: `run_context.run_timestamp` now in long_scan_latest.json (R26 fix)
-**discovery_coverage**: populated (R25 fix preserved)
 
 ---
 
@@ -171,12 +187,14 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Next Steps (R26)
+## Next Steps (R27)
 
+- **Adapter gaps**: implement `ve33` adapter for aerodrome (Base) and stratum (Mantle)
 - **Arbitrum exit gate**: 5 consecutive online runs with signals>=4, cross_dex>=3, drift_rate<=0.20
-- **zksync promotion**: reduce drift_rejection_rate_median below 0.25 via pair quarantine
-- **base economics**: reduce gap_to_zero_bps from 67 bps (quality/mixed-source cleanup first)
-- **Provenance**: long_scan_latest now has run_context.run_timestamp (R26 fix)
-- **Frontier triage**: status, route_health, blocker_reasons now in frontier_ranking (R26 fix)
-- Scroll: ECOSYSTEM_BLOCKED — do not invest engineering time
-- Test delta: +5 tests (1733 → 1738 passed)
+- **Arbitrum additive**: test `onboard_arbitrum_one_candidate.yaml` (4-DEX with camelot_v3)
+- **zksync promotion**: reduce drift_rejection_rate_median below 0.25
+- **Scroll verification**: run `onboard_scroll_stage1.yaml` online to verify nuri_v3 quoter_v2
+- **Linea stability**: run `onboard_linea_stage1.yaml` to stabilize lynex_v3 Algebra path
+- **Coverage matrix**: `docs/ONBOARDING_MATRIX.md` — single source of truth for adapter readiness
+- Scroll: ECOSYSTEM_BLOCKED until nuri_v3 verified + ecosystem matures
+- Test delta: +48 adapter readiness tests (R27)

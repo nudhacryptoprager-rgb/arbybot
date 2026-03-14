@@ -1,0 +1,74 @@
+# PATH: config/onboard_mantle_stage1.yaml
+#
+# ONBOARDING: mantle → STAGE 1 (single known-good DEX)
+#
+# STATUS: agni_v3 is the sole executable DEX (uniswap_v3/quoter_v2).
+# stratum (ve33) NOT YET IMPLEMENTED — excluded until ve33 adapter exists.
+# STRUCTURAL blocker: no cross-DEX surface without ve33.
+#
+# ADAPTER READINESS:
+#   agni_v3 → UniswapV3Adapter: PRODUCTION
+#   stratum → ve33: NOT IMPLEMENTED (blocker for cross-DEX)
+#
+# PURPOSE: Maintain intent.txt universe coverage; single-DEX fee-tier monitoring.
+# RUN_KIND: COVERAGE
+#
+# WORKFLOW:
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_mantle_stage1.yaml --cycles 1
+
+chain: mantle
+chain_id: 5000
+
+run_kind: COVERAGE
+
+rpc_endpoints:
+  - "https://rpc.mantle.xyz"
+  - "https://mantle.public.blastapi.io"
+
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+universe_source: discovery_runtime
+
+# Single executable DEX (stratum/ve33 not implemented)
+dexes:
+  - agni_v3
+
+discovery_runtime_max_pairs: 20
+# require_cross_dex=false: only 1 DEX until ve33 adapter implemented
+require_cross_dex: false
+
+use_multicall: true
+use_quoter_v2: true
+
+use_usd_notional: true
+target_usd_notional: 100.0
+
+min_spread_bps: 3
+paper_size_usd: 100
+paper_slippage_bps: 5
+gas_usd_estimate: 0.05
+
+truth_mode_m42: true
+execution_enabled: false
+execution_block_reason: "EXECUTION_DISABLED_M4"
+kill_switch_active: true
+simulate_only: true
+
+price_sanity_max_deviation_bps: 10000
+
+tokens_usd_price:
+  WMNT: 0.50
+  WETH: 2050.0
+  WBTC: 68000.0
+  USDC: 1.0
+  USDT: 1.0
+  mETH: 2100.0
+  wstETH: 2500.0
+
+tokens_anchor_price:
+  WETH_USDC: 2050.0
+  WETH_USDT: 2050.0
+  WMNT_USDC: 0.50
+  mETH_WETH: 1.02

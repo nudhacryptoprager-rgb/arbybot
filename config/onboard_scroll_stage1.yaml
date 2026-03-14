@@ -1,0 +1,79 @@
+# PATH: config/onboard_scroll_stage1.yaml
+#
+# ONBOARDING: scroll → STAGE 1 (nuri_v3 + sushiswap_v3 cross-DEX test)
+#
+# STATUS: monitoring_only / ECOSYSTEM_BLOCKED.
+# R27 fix: nuri_v3 re-classified as uniswap_v3/quoter_v2 (per dexes.yaml trust anchor).
+# Previously incorrectly excluded as algebra-incompatible.
+# Now 2 DEXes available for cross-DEX: nuri_v3 + sushiswap_v3.
+# Online verification needed to confirm nuri_v3 actually responds to QuoterV2 ABI.
+#
+# ADAPTER READINESS:
+#   nuri_v3 → UniswapV3Adapter: UNVERIFIED (dexes.yaml says uniswap_v3/quoter_v2, needs online test)
+#   sushiswap_v3 → UniswapV3Adapter: PRODUCTION
+#
+# PURPOSE: Verify nuri_v3 quoter_v2 compatibility online. If PASS → scroll exits ECOSYSTEM_BLOCKED.
+# RUN_KIND: COVERAGE
+#
+# WORKFLOW:
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_scroll_stage1.yaml --cycles 1
+
+chain: scroll
+chain_id: 534352
+
+run_kind: COVERAGE
+
+rpc_endpoints:
+  - "https://rpc.scroll.io"
+  - "https://scroll.public.blastapi.io"
+
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+universe_source: discovery_runtime
+
+# Both DEXes — cross-DEX test (nuri_v3 re-enabled R27)
+dexes:
+  - sushiswap_v3
+  - nuri_v3
+
+discovery_runtime_max_pairs: 20
+require_cross_dex: true
+
+use_multicall: true
+use_quoter_v2: true
+
+use_usd_notional: true
+target_usd_notional: 100.0
+
+min_spread_bps: 3
+paper_size_usd: 100
+paper_slippage_bps: 5
+gas_usd_estimate: 0.05
+
+# Relaxed thresholds for thin-liquidity chain
+quoter_max_gas_estimate: 3000000
+quoter_max_ticks_crossed: 40
+suspect_spread_bps_hard: 1000
+suspect_spread_bps: 400
+
+price_sanity_max_deviation_bps: 10000
+
+l1_data_gas_units: 0
+l1_gas_price_gwei: 0
+
+tokens_usd_price:
+  WETH: 2050.0
+  WBTC: 68000.0
+  USDC: 1.0
+  USDT: 1.0
+  wstETH: 2500.0
+  SCR: 0.50
+  STONE: 2100.0
+  weETH: 2100.0
+
+tokens_anchor_price:
+  WETH_USDC: 2050.0
+  WETH_USDT: 2050.0
+  WETH_WBTC: 0.030
