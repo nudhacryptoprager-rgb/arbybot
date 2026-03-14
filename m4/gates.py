@@ -832,6 +832,17 @@ def run_online_gate(
         # STEP 1: Emit to aggregator FIRST (always)
         agg_data = emit_to_aggregator_light(run_summary, agg_path)
         
+        # v3.2.23: NORM-only rolling pointer policy
+        # Only NORMAL runs update run_summary_latest.json and _latest.json
+        # COVERAGE/SMOKE runs already skip aggregator (rolling_store.py L175),
+        # but pointer files were written unconditionally — this caused rolling
+        # contamination when a COVERAGE chain run overwrote primary-chain pointer.
+        _run_kind = run_summary.get("run_kind", "NORMAL")
+        if _run_kind != "NORMAL":
+            print(f"[ROLLING] SKIP pointer files: run_kind={_run_kind} (NORM-only rolling pointer policy)")
+            print(f"[ROLLING] Aggregator updated (run skipped per NORM-only). Pointer files NOT overwritten.")
+            return 0
+        
         # STEP 2: Write run_summary_latest (only for ONLINE, or if no online exists)
         # v1.12.1: Canonical rolling files ONLY per AGENTS.md:
         #   _latest.json, run_summary_latest.json, m4_stability_agg.json

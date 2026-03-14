@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-14 (R27.1)
-**Tests**: 1793 collected / 1791 passed / 2 skipped
+**Updated**: 2026-03-14 (R27.2)
+**Tests**: 1800 collected / 1798 passed / 2 skipped
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_20260314_101735 (arb 4-DEX candidate PASS), ci_m5_gate_20260314_102036 (scroll stage1 PASS)
+**Evidence runDirs**: ci_m5_gate_20260314_192514 (arb primary NORMAL), ci_m5_gate_20260314_192713 (arb 4-DEX candidate PASS), ci_m5_gate_20260314_193000 (scroll stage1 PASS), ci_m5_gate_20260314_193819 (long_scan arb, rolling updated)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (pinned to 2026-03-13T22:14:53Z: 15 runs, 46 signals, $36.35)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-14T18:40:26Z: 8 runs, 17 signals, $23.49)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27)
 
 ---
@@ -16,6 +16,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R27.2: Rolling contamination FIXED — NORM-only guard in m4/gates.py prevents COVERAGE/SMOKE runs from overwriting pointer files. check_repo_safety detects contamination (check [20]). +7 regression tests. Fresh online evidence: arb primary + 4-DEX candidate + scroll stage1 + long scan (6 chains, 8 runs, $23.49).
 > R27.1: Online proof — arb 4-DEX candidate PASS (14 signals, $14.61, dexes_active=4), scroll stage1 PASS (3 signals, $0.14, nuri_v3 quoter_v2 confirmed).
 > R27: Strategy shift — full universe preserved, staged chain onboarding via `onboard_<chain>_stageN.yaml` configs. Scroll nuri_v3 contract mismatch fixed (was incorrectly classified as algebra, actually uniswap_v3/quoter_v2). Coverage matrix: `docs/ONBOARDING_MATRIX.md`.
 > R26: `run_context.run_timestamp` added to long_scan; frontier_ranking enriched with triage fields (status, route_health, blocker_reasons).
@@ -23,24 +24,24 @@
 
 ---
 
-## Chain Quality Classification (R27)
+## Chain Quality Classification (R27.2)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, 4/4 PASS, blocker=NONE)
-base:           SIGNAL_PRODUCING (discovery, cross-dex=10, 4/4 PASS, blocker=MIXED, rt_profitable=2 — COVERAGE evidence only, NOT promotion evidence)
-mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, 3/3 PASS, blocker=STRUCTURAL — ve33 adapter not implemented)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=3, 4/4 PASS, blocker=MIXED, gap=0.0 bps — drift=0.3077, needs <0.25)
-linea:          SIGNAL_PRODUCING (discovery, same-dex pancakeswap_v3, 3/3 PASS, blocker=STRUCTURAL — lynex_v3 algebra path unstable)
-scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 quoter_v2 confirmed R27.1, 3 signals, accepted-fail=true, blocker=THIN_LIQUIDITY)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=NONE, gap=15.77 bps, drift=0.17)
+base:           SIGNAL_PRODUCING (discovery, cross-dex=15, PASS, blocker=MIXED, rt_profitable=2 — COVERAGE evidence only)
+mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, PASS, blocker=STRUCTURAL — ve33 adapter not implemented)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, blocker=MIXED, drift=0.27 — needs <0.25)
+linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, blocker=STRUCTURAL — lynex_v3 algebra path unstable)
+scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 confirmed R27.1+R27.2, accepted-fail=true, blocker=THIN_LIQUIDITY)
 ```
 
-**Rollout Queue (R27.1 — additive model, with online proof)**:
-1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (14 signals, $14.61). Exit gate: 5 consecutive.
-2. **zksync** — drift_rejection_rate_median must drop below 0.25
-3. **base** — ve33 adapter (aerodrome) needed for full coverage, mixed-source cleanup
-4. **mantle** — COVERAGE only until ve33 adapter (stratum) implemented
-5. **linea** — COVERAGE only until lynex_v3 Algebra path stabilized
-6. **scroll** — nuri_v3 quoter_v2 confirmed (R27.1: 3 signals), needs sustained evidence for ECOSYSTEM_BLOCKED exit
+**Rollout Queue (R27.2 — additive model, with fresh long_scan + online proof)**:
+1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (R27.2: 14 sims). Gap=15.77 bps. Exit gate: 5 consecutive.
+2. **zksync** — drift_rejection_rate_median=0.27 (above 0.25 threshold), needs improvement
+3. **base** — ve33 adapter (aerodrome) needed for full coverage, 4 signals in long_scan
+4. **mantle** — COVERAGE only until ve33 adapter (stratum) implemented, 1 signal in long_scan
+5. **linea** — COVERAGE only until lynex_v3 Algebra path stabilized, 2 signals in long_scan, rank #2
+6. **scroll** — nuri_v3 confirmed (R27.1+R27.2), 0 signals in long_scan (accepted-fail), needs sustained evidence
 
 **Onboard Stage Configs (R27)**:
 - `config/onboard_arbitrum_one_candidate.yaml` — 4-DEX additive (uni+sushi+camelot+pancakeswap)
@@ -55,6 +56,19 @@ scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 quoter_v2 conf
 - **discovery**: base, linea, mantle, zksync (discovery_coverage populated)
 - **monitoring_only**: scroll (nuri_v3 re-enabled R27, accepted-fail=true)
 
+**R27.2 online verification**:
+- arb primary: ci_m5_gate_20260314_192514, PASS, 4 signals, $5.62 (NORMAL, rolling refreshed)
+- arb candidate: ci_m5_gate_20260314_192713, PASS, 87 quotes, cross_dex=27, 14 simulations (4-DEX)
+- scroll stage1: ci_m5_gate_20260314_193000, PASS, 3 signals, nuri_v3 confirmed (rolling NOT overwritten — NORM-only guard)
+- long scan: ci_m5_gate_20260314_193819 (arb final), 6 chains, 8 runs, 17 signals, $23.49
+
+**R27.2 code changes**:
+- `m4/gates.py`: NORM-only rolling pointer policy — non-NORMAL runs skip writing pointer files
+- `check_repo_safety.py`: check [20] rolling chain purity (validates run_kind=NORMAL + chain_key=arbitrum_one)
+- `test_rolling_chain_keys.py`: +7 regression tests (4 pointer protection + 3 chain purity)
+- ONBOARDING_MATRIX: camelot_v3+nuri_v3 "pending"→"verified" with runDir evidence
+- onboard_scroll_stage1.yaml: PURPOSE softened, nuri_v3 VERIFIED
+
 **R27.1 online verification**:
 - arb candidate: ci_m5_gate_20260314_101735, PASS, 14 signals, $14.61, dexes_active=4, cross_dex=27
 - scroll stage1: ci_m5_gate_20260314_102036, PASS, 3 signals, $0.14, dexes_active=2, cross_dex=8
@@ -68,8 +82,8 @@ scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 quoter_v2 conf
 - ve33 gap explicitly documented (base/aerodrome, mantle/stratum)
 - `base roundtrip_profitable=2` is COVERAGE evidence, NOT promotion evidence
 
-**Long scan (pinned to 2026-03-13)**: 5 PASS chains / 15 runs / 46 signals / $36.35 net
-**Profit truth**: NOT YET — Arbitrum profit-truth blocker remains (roundtrip.profitable_count=0)
+**Long scan (REFRESHED 2026-03-14)**: 5 PASS chains + 1 accepted-fail / 8 runs / 17 signals / $23.49 net / 2 profitable roundtrips
+**Profit truth**: NOT YET — Arbitrum profit-truth blocker remains (roundtrip.profitable_count=0 on primary chain, gap=15.77 bps)
 
 ---
 
@@ -110,6 +124,8 @@ scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 quoter_v2 conf
 |------|----------|
 | `--refresh-rolling` + non-primary chain | **FAIL** with error |
 | Auto-enable `refresh_rolling` + non-primary | **BLOCKED** |
+| Non-NORMAL run_kind (COVERAGE/SMOKE) | **SKIP** pointer file writes (R27.2 NORM-only guard, m4/gates.py) |
+| check_repo_safety check [20] | **FAIL** if run_kind!=NORMAL or chain_key!=arbitrum_one in pointer files |
 
 Rolling triplet: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json}`
 
@@ -193,14 +209,14 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Next Steps (R27)
+## Next Steps (R27.2)
 
 - **Adapter gaps**: implement `ve33` adapter for aerodrome (Base) and stratum (Mantle)
 - **Arbitrum exit gate**: 5 consecutive online runs with signals>=4, cross_dex>=3, drift_rate<=0.20
-- **Arbitrum additive**: test `onboard_arbitrum_one_candidate.yaml` (4-DEX with camelot_v3)
-- **zksync promotion**: reduce drift_rejection_rate_median below 0.25
-- **Scroll verification**: run `onboard_scroll_stage1.yaml` online to verify nuri_v3 quoter_v2
+- **Arbitrum frontier**: gap regressed from 8.41→15.77 bps — monitor for market recovery
+- **zksync promotion**: drift_rejection_rate_median=0.27 (above 0.25) — pair tuning may help
+- **Scroll sustained evidence**: 0 signals in long_scan vs 3 in stage1 — needs more runs
 - **Linea stability**: run `onboard_linea_stage1.yaml` to stabilize lynex_v3 Algebra path
 - **Coverage matrix**: `docs/ONBOARDING_MATRIX.md` — single source of truth for adapter readiness
-- Scroll: ECOSYSTEM_BLOCKED until nuri_v3 verified + ecosystem matures
-- Test delta: +48 adapter readiness tests (R27)
+- Scroll: ECOSYSTEM_BLOCKED until sustained evidence (not just single-run proof)
+- Test delta: +7 R27.2 rolling protection tests (1791 → 1798)

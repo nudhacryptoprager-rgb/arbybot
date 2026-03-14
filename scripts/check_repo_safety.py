@@ -28,7 +28,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.13.0"
+__version__ = "1.14.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -651,6 +651,64 @@ def check_rolling_consistency() -> List[str]:
         
     except Exception as e:
         issues.append(f"ERROR: Could not check rolling consistency: {e}")
+    
+    return issues
+
+
+def check_rolling_chain_purity() -> List[str]:
+    """Check that rolling pointer files reference PRIMARY_ROLLING_CHAIN and run_kind=NORMAL (v1.14.0).
+    
+    If run_summary_latest.json points to a COVERAGE run or non-primary chain,
+    that means a coverage/stage run overwrote the primary-chain pointer — a contamination bug.
+    """
+    issues = []
+    
+    rolling_dir = PROJECT_ROOT / "data" / "runs" / "_rolling"
+    summary_path = rolling_dir / "run_summary_latest.json"
+    latest_path = rolling_dir / "_latest.json"
+    
+    if not summary_path.exists():
+        return []  # No rolling artifacts = skip
+    
+    PRIMARY_ROLLING_CHAIN = "arbitrum_one"
+    
+    try:
+        with open(summary_path, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+        
+        # Check run_kind (must be NORMAL for primary rolling)
+        run_kind = summary.get("run_kind", "NORMAL")
+        if run_kind != "NORMAL":
+            issues.append(
+                f"ROLLING_CONTAMINATION: run_summary_latest.json has run_kind={run_kind}, "
+                f"expected NORMAL. A non-NORMAL run overwrote the primary-chain pointer."
+            )
+        
+        # Check chain_key (must be PRIMARY_ROLLING_CHAIN)
+        chain_key = summary.get("inputs", {}).get("chain_key", "")
+        if chain_key and chain_key != PRIMARY_ROLLING_CHAIN:
+            issues.append(
+                f"ROLLING_CONTAMINATION: run_summary_latest.json has chain_key={chain_key}, "
+                f"expected {PRIMARY_ROLLING_CHAIN}. A non-primary chain overwrote the rolling pointer."
+            )
+        
+        # Also check _latest.json if it exists
+        if latest_path.exists():
+            with open(latest_path, "r", encoding="utf-8") as f:
+                latest = json.load(f)
+            latest_kind = latest.get("inputs", {}).get("run_kind", "NORMAL")
+            latest_chain = latest.get("inputs", {}).get("chain_key", "")
+            if latest_kind != "NORMAL":
+                issues.append(
+                    f"ROLLING_CONTAMINATION: _latest.json has run_kind={latest_kind}, expected NORMAL."
+                )
+            if latest_chain and latest_chain != PRIMARY_ROLLING_CHAIN:
+                issues.append(
+                    f"ROLLING_CONTAMINATION: _latest.json has chain_key={latest_chain}, "
+                    f"expected {PRIMARY_ROLLING_CHAIN}."
+                )
+    except Exception as e:
+        issues.append(f"ERROR: Could not check rolling chain purity: {e}")
     
     return issues
 
@@ -1542,6 +1600,14 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: Docs within size limits")
+    
+    print("\n[20] Checking rolling chain purity...")
+    issues = check_rolling_chain_purity()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: Rolling pointer files reference primary chain (NORMAL)")
     
     # Summary
     print("\n" + "=" * 50)

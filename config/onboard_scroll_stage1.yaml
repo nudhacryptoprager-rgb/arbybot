@@ -9,10 +9,11 @@
 # Online verification needed to confirm nuri_v3 actually responds to QuoterV2 ABI.
 #
 # ADAPTER READINESS:
-#   nuri_v3 → UniswapV3Adapter: UNVERIFIED (dexes.yaml says uniswap_v3/quoter_v2, needs online test)
+#   nuri_v3 → UniswapV3Adapter: VERIFIED R27.1 (ci_m5_gate_20260314_102036, 3 signals, quoter_v2 confirmed)
 #   sushiswap_v3 → UniswapV3Adapter: PRODUCTION
 #
-# PURPOSE: Verify nuri_v3 quoter_v2 compatibility online. If PASS → scroll exits ECOSYSTEM_BLOCKED.
+# PURPOSE: Verify nuri_v3 quoter_v2 compatibility online. 1 PASS = adapter/quoter proof, NOT automatic exit from ECOSYSTEM_BLOCKED.
+#          Sustained evidence (multiple consecutive PASS with cross-DEX signals) required for promotion.
 # RUN_KIND: COVERAGE
 #
 # WORKFLOW:
