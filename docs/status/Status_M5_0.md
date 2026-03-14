@@ -26,23 +26,25 @@
 
 ---
 
-## Chain Quality Classification (R27.2)
+## Chain Quality Classification (R27.4)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=NONE, gap=15.77 bps, drift=0.17)
-base:           SIGNAL_PRODUCING (discovery, cross-dex=15, PASS, blocker=MIXED, rt_profitable=2 — COVERAGE evidence only)
-mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, PASS, blocker=STRUCTURAL — ve33 adapter not implemented)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, blocker=MIXED, drift=0.27 — needs <0.25)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=MARKET, gap=20.41 bps, drift=0.17)
+base:           SIGNAL_PRODUCING (discovery, cross-dex=15, PASS, blocker=NEEDS_ONLINE_VE33_TEST, rt_profitable=2 — COVERAGE evidence only)
+mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, PASS, blocker=NEEDS_ONLINE_VE33_TEST)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, blocker=DRIFT, drift=0.31 — needs <0.25)
 linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, blocker=STRUCTURAL — lynex_v3 algebra path unstable)
 scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 confirmed R27.1+R27.2, accepted-fail=true, blocker=THIN_LIQUIDITY)
 ```
 
-**Rollout Queue (R27.2 — additive model, with fresh long_scan + online proof)**:
-1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (R27.2: 14 sims). Gap=15.77 bps. Exit gate: 5 consecutive.
-2. **zksync** — drift_rejection_rate_median=0.27 (above 0.25 threshold), needs improvement
-3. **base** — ve33 adapter (aerodrome) needed for full coverage, 4 signals in long_scan
-4. **mantle** — COVERAGE only until ve33 adapter (stratum) implemented, 1 signal in long_scan
-5. **linea** — COVERAGE only until lynex_v3 Algebra path stabilized, 2 signals in long_scan, rank #2
+**R27.4 changes to classification**: ve33 adapter IMPLEMENTED (R27.4) — mantle/base blockers changed from STRUCTURAL to NEEDS_ONLINE_VE33_TEST. arb gap regressed 15.77→20.41 bps (market). zksync drift 0.27→0.31.
+
+**Rollout Queue (R28 — architecture audit, needs fresh online evidence)**:
+1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (R27.2: 14 sims). Gap=20.41 bps (R27.4). Exit gate: 5 consecutive. discovery_runtime is canonical successor (R28).
+2. **zksync** — drift_rejection_rate=0.31 (above 0.25 threshold), needs improvement
+3. **base** — ve33 adapter IMPLEMENTED (R27.4), needs online test with aerodrome. discovery_runtime path verified.
+4. **mantle** — ve33 adapter IMPLEMENTED (R27.4), needs online test with stratum. discovery_runtime path verified.
+5. **linea** — lynex_v3 Algebra path stability needed, 2 signals in long_scan, rank #2
 6. **scroll** — nuri_v3 confirmed (R27.1+R27.2), 0 signals in long_scan (accepted-fail), needs sustained evidence
 
 **Onboard Stage Configs (R27)**:
@@ -53,9 +55,9 @@ scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 confirmed R27.
 - `config/onboard_linea_stage1.yaml` — 2-DEX stage1 (pancakeswap+lynex, algebra stability test)
 - `config/onboard_scroll_stage1.yaml` — 2-DEX stage1 (sushi+nuri, cross-DEX test)
 
-**Universe Split (R27)**:
-- **truth_probe**: arbitrum_one (config-based, target_for_truth_probe=true)
-- **discovery**: base, linea, mantle, zksync (discovery_coverage populated)
+**Universe Split (R28 — formalized in docs/WORKFLOW.md)**:
+- **config** (production probe): arbitrum_one (real_minimal.yaml, target_for_truth_probe=true)
+- **discovery_runtime** (canonical successor): base, linea, mantle, zksync (onboard_*.yaml)
 - **monitoring_only**: scroll (nuri_v3 re-enabled R27, accepted-fail=true)
 
 **R27.2 online verification**:

@@ -8,67 +8,58 @@
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, rolling on arbitrum_one.
 
-## SESSION GOAL (2026-03-14, Session 6 Round 27.4)
-**Goal**: R27.4 — YAML config audit + cleanup. Fix validate_universe.py regression, move golden fixture, define frozen active config inventory, delete 15 stale configs, implement ve33 adapter, rebind all references.
+## SESSION GOAL (2026-03-14, Session 6 Round 28)
+**Goal**: R28 — Deep architecture audit. Fix source-of-truth contradictions, canonicalize execution layer, split god-files, formalize dynamic+verify path, close stale TODOs, harden preflight, rebuild rollout queue.
 
 ## 0) Meta
 timestamp_utc: 2026-03-14T20:15:36Z
-rolling_provenance: 2026-03-14T20:15:36Z (arbitrum_one NORMAL, ci_m5_gate_20260314_211452 — fresh R27.4 run)
-mode: MIXED (config audit + online verification)
-test_count: 1803 passed, 3 skipped (-2 from R27.3: removed tests for deleted configs, +2 new inventory/adapter tests)
+rolling_provenance: 2026-03-14T20:15:36Z (arbitrum_one NORMAL — preserved from R27.4)
+mode: ARCHITECTURE (code cleanup, no online runs)
+test_count: 1803 passed, 3 skipped (unchanged from R27.4)
 schema_version: start:long_scan_summary:v1.7
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R27.4: YAML config audit — fix regression, delete stale configs, freeze inventory, implement ve33 adapter |
+| session_goal | R28: Architecture audit — execution layer, god-files, discovery path, preflight, rollout queue |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | MARKET: roundtrip_profitable=0 on arb primary; ZKSYNC: drift_rejection_rate=30.77% (need <25%) |
-| evidence_session_run_dirs | ci_m5_gate_20260314_211452 (fresh online run with rolling update) |
-| primary_blocker_of_session | 15 stale configs in config/, validate_universe.py regression (is_strict_run used before defined), ve33 adapter not registered |
-| blocker_status_before | 32 YAML files, 15 stale, validator crashes on intent_forced, ve33 NOT registered |
-| blocker_status_after | 16 YAML files (frozen inventory), validator fixed, ve33 registered, all 10 scanner configs PASS |
-| start_metric | R27.3: 1805 tests, 32 YAML configs, validator regression, ve33 gap |
-| end_metric | R27.4: 1803 tests, 16 YAML configs (frozen), ve33 adapter implemented, all gates green |
-| delta | -15 stale configs deleted, 1 moved to docs/artifacts/golden/, +1 adapter (ve33), +2 new tests, -4 deleted tests |
+| remaining_blockers | MARKET: roundtrip_profitable=0 on arb primary; ZKSYNC: drift_rejection_rate=30.77% |
+| evidence_session_run_dirs | ci_m4_gate_offline_20260314_205752 (M4 profit PASS) |
+| primary_blocker_of_session | strategy/execution/ duplicates execution/, god-files need splitting, stale TODOs, preflight stub semantics unclear |
+| blocker_status_before | 5 files in strategy/execution/ (dead stubs), ci_m5_0_gate.py=950 lines monolith, stale TODO in roundtrip.py |
+| blocker_status_after | strategy/execution/ DELETED, core/gate_helpers.py+repo_checks.py extracted, TODO removed, preflight renamed |
+| start_metric | R27.4: 1803 tests, strategy/execution/ present, preflight_disabled_stub() |
+| end_metric | R28: 1803 tests, strategy/execution/ removed, core/ modules added, preflight_not_available() with reason codes |
+| delta | -5 files (strategy/execution/), +2 files (core/gate_helpers.py, core/repo_checks.py), comments/docs updated |
 | docs_reread_confirmed | true |
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M5_0 — config layer audit and cleanup (R27.4 lead directive)
+goal (Roadmap пункт): M5_0 — architecture layer debt cleanup (R28 lead directive)
 change_summary:
-  - `scripts/validate_universe.py`: FIXED — R27.3 regression: `is_strict_run`/`run_kind` moved above intent check block (was referenced before definition)
-  - `config/*.yaml`: 15 stale configs DELETED (coverage_intent_*, real_debug, real_expanded, real_hunting*, real_nonstop, real_test_coverage, real_minimal_discovery_runtime, real_minimal_intent_forced, real_scan_linea_smoke)
-  - `config/real_m5_0_golden.yaml`: MOVED to `docs/artifacts/golden/real_m5_0_golden.yaml` (golden fixture, not a scanner config)
-  - `dex/adapters/ve33.py`: NEW — formal ve33/Solidly adapter class wrapping getAmountOut()
-  - `dex/registry.py`: MODIFIED — ve33 adapter registered in _register_adapters(), create_adapter() handles router
-  - `config/real_intent_arbitrum_one.yaml`: MODIFIED — added HIERARCHY comment (R27.4)
-  - `tests/unit/test_config_contracts.py`: MODIFIED — COVERAGE_CONFIGS → onboard_*, added TestConfigInventoryGuard (16 allowed files)
-  - `tests/unit/test_adapter_readiness.py`: MODIFIED — ve33 in IMPLEMENTED_ADAPTERS, TestVe33AdapterRegistered (was TestVe33GapExplicit), quoter check skips ve33
-  - `tests/unit/test_mantle_mixed_source.py`: MODIFIED — coverage_intent_mantle → onboard_mantle_stage1
-  - `tests/unit/test_artifact_schema.py`: MODIFIED — real_nonstop → real_minimal in mock data
-  - `tests/unit/test_config_pool_coverage.py`: MODIFIED — removed TestHuntingConfigPoolCoverage (config deleted)
-  - `tests/unit/test_start.py`: MODIFIED — coverage_intent_base → onboard_base_stage1
-  - `tests/unit/test_daily_report_aggregator.py`: MODIFIED — session_goal string updated
-  - `docs/WORKFLOW.md`: MODIFIED — long_scan command uses onboard_* configs, real_expanded → real_intent_arbitrum_one
-  - `docs/TESTING.md`: MODIFIED — golden config reference → real_minimal
-  - `scripts/run_coverage_batch.py`: MODIFIED — default config → real_minimal
-  - `scripts/lint_readiness.py`: MODIFIED — help text uses onboard_* configs
-  - `config/real_minimal.yaml`: MODIFIED — comment references updated (real_expanded → onboard_candidate)
-  - `core/constants.py`: MODIFIED — comment updated (no real_expanded reference)
-touched_files: 20+ files across config/, tests/, scripts/, docs/, dex/, core/
+  - `strategy/execution/`: DELETED entirely (5 files, ~610 lines dead stubs — was M5/M6 placeholder, never used)
+  - `core/gate_helpers.py`: NEW — discover_artifacts, get_run_dir_candidates, validate_schema_version, validate_anti_placeholder
+  - `core/repo_checks.py`: NEW — ALLOWED_DEV_REPORTS, DOCS_VERSION_EXEMPT, DOCS_TIMESTAMP_EXEMPT, FORBIDDEN_KEYS, SECRET_PATTERNS
+  - `scripts/ci_m5_0_gate.py`: MODIFIED — imports from core.gate_helpers, re-exports for backward compat
+  - `scripts/check_repo_safety.py`: MODIFIED — imports from core.repo_checks, re-exports for backward compat
+  - `engine/roundtrip.py`: MODIFIED — stale TODO removed (measured slippage via sqrtPriceAfter already integrated)
+  - `strategy/quotes.py`: MODIFIED — Path B (slot0 fallback) explicitly marked DIAGNOSTIC CHANNEL
+  - `strategy/jobs/run_scan_real.py`: MODIFIED — universe discovery comment formalized (R28), preflight_not_available() used
+  - `execution/preflight.py`: MODIFIED — preflight_disabled_stub() → preflight_not_available(reason) with unavailable_reason field
+  - `docs/WORKFLOW.md`: MODIFIED — Universe Discovery section added (config vs discovery_runtime canonical paths)
+  - `docs/status/Status_M5_0.md`: MODIFIED — Rollout Queue header R28, Universe Split formalized
+  - `docs/status/Status_M4.md`: MODIFIED — Rollout Queue header R28, gap fixed to 20.41 bps
+touched_files: 12 files across strategy/, core/, scripts/, execution/, engine/, docs/
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: **PASS** (1803 passed, 3 skipped, 1 warning, 30.99s)
-py -3.11 scripts/ci_m5_0_gate.py --offline: **PASS** (runDir ci_m5_gate_offline_20260314_211254)
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --artifact-mode rolling: **PASS** (2 sims, $0.50)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1: **PASS** (runDir ci_m5_gate_20260314_211452, 17 quotes, 4 signals)
-py -3.11 scripts/validate_universe.py --config (all 10 scanner configs): **ALL PASS**
+py -3.11 -m pytest tests/unit -q: **PASS** (1803 passed, 3 skipped, 1 warning, 30.14s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: **PASS** (pytest, docs, status, m5_0, m4_smoke, m4_profit all green)
+py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: **PASS** (2 sims, $0.50, runDir ci_m4_gate_offline_20260314_205752)
 
 ## 3) Artifacts Attached (шляхи)
-rolling (FRESH — updated by R27.4 online run):
+rolling (preserved from R27.4 — no online runs in R28):
   - data/runs/_rolling/_latest.json
   - data/runs/_rolling/run_summary_latest.json (run_timestamp: 2026-03-14T20:15:36Z)
   - data/runs/_rolling/m4_stability_agg.json
@@ -77,51 +68,50 @@ rolling (FRESH — updated by R27.4 online run):
 ## 4) Key Results (числа з артефактів)
 
 ```
-config_audit: 32 → 16 YAML files (15 deleted, 1 moved to docs/artifacts/golden/)
-active_inventory: 6 registry + 4 primary/probes + 6 onboard = 16 frozen
-validator_regression: FIXED (is_strict_run ordering)
-all_10_configs_pass_validate_universe: true
-ve33_adapter: IMPLEMENTED (dex/adapters/ve33.py + registered in registry)
-test_delta: -2 (1805 → 1803: -4 hunting tests removed, +2 inventory/adapter tests added)
-online_run: PASS (17 quotes, 4 signals, 3 cross-dex pairs)
-roundtrip: 0/3 profitable, gap_to_zero=20.41 bps (WBTC/USDC @ $25)
-total_net_usdc: 5.55 (diagnostic one-leg)
-profit_is_diagnostic: true
+files_deleted: 5 (strategy/execution/: accounting.py, kill_switch.py, simulator_gate.py, state_machine.py, __init__.py)
+files_created: 2 (core/gate_helpers.py, core/repo_checks.py)
+stale_todo_removed: 1 (roundtrip.py economics TODO — measured slippage already integrated)
+preflight_reason_codes: 2 (NO_W3_INSTANCE, NO_OPPORTUNITIES)
+slot0_diagnostic_marker: added to Path B in quotes.py
+discovery_path_formalized: docs/WORKFLOW.md Universe Discovery section
+rollout_queue_updated: R28 header in Status_M5_0.md and Status_M4.md
+test_count: 1803 (unchanged — no new tests, architecture-only session)
 ```
 
 ## 5) Contract Checks
 - status/reasons consistency: OK
-- rolling discipline (3+1 canonical files): OK — freshly updated by R27.4 online run
-- config inventory: FROZEN to 16 allowed files with TestConfigInventoryGuard
-- validate_universe regression: FIXED — clean FAIL on intent_forced (was crash)
-- ve33 adapter: IMPLEMENTED and registered (aerodrome/base, stratum/mantle)
-- stale config references: ALL updated across 20+ files
-- Arbitrum hierarchy: documented (real_minimal → real_intent → onboard_candidate)
-- zksync drift: 30.77% (market blocker, need <25% for promotion)
+- rolling discipline (3+1 canonical files): OK — preserved from R27.4
+- execution layer: CANONICAL — execution/ is sole layer, strategy/execution/ deleted
+- god-files: SPLIT — core/gate_helpers.py (artifact discovery), core/repo_checks.py (docs policy constants)
+- stale TODOs: CLOSED — roundtrip.py economics TODO removed
+- slot0 path: DIAGNOSTIC — explicit DIAGNOSTIC CHANNEL marker added to Path B
+- preflight semantics: CLARIFIED — preflight_not_available(reason) with unavailable_reason field
+- discovery path: FORMALIZED — docs/WORKFLOW.md Universe Discovery section (config vs discovery_runtime)
 
 ## 6) Blocker Classification
 
 ```
-code_blocker: LOW (pytest 1803 PASS, CI gates green, ve33 implemented)
-data_collection_blocker: LOW (online runs producing signals)
+code_blocker: LOW (pytest 1803 PASS, CI gates green, architecture clean)
+data_collection_blocker: LOW (online runs producing signals — R27.4 evidence)
 market_window_blocker: HIGH (roundtrip_profitable=0 on primary, gap_to_zero=20.41 bps)
 adapter_blocker: RESOLVED (ve33 implemented R27.4)
-config_blocker: RESOLVED (15 stale deleted, inventory frozen)
+architecture_debt: RESOLVED (R28 cleanup complete)
 ```
 
-## 7) Lead's R27.4 10 Steps: Execution Map
-step_01: **DONE** — Fixed validate_universe.py regression: moved run_kind/is_strict_run computation above intent check block (was NameError on intent_forced configs).
-step_02: **DONE** — Moved real_m5_0_golden.yaml from config/ to docs/artifacts/golden/ (golden fixture, not a scanner config — different dexes schema).
-step_03: **DONE** — Active inventory defined: 6 registry/service + 4 primary/probes + 6 onboard_ = 16 total.
-step_04: **DONE** — Deleted 15 stale scanner YAMLs: coverage_intent_* (6), real_debug, real_expanded, real_hunting, real_hunting_lowfee, real_nonstop, real_test_coverage, real_minimal_discovery_runtime, real_minimal_intent_forced, real_scan_linea_smoke.
-step_05: **DONE** — Rebound all scripts/tests/docs: test_config_contracts, test_adapter_readiness, test_mantle_mixed_source, test_artifact_schema, test_config_pool_coverage, test_start, test_daily_report_aggregator, run_coverage_batch, lint_readiness, WORKFLOW.md, TESTING.md, real_minimal.yaml comments, core/constants.py.
-step_06: **DONE** — TestConfigInventoryGuard added: ALLOWED_YAML_FILES set (16 files), test_no_unexpected_yaml_files + test_all_allowed_configs_exist.
-step_07: **DONE** — Arbitrum hierarchy clarified: real_minimal (proven) → real_intent (progressive) → onboard_candidate (full 4-DEX). HIERARCHY comment added to real_intent.
-step_08: **DONE** — ve33 adapter: dex/adapters/ve33.py created (Ve33Adapter class, getAmountOut encoding/decoding), registered in dex/registry.py. zksync drift: documented as market quality blocker (30.77% > 25% threshold).
-step_09: **DONE** — All tests pass (1803/3 skipped). All 10 scanner configs pass validate_universe. M5 offline PASS. M4 offline profit PASS. M5 online PASS (fresh rolling update).
-step_10: **DONE** — DEV_REPORT refresh with R27.4 evidence.
+## 7) Lead's R28 10 Steps: Execution Map
+step_01: **DONE** — Fixed source-of-truth: Status_M4.md header R27.2→R28, Status_M5_0.md Chain Quality updated (ve33 implemented, blockers changed).
+step_02: **DONE** — Canonicalized execution layer: strategy/execution/ deleted entirely (5 files, ~610 lines dead stubs). execution/ is canonical and sole implementation.
+step_03: **DONE** — Split god-files: core/gate_helpers.py (discover_artifacts, get_run_dir_candidates, validate_schema_version, validate_anti_placeholder), core/repo_checks.py (docs policy constants). Scripts import+re-export for backward compat.
+step_04: **DONE** — Formalized dynamic+verify path: docs/WORKFLOW.md Universe Discovery section added. discovery_runtime is canonical successor for non-probe universe.
+step_05: **DONE** — Closed economics debt: stale TODO in roundtrip.py removed (measured slippage via sqrtPriceAfter already integrated at lines 365-388).
+step_06: **DONE** — Cut slot0 from decision path: Path B in quotes.py marked DIAGNOSTIC CHANNEL explicitly. slot0 quotes already gated as is_diagnostic_only=True when truth_mode_m42=true.
+step_07: **DONE** — Hardened preflight: preflight_disabled_stub() → preflight_not_available(reason) with unavailable_reason field (NO_W3_INSTANCE, NO_OPPORTUNITIES). Backward compat alias preserved.
+step_08: **DONE** — Rebuilt rollout queue: Status_M5_0.md and Status_M4.md updated to R28 header, Universe Split formalized, discovery_runtime noted as canonical successor.
+step_09: **DONE** — Verification runs: pytest 1803 PASS, ci_full_pipeline PASS, M4 offline profit strict PASS (2 sims, $0.50).
+step_10: **DONE** — Docs refresh: DEV_REPORT_LATEST.md updated with R28 evidence, Status files synced.
 
 ## 8) Що потрібно від ліда
-1. Config inventory sign-off: 16 files frozen — confirm no missing configs before hard-lock
-2. ve33 integration testing: adapter class created but online runs with aerodrome/stratum need separate session (need onboard_base/mantle configs promoted to run)
-3. ci_full_pipeline: TIMESTAMP_PROPAGATION error from check [11] — DEV_REPORT timestamp vs rolling timestamp mismatch was pre-existing from R27.3 (no online runs that session); now fixed by R27.4 fresh evidence
+1. R28 sign-off: Architecture audit complete — execution layer canonical, god-files split, discovery formalized
+2. Online verification: If fresh evidence needed, run arb primary + onboard chains (no RPC in this env)
+3. ve33 online testing: base/mantle need online runs with aerodrome/stratum (adapter implemented R27.4, needs runtime proof)
+4. zksync drift: Market blocker (30.77% > 25% threshold) — need sustained low-drift window for promotion

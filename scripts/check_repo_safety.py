@@ -36,39 +36,22 @@ FORBIDDEN_TRACKED_FILES = [
     ".vscode/settings.json",
 ]
 
-# DEV_REPORT files allowed in repo (v1.2.0)
-# Only these exact files are allowed, no versioned DEV_REPORT files
-ALLOWED_DEV_REPORTS = [
-    "docs/DEV_REPORT_LATEST.md",
-    "docs/DEV_REPORT_CANONICAL_UA.md",
-]
+# R28: Canonical constants extracted to core.repo_checks — re-export for backward compat
+from core.repo_checks import (  # noqa: E402
+    ALLOWED_DEV_REPORTS,
+    DOCS_VERSION_EXEMPT,
+    DOCS_VERSION_EXEMPT_PREFIXES,
+    DOCS_TIMESTAMP_EXEMPT,
+    FORBIDDEN_KEYS_IN_TRACKED,
+    SECRET_PATTERNS,
+)
 
 # Script version mappings for Status file validation (v1.3.0)
 # Map: Status file -> (script file, version regex pattern in Status)
 # NOTE: v1.4.0 - versions removed from Status headers per DOCS_POLICY.md
 STATUS_VERSION_MAPPINGS = {
     # Disabled: versions now tracked only in DEV_REPORT_LATEST.md
-    # "docs/status/Status_M5_0.md": ("scripts/ci_m5_0_gate.py", r"ci_m5_0_gate\.py.*v(\d+\.\d+\.\d+)"),
-    # "docs/status/Status_M4.md": ("scripts/ci_m4_execution_gate.py", r"ci_m4_execution_gate\.py.*v(\d+\.\d+\.\d+)"),
 }
-
-# Keys that should never appear in TRACKED files
-# v1.1.0: Only check tracked files, untracked files are INFO-level
-FORBIDDEN_KEYS_IN_TRACKED = [
-    "chat.tools.terminal.autoApprove",
-    "chat.tools.codeGeneration.autoApprove",
-    "chat.acceptAllTerminalRisks",
-    "chat.agent.autoApprove",
-]
-
-# Patterns that indicate secrets or credentials
-SECRET_PATTERNS = [
-    "ALCHEMY_API_KEY=",
-    "TENDERLY_ACCESS_KEY=",
-    "PRIVATE_KEY=",
-    "INFURA_API_KEY=",
-    "ETHERSCAN_API_KEY=",
-]
 
 
 def is_git_tracked(filepath: Path) -> bool:
@@ -217,25 +200,8 @@ def check_dev_report_bloat() -> List[str]:
     return issues
 
 
-# Files where versions are ALLOWED (exempt from docs-lint)
-DOCS_VERSION_EXEMPT = [
-    "docs/DEV_REPORT_LATEST.md",           # Canonical version tracking file
-    "docs/DOCS_POLICY.md",                  # Policy doc describing the rules (meta-description)
-    "docs/m4/ROLLING_CONTRACT.md",          # Schema version definitions (API contract)
-    "docs/m4/M4_POLICY.md",                 # Policy thresholds (API contract)
-]
-
-# Path prefixes where versions are allowed (golden fixtures, artifacts)
-DOCS_VERSION_EXEMPT_PREFIXES = [
-    "docs/artifacts/",                      # Golden fixtures may have schema versions
-]
-
-# Files where ISO timestamps are allowed
-DOCS_TIMESTAMP_EXEMPT = [
-    "docs/DEV_REPORT_LATEST.md",           # Contains rolling provenance
-    "docs/m4/ROLLING_CONTRACT.md",          # JSON examples with timestamps
-    "docs/m4/M4_POLICY.md",                 # JSON examples with timestamps
-]
+# R28: DOCS_VERSION_EXEMPT, DOCS_VERSION_EXEMPT_PREFIXES, DOCS_TIMESTAMP_EXEMPT
+# now imported from core.repo_checks at top of file
 
 
 def check_docs_lint() -> List[str]:

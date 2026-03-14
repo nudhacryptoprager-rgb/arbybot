@@ -1437,7 +1437,10 @@ def collect_quotes(
                               dex, token_in, token_out, fee_tier, reject_error)
                 continue
             
-            # Path B: slot0 fallback - only for uniswap_v3 when no quoter
+            # Path B: slot0 fallback — DIAGNOSTIC CHANNEL only (R28)
+            # slot0 reads are NOT executable quotes; they provide price reference
+            # when QuoterV2 is unavailable. Gated as is_diagnostic_only=True
+            # when truth_mode_m42=true (see line ~1693).
             if is_v3_dex and not is_algebra:
                 tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url, current_block)
                 

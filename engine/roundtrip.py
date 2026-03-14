@@ -85,10 +85,8 @@ class RoundTripResult:
     net_pnl_bps: float = 0.0
     total_ticks: int = 0
     total_gas: int = 0
-    # v2.1.0: Slippage estimate from ticks (heuristic: ~0.5 bps per tick in V3)
-    # TODO v2.2.0: Replace with measured slippage from sqrtPriceAfter (QuoterV2 output)
-    #   - sqrtPriceAfter = price AFTER swap, gives exact slippage vs sqrtPriceBefore
-    #   - requires adapter changes to expose sqrtPriceAfter in quote dict
+    # v2.1.0: Slippage — prefers measured from sqrtPriceAfter (see calculate_roundtrip_pnl),
+    # falls back to ticks heuristic (~0.5 bps per tick in V3)
     estimated_slippage_bps: float = 0.0
     slippage_source: str = "ticks_heuristic"  # "ticks_heuristic" | "sqrtPriceAfter" | "probe"
     # v2.1.0: L1 cost source for traceability

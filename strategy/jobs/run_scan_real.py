@@ -170,9 +170,9 @@ def run_scan(
     if run_kind == "SMOKE":
         logger.info("run_kind=SMOKE: this run will be excluded from rolling window")
     
-    # v2.2.0 Fix Step 7: universe_source=config|intent|intent_forced|discovery_runtime
-    # v2.3.0 Fix Step 4: intent_forced mode - reads from intent.txt directly
-    # v2.5.0: discovery_runtime mode - resolve pairs via factory.getPool()
+    # R28: Universe Discovery — two canonical paths (see docs/WORKFLOW.md):
+    #   config            → hardcoded pairs + pre-verified pools (Arbitrum production)
+    #   discovery_runtime  → intent.txt → factory RPC → RuntimePair (chain bring-up, canonical successor)
     universe_source = config.get("universe_source", "config")
     use_intent = (universe_source == "intent")
     force_intent = (universe_source in ("intent_verified", "intent_forced"))
@@ -1041,7 +1041,7 @@ def run_scan(
     try:
         from execution.preflight import (
             collect_top_n_preflight,
-            preflight_disabled_stub,
+            preflight_not_available,
             adapt_opportunity_to_preflight_input,
         )
         
@@ -1066,12 +1066,9 @@ def run_scan(
                 preflight_evidence["candidates_count"],
             )
         elif not w3_instance:
-            # No w3 available - use stub
-            stats["preflight_evidence"] = preflight_disabled_stub()
-            stats["preflight_evidence"]["error"] = "no_w3_instance"
+            stats["preflight_evidence"] = preflight_not_available("NO_W3_INSTANCE")
         else:
-            stats["preflight_evidence"] = preflight_disabled_stub()
-            stats["preflight_evidence"]["error"] = "no_opportunities"
+            stats["preflight_evidence"] = preflight_not_available("NO_OPPORTUNITIES")
     except Exception as pf_ev_err:
         logger.debug("Preflight evidence collection skipped: %s", pf_ev_err)
         stats["preflight_evidence"] = {

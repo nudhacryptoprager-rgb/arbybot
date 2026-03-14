@@ -99,6 +99,28 @@ BLOCKED → OPEN : blocker resolved (new evidence shows resolution)
 - If an artifact is required for reproducibility, move/copy it into `docs/artifacts/<scope>/<date>/...` and commit
 - Otherwise keep it local (do not pollute git history)
 
+## Universe Discovery (R28 canonical paths)
+
+Two mutually exclusive universe sources exist. Every scan config must declare exactly one.
+
+### Path 1: `universe_source: config` (Production Probe)
+- Loads hardcoded pairs + pre-verified pool addresses from the config YAML
+- Used by: `real_minimal.yaml`, `real_roundtrip_probe*.yaml`
+- Canonical for Arbitrum-ONE primary scanning (pools already proven)
+
+### Path 2: `universe_source: discovery_runtime` (Dynamic + Verify)
+- Flow: `intent.txt` → `TokenRegistry` → factory RPC queries → `RuntimePair`
+- Resolves pools on-chain via DEX factory contracts (`dexes.yaml`)
+- Used by: all `onboard_*.yaml` configs (base, linea, mantle, scroll, zksync)
+- Canonical for chain bring-up and ongoing pool discovery
+- Must satisfy `require_cross_dex: true` (≥2 DEXes per pair) for spread viability
+
+`discovery_runtime` is THE canonical successor for all non-probe universe.
+Static config probe remains as the documented Arbitrum production exception.
+
+**NOT related**: `dynamic_probe` (size sweep) is a post-baseline optimization that re-quotes
+at multiple notional sizes. It is NOT a universe discovery mode.
+
 ## Python Version Enforcement
 
 - `.python-version` file pins 3.11.9

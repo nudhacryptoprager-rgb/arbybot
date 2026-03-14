@@ -599,8 +599,13 @@ def collect_top_n_preflight(
     }
 
 
-def preflight_disabled_stub() -> Dict[str, Any]:
-    """Return stub for disabled preflight."""
+def preflight_not_available(reason: str = "NO_CONTEXT") -> Dict[str, Any]:
+    """Return evidence stub when preflight cannot be collected.
+
+    This is NOT a "disabled feature" — it indicates that evidence is
+    unavailable for a specific reason (no w3, no opportunities, etc.).
+    The reason code is included for operator traceability.
+    """
     return {
         "enabled": False,
         "candidates_count": 0,
@@ -610,4 +615,9 @@ def preflight_disabled_stub() -> Dict[str, Any]:
         "warnings": [],
         "evidence_source": "preflight_v1.0.3",
         "block_number": None,
+        "unavailable_reason": reason,
     }
+
+
+# R28 backward compat alias — callers should migrate to preflight_not_available()
+preflight_disabled_stub = preflight_not_available
