@@ -185,6 +185,15 @@ def validate_universe(config_path: Path) -> dict:
     result["summary"]["universe_source"] = universe_source
     is_discovery_runtime = (universe_source == "discovery_runtime")
     
+    # R27.3: Forbid intent/intent_forced for NORMAL/COVERAGE runs.
+    # intent paths skip on-chain verification and violate the "dynamic + verify" contract.
+    if universe_source in ("intent", "intent_forced") and is_strict_run:
+        result["errors"].append(
+            f"VIABILITY_FAIL: universe_source='{universe_source}' is forbidden for "
+            f"run_kind={run_kind}. Intent-based universes lack on-chain verification. "
+            "Use 'config' or 'discovery_runtime' for NORMAL/COVERAGE runs."
+        )
+    
     # v3.2.18: Check explicit run_kind for strict runs (no defaulting)
     has_explicit_run_kind = ("run_kind" in config)
     run_kind = config.get("run_kind", "NORMAL")
@@ -277,6 +286,16 @@ def validate_universe(config_path: Path) -> dict:
     if run_kind == "SMOKE":
         result["warnings"].append(
             "run_kind=SMOKE: this run will NOT update rolling artifacts (NORM-only policy)"
+        )
+    
+    # R27.3: Strategy mode encoding — warn when same-DEX fallback is active for NORMAL
+    require_cross_dex = config.get("require_cross_dex", True)
+    result["summary"]["require_cross_dex"] = require_cross_dex
+    result["summary"]["same_dex_only"] = not require_cross_dex
+    if not require_cross_dex and is_strict_run:
+        result["warnings"].append(
+            "SAME_DEX_MODE: require_cross_dex=false — signals are fee-tier arbitrage, "
+            "not cross-DEX. Ensure this is intentional for NORMAL runs."
         )
     
     # Finalize status

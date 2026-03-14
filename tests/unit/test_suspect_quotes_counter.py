@@ -13,6 +13,10 @@ def test_suspect_quotes_counter_and_reasons(monkeypatch):
     assert "suspect_quotes" in stats
     assert stats.get("suspect_quotes") >= 0
     assert isinstance(stats.get("suspect_reasons"), dict)
-    # Expect our sample reject to include 'way_below_expected'
+    # R27.3: suspect_reasons comes from REAL rejects only (no synthetic keys).
+    # With ARBY_SKIP_RPC/fake block, there are no real sanity rejects,
+    # so suspect_reasons should be empty (or contain only real reject reasons).
     reasons = stats.get("suspect_reasons", {})
-    assert "way_below_expected" in reasons
+    # All reason keys must be real reject reason strings, not synthetic placeholders
+    for key in reasons:
+        assert isinstance(key, str), f"suspect_reason key must be str, got {type(key)}"

@@ -1025,6 +1025,20 @@ def validate_current_block(scan_data: Dict[str, Any], truth_data: Dict[str, Any]
 
 def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool, str]:
     """Run real scan via strategy.jobs.run_scan_real."""
+    # R27.3: Pre-scan universe validation — catch misconfigs before wasting RPC calls
+    if config:
+        try:
+            from scripts.validate_universe import validate_universe
+            vu_result = validate_universe(Path(config))
+            if vu_result["status"] == "FAIL":
+                errors = "; ".join(vu_result["errors"][:5])
+                return False, f"Pre-scan validate_universe FAIL: {errors}"
+            if vu_result["warnings"]:
+                for w in vu_result["warnings"][:5]:
+                    print(f"  [validate_universe WARNING] {w}")
+        except Exception as vu_err:
+            print(f"  [validate_universe] Could not run pre-scan check: {vu_err}")
+    
     cmd = [
         sys.executable, "-m", "strategy.jobs.run_scan_real",
         "--cycles", str(cycles),

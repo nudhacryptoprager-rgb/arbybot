@@ -8,209 +8,115 @@
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, rolling on arbitrum_one.
 
-## SESSION GOAL (2026-03-14, Session 4 Round 27.2)
-**Goal**: R27.2 — Fix rolling contamination (COVERAGE scroll run overwrote pointer files), add NORM-only rolling guard, strengthen check_repo_safety, run fresh online evidence (primary + arb candidate + scroll stage1 + long scan), refresh docs LAST.
+## SESSION GOAL (2026-03-14, Session 5 Round 27.3)
+**Goal**: R27.3 — Deep code audit of scanner pipeline. Fix 10 strategic/contract gaps in run_scan_real.py and related modules: remove synthetic suspect metrics, enforce strict discovery_runtime, forbid intent for NORMAL, wire pre-scan validation, unify economics, encode strategy modes.
 
 ## 0) Meta
-timestamp_utc: 2026-03-14T18:39:08Z
-rolling_provenance: 2026-03-14T18:39:08Z (arbitrum_one NORMAL, ci_m5_gate_20260314_193819)
-mode: ONLINE (primary NORMAL + arb candidate + scroll stage1 + long scan 6 chains)
-test_count: 1798 passed, 2 skipped (+7 from R27.1: 4 rolling pointer protection + 3 rolling chain purity)
+timestamp_utc: 2026-03-14T20:26:06Z
+rolling_provenance: 2026-03-14T18:39:08Z (arbitrum_one NORMAL, ci_m5_gate_20260314_193819 — unchanged from R27.2)
+mode: OFFLINE (code audit + contract hardening, no online runs)
+test_count: 1805 passed, 2 skipped (+7 from R27.3: test_suspect_provenance.py)
 schema_version: start:long_scan_summary:v1.7
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R27.2: fix rolling contamination (COVERAGE overwriting pointers), add NORM-only guard, fresh online evidence, docs refresh |
+| session_goal | R27.3: Fix 10 strategic/contract gaps in scanner pipeline per lead audit |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | MARKET: roundtrip_profitable=0 on arb (primary); ADAPTER: ve33 not implemented (base/aerodrome, mantle/stratum) |
-| evidence_session_run_dirs | ci_m5_gate_20260314_192514 (arb primary NORMAL, 4 signals, $5.62), ci_m5_gate_20260314_192713 (arb 4-DEX candidate, 87 quotes, cross_dex=27, 14 sims PASS), ci_m5_gate_20260314_193000 (scroll stage1 COVERAGE, 3 signals, nuri_v3 confirmed), ci_m5_gate_20260314_193819 (long_scan arb run, 4 signals, $5.72, rolling updated) |
-| primary_blocker_of_session | rolling contamination: run_summary_latest.json pointed to chain=scroll, run_kind=COVERAGE (R27.1 scroll online inadvertently overwrote pointer files) |
-| blocker_status_before | CONTAMINATED: rolling pointers pointed to ci_m5_gate_20260314_102036 (scroll COVERAGE), not primary arb NORMAL |
-| blocker_status_after | RESOLVED. NORM-only guard in m4/gates.py (v3.2.23); check [20] in check_repo_safety v1.14.0; rolling now points to ci_m5_gate_20260314_193819 (arb NORMAL) |
-| start_metric | R27.1: 1791 tests, rolling contaminated (scroll COVERAGE), no NORM-only pointer guard |
-| end_metric | R27.2: 1798 tests, rolling clean (arb NORMAL), +7 regression tests, NORM-only guard enforced |
-| delta | +7 tests, 3 code files modified (m4/gates.py, check_repo_safety.py, test_rolling_chain_keys.py), 3 doc updates (matrix, scroll config, DEV_REPORT/Status), 4 online runs + long scan |
+| remaining_blockers | MARKET: roundtrip_profitable=0 on arb primary; ADAPTER: ve33 not implemented |
+| evidence_session_run_dirs | (no online runs — code audit session; CI offline gates verified) |
+| primary_blocker_of_session | 10 contract gaps: synthetic suspect metrics, silent discovery_runtime fallback, dual economics, no pre-scan validation |
+| blocker_status_before | 10 strategic/contract gaps identified by lead audit |
+| blocker_status_after | ALL 10 RESOLVED: code changes in 6 files + 1 new test file + 1 test update |
+| start_metric | R27.2: 1798 tests, synthetic _compute_sanity_rejects, silent discovery fallback, hardcoded OE slippage 5.0 |
+| end_metric | R27.3: 1805 tests, real-only suspect metrics, strict discovery, unified economics, pre-scan validation wired |
+| delta | +7 tests, 6 code files modified, 1 new test file, 1 test file updated |
 | docs_reread_confirmed | true |
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap пункт): M5_0 infrastructure — rolling contamination fix + fresh evidence (per lead R27.2 audit)
+goal (Roadmap пункт): M5_0 — scanner pipeline contract hardening (R27.3 lead audit)
 change_summary:
-  - `m4/gates.py`: MODIFIED — NORM-only rolling pointer policy (v3.2.23): skip writing run_summary_latest.json and _latest.json for non-NORMAL runs
-  - `scripts/check_repo_safety.py`: MODIFIED — v1.13.0→v1.14.0: added check [20] rolling chain purity (validates run_kind=NORMAL + chain_key=arbitrum_one in pointer files)
-  - `tests/unit/test_rolling_chain_keys.py`: MODIFIED — +7 tests: 4 TestRollingPointerProtection + 3 TestCheckRollingChainPurity
-  - `docs/ONBOARDING_MATRIX.md`: MODIFIED — camelot_v3 and nuri_v3 "pending"→"verified" with runDir evidence
-  - `config/onboard_scroll_stage1.yaml`: MODIFIED — PURPOSE softened (1 PASS ≠ exit from ECOSYSTEM_BLOCKED), nuri_v3 ADAPTER READINESS→VERIFIED R27.1
-  - `docs/status/Status_M5_0.md`: R27.2 refresh with fresh online evidence
-  - `docs/status/Status_M4.md`: R27.2 refresh with fresh online evidence
-  - `docs/DEV_REPORT_LATEST.md`: full rewrite with R27.2 evidence
+  - `strategy/jobs/run_scan_real.py`: MODIFIED — removed _compute_sanity_rejects() (synthetic suspect fabrication), replaced with _extract_suspect_from_rejects() (real data only); discovery_runtime strict-by-default (no silent fallback); intent/intent_forced forbidden for NORMAL/COVERAGE; strategy_mode/same_dex_only encoded in stats; pre-scan validate_universe wired; paper_slippage_bps passed to opportunity_engine
+  - `engine/opportunity_engine.py`: MODIFIED — paper_slippage_bps parameter added (was hardcoded 5.0); evaluate_quotes() + OpportunityEngine.__init__() accept config-driven slippage
+  - `scripts/validate_universe.py`: MODIFIED — intent/intent_forced forbidden for strict run_kinds; same_dex_mode warning for NORMAL; require_cross_dex/same_dex_only in summary
+  - `scripts/ci_m5_0_gate.py`: MODIFIED — run_real_scan() calls validate_universe before subprocess launch
+  - `strategy/jobs/run_scan.py`: MODIFIED — pre-dispatch validate_universe for REAL mode
+  - `tests/unit/test_suspect_provenance.py`: NEW — 7 tests: extract_empty, extract_single, max_deviation, none_deviation, no_synthetic_function, extract_exists, no_hardcoded_way_below
+  - `tests/unit/test_suspect_quotes_counter.py`: MODIFIED — removed assertion for synthetic "way_below_expected" key
 touched_files:
-  - m4/gates.py
-  - scripts/check_repo_safety.py
-  - tests/unit/test_rolling_chain_keys.py
-  - docs/ONBOARDING_MATRIX.md
-  - config/onboard_scroll_stage1.yaml
-  - docs/status/Status_M5_0.md
-  - docs/status/Status_M4.md
+  - strategy/jobs/run_scan_real.py
+  - engine/opportunity_engine.py
+  - scripts/validate_universe.py
+  - scripts/ci_m5_0_gate.py
+  - strategy/jobs/run_scan.py
+  - tests/unit/test_suspect_provenance.py
+  - tests/unit/test_suspect_quotes_counter.py
   - docs/DEV_REPORT_LATEST.md
 
 ## 2) Commands Executed (лише факти)
 
-py -3.11 -m pytest tests/unit -q: **PASS** (1798 passed, 2 skipped, 1 warning, 30.50s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: **PASS** (ALL REQUIRED GATES PASSED, 1791/2/1 at pre-fix; 1798/2/1 post-fix)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1: **PASS** (runDir ci_m5_gate_20260314_192514, arb primary NORMAL, 4 signals, $5.62)
-py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit --run-dir data/runs/ci_m5_gate_20260314_192514 --artifact-mode rolling: **PASS**
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_arbitrum_one_candidate.yaml --cycles 1: **PASS** (runDir ci_m5_gate_20260314_192713, 4-DEX, 87 quotes, cross_dex=27)
-py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit --run-dir data/runs/ci_m5_gate_20260314_192713 --artifact-mode full: **PASS** (14 simulations)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_scroll_stage1.yaml --cycles 1: **PASS** (runDir ci_m5_gate_20260314_193000, 2-DEX, 3 signals, nuri_v3 confirmed)
-py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit --run-dir data/runs/ci_m5_gate_20260314_193000 --artifact-mode full: **PASS** (1 simulation)
-py -3.11 start.py --hours 0.25 --cycles 1 --chains arbitrum_one zksync base mantle linea scroll: **PASS** (long scan: 8 runs, 17 signals, $23.49, 565s)
+py -3.11 -m pytest tests/unit -q: **PASS** (1805 passed, 2 skipped, 1 warning, 29.12s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: **PASS** (ALL REQUIRED GATES PASSED, 31.4s)
+py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: **PASS** (2 sims, $0.50)
+py -3.11 scripts/ci_m5_0_gate.py --offline: **PASS** (runDir ci_m5_gate_offline_20260314_202606)
+py -3.11 scripts/validate_universe.py --config config/real_minimal.yaml: **PASS** (6 pairs, 2 DEXes, NORMAL)
 
 ## 3) Artifacts Attached (шляхи)
-rolling (updated by R27.2 online runs):
-  - data/runs/_rolling/_latest.json (run_status: PASS, agg_status: PASS)
-  - data/runs/_rolling/run_summary_latest.json (run_timestamp: 2026-03-14T18:39:08Z, chain_key: arbitrum_one, run_kind: NORMAL)
-  - data/runs/_rolling/m4_stability_agg.json (agg_status: PASS, runs=200, $1310.11)
-  - data/runs/_rolling/long_scan_latest.json (generated: 2026-03-14T18:40:26Z, 8 runs, 17 signals, $23.49)
-run_dir_bundle (R27.2 ONLINE):
-  - data/runs/ci_m5_gate_20260314_192514/reports (arb primary NORMAL)
-  - data/runs/ci_m5_gate_20260314_192713/reports (arb 4-DEX candidate)
-  - data/runs/ci_m5_gate_20260314_193000/reports (scroll stage1 COVERAGE)
-  - data/runs/ci_m5_gate_20260314_193819/reports (long_scan arb run, rolling updated)
+rolling (UNCHANGED from R27.2 — no online runs this session):
+  - data/runs/_rolling/_latest.json
+  - data/runs/_rolling/run_summary_latest.json
+  - data/runs/_rolling/m4_stability_agg.json
+  - data/runs/_rolling/long_scan_latest.json
 
 ## 4) Key Results (числа з артефактів)
 
 ```
-latest:
-  schema_version: m4:latest:v2.0
-  run_status: PASS
-  agg_status: PASS
-  data_run_rate: 0.935
-run_summary_latest:
-  schema_version: m4:run_summary:v2.0
-  status: PASS
-  metrics.signals_count: 4
-  metrics.total_net_usdc: 5.7174
-  profit_status: PASS
-  drift_status: PASS
-  quality_status: WARN
-  run_timestamp: 2026-03-14T18:39:08.408499Z
-  code_identity: ts:2026-03-14T18:39:08.408499Z
-  inputs.run_mode: REGISTRY_REAL
-  inputs.run_dir_name: ci_m5_gate_20260314_193819
-  inputs.chain_key: arbitrum_one
-  inputs.run_kind: NORMAL
-stability_agg:
-  schema_version: m4:stability_agg:v2.0
-  agg_status: PASS
-  agg_reasons: []
-  runs_since_timestamp.runs_count: 200
-  runs_since_timestamp.data_runs_count: 187
-  quick_stats.unique_pairs: 13
-  quick_stats.unique_routes: 6
-  quick_stats.low_sample_rate: 0.05
-  quick_stats.data_run_rate: 0.935
-  quick_stats.total_net_usdc: 1310.1083
-long_scan_latest (REFRESHED R27.2):
-  schema: start:long_scan_summary:v1.7
-  generated_at: 2026-03-14T18:40:26Z
-  total_runs: 8 (7 PASS + 1 FAIL)
-  total_included_signals: 17
-  total_net_usdc: $23.49
-  total_profitable_roundtrips: 2
-  pass_chains: [arbitrum_one, zksync, base, mantle, linea]
-  fail_chains: [scroll]
-  accepted_fail_chains: [scroll]
-  per_chain:
-    arbitrum_one: runs=2, signals=8, net=$11.34, gap=15.77 bps, cross_dex=3
-    linea: runs=1, signals=2, net=$7.12, cross_dex=12
-    base: runs=1, signals=4, net=$2.19, cross_dex=15
-    mantle: runs=1, signals=1, net=$2.45, cross_dex=0
-    zksync: runs=2, signals=2, net=$0.39, cross_dex=10
-    scroll: runs=1, signals=0, net=$0.00, cross_dex=8 (accepted-fail)
-onboard_verification (R27.2, fresh):
-  arb_primary: ci_m5_gate_20260314_192514, PASS, 4 signals, $5.62
-  arb_candidate: ci_m5_gate_20260314_192713, PASS, 87 quotes, cross_dex=27, 14 simulations
-  scroll_stage1: ci_m5_gate_20260314_193000, PASS, 3 signals, nuri_v3 confirmed (rolling NOT overwritten — NORM-only guard)
-```
-
-## 4.1) Theoretical Net Profit (cost-aware reporting)
-
-```
-theoretical_net_profit:
-  mode: paper_simulated
-  arb_primary: $5.72 (1 run, 4 signals, long_scan arb component)
-  arb_candidate: $14.61 equivalent (4-DEX, 14 simulations passed)
-  scroll_stage1: $0.00 (COVERAGE, 3 signals — not counted in rolling)
-  long_scan_total: $23.49 (8 runs, 6 chains, 17 signals)
-  cost_breakdown: per-signal in truth_reports (gas+slippage+L1 cost model)
-  disclaimer: "Theoretical profit based on simulated execution. No real trades were executed."
+test_delta: +7 (1798 → 1805)
+code_changes: 6 files modified, 1 file created
+removed_function: _compute_sanity_rejects() — 82 lines of synthetic suspect generation
+new_function: _extract_suspect_from_rejects() — 16 lines, real-data-only extraction
+economics_unified: opportunity_engine now uses config paper_slippage_bps (was hardcoded 5.0)
+pre_scan_validation: wired in run_scan.py, run_scan_real.py main(), ci_m5_0_gate.py run_real_scan()
+discovery_strict: discovery_runtime_allow_fallback=false by default (was silent fallback)
+intent_forbidden: intent/intent_forced raise RuntimeError for NORMAL/COVERAGE run_kind
+strategy_modes: stats["strategy_mode"] = DYNAMIC_VERIFIED|BOOTSTRAP|TRUTH_PROBE
 ```
 
 ## 5) Contract Checks
 - status/reasons consistency: OK
-- rolling discipline (3+1 canonical files): OK — _latest, run_summary, m4_stability_agg, long_scan_latest
-- v2.x provenance contract: OK (run_timestamp, code_identity=ts:ISO, no runs_by_code_sha)
-- runtime artifacts not committed: OK
-- NORM-only rolling pointer guard: OK (m4/gates.py v3.2.23 — verified: scroll COVERAGE did NOT overwrite rolling)
-- check_repo_safety v1.14.0: OK (check [20] rolling chain purity — detects non-NORMAL/non-primary contamination)
-- schema version: **v1.7** (unchanged from R26)
-- test delta: +7 tests (1791 → 1798)
-- narrative consistency: OK (5 R27.1 tests + 7 R27.2 rolling tests)
+- rolling discipline (3+1 canonical files): OK — unchanged from R27.2
+- synthetic suspect metrics: REMOVED — _compute_sanity_rejects deleted, provenance tests lock it
+- discovery_runtime fallback: STRICT — requires explicit config flag to allow fallback
+- intent/intent_forced for NORMAL: FORBIDDEN — runtime + validate_universe enforce
+- economics alignment: UNIFIED — OE uses config paper_slippage_bps (same as spreads.py)
+- pre-scan validation: WIRED — 3 entrypoints call validate_universe before scan
+- strategy modes: ENCODED — stats carry strategy_mode and same_dex_only
+- test delta: +7 tests (1798 → 1805)
 
 ## 6) Blocker Classification
 
 ```
-code_blocker: LOW (pytest 1798 PASS, CI green, safety PASS)
-data_collection_blocker: LOW (data_run_rate=0.935, low_sample_rate=0.05, unique_pairs=13)
-market_window_blocker: HIGH (roundtrip_profitable=0 on primary chain arb, gap=15.77 bps)
-adapter_blocker: MEDIUM (ve33 not implemented — affects base/aerodrome, mantle/stratum)
+code_blocker: LOW (pytest 1805 PASS, CI green)
+data_collection_blocker: LOW (unchanged from R27.2)
+market_window_blocker: HIGH (unchanged — roundtrip_profitable=0 on primary)
+adapter_blocker: MEDIUM (ve33 not implemented)
 ```
 
-### Per-Chain Blocker Classification (R27.2 — with fresh long_scan evidence)
-
-| Chain | Classification | Route Health | Gap bps | Signals | Stage Config | Evidence |
-|-------|---------------|-------------|---------|---------|--------------|----------|
-| arbitrum_one | NONE | 1.00 | 15.77 | 8 (2 runs) | onboard_arbitrum_one_candidate.yaml | long_scan + ci_m5_gate_20260314_192713 |
-| linea | STRUCTURAL | 1.00 | n/a | 2 | onboard_linea_stage1.yaml | long_scan frontier (rank #2) |
-| base | MIXED + ve33 gap | 1.00 | n/a | 4 | onboard_base_stage1.yaml | long_scan frontier (rank #3) |
-| mantle | STRUCTURAL + ve33 gap | 1.00 | n/a | 1 | onboard_mantle_stage1.yaml | long_scan frontier (rank #4) |
-| zksync | MIXED | 1.00 | n/a | 2 | onboard_zksync_candidate.yaml | long_scan frontier (rank #5), drift=0.27 |
-| scroll | CROSS_DEX_VERIFIED | 1.00 | n/a | 0 (long_scan) / 3 (stage1) | onboard_scroll_stage1.yaml | ci_m5_gate_20260314_193000 PASS, accepted-fail |
-
-### Rollout Queue (R27.2 — additive model, per lead directive)
-
-| Priority | Chain | Stage Config | Condition |
-|----------|-------|--------------|-----------|
-| 1 | arbitrum_one (NORMAL) | onboard_arbitrum_one_candidate.yaml | 4-DEX PASS (R27.2: 14 sims), exit gate: 5 consecutive |
-| 2 | zksync | onboard_zksync_candidate.yaml | drift 0.27 > 0.25 threshold — needs improvement |
-| 3 | base | onboard_base_stage1.yaml | ve33 adapter (aerodrome) needed |
-| 4 | mantle | onboard_mantle_stage1.yaml | ve33 adapter (stratum) needed |
-| 5 | linea | onboard_linea_stage1.yaml | lynex_v3 algebra stability |
-| 6 | scroll | onboard_scroll_stage1.yaml | nuri_v3 verified R27.1/R27.2, needs sustained evidence |
-
-## 6.1) Blockers / Risks (max 5)
-- **MARKET**: roundtrip_profitable=2 total (base COVERAGE only) — arb primary gap=15.77 bps (regressed from 8.41)
-- **ADAPTER**: ve33 not implemented — blocks base/aerodrome, mantle/stratum full coverage
-- **ROLLING CONTAMINATION** (RESOLVED R27.2): NORM-only guard prevents COVERAGE/SMOKE runs from overwriting pointer files
-- **ZKSYNC**: drift_rejection_rate_median=0.27 (above 0.25 threshold); needs improvement before promotion
-- **SCROLL**: nuri_v3 confirmed (2 sessions), but 0 signals in long_scan — needs sustained evidence
-
-## 7) Lead's R27.2 10 Steps: Execution Map
-step_01: **DONE** — NORM-only rolling pointer guard added to m4/gates.py (v3.2.23). Non-NORMAL runs skip writing run_summary_latest.json and _latest.json. Evidence: scroll COVERAGE run ci_m5_gate_20260314_193000 did NOT overwrite rolling.
-step_02: **DONE** — Regression tests: +4 TestRollingPointerProtection (COVERAGE blocks, NORMAL allows, missing defaults NORMAL, SMOKE blocks). Evidence: 15 tests in test_rolling_chain_keys.py PASS.
-step_03: **DONE** — check_repo_safety v1.14.0: check [20] rolling chain purity validates run_kind=NORMAL + chain_key=arbitrum_one. Evidence: detected 4 ROLLING_CONTAMINATION errors before fix, 0 after.
-step_04: **DONE** — Rolling restored to primary NORMAL via fresh arb run ci_m5_gate_20260314_192514. Verified: inspect_rolling shows latest_chain_key=arbitrum_one. Final rolling: ci_m5_gate_20260314_193819 (long_scan arb run).
-step_05: **DONE** — ONBOARDING_MATRIX: camelot_v3 and nuri_v3 changed from "pending" to "verified" with runDir evidence.
-step_06: **DONE** — onboard_scroll_stage1.yaml: PURPOSE softened ("1 PASS = adapter/quoter proof, NOT automatic exit from ECOSYSTEM_BLOCKED"). nuri_v3 ADAPTER READINESS updated to VERIFIED R27.1.
-step_07: **DEFERRED** — ve33 adapter engineering (base/aerodrome, mantle/stratum) — future milestone.
-step_08: **DEFERRED** — zksync drift improvement — requires market conditions or pair tuning.
-step_09: **DONE** — Online runs: (a) arb primary NORMAL PASS, (b) arb candidate 4-DEX PASS (14 sims), (c) scroll stage1 PASS (3 signals, rolling NOT overwritten), (d) long scan 6 chains (8 runs, $23.49).
-step_10: **DONE** — Docs refresh: DEV_REPORT full rewrite, Status_M5_0 and Status_M4 updated with R27.2 evidence.
+## 7) Lead's R27.3 10 Steps: Execution Map
+step_01: **DONE** — Removed _compute_sanity_rejects(). Suspect metrics now come from real rejected_quotes (PRICE_SANITY_FAILED entries) via _extract_suspect_from_rejects(). Removed unused imports (Decimal, calculate_deviation_bps).
+step_02: **DONE** — 7 regression tests in test_suspect_provenance.py: empty/single/max_dev/None extractors + 3 purity tests (no synthetic function, extract exists, no hardcoded way_below_expected). Updated test_suspect_quotes_counter.py (removed synthetic "way_below_expected" assertion).
+step_03: **DONE** — discovery_runtime strict-by-default: exception raises RuntimeError unless config has discovery_runtime_allow_fallback=true. Stats record "discovery_runtime_failed" as universe_source.
+step_04: **DONE** — intent/intent_forced forbidden for NORMAL/COVERAGE: RuntimeError in run_scan_real.py + VIABILITY_FAIL in validate_universe.py.
+step_05: **DONE** — validate_universe wired: (a) ci_m5_0_gate.py run_real_scan() calls validate_universe before subprocess, (b) run_scan_real.py main() runs validate_universe after config load, (c) run_scan.py pre-dispatch for REAL mode.
+step_06: **DONE** — Unified economics: paper_slippage_bps parameter added to evaluate_quotes() and OpportunityEngine (was hardcoded 5.0). run_scan_real passes config.get("paper_slippage_bps", 0.0).
+step_07: **DONE** — Strategy modes encoded: stats["strategy_mode"] = DYNAMIC_VERIFIED|BOOTSTRAP|TRUTH_PROBE based on universe_source. stats["same_dex_only"] from require_cross_dex. validate_universe warns on same-DEX for NORMAL.
+step_08: **DONE** — Pre-dispatch validation: run_scan.py REAL mode calls validate_universe(config_path) before delegating. Raises RuntimeError on FAIL.
+step_09: **DONE** — Tests: 1805 passed (+7). CI full pipeline PASS. M4 offline profit PASS. M5 offline PASS. validate_universe real_minimal PASS.
+step_10: **DONE** — DEV_REPORT refresh with R27.3 evidence.
 
 ## 8) Що потрібно від ліда
-1. Arb gap regression: 8.41→15.77 bps — ринкова волатильність чи потрібна дія?
-2. zksync drift 0.27 (вище порогу 0.25) — чи є priority для pair tuning?
-3. ve33 adapter implementation priority (base/aerodrome vs mantle/stratum)
+1. Online runs needed: R27.3 was code audit only — recommend online run to verify no regression in real scan behaviour
+2. discovery_runtime_allow_fallback flag: should existing configs get this flag, or is strict-by-default the intended production state?
+3. paper_slippage_bps default: spreads.py uses 0.0 default, OE now matches — confirm this is correct (was previously 5.0 in OE)

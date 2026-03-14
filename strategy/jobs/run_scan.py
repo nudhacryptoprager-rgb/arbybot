@@ -61,6 +61,17 @@ def run_scanner(
     - REAL mode produces 4 artifacts
     """
     if mode == ScannerMode.REAL:
+        # R27.3: Pre-dispatch config validation for REAL mode
+        if config_path and config_path.exists():
+            try:
+                from scripts.validate_universe import validate_universe
+                vu = validate_universe(config_path)
+                if vu["status"] == "FAIL":
+                    errors = "; ".join(vu["errors"][:5])
+                    raise RuntimeError(f"Pre-dispatch validate_universe FAIL: {errors}")
+            except ImportError:
+                pass  # validate_universe not available — skip
+
         # REAL mode - ALWAYS use run_scan_real (no fallback)
         from strategy.jobs.run_scan_real import run_scanner as _run_real_scanner
         _run_real_scanner(

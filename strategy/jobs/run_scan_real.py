@@ -20,14 +20,12 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
 
 from core.constants import SCHEMA_VERSION, FAKE_BLOCK_SENTINELS
-from core.validators import calculate_deviation_bps
 from core.no_data import compute_no_data_reason, canonicalize_config_path
 from config.pairs import load_pairs
 from config import load_core_tokens
@@ -69,88 +67,27 @@ def _get_current_block(config: Dict[str, Any]) -> tuple[int, int]:
     return get_current_block_via_rpc(config)
 
 
-def _compute_sanity_rejects(
-    config: Dict[str, Any],
-    pairs_list: List,
-    dexes_active_list: List[str],
-) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
-    """Compute price sanity rejects and suspect examples."""
-    max_dev = config.get("price_sanity_max_deviation_bps", 5000)
-    
-    ref_pair = pairs_list[0] if pairs_list else None
-    ref_token_in = ref_pair.token_in if ref_pair else "WETH"
-    ref_token_out = ref_pair.token_out if ref_pair else "USDC"
-    ref_pair_key = f"{ref_token_in}_{ref_token_out}"
-    ref_decimals_in = ref_pair.token_in_decimals if ref_pair else 18
-    ref_decimals_out = ref_pair.token_out_decimals if ref_pair else 6
-    
-    try:
-        anchor_price = Decimal(str(config.get("tokens_anchor_price", {}).get(ref_pair_key, 2600)))
-    except Exception:
-        anchor_price = Decimal("2600")
-    
-    ref_amount_out = int(anchor_price * (10 ** ref_decimals_out))
-    
-    try:
-        from core.validators import normalize_price
-        implied_price_dec, _ = normalize_price(
-            amount_in_wei=10 ** ref_decimals_in,
-            amount_out_wei=ref_amount_out,
-            decimals_in=ref_decimals_in,
-            decimals_out=ref_decimals_out,
-            token_in=ref_token_in,
-            token_out=ref_token_out,
-        )
-        implied_price = Decimal(str(implied_price_dec))
-    except Exception:
-        implied_price = Decimal("0")
-    
-    _, raw_bps, _ = calculate_deviation_bps(implied_price, anchor_price)
-    capped_flag = raw_bps > int(max_dev)
-    deviation_bps = int(min(raw_bps, int(max_dev)))
-    
-    try:
-        implied_lt_expected = implied_price < anchor_price
-    except Exception:
-        implied_lt_expected = False
-    
-    reject_entry = {
-        "pair": f"{ref_token_in}/{ref_token_out}",
-        "dex_id": dexes_active_list[0] if dexes_active_list else "unknown",
-        "pool_fee": 3000,
-        "implied_price": str(implied_price),
-        "token_in_decimals": ref_decimals_in,
-        "token_out_decimals": ref_decimals_out,
-        "amount_in": 10 ** ref_decimals_in,
-        "amount_out": ref_amount_out,
-        "orientation": "normal",
-        "deviation_bps": deviation_bps,
-        "deviation_bps_raw": raw_bps,
-        "deviation_bps_capped": capped_flag,
-        "max_deviation_bps": int(max_dev),
-        "error": "deviation_exceeded" if raw_bps > int(max_dev) else None,
-        "inversion_applied": False,
-        "suspect_quote": True if (implied_lt_expected and raw_bps > 0) else False,
-        "suspect_reason": "way_below_expected" if (implied_lt_expected and raw_bps > 0) else None,
-        "expected_price": str(anchor_price),
-        "anchor_source": "config",
-        "expected_rule": "config_anchor",
-    }
-    
-    sanity_rejects = []
-    if raw_bps > int(max_dev):
-        sanity_rejects.append(reject_entry)
-    
-    suspect_examples = []
-    if reject_entry.get("suspect_quote"):
+def _extract_suspect_from_rejects(
+    sanity_rejects: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], int]:
+    """Extract suspect examples and max deviation bps from real rejected quotes.
+
+    Only uses actual PRICE_SANITY_FAILED rejects — no synthetic fabrication.
+    Returns (suspect_examples, raw_bps_max).
+    """
+    suspect_examples: List[Dict[str, Any]] = []
+    raw_bps_max = 0
+    for r in sanity_rejects:
+        dev = r.get("deviation_bps", 0) or 0
+        if dev > raw_bps_max:
+            raw_bps_max = dev
         suspect_examples.append({
-            "pair": reject_entry["pair"],
-            "implied_price": reject_entry["implied_price"],
-            "expected_price": reject_entry.get("expected_price"),
-            "reason": reject_entry.get("suspect_reason"),
+            "pair": r.get("pair"),
+            "implied_price": r.get("price_exact"),
+            "expected_price": r.get("anchor_price"),
+            "reason": r.get("reason", "PRICE_SANITY_FAILED"),
         })
-    
-    return sanity_rejects, suspect_examples, raw_bps
+    return suspect_examples, raw_bps_max
 
 
 def run_scan(
@@ -241,6 +178,14 @@ def run_scan(
     force_intent = (universe_source in ("intent_verified", "intent_forced"))
     use_discovery_runtime = (universe_source == "discovery_runtime")
     
+    # R27.3: Forbid intent/intent_forced for NORMAL/COVERAGE runs (no on-chain verify)
+    if universe_source in ("intent", "intent_forced") and run_kind in ("NORMAL", "COVERAGE"):
+        raise RuntimeError(
+            f"universe_source='{universe_source}' is forbidden for run_kind={run_kind}. "
+            "Intent-based universes lack on-chain verification. "
+            "Use 'config' or 'discovery_runtime'."
+        )
+    
     # Resolve pairs based on universe_source BEFORE quoting
     _discovery_runtime_resolved = []
     _discovery_runtime_stats = None
@@ -273,10 +218,19 @@ def run_scan(
             if _discovery_runtime_stats:
                 stats["discovery_runtime"] = _discovery_runtime_stats.to_dict()
         except Exception as dr_err:
-            logger.warning("discovery_runtime failed, falling back to config: %s", dr_err)
-            pairs_list = load_pairs(chain_key, config, use_intent=False, force_intent=False)
-            stats["universe_source"] = "config (discovery_runtime fallback)"
-            stats["discovery_runtime_error"] = str(dr_err)
+            allow_fallback = config.get("discovery_runtime_allow_fallback", False)
+            if allow_fallback:
+                logger.warning("discovery_runtime failed, falling back to config (allowed by config): %s", dr_err)
+                pairs_list = load_pairs(chain_key, config, use_intent=False, force_intent=False)
+                stats["universe_source"] = "config (discovery_runtime fallback)"
+                stats["discovery_runtime_error"] = str(dr_err)
+            else:
+                logger.error("discovery_runtime failed (strict mode, no fallback): %s", dr_err)
+                stats["universe_source"] = "discovery_runtime_failed"
+                stats["discovery_runtime_error"] = str(dr_err)
+                raise RuntimeError(
+                    f"discovery_runtime resolution failed and fallback is disabled: {dr_err}"
+                ) from dr_err
     elif force_intent:
         pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
         logger.info("Using intent.txt universe FORCED (universe_source=%s -> intent_forced, %d pairs)", universe_source, len(pairs_list))
@@ -292,6 +246,18 @@ def run_scan(
         pairs_list = None
         logger.debug("Using config pairs (universe_source=config)")
         stats["universe_source"] = "config"
+    
+    # R27.3: Encode strategy mode for artifact observability
+    _us = stats["universe_source"]
+    if _us == "discovery_runtime":
+        stats["strategy_mode"] = "DYNAMIC_VERIFIED"
+    elif _us in ("intent", "intent_forced"):
+        stats["strategy_mode"] = "BOOTSTRAP"
+    elif _us.startswith("config"):
+        stats["strategy_mode"] = "TRUTH_PROBE"
+    else:
+        stats["strategy_mode"] = "UNKNOWN"
+    stats["same_dex_only"] = not config.get("require_cross_dex", True)
     
     # Collect quotes with resolved pairs
     quotes_sample, rejected_quotes, counts = collect_quotes(config, current_block, rpc_latency, pairs_list=pairs_list)
@@ -358,24 +324,16 @@ def run_scan(
     sanity_reject_reasons = {"QUOTE_ZERO_OUT", "PRICE_CALC_FAILED", "NO_ONCHAIN_PRICE", "PRICE_SANITY_FAILED"}
     sanity_rejects = [r for r in rejected_quotes if r.get("reason") in sanity_reject_reasons]
     
-    # Compute additional sanity rejects from _compute_sanity_rejects (legacy placeholder)
-    legacy_sanity_rejects, suspect_examples, raw_bps = _compute_sanity_rejects(
-        config, pairs_list, dexes_active_list
-    )
+    # Extract suspect examples from real sanity rejects (no synthetic fabrication)
+    suspect_examples, raw_bps = _extract_suspect_from_rejects(sanity_rejects)
     
-    # Update suspect stats
-    try:
-        stats["suspect_quotes"] = len(suspect_examples)
-        reasons: Dict[str, int] = {}
-        for ex in suspect_examples:
-            r = ex.get("reason") or "unknown"
-            reasons[r] = reasons.get(r, 0) + 1
-        if "way_below_expected" not in reasons:
-            reasons.setdefault("way_below_expected", 0)
-        stats["suspect_reasons"] = reasons
-    except Exception:
-        stats["suspect_quotes"] = 0
-        stats["suspect_reasons"] = {"way_below_expected": 0}
+    # Update suspect stats from real data
+    stats["suspect_quotes"] = len(suspect_examples)
+    reasons: Dict[str, int] = {}
+    for ex in suspect_examples:
+        r = ex.get("reason") or "unknown"
+        reasons[r] = reasons.get(r, 0) + 1
+    stats["suspect_reasons"] = reasons
     
     # v2.0.8: price_sanity metrics
     # Contract: price_sanity operates on quotes that got far enough to have a price computed
@@ -464,6 +422,8 @@ def run_scan(
             max_notional_drift_pct=config.get("drift_warning_pct", 20.0),
             # v3.2.63: Per-chain SUSPECT_SPREAD_HARD threshold from config
             max_gross_spread_bps=config.get("suspect_spread_bps_hard"),
+            # R27.3: Unified economics — same paper_slippage_bps as spreads.py
+            paper_slippage_bps=config.get("paper_slippage_bps", 0.0),
         )
         
         # v3.2.5: Link opportunities to spread_signals and copy economics
@@ -1347,6 +1307,21 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     )
+    
+    # R27.3: Pre-scan universe validation
+    if args.config:
+        try:
+            from scripts.validate_universe import validate_universe
+            vu_result = validate_universe(Path(args.config))
+            if vu_result["status"] == "FAIL":
+                for err in vu_result["errors"]:
+                    logger.error("validate_universe: %s", err)
+                logger.error("Pre-scan validation FAIL — aborting. Fix config or override run_kind.")
+                return 1
+            for w in vu_result.get("warnings", []):
+                logger.warning("validate_universe: %s", w)
+        except ImportError:
+            logger.debug("validate_universe not available — skipping pre-scan check")
     
     args.output_dir.mkdir(parents=True, exist_ok=True)
     

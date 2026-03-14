@@ -236,11 +236,13 @@ class OpportunityEngine:
         max_notional_drift_pct: float = 20.0,  # v3.2.2: Aligned with spreads.py drift_warning_pct
         target_notional_usd: float = 1000.0,   # v2.1.0: Target notional for drift calc
         suspect_spread_bps: Optional[float] = None,  # v2.1.0: SUSPECT_SPREAD threshold (from Thresholds)
+        paper_slippage_bps: float = 0.0,  # R27.3: Config-driven, aligned with spreads.py
     ):
         self.gas_config = gas_config or GasConfig()
         self.min_net_profit_usd = min_net_profit_usd
         self.max_gas_cost_usd = max_gas_cost_usd
         self.min_gross_spread_bps = min_gross_spread_bps
+        self.paper_slippage_bps = paper_slippage_bps
         # v2.1.0: Use policy thresholds as defaults
         self.max_gross_spread_bps = max_gross_spread_bps if max_gross_spread_bps is not None else float(Thresholds.SUSPECT_SPREAD_BPS_HARD)
         self.suspect_spread_bps = suspect_spread_bps if suspect_spread_bps is not None else float(Thresholds.SUSPECT_SPREAD_BPS)
@@ -452,7 +454,7 @@ class OpportunityEngine:
             # Use the same formula as strategy/spreads.py for consistency
             buy_fee_bps = fee_tier_to_bps(buy_fee)
             sell_fee_bps = fee_tier_to_bps(sell_fee)
-            slippage_bps_est = 5.0  # Default paper slippage
+            slippage_bps_est = self.paper_slippage_bps
             size_usd_calc = float(usd_notional) if usd_notional else 250.0
             
             opp_min_required_bps = calc_min_required(
@@ -542,6 +544,7 @@ def evaluate_quotes(
     target_notional_usd: float = 1000.0,  # v2.7.1: Config-driven
     max_notional_drift_pct: float = 20.0,  # v3.2.2: Aligned with spreads.py drift_warning_pct
     max_gross_spread_bps: Optional[float] = None,  # v3.2.63: Per-chain SUSPECT_SPREAD_HARD threshold
+    paper_slippage_bps: float = 0.0,  # R27.3: Config-driven, aligned with spreads.py
 ) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     Convenience function to evaluate quotes and return opportunities.
@@ -562,6 +565,7 @@ def evaluate_quotes(
         target_notional_usd=target_notional_usd,
         max_gross_spread_bps=max_gross_spread_bps,
         max_notional_drift_pct=max_notional_drift_pct,
+        paper_slippage_bps=paper_slippage_bps,
     )
     
     opportunities = engine.build_opportunities(quotes, cycle, timestamp)
