@@ -179,3 +179,86 @@ class TestOnboardConfigsExist:
             assert dex in chain_dexes, (
                 f"{config_name}: dex '{dex}' not found in dexes.yaml for chain '{chain}'"
             )
+
+
+class TestNarrativeConsistency:
+    """Docs and configs must not contradict each other (R27 lead issue #6/#7/#10)."""
+
+    MATRIX_PATH = Path(__file__).parent.parent.parent / "docs" / "ONBOARDING_MATRIX.md"
+    SCROLL_COVERAGE_PATH = Path(__file__).parent.parent.parent / "config" / "coverage_intent_scroll.yaml"
+    ARB_CANDIDATE_PATH = Path(__file__).parent.parent.parent / "config" / "onboard_arbitrum_one_candidate.yaml"
+    SCROLL_STAGE1_PATH = Path(__file__).parent.parent.parent / "config" / "onboard_scroll_stage1.yaml"
+
+    def test_scroll_nuri_v3_enabled_in_coverage_config(self):
+        """If nuri_v3 is in coverage_intent_scroll.yaml dexes, docs cannot say excluded."""
+        with open(self.SCROLL_COVERAGE_PATH) as f:
+            data = yaml.safe_load(f)
+        assert "nuri_v3" in data.get("dexes", []), (
+            "nuri_v3 must be in coverage_intent_scroll.yaml dexes list (R27 fix)"
+        )
+
+    def test_scroll_blocker_text_no_algebra_incompatible(self):
+        """coverage_intent_scroll.yaml blocker_reason must not claim algebra-incompatible."""
+        with open(self.SCROLL_COVERAGE_PATH) as f:
+            content = f.read()
+        # Check machine-readable field
+        data = yaml.safe_load(content)
+        reason = data.get("blocker_reason", "")
+        assert "algebra-incompatible" not in reason, (
+            f"blocker_reason still claims algebra-incompatible: {reason}"
+        )
+
+    def test_matrix_scroll_nuri_not_excluded(self):
+        """ONBOARDING_MATRIX.md must not say nuri_v3 is EXCLUDED if config enables it."""
+        text = self.MATRIX_PATH.read_text(encoding="utf-8")
+        # Find the nuri_v3 row
+        for line in text.splitlines():
+            if "nuri_v3" in line and "scroll" in line.lower():
+                assert "EXCLUDED" not in line, (
+                    f"Matrix says nuri_v3 EXCLUDED but coverage config enables it: {line}"
+                )
+                assert "algebra-incompatible" not in line, (
+                    f"Matrix still claims algebra-incompatible: {line}"
+                )
+                break
+        else:
+            pytest.fail("nuri_v3 row not found in ONBOARDING_MATRIX.md")
+
+    def test_matrix_camelot_not_excluded_if_in_candidate(self):
+        """If camelot_v3 is in onboard_arbitrum_one_candidate.yaml, matrix cannot say EXCLUDED."""
+        with open(self.ARB_CANDIDATE_PATH) as f:
+            candidate = yaml.safe_load(f)
+        if "camelot_v3" not in candidate.get("dexes", []):
+            pytest.skip("camelot_v3 not in arb candidate config")
+
+        text = self.MATRIX_PATH.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if "camelot_v3" in line and "arbitrum" in line.lower():
+                assert "EXCLUDED" not in line, (
+                    f"Matrix says camelot_v3 EXCLUDED but candidate config includes it: {line}"
+                )
+                break
+        else:
+            pytest.fail("camelot_v3 row not found in ONBOARDING_MATRIX.md")
+
+    def test_stage_config_dexes_match_matrix_entries(self):
+        """DEXes in stage configs must exist in ONBOARDING_MATRIX.md table."""
+        text = self.MATRIX_PATH.read_text(encoding="utf-8")
+        configs = [
+            self.SCROLL_STAGE1_PATH,
+            self.ARB_CANDIDATE_PATH,
+        ]
+        for cfg_path in configs:
+            with open(cfg_path) as f:
+                data = yaml.safe_load(f)
+            chain = data["chain"]
+            for dex in data["dexes"]:
+                found = any(
+                    dex in line and chain in line.lower()
+                    for line in text.splitlines()
+                    if "|" in line
+                )
+                assert found, (
+                    f"DEX '{dex}' (chain={chain}) from {cfg_path.name} "
+                    f"not found in ONBOARDING_MATRIX.md table"
+                )

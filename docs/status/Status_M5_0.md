@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-14 (R27)
-**Tests**: 1788 collected / 1786 passed / 2 skipped (pending verification)
+**Updated**: 2026-03-14 (R27.1)
+**Tests**: 1793 collected / 1791 passed / 2 skipped
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_20260313_221453 (arb rolling R26), ci_m5_gate_20260313_223350 (arb rolling latest), 21 total runs across 6 chains
+**Evidence runDirs**: ci_m5_gate_20260314_101735 (arb 4-DEX candidate PASS), ci_m5_gate_20260314_102036 (scroll stage1 PASS)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (multi-chain frontier ranking with run_context provenance + triage fields, generated 2026-03-13T21:37:23Z)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (pinned to 2026-03-13T22:14:53Z: 15 runs, 46 signals, $36.35)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27)
 
 ---
@@ -16,6 +16,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R27.1: Online proof — arb 4-DEX candidate PASS (14 signals, $14.61, dexes_active=4), scroll stage1 PASS (3 signals, $0.14, nuri_v3 quoter_v2 confirmed).
 > R27: Strategy shift — full universe preserved, staged chain onboarding via `onboard_<chain>_stageN.yaml` configs. Scroll nuri_v3 contract mismatch fixed (was incorrectly classified as algebra, actually uniswap_v3/quoter_v2). Coverage matrix: `docs/ONBOARDING_MATRIX.md`.
 > R26: `run_context.run_timestamp` added to long_scan; frontier_ranking enriched with triage fields (status, route_health, blocker_reasons).
 > R25: `discovery_coverage` now populated from scan_*.json stats; `_warn_missing_chains()` is FATAL.
@@ -30,16 +31,16 @@ base:           SIGNAL_PRODUCING (discovery, cross-dex=10, 4/4 PASS, blocker=MIX
 mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, 3/3 PASS, blocker=STRUCTURAL — ve33 adapter not implemented)
 zksync:         SIGNAL_PRODUCING (discovery, cross-dex=3, 4/4 PASS, blocker=MIXED, gap=0.0 bps — drift=0.3077, needs <0.25)
 linea:          SIGNAL_PRODUCING (discovery, same-dex pancakeswap_v3, 3/3 PASS, blocker=STRUCTURAL — lynex_v3 algebra path unstable)
-scroll:         INFRA_READY (monitoring_only=true, nuri_v3 re-enabled R27, accepted-fail=true, 0/3 PASS, blocker=ECOSYSTEM_BLOCKED)
+scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 quoter_v2 confirmed R27.1, 3 signals, accepted-fail=true, blocker=THIN_LIQUIDITY)
 ```
 
-**Rollout Queue (R27 — additive model, per lead directive)**:
-1. **arbitrum_one** (primary, NORMAL) — must pass exit gate before others promoted
+**Rollout Queue (R27.1 — additive model, with online proof)**:
+1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (14 signals, $14.61). Exit gate: 5 consecutive.
 2. **zksync** — drift_rejection_rate_median must drop below 0.25
 3. **base** — ve33 adapter (aerodrome) needed for full coverage, mixed-source cleanup
 4. **mantle** — COVERAGE only until ve33 adapter (stratum) implemented
 5. **linea** — COVERAGE only until lynex_v3 Algebra path stabilized
-6. **scroll** — monitoring_only (nuri_v3 contract aligned R27, online verification pending)
+6. **scroll** — nuri_v3 quoter_v2 confirmed (R27.1: 3 signals), needs sustained evidence for ECOSYSTEM_BLOCKED exit
 
 **Onboard Stage Configs (R27)**:
 - `config/onboard_arbitrum_one_candidate.yaml` — 4-DEX additive (uni+sushi+camelot+pancakeswap)
@@ -54,6 +55,11 @@ scroll:         INFRA_READY (monitoring_only=true, nuri_v3 re-enabled R27, accep
 - **discovery**: base, linea, mantle, zksync (discovery_coverage populated)
 - **monitoring_only**: scroll (nuri_v3 re-enabled R27, accepted-fail=true)
 
+**R27.1 online verification**:
+- arb candidate: ci_m5_gate_20260314_101735, PASS, 14 signals, $14.61, dexes_active=4, cross_dex=27
+- scroll stage1: ci_m5_gate_20260314_102036, PASS, 3 signals, $0.14, dexes_active=2, cross_dex=8
+- nuri_v3 quoter_v2 CONFIRMED: 3 cross-DEX signals on scroll (1 PASS ≠ exit from ECOSYSTEM_BLOCKED)
+
 **R27 key changes**:
 - Strategy: full universe preserved, staged onboarding via `onboard_<chain>_stageN.yaml` configs
 - Scroll nuri_v3 contract mismatch FIXED (dexes.yaml=uniswap_v3/quoter_v2, was excluded as algebra)
@@ -62,7 +68,7 @@ scroll:         INFRA_READY (monitoring_only=true, nuri_v3 re-enabled R27, accep
 - ve33 gap explicitly documented (base/aerodrome, mantle/stratum)
 - `base roundtrip_profitable=2` is COVERAGE evidence, NOT promotion evidence
 
-**R26 scan result**: 5 PASS chains / 1 accepted-fail (scroll) / 21 total runs / 68 signals / $56.40 net / 2 roundtrip_profitable (base, COVERAGE only)
+**Long scan (pinned to 2026-03-13)**: 5 PASS chains / 15 runs / 46 signals / $36.35 net
 **Profit truth**: NOT YET — Arbitrum profit-truth blocker remains (roundtrip.profitable_count=0)
 
 ---

@@ -26,37 +26,39 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-14 R27)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1306.26. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: sweep_gap_to_zero_min=3.55 bps.
+> [!] **ROLLING STABILITY (2026-03-14 R27.1)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1304.98. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **M4.2 near closure**: sweep_gap_to_zero_min=0.0 bps (zksync frontier).
+> R27.1: Online proof — arb 4-DEX candidate PASS (14 signals, $14.61, dexes_active=4), scroll stage1 PASS (3 signals, $0.14, nuri_v3 quoter_v2 confirmed). +5 narrative consistency tests.
 > R27: Additive rollout model formalized — full universe preserved, staged chain onboarding via `onboard_<chain>_stageN.yaml` configs and adapter readiness (NOT by removing pairs/chains). Coverage matrix: `docs/ONBOARDING_MATRIX.md`. Scroll nuri_v3 contract mismatch fixed. +48 adapter readiness tests.
 > R26 closed observability/docs blocker (run_context, frontier triage fields, schema bump), NOT arb profit-truth blocker.
-> Latest evidence: `long_scan_latest.json` (generated 2026-03-13T21:37:23Z).
+> Latest evidence: `long_scan_latest.json` (pinned 2026-03-13T22:14:53Z), R27.1 online: ci_m5_gate_20260314_101735 (arb), ci_m5_gate_20260314_102036 (scroll).
 
-**Economics Snapshot (2026-03-13, R26):**
+**Economics Snapshot (2026-03-14, R27.1):**
 | Metric | Value | Notes |
 |--------|-------|-------|
-| `sweep_gap_to_zero_min` | 3.55 bps | Rolling frontier (improved from 4.10) |
+| `sweep_gap_to_zero_min` | 0.0 bps | Rolling frontier (zksync) |
 | `gap_to_zero_bps (zksync)` | 0.0 | Frontier #1, 4 signals |
-| `gap_to_zero_bps (arb)` | 20.5 | Frontier #2, 18 signals |
-| `gap_to_zero_bps (base)` | 67.1 | Frontier #3, 31 signals, rt_profitable=2 |
+| `gap_to_zero_bps (arb)` | 8.41 | Frontier #2, improved from 20.5 |
+| `gap_to_zero_bps (base)` | 90.73 | Frontier #3, regressed (high volatility) |
 | `roundtrip_total_profitable` | 0 | Rolling (arb_one): still market-blocked |
 | `roundtrip_profitable (base)` | 2 | COVERAGE chain, best=2548.33 bps |
 | `frontier_pair` | WETH/USDT | Latest frontier candidate |
 | `per_chain_frontier` | LIVE | 6 chains ranked with triage fields |
 | `runs_in_window` | 200 | Total NORMAL runs (rolling) |
-| `total_net_usdc` | $1306.26 | Cumulative paper profit |
+| `total_net_usdc` | $1304.98 | Cumulative paper profit |
 | `multi_chain_pass` | 5/6 | arb, base, mantle, linea, zksync |
-| `R26_scan_signals` | 68 | 21-run 6-chain scan, $56.40 net |
+| `long_scan_signals` | 46 | 15-run 5-chain scan (pinned), $36.35 net |
+| `R27.1_online` | 17 | arb=14, scroll=3 (single proof) |
 | `schema_version` | LATEST | R26: run_context + frontier triage |
 
-**Rollout Queue (R27 — additive model, per lead directive):**
+**Rollout Queue (R27.1 — additive model, with online proof):**
 | Priority | Chain | Status | Stage Config | Condition for Promotion |
 |----------|-------|--------|-------------|-------------------------|
-| 1 | arbitrum_one | NORMAL (primary) | `onboard_arbitrum_one_candidate.yaml` | Must pass exit gate before others |
+| 1 | arbitrum_one | NORMAL (primary) | `onboard_arbitrum_one_candidate.yaml` | 4-DEX PASS (R27.1), exit gate: 5 consecutive |
 | 2 | zksync | Candidate | `onboard_zksync_candidate.yaml` | drift_rejection_rate_median < 0.25 |
-| 3 | base | Stage1 | `onboard_base_stage1.yaml` | ve33 adapter (aerodrome) needed, gap=67 bps |
+| 3 | base | Stage1 | `onboard_base_stage1.yaml` | ve33 adapter (aerodrome) needed, gap=90.73 bps |
 | 4 | mantle | Stage1 | `onboard_mantle_stage1.yaml` | ve33 adapter (stratum) needed |
 | 5 | linea | Stage1 | `onboard_linea_stage1.yaml` | lynex_v3 Algebra path stability |
-| 6 | scroll | monitoring_only | `onboard_scroll_stage1.yaml` | nuri_v3 online verification pending |
+| 6 | scroll | CROSS_DEX_VERIFIED | `onboard_scroll_stage1.yaml` | nuri_v3 confirmed (R27.1: 3 signals), needs sustained evidence |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

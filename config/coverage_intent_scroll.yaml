@@ -129,33 +129,33 @@ dynamic_probe:
 # Run kind: COVERAGE (won't update rolling)
 run_kind: COVERAGE
 
-# R23: Machine-readable blocker classification for dashboard
-# Scroll is ECOSYSTEM_BLOCKED — single DEX (sushiswap_v3), 0 included signals.
-# Honest assessment: 18/18 FAIL, 0 signals, $0.00 net. NOT arbitrage-ready.
-# Drift data is meaningless here (45.5% rejection on 0 signals).
-# Evidence (R22 scan): 18/18 FAIL, all expected. Keep for ecosystem monitoring ONLY.
+# R27: Machine-readable blocker classification for dashboard
+# Scroll is ECOSYSTEM_BLOCKED — nuri_v3 re-enabled (uniswap_v3/quoter_v2), cross-DEX now possible.
+# R27 fix: nuri_v3 was incorrectly excluded as algebra-incompatible.
+# Cross-DEX: nuri_v3 <-> sushiswap_v3 now configured. Online verification pending.
+# Evidence (R26 scan): 0/3 PASS, 0 included signals. Expected until online re-verification.
 blocker_classification: ECOSYSTEM_BLOCKED
-blocker_reason: "no_viable_venue: sushiswap_v3 only, nuri_v3 algebra-incompatible, 0 included signals"
-blocker_resolution: "Monitor Scroll ecosystem quarterly for second quoter_v2-compatible DEX"
+blocker_reason: "cross_dex_unverified: nuri_v3 re-enabled R27 (uniswap_v3/quoter_v2), online proof pending"
+blocker_resolution: "Run onboard_scroll_stage1.yaml online to verify nuri_v3 quoter_v2 produces cross-DEX signals"
 stabilization_directive: >
-  R23: ECOSYSTEM_BLOCKED — honest probe-only assessment:
-  Scroll has ONE DEX (sushiswap_v3) producing same-dex fee-tier signals only,
-  ALL excluded by policy → 0 included signals → 18/18 FAIL. This is expected.
-  This is NOT a regression, NOT a code bug, NOT fixable by config tuning.
-  It requires a second quoter_v2-compatible DEX to deploy on Scroll.
+  R27: ECOSYSTEM_BLOCKED — nuri_v3 re-enabled, online verification pending:
+  Scroll now has 2 DEXes configured (nuri_v3 + sushiswap_v3), both uniswap_v3/quoter_v2.
+  Cross-DEX arbitrage routes should be available if pools have liquidity.
+  Previous state (R23): single DEX (sushiswap_v3 only), 0 included signals.
+  R27 change: nuri_v3 added back after contract mismatch fix.
   Concrete actions:
-  (1) keep in scan rotation for ecosystem monitoring ONLY;
+  (1) run onboard_scroll_stage1.yaml --cycles 1 to verify nuri_v3 quoter_v2;
   (2) accepted_fail=true — do NOT count scroll failures toward max_fail_chains;
-  (3) check Scroll DEX ecosystem quarterly for new DEX deployment;
+  (3) if nuri_v3 produces cross-DEX signals, update blocker to THIN_LIQUIDITY;
   (4) 2 pools quarantined (PRICE_SCALE_VIOLATION) — maintenance only;
-  (5) if second quoter_v2 DEX deploys, re-evaluate immediately;
-  (6) do NOT invest engineering time in Scroll until ecosystem changes.
+  (5) do NOT promote to SIGNAL_PRODUCING until cross-DEX signals confirmed;
+  (6) one PASS does NOT equal exit from ECOSYSTEM_BLOCKED — needs sustained evidence.
 stabilization_kpi_target:
-  status: PROBE_ONLY
+  status: CROSS_DEX_UNVERIFIED
   expected_included_signals: 0
   disabled_pool_count: 2
-  next_review_trigger: second_quoter_v2_dex_deployment
-  ecosystem_check_interval: quarterly
+  next_review_trigger: onboard_scroll_stage1_online_run
+  promotion_criteria: cross_dex_signals_gt_0_in_2_consecutive_runs
 
 # M4.2 Truth-Semantics (MANDATORY for profit interpretation)
 # v3.2.20: Full M4.2 semantics for contractual uniformity
