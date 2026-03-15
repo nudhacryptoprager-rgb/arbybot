@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-15 (R28.7 — economics engine correctness: executable_candidates KPI, min_spread_bps advisory, dynamic_sweep core, per_route_breakdown, ARB/WETH re-enabled, gap 18→15 bps)  
+**Updated**: 2026-03-15 (R28.10 — profit truth propagation: chain state classification, KPI separation, real_quote_count/profit_realism_status in run_summary + rolling + long_scan. RCA: linea profits from 0-fee pools, arb blocked by fee structure)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)  
-**Primary blocker**: market gap (agg sweep_median_gap ~15 bps, best-ever=3.55 bps). Slippage dominates all routes (83% of gap on WBTC/USDC). Secondary: async quote path deferred. Linea positive control (truth=True).
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.10**: `profit_realism_status` + `real_quote_count` now in run_summary + rolling + long_scan.  
+**Primary blocker**: market gap (arb: sweep_median_gap ~18.74 bps, best-ever=3.55 bps). Arb=PRIMARY_BLOCKER (real_quote_count=20, profitable_count=0). Linea/Base=CONFIRMED_POSITIVE_CONTROL. Fee structure is root cause (linea 0-fee pools vs arb 100-3000 bps).
 
 ## [!] M4.1 Simulate-Only DoD **MET**
 
@@ -27,7 +27,8 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-15 R28.7)**: `agg_status=PASS` sustained. runs_in_window=200+, total_net_usdc=$1224.92+. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **Economics engine corrected R28.7**: executable_candidates_count KPI, min_spread_bps advisory, dynamic_sweep as core, per_route_breakdown. Gap narrowed 18→15 bps. Slippage dominates (83% on WBTC/USDC).
+> [!] **ROLLING STABILITY (2026-03-15 R28.10)**: `agg_status=PASS` sustained. total_net_usdc=$1082.33. **M4.1 DoD MET**. **R28.10**: real_quote_count + profit_realism_status propagated through full chain. Chain profit states: linea/base=CONFIRMED_POSITIVE_CONTROL, arb/zksync=PRIMARY_BLOCKER. Rolling: real_quote_count_total=24, runs_with_real_quotes=6, latest_profit_realism_status=ROUNDTRIP_NOT_PROFITABLE.
+> R28.10: Profit truth propagation — real_quote_count + profit_realism_status in run_summary.metrics, rolling per-run + quick_stats, long_scan chain_profit_state. 5 states: CONFIRMED_POSITIVE_CONTROL/THIN_POSITIVE/PRIMARY_BLOCKER/CANDIDATE/PROBE_ONLY. KPI separation (signals/exec_candidates/profitable_roundtrips/truth_confirmed). RCA: linea profits from lynex_v3 0-fee pools; arb: 100-3000 bps fee pools + $150 paper_size slippage. Long scan: 27 runs, 69 signals, $91.42, 15 profitable RT.
 > R28.7: Economics engine correctness — 10 fix steps from lead directive. executable_candidates_count=4 (new KPI). min_spread_bps advisory (threshold=0 in truth_mode). Sweep promoted to core. Per-route breakdown: WBTC/USDC gap=15.22 bps (slip=12.57, fee=10, gas=3.25). ARB/WETH re-enabled (7 pairs now, SUSPECT_SPREAD_HARD gates outliers). Long scan: 42 runs / 109 signals / $123 / 21 RT in 573s. Linea truth=True (positive control confirmed).
 > R28.6: RunDir collision fix (6 collisions → 0 in parallel stress test 31 runs). Chain_id validation. Telemetry artifact patch. +9 tests (1837). Long scan parallel: 31 runs / 69 signals / $116.34 / 14 RT in 544s. Linea strongest non-arb (12 profitable RT).
 > R28.5: Bounded parallel coverage, expanded phase metrics, phase_timers artifact fix. Per-run ~27s→15s. Long scan: 37 runs / 52 signals / $85.88 / 12 RT in 556s.

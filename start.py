@@ -252,6 +252,9 @@ def new_chain_stats() -> dict[str, Any]:
         "net_usdc_total": 0.0,
         "profitable_roundtrips_total": 0,
         "roundtrip_evaluated_total": 0,
+        # R28.10: Profit realism tracking for chain state classification
+        "real_quote_count_total": 0,
+        "last_profit_realism_status": None,
         "best_roundtrip_net_bps": None,
         "best_measured_spread_gap_bps": None,
         "sweep_best_net_pnl_bps": None,
@@ -313,6 +316,11 @@ def update_chain_stats(
         rt = metrics.get("roundtrip", {}) or summary.get("roundtrip_summary", {})
         stats["profitable_roundtrips_total"] += int(rt.get("profitable_count", 0) or 0)
         stats["roundtrip_evaluated_total"] = stats.get("roundtrip_evaluated_total", 0) + int(rt.get("evaluated_count", 0) or 0)
+        # R28.10: Accumulate real_quote_count and snapshot profit_realism_status
+        stats["real_quote_count_total"] += int(rt.get("real_quote_count", 0) or 0)
+        prs = metrics.get("profit_realism_status")
+        if prs:
+            stats["last_profit_realism_status"] = prs
         run_best = rt.get("best_net_pnl_bps")
         if run_best is not None:
             prev = stats.get("best_roundtrip_net_bps")
@@ -423,6 +431,35 @@ def check_guardrails(per_chain: dict[str, dict[str, Any]]) -> list[str]:
     return warnings
 
 
+# -- chain profit state (R28.10) ------------------------------------------
+
+
+def classify_chain_profit_state(stats: dict[str, Any]) -> str:
+    """R28.10: Derive chain profit state from accumulated per-chain metrics.
+
+    States (ordered by strength):
+      CONFIRMED_POSITIVE_CONTROL - profitable RT with repeated real quotes (real_quote_count >= 2)
+      THIN_POSITIVE              - profitable RT exists but real quote evidence is thin (< 2)
+      PRIMARY_BLOCKER            - RT evaluated with real quotes but none profitable
+      CANDIDATE                  - runs exist but no roundtrip evaluation yet
+      PROBE_ONLY                 - no runs or no meaningful data
+    """
+    profitable = stats.get("profitable_roundtrips_total", 0)
+    evaluated = stats.get("roundtrip_evaluated_total", 0)
+    rq_total = stats.get("real_quote_count_total", 0)
+    runs = stats.get("runs", 0)
+
+    if profitable > 0 and rq_total >= 2:
+        return "CONFIRMED_POSITIVE_CONTROL"
+    if profitable > 0:
+        return "THIN_POSITIVE"
+    if evaluated > 0 and rq_total > 0:
+        return "PRIMARY_BLOCKER"
+    if runs > 0:
+        return "CANDIDATE"
+    return "PROBE_ONLY"
+
+
 # -- summary output -------------------------------------------------------
 
 
@@ -461,8 +498,12 @@ def build_summary(
     now_utc = datetime.now(timezone.utc)
     run_ts = now_utc.isoformat().replace("+00:00", "Z")
 
+    # R28.10: Classify chain profit state for each chain
+    for chain, s in per_chain.items():
+        s["chain_profit_state"] = classify_chain_profit_state(s)
+
     return {
-        "schema": "start:long_scan_summary:v1.7",  # R26: run_context provenance + frontier triage fields
+        "schema": "start:long_scan_summary:v1.8",  # R28.10: kpi_separation + profit_truth_summary + chain_profit_state
         "generated_at": run_ts,
         "run_context": {
             "run_timestamp": run_ts,
@@ -519,6 +560,10 @@ def build_summary(
         "per_chain_drift_summary": _compute_per_chain_drift_summary(per_chain),
         # R21: Explicit discovery vs truth-probe universe split
         "universe_split": _compute_universe_split(per_chain, pass_chains, fail_chains),
+        # R28.10: Strict KPI separation — signals vs executable vs profitable vs truth
+        "kpi_separation": _compute_kpi_separation(per_chain),
+        # R28.10: Profit truth summary — chain_profit_state rollup
+        "profit_truth_summary": _compute_profit_truth_summary(per_chain),
         # R28.9: Live batch state for dashboard visibility
         "batch_state": {
             "chains_total": len(per_chain),
@@ -580,6 +625,62 @@ def _compute_universe_split(
         "truth_probe_chains": sorted(truth_probe),
         "monitoring_only_chains": sorted(monitoring_only),
         "total_chains": len(per_chain),
+    }
+
+
+def _compute_kpi_separation(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """R28.10: Strictly separate KPIs — do NOT mix signals with profit truth.
+
+    Four-tier KPI:
+      signals_count         — raw signals found (one-leg spread detection)
+      exec_candidates       — signals that passed suspect/quality filters (executable)
+      profitable_roundtrips — roundtrip evaluations that showed profit
+      truth_confirmed       — profitable roundtrips backed by real DEX quotes (real_quote_count > 0)
+    """
+    per_chain_kpi = {}
+    totals = {"signals": 0, "exec_candidates": 0, "profitable_roundtrips": 0, "truth_confirmed": 0}
+    for chain, s in per_chain.items():
+        signals = s.get("included_signals_total", 0)
+        # exec_candidates approximated as included_signals (post-filter)
+        exec_cands = signals
+        profitable_rt = s.get("profitable_roundtrips_total", 0)
+        rq = s.get("real_quote_count_total", 0)
+        truth = profitable_rt if rq > 0 else 0
+        per_chain_kpi[chain] = {
+            "signals": signals,
+            "exec_candidates": exec_cands,
+            "profitable_roundtrips": profitable_rt,
+            "truth_confirmed": truth,
+            "real_quote_count": rq,
+        }
+        totals["signals"] += signals
+        totals["exec_candidates"] += exec_cands
+        totals["profitable_roundtrips"] += profitable_rt
+        totals["truth_confirmed"] += truth
+    return {"totals": totals, "per_chain": per_chain_kpi}
+
+
+def _compute_profit_truth_summary(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """R28.10: Summarize chain profit state across all chains.
+
+    Groups chains by their profit state for operator visibility.
+    """
+    groups: dict[str, list[str]] = {}
+    for chain, s in per_chain.items():
+        state = s.get("chain_profit_state", "PROBE_ONLY")
+        groups.setdefault(state, []).append(chain)
+
+    # Promotion eligibility: only CONFIRMED_POSITIVE_CONTROL chains are promotion-ready
+    # THIN_POSITIVE needs more evidence (real_quote_count >= 2)
+    promotion_eligible = sorted(groups.get("CONFIRMED_POSITIVE_CONTROL", []))
+    primary_blockers = sorted(groups.get("PRIMARY_BLOCKER", []))
+    thin_positive = sorted(groups.get("THIN_POSITIVE", []))
+
+    return {
+        "chain_states": {state: sorted(chains) for state, chains in groups.items()},
+        "promotion_eligible": promotion_eligible,
+        "primary_blockers": primary_blockers,
+        "thin_positive_needs_evidence": thin_positive,
     }
 
 
@@ -657,6 +758,9 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             "chain_quality_level": chain_quality,
             "blocker_classification": blocker_cls,
             "blocker_reason": blocker_rsn,
+            # R28.10: Chain profit state and promotion eligibility
+            "chain_profit_state": s.get("chain_profit_state"),
+            "promotion_eligible": s.get("chain_profit_state") == "CONFIRMED_POSITIVE_CONTROL",
         })
     ranked.sort(key=lambda x: (
         x.get("accepted_fail", False),
@@ -734,15 +838,35 @@ def print_summary(summary: dict[str, Any]) -> None:
         truth_s = str(truth) if truth is not None else "-"
         xdex = s.get("last_cross_dex_pairs_count")
         xdex_s = str(xdex) if xdex is not None else "-"
+        profit_state = s.get("chain_profit_state") or "-"
+        rq = s.get("real_quote_count_total", 0)
         print(
             f"  {'':16s}  quality={quality}  level={level}  "
             f"truth={truth_s}  cross_dex={xdex_s}"
+        )
+        print(
+            f"  {'':16s}  profit_state={profit_state}  "
+            f"real_quotes={rq}  profitable_rt={s.get('profitable_roundtrips_total', 0)}"
         )
 
     if summary["warnings"]:
         print("\n--- WARNINGS ---")
         for w in summary["warnings"]:
             print(f"  [!] {w}")
+
+    # R28.10: Profit truth summary
+    pts = summary.get("profit_truth_summary", {})
+    chain_states = pts.get("chain_states", {})
+    if chain_states:
+        print("\n--- Profit Truth Summary (R28.10) ---")
+        for state, chains in sorted(chain_states.items()):
+            print(f"  {state}: {', '.join(chains)}")
+        promo = pts.get("promotion_eligible", [])
+        if promo:
+            print(f"  PROMOTION-ELIGIBLE: {', '.join(promo)}")
+        blockers = pts.get("primary_blockers", [])
+        if blockers:
+            print(f"  PRIMARY-BLOCKERS:   {', '.join(blockers)}")
 
     ranking = summary.get("frontier_ranking", [])
     if ranking:

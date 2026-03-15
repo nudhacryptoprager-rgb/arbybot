@@ -308,7 +308,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.7")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.8")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -974,7 +974,7 @@ class TestFrontierRanking(unittest.TestCase):
         per_chain["base"]["included_signals_total"] = 3
         summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
         # Schema version check
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.7")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.8")
         # Required top-level fields
         self.assertIn("generated_at", summary)
         self.assertIn("wall_seconds", summary)
@@ -1505,6 +1505,96 @@ class TestReadConfigMetaChainId(unittest.TestCase):
             meta = start.read_config_meta(f.name)
         self.assertIsNone(meta["chain_id"])
         os.unlink(f.name)
+
+
+class TestChainProfitState(unittest.TestCase):
+    """R28.10: classify_chain_profit_state contracts."""
+
+    def test_confirmed_positive_control(self):
+        stats = start.new_chain_stats()
+        stats["profitable_roundtrips_total"] = 3
+        stats["real_quote_count_total"] = 4
+        stats["roundtrip_evaluated_total"] = 5
+        stats["runs"] = 3
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "CONFIRMED_POSITIVE_CONTROL",
+        )
+
+    def test_thin_positive(self):
+        stats = start.new_chain_stats()
+        stats["profitable_roundtrips_total"] = 2
+        stats["real_quote_count_total"] = 1
+        stats["roundtrip_evaluated_total"] = 4
+        stats["runs"] = 2
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "THIN_POSITIVE",
+        )
+
+    def test_primary_blocker(self):
+        stats = start.new_chain_stats()
+        stats["profitable_roundtrips_total"] = 0
+        stats["real_quote_count_total"] = 4
+        stats["roundtrip_evaluated_total"] = 4
+        stats["runs"] = 3
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "PRIMARY_BLOCKER",
+        )
+
+    def test_candidate(self):
+        stats = start.new_chain_stats()
+        stats["runs"] = 2
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "CANDIDATE",
+        )
+
+    def test_probe_only(self):
+        stats = start.new_chain_stats()
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "PROBE_ONLY",
+        )
+
+    def test_build_summary_has_new_sections(self):
+        """R28.10: build_summary must include kpi_separation and profit_truth_summary."""
+        per_chain = {
+            "linea": start.new_chain_stats(),
+            "arb": start.new_chain_stats(),
+        }
+        per_chain["linea"]["runs"] = 3
+        per_chain["linea"]["pass"] = 3
+        per_chain["linea"]["profitable_roundtrips_total"] = 5
+        per_chain["linea"]["real_quote_count_total"] = 3
+        per_chain["linea"]["roundtrip_evaluated_total"] = 6
+        per_chain["linea"]["included_signals_total"] = 10
+        per_chain["arb"]["runs"] = 3
+        per_chain["arb"]["pass"] = 2
+        per_chain["arb"]["no_data"] = 1
+        per_chain["arb"]["roundtrip_evaluated_total"] = 4
+        per_chain["arb"]["real_quote_count_total"] = 4
+        per_chain["arb"]["included_signals_total"] = 8
+
+        summary = start.build_summary(per_chain, 60.0, [])
+
+        # kpi_separation present
+        kpi = summary["kpi_separation"]
+        self.assertEqual(kpi["totals"]["signals"], 18)
+        self.assertEqual(kpi["totals"]["profitable_roundtrips"], 5)
+        self.assertEqual(kpi["totals"]["truth_confirmed"], 5)  # linea has rq>0
+        # arb has profitable_rt=0, so truth_confirmed=0 for arb
+        self.assertEqual(kpi["per_chain"]["arb"]["truth_confirmed"], 0)
+
+        # profit_truth_summary present
+        pts = summary["profit_truth_summary"]
+        self.assertIn("linea", pts["promotion_eligible"])
+        self.assertIn("arb", pts["primary_blockers"])
+
+        # per_chain has chain_profit_state
+        self.assertEqual(summary["per_chain"]["linea"]["chain_profit_state"], "CONFIRMED_POSITIVE_CONTROL")
+        self.assertEqual(summary["per_chain"]["arb"]["chain_profit_state"], "PRIMARY_BLOCKER")
 
 
 if __name__ == "__main__":

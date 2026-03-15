@@ -1121,6 +1121,8 @@ def generate_m4_from_online_inputs(
     roundtrip = {
         "evaluated_count": roundtrip_summary.get("evaluated_count", 0),
         "profitable_count": roundtrip_summary.get("profitable_count", 0),
+        # R28.10: Propagate real_quote_count for profit realism tracking
+        "real_quote_count": roundtrip_summary.get("real_quote_count", 0),
         "best_net_pnl_bps": roundtrip_summary.get("best_net_pnl_bps"),
         "best_measured_spread_gap_bps": roundtrip_summary.get("best_measured_spread_gap_bps"),
     }
@@ -1239,6 +1241,8 @@ def generate_m4_from_online_inputs(
             # v2.3.2: Profit truth availability (canonical for M4 DoD)
             "cost_model_available": cost_model_available,
             "profit_truth_available": profit_truth_available,
+            # R28.10: Profit realism status (from truth_report, canonical classification)
+            "profit_realism_status": truth_data.get("profit_realism_status", "ONE_LEG_ONLY_DIAGNOSTIC"),
             # v3.2.7: Deterministic NO_DATA classification
             "no_data_reason": no_data_reason,
             # v3.2.51: Chain quality level (INFRA_READY/SIGNAL_PRODUCING/QUALITY_RAISED)

@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-15 (R28.9 — dashboard observability: per-future long_scan writes, --keep-dashboard lifecycle, phase_timers, batch_state, quality_reasons, RT alert guard)
-**Tests**: 1853 passed / 3 skipped
-**Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_arbitrum_one_20260315_181340_343744 (R28.9 primary PASS, 7 signals), ci_m5_gate_linea_20260315_181303_641715 (linea ROUNDTRIP_PROFITABLE=2)
+**Updated**: 2026-03-15 (R28.10 — profit truth propagation: chain state classification, KPI separation, real_quote_count/profit_realism_status in run_summary + rolling + long_scan)
+**Tests**: 1856 passed / 3 skipped
+**Schema**: start:long_scan_summary:v1.8 (R28.10 bump)
+**Evidence runDirs**: ci_m5_gate_arbitrum_one_20260315_190256_678776 (R28.10 primary PASS, real_quote_count=4), ci_m5_gate_linea_20260315_190058_955019 (ROUNDTRIP_PROFITABLE=2, real_quote_count=2)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.9: 13 runs parallel, 39 signals, $53.33, 8 profitable roundtrips, wall_seconds=190)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.10: 27 runs parallel, 69 signals, $91.42, 15 profitable RT, wall_seconds=604)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
 ---
@@ -16,7 +16,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
-> R28.9: Dashboard observability — "dashboard backend is live, but UI refresh is batch-level and primary-centric; apparent stasis was a cadence/UX issue, not missing scan activity." 8 fixes: per-future long_scan writes (not per-batch), --keep-dashboard lifecycle, long_scan primary in UI, phase_timers propagation, batch_state, per-chain line_prefix, quality_reasons column, ROUNDTRIP_PROFITABLE alert guard (profit_realism_status). Fresh 13-run scan: 9 PASS, 39 signals, $53.33, 8 profitable RT, 190s wall.
+> R28.10: Profit truth propagation — real_quote_count + profit_realism_status now flow through full chain: truth_report → run_summary.metrics → rolling_store → long_scan. Chain profit state classification (5 states): CONFIRMED_POSITIVE_CONTROL (linea, base), PRIMARY_BLOCKER (arb, zksync), CANDIDATE (mantle, scroll). KPI separation: signals ≠ exec_candidates ≠ profitable_roundtrips ≠ truth_confirmed. RCA: linea profits from lynex_v3 0-fee pools; arb blocked by 100-3000 bps fee structure + $150 paper_size slippage amplification.
 > R28.7: Economics engine correctness — executable_candidates_count KPI (replaces signals_count as primary), min_spread_bps advisory in truth_mode (threshold=0), dynamic_sweep promoted to core decision layer, per_route_breakdown in artifacts (slippage/fee/gas decomposition). ARB/WETH re-enabled (SUSPECT_SPREAD_HARD gates >500bps). Gap narrowed 18→15 bps. Long scan: 42 runs, 109 signals, $123, 21 profitable RT. Linea truth=True (positive control confirmed).
 > R28.6: RunDir collision fix — chain-scoped unique dirs (`ci_m5_gate_{chain_key}_{YYYYMMDD}_{HHMMSS}_{microseconds}`) with `exist_ok=False`. 6 pre-fix collisions (zksync 324 + base 8453) → 0 post-fix in parallel stress test (31 runs). Chain_id validation in start.py. Telemetry: report_ms=63 (was 0). Lead: "R28.5 speed gain is provisional until parallel runDir uniqueness/provenance integrity is fixed" → FIXED.
 > R28.5: Bounded parallel coverage (`--coverage-workers N` in start.py), expanded phase metrics (8 fields), phase_timers artifact fix (computed before write_artifacts), COVERAGE dynamic_sweep skip. Long scan: 37 runs / 52 signals / $85.88 / 12 profitable roundtrips in 556s wall (~15s/run vs ~27s R28.4).
@@ -31,18 +31,18 @@
 
 ---
 
-## Chain Quality Classification (R28.9)
+## Chain Quality Classification (R28.10)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, 6 pairs, cross-dex=6, PASS, 7 signals, gap=3.55 bps best-ever, executable_candidates=4)
-base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=22, PASS, 10 signals, $4.49)
-mantle:         NO_DATA (probe-only, per lead R28.6)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=8, PASS, 2 signals)
-linea:          SIGNAL_PRODUCING (discovery, cross-dex=11, PASS, **truth=True**: ROUNDTRIP_PROFITABLE=2, positive control confirmed)
-scroll:         FAIL (accepted)
+arbitrum_one:   SIGNAL_PRODUCING / PRIMARY_BLOCKER (primary, rolling, truth_probe, 6 pairs, cross-dex=6, PASS, profitable_rt=0, real_quotes=20, gap=3.55 bps best-ever)
+base:           SIGNAL_PRODUCING / CONFIRMED_POSITIVE_CONTROL (stage2, 4 DEXes, cross-dex=22, profitable_rt=7, real_quotes=3)
+mantle:         NO_DATA / CANDIDATE (probe-only, no real quotes)
+zksync:         SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, cross-dex=8, profitable_rt=0, real_quotes=5)
+linea:          SIGNAL_PRODUCING / CONFIRMED_POSITIVE_CONTROL (discovery, cross-dex=11, **truth=True**: profitable_rt=8, real_quotes=8, positive control confirmed)
+scroll:         FAIL / CANDIDATE (accepted-fail, no real quotes)
 ```
 
-**R28.2 changes**: Semantics fix (require real_quote_count > 0 for ROUNDTRIP_PROFITABLE). ve33 stage2 configs created and tested online. Base ROUNDTRIP_PROFITABLE=2 but thin evidence (real_quote_count=1, measured_economics.available=false — not promotion-grade). Mantle cross-DEX surface enabled (agni_v3+stratum). Arb gap: agg best-ever=3.55 bps, median=17.99 bps.
+**R28.10 changes**: `chain_profit_state` classifier added to long_scan (5 states). `real_quote_count` + `profit_realism_status` propagated through full data chain. KPI separation (`kpi_separation` section in long_scan). `promotion_eligible` field in frontier_ranking. RCA: linea profits from lynex_v3 0-fee pools (arb has 100-3000 bps). Base promoted to CONFIRMED_POSITIVE_CONTROL (7 profitable RT, 3 real quotes accumulated across runs).
 
 **Rollout Queue (R28.2 — ve33 stage2 TESTED)**:
 1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (R27.2: 14 sims). Gap improved to 17.41 bps (was 20.41 R27.4). Exit gate: 5 consecutive. discovery_runtime is canonical successor (R28).

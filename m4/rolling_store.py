@@ -220,6 +220,9 @@ def emit_to_aggregator_light(
         # v3.2.30: Roundtrip metrics for M4.2 progress tracking
         "roundtrip_evaluated_count": metrics.get("roundtrip", {}).get("evaluated_count", 0),
         "roundtrip_profitable_count": metrics.get("roundtrip", {}).get("profitable_count", 0),
+        # R28.10: Real quote count and profit realism status for truth propagation
+        "real_quote_count": metrics.get("roundtrip", {}).get("real_quote_count", 0),
+        "profit_realism_status": metrics.get("profit_realism_status", "ONE_LEG_ONLY_DIAGNOSTIC"),
         # v3.3.1: Sweep frontier metrics for M4.2 blocker tracking
         "sweep_best_net_pnl_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("sweep_best_net_pnl_bps"),
         "sweep_gap_to_zero_bps": metrics.get("roundtrip", {}).get("dynamic_sweep", {}).get("gap_to_zero_bps"),
@@ -542,6 +545,14 @@ def _compute_quick_stats(
         "roundtrip_runs_profitable": sum(1 for r in normal_runs if r.get("roundtrip_profitable_count", 0) > 0),
         "roundtrip_total_evaluated": sum(r.get("roundtrip_evaluated_count", 0) for r in normal_runs),
         "roundtrip_total_profitable": sum(r.get("roundtrip_profitable_count", 0) for r in normal_runs),
+        # R28.10: Profit realism aggregates for truth propagation
+        "real_quote_count_total": sum(r.get("real_quote_count", 0) for r in normal_runs),
+        "runs_with_real_quotes": sum(1 for r in normal_runs if r.get("real_quote_count", 0) > 0),
+        "runs_roundtrip_profitable": sum(1 for r in normal_runs if r.get("profit_realism_status") == "ROUNDTRIP_PROFITABLE"),
+        "latest_profit_realism_status": next(
+            (r.get("profit_realism_status") for r in reversed(normal_runs) if r.get("profit_realism_status")),
+            None,
+        ),
         # v3.3.1: Sweep frontier aggregates for M4.2 blocker tracking
         # POLICY: gap_to_zero_bps is a WARN/frontier KPI only, NOT a hard pass/fail gate.
         "sweep_runs_count": sum(1 for r in normal_runs if r.get("sweep_best_net_pnl_bps") is not None),
