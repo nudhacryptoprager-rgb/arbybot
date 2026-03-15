@@ -1269,8 +1269,33 @@ ENV VARIABLES:
             
             print("\n[ONLINE] IGNORING ARBY_RUN_DIR (creating new run directory)")
             
-            run_dir = args.output_root / f"ci_m5_gate_{timestamp}"
-            run_dir.mkdir(parents=True, exist_ok=True)
+            # R28.6: Read chain_key from config for unique runDir naming
+            _cfg_chain_key = "unknown"
+            try:
+                import yaml as _yaml_rd
+                _cfg_p = Path(args.config)
+                if _cfg_p.exists():
+                    with open(_cfg_p, "r", encoding="utf8") as _f_rd:
+                        _cfg_rd = _yaml_rd.safe_load(_f_rd) or {}
+                    _cfg_chain_key = _cfg_rd.get("chain", "unknown")
+            except Exception:
+                pass
+            
+            # R28.6: Include chain_key + microsecond precision to prevent collision
+            # when parallel coverage workers create runDirs in the same second.
+            _now = datetime.now()
+            _ts_micro = _now.strftime("%Y%m%d_%H%M%S") + f"_{_now.microsecond:06d}"
+            run_dir = args.output_root / f"ci_m5_gate_{_cfg_chain_key}_{_ts_micro}"
+            try:
+                run_dir.mkdir(parents=True, exist_ok=False)
+            except FileExistsError:
+                # Retry once with fresh microsecond (extremely unlikely)
+                import time as _time_rd
+                _time_rd.sleep(0.001)
+                _now2 = datetime.now()
+                _ts_micro2 = _now2.strftime("%Y%m%d_%H%M%S") + f"_{_now2.microsecond:06d}"
+                run_dir = args.output_root / f"ci_m5_gate_{_cfg_chain_key}_{_ts_micro2}"
+                run_dir.mkdir(parents=True, exist_ok=False)
             
             print(f"[ONLINE] RunDir: {run_dir}")
             print(f"[ONLINE] Config: {args.config}")

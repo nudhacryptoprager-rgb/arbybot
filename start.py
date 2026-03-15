@@ -33,7 +33,9 @@ import yaml
 RUNS_DIR = Path("data") / "runs"
 CI_GATE = Path("scripts") / "ci_m5_0_gate.py"
 RUN_DIR_RE = re.compile(r"^\[ONLINE\] RunDir:\s*(.+)\s*$")
-CI_M5_DIR_RE = re.compile(r"^ci_m5_gate_\d{8}_\d{6}$")
+# R28.6: Match both legacy (ci_m5_gate_YYYYMMDD_HHMMSS) and new chain-scoped
+# (ci_m5_gate_{chain_key}_YYYYMMDD_HHMMSS_{microseconds}) runDir patterns
+CI_M5_DIR_RE = re.compile(r"^ci_m5_gate_(?:[a-z_]+_)?\d{8}_\d{6}(?:_\d+)?$")
 
 # -- config introspection -------------------------------------------------
 
@@ -47,6 +49,7 @@ def read_config_meta(config_path: str) -> dict[str, Any]:
         data = {}
     return {
         "chain": data.get("chain", "unknown"),
+        "chain_id": data.get("chain_id"),
         "run_kind": data.get("run_kind", "NORMAL"),
         "blocker_classification": data.get("blocker_classification"),
         "blocker_reason": data.get("blocker_reason"),
@@ -170,6 +173,28 @@ def extract_scan_stats(run_dir: Path | None) -> dict[str, Any] | None:
         return data.get("stats")
     except Exception:
         return None
+
+
+def _validate_chain_id_match(run_dir: Path, expected_chain_id: int, chain_name: str) -> None:
+    """Warn if any scan artifact in run_dir has a chain_id mismatch.
+
+    This catches runDir collision bugs where two chains write into the same directory.
+    """
+    reports = run_dir / "reports"
+    if not reports.exists():
+        return
+    for scan_file in reports.glob("scan_*.json"):
+        try:
+            with open(scan_file, encoding="utf-8") as f:
+                data = json.load(f)
+            actual = data.get("chain_id")
+            if actual is not None and actual != expected_chain_id:
+                print(
+                    f"[CHAIN_MISMATCH] {run_dir.name}: expected chain_id={expected_chain_id} "
+                    f"({chain_name}) but scan artifact has chain_id={actual}"
+                )
+        except Exception:
+            pass
 
 
 def classify_run(exit_code: int, summary: dict[str, Any] | None) -> str:
@@ -911,6 +936,7 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         """Run a single chain scan. Thread-safe for parallel coverage workers."""
         meta = config_meta[cfg]
         chain = meta["chain"]
+        expected_chain_id = meta.get("chain_id")
         refresh = is_primary_rolling_config(meta)
 
         rc, run_dir = run_gate_once(
@@ -922,6 +948,12 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         summary = extract_run_summary(run_dir)
         gate_res = extract_gate_result(run_dir)
         scan_st = extract_scan_stats(run_dir)
+
+        # R28.6: Validate scan artifact chain_id matches config chain
+        # Prevents corrupted summary from runDir collisions
+        if run_dir and expected_chain_id is not None:
+            _validate_chain_id_match(run_dir, expected_chain_id, chain)
+
         cls = classify_run(rc, summary)
 
         with _stats_lock:

@@ -1259,6 +1259,20 @@ def run_scan(
     stats["phase_timers_ms"]["total_ms"] = int((_phase_end - _phase_t0) * 1000)
     stats["phase_timers_ms"]["report_ms"] = int((_phase_end - _phase_report_start) * 1000)
     stats["phase_timers_ms"]["post_scan_ms"] = int((_phase_end - _phase_preflight_end) * 1000)
+
+    # R28.6: Patch scan artifact on disk with final phase_timers (including write+flush time)
+    # Only needed when artifacts were written to disk (artifact_mode != "rolling" or status != "PASS")
+    scan_artifact_path = artifacts.get("scan")
+    if isinstance(scan_artifact_path, Path) and scan_artifact_path.exists():
+        try:
+            import json as _json_patch
+            _scan_on_disk = _json_patch.loads(scan_artifact_path.read_text(encoding="utf-8"))
+            _scan_on_disk["stats"]["phase_timers_ms"] = stats["phase_timers_ms"]
+            from core.json_io import atomic_write_json
+            atomic_write_json(scan_artifact_path, _scan_on_disk, default=str)
+        except Exception as _patch_err:
+            logger.debug("phase_timers patch skipped: %s", _patch_err)
+
     logger.info(
         "Phase timers: total=%dms discovery=%dms quote=%dms postprocess=%dms preflight=%dms report=%dms",
         stats["phase_timers_ms"]["total_ms"],

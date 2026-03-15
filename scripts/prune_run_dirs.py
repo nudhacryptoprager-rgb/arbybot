@@ -94,10 +94,11 @@ def get_protected_from_status_md() -> set:
         content = status_path.read_text(encoding="utf-8")
         
         # Match common runDir patterns:
-        # ci_m5_gate_20260215_140031
+        # ci_m5_gate_20260215_140031 (legacy)
+        # ci_m5_gate_arbitrum_one_20260315_122041_456789 (R28.6 chain-scoped)
         # ci_m4_gate_20260215_140031
         # ci_m5_0_gate_offline_20260215_140031
-        pattern = r'(ci_m[45][_0-9a-z]*gate[_0-9a-z]*_\d{8}_\d{6})'
+        pattern = r'(ci_m[45][_0-9a-z]*gate[_0-9a-z]*_\d{8}_\d{6}(?:_\d+)?)'
         matches = re.findall(pattern, content, re.IGNORECASE)
         
         for match in matches:

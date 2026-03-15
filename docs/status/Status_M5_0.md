@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-15 (R28.5 — bounded parallel coverage, expanded phase metrics, phase_timers artifact fix)
-**Tests**: 1828 passed / 3 skipped (+6 from R28.4: bounded coverage workers, batched loop, expanded timers)
+**Updated**: 2026-03-15 (R28.6 — runDir collision fix, chain_id validation, telemetry artifact fix, +9 tests)
+**Tests**: 1837 passed / 3 skipped (+9 from R28.5: runDir regex, chain validation, config meta)
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_20260315_122041 (R28.5 arb phase_timers in artifact), ci_m5_gate_20260315_123037 (R28.5 long_scan final, rolling-refresh, PASS)
+**Evidence runDirs**: ci_m5_gate_arbitrum_one_20260315_125949_107589 (R28.6 arb primary, report_ms=63), ci_m5_gate_arbitrum_one_20260315_132036_628412 (R28.6 long_scan final, rolling refresh)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-15T12:34:00Z: 37 runs, 25 PASS, 52 signals, $85.88, 12 profitable roundtrips, wall_seconds=556)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.6: 31 runs parallel, 69 signals, $116.34, 14 profitable roundtrips, wall_seconds=544, **0 collisions**)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
 ---
@@ -16,6 +16,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R28.6: RunDir collision fix — chain-scoped unique dirs (`ci_m5_gate_{chain_key}_{YYYYMMDD}_{HHMMSS}_{microseconds}`) with `exist_ok=False`. 6 pre-fix collisions (zksync 324 + base 8453) → 0 post-fix in parallel stress test (31 runs). Chain_id validation in start.py. Telemetry: report_ms=63 (was 0). Lead: "R28.5 speed gain is provisional until parallel runDir uniqueness/provenance integrity is fixed" → FIXED.
 > R28.5: Bounded parallel coverage (`--coverage-workers N` in start.py), expanded phase metrics (8 fields), phase_timers artifact fix (computed before write_artifacts), COVERAGE dynamic_sweep skip. Long scan: 37 runs / 52 signals / $85.88 / 12 profitable roundtrips in 556s wall (~15s/run vs ~27s R28.4).
 > R28.4: Scanner performance optimization — shared Web3 cache (`_shared_w3_cache` in quotes.py), parallel quote prefetch (ThreadPoolExecutor, 8-way), COVERAGE lightweight mode (skip daily_report + preflight), inter-chain sleep 20→1s, phase_timers_ms in scan stats, multicall latency accounting fixed. Per-run scan time reduced from ~66s to ~27s (2.5x). Long scan: 21 runs / 43 signals / $68.28 / 9 profitable roundtrips in 563.6s wall.
 > R27.4: Config layer audit — 15 stale YAMLs deleted, inventory frozen to 16 active files with TestConfigInventoryGuard. validate_universe.py regression FIXED (is_strict_run used before defined). ve33 adapter IMPLEMENTED (dex/adapters/ve33.py + registry). Fresh online evidence: ci_m5_gate_20260314_211452 (4 signals, $5.55).
@@ -28,15 +29,15 @@
 
 ---
 
-## Chain Quality Classification (R28.5)
+## Chain Quality Classification (R28.6)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=MARKET, agg gap_min=3.55 bps, gap_median=17.95 bps)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=MARKET, quote_rpc=9s bottleneck)
 base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=16, PASS, ROUNDTRIP_PROFITABLE=2 thin)
-mantle:         NO_DATA (stage2, 2 DEXes agni_v3+stratum ve33, cross-dex=5, 6 NO_DATA runs in long_scan)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, 6 signals)
-linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, 12 signals, truth=True)
-scroll:         ACCEPTED_FAIL (6 FAIL runs in long_scan)
+mantle:         DROPPED (probe-only ballast, per lead R28.6 — not in long scan configs)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS)
+linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, **strongest non-arb**: 12 profitable RT in long_scan, ROUNDTRIP_PROFITABLE=2)
+scroll:         DROPPED (per lead R28.6 — not in long scan configs)
 ```
 
 **R28.2 changes**: Semantics fix (require real_quote_count > 0 for ROUNDTRIP_PROFITABLE). ve33 stage2 configs created and tested online. Base ROUNDTRIP_PROFITABLE=2 but thin evidence (real_quote_count=1, measured_economics.available=false — not promotion-grade). Mantle cross-DEX surface enabled (agni_v3+stratum). Arb gap: agg best-ever=3.55 bps, median=17.99 bps.
@@ -107,8 +108,8 @@ scroll:         ACCEPTED_FAIL (6 FAIL runs in long_scan)
 - `scripts/validate_universe.py`: intent forbidden for strict run_kinds, same_dex_mode warning
 - `tests/unit/test_suspect_provenance.py`: +7 tests (extract/purity validation)
 
-**Long scan**: REFRESHED 2026-03-15T10:25:50Z: 15 PASS + 3 NO_DATA + 3 FAIL / 21 runs / 43 signals / $68.28 net / 9 profitable roundtrips (wall_seconds=563.6, ~26.8s/run — 2.5x improvement from R28.3 baseline). Pass chains: arbitrum_one, zksync, base, linea. Fail: scroll (accepted-fail).
-**Profit truth**: BASE: positive but thin (ROUNDTRIP_PROFITABLE=2, real_quote_count=1, measured_economics.available=false — needs repetition). ARB PRIMARY: NOT YET (agg gap_median=17.99 bps, best-ever=3.55 bps).
+**Long scan (R28.6)**: REFRESHED — parallel (workers=2): 31 runs / 69 signals / $116.34 / 14 profitable roundtrips (wall_seconds=544). Serial (workers=1): 25 runs / 53 signals / $80.18 / 12 profitable RT (wall_seconds=543). Pass chains: arbitrum_one, zksync, base, linea. **0 runDir collisions** in parallel (was 6 in R28.5).
+**Profit truth**: LINEA: strongest non-arb evidence (12 profitable RT in long_scan, ROUNDTRIP_PROFITABLE=2). BASE: positive but thin. ARB PRIMARY: NOT YET (agg gap_median ~18 bps).
 
 ---
 

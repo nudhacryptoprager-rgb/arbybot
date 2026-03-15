@@ -1438,5 +1438,74 @@ class TestBatchedPrimaryCoverageLoop(unittest.TestCase):
                 self.assertFalse(refresh_arg, "Coverage should get refresh_rolling=False")
 
 
+class TestCI_M5_DIR_RE(unittest.TestCase):
+    """R28.6: Regex must match both legacy and chain-scoped runDir names."""
+
+    def test_legacy_format(self):
+        self.assertIsNotNone(start.CI_M5_DIR_RE.match("ci_m5_gate_20260315_122041"))
+
+    def test_chain_scoped_format(self):
+        self.assertIsNotNone(start.CI_M5_DIR_RE.match("ci_m5_gate_arbitrum_one_20260315_122041_456789"))
+
+    def test_chain_scoped_zksync(self):
+        self.assertIsNotNone(start.CI_M5_DIR_RE.match("ci_m5_gate_zksync_20260315_122041_000123"))
+
+    def test_rejects_random_dir(self):
+        self.assertIsNone(start.CI_M5_DIR_RE.match("some_random_dir"))
+
+
+class TestValidateChainIdMatch(unittest.TestCase):
+    """R28.6: Detect chain_id collisions in runDir scan artifacts."""
+
+    def test_no_mismatch_is_silent(self):
+        with tempfile.TemporaryDirectory() as td:
+            rd = Path(td) / "test_run"
+            reports = rd / "reports"
+            reports.mkdir(parents=True)
+            scan = {"chain_id": 42161, "stats": {}}
+            (reports / "scan_20260315_120000.json").write_text(json.dumps(scan))
+            # Should not raise or print anything
+            start._validate_chain_id_match(rd, 42161, "arbitrum_one")
+
+    def test_mismatch_prints_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            rd = Path(td) / "test_run"
+            reports = rd / "reports"
+            reports.mkdir(parents=True)
+            scan = {"chain_id": 324, "stats": {}}
+            (reports / "scan_20260315_120000.json").write_text(json.dumps(scan))
+            import io
+            from contextlib import redirect_stdout
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                start._validate_chain_id_match(rd, 8453, "base")
+            self.assertIn("CHAIN_MISMATCH", buf.getvalue())
+
+    def test_missing_reports_is_silent(self):
+        with tempfile.TemporaryDirectory() as td:
+            rd = Path(td) / "nonexistent"
+            start._validate_chain_id_match(rd, 42161, "arb")
+
+
+class TestReadConfigMetaChainId(unittest.TestCase):
+    """R28.6: read_config_meta must return chain_id."""
+
+    def test_chain_id_present(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write("chain: base\nchain_id: 8453\nrun_kind: COVERAGE\n")
+            f.flush()
+            meta = start.read_config_meta(f.name)
+        self.assertEqual(meta["chain_id"], 8453)
+        os.unlink(f.name)
+
+    def test_chain_id_missing_is_none(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write("chain: unknown\n")
+            f.flush()
+            meta = start.read_config_meta(f.name)
+        self.assertIsNone(meta["chain_id"])
+        os.unlink(f.name)
+
+
 if __name__ == "__main__":
     unittest.main()

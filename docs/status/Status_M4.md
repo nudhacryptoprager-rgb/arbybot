@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-15 (R28.4 — scanner performance optimization, fresh long_scan evidence)  
+**Updated**: 2026-03-15 (R28.6 — runDir collision fix, scanner latency + evidence integrity now same priority blocker as arb market gap)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)  
-**Primary blocker**: market gap (agg sweep_median_gap=17.99 bps, best-ever=3.55 bps). Secondary: zksync drift, probe_slippage artifact integration pending. Base/mantle stage2 TESTED online (R28.2+R28.3). Scanner performance improved 2.5x (R28.4).
+**Primary blocker**: market gap (agg sweep_median_gap ~18 bps, best-ever=3.55 bps). Secondary: scanner latency + evidence integrity (R28.6: RESOLVED — runDir collision fixed, telemetry fixed). Linea strongest non-arb evidence (12 profitable RT). Async quote path deferred.
 
 ## [!] M4.1 Simulate-Only DoD **MET**
 
@@ -27,7 +27,9 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-15 R28.4)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1224.92, unique_pairs=12. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **Rolling contamination FIXED R27.2**: NORM-only pointer guard in m4/gates.py prevents COVERAGE/SMOKE from overwriting pointer files.
+> [!] **ROLLING STABILITY (2026-03-15 R28.6)**: `agg_status=PASS` sustained. runs_in_window=200+, total_net_usdc=$1224.92+. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **RunDir collision FIXED R28.6**: chain-scoped unique dirs with microsecond precision. **Telemetry FIXED R28.6**: report_ms=63 in artifact (was 0). Rolling contamination FIXED R27.2.
+> R28.6: RunDir collision fix (6 collisions → 0 in parallel stress test 31 runs). Chain_id validation. Telemetry artifact patch. +9 tests (1837). Long scan parallel: 31 runs / 69 signals / $116.34 / 14 RT in 544s. Linea strongest non-arb (12 profitable RT).
+> R28.5: Bounded parallel coverage, expanded phase metrics, phase_timers artifact fix. Per-run ~27s→15s. Long scan: 37 runs / 52 signals / $85.88 / 12 RT in 556s.
 > R28.4: Scanner performance optimization — shared Web3 cache, parallel quote prefetch (ThreadPoolExecutor 8-way), COVERAGE lightweight mode, phase_timers_ms, inter-chain sleep 20→1s. Per-run scan time ~66s→~27s (2.5x). Long scan: 21 runs / 43 signals / $68.28 / 9 RT in 563.6s wall.
 > R28.3: Doc cleanup, claim downgrades (thin not REAL), deprecated pnl pruned, stale-section tests (+5), fresh evidence.
 > R28.2: Semantics fix (profit_truth requires real_quote_count>0). ve33 stage2 configs created+tested online. Base ROUNDTRIP_PROFITABLE=2 (thin: real_quote_count=1). Mantle cross_dex=5.
@@ -47,8 +49,8 @@
 | `runs_in_window` | 200 | m4_stability_agg |
 | `total_net_usdc` | $1224.92 | m4_stability_agg (paper profit) |
 | `unique_pairs` | 12 | m4_stability_agg |
-| `long_scan` | 21 runs, 43 signals, $68.28 | long_scan_latest (563.6s wall, ~27s/run) |
-| `multi_chain_pass` | 4/6 | long_scan (arb, zksync, base, linea; scroll=fail) |
+| `long_scan` | 31 runs, 69 signals, $116.34 | long_scan_latest (544s wall, parallel workers=2, **0 collisions**) |
+| `multi_chain_pass` | 4/4 | long_scan (arb, zksync, base, linea; mantle/scroll dropped) |
 
 **Rollout Queue (R28.2 — ve33 stage2 configs + semantics fix):**
 | Priority | Chain | Status | Stage Config | Condition for Promotion |
@@ -57,7 +59,7 @@
 | 2 | zksync | Candidate | `onboard_zksync_candidate.yaml` | drift=0.31 (above 0.25 threshold), needs improvement |
 | 3 | base | Stage2 tested | `onboard_base_stage2.yaml` [R28.2] | PASS, 4 DEXes, cross_dex=16, ROUNDTRIP_PROFITABLE=2 (thin: real_quote_count=1) |
 | 4 | mantle | Stage2 tested | `onboard_mantle_stage2.yaml` [R28.2] | PASS, 2 DEXes (agni_v3+stratum), cross_dex=5, profitable_count=0 |
-| 5 | linea | Stage1 | `onboard_linea_stage1.yaml` | lynex_v3 Algebra path stability, 2 signals (rank #2 frontier) |
+| 5 | linea | Stage1 | `onboard_linea_stage1.yaml` | **Strongest non-arb** (R28.6): 12 profitable RT in long_scan, ROUNDTRIP_PROFITABLE=2, cross_dex=12. Promote above zksync. |
 | 6 | scroll | CROSS_DEX_VERIFIED | `onboard_scroll_stage1.yaml` | nuri_v3 confirmed (R27.1+R27.2), 0 signals in long_scan (accepted-fail) |
 
 ## Executor Onboarding Checklist (2026-03-04)
@@ -168,21 +170,21 @@ simulate_only: true
 **Near breakeven**: Best-ever frontier only 4.10 bps from zero; fee=100 lever would save 8 bps.
 M4.2 requires `roundtrip.profitable_count > 0` AND `real_quote_count > 0` with real quoter-based economics (R28.2 semantics fix).
 
-## M4.2 Economics Frontier (2026-03-14)
+## M4.2 Economics Frontier (2026-03-15)
 
 **Primary blocker**: `gap_to_zero_bps` (distance from breakeven in sweep best).
 
-| Metric | R11 | R14 | R18 | R20 | R26 | R27.2 | **R28.2** | Delta |
-|--------|-----|-----|-----|-----|-----|-------|---------|-------|
-| `sweep_best_net_pnl_bps` | -4.10 | -4.10 | -4.10 | -4.10 | -3.55 | -15.77 | **-17.99 (median)** | market-dependent |
-| `gap_to_zero_bps (best)` | 4.10 | 4.10 | 4.10 | 4.10 | 3.55 | 15.77 | **3.55 (best-ever)** | stable |
-| `profitable_count (arb)` | 0 | 0 | 0 | 0 | 0 | 0 | **0** | arb-only |
-| `profitable_count (long_scan)` | — | — | — | — | — | 2 (SUSPECT) | **4** (base=2 thin, linea=2) | +2 |
-| `frontier_pair` | WBTC/USDC | WBTC/USDC | WBTC/USDC | WETH/USDT | WETH/USDT | WETH/USDT | **WETH/USDT** | stable |
-| `measured_fee_bps` | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | **10.0** | stable |
-| `test_count` | 1635 | 1653 | 1661 | 1685 | 1738 | 1798 | **1817** | +19 |
-| `runs_in_window` | 161 | 170 | 179 | 184 | 200 | 200 | **200** | stable |
-| `total_net_usdc` | $1016 | $1065 | $1114 | $1142 | $1306 | $1310 | **$1357** | +$47 |
+| Metric | R11 | R14 | R18 | R20 | R26 | R27.2 | R28.2 | **R28.6** | Delta |
+|--------|-----|-----|-----|-----|-----|-------|---------|---------|-------|
+| `sweep_best_net_pnl_bps` | -4.10 | -4.10 | -4.10 | -4.10 | -3.55 | -15.77 | -17.99 (median) | **-17.99** | stable |
+| `gap_to_zero_bps (best)` | 4.10 | 4.10 | 4.10 | 4.10 | 3.55 | 15.77 | 3.55 (best-ever) | **3.55** | stable |
+| `profitable_count (arb)` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** | arb-only |
+| `profitable_count (long_scan)` | — | — | — | — | — | 2 (SUSPECT) | 4 (base=2, linea=2) | **14** | +10 (parallel) |
+| `frontier_pair` | WBTC/USDC | WBTC/USDC | WBTC/USDC | WETH/USDT | WETH/USDT | WETH/USDT | WETH/USDT | **WETH/USDT** | stable |
+| `measured_fee_bps` | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | **10.0** | stable |
+| `test_count` | 1635 | 1653 | 1661 | 1685 | 1738 | 1798 | 1817 | **1837** | +20 |
+| `runs_in_window` | 161 | 170 | 179 | 184 | 200 | 200 | 200 | **200+** | stable |
+| `total_net_usdc` | $1016 | $1065 | $1114 | $1142 | $1306 | $1310 | $1357 | **$1357+** | stable |
 
 **Cost decomposition (arb WETH/USDT @ $25, R20 latest):**
 - LP fee: 10.0 bps (2x500 tier) — **main controllable cost, fee=100 would save 8 bps**
@@ -190,11 +192,12 @@ M4.2 requires `roundtrip.profitable_count > 0` AND `real_quote_count > 0` with r
 - Gas: 3.16 bps (L2)
 - Total: 25.13 bps cost (fee=40% of cost)
 
+**R28.6 note**: RunDir collision fix (6→0 collisions in parallel). Long scan parallel (workers=2): 31 runs / 69 signals / $116.34 / 14 profitable RT / 544s wall / 0 collisions. Linea strongest non-arb (12 profitable RT). Scanner latency + evidence integrity now same priority blocker as arb market gap (per lead R28.6).
 **R28.3 note**: Long scan improved: 9 runs/44 signals/$41.80 (was 8/23/$31.37). Sweep best=-12.81 bps (was -17.41). Scroll produced first non-zero signal. Base 3 profitable RT in long_scan (still thin: real_quote_count=1 per run). Agg: gap_median=17.95 bps, best-ever=3.55 bps unchanged.
 **Best-ever frontier**: -3.55 bps gap (R26) — only needs ~4 bps improvement to breakeven.
 **Fee=100 lever**: If fee=100 pool exists with liquidity, saves 8 bps → would cross breakeven.
 
-**Evidence**: `long_scan_latest.json` (REFRESHED 2026-03-15T09:24:23Z), `m4_stability_agg.json` (run_timestamp 2026-03-15T09:21:13Z), R28.3 session runDirs.
+**Evidence**: `long_scan_latest.json` (REFRESHED R28.6 parallel), `m4_stability_agg.json`, R28.6 session runDirs (chain-scoped).
 
 **Pipeline status**: Full measured economics (gas/fee/slippage/total_cost_bps) canonical in: truth_report → run_summary → m4_stability_agg → _latest.json. Rolling includes: median_gap_to_zero_bps, median_net_pnl_bps, frontier_pair_latest, frontier_chain_latest. Per-chain frontier ranking in start.py summary.
 
