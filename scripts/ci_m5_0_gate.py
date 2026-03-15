@@ -87,7 +87,7 @@ def check_roundtrip_profitable(run_dir: Path) -> Tuple[bool, int, str]:
         roundtrip_summary = truth.get("roundtrip_summary", {})
         profitable_count = roundtrip_summary.get("profitable_count", 0)
         
-        is_profitable = profitable_count > 0
+        is_profitable = profitable_count > 0 and profit_realism_status == "ROUNDTRIP_PROFITABLE"
         return is_profitable, profitable_count, profit_realism_status
     except Exception as e:
         return False, 0, f"ERROR: {e}"
@@ -1823,10 +1823,13 @@ ENV VARIABLES:
                 final_pass = False
             
             # v2.4.0: Check for roundtrip profitable and emit alert
+            # R28.9: Only alert when profit_realism_status confirms ROUNDTRIP_PROFITABLE
             if final_pass:
                 is_profitable, profitable_count, profit_status = check_roundtrip_profitable(run_dir)
                 if is_profitable:
                     emit_roundtrip_alert(run_dir, profitable_count, profit_status)
+                elif profitable_count > 0:
+                    print(f"[INFO] profitable_count={profitable_count} but profit_realism_status={profit_status} — alert suppressed")
             
             # v2.4.0: Loop mode handling
             if not loop_mode:

@@ -70,6 +70,7 @@ def run_gate_once(
     sleep_seconds: int,
     refresh_rolling: bool,
     timeout_seconds: int,
+    line_prefix: str = "",
 ) -> tuple[int, Path | None]:
     """Run ci_m5_0_gate.py once; return (exit_code, runDir)."""
     cmd = [
@@ -100,7 +101,11 @@ def run_gate_once(
     try:
         start = time.monotonic()
         for line in proc.stdout:
-            sys.stdout.write(line)
+            # R28.9: Prefix worker lines for log readability
+            if line_prefix:
+                sys.stdout.write(f"{line_prefix} {line}")
+            else:
+                sys.stdout.write(line)
             m = RUN_DIR_RE.match(line.strip())
             if m:
                 run_dir = Path(m.group(1).strip())
@@ -266,6 +271,7 @@ def new_chain_stats() -> dict[str, Any]:
         "last_profit_truth_available": None,
         "run_kind": None,
         "last_cross_dex_pairs_count": None,
+        "last_quality_reasons": [],
         "accepted_fail": False,
         # R19: Blocker classification from config
         "blocker_classification": None,
@@ -281,6 +287,8 @@ def new_chain_stats() -> dict[str, Any]:
         # R22: Worst drift pair (latest snapshot)
         "drift_worst_pair": None,
         "drift_worst_pair_bps": None,
+        # R28.9: Phase timers for dashboard performance visibility
+        "last_phase_timers_ms": None,
     }
 
 
@@ -339,6 +347,8 @@ def update_chain_stats(
         stats["last_chain_quality_level"] = metrics.get("chain_quality_level")
         stats["last_profit_truth_available"] = metrics.get("profit_truth_available")
         stats["run_kind"] = summary.get("run_kind", stats["run_kind"])
+        # R28.9: Capture quality_reasons for gate PASS + run_summary FAIL disambiguation
+        stats["last_quality_reasons"] = summary.get("quality_reasons", [])
 
         # R21: Per-chain drift tracking from run_summary
         drift = metrics.get("drift_summary", {})
@@ -376,6 +386,10 @@ def update_chain_stats(
                 "pairs_skipped_single_dex": dr.get("pairs_skipped_single_dex", 0),
                 "pairs_skipped_excluded": dr.get("pairs_skipped_excluded", 0),
             }
+        # R28.9: Propagate phase_timers_ms for dashboard performance visibility
+        pt = scan_stats.get("phase_timers_ms")
+        if pt:
+            stats["last_phase_timers_ms"] = pt
 
 
 # -- guardrails -----------------------------------------------------------
@@ -505,6 +519,16 @@ def build_summary(
         "per_chain_drift_summary": _compute_per_chain_drift_summary(per_chain),
         # R21: Explicit discovery vs truth-probe universe split
         "universe_split": _compute_universe_split(per_chain, pass_chains, fail_chains),
+        # R28.9: Live batch state for dashboard visibility
+        "batch_state": {
+            "chains_total": len(per_chain),
+            "chains_with_runs": sum(1 for s in per_chain.values() if s["runs"] > 0),
+            "last_completed_chain": next(
+                (c for c in reversed(list(per_chain)) if per_chain[c]["runs"] > 0),
+                None,
+            ),
+            "last_summary_write": run_ts,
+        },
     }
 
 
@@ -826,6 +850,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=8099,
         help="Port for the dashboard server (default: 8099)",
     )
+    ap.add_argument(
+        "--keep-dashboard",
+        action="store_true",
+        default=False,
+        help="Keep dashboard server running after scan completes (default: terminate with scan)",
+    )
     return ap.parse_args(argv)
 
 
@@ -856,9 +886,12 @@ def main(argv: list[str] | None = None) -> int:
         return _run_scan_loop(args, configs)
     finally:
         if dashboard_proc is not None:
-            dashboard_proc.terminate()
-            dashboard_proc.wait(timeout=5)
-            print("Dashboard server stopped.")
+            if args.keep_dashboard:
+                print(f"Dashboard server kept alive (PID {dashboard_proc.pid}): http://127.0.0.1:{args.dashboard_port}")
+            else:
+                dashboard_proc.terminate()
+                dashboard_proc.wait(timeout=5)
+                print("Dashboard server stopped.")
 
 
 def _warn_missing_chains(config_meta: dict[str, dict[str, Any]]) -> None:
@@ -932,17 +965,20 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
     # R28.5: Thread-safe lock for per_chain stats and stdout
     _stats_lock = threading.Lock()
 
-    def _run_one_chain(cfg: str) -> tuple[int, Path | None, str, str]:
+    def _run_one_chain(cfg: str, is_coverage: bool = False) -> tuple[int, Path | None, str, str]:
         """Run a single chain scan. Thread-safe for parallel coverage workers."""
         meta = config_meta[cfg]
         chain = meta["chain"]
         expected_chain_id = meta.get("chain_id")
         refresh = is_primary_rolling_config(meta)
+        # R28.9: Prefix coverage worker output for log readability
+        prefix = f"[{chain}]" if is_coverage else ""
 
         rc, run_dir = run_gate_once(
             cfg, args.cycles, args.prune_keep, args.sleep_seconds,
             refresh_rolling=refresh,
             timeout_seconds=args.child_timeout,
+            line_prefix=prefix,
         )
 
         summary = extract_run_summary(run_dir)
@@ -997,7 +1033,7 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                 print(f"[COVERAGE BATCH] {len(batch_cfgs)} chains, workers={coverage_workers}")
 
                 with ThreadPoolExecutor(max_workers=coverage_workers) as pool:
-                    futures = {pool.submit(_run_one_chain, cfg): cfg for cfg in batch_cfgs}
+                    futures = {pool.submit(_run_one_chain, cfg, True): cfg for cfg in batch_cfgs}
                     for future in as_completed(futures):
                         cfg = futures[future]
                         total_runs += 1
@@ -1007,11 +1043,11 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                         except Exception as e:
                             print(f"[run {total_runs}] COVERAGE_ERROR: {cfg}: {e}")
 
-                # Write summary after coverage batch for dashboard
-                interim_wall = time.monotonic() - wall_start
-                interim_warnings = check_guardrails(per_chain)
-                interim_summary = build_summary(per_chain, interim_wall, interim_warnings)
-                write_summary_file(interim_summary, args.summary_file)
+                        # R28.9: Write summary after each coverage future for live dashboard
+                        interim_wall = time.monotonic() - wall_start
+                        interim_warnings = check_guardrails(per_chain)
+                        interim_summary = build_summary(per_chain, interim_wall, interim_warnings)
+                        write_summary_file(interim_summary, args.summary_file)
 
         if total_runs % max(len(configs), 3) == 0:
             prune_run_dirs(args.prune_keep)

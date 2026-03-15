@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-15 (R28.7 — economics engine correctness: executable_candidates KPI, min_spread_bps advisory, dynamic_sweep core, probe_slippage per-route, ARB/WETH re-enabled)
-**Tests**: 1837 passed / 3 skipped (maintained from R28.6)
+**Updated**: 2026-03-15 (R28.9 — dashboard observability: per-future long_scan writes, --keep-dashboard lifecycle, phase_timers, batch_state, quality_reasons, RT alert guard)
+**Tests**: 1853 passed / 3 skipped
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_arbitrum_one_20260315_142730_339644 (R28.7 arb primary 5-cycle, 9 signals), ci_m5_gate_arbitrum_one_20260315_143747_439501 (R28.7 long_scan final, rolling refresh)
+**Evidence runDirs**: ci_m5_gate_arbitrum_one_20260315_181340_343744 (R28.9 primary PASS, 7 signals), ci_m5_gate_linea_20260315_181303_641715 (linea ROUNDTRIP_PROFITABLE=2)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.7: 42 runs parallel, 109 signals, $123, 21 profitable roundtrips, wall_seconds=573)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.9: 13 runs parallel, 39 signals, $53.33, 8 profitable roundtrips, wall_seconds=190)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
 ---
@@ -16,6 +16,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R28.9: Dashboard observability — "dashboard backend is live, but UI refresh is batch-level and primary-centric; apparent stasis was a cadence/UX issue, not missing scan activity." 8 fixes: per-future long_scan writes (not per-batch), --keep-dashboard lifecycle, long_scan primary in UI, phase_timers propagation, batch_state, per-chain line_prefix, quality_reasons column, ROUNDTRIP_PROFITABLE alert guard (profit_realism_status). Fresh 13-run scan: 9 PASS, 39 signals, $53.33, 8 profitable RT, 190s wall.
 > R28.7: Economics engine correctness — executable_candidates_count KPI (replaces signals_count as primary), min_spread_bps advisory in truth_mode (threshold=0), dynamic_sweep promoted to core decision layer, per_route_breakdown in artifacts (slippage/fee/gas decomposition). ARB/WETH re-enabled (SUSPECT_SPREAD_HARD gates >500bps). Gap narrowed 18→15 bps. Long scan: 42 runs, 109 signals, $123, 21 profitable RT. Linea truth=True (positive control confirmed).
 > R28.6: RunDir collision fix — chain-scoped unique dirs (`ci_m5_gate_{chain_key}_{YYYYMMDD}_{HHMMSS}_{microseconds}`) with `exist_ok=False`. 6 pre-fix collisions (zksync 324 + base 8453) → 0 post-fix in parallel stress test (31 runs). Chain_id validation in start.py. Telemetry: report_ms=63 (was 0). Lead: "R28.5 speed gain is provisional until parallel runDir uniqueness/provenance integrity is fixed" → FIXED.
 > R28.5: Bounded parallel coverage (`--coverage-workers N` in start.py), expanded phase metrics (8 fields), phase_timers artifact fix (computed before write_artifacts), COVERAGE dynamic_sweep skip. Long scan: 37 runs / 52 signals / $85.88 / 12 profitable roundtrips in 556s wall (~15s/run vs ~27s R28.4).
@@ -30,14 +31,14 @@
 
 ---
 
-## Chain Quality Classification (R28.7)
+## Chain Quality Classification (R28.9)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, 7 pairs, cross-dex=6, PASS, 8-9 signals, gap=15 bps, executable_candidates=4)
-base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=16, PASS, 22 signals)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, 6 pairs, cross-dex=6, PASS, 7 signals, gap=3.55 bps best-ever, executable_candidates=4)
+base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=22, PASS, 10 signals, $4.49)
 mantle:         NO_DATA (probe-only, per lead R28.6)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, 7 signals)
-linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, **truth=True**: profitable roundtrips confirmed, positive control group)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=8, PASS, 2 signals)
+linea:          SIGNAL_PRODUCING (discovery, cross-dex=11, PASS, **truth=True**: ROUNDTRIP_PROFITABLE=2, positive control confirmed)
 scroll:         FAIL (accepted)
 ```
 

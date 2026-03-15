@@ -69,19 +69,19 @@ tr:hover{background:#1c2128}
 
   <!-- Panel 3: Measured Economics -->
   <div class="panel" id="p-econ">
-    <h2>3. Measured Economics Decomposition</h2>
+    <h2>3. Measured Economics <span style="font-size:.65rem;color:#6e7681">(PRIMARY NORM-ONLY)</span></h2>
     <div id="econ-body"></div>
   </div>
 
   <!-- Panel 4: Top Routes -->
   <div class="panel" id="p-routes">
-    <h2>4. Top Routes</h2>
+    <h2>4. Top Routes <span style="font-size:.65rem;color:#6e7681">(PRIMARY NORM-ONLY)</span></h2>
     <div id="routes-body"></div>
   </div>
 
   <!-- Panel 5: Fee-Tier Comparison -->
   <div class="panel" id="p-fees">
-    <h2>5. Fee-Tier Comparison</h2>
+    <h2>5. Fee-Tier Comparison <span style="font-size:.65rem;color:#6e7681">(PRIMARY NORM-ONLY)</span></h2>
     <div id="fees-body"></div>
   </div>
 
@@ -105,7 +105,7 @@ tr:hover{background:#1c2128}
 
   <!-- Panel 9: Quality Rejects -->
   <div class="panel" id="p-rejects">
-    <h2>9. Quality Rejects</h2>
+    <h2>9. Quality Rejects <span style="font-size:.65rem;color:#6e7681">(PRIMARY NORM-ONLY)</span></h2>
     <div id="rejects-body"></div>
   </div>
 
@@ -143,9 +143,20 @@ function render(data) {
   el.textContent = aggSt;
   el.className = 'status ' + (aggSt === 'PASS' ? 'pass' : aggSt === 'WARN' ? 'warn' : 'fail');
 
-  const ts = rs?.timestamp || agg?.updated_at || '?';
-  $('meta-line').textContent = `Rolling: ${qs.pass_count||0}+${qs.no_data_count||0}+${qs.fail_count||0} runs (P/ND/F) | ` +
-    `Net: ${fmtUsd(qs.total_net_usdc)} | Updated: ${ts.slice(0,19)}Z`;
+  // R28.9: Primary meta from long_scan (multi-chain), run_summary labeled as PRIMARY NORM-ONLY
+  const lsTs = ls?.generated_at || '';
+  const lsRuns = ls?.total_runs || 0;
+  const lsPass = ls?.total_pass || 0;
+  const lsFail = ls?.total_fail || 0;
+  const lsSignals = ls?.total_included_signals || 0;
+  const lsNet = ls?.total_net_usdc;
+  const rsTs = rs?.timestamp || '';
+  const rsRunDir = rs?.inputs?.run_dir_name || '—';
+  const bs = ls?.batch_state || {};
+  const bsInfo = bs.chains_total ? ` | Batch: ${bs.chains_with_runs||0}/${bs.chains_total} chains done` + (bs.last_completed_chain ? ` (last: ${bs.last_completed_chain})` : '') : '';
+  $('meta-line').innerHTML =
+    `<b>Multi-chain:</b> ${lsRuns} runs (${lsPass}P/${lsFail}F) | ${lsSignals} signals | Net: ${fmtUsd(lsNet)} | Updated: ${(lsTs||'?').slice(0,19)}Z${bsInfo}` +
+    `<br><span style="color:#6e7681">Primary (NORM-ONLY): ${rsRunDir} | ${(rsTs||'?').slice(0,19)}Z | Rolling: ${qs.pass_count||0}+${qs.no_data_count||0}+${qs.fail_count||0} (P/ND/F)</span>`;
 
   renderChainStatus(ls);
   renderFrontier(ls);
@@ -164,7 +175,7 @@ function renderChainStatus(ls) {
   if (!ls?.per_chain) { $('chain-body').innerHTML = '<em class="na">No multi-chain data</em>'; return; }
   const pc = ls.per_chain;
   const driftSummary = ls.per_chain_drift_summary || {};
-  let html = '<table><tr><th>Chain</th><th>Runs</th><th class="num">P/ND/F</th><th class="num">Signals</th><th class="num">Net USD</th><th class="num">$/run</th><th class="num">Drift Rej%</th><th>Quality</th><th>Blocker</th></tr>';
+  let html = '<table><tr><th>Chain</th><th>Runs</th><th class="num">P/ND/F</th><th class="num">Signals</th><th class="num">Net USD</th><th class="num">$/run</th><th class="num">Drift Rej%</th><th>Quality</th><th>Blocker</th><th>Reason</th></tr>';
   for (const [chain, d] of Object.entries(pc)) {
     const qBadge = d.last_chain_quality_level === 'SIGNAL_PRODUCING' ? badge('SIGNAL','pass') :
                    d.last_chain_quality_level === 'INFRA_READY' ? badge('INFRA','warn') : badge(d.last_chain_quality_level||'?','fail');
@@ -192,6 +203,7 @@ function renderChainStatus(ls) {
       <td class="num ${dRejCls}">${dRejStr}</td>
       <td>${qBadge}</td>
       <td>${blockerBadge}</td>
+      <td style="font-size:.68rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(d.last_quality_reasons||[]).join(', ')}">${d.last_quality_status === 'FAIL_QUALITY' ? (d.last_quality_reasons||[]).slice(0,2).join(', ') || 'FAIL_QUALITY' : d.last_run_summary_status === 'FAIL' ? 'FAIL' : ''}</td>
     </tr>`;
   }
   html += '</table>';
@@ -200,6 +212,21 @@ function renderChainStatus(ls) {
   const tot = ls.total_runs || 1;
   const pPct = ((ls.total_pass||0)/tot*100).toFixed(0);
   html += `<div style="margin-top:8px"><div class="bar-bg"><div class="bar-fill" style="width:${pPct}%;background:#238636"></div><div class="bar-label">${ls.total_pass||0}/${tot} PASS (${pPct}%)</div></div></div>`;
+
+  // R28.9: Per-chain phase timers (performance visibility)
+  const hasTimers = Object.values(pc).some(d => d.last_phase_timers_ms);
+  if (hasTimers) {
+    html += '<h3 style="font-size:.8rem;color:#58a6ff;margin-top:12px;padding-top:8px;border-top:1px solid #21262d">Phase Timers (last run per chain)</h3>';
+    html += '<table><tr><th>Chain</th><th class="num">Total ms</th><th class="num">Discovery</th><th class="num">Quote RPC</th><th class="num">Postprocess</th><th class="num">Preflight</th><th class="num">Report</th></tr>';
+    for (const [chain, d] of Object.entries(pc)) {
+      const pt = d.last_phase_timers_ms;
+      if (!pt) continue;
+      const totalCls = pt.total_ms > 60000 ? 'neg' : pt.total_ms > 30000 ? 'warn-c' : '';
+      html += `<tr><td>${chain}</td><td class="num ${totalCls}">${pt.total_ms||'—'}</td><td class="num">${pt.discovery_ms||'—'}</td><td class="num">${pt.quote_rpc_ms||'—'}</td><td class="num">${pt.postprocess_ms||'—'}</td><td class="num">${pt.preflight_ms||'—'}</td><td class="num">${pt.report_ms||'—'}</td></tr>`;
+    }
+    html += '</table>';
+  }
+
   $('chain-body').innerHTML = html;
 }
 
