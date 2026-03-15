@@ -433,12 +433,13 @@ class TestSchemaVersion(unittest.TestCase):
 class TestProfitIsDiagnosticSemantics(unittest.TestCase):
     """v2.3.2: profit_is_diagnostic semantics tests."""
 
-    def _make_minimal_stats(self, roundtrip_profitable_count=0, roundtrip_evaluated_count=0):
+    def _make_minimal_stats(self, roundtrip_profitable_count=0, roundtrip_evaluated_count=0, real_quote_count=0):
         """Create minimal stats dict for build_truth_data."""
         return {
             "roundtrip": {
                 "profitable_count": roundtrip_profitable_count,
                 "evaluated_count": roundtrip_evaluated_count,
+                "real_quote_count": real_quote_count,
             },
             "quotes_fetched": 10,
             "quotes_total": 10,
@@ -452,11 +453,11 @@ class TestProfitIsDiagnosticSemantics(unittest.TestCase):
         }
 
     def test_profit_is_diagnostic_false_when_roundtrip_profitable(self):
-        """profit_is_diagnostic=False when roundtrip.profitable_count > 0, even with truth_mode_m42=True."""
+        """profit_is_diagnostic=False when roundtrip.profitable_count > 0 AND real_quote_count > 0."""
         from strategy.artifacts import build_truth_data
         
         config = {"truth_mode_m42": True}
-        stats = self._make_minimal_stats(roundtrip_profitable_count=2, roundtrip_evaluated_count=5)
+        stats = self._make_minimal_stats(roundtrip_profitable_count=2, roundtrip_evaluated_count=5, real_quote_count=3)
         
         truth_data = build_truth_data(
             config=config,
@@ -494,11 +495,11 @@ class TestProfitIsDiagnosticSemantics(unittest.TestCase):
         self.assertTrue(truth_data["profit_is_diagnostic"])
 
     def test_profit_truth_source_roundtrip_canonical(self):
-        """profit_truth_source=ROUNDTRIP_CANONICAL when profitable."""
+        """profit_truth_source=ROUNDTRIP_CANONICAL when profitable AND real_quote_count > 0."""
         from strategy.artifacts import build_truth_data
         
         config = {}
-        stats = self._make_minimal_stats(roundtrip_profitable_count=1)
+        stats = self._make_minimal_stats(roundtrip_profitable_count=1, real_quote_count=1)
         
         truth_data = build_truth_data(
             config=config,
@@ -512,6 +513,65 @@ class TestProfitIsDiagnosticSemantics(unittest.TestCase):
         )
         
         self.assertEqual(truth_data["profit_truth_source"], "ROUNDTRIP_CANONICAL")
+
+    def test_profitable_but_no_real_quotes_is_diagnostic(self):
+        """R28.2 regression: profitable_count > 0 but real_quote_count = 0 must stay DIAGNOSTIC.
+
+        This is the base-chain bug: profitable_count=1 from paper estimates,
+        real_quote_count=0, best_net_pnl_bps ~2548 (suspect contamination).
+        """
+        from strategy.artifacts import build_truth_data
+
+        config = {"truth_mode_m42": True}
+        stats = self._make_minimal_stats(
+            roundtrip_profitable_count=1,
+            roundtrip_evaluated_count=3,
+            real_quote_count=0,  # No real quotes — suspect
+        )
+
+        truth_data = build_truth_data(
+            config=config,
+            stats=stats,
+            current_block=12345,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=100,
+            spread_threshold_bps=50,
+        )
+
+        # Must NOT be CANONICAL/PROFITABLE without real quotes
+        self.assertTrue(truth_data["profit_is_diagnostic"])
+        self.assertNotEqual(truth_data["profit_truth_source"], "ROUNDTRIP_CANONICAL")
+        self.assertEqual(truth_data["profit_truth_source"], "ONE_LEG_DIAGNOSTIC")
+        self.assertNotEqual(truth_data["profit_realism_status"], "ROUNDTRIP_PROFITABLE")
+        self.assertEqual(truth_data["profit_realism_status"], "ROUNDTRIP_NOT_PROFITABLE")
+
+    def test_profitable_with_real_quotes_zero_no_truth_mode(self):
+        """Without truth_mode_m42, profitable_count > 0 but real_quote_count = 0 -> ONE_LEG_UNVERIFIED."""
+        from strategy.artifacts import build_truth_data
+
+        config = {"truth_mode_m42": False}
+        stats = self._make_minimal_stats(
+            roundtrip_profitable_count=1,
+            roundtrip_evaluated_count=2,
+            real_quote_count=0,
+        )
+
+        truth_data = build_truth_data(
+            config=config,
+            stats=stats,
+            current_block=12345,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=100,
+            spread_threshold_bps=50,
+        )
+
+        self.assertTrue(truth_data["profit_is_diagnostic"])
+        self.assertEqual(truth_data["profit_truth_source"], "ONE_LEG_UNVERIFIED")
+        self.assertEqual(truth_data["profit_realism_status"], "ROUNDTRIP_NOT_PROFITABLE")
 
 
 class TestComputeExecutionPnl(unittest.TestCase):

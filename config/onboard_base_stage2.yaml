@@ -1,22 +1,21 @@
-# PATH: config/onboard_base_stage1.yaml
+# PATH: config/onboard_base_stage2.yaml
 #
-# ONBOARDING: base → STAGE 1 (known-good DEXes only)
+# ONBOARDING: base → STAGE 2 (includes aerodrome ve33)
 #
-# STATUS: 3 executable DEXes (uniswap_v3, sushiswap_v3, pancakeswap_v3).
-# aerodrome (ve33) adapter IMPLEMENTED (R27.4) — excluded from stage1 for isolation.
-# See onboard_base_stage2.yaml for ve33-enabled config.
+# STATUS: 4 executable DEXes (uniswap_v3, sushiswap_v3, pancakeswap_v3, aerodrome).
+# aerodrome (ve33) adapter IMPLEMENTED (R27.4). This config adds it to the scan surface.
 #
 # ADAPTER READINESS:
 #   uniswap_v3 → UniswapV3Adapter: PRODUCTION
 #   sushiswap_v3 → UniswapV3Adapter: PRODUCTION
 #   pancakeswap_v3 → UniswapV3Adapter: PRODUCTION
-#   aerodrome → Ve33Adapter: PRODUCTION (excluded from stage1)
+#   aerodrome → Ve33Adapter: PRODUCTION (R27.4)
 #
-# PURPOSE: Evaluate 3-DEX cross-DEX surface, identify mixed-source noise.
+# PURPOSE: Test ve33 cross-DEX surface on base. Evaluate aerodrome pair quality.
 # RUN_KIND: COVERAGE
 #
 # WORKFLOW:
-#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_base_stage1.yaml --cycles 1
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_base_stage2.yaml --cycles 1
 
 chain: base
 chain_id: 8453
@@ -33,13 +32,14 @@ rpc_backoff_base_ms: 500
 
 universe_source: discovery_runtime
 
-# 3 executable DEXes (aerodrome excluded from stage1 — see onboard_base_stage2.yaml)
+# 4 DEXes: stage1 set + aerodrome (ve33)
 dexes:
   - uniswap_v3
   - sushiswap_v3
   - pancakeswap_v3
+  - aerodrome
 
-discovery_runtime_max_pairs: 25
+discovery_runtime_max_pairs: 30
 require_cross_dex: true
 
 use_multicall: true

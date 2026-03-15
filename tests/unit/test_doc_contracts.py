@@ -104,5 +104,85 @@ class TestAdapterRegistryMatchesFiles(unittest.TestCase):
             )
 
 
+class TestConfigInventoryDocContract(unittest.TestCase):
+    """Verify Status docs config inventory count matches actual allowed set."""
+
+    def test_stage2_configs_exist_when_claimed(self):
+        """Stage2 configs mentioned in Status_M5_0 must exist on disk."""
+        config_dir = Path(__file__).parents[2] / "config"
+        status_path = Path(__file__).parents[2] / "docs" / "status" / "Status_M5_0.md"
+        content = status_path.read_text(encoding="utf-8")
+        # Find all onboard_*_stage2.yaml references
+        stage2_refs = set(re.findall(r"(onboard_\w+_stage2\.yaml)", content))
+        for cfg_name in stage2_refs:
+            self.assertTrue(
+                (config_dir / cfg_name).exists(),
+                f"Status_M5_0.md references {cfg_name} but file does not exist"
+            )
+
+    def test_stage1_yaml_comments_no_not_implemented_lie(self):
+        """Stage1 YAML comment headers must not say 've33 NOT YET IMPLEMENTED' when adapter exists."""
+        config_dir = Path(__file__).parents[2] / "config"
+        adapters_dir = Path(__file__).parents[2] / "dex" / "adapters"
+        ve33_exists = (adapters_dir / "ve33.py").exists()
+        if not ve33_exists:
+            self.skipTest("ve33 adapter not found — comment is accurate")
+        for yaml_name in ["onboard_base_stage1.yaml", "onboard_mantle_stage1.yaml"]:
+            yaml_path = config_dir / yaml_name
+            if not yaml_path.exists():
+                continue
+            content = yaml_path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "NOT YET IMPLEMENTED",
+                content,
+                f"{yaml_name} says 'NOT YET IMPLEMENTED' but ve33 adapter exists at {adapters_dir / 've33.py'}"
+            )
+            self.assertNotIn(
+                "NOT IMPLEMENTED",
+                content,
+                f"{yaml_name} says 'NOT IMPLEMENTED' but ve33 adapter exists at {adapters_dir / 've33.py'}"
+            )
+
+
+class TestProfitSemanticsContract(unittest.TestCase):
+    """R28.2: Verify profit_truth semantics require real_quote_count > 0."""
+
+    def test_profitable_without_real_quotes_is_not_canonical(self):
+        """Core contract: profitable_count > 0 but real_quote_count = 0 must NOT produce ROUNDTRIP_CANONICAL."""
+        from strategy.artifacts import build_truth_data
+
+        stats = {
+            "roundtrip": {
+                "profitable_count": 5,
+                "evaluated_count": 10,
+                "real_quote_count": 0,  # No real quotes
+            },
+            "quotes_fetched": 10,
+            "quotes_total": 10,
+            "dexes_active": ["uniswap_v3"],
+            "price_sanity_passed": 10,
+            "price_sanity_failed": 0,
+            "gates_passed": 10,
+        }
+
+        truth_data = build_truth_data(
+            config={"truth_mode_m42": True},
+            stats=stats,
+            current_block=12345,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=100,
+            spread_threshold_bps=50,
+        )
+
+        self.assertTrue(truth_data["profit_is_diagnostic"],
+                        "profit_is_diagnostic must be True when real_quote_count=0")
+        self.assertNotEqual(truth_data["profit_truth_source"], "ROUNDTRIP_CANONICAL",
+                            "profit_truth_source must NOT be ROUNDTRIP_CANONICAL when real_quote_count=0")
+        self.assertNotEqual(truth_data["profit_realism_status"], "ROUNDTRIP_PROFITABLE",
+                            "profit_realism_status must NOT be ROUNDTRIP_PROFITABLE when real_quote_count=0")
+
+
 if __name__ == "__main__":
     unittest.main()

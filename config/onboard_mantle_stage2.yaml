@@ -1,20 +1,19 @@
-# PATH: config/onboard_mantle_stage1.yaml
+# PATH: config/onboard_mantle_stage2.yaml
 #
-# ONBOARDING: mantle → STAGE 1 (single known-good DEX)
+# ONBOARDING: mantle → STAGE 2 (includes stratum ve33)
 #
-# STATUS: agni_v3 is the sole executable DEX (uniswap_v3/quoter_v2).
-# stratum (ve33) adapter IMPLEMENTED (R27.4) — excluded from stage1 for isolation.
-# STRUCTURAL blocker: no cross-DEX surface in stage1. See onboard_mantle_stage2.yaml.
+# STATUS: 2 executable DEXes (agni_v3, stratum).
+# stratum (ve33) adapter IMPLEMENTED (R27.4). This config adds cross-DEX surface.
 #
 # ADAPTER READINESS:
 #   agni_v3 → UniswapV3Adapter: PRODUCTION
-#   stratum → Ve33Adapter: PRODUCTION (excluded from stage1)
+#   stratum → Ve33Adapter: PRODUCTION (R27.4)
 #
-# PURPOSE: Maintain intent.txt universe coverage; single-DEX fee-tier monitoring.
+# PURPOSE: Enable cross-DEX arb surface on mantle via ve33 adapter.
 # RUN_KIND: COVERAGE
 #
 # WORKFLOW:
-#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_mantle_stage1.yaml --cycles 1
+#   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_mantle_stage2.yaml --cycles 1
 
 chain: mantle
 chain_id: 5000
@@ -31,13 +30,13 @@ rpc_backoff_base_ms: 500
 
 universe_source: discovery_runtime
 
-# Single executable DEX (stratum/ve33 excluded from stage1 — see onboard_mantle_stage2.yaml)
+# 2 DEXes: agni_v3 + stratum (ve33)
 dexes:
   - agni_v3
+  - stratum
 
-discovery_runtime_max_pairs: 20
-# require_cross_dex=false: only 1 DEX until ve33 adapter implemented
-require_cross_dex: false
+discovery_runtime_max_pairs: 25
+require_cross_dex: true
 
 use_multicall: true
 use_quoter_v2: true

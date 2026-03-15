@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-14 (R28.1 — honesty correction)  
+**Updated**: 2026-03-15 (R28.2 — semantics fix, ve33 stage2 configs)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)  
-**Primary blocker**: market gap (`gap_to_zero≈20.41 bps`), probe_slippage artifact integration pending, zksync drift=0.31, base/mantle ve33 online-unverified
+**Primary blocker**: market gap (`gap_to_zero≈20.41 bps`), probe_slippage artifact integration pending, zksync drift=0.31, base/mantle ve33 stage2 configs created (R28.2) but UNTESTED online
 
 ## [!] M4.1 Simulate-Only DoD **MET**
 
@@ -42,7 +42,7 @@
 | `sweep_gap_to_zero_bps (arb)` | 15.77 | Long_scan R27.2 (regressed from 8.41 — market) |
 | `gap_to_zero_bps (zksync)` | n/a | No sweep data in long_scan (drift=0.27 blocks) |
 | `gap_to_zero_bps (base)` | n/a | No sweep data (ve33 gap) |
-| `roundtrip_total_profitable` | 2 | Long_scan total (base COVERAGE only) |
+| `roundtrip_total_profitable` | 0 CANONICAL | Long_scan total (base R28.1 profitable_count=1 was SUSPECT: real_quote_count=0) |
 | `roundtrip_profitable (arb)` | 0 | Primary chain: still market-blocked |
 | `frontier_pair` | WETH/USDT | Latest frontier candidate |
 | `per_chain_frontier` | LIVE | 5 ranked chains + 1 accepted-fail |
@@ -53,13 +53,13 @@
 | `R27.2_online` | 11+ | arb_primary=4, arb_candidate=87q, scroll=3 |
 | `schema_version` | LATEST | R26: run_context + frontier triage |
 
-**Rollout Queue (R28.1 — honesty correction, needs fresh online evidence):**
+**Rollout Queue (R28.2 — ve33 stage2 configs + semantics fix):**
 | Priority | Chain | Status | Stage Config | Condition for Promotion |
 |----------|-------|--------|-------------|-------------------------|
 | 1 | arbitrum_one | NORMAL (primary) | `onboard_arbitrum_one_candidate.yaml` | 4-DEX PASS (R27.2: 14 sims), gap=20.41 bps (R27.4), exit gate: 5 consecutive |
 | 2 | zksync | Candidate | `onboard_zksync_candidate.yaml` | drift=0.31 (above 0.25 threshold), needs improvement |
-| 3 | base | Stage1 | `onboard_base_stage1.yaml` | ve33 adapter IMPLEMENTED (R27.4), needs online test with aerodrome |
-| 4 | mantle | Stage1 | `onboard_mantle_stage1.yaml` | ve33 adapter IMPLEMENTED (R27.4), needs online test with stratum |
+| 3 | base | Stage2 ready | `onboard_base_stage2.yaml` [NEW R28.2] | ve33 adapter IMPLEMENTED (R27.4), stage2 config includes aerodrome. NEEDS ONLINE TEST |
+| 4 | mantle | Stage2 ready | `onboard_mantle_stage2.yaml` [NEW R28.2] | ve33 adapter IMPLEMENTED (R27.4), stage2 config includes stratum. NEEDS ONLINE TEST |
 | 5 | linea | Stage1 | `onboard_linea_stage1.yaml` | lynex_v3 Algebra path stability, 2 signals (rank #2 frontier) |
 | 6 | scroll | CROSS_DEX_VERIFIED | `onboard_scroll_stage1.yaml` | nuri_v3 confirmed (R27.1+R27.2), 0 signals in long_scan (accepted-fail) |
 
@@ -169,7 +169,7 @@ simulate_only: true
 **Paper profit PROVEN** under simulated cost model (`gas=$0.10`, `slippage=5bps`).
 **Profit realism NOT PROVEN** — round-trip shows actual losses (`profitable_count=0`, best=-4.10 bps @ $25, latest=-9.03 bps @ $25).
 **Near breakeven**: Best-ever frontier only 4.10 bps from zero; fee=100 lever would save 8 bps.
-M4.2 requires `roundtrip.profitable_count > 0` with real quoter-based economics.
+M4.2 requires `roundtrip.profitable_count > 0` AND `real_quote_count > 0` with real quoter-based economics (R28.2 semantics fix).
 
 ## M4.2 Economics Frontier (2026-03-14)
 
@@ -179,7 +179,7 @@ M4.2 requires `roundtrip.profitable_count > 0` with real quoter-based economics.
 |--------|-----|-----|-----|-----|-----|-------|---------|-------|
 | `sweep_best_net_pnl_bps` | -4.10 | -4.10 | -4.10 | -4.10 | -3.55 | -15.77 | **-20.41** | regressed (market) |
 | `gap_to_zero_bps (best)` | 4.10 | 4.10 | 4.10 | 4.10 | 3.55 | 15.77 | **20.41** | +4.64 (market) |
-| `profitable_count` | 0 | 0 | 0 | 0 | 0 | 2 (base COV) | **0** (arb primary) | arb-only |
+| `profitable_count` | 0 | 0 | 0 | 0 | 0 | 2 (base COV, SUSPECT: real_quote_count=0) | **0** (arb primary) | arb-only |
 | `frontier_pair` | WBTC/USDC | WBTC/USDC | WBTC/USDC | WETH/USDT | WETH/USDT | WETH/USDT | **WETH/USDT** | stable |
 | `measured_fee_bps` | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | **10.0** | stable |
 | `test_count` | 1635 | 1653 | 1661 | 1685 | 1738 | 1798 | **1803** | +5 |

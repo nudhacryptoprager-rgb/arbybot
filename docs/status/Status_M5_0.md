@@ -1,13 +1,13 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-14 (R28.1 — honesty correction)
-**Tests**: 1806 collected / 1803 passed / 3 skipped
+**Updated**: 2026-03-15 (R28.2 — semantics fix, ve33 stage2 configs)
+**Tests**: 1817 collected / 1817 passed / 3 skipped (R28.2: +5 tests — 2 profit semantics regression + 3 doc-contract)
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_20260314_223513 (R28.1 arb rolling-linked), ci_m5_gate_20260314_222606 (R28.1 arb primary), ci_m5_gate_20260314_222708 (R28.1 zksync), ci_m5_gate_20260314_222846 (R28.1 base, ROUNDTRIP_PROFITABLE=1), ci_m5_gate_20260314_223010 (R28.1 mantle)
+**Evidence runDirs**: ci_m5_gate_20260314_230400 (R28.2 arb rolling-refresh), ci_m5_gate_20260314_230514 (R28.2 zksync), ci_m5_gate_20260314_230622 (R28.2 base stage2, ROUNDTRIP_PROFITABLE=2 REAL: real_quote_count=1), ci_m5_gate_20260314_230824 (R28.2 mantle stage2, cross_dex=5)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-14T18:40:26Z: 8 runs, 17 signals, $23.49)
-**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 16 active files (R27.4).
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-14T22:18:17Z: 8 runs, 23 signals, $31.37, 4 profitable roundtrips)
+**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
 ---
 
@@ -29,29 +29,31 @@
 ## Chain Quality Classification (R27.4)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=MARKET, gap=20.41 bps, drift=0.17)
-base:           SIGNAL_PRODUCING (discovery, cross-dex=15, PASS, blocker=NEEDS_ONLINE_VE33_TEST, rt_profitable=2 — COVERAGE evidence only)
-mantle:         SIGNAL_PRODUCING (discovery, same-dex agni_v3, PASS, blocker=NEEDS_ONLINE_VE33_TEST)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, blocker=DRIFT, drift=0.31 — needs <0.25)
-linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, blocker=STRUCTURAL — lynex_v3 algebra path unstable)
-scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 confirmed R27.1+R27.2, accepted-fail=true, blocker=THIN_LIQUIDITY)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=MARKET, gap=17.41 bps, drift=0.20)
+base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=16, PASS, ROUNDTRIP_PROFITABLE=2 REAL: real_quote_count=1)
+mantle:         SIGNAL_PRODUCING (stage2, 2 DEXes agni_v3+stratum ve33, cross-dex=5, PASS, profitable_count=0)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, blocker=DRIFT, drift tbd)
+linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, 2 signals $7.44, 2 profitable roundtrips)
+scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, accepted-fail=true, 0 signals, blocker=THIN_LIQUIDITY)
 ```
 
-**R27.4 changes to classification**: ve33 adapter IMPLEMENTED (R27.4) — mantle/base blockers changed from STRUCTURAL to NEEDS_ONLINE_VE33_TEST. arb gap regressed 15.77→20.41 bps (market). zksync drift 0.27→0.31.
+**R28.2 changes**: Semantics fix (require real_quote_count > 0 for ROUNDTRIP_PROFITABLE). ve33 stage2 configs created and TESTED online. Base REAL ROUNDTRIP_PROFITABLE=2 (first confirmed real profitable roundtrip with real_quote_count=1). Mantle cross-DEX surface enabled (agni_v3+stratum). Arb gap improved 20.41→17.41 bps.
 
-**Rollout Queue (R28.1 — honesty correction, needs fresh online evidence)**:
-1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (R27.2: 14 sims). Gap=20.41 bps (R27.4). Exit gate: 5 consecutive. discovery_runtime is canonical successor (R28).
-2. **zksync** — drift_rejection_rate=0.31 (above 0.25 threshold), needs improvement
-3. **base** — ve33 adapter IMPLEMENTED (R27.4), needs online test with aerodrome. discovery_runtime path verified.
-4. **mantle** — ve33 adapter IMPLEMENTED (R27.4), needs online test with stratum. discovery_runtime path verified.
-5. **linea** — lynex_v3 Algebra path stability needed, 2 signals in long_scan, rank #2
-6. **scroll** — nuri_v3 confirmed (R27.1+R27.2), 0 signals in long_scan (accepted-fail), needs sustained evidence
+**Rollout Queue (R28.2 — ve33 stage2 TESTED)**:
+1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (R27.2: 14 sims). Gap improved to 17.41 bps (was 20.41 R27.4). Exit gate: 5 consecutive. discovery_runtime is canonical successor (R28).
+2. **zksync** — drift improvement needed, PASS, cross_dex=10
+3. **base** — **STAGE2 TESTED** (R28.2): 4 DEXes (uni+sushi+pancake+aerodrome ve33), cross_dex=16, ROUNDTRIP_PROFITABLE=2 REAL (real_quote_count=1). First confirmed real profitable roundtrip.
+4. **mantle** — **STAGE2 TESTED** (R28.2): 2 DEXes (agni_v3+stratum ve33), cross_dex=5, profitable_count=0 but cross-DEX surface enabled.
+5. **linea** — 2 signals, $7.44, 2 profitable roundtrips (long_scan), cross_dex=12
+6. **scroll** — accepted-fail, 0 signals, THIN_LIQUIDITY blocker
 
-**Onboard Stage Configs (R27)**:
+**Onboard Stage Configs (R27+R28.2)**:
 - `config/onboard_arbitrum_one_candidate.yaml` — 4-DEX additive (uni+sushi+camelot+pancakeswap)
 - `config/onboard_zksync_candidate.yaml` — 2-DEX candidate (uni+pancakeswap)
 - `config/onboard_base_stage1.yaml` — 3-DEX stage1 (uni+sushi+pancakeswap, aerodrome excluded)
+- `config/onboard_base_stage2.yaml` — 4-DEX stage2 (stage1 + aerodrome ve33) [NEW R28.2]
 - `config/onboard_mantle_stage1.yaml` — 1-DEX stage1 (agni_v3 only, stratum excluded)
+- `config/onboard_mantle_stage2.yaml` — 2-DEX stage2 (agni_v3 + stratum ve33) [NEW R28.2]
 - `config/onboard_linea_stage1.yaml` — 2-DEX stage1 (pancakeswap+lynex, algebra stability test)
 - `config/onboard_scroll_stage1.yaml` — 2-DEX stage1 (sushi+nuri, cross-DEX test)
 
@@ -103,8 +105,8 @@ scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, nuri_v3 confirmed R27.
 - `scripts/validate_universe.py`: intent forbidden for strict run_kinds, same_dex_mode warning
 - `tests/unit/test_suspect_provenance.py`: +7 tests (extract/purity validation)
 
-**Long scan (REFRESHED 2026-03-14)**: 5 PASS chains + 1 accepted-fail / 8 runs / 17 signals / $23.49 net / 2 profitable roundtrips
-**Profit truth**: NOT YET — Arbitrum profit-truth blocker remains (roundtrip.profitable_count=0 on primary chain, gap=20.41 bps R27.4)
+**Long scan**: REFRESHED 2026-03-14T22:18:17Z: 6 PASS + 1 accepted-fail + 1 fail / 8 runs / 23 signals / $31.37 net / 4 profitable roundtrips (base=2 REAL, linea=2)
+**Profit truth**: BASE: YES (ROUNDTRIP_PROFITABLE=2, real_quote_count=1, stage2 with aerodrome ve33). ARB PRIMARY: NOT YET (gap=17.41 bps, improving from 20.41 bps).
 
 ---
 

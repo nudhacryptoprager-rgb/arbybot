@@ -603,15 +603,25 @@ def build_truth_data(
         "truth_mode_m42": config.get("truth_mode_m42", False),
         # v2.3.0: Explicit DIAGNOSTIC vs CANONICAL profit semantics
         # profit_is_diagnostic=True means total_net_usdc is NOT canonical/realized profit
-        # v2.3.2 FIX: When roundtrip.profitable_count > 0, profit is CANONICAL regardless of truth_mode_m42
-        "profit_is_diagnostic": not (stats.get("roundtrip", {}).get("profitable_count", 0) > 0),
+        # v2.3.2 FIX: profitable_count > 0 AND real_quote_count > 0 required for CANONICAL.
+        # real_quote_count guards against suspect contamination (profitable_count from paper estimates).
+        "profit_is_diagnostic": not (
+            stats.get("roundtrip", {}).get("profitable_count", 0) > 0
+            and stats.get("roundtrip", {}).get("real_quote_count", 0) > 0
+        ),
         "profit_truth_source": (
-            "ROUNDTRIP_CANONICAL" if stats.get("roundtrip", {}).get("profitable_count", 0) > 0
+            "ROUNDTRIP_CANONICAL" if (
+                stats.get("roundtrip", {}).get("profitable_count", 0) > 0
+                and stats.get("roundtrip", {}).get("real_quote_count", 0) > 0
+            )
             else "ONE_LEG_DIAGNOSTIC" if config.get("truth_mode_m42", False)
             else "ONE_LEG_UNVERIFIED"
         ),
         "profit_realism_status": (
-            "ROUNDTRIP_PROFITABLE" if stats.get("roundtrip", {}).get("profitable_count", 0) > 0
+            "ROUNDTRIP_PROFITABLE" if (
+                stats.get("roundtrip", {}).get("profitable_count", 0) > 0
+                and stats.get("roundtrip", {}).get("real_quote_count", 0) > 0
+            )
             else "ROUNDTRIP_NOT_PROFITABLE" if stats.get("roundtrip", {}).get("evaluated_count", 0) > 0
             else "ONE_LEG_ONLY_DIAGNOSTIC"
         ),
