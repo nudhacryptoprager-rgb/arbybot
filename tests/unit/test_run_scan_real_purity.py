@@ -83,8 +83,9 @@ def test_run_scan_real_line_count():
     # R17: +6 for compared_fee_tiers_per_route
     # R28.5: +17 for expanded phase timers + COVERAGE sweep skip + multicall stats
     # R28.7: +14 for executable_candidates_count + sweep promotion to core decision
+    # R28.11: +39 for hot_requote loading/saving + scan_mode + strategy_mode HOT_REQUOTE
     # For now, just warn if it grows significantly
-    max_lines = 1445  # Alert if it grows past this
+    max_lines = 1490  # Alert if it grows past this
     
     assert line_count <= max_lines, \
         f"run_scan_real.py has {line_count} lines (max: {max_lines}). Consider refactoring."

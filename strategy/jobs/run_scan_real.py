@@ -151,6 +151,7 @@ def run_scan(
         "rpc_success_rate": 1.0,
         "requested_cycles": cycles,
         "cycles_completed": cycles,
+        "scan_mode": "full",  # R28.11: overridden to "hot" if hot_pairs loaded
     }
     
     # v2.6.0: Resolve universe BEFORE collect_quotes() so resolved pairs are used
@@ -194,7 +195,29 @@ def run_scan(
     _discovery_runtime_stats = None
     pairs_list = None
     
-    if use_discovery_runtime:
+    # R28.11: Hot re-quote mode — skip discovery, reuse cached pairs from previous full sweep
+    _hot_pairs_file = os.environ.get("ARBY_HOT_PAIRS_FILE")
+    if _hot_pairs_file and Path(_hot_pairs_file).is_file():
+        try:
+            import json as _json
+            from config.pairs import PairConfig
+            with open(_hot_pairs_file, "r", encoding="utf-8") as _hpf:
+                _hot_data = _json.load(_hpf)
+            _hot_pair_dicts = _hot_data.get("pairs", [])
+            pairs_list = [PairConfig.from_dict(d) for d in _hot_pair_dicts]
+            logger.info(
+                "HOT_REQUOTE: loaded %d cached pairs from %s (skipping discovery)",
+                len(pairs_list), _hot_pairs_file,
+            )
+            stats["universe_source"] = "hot_requote"
+            stats["scan_mode"] = "hot"
+            stats["hot_pairs_file"] = _hot_pairs_file
+            stats["hot_pairs_count"] = len(pairs_list)
+        except Exception as hp_err:
+            logger.warning("HOT_REQUOTE: failed to load %s, falling back to full discovery: %s", _hot_pairs_file, hp_err)
+            pairs_list = None
+    
+    if pairs_list is None and use_discovery_runtime:
         try:
             from discovery.runtime import resolve_runtime_pairs, runtime_pairs_to_pair_configs
             
@@ -234,17 +257,17 @@ def run_scan(
                 raise RuntimeError(
                     f"discovery_runtime resolution failed and fallback is disabled: {dr_err}"
                 ) from dr_err
-    elif force_intent:
+    elif pairs_list is None and force_intent:
         pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
         logger.info("Using intent.txt universe FORCED (universe_source=%s -> intent_forced, %d pairs)", universe_source, len(pairs_list))
         stats["universe_source"] = "intent_forced"
         stats["intent_pairs_count"] = len(pairs_list)
         stats["intent_on_chain_verified"] = False
-    elif use_intent:
+    elif pairs_list is None and use_intent:
         pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
         logger.info("Using intent.txt universe (universe_source=intent)")
         stats["universe_source"] = "intent"
-    else:
+    elif pairs_list is None:
         # Default: config pairs (let collect_quotes load them)
         pairs_list = None
         logger.debug("Using config pairs (universe_source=config)")
@@ -252,7 +275,9 @@ def run_scan(
     
     # R27.3: Encode strategy mode for artifact observability
     _us = stats["universe_source"]
-    if _us == "discovery_runtime":
+    if _us == "hot_requote":
+        stats["strategy_mode"] = "HOT_REQUOTE"
+    elif _us == "discovery_runtime":
         stats["strategy_mode"] = "DYNAMIC_VERIFIED"
     elif _us in ("intent", "intent_forced"):
         stats["strategy_mode"] = "BOOTSTRAP"
@@ -261,6 +286,26 @@ def run_scan(
     else:
         stats["strategy_mode"] = "UNKNOWN"
     stats["same_dex_only"] = not config.get("require_cross_dex", True)
+    
+    # R28.11: Save hot pairs cache after full discovery for subsequent hot re-quote cycles
+    if pairs_list and _us != "hot_requote":
+        try:
+            import json as _json
+            _cache_dir = Path("data") / "cache"
+            _cache_dir.mkdir(parents=True, exist_ok=True)
+            _cache_path = _cache_dir / f"hot_pairs_{chain_key}.json"
+            _cache_data = {
+                "schema": "hot_pairs_cache:v1.0",
+                "chain": chain_key,
+                "universe_source": _us,
+                "pairs_count": len(pairs_list),
+                "pairs": [p.to_dict() if hasattr(p, "to_dict") else p for p in pairs_list],
+            }
+            with open(_cache_path, "w", encoding="utf-8") as _cpf:
+                _json.dump(_cache_data, _cpf, indent=2)
+            logger.debug("Hot pairs cache written: %s (%d pairs)", _cache_path, len(pairs_list))
+        except Exception as _cache_err:
+            logger.debug("Hot pairs cache write skipped: %s", _cache_err)
     
     _phase_discovery_end = _time.monotonic()
     

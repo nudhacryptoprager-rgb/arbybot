@@ -214,6 +214,107 @@ class TestPerChainAggregation(unittest.TestCase):
         self.assertEqual(stats["profitable_roundtrips_total"], 2)
         self.assertEqual(stats["roundtrip_evaluated_total"], 5)
 
+    def test_update_chain_stats_captures_pair_radar_from_truth_report(self):
+        stats = start.new_chain_stats()
+        summary = {
+            "status": "PASS",
+            "metrics": {"included_signals_count": 3, "total_net_usdc": 2.0},
+            "run_context": {},
+        }
+        truth_report = {
+            "current_block": 123456,
+            "spread_signals": [
+                {
+                    "pair": "WETH/USDC",
+                    "buy_dex": "uniswap_v3",
+                    "sell_dex": "sushiswap_v3",
+                    "spread_bps": 12.3,
+                    "effective_slippage_bps": 4.5,
+                    "spread_minus_required_bps": 1.2,
+                }
+            ],
+        }
+        start.update_chain_stats(stats, 0, None, summary, truth_report=truth_report)
+        self.assertEqual(stats["last_current_block"], 123456)
+        self.assertEqual(len(stats["last_top_spread_signals"]), 1)
+        self.assertEqual(stats["last_top_spread_signals"][0]["pair"], "WETH/USDC")
+        self.assertEqual(stats["last_top_spread_signals"][0]["buy_dex"], "uniswap_v3")
+
+    def test_pair_history_accumulates_and_caps_at_5(self):
+        """R28.11: _pair_history keeps last 5 snapshots for delta tracking."""
+        stats = start.new_chain_stats()
+        for i in range(7):
+            truth = {
+                "current_block": 100000 + i,
+                "spread_signals": [{"pair": f"PAIR_{i}", "buy_dex": "a", "sell_dex": "b", "spread_bps": float(i)}],
+            }
+            summary = {"status": "PASS", "metrics": {"included_signals_count": 1, "total_net_usdc": 0}, "run_context": {}}
+            start.update_chain_stats(stats, 0, None, summary, truth_report=truth)
+        hist = stats["_pair_history"]
+        self.assertEqual(len(hist), 5)
+        # Oldest retained should be run index 2 (block 100002)
+        self.assertEqual(hist[0]["block"], 100002)
+        self.assertEqual(hist[-1]["block"], 100006)
+        self.assertEqual(hist[-1]["signals"][0]["pair"], "PAIR_6")
+
+    def test_cache_freshness_extracted_from_scan_stats(self):
+        """R28.11: pools_from_cache, pools_from_rpc, rpc_calls are captured."""
+        stats = start.new_chain_stats()
+        scan_stats = {
+            "discovery_runtime": {
+                "pairs_evaluated": 10,
+                "pairs_resolved": 5,
+                "cross_dex_pairs_count": 3,
+                "pairs_skipped_no_tokens": 0,
+                "pairs_skipped_no_pool": 1,
+                "pairs_skipped_single_dex": 2,
+                "pairs_skipped_excluded": 0,
+                "pools_from_cache": 42,
+                "pools_from_rpc": 3,
+                "rpc_calls": 5,
+            }
+        }
+        summary = {"status": "PASS", "metrics": {"included_signals_count": 1, "total_net_usdc": 0}, "run_context": {}}
+        start.update_chain_stats(stats, 0, None, summary, scan_stats=scan_stats)
+        self.assertEqual(stats["last_pools_from_cache"], 42)
+        self.assertEqual(stats["last_pools_from_rpc"], 3)
+        self.assertEqual(stats["last_rpc_calls"], 5)
+
+    def test_suppression_counters_from_truth_report(self):
+        """R28.11: suppression counters extracted from truth_report stats + discovery_runtime."""
+        stats = start.new_chain_stats()
+        truth = {
+            "current_block": 999,
+            "spread_signals": [],
+            "stats": {
+                "pool_missing_count": 4,
+                "price_sanity_failed": 2,
+                "quarantined_count": 1,
+            },
+            "drift_summary": {"drift_excluded_count": 3},
+        }
+        scan_stats = {
+            "discovery_runtime": {
+                "pairs_evaluated": 10,
+                "pairs_resolved": 5,
+                "cross_dex_pairs_count": 3,
+                "pairs_skipped_no_tokens": 0,
+                "pairs_skipped_no_pool": 1,
+                "pairs_skipped_single_dex": 5,
+                "pairs_skipped_excluded": 2,
+            }
+        }
+        summary = {"status": "PASS", "metrics": {"included_signals_count": 1, "total_net_usdc": 0}, "run_context": {}}
+        start.update_chain_stats(stats, 0, None, summary, scan_stats=scan_stats, truth_report=truth)
+        sup = stats["last_suppression"]
+        self.assertIsNotNone(sup)
+        self.assertEqual(sup["single_dex"], 5)
+        self.assertEqual(sup["no_pool"], 4)
+        self.assertEqual(sup["excluded"], 2)
+        self.assertEqual(sup["price_sanity_failed"], 2)
+        self.assertEqual(sup["notional_drift_excluded"], 3)
+        self.assertEqual(sup["quarantined"], 1)
+
     def test_sweep_gap_values_collected(self):
         """R12: update_chain_stats collects gap_to_zero values for median computation."""
         stats = start.new_chain_stats()
@@ -275,6 +376,39 @@ class TestGuardrails(unittest.TestCase):
         # Below threshold (runs < 3 for chain, runs < 5 for total)
         self.assertEqual(len(warnings), 0)
 
+    def test_static_probe_path_warning(self):
+        """R28.11: Warn when same top pairs repeat across 3+ runs."""
+        chains = {
+            "arb": {
+                "runs": 3, "pass": 3, "no_data": 0, "fail": 0, "infra_fail": 0,
+                "_pair_history": [
+                    {"block": 100, "signals": [{"pair": "WETH/USDC"}]},
+                    {"block": 101, "signals": [{"pair": "WETH/USDC"}]},
+                    {"block": 102, "signals": [{"pair": "WETH/USDC"}]},
+                ],
+                "last_top_spread_signals": [],
+            },
+        }
+        warnings = start.check_guardrails(chains)
+        static = [w for w in warnings if "STATIC_PROBE_PATH" in w]
+        self.assertTrue(len(static) >= 1, f"Expected STATIC_PROBE_PATH, got {warnings}")
+
+    def test_zero_fee_dominance_warning(self):
+        """R28.11: Warn when all top signals are 0 bps."""
+        chains = {
+            "linea": {
+                "runs": 1, "pass": 1, "no_data": 0, "fail": 0, "infra_fail": 0,
+                "_pair_history": [],
+                "last_top_spread_signals": [
+                    {"pair": "USDC/USDT", "spread_bps": 0, "spread_minus_required_bps": 0},
+                    {"pair": "WETH/USDC", "spread_bps": 0, "spread_minus_required_bps": 0},
+                ],
+            },
+        }
+        warnings = start.check_guardrails(chains)
+        zf = [w for w in warnings if "ZERO_FEE_DOMINANCE" in w]
+        self.assertTrue(len(zf) >= 1, f"Expected ZERO_FEE_DOMINANCE, got {warnings}")
+
 
 class TestBuildSummary(unittest.TestCase):
     """Test JSON summary structure."""
@@ -308,7 +442,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.8")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.10")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -974,7 +1108,7 @@ class TestFrontierRanking(unittest.TestCase):
         per_chain["base"]["included_signals_total"] = 3
         summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
         # Schema version check
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.8")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.10")
         # Required top-level fields
         self.assertIn("generated_at", summary)
         self.assertIn("wall_seconds", summary)
@@ -1595,6 +1729,125 @@ class TestChainProfitState(unittest.TestCase):
         # per_chain has chain_profit_state
         self.assertEqual(summary["per_chain"]["linea"]["chain_profit_state"], "CONFIRMED_POSITIVE_CONTROL")
         self.assertEqual(summary["per_chain"]["arb"]["chain_profit_state"], "PRIMARY_BLOCKER")
+
+    def test_build_summary_preserves_pair_radar_fields(self):
+        per_chain = {"linea": start.new_chain_stats()}
+        per_chain["linea"]["runs"] = 1
+        per_chain["linea"]["pass"] = 1
+        per_chain["linea"]["last_current_block"] = 29725074
+        per_chain["linea"]["last_top_spread_signals"] = [
+            {
+                "pair": "USDC/USDT",
+                "buy_dex": "pancakeswap_v3",
+                "sell_dex": "lynex_v3",
+                "spread_bps": 0.0,
+                "spread_minus_required_bps": 0.0,
+            }
+        ]
+
+        summary = start.build_summary(per_chain, 10.0, [])
+
+        self.assertEqual(summary["per_chain"]["linea"]["last_current_block"], 29725074)
+        self.assertEqual(summary["per_chain"]["linea"]["last_top_spread_signals"][0]["pair"], "USDC/USDT")
+
+    def test_build_summary_preserves_cache_and_suppression_fields(self):
+        """R28.11: Cache freshness and suppression counters survive build_summary."""
+        per_chain = {"base": start.new_chain_stats()}
+        per_chain["base"]["runs"] = 1
+        per_chain["base"]["pass"] = 1
+        per_chain["base"]["last_pools_from_cache"] = 50
+        per_chain["base"]["last_pools_from_rpc"] = 2
+        per_chain["base"]["last_rpc_calls"] = 4
+        per_chain["base"]["last_suppression"] = {
+            "single_dex": 3, "no_pool": 1, "excluded": 0,
+            "price_sanity_failed": 0, "notional_drift_excluded": 0, "quarantined": 0,
+        }
+        per_chain["base"]["_pair_history"] = [
+            {"block": 100, "signals": [{"pair": "A/B", "spread_bps": 1.5}]},
+        ]
+
+        summary = start.build_summary(per_chain, 5.0, [])
+
+        self.assertEqual(summary["per_chain"]["base"]["last_pools_from_cache"], 50)
+        self.assertEqual(summary["per_chain"]["base"]["last_pools_from_rpc"], 2)
+        self.assertEqual(summary["per_chain"]["base"]["last_suppression"]["single_dex"], 3)
+        self.assertEqual(len(summary["per_chain"]["base"]["_pair_history"]), 1)
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.10")
+
+
+class TestHotLoopAndDirtySet(unittest.TestCase):
+    """R28.11: Tests for hot re-quote loop and dirty-set integration."""
+
+    def test_new_chain_stats_has_hot_loop_fields(self):
+        stats = start.new_chain_stats()
+        self.assertEqual(stats["_run_counter"], 0)
+        self.assertIsNone(stats["last_scan_mode"])
+        self.assertEqual(stats["hot_requote_count"], 0)
+        self.assertEqual(stats["full_sweep_count"], 0)
+
+    def test_build_summary_includes_hot_loop(self):
+        per_chain = {"arb": start.new_chain_stats()}
+        per_chain["arb"]["runs"] = 3
+        per_chain["arb"]["pass"] = 3
+        per_chain["arb"]["full_sweep_count"] = 1
+        per_chain["arb"]["hot_requote_count"] = 2
+        per_chain["arb"]["last_scan_mode"] = "hot"
+        summary = start.build_summary(per_chain, 60.0, [])
+        self.assertIn("hot_loop", summary)
+        hl = summary["hot_loop"]
+        self.assertEqual(hl["full_sweep_interval"], start.FULL_SWEEP_INTERVAL)
+        self.assertEqual(hl["total_full_sweeps"], 1)
+        self.assertEqual(hl["total_hot_requotes"], 2)
+        self.assertEqual(hl["per_chain_mode"]["arb"]["last_scan_mode"], "hot")
+
+    def test_dirty_set_tracker_always_dirty_without_wss(self):
+        from strategy.infra import DirtySetTracker
+        ds = DirtySetTracker()
+        ds.start_watching("test_chain", None)
+        self.assertTrue(ds.is_dirty("test_chain"))
+        ds.mark_clean("test_chain")
+        # No WSS -> always dirty even after mark_clean
+        self.assertTrue(ds.is_dirty("test_chain"))
+        ds.stop()
+
+    def test_dirty_set_tracker_status(self):
+        from strategy.infra import DirtySetTracker
+        ds = DirtySetTracker()
+        ds.start_watching("arb", None)
+        ds.start_watching("base", None)
+        status = ds.status()
+        self.assertEqual(status["chains_watched"], 2)
+        self.assertEqual(status["chains_dirty"], 2)
+        ds.stop()
+
+    def test_pair_config_from_dict_roundtrip(self):
+        from config.pairs import PairConfig
+        pc = PairConfig(
+            chain="arbitrum_one",
+            token_in="WETH",
+            token_out="USDC",
+            token_in_address="0xabc",
+            token_out_address="0xdef",
+            token_in_decimals=18,
+            token_out_decimals=6,
+            fee_tiers=[500, 3000],
+            pool_info=[{"dex": "uniswap_v3", "fee": 3000, "address": "0x123"}],
+        )
+        d = pc.to_dict()
+        pc2 = PairConfig.from_dict(d)
+        self.assertEqual(pc2.chain, "arbitrum_one")
+        self.assertEqual(pc2.token_in, "WETH")
+        self.assertEqual(pc2.token_out, "USDC")
+        self.assertEqual(pc2.token_in_address, "0xabc")
+        self.assertEqual(pc2.token_out_address, "0xdef")
+        self.assertEqual(pc2.token_in_decimals, 18)
+        self.assertEqual(pc2.token_out_decimals, 6)
+        self.assertEqual(pc2.fee_tiers, [500, 3000])
+        self.assertEqual(pc2.pool_info, [{"dex": "uniswap_v3", "fee": 3000, "address": "0x123"}])
+
+    def test_full_sweep_interval_constant(self):
+        self.assertGreater(start.FULL_SWEEP_INTERVAL, 1)
+        self.assertLessEqual(start.FULL_SWEEP_INTERVAL, 10)
 
 
 if __name__ == "__main__":

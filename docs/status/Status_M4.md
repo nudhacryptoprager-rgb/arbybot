@@ -1,10 +1,10 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-15 (R28.10 — profit truth propagation: chain state classification, KPI separation, real_quote_count/profit_realism_status in run_summary + rolling + long_scan. RCA: linea profits from 0-fee pools, arb blocked by fee structure)  
+**Updated**: 2026-03-15 (R28.11 Turn 2 — hot re-quote loop + WebSocket dirty-set invalidation. Turn 1 retained: pair-level observability)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.10**: `profit_realism_status` + `real_quote_count` now in run_summary + rolling + long_scan.  
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.11 T2**: Hot re-quote loop (7 full / 5 hot in 12-run scan), WebSocket dirty-set trigger. **R28.11 T1**: pair-level visibility (_pair_history, spread deltas, cache %, suppression counters).  
 **Primary blocker**: market gap (arb: sweep_median_gap ~18.74 bps, best-ever=3.55 bps). Arb=PRIMARY_BLOCKER (real_quote_count=20, profitable_count=0). Linea/Base=CONFIRMED_POSITIVE_CONTROL. Fee structure is root cause (linea 0-fee pools vs arb 100-3000 bps).
 
 ## [!] M4.1 Simulate-Only DoD **MET**
@@ -27,8 +27,9 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-15 R28.10)**: `agg_status=PASS` sustained. total_net_usdc=$1082.33. **M4.1 DoD MET**. **R28.10**: real_quote_count + profit_realism_status propagated through full chain. Chain profit states: linea/base=CONFIRMED_POSITIVE_CONTROL, arb/zksync=PRIMARY_BLOCKER. Rolling: real_quote_count_total=24, runs_with_real_quotes=6, latest_profit_realism_status=ROUNDTRIP_NOT_PROFITABLE.
-> R28.10: Profit truth propagation — real_quote_count + profit_realism_status in run_summary.metrics, rolling per-run + quick_stats, long_scan chain_profit_state. 5 states: CONFIRMED_POSITIVE_CONTROL/THIN_POSITIVE/PRIMARY_BLOCKER/CANDIDATE/PROBE_ONLY. KPI separation (signals/exec_candidates/profitable_roundtrips/truth_confirmed). RCA: linea profits from lynex_v3 0-fee pools; arb: 100-3000 bps fee pools + $150 paper_size slippage. Long scan: 27 runs, 69 signals, $91.42, 15 profitable RT.
+> [!] **ROLLING STABILITY (2026-03-15 R28.11 T2)**: `agg_status=PASS` sustained. **M4.1 DoD MET**. **R28.11 Turn 2**: Hot re-quote loop + WebSocket dirty-set invalidation — dual-cycle architecture (FULL_SWEEP_INTERVAL=5), `DirtySetTracker` subscribes to WSS newHeads. Hot pairs caches: base=22, linea=11, mantle=4, scroll=9, zksync=8. Fresh evidence: 7 full sweeps + 5 hot requotes in 12-run scan. Schema v1.10. +6 tests (1870 total).
+> R28.11 Turn 1: Pair-level observability — _pair_history deque (5), spread_bps deltas, cache freshness, suppression counters, STATIC_PROBE_PATH + ZERO_FEE_DOMINANCE guardrails. +8 tests.
+> R28.10: Profit truth propagation — real_quote_count + profit_realism_status in run_summary.metrics, rolling per-run + quick_stats, long_scan chain_profit_state. 5 states: CONFIRMED_POSITIVE_CONTROL/THIN_POSITIVE/PRIMARY_BLOCKER/CANDIDATE/PROBE_ONLY. KPI separation (signals/exec_candidates/profitable_roundtrips/truth_confirmed). RCA: linea profits from lynex_v3 0-fee pools; arb: 100-3000 bps fee pools + $150 paper_size slippage.
 > R28.7: Economics engine correctness — 10 fix steps from lead directive. executable_candidates_count=4 (new KPI). min_spread_bps advisory (threshold=0 in truth_mode). Sweep promoted to core. Per-route breakdown: WBTC/USDC gap=15.22 bps (slip=12.57, fee=10, gas=3.25). ARB/WETH re-enabled (7 pairs now, SUSPECT_SPREAD_HARD gates outliers). Long scan: 42 runs / 109 signals / $123 / 21 RT in 573s. Linea truth=True (positive control confirmed).
 > R28.6: RunDir collision fix (6 collisions → 0 in parallel stress test 31 runs). Chain_id validation. Telemetry artifact patch. +9 tests (1837). Long scan parallel: 31 runs / 69 signals / $116.34 / 14 RT in 544s. Linea strongest non-arb (12 profitable RT).
 > R28.5: Bounded parallel coverage, expanded phase metrics, phase_timers artifact fix. Per-run ~27s→15s. Long scan: 37 runs / 52 signals / $85.88 / 12 RT in 556s.
@@ -37,7 +38,7 @@
 > R28.2: Semantics fix (profit_truth requires real_quote_count>0). ve33 stage2 configs created+tested online. Base ROUNDTRIP_PROFITABLE=2 (thin: real_quote_count=1). Mantle cross_dex=5.
 > R28/R28.1: Architecture audit — strategy/execution/ stubs DELETED, core/gate_helpers.py+repo_checks.py extracted, net_pnl_bps computed. probe_slippage artifact integration still pending.
 > R27.4: Config inventory frozen to 16 files, 15 stale deleted. ve33 adapter IMPLEMENTED. validate_universe regression FIXED.
-> Latest evidence: `long_scan_latest.json` (REFRESHED 2026-03-15T10:25:50Z), `m4_stability_agg.json` (2026-03-15T10:24:37Z).
+> Latest evidence: `long_scan_latest.json` (REFRESHED R28.11 T2), `m4_stability_agg.json`, hot_pairs_*.json caches.
 
 **Economics Snapshot (2026-03-15, R28.7 — from rolling agg + long_scan + per_route_breakdown):**
 | Metric | Value | Source |

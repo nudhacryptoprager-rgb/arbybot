@@ -77,6 +77,22 @@ class PairConfig:
             result["pool_info"] = self.pool_info
         return result
 
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "PairConfig":
+        """Deserialize from to_dict() output (hot pairs cache round-trip)."""
+        return cls(
+            chain=d["chain"],
+            token_in=d["token_in"],
+            token_out=d["token_out"],
+            token_in_address=d.get("token_in_address"),
+            token_out_address=d.get("token_out_address"),
+            token_in_decimals=d.get("token_in_decimals", 18),
+            token_out_decimals=d.get("token_out_decimals", 18),
+            fee_tiers=d.get("fee_tiers"),
+            pool_addresses=d.get("pool_addresses"),
+            pool_info=d.get("pool_info"),
+        )
+
 
 def parse_intent_file(chain_filter: Optional[str] = None) -> List[Tuple[str, str, str]]:
     """

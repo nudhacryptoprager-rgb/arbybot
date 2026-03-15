@@ -170,11 +170,11 @@ function render(data) {
   renderProbeTargets(ls);
 }
 
-// Panel 1: Chain Status
-function renderChainStatus(ls) {
-  if (!ls?.per_chain) { $('chain-body').innerHTML = '<em class="na">No multi-chain data</em>'; return; }
-  const pc = ls.per_chain;
-  const driftSummary = ls.per_chain_drift_summary || {};
+  // Panel 1: Chain Status
+  function renderChainStatus(ls) {
+    if (!ls?.per_chain) { $('chain-body').innerHTML = '<em class="na">No multi-chain data</em>'; return; }
+    const pc = ls.per_chain;
+    const driftSummary = ls.per_chain_drift_summary || {};
   let html = '<table><tr><th>Chain</th><th>Runs</th><th class="num">P/ND/F</th><th class="num">Signals</th><th class="num">Net USD</th><th class="num">$/run</th><th class="num">Drift Rej%</th><th>Quality</th><th>Blocker</th><th>Reason</th></tr>';
   for (const [chain, d] of Object.entries(pc)) {
     const qBadge = d.last_chain_quality_level === 'SIGNAL_PRODUCING' ? badge('SIGNAL','pass') :
@@ -215,20 +215,105 @@ function renderChainStatus(ls) {
 
   // R28.9: Per-chain phase timers (performance visibility)
   const hasTimers = Object.values(pc).some(d => d.last_phase_timers_ms);
-  if (hasTimers) {
-    html += '<h3 style="font-size:.8rem;color:#58a6ff;margin-top:12px;padding-top:8px;border-top:1px solid #21262d">Phase Timers (last run per chain)</h3>';
-    html += '<table><tr><th>Chain</th><th class="num">Total ms</th><th class="num">Discovery</th><th class="num">Quote RPC</th><th class="num">Postprocess</th><th class="num">Preflight</th><th class="num">Report</th></tr>';
+    if (hasTimers) {
+      html += '<h3 style="font-size:.8rem;color:#58a6ff;margin-top:12px;padding-top:8px;border-top:1px solid #21262d">Phase Timers (last run per chain)</h3>';
+      html += '<table><tr><th>Chain</th><th class="num">Total ms</th><th class="num">Discovery</th><th class="num">Quote RPC</th><th class="num">Postprocess</th><th class="num">Preflight</th><th class="num">Report</th></tr>';
     for (const [chain, d] of Object.entries(pc)) {
       const pt = d.last_phase_timers_ms;
       if (!pt) continue;
       const totalCls = pt.total_ms > 60000 ? 'neg' : pt.total_ms > 30000 ? 'warn-c' : '';
       html += `<tr><td>${chain}</td><td class="num ${totalCls}">${pt.total_ms||'—'}</td><td class="num">${pt.discovery_ms||'—'}</td><td class="num">${pt.quote_rpc_ms||'—'}</td><td class="num">${pt.postprocess_ms||'—'}</td><td class="num">${pt.preflight_ms||'—'}</td><td class="num">${pt.report_ms||'—'}</td></tr>`;
+      }
+      html += '</table>';
     }
-    html += '</table>';
-  }
 
-  $('chain-body').innerHTML = html;
-}
+    const hasPairRadar = Object.values(pc).some(d => (d.last_top_spread_signals||[]).length > 0);
+    if (hasPairRadar) {
+      html += '<h3 style="font-size:.8rem;color:#58a6ff;margin-top:12px;padding-top:8px;border-top:1px solid #21262d">Latest Pair Radar (per chain)</h3>';
+      html += '<table><tr><th>Chain</th><th class="num">Block</th><th>Top pairs / routes</th><th class="num">Delta</th></tr>';
+      for (const [chain, d] of Object.entries(pc)) {
+        const top = d.last_top_spread_signals || [];
+        const block = d.last_current_block || '—';
+        const hist = d._pair_history || [];
+        // Previous snapshot for delta (second-to-last since last is current)
+        const prev = hist.length >= 2 ? hist[hist.length - 2] : null;
+        const prevMap = {};
+        if (prev) { (prev.signals || []).forEach(s => { if (s.pair) prevMap[s.pair] = s; }); }
+        let detail = '—';
+        let deltaCol = '';
+        if (top.length > 0) {
+          const lines = top.map(s => {
+            const route = [s.buy_dex, s.sell_dex].filter(Boolean).join('→');
+            const spread = s.spread_bps != null ? `${fmt(s.spread_bps,2)} bps` : '—';
+            const margin = s.spread_minus_required_bps != null ? ` | margin ${fmt(s.spread_minus_required_bps,2)}` : '';
+            // Delta vs previous run
+            const pSig = prevMap[s.pair];
+            let deltaStr = '';
+            if (pSig && s.spread_bps != null && pSig.spread_bps != null) {
+              const d = s.spread_bps - pSig.spread_bps;
+              const dCls = d > 0 ? 'pos' : d < 0 ? 'neg' : '';
+              deltaStr = `<span class="${dCls}">${d >= 0 ? '+' : ''}${fmt(d,2)}</span>`;
+            }
+            return { text: `${s.pair || '?'} (${route || '?'}, ${spread}${margin})`, delta: deltaStr };
+          });
+          detail = lines.map(l => l.text).join('<br>');
+          deltaCol = lines.map(l => l.delta || '—').join('<br>');
+        }
+        // Block delta
+        let blockDelta = '';
+        if (prev && prev.block != null && d.last_current_block != null) {
+          blockDelta = ` <span style="font-size:.65rem;color:#8b949e">(+${d.last_current_block - prev.block})</span>`;
+        }
+        html += `<tr><td>${chain}</td><td class="num">${block}${blockDelta}</td><td style="font-size:.72rem;line-height:1.35">${detail}</td><td class="num" style="font-size:.72rem;line-height:1.35">${deltaCol}</td></tr>`;
+      }
+      html += '</table>';
+    }
+
+    // R28.11: Cache Freshness
+    const hasCache = Object.values(pc).some(d => d.last_pools_from_cache != null || d.last_pools_from_rpc != null);
+    if (hasCache) {
+      html += '<h3 style="font-size:.8rem;color:#58a6ff;margin-top:12px;padding-top:8px;border-top:1px solid #21262d">Cache Freshness (discovery runtime)</h3>';
+      html += '<table><tr><th>Chain</th><th class="num">From Cache</th><th class="num">From RPC</th><th class="num">RPC Calls</th><th class="num">Cache %</th></tr>';
+      for (const [chain, d] of Object.entries(pc)) {
+        const fc = d.last_pools_from_cache;
+        const fr = d.last_pools_from_rpc;
+        const rc = d.last_rpc_calls;
+        if (fc == null && fr == null) continue;
+        const total = (fc||0) + (fr||0);
+        const cachePct = total > 0 ? ((fc||0)/total*100).toFixed(1) : '—';
+        const cacheCls = total > 0 && (fc||0)/total > 0.99 ? 'warn-c' : '';
+        html += `<tr><td>${chain}</td><td class="num">${fc ?? '—'}</td><td class="num">${fr ?? '—'}</td><td class="num">${rc ?? '—'}</td><td class="num ${cacheCls}">${cachePct}%</td></tr>`;
+      }
+      html += '</table>';
+    }
+
+    // R28.11: Suppression Counters
+    const hasSuppression = Object.values(pc).some(d => d.last_suppression);
+    if (hasSuppression) {
+      html += '<h3 style="font-size:.8rem;color:#58a6ff;margin-top:12px;padding-top:8px;border-top:1px solid #21262d">Suppression Counters (per chain)</h3>';
+      html += '<table><tr><th>Chain</th><th class="num">Single DEX</th><th class="num">No Pool</th><th class="num">Excluded</th><th class="num">Price Sanity</th><th class="num">Drift Excl</th><th class="num">Quarantined</th></tr>';
+      for (const [chain, d] of Object.entries(pc)) {
+        const sup = d.last_suppression;
+        if (!sup) continue;
+        html += `<tr><td>${chain}</td><td class="num">${sup.single_dex||0}</td><td class="num">${sup.no_pool||0}</td><td class="num">${sup.excluded||0}</td><td class="num">${sup.price_sanity_failed||0}</td><td class="num">${sup.notional_drift_excluded||0}</td><td class="num">${sup.quarantined||0}</td></tr>`;
+      }
+      html += '</table>';
+    }
+
+    // R28.11: Hot Loop / Dirty-Set Status
+    const hl = ls?.hot_loop;
+    if (hl) {
+      html += '<h3 style="font-size:.8rem;color:#58a6ff;margin-top:12px;padding-top:8px;border-top:1px solid #21262d">Hot Loop (full sweep / hot re-quote)</h3>';
+      html += '<table><tr><th>Chain</th><th class="num">Mode</th><th class="num">Full Sweeps</th><th class="num">Hot Re-quotes</th></tr>';
+      for (const [chain, m] of Object.entries(hl.per_chain_mode || {})) {
+        const modeBadge = m.last_scan_mode === 'hot' ? badge('HOT','warn') : badge('FULL','pass');
+        html += `<tr><td>${chain}</td><td class="num">${modeBadge}</td><td class="num">${m.full_sweeps||0}</td><td class="num">${m.hot_requotes||0}</td></tr>`;
+      }
+      html += '</table>';
+    }
+  
+    $('chain-body').innerHTML = html;
+  }
 
 // Panel 2: Frontier Ranking
 function renderFrontier(ls) {

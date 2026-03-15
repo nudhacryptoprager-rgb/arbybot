@@ -32,10 +32,15 @@ import yaml
 
 RUNS_DIR = Path("data") / "runs"
 CI_GATE = Path("scripts") / "ci_m5_0_gate.py"
+HOT_PAIRS_CACHE_DIR = Path("data") / "cache"
 RUN_DIR_RE = re.compile(r"^\[ONLINE\] RunDir:\s*(.+)\s*$")
 # R28.6: Match both legacy (ci_m5_gate_YYYYMMDD_HHMMSS) and new chain-scoped
 # (ci_m5_gate_{chain_key}_YYYYMMDD_HHMMSS_{microseconds}) runDir patterns
 CI_M5_DIR_RE = re.compile(r"^ci_m5_gate_(?:[a-z_]+_)?\d{8}_\d{6}(?:_\d+)?$")
+
+# R28.11: Hot re-quote loop — every Nth cycle is a full universe sweep,
+# intervening cycles reuse cached pairs (skip discovery, just re-quote).
+FULL_SWEEP_INTERVAL = 5
 
 # -- config introspection -------------------------------------------------
 
@@ -71,6 +76,7 @@ def run_gate_once(
     refresh_rolling: bool,
     timeout_seconds: int,
     line_prefix: str = "",
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[int, Path | None]:
     """Run ci_m5_0_gate.py once; return (exit_code, runDir)."""
     cmd = [
@@ -89,12 +95,20 @@ def run_gate_once(
     if refresh_rolling:
         cmd += ["--refresh-rolling", "--refresh-rolling-strict"]
 
+    # R28.11: Thread extra env vars to subprocess (e.g. ARBY_HOT_PAIRS_FILE)
+    env = None
+    if extra_env:
+        import os as _os
+        env = _os.environ.copy()
+        env.update(extra_env)
+
     run_dir: Path | None = None
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        env=env,
     )
     assert proc.stdout is not None
 
@@ -176,6 +190,23 @@ def extract_scan_stats(run_dir: Path | None) -> dict[str, Any] | None:
         with open(scans[-1], encoding="utf-8") as f:
             data = json.load(f)
         return data.get("stats")
+    except Exception:
+        return None
+
+
+def extract_truth_report(run_dir: Path | None) -> dict[str, Any] | None:
+    """Read the latest truth_report from a runDir."""
+    if run_dir is None or not run_dir.exists():
+        return None
+    reports = run_dir / "reports"
+    if not reports.exists():
+        return None
+    truths = sorted(reports.glob("truth_report_*.json"))
+    if not truths:
+        return None
+    try:
+        with open(truths[-1], encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
         return None
 
@@ -292,6 +323,22 @@ def new_chain_stats() -> dict[str, Any]:
         "drift_worst_pair_bps": None,
         # R28.9: Phase timers for dashboard performance visibility
         "last_phase_timers_ms": None,
+        # R28.11: Pair-level live snapshot for dashboard/operator view
+        "last_current_block": None,
+        "last_top_spread_signals": [],
+        # R28.11: Pair history — last N snapshots for delta tracking
+        "_pair_history": [],  # list of {block, signals} dicts, max 5
+        # R28.11: Cache freshness from discovery_runtime
+        "last_pools_from_cache": None,
+        "last_pools_from_rpc": None,
+        "last_rpc_calls": None,
+        # R28.11: Suppression counters from truth_report stats
+        "last_suppression": None,
+        # R28.11: Hot loop tracking
+        "_run_counter": 0,
+        "last_scan_mode": None,  # "full" or "hot"
+        "hot_requote_count": 0,
+        "full_sweep_count": 0,
     }
 
 
@@ -302,6 +349,7 @@ def update_chain_stats(
     summary: dict[str, Any] | None,
     gate_result: dict[str, Any] | None = None,
     scan_stats: dict[str, Any] | None = None,
+    truth_report: dict[str, Any] | None = None,
 ) -> None:
     stats["runs"] += 1
     cls = classify_run(exit_code, summary)
@@ -394,10 +442,55 @@ def update_chain_stats(
                 "pairs_skipped_single_dex": dr.get("pairs_skipped_single_dex", 0),
                 "pairs_skipped_excluded": dr.get("pairs_skipped_excluded", 0),
             }
+            # R28.11: Cache freshness from discovery_runtime
+            stats["last_pools_from_cache"] = dr.get("pools_from_cache")
+            stats["last_pools_from_rpc"] = dr.get("pools_from_rpc")
+            stats["last_rpc_calls"] = dr.get("rpc_calls")
         # R28.9: Propagate phase_timers_ms for dashboard performance visibility
         pt = scan_stats.get("phase_timers_ms")
         if pt:
             stats["last_phase_timers_ms"] = pt
+
+    # R28.11: Suppression counters from truth_report stats
+    if truth_report:
+        tr_stats = truth_report.get("stats") or {}
+        drift_sum = truth_report.get("drift_summary") or {}
+        dr_rt = (scan_stats or {}).get("discovery_runtime") or {}
+        suppression = {
+            "single_dex": dr_rt.get("pairs_skipped_single_dex", 0),
+            "no_pool": tr_stats.get("pool_missing_count", 0),
+            "excluded": dr_rt.get("pairs_skipped_excluded", 0),
+            "price_sanity_failed": tr_stats.get("price_sanity_failed", 0),
+            "notional_drift_excluded": drift_sum.get("drift_excluded_count", 0),
+            "quarantined": tr_stats.get("quarantined_count", 0),
+        }
+        if any(v for v in suppression.values()):
+            stats["last_suppression"] = suppression
+
+    if truth_report:
+        stats["last_current_block"] = truth_report.get("current_block")
+        top_signals = []
+        for sig in (truth_report.get("spread_signals") or [])[:5]:
+            top_signals.append({
+                "pair": sig.get("pair"),
+                "buy_dex": sig.get("buy_dex"),
+                "sell_dex": sig.get("sell_dex"),
+                "spread_bps": sig.get("spread_bps"),
+                "effective_slippage_bps": sig.get("effective_slippage_bps"),
+                "spread_minus_required_bps": sig.get("spread_minus_required_bps"),
+            })
+        stats["last_top_spread_signals"] = top_signals
+
+        # R28.11: Pair history — keep last 5 snapshots for run-to-run delta
+        if top_signals or stats["last_current_block"] is not None:
+            history = stats["_pair_history"]
+            history.append({
+                "block": stats["last_current_block"],
+                "signals": top_signals,
+            })
+            # Keep only last 5 entries
+            if len(history) > 5:
+                stats["_pair_history"] = history[-5:]
 
 
 # -- guardrails -----------------------------------------------------------
@@ -426,6 +519,30 @@ def check_guardrails(per_chain: dict[str, dict[str, Any]]) -> list[str]:
         if s["runs"] >= 3 and s["infra_fail"] > s["runs"] * 0.5:
             warnings.append(
                 f"CHAIN_INFRA_UNSTABLE [{chain}]: >{50}% runs had infra failures"
+            )
+
+        # R28.11: Narrow probe path stability warning
+        # If a chain has identical top signals across multiple runs, its apparent
+        # stability may be an artifact of a narrow static probe universe rather
+        # than genuine market quiescence.
+        hist = s.get("_pair_history", [])
+        if len(hist) >= 3:
+            pairs_sets = [frozenset(sig.get("pair", "") for sig in h.get("signals", [])) for h in hist[-3:]]
+            if all(ps == pairs_sets[0] for ps in pairs_sets) and len(pairs_sets[0]) > 0:
+                warnings.append(
+                    f"STATIC_PROBE_PATH [{chain}]: same top pairs across last {len(hist[-3:])} runs — "
+                    "apparent stability may reflect narrow probe config, not market health"
+                )
+
+        # R28.11: Single 0-fee route dominance warning
+        top_sigs = s.get("last_top_spread_signals", [])
+        if top_sigs and all(
+            (sig.get("spread_bps") or 0) == 0 and (sig.get("spread_minus_required_bps") or 0) == 0
+            for sig in top_sigs
+        ):
+            warnings.append(
+                f"ZERO_FEE_DOMINANCE [{chain}]: all top signals have 0 bps spread — "
+                "likely single structural 0-fee route (e.g. lynex_v3); not market edge"
             )
 
     return warnings
@@ -503,7 +620,7 @@ def build_summary(
         s["chain_profit_state"] = classify_chain_profit_state(s)
 
     return {
-        "schema": "start:long_scan_summary:v1.8",  # R28.10: kpi_separation + profit_truth_summary + chain_profit_state
+        "schema": "start:long_scan_summary:v1.10",  # R28.11: hot_loop + dirty_set
         "generated_at": run_ts,
         "run_context": {
             "run_timestamp": run_ts,
@@ -573,6 +690,20 @@ def build_summary(
                 None,
             ),
             "last_summary_write": run_ts,
+        },
+        # R28.11: Hot loop metrics — full sweep vs hot re-quote cycle counts
+        "hot_loop": {
+            "full_sweep_interval": FULL_SWEEP_INTERVAL,
+            "total_full_sweeps": sum(s.get("full_sweep_count", 0) for s in per_chain.values()),
+            "total_hot_requotes": sum(s.get("hot_requote_count", 0) for s in per_chain.values()),
+            "per_chain_mode": {
+                c: {
+                    "last_scan_mode": s.get("last_scan_mode"),
+                    "full_sweeps": s.get("full_sweep_count", 0),
+                    "hot_requotes": s.get("hot_requote_count", 0),
+                }
+                for c, s in per_chain.items()
+            },
         },
     }
 
@@ -1086,6 +1217,26 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
     empty_deleted = 0
     wall_start = time.monotonic()
 
+    # R28.11: WebSocket dirty-set tracker — only re-scan chains with new blocks
+    dirty_tracker: Any = None
+    try:
+        from strategy.infra import DirtySetTracker
+        chains_yaml = Path("config") / "chains.yaml"
+        _chain_ws: dict[str, str | None] = {}
+        if chains_yaml.exists():
+            with open(chains_yaml, encoding="utf-8") as _cyf:
+                _cy = yaml.safe_load(_cyf) or {}
+            for _cn, _cd in _cy.items():
+                ws_eps = _cd.get("ws_endpoints") or []
+                _chain_ws[_cn] = ws_eps[0] if ws_eps else None
+        dirty_tracker = DirtySetTracker()
+        for chain in per_chain:
+            dirty_tracker.start_watching(chain, _chain_ws.get(chain))
+        print(f"  DirtySet: watching {len(per_chain)} chains ({sum(1 for v in _chain_ws.values() if v)} have WSS)")
+    except Exception as _ds_err:
+        print(f"  DirtySet: disabled ({_ds_err})")
+        dirty_tracker = None
+
     # R28.5: Thread-safe lock for per_chain stats and stdout
     _stats_lock = threading.Lock()
 
@@ -1098,16 +1249,33 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         # R28.9: Prefix coverage worker output for log readability
         prefix = f"[{chain}]" if is_coverage else ""
 
+        # R28.11: Hot loop — decide scan mode (full sweep vs hot re-quote)
+        extra_env: dict[str, str] | None = None
+        scan_mode = "full"
+        with _stats_lock:
+            chain_stats = per_chain[chain]
+            run_count = chain_stats["_run_counter"]
+            chain_stats["_run_counter"] = run_count + 1
+
+        # Hot re-quote: skip discovery on non-full-sweep cycles if cache exists
+        if run_count > 0 and run_count % FULL_SWEEP_INTERVAL != 0:
+            hot_file = HOT_PAIRS_CACHE_DIR / f"hot_pairs_{chain}.json"
+            if hot_file.is_file():
+                extra_env = {"ARBY_HOT_PAIRS_FILE": str(hot_file)}
+                scan_mode = "hot"
+
         rc, run_dir = run_gate_once(
             cfg, args.cycles, args.prune_keep, args.sleep_seconds,
             refresh_rolling=refresh,
             timeout_seconds=args.child_timeout,
             line_prefix=prefix,
+            extra_env=extra_env,
         )
 
         summary = extract_run_summary(run_dir)
         gate_res = extract_gate_result(run_dir)
         scan_st = extract_scan_stats(run_dir)
+        truth = extract_truth_report(run_dir)
 
         # R28.6: Validate scan artifact chain_id matches config chain
         # Prevents corrupted summary from runDir collisions
@@ -1117,7 +1285,13 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         cls = classify_run(rc, summary)
 
         with _stats_lock:
-            update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res, scan_st)
+            update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res, scan_st, truth)
+            # R28.11: Track scan mode for observability
+            per_chain[chain]["last_scan_mode"] = scan_mode
+            if scan_mode == "hot":
+                per_chain[chain]["hot_requote_count"] += 1
+            else:
+                per_chain[chain]["full_sweep_count"] += 1
             if run_dir and run_dir.exists():
                 if delete_if_empty_run_dir(run_dir):
                     pass  # cleaned up
@@ -1133,12 +1307,23 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             if time.monotonic() >= deadline:
                 break
             chain = config_meta[cfg]["chain"]
+
+            # R28.11: Skip chain if no new block since last scan (dirty-set gate)
+            if dirty_tracker and not dirty_tracker.is_dirty(chain):
+                continue
+
             total_runs += 1
+            _sm = per_chain.get(chain, {}).get("last_scan_mode", "full")
             print(f"\n{'-'*60}")
-            print(f"[run {total_runs}] chain={chain}  config={cfg}  rolling=YES  (PRIMARY)")
+            print(f"[run {total_runs}] chain={chain}  config={cfg}  rolling=YES  mode={_sm}  (PRIMARY)")
 
             rc, run_dir, chain_name, cls = _run_one_chain(cfg)
-            print(f"[run {total_runs}] result={cls}  exit_code={rc}  run_dir={run_dir.name if run_dir else 'N/A'}")
+            _sm = per_chain.get(chain, {}).get("last_scan_mode", "full")
+            print(f"[run {total_runs}] result={cls}  exit_code={rc}  mode={_sm}  run_dir={run_dir.name if run_dir else 'N/A'}")
+
+            # R28.11: Mark chain clean after scan (wait for next block)
+            if dirty_tracker:
+                dirty_tracker.mark_clean(chain)
 
             # Live update summary for dashboard
             interim_wall = time.monotonic() - wall_start
@@ -1151,7 +1336,12 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
 
         # Phase 2: Run coverage configs in bounded parallel pool
         if coverage_configs:
-            batch_cfgs = [cfg for cfg in coverage_configs if time.monotonic() < deadline]
+            # R28.11: Filter out clean chains (no new block) from coverage batch
+            batch_cfgs = [
+                cfg for cfg in coverage_configs
+                if time.monotonic() < deadline
+                and (not dirty_tracker or dirty_tracker.is_dirty(config_meta[cfg]["chain"]))
+            ]
             if batch_cfgs:
                 print(f"\n{'-'*60}")
                 print(f"[COVERAGE BATCH] {len(batch_cfgs)} chains, workers={coverage_workers}")
@@ -1164,6 +1354,9 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                         try:
                             rc, run_dir, chain_name, cls = future.result()
                             print(f"[run {total_runs}] chain={chain_name}  result={cls}  exit_code={rc}  run_dir={run_dir.name if run_dir else 'N/A'}  (COVERAGE)")
+                            # R28.11: Mark chain clean after coverage scan
+                            if dirty_tracker:
+                                dirty_tracker.mark_clean(chain_name)
                         except Exception as e:
                             print(f"[run {total_runs}] COVERAGE_ERROR: {cfg}: {e}")
 
@@ -1185,6 +1378,10 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             time.sleep(args.sleep_seconds)
 
     # Final report
+    # R28.11: Stop dirty-set watcher threads
+    if dirty_tracker:
+        dirty_tracker.stop()
+
     wall_seconds = time.monotonic() - wall_start
     warnings = check_guardrails(per_chain)
     summary_obj = build_summary(per_chain, wall_seconds, warnings)

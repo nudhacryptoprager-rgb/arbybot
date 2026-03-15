@@ -619,3 +619,147 @@ def reset_provider_router() -> None:
     """Reset the singleton (for testing)."""
     global _provider_router
     _provider_router = None
+
+
+# -- R28.11: WebSocket dirty-set block watcher --------------------------------
+
+
+class DirtySetTracker:
+    """Track which chains have new blocks via WebSocket subscription.
+
+    Each chain gets a background thread that connects to its WSS endpoint
+    and subscribes to ``newHeads``.  When a new block arrives the chain is
+    marked *dirty*.  The orchestrator checks ``is_dirty(chain)`` before
+    re-scanning; after a scan it calls ``mark_clean(chain)``.
+
+    Chains without a WSS endpoint are always considered dirty (time-based
+    fallback).
+    """
+
+    def __init__(self) -> None:
+        import threading
+        self._lock = threading.Lock()
+        # chain -> True if new block arrived since last mark_clean
+        self._dirty: dict[str, bool] = {}
+        # chain -> latest block number from WSS
+        self._last_block: dict[str, int | None] = {}
+        # chain -> background thread
+        self._threads: dict[str, threading.Thread] = {}
+        # chain -> True if WSS is connected
+        self._connected: dict[str, bool] = {}
+        self._stop = threading.Event()
+
+    # -- public API -----------------------------------------------------------
+
+    def start_watching(self, chain: str, ws_url: str | None) -> None:
+        """Begin watching a chain.  If *ws_url* is ``None`` the chain stays
+        permanently dirty (no WebSocket available)."""
+        import threading
+        with self._lock:
+            self._dirty[chain] = True  # dirty until first scan
+            self._connected[chain] = False
+            self._last_block[chain] = None
+
+        if not ws_url:
+            return  # no WSS -> always dirty
+
+        def _watch() -> None:
+            self._ws_loop(chain, ws_url)
+
+        t = threading.Thread(target=_watch, daemon=True, name=f"ws-{chain}")
+        t.start()
+        with self._lock:
+            self._threads[chain] = t
+
+    def is_dirty(self, chain: str) -> bool:
+        """Return ``True`` if the chain should be scanned (new block or no WSS)."""
+        with self._lock:
+            # If WSS never connected, always dirty (can't track blocks)
+            if not self._connected.get(chain, False):
+                return True
+            return self._dirty.get(chain, True)
+
+    def mark_clean(self, chain: str) -> None:
+        """Called after scanning — reset dirty flag until next block."""
+        with self._lock:
+            self._dirty[chain] = False
+
+    def stop(self) -> None:
+        """Signal all watcher threads to terminate."""
+        self._stop.set()
+
+    def status(self) -> dict[str, Any]:
+        """Return a snapshot of dirty-set state for observability."""
+        with self._lock:
+            return {
+                "chains_watched": len(self._dirty),
+                "chains_dirty": sum(1 for v in self._dirty.values() if v),
+                "chains_ws_connected": sum(1 for v in self._connected.values() if v),
+                "per_chain": {
+                    c: {
+                        "dirty": self._dirty.get(c, True),
+                        "ws_connected": self._connected.get(c, False),
+                        "last_block": self._last_block.get(c),
+                    }
+                    for c in self._dirty
+                },
+            }
+
+    # -- internal WebSocket loop -----------------------------------------------
+
+    def _ws_loop(self, chain: str, ws_url: str) -> None:
+        """Background: connect to WSS, subscribe to newHeads, mark dirty on each block."""
+        import time as _time
+
+        while not self._stop.is_set():
+            try:
+                import websocket as _wsclient
+                ws = _wsclient.create_connection(ws_url, timeout=10)
+                with self._lock:
+                    self._connected[chain] = True
+
+                # eth_subscribe newHeads
+                subscribe_msg = json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "eth_subscribe",
+                    "params": ["newHeads"],
+                })
+                ws.send(subscribe_msg)
+                # Read subscription confirmation
+                ws.recv()
+
+                logger.info("DirtySet: WSS connected for %s", chain)
+
+                while not self._stop.is_set():
+                    ws.settimeout(30)
+                    try:
+                        msg = ws.recv()
+                    except Exception:
+                        break  # reconnect on timeout/error
+                    try:
+                        data = json.loads(msg)
+                        params = data.get("params", {})
+                        result = params.get("result", {})
+                        block_hex = result.get("number")
+                        if block_hex:
+                            block_num = int(block_hex, 16)
+                            with self._lock:
+                                self._dirty[chain] = True
+                                self._last_block[chain] = block_num
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+                ws.close()
+            except Exception as e:
+                logger.debug("DirtySet: WSS error for %s: %s (reconnect in 5s)", chain, e)
+                # Connection lost — assume dirty (can't track blocks)
+                with self._lock:
+                    self._dirty[chain] = True
+            finally:
+                with self._lock:
+                    self._connected[chain] = False
+
+            if self._stop.is_set():
+                break
+            _time.sleep(5)  # backoff before reconnect
