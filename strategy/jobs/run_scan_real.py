@@ -61,10 +61,22 @@ except Exception:
 
 
 def _get_current_block(config: Dict[str, Any]) -> tuple[int, int]:
-    """Get current block via RPC or environment (wrapper for compatibility)."""
+    """Get current block via RPC, environment, or WS-observed block.
+
+    R28.12: If ARBY_WS_BLOCK_NUMBER is set (from DirtySetTracker), use it
+    directly — saves one RPC round-trip on hot re-quote cycles.
+    """
     if os.environ.get("ARBY_SKIP_RPC") == "1":
         block = int(os.environ.get("ARBY_FAKE_BLOCK", "100"))
         return block, 0
+    ws_block = os.environ.get("ARBY_WS_BLOCK_NUMBER")
+    if ws_block:
+        try:
+            block = int(ws_block)
+            logger.info("Using WS-observed block %d (skip block-pin RPC)", block)
+            return block, 0
+        except ValueError:
+            pass
     return get_current_block_via_rpc(config)
 
 

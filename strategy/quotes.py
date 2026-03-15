@@ -180,6 +180,21 @@ _QUOTE_CONCURRENCY = 8  # Max parallel RPC calls per pair batch
 # MULTICALL PREFETCH CACHE (v2.2.0)
 # =============================================================================
 
+# R28.12: Shared ThreadPoolExecutor for cross-pair quote fan-out
+# Avoids creating/destroying a TPE per pair (which was the serial bottleneck)
+_shared_quote_executor: Any = None
+_SHARED_QUOTE_CONCURRENCY = 16  # Cross-pair: allow more parallelism than single-pair
+
+
+def _get_shared_quote_executor() -> Any:
+    """Get or create the shared quote ThreadPoolExecutor."""
+    global _shared_quote_executor
+    if _shared_quote_executor is None:
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        _shared_quote_executor = _TPE(max_workers=_SHARED_QUOTE_CONCURRENCY)
+    return _shared_quote_executor
+
+
 # Module-level cache for multicall prefetch results
 _multicall_slot0_cache: Dict[str, Optional[Tuple[int, int]]] = {}
 _multicall_liquidity_cache: Dict[str, Optional[int]] = {}  # v2.2.0 Fix Step 6: Add liquidity cache
@@ -1022,10 +1037,9 @@ def collect_quotes(
                                     dex, token_in, token_out, fee_tier, pool_key)
         
         # R28.4: Parallel quote prefetch — fan out RPC calls for all pools in this pair
+        # R28.12: Use shared cross-pair executor (avoid per-pair TPE create/destroy)
         _prefetch_results: Dict[str, Any] = {}
         if pool_work_items and rpc_url and not skip_rpc:
-            from concurrent.futures import ThreadPoolExecutor as _TPE
-
             # Pre-compute pair-level context (same values the inner loop will compute)
             _pf_tin = resolve_token_address(token_in, pair_cfg, token_addresses, chain_name, is_token_in=True)
             _pf_tout = resolve_token_address(token_out, pair_cfg, token_addresses, chain_name, is_token_in=False)
@@ -1036,39 +1050,36 @@ def collect_quotes(
             _pf_use_q = config.get("use_quoter_v2", False)
 
             _pf_futures: Dict[str, Any] = {}
-            _pf_exec = _TPE(max_workers=_QUOTE_CONCURRENCY)
-            try:
-                for _d, _f, _a, _dc, _at, _pk in pool_work_items:
-                    if _at == "ve33":
-                        _pf_futures[_pk] = _pf_exec.submit(
-                            read_ve33_amount_out,
-                            pool_address=_a, token_in=_pf_tin,
-                            amount_in=_pf_amt, rpc_url=rpc_url, block_num=current_block,
-                        )
-                    elif (_at == "algebra" or _pf_use_q) and _dc:
-                        _qa = _dc.get_quoter_address()
-                        if _qa:
-                            if _at == "uniswap_v3":
-                                _pf_futures[_pk] = _pf_exec.submit(
-                                    read_quoter_v2,
-                                    _qa, _pf_tin, _pf_tout,
-                                    _pf_amt, _f, rpc_url, current_block,
-                                )
-                            elif _at == "algebra":
-                                _pf_futures[_pk] = _pf_exec.submit(
-                                    read_algebra_quoter,
-                                    _qa, _pf_tin, _pf_tout,
-                                    _pf_amt, rpc_url, current_block,
-                                )
-                # Resolve all futures
-                for _pk, _fut in _pf_futures.items():
-                    try:
-                        _prefetch_results[_pk] = _fut.result(timeout=15)
-                    except Exception as _e:
-                        _prefetch_results[_pk] = None
-                        logger.debug("PREFETCH_FAIL: %s error=%s", _pk, _e)
-            finally:
-                _pf_exec.shutdown(wait=False)
+            _pf_exec = _get_shared_quote_executor()
+            for _d, _f, _a, _dc, _at, _pk in pool_work_items:
+                if _at == "ve33":
+                    _pf_futures[_pk] = _pf_exec.submit(
+                        read_ve33_amount_out,
+                        pool_address=_a, token_in=_pf_tin,
+                        amount_in=_pf_amt, rpc_url=rpc_url, block_num=current_block,
+                    )
+                elif (_at == "algebra" or _pf_use_q) and _dc:
+                    _qa = _dc.get_quoter_address()
+                    if _qa:
+                        if _at == "uniswap_v3":
+                            _pf_futures[_pk] = _pf_exec.submit(
+                                read_quoter_v2,
+                                _qa, _pf_tin, _pf_tout,
+                                _pf_amt, _f, rpc_url, current_block,
+                            )
+                        elif _at == "algebra":
+                            _pf_futures[_pk] = _pf_exec.submit(
+                                read_algebra_quoter,
+                                _qa, _pf_tin, _pf_tout,
+                                _pf_amt, rpc_url, current_block,
+                            )
+            # Resolve all futures
+            for _pk, _fut in _pf_futures.items():
+                try:
+                    _prefetch_results[_pk] = _fut.result(timeout=15)
+                except Exception as _e:
+                    _prefetch_results[_pk] = None
+                    logger.debug("PREFETCH_FAIL: %s error=%s", _pk, _e)
 
         for dex, fee_tier, pool_addr, dex_cfg, adapter_type, pool_key in pool_work_items:
             # v2.1.0-fix: Check disabled_pools FIRST (before pool lookup)

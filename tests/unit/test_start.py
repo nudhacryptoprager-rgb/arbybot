@@ -442,7 +442,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.10")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.11")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -1108,7 +1108,7 @@ class TestFrontierRanking(unittest.TestCase):
         per_chain["base"]["included_signals_total"] = 3
         summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
         # Schema version check
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.10")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.11")
         # Required top-level fields
         self.assertIn("generated_at", summary)
         self.assertIn("wall_seconds", summary)
@@ -1772,7 +1772,7 @@ class TestChainProfitState(unittest.TestCase):
         self.assertEqual(summary["per_chain"]["base"]["last_pools_from_rpc"], 2)
         self.assertEqual(summary["per_chain"]["base"]["last_suppression"]["single_dex"], 3)
         self.assertEqual(len(summary["per_chain"]["base"]["_pair_history"]), 1)
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.10")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.11")
 
 
 class TestHotLoopAndDirtySet(unittest.TestCase):
@@ -1848,6 +1848,212 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
     def test_full_sweep_interval_constant(self):
         self.assertGreater(start.FULL_SWEEP_INTERVAL, 1)
         self.assertLessEqual(start.FULL_SWEEP_INTERVAL, 10)
+
+    # -- R28.12: event queue tests ------------------------------------------
+
+    def test_dirty_set_pending_chains_empty_when_clean(self):
+        from strategy.infra import DirtySetTracker
+        ds = DirtySetTracker()
+        ds.start_watching("arb", None)
+        # Without WSS, always dirty — but verify pending_chains returns it
+        pending = ds.pending_chains()
+        self.assertIn("arb", pending)
+        ds.stop()
+
+    def test_dirty_set_pending_chains_ordered_by_event_time(self):
+        """Chains with older events should appear first in pending_chains()."""
+        import time as _time
+        from strategy.infra import DirtySetTracker
+        ds = DirtySetTracker()
+        ds.start_watching("chain_a", None)
+        ds.start_watching("chain_b", None)
+        # Simulate event arrival: chain_b first, chain_a second
+        with ds._lock:
+            ds._last_event_time["chain_b"] = 1.0
+            ds._last_event_time["chain_a"] = 2.0
+        pending = ds.pending_chains()
+        idx_b = pending.index("chain_b")
+        idx_a = pending.index("chain_a")
+        self.assertLess(idx_b, idx_a, "chain_b (earlier event) should come before chain_a")
+        ds.stop()
+
+    def test_dirty_set_drain_event_returns_latest(self):
+        """drain_event() should return the latest block event."""
+        import collections
+        from strategy.infra import DirtySetTracker
+        ds = DirtySetTracker()
+        ds.start_watching("arb", None)
+        # Manually enqueue events
+        with ds._lock:
+            q = ds._event_queue["arb"]
+            q.append((100, 1000.0))
+            q.append((101, 1001.0))
+        event = ds.drain_event("arb")
+        self.assertIsNotNone(event)
+        self.assertEqual(event["block_number"], 101)
+        self.assertEqual(event["timestamp"], 1001.0)
+        ds.stop()
+
+    def test_dirty_set_drain_event_none_when_empty(self):
+        from strategy.infra import DirtySetTracker
+        ds = DirtySetTracker()
+        ds.start_watching("arb", None)
+        event = ds.drain_event("arb")
+        self.assertIsNone(event)
+        ds.stop()
+
+    def test_dirty_set_mark_clean_clears_event_queue(self):
+        """mark_clean() should clear the event queue."""
+        from strategy.infra import DirtySetTracker
+        ds = DirtySetTracker()
+        ds.start_watching("arb", None)
+        with ds._lock:
+            ds._event_queue["arb"].append((100, 1000.0))
+        ds.mark_clean("arb")
+        event = ds.drain_event("arb")
+        self.assertIsNone(event)
+        ds.stop()
+
+    def test_dirty_set_event_queue_maxlen(self):
+        """Event queue should be bounded (maxlen=32)."""
+        from strategy.infra import DirtySetTracker
+        ds = DirtySetTracker()
+        ds.start_watching("arb", None)
+        with ds._lock:
+            q = ds._event_queue["arb"]
+            for i in range(50):
+                q.append((i, float(i)))
+        self.assertLessEqual(len(ds._event_queue["arb"]), 32)
+        ds.stop()
+
+    def test_dirty_set_status_includes_pending_events(self):
+        from strategy.infra import DirtySetTracker
+        ds = DirtySetTracker()
+        ds.start_watching("arb", None)
+        with ds._lock:
+            ds._event_queue["arb"].append((100, 1000.0))
+        status = ds.status()
+        self.assertEqual(status["per_chain"]["arb"]["pending_events"], 1)
+        ds.stop()
+
+    # -- R28.12: write_hot_loop_snapshot tests ------------------------------
+
+    def test_write_hot_loop_snapshot_schema(self):
+        """write_hot_loop_snapshot() produces valid hot_loop_snapshot:v1.0."""
+        import time as _time
+        import tempfile
+        import json
+        per_chain = {"arb": start.new_chain_stats()}
+        per_chain["arb"]["runs"] = 2
+        per_chain["arb"]["pass"] = 1
+        per_chain["arb"]["full_sweep_count"] = 1
+        per_chain["arb"]["hot_requote_count"] = 1
+        per_chain["arb"]["last_scan_mode"] = "full"
+
+        # Temporarily redirect HOT_LOOP_LATEST to a temp file
+        original_path = start.HOT_LOOP_LATEST
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td) / "hot_loop_latest.json"
+            start.HOT_LOOP_LATEST = tmp_path
+            try:
+                start.write_hot_loop_snapshot(per_chain, None, _time.monotonic() - 30)
+                self.assertTrue(tmp_path.exists())
+                with open(tmp_path) as f:
+                    snap = json.load(f)
+                self.assertEqual(snap["schema"], "start:hot_loop_snapshot:v1.0")
+                self.assertIn("generated_at", snap)
+                self.assertIn("per_chain", snap)
+                self.assertIn("arb", snap["per_chain"])
+                self.assertEqual(snap["per_chain"]["arb"]["full_sweeps"], 1)
+                self.assertEqual(snap["per_chain"]["arb"]["hot_requotes"], 1)
+                self.assertEqual(snap["total_full_sweeps"], 1)
+                self.assertEqual(snap["total_hot_requotes"], 1)
+            finally:
+                start.HOT_LOOP_LATEST = original_path
+
+    # -- R28.12: truth path alignment tests ---------------------------------
+
+    def test_truth_path_alignment_blocked(self):
+        per_chain = {"arb": start.new_chain_stats()}
+        per_chain["arb"]["roundtrip_evaluated_total"] = 5
+        per_chain["arb"]["real_quote_count_total"] = 3
+        per_chain["arb"]["profitable_roundtrips_total"] = 0
+        per_chain["arb"]["runs"] = 1
+        per_chain["arb"]["pass"] = 1
+        summary = start.build_summary(per_chain, 10.0, [])
+        align = summary["truth_path_alignment"]
+        self.assertEqual(align["arb"]["alignment"], "BLOCKED")
+
+    def test_truth_path_alignment_positive(self):
+        per_chain = {"linea": start.new_chain_stats()}
+        per_chain["linea"]["real_quote_count_total"] = 5
+        per_chain["linea"]["profitable_roundtrips_total"] = 3
+        per_chain["linea"]["roundtrip_evaluated_total"] = 5
+        per_chain["linea"]["runs"] = 1
+        per_chain["linea"]["pass"] = 1
+        summary = start.build_summary(per_chain, 10.0, [])
+        align = summary["truth_path_alignment"]
+        self.assertEqual(align["linea"]["alignment"], "POSITIVE")
+
+    def test_truth_path_alignment_not_proven(self):
+        per_chain = {"base": start.new_chain_stats()}
+        per_chain["base"]["runs"] = 1
+        per_chain["base"]["pass"] = 1
+        # CANDIDATE: runs > 0 but no RT evaluation
+        summary = start.build_summary(per_chain, 10.0, [])
+        align = summary["truth_path_alignment"]
+        self.assertEqual(align["base"]["alignment"], "NOT_PROVEN")
+
+    def test_truth_path_alignment_in_summary(self):
+        """build_summary includes truth_path_alignment top-level key."""
+        per_chain = {"arb": start.new_chain_stats()}
+        summary = start.build_summary(per_chain, 10.0, [])
+        self.assertIn("truth_path_alignment", summary)
+        self.assertIn("arb", summary["truth_path_alignment"])
+
+
+class TestWSBlockPassThrough(unittest.TestCase):
+    """R28.12: WS block number pass-through via ARBY_WS_BLOCK_NUMBER."""
+
+    def test_get_current_block_uses_ws_block(self):
+        """_get_current_block uses ARBY_WS_BLOCK_NUMBER when set."""
+        from strategy.jobs.run_scan_real import _get_current_block
+        env = {"ARBY_WS_BLOCK_NUMBER": "12345"}
+        # Clear ARBY_SKIP_RPC to avoid hitting mock path first
+        clean = {k: v for k, v in os.environ.items() if k != "ARBY_SKIP_RPC"}
+        clean.update(env)
+        with patch.dict(os.environ, clean, clear=True):
+            block, latency = _get_current_block({})
+            self.assertEqual(block, 12345)
+            self.assertEqual(latency, 0)
+
+    def test_get_current_block_ignores_invalid_ws_block(self):
+        """_get_current_block falls back on invalid ARBY_WS_BLOCK_NUMBER."""
+        from strategy.jobs.run_scan_real import _get_current_block
+        env = {"ARBY_WS_BLOCK_NUMBER": "not_a_number", "ARBY_SKIP_RPC": "1", "ARBY_FAKE_BLOCK": "999"}
+        with patch.dict(os.environ, env, clear=False):
+            block, latency = _get_current_block({})
+            # Falls through to ARBY_SKIP_RPC path
+            self.assertEqual(block, 999)
+
+
+class TestSharedQuoteExecutor(unittest.TestCase):
+    """R28.12: Shared cross-pair ThreadPoolExecutor."""
+
+    def test_shared_executor_singleton(self):
+        """_get_shared_quote_executor returns the same instance."""
+        import strategy.quotes as sq
+        # Reset to ensure clean state
+        sq._shared_quote_executor = None
+        ex1 = sq._get_shared_quote_executor()
+        ex2 = sq._get_shared_quote_executor()
+        self.assertIs(ex1, ex2)
+        # Clean up
+        sq._shared_quote_executor = None
+
+    def test_shared_concurrency_constant(self):
+        import strategy.quotes as sq
+        self.assertEqual(sq._SHARED_QUOTE_CONCURRENCY, 16)
 
 
 if __name__ == "__main__":

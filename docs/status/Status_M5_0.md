@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-15 (R28.11 Turn 2 — hot re-quote loop + WebSocket dirty-set invalidation; Turn 1 retained: pair-level observability)
-**Tests**: 1870 passed / 3 skipped
-**Schema**: start:long_scan_summary:v1.10 (R28.11 T2 bump)
-**Evidence runDirs**: long_scan 12 runs 6 chains (R28.11 T2)
-**Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.11 T2: 12 runs, schema v1.10, hot_loop: 7 full / 5 hot)
+**Updated**: 2026-03-15 (R28.12 — event queue DirtySetTracker, hot_loop_latest.json, cross-pair parallel quotes, WS block pass-through, truth path alignment)
+**Tests**: 1886 passed / 3 skipped
+**Schema**: start:long_scan_summary:v1.11 (R28.12 bump)
+**Evidence runDirs**: long_scan 30 runs 6 chains (R28.12)
+**Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.12: 30 runs, hot_loop: 10 full / 20 hot, truth_path_alignment populated)
 **Hot pairs caches**: `data/cache/hot_pairs_{chain}.json` (base=22, linea=11, mantle=4, scroll=9, zksync=8 pairs)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
@@ -17,7 +17,8 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
-> R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation. Dual-cycle architecture: every FULL_SWEEP_INTERVAL=5 scans per chain does full discovery, others use cached pairs from `data/cache/hot_pairs_{chain}.json` (reduces RPC calls and latency). `DirtySetTracker` subscribes to WebSocket `eth_subscribe newHeads` — chains only re-scanned when dirty (new block). If WSS not connected, chain is always dirty (safe fallback). Dashboard "Hot Loop" table shows per-chain mode/full_sweeps/hot_requotes. Schema v1.10 (additive: hot_loop section). Addresses Lead directive: "Розвести два цикли: full sweep і hot re-quote loop. Використати WebSocket не як 'галочку', а як trigger для dirty-set invalidation."
+> R28.12: Event queue DirtySetTracker (pending_chains/drain_event/mark_clean), hot_loop_latest.json (fast-refresh artifact), cross-pair parallel quotes (shared 16-worker TPE), WS block pass-through (ARBY_WS_BLOCK_NUMBER env var skips block-pin RPC), truth_path_alignment section (BLOCKED/POSITIVE/NOT_PROVEN/ALIGNED per chain). System is still batch-hot — WS invalidates but does not yet trigger immediate executable re-quote. Schema bump (additive). +16 tests (1886). Fresh scan: 30 runs, 10 full/20 hot, linea CONFIRMED_POSITIVE_CONTROL (10 profitable RT), base THIN_POSITIVE (7 RT).
+> R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation. Dual-cycle architecture: every FULL_SWEEP_INTERVAL=5 scans per chain does full discovery, others use cached pairs from `data/cache/hot_pairs_{chain}.json` (reduces RPC calls and latency). `DirtySetTracker` subscribes to WebSocket `eth_subscribe newHeads` — chains only re-scanned when dirty (new block). If WSS not connected, chain is always dirty (safe fallback). Dashboard "Hot Loop" table shows per-chain mode/full_sweeps/hot_requotes. Addresses Lead directive: "Розвести два цикли: full sweep і hot re-quote loop. Використати WebSocket не як 'галочку', а як trigger для dirty-set invalidation."
 > R28.11 Turn 1: Pair-level dashboard visibility. _pair_history (5 runs), Delta column for spread_bps changes, Cache Freshness table (pools_from_cache/rpc/rpc_calls), Suppression Counters table (6 types), 2-decimal bps precision. Guardrails: STATIC_PROBE_PATH, ZERO_FEE_DOMINANCE.
 > R28.10: Profit truth propagation — real_quote_count + profit_realism_status now flow through full chain: truth_report → run_summary.metrics → rolling_store → long_scan. Chain profit state classification (5 states): CONFIRMED_POSITIVE_CONTROL (linea, base), PRIMARY_BLOCKER (arb, zksync), CANDIDATE (mantle, scroll). KPI separation: signals ≠ exec_candidates ≠ profitable_roundtrips ≠ truth_confirmed. RCA: linea profits from lynex_v3 0-fee pools; arb blocked by 100-3000 bps fee structure + $150 paper_size slippage amplification.
 > R28.7: Economics engine correctness — executable_candidates_count KPI (replaces signals_count as primary), min_spread_bps advisory in truth_mode (threshold=0), dynamic_sweep promoted to core decision layer, per_route_breakdown in artifacts (slippage/fee/gas decomposition). ARB/WETH re-enabled (SUSPECT_SPREAD_HARD gates >500bps). Gap narrowed 18→15 bps. Long scan: 42 runs, 109 signals, $123, 21 profitable RT. Linea truth=True (positive control confirmed).

@@ -629,20 +629,31 @@ class DirtySetTracker:
 
     Each chain gets a background thread that connects to its WSS endpoint
     and subscribes to ``newHeads``.  When a new block arrives the chain is
-    marked *dirty*.  The orchestrator checks ``is_dirty(chain)`` before
-    re-scanning; after a scan it calls ``mark_clean(chain)``.
+    marked *dirty* and the block event is enqueued.  The orchestrator can:
 
-    Chains without a WSS endpoint are always considered dirty (time-based
-    fallback).
+    * ``is_dirty(chain)``       — check if chain needs re-scan
+    * ``pending_chains()``      — get all dirty chains ordered by arrival
+    * ``drain_event(chain)``    — pop the latest block event for a chain
+    * ``mark_clean(chain)``     — called after scan
+
+    Chains without a WSS endpoint are always dirty (time-based fallback).
+
+    R28.12: Upgraded from boolean dirty-flag to event queue with
+    (chain, block_number, timestamp) events for immediate hot re-quote.
     """
 
     def __init__(self) -> None:
         import threading
+        import collections
         self._lock = threading.Lock()
         # chain -> True if new block arrived since last mark_clean
         self._dirty: dict[str, bool] = {}
         # chain -> latest block number from WSS
         self._last_block: dict[str, int | None] = {}
+        # chain -> deque of (block_number, timestamp) events since last mark_clean
+        self._event_queue: dict[str, collections.deque] = {}
+        # chain -> monotonic time of latest event (for priority ordering)
+        self._last_event_time: dict[str, float] = {}
         # chain -> background thread
         self._threads: dict[str, threading.Thread] = {}
         # chain -> True if WSS is connected
@@ -655,10 +666,13 @@ class DirtySetTracker:
         """Begin watching a chain.  If *ws_url* is ``None`` the chain stays
         permanently dirty (no WebSocket available)."""
         import threading
+        import collections
         with self._lock:
             self._dirty[chain] = True  # dirty until first scan
             self._connected[chain] = False
             self._last_block[chain] = None
+            self._event_queue[chain] = collections.deque(maxlen=32)
+            self._last_event_time[chain] = 0.0
 
         if not ws_url:
             return  # no WSS -> always dirty
@@ -679,10 +693,33 @@ class DirtySetTracker:
                 return True
             return self._dirty.get(chain, True)
 
+    def pending_chains(self) -> list[str]:
+        """Return dirty chains ordered by event arrival time (earliest first)."""
+        with self._lock:
+            dirty = [
+                c for c, d in self._dirty.items()
+                if d or not self._connected.get(c, False)
+            ]
+            # Sort by last_event_time so oldest-dirty chains get scanned first
+            dirty.sort(key=lambda c: self._last_event_time.get(c, 0.0))
+            return dirty
+
+    def drain_event(self, chain: str) -> dict[str, Any] | None:
+        """Pop the latest block event for a chain (for hot re-quote context)."""
+        with self._lock:
+            q = self._event_queue.get(chain)
+            if q:
+                block_num, ts = q[-1]  # latest event
+                return {"block_number": block_num, "timestamp": ts}
+            return None
+
     def mark_clean(self, chain: str) -> None:
-        """Called after scanning — reset dirty flag until next block."""
+        """Called after scanning — reset dirty flag and drain events."""
         with self._lock:
             self._dirty[chain] = False
+            q = self._event_queue.get(chain)
+            if q:
+                q.clear()
 
     def stop(self) -> None:
         """Signal all watcher threads to terminate."""
@@ -700,6 +737,7 @@ class DirtySetTracker:
                         "dirty": self._dirty.get(c, True),
                         "ws_connected": self._connected.get(c, False),
                         "last_block": self._last_block.get(c),
+                        "pending_events": len(self._event_queue.get(c, [])),
                     }
                     for c in self._dirty
                 },
@@ -708,7 +746,7 @@ class DirtySetTracker:
     # -- internal WebSocket loop -----------------------------------------------
 
     def _ws_loop(self, chain: str, ws_url: str) -> None:
-        """Background: connect to WSS, subscribe to newHeads, mark dirty on each block."""
+        """Background: connect to WSS, subscribe to newHeads, enqueue events."""
         import time as _time
 
         while not self._stop.is_set():
@@ -744,9 +782,14 @@ class DirtySetTracker:
                         block_hex = result.get("number")
                         if block_hex:
                             block_num = int(block_hex, 16)
+                            now = _time.monotonic()
                             with self._lock:
                                 self._dirty[chain] = True
                                 self._last_block[chain] = block_num
+                                q = self._event_queue.get(chain)
+                                if q is not None:
+                                    q.append((block_num, now))
+                                self._last_event_time[chain] = now
                     except (json.JSONDecodeError, ValueError):
                         pass
 

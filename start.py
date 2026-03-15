@@ -33,6 +33,7 @@ import yaml
 RUNS_DIR = Path("data") / "runs"
 CI_GATE = Path("scripts") / "ci_m5_0_gate.py"
 HOT_PAIRS_CACHE_DIR = Path("data") / "cache"
+HOT_LOOP_LATEST = Path("data") / "runs" / "_rolling" / "hot_loop_latest.json"
 RUN_DIR_RE = re.compile(r"^\[ONLINE\] RunDir:\s*(.+)\s*$")
 # R28.6: Match both legacy (ci_m5_gate_YYYYMMDD_HHMMSS) and new chain-scoped
 # (ci_m5_gate_{chain_key}_YYYYMMDD_HHMMSS_{microseconds}) runDir patterns
@@ -620,7 +621,7 @@ def build_summary(
         s["chain_profit_state"] = classify_chain_profit_state(s)
 
     return {
-        "schema": "start:long_scan_summary:v1.10",  # R28.11: hot_loop + dirty_set
+        "schema": "start:long_scan_summary:v1.11",  # R28.12: event queue + hot_loop_latest + cross-pair parallel
         "generated_at": run_ts,
         "run_context": {
             "run_timestamp": run_ts,
@@ -705,7 +706,42 @@ def build_summary(
                 for c, s in per_chain.items()
             },
         },
+        # R28.12: Truth path alignment — makes static-probe exceptions visible
+        "truth_path_alignment": _compute_truth_path_alignment(per_chain),
     }
+
+
+def _compute_truth_path_alignment(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """R28.12: Compute truth path alignment for all chains.
+
+    Makes visible which chains are on the same truth path vs static-probe
+    exceptions.  Helps the operator see misalignment at a glance.
+    """
+    result: dict[str, Any] = {}
+    for chain, s in per_chain.items():
+        profit_state = s.get("chain_profit_state", "UNKNOWN")
+        has_real_quotes = (s.get("real_quote_count_total", 0) or 0) > 0
+        has_profitable_rt = (s.get("profitable_roundtrips_total", 0) or 0) > 0
+        run_kind = "NORMAL" if s.get("config", "").endswith("real_minimal.yaml") else "COVERAGE"
+        truth_mode = s.get("last_truth_mode", s.get("last_quality_level"))
+
+        alignment = "ALIGNED"
+        if profit_state == "PRIMARY_BLOCKER":
+            alignment = "BLOCKED"
+        elif profit_state == "CANDIDATE" or not has_real_quotes:
+            alignment = "NOT_PROVEN"
+        elif has_profitable_rt:
+            alignment = "POSITIVE"
+
+        result[chain] = {
+            "run_kind": run_kind,
+            "profit_state": profit_state,
+            "has_real_quotes": has_real_quotes,
+            "has_profitable_rt": has_profitable_rt,
+            "alignment": alignment,
+            "truth_mode": truth_mode,
+        }
+    return result
 
 
 def _compute_per_chain_drift_summary(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -1034,6 +1070,56 @@ def write_summary_file(summary: dict[str, Any], path: str) -> None:
     print(f"Summary written to {out}")
 
 
+def write_hot_loop_snapshot(
+    per_chain: dict[str, dict[str, Any]],
+    dirty_tracker: Any,
+    wall_start: float,
+) -> None:
+    """Write lightweight hot_loop_latest.json after each hot re-quote batch.
+
+    R28.12: This gives the dashboard fast-refreshing data without waiting
+    for a full child-run to complete.  The file is small and overwritten
+    every hot cycle.
+    """
+    import time as _time
+    run_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    snapshot: dict[str, Any] = {
+        "schema": "start:hot_loop_snapshot:v1.0",
+        "generated_at": run_ts,
+        "wall_seconds": round(_time.monotonic() - wall_start, 1),
+        "full_sweep_interval": FULL_SWEEP_INTERVAL,
+        "total_full_sweeps": sum(s.get("full_sweep_count", 0) for s in per_chain.values()),
+        "total_hot_requotes": sum(s.get("hot_requote_count", 0) for s in per_chain.values()),
+        "per_chain": {},
+    }
+    for c, s in per_chain.items():
+        entry: dict[str, Any] = {
+            "last_scan_mode": s.get("last_scan_mode"),
+            "full_sweeps": s.get("full_sweep_count", 0),
+            "hot_requotes": s.get("hot_requote_count", 0),
+            "runs": s.get("runs", 0),
+            "pass": s.get("pass", 0),
+            "last_current_block": s.get("last_current_block"),
+        }
+        # Include latest top signals for live pair visibility
+        top_sigs = s.get("last_top_spread_signals", [])
+        if top_sigs:
+            entry["top_signals"] = top_sigs[:5]
+        snapshot["per_chain"][c] = entry
+    # Dirty-set status
+    if dirty_tracker:
+        try:
+            snapshot["dirty_set"] = dirty_tracker.status()
+        except Exception:
+            pass
+
+    HOT_LOOP_LATEST.parent.mkdir(parents=True, exist_ok=True)
+    tmp = HOT_LOOP_LATEST.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(snapshot, f, indent=2, default=str)
+    tmp.replace(HOT_LOOP_LATEST)
+
+
 # -- main -----------------------------------------------------------------
 
 
@@ -1264,6 +1350,13 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                 extra_env = {"ARBY_HOT_PAIRS_FILE": str(hot_file)}
                 scan_mode = "hot"
 
+        # R28.12: Pass WS-observed block number to child so it skips getBlockNumber RPC
+        if dirty_tracker:
+            evt = dirty_tracker.drain_event(chain)
+            if evt and evt.get("block_number"):
+                extra_env = extra_env or {}
+                extra_env["ARBY_WS_BLOCK_NUMBER"] = str(evt["block_number"])
+
         rc, run_dir = run_gate_once(
             cfg, args.cycles, args.prune_keep, args.sleep_seconds,
             refresh_rolling=refresh,
@@ -1303,7 +1396,17 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
     # R28.5: Batched round — primary sequential, then coverage parallel
     while time.monotonic() < deadline:
         # Phase 1: Run primary (NORMAL) configs sequentially (isolated, rolling-safe)
-        for cfg in primary_configs:
+        # R28.12: Use pending_chains() for priority ordering (earliest-dirty first)
+        if dirty_tracker:
+            _pending = set(dirty_tracker.pending_chains())
+            _ordered_primary = sorted(
+                primary_configs,
+                key=lambda c: (config_meta[c]["chain"] not in _pending, 0),
+            )
+        else:
+            _ordered_primary = primary_configs
+
+        for cfg in _ordered_primary:
             if time.monotonic() >= deadline:
                 break
             chain = config_meta[cfg]["chain"]
@@ -1331,17 +1434,27 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             interim_summary = build_summary(per_chain, interim_wall, interim_warnings)
             write_summary_file(interim_summary, args.summary_file)
 
+            # R28.12: Write lightweight hot snapshot for fast dashboard refresh
+            write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start)
+
         if time.monotonic() >= deadline:
             break
 
         # Phase 2: Run coverage configs in bounded parallel pool
         if coverage_configs:
-            # R28.11: Filter out clean chains (no new block) from coverage batch
-            batch_cfgs = [
-                cfg for cfg in coverage_configs
-                if time.monotonic() < deadline
-                and (not dirty_tracker or dirty_tracker.is_dirty(config_meta[cfg]["chain"]))
-            ]
+            # R28.12: Use pending_chains() for priority filtering
+            if dirty_tracker:
+                _pending_cov = set(dirty_tracker.pending_chains())
+                batch_cfgs = [
+                    cfg for cfg in coverage_configs
+                    if time.monotonic() < deadline
+                    and config_meta[cfg]["chain"] in _pending_cov
+                ]
+            else:
+                batch_cfgs = [
+                    cfg for cfg in coverage_configs
+                    if time.monotonic() < deadline
+                ]
             if batch_cfgs:
                 print(f"\n{'-'*60}")
                 print(f"[COVERAGE BATCH] {len(batch_cfgs)} chains, workers={coverage_workers}")
@@ -1365,6 +1478,9 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                         interim_warnings = check_guardrails(per_chain)
                         interim_summary = build_summary(per_chain, interim_wall, interim_warnings)
                         write_summary_file(interim_summary, args.summary_file)
+
+                # R28.12: Hot loop snapshot after coverage batch
+                write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start)
 
         if total_runs % max(len(configs), 3) == 0:
             prune_run_dirs(args.prune_keep)
