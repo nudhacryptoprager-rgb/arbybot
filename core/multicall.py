@@ -145,10 +145,14 @@ class MulticallBatcher:
             return []
         
         try:
+            import time as _time
             self.stats["rpc_calls"] += 1
+            _t0 = _time.monotonic()
             results = self._multicall.functions.aggregate3(calls).call(
                 block_identifier=self.block_num
             )
+            _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+            self.stats["latency_ms_total"] += _elapsed_ms
             return results
         except Exception as e:
             logger.debug("Multicall failed: %s", e)

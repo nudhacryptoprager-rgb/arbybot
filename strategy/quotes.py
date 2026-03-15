@@ -144,6 +144,39 @@ def resolve_token_address(
 logger = logging.getLogger("strategy.quotes")
 
 # =============================================================================
+# SHARED WEB3 PROVIDER CACHE (R28.4: eliminate per-quote HTTPProvider creation)
+# =============================================================================
+
+_shared_w3_cache: Dict[str, Any] = {}  # rpc_url -> Web3 instance
+
+
+def _get_shared_w3(rpc_url: str, timeout: int = 10) -> Any:
+    """Get or create a shared Web3 instance for an RPC URL.
+
+    R28.4: Previously every quote call created a new Web3(HTTPProvider(...)),
+    which was the primary speed killer in serial quoting.
+    """
+    if rpc_url in _shared_w3_cache:
+        return _shared_w3_cache[rpc_url]
+    try:
+        from web3 import Web3
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": timeout}))
+        _shared_w3_cache[rpc_url] = w3
+        return w3
+    except Exception:
+        return None
+
+
+def clear_shared_w3_cache() -> None:
+    """Clear the shared Web3 provider cache (for testing)."""
+    _shared_w3_cache.clear()
+
+
+# R28.4: Bounded concurrency for quote fan-out
+_QUOTE_CONCURRENCY = 8  # Max parallel RPC calls per pair batch
+
+
+# =============================================================================
 # MULTICALL PREFETCH CACHE (v2.2.0)
 # =============================================================================
 
@@ -303,7 +336,9 @@ def read_slot0_v3(pool_address: str, rpc_url: Optional[str], block_num: int) -> 
             return None, None
         
         abi = json.loads(abi_path.read_text(encoding="utf8"))
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 5}))
+        w3 = _get_shared_w3(rpc_url, timeout=5)
+        if w3 is None:
+            return None, None
         pool = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=abi)
         slot0 = pool.functions.slot0().call(block_identifier=block_num)
         
@@ -452,7 +487,9 @@ def read_quoter_v2(
             fee=fee,
         )
         
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        w3 = _get_shared_w3(rpc_url)
+        if w3 is None:
+            return None
         result_hex = w3.eth.call(
             {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
             block_identifier=block_num,
@@ -518,7 +555,9 @@ def read_algebra_quoter(
         logger.debug("Algebra quoter skipped: web3 not installed")
         return None
     
-    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+    w3 = _get_shared_w3(rpc_url)
+    if w3 is None:
+        return None
     
     # Try Style 1: quoteExactInputSingle(address,address,uint256,uint160) - Camelot
     try:
@@ -613,7 +652,9 @@ def read_ve33_amount_out(
         return None
     
     try:
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        w3 = _get_shared_w3(rpc_url)
+        if w3 is None:
+            return None
         pool = w3.eth.contract(
             address=Web3.to_checksum_address(pool_address),
             abi=[
@@ -973,6 +1014,55 @@ def collect_quotes(
                         logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config (key=%s)", 
                                     dex, token_in, token_out, fee_tier, pool_key)
         
+        # R28.4: Parallel quote prefetch — fan out RPC calls for all pools in this pair
+        _prefetch_results: Dict[str, Any] = {}
+        if pool_work_items and rpc_url and not skip_rpc:
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+
+            # Pre-compute pair-level context (same values the inner loop will compute)
+            _pf_tin = resolve_token_address(token_in, pair_cfg, token_addresses, chain_name, is_token_in=True)
+            _pf_tout = resolve_token_address(token_out, pair_cfg, token_addresses, chain_name, is_token_in=False)
+            if use_usd_notional:
+                _pf_amt = calculate_amount_in_wei(token_in, decimals_in, target_usd_notional, tokens_usd_price)
+            else:
+                _pf_amt = 10 ** decimals_in
+            _pf_use_q = config.get("use_quoter_v2", False)
+
+            _pf_futures: Dict[str, Any] = {}
+            _pf_exec = _TPE(max_workers=_QUOTE_CONCURRENCY)
+            try:
+                for _d, _f, _a, _dc, _at, _pk in pool_work_items:
+                    if _at == "ve33":
+                        _pf_futures[_pk] = _pf_exec.submit(
+                            read_ve33_amount_out,
+                            pool_address=_a, token_in=_pf_tin,
+                            amount_in=_pf_amt, rpc_url=rpc_url, block_num=current_block,
+                        )
+                    elif (_at == "algebra" or _pf_use_q) and _dc:
+                        _qa = _dc.get_quoter_address()
+                        if _qa:
+                            if _at == "uniswap_v3":
+                                _pf_futures[_pk] = _pf_exec.submit(
+                                    read_quoter_v2,
+                                    _qa, _pf_tin, _pf_tout,
+                                    _pf_amt, _f, rpc_url, current_block,
+                                )
+                            elif _at == "algebra":
+                                _pf_futures[_pk] = _pf_exec.submit(
+                                    read_algebra_quoter,
+                                    _qa, _pf_tin, _pf_tout,
+                                    _pf_amt, rpc_url, current_block,
+                                )
+                # Resolve all futures
+                for _pk, _fut in _pf_futures.items():
+                    try:
+                        _prefetch_results[_pk] = _fut.result(timeout=15)
+                    except Exception as _e:
+                        _prefetch_results[_pk] = None
+                        logger.debug("PREFETCH_FAIL: %s error=%s", _pk, _e)
+            finally:
+                _pf_exec.shutdown(wait=False)
+
         for dex, fee_tier, pool_addr, dex_cfg, adapter_type, pool_key in pool_work_items:
             # v2.1.0-fix: Check disabled_pools FIRST (before pool lookup)
             disabled_info = is_pool_disabled(config, dex, token_pair_tag, fee_tier)
@@ -1045,13 +1135,17 @@ def collect_quotes(
             
             # ve33 executable quote path (Aerodrome/Velodrome)
             if is_ve33:
-                amount_out_wei_val = read_ve33_amount_out(
-                    pool_address=pool_addr,
-                    token_in=token_in_addr,
-                    amount_in=amount_in_wei,
-                    rpc_url=rpc_url,
-                    block_num=current_block,
-                )
+                # R28.4: Use prefetched result if available
+                if pool_key in _prefetch_results:
+                    amount_out_wei_val = _prefetch_results[pool_key]
+                else:
+                    amount_out_wei_val = read_ve33_amount_out(
+                        pool_address=pool_addr,
+                        token_in=token_in_addr,
+                        amount_in=amount_in_wei,
+                        rpc_url=rpc_url,
+                        block_num=current_block,
+                    )
                 if amount_out_wei_val is None or amount_out_wei_val <= 0:
                     rejected_quotes.append({
                         "pair": f"{token_in}/{token_out}",
@@ -1218,17 +1312,23 @@ def collect_quotes(
                 quoter_addr = dex_cfg.get_quoter_address()
                 if quoter_addr:
                     if adapter_type == "uniswap_v3":
-                        # UniswapV3 QuoterV2
-                        quoter_result = read_quoter_v2(
-                            quoter_addr, token_in_addr, token_out_addr,
-                            amount_in_wei, fee_tier, rpc_url, current_block
-                        )
+                        # R28.4: Use prefetched result if available
+                        if pool_key in _prefetch_results:
+                            quoter_result = _prefetch_results[pool_key]
+                        else:
+                            quoter_result = read_quoter_v2(
+                                quoter_addr, token_in_addr, token_out_addr,
+                                amount_in_wei, fee_tier, rpc_url, current_block
+                            )
                     elif adapter_type == "algebra":
-                        # Algebra quoter (Camelot) - use fee=0 for dynamic fees
-                        quoter_result = read_algebra_quoter(
-                            quoter_addr, token_in_addr, token_out_addr,
-                            amount_in_wei, rpc_url, current_block
-                        )
+                        # R28.4: Use prefetched result if available
+                        if pool_key in _prefetch_results:
+                            quoter_result = _prefetch_results[pool_key]
+                        else:
+                            quoter_result = read_algebra_quoter(
+                                quoter_addr, token_in_addr, token_out_addr,
+                                amount_in_wei, rpc_url, current_block
+                            )
             
             # M4.2 FIX: If quoter_result is successful, we DON'T need slot0 at all
             # quoter_result gives executable amount_out, price derived from amount_out/amount_in

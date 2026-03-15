@@ -1337,6 +1337,8 @@ ENV VARIABLES:
             # SMOKE and COVERAGE runs should not update rolling artifacts
             # v3.2.17: Stricter enforcement - even if --refresh-rolling was explicitly passed
             # v3.2.18: FAIL if explicit run_kind is missing (no defaulting for strict runs)
+            # R28.4: run_kind used later for lightweight COVERAGE mode
+            run_kind = "NORMAL"  # default; overridden from config below
             try:
                 cfg_path = Path(args.config)
                 if cfg_path.exists():
@@ -1428,39 +1430,38 @@ ENV VARIABLES:
             # Generate daily_report with cost model
             # v2.6.1: Use CostModelRegistry from m4.policy (single source of truth)
             # aggregate_run() auto-loads paper_realistic model when available
-            try:
-                from scripts.generate_daily_report import aggregate_run
-                
-                # v2.6.1: Let aggregate_run use CostModelRegistry internally
-                # No need to pass gas_usd_estimate/slippage_usd_estimate manually
-                # v1.8.0: Pass session_context for session completion gate
-                # v3.2.68: Automated CI runs explicitly mark run_type="automated"
-                session_context = {
-                    "session_goal": f"M5 online scan ({args.config})",
-                    "goal_status": "IN_PROGRESS",
-                    "close_allowed": False,
-                    "remaining_blockers": [],
-                    "evidence_session_run_dirs": [run_dir.name],
-                    # v3.2.68: Automated runs have no human-defined blocker
-                    "primary_blocker_of_session": "CI_AUTOMATED_RUN",
-                    "blocker_status_before": "N/A",
-                    "blocker_status_after": "N/A",
-                    "docs_reread_confirmed": False,
-                    # v3.2.68: Explicit marker that this is an automated CI run
-                    "run_type": "automated",
-                }
-                report = aggregate_run(run_dir, session_context=session_context)
-                
-                # Write daily_report
-                report_dir = run_dir / "reports"
-                report_dir.mkdir(parents=True, exist_ok=True)
-                from datetime import date
-                report_path = report_dir / f"daily_report_{date.today().isoformat()}.json"
-                with open(report_path, "w", encoding="utf8") as f:
-                    json.dump(report, f, indent=2, ensure_ascii=False)
-                print(f"[ONLINE] Generated: {report_path}")
-            except Exception as e:
-                print(f"[ONLINE] WARN: daily_report generation failed: {e}")
+            # R28.4: Skip for COVERAGE runs (lightweight mode — no need for daily_report)
+            _is_lightweight = (run_kind != "NORMAL")
+            if _is_lightweight:
+                print(f"[ONLINE] Skipping daily_report (lightweight COVERAGE mode, run_kind={run_kind})")
+            else:
+                try:
+                    from scripts.generate_daily_report import aggregate_run
+                    
+                    session_context = {
+                        "session_goal": f"M5 online scan ({args.config})",
+                        "goal_status": "IN_PROGRESS",
+                        "close_allowed": False,
+                        "remaining_blockers": [],
+                        "evidence_session_run_dirs": [run_dir.name],
+                        "primary_blocker_of_session": "CI_AUTOMATED_RUN",
+                        "blocker_status_before": "N/A",
+                        "blocker_status_after": "N/A",
+                        "docs_reread_confirmed": False,
+                        "run_type": "automated",
+                    }
+                    report = aggregate_run(run_dir, session_context=session_context)
+                    
+                    # Write daily_report
+                    report_dir = run_dir / "reports"
+                    report_dir.mkdir(parents=True, exist_ok=True)
+                    from datetime import date
+                    report_path = report_dir / f"daily_report_{date.today().isoformat()}.json"
+                    with open(report_path, "w", encoding="utf8") as f:
+                        json.dump(report, f, indent=2, ensure_ascii=False)
+                    print(f"[ONLINE] Generated: {report_path}")
+                except Exception as e:
+                    print(f"[ONLINE] WARN: daily_report generation failed: {e}")
             
             artifacts = discover_artifacts(run_dir)
             missing = [name for name, path in artifacts.items() if path is None]
@@ -1643,34 +1644,34 @@ ENV VARIABLES:
                             print(f"[ONLINE] M4 gate passed, rolling artifacts updated")
                         else:
                             print(f"[ONLINE] M4 gate passed, run_summary generated (rolling not updated)")
-                        # v1.8.0: Regenerate daily_report AFTER M4 gate to pick up execution_report
-                        # First daily_report generation (line ~1507) happens before M4 creates execution_report
-                        try:
-                            from scripts.generate_daily_report import aggregate_run
-                            # v3.2.68: Automated CI runs explicitly mark run_type="automated"
-                            session_context = {
-                                "session_goal": f"M5 online scan ({args.config})",
-                                "goal_status": "IN_PROGRESS",
-                                "close_allowed": False,
-                                "remaining_blockers": [],
-                                "evidence_session_run_dirs": [run_dir.name],
-                                # v3.2.68: Automated runs have no human-defined blocker
-                                "primary_blocker_of_session": "CI_AUTOMATED_RUN",
-                                "blocker_status_before": "N/A",
-                                "blocker_status_after": "N/A",
-                                "docs_reread_confirmed": False,
-                                # v3.2.68: Explicit marker that this is an automated CI run
-                                "run_type": "automated",
-                            }
-                            report = aggregate_run(run_dir, session_context=session_context)
-                            from datetime import date
-                            report_path = reports_dir / f"daily_report_{date.today().isoformat()}.json"
-                            with open(report_path, "w", encoding="utf8") as f:
-                                json.dump(report, f, indent=2, ensure_ascii=False)
-                            m4_net = report.get("theoretical_net_profit", {}).get("m4_sim_net_usdc")
-                            print(f"[ONLINE] Regenerated daily_report with m4_sim_net_usdc={m4_net}")
-                        except Exception as e:
-                            print(f"[ONLINE] WARN: daily_report regeneration failed: {e}")
+                        # R28.4: Skip daily_report regeneration for COVERAGE (lightweight mode)
+                        if not _is_lightweight:
+                            # v1.8.0: Regenerate daily_report AFTER M4 gate to pick up execution_report
+                            try:
+                                from scripts.generate_daily_report import aggregate_run
+                                session_context = {
+                                    "session_goal": f"M5 online scan ({args.config})",
+                                    "goal_status": "IN_PROGRESS",
+                                    "close_allowed": False,
+                                    "remaining_blockers": [],
+                                    "evidence_session_run_dirs": [run_dir.name],
+                                    "primary_blocker_of_session": "CI_AUTOMATED_RUN",
+                                    "blocker_status_before": "N/A",
+                                    "blocker_status_after": "N/A",
+                                    "docs_reread_confirmed": False,
+                                    "run_type": "automated",
+                                }
+                                report = aggregate_run(run_dir, session_context=session_context)
+                                from datetime import date
+                                report_path = reports_dir / f"daily_report_{date.today().isoformat()}.json"
+                                with open(report_path, "w", encoding="utf8") as f:
+                                    json.dump(report, f, indent=2, ensure_ascii=False)
+                                m4_net = report.get("theoretical_net_profit", {}).get("m4_sim_net_usdc")
+                                print(f"[ONLINE] Regenerated daily_report with m4_sim_net_usdc={m4_net}")
+                            except Exception as e:
+                                print(f"[ONLINE] WARN: daily_report regeneration failed: {e}")
+                        else:
+                            print(f"[ONLINE] Skipping daily_report regeneration (lightweight COVERAGE mode)")
                     else:
                         print(f"[ONLINE] M4 gate returned {m4_result.returncode}")
                         m4_gate_ok = False

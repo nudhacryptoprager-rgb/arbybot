@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-15 (R28.3 — doc cleanup, deprecated pnl pruned, stale section tests, fresh evidence)
-**Tests**: 1822 passed / 3 skipped (R28.3: +5 tests — 5 stale-section doc-contract)
+**Updated**: 2026-03-15 (R28.4 — scanner performance optimization: shared Web3, parallel prefetch, COVERAGE lightweight, phase timing)
+**Tests**: 1822 passed / 3 skipped (unchanged from R28.3)
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_20260315_100946 (R28.3 arb rolling-refresh, 5 signals, $5.60), ci_m5_gate_20260315_101057 (R28.3 zksync, PASS, cross_dex=10), ci_m5_gate_20260315_101207 (R28.3 base stage2, ROUNDTRIP_PROFITABLE=2 thin: real_quote_count=1), ci_m5_gate_20260315_101358 (R28.3 mantle stage2, PASS, NO_DATA)
+**Evidence runDirs**: ci_m5_gate_20260315_111152 (R28.4 arb rolling-refresh, PASS, phase_timers), ci_m5_gate_20260315_111327 (R28.4 zksync COVERAGE lightweight, PASS), ci_m5_gate_20260315_111436 (R28.4 base COVERAGE lightweight, PASS), ci_m5_gate_20260315_111558 (R28.4 mantle COVERAGE lightweight, PASS)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-15T09:24:23Z: 9 runs, 8 PASS, 44 signals, $41.80, 5 profitable roundtrips)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-15T10:25:50Z: 21 runs, 15 PASS, 43 signals, $68.28, 9 profitable roundtrips, wall_seconds=563.6)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
 ---
@@ -16,6 +16,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R28.4: Scanner performance optimization — shared Web3 cache (`_shared_w3_cache` in quotes.py), parallel quote prefetch (ThreadPoolExecutor, 8-way), COVERAGE lightweight mode (skip daily_report + preflight), inter-chain sleep 20→1s, phase_timers_ms in scan stats, multicall latency accounting fixed. Per-run scan time reduced from ~66s to ~27s (2.5x). Long scan: 21 runs / 43 signals / $68.28 / 9 profitable roundtrips in 563.6s wall.
 > R27.4: Config layer audit — 15 stale YAMLs deleted, inventory frozen to 16 active files with TestConfigInventoryGuard. validate_universe.py regression FIXED (is_strict_run used before defined). ve33 adapter IMPLEMENTED (dex/adapters/ve33.py + registry). Fresh online evidence: ci_m5_gate_20260314_211452 (4 signals, $5.55).
 > R27.3: Scanner pipeline contract hardening — removed synthetic suspect metrics, strict discovery_runtime, intent forbidden for NORMAL, unified economics, pre-scan validation wired. +7 tests.
 > R27.2: Rolling contamination FIXED — NORM-only guard in m4/gates.py prevents COVERAGE/SMOKE runs from overwriting pointer files. check_repo_safety detects contamination (check [20]). +7 regression tests. Fresh online evidence: arb primary + 4-DEX candidate + scroll stage1 + long scan (6 chains, 8 runs, $23.49).
@@ -105,8 +106,8 @@ scroll:         CROSS_DEX_VERIFIED (1 signal $0.08 in long_scan — first non-ze
 - `scripts/validate_universe.py`: intent forbidden for strict run_kinds, same_dex_mode warning
 - `tests/unit/test_suspect_provenance.py`: +7 tests (extract/purity validation)
 
-**Long scan**: REFRESHED 2026-03-15T09:24:23Z: 8 PASS + 1 NO_DATA / 9 runs / 44 signals / $41.80 net / 5 profitable roundtrips (base=3, linea=2). Scroll=1 signal (first non-zero).
-**Profit truth**: BASE: positive but thin (ROUNDTRIP_PROFITABLE=2, real_quote_count=1, measured_economics.available=false — needs repetition). ARB PRIMARY: NOT YET (agg gap_median=17.95 bps, best-ever=3.55 bps).
+**Long scan**: REFRESHED 2026-03-15T10:25:50Z: 15 PASS + 3 NO_DATA + 3 FAIL / 21 runs / 43 signals / $68.28 net / 9 profitable roundtrips (wall_seconds=563.6, ~26.8s/run — 2.5x improvement from R28.3 baseline). Pass chains: arbitrum_one, zksync, base, linea. Fail: scroll (accepted-fail).
+**Profit truth**: BASE: positive but thin (ROUNDTRIP_PROFITABLE=2, real_quote_count=1, measured_economics.available=false — needs repetition). ARB PRIMARY: NOT YET (agg gap_median=17.99 bps, best-ever=3.55 bps).
 
 ---
 

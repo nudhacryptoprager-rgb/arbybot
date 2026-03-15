@@ -747,7 +747,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--hours", type=float, default=0, help="Time limit in hours (takes precedence over --minutes)")
     ap.add_argument("--minutes", type=int, default=120, help="Time limit in minutes (ignored if --hours set)")
     ap.add_argument("--max-runs", type=int, default=0, help="0 = unlimited within time window")
-    ap.add_argument("--sleep-seconds", type=int, default=20)
+    ap.add_argument("--sleep-seconds", type=int, default=1)
     ap.add_argument("--cycles", type=int, default=1)
     ap.add_argument("--prune-keep", type=int, default=200)
     ap.add_argument(
@@ -936,7 +936,8 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         if time.monotonic() >= deadline:
             break
 
-        time.sleep(max(1, args.sleep_seconds))
+        if args.sleep_seconds > 0:
+            time.sleep(args.sleep_seconds)
 
     # Final report
     wall_seconds = time.monotonic() - wall_start

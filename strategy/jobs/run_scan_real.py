@@ -19,6 +19,7 @@ import asyncio
 import logging
 import os
 import sys
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -103,6 +104,8 @@ def run_scan(
     by the gate and unit tests.
     """
     logger.info("Starting scan: cycles=%s, output=%s", cycles, output_dir)
+    
+    _phase_t0 = _time.monotonic()  # Phase timing: scan start
     
     # M4.2: Config validation - algebra DEXes require quoter
     dexes_list = config.get("dexes") or []
@@ -259,7 +262,10 @@ def run_scan(
         stats["strategy_mode"] = "UNKNOWN"
     stats["same_dex_only"] = not config.get("require_cross_dex", True)
     
+    _phase_discovery_end = _time.monotonic()
+    
     # Collect quotes with resolved pairs
+    _phase_quote_start = _time.monotonic()
     quotes_sample, rejected_quotes, counts = collect_quotes(config, current_block, rpc_latency, pairs_list=pairs_list)
     
     # Update stats from counts
@@ -310,6 +316,8 @@ def run_scan(
         stats["rpc_success_rate"] = 0.0 if stats.get("rpc_errors", 0) > 0 else 1.0
     
     logger.info("Quotes: %d valid, %d rejected", len(quotes_sample), len(rejected_quotes))
+    
+    _phase_quote_end = _time.monotonic()
     
     dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
     stats["dexes_active"] = len(dexes_active_list)
@@ -1038,43 +1046,50 @@ def run_scan(
     # v2.4.1: M4.3 Preflight EVIDENCE (eth_call/eth_estimateGas for top-N)
     # Collects actual RPC evidence without executing any transactions
     # Uses opps_list (gated opportunities) instead of spread_signals
-    try:
-        from execution.preflight import (
-            collect_top_n_preflight,
-            preflight_not_available,
-            adapt_opportunity_to_preflight_input,
-        )
-        
-        # Check if we have opportunities and a web3 instance
-        if opps_list and len(opps_list) > 0 and w3_instance:
-            # Convert opportunities to preflight input format
-            preflight_candidates = [
-                adapt_opportunity_to_preflight_input(opp, chain_key=chain_key)
-                for opp in opps_list[:3]  # Top-3 candidates
-            ]
+    # R28.4: Skip for COVERAGE runs (opt-in only for NORMAL/promotion checks)
+    _phase_preflight_start = _time.monotonic()
+    if run_kind == "COVERAGE":
+        stats["preflight_evidence"] = {"enabled": False, "skipped": "COVERAGE_LIGHTWEIGHT"}
+        logger.info("Preflight evidence skipped for COVERAGE run (lightweight mode)")
+    else:
+        try:
+            from execution.preflight import (
+                collect_top_n_preflight,
+                preflight_not_available,
+                adapt_opportunity_to_preflight_input,
+            )
             
-            preflight_evidence = collect_top_n_preflight(
-                w3=w3_instance,
-                spread_signals=preflight_candidates,
-                n=3,
-                current_block=current_block,
-            )
-            stats["preflight_evidence"] = preflight_evidence
-            logger.info(
-                "M4.3 Preflight Evidence: %d/%d candidates passed",
-                preflight_evidence["passed_count"],
-                preflight_evidence["candidates_count"],
-            )
-        elif not w3_instance:
-            stats["preflight_evidence"] = preflight_not_available("NO_W3_INSTANCE")
-        else:
-            stats["preflight_evidence"] = preflight_not_available("NO_OPPORTUNITIES")
-    except Exception as pf_ev_err:
-        logger.debug("Preflight evidence collection skipped: %s", pf_ev_err)
-        stats["preflight_evidence"] = {
-            "enabled": False,
-            "error": str(pf_ev_err),
-        }
+            # Check if we have opportunities and a web3 instance
+            if opps_list and len(opps_list) > 0 and w3_instance:
+                # Convert opportunities to preflight input format
+                preflight_candidates = [
+                    adapt_opportunity_to_preflight_input(opp, chain_key=chain_key)
+                    for opp in opps_list[:3]  # Top-3 candidates
+                ]
+                
+                preflight_evidence = collect_top_n_preflight(
+                    w3=w3_instance,
+                    spread_signals=preflight_candidates,
+                    n=3,
+                    current_block=current_block,
+                )
+                stats["preflight_evidence"] = preflight_evidence
+                logger.info(
+                    "M4.3 Preflight Evidence: %d/%d candidates passed",
+                    preflight_evidence["passed_count"],
+                    preflight_evidence["candidates_count"],
+                )
+            elif not w3_instance:
+                stats["preflight_evidence"] = preflight_not_available("NO_W3_INSTANCE")
+            else:
+                stats["preflight_evidence"] = preflight_not_available("NO_OPPORTUNITIES")
+        except Exception as pf_ev_err:
+            logger.debug("Preflight evidence collection skipped: %s", pf_ev_err)
+            stats["preflight_evidence"] = {
+                "enabled": False,
+                "error": str(pf_ev_err),
+            }
+    _phase_preflight_end = _time.monotonic()
     
     # v2.4.1: Discovery dry-run (count candidates without changing universe)
     # Uses chain_key (already resolved) and config.dexes for consistency
@@ -1210,6 +1225,24 @@ def run_scan(
     logger.info("Scan completed: %s artifacts written", len(artifacts))
     for name, path in artifacts.items():
         logger.info("  %s: %s", name, path)
+    
+    # R28.4: Phase timing metrics for performance observability
+    _phase_end = _time.monotonic()
+    stats["phase_timers_ms"] = {
+        "total_ms": int((_phase_end - _phase_t0) * 1000),
+        "init_rpc_ms": int((_phase_discovery_end - _phase_t0) * 1000),
+        "quote_rpc_ms": int((_phase_quote_end - _phase_quote_start) * 1000),
+        "preflight_ms": int((_phase_preflight_end - _phase_preflight_start) * 1000),
+        "post_scan_ms": int((_phase_end - _phase_preflight_end) * 1000),
+    }
+    logger.info(
+        "Phase timers: total=%dms init=%dms quote=%dms preflight=%dms post=%dms",
+        stats["phase_timers_ms"]["total_ms"],
+        stats["phase_timers_ms"]["init_rpc_ms"],
+        stats["phase_timers_ms"]["quote_rpc_ms"],
+        stats["phase_timers_ms"]["preflight_ms"],
+        stats["phase_timers_ms"]["post_scan_ms"],
+    )
     
     return stats
 

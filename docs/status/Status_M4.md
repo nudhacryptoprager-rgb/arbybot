@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-15 (R28.3 — fresh evidence, doc cleanup, stale tails removed)  
+**Updated**: 2026-03-15 (R28.4 — scanner performance optimization, fresh long_scan evidence)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)  
-**Primary blocker**: market gap (agg sweep_median_gap=17.95 bps, best-ever=3.55 bps). Secondary: zksync drift, probe_slippage artifact integration pending. Base/mantle stage2 TESTED online (R28.2+R28.3).
+**Primary blocker**: market gap (agg sweep_median_gap=17.99 bps, best-ever=3.55 bps). Secondary: zksync drift, probe_slippage artifact integration pending. Base/mantle stage2 TESTED online (R28.2+R28.3). Scanner performance improved 2.5x (R28.4).
 
 ## [!] M4.1 Simulate-Only DoD **MET**
 
@@ -27,31 +27,28 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-15 R28.3)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1378.75, unique_pairs=12. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **Rolling contamination FIXED R27.2**: NORM-only pointer guard in m4/gates.py prevents COVERAGE/SMOKE from overwriting pointer files.
-> R28.2: Semantics fix (profit_truth requires real_quote_count>0). ve33 stage2 configs created+tested online. Base ROUNDTRIP_PROFITABLE=2 (thin: real_quote_count=1). Mantle cross_dex=5. Deprecated pnl block cleaned.
-> R28/R28.1: Architecture audit — strategy/execution/ stubs DELETED (canonical=execution/), core/gate_helpers.py+repo_checks.py extracted, net_pnl_bps computed (was None/TODO), ONBOARDING_MATRIX ve33 fixed, Status contradictions resolved. probe_slippage artifact integration still pending.
-> R27.4: Config inventory frozen to 16 files, 15 stale deleted. ve33 adapter IMPLEMENTED. validate_universe regression FIXED. Fresh evidence: ci_m5_gate_20260314_211452 (arb primary, 4 signals, $5.55). gap regressed 15.77→20.41 bps (market).
-> R27.3: Scanner pipeline contract hardening — removed synthetic suspect metrics, strict discovery_runtime, intent forbidden for NORMAL, unified economics.
-> R27.2: Rolling guard added, +7 regression tests. Fresh long_scan: 8 runs, 17 signals, $23.49 (6 chains).
-> R27.1: Online proof — arb 4-DEX candidate PASS (14 signals, $14.61, dexes_active=4), scroll stage1 PASS (3 signals, $0.14, nuri_v3 quoter_v2 confirmed).
-> R27: Additive rollout model formalized — full universe preserved, staged chain onboarding.
-> Latest evidence: `long_scan_latest.json` (REFRESHED 2026-03-14T22:18:17Z), `m4_stability_agg.json` (2026-03-14T22:17:01Z).
+> [!] **ROLLING STABILITY (2026-03-15 R28.4)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1224.92, unique_pairs=12. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **Rolling contamination FIXED R27.2**: NORM-only pointer guard in m4/gates.py prevents COVERAGE/SMOKE from overwriting pointer files.
+> R28.4: Scanner performance optimization — shared Web3 cache, parallel quote prefetch (ThreadPoolExecutor 8-way), COVERAGE lightweight mode, phase_timers_ms, inter-chain sleep 20→1s. Per-run scan time ~66s→~27s (2.5x). Long scan: 21 runs / 43 signals / $68.28 / 9 RT in 563.6s wall.
+> R28.3: Doc cleanup, claim downgrades (thin not REAL), deprecated pnl pruned, stale-section tests (+5), fresh evidence.
+> R28.2: Semantics fix (profit_truth requires real_quote_count>0). ve33 stage2 configs created+tested online. Base ROUNDTRIP_PROFITABLE=2 (thin: real_quote_count=1). Mantle cross_dex=5.
+> R28/R28.1: Architecture audit — strategy/execution/ stubs DELETED, core/gate_helpers.py+repo_checks.py extracted, net_pnl_bps computed. probe_slippage artifact integration still pending.
+> R27.4: Config inventory frozen to 16 files, 15 stale deleted. ve33 adapter IMPLEMENTED. validate_universe regression FIXED.
+> Latest evidence: `long_scan_latest.json` (REFRESHED 2026-03-15T10:25:50Z), `m4_stability_agg.json` (2026-03-15T10:24:37Z).
 
-**Economics Snapshot (2026-03-14, R28.2 — from rolling agg + long_scan):**
+**Economics Snapshot (2026-03-15, R28.4 — from rolling agg + long_scan):**
 | Metric | Value | Source |
 |--------|-------|--------|
 | `sweep_gap_to_zero_min (arb)` | 3.55 bps | m4_stability_agg best-ever |
-| `sweep_median_gap_to_zero_bps` | 17.95 bps | m4_stability_agg median |
-| `long_scan sweep_best` | -12.81 bps | long_scan_latest (multi-chain, improved from -17.41) |
+| `sweep_median_gap_to_zero_bps` | 17.99 bps | m4_stability_agg median |
+| `long_scan sweep_best` | -15.80 bps | long_scan_latest (multi-chain) |
 | `roundtrip_total_profitable (agg)` | 0 | arb rolling (primary chain only) |
-| `roundtrip_total_profitable (long_scan)` | 5 | long_scan (base=3, linea=2) |
+| `roundtrip_total_profitable (long_scan)` | 9 | long_scan (improved from 5) |
 | `frontier_pair` | WETH/USDT | m4_stability_agg |
 | `runs_in_window` | 200 | m4_stability_agg |
-| `total_net_usdc` | $1378.75 | m4_stability_agg (paper profit) |
+| `total_net_usdc` | $1224.92 | m4_stability_agg (paper profit) |
 | `unique_pairs` | 12 | m4_stability_agg |
-| `unique_routes_cross_dex` | 6 | m4_stability_agg |
-| `long_scan` | 9 runs, 44 signals, $41.80 | long_scan_latest |
-| `multi_chain_pass` | 5/6 | long_scan (all 5 pass chains; mantle=NO_DATA) |
+| `long_scan` | 21 runs, 43 signals, $68.28 | long_scan_latest (563.6s wall, ~27s/run) |
+| `multi_chain_pass` | 4/6 | long_scan (arb, zksync, base, linea; scroll=fail) |
 
 **Rollout Queue (R28.2 — ve33 stage2 configs + semantics fix):**
 | Priority | Chain | Status | Stage Config | Condition for Promotion |
