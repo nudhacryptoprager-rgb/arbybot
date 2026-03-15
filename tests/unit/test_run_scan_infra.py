@@ -42,5 +42,35 @@ class TestRunScanInfra(unittest.TestCase):
             os.environ.update(env_backup)
 
 
+    def test_phase_timers_expanded_fields(self):
+        """R28.5: phase_timers_ms should include expanded fields."""
+        env_backup = os.environ.copy()
+        try:
+            os.environ["ARBY_SKIP_RPC"] = "1"
+            os.environ["ARBY_FAKE_BLOCK"] = "123"
+
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td)
+                cfg = {"dexes": ["sushiswap_v3"], "chain_id": 42161}
+                stats = run_scan_real.run_scan(cfg, out, cycles=1)
+
+                pt = stats.get("phase_timers_ms")
+                self.assertIsNotNone(pt, "phase_timers_ms missing from stats")
+                # R28.5 expanded fields
+                for key in ["total_ms", "discovery_ms", "quote_rpc_ms",
+                             "postprocess_ms", "preflight_ms", "report_ms"]:
+                    self.assertIn(key, pt, f"Missing phase timer key: {key}")
+                    self.assertIsInstance(pt[key], int, f"{key} should be int")
+                    self.assertGreaterEqual(pt[key], 0, f"{key} should be >= 0")
+                # Legacy aliases for backward compat
+                self.assertIn("init_rpc_ms", pt)
+                self.assertIn("post_scan_ms", pt)
+                # discovery_ms == init_rpc_ms (same value, different name)
+                self.assertEqual(pt["discovery_ms"], pt["init_rpc_ms"])
+        finally:
+            os.environ.clear()
+            os.environ.update(env_backup)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -279,6 +279,9 @@ def run_scan(
     # v2.3.2: Track pool_missing_keys for observability (what pools were skipped)
     stats["pool_missing_keys"] = counts.get("pool_missing_keys", [])
     stats["pool_missing_keys_total"] = counts.get("pool_missing_keys_total", 0)
+    # R28.5: Multicall batch stats for performance observability
+    if counts.get("multicall_stats"):
+        stats["multicall_stats"] = counts["multicall_stats"]
     
     # v2.0.8: quotes_total = attempted quotes (valid + rejected), accounts for fee_tiers
     stats["quotes_total"] = len(quotes_sample) + len(rejected_quotes)
@@ -318,6 +321,9 @@ def run_scan(
     logger.info("Quotes: %d valid, %d rejected", len(quotes_sample), len(rejected_quotes))
     
     _phase_quote_end = _time.monotonic()
+    
+    # R28.5: Postprocessing phase — spreads, opportunity engine, roundtrip, sweep
+    _phase_postprocess_start = _time.monotonic()
     
     dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
     stats["dexes_active"] = len(dexes_active_list)
@@ -820,8 +826,12 @@ def run_scan(
         stats["roundtrip"]["best_measured_spread_gap_bps"] = max(measured_gaps) if measured_gaps else None
         
         # v3.3.0: Dynamic size sweep — find optimal notional per route
+        # R28.5: Skip for COVERAGE runs (multiple re-quotes per route = expensive)
         dynamic_probe_cfg = config.get("dynamic_probe", {})
-        if dynamic_probe_cfg.get("enabled") and eligible_opps:
+        if run_kind == "COVERAGE":
+            stats["roundtrip"]["dynamic_sweep"] = {"enabled": False, "skipped": "COVERAGE_LIGHTWEIGHT"}
+            logger.info("Dynamic sweep skipped for COVERAGE run (lightweight mode)")
+        elif dynamic_probe_cfg.get("enabled") and eligible_opps:
             from engine.roundtrip import sweep_roundtrip_sizes, CANONICAL_SWEEP_SIZES_USD
 
             sweep_sizes = dynamic_probe_cfg.get("sizes_usd", None) or list(CANONICAL_SWEEP_SIZES_USD)
@@ -1185,6 +1195,9 @@ def run_scan(
     else:
         stats["discovery_runtime"] = {"enabled": False}
     
+    # R28.5: Report phase — artifact writing and state flush
+    _phase_report_start = _time.monotonic()
+    
     # Build artifact data structures
     # v2.3.0: Unified run_timestamp for provenance across all artifacts
     # v2.0.4: Use canonical timestamp helper from core/time.py
@@ -1202,6 +1215,21 @@ def run_scan(
     reject_data = build_reject_data(
         config, current_block, sanity_rejects, rejected_quotes, stats, infra_payload, run_timestamp=run_timestamp, quotes_sample=quotes_sample
     )
+    
+    # R28.5: Compute phase timers BEFORE write_artifacts so they appear in scan artifact.
+    # build_scan_data stores stats by reference, so mutating stats here propagates.
+    _phase_pre_write = _time.monotonic()
+    stats["phase_timers_ms"] = {
+        "total_ms": int((_phase_pre_write - _phase_t0) * 1000),
+        "discovery_ms": int((_phase_discovery_end - _phase_t0) * 1000),
+        "quote_rpc_ms": int((_phase_quote_end - _phase_quote_start) * 1000),
+        "postprocess_ms": int((_phase_preflight_start - _phase_postprocess_start) * 1000),
+        "preflight_ms": int((_phase_preflight_end - _phase_preflight_start) * 1000),
+        "report_ms": int((_phase_pre_write - _phase_report_start) * 1000),
+        # Legacy aliases for backward compatibility
+        "init_rpc_ms": int((_phase_discovery_end - _phase_t0) * 1000),
+        "post_scan_ms": int((_phase_pre_write - _phase_preflight_end) * 1000),
+    }
     
     # Write artifacts (timestamp already set before opportunity_engine)
     artifacts = write_artifacts(output_dir, timestamp, scan_data, truth_data, reject_data, artifact_mode=artifact_mode)
@@ -1226,22 +1254,19 @@ def run_scan(
     for name, path in artifacts.items():
         logger.info("  %s: %s", name, path)
     
-    # R28.4: Phase timing metrics for performance observability
+    # Update total_ms and report_ms with final values (including write + flush time)
     _phase_end = _time.monotonic()
-    stats["phase_timers_ms"] = {
-        "total_ms": int((_phase_end - _phase_t0) * 1000),
-        "init_rpc_ms": int((_phase_discovery_end - _phase_t0) * 1000),
-        "quote_rpc_ms": int((_phase_quote_end - _phase_quote_start) * 1000),
-        "preflight_ms": int((_phase_preflight_end - _phase_preflight_start) * 1000),
-        "post_scan_ms": int((_phase_end - _phase_preflight_end) * 1000),
-    }
+    stats["phase_timers_ms"]["total_ms"] = int((_phase_end - _phase_t0) * 1000)
+    stats["phase_timers_ms"]["report_ms"] = int((_phase_end - _phase_report_start) * 1000)
+    stats["phase_timers_ms"]["post_scan_ms"] = int((_phase_end - _phase_preflight_end) * 1000)
     logger.info(
-        "Phase timers: total=%dms init=%dms quote=%dms preflight=%dms post=%dms",
+        "Phase timers: total=%dms discovery=%dms quote=%dms postprocess=%dms preflight=%dms report=%dms",
         stats["phase_timers_ms"]["total_ms"],
-        stats["phase_timers_ms"]["init_rpc_ms"],
+        stats["phase_timers_ms"]["discovery_ms"],
         stats["phase_timers_ms"]["quote_rpc_ms"],
+        stats["phase_timers_ms"]["postprocess_ms"],
         stats["phase_timers_ms"]["preflight_ms"],
-        stats["phase_timers_ms"]["post_scan_ms"],
+        stats["phase_timers_ms"]["report_ms"],
     )
     
     return stats

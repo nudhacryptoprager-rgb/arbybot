@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-15 (R28.4 — scanner performance optimization: shared Web3, parallel prefetch, COVERAGE lightweight, phase timing)
-**Tests**: 1822 passed / 3 skipped (unchanged from R28.3)
+**Updated**: 2026-03-15 (R28.5 — bounded parallel coverage, expanded phase metrics, phase_timers artifact fix)
+**Tests**: 1828 passed / 3 skipped (+6 from R28.4: bounded coverage workers, batched loop, expanded timers)
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_20260315_111152 (R28.4 arb rolling-refresh, PASS, phase_timers), ci_m5_gate_20260315_111327 (R28.4 zksync COVERAGE lightweight, PASS), ci_m5_gate_20260315_111436 (R28.4 base COVERAGE lightweight, PASS), ci_m5_gate_20260315_111558 (R28.4 mantle COVERAGE lightweight, PASS)
+**Evidence runDirs**: ci_m5_gate_20260315_122041 (R28.5 arb phase_timers in artifact), ci_m5_gate_20260315_123037 (R28.5 long_scan final, rolling-refresh, PASS)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-15T10:25:50Z: 21 runs, 15 PASS, 43 signals, $68.28, 9 profitable roundtrips, wall_seconds=563.6)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-15T12:34:00Z: 37 runs, 25 PASS, 52 signals, $85.88, 12 profitable roundtrips, wall_seconds=556)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
 ---
@@ -16,6 +16,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R28.5: Bounded parallel coverage (`--coverage-workers N` in start.py), expanded phase metrics (8 fields), phase_timers artifact fix (computed before write_artifacts), COVERAGE dynamic_sweep skip. Long scan: 37 runs / 52 signals / $85.88 / 12 profitable roundtrips in 556s wall (~15s/run vs ~27s R28.4).
 > R28.4: Scanner performance optimization — shared Web3 cache (`_shared_w3_cache` in quotes.py), parallel quote prefetch (ThreadPoolExecutor, 8-way), COVERAGE lightweight mode (skip daily_report + preflight), inter-chain sleep 20→1s, phase_timers_ms in scan stats, multicall latency accounting fixed. Per-run scan time reduced from ~66s to ~27s (2.5x). Long scan: 21 runs / 43 signals / $68.28 / 9 profitable roundtrips in 563.6s wall.
 > R27.4: Config layer audit — 15 stale YAMLs deleted, inventory frozen to 16 active files with TestConfigInventoryGuard. validate_universe.py regression FIXED (is_strict_run used before defined). ve33 adapter IMPLEMENTED (dex/adapters/ve33.py + registry). Fresh online evidence: ci_m5_gate_20260314_211452 (4 signals, $5.55).
 > R27.3: Scanner pipeline contract hardening — removed synthetic suspect metrics, strict discovery_runtime, intent forbidden for NORMAL, unified economics, pre-scan validation wired. +7 tests.
@@ -27,15 +28,15 @@
 
 ---
 
-## Chain Quality Classification (R28.2)
+## Chain Quality Classification (R28.5)
 
 ```
 arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=MARKET, agg gap_min=3.55 bps, gap_median=17.95 bps)
-base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=16, PASS, ROUNDTRIP_PROFITABLE=2 thin: real_quote_count=1, measured_economics.available=false)
-mantle:         CROSS_DEX_VERIFIED (stage2, 2 DEXes agni_v3+stratum ve33, cross-dex=5, gate PASS, run_summary=NO_DATA, 0 signals)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, 2 signals, blocker=DRIFT)
-linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, 2 signals $7.54, 2 profitable roundtrips)
-scroll:         CROSS_DEX_VERIFIED (1 signal $0.08 in long_scan — first non-zero scroll evidence)
+base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=16, PASS, ROUNDTRIP_PROFITABLE=2 thin)
+mantle:         NO_DATA (stage2, 2 DEXes agni_v3+stratum ve33, cross-dex=5, 6 NO_DATA runs in long_scan)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, 6 signals)
+linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, 12 signals, truth=True)
+scroll:         ACCEPTED_FAIL (6 FAIL runs in long_scan)
 ```
 
 **R28.2 changes**: Semantics fix (require real_quote_count > 0 for ROUNDTRIP_PROFITABLE). ve33 stage2 configs created and tested online. Base ROUNDTRIP_PROFITABLE=2 but thin evidence (real_quote_count=1, measured_economics.available=false — not promotion-grade). Mantle cross-DEX surface enabled (agni_v3+stratum). Arb gap: agg best-ever=3.55 bps, median=17.99 bps.

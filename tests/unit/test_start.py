@@ -1338,5 +1338,105 @@ class TestWarnMissingChainsHardFail(unittest.TestCase):
             # Since all chains are covered, nothing happens
 
 
+class TestCoverageWorkersArg(unittest.TestCase):
+    """R28.5: Test --coverage-workers argument parsing and defaults."""
+
+    def test_default_coverage_workers_is_2(self):
+        args = start.parse_args(["--config", "x.yaml"])
+        self.assertEqual(args.coverage_workers, 2)
+
+    def test_coverage_workers_custom(self):
+        args = start.parse_args(["--config", "x.yaml", "--coverage-workers", "4"])
+        self.assertEqual(args.coverage_workers, 4)
+
+    def test_coverage_workers_one(self):
+        args = start.parse_args(["--config", "x.yaml", "--coverage-workers", "1"])
+        self.assertEqual(args.coverage_workers, 1)
+
+
+class TestBatchedPrimaryCoverageLoop(unittest.TestCase):
+    """R28.5: Primary configs run first (sequential), then coverage in parallel batch."""
+
+    @patch("start._warn_missing_chains")
+    @patch("start.extract_scan_stats")
+    @patch("start.extract_gate_result")
+    @patch("start.extract_run_summary")
+    @patch("start.run_gate_once")
+    @patch("start.read_config_meta")
+    @patch("start.prune_run_dirs")
+    def test_primary_runs_before_coverage(self, mock_prune, mock_meta, mock_gate, mock_summary, mock_gate_res, mock_scan_stats, mock_warn):
+        """Primary NORMAL runs should happen before coverage batch in each round."""
+        call_order = []
+
+        def meta_side(path):
+            if "primary" in path:
+                return {"chain": "arbitrum_one", "run_kind": "NORMAL"}
+            return {"chain": "base", "run_kind": "COVERAGE"}
+
+        def gate_side(config, *args, **kwargs):
+            call_order.append(config)
+            return (0, None)
+
+        mock_meta.side_effect = meta_side
+        mock_gate.side_effect = gate_side
+        mock_summary.return_value = {"status": "PASS", "metrics": {}, "run_context": {}}
+        mock_gate_res.return_value = None
+        mock_scan_stats.return_value = None
+
+        rc = start.main([
+            "--config-list", "primary.yaml,coverage.yaml",
+            "--max-runs", "2",
+            "--minutes", "1",
+            "--sleep-seconds", "0",
+            "--child-timeout", "0",
+            "--coverage-workers", "1",
+            "--summary-file", os.path.join(tempfile.mkdtemp(), "test.json"),
+        ])
+
+        self.assertEqual(rc, 0)
+        # In each round: primary first, then coverage
+        self.assertEqual(call_order[0], "primary.yaml")
+        self.assertEqual(call_order[1], "coverage.yaml")
+
+    @patch("start._warn_missing_chains")
+    @patch("start.extract_scan_stats")
+    @patch("start.extract_gate_result")
+    @patch("start.extract_run_summary")
+    @patch("start.run_gate_once")
+    @patch("start.read_config_meta")
+    @patch("start.prune_run_dirs")
+    def test_coverage_rolling_flags(self, mock_prune, mock_meta, mock_gate, mock_summary, mock_gate_res, mock_scan_stats, mock_warn):
+        """Primary gets refresh_rolling=True, coverage gets False in batched mode."""
+        def meta_side(path):
+            if "primary" in path:
+                return {"chain": "arbitrum_one", "run_kind": "NORMAL"}
+            return {"chain": "base", "run_kind": "COVERAGE"}
+
+        mock_meta.side_effect = meta_side
+        mock_gate.return_value = (0, None)
+        mock_summary.return_value = {"status": "PASS", "metrics": {}, "run_context": {}}
+        mock_gate_res.return_value = None
+        mock_scan_stats.return_value = None
+
+        rc = start.main([
+            "--config-list", "primary.yaml,coverage.yaml",
+            "--max-runs", "2",
+            "--minutes", "1",
+            "--sleep-seconds", "0",
+            "--child-timeout", "0",
+            "--summary-file", os.path.join(tempfile.mkdtemp(), "test.json"),
+        ])
+
+        # Check rolling flags on each call
+        for call in mock_gate.call_args_list:
+            args_pos, kwargs = call
+            config_arg = args_pos[0]
+            refresh_arg = args_pos[4] if len(args_pos) > 4 else kwargs.get("refresh_rolling")
+            if "primary" in config_arg:
+                self.assertTrue(refresh_arg, "Primary should get refresh_rolling=True")
+            else:
+                self.assertFalse(refresh_arg, "Coverage should get refresh_rolling=False")
+
+
 if __name__ == "__main__":
     unittest.main()

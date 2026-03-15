@@ -886,6 +886,13 @@ def collect_quotes(
             logger.info("Multicall prefetch: %d unique pools", len(unique_pools))
             clear_multicall_cache()  # Clear cache before prefetch
             prefetch_slot0_multicall(unique_pools, rpc_url, current_block)
+            # R28.5: Expose multicall stats for performance observability
+            try:
+                from core.multicall import get_multicall_batcher
+                _mc_batcher = get_multicall_batcher(rpc_url, current_block)
+                counts["multicall_stats"] = _mc_batcher.get_stats()
+            except Exception:
+                pass
     
     # M4.2: USD-notional sizing
     target_usd_notional = config.get("target_usd_notional", 1000.0)

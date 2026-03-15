@@ -20,6 +20,8 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -775,6 +777,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
              "(e.g. 'scroll'). These do not count toward --max-fail-chains.",
     )
     ap.add_argument(
+        "--coverage-workers",
+        type=int,
+        default=2,
+        help="Max parallel COVERAGE chain workers (default: 2). "
+             "Primary NORMAL chains always run sequentially first.",
+    )
+    ap.add_argument(
         "--no-dashboard",
         action="store_true",
         default=False,
@@ -862,6 +871,12 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
     # R24: Check config-list coverage against chains.yaml
     _warn_missing_chains(config_meta)
 
+    # R28.5: Separate primary (NORMAL) and coverage configs
+    primary_configs = [cfg for cfg in configs if is_primary_rolling_config(config_meta[cfg])]
+    coverage_configs = [cfg for cfg in configs if not is_primary_rolling_config(config_meta[cfg])]
+    coverage_workers = max(1, args.coverage_workers)
+    print(f"  Primary configs: {len(primary_configs)}  Coverage configs: {len(coverage_configs)}  workers={coverage_workers}")
+
     # Time budget
     if args.hours > 0:
         budget_seconds = args.hours * 3600
@@ -889,20 +904,14 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
     empty_deleted = 0
     wall_start = time.monotonic()
 
-    print(f"\nStarting multi-chain scan: {len(configs)} configs, budget={budget_seconds:.0f}s")
+    # R28.5: Thread-safe lock for per_chain stats and stdout
+    _stats_lock = threading.Lock()
 
-    # Round-robin loop
-    cfg_index = 0
-    while time.monotonic() < deadline:
-        cfg = configs[cfg_index % len(configs)]
-        cfg_index += 1
+    def _run_one_chain(cfg: str) -> tuple[int, Path | None, str, str]:
+        """Run a single chain scan. Thread-safe for parallel coverage workers."""
         meta = config_meta[cfg]
         chain = meta["chain"]
         refresh = is_primary_rolling_config(meta)
-
-        total_runs += 1
-        print(f"\n{'-'*60}")
-        print(f"[run {total_runs}] chain={chain}  config={cfg}  rolling={'YES' if refresh else 'no'}")
 
         rc, run_dir = run_gate_once(
             cfg, args.cycles, args.prune_keep, args.sleep_seconds,
@@ -915,18 +924,62 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         scan_st = extract_scan_stats(run_dir)
         cls = classify_run(rc, summary)
 
-        update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res, scan_st)
-        print(f"[run {total_runs}] result={cls}  exit_code={rc}  run_dir={run_dir.name if run_dir else 'N/A'}")
+        with _stats_lock:
+            update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res, scan_st)
+            if run_dir and run_dir.exists():
+                if delete_if_empty_run_dir(run_dir):
+                    pass  # cleaned up
 
-        # Live update: write summary after each chain for dashboard refresh
-        interim_wall = time.monotonic() - wall_start
-        interim_warnings = check_guardrails(per_chain)
-        interim_summary = build_summary(per_chain, interim_wall, interim_warnings)
-        write_summary_file(interim_summary, args.summary_file)
+        return rc, run_dir, chain, cls
 
-        if run_dir and run_dir.exists():
-            if delete_if_empty_run_dir(run_dir):
-                empty_deleted += 1
+    print(f"\nStarting multi-chain scan: {len(configs)} configs, budget={budget_seconds:.0f}s")
+
+    # R28.5: Batched round — primary sequential, then coverage parallel
+    while time.monotonic() < deadline:
+        # Phase 1: Run primary (NORMAL) configs sequentially (isolated, rolling-safe)
+        for cfg in primary_configs:
+            if time.monotonic() >= deadline:
+                break
+            chain = config_meta[cfg]["chain"]
+            total_runs += 1
+            print(f"\n{'-'*60}")
+            print(f"[run {total_runs}] chain={chain}  config={cfg}  rolling=YES  (PRIMARY)")
+
+            rc, run_dir, chain_name, cls = _run_one_chain(cfg)
+            print(f"[run {total_runs}] result={cls}  exit_code={rc}  run_dir={run_dir.name if run_dir else 'N/A'}")
+
+            # Live update summary for dashboard
+            interim_wall = time.monotonic() - wall_start
+            interim_warnings = check_guardrails(per_chain)
+            interim_summary = build_summary(per_chain, interim_wall, interim_warnings)
+            write_summary_file(interim_summary, args.summary_file)
+
+        if time.monotonic() >= deadline:
+            break
+
+        # Phase 2: Run coverage configs in bounded parallel pool
+        if coverage_configs:
+            batch_cfgs = [cfg for cfg in coverage_configs if time.monotonic() < deadline]
+            if batch_cfgs:
+                print(f"\n{'-'*60}")
+                print(f"[COVERAGE BATCH] {len(batch_cfgs)} chains, workers={coverage_workers}")
+
+                with ThreadPoolExecutor(max_workers=coverage_workers) as pool:
+                    futures = {pool.submit(_run_one_chain, cfg): cfg for cfg in batch_cfgs}
+                    for future in as_completed(futures):
+                        cfg = futures[future]
+                        total_runs += 1
+                        try:
+                            rc, run_dir, chain_name, cls = future.result()
+                            print(f"[run {total_runs}] chain={chain_name}  result={cls}  exit_code={rc}  run_dir={run_dir.name if run_dir else 'N/A'}  (COVERAGE)")
+                        except Exception as e:
+                            print(f"[run {total_runs}] COVERAGE_ERROR: {cfg}: {e}")
+
+                # Write summary after coverage batch for dashboard
+                interim_wall = time.monotonic() - wall_start
+                interim_warnings = check_guardrails(per_chain)
+                interim_summary = build_summary(per_chain, interim_wall, interim_warnings)
+                write_summary_file(interim_summary, args.summary_file)
 
         if total_runs % max(len(configs), 3) == 0:
             prune_run_dirs(args.prune_keep)
