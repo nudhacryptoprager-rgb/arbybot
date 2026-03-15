@@ -273,10 +273,35 @@ def _build_measured_economics(stats: Dict[str, Any]) -> Dict[str, Any]:
 
     This is the canonical operational truth — all values come from
     QuoterV2/live-gas path, NOT paper/baseline estimates.
+    
+    R28.7: Includes per-route cost breakdown (probe_slippage) for
+    each swept route — raw_spread, measured_slippage, lp_fee, gas, gap_to_zero.
     """
     ds = stats.get("roundtrip", {}).get("dynamic_sweep", {})
     if not ds.get("enabled") or not ds.get("best_net_pnl_bps"):
         return {"available": False, "source": "dynamic_sweep"}
+    
+    # R28.7: Per-route cost breakdown from sweep results
+    per_route_breakdown = []
+    raw_results = ds.get("results", [])
+    for r in raw_results:
+        if isinstance(r, dict):
+            route_info = {
+                "pair": r.get("pair"),
+                "buy_dex": r.get("buy_dex"),
+                "sell_dex": r.get("sell_dex"),
+                "best_size_usd": r.get("best_size_usd"),
+                "best_net_pnl_bps": r.get("best_net_pnl_bps"),
+                "best_gross_pnl_bps": r.get("best_gross_pnl_bps"),
+                "measured_slippage_bps": r.get("best_slippage_bps"),
+                "lp_fee_bps": r.get("best_fee_bps"),
+                "gas_bps": r.get("best_gas_bps"),
+                "total_cost_bps": r.get("best_total_cost_bps"),
+                "gap_to_zero_bps": r.get("gap_to_zero_bps"),
+                "frontier_reason": r.get("frontier_reason"),
+            }
+            per_route_breakdown.append(route_info)
+    
     return {
         "available": True,
         "source": "dynamic_sweep",
@@ -288,6 +313,8 @@ def _build_measured_economics(stats: Dict[str, Any]) -> Dict[str, Any]:
         "measured_fee_bps": ds.get("best_fee_bps"),
         "measured_slippage_bps": ds.get("best_slippage_bps"),
         "measured_total_cost_bps": ds.get("best_total_cost_bps"),
+        # R28.7: Per-route probe_slippage breakdown
+        "per_route_breakdown": per_route_breakdown,
     }
 
 
@@ -296,6 +323,9 @@ def _build_viability_decision(stats: Dict[str, Any]) -> Dict[str, Any]:
 
     The canonical decision point is post-sweep: raw spread alone is
     insufficient because LP fees, gas, and slippage can exceed gross spread.
+    
+    R28.7: Uses executable_evidence from promoted sweep results.
+    signal != opportunity != executable candidate.
     """
     ds = stats.get("roundtrip", {}).get("dynamic_sweep", {})
     rt = stats.get("roundtrip", {})
@@ -306,15 +336,22 @@ def _build_viability_decision(stats: Dict[str, Any]) -> Dict[str, Any]:
             "reason": "SWEEP_NOT_ENABLED",
         }
     gap = ds.get("gap_to_zero_bps")
-    profitable = rt.get("profitable_count", 0) > 0
+    # R28.7: Use executable_evidence as primary, profitable_count as secondary
+    executable_evidence = rt.get("executable_evidence", "NO_DATA")
+    sweep_profitable = executable_evidence == "SWEEP_PROFITABLE"
+    baseline_profitable = rt.get("profitable_count", 0) > 0
     return {
         "decided": True,
         "decision_point": "dynamic_sweep",
-        "is_profitable": profitable,
+        "is_profitable": sweep_profitable or baseline_profitable,
+        "sweep_profitable": sweep_profitable,
+        "baseline_profitable": baseline_profitable,
+        "executable_evidence": executable_evidence,
         "gap_to_zero_bps": gap,
         "frontier_pair": ds.get("best_pair"),
         "frontier_reason": ds.get("best_frontier_reason", "NO_DATA"),
         "routes_swept": ds.get("routes_swept", 0),
+        "executable_candidates_count": rt.get("executable_candidates_count", 0),
     }
 
 
@@ -331,7 +368,13 @@ def _build_roundtrip_summary(stats: Dict[str, Any]) -> Dict[str, Any]:
         "evaluated_count": rt.get("evaluated_count", 0),
         "profitable_count": rt.get("profitable_count", 0),
         "real_quote_count": rt.get("real_quote_count", 0),
+        # R28.7: New primary KPI — executable candidates that passed all pre-filters
+        "executable_candidates_count": rt.get("executable_candidates_count", 0),
         "best_net_pnl_bps": rt.get("best_net_pnl_bps"),
+        # R28.7: Promoted sweep evidence — core decision layer output
+        "best_executable_size_usd": rt.get("best_executable_size_usd"),
+        "best_executable_pnl_bps": rt.get("best_executable_pnl_bps"),
+        "executable_evidence": rt.get("executable_evidence", "NO_DATA"),
         "l1_cost_wei": rt.get("l1_cost_wei", 0),
         "l1_cost_source": rt.get("l1_cost_source", "none"),
         "gas_price_wei_used": rt.get("gas_price_wei_used", 0),

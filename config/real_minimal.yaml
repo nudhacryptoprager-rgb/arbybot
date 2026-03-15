@@ -77,14 +77,13 @@ pairs:
     token_out: WETH
     fee_tiers: [100, 500, 3000]
   # v2.5.2: fee=500 re-enabled for Uniswap fee-tier arbitrage (Sushi pool still disabled)
-  # v3.2.73: ARB/WETH DISABLED — one-leg outlier with $32+ sim_net
-  # Consistently produces suspect spread (1359bps) that inflates all_signals metrics
-  # Evidence: runDir 120509 - $32.48 excluded signal vs $3.46 included total
-  # Coverage config already excludes ARB/* via excluded_pair_hints
-  # RESTORE WHEN: M4.2 roundtrip truth validates ARB/WETH spread is real
-  # - token_in: ARB
-  #   token_out: WETH
-  #   fee_tiers: [500, 3000]
+  # v3.2.73: ARB/WETH was DISABLED — one-leg outlier with $32+ sim_net at 1359bps spread.
+  # R28.7: RE-ENABLED — truth_mode_m42 pipeline now gates via SUSPECT_SPREAD_HARD (>500bps)
+  # in opportunity_engine. Roundtrip canonical evaluation catches non-viable spreads.
+  # Sub-500bps signals pass through to roundtrip for proper cost-adjusted evaluation.
+  - token_in: ARB
+    token_out: WETH
+    fee_tiers: [500, 3000]
   # NOTE: LINK re-enabled for signals diversity (quality gate requirement)
   # NOTE: LINK/WETH - fee 500 disabled on Sushiswap (SUSPECT_LIQUIDITY)
   - token_in: LINK
@@ -475,13 +474,14 @@ dynamic_probe:
   top_routes: 3         # Sweep only top-3 eligible routes (RPC budget)
 
 # Spread signal threshold (M5)
-# Signals with spread_bps_exact < this are filtered out
+# R28.7: When truth_mode_m42=true, this value is ADVISORY ONLY — effective threshold=0.
+# All signals pass through to the opportunity engine where spread_minus_required_bps > 0
+# is the canonical gate. This prevents parameter-driven suppression of candidates.
+# The value here is still used for diagnostics logging and non-truth-mode runs.
 # Production: 20 bps minimum (filters marginal signals where sign can flip from slippage)
 # Debug: 5 bps (default), 0 = any positive spread
 # v3.3.0: Cost floor at $150: gas=6.67bps + paper_slippage=5bps = ~12bps (before LP fees)
-# min_spread_bps=12 filters signals below paper cost floor at $150 notional
-# RAISE TO 15 WHEN: paper_size_usd <= 100 (gas_bps rises to 10)
-min_spread_bps: 12  # 12 bps = above cost floor for $150 paper_size
+min_spread_bps: 12  # advisory: 12 bps = above cost floor for $150 paper_size
 
 # Net PnL threshold for daily_report top_opportunities (M5)
 # Signals with net_pnl_usdc_est < this are excluded from top_opportunities

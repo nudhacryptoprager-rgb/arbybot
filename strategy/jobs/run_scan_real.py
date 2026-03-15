@@ -785,6 +785,10 @@ def run_scan(
             "evaluated_count": len(roundtrip_results),
             "profitable_count": len(rt_profitable),
             "real_quote_count": len(rt_using_real_quote),
+            # R28.7: executable_candidates_count — how many candidates passed ALL pre-filters
+            # and were sent to roundtrip evaluation. This is the new primary KPI:
+            # signal != opportunity != executable candidate.
+            "executable_candidates_count": len(eligible_opps),
             "gas_price_wei_used": live_gas_price_wei,
             "l1_cost_wei": l1_cost_wei_used,  # v2.1.0: L1 cost tracking
             "l1_cost_source": l1_cost_source_used,  # v2.1.0: "onchain" | "config" | "default"
@@ -994,6 +998,23 @@ def run_scan(
                 }
             else:
                 stats["roundtrip"]["dynamic_sweep"] = {"enabled": True, "routes_swept": 0}
+            
+            # R28.7: Promote sweep results to top-level executable evidence.
+            # dynamic_sweep is the core decision layer — its best_executable_size_usd
+            # is the primary field for determining if a profitable trade exists.
+            ds = stats["roundtrip"].get("dynamic_sweep", {})
+            if ds.get("best_net_pnl_bps") is not None and ds["best_net_pnl_bps"] > 0:
+                stats["roundtrip"]["best_executable_size_usd"] = ds["best_size_usd"]
+                stats["roundtrip"]["best_executable_pnl_bps"] = ds["best_net_pnl_bps"]
+                stats["roundtrip"]["executable_evidence"] = "SWEEP_PROFITABLE"
+            elif ds.get("gap_to_zero_bps") is not None:
+                stats["roundtrip"]["best_executable_size_usd"] = ds.get("best_size_usd")
+                stats["roundtrip"]["best_executable_pnl_bps"] = ds.get("best_net_pnl_bps")
+                stats["roundtrip"]["executable_evidence"] = "SWEEP_GAP_TO_ZERO"
+            else:
+                stats["roundtrip"]["best_executable_size_usd"] = None
+                stats["roundtrip"]["best_executable_pnl_bps"] = None
+                stats["roundtrip"]["executable_evidence"] = "NO_SWEEP_DATA"
             
     except Exception as rt_err:
         logger.debug("Roundtrip evaluation skipped: %s", rt_err)

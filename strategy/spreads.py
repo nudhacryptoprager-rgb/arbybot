@@ -78,9 +78,18 @@ def compute_spread_signals(
         List of spread signal dicts
     """
     spread_signals: List[Dict[str, Any]] = []
-    spread_threshold_bps = config.get("min_spread_bps", config.get("spread_threshold_bps", 0))
+    config_spread_threshold_bps = config.get("min_spread_bps", config.get("spread_threshold_bps", 0))
     max_spread_bps_sanity = config.get("max_spread_bps_sanity", 10000)
     truth_mode = config.get("truth_mode_m42", False)
+    
+    # R28.7: When truth_mode_m42=true, min_spread_bps is advisory only.
+    # All signals pass through to the opportunity engine where the canonical
+    # gate (spread_minus_required_bps > 0) is applied post-quote.
+    # This prevents parameter-driven suppression of viable candidates.
+    if truth_mode:
+        spread_threshold_bps = 0
+    else:
+        spread_threshold_bps = config_spread_threshold_bps
     
     # v2.2.0: Filter out diagnostic-only quotes when truth_mode=true
     executable_quotes = quotes_sample
@@ -123,8 +132,8 @@ def compute_spread_signals(
                    drift_excluded_count, drift_exclude_pct)
     executable_quotes = filtered_quotes
     
-    logger.info("Starting spread signal computation: %d quotes (%d diagnostic excluded), threshold=%s bps", 
-                len(executable_quotes), diagnostic_count, spread_threshold_bps)
+    logger.info("Starting spread signal computation: %d quotes (%d diagnostic excluded), threshold=%s bps (advisory=%s, truth_mode=%s)", 
+                len(executable_quotes), diagnostic_count, spread_threshold_bps, config_spread_threshold_bps, truth_mode)
     
     try:
         # Group quotes by pair

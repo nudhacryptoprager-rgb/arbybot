@@ -1142,6 +1142,9 @@ class TestBuildRoundtripSummary(unittest.TestCase):
             "enabled", "evaluated_count", "profitable_count",
             "real_quote_count", "best_net_pnl_bps", "l1_cost_wei",
             "l1_cost_source", "gas_price_wei_used", "best_measured_spread_gap_bps",
+            # R28.7: New KPI fields
+            "executable_candidates_count", "best_executable_size_usd",
+            "best_executable_pnl_bps", "executable_evidence",
         ]:
             self.assertIn(key, summary, f"Missing baseline field: {key}")
 

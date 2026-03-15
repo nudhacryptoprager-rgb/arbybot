@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-15 (R28.6 — runDir collision fix, chain_id validation, telemetry artifact fix, +9 tests)
-**Tests**: 1837 passed / 3 skipped (+9 from R28.5: runDir regex, chain validation, config meta)
+**Updated**: 2026-03-15 (R28.7 — economics engine correctness: executable_candidates KPI, min_spread_bps advisory, dynamic_sweep core, probe_slippage per-route, ARB/WETH re-enabled)
+**Tests**: 1837 passed / 3 skipped (maintained from R28.6)
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_arbitrum_one_20260315_125949_107589 (R28.6 arb primary, report_ms=63), ci_m5_gate_arbitrum_one_20260315_132036_628412 (R28.6 long_scan final, rolling refresh)
+**Evidence runDirs**: ci_m5_gate_arbitrum_one_20260315_142730_339644 (R28.7 arb primary 5-cycle, 9 signals), ci_m5_gate_arbitrum_one_20260315_143747_439501 (R28.7 long_scan final, rolling refresh)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.6: 31 runs parallel, 69 signals, $116.34, 14 profitable roundtrips, wall_seconds=544, **0 collisions**)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.7: 42 runs parallel, 109 signals, $123, 21 profitable roundtrips, wall_seconds=573)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
 ---
@@ -16,6 +16,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> R28.7: Economics engine correctness — executable_candidates_count KPI (replaces signals_count as primary), min_spread_bps advisory in truth_mode (threshold=0), dynamic_sweep promoted to core decision layer, per_route_breakdown in artifacts (slippage/fee/gas decomposition). ARB/WETH re-enabled (SUSPECT_SPREAD_HARD gates >500bps). Gap narrowed 18→15 bps. Long scan: 42 runs, 109 signals, $123, 21 profitable RT. Linea truth=True (positive control confirmed).
 > R28.6: RunDir collision fix — chain-scoped unique dirs (`ci_m5_gate_{chain_key}_{YYYYMMDD}_{HHMMSS}_{microseconds}`) with `exist_ok=False`. 6 pre-fix collisions (zksync 324 + base 8453) → 0 post-fix in parallel stress test (31 runs). Chain_id validation in start.py. Telemetry: report_ms=63 (was 0). Lead: "R28.5 speed gain is provisional until parallel runDir uniqueness/provenance integrity is fixed" → FIXED.
 > R28.5: Bounded parallel coverage (`--coverage-workers N` in start.py), expanded phase metrics (8 fields), phase_timers artifact fix (computed before write_artifacts), COVERAGE dynamic_sweep skip. Long scan: 37 runs / 52 signals / $85.88 / 12 profitable roundtrips in 556s wall (~15s/run vs ~27s R28.4).
 > R28.4: Scanner performance optimization — shared Web3 cache (`_shared_w3_cache` in quotes.py), parallel quote prefetch (ThreadPoolExecutor, 8-way), COVERAGE lightweight mode (skip daily_report + preflight), inter-chain sleep 20→1s, phase_timers_ms in scan stats, multicall latency accounting fixed. Per-run scan time reduced from ~66s to ~27s (2.5x). Long scan: 21 runs / 43 signals / $68.28 / 9 profitable roundtrips in 563.6s wall.
@@ -29,15 +30,15 @@
 
 ---
 
-## Chain Quality Classification (R28.6)
+## Chain Quality Classification (R28.7)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=MARKET, quote_rpc=9s bottleneck)
-base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=16, PASS, ROUNDTRIP_PROFITABLE=2 thin)
-mantle:         DROPPED (probe-only ballast, per lead R28.6 — not in long scan configs)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS)
-linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, **strongest non-arb**: 12 profitable RT in long_scan, ROUNDTRIP_PROFITABLE=2)
-scroll:         DROPPED (per lead R28.6 — not in long scan configs)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, 7 pairs, cross-dex=6, PASS, 8-9 signals, gap=15 bps, executable_candidates=4)
+base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=16, PASS, 22 signals)
+mantle:         NO_DATA (probe-only, per lead R28.6)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, 7 signals)
+linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, **truth=True**: profitable roundtrips confirmed, positive control group)
+scroll:         FAIL (accepted)
 ```
 
 **R28.2 changes**: Semantics fix (require real_quote_count > 0 for ROUNDTRIP_PROFITABLE). ve33 stage2 configs created and tested online. Base ROUNDTRIP_PROFITABLE=2 but thin evidence (real_quote_count=1, measured_economics.available=false — not promotion-grade). Mantle cross-DEX surface enabled (agni_v3+stratum). Arb gap: agg best-ever=3.55 bps, median=17.99 bps.

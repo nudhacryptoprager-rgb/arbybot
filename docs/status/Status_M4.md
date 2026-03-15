@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-15 (R28.6 — runDir collision fix, scanner latency + evidence integrity now same priority blocker as arb market gap)  
+**Updated**: 2026-03-15 (R28.7 — economics engine correctness: executable_candidates KPI, min_spread_bps advisory, dynamic_sweep core, per_route_breakdown, ARB/WETH re-enabled, gap 18→15 bps)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)  
-**Primary blocker**: market gap (agg sweep_median_gap ~18 bps, best-ever=3.55 bps). Secondary: scanner latency + evidence integrity (R28.6: RESOLVED — runDir collision fixed, telemetry fixed). Linea strongest non-arb evidence (12 profitable RT). Async quote path deferred.
+**Primary blocker**: market gap (agg sweep_median_gap ~15 bps, best-ever=3.55 bps). Slippage dominates all routes (83% of gap on WBTC/USDC). Secondary: async quote path deferred. Linea positive control (truth=True).
 
 ## [!] M4.1 Simulate-Only DoD **MET**
 
@@ -27,7 +27,8 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-15 R28.6)**: `agg_status=PASS` sustained. runs_in_window=200+, total_net_usdc=$1224.92+. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **RunDir collision FIXED R28.6**: chain-scoped unique dirs with microsecond precision. **Telemetry FIXED R28.6**: report_ms=63 in artifact (was 0). Rolling contamination FIXED R27.2.
+> [!] **ROLLING STABILITY (2026-03-15 R28.7)**: `agg_status=PASS` sustained. runs_in_window=200+, total_net_usdc=$1224.92+. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **Economics engine corrected R28.7**: executable_candidates_count KPI, min_spread_bps advisory, dynamic_sweep as core, per_route_breakdown. Gap narrowed 18→15 bps. Slippage dominates (83% on WBTC/USDC).
+> R28.7: Economics engine correctness — 10 fix steps from lead directive. executable_candidates_count=4 (new KPI). min_spread_bps advisory (threshold=0 in truth_mode). Sweep promoted to core. Per-route breakdown: WBTC/USDC gap=15.22 bps (slip=12.57, fee=10, gas=3.25). ARB/WETH re-enabled (7 pairs now, SUSPECT_SPREAD_HARD gates outliers). Long scan: 42 runs / 109 signals / $123 / 21 RT in 573s. Linea truth=True (positive control confirmed).
 > R28.6: RunDir collision fix (6 collisions → 0 in parallel stress test 31 runs). Chain_id validation. Telemetry artifact patch. +9 tests (1837). Long scan parallel: 31 runs / 69 signals / $116.34 / 14 RT in 544s. Linea strongest non-arb (12 profitable RT).
 > R28.5: Bounded parallel coverage, expanded phase metrics, phase_timers artifact fix. Per-run ~27s→15s. Long scan: 37 runs / 52 signals / $85.88 / 12 RT in 556s.
 > R28.4: Scanner performance optimization — shared Web3 cache, parallel quote prefetch (ThreadPoolExecutor 8-way), COVERAGE lightweight mode, phase_timers_ms, inter-chain sleep 20→1s. Per-run scan time ~66s→~27s (2.5x). Long scan: 21 runs / 43 signals / $68.28 / 9 RT in 563.6s wall.
@@ -37,20 +38,24 @@
 > R27.4: Config inventory frozen to 16 files, 15 stale deleted. ve33 adapter IMPLEMENTED. validate_universe regression FIXED.
 > Latest evidence: `long_scan_latest.json` (REFRESHED 2026-03-15T10:25:50Z), `m4_stability_agg.json` (2026-03-15T10:24:37Z).
 
-**Economics Snapshot (2026-03-15, R28.4 — from rolling agg + long_scan):**
+**Economics Snapshot (2026-03-15, R28.7 — from rolling agg + long_scan + per_route_breakdown):**
 | Metric | Value | Source |
 |--------|-------|--------|
 | `sweep_gap_to_zero_min (arb)` | 3.55 bps | m4_stability_agg best-ever |
-| `sweep_median_gap_to_zero_bps` | 17.99 bps | m4_stability_agg median |
-| `long_scan sweep_best` | -15.80 bps | long_scan_latest (multi-chain) |
+| `sweep_median_gap_to_zero_bps` | ~15 bps | rolling + long_scan (improved from ~18 R28.6) |
+| `long_scan sweep_best` | -14.96 bps | long_scan_latest (multi-chain) |
+| `executable_candidates_count` | 4 | run_summary_latest (NEW R28.7 KPI) |
 | `roundtrip_total_profitable (agg)` | 0 | arb rolling (primary chain only) |
-| `roundtrip_total_profitable (long_scan)` | 9 | long_scan (improved from 5) |
-| `frontier_pair` | WETH/USDT | m4_stability_agg |
-| `runs_in_window` | 200 | m4_stability_agg |
-| `total_net_usdc` | $1224.92 | m4_stability_agg (paper profit) |
-| `unique_pairs` | 12 | m4_stability_agg |
-| `long_scan` | 31 runs, 69 signals, $116.34 | long_scan_latest (544s wall, parallel workers=2, **0 collisions**) |
-| `multi_chain_pass` | 4/4 | long_scan (arb, zksync, base, linea; mantle/scroll dropped) |
+| `roundtrip_total_profitable (long_scan)` | 21 | long_scan (improved from 14 R28.6) |
+| `WBTC/USDC gap` | 15.22 bps | per_route_breakdown (slip=12.57, fee=10, gas=3.25) |
+| `ARB/WETH gap` | 75.64 bps | per_route_breakdown (slip=51.65, fee=35, gas=3.2) |
+| `frontier_pair` | WBTC/USDC / WETH/USDT | alternating between runs |
+| `runs_in_window` | 200+ | m4_stability_agg |
+| `total_net_usdc` | $1224.92+ | m4_stability_agg (paper profit) |
+| `unique_pairs` | 13 | m4_stability_agg |
+| `long_scan` | 42 runs, 109 signals, $123 | long_scan_latest (573s wall, parallel workers=2) |
+| `multi_chain_pass` | 4/4 | long_scan (arb, zksync, base, linea) |
+| `linea_truth` | True | long_scan (positive control — profitable roundtrips) |
 
 **Rollout Queue (R28.2 — ve33 stage2 configs + semantics fix):**
 | Priority | Chain | Status | Stage Config | Condition for Promotion |
