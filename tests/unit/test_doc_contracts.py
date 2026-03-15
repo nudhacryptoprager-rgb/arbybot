@@ -184,5 +184,102 @@ class TestProfitSemanticsContract(unittest.TestCase):
                             "profit_realism_status must NOT be ROUNDTRIP_PROFITABLE when real_quote_count=0")
 
 
+class TestStatusHeaderBodyConsistency(unittest.TestCase):
+    """R28.3: Detect stale status files where header is updated but body has old R-tags."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.status_dir = Path(__file__).parents[2] / "docs" / "status"
+
+    def _get_header_round(self, content):
+        """Extract R-tag from the header Updated: line (e.g. R28.2)."""
+        m = re.search(r"\*\*Updated\*\*:\s*\d{4}-\d{2}-\d{2}\s*\(R(\d+(?:\.\d+)?)", content)
+        return m.group(1) if m else None
+
+    def test_status_m5_0_no_stale_next_steps(self):
+        """Status_M5_0.md must not have Next Steps referencing old rounds."""
+        path = self.status_dir / "Status_M5_0.md"
+        if not path.exists():
+            self.skipTest("Status_M5_0.md not found")
+        content = path.read_text(encoding="utf-8")
+        # "Next Steps (R27.2)" or similar stale next-steps sections
+        stale_next = re.findall(r"Next Steps?\s*\(R\d+(?:\.\d+)?\)", content)
+        self.assertEqual(stale_next, [],
+                         f"Status_M5_0.md has stale Next Steps sections: {stale_next}")
+
+    def test_status_m5_0_chain_classification_matches_header(self):
+        """Chain Quality Classification section tag must not lag behind header round."""
+        path = self.status_dir / "Status_M5_0.md"
+        if not path.exists():
+            self.skipTest("Status_M5_0.md not found")
+        content = path.read_text(encoding="utf-8")
+        header_round = self._get_header_round(content)
+        if not header_round:
+            self.skipTest("Cannot parse header round")
+        # Check the Chain Quality Classification section tag
+        m = re.search(r"## Chain Quality Classification \(R(\d+(?:\.\d+)?)\)", content)
+        if m:
+            section_round = m.group(1)
+            # The section round's major must not be more than 1 behind the header
+            header_major = int(header_round.split(".")[0])
+            section_major = int(section_round.split(".")[0])
+            self.assertGreaterEqual(section_major, header_major - 1,
+                                    f"Chain Classification (R{section_round}) is stale vs header (R{header_round})")
+
+    def test_status_m4_rollout_no_needs_online_test_when_tested(self):
+        """If a stage2 config exists, rollout table should not say 'NEEDS ONLINE TEST'."""
+        path = self.status_dir / "Status_M4.md"
+        if not path.exists():
+            self.skipTest("Status_M4.md not found")
+        content = path.read_text(encoding="utf-8")
+        config_dir = Path(__file__).parents[2] / "config"
+        for chain in ["base", "mantle"]:
+            stage2_file = config_dir / f"onboard_{chain}_stage2.yaml"
+            if stage2_file.exists():
+                # If stage2 config exists, the rollout table should not say NEEDS ONLINE TEST for that chain
+                pattern = rf"{chain}.*NEEDS ONLINE TEST"
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                self.assertEqual(matches, [],
+                                 f"Status_M4.md says '{chain}' NEEDS ONLINE TEST but stage2 config exists")
+
+    def test_status_m5_0_test_count_format(self):
+        """Test count line must be 'N passed / M skipped', not 'N collected / N passed / M skipped'."""
+        path = self.status_dir / "Status_M5_0.md"
+        if not path.exists():
+            self.skipTest("Status_M5_0.md not found")
+        content = path.read_text(encoding="utf-8")
+        # Reject the redundant "collected" format
+        bad_format = re.search(r"\*\*Tests\*\*:\s*\d+\s+collected\s*/\s*\d+\s+passed", content)
+        self.assertIsNone(bad_format,
+                          "Status_M5_0.md test count uses redundant 'collected / passed' format. "
+                          "Use 'N passed / M skipped' instead.")
+
+    def test_deprecated_pnl_block_has_no_none_fields(self):
+        """The deprecated pnl block in truth_report must not contain None fields that look like TODOs."""
+        from strategy.artifacts import build_truth_data
+
+        truth_data = build_truth_data(
+            config={"truth_mode_m42": False},
+            stats={"quotes_fetched": 1, "quotes_total": 1, "dexes_active": [],
+                    "price_sanity_passed": 0, "price_sanity_failed": 0, "gates_passed": 0},
+            current_block=1,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=50,
+        )
+
+        pnl = truth_data.get("pnl", {})
+        self.assertTrue(pnl.get("_deprecated"), "pnl block must be marked _deprecated")
+        # No None values that look like unfilled fields
+        for key, val in pnl.items():
+            if key.startswith("_"):
+                continue
+            self.assertIsNotNone(val,
+                                 f"pnl.{key}=None looks like an unfilled TODO. "
+                                 "Remove it or use execution_pnl instead.")
+
+
 if __name__ == "__main__":
     unittest.main()

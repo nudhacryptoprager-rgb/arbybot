@@ -209,7 +209,7 @@ A long scan is a **market/data probe** -- it confirms infrastructure stability, 
 and signal coverage across chains. It is not proof of constant profit.
 
 ```powershell
-py -3.11 start.py --config-list config/real_minimal.yaml,config/onboard_base_stage1.yaml,config/onboard_mantle_stage1.yaml,config/onboard_zksync_candidate.yaml,config/onboard_scroll_stage1.yaml,config/onboard_linea_stage1.yaml --hours 3 --cycles 1 --sleep-seconds 20 --prune-keep 200 --summary-file data/runs/_rolling/long_scan_latest.json
+py -3.11 start.py --config-list config/real_minimal.yaml,config/onboard_base_stage2.yaml,config/onboard_mantle_stage2.yaml,config/onboard_zksync_candidate.yaml,config/onboard_scroll_stage1.yaml,config/onboard_linea_stage1.yaml --hours 3 --cycles 1 --sleep-seconds 20 --prune-keep 200 --summary-file data/runs/_rolling/long_scan_latest.json
 ```
 
 Strict mode (exit 1 if any chain has failures):

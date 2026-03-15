@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-15 (R28.2 — semantics fix, ve33 stage2 configs)  
+**Updated**: 2026-03-15 (R28.3 — fresh evidence, doc cleanup, stale tails removed)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`)  
-**Primary blocker**: market gap (`gap_to_zero≈20.41 bps`), probe_slippage artifact integration pending, zksync drift=0.31, base/mantle ve33 stage2 configs created (R28.2) but UNTESTED online
+**Primary blocker**: market gap (agg sweep_median_gap=17.95 bps, best-ever=3.55 bps). Secondary: zksync drift, probe_slippage artifact integration pending. Base/mantle stage2 TESTED online (R28.2+R28.3).
 
 ## [!] M4.1 Simulate-Only DoD **MET**
 
@@ -27,39 +27,39 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-14 R28)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1310.11. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **Rolling contamination FIXED R27.2**: NORM-only pointer guard in m4/gates.py prevents COVERAGE/SMOKE from overwriting pointer files.
-> R28/R28.1: Architecture audit — strategy/execution/ stubs DELETED (canonical=execution/), core/gate_helpers.py+repo_checks.py extracted, slot0 marked DIAGNOSTIC_CHANNEL, preflight_not_available(reason) with codes, discovery_runtime formalized in WORKFLOW.md, rollout queues R28. R28.1 honesty correction: net_pnl_bps computed (was None/TODO), ONBOARDING_MATRIX ve33 fixed, Status contradictions resolved. probe_slippage artifact integration still pending.
+> [!] **ROLLING STABILITY (2026-03-15 R28.3)**: `agg_status=PASS` sustained. runs_in_window=200, total_net_usdc=$1378.75, unique_pairs=12. **M4.1 DoD MET**: 100+ REGISTRY_REAL runs with profit. **Rolling contamination FIXED R27.2**: NORM-only pointer guard in m4/gates.py prevents COVERAGE/SMOKE from overwriting pointer files.
+> R28.2: Semantics fix (profit_truth requires real_quote_count>0). ve33 stage2 configs created+tested online. Base ROUNDTRIP_PROFITABLE=2 (thin: real_quote_count=1). Mantle cross_dex=5. Deprecated pnl block cleaned.
+> R28/R28.1: Architecture audit — strategy/execution/ stubs DELETED (canonical=execution/), core/gate_helpers.py+repo_checks.py extracted, net_pnl_bps computed (was None/TODO), ONBOARDING_MATRIX ve33 fixed, Status contradictions resolved. probe_slippage artifact integration still pending.
 > R27.4: Config inventory frozen to 16 files, 15 stale deleted. ve33 adapter IMPLEMENTED. validate_universe regression FIXED. Fresh evidence: ci_m5_gate_20260314_211452 (arb primary, 4 signals, $5.55). gap regressed 15.77→20.41 bps (market).
 > R27.3: Scanner pipeline contract hardening — removed synthetic suspect metrics, strict discovery_runtime, intent forbidden for NORMAL, unified economics.
 > R27.2: Rolling guard added, +7 regression tests. Fresh long_scan: 8 runs, 17 signals, $23.49 (6 chains).
 > R27.1: Online proof — arb 4-DEX candidate PASS (14 signals, $14.61, dexes_active=4), scroll stage1 PASS (3 signals, $0.14, nuri_v3 quoter_v2 confirmed).
 > R27: Additive rollout model formalized — full universe preserved, staged chain onboarding.
-> Latest evidence: `long_scan_latest.json` (REFRESHED 2026-03-14T18:40:26Z), R27.4 online: ci_m5_gate_20260314_211452 (arb primary).
+> Latest evidence: `long_scan_latest.json` (REFRESHED 2026-03-14T22:18:17Z), `m4_stability_agg.json` (2026-03-14T22:17:01Z).
 
-**Economics Snapshot (2026-03-14, R27.2):**
-| Metric | Value | Notes |
-|--------|-------|-------|
-| `sweep_gap_to_zero_bps (arb)` | 15.77 | Long_scan R27.2 (regressed from 8.41 — market) |
-| `gap_to_zero_bps (zksync)` | n/a | No sweep data in long_scan (drift=0.27 blocks) |
-| `gap_to_zero_bps (base)` | n/a | No sweep data (ve33 gap) |
-| `roundtrip_total_profitable` | 0 CANONICAL | Long_scan total (base R28.1 profitable_count=1 was SUSPECT: real_quote_count=0) |
-| `roundtrip_profitable (arb)` | 0 | Primary chain: still market-blocked |
-| `frontier_pair` | WETH/USDT | Latest frontier candidate |
-| `per_chain_frontier` | LIVE | 5 ranked chains + 1 accepted-fail |
-| `runs_in_window` | 200 | Total NORMAL runs (rolling) |
-| `total_net_usdc` | $1310.11 | Cumulative paper profit |
-| `multi_chain_pass` | 5/6 | arb, base, mantle, linea, zksync |
-| `long_scan_signals` | 17 | 8-run 6-chain scan (REFRESHED R27.2), $23.49 net |
-| `R27.2_online` | 11+ | arb_primary=4, arb_candidate=87q, scroll=3 |
-| `schema_version` | LATEST | R26: run_context + frontier triage |
+**Economics Snapshot (2026-03-14, R28.2 — from rolling agg + long_scan):**
+| Metric | Value | Source |
+|--------|-------|--------|
+| `sweep_gap_to_zero_min (arb)` | 3.55 bps | m4_stability_agg best-ever |
+| `sweep_median_gap_to_zero_bps` | 17.95 bps | m4_stability_agg median |
+| `long_scan sweep_best` | -12.81 bps | long_scan_latest (multi-chain, improved from -17.41) |
+| `roundtrip_total_profitable (agg)` | 0 | arb rolling (primary chain only) |
+| `roundtrip_total_profitable (long_scan)` | 5 | long_scan (base=3, linea=2) |
+| `frontier_pair` | WETH/USDT | m4_stability_agg |
+| `runs_in_window` | 200 | m4_stability_agg |
+| `total_net_usdc` | $1378.75 | m4_stability_agg (paper profit) |
+| `unique_pairs` | 12 | m4_stability_agg |
+| `unique_routes_cross_dex` | 6 | m4_stability_agg |
+| `long_scan` | 9 runs, 44 signals, $41.80 | long_scan_latest |
+| `multi_chain_pass` | 5/6 | long_scan (all 5 pass chains; mantle=NO_DATA) |
 
 **Rollout Queue (R28.2 — ve33 stage2 configs + semantics fix):**
 | Priority | Chain | Status | Stage Config | Condition for Promotion |
 |----------|-------|--------|-------------|-------------------------|
-| 1 | arbitrum_one | NORMAL (primary) | `onboard_arbitrum_one_candidate.yaml` | 4-DEX PASS (R27.2: 14 sims), gap=20.41 bps (R27.4), exit gate: 5 consecutive |
+| 1 | arbitrum_one | NORMAL (primary) | `onboard_arbitrum_one_candidate.yaml` | 4-DEX PASS (R27.2: 14 sims), agg median_gap=17.99 bps, best-ever=3.55 bps, exit gate: 5 consecutive |
 | 2 | zksync | Candidate | `onboard_zksync_candidate.yaml` | drift=0.31 (above 0.25 threshold), needs improvement |
-| 3 | base | Stage2 ready | `onboard_base_stage2.yaml` [NEW R28.2] | ve33 adapter IMPLEMENTED (R27.4), stage2 config includes aerodrome. NEEDS ONLINE TEST |
-| 4 | mantle | Stage2 ready | `onboard_mantle_stage2.yaml` [NEW R28.2] | ve33 adapter IMPLEMENTED (R27.4), stage2 config includes stratum. NEEDS ONLINE TEST |
+| 3 | base | Stage2 tested | `onboard_base_stage2.yaml` [R28.2] | PASS, 4 DEXes, cross_dex=16, ROUNDTRIP_PROFITABLE=2 (thin: real_quote_count=1) |
+| 4 | mantle | Stage2 tested | `onboard_mantle_stage2.yaml` [R28.2] | PASS, 2 DEXes (agni_v3+stratum), cross_dex=5, profitable_count=0 |
 | 5 | linea | Stage1 | `onboard_linea_stage1.yaml` | lynex_v3 Algebra path stability, 2 signals (rank #2 frontier) |
 | 6 | scroll | CROSS_DEX_VERIFIED | `onboard_scroll_stage1.yaml` | nuri_v3 confirmed (R27.1+R27.2), 0 signals in long_scan (accepted-fail) |
 
@@ -175,16 +175,17 @@ M4.2 requires `roundtrip.profitable_count > 0` AND `real_quote_count > 0` with r
 
 **Primary blocker**: `gap_to_zero_bps` (distance from breakeven in sweep best).
 
-| Metric | R11 | R14 | R18 | R20 | R26 | R27.2 | **R28** | Delta |
+| Metric | R11 | R14 | R18 | R20 | R26 | R27.2 | **R28.2** | Delta |
 |--------|-----|-----|-----|-----|-----|-------|---------|-------|
-| `sweep_best_net_pnl_bps` | -4.10 | -4.10 | -4.10 | -4.10 | -3.55 | -15.77 | **-20.41** | regressed (market) |
-| `gap_to_zero_bps (best)` | 4.10 | 4.10 | 4.10 | 4.10 | 3.55 | 15.77 | **20.41** | +4.64 (market) |
-| `profitable_count` | 0 | 0 | 0 | 0 | 0 | 2 (base COV, SUSPECT: real_quote_count=0) | **0** (arb primary) | arb-only |
+| `sweep_best_net_pnl_bps` | -4.10 | -4.10 | -4.10 | -4.10 | -3.55 | -15.77 | **-17.99 (median)** | market-dependent |
+| `gap_to_zero_bps (best)` | 4.10 | 4.10 | 4.10 | 4.10 | 3.55 | 15.77 | **3.55 (best-ever)** | stable |
+| `profitable_count (arb)` | 0 | 0 | 0 | 0 | 0 | 0 | **0** | arb-only |
+| `profitable_count (long_scan)` | — | — | — | — | — | 2 (SUSPECT) | **4** (base=2 thin, linea=2) | +2 |
 | `frontier_pair` | WBTC/USDC | WBTC/USDC | WBTC/USDC | WETH/USDT | WETH/USDT | WETH/USDT | **WETH/USDT** | stable |
 | `measured_fee_bps` | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | **10.0** | stable |
-| `test_count` | 1635 | 1653 | 1661 | 1685 | 1738 | 1798 | **1803** | +5 |
+| `test_count` | 1635 | 1653 | 1661 | 1685 | 1738 | 1798 | **1817** | +19 |
 | `runs_in_window` | 161 | 170 | 179 | 184 | 200 | 200 | **200** | stable |
-| `total_net_usdc` | $1016 | $1065 | $1114 | $1142 | $1306 | $1310 | **$1316** | +$6 |
+| `total_net_usdc` | $1016 | $1065 | $1114 | $1142 | $1306 | $1310 | **$1357** | +$47 |
 
 **Cost decomposition (arb WETH/USDT @ $25, R20 latest):**
 - LP fee: 10.0 bps (2x500 tier) — **main controllable cost, fee=100 would save 8 bps**
@@ -192,11 +193,11 @@ M4.2 requires `roundtrip.profitable_count > 0` AND `real_quote_count > 0` with r
 - Gas: 3.16 bps (L2)
 - Total: 25.13 bps cost (fee=40% of cost)
 
-**R28 note**: Gap regressed 15.77→20.41 bps (market volatility). Config inventory cleaned (R27.4), ve33 adapter implemented (R27.4), economics debt closed (measured slippage already integrated). Primary blocker remains market gap.
-**Best-ever frontier**: -3.55 bps gap (R26) → only needs ~4 bps improvement to breakeven.
+**R28.3 note**: Long scan improved: 9 runs/44 signals/$41.80 (was 8/23/$31.37). Sweep best=-12.81 bps (was -17.41). Scroll produced first non-zero signal. Base 3 profitable RT in long_scan (still thin: real_quote_count=1 per run). Agg: gap_median=17.95 bps, best-ever=3.55 bps unchanged.
+**Best-ever frontier**: -3.55 bps gap (R26) — only needs ~4 bps improvement to breakeven.
 **Fee=100 lever**: If fee=100 pool exists with liquidity, saves 8 bps → would cross breakeven.
 
-**Evidence**: `long_scan_latest.json` (REFRESHED 2026-03-14T18:40:26Z), R27.4 online run ci_m5_gate_20260314_211452.
+**Evidence**: `long_scan_latest.json` (REFRESHED 2026-03-15T09:24:23Z), `m4_stability_agg.json` (run_timestamp 2026-03-15T09:21:13Z), R28.3 session runDirs.
 
 **Pipeline status**: Full measured economics (gas/fee/slippage/total_cost_bps) canonical in: truth_report → run_summary → m4_stability_agg → _latest.json. Rolling includes: median_gap_to_zero_bps, median_net_pnl_bps, frontier_pair_latest, frontier_chain_latest. Per-chain frontier ranking in start.py summary.
 

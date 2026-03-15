@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-15 (R28.2 — semantics fix, ve33 stage2 configs)
-**Tests**: 1817 collected / 1817 passed / 3 skipped (R28.2: +5 tests — 2 profit semantics regression + 3 doc-contract)
+**Updated**: 2026-03-15 (R28.3 — doc cleanup, deprecated pnl pruned, stale section tests, fresh evidence)
+**Tests**: 1822 passed / 3 skipped (R28.3: +5 tests — 5 stale-section doc-contract)
 **Schema**: start:long_scan_summary (latest, R26 bump)
-**Evidence runDirs**: ci_m5_gate_20260314_230400 (R28.2 arb rolling-refresh), ci_m5_gate_20260314_230514 (R28.2 zksync), ci_m5_gate_20260314_230622 (R28.2 base stage2, ROUNDTRIP_PROFITABLE=2 REAL: real_quote_count=1), ci_m5_gate_20260314_230824 (R28.2 mantle stage2, cross_dex=5)
+**Evidence runDirs**: ci_m5_gate_20260315_100946 (R28.3 arb rolling-refresh, 5 signals, $5.60), ci_m5_gate_20260315_101057 (R28.3 zksync, PASS, cross_dex=10), ci_m5_gate_20260315_101207 (R28.3 base stage2, ROUNDTRIP_PROFITABLE=2 thin: real_quote_count=1), ci_m5_gate_20260315_101358 (R28.3 mantle stage2, PASS, NO_DATA)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-14T22:18:17Z: 8 runs, 23 signals, $31.37, 4 profitable roundtrips)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED 2026-03-15T09:24:23Z: 9 runs, 8 PASS, 44 signals, $41.80, 5 profitable roundtrips)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
 ---
@@ -26,23 +26,23 @@
 
 ---
 
-## Chain Quality Classification (R27.4)
+## Chain Quality Classification (R28.2)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=MARKET, gap=17.41 bps, drift=0.20)
-base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=16, PASS, ROUNDTRIP_PROFITABLE=2 REAL: real_quote_count=1)
-mantle:         SIGNAL_PRODUCING (stage2, 2 DEXes agni_v3+stratum ve33, cross-dex=5, PASS, profitable_count=0)
-zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, blocker=DRIFT, drift tbd)
-linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, 2 signals $7.44, 2 profitable roundtrips)
-scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, accepted-fail=true, 0 signals, blocker=THIN_LIQUIDITY)
+arbitrum_one:   SIGNAL_PRODUCING (primary, rolling, truth_probe, cross-dex=3, PASS, blocker=MARKET, agg gap_min=3.55 bps, gap_median=17.95 bps)
+base:           SIGNAL_PRODUCING (stage2, 4 DEXes inc. aerodrome ve33, cross-dex=16, PASS, ROUNDTRIP_PROFITABLE=2 thin: real_quote_count=1, measured_economics.available=false)
+mantle:         CROSS_DEX_VERIFIED (stage2, 2 DEXes agni_v3+stratum ve33, cross-dex=5, gate PASS, run_summary=NO_DATA, 0 signals)
+zksync:         SIGNAL_PRODUCING (discovery, cross-dex=10, PASS, 2 signals, blocker=DRIFT)
+linea:          SIGNAL_PRODUCING (discovery, cross-dex=12, PASS, 2 signals $7.54, 2 profitable roundtrips)
+scroll:         CROSS_DEX_VERIFIED (1 signal $0.08 in long_scan — first non-zero scroll evidence)
 ```
 
-**R28.2 changes**: Semantics fix (require real_quote_count > 0 for ROUNDTRIP_PROFITABLE). ve33 stage2 configs created and TESTED online. Base REAL ROUNDTRIP_PROFITABLE=2 (first confirmed real profitable roundtrip with real_quote_count=1). Mantle cross-DEX surface enabled (agni_v3+stratum). Arb gap improved 20.41→17.41 bps.
+**R28.2 changes**: Semantics fix (require real_quote_count > 0 for ROUNDTRIP_PROFITABLE). ve33 stage2 configs created and tested online. Base ROUNDTRIP_PROFITABLE=2 but thin evidence (real_quote_count=1, measured_economics.available=false — not promotion-grade). Mantle cross-DEX surface enabled (agni_v3+stratum). Arb gap: agg best-ever=3.55 bps, median=17.99 bps.
 
 **Rollout Queue (R28.2 — ve33 stage2 TESTED)**:
 1. **arbitrum_one** (primary, NORMAL) — 4-DEX candidate PASS (R27.2: 14 sims). Gap improved to 17.41 bps (was 20.41 R27.4). Exit gate: 5 consecutive. discovery_runtime is canonical successor (R28).
 2. **zksync** — drift improvement needed, PASS, cross_dex=10
-3. **base** — **STAGE2 TESTED** (R28.2): 4 DEXes (uni+sushi+pancake+aerodrome ve33), cross_dex=16, ROUNDTRIP_PROFITABLE=2 REAL (real_quote_count=1). First confirmed real profitable roundtrip.
+3. **base** — **STAGE2 TESTED** (R28.2): 4 DEXes (uni+sushi+pancake+aerodrome ve33), cross_dex=16, ROUNDTRIP_PROFITABLE=2 thin (real_quote_count=1, measured_economics.available=false). Positive but not promotion-grade — needs 2-3 more profitable roundtrips with real_quote_count>1.
 4. **mantle** — **STAGE2 TESTED** (R28.2): 2 DEXes (agni_v3+stratum ve33), cross_dex=5, profitable_count=0 but cross-DEX surface enabled.
 5. **linea** — 2 signals, $7.44, 2 profitable roundtrips (long_scan), cross_dex=12
 6. **scroll** — accepted-fail, 0 signals, THIN_LIQUIDITY blocker
@@ -105,8 +105,8 @@ scroll:         CROSS_DEX_VERIFIED (monitoring_only=true, accepted-fail=true, 0 
 - `scripts/validate_universe.py`: intent forbidden for strict run_kinds, same_dex_mode warning
 - `tests/unit/test_suspect_provenance.py`: +7 tests (extract/purity validation)
 
-**Long scan**: REFRESHED 2026-03-14T22:18:17Z: 6 PASS + 1 accepted-fail + 1 fail / 8 runs / 23 signals / $31.37 net / 4 profitable roundtrips (base=2 REAL, linea=2)
-**Profit truth**: BASE: YES (ROUNDTRIP_PROFITABLE=2, real_quote_count=1, stage2 with aerodrome ve33). ARB PRIMARY: NOT YET (gap=17.41 bps, improving from 20.41 bps).
+**Long scan**: REFRESHED 2026-03-15T09:24:23Z: 8 PASS + 1 NO_DATA / 9 runs / 44 signals / $41.80 net / 5 profitable roundtrips (base=3, linea=2). Scroll=1 signal (first non-zero).
+**Profit truth**: BASE: positive but thin (ROUNDTRIP_PROFITABLE=2, real_quote_count=1, measured_economics.available=false — needs repetition). ARB PRIMARY: NOT YET (agg gap_median=17.95 bps, best-ever=3.55 bps).
 
 ---
 
@@ -232,14 +232,11 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Next Steps (R27.2)
+## Current Blockers (R28.3)
 
-- **Adapter gaps**: implement `ve33` adapter for aerodrome (Base) and stratum (Mantle)
-- **Arbitrum exit gate**: 5 consecutive online runs with signals>=4, cross_dex>=3, drift_rate<=0.20
-- **Arbitrum frontier**: gap regressed from 8.41→15.77 bps — monitor for market recovery
-- **zksync promotion**: drift_rejection_rate_median=0.27 (above 0.25) — pair tuning may help
-- **Scroll sustained evidence**: 0 signals in long_scan vs 3 in stage1 — needs more runs
-- **Linea stability**: run `onboard_linea_stage1.yaml` to stabilize lynex_v3 Algebra path
-- **Coverage matrix**: `docs/ONBOARDING_MATRIX.md` — single source of truth for adapter readiness
-- Scroll: ECOSYSTEM_BLOCKED until sustained evidence (not just single-run proof)
-- Test delta: +7 R27.2 rolling protection tests (1791 → 1798)
+- **Arb gap**: agg median_gap=17.99 bps, best-ever=3.55 bps. Primary blocker is market, not code.
+- **Base stage2**: ROUNDTRIP_PROFITABLE=2 but thin evidence (real_quote_count=1, measured_economics.available=false). Needs 2-3 more profitable roundtrips with real_quote_count>1.
+- **Mantle stage2**: cross_dex=5 PASS but NO_DATA (0 signals). Not yet signal-producing.
+- **zksync**: drift above threshold, needs pair tuning.
+- **Scroll**: accepted-fail, 0 signals in long_scan, THIN_LIQUIDITY.
+- **probe_slippage**: artifact integration still pending (Status_M4).
