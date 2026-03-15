@@ -113,6 +113,12 @@ def _register_adapters():
     except ImportError as e:
         logger.warning(f"Failed to import ve33 adapter: {e}")
     
+    try:
+        from dex.adapters.uniswap_v2 import UniswapV2Adapter
+        _ADAPTER_REGISTRY["uniswap_v2"] = UniswapV2Adapter
+    except ImportError as e:
+        logger.warning(f"Failed to import uniswap_v2 adapter: {e}")
+    
     logger.debug(f"Registered adapters: {list(_ADAPTER_REGISTRY.keys())}")
 
 
@@ -156,8 +162,8 @@ def create_adapter(
         quoter_address = dex_config.get_quoter_address() or ""
         dex_id = dex_config.name
         
-        # ve33 adapter uses router, not quoter
-        if dex_config.adapter_type == "ve33":
+        # ve33 and uniswap_v2 adapters use router, not quoter
+        if dex_config.adapter_type in ("ve33", "uniswap_v2"):
             router_address = dex_config.router or ""
             return adapter_class(rpc_provider, router_address, dex_id)
         

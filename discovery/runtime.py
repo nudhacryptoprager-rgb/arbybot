@@ -3,6 +3,8 @@
 Discovery Runtime Module - Dynamic universe expansion at runtime.
 
 v2.4.0: Added for discovery_runtime mode.
+R28.8: Removed artificial caps and adapter_type filters. All registered adapters
+       now participate in discovery. See OPERATIONAL CONTRACT below.
 
 PURPOSE:
     When discovery_runtime=true in config, this module expands the trading
@@ -14,9 +16,19 @@ CONTRACT:
         1. Reads pairs from config/intent.txt
         2. Filters to pairs with both tokens resolvable in core_tokens.yaml
         3. Uses discovery/pool_resolver.py to resolve pool addresses
-        4. Respects discovery_runtime_max_pairs cap (default: 20)
+        4. Respects discovery_runtime_max_pairs cap (default: 100)
         5. Returns deterministic ordering (sorted by canonical_key)
     - Observability: stats in stats["discovery_runtime"]
+    
+OPERATIONAL CONTRACT (R28.8):
+    TRUTH GATES (must keep):
+    - require_cross_dex: For DEX-DEX arb, pair must exist on 2+ DEXes
+    - Quarantine: Pools can be quarantined for bad behavior
+    - Confidence scoring: Spreads below threshold are advisory
+    
+    REMOVED SUPPRESSION (R28.8):
+    - adapter_types filter: Now None (all registered adapters participate)
+    - DEFAULT_MAX_PAIRS cap: Raised from 20 to 100
     
 SAFETY:
     - ARBY_SKIP_RPC=1 causes immediate return with empty list (no RPC calls)
@@ -122,7 +134,8 @@ from discovery.index_factories import (
 )
 
 # Default max pairs to resolve per cycle
-DEFAULT_MAX_PAIRS = 20
+# R28.8: Raised from 20 to 100 — full-universe scan, not artificial suppression
+DEFAULT_MAX_PAIRS = 100
 
 
 def _matches_excluded_hint(pair_display: str, hints: List[str]) -> bool:
@@ -210,9 +223,9 @@ def resolve_runtime_pairs(
         return [], stats
     
     # v3.2.17: Determine dexes to query from dexes.yaml (single source of truth)
+    # R28.8: Include ALL adapter types — ve33 and uniswap_v2 were silently excluded
     if dexes is None:
-        # Default to V3-compatible dexes (uniswap_v3 and algebra adapters)
-        dexes = get_chain_dexes(chain, adapter_types=["uniswap_v3", "algebra"])
+        dexes = get_chain_dexes(chain, adapter_types=None)
     stats.dexes_queried = dexes
     
     # v3.2.17: fee_tiers now handled per-DEX inside the loop (see below)

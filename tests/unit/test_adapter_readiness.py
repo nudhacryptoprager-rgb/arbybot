@@ -22,7 +22,7 @@ CHAINS_YAML = Path(__file__).parent.parent.parent / "config" / "chains.yaml"
 ALL_CHAINS = ["arbitrum_one", "base", "linea", "mantle", "scroll", "zksync"]
 
 # adapter_types that have a registered class in dex/registry.py
-IMPLEMENTED_ADAPTERS = {"uniswap_v3", "algebra", "ve33"}
+IMPLEMENTED_ADAPTERS = {"uniswap_v3", "algebra", "ve33", "uniswap_v2"}
 
 # adapter_types that are known but NOT yet implemented
 UNIMPLEMENTED_ADAPTERS = set()
@@ -74,8 +74,8 @@ class TestAdapterReadinessPerChain:
         for dex_name, dex_data in chain_dexes.items():
             adapter_type = dex_data.get("adapter_type", "")
             if adapter_type in IMPLEMENTED_ADAPTERS:
-                if adapter_type == "ve33":
-                    # ve33 quotes on-pool, router is optional
+                if adapter_type in ("ve33", "uniswap_v2"):
+                    # ve33/V2 quote on-pool, router is optional
                     continue
                 quoter = dex_data.get("quoter_v2") or dex_data.get("quoter")
                 assert quoter and quoter.startswith("0x"), (
