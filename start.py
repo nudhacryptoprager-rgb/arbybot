@@ -623,7 +623,7 @@ def build_summary(
     for chain, s in per_chain.items():
         s["chain_profit_state"] = classify_chain_profit_state(s)
 
-    return {
+    summary = {
         "schema": "start:long_scan_summary:v1.12",  # R28.13: truth contract alignment + truth KPIs surfaced
         "generated_at": run_ts,
         "run_context": {
@@ -710,12 +710,18 @@ def build_summary(
             },
         },
         # R28.12: Truth path alignment — makes static-probe exceptions visible
-        "truth_path_alignment": _compute_truth_path_alignment(per_chain),
+        "truth_path_alignment": None,  # filled below
+        # R28.14: Benchmark chain — strongest ALIGNED chain by merit
+        "benchmark_chain": None,  # filled below
     }
+    _tpa, _bench = _compute_truth_path_alignment(per_chain)
+    summary["truth_path_alignment"] = _tpa
+    summary["benchmark_chain"] = _bench
+    return summary
 
 
-def _compute_truth_path_alignment(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """R28.13: Compute truth path alignment for all chains.
+def _compute_truth_path_alignment(per_chain: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], str | None]:
+    """R28.14: Compute truth path alignment for all chains.
 
     Shows BOTH profit truth AND operational quality in one view, so the
     operator never sees a misleading ``POSITIVE + fail_chain`` without
@@ -767,7 +773,35 @@ def _compute_truth_path_alignment(per_chain: dict[str, dict[str, Any]]) -> dict[
             "best_net_pnl_bps": s.get("best_roundtrip_net_bps"),
             "gap_to_zero_bps": s.get("sweep_gap_to_zero_bps"),
         }
-    return result
+
+    # R28.14: Identify benchmark chain — strongest ALIGNED chain by merit
+    # Primary chain remains contractual (arbitrum_one for rolling), but the
+    # benchmark is whoever currently holds the best truth standard.
+    aligned_chains = [
+        (ch, info) for ch, info in result.items()
+        if info["alignment"] == "ALIGNED"
+    ]
+    benchmark_chain = None
+    if aligned_chains:
+        # Sort by profitable_roundtrips desc, then gap_to_zero_bps asc (lower is better)
+        aligned_chains.sort(
+            key=lambda x: (
+                -(x[1].get("profitable_roundtrips") or 0),
+                x[1].get("gap_to_zero_bps") if x[1].get("gap_to_zero_bps") is not None else 9999,
+            )
+        )
+        benchmark_chain = aligned_chains[0][0]
+
+    # R28.14: Unified truth standard fields per chain
+    for ch, info in result.items():
+        info["truth_standard_met"] = (
+            info["alignment"] in ("ALIGNED", "POSITIVE")
+            and info["has_real_quotes"]
+            and (info.get("profitable_roundtrips") or 0) > 0
+        )
+        info["is_benchmark"] = ch == benchmark_chain
+
+    return result, benchmark_chain
 
 
 def _compute_per_chain_drift_summary(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:

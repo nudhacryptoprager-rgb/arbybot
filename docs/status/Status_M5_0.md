@@ -1,12 +1,12 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-16 (R28.13 — truth contract alignment, hot_loop v1.1 provenance, truth KPI surfacing, dashboard Panel 0, PairHotQueue + micro-quote, cross-pair parallel quoter prefetch)
-**Tests**: 1886 passed / 3 skipped
-**Schema**: start:long_scan_summary:v1.12 (R28.13 bump)
-**Evidence runDirs**: long_scan 42 runs 6 chains (R28.13)
+**Updated**: 2026-03-16 (R28.14 — benchmark_chain formalized, unified truth standard per chain, forbidden version strings removed, fresh 42-run scan)
+**Tests**: 1888 passed / 3 skipped
+**Schema**: see DEV_REPORT_LATEST.md (schema unchanged, additive fields only)
+**Evidence runDirs**: long_scan 42 runs 6 chains (R28.14)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.13: 42 runs 384s, hot_loop v1.1: 17 full / 25 hot, truth_path_alignment enriched with quality context, PairHotQueue 54 pairs)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.14: 42 runs 371s, benchmark_chain=linea, truth_standard_met per chain, hot_loop 17 full / 25 hot)
 **Hot pairs caches**: `data/cache/hot_pairs_{chain}.json` (base=22, linea=11, mantle=4, scroll=9, zksync=8 pairs)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
 
@@ -17,7 +17,8 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
-> R28.13: Truth contract alignment (ALIGNED vs POSITIVE with quality_healthy — no hidden contradictions). hot_loop_latest.json v1.1 with run_context provenance, session link, truth KPIs per chain, micro_requote counters. Truth KPIs surfaced at 4 levels (metrics, frontier_ranking, hot_loop, truth_path_alignment). Dashboard Panel 0 "Hot Loop Live". PairHotQueue: 54 pairs loaded, drain+micro-quote between Phase 1 and Phase 2. Cross-pair parallel quoter prefetch: quote_rpc_ms reduced 8x (base 180s→22s). Schema v1.11→v1.12. Fresh scan: 42 runs 384s, linea ALIGNED/CONFIRMED_POSITIVE_CONTROL (14 profitable RT), base POSITIVE/THIN (3 RT, quality issues).
+> R28.14: Benchmark chain formalized — merit-based selection: linea is current benchmark (14 profitable RT, ALIGNED, is_benchmark=true). Unified truth standard: truth_standard_met + is_benchmark per chain. Forbidden version strings removed from Status files. Fresh scan: 42 runs 371s, benchmark_chain=linea. Arb gap=3.25 bps best-ever (approaching breakeven). quote_rpc_ms: arb 5.6s (was 14.6s), linea 8.1s, base 22s. +2 tests (1888). Arbitrum remains contractual primary truth path, but linea is currently the strongest aligned positive control. Next milestone: unified truth-standard across all chains + event-driven hot-loop speed.
+> R28.13: Truth contract alignment (ALIGNED vs POSITIVE with quality_healthy — no hidden contradictions). hot_loop_latest.json schema bump with run_context provenance, session link, truth KPIs per chain, micro_requote counters. Truth KPIs surfaced at 4 levels (metrics, frontier_ranking, hot_loop, truth_path_alignment). Dashboard Panel 0 "Hot Loop Live". PairHotQueue: 54 pairs loaded, drain+micro-quote between Phase 1 and Phase 2. Cross-pair parallel quoter prefetch: quote_rpc_ms reduced 8x (base 180s→22s). Schema bumped (additive). Fresh scan: 42 runs 384s, linea ALIGNED/CONFIRMED_POSITIVE_CONTROL (14 profitable RT), base POSITIVE/THIN (3 RT, quality issues).
 > R28.12: Event queue DirtySetTracker (pending_chains/drain_event/mark_clean), hot_loop_latest.json (fast-refresh artifact), cross-pair parallel quotes (shared 16-worker TPE), WS block pass-through (ARBY_WS_BLOCK_NUMBER env var skips block-pin RPC), truth_path_alignment section (BLOCKED/POSITIVE/NOT_PROVEN/ALIGNED per chain). System is still batch-hot — WS invalidates but does not yet trigger immediate executable re-quote. Schema bump (additive). +16 tests (1886). Fresh scan: 30 runs, 10 full/20 hot, linea CONFIRMED_POSITIVE_CONTROL (10 profitable RT), base THIN_POSITIVE (7 RT).
 > R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation. Dual-cycle architecture: every FULL_SWEEP_INTERVAL=5 scans per chain does full discovery, others use cached pairs from `data/cache/hot_pairs_{chain}.json` (reduces RPC calls and latency). `DirtySetTracker` subscribes to WebSocket `eth_subscribe newHeads` — chains only re-scanned when dirty (new block). If WSS not connected, chain is always dirty (safe fallback). Dashboard "Hot Loop" table shows per-chain mode/full_sweeps/hot_requotes. Addresses Lead directive: "Розвести два цикли: full sweep і hot re-quote loop. Використати WebSocket не як 'галочку', а як trigger для dirty-set invalidation."
 > R28.11 Turn 1: Pair-level dashboard visibility. _pair_history (5 runs), Delta column for spread_bps changes, Cache Freshness table (pools_from_cache/rpc/rpc_calls), Suppression Counters table (6 types), 2-decimal bps precision. Guardrails: STATIC_PROBE_PATH, ZERO_FEE_DOMINANCE.
@@ -36,26 +37,26 @@
 
 ---
 
-## Chain Quality Classification (R28.13)
+## Chain Quality Classification (R28.14)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING / PRIMARY_BLOCKER (primary, rolling, truth_probe, 6 pairs, cross-dex=6, PASS, profitable_rt=0, real_quotes=24, gap=16.2 bps, alignment=BLOCKED)
-base:           SIGNAL_PRODUCING / THIN_POSITIVE (stage2, 4 DEXes, cross-dex=22, profitable_rt=3, real_quotes=1, alignment=POSITIVE, quality_healthy=false)
-mantle:         NO_DATA / CANDIDATE (probe-only, no real quotes, alignment=NOT_PROVEN)
-zksync:         SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, cross-dex=8, profitable_rt=0, real_quotes=14, alignment=BLOCKED)
-linea:          SIGNAL_PRODUCING / CONFIRMED_POSITIVE_CONTROL (discovery, cross-dex=11, **truth=True**: profitable_rt=14, real_quotes=14, positive control confirmed, alignment=ALIGNED)
-scroll:         FAIL / CANDIDATE (accepted-fail, no real quotes, alignment=NOT_PROVEN)
+arbitrum_one:   SIGNAL_PRODUCING / PRIMARY_BLOCKER (primary, rolling, truth_probe, 6 pairs, cross-dex=6, PASS, profitable_rt=0, real_quotes=28, gap=3.25 bps best-ever, alignment=BLOCKED, truth_standard_met=false)
+base:           SIGNAL_PRODUCING / CONFIRMED_POSITIVE_CONTROL (stage2, 4 DEXes, cross-dex=22, profitable_rt=1, real_quotes=3, alignment=ALIGNED, truth_standard_met=true, quality intermittent)
+mantle:         NO_DATA / CANDIDATE (probe-only, no real quotes, alignment=NOT_PROVEN, truth_standard_met=false)
+zksync:         SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, cross-dex=1, profitable_rt=0, real_quotes=14, alignment=BLOCKED, truth_standard_met=false)
+linea:          SIGNAL_PRODUCING / CONFIRMED_POSITIVE_CONTROL (discovery, cross-dex=3, **benchmark_chain=true**: profitable_rt=14, real_quotes=14, alignment=ALIGNED, truth_standard_met=true)
+scroll:         FAIL / CANDIDATE (accepted-fail, no real quotes, alignment=NOT_PROVEN, truth_standard_met=false)
 ```
 
-**R28.13 changes**: Truth contract alignment replaces flat CONFIRMED_POSITIVE_CONTROL with 4-state model (ALIGNED/POSITIVE/BLOCKED/NOT_PROVEN) based on quality_healthy flag. Truth KPIs (real_quote_count, profitable_roundtrips, best_net_pnl_bps, gap_to_zero_bps) surfaced at metrics top-level, frontier_ranking, hot_loop per-chain, and truth_path_alignment. Base downgraded from CONFIRMED_POSITIVE_CONTROL to THIN_POSITIVE (quality_healthy=false). Linea upgraded to ALIGNED (quality_healthy=true, 14 profitable RT). Cross-pair parallel quoter prefetch reduces quote_rpc_ms 8x.
+**R28.14 changes**: Formal benchmark_chain concept (merit-based: linea). Unified truth_standard_met and is_benchmark fields per chain. Arbitrum remains contractual primary truth path, but it is no longer the strongest chain; linea is currently the strongest aligned positive control. Base improved to ALIGNED (0 fails this scan), but intermittent across scans.
 
-**Rollout Queue (R28.13 — truth contract alignment applied)**:
-1. **arbitrum_one** (primary) — BLOCKED. gap=16.2 bps, real_quotes=24, profitable_rt=0. Fee structure root cause (100-3000 bps).
-2. **linea** — **ALIGNED** (positive control). profitable_rt=14, real_quotes=14, quality_healthy=true. Strongest chain.
-3. **base** — **POSITIVE** (quality issues). 4 DEXes, cross_dex=22, profitable_rt=3, real_quotes=1, quality_healthy=false.
-4. **zksync** — BLOCKED. cross_dex=8, real_quotes=14, profitable_rt=0.
-5. **mantle** — NOT_PROVEN. probe-only, no real quotes.
-6. **scroll** — NOT_PROVEN. accepted-fail, no real quotes.
+**Rollout Queue (R28.14 — benchmark_chain formalized)**:
+1. **linea** — **ALIGNED / BENCHMARK** (merit-based). profitable_rt=14, real_quotes=14, quality_healthy=true, is_benchmark=true. Strongest chain.
+2. **base** — **ALIGNED** (intermittent). 4 DEXes, cross_dex=22, profitable_rt=1, real_quotes=3. Quality unstable across scans.
+3. **arbitrum_one** (primary contractual) — BLOCKED. gap=3.25 bps best-ever (approaching breakeven), real_quotes=28, profitable_rt=0.
+4. **zksync** — BLOCKED. cross_dex=1, real_quotes=14, profitable_rt=0.
+5. **mantle** — NOT_PROVEN. 5/7 FAIL, no real quotes.
+6. **scroll** — NOT_PROVEN. 7/7 FAIL (accepted-fail), no real quotes.
 
 **Onboard Stage Configs (R27+R28.2)**:
 - `config/onboard_arbitrum_one_candidate.yaml` — 4-DEX additive (uni+sushi+camelot+pancakeswap)

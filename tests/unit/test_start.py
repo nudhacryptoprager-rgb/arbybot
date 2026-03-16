@@ -2021,6 +2021,51 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
         self.assertIn("truth_path_alignment", summary)
         self.assertIn("arb", summary["truth_path_alignment"])
 
+    def test_benchmark_chain_identifies_strongest_aligned(self):
+        """R28.14: benchmark_chain is the ALIGNED chain with most profitable_roundtrips."""
+        per_chain = {
+            "arb": start.new_chain_stats(),
+            "linea": start.new_chain_stats(),
+            "base": start.new_chain_stats(),
+        }
+        # arb: BLOCKED (real quotes but no profitable RT)
+        per_chain["arb"]["real_quote_count_total"] = 20
+        per_chain["arb"]["profitable_roundtrips_total"] = 0
+        per_chain["arb"]["roundtrip_evaluated_total"] = 10
+        per_chain["arb"]["runs"] = 7
+        per_chain["arb"]["pass"] = 7
+        # linea: ALIGNED (profitable + quality healthy)
+        per_chain["linea"]["real_quote_count_total"] = 14
+        per_chain["linea"]["profitable_roundtrips_total"] = 14
+        per_chain["linea"]["roundtrip_evaluated_total"] = 14
+        per_chain["linea"]["runs"] = 7
+        per_chain["linea"]["pass"] = 7
+        # base: POSITIVE (profitable but fails)
+        per_chain["base"]["real_quote_count_total"] = 3
+        per_chain["base"]["profitable_roundtrips_total"] = 3
+        per_chain["base"]["roundtrip_evaluated_total"] = 5
+        per_chain["base"]["runs"] = 7
+        per_chain["base"]["pass"] = 4
+        per_chain["base"]["fail"] = 3
+
+        summary = start.build_summary(per_chain, 100.0, [])
+        self.assertEqual(summary["benchmark_chain"], "linea")
+        self.assertTrue(summary["truth_path_alignment"]["linea"]["is_benchmark"])
+        self.assertTrue(summary["truth_path_alignment"]["linea"]["truth_standard_met"])
+        self.assertFalse(summary["truth_path_alignment"]["arb"]["is_benchmark"])
+        self.assertFalse(summary["truth_path_alignment"]["arb"]["truth_standard_met"])
+        # base is POSITIVE (not ALIGNED), not benchmark but truth_standard_met
+        self.assertTrue(summary["truth_path_alignment"]["base"]["truth_standard_met"])
+        self.assertFalse(summary["truth_path_alignment"]["base"]["is_benchmark"])
+
+    def test_benchmark_chain_none_when_no_aligned(self):
+        """R28.14: benchmark_chain is None when no chain is ALIGNED."""
+        per_chain = {"arb": start.new_chain_stats()}
+        per_chain["arb"]["runs"] = 1
+        per_chain["arb"]["pass"] = 1
+        summary = start.build_summary(per_chain, 10.0, [])
+        self.assertIsNone(summary["benchmark_chain"])
+
 
 class TestWSBlockPassThrough(unittest.TestCase):
     """R28.12: WS block number pass-through via ARBY_WS_BLOCK_NUMBER."""
