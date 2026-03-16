@@ -442,7 +442,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.11")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.12")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -1108,7 +1108,7 @@ class TestFrontierRanking(unittest.TestCase):
         per_chain["base"]["included_signals_total"] = 3
         summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
         # Schema version check
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.11")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.12")
         # Required top-level fields
         self.assertIn("generated_at", summary)
         self.assertIn("wall_seconds", summary)
@@ -1772,7 +1772,7 @@ class TestChainProfitState(unittest.TestCase):
         self.assertEqual(summary["per_chain"]["base"]["last_pools_from_rpc"], 2)
         self.assertEqual(summary["per_chain"]["base"]["last_suppression"]["single_dex"], 3)
         self.assertEqual(len(summary["per_chain"]["base"]["_pair_history"]), 1)
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.11")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.12")
 
 
 class TestHotLoopAndDirtySet(unittest.TestCase):
@@ -1960,7 +1960,7 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
                 self.assertTrue(tmp_path.exists())
                 with open(tmp_path) as f:
                     snap = json.load(f)
-                self.assertEqual(snap["schema"], "start:hot_loop_snapshot:v1.0")
+                self.assertEqual(snap["schema"], "start:hot_loop_snapshot:v1.1")
                 self.assertIn("generated_at", snap)
                 self.assertIn("per_chain", snap)
                 self.assertIn("arb", snap["per_chain"])
@@ -1985,6 +1985,7 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
         self.assertEqual(align["arb"]["alignment"], "BLOCKED")
 
     def test_truth_path_alignment_positive(self):
+        """R28.13: ALIGNED when profitable + quality healthy; POSITIVE when profitable + quality issues."""
         per_chain = {"linea": start.new_chain_stats()}
         per_chain["linea"]["real_quote_count_total"] = 5
         per_chain["linea"]["profitable_roundtrips_total"] = 3
@@ -1993,7 +1994,16 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
         per_chain["linea"]["pass"] = 1
         summary = start.build_summary(per_chain, 10.0, [])
         align = summary["truth_path_alignment"]
-        self.assertEqual(align["linea"]["alignment"], "POSITIVE")
+        # Profitable + zero fails → ALIGNED
+        self.assertEqual(align["linea"]["alignment"], "ALIGNED")
+        self.assertTrue(align["linea"]["quality_healthy"])
+
+        # Now add a fail → POSITIVE (profitable but quality issues)
+        per_chain["linea"]["fail"] = 1
+        summary2 = start.build_summary(per_chain, 10.0, [])
+        align2 = summary2["truth_path_alignment"]
+        self.assertEqual(align2["linea"]["alignment"], "POSITIVE")
+        self.assertFalse(align2["linea"]["quality_healthy"])
 
     def test_truth_path_alignment_not_proven(self):
         per_chain = {"base": start.new_chain_stats()}

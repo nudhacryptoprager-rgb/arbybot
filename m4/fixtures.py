@@ -1243,6 +1243,11 @@ def generate_m4_from_online_inputs(
             "profit_truth_available": profit_truth_available,
             # R28.10: Profit realism status (from truth_report, canonical classification)
             "profit_realism_status": truth_data.get("profit_realism_status", "ONE_LEG_ONLY_DIAGNOSTIC"),
+            # R28.13 Step 5: Truth KPIs surfaced at top-level metrics (not buried in roundtrip)
+            "real_quote_count": roundtrip.get("real_quote_count", 0),
+            "profitable_roundtrips": roundtrip.get("profitable_count", 0),
+            "best_net_pnl_bps": roundtrip.get("best_net_pnl_bps"),
+            "gap_to_zero_bps": roundtrip.get("dynamic_sweep", {}).get("gap_to_zero_bps") if isinstance(roundtrip.get("dynamic_sweep"), dict) else None,
             # v3.2.7: Deterministic NO_DATA classification
             "no_data_reason": no_data_reason,
             # v3.2.51: Chain quality level (INFRA_READY/SIGNAL_PRODUCING/QUALITY_RAISED)

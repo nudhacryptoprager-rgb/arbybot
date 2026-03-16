@@ -55,6 +55,12 @@ tr:hover{background:#1c2128}
 <div id="error-msg"></div>
 
 <div class="grid">
+  <!-- Panel 0: Hot Loop Live (R28.13 — primary fast-refresh panel) -->
+  <div class="panel" id="p-hotloop" style="grid-column:1/-1">
+    <h2>&#9889; Hot Loop Live <span style="font-size:.65rem;color:#6e7681">(fast-refresh from hot_loop_latest.json)</span></h2>
+    <div id="hotloop-body"></div>
+  </div>
+
   <!-- Panel 1: Chain Status -->
   <div class="panel" id="p-chain">
     <h2>1. Chain Status</h2>
@@ -135,6 +141,7 @@ function render(data) {
   const rs = data.run_summary;
   const agg = data.stability_agg;
   const ls = data.long_scan;
+  const hl = data.hot_loop;
   const qs = agg?.quick_stats || {};
 
   // Header
@@ -158,6 +165,7 @@ function render(data) {
     `<b>Multi-chain:</b> ${lsRuns} runs (${lsPass}P/${lsFail}F) | ${lsSignals} signals | Net: ${fmtUsd(lsNet)} | Updated: ${(lsTs||'?').slice(0,19)}Z${bsInfo}` +
     `<br><span style="color:#6e7681">Primary (NORM-ONLY): ${rsRunDir} | ${(rsTs||'?').slice(0,19)}Z | Rolling: ${qs.pass_count||0}+${qs.no_data_count||0}+${qs.fail_count||0} (P/ND/F)</span>`;
 
+  renderHotLoop(hl);
   renderChainStatus(ls);
   renderFrontier(ls);
   renderEconomics(rs, qs);
@@ -169,6 +177,55 @@ function render(data) {
   renderRejects(rs);
   renderProbeTargets(ls);
 }
+
+  // Panel 0: Hot Loop Live (R28.13)
+  function renderHotLoop(hl) {
+    if (!hl?.per_chain) { $('hotloop-body').innerHTML = '<em class="na">No hot loop data (hot_loop_latest.json not found)</em>'; return; }
+    const ts = hl.generated_at || '?';
+    const wall = hl.wall_seconds || 0;
+    const fs = hl.total_full_sweeps || 0;
+    const hr = hl.total_hot_requotes || 0;
+    const tr = hl.total_runs || 0;
+    let html = `<div class="kpi" style="margin-bottom:10px">
+      <div class="kpi-item"><div class="kpi-val">${tr}</div><div class="kpi-lbl">Total Runs</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fs}</div><div class="kpi-lbl">Full Sweeps</div></div>
+      <div class="kpi-item"><div class="kpi-val">${hr}</div><div class="kpi-lbl">Hot Re-quotes</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(wall,0)}s</div><div class="kpi-lbl">Wall Time</div></div>
+      <div class="kpi-item"><div class="kpi-val" style="font-size:.9rem">${ts.slice(0,19)}Z</div><div class="kpi-lbl">Last Update</div></div>
+    </div>`;
+    html += '<table><tr><th>Chain</th><th class="num">Mode</th><th class="num">Runs</th><th class="num">P/F</th><th class="num">Block</th><th>Profit State</th><th class="num">Real Quotes</th><th class="num">Profitable RT</th><th class="num">Best PnL</th><th class="num">Gap</th></tr>';
+    for (const [chain, d] of Object.entries(hl.per_chain)) {
+      const modeBadge = d.last_scan_mode === 'hot' ? badge('HOT','warn') : d.last_scan_mode === 'full' ? badge('FULL','pass') : badge('—','');
+      const stateBadge = d.chain_profit_state === 'CONFIRMED_POSITIVE_CONTROL' ? badge('CONFIRMED+','pass') :
+                         d.chain_profit_state === 'THIN_POSITIVE' ? badge('THIN+','warn') :
+                         d.chain_profit_state === 'PRIMARY_BLOCKER' ? badge('BLOCKED','fail') :
+                         d.chain_profit_state === 'CANDIDATE' ? badge('CANDIDATE','') :
+                         badge(d.chain_profit_state||'—','');
+      const pnlVal = d.best_net_pnl_bps;
+      const pnlCls = pnlVal != null ? (pnlVal > 0 ? 'pos' : 'neg') : 'na';
+      const gapVal = d.gap_to_zero_bps;
+      const gapCls = gapVal != null ? (gapVal < 10 ? 'pos' : gapVal < 30 ? 'warn-c' : 'neg') : 'na';
+      html += `<tr>
+        <td>${chain}</td>
+        <td>${modeBadge}</td>
+        <td class="num">${d.runs||0}</td>
+        <td class="num">${d.pass||0}/${d.fail||0}</td>
+        <td class="num">${d.last_current_block||'—'}</td>
+        <td>${stateBadge}</td>
+        <td class="num">${d.real_quote_count||0}</td>
+        <td class="num">${d.profitable_roundtrips||0}</td>
+        <td class="num ${pnlCls}">${fmt(pnlVal,2)}</td>
+        <td class="num ${gapCls}">${fmt(gapVal,1)}</td>
+      </tr>`;
+    }
+    html += '</table>';
+    // Dirty-set status
+    const ds = hl.dirty_set;
+    if (ds) {
+      html += `<div style="font-size:.7rem;color:#8b949e;margin-top:6px">WSS: ${ds.chains_ws_connected||0}/${ds.chains_watched||0} connected | Dirty: ${ds.chains_dirty||0}</div>`;
+    }
+    $('hotloop-body').innerHTML = html;
+  }
 
   // Panel 1: Chain Status
   function renderChainStatus(ls) {

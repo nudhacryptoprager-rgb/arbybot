@@ -806,3 +806,92 @@ class DirtySetTracker:
             if self._stop.is_set():
                 break
             _time.sleep(5)  # backoff before reconnect
+
+
+# -- R28.13: Per-pair hot queue (Step 7) ------------------------------------
+
+
+class PairHotQueue:
+    """Per-pair re-quote queue driven by block events from DirtySetTracker.
+
+    When a chain gets a new block, all cached hot pairs for that chain are
+    enqueued for immediate re-quote.  The orchestrator drains pairs and
+    re-quotes them via the shared TPE without running a full child process.
+
+    This is the architectural bridge between *batch-hot* (DirtySetTracker
+    marks chain dirty → run full child) and *instant-hot* (per-pair re-quote
+    on every block).
+
+    Usage::
+
+        pq = PairHotQueue()
+        pq.load_pairs_for_chain("linea", pairs_list)
+        pq.enqueue_chain("linea", block_number=12345)
+        batch = pq.drain(max_items=10)
+        # re-quote each (chain, pair, block) in batch
+    """
+
+    def __init__(self) -> None:
+        import threading
+        import collections
+        self._lock = threading.Lock()
+        # chain -> list of pair dicts (from hot_pairs_*.json)
+        self._chain_pairs: dict[str, list[dict[str, Any]]] = {}
+        # queue of (chain, pair_tag, block_number, enqueue_time) tuples
+        self._queue: collections.deque = collections.deque(maxlen=500)
+        # chain -> latest enqueued block (dedup)
+        self._last_enqueued_block: dict[str, int] = {}
+
+    def load_pairs_for_chain(self, chain: str, pairs: list[dict[str, Any]]) -> None:
+        """Register hot pairs for a chain (from hot_pairs_{chain}.json)."""
+        with self._lock:
+            self._chain_pairs[chain] = list(pairs)
+
+    def enqueue_chain(self, chain: str, block_number: int) -> int:
+        """Enqueue all hot pairs for re-quote at given block.
+
+        Returns number of pairs enqueued.  Deduplicates if same block
+        already enqueued.
+        """
+        import time as _time
+        with self._lock:
+            if self._last_enqueued_block.get(chain) == block_number:
+                return 0  # already enqueued for this block
+            self._last_enqueued_block[chain] = block_number
+            pairs = self._chain_pairs.get(chain, [])
+            now = _time.monotonic()
+            for p in pairs:
+                tag = p.get("pair_tag") or p.get("display_name") or "?"
+                self._queue.append((chain, tag, block_number, now))
+            return len(pairs)
+
+    def drain(self, max_items: int = 20) -> list[tuple[str, str, int]]:
+        """Pop up to *max_items* (chain, pair_tag, block_number) from queue."""
+        result = []
+        with self._lock:
+            while self._queue and len(result) < max_items:
+                chain, tag, block, _ts = self._queue.popleft()
+                result.append((chain, tag, block))
+        return result
+
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._queue)
+
+    def get_pair_dicts(self, chain: str, pair_tags: set[str]) -> list[dict[str, Any]]:
+        """Return full pair dicts for given tags from the loaded cache."""
+        with self._lock:
+            pairs = self._chain_pairs.get(chain, [])
+            return [
+                p for p in pairs
+                if (p.get("pair_tag") or p.get("display_name") or "?") in pair_tags
+            ]
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "chains_loaded": len(self._chain_pairs),
+                "total_pairs_loaded": sum(len(v) for v in self._chain_pairs.values()),
+                "queue_depth": len(self._queue),
+                "per_chain_pairs": {c: len(v) for c, v in self._chain_pairs.items()},
+            }

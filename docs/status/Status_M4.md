@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-15 (R28.11 Turn 2 — hot re-quote loop + WebSocket dirty-set invalidation. Turn 1 retained: pair-level observability)  
+**Updated**: 2026-03-16 (R28.13 — truth contract alignment, hot_loop v1.1 provenance, cross-pair parallel quoter prefetch 8x, PairHotQueue + micro-quote)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.11 T2**: Hot re-quote loop (7 full / 5 hot in 12-run scan), WebSocket dirty-set trigger. **R28.11 T1**: pair-level visibility (_pair_history, spread deltas, cache %, suppression counters).  
-**Primary blocker**: market gap (arb: sweep_median_gap ~18.74 bps, best-ever=3.55 bps). Arb=PRIMARY_BLOCKER (real_quote_count=20, profitable_count=0). Linea/Base=CONFIRMED_POSITIVE_CONTROL. Fee structure is root cause (linea 0-fee pools vs arb 100-3000 bps).
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.13**: Truth contract split (ALIGNED/POSITIVE/BLOCKED/NOT_PROVEN), truth KPIs surfaced at 4 levels, hot_loop v1.1 with run_context provenance, PairHotQueue (54 pairs, drain+micro-quote), cross-pair parallel quoter prefetch (base quote_rpc_ms 180s→22s). **R28.11 T2**: Hot re-quote loop, WebSocket dirty-set trigger. **R28.11 T1**: pair-level visibility.  
+**Primary blocker**: market gap (arb: gap=16.2 bps). Arb=BLOCKED (real_quote_count=24, profitable_count=0). Linea=ALIGNED (14 RT). Base=POSITIVE (3 RT, quality issues). Fee structure is root cause (linea 0-fee pools vs arb 100-3000 bps).
 
 ## [!] M4.1 Simulate-Only DoD **MET**
 
@@ -27,7 +27,8 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-15 R28.11 T2)**: `agg_status=PASS` sustained. **M4.1 DoD MET**. **R28.11 Turn 2**: Hot re-quote loop + WebSocket dirty-set invalidation — dual-cycle architecture (FULL_SWEEP_INTERVAL=5), `DirtySetTracker` subscribes to WSS newHeads. Hot pairs caches: base=22, linea=11, mantle=4, scroll=9, zksync=8. Fresh evidence: 7 full sweeps + 5 hot requotes in 12-run scan. Schema bump for hot loop. +6 tests (1870 total).
+> [!] **ROLLING STABILITY (2026-03-16 R28.13)**: `agg_status=PASS` sustained. **M4.1 DoD MET**. **R28.13**: Truth contract alignment (ALIGNED/POSITIVE/BLOCKED/NOT_PROVEN split with quality_healthy flag), hot_loop v1.1 provenance (run_context, session link, truth KPIs per chain), truth KPIs surfaced at 4 levels (metrics top-level, frontier_ranking, hot_loop per-chain, truth_path_alignment), dashboard Panel 0 "Hot Loop Live", PairHotQueue (54 pairs across 5 chains, drain+micro-quote between phases), cross-pair parallel quoter prefetch (base quote_rpc_ms 180s→22s, 8x improvement). Schema v1.12. Fresh scan: 42 runs, 384s, 6 chains. Linea ALIGNED (14 RT), base POSITIVE (3 RT, quality issues). 1886 tests, CI all gates green.
+> R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation — dual-cycle architecture (FULL_SWEEP_INTERVAL=5), `DirtySetTracker` subscribes to WSS newHeads. Hot pairs caches: base=22, linea=11, mantle=4, scroll=9, zksync=8. Fresh evidence: 7 full sweeps + 5 hot requotes in 12-run scan. Schema bump for hot loop. +6 tests (1870 total).
 > R28.11 Turn 1: Pair-level observability — _pair_history deque (5), spread_bps deltas, cache freshness, suppression counters, STATIC_PROBE_PATH + ZERO_FEE_DOMINANCE guardrails. +8 tests.
 > R28.10: Profit truth propagation — real_quote_count + profit_realism_status in run_summary.metrics, rolling per-run + quick_stats, long_scan chain_profit_state. 5 states: CONFIRMED_POSITIVE_CONTROL/THIN_POSITIVE/PRIMARY_BLOCKER/CANDIDATE/PROBE_ONLY. KPI separation (signals/exec_candidates/profitable_roundtrips/truth_confirmed). RCA: linea profits from lynex_v3 0-fee pools; arb: 100-3000 bps fee pools + $150 paper_size slippage.
 > R28.7: Economics engine correctness — 10 fix steps from lead directive. executable_candidates_count=4 (new KPI). min_spread_bps advisory (threshold=0 in truth_mode). Sweep promoted to core. Per-route breakdown: WBTC/USDC gap=15.22 bps (slip=12.57, fee=10, gas=3.25). ARB/WETH re-enabled (7 pairs now, SUSPECT_SPREAD_HARD gates outliers). Long scan: 42 runs / 109 signals / $123 / 21 RT in 573s. Linea truth=True (positive control confirmed).
@@ -40,34 +41,34 @@
 > R27.4: Config inventory frozen to 16 files, 15 stale deleted. ve33 adapter IMPLEMENTED. validate_universe regression FIXED.
 > Latest evidence: `long_scan_latest.json` (REFRESHED R28.11 T2), `m4_stability_agg.json`, hot_pairs_*.json caches.
 
-**Economics Snapshot (2026-03-15, R28.7 — from rolling agg + long_scan + per_route_breakdown):**
+**Economics Snapshot (2026-03-16, R28.13 — from rolling agg + long_scan + fresh scan):**
 | Metric | Value | Source |
 |--------|-------|--------|
-| `sweep_gap_to_zero_min (arb)` | 3.55 bps | m4_stability_agg best-ever |
-| `sweep_median_gap_to_zero_bps` | ~15 bps | rolling + long_scan (improved from ~18 R28.6) |
-| `long_scan sweep_best` | -14.96 bps | long_scan_latest (multi-chain) |
-| `executable_candidates_count` | 4 | run_summary_latest (NEW R28.7 KPI) |
-| `roundtrip_total_profitable (agg)` | 0 | arb rolling (primary chain only) |
-| `roundtrip_total_profitable (long_scan)` | 21 | long_scan (improved from 14 R28.6) |
-| `WBTC/USDC gap` | 15.22 bps | per_route_breakdown (slip=12.57, fee=10, gas=3.25) |
-| `ARB/WETH gap` | 75.64 bps | per_route_breakdown (slip=51.65, fee=35, gas=3.2) |
+| `sweep_gap_to_zero_min (arb)` | 16.2 bps | long_scan_latest R28.13 |
+| `sweep_median_gap_to_zero_bps` | ~16 bps | long_scan (arb frontier) |
+| `long_scan sweep_best` | -14.96 bps | long_scan_latest (multi-chain, linea) |
+| `executable_candidates_count` | 4 | run_summary_latest |
+| `roundtrip_total_profitable (arb)` | 0 | arb (primary chain, BLOCKED) |
+| `roundtrip_total_profitable (long_scan)` | 17 | long_scan (14 linea + 3 base) |
+| `quote_rpc_ms (base)` | 22s | R28.13 fresh scan (was 180s pre-prefetch, 8x improvement) |
 | `frontier_pair` | WBTC/USDC / WETH/USDT | alternating between runs |
 | `runs_in_window` | 200+ | m4_stability_agg |
 | `total_net_usdc` | $1224.92+ | m4_stability_agg (paper profit) |
 | `unique_pairs` | 13 | m4_stability_agg |
-| `long_scan` | 42 runs, 109 signals, $123 | long_scan_latest (573s wall, parallel workers=2) |
-| `multi_chain_pass` | 4/4 | long_scan (arb, zksync, base, linea) |
-| `linea_truth` | True | long_scan (positive control — profitable roundtrips) |
+| `long_scan` | 42 runs, 6 chains, 384s | long_scan_latest R28.13 (parallel workers=2) |
+| `multi_chain_pass` | 6/6 | long_scan (arb, zksync, base, linea, mantle, scroll) |
+| `linea_truth` | ALIGNED | long_scan (14 profitable RT, quality_healthy=true) |
+| `base_truth` | POSITIVE | long_scan (3 profitable RT, quality_healthy=false) |
 
-**Rollout Queue (R28.2 — ve33 stage2 configs + semantics fix):**
+**Rollout Queue (R28.13 — truth contract alignment applied):**
 | Priority | Chain | Status | Stage Config | Condition for Promotion |
 |----------|-------|--------|-------------|-------------------------|
-| 1 | arbitrum_one | NORMAL (primary) | `onboard_arbitrum_one_candidate.yaml` | 4-DEX PASS (R27.2: 14 sims), agg median_gap=17.99 bps, best-ever=3.55 bps, exit gate: 5 consecutive |
-| 2 | zksync | Candidate | `onboard_zksync_candidate.yaml` | drift=0.31 (above 0.25 threshold), needs improvement |
-| 3 | base | Stage2 tested | `onboard_base_stage2.yaml` [R28.2] | PASS, 4 DEXes, cross_dex=16, ROUNDTRIP_PROFITABLE=2 (thin: real_quote_count=1) |
-| 4 | mantle | Stage2 tested | `onboard_mantle_stage2.yaml` [R28.2] | PASS, 2 DEXes (agni_v3+stratum), cross_dex=5, profitable_count=0 |
-| 5 | linea | Stage1 | `onboard_linea_stage1.yaml` | **Strongest non-arb** (R28.6): 12 profitable RT in long_scan, ROUNDTRIP_PROFITABLE=2, cross_dex=12. Promote above zksync. |
-| 6 | scroll | CROSS_DEX_VERIFIED | `onboard_scroll_stage1.yaml` | nuri_v3 confirmed (R27.1+R27.2), 0 signals in long_scan (accepted-fail) |
+| 1 | arbitrum_one | BLOCKED (primary) | `onboard_arbitrum_one_candidate.yaml` | gap=16.2 bps, real_quotes=24, profitable_rt=0, alignment=BLOCKED. Fee structure root cause. |
+| 2 | linea | ALIGNED (positive control) | `onboard_linea_stage1.yaml` | **Strongest chain**: profitable_rt=14, real_quotes=14, quality_healthy=true. Promote above zksync. |
+| 3 | base | POSITIVE (quality issues) | `onboard_base_stage2.yaml` | 4 DEXes, cross_dex=22, profitable_rt=3, real_quotes=1, quality_healthy=false. Needs quality improvement. |
+| 4 | zksync | BLOCKED | `onboard_zksync_candidate.yaml` | cross_dex=8, real_quotes=14, profitable_rt=0, alignment=BLOCKED |
+| 5 | mantle | NOT_PROVEN | `onboard_mantle_stage2.yaml` | probe-only, no real quotes, runs=7 fail=5 |
+| 6 | scroll | NOT_PROVEN | `onboard_scroll_stage1.yaml` | accepted-fail, no real quotes, runs=7 fail=6 |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

@@ -340,6 +340,9 @@ def new_chain_stats() -> dict[str, Any]:
         "last_scan_mode": None,  # "full" or "hot"
         "hot_requote_count": 0,
         "full_sweep_count": 0,
+        # R28.13: Micro-requote stats (in-process per-pair re-quotes)
+        "micro_requote_count": 0,
+        "micro_requote_quotes": 0,
     }
 
 
@@ -621,7 +624,7 @@ def build_summary(
         s["chain_profit_state"] = classify_chain_profit_state(s)
 
     return {
-        "schema": "start:long_scan_summary:v1.11",  # R28.12: event queue + hot_loop_latest + cross-pair parallel
+        "schema": "start:long_scan_summary:v1.12",  # R28.13: truth contract alignment + truth KPIs surfaced
         "generated_at": run_ts,
         "run_context": {
             "run_timestamp": run_ts,
@@ -712,10 +715,17 @@ def build_summary(
 
 
 def _compute_truth_path_alignment(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """R28.12: Compute truth path alignment for all chains.
+    """R28.13: Compute truth path alignment for all chains.
 
-    Makes visible which chains are on the same truth path vs static-probe
-    exceptions.  Helps the operator see misalignment at a glance.
+    Shows BOTH profit truth AND operational quality in one view, so the
+    operator never sees a misleading ``POSITIVE + fail_chain`` without
+    explanation.
+
+    alignment values:
+      ALIGNED        — profit proven + quality healthy (no fails)
+      POSITIVE       — profitable roundtrips exist but quality has issues
+      BLOCKED        — roundtrips evaluated with real quotes, none profitable
+      NOT_PROVEN     — no real quote data or no runs yet
     """
     result: dict[str, Any] = {}
     for chain, s in per_chain.items():
@@ -725,13 +735,21 @@ def _compute_truth_path_alignment(per_chain: dict[str, dict[str, Any]]) -> dict[
         run_kind = "NORMAL" if s.get("config", "").endswith("real_minimal.yaml") else "COVERAGE"
         truth_mode = s.get("last_truth_mode", s.get("last_quality_level"))
 
+        # R28.13: Operational quality — surface fail/pass alongside profit truth
+        run_status = s.get("last_run_summary_status")
+        quality_status = s.get("last_quality_status")
+        fail_count = s.get("fail", 0) + s.get("infra_fail", 0)
+        total_runs = s.get("runs", 0)
+        quality_healthy = fail_count == 0 and total_runs > 0
+
         alignment = "ALIGNED"
         if profit_state == "PRIMARY_BLOCKER":
             alignment = "BLOCKED"
         elif profit_state == "CANDIDATE" or not has_real_quotes:
             alignment = "NOT_PROVEN"
         elif has_profitable_rt:
-            alignment = "POSITIVE"
+            # R28.13: Distinguish ALIGNED (profit + quality) from POSITIVE (profit only)
+            alignment = "ALIGNED" if quality_healthy else "POSITIVE"
 
         result[chain] = {
             "run_kind": run_kind,
@@ -740,6 +758,14 @@ def _compute_truth_path_alignment(per_chain: dict[str, dict[str, Any]]) -> dict[
             "has_profitable_rt": has_profitable_rt,
             "alignment": alignment,
             "truth_mode": truth_mode,
+            # R28.13: Operational quality context (Step 2 — no hidden contradictions)
+            "run_status": run_status,
+            "quality_status": quality_status,
+            "quality_healthy": quality_healthy,
+            "real_quote_count": s.get("real_quote_count_total", 0),
+            "profitable_roundtrips": s.get("profitable_roundtrips_total", 0),
+            "best_net_pnl_bps": s.get("best_roundtrip_net_bps"),
+            "gap_to_zero_bps": s.get("sweep_gap_to_zero_bps"),
         }
     return result
 
@@ -928,6 +954,10 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             # R28.10: Chain profit state and promotion eligibility
             "chain_profit_state": s.get("chain_profit_state"),
             "promotion_eligible": s.get("chain_profit_state") == "CONFIRMED_POSITIVE_CONTROL",
+            # R28.13: Truth KPIs surfaced in frontier ranking (Step 5)
+            "real_quote_count": s.get("real_quote_count_total", 0),
+            "profitable_roundtrips": s.get("profitable_roundtrips_total", 0),
+            "best_net_pnl_bps": s.get("best_roundtrip_net_bps"),
         })
     ranked.sort(key=lambda x: (
         x.get("accepted_fail", False),
@@ -1070,26 +1100,123 @@ def write_summary_file(summary: dict[str, Any], path: str) -> None:
     print(f"Summary written to {out}")
 
 
+# -- R28.13 Step 7: Per-pair micro-quote (in-process, no child) -----------
+
+
+def _micro_requote_hot_pairs(
+    pair_hot_queue: Any,
+    config_meta: dict[str, dict[str, Any]],
+    per_chain: dict[str, dict[str, Any]],
+    stats_lock: threading.Lock,
+) -> int:
+    """Drain hot pairs and re-quote them in-process via collect_quotes.
+
+    Returns the number of pairs successfully re-quoted.  This runs between
+    Phase 1 (primary) and Phase 2 (coverage) to give dirty pairs an
+    immediate update without waiting for the next full chain-run.
+    """
+    if not pair_hot_queue or pair_hot_queue.pending_count() == 0:
+        return 0
+
+    batch = pair_hot_queue.drain(max_items=30)
+    if not batch:
+        return 0
+
+    # Group by chain: {chain: {pair_tags, block_number}}
+    chain_groups: dict[str, dict[str, Any]] = {}
+    for chain, tag, block in batch:
+        g = chain_groups.setdefault(chain, {"pair_tags": set(), "block": 0})
+        g["pair_tags"].add(tag)
+        g["block"] = max(g["block"], block)
+
+    total_requoted = 0
+
+    for chain, group in chain_groups.items():
+        pair_tags = group["pair_tags"]
+        block = group["block"]
+
+        # Get full pair dicts from PairHotQueue cache
+        pair_dicts = pair_hot_queue.get_pair_dicts(chain, pair_tags)
+        if not pair_dicts:
+            continue
+
+        # Find config file path for this chain
+        chain_cfg_path = per_chain.get(chain, {}).get("config")
+        if not chain_cfg_path:
+            continue
+
+        try:
+            # Load full YAML config
+            with open(chain_cfg_path, encoding="utf-8") as f:
+                full_config = yaml.safe_load(f) or {}
+
+            # Reconstruct PairConfig objects
+            from config.pairs import PairConfig
+            pair_configs = [PairConfig.from_dict(d) for d in pair_dicts]
+
+            # In-process quote collection (no child process)
+            from strategy.quotes import collect_quotes
+            quotes, rejects, counts = collect_quotes(
+                full_config,
+                block,
+                rpc_latency=0,
+                pairs_list=pair_configs,
+            )
+
+            n_ok = counts.get("quotes_fetched", 0)
+            n_rej = len(rejects)
+            total_requoted += n_ok
+
+            print(
+                f"  [MICRO] {chain}: {len(pair_configs)} pairs @ block {block} → "
+                f"{n_ok} quotes, {n_rej} rejected"
+            )
+
+            # Update per_chain stats for observability
+            with stats_lock:
+                cs = per_chain.get(chain, {})
+                cs["micro_requote_count"] = cs.get("micro_requote_count", 0) + 1
+                cs["micro_requote_quotes"] = cs.get("micro_requote_quotes", 0) + n_ok
+
+        except Exception as e:
+            print(f"  [MICRO] {chain}: ERROR {e}")
+
+    return total_requoted
+
+
 def write_hot_loop_snapshot(
     per_chain: dict[str, dict[str, Any]],
     dirty_tracker: Any,
     wall_start: float,
+    summary_file: str = "",
+    pair_hot_queue: Any = None,
 ) -> None:
     """Write lightweight hot_loop_latest.json after each hot re-quote batch.
 
-    R28.12: This gives the dashboard fast-refreshing data without waiting
-    for a full child-run to complete.  The file is small and overwritten
-    every hot cycle.
+    R28.13: Schema v1.1 — added run_context provenance, truth KPIs per chain,
+    chain_profit_state, and session link to long_scan.  All chains present
+    regardless of whether they've been scanned yet.
     """
     import time as _time
     run_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     snapshot: dict[str, Any] = {
-        "schema": "start:hot_loop_snapshot:v1.0",
+        "schema": "start:hot_loop_snapshot:v1.1",
         "generated_at": run_ts,
+        # R28.13 Step 4: run_context provenance (same shape as long_scan)
+        "run_context": {
+            "run_timestamp": run_ts,
+            "code_identity": f"ts:{run_ts}",
+            "code_sha": None,
+            "evidence_sha": None,
+        },
         "wall_seconds": round(_time.monotonic() - wall_start, 1),
         "full_sweep_interval": FULL_SWEEP_INTERVAL,
         "total_full_sweeps": sum(s.get("full_sweep_count", 0) for s in per_chain.values()),
         "total_hot_requotes": sum(s.get("hot_requote_count", 0) for s in per_chain.values()),
+        "total_micro_requotes": sum(s.get("micro_requote_count", 0) for s in per_chain.values()),
+        "total_runs": sum(s.get("runs", 0) for s in per_chain.values()),
+        # R28.13 Step 3: Link to active long-scan session artifact
+        "session_summary_file": summary_file or None,
         "per_chain": {},
     }
     for c, s in per_chain.items():
@@ -1099,7 +1226,17 @@ def write_hot_loop_snapshot(
             "hot_requotes": s.get("hot_requote_count", 0),
             "runs": s.get("runs", 0),
             "pass": s.get("pass", 0),
+            "fail": s.get("fail", 0) + s.get("infra_fail", 0),
             "last_current_block": s.get("last_current_block"),
+            # R28.13 Step 5: Truth KPIs in hot snapshot (fast-refresh surface)
+            "chain_profit_state": s.get("chain_profit_state"),
+            "real_quote_count": s.get("real_quote_count_total", 0),
+            "profitable_roundtrips": s.get("profitable_roundtrips_total", 0),
+            "best_net_pnl_bps": s.get("best_roundtrip_net_bps"),
+            "gap_to_zero_bps": s.get("sweep_gap_to_zero_bps"),
+            # R28.13 Step 7: Micro-requote stats
+            "micro_requotes": s.get("micro_requote_count", 0),
+            "micro_requote_quotes": s.get("micro_requote_quotes", 0),
         }
         # Include latest top signals for live pair visibility
         top_sigs = s.get("last_top_spread_signals", [])
@@ -1110,6 +1247,13 @@ def write_hot_loop_snapshot(
     if dirty_tracker:
         try:
             snapshot["dirty_set"] = dirty_tracker.status()
+        except Exception:
+            pass
+
+    # R28.13 Step 7: Per-pair hot queue status
+    if pair_hot_queue:
+        try:
+            snapshot["pair_hot_queue"] = pair_hot_queue.status()
         except Exception:
             pass
 
@@ -1323,6 +1467,23 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         print(f"  DirtySet: disabled ({_ds_err})")
         dirty_tracker = None
 
+    # R28.13 Step 7: Per-pair hot queue — load cached pairs for immediate re-quote
+    pair_hot_queue: Any = None
+    try:
+        from strategy.infra import PairHotQueue
+        pair_hot_queue = PairHotQueue()
+        for chain in per_chain:
+            hp_file = HOT_PAIRS_CACHE_DIR / f"hot_pairs_{chain}.json"
+            if hp_file.is_file():
+                with open(hp_file, encoding="utf-8") as _hpf:
+                    hp_data = json.load(_hpf)
+                pair_hot_queue.load_pairs_for_chain(chain, hp_data.get("pairs", []))
+        pq_status = pair_hot_queue.status()
+        print(f"  PairHotQueue: {pq_status['chains_loaded']} chains, {pq_status['total_pairs_loaded']} pairs loaded")
+    except Exception as _pq_err:
+        print(f"  PairHotQueue: disabled ({_pq_err})")
+        pair_hot_queue = None
+
     # R28.5: Thread-safe lock for per_chain stats and stdout
     _stats_lock = threading.Lock()
 
@@ -1356,6 +1517,9 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             if evt and evt.get("block_number"):
                 extra_env = extra_env or {}
                 extra_env["ARBY_WS_BLOCK_NUMBER"] = str(evt["block_number"])
+                # R28.13 Step 7: Enqueue hot pairs for this block
+                if pair_hot_queue:
+                    pair_hot_queue.enqueue_chain(chain, evt["block_number"])
 
         rc, run_dir = run_gate_once(
             cfg, args.cycles, args.prune_keep, args.sleep_seconds,
@@ -1435,7 +1599,12 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             write_summary_file(interim_summary, args.summary_file)
 
             # R28.12: Write lightweight hot snapshot for fast dashboard refresh
-            write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start)
+            write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start, args.summary_file, pair_hot_queue)
+
+        # R28.13 Step 7: Per-pair micro-quote — drain dirty pairs, re-quote in-process
+        if pair_hot_queue and pair_hot_queue.pending_count() > 0 and time.monotonic() < deadline:
+            _micro_requote_hot_pairs(pair_hot_queue, config_meta, per_chain, _stats_lock)
+            write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start, args.summary_file, pair_hot_queue)
 
         if time.monotonic() >= deadline:
             break
@@ -1480,7 +1649,7 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                         write_summary_file(interim_summary, args.summary_file)
 
                 # R28.12: Hot loop snapshot after coverage batch
-                write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start)
+                write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start, args.summary_file, pair_hot_queue)
 
         if total_runs % max(len(configs), 3) == 0:
             prune_run_dirs(args.prune_keep)

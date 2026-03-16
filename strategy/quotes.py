@@ -913,26 +913,34 @@ def collect_quotes(
     target_usd_notional = config.get("target_usd_notional", 1000.0)
     tokens_usd_price = config.get("tokens_usd_price") or {}
     use_usd_notional = config.get("use_usd_notional", True)  # Default ON for M4.2
-    
+
+    # R28.13 Step 8: Cross-pair parallel quoter prefetch
+    # Phase A: Build work items for ALL pairs and submit ALL quoter futures at once.
+    # Phase B: Resolve all futures in bulk (cross-pair parallelism).
+    # Phase C: Process pairs sequentially using pre-resolved results.
+    _global_prefetch_futures: Dict[str, Any] = {}
+    _global_prefetch_results: Dict[str, Any] = {}
+    _pair_work_data: list[tuple[Any, list, Any, Any, Any, Any, Optional[str]]] = []
+    # ^^ (pair_cfg, pool_work_items, anchor_price, anchor_source, amount_in_wei_pf, pf_tin, pf_tout)
+
+    _pf_exec = _get_shared_quote_executor()
+
     for pair_cfg in pairs_list:
         token_pair_tag = pair_cfg.pair_tag
         token_in = pair_cfg.token_in
         token_out = pair_cfg.token_out
         decimals_in = pair_cfg.token_in_decimals
         decimals_out = pair_cfg.token_out_decimals
-        
-        # v3.2.20: Viability filter - if use_usd_notional and no USD price for token_in,
-        # skip with deterministic reason (not NOTIONAL_DRIFT_EXCLUDED which is downstream)
+
+        # Viability filter (same as inner loop)
         if use_usd_notional:
-            # Check if token_in has a USD price (config > DEFAULT_TOKEN_USD_PRICES)
-            # v3.2.33: Use case-insensitive lookup (WEETH/weETH, WSTETH/wstETH)
             merged_prices = dict(DEFAULT_TOKEN_USD_PRICES)
             merged_prices.update(tokens_usd_price)
             token_in_price = lookup_token_usd_price_ci(merged_prices, token_in)
             if token_in_price is None or token_in_price <= 0:
                 rejected_quotes.append({
                     "pair": f"{token_in}/{token_out}",
-                    "dex_id": "_pre_routing",  # v3.2.20: Special bucket for pre-DEX viability rejections
+                    "dex_id": "_pre_routing",
                     "fee": 0,
                     "reason": "NO_USD_PRICE",
                     "gate_passed": False,
@@ -941,106 +949,75 @@ def collect_quotes(
                 counts["no_usd_price"] = counts.get("no_usd_price", 0) + 1
                 logger.warning("NO_USD_PRICE: %s pair %s/%s skipped (add %s to tokens_usd_price)",
                               "VIABILITY_FILTER", token_in, token_out, token_in)
-                continue  # Skip this pair entirely
-        
-        # Get anchor price for this pair (v2.2.0: prefer dynamic over YAML)
-        # v3.2.24: Use case-insensitive lookup to handle wstETH/WSTETH variants
+                continue
+
+        # Anchor price
         yaml_anchor = lookup_anchor_price_ci(tokens_anchor_price, token_pair_tag)
         if not yaml_anchor:
             reversed_tag = f"{token_out}_{token_in}"
             yaml_anchor = lookup_anchor_price_ci(tokens_anchor_price, reversed_tag)
             if yaml_anchor:
                 yaml_anchor = 1.0 / yaml_anchor
-        
-        # Dynamic anchor with YAML fallback
         pair_tag_display = f"{token_in}/{token_out}"
         anchor_price, anchor_source = am.get_anchor(pair_tag_display, yaml_anchor)
-        
-        # v2.0.7: Iterate over fee_tiers from pair config
+
+        # Build pool work items (same logic as before)
         fee_tiers = pair_cfg.fee_tiers or [500, 3000]
         chain_name = config.get("chain", "arbitrum_one")
-        
-        # v2.4.0: Build pool work items from either pool_info (discovery_runtime) or dex/fee iteration (config)
         from dex.registry import get_dex_config
-        pool_work_items = []
-        
+        pool_work_items: list = []
+
         if pair_cfg.pool_info:
-            # discovery_runtime mode: use pre-resolved pools with exact (dex, fee, address)
             for pi in pair_cfg.pool_info:
                 pi_dex = pi["dex"]
                 pi_fee = pi["fee"]
                 pi_addr = pi["address"]
                 pi_dex_cfg = get_dex_config(chain_name, pi_dex)
                 pi_adapter = pi_dex_cfg.adapter_type if pi_dex_cfg else None
-                
-                # v3.2.1 FIX: Generate pool_key for discovery_runtime items
                 pool_key = make_pool_key(pi_dex, token_pair_tag, pi_fee)
-                
-                # v3.2.1 FIX: Check disabled_pools for discovery_runtime items
                 disabled_info = is_pool_disabled(config, pi_dex, token_pair_tag, pi_fee)
                 if disabled_info:
                     counts["pool_disabled"] += 1
-                    logger.debug("POOL_DISABLED (config): %s %s/%s fee=%d reason=%s", 
-                               pi_dex, token_in, token_out, pi_fee, disabled_info.get('reason', 'DISABLED'))
                     continue
-                
-                # v3.2.1 FIX: Check runtime-disabled for discovery_runtime items
                 runtime_info = is_runtime_disabled(pool_key)
                 if runtime_info and not runtime_info.get("expired", False):
                     counts["runtime_disabled"] += 1
-                    logger.debug("RUNTIME_DISABLED: %s reason=%s remaining=%ds",
-                               pool_key, runtime_info.get('reason'), runtime_info.get('remaining_seconds', 0))
                     continue
-                
                 pool_work_items.append((pi_dex, pi_fee, pi_addr, pi_dex_cfg, pi_adapter, pool_key))
         else:
-            # config mode: iterate over dexes and fee_tiers, lookup pool addresses
             for dex in dexes_list:
                 dex_cfg = get_dex_config(chain_name, dex)
                 adapter_type = dex_cfg.adapter_type if dex_cfg else None
-                
-                # M4.2 FIX: Algebra DEXes use dynamic fees, use fee=0 for pool lookup
                 if adapter_type == "algebra":
-                    effective_fee_tiers = [0]  # Dynamic fee - lookup with fee=0
+                    effective_fee_tiers = [0]
                 else:
                     effective_fee_tiers = fee_tiers
-                
                 for fee_tier in effective_fee_tiers:
-                    # v2.0.4: Use canonical pool_key builder for all checks
                     pool_key = make_pool_key(dex, token_pair_tag, fee_tier)
-                    
                     # v2.6.1 FIX: Check disabled_pools BEFORE pool lookup
-                    # If pool is explicitly disabled, count as POOL_DISABLED not POOL_MISSING
                     disabled_info = is_pool_disabled(config, dex, token_pair_tag, fee_tier)
                     if disabled_info:
                         counts["pool_disabled"] += 1
-                        logger.debug("POOL_DISABLED (config): %s %s/%s fee=%d reason=%s", 
-                                   dex, token_in, token_out, fee_tier, disabled_info.get('reason', 'DISABLED'))
+                        logger.debug("POOL_DISABLED (config): %s %s/%s fee=%d",
+                                   dex, token_in, token_out, fee_tier)
                         continue
-                    
-                    # v3.2.0: Check runtime-disabled pools (auto-disabled)
                     runtime_info = is_runtime_disabled(pool_key)
                     if runtime_info and not runtime_info.get("expired", False):
                         counts["runtime_disabled"] += 1
-                        logger.debug("RUNTIME_DISABLED: %s reason=%s remaining=%ds",
-                                   pool_key, runtime_info.get('reason'), runtime_info.get('remaining_seconds', 0))
                         continue
-                    
                     pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)
                     if pool_addr:
                         pool_work_items.append((dex, fee_tier, pool_addr, dex_cfg, adapter_type, pool_key))
                     else:
-                        # v2.3.0: Silent skip (not reject) for unconfigured pools
                         counts["pool_missing"] += 1
                         pool_missing_keys.append(pool_key)
-                        logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config (key=%s)", 
+                        logger.debug("POOL_SKIP: %s %s/%s fee=%d - not in config (key=%s)",
                                     dex, token_in, token_out, fee_tier, pool_key)
-        
-        # R28.4: Parallel quote prefetch — fan out RPC calls for all pools in this pair
-        # R28.12: Use shared cross-pair executor (avoid per-pair TPE create/destroy)
-        _prefetch_results: Dict[str, Any] = {}
+
+        # Submit quoter futures for this pair's pools (NO blocking yet)
+        _pf_tin = None
+        _pf_tout = None
         if pool_work_items and rpc_url and not skip_rpc:
-            # Pre-compute pair-level context (same values the inner loop will compute)
             _pf_tin = resolve_token_address(token_in, pair_cfg, token_addresses, chain_name, is_token_in=True)
             _pf_tout = resolve_token_address(token_out, pair_cfg, token_addresses, chain_name, is_token_in=False)
             if use_usd_notional:
@@ -1049,11 +1026,11 @@ def collect_quotes(
                 _pf_amt = 10 ** decimals_in
             _pf_use_q = config.get("use_quoter_v2", False)
 
-            _pf_futures: Dict[str, Any] = {}
-            _pf_exec = _get_shared_quote_executor()
             for _d, _f, _a, _dc, _at, _pk in pool_work_items:
+                if _pk in _global_prefetch_futures:
+                    continue  # already submitted
                 if _at == "ve33":
-                    _pf_futures[_pk] = _pf_exec.submit(
+                    _global_prefetch_futures[_pk] = _pf_exec.submit(
                         read_ve33_amount_out,
                         pool_address=_a, token_in=_pf_tin,
                         amount_in=_pf_amt, rpc_url=rpc_url, block_num=current_block,
@@ -1062,24 +1039,52 @@ def collect_quotes(
                     _qa = _dc.get_quoter_address()
                     if _qa:
                         if _at == "uniswap_v3":
-                            _pf_futures[_pk] = _pf_exec.submit(
+                            _global_prefetch_futures[_pk] = _pf_exec.submit(
                                 read_quoter_v2,
                                 _qa, _pf_tin, _pf_tout,
                                 _pf_amt, _f, rpc_url, current_block,
                             )
                         elif _at == "algebra":
-                            _pf_futures[_pk] = _pf_exec.submit(
+                            _global_prefetch_futures[_pk] = _pf_exec.submit(
                                 read_algebra_quoter,
                                 _qa, _pf_tin, _pf_tout,
                                 _pf_amt, rpc_url, current_block,
                             )
-            # Resolve all futures
-            for _pk, _fut in _pf_futures.items():
-                try:
-                    _prefetch_results[_pk] = _fut.result(timeout=15)
-                except Exception as _e:
-                    _prefetch_results[_pk] = None
-                    logger.debug("PREFETCH_FAIL: %s error=%s", _pk, _e)
+
+        _pair_work_data.append((pair_cfg, pool_work_items, anchor_price, anchor_source))
+
+    # Phase B: Resolve ALL quoter futures at once (cross-pair parallelism)
+    for _pk, _fut in _global_prefetch_futures.items():
+        try:
+            _global_prefetch_results[_pk] = _fut.result(timeout=15)
+        except Exception as _e:
+            _global_prefetch_results[_pk] = None
+            logger.debug("PREFETCH_FAIL: %s error=%s", _pk, _e)
+
+    if _global_prefetch_futures:
+        logger.info(
+            "Cross-pair prefetch: %d futures submitted, %d resolved",
+            len(_global_prefetch_futures),
+            sum(1 for v in _global_prefetch_results.values() if v is not None),
+        )
+
+    # Phase C: Process pairs sequentially using pre-resolved prefetch results
+    for pair_cfg, pool_work_items, anchor_price, anchor_source in _pair_work_data:
+        token_pair_tag = pair_cfg.pair_tag
+        token_in = pair_cfg.token_in
+        token_out = pair_cfg.token_out
+        decimals_in = pair_cfg.token_in_decimals
+        decimals_out = pair_cfg.token_out_decimals
+
+        fee_tiers = pair_cfg.fee_tiers or [500, 3000]
+        chain_name = config.get("chain", "arbitrum_one")
+
+        # Use global prefetch results for this pair
+        _prefetch_results = {
+            pk: _global_prefetch_results.get(pk)
+            for _, _, _, _, _, pk in pool_work_items
+            if pk in _global_prefetch_results
+        }
 
         for dex, fee_tier, pool_addr, dex_cfg, adapter_type, pool_key in pool_work_items:
             # v2.1.0-fix: Check disabled_pools FIRST (before pool lookup)
