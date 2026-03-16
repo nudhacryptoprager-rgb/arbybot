@@ -551,9 +551,9 @@ def build_truth_data(
         "schema_version": SCHEMA_VERSION,
         "timestamp": now,
         "run_mode": "REGISTRY_REAL",
-        # v2.3.0: Explicit safety contract
-        "kill_switch_active": True,  # v2.3.0: Always true in M5_0 (no execution)
-        "execution_enabled": False,
+        # v2.3.0: Explicit safety contract (R28.15: read from config, not hardcoded)
+        "kill_switch_active": config.get("kill_switch_active", True),
+        "execution_enabled": config.get("execution_enabled", False),
         "execution_ready_count": stats.get("execution_ready_count", 0),  # v2.2.0: From stats (respects kill switch)
         "would_execute_count": stats.get("would_execute_count", 0),      # v2.2.0: Diagnostic only
         "execution_blocker": CURRENT_EXECUTION_BLOCKER.value,

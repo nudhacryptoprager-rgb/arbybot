@@ -351,6 +351,7 @@ ALLOWED_YAML_FILES = {
     "real_intent_arbitrum_one.yaml",
     "real_roundtrip_probe.yaml",
     "real_roundtrip_probe_lowfee.yaml",
+    "real_live_probe.yaml",
     # Staged rollout (onboard_ family)
     "onboard_arbitrum_one_candidate.yaml",
     "onboard_base_stage1.yaml",

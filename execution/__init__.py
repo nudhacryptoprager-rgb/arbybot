@@ -7,8 +7,8 @@ This module contains the execution layer components:
 - simulator: Pre-trade simulation gate
 - dex_dex_executor: DEX-DEX arbitrage executor
 
-NOTE: This is a skeleton for M4. Full implementation will follow
-after M3 closure.
+R28.15: Real implementations with tx build, signing policy,
+receipts, fill parsing, gas accounting, and realized PnL.
 """
 
 from execution.state_machine import (

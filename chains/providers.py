@@ -334,6 +334,54 @@ class RPCProvider:
         response = await self.call("eth_gasPrice")
         gas_price_wei = int(response.result, 16)
         return gas_price_wei, response.latency_ms
+
+    async def estimate_gas(
+        self,
+        from_addr: str,
+        to: str,
+        data: str,
+        value: int = 0,
+    ) -> tuple[int, int]:
+        """
+        Estimate gas for a transaction.
+
+        Returns:
+            (gas_estimate, latency_ms)
+        """
+        tx_obj: dict[str, str] = {"from": from_addr, "to": to, "data": data}
+        if value > 0:
+            tx_obj["value"] = hex(value)
+        response = await self.call("eth_estimateGas", [tx_obj])
+        gas = int(response.result, 16)
+        return gas, response.latency_ms
+
+    async def get_transaction_count(self, address: str) -> int:
+        """Get nonce (transaction count) for an address."""
+        response = await self.call("eth_getTransactionCount", [address, "latest"])
+        return int(response.result, 16)
+
+    async def send_raw_transaction(self, raw_tx: str) -> str:
+        """
+        Send a signed raw transaction.
+
+        Args:
+            raw_tx: Hex-encoded signed transaction.
+
+        Returns:
+            Transaction hash (hex string).
+        """
+        response = await self.call("eth_sendRawTransaction", [raw_tx])
+        return response.result
+
+    async def get_transaction_receipt(self, tx_hash: str) -> dict[str, Any] | None:
+        """
+        Get receipt for a confirmed transaction.
+
+        Returns:
+            Receipt dict or None if not yet mined.
+        """
+        response = await self.call("eth_getTransactionReceipt", [tx_hash])
+        return response.result
     
     def get_stats_summary(self) -> dict:
         """Get statistics summary for all endpoints."""

@@ -1,0 +1,75 @@
+# PATH: config/real_live_probe.yaml
+#
+# R28.15 LIVE EXECUTION PROBE - Arbitrum One
+#
+# PURPOSE: Live execution config for M4.2 DoD proof.
+# DO NOT USE until the full execution path is validated:
+#   - PreTradeSimulator passes
+#   - Gas price within bounds
+#   - Slippage within bounds
+#   - Signing infrastructure ready
+#
+# SAFETY:
+#   - kill_switch_active: false (operator must enable manually)
+#   - execution_enabled: true  (allows tx submission)
+#   - max_position_usd: 10.0   (micro-position for initial testing)
+#   - require_simulation: true  (must pass pre-trade sim)
+#
+# REQUIRED ENV:
+#   ARBY_SIGNER_ADDRESS - EOA address for signing txs
+#   ARBY_PRIVATE_KEY    - (via keystore, NOT plaintext)
+#   ARBY_RPC_URL        - fast RPC with tx submission support
+#
+
+chain: arbitrum_one
+chain_id: 42161
+
+rpc_endpoints:
+  - "https://arb1.arbitrum.io/rpc"
+  - "https://arbitrum-one.public.blastapi.io"
+
+rpc_timeout_seconds: 8
+rpc_retries: 2
+rpc_backoff_base_ms: 300
+
+# --- Execution flags ---
+execution_enabled: true
+kill_switch_active: false
+simulate_only: false
+
+# --- Execution safety bounds ---
+max_gas_price_gwei: 50.0
+max_slippage_bps: 100
+require_simulation: true
+receipt_timeout_seconds: 60
+max_position_usd: 10.0
+
+# --- Pair config (minimal for probe) ---
+base_tokens:
+  - symbol: WETH
+    address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+    decimals: 18
+  - symbol: USDC
+    address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+    decimals: 6
+
+quote_tokens:
+  - symbol: USDC
+    address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+    decimals: 6
+  - symbol: USDT
+    address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+    decimals: 6
+
+dexes:
+  - name: uniswap_v3
+    router: "0xE592427A0AEce92De3Edee1F18E0157C05861564"
+    quoter: "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6"
+    factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+  - name: sushiswap_v3
+    router: "0x8A21F6768C1f8075791D08546Dadf6daA0bE820c"
+    quoter: "0x0524E833cCD057e4d7A296e3aaAb9f7675964Ce1"
+    factory: "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e"
+
+# Run kind
+run_kind: PROBE
