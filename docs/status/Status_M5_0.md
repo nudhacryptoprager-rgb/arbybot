@@ -1,14 +1,14 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-16 (R28.14 — benchmark_chain formalized, unified truth standard per chain, forbidden version strings removed, fresh 42-run scan)
-**Tests**: 1888 passed / 3 skipped
+**Updated**: 2026-03-16 (R28.15 — live execution infrastructure implemented, scanner wiring done (dormant probe), honest simulate-only documentation)
+**Tests**: 1926 passed / 3 skipped
 **Schema**: see DEV_REPORT_LATEST.md (schema unchanged, additive fields only)
-**Evidence runDirs**: long_scan 42 runs 6 chains (R28.14)
+**Evidence runDirs**: long_scan 30 runs 6 chains (R28.15 rolling from R28.14 scan)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (REFRESHED R28.14: 42 runs 371s, benchmark_chain=linea, truth_standard_met per chain, hot_loop 17 full / 25 hot)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (30 runs 370s, benchmark_chain=linea, truth_standard_met per chain)
 **Hot pairs caches**: `data/cache/hot_pairs_{chain}.json` (base=22, linea=11, mantle=4, scroll=9, zksync=8 pairs)
-**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 18 active files (R28.2: +2 stage2 configs).
+**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files (R28.15: +1 real_live_probe.yaml).
 
 ---
 
@@ -17,6 +17,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> **R28.15**: Scan stack is productive in simulate-only mode, but live-profit metrics remain blocked because execute_live/simulate_rpc were not yet wired into the operational scanner path until this round. Now wired as dormant probe (gated by config — all production configs keep execution_enabled=false). Real PreTradeSimulator and DexDexExecutor implemented + tested (38 new tests, 1926 total). Live execution probe block in run_scan_real.py: pick best candidate → simulate_rpc() → check signer → log. config/real_live_probe.yaml ready for first live test. Artifacts: truth_data now includes live_execution field, kill_switch_active/execution_enabled are config-driven. The next milestone is realized execution truth — tx submission, receipts, and realized PnL — not further reinterpretation of paper profit.
 > R28.14: Benchmark chain formalized — merit-based selection: linea is current benchmark (14 profitable RT, ALIGNED, is_benchmark=true). Unified truth standard: truth_standard_met + is_benchmark per chain. Forbidden version strings removed from Status files. Fresh scan: 42 runs 371s, benchmark_chain=linea. Arb gap=3.25 bps best-ever (approaching breakeven). quote_rpc_ms: arb 5.6s (was 14.6s), linea 8.1s, base 22s. +2 tests (1888). Arbitrum remains contractual primary truth path, but linea is currently the strongest aligned positive control. Next milestone: unified truth-standard across all chains + event-driven hot-loop speed.
 > R28.13: Truth contract alignment (ALIGNED vs POSITIVE with quality_healthy — no hidden contradictions). hot_loop_latest.json schema bump with run_context provenance, session link, truth KPIs per chain, micro_requote counters. Truth KPIs surfaced at 4 levels (metrics, frontier_ranking, hot_loop, truth_path_alignment). Dashboard Panel 0 "Hot Loop Live". PairHotQueue: 54 pairs loaded, drain+micro-quote between Phase 1 and Phase 2. Cross-pair parallel quoter prefetch: quote_rpc_ms reduced 8x (base 180s→22s). Schema bumped (additive). Fresh scan: 42 runs 384s, linea ALIGNED/CONFIRMED_POSITIVE_CONTROL (14 profitable RT), base POSITIVE/THIN (3 RT, quality issues).
 > R28.12: Event queue DirtySetTracker (pending_chains/drain_event/mark_clean), hot_loop_latest.json (fast-refresh artifact), cross-pair parallel quotes (shared 16-worker TPE), WS block pass-through (ARBY_WS_BLOCK_NUMBER env var skips block-pin RPC), truth_path_alignment section (BLOCKED/POSITIVE/NOT_PROVEN/ALIGNED per chain). System is still batch-hot — WS invalidates but does not yet trigger immediate executable re-quote. Schema bump (additive). +16 tests (1886). Fresh scan: 30 runs, 10 full/20 hot, linea CONFIRMED_POSITIVE_CONTROL (10 profitable RT), base THIN_POSITIVE (7 RT).

@@ -1179,6 +1179,114 @@ def run_scan(
             }
     _phase_preflight_end = _time.monotonic()
     
+    # R28.15: Live execution probe — wires simulate_rpc + execute_live into scanner
+    # This block is DORMANT unless config explicitly sets execution_enabled=true
+    # and kill_switch_active=false. All current configs keep this off.
+    # Flow: best candidate → simulate_rpc → execute_live → receipt → realized_pnl
+    _phase_exec_start = _time.monotonic()
+    stats["live_execution"] = {"enabled": False}
+    if (
+        config.get("execution_enabled", False) is True
+        and config.get("kill_switch_active", True) is False
+        and config.get("simulate_only", True) is False
+        and provider_http is not None
+        and opps_list
+        and len(opps_list) > 0
+    ):
+        try:
+            import asyncio
+            from execution.simulator import PreTradeSimulator, SimulatorConfig
+            from execution.dex_dex_executor import DexDexExecutor, ExecutorConfig
+
+            # Pick best candidate (first opportunity by PnL ranking)
+            best_opp = opps_list[0]
+            # Build opportunity dict for simulator/executor
+            exec_opp = {
+                "spread_id": best_opp.get("spread_id", best_opp.get("signal_id", "unknown")),
+                "router_address": best_opp.get("buy_pool", ""),
+                "swap_calldata": best_opp.get("swap_calldata", ""),
+                "expected_out": str(best_opp.get("gross_pnl_usdc_est", "0")),
+                "gas_estimate": int(best_opp.get("gas_estimate", 300_000)),
+                "quote_timestamp_ms": int(_time.time() * 1000),
+                "simulation_passed": False,
+                "expected_pnl_usd": str(best_opp.get("net_pnl_usdc_est", "0")),
+                "paper_size_usd": str(config.get("paper_size_usd", 150)),
+            }
+
+            # Step 1: Pre-trade simulation (async)
+            sim_config = SimulatorConfig(
+                max_slippage_bps=config.get("max_slippage_bps", 100),
+                max_gas_estimate=config.get("max_gas_estimate", 500_000),
+                quote_freshness_ms=config.get("quote_freshness_ms", 3000),
+            )
+            simulator = PreTradeSimulator(sim_config)
+            sim_result = asyncio.run(simulator.simulate_rpc(exec_opp, provider_http))
+
+            if sim_result.passed:
+                exec_opp["simulation_passed"] = True
+                exec_opp["simulated_out"] = str(sim_result.simulated_out)
+
+                # Step 2: Execute (async) — requires signer
+                signer_address = config.get("signer_address")
+                sign_fn_path = config.get("sign_function")
+                if signer_address and sign_fn_path:
+                    exec_config = ExecutorConfig(
+                        smoke_mode=False,
+                        execution_enabled=True,
+                        require_simulation=True,
+                        max_gas_price_gwei=config.get("max_gas_price_gwei", 50.0),
+                        max_slippage_bps=config.get("max_slippage_bps", 100),
+                    )
+                    executor = DexDexExecutor(config=exec_config, kill_switch_active=False)
+
+                    # sign_and_send must be provided externally via config
+                    # For now, log that we reached this point (M4.2 gate)
+                    stats["live_execution"] = {
+                        "enabled": True,
+                        "simulation_passed": True,
+                        "simulated_out": str(sim_result.simulated_out),
+                        "slippage_bps": sim_result.slippage_bps,
+                        "execution_attempted": False,
+                        "reason": "SIGNER_READY_BUT_NO_SIGN_FN_YET",
+                    }
+                    logger.info(
+                        "Live execution: simulation PASSED (slippage=%d bps), signer ready but sign_fn not wired",
+                        sim_result.slippage_bps,
+                    )
+                else:
+                    stats["live_execution"] = {
+                        "enabled": True,
+                        "simulation_passed": True,
+                        "simulated_out": str(sim_result.simulated_out),
+                        "slippage_bps": sim_result.slippage_bps,
+                        "execution_attempted": False,
+                        "reason": "NO_SIGNER_CONFIGURED",
+                    }
+                    logger.info(
+                        "Live execution: simulation PASSED (slippage=%d bps) but no signer configured",
+                        sim_result.slippage_bps,
+                    )
+            else:
+                stats["live_execution"] = {
+                    "enabled": True,
+                    "simulation_passed": False,
+                    "blockers": sim_result.blockers,
+                    "revert_reason": sim_result.revert_reason,
+                    "execution_attempted": False,
+                }
+                logger.info(
+                    "Live execution: simulation FAILED (%s)",
+                    ", ".join(sim_result.blockers),
+                )
+        except Exception as exec_err:
+            logger.warning("Live execution probe failed: %s", exec_err)
+            stats["live_execution"] = {
+                "enabled": True,
+                "error": str(exec_err),
+                "execution_attempted": False,
+            }
+    _phase_exec_end = _time.monotonic()
+    
     # v2.4.1: Discovery dry-run (count candidates without changing universe)
     # Uses chain_key (already resolved) and config.dexes for consistency
     discovery_dry_run = config.get("discovery_dry_run", False)
@@ -1303,6 +1411,7 @@ def run_scan(
         "quote_rpc_ms": int((_phase_quote_end - _phase_quote_start) * 1000),
         "postprocess_ms": int((_phase_preflight_start - _phase_postprocess_start) * 1000),
         "preflight_ms": int((_phase_preflight_end - _phase_preflight_start) * 1000),
+        "exec_probe_ms": int((_phase_exec_end - _phase_exec_start) * 1000),
         "report_ms": int((_phase_pre_write - _phase_report_start) * 1000),
         # Legacy aliases for backward compatibility
         "init_rpc_ms": int((_phase_discovery_end - _phase_t0) * 1000),

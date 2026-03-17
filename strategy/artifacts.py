@@ -625,6 +625,8 @@ def build_truth_data(
         },
         # M4.2: Opportunity engine integration
         "opportunity_engine": stats.get("opportunity_engine", {}),
+        # R28.15: Live execution probe results (dormant unless execution_enabled=true)
+        "live_execution": stats.get("live_execution", {"enabled": False}),
         # v2.1.0: Roundtrip reality check (Step 4 - roundtrip in truth_report)
         "roundtrip_summary": _build_roundtrip_summary(stats),
         # v3.5.0: Top-level measured economics — canonical operational truth block.

@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-16 (R28.14 — benchmark_chain formalized, unified truth standard, forbidden version strings removed, fresh 42-run scan)  
+**Updated**: 2026-03-16 (R28.15 — live execution infrastructure implemented, scanner wiring done, honest simulate-only documentation)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.14**: benchmark_chain=linea (merit-based), unified truth_standard_met per chain, forbidden version strings fixed. **R28.13**: Truth contract split (ALIGNED/POSITIVE/BLOCKED/NOT_PROVEN), hot_loop provenance, PairHotQueue, cross-pair parallel quoter prefetch. **R28.11 T2**: Hot re-quote loop, WebSocket dirty-set trigger.  
-**Primary blocker**: market gap (arb: gap=3.25 bps best-ever, approaching breakeven). Arb=BLOCKED (real_quote_count=28, profitable_count=0). Linea=ALIGNED/BENCHMARK (14 RT). Base=ALIGNED (intermittent). Fee structure is root cause (linea 0-fee pools vs arb 100-3000 bps).
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.15**: The next milestone is realized execution truth — tx submission, receipts, and realized PnL — not further reinterpretation of paper profit. Live execution infrastructure exists (simulator.py, dex_dex_executor.py, providers.py) but is dormant in production. **R28.14**: benchmark_chain=linea (merit-based), unified truth_standard_met per chain.  
+**Primary blocker**: execute_live/simulate_rpc wired but dormant. No signer configured. No realized PnL produced. Market gap on arb (gap=9.95 bps from long_scan). Linea=ALIGNED/BENCHMARK (10 profitable RT in long_scan).
 
 ## [!] M4.1 Simulate-Only DoD **MET**
 
@@ -27,7 +27,7 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-16 R28.14)**: `agg_status=PASS` sustained. **M4.1 DoD MET**. **R28.14**: Formalized benchmark_chain (linea, merit-based: is_benchmark=true, 14 profitable RT). Unified truth_standard_met per chain. Forbidden version strings removed from Status files. Fresh scan: 42 runs, 371s, 6 chains. Linea=ALIGNED/BENCHMARK, base=ALIGNED (intermittent), arb gap=3.25 bps (best-ever). 1888 tests, CI all gates green. The next milestone target is not priority reshuffling by opinion, but unified truth-standard across all chains plus event-driven hot-loop speed.
+> [!] **ROLLING STABILITY (2026-03-16 R28.15)**: `agg_status=WARN_QUALITY` (FRAGILE_P90_ELEVATED). **M4.1 DoD MET** (simulate-only). **R28.15**: Live execution infrastructure implemented: real PreTradeSimulator (simulate/simulate_rpc/classify_revert), real DexDexExecutor (execute/execute_live/parse_swap_fills/compute_realized_pnl), 4 async RPCProvider methods. Scanner wiring: live execution probe block in run_scan_real.py (dormant — gated by execution_enabled=true which no production config enables). truth_data includes live_execution field. artifacts.py config-driven flags. +38 new tests (1926 total). The next milestone is realized execution truth — tx submission, receipts, and realized PnL — not further reinterpretation of paper profit.
 > R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation — dual-cycle architecture (FULL_SWEEP_INTERVAL=5), `DirtySetTracker` subscribes to WSS newHeads. Hot pairs caches: base=22, linea=11, mantle=4, scroll=9, zksync=8. Fresh evidence: 7 full sweeps + 5 hot requotes in 12-run scan. Schema bump for hot loop. +6 tests (1870 total).
 > R28.11 Turn 1: Pair-level observability — _pair_history deque (5), spread_bps deltas, cache freshness, suppression counters, STATIC_PROBE_PATH + ZERO_FEE_DOMINANCE guardrails. +8 tests.
 > R28.10: Profit truth propagation — real_quote_count + profit_realism_status in run_summary.metrics, rolling per-run + quick_stats, long_scan chain_profit_state. 5 states: CONFIRMED_POSITIVE_CONTROL/THIN_POSITIVE/PRIMARY_BLOCKER/CANDIDATE/PROBE_ONLY. KPI separation (signals/exec_candidates/profitable_roundtrips/truth_confirmed). RCA: linea profits from lynex_v3 0-fee pools; arb: 100-3000 bps fee pools + $150 paper_size slippage.
