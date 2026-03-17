@@ -863,7 +863,21 @@ def run_scan(
             )
         
         # Summarize round-trip results
-        rt_profitable = [r for r in roundtrip_results if r.is_profitable]
+        # R28.17: Filter out "profitable" roundtrips with absurd PnL (accounting contamination)
+        SANE_RT_PNL_MAX = 500  # aligned with SUSPECT_ROUNDTRIP_OUTLIER_BPS
+        rt_profitable = [
+            r for r in roundtrip_results
+            if r.is_profitable and r.net_pnl_bps <= SANE_RT_PNL_MAX
+        ]
+        rt_suspect_profitable = [
+            r for r in roundtrip_results
+            if r.is_profitable and r.net_pnl_bps > SANE_RT_PNL_MAX
+        ]
+        if rt_suspect_profitable:
+            logger.warning(
+                "SUSPECT_ACCOUNTING: %d roundtrips with absurd pnl filtered from profitable_count",
+                len(rt_suspect_profitable),
+            )
         rt_using_real_quote = [r for r in roundtrip_results if r.leg2_is_real_quote]
         
         # v2.1.0: Track L1 cost source for transparency
@@ -874,6 +888,7 @@ def run_scan(
             "enabled": True,
             "evaluated_count": len(roundtrip_results),
             "profitable_count": len(rt_profitable),
+            "suspect_profitable_count": len(rt_suspect_profitable),  # R28.17
             "real_quote_count": len(rt_using_real_quote),
             # R28.7: executable_candidates_count — how many candidates passed ALL pre-filters
             # and were sent to roundtrip evaluation. This is the new primary KPI:
@@ -920,12 +935,9 @@ def run_scan(
         stats["roundtrip"]["best_measured_spread_gap_bps"] = max(measured_gaps) if measured_gaps else None
         
         # v3.3.0: Dynamic size sweep — find optimal notional per route
-        # R28.5: Skip for COVERAGE runs (multiple re-quotes per route = expensive)
+        # R28.17: COVERAGE runs now use same truth path as NORMAL (no lightweight skip)
         dynamic_probe_cfg = config.get("dynamic_probe", {})
-        if run_kind == "COVERAGE":
-            stats["roundtrip"]["dynamic_sweep"] = {"enabled": False, "skipped": "COVERAGE_LIGHTWEIGHT"}
-            logger.info("Dynamic sweep skipped for COVERAGE run (lightweight mode)")
-        elif dynamic_probe_cfg.get("enabled") and eligible_opps:
+        if dynamic_probe_cfg.get("enabled") and eligible_opps:
             from engine.roundtrip import sweep_roundtrip_sizes, CANONICAL_SWEEP_SIZES_USD
 
             sweep_sizes = dynamic_probe_cfg.get("sizes_usd", None) or list(CANONICAL_SWEEP_SIZES_USD)
@@ -1175,49 +1187,45 @@ def run_scan(
     # v2.4.1: M4.3 Preflight EVIDENCE (eth_call/eth_estimateGas for top-N)
     # Collects actual RPC evidence without executing any transactions
     # Uses opps_list (gated opportunities) instead of spread_signals
-    # R28.4: Skip for COVERAGE runs (opt-in only for NORMAL/promotion checks)
+    # R28.17: COVERAGE runs now use same truth path (no lightweight skip)
     _phase_preflight_start = _time.monotonic()
-    if run_kind == "COVERAGE":
-        stats["preflight_evidence"] = {"enabled": False, "skipped": "COVERAGE_LIGHTWEIGHT"}
-        logger.info("Preflight evidence skipped for COVERAGE run (lightweight mode)")
-    else:
-        try:
-            from execution.preflight import (
-                collect_top_n_preflight,
-                preflight_not_available,
-                adapt_opportunity_to_preflight_input,
-            )
+    try:
+        from execution.preflight import (
+            collect_top_n_preflight,
+            preflight_not_available,
+            adapt_opportunity_to_preflight_input,
+        )
+        
+        # Check if we have opportunities and a web3 instance
+        if opps_list and len(opps_list) > 0 and w3_instance:
+            # Convert opportunities to preflight input format
+            preflight_candidates = [
+                adapt_opportunity_to_preflight_input(opp, chain_key=chain_key)
+                for opp in opps_list[:3]  # Top-3 candidates
+            ]
             
-            # Check if we have opportunities and a web3 instance
-            if opps_list and len(opps_list) > 0 and w3_instance:
-                # Convert opportunities to preflight input format
-                preflight_candidates = [
-                    adapt_opportunity_to_preflight_input(opp, chain_key=chain_key)
-                    for opp in opps_list[:3]  # Top-3 candidates
-                ]
-                
-                preflight_evidence = collect_top_n_preflight(
-                    w3=w3_instance,
-                    spread_signals=preflight_candidates,
-                    n=3,
-                    current_block=current_block,
-                )
-                stats["preflight_evidence"] = preflight_evidence
-                logger.info(
-                    "M4.3 Preflight Evidence: %d/%d candidates passed",
-                    preflight_evidence["passed_count"],
-                    preflight_evidence["candidates_count"],
-                )
-            elif not w3_instance:
-                stats["preflight_evidence"] = preflight_not_available("NO_W3_INSTANCE")
-            else:
-                stats["preflight_evidence"] = preflight_not_available("NO_OPPORTUNITIES")
-        except Exception as pf_ev_err:
-            logger.debug("Preflight evidence collection skipped: %s", pf_ev_err)
-            stats["preflight_evidence"] = {
-                "enabled": False,
-                "error": str(pf_ev_err),
-            }
+            preflight_evidence = collect_top_n_preflight(
+                w3=w3_instance,
+                spread_signals=preflight_candidates,
+                n=3,
+                current_block=current_block,
+            )
+            stats["preflight_evidence"] = preflight_evidence
+            logger.info(
+                "M4.3 Preflight Evidence: %d/%d candidates passed",
+                preflight_evidence["passed_count"],
+                preflight_evidence["candidates_count"],
+            )
+        elif not w3_instance:
+            stats["preflight_evidence"] = preflight_not_available("NO_W3_INSTANCE")
+        else:
+            stats["preflight_evidence"] = preflight_not_available("NO_OPPORTUNITIES")
+    except Exception as pf_ev_err:
+        logger.debug("Preflight evidence collection skipped: %s", pf_ev_err)
+        stats["preflight_evidence"] = {
+            "enabled": False,
+            "error": str(pf_ev_err),
+        }
     _phase_preflight_end = _time.monotonic()
     
     # R28.15: Live execution probe — wires simulate_rpc + execute_live into scanner

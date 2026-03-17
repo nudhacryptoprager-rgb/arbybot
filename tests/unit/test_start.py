@@ -442,7 +442,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.12")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.13")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -1108,7 +1108,7 @@ class TestFrontierRanking(unittest.TestCase):
         per_chain["base"]["included_signals_total"] = 3
         summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
         # Schema version check
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.12")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.13")
         # Required top-level fields
         self.assertIn("generated_at", summary)
         self.assertIn("wall_seconds", summary)
@@ -1692,6 +1692,57 @@ class TestChainProfitState(unittest.TestCase):
             "PROBE_ONLY",
         )
 
+    def test_suspect_accounting_absurd_pnl(self):
+        """R28.17: Absurd best_roundtrip_net_bps => SUSPECT_ACCOUNTING."""
+        stats = start.new_chain_stats()
+        stats["profitable_roundtrips_total"] = 2
+        stats["real_quote_count_total"] = 5
+        stats["roundtrip_evaluated_total"] = 7
+        stats["runs"] = 6
+        stats["best_roundtrip_net_bps"] = 8e16  # absurdly large
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "SUSPECT_ACCOUNTING",
+        )
+
+    def test_suspect_accounting_count_triggers(self):
+        """R28.17: suspect_accounting_count > 0 => SUSPECT_ACCOUNTING."""
+        stats = start.new_chain_stats()
+        stats["profitable_roundtrips_total"] = 1
+        stats["real_quote_count_total"] = 2
+        stats["roundtrip_evaluated_total"] = 3
+        stats["runs"] = 2
+        stats["_suspect_accounting_count"] = 1
+        # best_roundtrip_net_bps may be None (filtered out at accumulation)
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "SUSPECT_ACCOUNTING",
+        )
+
+    def test_sane_accounting_allows_confirmed(self):
+        """R28.17: Sane PnL + profitable + rq >= 2 => CONFIRMED_POSITIVE_CONTROL."""
+        stats = start.new_chain_stats()
+        stats["profitable_roundtrips_total"] = 3
+        stats["real_quote_count_total"] = 4
+        stats["roundtrip_evaluated_total"] = 5
+        stats["runs"] = 3
+        stats["best_roundtrip_net_bps"] = 12.5  # sane value
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "CONFIRMED_POSITIVE_CONTROL",
+        )
+
+    def test_roundtrip_accounting_sane_check(self):
+        """R28.17: _roundtrip_accounting_is_sane boundary cases."""
+        stats = start.new_chain_stats()
+        self.assertTrue(start._roundtrip_accounting_is_sane(stats))  # no data
+        stats["best_roundtrip_net_bps"] = 499
+        self.assertTrue(start._roundtrip_accounting_is_sane(stats))
+        stats["best_roundtrip_net_bps"] = 501
+        self.assertFalse(start._roundtrip_accounting_is_sane(stats))
+        stats["best_roundtrip_net_bps"] = -501
+        self.assertFalse(start._roundtrip_accounting_is_sane(stats))
+
     def test_build_summary_has_new_sections(self):
         """R28.10: build_summary must include kpi_separation and profit_truth_summary."""
         per_chain = {
@@ -1713,13 +1764,12 @@ class TestChainProfitState(unittest.TestCase):
 
         summary = start.build_summary(per_chain, 60.0, [])
 
-        # kpi_separation present
+        # kpi_separation present (R28.17: 3-tier signal classification)
         kpi = summary["kpi_separation"]
-        self.assertEqual(kpi["totals"]["signals"], 18)
-        self.assertEqual(kpi["totals"]["profitable_roundtrips"], 5)
-        self.assertEqual(kpi["totals"]["truth_confirmed"], 5)  # linea has rq>0
-        # arb has profitable_rt=0, so truth_confirmed=0 for arb
-        self.assertEqual(kpi["per_chain"]["arb"]["truth_confirmed"], 0)
+        self.assertEqual(kpi["totals"]["diagnostic_signals"], 18)
+        self.assertEqual(kpi["totals"]["executable_profitable"], 5)  # linea has rq>0 + sane
+        # arb has profitable_rt=0, so executable_profitable=0 for arb
+        self.assertEqual(kpi["per_chain"]["arb"]["executable_profitable"], 0)
 
         # profit_truth_summary present
         pts = summary["profit_truth_summary"]
@@ -1772,7 +1822,7 @@ class TestChainProfitState(unittest.TestCase):
         self.assertEqual(summary["per_chain"]["base"]["last_pools_from_rpc"], 2)
         self.assertEqual(summary["per_chain"]["base"]["last_suppression"]["single_dex"], 3)
         self.assertEqual(len(summary["per_chain"]["base"]["_pair_history"]), 1)
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.12")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.13")
 
 
 class TestHotLoopAndDirtySet(unittest.TestCase):
@@ -2088,7 +2138,7 @@ class TestLiveStreamErrorPath(unittest.TestCase):
     # -- R28.12: write_hot_loop_snapshot tests ------------------------------
 
     def test_write_hot_loop_snapshot_schema(self):
-        """write_hot_loop_snapshot() produces valid hot_loop_snapshot:v1.1."""
+        """write_hot_loop_snapshot() produces valid hot_loop_snapshot:v1.2."""
         import time as _time
         import tempfile
         import json
@@ -2132,8 +2182,9 @@ class TestLiveStreamErrorPath(unittest.TestCase):
                 self.assertTrue(tmp_path.exists())
                 with open(tmp_path) as f:
                     snap = json.load(f)
-                self.assertEqual(snap["schema"], "start:hot_loop_snapshot:v1.1")
+                self.assertEqual(snap["schema"], "start:hot_loop_snapshot:v1.2")
                 self.assertIn("generated_at", snap)
+                self.assertFalse(snap["is_test_session"])
                 self.assertIn("per_chain", snap)
                 self.assertIn("arb", snap["per_chain"])
                 self.assertEqual(snap["per_chain"]["arb"]["full_sweeps"], 1)
@@ -2145,6 +2196,28 @@ class TestLiveStreamErrorPath(unittest.TestCase):
                 self.assertEqual(snap["live_stream"]["active_runs"][0]["chain"], "arb")
                 self.assertGreaterEqual(snap["live_stream"]["active_runs"][0]["elapsed_seconds"], 0)
                 self.assertEqual(snap["live_stream"]["recent_events"][0]["event"], "scan_finished")
+            finally:
+                start.HOT_LOOP_LATEST = original_path
+
+    def test_write_hot_loop_snapshot_test_session_marker(self):
+        """R28.17: is_test_session=True marks snapshot accordingly."""
+        import time as _time
+        import tempfile
+        import json
+        per_chain = {"arb": start.new_chain_stats()}
+        per_chain["arb"]["runs"] = 1
+        original_path = start.HOT_LOOP_LATEST
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td) / "hot_loop_latest.json"
+            start.HOT_LOOP_LATEST = tmp_path
+            try:
+                start.write_hot_loop_snapshot(
+                    per_chain, None, _time.monotonic() - 5,
+                    is_test_session=True,
+                )
+                with open(tmp_path) as f:
+                    snap = json.load(f)
+                self.assertTrue(snap["is_test_session"])
             finally:
                 start.HOT_LOOP_LATEST = original_path
 

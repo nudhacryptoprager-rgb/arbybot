@@ -20,6 +20,7 @@ import json
 import shutil
 import subprocess
 import sys
+import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -306,6 +307,7 @@ def new_chain_stats() -> dict[str, Any]:
         "real_quote_count_total": 0,
         "last_profit_realism_status": None,
         "best_roundtrip_net_bps": None,
+        "_suspect_accounting_count": 0,  # R28.17: contaminated PnL events
         "best_measured_spread_gap_bps": None,
         "sweep_best_net_pnl_bps": None,
         "sweep_best_size_usd": None,
@@ -393,8 +395,16 @@ def update_chain_stats(
             stats["last_profit_realism_status"] = prs
         run_best = rt.get("best_net_pnl_bps")
         if run_best is not None:
-            prev = stats.get("best_roundtrip_net_bps")
-            stats["best_roundtrip_net_bps"] = run_best if prev is None else max(prev, run_best)
+            # R28.17: Guard against accumulating contaminated PnL values
+            if SANE_ROUNDTRIP_PNL_BPS_MIN <= run_best <= SANE_ROUNDTRIP_PNL_BPS_MAX:
+                prev = stats.get("best_roundtrip_net_bps")
+                stats["best_roundtrip_net_bps"] = run_best if prev is None else max(prev, run_best)
+            else:
+                logger.warning(
+                    "SUSPECT_ACCOUNTING: best_net_pnl_bps=%.2f outside sane range [%d, %d], skipping",
+                    run_best, SANE_ROUNDTRIP_PNL_BPS_MIN, SANE_ROUNDTRIP_PNL_BPS_MAX,
+                )
+                stats["_suspect_accounting_count"] = stats.get("_suspect_accounting_count", 0) + 1
         run_gap = rt.get("best_measured_spread_gap_bps")
         if run_gap is not None:
             prev_gap = stats.get("best_measured_spread_gap_bps")
@@ -570,16 +580,36 @@ def check_guardrails(per_chain: dict[str, dict[str, Any]]) -> list[str]:
     return warnings
 
 
-# -- chain profit state (R28.10) ------------------------------------------
+# -- chain profit state (R28.10, R28.17) -----------------------------------
+
+# R28.17: Sane bounds for roundtrip PnL — values outside this range indicate
+# accounting contamination (mixed-source quotes, decimal mismatch, garbage pools).
+SANE_ROUNDTRIP_PNL_BPS_MAX = 500  # aligned with SUSPECT_ROUNDTRIP_OUTLIER_BPS
+SANE_ROUNDTRIP_PNL_BPS_MIN = -500
+
+
+def _roundtrip_accounting_is_sane(stats: dict[str, Any]) -> bool:
+    """R28.17: Guard against contaminated roundtrip accounting.
+
+    Returns False if best_roundtrip_net_bps is outside sane bounds,
+    or if suspect accounting events were recorded during accumulation.
+    """
+    best = stats.get("best_roundtrip_net_bps")
+    if best is not None and not (SANE_ROUNDTRIP_PNL_BPS_MIN <= best <= SANE_ROUNDTRIP_PNL_BPS_MAX):
+        return False
+    if stats.get("_suspect_accounting_count", 0) > 0:
+        return False
+    return True
 
 
 def classify_chain_profit_state(stats: dict[str, Any]) -> str:
-    """R28.10: Derive chain profit state from accumulated per-chain metrics.
+    """R28.10/R28.17: Derive chain profit state from accumulated per-chain metrics.
 
     States (ordered by strength):
-      CONFIRMED_POSITIVE_CONTROL - profitable RT with repeated real quotes (real_quote_count >= 2)
-      THIN_POSITIVE              - profitable RT exists but real quote evidence is thin (< 2)
+      CONFIRMED_POSITIVE_CONTROL - profitable RT with repeated real quotes AND sane accounting
+      THIN_POSITIVE              - profitable RT exists but evidence thin or accounting suspect
       PRIMARY_BLOCKER            - RT evaluated with real quotes but none profitable
+      SUSPECT_ACCOUNTING         - profitable RT reported but accounting is outside sane bounds
       CANDIDATE                  - runs exist but no roundtrip evaluation yet
       PROBE_ONLY                 - no runs or no meaningful data
     """
@@ -587,7 +617,10 @@ def classify_chain_profit_state(stats: dict[str, Any]) -> str:
     evaluated = stats.get("roundtrip_evaluated_total", 0)
     rq_total = stats.get("real_quote_count_total", 0)
     runs = stats.get("runs", 0)
+    sane = _roundtrip_accounting_is_sane(stats)
 
+    if profitable > 0 and not sane:
+        return "SUSPECT_ACCOUNTING"
     if profitable > 0 and rq_total >= 2:
         return "CONFIRMED_POSITIVE_CONTROL"
     if profitable > 0:
@@ -642,7 +675,7 @@ def build_summary(
         s["chain_profit_state"] = classify_chain_profit_state(s)
 
     summary = {
-        "schema": "start:long_scan_summary:v1.12",  # R28.13: truth contract alignment + truth KPIs surfaced
+        "schema": "start:long_scan_summary:v1.13",  # R28.17: truth-quality discipline + 3-tier signal classification
         "generated_at": run_ts,
         "run_context": {
             "run_timestamp": run_ts,
@@ -874,41 +907,42 @@ def _compute_universe_split(
 
 
 def _compute_kpi_separation(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """R28.10: Strictly separate KPIs — do NOT mix signals with profit truth.
+    """R28.10/R28.17: Three-tier signal classification per chain.
 
-    Four-tier KPI:
-      signals_count         — raw signals found (one-leg spread detection)
-      exec_candidates       — signals that passed suspect/quality filters (executable)
-      profitable_roundtrips — roundtrip evaluations that showed profit
-      truth_confirmed       — profitable roundtrips backed by real DEX quotes (real_quote_count > 0)
+    Tiers (strictly ordered):
+      diagnostic_signals       — raw spread signals (one-leg detection, may be mixed-source/noise)
+      real_quote_signals       — roundtrips evaluated with real DEX quotes (real_quote_count > 0)
+      executable_profitable    — profitable roundtrips with sane accounting AND real quotes
     """
     per_chain_kpi = {}
-    totals = {"signals": 0, "exec_candidates": 0, "profitable_roundtrips": 0, "truth_confirmed": 0}
+    totals = {"diagnostic_signals": 0, "real_quote_signals": 0, "executable_profitable": 0}
     for chain, s in per_chain.items():
-        signals = s.get("included_signals_total", 0)
-        # exec_candidates approximated as included_signals (post-filter)
-        exec_cands = signals
-        profitable_rt = s.get("profitable_roundtrips_total", 0)
+        diagnostic = s.get("included_signals_total", 0)
         rq = s.get("real_quote_count_total", 0)
-        truth = profitable_rt if rq > 0 else 0
+        profitable_rt = s.get("profitable_roundtrips_total", 0)
+        sane = _roundtrip_accounting_is_sane(s)
+        # real_quote_signals: roundtrips that used real quotes (regardless of profitability)
+        real_quote_sig = rq
+        # executable_profitable: profitable AND sane AND real-quote backed
+        exec_profitable = profitable_rt if (sane and rq > 0) else 0
         per_chain_kpi[chain] = {
-            "signals": signals,
-            "exec_candidates": exec_cands,
-            "profitable_roundtrips": profitable_rt,
-            "truth_confirmed": truth,
+            "diagnostic_signals": diagnostic,
+            "real_quote_signals": real_quote_sig,
+            "executable_profitable": exec_profitable,
+            "accounting_sane": sane,
             "real_quote_count": rq,
         }
-        totals["signals"] += signals
-        totals["exec_candidates"] += exec_cands
-        totals["profitable_roundtrips"] += profitable_rt
-        totals["truth_confirmed"] += truth
+        totals["diagnostic_signals"] += diagnostic
+        totals["real_quote_signals"] += real_quote_sig
+        totals["executable_profitable"] += exec_profitable
     return {"totals": totals, "per_chain": per_chain_kpi}
 
 
 def _compute_profit_truth_summary(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """R28.10: Summarize chain profit state across all chains.
+    """R28.10/R28.17: Summarize chain profit state across all chains.
 
     Groups chains by their profit state for operator visibility.
+    Includes SUSPECT_ACCOUNTING group for contaminated chains.
     """
     groups: dict[str, list[str]] = {}
     for chain, s in per_chain.items():
@@ -920,12 +954,14 @@ def _compute_profit_truth_summary(per_chain: dict[str, dict[str, Any]]) -> dict[
     promotion_eligible = sorted(groups.get("CONFIRMED_POSITIVE_CONTROL", []))
     primary_blockers = sorted(groups.get("PRIMARY_BLOCKER", []))
     thin_positive = sorted(groups.get("THIN_POSITIVE", []))
+    suspect_accounting = sorted(groups.get("SUSPECT_ACCOUNTING", []))
 
     return {
         "chain_states": {state: sorted(chains) for state, chains in groups.items()},
         "promotion_eligible": promotion_eligible,
         "primary_blockers": primary_blockers,
         "thin_positive_needs_evidence": thin_positive,
+        "suspect_accounting": suspect_accounting,
     }
 
 
@@ -1116,6 +1152,9 @@ def print_summary(summary: dict[str, Any]) -> None:
         blockers = pts.get("primary_blockers", [])
         if blockers:
             print(f"  PRIMARY-BLOCKERS:   {', '.join(blockers)}")
+        suspect = pts.get("suspect_accounting", [])
+        if suspect:
+            print(f"  SUSPECT-ACCOUNTING: {', '.join(suspect)}")
 
     ranking = summary.get("frontier_ranking", [])
     if ranking:
@@ -1244,18 +1283,19 @@ def write_hot_loop_snapshot(
     pair_hot_queue: Any = None,
     live_events: list[dict[str, Any]] | None = None,
     active_runs: dict[str, dict[str, Any]] | None = None,
+    is_test_session: bool = False,
 ) -> None:
     """Write lightweight hot_loop_latest.json after each hot re-quote batch.
 
-    R28.13: Schema v1.1 — added run_context provenance, truth KPIs per chain,
-    chain_profit_state, and session link to long_scan.  All chains present
-    regardless of whether they've been scanned yet.
+    R28.13: Schema v1.2 — added is_test_session marker for rolling protection.
+    R28.17: is_test_session=True marks snapshot as test/diagnostic, not operational.
     """
     import time as _time
     run_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     snapshot: dict[str, Any] = {
-        "schema": "start:hot_loop_snapshot:v1.1",
+        "schema": "start:hot_loop_snapshot:v1.2",
         "generated_at": run_ts,
+        "is_test_session": is_test_session,  # R28.17: rolling protection marker
         # R28.13 Step 4: run_context provenance (same shape as long_scan)
         "run_context": {
             "run_timestamp": run_ts,
@@ -1625,6 +1665,9 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         with _live_lock:
             _active_runs.pop(chain, None)
 
+    # R28.17: Detect test-like session to protect rolling artifacts
+    _is_test_session = os.environ.get("ARBY_OFFLINE", "") == "1"
+
     def _write_hot_snapshot() -> None:
         with _live_lock:
             live_events = list(_live_events)
@@ -1638,6 +1681,7 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                 pair_hot_queue,
                 live_events=live_events,
                 active_runs=active_runs,
+                is_test_session=_is_test_session,
             )
 
     _append_live_event(

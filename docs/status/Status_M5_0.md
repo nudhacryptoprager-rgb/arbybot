@@ -1,10 +1,10 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-17 (R28.16 — phase event protocol for live stream, /api/hot lightweight endpoint, dashboard severity badges)
-**Tests**: 1932 passed / 3 skipped
-**Schema**: see DEV_REPORT_LATEST.md (schema unchanged, additive fields only)
-**Evidence runDirs**: long_scan 30 runs 6 chains (R28.15 rolling from R28.14 scan)
+**Updated**: 2026-03-17 (R28.17 — truth-quality discipline: accounting guard, 3-tier signal classification, COVERAGE truth-path parity)
+**Tests**: 1937 passed / 3 skipped
+**Schema**: see DEV_REPORT_LATEST.md (long_scan_summary + hot_loop_snapshot schemas bumped)
+**Evidence runDirs**: long_scan 35 runs 6 chains (R28.15 scan, rolling unchanged)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
 **Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (30 runs 370s, benchmark_chain=linea, truth_standard_met per chain)
 **Hot pairs caches**: `data/cache/hot_pairs_{chain}.json` (base=22, linea=11, mantle=4, scroll=9, zksync=8 pairs)
@@ -17,6 +17,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> **R28.17**: Truth-quality discipline. SUSPECT_ACCOUNTING state added to classify_chain_profit_state — chains with profitable roundtrips but absurd best_net_pnl_bps (outside ±500 bps) are blocked from CONFIRMED_POSITIVE_CONTROL. Base had best_net_pnl_bps=8e16 (accounting contamination) → will be SUSPECT_ACCOUNTING on fresh scan. Accumulation guard: update_chain_stats rejects insane PnL values. Scanner: suspect_profitable_count tracks filtered roundtrips. 3-tier signal classification in kpi_separation: diagnostic_signals / real_quote_signals / executable_profitable (replaces old 4-tier). COVERAGE truth-path parity: removed lightweight skip for dynamic_sweep + preflight_evidence — all run_kinds now evaluated equally. Rolling protection: hot_loop_snapshot with is_test_session marker. Only linea is true positive control (rq=12, prt=12). +5 tests (1937 total). Schema bumps: long_scan_summary + hot_loop_snapshot (see DEV_REPORT for versions).
 > **R28.16**: Phase-level visibility in live stream. Scanner child process (run_scan_real.py) emits structured `ARBY_PHASE:` JSON lines on stdout for 6 phase boundaries (discovery_started/finished, quote_started/finished, preflight_finished, gate_finished). Parent (start.py run_gate_once) parses these and pipes into hot_loop_latest.json live_stream as `phase:*` events. Dashboard badges for phase transitions + severity/reason detail column. Lightweight `/api/hot` endpoint (serves only hot_loop_latest.json vs full /api/rolling). Pair-hot-queue pending count surfaced in live_stream KPIs. +6 tests (1932 total). System remains batch-hot — phases confirm operational visibility within long child runs, not instant-hot trading.
 > **R28.15**: Scan stack is productive in simulate-only mode, but live-profit metrics remain blocked because execute_live/simulate_rpc were not yet wired into the operational scanner path until this round. Now wired as dormant probe (gated by config — all production configs keep execution_enabled=false). Real PreTradeSimulator and DexDexExecutor implemented + tested (38 new tests, 1926 total). Live execution probe block in run_scan_real.py: pick best candidate → simulate_rpc() → check signer → log. config/real_live_probe.yaml ready for first live test. Artifacts: truth_data now includes live_execution field, kill_switch_active/execution_enabled are config-driven. The next milestone is realized execution truth — tx submission, receipts, and realized PnL — not further reinterpretation of paper profit.
 > R28.14: Benchmark chain formalized — merit-based selection: linea is current benchmark (14 profitable RT, ALIGNED, is_benchmark=true). Unified truth standard: truth_standard_met + is_benchmark per chain. Forbidden version strings removed from Status files. Fresh scan: 42 runs 371s, benchmark_chain=linea. Arb gap=3.25 bps best-ever (approaching breakeven). quote_rpc_ms: arb 5.6s (was 14.6s), linea 8.1s, base 22s. +2 tests (1888). Arbitrum remains contractual primary truth path, but linea is currently the strongest aligned positive control. Next milestone: unified truth-standard across all chains + event-driven hot-loop speed.
