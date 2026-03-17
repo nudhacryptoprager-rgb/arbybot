@@ -6,72 +6,63 @@
 ## Stage Context
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
-**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, rolling on arbitrum_one. Scan stack is productive in simulate-only mode. Live execution infrastructure (simulator.py, dex_dex_executor.py) implemented and tested but NOT yet producing realized PnL — wired into scanner as dormant probe.
+**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, rolling on arbitrum_one. Scan stack is productive in simulate-only mode. Live execution infrastructure (simulator.py, dex_dex_executor.py) implemented and tested but NOT yet producing realized PnL — wired into scanner as dormant probe. R28.16: Phase-level operational visibility via ARBY_PHASE protocol.
 
-## SESSION GOAL (2026-03-16, Session 9 Round 28.15)
-**Goal**: R28.15 — Wire simulate_rpc/execute_live into operational scanner, implement live execution probe circuit, honest simulate-only vs realized execution documentation. Implement real PreTradeSimulator and DexDexExecutor. Fix DEV_REPORT stale vs rolling (check_repo_safety FAIL).
-**Prior (R28.14)**: Benchmark_chain formalized (linea), unified truth standard per chain, forbidden version strings removed. Lead review R28.15: "execute_live/simulate_rpc exist but are NOT wired into the operational scanner path — this is the critical gap. DEV_REPORT stale vs rolling. The next milestone is realized execution truth — tx submission, receipts, realized PnL — not further reinterpretation of paper profit."
+## SESSION GOAL (2026-03-17, Session 10 Round 28.16)
+**Goal**: R28.16 — Lead review directive: phase-level visibility in live stream (not just chain start/end), structured phase events from scanner child process, severity/reason badges in dashboard, lightweight /api/hot endpoint, pair-hot-queue activity in live stream, error path tests.
+**Prior (R28.15)**: Live execution infrastructure implemented (simulator.py, dex_dex_executor.py), scanner wiring done (dormant probe), honest simulate-only documentation. Lead review R28.16: "live stream is chain-level not pair-level, still polling not server-push, no heartbeat within long child-run, no phase transition visibility (discovery→quote→preflight→gate)."
 
 ## 0) Meta
 timestamp_utc: 2026-03-17T08:04:59Z
-rolling_provenance: 2026-03-17T08:04:59Z (run_summary_latest.json — R28.15 fresh evidence)
+rolling_provenance: 2026-03-17T08:04:59Z (run_summary_latest.json — rolling unchanged, R28.16 is observability-only)
 rolling_run_dir: ci_m5_gate_arbitrum_one_20260317_090447_596027
-mode: EXECUTION_WIRING + SIMULATOR_REWRITE + DOCS_ALIGNMENT
-test_count: 1926 passed, 3 skipped
+mode: PHASE_VISIBILITY + DASHBOARD_ENHANCEMENT
+test_count: 1932 passed, 3 skipped
 schema_version: start:long_scan_summary:v1.12
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R28.15: Wire simulate_rpc/execute_live into scanner, implement real execution infrastructure, fix stale DEV_REPORT |
+| session_goal | R28.16: Phase-level visibility in live stream, structured phase events from scanner, severity/reason badges, /api/hot endpoint, pair-hot-queue in live stream, error path tests |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | MARKET: arb WARN_QUALITY (FRAGILE_P90_ELEVATED); linea only chain with profitable RT; signer not configured for live execution |
-| evidence_session_run_dirs | ci_m5_gate_arbitrum_one_20260317_090447_596027 (primary rolling, PASS), long_scan_latest.json (2026-03-17T08:02:29Z, 6 chains, 42 runs 383s), ci_m5_gate_linea_20260317_090349_494055 (ROUNDTRIP_PROFITABLE=2), ci_m5_gate_linea_20260317_090408_510597 (PASS) |
-| primary_blocker_of_session | execute_live/simulate_rpc not wired into operational scanner path; DEV_REPORT stale vs rolling |
-| blocker_status_before | ACTIVE: execute_live/simulate_rpc exist in execution/ but scanner never calls them; DEV_REPORT references R28.14 timestamps; check_repo_safety FAIL |
-| blocker_status_after | RESOLVED: scanner wiring DONE (dormant probe), execution infra DONE (simulator+executor+providers), DEV_REPORT aligned with rolling, fresh scans PASS (42 runs + rolling refresh) |
-| start_metric | R28.14: 1888 tests, execute_live disconnected from scanner |
-| end_metric | R28.15: 1926 tests (+38), live execution probe wired in scanner (dormant), real simulator + executor |
-| delta | +real PreTradeSimulator (simulate/simulate_rpc/batch_simulate_rpc/classify_revert), +real DexDexExecutor (execute/execute_live/wait_for_receipt/parse_swap_fills/compute_realized_pnl), +4 RPCProvider async methods, +live execution probe in run_scan_real.py (gated: dormant unless execution_enabled=true), +live_execution field in truth_data, +config/real_live_probe.yaml, +38 tests, artifacts.py config-driven flags |
+| remaining_blockers | MARKET: arb WARN_QUALITY (FRAGILE_P90_ELEVATED); system still batch-hot not instant-hot; signer not configured for live execution |
+| evidence_session_run_dirs | No new scan runs (R28.16 is observability-only change); rolling artifacts unchanged from R28.15 |
+| primary_blocker_of_session | No phase transition visibility within long child runs; live stream is chain-level only |
+| blocker_status_before | ACTIVE: dashboard shows only scan_started/scan_finished events, no phase transitions; no severity/reason badges; /api/rolling serves all 4 artifacts for every poll |
+| blocker_status_after | RESOLVED: 6 phase events (discovery_started/finished, quote_started/finished, preflight_finished, gate_finished) emitted from scanner via ARBY_PHASE: protocol, parsed by parent, surfaced in dashboard with badges + detail column; /api/hot serves only hot_loop_latest.json; pair_hot_queue_pending in live stream KPIs |
+| start_metric | R28.15: 1926 tests, no phase visibility within child runs |
+| end_metric | R28.16: 1932 tests (+6), full phase-level visibility in live stream |
+| delta | +_emit_phase() in run_scan_real.py (6 phase events), +phase_callback in run_gate_once(), +phase: event badges in dashboard, +severity/reason detail column, +/api/hot endpoint, +pair_hot_queue_pending in live_stream, +6 tests (phase protocol + error path + serialization) |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 — R28.15 lead review directive (10 critical issues, 10 fix steps)
+goal (Roadmap): M5_0/M4 — R28.16 lead review directive (10 critical issues, 10 fix steps)
 change_summary:
-  - EXECUTION WIRING: Live execution probe block inserted in run_scan_real.py after preflight, before discovery. Flow: pick best opportunity → simulate_rpc() → check signer → log to stats["live_execution"]. Gated by execution_enabled=true AND kill_switch_active=false AND simulate_only=false. All current configs keep this OFF (dormant).
-  - SIMULATOR REWRITE: execution/simulator.py — real PreTradeSimulator with simulate() (sync/DRY_RUN), simulate_rpc() (async eth_call), batch_simulate_rpc(), classify_revert() with REVERT_SIGNATURES dict.
-  - EXECUTOR REWRITE: execution/dex_dex_executor.py — real DexDexExecutor with execute() (sync/blocked), execute_live() (async/real tx submission), state machine integration, _wait_for_receipt(), _parse_swap_fills() (Uniswap V3 Swap log parsing), _compute_realized_pnl().
-  - PROVIDERS: chains/providers.py — 4 new async methods: estimate_gas(), get_transaction_count(), send_raw_transaction(), get_transaction_receipt().
-  - ARTIFACTS: strategy/artifacts.py — kill_switch_active/execution_enabled now config-driven (not hardcoded). truth_data includes live_execution field.
-  - CONFIG: config/real_live_probe.yaml — execution_enabled=true, kill_switch_active=false, simulate_only=false, max_position_usd=10, run_kind=PROBE.
-  - TESTS: 38 new tests in tests/unit/test_execution_live.py covering classify_revert, simulator DRY_RUN, executor blockers, execute_live async mock, ExecutionResult contract, swap fill parsing.
-  - PURITY: test_run_scan_real_purity.py max_lines 1500→1650 (scanner grew +105 lines for probe block).
+  - PHASE EVENT PROTOCOL: _emit_phase() in run_scan_real.py emits structured ARBY_PHASE:{json} lines on stdout at 6 phase boundaries (discovery_started, discovery_finished, quote_started, quote_finished, preflight_finished, gate_finished). Each carries chain, timing, counts.
+  - PHASE PARSING: start.py run_gate_once() accepts phase_callback parameter, parses ARBY_PHASE: lines from child stdout, calls callback. _run_one_chain() wires callback to _append_live_event() + _write_hot_snapshot() for real-time live stream updates during child run.
+  - DASHBOARD: Phase event badges (DISCOVERY/QUOTE/PREFLIGHT/GATE with started/finished coloring). Severity/reason detail column (profit_realism_status badges, result badges, quotes/pairs counts, pass/fail preflight). Event list expanded from 12 to 20. Pair-hot-queue pending count as KPI.
+  - /API/HOT ENDPOINT: Lightweight /api/hot in dashboard_server.py serves only hot_loop_latest.json (vs full /api/rolling that loads all 4 artifacts). Suitable for fast 3s polling when only live stream data needed.
+  - PAIR-HOT-QUEUE VISIBILITY: pair_hot_queue_pending added to _serialize_live_stream() output, surfaced in dashboard KPIs.
+  - TESTS: 6 new tests — _emit_phase format validation, phase_callback wiring in run_gate_once (mock subprocess), backward compat (no callback), _serialize_live_stream pair_hot_queue_pending, default pending=0, active_run cleanup on error path.
+  - PURITY: test_run_scan_real_purity.py max_lines 1650→1680 (scanner grew +30 lines for phase emissions).
 touched_files:
-  - strategy/jobs/run_scan_real.py (live execution probe block + exec_probe_ms timer)
-  - strategy/artifacts.py (config-driven flags + live_execution in truth_data)
-  - execution/simulator.py (full rewrite)
-  - execution/dex_dex_executor.py (full rewrite)
-  - execution/__init__.py (skeleton note updated)
-  - chains/providers.py (+4 async RPC methods)
-  - config/real_live_probe.yaml (new)
-  - tests/unit/test_execution_live.py (new, 38 tests)
-  - tests/unit/test_config_contracts.py (inventory guard update)
+  - strategy/jobs/run_scan_real.py (_emit_phase helper + 6 phase event emissions)
+  - start.py (PHASE_LINE_PREFIX, phase_callback in run_gate_once, _on_phase in _run_one_chain, pair_hot_queue_pending in _serialize_live_stream)
+  - monitoring/dashboard.html (phase badges, severity/reason detail column, events expanded to 20, pair hot queue KPI)
+  - monitoring/dashboard_server.py (/api/hot endpoint)
+  - tests/unit/test_start.py (+6 tests: phase protocol + error path + serialization)
   - tests/unit/test_run_scan_real_purity.py (line limit update)
-  - docs/DEV_REPORT_LATEST.md (rewrite for R28.15)
-  - docs/status/Status_M5_0.md (update pending)
-  - docs/status/Status_M4.md (update pending)
+  - docs/status/Status_M5_0.md (R28.16 update)
+  - docs/DEV_REPORT_LATEST.md (rewrite for R28.16)
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: **PASS** (1926 passed, 3 skipped)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: **PASS** (all gates green, 26.4s)
+py -3.11 -m pytest tests/unit -q: **PASS** (1932 passed, 3 skipped)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: **PASS** (all gates green)
 py -3.11 scripts/check_repo_safety.py: **PASS** (0 warnings)
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: **PASS**
-py -3.11 start.py --config-list (6 chains) --hours 0.10 --cycles 1: **42 runs, 383s wall** (PASS=18, NO_DATA=8, FAIL=16)
-py -3.11 scripts/ci_m5_0_gate.py --online --config onboard_linea_stage1.yaml --cycles 5: **PASS** (ROUNDTRIP_PROFITABLE=2)
-py -3.11 scripts/ci_m5_0_gate.py --online --config real_minimal.yaml --cycles 5 --refresh-rolling: **PASS** (rolling updated, status=PASS, signals=9, net=$5.20)
+py -3.11 -c "_emit_phase('test_event', chain='arb', pairs=5)": **PASS** (ARBY_PHASE: JSON line emitted correctly)
 
 ## 3) Artifacts Attached
 rolling (FRESH from R28.15):

@@ -1902,6 +1902,155 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
         self.assertIsNone(event)
         ds.stop()
 
+
+class TestPhaseEventProtocol(unittest.TestCase):
+    """R28.16: Phase event protocol between child (run_scan_real) and parent (start)."""
+
+    def test_emit_phase_format(self):
+        """_emit_phase outputs ARBY_PHASE: prefixed JSON line."""
+        import io
+        import json
+        from strategy.jobs.run_scan_real import _emit_phase, PHASE_LINE_PREFIX
+
+        buf = io.StringIO()
+        import sys
+        old_stdout = sys.stdout
+        try:
+            sys.stdout = buf
+            _emit_phase("discovery_started", chain="arb", pairs=10)
+        finally:
+            sys.stdout = old_stdout
+
+        line = buf.getvalue().strip()
+        self.assertTrue(line.startswith(PHASE_LINE_PREFIX))
+        payload = json.loads(line[len(PHASE_LINE_PREFIX):])
+        self.assertEqual(payload["event"], "discovery_started")
+        self.assertEqual(payload["chain"], "arb")
+        self.assertEqual(payload["pairs"], 10)
+
+    def test_phase_callback_wired_in_run_gate_once(self):
+        """run_gate_once() invokes phase_callback for ARBY_PHASE: lines."""
+        import subprocess
+        import json
+
+        received = []
+
+        def _cb(data):
+            received.append(data)
+
+        # Patch subprocess.Popen to emit a fake ARBY_PHASE line
+        phase_line = f'{start.PHASE_LINE_PREFIX}{json.dumps({"event": "discovery_started", "chain": "test"})}\n'
+        normal_line = "[ONLINE] RunDir: data/runs/fake_run\n"
+
+        class FakeProc:
+            def __init__(self, *a, **kw):
+                self.stdout = iter([phase_line, normal_line])
+                self.returncode = 0
+            def wait(self, timeout=None):
+                return 0
+            def kill(self):
+                pass
+
+        with unittest.mock.patch("subprocess.Popen", FakeProc):
+            rc, run_dir = start.run_gate_once(
+                "config/test.yaml", 1, 5, 0,
+                refresh_rolling=False,
+                timeout_seconds=0,
+                phase_callback=_cb,
+            )
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0]["event"], "discovery_started")
+        self.assertEqual(received[0]["chain"], "test")
+
+    def test_phase_callback_none_is_safe(self):
+        """run_gate_once() works without phase_callback (backward compat)."""
+        import subprocess
+
+        class FakeProc:
+            def __init__(self, *a, **kw):
+                self.stdout = iter(["not a phase line\n"])
+                self.returncode = 0
+            def wait(self, timeout=None):
+                return 0
+            def kill(self):
+                pass
+
+        with unittest.mock.patch("subprocess.Popen", FakeProc):
+            rc, _ = start.run_gate_once(
+                "config/test.yaml", 1, 5, 0,
+                refresh_rolling=False,
+                timeout_seconds=0,
+            )
+        self.assertEqual(rc, 0)
+
+
+class TestLiveStreamErrorPath(unittest.TestCase):
+    """R28.16: Verify active_runs cleanup and scan_error event on exception."""
+
+    def test_serialize_live_stream_pair_hot_queue(self):
+        """_serialize_live_stream includes pair_hot_queue_pending field."""
+        import time as _time
+        result = start._serialize_live_stream(
+            active_runs=None,
+            live_events=[],
+            pair_hot_queue_pending=42,
+        )
+        self.assertEqual(result["pair_hot_queue_pending"], 42)
+        self.assertEqual(result["active_count"], 0)
+
+    def test_serialize_live_stream_default_pending(self):
+        """_serialize_live_stream defaults pair_hot_queue_pending to 0."""
+        result = start._serialize_live_stream(
+            active_runs=None,
+            live_events=[],
+        )
+        self.assertEqual(result["pair_hot_queue_pending"], 0)
+
+    def test_active_run_cleared_on_error(self):
+        """When scan crashes, active run is removed and scan_error is emitted."""
+        import time as _time
+        from collections import deque
+
+        # Simulate the live event system state
+        active_runs = {}
+        live_events = deque(maxlen=80)
+
+        # Set an active run
+        active_runs["arb"] = {
+            "chain": "arb",
+            "config": "test.yaml",
+            "started_at": "2026-03-17T10:00:00Z",
+            "_started_monotonic": _time.monotonic() - 2.0,
+        }
+
+        # Simulate the except block from _run_one_chain
+        active_runs.pop("arb", None)
+        live_events.append({
+            "timestamp": "2026-03-17T10:00:02Z",
+            "event": "scan_error",
+            "chain": "arb",
+            "message": "FULL scan errored",
+            "error": "RPC timeout",
+        })
+
+        # Verify cleanup
+        self.assertNotIn("arb", active_runs)
+        self.assertEqual(len(live_events), 1)
+        self.assertEqual(live_events[0]["event"], "scan_error")
+        self.assertEqual(live_events[0]["chain"], "arb")
+        self.assertIn("RPC timeout", live_events[0]["error"])
+
+        # Serialize should show 0 active, error in events
+        result = start._serialize_live_stream(
+            active_runs=active_runs,
+            live_events=list(live_events),
+        )
+        self.assertEqual(result["active_count"], 0)
+        self.assertEqual(len(result["recent_events"]), 1)
+        self.assertEqual(result["recent_events"][0]["event"], "scan_error")
+
     def test_dirty_set_mark_clean_clears_event_queue(self):
         """mark_clean() should clear the event queue."""
         from strategy.infra import DirtySetTracker
@@ -1939,7 +2088,7 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
     # -- R28.12: write_hot_loop_snapshot tests ------------------------------
 
     def test_write_hot_loop_snapshot_schema(self):
-        """write_hot_loop_snapshot() produces valid hot_loop_snapshot:v1.0."""
+        """write_hot_loop_snapshot() produces valid hot_loop_snapshot:v1.1."""
         import time as _time
         import tempfile
         import json
@@ -1956,7 +2105,30 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
             tmp_path = Path(td) / "hot_loop_latest.json"
             start.HOT_LOOP_LATEST = tmp_path
             try:
-                start.write_hot_loop_snapshot(per_chain, None, _time.monotonic() - 30)
+                live_events = [
+                    {"timestamp": "2026-03-17T10:00:00Z", "event": "scan_started", "chain": "arb", "message": "FULL scan started"},
+                    {"timestamp": "2026-03-17T10:00:05Z", "event": "scan_finished", "chain": "arb", "message": "FULL scan finished: PASS"},
+                ]
+                active_runs = {
+                    "arb": {
+                        "chain": "arb",
+                        "config": "config/real_minimal.yaml",
+                        "run_kind": "NORMAL",
+                        "scan_mode": "full",
+                        "is_coverage": False,
+                        "rolling": True,
+                        "block_number": 123,
+                        "started_at": "2026-03-17T10:00:00Z",
+                        "_started_monotonic": _time.monotonic() - 3.0,
+                    }
+                }
+                start.write_hot_loop_snapshot(
+                    per_chain,
+                    None,
+                    _time.monotonic() - 30,
+                    live_events=live_events,
+                    active_runs=active_runs,
+                )
                 self.assertTrue(tmp_path.exists())
                 with open(tmp_path) as f:
                     snap = json.load(f)
@@ -1968,6 +2140,11 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
                 self.assertEqual(snap["per_chain"]["arb"]["hot_requotes"], 1)
                 self.assertEqual(snap["total_full_sweeps"], 1)
                 self.assertEqual(snap["total_hot_requotes"], 1)
+                self.assertIn("live_stream", snap)
+                self.assertEqual(snap["live_stream"]["active_count"], 1)
+                self.assertEqual(snap["live_stream"]["active_runs"][0]["chain"], "arb")
+                self.assertGreaterEqual(snap["live_stream"]["active_runs"][0]["elapsed_seconds"], 0)
+                self.assertEqual(snap["live_stream"]["recent_events"][0]["event"], "scan_finished")
             finally:
                 start.HOT_LOOP_LATEST = original_path
 

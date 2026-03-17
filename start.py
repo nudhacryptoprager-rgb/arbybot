@@ -15,6 +15,7 @@ Runtime artifacts stay under data/runs/** and must never be committed.
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import json
 import shutil
 import subprocess
@@ -42,6 +43,10 @@ CI_M5_DIR_RE = re.compile(r"^ci_m5_gate_(?:[a-z_]+_)?\d{8}_\d{6}(?:_\d+)?$")
 # R28.11: Hot re-quote loop — every Nth cycle is a full universe sweep,
 # intervening cycles reuse cached pairs (skip discovery, just re-quote).
 FULL_SWEEP_INTERVAL = 5
+LIVE_STREAM_MAX_EVENTS = 80
+
+# R28.16: Phase event protocol — matches ARBY_PHASE: prefix from run_scan_real.py
+PHASE_LINE_PREFIX = "ARBY_PHASE:"
 
 # -- config introspection -------------------------------------------------
 
@@ -78,8 +83,13 @@ def run_gate_once(
     timeout_seconds: int,
     line_prefix: str = "",
     extra_env: dict[str, str] | None = None,
+    phase_callback: Any = None,
 ) -> tuple[int, Path | None]:
-    """Run ci_m5_0_gate.py once; return (exit_code, runDir)."""
+    """Run ci_m5_0_gate.py once; return (exit_code, runDir).
+
+    phase_callback: if provided, called with dict for each ARBY_PHASE: line
+    emitted by the child process (see strategy/jobs/run_scan_real.py).
+    """
     cmd = [
         sys.executable,
         str(CI_GATE),
@@ -116,12 +126,20 @@ def run_gate_once(
     try:
         start = time.monotonic()
         for line in proc.stdout:
+            stripped = line.strip()
+            # R28.16: Parse phase event lines from child process
+            if stripped.startswith(PHASE_LINE_PREFIX) and phase_callback is not None:
+                try:
+                    phase_data = json.loads(stripped[len(PHASE_LINE_PREFIX):])
+                    phase_callback(phase_data)
+                except Exception:
+                    pass  # Malformed phase line — ignore silently
             # R28.9: Prefix worker lines for log readability
             if line_prefix:
                 sys.stdout.write(f"{line_prefix} {line}")
             else:
                 sys.stdout.write(line)
-            m = RUN_DIR_RE.match(line.strip())
+            m = RUN_DIR_RE.match(stripped)
             if m:
                 run_dir = Path(m.group(1).strip())
             if timeout_seconds > 0 and (time.monotonic() - start) > timeout_seconds:
@@ -1224,6 +1242,8 @@ def write_hot_loop_snapshot(
     wall_start: float,
     summary_file: str = "",
     pair_hot_queue: Any = None,
+    live_events: list[dict[str, Any]] | None = None,
+    active_runs: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Write lightweight hot_loop_latest.json after each hot re-quote batch.
 
@@ -1291,11 +1311,43 @@ def write_hot_loop_snapshot(
         except Exception:
             pass
 
+    pq_pending = 0
+    if pair_hot_queue:
+        try:
+            pq_pending = pair_hot_queue.pending_count()
+        except Exception:
+            pass
+
+    snapshot["live_stream"] = _serialize_live_stream(active_runs, live_events, pq_pending)
+
     HOT_LOOP_LATEST.parent.mkdir(parents=True, exist_ok=True)
     tmp = HOT_LOOP_LATEST.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, indent=2, default=str)
     tmp.replace(HOT_LOOP_LATEST)
+
+
+def _serialize_live_stream(
+    active_runs: dict[str, dict[str, Any]] | None,
+    live_events: list[dict[str, Any]] | None,
+    pair_hot_queue_pending: int = 0,
+) -> dict[str, Any]:
+    """Build bounded live stream payload for dashboard fast-refresh."""
+    now = time.monotonic()
+    active_list: list[dict[str, Any]] = []
+    for chain, item in sorted((active_runs or {}).items()):
+        entry = {k: v for k, v in item.items() if not k.startswith("_")}
+        started = item.get("_started_monotonic")
+        if started is not None:
+            entry["elapsed_seconds"] = round(max(0.0, now - float(started)), 1)
+        active_list.append(entry)
+    events = list(live_events or [])
+    return {
+        "active_count": len(active_list),
+        "active_runs": active_list,
+        "recent_events": list(reversed(events[-20:])),
+        "pair_hot_queue_pending": pair_hot_queue_pending,
+    }
 
 
 # -- main -----------------------------------------------------------------
@@ -1520,6 +1572,82 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
 
     # R28.5: Thread-safe lock for per_chain stats and stdout
     _stats_lock = threading.Lock()
+    _live_lock = threading.Lock()
+    _hot_snapshot_lock = threading.Lock()
+    _live_events: deque[dict[str, Any]] = deque(maxlen=LIVE_STREAM_MAX_EVENTS)
+    _active_runs: dict[str, dict[str, Any]] = {}
+
+    def _append_live_event(
+        event: str,
+        *,
+        chain: str | None = None,
+        message: str | None = None,
+        **extra: Any,
+    ) -> None:
+        entry: dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "event": event,
+        }
+        if chain:
+            entry["chain"] = chain
+        if message:
+            entry["message"] = message
+        for key, value in extra.items():
+            if value is not None:
+                entry[key] = value
+        with _live_lock:
+            _live_events.append(entry)
+
+    def _set_active_run(
+        chain: str,
+        *,
+        config: str,
+        run_kind: str,
+        scan_mode: str,
+        is_coverage: bool,
+        rolling: bool,
+        block_number: int | None = None,
+    ) -> None:
+        with _live_lock:
+            _active_runs[chain] = {
+                "chain": chain,
+                "config": config,
+                "run_kind": run_kind,
+                "scan_mode": scan_mode,
+                "is_coverage": is_coverage,
+                "rolling": rolling,
+                "block_number": block_number,
+                "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "_started_monotonic": time.monotonic(),
+            }
+
+    def _clear_active_run(chain: str) -> None:
+        with _live_lock:
+            _active_runs.pop(chain, None)
+
+    def _write_hot_snapshot() -> None:
+        with _live_lock:
+            live_events = list(_live_events)
+            active_runs = {k: dict(v) for k, v in _active_runs.items()}
+        with _hot_snapshot_lock:
+            write_hot_loop_snapshot(
+                per_chain,
+                dirty_tracker,
+                wall_start,
+                args.summary_file,
+                pair_hot_queue,
+                live_events=live_events,
+                active_runs=active_runs,
+            )
+
+    _append_live_event(
+        "session_started",
+        message="Multi-chain scan session started",
+        config_count=len(configs),
+        coverage_workers=args.coverage_workers,
+        full_sweep_interval=FULL_SWEEP_INTERVAL,
+    )
+    _write_hot_snapshot()
 
     def _run_one_chain(cfg: str, is_coverage: bool = False) -> tuple[int, Path | None, str, str]:
         """Run a single chain scan. Thread-safe for parallel coverage workers."""
@@ -1555,39 +1683,118 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                 if pair_hot_queue:
                     pair_hot_queue.enqueue_chain(chain, evt["block_number"])
 
-        rc, run_dir = run_gate_once(
-            cfg, args.cycles, args.prune_keep, args.sleep_seconds,
-            refresh_rolling=refresh,
-            timeout_seconds=args.child_timeout,
-            line_prefix=prefix,
-            extra_env=extra_env,
+        block_number = None
+        if extra_env:
+            try:
+                block_number = int(extra_env.get("ARBY_WS_BLOCK_NUMBER")) if extra_env.get("ARBY_WS_BLOCK_NUMBER") else None
+            except Exception:
+                block_number = None
+
+        _set_active_run(
+            chain,
+            config=cfg,
+            run_kind=meta["run_kind"],
+            scan_mode=scan_mode,
+            is_coverage=is_coverage,
+            rolling=refresh,
+            block_number=block_number,
         )
+        _append_live_event(
+            "scan_started",
+            chain=chain,
+            message=f"{scan_mode.upper()} scan started",
+            config=cfg,
+            run_kind=meta["run_kind"],
+            scan_mode=scan_mode,
+            is_coverage=is_coverage,
+            rolling=refresh,
+            block_number=block_number,
+        )
+        _write_hot_snapshot()
 
-        summary = extract_run_summary(run_dir)
-        gate_res = extract_gate_result(run_dir)
-        scan_st = extract_scan_stats(run_dir)
-        truth = extract_truth_report(run_dir)
+        try:
+            # R28.16: Phase callback — pipe child phase events into live stream
+            def _on_phase(phase_data: dict) -> None:
+                evt = phase_data.get("event", "phase_unknown")
+                _append_live_event(
+                    f"phase:{evt}",
+                    chain=chain,
+                    scan_mode=scan_mode,
+                    message=f"{evt.replace('_', ' ').title()}",
+                    **{k: v for k, v in phase_data.items() if k != "event" and k != "chain"},
+                )
+                _write_hot_snapshot()
 
-        # R28.6: Validate scan artifact chain_id matches config chain
-        # Prevents corrupted summary from runDir collisions
-        if run_dir and expected_chain_id is not None:
-            _validate_chain_id_match(run_dir, expected_chain_id, chain)
+            rc, run_dir = run_gate_once(
+                cfg, args.cycles, args.prune_keep, args.sleep_seconds,
+                refresh_rolling=refresh,
+                timeout_seconds=args.child_timeout,
+                line_prefix=prefix,
+                extra_env=extra_env,
+                phase_callback=_on_phase,
+            )
 
-        cls = classify_run(rc, summary)
+            summary = extract_run_summary(run_dir)
+            gate_res = extract_gate_result(run_dir)
+            scan_st = extract_scan_stats(run_dir)
+            truth = extract_truth_report(run_dir)
 
-        with _stats_lock:
-            update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res, scan_st, truth)
-            # R28.11: Track scan mode for observability
-            per_chain[chain]["last_scan_mode"] = scan_mode
-            if scan_mode == "hot":
-                per_chain[chain]["hot_requote_count"] += 1
-            else:
-                per_chain[chain]["full_sweep_count"] += 1
-            if run_dir and run_dir.exists():
-                if delete_if_empty_run_dir(run_dir):
-                    pass  # cleaned up
+            # R28.6: Validate scan artifact chain_id matches config chain
+            # Prevents corrupted summary from runDir collisions
+            if run_dir and expected_chain_id is not None:
+                _validate_chain_id_match(run_dir, expected_chain_id, chain)
 
-        return rc, run_dir, chain, cls
+            cls = classify_run(rc, summary)
+
+            with _stats_lock:
+                update_chain_stats(per_chain[chain], rc, run_dir, summary, gate_res, scan_st, truth)
+                # R28.11: Track scan mode for observability
+                per_chain[chain]["last_scan_mode"] = scan_mode
+                if scan_mode == "hot":
+                    per_chain[chain]["hot_requote_count"] += 1
+                else:
+                    per_chain[chain]["full_sweep_count"] += 1
+                if run_dir and run_dir.exists():
+                    if delete_if_empty_run_dir(run_dir):
+                        pass  # cleaned up
+
+            rt = (summary or {}).get("metrics", {}).get("roundtrip", {}) or (summary or {}).get("roundtrip_summary", {})
+            _clear_active_run(chain)
+            _append_live_event(
+                "scan_finished",
+                chain=chain,
+                message=f"{scan_mode.upper()} scan finished: {cls}",
+                config=cfg,
+                run_kind=meta["run_kind"],
+                scan_mode=scan_mode,
+                is_coverage=is_coverage,
+                rolling=refresh,
+                result=cls,
+                exit_code=rc,
+                run_dir=run_dir.name if run_dir else None,
+                signals=(summary or {}).get("metrics", {}).get("included_signals_count"),
+                real_quote_count=rt.get("real_quote_count"),
+                profitable_roundtrips=rt.get("profitable_count"),
+                profit_realism_status=(summary or {}).get("metrics", {}).get("profit_realism_status"),
+            )
+            _write_hot_snapshot()
+
+            return rc, run_dir, chain, cls
+        except Exception as exc:
+            _clear_active_run(chain)
+            _append_live_event(
+                "scan_error",
+                chain=chain,
+                message=f"{scan_mode.upper()} scan errored",
+                config=cfg,
+                run_kind=meta["run_kind"],
+                scan_mode=scan_mode,
+                is_coverage=is_coverage,
+                rolling=refresh,
+                error=str(exc),
+            )
+            _write_hot_snapshot()
+            raise
 
     print(f"\nStarting multi-chain scan: {len(configs)} configs, budget={budget_seconds:.0f}s")
 
@@ -1633,12 +1840,25 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             write_summary_file(interim_summary, args.summary_file)
 
             # R28.12: Write lightweight hot snapshot for fast dashboard refresh
-            write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start, args.summary_file, pair_hot_queue)
+            _write_hot_snapshot()
 
         # R28.13 Step 7: Per-pair micro-quote — drain dirty pairs, re-quote in-process
         if pair_hot_queue and pair_hot_queue.pending_count() > 0 and time.monotonic() < deadline:
-            _micro_requote_hot_pairs(pair_hot_queue, config_meta, per_chain, _stats_lock)
-            write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start, args.summary_file, pair_hot_queue)
+            pending_pairs = pair_hot_queue.pending_count()
+            _append_live_event(
+                "micro_requote_started",
+                message="In-process micro re-quote batch started",
+                pending_pairs=pending_pairs,
+            )
+            _write_hot_snapshot()
+            total_micro_quotes = _micro_requote_hot_pairs(pair_hot_queue, config_meta, per_chain, _stats_lock)
+            _append_live_event(
+                "micro_requote_finished",
+                message="In-process micro re-quote batch finished",
+                pending_pairs=pending_pairs,
+                quoted_pairs=total_micro_quotes,
+            )
+            _write_hot_snapshot()
 
         if time.monotonic() >= deadline:
             break
@@ -1661,9 +1881,16 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             if batch_cfgs:
                 print(f"\n{'-'*60}")
                 print(f"[COVERAGE BATCH] {len(batch_cfgs)} chains, workers={coverage_workers}")
+                _append_live_event(
+                    "coverage_batch_started",
+                    message="Coverage batch started",
+                    chains=[config_meta[c]["chain"] for c in batch_cfgs],
+                    workers=coverage_workers,
+                )
 
                 with ThreadPoolExecutor(max_workers=coverage_workers) as pool:
                     futures = {pool.submit(_run_one_chain, cfg, True): cfg for cfg in batch_cfgs}
+                    _write_hot_snapshot()
                     for future in as_completed(futures):
                         cfg = futures[future]
                         total_runs += 1
@@ -1681,9 +1908,16 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                         interim_warnings = check_guardrails(per_chain)
                         interim_summary = build_summary(per_chain, interim_wall, interim_warnings)
                         write_summary_file(interim_summary, args.summary_file)
+                        _write_hot_snapshot()
 
                 # R28.12: Hot loop snapshot after coverage batch
-                write_hot_loop_snapshot(per_chain, dirty_tracker, wall_start, args.summary_file, pair_hot_queue)
+                _append_live_event(
+                    "coverage_batch_finished",
+                    message="Coverage batch finished",
+                    chains=[config_meta[c]["chain"] for c in batch_cfgs],
+                    workers=coverage_workers,
+                )
+                _write_hot_snapshot()
 
         if total_runs % max(len(configs), 3) == 0:
             prune_run_dirs(args.prune_keep)
@@ -1707,6 +1941,15 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
     print_summary(summary_obj)
 
     write_summary_file(summary_obj, args.summary_file)
+    _append_live_event(
+        "session_finished",
+        message="Multi-chain scan session finished",
+        total_runs=summary_obj.get("total_runs"),
+        total_signals=summary_obj.get("total_included_signals"),
+        total_profitable_roundtrips=summary_obj.get("total_profitable_roundtrips"),
+        wall_seconds=summary_obj.get("wall_seconds"),
+    )
+    _write_hot_snapshot()
 
     # Exit semantics — accepted-fail chains don't count toward limit
     unexpected_fail_count = len(summary_obj.get("unexpected_fail_chains", []))

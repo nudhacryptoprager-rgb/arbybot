@@ -38,6 +38,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._serve_file(DASHBOARD_HTML, "text/html")
         elif self.path == "/api/rolling":
             self._serve_rolling_data()
+        elif self.path == "/api/hot":
+            self._serve_hot_data()
         else:
             self.send_error(404)
 
@@ -53,7 +55,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.wfile.write(data)
 
     def _serve_rolling_data(self):
-        """Load all 3 rolling artifacts and return as single JSON."""
+        """Load all 4 rolling artifacts and return as single JSON."""
         result = {}
         for key, path in ARTIFACT_FILES.items():
             if path.is_file():
@@ -66,6 +68,30 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 result[key] = None
 
         payload = json.dumps(result, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_hot_data(self):
+        """R28.16: Lightweight endpoint — serve only hot_loop_latest.json.
+
+        Much smaller payload than /api/rolling; suitable for fast 3s polling
+        when only live stream data is needed.
+        """
+        hot_path = ARTIFACT_FILES["hot_loop"]
+        if not hot_path.is_file():
+            payload = b'{"hot_loop": null}'
+        else:
+            try:
+                with open(hot_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                payload = json.dumps({"hot_loop": data}, default=str).encode("utf-8")
+            except (json.JSONDecodeError, OSError):
+                payload = b'{"hot_loop": null}'
+
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))

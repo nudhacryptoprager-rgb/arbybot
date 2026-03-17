@@ -46,6 +46,19 @@ from strategy.infra import (
 
 logger = logging.getLogger("run_scan_real")
 
+# R28.16: Phase event protocol — structured JSON lines for parent process consumption
+# Parent (start.py) reads stdout and parses lines prefixed with ARBY_PHASE: to
+# surface phase transitions in the live stream without needing IPC or shared files.
+PHASE_LINE_PREFIX = "ARBY_PHASE:"
+
+
+def _emit_phase(event: str, **data: Any) -> None:
+    """Emit a structured phase event line for the parent process to consume."""
+    import json as _phase_json
+    payload = {"event": event, **data}
+    print(f"{PHASE_LINE_PREFIX}{_phase_json.dumps(payload, default=str)}", flush=True)
+
+
 # Ensure environment variables from project .env are loaded
 try:
     from core.env import load_root_dotenv
@@ -118,6 +131,8 @@ def run_scan(
     logger.info("Starting scan: cycles=%s, output=%s", cycles, output_dir)
     
     _phase_t0 = _time.monotonic()  # Phase timing: scan start
+    
+    _emit_phase("discovery_started", chain=config.get("chain", "unknown"))
     
     # M4.2: Config validation - algebra DEXes require quoter
     dexes_list = config.get("dexes") or []
@@ -321,8 +336,18 @@ def run_scan(
     
     _phase_discovery_end = _time.monotonic()
     
+    _emit_phase(
+        "discovery_finished",
+        chain=chain_key,
+        pairs=len(pairs_list) if pairs_list else 0,
+        universe_source=_us,
+        discovery_ms=int((_phase_discovery_end - _phase_t0) * 1000),
+    )
+    
     # Collect quotes with resolved pairs
     _phase_quote_start = _time.monotonic()
+    
+    _emit_phase("quote_started", chain=chain_key, pairs=len(pairs_list) if pairs_list else 0)
     quotes_sample, rejected_quotes, counts = collect_quotes(config, current_block, rpc_latency, pairs_list=pairs_list)
     
     # Update stats from counts
@@ -378,6 +403,14 @@ def run_scan(
     logger.info("Quotes: %d valid, %d rejected", len(quotes_sample), len(rejected_quotes))
     
     _phase_quote_end = _time.monotonic()
+    
+    _emit_phase(
+        "quote_finished",
+        chain=chain_key,
+        quotes_fetched=len(quotes_sample),
+        quotes_rejected=len(rejected_quotes),
+        quote_rpc_ms=int((_phase_quote_end - _phase_quote_start) * 1000),
+    )
     
     # R28.5: Postprocessing phase — spreads, opportunity engine, roundtrip, sweep
     _phase_postprocess_start = _time.monotonic()
@@ -1131,6 +1164,14 @@ def run_scan(
         stats["execution_ready_count"] = 0
         stats["would_execute_count"] = 0
     
+    _emit_phase(
+        "preflight_finished",
+        chain=chain_key,
+        passed=stats.get("preflight", {}).get("passed", False) if isinstance(stats.get("preflight"), dict) else False,
+        execution_ready=stats.get("execution_ready_count", 0),
+        would_execute=stats.get("would_execute_count", 0),
+    )
+    
     # v2.4.1: M4.3 Preflight EVIDENCE (eth_call/eth_estimateGas for top-N)
     # Collects actual RPC evidence without executing any transactions
     # Uses opps_list (gated opportunities) instead of spread_signals
@@ -1468,6 +1509,14 @@ def run_scan(
         stats["phase_timers_ms"]["postprocess_ms"],
         stats["phase_timers_ms"]["preflight_ms"],
         stats["phase_timers_ms"]["report_ms"],
+    )
+    
+    _emit_phase(
+        "gate_finished",
+        chain=chain_key,
+        signals=len(spread_signals),
+        total_ms=stats["phase_timers_ms"]["total_ms"],
+        quotes_fetched=stats.get("quotes_fetched", 0),
     )
     
     return stats
