@@ -53,13 +53,13 @@ paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.05
 
-# Relaxed thresholds for thin-liquidity chain
+# Production-like thresholds (R28.18: tightened from debug)
 quoter_max_gas_estimate: 3000000
-quoter_max_ticks_crossed: 40
-suspect_spread_bps_hard: 1000
+quoter_max_ticks_crossed: 15
+suspect_spread_bps_hard: 500
 suspect_spread_bps: 400
 
-price_sanity_max_deviation_bps: 10000
+price_sanity_max_deviation_bps: 5000
 
 l1_data_gas_units: 0
 l1_gas_price_gwei: 0
@@ -78,3 +78,6 @@ tokens_anchor_price:
   WETH_USDC: 2050.0
   WETH_USDT: 2050.0
   WETH_WBTC: 0.030
+  WBTC_USDC: 68000.0
+  USDC_USDT: 1.0
+  USDC_DAI: 1.0

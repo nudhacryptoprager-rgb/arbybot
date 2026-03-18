@@ -1565,6 +1565,27 @@ def collect_quotes(
             # when QuoterV2 is unavailable. Gated as is_diagnostic_only=True
             # when truth_mode_m42=true (see line ~1693).
             if is_v3_dex and not is_algebra:
+                # R28.18: Secondary liquidity check for slot0 path.
+                # The primary LIQUIDITY_ZERO gate (line ~1124) depends on multicall cache.
+                # If multicall didn't prefetch this pool, dead pools slip through.
+                # Check again here to prevent stale sqrtPrice from empty pools.
+                cached_liq_slot0 = get_cached_liquidity(pool_addr)
+                if cached_liq_slot0 is not None and cached_liq_slot0 == 0:
+                    auto_disable_pool(pool_key, "LIQUIDITY_ZERO",
+                                     {"pool_address": pool_addr, "liquidity": 0, "path": "slot0"})
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "LIQUIDITY_ZERO",
+                        "gate_passed": False,
+                        "error": "Pool has zero liquidity (slot0 path check)",
+                    })
+                    counts["liquidity_zero"] = counts.get("liquidity_zero", 0) + 1
+                    logger.info("LIQUIDITY_ZERO (slot0): %s (auto-disabled)", pool_key)
+                    continue
+
                 tick_val, sqrt_price_val = read_slot0_v3(pool_addr, rpc_url, current_block)
                 
                 if tick_val is None or sqrt_price_val is None:
@@ -1704,28 +1725,25 @@ def collect_quotes(
             # Issue #3: slot0 quotes were bypassing PRICE_SANITY check, allowing outliers
             price_sanity_enabled = config.get("price_sanity_enabled", True)
             price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
-            # v3.2.25: Case-insensitive anchor lookup (same as quoter path)
-            slot0_anchor_price = lookup_anchor_price_ci(tokens_anchor_price, f"{token_in}_{token_out}")
-            if not slot0_anchor_price:
-                reversed_tag = f"{token_out}_{token_in}"
-                slot0_anchor_price = lookup_anchor_price_ci(tokens_anchor_price, reversed_tag)
-                if slot0_anchor_price:
-                    slot0_anchor_price = 1.0 / slot0_anchor_price
-            if price_sanity_enabled and slot0_anchor_price and price_exact is not None:
+            # R28.18: Use upstream anchor_price from anchor_manager (unified with quoter path).
+            # Previously did independent lookup_anchor_price_ci() which missed anchor_manager
+            # fallbacks — pairs without explicit tokens_anchor_price entry had anchor=None
+            # and silently skipped price_sanity entirely.
+            if price_sanity_enabled and anchor_price and price_exact is not None:
                 from core.validators import check_price_sanity
                 sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
                     price=Decimal(str(price_exact)),
-                    anchor_price=Decimal(str(slot0_anchor_price)),
+                    anchor_price=Decimal(str(anchor_price)),
                     pair=f"{token_in}/{token_out}",
                     dex_id=dex,
                     fee_tier=fee_tier,
                     max_deviation_bps=price_sanity_max_bps,
-                    anchor_source="tokens_anchor_price",
+                    anchor_source=anchor_source,
                     pool_address=pool_addr,
                 )
                 if not sanity_passed:
                     try:
-                        ratio = float(price_exact) / float(slot0_anchor_price) if slot0_anchor_price else 0.0
+                        ratio = float(price_exact) / float(anchor_price) if anchor_price else 0.0
                     except (TypeError, ZeroDivisionError, OverflowError):
                         ratio = 0.0
                     
@@ -1738,10 +1756,10 @@ def collect_quotes(
                         "gate_passed": False,
                         "error": sanity_err,
                         "deviation_bps": sanity_dev_bps,
-                        "anchor_price": str(slot0_anchor_price),
+                        "anchor_price": str(anchor_price),
                         "price_exact": str(price_exact),
                         "price_ratio": round(ratio, 4) if abs(ratio) < 1e20 else None,
-                        "anchor_source": "tokens_anchor_price",
+                        "anchor_source": anchor_source,
                         "quote_source": "slot0",
                         "tick": tick_val,
                         "diagnostics": sanity_diag,
@@ -1751,7 +1769,7 @@ def collect_quotes(
                     logger.info(
                         "PRICE_SANITY_FAILED (slot0): %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s",
                         dex, token_in, token_out, fee_tier, sanity_dev_bps,
-                        str(slot0_anchor_price)[:12], str(price_exact)[:20]
+                        str(anchor_price)[:12], str(price_exact)[:20]
                     )
                     continue
             

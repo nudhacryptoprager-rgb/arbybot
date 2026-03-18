@@ -55,7 +55,7 @@ execution_block_reason: "EXECUTION_DISABLED_M4"
 kill_switch_active: true
 simulate_only: true
 
-price_sanity_max_deviation_bps: 10000
+price_sanity_max_deviation_bps: 5000
 
 tokens_usd_price:
   WMNT: 0.50
@@ -71,3 +71,5 @@ tokens_anchor_price:
   WETH_USDT: 2050.0
   WMNT_USDC: 0.50
   mETH_WETH: 1.02
+  WBTC_USDC: 68000.0
+  USDC_USDT: 1.0

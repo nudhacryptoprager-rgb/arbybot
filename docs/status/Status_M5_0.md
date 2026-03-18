@@ -1,13 +1,13 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-17 (R28.17 — truth-quality discipline: accounting guard, 3-tier signal classification, COVERAGE truth-path parity)
-**Tests**: 1937 passed / 3 skipped
-**Schema**: see DEV_REPORT_LATEST.md (long_scan_summary + hot_loop_snapshot schemas bumped)
-**Evidence runDirs**: long_scan 35 runs 6 chains (R28.15 scan, rolling unchanged)
+**Updated**: 2026-03-18 (R28.18 — code fixes + 10-min online scan: slot0 anchor unification, liquidity check, promotion contract, config tightening, logger fix. 1940 tests, 43 runs.)
+**Tests**: 1940 passed / 3 skipped
+**Schema**: see DEV_REPORT_LATEST.md (long_scan_summary + hot_loop_snapshot schemas bumped in R28.17)
+**Evidence runDirs**: long_scan 43 runs 6 chains 578s (R28.18 post-fix scan)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (30 runs 370s, benchmark_chain=linea, truth_standard_met per chain)
-**Hot pairs caches**: `data/cache/hot_pairs_{chain}.json` (base=22, linea=11, mantle=4, scroll=9, zksync=8 pairs)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (43 runs 578s, total_profitable_roundtrips=0, executable_profitable=0 all chains, signals=288, rq=56)
+**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=28), zksync=PRIMARY_BLOCKER(rq=13), base=PRIMARY_BLOCKER(rq=1), linea=PRIMARY_BLOCKER(rq=14), mantle=CANDIDATE(rq=0), scroll=CANDIDATE(rq=0)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files (R28.15: +1 real_live_probe.yaml).
 
 ---
@@ -17,6 +17,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> **R28.18**: Code fixes for scroll price-truth blocker + promotion contract enforcement + fresh 10-min online evidence. (1) strategy/quotes.py: slot0 anchor unification — replaced independent lookup_anchor_price_ci() with upstream anchor_price from anchor_manager. Previously, pairs without explicit tokens_anchor_price entry had anchor=None in slot0 path → price_sanity silently SKIPPED. Root cause of scroll WBTC/USDC + WETH/USDC PRICE_SCALE violations (dead pools returning stale sqrtPrice unchecked). (2) strategy/quotes.py: slot0 LIQUIDITY_ZERO secondary gate — catches dead pools when multicall cache missed them. (3) start.py: CONFIRMED_POSITIVE_CONTROL now requires last_profit_realism_status != ONE_LEG_ONLY_DIAGNOSTIC AND last_quality_status != FAIL_QUALITY (diagnostic-only chains capped at THIN_POSITIVE). (4) start.py: logger NameError fix in update_chain_stats (was crashing all online scans). (5) Configs: scroll price_sanity_max_deviation_bps 10000→5000, suspect_spread_bps_hard 1000→500, quoter_max_ticks_crossed 40→15, added missing anchors (WBTC_USDC, USDC_USDT, USDC_DAI). Mantle: same tightening + anchors. 1940 tests, CI ALL GATES PASS. Fresh 43-run scan (578s): signals=288, rq=56, executable_profitable=0, best_rt_bps=-42.85 (arb). Scroll PRICE_SANITY now catching 11 dead pool rejections per cycle (verified working). arb=PRIMARY_BLOCKER(rq=28), linea=PRIMARY_BLOCKER(rq=14), zksync=PRIMARY_BLOCKER(rq=13), base=PRIMARY_BLOCKER(rq=1/NO_DATA), mantle=CANDIDATE(rq=0), scroll=CANDIDATE(rq=0).
 > **R28.17**: Truth-quality discipline. SUSPECT_ACCOUNTING state added to classify_chain_profit_state — chains with profitable roundtrips but absurd best_net_pnl_bps (outside ±500 bps) are blocked from CONFIRMED_POSITIVE_CONTROL. Base had best_net_pnl_bps=8e16 (accounting contamination) → will be SUSPECT_ACCOUNTING on fresh scan. Accumulation guard: update_chain_stats rejects insane PnL values. Scanner: suspect_profitable_count tracks filtered roundtrips. 3-tier signal classification in kpi_separation: diagnostic_signals / real_quote_signals / executable_profitable (replaces old 4-tier). COVERAGE truth-path parity: removed lightweight skip for dynamic_sweep + preflight_evidence — all run_kinds now evaluated equally. Rolling protection: hot_loop_snapshot with is_test_session marker. Only linea is true positive control (rq=12, prt=12). +5 tests (1937 total). Schema bumps: long_scan_summary + hot_loop_snapshot (see DEV_REPORT for versions).
 > **R28.16**: Phase-level visibility in live stream. Scanner child process (run_scan_real.py) emits structured `ARBY_PHASE:` JSON lines on stdout for 6 phase boundaries (discovery_started/finished, quote_started/finished, preflight_finished, gate_finished). Parent (start.py run_gate_once) parses these and pipes into hot_loop_latest.json live_stream as `phase:*` events. Dashboard badges for phase transitions + severity/reason detail column. Lightweight `/api/hot` endpoint (serves only hot_loop_latest.json vs full /api/rolling). Pair-hot-queue pending count surfaced in live_stream KPIs. +6 tests (1932 total). System remains batch-hot — phases confirm operational visibility within long child runs, not instant-hot trading.
 > **R28.15**: Scan stack is productive in simulate-only mode, but live-profit metrics remain blocked because execute_live/simulate_rpc were not yet wired into the operational scanner path until this round. Now wired as dormant probe (gated by config — all production configs keep execution_enabled=false). Real PreTradeSimulator and DexDexExecutor implemented + tested (38 new tests, 1926 total). Live execution probe block in run_scan_real.py: pick best candidate → simulate_rpc() → check signer → log. config/real_live_probe.yaml ready for first live test. Artifacts: truth_data now includes live_execution field, kill_switch_active/execution_enabled are config-driven. The next milestone is realized execution truth — tx submission, receipts, and realized PnL — not further reinterpretation of paper profit.
@@ -40,18 +41,18 @@
 
 ---
 
-## Chain Quality Classification (R28.14)
+## Chain Quality Classification (R28.18 — fresh evidence)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING / PRIMARY_BLOCKER (primary, rolling, truth_probe, 6 pairs, cross-dex=6, PASS, profitable_rt=0, real_quotes=28, gap=3.25 bps best-ever, alignment=BLOCKED, truth_standard_met=false)
-base:           SIGNAL_PRODUCING / CONFIRMED_POSITIVE_CONTROL (stage2, 4 DEXes, cross-dex=22, profitable_rt=1, real_quotes=3, alignment=ALIGNED, truth_standard_met=true, quality intermittent)
-mantle:         NO_DATA / CANDIDATE (probe-only, no real quotes, alignment=NOT_PROVEN, truth_standard_met=false)
-zksync:         SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, cross-dex=1, profitable_rt=0, real_quotes=14, alignment=BLOCKED, truth_standard_met=false)
-linea:          SIGNAL_PRODUCING / CONFIRMED_POSITIVE_CONTROL (discovery, cross-dex=3, **benchmark_chain=true**: profitable_rt=14, real_quotes=14, alignment=ALIGNED, truth_standard_met=true)
-scroll:         FAIL / CANDIDATE (accepted-fail, no real quotes, alignment=NOT_PROVEN, truth_standard_met=false)
+arbitrum_one:   SIGNAL_PRODUCING / PRIMARY_BLOCKER (primary, rolling, 6 pairs, rqc=24, prt=0, best_net=-80.54bps, diag=133, economics blocker)
+base:           INFRA_READY / PRIMARY_BLOCKER (stage2, rqc=1, prt=0, NO_DATA, accounting_sane=True on fresh data)
+mantle:         NO_DATA / CANDIDATE (probe-only, rqc=0, signals=0, structural cross-DEX deficit: 4/12 pairs, stratum +0, all 4 cdx pairs drift-excluded)
+zksync:         SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, rqc=10, prt=0, best_net=-191.44bps)
+linea:          SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, rqc=8, prt=0, best_net_pnl=4576bps SUSPECT — 204x amplification vs spread_gap=22.39bps)
+scroll:         FAIL / CANDIDATE (accepted-fail, rqc=0, signals=0, PRICE_SCALE violations: WBTC/USDC + WETH/USDC inverted direction)
 ```
 
-**R28.14 changes**: Formal benchmark_chain concept (merit-based: linea). Unified truth_standard_met and is_benchmark fields per chain. Arbitrum remains contractual primary truth path, but it is no longer the strongest chain; linea is currently the strongest aligned positive control. Base improved to ALIGNED (0 fails this scan), but intermittent across scans.
+**R28.18 changes**: Fresh online evidence with R28.17 guards. total_profitable_roundtrips=0 across all chains. Linea reclassified from CONFIRMED_POSITIVE_CONTROL to PRIMARY_BLOCKER (204x accounting amplification caught by SANE_RT_PNL_MAX=500). base accounting clean on fresh data. Per-chain blockers identified: arbitrum/zksync=economics, base=NO_DATA, linea=accounting anomaly, mantle=structural surface, scroll=quote-truth.
 
 **Rollout Queue (R28.14 — benchmark_chain formalized)**:
 1. **linea** — **ALIGNED / BENCHMARK** (merit-based). profitable_rt=14, real_quotes=14, quality_healthy=true, is_benchmark=true. Strongest chain.

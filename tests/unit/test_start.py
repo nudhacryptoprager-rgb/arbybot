@@ -1743,6 +1743,46 @@ class TestChainProfitState(unittest.TestCase):
         stats["best_roundtrip_net_bps"] = -501
         self.assertFalse(start._roundtrip_accounting_is_sane(stats))
 
+    def test_promotion_blocked_one_leg_only(self):
+        """R28.18: ONE_LEG_ONLY_DIAGNOSTIC blocks CONFIRMED promotion."""
+        stats = start.new_chain_stats()
+        stats["profitable_roundtrips_total"] = 3
+        stats["real_quote_count_total"] = 4
+        stats["roundtrip_evaluated_total"] = 5
+        stats["runs"] = 3
+        stats["last_profit_realism_status"] = "ONE_LEG_ONLY_DIAGNOSTIC"
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "THIN_POSITIVE",
+        )
+
+    def test_promotion_blocked_fail_quality(self):
+        """R28.18: FAIL_QUALITY blocks CONFIRMED promotion."""
+        stats = start.new_chain_stats()
+        stats["profitable_roundtrips_total"] = 3
+        stats["real_quote_count_total"] = 4
+        stats["roundtrip_evaluated_total"] = 5
+        stats["runs"] = 3
+        stats["last_quality_status"] = "FAIL_QUALITY"
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "THIN_POSITIVE",
+        )
+
+    def test_promotion_allowed_when_quality_pass(self):
+        """R28.18: CONFIRMED allowed when quality and realism are acceptable."""
+        stats = start.new_chain_stats()
+        stats["profitable_roundtrips_total"] = 3
+        stats["real_quote_count_total"] = 4
+        stats["roundtrip_evaluated_total"] = 5
+        stats["runs"] = 3
+        stats["last_profit_realism_status"] = "ROUNDTRIP_PROFITABLE"
+        stats["last_quality_status"] = "PASS"
+        self.assertEqual(
+            start.classify_chain_profit_state(stats),
+            "CONFIRMED_POSITIVE_CONTROL",
+        )
+
     def test_build_summary_has_new_sections(self):
         """R28.10: build_summary must include kpi_separation and profit_truth_summary."""
         per_chain = {

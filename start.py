@@ -400,9 +400,9 @@ def update_chain_stats(
                 prev = stats.get("best_roundtrip_net_bps")
                 stats["best_roundtrip_net_bps"] = run_best if prev is None else max(prev, run_best)
             else:
-                logger.warning(
-                    "SUSPECT_ACCOUNTING: best_net_pnl_bps=%.2f outside sane range [%d, %d], skipping",
-                    run_best, SANE_ROUNDTRIP_PNL_BPS_MIN, SANE_ROUNDTRIP_PNL_BPS_MAX,
+                print(
+                    f"[WARN] SUSPECT_ACCOUNTING: best_net_pnl_bps={run_best:.2f} outside sane range "
+                    f"[{SANE_ROUNDTRIP_PNL_BPS_MIN}, {SANE_ROUNDTRIP_PNL_BPS_MAX}], skipping"
                 )
                 stats["_suspect_accounting_count"] = stats.get("_suspect_accounting_count", 0) + 1
         run_gap = rt.get("best_measured_spread_gap_bps")
@@ -618,10 +618,15 @@ def classify_chain_profit_state(stats: dict[str, Any]) -> str:
     rq_total = stats.get("real_quote_count_total", 0)
     runs = stats.get("runs", 0)
     sane = _roundtrip_accounting_is_sane(stats)
+    # R28.18: Strict promotion guard — block CONFIRMED when evidence is diagnostic-only or quality FAIL
+    last_prs = stats.get("last_profit_realism_status")
+    last_qs = stats.get("last_quality_status")
 
     if profitable > 0 and not sane:
         return "SUSPECT_ACCOUNTING"
     if profitable > 0 and rq_total >= 2:
+        if last_prs == "ONE_LEG_ONLY_DIAGNOSTIC" or last_qs == "FAIL_QUALITY":
+            return "THIN_POSITIVE"
         return "CONFIRMED_POSITIVE_CONTROL"
     if profitable > 0:
         return "THIN_POSITIVE"
