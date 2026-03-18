@@ -1,13 +1,13 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-18 (R28.19 — best_net_pnl_bps sane filter fix, regression tests, reject visibility in truth artifacts. 1948 tests.)
+**Updated**: 2026-03-18 (R28.20 — tooling fixes, reject histograms in truth, actionable_signals_count, mantle/scroll configs, fresh 54-run online verification. 1948 tests.)
 **Tests**: 1948 passed / 3 skipped
 **Schema**: see DEV_REPORT_LATEST.md (long_scan_summary + hot_loop_snapshot schemas bumped in R28.17)
-**Evidence runDirs**: long_scan 43 runs 6 chains 578s (R28.18 post-fix scan, still canonical)
+**Evidence runDirs**: long_scan 54 runs 6 chains 732s (R28.20 fresh online scan with code fixes applied)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (43 runs 578s, total_profitable_roundtrips=0, executable_profitable=0 all chains, signals=288, rq=56)
-**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=28), zksync=PRIMARY_BLOCKER(rq=13), base=PRIMARY_BLOCKER(rq=1), linea=PRIMARY_BLOCKER(rq=14), mantle=CANDIDATE(rq=0), scroll=CANDIDATE(rq=0)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (54 runs 732s, total_profitable_roundtrips=0, executable_profitable=0 all chains, signals=388, rq=65, reject_histogram visible per chain)
+**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=37), zksync=PRIMARY_BLOCKER(rq=9), base=PRIMARY_BLOCKER(rq=1), linea=PRIMARY_BLOCKER(rq=18), mantle=CANDIDATE(rq=0,quarantine_reaccumulated), scroll=CANDIDATE(rq=0,18_diagnostic_0_actionable)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files (R28.15: +1 real_live_probe.yaml).
 
 ---
@@ -17,6 +17,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> **R28.20**: Lead post-verification directive (10 issues, 10 fix steps). (1) warm_pool_cache: Unicode→ASCII status icons for Windows, multicall batch fallback to per-pool on decode failure. (2) start.py: PermissionError resilience for hot_loop_latest.json writes (try/retry/fallback/pass). (3) strategy/artifacts.py: reject_histogram + reject_samples in truth_data (reason→count dict, top 10 rejects). (4) strategy/artifacts.py: actionable_signals_count excludes is_diagnostic_only signals. (5) ci_m5_0_gate.py: signals_count uses actionable_signals_count with fallback. (6) start.py: last_reject_histogram propagation to per-chain stats → long_scan. (7) mantle config: R28.20 objective (restore signal flow), WETH_WMNT anchor, quarantine clear instructions. (8) scroll config: STRUCTURAL_DEBUG status, truth_mode_m42, execution safety flags. (9) Fresh 54-run online verification: 0 profitable RT confirmed, mantle quarantine cleared → re-accumulated 4 genuine failures (structural confirmed), scroll 18 diagnostic/0 actionable. 1948 tests, CI green.
 > **R28.19**: Lead review fixes. (1) best_net_pnl_bps sane filter fix in run_scan_real.py — previously used unfiltered max(roundtrip_results), now uses sane_rts (≤500 bps). If all insane → None. Prevents base 8.2e16 bps contamination. (2) +8 regression tests locking the contract: profitable_count=0 must never coexist with absurd positive best_net_pnl_bps. Tests cover scanner sane filter, start.py secondary guard, classify_chain_profit_state SUSPECT_ACCOUNTING. (3) Reject visibility in truth_report roundtrip_summary: added candidates_total, gated_by_economics, rejected_reasons, suspect_profitable_count. Makes reject pipeline visible in truth artifacts for failing chains. (4) Truth reclassification confirmed: no chain is CONFIRMED_POSITIVE_CONTROL — all are PRIMARY_BLOCKER or CANDIDATE. Classification is purely dynamic, no hardcoded overrides. (5) Scroll quote-truth confirmed structural: 2 DEXes adequate (9/13 cross-dex), but all pools dead or drift-excluded → 0 surviving quotes. Not a code bug. (6) Mantle structural deficit confirmed: 2 DEXes, cross-dex pairs drift-excluded. Needs 3rd DEX or drift fix. 1948 tests, CI green.
 > **R28.18**: Code fixes for scroll price-truth blocker + promotion contract enforcement + fresh 10-min online evidence. (1) strategy/quotes.py: slot0 anchor unification — replaced independent lookup_anchor_price_ci() with upstream anchor_price from anchor_manager. Root cause of scroll PRICE_SCALE violations. (2) strategy/quotes.py: slot0 LIQUIDITY_ZERO secondary gate. (3) start.py: promotion contract enforcement (ONE_LEG_ONLY_DIAGNOSTIC/FAIL_QUALITY → capped at THIN_POSITIVE). (4) start.py: logger NameError fix. (5) Configs: scroll/mantle tightened. 1940 tests. 43-run scan: signals=288, rq=56, executable_profitable=0.
 > **R28.17**: Truth-quality discipline. SUSPECT_ACCOUNTING state added to classify_chain_profit_state — chains with profitable roundtrips but absurd best_net_pnl_bps (outside ±500 bps) are blocked from CONFIRMED_POSITIVE_CONTROL. Base had best_net_pnl_bps=8e16 (accounting contamination) → will be SUSPECT_ACCOUNTING on fresh scan. Accumulation guard: update_chain_stats rejects insane PnL values. Scanner: suspect_profitable_count tracks filtered roundtrips. 3-tier signal classification in kpi_separation: diagnostic_signals / real_quote_signals / executable_profitable (replaces old 4-tier). COVERAGE truth-path parity: removed lightweight skip for dynamic_sweep + preflight_evidence — all run_kinds now evaluated equally. Rolling protection: hot_loop_snapshot with is_test_session marker. Only linea is true positive control (rq=12, prt=12). +5 tests (1937 total). Schema bumps: long_scan_summary + hot_loop_snapshot (see DEV_REPORT for versions).
@@ -42,26 +43,32 @@
 
 ---
 
-## Chain Quality Classification (R28.18 — fresh evidence)
+## Chain Quality Classification (R28.20 — fresh 54-run online evidence)
 
 ```
-arbitrum_one:   SIGNAL_PRODUCING / PRIMARY_BLOCKER (primary, rolling, 6 pairs, rqc=24, prt=0, best_net=-80.54bps, diag=133, economics blocker)
-base:           INFRA_READY / PRIMARY_BLOCKER (stage2, rqc=1, prt=0, NO_DATA, accounting_sane=True on fresh data)
-mantle:         NO_DATA / CANDIDATE (probe-only, rqc=0, signals=0, structural cross-DEX deficit: 4/12 pairs, stratum +0, all 4 cdx pairs drift-excluded)
-zksync:         SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, rqc=10, prt=0, best_net=-191.44bps)
-linea:          SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, rqc=8, prt=0, best_net_pnl=4576bps SUSPECT — 204x amplification vs spread_gap=22.39bps)
-scroll:         FAIL / CANDIDATE (accepted-fail, rqc=0, signals=0, PRICE_SCALE violations: WBTC/USDC + WETH/USDC inverted direction)
+arbitrum_one:   SIGNAL_PRODUCING / PRIMARY_BLOCKER (primary, rolling, 7 xdex, rq=37, prt=0/37, best_net=-47.26bps, economics blocker)
+                rejects: NOTIONAL_DRIFT_EXCLUDED=31, SUSPECT_LIQUIDITY=21, PRICE_SANITY_FAILED=19
+base:           SIGNAL_PRODUCING / PRIMARY_BLOCKER (stage2, rq=1, prt=0/6, 3/9 NO_DATA, QUARANTINED=19)
+                rejects: QUARANTINED=19, NO_USD_PRICE=8, VE33_QUOTE_FAILED=3
+linea:          SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, rq=18, prt=0/36, best_net=-94.81bps, 3 xdex, 100% pass)
+                rejects: NO_USD_PRICE=3, QUARANTINED=3, ALGEBRA_NEEDS_QUOTER=2
+mantle:         NO_DATA / CANDIDATE (probe-only, rq=0, sig=0, structural: quarantine cleared → re-accumulated 4 genuine failures)
+                rejects: QUARANTINED=13, NOTIONAL_DRIFT_EXCLUDED=4
+scroll:         FAIL / CANDIDATE (structural-debug, sig=18 diagnostic / 0 actionable, mixed-source gated, 2 xdex)
+                rejects: QUARANTINED=16, NOTIONAL_DRIFT_EXCLUDED=2
+zksync:         SIGNAL_PRODUCING / PRIMARY_BLOCKER (discovery, rq=9, prt=0/9, best_net=-420.61bps, 1 xdex)
+                rejects: QUARANTINED=19, NOTIONAL_DRIFT_EXCLUDED=10, NO_USD_PRICE=1
 ```
 
-**R28.18 changes**: Fresh online evidence with R28.17 guards. total_profitable_roundtrips=0 across all chains. Linea reclassified from CONFIRMED_POSITIVE_CONTROL to PRIMARY_BLOCKER (204x accounting amplification caught by SANE_RT_PNL_MAX=500). base accounting clean on fresh data. Per-chain blockers identified: arbitrum/zksync=economics, base=NO_DATA, linea=accounting anomaly, mantle=structural surface, scroll=quote-truth.
+**R28.20 changes**: Fresh 54-run online evidence with R28.20 code fixes (reject histograms, actionable_signals_count, mantle quarantine clear). total_profitable_roundtrips=0 confirmed. Reject histograms now visible per chain in truth artifacts + long_scan. Mantle quarantine cleared → re-accumulated 4 genuine stratum failures (structural confirmed, not stale data). Scroll 18 diagnostic signals correctly excluded from actionable count.
 
-**Rollout Queue (R28.19 — truth audit reset, no chain is positive control)**:
-1. **arbitrum_one** (primary contractual) — PRIMARY_BLOCKER. best_net=-42.85 bps, rq=28, prt=0. Economics blocker.
-2. **linea** — PRIMARY_BLOCKER. rq=14, prt=0. Was "benchmark" in R28.14 — R28.17 SANE_RT_PNL_MAX=500 guard exposed 204x accounting anomaly (best_net_pnl=4576 was unfiltered).
-3. **zksync** — PRIMARY_BLOCKER. rq=13, prt=0. best_net=-180.55 bps. Deeply negative.
-4. **base** — PRIMARY_BLOCKER. rq=1, 5/7 runs NO_DATA. Thin evidence.
-5. **mantle** — CANDIDATE. 0 signals, 0 rq. Structural cross-DEX deficit (4 pairs all drift-excluded). Needs 3rd DEX or drift fix.
-6. **scroll** — CANDIDATE. 0 signals, 0 rq. Quote-truth blocker (adequate surface 9/13 cross-dex, but all pools dead/broken). Structural.
+**Rollout Queue (R28.20 — fresh evidence, no chain is positive control)**:
+1. **arbitrum_one** (primary contractual) — PRIMARY_BLOCKER. best_net=-47.26 bps, rq=37, prt=0. Economics blocker. gap-to-zero=18.71 bps.
+2. **linea** — PRIMARY_BLOCKER. rq=18, prt=0, best_net=-94.81 bps. Strongest signal producer after arb. Clean sane filter result.
+3. **zksync** — PRIMARY_BLOCKER. rq=9, prt=0. best_net=-420.61 bps. Deeply negative.
+4. **base** — PRIMARY_BLOCKER. rq=1, 3/9 runs NO_DATA, QUARANTINED=19. Thin evidence.
+5. **mantle** — CANDIDATE. 0 signals, 0 rq. Structural: quarantine cleared, re-accumulated 4 genuine stratum failures. Needs 3rd DEX or stratum pool health fix.
+6. **scroll** — CANDIDATE. 18 diagnostic signals, 0 actionable. Mixed-source gated. QUARANTINED=16. Structural.
 
 **Onboard Stage Configs (R27+R28.2)**:
 - `config/onboard_arbitrum_one_candidate.yaml` — 4-DEX additive (uni+sushi+camelot+pancakeswap)

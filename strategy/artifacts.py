@@ -621,6 +621,11 @@ def build_truth_data(
         },
         "spread_signals": spread_signals,
         "signals_total": len(spread_signals),
+        # R28.20: Actionable signals exclude diagnostic-only (mixed-source, slot0-only).
+        # Gates should use this count, not signals_total, for real signal flow assessment.
+        "actionable_signals_count": len([
+            s for s in spread_signals if not s.get("is_diagnostic_only")
+        ]),
         "opportunities_total": len([s for s in spread_signals if s.get("is_net_positive_est")]),
         "infra": infra_payload,
         "suspect_summary": {
@@ -677,6 +682,27 @@ def build_truth_data(
         truth_data["price_sanity_deviation_bps_raw_max"] = int(raw_bps)
     except Exception:
         truth_data["price_sanity_deviation_bps_raw_max"] = None
+    
+    # R28.20: Inline reject histogram + samples so truth_report is self-contained
+    # for RCA.  Previously this data was only in the separate reject_histogram artifact,
+    # making failing-chain truth reports opaque.
+    rq = rejected_quotes or []
+    rh: Dict[str, int] = {}
+    for r in rq:
+        reason = r.get("reason", "UNKNOWN")
+        rh[reason] = rh.get(reason, 0) + 1
+    truth_data["reject_histogram"] = rh
+    truth_data["reject_samples"] = [
+        {
+            "pair": r.get("pair"),
+            "dex_id": r.get("dex_id"),
+            "fee": r.get("fee"),
+            "reason": r.get("reason"),
+            "deviation_bps": r.get("deviation_bps"),
+            "pool_address": r.get("pool_address"),
+        }
+        for r in rq[:10]
+    ]
     
     return truth_data
 

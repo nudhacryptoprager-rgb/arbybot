@@ -352,7 +352,19 @@ def warm_chain(
             # Use block 0 (latest) for liquidity check
             mc = MulticallBatcher(rpc_url, 0)
             
-            liquidities = mc.batch_liquidity(list(pool_addresses_map.keys()))
+            pool_list = list(pool_addresses_map.keys())
+            try:
+                liquidities = mc.batch_liquidity(pool_list)
+            except Exception as batch_err:
+                # Multicall decode failure — fall back to per-pool calls
+                logger.warning(f"Batch liquidity failed, falling back to per-pool: {batch_err}")
+                liquidities = {}
+                for addr in pool_list:
+                    try:
+                        single = mc.batch_liquidity([addr])
+                        liquidities.update(single)
+                    except Exception:
+                        liquidities[addr] = None
             
             zero_count = 0
             for pool_addr, liq in liquidities.items():
@@ -420,9 +432,9 @@ def print_summary(summary: ChainSummary, verbose: bool = False, rank_dexes: bool
         print(f"\nPair Details:")
         for diag in summary.pair_diagnostics:
             status_icon = {
-                "CROSS_DEX": "✓",
-                "SINGLE_DEX": "△",
-                "NO_POOL": "✗",
+                "CROSS_DEX": "+",
+                "SINGLE_DEX": "~",
+                "NO_POOL": "x",
                 "NO_TOKEN": "?",
             }.get(diag.status, "?")
             dexes_str = ", ".join(diag.pool_found) if diag.pool_found else "none"

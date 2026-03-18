@@ -2,19 +2,24 @@
 #
 # ONBOARDING: scroll → STAGE 1 (nuri_v3 + sushiswap_v3 cross-DEX test)
 #
-# STATUS: monitoring_only / ECOSYSTEM_BLOCKED.
+# STATUS: STRUCTURAL_DEBUG / bring-up config. DO NOT use for production truth.
+#
+# R28.20 STRUCTURAL REALITY:
+#   - Surface is adequate: 9/13 cross-DEX pairs
+#   - But ALL pools dead/broken: WBTC/USDC price=7330 (expected 68000),
+#     WETH/USDC@sushiswap nearly empty, USDC/DAI@sushiswap dead (0.056 DAI per 100 USDC)
+#   - Surviving signal is mixed-source (buy=quoter_v2, sell=slot0) with
+#     SUSPECT_SPREAD_EXCLUDED + SLOT0_DIAGNOSTIC + MIXED_SOURCE_DIAGNOSTIC
+#   - actionable_signals_count=0 after R28.20 (diagnostic signals excluded from count)
+#   - This config is for BRING-UP ONLY — production stage2 requires healthy real-quote routes
+#   - Before running: clear quarantine with:
+#       Remove-Item data\cache\quarantine_state_scroll.json
+#
 # R27 fix: nuri_v3 re-classified as uniswap_v3/quoter_v2 (per dexes.yaml trust anchor).
-# Previously incorrectly excluded as algebra-incompatible.
-# Now 2 DEXes available for cross-DEX: nuri_v3 + sushiswap_v3.
-# Online verification needed to confirm nuri_v3 actually responds to QuoterV2 ABI.
 #
 # ADAPTER READINESS:
-#   nuri_v3 → UniswapV3Adapter: VERIFIED R27.1 (ci_m5_gate_20260314_102036, 3 signals, quoter_v2 confirmed)
+#   nuri_v3 → UniswapV3Adapter: VERIFIED R27.1
 #   sushiswap_v3 → UniswapV3Adapter: PRODUCTION
-#
-# PURPOSE: Verify nuri_v3 quoter_v2 compatibility online. 1 PASS = adapter/quoter proof, NOT automatic exit from ECOSYSTEM_BLOCKED.
-#          Sustained evidence (multiple consecutive PASS with cross-DEX signals) required for promotion.
-# RUN_KIND: COVERAGE
 #
 # WORKFLOW:
 #   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_scroll_stage1.yaml --cycles 1
@@ -52,6 +57,12 @@ min_spread_bps: 3
 paper_size_usd: 100
 paper_slippage_bps: 5
 gas_usd_estimate: 0.05
+
+truth_mode_m42: true
+execution_enabled: false
+execution_block_reason: "EXECUTION_DISABLED_M4"
+kill_switch_active: true
+simulate_only: true
 
 # Production-like thresholds (R28.18: tightened from debug)
 quoter_max_gas_estimate: 3000000

@@ -498,6 +498,10 @@ def update_chain_stats(
         }
         if any(v for v in suppression.values()):
             stats["last_suppression"] = suppression
+        # R28.20: Propagate reject histogram from truth_report for long_scan RCA
+        rh = truth_report.get("reject_histogram")
+        if rh:
+            stats["last_reject_histogram"] = rh
 
     if truth_report:
         stats["last_current_block"] = truth_report.get("current_block")
@@ -1369,7 +1373,25 @@ def write_hot_loop_snapshot(
     tmp = HOT_LOOP_LATEST.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, indent=2, default=str)
-    tmp.replace(HOT_LOOP_LATEST)
+    # Atomic replace with Windows PermissionError resilience:
+    # If the dashboard (or another reader) has the file open, Path.replace()
+    # can fail on Windows.  Retry once after a short pause, then fall back to
+    # a non-atomic overwrite so the scanner loop is never blocked.
+    try:
+        tmp.replace(HOT_LOOP_LATEST)
+    except PermissionError:
+        import time as _t2
+        _t2.sleep(0.05)
+        try:
+            tmp.replace(HOT_LOOP_LATEST)
+        except PermissionError:
+            # Non-atomic fallback: write directly (reader may see partial)
+            try:
+                with open(HOT_LOOP_LATEST, "w", encoding="utf-8") as f2:
+                    json.dump(snapshot, f2, indent=2, default=str)
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass  # Snapshot is best-effort; never block the scan loop
 
 
 def _serialize_live_stream(

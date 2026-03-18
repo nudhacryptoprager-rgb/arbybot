@@ -1742,8 +1742,12 @@ ENV VARIABLES:
                             truth_data = json.load(f)
                         truth_ctx = truth_data.get("run_context", {})
                         run_timestamp = truth_ctx.get("run_timestamp", run_timestamp)
-                        # v3.2.23: Use len(spread_signals) instead of stats.total_signals (doesn't exist)
-                        signals_count = len(truth_data.get("spread_signals", []))
+                        # R28.20: Prefer actionable_signals_count (excludes diagnostic-only).
+                        # Falls back to len(spread_signals) for pre-R28.20 truth artifacts.
+                        signals_count = truth_data.get(
+                            "actionable_signals_count",
+                            len(truth_data.get("spread_signals", []))
+                        )
                         # NO_DATA reason mapping: NO_QUOTES, NO_TOKENS, NO_POOL, RPC_ERROR, etc.
                         truth_stats = truth_data.get("stats", {})
                         no_data_reason = truth_stats.get("no_data_reason", "NO_QUOTES")

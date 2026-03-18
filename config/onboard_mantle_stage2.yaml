@@ -5,12 +5,23 @@
 # STATUS: 2 executable DEXes (agni_v3, stratum).
 # stratum (ve33) adapter IMPLEMENTED (R27.4). This config adds cross-DEX surface.
 #
+# R28.20 OBJECTIVE: RESTORE SIGNAL FLOW first.
+#   Target: signals_count > 0 AND real_quote_count > 0 on consecutive runs.
+#   Profitability work deferred until signal flow is proven.
+#
+# STRUCTURAL REALITY (R28.20):
+#   - 12 intent pairs, only 4 cross-DEX (USDC/USDT, WETH/WMNT, WMNT/USDC, METH/WETH)
+#   - stratum adds +0 incremental cross-DEX pairs in warm_pool_cache audit
+#   - All 4 cross-DEX pairs blocked: quarantined + drift-excluded + price-sanity
+#   - Root cause: stale token prices + stale quarantine from previous configs
+#   - Before running: clear quarantine with:
+#       Remove-Item data\cache\quarantine_state_mantle.json
+#   - Then refresh token prices with:
+#       py -3.11 scripts/verify_tokens.py --chain mantle --all-new
+#
 # ADAPTER READINESS:
 #   agni_v3 → UniswapV3Adapter: PRODUCTION
 #   stratum → Ve33Adapter: PRODUCTION (R27.4)
-#
-# PURPOSE: Enable cross-DEX arb surface on mantle via ve33 adapter.
-# RUN_KIND: COVERAGE
 #
 # WORKFLOW:
 #   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_mantle_stage2.yaml --cycles 1
@@ -57,6 +68,7 @@ simulate_only: true
 
 price_sanity_max_deviation_bps: 5000
 
+# R28.20: Prices below may be stale. Run verify_tokens.py --chain mantle to refresh.
 tokens_usd_price:
   WMNT: 0.50
   WETH: 2050.0
@@ -69,6 +81,7 @@ tokens_usd_price:
 tokens_anchor_price:
   WETH_USDC: 2050.0
   WETH_USDT: 2050.0
+  WETH_WMNT: 4100.0
   WMNT_USDC: 0.50
   mETH_WETH: 1.02
   WBTC_USDC: 68000.0
