@@ -906,20 +906,33 @@ def run_scan(
             "warnings": roundtrip_stats.warnings or [],
         }
         
-        # v2.1.0: FIX issue #8 - best_net_pnl_bps should show actual best, not 0.0 when all negative
-        if roundtrip_results:
-            best_rt = max(roundtrip_results, key=lambda r: r.net_pnl_bps)
+        # R28.18: best_net_pnl_bps must be from sane-filtered universe only.
+        # Previously used unfiltered roundtrip_results, leaking absurd values
+        # (e.g. 8e16 bps on base) even when profitable_count=0.
+        sane_rts = [
+            r for r in roundtrip_results
+            if r.net_pnl_bps <= SANE_RT_PNL_MAX
+        ]
+        if sane_rts:
+            best_rt = max(sane_rts, key=lambda r: r.net_pnl_bps)
             stats["roundtrip"]["best_net_pnl_bps"] = best_rt.net_pnl_bps
             if rt_profitable:
                 logger.info(
-                    "Roundtrip: %d/%d profitable, best=%.2f bps",
+                    "Roundtrip: %d/%d profitable, best(sane)=%.2f bps",
                     len(rt_profitable), len(roundtrip_results), best_rt.net_pnl_bps
                 )
             else:
                 logger.info(
-                    "Roundtrip: 0/%d profitable, best(negative)=%.2f bps",
+                    "Roundtrip: 0/%d profitable, best(sane,negative)=%.2f bps",
                     len(roundtrip_results), best_rt.net_pnl_bps
                 )
+        elif roundtrip_results:
+            # All roundtrips are insane — report None, not the absurd value
+            stats["roundtrip"]["best_net_pnl_bps"] = None
+            logger.warning(
+                "Roundtrip: 0/%d profitable, ALL %d results outside sane range (±%d bps)",
+                len(roundtrip_results), len(roundtrip_results), SANE_RT_PNL_MAX,
+            )
         else:
             stats["roundtrip"]["best_net_pnl_bps"] = None
             logger.info("Roundtrip: no candidates evaluated")

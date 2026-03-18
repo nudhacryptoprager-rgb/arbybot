@@ -249,5 +249,243 @@ class TestRoundtripResultSlippageSource(unittest.TestCase):
         self.assertEqual(d["slippage_source"], "sqrtPriceAfter")
 
 
+class TestBestNetPnlBpsSaneFiltering(unittest.TestCase):
+    """R28.19: best_net_pnl_bps must come from sane-filtered universe.
+
+    CONTRACT: profitable_count=0 must NEVER coexist with absurd positive
+    best_net_pnl_bps. The scanner's sane filter (SANE_RT_PNL_MAX=500)
+    must gate the value before it reaches stats or truth report.
+    """
+
+    def test_all_insane_roundtrips_yields_none(self):
+        """When ALL roundtrip results have absurd PnL, best_net_pnl_bps=None."""
+        from strategy.artifacts import build_truth_data
+
+        config = {"truth_mode_m42": True}
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 3,
+                "profitable_count": 0,
+                "suspect_profitable_count": 3,
+                "real_quote_count": 0,
+                "best_net_pnl_bps": None,  # Scanner already filtered
+            }
+        )
+
+        result = build_truth_data(
+            config=config,
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+
+        rs = result["roundtrip_summary"]
+        self.assertIsNone(rs["best_net_pnl_bps"])
+        self.assertEqual(result["profit_realism_status"], "ROUNDTRIP_NOT_PROFITABLE")
+
+    def test_mixed_sane_and_insane_uses_sane_best(self):
+        """When mix of sane/insane, best_net_pnl_bps reflects only the sane max."""
+        from strategy.artifacts import build_truth_data
+
+        config = {"truth_mode_m42": True}
+        # Scanner should have computed: sane best = 45.0 (the insane 8e16 is filtered)
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 4,
+                "profitable_count": 1,
+                "suspect_profitable_count": 1,
+                "real_quote_count": 2,
+                "best_net_pnl_bps": 45.0,  # From sane-filtered max
+            }
+        )
+
+        result = build_truth_data(
+            config=config,
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+
+        rs = result["roundtrip_summary"]
+        self.assertEqual(rs["best_net_pnl_bps"], 45.0)
+        self.assertEqual(result["profit_realism_status"], "ROUNDTRIP_PROFITABLE")
+
+    def test_zero_profitable_with_none_best_pnl(self):
+        """profitable_count=0 with best_net_pnl_bps=None is valid (no contamination)."""
+        from strategy.artifacts import build_truth_data
+
+        config = {"truth_mode_m42": True}
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 5,
+                "profitable_count": 0,
+                "suspect_profitable_count": 2,
+                "real_quote_count": 3,
+                "best_net_pnl_bps": None,
+            }
+        )
+
+        result = build_truth_data(
+            config=config,
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+
+        rs = result["roundtrip_summary"]
+        self.assertIsNone(rs["best_net_pnl_bps"])
+        self.assertEqual(result["profit_realism_status"], "ROUNDTRIP_NOT_PROFITABLE")
+
+    def test_sane_negative_best_preserved(self):
+        """Negative but sane best_net_pnl_bps is preserved (not forced to None)."""
+        from strategy.artifacts import build_truth_data
+
+        config = {"truth_mode_m42": True}
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 3,
+                "profitable_count": 0,
+                "real_quote_count": 2,
+                "best_net_pnl_bps": -42.5,
+            }
+        )
+
+        result = build_truth_data(
+            config=config,
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+
+        rs = result["roundtrip_summary"]
+        self.assertEqual(rs["best_net_pnl_bps"], -42.5)
+
+
+class TestUpdateChainStatsSaneGuard(unittest.TestCase):
+    """R28.17/R28.19: update_chain_stats must reject insane best_net_pnl_bps.
+
+    The secondary guard in start.py prevents contaminated values from
+    accumulating even if the scanner's primary filter is bypassed.
+    """
+
+    def _make_chain_stats(self):
+        """Fresh per-chain stats dict matching new_chain_stats()."""
+        from start import new_chain_stats
+        return new_chain_stats()
+
+    def test_absurd_positive_rejected(self):
+        """best_net_pnl_bps > SANE_MAX is not accumulated."""
+        from start import update_chain_stats, SANE_ROUNDTRIP_PNL_BPS_MAX
+
+        cs = self._make_chain_stats()
+        summary = {
+            "metrics": {
+                "roundtrip": {
+                    "evaluated_count": 2,
+                    "profitable_count": 0,
+                    "real_quote_count": 1,
+                    "best_net_pnl_bps": 8.2e16,  # Absurd value from old bug
+                },
+            },
+        }
+        update_chain_stats(cs, exit_code=0, run_dir=None, summary=summary)
+        # Must NOT have accumulated the absurd value
+        self.assertIsNone(cs.get("best_roundtrip_net_bps"))
+        self.assertEqual(cs.get("_suspect_accounting_count", 0), 1)
+
+    def test_sane_value_accumulated(self):
+        """best_net_pnl_bps within sane range IS accumulated."""
+        from start import update_chain_stats
+
+        cs = self._make_chain_stats()
+        summary = {
+            "metrics": {
+                "roundtrip": {
+                    "evaluated_count": 2,
+                    "profitable_count": 1,
+                    "real_quote_count": 2,
+                    "best_net_pnl_bps": 45.0,
+                },
+            },
+        }
+        update_chain_stats(cs, exit_code=0, run_dir=None, summary=summary)
+        self.assertEqual(cs["best_roundtrip_net_bps"], 45.0)
+        self.assertEqual(cs.get("_suspect_accounting_count", 0), 0)
+
+    def test_none_pnl_no_accumulation(self):
+        """best_net_pnl_bps=None (all insane at scanner) does not accumulate."""
+        from start import update_chain_stats
+
+        cs = self._make_chain_stats()
+        summary = {
+            "metrics": {
+                "roundtrip": {
+                    "evaluated_count": 3,
+                    "profitable_count": 0,
+                    "real_quote_count": 1,
+                    "best_net_pnl_bps": None,
+                },
+            },
+        }
+        update_chain_stats(cs, exit_code=0, run_dir=None, summary=summary)
+        self.assertIsNone(cs.get("best_roundtrip_net_bps"))
+        self.assertEqual(cs.get("_suspect_accounting_count", 0), 0)
+
+    def test_classify_suspect_accounting_after_absurd(self):
+        """classify_chain_profit_state returns SUSPECT_ACCOUNTING when absurd values leaked."""
+        from start import update_chain_stats, classify_chain_profit_state
+
+        cs = self._make_chain_stats()
+
+        # First: a sane profitable run (builds up profitable count)
+        summary_good = {
+            "metrics": {
+                "roundtrip": {
+                    "evaluated_count": 2,
+                    "profitable_count": 1,
+                    "real_quote_count": 2,
+                    "best_net_pnl_bps": 30.0,
+                },
+            },
+        }
+        update_chain_stats(cs, exit_code=0, run_dir=None, summary=summary_good)
+
+        # Second: an absurd run (contaminates accounting)
+        summary_bad = {
+            "metrics": {
+                "roundtrip": {
+                    "evaluated_count": 1,
+                    "profitable_count": 1,
+                    "real_quote_count": 1,
+                    "best_net_pnl_bps": 9999.0,
+                },
+            },
+        }
+        update_chain_stats(cs, exit_code=0, run_dir=None, summary=summary_bad)
+
+        state = classify_chain_profit_state(cs)
+        self.assertEqual(state, "SUSPECT_ACCOUNTING")
+
+
 if __name__ == "__main__":
     unittest.main()

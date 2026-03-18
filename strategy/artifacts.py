@@ -367,6 +367,7 @@ def _build_roundtrip_summary(stats: Dict[str, Any]) -> Dict[str, Any]:
         "enabled": rt.get("enabled", False),
         "evaluated_count": rt.get("evaluated_count", 0),
         "profitable_count": rt.get("profitable_count", 0),
+        "suspect_profitable_count": rt.get("suspect_profitable_count", 0),  # R28.19
         "real_quote_count": rt.get("real_quote_count", 0),
         # R28.7: New primary KPI — executable candidates that passed all pre-filters
         "executable_candidates_count": rt.get("executable_candidates_count", 0),
@@ -379,6 +380,10 @@ def _build_roundtrip_summary(stats: Dict[str, Any]) -> Dict[str, Any]:
         "l1_cost_source": rt.get("l1_cost_source", "none"),
         "gas_price_wei_used": rt.get("gas_price_wei_used", 0),
         "best_measured_spread_gap_bps": rt.get("best_measured_spread_gap_bps"),
+        # R28.19: Reject visibility — roundtrip pipeline rejection reasons and gating counts
+        "candidates_total": rt.get("candidates_total", 0),
+        "gated_by_economics": rt.get("gated_by_economics", 0),
+        "rejected_reasons": rt.get("rejected_reasons", {}),
     }
     # v3.3.0: Canonical dynamic sweep sub-block
     if ds.get("enabled"):

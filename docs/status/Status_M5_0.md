@@ -1,10 +1,10 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-18 (R28.18 — code fixes + 10-min online scan: slot0 anchor unification, liquidity check, promotion contract, config tightening, logger fix. 1940 tests, 43 runs.)
-**Tests**: 1940 passed / 3 skipped
+**Updated**: 2026-03-18 (R28.19 — best_net_pnl_bps sane filter fix, regression tests, reject visibility in truth artifacts. 1948 tests.)
+**Tests**: 1948 passed / 3 skipped
 **Schema**: see DEV_REPORT_LATEST.md (long_scan_summary + hot_loop_snapshot schemas bumped in R28.17)
-**Evidence runDirs**: long_scan 43 runs 6 chains 578s (R28.18 post-fix scan)
+**Evidence runDirs**: long_scan 43 runs 6 chains 578s (R28.18 post-fix scan, still canonical)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
 **Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (43 runs 578s, total_profitable_roundtrips=0, executable_profitable=0 all chains, signals=288, rq=56)
 **Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=28), zksync=PRIMARY_BLOCKER(rq=13), base=PRIMARY_BLOCKER(rq=1), linea=PRIMARY_BLOCKER(rq=14), mantle=CANDIDATE(rq=0), scroll=CANDIDATE(rq=0)
@@ -17,7 +17,8 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
-> **R28.18**: Code fixes for scroll price-truth blocker + promotion contract enforcement + fresh 10-min online evidence. (1) strategy/quotes.py: slot0 anchor unification — replaced independent lookup_anchor_price_ci() with upstream anchor_price from anchor_manager. Previously, pairs without explicit tokens_anchor_price entry had anchor=None in slot0 path → price_sanity silently SKIPPED. Root cause of scroll WBTC/USDC + WETH/USDC PRICE_SCALE violations (dead pools returning stale sqrtPrice unchecked). (2) strategy/quotes.py: slot0 LIQUIDITY_ZERO secondary gate — catches dead pools when multicall cache missed them. (3) start.py: CONFIRMED_POSITIVE_CONTROL now requires last_profit_realism_status != ONE_LEG_ONLY_DIAGNOSTIC AND last_quality_status != FAIL_QUALITY (diagnostic-only chains capped at THIN_POSITIVE). (4) start.py: logger NameError fix in update_chain_stats (was crashing all online scans). (5) Configs: scroll price_sanity_max_deviation_bps 10000→5000, suspect_spread_bps_hard 1000→500, quoter_max_ticks_crossed 40→15, added missing anchors (WBTC_USDC, USDC_USDT, USDC_DAI). Mantle: same tightening + anchors. 1940 tests, CI ALL GATES PASS. Fresh 43-run scan (578s): signals=288, rq=56, executable_profitable=0, best_rt_bps=-42.85 (arb). Scroll PRICE_SANITY now catching 11 dead pool rejections per cycle (verified working). arb=PRIMARY_BLOCKER(rq=28), linea=PRIMARY_BLOCKER(rq=14), zksync=PRIMARY_BLOCKER(rq=13), base=PRIMARY_BLOCKER(rq=1/NO_DATA), mantle=CANDIDATE(rq=0), scroll=CANDIDATE(rq=0).
+> **R28.19**: Lead review fixes. (1) best_net_pnl_bps sane filter fix in run_scan_real.py — previously used unfiltered max(roundtrip_results), now uses sane_rts (≤500 bps). If all insane → None. Prevents base 8.2e16 bps contamination. (2) +8 regression tests locking the contract: profitable_count=0 must never coexist with absurd positive best_net_pnl_bps. Tests cover scanner sane filter, start.py secondary guard, classify_chain_profit_state SUSPECT_ACCOUNTING. (3) Reject visibility in truth_report roundtrip_summary: added candidates_total, gated_by_economics, rejected_reasons, suspect_profitable_count. Makes reject pipeline visible in truth artifacts for failing chains. (4) Truth reclassification confirmed: no chain is CONFIRMED_POSITIVE_CONTROL — all are PRIMARY_BLOCKER or CANDIDATE. Classification is purely dynamic, no hardcoded overrides. (5) Scroll quote-truth confirmed structural: 2 DEXes adequate (9/13 cross-dex), but all pools dead or drift-excluded → 0 surviving quotes. Not a code bug. (6) Mantle structural deficit confirmed: 2 DEXes, cross-dex pairs drift-excluded. Needs 3rd DEX or drift fix. 1948 tests, CI green.
+> **R28.18**: Code fixes for scroll price-truth blocker + promotion contract enforcement + fresh 10-min online evidence. (1) strategy/quotes.py: slot0 anchor unification — replaced independent lookup_anchor_price_ci() with upstream anchor_price from anchor_manager. Root cause of scroll PRICE_SCALE violations. (2) strategy/quotes.py: slot0 LIQUIDITY_ZERO secondary gate. (3) start.py: promotion contract enforcement (ONE_LEG_ONLY_DIAGNOSTIC/FAIL_QUALITY → capped at THIN_POSITIVE). (4) start.py: logger NameError fix. (5) Configs: scroll/mantle tightened. 1940 tests. 43-run scan: signals=288, rq=56, executable_profitable=0.
 > **R28.17**: Truth-quality discipline. SUSPECT_ACCOUNTING state added to classify_chain_profit_state — chains with profitable roundtrips but absurd best_net_pnl_bps (outside ±500 bps) are blocked from CONFIRMED_POSITIVE_CONTROL. Base had best_net_pnl_bps=8e16 (accounting contamination) → will be SUSPECT_ACCOUNTING on fresh scan. Accumulation guard: update_chain_stats rejects insane PnL values. Scanner: suspect_profitable_count tracks filtered roundtrips. 3-tier signal classification in kpi_separation: diagnostic_signals / real_quote_signals / executable_profitable (replaces old 4-tier). COVERAGE truth-path parity: removed lightweight skip for dynamic_sweep + preflight_evidence — all run_kinds now evaluated equally. Rolling protection: hot_loop_snapshot with is_test_session marker. Only linea is true positive control (rq=12, prt=12). +5 tests (1937 total). Schema bumps: long_scan_summary + hot_loop_snapshot (see DEV_REPORT for versions).
 > **R28.16**: Phase-level visibility in live stream. Scanner child process (run_scan_real.py) emits structured `ARBY_PHASE:` JSON lines on stdout for 6 phase boundaries (discovery_started/finished, quote_started/finished, preflight_finished, gate_finished). Parent (start.py run_gate_once) parses these and pipes into hot_loop_latest.json live_stream as `phase:*` events. Dashboard badges for phase transitions + severity/reason detail column. Lightweight `/api/hot` endpoint (serves only hot_loop_latest.json vs full /api/rolling). Pair-hot-queue pending count surfaced in live_stream KPIs. +6 tests (1932 total). System remains batch-hot — phases confirm operational visibility within long child runs, not instant-hot trading.
 > **R28.15**: Scan stack is productive in simulate-only mode, but live-profit metrics remain blocked because execute_live/simulate_rpc were not yet wired into the operational scanner path until this round. Now wired as dormant probe (gated by config — all production configs keep execution_enabled=false). Real PreTradeSimulator and DexDexExecutor implemented + tested (38 new tests, 1926 total). Live execution probe block in run_scan_real.py: pick best candidate → simulate_rpc() → check signer → log. config/real_live_probe.yaml ready for first live test. Artifacts: truth_data now includes live_execution field, kill_switch_active/execution_enabled are config-driven. The next milestone is realized execution truth — tx submission, receipts, and realized PnL — not further reinterpretation of paper profit.
@@ -26,7 +27,7 @@
 > R28.12: Event queue DirtySetTracker (pending_chains/drain_event/mark_clean), hot_loop_latest.json (fast-refresh artifact), cross-pair parallel quotes (shared 16-worker TPE), WS block pass-through (ARBY_WS_BLOCK_NUMBER env var skips block-pin RPC), truth_path_alignment section (BLOCKED/POSITIVE/NOT_PROVEN/ALIGNED per chain). System is still batch-hot — WS invalidates but does not yet trigger immediate executable re-quote. Schema bump (additive). +16 tests (1886). Fresh scan: 30 runs, 10 full/20 hot, linea CONFIRMED_POSITIVE_CONTROL (10 profitable RT), base THIN_POSITIVE (7 RT).
 > R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation. Dual-cycle architecture: every FULL_SWEEP_INTERVAL=5 scans per chain does full discovery, others use cached pairs from `data/cache/hot_pairs_{chain}.json` (reduces RPC calls and latency). `DirtySetTracker` subscribes to WebSocket `eth_subscribe newHeads` — chains only re-scanned when dirty (new block). If WSS not connected, chain is always dirty (safe fallback). Dashboard "Hot Loop" table shows per-chain mode/full_sweeps/hot_requotes. Addresses Lead directive: "Розвести два цикли: full sweep і hot re-quote loop. Використати WebSocket не як 'галочку', а як trigger для dirty-set invalidation."
 > R28.11 Turn 1: Pair-level dashboard visibility. _pair_history (5 runs), Delta column for spread_bps changes, Cache Freshness table (pools_from_cache/rpc/rpc_calls), Suppression Counters table (6 types), 2-decimal bps precision. Guardrails: STATIC_PROBE_PATH, ZERO_FEE_DOMINANCE.
-> R28.10: Profit truth propagation — real_quote_count + profit_realism_status now flow through full chain: truth_report → run_summary.metrics → rolling_store → long_scan. Chain profit state classification (5 states): CONFIRMED_POSITIVE_CONTROL (linea, base), PRIMARY_BLOCKER (arb, zksync), CANDIDATE (mantle, scroll). KPI separation: signals ≠ exec_candidates ≠ profitable_roundtrips ≠ truth_confirmed. RCA: linea profits from lynex_v3 0-fee pools; arb blocked by 100-3000 bps fee structure + $150 paper_size slippage amplification.
+> R28.10: Profit truth propagation — real_quote_count + profit_realism_status now flow through full chain: truth_report → run_summary.metrics → rolling_store → long_scan. Chain profit state classification (5 states). KPI separation: signals ≠ exec_candidates ≠ profitable_roundtrips ≠ truth_confirmed. RCA: linea profits from lynex_v3 0-fee pools; arb blocked by 100-3000 bps fee structure + $150 paper_size slippage amplification. **NOTE (R28.19)**: R28.10's claim "CONFIRMED_POSITIVE_CONTROL (linea, base)" is stale — R28.17/R28.18 truth audit reset all chains to non-profitable.
 > R28.7: Economics engine correctness — executable_candidates_count KPI (replaces signals_count as primary), min_spread_bps advisory in truth_mode (threshold=0), dynamic_sweep promoted to core decision layer, per_route_breakdown in artifacts (slippage/fee/gas decomposition). ARB/WETH re-enabled (SUSPECT_SPREAD_HARD gates >500bps). Gap narrowed 18→15 bps. Long scan: 42 runs, 109 signals, $123, 21 profitable RT. Linea truth=True (positive control confirmed).
 > R28.6: RunDir collision fix — chain-scoped unique dirs (`ci_m5_gate_{chain_key}_{YYYYMMDD}_{HHMMSS}_{microseconds}`) with `exist_ok=False`. 6 pre-fix collisions (zksync 324 + base 8453) → 0 post-fix in parallel stress test (31 runs). Chain_id validation in start.py. Telemetry: report_ms=63 (was 0). Lead: "R28.5 speed gain is provisional until parallel runDir uniqueness/provenance integrity is fixed" → FIXED.
 > R28.5: Bounded parallel coverage (`--coverage-workers N` in start.py), expanded phase metrics (8 fields), phase_timers artifact fix (computed before write_artifacts), COVERAGE dynamic_sweep skip. Long scan: 37 runs / 52 signals / $85.88 / 12 profitable roundtrips in 556s wall (~15s/run vs ~27s R28.4).
@@ -54,13 +55,13 @@ scroll:         FAIL / CANDIDATE (accepted-fail, rqc=0, signals=0, PRICE_SCALE v
 
 **R28.18 changes**: Fresh online evidence with R28.17 guards. total_profitable_roundtrips=0 across all chains. Linea reclassified from CONFIRMED_POSITIVE_CONTROL to PRIMARY_BLOCKER (204x accounting amplification caught by SANE_RT_PNL_MAX=500). base accounting clean on fresh data. Per-chain blockers identified: arbitrum/zksync=economics, base=NO_DATA, linea=accounting anomaly, mantle=structural surface, scroll=quote-truth.
 
-**Rollout Queue (R28.14 — benchmark_chain formalized)**:
-1. **linea** — **ALIGNED / BENCHMARK** (merit-based). profitable_rt=14, real_quotes=14, quality_healthy=true, is_benchmark=true. Strongest chain.
-2. **base** — **ALIGNED** (intermittent). 4 DEXes, cross_dex=22, profitable_rt=1, real_quotes=3. Quality unstable across scans.
-3. **arbitrum_one** (primary contractual) — BLOCKED. gap=3.25 bps best-ever (approaching breakeven), real_quotes=28, profitable_rt=0.
-4. **zksync** — BLOCKED. cross_dex=1, real_quotes=14, profitable_rt=0.
-5. **mantle** — NOT_PROVEN. 5/7 FAIL, no real quotes.
-6. **scroll** — NOT_PROVEN. 7/7 FAIL (accepted-fail), no real quotes.
+**Rollout Queue (R28.19 — truth audit reset, no chain is positive control)**:
+1. **arbitrum_one** (primary contractual) — PRIMARY_BLOCKER. best_net=-42.85 bps, rq=28, prt=0. Economics blocker.
+2. **linea** — PRIMARY_BLOCKER. rq=14, prt=0. Was "benchmark" in R28.14 — R28.17 SANE_RT_PNL_MAX=500 guard exposed 204x accounting anomaly (best_net_pnl=4576 was unfiltered).
+3. **zksync** — PRIMARY_BLOCKER. rq=13, prt=0. best_net=-180.55 bps. Deeply negative.
+4. **base** — PRIMARY_BLOCKER. rq=1, 5/7 runs NO_DATA. Thin evidence.
+5. **mantle** — CANDIDATE. 0 signals, 0 rq. Structural cross-DEX deficit (4 pairs all drift-excluded). Needs 3rd DEX or drift fix.
+6. **scroll** — CANDIDATE. 0 signals, 0 rq. Quote-truth blocker (adequate surface 9/13 cross-dex, but all pools dead/broken). Structural.
 
 **Onboard Stage Configs (R27+R28.2)**:
 - `config/onboard_arbitrum_one_candidate.yaml` — 4-DEX additive (uni+sushi+camelot+pancakeswap)
@@ -121,7 +122,7 @@ scroll:         FAIL / CANDIDATE (accepted-fail, rqc=0, signals=0, PRICE_SCALE v
 - `tests/unit/test_suspect_provenance.py`: +7 tests (extract/purity validation)
 
 **Long scan (R28.6)**: REFRESHED — parallel (workers=2): 31 runs / 69 signals / $116.34 / 14 profitable roundtrips (wall_seconds=544). Serial (workers=1): 25 runs / 53 signals / $80.18 / 12 profitable RT (wall_seconds=543). Pass chains: arbitrum_one, zksync, base, linea. **0 runDir collisions** in parallel (was 6 in R28.5).
-**Profit truth**: LINEA: strongest non-arb evidence (12 profitable RT in long_scan, ROUNDTRIP_PROFITABLE=2). BASE: positive but thin. ARB PRIMARY: NOT YET (agg gap_median ~18 bps).
+**Profit truth (R28.19)**: All chains non-profitable under SANE_RT_PNL_MAX=500. executable_profitable=0 across all 6 chains. R28.18 truth audit reset all chains. Linea reclassified from CONFIRMED to PRIMARY_BLOCKER (204x accounting anomaly).
 
 ---
 
@@ -247,11 +248,12 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Current Blockers (R28.3)
+## Current Blockers (R28.19)
 
-- **Arb gap**: agg median_gap=17.99 bps, best-ever=3.55 bps. Primary blocker is market, not code.
-- **Base stage2**: ROUNDTRIP_PROFITABLE=2 but thin evidence (real_quote_count=1, measured_economics.available=false). Needs 2-3 more profitable roundtrips with real_quote_count>1.
-- **Mantle stage2**: cross_dex=5 PASS but NO_DATA (0 signals). Not yet signal-producing.
-- **zksync**: drift above threshold, needs pair tuning.
-- **Scroll**: accepted-fail, 0 signals in long_scan, THIN_LIQUIDITY.
-- **probe_slippage**: artifact integration still pending (Status_M4).
+- **All chains**: executable_profitable=0 across all 6 chains. No chain qualifies as positive control.
+- **Arb gap**: best_net=-42.85 bps (improved from -80.54). Primary blocker is market economics, not code.
+- **Linea**: 14 rq, 0 prt. Was "benchmark" in R28.14 — accounting anomaly (204x amplification) filtered by SANE_RT_PNL_MAX=500.
+- **zksync**: 13 rq, 0 prt, best_net=-180.55 bps. Deeply negative economics.
+- **Base**: 1 rq, 5/7 NO_DATA. RPC stability or pool coverage issue.
+- **Mantle**: 0 signals. Structural cross-DEX deficit — 4 pairs all drift-excluded. Needs 3rd DEX or drift fix.
+- **Scroll**: 0 signals. Quote-truth blocker — adequate surface but all pools dead/broken. Structural issue, not code bug.
