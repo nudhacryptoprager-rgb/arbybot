@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-19 (R28.23 — Lead config audit: 8 configs regenerated, +FusionX V3 mantle. 60.5-min bundle: 240 runs, 6 chains. 0 profitable RT. arb gap=10.62bps. mantle SIGNAL_PRODUCING.)  
+**Updated**: 2026-03-19 (R28.25 — Lead audit: filter-layer RCA corrected. Config aligned all chains 150 USD / 5 bps. Suppression reform. roundtrip_truth_status elevated to compute_status(). 0 profitable RT. Pending verification scan.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.23**: All chains are PRIMARY_BLOCKER or CANDIDATE. No chain is positive control — 0 profitable RT confirmed in 240-run bundle. Mantle promoted from CANDIDATE to PRIMARY_BLOCKER (FusionX V3 produces signals). Live execution infrastructure exists but is dormant.  
-**Primary blocker**: Market conditions + quote-path defects — all evaluated roundtrips are negative (best_net_pnl_bps=-21.19 on arb, gap=10.62bps). Base blocked by VE33_QUOTE_FAILED. No signer configured. No realized PnL produced.
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.25**: roundtrip_truth_status now separate field in compute_status() — "PROFITABLE"/"NOT_PROFITABLE"/"NO_DATA". profit_status (one-leg) preserved but no longer masks roundtrip truth. All chains PRIMARY_BLOCKER or CANDIDATE. 0 profitable RT. Filter funnel material blocker alongside market efficiency.  
+**Primary blocker**: Filter funnel (73% quote loss) + market efficiency (phantom spreads) — roundtrips evaluate negative even with reduced suppression. Anchor stale since 2026-02-17.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
@@ -28,7 +28,9 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-19 R28.23)**: run_summary_latest status=PASS, profit_status=PASS, quality_status=WARN. **M4.1 DoD MET** (simulate-only). **R28.23**: Lead config audit confirmed config debt real and partially fixed. FusionX V3 added to mantle → SIGNAL_PRODUCING. 0 profitable RT remains — dominant blockers are economics/quote-path, not YAML. arb gap=10.62bps (closest). base VE33=29 (ve33 adapter). scroll dead pools.
+> [!] **ROLLING STABILITY (2026-03-19 R28.25)**: R28.25 code changes: roundtrip_truth_status elevated to compute_status(), filter funnel propagated to start.py, suppression reformed (probation mode). Config aligned all chains. 1961 tests PASS. No fresh scan yet — pending verification.
+> R28.24: Deep pipeline analysis. Phantom spread root cause. Filter funnel artifact. 37-run scan, gap=15.38bps.
+> R28.23: Lead config audit. 8 configs regenerated. +FusionX V3 mantle. 240-run bundle. arb gap=10.62bps.
 > R28.22-cont-2: Per-chain NO_USD_PRICE fixes (+14 tokens), zombie quarantine fix, 97.7-min bundle (406 runs). base 0→54 signals.
 > R28.21: Cache freshness observability, all chains cache-backed (rpc=0), 0 profitable RT. Removed stale positive-control claims.
 > R28.20: Lead post-verification directive (10 issues, 10 fix steps). warm_pool_cache+start.py tooling fixes. reject_histogram+reject_samples in truth artifacts. actionable_signals_count. mantle/scroll configs. Fresh 54-run online verification: 0 profitable RT confirmed.
@@ -257,124 +259,38 @@ M4.2 requires `roundtrip.profitable_count > 0` AND `real_quote_count > 0` with r
 > `REGISTRY_REAL` is the canonical run_mode for online scanning.
 > Legacy docs may use `REAL` as shorthand but artifacts MUST use `REGISTRY_REAL`.
 
-**M4-profit DoD**: See `Roadmap.md` L52-62. Quick ref: N>=5 runs in `m4_stability_agg.json.runs[]` with `run_mode=REGISTRY_REAL`, `pinned_block!=429900000`, `block_is_synthetic=false`, `total_net_usdc>0`.
+**M4-profit DoD**: See `Roadmap.md` L52-62. Quick ref: N>=5 runs with `run_mode=REGISTRY_REAL`, `total_net_usdc>0`.
 
-**Evidence (rolling snapshot 2026-02-19)**: 80 runs in window, 79 data runs PASS, `total_net_usdc=$4359.51`, `data_run_rate=0.9875`, `agg_status=PASS`, `unique_pairs=8`, `unique_routes=2`. `profit_is_diagnostic=true` (paper, not on-chain).
+## Contracts & Reference (condensed)
 
-## Version Discipline
+**Version Discipline**: SHA-free provenance via `run_timestamp`. See `AGENTS.md §2`, `docs/DOCS_POLICY.md`.
 
-> Per docs policy, version tracking moved to `docs/DEV_REPORT_LATEST.md`. See `docs/DOCS_POLICY.md`.
+**Workflow**: DEV (fast iteration, run_timestamp only) | RELEASE (public proof + rolling artifacts).
 
-## Workflow (SHA-free)
+**Taxonomy**: `FAIL_*` → status=FAIL mandatory. `WARN_*` → status=PASS allowed. `NO_DATA` → signals_count==0 only.
 
-| Mode | Description | Provenance |
-|------|-------------|------------|
-| **DEV** | Fast iteration cycle | run_timestamp only |
-| **RELEASE** | Public proof | run_timestamp + rolling artifacts |
+**Status Contract**: NO_DATA = signals==0. signals>0,net>0 = PASS. signals>0,net≤0 = FAIL. signals<5 = quality_status=WARN.
 
-> Provenance: SHA tracking removed. `run_timestamp` is primary provenance. See AGENTS.md §2.
+**Run Kinds**: NORMAL (counted in KPIs) | COVERAGE (separate stats) | SMOKE/OFFLINE (excluded).
 
-## Docs Freeze Rules
+**Rolling KPIs**: data_run_rate≥0.50 (FAIL<0.30), fail_rate≤0.10 (FAIL>0.15), unique_pairs≥10 (FAIL<3), unique_routes≥4 (FAIL<2).
 
-**Зміни DoD/контрактів дозволені лише при:**
-1. Зміні коду/скриптів, що вимагає нового контракту
-2. Оновленні `docs/m4/ROLLING_CONTRACT.md` з новою схемою
-3. Прикладі у rolling/runDir artifacts, що демонструє нову структуру
+**Thresholds**: MIN_SIGNALS_FOR_PASS=3, MAE_WARN/FAIL=0.55/0.80, SIGN_RATE_MIN=0.60, AGG_FAIL_RATE=0.15, DIVERSITY_PAIRS_MIN/ROUTES_MIN=3/2.
 
-**Policy Version Discipline:**
-- `policy_version` у `m4/policy.py` MUST змінюватись при будь-якому зсуві порогів `MIN_*`
-- `policy_version` у rolling артефактах MUST дорівнювати `policy.py`
-- Розбіжність = FAIL для release gates  
-
-## Taxonomy Contract
-
-| Reason Prefix | Status Required | Semantic |
-|---------------|-----------------|----------|
-| `FAIL_*` | status=FAIL | Hard failure, blocks passage |
-| `WARN_*` | status=PASS allowed | Warning, quality concern |
-| `NO_DATA` | status=NO_DATA | signals_count == 0 only |
-
-**Invariant**: If `FAIL_*` appears in reasons, status MUST be FAIL. Enforced by `compute_status()`.
-
-## Status Contract
-
-| Condition | Status | Semantic |
-|-----------|--------|----------|
-| `signals_count == 0` | NO_DATA | True absence of data |
-| `signals > 0, net > 0` | PASS | Profitable (quality may warn) |
-| `signals > 0, net <= 0` | FAIL | Unprofitable |
-| `signals < 5` | quality_status=WARN | Low sample (not NO_DATA) |
-
-**Rule**: NO_DATA only when signals_count == 0. Low sample -> WARN, not NO_DATA.
-
-## Run Kinds
-
-| Kind | Description | Counted in KPIs |
-|------|-------------|-----------------|
-| NORMAL | Regular online scan | [YES] Main KPIs |
-| COVERAGE | Coverage batch run | [NO] Separate stats |
-| SMOKE | Smoke test | [NO] Excluded |
-| OFFLINE | Offline fixture | [NO] Excluded |
-
-## Rolling KPIs (Targets)
-
-| Metric | Target | FAIL | Description |
-|--------|--------|------|-------------|
-| `data_run_rate` | >= 0.50 | < 0.30 | % NORMAL runs with >=3 signals |
-| `fail_rate` | <= 0.10 | > 0.15 | % FAIL runs |
-| `fragile_rate_p90` | <= 0.30 | > 0.50 | p90 fragile rate |
-| `unique_pairs` | >= 10 | < 3 | Pair diversity |
-| `unique_routes` | >= 4* | < 2 | Route diversity (*M4 accepts 2 with 2 DEX) |
-
-## Thresholds
-
-| Threshold | Value |
-|-----------|-------|
-| `MIN_SIGNALS_FOR_PASS` | 3 |
-| `MIN_SIGNALS_WARN` | 2 |
-| `MAE_WARN` / `MAE_FAIL` | 0.55 / 0.80 |
-| `SIGN_RATE_MIN` | 0.60 |
-| `AGG_FAIL_RATE_FAIL` | 0.15 |
-| `DIVERSITY_PAIRS_MIN` / `ROUTES_MIN` | 3 / 2 |
-
-### Acceptable States (agg_status)
-
-| agg_status | DEV | RELEASE |
-|------------|-----|---------|
-| `PASS` | [OK] | [OK] |
-| `WARN_QUALITY` (DIVERSITY only) | [OK] | [WARN] TEMP OK |
-| `WARN_QUALITY` (DATA_RUN_RATE) | [WARN] | [FAIL] |
-| `FAIL` | [FAIL] | [FAIL] |
-| `PASS_WARMUP` | [OK] | [WAIT] |
+**Docs Freeze**: DoD/contract changes only when code changes require it + rolling artifacts demonstrate new structure.
 
 ## Canonical Commands
 
 ```bash
-# Coverage batch (COVERAGE kind)
-python scripts/run_coverage_batch.py --min-signals-target 30 --max-seconds 600 --profile profit
-
-# M4 gate (profit, require-clean by default)
+# M4 gate (profit)
 python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling
-
-# Allow dirty worktree (dev only)
-python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --allow-dirty
-
-# Check rolling KPIs
-Get-Content data/runs/_rolling/m4_stability_agg.json | Select-String "data_run_rate|no_data_rate|signals_per_run_p50"
-
-# Reset window
-python scripts/ci_m4_execution_gate.py --online --profile profit --artifact-mode rolling --reset-window
+# Check rolling
+Get-Content data/runs/_rolling/m4_stability_agg.json | Select-String "data_run_rate|no_data_rate"
 ```
 
 ## Rolling Artifacts
 
-| File | Purpose |
-|------|---------|
-| `_latest.json` | Latest run pointer |
-| `run_summary_latest.json` | Full run summary |
-| `m4_stability_agg.json` | Rolling aggregator (segmented by run_kind) |
-
-Location: `data/runs/_rolling/`
+`data/runs/_rolling/`: `_latest.json`, `run_summary_latest.json`, `m4_stability_agg.json`
 
 ## Definition of Done
 

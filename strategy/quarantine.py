@@ -43,6 +43,15 @@ QUARANTINE_CONFIG = {
         "SUSPECT_LIQUIDITY": 5,  # R28.24: Raised from 2 — was too aggressive, blocking viable pools
     },
     
+    # R28.25: Probation errors — use shorter quarantine + auto-retry instead of full quarantine.
+    # Pools with these errors get quarantine_duration_probation_seconds and are re-tried
+    # at the probation interval. This prevents premature kill of transiently-failing pools
+    # (mantle, scroll bring-up chains).
+    "probation_errors": [
+        "SUSPECT_LIQUIDITY",
+    ],
+    "quarantine_duration_probation_seconds": 60,  # 1 min probation (vs 5 min full)
+    
     # How long to quarantine (seconds)
     "quarantine_duration_seconds": 300,  # 5 minutes
     
@@ -199,14 +208,20 @@ class QuarantineManager:
         
         # Apply quarantine
         if should_quarantine:
-            duration = self.config.get("quarantine_duration_seconds", 300)
+            # R28.25: Probation mode — shorter quarantine for transient errors
+            probation_errors = self.config.get("probation_errors", [])
+            if error_code in probation_errors:
+                duration = self.config.get("quarantine_duration_probation_seconds", 60)
+            else:
+                duration = self.config.get("quarantine_duration_seconds", 300)
             record.quarantined_until = now + duration
             record.quarantine_count += 1
             self._stats["total_quarantines"] += 1
             self._stats["active_quarantines"] += 1
             
+            mode = "probation" if error_code in probation_errors else "full"
             logger.info(
-                f"Quarantined {key} for {duration}s (count: {record.quarantine_count})"
+                f"Quarantined {key} for {duration}s mode={mode} (count: {record.quarantine_count})"
             )
         
         return should_quarantine

@@ -1567,8 +1567,10 @@ def collect_quotes(
             
             # M4.2 FIX: Algebra DEXes require quoter - slot0() ABI is incompatible
             # v3.2.20: Quoter is now auto-enabled for Algebra, so this means quoter call failed
+            # R28.25: Track as ALGEBRA_QUOTER_FAILED (not NEEDS_QUOTER) for clarity.
+            # Algebra pools use globalState() not slot0(), so V3 slot0 fallback won't work.
+            # These are genuine filter losses — visible in filter_funnel artifact.
             if is_algebra and not quoter_success:
-                # Determine root cause: no quoter address or quoter call failed
                 quoter_addr = dex_cfg.get_quoter_address() if dex_cfg else None
                 reject_error = (
                     f"Algebra quoter call failed (quoter={quoter_addr[:16] + '...' if quoter_addr else 'NONE'})"
@@ -1584,11 +1586,11 @@ def collect_quotes(
                     "gate_passed": False,
                     "error": reject_error,
                     "quoter_configured": bool(quoter_addr),
-                    "quoter_result": quoter_result,  # Include result for debugging
+                    "quoter_result": quoter_result,
                 })
                 counts["algebra_needs_quoter"] = counts.get("algebra_needs_quoter", 0) + 1
-                logger.warning("ALGEBRA_NEEDS_QUOTER: %s %s/%s fee=%d: %s", 
-                              dex, token_in, token_out, fee_tier, reject_error)
+                logger.info("ALGEBRA_QUOTER_FAILED: %s %s/%s fee=%d: %s", 
+                           dex, token_in, token_out, fee_tier, reject_error)
                 continue
             
             # Path B: slot0 fallback — DIAGNOSTIC CHANNEL only (R28)
@@ -1597,9 +1599,6 @@ def collect_quotes(
             # when truth_mode_m42=true (see line ~1693).
             if is_v3_dex and not is_algebra:
                 # R28.18: Secondary liquidity check for slot0 path.
-                # The primary LIQUIDITY_ZERO gate (line ~1124) depends on multicall cache.
-                # If multicall didn't prefetch this pool, dead pools slip through.
-                # Check again here to prevent stale sqrtPrice from empty pools.
                 cached_liq_slot0 = get_cached_liquidity(pool_addr)
                 if cached_liq_slot0 is not None and cached_liq_slot0 == 0:
                     auto_disable_pool(pool_key, "LIQUIDITY_ZERO",

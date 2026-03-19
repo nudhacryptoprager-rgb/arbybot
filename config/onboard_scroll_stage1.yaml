@@ -42,14 +42,19 @@ dexes:
 discovery_runtime_max_pairs: 30
 require_cross_dex: true
 
+# R28.25: Roundtrip evaluation caps (aligned with primary)
+roundtrip_max_candidates: 50
+roundtrip_top_n: 15
+
 use_multicall: true
 use_quoter_v2: true
 
+# R28.25: Aligned with primary economics contract (was 100/3)
 use_usd_notional: true
-target_usd_notional: 100.0
+target_usd_notional: 150.0
 
-min_spread_bps: 3
-paper_size_usd: 100
+min_spread_bps: 5
+paper_size_usd: 150
 paper_slippage_bps: 5
 gas_usd_estimate: 0.05
 

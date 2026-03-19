@@ -729,6 +729,9 @@ def run_online_gate(
         upstream_quality_reasons = run_summary.get("quality_reasons", [])
         
         # v2.0: SHA-free compute_status (code_dirty always False)
+        # R28.25: Extract roundtrip profitable count for truth status
+        rt_summary = metrics.get("roundtrip", {}) or run_summary.get("roundtrip_summary", {})
+        rt_profitable_count = int(rt_summary.get("profitable_count", 0) or 0)
         status_result = compute_status(
             signals_count=signals_count,
             total_net_usdc=total_net,
@@ -737,6 +740,7 @@ def run_online_gate(
             fragile_rate=fragile_rate,
             code_dirty=False,  # v2.0: SHA tracking removed
             require_clean=False,  # v2.0: No clean worktree requirement
+            roundtrip_profitable_count=rt_profitable_count,
         )
         
         status = status_result["status"]
@@ -744,6 +748,7 @@ def run_online_gate(
         profit_status = status_result["profit_status"]
         drift_status = status_result["drift_status"]
         quality_status = status_result["quality_status"]
+        roundtrip_truth_status = status_result.get("roundtrip_truth_status", "NO_DATA")
         
         # v2.0.4: Merge upstream quality warnings with computed reasons
         # Upstream may have EXCLUDED_PRESENT, TOP_PAIR_DOMINANCE, CRITICAL_REJECT etc.
@@ -796,6 +801,7 @@ def run_online_gate(
         run_summary["profit_status"] = profit_status
         run_summary["drift_status"] = drift_status
         run_summary["quality_status"] = quality_status
+        run_summary["roundtrip_truth_status"] = roundtrip_truth_status  # R28.25
         run_summary["profit_reasons"] = [r for r in reasons if r in (FailReason.FAIL_NET, FailReason.FAIL_NO_PROFITABLE)]
         run_summary["drift_reasons"] = [r for r in reasons if "DRIFT" in r or "SIGN" in r]
         run_summary["quality_reasons"] = merged_quality_reasons

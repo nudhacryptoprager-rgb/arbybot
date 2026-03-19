@@ -45,6 +45,12 @@ RUNTIME_DISABLED_CONFIG = {
     # TTL for runtime-disabled pools (seconds)
     "ttl_seconds": 3600,  # 1 hour
     
+    # R28.25: Per-error TTL overrides — shorter TTL for transient errors
+    # Allows pools to re-try sooner for bring-up chains (mantle, scroll)
+    "ttl_overrides": {
+        "SUSPECT_LIQUIDITY": 300,  # 5 min instead of 1 hour
+    },
+    
     # Error codes that trigger auto-disable
     "auto_disable_errors": [
         "SUSPECT_LIQUIDITY",
@@ -199,8 +205,9 @@ class RuntimeDisabledManager:
         if entry is None:
             return None
         
-        # Check if expired (can attempt re-enable)
-        ttl = self.config.get("ttl_seconds", 3600)
+        # R28.25: Per-error TTL overrides
+        ttl_overrides = self.config.get("ttl_overrides", {})
+        ttl = ttl_overrides.get(entry.reason, self.config.get("ttl_seconds", 3600))
         if entry.is_expired(ttl):
             remaining_seconds = 0
         else:
@@ -294,7 +301,9 @@ class RuntimeDisabledManager:
         if entry is None:
             return False
         
-        ttl = self.config.get("ttl_seconds", 3600)
+        # R28.25: Per-error TTL overrides
+        ttl_overrides = self.config.get("ttl_overrides", {})
+        ttl = ttl_overrides.get(entry.reason, self.config.get("ttl_seconds", 3600))
         if entry.is_expired(ttl):
             # Re-enable
             del self._entries[pool_key]

@@ -214,6 +214,7 @@ def compute_status(
     fragile_rate: float = 0,
     code_dirty: bool = False,
     require_clean: bool = False,
+    roundtrip_profitable_count: int = 0,
 ) -> dict:
     """
     Single source of truth for status computation.
@@ -229,6 +230,7 @@ def compute_status(
         fragile_rate: Fraction of fragile simulations
         code_dirty: Whether code has uncommitted changes
         require_clean: Whether clean worktree is required
+        roundtrip_profitable_count: Number of profitable roundtrips (0 = no executable profit)
         
     Returns:
         dict with keys:
@@ -236,6 +238,7 @@ def compute_status(
         - profit_status: "NO_DATA" | "PASS" | "FAIL"
         - drift_status: "NO_DATA" | "PASS" | "WARN" | "FAIL"
         - quality_status: "NO_DATA" | "PASS" | "WARN" | "FAIL_QUALITY"
+        - roundtrip_truth_status: "NO_DATA" | "PROFITABLE" | "NOT_PROFITABLE"
         - reasons: list of reason codes (guaranteed FAIL_* only if status=FAIL)
     """
     reasons = []
@@ -247,8 +250,17 @@ def compute_status(
             "profit_status": "NO_DATA",
             "drift_status": "NO_DATA",
             "quality_status": "NO_DATA",
+            "roundtrip_truth_status": "NO_DATA",
             "reasons": ["NO_DATA"],
         }
+    
+    # === ROUNDTRIP TRUTH STATUS (R28.25) ===
+    # Separate from profit_status: shows whether any ROUNDTRIP is profitable.
+    # profit_status can be PASS with one-leg net>0 while roundtrips are all negative.
+    if roundtrip_profitable_count > 0:
+        roundtrip_truth = "PROFITABLE"
+    else:
+        roundtrip_truth = "NOT_PROFITABLE"
     
     # === PROFIT STATUS ===
     if total_net_usdc > 0:
@@ -313,6 +325,7 @@ def compute_status(
         "profit_status": profit_status,
         "drift_status": drift_status,
         "quality_status": quality_status,
+        "roundtrip_truth_status": roundtrip_truth,
         "reasons": reasons,
     }
 

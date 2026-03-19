@@ -517,7 +517,13 @@ discovery_dry_run: true
 # When true, emits stats["discovery_runtime"] with resolved pairs and resolver stats
 # NOTE: Observability only - does NOT change quote universe in this version
 discovery_runtime: false
-discovery_runtime_max_pairs: 20
+discovery_runtime_max_pairs: 30
+
+# R28.25: Roundtrip evaluation caps (was hardcoded 20/5, then config-driven 50/10)
+# These control how many candidates pass through to roundtrip truth evaluation.
+# Higher values = deeper executable frontier exploration at cost of more RPC calls.
+roundtrip_max_candidates: 50
+roundtrip_top_n: 15
 
 # v2.5.1: Cross-DEX preference - prefer cross-DEX spreads over same-DEX fee-tier arb
 # When true, same-DEX signals are EXCLUDED (reduces included_pairs)

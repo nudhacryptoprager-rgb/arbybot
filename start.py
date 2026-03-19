@@ -391,6 +391,10 @@ def new_chain_stats() -> dict[str, Any]:
         # R28.21: Cache freshness observability
         "last_full_refresh_utc": None,
         "last_hot_requote_utc": None,
+        # R28.25: Filter funnel per-chain (last-run snapshot)
+        "last_filter_funnel": None,
+        # R28.25: Roundtrip truth status (separate from diagnostic profit_status)
+        "last_roundtrip_truth_status": None,
     }
 
 
@@ -561,6 +565,15 @@ def update_chain_stats(
             # Keep only last 5 entries
             if len(history) > 5:
                 stats["_pair_history"] = history[-5:]
+
+    # R28.25: Propagate filter_funnel and roundtrip_truth_status from scan_stats
+    if scan_stats:
+        ff = scan_stats.get("filter_funnel")
+        if ff:
+            stats["last_filter_funnel"] = ff
+        rts = scan_stats.get("roundtrip_truth_status")
+        if rts:
+            stats["last_roundtrip_truth_status"] = rts
 
 
 # -- guardrails -----------------------------------------------------------
