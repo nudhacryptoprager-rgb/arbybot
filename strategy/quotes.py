@@ -384,6 +384,17 @@ DEFAULT_TOKEN_USD_PRICES = {
     "wstETH": 2300.0,
     "UNI": 6.0,
     "AAVE": 100.0,
+    "GNS": 1.50,
+    "PENDLE": 1.30,
+    "RETH": 2400.0,
+    "rETH": 2400.0,
+    "TBTC": 68000.0,
+    "tBTC": 68000.0,
+    "EZETH": 2050.0,
+    "ezETH": 2050.0,
+    "STONE": 2100.0,
+    "weETH": 2100.0,
+    "mETH": 2100.0,
 }
 
 
@@ -570,7 +581,7 @@ def read_algebra_quoter(
         logger.debug("Algebra quoter skipped: web3 not installed")
         return None
     
-    w3 = _get_shared_w3(rpc_url)
+    w3 = _get_shared_w3(rpc_url, timeout=5)  # 5s timeout matches QuoterV2
     if w3 is None:
         return None
     

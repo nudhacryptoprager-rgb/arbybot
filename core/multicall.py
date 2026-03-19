@@ -26,6 +26,9 @@ logger = logging.getLogger("core.multicall")
 # See: https://github.com/mds1/multicall
 MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"
 
+# Maximum calls per aggregate3 batch — RPCs reject oversized payloads
+MULTICALL_MAX_BATCH = int(os.environ.get("ARBY_MULTICALL_BATCH", "200"))
+
 # ABI for Multicall3 aggregate3 function
 MULTICALL3_ABI = [
     {
@@ -137,27 +140,35 @@ class MulticallBatcher:
         return calls
     
     def _execute_multicall(self, calls: List[Tuple[str, bool, bytes]]) -> Optional[List[Tuple[bool, bytes]]]:
-        """Execute multicall and return results."""
+        """Execute multicall, chunking large batches to avoid RPC rejection."""
         if not self._ensure_web3():
             return None
-        
+
         if not calls:
             return []
-        
-        try:
-            import time as _time
-            self.stats["rpc_calls"] += 1
-            _t0 = _time.monotonic()
-            results = self._multicall.functions.aggregate3(calls).call(
-                block_identifier=self.block_num
-            )
-            _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-            self.stats["latency_ms_total"] += _elapsed_ms
-            return results
-        except Exception as e:
-            logger.debug("Multicall failed: %s", e)
-            self.stats["calls_failed"] += len(calls)
-            return None
+
+        import time as _time
+
+        all_results: List[Tuple[bool, bytes]] = []
+        chunk_size = MULTICALL_MAX_BATCH
+
+        for start in range(0, len(calls), chunk_size):
+            chunk = calls[start : start + chunk_size]
+            try:
+                self.stats["rpc_calls"] += 1
+                _t0 = _time.monotonic()
+                results = self._multicall.functions.aggregate3(chunk).call(
+                    block_identifier=self.block_num
+                )
+                _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+                self.stats["latency_ms_total"] += _elapsed_ms
+                all_results.extend(results)
+            except Exception as e:
+                logger.debug("Multicall chunk failed (%d calls): %s", len(chunk), e)
+                self.stats["calls_failed"] += len(chunk)
+                all_results.extend([(False, b"")] * len(chunk))
+
+        return all_results
     
     def batch_slot0(self, pool_addresses: List[str]) -> Dict[str, Optional[Tuple[int, int, int]]]:
         """

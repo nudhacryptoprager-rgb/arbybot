@@ -785,7 +785,10 @@ def run_scan(
                 return opp.get("buy_dex") != opp.get("sell_dex")
             
             # v2.2.1: Combined filter: cross-DEX AND LP fee viable
+            # R28.21: Exclude diagnostic-only signals from roundtrip evaluation
             def roundtrip_eligible(opp: dict) -> bool:
+                if opp.get("is_diagnostic_only", False):
+                    return False
                 return is_cross_dex(opp) and lp_fee_viable(opp)
             
             # v3.2.4: Filter for minimum viability margin before roundtrip eval
@@ -906,12 +909,13 @@ def run_scan(
             "warnings": roundtrip_stats.warnings or [],
         }
         
-        # R28.18: best_net_pnl_bps must be from sane-filtered universe only.
-        # Previously used unfiltered roundtrip_results, leaking absurd values
-        # (e.g. 8e16 bps on base) even when profitable_count=0.
+        # R28.18→R28.21: best_net_pnl_bps must be from sane-filtered universe only.
+        # Both upper AND lower bound required: absurdly negative values (e.g. -10012 bps
+        # on base from diagnostic contamination) are equally invalid as absurd positives.
+        SANE_RT_PNL_MIN = -SANE_RT_PNL_MAX  # symmetric: ±500 bps
         sane_rts = [
             r for r in roundtrip_results
-            if r.net_pnl_bps <= SANE_RT_PNL_MAX
+            if SANE_RT_PNL_MIN <= r.net_pnl_bps <= SANE_RT_PNL_MAX
         ]
         if sane_rts:
             best_rt = max(sane_rts, key=lambda r: r.net_pnl_bps)
@@ -1071,10 +1075,10 @@ def run_scan(
             suspect_outlier_count = 0
             clean_results = []
             for sr in sweep_results:
-                if sr.best_net_pnl_bps is not None and sr.best_net_pnl_bps > SUSPECT_ROUNDTRIP_OUTLIER_BPS:
+                if sr.best_net_pnl_bps is not None and abs(sr.best_net_pnl_bps) > SUSPECT_ROUNDTRIP_OUTLIER_BPS:
                     suspect_outlier_count += 1
                     logger.warning(
-                        "SUSPECT_ROUNDTRIP_OUTLIER: %s pnl=%.1f bps > %d threshold",
+                        "SUSPECT_ROUNDTRIP_OUTLIER: %s pnl=%.1f bps outside ±%d threshold",
                         sr.pair, sr.best_net_pnl_bps, SUSPECT_ROUNDTRIP_OUTLIER_BPS,
                     )
                 else:

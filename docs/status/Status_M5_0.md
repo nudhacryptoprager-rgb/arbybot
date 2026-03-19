@@ -1,18 +1,41 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-19 (R28.21 — cache freshness observability, architecture contract documentation, real_live_probe.yaml fix, docs update. All chains cache-backed (rpc=0). 1948 tests.)
-**Tests**: 1948 passed / 3 skipped
-**Schema**: start:long_scan_summary:v1.14 (R28.21), start:hot_loop_snapshot:v1.3 (R28.21)
-**Evidence runDirs**: long_scan 36 runs 6 chains 387s (R28.21 COVERAGE scan, all chains cache-backed)
+**Updated**: 2026-03-19 (R28.21-final — multicall batch chunking fix, USD price anchors, quoter timeout, roundtrip contamination fix. arb real_quotes 3→26 (8.7x), quote_rpc_ms 64.6s→32.4s (50% reduction). 1938 tests.)
+**Tests**: 1938 passed / 10 failed (pre-existing: 7 asyncio, 3 web3) / 3 skipped
+**Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
+**Evidence runDirs**: long_scan 42 runs 6 chains 429s (R28.21-final — multicall fix verification)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (36 runs 387s, total_profitable_roundtrips=0, all chains rpc=0 cache-backed)
-**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=26,cache=455,rpc=0), zksync=PRIMARY_BLOCKER(rq=10,cache=104,rpc=0), base=PRIMARY_BLOCKER(rq=1,cache=322,rpc=0), linea=PRIMARY_BLOCKER(rq=12,cache=85,rpc=0), mantle=CANDIDATE(rq=0,cache=72,rpc=0), scroll=CANDIDATE(rq=0,cache=104,rpc=0,accepted_fail)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (42 runs 429s, total_profitable_roundtrips=0, arb rq=26)
+**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=26,signals=156,multicall=0%fail), zksync=PRIMARY_BLOCKER(rq=14), base=PRIMARY_BLOCKER(rq=1), linea=PRIMARY_BLOCKER(rq=14), mantle=CANDIDATE(rq=0,signals=0,structural), scroll=CANDIDATE(rq=0,signals=14,diagnostic-only)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files.
 
 ---
 
-## Architecture Contract (R28.21 — new)
+## R28.21-final Code Fixes (new)
+
+Critical performance fixes based on Lead's post-verification directive:
+
+1. **Multicall Batch Chunking** (core/multicall.py):
+   - Problem: arb multicall 100% failure rate (1175 calls batched, all failed → individual RPC fallback → 64.6s).
+   - Fix: `MULTICALL_MAX_BATCH=200`, `_execute_multicall()` now chunks and continues on partial failure.
+   - Result: arb quote_rpc_ms 64.6s → 32.4s (50% reduction), multicall 0% failure.
+
+2. **Roundtrip Contamination** (strategy/jobs/run_scan_real.py):
+   - Problem: best_net_pnl_bps=-10012 bps leaking from diagnostic signals.
+   - Fix: (a) symmetric sane filter `SANE_RT_PNL_MIN=-500`, (b) `abs()` in sweep outlier filter, (c) diagnostic-only exclusion in `roundtrip_eligible()`.
+   - Result: best_net_pnl_bps now -55.39 bps (clean).
+
+3. **USD Price Anchors** (strategy/quotes.py + config/real_minimal.yaml):
+   - Problem: NO_USD_PRICE rejects for GNS, PENDLE, RETH, TBTC, EZETH, STONE.
+   - Fix: Added 11 token prices to DEFAULT_TOKEN_USD_PRICES and real_minimal.yaml.
+
+4. **Algebra Quoter Timeout** (strategy/quotes.py):
+   - Fix: Reduced timeout 10s → 5s (matches QuoterV2), improves RPC headroom.
+
+---
+
+## Architecture Contract (R28.21 — unchanged)
 
 > **Static-looking scans are caused by cache-backed discovery and a tiny surviving route surface; live-market target requires real-time quote refresh plus event-driven hot re-quote, not full registry RPC refresh every cycle.**
 

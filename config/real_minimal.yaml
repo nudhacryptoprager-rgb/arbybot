@@ -445,6 +445,17 @@ tokens_usd_price:
   LINK: 16.0     # on-chain ~16 (2026-02-26), was 11.0 default
   GMX: 17.0      # on-chain ~17 (2026-02-26), was 24.0 default
   wstETH: 2500   # on-chain ~2500 (2026-02-26)
+  GNS: 1.50      # Gains Network
+  PENDLE: 1.30   # Pendle
+  RETH: 2400     # Rocket Pool ETH
+  rETH: 2400     # alias
+  TBTC: 68000    # tBTC (threshold BTC)
+  tBTC: 68000    # alias
+  EZETH: 2050    # Renzo restaked ETH
+  ezETH: 2050    # alias
+  STONE: 2100    # StakeStone ETH
+  weETH: 2100    # EtherFi wrapped eETH
+  mETH: 2100     # Mantle staked ETH
 
 # Autosize configuration (M5)
 # Auto-reduces position size when impact/ticksCrossed grows
