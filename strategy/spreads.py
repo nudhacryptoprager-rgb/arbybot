@@ -9,6 +9,7 @@ Contains functions for computing spread signals from quotes.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -243,11 +244,19 @@ def _compute_pair_spread(
     
     # v2.9.6: When require_cross_dex=true, do NOT generate same-DEX signals at all
     # They would just be excluded anyway, creating noise in excluded_signals_count
+    # R28.27: ARBY_ALLOW_SAME_DEX env var or config key overrides require_cross_dex
+    # for A/B testing whether same-DEX fee-tier arb produces executable frontier
     require_cross_dex = config.get("require_cross_dex", False)
-    if require_cross_dex:
+    allow_same_dex_override = (
+        os.environ.get("ARBY_ALLOW_SAME_DEX", "").strip().lower() in {"1", "true", "yes", "on"}
+        or bool(config.get("allow_same_dex", False))
+    )
+    if require_cross_dex and not allow_same_dex_override:
         # No cross-DEX found and cross-DEX is required - return empty (no same-DEX fallback)
         logger.debug("SKIP_SAME_DEX: %s - require_cross_dex=true, no cross-DEX signal found", pair)
         return []
+    if require_cross_dex and allow_same_dex_override:
+        logger.debug("SAME_DEX_OVERRIDE: %s - require_cross_dex=true but allow_same_dex=true, allowing same-DEX fallback", pair)
     
     # Fallback: standard logic (min/max regardless of DEX) - only if no cross-DEX found
     sorted_by_price = sorted(quotes_for_pair, key=_get_price)
@@ -540,7 +549,12 @@ def _build_spread_signal(
     
     # v2.5.0: Same-dex detection (fee-tier arb within same DEX)
     is_same_dex = buy_dex == sell_dex
-    is_same_dex_excluded = is_same_dex and config.get("require_cross_dex", False)
+    # R28.27: allow_same_dex override neutralizes the exclusion flag
+    _allow_sd = (
+        os.environ.get("ARBY_ALLOW_SAME_DEX", "").strip().lower() in {"1", "true", "yes", "on"}
+        or bool(config.get("allow_same_dex", False))
+    )
+    is_same_dex_excluded = is_same_dex and config.get("require_cross_dex", False) and not _allow_sd
     if is_same_dex:
         confidence_reasons.append("SAME_DEX_FEE_TIER")
     if is_same_dex_excluded:

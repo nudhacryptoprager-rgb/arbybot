@@ -46,6 +46,54 @@ from strategy.infra import (
 
 logger = logging.getLogger("run_scan_real")
 
+
+# ---------------------------------------------------------------------------
+# R28.27: Cap-isolation toggles — modeled after quotes._get_runtime_filter_switches
+# When active, hard caps are raised to very high values so their effect on the
+# funnel can be measured independently (A/B style).
+# Priority: ENV VAR → CONFIG KEY → DEFAULT (caps active).
+# ---------------------------------------------------------------------------
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an env var is set to a truthy flag value."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Sentinel value: effectively uncapped while remaining an int
+_UNCAPPED = 999_999
+
+
+def _get_cap_isolation_switches(config: Dict[str, Any]) -> Dict[str, bool]:
+    """Resolve which hard caps are in isolation (uncapped) mode.
+
+    Contract:
+    - When a cap is "isolated", its value is replaced with _UNCAPPED so
+      the pipeline runs as if that cap didn't exist.
+    - Default is all caps ACTIVE (normal production behavior).
+    - Granular env vars allow isolating one cap at a time for A/B.
+
+    Returns dict with keys: uncap_discovery_max_pairs, uncap_rt_max_candidates,
+    uncap_rt_top_n.  True means the cap is REMOVED for this run.
+    """
+    uncap_all = _env_flag_enabled("ARBY_UNCAP_ALL") or bool(
+        config.get("uncap_all", False)
+    )
+    uncap_discovery = uncap_all or _env_flag_enabled(
+        "ARBY_UNCAP_DISCOVERY_MAX_PAIRS"
+    ) or bool(config.get("uncap_discovery_max_pairs", False))
+    uncap_rt_max = uncap_all or _env_flag_enabled(
+        "ARBY_UNCAP_RT_MAX_CANDIDATES"
+    ) or bool(config.get("uncap_rt_max_candidates", False))
+    uncap_rt_top = uncap_all or _env_flag_enabled(
+        "ARBY_UNCAP_RT_TOP_N"
+    ) or bool(config.get("uncap_rt_top_n", False))
+    return {
+        "uncap_discovery_max_pairs": uncap_discovery,
+        "uncap_rt_max_candidates": uncap_rt_max,
+        "uncap_rt_top_n": uncap_rt_top,
+    }
+
+
 # R28.16: Phase event protocol — structured JSON lines for parent process consumption
 # Parent (start.py) reads stdout and parses lines prefixed with ARBY_PHASE: to
 # surface phase transitions in the live stream without needing IPC or shared files.
@@ -255,6 +303,12 @@ def run_scan(
         "scan_mode": "full",  # R28.11: overridden to "hot" if hot_pairs loaded
     }
     
+    # R28.27: Resolve cap-isolation switches early for consistent application
+    _cap_switches = _get_cap_isolation_switches(config)
+    if any(_cap_switches.values()):
+        logger.info("CAP_ISOLATION active: %s", {k: v for k, v in _cap_switches.items() if v})
+    stats["cap_isolation"] = _cap_switches
+
     # v2.6.0: Resolve universe BEFORE collect_quotes() so resolved pairs are used
     dexes_list = config.get("dexes") or []
     
@@ -323,6 +377,10 @@ def run_scan(
             from discovery.runtime import resolve_runtime_pairs, runtime_pairs_to_pair_configs
             
             max_pairs = config.get("discovery_runtime_max_pairs", 20)
+            # R28.27: When uncapped, remove discovery cap to measure its funnel effect
+            if _cap_switches["uncap_discovery_max_pairs"]:
+                logger.info("CAP_ISOLATION: discovery_runtime_max_pairs uncapped (was %d)", max_pairs)
+                max_pairs = _UNCAPPED
             require_cross_dex = config.get("require_cross_dex", False)
             excluded_hints = config.get("excluded_pair_hints") or []
             _discovery_runtime_resolved, _discovery_runtime_stats = resolve_runtime_pairs(
@@ -895,6 +953,13 @@ def run_scan(
             # R28.24: Config-driven caps (was hard-coded 20/5, too restrictive)
             _rt_max_candidates = config.get("roundtrip_max_candidates", 50)
             _rt_top_n = config.get("roundtrip_top_n", 10)
+            # R28.27: Cap isolation — lift caps when investigating funnel bottlenecks
+            if _cap_switches["uncap_rt_max_candidates"]:
+                logger.info("CAP_ISOLATION: roundtrip_max_candidates uncapped (was %d)", _rt_max_candidates)
+                _rt_max_candidates = _UNCAPPED
+            if _cap_switches["uncap_rt_top_n"]:
+                logger.info("CAP_ISOLATION: roundtrip_top_n uncapped (was %d)", _rt_top_n)
+                _rt_top_n = _UNCAPPED
             
             # Apply best-per-pair, filter by eligibility AND margin viability
             per_pair_best = best_per_pair(opps_list, max_candidates=_rt_max_candidates)
@@ -1510,6 +1575,9 @@ def run_scan(
             
             dexes_list_rt = config.get("dexes") or None
             max_pairs = config.get("discovery_runtime_max_pairs", 20)
+            # R28.27: Cap isolation consistency with primary discovery path
+            if _cap_switches["uncap_discovery_max_pairs"]:
+                max_pairs = _UNCAPPED
             
             resolved_pairs, runtime_stats = resolve_runtime_pairs(
                 chain=chain_key,

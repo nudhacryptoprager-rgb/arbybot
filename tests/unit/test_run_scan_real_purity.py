@@ -89,8 +89,9 @@ def test_run_scan_real_line_count():
     # R28.22: +77 for compact live candidate stream builder + candidate_snapshot emission
     # R28.22b: +6 for is_actionable, spread_bps fallback, final_net_pnl_usd
     # R28.24: +48 for filter_funnel artifact + roundtrip_truth_status + config-driven caps
+    # R28.27: +62 for cap-isolation toggles (_get_cap_isolation_switches + 3 application sites)
     # For now, just warn if it grows significantly
-    max_lines = 1825  # Alert if it grows past this
+    max_lines = 1900  # Alert if it grows past this
     
     assert line_count <= max_lines, \
         f"run_scan_real.py has {line_count} lines (max: {max_lines}). Consider refactoring."

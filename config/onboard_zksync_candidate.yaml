@@ -4,6 +4,9 @@
 #
 # STATUS: Frontier #1 (gap_to_zero=0.0 bps), but drift_rejection_rate_median=0.3077.
 # Must reduce drift below 0.25 before promotion.
+# R28.27: Added excluded_pair_hints for ZK/HOLD pairs (always PRICE_SANITY_FAILED).
+# Surface expansion: SyncSwap (non-V3 adapter) and SpaceFi are candidates but
+# require new adapter work. Current 2-DEX (uni+pcswap) is the V3-compatible ceiling.
 #
 # ADAPTER READINESS:
 #   uniswap_v3 → UniswapV3Adapter: PRODUCTION
@@ -37,6 +40,14 @@ dexes:
 
 discovery_runtime_max_pairs: 30
 require_cross_dex: true
+
+# R28.27: Exclude consistently-failing ZK pairs (PRICE_SANITY_FAILED + LIQUIDITY_ZERO)
+# ZK/* pairs always fail sanity — no reliable anchor, thin liquidity
+excluded_pair_hints:
+  - "ZK/*"
+  - "*/ZK"
+  - "HOLD/*"
+  - "*/HOLD"
 
 # R28.25: Roundtrip evaluation caps (aligned with primary)
 roundtrip_max_candidates: 50

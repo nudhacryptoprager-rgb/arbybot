@@ -635,6 +635,7 @@ def read_algebra_quoter(
         return None
     
     # Try Style 1: quoteExactInputSingle(address,address,uint256,uint160) - Camelot
+    style1_error = None
     try:
         SELECTOR_SINGLE = "0x2d58eb1d"
         
@@ -664,10 +665,16 @@ def read_algebra_quoter(
                     "ticks_crossed": None,
                     "gas_estimate": 200_000,
                 }
+            else:
+                style1_error = "amountOut=0 (zero liquidity)"
+        else:
+            style1_error = f"empty_response (len={len(result_hex) if result_hex else 0})"
     except Exception as e:
+        style1_error = str(e)[:120]
         logger.debug("Algebra quoter (single) failed: %s", e)
     
     # Try Style 2: quoteExactInput(bytes path, uint256 amountIn) - Lynex
+    style2_error = None
     try:
         from eth_abi import encode
         
@@ -695,10 +702,20 @@ def read_algebra_quoter(
                     "ticks_crossed": None,
                     "gas_estimate": 200_000,
                 }
+            else:
+                style2_error = "amountOut=0 (zero liquidity)"
+        else:
+            style2_error = f"empty_response (len={len(result_hex) if result_hex else 0})"
     except Exception as e:
+        style2_error = str(e)[:120]
         logger.debug("Algebra quoter (path) failed: %s", e)
     
-    logger.debug("Algebra quoter: both styles failed for %s/%s", token_in[:10], token_out[:10])
+    # R28.27: Enhanced diagnostic — capture WHY both styles failed
+    logger.info(
+        "ALGEBRA_QUOTER_DIAG: %s/%s quoter=%s style1=%s style2=%s",
+        token_in[:10], token_out[:10], quoter_address[:16],
+        style1_error or "not_attempted", style2_error or "not_attempted",
+    )
     return None
 
 
@@ -757,7 +774,11 @@ def read_ve33_amount_out(
         return amount_out_int if amount_out_int > 0 else None
         
     except Exception as e:
-        logger.debug("ve33 getAmountOut failed: %s", e)
+        # R28.27: Enhanced diagnostic for ve33 failures (same pattern as ALGEBRA_QUOTER_DIAG)
+        logger.info(
+            "VE33_QUOTE_DIAG: pool=%s token_in=%s amount_in=%d error=%s",
+            pool_address[:16], token_in[:10], amount_in, str(e)[:120],
+        )
         return None
 
 

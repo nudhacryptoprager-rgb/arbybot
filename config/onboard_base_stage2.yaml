@@ -4,6 +4,9 @@
 #
 # STATUS: 4 executable DEXes (uniswap_v3, sushiswap_v3, pancakeswap_v3, aerodrome).
 # aerodrome (ve33) adapter IMPLEMENTED (R27.4). This config adds it to the scan surface.
+# R28.27: aerodrome still excluded (VE33_QUOTE_FAILED). Added excluded_pair_hints for
+# LIQUIDITY_ZERO meme pairs (BRETT, DEGEN, TOSHI) that waste quote budget.
+# Ve33 diagnostic logging improved (VE33_QUOTE_DIAG at INFO level).
 #
 # ADAPTER READINESS:
 #   uniswap_v3 → UniswapV3Adapter: PRODUCTION
@@ -43,6 +46,16 @@ dexes:
 
 discovery_runtime_max_pairs: 30
 require_cross_dex: true
+
+# R28.27: Exclude known-dead/stale pairs on base
+# LIQUIDITY_ZERO dominant: 41 pools persistently zero → waste quote budget
+excluded_pair_hints:
+  - "BRETT/*"
+  - "DEGEN/*"
+  - "TOSHI/*"
+  - "*/BRETT"
+  - "*/DEGEN"
+  - "*/TOSHI"
 
 # R28.25: Roundtrip evaluation caps (aligned with primary)
 roundtrip_max_candidates: 50

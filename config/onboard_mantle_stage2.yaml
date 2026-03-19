@@ -5,6 +5,7 @@
 # STATUS: 3 executable DEXes (agni_v3, fusionx_v3, stratum).
 # FusionX is an official Mantle V3 deployment and maps to the UniV3 adapter family.
 # stratum (ve33) remains enabled to preserve the ve33 surface.
+# R28.27: Added excluded_pair_hints for USDC/USDT (stale 2884bps) and mUSD (no liquidity).
 #
 # OBJECTIVE: restore signal flow first.
 #   Target: signals_count > 0 AND real_quote_count > 0 on consecutive runs.
@@ -48,6 +49,13 @@ dexes:
 
 discovery_runtime_max_pairs: 30
 require_cross_dex: true
+
+# R28.27: Exclude known-stale pairs (USDC/USDT consistently 2884bps → SUSPECT_SPREAD)
+excluded_pair_hints:
+  - "USDC/USDT"
+  - "USDT/USDC"
+  - "mUSD/*"
+  - "*/mUSD"
 
 # R28.25: Roundtrip evaluation caps (aligned with primary)
 roundtrip_max_candidates: 50

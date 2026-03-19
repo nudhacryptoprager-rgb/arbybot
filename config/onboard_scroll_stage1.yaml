@@ -3,6 +3,7 @@
 # ONBOARDING: scroll -> STAGE 1 (Sushi + Nuri + official Uniswap V3)
 #
 # STATUS: structural-debug / bring-up config. Do not treat this as production truth.
+# R28.27: Added excluded_pair_hints for SCR/STONE (persistent LIQUIDITY_ZERO, dead pools).
 #
 # STRUCTURAL REALITY:
 #   - Scroll has surface, but dead or mispriced pools still dominate truthful gating
@@ -41,6 +42,14 @@ dexes:
 
 discovery_runtime_max_pairs: 30
 require_cross_dex: true
+
+# R28.27: Exclude known-dead/zero-liquidity pairs on scroll
+# SCR/* and STONE/* have persistent LIQUIDITY_ZERO, waste quote budget
+excluded_pair_hints:
+  - "SCR/*"
+  - "*/SCR"
+  - "STONE/*"
+  - "*/STONE"
 
 # R28.25: Roundtrip evaluation caps (aligned with primary)
 roundtrip_max_candidates: 50
