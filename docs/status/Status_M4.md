@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-19 (R28.28 — God-file extraction complete. run_scan_real.py 1724→1371 lines, 5 new modules, 38 new tests. 2017 PASS. 10-min scan: 60 runs, 0 infra_fail, 0 profitable RT. sweep_gap=16.33 bps.)  
+**Updated**: 2026-03-19 (R28.29 — Lead audit: dedup fixes, discovery productivity contract. 2056 tests PASS. God-file risk migrated to quotes.py (1882 lines). Onboarding configs: validator-clean but TOKENS=0/PAIRS=0 (runtime-dependent). Signal loss suspicion → scan_universe + quotes layers.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.28**: Extraction validated — all modules produce consistent artifacts. sweep_gap stable at 16.33 bps (arb). 0 profitable RT.  
-**Primary blocker**: Market efficiency (0 profitable RT) + LIQUIDITY_ZERO dominance + quote-path defects. Sweep gap 10.62-16.33 bps across 200-run rolling window.
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.29**: Onboarding configs validator-clean but runtime-empty; signal-loss risk in scan_universe + quotes, not YAML. sweep_gap stable 10.62-16.33 bps.  
+**Primary blocker**: Market efficiency (0 profitable RT) + discovery-runtime dependency (5 configs TOKENS=0/PAIRS=0) + quote-path defects. quotes.py 1882 lines = next extraction target.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
@@ -28,9 +28,9 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-19 R28.28)**: God-file extraction complete. run_scan_real.py 1724→1371 lines, 5 modules extracted, 38 new tests. 2017 PASS. 10-min scan: 60 runs, 0 infra_fail, 0 profitable RT. sweep_gap=16.33 bps. Rolling: 200 runs, 93.5% pass, $7683 net USDC.
+> [!] **ROLLING STABILITY (2026-03-19 R28.29)**: Lead audit — dedup fixes, discovery productivity contract (39 new tests). Onboarding configs: TOKENS=0/PAIRS=0 → runtime-dependent. quotes.py 1882 lines = next god-file. 2056 tests PASS.
+> R28.28: God-file extraction: run_scan_real.py 1724→1371 lines, 5 modules, 38 tests. 2017 PASS.
 > R28.27: Cap isolation toggles + same-DEX override + diagnostics + 4 chain fixes. 1979 tests.
-> R28.26: 4-layer ladder experiment. Suppression NOT the surface killer. 1966 tests.
 > R28.22-cont-2: Per-chain NO_USD_PRICE fixes (+14 tokens), zombie quarantine fix, 97.7-min bundle (406 runs). base 0→54 signals.
 > R28.21: Cache freshness observability, all chains cache-backed (rpc=0), 0 profitable RT. Removed stale positive-control claims.
 > R28.20: Lead post-verification directive (10 issues, 10 fix steps). warm_pool_cache+start.py tooling fixes. reject_histogram+reject_samples in truth artifacts. actionable_signals_count. mantle/scroll configs. Fresh 54-run online verification: 0 profitable RT confirmed.

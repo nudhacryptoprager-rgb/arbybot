@@ -1,12 +1,37 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-19 (R28.28 — God-file extraction: run_scan_real.py 1724→1371 lines (-20.5%). 5 new strategy modules, 38 new tests. 2017 tests PASS. 10-min verification scan: 60 runs, 0 infra_fail, extraction validated.)
-**Tests**: 2017 passed / 3 skipped
+**Updated**: 2026-03-19 (R28.29 — Lead audit dedup + discovery contract. _env_flag_enabled → core.env (canonical). read_slot0_v3 dead code removed from infra.py. 39 new contract tests. validate_universe RUNTIME_DEPENDENT warning. 2056 tests PASS.)
+**Tests**: 2056 passed / 3 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: R28.28: 10-min scan (60 runs, 6 chains, 625s wall). R28.27: cap isolation + diagnostics. R28.26: 4 ladder runs.
+**Evidence runDirs**: R28.29: verification scan pending. R28.28: 10-min scan (60 runs, 6 chains). R28.27: cap isolation.
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Strategy**: God-file extraction complete. 5 modules with contract tests. Next: adapter expansion or architectural improvements.
+**Strategy**: R28.28 extraction reduced run_scan_real.py, but the strategy god-file risk migrated into strategy/quotes.py (1882 lines). All five onboarding configs are validator-clean yet runtime-empty (TOKENS=0 / PAIRS=0), so current signal-loss suspicion points first to discovery/quote layers, not to YAML syntax. Next extraction target: strategy/quotes.py.
+
+---
+
+## R28.29 Lead Audit: Dedup + Discovery Productivity Contract
+
+### Code Fixes
+1. **_env_flag_enabled dedup**: Moved canonical implementation to `core/env.py:env_flag_enabled()`. Both `strategy/quotes.py` and `strategy/jobs/run_scan_real.py` now import from core.env — eliminates drift risk for feature toggles.
+2. **read_slot0_v3 dead code removed**: `strategy/infra.py` had a duplicate (no callers, no multicall cache). Canonical version remains in `strategy/quotes.py` (with multicall cache support). infra.py: 824→784 lines (-40).
+3. **validate_universe RUNTIME_DEPENDENT warning**: Discovery-runtime configs now get explicit warning that TOKENS=0/PAIRS=0 means signal surface is entirely runtime-dependent. PASS still means schema-correct, but does NOT prove operational productivity.
+
+### Discovery Productivity Contract
+- 39 new tests in `tests/unit/test_discovery_productivity_contract.py`
+- All 5 onboarding configs: validator-clean (PASS) + zero static pairs (TOKENS=0/PAIRS=0)
+- RUNTIME_DEPENDENT warning present for all discovery-runtime configs
+- `resolve_universe` stats tracking verified: `universe_source`, `discovery_runtime_pairs_count`, `strategy_mode`
+- `env_flag_enabled` canonical identity test: both quotes.py and run_scan_real.py import the same function
+- `read_slot0_v3` no-duplicate test: infra.py must NOT export it
+
+### Key Insight (from Lead)
+> onboarding configs are validator-clean but discovery-runtime-dependent; signal loss risk now sits primarily in scan_universe + quotes, not in YAML syntax.
+
+### Pending
+- **quotes.py extraction**: 1882 lines — next god-file target (issue #1)
+- **Discovery A/B audit**: Compare resolved_pairs/cross_dex_pairs_count across onboarding configs (step 7)
+- **10-min verification scan**: Pending for this session
 
 ---
 

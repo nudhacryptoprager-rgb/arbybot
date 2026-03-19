@@ -72,48 +72,8 @@ def get_current_block_via_rpc(config: Dict[str, Any]) -> Tuple[int, int]:
         raise BlockPinError(f"Failed to pin current block via RPC: {e}")
 
 
-def read_slot0_v3(pool_address: str, rpc_url: Optional[str], block_num: int) -> Tuple[Optional[int], Optional[int]]:
-    """
-    Read slot0() from a Uniswap V3 pool contract.
-    
-    Args:
-        pool_address: Pool contract address
-        rpc_url: RPC URL to use
-        block_num: Block number to query at
-        
-    Returns:
-        (tick, sqrtPriceX96) or (None, None) on failure
-    """
-    if not pool_address or not rpc_url:
-        return None, None
-    if os.environ.get("ARBY_SKIP_RPC") == "1":
-        return None, None
-    
-    try:
-        from web3 import Web3
-    except ImportError:
-        logger.debug("slot0() skipped: web3 not installed")
-        return None, None
-    
-    try:
-        abi_path = Path(__file__).parent.parent / "dex" / "abi" / "uniswap_v3_pool.json"
-        if not abi_path.exists():
-            logger.debug("slot0() skipped: ABI not found at %s", abi_path)
-            return None, None
-        
-        abi = json.loads(abi_path.read_text(encoding="utf8"))
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 5}))
-        pool = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=abi)
-        slot0 = pool.functions.slot0().call(block_identifier=block_num)
-        
-        # slot0 returns: (sqrtPriceX96, tick, ...)
-        sqrt_price_x96 = int(slot0[0])
-        tick = int(slot0[1])
-        logger.debug("slot0() success for %s: tick=%s, sqrtPriceX96=%s", pool_address, tick, sqrt_price_x96)
-        return tick, sqrt_price_x96
-    except Exception as e:
-        logger.debug("slot0() read failed for %s: %s", pool_address, e)
-        return None, None
+# read_slot0_v3 removed in R28.29 (dead code). Canonical version lives in
+# strategy.quotes.read_slot0_v3 (with multicall cache support).
 
 
 def resolve_rpc_endpoints(config: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], str, str]:

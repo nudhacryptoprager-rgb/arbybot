@@ -59,9 +59,8 @@ logger = logging.getLogger("run_scan_real")
 # Priority: ENV VAR → CONFIG KEY → DEFAULT (caps active).
 # ---------------------------------------------------------------------------
 
-def _env_flag_enabled(name: str) -> bool:
-    """Return True when an env var is set to a truthy flag value."""
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+# Canonical _env_flag_enabled lives in core.env; local alias for brevity
+from core.env import env_flag_enabled as _env_flag_enabled
 
 
 # Sentinel value: effectively uncapped while remaining an int

@@ -3,6 +3,15 @@ import os
 from dotenv import load_dotenv
 
 
+def env_flag_enabled(name: str) -> bool:
+    """Return True when an env var is set to a truthy flag value.
+
+    Canonical implementation — used by quotes.py and run_scan_real.py.
+    Recognized truthy values: '1', 'true', 'yes', 'on' (case-insensitive).
+    """
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def load_root_dotenv() -> bool:
     """Load .env from repository root (core/ is two levels deep).
 

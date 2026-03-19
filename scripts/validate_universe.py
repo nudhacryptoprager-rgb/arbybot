@@ -251,6 +251,17 @@ def validate_universe(config_path: Path) -> dict:
                 "VIABILITY_FAIL: discovery_runtime config missing explicit 'run_kind' - "
                 "required for rolling policy enforcement"
             )
+
+        # R28.29: Warn that TOKENS=0/PAIRS=0 means signal surface is entirely
+        # runtime-dependent — validate_universe PASS proves schema correctness only,
+        # NOT that the chain has a productive signal surface.
+        if not pairs and not unique_tokens:
+            result["warnings"].append(
+                "RUNTIME_DEPENDENT: discovery_runtime config has TOKENS=0 / PAIRS=0. "
+                "Signal surface depends entirely on runtime discovery "
+                "(scan_universe + discovery.runtime). validate_universe PASS proves "
+                "schema correctness only, not operational productivity."
+            )
     else:
         # v3.2.11: pairs_count==0 is a FAIL for strict runs (misconfig)
         if not pairs:

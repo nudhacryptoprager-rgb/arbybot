@@ -143,10 +143,8 @@ def resolve_token_address(
 
 logger = logging.getLogger("strategy.quotes")
 
-
-def _env_flag_enabled(name: str) -> bool:
-    """Return True when an env var is set to a truthy disable flag."""
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+# Canonical _env_flag_enabled lives in core.env; local alias for brevity
+from core.env import env_flag_enabled as _env_flag_enabled
 
 
 def _get_runtime_filter_switches(config: Dict[str, Any]) -> Dict[str, bool]:
