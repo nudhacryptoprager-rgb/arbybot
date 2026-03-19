@@ -1,19 +1,53 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-19 (R28.22-cont-2 — per-chain NO_USD_PRICE fixes (+14 tokens), zombie quarantine fix, cache cleared. 97.7-min bundle: 406 runs, 6 chains. base: 0→54 signals. linea: 100% pass. arb: gap_to_zero=11.65bps.)
-**Tests**: 1957 passed / 3 skipped (+1 zombie quarantine test)
+**Updated**: 2026-03-19 (R28.23 — Lead config audit: 8 configs regenerated from official sources. +FusionX V3 (mantle → SIGNAL_PRODUCING). 60.5-min bundle: 240 runs, 6 chains. 0 profitable RT persists — economics-blocked, not YAML.)
+**Tests**: 1957 passed / 3 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: 406 runs (arb=68, base=67, zksync=68, linea=68, mantle=68, scroll=67)
+**Evidence runDirs**: 240 runs (40 per chain × 6 chains)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: long_scan_latest.json @ 2026-03-19T13:18:23Z (406 runs, 97.7 min)
-**Evidence per-chain**: arb=ECONOMICS(2028 signals, 284 rq, gap=11.65bps), base=ECONOMICS(54 signals, 13 rq), zksync=ECONOMICS(68 signals, 128 rq), linea=ECONOMICS(272 signals, 135 rq, 100% pass), mantle=STRUCTURAL(0 signals), scroll=PARTIAL(134 signals, 0 rq)
-**Evidence timestamps**: Rolling @ 2026-03-19T13:17:39Z, long_scan @ 2026-03-19T13:18:23Z
+**Evidence long scan**: long_scan_latest.json @ 2026-03-19T16:00:27Z (240 runs, 60.5 min)
+**Evidence per-chain**: arb=ECONOMICS(1163 signals, 172 rq, gap=10.62bps), linea=ECONOMICS(160 signals, 160 rq, 100% pass), zksync=ECONOMICS(40 signals, 80 rq), base=QUOTE_PATH(50 signals, 52 rq, VE33=29), mantle=PARTIALLY_UNBLOCKED(35 signals, 39 rq, FusionX works!), scroll=DIAGNOSTIC(80 signals, 0 rq, dead pools)
+**Evidence timestamps**: Rolling @ 2026-03-19T15:59:26Z, long_scan @ 2026-03-19T16:00:27Z
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files.
 
 ---
 
-## R28.22 Live-Stream Truth Contract (new)
+## R28.23 Lead Config Audit + Regeneration
+
+Lead personally audited and regenerated 8 config files from official sources (FusionX Mantle contracts, Scroll ecosystem docs, iZiSwap deployments). Core finding: "config debt was real and partially fixed — Mantle and Scroll were materially unblocked at config layer, but 0 profitable RT remains because the dominant blockers are now chain-specific economics and quote-path defects, not invalid YAML."
+
+### Config Changes (lead-regenerated)
+1. **config/dexes.yaml** — Added FusionX V3 for mantle (official contracts), Nuri V3 + verified Uniswap V3 for scroll.
+2. **config/onboard_mantle_stage2.yaml** — 3 DEXes (agni_v3, fusionx_v3, stratum), require_cross_dex=true.
+3. **config/onboard_scroll_stage1.yaml** — 3 DEXes (uniswap_v3, sushiswap_v3, nuri_v3), suspect_spread_bps_hard=500.
+4. **config/onboard_base_stage1.yaml** — 3 DEXes, +VIRTUAL(0.68)/WELL(0.0045) R28.23 on-chain medians.
+5. **config/onboard_base_stage2.yaml** — 4 DEXes (with aerodrome), refreshed token prices.
+6. **config/onboard_arbitrum_one_candidate.yaml** — 4 DEXes, 17 token anchors with R28.23 on-chain medians.
+7. **config/onboard_linea_stage1.yaml** — 2 DEXes (pancakeswap_v3, lynex_v3).
+8. **config/onboard_mantle_stage1.yaml** — 1 DEX (agni_v3 only).
+
+### Verification Results (60.5-min bundle, 240 runs)
+| Chain | runs | pass | fail | signals | rq | cdx | best_rt_bps | quality | delta |
+|-------|------|------|------|---------|----|-----|-------------|---------|-------|
+| arb | 40 | 40 | 0 | 1163 | 172 | 8 | -21.19 | SIGNAL_PRODUCING | gap 11.65→10.62 bps |
+| linea | 40 | 40 | 0 | 160 | 160 | 4 | -62.96 | SIGNAL_PRODUCING | 100% pass |
+| zksync | 40 | 40 | 0 | 40 | 80 | 1 | -130.31 | SIGNAL_PRODUCING | stable |
+| base | 40 | 24 | 3 | 50 | 52 | 0 | 0.0 | INFRA_READY | VE33=29 dominant |
+| mantle | 40 | 0 | 35 | 35 | 39 | 1 | n/a | **SIGNAL_PRODUCING** | **0→35 signals (FusionX!)** |
+| scroll | 40 | 1 | 39 | 80 | 0 | 2 | n/a | SIGNAL_PRODUCING | dead pools block RT |
+
+### Per-Chain Blocker RCA
+- **arb** (ECONOMICS): Frontier WETH/ARB @ $25, total_cost=10.38bps, but gross_pnl=-69.8bps. Spread doesn't exist — market efficient.
+- **base** (QUOTE_PATH): VE33_QUOTE_FAILED=29 from aerodrome ve33 adapter. Dominant blocker prevents cross-DEX.
+- **linea** (ECONOMICS): 100% pass, 4 cdx pairs. ALGEBRA_NEEDS_QUOTER=2 genuine (not config).
+- **mantle** (PARTIALLY_UNBLOCKED): FusionX V3 works! agni_v3 works! stratum still broken. 2/3 DEXes active.
+- **scroll** (DIAGNOSTIC): LIQUIDITY_ZERO=20, PRICE_SANITY=12. Dead sushi pools. Living pairs produce signals.
+- **zksync** (ECONOMICS): Narrow surface, 1 cdx pair. best_rt=-130bps.
+
+---
+
+## R28.22 Live-Stream Truth Contract
 
 R28.21-final live dashboard stream is now runtime-verified: /api/hot is lightweight and carries active chain scans plus verified pair rows. R28.22 splits the primary stream into actionable vs diagnostic/suspect:
 

@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-19 (R28.21 — cache freshness observability, all chains cache-backed (rpc=0), 0 profitable RT confirmed, Status_M4.md updated to remove stale positive-control claims)  
+**Updated**: 2026-03-19 (R28.23 — Lead config audit: 8 configs regenerated, +FusionX V3 mantle. 60.5-min bundle: 240 runs, 6 chains. 0 profitable RT. arb gap=10.62bps. mantle SIGNAL_PRODUCING.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.21**: All chains are PRIMARY_BLOCKER or CANDIDATE. No chain is positive control — 0 profitable RT confirmed in fresh 36-run scan. All chains cache-backed (rpc=0). Live execution infrastructure exists but is dormant. 
-**Primary blocker**: Market conditions — all evaluated roundtrips are negative (best_net_pnl_bps=-31.54 on arb). No signer configured. No realized PnL produced.
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.23**: All chains are PRIMARY_BLOCKER or CANDIDATE. No chain is positive control — 0 profitable RT confirmed in 240-run bundle. Mantle promoted from CANDIDATE to PRIMARY_BLOCKER (FusionX V3 produces signals). Live execution infrastructure exists but is dormant.  
+**Primary blocker**: Market conditions + quote-path defects — all evaluated roundtrips are negative (best_net_pnl_bps=-21.19 on arb, gap=10.62bps). Base blocked by VE33_QUOTE_FAILED. No signer configured. No realized PnL produced.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
@@ -28,7 +28,9 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-19 R28.21)**: `agg_status=WARN_QUALITY` (policy rejects). **M4.1 DoD MET** (simulate-only). **R28.21**: No chain is positive control — 0 profitable RT confirmed in fresh 36-run scan. All chains cache-backed (rpc=0). Cache freshness observability added (last_full_refresh_utc, last_hot_requote_utc, pools_from_cache/rpc). Status_M4.md updated to remove stale "linea is benchmark (14 profitable RT)" claims — that was pre-R28.17 data before truth audit. Current truth: all chains PRIMARY_BLOCKER or CANDIDATE, 0 executable profitable.
+> [!] **ROLLING STABILITY (2026-03-19 R28.23)**: run_summary_latest status=PASS, profit_status=PASS, quality_status=WARN. **M4.1 DoD MET** (simulate-only). **R28.23**: Lead config audit confirmed config debt real and partially fixed. FusionX V3 added to mantle → SIGNAL_PRODUCING. 0 profitable RT remains — dominant blockers are economics/quote-path, not YAML. arb gap=10.62bps (closest). base VE33=29 (ve33 adapter). scroll dead pools.
+> R28.22-cont-2: Per-chain NO_USD_PRICE fixes (+14 tokens), zombie quarantine fix, 97.7-min bundle (406 runs). base 0→54 signals.
+> R28.21: Cache freshness observability, all chains cache-backed (rpc=0), 0 profitable RT. Removed stale positive-control claims.
 > R28.20: Lead post-verification directive (10 issues, 10 fix steps). warm_pool_cache+start.py tooling fixes. reject_histogram+reject_samples in truth artifacts. actionable_signals_count. mantle/scroll configs. Fresh 54-run online verification: 0 profitable RT confirmed.
 > R28.19: best_net_pnl_bps sane filter fix (base 8e16 contamination blocked). +8 regression tests. Reject visibility in truth_report roundtrip_summary.
 > R28.18: Code fixes for scroll price-truth blocker + promotion contract enforcement + fresh 10-min online evidence.
@@ -37,26 +39,28 @@
 > R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation — dual-cycle architecture.
 > Earlier rounds: see Status_M5_0.md for full history.
 
-**Economics Snapshot (2026-03-19, R28.21 — from fresh 36-run long_scan):**
+**Economics Snapshot (2026-03-19, R28.23 — from 240-run long_scan, 60.5 min):**
 | Metric | Value | Source |
 |--------|-------|--------|
-| `arb best_net_pnl_bps` | -31.54 bps | long_scan R28.21 (primary chain, BLOCKED) |
-| `linea best_net_pnl_bps` | -76.57 bps | long_scan R28.21 (BLOCKED, not positive control) |
-| `zksync best_net_pnl_bps` | -187.56 bps | long_scan R28.21 (BLOCKED) |
-| `base best_net_pnl_bps` | -82.20 bps | long_scan R28.21 (BLOCKED) |
-| `total_profitable_roundtrips` | 0 | long_scan R28.21 (all chains) |
-| `benchmark_chain` | None | long_scan R28.21 (no chain qualifies) |
-| `all_chains_cache_backed` | true | long_scan R28.21 (every chain has rpc=0) |
+| `arb best_net_pnl_bps` | -21.19 bps | long_scan R28.23 (primary chain, ECONOMICS) |
+| `arb sweep_best` | -10.62 bps @ $25 | long_scan R28.23 (gap_to_zero=10.62 bps — CLOSEST) |
+| `linea best_net_pnl_bps` | -62.96 bps | long_scan R28.23 (ECONOMICS, 100% pass, cdx=4) |
+| `zksync best_net_pnl_bps` | -130.31 bps | long_scan R28.23 (ECONOMICS, cdx=1) |
+| `base best_net_pnl_bps` | 0.0 bps | long_scan R28.23 (QUOTE_PATH, VE33=29) |
+| `mantle best_net_pnl_bps` | n/a | long_scan R28.23 (**NEW: 35 sig, 39 rq, FusionX works**) |
+| `scroll best_net_pnl_bps` | n/a | long_scan R28.23 (DIAGNOSTIC, 0 rq, dead pools) |
+| `total_profitable_roundtrips` | 0 | long_scan R28.23 (all chains) |
+| `benchmark_chain` | None | long_scan R28.23 (no chain qualifies) |
 
-**Rollout Queue (R28.21 — no positive control, all chains blocked or candidate):**
+**Rollout Queue (R28.23 — 240-run bundle, all chains blocked):**
 | Priority | Chain | Status | Evidence |
 |----------|-------|--------|----------|
-| 1 | arbitrum_one | PRIMARY_BLOCKER | rq=26, prt=0, best=-31.54bps, cache=455, rpc=0 |
-| 2 | linea | PRIMARY_BLOCKER | rq=12, prt=0, best=-76.57bps, cache=85, rpc=0 |
-| 3 | zksync | PRIMARY_BLOCKER | rq=10, prt=0, best=-187.56bps, cache=104, rpc=0 |
-| 4 | base | PRIMARY_BLOCKER | rq=1, prt=0, best=-82.20bps, cache=322, rpc=0 |
-| 5 | mantle | CANDIDATE | rq=0, prt=0, sig=0, cache=72, rpc=0 (structural deficit) |
-| 6 | scroll | CANDIDATE | rq=0, prt=0, sig=12 diagnostic, cache=104, rpc=0 (accepted_fail) |
+| 1 | arbitrum_one | PRIMARY_BLOCKER | sig=1163, rq=172, cdx=8, prt=0, best=-21.19bps, gap=10.62bps |
+| 2 | linea | PRIMARY_BLOCKER | sig=160, rq=160, cdx=4, prt=0, best=-62.96bps, 100% pass |
+| 3 | zksync | PRIMARY_BLOCKER | sig=40, rq=80, cdx=1, prt=0, best=-130.31bps |
+| 4 | base | PRIMARY_BLOCKER | sig=50, rq=52, cdx=0, prt=0, VE33_QUOTE_FAILED=29 |
+| 5 | mantle | PRIMARY_BLOCKER | sig=35, rq=39, cdx=1, prt=0 (**NEW: FusionX V3 → SIGNAL_PRODUCING**) |
+| 6 | scroll | CANDIDATE | sig=80, rq=0, cdx=2, prt=0, LIQUIDITY_ZERO=20, accepted_fail |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

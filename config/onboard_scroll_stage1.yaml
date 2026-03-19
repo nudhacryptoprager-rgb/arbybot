@@ -1,25 +1,20 @@
 # PATH: config/onboard_scroll_stage1.yaml
 #
-# ONBOARDING: scroll → STAGE 1 (nuri_v3 + sushiswap_v3 cross-DEX test)
+# ONBOARDING: scroll -> STAGE 1 (Sushi + Nuri + official Uniswap V3)
 #
-# STATUS: STRUCTURAL_DEBUG / bring-up config. DO NOT use for production truth.
+# STATUS: structural-debug / bring-up config. Do not treat this as production truth.
 #
-# R28.20 STRUCTURAL REALITY:
-#   - Surface is adequate: 9/13 cross-DEX pairs
-#   - But ALL pools dead/broken: WBTC/USDC price=7330 (expected 68000),
-#     WETH/USDC@sushiswap nearly empty, USDC/DAI@sushiswap dead (0.056 DAI per 100 USDC)
-#   - Surviving signal is mixed-source (buy=quoter_v2, sell=slot0) with
-#     SUSPECT_SPREAD_EXCLUDED + SLOT0_DIAGNOSTIC + MIXED_SOURCE_DIAGNOSTIC
-#   - actionable_signals_count=0 after R28.20 (diagnostic signals excluded from count)
-#   - This config is for BRING-UP ONLY — production stage2 requires healthy real-quote routes
+# STRUCTURAL REALITY:
+#   - Scroll has surface, but dead or mispriced pools still dominate truthful gating
+#   - Official Scroll docs list SushiSwap, Nuri, Uniswap V3, SyncSwap and iZUMi
+#   - We only enable DEXes that map to currently supported adapter families
 #   - Before running: clear quarantine with:
 #       Remove-Item data\cache\quarantine_state_scroll.json
 #
-# R27 fix: nuri_v3 re-classified as uniswap_v3/quoter_v2 (per dexes.yaml trust anchor).
-#
 # ADAPTER READINESS:
-#   nuri_v3 → UniswapV3Adapter: VERIFIED R27.1
-#   sushiswap_v3 → UniswapV3Adapter: PRODUCTION
+#   uniswap_v3 -> UniswapV3Adapter: official Scroll deployment, newly enabled
+#   nuri_v3 -> UniswapV3Adapter: verified
+#   sushiswap_v3 -> UniswapV3Adapter: production
 #
 # WORKFLOW:
 #   py -3.11 scripts/ci_m5_0_gate.py --online --config config/onboard_scroll_stage1.yaml --cycles 1
@@ -39,12 +34,12 @@ rpc_backoff_base_ms: 500
 
 universe_source: discovery_runtime
 
-# Both DEXes — cross-DEX test (nuri_v3 re-enabled R27)
 dexes:
+  - uniswap_v3
   - sushiswap_v3
   - nuri_v3
 
-discovery_runtime_max_pairs: 20
+discovery_runtime_max_pairs: 30
 require_cross_dex: true
 
 use_multicall: true
@@ -64,7 +59,6 @@ execution_block_reason: "EXECUTION_DISABLED_M4"
 kill_switch_active: true
 simulate_only: true
 
-# Production-like thresholds (R28.18: tightened from debug)
 quoter_max_gas_estimate: 3000000
 quoter_max_ticks_crossed: 15
 suspect_spread_bps_hard: 500
@@ -80,6 +74,7 @@ tokens_usd_price:
   WBTC: 68000.0
   USDC: 1.0
   USDT: 1.0
+  DAI: 1.0
   wstETH: 2500.0
   SCR: 0.50
   STONE: 2100.0

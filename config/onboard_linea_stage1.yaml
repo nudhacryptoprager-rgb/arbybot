@@ -63,8 +63,12 @@ tokens_usd_price:
   WBTC: 68000.0
   USDC: 1.0
   USDT: 1.0
+  DAI: 1.0
   wstETH: 2500.0
   weETH: 2100.0
+  STONE: 2100.0
+  EZETH: 2050.0
+  ezETH: 2050.0
   BUSD: 1.0
 
 tokens_anchor_price:

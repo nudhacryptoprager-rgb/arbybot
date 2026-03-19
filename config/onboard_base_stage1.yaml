@@ -71,6 +71,14 @@ tokens_usd_price:
   wstETH: 2500.0
   AERO: 0.50
   DAI: 1.0
+  cbBTC: 68000.0
+  BRETT: 0.05
+  DEGEN: 0.005
+  TOSHI: 0.0003
+  rETH: 2400.0
+  # R28.23: on-chain medians from fresh base quote artifacts
+  VIRTUAL: 0.68
+  WELL: 0.0045
 
 tokens_anchor_price:
   WETH_USDC: 2050.0

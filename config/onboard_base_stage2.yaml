@@ -77,6 +77,9 @@ tokens_usd_price:
   DEGEN: 0.005
   TOSHI: 0.0003
   rETH: 2400.0
+  # R28.23: on-chain medians from fresh base quote artifacts
+  VIRTUAL: 0.68
+  WELL: 0.0045
 
 tokens_anchor_price:
   WETH_USDC: 2050.0

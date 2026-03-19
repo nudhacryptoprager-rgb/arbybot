@@ -69,6 +69,10 @@ tokens_usd_price:
   WBTC: 68000.0
   USDC: 1.0
   USDT: 1.0
+  DAI: 1.0
+  FRAX: 1.0
+  LUSD: 1.0
+  USDE: 1.0
   ARB: 0.35
   wstETH: 2500.0
   LINK: 15.0
@@ -76,6 +80,14 @@ tokens_usd_price:
   RDNT: 0.04
   MAGIC: 0.35
   GRAIL: 1500.0
+  # R28.23: medians derived from fresh Arbitrum quote artifacts
+  GNS: 0.78
+  PENDLE: 1.21
+  TBTC: 70600.0
+  rETH: 2400.0
+  UNI: 3.47
+  DPX: 2.15
+  JOE: 0.85
 
 tokens_anchor_price:
   WETH_USDC: 2050.0

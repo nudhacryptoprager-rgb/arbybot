@@ -65,6 +65,8 @@ tokens_usd_price:
   USDC: 1.0
   USDT: 1.0
   mETH: 2100.0
+  cmETH: 2100.0
+  mUSD: 1.0
   wstETH: 2500.0
 
 tokens_anchor_price:
