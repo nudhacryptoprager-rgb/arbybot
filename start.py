@@ -41,6 +41,30 @@ RUN_DIR_RE = re.compile(r"^\[ONLINE\] RunDir:\s*(.+)\s*$")
 # (ci_m5_gate_{chain_key}_YYYYMMDD_HHMMSS_{microseconds}) runDir patterns
 CI_M5_DIR_RE = re.compile(r"^ci_m5_gate_(?:[a-z_]+_)?\d{8}_\d{6}(?:_\d+)?$")
 
+# ---------------------------------------------------------------------------
+# R28.21: ARCHITECTURE CONTRACT — Refresh Cadence Layers
+# ---------------------------------------------------------------------------
+# Live scanning operates with THREE refresh cadences (not one):
+#
+#   1. QUOTES / BLOCKS (live RPC/WSS)
+#      - Always fresh: every scan cycle fetches real quotes and block data
+#      - This is working — real_quote_count > 0 on signal-producing chains
+#
+#   2. HOT RE-QUOTE (event-driven)
+#      - Target: re-quote hot pairs immediately on price/event triggers
+#      - Current state: timer-based (FULL_SWEEP_INTERVAL), NOT event-driven
+#      - Improvement: tie to WebSocket Swap events or price delta triggers
+#
+#   3. REGISTRY / DISCOVERY (periodic cold refresh)
+#      - Pool registry from cache (warm_pool_cache) — refreshed manually
+#      - Currently: cache-backed (pools_from_rpc=0 for most chains)
+#      - Improvement: add TTL-based cache invalidation (e.g., 24h)
+#
+# CONSEQUENCE of cache-backed registry: scans appear "static" because the
+# same pool surface is evaluated each cycle. This is correct for cost
+# control but must be visible in artifacts (last_full_refresh_utc, etc.).
+# ---------------------------------------------------------------------------
+
 # R28.11: Hot re-quote loop — every Nth cycle is a full universe sweep,
 # intervening cycles reuse cached pairs (skip discovery, just re-quote).
 FULL_SWEEP_INTERVAL = 5
@@ -363,6 +387,9 @@ def new_chain_stats() -> dict[str, Any]:
         # R28.13: Micro-requote stats (in-process per-pair re-quotes)
         "micro_requote_count": 0,
         "micro_requote_quotes": 0,
+        # R28.21: Cache freshness observability
+        "last_full_refresh_utc": None,
+        "last_hot_requote_utc": None,
     }
 
 
@@ -478,6 +505,9 @@ def update_chain_stats(
             stats["last_pools_from_cache"] = dr.get("pools_from_cache")
             stats["last_pools_from_rpc"] = dr.get("pools_from_rpc")
             stats["last_rpc_calls"] = dr.get("rpc_calls")
+            # R28.21: Track last time this chain did a real RPC refresh
+            if (dr.get("pools_from_rpc") or 0) > 0:
+                stats["last_full_refresh_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         # R28.9: Propagate phase_timers_ms for dashboard performance visibility
         pt = scan_stats.get("phase_timers_ms")
         if pt:
@@ -684,7 +714,7 @@ def build_summary(
         s["chain_profit_state"] = classify_chain_profit_state(s)
 
     summary = {
-        "schema": "start:long_scan_summary:v1.13",  # R28.17: truth-quality discipline + 3-tier signal classification
+        "schema": "start:long_scan_summary:v1.14",  # R28.21: cache freshness observability
         "generated_at": run_ts,
         "run_context": {
             "run_timestamp": run_ts,
@@ -765,6 +795,11 @@ def build_summary(
                     "last_scan_mode": s.get("last_scan_mode"),
                     "full_sweeps": s.get("full_sweep_count", 0),
                     "hot_requotes": s.get("hot_requote_count", 0),
+                    # R28.21: Cache freshness observability
+                    "last_full_refresh_utc": s.get("last_full_refresh_utc"),
+                    "last_hot_requote_utc": s.get("last_hot_requote_utc"),
+                    "pools_from_cache": s.get("last_pools_from_cache"),
+                    "pools_from_rpc": s.get("last_pools_from_rpc"),
                 }
                 for c, s in per_chain.items()
             },
@@ -1302,7 +1337,7 @@ def write_hot_loop_snapshot(
     import time as _time
     run_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     snapshot: dict[str, Any] = {
-        "schema": "start:hot_loop_snapshot:v1.2",
+        "schema": "start:hot_loop_snapshot:v1.3",  # R28.21: cache freshness observability
         "generated_at": run_ts,
         "is_test_session": is_test_session,  # R28.17: rolling protection marker
         # R28.13 Step 4: run_context provenance (same shape as long_scan)
@@ -1340,6 +1375,11 @@ def write_hot_loop_snapshot(
             # R28.13 Step 7: Micro-requote stats
             "micro_requotes": s.get("micro_requote_count", 0),
             "micro_requote_quotes": s.get("micro_requote_quotes", 0),
+            # R28.21: Cache freshness observability
+            "last_full_refresh_utc": s.get("last_full_refresh_utc"),
+            "last_hot_requote_utc": s.get("last_hot_requote_utc"),
+            "pools_from_cache": s.get("last_pools_from_cache"),
+            "pools_from_rpc": s.get("last_pools_from_rpc"),
         }
         # Include latest top signals for live pair visibility
         top_sigs = s.get("last_top_spread_signals", [])
@@ -1823,6 +1863,8 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                 per_chain[chain]["last_scan_mode"] = scan_mode
                 if scan_mode == "hot":
                     per_chain[chain]["hot_requote_count"] += 1
+                    # R28.21: Track last hot re-quote timestamp
+                    per_chain[chain]["last_hot_requote_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 else:
                     per_chain[chain]["full_sweep_count"] += 1
                 if run_dir and run_dir.exists():

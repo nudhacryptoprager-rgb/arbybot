@@ -45,31 +45,18 @@ receipt_timeout_seconds: 60
 max_position_usd: 10.0
 
 # --- Pair config (minimal for probe) ---
-base_tokens:
-  - symbol: WETH
-    address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
-    decimals: 18
-  - symbol: USDC
-    address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
-    decimals: 6
-
-quote_tokens:
-  - symbol: USDC
-    address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
-    decimals: 6
-  - symbol: USDT
-    address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
-    decimals: 6
+# Uses pairs (canonical format), not base_tokens/quote_tokens
+pairs:
+  - token_in: WETH
+    token_out: USDC
+    fee_tiers: [100, 500]
+  - token_in: WETH
+    token_out: USDT
+    fee_tiers: [500]
 
 dexes:
-  - name: uniswap_v3
-    router: "0xE592427A0AEce92De3Edee1F18E0157C05861564"
-    quoter: "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6"
-    factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
-  - name: sushiswap_v3
-    router: "0x8A21F6768C1f8075791D08546Dadf6daA0bE820c"
-    quoter: "0x0524E833cCD057e4d7A296e3aaAb9f7675964Ce1"
-    factory: "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e"
+  - uniswap_v3
+  - sushiswap_v3
 
 # Run kind
 run_kind: PROBE

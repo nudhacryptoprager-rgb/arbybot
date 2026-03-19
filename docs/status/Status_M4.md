@@ -1,76 +1,62 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-16 (R28.15 — live execution infrastructure implemented, scanner wiring done, honest simulate-only documentation)  
+**Updated**: 2026-03-19 (R28.21 — cache freshness observability, all chains cache-backed (rpc=0), 0 profitable RT confirmed, Status_M4.md updated to remove stale positive-control claims)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.15**: The next milestone is realized execution truth — tx submission, receipts, and realized PnL — not further reinterpretation of paper profit. Live execution infrastructure exists (simulator.py, dex_dex_executor.py, providers.py) but is dormant in production. **R28.14**: benchmark_chain=linea (merit-based), unified truth_standard_met per chain.  
-**Primary blocker**: execute_live/simulate_rpc wired but dormant. No signer configured. No realized PnL produced. Market gap on arb (gap=9.95 bps from long_scan). Linea=ALIGNED/BENCHMARK (10 profitable RT in long_scan).
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`, **Clean PnL AVAILABLE** (`execution_pnl.cost_model_available=true`, `profit_truth_available=false`, `WARN_PROFIT_DIAGNOSTIC`). **R28.21**: All chains are PRIMARY_BLOCKER or CANDIDATE. No chain is positive control — 0 profitable RT confirmed in fresh 36-run scan. All chains cache-backed (rpc=0). Live execution infrastructure exists but is dormant. 
+**Primary blocker**: Market conditions — all evaluated roundtrips are negative (best_net_pnl_bps=-31.54 on arb). No signer configured. No realized PnL produced.
 
-## [!] M4.1 Simulate-Only DoD **MET**
+## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
-**M4.1 DoD ACHIEVED** (per Roadmap.md L130-145):
+**M4.1 DoD ACHIEVED** (per Roadmap.md L130-145, achieved pre-R28.17):
 - ✅ N = 100 REGISTRY_REAL runs with `net_usdc > 0`
 - ✅ `agg_status = PASS` sustained
 - ✅ `profit_is_diagnostic = true` (accepted for simulate-only)
-- ✅ `total_net_usdc = $1142.02` (cumulative paper profit)
+- ✅ `total_net_usdc = $1142.02` (cumulative paper profit, historical)
 
-**Current State**:
-- Rolling: runs_in_window=184, unique_pairs=13
+**Current State (R28.21)**:
+- Rolling: runs_in_window=200+, unique_pairs=13
+- **No chain is positive control** — R28.17+ truth audit reset all chains to non-profitable
+- All chains cache-backed (rpc=0), registry from warm_pool_cache
 - Policy: `intent.txt` = business intent (per Roadmap.md:680); pool-level quarantine/runtime_disabled handles filtering
-- Pairs restored: RDNT, MAGIC, GRAIL (with evidence-based USD prices/anchors)
-- LIQUIDITY_ZERO auto-disable working
 
 **M4.2 (roundtrip) Remains**:
 - Requires market arb opportunity (`roundtrip.profitable_count > 0`)
 - Non-deterministic, depends on market conditions
+- Currently blocked: all chains have best_net_pnl_bps < 0
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-16 R28.15)**: `agg_status=WARN_QUALITY` (FRAGILE_P90_ELEVATED). **M4.1 DoD MET** (simulate-only). **R28.15**: Live execution infrastructure implemented: real PreTradeSimulator (simulate/simulate_rpc/classify_revert), real DexDexExecutor (execute/execute_live/parse_swap_fills/compute_realized_pnl), 4 async RPCProvider methods. Scanner wiring: live execution probe block in run_scan_real.py (dormant — gated by execution_enabled=true which no production config enables). truth_data includes live_execution field. artifacts.py config-driven flags. +38 new tests (1926 total). The next milestone is realized execution truth — tx submission, receipts, and realized PnL — not further reinterpretation of paper profit.
-> R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation — dual-cycle architecture (FULL_SWEEP_INTERVAL=5), `DirtySetTracker` subscribes to WSS newHeads. Hot pairs caches: base=22, linea=11, mantle=4, scroll=9, zksync=8. Fresh evidence: 7 full sweeps + 5 hot requotes in 12-run scan. Schema bump for hot loop. +6 tests (1870 total).
-> R28.11 Turn 1: Pair-level observability — _pair_history deque (5), spread_bps deltas, cache freshness, suppression counters, STATIC_PROBE_PATH + ZERO_FEE_DOMINANCE guardrails. +8 tests.
-> R28.10: Profit truth propagation — real_quote_count + profit_realism_status in run_summary.metrics, rolling per-run + quick_stats, long_scan chain_profit_state. 5 states: CONFIRMED_POSITIVE_CONTROL/THIN_POSITIVE/PRIMARY_BLOCKER/CANDIDATE/PROBE_ONLY. KPI separation (signals/exec_candidates/profitable_roundtrips/truth_confirmed). RCA: linea profits from lynex_v3 0-fee pools; arb: 100-3000 bps fee pools + $150 paper_size slippage.
-> R28.7: Economics engine correctness — 10 fix steps from lead directive. executable_candidates_count=4 (new KPI). min_spread_bps advisory (threshold=0 in truth_mode). Sweep promoted to core. Per-route breakdown: WBTC/USDC gap=15.22 bps (slip=12.57, fee=10, gas=3.25). ARB/WETH re-enabled (7 pairs now, SUSPECT_SPREAD_HARD gates outliers). Long scan: 42 runs / 109 signals / $123 / 21 RT in 573s. Linea truth=True (positive control confirmed).
-> R28.6: RunDir collision fix (6 collisions → 0 in parallel stress test 31 runs). Chain_id validation. Telemetry artifact patch. +9 tests (1837). Long scan parallel: 31 runs / 69 signals / $116.34 / 14 RT in 544s. Linea strongest non-arb (12 profitable RT).
-> R28.5: Bounded parallel coverage, expanded phase metrics, phase_timers artifact fix. Per-run ~27s→15s. Long scan: 37 runs / 52 signals / $85.88 / 12 RT in 556s.
-> R28.4: Scanner performance optimization — shared Web3 cache, parallel quote prefetch (ThreadPoolExecutor 8-way), COVERAGE lightweight mode, phase_timers_ms, inter-chain sleep 20→1s. Per-run scan time ~66s→~27s (2.5x). Long scan: 21 runs / 43 signals / $68.28 / 9 RT in 563.6s wall.
-> R28.3: Doc cleanup, claim downgrades (thin not REAL), deprecated pnl pruned, stale-section tests (+5), fresh evidence.
-> R28.2: Semantics fix (profit_truth requires real_quote_count>0). ve33 stage2 configs created+tested online. Base ROUNDTRIP_PROFITABLE=2 (thin: real_quote_count=1). Mantle cross_dex=5.
-> R28/R28.1: Architecture audit — strategy/execution/ stubs DELETED, core/gate_helpers.py+repo_checks.py extracted, net_pnl_bps computed. probe_slippage artifact integration still pending.
-> R27.4: Config inventory frozen to 16 files, 15 stale deleted. ve33 adapter IMPLEMENTED. validate_universe regression FIXED.
-> Latest evidence: `long_scan_latest.json` (REFRESHED R28.11 T2), `m4_stability_agg.json`, hot_pairs_*.json caches.
+> [!] **ROLLING STABILITY (2026-03-19 R28.21)**: `agg_status=WARN_QUALITY` (policy rejects). **M4.1 DoD MET** (simulate-only). **R28.21**: No chain is positive control — 0 profitable RT confirmed in fresh 36-run scan. All chains cache-backed (rpc=0). Cache freshness observability added (last_full_refresh_utc, last_hot_requote_utc, pools_from_cache/rpc). Status_M4.md updated to remove stale "linea is benchmark (14 profitable RT)" claims — that was pre-R28.17 data before truth audit. Current truth: all chains PRIMARY_BLOCKER or CANDIDATE, 0 executable profitable.
+> R28.20: Lead post-verification directive (10 issues, 10 fix steps). warm_pool_cache+start.py tooling fixes. reject_histogram+reject_samples in truth artifacts. actionable_signals_count. mantle/scroll configs. Fresh 54-run online verification: 0 profitable RT confirmed.
+> R28.19: best_net_pnl_bps sane filter fix (base 8e16 contamination blocked). +8 regression tests. Reject visibility in truth_report roundtrip_summary.
+> R28.18: Code fixes for scroll price-truth blocker + promotion contract enforcement + fresh 10-min online evidence.
+> R28.17: Truth-quality discipline. SUSPECT_ACCOUNTING state added. Accumulation guard rejects insane PnL. 3-tier signal classification. All chains reset to non-profitable.
+> R28.15: Live execution infrastructure implemented (simulator.py, dex_dex_executor.py, providers.py) but dormant in production. Scanner wiring done. +38 tests.
+> R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation — dual-cycle architecture.
+> Earlier rounds: see Status_M5_0.md for full history.
 
-**Economics Snapshot (2026-03-16, R28.14 — from rolling agg + long_scan + fresh scan):**
+**Economics Snapshot (2026-03-19, R28.21 — from fresh 36-run long_scan):**
 | Metric | Value | Source |
 |--------|-------|--------|
-| `arb gap_to_zero_bps` | 3.25 bps | run_summary_latest R28.14 (best-ever) |
-| `sweep_median_gap_to_zero_bps` | ~11 bps | long_scan R28.14 (improved from ~16) |
-| `long_scan sweep_best` | -9.17 bps | long_scan_latest (multi-chain) |
-| `executable_candidates_count` | 4 | run_summary_latest |
-| `roundtrip_total_profitable (arb)` | 0 | arb (primary chain, BLOCKED) |
-| `roundtrip_total_profitable (long_scan)` | 15 | long_scan (14 linea + 1 base) |
-| `quote_rpc_ms (arb)` | 5.6s | R28.14 (was 14.6s R28.13, was 180s R28.12) |
-| `quote_rpc_ms (base)` | 22s | R28.14 (still highest) |
-| `benchmark_chain` | linea | long_scan_latest (merit-based) |
-| `frontier_pair` | WETH/USDT | run_summary_latest |
-| `runs_in_window` | 200+ | m4_stability_agg |
-| `total_net_usdc` | $1234+ | m4_stability_agg (paper profit) |
-| `unique_pairs` | 13 | m4_stability_agg |
-| `long_scan` | 42 runs, 6 chains, 371s | long_scan_latest R28.14 (parallel workers=2) |
-| `multi_chain_pass` | 4/6 | long_scan (arb, zksync, base, linea PASS; mantle, scroll FAIL) |
-| `linea_truth` | ALIGNED / BENCHMARK | long_scan (14 profitable RT, is_benchmark=true) |
-| `base_truth` | ALIGNED (intermittent) | long_scan (1 profitable RT this scan) |
+| `arb best_net_pnl_bps` | -31.54 bps | long_scan R28.21 (primary chain, BLOCKED) |
+| `linea best_net_pnl_bps` | -76.57 bps | long_scan R28.21 (BLOCKED, not positive control) |
+| `zksync best_net_pnl_bps` | -187.56 bps | long_scan R28.21 (BLOCKED) |
+| `base best_net_pnl_bps` | -82.20 bps | long_scan R28.21 (BLOCKED) |
+| `total_profitable_roundtrips` | 0 | long_scan R28.21 (all chains) |
+| `benchmark_chain` | None | long_scan R28.21 (no chain qualifies) |
+| `all_chains_cache_backed` | true | long_scan R28.21 (every chain has rpc=0) |
 
-**Rollout Queue (R28.14 — benchmark_chain formalized by merit):**
-| Priority | Chain | Status | Stage Config | Condition for Promotion |
-|----------|-------|--------|-------------|-------------------------|
-| 1 | linea | ALIGNED / BENCHMARK | `onboard_linea_stage1.yaml` | **Strongest chain**: profitable_rt=14, real_quotes=14, quality_healthy=true, is_benchmark=true. |
-| 2 | base | ALIGNED (intermittent) | `onboard_base_stage2.yaml` | 4 DEXes, cross_dex=22, profitable_rt=1, real_quotes=3. Quality unstable across scans. |
-| 3 | arbitrum_one | BLOCKED (primary contractual) | `onboard_arbitrum_one_candidate.yaml` | gap=3.25 bps best-ever (approaching breakeven). Fee structure root cause. |
-| 4 | zksync | BLOCKED | `onboard_zksync_candidate.yaml` | cross_dex=1, real_quotes=14, profitable_rt=0 |
-| 5 | mantle | NOT_PROVEN | `onboard_mantle_stage2.yaml` | 5/7 FAIL, no real quotes |
-| 6 | scroll | NOT_PROVEN | `onboard_scroll_stage1.yaml` | 7/7 FAIL (accepted-fail), no real quotes |
+**Rollout Queue (R28.21 — no positive control, all chains blocked or candidate):**
+| Priority | Chain | Status | Evidence |
+|----------|-------|--------|----------|
+| 1 | arbitrum_one | PRIMARY_BLOCKER | rq=26, prt=0, best=-31.54bps, cache=455, rpc=0 |
+| 2 | linea | PRIMARY_BLOCKER | rq=12, prt=0, best=-76.57bps, cache=85, rpc=0 |
+| 3 | zksync | PRIMARY_BLOCKER | rq=10, prt=0, best=-187.56bps, cache=104, rpc=0 |
+| 4 | base | PRIMARY_BLOCKER | rq=1, prt=0, best=-82.20bps, cache=322, rpc=0 |
+| 5 | mantle | CANDIDATE | rq=0, prt=0, sig=0, cache=72, rpc=0 (structural deficit) |
+| 6 | scroll | CANDIDATE | rq=0, prt=0, sig=12 diagnostic, cache=104, rpc=0 (accepted_fail) |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

@@ -442,7 +442,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.13")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.14")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -1108,7 +1108,7 @@ class TestFrontierRanking(unittest.TestCase):
         per_chain["base"]["included_signals_total"] = 3
         summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
         # Schema version check
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.13")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.14")
         # Required top-level fields
         self.assertIn("generated_at", summary)
         self.assertIn("wall_seconds", summary)
@@ -1862,7 +1862,7 @@ class TestChainProfitState(unittest.TestCase):
         self.assertEqual(summary["per_chain"]["base"]["last_pools_from_rpc"], 2)
         self.assertEqual(summary["per_chain"]["base"]["last_suppression"]["single_dex"], 3)
         self.assertEqual(len(summary["per_chain"]["base"]["_pair_history"]), 1)
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.13")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.14")
 
 
 class TestHotLoopAndDirtySet(unittest.TestCase):
@@ -2178,7 +2178,7 @@ class TestLiveStreamErrorPath(unittest.TestCase):
     # -- R28.12: write_hot_loop_snapshot tests ------------------------------
 
     def test_write_hot_loop_snapshot_schema(self):
-        """write_hot_loop_snapshot() produces valid hot_loop_snapshot:v1.2."""
+        """write_hot_loop_snapshot() produces valid hot_loop_snapshot:v1.3."""
         import time as _time
         import tempfile
         import json
@@ -2222,7 +2222,7 @@ class TestLiveStreamErrorPath(unittest.TestCase):
                 self.assertTrue(tmp_path.exists())
                 with open(tmp_path) as f:
                     snap = json.load(f)
-                self.assertEqual(snap["schema"], "start:hot_loop_snapshot:v1.2")
+                self.assertEqual(snap["schema"], "start:hot_loop_snapshot:v1.3")
                 self.assertIn("generated_at", snap)
                 self.assertFalse(snap["is_test_session"])
                 self.assertIn("per_chain", snap)

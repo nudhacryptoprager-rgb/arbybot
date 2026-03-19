@@ -1,14 +1,27 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-18 (R28.20 — tooling fixes, reject histograms in truth, actionable_signals_count, mantle/scroll configs, fresh 54-run online verification. 1948 tests.)
+**Updated**: 2026-03-19 (R28.21 — cache freshness observability, architecture contract documentation, real_live_probe.yaml fix, docs update. All chains cache-backed (rpc=0). 1948 tests.)
 **Tests**: 1948 passed / 3 skipped
-**Schema**: see DEV_REPORT_LATEST.md (long_scan_summary + hot_loop_snapshot schemas bumped in R28.17)
-**Evidence runDirs**: long_scan 54 runs 6 chains 732s (R28.20 fresh online scan with code fixes applied)
+**Schema**: start:long_scan_summary:v1.14 (R28.21), start:hot_loop_snapshot:v1.3 (R28.21)
+**Evidence runDirs**: long_scan 36 runs 6 chains 387s (R28.21 COVERAGE scan, all chains cache-backed)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (54 runs 732s, total_profitable_roundtrips=0, executable_profitable=0 all chains, signals=388, rq=65, reject_histogram visible per chain)
-**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=37), zksync=PRIMARY_BLOCKER(rq=9), base=PRIMARY_BLOCKER(rq=1), linea=PRIMARY_BLOCKER(rq=18), mantle=CANDIDATE(rq=0,quarantine_reaccumulated), scroll=CANDIDATE(rq=0,18_diagnostic_0_actionable)
-**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files (R28.15: +1 real_live_probe.yaml).
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (36 runs 387s, total_profitable_roundtrips=0, all chains rpc=0 cache-backed)
+**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=26,cache=455,rpc=0), zksync=PRIMARY_BLOCKER(rq=10,cache=104,rpc=0), base=PRIMARY_BLOCKER(rq=1,cache=322,rpc=0), linea=PRIMARY_BLOCKER(rq=12,cache=85,rpc=0), mantle=CANDIDATE(rq=0,cache=72,rpc=0), scroll=CANDIDATE(rq=0,cache=104,rpc=0,accepted_fail)
+**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files.
+
+---
+
+## Architecture Contract (R28.21 — new)
+
+> **Static-looking scans are caused by cache-backed discovery and a tiny surviving route surface; live-market target requires real-time quote refresh plus event-driven hot re-quote, not full registry RPC refresh every cycle.**
+
+Live scanning operates with THREE refresh cadences:
+1. **QUOTES/BLOCKS** (live RPC every cycle) — ✅ Working. `real_quote_count > 0` on signal-producing chains.
+2. **HOT RE-QUOTE** (event-driven target) — ❌ Timer-based (`FULL_SWEEP_INTERVAL=5`), not WebSocket event-driven. `ws_connected=0`.
+3. **REGISTRY/DISCOVERY** (periodic cold refresh) — ❌ Cache-backed (`pools_from_rpc=0` for all chains), no TTL.
+
+**Artifact visibility (R28.21)**: `last_full_refresh_utc`, `last_hot_requote_utc`, `pools_from_cache`, `pools_from_rpc` now exposed in per_chain stats and hot_loop/long_scan artifacts.
 
 ---
 
@@ -17,6 +30,7 @@
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
+> **R28.21**: Lead post-R28.20 audit directive (10 issues, 10 fix steps). (1-3) Architecture contract documentation: quotes=live RPC, hot-requote=timer-based (not event-driven), registry=cache-backed (no TTL). (4) Cache freshness fields added: last_full_refresh_utc, last_hot_requote_utc, pools_from_cache/rpc in per_chain stats + hot_loop + long_scan. (5) real_live_probe.yaml schema fixed: dict-style dexes → string list, base_tokens/quote_tokens → pairs list. 13/13 validate_universe PASS. (6-8) Chain-specific notes documented (linea/zksync/scroll route variation, mantle surface, scroll gating strict). (9-10) Docs updated. Schema bumps: long_scan_summary v1.14, hot_loop_snapshot v1.3. Fresh 36-run scan confirms all chains cache-backed (rpc=0).
 > **R28.20**: Lead post-verification directive (10 issues, 10 fix steps). (1) warm_pool_cache: Unicode→ASCII status icons for Windows, multicall batch fallback to per-pool on decode failure. (2) start.py: PermissionError resilience for hot_loop_latest.json writes (try/retry/fallback/pass). (3) strategy/artifacts.py: reject_histogram + reject_samples in truth_data (reason→count dict, top 10 rejects). (4) strategy/artifacts.py: actionable_signals_count excludes is_diagnostic_only signals. (5) ci_m5_0_gate.py: signals_count uses actionable_signals_count with fallback. (6) start.py: last_reject_histogram propagation to per-chain stats → long_scan. (7) mantle config: R28.20 objective (restore signal flow), WETH_WMNT anchor, quarantine clear instructions. (8) scroll config: STRUCTURAL_DEBUG status, truth_mode_m42, execution safety flags. (9) Fresh 54-run online verification: 0 profitable RT confirmed, mantle quarantine cleared → re-accumulated 4 genuine failures (structural confirmed), scroll 18 diagnostic/0 actionable. 1948 tests, CI green.
 > **R28.19**: Lead review fixes. (1) best_net_pnl_bps sane filter fix in run_scan_real.py — previously used unfiltered max(roundtrip_results), now uses sane_rts (≤500 bps). If all insane → None. Prevents base 8.2e16 bps contamination. (2) +8 regression tests locking the contract: profitable_count=0 must never coexist with absurd positive best_net_pnl_bps. Tests cover scanner sane filter, start.py secondary guard, classify_chain_profit_state SUSPECT_ACCOUNTING. (3) Reject visibility in truth_report roundtrip_summary: added candidates_total, gated_by_economics, rejected_reasons, suspect_profitable_count. Makes reject pipeline visible in truth artifacts for failing chains. (4) Truth reclassification confirmed: no chain is CONFIRMED_POSITIVE_CONTROL — all are PRIMARY_BLOCKER or CANDIDATE. Classification is purely dynamic, no hardcoded overrides. (5) Scroll quote-truth confirmed structural: 2 DEXes adequate (9/13 cross-dex), but all pools dead or drift-excluded → 0 surviving quotes. Not a code bug. (6) Mantle structural deficit confirmed: 2 DEXes, cross-dex pairs drift-excluded. Needs 3rd DEX or drift fix. 1948 tests, CI green.
 > **R28.18**: Code fixes for scroll price-truth blocker + promotion contract enforcement + fresh 10-min online evidence. (1) strategy/quotes.py: slot0 anchor unification — replaced independent lookup_anchor_price_ci() with upstream anchor_price from anchor_manager. Root cause of scroll PRICE_SCALE violations. (2) strategy/quotes.py: slot0 LIQUIDITY_ZERO secondary gate. (3) start.py: promotion contract enforcement (ONE_LEG_ONLY_DIAGNOSTIC/FAIL_QUALITY → capped at THIN_POSITIVE). (4) start.py: logger NameError fix. (5) Configs: scroll/mantle tightened. 1940 tests. 43-run scan: signals=288, rq=56, executable_profitable=0.
