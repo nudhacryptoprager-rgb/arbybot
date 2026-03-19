@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-19 (R28.25 — Lead audit: filter-layer RCA corrected. Config aligned all chains 150 USD / 5 bps. Suppression reform. roundtrip_truth_status elevated to compute_status(). 0 profitable RT. Pending verification scan.)  
+**Updated**: 2026-03-19 (R28.26 — 4-layer ladder experiment. Suppression NOT the blocker. quarantine=0 impact, runtime_disabled=perf cache. 0 profitable RT all layers. Next: hard caps in run_scan_real.py.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.25**: roundtrip_truth_status now separate field in compute_status() — "PROFITABLE"/"NOT_PROFITABLE"/"NO_DATA". profit_status (one-leg) preserved but no longer masks roundtrip truth. All chains PRIMARY_BLOCKER or CANDIDATE. 0 profitable RT. Filter funnel material blocker alongside market efficiency.  
-**Primary blocker**: Filter funnel (73% quote loss) + market efficiency (phantom spreads) — roundtrips evaluate negative even with reduced suppression. Anchor stale since 2026-02-17.
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.26**: 4-layer ladder proves suppression NOT the blocker. runtime_disabled caches LIQUIDITY_ZERO (improves throughput). 0 profitable RT in all 4 layers x 6 chains. Next isolation: hard caps in run_scan_real.py.  
+**Primary blocker**: Market efficiency (0 profitable RT even with all suppression OFF) + LIQUIDITY_ZERO dominance (147 pools) + quote-path defects (ALGEBRA_NEEDS_QUOTER, VE33_QUOTE_FAILED). Anchor stale since 2026-02-17.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
@@ -28,8 +28,8 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-19 R28.25)**: R28.25 code changes: roundtrip_truth_status elevated to compute_status(), filter funnel propagated to start.py, suppression reformed (probation mode). Config aligned all chains. 1961 tests PASS. No fresh scan yet — pending verification.
-> R28.24: Deep pipeline analysis. Phantom spread root cause. Filter funnel artifact. 37-run scan, gap=15.38bps.
+> [!] **ROLLING STABILITY (2026-03-19 R28.26)**: 4-layer ladder experiment complete. Suppression NOT the surface killer (quarantine=0 impact, runtime_disabled=perf cache for 147 LIQUIDITY_ZERO pools). 0 profitable RT in all layers. 1966 tests PASS. Next: hard caps isolation.
+> R28.25: Lead audit 10-step. Config aligned 150 USD / 5 bps. Suppression reform. roundtrip_truth_status elevated.
 > R28.23: Lead config audit. 8 configs regenerated. +FusionX V3 mantle. 240-run bundle. arb gap=10.62bps.
 > R28.22-cont-2: Per-chain NO_USD_PRICE fixes (+14 tokens), zombie quarantine fix, 97.7-min bundle (406 runs). base 0→54 signals.
 > R28.21: Cache freshness observability, all chains cache-backed (rpc=0), 0 profitable RT. Removed stale positive-control claims.

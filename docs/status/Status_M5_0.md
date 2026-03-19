@@ -1,12 +1,44 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-19 (R28.25 — Lead audit 10-step fix. RCA corrected: zero-profit = filter funnel + market efficiency (not just market). Config aligned all chains 150 USD / 5 bps. Suppression reform: probation mode. roundtrip_truth_status elevated to m4/policy.py. 1961 tests PASS. Pending: verification scan.)
-**Tests**: 1961 passed / 3 skipped
+**Updated**: 2026-03-19 (R28.26 — 4-layer ladder experiment. Suppression NOT the surface killer. quarantine=0 impact, runtime_disabled=perf cache. 0 profitable RT in all layers. 1966 tests PASS.)
+**Tests**: 1966 passed / 3 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: R28.25: code-only (pending scan). R28.24: 37 runs (6 chains, ~587s).
-**Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Strategy**: Filter funnel is material blocker alongside market efficiency. R28.25 addresses both: wider config surface + reduced suppression + truth layer elevation. Next: 10-min canonical run to measure filter funnel improvement.
+**Evidence runDirs**: R28.26: 4 ladder runs (L0/L1/L2/L3, 10 min each, 6 chains). R28.25: code-only.
+**Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
+**Strategy**: Suppression isolation complete. Neither quarantine nor runtime_disabled kills the quote surface. runtime_disabled improves throughput by caching LIQUIDITY_ZERO pools. Next isolation target: hard caps in run_scan_real.py.
+
+---
+
+## R28.26 Suppression Layer Isolation (4-Layer Ladder)
+
+### Experiment Design
+4-layer ladder, each 10-min scan across 6 chains (arb/zksync/base/mantle/linea/scroll):
+- **L0**: ARBY_DISABLE_RUNTIME_SUPPRESSION=1 (all suppression OFF)
+- **L1**: ARBY_DISABLE_RUNTIME_QUARANTINE=1 (quarantine OFF, runtime_disabled ON)
+- **L2**: ARBY_DISABLE_RUNTIME_DISABLED=1 (runtime_disabled OFF, quarantine ON)
+- **L3**: baseline (all ON)
+
+### Results (aggregate, all 6 chains)
+| Metric | L0 (all OFF) | L1 (quar OFF) | L2 (rtdis OFF) | L3 (baseline) |
+|--------|-------------|----------------|-----------------|---------------|
+| quotes_fetched | 241 | 233 | 244 | 233 |
+| spread_signals | 29 | 53 | 31 | 58 |
+| rt_real_quote | **7** | **13** | **7** | **12** |
+| rt_profitable | **0** | **0** | **0** | **0** |
+| quarantined_skip | 0 | 0 | 0 | 0 |
+| runtime_disabled_skip | 0 | 147 | 0 | 147 |
+
+### Key Findings
+1. **Quarantine = ZERO impact**: quarantined_skipped=0 in all 4 layers, all 6 chains
+2. **runtime_disabled = perf cache**: 147 pools are LIQUIDITY_ZERO cached. OFF = worse (L0=7 vs L3=12 rt_real_quote)
+3. **0 profitable RT in ALL layers**: suppression NOT the cause of zero profitability
+4. **base = quote-path blocker**: 0 rt_real_quote regardless of suppression (LIQUIDITY_ZERO=41)
+
+### Pending
+- **Hard caps isolation**: roundtrip_max_candidates, discovery_runtime_max_pairs, min_spread_bps in run_scan_real.py
+- **LIQUIDITY_ZERO investigation**: 61 arb pools permanently zero-liquidity
+- **Anchor refresh**: Prices stale since 2026-02-17
 
 ---
 
@@ -190,9 +222,9 @@ Live scanning operates with THREE refresh cadences:
 > **M5_0 is mandatory for CI and infra-proof.**
 > M5_0 validates artifact schemas/invariants, multicall, failover, provenance.
 > M4 execution gate is a separate "core truth" for profit.
-> **R28.25**: Lead audit corrects filter-layer RCA. 10-step fix: config alignment, suppression reform, roundtrip_truth_status elevation. Filter funnel material blocker alongside market efficiency.
+> **R28.26**: 4-layer ladder proves suppression NOT the surface killer. runtime_disabled = perf cache (147 LIQUIDITY_ZERO). 0 profitable RT in all layers. Next: hard caps.
+> **R28.25**: Lead audit corrects filter-layer RCA. 10-step fix: config alignment, suppression reform, roundtrip_truth_status elevation.
 > **R28.24**: Deep pipeline analysis. Phantom spread root cause. Filter funnel artifact. Config-driven RT caps.
-> **R28.23**: Lead config audit. 8 configs regenerated. FusionX V3 mantle. 240-run bundle.
 > **R28.22**: Live-stream truth: is_actionable, spread_bps, dashboard split. Dashboard coherence.
 > **R28.21**: Multicall batch chunking, roundtrip contamination fix, architecture contract (3 cadences).
 > **R28.20**: Reject histogram in truth artifacts, actionable_signals_count, mantle/scroll configs.
@@ -205,18 +237,18 @@ Live scanning operates with THREE refresh cadences:
 
 ---
 
-## Chain Quality Classification (R28.24 — pending R28.25 re-scan)
+## Chain Quality Classification (R28.26 — ladder evidence)
 
-| Chain | Quality | Blocker | Key Metric |
+| Chain | Quality | Blocker | Key Metric (L3 baseline) |
 |-------|---------|---------|------------|
-| arbitrum_one | SIGNAL_PRODUCING | FILTER_FUNNEL + ECONOMICS | sig=203, rq=40, prt=0, gap=15.38bps |
-| linea | SIGNAL_PRODUCING | ECONOMICS | sig=24, rq=12, prt=0, best=-65.75bps |
-| zksync | SIGNAL_PRODUCING | ECONOMICS | sig=6, rq=12, prt=0, best=-148.14bps |
-| base | INFRA_READY | NO_DATA | aerodrome excluded, 0 sig |
-| mantle | SIGNAL_PRODUCING | STRUCTURAL | sig=6, rq=6, prt=0, SUSPECT_LIQ=30 |
-| scroll | CANDIDATE | DEAD_POOLS | sig=12, rq=0, accepted_fail |
+| arbitrum_one | SIGNAL_PRODUCING | ECONOMICS + LIQUIDITY_ZERO | qt=98, sig=47, rq=8, prt=0, rtdis=61 |
+| linea | SIGNAL_PRODUCING | ECONOMICS | qt=20, sig=4, rq=1, prt=0, rtdis=12 |
+| zksync | SIGNAL_PRODUCING | ECONOMICS | qt=15, sig=2, rq=2, prt=0, rtdis=10 |
+| base | INFRA_READY | QUOTE_PATH | qt=81, sig=2, rq=0, prt=0, rtdis=41 |
+| mantle | SIGNAL_PRODUCING | ECONOMICS | qt=9, sig=1, rq=1, prt=0, rtdis=3 |
+| scroll | CANDIDATE | DEAD_POOLS | qt=10, sig=2, rq=0, prt=0, rtdis=20 |
 
-**R28.25 changes expected to improve**: arb rejects (SUSPECT_LIQUIDITY re-evaluation 60s, runtime_disabled TTL 300s). Coverage chains economics (150 USD / 5 bps aligned).
+**R28.26 suppression ladder**: Disabling suppression does NOT improve any chain. runtime_disabled caches LIQUIDITY_ZERO pools (improving throughput).
 
 **Rollout Queue**: arb → linea → zksync → base → mantle → scroll.
 
