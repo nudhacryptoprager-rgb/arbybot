@@ -71,6 +71,12 @@ tokens_usd_price:
   wstETH: 2500.0
   AERO: 0.50
   DAI: 1.0
+  # R28.22: Fix NO_USD_PRICE rejects for base meme/defi pairs
+  cbBTC: 68000.0
+  BRETT: 0.05
+  DEGEN: 0.005
+  TOSHI: 0.0003
+  rETH: 2400.0
 
 tokens_anchor_price:
   WETH_USDC: 2050.0

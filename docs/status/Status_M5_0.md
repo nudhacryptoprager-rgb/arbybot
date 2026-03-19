@@ -1,13 +1,14 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-19 (R28.22 — live-stream truth contract split, spread_bps non-null, final_net_pnl_usd, dashboard actionable/diagnostic split. 30 runs, 0 profitable RT. 1956 tests.)
-**Tests**: 1956 passed / 3 skipped
+**Updated**: 2026-03-19 (R28.22-cont-2 — per-chain NO_USD_PRICE fixes (+14 tokens), zombie quarantine fix, cache cleared. 97.7-min bundle: 406 runs, 6 chains. base: 0→54 signals. linea: 100% pass. arb: gap_to_zero=11.65bps.)
+**Tests**: 1957 passed / 3 skipped (+1 zombie quarantine test)
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: long_scan 30 runs 6 chains 371s (R28.22 — live-stream split verification)
+**Evidence runDirs**: 406 runs (arb=68, base=67, zksync=68, linea=68, mantle=68, scroll=67)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (30 runs 371s, total_profitable_roundtrips=0, arb rq=21)
-**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=21,signals=82,actionable=5/5), zksync=PRIMARY_BLOCKER(rq=10), base=PRIMARY_BLOCKER(rq=1), linea=PRIMARY_BLOCKER(rq=10,suspect=2/4), mantle=CANDIDATE(rq=0,signals=0,structural), scroll=CANDIDATE(rq=0,signals=10,diagnostic-only)
+**Evidence long scan**: long_scan_latest.json @ 2026-03-19T13:18:23Z (406 runs, 97.7 min)
+**Evidence per-chain**: arb=ECONOMICS(2028 signals, 284 rq, gap=11.65bps), base=ECONOMICS(54 signals, 13 rq), zksync=ECONOMICS(68 signals, 128 rq), linea=ECONOMICS(272 signals, 135 rq, 100% pass), mantle=STRUCTURAL(0 signals), scroll=PARTIAL(134 signals, 0 rq)
+**Evidence timestamps**: Rolling @ 2026-03-19T13:17:39Z, long_scan @ 2026-03-19T13:18:23Z
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files.
 
 ---
@@ -23,6 +24,50 @@ R28.21-final live dashboard stream is now runtime-verified: /api/hot is lightwei
 5. **_serialize_live_stream split** (start.py): `verified_pairs` = actionable only, `diagnostic_pairs` = suspect/diagnostic. Both capped at 20.
 
 Fresh verification (30 runs, 371s): arb actionable=5/5, linea SUSPECT=2/4 correctly flagged, spread_bps populated everywhere.
+
+---
+
+## R28.22-cont Dashboard Operational Coherence
+
+Lead review of R28.22 identified 10 issues centered on dashboard data contract and operational coherence. Fixes applied:
+
+1. **WORKFLOW.md canonical run contract** (docs/WORKFLOW.md): Formalized the proven mode: external `dashboard_server.py --port 8099` + `start.py --no-dashboard`. Documented key constraints (NORMAL config updates primary rolling, coverage configs update long_scan only, Panel 0 reflects live stream).
+2. **Dashboard stale banner** (dashboard.html): When primary rolling date (`run_summary.timestamp`) diverges from long_scan date (`long_scan.generated_at`), a warning banner appears: "PRIMARY ROLLING STALE". Hidden when dates match.
+3. **Idle-state messaging** (dashboard.html): When `active_count=0` and no actionable/diagnostic rows or events, Panel 0 shows "No active scan right now. Start a scan to see live stream data here."
+4. **Timestamp divergence resolved**: NORMAL config (`real_minimal.yaml`) included in bundle refreshes primary rolling. All 4 rolling artifacts now synchronized at 2026-03-19T10:55Z.
+5. **/api/hot coherence verified**: All 6 chains present, hot_loop fresh, live_stream idle state confirmed.
+
+R28.22 split preserved (is_actionable, spread_bps, final_net_pnl_usd, actionable/diagnostic tables).
+
+Fresh bundle: 25 runs, 363s, 192 signals, 51 RT evaluated, 0 profitable, best=-49.56 bps.
+
+---
+
+## R28.22-cont-2 Per-Chain Targeted Fixes
+
+Lead's 10-step directive: per-chain NO_USD_PRICE elimination, zombie quarantine fix, surface expansion. Core insight: "the no-profit state is chain-specific — each chain has a different root cause."
+
+### Code Changes
+1. **DEFAULT_TOKEN_USD_PRICES expanded** (strategy/quotes.py): +14 tokens (GRAIL, MAGIC, RDNT, HOLD, BRETT, cbBTC, DEGEN, TOSHI, FRAX, LUSD, USDE, JOE, DPX, WMNT, ZK, SCR, AERO, cbETH).
+2. **Per-chain config prices** — arb: +GRAIL/MAGIC/RDNT, base: +cbBTC/BRETT/DEGEN/TOSHI/rETH, zksync: +HOLD/DAI.
+3. **Zombie quarantine fix** (strategy/quarantine.py): `load_quarantine_state()` now resets `consecutive_failures` to 0 for records that are NOT actively quarantined. Prevents stale disk-cached failure counts from causing immediate re-quarantine across sessions.
+4. **Quarantine cache cleared**: All 7 `data/cache/quarantine_state_*.json` files removed.
+5. **Test added**: `test_zombie_quarantine_reset_on_load` locks the fix.
+
+### Per-Chain Impact (FINAL — 97.7 min, 406 runs)
+| Chain | Before | After | Delta |
+|-------|--------|-------|-------|
+| arbitrum_one | 3 NO_USD_PRICE, 50 QUARANTINED | 0 NO_USD_PRICE, 2028 signals, 284 rq, gap=11.65bps | **ECONOMICS** (closest to profit) |
+| base | 7 NO_USD_PRICE, 18 QUARANTINED, 0 quotes | 54 signals, 13 rq, 4 DEXes | **CRITICAL: 0→54 signals** |
+| zksync | 1 NO_USD_PRICE, 18 QUARANTINED | 68 signals, 128 rq | surface maintained |
+| linea | 3 QUARANTINED, 2 ALGEBRA | 272 signals, 135 rq, 68/68 pass (100%) | **BEST chain** |
+| scroll | 15 QUARANTINED, 0 rq | 134 signals, 2 cdx pairs | PARTIAL_UNBLOCK |
+| mantle | 14 QUARANTINED, 0 signals | 0 signals (68 runs) | **CONFIRMED STRUCTURAL** |
+
+### Remaining Structural Issues
+- **mantle**: stratum ve33 genuinely broken — fails even with fresh quarantine. Need 3rd DEX or stratum investigation.
+- **scroll**: 10+ PRICE_SANITY_FAILED from dead sushiswap pools (WBTC@6840 vs anchor@68000). Living pairs (WETH/USDC, USDC/USDT) work.
+- **arb economics**: slippage 500-9900 bps on $25-150 sizes. Pool depth issue, not config.
 
 ---
 

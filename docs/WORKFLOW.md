@@ -225,6 +225,34 @@ Summary output goes to `data/runs/_rolling/long_scan_latest.json` (canonical rol
 py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --loop --sleep-seconds 20
 ```
 
+### Canonical Run Mode (Dashboard + Scanner)
+
+The proven canonical mode is **external dashboard server + scanner with `--no-dashboard`**.
+The dashboard process and the scanner are separate — this avoids coupling dashboard lifecycle
+to scan cycles and allows the dashboard to serve idle-state data between scans.
+
+**Start dashboard (background):**
+```powershell
+py -3.11 -m monitoring.dashboard_server --port 8099
+```
+
+**Start scanner (foreground, no embedded dashboard):**
+```powershell
+py -3.11 start.py --config-list config/real_minimal.yaml,config/onboard_zksync_candidate.yaml,config/onboard_base_stage2.yaml,config/onboard_mantle_stage2.yaml,config/onboard_linea_stage1.yaml,config/onboard_scroll_stage1.yaml --accepted-fail-chains scroll --max-fail-chains 5 --hours 0.10 --cycles 1 --sleep-seconds 0 --coverage-workers 2 --no-dashboard --prune-keep 200 --summary-file data/runs/_rolling/long_scan_latest.json
+```
+
+**Verify dashboard coherence:**
+```powershell
+Invoke-RestMethod http://127.0.0.1:8099/api/hot
+```
+
+Key constraints:
+- `--no-dashboard` on `start.py` — the embedded dashboard is disabled
+- Dashboard reads rolling artifacts (`_latest.json`, `run_summary_latest.json`, `long_scan_latest.json`, `hot_loop_latest.json`) independently
+- Primary rolling (`_latest.json`, `run_summary_latest.json`) updates only from `run_kind=NORMAL` configs (e.g., `real_minimal.yaml`)
+- Coverage configs (`onboard_*`) update `long_scan_latest.json` only
+- Panel 0 (Hot Loop) reflects live stream state; Panels 1+ reflect rolling artifacts
+
 ### Monitoring During Non-stop Run
 
 Check rolling artifact status:

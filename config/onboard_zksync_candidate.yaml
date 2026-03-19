@@ -64,6 +64,8 @@ tokens_usd_price:
   USDT: 1.0
   ZK: 0.10
   wstETH: 2500.0
+  DAI: 1.0
+  HOLD: 0.003
 
 tokens_anchor_price:
   WETH_USDC: 2050.0

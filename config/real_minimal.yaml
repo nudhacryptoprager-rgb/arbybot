@@ -455,8 +455,10 @@ tokens_usd_price:
   ezETH: 2050    # alias
   STONE: 2100    # StakeStone ETH
   weETH: 2100    # EtherFi wrapped eETH
-  mETH: 2100     # Mantle staked ETH
-
+  mETH: 2100     # Mantle staked ETH  # R28.22: Fix NO_USD_PRICE rejects for arb pairs
+  GRAIL: 1.50     # Camelot governance
+  MAGIC: 0.30     # Treasure DAO
+  RDNT: 0.01      # Radiant Capital
 # Autosize configuration (M5)
 # Auto-reduces position size when impact/ticksCrossed grows
 autosize:

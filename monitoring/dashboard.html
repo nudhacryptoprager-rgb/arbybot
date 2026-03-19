@@ -52,6 +52,7 @@ tr:hover{background:#1c2128}
   <button class="refresh-btn" onclick="loadData()">&#x21bb; Refresh</button>
 </h1>
 <div class="meta" id="meta-line">Loading...</div>
+<div id="stale-banner" style="display:none;background:#5d3a00;color:#f0c040;border:1px solid #f0c040;border-radius:6px;padding:6px 12px;margin:6px 0;font-size:.78rem"></div>
 <div id="error-msg"></div>
 
 <div class="grid">
@@ -188,6 +189,15 @@ function renderRolling(data) {
     `<b>Multi-chain:</b> ${lsRuns} runs (${lsPass}P/${lsFail}F) | ${lsSignals} signals | Net: ${fmtUsd(lsNet)} | Updated: ${(lsTs||'?').slice(0,19)}Z${bsInfo}` +
     `<br><span style="color:#6e7681">Primary (NORM-ONLY): ${rsRunDir} | ${(rsTs||'?').slice(0,19)}Z | Rolling: ${qs.pass_count||0}+${qs.no_data_count||0}+${qs.fail_count||0} (P/ND/F)</span>`;
 
+  // R28.22: Stale banner when primary rolling date diverges from long_scan date
+  const staleBanner = $('stale-banner');
+  if (rsTs && lsTs && rsTs.slice(0,10) !== lsTs.slice(0,10)) {
+    staleBanner.textContent = `\u26A0 PRIMARY ROLLING STALE: primary updated ${rsTs.slice(0,10)}, long_scan updated ${lsTs.slice(0,10)}. Run a NORMAL config (e.g. real_minimal.yaml) to refresh primary rolling.`;
+    staleBanner.style.display = 'block';
+  } else {
+    staleBanner.style.display = 'none';
+  }
+
   renderChainStatus(ls);
   renderFrontier(ls);
   renderEconomics(rs, qs);
@@ -221,7 +231,13 @@ function renderRolling(data) {
         }
       }
     }
-    let html = `<div class="kpi" style="margin-bottom:10px">
+    // R28.22: Idle-state messaging when no scan active
+    const isIdle = (live.active_count || 0) === 0 && actionableRows.length === 0 && diagnosticRows.length === 0 && events.length === 0;
+    let html = '';
+    if (isIdle) {
+      html += '<div style="background:#1c2128;border:1px solid #30363d;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:.82rem;color:#8b949e">No active scan right now. Start a scan to see live stream data here.</div>';
+    }
+    html += `<div class="kpi" style="margin-bottom:10px">
       <div class="kpi-item"><div class="kpi-val">${tr}</div><div class="kpi-lbl">Total Runs</div></div>
       <div class="kpi-item"><div class="kpi-val">${fs}</div><div class="kpi-lbl">Full Sweeps</div></div>
       <div class="kpi-item"><div class="kpi-val">${hr}</div><div class="kpi-lbl">Hot Re-quotes</div></div>

@@ -121,6 +121,55 @@ class TestQuarantineChainScoped:
         cache_b = _get_quarantine_cache_path("linea")
         assert not cache_b.exists() or json.loads(cache_b.read_text()).get("records", {}) == {}
 
+    def test_zombie_quarantine_reset_on_load(self, tmp_path):
+        """R28.22: Non-quarantined records must have consecutive_failures reset on load.
+        
+        Prevents zombie re-quarantine where stale high-failure records
+        from previous sessions cause immediate re-quarantine on first failure.
+        """
+        import time as _time
+        from strategy.quarantine import (
+            QuarantineManager,
+            QuarantineKey,
+            FailureRecord,
+            save_quarantine_state,
+            load_quarantine_state,
+            _get_quarantine_cache_path,
+        )
+
+        # Create a manager with a record that has high failures but NOT quarantined
+        mgr = QuarantineManager()
+        key = QuarantineKey("test_dex", "WETH/USDC", 3000, None)
+        mgr._records[key] = FailureRecord(
+            consecutive_failures=5,  # Above threshold
+            total_failures=10,
+            last_failure_time=_time.time() - 600,  # 10 min ago
+            last_error_code="QUOTE_REVERT",
+            quarantined_until=0.0,  # NOT quarantined (expired or reset)
+            quarantine_count=2,
+        )
+
+        # Save to disk
+        save_quarantine_state(mgr, chain_key="test_zombie")
+
+        # Load into fresh manager
+        mgr2 = QuarantineManager()
+        load_quarantine_state(mgr2, chain_key="test_zombie")
+
+        loaded_record = mgr2._records.get(key)
+        assert loaded_record is not None, "Record should be loaded"
+        assert loaded_record.consecutive_failures == 0, (
+            f"consecutive_failures should be reset to 0 for non-quarantined records, "
+            f"got {loaded_record.consecutive_failures}"
+        )
+        # total_failures should be preserved (historical stat)
+        assert loaded_record.total_failures == 10
+
+        # Cleanup
+        cache_path = _get_quarantine_cache_path("test_zombie")
+        if cache_path.exists():
+            cache_path.unlink()
+
 
 class TestRuntimeDisabledChainScoped:
     """Tests for strategy/runtime_disabled.py chain-scoped persistence."""

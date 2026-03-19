@@ -395,6 +395,26 @@ DEFAULT_TOKEN_USD_PRICES = {
     "STONE": 2100.0,
     "weETH": 2100.0,
     "mETH": 2100.0,
+    # R28.22: Per-chain NO_USD_PRICE fixes
+    "GRAIL": 1.50,
+    "MAGIC": 0.30,
+    "RDNT": 0.01,
+    "HOLD": 0.003,
+    "BRETT": 0.05,
+    "cbBTC": 68000.0,
+    "CBBTC": 68000.0,
+    "DEGEN": 0.005,
+    "TOSHI": 0.0003,
+    "FRAX": 1.0,
+    "LUSD": 1.0,
+    "USDE": 1.0,
+    "JOE": 0.25,
+    "DPX": 5.0,
+    "WMNT": 0.50,
+    "ZK": 0.10,
+    "SCR": 0.50,
+    "AERO": 0.50,
+    "cbETH": 2200.0,
 }
 
 

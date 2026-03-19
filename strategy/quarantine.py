@@ -459,8 +459,12 @@ def load_quarantine_state(manager: "QuarantineManager", chain_key: str | None = 
                 fee=data["fee"],
                 quoter_address=data.get("quoter_address"),
             )
+            # R28.22: Reset consecutive_failures for non-quarantined records
+            # to prevent zombie re-quarantine from stale cache across sessions.
+            # Active quarantines keep their failure count.
+            is_actively_quarantined = quarantined_until > now
             record = FailureRecord(
-                consecutive_failures=data.get("consecutive_failures", 0),
+                consecutive_failures=data.get("consecutive_failures", 0) if is_actively_quarantined else 0,
                 total_failures=data.get("total_failures", 0),
                 last_failure_time=data.get("last_failure_time", 0.0),
                 last_error_code=data.get("last_error_code", ""),
