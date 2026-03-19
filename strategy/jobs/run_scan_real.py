@@ -12,6 +12,11 @@ REFACTORED: Logic extracted to:
 - strategy/spreads.py - Spread signal computation
 - strategy/artifacts.py - Artifact writing
 - strategy/infra.py - RPC/WS infrastructure helpers
+- strategy/scan_universe.py - Universe resolution (R28.28)
+- strategy/roundtrip_selection.py - Candidate selection pipeline (R28.28)
+- strategy/dynamic_sweep_runtime.py - Dynamic size sweep (R28.28)
+- strategy/execution_probe.py - Live execution probe (R28.28)
+- strategy/live_stream.py - Operator candidate stream (R28.28)
 """
 
 import argparse
@@ -115,69 +120,19 @@ def _build_live_candidate_stream(
     default_size_usd: float,
     max_candidates: int = 10,
 ) -> List[Dict[str, Any]]:
-    """Build compact operator-facing pair candidates for hot-loop streaming."""
-    opp_map = {
-        (o.get("pair"), o.get("buy_dex"), o.get("sell_dex")): o
-        for o in (opportunities or [])
-    }
-    sweep_map = {
-        (r.get("pair"), r.get("buy_dex"), r.get("sell_dex")): r
-        for r in ((dynamic_sweep or {}).get("results") or [])
-    }
-    candidates: List[Dict[str, Any]] = []
-    for rt in roundtrip_results or []:
-        key = (rt.pair, rt.buy_dex, rt.sell_dex)
-        opp = opp_map.get(key, {})
-        sweep = sweep_map.get(key, {})
-        lp_fee_bps = ((rt.leg1_fee or 0) + (rt.leg2_fee or 0)) / 100.0
-        gas_bps = max(0.0, float(rt.gross_pnl_bps or 0.0) - float(rt.net_pnl_bps or 0.0))
-        cost_bps = sweep.get("best_total_cost_bps")
-        if cost_bps is None:
-            cost_bps = round(abs(float(rt.estimated_slippage_bps or 0.0)) + lp_fee_bps + gas_bps, 2)
-        size_usd = sweep.get("best_size_usd") or opp.get("usd_notional") or default_size_usd
-        net_bps = sweep.get("best_net_pnl_bps")
-        if net_bps is None:
-            net_bps = float(rt.net_pnl_bps or 0.0)
-        if rt.is_profitable and abs(net_bps) > 500:
-            final_result = "SUSPECT_ACCOUNTING"
-        elif rt.is_profitable and rt.leg2_is_real_quote:
-            final_result = "ROUNDTRIP_PROFITABLE"
-        elif rt.leg2_is_real_quote:
-            final_result = "ROUNDTRIP_NOT_PROFITABLE"
-        else:
-            final_result = "ONE_LEG_ONLY_DIAGNOSTIC"
-        spread = opp.get("spread_bps") or opp.get("gross_spread_bps")
-        if spread is None and rt.gross_pnl_bps is not None:
-            spread = float(rt.gross_pnl_bps)
-        is_actionable = bool(rt.leg2_is_real_quote) and final_result != "SUSPECT_ACCOUNTING"
-        final_net_usd = None
-        if size_usd is not None and net_bps is not None:
-            final_net_usd = round((float(size_usd) * float(net_bps)) / 10000.0, 4)
-        candidates.append({
-            "network": chain_key,
-            "pair": rt.pair,
-            "route": f"{rt.buy_dex}->{rt.sell_dex}",
-            "buy_dex": rt.buy_dex,
-            "sell_dex": rt.sell_dex,
-            "optimal_size_usd": round(float(size_usd), 2) if size_usd is not None else None,
-            "spread_bps": round(float(spread), 2) if spread is not None else None,
-            "execution_cost_bps": round(float(cost_bps), 2) if cost_bps is not None else None,
-            "execution_cost_usd": round((float(size_usd) * float(cost_bps)) / 10000.0, 4) if size_usd is not None and cost_bps is not None else None,
-            "final_net_pnl_bps": round(float(net_bps), 2) if net_bps is not None else None,
-            "final_net_pnl_usd": final_net_usd,
-            "final_result": final_result,
-            "is_actionable": is_actionable,
-            "real_quote": bool(rt.leg2_is_real_quote),
-            "reject_reason": rt.reject_reason,
-        })
-    candidates.sort(
-        key=lambda c: (
-            c.get("final_result") != "ROUNDTRIP_PROFITABLE",
-            c.get("final_result") == "ONE_LEG_ONLY_DIAGNOSTIC",
-            -(c.get("final_net_pnl_bps") or -999999.0),
-        )
+    """Build compact operator-facing pair candidates for hot-loop streaming.
+
+    R28.28: Delegates to strategy.live_stream (extracted module).
+    """
+    from strategy.live_stream import build_live_candidate_stream
+    return build_live_candidate_stream(
+        chain_key=chain_key,
+        opportunities=opportunities,
+        roundtrip_results=roundtrip_results,
+        dynamic_sweep=dynamic_sweep,
+        default_size_usd=default_size_usd,
+        max_candidates=max_candidates,
     )
-    return candidates[:max_candidates]
 
 
 # Ensure environment variables from project .env are loaded
@@ -329,142 +284,20 @@ def run_scan(
     if run_kind == "SMOKE":
         logger.info("run_kind=SMOKE: this run will be excluded from rolling window")
     
-    # R28: Universe Discovery — two canonical paths (see docs/WORKFLOW.md):
-    #   config            → hardcoded pairs + pre-verified pools (Arbitrum production)
-    #   discovery_runtime  → intent.txt → factory RPC → RuntimePair (chain bring-up, canonical successor)
-    universe_source = config.get("universe_source", "config")
-    use_intent = (universe_source == "intent")
-    force_intent = (universe_source in ("intent_verified", "intent_forced"))
-    use_discovery_runtime = (universe_source == "discovery_runtime")
-    
-    # R27.3: Forbid intent/intent_forced for NORMAL/COVERAGE runs (no on-chain verify)
-    if universe_source in ("intent", "intent_forced") and run_kind in ("NORMAL", "COVERAGE"):
-        raise RuntimeError(
-            f"universe_source='{universe_source}' is forbidden for run_kind={run_kind}. "
-            "Intent-based universes lack on-chain verification. "
-            "Use 'config' or 'discovery_runtime'."
-        )
-    
-    # Resolve pairs based on universe_source BEFORE quoting
-    _discovery_runtime_resolved = []
-    _discovery_runtime_stats = None
-    pairs_list = None
-    
-    # R28.11: Hot re-quote mode — skip discovery, reuse cached pairs from previous full sweep
-    _hot_pairs_file = os.environ.get("ARBY_HOT_PAIRS_FILE")
-    if _hot_pairs_file and Path(_hot_pairs_file).is_file():
-        try:
-            import json as _json
-            from config.pairs import PairConfig
-            with open(_hot_pairs_file, "r", encoding="utf-8") as _hpf:
-                _hot_data = _json.load(_hpf)
-            _hot_pair_dicts = _hot_data.get("pairs", [])
-            pairs_list = [PairConfig.from_dict(d) for d in _hot_pair_dicts]
-            logger.info(
-                "HOT_REQUOTE: loaded %d cached pairs from %s (skipping discovery)",
-                len(pairs_list), _hot_pairs_file,
-            )
-            stats["universe_source"] = "hot_requote"
-            stats["scan_mode"] = "hot"
-            stats["hot_pairs_file"] = _hot_pairs_file
-            stats["hot_pairs_count"] = len(pairs_list)
-        except Exception as hp_err:
-            logger.warning("HOT_REQUOTE: failed to load %s, falling back to full discovery: %s", _hot_pairs_file, hp_err)
-            pairs_list = None
-    
-    if pairs_list is None and use_discovery_runtime:
-        try:
-            from discovery.runtime import resolve_runtime_pairs, runtime_pairs_to_pair_configs
-            
-            max_pairs = config.get("discovery_runtime_max_pairs", 20)
-            # R28.27: When uncapped, remove discovery cap to measure its funnel effect
-            if _cap_switches["uncap_discovery_max_pairs"]:
-                logger.info("CAP_ISOLATION: discovery_runtime_max_pairs uncapped (was %d)", max_pairs)
-                max_pairs = _UNCAPPED
-            require_cross_dex = config.get("require_cross_dex", False)
-            excluded_hints = config.get("excluded_pair_hints") or []
-            _discovery_runtime_resolved, _discovery_runtime_stats = resolve_runtime_pairs(
-                chain=chain_key,
-                dexes=dexes_list if dexes_list else None,
-                max_pairs=max_pairs,
-                require_cross_dex=require_cross_dex,
-                excluded_pair_hints=excluded_hints,
-            )
-            pairs_list = runtime_pairs_to_pair_configs(_discovery_runtime_resolved)
-            
-            logger.info(
-                "Using discovery_runtime universe (%d pools resolved -> %d unique pairs for quoting)",
-                len(_discovery_runtime_resolved),
-                len(pairs_list),
-            )
-            stats["universe_source"] = "discovery_runtime"
-            stats["discovery_runtime_pairs_count"] = len(pairs_list)
-            stats["discovery_runtime_pools_resolved"] = len(_discovery_runtime_resolved)
-            if _discovery_runtime_stats:
-                stats["discovery_runtime"] = _discovery_runtime_stats.to_dict()
-        except Exception as dr_err:
-            allow_fallback = config.get("discovery_runtime_allow_fallback", False)
-            if allow_fallback:
-                logger.warning("discovery_runtime failed, falling back to config (allowed by config): %s", dr_err)
-                pairs_list = load_pairs(chain_key, config, use_intent=False, force_intent=False)
-                stats["universe_source"] = "config (discovery_runtime fallback)"
-                stats["discovery_runtime_error"] = str(dr_err)
-            else:
-                logger.error("discovery_runtime failed (strict mode, no fallback): %s", dr_err)
-                stats["universe_source"] = "discovery_runtime_failed"
-                stats["discovery_runtime_error"] = str(dr_err)
-                raise RuntimeError(
-                    f"discovery_runtime resolution failed and fallback is disabled: {dr_err}"
-                ) from dr_err
-    elif pairs_list is None and force_intent:
-        pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
-        logger.info("Using intent.txt universe FORCED (universe_source=%s -> intent_forced, %d pairs)", universe_source, len(pairs_list))
-        stats["universe_source"] = "intent_forced"
-        stats["intent_pairs_count"] = len(pairs_list)
-        stats["intent_on_chain_verified"] = False
-    elif pairs_list is None and use_intent:
-        pairs_list = load_pairs(chain_key, config, use_intent=use_intent, force_intent=force_intent)
-        logger.info("Using intent.txt universe (universe_source=intent)")
-        stats["universe_source"] = "intent"
-    elif pairs_list is None:
-        # Default: config pairs (let collect_quotes load them)
-        pairs_list = None
-        logger.debug("Using config pairs (universe_source=config)")
-        stats["universe_source"] = "config"
-    
-    # R27.3: Encode strategy mode for artifact observability
-    _us = stats["universe_source"]
-    if _us == "hot_requote":
-        stats["strategy_mode"] = "HOT_REQUOTE"
-    elif _us == "discovery_runtime":
-        stats["strategy_mode"] = "DYNAMIC_VERIFIED"
-    elif _us in ("intent", "intent_forced"):
-        stats["strategy_mode"] = "BOOTSTRAP"
-    elif _us.startswith("config"):
-        stats["strategy_mode"] = "TRUTH_PROBE"
-    else:
-        stats["strategy_mode"] = "UNKNOWN"
-    stats["same_dex_only"] = not config.get("require_cross_dex", True)
-    
-    # R28.11: Save hot pairs cache after full discovery for subsequent hot re-quote cycles
-    if pairs_list and _us != "hot_requote":
-        try:
-            import json as _json
-            _cache_dir = Path("data") / "cache"
-            _cache_dir.mkdir(parents=True, exist_ok=True)
-            _cache_path = _cache_dir / f"hot_pairs_{chain_key}.json"
-            _cache_data = {
-                "schema": "hot_pairs_cache:v1.0",
-                "chain": chain_key,
-                "universe_source": _us,
-                "pairs_count": len(pairs_list),
-                "pairs": [p.to_dict() if hasattr(p, "to_dict") else p for p in pairs_list],
-            }
-            with open(_cache_path, "w", encoding="utf-8") as _cpf:
-                _json.dump(_cache_data, _cpf, indent=2)
-            logger.debug("Hot pairs cache written: %s (%d pairs)", _cache_path, len(pairs_list))
-        except Exception as _cache_err:
-            logger.debug("Hot pairs cache write skipped: %s", _cache_err)
+    # R28.28: Universe resolution extracted to strategy.scan_universe
+    from strategy.scan_universe import resolve_universe
+    _universe = resolve_universe(
+        config=config,
+        chain_key=chain_key,
+        dexes_list=dexes_list,
+        run_kind=run_kind,
+        cap_switches=_cap_switches,
+    )
+    pairs_list = _universe["pairs_list"]
+    _discovery_runtime_resolved = _universe["discovery_runtime_resolved"]
+    _discovery_runtime_stats = _universe["discovery_runtime_stats"]
+    stats.update(_universe["stats_updates"])
+    use_discovery_runtime = (config.get("universe_source", "config") == "discovery_runtime")
     
     _phase_discovery_end = _time.monotonic()
     
@@ -472,7 +305,7 @@ def run_scan(
         "discovery_finished",
         chain=chain_key,
         pairs=len(pairs_list) if pairs_list else 0,
-        universe_source=_us,
+        universe_source=stats.get("universe_source", "config"),
         discovery_ms=int((_phase_discovery_end - _phase_t0) * 1000),
     )
     
@@ -651,7 +484,8 @@ def run_scan(
         
         opps_list, opps_summary = evaluate_quotes(
             quotes_sample, cycle=0, timestamp=timestamp,
-            eth_usd_price=eth_usd, min_net_profit_usd=0.10,
+            eth_usd_price=eth_usd,
+            min_net_profit_usd=config.get("min_net_profit_usd", 0.10),
             gas_config=gas_config,
             # v3.2.2: Use drift_warning_pct to align opportunity gates with spreads policy
             target_notional_usd=config.get("target_usd_notional", 1000.0),
@@ -903,56 +737,13 @@ def run_scan(
             # LP fee per leg = fee_tier / 100 (e.g., 500 -> 5 bps)
             # Roundtrip LP cost = buy_fee/100 + sell_fee/100
             # NOTE: opps_list contains dicts (from to_dict()), not Opportunity objects
-            def lp_fee_viable(opp: dict) -> bool:
-                """Check if gross spread covers roundtrip LP fees."""
-                try:
-                    lp_bps = (opp.get("buy_fee", 0) + opp.get("sell_fee", 0)) / 100
-                    return float(opp.get("gross_spread_bps", 0)) > lp_bps
-                except Exception:
-                    return True  # Allow on error (conservative)
-            
-            # v2.2.1: Roundtrip MUST be cross-DEX (same-DEX fee-tier arb not viable as roundtrip)
-            def is_cross_dex(opp: dict) -> bool:
-                """Check if opportunity is cross-DEX (buy_dex != sell_dex)."""
-                return opp.get("buy_dex") != opp.get("sell_dex")
-            
-            # v2.2.1: Combined filter: cross-DEX AND LP fee viable
-            # R28.21: Exclude diagnostic-only signals from roundtrip evaluation
-            def roundtrip_eligible(opp: dict) -> bool:
-                if opp.get("is_diagnostic_only", False):
-                    return False
-                return is_cross_dex(opp) and lp_fee_viable(opp)
-            
-            # v3.2.4: Filter for minimum viability margin before roundtrip eval
-            # Only candidates with spread_minus_required_bps > -5 get evaluated
-            # This prevents wasting roundtrip evals on clearly non-viable candidates
-            MIN_SPREAD_MINUS_THRESHOLD = -5.0  # bps
-            
-            def margin_viable(opp: dict) -> bool:
-                """Check if candidate has viable economics margin."""
-                margin = opp.get("spread_minus_required_bps", -999)
-                return margin > MIN_SPREAD_MINUS_THRESHOLD
-            
-            # v2.8.0: Best-per-pair selection to improve coverage across pairs
-            # Instead of taking top-N overall (which often clusters on one pair),
-            # select best candidate per unique pair, then take top-5
-            # v3.2.4: Sort by spread_minus_required_bps (desc) for viability-first selection
-            def best_per_pair(opps, max_candidates=10):
-                """Select best opportunity per pair by spread_minus_required_bps."""
-                pairs_best = {}
-                for o in opps[:max_candidates]:
-                    pair = o.get("pair", "unknown")
-                    # v3.2.4: Prioritize by spread_minus_required_bps (viability margin)
-                    curr_margin = o.get("spread_minus_required_bps", -999)
-                    best_margin = pairs_best[pair].get("spread_minus_required_bps", -999) if pair in pairs_best else -999
-                    if pair not in pairs_best or curr_margin > best_margin:
-                        pairs_best[pair] = o
-                # v3.2.4: Sort by spread_minus_required_bps descending (viable first)
-                return sorted(pairs_best.values(), key=lambda x: x.get("spread_minus_required_bps", -999), reverse=True)
+            # R28.28: Candidate selection extracted to strategy.roundtrip_selection
+            from strategy.roundtrip_selection import select_roundtrip_candidates, is_cross_dex, lp_fee_viable
             
             # R28.24: Config-driven caps (was hard-coded 20/5, too restrictive)
             _rt_max_candidates = config.get("roundtrip_max_candidates", 50)
             _rt_top_n = config.get("roundtrip_top_n", 10)
+            _min_margin_bps = config.get("roundtrip_min_margin_bps", -5.0)
             # R28.27: Cap isolation — lift caps when investigating funnel bottlenecks
             if _cap_switches["uncap_rt_max_candidates"]:
                 logger.info("CAP_ISOLATION: roundtrip_max_candidates uncapped (was %d)", _rt_max_candidates)
@@ -961,19 +752,13 @@ def run_scan(
                 logger.info("CAP_ISOLATION: roundtrip_top_n uncapped (was %d)", _rt_top_n)
                 _rt_top_n = _UNCAPPED
             
-            # Apply best-per-pair, filter by eligibility AND margin viability
-            per_pair_best = best_per_pair(opps_list, max_candidates=_rt_max_candidates)
-            # v3.2.4: Filter by roundtrip_eligible AND margin_viable (spread_minus > -5 bps)
-            eligible_opps = [o for o in per_pair_best if roundtrip_eligible(o) and margin_viable(o)][:_rt_top_n]
-            margin_filtered_count = len([o for o in per_pair_best if roundtrip_eligible(o)]) - len([o for o in per_pair_best if roundtrip_eligible(o) and margin_viable(o)])
-            stats["roundtrip_lp_filter"] = {
-                "candidates_considered": min(_rt_max_candidates, len(opps_list)),
-                "cross_dex_count": len([o for o in opps_list[:_rt_max_candidates] if is_cross_dex(o)]),
-                "lp_viable_count": len([o for o in opps_list[:_rt_max_candidates] if lp_fee_viable(o)]),
-                "unique_pairs_considered": len(per_pair_best),  # v2.8.0: Track pair diversity
-                "margin_filtered_count": margin_filtered_count,  # v3.2.4: Count filtered by margin
-                "passed_to_roundtrip": len(eligible_opps),
-            }
+            eligible_opps, _rt_filter_stats = select_roundtrip_candidates(
+                opps_list,
+                rt_max_candidates=_rt_max_candidates,
+                rt_top_n=_rt_top_n,
+                min_margin_bps=_min_margin_bps,
+            )
+            stats["roundtrip_lp_filter"] = _rt_filter_stats
             
             # v2.8.1: Build token_decimals dict for correct net_pnl_bps calculation
             # Source: pairs_list (if available) or core_tokens.yaml
@@ -1094,189 +879,26 @@ def run_scan(
         ]
         stats["roundtrip"]["best_measured_spread_gap_bps"] = max(measured_gaps) if measured_gaps else None
         
-        # v3.3.0: Dynamic size sweep — find optimal notional per route
-        # R28.17: COVERAGE runs now use same truth path as NORMAL (no lightweight skip)
+        # v3.3.0: Dynamic size sweep — R28.28: extracted to strategy.dynamic_sweep_runtime
         dynamic_probe_cfg = config.get("dynamic_probe", {})
         if dynamic_probe_cfg.get("enabled") and eligible_opps:
-            from engine.roundtrip import sweep_roundtrip_sizes, CANONICAL_SWEEP_SIZES_USD
+            from strategy.dynamic_sweep_runtime import run_sweep
 
-            sweep_sizes = dynamic_probe_cfg.get("sizes_usd", None) or list(CANONICAL_SWEEP_SIZES_USD)
-            max_routes = dynamic_probe_cfg.get("top_routes", 3)
-
-            # Factory: re-quote leg1 on sell_dex (token_in → token_out, same direction)
-            def _make_leg1_requote(quote: Dict):
-                _dex_id = quote.get("dex_id", "")
-                _dex_cfg = get_dex_config(chain_key, _dex_id)
-                _quoter = _dex_cfg.get_quoter_address() if _dex_cfg else None
-                _ti_sym = quote.get("token_in", "")
-                _to_sym = quote.get("token_out", "")
-                _fee = quote.get("fee", 3000)
-                _ti_addr = get_token_address(chain_key, _ti_sym)
-                _to_addr = get_token_address(chain_key, _to_sym)
-                if not _quoter or not _ti_addr or not _to_addr:
-                    return None
-
-                def _requote(amount_in_wei: int) -> Optional[Dict]:
-                    r = read_quoter_v2(
-                        quoter_address=_quoter,
-                        token_in=_ti_addr,
-                        token_out=_to_addr,
-                        amount_in=amount_in_wei,
-                        fee=_fee,
-                        rpc_url=resolved_http,
-                        block_num=current_block,
-                    )
-                    if r:
-                        return {
-                            "amount_out_wei": r["amount_out"],
-                            "gas_estimate": r.get("gas_estimate", 150000),
-                            "ticks_crossed": r.get("ticks_crossed", 0),
-                            "sqrt_price_after": r.get("sqrt_price_after"),
-                        }
-                    return None
-                return _requote
-
-            # Factory: re-quote leg2 on buy_dex (token_out → token_in, REVERSE)
-            def _make_leg2_requote(quote: Dict):
-                _dex_id = quote.get("dex_id", "")
-                _dex_cfg = get_dex_config(chain_key, _dex_id)
-                _quoter = _dex_cfg.get_quoter_address() if _dex_cfg else None
-                _to_sym = quote.get("token_out", "")
-                _ti_sym = quote.get("token_in", "")
-                _fee = quote.get("fee", 3000)
-                _to_addr = get_token_address(chain_key, _to_sym)
-                _ti_addr = get_token_address(chain_key, _ti_sym)
-                if not _quoter or not _ti_addr or not _to_addr:
-                    return None
-
-                def _requote(amount_in_wei: int) -> Optional[Dict]:
-                    r = read_quoter_v2(
-                        quoter_address=_quoter,
-                        token_in=_to_addr,   # REVERSE: token_out → token_in
-                        token_out=_ti_addr,
-                        amount_in=amount_in_wei,
-                        fee=_fee,
-                        rpc_url=resolved_http,
-                        block_num=current_block,
-                    )
-                    if r:
-                        return {
-                            "amount_out_wei": r["amount_out"],
-                            "gas_estimate": r.get("gas_estimate", 150000),
-                            "ticks_crossed": r.get("ticks_crossed", 0),
-                            "sqrt_price_after": r.get("sqrt_price_after"),
-                        }
-                    return None
-                return _requote
-
-            sweep_results = []
-            for opp in eligible_opps[:max_routes]:
-                buy_key = f"{opp.get('buy_dex')}:{opp.get('diagnostics', {}).get('buy_pool')}:{opp.get('buy_fee')}"
-                sell_key = f"{opp.get('sell_dex')}:{opp.get('diagnostics', {}).get('sell_pool')}:{opp.get('sell_fee')}"
-                bq = quotes_by_key.get(buy_key)
-                sq = quotes_by_key.get(sell_key)
-                if not bq or not sq:
-                    continue
-
-                leg1_rq = _make_leg1_requote(sq)   # leg1 on sell_dex
-                leg2_rq = _make_leg2_requote(bq)   # leg2 on buy_dex
-                if not leg1_rq or not leg2_rq:
-                    continue
-
-                _ti = sq.get("token_in", "WETH")
-                _ti_price = (config.get("tokens_usd_price") or {}).get(_ti)
-                if not _ti_price:
-                    _ti_price = eth_usd if _ti in ("WETH", "ETH") else None
-                if not _ti_price:
-                    continue
-
-                _ti_dec = token_decimals.get(_ti, 18)
-
-                sr = sweep_roundtrip_sizes(
-                    buy_quote_base=sq,   # leg1 base (sell_dex quote)
-                    sell_quote_base=bq,  # leg2 base (buy_dex quote)
-                    requote_leg1=leg1_rq,
-                    requote_leg2=leg2_rq,
-                    sizes_usd=sweep_sizes,
-                    token_in_usd_price=_ti_price,
-                    token_in_decimals=_ti_dec,
-                    gas_price_wei=live_gas_price_wei,
-                    l1_cost_wei=l1_cost_wei,
-                    l1_cost_source=l1_cost_source,
-                    eth_usd_price=eth_usd,
-                )
-                sweep_results.append(sr)
-                logger.info(
-                    "Sweep %s: best=$%s, pnl=%.2f bps, frontier=%s",
-                    sr.pair, sr.best_size_usd, sr.best_net_pnl_bps or 0.0, sr.frontier_reason,
-                )
-
-            # SUSPECT_ROUNDTRIP_OUTLIER: filter out sweep results with
-            # extreme positive PnL, which indicates illiquid/garbage pool data.
-            # Threshold aligned with SUSPECT_SPREAD_BPS_HARD (500 bps).
-            SUSPECT_ROUNDTRIP_OUTLIER_BPS = 500
-            suspect_outlier_count = 0
-            clean_results = []
-            for sr in sweep_results:
-                if sr.best_net_pnl_bps is not None and abs(sr.best_net_pnl_bps) > SUSPECT_ROUNDTRIP_OUTLIER_BPS:
-                    suspect_outlier_count += 1
-                    logger.warning(
-                        "SUSPECT_ROUNDTRIP_OUTLIER: %s pnl=%.1f bps outside ±%d threshold",
-                        sr.pair, sr.best_net_pnl_bps, SUSPECT_ROUNDTRIP_OUTLIER_BPS,
-                    )
-                else:
-                    clean_results.append(sr)
-
-            if clean_results:
-                best_sweep = max(
-                    clean_results,
-                    key=lambda s: s.best_net_pnl_bps if s.best_net_pnl_bps is not None else -9999,
-                )
-                stats["roundtrip"]["dynamic_sweep"] = {
-                    "enabled": True,
-                    "routes_swept": len(sweep_results),
-                    "routes_clean": len(clean_results),
-                    "suspect_outlier_count": suspect_outlier_count,
-                    "best_pair": best_sweep.pair,
-                    "best_size_usd": best_sweep.best_size_usd,
-                    "best_net_pnl_bps": best_sweep.best_net_pnl_bps,
-                    "best_frontier_reason": best_sweep.frontier_reason,
-                    "gap_to_zero_bps": best_sweep.gap_to_zero_bps,
-                    "best_gas_bps": best_sweep.best_gas_bps,
-                    "best_fee_bps": best_sweep.best_fee_bps,
-                    "best_slippage_bps": best_sweep.best_slippage_bps,
-                    "best_total_cost_bps": best_sweep.best_total_cost_bps,
-                    "results": [s.to_dict() for s in sweep_results],
-                }
-            elif sweep_results:
-                # All results were suspect outliers
-                stats["roundtrip"]["dynamic_sweep"] = {
-                    "enabled": True,
-                    "routes_swept": len(sweep_results),
-                    "routes_clean": 0,
-                    "suspect_outlier_count": suspect_outlier_count,
-                    "best_frontier_reason": "ALL_SUSPECT_OUTLIER",
-                    "results": [s.to_dict() for s in sweep_results],
-                }
-            else:
-                stats["roundtrip"]["dynamic_sweep"] = {"enabled": True, "routes_swept": 0}
-            
-            # R28.7: Promote sweep results to top-level executable evidence.
-            # dynamic_sweep is the core decision layer — its best_executable_size_usd
-            # is the primary field for determining if a profitable trade exists.
-            ds = stats["roundtrip"].get("dynamic_sweep", {})
-            if ds.get("best_net_pnl_bps") is not None and ds["best_net_pnl_bps"] > 0:
-                stats["roundtrip"]["best_executable_size_usd"] = ds["best_size_usd"]
-                stats["roundtrip"]["best_executable_pnl_bps"] = ds["best_net_pnl_bps"]
-                stats["roundtrip"]["executable_evidence"] = "SWEEP_PROFITABLE"
-            elif ds.get("gap_to_zero_bps") is not None:
-                stats["roundtrip"]["best_executable_size_usd"] = ds.get("best_size_usd")
-                stats["roundtrip"]["best_executable_pnl_bps"] = ds.get("best_net_pnl_bps")
-                stats["roundtrip"]["executable_evidence"] = "SWEEP_GAP_TO_ZERO"
-            else:
-                stats["roundtrip"]["best_executable_size_usd"] = None
-                stats["roundtrip"]["best_executable_pnl_bps"] = None
-                stats["roundtrip"]["executable_evidence"] = "NO_SWEEP_DATA"
+            sweep_result = run_sweep(
+                eligible_opps=eligible_opps,
+                quotes_by_key=quotes_by_key,
+                config=config,
+                chain_key=chain_key,
+                rpc_url=resolved_http,
+                current_block=current_block,
+                live_gas_price_wei=live_gas_price_wei,
+                l1_cost_wei=l1_cost_wei,
+                l1_cost_source=l1_cost_source,
+                eth_usd=eth_usd,
+                token_decimals=token_decimals,
+            )
+            stats["roundtrip"]["dynamic_sweep"] = sweep_result["dynamic_sweep"]
+            stats["roundtrip"].update(sweep_result["executable_evidence"])
 
         stats["live_candidate_stream"] = _build_live_candidate_stream(
             chain_key=chain_key,
@@ -1404,112 +1026,10 @@ def run_scan(
         }
     _phase_preflight_end = _time.monotonic()
     
-    # R28.15: Live execution probe — wires simulate_rpc + execute_live into scanner
-    # This block is DORMANT unless config explicitly sets execution_enabled=true
-    # and kill_switch_active=false. All current configs keep this off.
-    # Flow: best candidate → simulate_rpc → execute_live → receipt → realized_pnl
+    # R28.15→R28.28: Live execution probe — extracted to strategy.execution_probe
     _phase_exec_start = _time.monotonic()
-    stats["live_execution"] = {"enabled": False}
-    if (
-        config.get("execution_enabled", False) is True
-        and config.get("kill_switch_active", True) is False
-        and config.get("simulate_only", True) is False
-        and provider_http is not None
-        and opps_list
-        and len(opps_list) > 0
-    ):
-        try:
-            import asyncio
-            from execution.simulator import PreTradeSimulator, SimulatorConfig
-            from execution.dex_dex_executor import DexDexExecutor, ExecutorConfig
-
-            # Pick best candidate (first opportunity by PnL ranking)
-            best_opp = opps_list[0]
-            # Build opportunity dict for simulator/executor
-            exec_opp = {
-                "spread_id": best_opp.get("spread_id", best_opp.get("signal_id", "unknown")),
-                "router_address": best_opp.get("buy_pool", ""),
-                "swap_calldata": best_opp.get("swap_calldata", ""),
-                "expected_out": str(best_opp.get("gross_pnl_usdc_est", "0")),
-                "gas_estimate": int(best_opp.get("gas_estimate", 300_000)),
-                "quote_timestamp_ms": int(_time.time() * 1000),
-                "simulation_passed": False,
-                "expected_pnl_usd": str(best_opp.get("net_pnl_usdc_est", "0")),
-                "paper_size_usd": str(config.get("paper_size_usd", 150)),
-            }
-
-            # Step 1: Pre-trade simulation (async)
-            sim_config = SimulatorConfig(
-                max_slippage_bps=config.get("max_slippage_bps", 100),
-                max_gas_estimate=config.get("max_gas_estimate", 500_000),
-                quote_freshness_ms=config.get("quote_freshness_ms", 3000),
-            )
-            simulator = PreTradeSimulator(sim_config)
-            sim_result = asyncio.run(simulator.simulate_rpc(exec_opp, provider_http))
-
-            if sim_result.passed:
-                exec_opp["simulation_passed"] = True
-                exec_opp["simulated_out"] = str(sim_result.simulated_out)
-
-                # Step 2: Execute (async) — requires signer
-                signer_address = config.get("signer_address")
-                sign_fn_path = config.get("sign_function")
-                if signer_address and sign_fn_path:
-                    exec_config = ExecutorConfig(
-                        smoke_mode=False,
-                        execution_enabled=True,
-                        require_simulation=True,
-                        max_gas_price_gwei=config.get("max_gas_price_gwei", 50.0),
-                        max_slippage_bps=config.get("max_slippage_bps", 100),
-                    )
-                    executor = DexDexExecutor(config=exec_config, kill_switch_active=False)
-
-                    # sign_and_send must be provided externally via config
-                    # For now, log that we reached this point (M4.2 gate)
-                    stats["live_execution"] = {
-                        "enabled": True,
-                        "simulation_passed": True,
-                        "simulated_out": str(sim_result.simulated_out),
-                        "slippage_bps": sim_result.slippage_bps,
-                        "execution_attempted": False,
-                        "reason": "SIGNER_READY_BUT_NO_SIGN_FN_YET",
-                    }
-                    logger.info(
-                        "Live execution: simulation PASSED (slippage=%d bps), signer ready but sign_fn not wired",
-                        sim_result.slippage_bps,
-                    )
-                else:
-                    stats["live_execution"] = {
-                        "enabled": True,
-                        "simulation_passed": True,
-                        "simulated_out": str(sim_result.simulated_out),
-                        "slippage_bps": sim_result.slippage_bps,
-                        "execution_attempted": False,
-                        "reason": "NO_SIGNER_CONFIGURED",
-                    }
-                    logger.info(
-                        "Live execution: simulation PASSED (slippage=%d bps) but no signer configured",
-                        sim_result.slippage_bps,
-                    )
-            else:
-                stats["live_execution"] = {
-                    "enabled": True,
-                    "simulation_passed": False,
-                    "blockers": sim_result.blockers,
-                    "revert_reason": sim_result.revert_reason,
-                    "execution_attempted": False,
-                }
-                logger.info(
-                    "Live execution: simulation FAILED (%s)",
-                    ", ".join(sim_result.blockers),
-                )
-        except Exception as exec_err:
-            logger.warning("Live execution probe failed: %s", exec_err)
-            stats["live_execution"] = {
-                "enabled": True,
-                "error": str(exec_err),
-                "execution_attempted": False,
-            }
+    from strategy.execution_probe import probe_live_execution
+    stats["live_execution"] = probe_live_execution(config, provider_http, opps_list)
     _phase_exec_end = _time.monotonic()
     
     # v2.4.1: Discovery dry-run (count candidates without changing universe)
@@ -1642,6 +1162,15 @@ def run_scan(
     # R28.24: Roundtrip truth status — separate from diagnostic profit_status.
     # When roundtrip.profitable_count=0 but one-leg total_net_usdc>0,
     # operator must see that no real roundtrip profit exists.
+    # R28.28: Scanner produces granular 5-value status; m4 canonical is 3-value.
+    # Both are emitted: roundtrip_truth_status (granular) + roundtrip_truth_canonical (m4-aligned).
+    _TRUTH_TO_CANONICAL = {
+        "PROFITABLE": "PROFITABLE",
+        "EVALUATED_NOT_PROFITABLE": "NOT_PROFITABLE",
+        "CANDIDATES_NOT_EVALUATED": "NOT_PROFITABLE",
+        "NO_CANDIDATES": "NO_DATA",
+        "ROUNDTRIP_DISABLED": "NO_DATA",
+    }
     if _rt.get("enabled"):
         _rt_profitable_count = _rt.get("profitable_count", 0)
         if _rt_profitable_count > 0:
@@ -1654,6 +1183,9 @@ def run_scan(
             stats["roundtrip_truth_status"] = "NO_CANDIDATES"
     else:
         stats["roundtrip_truth_status"] = "ROUNDTRIP_DISABLED"
+    stats["roundtrip_truth_canonical"] = _TRUTH_TO_CANONICAL.get(
+        stats["roundtrip_truth_status"], "NO_DATA"
+    )
     
     # R28.5: Report phase — artifact writing and state flush
     _phase_report_start = _time.monotonic()

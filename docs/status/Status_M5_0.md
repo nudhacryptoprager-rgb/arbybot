@@ -1,12 +1,46 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-19 (R28.26 — 4-layer ladder experiment. Suppression NOT the surface killer. quarantine=0 impact, runtime_disabled=perf cache. 0 profitable RT in all layers. 1966 tests PASS.)
-**Tests**: 1966 passed / 3 skipped
+**Updated**: 2026-03-19 (R28.28 — God-file extraction: run_scan_real.py 1724→1371 lines (-20.5%). 5 new strategy modules, 38 new tests. 2017 tests PASS. 10-min verification scan: 60 runs, 0 infra_fail, extraction validated.)
+**Tests**: 2017 passed / 3 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: R28.26: 4 ladder runs (L0/L1/L2/L3, 10 min each, 6 chains). R28.25: code-only.
+**Evidence runDirs**: R28.28: 10-min scan (60 runs, 6 chains, 625s wall). R28.27: cap isolation + diagnostics. R28.26: 4 ladder runs.
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Strategy**: Suppression isolation complete. Neither quarantine nor runtime_disabled kills the quote surface. runtime_disabled improves throughput by caching LIQUIDITY_ZERO pools. Next isolation target: hard caps in run_scan_real.py.
+**Strategy**: God-file extraction complete. 5 modules with contract tests. Next: adapter expansion or architectural improvements.
+
+---
+
+## R28.28 God-File Extraction (run_scan_real.py → 5 strategy modules)
+
+### Extraction Results
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| run_scan_real.py lines | 1724 | 1371 | -353 (-20.5%) |
+| Extracted modules | 0 | 5 | +5 |
+| Total tests | 1979 | 2017 | +38 |
+| Purity threshold | 1900 | 1500 | -400 lines headroom |
+
+### New Modules
+- `strategy/scan_universe.py` (~165 lines) — universe resolution
+- `strategy/roundtrip_selection.py` (~110 lines) — candidate selection
+- `strategy/dynamic_sweep_runtime.py` (~200 lines) — sweep orchestration
+- `strategy/execution_probe.py` (~120 lines) — live execution probe
+- `strategy/live_stream.py` (~95 lines) — operator candidate stream
+
+### Verification Scan (10 min, 6 chains)
+- 60 runs: PASS=7, NO_DATA=6, FAIL=47, INFRA_FAIL=0
+- 61 signals, $68.95 net USDC, 0 profitable roundtrips
+- Sweep gap: 16.33 bps (WETH/USDT @ $25, arbitrum_one)
+- All extracted modules correctly invoked (hot_requote cache, sweep, selection visible in logs)
+
+### Bug Fixes
+1. `_us` NameError in `_emit_phase` → `stats.get("universe_source", "config")`
+2. test_force_intent.py target updated: scan_universe.py
+3. test_scan_universe mock path corrected
+
+### Pending
+- **Adapter expansion**: base ve33/aerodrome, zksync SyncSwap/SpaceFi
+- **Market conditions**: sweep gap 16.33 bps, 0 profitable RT
 
 ---
 

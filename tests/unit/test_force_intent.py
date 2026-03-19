@@ -114,26 +114,30 @@ class TestIntentForcedModeWiring:
     """Test that intent_forced mode uses force_intent correctly."""
     
     def test_run_scan_real_has_intent_forced_handling(self):
-        """run_scan_real should handle universe_source=intent_forced."""
+        """run_scan_real delegates universe resolution including intent_forced."""
         import inspect
         from strategy.jobs import run_scan_real
+        from strategy import scan_universe
         
-        source = inspect.getsource(run_scan_real)
+        runner_source = inspect.getsource(run_scan_real)
+        universe_source = inspect.getsource(scan_universe)
         
-        # Should check for intent_forced (or legacy intent_verified)
-        assert "intent_forced" in source or "intent_verified" in source, \
-            "run_scan_real should handle intent_forced/intent_verified mode"
+        # Runner delegates to scan_universe.resolve_universe
+        assert "resolve_universe" in runner_source, \
+            "run_scan_real should delegate to resolve_universe"
         
-        # Should set force_intent=True somewhere
-        assert "force_intent" in source, \
-            "run_scan_real should use force_intent parameter"
+        # scan_universe handles intent_forced/intent_verified
+        assert "intent_forced" in universe_source or "intent_verified" in universe_source, \
+            "scan_universe should handle intent_forced/intent_verified mode"
+        assert "force_intent" in universe_source, \
+            "scan_universe should use force_intent parameter"
     
     def test_intent_forced_has_explicit_not_verified_field(self):
-        """run_scan_real should add intent_on_chain_verified=False field."""
+        """scan_universe should add intent_on_chain_verified=False field."""
         import inspect
-        from strategy.jobs import run_scan_real
+        from strategy import scan_universe
         
-        source = inspect.getsource(run_scan_real)
+        source = inspect.getsource(scan_universe)
         
         # Should have explicit field stating pools are NOT on-chain verified
         assert "intent_on_chain_verified" in source, \
