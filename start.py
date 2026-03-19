@@ -371,6 +371,7 @@ def new_chain_stats() -> dict[str, Any]:
         # R28.11: Pair-level live snapshot for dashboard/operator view
         "last_current_block": None,
         "last_top_spread_signals": [],
+        "last_live_candidates": [],
         # R28.11: Pair history — last N snapshots for delta tracking
         "_pair_history": [],  # list of {block, signals} dicts, max 5
         # R28.11: Cache freshness from discovery_runtime
@@ -518,6 +519,9 @@ def update_chain_stats(
         tr_stats = truth_report.get("stats") or {}
         drift_sum = truth_report.get("drift_summary") or {}
         dr_rt = (scan_stats or {}).get("discovery_runtime") or {}
+        live_candidates = truth_report.get("live_candidate_stream") or tr_stats.get("live_candidate_stream")
+        if isinstance(live_candidates, list):
+            stats["last_live_candidates"] = live_candidates[:5]
         suppression = {
             "single_dex": dr_rt.get("pairs_skipped_single_dex", 0),
             "no_pool": tr_stats.get("pool_missing_count", 0),
@@ -1385,6 +1389,9 @@ def write_hot_loop_snapshot(
         top_sigs = s.get("last_top_spread_signals", [])
         if top_sigs:
             entry["top_signals"] = top_sigs[:5]
+        live_candidates = s.get("last_live_candidates", [])
+        if live_candidates:
+            entry["live_candidates"] = live_candidates[:5]
         snapshot["per_chain"][c] = entry
     # Dirty-set status
     if dirty_tracker:
@@ -1442,18 +1449,29 @@ def _serialize_live_stream(
     """Build bounded live stream payload for dashboard fast-refresh."""
     now = time.monotonic()
     active_list: list[dict[str, Any]] = []
+    verified_pairs: list[dict[str, Any]] = []
+    diagnostic_pairs: list[dict[str, Any]] = []
     for chain, item in sorted((active_runs or {}).items()):
         entry = {k: v for k, v in item.items() if not k.startswith("_")}
         started = item.get("_started_monotonic")
         if started is not None:
             entry["elapsed_seconds"] = round(max(0.0, now - float(started)), 1)
         active_list.append(entry)
+        for pair in (entry.get("verified_pairs") or [])[:5]:
+            row = dict(pair)
+            row.setdefault("network", chain)
+            if row.get("is_actionable"):
+                verified_pairs.append(row)
+            else:
+                diagnostic_pairs.append(row)
     events = list(live_events or [])
     return {
         "active_count": len(active_list),
         "active_runs": active_list,
         "recent_events": list(reversed(events[-20:])),
         "pair_hot_queue_pending": pair_hot_queue_pending,
+        "verified_pairs": verified_pairs[:20],
+        "diagnostic_pairs": diagnostic_pairs[:20],
     }
 
 
@@ -1827,6 +1845,23 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             # R28.16: Phase callback — pipe child phase events into live stream
             def _on_phase(phase_data: dict) -> None:
                 evt = phase_data.get("event", "phase_unknown")
+                if evt == "candidate_snapshot":
+                    candidates = phase_data.get("candidates") or []
+                    with _live_lock:
+                        if chain in _active_runs:
+                            _active_runs[chain]["verified_pairs"] = candidates[:5]
+                    with _stats_lock:
+                        per_chain[chain]["last_live_candidates"] = candidates[:5]
+                    _append_live_event(
+                        "candidate_snapshot",
+                        chain=chain,
+                        scan_mode=scan_mode,
+                        message=f"{len(candidates)} verified pair candidates",
+                        candidate_count=len(candidates),
+                        verified_pairs=candidates[:5],
+                    )
+                    _write_hot_snapshot()
+                    return
                 _append_live_event(
                     f"phase:{evt}",
                     chain=chain,

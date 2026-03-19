@@ -129,19 +129,42 @@ const fmtUsd = v => v == null ? '—' : '$' + Number(v).toFixed(2);
 const cls = v => v == null ? 'na' : v > 0 ? 'pos' : v < 0 ? 'neg' : '';
 const badge = (text, c) => `<span class="badge ${c}">${text}</span>`;
 
+let latestRolling = null;
+let latestHot = null;
+
 function loadData() {
+  loadRollingData();
+  loadHotData();
+}
+
+function loadRollingData() {
   $('error-msg').textContent = '';
   fetch('/api/rolling')
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(render)
-    .catch(e => { $('error-msg').textContent = 'Failed to load: ' + e.message; });
+    .then(data => {
+      latestRolling = data;
+      renderRolling(data);
+      if (!latestHot && data?.hot_loop) renderHotLoop(data.hot_loop);
+    })
+    .catch(e => { $('error-msg').textContent = 'Failed to load rolling data: ' + e.message; });
 }
 
-function render(data) {
+function loadHotData() {
+  fetch('/api/hot')
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      latestHot = data?.hot_loop || null;
+      renderHotLoop(latestHot || latestRolling?.hot_loop || null);
+    })
+    .catch(e => {
+      if (!latestRolling) $('error-msg').textContent = 'Failed to load hot stream: ' + e.message;
+    });
+}
+
+function renderRolling(data) {
   const rs = data.run_summary;
   const agg = data.stability_agg;
   const ls = data.long_scan;
-  const hl = data.hot_loop;
   const qs = agg?.quick_stats || {};
 
   // Header
@@ -165,7 +188,6 @@ function render(data) {
     `<b>Multi-chain:</b> ${lsRuns} runs (${lsPass}P/${lsFail}F) | ${lsSignals} signals | Net: ${fmtUsd(lsNet)} | Updated: ${(lsTs||'?').slice(0,19)}Z${bsInfo}` +
     `<br><span style="color:#6e7681">Primary (NORM-ONLY): ${rsRunDir} | ${(rsTs||'?').slice(0,19)}Z | Rolling: ${qs.pass_count||0}+${qs.no_data_count||0}+${qs.fail_count||0} (P/ND/F)</span>`;
 
-  renderHotLoop(hl);
   renderChainStatus(ls);
   renderFrontier(ls);
   renderEconomics(rs, qs);
@@ -189,6 +211,16 @@ function render(data) {
     const live = hl.live_stream || {};
     const activeRuns = live.active_runs || [];
     const events = live.recent_events || [];
+    let actionableRows = [...(live.verified_pairs || [])];
+    let diagnosticRows = [...(live.diagnostic_pairs || [])];
+    if (actionableRows.length === 0 && diagnosticRows.length === 0) {
+      for (const [chain, d] of Object.entries(hl.per_chain || {})) {
+        for (const row of (d.live_candidates || [])) {
+          const dest = row.is_actionable ? actionableRows : diagnosticRows;
+          dest.push({ network: chain, ...row });
+        }
+      }
+    }
     let html = `<div class="kpi" style="margin-bottom:10px">
       <div class="kpi-item"><div class="kpi-val">${tr}</div><div class="kpi-lbl">Total Runs</div></div>
       <div class="kpi-item"><div class="kpi-val">${fs}</div><div class="kpi-lbl">Full Sweeps</div></div>
@@ -198,6 +230,47 @@ function render(data) {
       <div class="kpi-item"><div class="kpi-val">${fmt(wall,0)}s</div><div class="kpi-lbl">Wall Time</div></div>
       <div class="kpi-item"><div class="kpi-val" style="font-size:.9rem">${ts.slice(0,19)}Z</div><div class="kpi-lbl">Last Update</div></div>
     </div>`;
+    html += '<h3 style="font-size:.8rem;color:#58a6ff;margin:8px 0 6px">Actionable Now (Real Quotes)</h3>';
+    if (actionableRows.length > 0) {
+      html += '<table><tr><th>Network</th><th>Pair</th><th class="num">Opt Size</th><th class="num">Spread</th><th class="num">Exec Cost</th><th>Result</th><th class="num">Final bps</th><th class="num">Final USD</th></tr>';
+      for (const row of actionableRows.slice(0, 20)) {
+        const resultBadge = row.final_result === 'ROUNDTRIP_PROFITABLE' ? badge('PROFITABLE', 'pass')
+          : badge('NOT_PROFIT', 'fail');
+        const finalCls = cls(row.final_net_pnl_bps);
+        const costTxt = row.execution_cost_bps != null
+          ? `${fmt(row.execution_cost_bps,2)} bps` + (row.execution_cost_usd != null ? ` / ${fmtUsd(row.execution_cost_usd)}` : '')
+          : '\u2014';
+        html += `<tr>
+          <td>${row.network || '\u2014'}</td>
+          <td title="${row.route || ''}">${row.pair || '\u2014'}</td>
+          <td class="num">${row.optimal_size_usd != null ? fmtUsd(row.optimal_size_usd) : '\u2014'}</td>
+          <td class="num">${fmt(row.spread_bps,2)}</td>
+          <td class="num">${costTxt}</td>
+          <td>${resultBadge}</td>
+          <td class="num ${finalCls}">${fmt(row.final_net_pnl_bps,2)}</td>
+          <td class="num ${finalCls}">${row.final_net_pnl_usd != null ? fmtUsd(row.final_net_pnl_usd) : '\u2014'}</td>
+        </tr>`;
+      }
+      html += '</table>';
+    } else {
+      html += '<div style="font-size:.78rem;color:#8b949e;margin-bottom:8px">No actionable real-quote candidates yet.</div>';
+    }
+    if (diagnosticRows.length > 0) {
+      html += '<h3 style="font-size:.8rem;color:#7c8593;margin:8px 0 6px">Diagnostic / Suspect</h3>';
+      html += '<table><tr><th>Network</th><th>Pair</th><th class="num">Spread</th><th>Result</th><th class="num">Final bps</th></tr>';
+      for (const row of diagnosticRows.slice(0, 10)) {
+        const resultBadge = row.final_result === 'SUSPECT_ACCOUNTING' ? badge('SUSPECT', 'warn')
+          : badge('DIAGNOSTIC', 'warn');
+        html += `<tr>
+          <td>${row.network || '\u2014'}</td>
+          <td title="${row.route || ''}">${row.pair || '\u2014'}</td>
+          <td class="num">${fmt(row.spread_bps,2)}</td>
+          <td>${resultBadge}</td>
+          <td class="num">${fmt(row.final_net_pnl_bps,2)}</td>
+        </tr>`;
+      }
+      html += '</table>';
+    }
     if (activeRuns.length > 0) {
       html += '<h3 style="font-size:.8rem;color:#58a6ff;margin:8px 0 6px">Active Chain Scans</h3>';
       html += '<table><tr><th>Chain</th><th>Mode</th><th>Kind</th><th class="num">Elapsed</th><th class="num">Block</th><th>Config</th></tr>';
@@ -223,6 +296,7 @@ function render(data) {
         const phaseLabel = isPhase ? e.event.slice(6).replace(/_/g,' ').toUpperCase() : '';
         const evBadge = e.event === 'scan_finished' ? badge('DONE', 'pass')
           : e.event === 'scan_started' ? badge('START', 'warn')
+          : e.event === 'candidate_snapshot' ? badge('PAIRS', 'pass')
           : e.event === 'scan_error' ? badge('ERROR', 'fail')
           : e.event === 'micro_requote_finished' ? badge('MICRO', 'pass')
           : e.event === 'micro_requote_started' ? badge('MICRO', 'warn')
@@ -240,6 +314,7 @@ function render(data) {
           : badge(e.event || 'EVENT', '');
         // R28.16: Severity/reason detail column
         const detail = e.profit_realism_status ? badge(e.profit_realism_status, e.profit_realism_status === 'ROUNDTRIP_PROFITABLE' ? 'pass' : e.profit_realism_status === 'ROUNDTRIP_NOT_PROFITABLE' ? 'fail' : 'warn')
+          : e.candidate_count != null ? `${e.candidate_count} pairs`
           : e.result && e.result !== 'ok' ? badge(e.result, e.result.startsWith('FAIL') ? 'fail' : 'warn')
           : e.quotes_fetched != null ? `${e.quotes_fetched}q`
           : e.pairs != null ? `${e.pairs}p`
@@ -784,8 +859,10 @@ function renderProbeTargets(ls) {
 
 // Auto-load on page open
 loadData();
-// Auto-refresh every 3 seconds for live scan stream visibility
-setInterval(loadData, 3000);
+// Fast hot-loop stream
+setInterval(loadHotData, 1000);
+// Slower full rolling refresh for heavy panels
+setInterval(loadRollingData, 15000);
 </script>
 </body>
 </html>

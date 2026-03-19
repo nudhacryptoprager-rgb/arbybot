@@ -1,18 +1,32 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-19 (R28.21-final — multicall batch chunking fix, USD price anchors, quoter timeout, roundtrip contamination fix. arb real_quotes 3→26 (8.7x), quote_rpc_ms 64.6s→32.4s (50% reduction). 1938 tests.)
-**Tests**: 1938 passed / 10 failed (pre-existing: 7 asyncio, 3 web3) / 3 skipped
+**Updated**: 2026-03-19 (R28.22 — live-stream truth contract split, spread_bps non-null, final_net_pnl_usd, dashboard actionable/diagnostic split. 30 runs, 0 profitable RT. 1956 tests.)
+**Tests**: 1956 passed / 3 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: long_scan 42 runs 6 chains 429s (R28.21-final — multicall fix verification)
+**Evidence runDirs**: long_scan 30 runs 6 chains 371s (R28.22 — live-stream split verification)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (42 runs 429s, total_profitable_roundtrips=0, arb rq=26)
-**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=26,signals=156,multicall=0%fail), zksync=PRIMARY_BLOCKER(rq=14), base=PRIMARY_BLOCKER(rq=1), linea=PRIMARY_BLOCKER(rq=14), mantle=CANDIDATE(rq=0,signals=0,structural), scroll=CANDIDATE(rq=0,signals=14,diagnostic-only)
+**Evidence long scan**: `data/runs/_rolling/long_scan_latest.json` (30 runs 371s, total_profitable_roundtrips=0, arb rq=21)
+**Evidence per-chain**: arb=PRIMARY_BLOCKER(rq=21,signals=82,actionable=5/5), zksync=PRIMARY_BLOCKER(rq=10), base=PRIMARY_BLOCKER(rq=1), linea=PRIMARY_BLOCKER(rq=10,suspect=2/4), mantle=CANDIDATE(rq=0,signals=0,structural), scroll=CANDIDATE(rq=0,signals=10,diagnostic-only)
 **Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files.
 
 ---
 
-## R28.21-final Code Fixes (new)
+## R28.22 Live-Stream Truth Contract (new)
+
+R28.21-final live dashboard stream is now runtime-verified: /api/hot is lightweight and carries active chain scans plus verified pair rows. R28.22 splits the primary stream into actionable vs diagnostic/suspect:
+
+1. **is_actionable field** (run_scan_real.py): Each live candidate now carries `is_actionable=True/False`. Actionable = `real_quote=True AND final_result != SUSPECT_ACCOUNTING`.
+2. **spread_bps non-null** (run_scan_real.py): Fallback chain: `opp.spread_bps → opp.gross_spread_bps → rt.gross_pnl_bps`. spread always populated when RT data exists.
+3. **final_net_pnl_usd** (run_scan_real.py): `(size_usd * net_bps) / 10000`. Operator sees USD impact.
+4. **Dashboard split** (dashboard.html): "Actionable Now (Real Quotes)" table + "Diagnostic / Suspect" table. Final USD column added.
+5. **_serialize_live_stream split** (start.py): `verified_pairs` = actionable only, `diagnostic_pairs` = suspect/diagnostic. Both capped at 20.
+
+Fresh verification (30 runs, 371s): arb actionable=5/5, linea SUSPECT=2/4 correctly flagged, spread_bps populated everywhere.
+
+---
+
+## R28.21-final Code Fixes
 
 Critical performance fixes based on Lead's post-verification directive:
 

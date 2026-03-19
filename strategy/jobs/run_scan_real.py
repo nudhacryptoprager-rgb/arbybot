@@ -59,6 +59,78 @@ def _emit_phase(event: str, **data: Any) -> None:
     print(f"{PHASE_LINE_PREFIX}{_phase_json.dumps(payload, default=str)}", flush=True)
 
 
+def _build_live_candidate_stream(
+    chain_key: str,
+    opportunities: List[Dict[str, Any]],
+    roundtrip_results: List[Any],
+    dynamic_sweep: Optional[Dict[str, Any]],
+    default_size_usd: float,
+) -> List[Dict[str, Any]]:
+    """Build compact operator-facing pair candidates for hot-loop streaming."""
+    opp_map = {
+        (o.get("pair"), o.get("buy_dex"), o.get("sell_dex")): o
+        for o in (opportunities or [])
+    }
+    sweep_map = {
+        (r.get("pair"), r.get("buy_dex"), r.get("sell_dex")): r
+        for r in ((dynamic_sweep or {}).get("results") or [])
+    }
+    candidates: List[Dict[str, Any]] = []
+    for rt in roundtrip_results or []:
+        key = (rt.pair, rt.buy_dex, rt.sell_dex)
+        opp = opp_map.get(key, {})
+        sweep = sweep_map.get(key, {})
+        lp_fee_bps = ((rt.leg1_fee or 0) + (rt.leg2_fee or 0)) / 100.0
+        gas_bps = max(0.0, float(rt.gross_pnl_bps or 0.0) - float(rt.net_pnl_bps or 0.0))
+        cost_bps = sweep.get("best_total_cost_bps")
+        if cost_bps is None:
+            cost_bps = round(abs(float(rt.estimated_slippage_bps or 0.0)) + lp_fee_bps + gas_bps, 2)
+        size_usd = sweep.get("best_size_usd") or opp.get("usd_notional") or default_size_usd
+        net_bps = sweep.get("best_net_pnl_bps")
+        if net_bps is None:
+            net_bps = float(rt.net_pnl_bps or 0.0)
+        if rt.is_profitable and abs(net_bps) > 500:
+            final_result = "SUSPECT_ACCOUNTING"
+        elif rt.is_profitable and rt.leg2_is_real_quote:
+            final_result = "ROUNDTRIP_PROFITABLE"
+        elif rt.leg2_is_real_quote:
+            final_result = "ROUNDTRIP_NOT_PROFITABLE"
+        else:
+            final_result = "ONE_LEG_ONLY_DIAGNOSTIC"
+        spread = opp.get("spread_bps") or opp.get("gross_spread_bps")
+        if spread is None and rt.gross_pnl_bps is not None:
+            spread = float(rt.gross_pnl_bps)
+        is_actionable = bool(rt.leg2_is_real_quote) and final_result != "SUSPECT_ACCOUNTING"
+        final_net_usd = None
+        if size_usd is not None and net_bps is not None:
+            final_net_usd = round((float(size_usd) * float(net_bps)) / 10000.0, 4)
+        candidates.append({
+            "network": chain_key,
+            "pair": rt.pair,
+            "route": f"{rt.buy_dex}->{rt.sell_dex}",
+            "buy_dex": rt.buy_dex,
+            "sell_dex": rt.sell_dex,
+            "optimal_size_usd": round(float(size_usd), 2) if size_usd is not None else None,
+            "spread_bps": round(float(spread), 2) if spread is not None else None,
+            "execution_cost_bps": round(float(cost_bps), 2) if cost_bps is not None else None,
+            "execution_cost_usd": round((float(size_usd) * float(cost_bps)) / 10000.0, 4) if size_usd is not None and cost_bps is not None else None,
+            "final_net_pnl_bps": round(float(net_bps), 2) if net_bps is not None else None,
+            "final_net_pnl_usd": final_net_usd,
+            "final_result": final_result,
+            "is_actionable": is_actionable,
+            "real_quote": bool(rt.leg2_is_real_quote),
+            "reject_reason": rt.reject_reason,
+        })
+    candidates.sort(
+        key=lambda c: (
+            c.get("final_result") != "ROUNDTRIP_PROFITABLE",
+            c.get("final_result") == "ONE_LEG_ONLY_DIAGNOSTIC",
+            -(c.get("final_net_pnl_bps") or -999999.0),
+        )
+    )
+    return candidates[:5]
+
+
 # Ensure environment variables from project .env are loaded
 try:
     from core.env import load_root_dotenv
@@ -1134,10 +1206,25 @@ def run_scan(
                 stats["roundtrip"]["best_executable_size_usd"] = None
                 stats["roundtrip"]["best_executable_pnl_bps"] = None
                 stats["roundtrip"]["executable_evidence"] = "NO_SWEEP_DATA"
+
+        stats["live_candidate_stream"] = _build_live_candidate_stream(
+            chain_key=chain_key,
+            opportunities=eligible_opps if opps_list else [],
+            roundtrip_results=roundtrip_results,
+            dynamic_sweep=stats.get("roundtrip", {}).get("dynamic_sweep"),
+            default_size_usd=float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0),
+        )
+        _emit_phase(
+            "candidate_snapshot",
+            chain=chain_key,
+            candidate_count=len(stats["live_candidate_stream"]),
+            candidates=stats["live_candidate_stream"],
+        )
             
     except Exception as rt_err:
         logger.debug("Roundtrip evaluation skipped: %s", rt_err)
         stats["roundtrip"] = {"enabled": False, "error": str(rt_err)}
+        stats["live_candidate_stream"] = []
     
     # v2.2.0: M4.3 Preflight check for execution readiness
     try:

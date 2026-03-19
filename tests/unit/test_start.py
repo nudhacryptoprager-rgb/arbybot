@@ -240,6 +240,33 @@ class TestPerChainAggregation(unittest.TestCase):
         self.assertEqual(stats["last_top_spread_signals"][0]["pair"], "WETH/USDC")
         self.assertEqual(stats["last_top_spread_signals"][0]["buy_dex"], "uniswap_v3")
 
+    def test_update_chain_stats_captures_live_candidates(self):
+        stats = start.new_chain_stats()
+        summary = {
+            "status": "PASS",
+            "metrics": {"included_signals_count": 1, "total_net_usdc": 0.5},
+            "run_context": {},
+        }
+        truth_report = {
+            "stats": {
+                "live_candidate_stream": [
+                    {
+                        "network": "base",
+                        "pair": "WETH/USDC",
+                        "optimal_size_usd": 100.0,
+                        "spread_bps": 12.34,
+                        "execution_cost_bps": 9.87,
+                        "final_net_pnl_bps": -1.23,
+                        "final_result": "ROUNDTRIP_NOT_PROFITABLE",
+                    }
+                ]
+            }
+        }
+        start.update_chain_stats(stats, 0, None, summary, truth_report=truth_report)
+        self.assertEqual(len(stats["last_live_candidates"]), 1)
+        self.assertEqual(stats["last_live_candidates"][0]["pair"], "WETH/USDC")
+        self.assertEqual(stats["last_live_candidates"][0]["optimal_size_usd"], 100.0)
+
     def test_pair_history_accumulates_and_caps_at_5(self):
         """R28.11: _pair_history keeps last 5 snapshots for delta tracking."""
         stats = start.new_chain_stats()
@@ -2098,6 +2125,32 @@ class TestLiveStreamErrorPath(unittest.TestCase):
         )
         self.assertEqual(result["pair_hot_queue_pending"], 0)
 
+    def test_serialize_live_stream_includes_verified_pairs(self):
+        result = start._serialize_live_stream(
+            active_runs={
+                "arb": {
+                    "chain": "arb",
+                    "scan_mode": "hot",
+                    "verified_pairs": [
+                        {
+                            "pair": "USDC/DAI",
+                            "optimal_size_usd": 100.0,
+                            "spread_bps": 12.5,
+                            "execution_cost_bps": 9.1,
+                            "final_result": "ROUNDTRIP_NOT_PROFITABLE",
+                            "is_actionable": True,
+                        }
+                    ],
+                }
+            },
+            live_events=[],
+        )
+        self.assertEqual(len(result["verified_pairs"]), 1)
+        self.assertEqual(result["verified_pairs"][0]["network"], "arb")
+        self.assertEqual(result["verified_pairs"][0]["pair"], "USDC/DAI")
+        # diagnostic_pairs should be empty
+        self.assertEqual(len(result["diagnostic_pairs"]), 0)
+
     def test_active_run_cleared_on_error(self):
         """When scan crashes, active run is removed and scan_error is emitted."""
         import time as _time
@@ -2236,6 +2289,37 @@ class TestLiveStreamErrorPath(unittest.TestCase):
                 self.assertEqual(snap["live_stream"]["active_runs"][0]["chain"], "arb")
                 self.assertGreaterEqual(snap["live_stream"]["active_runs"][0]["elapsed_seconds"], 0)
                 self.assertEqual(snap["live_stream"]["recent_events"][0]["event"], "scan_finished")
+                self.assertEqual(snap["live_stream"]["verified_pairs"], [])
+                self.assertEqual(snap["live_stream"]["diagnostic_pairs"], [])
+            finally:
+                start.HOT_LOOP_LATEST = original_path
+
+    def test_write_hot_loop_snapshot_includes_live_candidates(self):
+        """Hot snapshot surfaces per-chain live candidate rows for dashboard stream."""
+        import time as _time
+        import tempfile
+        import json
+        per_chain = {"arb": start.new_chain_stats()}
+        per_chain["arb"]["last_live_candidates"] = [
+            {
+                "network": "arb",
+                "pair": "USDC/DAI",
+                "optimal_size_usd": 100.0,
+                "spread_bps": 15.2,
+                "execution_cost_bps": 12.1,
+                "final_net_pnl_bps": -3.4,
+                "final_result": "ROUNDTRIP_NOT_PROFITABLE",
+            }
+        ]
+        original_path = start.HOT_LOOP_LATEST
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td) / "hot_loop_latest.json"
+            start.HOT_LOOP_LATEST = tmp_path
+            try:
+                start.write_hot_loop_snapshot(per_chain, None, _time.monotonic() - 5)
+                with open(tmp_path) as f:
+                    snap = json.load(f)
+                self.assertEqual(snap["per_chain"]["arb"]["live_candidates"][0]["pair"], "USDC/DAI")
             finally:
                 start.HOT_LOOP_LATEST = original_path
 
