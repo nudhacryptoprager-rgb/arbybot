@@ -126,10 +126,10 @@ class TestRuntimeDisabledManager:
         """Test that failures at threshold disable pool."""
         mgr = get_runtime_disabled_manager()
         
-        # Record 3 failures (default threshold)
-        mgr.record_failure("test_pool", "SUSPECT_LIQUIDITY")
-        mgr.record_failure("test_pool", "SUSPECT_LIQUIDITY")
-        mgr.record_failure("test_pool", "SUSPECT_LIQUIDITY")
+        # Record 3 failures (default threshold for PRICE_SANITY_FAILED)
+        mgr.record_failure("test_pool", "PRICE_SANITY_FAILED")
+        mgr.record_failure("test_pool", "PRICE_SANITY_FAILED")
+        mgr.record_failure("test_pool", "PRICE_SANITY_FAILED")
         
         # Pool should now be disabled
         assert mgr.is_disabled("test_pool") is not None
@@ -161,6 +161,23 @@ class TestRuntimeDisabledManager:
         
         # Still below threshold after reset
         assert mgr.is_disabled("reset_test_pool") is None
+
+    def test_suspect_liquidity_threshold_override(self):
+        """R28.24: SUSPECT_LIQUIDITY has higher threshold (5) than default (3)."""
+        mgr = get_runtime_disabled_manager()
+        
+        # 3 failures should NOT disable (threshold=5 for SUSPECT_LIQUIDITY)
+        for _ in range(3):
+            mgr.record_failure("override_pool", "SUSPECT_LIQUIDITY")
+        assert mgr.is_disabled("override_pool") is None
+        
+        # 4 failures still below threshold
+        mgr.record_failure("override_pool", "SUSPECT_LIQUIDITY")
+        assert mgr.is_disabled("override_pool") is None
+        
+        # 5th failure triggers auto-disable
+        mgr.record_failure("override_pool", "SUSPECT_LIQUIDITY")
+        assert mgr.is_disabled("override_pool") is not None
 
     def test_ttl_expiration(self):
         """Test that disabled pools expire after TTL."""
@@ -267,8 +284,8 @@ class TestModuleLevelFunctions:
 
     def test_auto_disable_pool_threshold(self):
         """Test auto_disable_pool with threshold-based disable."""
-        # Record failures up to threshold
-        for _ in range(3):
+        # R28.24: SUSPECT_LIQUIDITY threshold raised to 5
+        for _ in range(5):
             auto_disable_pool("threshold_pool", "SUSPECT_LIQUIDITY", {})
         
         info = is_runtime_disabled("threshold_pool")

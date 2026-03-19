@@ -88,8 +88,41 @@ def test_run_scan_real_line_count():
     # R28.16: +30 for _emit_phase() helper + phase event emissions at boundaries
     # R28.22: +77 for compact live candidate stream builder + candidate_snapshot emission
     # R28.22b: +6 for is_actionable, spread_bps fallback, final_net_pnl_usd
+    # R28.24: +48 for filter_funnel artifact + roundtrip_truth_status + config-driven caps
     # For now, just warn if it grows significantly
-    max_lines = 1771  # Alert if it grows past this
+    max_lines = 1825  # Alert if it grows past this
     
     assert line_count <= max_lines, \
         f"run_scan_real.py has {line_count} lines (max: {max_lines}). Consider refactoring."
+
+
+def test_run_scan_real_has_filter_funnel():
+    """R28.24: run_scan_real.py must produce filter_funnel artifact."""
+    path = Path(__file__).parent.parent.parent / "strategy" / "jobs" / "run_scan_real.py"
+    content = path.read_text(encoding="utf-8")
+
+    assert 'stats["filter_funnel"]' in content, "filter_funnel dict missing from stats"
+    # Key stages must be present
+    for key in ["resolved_pairs", "quotes_attempted", "quotes_fetched",
+                "spread_signals", "opp_candidates", "rt_passed_to_eval",
+                "rt_evaluated", "rt_real_quote", "rt_profitable"]:
+        assert f'"{key}"' in content, f"filter_funnel key '{key}' missing"
+
+
+def test_run_scan_real_has_roundtrip_truth_status():
+    """R28.24: run_scan_real.py must produce roundtrip_truth_status."""
+    path = Path(__file__).parent.parent.parent / "strategy" / "jobs" / "run_scan_real.py"
+    content = path.read_text(encoding="utf-8")
+
+    assert 'stats["roundtrip_truth_status"]' in content
+    for status in ["PROFITABLE", "EVALUATED_NOT_PROFITABLE", "NO_CANDIDATES"]:
+        assert f'"{status}"' in content, f"roundtrip_truth_status value '{status}' missing"
+
+
+def test_run_scan_real_config_driven_caps():
+    """R28.24: Candidate caps must be config-driven, not hardcoded."""
+    path = Path(__file__).parent.parent.parent / "strategy" / "jobs" / "run_scan_real.py"
+    content = path.read_text(encoding="utf-8")
+
+    assert "roundtrip_max_candidates" in content, "roundtrip_max_candidates config key missing"
+    assert "roundtrip_top_n" in content, "roundtrip_top_n config key missing"

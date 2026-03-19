@@ -37,6 +37,11 @@ RUNTIME_DISABLED_CONFIG = {
     # Auto-disable threshold (consecutive failures)
     "failure_threshold": 3,
     
+    # R28.24: Per-error-code threshold overrides
+    "failure_threshold_overrides": {
+        "SUSPECT_LIQUIDITY": 5,  # Relaxed — was globally 3, too aggressive for transient liquidity
+    },
+    
     # TTL for runtime-disabled pools (seconds)
     "ttl_seconds": 3600,  # 1 hour
     
@@ -240,7 +245,10 @@ class RuntimeDisabledManager:
         count = self._failure_counts[pool_key]
         
         # Check if should auto-disable
-        threshold = self.config.get("failure_threshold", 3)
+        # R28.24: Support per-error-code threshold overrides
+        default_threshold = self.config.get("failure_threshold", 3)
+        overrides = self.config.get("failure_threshold_overrides", {})
+        threshold = overrides.get(error_code, default_threshold)
         should_disable = (
             error_code in immediate_errors or
             count >= threshold

@@ -40,7 +40,7 @@ QUARANTINE_CONFIG = {
     
     # v2.3.0: Per-error-code threshold overrides (lower = more aggressive quarantine)
     "failure_threshold_overrides": {
-        "SUSPECT_LIQUIDITY": 2,  # SUSPECT_LIQUIDITY is a strong signal, quarantine after 2 failures
+        "SUSPECT_LIQUIDITY": 5,  # R28.24: Raised from 2 — was too aggressive, blocking viable pools
     },
     
     # How long to quarantine (seconds)

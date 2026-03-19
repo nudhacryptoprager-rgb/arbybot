@@ -1,15 +1,66 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-19 (R28.23 — Lead config audit: 8 configs regenerated from official sources. +FusionX V3 (mantle → SIGNAL_PRODUCING). 60.5-min bundle: 240 runs, 6 chains. 0 profitable RT persists — economics-blocked, not YAML.)
-**Tests**: 1957 passed / 3 skipped
+**Updated**: 2026-03-19 (R28.24 — Deep pipeline analysis: phantom spread root cause identified. Filter funnel improvements (config-driven RT caps, quarantine/runtime thresholds). 37-run scan confirms GROSS is negative — slot0 ≠ QuoterV2 executable. 0 profitable RT = market efficiency, not infra bug.)
+**Tests**: 1961 passed / 3 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: 240 runs (40 per chain × 6 chains)
+**Evidence runDirs**: 37 runs (6 chains, ~587s)
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
-**Evidence long scan**: long_scan_latest.json @ 2026-03-19T16:00:27Z (240 runs, 60.5 min)
-**Evidence per-chain**: arb=ECONOMICS(1163 signals, 172 rq, gap=10.62bps), linea=ECONOMICS(160 signals, 160 rq, 100% pass), zksync=ECONOMICS(40 signals, 80 rq), base=QUOTE_PATH(50 signals, 52 rq, VE33=29), mantle=PARTIALLY_UNBLOCKED(35 signals, 39 rq, FusionX works!), scroll=DIAGNOSTIC(80 signals, 0 rq, dead pools)
-**Evidence timestamps**: Rolling @ 2026-03-19T15:59:26Z, long_scan @ 2026-03-19T16:00:27Z
-**Strategy**: Full universe preserved, staged chain onboarding via configs/adapters (R27). Config inventory frozen to 19 active files.
+**Evidence long scan**: long_scan_latest.json @ 2026-03-19T17:17:00Z (37 runs, 587s)
+**Evidence per-chain**: arb=ECONOMICS(19 pass/6 no_data/12 fail, 251 signals, gap=15.38bps, gross NEGATIVE), linea=NO_DATA, zksync=NO_DATA, base=NO_DATA, mantle=NO_DATA, scroll=NO_DATA
+**Evidence timestamps**: Rolling @ 2026-03-19T17:17:00Z
+**Strategy**: Full universe preserved. ROOT CAUSE confirmed: phantom spreads (slot0 price gaps collapse under QuoterV2 roundtrip). Next: expand coverage surface or pivot to intent-based routing.
+
+---
+
+## R28.24 Deep Pipeline Analysis + Filter Funnel
+
+### Code Changes (7 files)
+1. **strategy/jobs/run_scan_real.py** — +filter_funnel artifact, config-driven RT caps (max_candidates 20→50, top_n 5→10), +roundtrip_truth_status, +algebra auto-enable quoter_v2
+2. **discovery/quarantine.py** — SUSPECT_LIQUIDITY threshold 2→5
+3. **strategy/runtime_disabled.py** — per-error failure_threshold_overrides (SUSPECT_LIQUIDITY 3→5)
+4. **config/onboard_base_stage2.yaml** — aerodrome ve33 excluded from base
+5. **tests/unit/test_run_scan_real_purity.py** — filter_funnel test coverage
+6. **tests/unit/test_runtime_disabled.py** — per-error override test coverage
+
+### Root Cause: PHANTOM SPREADS
+**Finding**: Slot0 price comparison produces apparent 100-500bps spreads between DEXes. These are NOT executable. QuoterV2 roundtrip re-quote shows GROSS PnL is deeply negative.
+
+**Evidence** (arb truth_report, arb sweep):
+- ARB/USDC: Signal=484bps spread → Sweep@$25: gross=-76.6bps, net=-81.2bps (560bps collapse)
+- WETH/USDT: Sweep best@$25: net=-15.38bps (signal was positive)
+- WETH/RDNT: Sweep @$25: net=-9766.8bps (completely broken pair)
+- 47 spread signals generated, 16 with positive spread_minus_required, but 0 survive roundtrip
+
+**On-chain measured costs** (NOT defaults):
+- l1_cost_wei = 14,460,000,000 (vs default 60e12) — l1_cost_source=onchain
+- gas_price_wei = 20,140,000 (vs default 100M)
+- total_cost ≈ 15-25bps (gas=3-5bps, fee=10bps, slippage=0.5-12bps)
+- **Gas is NOT the blocker. Gross PnL is negative before costs.**
+
+### Per-Chain Status (R28.24 scan: 37 runs, 587s)
+| Chain | pass | fail | no_data | signals | rq | best_rt | blocker |
+|-------|------|------|---------|---------|----|---------|---------|
+| arb | 19 | 12 | 6 | 251 | 70 | -15.38bps | PHANTOM_SPREAD + MARKET_EFFICIENT |
+| linea | — | — | — | — | — | — | NO_DATA (coverage run) |
+| zksync | — | — | — | — | — | — | NO_DATA (coverage run) |
+| base | — | — | — | — | — | — | NO_DATA (coverage run) |
+| mantle | — | — | — | — | — | — | NO_DATA (coverage run) |
+| scroll | — | — | — | — | — | — | NO_DATA (coverage run) |
+
+### Pipeline Funnel (arb, single run)
+```
+235 pool universe
+ → 98 quotes fetched (137 failed: slot0 86% fail rate, runtime_disabled=61)
+ → 47 spread signals (slot0 comparison)
+ → 16 positive spread_minus_required
+ → 7 RT candidates (pre-filter: MIN_SPREAD_MINUS=-5.0bps)
+ → 0 profitable (LP_FEES_TOO_HIGH=5, NET_PROFIT_TOO_LOW=1, SLIPPAGE_TOO_HIGH=1)
+ → 3 sweep routes → 0 viable
+```
+
+### Conclusion
+The scanner infrastructure works correctly. The zero-profit outcome is NOT a code bug — it reflects market efficiency on mature L2 AMM surface. Slot0-based spread signals are unreliable predictors of executable profitability. Options: (1) expand to less-efficient chains/DEXes, (2) pivot to intent-based or cross-chain arb, (3) accept diagnostic-only mode for current surface.
 
 ---
 

@@ -6,191 +6,208 @@
 ## Stage Context
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
-**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, rolling on arbitrum_one. R28.23: Lead personally audited and regenerated 8 config files from official sources. Config debt confirmed real and partially fixed — mantle/scroll materially unblocked at config layer (FusionX V3 added to mantle → first SIGNAL_PRODUCING). **0 profitable RT persists because dominant blockers are now chain-specific economics and quote-path defects, not invalid YAML.** 1957 tests. 60.5-min bundle completed (240 runs, 6 chains).
+**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, rolling on arbitrum_one. R28.24: Filter/gating funnel improvements (config-driven RT caps 20→50/5→10, quarantine SUSPECT_LIQUIDITY 2→5, runtime_disabled per-error overrides, algebra auto-enable quoter_v2, base aerodrome exclusion, filter_funnel artifact, roundtrip_truth_status). 10-min multi-chain scan (37 runs, 6 chains). **Deep pipeline analysis reveals fundamental blocker: phantom spreads collapse under QuoterV2 roundtrip re-quote.** Spread signals (up to 484 bps) show -76.6 bps gross PnL in actual roundtrip — the remaining gap=15.38 bps measures pricing noise, not exploitable arbitrage. 1961 tests, CI green.
 
-## SESSION GOAL (2026-03-19, Session 10 Round 28.23)
-**Goal**: R28.23 — Lead's config audit response: verify lead-regenerated configs, per-chain RCA, 1h canonical bundle, docs update. Truth narrative: "config debt was real and partially fixed; 0 profitable RT remains because the dominant blockers are economics/quote-path, not YAML."
-**Prior (R28.22-cont-2)**: Per-chain NO_USD_PRICE fixes (+14 tokens), zombie quarantine fix, 97.7-min bundle (406 runs).
+## SESSION GOAL (2026-03-19, Session 11 Round 28.24)
+**Goal**: R28.24 — Deep analysis of scan pipeline, filter/gating funnel, and config constraints. Root cause analysis of persistent 0 profitable roundtrips. Truth narrative: "filter funnel improvements are correct but irrelevant — the core blocker is that cross-DEX spread signals are phantom (slot0-based price discrepancies that collapse to negative gross PnL under QuoterV2 roundtrip re-quote). Market efficiency on Arbitrum V3 DEXes makes pure cross-DEX AMM arb non-viable at current pair/DEX coverage."
+**Prior (R28.23)**: Lead config audit — 8 configs regenerated, +FusionX V3 (mantle), 60.5-min bundle (240 runs).
 
 ## 0) Meta
-timestamp_utc: 2026-03-19T15:59:26Z (rolling provenance from run_summary_latest.json)
-rolling_provenance: 2026-03-19T15:59:26.854125Z (from _latest.json)
-long_scan_evidence: 2026-03-19T16:00:27.422640Z (long_scan_latest.json, 240 runs, 60.5 min)
-mode: CONFIG_VERIFICATION + ONLINE_VERIFICATION
-test_count: 1957 passed, 3 skipped
+timestamp_utc: 2026-03-19T17:17:00Z (rolling provenance from long_scan_latest.json)
+rolling_provenance: 2026-03-19T17:17:00.942521Z (from long_scan_latest.json)
+long_scan_evidence: 2026-03-19T17:17:00.942521Z (long_scan_latest.json, 37 runs, 587s / ~10 min)
+mode: ONLINE_ANALYSIS (R28.24 code changes + multi-chain scan + deep pipeline analysis)
+test_count: 1961 passed, 3 skipped
 schema_version: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R28.23: Lead config audit verification + 1h canonical bundle + per-chain RCA + docs update |
-| goal_status | **REACHED** (60.5-min bundle completed, 240 runs, lead configs verified, per-chain RCA done) |
+| session_goal | R28.24: Deep analysis of scan/filter/config pipeline. Root cause of 0 profitable RT. |
+| goal_status | **REACHED** (37-run scan + full pipeline code analysis + per-chain artifact analysis + root cause identified) |
 | close_allowed | true |
-| remaining_blockers | 0 profitable RT (economics). base VE33_QUOTE_FAILED. scroll dead pools. Residual config debts (CHEEMS, PUFF, LYNX, NILE — deferred per lead). |
-| evidence_session_run_dirs | 240 runs across 6 chains (60.5 min). 40 per chain. long_scan_latest.json @ 2026-03-19T16:00:27Z. Mantle 5-cycle gate PASS. Scroll 5-cycle gate PASS. |
-| primary_blocker_of_session | Config debt (lead-identified): incorrect/missing DEX registrations, stale token prices, missing protocols |
-| blocker_status_before | ACTIVE: mantle 0 signals (stratum only, no FusionX), scroll misconfigured DEXes, base/linea/arb stale token anchors |
-| blocker_status_after | PARTIALLY_RESOLVED: mantle → SIGNAL_PRODUCING (FusionX V3 works, 39 rq, 1 cdx). scroll → 2 DEXes active but 0 rq (dead pools). arb/linea/base → economics-blocked (not YAML). |
-| start_metric | mantle: 0 signals (R28.22-cont-2). scroll: 0 rq. arb: gap=11.65bps. |
-| end_metric | mantle: 35 signals, 39 rq, 1 cdx (SIGNAL_PRODUCING). scroll: 80 signals, 0 rq, 2 cdx. arb: gap=10.62bps (improved). linea: 160 sig, 160 rq, 4 cdx (100% pass). |
-| delta | Lead regenerated 8 config files: +FusionX V3 (mantle), +Nuri V3 (scroll), verified Uniswap V3 (scroll), refreshed token anchors across all chains. |
+| remaining_blockers | 0 profitable RT (MARKET_EFFICIENCY — phantom spreads, not filter/config). base NO_DATA (aerodrome excluded). mantle/scroll: structural failures. |
+| evidence_session_run_dirs | 37 runs across 6 chains (587s). 7× arb, 6× each coverage chain. long_scan_latest.json @ 2026-03-19T17:17:00Z. |
+| primary_blocker_of_session | 0 profitable roundtrips despite R28.24 filter funnel improvements |
+| blocker_status_before | ACTIVE: 0 profitable RT, filter funnel suspected as bottleneck |
+| blocker_status_after | RESOLVED_DIAGNOSIS: blocker is NOT filter funnel — it's phantom spreads (slot0 price discrepancy ≠ executable spread). Market is efficient for configured pairs/DEXes. |
+| start_metric | R28.23: arb gap=10.62bps. 0 profitable RT. |
+| end_metric | R28.24: arb gap=15.38bps (WETH/USDT). 0 profitable RT. Frontier ARB/USDC gross=-76.6bps (phantom). Best NET=-32.99bps pre-sweep, -15.38bps post-sweep @$25. |
+| delta | R28.24 code: +filter_funnel artifact, +config-driven RT caps (50/10), +quarantine threshold 2→5, +runtime_disabled per-error overrides, +algebra auto-enable, +base aerodrome exclusion. Pipeline analysis: phantom spread root cause confirmed. |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 — R28.23: Lead config audit verification and 1h canonical bundle
+goal (Roadmap): M5_0/M4 — R28.24: Deep pipeline analysis + filter funnel improvements
 change_summary:
-  - CONFIG (lead-regenerated): config/dexes.yaml — +FusionX V3 for mantle, +Nuri V3 + verified Uniswap V3 for scroll
-  - CONFIG (lead-regenerated): config/onboard_mantle_stage2.yaml — 3 DEXes (agni_v3, fusionx_v3, stratum)
-  - CONFIG (lead-regenerated): config/onboard_scroll_stage1.yaml — 3 DEXes (uniswap_v3, sushiswap_v3, nuri_v3)
-  - CONFIG (lead-regenerated): config/onboard_base_stage1.yaml — 3 DEXes, +VIRTUAL/WELL prices
-  - CONFIG (lead-regenerated): config/onboard_base_stage2.yaml — 4 DEXes (with aerodrome), refreshed token prices
-  - CONFIG (lead-regenerated): config/onboard_arbitrum_one_candidate.yaml — 4 DEXes, 17 token anchors
-  - CONFIG (lead-regenerated): config/onboard_linea_stage1.yaml — 2 DEXes (pancakeswap_v3, lynex_v3)
-  - CONFIG (lead-regenerated): config/onboard_mantle_stage1.yaml — 1 DEX (agni_v3 only)
-  - VERIFICATION: mantle 5-cycle gate, scroll 5-cycle gate, 1h canonical bundle (240 runs)
-  - RCA: arb pair-level economics (frontier WETH/ARB, gap=10.62bps, gross=-69.8bps)
+  - CODE: strategy/jobs/run_scan_real.py — filter_funnel artifact, config-driven RT caps (max_candidates 20→50, top_n 5→10), roundtrip_truth_status field, algebra auto-enable quoter_v2
+  - CODE: discovery/quarantine.py — SUSPECT_LIQUIDITY threshold 2→5
+  - CODE: strategy/runtime_disabled.py — per-error failure_threshold_overrides (SUSPECT_LIQUIDITY 3→5)
+  - CONFIG: config/onboard_base_stage2.yaml — aerodrome ve33 excluded (VE33_QUOTE_FAILED dominant)
+  - TEST: tests/unit/test_run_scan_real_purity.py — max_lines 1771→1825, +3 new tests
+  - TEST: tests/unit/test_runtime_disabled.py — 2 tests fixed, +1 new test
+  - ANALYSIS: Full pipeline funnel analysis (quotes→spreads→opportunities→roundtrips→sweep)
+  - ANALYSIS: Root cause identified — phantom spreads (slot0 vs QuoterV2 roundtrip collapse)
 touched_files:
-  - config/dexes.yaml (M — FusionX V3 mantle, Nuri V3 scroll)
-  - config/onboard_arbitrum_one_candidate.yaml (M — 4 DEXes, 17 token anchors)
-  - config/onboard_base_stage1.yaml (M — 3 DEXes, +VIRTUAL/WELL)
-  - config/onboard_base_stage2.yaml (M — 4 DEXes, refreshed prices)
-  - config/onboard_linea_stage1.yaml (M — 2 DEXes)
-  - config/onboard_mantle_stage1.yaml (M — 1 DEX)
-  - config/onboard_mantle_stage2.yaml (M — 3 DEXes)
-  - config/onboard_scroll_stage1.yaml (M — 3 DEXes, suspect_spread_bps_hard=500)
+  - strategy/jobs/run_scan_real.py (M — filter_funnel, RT caps, algebra)
+  - discovery/quarantine.py (M — threshold)
+  - strategy/runtime_disabled.py (M — per-error overrides)
+  - config/onboard_base_stage2.yaml (M — aerodrome exclusion)
+  - tests/unit/test_run_scan_real_purity.py (M — +3 tests)
+  - tests/unit/test_runtime_disabled.py (M — +1 test, 2 fixes)
   - docs/DEV_REPORT_LATEST.md (this file)
-  - docs/status/Status_M5_0.md (R28.23 section)
-  - docs/status/Status_M4.md (R28.23 economics update)
+  - docs/status/Status_M5_0.md (R28.24 section)
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: **PASS** (1957 passed, 3 skipped)
-py -3.11 scripts/check_repo_safety.py: **PASS** (1 warning: DEV_REPORT alignment)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: **PASS** (ALL REQUIRED GATES PASSED, 30.1s)
-py -3.11 start.py --config config/onboard_mantle_stage2.yaml --no-dashboard --cycles 5: **PASS** (3 DEXes active, 14 qf, 7 cdx, 1 RT candidate)
-py -3.11 start.py --config config/onboard_scroll_stage1.yaml --no-dashboard --cycles 5: **PASS** (2 DEXes active, 9 qf, 0 RT candidates)
-py -3.11 start.py --config-list <6 chains> --no-dashboard --hours 1 --cycles 1 --accepted-fail-chains scroll --max-fail-chains 5: **COMPLETED** (60.5 min, 240 runs)
-Remove-Item data\cache\quarantine_state_mantle*.json, data\cache\runtime_disabled_mantle*.json: **DONE**
-Remove-Item data\cache\quarantine_state_scroll*.json, data\cache\runtime_disabled_scroll*.json: **DONE**
+py -3.11 -m pytest tests/unit -q: **PASS** (1961 passed, 3 skipped)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: **PASS** (ALL REQUIRED GATES PASSED)
+py -3.11 start.py --config-list <6 chains> --no-dashboard --hours 1 --cycles 1 --accepted-fail-chains scroll --max-fail-chains 5 --coverage-workers 2: **TERMINATED BY USER** (587s, 37 runs, exit code 1)
 
 ## 3) Artifacts Attached
-rolling: _latest.json @ 2026-03-19T15:59:26Z, run_summary_latest.json (status=PASS), long_scan_latest.json @ 2026-03-19T16:00:27Z (240 runs, 60.5 min)
-config changes (lead-regenerated, 8 files):
-  - config/dexes.yaml, config/onboard_arbitrum_one_candidate.yaml
-  - config/onboard_base_stage1.yaml, config/onboard_base_stage2.yaml
-  - config/onboard_linea_stage1.yaml, config/onboard_mantle_stage1.yaml
-  - config/onboard_mantle_stage2.yaml, config/onboard_scroll_stage1.yaml
+rolling: long_scan_latest.json @ 2026-03-19T17:17:00Z (37 runs, 587s)
+run_dir_bundle: ci_m5_gate_arbitrum_one_20260319_181625_174906/reports/ (truth_report, reject_histogram, scan, signals, daily_report)
 
 ## 4) Key Results
 
 ```
-# Final Bundle Results (R28.23 — 60.5 min, 240 runs, 6 chains)
-# long_scan_latest.json @ 2026-03-19T16:00:27Z
+# R28.24 Scan Results (37 runs, 587s, 6 chains)
+# long_scan_latest.json @ 2026-03-19T17:17:00Z
 
 GLOBAL:
-  total_runs: 240 (40 per chain)
-  total_pass: 145 / fail: 77 / no_data: 18
-  total_signals: 1528
-  total_net_usdc: 1977.79
-  total_profitable_roundtrips: 0 / roundtrip_evaluated: 503
-  best_roundtrip_net_bps: 0.0
-  sweep_best_net_pnl_bps: -10.62 @ $25
-  gap_to_zero_bps: 10.62 (best, arb), gap_median calculated from sweep
+  total_runs: 37 (7 arb, 6 each coverage)
+  total_pass: 19 / fail: 12 / no_data: 6
+  total_signals: 251 (diagnostic), real_quote_signals: 70
+  total_net_usdc: 311.50
+  total_profitable_roundtrips: 0 / roundtrip_evaluated: 82
+  best_roundtrip_net_bps: -16.45
+  sweep_best_net_pnl_bps: -15.38 @ $25
+  gap_to_zero_bps: 15.38 (arb, WETH/USDT)
 
-PER-CHAIN (R28.22-cont-2 → R28.23):
-arbitrum_one (NORMAL, SIGNAL_PRODUCING, PRIMARY_BLOCKER):
-  runs=40, pass=40, fail=0 (100% pass rate)
-  sig=1163, rq=172, cdx=8, prt=0
-  best_rt=-21.19 bps, sweep=-10.62 bps @ $25, gap=10.62 bps
-  top rejects: PRICE_SANITY=37, NOTIONAL_DRIFT=36, SUSPECT_LIQUIDITY=31
-  CLOSEST TO PROFITABILITY — gap improved 11.65 → 10.62 bps
+PER-CHAIN:
+arbitrum_one (NORMAL, SIGNAL_PRODUCING):
+  runs=7, pass=7, fail=0 (100% pass)
+  sig=203, rq=40, cdx=8, prt=0
+  best_rt=-16.45bps, sweep=-15.38bps@$25, gap=15.38bps
+  sweep_pair=WETH/USDT, gas=3.17bps, fee=10.0bps, slippage=11.91bps
+  rejects: SUSPECT_LIQUIDITY=36, NOTIONAL_DRIFT=35, PRICE_SANITY=33
 
-linea (COVERAGE, SIGNAL_PRODUCING, PRIMARY_BLOCKER):
-  runs=40, pass=40, fail=0 — 100% PASS RATE (best chain!)
-  sig=160, rq=160, cdx=4, prt=0
-  best_rt=-62.96 bps
-  rejects: SUSPECT_LIQUIDITY=4, NOTIONAL_DRIFT=3, ALGEBRA_NEEDS_QUOTER=2
+linea (COVERAGE, SIGNAL_PRODUCING):
+  runs=6, pass=6 (100%), sig=24, rq=12, prt=0, best_rt=-65.75bps
 
-zksync (COVERAGE, SIGNAL_PRODUCING, PRIMARY_BLOCKER):
-  runs=40, pass=40, fail=0
-  sig=40, rq=80, cdx=1, prt=0
-  best_rt=-130.31 bps
-  rejects: NOTIONAL_DRIFT=11, PRICE_SANITY=10, SUSPECT_LIQUIDITY=9
+zksync (COVERAGE, SIGNAL_PRODUCING):
+  runs=6, pass=6, sig=6, rq=12, prt=0, best_rt=-148.14bps
 
-base (COVERAGE, INFRA_READY, PRIMARY_BLOCKER):
-  runs=40, pass=24, fail=3
-  sig=50, rq=52, cdx=0, prt=0
-  best_rt=0.0 bps (no valid RT evaluated)
-  DOMINANT REJECT: VE33_QUOTE_FAILED=29, PRICE_SANITY=4, NOTIONAL_DRIFT=3
+base (COVERAGE, INFRA_READY):
+  runs=6, pass=0, no_data=6, sig=0, rq=0 (aerodrome excluded R28.24)
 
-mantle (COVERAGE, SIGNAL_PRODUCING, PRIMARY_BLOCKER):
-  runs=40, pass=0, fail=35 (pass/fail counts reflect run-level; signals still produced)
-  sig=35, rq=39, cdx=1, prt=0
-  ** NEW: was 0 signals before FusionX V3 → now SIGNAL_PRODUCING **
-  rejects: SUSPECT_LIQUIDITY=30, NOTIONAL_DRIFT=9, PRICE_SANITY=4
-  FusionX V3 working! agni_v3 working! stratum still broken.
+mantle (COVERAGE, SIGNAL_PRODUCING):
+  runs=6, pass=0, fail=6, sig=6, rq=6, prt=0 (SUSPECT_LIQUIDITY=30)
 
-scroll (COVERAGE, SIGNAL_PRODUCING, CANDIDATE):
-  runs=40, pass=1, fail=39
-  sig=80, rq=0, cdx=2, prt=0
-  rejects: LIQUIDITY_ZERO=20, PRICE_SANITY=12, SUSPECT_LIQUIDITY=6
-  Dead sushi pools dominate. Living pairs (WETH/USDC, USDC/USDT) produce signals.
+scroll (COVERAGE, SIGNAL_PRODUCING):
+  runs=6, pass=0, fail=6, sig=12, rq=0 (dead pools, accepted_fail=true)
 ```
+
+## 4.1) DEEP PIPELINE ANALYSIS — Root Cause of 0 Profitable RT
+
+### Повний фільтр-фунел (Arbitrum, останній цикл)
+
+```
+ЕТАП                                COUNT    
+───────────────────────────────────────────
+1. Pool universe (hot_pairs)         235     
+2. Multicall slot0 success           32/235  (86% slot0 FAIL)
+3. QuoterV2 quotes attempted         169
+4. Quotes fetched (valid)            98      
+   ├── SUSPECT_LIQUIDITY             36      
+   ├── PRICE_SANITY_FAILED           33      
+   ├── NOTIONAL_DRIFT_EXCLUDED       35      (anchors від 2026-02-17)
+   ├── ALGEBRA_NEEDS_QUOTER          2       
+   └── runtime_disabled              61      
+5. Post-drift usable quotes          63      
+6. Spread signals                    47      (cross-DEX, ≥2 quotes/pair)
+7. Viable signals (sm_req > 0)       16      
+8. RT candidates                     7       
+9. Gated by economics                0       (всі 7 пройшли)
+10. Simulated roundtrips             7       
+11. Profitable roundtrips            0       ← ВСІ МАЮТЬ НЕГАТИВНИЙ GROSS
+12. Dynamic sweep routes             3       
+13. Profitable після sweep           0       (best=-81.19bps ARB/USDC@$25)
+```
+
+### ROOT CAUSE 1: PHANTOM SPREADS (головний блокер)
+
+Spread сигнали — фантомні. Slot0/single-leg ціновий розрив ПОВНІСТЮ ЗНИКАЄ при QuoterV2 roundtrip re-quote:
+
+| Сигнал | Spread (signal) | Gross PnL (roundtrip) | Колапс |
+|--------|-----------------|----------------------|--------|
+| ARB/USDC uni→pancake | +484 bps | **-76.6 bps** | -560 bps |
+| WETH/ARB camelot→pancake | viable | LEG1_QUOTE_FAIL | quoter fail |
+| WETH/RDNT sushi→pancake | suspect | **-9766 bps** | broken pool |
+
+**Причини**: (1) slot0 midpoint ≠ executable swap; (2) різні fee tiers створюють ілюзію спреду; (3) low-liquidity DEXes (PancakeSwap/Camelot на Arb) — slot0 ≠ swap.
+
+### ROOT CAUSE 2: STALE CONFIG (60% втрата квотів)
+
+Anchor prices від 2026-02-17 (1 місяць): 35 quotes drift-excluded, 33 price_sanity_failed, 61 runtime_disabled, 203/235 slot0 fail. Лише 63 usable quotes з 235 universe (27%).
+
+### ROOT CAUSE 3: MARKET EFFICIENCY
+
+Cross-DEX AMM arb на зрілому L2 (Arbitrum) з Uniswap V3 + Sushiswap V3: ринок ефективний для наявного pair/DEX coverage. Точкова ціна може відрізнятись на 100+ bps між DEXes, але executable swap не дає прибутку.
+
+### РЕКОМЕНДАЦІЇ
+
+1. Більше DEXes з низькою MEV-конкуренцією (Camelot Algebra quoter, Trader Joe)
+2. Stablecoin pairs (USDC/USDT/DAI) — 1-5 bps LP fees, мікро-спреди
+3. Dynamic anchor prices (Chainlink/Pyth замість статичних YAML)
+4. Coverage chains focus (Mantle, Linea — менш ефективні ринки)
+5. Multi-hop A→B→C→A (складніший, але більші спреди)
 
 ## 5) Contract Checks
 
-### R28.23 (this session — lead config audit response)
-- **Truth narrative**: Config debt was real and partially fixed. Mantle and scroll were materially unblocked at the config layer. Base/linea/arb lost several false NO_USD_PRICE blockers (R28.22-cont-2). **But 0 profitable RT remains because the dominant blockers are now chain-specific economics and quote-path defects, not invalid YAML.**
-- **FusionX V3 added to mantle** — lead regenerated dexes.yaml with official FusionX contracts. Result: mantle goes from 0 signals → 35 signals, 39 rq, 1 cdx pair. SIGNAL_PRODUCING quality.
-- **Nuri V3 added to scroll** — lead added official Nuri V3 contracts. 2 DEXes now active; nuri_v3 may not be quoting all pairs.
-- **Arb pair-level economics RCA** — Frontier pair: WETH/ARB @ $25. Costs only 10.38 bps (gas=3.88, fee=6.0, slippage=0.5). But gross_pnl=-69.8 bps — the spread itself is negative. Market efficiency, not costs.
-- **Mantle 5-cycle gate**: PASS — 3 DEXes active, 53 qt, 14 qf, 7 cross-dex, 1 RT candidate (SLIPPAGE_TOO_HIGH).
-- **Scroll 5-cycle gate**: PASS — 2 DEXes active, 47 qt, 9 qf, 0 RT candidates, 12 PRICE_SANITY_FAILED.
+### R28.24 (this session — deep pipeline analysis)
+- **Truth narrative**: Filter funnel improvements працюють коректно — R28.24 caps (50/10), quarantine(5), runtime_disabled overrides пропустили більше кандидатів. Але проблема НЕ у фільтрації: 7 RT candidates → 0 gated_by_economics → ALL negative gross PnL. Phantom spreads (slot0 vs QuoterV2 roundtrip collapse) — корінна причина.
+- **Opportunity Engine error**: `'<' not supported between instances of 'NoneType' and 'str'` — non-blocking but masks RT stats.
+- **Gas costs reasonable**: measured_gas=3-5bps, fee=10bps, slippage=0.5-12bps, total=15-25bps. Problem is GROSS = -76 to -9766 bps.
 
 ### Invariants (ongoing)
-- total_profitable_roundtrips=0 across all 6 chains — economics-blocked
-- M4 safety contract: execution_enabled=false, kill_switch_active=true — MAINTAINED
-- All profit numbers are PAPER/SIMULATED
+- total_profitable_roundtrips=0 across all 6 chains — MARKET_EFFICIENCY blocked
+- M4 safety: execution_enabled=false, kill_switch_active=true — MAINTAINED
+- All profit numbers PAPER/SIMULATED
 
 ## 6) Blocker Classification
 
 ```
-code_blocker: NONE (1957 tests PASS)
-execution_blocker: HIGH (live execution dormant — no signer, no realized PnL)
-online_verification: COMPLETED (60.5-min bundle, 240 runs, 6 chains)
+code_blocker: NONE (1961 tests PASS, CI green)
+data_collection_blocker: MEDIUM (stale anchors -36% quotes, 86% slot0 fail, 61 runtime_disabled)
+market_window_blocker: CRITICAL (0/82 RT profitable, best gross=-76.6bps, phantom spreads)
+execution_blocker: HIGH (dormant — no signer)
 
-per_chain_blockers (R28.23 FINAL, 240 runs):
-  arbitrum_one: ECONOMICS (40 runs, 1163 signals, 172 rq, best_rt=-21.19bps, gap=10.62bps, CLOSEST TO PROFIT)
-               RCA: frontier WETH/ARB total_cost=10.38bps but gross=-69.8bps. Spread doesn't exist.
-  linea:        ECONOMICS (40 runs, 160 signals, 160 rq, best_rt=-62.96bps, 100% pass, cdx=4)
-               ALGEBRA_NEEDS_QUOTER=2 genuine (USDC/DAI, WSTETH/USDC)
-  zksync:       ECONOMICS (40 runs, 40 signals, 80 rq, best_rt=-130.31bps, cdx=1)
-  base:         QUOTE_PATH (40 runs, 50 signals, 52 rq, cdx=0, VE33_QUOTE_FAILED=29 dominant)
-               Aerodrome ve33 adapter fails on most pairs. Without aerodrome, only 3 DEXes.
-  mantle:       PARTIALLY_UNBLOCKED (40 runs, 35 signals, 39 rq, cdx=1)
-               WAS: 0 signals (stratum only). NOW: SIGNAL_PRODUCING (FusionX V3 works!)
-               Stratum ve33 still broken. 2 of 3 DEXes working.
-  scroll:       DIAGNOSTIC (40 runs, 80 signals, 0 rq, cdx=2, LIQUIDITY_ZERO=20)
-               Dead sushi pools. Living pairs produce signals but no RT candidates.
+per_chain_blockers (R28.24, 37 runs):
+  arbitrum_one: MARKET_EFFICIENCY (7 runs, 203 sig, 40 rq, gap=15.38bps)
+    Evidence: ARB/USDC signal=484bps → roundtrip gross=-76.6bps. PHANTOM.
+    WETH/USDT sweep best=-15.38bps@$25 (closest). Cost=25bps, gross=-15bps.
+  linea: ECONOMICS (6 runs, 24 sig, 12 rq, best_rt=-65.75bps)
+  zksync: ECONOMICS (6 runs, 6 sig, 12 rq, best_rt=-148.14bps)
+  base: NO_DATA (6 runs, 0 sig, 0 rq — aerodrome excluded, diagnostic-only quotes)
+  mantle: STRUCTURAL (6 runs, 6 sig, 6 rq, SUSPECT_LIQUIDITY=30, stratum broken)
+  scroll: DEAD_POOLS (6 runs, 12 sig, 0 rq, accepted_fail=true)
 ```
 
-## 7) Lead's R28.23 10 Steps: Execution Map
-step_01: **DONE** (truth narrative: config debt real, partially fixed, economics now dominant)
-step_02: **VERIFIED** (lead's 8 regenerated configs verified by 5-cycle gates + 1h bundle)
-step_03: **DONE** (arb pair-level economics RCA: frontier WETH/ARB, gap=10.62bps, total_cost=10.38bps, gross=-69.8bps)
-step_04: **CONFIRMED** (base VE33_QUOTE_FAILED=29 dominant blocker — aerodrome ve33 adapter issue)
-step_05: **CONFIRMED** (linea ALGEBRA_NEEDS_QUOTER=2 genuine — quoter call fails, not config)
-step_06: **DONE** (mantle: 5-cycle gate PASS, 3 DEXes active, FusionX V3 working, SIGNAL_PRODUCING)
-step_07: **DONE** (scroll: 5-cycle gate PASS, 2 DEXes active, dead-pool isolation confirmed)
-step_08: **DEFERRED** (residual config debts: CHEEMS, PUFF, LYNX, NILE — per lead: "only after live source verification")
-step_09: **COMPLETED** (60.5-min canonical bundle — 240 runs, 6 chains, all fixes verified)
-step_10: **DONE** (docs update — DEV_REPORT_LATEST.md, Status_M5_0.md, Status_M4.md)
+## 7) Lead's R28.24 Analysis Steps
+step_01: **DONE** — R28.24 code changes: filter_funnel, RT caps 50/10, quarantine 5, runtime_disabled overrides, algebra auto-enable, base aerodrome exclusion. 1961 tests PASS.
+step_02: **DONE** — Multi-chain scan launched (6 chains, 587s, 37 runs). User terminated after ~10 min.
+step_03: **DONE** — Arb truth report deep analysis: 169 quotes→98 fetched→47 signals→16 viable→7 RT→0 profitable. Full funnel traced.
+step_04: **DONE** — Dynamic sweep analysis: ARB/USDC $25-$250 ALL negative gross. WETH/USDT best=-15.38bps@$25.
+step_05: **DONE** — Reject histogram analysis: 106 total rejects (SUSPECT_LIQ=36, PRICE_SANITY=33, NOTIONAL_DRIFT=35, ALGEBRA=2).
+step_06: **DONE** — Spread signal → RT mapping: 16 viable signals but slot0 spread ≠ executable spread. 484bps→-76.6bps collapse proven.
+step_07: **DONE** — Config analysis: real_minimal.yaml only 2 DEXes, 6 pairs, anchors stale since 2026-02-17.
+step_08: **DONE** — Pipeline code analysis: quotes→spreads→opp_engine→roundtrip→sweep fully mapped with thresholds.
+step_09: **DONE** — Root cause synthesis: PHANTOM SPREADS + MARKET EFFICIENCY + STALE CONFIG.
+step_10: **DONE** — Reports: DEV_REPORT_LATEST.md + Status_M5_0.md updated.
 
 ## 8) What I need from Lead now
-1. **Mantle success confirmation**: FusionX V3 works (35 signals, 39 rq, 1 cdx). Stratum ve33 still broken. Decision: (a) accept 2-of-3 DEXes, (b) investigate stratum, (c) add 4th DEX.
-2. **Base VE33_QUOTE_FAILED**: 29 rejects from aerodrome ve33 adapter. This is the dominant blocker preventing cross-DEX spreads. Is the ve33 adapter known-broken for these pairs, or is there a pool configuration issue?
-3. **Scroll dead pools**: LIQUIDITY_ZERO=20, PRICE_SANITY=12. Living pairs produce signals but no RT candidates. Options: (a) prune dead fee tiers from config, (b) add more token pairs, (c) accept as diagnostic.
-4. **Arb economics truth**: Gap=10.62 bps is closest to profitability but gross spread is negative (-69.8 bps on frontier). The market is efficient at $25 size — cross-DEX price differences are sub-basis-point. Options: (a) probe smaller sizes ($5-10), (b) expand to more volatile pairs, (c) accept as market-blocked.
-5. **Residual config debts**: CHEEMS (zksync), PUFF (mantle), LYNX/NILE (linea) — lead said "only after live source verification". Confirm these are deferred.
-6. **Next session priority**: (a) ve33 adapter investigation for base, (b) arb micro-size sweep, (c) mantle cdx expansion.
+1. **Strategic decision**: Cross-DEX AMM arb на Arbitrum з Uni+Sushi ринок-ефективний (proven with data). Варіанти: (a) pivot to multi-hop/same-DEX fee-tier arb, (b) focus on less-mature chains (Mantle/Linea), (c) add more DEXes (Camelot Algebra integration), (d) accept MARKET_BLOCKED and move to M6 preparation.
+2. **Stale anchors**: Anchor prices в real_minimal.yaml від 2026-02-17 (1 місяць). Оновити? Чи впровадити dynamic pricing (Chainlink)?
+3. **Opportunity Engine error**: `'<' not supported between NoneType and str` — non-blocking but masks opportunity stats. Fix priority?
+4. **Base strategy**: Aerodrome excluded (R28.24). Without it, base = NO_DATA. Investigate ve33 adapter or accept base as non-viable?

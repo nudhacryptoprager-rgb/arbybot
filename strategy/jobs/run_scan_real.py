@@ -65,6 +65,7 @@ def _build_live_candidate_stream(
     roundtrip_results: List[Any],
     dynamic_sweep: Optional[Dict[str, Any]],
     default_size_usd: float,
+    max_candidates: int = 10,
 ) -> List[Dict[str, Any]]:
     """Build compact operator-facing pair candidates for hot-loop streaming."""
     opp_map = {
@@ -128,7 +129,7 @@ def _build_live_candidate_stream(
             -(c.get("final_net_pnl_bps") or -999999.0),
         )
     )
-    return candidates[:5]
+    return candidates[:max_candidates]
 
 
 # Ensure environment variables from project .env are loaded
@@ -213,12 +214,13 @@ def run_scan(
     algebra_dexes = [d for d in dexes_list if d in ("camelot_v3", "algebra", "swaap_v3")]
     
     if algebra_dexes and not use_quoter_v2:
-        logger.warning(
-            "CONFIG_WARN: %s in dexes but use_quoter_v2=false. "
-            "Algebra-based DEXes require QuoterV2 (slot0 ABI incompatible). "
-            "Quotes from these DEXes will be rejected with ALGEBRA_NEEDS_QUOTER.",
-            algebra_dexes
+        # R28.24: Auto-enable quoter_v2 for algebra DEXes instead of rejecting
+        logger.info(
+            "R28.24: Auto-enabling use_quoter_v2 for algebra DEXes: %s",
+            algebra_dexes,
         )
+        use_quoter_v2 = True
+        config["use_quoter_v2"] = True
     
     # Resolve RPC endpoints
     resolved_http, resolved_ws, provider_http, provider_ws = resolve_rpc_endpoints(config)
@@ -890,15 +892,19 @@ def run_scan(
                 # v3.2.4: Sort by spread_minus_required_bps descending (viable first)
                 return sorted(pairs_best.values(), key=lambda x: x.get("spread_minus_required_bps", -999), reverse=True)
             
-            # Apply best-per-pair, filter by eligibility AND margin viability, take top 5
-            per_pair_best = best_per_pair(opps_list, max_candidates=20)
+            # R28.24: Config-driven caps (was hard-coded 20/5, too restrictive)
+            _rt_max_candidates = config.get("roundtrip_max_candidates", 50)
+            _rt_top_n = config.get("roundtrip_top_n", 10)
+            
+            # Apply best-per-pair, filter by eligibility AND margin viability
+            per_pair_best = best_per_pair(opps_list, max_candidates=_rt_max_candidates)
             # v3.2.4: Filter by roundtrip_eligible AND margin_viable (spread_minus > -5 bps)
-            eligible_opps = [o for o in per_pair_best if roundtrip_eligible(o) and margin_viable(o)][:5]
+            eligible_opps = [o for o in per_pair_best if roundtrip_eligible(o) and margin_viable(o)][:_rt_top_n]
             margin_filtered_count = len([o for o in per_pair_best if roundtrip_eligible(o)]) - len([o for o in per_pair_best if roundtrip_eligible(o) and margin_viable(o)])
             stats["roundtrip_lp_filter"] = {
-                "candidates_considered": min(20, len(opps_list)),
-                "cross_dex_count": len([o for o in opps_list[:20] if is_cross_dex(o)]),
-                "lp_viable_count": len([o for o in opps_list[:20] if lp_fee_viable(o)]),
+                "candidates_considered": min(_rt_max_candidates, len(opps_list)),
+                "cross_dex_count": len([o for o in opps_list[:_rt_max_candidates] if is_cross_dex(o)]),
+                "lp_viable_count": len([o for o in opps_list[:_rt_max_candidates] if lp_fee_viable(o)]),
                 "unique_pairs_considered": len(per_pair_best),  # v2.8.0: Track pair diversity
                 "margin_filtered_count": margin_filtered_count,  # v3.2.4: Count filtered by margin
                 "passed_to_roundtrip": len(eligible_opps),
@@ -927,7 +933,7 @@ def run_scan(
                 buy_quotes_by_key=quotes_by_key,
                 sell_quotes_by_key=quotes_by_key,
                 gas_price_wei=live_gas_price_wei,
-                top_n=5,
+                top_n=_rt_top_n,
                 leg2_quote_callback_factory=make_leg2_callback,
                 l1_cost_wei=l1_cost_wei,
                 l1_cost_source=l1_cost_source,
@@ -1213,6 +1219,7 @@ def run_scan(
             roundtrip_results=roundtrip_results,
             dynamic_sweep=stats.get("roundtrip", {}).get("dynamic_sweep"),
             default_size_usd=float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0),
+            max_candidates=_rt_top_n,
         )
         _emit_phase(
             "candidate_snapshot",
@@ -1533,6 +1540,52 @@ def run_scan(
             stats["discovery_runtime"] = {"enabled": False, "error": str(rt_err)}
     else:
         stats["discovery_runtime"] = {"enabled": False}
+    
+    # =========================================================================
+    # R28.24: Filter funnel artifact — per-chain stage counters
+    # Consolidates all filter stages into a single diagnostic dict for
+    # operator visibility into where candidates are lost in the pipeline.
+    # =========================================================================
+    _opp_engine = stats.get("opportunity_engine", {})
+    _opp_summary = _opp_engine.get("summary", {}) if _opp_engine.get("enabled") else {}
+    _rt = stats.get("roundtrip", {})
+    _rt_filter = stats.get("roundtrip_lp_filter", {})
+    stats["filter_funnel"] = {
+        "resolved_pairs": len(pairs_list) if pairs_list else 0,
+        "quotes_attempted": stats.get("quotes_total", 0),
+        "quotes_fetched": stats.get("quotes_fetched", 0),
+        "quarantined_skipped": stats.get("quarantined_count", 0),
+        "runtime_disabled_skipped": stats.get("runtime_disabled_count", 0),
+        "pool_missing_skipped": stats.get("pool_missing_count", 0),
+        "spread_signals": len(spread_signals),
+        "opp_candidates": _opp_summary.get("total_opportunities", 0),
+        "opp_profitable_diagnostic": _opp_summary.get("profitable_count", 0),
+        "rt_candidates_considered": _rt_filter.get("candidates_considered", 0),
+        "rt_cross_dex": _rt_filter.get("cross_dex_count", 0),
+        "rt_lp_viable": _rt_filter.get("lp_viable_count", 0),
+        "rt_unique_pairs": _rt_filter.get("unique_pairs_considered", 0),
+        "rt_margin_filtered": _rt_filter.get("margin_filtered_count", 0),
+        "rt_passed_to_eval": _rt_filter.get("passed_to_roundtrip", 0),
+        "rt_evaluated": _rt.get("evaluated_count", 0),
+        "rt_real_quote": _rt.get("real_quote_count", 0),
+        "rt_profitable": _rt.get("profitable_count", 0),
+    }
+    
+    # R28.24: Roundtrip truth status — separate from diagnostic profit_status.
+    # When roundtrip.profitable_count=0 but one-leg total_net_usdc>0,
+    # operator must see that no real roundtrip profit exists.
+    if _rt.get("enabled"):
+        _rt_profitable_count = _rt.get("profitable_count", 0)
+        if _rt_profitable_count > 0:
+            stats["roundtrip_truth_status"] = "PROFITABLE"
+        elif _rt.get("evaluated_count", 0) > 0:
+            stats["roundtrip_truth_status"] = "EVALUATED_NOT_PROFITABLE"
+        elif _rt_filter.get("passed_to_roundtrip", 0) > 0:
+            stats["roundtrip_truth_status"] = "CANDIDATES_NOT_EVALUATED"
+        else:
+            stats["roundtrip_truth_status"] = "NO_CANDIDATES"
+    else:
+        stats["roundtrip_truth_status"] = "ROUNDTRIP_DISABLED"
     
     # R28.5: Report phase — artifact writing and state flush
     _phase_report_start = _time.monotonic()
