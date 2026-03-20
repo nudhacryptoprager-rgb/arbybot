@@ -98,7 +98,7 @@ def run_sweep(
 
     dynamic_probe_cfg = config.get("dynamic_probe", {})
     sweep_sizes = dynamic_probe_cfg.get("sizes_usd", None) or list(CANONICAL_SWEEP_SIZES_USD)
-    max_routes = dynamic_probe_cfg.get("top_routes", 3)
+    max_routes = dynamic_probe_cfg.get("top_routes", 15)
 
     make_leg1 = make_requote_factory(
         chain_key, rpc_url, current_block,

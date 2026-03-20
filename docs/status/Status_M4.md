@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-20 (R29 cont'd (2) — 5-module `strategy/quotes.py` extraction complete (1252 lines), pair-level RCA for base+arb, fresh 60-run online evidence. 2092 tests PASS.)  
+**Updated**: 2026-03-20 (R29 (3) — **fixed-size position doctrine removed**. 19-point $1–$10,000 sweep ladder, top_routes 3→15. Wide frontier: arb true minimum -16.89 bps at $25 (was -31.75 at $150). 2092 tests PASS.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.30 follow-up**: hot-mode provenance now survives re-quotes, so Stage-1 cross-DEX counts remain visible in rolling artifacts during hot cycles.  
-**Primary blocker**: No single blocker — pair-level RCA verified per-chain taxonomy: `base`=quote-path blocked (14/15 pairs quoted, 0 signals), `arb`=mixed coverage+economics (gas-dominated, -25.02 bps best), `linea`=economics-control (30 sig, cleanest truth path), `zksync`=thin-surface economics, `mantle`=liquidity/quality, `scroll`=no real RT. 5-module extraction complete (quotes.py 1252, quote_rpc.py 233, quote_adapters.py 288, quote_policy.py 107, quote_metrics.py 39).
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. R29 (3): paper_size_usd now annotated as `seed_diagnostic` — separate from executable sweep truth.  
+**Primary blocker**: Economics (gas+slippage) remain chain-specific. Wide frontier dramatically improved gap: arb true minimum at $25 is -16.89 bps (improvement of ~15 bps from fixed $150 probe). Base still quote-path blocked. `profitable_roundtrips=0` across all chains.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
@@ -28,7 +28,7 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-20 R29 cont'd (2))**: 5-module `quotes.py` extraction complete (1252 lines + quote_rpc 233 + quote_adapters 288 + quote_policy 107 + quote_metrics 39). Fresh 60-run canonical scan: 646.1s wall / 56 included signals / 54 RT evaluated / 0 profitable RT / best -25.02 bps. Pair-level RCA on base (quote-path blocked) and arb (gas-dominated, counterfactual: zero-gas → +253 bps on WBTC/USDC).
+> [!] **ROLLING STABILITY (2026-03-20 R29 (3))**: **Fixed-size doctrine removed.** CANONICAL_SWEEP_SIZES_USD widened: 7-point [50–250] → 19-point [1–10000]. top_routes 3→15. Three decoupled size layers (discovery_probe, spread_seed, executable_sweep). Fresh 54-run canonical scan: 654.8s wall / 54 included signals / 49 RT evaluated / 0 profitable RT / best -28.70 bps (fixed-size). Sweep frontier: arb true minimum -16.89 bps at $25 (was -31.75 at $150). Gap_to_zero: 0.0 bps at $2500 (zero-quote) → true gap -16.89 bps at $25.
 > R29 cont'd: staged `quotes.py` extraction landed (`quote_rpc.py` added; `quotes.py` 2006→1658). Same-session canonical run: 72 runs / 647.8s / 78 included signals / 57 RT evaluated / 0 profitable RT. `/api/hot` matched `long_scan_latest.json` in the same session.
 > R28.28: God-file extraction: run_scan_real.py 1724→1371 lines, 5 modules, 38 tests. 2017 PASS.
 > R28.27: Cap isolation toggles + same-DEX override + diagnostics + 4 chain fixes. 1979 tests.
@@ -42,28 +42,30 @@
 > R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation — dual-cycle architecture.
 > Earlier rounds: see Status_M5_0.md for full history.
 
-**Economics Snapshot (2026-03-20, R29 cont'd (2) — from 60-run long_scan, 646.1s):**
+**Economics Snapshot (2026-03-20, R29 (3) — from 54-run long_scan, 654.8s, WIDE FRONTIER):**
 | Metric | Value | Source |
 |--------|-------|--------|
-| `arb best_net_pnl_bps` | -25.02 bps | long_scan R29c2 (WBTC/USDC, gas=278.93 bps) |
-| `arb counterfactual` | +253.91 bps if zero-gas | pair_level_rca (gas-dominated) |
-| `linea best_net_pnl_bps` | -122.5 bps | long_scan R29c2 (30 signals, 11 cdx, route_health=1.0) |
-| `zksync best_net_pnl_bps` | n/a | long_scan R29c2 (4 signals, thin-surface) |
-| `base best_net_pnl_bps` | 0.0 bps | long_scan R29c2 (QUOTE_PATH, 15 pairs, 14 quoted, 0 signals) |
-| `mantle best_net_pnl_bps` | n/a | long_scan R29c2 (fragile signal pass) |
-| `scroll best_net_pnl_bps` | n/a | long_scan R29c2 (accepted_fail, no real RT) |
-| `total_profitable_roundtrips` | 0 | long_scan R29c2 (all chains) |
-| `benchmark_chain` | None | long_scan R29c2 (no chain qualifies) |
+| `arb sweep_best_size_usd` | $2500 (zero-quote) | long_scan R29(3) frontier_ranking |
+| `arb true_optimum` | **-16.89 bps at $25** | sweep curve U-shaped: gas=3.84, slip=7.32, fee=10.00 |
+| `arb old_fixed_$150` | -31.75 bps | same sweep curve (improvement: +14.86 bps) |
+| `arb best_net_pnl_bps (RT)` | -28.70 bps | long_scan R29(3) (fixed-size RT eval) |
+| `mantle sweep_best` | $250 / 0.0 bps (zero-quote) | long_scan R29(3) (WMNT/USDT) |
+| `base sweep_best` | $10000 / 0.0 bps (zero-quote) | long_scan R29(3) (WETH/VIRTUAL) |
+| `zksync sweep_best` | $25 / -209.87 bps | long_scan R29(3) (WETH/WBTC) |
+| `linea sweep_best` | — (no sweep data) | no cross-DEX RT candidates |
+| `scroll sweep_best` | — (no sweep data) | accepted_fail, no real RT |
+| `total_profitable_roundtrips` | 0 | long_scan R29(3) (all chains) |
+| `benchmark_chain` | None | long_scan R29(3) (no chain qualifies) |
 
-**Rollout Queue (R29 cont'd (2) — 60-run bundle, pair-level RCA verified):**
-| Priority | Chain | Status | Evidence |
-|----------|-------|--------|----------|
-| 1 | arbitrum_one | MIXED_COVERAGE_ECONOMICS | 7 pairs, 4 RT eval, best=-25.02bps, gas-dominated, counterfactual +253bps |
-| 2 | linea | ECONOMICS_CONTROL | 30 signals, 11 cdx, route_health=1.0, cleanest truth path |
-| 3 | zksync | THIN_SURFACE_ECONOMICS | 4 signals, thin surface |
-| 4 | base | QUOTE_PATH_BLOCKED | 15 pairs, 14 quoted, 0 signals, 3 real quotes — QuoterV2 issue |
-| 5 | mantle | LIQUIDITY_QUALITY | fragile signal pass |
-| 6 | scroll | NO_REAL_RT | accepted_fail, upstream signal-pass collapse |
+**Rollout Queue (R29 (3) — 54-run bundle, wide frontier verified):**
+| Priority | Chain | Status | Sweep Evidence |
+|----------|-------|--------|----------------|
+| 1 | arbitrum_one | ECONOMICS_GAS_SLIPPAGE | true min -16.89 bps at $25 (was -31.75 at $150), 4 RT eval, gap improved ~15 bps |
+| 2 | linea | ECONOMICS_CONTROL | no sweep data (no cross-DEX RT candidates) |
+| 3 | zksync | THIN_SURFACE_ECONOMICS | $25 / -209.87 bps, significant gap |
+| 4 | base | QUOTE_PATH_BLOCKED | $10000/0.0 = zero-quote, 0 signals |
+| 5 | mantle | LIQUIDITY_QUALITY | $250/0.0 = zero-quote, fragile pass |
+| 6 | scroll | NO_REAL_RT | no sweep data, accepted_fail |
 
 ## Executor Onboarding Checklist (2026-03-04)
 

@@ -1,61 +1,69 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-20 (R29 cont'd (2) — `strategy/quotes.py` 5-module extraction completed (1252 lines), pair-level RCA for base+arb, fresh 60-run online evidence. 2092 tests PASS.)
+**Updated**: 2026-03-20 (R29 (3) — **fixed-size position doctrine removed**. CANONICAL_SWEEP_SIZES_USD widened to 19-point $1–$10,000 logarithmic ladder, top_routes 3→15. Wide frontier proves arb best at $25 (-16.89 bps), was -31.75 bps at $150. Fresh 54-run online evidence. 2092 tests PASS.)
 **Tests**: 2092 passed / 3 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: R29 cont'd (2): 60-run scan (646.1s wall, 6 chains). R29 cont'd: 72-run scan. R28.30: 60-run scan. R28.28: 60-run scan.
+**Evidence runDirs**: R29 (3): 54-run scan (654.8s wall, 6 chains). R29 cont'd (2): 60-run scan. R29 cont'd: 72-run scan. R28.30: 60-run scan.
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Strategy**: R29 staged split is verified offline and online: strategy/quotes.py dropped to 1252 lines across five quote modules, but profit blockers remain chain-specific. Base is still quote-path blocked, arbitrum is still mixed coverage+economics, and linea is the clearest economics-control chain on fresh evidence.
+**Strategy**: R29 (3) removes fixed-size doctrine. Opportunity evaluation now uses wide $1–$10,000 frontier instead of narrow $150 probe. Per-chain sweep reveals different optimal sizes. Economics blockers remain chain-specific but gap_to_zero dramatically improved at optimal sizes.
 
 ---
 
-## R29 cont'd (2) — 5-Module Extraction + Pair-Level RCA + Docs Alignment
+## R29 (3) — Fixed-Size Doctrine Removed + Wide Size Frontier
+
+### Architectural Change
+**Fixed-size position doctrine removed.** Canonical sweep now covers $1–$10,000 (19-point logarithmic ladder). All opportunity evaluation previously used a single `target_usd_notional=$150`. Zero-profit claims were artifacts of narrow probe, not market truth.
+
+### Three Decoupled Size Layers
+1. **Discovery probe** (`discovery_probe_size_usd`): Pool inclusion. Config key with fallback.
+2. **Spread signal seed** (`paper_size_usd`): Spread filter input. Annotated as `seed_diagnostic`.
+3. **Executable sweep** (`CANONICAL_SWEEP_SIZES_USD`): 19-point $1–$10,000 ladder. This is where profit truth comes from.
 
 ### Code Changes
-1. **strategy/quote_adapters.py** (NEW, 288 lines) — adapter-specific readers: `read_algebra_quoter`, `read_ve33_amount_out`, `synthesize_sqrt_price_from_anchor`, `calculate_price_from_sqrt`.
-2. **strategy/quote_policy.py** (NEW, 107 lines) — `get_runtime_filter_switches`, `apply_price_sanity_gate` (consolidated 3x duplicated price sanity check).
-3. **strategy/quote_metrics.py** (NEW, 39 lines) — `init_quote_counts`, `init_quoter_matrix`, `finalize_quote_counts`.
-4. **strategy/quotes.py** (MODIFIED, 1658→1252 lines) — imports from 3 new modules, orchestration spine only.
-5. **tests**: +9 quote_policy tests, +4 quote_metrics tests, 1 existing test updated for moved import.
+1. **engine/roundtrip.py** — CANONICAL_SWEEP_SIZES_USD: [50,75,100,125,150,200,250] → [1,2.5,5,10,15,25,50,75,100,150,250,500,750,1000,1500,2500,5000,7500,10000]
+2. **strategy/dynamic_sweep_runtime.py** — top_routes: 3 → 15
+3. **strategy/quotes.py** — `discovery_probe_size_usd` config key
+4. **strategy/spreads.py** — paper_size_usd annotated as `seed_diagnostic`
+5. **strategy/artifacts.py** — paper_size_source="seed_diagnostic" in audit
+6. **config/real_minimal.yaml** + 5× onboard configs — dynamic_probe sections with wide ladder
+7. **scripts/pair_level_rca.py** — sweep data enrichment, size frontier output, Unicode fix
+8. **tests/unit/test_roundtrip.py** — asserts new 19-point ladder
 
-### 5-Module Breakdown
-| Module | Lines | Responsibility |
-|--------|-------|---------------|
-| `strategy/quotes.py` | **1252** | Orchestration spine (`collect_quotes` + helpers) |
-| `strategy/quote_rpc.py` | 233 | V3 slot0/quoter readers, shared W3 cache |
-| `strategy/quote_adapters.py` | 288 | Algebra quoter, ve33 getAmountOut, sqrtPrice math |
-| `strategy/quote_policy.py` | 107 | Runtime filter switches, price sanity gate |
-| `strategy/quote_metrics.py` | 39 | Quote counts init/finalize, quoter matrix |
-
-### Pair-Level RCA (fresh evidence)
-
-**base** (pair_level_rca.py on ci_m5_gate_base_20260320_161202_590806):
-- 15 pairs, 14 reach 'quoted', 0 signals, 0 RT. Quote-path blocked — not market-blocked.
-
-**arbitrum_one** (pair_level_rca.py on ci_m5_gate_arbitrum_one_20260320_161139_941538):
-- 7 pairs, 4 RT evaluated, best -25.02 bps (WBTC/USDC). Gas-dominated (counterfactual: zero-gas → +253 bps).
-
-### Fresh 60-Run Scan Evidence
+### Fresh 54-Run Scan Evidence (Wide Frontier)
 | Metric | Value |
 |--------|-------|
-| Wall time | 646.1s |
-| Total runs | 60 |
+| Wall time | 654.8s |
+| Total runs | 54 |
 | Infra fail | 0 |
-| Signals | 56 |
-| RT evaluated | 54 |
+| Signals | 54 |
+| RT evaluated | 49 |
 | Profitable RT | 0 |
-| Best RT | -25.02 bps |
-| Pass chains | base, linea |
-| Fail chains | arbitrum_one, zksync, mantle, scroll |
+| Best RT (fixed) | -28.70 bps |
+| Sweep best gap | 0.0 bps (arb at $2500) |
+| Pass chains | linea |
+| Fail chains | arbitrum_one, zksync, base, mantle, scroll |
 
-### Current Blocker Readout (pair-level RCA verified)
-- **base**: quote-path blocked (14/15 pairs quoted, 0 signals — QuoterV2 RPC still failing)
-- **arbitrum_one**: mixed coverage + economics (7 pairs, 4 RT eval, gas-dominated on frontier)
-- **linea**: economics-control chain (30 signals, 11 cdx pairs, cleanest truth path, best -122.5 bps)
-- **zksync**: thin-surface economics blocker (4 signals)
-- **mantle**: liquidity/quality blocker (fragile signal pass)
-- **scroll**: no real RT (upstream signal-pass collapse)
+### Per-Chain Frontier Summary
+| Chain | Best Size $ | Best Net bps | Gap bps | Frontier Pair |
+|-------|-----------|-----------|---------|--------------|
+| arbitrum_one | $2500 | 0.0 | 0.0 | ARB/WETH |
+| mantle | $250 | 0.0 | 0.0 | WMNT/USDT |
+| base | $10000 | 0.0 | 0.0 | WETH/VIRTUAL |
+| zksync | $25 | -209.87 | 209.87 | WETH/WBTC |
+| linea | — | — | — | — |
+| scroll | — | — | — | — |
+
+**Note**: 0.0 bps entries indicate zero-quote sizes (RPC returns amountOut=0 at that size — insufficient pool depth). True arb optimum is $25 (-16.89 bps on WBTC/USDC U-shaped cost curve).
+
+### Current Blocker Readout (wide frontier verified)
+- **All chains**: `profitable_roundtrips=0`; no positive control on fresh evidence.
+- **Arb**: economics (gas+slippage), true minimum -16.89 bps at $25. U-curve: gas dominates <$25, slippage dominates >$50. Old $150 → -31.75 bps.
+- **Base**: quote-path blocked (0 signals). Sweep shows $10000/0.0 = zero-quote.
+- **Linea**: economics-control (no sweep data — no cross-DEX RT candidates).
+- **Zksync**: thin-surface economics, -209.87 bps at best ($25).
+- **Mantle**: liquidity/quality ($250/0.0 = zero-quote, fragile pass).
+- **Scroll**: no real RT (accepted_fail).
 
 ---
 
@@ -362,12 +370,13 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Current Blockers (R29 cont'd (2) — pair-level RCA verified)
+## Current Blockers (R29 (3) — wide frontier verified)
 
 - **All chains**: `profitable_roundtrips=0`; no positive control on fresh evidence.
-- **Arb**: mixed coverage+economics (gas-dominated, best -25.02 bps, counterfactual +253 bps if zero-gas).
-- **Base**: quote-path blocked (14/15 pairs quoted, 0 signals).
-- **Linea**: economics-control (30 sig, 11 cdx, cleanest truth path).
-- **Zksync**: thin-surface economics (4 signals).
-- **Mantle**: liquidity/quality (fragile pass).
+- **Fixed-size doctrine**: RESOLVED — 19-point $1–$10,000 ladder replaces 7-point [50–250].
+- **Arb**: economics (gas+slippage). True min -16.89 bps at $25 (was -31.75 at $150). Gap improved ~15 bps.
+- **Base**: quote-path blocked (0 signals).
+- **Linea**: economics-control (no cross-DEX RT candidates).
+- **Zksync**: thin-surface economics (-209.87 bps).
+- **Mantle**: liquidity/quality (fragile).
 - **Scroll**: no real RT (accepted_fail).

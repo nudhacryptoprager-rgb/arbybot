@@ -65,6 +65,12 @@ paper_size_usd: 150
 paper_slippage_bps: 5
 gas_usd_estimate: 0.10
 
+# R29: Wide size frontier (fixed-size doctrine removed)
+dynamic_probe:
+  enabled: true
+  sizes_usd: [1, 2.5, 5, 10, 15, 25, 50, 75, 100, 150, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]
+  top_routes: 15
+
 truth_mode_m42: true
 execution_enabled: false
 execution_block_reason: "EXECUTION_DISABLED_M4"

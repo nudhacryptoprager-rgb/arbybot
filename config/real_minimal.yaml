@@ -480,11 +480,12 @@ autosize:
 # Sweeps multiple notional sizes per route to find optimal roundtrip PnL.
 # Runs AFTER the fixed-baseline roundtrip evaluation for regression safety.
 # Each route requires 2 RPC calls per size (leg1 + leg2 re-quote).
-# R11: $25 added as additional lower probe point (dust-edge guard: don't draw conclusions from $25 alone).
+# R29: Wide logarithmic frontier ($1–$10000). Fixed-size doctrine removed.
+# Canonical truth comes from this frontier, not paper_size_usd.
 dynamic_probe:
   enabled: true
-  sizes_usd: [25, 50, 75, 100, 125, 150, 200, 250]
-  top_routes: 3         # Sweep only top-3 eligible routes (RPC budget)
+  sizes_usd: [1, 2.5, 5, 10, 15, 25, 50, 75, 100, 150, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]
+  top_routes: 15        # R29: Raised from 3 — sweep all eligible routes
 
 # Spread signal threshold (M5)
 # R28.7: When truth_mode_m42=true, this value is ADVISORY ONLY — effective threshold=0.

@@ -36,9 +36,14 @@ logger = logging.getLogger("engine.roundtrip")
 
 # ---------------------------------------------------------------------------
 # Canonical sweep size ladder — bounded, deterministic, session-independent.
-# Any change to this list requires a schema bump and test update.
+# Wide logarithmic frontier from positive-epsilon ($1) to $10 000.
+# Fixed-size doctrine removed R29: canonical truth comes from this full frontier,
+# not a single probe notional. Any change requires a schema bump and test update.
 # ---------------------------------------------------------------------------
-CANONICAL_SWEEP_SIZES_USD: List[float] = [50, 75, 100, 125, 150, 200, 250]
+CANONICAL_SWEEP_SIZES_USD: List[float] = [
+    1, 2.5, 5, 10, 15, 25, 50, 75, 100, 150, 250,
+    500, 750, 1000, 1500, 2500, 5000, 7500, 10000,
+]
 
 
 @dataclass

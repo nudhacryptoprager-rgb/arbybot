@@ -216,6 +216,8 @@ def _compute_execution_pnl(
     
     # v3.2.58: Slippage based on position size (notional), NOT gross profit
     # This matches execution simulation: slippage_usd = paper_size_usd * slippage_bps / 10000
+    # R29: paper_size_usd is seed-size diagnostic only. Canonical economics truth
+    # comes from dynamic sweep frontier (best_size_usd / best_net_pnl_bps).
     paper_size_usd = config.get("paper_size_usd", 100.0)
     slippage_bps = config.get("paper_slippage_bps", 0)
     # Position-based slippage per signal, times number of signals
@@ -262,7 +264,8 @@ def _compute_execution_pnl(
             "l1_cost_usd": round(l1_cost_usd, 6),
             "total_cost_usd": round(total_cost_usd, 6),
             "eth_price_usd": eth_price_usd,
-            "paper_size_usd": paper_size_usd,  # v3.2.58: Track position size for audit
+            "paper_size_usd": paper_size_usd,  # seed-size diagnostic (R29: NOT execution truth)
+            "paper_size_source": "seed_diagnostic",  # R29: canonical truth is dynamic_sweep.best_size_usd
             "num_signals": num_signals,  # v3.2.58: Track signal count for verification
         } if cost_model_available else None,
     }

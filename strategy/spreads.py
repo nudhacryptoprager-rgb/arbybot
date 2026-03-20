@@ -431,9 +431,12 @@ def _build_spread_signal(
     current_block: int,
 ) -> Dict[str, Any]:
     """Build spread signal dict with PnL estimates."""
-    # Paper cost estimates
+    # Paper cost estimates — seed-size diagnostic only.
+    # R29: paper_size_usd is NOT execution truth. Canonical economics come from
+    # the dynamic size sweep (engine/roundtrip.py wide frontier). This estimate
+    # is kept for Stage-3 signal ranking and backward compat.
     paper_size_usd = Decimal(str(config.get("paper_size_usd", 1000)))
-    size_source = "config" if "paper_size_usd" in config else "default"
+    size_source = ("config_seed" if "paper_size_usd" in config else "default_seed")
     
     gross_pnl_usdc = float(paper_size_usd * spread_bps_decimal / Decimal(10000))
     

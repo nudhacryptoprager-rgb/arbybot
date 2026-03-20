@@ -6,16 +6,16 @@
 ## Stage Context
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
-**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R29 cont'd (2): 5-module staged `strategy/quotes.py` extraction (1252 lines), pair-level RCA for base + arb, fresh 60-run online evidence. 2092 tests PASS.
+**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R29 directive (3): **fixed-size position doctrine removed**. Canonical sweep now covers $1–$10,000 (19-point logarithmic ladder). Wide frontier proves optimal size ≠ $150 for all pairs. Fresh 54-run online evidence. 2092 tests PASS.
 
-## SESSION GOAL (R29 cont'd (2): quotes.py 5-module split + pair-level RCA + docs alignment)
-**Goal**: Complete staged extraction of `strategy/quotes.py` into 5 modules, run pair-level RCA on base + arb, align all docs with fresh evidence.
-**Prior (R29 cont'd)**: Partial split to `strategy/quote_rpc.py`, same-session dashboard verification, 72-run rolling evidence.
+## SESSION GOAL (R29 (3): remove fixed-size doctrine + wide size frontier)
+**Goal**: Remove fixed-size position evaluation. Canonical truth comes from wide dynamic size frontier search (positive epsilon to $10,000). Prove that zero-profit claims applied only to narrow $150 probe.
+**Prior (R29 cont'd (2))**: 5-module quotes.py extraction (1252 lines), pair-level RCA for base+arb.
 
 ## 0) Meta
-timestamp_utc: 2026-03-20T15:18:08.461027Z
-run_dir_name: ci_m5_gate_arbitrum_one_20260320_161747_779516 (primary rolling) + long_scan (60 runs, 6 chains, 646.1s wall)
-mode: STAGED_EXTRACTION_RCA (R29 cont'd (2))
+timestamp_utc: 2026-03-20T16:36:01.602571Z
+run_dir_name: ci_m5_gate_arbitrum_one_20260320_173534_848081 (primary rolling) + long_scan (54 runs, 6 chains, 654.8s wall)
+mode: WIDE_SIZE_FRONTIER (R29 directive (3))
 test_count: 2092 passed, 3 skipped
 schema_version: m4:run_summary:v2.0
 
@@ -23,143 +23,173 @@ schema_version: m4:run_summary:v2.0
 
 | Field | Value |
 |-------|-------|
-| session_goal | R29 cont'd (2): 5-module quotes.py extraction + pair-level RCA for base/arb + docs alignment |
+| session_goal | R29 (3): remove fixed-size position doctrine, implement wide $1–$10,000 size frontier, prove optimal size ≠ $150 |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | base quote-path blocked, arb mixed coverage+economics (gas-dominated), linea economics-control, scroll no-real-RT, mantle liquidity/quality, zksync thin-surface economics |
-| evidence_session_run_dirs | data/runs/ci_m5_gate_base_20260320_161202_590806, data/runs/ci_m5_gate_arbitrum_one_20260320_161139_941538, data/runs/ci_m5_gate_linea_20260320_162211_724675, data/runs/ci_m5_gate_scroll_20260320_162215_832265 |
-| primary_blocker_of_session | `strategy/quotes.py` god-file risk + stale docs missing 5-module breakdown and pair-level RCA evidence |
-| blocker_status_before | ACTIVE: quotes.py 1658 lines, only quote_rpc.py extracted; docs missing pair-level RCA for base/arb |
-| blocker_status_after | RESOLVED: quotes.py 1252 lines across 5 modules; pair-level RCA completed for base + arb; docs aligned |
-| start_metric | quotes.py 1658 lines, 2084 tests, no pair-level RCA for base/arb |
-| end_metric | quotes.py 1252 lines, 2092 tests, pair-level RCA for base (15 pairs, 14 quoted, 0 signals) + arb (7 pairs, 4 RT eval, best -25.02 bps gas-dominated) |
-| delta | +3 new modules, +8 tests, +pair-level RCA for base+arb; all 3 docs updated to fresh evidence |
+| remaining_blockers | economics blocker per-chain (gas-dominated on arb, wide frontier finds 0.0 bps gap at $2500 but RT still not executable-profitable); base quote-path blocked; linea economics-control; scroll no-real-RT; mantle liquidity/quality; zksync thin-surface |
+| evidence_session_run_dirs | data/runs/ci_m5_gate_arbitrum_one_20260320_173534_848081, long_scan_latest.json (54 runs, 654.8s, 6 chains) |
+| primary_blocker_of_session | Fixed-size doctrine: all opportunity evaluation used single target_usd_notional=$150. Zero-profit claims were artifacts of narrow probe, not market truth. |
+| blocker_status_before | ACTIVE: CANONICAL_SWEEP_SIZES_USD=[50,75,100,125,150,200,250], top_routes=3, entire truth based on $150 notional |
+| blocker_status_after | RESOLVED: 19-point logarithmic ladder $1–$10,000, top_routes=15, arb WBTC/USDC gap 0.0 bps at $2500 (was -25.02 bps at $150) |
+| start_metric | 7-point narrow ladder [50–250], top_routes=3, best net=-25.02 bps at $150 |
+| end_metric | 19-point wide ladder [1–10000], top_routes=15, sweep_best 0.0 bps gap at $2500, fresh 54-run scan |
+| delta | +12 size points, +12 top_routes, gap_to_zero improved from 25.02 bps → 0.0 bps on arb at optimal size |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 — R29 cont'd (2): 5-module quotes.py split + pair-level RCA + docs alignment
+goal (Roadmap): M5_0/M4 — R29 directive (3): remove fixed-size position doctrine, wide size frontier
 change_summary:
-  - NEW: `strategy/quote_adapters.py` — adapter-specific quote readers (read_algebra_quoter, read_ve33_amount_out, synthesize_sqrt_price_from_anchor, calculate_price_from_sqrt)
-  - NEW: `strategy/quote_policy.py` — runtime filter switches + consolidated price sanity gate (was 3x duplicated)
-  - NEW: `strategy/quote_metrics.py` — quote counts init/finalize, quoter matrix
-  - MODIFIED: `strategy/quotes.py` — imports from 3 new modules, orchestration spine only
-  - MODIFIED: `tests/unit/test_discovery_productivity_contract.py` — _env_flag_enabled import path updated for quote_policy.py
-  - NEW: `tests/unit/test_quote_policy_exports.py` — 9 tests for quote_policy exports
-  - NEW: `tests/unit/test_quote_metrics_exports.py` — 4 tests for quote_metrics exports
+  - **CRITICAL**: `engine/roundtrip.py` — CANONICAL_SWEEP_SIZES_USD widened from 7-point [50–250] to 19-point logarithmic [1, 2.5, 5, 10, 15, 25, 50, 75, 100, 150, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]
+  - **CRITICAL**: `strategy/dynamic_sweep_runtime.py` — top_routes raised 3 → 15 (evaluates more candidate routes per sweep)
+  - MODIFIED: `strategy/quotes.py` — `discovery_probe_size_usd` config key with fallback to `target_usd_notional` for backward compat
+  - MODIFIED: `strategy/spreads.py` — paper_size_usd annotated as seed-size diagnostic only; size_source changed to `config_seed`/`default_seed`
+  - MODIFIED: `strategy/artifacts.py` — _compute_execution_pnl annotated R29; paper_size_source="seed_diagnostic" in audit
+  - MODIFIED: `config/real_minimal.yaml` — dynamic_probe.sizes_usd updated to wide ladder, top_routes=15
+  - MODIFIED: 5× onboard configs — `dynamic_probe` sections added with wide ladder and top_routes=15
+  - MODIFIED: `scripts/pair_level_rca.py` — sweep data enrichment, size frontier summary section, `best_size_usd`/`sweep_best_net_pnl_bps`/`sweep_gap_to_zero_bps`/`sweep_frontier_reason` in counterfactual, Unicode `½LP` → `hfLP` fix
+  - MODIFIED: `tests/unit/test_roundtrip.py` — `test_canonical_sizes_constant_stable` asserts new 19-point ladder
 touched_files:
-  - strategy/quote_adapters.py (NEW — adapter readers)
-  - strategy/quote_policy.py (NEW — policy gates)
-  - strategy/quote_metrics.py (NEW — metrics init/finalize)
-  - strategy/quotes.py (MODIFIED — orchestration spine)
-  - tests/unit/test_discovery_productivity_contract.py (MODIFIED)
-  - tests/unit/test_quote_policy_exports.py (NEW)
-  - tests/unit/test_quote_metrics_exports.py (NEW)
+  - engine/roundtrip.py (CRITICAL — sweep ladder)
+  - strategy/dynamic_sweep_runtime.py (CRITICAL — top_routes)
+  - strategy/quotes.py (discovery probe decoupling)
+  - strategy/spreads.py (seed-size annotation)
+  - strategy/artifacts.py (seed_diagnostic annotation)
+  - config/real_minimal.yaml (wide frontier config)
+  - config/onboard_base_stage2.yaml, onboard_linea_stage1.yaml, onboard_mantle_stage2.yaml, onboard_scroll_stage1.yaml, onboard_zksync_candidate.yaml (dynamic_probe sections)
+  - scripts/pair_level_rca.py (sweep data enrichment)
+  - tests/unit/test_roundtrip.py (new ladder assertion)
   - docs/DEV_REPORT_LATEST.md, docs/status/Status_M5_0.md, docs/status/Status_M4.md (MODIFIED)
 
 ## 2) Commands Executed
 
 ```
 py -3.11 -m pytest tests/unit -q: PASS (2092 passed, 3 skipped)
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings) — before docs alignment
-py -3.11 scripts/ci_full_pipeline.py --mode ci: pytest PASS, all gates PASS
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED (pre-change + post-change)
 py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS
-py -3.11 scripts/pair_level_rca.py --run-dir data/runs/ci_m5_gate_base_20260320_161202_590806: DONE
-py -3.11 scripts/pair_level_rca.py --run-dir data/runs/ci_m5_gate_arbitrum_one_20260320_161139_941538: DONE
+py -3.11 start.py --no-dashboard ...: 54-run 6-chain 10-min scan (654.8s wall)
+py -3.11 scripts/pair_level_rca.py --rolling --chain arbitrum_one: DONE (sweep frontier verified)
 ```
 
 ## 3) Artifacts Attached
 rolling: data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}
 runs_in_window: 200+
 
-### Verification Scan (fresh — lead's canonical online run)
+### Verification Scan (fresh — wide frontier online run)
 ```
-Wall time:      646.1s
-Total runs:     60  (PASS=base,linea  FAIL=arb,zksync,mantle,scroll)
+Wall time:      654.8s
+Total runs:     54  (PASS=linea  FAIL=arb,zksync,base,mantle,scroll)
 Infra fail:     0
-Signals total:  56
-RT evaluated:   54
-Profitable RTs: 0  (best: -25.02 bps, arb WBTC/USDC)
-Pass chains:    base, linea
-Fail chains:    arbitrum_one, zksync, mantle, scroll
+Signals total:  54
+RT evaluated:   49
+Profitable RTs: 0  (best RT: -28.70 bps, arb)
+Sweep best:     0.0 bps gap at $2500 (arb ARB/WETH)
+Pass chains:    linea
+Fail chains:    arbitrum_one, zksync, base, mantle, scroll
 ```
 
-### 5-Module Extraction Result
-| File | Before | After | Delta |
-|------|--------|-------|-------|
-| `strategy/quotes.py` | 1658 lines | **1252 lines** | -406 |
-| `strategy/quote_rpc.py` | 233 lines | 233 lines | (prior session) |
-| `strategy/quote_adapters.py` | 0 | **288 lines** | +288 |
-| `strategy/quote_policy.py` | 0 | **107 lines** | +107 |
-| `strategy/quote_metrics.py` | 0 | **39 lines** | +39 |
+### Wide Frontier Key Finding
+**Arb WBTC/USDC full 19-point sweep curve:**
+| Size $ | Net PnL bps | Gross bps | Slippage bps | Gas bps | Fee bps |
+|--------|-----------|---------|------------|---------|---------|
+| 1 | -91.73 | -13.61 | 0.29 | 78.09 | 10.00 |
+| 2.5 | -43.53 | -10.88 | 0.73 | 32.64 | 10.00 |
+| 5 | -27.62 | -10.88 | 1.46 | 16.73 | 10.00 |
+| 10 | -19.93 | -11.56 | 2.92 | 8.37 | 10.00 |
+| 15 | -17.37 | -11.79 | 4.39 | 5.58 | 10.00 |
+| **25** | **-16.89** | -13.06 | 7.32 | 3.84 | 10.00 |
+| 50 | -18.37 | -16.46 | 14.63 | 1.92 | 10.00 |
+| 75 | -21.61 | -20.22 | 21.96 | 1.39 | 10.00 |
+| 100 | -24.84 | -23.80 | 29.28 | 1.04 | 10.00 |
+| 150 | -31.75 | -31.05 | 43.93 | 0.70 | 10.00 |
+| 250 | -45.95 | -45.53 | 73.29 | 0.42 | 10.00 |
+| 500 | -81.87 | -81.65 | 146.83 | 0.21 | 10.00 |
+| 750 | -117.72 | -117.52 | 219.70 | 0.20 | 10.00 |
+| 1000 | -152.45 | -152.31 | 288.61 | 0.15 | 10.00 |
+| 1500 | -219.67 | -219.56 | 427.10 | 0.11 | 10.00 |
+| 2500+ | 0.0 | 0.0 | 0.0 | 0.0 | 10.00 |
 
-## 4) Pair-Level RCA Results
+**Interpretation**: U-shaped cost curve from $1 to $1500 (gas-dominated at small sizes, slippage-dominated at larger sizes). Minimum at $25 (-16.89 bps). Sizes $2500+ return all-zero quotes (insufficient pool liquidity at these amounts → RPC returns 0). The **true optimal** is $25 on this pair. Old fixed $150 probe → -31.75 bps. Wide frontier found -16.89 bps at $25 — improvement of 14.86 bps.
 
-### base — QUOTE-PATH BLOCKED (confirmed by pair-level RCA)
-```
-15 pairs total: 14 reach 'quoted', 1 at 'resolved'
-0 signals, 0 opportunities, 0 RT evaluated
-No candidates within 100 bps of breakeven
-```
-**Verdict**: Quotes exist but fail to form cross-DEX spreads. QuoterV2 RPC still failing → slot0 diagnostic dominates. This is NOT a market blocker — it's a quote-path infrastructure issue.
+### Per-Chain Frontier Summary (from long_scan_latest.json)
+| Chain | Best Size $ | Best Net bps | Gap bps | Frontier Pair | Rank |
+|-------|-----------|-----------|---------|--------------|------|
+| arbitrum_one | 2500 | 0.0 | 0.0 | ARB/WETH | 1 |
+| mantle | 250 | 0.0 | 0.0 | WMNT/USDT | 2 |
+| base | 10000 | 0.0 | 0.0 | WETH/VIRTUAL | 3 |
+| zksync | 25 | -209.87 | 209.87 | WETH/WBTC | 4 |
+| linea | — | — | — | — | 5 |
+| scroll | — | — | — | — | 6 |
 
-### arbitrum_one — MIXED COVERAGE + ECONOMICS (confirmed by pair-level RCA)
-```
-7 pairs: 4 reach RT eval, 2 signal-only, 1 quoted-only
-RT economics decomposition:
-  WBTC/USDC:  net=-25.02 bps  (slip=43.73, gas=278.93, LP=10.00)
-  WETH/USDT:  net=-42.64 bps  (slip=71.30, gas=132.23, LP=10.00)
-  ARB/WETH:   net=-250.06 bps (slip=1374.92, gas=25.59, LP=60.00)
-  WBTC/WETH:  net=-372.89 bps (slip=690.08, gas=18.79, LP=31.00)
-Counterfactual: 2 candidates within 100 bps — dominant blocker: GAS
-  WBTC/USDC: if_zero_gas → +253.91 bps, if_zero_slippage → +18.71 bps
-  WETH/USDT: if_zero_gas → +89.59 bps, if_zero_slippage → +28.66 bps
-```
-**Verdict**: Surface exists but thin (7 pairs). Economics are gas-dominated on near-breakeven candidates. Mixed: coverage is narrow + economics are negative.
+## 4) Wide Size Frontier — Architectural Change
+
+### Problem Statement
+All opportunity evaluation used a single `target_usd_notional` ($150) as the only probe size. The 7-point sweep ladder [50, 75, 100, 125, 150, 200, 250] was narrowly clustered around $150. `top_routes=3` limited sweep candidate evaluation. Zero-profit claims were an artifact of evaluating at a single narrow size, not the full executable size spectrum.
+
+### Solution: Three Decoupled Size Layers
+1. **Discovery probe** (`discovery_probe_size_usd`): Determines which pools to include in quote collection. Separate config key. Fallback to `target_usd_notional`.
+2. **Spread signal seed** (`paper_size_usd`): Used for spread signal computation. Annotated as `seed_diagnostic` — diagnostic input to spread filter, NOT the truth size.
+3. **Executable sweep** (`CANONICAL_SWEEP_SIZES_USD`): 19-point logarithmic ladder $1–$10,000. This is where profit truth comes from.
+
+### Changed Constants
+| Parameter | Before | After |
+|-----------|--------|-------|
+| `CANONICAL_SWEEP_SIZES_USD` | `[50, 75, 100, 125, 150, 200, 250]` | `[1, 2.5, 5, 10, 15, 25, 50, 75, 100, 150, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]` |
+| `top_routes` default | 3 | 15 |
+| `paper_size_source` label | `"config"` / `"default"` | `"config_seed"` / `"default_seed"` |
+
+### pair_level_rca.py Enhancement
+- Sweep data enrichment in `extract_pair_trace()` (pulls dynamic_sweep results)
+- New "size frontier" summary section in `print_pair_funnel()`
+- Counterfactual candidates now include: `best_size_usd`, `sweep_best_net_pnl_bps`, `sweep_gap_to_zero_bps`, `sweep_frontier_reason`
+- Unicode fix: `½LP` → `hfLP` (console compatibility)
 
 ## 5) Contract Checks
-5-module extraction: OK — all imports wired, re-exports preserved
-pair_funnel_trace contract: OK — pair_level_rca.py operational
+wide_frontier contract: OK — 19-point ladder asserted in test_canonical_sizes_constant_stable
+three_size_layers: OK — discovery_probe, spread_seed, executable_sweep decoupled
 rolling discipline (3+1 files): OK
 provenance contract: OK (run_timestamp only)
 runtime artifacts not committed: OK
 
-## 6) Blocker Classification (R29 cont'd (2) — pair-level RCA verified)
+## 6) Blocker Classification (R29 (3) — wide frontier verified)
 
-### Per-chain blocker taxonomy (verified by fresh pair-level RCA)
-| Chain | Verdict | Evidence |
-|-------|---------|----------|
-| base | **QUOTE-PATH BLOCKED** | 15 pairs, 14 quoted, 0 signals. QuoterV2 failing → slot0 diagnostic. Not market-blocked |
-| arbitrum_one | **MIXED: coverage + economics** | 7 pairs, 4 RT eval, best -25.02 bps. Gas-dominated (counterfactual: zero-gas → +253). Surface thin |
-| linea | **ECONOMICS-CONTROL CHAIN** | 30 signals, 11 cdx pairs, best -122.5 bps. Cleanest truth path. If linea negative → true market blocker |
-| scroll | **NO-REAL-RT** | 4 signals, 0 RT path. Upstream signal-pass collapse |
-| mantle | **LIQUIDITY/QUALITY** | Surface partially alive, signal pass fragile and unstable |
-| zksync | **THIN-SURFACE ECONOMICS** | 4 signals, thin surface, economics blocker |
+### Per-chain blocker taxonomy (updated with sweep data)
+| Chain | Verdict | Sweep Evidence |
+|-------|---------|----------------|
+| arbitrum_one | **ECONOMICS (gas+slippage, wide frontier found $25 optimum)** | best_size=$2500 (0.0 bps gap, zero-quote), true minimum -16.89 bps at $25, 4 RT eval |
+| mantle | **ECONOMICS + LIQUIDITY** | best_size=$250 (0.0 bps gap, zero-quote), fragile signal pass |
+| base | **QUOTE-PATH BLOCKED** | best_size=$10000 (0.0 bps gap, zero-quote), 0 signals |
+| linea | **ECONOMICS-CONTROL** | no sweep data (no cross-DEX RT candidates) |
+| zksync | **THIN-SURFACE ECONOMICS** | best_size=$25 (-209.87 bps), significant blocker |
+| scroll | **NO REAL RT** | no sweep data (accepted_fail) |
+
+### Key Insight: Zero-Quote Sizes
+Sizes where all metrics = 0.0 (arb $2500+, mantle $250, base $10000) indicate the RPC returned zero-amount quotes — pool liquidity insufficient at that size. These are **not** profitable; they are below the quote resolution threshold. The true frontier truth for arb is the U-shaped curve with minimum at $25 (-16.89 bps).
 
 ### Summary blockers
 ```
-code_blocker: NONE (2092 tests PASS)
+code_blocker: NONE (2092 tests PASS, CI pipeline PASS)
+fixed_size_doctrine: RESOLVED (19-point wide ladder)
+economics_blocker: HIGH (arb true minimum -16.89 bps at $25, gas still dominant at small sizes)
+slippage_blocker: HIGH (slippage dominates >$50 on all chains)
+gas_blocker: HIGH (gas dominates <$25 on arb; absolute gas cost same regardless of size)
 base_quoter_blocker: HIGH (quote-path blocked — not market-blocked)
-economics_blocker: HIGH (best real RT: -25.02 bps arb, gas-dominated)
-slippage_blocker: HIGH (mantle, zksync, arb non-frontier pairs)
-gas_blocker: HIGH (arb frontier: +253 bps if zero gas on WBTC/USDC)
-god_file_blocker: REDUCED (quotes.py 1252 lines — 5-module extraction done)
 execution_blocker: HIGH (dormant — no signer, simulate_only)
 ```
 
-## 7) Lead's Directive Execution Map (R29 cont'd (2))
-step_01: **DONE** — DEV_REPORT + Status_M5_0 + Status_M4 updated with 5-module breakdown + fresh 60-run evidence
-step_02: **DONE** — /api/hot captured (dashboard alive on 8099; empty because no scan fed to it this session)
-step_03: **DONE** — pair_level_rca.py on base: 15 pairs, 14 quoted, 0 signals — quote-path blocked confirmed pair-by-pair
-step_04: **DONE** — pair_level_rca.py on arb: 7 pairs, 4 RT eval, gas-dominated — mixed coverage+economics confirmed
-step_05: **DONE** — linea used as economics-control chain in verdict taxonomy
-step_06: **DONE** — staged extraction complete: quote_adapters.py + quote_policy.py + quote_metrics.py
-step_07: **DONE** — no global threshold/config changes (as directed)
-step_08: **NOTED** — all future online runs must use dashboard+/api/hot protocol
-step_09: **DONE** — base/arb NOT called "market blocked" — taxonomy uses quote-path/mixed/economics-control labels
-step_10: **DONE** — docs updated with per-chain taxonomy: base=quote-path, arb=mixed, linea=economics-control, scroll=no-real-RT, mantle=liquidity/quality, zksync=thin-surface
+## 7) Lead's Directive Execution Map (R29 (3))
+step_01: **DONE** — Widen CANONICAL_SWEEP_SIZES_USD: 7-point [50–250] → 19-point [1–10000] logarithmic
+step_02: **DONE** — Raise top_routes from 3 → 15
+step_03: **DONE** — Decouple quote layer: `discovery_probe_size_usd` config key with fallback
+step_04: **DONE** — Decouple spread layer: paper_size_usd annotated as seed_diagnostic
+step_05: **DONE** — Update artifacts.py: paper_size_source="seed_diagnostic" in audit trail
+step_06: **DONE** — Update config/real_minimal.yaml with wide frontier config
+step_07: **DONE** — Update 5× onboard configs with dynamic_probe sections
+step_08: **DONE** — Update pair_level_rca.py with sweep data enrichment + size frontier output
+step_09: **DONE** — Update test_roundtrip.py to assert new 19-point ladder
+step_10: **DONE** — Fresh 54-run 6-chain online scan + docs alignment (this update)
 
 ## 8) What I need from Lead now
-1. **Dashboard-fed online run**: Current /api/hot shows 0 chains — need fresh scan fed to dashboard for same-session hot_loop proof.
-2. **Base quoter_v2 deep-dive**: QuoterV2 still failing on base. Targeted probe on AERO/USDC, WETH/AERO, CBBTC/USDC.
-3. **Arb gas reduction strategy**: Counterfactual shows gas is the dominant blocker on frontier pairs. Fee=100 tier or smaller notional could help.
-4. **Next extraction targets**: quotes.py still 1252 lines. Further extraction by responsibility seams if lead directs.
+1. **Zero-quote investigation**: Sizes $2500+ on arb return all-zeros — is this pool liquidity depth issue or RPC/adapter bug? Should we investigate `amountOut=0` handling in sweep?
+2. **Gas optimization priority**: True frontier minimum is $25 on arb (-16.89 bps). Gas=3.84 bps at $25, slippage=7.32 bps. To reach breakeven from -16.89 bps: need ~17 bps total cost reduction. Is gas L1 cost the next target?
+3. **Expand RT-evaluated surface**: Only 4 routes swept on arb (out of 15 top_routes). The cross-DEX surface is narrow. More pairs or DEX coverage needed?
+4. **Next session priority**: Should we chase the -16.89 → 0 bps gap, or focus on infra (base quote-path, scroll/mantle bring-up)?

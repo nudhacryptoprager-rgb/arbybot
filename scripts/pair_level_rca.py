@@ -96,6 +96,22 @@ def extract_pair_trace(truth: Dict[str, Any], scan: Optional[Dict[str, Any]]) ->
                         "rt_lp_fee_bps": ((rt.get("leg1_fee", 0) + rt.get("leg2_fee", 0)) / 100.0),
                         "rt_leg2_is_real": rt.get("leg2_is_real_quote"),
                     }
+
+    # R29: Enrich with dynamic sweep size frontier data
+    ds = stats.get("roundtrip", {}).get("dynamic_sweep", {})
+    for sr in ds.get("results", []):
+        pair = sr.get("pair", "unknown")
+        if pair in trace:
+            trace[pair]["sweep"] = {
+                "best_size_usd": sr.get("best_size_usd"),
+                "best_net_pnl_bps": sr.get("best_net_pnl_bps"),
+                "gap_to_zero_bps": sr.get("gap_to_zero_bps"),
+                "frontier_reason": sr.get("frontier_reason"),
+                "sizes_evaluated": sr.get("sizes_evaluated"),
+                "best_gas_bps": sr.get("best_gas_bps"),
+                "best_fee_bps": sr.get("best_fee_bps"),
+                "best_slippage_bps": sr.get("best_slippage_bps"),
+            }
     
     return sorted(trace.values(), key=lambda x: -(x.get("rt_best_net_pnl_bps") or -9999))
 
@@ -130,6 +146,11 @@ def counterfactual_analysis(trace: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "lp_fee_bps": round(lp_fee_bps, 2),
                 "dominant_cost": dominant,
                 "leg2_real": econ.get("rt_leg2_is_real"),
+                # R29: Size frontier data from dynamic sweep
+                "best_size_usd": t.get("sweep", {}).get("best_size_usd"),
+                "sweep_best_net_pnl_bps": t.get("sweep", {}).get("best_net_pnl_bps"),
+                "sweep_gap_to_zero_bps": t.get("sweep", {}).get("gap_to_zero_bps"),
+                "sweep_frontier_reason": t.get("sweep", {}).get("frontier_reason"),
                 "counterfactual": {
                     "if_zero_gas": round(pnl + gas_bps, 2) if gas_bps else pnl,
                     "if_zero_slippage": round(pnl + slip_bps, 2) if slip_bps else pnl,
@@ -202,6 +223,24 @@ def print_pair_funnel(trace: List[Dict[str, Any]], chain_key: str = ""):
                   f"{e.get('rt_lp_fee_bps', 0):>8.2f} "
                   f"{'Y' if e.get('rt_leg2_is_real') else 'N':>5s}")
 
+    # R29: Size frontier summary from dynamic sweep
+    swept_pairs = [t for t in trace if t.get("sweep")]
+    if swept_pairs:
+        print(f"\nSize frontier (dynamic sweep):")
+        print(f"  {'Pair':20s} {'BstSz':>7s} {'BstPnL':>8s} {'Gap':>6s} {'Reason':>12s} {'Sizes':>5s}")
+        print(f"  {'-'*20} {'-'*7} {'-'*8} {'-'*6} {'-'*12} {'-'*5}")
+        for t in swept_pairs[:10]:
+            sw = t["sweep"]
+            bsz = sw.get("best_size_usd")
+            bsz_str = f"${bsz:.0f}" if bsz is not None else "-"
+            bpnl = sw.get("best_net_pnl_bps")
+            bpnl_str = f"{bpnl:+.2f}" if bpnl is not None else "-"
+            gap = sw.get("gap_to_zero_bps")
+            gap_str = f"{gap:.2f}" if gap is not None else "-"
+            fr = sw.get("frontier_reason", "-")
+            se = sw.get("sizes_evaluated", 0)
+            print(f"  {t['pair']:20s} {bsz_str:>7s} {bpnl_str:>8s} {gap_str:>6s} {fr:>12s} {se:>5d}")
+
 
 def print_counterfactual(cf: Dict[str, Any]):
     """Print counterfactual analysis to console."""
@@ -216,14 +255,16 @@ def print_counterfactual(cf: Dict[str, Any]):
     print(f"\n  {cf['near_zero_count']} candidates within 100 bps of breakeven")
     print(f"  Dominant blocker distribution: {cf['dominant_blocker_distribution']}")
     
-    print(f"\n  {'Pair':20s} {'Net':>8s} {'Gap':>6s} {'Dom':>10s} {'0gas':>8s} {'0slip':>8s} {'½LP':>8s}")
-    print(f"  {'-'*20} {'-'*8} {'-'*6} {'-'*10} {'-'*8} {'-'*8} {'-'*8}")
+    print(f"\n  {'Pair':20s} {'Net':>8s} {'Gap':>6s} {'Dom':>10s} {'0gas':>8s} {'0slip':>8s} {'hfLP':>8s} {'BstSz':>7s}")
+    print(f"  {'-'*20} {'-'*8} {'-'*6} {'-'*10} {'-'*8} {'-'*8} {'-'*8} {'-'*7}")
     for c in cf["candidates"]:
         cf_vals = c["counterfactual"]
+        bsz = c.get("best_size_usd")
+        bsz_str = f"${bsz:.0f}" if bsz is not None else "-"
         print(f"  {c['pair']:20s} {c['net_pnl_bps']:>+8.2f} {c['gap_to_zero_bps']:>6.2f} "
               f"{c['dominant_cost']:>10s} "
               f"{cf_vals['if_zero_gas']:>+8.2f} {cf_vals['if_zero_slippage']:>+8.2f} "
-              f"{cf_vals['if_half_lp_fee']:>+8.2f}")
+              f"{cf_vals['if_half_lp_fee']:>+8.2f} {bsz_str:>7s}")
 
 
 def main():

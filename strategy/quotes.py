@@ -404,7 +404,13 @@ def collect_quotes(
                 pass
     
     # M4.2: USD-notional sizing
-    target_usd_notional = config.get("target_usd_notional", 1000.0)
+    # R29: discovery_probe_size_usd is the canonical key for quote-stage sizing.
+    # Falls back to target_usd_notional (legacy) for backward compatibility.
+    # This is a discovery probe — NOT the execution truth size.
+    target_usd_notional = config.get(
+        "discovery_probe_size_usd",
+        config.get("target_usd_notional", 1000.0),
+    )
     tokens_usd_price = config.get("tokens_usd_price") or {}
     use_usd_notional = config.get("use_usd_notional", True)  # Default ON for M4.2
 

@@ -1141,10 +1141,13 @@ class TestCanonicalSweep:
     """Contract tests for CANONICAL_SWEEP_SIZES_USD and sweep defaults."""
 
     def test_canonical_sizes_constant_stable(self):
-        """CANONICAL_SWEEP_SIZES_USD must be exactly [50, 75, 100, 125, 150, 200, 250]."""
+        """CANONICAL_SWEEP_SIZES_USD must be the wide logarithmic frontier."""
         from engine.roundtrip import CANONICAL_SWEEP_SIZES_USD
 
-        assert CANONICAL_SWEEP_SIZES_USD == [50, 75, 100, 125, 150, 200, 250]
+        assert CANONICAL_SWEEP_SIZES_USD == [
+            1, 2.5, 5, 10, 15, 25, 50, 75, 100, 150, 250,
+            500, 750, 1000, 1500, 2500, 5000, 7500, 10000,
+        ]
 
     def test_sweep_defaults_to_canonical_ladder(self):
         """sweep_roundtrip_sizes uses CANONICAL_SWEEP_SIZES_USD when no sizes passed."""
