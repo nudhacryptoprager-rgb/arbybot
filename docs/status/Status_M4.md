@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-19 (R28.29 — Lead audit: dedup fixes, discovery productivity contract. 2056 tests PASS. God-file risk migrated to quotes.py (1882 lines). Onboarding configs: validator-clean but TOKENS=0/PAIRS=0 (runtime-dependent). Signal loss suspicion → scan_universe + quotes layers.)  
+**Updated**: 2026-03-20 (R28.30 follow-up — `scan_universe.py` hot-cache integrity fixed, hot cycles preserve discovery_runtime provenance, dashboard protocol remains canonical. 2060 tests PASS.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
-**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.29**: Onboarding configs validator-clean but runtime-empty; signal-loss risk in scan_universe + quotes, not YAML. sweep_gap stable 10.62-16.33 bps.  
-**Primary blocker**: Market efficiency (0 profitable RT) + discovery-runtime dependency (5 configs TOKENS=0/PAIRS=0) + quote-path defects. quotes.py 1882 lines = next extraction target.
+**Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.30 follow-up**: hot-mode provenance now survives re-quotes, so Stage-1 cross-DEX counts remain visible in rolling artifacts during hot cycles.  
+**Primary blocker**: Market efficiency (0 profitable RT) + discovery-runtime dependency + signal-loss stages documented per-chain. Hot-cache integrity blocker is resolved; quotes.py 1962 lines = next extraction target.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 

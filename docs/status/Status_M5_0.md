@@ -1,12 +1,68 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-19 (R28.29 — Lead audit dedup + discovery contract. _env_flag_enabled → core.env (canonical). read_slot0_v3 dead code removed from infra.py. 39 new contract tests. validate_universe RUNTIME_DEPENDENT warning. 2056 tests PASS.)
-**Tests**: 2056 passed / 3 skipped
+**Updated**: 2026-03-20 (R28.30 follow-up — `scan_universe.py` hot-cache integrity + discovery_runtime provenance preserved in hot mode. Funnel normalization and dashboard canonical protocol remain active. 2060 tests PASS.)
+**Tests**: 2060 passed / 3 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: R28.29: verification scan pending. R28.28: 10-min scan (60 runs, 6 chains). R28.27: cap isolation.
+**Evidence runDirs**: R28.30: 10-min scan (60 runs, 6 chains, 660s wall). R28.28: 10-min scan (60 runs). R28.27: cap isolation.
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Strategy**: R28.28 extraction reduced run_scan_real.py, but the strategy god-file risk migrated into strategy/quotes.py (1882 lines). All five onboarding configs are validator-clean yet runtime-empty (TOKENS=0 / PAIRS=0), so current signal-loss suspicion points first to discovery/quote layers, not to YAML syntax. Next extraction target: strategy/quotes.py.
+**Strategy**: Funnel contract normalized: `opp_engine_combinations` replaces misleading `opp_candidates`, `cross_dex_pairs_count` added, 6-stage annotations. Hot cache now writes atomically and preserves discovery_runtime provenance during hot re-quotes. 5 accumulated counters for productivity DoD. Dashboard canonical protocol mandated (dashboard_server + /api/hot). quotes.py (1962 lines) remains next extraction target.
+
+---
+
+## R28.30 Funnel Normalization + Signal-Loss RCA + Dashboard Protocol
+
+### Code Changes (3 files)
+1. **strategy/jobs/run_scan_real.py** — `filter_funnel` normalized: `opp_candidates` → `opp_engine_combinations` (with comment: pair×route×fee combinatorics, NOT downstream of spread_signals). Added `cross_dex_pairs_count` from discovery_runtime. 6-stage annotations (Stage 1: discovery → Stage 6: roundtrip profit).
+2. **start.py** — Added 5 accumulated funnel productivity counters in `init_chain_stats()` and accumulation in `update_chain_stats()`: `funnel_quotes_attempted_total`, `funnel_quotes_fetched_total`, `funnel_spread_signals_total`, `funnel_rt_evaluated_total`, `funnel_rt_real_quote_total`.
+3. **tests/unit/test_run_scan_real_purity.py** — Updated `opp_candidates` → `opp_engine_combinations`. Added 2 new tests: `test_filter_funnel_normalized_fields`, `test_start_funnel_accumulation_fields`.
+
+### Normalized Filter Funnel (6-Stage Contract)
+```
+Stage 1 (Discovery): resolved_pairs, cross_dex_pairs_count
+Stage 2 (Quote):     quotes_attempted, quotes_fetched, quarantined_skip, disabled_skip, missing_skip
+Stage 3 (Spread):    spread_signals
+Stage 4 (Engine):    opp_engine_combinations (pair×route×fee combos), opp_profitable_diagnostic
+Stage 5 (Selection): rt_candidates_considered, rt_cross_dex, rt_lp_viable, rt_unique_pairs, rt_margin_filtered, rt_passed_to_eval
+Stage 6 (Roundtrip): rt_evaluated, rt_real_quote, rt_profitable
+```
+
+### Signal-Loss RCA (Per-Chain, R28.30 scan)
+
+**base**: resolved=15 → quotes_fetched=59 → spread_signals=0 → opp_engine_combinations=108 → rt_evaluated=0. **Main loss**: No cross-DEX spread signals despite 59 quotes. runtime_disabled=26 pools. The 108 opp_engine_combinations are NOT downstream of spread_signals — they represent all possible pair×route×fee combinatorics.
+
+**linea**: resolved=11 → quotes_fetched=20 → spread_signals=4 → rt_evaluated=3 → rt_real_quote=1 → rt_profitable=0. **Main loss**: RT economics — best=-82.54 bps. SUSPECT_ACCOUNTING on 2 roundtrips (WSTETH/WETH, WEETH/WETH: extreme spread_bps but unreliable). Only WETH/USDC survives sanity → slippage 207.2 bps kills it.
+
+**scroll**: resolved=5 → quotes_fetched=7 → spread_signals=2 → rt_lp_viable=0 → rt_evaluated=0. **Main loss**: LP fee gate blocks ALL candidates. SUSPECT_LIQUIDITY rejects (gas_estimate>3M, ticks_crossed>15 in fragile pools). NO_CANDIDATES status.
+
+**arbitrum_one**: resolved=36 → quotes_fetched=9 → spread_signals=4 → rt_evaluated=0. **Main loss**: Hot requote mode — only 10 quotes attempted (cached surface). 4 signals but no cross-DEX candidates survive economics gate.
+
+**mantle**: resolved=6 → quotes_fetched=7 → spread_signals=0 → rt_evaluated=1 → rt_real_quote=1 → rt_profitable=0. **Main loss**: PRICE_SANITY failures (16 of 41 attempted quotes). No spread signals but 1 RT evaluated from previous cycle state.
+
+**zksync**: resolved=4 → quotes_fetched=7 → spread_signals=2 → rt_evaluated=1 → rt_real_quote=1 → rt_profitable=0. **Main loss**: Narrow surface (4 resolved pairs, 2 DEXes). Economics blocker.
+
+### Dashboard Canonical Protocol (Mandatory)
+Per lead directive (R28.30 step 2):
+1. Start dashboard_server: `py -3.11 -m monitoring.dashboard_server --port 8099`
+2. Run scan with `--no-dashboard`: `py -3.11 start.py --no-dashboard ...`
+3. After scan: `Invoke-RestMethod http://127.0.0.1:8099/api/hot` as mandatory proof
+4. /api/hot evidence: schema=hot_loop_snapshot:v1.3, 60 total_runs, 12 full_sweeps, 48 hot_requotes
+
+### Accumulated Funnel Counters (Productivity DoD)
+Per-chain totals across all runs in session:
+| Chain | qt_attempted | qt_fetched | spread_sig | rt_eval | rt_rq |
+|-------|-------------|-----------|-----------|---------|-------|
+| arbitrum_one | 126 | 112 | 45 | 7 | 7 |
+| base | 676 | 602 | 4 | 1 | 1 |
+| linea | 272 | 200 | 40 | 30 | 10 |
+| mantle | 413 | 72 | 0 | 10 | 10 |
+| scroll | 238 | 70 | 20 | 0 | 0 |
+| zksync | 175 | 70 | 20 | 10 | 10 |
+
+### Pending
+- **quotes.py extraction**: 1962 lines — next god-file target (lead step 4)
+- **Discovery A/B audit**: Compare cross_dex_pairs_count across configs (lead step 7)
+- **Short targeted runs**: Isolate specific signal-loss stages per chain (lead step 9)
 
 ---
 

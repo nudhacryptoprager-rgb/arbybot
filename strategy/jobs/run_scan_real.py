@@ -1137,22 +1137,49 @@ def run_scan(
     _opp_summary = _opp_engine.get("summary", {}) if _opp_engine.get("enabled") else {}
     _rt = stats.get("roundtrip", {})
     _rt_filter = stats.get("roundtrip_lp_filter", {})
+    # R28.30+: cross_dex_pairs_count — truthful for ALL universe paths
+    # discovery_runtime tracks it via RuntimeStats; for config/intent/hot paths,
+    # compute from actual fetched quotes (pairs with quotes from >=2 distinct DEXes).
+    _disc_rt = stats.get("discovery_runtime", {})
+    _cross_dex_pairs = _disc_rt.get("cross_dex_pairs_count", 0) if _disc_rt.get("universe_active") else 0
+    if _cross_dex_pairs == 0 and quotes_sample:
+        # R28.30+: Compute cross_dex from actual fetched quotes (fallback for config/intent/hot paths).
+        # Quotes use token_in/token_out as pair identifier, not 'pair' key.
+        _pair_dexes: dict = {}
+        for _q in quotes_sample:
+            # Construct pair key from token symbols (quotes use token_in/token_out)
+            _tin = _q.get("token_in") or ""
+            _tout = _q.get("token_out") or ""
+            _pname = f"{_tin}/{_tout}" if _tin and _tout else ""
+            _dex = _q.get("dex_id") or ""
+            if _pname and _dex:
+                _pair_dexes.setdefault(_pname, set()).add(_dex)
+        _cross_dex_pairs = sum(1 for _dxs in _pair_dexes.values() if len(_dxs) >= 2)
     stats["filter_funnel"] = {
+        # Stage 1: Universe resolution
         "resolved_pairs": len(pairs_list) if pairs_list else 0,
+        "cross_dex_pairs_count": _cross_dex_pairs,
+        # Stage 2: Quote collection
         "quotes_attempted": stats.get("quotes_total", 0),
         "quotes_fetched": stats.get("quotes_fetched", 0),
         "quarantined_skipped": stats.get("quarantined_count", 0),
         "runtime_disabled_skipped": stats.get("runtime_disabled_count", 0),
         "pool_missing_skipped": stats.get("pool_missing_count", 0),
+        # Stage 3: Spread signal computation (cross-dex price comparisons)
         "spread_signals": len(spread_signals),
-        "opp_candidates": _opp_summary.get("total_opportunities", 0),
+        # Stage 4: OpportunityEngine (pair×route×fee combinatorics — NOT downstream of spread_signals)
+        # NOTE: opp_engine_combinations >= spread_signals is normal because OpportunityEngine
+        # builds all pair×route×fee-tier combinations from quotes, independently of spread_signals.
+        "opp_engine_combinations": _opp_summary.get("total_opportunities", 0),
         "opp_profitable_diagnostic": _opp_summary.get("profitable_count", 0),
+        # Stage 5: Roundtrip candidate selection (cross-dex, LP viable, margin filter)
         "rt_candidates_considered": _rt_filter.get("candidates_considered", 0),
         "rt_cross_dex": _rt_filter.get("cross_dex_count", 0),
         "rt_lp_viable": _rt_filter.get("lp_viable_count", 0),
         "rt_unique_pairs": _rt_filter.get("unique_pairs_considered", 0),
         "rt_margin_filtered": _rt_filter.get("margin_filtered_count", 0),
         "rt_passed_to_eval": _rt_filter.get("passed_to_roundtrip", 0),
+        # Stage 6: Roundtrip evaluation (live re-quote, cost model, PnL)
         "rt_evaluated": _rt.get("evaluated_count", 0),
         "rt_real_quote": _rt.get("real_quote_count", 0),
         "rt_profitable": _rt.get("profitable_count", 0),

@@ -105,7 +105,7 @@ def test_run_scan_real_has_filter_funnel():
     assert 'stats["filter_funnel"]' in content, "filter_funnel dict missing from stats"
     # Key stages must be present
     for key in ["resolved_pairs", "quotes_attempted", "quotes_fetched",
-                "spread_signals", "opp_candidates", "rt_passed_to_eval",
+                "spread_signals", "opp_engine_combinations", "rt_passed_to_eval",
                 "rt_evaluated", "rt_real_quote", "rt_profitable"]:
         assert f'"{key}"' in content, f"filter_funnel key '{key}' missing"
 
@@ -127,3 +127,43 @@ def test_run_scan_real_config_driven_caps():
 
     assert "roundtrip_max_candidates" in content, "roundtrip_max_candidates config key missing"
     assert "roundtrip_top_n" in content, "roundtrip_top_n config key missing"
+
+
+def test_filter_funnel_normalized_fields():
+    """R28.30: filter_funnel must have stage-annotated keys and cross_dex_pairs_count."""
+    path = Path(__file__).parent.parent.parent / "strategy" / "jobs" / "run_scan_real.py"
+    content = path.read_text(encoding="utf-8")
+
+    # R28.30: opp_candidates renamed to opp_engine_combinations for disambiguation
+    assert '"opp_engine_combinations"' in content, "opp_engine_combinations key missing (was opp_candidates)"
+    assert '"opp_candidates"' not in content, "legacy opp_candidates key should have been renamed"
+    # R28.30: cross_dex_pairs_count injected from discovery_runtime
+    assert '"cross_dex_pairs_count"' in content, "cross_dex_pairs_count key missing from filter_funnel"
+
+
+def test_cross_dex_pairs_count_fallback_from_quotes():
+    """R28.30+: cross_dex_pairs_count must fall back to quote-based computation for config/intent paths."""
+    path = Path(__file__).parent.parent.parent / "strategy" / "jobs" / "run_scan_real.py"
+    content = path.read_text(encoding="utf-8")
+
+    # When discovery_runtime doesn't provide cross_dex_pairs_count (config/intent/hot path),
+    # the funnel builder must compute it from quotes_sample by counting pairs with >=2 DEXes.
+    assert "quotes_sample" in content and "_pair_dexes" in content, (
+        "filter_funnel must compute cross_dex_pairs_count from quotes_sample "
+        "when discovery_runtime is unavailable (config/intent path)"
+    )
+
+
+def test_start_funnel_accumulation_fields():
+    """R28.30: start.py must accumulate funnel productivity counters."""
+    path = Path(__file__).parent.parent.parent / "start.py"
+    content = path.read_text(encoding="utf-8")
+
+    for key in [
+        "funnel_quotes_attempted_total",
+        "funnel_quotes_fetched_total",
+        "funnel_spread_signals_total",
+        "funnel_rt_evaluated_total",
+        "funnel_rt_real_quote_total",
+    ]:
+        assert key in content, f"start.py missing accumulated funnel field '{key}'"

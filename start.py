@@ -395,6 +395,12 @@ def new_chain_stats() -> dict[str, Any]:
         "last_filter_funnel": None,
         # R28.25: Roundtrip truth status (separate from diagnostic profit_status)
         "last_roundtrip_truth_status": None,
+        # R28.30: Accumulated funnel productivity counters (across all runs in window)
+        "funnel_quotes_attempted_total": 0,
+        "funnel_quotes_fetched_total": 0,
+        "funnel_spread_signals_total": 0,
+        "funnel_rt_evaluated_total": 0,
+        "funnel_rt_real_quote_total": 0,
     }
 
 
@@ -571,6 +577,12 @@ def update_chain_stats(
         ff = scan_stats.get("filter_funnel")
         if ff:
             stats["last_filter_funnel"] = ff
+            # R28.30: Accumulate funnel productivity counters
+            stats["funnel_quotes_attempted_total"] += ff.get("quotes_attempted", 0)
+            stats["funnel_quotes_fetched_total"] += ff.get("quotes_fetched", 0)
+            stats["funnel_spread_signals_total"] += ff.get("spread_signals", 0)
+            stats["funnel_rt_evaluated_total"] += ff.get("rt_evaluated", 0)
+            stats["funnel_rt_real_quote_total"] += ff.get("rt_real_quote", 0)
         rts = scan_stats.get("roundtrip_truth_status")
         if rts:
             stats["last_roundtrip_truth_status"] = rts

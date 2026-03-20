@@ -13,14 +13,86 @@ import json
 import logging
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from config.pairs import load_pairs
+from core.json_io import atomic_write_json, read_json
 
 logger = logging.getLogger("scan_universe")
 
 # Sentinel value: effectively uncapped while remaining an int
 _UNCAPPED = 999_999
+
+
+def _count_cross_dex_pairs(pair_dicts: List[Dict[str, Any]]) -> int:
+    """Count cached pairs that still have >=2 distinct DEXes in pool_info."""
+    cross_dex = 0
+    for pair_dict in pair_dicts:
+        dexes = {
+            entry.get("dex")
+            for entry in (pair_dict.get("pool_info") or [])
+            if entry.get("dex")
+        }
+        if len(dexes) >= 2:
+            cross_dex += 1
+    return cross_dex
+
+
+def _restore_discovery_runtime_from_hot_cache(
+    hot_data: Dict[str, Any],
+    hot_pair_dicts: List[Dict[str, Any]],
+) -> Tuple[List[Any], Optional[Any], Optional[Dict[str, Any]]]:
+    """Restore minimal discovery_runtime observability from hot cache metadata.
+
+    Hot re-quotes should not erase the fact that the active universe was originally
+    resolved via discovery_runtime. Without this, later funnel artifacts misleadingly
+    report cross_dex_pairs_count=0 during hot cycles even when the cached universe
+    came from multi-DEX discovery.
+    """
+    origin_universe = hot_data.get("origin_universe_source") or hot_data.get("universe_source")
+    if origin_universe != "discovery_runtime":
+        return [], None, None
+
+    from discovery.runtime import RuntimeStats
+
+    cross_dex_pairs = hot_data.get("cross_dex_pairs_count")
+    if cross_dex_pairs is None:
+        cross_dex_pairs = _count_cross_dex_pairs(hot_pair_dicts)
+
+    pairs_resolved = hot_data.get("discovery_runtime_pairs_count", len(hot_pair_dicts))
+    pools_resolved = hot_data.get("discovery_runtime_pools_resolved")
+    if pools_resolved is None:
+        pools_resolved = sum(len(pair_dict.get("pool_info") or []) for pair_dict in hot_pair_dicts)
+
+    resolved_pairs: List[Any] = []
+    for pair_dict in hot_pair_dicts:
+        display_name = pair_dict.get("display_name") or f"{pair_dict.get('token_in')}/{pair_dict.get('token_out')}"
+        for pool_info in (pair_dict.get("pool_info") or []):
+            resolved_pairs.append(
+                SimpleNamespace(
+                    display_name=display_name,
+                    dex=pool_info.get("dex"),
+                    fee=pool_info.get("fee"),
+                    pool_address=pool_info.get("address"),
+                )
+            )
+
+    runtime_stats = RuntimeStats(
+        enabled=True,
+        pairs_evaluated=pairs_resolved,
+        pairs_resolved=pairs_resolved,
+        pools_resolved=pools_resolved,
+        pools_from_cache=pools_resolved,
+        pools_from_rpc=0,
+        rpc_calls=0,
+        cross_dex_pairs_count=cross_dex_pairs,
+    )
+    runtime_payload = runtime_stats.to_dict()
+    runtime_payload["universe_active"] = True
+    runtime_payload["from_hot_cache"] = True
+
+    return resolved_pairs, runtime_stats, runtime_payload
 
 
 def resolve_universe(
@@ -61,10 +133,17 @@ def resolve_universe(
     if _hot_pairs_file and Path(_hot_pairs_file).is_file():
         try:
             from config.pairs import PairConfig
-            with open(_hot_pairs_file, "r", encoding="utf-8") as _hpf:
-                _hot_data = json.load(_hpf)
+            _hot_data = read_json(_hot_pairs_file)
             _hot_pair_dicts = _hot_data.get("pairs", [])
             pairs_list = [PairConfig.from_dict(d) for d in _hot_pair_dicts]
+            restored_pairs, restored_stats, restored_payload = _restore_discovery_runtime_from_hot_cache(
+                _hot_data,
+                _hot_pair_dicts,
+            )
+            if restored_pairs:
+                discovery_runtime_resolved = restored_pairs
+            if restored_stats is not None:
+                discovery_runtime_stats = restored_stats
             logger.info(
                 "HOT_REQUOTE: loaded %d cached pairs from %s (skipping discovery)",
                 len(pairs_list), _hot_pairs_file,
@@ -73,6 +152,11 @@ def resolve_universe(
             stats_updates["scan_mode"] = "hot"
             stats_updates["hot_pairs_file"] = _hot_pairs_file
             stats_updates["hot_pairs_count"] = len(pairs_list)
+            stats_updates["hot_pairs_origin_universe_source"] = (
+                _hot_data.get("origin_universe_source") or _hot_data.get("universe_source")
+            )
+            if restored_payload is not None:
+                stats_updates["discovery_runtime"] = restored_payload
         except Exception as hp_err:
             logger.warning(
                 "HOT_REQUOTE: failed to load %s, falling back to full discovery: %s",
@@ -160,7 +244,7 @@ def resolve_universe(
 
     # R28.11: Save hot pairs cache after full discovery
     if pairs_list and _us != "hot_requote":
-        _write_hot_pairs_cache(chain_key, _us, pairs_list)
+        _write_hot_pairs_cache(chain_key, _us, pairs_list, stats_updates=stats_updates)
 
     return {
         "pairs_list": pairs_list,
@@ -170,7 +254,12 @@ def resolve_universe(
     }
 
 
-def _write_hot_pairs_cache(chain_key: str, universe_source: str, pairs_list: list) -> None:
+def _write_hot_pairs_cache(
+    chain_key: str,
+    universe_source: str,
+    pairs_list: list,
+    stats_updates: Optional[Dict[str, Any]] = None,
+) -> None:
     """Write hot pairs cache for subsequent hot re-quote cycles."""
     try:
         _cache_dir = Path("data") / "cache"
@@ -180,11 +269,24 @@ def _write_hot_pairs_cache(chain_key: str, universe_source: str, pairs_list: lis
             "schema": "hot_pairs_cache:v1.0",
             "chain": chain_key,
             "universe_source": universe_source,
+            "origin_universe_source": universe_source,
             "pairs_count": len(pairs_list),
             "pairs": [p.to_dict() if hasattr(p, "to_dict") else p for p in pairs_list],
         }
-        with open(_cache_path, "w", encoding="utf-8") as _cpf:
-            json.dump(_cache_data, _cpf, indent=2)
+        if stats_updates:
+            _cache_data["strategy_mode"] = stats_updates.get("strategy_mode")
+            _cache_data["same_dex_only"] = stats_updates.get("same_dex_only")
+            _cache_data["discovery_runtime_pairs_count"] = stats_updates.get(
+                "discovery_runtime_pairs_count",
+                len(pairs_list),
+            )
+            _cache_data["discovery_runtime_pools_resolved"] = stats_updates.get(
+                "discovery_runtime_pools_resolved",
+                0,
+            )
+            _disc = stats_updates.get("discovery_runtime") or {}
+            _cache_data["cross_dex_pairs_count"] = _disc.get("cross_dex_pairs_count", 0)
+        atomic_write_json(_cache_path, _cache_data)
         logger.debug("Hot pairs cache written: %s (%d pairs)", _cache_path, len(pairs_list))
     except Exception as _cache_err:
         logger.debug("Hot pairs cache write skipped: %s", _cache_err)
