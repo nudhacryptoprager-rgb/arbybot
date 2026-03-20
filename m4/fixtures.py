@@ -1182,6 +1182,18 @@ def generate_m4_from_online_inputs(
         infra_gate_pass=True,  # Reaching this code means infra passed
     )
     
+    # R31: truth_verdict — unambiguous operator-facing classification combining
+    # profit_status + roundtrip truth into a single actionable label.
+    _rt_profitable = roundtrip.get("profitable_count", 0) > 0
+    if _rt_profitable:
+        truth_verdict = "ROUNDTRIP_PROFITABLE"
+    elif profit_status == "PASS":
+        truth_verdict = "DIAGNOSTIC_PROFIT_ONLY"
+    elif profit_status == "NO_DATA":
+        truth_verdict = "NO_DATA"
+    else:
+        truth_verdict = "NO_PROFIT"
+    
     run_summary_data = {
         "schema_version": "m4:run_summary:v2.0",  # v2.0: timestamp-based provenance
         "policy_version": POLICY_VERSION,
@@ -1278,6 +1290,8 @@ def generate_m4_from_online_inputs(
         # Combined status (backwards compat)
         "status": combined_status,
         "reasons": all_reasons,
+        # R31: truth_verdict — single actionable classification for operators
+        "truth_verdict": truth_verdict,
         # v1.9.5: Quality warnings (separate from status reasons)
         "quality_warnings": quality_warnings,
         # Evidence validation

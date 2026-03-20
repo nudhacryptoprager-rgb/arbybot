@@ -239,6 +239,7 @@ def compute_status(
         - drift_status: "NO_DATA" | "PASS" | "WARN" | "FAIL"
         - quality_status: "NO_DATA" | "PASS" | "WARN" | "FAIL_QUALITY"
         - roundtrip_truth_status: "NO_DATA" | "PROFITABLE" | "NOT_PROFITABLE"
+        - truth_verdict: "NO_DATA" | "ROUNDTRIP_PROFITABLE" | "DIAGNOSTIC_PROFIT_ONLY" | "NO_PROFIT"
         - reasons: list of reason codes (guaranteed FAIL_* only if status=FAIL)
     """
     reasons = []
@@ -251,6 +252,7 @@ def compute_status(
             "drift_status": "NO_DATA",
             "quality_status": "NO_DATA",
             "roundtrip_truth_status": "NO_DATA",
+            "truth_verdict": "NO_DATA",
             "reasons": ["NO_DATA"],
         }
     
@@ -320,12 +322,26 @@ def compute_status(
     if status != "FAIL":
         reasons = [r for r in reasons if not r.startswith("FAIL_")]
     
+    # R31: truth_verdict — unambiguous operator-facing classification that
+    # combines profit_status + roundtrip_truth into a single actionable label.
+    # Resolves ambiguity where profit_status=PASS (one-leg diagnostic) alongside
+    # roundtrip_truth=NOT_PROFITABLE can mislead operators into thinking profit exists.
+    if roundtrip_truth == "PROFITABLE":
+        truth_verdict = "ROUNDTRIP_PROFITABLE"
+    elif profit_status == "PASS" and roundtrip_truth == "NOT_PROFITABLE":
+        truth_verdict = "DIAGNOSTIC_PROFIT_ONLY"
+    elif profit_status == "FAIL":
+        truth_verdict = "NO_PROFIT"
+    else:
+        truth_verdict = "NO_PROFIT"
+
     return {
         "status": status,
         "profit_status": profit_status,
         "drift_status": drift_status,
         "quality_status": quality_status,
         "roundtrip_truth_status": roundtrip_truth,
+        "truth_verdict": truth_verdict,
         "reasons": reasons,
     }
 

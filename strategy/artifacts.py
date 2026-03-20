@@ -686,6 +686,25 @@ def build_truth_data(
     except Exception:
         truth_data["price_sanity_deviation_bps_raw_max"] = None
     
+    # R31: quote_source_summary — first-class visibility of executable vs diagnostic
+    # quote split per DEX.  Previously buried inside stats; now surfaced for operator RCA.
+    truth_data["quote_source_summary"] = {
+        "quotes_fetched_executable": stats.get("quotes_fetched_executable", 0),
+        "quotes_fetched_diagnostic": stats.get("quotes_fetched_diagnostic", 0),
+        "quoter_v2_failed_count": stats.get("quoter_v2_failed_count", 0),
+        "quoter_matrix": stats.get("quoter_matrix", {}),
+    }
+
+    # R31: OE rejection funnel — first-class summary of opportunity engine rejections.
+    _oe = stats.get("opportunity_engine", {})
+    _oe_summary = _oe.get("summary", {}) if isinstance(_oe, dict) else {}
+    truth_data["oe_rejection_funnel"] = {
+        "total_opportunities": _oe_summary.get("total_opportunities", 0),
+        "gated_count": _oe_summary.get("gated_count", 0),
+        "rejected_count": _oe_summary.get("rejected_count", 0),
+        "rejected_reasons": _oe_summary.get("rejected_reasons", {}),
+    }
+
     # R28.20: Inline reject histogram + samples so truth_report is self-contained
     # for RCA.  Previously this data was only in the separate reject_histogram artifact,
     # making failing-chain truth reports opaque.

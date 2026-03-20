@@ -1,12 +1,65 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-20 (R29 (3) — **fixed-size position doctrine removed**. CANONICAL_SWEEP_SIZES_USD widened to 19-point $1–$10,000 logarithmic ladder, top_routes 3→15. Wide frontier proves arb best at $25 (-16.89 bps), was -31.75 bps at $150. Fresh 54-run online evidence. 2092 tests PASS.)
-**Tests**: 2092 passed / 3 skipped
-**Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: R29 (3): 54-run scan (654.8s wall, 6 chains). R29 cont'd (2): 60-run scan. R29 cont'd: 72-run scan. R28.30: 60-run scan.
+**Updated**: 2026-03-20 (R31 — **truth_verdict + OE rejection funnel + quote_source_summary**. 3 new first-class artifact fields. OE bottleneck RCA: NET_PROFIT_TOO_LOW=57% of 207 rejections at $10 probe. 43-run 6-chain scan: 308 signals, $560.16 diag net, 0 profitable RT. truth_verdict=DIAGNOSTIC_PROFIT_ONLY. 2101 tests PASS.)
+**Tests**: 2101 passed / 5 skipped
+**Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3, m4:run_summary:v2.0 (+truth_verdict)
+**Evidence runDirs**: R31: 43-run scan (630s wall, 6 chains, primary: ci_m5_gate_arbitrum_one_20260320_230614_040386). R29 (3): 54-run scan. R29 cont'd (2): 60-run scan. R29 cont'd: 72-run scan. R28.30: 60-run scan.
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Strategy**: R29 (3) removes fixed-size doctrine. Opportunity evaluation now uses wide $1–$10,000 frontier instead of narrow $150 probe. Per-chain sweep reveals different optimal sizes. Economics blockers remain chain-specific but gap_to_zero dramatically improved at optimal sizes.
+**Strategy**: R31 completes OE bottleneck diagnosis. Primary blocker is economics (NET_PROFIT_TOO_LOW at $10 probe = 57%), not quoter failures (91.7% success rate). truth_verdict disambiguates profit_status=PASS from executable profit.
+
+---
+
+## R31 — OE Bottleneck Diagnosis + truth_verdict + quote_source_summary
+
+### Architectural Changes (3 new artifact fields)
+1. **truth_verdict** (run_summary): 4-value domain [NO_DATA, ROUNDTRIP_PROFITABLE, DIAGNOSTIC_PROFIT_ONLY, NO_PROFIT]. Added to `m4/policy.py` compute_status() and `m4/fixtures.py` run_summary_data.
+2. **quote_source_summary** (truth_report): Per-DEX:fee breakdown of executable/diagnostic/quoter_v2_failed counts. Added to `strategy/artifacts.py`.
+3. **oe_rejection_funnel** (truth_report): Total/gated/rejected/reasons from OE gate. Added to `strategy/artifacts.py`.
+
+### Code Changes (4 files)
+1. **m4/policy.py** — `compute_status()` returns `truth_verdict` in both NO_DATA early-return and normal paths.
+2. **m4/fixtures.py** — `truth_verdict` computed inline before `run_summary_data` dict, surfaced as first-class field.
+3. **strategy/artifacts.py** — `build_truth_data()` adds `quote_source_summary` + `oe_rejection_funnel` blocks.
+4. **tests/unit/test_r31_truth_verdict.py** — NEW: 11 tests (5 policy, 3 quote_source_summary, 3 oe_rejection_funnel).
+
+### Fresh 43-Run 6-Chain Scan (R31 evidence)
+| Metric | Value |
+|--------|-------|
+| Wall time | 630s |
+| Total runs | 43 |
+| PASS / NO_DATA / FAIL | 33 / 2 / 8 |
+| Signals total | 308 |
+| Net USDC total (diag) | $560.16 |
+| Profitable RT | 0 |
+| truth_verdict (primary) | DIAGNOSTIC_PROFIT_ONLY |
+| Pass chains | arbitrum_one, linea, scroll |
+| Fail chains | zksync, base, mantle |
+
+### Per-Chain R31 Summary
+| Chain | Runs | PASS | Signals | Net USDC | Level |
+|-------|------|------|---------|----------|-------|
+| arbitrum_one | 8 | 8 | 216 | $368.20 | SIGNAL_PRODUCING |
+| linea | 7 | 7 | 31 | $75.51 | SIGNAL_PRODUCING |
+| scroll | 7 | 7 | 28 | $32.53 | SIGNAL_PRODUCING |
+| mantle | 7 | 6 | 18 | $62.92 | SIGNAL_PRODUCING |
+| zksync | 7 | 2 | 8 | $3.85 | FAIL |
+| base | 7 | 3 | 7 | $17.15 | INFRA_READY |
+
+### OE Rejection Funnel (arb primary — NEW field)
+```
+total_opportunities: 207
+gated_count: 0
+rejected_reasons:
+  NET_PROFIT_TOO_LOW: 118  (57.0%)
+  SUSPECT_SPREAD_HARD: 46  (22.2%)
+  MIXED_SOURCE: 21          (10.1%)
+  NOTIONAL_DRIFT: 19        (9.2%)
+  SLOT0_DIAGNOSTIC: 3       (1.4%)
+```
+
+### Key RCA Finding
+Primary blocker = **economics at $10 probe** (NET_PROFIT_TOO_LOW = 57%), NOT quoter failures (quoter_v2 success rate improved to 91.7%). MIXED_SOURCE only 10.1%. Next step: increase probe size or connect wide sweep ladder to OE evaluation.
 
 ---
 
