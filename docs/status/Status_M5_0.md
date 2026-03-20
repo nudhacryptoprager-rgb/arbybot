@@ -1,12 +1,61 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-20 (R29 cont'd — `strategy/quotes.py` staged extraction, same-session dashboard verification, fresh 72-run rolling evidence. 2084 tests PASS.)
-**Tests**: 2084 passed / 14 skipped
+**Updated**: 2026-03-20 (R29 cont'd (2) — `strategy/quotes.py` 5-module extraction completed (1252 lines), pair-level RCA for base+arb, fresh 60-run online evidence. 2092 tests PASS.)
+**Tests**: 2092 passed / 3 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
-**Evidence runDirs**: R28.30: 10-min scan (60 runs, 6 chains, 660s wall). R28.28: 10-min scan (60 runs). R28.27: cap isolation.
+**Evidence runDirs**: R29 cont'd (2): 60-run scan (646.1s wall, 6 chains). R29 cont'd: 72-run scan. R28.30: 60-run scan. R28.28: 60-run scan.
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Strategy**: Funnel contract normalized: `opp_engine_combinations` replaces misleading `opp_candidates`, `cross_dex_pairs_count` added, 6-stage annotations. Hot cache writes atomically and preserves discovery_runtime provenance during hot re-quotes. Dashboard canonical protocol mandated (`dashboard_server` + `/api/hot`). `strategy/quotes.py` was partially decomposed into `strategy/quote_rpc.py`; the remaining quote-policy split is the next extraction target.
+**Strategy**: R29 staged split is verified offline and online: strategy/quotes.py dropped to 1252 lines across five quote modules, but profit blockers remain chain-specific. Base is still quote-path blocked, arbitrum is still mixed coverage+economics, and linea is the clearest economics-control chain on fresh evidence.
+
+---
+
+## R29 cont'd (2) — 5-Module Extraction + Pair-Level RCA + Docs Alignment
+
+### Code Changes
+1. **strategy/quote_adapters.py** (NEW, 288 lines) — adapter-specific readers: `read_algebra_quoter`, `read_ve33_amount_out`, `synthesize_sqrt_price_from_anchor`, `calculate_price_from_sqrt`.
+2. **strategy/quote_policy.py** (NEW, 107 lines) — `get_runtime_filter_switches`, `apply_price_sanity_gate` (consolidated 3x duplicated price sanity check).
+3. **strategy/quote_metrics.py** (NEW, 39 lines) — `init_quote_counts`, `init_quoter_matrix`, `finalize_quote_counts`.
+4. **strategy/quotes.py** (MODIFIED, 1658→1252 lines) — imports from 3 new modules, orchestration spine only.
+5. **tests**: +9 quote_policy tests, +4 quote_metrics tests, 1 existing test updated for moved import.
+
+### 5-Module Breakdown
+| Module | Lines | Responsibility |
+|--------|-------|---------------|
+| `strategy/quotes.py` | **1252** | Orchestration spine (`collect_quotes` + helpers) |
+| `strategy/quote_rpc.py` | 233 | V3 slot0/quoter readers, shared W3 cache |
+| `strategy/quote_adapters.py` | 288 | Algebra quoter, ve33 getAmountOut, sqrtPrice math |
+| `strategy/quote_policy.py` | 107 | Runtime filter switches, price sanity gate |
+| `strategy/quote_metrics.py` | 39 | Quote counts init/finalize, quoter matrix |
+
+### Pair-Level RCA (fresh evidence)
+
+**base** (pair_level_rca.py on ci_m5_gate_base_20260320_161202_590806):
+- 15 pairs, 14 reach 'quoted', 0 signals, 0 RT. Quote-path blocked — not market-blocked.
+
+**arbitrum_one** (pair_level_rca.py on ci_m5_gate_arbitrum_one_20260320_161139_941538):
+- 7 pairs, 4 RT evaluated, best -25.02 bps (WBTC/USDC). Gas-dominated (counterfactual: zero-gas → +253 bps).
+
+### Fresh 60-Run Scan Evidence
+| Metric | Value |
+|--------|-------|
+| Wall time | 646.1s |
+| Total runs | 60 |
+| Infra fail | 0 |
+| Signals | 56 |
+| RT evaluated | 54 |
+| Profitable RT | 0 |
+| Best RT | -25.02 bps |
+| Pass chains | base, linea |
+| Fail chains | arbitrum_one, zksync, mantle, scroll |
+
+### Current Blocker Readout (pair-level RCA verified)
+- **base**: quote-path blocked (14/15 pairs quoted, 0 signals — QuoterV2 RPC still failing)
+- **arbitrum_one**: mixed coverage + economics (7 pairs, 4 RT eval, gas-dominated on frontier)
+- **linea**: economics-control chain (30 signals, 11 cdx pairs, cleanest truth path, best -122.5 bps)
+- **zksync**: thin-surface economics blocker (4 signals)
+- **mantle**: liquidity/quality blocker (fragile signal pass)
+- **scroll**: no real RT (upstream signal-pass collapse)
 
 ---
 
@@ -131,64 +180,17 @@ Per-chain totals across all runs in session:
 
 ## R28.28 God-File Extraction (run_scan_real.py → 5 strategy modules)
 
-### Extraction Results
-| Metric | Before | After | Delta |
-|--------|--------|-------|-------|
-| run_scan_real.py lines | 1724 | 1371 | -353 (-20.5%) |
-| Extracted modules | 0 | 5 | +5 |
-| Total tests | 1979 | 2017 | +38 |
-| Purity threshold | 1900 | 1500 | -400 lines headroom |
-
-### New Modules
-- `strategy/scan_universe.py` (~165 lines) — universe resolution
-- `strategy/roundtrip_selection.py` (~110 lines) — candidate selection
-- `strategy/dynamic_sweep_runtime.py` (~200 lines) — sweep orchestration
-- `strategy/execution_probe.py` (~120 lines) — live execution probe
-- `strategy/live_stream.py` (~95 lines) — operator candidate stream
-
-### Verification Scan (10 min, 6 chains)
-- 60 runs: PASS=7, NO_DATA=6, FAIL=47, INFRA_FAIL=0
-- 61 signals, $68.95 net USDC, 0 profitable roundtrips
-- Sweep gap: 16.33 bps (WETH/USDT @ $25, arbitrum_one)
-- All extracted modules correctly invoked (hot_requote cache, sweep, selection visible in logs)
-
-### Bug Fixes
-1. `_us` NameError in `_emit_phase` → `stats.get("universe_source", "config")`
-2. test_force_intent.py target updated: scan_universe.py
-3. test_scan_universe mock path corrected
-
-### Pending
-- **Adapter expansion**: base ve33/aerodrome, zksync SyncSwap/SpaceFi
-- **Market conditions**: sweep gap 16.33 bps, 0 profitable RT
+`run_scan_real.py` reduced from 1724→1371 lines (-20.5%). 5 new modules: `scan_universe.py`, `roundtrip_selection.py`, `dynamic_sweep_runtime.py`, `execution_probe.py`, `live_stream.py`. Tests: 1979→2017. Verified on 60-run scan (61 signals, 0 profitable RT).
 
 ---
 
 ## R28.26 Suppression Layer Isolation (4-Layer Ladder)
 
-### Experiment Design
-4-layer ladder, each 10-min scan across 6 chains (arb/zksync/base/mantle/linea/scroll):
-- **L0**: ARBY_DISABLE_RUNTIME_SUPPRESSION=1 (all suppression OFF)
-- **L1**: ARBY_DISABLE_RUNTIME_QUARANTINE=1 (quarantine OFF, runtime_disabled ON)
-- **L2**: ARBY_DISABLE_RUNTIME_DISABLED=1 (runtime_disabled OFF, quarantine ON)
-- **L3**: baseline (all ON)
-
-### Results (aggregate, all 6 chains)
-| Metric | L0 (all OFF) | L1 (quar OFF) | L2 (rtdis OFF) | L3 (baseline) |
-|--------|-------------|----------------|-----------------|---------------|
-| quotes_fetched | 241 | 233 | 244 | 233 |
-| spread_signals | 29 | 53 | 31 | 58 |
-| rt_real_quote | **7** | **13** | **7** | **12** |
-| rt_profitable | **0** | **0** | **0** | **0** |
-| quarantined_skip | 0 | 0 | 0 | 0 |
-| runtime_disabled_skip | 0 | 147 | 0 | 147 |
-
-### Key Findings
-1. **Quarantine = ZERO impact**: quarantined_skipped=0 in all 4 layers, all 6 chains
-2. **runtime_disabled = perf cache**: 147 pools are LIQUIDITY_ZERO cached. OFF = worse (L0=7 vs L3=12 rt_real_quote)
-3. **0 profitable RT in ALL layers**: suppression NOT the cause of zero profitability
-4. **base = quote-path blocker**: 0 rt_real_quote regardless of suppression (LIQUIDITY_ZERO=41)
-
-### Pending
+4-layer ladder (L0-L3) across 6 chains. Key findings:
+1. **Quarantine = ZERO impact** (quarantined_skipped=0 all layers)
+2. **runtime_disabled = perf cache** (147 LIQUIDITY_ZERO pools cached; OFF = worse)
+3. **0 profitable RT in ALL layers** — suppression NOT cause of zero profitability
+4. **base = quote-path blocker** (0 rt_real_quote regardless of suppression)
 - **Hard caps isolation**: roundtrip_max_candidates, discovery_runtime_max_pairs, min_spread_bps in run_scan_real.py
 - **LIQUIDITY_ZERO investigation**: 61 arb pools permanently zero-liquidity
 - **Anchor refresh**: Prices stale since 2026-02-17
@@ -360,11 +362,12 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Current Blockers (R29 cont'd)
+## Current Blockers (R29 cont'd (2) — pair-level RCA verified)
 
-- **All chains**: `profitable_roundtrips=0`; no positive control exists on fresh same-session evidence.
-- **Arb**: mixed coverage + economics. `cross_dex_pairs_count=2`, `best_roundtrip_net_bps=-25.38`.
-- **Base**: quote-path blocked. `cross_dex_pairs_count=15`, `real_quote_count=3`, but still no executable spread frontier.
-- **Linea**: cleanest economics blocker. `real_quote_count=12`, best RT still negative.
-- **Mantle**: liquidity/quality blocker. Surface exists but is fragile and still non-profitable.
-- **Scroll**: candidate-only. `real_quote_count=0`, no RT path yet.
+- **All chains**: `profitable_roundtrips=0`; no positive control on fresh evidence.
+- **Arb**: mixed coverage+economics (gas-dominated, best -25.02 bps, counterfactual +253 bps if zero-gas).
+- **Base**: quote-path blocked (14/15 pairs quoted, 0 signals).
+- **Linea**: economics-control (30 sig, 11 cdx, cleanest truth path).
+- **Zksync**: thin-surface economics (4 signals).
+- **Mantle**: liquidity/quality (fragile pass).
+- **Scroll**: no real RT (accepted_fail).

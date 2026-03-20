@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-20 (R29 cont'd — staged `strategy/quotes.py` extraction validated, same-session dashboard verification complete, 72-run canonical scan preserved rolling coherence. 2084 tests PASS.)  
+**Updated**: 2026-03-20 (R29 cont'd (2) — 5-module `strategy/quotes.py` extraction complete (1252 lines), pair-level RCA for base+arb, fresh 60-run online evidence. 2092 tests PASS.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.30 follow-up**: hot-mode provenance now survives re-quotes, so Stage-1 cross-DEX counts remain visible in rolling artifacts during hot cycles.  
-**Primary blocker**: No single blocker. `linea/zksync` now look economics-blocked, but `base` remains quote-path blocked, `arb` still loses surface before roundtrip truth, `mantle` is liquidity/quality-limited, and `scroll` still has no real RT path. `strategy/quotes.py` remains the next extraction target even after partial split to `strategy/quote_rpc.py`.
+**Primary blocker**: No single blocker — pair-level RCA verified per-chain taxonomy: `base`=quote-path blocked (14/15 pairs quoted, 0 signals), `arb`=mixed coverage+economics (gas-dominated, -25.02 bps best), `linea`=economics-control (30 sig, cleanest truth path), `zksync`=thin-surface economics, `mantle`=liquidity/quality, `scroll`=no real RT. 5-module extraction complete (quotes.py 1252, quote_rpc.py 233, quote_adapters.py 288, quote_policy.py 107, quote_metrics.py 39).
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
@@ -28,7 +28,8 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-20 R29 cont'd)**: staged `quotes.py` extraction landed (`quote_rpc.py` added; `quotes.py` 2006→1658). Same-session canonical run: 72 runs / 647.8s / 78 included signals / 57 RT evaluated / 0 profitable RT. `/api/hot` matched `long_scan_latest.json` in the same session.
+> [!] **ROLLING STABILITY (2026-03-20 R29 cont'd (2))**: 5-module `quotes.py` extraction complete (1252 lines + quote_rpc 233 + quote_adapters 288 + quote_policy 107 + quote_metrics 39). Fresh 60-run canonical scan: 646.1s wall / 56 included signals / 54 RT evaluated / 0 profitable RT / best -25.02 bps. Pair-level RCA on base (quote-path blocked) and arb (gas-dominated, counterfactual: zero-gas → +253 bps on WBTC/USDC).
+> R29 cont'd: staged `quotes.py` extraction landed (`quote_rpc.py` added; `quotes.py` 2006→1658). Same-session canonical run: 72 runs / 647.8s / 78 included signals / 57 RT evaluated / 0 profitable RT. `/api/hot` matched `long_scan_latest.json` in the same session.
 > R28.28: God-file extraction: run_scan_real.py 1724→1371 lines, 5 modules, 38 tests. 2017 PASS.
 > R28.27: Cap isolation toggles + same-DEX override + diagnostics + 4 chain fixes. 1979 tests.
 > R28.22-cont-2: Per-chain NO_USD_PRICE fixes (+14 tokens), zombie quarantine fix, 97.7-min bundle (406 runs). base 0→54 signals.
@@ -41,28 +42,28 @@
 > R28.11 Turn 2: Hot re-quote loop + WebSocket dirty-set invalidation — dual-cycle architecture.
 > Earlier rounds: see Status_M5_0.md for full history.
 
-**Economics Snapshot (2026-03-19, R28.23 — from 240-run long_scan, 60.5 min):**
+**Economics Snapshot (2026-03-20, R29 cont'd (2) — from 60-run long_scan, 646.1s):**
 | Metric | Value | Source |
 |--------|-------|--------|
-| `arb best_net_pnl_bps` | -21.19 bps | long_scan R28.23 (primary chain, ECONOMICS) |
-| `arb sweep_best` | -10.62 bps @ $25 | long_scan R28.23 (gap_to_zero=10.62 bps — CLOSEST) |
-| `linea best_net_pnl_bps` | -62.96 bps | long_scan R28.23 (ECONOMICS, 100% pass, cdx=4) |
-| `zksync best_net_pnl_bps` | -130.31 bps | long_scan R28.23 (ECONOMICS, cdx=1) |
-| `base best_net_pnl_bps` | 0.0 bps | long_scan R28.23 (QUOTE_PATH, VE33=29) |
-| `mantle best_net_pnl_bps` | n/a | long_scan R28.23 (**NEW: 35 sig, 39 rq, FusionX works**) |
-| `scroll best_net_pnl_bps` | n/a | long_scan R28.23 (DIAGNOSTIC, 0 rq, dead pools) |
-| `total_profitable_roundtrips` | 0 | long_scan R28.23 (all chains) |
-| `benchmark_chain` | None | long_scan R28.23 (no chain qualifies) |
+| `arb best_net_pnl_bps` | -25.02 bps | long_scan R29c2 (WBTC/USDC, gas=278.93 bps) |
+| `arb counterfactual` | +253.91 bps if zero-gas | pair_level_rca (gas-dominated) |
+| `linea best_net_pnl_bps` | -122.5 bps | long_scan R29c2 (30 signals, 11 cdx, route_health=1.0) |
+| `zksync best_net_pnl_bps` | n/a | long_scan R29c2 (4 signals, thin-surface) |
+| `base best_net_pnl_bps` | 0.0 bps | long_scan R29c2 (QUOTE_PATH, 15 pairs, 14 quoted, 0 signals) |
+| `mantle best_net_pnl_bps` | n/a | long_scan R29c2 (fragile signal pass) |
+| `scroll best_net_pnl_bps` | n/a | long_scan R29c2 (accepted_fail, no real RT) |
+| `total_profitable_roundtrips` | 0 | long_scan R29c2 (all chains) |
+| `benchmark_chain` | None | long_scan R29c2 (no chain qualifies) |
 
-**Rollout Queue (R28.23 — 240-run bundle, all chains blocked):**
+**Rollout Queue (R29 cont'd (2) — 60-run bundle, pair-level RCA verified):**
 | Priority | Chain | Status | Evidence |
 |----------|-------|--------|----------|
-| 1 | arbitrum_one | PRIMARY_BLOCKER | sig=1163, rq=172, cdx=8, prt=0, best=-21.19bps, gap=10.62bps |
-| 2 | linea | PRIMARY_BLOCKER | sig=160, rq=160, cdx=4, prt=0, best=-62.96bps, 100% pass |
-| 3 | zksync | PRIMARY_BLOCKER | sig=40, rq=80, cdx=1, prt=0, best=-130.31bps |
-| 4 | base | PRIMARY_BLOCKER | sig=50, rq=52, cdx=0, prt=0, VE33_QUOTE_FAILED=29 |
-| 5 | mantle | PRIMARY_BLOCKER | sig=35, rq=39, cdx=1, prt=0 (**NEW: FusionX V3 → SIGNAL_PRODUCING**) |
-| 6 | scroll | CANDIDATE | sig=80, rq=0, cdx=2, prt=0, LIQUIDITY_ZERO=20, accepted_fail |
+| 1 | arbitrum_one | MIXED_COVERAGE_ECONOMICS | 7 pairs, 4 RT eval, best=-25.02bps, gas-dominated, counterfactual +253bps |
+| 2 | linea | ECONOMICS_CONTROL | 30 signals, 11 cdx, route_health=1.0, cleanest truth path |
+| 3 | zksync | THIN_SURFACE_ECONOMICS | 4 signals, thin surface |
+| 4 | base | QUOTE_PATH_BLOCKED | 15 pairs, 14 quoted, 0 signals, 3 real quotes — QuoterV2 issue |
+| 5 | mantle | LIQUIDITY_QUALITY | fragile signal pass |
+| 6 | scroll | NO_REAL_RT | accepted_fail, upstream signal-pass collapse |
 
 ## Executor Onboarding Checklist (2026-03-04)
 
