@@ -8,11 +8,9 @@ Contains functions for fetching quotes from DEX pools.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from decimal import Decimal, InvalidOperation, localcontext
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config.pairs import load_pairs, get_pool_address, is_pool_disabled, PairConfig
@@ -143,254 +141,32 @@ def resolve_token_address(
 
 logger = logging.getLogger("strategy.quotes")
 
-# Canonical _env_flag_enabled lives in core.env; local alias for brevity
-from core.env import env_flag_enabled as _env_flag_enabled
-
-
-def _get_runtime_filter_switches(config: Dict[str, Any]) -> Dict[str, bool]:
-    """Resolve debug/bring-up toggles for stateful runtime suppression layers.
-
-    Contract:
-    - Truth gates remain active (price sanity, suspect liquidity, drift, mixed-source).
-    - These toggles only disable stateful suppression side-effects:
-      quarantine and runtime_disabled persistence/skip logic.
-    - Default is fully enabled to preserve production behavior.
-    """
-    disable_all = _env_flag_enabled("ARBY_DISABLE_RUNTIME_SUPPRESSION") or bool(
-        config.get("disable_runtime_suppression", False)
-    )
-    disable_quarantine = disable_all or _env_flag_enabled(
-        "ARBY_DISABLE_RUNTIME_QUARANTINE"
-    ) or bool(config.get("disable_runtime_quarantine", False))
-    disable_runtime_disabled = disable_all or _env_flag_enabled(
-        "ARBY_DISABLE_RUNTIME_DISABLED"
-    ) or bool(config.get("disable_runtime_disabled", False))
-    return {
-        "quarantine_enabled": not disable_quarantine,
-        "runtime_disabled_enabled": not disable_runtime_disabled,
-    }
-
-# =============================================================================
-# SHARED WEB3 PROVIDER CACHE (R28.4: eliminate per-quote HTTPProvider creation)
-# =============================================================================
-
-_shared_w3_cache: Dict[str, Any] = {}  # rpc_url -> Web3 instance
-
-
-def _get_shared_w3(rpc_url: str, timeout: int = 10) -> Any:
-    """Get or create a shared Web3 instance for an RPC URL.
-
-    R28.4: Previously every quote call created a new Web3(HTTPProvider(...)),
-    which was the primary speed killer in serial quoting.
-    """
-    if rpc_url in _shared_w3_cache:
-        return _shared_w3_cache[rpc_url]
-    try:
-        from web3 import Web3
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": timeout}))
-        _shared_w3_cache[rpc_url] = w3
-        return w3
-    except Exception:
-        return None
-
-
-def clear_shared_w3_cache() -> None:
-    """Clear the shared Web3 provider cache (for testing)."""
-    _shared_w3_cache.clear()
-
-
-# R28.4: Bounded concurrency for quote fan-out
-_QUOTE_CONCURRENCY = 8  # Max parallel RPC calls per pair batch
-
-
-# =============================================================================
-# MULTICALL PREFETCH CACHE (v2.2.0)
-# =============================================================================
-
-# R28.12: Shared ThreadPoolExecutor for cross-pair quote fan-out
-# Avoids creating/destroying a TPE per pair (which was the serial bottleneck)
-_shared_quote_executor: Any = None
-_SHARED_QUOTE_CONCURRENCY = 16  # Cross-pair: allow more parallelism than single-pair
-
-
-def _get_shared_quote_executor() -> Any:
-    """Get or create the shared quote ThreadPoolExecutor."""
-    global _shared_quote_executor
-    if _shared_quote_executor is None:
-        from concurrent.futures import ThreadPoolExecutor as _TPE
-        _shared_quote_executor = _TPE(max_workers=_SHARED_QUOTE_CONCURRENCY)
-    return _shared_quote_executor
-
-
-# Module-level cache for multicall prefetch results
-_multicall_slot0_cache: Dict[str, Optional[Tuple[int, int]]] = {}
-_multicall_liquidity_cache: Dict[str, Optional[int]] = {}  # v2.2.0 Fix Step 6: Add liquidity cache
-_multicall_token_info_cache: Dict[str, Optional[Tuple[str, str, int]]] = {}  # v2.2.0 Fix Step 6: Add token_info cache
-_multicall_decimals_cache: Dict[str, Optional[int]] = {}  # v2.2.0 Fix Step 5: Add decimals cache
-
-
-def prefetch_slot0_multicall(
-    pool_addresses: List[str], rpc_url: str, block_num: int
-) -> Dict[str, Optional[Tuple[int, int]]]:
-    """
-    Prefetch slot0, liquidity, and token_info data for multiple pools using multicall.
-    
-    v2.2.0: Roadmap M5_0 requires multicall batching per cycle.
-    This reduces RPC calls from N to 1 for N pools.
-    
-    v2.2.0 Fix Step 6: Also batch liquidity() calls.
-    v2.2.1 Fix Step 6: Also batch token_info() calls (token0, token1, fee).
-    
-    Args:
-        pool_addresses: List of pool addresses to fetch
-        rpc_url: RPC URL
-        block_num: Block number
-        
-    Returns:
-        Dict mapping pool_address -> (tick, sqrt_price_x96) or None
-    """
-    global _multicall_slot0_cache, _multicall_liquidity_cache, _multicall_token_info_cache
-    
-    if not pool_addresses or not rpc_url:
-        return {}
-    
-    if os.environ.get("ARBY_SKIP_RPC") == "1":
-        return {addr: None for addr in pool_addresses}
-    
-    try:
-        from core.multicall import get_multicall_batcher
-        
-        batcher = get_multicall_batcher(rpc_url, block_num)
-        
-        # Batch slot0 calls
-        results = batcher.batch_slot0(pool_addresses)
-        
-        # v2.2.0 Fix Step 6: Also batch liquidity calls
-        liquidity_results = batcher.batch_liquidity(pool_addresses)
-        
-        # v2.2.0 Fix Step 6: Also batch token_info calls (token0, token1, fee)
-        token_info_results = batcher.batch_token_info(pool_addresses)
-        
-        # v2.2.0 Fix Step 5: Batch decimals for unique tokens from token_info
-        unique_tokens: set[str] = set()
-        for info in token_info_results.values():
-            if info is not None:
-                token0, token1, _ = info
-                if token0:
-                    unique_tokens.add(token0.lower())
-                if token1:
-                    unique_tokens.add(token1.lower())
-        
-        decimals_results: Dict[str, Optional[int]] = {}
-        if unique_tokens:
-            decimals_results = batcher.batch_decimals(list(unique_tokens))
-        
-        # Convert from (sqrt, tick, liq) to (tick, sqrt)
-        output = {}
-        for addr, data in results.items():
-            if data is not None:
-                sqrt_price, tick, _ = data
-                output[addr.lower()] = (tick, sqrt_price)
-            else:
-                output[addr.lower()] = None
-        
-        # Update caches
-        _multicall_slot0_cache.update(output)
-        _multicall_liquidity_cache.update({k.lower(): v for k, v in liquidity_results.items()})
-        _multicall_token_info_cache.update({k.lower(): v for k, v in token_info_results.items()})
-        _multicall_decimals_cache.update({k.lower(): v for k, v in decimals_results.items()})
-        
-        success_count = sum(1 for v in output.values() if v is not None)
-        liq_count = sum(1 for v in liquidity_results.values() if v is not None)
-        token_count = sum(1 for v in token_info_results.values() if v is not None)
-        decimals_count = sum(1 for v in decimals_results.values() if v is not None)
-        logger.info("Multicall prefetch: %d pools, %d tokens, success: slot0=%d, liquidity=%d, token_info=%d, decimals=%d", 
-                   len(pool_addresses), len(unique_tokens), success_count, liq_count, token_count, decimals_count)
-        return output
-    except Exception as e:
-        logger.debug("Multicall prefetch failed: %s", e)
-        return {addr: None for addr in pool_addresses}
-
-
-def get_cached_liquidity(pool_address: str) -> Optional[int]:
-    """Get liquidity from multicall cache if available."""
-    return _multicall_liquidity_cache.get(pool_address.lower())
-
-
-def get_cached_token_info(pool_address: str) -> Optional[Tuple[str, str, int]]:
-    """Get token_info (token0, token1, fee) from multicall cache if available."""
-    return _multicall_token_info_cache.get(pool_address.lower())
-
-
-def get_cached_decimals(token_address: str) -> Optional[int]:
-    """Get decimals from multicall cache if available."""
-    return _multicall_decimals_cache.get(token_address.lower())
-
-
-def clear_multicall_cache() -> None:
-    """Clear the multicall prefetch cache (for testing)."""
-    global _multicall_slot0_cache, _multicall_liquidity_cache, _multicall_token_info_cache, _multicall_decimals_cache
-    _multicall_slot0_cache.clear()
-    _multicall_liquidity_cache.clear()  # v2.2.0 Fix Step 6
-    _multicall_token_info_cache.clear()  # v2.2.0 Fix Step 6
-    _multicall_decimals_cache.clear()  # v2.2.0 Fix Step 5
-
-
-def read_slot0_v3(pool_address: str, rpc_url: Optional[str], block_num: int) -> Tuple[Optional[int], Optional[int]]:
-    """
-    Read slot0() from a Uniswap V3 pool contract.
-    
-    v2.2.0: Checks multicall cache first if prefetch was done.
-    
-    Args:
-        pool_address: Pool contract address
-        rpc_url: RPC URL to use
-        block_num: Block number to query at
-        
-    Returns:
-        (tick, sqrtPriceX96) or (None, None) on failure
-    """
-    if not pool_address or not rpc_url:
-        return None, None
-    
-    # v2.2.0: Check multicall cache first
-    cache_key = pool_address.lower()
-    if cache_key in _multicall_slot0_cache:
-        cached = _multicall_slot0_cache[cache_key]
-        if cached is not None:
-            logger.debug("slot0() from multicall cache for %s", pool_address)
-            return cached  # (tick, sqrt_price_x96)
-        # None in cache means multicall tried and failed - fall through to direct read
-    
-    if os.environ.get("ARBY_SKIP_RPC") == "1":
-        return None, None
-    
-    try:
-        from web3 import Web3
-    except ImportError:
-        logger.debug("slot0() skipped: web3 not installed")
-        return None, None
-    
-    try:
-        abi_path = Path(__file__).parent.parent / "dex" / "abi" / "uniswap_v3_pool.json"
-        if not abi_path.exists():
-            logger.debug("slot0() skipped: ABI not found at %s", abi_path)
-            return None, None
-        
-        abi = json.loads(abi_path.read_text(encoding="utf8"))
-        w3 = _get_shared_w3(rpc_url, timeout=5)
-        if w3 is None:
-            return None, None
-        pool = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=abi)
-        slot0 = pool.functions.slot0().call(block_identifier=block_num)
-        
-        sqrt_price_x96 = int(slot0[0])
-        tick = int(slot0[1])
-        logger.debug("slot0() success for %s: tick=%s, sqrtPriceX96=%s", pool_address, tick, sqrt_price_x96)
-        return tick, sqrt_price_x96
-    except Exception as e:
-        logger.debug("slot0() read failed for %s: %s", pool_address, e)
-        return None, None
+from strategy.quote_rpc import (
+    _get_shared_w3,
+    _get_shared_quote_executor,
+    clear_multicall_cache,
+    clear_shared_w3_cache,
+    get_cached_liquidity,
+    get_cached_slot0,
+    prefetch_slot0_multicall,
+    read_quoter_v2,
+    read_slot0_v3,
+)
+from strategy.quote_adapters import (
+    read_algebra_quoter,
+    read_ve33_amount_out,
+    synthesize_sqrt_price_from_anchor,
+    calculate_price_from_sqrt,
+)
+from strategy.quote_policy import (
+    get_runtime_filter_switches as _get_runtime_filter_switches,
+    apply_price_sanity_gate,
+)
+from strategy.quote_metrics import (
+    init_quote_counts,
+    init_quoter_matrix,
+    finalize_quote_counts,
+)
 
 
 # =============================================================================
@@ -501,364 +277,6 @@ def calculate_amount_in_wei(
     return amount_in_wei
 
 
-# =============================================================================
-# QUOTER V2 - Executable quotes (M4.2)
-# =============================================================================
-
-def read_quoter_v2(
-    quoter_address: str,
-    token_in: str,
-    token_out: str,
-    amount_in: int,
-    fee: int,
-    rpc_url: Optional[str],
-    block_num: int,
-) -> Optional[Dict[str, Any]]:
-    """
-    Get executable quote from QuoterV2 contract.
-    
-    M4.2 CONTRACT:
-    - Returns actual amountOut (not spot price)
-    - Returns gas_estimate and ticks_crossed
-    - Can detect low liquidity (high ticks/gas)
-    
-    Args:
-        quoter_address: QuoterV2 contract address
-        token_in: Input token address
-        token_out: Output token address
-        amount_in: Input amount in wei
-        fee: Fee tier
-        rpc_url: RPC URL
-        block_num: Block number
-        
-    Returns:
-        Dict with: amount_out, sqrt_price_after, ticks_crossed, gas_estimate
-        None on failure
-    """
-    if not quoter_address or not rpc_url:
-        return None
-    if os.environ.get("ARBY_SKIP_RPC") == "1":
-        return None
-    
-    try:
-        from web3 import Web3
-    except ImportError:
-        logger.debug("QuoterV2 skipped: web3 not installed")
-        return None
-    
-    try:
-        # Encode quoteExactInputSingle call
-        from dex.adapters.uniswap_v3 import (
-            encode_quote_exact_input_single,
-            decode_quote_response,
-        )
-        
-        call_data = encode_quote_exact_input_single(
-            token_in=token_in,
-            token_out=token_out,
-            amount_in=amount_in,
-            fee=fee,
-        )
-        
-        w3 = _get_shared_w3(rpc_url)
-        if w3 is None:
-            return None
-        result_hex = w3.eth.call(
-            {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
-            block_identifier=block_num,
-        ).hex()
-        
-        amount_out, sqrt_price_after, ticks_crossed, gas_estimate = decode_quote_response(result_hex)
-        
-        logger.debug(
-            "QuoterV2 success: %s -> %s, amountOut=%d, ticks=%d, gas=%d",
-            token_in[:10], token_out[:10], amount_out, ticks_crossed, gas_estimate
-        )
-        
-        return {
-            "amount_out": amount_out,
-            "sqrt_price_after": sqrt_price_after,
-            "ticks_crossed": ticks_crossed,
-            "gas_estimate": gas_estimate,
-        }
-    except Exception as e:
-        logger.debug("QuoterV2 failed: %s", e)
-        return None
-
-
-def read_algebra_quoter(
-    quoter_address: str,
-    token_in: str,
-    token_out: str,
-    amount_in: int,
-    rpc_url: Optional[str],
-    block_num: int,
-) -> Optional[Dict[str, Any]]:
-    """
-    Get executable quote from Algebra (Camelot/Lynex) quoter contract.
-    
-    Algebra quoter uses different signature than UniswapV3 QuoterV2:
-    - No fee parameter (Algebra has dynamic fees)
-    - Different return values
-    
-    Supports two Algebra quoter styles:
-    1. quoteExactInputSingle(address,address,uint256,uint160) - Camelot style
-    2. quoteExactInput(bytes path, uint256 amountIn) - Lynex style
-    
-    Args:
-        quoter_address: Algebra quoter contract address
-        token_in: Input token address
-        token_out: Output token address
-        amount_in: Input amount in wei
-        rpc_url: RPC URL
-        block_num: Block number
-        
-    Returns:
-        Dict with: amount_out, gas_estimate
-        None on failure
-    """
-    if not quoter_address or not rpc_url:
-        return None
-    if os.environ.get("ARBY_SKIP_RPC") == "1":
-        return None
-    
-    try:
-        from web3 import Web3
-    except ImportError:
-        logger.debug("Algebra quoter skipped: web3 not installed")
-        return None
-    
-    w3 = _get_shared_w3(rpc_url, timeout=5)  # 5s timeout matches QuoterV2
-    if w3 is None:
-        return None
-    
-    # Try Style 1: quoteExactInputSingle(address,address,uint256,uint160) - Camelot
-    style1_error = None
-    try:
-        SELECTOR_SINGLE = "0x2d58eb1d"
-        
-        token_in_padded = token_in[2:].lower().zfill(64)
-        token_out_padded = token_out[2:].lower().zfill(64)
-        amount_in_hex = hex(amount_in)[2:].zfill(64)
-        sqrt_price_limit = hex(0)[2:].zfill(64)  # 0 = no limit
-        
-        call_data = f"{SELECTOR_SINGLE}{token_in_padded}{token_out_padded}{amount_in_hex}{sqrt_price_limit}"
-        
-        result_hex = w3.eth.call(
-            {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
-            block_identifier=block_num,
-        ).hex()
-        
-        if result_hex and result_hex != "0x" and len(result_hex) >= 66:
-            data = result_hex[2:] if result_hex.startswith("0x") else result_hex
-            amount_out = int(data[0:64], 16)
-            if amount_out > 0:
-                logger.debug(
-                    "Algebra quoter (single) success: %s -> %s, amountOut=%d",
-                    token_in[:10], token_out[:10], amount_out
-                )
-                return {
-                    "amount_out": amount_out,
-                    "sqrt_price_after": None,
-                    "ticks_crossed": None,
-                    "gas_estimate": 200_000,
-                }
-            else:
-                style1_error = "amountOut=0 (zero liquidity)"
-        else:
-            style1_error = f"empty_response (len={len(result_hex) if result_hex else 0})"
-    except Exception as e:
-        style1_error = str(e)[:120]
-        logger.debug("Algebra quoter (single) failed: %s", e)
-    
-    # Try Style 2: quoteExactInput(bytes path, uint256 amountIn) - Lynex
-    style2_error = None
-    try:
-        from eth_abi import encode
-        
-        # Algebra path: 20 bytes tokenIn + 20 bytes tokenOut (no fee)
-        path = bytes.fromhex(token_in[2:]) + bytes.fromhex(token_out[2:])
-        params = encode(['bytes', 'uint256'], [path, amount_in])
-        call_data = "0xcdca1753" + params.hex()
-        
-        result_hex = w3.eth.call(
-            {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
-            block_identifier=block_num,
-        ).hex()
-        
-        if result_hex and result_hex != "0x" and len(result_hex) >= 66:
-            data = result_hex[2:] if result_hex.startswith("0x") else result_hex
-            amount_out = int(data[0:64], 16)
-            if amount_out > 0:
-                logger.debug(
-                    "Algebra quoter (path) success: %s -> %s, amountOut=%d",
-                    token_in[:10], token_out[:10], amount_out
-                )
-                return {
-                    "amount_out": amount_out,
-                    "sqrt_price_after": None,
-                    "ticks_crossed": None,
-                    "gas_estimate": 200_000,
-                }
-            else:
-                style2_error = "amountOut=0 (zero liquidity)"
-        else:
-            style2_error = f"empty_response (len={len(result_hex) if result_hex else 0})"
-    except Exception as e:
-        style2_error = str(e)[:120]
-        logger.debug("Algebra quoter (path) failed: %s", e)
-    
-    # R28.27: Enhanced diagnostic — capture WHY both styles failed
-    logger.info(
-        "ALGEBRA_QUOTER_DIAG: %s/%s quoter=%s style1=%s style2=%s",
-        token_in[:10], token_out[:10], quoter_address[:16],
-        style1_error or "not_attempted", style2_error or "not_attempted",
-    )
-    return None
-
-
-def read_ve33_amount_out(
-    pool_address: str,
-    token_in: str,
-    amount_in: int,
-    rpc_url: Optional[str],
-    block_num: int,
-) -> Optional[int]:
-    """
-    Get executable quote from ve33 / Solidly-style pool via getAmountOut().
-    
-    Aerodrome/Velodrome-style pools expose:
-      getAmountOut(uint256 amountIn, address tokenIn) -> uint256 amountOut
-    """
-    if not pool_address or not token_in or not rpc_url:
-        return None
-    if os.environ.get("ARBY_SKIP_RPC") == "1":
-        return None
-    
-    try:
-        from web3 import Web3
-    except ImportError:
-        logger.debug("ve33 quote skipped: web3 not installed")
-        return None
-    
-    try:
-        w3 = _get_shared_w3(rpc_url)
-        if w3 is None:
-            return None
-        pool = w3.eth.contract(
-            address=Web3.to_checksum_address(pool_address),
-            abi=[
-                {
-                    "inputs": [
-                        {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
-                        {"internalType": "address", "name": "tokenIn", "type": "address"},
-                    ],
-                    "name": "getAmountOut",
-                    "outputs": [{"internalType": "uint256", "name": "amountOut", "type": "uint256"}],
-                    "stateMutability": "view",
-                    "type": "function",
-                }
-            ],
-        )
-        
-        amount_out = pool.functions.getAmountOut(
-            amount_in,
-            Web3.to_checksum_address(token_in),
-        ).call(block_identifier=block_num)
-        
-        if amount_out is None:
-            return None
-        amount_out_int = int(amount_out)
-        return amount_out_int if amount_out_int > 0 else None
-        
-    except Exception as e:
-        # R28.27: Enhanced diagnostic for ve33 failures (same pattern as ALGEBRA_QUOTER_DIAG)
-        logger.info(
-            "VE33_QUOTE_DIAG: pool=%s token_in=%s amount_in=%d error=%s",
-            pool_address[:16], token_in[:10], amount_in, str(e)[:120],
-        )
-        return None
-
-
-def synthesize_sqrt_price_from_anchor(
-    anchor_price: float,
-    decimals_in: int,
-    decimals_out: int,
-) -> Tuple[Optional[int], Optional[int]]:
-    """
-    Synthesize sqrtPriceX96 from anchor price for test mode.
-    
-    Args:
-        anchor_price: Anchor price to use
-        decimals_in: Decimals of token_in
-        decimals_out: Decimals of token_out
-        
-    Returns:
-        (tick, sqrtPriceX96) or (None, None) on failure
-    """
-    from math import sqrt
-    try:
-        decimals_diff_pow = 10 ** (decimals_in - decimals_out)
-        raw_price = anchor_price / decimals_diff_pow
-        sqrt_price_val = int(sqrt(raw_price) * (2 ** 96))
-        tick_val = 0  # Placeholder for test mode
-        return tick_val, sqrt_price_val
-    except Exception as e:
-        logger.warning("Failed to synthesize sqrtPriceX96 from anchor: %s", e)
-        return None, None
-
-
-def calculate_price_from_sqrt(
-    sqrt_price_val: int,
-    token_in_addr: str,
-    token_out_addr: str,
-    decimals_in: int,
-    decimals_out: int,
-) -> Optional[Decimal]:
-    """
-    Calculate price from sqrtPriceX96.
-    
-    v2.1.0-fix: Use Decimal exponentiation to avoid overflow with high-decimal 
-    difference pairs (e.g., WBTC(8) / WETH(18) = -10 decimals diff).
-    Previously used `10 ** (decimals_in - decimals_out)` which could overflow
-    to float for large negative exponents.
-    
-    Args:
-        sqrt_price_val: sqrtPriceX96 value
-        token_in_addr: Address of token_in
-        token_out_addr: Address of token_out
-        decimals_in: Decimals of token_in
-        decimals_out: Decimals of token_out
-        
-    Returns:
-        Price as Decimal or None on failure
-    """
-    if sqrt_price_val is None or sqrt_price_val <= 0:
-        return None
-    
-    try:
-        sqrt_ratio = Decimal(sqrt_price_val) / Decimal(2 ** 96)
-        raw_price = sqrt_ratio * sqrt_ratio
-        
-        # v2.1.0-fix: Use Decimal(10) ** exp to avoid float overflow for large
-        # negative exponents (e.g., WBTC/WETH has decimals_in=8, decimals_out=18)
-        decimals_exp = decimals_in - decimals_out
-        decimals_diff = Decimal(10) ** decimals_exp
-        
-        if token_in_addr and token_out_addr:
-            token_in_is_token0 = token_in_addr.lower() < token_out_addr.lower()
-            
-            if token_in_is_token0:
-                return raw_price * decimals_diff
-            else:
-                return (Decimal(1) / raw_price) * decimals_diff
-        else:
-            return raw_price * decimals_diff
-    except Exception as e:
-        logger.warning("Price calculation failed: %s", e)
-        return None
-
-
 def collect_quotes(
     config: Dict[str, Any],
     current_block: int,
@@ -880,23 +298,8 @@ def collect_quotes(
     quotes_sample: List[Dict[str, Any]] = []
     rejected_quotes: List[Dict[str, Any]] = []
     
-    counts = {
-        "quotes_fetched": 0,
-        "pool_missing": 0,
-        "pool_disabled": 0,
-        "runtime_disabled": 0,  # v3.2.0: Runtime auto-disabled pools
-        "liquidity_zero": 0,    # v3.2.0: Zero liquidity pools (auto-disabled)
-        "quarantined": 0,
-        "v3_slot0_failed": 0,
-        "ve33_quote_failed": 0,
-        "price_calc_failed": 0,
-        "no_onchain_price": 0,
-        "no_usd_price": 0,      # v3.2.20: Viability filter - no USD price for token_in
-        "algebra_needs_quoter": 0,
-        "quoter_v2_failed": 0,  # R29: V3 quoter call failed, fell back to slot0
-    }
-    # R29: Per-DEX quoter success matrix (step 4)
-    quoter_matrix: Dict[str, Dict[str, int]] = {}
+    counts = init_quote_counts()
+    quoter_matrix = init_quoter_matrix()
     
     # v2.3.0: Track failed pool addresses for actionable diagnostics
     failed_pool_addresses: List[Dict[str, str]] = []
@@ -1301,72 +704,35 @@ def collect_quotes(
                 )
                 price_str = str(round(float(price_exact), 6))
                 
-                # PRICE_SANITY gate (same as quoter path)
-                price_sanity_enabled = config.get("price_sanity_enabled", True)
-                price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
-                if price_sanity_enabled and anchor_price:
-                    from decimal import Decimal as _Decimal
-                    from core.validators import check_price_sanity
-                    sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
-                        price=_Decimal(str(price_exact)),
-                        anchor_price=_Decimal(str(anchor_price)),
-                        pair=f"{token_in}/{token_out}",
-                        dex_id=dex,
-                        fee_tier=fee_tier,
-                        max_deviation_bps=price_sanity_max_bps,
-                        anchor_source="tokens_anchor_price",
-                        pool_address=pool_addr,
-                    )
-                    if not sanity_passed:
-                        try:
-                            ratio = float(price_exact) / float(anchor_price) if anchor_price else 0.0
-                        except (TypeError, ZeroDivisionError):
-                            ratio = 0.0
-                        
-                        rejected_quotes.append({
-                            "pair": f"{token_in}/{token_out}",
-                            "dex_id": dex,
-                            "fee": fee_tier,
-                            "pool_address": pool_addr,
-                            "reason": "PRICE_SANITY_FAILED",
-                            "gate_passed": False,
-                            "error": sanity_err,
-                            "deviation_bps": sanity_dev_bps,
-                            "anchor_price": str(anchor_price),
-                            "price_exact": str(price_exact),
-                            "price_ratio": round(ratio, 4),
-                            "anchor_source": anchor_source,
-                            "amount_in_wei": amount_in_wei,
-                            "notional_usd_target": target_usd_notional if use_usd_notional else None,
-                            "diagnostics": sanity_diag,
-                        })
-                        counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
-                        counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
-                        if quarantine_enabled:
-                            qm.record_failure(
-                                dex,
-                                f"{token_in}/{token_out}",
-                                fee_tier,
-                                "PRICE_SANITY_FAILED",
-                                details={
-                                    "pool_address": pool_addr,
-                                    "deviation_bps": sanity_dev_bps,
-                                    "anchor_price": str(anchor_price),
-                                    "price_exact": str(price_exact),
-                                },
-                            )
-                        if runtime_disabled_enabled:
-                            auto_disable_pool(
-                                pool_key,
-                                "PRICE_SANITY_FAILED",
-                                {"pool_address": pool_addr, "deviation_bps": sanity_dev_bps},
-                            )
-                        logger.info(
-                            "PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s ratio=%.4f",
-                            dex, token_in, token_out, fee_tier, sanity_dev_bps,
-                            str(anchor_price)[:12], str(price_exact)[:12], ratio
+                # PRICE_SANITY gate (ve33 path — consolidated via quote_policy)
+                _ps_reject = apply_price_sanity_gate(
+                    price_exact=price_exact, anchor_price=anchor_price,
+                    anchor_source="tokens_anchor_price",
+                    pair_tag=f"{token_in}/{token_out}", dex=dex,
+                    fee_tier=fee_tier, pool_addr=pool_addr, config=config,
+                    amount_in_wei=amount_in_wei,
+                    target_usd_notional=target_usd_notional if use_usd_notional else None,
+                )
+                if _ps_reject is not None:
+                    rejected_quotes.append(_ps_reject)
+                    counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                    counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                    if quarantine_enabled:
+                        qm.record_failure(
+                            dex, f"{token_in}/{token_out}", fee_tier,
+                            "PRICE_SANITY_FAILED",
+                            details={"pool_address": pool_addr,
+                                     "deviation_bps": _ps_reject.get("deviation_bps"),
+                                     "anchor_price": str(anchor_price),
+                                     "price_exact": str(price_exact)},
                         )
-                        continue
+                    if runtime_disabled_enabled:
+                        auto_disable_pool(
+                            pool_key, "PRICE_SANITY_FAILED",
+                            {"pool_address": pool_addr,
+                             "deviation_bps": _ps_reject.get("deviation_bps")},
+                        )
+                    continue
                 
                 q = QuoteCompat(
                     dex_id=dex,
@@ -1467,7 +833,7 @@ def collect_quotes(
             
             # v2.8.0: Try to get sqrt_price_x96 from multicall cache for slippage measurement
             # This is the "before" price - quoter gives us "after" price via sqrt_price_after
-            cached_slot0 = _multicall_slot0_cache.get(pool_addr.lower())
+            cached_slot0 = get_cached_slot0(pool_addr)
             if cached_slot0:
                 tick_val, sqrt_price_val = cached_slot0
             
@@ -1522,64 +888,30 @@ def collect_quotes(
                                          {"pool_address": pool_addr, "error": suspect_liquidity_reason})
                     continue  # Skip this quote
                 
-                # v2.1.0: PRICE_SANITY gate (per-quote)
-                price_sanity_enabled = config.get("price_sanity_enabled", True)
-                price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
-                if price_sanity_enabled and anchor_price:
-                    from decimal import Decimal as _Decimal
-                    from core.validators import check_price_sanity
-                    sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
-                        price=_Decimal(str(price_exact)),
-                        anchor_price=_Decimal(str(anchor_price)),
-                        pair=f"{token_in}/{token_out}",
-                        dex_id=dex,
-                        fee_tier=fee_tier,
-                        max_deviation_bps=price_sanity_max_bps,
-                        anchor_source="tokens_anchor_price",
-                        pool_address=pool_addr,
-                    )
-                    if not sanity_passed:
-                        # v2.1.0 Step 8: Enhanced price_sanity reject logging
-                        try:
-                            ratio = float(price_exact) / float(anchor_price) if anchor_price else 0.0
-                        except (TypeError, ZeroDivisionError):
-                            ratio = 0.0
-                        
-                        rejected_quotes.append({
-                            "pair": f"{token_in}/{token_out}",
-                            "dex_id": dex,
-                            "fee": fee_tier,
-                            "pool_address": pool_addr,
-                            "reason": "PRICE_SANITY_FAILED",  # v2.1.0: Match ErrorCode canonical
-                            "gate_passed": False,
-                            "error": sanity_err,
-                            "deviation_bps": sanity_dev_bps,
-                            "anchor_price": str(anchor_price),
-                            "price_exact": str(price_exact),
-                            # v2.1.0 Step 8: Enhanced diagnostics
-                            "price_ratio": round(ratio, 4),
-                            "anchor_source": anchor_source,  # v2.2.0: dynamic or yaml_fallback
-                            "amount_in_wei": amount_in_wei,
-                            "notional_usd_target": target_usd_notional if use_usd_notional else None,
-                            "diagnostics": sanity_diag,
-                        })
-                        counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
-                        counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
-                        # v2.2.2: Record failure for auto-quarantine (same as SUSPECT_LIQUIDITY)
-                        if quarantine_enabled:
-                            qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "PRICE_SANITY_FAILED",
-                                             details={"pool_address": pool_addr, "deviation_bps": sanity_dev_bps,
-                                                      "anchor_price": str(anchor_price), "price_exact": str(price_exact)})
-                        if runtime_disabled_enabled:
-                            auto_disable_pool(pool_key, "PRICE_SANITY_FAILED",
-                                             {"pool_address": pool_addr, "deviation_bps": sanity_dev_bps})
-                        # v2.1.0: Log at INFO level for visibility of price sanity failures
-                        logger.info(
-                            "PRICE_SANITY_FAILED: %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s ratio=%.4f",
-                            dex, token_in, token_out, fee_tier, sanity_dev_bps,
-                            str(anchor_price)[:12], str(price_exact)[:12], ratio
-                        )
-                        continue  # Skip this quote
+                # PRICE_SANITY gate (quoter path — consolidated via quote_policy)
+                _ps_reject = apply_price_sanity_gate(
+                    price_exact=price_exact, anchor_price=anchor_price,
+                    anchor_source="tokens_anchor_price",
+                    pair_tag=f"{token_in}/{token_out}", dex=dex,
+                    fee_tier=fee_tier, pool_addr=pool_addr, config=config,
+                    amount_in_wei=amount_in_wei,
+                    target_usd_notional=target_usd_notional if use_usd_notional else None,
+                )
+                if _ps_reject is not None:
+                    rejected_quotes.append(_ps_reject)
+                    counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                    counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                    if quarantine_enabled:
+                        qm.record_failure(dex, f"{token_in}/{token_out}", fee_tier, "PRICE_SANITY_FAILED",
+                                         details={"pool_address": pool_addr,
+                                                  "deviation_bps": _ps_reject.get("deviation_bps"),
+                                                  "anchor_price": str(anchor_price),
+                                                  "price_exact": str(price_exact)})
+                    if runtime_disabled_enabled:
+                        auto_disable_pool(pool_key, "PRICE_SANITY_FAILED",
+                                         {"pool_address": pool_addr,
+                                          "deviation_bps": _ps_reject.get("deviation_bps")})
+                    continue  # Skip this quote
                 
                 # Build quote directly from quoter data
                 q = QuoteCompat(
@@ -1856,57 +1188,19 @@ def collect_quotes(
             # M4.2: Use USD-notional sizing for amount_in_wei
             amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
             
-            # v2.1.0-fix: PRICE_SANITY gate for slot0 path (parity with quoter path)
-            # Issue #3: slot0 quotes were bypassing PRICE_SANITY check, allowing outliers
-            price_sanity_enabled = config.get("price_sanity_enabled", True)
-            price_sanity_max_bps = config.get("price_sanity_max_deviation_bps", 5000)
-            # R28.18: Use upstream anchor_price from anchor_manager (unified with quoter path).
-            # Previously did independent lookup_anchor_price_ci() which missed anchor_manager
-            # fallbacks — pairs without explicit tokens_anchor_price entry had anchor=None
-            # and silently skipped price_sanity entirely.
-            if price_sanity_enabled and anchor_price and price_exact is not None:
-                from core.validators import check_price_sanity
-                sanity_passed, sanity_dev_bps, sanity_err, sanity_diag = check_price_sanity(
-                    price=Decimal(str(price_exact)),
-                    anchor_price=Decimal(str(anchor_price)),
-                    pair=f"{token_in}/{token_out}",
-                    dex_id=dex,
-                    fee_tier=fee_tier,
-                    max_deviation_bps=price_sanity_max_bps,
-                    anchor_source=anchor_source,
-                    pool_address=pool_addr,
-                )
-                if not sanity_passed:
-                    try:
-                        ratio = float(price_exact) / float(anchor_price) if anchor_price else 0.0
-                    except (TypeError, ZeroDivisionError, OverflowError):
-                        ratio = 0.0
-                    
-                    rejected_quotes.append({
-                        "pair": f"{token_in}/{token_out}",
-                        "dex_id": dex,
-                        "fee": fee_tier,
-                        "pool_address": pool_addr,
-                        "reason": "PRICE_SANITY_FAILED",
-                        "gate_passed": False,
-                        "error": sanity_err,
-                        "deviation_bps": sanity_dev_bps,
-                        "anchor_price": str(anchor_price),
-                        "price_exact": str(price_exact),
-                        "price_ratio": round(ratio, 4) if abs(ratio) < 1e20 else None,
-                        "anchor_source": anchor_source,
-                        "quote_source": "slot0",
-                        "tick": tick_val,
-                        "diagnostics": sanity_diag,
-                    })
-                    counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
-                    counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
-                    logger.info(
-                        "PRICE_SANITY_FAILED (slot0): %s %s/%s fee=%d dev=%d bps anchor=%s observed=%s",
-                        dex, token_in, token_out, fee_tier, sanity_dev_bps,
-                        str(anchor_price)[:12], str(price_exact)[:20]
-                    )
-                    continue
+            # PRICE_SANITY gate (slot0 path — consolidated via quote_policy)
+            _ps_reject = apply_price_sanity_gate(
+                price_exact=price_exact, anchor_price=anchor_price,
+                anchor_source=anchor_source,
+                pair_tag=f"{token_in}/{token_out}", dex=dex,
+                fee_tier=fee_tier, pool_addr=pool_addr, config=config,
+                quote_source="slot0", tick_val=tick_val,
+            )
+            if _ps_reject is not None:
+                rejected_quotes.append(_ps_reject)
+                counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                continue
             
             # M4.2: This path is only reached via slot0 (quoter success continues early above)
             quote_source = "slot0"
@@ -1992,15 +1286,6 @@ def collect_quotes(
             if price_exact is not None and float(price_exact) > 0:
                 am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
     
-    # v2.3.0: Add failed pool addresses to counts for artifact generation
-    counts["failed_pool_addresses"] = failed_pool_addresses
-    
-    # v2.3.1: Add pool_missing_keys for observability (what pools were skipped)
-    # Limit to top 20 to avoid huge artifacts
-    counts["pool_missing_keys"] = pool_missing_keys[:20]
-    counts["pool_missing_keys_total"] = len(pool_missing_keys)
-    
-    # R29: Attach quoter_matrix to counts for artifact propagation
-    counts["quoter_matrix"] = quoter_matrix
+    finalize_quote_counts(counts, failed_pool_addresses, pool_missing_keys, quoter_matrix)
     
     return quotes_sample, rejected_quotes, counts

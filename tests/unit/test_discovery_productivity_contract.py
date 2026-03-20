@@ -165,10 +165,10 @@ class TestEnvFlagEnabledCanonical:
         assert env_flag_enabled("_TEST_FLAG") is False
 
     def test_quotes_uses_canonical(self):
-        """strategy.quotes._env_flag_enabled must be the core.env version."""
-        from strategy.quotes import _env_flag_enabled
+        """strategy.quote_policy uses core.env.env_flag_enabled (moved from quotes.py)."""
+        from strategy.quote_policy import _env_flag_enabled as _flag
         from core.env import env_flag_enabled
-        assert _env_flag_enabled is env_flag_enabled
+        assert _flag is env_flag_enabled
 
     def test_run_scan_real_uses_canonical(self):
         """strategy.jobs.run_scan_real._env_flag_enabled must be the core.env version."""

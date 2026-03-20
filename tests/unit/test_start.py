@@ -2471,18 +2471,18 @@ class TestSharedQuoteExecutor(unittest.TestCase):
 
     def test_shared_executor_singleton(self):
         """_get_shared_quote_executor returns the same instance."""
-        import strategy.quotes as sq
+        import strategy.quote_rpc as qr
         # Reset to ensure clean state
-        sq._shared_quote_executor = None
-        ex1 = sq._get_shared_quote_executor()
-        ex2 = sq._get_shared_quote_executor()
+        qr._shared_quote_executor = None
+        ex1 = qr._get_shared_quote_executor()
+        ex2 = qr._get_shared_quote_executor()
         self.assertIs(ex1, ex2)
         # Clean up
-        sq._shared_quote_executor = None
+        qr._shared_quote_executor = None
 
     def test_shared_concurrency_constant(self):
-        import strategy.quotes as sq
-        self.assertEqual(sq._SHARED_QUOTE_CONCURRENCY, 16)
+        import strategy.quote_rpc as qr
+        self.assertEqual(qr._SHARED_QUOTE_CONCURRENCY, 16)
 
 
 if __name__ == "__main__":

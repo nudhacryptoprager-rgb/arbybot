@@ -1,12 +1,50 @@
 ﻿# Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-20 (R28.30 follow-up — `scan_universe.py` hot-cache integrity + discovery_runtime provenance preserved in hot mode. Funnel normalization and dashboard canonical protocol remain active. 2060 tests PASS.)
-**Tests**: 2060 passed / 3 skipped
+**Updated**: 2026-03-20 (R29 cont'd — `strategy/quotes.py` staged extraction, same-session dashboard verification, fresh 72-run rolling evidence. 2084 tests PASS.)
+**Tests**: 2084 passed / 14 skipped
 **Schema**: start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
 **Evidence runDirs**: R28.30: 10-min scan (60 runs, 6 chains, 660s wall). R28.28: 10-min scan (60 runs). R28.27: cap isolation.
 **Evidence rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
-**Strategy**: Funnel contract normalized: `opp_engine_combinations` replaces misleading `opp_candidates`, `cross_dex_pairs_count` added, 6-stage annotations. Hot cache now writes atomically and preserves discovery_runtime provenance during hot re-quotes. 5 accumulated counters for productivity DoD. Dashboard canonical protocol mandated (dashboard_server + /api/hot). quotes.py (1962 lines) remains next extraction target.
+**Strategy**: Funnel contract normalized: `opp_engine_combinations` replaces misleading `opp_candidates`, `cross_dex_pairs_count` added, 6-stage annotations. Hot cache writes atomically and preserves discovery_runtime provenance during hot re-quotes. Dashboard canonical protocol mandated (`dashboard_server` + `/api/hot`). `strategy/quotes.py` was partially decomposed into `strategy/quote_rpc.py`; the remaining quote-policy split is the next extraction target.
+
+---
+
+## R29 cont'd Quotes RPC Extraction + Same-Session Dashboard Verification
+
+### Code Changes
+1. **strategy/quote_rpc.py** — new low-level quote RPC module: shared web3/executor, multicall cache helpers, `read_slot0_v3`, `read_quoter_v2`, cache clear helpers.
+2. **strategy/quotes.py** — imports extracted low-level helpers from `strategy.quote_rpc`; in-file shared-cache and basic V3 reader code removed. File size reduced from ~2006 to **1658** lines.
+3. **tests/unit/test_start.py** — shared executor contract assertions moved to `strategy.quote_rpc`.
+4. **tests/unit/test_quote_rpc_exports.py** — new compatibility tests protecting exports used by existing scanner code.
+
+### Verification
+- `py -3.11 -m pytest -q` → **2084 passed, 14 skipped**
+- `py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict` → **PASS**
+- Canonical online run: external `dashboard_server` + `start.py --no-dashboard`
+- Same-session `/api/hot` verified: `schema=v1.3`, `is_test_session=false`, `total_runs=72`, `full_sweeps=18`, `hot_requotes=54`
+
+### Fresh 10-min Scan Evidence
+| Metric | Value |
+|--------|-------|
+| Wall time | 647.8s |
+| Total runs | 72 |
+| PASS / NO_DATA / FAIL / INFRA_FAIL | 23 / 10 / 39 / 0 |
+| Included signals | 78 |
+| Roundtrip evaluated | 57 |
+| Profitable RT | 0 |
+| Best RT | -25.38 bps |
+| Pass chains | base, linea |
+| Fail chains | arbitrum_one, zksync, mantle |
+| Accepted fail | scroll |
+
+### Current Blocker Readout
+- **base**: quote-path blocked, but no longer “all quoters dead”; fresh rolling shows `real_quote_count=3`
+- **arbitrum_one**: mixed coverage + economics; `cross_dex_pairs_count=2`, best RT still negative
+- **linea**: strongest clean economics blocker; `real_quote_count=12`, best RT still negative
+- **zksync**: thin-surface economics blocker
+- **mantle**: liquidity/quality blocker with fragile RT path
+- **scroll**: no real RT; candidate-only
 
 ---
 
@@ -192,97 +230,13 @@ R28.24 overclaimed "zero-profit = market efficiency, not infra bug." Lead audit 
 
 ---
 
-## R28.24 Deep Pipeline Analysis + Filter Funnel
-
-### Code Changes (7 files)
-1. **strategy/jobs/run_scan_real.py** — +filter_funnel artifact, config-driven RT caps (max_candidates 20→50, top_n 5→10), +roundtrip_truth_status, +algebra auto-enable quoter_v2
-2. **discovery/quarantine.py** — SUSPECT_LIQUIDITY threshold 2→5
-3. **strategy/runtime_disabled.py** — per-error failure_threshold_overrides (SUSPECT_LIQUIDITY 3→5)
-4. **config/onboard_base_stage2.yaml** — aerodrome ve33 excluded from base
-5. **tests/unit/test_run_scan_real_purity.py** — filter_funnel test coverage
-6. **tests/unit/test_runtime_disabled.py** — per-error override test coverage
-
-### Root Cause: PHANTOM SPREADS
-**Finding**: Slot0 price comparison produces apparent 100-500bps spreads between DEXes. These are NOT executable. QuoterV2 roundtrip re-quote shows GROSS PnL is deeply negative.
-
-**Evidence** (arb truth_report, arb sweep):
-- ARB/USDC: Signal=484bps spread → Sweep@$25: gross=-76.6bps, net=-81.2bps (560bps collapse)
-- WETH/USDT: Sweep best@$25: net=-15.38bps (signal was positive)
-- WETH/RDNT: Sweep @$25: net=-9766.8bps (completely broken pair)
-- 47 spread signals generated, 16 with positive spread_minus_required, but 0 survive roundtrip
-
-**On-chain measured costs** (NOT defaults):
-- l1_cost_wei = 14,460,000,000 (vs default 60e12) — l1_cost_source=onchain
-- gas_price_wei = 20,140,000 (vs default 100M)
-- total_cost ≈ 15-25bps (gas=3-5bps, fee=10bps, slippage=0.5-12bps)
-- **Gas is NOT the blocker. Gross PnL is negative before costs.**
-
-### Per-Chain Status (R28.24 scan: 37 runs, 587s)
-| Chain | pass | fail | no_data | signals | rq | best_rt | blocker |
-|-------|------|------|---------|---------|----|---------|---------|
-| arb | 19 | 12 | 6 | 251 | 70 | -15.38bps | PHANTOM_SPREAD + MARKET_EFFICIENT |
-| linea | — | — | — | — | — | — | NO_DATA (coverage run) |
-| zksync | — | — | — | — | — | — | NO_DATA (coverage run) |
-| base | — | — | — | — | — | — | NO_DATA (coverage run) |
-| mantle | — | — | — | — | — | — | NO_DATA (coverage run) |
-| scroll | — | — | — | — | — | — | NO_DATA (coverage run) |
-
-### Pipeline Funnel (arb, single run)
-```
-235 pool universe
- → 98 quotes fetched (137 failed: slot0 86% fail rate, runtime_disabled=61)
- → 47 spread signals (slot0 comparison)
- → 16 positive spread_minus_required
- → 7 RT candidates (pre-filter: MIN_SPREAD_MINUS=-5.0bps)
- → 0 profitable (LP_FEES_TOO_HIGH=5, NET_PROFIT_TOO_LOW=1, SLIPPAGE_TOO_HIGH=1)
- → 3 sweep routes → 0 viable
-```
-
-### Conclusion
-The scanner infrastructure works correctly. The zero-profit outcome is NOT a code bug — it reflects market efficiency on mature L2 AMM surface. Slot0-based spread signals are unreliable predictors of executable profitability. Options: (1) expand to less-efficient chains/DEXes, (2) pivot to intent-based or cross-chain arb, (3) accept diagnostic-only mode for current surface.
-
----
-
-## R28.23 Lead Config Audit + Regeneration
-
-Lead personally audited and regenerated 8 config files from official sources (FusionX Mantle contracts, Scroll ecosystem docs, iZiSwap deployments). Core finding: "config debt was real and partially fixed — Mantle and Scroll were materially unblocked at config layer, but 0 profitable RT remains because the dominant blockers are now chain-specific economics and quote-path defects, not invalid YAML."
-
-### Config Changes (lead-regenerated)
-1. **config/dexes.yaml** — Added FusionX V3 for mantle (official contracts), Nuri V3 + verified Uniswap V3 for scroll.
-2. **config/onboard_mantle_stage2.yaml** — 3 DEXes (agni_v3, fusionx_v3, stratum), require_cross_dex=true.
-3. **config/onboard_scroll_stage1.yaml** — 3 DEXes (uniswap_v3, sushiswap_v3, nuri_v3), suspect_spread_bps_hard=500.
-4. **config/onboard_base_stage1.yaml** — 3 DEXes, +VIRTUAL(0.68)/WELL(0.0045) R28.23 on-chain medians.
-5. **config/onboard_base_stage2.yaml** — 4 DEXes (with aerodrome), refreshed token prices.
-6. **config/onboard_arbitrum_one_candidate.yaml** — 4 DEXes, 17 token anchors with R28.23 on-chain medians.
-7. **config/onboard_linea_stage1.yaml** — 2 DEXes (pancakeswap_v3, lynex_v3).
-8. **config/onboard_mantle_stage1.yaml** — 1 DEX (agni_v3 only).
-
-### Verification Results (60.5-min bundle, 240 runs)
-| Chain | runs | pass | fail | signals | rq | cdx | best_rt_bps | quality | delta |
-|-------|------|------|------|---------|----|-----|-------------|---------|-------|
-| arb | 40 | 40 | 0 | 1163 | 172 | 8 | -21.19 | SIGNAL_PRODUCING | gap 11.65→10.62 bps |
-| linea | 40 | 40 | 0 | 160 | 160 | 4 | -62.96 | SIGNAL_PRODUCING | 100% pass |
-| zksync | 40 | 40 | 0 | 40 | 80 | 1 | -130.31 | SIGNAL_PRODUCING | stable |
-| base | 40 | 24 | 3 | 50 | 52 | 0 | 0.0 | INFRA_READY | VE33=29 dominant |
-| mantle | 40 | 0 | 35 | 35 | 39 | 1 | n/a | **SIGNAL_PRODUCING** | **0→35 signals (FusionX!)** |
-| scroll | 40 | 1 | 39 | 80 | 0 | 2 | n/a | SIGNAL_PRODUCING | dead pools block RT |
-
-### Per-Chain Blocker RCA
-- **arb** (ECONOMICS): Frontier WETH/ARB @ $25, total_cost=10.38bps, but gross_pnl=-69.8bps. Spread doesn't exist — market efficient.
-- **base** (QUOTE_PATH): VE33_QUOTE_FAILED=29 from aerodrome ve33 adapter. Dominant blocker prevents cross-DEX.
-- **linea** (ECONOMICS): 100% pass, 4 cdx pairs. ALGEBRA_NEEDS_QUOTER=2 genuine (not config).
-- **mantle** (PARTIALLY_UNBLOCKED): FusionX V3 works! agni_v3 works! stratum still broken. 2/3 DEXes active.
-- **scroll** (DIAGNOSTIC): LIQUIDITY_ZERO=20, PRICE_SANITY=12. Dead sushi pools. Living pairs produce signals.
-- **zksync** (ECONOMICS): Narrow surface, 1 cdx pair. best_rt=-130bps.
-
----
-
 ## Historical Rounds (R28.22 and earlier — condensed)
 
 **R28.22 Live-Stream Truth Contract**: is_actionable field, spread_bps non-null, final_net_pnl_usd, dashboard actionable/diagnostic split. Fresh 30 runs verified.
 
 **R28.22-cont Dashboard Operational Coherence**: WORKFLOW.md canonical run contract, stale banner, idle-state messaging. All rolling artifacts synchronized.
 
+**R28.24-R28.23 Deep RCA + Config Regeneration**: Phantom spread analysis, filter funnel, 8 config regenerations, chain-specific RCA. Detailed evidence preserved in git history and superseded by R29/R29 cont'd current-state sections above.
 **R28.22-cont-2 Per-Chain Targeted Fixes**: +14 tokens NO_USD_PRICE, zombie quarantine fix, 97.7-min bundle (406 runs). base 0→54 signals. mantle structural confirmed. arb slippage 500-9900 bps.
 
 **R28.21-final Code Fixes**: Multicall batch chunking (arb 64.6s→32.4s), roundtrip contamination fix (SANE_RT_PNL_MIN=-500), +11 USD token prices, Algebra quoter timeout 10s→5s.
@@ -406,54 +360,11 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Exit Codes
+## Current Blockers (R29 cont'd)
 
-| Code | Meaning |
-|------|---------|
-| 0 | PASS |
-| 1 | FAIL validation |
-| 2 | FAIL missing artifacts |
-| 3 | FAIL scanner error |
-
----
-
-## Schema Versions
-
-| Artifact | Version | Notes |
-|----------|---------|-------|
-| scan | `3.2.0` | M5 family |
-| truth_report | `3.2.0` | M5 family |
-| reject_histogram | `3.2.0` | reject samples (not aggregated counts) |
-| long_scan_summary | `LATEST` | R26: run_context provenance + frontier triage fields |
-
----
-
-## Files Reference
-
-| File | Purpose |
-|------|---------|
-| `scripts/ci_m5_0_gate.py` | M5_0 acceptance gate |
-| `scripts/ci_full_pipeline.py` | Full CI pipeline |
-| `core/artifact_invariants.py` | Cross-artifact validation |
-| `start.py` | Multi-chain orchestrator |
-
----
-
-## Relationship to M5/M4
-
-| Milestone | Focus | Gate |
-|-----------|-------|------|
-| M5_0 | Infrastructure hardening | `ci_m5_0_gate.py` |
-| M5 | Production features | `ci_m5_gate.py` |
-| M4 | Execution layer | `ci_m4_execution_gate.py` |
-
----
-
-## Current Blockers (R28.25)
-
-- **All chains**: executable_profitable=0. No chain qualifies as positive control. R28.25 filter reforms pending verification.
-- **Arb**: FILTER_FUNNEL (73% quote loss) + ECONOMICS (gap=15.38bps, phantom spreads). Suppression reformed.
-- **Linea/zksync**: ECONOMICS (best_net=-65.75/-148.14 bps). Config aligned to 150 USD / 5 bps.
-- **Base**: NO_DATA (aerodrome excluded, ve33 incompatible with slot0).
-- **Mantle**: STRUCTURAL (stratum broken, SUSPECT_LIQUIDITY dominant). Probation mode may help.
-- **Scroll**: DEAD_POOLS (accepted_fail=true).
+- **All chains**: `profitable_roundtrips=0`; no positive control exists on fresh same-session evidence.
+- **Arb**: mixed coverage + economics. `cross_dex_pairs_count=2`, `best_roundtrip_net_bps=-25.38`.
+- **Base**: quote-path blocked. `cross_dex_pairs_count=15`, `real_quote_count=3`, but still no executable spread frontier.
+- **Linea**: cleanest economics blocker. `real_quote_count=12`, best RT still negative.
+- **Mantle**: liquidity/quality blocker. Surface exists but is fragile and still non-profitable.
+- **Scroll**: candidate-only. `real_quote_count=0`, no RT path yet.

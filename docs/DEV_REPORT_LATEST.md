@@ -6,74 +6,92 @@
 ## Stage Context
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
-**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R29: QUOTER_V2_FAILED structured reject, per-DEX quoter_matrix, executable/diagnostic split. 2076 tests PASS.
+**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R29 cont'd: staged `strategy/quotes.py` extraction, same-session dashboard verification, fresh 72-run rolling evidence. 2084 tests PASS.
 
-## SESSION GOAL (R29 cont'd: Lead Audit Stesp 2-4 — Structured Quoter Observability)
-**Goal**: Add QUOTER_V2_FAILED reject (visible in reject_histogram), per-DEX quoter_matrix artifact, split Stage-2 metrics into executable/diagnostic. Correct per-chain blocker classification per lead audit.
-**Prior (R29)**: Pair-level E2E replay infrastructure, 72-run 6-chain diagnostic scan, per-chain RCA. 2071 tests.
+## SESSION GOAL (R29 cont'd: quotes.py staged extraction + same-session dashboard evidence)
+**Goal**: Audit `setting_timlid.md`, review `strategy/quotes.py`, safely split low-level RPC/cache responsibilities out of the god-file, and verify the scanner end-to-end in canonical dashboard mode with fresh rolling evidence.
+**Prior (R29)**: Pair-level E2E replay infrastructure, QUOTER_V2_FAILED reject, per-DEX quoter_matrix artifact, executable/diagnostic split.
 
 ## 0) Meta
-timestamp_utc: 2026-03-20T10:30:00Z
-run_dir_name: long_scan (72 runs, 6 chains, 620s wall)
-mode: LEAD_AUDIT_STEPS_2_4 (R29 cont'd)
-test_count: 2076 passed, 3 skipped
+timestamp_utc: 2026-03-20T11:06:10.764758Z
+run_dir_name: ci_m5_gate_arbitrum_one_20260320_120555_227055 (primary rolling) + long_scan (72 runs, 6 chains, 647.8s wall)
+mode: LEAD_AUDIT_QUOTES_EXTRACTION (R29 cont'd)
+test_count: 2084 passed, 14 skipped
 schema_version: m4:run_summary:v2.0
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R29 cont'd: QUOTER_V2_FAILED structured reject, quoter_matrix, executable/diagnostic split, correct blocker taxonomy |
+| session_goal | R29 cont'd: staged quotes.py extraction + same-session dashboard/rolling verification |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | steps 5-6 (base quoter probe, arb coverage audit) deferred to next session — require live RPC |
-| evidence_session_run_dirs | code-only session; uses prior 72-run evidence |
-| primary_blocker_of_session | Quoter failures invisible in reject_histogram; Stage-2 conflates executable/diagnostic |
-| blocker_status_before | ACTIVE: quoter_v2 failures hidden behind silent slot0 fallback |
-| blocker_status_after | RESOLVED: QUOTER_V2_FAILED reject emitted, quoter_matrix tracks per-DEX success/fail/diagnostic |
-| start_metric | 0 QUOTER_V2_FAILED in reject_histogram; quotes_fetched=59 on base (misleading) |
-| end_metric | QUOTER_V2_FAILED reject visible; quotes_fetched_executable/diagnostic split; quoter_matrix per-DEX |
-| delta | +5 tests (2076 total), 3 files modified, 1 new test file |
+| remaining_blockers | base quote-path, arb mixed coverage/economics, linea/zksync economics, mantle liquidity-quality, scroll no real RT |
+| evidence_session_run_dirs | data/runs/ci_m5_gate_arbitrum_one_20260320_120652_022118, data/runs/ci_m5_gate_zksync_20260320_120710_487428, data/runs/ci_m5_gate_base_20260320_120714_572504, data/runs/ci_m5_gate_mantle_20260320_120719_371191, data/runs/ci_m5_gate_linea_20260320_120731_538504, data/runs/ci_m5_gate_scroll_20260320_120739_677712 |
+| primary_blocker_of_session | `strategy/quotes.py` had re-accumulated low-level RPC/cache responsibilities and hid the next isolation target inside a 2k-line file |
+| blocker_status_before | ACTIVE: quotes.py ~2000 lines, low-level v3/shared-cache helpers embedded in the same file as quote policy/orchestration |
+| blocker_status_after | PARTIAL: extracted low-level shared RPC/cache helpers into `strategy/quote_rpc.py`; quotes.py reduced to 1658 lines, but adapter/policy split still pending |
+| start_metric | `strategy/quotes.py` ~2006 lines, no dedicated low-level quote RPC module, same-session dashboard evidence stale |
+| end_metric | `strategy/quotes.py` 1658 lines, `strategy/quote_rpc.py` 233 lines, same-session `/api/hot` snapshot aligned with `long_scan_latest.json` |
+| delta | +2 files touched in code + 2 tests updated/added; full pytest 2084/14; fresh 72-run online evidence |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 — R29 cont'd: Lead audit steps 2-4 (structured quoter observability)
+goal (Roadmap): M5_0/M4 — R29 cont'd: staged quotes.py extraction + same-session dashboard verification
 change_summary:
-  - MODIFIED: `strategy/quotes.py` — QUOTER_V2_FAILED reject for non-algebra V3 when quoter fails (informational, slot0 still executes); quoter_matrix per-DEX tracking; counts propagation
-  - MODIFIED: `strategy/jobs/run_scan_real.py` — quotes_fetched_executable/diagnostic split; quoter_v2_failed_count; quoter_matrix propagation to stats
-  - NEW: `tests/unit/test_quoter_v2_failed_reject.py` — 5 tests (reject emission, fallback contract, matrix tracking, source inspection)
-  - CORRECTED: Blocker classification per lead audit (base=quote-path blocked, NOT "all 3 quoters dead"; arb=mixed coverage+economics; linea=true economics; scroll=economics gap; mantle=liquidity/quality; zksync=thin-market)
+  - NEW: `strategy/quote_rpc.py` — extracted shared web3/executor, multicall caches, slot0/quoter_v2 readers
+  - MODIFIED: `strategy/quotes.py` — imports low-level helpers from `strategy.quote_rpc`, removes duplicated low-level v3/shared-cache logic, keeps policy/adapters in place
+  - MODIFIED: `tests/unit/test_start.py` — shared quote executor assertions moved to `strategy.quote_rpc`
+  - NEW: `tests/unit/test_quote_rpc_exports.py` — export compatibility tests for extracted helpers
+  - VERIFIED: canonical mode = `dashboard_server` + `start.py --no-dashboard`; `/api/hot` same-session with rolling `long_scan_latest.json`
 touched_files:
-  - strategy/quotes.py (MODIFIED — QUOTER_V2_FAILED reject + quoter_matrix)
-  - strategy/jobs/run_scan_real.py (MODIFIED — executable/diagnostic split + quoter_matrix)
-  - tests/unit/test_quoter_v2_failed_reject.py (NEW — 5 tests)
-  - docs/DEV_REPORT_LATEST.md (MODIFIED — corrected blocker classification)
+  - strategy/quote_rpc.py (NEW — low-level quote RPC/cache helpers)
+  - strategy/quotes.py (MODIFIED — partial staged extraction)
+  - tests/unit/test_start.py (MODIFIED — shared executor test target moved)
+  - tests/unit/test_quote_rpc_exports.py (NEW — compatibility tests)
+  - docs/DEV_REPORT_LATEST.md (MODIFIED — fresh same-session evidence)
 
 ## 2) Commands Executed
 
 ```
-py -3.11 -m pytest tests/unit -q: PASS (2071 passed, 3 skipped)
-py -3.11 -m monitoring.dashboard_server --port 8099: RUNNING
-py -3.11 start.py --config-list (6 chains) --hours 0.17 --no-dashboard: PASS (72 runs, 620s wall)
-py -3.11 scripts/pair_level_rca.py --run-dir <per-chain>: RCA for all 6 chains
+py -3.11 -m pytest tests/unit/test_quote_rpc_exports.py tests/unit/test_quoter_v2_failed_reject.py tests/unit/test_quoter_canonical.py tests/unit/test_start.py -q: PASS (165 passed)
+py -3.11 -m pytest -q: PASS (2084 passed, 14 skipped)
+py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS
+py -3.11 -m monitoring.dashboard_server --port 8099: RUNNING (same-session proof server)
+py -3.11 start.py --config-list (6 chains) --hours 0.17 --no-dashboard: PASS (72 runs, 647.8s wall, 0 infra_fail)
+Invoke-RestMethod http://127.0.0.1:8099/api/hot: PASS (schema=v1.3, same-session, is_test_session=false)
 ```
 
 ## 3) Artifacts Attached
 rolling: data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}
 runs_in_window: 200+
 
-### 10-min Verification Scan (R29 — with pair_funnel_trace)
+### 10-min Verification Scan (R29 cont'd — staged quotes.py extraction + same-session dashboard)
 ```
-Wall time:      620s
-Total runs:     72  (PASS=25  NO_DATA=7  FAIL=40  INFRA_FAIL=0)
-Signals total:  77
-Profitable RTs: 0  (evaluated: 53, best: -22.38 bps)
-Spread gap:     +20.28 bps
+Wall time:      647.8s
+Total runs:     72  (PASS=23  NO_DATA=10  FAIL=39  INFRA_FAIL=0)
+Signals total:  78
+Profitable RTs: 0  (evaluated: 57, best: -25.38 bps)
+Spread gap:     +16.06 bps sweep / +20.28 bps measured spread gap
 Chains:         arbitrum_one, zksync, base, mantle, linea, scroll
-Pass chains:    linea
-Fail chains:    arbitrum_one, zksync, base, mantle
+Pass chains:    base, linea
+Fail chains:    arbitrum_one, zksync, mantle
 Accepted fail:  scroll
 ```
+
+### Extraction Result
+| File | Before | After | Delta |
+|------|--------|-------|-------|
+| `strategy/quotes.py` | ~2006 lines | 1658 lines | -348 |
+| `strategy/quote_rpc.py` | 0 | 233 lines | +233 |
+| `strategy/jobs/run_scan_real.py` | unchanged this session | 1425 lines | orchestration spine preserved |
+
+### Fresh same-session dashboard evidence
+- `hot_loop_latest.json` `run_timestamp=2026-03-20T11:07:45Z`
+- `session_summary_file=data/runs/_rolling/long_scan_latest.json`
+- `total_runs=72`, `total_full_sweeps=18`, `total_hot_requotes=54`
+- `is_test_session=false`
+- `/api/hot` therefore matches the same canonical online run and is valid RCA evidence
 
 ## 4) Key Results: Pair-Level E2E Replay Infrastructure
 

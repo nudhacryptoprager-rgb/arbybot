@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-20 (R28.30 follow-up — `scan_universe.py` hot-cache integrity fixed, hot cycles preserve discovery_runtime provenance, dashboard protocol remains canonical. 2060 tests PASS.)  
+**Updated**: 2026-03-20 (R29 cont'd — staged `strategy/quotes.py` extraction validated, same-session dashboard verification complete, 72-run canonical scan preserved rolling coherence. 2084 tests PASS.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. **R28.30 follow-up**: hot-mode provenance now survives re-quotes, so Stage-1 cross-DEX counts remain visible in rolling artifacts during hot cycles.  
-**Primary blocker**: Market efficiency (0 profitable RT) + discovery-runtime dependency + signal-loss stages documented per-chain. Hot-cache integrity blocker is resolved; quotes.py 1962 lines = next extraction target.
+**Primary blocker**: No single blocker. `linea/zksync` now look economics-blocked, but `base` remains quote-path blocked, `arb` still loses surface before roundtrip truth, `mantle` is liquidity/quality-limited, and `scroll` still has no real RT path. `strategy/quotes.py` remains the next extraction target even after partial split to `strategy/quote_rpc.py`.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
@@ -28,7 +28,7 @@
 
 ---
 
-> [!] **ROLLING STABILITY (2026-03-19 R28.29)**: Lead audit — dedup fixes, discovery productivity contract (39 new tests). Onboarding configs: TOKENS=0/PAIRS=0 → runtime-dependent. quotes.py 1882 lines = next god-file. 2056 tests PASS.
+> [!] **ROLLING STABILITY (2026-03-20 R29 cont'd)**: staged `quotes.py` extraction landed (`quote_rpc.py` added; `quotes.py` 2006→1658). Same-session canonical run: 72 runs / 647.8s / 78 included signals / 57 RT evaluated / 0 profitable RT. `/api/hot` matched `long_scan_latest.json` in the same session.
 > R28.28: God-file extraction: run_scan_real.py 1724→1371 lines, 5 modules, 38 tests. 2017 PASS.
 > R28.27: Cap isolation toggles + same-DEX override + diagnostics + 4 chain fixes. 1979 tests.
 > R28.22-cont-2: Per-chain NO_USD_PRICE fixes (+14 tokens), zombie quarantine fix, 97.7-min bundle (406 runs). base 0→54 signals.
