@@ -893,7 +893,10 @@ def collect_quotes(
         "no_onchain_price": 0,
         "no_usd_price": 0,      # v3.2.20: Viability filter - no USD price for token_in
         "algebra_needs_quoter": 0,
+        "quoter_v2_failed": 0,  # R29: V3 quoter call failed, fell back to slot0
     }
+    # R29: Per-DEX quoter success matrix (step 4)
+    quoter_matrix: Dict[str, Dict[str, int]] = {}
     
     # v2.3.0: Track failed pool addresses for actionable diagnostics
     failed_pool_addresses: List[Dict[str, str]] = []
@@ -1453,6 +1456,15 @@ def collect_quotes(
             tick_val, sqrt_price_val = None, None
             quoter_success = quoter_result and quoter_result.get("amount_out", 0) > 0
             
+            # R29: Track per-DEX quoter success/failure for quoter_matrix artifact
+            if use_quoter_for_dex and dex_cfg and dex_cfg.get_quoter_address():
+                mx_key = f"{dex}:{fee_tier}"
+                if mx_key not in quoter_matrix:
+                    quoter_matrix[mx_key] = {"dex": dex, "fee": fee_tier, "attempted": 0, "quoter_success": 0, "slot0_fallback": 0, "diagnostic_only": 0}
+                quoter_matrix[mx_key]["attempted"] += 1
+                if quoter_success:
+                    quoter_matrix[mx_key]["quoter_success"] += 1
+            
             # v2.8.0: Try to get sqrt_price_x96 from multicall cache for slippage measurement
             # This is the "before" price - quoter gives us "after" price via sqrt_price_after
             cached_slot0 = _multicall_slot0_cache.get(pool_addr.lower())
@@ -1658,6 +1670,31 @@ def collect_quotes(
                 logger.info("ALGEBRA_QUOTER_FAILED: %s %s/%s fee=%d: %s", 
                            dex, token_in, token_out, fee_tier, reject_error)
                 continue
+            
+            # R29: Emit QUOTER_V2_FAILED reject for non-algebra V3 DEXes when quoter
+            # was attempted but failed. This is INFORMATIONAL — we still fall through
+            # to slot0 path below. Makes quoter failures visible in reject_histogram.
+            if use_quoter_for_dex and not quoter_success and is_v3_dex and not is_algebra:
+                quoter_addr = dex_cfg.get_quoter_address() if dex_cfg else None
+                rejected_quotes.append({
+                    "pair": f"{token_in}/{token_out}",
+                    "dex_id": dex,
+                    "fee": fee_tier,
+                    "pool_address": pool_addr,
+                    "reason": "QUOTER_V2_FAILED",
+                    "gate_passed": False,
+                    "error": f"QuoterV2 failed, falling back to slot0 diagnostic (quoter={quoter_addr[:16] + '...' if quoter_addr else 'NONE'})",
+                    "quoter_configured": bool(quoter_addr),
+                    "quoter_result": quoter_result,
+                    "fallback": "slot0_diagnostic",
+                })
+                counts["quoter_v2_failed"] = counts.get("quoter_v2_failed", 0) + 1
+                mx_key = f"{dex}:{fee_tier}"
+                if mx_key in quoter_matrix:
+                    quoter_matrix[mx_key]["slot0_fallback"] += 1
+                logger.info("QUOTER_V2_FAILED: %s %s/%s fee=%d pool=%s → slot0 fallback",
+                           dex, token_in, token_out, fee_tier, pool_addr)
+                # Do NOT continue — fall through to slot0 path below
             
             # Path B: slot0 fallback — DIAGNOSTIC CHANNEL only (R28)
             # slot0 reads are NOT executable quotes; they provide price reference
@@ -1935,6 +1972,10 @@ def collect_quotes(
             if truth_mode and quote_source == "slot0":
                 q_dict["is_diagnostic_only"] = True
                 q_dict["diagnostic_reason"] = "SLOT0_DIAGNOSTIC"
+                # R29: Track in quoter_matrix
+                mx_key = f"{dex}:{fee_tier}"
+                if mx_key in quoter_matrix:
+                    quoter_matrix[mx_key]["diagnostic_only"] += 1
                 logger.debug(
                     "SLOT0_DIAGNOSTIC: %s %s/%s (truth_mode requires quoter for executable quotes)",
                     dex, token_in, token_out
@@ -1958,5 +1999,8 @@ def collect_quotes(
     # Limit to top 20 to avoid huge artifacts
     counts["pool_missing_keys"] = pool_missing_keys[:20]
     counts["pool_missing_keys_total"] = len(pool_missing_keys)
+    
+    # R29: Attach quoter_matrix to counts for artifact propagation
+    counts["quoter_matrix"] = quoter_matrix
     
     return quotes_sample, rejected_quotes, counts

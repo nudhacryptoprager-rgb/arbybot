@@ -6,53 +6,48 @@
 ## Stage Context
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
-**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R29: Pair-level end-to-end replay infrastructure built, per-chain RCA completed. 2071 tests PASS.
+**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R29: QUOTER_V2_FAILED structured reject, per-DEX quoter_matrix, executable/diagnostic split. 2076 tests PASS.
 
-## SESSION GOAL (R29: Pair-Level E2E Replay)
-**Goal**: Build pair-level funnel trace artifact, counterfactual replay harness, and per-chain economics decomposition. Shift from broad scanning to targeted pair-level diagnostics.
-**Prior (R28.30)**: Fixed cross_dex_pairs_count fallback; normalized filter funnel; dashboard protocol. 2061 tests.
+## SESSION GOAL (R29 cont'd: Lead Audit Stesp 2-4 — Structured Quoter Observability)
+**Goal**: Add QUOTER_V2_FAILED reject (visible in reject_histogram), per-DEX quoter_matrix artifact, split Stage-2 metrics into executable/diagnostic. Correct per-chain blocker classification per lead audit.
+**Prior (R29)**: Pair-level E2E replay infrastructure, 72-run 6-chain diagnostic scan, per-chain RCA. 2071 tests.
 
 ## 0) Meta
-timestamp_utc: 2026-03-20T09:42:41Z
+timestamp_utc: 2026-03-20T10:30:00Z
 run_dir_name: long_scan (72 runs, 6 chains, 620s wall)
-mode: PAIR_LEVEL_E2E_REPLAY (R29)
-test_count: 2071 passed, 3 skipped
+mode: LEAD_AUDIT_STEPS_2_4 (R29 cont'd)
+test_count: 2076 passed, 3 skipped
 schema_version: m4:run_summary:v2.0
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R29: Build pair-level funnel trace, counterfactual replay, per-chain RCA with economics decomposition |
+| session_goal | R29 cont'd: QUOTER_V2_FAILED structured reject, quoter_matrix, executable/diagnostic split, correct blocker taxonomy |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | none — all 10 lead steps addressed (steps 4/8 deferred to next session with rationale) |
-| evidence_session_run_dirs | 72 runs across 6 chains in long_scan; per-chain runDirs with pair_funnel_trace embedded |
-| primary_blocker_of_session | No pair-level visibility into where candidates die in the pipeline |
-| blocker_status_before | ACTIVE: no per-pair trace artifact, no way to isolate gate-by-gate losses |
-| blocker_status_after | RESOLVED: pair_funnel_trace in every truth_report, scripts/pair_level_rca.py for post-hoc analysis |
-| start_metric | 0 pair-level trace data in any artifact |
-| end_metric | pair_funnel_trace in all 72 truth_reports; RCA completed for all 6 chains |
-| delta | +10 tests, 2 new files, 2 modified files |
+| remaining_blockers | steps 5-6 (base quoter probe, arb coverage audit) deferred to next session — require live RPC |
+| evidence_session_run_dirs | code-only session; uses prior 72-run evidence |
+| primary_blocker_of_session | Quoter failures invisible in reject_histogram; Stage-2 conflates executable/diagnostic |
+| blocker_status_before | ACTIVE: quoter_v2 failures hidden behind silent slot0 fallback |
+| blocker_status_after | RESOLVED: QUOTER_V2_FAILED reject emitted, quoter_matrix tracks per-DEX success/fail/diagnostic |
+| start_metric | 0 QUOTER_V2_FAILED in reject_histogram; quotes_fetched=59 on base (misleading) |
+| end_metric | QUOTER_V2_FAILED reject visible; quotes_fetched_executable/diagnostic split; quoter_matrix per-DEX |
+| delta | +5 tests (2076 total), 3 files modified, 1 new test file |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 — R29: Lead audit directive (pair-level E2E replay, economics decomposition)
+goal (Roadmap): M5_0/M4 — R29 cont'd: Lead audit steps 2-4 (structured quoter observability)
 change_summary:
-  - NEW: `strategy/pair_trace.py` — extracted pair-level funnel trace builder (per-pair: resolved→quoted→signal→opp→rt_candidate→rt_eval→rt_profitable)
-  - NEW: `tests/unit/test_pair_trace.py` — 10 tests covering all pipeline stages
-  - NEW: `scripts/pair_level_rca.py` — post-hoc RCA tool (funnel summary, economics decomposition, counterfactual analysis)
-  - MODIFIED: `strategy/jobs/run_scan_real.py` — calls `build_pair_funnel_trace()` after filter_funnel
-  - MODIFIED: `strategy/artifacts.py` — propagates `pair_funnel_trace` to truth_report
-  - ROOT CAUSE FOUND: Base 96% diagnostic-only quotes (quoter_v2 RPC failures → slot0 fallback)
-  - ROOT CAUSE FOUND: Scroll economics gap (-271 bps) not LP gate bug
-  - ROOT CAUSE FOUND: Mantle 73% SUSPECT_LIQUIDITY rejection rate
+  - MODIFIED: `strategy/quotes.py` — QUOTER_V2_FAILED reject for non-algebra V3 when quoter fails (informational, slot0 still executes); quoter_matrix per-DEX tracking; counts propagation
+  - MODIFIED: `strategy/jobs/run_scan_real.py` — quotes_fetched_executable/diagnostic split; quoter_v2_failed_count; quoter_matrix propagation to stats
+  - NEW: `tests/unit/test_quoter_v2_failed_reject.py` — 5 tests (reject emission, fallback contract, matrix tracking, source inspection)
+  - CORRECTED: Blocker classification per lead audit (base=quote-path blocked, NOT "all 3 quoters dead"; arb=mixed coverage+economics; linea=true economics; scroll=economics gap; mantle=liquidity/quality; zksync=thin-market)
 touched_files:
-  - strategy/pair_trace.py (NEW — 165 lines)
-  - tests/unit/test_pair_trace.py (NEW — 10 tests)
-  - scripts/pair_level_rca.py (NEW — RCA analysis tool)
-  - strategy/jobs/run_scan_real.py (MODIFIED — pair trace integration)
-  - strategy/artifacts.py (MODIFIED — truth_report propagation)
+  - strategy/quotes.py (MODIFIED — QUOTER_V2_FAILED reject + quoter_matrix)
+  - strategy/jobs/run_scan_real.py (MODIFIED — executable/diagnostic split + quoter_matrix)
+  - tests/unit/test_quoter_v2_failed_reject.py (NEW — 5 tests)
+  - docs/DEV_REPORT_LATEST.md (MODIFIED — corrected blocker classification)
 
 ## 2) Commands Executed
 
@@ -150,40 +145,51 @@ rolling discipline (3+1 files): OK
 provenance contract: OK (run_timestamp only)
 runtime artifacts not committed: OK
 
-## 6) Blocker Classification
+## 6) Blocker Classification (corrected per Lead R29 audit)
 
+### Per-chain blocker taxonomy (R29 — lead-corrected)
+| Chain | Verdict | Primary Blocker | Detail |
+|-------|---------|----------------|--------|
+| base | **QUOTE-PATH BLOCKED** | quoter_v2 RPC failure | 96% diagnostic-only; 2 real quotes (not "all 3 quoters dead" — corrected). QUOTER_V2_FAILED now visible in reject_histogram |
+| arbitrum_one | **MIXED: coverage + economics** | 32/36 pairs pool-missing on 2nd DEX; 2 viable pairs have gross<0 | Only WBTC/USDC, WETH/USDC reach cross-DEX; gas=266 bps dominates |
+| linea | **TRUE ECONOMICS BLOCKER** | slippage=208 bps on best RT | Reference chain — quoter works, pools resolve, data quality good. Economics genuinely tight |
+| scroll | **ECONOMICS GAP** | gross=25 vs required=296 bps | Not LP gate bug. Pure economics gap (-271 bps). Low pair count |
+| mantle | **LIQUIDITY/QUALITY BLOCKER** | 73% SUSPECT_LIQUIDITY rejection | Liquidity desert; even surviving quotes have 4107 bps slippage |
+| zksync | **THIN-MARKET ECONOMICS** | 1 pair at RT, -448 bps | Thin market, limited DEX coverage, slippage=1064 bps |
+
+### Summary blockers
 ```
-code_blocker: NONE (2071 tests PASS)
-base_quoter_blocker: HIGH (96% diagnostic — quoter_v2 RPC failing for all 3 base DEXes)
+code_blocker: NONE (2076 tests PASS)
+base_quoter_blocker: HIGH (96% diagnostic — now tracked via QUOTER_V2_FAILED reject + quoter_matrix)
 economics_blocker: HIGH (best real RT: -24 bps arb, -142 bps linea)
 slippage_blocker: HIGH (dominates on mantle 4107 bps, zksync 1064 bps, linea 208 bps)
 gas_blocker: MEDIUM (arb 266 bps on WBTC/USDC, linea 10 bps)
 liquidity_blocker: HIGH (mantle 73% SUSPECT_LIQUIDITY)
 execution_blocker: HIGH (dormant — no signer, simulate_only)
-god_file_blocker: PARTIAL (quotes.py: 1962 lines — deferred)
+god_file_blocker: PARTIAL (quotes.py: ~2000 lines — staged extraction per lead step 1)
 ```
 
-## 7) Lead's R29 Audit Directive: Execution Map
-step_01: **DONE** — Same-session diagnostic bundle: 72 runs with embedded pair_funnel_trace
-step_02: **DONE** — Pair-level funnel trace artifact: strategy/pair_trace.py + truth_report integration
-step_03: **DONE** — Counterfactual replay harness: scripts/pair_level_rca.py
-step_04: **DEFERRED** — External truth probe for near-profit pairs (requires separate quoter verification script)
-step_05: **DONE** — Base spread-formation audit: ROOT CAUSE = quoter_v2 RPC failure → 96% slot0/diagnostic
-step_06: **DONE** — Scroll LP gate replay: NOT a gate bug, economics gap = -271 bps (25 spread vs 296 required)
-step_07: **DONE** — Mantle quote-quality census: 73% SUSPECT_LIQUIDITY, 4107 bps slippage on WMNT/USDT
-step_08: **DEFERRED** — quotes.py staged extraction (1962 lines → next session)
-step_09: **DONE** — Economics decomposition: gas/slippage/LP breakdown per chain
-step_10: **DONE** — Docs updated with fresh evidence
+## 7) Lead's R29 Audit Directive: Execution Map (continued)
+step_01: **NOTED** — quotes.py staged extraction (lead: "only by responsibility", deferred to dedicated session)
+step_02: **DONE** — QUOTER_V2_FAILED structured reject in reject_histogram (informational, slot0 still executes)
+step_03: **DONE** — Split quotes_fetched → quotes_fetched_executable + quotes_fetched_diagnostic in scan stats
+step_04: **DONE** — Per-DEX quoter_matrix artifact (attempted/quoter_success/slot0_fallback/diagnostic_only per dex:fee)
+step_05: **DEFERRED** — Base quoter probe on AERO/USDC, WETH/AERO, CBBTC/USDC, CBBTC/WETH (requires live RPC)
+step_06: **DEFERRED** — Arb coverage audit on 32 pairs never reaching quote stage (requires run analysis)
+step_07: **NOTED** — Linea = reference economics-control chain (correct, no action needed)
+step_08: **NOTED** — Scroll/mantle treatment (scroll=economics gap, mantle=liquidity desert)
+step_09: **DEFERRED** — Same-session clean E2E with unpolluted hot-loop evidence
+step_10: **DONE** — Blocker classification corrected per lead taxonomy
 
-## 8) Root Causes Discovered (R29)
-1. **Base diagnostic-only quotes**: ALL quoter_v2 RPC calls failing on base → slot0 fallback → truth_mode filters these out → 0 signals. Fix: verify quoter contract addresses on basescan, test with direct eth.call().
+## 8) Root Causes Discovered (R29, corrected per lead audit)
+1. **Base quote-path blocked** (corrected): QuoterV2 RPC calls failing on base → 96% slot0 diagnostic. NOT "all 3 quoters fully dead" — 2 real quotes exist (RETH/WETH, USDC/USDT). Quoter is severely degraded, not completely absent. Now tracked via QUOTER_V2_FAILED reject + quoter_matrix.
 2. **Scroll NOT LP gate**: Spread (25 bps) vs required (296 bps = 60 LP + 231 slippage + 5 gas). Pure economics gap, not misconfiguration.
 3. **Mantle liquidity desert**: 73% of 41 quote attempts fail SUSPECT_LIQUIDITY. Even the 1 RT candidate has 4107 bps slippage. Not viable for arb.
 4. **Linea suspect accounting**: WSTETH/WETH (+4577) and WEETH/WETH (+1682) marked profitable but leg2_is_real=false. Properly filtered as SUSPECT_ACCOUNTING.
 5. **Arb pool resolution gap**: 32/36 pairs never get quotes — missing pools on second DEX. Only 2 pairs have cross-DEX potential.
 
 ## 9) What I need from Lead now
-1. **Base quoter_v2 fix**: Verify 3 quoter contract addresses on basescan. If valid, diagnose RPC failure (function selector? encoding? rate limit?). This is the #1 unblock for base.
-2. **Slippage model audit**: Slippage dominates on ALL chains (208-4107 bps). Is the slippage model (`effective_slippage_bps`) overestimating? Or is this market reality?
-3. **Arb pair coverage**: Only 4/36 pairs get real quotes. Should we expand DEX registry (camelot, zyberswap) or focus on the 2 viable pairs?
-4. **quotes.py extraction plan**: 1962 lines — lead to prescribe extraction targets for next session.
+1. **Base quoter probe** (step 5): Run targeted live scan on base with AERO/USDC, WETH/AERO, CBBTC/USDC, CBBTC/WETH. The new QUOTER_V2_FAILED rejects + quoter_matrix will show exactly which quoter calls fail.
+2. **Arb coverage audit** (step 6): Analyze the 32/36 arb pairs that never reach quote stage — is this DEX registry gaps or pool resolution?
+3. **Same-session clean E2E** (step 9): Dashboard on 8099, start.py --no-dashboard, immediate /api/hot capture, verify hot_loop_latest.json is unpolluted.
+4. **quotes.py extraction plan** (step 1): Lead to prescribe extraction targets ("only by responsibility") for dedicated session.

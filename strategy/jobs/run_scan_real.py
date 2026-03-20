@@ -328,10 +328,17 @@ def run_scan(
     # R28.5: Multicall batch stats for performance observability
     if counts.get("multicall_stats"):
         stats["multicall_stats"] = counts["multicall_stats"]
+    # R29: Per-DEX quoter success matrix for quoter health observability
+    if counts.get("quoter_matrix"):
+        stats["quoter_matrix"] = counts["quoter_matrix"]
     
     # v2.0.8: quotes_total = attempted quotes (valid + rejected), accounts for fee_tiers
     stats["quotes_total"] = len(quotes_sample) + len(rejected_quotes)
     stats["quotes_fetched"] = len(quotes_sample)
+    # R29: Split quotes_fetched into executable vs diagnostic for Stage-2 clarity
+    stats["quotes_fetched_executable"] = sum(1 for q in quotes_sample if not q.get("is_diagnostic_only"))
+    stats["quotes_fetched_diagnostic"] = sum(1 for q in quotes_sample if q.get("is_diagnostic_only"))
+    stats["quoter_v2_failed_count"] = counts.get("quoter_v2_failed", 0)
     stats["gates_passed"] = sum(1 for q in quotes_sample if q.get("gate_passed", True))
     
     # v2.2.2: Config transparency - propagate to scan.stats for cross-artifact consistency
