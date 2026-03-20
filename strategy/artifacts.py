@@ -704,6 +704,10 @@ def build_truth_data(
         for r in rq[:10]
     ]
     
+    # R29: Pair-level funnel trace — propagated from stats for truth-report self-containment
+    if stats.get("pair_funnel_trace"):
+        truth_data["pair_funnel_trace"] = stats["pair_funnel_trace"]
+    
     return truth_data
 
 

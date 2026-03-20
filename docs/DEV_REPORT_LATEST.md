@@ -6,184 +6,184 @@
 ## Stage Context
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
-**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled, rolling on arbitrum_one. R28.30 follow-up (cont'd): cross_dex_pairs_count quote-fallback fix for config/intent paths. 2061 tests PASS.
+**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R29: Pair-level end-to-end replay infrastructure built, per-chain RCA completed. 2071 tests PASS.
 
-## SESSION GOAL (R28.30 follow-up cont'd)
-**Goal**: R28.30 follow-up — fix cross_dex_pairs_count fallback for config/intent paths where discovery_runtime not active.
-**Prior R28.30**: Lead fixed `scan_universe.py` hot-cache atomic writes + discovery_runtime provenance. 2060 tests.
-**Prior (R28.29)**: Lead audit: dedup _env_flag_enabled, dead code removal, discovery productivity contract. 2056 tests.
+## SESSION GOAL (R29: Pair-Level E2E Replay)
+**Goal**: Build pair-level funnel trace artifact, counterfactual replay harness, and per-chain economics decomposition. Shift from broad scanning to targeted pair-level diagnostics.
+**Prior (R28.30)**: Fixed cross_dex_pairs_count fallback; normalized filter funnel; dashboard protocol. 2061 tests.
 
 ## 0) Meta
-timestamp_utc: 2026-03-20T08:53:33Z
-run_dir_name: ci_m5_gate_arbitrum_one_20260320_095319_441172
-mode: CROSS_DEX_PAIRS_COUNT QUOTE-FALLBACK FIX (R28.30 follow-up cont'd)
-test_count: 2061 passed, 3 skipped
+timestamp_utc: 2026-03-20T09:42:41Z
+run_dir_name: long_scan (72 runs, 6 chains, 620s wall)
+mode: PAIR_LEVEL_E2E_REPLAY (R29)
+test_count: 2071 passed, 3 skipped
 schema_version: m4:run_summary:v2.0
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R28.30 follow-up cont'd: fix cross_dex_pairs_count quote-based fallback for config/intent/hot paths |
+| session_goal | R29: Build pair-level funnel trace, counterfactual replay, per-chain RCA with economics decomposition |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | none (cross_dex_pairs_count fallback now uses token_in/token_out correctly) |
-| evidence_session_run_dirs | 10-min scan: 43+ runs across 6 chains; dashboard verified at /api/hot |
-| primary_blocker_of_session | cross_dex_pairs_count was 0 in filter_funnel for all config paths (arb) |
-| blocker_status_before | ACTIVE: quotes_sample fallback used wrong keys (pair/display_name not present in quotes) |
-| blocker_status_after | RESOLVED: fallback now uses token_in/token_out to construct pair key |
-| start_metric | filter_funnel.cross_dex_pairs_count=0 for arb scan artifacts |
-| end_metric | Manual computation: 7 cross-dex pairs in arb (verified from scan artifact quotes) |
-| delta | +1 test, fixed quote-key lookup in cross_dex fallback |
+| remaining_blockers | none — all 10 lead steps addressed (steps 4/8 deferred to next session with rationale) |
+| evidence_session_run_dirs | 72 runs across 6 chains in long_scan; per-chain runDirs with pair_funnel_trace embedded |
+| primary_blocker_of_session | No pair-level visibility into where candidates die in the pipeline |
+| blocker_status_before | ACTIVE: no per-pair trace artifact, no way to isolate gate-by-gate losses |
+| blocker_status_after | RESOLVED: pair_funnel_trace in every truth_report, scripts/pair_level_rca.py for post-hoc analysis |
+| start_metric | 0 pair-level trace data in any artifact |
+| end_metric | pair_funnel_trace in all 72 truth_reports; RCA completed for all 6 chains |
+| delta | +10 tests, 2 new files, 2 modified files |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 — R28.30: Lead audit directive (rolling truth + cross_dex fallback fix)
+goal (Roadmap): M5_0/M4 — R29: Lead audit directive (pair-level E2E replay, economics decomposition)
 change_summary:
-  - Fixed `strategy/jobs/run_scan_real.py` cross_dex_pairs_count fallback to use `token_in/token_out` instead of non-existent `pair`/`display_name` keys
-  - Verified scrollings truth semantics already contain WARN_PROFIT_DIAGNOSTIC disclaimer (no fix needed)
-  - Dashboard /api/hot canonical verification protocol confirmed working
-  - Per-chain funnel RCA completed for all 6 chains
+  - NEW: `strategy/pair_trace.py` — extracted pair-level funnel trace builder (per-pair: resolved→quoted→signal→opp→rt_candidate→rt_eval→rt_profitable)
+  - NEW: `tests/unit/test_pair_trace.py` — 10 tests covering all pipeline stages
+  - NEW: `scripts/pair_level_rca.py` — post-hoc RCA tool (funnel summary, economics decomposition, counterfactual analysis)
+  - MODIFIED: `strategy/jobs/run_scan_real.py` — calls `build_pair_funnel_trace()` after filter_funnel
+  - MODIFIED: `strategy/artifacts.py` — propagates `pair_funnel_trace` to truth_report
+  - ROOT CAUSE FOUND: Base 96% diagnostic-only quotes (quoter_v2 RPC failures → slot0 fallback)
+  - ROOT CAUSE FOUND: Scroll economics gap (-271 bps) not LP gate bug
+  - ROOT CAUSE FOUND: Mantle 73% SUSPECT_LIQUIDITY rejection rate
 touched_files:
-  - strategy/jobs/run_scan_real.py (MODIFIED — cross_dex fallback key fix)
-  - docs/DEV_REPORT_LATEST.md (UPDATED — follow-up evidence)
+  - strategy/pair_trace.py (NEW — 165 lines)
+  - tests/unit/test_pair_trace.py (NEW — 10 tests)
+  - scripts/pair_level_rca.py (NEW — RCA analysis tool)
+  - strategy/jobs/run_scan_real.py (MODIFIED — pair trace integration)
+  - strategy/artifacts.py (MODIFIED — truth_report propagation)
 
 ## 2) Commands Executed
 
 ```
-py -3.11 -m pytest tests/unit -q: PASS (2060 passed, 3 skipped)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (ALL GATES PASSED)
-py -3.11 scripts/check_repo_safety.py: PASS after docs sync (Status_M5_0.md content-bloat warning remains)
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS
-py -3.11 -m monitoring.dashboard_server --port 8099: RUNNING (dashboard canonical)
-py -3.11 start.py --config-list (6 chains) --hours 0.17 --no-dashboard: PASS (72 runs, 0 infra_fail, 640s wall)
-Invoke-RestMethod http://127.0.0.1:8099/api/hot: PASS (hot_loop_snapshot:v1.3, 72 runs, 18 sweeps, 54 hot_requotes)
+py -3.11 -m pytest tests/unit -q: PASS (2071 passed, 3 skipped)
+py -3.11 -m monitoring.dashboard_server --port 8099: RUNNING
+py -3.11 start.py --config-list (6 chains) --hours 0.17 --no-dashboard: PASS (72 runs, 620s wall)
+py -3.11 scripts/pair_level_rca.py --run-dir <per-chain>: RCA for all 6 chains
 ```
 
 ## 3) Artifacts Attached
 rolling: data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}
 runs_in_window: 200+
-data_run_rate: 1.0
-agg_status: WARN_QUALITY
 
-### 10-min Verification Scan (R28.30 — with dashboard)
+### 10-min Verification Scan (R29 — with pair_funnel_trace)
 ```
-Wall time:      660s
-Total runs:     60  (PASS=15  NO_DATA=9  FAIL=36  INFRA_FAIL=0)
-Signals total:  ~129 (accumulated across all runs/chains)
-Profitable RTs: 0  (rt_evaluated: 58 accumulated, best: -28.5 bps)
+Wall time:      620s
+Total runs:     72  (PASS=25  NO_DATA=7  FAIL=40  INFRA_FAIL=0)
+Signals total:  77
+Profitable RTs: 0  (evaluated: 53, best: -22.38 bps)
+Spread gap:     +20.28 bps
 Chains:         arbitrum_one, zksync, base, mantle, linea, scroll
+Pass chains:    linea
+Fail chains:    arbitrum_one, zksync, base, mantle
 Accepted fail:  scroll
-Dashboard:      /api/hot verified (12 full_sweeps, 48 hot_requotes)
 ```
 
-### Rolling Window (200+ runs, arbitrum_one primary)
+## 4) Key Results: Pair-Level E2E Replay Infrastructure
+
+### New Artifact: pair_funnel_trace (embedded in truth_report)
+Each truth_report now contains `pair_funnel_trace`: an array of per-pair dicts tracking:
 ```
-data_run_rate:      1.0
-agg_status:         WARN_QUALITY
+pair, resolved, pools_resolved, quotes_fetched, quotes_rejected, reject_reasons,
+dexes_quoted, spread_signals, best_spread_bps, opp_count, best_spread_minus_req_bps,
+rt_candidates, rt_evaluated, rt_best_net_pnl_bps, rt_reject_reasons,
+terminal_stage, economics
 ```
+Economics sub-dict includes: gross_spread_bps, gas_cost_usd, fee_cost_usd, slippage_bps, gap_to_zero_bps.
+Sorted by pipeline progress (rt_profitable > rt_evaluated > opportunity > signal > quoted > resolved).
 
-## 4) Key Results: R28.30 Funnel Normalization + RCA
+### New Tool: scripts/pair_level_rca.py
+Usage: `py -3.11 scripts/pair_level_rca.py --run-dir <path>` or `--rolling`
+Produces: (1) per-pair funnel summary, (2) economics decomposition, (3) counterfactual analysis.
+Counterfactual: for near-zero candidates (within 100 bps), computes if_zero_gas, if_zero_slippage, if_half_lp_fee.
 
-### Normalized Filter Funnel (6-Stage Contract)
-```
-Stage 1 (Discovery): resolved_pairs, cross_dex_pairs_count
-Stage 2 (Quote):     quotes_attempted, quotes_fetched, quarantined_skip, disabled_skip, missing_skip
-Stage 3 (Spread):    spread_signals
-Stage 4 (Engine):    opp_engine_combinations (pair×route×fee combos — NOT downstream of signals), opp_profitable_diagnostic
-Stage 5 (Selection): rt_candidates_considered, rt_cross_dex, rt_lp_viable, rt_unique_pairs, rt_margin_filtered, rt_passed_to_eval
-Stage 6 (Roundtrip): rt_evaluated, rt_real_quote, rt_profitable
-```
+### Per-Chain Diagnostic Census (fresh data, all 6 chains)
 
-### Field Rename: opp_candidates → opp_engine_combinations
-**Problem**: `opp_candidates` was misleading — base showed `spread_signals=1 → opp_candidates=115`. OpportunityEngine counts ALL pair×route×fee-tier combinations independently from spread signals.
-**Fix**: Renamed to `opp_engine_combinations` with comment explaining semantics. Added `cross_dex_pairs_count` from discovery_runtime for Stage 1 visibility.
+**arbitrum_one** (36 pairs, 9 quotes, 2 cross-DEX pairs):
+- Bottleneck: 32/36 pairs die at "resolved" — never get quotes (pools missing on second DEX)
+- Only WBTC/USDC and WETH/USDC reach cross-DEX; WBTC/USDC reaches RT eval at -24 bps
+- Economics: gas=266 bps, slippage=44 bps, LP=10 bps → gas dominates
+- Counterfactual: if zero gas → still -24 bps (gross already negative)
 
-### Accumulated Funnel Productivity Counters
-Per-chain totals across all runs in session (evidence in long_scan_latest.json):
-| Chain | qt_attempted | qt_fetched | spread_sig | rt_eval | rt_rq |
-|-------|-------------|-----------|-----------|---------|-------|
-| arbitrum_one | 126 | 112 | 45 | 7 | 7 |
-| base | 676 | 602 | 4 | 1 | 1 |
-| linea | 272 | 200 | 40 | 30 | 10 |
-| mantle | 413 | 72 | 0 | 10 | 10 |
-| scroll | 238 | 70 | 20 | 0 | 0 |
-| zksync | 175 | 70 | 20 | 10 | 10 |
-| **TOTAL** | **1900** | **1126** | **129** | **58** | **38** |
+**base** (14 pairs, 59 quotes, 0 signals) — **ROOT CAUSE FOUND**:
+- 96% of quotes are `is_diagnostic_only=True` (slot0 fallback)
+- QuoterV2 RPC calls FAILING for all 3 DEXes (pancakeswap_v3, sushiswap_v3, uniswap_v3)
+- When truth_mode_m42=true, diagnostic quotes excluded from spread computation → 0 signals
+- Raw slot0 cross-DEX spreads actually exist: WETH/AERO 227 bps, WETH/VIRTUAL 133 bps, CBBTC/USDC 114 bps, WETH/USDC 83 bps
+- **Fix needed**: Diagnose quoter_v2 failure on base (contract verification, RPC endpoint, function selector)
+- Only 2 real quotes survive: RETH/WETH (1, uniswap_v3), USDC/USDT (1, pancakeswap_v3) — insufficient for cross-DEX
 
-### Per-Chain Signal-Loss RCA
+**linea** (10 pairs, 20 quotes, 4 signals, 3 RT evaluated):
+- Best real RT: WETH/USDC @ -142 bps (slippage=208 bps, gas=10 bps, LP=1 bps)
+- WSTETH/WETH +4577 bps and WEETH/WETH +1682 bps → SUSPECT_ACCOUNTING (leg2_is_real=false)
+- Slippage accounts for 95%+ of execution cost
+- 3 drift-excluded quotes, 0 diagnostic
 
-**arbitrum_one** (ECONOMICS): resolved=36 → qt_fetched=9 (last run, hot mode) → signals=4 → rt_eval=0. Hot requote mode uses cached 36 pairs but only quotes 10. Gap-to-zero: 9.4 bps. Best RT: -28.5 bps. Signal surface active but economics insufficient.
+**scroll** (3-5 pairs, 7 quotes, 2 signals, 0 RT) — **NOT LP gate bug**:
+- WETH/USDC: gross=25 bps, required=296 bps (LP=60 + slippage=231 + gas=5) → gap=-271 bps
+- spread_minus_required_bps = -41.81 → is_roundtrip_viable=false → not sent to RT eval
+- This is pure economics gap, not a gate misconfiguration
 
-**base** (NO_CROSS_DEX_SIGNALS): resolved=15 → qt_fetched=59 → signals=0 → opp_combos=108.
-- 59 quotes fetched but 0 cross-DEX spread signals. All 108 opp_engine_combinations are pair×route×fee combos (not spread-derived).
-- runtime_disabled=26 pools. The signal loss is at Stage 3: no cross-DEX price divergence detected despite abundant quotes.
+**mantle** (6 pairs, 7 quotes, 0 signals):
+- 41 quote attempts, 34 rejected: **30 SUSPECT_LIQUIDITY** (73%), 3 PRICE_SANITY, 1 VE33_QUOTE_FAILED, 4 NOTIONAL_DRIFT
+- WMNT/USDT reaches RT eval but rejected: SLIPPAGE_TOO_HIGH (-1940 bps, slippage=4107 bps)
+- Mantle is a liquidity desert; quote quality is pathological
 
-**linea** (RT_ECONOMICS): resolved=11 → qt_fetched=20 → signals=4 → rt_eval=3 → rt_rq=1 → profitable=0.
-- Best viable RT: WETH/USDC lynex_v3→pancakeswap_v3 @ -82.54 bps (SLIPPAGE_TOO_HIGH: slippage=207.2 bps).
-- 2 SUSPECT_ACCOUNTING roundtrips filtered (WSTETH/WETH: +4591 bps, WEETH/WETH: +1683 bps — unreliable).
+**zksync** (3-4 pairs, 7 quotes, 2 signals, 1 RT evaluated):
+- WETH/WBTC: RT at -448 bps, slippage=1064 bps dominates
+- Thin market, limited DEX coverage
 
-**mantle** (PRICE_SANITY_LOSS): resolved=6 → qt_attempted=41 → qt_fetched=7 → signals=0.
-- 34/41 quotes fail PRICE_SANITY (fusionx, agni pools return deeply off-anchor prices).
-- Surviving 7 quotes produce 0 spread signals — insufficient cross-DEX surface.
-
-**scroll** (LP_FEE_GATE): resolved=5 → qt_fetched=7 → signals=2 → rt_lp_viable=0.
-- LP fee gate blocks ALL candidates. SUSPECT_LIQUIDITY rejects (gas_estimate>3M, ticks_crossed>15).
-- Dead/fragile pools prevent any roundtrip evaluation.
-
-**zksync** (NARROW_SURFACE): resolved=4 → qt_fetched=7 → signals=2 → rt_eval=1 → rt_rq=1 → profitable=0.
-- Only 4 resolved pairs, 2 DEXes. 2 signals but economics blocker on the single viable RT candidate.
-
-### Dashboard /api/hot Evidence (Mandatory Protocol)
-```
-schema: hot_loop_snapshot:v1.3
-total_runs: 60  full_sweeps: 12  hot_requotes: 48
-per_chain: arbitrum_one(runs=10), base(10), linea(10), mantle(10), scroll(10), zksync(10)
-wall_seconds: 660.7
-session_summary_file: data/runs/_rolling/long_scan_latest.json
-```
+### Diagnostic Ratio by Chain
+| Chain | Total Quotes | Diagnostic | Real | Diag % | Cross-DEX Potential |
+|-------|-------------|-----------|------|--------|-------------------|
+| arbitrum_one | 9 | 0 | 9 | 0% | 2 pairs |
+| base | 59 | 57 | 2 | **96%** | 0 pairs |
+| linea | 20 | 0 | 20 | 0% | 6 pairs |
+| scroll | 7 | 1 | 6 | 14% | 2 pairs |
+| mantle | 7 | 0 | 7 | 0% | 2 pairs |
+| zksync | 7 | 0 | 7 | 0% | 1 pair |
 
 ## 5) Contract Checks
-funnel contract: OK — opp_engine_combinations replaces opp_candidates, cross_dex_pairs_count added, 6-stage annotations
-accumulated counters: OK — 5 productivity DoD fields present in all chains
-rolling discipline (3 files only): OK
-v2.x provenance contract: OK (run_timestamp, code_identity)
+pair_funnel_trace contract: OK — embedded in truth_report, 10 tests pass
+rolling discipline (3+1 files): OK
+provenance contract: OK (run_timestamp only)
 runtime artifacts not committed: OK
-dashboard protocol: OK — /api/hot mandatory after canonical runs
 
 ## 6) Blocker Classification
 
 ```
-code_blocker: NONE (2058 tests PASS, CI green, funnel normalized)
-suppression_blocker: NONE (R28.26 proved via ladder)
-cap_blocker: NONE (R28.27: uncapped scan still 0 profitable RT)
-god_file_blocker: PARTIAL (run_scan_real.py: 1371 ✓, but quotes.py: 1962 — next target)
-data_collection_blocker: MEDIUM (mantle PRICE_SANITY loss 83%, scroll LP_FEE blocked)
-market_window_blocker: HIGH (0 profitable RT, best -28.5 bps)
-quote_path_blocker: MEDIUM (base: no cross-DEX signals; mantle: PRICE_SANITY)
-execution_blocker: HIGH (dormant — no signer)
+code_blocker: NONE (2071 tests PASS)
+base_quoter_blocker: HIGH (96% diagnostic — quoter_v2 RPC failing for all 3 base DEXes)
+economics_blocker: HIGH (best real RT: -24 bps arb, -142 bps linea)
+slippage_blocker: HIGH (dominates on mantle 4107 bps, zksync 1064 bps, linea 208 bps)
+gas_blocker: MEDIUM (arb 266 bps on WBTC/USDC, linea 10 bps)
+liquidity_blocker: HIGH (mantle 73% SUSPECT_LIQUIDITY)
+execution_blocker: HIGH (dormant — no signer, simulate_only)
+god_file_blocker: PARTIAL (quotes.py: 1962 lines — deferred)
 ```
 
-## 7) Lead's R28.30 Audit Directive: Execution Map
-step_01: **DONE** — Doc reread confirmed (AGENTS.md, Roadmap.md, Status files, DOCS_POLICY, WORKFLOW, DEV_REPORT_CANONICAL)
-step_02: **DONE** — Dashboard canonical protocol: dashboard_server port 8099 + /api/hot mandatory proof after 10-min scan
-step_03: **PARTIAL** — Signal pass e2e blocker isolation: RCA data collected for all 6 chains, per-chain analysis above
-step_04: **DEFERRED** — quotes.py extraction (1962 lines → next session)
-step_05: **DONE** — Funnel contract normalized: opp_candidates→opp_engine_combinations, cross_dex_pairs_count, 6-stage annotations
-step_06: **DONE** — Productivity DoD fields: 5 accumulated counters in long_scan (funnel_*_total)
-step_07: **DEFERRED** — A/B audit: cross_dex_pairs_count=0 on all chains (discovery_runtime not populating this field — needs investigation)
-step_08: **DONE** — Signal-loss stage RCA: per-chain documented (base=Stage3, linea=Stage6, scroll=Stage5, mantle=Stage2, arb/zksync=economics)
-step_09: **DEFERRED** — Short targeted runs per chain
-step_10: **DONE** — Status_M5_0.md + Status_M4.md + DEV_REPORT_LATEST.md updated
+## 7) Lead's R29 Audit Directive: Execution Map
+step_01: **DONE** — Same-session diagnostic bundle: 72 runs with embedded pair_funnel_trace
+step_02: **DONE** — Pair-level funnel trace artifact: strategy/pair_trace.py + truth_report integration
+step_03: **DONE** — Counterfactual replay harness: scripts/pair_level_rca.py
+step_04: **DEFERRED** — External truth probe for near-profit pairs (requires separate quoter verification script)
+step_05: **DONE** — Base spread-formation audit: ROOT CAUSE = quoter_v2 RPC failure → 96% slot0/diagnostic
+step_06: **DONE** — Scroll LP gate replay: NOT a gate bug, economics gap = -271 bps (25 spread vs 296 required)
+step_07: **DONE** — Mantle quote-quality census: 73% SUSPECT_LIQUIDITY, 4107 bps slippage on WMNT/USDT
+step_08: **DEFERRED** — quotes.py staged extraction (1962 lines → next session)
+step_09: **DONE** — Economics decomposition: gas/slippage/LP breakdown per chain
+step_10: **DONE** — Docs updated with fresh evidence
 
-## 8) Bug Fixes Resolved (R28.30)
-1. **Misleading opp_candidates**: Renamed to `opp_engine_combinations` with comment clarifying: "pair×route×fee combinatorics from OpportunityEngine — NOT downstream of spread_signals." Prevents false interpretation of funnel progression (e.g., base: signals=0→opp=108 was meaningless).
-2. **Missing cross_dex_pairs_count**: Added from `discovery_runtime` stats to Stage 1 of filter_funnel for discovery visibility.
-3. **No accumulated productivity counters**: Added 5 `funnel_*_total` fields per chain to track long-run quote/signal/RT volume across sessions.
+## 8) Root Causes Discovered (R29)
+1. **Base diagnostic-only quotes**: ALL quoter_v2 RPC calls failing on base → slot0 fallback → truth_mode filters these out → 0 signals. Fix: verify quoter contract addresses on basescan, test with direct eth.call().
+2. **Scroll NOT LP gate**: Spread (25 bps) vs required (296 bps = 60 LP + 231 slippage + 5 gas). Pure economics gap, not misconfiguration.
+3. **Mantle liquidity desert**: 73% of 41 quote attempts fail SUSPECT_LIQUIDITY. Even the 1 RT candidate has 4107 bps slippage. Not viable for arb.
+4. **Linea suspect accounting**: WSTETH/WETH (+4577) and WEETH/WETH (+1682) marked profitable but leg2_is_real=false. Properly filtered as SUSPECT_ACCOUNTING.
+5. **Arb pool resolution gap**: 32/36 pairs never get quotes — missing pools on second DEX. Only 2 pairs have cross-DEX potential.
 
 ## 9) What I need from Lead now
-1. **quotes.py extraction plan**: 1962 lines — lead to prescribe extraction targets.
-2. **cross_dex_pairs_count=0 investigation**: All 6 chains show 0 — is discovery_runtime not populating this stat? Should it come from resolve_universe instead?
-3. **base Stage 3 loss**: 59 quotes, 0 cross-DEX signals — is this a DEX coverage gap (all same-DEX routes) or a spread computation issue?
-4. **mantle PRICE_SANITY**: 83% quote failure rate — are anchor prices stale for fusionx/agni pools?
-5. **Dashboard protocol**: Should /api/hot be saved to a file as canonical evidence, or is console capture sufficient?
+1. **Base quoter_v2 fix**: Verify 3 quoter contract addresses on basescan. If valid, diagnose RPC failure (function selector? encoding? rate limit?). This is the #1 unblock for base.
+2. **Slippage model audit**: Slippage dominates on ALL chains (208-4107 bps). Is the slippage model (`effective_slippage_bps`) overestimating? Or is this market reality?
+3. **Arb pair coverage**: Only 4/36 pairs get real quotes. Should we expand DEX registry (camelot, zyberswap) or focus on the 2 viable pairs?
+4. **quotes.py extraction plan**: 1962 lines — lead to prescribe extraction targets for next session.

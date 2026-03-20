@@ -1185,6 +1185,28 @@ def run_scan(
         "rt_profitable": _rt.get("profitable_count", 0),
     }
     
+    # =========================================================================
+    # R29: Pair-level funnel trace (extracted to strategy/pair_trace.py)
+    # =========================================================================
+    try:
+        roundtrip_results  # noqa: B018
+    except NameError:
+        roundtrip_results = []
+    try:
+        eligible_opps  # noqa: B018
+    except NameError:
+        eligible_opps = []
+    from strategy.pair_trace import build_pair_funnel_trace
+    stats["pair_funnel_trace"] = build_pair_funnel_trace(
+        pairs_list=pairs_list,
+        quotes_sample=quotes_sample,
+        rejected_quotes=rejected_quotes,
+        spread_signals=spread_signals,
+        opps_list=opps_list,
+        roundtrip_results=roundtrip_results,
+        eligible_opps=eligible_opps,
+    )
+    
     # R28.24: Roundtrip truth status — separate from diagnostic profit_status.
     # When roundtrip.profitable_count=0 but one-leg total_net_usdc>0,
     # operator must see that no real roundtrip profit exists.
