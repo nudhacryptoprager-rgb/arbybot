@@ -57,7 +57,9 @@ use_multicall: true
 use_quoter_v2: true
 
 # R28.25: Aligned with primary economics contract (was 100/3)
+# R30: discovery_probe_size_usd decouples discovery from execution sizing
 use_usd_notional: true
+discovery_probe_size_usd: 10
 target_usd_notional: 150.0
 
 min_spread_bps: 5

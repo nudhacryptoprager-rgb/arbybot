@@ -119,6 +119,25 @@ def _register_adapters():
     except ImportError as e:
         logger.warning(f"Failed to import uniswap_v2 adapter: {e}")
     
+    # R30: New adapter stubs (not yet implemented — raise QuoteError on all calls)
+    try:
+        from dex.adapters.iziswap import IziSwapAdapter
+        _ADAPTER_REGISTRY["iziswap"] = IziSwapAdapter
+    except ImportError as e:
+        logger.warning(f"Failed to import iziswap adapter: {e}")
+    
+    try:
+        from dex.adapters.syncswap import SyncSwapAdapter
+        _ADAPTER_REGISTRY["syncswap"] = SyncSwapAdapter
+    except ImportError as e:
+        logger.warning(f"Failed to import syncswap adapter: {e}")
+    
+    try:
+        from dex.adapters.ambient import AmbientAdapter
+        _ADAPTER_REGISTRY["ambient"] = AmbientAdapter
+    except ImportError as e:
+        logger.warning(f"Failed to import ambient adapter: {e}")
+    
     logger.debug(f"Registered adapters: {list(_ADAPTER_REGISTRY.keys())}")
 
 
@@ -162,8 +181,8 @@ def create_adapter(
         quoter_address = dex_config.get_quoter_address() or ""
         dex_id = dex_config.name
         
-        # ve33 and uniswap_v2 adapters use router, not quoter
-        if dex_config.adapter_type in ("ve33", "uniswap_v2"):
+        # ve33, uniswap_v2, and syncswap adapters use router, not quoter
+        if dex_config.adapter_type in ("ve33", "uniswap_v2", "syncswap"):
             router_address = dex_config.router or ""
             return adapter_class(rpc_provider, router_address, dex_id)
         

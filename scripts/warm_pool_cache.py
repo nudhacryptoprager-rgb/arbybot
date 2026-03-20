@@ -33,8 +33,9 @@ USAGE:
     # Check pool liquidity (adds RPC calls)
     py -3.11 scripts/warm_pool_cache.py --chain scroll --check-liquidity
     
-    # Audit a candidate DEX not yet in dexes.yaml
-    py -3.11 scripts/warm_pool_cache.py --chain scroll --dex izi_swap --dex pancakeswap_v3
+    # Audit a candidate DEX not yet in dexes.yaml (requires adapter in registry)
+    # NOTE: izi_swap adapter not yet implemented — see dex/registry.py for supported families
+    py -3.11 scripts/warm_pool_cache.py --chain scroll --dex sushiswap_v3 --dex pancakeswap_v3
 
 OUTPUT:
     - Warms data/cache/pool_resolver_cache_<chain>.json

@@ -22,9 +22,10 @@ CHAINS_YAML = Path(__file__).parent.parent.parent / "config" / "chains.yaml"
 ALL_CHAINS = ["arbitrum_one", "base", "linea", "mantle", "scroll", "zksync"]
 
 # adapter_types that have a registered class in dex/registry.py
-IMPLEMENTED_ADAPTERS = {"uniswap_v3", "algebra", "ve33", "uniswap_v2"}
+IMPLEMENTED_ADAPTERS = {"uniswap_v3", "algebra", "ve33", "uniswap_v2", "iziswap", "syncswap", "ambient"}
 
-# adapter_types that are known but NOT yet implemented
+# adapter_types that are known but NOT yet implemented (registered as stubs)
+# R30: iziswap, syncswap, ambient are registered stubs — raise QuoteError on all calls
 UNIMPLEMENTED_ADAPTERS = set()
 
 # DEXes that use ve33 (now implemented — R27.4)

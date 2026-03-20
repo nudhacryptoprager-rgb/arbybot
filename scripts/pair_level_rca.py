@@ -282,16 +282,35 @@ def main():
     if args.rolling:
         # Use rolling artifacts
         rolling_dir = Path("data/runs/_rolling")
-        latest_path = rolling_dir / "run_summary_latest.json"
-        if latest_path.exists():
-            with open(latest_path, "r", encoding="utf-8") as f:
-                summary = json.load(f)
-            run_dir_rel = summary.get("inputs", {}).get("run_dir_rel")
-            chain_key = chain_key or summary.get("inputs", {}).get("chain_key", "")
-            if run_dir_rel:
-                run_dir = Path(run_dir_rel)
-                truth = load_truth_report(run_dir)
-                scan = load_scan_report(run_dir)
+        
+        # R30: --chain filter with --rolling finds the latest runDir for that chain
+        # instead of always using run_summary_latest.json (which is primary chain only)
+        if args.chain:
+            runs_dir = Path("data/runs")
+            chain_pattern = f"ci_m5_gate_{args.chain}_"
+            chain_dirs = sorted(
+                [d for d in runs_dir.iterdir() 
+                 if d.is_dir() and d.name.startswith(chain_pattern)],
+                key=lambda d: d.name,
+                reverse=True,
+            )
+            for rd in chain_dirs[:5]:
+                truth = load_truth_report(rd)
+                if truth:
+                    scan = load_scan_report(rd)
+                    chain_key = args.chain
+                    break
+        else:
+            latest_path = rolling_dir / "run_summary_latest.json"
+            if latest_path.exists():
+                with open(latest_path, "r", encoding="utf-8") as f:
+                    summary = json.load(f)
+                run_dir_rel = summary.get("inputs", {}).get("run_dir_rel")
+                chain_key = chain_key or summary.get("inputs", {}).get("chain_key", "")
+                if run_dir_rel:
+                    run_dir = Path(run_dir_rel)
+                    truth = load_truth_report(run_dir)
+                    scan = load_scan_report(run_dir)
         if truth is None:
             print("ERROR: Could not load truth_report from rolling artifacts", file=sys.stderr)
             sys.exit(1)

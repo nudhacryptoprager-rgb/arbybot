@@ -32,6 +32,9 @@ class TestConfigPoolCoverage:
     def test_all_pool_keys_covered(self, real_minimal_config):
         """Every pool_key from pairs×dexes×fee_tiers must be in pools or disabled_pools."""
         config = real_minimal_config
+        # R30: discovery_runtime uses factory.getPool() at runtime — no explicit pool coverage needed
+        if config.get("universe_source") == "discovery_runtime":
+            pytest.skip("universe_source=discovery_runtime: pools discovered via factory at runtime")
         dexes = config.get("dexes", [])
         pairs = config.get("pairs", [])
         pools = config.get("pools", {})
@@ -79,6 +82,10 @@ class TestConfigPoolCoverage:
     
     def test_pool_missing_count_zero_contract(self, real_minimal_config):
         """Contract: with complete coverage, pool_missing_count should be 0 at runtime."""
+        config = real_minimal_config
+        # R30: discovery_runtime uses factory.getPool() — pool_missing not applicable
+        if config.get("universe_source") == "discovery_runtime":
+            pytest.skip("universe_source=discovery_runtime: pools discovered via factory at runtime")
         # This is a static validation - runtime check happens in ONLINE scans
         # Here we verify the contract by checking coverage
         config = real_minimal_config

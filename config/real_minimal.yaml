@@ -49,14 +49,23 @@ rpc_timeout_seconds: 10
 rpc_retries: 3
 rpc_backoff_base_ms: 500
 
-# 2 DEXes for cross-DEX arbitrage
-# NOTE: camelot_v3 in onboard_arbitrum_one_candidate.yaml - needs Algebra quoter integration (ALGEBRA_NEEDS_QUOTER)
+# R30: 4-DEX contour — uni + sushi + pancake + camelot (adapter types: uniswap_v3, algebra)
+# Expanded from 2-DEX (uni+sushi) to cover cross-DEX surface revealed by warm_pool_cache
 dexes:
   - uniswap_v3
   - sushiswap_v3
+  - pancakeswap_v3
+  - camelot_v3
 
-# M5 pairs: Mostly cross-dex pairs, some Uniswap-only (GMX/USDC, UNI/WETH)
-# NOTE: POOL_MISSING is a silent skip (v2.3.0), not a reject. See pool_missing_count/pool_missing_keys in stats.
+# R30: Switched to discovery_runtime for 4-DEX automatic pool discovery via factory.getPool()
+# Pairs come from intent.txt (36 arb pairs). Pool resolver cache in data/cache/.
+# require_cross_dex filters out single-DEX pairs at discovery time.
+universe_source: discovery_runtime
+discovery_runtime_max_pairs: 36
+require_cross_dex: true
+
+# LEGACY: Explicit pairs/pools sections below retained as documentation + fallback reference.
+# With universe_source=discovery_runtime, these are NOT used at runtime.
 # Pool addresses verified via factory.getPool() (dates vary: 2026-02-07 to 2026-02-19)
 pairs:
   # Major pairs with high liquidity on both DEXes
@@ -429,9 +438,10 @@ paper_size_usd: 150
 paper_slippage_bps: 5  # v3.0.0: 5 bps for realistic economics (was 0 - too optimistic)
 
 # M4.2 USD-notional sizing (v2.2.3)
-# target_usd_notional: Target USD value for quote sizing (matches paper_size_usd)
-# v3.3.0: Reduced from 250 to 150 to match paper_size_usd (probe size reduction)
+# target_usd_notional: Legacy fallback for quote sizing (matches paper_size_usd)
+# discovery_probe_size_usd: R30 canonical key — small probe for wider pool discovery
 # tokens_usd_price: Override default prices to reduce NOTIONAL_DRIFT warnings
+discovery_probe_size_usd: 10
 target_usd_notional: 150
 use_usd_notional: true
 tokens_usd_price:
@@ -511,12 +521,11 @@ truth_mode_m42: true
 use_quoter_v2: true
 
 # v2.4.1: Discovery dry-run - count candidates without changing universe
-# When true, emits stats["discovery"] with resolvable_pairs/potential_queries
-discovery_dry_run: true
+# R30: Not needed with universe_source=discovery_runtime, kept for compatibility
+discovery_dry_run: false
 
-# v2.4.2: Discovery runtime - resolve pool addresses via factory.getPool()
-# When true, emits stats["discovery_runtime"] with resolved pairs and resolver stats
-# NOTE: Observability only - does NOT change quote universe in this version
+# v2.4.2: Legacy discovery_runtime flag (observability only)
+# R30: Superseded by universe_source=discovery_runtime. Kept as false.
 discovery_runtime: false
 discovery_runtime_max_pairs: 30
 

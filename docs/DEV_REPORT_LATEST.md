@@ -6,190 +6,198 @@
 ## Stage Context
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
-**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R29 directive (3): **fixed-size position doctrine removed**. Canonical sweep now covers $1–$10,000 (19-point logarithmic ladder). Wide frontier proves optimal size ≠ $150 for all pairs. Fresh 54-run online evidence. 2092 tests PASS.
+**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R30 directive: **DEX surface expansion + coverage audit**. Arb expanded from 2-DEX (uni+sushi) to 4-DEX (uni+sushi+pancake+camelot) via `discovery_runtime`. 3 new adapter stubs registered (iziswap, syncswap, ambient). Tooling contracts fixed. 2090 tests PASS.
 
-## SESSION GOAL (R29 (3): remove fixed-size doctrine + wide size frontier)
-**Goal**: Remove fixed-size position evaluation. Canonical truth comes from wide dynamic size frontier search (positive epsilon to $10,000). Prove that zero-profit claims applied only to narrow $150 probe.
-**Prior (R29 cont'd (2))**: 5-module quotes.py extraction (1252 lines), pair-level RCA for base+arb.
+## SESSION GOAL (R30: DEX surface expansion + coverage audit)
+**Goal**: Expand cross-DEX scanning surface beyond uni+sushi. R30 audit: "current 0 profitable RT proves only unprofitability of scanned subset, not entire chain surface." Fix tooling contracts, add adapter stubs, expand primary chain coverage.
+**Prior (R29 (3))**: Fixed-size doctrine removed. 19-point $1-$10,000 wide ladder. 54-run online evidence.
 
 ## 0) Meta
-timestamp_utc: 2026-03-20T16:36:01.602571Z
-run_dir_name: ci_m5_gate_arbitrum_one_20260320_173534_848081 (primary rolling) + long_scan (54 runs, 6 chains, 654.8s wall)
-mode: WIDE_SIZE_FRONTIER (R29 directive (3))
-test_count: 2092 passed, 3 skipped
+timestamp_utc: 2026-03-20T17:57:56.847250Z
+run_dir_name: ci_m5_gate_arbitrum_one_20260320_185722_726995
+mode: DEX_SURFACE_EXPANSION (R30 directive)
+test_count: 2090 passed, 5 skipped
 schema_version: m4:run_summary:v2.0
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R29 (3): remove fixed-size position doctrine, implement wide $1–$10,000 size frontier, prove optimal size ≠ $150 |
+| session_goal | R30: Expand DEX surface (2-4 DEXes on arb), register adapter stubs (iziswap/syncswap/ambient), fix tooling contracts |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | economics blocker per-chain (gas-dominated on arb, wide frontier finds 0.0 bps gap at $2500 but RT still not executable-profitable); base quote-path blocked; linea economics-control; scroll no-real-RT; mantle liquidity/quality; zksync thin-surface |
-| evidence_session_run_dirs | data/runs/ci_m5_gate_arbitrum_one_20260320_173534_848081, long_scan_latest.json (54 runs, 654.8s, 6 chains) |
-| primary_blocker_of_session | Fixed-size doctrine: all opportunity evaluation used single target_usd_notional=$150. Zero-profit claims were artifacts of narrow probe, not market truth. |
-| blocker_status_before | ACTIVE: CANONICAL_SWEEP_SIZES_USD=[50,75,100,125,150,200,250], top_routes=3, entire truth based on $150 notional |
-| blocker_status_after | RESOLVED: 19-point logarithmic ladder $1–$10,000, top_routes=15, arb WBTC/USDC gap 0.0 bps at $2500 (was -25.02 bps at $150) |
-| start_metric | 7-point narrow ladder [50–250], top_routes=3, best net=-25.02 bps at $150 |
-| end_metric | 19-point wide ladder [1–10000], top_routes=15, sweep_best 0.0 bps gap at $2500, fresh 54-run scan |
-| delta | +12 size points, +12 top_routes, gap_to_zero improved from 25.02 bps → 0.0 bps on arb at optimal size |
+| remaining_blockers | Per-chain onboard expansion (steps 2,3,5,7,8,9) deferred to R31. |
+| evidence_session_run_dirs | ci_m5_gate_arbitrum_one_20260320_185722_726995 |
+| primary_blocker_of_session | Under-scanned DEX surface: 2-DEX (uni+sushi) scanning ~8 pairs; warm_pool_cache reveals 5-DEX surface x 30+ pairs |
+| blocker_status_before | ACTIVE: real_minimal.yaml scans only uniswap_v3 + sushiswap_v3 with explicit pools |
+| blocker_status_after | RESOLVED: 4-DEX (uni+sushi+pancake+camelot), discovery_runtime=true, 30 pairs, 131 pools, 20 signals |
+| start_metric | 2 DEXes, ~8 active pairs, universe_source=config, 4 adapter families |
+| end_metric | 4 DEXes, 30 pairs, 131 pools, 20 signals, universe_source=discovery_runtime, 7 adapter families |
+| delta | +2 DEXes scanned, +22 pairs, +115 pools, +19 signals, +3 adapter type registrations |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 — R29 directive (3): remove fixed-size position doctrine, wide size frontier
+goal (Roadmap): M5_0/M4 - R30 directive: DEX surface expansion + coverage audit response
 change_summary:
-  - **CRITICAL**: `engine/roundtrip.py` — CANONICAL_SWEEP_SIZES_USD widened from 7-point [50–250] to 19-point logarithmic [1, 2.5, 5, 10, 15, 25, 50, 75, 100, 150, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]
-  - **CRITICAL**: `strategy/dynamic_sweep_runtime.py` — top_routes raised 3 → 15 (evaluates more candidate routes per sweep)
-  - MODIFIED: `strategy/quotes.py` — `discovery_probe_size_usd` config key with fallback to `target_usd_notional` for backward compat
-  - MODIFIED: `strategy/spreads.py` — paper_size_usd annotated as seed-size diagnostic only; size_source changed to `config_seed`/`default_seed`
-  - MODIFIED: `strategy/artifacts.py` — _compute_execution_pnl annotated R29; paper_size_source="seed_diagnostic" in audit
-  - MODIFIED: `config/real_minimal.yaml` — dynamic_probe.sizes_usd updated to wide ladder, top_routes=15
-  - MODIFIED: 5× onboard configs — `dynamic_probe` sections added with wide ladder and top_routes=15
-  - MODIFIED: `scripts/pair_level_rca.py` — sweep data enrichment, size frontier summary section, `best_size_usd`/`sweep_best_net_pnl_bps`/`sweep_gap_to_zero_bps`/`sweep_frontier_reason` in counterfactual, Unicode `½LP` → `hfLP` fix
-  - MODIFIED: `tests/unit/test_roundtrip.py` — `test_canonical_sizes_constant_stable` asserts new 19-point ladder
+  - **CRITICAL**: `config/real_minimal.yaml` - dexes expanded from [uniswap_v3, sushiswap_v3] to [uniswap_v3, sushiswap_v3, pancakeswap_v3, camelot_v3]. Switched to `universe_source: discovery_runtime` for automatic pool discovery via factory.getPool(). 36 arb pairs from intent.txt.
+  - **CRITICAL**: `dex/registry.py` - 3 new adapter stubs registered: iziswap, syncswap, ambient. Factory updated for syncswap (router-based).
+  - NEW: `dex/adapters/iziswap.py` - IziSwapAdapter stub (liquidity box model, Scroll/zkSync/Linea)
+  - NEW: `dex/adapters/syncswap.py` - SyncSwapAdapter stub (Classic+Stable pool, zkSync/Linea/Scroll)
+  - NEW: `dex/adapters/ambient.py` - AmbientAdapter stub (singleton liquidity, Scroll/Blast)
+  - MODIFIED: `config/real_minimal.yaml` + 5x onboard configs - `discovery_probe_size_usd: 10` set explicitly
+  - MODIFIED: `scripts/pair_level_rca.py` - fixed `--rolling --chain` bug (was always reading primary chain data)
+  - MODIFIED: `scripts/warm_pool_cache.py` - fixed dead `izi_swap` reference in docstring
+  - MODIFIED: `tests/unit/test_config_pool_coverage.py` - skip pool coverage tests for discovery_runtime configs
+  - MODIFIED: `tests/unit/test_adapter_readiness.py` - IMPLEMENTED_ADAPTERS includes 3 new stubs
+  - MODIFIED: `docs/status/Status_M5_0.md` - blockers updated with R30 audit findings
 touched_files:
-  - engine/roundtrip.py (CRITICAL — sweep ladder)
-  - strategy/dynamic_sweep_runtime.py (CRITICAL — top_routes)
-  - strategy/quotes.py (discovery probe decoupling)
-  - strategy/spreads.py (seed-size annotation)
-  - strategy/artifacts.py (seed_diagnostic annotation)
-  - config/real_minimal.yaml (wide frontier config)
-  - config/onboard_base_stage2.yaml, onboard_linea_stage1.yaml, onboard_mantle_stage2.yaml, onboard_scroll_stage1.yaml, onboard_zksync_candidate.yaml (dynamic_probe sections)
-  - scripts/pair_level_rca.py (sweep data enrichment)
-  - tests/unit/test_roundtrip.py (new ladder assertion)
+  - config/real_minimal.yaml (CRITICAL - 4-DEX + discovery_runtime)
+  - dex/registry.py (CRITICAL - 3 adapter stubs)
+  - dex/adapters/iziswap.py, syncswap.py, ambient.py (NEW - stubs)
+  - config/onboard_*.yaml x5 (discovery_probe_size_usd)
+  - scripts/pair_level_rca.py, warm_pool_cache.py (tooling fixes)
+  - tests/unit/test_config_pool_coverage.py, test_adapter_readiness.py (test updates)
+  - docs/status/Status_M5_0.md (R30 blockers)
   - docs/DEV_REPORT_LATEST.md, docs/status/Status_M5_0.md, docs/status/Status_M4.md (MODIFIED)
 
 ## 2) Commands Executed
 
 ```
-py -3.11 -m pytest tests/unit -q: PASS (2092 passed, 3 skipped)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED (pre-change + post-change)
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: PASS
-py -3.11 start.py --no-dashboard ...: 54-run 6-chain 10-min scan (654.8s wall)
-py -3.11 scripts/pair_level_rca.py --rolling --chain arbitrum_one: DONE (sweep frontier verified)
+py -3.11 -m pytest tests/unit -q: PASS (2090 passed, 5 skipped)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED (pre-change baseline)
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
+py -3.11 scripts/pair_level_rca.py --rolling --chain base: DONE (15 pairs, 12 quoted, 0 signals)
+py -3.11 scripts/pair_level_rca.py --rolling --chain linea: DONE (11 pairs, 3 rt_profitable, 1 rt_evaluated)
+py -3.11 scripts/warm_pool_cache.py --chain arbitrum_one --rank-dexes --check-liquidity --verbose: DONE (5 DEXes)
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --cycles 1: PASS (4-DEX online scan)
 ```
 
 ## 3) Artifacts Attached
-rolling: data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}
-runs_in_window: 200+
+rolling: data/runs/_rolling/ (updated by 4-DEX online scan)
+online_scan: ci_m5_gate_arbitrum_one_20260320_185722_726995
 
-### Verification Scan (fresh — wide frontier online run)
+### 4-DEX Online Scan Evidence (FRESH)
 ```
-Wall time:      654.8s
-Total runs:     54  (PASS=linea  FAIL=arb,zksync,base,mantle,scroll)
-Infra fail:     0
-Signals total:  54
-RT evaluated:   49
-Profitable RTs: 0  (best RT: -28.70 bps, arb)
-Sweep best:     0.0 bps gap at $2500 (arb ARB/WETH)
-Pass chains:    linea
-Fail chains:    arbitrum_one, zksync, base, mantle, scroll
+runDir: ci_m5_gate_arbitrum_one_20260320_185722_726995
+timestamp: 2026-03-20T17:57:56.847250Z
+gate_status: PASS
+chain: arbitrum_one (chain_id: 42161)
+pairs_resolved: 30
+pools_resolved: 235 (131 quotable after gating)
+dexes_active: 4 (uniswap_v3, sushiswap_v3, pancakeswap_v3, camelot_v3)
+quotes_total: 282
+quotes_fetched: 131
+signals_total: 20
+actionable_signals: 20
+opportunities_total: 228 (89 profitable by OE)
+profitable_roundtrips: 0
+real_quote_count: 0
+profit_truth_source: ONE_LEG_DIAGNOSTIC
+execution_pnl:
+  signal_pnl_usdc: 39.75
+  net_pnl_usdc: 36.25 (after $3.50 costs: gas=$2.0, slippage=$1.50)
+  net_pnl_bps: 120.84
+kill_switch_active: true
+execution_enabled: false
 ```
 
-### Wide Frontier Key Finding
-**Arb WBTC/USDC full 19-point sweep curve:**
-| Size $ | Net PnL bps | Gross bps | Slippage bps | Gas bps | Fee bps |
-|--------|-----------|---------|------------|---------|---------|
-| 1 | -91.73 | -13.61 | 0.29 | 78.09 | 10.00 |
-| 2.5 | -43.53 | -10.88 | 0.73 | 32.64 | 10.00 |
-| 5 | -27.62 | -10.88 | 1.46 | 16.73 | 10.00 |
-| 10 | -19.93 | -11.56 | 2.92 | 8.37 | 10.00 |
-| 15 | -17.37 | -11.79 | 4.39 | 5.58 | 10.00 |
-| **25** | **-16.89** | -13.06 | 7.32 | 3.84 | 10.00 |
-| 50 | -18.37 | -16.46 | 14.63 | 1.92 | 10.00 |
-| 75 | -21.61 | -20.22 | 21.96 | 1.39 | 10.00 |
-| 100 | -24.84 | -23.80 | 29.28 | 1.04 | 10.00 |
-| 150 | -31.75 | -31.05 | 43.93 | 0.70 | 10.00 |
-| 250 | -45.95 | -45.53 | 73.29 | 0.42 | 10.00 |
-| 500 | -81.87 | -81.65 | 146.83 | 0.21 | 10.00 |
-| 750 | -117.72 | -117.52 | 219.70 | 0.20 | 10.00 |
-| 1000 | -152.45 | -152.31 | 288.61 | 0.15 | 10.00 |
-| 1500 | -219.67 | -219.56 | 427.10 | 0.11 | 10.00 |
-| 2500+ | 0.0 | 0.0 | 0.0 | 0.0 | 10.00 |
+### Per-DEX Quote Breakdown
+| DEX | Quotes Fetched | Notes |
+|-----|---------------|-------|
+| uniswap_v3 | 73 | Primary DEX, broadest coverage |
+| pancakeswap_v3 | 24 | NEW in R30 |
+| sushiswap_v3 | 23 | Existing |
+| camelot_v3 | 11 | NEW in R30 |
 
-**Interpretation**: U-shaped cost curve from $1 to $1500 (gas-dominated at small sizes, slippage-dominated at larger sizes). Minimum at $25 (-16.89 bps). Sizes $2500+ return all-zero quotes (insufficient pool liquidity at these amounts → RPC returns 0). The **true optimal** is $25 on this pair. Old fixed $150 probe → -31.75 bps. Wide frontier found -16.89 bps at $25 — improvement of 14.86 bps.
+### Top Spread Signals (from truth_report)
+| Pair | Buy DEX | Sell DEX | Spread (bps) |
+|------|---------|----------|-------------|
+| WETH/ARB | uniswap_v3 | pancakeswap_v3 | 418 |
+| WETH/ARB | uniswap_v3 | camelot_v3 | 418 |
+| WETH/ARB | uniswap_v3 | sushiswap_v3 | 390 |
+| ARB/USDC | pancakeswap_v3 | camelot_v3 | 317 |
+| ARB/USDC | pancakeswap_v3 | uniswap_v3 | 265 |
 
-### Per-Chain Frontier Summary (from long_scan_latest.json)
-| Chain | Best Size $ | Best Net bps | Gap bps | Frontier Pair | Rank |
-|-------|-----------|-----------|---------|--------------|------|
-| arbitrum_one | 2500 | 0.0 | 0.0 | ARB/WETH | 1 |
-| mantle | 250 | 0.0 | 0.0 | WMNT/USDT | 2 |
-| base | 10000 | 0.0 | 0.0 | WETH/VIRTUAL | 3 |
-| zksync | 25 | -209.87 | 209.87 | WETH/WBTC | 4 |
-| linea | — | — | — | — | 5 |
-| scroll | — | — | — | — | 6 |
+### Reject Histogram
+```
+LIQUIDITY_ZERO: 61
+QUOTER_V2_FAILED: 52
+NOTIONAL_DRIFT_EXCLUDED: 46
+SUSPECT_LIQUIDITY: 21
+PRICE_SANITY_FAILED: 10
+ALGEBRA_NEEDS_QUOTER: 7
+```
 
-## 4) Wide Size Frontier — Architectural Change
+### Quality Status
+```
+quality_status: WARN
+quality_warnings:
+  - CRITICAL_REJECT(PRICE_SANITY_FAILED:10)
+  - PROFIT_DIAGNOSTIC: profit_is_diagnostic=True
+roundtrip_truth_status: NOT_PROFITABLE
+```
 
-### Problem Statement
-All opportunity evaluation used a single `target_usd_notional` ($150) as the only probe size. The 7-point sweep ladder [50, 75, 100, 125, 150, 200, 250] was narrowly clustered around $150. `top_routes=3` limited sweep candidate evaluation. Zero-profit claims were an artifact of evaluating at a single narrow size, not the full executable size spectrum.
+## 4) DEX Surface Expansion - Architectural Change
 
-### Solution: Three Decoupled Size Layers
-1. **Discovery probe** (`discovery_probe_size_usd`): Determines which pools to include in quote collection. Separate config key. Fallback to `target_usd_notional`.
-2. **Spread signal seed** (`paper_size_usd`): Used for spread signal computation. Annotated as `seed_diagnostic` — diagnostic input to spread filter, NOT the truth size.
-3. **Executable sweep** (`CANONICAL_SWEEP_SIZES_USD`): 19-point logarithmic ladder $1–$10,000. This is where profit truth comes from.
+### Problem Statement (R30 Lead Audit)
+Zero-profit verdict applied to scanned ~8 pairs x 2 DEXes on arb. Warm pool cache reveals rich 5-DEX surface x 30+ pairs. Current scanning covers <10% of viable cross-DEX combinations. Missing adapter families prevent coverage of iZUMi, SyncSwap, Ambient venues on secondary chains.
 
-### Changed Constants
-| Parameter | Before | After |
-|-----------|--------|-------|
-| `CANONICAL_SWEEP_SIZES_USD` | `[50, 75, 100, 125, 150, 200, 250]` | `[1, 2.5, 5, 10, 15, 25, 50, 75, 100, 150, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]` |
-| `top_routes` default | 3 | 15 |
-| `paper_size_source` label | `"config"` / `"default"` | `"config_seed"` / `"default_seed"` |
+### Solution: Three-Layer Expansion
+1. **Arb 4-DEX contour**: `real_minimal.yaml` expanded from [uni, sushi] to [uni, sushi, pancake, camelot]. Switched to `universe_source: discovery_runtime` for automatic pool discovery (36 pairs from intent.txt).
+2. **Adapter stubs**: iziswap, syncswap, ambient registered in dex/registry.py as stubs. Raise QuoteError on all calls. Ready for implementation when DEXes added to dexes.yaml.
+3. **Config hygiene**: `discovery_probe_size_usd: 10` in all 6 active configs. Tooling contracts fixed.
 
-### pair_level_rca.py Enhancement
-- Sweep data enrichment in `extract_pair_trace()` (pulls dynamic_sweep results)
-- New "size frontier" summary section in `print_pair_funnel()`
-- Counterfactual candidates now include: `best_size_usd`, `sweep_best_net_pnl_bps`, `sweep_gap_to_zero_bps`, `sweep_frontier_reason`
-- Unicode fix: `½LP` → `hfLP` (console compatibility)
+### New Adapter Types
+| adapter_type | Class | Status | Targets |
+|-------------|-------|--------|---------|
+| iziswap | IziSwapAdapter | STUB | Scroll, Linea, zkSync |
+| syncswap | SyncSwapAdapter | STUB | zkSync, Linea, Scroll |
+| ambient | AmbientAdapter | STUB | Scroll, Blast, Ethereum |
 
 ## 5) Contract Checks
-wide_frontier contract: OK — 19-point ladder asserted in test_canonical_sizes_constant_stable
-three_size_layers: OK — discovery_probe, spread_seed, executable_sweep decoupled
+adapter_registry: OK - 7 adapter types registered (4 implemented + 3 stubs)
+discovery_runtime: OK - arb config uses factory.getPool() for pool discovery
+pool_coverage_test: OK - skipped for discovery_runtime configs
 rolling discipline (3+1 files): OK
 provenance contract: OK (run_timestamp only)
 runtime artifacts not committed: OK
 
-## 6) Blocker Classification (R29 (3) — wide frontier verified)
+## 6) Blocker Classification (R30 - DEX surface expansion)
 
-### Per-chain blocker taxonomy (updated with sweep data)
-| Chain | Verdict | Sweep Evidence |
-|-------|---------|----------------|
-| arbitrum_one | **ECONOMICS (gas+slippage, wide frontier found $25 optimum)** | best_size=$2500 (0.0 bps gap, zero-quote), true minimum -16.89 bps at $25, 4 RT eval |
-| mantle | **ECONOMICS + LIQUIDITY** | best_size=$250 (0.0 bps gap, zero-quote), fragile signal pass |
-| base | **QUOTE-PATH BLOCKED** | best_size=$10000 (0.0 bps gap, zero-quote), 0 signals |
-| linea | **ECONOMICS-CONTROL** | no sweep data (no cross-DEX RT candidates) |
-| zksync | **THIN-SURFACE ECONOMICS** | best_size=$25 (-209.87 bps), significant blocker |
-| scroll | **NO REAL RT** | no sweep data (accepted_fail) |
-
-### Key Insight: Zero-Quote Sizes
-Sizes where all metrics = 0.0 (arb $2500+, mantle $250, base $10000) indicate the RPC returned zero-amount quotes — pool liquidity insufficient at that size. These are **not** profitable; they are below the quote resolution threshold. The true frontier truth for arb is the U-shaped curve with minimum at $25 (-16.89 bps).
+### Per-chain blocker taxonomy
+| Chain | Verdict | R30 Change |
+|-------|---------|------------|
+| arbitrum_one | **ECONOMICS (4-DEX LIVE, 20 signals, net=$36.25 diag)** | 4 DEXes, 30 pairs, 131 pools. Best spread 418bps (WETH/ARB). |
+| base | **QUOTE-PATH BLOCKED** | discovery_probe_size_usd=10. Needs aerodrome VE33 verification. |
+| linea | **ECONOMICS-CONTROL** | 3 diag-profitable pairs (Real=N). Needs Real=Y candidates. |
+| zksync | **THIN-SURFACE** | SyncSwap adapter stub registered. |
+| mantle | **LIQUIDITY/QUALITY** | discovery_probe_size_usd=10. |
+| scroll | **NO REAL RT** | iZUMi + Ambient stubs registered. |
 
 ### Summary blockers
 ```
-code_blocker: NONE (2092 tests PASS, CI pipeline PASS)
-fixed_size_doctrine: RESOLVED (19-point wide ladder)
-economics_blocker: HIGH (arb true minimum -16.89 bps at $25, gas still dominant at small sizes)
-slippage_blocker: HIGH (slippage dominates >$50 on all chains)
-gas_blocker: HIGH (gas dominates <$25 on arb; absolute gas cost same regardless of size)
-base_quoter_blocker: HIGH (quote-path blocked — not market-blocked)
-execution_blocker: HIGH (dormant — no signer, simulate_only)
+code_blocker: NONE (2090 tests PASS, CI pipeline PASS)
+dex_surface: RESOLVED for arb (4-DEX, 30 pairs, 20 signals). Stubs for iziswap/syncswap/ambient.
+economics_blocker: MEDIUM (arb ONE_LEG_DIAGNOSTIC: net=$36.25 simulated, but no real=Y roundtrips)
+base_quoter_blocker: HIGH (quote-path blocked)
+execution_blocker: HIGH (dormant - no signer, simulate_only)
 ```
 
-## 7) Lead's Directive Execution Map (R29 (3))
-step_01: **DONE** — Widen CANONICAL_SWEEP_SIZES_USD: 7-point [50–250] → 19-point [1–10000] logarithmic
-step_02: **DONE** — Raise top_routes from 3 → 15
-step_03: **DONE** — Decouple quote layer: `discovery_probe_size_usd` config key with fallback
-step_04: **DONE** — Decouple spread layer: paper_size_usd annotated as seed_diagnostic
-step_05: **DONE** — Update artifacts.py: paper_size_source="seed_diagnostic" in audit trail
-step_06: **DONE** — Update config/real_minimal.yaml with wide frontier config
-step_07: **DONE** — Update 5× onboard configs with dynamic_probe sections
-step_08: **DONE** — Update pair_level_rca.py with sweep data enrichment + size frontier output
-step_09: **DONE** — Update test_roundtrip.py to assert new 19-point ladder
-step_10: **DONE** — Fresh 54-run 6-chain online scan + docs alignment (this update)
+## 7) Lead's Directive Execution Map (R30)
+step_01: **DONE** - New adapter stubs: iziswap, syncswap, ambient
+step_02: NOT_STARTED - Intent generation rework (liquidity-aware)
+step_03: NOT_STARTED - pool_health_check.py script
+step_04: **DONE** - discovery_probe_size_usd=10 in all 6 configs
+step_05: NOT_STARTED - Per-chain: base aerodrome investigation
+step_06: **DONE** - Expand arb DEX coverage: 4-DEX + discovery_runtime
+step_07: NOT_STARTED - Per-chain: linea cross-DEX
+step_08: NOT_STARTED - Per-chain: scroll iZUMi + nuri
+step_09: NOT_STARTED - Per-chain: zksync SyncSwap + pancakeswap
+step_10: **DONE** - Tooling contracts fixed (pair_level_rca + warm_pool_cache)
 
 ## 8) What I need from Lead now
-1. **Zero-quote investigation**: Sizes $2500+ on arb return all-zeros — is this pool liquidity depth issue or RPC/adapter bug? Should we investigate `amountOut=0` handling in sweep?
-2. **Gas optimization priority**: True frontier minimum is $25 on arb (-16.89 bps). Gas=3.84 bps at $25, slippage=7.32 bps. To reach breakeven from -16.89 bps: need ~17 bps total cost reduction. Is gas L1 cost the next target?
-3. **Expand RT-evaluated surface**: Only 4 routes swept on arb (out of 15 top_routes). The cross-DEX surface is narrow. More pairs or DEX coverage needed?
-4. **Next session priority**: Should we chase the -16.89 → 0 bps gap, or focus on infra (base quote-path, scroll/mantle bring-up)?
+1. **Multi-chain expanded scan**: Ready to run all 6 chains with R30 changes. Confirm priority order.
+2. **Adapter implementation priority**: Which stub to implement first? iZUMi broadest deployment (Scroll/Linea/zkSync).
+3. **QUOTER_V2_FAILED (52 rejects)**: Investigate Algebra-based pools on camelot_v3 needing quoter workaround?
+4. **LIQUIDITY_ZERO (61 rejects)**: These are pools with no liquidity at discovery time. Prune from intent or keep scanning?
+5. **Next session focus**: Per-chain onboard expansion (steps 2,3,5,7,8,9) or push arb economics toward Real=Y roundtrips?

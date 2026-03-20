@@ -370,13 +370,20 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 ---
 
-## Current Blockers (R29 (3) — wide frontier verified)
+## Current Blockers (R30 — DEX surface expansion + coverage audit)
 
-- **All chains**: `profitable_roundtrips=0`; no positive control on fresh evidence.
-- **Fixed-size doctrine**: RESOLVED — 19-point $1–$10,000 ladder replaces 7-point [50–250].
-- **Arb**: economics (gas+slippage). True min -16.89 bps at $25 (was -31.75 at $150). Gap improved ~15 bps.
-- **Base**: quote-path blocked (0 signals).
-- **Linea**: economics-control (no cross-DEX RT candidates).
-- **Zksync**: thin-surface economics (-209.87 bps).
+- **All chains**: `profitable_roundtrips=0` on scanned subset; no positive control on fresh evidence.
+- **R30 audit correction**: Current zero-profit evidence is valid only for the scanned subset.
+  Theoretical chain surface is still under-covered on several networks because adapter support
+  is limited to `uniswap_v3/algebra/ve33/uniswap_v2`, while official deployments include
+  additional venue families (iZUMi, SyncSwap, Ambient). Adapter stubs registered but not implemented.
+- **Arb**: expanded to 4-DEX contour (uni+sushi+pancake+camelot) via `universe_source: discovery_runtime`.
+  Was 2-DEX (uni+sushi) scanning ~8 pairs; now ~36 pairs × 4 DEXes via intent.txt.
+- **Base**: quote-path blocked (0 signals). Needs aerodrome VE33 adapter verification.
+- **Linea**: 3 diagnostic-profitable pairs (wstETH/WETH +4576 bps, weETH/WETH +1681 bps, ezETH/WETH +1480 bps — all Real=N). Economics-control (no cross-DEX RT candidates with Real=Y).
+- **Zksync**: thin-surface economics (-209.87 bps). SyncSwap adapter stub registered.
 - **Mantle**: liquidity/quality (fragile).
-- **Scroll**: no real RT (accepted_fail).
+- **Scroll**: no real RT (accepted_fail). iZUMi + Ambient adapter stubs registered.
+- **Fixed-size doctrine**: RESOLVED — 19-point $1–$10,000 ladder.
+- **discovery_probe_size_usd**: Set to 10 in all 6 active configs (R30).
+- **Tooling fixes**: `pair_level_rca.py --rolling --chain` now correctly reads chain-specific runDirs.
