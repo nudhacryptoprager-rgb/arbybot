@@ -27,6 +27,7 @@ def init_quote_counts() -> Dict[str, Any]:
         "no_usd_price": 0,
         "algebra_needs_quoter": 0,
         "quoter_v2_failed": 0,
+        "quoter_v2_skipped": 0,  # R32: pools where quoter_v2 was skipped (repeated failures)
     }
 
 

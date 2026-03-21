@@ -1,0 +1,80 @@
+# PATH: tests/unit/test_blocker_evidence.py
+"""
+Contract tests for _compute_blocker_evidence() in start.py.
+
+Verifies the auto-computed blocker taxonomy:
+  ROUNDTRIP_PROFITABLE > INFRA_FAIL > NO_SIGNAL > QUOTE_PATH_BLOCKED > OE_ECONOMICS > MIXED_SOURCE
+"""
+
+from start import _compute_blocker_evidence
+
+
+def _base_stats(**overrides):
+    s = {
+        "runs": 10,
+        "fail": 0,
+        "profitable_roundtrips_total": 0,
+        "included_signals_total": 10,
+        "last_truth_verdict": None,
+        "last_quote_source_summary": {},
+        "last_oe_rejection_funnel": {},
+        "blocker_evidence": None,
+    }
+    s.update(overrides)
+    return s
+
+
+class TestComputeBlockerEvidence:
+    def test_roundtrip_profitable_wins(self):
+        s = _base_stats(profitable_roundtrips_total=1)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "ROUNDTRIP_PROFITABLE"
+
+    def test_infra_fail(self):
+        s = _base_stats(runs=10, fail=6)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "INFRA_FAIL"
+
+    def test_no_signal(self):
+        s = _base_stats(included_signals_total=0)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "NO_SIGNAL"
+
+    def test_quote_path_blocked(self):
+        qss = {"quotes_fetched_executable": 2, "quotes_fetched_diagnostic": 3,
+               "quoter_v2_failed_count": 20}
+        s = _base_stats(last_quote_source_summary=qss)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "QUOTE_PATH_BLOCKED"
+
+    def test_oe_economics(self):
+        oe_rf = {"rejected_count": 10, "rejected_reasons": {"NET_PROFIT_TOO_LOW": 8}}
+        s = _base_stats(last_oe_rejection_funnel=oe_rf)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "OE_ECONOMICS"
+
+    def test_mixed_source(self):
+        oe_rf = {"rejected_count": 10, "rejected_reasons": {"MIXED_SOURCE": 5}}
+        s = _base_stats(last_oe_rejection_funnel=oe_rf)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "MIXED_SOURCE"
+
+    def test_priority_profitable_over_infra_fail(self):
+        s = _base_stats(profitable_roundtrips_total=1, fail=8, runs=10)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "ROUNDTRIP_PROFITABLE"
+
+    def test_fallback_from_truth_verdict_diagnostic(self):
+        s = _base_stats(last_truth_verdict="DIAGNOSTIC_PROFIT_ONLY")
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "OE_ECONOMICS"
+
+    def test_fallback_from_truth_verdict_no_profit(self):
+        s = _base_stats(last_truth_verdict="NO_PROFIT")
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "NO_SIGNAL"
+
+    def test_none_when_no_evidence(self):
+        s = _base_stats()
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] is None

@@ -6,228 +6,100 @@
 ## Stage Context
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
-**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R31 directive: **Diagnose 0-roundtrip bottleneck, add truth_verdict + quote_source_summary for operator clarity.** R30 expanded arb to 4-DEX. R31 traces the signal→roundtrip pipeline, identifies QUOTER_V2_FAILED→slot0→OE rejection as the root cause of 0 candidates, and adds first-class artifact fields for diagnosis.
+**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R32 directive: **Connect wide sweep to OE re-check, auto-compute blocker taxonomy, reduce QUOTER_V2_FAILED.** R31 resolved artifact clarity (truth_verdict/OE funnel), not profit discovery. R32 addresses the 0-RT problem via sweep reprieve and economics re-check at multiple sizes.
 
-## SESSION GOAL (R31: OE bottleneck diagnosis + artifact clarity)
-**Goal**: Diagnose why 20+ signals produce 0 roundtrip evaluations. Add `truth_verdict` to run_summary and `quote_source_summary`/`oe_rejection_funnel` to truth_report. Run fresh 6-chain long scan with R31 changes.
-**Prior (R30)**: 4-DEX expansion on arb (uni+sushi+pancake+camelot), discovery_runtime, 3 adapter stubs, 2090 tests PASS.
+## SESSION GOAL (R32: sweep reprieve + quoter skip cache + blocker taxonomy)
+**Goal**: Implement lead's 10-step directive: connect wide-sweep ladder to OE re-check, aggregate R31 fields per-chain, prominence for truth_verdict, pair-level economics, base quote-path fix, blocker_classification auto-computation, docs framing fix.
+**Prior (R31)**: OE bottleneck diagnosis. truth_verdict + quote_source_summary + oe_rejection_funnel. 43-run scan: 0 profitable RT. 2101 tests PASS.
 
 ## 0) Meta
-timestamp_utc: 2026-03-20T22:06:52.855924Z
-run_dir_name: ci_m5_gate_arbitrum_one_20260320_230614_040386
-mode: OE_BOTTLENECK_DIAGNOSIS + ARTIFACT_CLARITY (R31 directive)
-test_count: 2101 passed, 5 skipped
-schema_version: m4:run_summary:v2.0
+timestamp_utc: (pending fresh scan)
+run_dir_name: (pending fresh scan)
+mode: SWEEP_REPRIEVE + QUOTER_SKIP_CACHE + BLOCKER_TAXONOMY (R32 directive)
+test_count: 2126 passed, 5 skipped
+schema_version: m4:run_summary:v2.1, start:long_scan_summary:v1.15
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R31: Diagnose 0-roundtrip bottleneck (OE rejection funnel), add truth_verdict + quote_source_summary artifact fields |
-| goal_status | **REACHED** |
-| close_allowed | true |
-| remaining_blockers | Per-chain adapter implementation (iziswap/syncswap/ambient stubs). Quoter_v2 failure rate requires investigation. |
-| evidence_session_run_dirs | ci_m5_gate_arbitrum_one_20260320_230614_040386 (primary), + 42 coverage runs across 6 chains |
-| primary_blocker_of_session | Operator ambiguity: profit_status=PASS alongside roundtrip_truth_status=NOT_PROFITABLE; OE rejection funnel not visible in truth_report |
-| blocker_status_before | ACTIVE: truth_report lacks OE funnel data; run_summary has no truth_verdict; profit_status=PASS misleads operators |
-| blocker_status_after | RESOLVED: truth_verdict=DIAGNOSTIC_PROFIT_ONLY disambiguates; quote_source_summary + oe_rejection_funnel are first-class fields |
-| start_metric | 2090 tests, 0 truth_verdict field, 0 quote_source_summary, 0 oe_rejection_funnel |
-| end_metric | 2101 tests, truth_verdict live in run_summary, quote_source_summary + oe_rejection_funnel in truth_report |
-| delta | +11 tests, +3 first-class artifact fields, full OE bottleneck RCA completed |
+| session_goal | R32: Connect wide-sweep to OE re-check, auto-compute blocker taxonomy, reduce QUOTER_V2_FAILED, fix R31 framing |
+| goal_status | **IN_PROGRESS** (code changes complete, fresh scan pending) |
+| close_allowed | false (need same-session evidence) |
+| remaining_blockers | Fresh scan bundle required to validate sweep reprieve effect |
+| evidence_session_run_dirs | (pending) |
+| primary_blocker_of_session | 0-RT problem: OE rejects all at $10 probe (NET_PROFIT_TOO_LOW=57%), sweep never runs (eligible_opps empty) |
+| blocker_status_before | ACTIVE: sweep disconnected from OE re-check; blocker_classification always null; quoter_v2 failures waste RPC |
+| blocker_status_after | CODE_COMPLETE: sweep reprieve wired; blocker auto-computed; quoter skip cache active. Runtime validation pending. |
+| start_metric | 2101 tests, 0 sweep reprieve, null blocker_classification, 59 QUOTER_V2_FAILED per base cycle |
+| end_metric | 2126 tests, sweep reprieve for NET_PROFIT_TOO_LOW rejects, auto blocker taxonomy (6 values), quoter_v2 skip cache (3-fail threshold) |
+| delta | +25 tests, +3 new test files, 7 files changed |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 - R31 directive: OE bottleneck diagnosis + artifact clarity
+goal (Roadmap): M5_0/M4 - R32 directive: address 0-RT problem
 change_summary:
-  - **CRITICAL**: `m4/policy.py` — `compute_status()` returns new `truth_verdict` field: NO_DATA | ROUNDTRIP_PROFITABLE | DIAGNOSTIC_PROFIT_ONLY | NO_PROFIT. Resolves operator ambiguity where profit_status=PASS + roundtrip_truth=NOT_PROFITABLE.
-  - **CRITICAL**: `m4/fixtures.py` — `truth_verdict` surfaced in `run_summary_data` as first-class field. Inline computation mirrors `compute_status()` logic.
-  - **CRITICAL**: `strategy/artifacts.py` — `build_truth_data()` adds `quote_source_summary` (executable/diagnostic/quoter_matrix per DEX) and `oe_rejection_funnel` (total/gated/rejected/reasons from OE).
-  - NEW: `tests/unit/test_r31_truth_verdict.py` — 11 tests locking truth_verdict domain, quote_source_summary, oe_rejection_funnel contracts.
+  - **CRITICAL**: `strategy/roundtrip_selection.py` — `select_sweep_reprieve_candidates()`: when OE rejects all at $10 probe, NET_PROFIT_TOO_LOW rejects with both legs quoter_v2 + cross-DEX get swept at full 19-point size ladder.
+  - **CRITICAL**: `strategy/jobs/run_scan_real.py` — sweep reprieve wiring: empty `eligible_opps` → reprieve candidates → `run_sweep()`.
+  - **CRITICAL**: `start.py` — 4 new per-chain fields (last_truth_verdict, last_quote_source_summary, last_oe_rejection_funnel, blocker_evidence). `_compute_blocker_evidence()` auto-taxonomy: ROUNDTRIP_PROFITABLE | INFRA_FAIL | NO_SIGNAL | QUOTE_PATH_BLOCKED | OE_ECONOMICS | MIXED_SOURCE.
+  - **CRITICAL**: `strategy/quotes.py` — quoter_v2 skip cache: after 3 consecutive failures, skip quoter_v2 for 10min (straight to slot0). Reduces QUOTER_V2_FAILED count + RPC waste.
+  - `m4/fixtures.py` — truth_verdict moved to first status field in run_summary.
+  - `scripts/pair_level_rca.py` — `_rt_gas_bps()` fixes latent bug (gas always 0 in counterfactuals), `_print_oe_funnel()` for console diagnostics.
+  - `strategy/quote_metrics.py` — `quoter_v2_skipped` counter.
 touched_files:
-  - m4/policy.py (CRITICAL — truth_verdict in compute_status)
-  - m4/fixtures.py (CRITICAL — truth_verdict in run_summary)
-  - strategy/artifacts.py (CRITICAL — quote_source_summary + oe_rejection_funnel)
-  - tests/unit/test_r31_truth_verdict.py (NEW — 11 tests)
+  - strategy/roundtrip_selection.py (CRITICAL — sweep reprieve)
+  - strategy/jobs/run_scan_real.py (CRITICAL — sweep reprieve wiring)
+  - start.py (CRITICAL — blocker_evidence auto-taxonomy + per-chain R31 fields)
+  - strategy/quotes.py (CRITICAL — quoter_v2 skip cache)
+  - m4/fixtures.py (truth_verdict prominence)
+  - scripts/pair_level_rca.py (gas_bps fix + OE funnel printer)
+  - strategy/quote_metrics.py (quoter_v2_skipped counter)
+  - tests/unit/test_roundtrip_selection.py (+8 sweep reprieve tests)
+  - tests/unit/test_blocker_evidence.py (NEW — 10 taxonomy tests)
+  - tests/unit/test_quoter_v2_skip_cache.py (NEW — 7 skip cache tests)
 
 ## 2) Commands Executed
 
 ```
-py -3.11 -m pytest tests/unit -q: PASS (2101 passed, 5 skipped)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED (42.8s)
-py -3.11 start.py --config-list real_minimal+5 onboard configs --hours 0.17 --cycles 1: 43 runs, 6 chains (630s wall)
+py -3.11 -m pytest tests/unit -q: PASS (2126 passed, 5 skipped)
 ```
+Fresh scan: (pending)
 
-## 3) Artifacts Attached
-rolling: data/runs/_rolling/ (updated by primary arb online scan)
-online_scan: ci_m5_gate_arbitrum_one_20260320_230614_040386
-long_scan: data/runs/_rolling/long_scan_latest.json (43 runs, 6 chains)
+## 3) R32 Architecture Changes
 
-### Primary Arb Scan Evidence (FRESH, R31)
-```
-runDir: ci_m5_gate_arbitrum_one_20260320_230614_040386
-timestamp: 2026-03-20T22:06:52.855924Z
-gate_status: PASS
-chain: arbitrum_one (chain_id: 42161)
-pairs_resolved: 30 (from 28 cross-DEX active)
-dexes_active: 4 (uniswap_v3, sushiswap_v3, pancakeswap_v3, camelot_v3)
-quotes_total: 181
-quotes_fetched: 108
-  executable: 99 (91.7%)
-  diagnostic: 9 (8.3%)
-  quoter_v2_failed: 12
-signals_total: 46
-included_signals: 38
-opportunities_total: 207 (89 profitable by OE)
-truth_verdict: DIAGNOSTIC_PROFIT_ONLY
-profit_status: PASS
-roundtrip_truth_status: NOT_PROFITABLE
-profitable_roundtrips: 0
-real_quote_count: 0
-execution_pnl:
-  total_net_usdc: 59.90
-kill_switch_active: true
-execution_enabled: false
-```
+### Sweep Reprieve (connecting wide-sweep to OE re-check)
+Problem: OE evaluates at single $10 probe → 57% rejected as NET_PROFIT_TOO_LOW → eligible_opps empty → sweep never runs.
+Fix: `select_sweep_reprieve_candidates()` picks NET_PROFIT_TOO_LOW rejects where both legs are quoter_v2 + cross-DEX, deduplicates by pair (best spread), caps at 15. These are passed to `run_sweep()` which evaluates the full 19-point [$1-$10,000] size ladder. If ANY size is profitable at the frontier, the route is found.
 
-### OE Rejection Funnel (from truth_report — NEW R31 FIELD)
-```
-total_opportunities: 207
-gated_count: 0
-rejected_count: 207
-rejected_reasons:
-  NET_PROFIT_TOO_LOW: 118  (57.0%) — economics don't work at $10 probe
-  SUSPECT_SPREAD_HARD: 46  (22.2%) — spread >500 bps (stale/inverted)
-  MIXED_SOURCE: 21          (10.1%) — one leg quoter_v2, other slot0
-  NOTIONAL_DRIFT: 19        (9.2%)  — target vs actual size drift >20%
-  SLOT0_DIAGNOSTIC: 3       (1.4%)  — both legs slot0 fallback
-```
+### Quoter V2 Skip Cache (reducing QUOTER_V2_FAILED)
+Problem: Base has 59/63 pools where quoter_v2 fails every cycle (dust liquidity), wasting RPC calls.
+Fix: Module-level `_quoter_v2_fail_counts` tracks consecutive failures per pool_key. After 3 failures, quoter_v2 is skipped for 10 minutes (straight to slot0 diagnostic). Cache resets on success (liquidity recovery).
 
-### Quote Source Summary (from truth_report — NEW R31 FIELD)
-| DEX | Fee | Attempted | Quoter OK | Slot0 Fallback | Diag |
-|-----|-----|-----------|-----------|----------------|------|
-| camelot_v3 | 0 | 19 | 16 | 0 | 0 |
-| uniswap_v3 | 500 | 24 | 23 | 1 | 1 |
-| uniswap_v3 | 3000 | 24 | 22 | 2 | 2 |
-| sushiswap_v3 | 3000 | 14 | 13 | 1 | 1 |
-| pancakeswap_v3 | 2500 | 8 | 8 | 0 | 0 |
+### Blocker Evidence Taxonomy (auto-computed per-chain)
+Problem: `blocker_classification` was always null in long_scan_latest.json (only set from config YAML).
+Fix: `_compute_blocker_evidence()` auto-computes from fresh evidence with priority:
+1. ROUNDTRIP_PROFITABLE (≥1 profitable RT)
+2. INFRA_FAIL (>50% run failure rate)
+3. NO_SIGNAL (0 signals with runs > 0)
+4. QUOTE_PATH_BLOCKED (>50% quoter_v2 failure rate)
+5. OE_ECONOMICS (>40% NET_PROFIT_TOO_LOW in OE rejections)
+6. MIXED_SOURCE (>30% MIXED_SOURCE in OE rejections)
 
-Quoter V2 success rate: **99/108 = 91.7%** executable (improved from ~60% in R30 due to hot_requote excluding dead pools).
-
-### Truth Verdict (NEW R31 FIELD)
-```
-truth_verdict: DIAGNOSTIC_PROFIT_ONLY
-meaning: profit_status=PASS (one-leg simulated net $59.90) but 0 roundtrip-confirmed profit
-operator_action: Do NOT interpret as "profitable". The $59.90 net is diagnostic only.
-```
-
-## 4) Multi-Chain Long Scan Evidence (FRESH R31)
-
-### Summary (43 runs, 630s wall, 6 chains)
-| Metric | Value |
-|--------|-------|
-| Total runs | 43 |
-| PASS / NO_DATA / FAIL | 33 / 2 / 8 |
-| Signals total | 308 |
-| Net USDC total | $560.16 |
-| Profitable RTs | 0 |
-| RT evaluated | 0 |
-| Pass chains | arbitrum_one, linea, scroll |
-| Fail chains | zksync, base, mantle |
-
-### Per-Chain Breakdown
-| Chain | Runs | PASS | FAIL | Signals | Net USDC | Cross-DEX | Quality | Level |
-|-------|------|------|------|---------|----------|-----------|---------|-------|
-| arbitrum_one | 8 | 8 | 0 | 216 | $368.20 | 30 | WARN | SIGNAL_PRODUCING |
-| linea | 7 | 7 | 0 | 31 | $75.51 | 11 | WARN | SIGNAL_PRODUCING |
-| scroll | 7 | 7 | 0 | 28 | $32.53 | 5 | WARN | SIGNAL_PRODUCING |
-| mantle | 7 | 6 | 1 | 18 | $62.92 | 6 | WARN | SIGNAL_PRODUCING |
-| zksync | 7 | 2 | 5 | 8 | $3.85 | 4 | FAIL | - |
-| base | 7 | 3 | 2 | 7 | $17.15 | 15 | NO_DATA | INFRA_READY |
-
-### Profit Truth Summary
-All 6 chains: `truth_verdict = DIAGNOSTIC_PROFIT_ONLY` or worse. 0 roundtrips evaluated across all chains. All net USDC values are one-leg diagnostic simulations — NOT executable profit.
-
-## 5) Root Cause Analysis: 0 Roundtrip Evaluations
-
-### Pipeline Trace (arb primary)
-```
-signals (46) → OE (207 combinations) → OE gate (0 pass) → roundtrip selection (0 candidates) → roundtrip (0 evaluated)
-```
-
-### Why 207→0 at OE Gate
-1. **NET_PROFIT_TOO_LOW (118)**: At $10 probe size, gas+slippage costs exceed spread profit for most pairs. This is the dominant blocker.
-2. **SUSPECT_SPREAD_HARD (46)**: Stale slot0 prices or inverted pools produce >500 bps apparent spreads that are artifacts, not opportunities.
-3. **MIXED_SOURCE (21)**: One leg uses quoter_v2 (executable), other falls back to slot0 (diagnostic). OE requires both legs executable.
-4. **NOTIONAL_DRIFT (19)**: Target $10 vs actual amount differs >20% due to low-liquidity pools.
-5. **SLOT0_DIAGNOSTIC (3)**: Both legs are slot0 fallback — entirely non-executable.
-
-### Key Insight
-The primary blocker is **economics at $10 probe size** (NET_PROFIT_TOO_LOW = 57% of rejections), NOT the mixed-source/slot0 issue identified in R30's preliminary analysis. The quoter success rate improved to 91.7% in R31 (from ~60% in R30) because hot_requote mode prunes dead pools.
-
-## 6) R31 Architecture Changes
-
-### truth_verdict (4-value domain)
-Added to `compute_status()` in `m4/policy.py` and to `run_summary_data` in `m4/fixtures.py`:
-| Value | Meaning |
-|-------|---------|
-| `NO_DATA` | No signals (empty scan) |
-| `ROUNDTRIP_PROFITABLE` | At least 1 profitable roundtrip |
-| `DIAGNOSTIC_PROFIT_ONLY` | profit_status=PASS but 0 profitable roundtrips |
-| `NO_PROFIT` | profit_status=FAIL |
-
-### quote_source_summary (truth_report first-class field)
-Surfaced from `stats.quoter_matrix` into `truth_report.quote_source_summary` with per-DEX:fee executable/diagnostic/failed breakdown.
-
-### oe_rejection_funnel (truth_report first-class field)
-Surfaced from `stats.opportunity_engine.summary` into `truth_report.oe_rejection_funnel` with total/gated/rejected/reasons.
-
-## 7) Contract Checks
-truth_verdict domain: OK — 4 values, tested in test_r31_truth_verdict.py (5 tests)
-quote_source_summary: OK — present in truth_report, tested (3 tests)
-oe_rejection_funnel: OK — present in truth_report, tested (3 tests)
+## 4) Contract Checks
+sweep_reprieve: 8 tests (filtering, dedup, max_candidates, source filtering, empty input)
+blocker_evidence: 10 tests (full priority chain, truth_verdict fallback, no-evidence case)
+quoter_v2_skip_cache: 7 tests (threshold, TTL expiry, success reset, pool independence)
+truth_verdict first in run_summary: verified in fixtures.py
 rolling discipline (3+1 files): OK
 provenance contract: OK (run_timestamp only)
-runtime artifacts not committed: OK
-CI pipeline: ALL REQUIRED GATES PASSED
+CI pipeline: 2126 tests PASS
 
-## 8) Rolling Aggregator Stats (m4_stability_agg quick_stats)
-```
-pass_rate: 0.95
-data_run_rate: 1.0
-total_net_usdc: $7127.42 (200-run window)
-avg_net_usdc: $35.64 per run
-latest_profit_realism_status: ONE_LEG_ONLY_DIAGNOSTIC
-roundtrip_runs_evaluated: 191
-roundtrip_runs_profitable: 0
-sweep_median_gap_to_zero_bps: 68.13
-consecutive_non_nodata_cycles: 200
-chain_key: arbitrum_one
-```
+## 5) R31 Framing Correction
+R31 resolved artifact clarity (truth_verdict, quote_source_summary, oe_rejection_funnel) — not profit discovery. The 0-RT problem is an arb-specific OE economics bottleneck at the $10 probe, while base remains quote-path blocked. Chain-global "market-blocked" claims are premature. R32 addresses economics directly via sweep reprieve.
 
-## 9) Blocker Classification (R31)
-
-### Per-chain blocker taxonomy
-| Chain | Verdict | R31 Finding |
-|-------|---------|-------------|
-| arbitrum_one | **OE_ECONOMICS (NET_PROFIT_TOO_LOW = 57% of rejections)** | 207 OE combos, 0 gated. $10 probe too small for gas breakeven. |
-| linea | **SIGNAL_PRODUCING (31 signals, $75.51 diag)** | Pass chain. 2 DEXes (pancake+lynex). 4 cross-DEX signals per run. |
-| scroll | **SIGNAL_PRODUCING (28 signals, $32.53 diag)** | Pass chain. 3 DEXes (nuri+sushi+uni). Accepted-fail. |
-| mantle | **FRAGILE_QUALITY (6/7 PASS, 18 signals)** | Intermittent failures. discovery_probe_size_usd=10. |
-| zksync | **HIGH_FAIL (5/7 FAIL, 8 signals)** | RPC instability. SyncSwap stub not yet functional. |
-| base | **INFRA_READY (2 NO_DATA, 15 cross-DEX pairs discovered)** | Aerodrome VE33 quote path not producing signals. |
-
-### Summary blockers
-```
-code_blocker: NONE (2101 tests PASS, CI pipeline PASS)
-artifact_clarity: RESOLVED (truth_verdict + quote_source_summary + oe_rejection_funnel)
-economics_blocker: HIGH ($10 probe NET_PROFIT_TOO_LOW = 57% OE rejections on arb)
-quoter_v2_fallback: LOW (91.7% quoter_v2 success rate; MIXED_SOURCE only 10.1% of rejections)
-execution_blocker: HIGH (dormant — no signer, simulate_only)
-```
-
-## 10) What I need from Lead now
-1. **Probe size strategy**: $10 is too small for gas breakeven on most pairs (NET_PROFIT_TOO_LOW = 57% of OE rejections). Should we increase probe size or use the wide sweep ladder from R29?
-2. **OE gating policy**: With 91.7% quoter_v2 success rate, MIXED_SOURCE (10.1%) is a minor blocker. Consider relaxing OE gate for pairs where one leg is quoter_v2?
+## 6) What I need from Lead now
+1. **Fresh scan validation**: R32 changes are code-complete. Need same-session scan to validate sweep reprieve effect (does the 19-point ladder find profitable sizes for NET_PROFIT_TOO_LOW rejects?).
+2. **Aerodrome re-enablement**: Base quote-path is QUOTE_PATH_BLOCKED. Aerodrome (ve33) was disabled R28.24 because `getAmountOut()` returns 0. Root cause investigation needed for R33.
 3. **Per-chain priority**: linea and scroll are SIGNAL_PRODUCING with 100% pass rate. Push these toward roundtrip evaluation first?
 4. **Adapter implementation**: iziswap/syncswap/ambient stubs still pending. Which first?
 5. **Sweep integration with OE**: R29 wide ladder ($1-$10,000) never reaches OE because OE uses paper_size_usd=$10. Connect sweep to OE evaluation?

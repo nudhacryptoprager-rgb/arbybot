@@ -8,7 +8,7 @@ overridden independently.
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger("roundtrip_selection")
 
@@ -106,3 +106,55 @@ def select_roundtrip_candidates(
         "passed_to_roundtrip": len(eligible_opps),
     }
     return eligible_opps, filter_stats
+
+
+def select_sweep_reprieve_candidates(
+    opps_list: List[dict],
+    max_candidates: int = 15,
+) -> Tuple[List[dict], dict]:
+    """Select candidates for sweep reprieve from NET_PROFIT_TOO_LOW rejected opps.
+
+    When OE rejects all opportunities at the single probe size (e.g. $10), routes
+    rejected only by NET_PROFIT_TOO_LOW with both legs executable (quoter_v2) deserve
+    a wide-size frontier replay. This prevents single-size economics from being the
+    final verdict without exploring the full sweep ladder.
+
+    Criteria:
+    - gate_passed == False
+    - reject_reason starts with "NET_PROFIT_TOO_LOW"
+    - Both legs are quoter_v2 (not mixed-source or slot0)
+    - Cross-DEX
+
+    Returns:
+        (sweep_reprieve_candidates, stats_dict)
+    """
+    reprieve = []
+    for opp in opps_list:
+        if opp.get("gate_passed", False):
+            continue
+        reason = opp.get("reject_reason") or ""
+        if not reason.startswith("NET_PROFIT_TOO_LOW"):
+            continue
+        if opp.get("buy_quote_source") != "quoter_v2" or opp.get("sell_quote_source") != "quoter_v2":
+            continue
+        if not is_cross_dex(opp):
+            continue
+        reprieve.append(opp)
+
+    # Sort by gross spread (best first) and deduplicate by pair
+    reprieve.sort(key=lambda o: float(o.get("gross_spread_bps", 0)), reverse=True)
+    seen_pairs: Dict[str, bool] = {}
+    deduped: List[dict] = []
+    for opp in reprieve:
+        pair = opp.get("pair", "unknown")
+        if pair not in seen_pairs:
+            seen_pairs[pair] = True
+            deduped.append(opp)
+        if len(deduped) >= max_candidates:
+            break
+
+    stats = {
+        "net_profit_too_low_total": len(reprieve),
+        "sweep_reprieve_selected": len(deduped),
+    }
+    return deduped, stats

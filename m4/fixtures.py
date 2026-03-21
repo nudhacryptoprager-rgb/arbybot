@@ -1279,6 +1279,9 @@ def generate_m4_from_online_inputs(
             "min_signals_for_pass": Thresholds.MIN_SIGNALS_FOR_PASS,  # v1.9.7: unified
             "fragile_rate_warn": 0.50,  # v1.9.7: run-level fragile gate
         },
+        # R32: truth_verdict is the PRIMARY operator field — placed first.
+        # Combines profit_status + roundtrip_truth into a single actionable classification.
+        "truth_verdict": truth_verdict,
         # Split status (v1.5.0)
         "profit_status": profit_status,
         "profit_reasons": profit_reasons,
@@ -1290,8 +1293,6 @@ def generate_m4_from_online_inputs(
         # Combined status (backwards compat)
         "status": combined_status,
         "reasons": all_reasons,
-        # R31: truth_verdict — single actionable classification for operators
-        "truth_verdict": truth_verdict,
         # v1.9.5: Quality warnings (separate from status reasons)
         "quality_warnings": quality_warnings,
         # Evidence validation

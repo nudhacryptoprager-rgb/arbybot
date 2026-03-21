@@ -887,11 +887,31 @@ def run_scan(
         
         # v3.3.0: Dynamic size sweep — R28.28: extracted to strategy.dynamic_sweep_runtime
         dynamic_probe_cfg = config.get("dynamic_probe", {})
-        if dynamic_probe_cfg.get("enabled") and eligible_opps:
+        # R32: Sweep reprieve — when eligible_opps is empty but NET_PROFIT_TOO_LOW
+        # rejected opps exist with both legs executable, give them a frontier replay.
+        # This prevents single-probe economics from being the final verdict.
+        sweep_candidates = list(eligible_opps)
+        sweep_reprieve_count = 0
+        if not sweep_candidates and dynamic_probe_cfg.get("enabled"):
+            from strategy.roundtrip_selection import select_sweep_reprieve_candidates
+            _reprieve, _reprieve_stats = select_sweep_reprieve_candidates(
+                opps_list, max_candidates=15
+            )
+            sweep_candidates = _reprieve
+            sweep_reprieve_count = len(_reprieve)
+            stats["roundtrip"]["sweep_reprieve_count"] = sweep_reprieve_count
+            stats["roundtrip"]["sweep_reprieve_stats"] = _reprieve_stats
+            if sweep_reprieve_count > 0:
+                logger.info(
+                    "Sweep reprieve: %d NET_PROFIT_TOO_LOW candidates promoted to frontier sweep",
+                    sweep_reprieve_count,
+                )
+
+        if dynamic_probe_cfg.get("enabled") and sweep_candidates:
             from strategy.dynamic_sweep_runtime import run_sweep
 
             sweep_result = run_sweep(
-                eligible_opps=eligible_opps,
+                eligible_opps=sweep_candidates,
                 quotes_by_key=quotes_by_key,
                 config=config,
                 chain_key=chain_key,
@@ -1190,6 +1210,8 @@ def run_scan(
         "rt_evaluated": _rt.get("evaluated_count", 0),
         "rt_real_quote": _rt.get("real_quote_count", 0),
         "rt_profitable": _rt.get("profitable_count", 0),
+        # R32: Sweep reprieve — NET_PROFIT_TOO_LOW opps promoted to frontier sweep
+        "sweep_reprieve_count": _rt.get("sweep_reprieve_count", 0),
     }
     
     # =========================================================================

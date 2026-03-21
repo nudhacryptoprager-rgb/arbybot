@@ -15,6 +15,7 @@ from strategy.roundtrip_selection import (
     margin_viable,
     roundtrip_eligible,
     select_roundtrip_candidates,
+    select_sweep_reprieve_candidates,
 )
 
 
@@ -139,3 +140,88 @@ class TestSelectRoundtripCandidates:
 
     def test_default_threshold(self):
         assert DEFAULT_MIN_SPREAD_MINUS_THRESHOLD == -5.0
+
+
+def _make_rejected_opp(
+    pair="WETH_USDC",
+    buy_dex="uniswap_v3",
+    sell_dex="sushiswap_v3",
+    buy_fee=500,
+    sell_fee=500,
+    gross_spread_bps=15.0,
+    reject_reason="NET_PROFIT_TOO_LOW: -0.12 < 0.50",
+    buy_quote_source="quoter_v2",
+    sell_quote_source="quoter_v2",
+):
+    return {
+        "pair": pair,
+        "buy_dex": buy_dex,
+        "sell_dex": sell_dex,
+        "buy_fee": buy_fee,
+        "sell_fee": sell_fee,
+        "gross_spread_bps": gross_spread_bps,
+        "gate_passed": False,
+        "reject_reason": reject_reason,
+        "buy_quote_source": buy_quote_source,
+        "sell_quote_source": sell_quote_source,
+    }
+
+
+class TestSelectSweepReprieveCandidates:
+    def test_basic_reprieve(self):
+        opps = [
+            _make_rejected_opp(pair="WETH_USDC", gross_spread_bps=15),
+            _make_rejected_opp(pair="WETH_DAI", gross_spread_bps=10),
+        ]
+        result, stats = select_sweep_reprieve_candidates(opps)
+        assert len(result) == 2
+        assert stats["sweep_reprieve_selected"] == 2
+
+    def test_filters_non_net_profit(self):
+        opps = [
+            _make_rejected_opp(reject_reason="SPREAD_TOO_LOW"),
+            _make_rejected_opp(pair="OK"),
+        ]
+        result, stats = select_sweep_reprieve_candidates(opps)
+        assert len(result) == 1
+        assert result[0]["pair"] == "OK"
+
+    def test_filters_mixed_source(self):
+        opps = [
+            _make_rejected_opp(buy_quote_source="slot0", sell_quote_source="quoter_v2"),
+        ]
+        result, _ = select_sweep_reprieve_candidates(opps)
+        assert len(result) == 0
+
+    def test_filters_same_dex(self):
+        opps = [_make_rejected_opp(buy_dex="uniswap_v3", sell_dex="uniswap_v3")]
+        result, _ = select_sweep_reprieve_candidates(opps)
+        assert len(result) == 0
+
+    def test_skips_gate_passed(self):
+        opp = _make_rejected_opp()
+        opp["gate_passed"] = True
+        result, _ = select_sweep_reprieve_candidates([opp])
+        assert len(result) == 0
+
+    def test_dedup_by_pair_best_spread(self):
+        opps = [
+            _make_rejected_opp(pair="A", gross_spread_bps=5),
+            _make_rejected_opp(pair="A", gross_spread_bps=20),
+            _make_rejected_opp(pair="B", gross_spread_bps=10),
+        ]
+        result, stats = select_sweep_reprieve_candidates(opps)
+        # 2 unique pairs
+        assert len(result) == 2
+        # Best spread for pair A = 20 (sorted first)
+        assert result[0]["gross_spread_bps"] == 20
+
+    def test_max_candidates(self):
+        opps = [_make_rejected_opp(pair=f"P{i}") for i in range(20)]
+        result, stats = select_sweep_reprieve_candidates(opps, max_candidates=5)
+        assert len(result) <= 5
+
+    def test_empty(self):
+        result, stats = select_sweep_reprieve_candidates([])
+        assert result == []
+        assert stats["sweep_reprieve_selected"] == 0

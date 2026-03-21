@@ -221,6 +221,52 @@ DEFAULT_TOKEN_USD_PRICES = {
 }
 
 
+# =============================================================================
+# R32: QUOTER_V2 SKIP CACHE — skip quoter_v2 for pools with repeated failures
+# =============================================================================
+# Pools where quoter_v2 consistently fails (low/dust liquidity) waste RPC calls
+# and inflate QUOTER_V2_FAILED counts.  After QUOTER_V2_SKIP_THRESHOLD consecutive
+# failures the quoter call is bypassed and the pool goes directly to slot0 diagnostic.
+# The cache entry expires after QUOTER_V2_SKIP_TTL_SECONDS so the quoter is retried
+# periodically in case liquidity improves.
+
+import time as _time
+
+_quoter_v2_fail_counts: Dict[str, int] = {}        # pool_key → consecutive fail count
+_quoter_v2_skip_since: Dict[str, float] = {}        # pool_key → timestamp when skip started
+
+QUOTER_V2_SKIP_THRESHOLD = 3      # skip after this many consecutive failures
+QUOTER_V2_SKIP_TTL_SECONDS = 600  # 10 min: retry quoter_v2 to detect liquidity recovery
+
+
+def _should_skip_quoter_v2(pool_key: str) -> bool:
+    """Return True if quoter_v2 should be skipped for this pool (repeated failures)."""
+    cnt = _quoter_v2_fail_counts.get(pool_key, 0)
+    if cnt < QUOTER_V2_SKIP_THRESHOLD:
+        return False
+    since = _quoter_v2_skip_since.get(pool_key, 0.0)
+    if _time.time() - since > QUOTER_V2_SKIP_TTL_SECONDS:
+        # TTL expired — reset and allow retry
+        _quoter_v2_fail_counts.pop(pool_key, None)
+        _quoter_v2_skip_since.pop(pool_key, None)
+        return False
+    return True
+
+
+def _record_quoter_v2_failure(pool_key: str) -> None:
+    """Track a quoter_v2 failure for skip-cache purposes."""
+    prev = _quoter_v2_fail_counts.get(pool_key, 0)
+    _quoter_v2_fail_counts[pool_key] = prev + 1
+    if prev + 1 >= QUOTER_V2_SKIP_THRESHOLD and pool_key not in _quoter_v2_skip_since:
+        _quoter_v2_skip_since[pool_key] = _time.time()
+
+
+def _record_quoter_v2_success(pool_key: str) -> None:
+    """Reset skip-cache on quoter_v2 success (liquidity recovered)."""
+    _quoter_v2_fail_counts.pop(pool_key, None)
+    _quoter_v2_skip_since.pop(pool_key, None)
+
+
 def calculate_amount_in_wei(
     token_symbol: str,
     decimals: int,
@@ -536,6 +582,9 @@ def collect_quotes(
                         amount_in=_pf_amt, rpc_url=rpc_url, block_num=current_block,
                     )
                 elif (_at == "algebra" or _pf_use_q) and _dc:
+                    # R32: Skip quoter_v2 prefetch for pools with repeated failures
+                    if _at == "uniswap_v3" and _should_skip_quoter_v2(_pk):
+                        continue
                     _qa = _dc.get_quoter_address()
                     if _qa:
                         if _at == "uniswap_v3":
@@ -799,13 +848,17 @@ def collect_quotes(
             use_quoter_global = config.get("use_quoter_v2", False)
             use_quoter_for_dex = is_algebra or use_quoter_global
             quoter_result = None
+            _quoter_v2_was_skipped = False
             
             if use_quoter_for_dex and dex_cfg:
                 quoter_addr = dex_cfg.get_quoter_address()
                 if quoter_addr:
                     if adapter_type == "uniswap_v3":
-                        # R28.4: Use prefetched result if available
-                        if pool_key in _prefetch_results:
+                        # R32: Skip quoter_v2 for pools with repeated failures
+                        if _should_skip_quoter_v2(pool_key):
+                            counts["quoter_v2_skipped"] = counts.get("quoter_v2_skipped", 0) + 1
+                            _quoter_v2_was_skipped = True
+                        elif pool_key in _prefetch_results:
                             quoter_result = _prefetch_results[pool_key]
                         else:
                             quoter_result = read_quoter_v2(
@@ -974,6 +1027,8 @@ def collect_quotes(
                     qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
                 if runtime_disabled_enabled:
                     record_quote_success(pool_key)
+                # R32: Reset quoter_v2 skip cache on success (liquidity recovered)
+                _record_quoter_v2_success(pool_key)
                 # v2.2.0: Record valid quote for dynamic anchor calculation
                 if price_exact is not None and float(price_exact) > 0:
                     am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
@@ -1012,7 +1067,8 @@ def collect_quotes(
             # R29: Emit QUOTER_V2_FAILED reject for non-algebra V3 DEXes when quoter
             # was attempted but failed. This is INFORMATIONAL — we still fall through
             # to slot0 path below. Makes quoter failures visible in reject_histogram.
-            if use_quoter_for_dex and not quoter_success and is_v3_dex and not is_algebra:
+            # R32: Don't emit QUOTER_V2_FAILED when quoter was intentionally skipped
+            if use_quoter_for_dex and not quoter_success and is_v3_dex and not is_algebra and not _quoter_v2_was_skipped:
                 quoter_addr = dex_cfg.get_quoter_address() if dex_cfg else None
                 rejected_quotes.append({
                     "pair": f"{token_in}/{token_out}",
@@ -1032,6 +1088,8 @@ def collect_quotes(
                     quoter_matrix[mx_key]["slot0_fallback"] += 1
                 logger.info("QUOTER_V2_FAILED: %s %s/%s fee=%d pool=%s → slot0 fallback",
                            dex, token_in, token_out, fee_tier, pool_addr)
+                # R32: Track failure for skip cache (skip quoter_v2 after repeated failures)
+                _record_quoter_v2_failure(pool_key)
                 # Do NOT continue — fall through to slot0 path below
             
             # Path B: slot0 fallback — DIAGNOSTIC CHANNEL only (R28)

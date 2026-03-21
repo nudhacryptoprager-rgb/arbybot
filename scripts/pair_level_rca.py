@@ -46,6 +46,18 @@ def load_scan_report(run_dir: Path) -> Optional[Dict[str, Any]]:
         return json.load(f)
 
 
+def _rt_gas_bps(rt: Dict[str, Any]) -> float:
+    """Compute gas cost in bps from roundtrip result dict."""
+    gas_usd = rt.get("gas_cost_usd", 0) or 0
+    # Approximate notional from gross_pnl_usd / gross_pnl_bps
+    gross_bps = rt.get("gross_pnl_bps", 0) or 0
+    gross_usd = rt.get("gross_pnl_usd", 0) or 0
+    if gross_bps != 0 and gross_usd != 0:
+        notional_usd = abs(gross_usd / (gross_bps / 10000))
+        return (gas_usd / notional_usd) * 10000 if notional_usd > 0 else 0
+    return 0
+
+
 def extract_pair_trace(truth: Dict[str, Any], scan: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Extract pair_funnel_trace from truth_report or reconstruct from signals."""
     # R29: If pair_funnel_trace is embedded in the artifact, use it directly
@@ -95,6 +107,8 @@ def extract_pair_trace(truth: Dict[str, Any], scan: Optional[Dict[str, Any]]) ->
                         "rt_slippage_bps": rt.get("estimated_slippage_bps"),
                         "rt_lp_fee_bps": ((rt.get("leg1_fee", 0) + rt.get("leg2_fee", 0)) / 100.0),
                         "rt_leg2_is_real": rt.get("leg2_is_real_quote"),
+                        # R32: gas_bps computed from gas_cost_usd / notional
+                        "rt_gas_bps": _rt_gas_bps(rt),
                     }
 
     # R29: Enrich with dynamic sweep size frontier data
@@ -267,6 +281,32 @@ def print_counterfactual(cf: Dict[str, Any]):
               f"{cf_vals['if_half_lp_fee']:>+8.2f} {bsz_str:>7s}")
 
 
+def _print_oe_funnel(truth: Dict[str, Any]):
+    """Print OE rejection funnel and quote source summary from R31 truth_report fields."""
+    oe = truth.get("oe_rejection_funnel")
+    qss = truth.get("quote_source_summary")
+
+    if oe:
+        total = oe.get("total_opportunities", 0)
+        gated = oe.get("gated_count", 0)
+        rejected = oe.get("rejected_count", 0)
+        reasons = oe.get("rejected_reasons", {})
+        print(f"\nOE Rejection Funnel: {total} total -> {gated} gated, {rejected} rejected")
+        if reasons:
+            for reason, cnt in sorted(reasons.items(), key=lambda x: -x[1]):
+                pct = cnt / rejected * 100 if rejected > 0 else 0
+                print(f"  {reason:30s}: {cnt:>4d} ({pct:5.1f}%)")
+
+    if qss:
+        exec_q = qss.get("quotes_fetched_executable", 0)
+        diag_q = qss.get("quotes_fetched_diagnostic", 0)
+        fail_q = qss.get("quoter_v2_failed_count", 0)
+        total_q = exec_q + diag_q + fail_q
+        rate = exec_q / total_q * 100 if total_q > 0 else 0
+        print(f"\nQuote Source: {exec_q} executable, {diag_q} diagnostic, {fail_q} quoter_v2_failed "
+              f"(exec rate: {rate:.1f}%)")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pair-level RCA tool")
     parser.add_argument("--run-dir", type=str, help="Path to runDir")
@@ -348,9 +388,15 @@ def main():
             "pair_funnel_trace": trace,
             "counterfactual": cf,
         }
+        if truth:
+            output["quote_source_summary"] = truth.get("quote_source_summary")
+            output["oe_rejection_funnel"] = truth.get("oe_rejection_funnel")
         print(json.dumps(output, indent=2, default=str))
     else:
         print_pair_funnel(trace, chain_key)
+        # R32: Print OE funnel + quote source from truth_report
+        if truth:
+            _print_oe_funnel(truth)
         print_counterfactual(cf)
 
 

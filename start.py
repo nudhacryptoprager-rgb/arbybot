@@ -401,7 +401,70 @@ def new_chain_stats() -> dict[str, Any]:
         "funnel_spread_signals_total": 0,
         "funnel_rt_evaluated_total": 0,
         "funnel_rt_real_quote_total": 0,
+        # R32: Per-chain R31 artifact fields (last-run snapshot)
+        "last_truth_verdict": None,
+        "last_quote_source_summary": None,
+        "last_oe_rejection_funnel": None,
+        # R32: Auto-computed blocker from evidence (overrides config YAML when evidence exists)
+        "blocker_evidence": None,
     }
+
+
+def _compute_blocker_evidence(stats: dict[str, Any]) -> None:
+    """Compute blocker_evidence from fresh per-chain data.
+
+    taxonomy:
+      ROUNDTRIP_PROFITABLE — at least 1 profitable RT
+      OE_ECONOMICS — signals exist but OE rejects on NET_PROFIT_TOO_LOW (dominant)
+      QUOTE_PATH_BLOCKED — high quoter_v2 failure rate (>50% failed)
+      MIXED_SOURCE — OE rejects on MIXED_SOURCE (dominant)
+      NO_SIGNAL — no spread signals produced
+      INFRA_FAIL — chain consistently fails (>50% runs)
+    """
+    verdict = stats.get("last_truth_verdict")
+    qss = stats.get("last_quote_source_summary") or {}
+    oe_rf = stats.get("last_oe_rejection_funnel") or {}
+
+    if stats.get("profitable_roundtrips_total", 0) > 0:
+        stats["blocker_evidence"] = "ROUNDTRIP_PROFITABLE"
+        return
+
+    runs = stats.get("runs", 0)
+    fail = stats.get("fail", 0)
+    if runs > 0 and fail / runs > 0.5:
+        stats["blocker_evidence"] = "INFRA_FAIL"
+        return
+
+    if stats.get("included_signals_total", 0) == 0 and runs > 0:
+        stats["blocker_evidence"] = "NO_SIGNAL"
+        return
+
+    # Check quote-path: high quoter_v2 failure rate
+    exec_q = qss.get("quotes_fetched_executable", 0)
+    diag_q = qss.get("quotes_fetched_diagnostic", 0)
+    fail_q = qss.get("quoter_v2_failed_count", 0)
+    total_q = exec_q + diag_q + fail_q
+    if total_q > 0 and fail_q / total_q > 0.5:
+        stats["blocker_evidence"] = "QUOTE_PATH_BLOCKED"
+        return
+
+    # Check OE rejection reasons
+    rejected_reasons = oe_rf.get("rejected_reasons", {})
+    total_rej = oe_rf.get("rejected_count", 0)
+    if total_rej > 0:
+        net_low = rejected_reasons.get("NET_PROFIT_TOO_LOW", 0)
+        mixed = rejected_reasons.get("MIXED_SOURCE", 0)
+        if net_low / total_rej > 0.4:
+            stats["blocker_evidence"] = "OE_ECONOMICS"
+            return
+        if mixed / total_rej > 0.3:
+            stats["blocker_evidence"] = "MIXED_SOURCE"
+            return
+
+    if verdict == "DIAGNOSTIC_PROFIT_ONLY":
+        stats["blocker_evidence"] = "OE_ECONOMICS"
+    elif verdict == "NO_PROFIT":
+        stats["blocker_evidence"] = "NO_SIGNAL"
 
 
 def update_chain_stats(
@@ -571,6 +634,22 @@ def update_chain_stats(
             # Keep only last 5 entries
             if len(history) > 5:
                 stats["_pair_history"] = history[-5:]
+
+    # R32: Propagate R31 artifact fields per-chain
+    if truth_report:
+        qss = truth_report.get("quote_source_summary")
+        if qss:
+            stats["last_quote_source_summary"] = qss
+        oe_rf = truth_report.get("oe_rejection_funnel")
+        if oe_rf:
+            stats["last_oe_rejection_funnel"] = oe_rf
+    if summary:
+        tv = summary.get("truth_verdict")
+        if tv:
+            stats["last_truth_verdict"] = tv
+
+    # R32: Auto-compute blocker_evidence from fresh data
+    _compute_blocker_evidence(stats)
 
     # R28.25: Propagate filter_funnel and roundtrip_truth_status from scan_stats
     if scan_stats:
