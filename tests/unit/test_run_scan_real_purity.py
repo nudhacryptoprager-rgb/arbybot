@@ -155,8 +155,11 @@ def test_cross_dex_pairs_count_fallback_from_quotes():
 
 
 def test_start_funnel_accumulation_fields():
-    """R28.30: start.py must accumulate funnel productivity counters."""
-    path = Path(__file__).parent.parent.parent / "start.py"
+    """R28.30: chain_stats.py must accumulate funnel productivity counters.
+
+    R33: Fields extracted from start.py to strategy/chain_stats.py.
+    """
+    path = Path(__file__).parent.parent.parent / "strategy" / "chain_stats.py"
     content = path.read_text(encoding="utf-8")
 
     for key in [
@@ -166,4 +169,4 @@ def test_start_funnel_accumulation_fields():
         "funnel_rt_evaluated_total",
         "funnel_rt_real_quote_total",
     ]:
-        assert key in content, f"start.py missing accumulated funnel field '{key}'"
+        assert key in content, f"chain_stats.py missing accumulated funnel field '{key}'"

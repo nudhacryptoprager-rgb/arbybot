@@ -2242,57 +2242,52 @@ class TestLiveStreamErrorPath(unittest.TestCase):
         per_chain["arb"]["hot_requote_count"] = 1
         per_chain["arb"]["last_scan_mode"] = "full"
 
-        # Temporarily redirect HOT_LOOP_LATEST to a temp file
-        original_path = start.HOT_LOOP_LATEST
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td) / "hot_loop_latest.json"
-            start.HOT_LOOP_LATEST = tmp_path
-            try:
-                live_events = [
-                    {"timestamp": "2026-03-17T10:00:00Z", "event": "scan_started", "chain": "arb", "message": "FULL scan started"},
-                    {"timestamp": "2026-03-17T10:00:05Z", "event": "scan_finished", "chain": "arb", "message": "FULL scan finished: PASS"},
-                ]
-                active_runs = {
-                    "arb": {
-                        "chain": "arb",
-                        "config": "config/real_minimal.yaml",
-                        "run_kind": "NORMAL",
-                        "scan_mode": "full",
-                        "is_coverage": False,
-                        "rolling": True,
-                        "block_number": 123,
-                        "started_at": "2026-03-17T10:00:00Z",
-                        "_started_monotonic": _time.monotonic() - 3.0,
-                    }
+            live_events = [
+                {"timestamp": "2026-03-17T10:00:00Z", "event": "scan_started", "chain": "arb", "message": "FULL scan started"},
+                {"timestamp": "2026-03-17T10:00:05Z", "event": "scan_finished", "chain": "arb", "message": "FULL scan finished: PASS"},
+            ]
+            active_runs = {
+                "arb": {
+                    "chain": "arb",
+                    "config": "config/real_minimal.yaml",
+                    "run_kind": "NORMAL",
+                    "scan_mode": "full",
+                    "is_coverage": False,
+                    "rolling": True,
+                    "block_number": 123,
+                    "started_at": "2026-03-17T10:00:00Z",
+                    "_started_monotonic": _time.monotonic() - 3.0,
                 }
-                start.write_hot_loop_snapshot(
-                    per_chain,
-                    None,
-                    _time.monotonic() - 30,
-                    live_events=live_events,
-                    active_runs=active_runs,
-                )
-                self.assertTrue(tmp_path.exists())
-                with open(tmp_path) as f:
-                    snap = json.load(f)
-                self.assertEqual(snap["schema"], "start:hot_loop_snapshot:v1.3")
-                self.assertIn("generated_at", snap)
-                self.assertFalse(snap["is_test_session"])
-                self.assertIn("per_chain", snap)
-                self.assertIn("arb", snap["per_chain"])
-                self.assertEqual(snap["per_chain"]["arb"]["full_sweeps"], 1)
-                self.assertEqual(snap["per_chain"]["arb"]["hot_requotes"], 1)
-                self.assertEqual(snap["total_full_sweeps"], 1)
-                self.assertEqual(snap["total_hot_requotes"], 1)
-                self.assertIn("live_stream", snap)
-                self.assertEqual(snap["live_stream"]["active_count"], 1)
-                self.assertEqual(snap["live_stream"]["active_runs"][0]["chain"], "arb")
-                self.assertGreaterEqual(snap["live_stream"]["active_runs"][0]["elapsed_seconds"], 0)
-                self.assertEqual(snap["live_stream"]["recent_events"][0]["event"], "scan_finished")
-                self.assertEqual(snap["live_stream"]["verified_pairs"], [])
-                self.assertEqual(snap["live_stream"]["diagnostic_pairs"], [])
-            finally:
-                start.HOT_LOOP_LATEST = original_path
+            }
+            start.write_hot_loop_snapshot(
+                per_chain,
+                None,
+                _time.monotonic() - 30,
+                live_events=live_events,
+                active_runs=active_runs,
+                output_path=tmp_path,
+            )
+            self.assertTrue(tmp_path.exists())
+            with open(tmp_path) as f:
+                snap = json.load(f)
+            self.assertEqual(snap["schema"], "start:hot_loop_snapshot:v1.3")
+            self.assertIn("generated_at", snap)
+            self.assertFalse(snap["is_test_session"])
+            self.assertIn("per_chain", snap)
+            self.assertIn("arb", snap["per_chain"])
+            self.assertEqual(snap["per_chain"]["arb"]["full_sweeps"], 1)
+            self.assertEqual(snap["per_chain"]["arb"]["hot_requotes"], 1)
+            self.assertEqual(snap["total_full_sweeps"], 1)
+            self.assertEqual(snap["total_hot_requotes"], 1)
+            self.assertIn("live_stream", snap)
+            self.assertEqual(snap["live_stream"]["active_count"], 1)
+            self.assertEqual(snap["live_stream"]["active_runs"][0]["chain"], "arb")
+            self.assertGreaterEqual(snap["live_stream"]["active_runs"][0]["elapsed_seconds"], 0)
+            self.assertEqual(snap["live_stream"]["recent_events"][0]["event"], "scan_finished")
+            self.assertEqual(snap["live_stream"]["verified_pairs"], [])
+            self.assertEqual(snap["live_stream"]["diagnostic_pairs"], [])
 
     def test_write_hot_loop_snapshot_includes_live_candidates(self):
         """Hot snapshot surfaces per-chain live candidate rows for dashboard stream."""
@@ -2311,17 +2306,12 @@ class TestLiveStreamErrorPath(unittest.TestCase):
                 "final_result": "ROUNDTRIP_NOT_PROFITABLE",
             }
         ]
-        original_path = start.HOT_LOOP_LATEST
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td) / "hot_loop_latest.json"
-            start.HOT_LOOP_LATEST = tmp_path
-            try:
-                start.write_hot_loop_snapshot(per_chain, None, _time.monotonic() - 5)
-                with open(tmp_path) as f:
-                    snap = json.load(f)
-                self.assertEqual(snap["per_chain"]["arb"]["live_candidates"][0]["pair"], "USDC/DAI")
-            finally:
-                start.HOT_LOOP_LATEST = original_path
+            start.write_hot_loop_snapshot(per_chain, None, _time.monotonic() - 5, output_path=tmp_path)
+            with open(tmp_path) as f:
+                snap = json.load(f)
+            self.assertEqual(snap["per_chain"]["arb"]["live_candidates"][0]["pair"], "USDC/DAI")
 
     def test_write_hot_loop_snapshot_test_session_marker(self):
         """R28.17: is_test_session=True marks snapshot accordingly."""
@@ -2330,20 +2320,16 @@ class TestLiveStreamErrorPath(unittest.TestCase):
         import json
         per_chain = {"arb": start.new_chain_stats()}
         per_chain["arb"]["runs"] = 1
-        original_path = start.HOT_LOOP_LATEST
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td) / "hot_loop_latest.json"
-            start.HOT_LOOP_LATEST = tmp_path
-            try:
-                start.write_hot_loop_snapshot(
-                    per_chain, None, _time.monotonic() - 5,
-                    is_test_session=True,
-                )
-                with open(tmp_path) as f:
-                    snap = json.load(f)
-                self.assertTrue(snap["is_test_session"])
-            finally:
-                start.HOT_LOOP_LATEST = original_path
+            start.write_hot_loop_snapshot(
+                per_chain, None, _time.monotonic() - 5,
+                is_test_session=True,
+                output_path=tmp_path,
+            )
+            with open(tmp_path) as f:
+                snap = json.load(f)
+            self.assertTrue(snap["is_test_session"])
 
     # -- R28.12: truth path alignment tests ---------------------------------
 
