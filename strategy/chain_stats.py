@@ -166,6 +166,15 @@ def _compute_blocker_evidence(stats: dict[str, Any]) -> None:
     # Check OE rejection reasons
     rejected_reasons = oe_rf.get("rejected_reasons", {})
     total_rej = oe_rf.get("rejected_count", 0)
+
+    # R33: SLOT0_DIAGNOSTIC dominance in OE means quoter_v2 not answering
+    # for those pairs — this is a quote-path issue, not economics.
+    if total_rej > 0:
+        slot0_rej = rejected_reasons.get("SLOT0_DIAGNOSTIC", 0)
+        if slot0_rej / total_rej > 0.4:
+            stats["blocker_evidence"] = "QUOTE_PATH_BLOCKED"
+            return
+
     if total_rej > 0:
         net_low = rejected_reasons.get("NET_PROFIT_TOO_LOW", 0)
         mixed = rejected_reasons.get("MIXED_SOURCE", 0)

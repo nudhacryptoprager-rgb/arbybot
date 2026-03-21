@@ -894,8 +894,10 @@ def run_scan(
         sweep_reprieve_count = 0
         if not sweep_candidates and dynamic_probe_cfg.get("enabled"):
             from strategy.roundtrip_selection import select_sweep_reprieve_candidates
+            # R33: Use rejected opportunities from OE (not gated opps_list)
+            rejected_opps = opps_summary.get("_rejected_opportunities", [])
             _reprieve, _reprieve_stats = select_sweep_reprieve_candidates(
-                opps_list, max_candidates=15
+                rejected_opps, max_candidates=15
             )
             sweep_candidates = _reprieve
             sweep_reprieve_count = len(_reprieve)

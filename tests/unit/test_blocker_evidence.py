@@ -78,3 +78,20 @@ class TestComputeBlockerEvidence:
         s = _base_stats()
         _compute_blocker_evidence(s)
         assert s["blocker_evidence"] is None
+
+    def test_slot0_diagnostic_is_quote_path_blocked(self):
+        """R33: SLOT0_DIAGNOSTIC dominance in OE means quoter_v2 not answering."""
+        oe_rf = {"rejected_count": 200,
+                 "rejected_reasons": {"SLOT0_DIAGNOSTIC": 115, "NET_PROFIT_TOO_LOW": 50,
+                                      "QUOTER_V2_FAILED": 35}}
+        s = _base_stats(last_oe_rejection_funnel=oe_rf)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "QUOTE_PATH_BLOCKED"
+
+    def test_slot0_below_threshold_falls_to_oe_economics(self):
+        """When SLOT0 is below 40% but NET_PROFIT_TOO_LOW is dominant, OE_ECONOMICS."""
+        oe_rf = {"rejected_count": 100,
+                 "rejected_reasons": {"SLOT0_DIAGNOSTIC": 20, "NET_PROFIT_TOO_LOW": 60}}
+        s = _base_stats(last_oe_rejection_funnel=oe_rf)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "OE_ECONOMICS"

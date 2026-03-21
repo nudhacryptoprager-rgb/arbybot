@@ -600,6 +600,10 @@ def evaluate_quotes(
         "suspect_spread_bps_hard_threshold": engine.max_gross_spread_bps,
     }
     
+    # R33: Rejected opportunities for downstream reprieve path
+    rejected = [o for o in opportunities if not o.gate_passed]
+    summary["_rejected_opportunities"] = [o.to_dict() for o in rejected]
+
     # v2.8.0: Sort by net_profit_usd descending so roundtrip evaluates best candidates first
     gated_sorted = sorted(gated, key=lambda o: o.net_profit_usd, reverse=True)
     

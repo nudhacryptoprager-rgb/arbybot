@@ -402,7 +402,8 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
         # R26: Derive triage status from chain metrics
         chain_status = s.get("last_run_summary_status")
         chain_quality = s.get("last_chain_quality_level")
-        blocker_cls = s.get("blocker_classification")
+        # R33: Fall back to auto-computed blocker_evidence when config fields are null
+        blocker_cls = s.get("blocker_classification") or s.get("blocker_evidence")
         blocker_rsn = s.get("blocker_reason")
         total_runs = s.get("runs", 0)
         pass_runs = s.get("pass", 0)

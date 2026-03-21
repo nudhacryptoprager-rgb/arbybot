@@ -225,3 +225,46 @@ class TestSelectSweepReprieveCandidates:
         result, stats = select_sweep_reprieve_candidates([])
         assert result == []
         assert stats["sweep_reprieve_selected"] == 0
+
+
+class TestReprieveFromRejectedOEOpps:
+    """R33 regression: reprieve must find candidates from OE rejected list,
+    not from gated opps_list (which only has gate_passed=True)."""
+
+    def test_gated_opps_yield_zero_reprieve(self):
+        """Passing only gated (gate_passed=True) opps must yield 0 reprieve —
+        this was the pre-R33 bug."""
+        gated = [_make_rejected_opp(pair="A")]
+        gated[0]["gate_passed"] = True
+        result, stats = select_sweep_reprieve_candidates(gated)
+        assert result == []
+        assert stats["sweep_reprieve_selected"] == 0
+
+    def test_rejected_opps_yield_reprieve(self):
+        """Passing rejected (gate_passed=False) NET_PROFIT_TOO_LOW opps yields candidates."""
+        rejected = [
+            _make_rejected_opp(pair="WETH_USDC", gross_spread_bps=12),
+            _make_rejected_opp(pair="WETH_DAI", gross_spread_bps=8),
+            _make_rejected_opp(pair="WETH_USDT", reject_reason="SLOT0_DIAGNOSTIC"),
+        ]
+        result, stats = select_sweep_reprieve_candidates(rejected)
+        # Only the 2 NET_PROFIT_TOO_LOW cross-DEX quoter_v2 opps qualify
+        assert len(result) == 2
+        assert stats["sweep_reprieve_selected"] == 2
+
+    def test_evaluate_quotes_returns_rejected(self):
+        """evaluate_quotes summary must contain _rejected_opportunities."""
+        from engine.opportunity_engine import evaluate_quotes
+        quotes = [
+            {"dex_id": "uniswap_v3", "token_in": "A", "token_out": "B",
+             "price": "100", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},
+            {"dex_id": "sushiswap_v3", "token_in": "A", "token_out": "B",
+             "price": "101", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},
+        ]
+        # min_net_profit_usd=9999 forces all opps to be rejected as NET_PROFIT_TOO_LOW
+        _, summary = evaluate_quotes(quotes, min_net_profit_usd=9999.0)
+        rejected = summary.get("_rejected_opportunities", [])
+        assert len(rejected) > 0
+        assert all(not r["gate_passed"] for r in rejected)
