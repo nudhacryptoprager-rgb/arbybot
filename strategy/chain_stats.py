@@ -154,12 +154,17 @@ def _compute_blocker_evidence(stats: dict[str, Any]) -> None:
         stats["blocker_evidence"] = "NO_SIGNAL"
         return
 
+    # R35: If sweep evidence is strong (routes swept, sweep PnL observed),
+    # the quote path is working for active pairs — skip QUOTE_PATH_BLOCKED
+    # and fall through to economics/rejection classification.
+    has_sweep_evidence = stats.get("runs_with_sweep", 0) > 0
+
     # Check quote-path: high quoter_v2 failure rate
     exec_q = qss.get("quotes_fetched_executable", 0)
     diag_q = qss.get("quotes_fetched_diagnostic", 0)
     fail_q = qss.get("quoter_v2_failed_count", 0)
     total_q = exec_q + diag_q + fail_q
-    if total_q > 0 and fail_q / total_q > 0.5:
+    if total_q > 0 and fail_q / total_q > 0.5 and not has_sweep_evidence:
         stats["blocker_evidence"] = "QUOTE_PATH_BLOCKED"
         return
 
@@ -171,7 +176,7 @@ def _compute_blocker_evidence(stats: dict[str, Any]) -> None:
     # for those pairs — this is a quote-path issue, not economics.
     if total_rej > 0:
         slot0_rej = rejected_reasons.get("SLOT0_DIAGNOSTIC", 0)
-        if slot0_rej / total_rej > 0.4:
+        if slot0_rej / total_rej > 0.4 and not has_sweep_evidence:
             stats["blocker_evidence"] = "QUOTE_PATH_BLOCKED"
             return
 

@@ -246,12 +246,23 @@ function renderRolling(data) {
       <div class="kpi-item"><div class="kpi-val">${fmt(wall,0)}s</div><div class="kpi-lbl">Wall Time</div></div>
       <div class="kpi-item"><div class="kpi-val" style="font-size:.9rem">${ts.slice(0,19)}Z</div><div class="kpi-lbl">Last Update</div></div>
     </div>`;
-    html += '<h3 style="font-size:.8rem;color:#58a6ff;margin:8px 0 6px">Actionable Now (Real Quotes)</h3>';
-    if (actionableRows.length > 0) {
+    const showDiagnosticAsPrimary = actionableRows.length === 0 && diagnosticRows.length > 0;
+    const primaryRows = actionableRows.length > 0 ? actionableRows : diagnosticRows;
+    const primaryTitle = actionableRows.length > 0
+      ? 'Actionable Now (Real Quotes)'
+      : showDiagnosticAsPrimary
+        ? 'Best Available Frontier (Diagnostic)'
+        : 'Actionable Now (Real Quotes)';
+    html += `<h3 style="font-size:.8rem;color:#58a6ff;margin:8px 0 6px">${primaryTitle}</h3>`;
+    if (showDiagnosticAsPrimary) {
+      html += '<div style="font-size:.78rem;color:#8b949e;margin-bottom:8px">No real-quote candidates yet. Showing the best diagnostic frontier rows so the pair/route/size/PnL stream stays visible.</div>';
+    }
+    if (primaryRows.length > 0) {
       html += '<table><tr><th>Network</th><th>Pair</th><th class="num">Opt Size</th><th class="num">Spread</th><th class="num">Exec Cost</th><th>Result</th><th class="num">Final bps</th><th class="num">Final USD</th></tr>';
-      for (const row of actionableRows.slice(0, 20)) {
+      for (const row of primaryRows.slice(0, 20)) {
         const resultBadge = row.final_result === 'ROUNDTRIP_PROFITABLE' ? badge('PROFITABLE', 'pass')
-          : badge('NOT_PROFIT', 'fail');
+          : row.is_actionable ? badge('NOT_PROFIT', 'fail')
+          : badge(row.final_result || 'DIAGNOSTIC', 'warn');
         const finalCls = cls(row.final_net_pnl_bps);
         const costTxt = row.execution_cost_bps != null
           ? `${fmt(row.execution_cost_bps,2)} bps` + (row.execution_cost_usd != null ? ` / ${fmtUsd(row.execution_cost_usd)}` : '')
@@ -271,7 +282,7 @@ function renderRolling(data) {
     } else {
       html += '<div style="font-size:.78rem;color:#8b949e;margin-bottom:8px">No actionable real-quote candidates yet.</div>';
     }
-    if (diagnosticRows.length > 0) {
+    if (actionableRows.length > 0 && diagnosticRows.length > 0) {
       html += '<h3 style="font-size:.8rem;color:#7c8593;margin:8px 0 6px">Diagnostic / Suspect</h3>';
       html += '<table><tr><th>Network</th><th>Pair</th><th class="num">Spread</th><th>Result</th><th class="num">Final bps</th></tr>';
       for (const row of diagnosticRows.slice(0, 10)) {

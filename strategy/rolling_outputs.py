@@ -311,6 +311,13 @@ def write_hot_loop_snapshot(
     if is_test_session and output_path is None:
         return
 
+    # R35: Non-canonical sessions (no summary_file pointing to _rolling/) must
+    # not overwrite HOT_LOOP_LATEST either. Only sessions with an explicit
+    # rolling summary_file or an explicit output_path may write.
+    if output_path is None:
+        if not summary_file or "_rolling" not in summary_file:
+            return
+
     # Use output_path if provided, else default to HOT_LOOP_LATEST
     target_path = output_path if output_path is not None else HOT_LOOP_LATEST
     target_path.parent.mkdir(parents=True, exist_ok=True)

@@ -145,6 +145,11 @@ def run_sweep(
             l1_cost_source=l1_cost_source,
             eth_usd_price=eth_usd,
         )
+        # Preserve opportunity route identity for downstream live-stream matching.
+        # sweep_roundtrip_sizes receives leg quotes in simulation order, which can
+        # invert buy/sell DEX labels relative to the originating OE opportunity.
+        sr.buy_dex = opp.get("buy_dex", sr.buy_dex)
+        sr.sell_dex = opp.get("sell_dex", sr.sell_dex)
         sweep_results.append(sr)
         logger.info(
             "Sweep %s: best=$%s, pnl=%.2f bps, frontier=%s",

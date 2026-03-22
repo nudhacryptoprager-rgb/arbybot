@@ -32,6 +32,10 @@ def build_live_candidate_stream(
         (o.get("pair"), o.get("buy_dex"), o.get("sell_dex")): o
         for o in (opportunities or [])
     }
+    reprieve_map = {
+        (c.get("pair"), c.get("buy_dex"), c.get("sell_dex")): c
+        for c in (sweep_candidates or [])
+    }
     sweep_map = {
         (r.get("pair"), r.get("buy_dex"), r.get("sell_dex")): r
         for r in ((dynamic_sweep or {}).get("results") or [])
@@ -44,6 +48,7 @@ def build_live_candidate_stream(
         key = (rt.pair, rt.buy_dex, rt.sell_dex)
         seen_keys.add(key)
         opp = opp_map.get(key, {})
+        reprieve = reprieve_map.get(key, {})
         sweep = sweep_map.get(key, {})
         lp_fee_bps = ((rt.leg1_fee or 0) + (rt.leg2_fee or 0)) / 100.0
         gas_bps = max(0.0, float(rt.gross_pnl_bps or 0.0) - float(rt.net_pnl_bps or 0.0))
@@ -62,7 +67,12 @@ def build_live_candidate_stream(
             final_result = "ROUNDTRIP_NOT_PROFITABLE"
         else:
             final_result = "ONE_LEG_ONLY_DIAGNOSTIC"
-        spread = opp.get("spread_bps") or opp.get("gross_spread_bps")
+        spread = (
+            opp.get("spread_bps")
+            or opp.get("gross_spread_bps")
+            or reprieve.get("spread_bps")
+            or reprieve.get("gross_spread_bps")
+        )
         if spread is None and rt.gross_pnl_bps is not None:
             spread = float(rt.gross_pnl_bps)
         is_actionable = bool(rt.leg2_is_real_quote) and final_result != "SUSPECT_ACCOUNTING"
@@ -84,7 +94,7 @@ def build_live_candidate_stream(
             "final_result": final_result,
             "is_actionable": is_actionable,
             "real_quote": bool(rt.leg2_is_real_quote),
-            "reject_reason": rt.reject_reason,
+            "reject_reason": rt.reject_reason or reprieve.get("reject_reason"),
         })
 
     # R34: Secondary path — when roundtrip_results is empty, build rows from
@@ -96,10 +106,16 @@ def build_live_candidate_stream(
             seen_keys.add(key)
             pair, buy_dex, sell_dex = key
             opp = opp_map.get(key, {})
+            reprieve = reprieve_map.get(key, {})
             net_bps = sweep.get("best_net_pnl_bps")
             size_usd = sweep.get("best_size_usd") or opp.get("usd_notional") or default_size_usd
             cost_bps = sweep.get("best_total_cost_bps")
-            spread = opp.get("spread_bps") or opp.get("gross_spread_bps")
+            spread = (
+                opp.get("spread_bps")
+                or opp.get("gross_spread_bps")
+                or reprieve.get("spread_bps")
+                or reprieve.get("gross_spread_bps")
+            )
             final_net_usd = None
             if size_usd is not None and net_bps is not None:
                 final_net_usd = round((float(size_usd) * float(net_bps)) / 10000.0, 4)
@@ -118,7 +134,7 @@ def build_live_candidate_stream(
                 "final_result": "DIAGNOSTIC_FRONTIER",
                 "is_actionable": False,
                 "real_quote": False,
-                "reject_reason": None,
+                "reject_reason": reprieve.get("reject_reason"),
             })
 
     # R34: Tertiary path — reprieve candidates without sweep results still get rows.

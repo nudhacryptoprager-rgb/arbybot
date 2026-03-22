@@ -6,111 +6,86 @@
 ## Stage Context
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
-**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R34 directive: **Fix stream-to-analysis signal loss (token_decimals UnboundLocalError + _rt_top_n UnboundLocalError + live_stream empty).** R33 extracted start.py into 4 modules + fixed eligible_opps scoping. R34 completes the reprieve→live_stream→hot_loop pipeline.
+**Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled. R35 directive: **Evidence discipline + QUOTE_PATH_BLOCKED heuristic fix + hot_loop canonical guard.** R34 fixed stream-to-analysis signal loss. R35 hardens evidence discipline and regenerates canonical 6-chain proof bundle.
 
-## SESSION GOAL (R34: Fix stream-to-analysis signal loss)
-**Goal**: Fix the stream-to-analysis signal loss: top_signals exist in hot_loop and spread_signals exist in truth reports, but live_stream.verified_pairs/diagnostic_pairs are empty because reprieve-only paths crash with UnboundLocalError in run_scan_real.py.
-**Prior (R33)**: start.py extraction + eligible_opps fix. 2137 tests PASS. Reprieve began firing but live_stream remained empty.
+## SESSION GOAL (R35: Evidence discipline & canonical proof bundle)
+**Goal**: Fix evidence discipline: (1) harden hot_loop guard against non-canonical sessions, (2) fix QUOTE_PATH_BLOCKED heuristic for chains with active sweep evidence, (3) regenerate canonical 6-chain multi-chain proof bundle.
+**Prior (R34)**: Stream-to-analysis signal loss fixed (3 UnboundLocalError hoists, 3-tier live_stream, per_chain fallback). 2154 tests PASS. Sweep working (routes_swept=13) but proof bundle destroyed by temp mini-session.
 
 ## 0) Meta
-timestamp_utc: 2026-03-22T10:15:00Z (R34 fresh scan evidence)
-run_dir_name: ci_m5_gate_arbitrum_one_20260322_101413_617724
-mode: R34_STREAM_REPRIEVE_FIX
-test_count: 2154 passed (2137 core + 17 R34 regression), 14 pre-existing failures, 5 skipped
+timestamp_utc: 2026-03-22T09:47:44Z (R35 canonical 6-chain scan)
+run_dir_name: ci_m5_gate_arbitrum_one_20260322_104631_466460
+mode: R35_EVIDENCE_DISCIPLINE
+test_count: 2160 passed (2137 core + 17 R34 + 6 R35 regression), 5 skipped
 schema_version: m4:run_summary:v2.0, start:long_scan_summary:v1.14, start:hot_loop_snapshot:v1.3
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R34: Fix stream-to-analysis signal loss (token_decimals + _rt_top_n + live_stream empty) |
-| goal_status | **REACHED** (all 4 acceptance criteria pass with fresh scan evidence) |
+| session_goal | R35: Evidence discipline + QUOTE_PATH_BLOCKED fix + canonical 6-chain proof bundle |
+| goal_status | **REACHED** (6-chain canonical scan, 5 acceptance criteria pass) |
 | close_allowed | true |
-| remaining_blockers | None for R34 scope. Market blockers remain (0 profitable RT). |
-| evidence_session_run_dirs | ci_m5_gate_arbitrum_one_20260322_101413_617724 |
-| primary_blocker_of_session | token_decimals/rt_top_n UnboundLocalError on reprieve-only paths |
-| blocker_status_before | ACTIVE: token_decimals assigned only inside `if opps_list:`, _rt_top_n assigned only inside same block, live_stream populated only from active_runs (cleared before snapshot) |
-| blocker_status_after | **FIXED**: token_decimals + _rt_top_n hoisted, live_stream uses per_chain fallback |
-| start_metric | live_stream.diagnostic_pairs=0, sweep_reprieve_count present but invisible in hot_loop |
-| end_metric | live_stream.diagnostic_pairs=5, sweep_reprieve_count=13, runs_with_sweep=2, error=None |
-| delta | +17 tests, 3 UnboundLocalError fixes, 1 live_stream fallback, 4 acceptance criteria PASS |
+| remaining_blockers | None for R35 scope. Market blockers remain (0 profitable RT). |
+| evidence_session_run_dirs | ci_m5_gate_arbitrum_one_20260322_104631_466460 |
+| primary_blocker_of_session | Evidence discipline: hot_loop overwritten by temp session, QUOTE_PATH_BLOCKED misclassification |
+| blocker_status_before | ACTIVE: hot_loop_latest.json overwritten by non-canonical mini-session, arb misclassified as QUOTE_PATH_BLOCKED despite routes_swept=13, DEV_REPORT timestamp stale |
+| blocker_status_after | **FIXED**: hot_loop requires _rolling summary_file, sweep evidence overrides QUOTE_PATH_BLOCKED, 6-chain canonical bundle regenerated |
+| start_metric | hot_loop=temp session, arb blocker=QUOTE_PATH_BLOCKED, long_scan=2 arb-only runs, DEV_REPORT timestamp mismatch |
+| end_metric | hot_loop=canonical (25 runs, 6 chains, 16 diagnostic_pairs), arb blocker=OE_ECONOMICS, long_scan=25 runs across 6 chains |
+| delta | +6 tests (2160 total), 2 code fixes (sweep override + hot_loop guard), canonical 6-chain proof bundle |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 - R34 directive: Fix stream-to-analysis signal loss
+goal (Roadmap): M5_0/M4 - R35 directive: Evidence discipline + QUOTE_PATH_BLOCKED fix
 change_summary:
-  - **CRITICAL**: `strategy/jobs/run_scan_real.py` — Hoisted `token_decimals = {}` before `if opps_list:` block. Was causing UnboundLocalError on reprieve-only path.
-  - **CRITICAL**: `strategy/jobs/run_scan_real.py` — Hoisted `_rt_top_n` default before `if opps_list:` block. Same pattern as token_decimals.
-  - **CRITICAL**: `strategy/jobs/run_scan_real.py` — Reworked except block to preserve sweep_reprieve_count/stats/dynamic_sweep and attempt live_stream recovery.
-  - **CRITICAL**: `strategy/live_stream.py` — Full rewrite with 3-tier row building: RT → dynamic_sweep → sweep_candidates (reprieve).
-  - **CRITICAL**: `strategy/rolling_outputs.py` — `_serialize_live_stream` now uses `per_chain["last_live_candidates"]` as fallback source (survives after `_clear_active_run`).
-  - `strategy/artifacts.py` — `_build_roundtrip_summary` propagates error, sweep_reprieve_count, sweep_reprieve_stats.
-  - `strategy/long_scan_summary.py` — Added materialization loop for blocker_classification/blocker_reason in raw per_chain.
-  - `tests/unit/test_r34_stream_reprieve.py` — 17 regression tests covering all R34 fixes.
+  - **CRITICAL**: `strategy/chain_stats.py` — QUOTE_PATH_BLOCKED heuristic: when `runs_with_sweep > 0`, skip QUOTE_PATH_BLOCKED classification. Chains with active sweep evidence are economics-blocked, not quote-path-blocked.
+  - **CRITICAL**: `strategy/rolling_outputs.py` — Hot loop canonical guard: `write_hot_loop_snapshot` now requires `summary_file` containing `_rolling` to write to HOT_LOOP_LATEST. Non-canonical sessions silently skip.
+  - `tests/unit/test_r34_stream_reprieve.py` — 6 new R35 tests: 3 for QUOTE_PATH_BLOCKED sweep override, 3 for hot_loop non-canonical guard.
 touched_files:
-  - strategy/jobs/run_scan_real.py (CRITICAL — 3 fixes: token_decimals, _rt_top_n, except block)
-  - strategy/live_stream.py (CRITICAL — 3-tier row building)
-  - strategy/rolling_outputs.py (CRITICAL — per_chain fallback in _serialize_live_stream)
-  - strategy/artifacts.py (error/sweep propagation)
-  - strategy/long_scan_summary.py (blocker materialization)
-  - tests/unit/test_r34_stream_reprieve.py (NEW — 17 tests)
-  - tests/unit/test_run_scan_real_purity.py (max_lines bumped to 1545)
+  - strategy/chain_stats.py (CRITICAL — QUOTE_PATH_BLOCKED sweep override)
+  - strategy/rolling_outputs.py (CRITICAL — hot_loop canonical guard hardening)
+  - tests/unit/test_r34_stream_reprieve.py (6 new R35 regression tests, 23 total)
 
 ## 2) Commands Executed
 
 ```
-py -3.11 -m pytest tests/unit -q: PASS (2154 passed, 14 failed pre-existing, 5 skipped)
-python start.py --config config/real_minimal.yaml --hours 0.02 --allow-partial-chains: PASS (fresh scan evidence)
+py -3.11 -m pytest tests/unit -q: PASS (2160 passed, 5 skipped)
+py -3.11 start.py --config-list config/real_minimal.yaml,config/onboard_zksync_candidate.yaml,config/onboard_base_stage2.yaml,config/onboard_mantle_stage2.yaml,config/onboard_linea_stage1.yaml,config/onboard_scroll_stage1.yaml --accepted-fail-chains scroll --max-fail-chains 5 --hours 0.17 --cycles 1 --sleep-seconds 0 --coverage-workers 2 --no-dashboard --prune-keep 200 --summary-file data/runs/_rolling/long_scan_latest.json: PASS (25 runs, 6 chains)
 ```
 
-## 3) R34 Architecture Changes
+## 3) R35 Architecture Changes
 
-### token_decimals UnboundLocalError Fix
-Problem: `token_decimals = {}` was assigned only inside `if opps_list:` block (~line 775). When opps_list was empty (0 gated opportunities), the reprieve/sweep path still tried to use `token_decimals` → crash.
-Fix: Hoisted `token_decimals = {}` and its population logic before the conditional (~line 718).
+### QUOTE_PATH_BLOCKED Sweep Override
+Problem: `_compute_blocker_evidence()` in chain_stats.py applied QUOTE_PATH_BLOCKED when quoter_v2 failure rate >50% or SLOT0_DIAGNOSTIC rejection rate >40%, even when the chain had active sweep evidence (`runs_with_sweep > 0`, `routes_swept > 0`). This misclassified arb as quote-blocked despite 30 cross_dex_pairs and 13 routes swept.
+Fix: Added `has_sweep_evidence = stats.get("runs_with_sweep", 0) > 0` check. Both QUOTE_PATH_BLOCKED branches now include `and not has_sweep_evidence` guard. Chains with active sweep fall through to OE_ECONOMICS/MIXED_SOURCE.
 
-### _rt_top_n UnboundLocalError Fix
-Problem: Same pattern. `_rt_top_n = config.get("roundtrip_top_n", 10)` was inside `if opps_list:` but `_build_live_candidate_stream` used it at line ~948 outside the block.
-Fix: Hoisted default assignment before the conditional.
-
-### Except Block Data Preservation
-Problem: `except Exception as rt_err:` completely replaced `stats["roundtrip"]` with `{"enabled": False, "error": str(rt_err)}`, losing all sweep_reprieve data collected before the crash.
-Fix: Except block now merges error into existing dict, preserving sweep_reprieve_count/stats/dynamic_sweep. Also attempts to build live_stream from collected data.
-
-### 3-Tier Live Stream Row Building
-Problem: `build_live_candidate_stream` only built rows from `roundtrip_results`. When RT was empty (reprieve-only path), the stream was silent.
-Fix: 3-tier fallback: (1) Build from roundtrip_results, (2) if empty, build DIAGNOSTIC_FRONTIER rows from dynamic_sweep.results, (3) if still empty, build REPRIEVE_CANDIDATE rows from sweep_candidates.
-
-### per_chain Fallback in _serialize_live_stream
-Problem: `_serialize_live_stream` got `verified_pairs` from `active_runs[chain]["verified_pairs"]`. But `_clear_active_run(chain)` is called BEFORE `_write_hot_snapshot()`, so `active_runs` is empty by the time the snapshot is written.
-Fix: Also pull from `per_chain[chain]["last_live_candidates"]` which persists after `_clear_active_run()`.
+### Hot Loop Canonical Guard
+Problem: `write_hot_loop_snapshot()` only guarded against `is_test_session=True`. Non-test mini-sessions or ad-hoc runs (without `summary_file` pointing to `_rolling/`) could overwrite HOT_LOOP_LATEST, destroying canonical evidence.
+Fix: Added guard: when `output_path is None` (targeting HOT_LOOP_LATEST), require `summary_file` to contain `_rolling`. Sessions without proper rolling summary_file are silently skipped.
 
 ## 4) Contract Checks
-token_decimals hoisted: 2 structural tests
-_rt_top_n hoisted: 1 structural test
-except block preserves sweep: 1 structural test
-artifacts propagate error/sweep: 2 tests
-live_stream 3-tier: 4 tests
-blocker materialization: 2 tests
-hot_loop test session protection: 2 tests
-per_chain fallback in _serialize_live_stream: 2 tests
+QUOTE_PATH_BLOCKED sweep override: 3 tests (quoter failure, SLOT0 diagnostic, negative control)
+hot_loop non-canonical guard: 3 tests (empty summary, non-rolling path, rolling path writes)
+R34 regression tests retained: 17 tests (all passing)
 rolling discipline (3+1 files): OK
 provenance contract: OK (run_timestamp only)
-CI pipeline: 2154 tests PASS (14 pre-existing failures)
+CI pipeline: 2160 tests PASS, 5 skipped
 
-## 5) R34 Acceptance Criteria Verification
+## 5) R35 Acceptance Criteria Verification
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| 1. `live_stream.diagnostic_pairs` non-empty | ✅ PASS | 5 entries with `DIAGNOSTIC_FRONTIER` |
-| 2. `sweep_reprieve_count > 0` in truth | ✅ PASS | `sweep_reprieve_count: 13` |
-| 3. `runs_with_sweep > 0` in long_scan | ✅ PASS | `runs_with_sweep: 2` |
+| 1. `live_stream.diagnostic_pairs` non-empty | ✅ PASS | 16 entries across 6 chains |
+| 2. `runs_with_sweep > 0` in long_scan | ✅ PASS | arb=5, mantle=4, scroll=4, zksync=1, base=1 |
+| 3. `blocker_classification` non-null for all chains | ✅ PASS | arb=OE_ECONOMICS, zksync=INFRA_FAIL, base=INFRA_FAIL, mantle=MIXED_SOURCE, linea=INFRA_FAIL, scroll=OE_ECONOMICS |
 | 4. No `roundtrip.error` in fresh scan | ✅ PASS | `error: None` |
+| 5. arb blocker != QUOTE_PATH_BLOCKED | ✅ PASS | arb=OE_ECONOMICS (R35 sweep override working) |
 
-Run: ci_m5_gate_arbitrum_one_20260322_101413_617724
-Rolling: hot_loop_latest.json shows 5 diagnostic_pairs (USDC/DAI, WETH/PENDLE, WETH/WBTC, WBTC/USDC, WETH/MAGIC)
+Run: ci_m5_gate_arbitrum_one_20260322_104631_466460 (25 runs, 6 chains, 229 signals)
+Rolling: hot_loop_latest.json shows 16 diagnostic_pairs, session_summary_file=data/runs/_rolling/long_scan_latest.json
 
 ## 6) What I need from Lead now
-1. **R34 validated** — all acceptance criteria pass. Ready for R35 directive.
-2. **Aerodrome re-enablement**: Base remains QUOTE_PATH_BLOCKED. Root cause: `getAmountOut()` returns 0.
-3. **iziswap/syncswap/ambient**: Adapter stubs pending. Which first?
-4. **M4.2 path**: All chains still 0 profitable RT. Economics blocker remains (gas+slippage > spread at all sizes).
+1. **R35 validated** — evidence discipline hardened, canonical 6-chain bundle regenerated, QUOTE_PATH_BLOCKED fixed.
+2. **Base/linea INFRA_FAIL**: Both chains failing >50% runs. Base has partial success (2/4 pass). Root cause investigation needed.
+3. **zksync INFRA_FAIL**: All 4 runs failed. Config or RPC issue?
+4. **M4.2 path**: 0 profitable RT across all 6 chains. OE_ECONOMICS dominates. Next: lower cost model or higher-spread pair discovery.

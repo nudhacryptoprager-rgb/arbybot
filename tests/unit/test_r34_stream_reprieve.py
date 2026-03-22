@@ -13,11 +13,14 @@ Covers:
 """
 
 import json
+import sys
 import tempfile
 import time
+import types
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest import TestCase
+from unittest.mock import patch
 
 
 class TestTokenDecimalsHoisted(TestCase):
@@ -175,6 +178,43 @@ class TestLiveStreamSweepRows(TestCase):
         self.assertFalse(result[0]["is_actionable"])
         self.assertEqual(result[0]["final_net_pnl_bps"], -3.5)
 
+    def test_sweep_results_fallback_to_reprieve_spread_context(self):
+        """Reprieve-only sweep rows must keep spread and reject context for dashboard visibility."""
+        from strategy.live_stream import build_live_candidate_stream
+
+        dynamic_sweep = {
+            "results": [
+                {
+                    "pair": "WETH/USDC",
+                    "buy_dex": "sushiswap",
+                    "sell_dex": "uniswap_v3",
+                    "best_net_pnl_bps": -4.2,
+                    "best_size_usd": 25.0,
+                    "best_total_cost_bps": 18.0,
+                },
+            ]
+        }
+        sweep_candidates = [
+            {
+                "pair": "WETH/USDC",
+                "buy_dex": "sushiswap",
+                "sell_dex": "uniswap_v3",
+                "spread_bps": 12.0,
+                "reject_reason": "NET_PROFIT_TOO_LOW",
+            },
+        ]
+        result = build_live_candidate_stream(
+            chain_key="arbitrum_one",
+            opportunities=[],
+            roundtrip_results=[],
+            dynamic_sweep=dynamic_sweep,
+            default_size_usd=25.0,
+            sweep_candidates=sweep_candidates,
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["spread_bps"], 12.0)
+        self.assertEqual(result[0]["reject_reason"], "NET_PROFIT_TOO_LOW")
+
     def test_reprieve_candidates_produce_rows_when_sweep_empty(self):
         from strategy.live_stream import build_live_candidate_stream
 
@@ -243,6 +283,91 @@ class TestLiveStreamSweepRows(TestCase):
             sweep_candidates=[],
         )
         self.assertEqual(result, [])
+
+
+class TestDynamicSweepRouteIdentity(TestCase):
+    """R35 follow-up: dynamic sweep results must keep OE route identity."""
+
+    def test_run_sweep_normalizes_route_identity_to_opportunity(self):
+        from engine.roundtrip import SizeSweepResult
+        from strategy.dynamic_sweep_runtime import run_sweep
+
+        class _DexCfg:
+            def get_quoter_address(self):
+                return "0xquoter"
+
+        fake_quotes = types.ModuleType("strategy.quotes")
+        fake_quotes.read_quoter_v2 = lambda **kwargs: None
+        fake_config = types.ModuleType("config")
+        fake_config.get_token_address = lambda chain, sym: f"0x{sym.lower()}"
+        fake_registry = types.ModuleType("dex.registry")
+        fake_registry.get_dex_config = lambda chain, dex: _DexCfg()
+
+        opp = {
+            "pair": "WETH/USDC",
+            "buy_dex": "uniswap_v3",
+            "sell_dex": "pancakeswap_v3",
+            "buy_fee": 500,
+            "sell_fee": 500,
+            "diagnostics": {
+                "buy_pool": "0xbuy",
+                "sell_pool": "0xsell",
+            },
+        }
+        quotes_by_key = {
+            "uniswap_v3:0xbuy:500": {
+                "dex_id": "uniswap_v3",
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "fee": 500,
+            },
+            "pancakeswap_v3:0xsell:500": {
+                "dex_id": "pancakeswap_v3",
+                "token_in": "WETH",
+                "token_out": "USDC",
+                "fee": 500,
+            },
+        }
+        fake_result = SizeSweepResult(
+            pair="WETH/USDC",
+            buy_dex="pancakeswap_v3",
+            sell_dex="uniswap_v3",
+            sizes_evaluated=1,
+            best_size_usd=25.0,
+            best_net_pnl_bps=-4.2,
+            best_total_cost_bps=18.0,
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "strategy.quotes": fake_quotes,
+                "config": fake_config,
+                "dex.registry": fake_registry,
+            },
+            clear=False,
+        ), patch(
+            "engine.roundtrip.sweep_roundtrip_sizes",
+            return_value=fake_result,
+        ):
+            result = run_sweep(
+                eligible_opps=[opp],
+                quotes_by_key=quotes_by_key,
+                config={"dynamic_probe": {"enabled": True, "top_routes": 15}},
+                chain_key="arbitrum_one",
+                rpc_url="http://localhost:8545",
+                current_block=1,
+                live_gas_price_wei=1,
+                l1_cost_wei=1,
+                l1_cost_source="test",
+                eth_usd=2000.0,
+                token_decimals={"WETH": 18},
+            )
+
+        results = result["dynamic_sweep"]["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["buy_dex"], "uniswap_v3")
+        self.assertEqual(results[0]["sell_dex"], "pancakeswap_v3")
 
 
 class TestBlockerFieldsInPerChain(TestCase):
@@ -381,3 +506,139 @@ class TestSerializeLiveStreamPerChainFallback(TestCase):
         }
         result = _serialize_live_stream({}, [], 0, per_chain=per_chain)
         self.assertEqual(result["diagnostic_pairs"][0]["network"], "linea")
+
+
+class TestQuotePathBlockedSweepOverride(TestCase):
+    """R35: QUOTE_PATH_BLOCKED should not apply when sweep evidence is strong."""
+
+    def test_sweep_evidence_overrides_quoter_failure(self):
+        from strategy.chain_stats import _compute_blocker_evidence
+
+        stats = {
+            "profitable_roundtrips_total": 0,
+            "runs": 5,
+            "fail": 0,
+            "included_signals_total": 50,
+            "runs_with_sweep": 3,
+            "last_quote_source_summary": {
+                "quotes_fetched_executable": 5,
+                "quotes_fetched_diagnostic": 5,
+                "quoter_v2_failed_count": 60,  # >50% failure
+            },
+            "last_oe_rejection_funnel": {
+                "rejected_count": 10,
+                "rejected_reasons": {"NET_PROFIT_TOO_LOW": 8},
+            },
+            "last_truth_verdict": None,
+        }
+        _compute_blocker_evidence(stats)
+        # Should NOT be QUOTE_PATH_BLOCKED because sweep is active
+        self.assertNotEqual(stats["blocker_evidence"], "QUOTE_PATH_BLOCKED")
+        self.assertEqual(stats["blocker_evidence"], "OE_ECONOMICS")
+
+    def test_sweep_evidence_overrides_slot0_diagnostic(self):
+        from strategy.chain_stats import _compute_blocker_evidence
+
+        stats = {
+            "profitable_roundtrips_total": 0,
+            "runs": 5,
+            "fail": 0,
+            "included_signals_total": 50,
+            "runs_with_sweep": 2,
+            "last_quote_source_summary": {},
+            "last_oe_rejection_funnel": {
+                "rejected_count": 20,
+                "rejected_reasons": {"SLOT0_DIAGNOSTIC": 10, "NET_PROFIT_TOO_LOW": 10},
+            },
+            "last_truth_verdict": None,
+        }
+        _compute_blocker_evidence(stats)
+        # With sweep evidence, SLOT0_DIAGNOSTIC should not trigger QUOTE_PATH_BLOCKED
+        # Instead falls through to OE_ECONOMICS (NET_PROFIT_TOO_LOW is 50% > 40%)
+        self.assertNotEqual(stats["blocker_evidence"], "QUOTE_PATH_BLOCKED")
+        self.assertEqual(stats["blocker_evidence"], "OE_ECONOMICS")
+
+    def test_no_sweep_evidence_still_labels_quote_blocked(self):
+        from strategy.chain_stats import _compute_blocker_evidence
+
+        stats = {
+            "profitable_roundtrips_total": 0,
+            "runs": 5,
+            "fail": 0,
+            "included_signals_total": 50,
+            "runs_with_sweep": 0,
+            "last_quote_source_summary": {
+                "quotes_fetched_executable": 5,
+                "quotes_fetched_diagnostic": 5,
+                "quoter_v2_failed_count": 60,
+            },
+            "last_oe_rejection_funnel": {},
+            "last_truth_verdict": None,
+        }
+        _compute_blocker_evidence(stats)
+        self.assertEqual(stats["blocker_evidence"], "QUOTE_PATH_BLOCKED")
+
+
+class TestHotLoopNonCanonicalGuard(TestCase):
+    """R35: Non-canonical sessions (no _rolling summary_file) must not overwrite HOT_LOOP_LATEST."""
+
+    def test_empty_summary_file_skips_canonical_write(self):
+        from strategy.rolling_outputs import write_hot_loop_snapshot, HOT_LOOP_LATEST
+        from strategy.chain_stats import new_chain_stats
+
+        per_chain = {"arb": new_chain_stats()}
+        per_chain["arb"]["runs"] = 1
+
+        HOT_LOOP_LATEST.parent.mkdir(parents=True, exist_ok=True)
+        existed_before = HOT_LOOP_LATEST.exists()
+        if existed_before:
+            before_content = HOT_LOOP_LATEST.read_text(encoding="utf-8")
+
+        write_hot_loop_snapshot(
+            per_chain, None, time.monotonic() - 5,
+            summary_file="",  # Non-canonical: no summary file
+        )
+
+        if existed_before:
+            after_content = HOT_LOOP_LATEST.read_text(encoding="utf-8")
+            self.assertEqual(before_content, after_content,
+                             "Non-canonical session must NOT modify canonical hot_loop_latest.json")
+
+    def test_non_rolling_summary_file_skips_canonical_write(self):
+        from strategy.rolling_outputs import write_hot_loop_snapshot, HOT_LOOP_LATEST
+        from strategy.chain_stats import new_chain_stats
+
+        per_chain = {"base": new_chain_stats()}
+        per_chain["base"]["runs"] = 1
+
+        HOT_LOOP_LATEST.parent.mkdir(parents=True, exist_ok=True)
+        existed_before = HOT_LOOP_LATEST.exists()
+        if existed_before:
+            before_content = HOT_LOOP_LATEST.read_text(encoding="utf-8")
+
+        write_hot_loop_snapshot(
+            per_chain, None, time.monotonic() - 5,
+            summary_file="C:\\Users\\tmp\\test_summary.json",  # Non-rolling path
+        )
+
+        if existed_before:
+            after_content = HOT_LOOP_LATEST.read_text(encoding="utf-8")
+            self.assertEqual(before_content, after_content,
+                             "Non-rolling summary_file must NOT modify canonical hot_loop_latest.json")
+
+    def test_rolling_summary_file_writes_canonical(self):
+        from strategy.rolling_outputs import write_hot_loop_snapshot
+        from strategy.chain_stats import new_chain_stats
+
+        per_chain = {"arb": new_chain_stats()}
+        per_chain["arb"]["runs"] = 1
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td) / "hot_loop_test.json"
+            write_hot_loop_snapshot(
+                per_chain, None, time.monotonic() - 5,
+                summary_file="data/runs/_rolling/long_scan_latest.json",
+                output_path=tmp_path,  # Explicit path to avoid modifying real file
+            )
+            self.assertTrue(tmp_path.exists(),
+                            "Rolling summary_file with explicit output_path should write")
