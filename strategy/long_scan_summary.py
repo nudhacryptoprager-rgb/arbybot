@@ -105,6 +105,15 @@ def build_summary(
     for chain, s in per_chain.items():
         s["chain_profit_state"] = classify_chain_profit_state(s)
 
+    # R34: Materialize blocker_classification and blocker_reason into raw per_chain,
+    # not just in frontier_ranking. Consumers of per_chain (dashboards, gates)
+    # need these fields directly without parsing frontier_ranking.
+    for chain, s in per_chain.items():
+        blocker_cls = s.get("blocker_classification") or s.get("blocker_evidence")
+        blocker_rsn = s.get("blocker_reason") or _blocker_evidence_reason(blocker_cls)
+        s["blocker_classification"] = blocker_cls
+        s["blocker_reason"] = blocker_rsn
+
     summary = {
         "schema": "start:long_scan_summary:v1.14",  # R28.21: cache freshness observability
         "generated_at": run_ts,

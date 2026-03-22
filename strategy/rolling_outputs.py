@@ -301,7 +301,15 @@ def write_hot_loop_snapshot(
         except Exception:
             pass
 
-    snapshot["live_stream"] = _serialize_live_stream(active_runs, live_events, pq_pending)
+    snapshot["live_stream"] = _serialize_live_stream(
+        active_runs, live_events, pq_pending, per_chain=per_chain
+    )
+
+    # R34: When is_test_session=True and no explicit output_path, skip writing
+    # to the canonical rolling file to prevent test runs from overwriting
+    # production hot_loop_latest.json.
+    if is_test_session and output_path is None:
+        return
 
     # Use output_path if provided, else default to HOT_LOOP_LATEST
     target_path = output_path if output_path is not None else HOT_LOOP_LATEST
@@ -330,6 +338,7 @@ def _serialize_live_stream(
     active_runs: dict[str, dict[str, Any]] | None,
     live_events: list[dict[str, Any]] | None,
     pair_hot_queue_pending: int = 0,
+    per_chain: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build bounded live stream payload for dashboard fast-refresh."""
     now = time.monotonic()
@@ -349,6 +358,24 @@ def _serialize_live_stream(
                 verified_pairs.append(row)
             else:
                 diagnostic_pairs.append(row)
+
+    # R34: Also collect from per_chain["last_live_candidates"] — this survives
+    # after _clear_active_run() has cleared active_runs for the chain.
+    if per_chain:
+        seen_keys: set[str] = set()
+        for chain, stats in sorted(per_chain.items()):
+            for pair in (stats.get("last_live_candidates") or [])[:5]:
+                key = f"{chain}:{pair.get('pair')}:{pair.get('route')}"
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                row = dict(pair)
+                row.setdefault("network", chain)
+                if row.get("is_actionable"):
+                    verified_pairs.append(row)
+                else:
+                    diagnostic_pairs.append(row)
+
     events = list(live_events or [])
     return {
         "active_count": len(active_list),

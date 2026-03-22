@@ -387,6 +387,11 @@ def _build_roundtrip_summary(stats: Dict[str, Any]) -> Dict[str, Any]:
         "candidates_total": rt.get("candidates_total", 0),
         "gated_by_economics": rt.get("gated_by_economics", 0),
         "rejected_reasons": rt.get("rejected_reasons", {}),
+        # R34: Propagate runtime error and sweep reprieve data so truth_report
+        # doesn't mask a crash as ordinary NO_DATA.
+        "error": rt.get("error"),
+        "sweep_reprieve_count": rt.get("sweep_reprieve_count", 0),
+        "sweep_reprieve_stats": rt.get("sweep_reprieve_stats"),
     }
     # v3.3.0: Canonical dynamic sweep sub-block
     if ds.get("enabled"):

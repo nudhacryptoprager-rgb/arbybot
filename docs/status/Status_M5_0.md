@@ -1,37 +1,37 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-21 (R33 — **start.py extraction (2236→753 lines) + reprieve runtime validation**. R32 implemented sweep reprieve + quoter skip cache; R33 fixed eligible_opps scoping bug + OE→reprieve contract + blocker taxonomy materialization + --allow-partial-chains. 2137 tests PASS.)
-**Tests**: 2137 passed / 10 pre-existing failed / 5 skipped
-**Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0
-**Evidence**: R33: 24+ run multi-chain scan (2026-03-21T11:28-11:38). R32: pending fresh scan (R33 validates R32 features). R31: 43-run 6-chain (630s wall).
-**Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json}`
+**Updated**: 2026-03-22 (R34 — **Fix stream-to-analysis signal loss.** R33 fresh same-session scan proved a real signal loss: top_signals present in hot_loop and spread_signals present in truth reports, but live_stream.verified_pairs/diagnostic_pairs empty because reprieve-only paths crashed in run_scan_real.py (token_decimals/rt_top_n UnboundLocalError). R34 hoisted both variables, added 3-tier live_stream row building, and fixed per_chain fallback in rolling_outputs. 2154 tests PASS.)
+**Tests**: 2154 passed / 14 pre-existing failed / 5 skipped
+**Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
+**Evidence**: R34: fresh scan (2026-03-22T10:14). R33: 24+ run multi-chain scan (2026-03-21T11:28-11:38). R32: sweep reprieve + quoter skip cache.
+**Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R34 — Fix Stream-to-Analysis Signal Loss
+
+R33 same-session scan proved stream-to-analysis signal loss: top_signals are present in hot_loop and spread_signals are present in truth reports, but live_stream.verified_pairs/diagnostic_pairs are empty because reprieve-only paths crash in run_scan_real.py (token_decimals/rt_top_n unbound) and live_stream.py still builds rows only from roundtrip_results.
+
+### Code Changes (17 new tests)
+1. **strategy/jobs/run_scan_real.py** — Hoisted `token_decimals = {}` before `if opps_list:` block (was causing UnboundLocalError on reprieve path).
+2. **strategy/jobs/run_scan_real.py** — Hoisted `_rt_top_n` default before conditional (same pattern).
+3. **strategy/jobs/run_scan_real.py** — Reworked except block to preserve sweep_reprieve_count/stats/dynamic_sweep and attempt live_stream recovery.
+4. **strategy/live_stream.py** — Full rewrite with 3-tier row building: RT → dynamic_sweep → sweep_candidates (reprieve).
+5. **strategy/rolling_outputs.py** — `_serialize_live_stream` uses `per_chain["last_live_candidates"]` as fallback (survives after `_clear_active_run`).
+6. **strategy/artifacts.py** — `_build_roundtrip_summary` propagates error, sweep_reprieve_count, sweep_reprieve_stats.
+
+### R34 Acceptance Criteria (all PASS)
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| `diagnostic_pairs` non-empty | ✅ PASS | 5 entries (USDC/DAI, WETH/PENDLE, WETH/WBTC, etc.) |
+| `sweep_reprieve_count > 0` in truth | ✅ PASS | 13 in ci_m5_gate_arbitrum_one_20260322_101413_617724 |
+| `runs_with_sweep > 0` in long_scan | ✅ PASS | 2 |
+| No `roundtrip.error` in fresh scan | ✅ PASS | `error: None` |
 
 ---
 
 ## R33 — Start.py Extraction + Reprieve Runtime Validation
-
-R32 implemented sweep reprieve + quoter skip cache + blocker taxonomy. R33 fixed runtime bugs preventing reprieve from firing.
-
-### Code Changes (11 new tests, 4 modules extracted)
-1. **start.py** — God-file extraction: 2236→753 lines. Extracted `run_artifact_extract.py`, `chain_stats.py`, `long_scan_summary.py`, `rolling_outputs.py`.
-2. **start.py** — Added `--allow-partial-chains` flag for single-chain verification.
-3. **strategy/jobs/run_scan_real.py** — Fixed `eligible_opps` scoping: variable only assigned inside `if opps_list:` block → UnboundLocalError silently caught → entire roundtrip+reprieve path disabled.
-4. **engine/opportunity_engine.py** — Added `_rejected_opportunities` to `opps_summary` so reprieve can access NET_PROFIT_TOO_LOW rejects.
-5. **strategy/chain_stats.py** — Fixed SLOT0_DIAGNOSTIC taxonomy: >40% slot0 → QUOTE_PATH_BLOCKED (before OE_ECONOMICS check).
-6. **strategy/long_scan_summary.py** — Added `_blocker_evidence_reason()` to materialize `blocker_reason` from `blocker_evidence`.
-
-### R33 Runtime Validation (10-min multi-chain scan)
-- scroll: Sweep reprieve: selected=3 from 3 NET_PROFIT_TOO_LOW ✓
-- linea: Sweep reprieve: selected=6 from 8 NET_PROFIT_TOO_LOW ✓
-- mantle: Sweep reprieve: selected=3 from 10 NET_PROFIT_TOO_LOW ✓
-- base: blocker_classification=QUOTE_PATH_BLOCKED (auto-computed) ✓
-- zksync: blocker_classification=INFRA_FAIL (auto-computed) ✓
-- All 4 conditions verified: reprieve_count>0, runs_with_sweep>0, no eligible_opps crash, blocker non-null
-
----
-
-## R32 — Sweep Reprieve + Quoter V2 Skip Cache + Blocker Taxonomy
 
 ### Code Changes (7 files, 25 new tests)
 1. **strategy/roundtrip_selection.py** — `select_sweep_reprieve_candidates()`: NET_PROFIT_TOO_LOW rejects with both legs quoter_v2 + cross-DEX get promoted to sweep for wide-size frontier re-check.

@@ -118,6 +118,7 @@ def _build_live_candidate_stream(
     dynamic_sweep: Optional[Dict[str, Any]],
     default_size_usd: float,
     max_candidates: int = 10,
+    sweep_candidates: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Build compact operator-facing pair candidates for hot-loop streaming.
 
@@ -131,6 +132,7 @@ def _build_live_candidate_stream(
         dynamic_sweep=dynamic_sweep,
         default_size_usd=default_size_usd,
         max_candidates=max_candidates,
+        sweep_candidates=sweep_candidates,
     )
 
 
@@ -710,6 +712,27 @@ def run_scan(
         # is reachable even when opps_list is empty (0 gated opportunities).
         eligible_opps = []
 
+        # R34: Hoist _rt_top_n to outer scope — _build_live_candidate_stream
+        # uses it even when opps_list is empty (was UnboundLocalError before).
+        _rt_top_n = config.get("roundtrip_top_n", 10)
+
+        # R34: Hoist token_decimals to outer scope — reprieve/sweep path needs
+        # it even when opps_list is empty (was UnboundLocalError before).
+        token_decimals = {}
+        if pairs_list:
+            for p in pairs_list:
+                token_decimals[p.token_in] = p.token_in_decimals
+                token_decimals[p.token_out] = p.token_out_decimals
+        else:
+            try:
+                core_tokens = load_core_tokens()
+                chain_tokens = core_tokens.get(chain_key, {})
+                for symbol, token_data in chain_tokens.items():
+                    if isinstance(token_data, dict) and "decimals" in token_data:
+                        token_decimals[symbol] = token_data["decimals"]
+            except Exception as e:
+                logger.warning("Failed to load token_decimals from core_tokens: %s", e)
+
         if opps_list:
             # v2.1.0: Get L1 cost with source tracking (prefer onchain if w3_instance available)
             # v2.1.0-fix: Pass representative swap calldata for accurate L1 estimation
@@ -769,24 +792,6 @@ def run_scan(
                 min_margin_bps=_min_margin_bps,
             )
             stats["roundtrip_lp_filter"] = _rt_filter_stats
-            
-            # v2.8.1: Build token_decimals dict for correct net_pnl_bps calculation
-            # Source: pairs_list (if available) or core_tokens.yaml
-            token_decimals = {}
-            if pairs_list:
-                for p in pairs_list:
-                    token_decimals[p.token_in] = p.token_in_decimals
-                    token_decimals[p.token_out] = p.token_out_decimals
-            else:
-                # Fallback: load from core_tokens.yaml
-                try:
-                    core_tokens = load_core_tokens()
-                    chain_tokens = core_tokens.get(chain_key, {})
-                    for symbol, token_data in chain_tokens.items():
-                        if isinstance(token_data, dict) and "decimals" in token_data:
-                            token_decimals[symbol] = token_data["decimals"]
-                except Exception as e:
-                    logger.warning("Failed to load token_decimals from core_tokens: %s", e)
             
             roundtrip_results, roundtrip_stats = evaluate_roundtrip_candidates(
                 opportunities=eligible_opps,
@@ -940,6 +945,7 @@ def run_scan(
             dynamic_sweep=stats.get("roundtrip", {}).get("dynamic_sweep"),
             default_size_usd=float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0),
             max_candidates=_rt_top_n,
+            sweep_candidates=sweep_candidates,
         )
         _emit_phase(
             "candidate_snapshot",
@@ -949,9 +955,31 @@ def run_scan(
         )
             
     except Exception as rt_err:
-        logger.debug("Roundtrip evaluation skipped: %s", rt_err)
-        stats["roundtrip"] = {"enabled": False, "error": str(rt_err)}
-        stats["live_candidate_stream"] = []
+        logger.warning("Roundtrip evaluation error: %s", rt_err)
+        # R34: Preserve sweep_reprieve data that was collected before the crash.
+        # Don't blindly overwrite stats["roundtrip"] — merge error into existing.
+        existing_rt = stats.get("roundtrip", {})
+        stats["roundtrip"] = {
+            "enabled": False,
+            "error": str(rt_err),
+            "sweep_reprieve_count": existing_rt.get("sweep_reprieve_count", 0),
+            "sweep_reprieve_stats": existing_rt.get("sweep_reprieve_stats"),
+            "dynamic_sweep": existing_rt.get("dynamic_sweep"),
+            "executable_candidates_count": existing_rt.get("executable_candidates_count", 0),
+        }
+        # R34: Still attempt to build live_stream from whatever was collected
+        try:
+            stats["live_candidate_stream"] = _build_live_candidate_stream(
+                chain_key=chain_key,
+                opportunities=eligible_opps if opps_list else [],
+                roundtrip_results=[],
+                dynamic_sweep=existing_rt.get("dynamic_sweep"),
+                default_size_usd=float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0),
+                max_candidates=_rt_top_n,
+                sweep_candidates=sweep_candidates,
+            )
+        except Exception:
+            stats["live_candidate_stream"] = []
     
     # v2.2.0: M4.3 Preflight check for execution readiness
     try:
