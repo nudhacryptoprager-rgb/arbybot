@@ -268,3 +268,29 @@ class TestReprieveFromRejectedOEOpps:
         rejected = summary.get("_rejected_opportunities", [])
         assert len(rejected) > 0
         assert all(not r["gate_passed"] for r in rejected)
+
+    def test_reprieve_from_evaluate_quotes_rejected_integration(self):
+        """R33 integration: OE rejected list fed to reprieve yields candidates.
+
+        Reproduces the exact failure mode where: OE has NET_PROFIT_TOO_LOW rejects,
+        gated opps is empty, but reprieve must return >0 candidates.
+        """
+        from engine.opportunity_engine import evaluate_quotes
+        quotes = [
+            {"dex_id": "uniswap_v3", "token_in": "A", "token_out": "B",
+             "price": "100", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},
+            {"dex_id": "sushiswap_v3", "token_in": "A", "token_out": "B",
+             "price": "101", "fee": 500, "usd_notional": 1000, "amount_in_wei": 1,
+             "quote_source": "quoter_v2"},
+        ]
+        gated, summary = evaluate_quotes(quotes, min_net_profit_usd=9999.0)
+        # Gated is empty (all rejected by NET_PROFIT_TOO_LOW)
+        assert gated == []
+        assert summary["rejected_reasons"].get("NET_PROFIT_TOO_LOW", 0) > 0
+
+        # Feed rejected list to reprieve — must find candidates
+        rejected = summary["_rejected_opportunities"]
+        reprieve, stats = select_sweep_reprieve_candidates(rejected)
+        assert stats["sweep_reprieve_selected"] > 0
+        assert all(r.get("reject_reason", "").startswith("NET_PROFIT_TOO_LOW") for r in reprieve)

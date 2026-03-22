@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-20 (R29 (3) — **fixed-size position doctrine removed**. 19-point $1–$10,000 sweep ladder, top_routes 3→15. Wide frontier: arb true minimum -16.89 bps at $25 (was -31.75 at $150). 2092 tests PASS.)  
+**Updated**: 2026-03-21 (R33 — **start.py extraction + reprieve runtime validation**. start.py 2236→753 lines (4 modules extracted). eligible_opps scoping bug fixed. OE→reprieve contract fixed. blocker_classification materialized. 2137 tests PASS. Reprieve validated: linea=6, scroll=3, mantle=3 candidates selected.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. R29 (3): paper_size_usd now annotated as `seed_diagnostic` — separate from executable sweep truth.  
-**Primary blocker**: Economics (gas+slippage) remain chain-specific. Wide frontier dramatically improved gap: arb true minimum at $25 is -16.89 bps (improvement of ~15 bps from fixed $150 probe). Base still quote-path blocked. `profitable_roundtrips=0` across all chains.
+**Primary blocker**: Economics (gas+slippage) remain chain-specific. R33: reprieve now firing (sweep reprieve selects NET_PROFIT_TOO_LOW rejects for wide-size ladder). Base still QUOTE_PATH_BLOCKED. `profitable_roundtrips=0` across all chains.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
@@ -15,11 +15,12 @@
 - ✅ `profit_is_diagnostic = true` (accepted for simulate-only)
 - ✅ `total_net_usdc = $1142.02` (cumulative paper profit, historical)
 
-**Current State (R28.21)**:
-- Rolling: runs_in_window=200+, unique_pairs=13
-- **No chain is positive control** — R28.17+ truth audit reset all chains to non-profitable
-- All chains cache-backed (rpc=0), registry from warm_pool_cache
-- Policy: `intent.txt` = business intent (per Roadmap.md:680); pool-level quarantine/runtime_disabled handles filtering
+**Current State (R33)**:
+- Rolling: runs_in_window=200+, unique_pairs=13+
+- **No chain is positive control** — all chains have best_net_pnl_bps < 0
+- R33: Reprieve validated — linea/scroll/mantle now select NET_PROFIT_TOO_LOW rejects for sweep
+- R33: blocker_classification auto-computed (base=QUOTE_PATH_BLOCKED, zksync=INFRA_FAIL)
+- Policy: `intent.txt` = business intent; pool-level quarantine/runtime_disabled handles filtering
 
 **M4.2 (roundtrip) Remains**:
 - Requires market arb opportunity (`roundtrip.profitable_count > 0`)
@@ -28,6 +29,7 @@
 
 ---
 
+> [!] **ROLLING STABILITY (2026-03-21 R33)**: **start.py extraction completed.** start.py 2236→753 lines (4 modules: run_artifact_extract.py, chain_stats.py, long_scan_summary.py, rolling_outputs.py). eligible_opps scoping bug fixed (was UnboundLocalError silently caught). OE→reprieve contract fixed (_rejected_opportunities). Fresh 10-min multi-chain scan: reprieve validated (linea=6, scroll=3, mantle=3 selected). blocker_classification/blocker_reason materialized from evidence. --allow-partial-chains flag added for single-chain verification. 2137 tests PASS.
 > [!] **ROLLING STABILITY (2026-03-20 R29 (3))**: **Fixed-size doctrine removed.** CANONICAL_SWEEP_SIZES_USD widened: 7-point [50–250] → 19-point [1–10000]. top_routes 3→15. Three decoupled size layers (discovery_probe, spread_seed, executable_sweep). Fresh 54-run canonical scan: 654.8s wall / 54 included signals / 49 RT evaluated / 0 profitable RT / best -28.70 bps (fixed-size). Sweep frontier: arb true minimum -16.89 bps at $25 (was -31.75 at $150). Gap_to_zero: 0.0 bps at $2500 (zero-quote) → true gap -16.89 bps at $25.
 > R29 cont'd: staged `quotes.py` extraction landed (`quote_rpc.py` added; `quotes.py` 2006→1658). Same-session canonical run: 72 runs / 647.8s / 78 included signals / 57 RT evaluated / 0 profitable RT. `/api/hot` matched `long_scan_latest.json` in the same session.
 > R28.28: God-file extraction: run_scan_real.py 1724→1371 lines, 5 modules, 38 tests. 2017 PASS.

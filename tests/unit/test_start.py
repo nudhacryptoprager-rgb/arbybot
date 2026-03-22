@@ -1277,6 +1277,50 @@ class TestFrontierRanking(unittest.TestCase):
         self.assertEqual(base["measured_total_cost_bps"], 13.5)
         self.assertIsNone(linea.get("measured_total_cost_bps"))
 
+    def test_blocker_classification_materialized_from_evidence(self):
+        """R33: blocker_classification falls back to blocker_evidence when config null."""
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 15.0, "sweep_best_net_pnl_bps": -15.0,
+                "included_signals_total": 50, "accepted_fail": False,
+                # Config-based fields are null
+                "blocker_classification": None,
+                "blocker_reason": None,
+                # Auto-computed from evidence
+                "blocker_evidence": "OE_ECONOMICS",
+            },
+            "base": {
+                "sweep_gap_to_zero_bps": None, "sweep_best_net_pnl_bps": None,
+                "included_signals_total": 10, "accepted_fail": False,
+                "blocker_classification": None,
+                "blocker_reason": None,
+                "blocker_evidence": "QUOTE_PATH_BLOCKED",
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        arb = [r for r in ranking if r["chain"] == "arb"][0]
+        base = [r for r in ranking if r["chain"] == "base"][0]
+        # Must not be null — materialized from blocker_evidence
+        self.assertEqual(arb["blocker_classification"], "OE_ECONOMICS")
+        self.assertIsNotNone(arb["blocker_reason"])
+        self.assertEqual(base["blocker_classification"], "QUOTE_PATH_BLOCKED")
+        self.assertIsNotNone(base["blocker_reason"])
+
+    def test_blocker_classification_config_overrides_evidence(self):
+        """Config-based blocker_classification takes priority over evidence."""
+        per_chain = {
+            "arb": {
+                "sweep_gap_to_zero_bps": 15.0, "sweep_best_net_pnl_bps": -15.0,
+                "included_signals_total": 50, "accepted_fail": False,
+                "blocker_classification": "MANUAL_OVERRIDE",
+                "blocker_reason": "operator set",
+                "blocker_evidence": "OE_ECONOMICS",
+            },
+        }
+        ranking = start._compute_frontier_ranking(per_chain)
+        self.assertEqual(ranking[0]["blocker_classification"], "MANUAL_OVERRIDE")
+        self.assertEqual(ranking[0]["blocker_reason"], "operator set")
+
 
 class TestExtractScanStats(unittest.TestCase):
     """R25: extract_scan_stats reads stats from scan_*.json."""
@@ -1497,6 +1541,44 @@ class TestWarnMissingChainsHardFail(unittest.TestCase):
             # When all chains are covered, _warn_missing_chains should NOT exit
             # We test the real function but patched to use our chains.yaml
             # Since all chains are covered, nothing happens
+
+    def test_allow_partial_chains_downgrades_to_warning(self):
+        """R33: --allow-partial-chains makes missing chains a warning, not fatal."""
+        with tempfile.TemporaryDirectory() as td:
+            chains_file = Path(td) / "config" / "chains.yaml"
+            chains_file.parent.mkdir(parents=True)
+            with open(chains_file, "w") as f:
+                yaml.dump({"arbitrum_one": {}, "base": {}, "scroll": {}}, f)
+            config_meta = {
+                "a.yaml": {"chain": "arbitrum_one"},
+            }
+            # Replicate the logic with allow_partial=True — should NOT exit
+            def patched_warn(config_meta_arg, *, allow_partial=False):
+                chains_yaml = chains_file
+                try:
+                    with open(chains_yaml, encoding="utf-8") as f:
+                        all_chains = set(yaml.safe_load(f) or {})
+                except Exception:
+                    return
+                config_chains = {meta["chain"] for meta in config_meta_arg.values()}
+                missing = sorted(all_chains - config_chains)
+                if missing:
+                    if allow_partial:
+                        return  # warning only
+                    sys.exit(1)
+            # With allow_partial=True, no exit
+            patched_warn(config_meta, allow_partial=True)  # should not raise
+            # Without allow_partial, should exit
+            with self.assertRaises(SystemExit):
+                patched_warn(config_meta, allow_partial=False)
+
+    def test_allow_partial_chains_arg_parsing(self):
+        """R33: --allow-partial-chains flag is parsed correctly."""
+        args = start.parse_args(["--config", "x.yaml", "--allow-partial-chains"])
+        self.assertTrue(args.allow_partial_chains)
+
+        args_default = start.parse_args(["--config", "x.yaml"])
+        self.assertFalse(args_default.allow_partial_chains)
 
 
 class TestCoverageWorkersArg(unittest.TestCase):

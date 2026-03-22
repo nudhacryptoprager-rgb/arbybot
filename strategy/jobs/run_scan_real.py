@@ -706,6 +706,10 @@ def run_scan(
         l1_cost_wei = 0
         l1_cost_source = "none"
         
+        # R33: Initialize before conditional block so reprieve/sweep path
+        # is reachable even when opps_list is empty (0 gated opportunities).
+        eligible_opps = []
+
         if opps_list:
             # v2.1.0: Get L1 cost with source tracking (prefer onchain if w3_instance available)
             # v2.1.0-fix: Pass representative swap calldata for accurate L1 estimation
@@ -903,11 +907,12 @@ def run_scan(
             sweep_reprieve_count = len(_reprieve)
             stats["roundtrip"]["sweep_reprieve_count"] = sweep_reprieve_count
             stats["roundtrip"]["sweep_reprieve_stats"] = _reprieve_stats
-            if sweep_reprieve_count > 0:
-                logger.info(
-                    "Sweep reprieve: %d NET_PROFIT_TOO_LOW candidates promoted to frontier sweep",
-                    sweep_reprieve_count,
-                )
+            logger.info(
+                "Sweep reprieve: selected=%d from %d NET_PROFIT_TOO_LOW rejected (source_count=%d)",
+                sweep_reprieve_count,
+                _reprieve_stats.get("net_profit_too_low_total", 0),
+                len(rejected_opps),
+            )
 
         if dynamic_probe_cfg.get("enabled") and sweep_candidates:
             from strategy.dynamic_sweep_runtime import run_sweep

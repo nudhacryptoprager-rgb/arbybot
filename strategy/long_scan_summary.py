@@ -380,6 +380,21 @@ def _compute_profit_truth_summary(per_chain: dict[str, dict[str, Any]]) -> dict[
     }
 
 
+# R33: Map auto-computed blocker_evidence to human-readable reason strings.
+_BLOCKER_EVIDENCE_REASONS: dict[str | None, str | None] = {
+    "ROUNDTRIP_PROFITABLE": None,  # not a blocker
+    "OE_ECONOMICS": "Signals exist, all rejected by NET_PROFIT_TOO_LOW at probe size",
+    "QUOTE_PATH_BLOCKED": "quoter_v2 failure rate or SLOT0_DIAGNOSTIC dominance too high",
+    "MIXED_SOURCE": "OE rejects are dominated by MIXED_SOURCE (quoter_v2 on one leg only)",
+    "NO_SIGNAL": "No spread signals produced",
+    "INFRA_FAIL": "Chain consistently fails (>50% runs)",
+}
+
+
+def _blocker_evidence_reason(blocker_cls: str | None) -> str | None:
+    return _BLOCKER_EVIDENCE_REASONS.get(blocker_cls)
+
+
 def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """Rank chains by composite frontier score (R12→R22: robust multi-metric selection)."""
     ranked = []
@@ -404,7 +419,7 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
         chain_quality = s.get("last_chain_quality_level")
         # R33: Fall back to auto-computed blocker_evidence when config fields are null
         blocker_cls = s.get("blocker_classification") or s.get("blocker_evidence")
-        blocker_rsn = s.get("blocker_reason")
+        blocker_rsn = s.get("blocker_reason") or _blocker_evidence_reason(blocker_cls)
         total_runs = s.get("runs", 0)
         pass_runs = s.get("pass", 0)
         route_health = round(pass_runs / total_runs, 4) if total_runs > 0 else None

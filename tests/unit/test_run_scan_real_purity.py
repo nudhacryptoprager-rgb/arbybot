@@ -91,7 +91,7 @@ def test_run_scan_real_line_count():
     # R28.24: +48 for filter_funnel artifact + roundtrip_truth_status + config-driven caps
     # R28.27: +62 for cap-isolation toggles (_get_cap_isolation_switches + 3 application sites)
     # For now, just warn if it grows significantly
-    max_lines = 1500  # R28.28: reduced from 1900 after extraction to strategy modules
+    max_lines = 1510  # R33: +3 for eligible_opps init fix, +7 for reprieve logging
     
     assert line_count <= max_lines, \
         f"run_scan_real.py has {line_count} lines (max: {max_lines}). Consider refactoring."
@@ -170,3 +170,32 @@ def test_start_funnel_accumulation_fields():
         "funnel_rt_real_quote_total",
     ]:
         assert key in content, f"chain_stats.py missing accumulated funnel field '{key}'"
+
+
+def test_eligible_opps_initialized_before_conditional():
+    """R33: eligible_opps must be initialized before `if opps_list:` to prevent
+    UnboundLocalError when gated opps is empty but reprieve path needs it."""
+    path = Path(__file__).parent.parent.parent / "strategy" / "jobs" / "run_scan_real.py"
+    content = path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+
+    # Find the line where eligible_opps = [] is initialized
+    init_line = None
+    conditional_line = None
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if stripped == "eligible_opps = []" and init_line is None:
+            init_line = i
+        if "eligible_opps, _rt_filter_stats = select_roundtrip_candidates(" in stripped:
+            conditional_line = i
+
+    assert init_line is not None, (
+        "eligible_opps = [] initialization not found in run_scan_real.py"
+    )
+    assert conditional_line is not None, (
+        "select_roundtrip_candidates call not found in run_scan_real.py"
+    )
+    assert init_line < conditional_line, (
+        f"eligible_opps = [] (line {init_line}) must come BEFORE "
+        f"select_roundtrip_candidates (line {conditional_line})"
+    )

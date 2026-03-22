@@ -247,6 +247,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
              "(e.g. 'scroll'). These do not count toward --max-fail-chains.",
     )
     ap.add_argument(
+        "--allow-partial-chains",
+        action="store_true",
+        default=False,
+        help="Allow config-list to cover fewer chains than chains.yaml defines. "
+             "Downgrades the missing-chains check from FATAL to WARNING.",
+    )
+    ap.add_argument(
         "--coverage-workers",
         type=int,
         default=2,
@@ -315,10 +322,11 @@ def main(argv: list[str] | None = None) -> int:
                 print("Dashboard server stopped.")
 
 
-def _warn_missing_chains(config_meta: dict[str, dict[str, Any]]) -> None:
-    """R24→R25: Hard-fail if any chain from chains.yaml is not represented in config-list.
+def _warn_missing_chains(config_meta: dict[str, dict[str, Any]], *, allow_partial: bool = False) -> None:
+    """R24→R25→R33: Hard-fail if any chain from chains.yaml is not represented in config-list.
 
     Prevents silent coverage gaps where a chain is defined but has no config in the scan.
+    When allow_partial=True, downgrades to WARNING for single-chain verification.
     """
     chains_yaml = Path("config") / "chains.yaml"
     if not chains_yaml.exists():
@@ -331,10 +339,14 @@ def _warn_missing_chains(config_meta: dict[str, dict[str, Any]]) -> None:
     config_chains = {meta["chain"] for meta in config_meta.values()}
     missing = sorted(all_chains - config_chains)
     if missing:
-        print(f"  FATAL: chains.yaml defines {sorted(all_chains)} but config-list covers only {sorted(config_chains)}")
-        print(f"  FATAL: missing chains: {missing}")
-        print(f"  Add configs for missing chains or remove them from chains.yaml.")
-        sys.exit(1)
+        if allow_partial:
+            print(f"  WARNING: chains.yaml defines {sorted(all_chains)} but config-list covers only {sorted(config_chains)}")
+            print(f"  WARNING: missing chains: {missing} (--allow-partial-chains active, continuing)")
+        else:
+            print(f"  FATAL: chains.yaml defines {sorted(all_chains)} but config-list covers only {sorted(config_chains)}")
+            print(f"  FATAL: missing chains: {missing}")
+            print(f"  Add configs for missing chains or remove them from chains.yaml.")
+            sys.exit(1)
 
 
 def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
@@ -347,8 +359,8 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         rolling = "YES" if is_primary_rolling_config(meta) else "no"
         print(f"  [{meta['chain']:16s}] {cfg}  run_kind={meta['run_kind']}  rolling={rolling}")
 
-    # R24: Check config-list coverage against chains.yaml
-    _warn_missing_chains(config_meta)
+    # R24→R33: Check config-list coverage against chains.yaml
+    _warn_missing_chains(config_meta, allow_partial=args.allow_partial_chains)
 
     # R28.5: Separate primary (NORMAL) and coverage configs
     primary_configs = [cfg for cfg in configs if is_primary_rolling_config(config_meta[cfg])]
