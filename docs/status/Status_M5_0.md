@@ -1,11 +1,43 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-22 (R34 — **Fix stream-to-analysis signal loss.** R33 fresh same-session scan proved a real signal loss: top_signals present in hot_loop and spread_signals present in truth reports, but live_stream.verified_pairs/diagnostic_pairs empty because reprieve-only paths crashed in run_scan_real.py (token_decimals/rt_top_n UnboundLocalError). R34 hoisted both variables, added 3-tier live_stream row building, and fixed per_chain fallback in rolling_outputs. 2154 tests PASS.)
-**Tests**: 2154 passed / 14 pre-existing failed / 5 skipped
+**Updated**: 2026-03-23 (R35 — **User-visible stream fix + evidence discipline.** R35 follow-up resolved the user-visible stream regression: the hot-loop frontier is no longer empty. Diagnostic reprieve rows now preserve pair, route, spread_bps, reject_reason, and net frontier PnL. Route-identity normalization in dynamic_sweep_runtime.py, dashboard diagnostic fallback, QUOTE_PATH_BLOCKED sweep override, hot_loop canonical guard. Fresh 6-chain canonical scan: 24 runs, 16 diagnostic_pairs across 6 chains. 2162 tests PASS.)
+**Tests**: 2162 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R34: fresh scan (2026-03-22T10:14). R33: 24+ run multi-chain scan (2026-03-21T11:28-11:38). R32: sweep reprieve + quoter skip cache.
+**Evidence**: R35: canonical 6-chain scan (2026-03-23T08:06:35Z). R34: stream signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R35 — User-Visible Stream Fix + Evidence Discipline
+
+R35 follow-up resolved the user-visible stream regression. The hot-loop frontier is no longer empty: diagnostic reprieve rows now preserve pair, route, spread_bps, reject_reason, and net frontier PnL. Remaining blockers are downstream economics and real-quote roundtrip truth, not stream serialization.
+
+### Code Changes
+1. **strategy/dynamic_sweep_runtime.py** — Route identity normalization: after `sweep_roundtrip_sizes()`, `sr.buy_dex`/`sr.sell_dex` overwritten with OE opportunity’s original direction. Root cause of empty live_stream fields.
+2. **monitoring/dashboard.html** — When `verified_pairs=[]`, shows diagnostic frontier as primary panel ("Best Available Frontier") instead of empty table.
+3. **strategy/chain_stats.py** — QUOTE_PATH_BLOCKED sweep override: `has_sweep_evidence` guard prevents misclassification when `runs_with_sweep > 0`.
+4. **strategy/rolling_outputs.py** — Hot loop canonical guard: require `summary_file` containing `_rolling` to write to HOT_LOOP_LATEST.
+
+### R35 Acceptance Criteria (all PASS)
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| `diagnostic_pairs` non-empty, multi-chain | ✅ PASS | 16 entries across 6 chains (arb=5, linea=3, mantle=2, scroll=3, zksync=3) |
+| rows have pair/route/spread_bps/reject_reason | ✅ PASS | e.g. USDC/DAI=39.65, WETH/PENDLE=26.63, WETH/WBTC=8.21 bps |
+| `runs_with_sweep > 0` | ✅ PASS | arb=4, mantle=4, scroll=4, base=3, zksync=1 |
+| `arb blocker != QUOTE_PATH_BLOCKED` | ✅ PASS | arb=OE_ECONOMICS (sweep override working) |
+| `blocker_classification` non-null all chains | ✅ PASS | arb/zksync/scroll=OE_ECONOMICS, base/linea=INFRA_FAIL, mantle=MIXED_SOURCE |
+| dashboard shows diagnostic frontier | ✅ PASS | "Best Available Frontier (Diagnostic)" panel populated |
+
+### Chain Quality (R35 fresh 6-chain canonical scan, 2026-03-23)
+| Chain | Runs | Blocker | Sweep Runs | Signals |
+|-------|------|---------|------------|--------|
+| arbitrum_one | 4 | OE_ECONOMICS | 4 | 109 |
+| zksync | 4 | OE_ECONOMICS | 1 | 3 |
+| base | 4 | INFRA_FAIL | 3 | 4 |
+| mantle | 4 | MIXED_SOURCE | 4 | 12 |
+| linea | 4 | INFRA_FAIL | 0 | 19 |
+| scroll | 4 | OE_ECONOMICS | 4 | 16 |
 
 ---
 
@@ -126,12 +158,12 @@ THREE refresh cadences:
 
 | Chain | Quality | Blocker | Summary |
 |-------|---------|---------|---------|
-| arbitrum_one | SIGNAL_PRODUCING | OE_ECONOMICS | 4-DEX, 36 pairs, NET_PROFIT_TOO_LOW=57% |
-| linea | SIGNAL_PRODUCING | ECONOMICS | 2-DEX, pass chain |
-| scroll | SIGNAL_PRODUCING | ECONOMICS | 3-DEX, accepted-fail |
-| mantle | SIGNAL_PRODUCING | FRAGILE_QUALITY | Intermittent failures |
-| zksync | FAIL | HIGH_FAIL | SyncSwap stub not functional |
-| base | INFRA_READY | QUOTE_PATH_BLOCKED | Aerodrome ve33 disabled R28.24 |
+| arbitrum_one | SIGNAL_PRODUCING | OE_ECONOMICS | 4-DEX, 30 cross-dex pairs, routes_swept=13+, NET_PROFIT_TOO_LOW dominant |
+| linea | SIGNAL_PRODUCING | INFRA_FAIL | 2-DEX, 3/4 runs fail, sweep not active |
+| scroll | SIGNAL_PRODUCING | OE_ECONOMICS | 3-DEX, accepted-fail, sweep active |
+| mantle | SIGNAL_PRODUCING | MIXED_SOURCE | 2-DEX, all runs pass, sweep active |
+| zksync | SIGNAL_PRODUCING | OE_ECONOMICS | 2-DEX, 3/4 runs fail, sweep partial |
+| base | INFRA_READY | INFRA_FAIL | 3-DEX, >50% fail rate |
 
 **Rollout Queue**: arb → linea → zksync → base → mantle → scroll
 

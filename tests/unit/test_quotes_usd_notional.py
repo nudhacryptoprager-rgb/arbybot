@@ -41,8 +41,8 @@ class TestUsdNotionalSizing:
     def test_wbtc_sizing(self):
         """WBTC sizing with 8 decimals."""
         amount = calculate_amount_in_wei("WBTC", 8, 1000.0)
-        # WBTC at $34000 -> 1000/34000 ≈ 0.02941 WBTC
-        expected = int(1000.0 / 34000.0 * 10**8)
+        # WBTC at $87000 -> 1000/87000 ≈ 0.01149 WBTC
+        expected = int(1000.0 / 87000.0 * 10**8)
         assert amount == expected
     
     def test_custom_price_override(self):

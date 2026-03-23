@@ -112,16 +112,17 @@ def select_sweep_reprieve_candidates(
     opps_list: List[dict],
     max_candidates: int = 15,
 ) -> Tuple[List[dict], dict]:
-    """Select candidates for sweep reprieve from NET_PROFIT_TOO_LOW rejected opps.
+    """Select candidates for sweep reprieve from reprievable rejected opps.
 
     When OE rejects all opportunities at the single probe size (e.g. $10), routes
-    rejected only by NET_PROFIT_TOO_LOW with both legs executable (quoter_v2) deserve
+    rejected by economics-based gates (NET_PROFIT_TOO_LOW, GAS_TOO_HIGH,
+    SPREAD_TOO_LOW, NOTIONAL_DRIFT) with both legs executable (quoter_v2) deserve
     a wide-size frontier replay. This prevents single-size economics from being the
     final verdict without exploring the full sweep ladder.
 
     Criteria:
     - gate_passed == False
-    - reject_reason starts with "NET_PROFIT_TOO_LOW"
+    - is_reprievable == True (R36), or reject_reason starts with NET_PROFIT_TOO_LOW (legacy)
     - Both legs are quoter_v2 (not mixed-source or slot0)
     - Cross-DEX
 
@@ -132,9 +133,11 @@ def select_sweep_reprieve_candidates(
     for opp in opps_list:
         if opp.get("gate_passed", False):
             continue
-        reason = opp.get("reject_reason") or ""
-        if not reason.startswith("NET_PROFIT_TOO_LOW"):
-            continue
+        # R36: Use is_reprievable flag if present, fall back to string match for legacy
+        if not opp.get("is_reprievable", False):
+            reason = opp.get("reject_reason") or ""
+            if not reason.startswith("NET_PROFIT_TOO_LOW"):
+                continue
         if opp.get("buy_quote_source") != "quoter_v2" or opp.get("sell_quote_source") != "quoter_v2":
             continue
         if not is_cross_dex(opp):

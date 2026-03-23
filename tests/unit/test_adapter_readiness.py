@@ -75,8 +75,8 @@ class TestAdapterReadinessPerChain:
         for dex_name, dex_data in chain_dexes.items():
             adapter_type = dex_data.get("adapter_type", "")
             if adapter_type in IMPLEMENTED_ADAPTERS:
-                if adapter_type in ("ve33", "uniswap_v2"):
-                    # ve33/V2 quote on-pool, router is optional
+                if adapter_type in ("ve33", "uniswap_v2", "syncswap"):
+                    # ve33/V2/syncswap quote on-pool, router is optional
                     continue
                 quoter = dex_data.get("quoter_v2") or dex_data.get("quoter")
                 assert quoter and quoter.startswith("0x"), (

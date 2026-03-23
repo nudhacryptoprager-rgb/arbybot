@@ -391,6 +391,22 @@ def run_scan(
     dexes_active_list = sorted({q.get("dex_id") for q in quotes_sample})
     stats["dexes_active"] = len(dexes_active_list)
     
+    # R36: Surface coverage — compare scanned DEXes vs all DEXes in dexes.yaml for this chain
+    try:
+        from config import load_dexes
+        _all_chain_dexes = sorted(load_dexes().get(chain_key, {}).keys())
+    except Exception:
+        _all_chain_dexes = []
+    stats["scanned_surface_vs_supported_surface"] = {
+        "dexes_supported_yaml": len(_all_chain_dexes),
+        "dexes_in_scan_config": len(dexes_list),
+        "dexes_active_scanned": stats["dexes_active"],
+        "scan_coverage_ratio": round(stats["dexes_active"] / max(len(_all_chain_dexes), 1), 4),
+        "config_coverage_ratio": round(len(dexes_list) / max(len(_all_chain_dexes), 1), 4),
+        "missing_from_config": sorted(set(_all_chain_dexes) - set(dexes_list)),
+        "missing_from_scan": sorted(set(dexes_list) - set(dexes_active_list)),
+    }
+    
     # Compute spread signals
     spread_threshold_bps = config.get("min_spread_bps", config.get("spread_threshold_bps", 0))
     spread_signals = compute_spread_signals(quotes_sample, config, current_block, rejected_quotes)
@@ -490,13 +506,27 @@ def run_scan(
             _live_mode=w3_instance is not None,
         )
         
+        # R36: Scale min_net_profit_usd proportionally to probe-vs-target ratio.
+        # Config min_net_profit_usd ($0.10) is calibrated for target_usd_notional ($150).
+        # At discovery_probe_size_usd ($10), must scale: $0.10 × (10/150) ≈ $0.007.
+        _probe_usd = config.get(
+            "discovery_probe_size_usd",
+            config.get("target_usd_notional", 1000.0),
+        )
+        _target_usd = config.get("target_usd_notional", 1000.0)
+        _min_profit_raw = config.get("min_net_profit_usd", 0.10)
+        _profit_scale = _probe_usd / _target_usd if _target_usd > 0 else 1.0
+        _min_profit_scaled = _min_profit_raw * _profit_scale
+        
         opps_list, opps_summary = evaluate_quotes(
             quotes_sample, cycle=0, timestamp=timestamp,
             eth_usd_price=eth_usd,
-            min_net_profit_usd=config.get("min_net_profit_usd", 0.10),
+            min_net_profit_usd=_min_profit_scaled,
             gas_config=gas_config,
-            # v3.2.2: Use drift_warning_pct to align opportunity gates with spreads policy
-            target_notional_usd=config.get("target_usd_notional", 1000.0),
+            # R36: Use discovery_probe_size_usd as OE target to match actual quote sizing.
+            # Previously used target_usd_notional ($150), but quotes are sized at
+            # discovery_probe_size_usd ($10) — causing 93% NOTIONAL_DRIFT rejection.
+            target_notional_usd=_probe_usd,
             max_notional_drift_pct=config.get("drift_warning_pct", 20.0),
             # v3.2.63: Per-chain SUSPECT_SPREAD_HARD threshold from config
             max_gross_spread_bps=config.get("suspect_spread_bps_hard"),
@@ -1260,6 +1290,12 @@ def run_scan(
         eligible_opps  # noqa: B018
     except NameError:
         eligible_opps = []
+    try:
+        sweep_candidates  # noqa: B018
+    except NameError:
+        sweep_candidates = []
+    # R36: Collect per-route sweep results for pair_trace
+    _sweep_results_for_trace = stats.get("roundtrip", {}).get("dynamic_sweep", {}).get("results", [])
     from strategy.pair_trace import build_pair_funnel_trace
     stats["pair_funnel_trace"] = build_pair_funnel_trace(
         pairs_list=pairs_list,
@@ -1269,6 +1305,8 @@ def run_scan(
         opps_list=opps_list,
         roundtrip_results=roundtrip_results,
         eligible_opps=eligible_opps,
+        sweep_candidates=sweep_candidates,
+        sweep_results=_sweep_results_for_trace,
     )
     
     # R28.24: Roundtrip truth status — separate from diagnostic profit_status.

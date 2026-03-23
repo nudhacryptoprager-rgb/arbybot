@@ -240,6 +240,16 @@ def _compute_pair_spread(
         
         # If we got any cross-DEX signals, return them (don't fall back to same-DEX)
         if signals:
+            # R36: Same-DEX fee-tier verification — append diagnostic signals
+            # when same_dex_verification=true. These are diagnostic-only and don't
+            # replace cross-DEX signals. They enable tracking whether fee-tier arb
+            # exists within the same DEX (e.g., UniV3 100bps→500bps).
+            if config.get("same_dex_verification", False):
+                same_dex_verif = _find_same_dex_fee_tier_spreads(
+                    quotes_for_pair, config, spread_threshold_bps, max_spread_bps_sanity,
+                    current_block, pair,
+                )
+                signals.extend(same_dex_verif)
             return signals
     
     # v2.9.6: When require_cross_dex=true, do NOT generate same-DEX signals at all
@@ -310,6 +320,67 @@ def _compute_pair_spread(
         spread_bps_decimal, spread_bps, config, current_block
     )
     return [signal]
+
+
+def _find_same_dex_fee_tier_spreads(
+    quotes_for_pair: List[Dict[str, Any]],
+    config: Dict[str, Any],
+    spread_threshold_bps: int,
+    max_spread_bps_sanity: int,
+    current_block: Optional[int],
+    pair: str,
+) -> List[Dict[str, Any]]:
+    """R36: Find same-DEX fee-tier spreads for verification/diagnostic.
+
+    Groups quotes by dex_id, then within each DEX compares fee tiers.
+    E.g., UniV3 fee=100 vs UniV3 fee=500 on the same pair.
+    All returned signals are marked verification_mode=True, is_diagnostic_only=True.
+    """
+    quotes_by_dex: Dict[str, List[Dict[str, Any]]] = {}
+    for q in quotes_for_pair:
+        dex_id = q.get("dex_id", "unknown")
+        quotes_by_dex.setdefault(dex_id, []).append(q)
+
+    signals = []
+    for dex_id, dex_quotes in quotes_by_dex.items():
+        # Need at least 2 different fee tiers
+        fee_tiers = {q.get("fee", 0) for q in dex_quotes}
+        if len(fee_tiers) < 2:
+            continue
+
+        # Find best buy (min price) and best sell (max price) across fee tiers
+        sorted_q = sorted(dex_quotes, key=_get_price)
+        best_buy = sorted_q[0]
+        best_sell = sorted_q[-1]
+
+        # Must be different fee tiers
+        if best_buy.get("fee") == best_sell.get("fee"):
+            continue
+
+        buy_price = _get_price(best_buy)
+        sell_price = _get_price(best_sell)
+        if buy_price <= 0 or sell_price <= 0:
+            continue
+
+        spread_bps_decimal = (sell_price - buy_price) / buy_price * Decimal("10000")
+        if abs(spread_bps_decimal) < spread_threshold_bps:
+            continue
+        if abs(spread_bps_decimal) > max_spread_bps_sanity:
+            continue
+
+        spread_bps = int(spread_bps_decimal)
+        signal = _build_spread_signal(
+            pair, best_buy, best_sell, buy_price, sell_price,
+            spread_bps_decimal, spread_bps, config, current_block,
+        )
+        signal["verification_mode"] = True
+        signal["is_diagnostic_only"] = True
+        signal["same_dex_fee_arb"] = True
+        signal["fee_tier_buy"] = best_buy.get("fee")
+        signal["fee_tier_sell"] = best_sell.get("fee")
+        signals.append(signal)
+
+    return signals
 
 
 def _find_all_cross_dex_spreads(

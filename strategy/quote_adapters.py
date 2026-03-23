@@ -227,6 +227,168 @@ def read_ve33_amount_out(
 
 
 # =============================================================================
+# SYNCSWAP (zkSync / Scroll / Linea)
+# =============================================================================
+
+def read_syncswap_amount_out(
+    pool_address: str,
+    token_in: str,
+    amount_in: int,
+    rpc_url: Optional[str],
+    block_num: int,
+) -> Optional[int]:
+    """
+    Get executable quote from SyncSwap pool via getAmountOut().
+
+    SyncSwap Classic/Stable pools expose:
+      getAmountOut(address tokenIn, uint256 amountIn, address sender) -> uint256 amountOut
+    """
+    if not pool_address or not token_in or not rpc_url:
+        return None
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+
+    try:
+        from web3 import Web3
+    except ImportError:
+        logger.debug("syncswap quote skipped: web3 not installed")
+        return None
+
+    try:
+        w3 = _get_shared_w3(rpc_url)
+        if w3 is None:
+            return None
+        pool = w3.eth.contract(
+            address=Web3.to_checksum_address(pool_address),
+            abi=[
+                {
+                    "inputs": [
+                        {"internalType": "address", "name": "tokenIn", "type": "address"},
+                        {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
+                        {"internalType": "address", "name": "sender", "type": "address"},
+                    ],
+                    "name": "getAmountOut",
+                    "outputs": [{"internalType": "uint256", "name": "amountOut", "type": "uint256"}],
+                    "stateMutability": "view",
+                    "type": "function",
+                }
+            ],
+        )
+
+        amount_out = pool.functions.getAmountOut(
+            Web3.to_checksum_address(token_in),
+            amount_in,
+            Web3.to_checksum_address("0x0000000000000000000000000000000000000000"),
+        ).call(block_identifier=block_num)
+
+        if amount_out is None:
+            return None
+        amount_out_int = int(amount_out)
+        return amount_out_int if amount_out_int > 0 else None
+
+    except Exception as e:
+        logger.info(
+            "SYNCSWAP_QUOTE_DIAG: pool=%s token_in=%s amount_in=%d error=%s",
+            pool_address[:16], token_in[:10], amount_in, str(e)[:120],
+        )
+        return None
+
+
+# =============================================================================
+# IZISWAP (iZUMi Finance — Discretized Concentrated Liquidity)
+# =============================================================================
+
+def read_iziswap_amount_out(
+    quoter_address: str,
+    token_in: str,
+    token_out: str,
+    amount_in: int,
+    fee: int,
+    rpc_url: Optional[str],
+    block_num: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get executable quote from iZiSwap via Quoter.swapAmount().
+
+    iZiSwap Quoter exposes:
+      swapAmount(uint128 amount, address tokenX, address tokenY, uint24 fee, bool sellXEarnY)
+      -> (uint256 acquire, int24 pointAfterX)
+
+    We pass sellXEarnY = (tokenIn < tokenOut by address) since iZiSwap
+    defines tokenX < tokenY and sellXEarnY = selling tokenX.
+    """
+    if not quoter_address or not token_in or not token_out or not rpc_url:
+        return None
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return None
+
+    try:
+        from web3 import Web3
+    except ImportError:
+        logger.debug("iziswap quote skipped: web3 not installed")
+        return None
+
+    try:
+        w3 = _get_shared_w3(rpc_url)
+        if w3 is None:
+            return None
+
+        quoter = w3.eth.contract(
+            address=Web3.to_checksum_address(quoter_address),
+            abi=[
+                {
+                    "inputs": [
+                        {"internalType": "uint128", "name": "amount", "type": "uint128"},
+                        {"internalType": "address", "name": "tokenX", "type": "address"},
+                        {"internalType": "address", "name": "tokenY", "type": "address"},
+                        {"internalType": "uint24", "name": "fee", "type": "uint24"},
+                        {"internalType": "bool", "name": "sellXEarnY", "type": "bool"},
+                    ],
+                    "name": "swapAmount",
+                    "outputs": [
+                        {"internalType": "uint256", "name": "acquire", "type": "uint256"},
+                        {"internalType": "int24", "name": "pointAfter", "type": "int24"},
+                    ],
+                    "stateMutability": "nonpayable",
+                    "type": "function",
+                }
+            ],
+        )
+
+        # iZiSwap convention: tokenX < tokenY (sorted by address)
+        token_in_lower = token_in.lower()
+        token_out_lower = token_out.lower()
+        sell_x_earn_y = token_in_lower < token_out_lower
+
+        # Clamp amount to uint128 max
+        max_uint128 = (1 << 128) - 1
+        clamped_amount = min(amount_in, max_uint128)
+
+        acquire, point_after = quoter.functions.swapAmount(
+            clamped_amount,
+            Web3.to_checksum_address(min(token_in, token_out, key=str.lower)),
+            Web3.to_checksum_address(max(token_in, token_out, key=str.lower)),
+            fee,
+            sell_x_earn_y,
+        ).call(block_identifier=block_num)
+
+        if acquire is None or int(acquire) <= 0:
+            return None
+
+        return {
+            "amount_out": int(acquire),
+            "point_after": int(point_after),
+        }
+
+    except Exception as e:
+        logger.info(
+            "IZISWAP_QUOTE_DIAG: quoter=%s token_in=%s token_out=%s fee=%s amount_in=%d error=%s",
+            quoter_address[:16], token_in[:10], token_out[:10], fee, amount_in, str(e)[:120],
+        )
+        return None
+
+
+# =============================================================================
 # PRICE MATH (sqrtPriceX96 → price)
 # =============================================================================
 

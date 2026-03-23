@@ -48,8 +48,9 @@ NODE_INTERFACE_ABI = [
 ]
 
 # Default L1 cost parameters (fallback)
+# R36: Updated from 30 gwei (pre-EIP-4844) to 3 gwei (post-blob era, Mar 2024+)
 DEFAULT_L1_DATA_GAS_UNITS = 2000
-DEFAULT_L1_GAS_PRICE_GWEI = 30
+DEFAULT_L1_GAS_PRICE_GWEI = 3
 
 
 def estimate_l1_cost_onchain(

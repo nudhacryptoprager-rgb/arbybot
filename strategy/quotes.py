@@ -155,6 +155,8 @@ from strategy.quote_rpc import (
 from strategy.quote_adapters import (
     read_algebra_quoter,
     read_ve33_amount_out,
+    read_syncswap_amount_out,
+    read_iziswap_amount_out,
     synthesize_sqrt_price_from_anchor,
     calculate_price_from_sqrt,
 )
@@ -177,7 +179,7 @@ from strategy.quote_metrics import (
 DEFAULT_TOKEN_USD_PRICES = {
     "WETH": 2000.0,
     "ETH": 2000.0,
-    "WBTC": 34000.0,
+    "WBTC": 87000.0,  # R36: Updated from 34K (stale) to ~87K (2025 approx)
     "USDC": 1.0,
     "USDT": 1.0,
     "DAI": 1.0,
@@ -581,6 +583,21 @@ def collect_quotes(
                         pool_address=_a, token_in=_pf_tin,
                         amount_in=_pf_amt, rpc_url=rpc_url, block_num=current_block,
                     )
+                elif _at == "syncswap":
+                    _global_prefetch_futures[_pk] = _pf_exec.submit(
+                        read_syncswap_amount_out,
+                        pool_address=_a, token_in=_pf_tin,
+                        amount_in=_pf_amt, rpc_url=rpc_url, block_num=current_block,
+                    )
+                elif _at == "iziswap" and _dc:
+                    _izi_qa = _dc.get_quoter_address()
+                    if _izi_qa:
+                        _global_prefetch_futures[_pk] = _pf_exec.submit(
+                            read_iziswap_amount_out,
+                            quoter_address=_izi_qa, token_in=_pf_tin,
+                            token_out=_pf_tout, amount_in=_pf_amt,
+                            fee=_f, rpc_url=rpc_url, block_num=current_block,
+                        )
                 elif (_at == "algebra" or _pf_use_q) and _dc:
                     # R32: Skip quoter_v2 prefetch for pools with repeated failures
                     if _at == "uniswap_v3" and _should_skip_quoter_v2(_pk):
@@ -705,7 +722,253 @@ def collect_quotes(
             is_v3_dex = adapter_type in ("uniswap_v3", "algebra")
             is_algebra = adapter_type == "algebra"
             is_ve33 = adapter_type == "ve33"
+            is_syncswap = adapter_type == "syncswap"
+            is_iziswap = adapter_type == "iziswap"
             
+            # R36: SyncSwap executable quote path (pool.getAmountOut)
+            if is_syncswap:
+                # Use prefetched result if available
+                if pool_key in _prefetch_results:
+                    amount_out_wei_val = _prefetch_results[pool_key]
+                else:
+                    amount_out_wei_val = read_syncswap_amount_out(
+                        pool_address=pool_addr,
+                        token_in=token_in_addr,
+                        amount_in=amount_in_wei,
+                        rpc_url=rpc_url,
+                        block_num=current_block,
+                    )
+                if amount_out_wei_val is None or amount_out_wei_val <= 0:
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "SYNCSWAP_QUOTE_FAILED",
+                        "gate_passed": False,
+                        "error": "pool.getAmountOut() failed or returned zero",
+                    })
+                    counts["syncswap_quote_failed"] = counts.get("syncswap_quote_failed", 0) + 1
+                    failed_pool_addresses.append({
+                        "pool_address": pool_addr,
+                        "dex_id": dex,
+                        "pair": f"{token_in}/{token_out}",
+                        "fee": fee_tier,
+                        "reason": "SYNCSWAP_QUOTE_FAILED",
+                    })
+                    if quarantine_enabled:
+                        qm.record_failure(
+                            dex, f"{token_in}/{token_out}", fee_tier,
+                            "QUOTE_REVERT",
+                            details={"pool_address": pool_addr, "error": "syncswap_getAmountOut_failed"},
+                        )
+                    continue
+
+                amount_out_human_val = float(Decimal(amount_out_wei_val) / Decimal(10 ** decimals_out))
+                amount_out_human_str = str(round(amount_out_human_val, 6))
+                amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                amount_in_tokens = float(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                price_exact = (
+                    Decimal(str(amount_out_human_val)) / Decimal(str(amount_in_tokens))
+                    if amount_in_tokens > 0
+                    else Decimal(0)
+                )
+                price_str = str(round(float(price_exact), 6))
+
+                _ps_reject = apply_price_sanity_gate(
+                    price_exact=price_exact, anchor_price=anchor_price,
+                    anchor_source="tokens_anchor_price",
+                    pair_tag=f"{token_in}/{token_out}", dex=dex,
+                    fee_tier=fee_tier, pool_addr=pool_addr, config=config,
+                    amount_in_wei=amount_in_wei,
+                    target_usd_notional=target_usd_notional if use_usd_notional else None,
+                )
+                if _ps_reject is not None:
+                    rejected_quotes.append(_ps_reject)
+                    counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                    counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                    if quarantine_enabled:
+                        qm.record_failure(
+                            dex, f"{token_in}/{token_out}", fee_tier,
+                            "PRICE_SANITY_FAILED",
+                            details={"pool_address": pool_addr,
+                                     "deviation_bps": _ps_reject.get("deviation_bps"),
+                                     "anchor_price": str(anchor_price),
+                                     "price_exact": str(price_exact)},
+                        )
+                    if runtime_disabled_enabled:
+                        auto_disable_pool(
+                            pool_key, "PRICE_SANITY_FAILED",
+                            {"pool_address": pool_addr,
+                             "deviation_bps": _ps_reject.get("deviation_bps")},
+                        )
+                    continue
+
+                q = QuoteCompat(
+                    dex_id=dex, pool_address=pool_addr,
+                    token_in=token_in, token_out=token_out, fee=fee_tier,
+                    amount_in_wei=amount_in_wei, amount_out_wei=amount_out_wei_val,
+                    amount_in_human=amount_in_human_str, amount_out_human=amount_out_human_str,
+                    price=price_str, latency_ms=rpc_latency or 10,
+                    block_number=current_block, rpc_success=True, gate_passed=True,
+                    tick=None, sqrt_price_x96=None,
+                )
+                q_dict = q.__dict__
+                q_dict["price_exact"] = str(price_exact)
+                q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
+                q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
+                token_out_price = lookup_token_usd_price_ci(tokens_usd_price, token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
+                notional_usd_actual = round(amount_out_human_val * token_out_price, 2)
+                q_dict["notional_usd_actual"] = notional_usd_actual
+                if use_usd_notional and target_usd_notional > 0 and notional_usd_actual > 0:
+                    drift_pct = abs(notional_usd_actual - target_usd_notional) / target_usd_notional * 100
+                    q_dict["notional_drift_pct"] = round(drift_pct, 2)
+                q_dict["quote_source"] = "syncswap_getAmountOut"
+                q_dict["gas_estimate"] = None
+                q_dict["ticks_crossed"] = None
+                q_dict["anchor_source"] = anchor_source
+                q_dict["sqrt_price_after"] = None
+                q_dict["is_diagnostic_only"] = False
+                quotes_sample.append(q_dict)
+                counts["quotes_fetched"] += 1
+                if quarantine_enabled:
+                    qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
+                if runtime_disabled_enabled:
+                    record_quote_success(pool_key)
+                if price_exact is not None and float(price_exact) > 0:
+                    am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
+                continue
+
+            # R36: iZiSwap executable quote path (Quoter.swapAmount)
+            if is_iziswap:
+                _izi_quoter_addr = dex_cfg.get_quoter_address() if dex_cfg else None
+                if not _izi_quoter_addr:
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "IZISWAP_NO_QUOTER",
+                        "gate_passed": False,
+                        "error": "No quoter address configured for iZiSwap",
+                    })
+                    continue
+
+                # Use prefetched result if available
+                if pool_key in _prefetch_results and _prefetch_results[pool_key] is not None:
+                    _izi_result = _prefetch_results[pool_key]
+                else:
+                    _izi_result = read_iziswap_amount_out(
+                    quoter_address=_izi_quoter_addr,
+                    token_in=token_in_addr,
+                    token_out=token_out_addr,
+                    amount_in=amount_in_wei,
+                    fee=fee_tier,
+                    rpc_url=rpc_url,
+                    block_num=current_block,
+                )
+                if _izi_result is None:
+                    rejected_quotes.append({
+                        "pair": f"{token_in}/{token_out}",
+                        "dex_id": dex,
+                        "fee": fee_tier,
+                        "pool_address": pool_addr,
+                        "reason": "IZISWAP_QUOTE_FAILED",
+                        "gate_passed": False,
+                        "error": "Quoter.swapAmount() failed or returned zero",
+                    })
+                    counts["iziswap_quote_failed"] = counts.get("iziswap_quote_failed", 0) + 1
+                    failed_pool_addresses.append({
+                        "pool_address": pool_addr,
+                        "dex_id": dex,
+                        "pair": f"{token_in}/{token_out}",
+                        "fee": fee_tier,
+                        "reason": "IZISWAP_QUOTE_FAILED",
+                    })
+                    if quarantine_enabled:
+                        qm.record_failure(
+                            dex, f"{token_in}/{token_out}", fee_tier,
+                            "QUOTE_REVERT",
+                            details={"pool_address": pool_addr, "error": "iziswap_swapAmount_failed"},
+                        )
+                    continue
+
+                amount_out_wei_val = _izi_result["amount_out"]
+                amount_out_human_val = float(Decimal(amount_out_wei_val) / Decimal(10 ** decimals_out))
+                amount_out_human_str = str(round(amount_out_human_val, 6))
+                amount_in_human_str = str(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                amount_in_tokens = float(Decimal(amount_in_wei) / Decimal(10 ** decimals_in))
+                price_exact = (
+                    Decimal(str(amount_out_human_val)) / Decimal(str(amount_in_tokens))
+                    if amount_in_tokens > 0
+                    else Decimal(0)
+                )
+                price_str = str(round(float(price_exact), 6))
+
+                _ps_reject = apply_price_sanity_gate(
+                    price_exact=price_exact, anchor_price=anchor_price,
+                    anchor_source="tokens_anchor_price",
+                    pair_tag=f"{token_in}/{token_out}", dex=dex,
+                    fee_tier=fee_tier, pool_addr=pool_addr, config=config,
+                    amount_in_wei=amount_in_wei,
+                    target_usd_notional=target_usd_notional if use_usd_notional else None,
+                )
+                if _ps_reject is not None:
+                    rejected_quotes.append(_ps_reject)
+                    counts["quotes_rejected"] = counts.get("quotes_rejected", 0) + 1
+                    counts["price_sanity_failed"] = counts.get("price_sanity_failed", 0) + 1
+                    if quarantine_enabled:
+                        qm.record_failure(
+                            dex, f"{token_in}/{token_out}", fee_tier,
+                            "PRICE_SANITY_FAILED",
+                            details={"pool_address": pool_addr,
+                                     "deviation_bps": _ps_reject.get("deviation_bps"),
+                                     "anchor_price": str(anchor_price),
+                                     "price_exact": str(price_exact)},
+                        )
+                    if runtime_disabled_enabled:
+                        auto_disable_pool(
+                            pool_key, "PRICE_SANITY_FAILED",
+                            {"pool_address": pool_addr,
+                             "deviation_bps": _ps_reject.get("deviation_bps")},
+                        )
+                    continue
+
+                q = QuoteCompat(
+                    dex_id=dex, pool_address=pool_addr,
+                    token_in=token_in, token_out=token_out, fee=fee_tier,
+                    amount_in_wei=amount_in_wei, amount_out_wei=amount_out_wei_val,
+                    amount_in_human=amount_in_human_str, amount_out_human=amount_out_human_str,
+                    price=price_str, latency_ms=rpc_latency or 10,
+                    block_number=current_block, rpc_success=True, gate_passed=True,
+                    tick=None, sqrt_price_x96=None,
+                )
+                q_dict = q.__dict__
+                q_dict["price_exact"] = str(price_exact)
+                q_dict["usd_notional"] = target_usd_notional if use_usd_notional else None
+                q_dict["notional_usd_target"] = target_usd_notional if use_usd_notional else None
+                token_out_price = lookup_token_usd_price_ci(tokens_usd_price, token_out) or DEFAULT_TOKEN_USD_PRICES.get(token_out, 1.0)
+                notional_usd_actual = round(amount_out_human_val * token_out_price, 2)
+                q_dict["notional_usd_actual"] = notional_usd_actual
+                if use_usd_notional and target_usd_notional > 0 and notional_usd_actual > 0:
+                    drift_pct = abs(notional_usd_actual - target_usd_notional) / target_usd_notional * 100
+                    q_dict["notional_drift_pct"] = round(drift_pct, 2)
+                q_dict["quote_source"] = "iziswap_swapAmount"
+                q_dict["gas_estimate"] = None
+                q_dict["ticks_crossed"] = None
+                q_dict["anchor_source"] = anchor_source
+                q_dict["sqrt_price_after"] = None
+                q_dict["is_diagnostic_only"] = False
+                quotes_sample.append(q_dict)
+                counts["quotes_fetched"] += 1
+                if quarantine_enabled:
+                    qm.record_success(dex, f"{token_in}/{token_out}", fee_tier)
+                if runtime_disabled_enabled:
+                    record_quote_success(pool_key)
+                if price_exact is not None and float(price_exact) > 0:
+                    am.record_quote(f"{token_in}/{token_out}", float(price_exact), dex, fee_tier, current_block)
+                continue
+
             # ve33 executable quote path (Aerodrome/Velodrome)
             if is_ve33:
                 # R28.4: Use prefetched result if available

@@ -191,7 +191,7 @@ def simulate_roundtrip(
     gas_price_wei: int = 100_000_000,  # 0.1 gwei default (Arbitrum)
     max_ticks_crossed: int = 30,  # Total for both legs
     leg2_quote_callback: Optional[callable] = None,  # v2.1.0: Optional re-quote function
-    l1_cost_wei: int = 60_000_000_000_000,  # v2.1.0: L1 overhead (~$0.12 at 2000 gas * 30 gwei)
+    l1_cost_wei: int = 6_000_000_000_000,  # R36: L1 overhead (~$0.012 at 2000 gas * 3 gwei, post-EIP-4844)
     l1_cost_source: str = "default",  # v2.1.0: "config" | "onchain" | "default"
     gas_override: Optional[Tuple[int, int]] = None,  # v2.1.0-fix: (leg1_gas, leg2_gas) from eth_estimateGas
     eth_usd_price: float = 2000.0,  # v2.8.0: For USD gas conversion
@@ -438,7 +438,7 @@ def evaluate_roundtrip_candidates(
     gas_price_wei: int = 100_000_000,
     top_n: int = 5,
     leg2_quote_callback_factory: Optional[callable] = None,
-    l1_cost_wei: int = 60_000_000_000_000,  # v2.1.0: L1 overhead for unified gas model
+    l1_cost_wei: int = 6_000_000_000_000,  # R36: L1 overhead for unified gas model (post-EIP-4844)
     l1_cost_source: str = "default",  # v2.1.0: "config" | "onchain" | "default"
     eth_usd_price: float = 2000.0,  # v2.8.0: For USD gas conversion
     token_usd_prices: Optional[Dict[str, float]] = None,  # v2.8.0: {"WBTC": 68000, "USDC": 1.0, ...}
@@ -854,7 +854,7 @@ def sweep_roundtrip_sizes(
     token_in_usd_price: float = 0.0,
     token_in_decimals: int = 18,
     gas_price_wei: int = 100_000_000,
-    l1_cost_wei: int = 60_000_000_000_000,
+    l1_cost_wei: int = 6_000_000_000_000,  # R36: Post-EIP-4844 default
     l1_cost_source: str = "default",
     eth_usd_price: float = 2000.0,
 ) -> SizeSweepResult:

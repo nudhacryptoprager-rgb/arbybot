@@ -45,13 +45,13 @@ class TestEstimateL1CostFromConfig(unittest.TestCase):
     
     def test_with_default_fallback(self):
         """Should use defaults for missing config keys."""
-        from chains.l1_cost import estimate_l1_cost_from_config
+        from chains.l1_cost import estimate_l1_cost_from_config, DEFAULT_L1_GAS_PRICE_GWEI
         
         # Empty config should use defaults
         result = estimate_l1_cost_from_config({})
         
-        # Default: 2000 * 30 * 1e9
-        expected = int(2000 * 30 * 1e9)
+        # Default: 2000 * DEFAULT_L1_GAS_PRICE_GWEI * 1e9
+        expected = int(2000 * DEFAULT_L1_GAS_PRICE_GWEI * 1e9)
         self.assertEqual(result, expected)
 
 

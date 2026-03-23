@@ -10,7 +10,7 @@ by tracking per-pair state at each pipeline stage:
 Extracted from run_scan_real.py to keep orchestrator lean.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def _empty_trace(pair: str, resolved: bool = False) -> Dict[str, Any]:
@@ -33,6 +33,13 @@ def _empty_trace(pair: str, resolved: bool = False) -> Dict[str, Any]:
         "rt_reject_reasons": {},
         "terminal_stage": "resolved" if resolved else "unknown",
         "economics": {},
+        # R36: Sweep reprieve tracking
+        "sweep_reprieved": False,
+        "sweep_reprieve_reason": None,
+        "sweep_evaluated": False,
+        "sweep_best_net_pnl_bps": None,
+        "sweep_best_size_usd": None,
+        "sweep_frontier_reason": None,
     }
 
 
@@ -44,6 +51,8 @@ def build_pair_funnel_trace(
     opps_list: List[Dict[str, Any]],
     roundtrip_results: list,
     eligible_opps: List[Dict[str, Any]],
+    sweep_candidates: Optional[List[Dict[str, Any]]] = None,
+    sweep_results: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Build per-pair funnel trace from all pipeline stages.
 
@@ -150,10 +159,38 @@ def build_pair_funnel_trace(
             if rt_r.is_profitable:
                 trace[_pkey]["terminal_stage"] = "rt_profitable"
 
+    # R36 Stage 5b: Sweep reprieve — which pairs were reprieved
+    if sweep_candidates:
+        for sc in sweep_candidates:
+            _pkey = sc.get("pair", "unknown") if isinstance(sc, dict) else "unknown"
+            if _pkey in trace:
+                trace[_pkey]["sweep_reprieved"] = True
+                trace[_pkey]["sweep_reprieve_reason"] = sc.get("reject_reason")
+                if trace[_pkey]["terminal_stage"] in ("opportunity", "signal", "quoted", "resolved", "unknown"):
+                    trace[_pkey]["terminal_stage"] = "sweep_reprieved"
+
+    # R36 Stage 5c: Sweep evaluation results
+    if sweep_results:
+        for sr in sweep_results:
+            _pkey = sr.get("pair", "unknown")
+            if _pkey in trace:
+                trace[_pkey]["sweep_evaluated"] = True
+                best_pnl = sr.get("best_net_pnl_bps")
+                best_size = sr.get("best_size_usd")
+                frontier = sr.get("frontier_reason")
+                trace[_pkey]["sweep_best_net_pnl_bps"] = round(best_pnl, 2) if best_pnl is not None else None
+                trace[_pkey]["sweep_best_size_usd"] = best_size
+                trace[_pkey]["sweep_frontier_reason"] = frontier
+                if best_pnl is not None and best_pnl > 0:
+                    trace[_pkey]["terminal_stage"] = "sweep_profitable"
+                elif trace[_pkey]["terminal_stage"] == "sweep_reprieved":
+                    trace[_pkey]["terminal_stage"] = "sweep_not_profitable"
+
     # Serialize: convert sets to lists, sort by pipeline progress
     _stage_order = {
-        "rt_profitable": 0, "rt_evaluated": 1, "opportunity": 2,
-        "signal": 3, "quoted": 4, "rejected": 5, "resolved": 6, "unknown": 7,
+        "rt_profitable": 0, "sweep_profitable": 1, "rt_evaluated": 2,
+        "sweep_not_profitable": 3, "sweep_reprieved": 4, "opportunity": 5,
+        "signal": 6, "quoted": 7, "rejected": 8, "resolved": 9, "unknown": 10,
     }
     result = []
     for pt in trace.values():

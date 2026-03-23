@@ -91,7 +91,7 @@ def test_run_scan_real_line_count():
     # R28.24: +48 for filter_funnel artifact + roundtrip_truth_status + config-driven caps
     # R28.27: +62 for cap-isolation toggles (_get_cap_isolation_switches + 3 application sites)
     # For now, just warn if it grows significantly
-    max_lines = 1545  # R34: +35 for token_decimals hoist, _rt_top_n hoist, except block stream recovery
+    max_lines = 1570  # R36: +10 sweep→RT breakdown + +15 surface coverage tracking
     
     assert line_count <= max_lines, \
         f"run_scan_real.py has {line_count} lines (max: {max_lines}). Consider refactoring."

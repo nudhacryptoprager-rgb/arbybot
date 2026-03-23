@@ -44,7 +44,7 @@ class GasConfig:
     
     # L1 data cost (Arbitrum batching overhead)
     l1_data_gas_units: int = 2_000  # Calldata compression overhead
-    l1_gas_price_gwei: float = 30.0  # L1 gas price estimate
+    l1_gas_price_gwei: float = 3.0  # R36: Post-EIP-4844 blob era (~1-5 gwei on L1)
     
     # ETH price for USD conversion
     eth_usd_price: float = 2000.0
@@ -153,6 +153,7 @@ class Opportunity:
     # Quality flags
     gate_passed: bool = False
     reject_reason: Optional[str] = None
+    is_reprievable: bool = False  # R36: True if rejection may be overturned at different size
     
     # Diagnostics
     buy_quote_source: str = "slot0"
@@ -197,6 +198,7 @@ class Opportunity:
             "net_profit_usd": round(self.net_profit_usd, 4),
             "gate_passed": self.gate_passed,
             "reject_reason": self.reject_reason,
+            "is_reprievable": self.is_reprievable,
             "buy_quote_source": self.buy_quote_source,
             "sell_quote_source": self.sell_quote_source,
             # v3.2.4: Economics fields
@@ -416,6 +418,7 @@ class OpportunityEngine:
             # Apply gates
             gate_passed = True
             reject_reason = None
+            is_reprievable = False  # R36: only set for economics-based rejects
             
             # v2.1.0: No mixed-source opportunities - both legs must be quoter_v2
             # slot0 is diagnostic only, cannot be used for gated profit calculation
@@ -436,18 +439,22 @@ class OpportunityEngine:
                 reject_reason = f"SUSPECT_SPREAD_HARD: {gross_spread_bps:.1f} > {self.max_gross_spread_bps:.1f} bps"
             elif net_profit_usd < self.min_net_profit_usd:
                 gate_passed = False
+                is_reprievable = True  # R36: may pass at larger trade size
                 reject_reason = f"NET_PROFIT_TOO_LOW: {net_profit_usd:.2f} < {self.min_net_profit_usd:.2f}"
             elif gas_cost_usd > self.max_gas_cost_usd:
                 gate_passed = False
+                is_reprievable = True  # R36: gas ratio improves at larger size
                 reject_reason = f"GAS_TOO_HIGH: {gas_cost_usd:.2f} > {self.max_gas_cost_usd:.2f}"
             elif float(gross_spread_bps) < self.min_gross_spread_bps:
                 gate_passed = False
+                is_reprievable = True  # R36: spread may widen at different size
                 reject_reason = f"SPREAD_TOO_LOW: {gross_spread_bps:.1f} < {self.min_gross_spread_bps:.1f} bps"
             else:
                 # v2.1.0: NOTIONAL_DRIFT gate - ensure trade size is within expected range
                 notional_drift_pct = abs(usd_notional - self.target_notional_usd) / self.target_notional_usd * 100
                 if notional_drift_pct > self.max_notional_drift_pct:
                     gate_passed = False
+                    is_reprievable = True  # R36: drift eliminated at correct size
                     reject_reason = f"NOTIONAL_DRIFT: {notional_drift_pct:.1f}% > {self.max_notional_drift_pct:.1f}%"
             
             # v3.2.4: Calculate economics fields for roundtrip gating
@@ -495,6 +502,7 @@ class OpportunityEngine:
                 net_profit_usd=net_profit_usd,
                 gate_passed=gate_passed,
                 reject_reason=reject_reason,
+                is_reprievable=is_reprievable,
                 buy_quote_source=buy_quote.get("quote_source", "slot0"),
                 sell_quote_source=sell_quote.get("quote_source", "slot0"),
                 buy_gas_estimate=buy_gas,
