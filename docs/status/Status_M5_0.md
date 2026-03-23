@@ -1,11 +1,44 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-23 (R39c — **EXECUTABLE_BEST_NEG distinction + route-level RCA.** 2259 tests PASS. EXECUTABLE_BEST_NEG separates proven-executable negative frontier from paper-only BEST_NEG. Sweep guard + post-aggregation fence + per-chain ranking all updated. Route-level economics in pair_trace.py + pair_level_rca.py.)
-**Tests**: 2259 passed / 5 skipped
+**Updated**: 2026-03-23 (R39d — **Quality-ranked pair selection.** 2290 tests PASS. Tiered intent generation: productive/exploratory/diagnostic. core_tokens.yaml metadata: volatility_tier, liquidity_tier, cross_dex_expected, accounting_sensitive, productive_default. Productive contour: 31 pairs across 6 chains, focused on volatile + liquid + multi-DEX tokens.)
+**Tests**: 2290 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R39c: EXECUTABLE_BEST_NEG + route-level RCA (2026-03-23). R39b: sweep field fix + chain_stats + pair_trace gas (2026-03-23). R39a: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
+**Evidence**: R39d: quality-ranked pair selection (2026-03-23). R39c: EXECUTABLE_BEST_NEG + route-level RCA (2026-03-23). R39b: sweep field fix + chain_stats + pair_trace gas (2026-03-23). R39a: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R39d — Quality-Ranked Pair Selection (Tiered Intent)
+
+A market-surface review of current intent.txt shows that the next leverage is not broader inventory coverage but quality-ranked pair selection. Healthy supported chains are already reaching real RT and failing mostly on economics, so the productive contour should shift toward volatile, liquid, multi-DEX pairs (ARB, PENDLE, AERO, VIRTUAL, WMNT, ZK) while stable/stable, LST/LRT, and thin long-tail pairs move to diagnostic or exploratory tiers.
+
+### Code Changes (R39d)
+1. **config/core_tokens.yaml** — Tier metadata added to all tokens: `volatility_tier` (high/medium/low), `liquidity_tier` (high/medium/low), `cross_dex_expected` (int), `accounting_sensitive` (bool for LST/LRT), `productive_default` (bool). Each token classified based on R39c RCA evidence.
+2. **scripts/generate_intent.py** — Refactored from blind inventory-based generator to tiered selector. `classify_token()` classifies tokens into productive/exploratory/diagnostic tiers. `generate_pairs_for_chain()` accepts `tier_filter` parameter. `--tier` CLI flag: productive (default) / exploratory / all / diagnostic.
+3. **config/intent.txt** — Regenerated with productive contour: 31 pairs (down from 116). Stable/stable, LST/LRT, thin long-tail all excluded from default.
+
+### Per-Chain Productive Contour (R39d)
+| Chain | P0 Pairs | Key Tokens |
+|-------|----------|------------|
+| arbitrum_one | 9 | ARB, PENDLE, LINK, WBTC |
+| base | 7 | AERO, VIRTUAL, cbBTC |
+| linea | 3 | WBTC |
+| scroll | 3 | WBTC |
+| mantle | 4 | WMNT |
+| zksync | 5 | ZK, WBTC |
+
+### Demoted/Removed from Productive
+- **Stable/stable**: USDC/DAI, USDC/USDT → diagnostic
+- **Near-stable**: WETH/FRAX, WETH/LUSD, WETH/USDE → diagnostic
+- **LST/LRT**: wstETH/*, rETH/*, ezETH/*, weETH/*, STONE/*, cbETH/*, mETH/*, cmETH/* → diagnostic (accounting_sensitive)
+- **Thin long-tail (arb)**: DPX, GRAIL, GNS, JOE, MAGIC, RDNT, TBTC → exploratory
+- **Meme (base)**: BRETT, DEGEN, TOSHI, WELL → exploratory
+- **Removed (zksync)**: CHEEMS, HOLD → exploratory
+- **Not headline (mantle)**: PUFF, mETH, cmETH → exploratory/diagnostic
+
+### Tests (+31)
+- `test_tiered_intent.py`: classify_token (8), per-chain P0 (14), tier expansion (5), metadata contract (4)
 
 ---
 
@@ -292,38 +325,17 @@ Primary blocker = **economics at $10 probe** (NET_PROFIT_TOO_LOW = 57%), NOT quo
 
 ## Historical Summary (R29-R28 — condensed)
 
-### R29 — Fixed-Size Doctrine Removed
-- **Canonical sweep**: $1–$10,000 (19-point log ladder)
-- **Three size layers**: Discovery probe (pool inclusion), Spread seed (signal filter), Executable sweep (profit truth)
-- **Sweep evidence**: 54 runs, 0 profitable RT, best gap 0.0 bps (zero-quote at extreme sizes)
-
-### R29 cont'd — Quotes RPC Extraction
-- **strategy/quote_rpc.py**: Extracted low-level RPC helpers (quotes.py 2006→1658 lines)
+### R29 — Fixed-Size Doctrine Removed + Quotes RPC Extraction
+- **Canonical sweep**: $1–$10,000 (19-point log ladder). Discovery probe, spread seed, executable sweep.
+- **strategy/quote_rpc.py**: Extracted RPC helpers (quotes.py 2006→1658 lines)
 - **Evidence**: 72 runs, 0 profitable RT, best -25.38 bps
 
-### R28.30 — Funnel Normalization
-- **6-stage filter funnel**: discovery → quote → spread → engine → selection → roundtrip
-- **Signal-loss RCA**: base = quote-path blocked, arb = economics + mixed coverage, linea = slippage
-
-### R28.29 — Lead Audit: Dedup + Discovery Contract
-- **env_flag_enabled**: Canonical in core/env.py
-- **read_slot0_v3 dedup**: Removed from strategy/infra.py
-- **39 discovery productivity tests**
-
-### R28.28 — God-File Extraction
-- **run_scan_real.py**: 1724→1371 lines (-20.5%)
-- **5 new modules**: scan_universe, roundtrip_selection, dynamic_sweep_runtime, execution_probe, live_stream
-
-### R28.26 — Suppression Layer Isolation
-- **4-layer ladder (L0-L3)**: Quarantine=0 impact, runtime_disabled=perf cache, 0 profitable RT all layers
-- **Finding**: Suppression NOT cause of zero profitability
-
-### R28.25 — Lead Audit: Filter-Layer RCA
-- **10-step fix**: Config alignment (150 USD/5 bps), suppression reform (probation 60s), roundtrip_truth_status
-- **235 pool universe → 63 usable quotes (27%)**
+### R28.30-R28.29 — Funnel Normalization + Lead Audit
+- **6-stage funnel**: discovery→quote→spread→engine→selection→roundtrip
+- **env_flag_enabled**: Canonical in core/env.py. read_slot0_v3 dedup. 39 discovery tests.
 
 ### Earlier Rounds (R28.24-R25)
-Detailed in git history. Key milestones: hot re-quote loop (R28.11), truth contract (R28.13), benchmark chain (R28.14), execution infra (R28.15), phase visibility (R28.16), 3-tier signal classification (R28.17), LIQUIDITY_ZERO gate (R28.18).
+Detailed in git history. Key: hot re-quote loop (R28.11), truth contract (R28.13), benchmark chain (R28.14), funnel normalization (R28.30), god-file extraction (R28.28), suppression isolation (R28.26), filter-layer RCA (R28.25).
 
 ---
 

@@ -75,10 +75,15 @@ def main():
         return 1
     
     # v2.3.2: Repo safety check before any gates
+    # Parse --allow-intent-edit early (before full argparse) for safety gate
+    allow_intent = "--allow-intent-edit" in sys.argv
     repo_safety_script = PROJECT_ROOT / "scripts" / "check_repo_safety.py"
     if repo_safety_script.exists():
+        safety_cmd = [sys.executable, "scripts/check_repo_safety.py"]
+        if allow_intent:
+            safety_cmd.append("--allow-intent-edit")
         result = subprocess.run(
-            [sys.executable, "scripts/check_repo_safety.py"],
+            safety_cmd,
             cwd=PROJECT_ROOT
         )
         if result.returncode != 0:
@@ -96,6 +101,8 @@ def main():
                         help="Number of scan cycles in E2E mode (passed to ci_m5_0_gate.py)")
     parser.add_argument("--strict", action="store_true", default=True,
                         help="Enable strict validation in E2E mode (default: True)")
+    parser.add_argument("--allow-intent-edit", action="store_true",
+                        help="Allow uncommitted intent.txt changes (passed to repo safety gate)")
     args = parser.parse_args()
     
     is_e2e = args.mode == "e2e"

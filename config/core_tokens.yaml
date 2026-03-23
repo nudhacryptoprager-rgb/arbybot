@@ -1,5 +1,5 @@
 # =============================================================================
-# config/core_tokens.yaml - Token Registry
+# config/core_tokens.yaml - Token Registry (Tiered)
 # =============================================================================
 #
 # This file serves two purposes:
@@ -14,13 +14,20 @@
 #    scripts/verify_tokens.py. These can be added/rotated based on
 #    discovery metrics but should remain stable once verified.
 #
-# Format: symbol -> {address, decimals, name}
+# Format: symbol -> {address, decimals, name, ...metadata}
 # Addresses MUST be checksummed.
+#
+# Tier metadata (v3.3.0 — quality-ranked pair selection):
+#   volatility_tier: high | medium | low   (price movement potential)
+#   liquidity_tier:  high | medium | low   (on-chain TVL depth)
+#   cross_dex_expected: int                 (# DEXes with real liquidity)
+#   accounting_sensitive: true              (LST/LRT — peg-drift false profits)
+#   productive_default: true | false        (included in productive contour)
 #
 # Contract: Do not remove TRUST ANCHOR tokens without explicit approval.
 # Verified tokens may be rotated if discovery metrics degrade.
 #
-# Last updated: 2026-02-23
+# Last updated: 2026-03-23
 # =============================================================================
 
 # =============================================================================
@@ -31,80 +38,138 @@ arbitrum_one:
     address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
     decimals: 18
     name: "Wrapped Ether"
+    volatility_tier: medium
+    liquidity_tier: high
+    cross_dex_expected: 4
+    productive_default: true
   
   USDC:
     address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
     decimals: 6
     name: "USD Coin"
     note: "Native USDC (not bridged)"
+    volatility_tier: low
+    liquidity_tier: high
+    cross_dex_expected: 4
+    productive_default: true
   
   USDC_E:
     address: "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8"
     decimals: 6
     name: "Bridged USDC (USDC.e)"
     note: "Legacy bridged USDC"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: false
   
   USDT:
     address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
     decimals: 6
     name: "Tether USD"
+    volatility_tier: low
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: false
   
   DAI:
     address: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"
     decimals: 18
     name: "Dai Stablecoin"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: false
   
   WBTC:
     address: "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f"
     decimals: 8
     name: "Wrapped BTC"
+    volatility_tier: high
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: true
   
   ARB:
     address: "0x912CE59144191C1204E64559FE8253a0e49E6548"
     decimals: 18
     name: "Arbitrum"
     note: "ARB governance token"
+    volatility_tier: high
+    liquidity_tier: high
+    cross_dex_expected: 4
+    productive_default: true
   
   LINK:
     address: "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4"
     decimals: 18
     name: "Chainlink"
+    volatility_tier: high
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: true
   
   wstETH:
     address: "0x5979D7b546E38E414F7E9822514be443A4800529"
     decimals: 18
     name: "Wrapped stETH"
     note: "Lido wrapped staked ETH"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    accounting_sensitive: true
+    productive_default: false
   
   WSTETH:
     address: "0x5979D7b546E38E414F7E9822514be443A4800529"
     decimals: 18
     name: "Wrapped stETH"
     note: "Alias for wstETH - symbol normalization compatibility"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    accounting_sensitive: true
+    productive_default: false
   
   GMX:
     address: "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
     decimals: 18
     name: "GMX"
     note: "GMX governance token"
+    volatility_tier: high
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: false
   
   UNI:
     address: "0xFa7F8980b0f1E64A2062791cc3b0871572f1F7f0"
     decimals: 18
     name: "Uniswap"
     note: "UNI governance token (v2.3.0)"
+    volatility_tier: medium
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: false
   
   PENDLE:
     address: "0x0c880f6761F1af8d9Aa9C466984b80dAb9a8c9e8"
     decimals: 18
     name: "Pendle"
     note: "v2.3.2: DeFi yield protocol token"
+    volatility_tier: high
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: true
   
   RDNT:
     address: "0x3082CC23568eA640225c2467653dB90e9250AaA0"
     decimals: 18
     name: "Radiant"
-    note: "v2.3.2: Radiant Capital token"
+    note: "v2.3.2: Radiant Capital token — thin vol, slippage-dominated"
+    volatility_tier: medium
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
   # v2.4.0: Discovery tokens (added to resolve unresolvable_pairs=12)
   rETH:
@@ -112,66 +177,112 @@ arbitrum_one:
     decimals: 18
     name: "Rocket Pool ETH"
     note: "LST - Rocket Pool staked ETH"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    accounting_sensitive: true
+    productive_default: false
 
   RETH:
     address: "0xEC70Dcb4A1EFa46b8F2D97C310C9c4790ba5ffA8"
     decimals: 18
     name: "Rocket Pool ETH"
     note: "Alias for rETH - symbol normalization compatibility"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    accounting_sensitive: true
+    productive_default: false
 
   MAGIC:
     address: "0x539bdE0d7Dbd336b79148AA742883198BBF60342"
     decimals: 18
     name: "MAGIC"
-    note: "Treasure ecosystem token"
+    note: "Treasure ecosystem token — thin vol, -421 bps slippage loss"
+    volatility_tier: medium
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
   FRAX:
     address: "0x17FC002b466eEc40DaE837Fc4bE5c67993ddBd6F"
     decimals: 18
     name: "Frax"
-    note: "Frax stablecoin"
+    note: "Frax stablecoin — near-stable, not productive"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 1
+    productive_default: false
 
   LUSD:
     address: "0x93b346b6BC2548dA6A1E7d98E9a421B42541425b"
     decimals: 18
     name: "Liquity USD"
-    note: "Liquity stablecoin"
+    note: "Liquity stablecoin — near-stable, not productive"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
   GNS:
     address: "0x18c11FD286C5EC11c3b683Caa813B77f5163A122"
     decimals: 18
     name: "Gains Network"
-    note: "gTrade governance token"
+    note: "gTrade governance token — thin vol long-tail"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
   GRAIL:
     address: "0x3d9907F9a368ad0a51Be60f7Da3b97cf940982D8"
     decimals: 18
     name: "Camelot GRAIL"
-    note: "Camelot DEX governance token"
+    note: "Camelot DEX governance token — thin vol long-tail"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
   JOE:
     address: "0x371c7ec6D8039ff7933a2AA28EB827Ffe1F52f07"
     decimals: 18
     name: "Trader Joe"
-    note: "Trader Joe governance token"
+    note: "Trader Joe governance token — thin vol long-tail"
+    volatility_tier: medium
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
   USDE:
     address: "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34"
     decimals: 18
     name: "USDe"
-    note: "Ethena USDe synthetic dollar"
+    note: "Ethena USDe synthetic dollar — near-stable, not productive"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 1
+    productive_default: false
 
   TBTC:
     address: "0x6c84a8f1c29108F47a79964b5Fe888D4f4D0dE40"
     decimals: 18
     name: "tBTC v2"
-    note: "Threshold Network BTC"
+    note: "Threshold Network BTC — low liquidity on arb"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
   DPX:
     address: "0x6C2C06790b3E3E3c38e12Ee22F8183b37a13EE55"
     decimals: 18
     name: "Dopex"
-    note: "Dopex governance token"
+    note: "Dopex governance token — thin vol long-tail"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
 # =============================================================================
 # BASE (chain_id: 8453)
@@ -181,79 +292,139 @@ base:
     address: "0x4200000000000000000000000000000000000006"
     decimals: 18
     name: "Wrapped Ether"
+    volatility_tier: medium
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: true
   
   USDC:
     address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     decimals: 6
     name: "USD Coin"
+    volatility_tier: low
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: true
   
   USDT:
     address: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2"
     decimals: 6
     name: "Tether USD"
     note: "May have lower liquidity"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   DAI:
     address: "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb"
     decimals: 18
     name: "Dai Stablecoin"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   cbETH:
     address: "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22"
     decimals: 18
     name: "Coinbase Wrapped Staked ETH"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
   
   cbBTC:
     address: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
     decimals: 8
     name: "Coinbase Wrapped BTC"
+    volatility_tier: high
+    liquidity_tier: high
+    cross_dex_expected: 2
+    productive_default: true
   
   AERO:
     address: "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
     decimals: 18
     name: "Aerodrome"
-    note: "Aerodrome DEX native token"
+    note: "Aerodrome DEX native token — high TVL Base-native"
+    volatility_tier: high
+    liquidity_tier: high
+    cross_dex_expected: 2
+    productive_default: true
   
   BRETT:
     address: "0x532f27101965dd16442E59d40670FaF5eBB142E4"
     decimals: 18
     name: "Brett"
-    note: "Meme token"
+    note: "Meme token — exploratory only"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   DEGEN:
     address: "0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed"
     decimals: 18
     name: "Degen"
-    note: "Meme token"
+    note: "Meme token — exploratory only"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   TOSHI:
     address: "0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4"
     decimals: 18
     name: "Toshi"
-    note: "Meme token"
+    note: "Meme token — exploratory only"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   VIRTUAL:
     address: "0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b"
     decimals: 18
     name: "Virtual Protocol"
+    note: "High TVL on Base — productive after quote-path fix"
+    volatility_tier: high
+    liquidity_tier: high
+    cross_dex_expected: 2
+    productive_default: true
   
   WELL:
     address: "0xA88594D404727625A9437C3f886C7643872296AE"
     decimals: 18
     name: "WELL"
-    note: "Moonwell governance token"
+    note: "Moonwell governance token — exploratory only"
+    volatility_tier: medium
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
   wstETH:
     address: "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452"
     decimals: 18
     name: "Wrapped stETH"
     note: "Lido wstETH bridged to Base"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
 
   rETH:
     address: "0xB6fe221Fe9EeF5aBa221c348bA20A1Bf5e73624c"
     decimals: 18
     name: "Rocket Pool ETH"
     note: "Rocketpool rETH bridged to Base"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
 
 # =============================================================================
 # LINEA (chain_id: 59144)
@@ -263,62 +434,110 @@ linea:
     address: "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f"
     decimals: 18
     name: "Wrapped Ether"
+    volatility_tier: medium
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: true
   
   USDC:
     address: "0x176211869cA2b568f2A7D4EE941E073a821EE1ff"
     decimals: 6
     name: "USD Coin"
+    volatility_tier: low
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: true
   
   USDT:
     address: "0xA219439258ca9da29E9Cc4cE5596924745e12B93"
     decimals: 6
     name: "Tether USD"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: false
   
   DAI:
     address: "0x4AF15ec2A0BD43Db75dd04E62FAA3B8EF36b00d5"
     decimals: 18
     name: "Dai Stablecoin"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   WBTC:
     address: "0x3aAB2285ddcDdaD8edf438C1bAB47e1a9D05a9b4"
     decimals: 8
     name: "Wrapped BTC"
+    volatility_tier: high
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: true
   
   LYNX:
     address: "0x1a51b19CE03dbE0Cb44C1528E34a7edD7771e9af"
     decimals: 18
     name: "Lynex"
     note: "Lynex DEX governance token"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   wstETH:
     address: "0xB5beDd42000b71FddE22D3eE8a79Bd49A568fC8F"
     decimals: 18
     name: "Wrapped stETH"
     note: "v3.2.32: Verified via DexScreener"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    accounting_sensitive: true
+    productive_default: false
   
   STONE:
     address: "0x93F4d0ab6a8B4271f4a28Db399b5E30612D21116"
     decimals: 18
     name: "StakeStone Ether"
     note: "v3.2.32: LST verified via DexScreener"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
   
   ezETH:
     address: "0x2416092f143378750bb29b79eD961ab195CcEea5"
     decimals: 18
     name: "Renzo Restaked ETH"
     note: "v3.2.32: LRT verified via CoinGecko/DexScreener"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
   
   weETH:
     address: "0x1Bf74C010E6320bab11e2e5A532b5AC15e0b8aA6"
     decimals: 18
     name: "Wrapped eETH"
     note: "v3.2.32: EtherFi LST verified via DexScreener"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
   
   NILE:
     address: "0xAAAac83751090C6ea42379626435f805DDF54DC8"
     decimals: 18
     name: "NILE Token"
     note: "v3.2.32: Verified via CoinGecko/DexScreener"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
 # =============================================================================
 # SCROLL (chain_id: 534352)
@@ -328,50 +547,89 @@ scroll:
     address: "0x5300000000000000000000000000000000000004"
     decimals: 18
     name: "Wrapped Ether"
+    volatility_tier: medium
+    liquidity_tier: high
+    cross_dex_expected: 2
+    productive_default: true
   
   USDC:
     address: "0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4"
     decimals: 6
     name: "USD Coin"
+    volatility_tier: low
+    liquidity_tier: high
+    cross_dex_expected: 2
+    productive_default: true
   
   USDT:
     address: "0xf55BEC9cafDbE8730f096Aa55dad6D22d44099Df"
     decimals: 6
     name: "Tether USD"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 1
+    productive_default: false
   
   DAI:
     address: "0xcA77eB3fEFe3725Dc33bccB54eDEFc3D9f764f97"
     decimals: 18
     name: "Dai Stablecoin"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   WBTC:
     address: "0x3C1BCa5a656e69edCD0D4E36BEbb3FcDAcA60Cf1"
     decimals: 8
     name: "Wrapped BTC"
+    volatility_tier: high
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: true
   
   SCR:
     address: "0xd29687c813D741E2F938F4aC377128810E217b1b"
     decimals: 18
     name: "Scroll"
-    note: "Scroll native token"
+    note: "Scroll native token — exploratory only"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   wstETH:
     address: "0xf610A9dfB7C89644979b4A0f27063E9e7d7Cda32"
     decimals: 18
     name: "Wrapped stETH"
     note: "v3.2.32: Scroll bridged wstETH verified via DexScreener"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
   
   STONE:
     address: "0x80137510979822322193FC997d400D5A6C747bf7"
     decimals: 18
     name: "StakeStone Ether"
     note: "v3.2.32: LST verified via DexScreener"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
   
   weETH:
     address: "0x01f0a31698C4d065659b9bdC21B3610292a1c506"
     decimals: 18
     name: "Wrapped eETH"
     note: "v3.2.32: EtherFi LST verified via DexScreener"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
 
 # =============================================================================
 # MANTLE (chain_id: 5000)
@@ -381,45 +639,80 @@ mantle:
     address: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111"
     decimals: 18
     name: "Wrapped Ether"
+    volatility_tier: medium
+    liquidity_tier: high
+    cross_dex_expected: 2
+    productive_default: true
   
   WMNT:
     address: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8"
     decimals: 18
     name: "Wrapped Mantle"
     note: "Native wrapper token"
+    volatility_tier: high
+    liquidity_tier: high
+    cross_dex_expected: 2
+    productive_default: true
   
   USDC:
     address: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9"
     decimals: 6
     name: "USD Coin"
+    volatility_tier: low
+    liquidity_tier: high
+    cross_dex_expected: 2
+    productive_default: true
   
   USDT:
     address: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE"
     decimals: 6
     name: "Tether USD"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: false
   
   mETH:
     address: "0xcDA86A272531e8640cD7F1a92c01839911B90bb0"
     decimals: 18
     name: "Mantle Staked Ether"
+    note: "LST — not headline, accounting-sensitive"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
   
   PUFF:
     address: "0x26a6b0dcdCfB981362aFa56D581e4A7DBa3Be140"
     decimals: 18
     name: "Puff The Dragon"
-    note: "Mantle native meme token"
+    note: "Mantle native meme token — not headline"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   cmETH:
     address: "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA"
     decimals: 18
     name: "Cook mETH"
-    note: "v3.2.32: Verified via DexScreener"
+    note: "v3.2.32: Verified via DexScreener — LST derivative"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
   
   mUSD:
     address: "0xab575258d37eaa5c8956efabe71f4ee8f6397cf3"
     decimals: 18
     name: "Mantle USD"
     note: "v3.2.52: Added via CoinGecko lookup"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
 
 # =============================================================================
 # ZKSYNC ERA (chain_id: 324)
@@ -429,46 +722,84 @@ zksync:
     address: "0x5AEa5775959fBC2557Cc8789bC1bf90A239D9a91"
     decimals: 18
     name: "Wrapped Ether"
+    volatility_tier: medium
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: true
   
   USDC:
     address: "0x1d17CBcF0D6D143135aE902365D2E5e2A16538D4"
     decimals: 6
     name: "USD Coin"
+    volatility_tier: low
+    liquidity_tier: high
+    cross_dex_expected: 3
+    productive_default: true
   
   USDT:
     address: "0x493257fD37EDB34451f62EDf8D2a0C418852bA4C"
     decimals: 6
     name: "Tether USD"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: false
   
   DAI:
     address: "0x4B9eb6c0b6ea15176BBF62841C6B2A8a398cb656"
     decimals: 18
     name: "Dai Stablecoin"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   WBTC:
     address: "0xBBeB516fb02a01611cBBE0453Fe3c580D7281011"
     decimals: 8
     name: "Wrapped BTC"
+    volatility_tier: high
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: true
   
   ZK:
     address: "0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E"
     decimals: 18
     name: "ZKsync"
     note: "zkSync native token"
+    volatility_tier: high
+    liquidity_tier: high
+    cross_dex_expected: 2
+    productive_default: true
   
   wstETH:
     address: "0x703b52F2b28fEbcB60E1372858AF5b18849FE867"
     decimals: 18
     name: "Wrapped stETH"
     note: "zkSync bridged wstETH"
+    volatility_tier: low
+    liquidity_tier: low
+    cross_dex_expected: 1
+    accounting_sensitive: true
+    productive_default: false
   
   HOLD:
     address: "0xed4040fD47629e7c8FBB7DA76bb50B3e7695F0f2"
     decimals: 18
     name: "Holdstation"
+    note: "Removed from productive — low TVL"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
   
   CHEEMS:
     address: "0x9Db6BF8B0215A02BEA9beF28A92D829FD008D480"
     decimals: 18
     name: "Cheems"
-    note: "Meme token"
+    note: "Meme token — removed from productive"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
