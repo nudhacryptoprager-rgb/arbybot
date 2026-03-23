@@ -1193,6 +1193,41 @@ def generate_m4_from_online_inputs(
         truth_verdict = "NO_DATA"
     else:
         truth_verdict = "NO_PROFIT"
+
+    # R38: Compute single-run blocker_classification and blocker_reason
+    # so run_summary has parity with long_scan per_chain fields.
+    # Logic mirrors strategy/chain_stats._compute_blocker_evidence for single-run context.
+    _oe_funnel = truth_data.get("oe_rejection_funnel", {})
+    _oe_rej_reasons = _oe_funnel.get("rejected_reasons", {})
+    _oe_total_rej = _oe_funnel.get("rejected_count", 0)
+    if _rt_profitable:
+        run_blocker_classification = "ROUNDTRIP_PROFITABLE"
+        run_blocker_reason = None
+    elif included_signals_count == 0:
+        run_blocker_classification = "NO_SIGNAL"
+        run_blocker_reason = "No spread signals produced"
+    elif _oe_total_rej > 0:
+        _net_low = _oe_rej_reasons.get("NET_PROFIT_TOO_LOW", 0)
+        _mixed = _oe_rej_reasons.get("MIXED_SOURCE", 0)
+        _slot0 = _oe_rej_reasons.get("SLOT0_DIAGNOSTIC", 0)
+        if _slot0 / _oe_total_rej > 0.4:
+            run_blocker_classification = "QUOTE_PATH_BLOCKED"
+            run_blocker_reason = "quoter_v2 failure rate or SLOT0_DIAGNOSTIC dominance too high"
+        elif _net_low / _oe_total_rej > 0.4:
+            run_blocker_classification = "OE_ECONOMICS"
+            run_blocker_reason = "Signals exist but economics-blocked (NET_PROFIT_TOO_LOW / SLIPPAGE_TOO_HIGH at real sizes)"
+        elif _mixed / _oe_total_rej > 0.3:
+            run_blocker_classification = "MIXED_SOURCE"
+            run_blocker_reason = "OE rejects dominated by MIXED_SOURCE (quoter_v2 on one leg only)"
+        else:
+            run_blocker_classification = "OE_ECONOMICS"
+            run_blocker_reason = "Signals exist but economics-blocked (NET_PROFIT_TOO_LOW / SLIPPAGE_TOO_HIGH at real sizes)"
+    elif truth_verdict == "DIAGNOSTIC_PROFIT_ONLY":
+        run_blocker_classification = "OE_ECONOMICS"
+        run_blocker_reason = "Signals exist but economics-blocked (NET_PROFIT_TOO_LOW / SLIPPAGE_TOO_HIGH at real sizes)"
+    else:
+        run_blocker_classification = None
+        run_blocker_reason = None
     
     run_summary_data = {
         "schema_version": "m4:run_summary:v2.0",  # v2.0: timestamp-based provenance
@@ -1302,6 +1337,9 @@ def generate_m4_from_online_inputs(
         },
         # R37: Top-level roundtrip_summary alias for parity with long_scan_latest.json
         "roundtrip_summary": roundtrip,
+        # R38: Blocker classification for operator-facing truth
+        "blocker_classification": run_blocker_classification,
+        "blocker_reason": run_blocker_reason,
     }
     
     with open(run_summary_path, "w") as f:

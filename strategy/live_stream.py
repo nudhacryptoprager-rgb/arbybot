@@ -9,6 +9,28 @@ from scan orchestration.
 from typing import Any, Dict, List, Optional
 
 
+# R38: Known LST/derivative pair tokens — their "spread" between DEXes is mostly
+# rebasing differential or oracle lag, not a real arbitrage opportunity.
+# Use lower SUSPECT_ACCOUNTING threshold for these pairs.
+_LST_TOKENS = frozenset({
+    "WSTETH", "wstETH",
+    "METH", "mETH",
+    "CBETH", "cbETH",
+    "RETH", "rETH",
+    "STETH", "stETH",
+    "SWETH", "swETH",
+    "SFRXETH", "sfrxETH",
+})
+_SANE_RT_PNL_MAX_BPS = 500  # generic threshold
+_SANE_RT_PNL_MAX_BPS_LST = 50  # R38: tighter for LST/derivative pairs
+
+
+def _is_lst_pair(pair: str) -> bool:
+    """Check if pair involves LST/derivative tokens with known false-positive risk."""
+    parts = pair.upper().replace("/", " ").split()
+    return any(p in {t.upper() for t in _LST_TOKENS} for p in parts)
+
+
 def build_live_candidate_stream(
     chain_key: str,
     opportunities: List[Dict[str, Any]],
@@ -59,7 +81,9 @@ def build_live_candidate_stream(
         net_bps = sweep.get("best_net_pnl_bps")
         if net_bps is None:
             net_bps = float(rt.net_pnl_bps or 0.0)
-        if rt.is_profitable and abs(net_bps) > 500:
+        # R38: LST/derivative pairs get tighter accounting threshold
+        _suspect_thr = _SANE_RT_PNL_MAX_BPS_LST if _is_lst_pair(rt.pair) else _SANE_RT_PNL_MAX_BPS
+        if rt.is_profitable and abs(net_bps) > _suspect_thr:
             final_result = "SUSPECT_ACCOUNTING"
         elif rt.is_profitable and rt.leg2_is_real_quote:
             final_result = "ROUNDTRIP_PROFITABLE"

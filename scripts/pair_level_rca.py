@@ -20,6 +20,16 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+_LST_TOKENS_UPPER = frozenset(
+    {"WSTETH", "METH", "CBETH", "RETH", "STETH", "SWETH", "SFRXETH"}
+)
+
+
+def _is_lst_pair_rca(pair: str) -> bool:
+    """Return True if pair contains an LST/derivative token."""
+    parts = pair.upper().replace("/", " ").split()
+    return any(p in _LST_TOKENS_UPPER for p in parts)
+
 
 def load_truth_report(run_dir: Path) -> Optional[Dict[str, Any]]:
     """Load truth_report from runDir/reports/."""
@@ -225,17 +235,20 @@ def print_pair_funnel(trace: List[Dict[str, Any]], chain_key: str = ""):
     rt_pairs = [t for t in trace if t.get("terminal_stage") in ("rt_evaluated", "rt_profitable")]
     if rt_pairs:
         print(f"\nEconomics decomposition (RT-evaluated pairs):")
-        print(f"  {'Pair':20s} {'Gross':>8s} {'Net':>8s} {'Slip':>8s} {'Gas':>8s} {'LP Fee':>8s} {'Real':>5s}")
-        print(f"  {'-'*20} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*5}")
+        print(f"  {'Pair':20s} {'Gross':>8s} {'Net':>8s} {'Slip':>8s} {'Gas':>8s} {'LP Fee':>8s} {'Real':>5s} {'LST':>4s}")
+        print(f"  {'-'*20} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*5} {'-'*4}")
         for t in rt_pairs[:10]:
             e = t.get("economics", {})
+            # R38: LST/derivative pair annotation
+            lst_flag = _is_lst_pair_rca(t["pair"])
             print(f"  {t['pair']:20s} "
                   f"{e.get('rt_gross_pnl_bps', 0):>+8.2f} "
                   f"{e.get('rt_net_pnl_bps', 0):>+8.2f} "
                   f"{e.get('rt_slippage_bps', 0):>8.2f} "
                   f"{e.get('rt_gas_bps', 0):>8.2f} "
                   f"{e.get('rt_lp_fee_bps', 0):>8.2f} "
-                  f"{'Y' if e.get('rt_leg2_is_real') else 'N':>5s}")
+                  f"{'Y' if e.get('rt_leg2_is_real') else 'N':>5s} "
+                  f"{'Y' if lst_flag else '':>4s}")
 
     # R29: Size frontier summary from dynamic sweep
     swept_pairs = [t for t in trace if t.get("sweep")]

@@ -113,6 +113,11 @@ def build_summary(
         blocker_rsn = s.get("blocker_reason") or _blocker_evidence_reason(blocker_cls)
         s["blocker_classification"] = blocker_cls
         s["blocker_reason"] = blocker_rsn
+        # R38: Aliases for consumer parity — dashboards, gates, and hot-loop
+        # expect pass_runs/signals_count/real_quote_count alongside originals.
+        s["pass_runs"] = s.get("pass", 0)
+        s["signals_count"] = s.get("included_signals_total", 0)
+        s["real_quote_count"] = s.get("real_quote_count_total", 0)
 
     summary = {
         "schema": "start:long_scan_summary:v1.14",  # R28.21: cache freshness observability
@@ -402,8 +407,11 @@ def _compute_profit_truth_summary(per_chain: dict[str, dict[str, Any]]) -> dict[
 # R33: Map auto-computed blocker_evidence to human-readable reason strings.
 _BLOCKER_EVIDENCE_REASONS: dict[str | None, str | None] = {
     "ROUNDTRIP_PROFITABLE": None,  # not a blocker
-    "OE_ECONOMICS": "Signals exist, all rejected by NET_PROFIT_TOO_LOW at probe size",
+    # R38: Updated — surviving RT blocker is often SLIPPAGE_TOO_HIGH at real sizes,
+    # not just NET_PROFIT_TOO_LOW at probe size.
+    "OE_ECONOMICS": "Signals exist but economics-blocked (NET_PROFIT_TOO_LOW / SLIPPAGE_TOO_HIGH at real sizes)",
     "QUOTE_PATH_BLOCKED": "quoter_v2 failure rate or SLOT0_DIAGNOSTIC dominance too high",
+    "QUOTE_PATH_CONSTRAINED": "Few cross-DEX pairs (≤3), limited quoting surface",
     "MIXED_SOURCE": "OE rejects are dominated by MIXED_SOURCE (quoter_v2 on one leg only)",
     "NO_SIGNAL": "No spread signals produced",
     "INFRA_FAIL": "Chain consistently fails (>50% runs)",

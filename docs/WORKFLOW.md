@@ -147,6 +147,9 @@ python --version  # MUST be 3.11.x
 Using wrong Python (e.g., 3.14) will cause `ci_full_pipeline.py` to FAIL with version check error.
 
 ```powershell
+# Dashboard (MANDATORY — start BEFORE scanner, keep running throughout session)
+py -3.11 -m monitoring.dashboard_server --port 8099
+
 # Tests
 py -3.11 -m pytest -q
 

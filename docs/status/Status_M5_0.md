@@ -1,11 +1,77 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-23 (R37 — **Artifact parity + frontier classification + stale-claims cleanup.** `BREAKEVEN_FRONTIER` added to distinguish 0.0 bps sweep from genuine negative (`BEST_NEG`). `roundtrip_summary` added to run_summary top-level. `QUOTE_PATH_CONSTRAINED` blocker for surface-limited chains (base). Per-chain taxonomy updated from fresh rolling data. Stale doc claims cleaned. 2213 tests PASS.)
-**Tests**: 2213 passed / 5 skipped
+**Updated**: 2026-03-23 (R38 — **Sweep size promotion + blocker accuracy + LST suppression + artifact parity.** Sweep `best_size_usd` promoted into final RT sizing. `blocker_classification` + `blocker_reason` added to run_summary. Per-chain `pass_runs`/`signals_count`/`real_quote_count` aliases. LST/derivative 50 bps SUSPECT_ACCOUNTING threshold. OE_ECONOMICS text updated with SLIPPAGE_TOO_HIGH. 2233 tests PASS.)
+**Tests**: 2233 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
+**Evidence**: R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R38 — Sweep Size Promotion + Blocker Accuracy + LST Suppression + Artifact Parity + Event-Driven Loop
+
+R38 responds to lead's 2-hour canonical online audit (282 runs, 2557 signals, 649 RT evaluated, 0 profitable, $4411.02 diagnostic net USDC).
+
+### Blocker Verdict: MIXED (Step 1)
+The project blocker is **mixed** — not a single classification:
+- **Healthy chains (arb/mantle/scroll)**: 100% PASS, high signal volume. Blocker is pure economics/slippage, not infra. Pipeline is NOT the bottleneck here.
+- **Signal-rich but unstable (linea)**: Good signal volume (243/47 runs) but 57% fail rate. Economics-blocked + infra instability.
+- **Quote-path debt (base)**: SLOT0_DIAGNOSTIC dominance, NO_DATA rate 34%. Not a market verdict — infrastructure/adapter debt (Aerodrome needed).
+- **Weak market data (zksync)**: 79% fail rate. Cannot draw market conclusions until stability improves.
+M4.1 (simulate-only) operationally proven; M4.2 (stable profit) still open.
+
+### Code Changes
+1. **strategy/jobs/run_scan_real.py** — Final RT candidates now use sweep `best_size_usd` (from `dynamic_sweep`) instead of static `target_usd_notional`. Both primary + error paths updated. Falls back to config when sweep unavailable.
+2. **strategy/jobs/run_scan_real.py** — LST-aware SUSPECT_ACCOUNTING: 50 bps threshold for LST/derivative pairs (WSTETH, METH, etc.) vs 500 bps generic. Fixed stale `SANE_RT_PNL_MAX` references to use imported constants.
+3. **strategy/jobs/run_scan_real.py** — Fixed NoneType crash in `dynamic_sweep.results` chain (defensive `or {}` for None values).
+4. **strategy/long_scan_summary.py** — `OE_ECONOMICS` blocker_reason updated: "economics-blocked (NET_PROFIT_TOO_LOW / SLIPPAGE_TOO_HIGH at real sizes)". Added `QUOTE_PATH_CONSTRAINED` reason entry.
+5. **strategy/long_scan_summary.py** — Per-chain aliases: `pass_runs`, `signals_count`, `real_quote_count` alongside originals for consumer parity.
+6. **m4/fixtures.py** — `blocker_classification` + `blocker_reason` computed per-run from `oe_rejection_funnel`. Cascade: ROUNDTRIP_PROFITABLE → NO_SIGNAL → QUOTE_PATH_BLOCKED (SLOT0>40%) → OE_ECONOMICS (NET_PROFIT>40%) → MIXED_SOURCE (>30%).
+7. **strategy/live_stream.py** — `_LST_TOKENS` frozenset, `_is_lst_pair()` function, `_SANE_RT_PNL_MAX_BPS=500`, `_SANE_RT_PNL_MAX_BPS_LST=50`. SUSPECT_ACCOUNTING threshold is LST-aware.
+8. **scripts/pair_level_rca.py** — LST column added to economics decomposition output.
+9. **strategy/infra.py** — `DirtySetTracker.wait_for_dirty(timeout)`: event-driven wait using `threading.Event`. WS background threads `set()` the event on `newHeads`, orchestrator wakes immediately. `status()` reports `event_driven: true`.
+10. **start.py** — Orchestrator loop: `time.sleep(sleep_seconds)` replaced with `dirty_tracker.wait_for_dirty(timeout=sleep_seconds)`. Falls back to `time.sleep()` when no tracker.
+11. **docs/WORKFLOW.md** — Dashboard elevated to primary "Canonical Commands" section (before scanner).
+
+### Tests (+20)
+- `test_r38_changes.py`: LST detection (7), blocker classification cascade (8), per-chain aliases (2), blocker reason text (2), RCA LST parity (1)
+
+### Per-Chain Blocker Taxonomy (R38, from lead's 2h canonical audit)
+| Chain | Blocker Class | Specific | Action |
+|-------|---------------|----------|--------|
+| arbitrum_one | OE_ECONOMICS | Near-profit counterfactual only (USDC/DAI -53.96 bps); economics/slippage blocked | Sweep-optimal sizing now live; event-driven execution needed |
+| mantle | OE_ECONOMICS | NET_PROFIT_TOO_LOW; LST pseudo-profits (METH/WETH) suppressed at 50 bps | Economics investigation; LST filter active |
+| linea | OE_ECONOMICS | Signals exist but economics-blocked; LST pseudo-profits (WSTETH/WETH) suppressed | Economics investigation; LST filter active |
+| zksync | OE_ECONOMICS | FAIL-heavy, weak market verdict | Stability track first |
+| base | QUOTE_PATH_CONSTRAINED | SLOT0_DIAGNOSTIC dominance, few cross-dex pairs | Separate quote-path track; Aerodrome adapter |
+| scroll | MIXED_SOURCE | OE rejects dominated by MIXED_SOURCE | Fix MIXED_SOURCE pairs or filter |
+
+### Per-Chain Worktracks (Step 6)
+Each chain now has an independent action track:
+
+| Chain | Track | Priority | Next Action |
+|-------|-------|----------|-------------|
+| arbitrum_one | **ECONOMICS** | P0 | Event-driven re-quote at WS block, optimal sweep sizing, reduce slippage model |
+| mantle | **ECONOMICS** | P1 | LST false-positive filter active; investigate NET_PROFIT on non-LST pairs |
+| linea | **STABILITY+ECONOMICS** | P1 | Fix 57% fail rate (RPC reliability), then economics |
+| scroll | **MIXED_SOURCE** | P2 | Identify and remove MIXED_SOURCE-dominated pairs, or fix quoter_v2 coverage |
+| zksync | **STABILITY** | P2 | Fix 79% fail rate before drawing any economics conclusions |
+| base | **QUOTE_PATH** | P3 | Aerodrome adapter; increase cross-DEX pair surface beyond current 3 |
+
+### Quality-Ranked Pair Selection Policy (Step 7)
+**Do NOT add more pairs blindly.** Current intent.txt expanded aggressively; many pairs produce only diagnostic data. Policy going forward:
+- Pairs must have ≥2 DEXes with real (non-SLOT0) quotes before promotion to core
+- Priority: pairs that reach RT evaluation → pairs with near-zero PnL → pairs with signals
+- Use `scripts/pair_level_rca.py` to audit pair quality BEFORE adding to configs
+- Remove or demote pairs that consistently produce SUSPECT_ACCOUNTING or MIXED_SOURCE rejects
+
+### Selective Coverage Expansion Policy (Step 10)
+Coverage expansion (new chains, new DEXes, new pairs) is paused until:
+1. Healthy chains (arb/mantle) show RT net_pnl_bps > 0 at optimal sweep size
+2. Unstable chains (zksync/linea) reach >80% pass rate
+3. Base has Aerodrome adapter or equivalent cross-DEX surface
+New pairs should be quality-ranked (Step 7) before admission.
 
 ---
 

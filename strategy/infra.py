@@ -619,6 +619,8 @@ class DirtySetTracker:
         # chain -> True if WSS is connected
         self._connected: dict[str, bool] = {}
         self._stop = threading.Event()
+        # R38: Event for wait_for_dirty() — set when ANY chain becomes dirty
+        self._dirty_event = threading.Event()
 
     # -- public API -----------------------------------------------------------
 
@@ -681,9 +683,28 @@ class DirtySetTracker:
             if q:
                 q.clear()
 
+    def wait_for_dirty(self, timeout: float | None = None) -> bool:
+        """Block until at least one chain is dirty or *timeout* seconds elapse.
+
+        R38: Event-driven replacement for ``time.sleep(sleep_seconds)`` in the
+        orchestrator loop.  Returns ``True`` if a chain became dirty, ``False``
+        on timeout.  If any chain is already dirty the call returns immediately.
+        """
+        # Fast path: already dirty
+        with self._lock:
+            if any(d for d in self._dirty.values()):
+                return True
+            # Also return True if any chain has no WS (always-dirty fallback)
+            if any(not self._connected.get(c, False) for c in self._dirty):
+                return True
+        # Slow path: wait for _dirty_event from WS threads
+        self._dirty_event.clear()
+        return self._dirty_event.wait(timeout=timeout)
+
     def stop(self) -> None:
         """Signal all watcher threads to terminate."""
         self._stop.set()
+        self._dirty_event.set()  # unblock any wait_for_dirty() caller
 
     def status(self) -> dict[str, Any]:
         """Return a snapshot of dirty-set state for observability."""
@@ -692,6 +713,7 @@ class DirtySetTracker:
                 "chains_watched": len(self._dirty),
                 "chains_dirty": sum(1 for v in self._dirty.values() if v),
                 "chains_ws_connected": sum(1 for v in self._connected.values() if v),
+                "event_driven": True,  # R38: orchestrator uses wait_for_dirty()
                 "per_chain": {
                     c: {
                         "dirty": self._dirty.get(c, True),
@@ -750,6 +772,8 @@ class DirtySetTracker:
                                 if q is not None:
                                     q.append((block_num, now))
                                 self._last_event_time[chain] = now
+                            # R38: Wake orchestrator immediately on new block
+                            self._dirty_event.set()
                     except (json.JSONDecodeError, ValueError):
                         pass
 

@@ -840,14 +840,20 @@ def run_scan(
         
         # Summarize round-trip results
         # R28.17: Filter out "profitable" roundtrips with absurd PnL (accounting contamination)
-        SANE_RT_PNL_MAX = 500  # aligned with SUSPECT_ROUNDTRIP_OUTLIER_BPS
+        # R38: LST/derivative pairs use tighter threshold (50 bps) to suppress
+        # rebasing-differential false positives (WSTETH/WETH, METH/WETH etc).
+        from strategy.live_stream import _is_lst_pair, _SANE_RT_PNL_MAX_BPS, _SANE_RT_PNL_MAX_BPS_LST
         rt_profitable = [
             r for r in roundtrip_results
-            if r.is_profitable and r.net_pnl_bps <= SANE_RT_PNL_MAX
+            if r.is_profitable and r.net_pnl_bps <= (
+                _SANE_RT_PNL_MAX_BPS_LST if _is_lst_pair(r.pair) else _SANE_RT_PNL_MAX_BPS
+            )
         ]
         rt_suspect_profitable = [
             r for r in roundtrip_results
-            if r.is_profitable and r.net_pnl_bps > SANE_RT_PNL_MAX
+            if r.is_profitable and r.net_pnl_bps > (
+                _SANE_RT_PNL_MAX_BPS_LST if _is_lst_pair(r.pair) else _SANE_RT_PNL_MAX_BPS
+            )
         ]
         if rt_suspect_profitable:
             logger.warning(
@@ -885,10 +891,10 @@ def run_scan(
         # R28.18→R28.21: best_net_pnl_bps must be from sane-filtered universe only.
         # Both upper AND lower bound required: absurdly negative values (e.g. -10012 bps
         # on base from diagnostic contamination) are equally invalid as absurd positives.
-        SANE_RT_PNL_MIN = -SANE_RT_PNL_MAX  # symmetric: ±500 bps
+        _SANE_RT_PNL_MIN = -_SANE_RT_PNL_MAX_BPS  # symmetric: ±500 bps
         sane_rts = [
             r for r in roundtrip_results
-            if SANE_RT_PNL_MIN <= r.net_pnl_bps <= SANE_RT_PNL_MAX
+            if _SANE_RT_PNL_MIN <= r.net_pnl_bps <= _SANE_RT_PNL_MAX_BPS
         ]
         if sane_rts:
             best_rt = max(sane_rts, key=lambda r: r.net_pnl_bps)
@@ -908,7 +914,7 @@ def run_scan(
             stats["roundtrip"]["best_net_pnl_bps"] = None
             logger.warning(
                 "Roundtrip: 0/%d profitable, ALL %d results outside sane range (±%d bps)",
-                len(roundtrip_results), len(roundtrip_results), SANE_RT_PNL_MAX,
+                len(roundtrip_results), len(roundtrip_results), _SANE_RT_PNL_MAX_BPS,
             )
         else:
             stats["roundtrip"]["best_net_pnl_bps"] = None
@@ -990,12 +996,19 @@ def run_scan(
                         sweep_ds.get("best_pair"),
                     )
 
+        # R38: Promote sweep best_size_usd as default for live candidates
+        # instead of config target_usd_notional, so final RT sizing reflects
+        # the sweep-optimal size rather than the static probe size.
+        _sweep_ds = stats.get("roundtrip", {}).get("dynamic_sweep") or {}
+        _sweep_best_size = _sweep_ds.get("best_size_usd")
+        _config_size = float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0)
+        _default_size = float(_sweep_best_size) if _sweep_best_size else _config_size
         stats["live_candidate_stream"] = _build_live_candidate_stream(
             chain_key=chain_key,
             opportunities=eligible_opps if opps_list else [],
             roundtrip_results=roundtrip_results,
-            dynamic_sweep=stats.get("roundtrip", {}).get("dynamic_sweep"),
-            default_size_usd=float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0),
+            dynamic_sweep=_sweep_ds or None,
+            default_size_usd=_default_size,
             max_candidates=_rt_top_n,
             sweep_candidates=sweep_candidates,
         )
@@ -1021,12 +1034,17 @@ def run_scan(
         }
         # R34: Still attempt to build live_stream from whatever was collected
         try:
+            # R38: Same sweep-size promotion as primary path
+            _err_ds = existing_rt.get("dynamic_sweep") or {}
+            _err_sweep_size = _err_ds.get("best_size_usd")
+            _err_config_size = float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0)
+            _err_default_size = float(_err_sweep_size) if _err_sweep_size else _err_config_size
             stats["live_candidate_stream"] = _build_live_candidate_stream(
                 chain_key=chain_key,
                 opportunities=eligible_opps if opps_list else [],
                 roundtrip_results=[],
-                dynamic_sweep=existing_rt.get("dynamic_sweep"),
-                default_size_usd=float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0),
+                dynamic_sweep=_err_ds or None,
+                default_size_usd=_err_default_size,
                 max_candidates=_rt_top_n,
                 sweep_candidates=sweep_candidates,
             )
@@ -1317,7 +1335,8 @@ def run_scan(
     except NameError:
         sweep_candidates = []
     # R36: Collect per-route sweep results for pair_trace
-    _sweep_results_for_trace = stats.get("roundtrip", {}).get("dynamic_sweep", {}).get("results", [])
+    _sweep_results_for_trace = (stats.get("roundtrip") or {}).get("dynamic_sweep") or {}
+    _sweep_results_for_trace = _sweep_results_for_trace.get("results", [])
     from strategy.pair_trace import build_pair_funnel_trace
     stats["pair_funnel_trace"] = build_pair_funnel_trace(
         pairs_list=pairs_list,

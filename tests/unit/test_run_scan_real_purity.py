@@ -91,7 +91,7 @@ def test_run_scan_real_line_count():
     # R28.24: +48 for filter_funnel artifact + roundtrip_truth_status + config-driven caps
     # R28.27: +62 for cap-isolation toggles (_get_cap_isolation_switches + 3 application sites)
     # For now, just warn if it grows significantly
-    max_lines = 1595  # R36: +25 sweep frontier promotion block
+    max_lines = 1620  # R38: +25 LST-aware thresholds + sweep best_size promotion
     
     assert line_count <= max_lines, \
         f"run_scan_real.py has {line_count} lines (max: {max_lines}). Consider refactoring."

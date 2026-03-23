@@ -812,8 +812,14 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         if time.monotonic() >= deadline:
             break
 
+        # R38: Event-driven sleep — use dirty_tracker.wait_for_dirty() when WS
+        # is available; orchestrator wakes immediately on new block instead of
+        # blind time.sleep().  Falls back to time.sleep() when tracker absent.
         if args.sleep_seconds > 0:
-            time.sleep(args.sleep_seconds)
+            if dirty_tracker:
+                dirty_tracker.wait_for_dirty(timeout=args.sleep_seconds)
+            else:
+                time.sleep(args.sleep_seconds)
 
     # Final report
     # R28.11: Stop dirty-set watcher threads
