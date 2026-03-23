@@ -11,6 +11,8 @@
 | `uniswap_v3` | `UniswapV3Adapter` | `dex/adapters/uniswap_v3.py` | PRODUCTION |
 | `algebra` | `AlgebraAdapter` | `dex/adapters/algebra.py` | PRODUCTION |
 | `ve33` | `Ve33Adapter` | `dex/adapters/ve33.py` | IMPLEMENTED (R27.4, online-unverified) |
+| `syncswap` | `SyncSwapAdapter` | `dex/adapters/syncswap.py` | IMPLEMENTED (R36, online-unverified) |
+| `iziswap` | `IziSwapAdapter` | `dex/adapters/iziswap.py` | IMPLEMENTED (R36, online-unverified) |
 
 ## Coverage Matrix
 
@@ -20,18 +22,26 @@
 | **arbitrum_one** | sushiswap_v3 | uniswap_v3 | 0x1af4… | quoter_v2: 0x0524… | 100,500,3000,10000 | YES | YES | — |
 | **arbitrum_one** | camelot_v3 | algebra | 0x1a3c… | quoter: 0x0Fc7… | dynamic | YES | CANDIDATE (verified R27.1) | Verified online: `ci_m5_gate_20260314_101735` (4-DEX PASS, 14 signals, $14.61) |
 | **arbitrum_one** | pancakeswap_v3 | uniswap_v3 | 0x0BFb… | quoter_v2: 0xB048… | 100,500,2500,10000 | YES | YES | — |
+| **arbitrum_one** | iziswap | iziswap | 0x93BB… | quoter: 0x34bc… | 400,2000,10000 | YES (R36) | CANDIDATE | R36: adapter implemented, needs online verification |
 | **zksync** | uniswap_v3 | uniswap_v3 | 0x8FdA… | quoter_v2: 0x8Cb5… | 100,500,3000,10000 | YES | YES | — |
 | **zksync** | pancakeswap_v3 | uniswap_v3 | 0x1BB7… | quoter_v2: 0x3d14… | 100,500,2500,10000 | YES | YES | — |
+| **zksync** | syncswap | syncswap | 0xf2DA… | pool.getAmountOut | — | YES (R36) | CANDIDATE | R36: SyncSwap Classic pools, adapter implemented |
+| **zksync** | iziswap | iziswap | 0x45e5… | quoter: 0x3353… | 400,2000,10000 | YES (R36) | CANDIDATE | R36: iZiSwap, needs online verification |
 | **base** | uniswap_v3 | uniswap_v3 | 0x3312… | quoter_v2: 0x3d4e… | 100,500,3000,10000 | YES | YES | — |
 | **base** | sushiswap_v3 | uniswap_v3 | 0xc35D… | quoter_v2: 0xb1E8… | 100,500,3000,10000 | YES | YES | — |
 | **base** | pancakeswap_v3 | uniswap_v3 | 0x0BFb… | quoter_v2: 0xB048… | 100,500,2500,10000 | YES | YES | — |
 | **base** | aerodrome | ve33 | 0x420D… | — | — | YES (R27.4) | NO | Adapter implemented, needs online verification |
 | **mantle** | agni_v3 | uniswap_v3 | 0x2578… | quoter_v2: 0xc4aa… | 100,500,2500,10000 | YES | YES | — |
 | **mantle** | stratum | ve33 | 0x061F… | — | — | YES (R27.4) | NO | Adapter implemented, needs online verification |
+| **mantle** | iziswap | iziswap | 0x45e5… | quoter: 0x032b… | 400,2000,10000 | YES (R36) | CANDIDATE | R36: iZiSwap, needs online verification |
 | **linea** | lynex_v3 | algebra | 0x622b… | quoter: 0xcE82… | dynamic | YES | PARTIAL | Algebra path not stabilized for production |
 | **linea** | pancakeswap_v3 | uniswap_v3 | 0x0BFb… | quoter_v2: 0xB048… | 100,500,2500,10000 | YES | YES | — |
+| **linea** | syncswap_linea | syncswap | 0x37BA… | pool.getAmountOut | — | YES (R36) | CANDIDATE | R36: SyncSwap Classic pools on Linea |
+| **linea** | iziswap | iziswap | 0x45e5… | quoter: 0x3353… | 400,2000,10000 | YES (R36) | CANDIDATE | R36: iZiSwap on Linea |
 | **scroll** | nuri_v3 | uniswap_v3 | 0xAAA3… | quoter_v2: 0xAAAE… | 100,500,3000,10000 | YES | VERIFIED (R27.1) | Verified online: `ci_m5_gate_20260314_102036` (3 signals, quoter_v2 confirmed) |
 | **scroll** | sushiswap_v3 | uniswap_v3 | 0x46B3… | quoter_v2: 0xe43c… | 100,500,3000,10000 | YES | YES | Single executable DEX → ECOSYSTEM_BLOCKED |
+| **scroll** | syncswap | syncswap | 0x37BA… | pool.getAmountOut | — | YES (R36) | CANDIDATE | R36: SyncSwap Classic pools on Scroll |
+| **scroll** | iziswap | iziswap | 0x8c7d… | quoter: 0x3EF6… | 400,2000,10000 | YES (R36) | CANDIDATE | R36: iZiSwap on Scroll |
 
 ## Contract Mismatches (resolved R27)
 

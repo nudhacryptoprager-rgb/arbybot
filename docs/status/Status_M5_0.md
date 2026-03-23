@@ -1,11 +1,66 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-23 (R35 — **User-visible stream fix + evidence discipline.** R35 follow-up resolved the user-visible stream regression: the hot-loop frontier is no longer empty. Diagnostic reprieve rows now preserve pair, route, spread_bps, reject_reason, and net frontier PnL. Route-identity normalization in dynamic_sweep_runtime.py, dashboard diagnostic fallback, QUOTE_PATH_BLOCKED sweep override, hot_loop canonical guard. Fresh 6-chain canonical scan: 24 runs, 16 diagnostic_pairs across 6 chains. 2162 tests PASS.)
-**Tests**: 2162 passed / 5 skipped
+**Updated**: 2026-03-23 (R37 — **Artifact parity + frontier classification + stale-claims cleanup.** `BREAKEVEN_FRONTIER` added to distinguish 0.0 bps sweep from genuine negative (`BEST_NEG`). `roundtrip_summary` added to run_summary top-level. `QUOTE_PATH_CONSTRAINED` blocker for surface-limited chains (base). Per-chain taxonomy updated from fresh rolling data. Stale doc claims cleaned. 2213 tests PASS.)
+**Tests**: 2213 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R35: canonical 6-chain scan (2026-03-23T08:06:35Z). R34: stream signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
+**Evidence**: R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R37 — Artifact Parity + Frontier Classification + Stale-Claims Cleanup
+
+R37 closes the lead's 10-point R36 audit. Code: `BREAKEVEN_FRONTIER` reason added to distinguish 0.0 bps sweep results from genuine negative PnL. `roundtrip_summary` promoted to run_summary top-level. `QUOTE_PATH_CONSTRAINED` blocker added for surface-limited chains (base). Per-chain blocker taxonomy refreshed from rolling artifacts. All stale doc claims cleaned.
+
+R36 closes most recent code/config directives, but not all historical monitoring directives are fully closed yet. On healthy supported chains the dominant blocker is now market economics/slippage, while base and part of zksync remain infrastructure/quote-path constrained; therefore the project is beyond infra bring-up, but not yet at milestone profit closure.
+
+### Code Changes
+1. **engine/roundtrip.py** — `BREAKEVEN_FRONTIER` reason for 0.0 bps net_pnl (was classified as `BEST_NEG`). Distinguishes genuine negative frontier from breakeven/zero-quote.
+2. **m4/fixtures.py** — `roundtrip_summary` added as top-level key in run_summary (alias of `metrics.roundtrip`) for parity with long_scan_latest.json.
+3. **strategy/chain_stats.py** — `QUOTE_PATH_CONSTRAINED` blocker: no signals + few cross-dex pairs (<=3). Separates base (surface-limited) from generic NO_SIGNAL. Taxonomy docstring updated.
+4. **docs/status/Status_M5_0.md** — Per-chain blocker taxonomy updated from fresh rolling data. Stale blocker classifications fixed (linea: INFRA_PARTIAL→OE_ECONOMICS, base: QUOTE_PATH_DIAGNOSTICS→QUOTE_PATH_CONSTRAINED, scroll: ECONOMICS_DEAD_POOLS→MIXED_SOURCE).
+5. **docs/status/Status_M4.md** — "Pending: 6-chain scan" → completed. Stale R33 claims updated.
+
+### Tests (+2: BREAKEVEN_FRONTIER + QUOTE_PATH_CONSTRAINED)
+
+---
+
+## R36 — Surface Expansion + Sweep Frontier Promotion
+
+R36 closes the gap between "adapter implemented" and "adapter enabled in production configs". SyncSwap and iZiSwap adapters are now active in all applicable chain configs. Sweep frontier promotion ensures `best_size_usd` from dynamic sweep influences headline RT metrics. ZERO_QUOTE_FRONTIER distinction (`frontier_reason`) surfaced in long_scan_summary.
+
+### Code Changes
+1. **config/real_minimal.yaml** — +iziswap (arb), +same_dex_verification: true
+2. **config/onboard_zksync_candidate.yaml** — +syncswap, +iziswap
+3. **config/onboard_linea_stage1.yaml** — +syncswap_linea, +iziswap
+4. **config/onboard_mantle_stage2.yaml** — +iziswap
+5. **config/onboard_scroll_stage1.yaml** — +syncswap, +iziswap
+6. **strategy/jobs/run_scan_real.py** — Sweep frontier promotion: when sweep `best_net_pnl_bps` > fixed-size RT, promote to `stats["roundtrip"]["best_net_pnl_bps"]` with `sweep_promoted=true`.
+7. **strategy/chain_stats.py** — Track `sweep_best_frontier_reason` per chain (ALL_FAILED / BEST_NEG / PROFITABLE).
+8. **strategy/long_scan_summary.py** — Surface `sweep_best_frontier_reason` at top level for downstream consumers.
+9. **docs/ONBOARDING_MATRIX.md** — Added 9 entries (syncswap×3, iziswap×5, syncswap_linea×1) to Adapter Registry and Coverage Matrix.
+
+### R36 Acceptance Criteria
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| New adapters in active configs | ✅ PASS | 5 configs updated (arb/zksync/linea/mantle/scroll) |
+| same_dex_verification enabled | ✅ PASS | real_minimal.yaml |
+| Sweep promotion implemented | ✅ PASS | run_scan_real.py `sweep_promoted` flag |
+| ZERO_QUOTE_FRONTIER in summary | ✅ PASS | `sweep_best_frontier_reason` in long_scan_summary |
+| ONBOARDING_MATRIX updated | ✅ PASS | 9 new rows in Coverage Matrix |
+| Tests pass | ✅ PASS | 2211 passed, 5 skipped |
+| ambient.py remains stub | ⚠️ KNOWN | Ambient adapter not claimed as production; stub only |
+
+### Per-Chain Blocker Taxonomy (R36, updated R37 from fresh rolling)
+| Chain | DEXes (R36) | Blocker Class | Specific Blocker | Action |
+|-------|-------------|---------------|------------------|--------|
+| arbitrum_one | 5 (uni+sushi+pcswap+camelot+izi) | OE_ECONOMICS | Gas $2.84 + slip 7-9x at $5 sweep best (-27.4 bps) | Economics/slippage investigation; event-driven execution |
+| zksync | 4 (uni+pcswap+syncswap+izi) | OE_ECONOMICS | NET_PROFIT_TOO_LOW at probe; 0.0 bps frontier at $50 | Stability track (FAIL-heavy), then market conclusions |
+| base | 3 (uni+sushi+pcswap) | QUOTE_PATH_CONSTRAINED | No syncswap/izi in dexes.yaml, surface limited, few cross-dex pairs | Separate quote-path track; Aerodrome adapter |
+| mantle | 4 (agni+fusionx+stratum+izi) | OE_ECONOMICS | NET_PROFIT_TOO_LOW; 0.0 bps frontier at $50 | Economics investigation |
+| linea | 4 (pcswap+lynex+syncswap_linea+izi) | OE_ECONOMICS | Signals exist, OE rejects; no sweep candidates reach RT | Economics investigation (was INFRA_PARTIAL, now PASS) |
+| scroll | 5 (uni+sushi+nuri+syncswap+izi) | MIXED_SOURCE | OE rejects dominated by MIXED_SOURCE | Fix MIXED_SOURCE pairs or filter; then economics |
 
 ---
 
@@ -156,14 +211,14 @@ THREE refresh cadences:
 
 ## Chain Quality Classification
 
-| Chain | Quality | Blocker | Summary |
-|-------|---------|---------|---------|
-| arbitrum_one | SIGNAL_PRODUCING | OE_ECONOMICS | 4-DEX, 30 cross-dex pairs, routes_swept=13+, NET_PROFIT_TOO_LOW dominant |
-| linea | SIGNAL_PRODUCING | INFRA_FAIL | 2-DEX, 3/4 runs fail, sweep not active |
-| scroll | SIGNAL_PRODUCING | OE_ECONOMICS | 3-DEX, accepted-fail, sweep active |
-| mantle | SIGNAL_PRODUCING | MIXED_SOURCE | 2-DEX, all runs pass, sweep active |
-| zksync | SIGNAL_PRODUCING | OE_ECONOMICS | 2-DEX, 3/4 runs fail, sweep partial |
-| base | INFRA_READY | INFRA_FAIL | 3-DEX, >50% fail rate |
+| Chain | Quality | DEXes (R36) | Blocker (R37 fresh) | Summary |
+|-------|---------|-------------|---------------------|--------|
+| arbitrum_one | SIGNAL_PRODUCING | 5 (uni+sushi+pcswap+camelot+izi) | OE_ECONOMICS | 5-DEX, 30+ cross-dex pairs, gas+slippage dominant (USDC/DAI gap=54bps) |
+| zksync | SIGNAL_PRODUCING | 4 (uni+pcswap+syncswap+izi) | OE_ECONOMICS | 4-DEX, FAIL-heavy but signals exist, NET_PROFIT_TOO_LOW |
+| scroll | SIGNAL_PRODUCING | 5 (uni+sushi+nuri+syncswap+izi) | MIXED_SOURCE | 5-DEX, MIXED_SOURCE rejection dominant |
+| mantle | SIGNAL_PRODUCING | 4 (agni+fusionx+stratum+izi) | OE_ECONOMICS | 4-DEX, fragile pass, NET_PROFIT_TOO_LOW |
+| linea | SIGNAL_PRODUCING | 4 (pcswap+lynex+syncswap_linea+izi) | OE_ECONOMICS | 4-DEX, 5/5 PASS (was INFRA_FAIL), no sweep candidates |
+| base | INFRA_READY | 3 (uni+sushi+pcswap) | QUOTE_PATH_CONSTRAINED | Surface limited, no expansion in dexes.yaml |
 
 **Rollout Queue**: arb → linea → zksync → base → mantle → scroll
 

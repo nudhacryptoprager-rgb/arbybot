@@ -42,10 +42,12 @@ rpc_backoff_base_ms: 500
 
 universe_source: discovery_runtime
 
+# R36: +iziswap — adapter implemented, dexes.yaml entry present for mantle
 dexes:
   - agni_v3
   - fusionx_v3
   - stratum
+  - iziswap
 
 discovery_runtime_max_pairs: 30
 require_cross_dex: true

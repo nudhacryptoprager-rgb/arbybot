@@ -56,6 +56,7 @@ def new_chain_stats() -> dict[str, Any]:
         "sweep_measured_fee_bps": None,
         "sweep_measured_slippage_bps": None,
         "sweep_measured_total_cost_bps": None,
+        "sweep_best_frontier_reason": None,  # R36: ALL_FAILED vs BEST_NEG vs PROFITABLE
         "last_run_timestamp": None,
         "last_run_dir": None,
         # Richer per-chain fields (last-run snapshot)
@@ -132,6 +133,7 @@ def _compute_blocker_evidence(stats: dict[str, Any]) -> None:
       ROUNDTRIP_PROFITABLE — at least 1 profitable RT
       OE_ECONOMICS — signals exist but OE rejects on NET_PROFIT_TOO_LOW (dominant)
       QUOTE_PATH_BLOCKED — high quoter_v2 failure rate (>50% failed)
+      QUOTE_PATH_CONSTRAINED — no signals, limited surface (few cross-dex pairs)
       MIXED_SOURCE — OE rejects on MIXED_SOURCE (dominant)
       NO_SIGNAL — no spread signals produced
       INFRA_FAIL — chain consistently fails (>50% runs)
@@ -151,6 +153,13 @@ def _compute_blocker_evidence(stats: dict[str, Any]) -> None:
         return
 
     if stats.get("included_signals_total", 0) == 0 and runs > 0:
+        # R37: Distinguish surface-constrained chains (few cross-dex pairs, no expansion)
+        # from generic no-signal chains. This separates base (quote-path limited)
+        # from chains that are genuinely signal-dry for other reasons.
+        xdex = stats.get("last_cross_dex_pairs_count") or 0
+        if xdex <= 3:
+            stats["blocker_evidence"] = "QUOTE_PATH_CONSTRAINED"
+            return
         stats["blocker_evidence"] = "NO_SIGNAL"
         return
 
@@ -257,6 +266,12 @@ def update_chain_stats(
                 stats["sweep_measured_fee_bps"] = sweep.get("measured_fee_bps") or sweep.get("best_fee_bps")
                 stats["sweep_measured_slippage_bps"] = sweep.get("measured_slippage_bps") or sweep.get("best_slippage_bps")
                 stats["sweep_measured_total_cost_bps"] = sweep.get("measured_total_cost_bps") or sweep.get("best_total_cost_bps")
+                # R36: Track frontier_reason to distinguish ALL_FAILED (no quotes) from
+                # BEST_NEG (genuine zero/negative) in downstream summary aggregation.
+                stats["sweep_best_frontier_reason"] = (
+                    sweep.get("best_frontier_reason")
+                    or sweep.get("sweep_best_frontier_reason")
+                )
         ctx = summary.get("run_context", {})
         stats["last_run_timestamp"] = ctx.get("run_timestamp", stats["last_run_timestamp"])
         # Richer snapshot fields

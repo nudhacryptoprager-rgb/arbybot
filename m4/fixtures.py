@@ -1300,6 +1300,8 @@ def generate_m4_from_online_inputs(
             "ok": evidence_ok,
             "issues": evidence_issues,
         },
+        # R37: Top-level roundtrip_summary alias for parity with long_scan_latest.json
+        "roundtrip_summary": roundtrip,
     }
     
     with open(run_summary_path, "w") as f:

@@ -35,10 +35,13 @@ rpc_backoff_base_ms: 500
 
 universe_source: discovery_runtime
 
+# R36: +syncswap +iziswap — adapters implemented, dexes.yaml entries present for scroll
 dexes:
   - uniswap_v3
   - sushiswap_v3
   - nuri_v3
+  - syncswap
+  - iziswap
 
 discovery_runtime_max_pairs: 30
 require_cross_dex: true

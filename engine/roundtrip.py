@@ -988,6 +988,9 @@ def sweep_roundtrip_sizes(
     if result.best_net_pnl_bps is not None and result.best_net_pnl_bps > 0:
         result.frontier_reason = "PROFITABLE"
         result.gap_to_zero_bps = 0.0
+    elif result.best_net_pnl_bps is not None and result.best_net_pnl_bps == 0.0:
+        result.frontier_reason = "BREAKEVEN_FRONTIER"
+        result.gap_to_zero_bps = 0.0
     elif result.best_net_pnl_bps is not None:
         result.frontier_reason = "BEST_NEG"
         result.gap_to_zero_bps = abs(result.best_net_pnl_bps)

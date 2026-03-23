@@ -153,6 +153,16 @@ def build_summary(
             ),
             None,
         ),
+        # R36: Surface frontier_reason for best sweep chain — distinguishes
+        # ALL_FAILED (no quotes at any size) from BEST_NEG (genuine zero/negative).
+        "sweep_best_frontier_reason": next(
+            (
+                s.get("sweep_best_frontier_reason")
+                for s in sorted(per_chain.values(), key=lambda x: x.get("sweep_best_net_pnl_bps") or -9999, reverse=True)
+                if s.get("sweep_best_frontier_reason") is not None
+            ),
+            None,
+        ),
         # R12: Gap percentile context for frontier analysis
         "gap_percentile_context": {
             "best_gap_to_zero_bps": round(gap_best, 4) if gap_best is not None else None,

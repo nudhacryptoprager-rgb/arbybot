@@ -51,11 +51,13 @@ rpc_backoff_base_ms: 500
 
 # R30: 4-DEX contour — uni + sushi + pancake + camelot (adapter types: uniswap_v3, algebra)
 # Expanded from 2-DEX (uni+sushi) to cover cross-DEX surface revealed by warm_pool_cache
+# R36: +iziswap (iZUMi concentrated liquidity) — adapter implemented, dexes.yaml entry present
 dexes:
   - uniswap_v3
   - sushiswap_v3
   - pancakeswap_v3
   - camelot_v3
+  - iziswap
 
 # R30: Switched to discovery_runtime for 4-DEX automatic pool discovery via factory.getPool()
 # Pairs come from intent.txt (36 arb pairs). Pool resolver cache in data/cache/.
@@ -63,6 +65,10 @@ dexes:
 universe_source: discovery_runtime
 discovery_runtime_max_pairs: 36
 require_cross_dex: true
+
+# R36: Same-DEX fee-tier verification — appends diagnostic signals for
+# intra-DEX fee-tier arb (e.g., UniV3 100bps→500bps) alongside cross-DEX signals.
+same_dex_verification: true
 
 # LEGACY: Explicit pairs/pools sections below retained as documentation + fallback reference.
 # With universe_source=discovery_runtime, these are NOT used at runtime.

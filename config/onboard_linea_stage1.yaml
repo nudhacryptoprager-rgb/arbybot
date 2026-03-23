@@ -32,9 +32,12 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # Both DEXes — stage1 tests lynex_v3 Algebra stability alongside pancakeswap_v3
+# R36: +syncswap_linea +iziswap — adapters implemented, dexes.yaml entries present for linea
 dexes:
   - pancakeswap_v3
   - lynex_v3
+  - syncswap_linea
+  - iziswap
 
 discovery_runtime_max_pairs: 30
 require_cross_dex: true

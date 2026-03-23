@@ -1262,6 +1262,16 @@ class TestCanonicalSweep:
         d = r.to_dict()
         assert d["gap_to_zero_bps"] == 5.0
 
+    def test_breakeven_frontier_at_zero_pnl(self):
+        """R37: 0.0 bps net_pnl classifies as BREAKEVEN_FRONTIER, not BEST_NEG."""
+        from engine.roundtrip import SizeSweepResult
+
+        r = SizeSweepResult(pair="A/B", buy_dex="d1", sell_dex="d2",
+                            best_net_pnl_bps=0.0, gap_to_zero_bps=0.0,
+                            frontier_reason="BREAKEVEN_FRONTIER")
+        assert r.frontier_reason == "BREAKEVEN_FRONTIER"
+        assert r.gap_to_zero_bps == 0.0
+
     def test_fee_bps_in_sweep_point(self):
         """fee_bps is computed from leg fees and appears in SizeSweepPoint."""
         from engine.roundtrip import sweep_roundtrip_sizes

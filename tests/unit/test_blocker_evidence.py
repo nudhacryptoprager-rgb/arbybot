@@ -36,9 +36,15 @@ class TestComputeBlockerEvidence:
         assert s["blocker_evidence"] == "INFRA_FAIL"
 
     def test_no_signal(self):
-        s = _base_stats(included_signals_total=0)
+        s = _base_stats(included_signals_total=0, last_cross_dex_pairs_count=10)
         _compute_blocker_evidence(s)
         assert s["blocker_evidence"] == "NO_SIGNAL"
+
+    def test_quote_path_constrained(self):
+        """R37: Few cross-dex pairs + no signals = surface-constrained (e.g. base)."""
+        s = _base_stats(included_signals_total=0, last_cross_dex_pairs_count=2)
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "QUOTE_PATH_CONSTRAINED"
 
     def test_quote_path_blocked(self):
         qss = {"quotes_fetched_executable": 2, "quotes_fetched_diagnostic": 3,

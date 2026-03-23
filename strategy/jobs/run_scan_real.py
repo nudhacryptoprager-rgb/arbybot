@@ -968,6 +968,28 @@ def run_scan(
             stats["roundtrip"]["dynamic_sweep"] = sweep_result["dynamic_sweep"]
             stats["roundtrip"].update(sweep_result["executable_evidence"])
 
+            # R36: Sweep frontier promotion — if sweep found a better frontier than
+            # fixed-size RT, promote sweep result to headline metrics. This closes
+            # the gap where sweep was visibility-only and never influenced the
+            # official RT best_net_pnl_bps / profitable_count.
+            sweep_ds = sweep_result["dynamic_sweep"]
+            sweep_best_pnl = sweep_ds.get("best_net_pnl_bps")
+            fixed_best_pnl = stats["roundtrip"].get("best_net_pnl_bps")
+            if sweep_best_pnl is not None:
+                if fixed_best_pnl is None or sweep_best_pnl > fixed_best_pnl:
+                    stats["roundtrip"]["best_net_pnl_bps"] = sweep_best_pnl
+                    stats["roundtrip"]["sweep_promoted"] = True
+                    stats["roundtrip"]["sweep_promoted_size_usd"] = sweep_ds.get("best_size_usd")
+                    stats["roundtrip"]["sweep_promoted_pair"] = sweep_ds.get("best_pair")
+                    stats["roundtrip"]["sweep_promoted_frontier_reason"] = sweep_ds.get("best_frontier_reason")
+                    logger.info(
+                        "SWEEP_PROMOTED: best_net_pnl_bps %.2f bps (was %.2f) at $%s for %s",
+                        sweep_best_pnl,
+                        fixed_best_pnl if fixed_best_pnl is not None else float("nan"),
+                        sweep_ds.get("best_size_usd"),
+                        sweep_ds.get("best_pair"),
+                    )
+
         stats["live_candidate_stream"] = _build_live_candidate_stream(
             chain_key=chain_key,
             opportunities=eligible_opps if opps_list else [],

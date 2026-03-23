@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-23 (R35 — **User-visible stream fix + evidence discipline.** Route-identity normalization in dynamic_sweep_runtime.py. QUOTE_PATH_BLOCKED sweep override. Dashboard diagnostic fallback. Hot_loop canonical guard. Fresh 6-chain canonical scan: 24 runs, 163 signals, 0 profitable RT. arb reclassified from QUOTE_PATH_BLOCKED to OE_ECONOMICS. 2162 tests PASS.)  
+**Updated**: 2026-03-23 (R37 — **Artifact parity + frontier classification.** `BREAKEVEN_FRONTIER` added (0.0 bps ≠ genuine negative). `roundtrip_summary` in run_summary. `QUOTE_PATH_CONSTRAINED` for base. Per-chain taxonomy refreshed. 2213 tests PASS.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. R29 (3): paper_size_usd now annotated as `seed_diagnostic` — separate from executable sweep truth.  
-**Primary blocker**: Economics (gas+slippage) remain chain-specific. R35: arb now OE_ECONOMICS (was QUOTE_PATH_BLOCKED; sweep override fixed). Route-identity normalization enables diagnostic frontier visibility in dashboard. `profitable_roundtrips=0` across all chains.
+**Primary blocker**: Economics (gas+slippage) remain chain-specific. R37: `BREAKEVEN_FRONTIER` now separates 0.0 bps from genuine negative. R36: sweep frontier promoted to headline RT metrics. Surface expanded (5 chains gain new DEXes). On healthy chains (arb/mantle/linea/scroll) blocker is market economics. On base: surface-constrained (`QUOTE_PATH_CONSTRAINED`). On zksync: FAIL-heavy + economics. `profitable_roundtrips=0` persists.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 
@@ -29,6 +29,8 @@
 
 ---
 
+> [!] **ROLLING STABILITY (2026-03-23 R37)**: **Artifact parity + frontier classification.** `BREAKEVEN_FRONTIER` reason (0.0 bps ≠ BEST_NEG). `roundtrip_summary` in run_summary top-level. `QUOTE_PATH_CONSTRAINED` for base. Per-chain taxonomy refreshed from rolling. Stale doc claims cleaned. 2213 tests PASS.
+> [!] **ROLLING STABILITY (2026-03-23 R36)**: **Surface expansion + sweep frontier promotion.** SyncSwap + iZiSwap enabled in 5 active chain configs (arb: 4→5, zksync: 2→4, linea: 2→4, mantle: 3→4, scroll: 3→5). Sweep `best_net_pnl_bps` promoted to headline RT when better than fixed-size. `sweep_best_frontier_reason` surfaced (ALL_FAILED vs BEST_NEG). `same_dex_verification: true` on arbitrum. ONBOARDING_MATRIX updated (9 entries). 2213 tests PASS. 6-chain canonical scan: DONE (30 runs, 207 signals).
 > [!] **ROLLING STABILITY (2026-03-23 R35)**: **User-visible stream fix + evidence discipline.** Route-identity normalization in dynamic_sweep_runtime.py resolved empty live_stream. QUOTE_PATH_BLOCKED sweep override (arb→OE_ECONOMICS). Hot_loop canonical guard hardened. Dashboard diagnostic fallback. Fresh 6-chain canonical scan: 24 runs / 6 chains / 163 signals / 0 profitable RT / 16 diagnostic_pairs. 2162 tests PASS.
 > [!] **ROLLING STABILITY (2026-03-21 R33)**: **start.py extraction completed.** start.py 2236→753 lines (4 modules: run_artifact_extract.py, chain_stats.py, long_scan_summary.py, rolling_outputs.py). eligible_opps scoping bug fixed (was UnboundLocalError silently caught). OE→reprieve contract fixed (_rejected_opportunities). Fresh 10-min multi-chain scan: reprieve validated (linea=6, scroll=3, mantle=3 selected). blocker_classification/blocker_reason materialized from evidence. --allow-partial-chains flag added for single-chain verification. 2137 tests PASS.
 > [!] **ROLLING STABILITY (2026-03-20 R29 (3))**: **Fixed-size doctrine removed.** CANONICAL_SWEEP_SIZES_USD widened: 7-point [50–250] → 19-point [1–10000]. top_routes 3→15. Three decoupled size layers (discovery_probe, spread_seed, executable_sweep). Fresh 54-run canonical scan: 654.8s wall / 54 included signals / 49 RT evaluated / 0 profitable RT / best -28.70 bps (fixed-size). Sweep frontier: arb true minimum -16.89 bps at $25 (was -31.75 at $150). Gap_to_zero: 0.0 bps at $2500 (zero-quote) → true gap -16.89 bps at $25.
