@@ -146,11 +146,25 @@ def build_pair_funnel_trace(
                 trace[_pkey]["economics"]["rt_gross_pnl_bps"] = round(rt_r.gross_pnl_bps, 2)
                 trace[_pkey]["economics"]["rt_net_pnl_bps"] = round(rt_r.net_pnl_bps, 2)
                 trace[_pkey]["economics"]["rt_slippage_bps"] = round(rt_r.estimated_slippage_bps, 2)
-                _notional = rt_r.net_pnl_usd + rt_r.gas_cost_usd if rt_r.gas_cost_usd else 0.01
-                trace[_pkey]["economics"]["rt_gas_bps"] = round(
-                    (rt_r.gas_cost_usd / max(abs(_notional), 0.01)) * 10000
-                    if rt_r.gas_cost_usd else 0, 2
-                )
+                # R39: Parse gas_bps from reject_reason (authoritative, real notional)
+                _rr = rt_r.reject_reason or ""
+                _gas_bps_parsed = None
+                if "|gas=" in _rr:
+                    try:
+                        _gas_bps_parsed = float(_rr.split("|gas=")[1].split("|")[0])
+                    except (ValueError, IndexError):
+                        pass
+                if _gas_bps_parsed is not None:
+                    trace[_pkey]["economics"]["rt_gas_bps"] = round(_gas_bps_parsed, 2)
+                else:
+                    # Fallback: compute from gas_cost_usd / trade notional
+                    _notional_usd = 0.0
+                    if rt_r.gross_pnl_bps != 0 and rt_r.gross_pnl_usd != 0:
+                        _notional_usd = abs(rt_r.gross_pnl_usd / (rt_r.gross_pnl_bps / 10000))
+                    trace[_pkey]["economics"]["rt_gas_bps"] = round(
+                        (rt_r.gas_cost_usd / _notional_usd) * 10000
+                        if _notional_usd > 0 and rt_r.gas_cost_usd else 0, 2
+                    )
                 trace[_pkey]["economics"]["rt_lp_fee_bps"] = (rt_r.leg1_fee + rt_r.leg2_fee) / 100.0
                 trace[_pkey]["economics"]["rt_leg2_is_real"] = rt_r.leg2_is_real_quote
                 trace[_pkey]["economics"]["rt_gap_to_zero_bps"] = (

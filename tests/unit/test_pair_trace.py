@@ -27,6 +27,7 @@ class _FakeRT:
     pair: str
     net_pnl_bps: float
     gross_pnl_bps: float = 0.0
+    gross_pnl_usd: float = 0.0
     estimated_slippage_bps: float = 0.0
     gas_cost_usd: float = 0.0
     net_pnl_usd: float = 0.0

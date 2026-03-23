@@ -262,10 +262,14 @@ def update_chain_stats(
                 stats["sweep_best_size_usd"] = sweep.get("best_size_usd") or sweep.get("sweep_best_size_usd")
                 stats["sweep_best_pair"] = sweep.get("best_pair") or sweep.get("frontier_pair")
                 stats["sweep_gap_to_zero_bps"] = gap
-                stats["sweep_measured_gas_bps"] = sweep.get("measured_gas_bps") or sweep.get("best_gas_bps")
-                stats["sweep_measured_fee_bps"] = sweep.get("measured_fee_bps") or sweep.get("best_fee_bps")
-                stats["sweep_measured_slippage_bps"] = sweep.get("measured_slippage_bps") or sweep.get("best_slippage_bps")
-                stats["sweep_measured_total_cost_bps"] = sweep.get("measured_total_cost_bps") or sweep.get("best_total_cost_bps")
+                _gas = sweep.get("measured_gas_bps")
+                stats["sweep_measured_gas_bps"] = _gas if _gas is not None else sweep.get("best_gas_bps")
+                _fee = sweep.get("measured_fee_bps")
+                stats["sweep_measured_fee_bps"] = _fee if _fee is not None else sweep.get("best_fee_bps")
+                _slip = sweep.get("measured_slippage_bps")
+                stats["sweep_measured_slippage_bps"] = _slip if _slip is not None else sweep.get("best_slippage_bps")
+                _tcost = sweep.get("measured_total_cost_bps")
+                stats["sweep_measured_total_cost_bps"] = _tcost if _tcost is not None else sweep.get("best_total_cost_bps")
                 # R36: Track frontier_reason to distinguish ALL_FAILED (no quotes) from
                 # BEST_NEG (genuine zero/negative) in downstream summary aggregation.
                 stats["sweep_best_frontier_reason"] = (

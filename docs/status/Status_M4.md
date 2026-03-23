@@ -1,11 +1,11 @@
 ﻿# Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **M4.1 SIMULATE-ONLY CLOSED** (N≥100 REGISTRY_REAL runs with profit, agg_status=PASS)  
-**Updated**: 2026-03-23 (R37 — **Artifact parity + frontier classification.** `BREAKEVEN_FRONTIER` added (0.0 bps ≠ genuine negative). `roundtrip_summary` in run_summary. `QUOTE_PATH_CONSTRAINED` for base. Per-chain taxonomy refreshed. 2213 tests PASS.)  
+**Updated**: 2026-03-23 (R39b — **Sweep guard field fix + chain_stats truthiness + pair_trace gas.** Post-R39 rerun: 30 runs, 241 sig, 67 RT, 0 profitable, $420.82. 2250 tests PASS.)  
 **Policy**: DIVERSITY_PAIRS_TARGET=4 (adjusted for min_spread_bps=10 filter)  
 **Infra Evidence**: see [Status_M5_0.md](Status_M5_0.md) for multicall/failover/WS proof  
 **Profit Truth**: `profit_is_diagnostic=true`, `profit_truth_source=ONE_LEG_DIAGNOSTIC`. R29 (3): paper_size_usd now annotated as `seed_diagnostic` — separate from executable sweep truth.  
-**Primary blocker**: Economics (gas+slippage) remain chain-specific. R37: `BREAKEVEN_FRONTIER` now separates 0.0 bps from genuine negative. R36: sweep frontier promoted to headline RT metrics. Surface expanded (5 chains gain new DEXes). On healthy chains (arb/mantle/linea/scroll) blocker is market economics. On base: surface-constrained (`QUOTE_PATH_CONSTRAINED`). On zksync: FAIL-heavy + economics. `profitable_roundtrips=0` persists.
+**Primary blocker**: Economics (gas+slippage) remain chain-specific. R39b: sweep guard field names fixed (was dead code), chain_stats 0.0 truthiness fixed, pair_trace gas computation fixed. R39a: `BREAKEVEN_FRONTIER` enforced via post-aggregation fence. R38: sweep size promotion + LST suppression. R37: `BREAKEVEN_FRONTIER` distinguished from genuine negative. On healthy chains (arb/mantle/scroll) blocker is market economics. On base: NO_SIGNAL/surface-constrained. On zksync: 1/5 pass + economics. On linea: 0/5 INFRA_FAIL. `profitable_roundtrips=0` persists.
 
 ## [!] M4.1 Simulate-Only DoD **MET** (historical)
 

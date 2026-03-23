@@ -1,46 +1,51 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-23 (R39 — **Frontier contract fix + executable sweep guard + RCA gas alignment.** Frontier `0.0 bps` + `BEST_NEG` mismatch fixed. Sweep size promotion guarded by executable frontier check. RCA gas_bps parsed from reject_reason. Fresh canonical 10-min scan: 36 runs, 159 signals, 59 RT, 0 profitable. 2246 tests PASS.)
-**Tests**: 2246 passed / 5 skipped
+**Updated**: 2026-03-23 (R39b — **Sweep guard field fix + chain_stats truthiness + pair_trace gas.** Post-R39 rerun: 30 runs, 241 signals, 67 RT, 0 profitable, $420.82. Sweep guard dead code fixed (`measured_*` → `best_*`). chain_stats 0.0→None truthiness fixed. pair_trace gas computation fixed (reject_reason parse). 2250 tests PASS.)
+**Tests**: 2250 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R39: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
+**Evidence**: R39b: sweep field fix + chain_stats + pair_trace gas (2026-03-23). R39a: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
 
 ---
 
-## R39 — Frontier Contract Fix + Executable Sweep Guard + RCA Gas Alignment
+## R39 — Frontier Contract Fix + Sweep Guard Field Fix + Chain Stats Truthiness + Pair Trace Gas
 
-R39 responds to lead's fresh 10-minute canonical scan (36 runs, 159 signals, 59 RT evaluated, 0 profitable RT, $254.60 diagnostic net USDC) that exposed three contract/accuracy issues from R38.
+R39 responds to lead's two canonical scans. First (pre-R39 code): 36 runs, 159 signals, 59 RT, $254.60. Second (post-R39 rerun): 30 runs, 241 signals, 67 RT evaluated, 0 profitable RT, $420.82 diagnostic net USDC. The rerun exposed three additional bugs beyond the initial frontier fix.
 
-### Fresh Evidence (lead's 10-min canonical scan, 2026-03-23T15:52:45Z)
-| Chain | Runs | PASS | FAIL | NO_DATA | Signals | RT Eval | Net USDC | Blocker |
-|-------|------|------|------|---------|---------|---------|----------|---------|
-| arbitrum_one | 6 | 2 | 4 | 0 | 81 | 15 | $103.25 | OE_ECONOMICS |
-| mantle | 6 | 6 | 0 | 0 | 10 | 12 | $14.39 | OE_ECONOMICS |
-| linea | 6 | 3 | 3 | 0 | 31 | 6 | $34.56 | OE_ECONOMICS |
-| scroll | 6 | 6 | 0 | 0 | 13 | 12 | $33.89 | MIXED_SOURCE |
-| zksync | 6 | 0 | 6 | 0 | 18 | 1 | $55.78 | OE_ECONOMICS |
-| base | 6 | 3 | 0 | 3 | 6 | 13 | $12.74 | QUOTE_PATH_CONSTRAINED |
+### Fresh Evidence (post-R39 rerun, 2026-03-23T16:42:04Z)
+| Chain | Runs | PASS | FAIL | Signals | RT Eval | Blocker | Sweep Frontier | BEQ Size |
+|-------|------|------|------|---------|---------|---------|----------------|----------|
+| arbitrum_one | 5 | 5 | 0 | 175 | 6 | OE_ECONOMICS | BREAKEVEN_FRONTIER | $2500 |
+| mantle | 5 | 5 | 0 | 15 | 2 | OE_ECONOMICS | BREAKEVEN_FRONTIER | $25 |
+| scroll | 5 | 5 | 0 | 20 | 2 | MIXED_SOURCE | BREAKEVEN_FRONTIER | $50 |
+| zksync | 5 | 1 | 4 | 4 | 1 | OE_ECONOMICS | BREAKEVEN_FRONTIER | $50 |
+| base | 5 | 3 | 2 | 5 | 0 | NO_SIGNAL | BEST_NEG | $5000 |
+| linea | 5 | 0 | 5 | 22 | 2 | INFRA_FAIL | (no sweep) | — |
 
-### Blocker Verdict: MIXED (updated from fresh evidence)
-- **Healthy supported chains (arb/mantle)**: Economics/slippage dominant. Not dead infrastructure.
-- **base**: Quote-path constrained. `SLOT0_DIAGNOSTIC=91.9%`, `real_quote_count=0` in fresh RCA.
-- **zksync**: Fail-heavy (0/6 pass in fresh run). Cannot draw market conclusions.
-- **scroll**: MIXED_SOURCE debt (33.3% of OE rejects). Economics present but mixed.
-- **linea**: Unstable (3/6 fail). Economics-blocked + infra instability.
+### Blocker Verdict: MIXED (updated from post-R39 rerun)
+- **Healthy supported chains (arb/mantle/scroll)**: 5/5 pass, economics/slippage dominant. Not dead infrastructure.
+- **base**: NO_SIGNAL, 3/5 pass. SLOT0_DIAGNOSTIC=68.8%, exec rate 5.0%. Surface-constrained.
+- **zksync**: 1/5 pass. Economics + stability needed before market conclusions.
+- **linea**: 0/5 pass. INFRA_FAIL. 22 signals but no sweep candidates reach RT. Pipeline gap.
+- **LST pseudo-profits**: METH/WETH (mantle +1444 bps) and WSTETH/WETH (linea +4434 bps) are NOT real profitable RT. Must be excluded from headline frontier decisions.
 
-### Code Changes
+### Code Changes (R39a + R39b)
 1. **strategy/long_scan_summary.py** — Fixed frontier contract mismatch: sort key `x.get("sweep_best_net_pnl_bps") or -9999` treated 0.0 as falsy (Python truthiness: `0.0 or -9999 == -9999`), causing top-level to pick BEST_NEG from a worse chain while pnl=0.0. Fixed with `if v is not None else -9999`. Added post-aggregation consistency fence: if pnl==0.0 → force BREAKEVEN_FRONTIER.
-2. **strategy/jobs/run_scan_real.py** — Sweep size promotion now guarded by executable frontier check: `frontier_reason` must be BREAKEVEN_FRONTIER or PROFITABLE, `measured_total_cost_bps > 0`, and `measured_slippage_bps is not None`. Falls back to config size when sweep is paper-only. Both primary and error paths updated.
-3. **scripts/pair_level_rca.py** — `_rt_gas_bps()` now parses gas from `reject_reason` string (authoritative, computed with real notional in engine) before falling back to gross_pnl back-calculation. Fixes Gas column mismatch with live reject reasons.
-4. **tests/unit/test_r38_changes.py** — +9 tests: frontier consistency (3), sweep guard (3), RCA gas parsing (3).
-5. **tests/unit/test_run_scan_real_purity.py** — max_lines bumped to 1650 for R39 guard code.
-6. **tests/unit/test_nonstop_loop_artifacts.py** — Rolling artifact test allows .log files (produced by scan sessions).
+2. **strategy/jobs/run_scan_real.py** — Sweep size promotion guarded by executable frontier check. **R39b field fix**: guard checked `measured_total_cost_bps`/`measured_slippage_bps` (don't exist) → always false → size stuck at config 150. Fixed to `best_total_cost_bps`/`best_slippage_bps`. Both primary and error paths updated.
+3. **strategy/chain_stats.py** — **R39b truthiness fix**: `sweep.get("measured_gas_bps") or sweep.get("best_gas_bps")` treated 0.0 as falsy → mapped to None. Fixed with `if _var is not None else` pattern for all 4 measured fields (gas, fee, slippage, total_cost).
+4. **strategy/pair_trace.py** — **R39b gas computation fix**: Old code used `net_pnl_usd + gas_cost_usd` as "notional" (wrong — sum of PnL + gas ≠ trade notional). For USDC/DAI: gas=2864.67 instead of 12.0. Now parses from `reject_reason` string first (`|gas=12.0|`), fallback to `abs(gross_usd / (gross_bps/10000))`.
+5. **scripts/pair_level_rca.py** — `_rt_gas_bps()` now parses gas from `reject_reason` string (authoritative, computed with real notional in engine) before falling back to gross_pnl back-calculation. Fixes Gas column mismatch with live reject reasons.
+6. **tests/unit/test_r38_changes.py** — +13 tests total: frontier consistency (3), sweep guard (4 including field name test), chain_stats truthiness (2), pair_trace gas (2), RCA gas parsing (3).
+7. **tests/unit/test_pair_trace.py** — Added `gross_pnl_usd` to `_FakeRT` fixture.
+8. **tests/unit/test_run_scan_real_purity.py** — max_lines bumped to 1650.
+9. **tests/unit/test_nonstop_loop_artifacts.py** — Rolling artifact test allows .log files.
 
-### Tests (+9)
+### Tests (+13)
 - `TestFrontierContractConsistency`: breakeven vs BEST_NEG (3 tests)
-- `TestSweepSizePromotionGuard`: executable/non-executable/BEST_NEG (3 tests)
+- `TestSweepSizePromotionGuard`: executable/non-executable/BEST_NEG/zero_slippage (4 tests)
+- `TestChainStatsSweepMeasured`: zero_slippage_preserved, none_falls_through (2 tests)
+- `TestPairTraceGasFromRejectReason`: gas_parsed_from_reject_reason, gas_fallback (2 tests)
 - `TestRcaGasBpsFromRejectReason`: parse/fallback/zero (3 tests)
 
 ---

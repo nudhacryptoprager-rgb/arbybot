@@ -1006,8 +1006,8 @@ def run_scan(
         # 2) measured_total_cost_bps > 0 (some cost was measured)
         # 3) measured_slippage_bps is not None (slippage was explicitly measured)
         _sweep_frontier = _sweep_ds.get("best_frontier_reason") or _sweep_ds.get("sweep_best_frontier_reason")
-        _sweep_total_cost = _sweep_ds.get("measured_total_cost_bps")
-        _sweep_slip = _sweep_ds.get("measured_slippage_bps")
+        _sweep_total_cost = _sweep_ds.get("best_total_cost_bps")
+        _sweep_slip = _sweep_ds.get("best_slippage_bps")
         _sweep_is_executable = (
             _sweep_best_size is not None
             and _sweep_best_size > 0
@@ -1053,8 +1053,8 @@ def run_scan(
             _err_sweep_size = _err_ds.get("best_size_usd")
             _err_config_size = float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0)
             _err_frontier = _err_ds.get("best_frontier_reason") or _err_ds.get("sweep_best_frontier_reason")
-            _err_total_cost = _err_ds.get("measured_total_cost_bps")
-            _err_slip = _err_ds.get("measured_slippage_bps")
+            _err_total_cost = _err_ds.get("best_total_cost_bps")
+            _err_slip = _err_ds.get("best_slippage_bps")
             _err_is_executable = (
                 _err_sweep_size is not None
                 and _err_sweep_size > 0

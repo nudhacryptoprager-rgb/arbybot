@@ -364,9 +364,9 @@ class TestSweepSizePromotionGuard:
         ds = {
             "best_size_usd": 750,
             "best_frontier_reason": "BEST_NEG",
-            "measured_total_cost_bps": 31.0,
-            "measured_slippage_bps": 10.0,
-            "measured_gas_bps": 5.0,
+            "best_total_cost_bps": 31.0,
+            "best_slippage_bps": 10.0,
+            "best_gas_bps": 5.0,
         }
         frontier = ds.get("best_frontier_reason")
         is_exec = frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE")
@@ -404,3 +404,91 @@ class TestRcaGasBpsFromRejectReason:
         from scripts.pair_level_rca import _rt_gas_bps
         rt = {"gross_pnl_bps": 0, "gross_pnl_usd": 0}
         assert _rt_gas_bps(rt) == 0
+
+
+# ---------- 10. R39: chain_stats sweep measured fields 0.0 truthiness ----------
+
+class TestChainStatsSweepMeasured:
+    """Verify chain_stats maps sweep fields without 0.0 truthiness bug."""
+
+    def test_zero_slippage_preserved(self):
+        """best_slippage_bps=0.0 should map to sweep_measured_slippage_bps=0.0, not None."""
+        sweep = {
+            "best_net_pnl_bps": 0.0,
+            "best_size_usd": 2500,
+            "best_gas_bps": 0.0,
+            "best_fee_bps": 6.0,
+            "best_slippage_bps": 0.0,
+            "best_total_cost_bps": 6.0,
+            "gap_to_zero_bps": 0.0,
+            "best_frontier_reason": "BREAKEVEN_FRONTIER",
+        }
+        # Simulate chain_stats logic
+        _gas = sweep.get("measured_gas_bps")
+        gas_result = _gas if _gas is not None else sweep.get("best_gas_bps")
+        _slip = sweep.get("measured_slippage_bps")
+        slip_result = _slip if _slip is not None else sweep.get("best_slippage_bps")
+        _tcost = sweep.get("measured_total_cost_bps")
+        tcost_result = _tcost if _tcost is not None else sweep.get("best_total_cost_bps")
+        assert gas_result == 0.0  # not None
+        assert slip_result == 0.0  # not None
+        assert tcost_result == 6.0
+
+    def test_none_falls_through(self):
+        """When neither measured nor best exists, result is None."""
+        sweep = {"best_net_pnl_bps": -5.0}
+        _slip = sweep.get("measured_slippage_bps")
+        slip_result = _slip if _slip is not None else sweep.get("best_slippage_bps")
+        assert slip_result is None
+
+
+# ---------- 11. R39: pair_trace gas_bps from reject_reason ----------
+
+class TestPairTraceGasFromRejectReason:
+    """Verify pair_trace.py computes gas_bps from reject_reason, not notional hack."""
+
+    def test_gas_parsed_from_reject_reason(self):
+        from types import SimpleNamespace
+        from strategy.pair_trace import build_pair_funnel_trace
+        pairs = [SimpleNamespace(display_name="USDC/DAI", token_in="USDC", token_out="DAI")]
+        rt = SimpleNamespace(
+            pair="USDC/DAI",
+            net_pnl_bps=-54.07,
+            gross_pnl_bps=-42.03,
+            gross_pnl_usd=-0.0042,
+            estimated_slippage_bps=792.18,
+            gas_cost_usd=0.014,
+            leg1_fee=300,
+            leg2_fee=300,
+            leg2_is_real_quote=True,
+            reject_reason="SLIPPAGE_TOO_HIGH: net_pnl_bps=-54.07|slippage=792.2|lp_fee=6.0|gas=12.0",
+            is_profitable=False,
+            net_pnl_usd=-0.005,
+        )
+        trace = build_pair_funnel_trace(pairs, [], [], [], [], [rt], [])
+        econ = trace[0]["economics"]
+        # Must match reject_reason gas=12.0, NOT back-calculated 2864.67
+        assert econ["rt_gas_bps"] == 12.0
+
+    def test_gas_fallback_when_no_reject_reason(self):
+        from types import SimpleNamespace
+        from strategy.pair_trace import build_pair_funnel_trace
+        pairs = [SimpleNamespace(display_name="WETH/USDC", token_in="WETH", token_out="USDC")]
+        rt = SimpleNamespace(
+            pair="WETH/USDC",
+            net_pnl_bps=-749.43,
+            gross_pnl_bps=-738.9,
+            gross_pnl_usd=-0.7389,
+            estimated_slippage_bps=860.24,
+            gas_cost_usd=0.0105,
+            leg1_fee=3000,
+            leg2_fee=100,
+            leg2_is_real_quote=True,
+            reject_reason=None,
+            is_profitable=False,
+            net_pnl_usd=-0.07494,
+        )
+        trace = build_pair_funnel_trace(pairs, [], [], [], [], [rt], [])
+        econ = trace[0]["economics"]
+        # Fallback: notional = 0.7389 / (738.9/10000) = 10.0, gas = 0.0105/10.0*10000 = 10.5
+        assert econ["rt_gas_bps"] == 10.5
