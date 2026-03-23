@@ -149,19 +149,29 @@ def _compute_blocker_evidence(stats: dict[str, Any]) -> None:
     runs = stats.get("runs", 0)
     fail = stats.get("fail", 0)
     if runs > 0 and fail / runs > 0.5:
-        stats["blocker_evidence"] = "INFRA_FAIL"
-        return
+        # R39g: Don't classify as INFRA_FAIL if the chain produced real data —
+        # failures may be gate-related (e.g. coverage threshold), not actual infra.
+        rt_total = stats.get("roundtrip_evaluated_total", 0)
+        rq_total = stats.get("real_quote_count_total", 0)
+        oe_total = (stats.get("last_oe_rejection_funnel") or {}).get("total_opportunities", 0)
+        if rt_total == 0 and rq_total == 0 and oe_total == 0:
+            stats["blocker_evidence"] = "INFRA_FAIL"
+            return
 
     if stats.get("included_signals_total", 0) == 0 and runs > 0:
-        # R37: Distinguish surface-constrained chains (few cross-dex pairs, no expansion)
-        # from generic no-signal chains. This separates base (quote-path limited)
-        # from chains that are genuinely signal-dry for other reasons.
-        xdex = stats.get("last_cross_dex_pairs_count") or 0
-        if xdex <= 3:
-            stats["blocker_evidence"] = "QUOTE_PATH_CONSTRAINED"
+        # R39g: If we have RT evaluation data or real quotes despite 0 included signals,
+        # the chain is producing data — fall through to economics/rejection classification.
+        rt_total = stats.get("roundtrip_evaluated_total", 0)
+        rq_total = stats.get("real_quote_count_total", 0)
+        if rt_total == 0 and rq_total == 0:
+            # R37: Distinguish surface-constrained chains (few cross-dex pairs, no expansion)
+            # from generic no-signal chains.
+            xdex = stats.get("last_cross_dex_pairs_count") or 0
+            if xdex <= 3:
+                stats["blocker_evidence"] = "QUOTE_PATH_CONSTRAINED"
+                return
+            stats["blocker_evidence"] = "NO_SIGNAL"
             return
-        stats["blocker_evidence"] = "NO_SIGNAL"
-        return
 
     # R35: If sweep evidence is strong (routes swept, sweep PnL observed),
     # the quote path is working for active pairs — skip QUOTE_PATH_BLOCKED

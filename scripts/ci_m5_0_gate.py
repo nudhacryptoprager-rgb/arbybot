@@ -623,11 +623,12 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                 
                 # Coverage validation for online runs
                 if require_real:
-                    # discovery_runtime mode has lower coverage expectations (intentional limited universe)
+                    # discovery_runtime / hot_requote modes have lower coverage expectations
+                    # (intentional limited universe — productive pairs may be < 5 on thin chains)
                     stats = data.get("stats", {})
                     universe_source = stats.get("universe_source", "config")
-                    if universe_source == "discovery_runtime":
-                        # discovery_runtime: min 1 pair, 2 pools (cross-dex requires at least 2)
+                    if universe_source in ("discovery_runtime", "hot_requote"):
+                        # thin productive contour: min 1 pair, 2 pools (cross-dex requires at least 2)
                         ok_cov, msg_cov = validate_coverage(data, min_pairs=1, min_pools=2)
                     else:
                         # standard mode: min 5 pairs, 6 pools

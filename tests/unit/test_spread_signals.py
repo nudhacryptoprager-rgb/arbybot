@@ -382,3 +382,74 @@ class TestNotionalDriftFilter:
         signals_25 = compute_spread_signals(quotes, config_25, 1000, rejected_25)
         assert len(signals_25) == 0, "With 25% threshold, both quotes should be excluded"
         assert len(rejected_25) == 2, "Should have 2 rejected quotes"
+
+
+class TestDualRouteContract:
+    """Contract test: emit_dual_routes=true must emit BOTH cross-DEX directions.
+
+    When A->B and B->A are both above threshold, _find_all_cross_dex_spreads
+    returns both, and _compute_pair_spread emits both signals.  This contract
+    is critical — step 1/2 of R39f source-coverage review.
+    """
+
+    @staticmethod
+    def _make_quote(dex_id: str, price: str, pair: str = "ARB/USDC") -> Dict[str, Any]:
+        token_in, token_out = pair.split("/")
+        return {
+            "dex_id": dex_id,
+            "token_in": token_in,
+            "token_out": token_out,
+            "price_exact": price,
+            "price": price,
+            "pool_address": f"0x{dex_id[:8].ljust(40, '0')}",
+        }
+
+    def test_both_directions_emitted(self):
+        """With 3 DEXes where two cross-DEX directions are profitable, both routes emitted."""
+        from strategy.spreads import _find_all_cross_dex_spreads
+
+        # DEX A: price 100, DEX B: price 102, DEX C: price 98
+        # A->B: buy@100, sell@102 → +200 bps  (threshold=0)
+        # C->B: buy@98,  sell@102 → +408 bps
+        # C->A: buy@98,  sell@100 → +204 bps
+        # B->A: buy@102, sell@100 → negative → excluded
+        quotes = [
+            self._make_quote("dex_a", "100.00"),
+            self._make_quote("dex_b", "102.00"),
+            self._make_quote("dex_c", "98.00"),
+        ]
+        config: Dict[str, Any] = {"emit_dual_routes": True}
+        results = _find_all_cross_dex_spreads(quotes, config, spread_threshold_bps=0)
+
+        routes = {f"{r[0]['dex_id']}->{r[1]['dex_id']}" for r in results}
+        # At least 2 directions (both A->B and C->B, or C->A, etc.)
+        assert len(results) >= 2, f"Expected >=2 cross-DEX routes, got {len(results)}: {routes}"
+        # Every result must be cross-DEX
+        for buy_q, sell_q, bp, sp in results:
+            assert buy_q["dex_id"] != sell_q["dex_id"], "Same-DEX route leaked into cross-DEX results"
+            assert sp > bp, "Sell price must exceed buy price"
+
+    def test_single_direction_when_emit_dual_false(self):
+        """With emit_dual_routes=false, only the best single route is returned from _compute_pair_spread."""
+        from strategy.spreads import _compute_pair_spread
+
+        quotes = [
+            self._make_quote("dex_a", "100.00"),
+            self._make_quote("dex_b", "102.00"),
+            self._make_quote("dex_c", "98.00"),
+        ]
+        config: Dict[str, Any] = {"emit_dual_routes": False}
+        signals = _compute_pair_spread("ARB/USDC", quotes, config, 100000, 0, 10000, [])
+        assert len(signals) == 1, f"emit_dual_routes=false should yield 1 signal, got {len(signals)}"
+
+    def test_require_cross_dex_blocks_same_dex(self):
+        """require_cross_dex=true with only same-DEX quotes returns empty."""
+        from strategy.spreads import _compute_pair_spread
+
+        quotes = [
+            self._make_quote("uniswap_v3", "100.00"),
+            self._make_quote("uniswap_v3", "102.00"),
+        ]
+        config: Dict[str, Any] = {"require_cross_dex": True}
+        signals = _compute_pair_spread("ARB/USDC", quotes, config, 100000, 0, 10000, [])
+        assert len(signals) == 0, "require_cross_dex must block same-DEX-only pairs"

@@ -56,6 +56,15 @@ def load_scan_report(run_dir: Path) -> Optional[Dict[str, Any]]:
         return json.load(f)
 
 
+def load_gate_result(run_dir: Path) -> Optional[Dict[str, Any]]:
+    """Load gate_result.json from runDir/reports/."""
+    p = run_dir / "reports" / "gate_result.json"
+    if not p.exists():
+        return None
+    with open(p, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def _rt_gas_bps(rt: Dict[str, Any]) -> float:
     """Compute gas cost in bps from roundtrip result dict.
 
@@ -363,6 +372,64 @@ def _print_oe_funnel(truth: Dict[str, Any]):
               f"(exec rate: {rate:.1f}%)")
 
 
+def _derive_profit_blocker(trace: List[Dict[str, Any]], truth: Dict[str, Any]) -> str:
+    """Derive the actual profit blocker from funnel trace and truth data.
+
+    Returns a short label like OE_ECONOMICS, QUOTE_PATH, MIXED_SOURCE, SIGNAL_DRY.
+    """
+    rt_pairs = [p for p in trace if p.get("rt_evaluated", 0) > 0]
+    rt_prof = [p for p in trace if (p.get("rt_best_net_pnl_bps") or -999) > 0]
+
+    if rt_prof:
+        return "NONE (profitable RT exists)"
+
+    oe = truth.get("oe_rejection_funnel") or {}
+    rej_total = oe.get("rejected_count", 0)
+    reasons = oe.get("rejected_reasons", {})
+
+    if rt_pairs:
+        # Had RT evaluation, all negative — pure economics
+        return "OE_ECONOMICS (all RT negative)"
+
+    if rej_total > 0:
+        top_reason = max(reasons, key=reasons.get) if reasons else "UNKNOWN"
+        top_pct = reasons.get(top_reason, 0) / rej_total * 100 if rej_total > 0 else 0
+        return f"{top_reason} ({top_pct:.0f}% of {rej_total} rejections)"
+
+    sig_pairs = [p for p in trace if p.get("spread_signals", 0) > 0]
+    if not sig_pairs:
+        return "SIGNAL_DRY (no spread signals)"
+
+    return "UNKNOWN"
+
+
+def _print_gate_vs_blocker(
+    gate_result: Optional[Dict[str, Any]],
+    trace: List[Dict[str, Any]],
+    truth: Dict[str, Any],
+):
+    """R39g: Print gate status vs actual profit blocker — separates infra/coverage
+    failures from real economics blockers."""
+    print("\n--- Gate vs Profit Blocker ---")
+
+    # Gate status
+    if gate_result:
+        status = gate_result.get("status", "?")
+        reasons = gate_result.get("reasons", [])
+        if status == "PASS":
+            print(f"  Gate:           PASS")
+        else:
+            print(f"  Gate:           FAIL")
+            for r in reasons:
+                print(f"    - {r}")
+    else:
+        print(f"  Gate:           (no gate_result.json)")
+
+    # Actual profit blocker
+    blocker = _derive_profit_blocker(trace, truth)
+    print(f"  Profit blocker: {blocker}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pair-level RCA tool")
     parser.add_argument("--run-dir", type=str, help="Path to runDir")
@@ -373,7 +440,9 @@ def main():
     
     truth = None
     scan = None
+    gate = None
     chain_key = args.chain
+    resolved_run_dir: Optional[Path] = None
     
     if args.rolling:
         # Use rolling artifacts
@@ -394,6 +463,7 @@ def main():
                 truth = load_truth_report(rd)
                 if truth:
                     scan = load_scan_report(rd)
+                    resolved_run_dir = rd
                     chain_key = args.chain
                     break
         else:
@@ -407,6 +477,7 @@ def main():
                     run_dir = Path(run_dir_rel)
                     truth = load_truth_report(run_dir)
                     scan = load_scan_report(run_dir)
+                    resolved_run_dir = run_dir
         if truth is None:
             print("ERROR: Could not load truth_report from rolling artifacts", file=sys.stderr)
             sys.exit(1)
@@ -414,6 +485,7 @@ def main():
         run_dir = Path(args.run_dir)
         truth = load_truth_report(run_dir)
         scan = load_scan_report(run_dir)
+        resolved_run_dir = run_dir
         chain_key = chain_key or truth.get("chain_key", "") if truth else ""
         if truth is None:
             print(f"ERROR: No truth_report found in {run_dir}", file=sys.stderr)
@@ -429,11 +501,16 @@ def main():
             truth = load_truth_report(rd)
             if truth:
                 scan = load_scan_report(rd)
+                resolved_run_dir = rd
                 chain_key = chain_key or truth.get("chain_key", "")
                 break
         if truth is None:
             print("ERROR: No runDir with truth_report found", file=sys.stderr)
             sys.exit(1)
+    
+    # R39g: Load gate_result for gate vs profit blocker analysis
+    if resolved_run_dir:
+        gate = load_gate_result(resolved_run_dir)
     
     trace = extract_pair_trace(truth, scan)
     cf = counterfactual_analysis(trace)
@@ -447,6 +524,11 @@ def main():
         if truth:
             output["quote_source_summary"] = truth.get("quote_source_summary")
             output["oe_rejection_funnel"] = truth.get("oe_rejection_funnel")
+        if gate:
+            output["gate_result"] = {
+                "status": gate.get("status"),
+                "reasons": gate.get("reasons", []),
+            }
         print(json.dumps(output, indent=2, default=str))
     else:
         print_pair_funnel(trace, chain_key)
@@ -454,6 +536,9 @@ def main():
         if truth:
             _print_oe_funnel(truth)
         print_counterfactual(cf)
+        # R39g: Gate vs profit blocker summary
+        if truth:
+            _print_gate_vs_blocker(gate, trace, truth)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,66 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-23 (R39e -- **Market verdicts corrected + calibration universe.** 2293 tests PASS. Dense productive contour improved signal density materially on arb but did not unlock profit. Fresh RCA shows healthy-chain signals survive to real RT and fail on economics; density improved, profit proximity did not. Base remains quote-path constrained. Mantle/scroll/linea are economics/mixed-source, not pure adapter gaps.)
-**Tests**: 2293 passed / 5 skipped
+**Updated**: 2026-03-23 (R39g -- **Gate accuracy fix + blocker classification.** 2306 tests PASS. Coverage gate fixed for thin productive contours (hot_requote). Blocker classification: INFRA_FAIL no longer masks economics data. pair_level_rca gate-vs-profit-blocker section added.)
+**Tests**: 2306 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R39e: market verdicts + calibration (2026-03-23). R39d: quality-ranked pair selection (2026-03-23). R39c: EXECUTABLE_BEST_NEG + route-level RCA (2026-03-23). R39b: sweep field fix + chain_stats + pair_trace gas (2026-03-23). R39a: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
+**Evidence**: R39g: gate accuracy + blocker classification (2026-03-23). R39f: source coverage audit (2026-03-23). R39e: market verdicts + calibration (2026-03-23). R39d: quality-ranked pair selection (2026-03-23). R39c: EXECUTABLE_BEST_NEG + route-level RCA (2026-03-23). R39b+a: sweep field + frontier fix (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R39g -- Gate Accuracy + Blocker Classification Fix
+
+Lead's canonical scan (42 runs, 233 signals, 36 RT evaluated, 0 profitable, $318.19) proved that current FAIL labels mask the true economics blocker on healthy chains. arb: 7/7 PASS, 224 signals, 27 real_quotes, 4 RT evaluated, all negative — pure economics blocker. Secondary chains (zksync, mantle, scroll, linea) show coverage gate FAILs (`pairs_count < 5`) because `hot_requote` universe source used strict thresholds designed for full `config` universes. These gate FAILs inflate fail/runs ratio, causing `INFRA_FAIL` blocker classification that hides real economics data.
+
+### Fixes (R39g)
+1. **scripts/ci_m5_0_gate.py** — `hot_requote` universe source now uses relaxed coverage thresholds (min_pairs=1, min_pools=2), same as `discovery_runtime`. Thin productive contours (zksync=2, linea=3, scroll=3, mantle=4 pairs) no longer trigger spurious COVERAGE FAIL.
+2. **strategy/chain_stats.py** — `_compute_blocker_evidence()` INFRA_FAIL gate: before assigning INFRA_FAIL, checks if `roundtrip_evaluated_total > 0` or `real_quote_count_total > 0` or OE `total_opportunities > 0`. If chain produced real data, bypasses INFRA_FAIL and falls through to economics/rejection classification. Same pattern for NO_SIGNAL: bypassed when RT or real_quote data exists.
+3. **scripts/pair_level_rca.py** — New `_print_gate_vs_blocker()` section: separates gate status (PASS/FAIL with reasons) from actual profit blocker (OE_ECONOMICS, MIXED_SOURCE, etc.). Also added `load_gate_result()` and `_derive_profit_blocker()`.
+
+### Expected Blocker Reclassification (after fix)
+| Chain | Old Blocker | New Blocker | Evidence |
+|-------|-------------|-------------|----------|
+| arbitrum_one | OE_ECONOMICS | OE_ECONOMICS (unchanged) | 7/7 PASS, pure economics |
+| zksync | INFRA_FAIL | **OE_ECONOMICS** | fail/runs=5/7 but rt=2, NET_PROFIT 80% |
+| mantle | INFRA_FAIL | **MIXED_SOURCE** | fail/runs=5/7 but rt=4, MIXED_SOURCE 61.5% |
+| linea | INFRA_FAIL | **QUOTE_PATH_CONSTRAINED** | fail/runs=7/7, OE=6 opps, xdex=3 |
+| scroll | INFRA_FAIL | **MIXED_SOURCE** | fail/runs=7/7 but rt=2, MIXED_SOURCE 50% |
+| base | OE_ECONOMICS | OE_ECONOMICS (unchanged) | SLOT0_DIAGNOSTIC path, sweep evidence |
+
+### Tests (+10)
+- `test_r39g_gate_blocker.py`: coverage gate hot_requote (2), blocker INFRA_FAIL bypass (3), NO_SIGNAL bypass (1), _derive_profit_blocker (4).
+
+---
+
+## R39f -- Source Coverage Audit + Dual-Route Contract
+
+Cross-DEX spread directions are fully checked in both directions (emit_dual_routes=true default, verified by contract test). Same-DEX remains diagnostic-only and not all project DEX sources are active in runtime. Current active coverage is 25/27 declared config sources across the six active chain configs, with base.aerodrome and arbitrum_one.sushiswap_v2 inactive, and the ambient adapter unwired from dexes.yaml entirely.
+
+### Declared vs Active vs Productive Sources (step 9)
+| Chain | Declared | Active | Missing | Excluded Pairs | Policy |
+|-------|----------|--------|---------|----------------|--------|
+| arbitrum_one | 6 | 5/6 | sushiswap_v2 | none | sushiswap_v2 out-of-scope (V2, low volume) |
+| base | 4 | 3/4 | aerodrome | none | aerodrome blocked: VE33_QUOTE_FAILED |
+| linea | 4 | 4/4 | none | none | full coverage |
+| mantle | 4 | 4/4 | none | none | full coverage |
+| scroll | 5 | 5/5 | none | SCR/*, STONE/* | excludes = noise reduction policy |
+| zksync | 4 | 4/4 | none | ZK/*, HOLD/* | excludes = noise reduction policy |
+| **Total** | **27** | **25/27** | **2** | | |
+
+**ambient**: adapter exists (dex/adapters/ambient.py) and registry import present, but NOT in dexes.yaml or any active config. Classified as tech debt / out-of-scope.
+
+### Policy Decisions (R39f)
+1. **emit_dual_routes=true**: mandatory contract, locked by TestDualRouteContract (3 tests).
+2. **Same-DEX**: diagnostic-only (`same_dex_verification: true` in real_minimal.yaml). Not truth-path. No selective config key needed yet.
+3. **base.aerodrome**: priority #1 source-expansion target. Blocked by VE33_QUOTE_FAILED. Next: fix quote path in quotes.py / quote_adapters.py.
+4. **arb.sushiswap_v2**: out-of-scope for current productive strategy (V2 AMM, low volume on arb).
+5. **ambient**: tech debt, no runtime use. Not blocking any chain.
+6. **excluded_pair_hints (zksync: ZK/*, scroll: SCR/*, STONE/*)**: intentional noise-reduction policy, not infra gaps.
+7. **Source-expansion acceptance**: same criteria as R39e — change accepted only if real_quote_count, RT-evaluated, route diversity, or best RT gap improves.
+
+### Code Changes (R39f)
+1. **tests/unit/test_spread_signals.py** -- +3 TestDualRouteContract tests: both_directions_emitted, single_direction_when_emit_dual_false, require_cross_dex_blocks_same_dex.
 
 ---
 
@@ -248,68 +303,26 @@ R35 follow-up resolved the user-visible stream regression. The hot-loop frontier
 
 ---
 
-## R34 — Fix Stream-to-Analysis Signal Loss
-
-R33 same-session scan proved stream-to-analysis signal loss: top_signals are present in hot_loop and spread_signals are present in truth reports, but live_stream.verified_pairs/diagnostic_pairs are empty because reprieve-only paths crash in run_scan_real.py (token_decimals/rt_top_n unbound) and live_stream.py still builds rows only from roundtrip_results.
-
-### Code Changes (17 new tests)
-1. **strategy/jobs/run_scan_real.py** — Hoisted `token_decimals = {}` before `if opps_list:` block (was causing UnboundLocalError on reprieve path).
-2. **strategy/jobs/run_scan_real.py** — Hoisted `_rt_top_n` default before conditional (same pattern).
-3. **strategy/jobs/run_scan_real.py** — Reworked except block to preserve sweep_reprieve_count/stats/dynamic_sweep and attempt live_stream recovery.
-4. **strategy/live_stream.py** — Full rewrite with 3-tier row building: RT → dynamic_sweep → sweep_candidates (reprieve).
-5. **strategy/rolling_outputs.py** — `_serialize_live_stream` uses `per_chain["last_live_candidates"]` as fallback (survives after `_clear_active_run`).
-6. **strategy/artifacts.py** — `_build_roundtrip_summary` propagates error, sweep_reprieve_count, sweep_reprieve_stats.
-
-### R34 Acceptance Criteria (all PASS)
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| `diagnostic_pairs` non-empty | ✅ PASS | 5 entries (USDC/DAI, WETH/PENDLE, WETH/WBTC, etc.) |
-| `sweep_reprieve_count > 0` in truth | ✅ PASS | 13 in ci_m5_gate_arbitrum_one_20260322_101413_617724 |
-| `runs_with_sweep > 0` in long_scan | ✅ PASS | 2 |
-| No `roundtrip.error` in fresh scan | ✅ PASS | `error: None` |
+## R34 — Fix Stream-to-Analysis Signal Loss (condensed)
+- Fixed live_stream.verified_pairs/diagnostic_pairs being empty (token_decimals/rt_top_n unbound on reprieve path).
+- live_stream.py rewrite: 3-tier row building (RT → dynamic_sweep → sweep_candidates).
+- Hot loop canonical guard: non-canonical sessions skip HOT_LOOP_LATEST write.
+- +17 tests.
 
 ---
 
-## R33 — Start.py Extraction + Reprieve Runtime Validation
-
-### Code Changes (7 files, 25 new tests)
-1. **strategy/roundtrip_selection.py** — `select_sweep_reprieve_candidates()`: NET_PROFIT_TOO_LOW rejects with both legs quoter_v2 + cross-DEX get promoted to sweep for wide-size frontier re-check.
-2. **strategy/jobs/run_scan_real.py** — Sweep reprieve wiring: when `eligible_opps` empty, reprieve candidates are passed to `run_sweep()`.
-3. **start.py** — 4 new per-chain stats: `last_truth_verdict`, `last_quote_source_summary`, `last_oe_rejection_funnel`, `blocker_evidence`. Auto-computed `_compute_blocker_evidence()` with 6-value taxonomy.
-4. **strategy/quotes.py** — Quoter_v2 skip cache: after 3 consecutive failures, quoter_v2 is bypassed for 10 minutes.
-5. **m4/fixtures.py** — truth_verdict is PRIMARY operator field, placed first in run_summary.
-6. **scripts/pair_level_rca.py** — `_rt_gas_bps()` fixes latent bug (gas always 0 in counterfactuals), `_print_oe_funnel()`.
-7. **strategy/quote_metrics.py** — `quoter_v2_skipped` counter.
-
-### Tests (+25: 8 sweep reprieve, 10 blocker taxonomy, 7 skip cache)
-
-### Blocker Taxonomy (auto-computed)
-Priority: ROUNDTRIP_PROFITABLE > INFRA_FAIL > NO_SIGNAL > QUOTE_PATH_BLOCKED > OE_ECONOMICS > MIXED_SOURCE
+## R33 — Start.py Extraction + Reprieve Runtime Validation (condensed)
+- Sweep reprieve: NET_PROFIT_TOO_LOW rejects with cross-DEX get sweep re-check.
+- Blocker taxonomy: 6-value auto-computed (`_compute_blocker_evidence()`).
+- Quoter_v2 skip cache: 3 failures → 10-min bypass.
+- +25 tests.
 
 ---
 
-## R31 — OE Bottleneck Diagnosis + truth_verdict + quote_source_summary
-
-### Architectural Changes (3 new artifact fields)
-1. **truth_verdict**: 4-value domain [NO_DATA, ROUNDTRIP_PROFITABLE, DIAGNOSTIC_PROFIT_ONLY, NO_PROFIT]
-2. **quote_source_summary**: Per-DEX:fee breakdown of executable/diagnostic/quoter_v2_failed
-3. **oe_rejection_funnel**: Total/gated/rejected/reasons from OE gate
-
-### 43-Run Evidence (R31)
-| Metric | Value |
-|--------|-------|
-| Signals total | 308 |
-| Net USDC (diag) | $560.16 |
-| Profitable RT | 0 |
-| truth_verdict | DIAGNOSTIC_PROFIT_ONLY |
-| Pass chains | arbitrum_one, linea, scroll |
-| Fail chains | zksync, base, mantle |
-
-### OE Rejection Funnel (arb primary)
-NET_PROFIT_TOO_LOW: 118 (57%), SUSPECT_SPREAD_HARD: 46 (22%), MIXED_SOURCE: 21 (10%), NOTIONAL_DRIFT: 19 (9%)
-
-### Key RCA Finding
-Primary blocker = **economics at $10 probe** (NET_PROFIT_TOO_LOW = 57%), NOT quoter failures (quoter_v2 success rate = 91.7%).
+## R31 — OE Bottleneck Diagnosis (condensed)
+- truth_verdict (4-value), quote_source_summary (per-DEX:fee), oe_rejection_funnel (total/gated/rejected/reasons).
+- 43-run evidence: 308 signals, $560.16 diag, 0 profitable. Primary blocker = economics at $10 probe (NET_PROFIT_TOO_LOW 57%).
+- +14 tests.
 
 ---
 
