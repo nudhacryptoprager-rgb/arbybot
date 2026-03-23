@@ -1011,7 +1011,7 @@ def run_scan(
         _sweep_is_executable = (
             _sweep_best_size is not None
             and _sweep_best_size > 0
-            and _sweep_frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE")
+            and _sweep_frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE", "EXECUTABLE_BEST_NEG")
             and _sweep_total_cost is not None
             and _sweep_total_cost > 0
             and _sweep_slip is not None
@@ -1058,7 +1058,7 @@ def run_scan(
             _err_is_executable = (
                 _err_sweep_size is not None
                 and _err_sweep_size > 0
-                and _err_frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE")
+                and _err_frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE", "EXECUTABLE_BEST_NEG")
                 and _err_total_cost is not None
                 and _err_total_cost > 0
                 and _err_slip is not None

@@ -272,10 +272,19 @@ def update_chain_stats(
                 stats["sweep_measured_total_cost_bps"] = _tcost if _tcost is not None else sweep.get("best_total_cost_bps")
                 # R36: Track frontier_reason to distinguish ALL_FAILED (no quotes) from
                 # BEST_NEG (genuine zero/negative) in downstream summary aggregation.
-                stats["sweep_best_frontier_reason"] = (
+                _raw_reason = (
                     sweep.get("best_frontier_reason")
                     or sweep.get("sweep_best_frontier_reason")
                 )
+                # R39b: Upgrade BEST_NEG → EXECUTABLE_BEST_NEG when measured costs
+                # are populated (proven by real quotes, not just paper boundary).
+                if (
+                    _raw_reason == "BEST_NEG"
+                    and stats.get("sweep_measured_slippage_bps") is not None
+                    and stats.get("sweep_measured_gas_bps") is not None
+                ):
+                    _raw_reason = "EXECUTABLE_BEST_NEG"
+                stats["sweep_best_frontier_reason"] = _raw_reason
         ctx = summary.get("run_context", {})
         stats["last_run_timestamp"] = ctx.get("run_timestamp", stats["last_run_timestamp"])
         # Richer snapshot fields

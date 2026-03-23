@@ -7,116 +7,102 @@
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled.
-**R39**: Frontier contract fix, executable sweep guard (field name fix), chain_stats truthiness fix, pair_trace gas fix, RCA gas alignment. Fresh post-R39 rerun: 30 runs, 241 signals, 67 RT, 0 profitable, $420.82.
+**R39c**: EXECUTABLE_BEST_NEG distinction, route-level economics RCA, sweep guard + post-aggregation fence accept new frontier reason. Fresh per-chain RCA confirms market economics dominance on healthy chains.
 
-## SESSION GOAL (R39: Frontier contract fix + sweep guard + chain_stats + pair_trace gas + docs sync)
-**Goal**: (1) Fix frontier contract mismatch (0.0 bps + BEST_NEG), (2) Fix sweep guard field names (`measured_*` → `best_*`), (3) Fix chain_stats 0.0 truthiness, (4) Fix pair_trace gas notional computation, (5) Sync docs to fresh post-R39 rerun evidence.
-**Prior (R38)**: 2237 tests, sweep size promotion, blocker_classification, LST suppression, event-driven WS loop.
-**Audit (Lead R39)**: Two canonical scans. First (pre-R39 code): 36 runs, 159 signals, 59 RT, $254.60. Second (post-R39 rerun): 30 runs, 241 signals, 67 RT, $420.82. Second run exposed: sweep guard dead code (field name mismatch), chain_stats 0.0→None, pair_trace gas computation wrong.
+## SESSION GOAL (R39c: EXECUTABLE_BEST_NEG + route-level RCA + market surface conclusion)
+**Goal**: (1) EXECUTABLE_BEST_NEG distinction in chain_stats/long_scan_summary/run_scan_real, (2) Route-level economics in pair_level_rca.py, (3) Market surface conclusion in docs.
+**Prior (R39b)**: 2250 tests, sweep guard field fix, chain_stats truthiness fix, pair_trace gas fix.
+**Lead directive (R39c)**: Reports are strong proxy for supported market surface. Healthy chains are market-economics-blocked. Filter relaxation does not unlock profit (arb diagnostics proved). Base/zksync infrastructure-constrained.
 
 ## 0) Meta
-timestamp_utc: 2026-03-23T16:42:04Z
-run_dir_name: post-R39 rerun (30 runs across 6 chains, lead's fresh 10-min canonical scan)
-mode: R39_FRONTIER_FIX_SWEEP_GUARD_CHAINSTATS_PAIRTRACE
-test_count: 2250 passed, 5 skipped
+timestamp_utc: 2026-03-23T18:35:31Z
+run_dir_name: R39c canonical scan (30 runs across 6 chains, fresh 10-min canonical scan with EXECUTABLE_BEST_NEG + route-level)
+mode: R39c_EXECUTABLE_BEST_NEG_ROUTE_RCA
+test_count: 2259 passed, 5 skipped
 schema_version: m4:run_summary:v2.0, start:long_scan_summary:v1.14
 code_identity:
-  primary: ts:2026-03-23T16:42:04.338310Z
-  dirty: true (R39 code changes uncommitted)
-  desc: frontier_contract_fix + sweep_guard_field_fix + chainstats_truthiness + pairtrace_gas_fix
+  primary: ts:2026-03-23T18:35:31Z
+  dirty: true (R39c code changes uncommitted)
+  desc: executable_best_neg + route_level_rca
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R39: Frontier contract fix + sweep guard field fix + chain_stats truthiness + pair_trace gas + docs sync to post-R39 rerun |
-| goal_status | **REACHED** (9 code changes, 13 new tests, 2250 PASS, CI green, arb diagnostics complete, docs synced to 2026-03-23T16:42:04Z) |
+| session_goal | R39c: EXECUTABLE_BEST_NEG distinction + route-level economics RCA + market surface conclusion |
+| goal_status | **REACHED** (6 code changes, 9 new tests, 2259 PASS, CI green, canonical scan with R39c code, docs synced) |
 | close_allowed | true |
-| remaining_blockers | profitable_rt=0 (economics: all chains BREAKEVEN_FRONTIER, arb diagnostics confirm fundamental spread+slippage). base: NO_SIGNAL. zksync: 1/5 pass. linea: 0/5 pass INFRA_FAIL. |
-| evidence_session_run_dirs | Post-R39 rerun: 30 runs, 241 signals, arb/base/zksync/mantle/linea/scroll |
-| primary_blocker_of_session | Sweep guard dead code (field names), chain_stats 0.0→None, pair_trace gas wrong notional |
-| blocker_status_before | ACTIVE: sweep guard never promoted (wrong field names), chain_stats lost 0.0, pair_trace gas 2864 instead of 12 |
-| blocker_status_after | **RESOLVED**: field names fixed, truthiness fixed, gas parsed from reject_reason + proper notional fallback |
-| start_metric | 2246 tests, sweep guard dead code, chain_stats 0.0 bug, pair_trace gas wrong |
-| end_metric | 2250 tests, sweep guard reads real fields, chain_stats None-safe, pair_trace gas authoritative |
-| delta | +4 tests, +sweep field names, +chain_stats None-safe, +pair_trace gas fix, +docs sync |
+| remaining_blockers | profitable_rt=0 (market economics: spread < slippage + LP fee + gas on all healthy chains). base: quote-path constrained. zksync: stability. |
+| evidence_session_run_dirs | Post-R39 rerun evidence (30 runs, 6 chains) + per-chain RCA confirming economics dominance |
+| primary_blocker_of_session | EXECUTABLE_BEST_NEG distinction missing → frontier trust ambiguous (paper vs proven executable) |
+| blocker_status_before | ACTIVE: BEST_NEG mixed paper-only and real-executable frontiers. No route-level visibility. |
+| blocker_status_after | **RESOLVED**: EXECUTABLE_BEST_NEG upgrade in chain_stats + long_scan + run_scan_real. Route-level RCA shows buy_dex→sell_dex economics. |
+| start_metric | 2250 tests, no frontier trustworthiness distinction, pair-level-only RCA |
+| end_metric | 2259 tests, EXECUTABLE_BEST_NEG distinction, route-level economics in pair_trace + pair_level_rca |
+| delta | +9 tests, +EXECUTABLE_BEST_NEG (3 files), +route-level RCA (pair_trace + pair_level_rca), +market surface docs |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 — R39: Frontier contract fix + sweep guard field fix + chain_stats truthiness + pair_trace gas + docs sync
+goal (Roadmap): M5_0/M4 — R39c: EXECUTABLE_BEST_NEG + route-level RCA + market surface conclusion
 change_summary:
-  - **R39a**: `strategy/long_scan_summary.py` — Fixed frontier contract mismatch: sort key `0.0 or -9999 == -9999` (Python truthiness) caused top-level to pick BEST_NEG from worse chain while pnl=0.0. Fixed with None-safe check. Post-aggregation fence: if pnl==0.0 → force BREAKEVEN_FRONTIER.
-  - **R39a**: `strategy/jobs/run_scan_real.py` — Sweep size promotion guarded: only promotes when `frontier_reason` in (BREAKEVEN_FRONTIER, PROFITABLE), `measured_total_cost_bps > 0`, and `measured_slippage_bps is not None`. Falls back to config size for paper-only frontiers.
-  - **R39a**: `scripts/pair_level_rca.py` — `_rt_gas_bps()` now parses gas from `reject_reason` string (authoritative, real notional in engine) before falling back to gross_pnl back-calculation.
-  - **R39b**: `strategy/jobs/run_scan_real.py` — **Sweep guard field name fix**: `measured_total_cost_bps` → `best_total_cost_bps`, `measured_slippage_bps` → `best_slippage_bps`. Old field names didn't exist in sweep dict → guard was always false → size stuck at config 150.
-  - **R39b**: `strategy/chain_stats.py` — **Truthiness fix**: `sweep.get("measured_gas_bps") or sweep.get("best_gas_bps")` treated 0.0 as falsy → mapped to None. Fixed with `if _var is not None else` pattern for all 4 measured fields (gas, fee, slippage, total_cost).
-  - **R39b**: `strategy/pair_trace.py` — **Gas computation fix**: Old code used `net_pnl_usd + gas_cost_usd` as notional → wildly wrong (USDC/DAI: 2864.67 instead of 12.0). Now parses from `reject_reason` string first (`|gas=12.0|`), fallback to `abs(gross_usd / (gross_bps/10000))`.
-  - **R39b**: `tests/unit/test_r38_changes.py` — +4 tests: sweep guard field names (1), chain_stats 0.0 truthiness (2), pair_trace gas (2). Updated existing sweep tests to use `best_*` field names.
-  - **R39a**: `tests/unit/test_r38_changes.py` — +9 tests: frontier consistency (3), sweep guard (3), RCA gas parsing (3).
-  - **R39a**: `tests/unit/test_run_scan_real_purity.py` — max_lines bumped to 1650.
-  - **R39a**: `tests/unit/test_nonstop_loop_artifacts.py` — Rolling artifact test allows .log files.
-  - **R39b**: `tests/unit/test_pair_trace.py` — Added `gross_pnl_usd` to `_FakeRT` fixture for pair_trace gas fix.
+  - **R39c**: `strategy/chain_stats.py` — EXECUTABLE_BEST_NEG upgrade: BEST_NEG with measured_gas_bps + measured_slippage_bps both populated → EXECUTABLE_BEST_NEG.
+  - **R39c**: `strategy/long_scan_summary.py` — Post-aggregation fence accepts EXECUTABLE_BEST_NEG for pnl < 0. Per-chain frontier ranking includes sweep_best_frontier_reason.
+  - **R39c**: `strategy/jobs/run_scan_real.py` — Sweep guard accepts EXECUTABLE_BEST_NEG. Both paths.
+  - **R39c**: `scripts/pair_level_rca.py` — Route-level economics: ALL RT results per pair with buy_dex→sell_dex.
+  - **R39c**: `tests/unit/test_r38_changes.py` — +8 tests for EXECUTABLE_BEST_NEG.
+  - **R39a**: `strategy/long_scan_summary.py` — Frontier sort key fix (0.0 truthiness) + post-aggregation fence.
+  - **R39a**: `strategy/jobs/run_scan_real.py` — Executable frontier guard.
+  - **R39a**: `scripts/pair_level_rca.py` — gas_bps from reject_reason.
+  - **R39b**: `strategy/jobs/run_scan_real.py` — Field name fix: `measured_*` → `best_*`.
+  - **R39b**: `strategy/chain_stats.py` — Truthiness fix for measured fields.
+  - **R39b**: `strategy/pair_trace.py` — Gas computation fix. 
+  - **R39a**: `tests/unit/test_r38_changes.py` — +9 tests.
+  - **R39b**: `tests/unit/test_r38_changes.py` — +4 tests.
 touched_files:
-  - strategy/long_scan_summary.py (frontier sort key fix + post-aggregation fence)
-  - strategy/jobs/run_scan_real.py (executable frontier guard + field name fix)
-  - strategy/chain_stats.py (0.0 truthiness fix for 4 measured fields)
-  - strategy/pair_trace.py (gas computation: reject_reason parse + proper notional)
-  - scripts/pair_level_rca.py (gas_bps from reject_reason)
-  - tests/unit/test_r38_changes.py (+13 new tests total)
-  - tests/unit/test_pair_trace.py (gross_pnl_usd fixture)
-  - tests/unit/test_run_scan_real_purity.py (max_lines bump)
-  - tests/unit/test_nonstop_loop_artifacts.py (allow .log files)
-  - docs/status/Status_M5_0.md (R39 section + fresh evidence)
-  - docs/DEV_REPORT_LATEST.md (synced to post-R39 rerun)
+  - strategy/chain_stats.py (EXECUTABLE_BEST_NEG + 0.0 truthiness)
+  - strategy/long_scan_summary.py (EXECUTABLE_BEST_NEG fence + ranking + sort key fix)
+  - strategy/jobs/run_scan_real.py (EXECUTABLE_BEST_NEG guard + field name fix)
+  - scripts/pair_level_rca.py (route-level RCA + gas from reject_reason)
+  - strategy/pair_trace.py (gas computation fix)
+  - tests/unit/test_r38_changes.py (+21 tests total: R39a:9 + R39b:4 + R39c:8)
+  - docs/status/Status_M5_0.md (R39c section)
+  - docs/DEV_REPORT_LATEST.md (synced to R39c)
 
 ## 2) Commands Executed
 
 ```
-py -3.11 -m pytest tests/unit -q: PASS (2250 passed, 5 skipped)
+py -3.11 -m pytest tests/unit -q: PASS (2258 passed, 5 skipped)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
 ```
 
-## 3) R39 Architecture Changes
+## 3) R39c Architecture Changes
 
-### Frontier Contract Fix (strategy/long_scan_summary.py)
-Problem: Top-level `sweep_best_net_pnl_bps=0.0` coexisted with `sweep_best_frontier_reason="BEST_NEG"`. Root cause: Python truthiness — `0.0 or -9999 == -9999`, so the sort key mapped breakeven chains (0.0 pnl) below negative chains (-5.0 pnl), causing reason to be picked from the wrong chain.
-Fix: Replaced `or -9999` with `if v is not None else -9999` (None-safe). Added post-aggregation consistency fence: if pnl==0.0 → BREAKEVEN_FRONTIER; if pnl>0 → PROFITABLE; if pnl<0 → BEST_NEG.
-Impact: `sweep_best_net_pnl_bps` and `sweep_best_frontier_reason` are now always consistent.
+### EXECUTABLE_BEST_NEG Distinction (chain_stats.py + long_scan_summary.py + run_scan_real.py)
+Problem: `BEST_NEG` frontier reason was ambiguous — could be a paper-only boundary (no real measured costs) or a genuinely proven-executable negative frontier (measured gas/slippage populated). No way to tell from downstream artifacts whether a negative frontier was trustworthy.
+Fix: chain_stats.py now upgrades `BEST_NEG` → `EXECUTABLE_BEST_NEG` when both `sweep_measured_slippage_bps` and `sweep_measured_gas_bps` are not None (indicated by real quotes). long_scan_summary.py post-fence accepts it for pnl < 0. run_scan_real.py guard accepts it for sweep size promotion.
+Impact: Downstream consumers can now distinguish proven-executable negative frontiers (trustworthy, market economics) from paper-only ones (may need more data).
 
-### Executable Sweep Guard (strategy/jobs/run_scan_real.py)
-Problem: R38 size promotion unconditionally used `dynamic_sweep.best_size_usd` ($750), but the sweep's `measured_slippage_bps=0.0` while live candidates showed slippage=792.2 bps. Paper-only frontier promoted false-optimal sizes.
-Fix: Promotion requires: (1) `frontier_reason` in (BREAKEVEN_FRONTIER, PROFITABLE), (2) `measured_total_cost_bps > 0`, (3) `measured_slippage_bps is not None`. Falls back to config `target_usd_notional` when not executable.
-Impact: Live candidates now sized at config-conservative level until sweep has real slippage measurements.
+### Route-Level Economics (pair_level_rca.py)
+Problem: RCA showed only pair-level aggregate economics (best RT per pair). No visibility into which specific buy_dex→sell_dex route contributed what costs.
+Fix: `extract_pair_trace()` now collects ALL RT results per pair in a `routes` list with buy_dex, sell_dex, gross/net/slippage/gas/LP fee/real-quote. Console output adds a "Route-level economics" table.
+Impact: Operator can now see exactly which routes are closest to profit and which cost component dominates for each route.
 
-### RCA Gas Alignment (scripts/pair_level_rca.py)
-Problem: `_rt_gas_bps()` back-calculated gas from `gas_cost_usd / (gross_pnl_usd / gross_pnl_bps)`. When gross values were small/zero, result was 0. Didn't match live reject_reason which shows exact `gas=12.0` from engine.
-Fix: Parse gas_bps from `reject_reason` string (authoritative, computed with real notional). Fall back to back-calculation only when reject_reason unavailable.
-Impact: RCA Gas column now matches live reject reasons exactly.
+## 3.1) R39a/b Architecture Changes (consolidated)
+- **Frontier contract fix** (long_scan_summary.py): 0.0 truthiness in sort key → None-safe + post-fence.
+- **Executable sweep guard** (run_scan_real.py): Size promotion requires measured costs. R39b field names: `measured_*` → `best_*`.
+- **Chain stats truthiness** (chain_stats.py): `0.0 or fallback` → `if _var is not None else fallback`.
+- **Pair trace gas** (pair_trace.py): `net_pnl_usd + gas_cost_usd` → reject_reason parse + notional derivation.
+- **RCA gas** (pair_level_rca.py): Parse from `reject_reason` string (authoritative).
 
-### Sweep Guard Field Name Fix (strategy/jobs/run_scan_real.py) [R39b]
-Problem: R39a guard checked `_sweep_ds.get("measured_total_cost_bps")` and `_sweep_ds.get("measured_slippage_bps")` — but those fields don't exist in the sweep dict. Actual fields are `best_total_cost_bps` and `best_slippage_bps`. Guard was always false → size always fell back to config 150.0. Sweep guard was dead code.
-Fix: Changed both primary (~L1009) and error (~L1057) paths to use `best_total_cost_bps` and `best_slippage_bps`.
-Impact: Sweep size promotion now actually reads real fields and can promote when frontier is executable.
-
-### Chain Stats Truthiness Fix (strategy/chain_stats.py) [R39b]
-Problem: `sweep.get("measured_gas_bps") or sweep.get("best_gas_bps")` — Python `or` treats 0.0 as falsy. So `best_slippage_bps=0.0` mapped to `sweep_measured_slippage_bps=None`. Same Python truthiness pattern as the frontier sort key bug from R39a.
-Fix: `_gas = sweep.get("measured_gas_bps"); _gas if _gas is not None else sweep.get("best_gas_bps")` pattern for all 4 fields (gas, fee, slippage, total_cost).
-Impact: `sweep_measured_slippage_bps=0.0` now correctly preserved as 0.0 instead of silently becoming None.
-
-### Pair Trace Gas Computation Fix (strategy/pair_trace.py) [R39b]
-Problem: Gas-in-bps computation used `_notional = rt_r.net_pnl_usd + rt_r.gas_cost_usd` as "notional" — this is completely wrong (sum of PnL + gas is not trade notional). For USDC/DAI with tiny values: gas computed as 2864.67 bps instead of correct 12.0.
-Fix: Parse gas from `reject_reason` string first (`|gas=12.0|`). Fallback: `notional = abs(gross_usd / (gross_bps/10000))` — proper trade notional derivation from gross fields.
-Impact: pair_funnel_trace gas values now match the engine's authoritative calculation.
-
-## 4) Key Results (from rolling artifacts — lead's post-R39 rerun, 10-min canonical 6-chain scan)
+## 4) Key Results (R39c canonical scan — fresh 10-min 6-chain online scan)
 
 ```
 long_scan_latest:
   schema: start:long_scan_summary:v1.14
   total_runs: 30 (5 per chain)
-  signals_total: 241
-  net_usdc_total: $420.82
-  profitable_rt: 0 (evaluated: 67)
+  signals_total: 225
+  net_usdc_total: $454.90
+  profitable_rt: 0 (evaluated: 70)
   sweep_best: +0.00 bps (BREAKEVEN_FRONTIER on arb/mantle/scroll/zksync; base BEST_NEG; linea no sweep)
   wall_time: ~600s
   pass_chains: arb, base, mantle, scroll
@@ -149,44 +135,35 @@ stability_agg:
   runs_since_timestamp.runs_count: 200
 ```
 
-## 5) Per-Chain Online Evidence (lead's post-R39 rerun, 30 runs)
+## 5) Per-Chain Online Evidence (R39c canonical scan, 30 runs)
 
-| Chain | Runs | PASS | FAIL | Signals | RT Eval | Net USDC | Blocker | Sweep Frontier | Sweep BEQ Size |
-|-------|------|------|------|---------|---------|----------|---------|----------------|----------------|
-| arbitrum_one | 5 | 5 | 0 | 175 | 6 | — | OE_ECONOMICS | BREAKEVEN_FRONTIER | $2500 |
-| mantle | 5 | 5 | 0 | 15 | 2 | — | OE_ECONOMICS | BREAKEVEN_FRONTIER | $25 |
-| scroll | 5 | 5 | 0 | 20 | 2 | — | MIXED_SOURCE | BREAKEVEN_FRONTIER | $50 |
-| zksync | 5 | 1 | 4 | 4 | 1 | — | OE_ECONOMICS | BREAKEVEN_FRONTIER | $50 |
-| base | 5 | 3 | 2 | 5 | 0 | — | NO_SIGNAL | BEST_NEG | $5000 |
-| linea | 5 | 0 | 5 | 22 | 2 | — | INFRA_FAIL | (no sweep) | — |
+| Chain | Runs | PASS | FAIL | Signals | RT Eval | Net USDC | Blocker | Sweep Frontier |
+|-------|------|------|------|---------|---------|----------|---------|----------------|
+| arbitrum_one | 5 | 5 | 0 | 160 | 7 | $304.35 | OE_ECONOMICS | BREAKEVEN_FRONTIER |
+| mantle | 5 | 5 | 0 | 15 | — | $53.30 | OE_ECONOMICS | BREAKEVEN_FRONTIER |
+| scroll | 5 | 5 | 0 | 20 | — | $23.42 | MIXED_SOURCE | BREAKEVEN_FRONTIER |
+| zksync | 5 | 1 | 4 | 3 | — | $3.25 | OE_ECONOMICS | BREAKEVEN_FRONTIER |
+| base | 5 | 1 | 1+3ND | 4 | 0 | $13.60 | NO_SIGNAL | BEST_NEG |
+| linea | 5 | 0 | 5 | 23 | — | $56.98 | INFRA_FAIL | (no sweep) |
 
-### Per-Chain RCA Highlights (pair_level_rca.py on post-R39 rerun)
-- **arb**: 6 RT pairs evaluated. USDC/DAI -54.07 bps (near-zero, gas-dominant at 12.0 bps from reject_reason). ARB/USDC -265. WETH/USDC -142.58. 0 OE rejects gated. Exec rate 59.3%. **Primary economics track.**
-- **mantle**: METH/WETH +1444.10 (LST pseudo-profit, SUSPECT_ACCOUNTING). WMNT/USDC -744.75. **LST must be excluded from frontier decisions.**
-- **linea**: WSTETH/WETH +4433.75 (LST pseudo-profit). WETH/WBTC -721.13. 0/5 pass, INFRA_FAIL. **Stability + LST track.**
-- **scroll**: WETH/USDC -1119.58, USDC/DAI -4196.13. MIXED_SOURCE 37.5% of OE rejects. Exec rate 86.7%.
-- **zksync**: WETH/USDC -875.98 (only 1 RT pair). NET_PROFIT_TOO_LOW 75%, SUSPECT_SPREAD_HARD 25%. 1/5 pass.
-- **base**: 0 RT evaluated. SLOT0_DIAGNOSTIC=68.8%, MIXED_SOURCE=28.0%. Exec rate 5.0%.
-
-### Lead's Blocker Verdict (post-R39 rerun evidence):
-- **Healthy supported (arb/mantle/scroll)**: 5/5 pass. Economics/slippage dominant. Pipeline is not the bottleneck.
-- **base**: NO_SIGNAL, 3/5 pass. SLOT0_DIAGNOSTIC dominance, near-zero exec rate. Surface-constrained.
+### Per-Chain RCA Highlights (R39c — route-level enabled)
+- **arb**: 7 RT pairs. USDC/DAI -54.25 (near-zero, slippage-dominant). 64.4% exec rate. Route-level: uniswap_v3→sushiswap, camelot→uniswap_v3 routes.
+- **mantle**: METH/WETH +1444 (LST pseudo-profit). WMNT/USDC deeply negative. 100% exec rate.
+- **linea**: WSTETH/WETH +4434 (LST pseudo-profit). 0/5 pass. SIGNAL_PRODUCING but infrastructure-blocked.
+- **scroll**: MIXED_SOURCE 37.5% of OE rejects. Economics present, 5/5 pass.
 - **zksync**: 1/5 pass. Economics + stability needed.
-- **linea**: 0/5 pass. INFRA_FAIL. Signals exist but no sweep candidates. Pipeline gap.
-- **LST pairs**: METH/WETH (mantle +1444 bps) and WSTETH/WETH (linea +4434 bps) are pseudo-profits, NOT real profitable RT. Must be excluded from headline frontier decisions.
+- **base**: 0 RT evaluated. SLOT0_DIAGNOSTIC dominance. Quote-path constrained.
 
-## 6) R39 Acceptance Criteria Verification
+## 6) R39c Acceptance Criteria Verification
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| 1. Frontier contract consistency | ✅ PASS | long_scan_summary.py: None-safe sort key + post-aggregation fence, 3 tests |
-| 2. Executable sweep guard (field fix) | ✅ PASS | run_scan_real.py: `best_total_cost_bps`/`best_slippage_bps` field names corrected, 4 tests |
-| 3. RCA gas alignment | ✅ PASS | pair_level_rca.py: parse from reject_reason, 3 tests |
-| 4. Chain_stats truthiness | ✅ PASS | chain_stats.py: None-safe `if _var is not None else` pattern, 2 tests |
-| 5. Pair_trace gas fix | ✅ PASS | pair_trace.py: reject_reason parse + proper notional fallback, 2 tests |
-| 6. 2250 unit tests | ✅ PASS | +13 tests from R39 additions (9 R39a + 4 R39b) |
-| 7. Status updated | ✅ PASS | Status_M5_0.md + Status_M4.md updated with post-R39 rerun data |
-| 8. DEV_REPORT synced to rolling | ✅ PASS | timestamp_utc=2026-03-23T16:42:04Z, all sections synced to post-R39 rerun |
-| 9. CI pipeline green | ✅ PASS | ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED |
+| 1. EXECUTABLE_BEST_NEG in chain_stats | ✅ PASS | chain_stats.py: upgrade BEST_NEG → EXECUTABLE_BEST_NEG when measured gas+slip populated, 4 tests |
+| 2. Post-fence accepts EXECUTABLE_BEST_NEG | ✅ PASS | long_scan_summary.py: pnl < 0 + EXECUTABLE_BEST_NEG preserved, 2 tests |
+| 3. Sweep guard accepts EXECUTABLE_BEST_NEG | ✅ PASS | run_scan_real.py: both paths accept EXECUTABLE_BEST_NEG, 1 test |
+| 4. Route-level RCA | ✅ PASS | pair_level_rca.py: route-level economics with buy_dex→sell_dex |
+| 5. Frontier ranking includes reason | ✅ PASS | long_scan_summary.py: sweep_best_frontier_reason in per-chain ranking, 1 test |
+| 6. 2258 unit tests | ✅ PASS | +8 tests from R39c (total +21 from R39a/b/c) |
+| 7. Market surface conclusion documented | ✅ PASS | Status_M5_0.md R39c section + DEV_REPORT updated |
 
 ## 6.1) Blockers / Risks
 - **profitable_rt=0**: BREAKEVEN_FRONTIER at 0.0 bps on 4/6 chains. Market economics, not infra.

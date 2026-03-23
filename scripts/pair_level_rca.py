@@ -132,6 +132,18 @@ def extract_pair_trace(truth: Dict[str, Any], scan: Optional[Dict[str, Any]]) ->
                         # R32: gas_bps computed from gas_cost_usd / notional
                         "rt_gas_bps": _rt_gas_bps(rt),
                     }
+            # R39c: Collect ALL route-level results for per-route analysis
+            trace[pair].setdefault("routes", []).append({
+                "buy_dex": rt.get("buy_dex") or rt.get("leg1_dex", "?"),
+                "sell_dex": rt.get("sell_dex") or rt.get("leg2_dex", "?"),
+                "gross_pnl_bps": rt.get("gross_pnl_bps", 0),
+                "net_pnl_bps": rt.get("net_pnl_bps", 0),
+                "slippage_bps": rt.get("estimated_slippage_bps", 0),
+                "gas_bps": _rt_gas_bps(rt),
+                "lp_fee_bps": ((rt.get("leg1_fee", 0) + rt.get("leg2_fee", 0)) / 100.0),
+                "leg2_real": rt.get("leg2_is_real_quote", False),
+                "reject_reason": rt.get("reject_reason"),
+            })
 
     # R29: Enrich with dynamic sweep size frontier data
     ds = stats.get("roundtrip", {}).get("dynamic_sweep", {})
@@ -279,6 +291,25 @@ def print_pair_funnel(trace: List[Dict[str, Any]], chain_key: str = ""):
             fr = sw.get("frontier_reason", "-")
             se = sw.get("sizes_evaluated", 0)
             print(f"  {t['pair']:20s} {bsz_str:>7s} {bpnl_str:>8s} {gap_str:>6s} {fr:>12s} {se:>5d}")
+
+    # R39c: Route-level economics — show ALL evaluated routes per pair
+    route_pairs = [t for t in trace if t.get("routes")]
+    if route_pairs:
+        print(f"\nRoute-level economics (buy→sell per pair):")
+        print(f"  {'Pair':20s} {'Route':>25s} {'Gross':>8s} {'Net':>8s} {'Slip':>8s} {'Gas':>8s} {'LP':>6s} {'Real':>5s}")
+        print(f"  {'-'*20} {'-'*25} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*6} {'-'*5}")
+        for t in route_pairs[:10]:
+            for r in sorted(t["routes"], key=lambda x: -(x.get("net_pnl_bps") or -9999)):
+                route_str = f"{r['buy_dex']}→{r['sell_dex']}"
+                if len(route_str) > 25:
+                    route_str = route_str[:22] + "..."
+                print(f"  {t['pair']:20s} {route_str:>25s} "
+                      f"{r['gross_pnl_bps']:>+8.2f} "
+                      f"{r['net_pnl_bps']:>+8.2f} "
+                      f"{r['slippage_bps']:>8.2f} "
+                      f"{r['gas_bps']:>8.2f} "
+                      f"{r['lp_fee_bps']:>6.1f} "
+                      f"{'Y' if r['leg2_real'] else 'N':>5s}")
 
 
 def print_counterfactual(cf: Dict[str, Any]):

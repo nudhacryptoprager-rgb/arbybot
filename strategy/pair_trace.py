@@ -139,6 +139,32 @@ def build_pair_funnel_trace(
                 trace[_pkey]["rt_reject_reasons"][rt_r.reject_reason] = (
                     trace[_pkey]["rt_reject_reasons"].get(rt_r.reject_reason, 0) + 1
                 )
+            # R39c: Collect ALL route-level results for per-route RCA
+            _rr = rt_r.reject_reason or ""
+            _gas_bps_route = None
+            if "|gas=" in _rr:
+                try:
+                    _gas_bps_route = float(_rr.split("|gas=")[1].split("|")[0])
+                except (ValueError, IndexError):
+                    pass
+            if _gas_bps_route is None:
+                _notional_rt = 0.0
+                if rt_r.gross_pnl_bps != 0 and rt_r.gross_pnl_usd != 0:
+                    _notional_rt = abs(rt_r.gross_pnl_usd / (rt_r.gross_pnl_bps / 10000))
+                _gas_bps_route = round(
+                    (rt_r.gas_cost_usd / _notional_rt) * 10000
+                    if _notional_rt > 0 and rt_r.gas_cost_usd else 0, 2
+                )
+            trace[_pkey].setdefault("routes", []).append({
+                "buy_dex": getattr(rt_r, "buy_dex", "") or getattr(rt_r, "leg1_dex", "?"),
+                "sell_dex": getattr(rt_r, "sell_dex", "") or getattr(rt_r, "leg2_dex", "?"),
+                "gross_pnl_bps": round(rt_r.gross_pnl_bps, 2),
+                "net_pnl_bps": round(rt_r.net_pnl_bps, 2),
+                "slippage_bps": round(rt_r.estimated_slippage_bps, 2),
+                "gas_bps": round(_gas_bps_route, 2),
+                "lp_fee_bps": (rt_r.leg1_fee + rt_r.leg2_fee) / 100.0,
+                "leg2_real": getattr(rt_r, "leg2_is_real_quote", False),
+            })
             cur_best = trace[_pkey]["rt_best_net_pnl_bps"]
             if cur_best is None or rt_r.net_pnl_bps > cur_best:
                 trace[_pkey]["rt_best_net_pnl_bps"] = round(rt_r.net_pnl_bps, 2)

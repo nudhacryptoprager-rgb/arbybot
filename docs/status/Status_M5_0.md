@@ -1,11 +1,33 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-23 (R39b — **Sweep guard field fix + chain_stats truthiness + pair_trace gas.** Post-R39 rerun: 30 runs, 241 signals, 67 RT, 0 profitable, $420.82. Sweep guard dead code fixed (`measured_*` → `best_*`). chain_stats 0.0→None truthiness fixed. pair_trace gas computation fixed (reject_reason parse). 2250 tests PASS.)
-**Tests**: 2250 passed / 5 skipped
+**Updated**: 2026-03-23 (R39c — **EXECUTABLE_BEST_NEG distinction + route-level RCA.** 2259 tests PASS. EXECUTABLE_BEST_NEG separates proven-executable negative frontier from paper-only BEST_NEG. Sweep guard + post-aggregation fence + per-chain ranking all updated. Route-level economics in pair_trace.py + pair_level_rca.py.)
+**Tests**: 2259 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R39b: sweep field fix + chain_stats + pair_trace gas (2026-03-23). R39a: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
+**Evidence**: R39c: EXECUTABLE_BEST_NEG + route-level RCA (2026-03-23). R39b: sweep field fix + chain_stats + pair_trace gas (2026-03-23). R39a: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R39c — EXECUTABLE_BEST_NEG Distinction + Route-Level Economics RCA
+
+R39c responds to lead's R39c directive: the current reports are a strong proxy for the **supported market surface**, not just pipeline health. Healthy chains (arb/mantle/linea/scroll) are market-economics-blocked. Base and partly zksync are infrastructure/quote-path constrained. The lead's key conclusion: filter relaxation does not unlock profit on healthy chains — the dominant blocker is market economics (spread < slippage + LP fee + gas).
+
+### Market Surface Conclusion (R39c)
+- **arb (6 RT)**: USDC/DAI -54 (nearest), WETH/USDC -749 (furthest). 59.3% exec rate. 0 OE gated. **Economics-blocked on all routes.**
+- **mantle (2 RT)**: METH/WETH +1444 (LST pseudo-profit), WMNT/USDC -745. 100% exec rate. **Economics-blocked (non-LST).**
+- **linea (2 RT)**: WSTETH/WETH +4434 (LST), WETH/WBTC -721. 100% exec rate. **Economics-blocked (non-LST).**
+- **scroll (2 RT)**: WETH/USDC -1120, USDC/DAI -4196. 86.7% exec rate. MIXED_SOURCE 37.5%. **Economics + quote-quality.**
+- **zksync (1 RT)**: WETH/USDC -876. 100% exec rate. NET_PROFIT 75%, SUSPECT_SPREAD 25%. **Economics-blocked + stability.**
+- **base (0 RT)**: SLOT0_DIAGNOSTIC=68.8%, MIXED_SOURCE=28.0%, exec rate 5.0%. **Quote-path constrained — not market verdict.**
+
+### Code Changes (R39c)
+1. **strategy/chain_stats.py** — `EXECUTABLE_BEST_NEG` upgrade: when frontier is `BEST_NEG` but `measured_slippage_bps` and `measured_gas_bps` are both populated (not None), the reason upgrades to `EXECUTABLE_BEST_NEG`. This distinguishes proven-executable negative frontiers from paper/placeholder boundaries.
+2. **strategy/long_scan_summary.py** — Post-aggregation fence updated: `EXECUTABLE_BEST_NEG` is now an acceptable reason for pnl < 0 (alongside `BEST_NEG`, `ALL_FAILED`, `ALL_SUSPECT_OUTLIER`). Per-chain frontier ranking now includes `sweep_best_frontier_reason` field.
+3. **strategy/jobs/run_scan_real.py** — Sweep size promotion guard now accepts `EXECUTABLE_BEST_NEG` alongside `BREAKEVEN_FRONTIER` and `PROFITABLE`. Both primary and error paths updated.
+4. **scripts/pair_level_rca.py** — Route-level economics: `extract_pair_trace()` now collects ALL RT results per pair (not just best) with `buy_dex→sell_dex` route detail, gross/net/slippage/gas/LP fee/real-quote. Console output adds "Route-level economics" section after sweep data.
+4b. **strategy/pair_trace.py** — `build_pair_funnel_trace()` now collects route-level data (buy_dex, sell_dex, per-route economics) for every RT result, embedded in the truth_report's `pair_funnel_trace`.
+5. **tests/unit/test_r38_changes.py** — +9 tests: chain_stats upgrade (4), post-fence (2), sweep guard (1), ranking field (1), route-level data (1). Existing sweep guard test updated. Total: 2259 tests.
 
 ---
 

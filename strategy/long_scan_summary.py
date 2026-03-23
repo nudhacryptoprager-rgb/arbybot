@@ -241,7 +241,7 @@ def build_summary(
             summary["sweep_best_frontier_reason"] = "BREAKEVEN_FRONTIER"
         elif _sweep_pnl > 0 and _sweep_reason != "PROFITABLE":
             summary["sweep_best_frontier_reason"] = "PROFITABLE"
-        elif _sweep_pnl < 0 and _sweep_reason not in ("BEST_NEG", "ALL_FAILED", "ALL_SUSPECT_OUTLIER"):
+        elif _sweep_pnl < 0 and _sweep_reason not in ("BEST_NEG", "EXECUTABLE_BEST_NEG", "ALL_FAILED", "ALL_SUSPECT_OUTLIER"):
             summary["sweep_best_frontier_reason"] = "BEST_NEG"
 
     return summary
@@ -479,6 +479,8 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             "measured_fee_bps": s.get("sweep_measured_fee_bps"),
             "measured_slippage_bps": s.get("sweep_measured_slippage_bps"),
             "measured_total_cost_bps": s.get("sweep_measured_total_cost_bps"),
+            # R39b: Per-chain frontier reason (BREAKEVEN_FRONTIER / EXECUTABLE_BEST_NEG / BEST_NEG)
+            "sweep_best_frontier_reason": s.get("sweep_best_frontier_reason"),
             "included_signals_total": signals,
             "cross_dex_pairs_count": xdex,
             "accepted_fail": is_af,

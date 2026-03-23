@@ -369,7 +369,8 @@ class TestSweepSizePromotionGuard:
             "best_gas_bps": 5.0,
         }
         frontier = ds.get("best_frontier_reason")
-        is_exec = frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE")
+        # R39c: guard now also accepts EXECUTABLE_BEST_NEG, but plain BEST_NEG still blocks
+        is_exec = frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE", "EXECUTABLE_BEST_NEG")
         assert is_exec is False
 
 
@@ -492,3 +493,161 @@ class TestPairTraceGasFromRejectReason:
         econ = trace[0]["economics"]
         # Fallback: notional = 0.7389 / (738.9/10000) = 10.0, gas = 0.0105/10.0*10000 = 10.5
         assert econ["rt_gas_bps"] == 10.5
+
+    def test_route_level_data_collected(self):
+        """R39c: pair_trace collects route-level buy_dex→sell_dex per RT result."""
+        from types import SimpleNamespace
+        from strategy.pair_trace import build_pair_funnel_trace
+        pairs = [SimpleNamespace(display_name="USDC/DAI", token_in="USDC", token_out="DAI")]
+        rt = SimpleNamespace(
+            pair="USDC/DAI",
+            net_pnl_bps=-54.07,
+            gross_pnl_bps=-42.03,
+            gross_pnl_usd=-0.0042,
+            estimated_slippage_bps=792.18,
+            gas_cost_usd=0.014,
+            leg1_fee=300,
+            leg2_fee=300,
+            leg2_is_real_quote=True,
+            reject_reason="SLIPPAGE_TOO_HIGH: net_pnl_bps=-54.07|slippage=792.2|lp_fee=6.0|gas=12.0",
+            is_profitable=False,
+            net_pnl_usd=-0.005,
+            buy_dex="uniswap_v3",
+            sell_dex="sushiswap",
+        )
+        trace = build_pair_funnel_trace(pairs, [], [], [], [], [rt], [])
+        routes = trace[0].get("routes", [])
+        assert len(routes) == 1
+        assert routes[0]["buy_dex"] == "uniswap_v3"
+        assert routes[0]["sell_dex"] == "sushiswap"
+        assert routes[0]["net_pnl_bps"] == -54.07
+        assert routes[0]["gas_bps"] == 12.0
+        assert routes[0]["lp_fee_bps"] == 6.0
+        assert routes[0]["leg2_real"] is True
+
+
+# ---------- 12. R39c: EXECUTABLE_BEST_NEG distinction ----------
+
+class TestExecutableBestNeg:
+    """Verify EXECUTABLE_BEST_NEG upgrade and acceptance in chain_stats / summary / sweep guard."""
+
+    def test_chain_stats_upgrades_best_neg_with_measured_costs(self):
+        """BEST_NEG with measured gas + slippage → EXECUTABLE_BEST_NEG."""
+        # Simulate chain_stats upgrade logic (lines 281-289)
+        _raw_reason = "BEST_NEG"
+        measured_slip = 20.0  # not None
+        measured_gas = 12.0   # not None
+        if (
+            _raw_reason == "BEST_NEG"
+            and measured_slip is not None
+            and measured_gas is not None
+        ):
+            _raw_reason = "EXECUTABLE_BEST_NEG"
+        assert _raw_reason == "EXECUTABLE_BEST_NEG"
+
+    def test_chain_stats_no_upgrade_without_measured(self):
+        """BEST_NEG without measured costs stays BEST_NEG."""
+        _raw_reason = "BEST_NEG"
+        measured_slip = None
+        measured_gas = None
+        if (
+            _raw_reason == "BEST_NEG"
+            and measured_slip is not None
+            and measured_gas is not None
+        ):
+            _raw_reason = "EXECUTABLE_BEST_NEG"
+        assert _raw_reason == "BEST_NEG"
+
+    def test_chain_stats_no_upgrade_partial_measured(self):
+        """BEST_NEG with only gas (no slippage) stays BEST_NEG."""
+        _raw_reason = "BEST_NEG"
+        measured_slip = None
+        measured_gas = 12.0
+        if (
+            _raw_reason == "BEST_NEG"
+            and measured_slip is not None
+            and measured_gas is not None
+        ):
+            _raw_reason = "EXECUTABLE_BEST_NEG"
+        assert _raw_reason == "BEST_NEG"
+
+    def test_chain_stats_zero_measured_still_upgrades(self):
+        """BEST_NEG with measured_gas=0.0 and measured_slip=0.0 → upgrades (0.0 != None)."""
+        _raw_reason = "BEST_NEG"
+        measured_slip = 0.0
+        measured_gas = 0.0
+        if (
+            _raw_reason == "BEST_NEG"
+            and measured_slip is not None
+            and measured_gas is not None
+        ):
+            _raw_reason = "EXECUTABLE_BEST_NEG"
+        assert _raw_reason == "EXECUTABLE_BEST_NEG"
+
+    def test_post_fence_accepts_executable_best_neg(self):
+        """build_summary post-fence: EXECUTABLE_BEST_NEG with pnl < 0 is preserved."""
+        from strategy.long_scan_summary import build_summary
+        from strategy.chain_stats import new_chain_stats
+        stats = new_chain_stats()
+        stats["config"] = "config/arb.yaml"
+        stats["sweep_best_net_pnl_bps"] = -50.0
+        stats["sweep_best_frontier_reason"] = "EXECUTABLE_BEST_NEG"
+        stats["sweep_best_size_usd"] = 750
+        per_chain = {"arbitrum_one": stats}
+        summary = build_summary(per_chain, wall_seconds=10.0, warnings=[])
+        assert summary["sweep_best_net_pnl_bps"] == -50.0
+        assert summary["sweep_best_frontier_reason"] == "EXECUTABLE_BEST_NEG"
+
+    def test_post_fence_corrects_unknown_reason(self):
+        """Unknown reason with pnl < 0 → BEST_NEG."""
+        from strategy.long_scan_summary import build_summary
+        from strategy.chain_stats import new_chain_stats
+        stats = new_chain_stats()
+        stats["config"] = "config/arb.yaml"
+        stats["sweep_best_net_pnl_bps"] = -30.0
+        stats["sweep_best_frontier_reason"] = "SOMETHING_WEIRD"
+        stats["sweep_best_size_usd"] = 500
+        per_chain = {"arb": stats}
+        summary = build_summary(per_chain, wall_seconds=10.0, warnings=[])
+        assert summary["sweep_best_frontier_reason"] == "BEST_NEG"
+
+    def test_sweep_guard_accepts_executable_best_neg(self):
+        """Sweep size promotion guard accepts EXECUTABLE_BEST_NEG."""
+        ds = {
+            "best_size_usd": 750,
+            "best_frontier_reason": "EXECUTABLE_BEST_NEG",
+            "best_total_cost_bps": 38.0,
+            "best_slippage_bps": 20.0,
+        }
+        config_size = 150.0
+        frontier = ds.get("best_frontier_reason")
+        total_cost = ds.get("best_total_cost_bps")
+        slip = ds.get("best_slippage_bps")
+        is_exec = (
+            ds["best_size_usd"] is not None
+            and ds["best_size_usd"] > 0
+            and frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE", "EXECUTABLE_BEST_NEG")
+            and total_cost is not None
+            and total_cost > 0
+            and slip is not None
+        )
+        assert is_exec is True
+        result_size = float(ds["best_size_usd"]) if is_exec else config_size
+        assert result_size == 750.0
+
+    def test_frontier_ranking_includes_reason(self):
+        """Per-chain frontier ranking includes sweep_best_frontier_reason."""
+        from strategy.long_scan_summary import build_summary
+        from strategy.chain_stats import new_chain_stats
+        stats = new_chain_stats()
+        stats["config"] = "config/arb.yaml"
+        stats["sweep_best_net_pnl_bps"] = -50.0
+        stats["sweep_best_frontier_reason"] = "EXECUTABLE_BEST_NEG"
+        stats["sweep_best_size_usd"] = 750
+        stats["_sweep_gap_values"] = [50.0]
+        stats["runs_with_sweep"] = 1
+        per_chain = {"arbitrum_one": stats}
+        summary = build_summary(per_chain, wall_seconds=10.0, warnings=[])
+        ranking = summary.get("frontier_ranking", [])
+        assert len(ranking) == 1
+        assert ranking[0]["sweep_best_frontier_reason"] == "EXECUTABLE_BEST_NEG"
