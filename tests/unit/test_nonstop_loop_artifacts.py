@@ -50,11 +50,13 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
         
         # Archive files are allowed (created on reset)
         archive_pattern = lambda f: f.startswith("m4_stability_agg_archive_")
+        # Log files are allowed (created by scan sessions)
+        log_pattern = lambda f: f.endswith(".log")
         
         all_files = set(f.name for f in rolling_dir.iterdir() if f.is_file())
         
-        # Filter out archive files
-        non_archive_files = {f for f in all_files if not archive_pattern(f)}
+        # Filter out archive and log files
+        non_archive_files = {f for f in all_files if not archive_pattern(f) and not log_pattern(f)}
         
         # Check that canonical files exist
         for canon in canonical_files:

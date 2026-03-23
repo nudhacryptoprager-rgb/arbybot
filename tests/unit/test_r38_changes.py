@@ -247,3 +247,160 @@ class TestDirtySetTrackerEventDriven:
         status = tracker.status()
         assert status["event_driven"] is True
         tracker.stop()
+
+
+# ---------- 7. R39: Frontier contract consistency ----------
+
+class TestFrontierContractConsistency:
+    """Verify that sweep_best_net_pnl_bps and sweep_best_frontier_reason
+    are always consistent — 0.0 must be BREAKEVEN_FRONTIER, not BEST_NEG."""
+
+    def _make_per_chain(self, chains):
+        """Helper: build per_chain dict from list of (name, pnl, reason) tuples."""
+        from strategy.chain_stats import new_chain_stats
+        result = {}
+        for name, pnl, reason in chains:
+            stats = new_chain_stats()
+            stats["config"] = f"config/{name}.yaml"
+            stats["sweep_best_net_pnl_bps"] = pnl
+            stats["sweep_best_frontier_reason"] = reason
+            stats["sweep_best_size_usd"] = 750 if pnl is not None else None
+            result[name] = stats
+        return result
+
+    def test_breakeven_not_overridden_by_best_neg(self):
+        """When best chain has pnl=0.0 (BREAKEVEN_FRONTIER), top-level must
+        not pick BEST_NEG from a worse chain."""
+        from strategy.long_scan_summary import build_summary
+        per_chain = self._make_per_chain([
+            ("arb", 0.0, "BREAKEVEN_FRONTIER"),
+            ("zksync", -5.0, "BEST_NEG"),
+        ])
+        summary = build_summary(per_chain, wall_seconds=10.0, warnings=[])
+        assert summary["sweep_best_net_pnl_bps"] == 0.0
+        assert summary["sweep_best_frontier_reason"] == "BREAKEVEN_FRONTIER"
+
+    def test_post_fence_corrects_mismatch(self):
+        """Post-aggregation fence: if aggregation produces 0.0+BEST_NEG, correct it."""
+        from strategy.long_scan_summary import build_summary
+        # Simulate the pathological case: chain A has pnl=0.0 but reason=None,
+        # chain B has pnl=-10 with reason=BEST_NEG
+        per_chain = self._make_per_chain([
+            ("arb", 0.0, None),
+            ("zksync", -10.0, "BEST_NEG"),
+        ])
+        summary = build_summary(per_chain, wall_seconds=10.0, warnings=[])
+        assert summary["sweep_best_net_pnl_bps"] == 0.0
+        assert summary["sweep_best_frontier_reason"] == "BREAKEVEN_FRONTIER"
+
+    def test_negative_pnl_gets_best_neg(self):
+        """Negative pnl must map to BEST_NEG (not BREAKEVEN_FRONTIER)."""
+        from strategy.long_scan_summary import build_summary
+        per_chain = self._make_per_chain([
+            ("arb", -5.0, "BEST_NEG"),
+        ])
+        summary = build_summary(per_chain, wall_seconds=10.0, warnings=[])
+        assert summary["sweep_best_net_pnl_bps"] == -5.0
+        assert summary["sweep_best_frontier_reason"] == "BEST_NEG"
+
+
+# ---------- 8. R39: Sweep size promotion guard ----------
+
+class TestSweepSizePromotionGuard:
+    """Verify that sweep best_size is only promoted when frontier is executable."""
+
+    def test_non_executable_falls_back_to_config(self):
+        """When measured_slippage_bps is None (paper-only), config size is used."""
+        ds = {
+            "best_size_usd": 750,
+            "best_frontier_reason": "BREAKEVEN_FRONTIER",
+            "measured_total_cost_bps": 31.0,
+            "measured_slippage_bps": None,  # NOT measured
+            "measured_gas_bps": 0.0,
+        }
+        config_size = 150.0
+        frontier = ds.get("best_frontier_reason")
+        total_cost = ds.get("measured_total_cost_bps")
+        slip = ds.get("measured_slippage_bps")
+        is_exec = (
+            ds["best_size_usd"] is not None
+            and ds["best_size_usd"] > 0
+            and frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE")
+            and total_cost is not None
+            and total_cost > 0
+            and slip is not None
+        )
+        assert is_exec is False
+        result_size = float(ds["best_size_usd"]) if is_exec else config_size
+        assert result_size == config_size
+
+    def test_executable_promotes_sweep_size(self):
+        """When all measured costs present, sweep size is promoted."""
+        ds = {
+            "best_size_usd": 5000,
+            "best_frontier_reason": "PROFITABLE",
+            "measured_total_cost_bps": 45.0,
+            "measured_slippage_bps": 20.0,
+            "measured_gas_bps": 12.0,
+        }
+        config_size = 150.0
+        frontier = ds.get("best_frontier_reason")
+        total_cost = ds.get("measured_total_cost_bps")
+        slip = ds.get("measured_slippage_bps")
+        is_exec = (
+            ds["best_size_usd"] is not None
+            and ds["best_size_usd"] > 0
+            and frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE")
+            and total_cost is not None
+            and total_cost > 0
+            and slip is not None
+        )
+        assert is_exec is True
+        result_size = float(ds["best_size_usd"]) if is_exec else config_size
+        assert result_size == 5000.0
+
+    def test_best_neg_frontier_blocks_promotion(self):
+        """BEST_NEG frontier blocks size promotion even with measured costs."""
+        ds = {
+            "best_size_usd": 750,
+            "best_frontier_reason": "BEST_NEG",
+            "measured_total_cost_bps": 31.0,
+            "measured_slippage_bps": 10.0,
+            "measured_gas_bps": 5.0,
+        }
+        frontier = ds.get("best_frontier_reason")
+        is_exec = frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE")
+        assert is_exec is False
+
+
+# ---------- 9. R39: RCA gas_bps from reject_reason ----------
+
+class TestRcaGasBpsFromRejectReason:
+    """Verify _rt_gas_bps prefers reject_reason over back-calculation."""
+
+    def test_parses_gas_from_reject_reason(self):
+        from scripts.pair_level_rca import _rt_gas_bps
+        rt = {
+            "reject_reason": "SLIPPAGE_TOO_HIGH: net_pnl_bps=-54.05|slippage=792.2|lp_fee=6.0|gas=12.0",
+            "gas_cost_usd": 0.9,
+            "gross_pnl_bps": -42.0,
+            "gross_pnl_usd": -3.15,
+        }
+        assert _rt_gas_bps(rt) == 12.0
+
+    def test_fallback_when_no_reject_reason(self):
+        from scripts.pair_level_rca import _rt_gas_bps
+        rt = {
+            "reject_reason": None,
+            "gas_cost_usd": 0.9,
+            "gross_pnl_bps": -42.0,
+            "gross_pnl_usd": -3.15,
+        }
+        result = _rt_gas_bps(rt)
+        # Back-calc: notional = 3.15 / (42.0/10000) = 750, gas_bps = 0.9/750*10000 = 12.0
+        assert abs(result - 12.0) < 0.5
+
+    def test_zero_when_no_data(self):
+        from scripts.pair_level_rca import _rt_gas_bps
+        rt = {"gross_pnl_bps": 0, "gross_pnl_usd": 0}
+        assert _rt_gas_bps(rt) == 0

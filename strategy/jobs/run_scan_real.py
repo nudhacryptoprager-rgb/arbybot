@@ -996,13 +996,27 @@ def run_scan(
                         sweep_ds.get("best_pair"),
                     )
 
-        # R38: Promote sweep best_size_usd as default for live candidates
-        # instead of config target_usd_notional, so final RT sizing reflects
-        # the sweep-optimal size rather than the static probe size.
+        # R38+R39: Promote sweep best_size_usd as default for live candidates,
+        # but only when the frontier is executable (real measured costs, not paper-only).
         _sweep_ds = stats.get("roundtrip", {}).get("dynamic_sweep") or {}
         _sweep_best_size = _sweep_ds.get("best_size_usd")
         _config_size = float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0)
-        _default_size = float(_sweep_best_size) if _sweep_best_size else _config_size
+        # R39: Guard — only promote when frontier is executable:
+        # 1) frontier_reason indicates real evaluation (not ALL_FAILED/ALL_SUSPECT_OUTLIER)
+        # 2) measured_total_cost_bps > 0 (some cost was measured)
+        # 3) measured_slippage_bps is not None (slippage was explicitly measured)
+        _sweep_frontier = _sweep_ds.get("best_frontier_reason") or _sweep_ds.get("sweep_best_frontier_reason")
+        _sweep_total_cost = _sweep_ds.get("measured_total_cost_bps")
+        _sweep_slip = _sweep_ds.get("measured_slippage_bps")
+        _sweep_is_executable = (
+            _sweep_best_size is not None
+            and _sweep_best_size > 0
+            and _sweep_frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE")
+            and _sweep_total_cost is not None
+            and _sweep_total_cost > 0
+            and _sweep_slip is not None
+        )
+        _default_size = float(_sweep_best_size) if _sweep_is_executable else _config_size
         stats["live_candidate_stream"] = _build_live_candidate_stream(
             chain_key=chain_key,
             opportunities=eligible_opps if opps_list else [],
@@ -1034,11 +1048,22 @@ def run_scan(
         }
         # R34: Still attempt to build live_stream from whatever was collected
         try:
-            # R38: Same sweep-size promotion as primary path
+            # R38+R39: Same executable-frontier guard as primary path
             _err_ds = existing_rt.get("dynamic_sweep") or {}
             _err_sweep_size = _err_ds.get("best_size_usd")
             _err_config_size = float(config.get("target_usd_notional") or config.get("paper_size_usd") or 0.0)
-            _err_default_size = float(_err_sweep_size) if _err_sweep_size else _err_config_size
+            _err_frontier = _err_ds.get("best_frontier_reason") or _err_ds.get("sweep_best_frontier_reason")
+            _err_total_cost = _err_ds.get("measured_total_cost_bps")
+            _err_slip = _err_ds.get("measured_slippage_bps")
+            _err_is_executable = (
+                _err_sweep_size is not None
+                and _err_sweep_size > 0
+                and _err_frontier in ("BREAKEVEN_FRONTIER", "PROFITABLE")
+                and _err_total_cost is not None
+                and _err_total_cost > 0
+                and _err_slip is not None
+            )
+            _err_default_size = float(_err_sweep_size) if _err_is_executable else _err_config_size
             stats["live_candidate_stream"] = _build_live_candidate_stream(
                 chain_key=chain_key,
                 opportunities=eligible_opps if opps_list else [],

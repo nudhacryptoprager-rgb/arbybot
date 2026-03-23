@@ -57,9 +57,21 @@ def load_scan_report(run_dir: Path) -> Optional[Dict[str, Any]]:
 
 
 def _rt_gas_bps(rt: Dict[str, Any]) -> float:
-    """Compute gas cost in bps from roundtrip result dict."""
+    """Compute gas cost in bps from roundtrip result dict.
+
+    R39: Prefer explicit gas_bps parsed from reject_reason (computed with
+    real notional inside the engine) over back-calculation from gross_pnl.
+    """
+    # Primary: parse from reject_reason — authoritative, uses real notional
+    rr = rt.get("reject_reason") or ""
+    if "|gas=" in rr:
+        try:
+            gas_str = rr.split("|gas=")[1].split("|")[0]
+            return float(gas_str)
+        except (ValueError, IndexError):
+            pass
+    # Fallback: back-calculate from gas_cost_usd and gross_pnl
     gas_usd = rt.get("gas_cost_usd", 0) or 0
-    # Approximate notional from gross_pnl_usd / gross_pnl_bps
     gross_bps = rt.get("gross_pnl_bps", 0) or 0
     gross_usd = rt.get("gross_pnl_usd", 0) or 0
     if gross_bps != 0 and gross_usd != 0:

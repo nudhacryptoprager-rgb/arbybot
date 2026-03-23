@@ -1,11 +1,47 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-23 (R38 — **Sweep size promotion + blocker accuracy + LST suppression + artifact parity.** Sweep `best_size_usd` promoted into final RT sizing. `blocker_classification` + `blocker_reason` added to run_summary. Per-chain `pass_runs`/`signals_count`/`real_quote_count` aliases. LST/derivative 50 bps SUSPECT_ACCOUNTING threshold. OE_ECONOMICS text updated with SLIPPAGE_TOO_HIGH. 2233 tests PASS.)
-**Tests**: 2233 passed / 5 skipped
+**Updated**: 2026-03-23 (R39 — **Frontier contract fix + executable sweep guard + RCA gas alignment.** Frontier `0.0 bps` + `BEST_NEG` mismatch fixed. Sweep size promotion guarded by executable frontier check. RCA gas_bps parsed from reject_reason. Fresh canonical 10-min scan: 36 runs, 159 signals, 59 RT, 0 profitable. 2246 tests PASS.)
+**Tests**: 2246 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
+**Evidence**: R39: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R39 — Frontier Contract Fix + Executable Sweep Guard + RCA Gas Alignment
+
+R39 responds to lead's fresh 10-minute canonical scan (36 runs, 159 signals, 59 RT evaluated, 0 profitable RT, $254.60 diagnostic net USDC) that exposed three contract/accuracy issues from R38.
+
+### Fresh Evidence (lead's 10-min canonical scan, 2026-03-23T15:52:45Z)
+| Chain | Runs | PASS | FAIL | NO_DATA | Signals | RT Eval | Net USDC | Blocker |
+|-------|------|------|------|---------|---------|---------|----------|---------|
+| arbitrum_one | 6 | 2 | 4 | 0 | 81 | 15 | $103.25 | OE_ECONOMICS |
+| mantle | 6 | 6 | 0 | 0 | 10 | 12 | $14.39 | OE_ECONOMICS |
+| linea | 6 | 3 | 3 | 0 | 31 | 6 | $34.56 | OE_ECONOMICS |
+| scroll | 6 | 6 | 0 | 0 | 13 | 12 | $33.89 | MIXED_SOURCE |
+| zksync | 6 | 0 | 6 | 0 | 18 | 1 | $55.78 | OE_ECONOMICS |
+| base | 6 | 3 | 0 | 3 | 6 | 13 | $12.74 | QUOTE_PATH_CONSTRAINED |
+
+### Blocker Verdict: MIXED (updated from fresh evidence)
+- **Healthy supported chains (arb/mantle)**: Economics/slippage dominant. Not dead infrastructure.
+- **base**: Quote-path constrained. `SLOT0_DIAGNOSTIC=91.9%`, `real_quote_count=0` in fresh RCA.
+- **zksync**: Fail-heavy (0/6 pass in fresh run). Cannot draw market conclusions.
+- **scroll**: MIXED_SOURCE debt (33.3% of OE rejects). Economics present but mixed.
+- **linea**: Unstable (3/6 fail). Economics-blocked + infra instability.
+
+### Code Changes
+1. **strategy/long_scan_summary.py** — Fixed frontier contract mismatch: sort key `x.get("sweep_best_net_pnl_bps") or -9999` treated 0.0 as falsy (Python truthiness: `0.0 or -9999 == -9999`), causing top-level to pick BEST_NEG from a worse chain while pnl=0.0. Fixed with `if v is not None else -9999`. Added post-aggregation consistency fence: if pnl==0.0 → force BREAKEVEN_FRONTIER.
+2. **strategy/jobs/run_scan_real.py** — Sweep size promotion now guarded by executable frontier check: `frontier_reason` must be BREAKEVEN_FRONTIER or PROFITABLE, `measured_total_cost_bps > 0`, and `measured_slippage_bps is not None`. Falls back to config size when sweep is paper-only. Both primary and error paths updated.
+3. **scripts/pair_level_rca.py** — `_rt_gas_bps()` now parses gas from `reject_reason` string (authoritative, computed with real notional in engine) before falling back to gross_pnl back-calculation. Fixes Gas column mismatch with live reject reasons.
+4. **tests/unit/test_r38_changes.py** — +9 tests: frontier consistency (3), sweep guard (3), RCA gas parsing (3).
+5. **tests/unit/test_run_scan_real_purity.py** — max_lines bumped to 1650 for R39 guard code.
+6. **tests/unit/test_nonstop_loop_artifacts.py** — Rolling artifact test allows .log files (produced by scan sessions).
+
+### Tests (+9)
+- `TestFrontierContractConsistency`: breakeven vs BEST_NEG (3 tests)
+- `TestSweepSizePromotionGuard`: executable/non-executable/BEST_NEG (3 tests)
+- `TestRcaGasBpsFromRejectReason`: parse/fallback/zero (3 tests)
 
 ---
 

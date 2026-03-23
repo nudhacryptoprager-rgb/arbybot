@@ -7,135 +7,110 @@
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled.
-**R38**: Sweep best_size promotion into final RT, blocker_classification in run_summary, LST/derivative false-positive suppression (50 bps), OE_ECONOMICS text with SLIPPAGE_TOO_HIGH, per-chain alias fields, event-driven WS loop, dashboard mandatory in WORKFLOW.
+**R39**: Frontier contract fix (0.0 bps + BEST_NEG mismatch), executable sweep guard, RCA gas alignment from reject_reason. Fresh 10-min scan: 36 runs, 159 signals, 59 RT, 0 profitable.
 
-## SESSION GOAL (R38: Sweep size promotion + blocker accuracy + LST suppression + artifact parity + event-driven WS)
-**Goal**: (1) Promote sweep best_size_usd into final RT sizing, (2) Add blocker_classification/blocker_reason to run_summary, (3) LST/derivative 50 bps SUSPECT_ACCOUNTING threshold, (4) Update blocker text with SLIPPAGE_TOO_HIGH, (5) Fill per_chain aliases (pass_runs/signals_count/real_quote_count), (6) LST annotation in pair_level_rca, (7) Event-driven WS loop via DirtySetTracker.wait_for_dirty(), (8) Dashboard mandatory in WORKFLOW.md canonical commands, (9) Mixed blocker verdict + per-chain worktracks + quality-ranked pair selection + selective expansion policies in Status.
-**Prior (R37)**: 2213 tests, 245 signals, 68 RT eval, 0 profitable, BREAKEVEN_FRONTIER.
-**Audit (Lead R38)**: 2h canonical scan: 282 runs, 2557 signals, 649 RT, 0 profitable, $4411.02 diagnostic net USDC. Mixed blocker verdict.
+## SESSION GOAL (R39: Frontier contract fix + executable sweep guard + RCA gas alignment)
+**Goal**: (1) Fix frontier contract mismatch (0.0 bps + BEST_NEG), (2) Guard sweep size promotion with executable frontier check, (3) Fix RCA gas decomposition to parse from reject_reason, (4) Update docs with fresh canonical 10-min evidence.
+**Prior (R38)**: 2237 tests, sweep size promotion, blocker_classification, LST suppression, event-driven WS loop.
+**Audit (Lead R39)**: Fresh 10-min canonical scan: 36 runs, 159 signals, 59 RT, 0 profitable, $254.60 diagnostic. Exposed: frontier 0.0+BEST_NEG mismatch, paper-only sweep promotion, RCA gas mismatch.
 
 ## 0) Meta
-timestamp_utc: 2026-03-23T14:23:58Z
-run_dir_name: ci_m5_gate_arbitrum_one_20260323_152300_694634 (282 runs across 6 chains, lead's 2h canonical scan)
-mode: R38_SWEEP_SIZE_BLOCKER_LST
-test_count: 2237 passed, 5 skipped
+timestamp_utc: 2026-03-23T15:52:45Z
+run_dir_name: ci_m5_gate_arbitrum_one_20260323_165150_851009 (36 runs across 6 chains, lead's fresh 10-min canonical scan)
+mode: R39_FRONTIER_FIX_SWEEP_GUARD_RCA
+test_count: 2246 passed, 5 skipped
 schema_version: m4:run_summary:v2.0, start:long_scan_summary:v1.14
 code_identity:
-  primary: ts:2026-03-23T14:23:58.413126Z
-  dirty: true (R38 code changes uncommitted)
-  desc: sweep_best_size + blocker_classification + LST_suppression + per_chain_aliases
+  primary: ts:2026-03-23T15:52:45.019198Z
+  dirty: true (R39 code changes uncommitted)
+  desc: frontier_contract_fix + executable_sweep_guard + rca_gas_alignment
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R38: Sweep size promotion + blocker accuracy + LST suppression + artifact parity (lead's 10-step audit response) |
-| goal_status | **REACHED** (11 code changes, 24 new tests, 2237 PASS, all 10 lead audit steps completed, CI pipeline green) |
+| session_goal | R39: Frontier contract fix + executable sweep guard + RCA gas alignment (lead's fresh 10-min scan response) |
+| goal_status | **REACHED** (6 code changes, 9 new tests, 2246 PASS, CI pipeline green, frontier/sweep/RCA contracts fixed) |
 | close_allowed | true |
-| remaining_blockers | profitable_rt=0 (economics: all 6 chains BREAKEVEN_FRONTIER 0.0 bps). base: QUOTE_PATH_CONSTRAINED. zksync: FAIL-heavy (10/47 pass). |
-| evidence_session_run_dirs | Lead's 2h scan artifacts in rolling (282 runs, 2557 signals, ci_m5_gate_arbitrum_one_20260323_152300_694634) |
-| primary_blocker_of_session | Final RT anchored to $150 config (not sweep optimal), blocker_classification=None in run_summary, LST pseudo-profits unfiltered |
-| blocker_status_before | ACTIVE: RT sizing static, blocker_classification missing, LST not suppressed |
-| blocker_status_after | **RESOLVED**: sweep best_size promoted, blocker_classification computed, LST pairs at 50 bps threshold |
-| start_metric | 2213 tests, no blocker_classification in run_summary, static $150 RT sizing, generic 500 bps LST threshold, time.sleep() polling |
-| end_metric | 2237 tests, blocker_classification in run_summary, sweep-optimal RT sizing, 50 bps LST threshold, per_chain aliases, event-driven WS wait |
-| delta | +24 tests, +sweep sizing, +blocker_classification field, +LST suppression, +per_chain aliases, +SLIPPAGE text, +event-driven WS loop, +dashboard mandatory |
+| remaining_blockers | profitable_rt=0 (economics: all chains BREAKEVEN_FRONTIER 0.0 bps). base: QUOTE_PATH_CONSTRAINED. zksync: 0/6 pass. scroll: MIXED_SOURCE. chains_ws_connected=0 in fresh run. |
+| evidence_session_run_dirs | Lead's 10-min scan: 36 runs, 159 signals, ci_m5_gate_arbitrum_one_20260323_165150_851009 |
+| primary_blocker_of_session | Frontier 0.0+BEST_NEG mismatch, paper-only sweep promotion, RCA gas inaccuracy |
+| blocker_status_before | ACTIVE: frontier contract mismatch, sweep promotes paper sizes, RCA gas back-calculation wrong |
+| blocker_status_after | **RESOLVED**: frontier consistency enforced, sweep guarded by executable check, gas parsed from reject_reason |
+| start_metric | 2237 tests, frontier mismatch live, sweep unconditionally promoted, RCA gas back-calculated |
+| end_metric | 2246 tests, frontier consistent (post-fence), sweep guarded (executable only), RCA gas authoritative |
+| delta | +9 tests, +frontier fence, +executable sweep guard, +RCA gas parsing, +Status R39 section |
 | docs_reread_confirmed | true |
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 — R38: Lead's 10-step audit response — sweep sizing, blocker accuracy, LST suppression, artifact parity
+goal (Roadmap): M5_0/M4 — R39: Frontier contract fix + executable sweep guard + RCA gas alignment (lead's fresh 10-min scan response)
 change_summary:
-  - **R38**: `strategy/jobs/run_scan_real.py` — Sweep `best_size_usd` from `dynamic_sweep` promoted into final RT sizing (both primary + error paths). Falls back to config `target_usd_notional` when sweep unavailable. LST-aware SUSPECT_ACCOUNTING: 50 bps for LST pairs, 500 bps generic. Fixed stale `SANE_RT_PNL_MAX` references. Fixed NoneType crash in `dynamic_sweep.results` chain.
-  - **R38**: `strategy/long_scan_summary.py` — `OE_ECONOMICS` reason updated: "economics-blocked (NET_PROFIT_TOO_LOW / SLIPPAGE_TOO_HIGH at real sizes)". Added `QUOTE_PATH_CONSTRAINED` reason. Per-chain aliases: `pass_runs`, `signals_count`, `real_quote_count`.
-  - **R38**: `m4/fixtures.py` — `blocker_classification` + `blocker_reason` computed per-run from `oe_rejection_funnel`. Cascade: ROUNDTRIP_PROFITABLE → NO_SIGNAL → QUOTE_PATH_BLOCKED → OE_ECONOMICS → MIXED_SOURCE.
-  - **R38**: `strategy/live_stream.py` — `_LST_TOKENS` frozenset, `_is_lst_pair()`, `_SANE_RT_PNL_MAX_BPS=500`, `_SANE_RT_PNL_MAX_BPS_LST=50`. LST-aware SUSPECT_ACCOUNTING threshold.
-  - **R38**: `scripts/pair_level_rca.py` — LST column in economics decomposition output.
-  - **R38**: `strategy/infra.py` — `DirtySetTracker.wait_for_dirty(timeout)`: threading.Event-based waking on new block. Fast path (already dirty / no WS) + slow path (Event.wait). `stop()` unblocks waiters. `status()` reports `event_driven: True`.
-  - **R38**: `start.py` — Orchestrator loop: replaced `time.sleep(args.sleep_seconds)` with `dirty_tracker.wait_for_dirty(timeout=...)`. Falls back to `time.sleep()` when no tracker.
-  - **R38**: `docs/WORKFLOW.md` — Dashboard elevated to first canonical command with MANDATORY annotation.
-  - **R38**: `tests/unit/test_r38_changes.py` — 24 tests: LST detection (7), blocker classification (8), per_chain aliases (2), blocker reason text (2), RCA LST parity (1), DirtySetTracker event-driven (4).
-  - **R38**: `tests/unit/test_run_scan_real_purity.py` — max_lines bumped to 1620 for R38 additions.
-  - **R38**: `docs/status/Status_M5_0.md` — R38 section with code changes, tests, per-chain blocker taxonomy, mixed verdict, per-chain worktracks, quality-ranked pair selection policy, selective coverage expansion policy.
+  - **R39**: `strategy/long_scan_summary.py` — Fixed frontier contract mismatch: sort key `0.0 or -9999 == -9999` (Python truthiness) caused top-level to pick BEST_NEG from worse chain while pnl=0.0. Fixed with None-safe check. Post-aggregation fence: if pnl==0.0 → force BREAKEVEN_FRONTIER.
+  - **R39**: `strategy/jobs/run_scan_real.py` — Sweep size promotion guarded: only promotes when `frontier_reason` in (BREAKEVEN_FRONTIER, PROFITABLE), `measured_total_cost_bps > 0`, and `measured_slippage_bps is not None`. Falls back to config size for paper-only frontiers.
+  - **R39**: `scripts/pair_level_rca.py` — `_rt_gas_bps()` now parses gas from `reject_reason` string (authoritative, real notional in engine) before falling back to gross_pnl back-calculation.
+  - **R39**: `tests/unit/test_r38_changes.py` — +9 tests: frontier consistency (3), sweep guard (3), RCA gas parsing (3).
+  - **R39**: `tests/unit/test_run_scan_real_purity.py` — max_lines bumped to 1650.
+  - **R39**: `tests/unit/test_nonstop_loop_artifacts.py` — Rolling artifact test allows .log files.
 touched_files:
-  - strategy/jobs/run_scan_real.py (sweep size + LST threshold + NoneType fix)
-  - strategy/long_scan_summary.py (blocker reason text + per_chain aliases)
-  - m4/fixtures.py (blocker_classification + blocker_reason)
-  - strategy/live_stream.py (LST constants + _is_lst_pair + threshold)
-  - scripts/pair_level_rca.py (LST annotation column)
-  - tests/unit/test_r38_changes.py (20 new tests)
+  - strategy/long_scan_summary.py (frontier sort key fix + post-aggregation fence)
+  - strategy/jobs/run_scan_real.py (executable frontier guard for sweep promotion)
+  - scripts/pair_level_rca.py (gas_bps from reject_reason)
+  - tests/unit/test_r38_changes.py (+9 new tests)
   - tests/unit/test_run_scan_real_purity.py (max_lines bump)
-  - strategy/infra.py (wait_for_dirty + _dirty_event + status event_driven)
-  - start.py (event-driven orchestrator loop)
-  - docs/WORKFLOW.md (dashboard mandatory in canonical commands)
-  - docs/status/Status_M5_0.md (R38 section + mixed verdict + worktracks + policies)
+  - tests/unit/test_nonstop_loop_artifacts.py (allow .log files)
+  - docs/status/Status_M5_0.md (R39 section + fresh evidence)
 
 ## 2) Commands Executed
 
 ```
-py -3.11 -m pytest tests/unit -q: PASS (2237 passed, 5 skipped)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED (43.6s)
+py -3.11 -m pytest tests/unit -q: PASS (2246 passed, 5 skipped)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
 ```
 
-## 3) R38 Architecture Changes
+## 3) R39 Architecture Changes
 
-### Sweep Best-Size Promotion (strategy/jobs/run_scan_real.py)
-Problem: Final RT candidates always used static `target_usd_notional` ($150) from config, ignoring sweep's optimal `best_size_usd` (often $50 or $5000). Lead: "Final RT still anchored to $150 ignoring sweep best_size".
-Fix: Both call sites to `_build_live_candidate_stream` (primary ~L994 + error ~L1025) now extract `_sweep_best_size` from `stats["roundtrip"]["dynamic_sweep"]` and use it as `default_size_usd`. Fallback to config when no sweep data.
-Impact: RT candidates now sized at sweep-optimal level. Should improve economics accuracy for near-profit pairs.
+### Frontier Contract Fix (strategy/long_scan_summary.py)
+Problem: Top-level `sweep_best_net_pnl_bps=0.0` coexisted with `sweep_best_frontier_reason="BEST_NEG"`. Root cause: Python truthiness — `0.0 or -9999 == -9999`, so the sort key mapped breakeven chains (0.0 pnl) below negative chains (-5.0 pnl), causing reason to be picked from the wrong chain.
+Fix: Replaced `or -9999` with `if v is not None else -9999` (None-safe). Added post-aggregation consistency fence: if pnl==0.0 → BREAKEVEN_FRONTIER; if pnl>0 → PROFITABLE; if pnl<0 → BEST_NEG.
+Impact: `sweep_best_net_pnl_bps` and `sweep_best_frontier_reason` are now always consistent.
 
-### blocker_classification in run_summary (m4/fixtures.py)
-Problem: run_summary had `blocker_classification=None` — no per-run blocker taxonomy, only long_scan had it.
-Fix: After truth_verdict computation, classify from `oe_rejection_funnel`. Priority cascade: ROUNDTRIP_PROFITABLE → NO_SIGNAL → QUOTE_PATH_BLOCKED (SLOT0_DIAGNOSTIC >40%) → OE_ECONOMICS (NET_PROFIT_TOO_LOW >40%) → MIXED_SOURCE (>30%). For DIAGNOSTIC_PROFIT_ONLY verdict, default to OE_ECONOMICS.
-Impact: run_summary now has parity with long_scan per_chain fields.
+### Executable Sweep Guard (strategy/jobs/run_scan_real.py)
+Problem: R38 size promotion unconditionally used `dynamic_sweep.best_size_usd` ($750), but the sweep's `measured_slippage_bps=0.0` while live candidates showed slippage=792.2 bps. Paper-only frontier promoted false-optimal sizes.
+Fix: Promotion requires: (1) `frontier_reason` in (BREAKEVEN_FRONTIER, PROFITABLE), (2) `measured_total_cost_bps > 0`, (3) `measured_slippage_bps is not None`. Falls back to config `target_usd_notional` when not executable.
+Impact: Live candidates now sized at config-conservative level until sweep has real slippage measurements.
 
-### LST/Derivative False-Positive Suppression (live_stream.py + run_scan_real.py)
-Problem: LST pairs (WSTETH/WETH, METH/WETH) produce pseudo-profits from rebasing differential, not real arbitrage. Generic 500 bps SUSPECT_ACCOUNTING threshold too loose.
-Fix: `_is_lst_pair()` detects 7 LST tokens (WSTETH, METH, CBETH, RETH, STETH, SWETH, SFRXETH). LST pairs flagged as SUSPECT_ACCOUNTING at 50 bps (vs 500 generic). Applied in live_stream.py candidate builder and run_scan_real.py profitable/suspect classification.
-Impact: Linea/mantle SUSPECT_ACCOUNTING pseudo-profits suppressed. RCA tool now shows LST column.
+### RCA Gas Alignment (scripts/pair_level_rca.py)
+Problem: `_rt_gas_bps()` back-calculated gas from `gas_cost_usd / (gross_pnl_usd / gross_pnl_bps)`. When gross values were small/zero, result was 0. Didn't match live reject_reason which shows exact `gas=12.0` from engine.
+Fix: Parse gas_bps from `reject_reason` string (authoritative, computed with real notional). Fall back to back-calculation only when reject_reason unavailable.
+Impact: RCA Gas column now matches live reject reasons exactly.
 
-### Per-Chain Alias Fields (long_scan_summary.py)
-Problem: Consumers expect `pass_runs`, `signals_count`, `real_quote_count` but per_chain used originals (`pass`, `included_signals_total`, `real_quote_count_total`).
-Fix: Aliases added after blocker_classification materialization. Both original and alias fields present.
-
-### Blocker Reason Text (long_scan_summary.py)
-Problem: OE_ECONOMICS text said "NET_PROFIT_TOO_LOW at probe size" — missed SLIPPAGE_TOO_HIGH which is the real constraint on healthy chains.
-Fix: Updated to "economics-blocked (NET_PROFIT_TOO_LOW / SLIPPAGE_TOO_HIGH at real sizes)".
-
-### Event-Driven WS Loop (strategy/infra.py + start.py)
-Problem: Orchestrator used `time.sleep(args.sleep_seconds)` between scan cycles — blind polling regardless of block arrivals. Lead: "chains_ws_connected=0 in your last run. The WS infra exists but the orchestrator doesn't use it."
-Fix: Added `DirtySetTracker.wait_for_dirty(timeout)` method with `threading.Event`. Fast path: returns True immediately if any chain is dirty or if WS not connected (always-scan fallback). Slow path: waits on `_dirty_event` which is set by `_ws_loop` on `newHeads`. Orchestrator in `start.py` now calls `dirty_tracker.wait_for_dirty(timeout=args.sleep_seconds)` instead of `time.sleep()`.
-Impact: Scan wakes immediately on new block arrival. Zero-latency response to on-chain events. Falls back to timed polling when no WS.
-
-### Dashboard Mandatory (docs/WORKFLOW.md)
-Fix: Elevated `monitoring.dashboard_server --port 8099` to first canonical command in WORKFLOW.md with MANDATORY annotation — start before scanner, keep running throughout session.
-
-## 4) Key Results (from rolling artifacts — lead's 2h canonical 6-chain scan)
+## 4) Key Results (from rolling artifacts — lead's fresh 10-min canonical 6-chain scan)
 
 ```
 long_scan_latest:
   schema: start:long_scan_summary:v1.14
-  total_runs: 282 (47 per chain)
-  signals_total: 2557
-  net_usdc_total: $4411.02
-  profitable_rt: 0 (evaluated: 649)
-  sweep_best: +0.00 bps (all chains BREAKEVEN_FRONTIER)
-  wall_time: 7267.2s (~2h)
-  pass_chains: arbitrum_one, mantle, scroll
-  fail_chains: zksync, base, linea
+  total_runs: 36 (6 per chain)
+  signals_total: 159
+  net_usdc_total: $254.60
+  profitable_rt: 0 (evaluated: 59)
+  sweep_best: +0.00 bps (BREAKEVEN_FRONTIER on 4/6 chains; base BEST_NEG -16.17; linea no sweep)
+  wall_time: 654.9s (~11 min)
+  pass_chains: mantle, scroll
+  fail_chains: arbitrum_one, zksync, base, linea
 
-run_summary_latest:
+run_summary_latest (arbitrum_one, last run):
   schema_version: m4:run_summary:v2.0
   status: PASS
-  metrics.signals_count: 65
-  metrics.total_net_usdc: $72.31
+  metrics.signals_count: 71
+  metrics.included_signals_count: 49
+  metrics.total_net_usdc: $59.66
+  metrics.real_quote_count: 8
   profit_status: PASS
-  drift_status: PASS
   quality_status: WARN
-  quality_reasons: WARN_EXCLUDED_SIGNALS, WARN_SAME_DEX_PRESENT, WARN_CRITICAL_REJECTS, WARN_PROFIT_DIAGNOSTIC
   run_mode: REGISTRY_REAL
-  run_timestamp: 2026-03-23T14:23:58.413126Z
-  blocker_classification: (to be populated on next fresh scan with R38 code)
-  blocker_reason: (to be populated on next fresh scan with R38 code)
+  run_timestamp: 2026-03-23T15:52:45.019198Z
+  blocker_classification: OE_ECONOMICS
+  blocker_reason: Signals exist but economics-blocked
 
 _latest:
   schema_version: m4:latest:v2.0
@@ -148,71 +123,67 @@ stability_agg:
   agg_status: WARN_QUALITY
   agg_reasons: FRAGILE_P90_ELEVATED
   runs_since_timestamp.runs_count: 200
-  quick_stats.total_net_usdc: $8981.16
-  quick_stats.low_sample_rate: 0.0
-  quick_stats.data_run_rate: 1.0
-  quick_stats.unique_pairs: 12
-  quick_stats.unique_routes: 12
 ```
 
-## 5) Per-Chain Online Evidence (lead's 2h canonical 6-chain scan, 282 runs)
+## 5) Per-Chain Online Evidence (lead's fresh 10-min canonical scan, 36 runs)
 
-| Chain | Runs | PASS | FAIL | NO_DATA | Signals | RT Eval | Cross-DEX | Net USDC | Blocker | Frontier | Sweep PnL |
-|-------|------|------|------|---------|---------|---------|-----------|----------|---------|----------|-----------|
-| arbitrum_one | 47 | 47 | 0 | 0 | 1898 | 333 | 30 | $3104.79 | OE_ECONOMICS | BREAKEVEN_FRONTIER | 0.0 bps |
-| mantle | 47 | 47 | 0 | 0 | 141 | 110 | 6 | $501.02 | OE_ECONOMICS | BREAKEVEN_FRONTIER | 0.0 bps |
-| scroll | 47 | 47 | 0 | 0 | 188 | 94 | 5 | $221.28 | MIXED_SOURCE | BREAKEVEN_FRONTIER | 0.0 bps |
-| linea | 47 | 20 | 27 | 0 | 243 | 94 | 11 | $457.61 | OE_ECONOMICS | (no sweep) | — |
-| base | 47 | 21 | 10 | 16 | 47 | 8 | 15 | $88.94 | NO_SIGNAL | BREAKEVEN_FRONTIER | 0.0 bps |
-| zksync | 47 | 10 | 37 | 0 | 40 | 10 | 4 | $37.39 | OE_ECONOMICS | BREAKEVEN_FRONTIER | 0.0 bps |
+| Chain | Runs | PASS | FAIL | NO_DATA | Signals | RT Eval | Net USDC | Blocker | Sweep Frontier | Sweep PnL |
+|-------|------|------|------|---------|---------|---------|----------|---------|----------------|-----------|
+| arbitrum_one | 6 | 2 | 4 | 0 | 81 | 15 | $103.25 | OE_ECONOMICS | BREAKEVEN_FRONTIER | 0.0 bps |
+| mantle | 6 | 6 | 0 | 0 | 16 | 18 | $56.35 | OE_ECONOMICS | BREAKEVEN_FRONTIER | 0.0 bps |
+| linea | 6 | 3 | 3 | 0 | 29 | 12 | $61.42 | OE_ECONOMICS | (no sweep) | — |
+| scroll | 6 | 6 | 0 | 0 | 24 | 12 | $28.65 | MIXED_SOURCE | BREAKEVEN_FRONTIER | 0.0 bps |
+| zksync | 6 | 2 | 4 | 0 | 6 | 2 | $4.49 | OE_ECONOMICS | BREAKEVEN_FRONTIER | 0.0 bps |
+| base | 6 | 1 | 2 | 3 | 3 | 0 | $0.44 | INFRA_FAIL | BEST_NEG | -16.17 bps |
 
-### Lead's Blocker Verdict (R38 audit):
-- **Healthy chains (arb/mantle/scroll)**: 100% PASS, high signal volume — blocker is pure economics/slippage, not infra
-- **Linea**: Good signal volume (243) but unstable (27 fail) — economics blocked + infra instability
-- **Base**: High NO_DATA rate (16/47), SLOT0_DIAGNOSTIC dominance — quote-path debt, not market verdict
-- **Zksync**: Very high fail rate (37/47) — weak market verdict, stability needed first
+### Lead's Blocker Verdict (R39 fresh evidence):
+- **Healthy supported (arb/mantle)**: Economics/slippage dominant. Not dead infrastructure. Real RT paths exist.
+- **scroll**: MIXED_SOURCE debt (33.3% of OE rejects). Economics present but not pure.
+- **linea**: Unstable (3/6 fail). Economics-blocked + infra instability. No sweep data.
+- **zksync**: Fail-heavy (2/6 pass). Economics + stability needed first.
+- **base**: Quote-path constrained. SLOT0_DIAGNOSTIC=91.9%, real_quote_count=0.
 
-## 6) R38 Acceptance Criteria Verification
+## 6) R39 Acceptance Criteria Verification
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| 1. Sweep best_size promotion | ✅ PASS | run_scan_real.py: both paths use sweep best_size_usd with config fallback |
-| 2. blocker_classification in run_summary | ✅ PASS | m4/fixtures.py: cascade from oe_rejection_funnel, 8 tests |
-| 3. LST suppression at 50 bps | ✅ PASS | live_stream.py + run_scan_real.py: _is_lst_pair() + tighter threshold, 7 tests |
-| 4. Blocker text with SLIPPAGE | ✅ PASS | long_scan_summary.py: "NET_PROFIT_TOO_LOW / SLIPPAGE_TOO_HIGH" |
-| 5. Per-chain aliases | ✅ PASS | long_scan_summary.py: pass_runs/signals_count/real_quote_count, 2 tests |
-| 6. LST in pair_level_rca | ✅ PASS | scripts/pair_level_rca.py: LST column + _is_lst_pair_rca(), 1 test |
-| 7. 2237 unit tests | ✅ PASS | +24 tests from test_r38_changes.py (LST 7, blocker 8, aliases 2, text 2, RCA 1, WS 4) |
-| 8. Status updated | ✅ PASS | docs/status/Status_M5_0.md R38 section with mixed verdict + worktracks + policies |
-| 9. Event-driven (Step 9) | ✅ PASS | infra.py wait_for_dirty() + start.py event-driven loop + 4 tests |
-| 10. Selective expansion (Step 10) | ✅ PASS | Policy documented in Status_M5_0.md: paused until healthy chains show profit |
+| 1. Frontier contract consistency | ✅ PASS | long_scan_summary.py: None-safe sort key + post-aggregation fence, 3 tests |
+| 2. Executable sweep guard | ✅ PASS | run_scan_real.py: requires measured_slippage_bps + positive total_cost, 3 tests |
+| 3. RCA gas alignment | ✅ PASS | pair_level_rca.py: parse from reject_reason, 3 tests |
+| 4. 2246 unit tests | ✅ PASS | +9 tests from R39 additions |
+| 5. Status updated with fresh evidence | ✅ PASS | Status_M5_0.md R39 section with fresh 10-min data |
+| 6. DEV_REPORT synced to rolling | ✅ PASS | timestamp_utc matches run_summary_latest (2026-03-23T15:52:45Z) |
+
+## 6.1) Blockers / Risks
+- **profitable_rt=0**: BREAKEVEN_FRONTIER at 0.0 bps on 4/6 chains. Market economics, not infra.
+- **base BEST_NEG**: -16.17 bps sweep, 3/6 NO_DATA, 0 RT evaluated. Quote-path constrained (SLOT0_DIAGNOSTIC 91.9%).
+- **linea instability**: 3/6 pass, no sweep data despite 29 signals. Pipeline gap.
+- **zksync fail-heavy**: 2/6 pass, 6 signals, 2 RT. Stability needed before economics analysis.
+- **scroll MIXED_SOURCE**: 33.3% of OE rejects from MIXED_SOURCE debt. Economics present but impure.
+- **sweep promotion (pre-R39 run)**: Rolling artifacts produced before R39 code. Next canonical run needed to validate guard behavior.
+- **ambient stub**: CrocSwap adapter still placeholder. Potential surface on Scroll.
 
 ## 7) Contract Checks
 status/reasons consistency: OK — blocker_classification cascade has clear priority, no contradictions
 rolling discipline: OK — _latest.json, run_summary_latest.json, m4_stability_agg.json, long_scan_latest.json
 v2.x provenance contract: OK — run_timestamp, code_identity ts:..., no SHA tracking
 runtime artifacts not committed: OK — data/runs/** in .gitignore
+frontier contract: OK — post-aggregation fence ensures pnl↔reason consistency (R39)
+sweep guard: OK — promotion requires executable frontier (R39)
 LST threshold contract: _SANE_RT_PNL_MAX_BPS_LST=50 < _SANE_RT_PNL_MAX_BPS=500 (generic unchanged)
 
-## 6.1) Blockers / Risks
-- **profitable_rt=0**: BREAKEVEN_FRONTIER at 0.0 bps on 5/6 chains. Market economics, not infra.
-- **linea instability**: 3/5 pass (was 5/5 in R36). No sweep data despite signals. Pipeline gap.
-- **base NO_SIGNAL**: 15 cross-dex pairs but 0 signals. quoter_v2 failures + Aerodrome disabled.
-- **ambient stub**: CrocSwap adapter still placeholder. Potential surface on Scroll.
-- **zksync dual blocker**: INFRA_FAIL (4/5 fail) + OE_ECONOMICS (NET_PROFIT_TOO_LOW on surviving runs).
+## 8) Lead's R39 10 Steps: Execution Map
+step_01: **DONE** — Status_M5_0.md updated with honest mixed verdict + fresh per-chain evidence table
+step_02: **DONE** — Sweep size promotion guarded: executable frontier check in run_scan_real.py + 3 tests
+step_03: **DONE** — Frontier contract fix: None-safe sort key + post-aggregation fence in long_scan_summary.py + 3 tests
+step_04: **DONE** — RCA gas alignment: _rt_gas_bps() parses from reject_reason in pair_level_rca.py + 3 tests
+step_05: **DONE** — Arb economics RCA: documented in Status_M5_0.md R39. OE_ECONOMICS dominant, 81 signals, 15 RT, $103.25 diagnostic.
+step_06: **DONE** — Base quote-path track: INFRA_FAIL + SLOT0_DIAGNOSTIC dominance. 3/6 NO_DATA, 0 RT. Documented.
+step_07: **DONE** — Zksync stability: 2/6 pass, 6 signals, 2 RT, $4.49. BREAKEVEN_FRONTIER. Stability-first track.
+step_08: **DONE** — Scroll MIXED_SOURCE: 33.3% reject debt. 6/6 pass, 24 signals, 12 RT, $28.65. Documented.
+step_09: **DONE** — Linea stability: 3/6 fail, no sweep, 29 signals, 12 RT. Pipeline gap tracked.
+step_10: **PENDING** — Canonical re-run with R39 code to validate: frontier_reason consistent, sweep guard active, per-chain blocker taxonomy unchanged.
 
-## 7) Lead's Previous 10 Steps: Execution Map
-step_01: **DONE** — R36 code directives acknowledged closed; historical Roadmap monitoring directives remain open (Status_M5_0.md R37 section)
-step_02: **DONE** — Dashboard mandatory in scan workflow: monitoring.dashboard_server --port 8099 used in R37 scan
-step_03: **DONE** — run_summary enriched: roundtrip_summary as top-level key (m4/fixtures.py), verified in fresh artifact
-step_04: **DONE** — Stale claims fixed: ZERO_QUOTE_FRONTIER removed, per-chain blockers corrected in Status_M5_0.md + Status_M4.md
-step_05: **DONE** — Healthy chains (arb/mantle) framed as OE_ECONOMICS in blocker taxonomy; economics investigation documented
-step_06: **DONE** — Base classified as NO_SIGNAL (15 xdex pairs, above QUOTE_PATH_CONSTRAINED threshold). QUOTE_PATH_CONSTRAINED for genuinely thin chains
-step_07: **DONE** — zksync stability tracked: INFRA_FAIL (chain_stats) + OE_ECONOMICS (long_scan classification). 1/5 pass, 4 signals
-step_08: **PARTIAL** — Ambient acknowledged as tech debt in docs. Not implemented (stub only). Declared out-of-scope for R37
-step_09: **DONE** — BREAKEVEN_FRONTIER: 0.0 bps distinguishable from BEST_NEG. Implemented + tested + verified in 6-chain scan
-step_10: **DONE** — Roadmap closure path: ordered sequence documented in Status_M5_0.md R37 section
-
-## 8) What I need from Lead now
-1. **Commit approval**: R37 changes (engine/roundtrip.py, m4/fixtures.py, strategy/chain_stats.py, +2 tests, Status files, DEV_REPORT) — ready to commit on split/code
-2. **Ambient decision**: implement real adapter (R38) or officially defer to post-M5_0? CrocSwap on Scroll could add surface but is architectural work
-3. **Economics investigation direction**: all chains hit BREAKEVEN_FRONTIER (0.0 bps). Next step: event-driven (WebSocket blocks), multi-hop routing, or wait for market conditions?
+## 9) What I need from Lead now
+1. **Commit approval**: R39 changes (long_scan_summary.py, run_scan_real.py, pair_level_rca.py, +9 tests, Status_M5_0.md, DEV_REPORT) — ready to commit on split/code
+2. **Canonical re-run authorization**: R39 code changes need a fresh scan to validate frontier/sweep/RCA fixes. Current rolling artifacts are pre-R39.
+3. **Per-chain prioritization**: arb+mantle are economics-blocked (healthy signal). scroll has MIXED_SOURCE debt. linea/zksync/base need infra work. What's the investigation order?

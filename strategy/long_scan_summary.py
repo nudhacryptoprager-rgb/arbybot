@@ -150,20 +150,23 @@ def build_summary(
             (s["sweep_best_net_pnl_bps"] for s in per_chain.values() if s.get("sweep_best_net_pnl_bps") is not None),
             default=None,
         ),
+        # R39: Use None-safe sort key — 0.0 is falsy in Python, so `or -9999`
+        # maps breakeven chains to bottom; `if v is not None` preserves 0.0.
         "sweep_best_size_usd": next(
             (
                 s["sweep_best_size_usd"]
-                for s in sorted(per_chain.values(), key=lambda x: x.get("sweep_best_net_pnl_bps") or -9999, reverse=True)
+                for s in sorted(per_chain.values(), key=lambda x: x.get("sweep_best_net_pnl_bps") if x.get("sweep_best_net_pnl_bps") is not None else -9999, reverse=True)
                 if s.get("sweep_best_size_usd") is not None
             ),
             None,
         ),
         # R36: Surface frontier_reason for best sweep chain — distinguishes
         # ALL_FAILED (no quotes at any size) from BEST_NEG (genuine zero/negative).
+        # R39: Same None-safe sort key to ensure reason comes from same chain as pnl.
         "sweep_best_frontier_reason": next(
             (
                 s.get("sweep_best_frontier_reason")
-                for s in sorted(per_chain.values(), key=lambda x: x.get("sweep_best_net_pnl_bps") or -9999, reverse=True)
+                for s in sorted(per_chain.values(), key=lambda x: x.get("sweep_best_net_pnl_bps") if x.get("sweep_best_net_pnl_bps") is not None else -9999, reverse=True)
                 if s.get("sweep_best_frontier_reason") is not None
             ),
             None,
@@ -228,6 +231,19 @@ def build_summary(
     _tpa, _bench = _compute_truth_path_alignment(per_chain)
     summary["truth_path_alignment"] = _tpa
     summary["benchmark_chain"] = _bench
+
+    # R39: Post-aggregation frontier consistency — pnl and reason must agree.
+    # If pnl == 0.0, reason MUST be BREAKEVEN_FRONTIER (not BEST_NEG).
+    _sweep_pnl = summary.get("sweep_best_net_pnl_bps")
+    _sweep_reason = summary.get("sweep_best_frontier_reason")
+    if _sweep_pnl is not None and _sweep_reason:
+        if _sweep_pnl == 0.0 and _sweep_reason != "BREAKEVEN_FRONTIER":
+            summary["sweep_best_frontier_reason"] = "BREAKEVEN_FRONTIER"
+        elif _sweep_pnl > 0 and _sweep_reason != "PROFITABLE":
+            summary["sweep_best_frontier_reason"] = "PROFITABLE"
+        elif _sweep_pnl < 0 and _sweep_reason not in ("BEST_NEG", "ALL_FAILED", "ALL_SUSPECT_OUTLIER"):
+            summary["sweep_best_frontier_reason"] = "BEST_NEG"
+
     return summary
 
 
