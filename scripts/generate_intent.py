@@ -104,10 +104,11 @@ def generate_pairs_for_chain(
     Generate intent pairs for a single chain using tiered selection.
 
     tier_filter:
-      'productive'   → only productive tokens (default intent.txt)
-      'exploratory'  → productive + exploratory
-      'all'          → all tiers (including diagnostic)
-      'diagnostic'   → only diagnostic pairs (LST, stables)
+      'productive'   -> only productive tokens (default intent.txt)
+      'exploratory'  -> productive + exploratory
+      'all'          -> all tiers (including diagnostic)
+      'diagnostic'   -> only diagnostic pairs (LST, stables)
+      'calibration'  -> productive + near-zero benchmark pairs (USDC/DAI, USDC/USDT, WETH/USDC, WBTC/USDC)
     """
     # Deduplicate tokens by lowercase (prefer the original-case version)
     seen_lower: dict[str, tuple[str, dict]] = {}
@@ -133,6 +134,9 @@ def generate_pairs_for_chain(
         # Special: only diagnostic
         eligible = {s for s, t in token_tiers.items() if t == "diagnostic"}
         return _generate_diagnostic_pairs(chain, eligible, set(token_tiers.keys()))
+    elif tier_filter == "calibration":
+        # Productive + calibration benchmark pairs
+        max_tier = 0
     else:
         max_tier = 0
 
@@ -144,6 +148,15 @@ def generate_pairs_for_chain(
     # 1. Anchor: WETH/USDC (always)
     if "WETH" in symbols and "USDC" in symbols:
         pairs.add(("WETH", "USDC"))
+
+    # Calibration benchmark pairs (near-zero reference)
+    if tier_filter == "calibration":
+        if "USDC" in symbols and "DAI" in symbols:
+            pairs.add(("USDC", "DAI"))
+        if "USDC" in symbols and "USDT" in symbols:
+            pairs.add(("USDC", "USDT"))
+        if "WBTC" in symbols and "USDC" in symbols:
+            pairs.add(("WBTC", "USDC"))
 
     # 2. Chain-native wrapper pairs (mantle WMNT)
     if "WMNT" in eligible:
@@ -230,6 +243,7 @@ def generate_intent(tier_filter: str = "productive") -> str:
         "exploratory": "Productive + Exploratory",
         "all": "All tiers (productive + exploratory + diagnostic)",
         "diagnostic": "Diagnostic only (stable/stable, LST/LRT)",
+        "calibration": "Productive + calibration benchmarks (USDC/DAI, USDC/USDT, WETH/USDC, WBTC/USDC)",
     }.get(tier_filter, "Productive contour")
 
     lines = [
@@ -283,7 +297,7 @@ def main():
     parser.add_argument("--diff", action="store_true", help="Show diff vs current intent.txt")
     parser.add_argument(
         "--tier",
-        choices=["productive", "exploratory", "all", "diagnostic"],
+        choices=["productive", "exploratory", "all", "diagnostic", "calibration"],
         default="productive",
         help="Which tier to generate (default: productive)",
     )

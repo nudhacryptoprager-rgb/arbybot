@@ -346,3 +346,33 @@ class TestProductiveSanity:
         for chain in ["arbitrum_one", "base", "linea", "scroll", "mantle", "zksync"]:
             pairs = generate_pairs_for_chain(chain, data[chain], "productive")
             assert f"{chain}:WETH/USDC" in pairs, f"{chain} missing WETH/USDC anchor"
+
+
+# ──────────────────────────────────────────────────────────────
+# Calibration tier — near-zero benchmark pairs
+# ──────────────────────────────────────────────────────────────
+
+class TestCalibrationTier:
+    """Calibration tier includes productive + benchmark pairs."""
+
+    def test_calibration_superset_of_productive(self):
+        """Calibration includes all productive pairs."""
+        data = load_core_tokens()
+        for chain in ["arbitrum_one", "base", "zksync"]:
+            prod = set(generate_pairs_for_chain(chain, data[chain], "productive"))
+            cal = set(generate_pairs_for_chain(chain, data[chain], "calibration"))
+            assert prod.issubset(cal), f"{chain}: productive not subset of calibration"
+
+    def test_arb_calibration_has_stable_pairs(self):
+        """Arb calibration has USDC/DAI and USDC/USDT benchmarks."""
+        data = load_core_tokens()
+        cal = generate_pairs_for_chain("arbitrum_one", data["arbitrum_one"], "calibration")
+        assert "arbitrum_one:USDC/DAI" in cal
+        assert "arbitrum_one:USDC/USDT" in cal
+
+    def test_calibration_count_reasonable(self):
+        """Calibration should be productive + a few benchmark pairs per chain."""
+        generated = generate_intent("calibration")
+        lines = [l for l in generated.split("\n") if l and not l.startswith("#")]
+        # 31 productive + up to 2 benchmark per chain (max ~12 extra)
+        assert 31 <= len(lines) <= 50, f"Expected 31-50 calibration pairs, got {len(lines)}"

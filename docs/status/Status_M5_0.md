@@ -1,15 +1,40 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-23 (R39d — **Quality-ranked pair selection.** 2290 tests PASS. Tiered intent generation: productive/exploratory/diagnostic. core_tokens.yaml metadata: volatility_tier, liquidity_tier, cross_dex_expected, accounting_sensitive, productive_default. Productive contour: 31 pairs across 6 chains, focused on volatile + liquid + multi-DEX tokens.)
-**Tests**: 2290 passed / 5 skipped
+**Updated**: 2026-03-23 (R39e -- **Market verdicts corrected + calibration universe.** 2293 tests PASS. Dense productive contour improved signal density materially on arb but did not unlock profit. Fresh RCA shows healthy-chain signals survive to real RT and fail on economics; density improved, profit proximity did not. Base remains quote-path constrained. Mantle/scroll/linea are economics/mixed-source, not pure adapter gaps.)
+**Tests**: 2293 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R39d: quality-ranked pair selection (2026-03-23). R39c: EXECUTABLE_BEST_NEG + route-level RCA (2026-03-23). R39b: sweep field fix + chain_stats + pair_trace gas (2026-03-23). R39a: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
+**Evidence**: R39e: market verdicts + calibration (2026-03-23). R39d: quality-ranked pair selection (2026-03-23). R39c: EXECUTABLE_BEST_NEG + route-level RCA (2026-03-23). R39b: sweep field fix + chain_stats + pair_trace gas (2026-03-23). R39a: frontier fix + sweep guard + RCA (2026-03-23). R38: sweep size + blocker + LST suppression (2026-03-23). R37: artifact parity + frontier classification (2026-03-23). R36: sweep promotion + config expansion (2026-03-23). R35: stream fix (2026-03-23). R34: signal loss fix (2026-03-22). R33: multi-chain + reprieve (2026-03-21).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
 
 ---
 
-## R39d — Quality-Ranked Pair Selection (Tiered Intent)
+## R39e -- Market Verdicts + Calibration Universe
+
+The dense productive contour (R39d) improved signal density materially on arbitrum_one, but it did not unlock profit. Fresh RCA shows that healthy-chain signals now survive to real RT and still fail on economics; density improved, profit proximity did not. Base remains quote-path constrained, and mantle/scroll/linea should not be described as pure adapter gaps.
+
+### Per-Chain Verdicts (from fresh RCA evidence)
+| Chain | Verdict | RT | Best PnL | Key Blocker |
+|-------|---------|----|---------:|-------------|
+| arb | healthy, economics-blocked | 5 | -291 bps | slippage (582 bps) dominates |
+| mantle | economics-blocked | 2 | -360 bps | high gas (133 bps) + MIXED_SOURCE 61.5% |
+| scroll | mixed-source + economics | 1 | -332 bps | SUSPECT_SPREAD 50%, MIXED_SOURCE 50% |
+| linea | executable, sweep-not-profitable | 0 | - | SUSPECT_SPREAD 50%, NET_PROFIT_TOO_LOW 50% |
+| zksync | thin + economics | 1 | -737 bps | high gas (163 bps), only 1 RT |
+| base | quote-path constrained | 0 | - | SLOT0_DIAGNOSTIC 96.6%, 1.4% exec rate |
+
+### Code Changes (R39e)
+1. **scripts/pair_level_rca.py** -- Unicode arrow replaced with ASCII `->` for Windows console safety.
+2. **scripts/generate_intent.py** -- `--tier calibration` added: productive + benchmark pairs (USDC/DAI, USDC/USDT per chain). 42 total pairs.
+3. **scripts/ci_full_pipeline.py** -- `--allow-intent-edit` passthrough to repo safety gate.
+4. **tests/unit/test_tiered_intent.py** -- +3 calibration tier tests (total 34).
+
+### Acceptance Criteria (for next pair strategy change)
+Next change REACHED only if at least one of: RT-evaluated count grows, real_quote_count grows, near-zero executable candidates appear (gap < 100 bps), or best RT gap to zero decreases. signals_count alone insufficient.
+
+---
+
+## R39d -- Quality-Ranked Pair Selection (Tiered Intent)
 
 A market-surface review of current intent.txt shows that the next leverage is not broader inventory coverage but quality-ranked pair selection. Healthy supported chains are already reaching real RT and failing mostly on economics, so the productive contour should shift toward volatile, liquid, multi-DEX pairs (ARB, PENDLE, AERO, VIRTUAL, WMNT, ZK) while stable/stable, LST/LRT, and thin long-tail pairs move to diagnostic or exploratory tiers.
 
@@ -42,57 +67,22 @@ A market-surface review of current intent.txt shows that the next leverage is no
 
 ---
 
-## R39c — EXECUTABLE_BEST_NEG Distinction + Route-Level Economics RCA
-
-R39c responds to lead's R39c directive: the current reports are a strong proxy for the **supported market surface**, not just pipeline health. Healthy chains (arb/mantle/linea/scroll) are market-economics-blocked. Base and partly zksync are infrastructure/quote-path constrained. The lead's key conclusion: filter relaxation does not unlock profit on healthy chains — the dominant blocker is market economics (spread < slippage + LP fee + gas).
-
-### Market Surface Conclusion (R39c)
-- **arb (6 RT)**: USDC/DAI -54 (nearest), WETH/USDC -749 (furthest). 59.3% exec rate. 0 OE gated. **Economics-blocked on all routes.**
-- **mantle (2 RT)**: METH/WETH +1444 (LST pseudo-profit), WMNT/USDC -745. 100% exec rate. **Economics-blocked (non-LST).**
-- **linea (2 RT)**: WSTETH/WETH +4434 (LST), WETH/WBTC -721. 100% exec rate. **Economics-blocked (non-LST).**
-- **scroll (2 RT)**: WETH/USDC -1120, USDC/DAI -4196. 86.7% exec rate. MIXED_SOURCE 37.5%. **Economics + quote-quality.**
-- **zksync (1 RT)**: WETH/USDC -876. 100% exec rate. NET_PROFIT 75%, SUSPECT_SPREAD 25%. **Economics-blocked + stability.**
-- **base (0 RT)**: SLOT0_DIAGNOSTIC=68.8%, MIXED_SOURCE=28.0%, exec rate 5.0%. **Quote-path constrained — not market verdict.**
-
-### Code Changes (R39c)
-1. **strategy/chain_stats.py** — `EXECUTABLE_BEST_NEG` upgrade: when frontier is `BEST_NEG` but `measured_slippage_bps` and `measured_gas_bps` are both populated (not None), the reason upgrades to `EXECUTABLE_BEST_NEG`. This distinguishes proven-executable negative frontiers from paper/placeholder boundaries.
-2. **strategy/long_scan_summary.py** — Post-aggregation fence updated: `EXECUTABLE_BEST_NEG` is now an acceptable reason for pnl < 0 (alongside `BEST_NEG`, `ALL_FAILED`, `ALL_SUSPECT_OUTLIER`). Per-chain frontier ranking now includes `sweep_best_frontier_reason` field.
-3. **strategy/jobs/run_scan_real.py** — Sweep size promotion guard now accepts `EXECUTABLE_BEST_NEG` alongside `BREAKEVEN_FRONTIER` and `PROFITABLE`. Both primary and error paths updated.
-4. **scripts/pair_level_rca.py** — Route-level economics: `extract_pair_trace()` now collects ALL RT results per pair (not just best) with `buy_dex→sell_dex` route detail, gross/net/slippage/gas/LP fee/real-quote. Console output adds "Route-level economics" section after sweep data.
-4b. **strategy/pair_trace.py** — `build_pair_funnel_trace()` now collects route-level data (buy_dex, sell_dex, per-route economics) for every RT result, embedded in the truth_report's `pair_funnel_trace`.
-5. **tests/unit/test_r38_changes.py** — +9 tests: chain_stats upgrade (4), post-fence (2), sweep guard (1), ranking field (1), route-level data (1). Existing sweep guard test updated. Total: 2259 tests.
+## R39c -- EXECUTABLE_BEST_NEG + Route-Level RCA (condensed)
+- `EXECUTABLE_BEST_NEG` upgrade in chain_stats.py: distinguishes proven-executable negative frontiers.
+- Post-aggregation fence: accepts EXECUTABLE_BEST_NEG for pnl < 0.
+- Route-level economics in pair_level_rca.py: buy_dex->sell_dex detail per RT.
+- Market surface: arb economics-blocked (-54 to -749 bps), base quote-path constrained (SLOT0_DIAGNOSTIC 68.8%), zksync/mantle/linea/scroll economics-blocked.
+- +8 tests. Total: 2259.
 
 ---
 
-## R39 — Frontier Contract Fix + Sweep Guard Field Fix + Chain Stats Truthiness + Pair Trace Gas
-
-R39 responds to lead's two canonical scans. First (pre-R39 code): 36 runs, 159 signals, 59 RT, $254.60. Second (post-R39 rerun): 30 runs, 241 signals, 67 RT evaluated, 0 profitable RT, $420.82 diagnostic net USDC. The rerun exposed three additional bugs beyond the initial frontier fix.
-
-### Fresh Evidence (post-R39 rerun, 2026-03-23T16:42:04Z)
-| Chain | Runs | PASS | FAIL | Signals | RT Eval | Blocker | Sweep Frontier | BEQ Size |
-|-------|------|------|------|---------|---------|---------|----------------|----------|
-| arbitrum_one | 5 | 5 | 0 | 175 | 6 | OE_ECONOMICS | BREAKEVEN_FRONTIER | $2500 |
-| mantle | 5 | 5 | 0 | 15 | 2 | OE_ECONOMICS | BREAKEVEN_FRONTIER | $25 |
-| scroll | 5 | 5 | 0 | 20 | 2 | MIXED_SOURCE | BREAKEVEN_FRONTIER | $50 |
-| zksync | 5 | 1 | 4 | 4 | 1 | OE_ECONOMICS | BREAKEVEN_FRONTIER | $50 |
-| base | 5 | 3 | 2 | 5 | 0 | NO_SIGNAL | BEST_NEG | $5000 |
-| linea | 5 | 0 | 5 | 22 | 2 | INFRA_FAIL | (no sweep) | — |
-
-### Blocker Verdict: MIXED (updated from post-R39 rerun)
-- **Healthy supported chains (arb/mantle/scroll)**: 5/5 pass, economics/slippage dominant. Not dead infrastructure.
-- **base**: NO_SIGNAL, 3/5 pass. SLOT0_DIAGNOSTIC=68.8%, exec rate 5.0%. Surface-constrained.
-- **zksync**: 1/5 pass. Economics + stability needed before market conclusions.
-- **linea**: 0/5 pass. INFRA_FAIL. 22 signals but no sweep candidates reach RT. Pipeline gap.
-- **LST pseudo-profits**: METH/WETH (mantle +1444 bps) and WSTETH/WETH (linea +4434 bps) are NOT real profitable RT. Must be excluded from headline frontier decisions.
-
-### Code Changes (R39a + R39b)
-1. **strategy/long_scan_summary.py** — Fixed frontier contract mismatch: sort key `x.get("sweep_best_net_pnl_bps") or -9999` treated 0.0 as falsy (Python truthiness: `0.0 or -9999 == -9999`), causing top-level to pick BEST_NEG from a worse chain while pnl=0.0. Fixed with `if v is not None else -9999`. Added post-aggregation consistency fence: if pnl==0.0 → force BREAKEVEN_FRONTIER.
-2. **strategy/jobs/run_scan_real.py** — Sweep size promotion guarded by executable frontier check. **R39b field fix**: guard checked `measured_total_cost_bps`/`measured_slippage_bps` (don't exist) → always false → size stuck at config 150. Fixed to `best_total_cost_bps`/`best_slippage_bps`. Both primary and error paths updated.
-3. **strategy/chain_stats.py** — **R39b truthiness fix**: `sweep.get("measured_gas_bps") or sweep.get("best_gas_bps")` treated 0.0 as falsy → mapped to None. Fixed with `if _var is not None else` pattern for all 4 measured fields (gas, fee, slippage, total_cost).
-4. **strategy/pair_trace.py** — **R39b gas computation fix**: Old code used `net_pnl_usd + gas_cost_usd` as "notional" (wrong — sum of PnL + gas ≠ trade notional). For USDC/DAI: gas=2864.67 instead of 12.0. Now parses from `reject_reason` string first (`|gas=12.0|`), fallback to `abs(gross_usd / (gross_bps/10000))`.
-5. **scripts/pair_level_rca.py** — `_rt_gas_bps()` now parses gas from `reject_reason` string (authoritative, computed with real notional in engine) before falling back to gross_pnl back-calculation. Fixes Gas column mismatch with live reject reasons.
-6. **tests/unit/test_r38_changes.py** — +13 tests total: frontier consistency (3), sweep guard (4 including field name test), chain_stats truthiness (2), pair_trace gas (2), RCA gas parsing (3).
-7. **tests/unit/test_pair_trace.py** — Added `gross_pnl_usd` to `_FakeRT` fixture.
+## R39 -- Frontier Fix + Sweep Guard + Chain Stats Truthiness (condensed)
+- Frontier sort key: 0.0 truthiness bug fixed (Python `0.0 or -9999`).
+- Sweep size promotion: field name fix (`measured_*` -> `best_*`).
+- Chain stats: 0.0 truthiness fix for gas/fee/slippage/total_cost.
+- Pair trace gas: reject_reason parsing instead of wrong notional calc.
+- Evidence: 30 runs, 241 signals, 67 RT, 0 profitable, $420.82.
+- +13 tests.
 8. **tests/unit/test_run_scan_real_purity.py** — max_lines bumped to 1650.
 9. **tests/unit/test_nonstop_loop_artifacts.py** — Rolling artifact test allows .log files.
 

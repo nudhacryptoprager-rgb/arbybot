@@ -295,12 +295,12 @@ def print_pair_funnel(trace: List[Dict[str, Any]], chain_key: str = ""):
     # R39c: Route-level economics — show ALL evaluated routes per pair
     route_pairs = [t for t in trace if t.get("routes")]
     if route_pairs:
-        print(f"\nRoute-level economics (buy→sell per pair):")
+        print(f"\nRoute-level economics (buy->sell per pair):")
         print(f"  {'Pair':20s} {'Route':>25s} {'Gross':>8s} {'Net':>8s} {'Slip':>8s} {'Gas':>8s} {'LP':>6s} {'Real':>5s}")
         print(f"  {'-'*20} {'-'*25} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*6} {'-'*5}")
         for t in route_pairs[:10]:
             for r in sorted(t["routes"], key=lambda x: -(x.get("net_pnl_bps") or -9999)):
-                route_str = f"{r['buy_dex']}→{r['sell_dex']}"
+                route_str = f"{r['buy_dex']}->{r['sell_dex']}"
                 if len(route_str) > 25:
                     route_str = route_str[:22] + "..."
                 print(f"  {t['pair']:20s} {route_str:>25s} "
