@@ -70,6 +70,10 @@ class RoundTripResult:
     leg2_success: bool = False
     leg2_is_real_quote: bool = False  # v2.1.0: True if re-quoted, False if ratio estimate
     
+    # R39i++: Per-leg quote source tracking for mixed-source visibility
+    leg1_source: str = "unknown"  # "quoter_v2" | "slot0" | "ve33" | "syncswap" | etc
+    leg2_source: str = "unknown"
+    
     # Results
     gross_pnl_wei: int = 0  # amount_back - amount_in
     gas_cost_wei: int = 0
@@ -125,6 +129,9 @@ class RoundTripResult:
             "leg2_ticks_crossed": self.leg2_ticks_crossed,
             "leg2_success": self.leg2_success,
             "leg2_is_real_quote": self.leg2_is_real_quote,
+            # R39i++: Per-leg quote source tracking
+            "leg1_source": self.leg1_source,
+            "leg2_source": self.leg2_source,
             "gross_pnl_wei": str(self.gross_pnl_wei),
             "gas_cost_wei": str(self.gas_cost_wei),
             "net_pnl_wei": str(self.net_pnl_wei),
@@ -248,6 +255,9 @@ def simulate_roundtrip(
         leg2_pool=sell_quote.get("pool_address", ""),
         leg1_fee=buy_quote.get("fee", 0),
         leg2_fee=sell_quote.get("fee", 0),
+        # R39i++: Per-leg quote source tracking for mixed-source visibility
+        leg1_source=buy_quote.get("quote_source", "unknown"),
+        leg2_source=sell_quote.get("quote_source", "unknown"),
     )
     
     # Leg 1: Extract from buy quote

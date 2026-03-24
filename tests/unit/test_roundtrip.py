@@ -1493,3 +1493,87 @@ class TestFrontierTruthGuards:
 
         assert result.best_net_pnl_bps < 0
         assert result.frontier_reason == "BEST_NEG"
+
+
+class TestLegSourceTracking:
+    """R39i++: Tests for per-leg quote source visibility in roundtrip results."""
+
+    def test_leg_sources_propagated_from_quotes(self):
+        """Leg sources are taken from quote_source fields."""
+        buy_quote = {
+            "token_in": "WETH",
+            "token_out": "USDC",
+            "amount_in_wei": 10**18,
+            "amount_out_wei": 2000 * 10**6,
+            "dex_id": "uniswap_v3",
+            "quote_source": "quoter_v2",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 2,
+        }
+        sell_quote = {
+            "token_in": "USDC",
+            "token_out": "WETH",
+            "amount_in_wei": 2000 * 10**6,
+            "amount_out_wei": 10**18,
+            "dex_id": "sushiswap_v3",
+            "quote_source": "slot0",
+            "gas_estimate": 150_000,
+            "ticks_crossed": 1,
+        }
+
+        result = simulate_roundtrip(
+            buy_quote, sell_quote,
+            gas_price_wei=100_000_000,
+        )
+
+        assert result.leg1_source == "quoter_v2"
+        assert result.leg2_source == "slot0"
+
+    def test_leg_sources_in_to_dict(self):
+        """Leg sources appear in serialized output."""
+        buy_quote = {
+            "token_in": "WETH",
+            "token_out": "USDC",
+            "amount_in_wei": 10**18,
+            "amount_out_wei": 2000 * 10**6,
+            "dex_id": "uniswap_v3",
+            "quote_source": "quoter_v2",
+        }
+        sell_quote = {
+            "token_in": "USDC",
+            "token_out": "WETH",
+            "amount_in_wei": 2000 * 10**6,
+            "amount_out_wei": 10**18,
+            "dex_id": "sushiswap_v3",
+            "quote_source": "ve33_getAmountOut",
+        }
+
+        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei=100_000_000)
+        d = result.to_dict()
+
+        assert d["leg1_source"] == "quoter_v2"
+        assert d["leg2_source"] == "ve33_getAmountOut"
+
+    def test_leg_sources_default_to_unknown(self):
+        """Missing quote_source defaults to 'unknown'."""
+        buy_quote = {
+            "token_in": "WETH",
+            "token_out": "USDC",
+            "amount_in_wei": 10**18,
+            "amount_out_wei": 2000 * 10**6,
+            "dex_id": "uniswap_v3",
+            # no quote_source
+        }
+        sell_quote = {
+            "token_in": "USDC",
+            "token_out": "WETH",
+            "amount_in_wei": 2000 * 10**6,
+            "amount_out_wei": 10**18,
+            "dex_id": "sushiswap_v3",
+            # no quote_source
+        }
+
+        result = simulate_roundtrip(buy_quote, sell_quote, gas_price_wei=100_000_000)
+
+        assert result.leg1_source == "unknown"
+        assert result.leg2_source == "unknown"
