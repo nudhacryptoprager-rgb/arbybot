@@ -34,6 +34,40 @@ Several files remain oversized (god-files) and need meaningful extraction:
 
 ---
 
+### TD-003: Event-Driven Freshness (R39g+)
+**Added**: 2026-03-24
+**Priority**: HIGH
+**Category**: Architecture / Signal Quality
+
+**Description**:
+Current scan loop polls all pairs on a fixed timer. The `DirtySetTracker` (R38) provides the primitive — `wait_for_dirty(timeout)` wakes on WS `newHeads` — but the quote pipeline still re-quotes the entire universe each cycle regardless of which pools actually had state changes.
+
+The lead identifies this as **the highest-leverage protocol-level improvement**: "spread < slippage + LP fee + gas" on every route, but much of the slippage estimate is stale because quotes are seconds old by the time the opportunity engine evaluates them.
+
+**Current state**:
+- `DirtySetTracker` exists in `strategy/infra.py` with `threading.Event` wake.
+- `DEFAULT_QUOTE_FRESHNESS_MS = 3000` in `core/models.py`.
+- Simulator rejects stale quotes (`execution/simulator.py` `_check_quote_freshness()`).
+- No per-pool dirty tracking — all pools re-quoted each cycle.
+
+**Target architecture**:
+1. Per-pool dirty bits: WS subscription to pool `Swap`/`Sync`/`Mint`/`Burn` events marks specific pools dirty.
+2. Selective requote: only dirty pools re-quoted each cycle, reducing RPC load and latency.
+3. Fresher quotes → tighter slippage estimates → opportunities that are currently rejected as unprofitable may become viable.
+4. Priority integration: dirty pools with cross-dex spread > threshold get front-of-queue requoting.
+
+**Impact**: Currently all 5 chains show slippage >> spread. ARB/USDC (closest to breakeven at $254.97 gap) could narrow significantly with sub-second quote freshness. Estimated improvement: reduced QUOTE_STALE rejections, tighter slippage modeling, potential for profitable RT on high-volume pairs.
+
+**Next Steps**:
+1. Extend `DirtySetTracker` with per-pool granularity (pool address → last_dirty_block).
+2. Add WS event filters for `Swap` events on tracked pools.
+3. Modify scan loop to skip clean pools (or use longer interval for clean pools).
+4. Benchmark: measure quote freshness distribution before/after.
+
+**Tracking**: R39g+ documents as architectural priority. Not blocking M5.0 CI.
+
+---
+
 ### TD-001: websockets.legacy Deprecation Warning
 **Added**: 2026-02-23
 **Priority**: LOW

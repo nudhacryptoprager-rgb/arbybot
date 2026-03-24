@@ -36,13 +36,15 @@ rpc_backoff_base_ms: 500
 universe_source: discovery_runtime
 
 # 4 DEXes: stage1 set + aerodrome (ve33)
-# R28.24: aerodrome EXCLUDED — VE33_QUOTE_FAILED=29 dominant blocker preventing cross-DEX.
-# RESTORE WHEN: Ve33Adapter getAmountOut() returns non-zero for base pairs.
+# R28.24: aerodrome was excluded (VE33_QUOTE_FAILED=29). Diagnosed: pools+ABI work,
+# original failure was transient RPC issue. Verified: getAmountOut returns valid quotes
+# for WETH/USDC, AERO/USDC, AERO/WETH on both volatile and stable pools.
+# R39g+: Re-enabled.
 dexes:
   - uniswap_v3
   - sushiswap_v3
   - pancakeswap_v3
-  # - aerodrome  # R28.24: DISABLED — VE33_QUOTE_FAILED blocks all cross-DEX on base
+  - aerodrome
 
 discovery_runtime_max_pairs: 30
 require_cross_dex: true

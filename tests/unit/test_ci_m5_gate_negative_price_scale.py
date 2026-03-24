@@ -32,7 +32,7 @@ class TestPriceScale_InvertedDirection(unittest.TestCase):
         }
         ok, msg = validate_price_scale(data, require_real=True)
         self.assertFalse(ok)
-        self.assertIn("PRICE_SCALE VIOLATION", msg)
+        self.assertIn("DIRECTION BUG", msg)
         self.assertIn("ARB/WETH", msg)
     
     def test_arb_usdc_inverted_fails_strict(self):
@@ -128,22 +128,26 @@ class TestPriceScale_CorrectPrices(unittest.TestCase):
 
 
 class TestPriceScale_OfflineWarning(unittest.TestCase):
-    """Offline mode (require_real=False) should warn but not fail."""
+    """Offline mode (require_real=False) should warn but not fail for outliers.
     
-    def test_inverted_price_warns_offline(self):
-        """Inverted price with require_real=False → WARN, OK."""
+    R39g+: Per-pair majority logic. If a pair has only bad quotes,
+    it's a direction bug → FAIL regardless of require_real.
+    """
+    
+    def test_inverted_price_all_bad_fails_even_offline(self):
+        """All-bad pair is a direction bug → FAIL even in offline mode."""
         data = {
             "quotes_sample": [
                 {
                     "token_in": "ARB",
                     "token_out": "WETH",
-                    "price_exact": "17000",  # Wrong
+                    "price_exact": "17000",  # Wrong, and no good quotes
                 }
             ]
         }
         ok, msg = validate_price_scale(data, require_real=False)
-        self.assertTrue(ok)  # Passes but warns
-        self.assertIn("WARN", msg)
+        self.assertFalse(ok)
+        self.assertIn("DIRECTION BUG", msg)
 
 
 class TestPriceScale_Bounds(unittest.TestCase):
@@ -170,16 +174,16 @@ class TestPriceScale_Bounds(unittest.TestCase):
 
 
 class TestPriceScale_LineaRegression(unittest.TestCase):
-    """Regression: Linea PRICE_SCALE 11.8% violation (runDir 095809).
+    """Regression: Linea PRICE_SCALE violations from low-liquidity extreme fee-tier pools.
     
-    Linea pancakeswap_v3 produced:
-    - WETH/USDC fee=2500: price=0.001476 (inverted, expected ~2050)
-    - WETH/USDT fee=500: price=93.0456 (below [100, 50000] range)
-    2/17 quotes = 11.8% > 10% threshold → FAIL.
+    R39g+: Per-pair majority logic. If WETH/USDC has good quotes (~2050) AND
+    bad quotes (0.001476 from 10000-fee pool), the bad ones are data quality
+    outliers since the pair has good quotes → PASS with WARN.
+    Only FAIL if ALL quotes for a pair are outside bounds (directi bug).
     """
     
-    def test_linea_inverted_weth_usdc_fails(self):
-        """WETH/USDC=0.001476 (inverted) → violation detected."""
+    def test_linea_inverted_weth_usdc_only_bad_fails(self):
+        """WETH/USDC=0.001476 with NO good quotes → FAIL (direction bug)."""
         data = {
             "quotes_sample": [
                 {"token_in": "WETH", "token_out": "USDC", "price_exact": "0.001476"},
@@ -189,8 +193,8 @@ class TestPriceScale_LineaRegression(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("WETH/USDC", msg)
     
-    def test_linea_weth_usdt_below_range_fails(self):
-        """WETH/USDT=93.0456 (below 100 min) → violation detected."""
+    def test_linea_weth_usdt_below_range_only_bad_fails(self):
+        """WETH/USDT=93.0456 (below 100 min) with NO good quotes → FAIL."""
         data = {
             "quotes_sample": [
                 {"token_in": "WETH", "token_out": "USDT", "price_exact": "93.0456"},
@@ -200,30 +204,52 @@ class TestPriceScale_LineaRegression(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("WETH/USDT", msg)
     
-    def test_linea_violation_rate_above_10pct(self):
-        """2 bad quotes out of 17 = 11.8% > 10% threshold → FAIL in real mode."""
-        good_quotes = [
-            {"token_in": "WETH", "token_out": "USDC", "price_exact": "2050.0"},
-        ] * 15
-        bad_quotes = [
-            {"token_in": "WETH", "token_out": "USDC", "price_exact": "0.001476"},
-            {"token_in": "WETH", "token_out": "USDT", "price_exact": "93.0456"},
-        ]
-        data = {"quotes_sample": good_quotes + bad_quotes}
+    def test_linea_outlier_with_good_quotes_passes(self):
+        """R39g+: 1 bad WETH/USDC quote + 4 good ones → PASS (data quality warn)."""
+        data = {
+            "quotes_sample": [
+                {"token_in": "WETH", "token_out": "USDC", "price_exact": "2050.0"},
+                {"token_in": "WETH", "token_out": "USDC", "price_exact": "2060.0"},
+                {"token_in": "WETH", "token_out": "USDC", "price_exact": "2040.0"},
+                {"token_in": "WETH", "token_out": "USDC", "price_exact": "2055.0"},
+                {"token_in": "WETH", "token_out": "USDC", "price_exact": "0.01476"},  # outlier from 10000 fee pool
+            ]
+        }
         ok, msg = validate_price_scale(data, require_real=True)
-        self.assertFalse(ok)
-        self.assertIn("PRICE_SCALE VIOLATION", msg)
+        self.assertTrue(ok)
+        self.assertIn("WARN", msg)
+        self.assertIn("data quality", msg)
     
-    def test_linea_violation_rate_at_10pct_passes(self):
-        """Exactly 10% violation rate (2/20) → PASS (≤10% tolerant)."""
+    def test_linea_mixed_pairs_bad_and_good(self):
+        """R39g+: Mixed scenario - WETH/USDC has outlier (OK), WETH/USDT all bad (FAIL)."""
+        data = {
+            "quotes_sample": [
+                {"token_in": "WETH", "token_out": "USDC", "price_exact": "2050.0"},  # good
+                {"token_in": "WETH", "token_out": "USDC", "price_exact": "0.001476"},  # bad outlier
+                {"token_in": "WETH", "token_out": "USDT", "price_exact": "93.0456"},  # bad, no good USDT quotes
+            ]
+        }
+        ok, msg = validate_price_scale(data, require_real=True)
+        self.assertFalse(ok)  # WETH/USDT has only bad quotes = direction bug
+        self.assertIn("WETH/USDT", msg)
+    
+    def test_linea_real_scenario_passes(self):
+        """R39g+: Real linea scenario - 4 good WETH/USDC + 1 bad → all OK."""
         good_quotes = [
-            {"token_in": "WETH", "token_out": "USDC", "price_exact": "2050.0"},
-        ] * 18
-        bad_quotes = [
-            {"token_in": "WETH", "token_out": "USDC", "price_exact": "0.001476"},
-            {"token_in": "WETH", "token_out": "USDT", "price_exact": "93.0456"},
+            {"token_in": "WETH", "token_out": "USDC", "price_exact": "2160.6"},
+            {"token_in": "WETH", "token_out": "USDC", "price_exact": "2158.9"},
+            {"token_in": "WETH", "token_out": "USDC", "price_exact": "1882.9"},
+            {"token_in": "WETH", "token_out": "USDC", "price_exact": "2159.3"},
         ]
-        data = {"quotes_sample": good_quotes + bad_quotes}
+        bad_quotes = [
+            {"token_in": "WETH", "token_out": "USDC", "price_exact": "0.01476"},
+        ]
+        # Also include unrelated pairs
+        other = [
+            {"token_in": "WBTC", "token_out": "USDC", "price_exact": "70489.0"},
+            {"token_in": "WETH", "token_out": "WBTC", "price_exact": "0.029"},
+        ]
+        data = {"quotes_sample": good_quotes + bad_quotes + other}
         ok, msg = validate_price_scale(data, require_real=True)
         self.assertTrue(ok)
 

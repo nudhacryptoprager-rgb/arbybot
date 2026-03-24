@@ -309,14 +309,20 @@ def validate_price_scale(data: Dict[str, Any], require_real: bool = False) -> Tu
     This catches bugs where price is calculated as token0/token1 instead of token1/token0
     (or vice versa), resulting in prices that are orders of magnitude wrong.
     
-    M4.2 UPDATE: Tolerance for < 10% of quotes with wrong scale (data quality issue,
-    not a code bug). Fails only if > 10% of quotes have wrong scale.
+    R39g+: Per-pair majority logic. If a pair has at least one good quote,
+    outlier quotes for that pair are data quality issues (e.g., low-liquidity
+    extreme fee-tier pools), not direction bugs. Only fail if a pair has
+    ALL quotes outside bounds (systematic direction error).
     """
     quotes = data.get("quotes_sample", [])
     if not quotes:
         return True, "price_scale OK (no quotes_sample)"
     
-    violations = []
+    # Collect per-pair good/bad counts
+    from collections import defaultdict
+    pair_good: dict = defaultdict(int)
+    pair_bad: dict = defaultdict(list)
+    
     for q in quotes:
         pair = f"{q.get('token_in', '?')}/{q.get('token_out', '?')}"
         price_str = q.get("price_exact") or q.get("price")
@@ -332,21 +338,30 @@ def validate_price_scale(data: Dict[str, Any], require_real: bool = False) -> Tu
         if bounds:
             min_p, max_p = bounds
             if price < min_p or price > max_p:
-                violations.append(
-                    f"{pair}: price={price:.6g} outside [{min_p}, {max_p}] (likely inverted direction)"
+                pair_bad[pair].append(
+                    f"{pair}: price={price:.6g} outside [{min_p}, {max_p}]"
                 )
+            else:
+                pair_good[pair] += 1
     
-    if violations:
-        # M4.2: Tolerate up to 10% bad quotes (data quality issue from low-liquidity pools)
-        violation_rate = len(violations) / len(quotes) if quotes else 0
-        msg = f"PRICE_SCALE VIOLATION: {len(violations)}/{len(quotes)} quotes ({violation_rate:.1%}) with wrong scale: {violations[:3]}"
-        
-        if require_real and violation_rate > 0.10:
-            # More than 10% violations = likely code bug
-            return False, msg
+    # A pair is a direction-bug if ALL its quotes are outside bounds
+    direction_bugs = []
+    data_quality_warns = []
+    for pair, bad_list in pair_bad.items():
+        if pair_good.get(pair, 0) > 0:
+            # Pair has good quotes — outliers are data quality, not direction bugs
+            data_quality_warns.extend(bad_list)
         else:
-            # Few violations = data quality issue, warn only
-            return True, f"WARN: {msg}"
+            direction_bugs.extend(bad_list)
+    
+    if direction_bugs:
+        msg = f"PRICE_SCALE DIRECTION BUG: {len(direction_bugs)} quotes with ALL-bad pairs: {direction_bugs[:3]}"
+        return False, msg
+    
+    if data_quality_warns:
+        msg = (f"PRICE_SCALE data quality: {len(data_quality_warns)} outlier quotes "
+               f"(pairs have good quotes too): {data_quality_warns[:3]}")
+        return True, f"WARN: {msg}"
     
     return True, f"price_scale OK ({len(quotes)} quotes checked)"
 

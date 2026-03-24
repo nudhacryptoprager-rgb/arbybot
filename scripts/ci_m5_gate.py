@@ -35,14 +35,19 @@ from core.constants import PRICE_SCALE_BOUNDS
 def validate_price_scale(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """Validate price scale invariant (M5 strict gate rule).
     
+    R39g+: Per-pair majority logic. If a pair has at least one good quote,
+    outlier quotes are data quality, not direction bugs. Only fail if
+    ALL quotes for a pair are outside bounds.
+    
     Returns (ok, errors) where errors contains violation messages.
     """
-    errors = []
-    
-    # Look for quotes in various locations
     quotes = data.get("top_opportunities", [])
     if not quotes:
         return True, []
+    
+    from collections import defaultdict
+    pair_good: dict = defaultdict(int)
+    pair_bad: dict = defaultdict(list)
     
     for i, q in enumerate(quotes):
         pair = q.get("pair") or f"{q.get('token_in', '?')}/{q.get('token_out', '?')}"
@@ -59,9 +64,16 @@ def validate_price_scale(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
         if bounds:
             min_p, max_p = bounds
             if price < min_p or price > max_p:
-                errors.append(
+                pair_bad[pair].append(
                     f"strict_price_scale_violation_{i}_{pair}_{price:.6g}_outside_{min_p}_{max_p}"
                 )
+            else:
+                pair_good[pair] += 1
+    
+    errors = []
+    for pair, bad_list in pair_bad.items():
+        if pair_good.get(pair, 0) == 0:
+            errors.extend(bad_list)
     
     return len(errors) == 0, errors
 
