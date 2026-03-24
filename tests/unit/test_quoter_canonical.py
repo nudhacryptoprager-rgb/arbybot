@@ -56,7 +56,7 @@ class TestQuoterCanonical:
             slot0_called.append(pool_addr)
             return None, None  # slot0 fails
         
-        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block):
+        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block, **kwargs):
             return {
                 "amount_out": 2500 * 10**6,  # 2500 USDC
                 "gas_estimate": 150000,
@@ -106,7 +106,7 @@ class TestQuoterCanonical:
         def mock_slot0(pool_addr, rpc_url, block):
             return None, None  # slot0 FAILS
         
-        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block):
+        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block, **kwargs):
             return {
                 "amount_out": 1000 * 10**6,  # 1000 USDC
                 "gas_estimate": 100000,

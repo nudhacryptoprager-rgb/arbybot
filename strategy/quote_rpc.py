@@ -246,8 +246,14 @@ def read_quoter_v2(
     fee: int,
     rpc_url: Optional[str],
     block_num: int,
+    fallback_rpc_urls: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Get executable quote from QuoterV2 contract."""
+    """Get executable quote from QuoterV2 contract.
+
+    R39n: On 429 rate-limit, tries fallback_rpc_urls before returning
+    QUOTER_RATE_LIMITED sentinel. This prevents slot0 contamination
+    on alpha pairs when the primary RPC is rate-limited.
+    """
     if not quoter_address or not rpc_url:
         return None
     if os.environ.get("ARBY_SKIP_RPC") == "1":
@@ -259,49 +265,65 @@ def read_quoter_v2(
         logger.debug("QuoterV2 skipped: web3 not installed")
         return None
 
-    try:
-        from dex.adapters.uniswap_v3 import (
-            decode_quote_response,
-            encode_quote_exact_input_single,
-        )
+    # Build ordered list of RPCs to try: primary first, then fallbacks
+    urls_to_try = [rpc_url]
+    if fallback_rpc_urls:
+        for fb in fallback_rpc_urls:
+            if fb and fb != rpc_url and fb not in urls_to_try:
+                urls_to_try.append(fb)
 
-        call_data = encode_quote_exact_input_single(
-            token_in=token_in,
-            token_out=token_out,
-            amount_in=amount_in,
-            fee=fee,
-        )
+    from dex.adapters.uniswap_v3 import (
+        decode_quote_response,
+        encode_quote_exact_input_single,
+    )
 
-        w3 = _get_shared_w3(rpc_url)
-        if w3 is None:
+    call_data = encode_quote_exact_input_single(
+        token_in=token_in,
+        token_out=token_out,
+        amount_in=amount_in,
+        fee=fee,
+    )
+
+    last_error = None
+    for url in urls_to_try:
+        try:
+            w3 = _get_shared_w3(url)
+            if w3 is None:
+                continue
+            result_hex = w3.eth.call(
+                {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
+                block_identifier=block_num,
+            ).hex()
+
+            amount_out, sqrt_price_after, ticks_crossed, gas_estimate = (
+                decode_quote_response(result_hex)
+            )
+
+            logger.debug(
+                "QuoterV2 success: %s -> %s, amountOut=%d, ticks=%d, gas=%d",
+                token_in[:10],
+                token_out[:10],
+                amount_out,
+                ticks_crossed,
+                gas_estimate,
+            )
+
+            return {
+                "amount_out": amount_out,
+                "sqrt_price_after": sqrt_price_after,
+                "ticks_crossed": ticks_crossed,
+                "gas_estimate": gas_estimate,
+            }
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                logger.info("QuoterV2 rate-limited (429) on %s: %s", url[:40], e)
+                last_error = e
+                continue  # R39n: try next RPC
+            logger.debug("QuoterV2 failed on %s: %s", url[:40], e)
             return None
-        result_hex = w3.eth.call(
-            {"to": Web3.to_checksum_address(quoter_address), "data": call_data},
-            block_identifier=block_num,
-        ).hex()
 
-        amount_out, sqrt_price_after, ticks_crossed, gas_estimate = (
-            decode_quote_response(result_hex)
-        )
-
-        logger.debug(
-            "QuoterV2 success: %s -> %s, amountOut=%d, ticks=%d, gas=%d",
-            token_in[:10],
-            token_out[:10],
-            amount_out,
-            ticks_crossed,
-            gas_estimate,
-        )
-
-        return {
-            "amount_out": amount_out,
-            "sqrt_price_after": sqrt_price_after,
-            "ticks_crossed": ticks_crossed,
-            "gas_estimate": gas_estimate,
-        }
-    except Exception as e:
-        if _is_rate_limit_error(e):
-            logger.info("QuoterV2 rate-limited (429): %s", e)
-            return QUOTER_RATE_LIMITED
-        logger.debug("QuoterV2 failed: %s", e)
-        return None
+    # All RPCs rate-limited
+    if last_error is not None:
+        logger.info("QuoterV2 rate-limited on all %d RPCs", len(urls_to_try))
+        return QUOTER_RATE_LIMITED
+    return None

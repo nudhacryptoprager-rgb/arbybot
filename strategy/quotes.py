@@ -406,7 +406,10 @@ def collect_quotes(
     
     # RPC URL for slot0 reads
     # v3.2.32: Config rpc_endpoints take priority over env (multi-chain safety)
-    rpc_url = (config.get("rpc_endpoints") or [None])[0] or os.environ.get("ARBY_RPC_HTTP_PRIMARY")
+    _all_rpc_endpoints = config.get("rpc_endpoints") or []
+    rpc_url = (_all_rpc_endpoints[0] if _all_rpc_endpoints else None) or os.environ.get("ARBY_RPC_HTTP_PRIMARY")
+    # R39n: Remaining endpoints used as 429 failover for quoter calls
+    _fallback_rpc_urls = _all_rpc_endpoints[1:] if len(_all_rpc_endpoints) > 1 else []
     skip_rpc = os.environ.get("ARBY_SKIP_RPC") == "1"
     tokens_anchor_price = config.get("tokens_anchor_price") or {}
     
@@ -1127,7 +1130,8 @@ def collect_quotes(
                         else:
                             quoter_result = read_quoter_v2(
                                 quoter_addr, token_in_addr, token_out_addr,
-                                amount_in_wei, fee_tier, rpc_url, current_block
+                                amount_in_wei, fee_tier, rpc_url, current_block,
+                                fallback_rpc_urls=_fallback_rpc_urls,
                             )
                     elif adapter_type == "algebra":
                         # R28.4: Use prefetched result if available
@@ -1360,7 +1364,19 @@ def collect_quotes(
                 # R32: Only count genuine failures toward skip cache, NOT rate limits
                 if not _was_rate_limited:
                     _record_quoter_v2_failure(pool_key)
-                # Do NOT continue — fall through to slot0 path below
+                # R39n: Alpha pairs must not contaminate truth with slot0 on 429.
+                # If rate-limited on an alpha pair, skip slot0 entirely (unavailable this cycle).
+                if _was_rate_limited:
+                    from core.constants import get_pair_role
+                    _pair_role = get_pair_role(f"{token_in}/{token_out}", chain_key)
+                    if _pair_role == "alpha":
+                        counts["alpha_429_skipped"] = counts.get("alpha_429_skipped", 0) + 1
+                        logger.info(
+                            "ALPHA_429_SKIP: %s %s/%s fee=%d — no slot0 fallback for alpha pair",
+                            dex, token_in, token_out, fee_tier,
+                        )
+                        continue  # Skip slot0 path — unavailable this cycle
+                # Non-alpha or non-rate-limited: fall through to slot0 path below
             
             # Path B: slot0 fallback — DIAGNOSTIC CHANNEL only (R28)
             # slot0 reads are NOT executable quotes; they provide price reference

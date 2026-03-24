@@ -356,6 +356,7 @@ ALLOWED_YAML_FILES = {
     "onboard_arbitrum_one_candidate.yaml",
     "onboard_base_stage1.yaml",
     "onboard_base_stage2.yaml",
+    "onboard_base_profit.yaml",
     "onboard_linea_stage1.yaml",
     "onboard_mantle_stage1.yaml",
     "onboard_mantle_stage2.yaml",

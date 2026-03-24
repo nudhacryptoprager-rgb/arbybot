@@ -820,6 +820,7 @@ def run_scan(
                 rt_max_candidates=_rt_max_candidates,
                 rt_top_n=_rt_top_n,
                 min_margin_bps=_min_margin_bps,
+                chain=chain_key,
             )
             stats["roundtrip_lp_filter"] = _rt_filter_stats
             

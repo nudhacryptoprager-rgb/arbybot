@@ -70,7 +70,7 @@ class TestQuoterV2FailedReject:
         """When quoter fails on uniswap_v3, QUOTER_V2_FAILED reject is emitted."""
         from strategy.quotes import collect_quotes
 
-        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block):
+        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block, **kwargs):
             return None  # Quoter fails
 
         def mock_slot0(pool_addr, rpc_url, block):
@@ -101,7 +101,7 @@ class TestQuoterV2FailedReject:
 
         slot0_called = []
 
-        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block):
+        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block, **kwargs):
             return None  # Quoter fails
 
         def mock_slot0(pool_addr, rpc_url, block):
@@ -157,7 +157,7 @@ class TestQuoterMatrix:
         """quoter_matrix records successful quoter calls."""
         from strategy.quotes import collect_quotes
 
-        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block):
+        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block, **kwargs):
             return {
                 "amount_out": 2500 * 10**6,
                 "gas_estimate": 150000,
@@ -201,7 +201,7 @@ class TestQuoterMatrix:
         """quoter_matrix records failed quoter calls and slot0 fallback."""
         from strategy.quotes import collect_quotes
 
-        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block):
+        def mock_quoter_v2(quoter_addr, token_in, token_out, amount_in, fee, rpc_url, block, **kwargs):
             return None  # Quoter fails
 
         def mock_slot0(pool_addr, rpc_url, block):

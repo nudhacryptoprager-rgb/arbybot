@@ -10,6 +10,8 @@ overridden independently.
 import logging
 from typing import Any, Dict, List, Tuple
 
+from core.constants import EXECUTABLE_QUOTE_SOURCES, get_pair_role
+
 logger = logging.getLogger("roundtrip_selection")
 
 # Policy constant: minimum spread-minus-required for roundtrip consideration.
@@ -72,11 +74,24 @@ def best_per_pair(opps: List[dict], max_candidates: int = 10) -> List[dict]:
     return sorted(pairs_best.values(), key=lambda x: x.get("spread_minus_required_bps", -999), reverse=True)
 
 
+# R39n: Pair role priority for alpha-first ordering.
+# Lower number = higher priority in roundtrip evaluation.
+_ROLE_PRIORITY = {"alpha": 0, "unclassified": 1, "benchmark": 2, "calibration": 3}
+
+
+def _pair_role_sort_key(opp: dict, chain: str) -> int:
+    """Return numeric priority for alpha-first ordering (0=alpha, 3=calibration)."""
+    pair = opp.get("pair", "")
+    role = get_pair_role(chain, pair)
+    return _ROLE_PRIORITY.get(role, 1)
+
+
 def select_roundtrip_candidates(
     opps_list: List[dict],
     rt_max_candidates: int = 50,
     rt_top_n: int = 10,
     min_margin_bps: float = DEFAULT_MIN_SPREAD_MINUS_THRESHOLD,
+    chain: str = "",
 ) -> tuple:
     """Run the full candidate selection pipeline and return (eligible_opps, filter_stats).
 
@@ -84,7 +99,8 @@ def select_roundtrip_candidates(
     1. best_per_pair — deduplicate by pair (keep best margin)
     2. roundtrip_eligible — cross-DEX + LP-fee viable + not diagnostic
     3. margin_viable — spread_minus_required_bps > threshold
-    4. Cap to rt_top_n
+    4. R39n: Sort alpha-first when chain is provided
+    5. Cap to rt_top_n
 
     Returns:
         (eligible_opps, filter_stats_dict)
@@ -93,6 +109,11 @@ def select_roundtrip_candidates(
 
     eligible_and_rt = [o for o in per_pair if roundtrip_eligible(o)]
     eligible_all = [o for o in eligible_and_rt if margin_viable(o, min_margin_bps)]
+
+    # R39n: Alpha-first ordering — evaluate alpha pairs before benchmark/calibration.
+    if chain:
+        eligible_all.sort(key=lambda o: _pair_role_sort_key(o, chain))
+
     eligible_opps = eligible_all[:rt_top_n]
 
     margin_filtered_count = len(eligible_and_rt) - len(eligible_all)
@@ -123,7 +144,7 @@ def select_sweep_reprieve_candidates(
     Criteria:
     - gate_passed == False
     - is_reprievable == True (R36), or reject_reason starts with NET_PROFIT_TOO_LOW (legacy)
-    - Both legs are quoter_v2 (not mixed-source or slot0)
+    - Both legs are executable (in EXECUTABLE_QUOTE_SOURCES, not slot0)
     - Cross-DEX
 
     Returns:
@@ -138,7 +159,10 @@ def select_sweep_reprieve_candidates(
             reason = opp.get("reject_reason") or ""
             if not reason.startswith("NET_PROFIT_TOO_LOW"):
                 continue
-        if opp.get("buy_quote_source") != "quoter_v2" or opp.get("sell_quote_source") != "quoter_v2":
+        # R39n: Accept any executable quote source (quoter_v2, ve33_getAmountOut, etc.)
+        buy_src = opp.get("buy_quote_source", "slot0")
+        sell_src = opp.get("sell_quote_source", "slot0")
+        if buy_src not in EXECUTABLE_QUOTE_SOURCES or sell_src not in EXECUTABLE_QUOTE_SOURCES:
             continue
         if not is_cross_dex(opp):
             continue
