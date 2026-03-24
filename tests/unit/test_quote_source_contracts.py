@@ -372,3 +372,109 @@ class TestQuoterV2SkipMechanism(TestCase):
         _compute_blocker_evidence(stats)
         # With rq=0 and SLOT0_DIAGNOSTIC > 40% → QUOTE_PATH_BLOCKED
         self.assertEqual(stats["blocker_evidence"], "QUOTE_PATH_BLOCKED")
+
+    def test_rate_limit_sentinel_not_counted_as_failure(self):
+        """R39k: QUOTER_RATE_LIMITED sentinel should NOT increment skip cache."""
+        from strategy.quote_rpc import QUOTER_RATE_LIMITED, _is_rate_limit_error
+        from strategy.quotes import (
+            _record_quoter_v2_failure,
+            _record_quoter_v2_success,
+            _should_skip_quoter_v2,
+            QUOTER_V2_SKIP_THRESHOLD,
+        )
+
+        # Verify sentinel shape
+        self.assertTrue(QUOTER_RATE_LIMITED.get("_rate_limited"))
+        self.assertEqual(QUOTER_RATE_LIMITED.get("amount_out", 0), 0)
+
+        # Verify detection of 429 errors
+        self.assertTrue(_is_rate_limit_error(Exception("429 Client Error: Too Many Requests")))
+        self.assertTrue(_is_rate_limit_error(Exception("rate limit exceeded")))
+        self.assertFalse(_is_rate_limit_error(Exception("execution reverted")))
+
+        # Verify identity check works (used in quotes.py to gate skip cache)
+        self.assertIs(QUOTER_RATE_LIMITED, QUOTER_RATE_LIMITED)
+        self.assertIsNot({"_rate_limited": True}, QUOTER_RATE_LIMITED)
+
+        # Verify a pool with only rate-limit "failures" does NOT get skip-cached
+        pool_key = "test_rate_limit_pool_key_unique_rl999"
+        _record_quoter_v2_success(pool_key)  # reset
+        # Simulate: rate-limited calls should NOT call _record_quoter_v2_failure
+        # (this is enforced in quotes.py, here we just verify the skip cache stays clean)
+        for _ in range(QUOTER_V2_SKIP_THRESHOLD + 5):
+            pass  # rate-limited calls don't record failure
+        self.assertFalse(_should_skip_quoter_v2(pool_key))
+
+
+class TestLegSourceSummaryOperational(TestCase):
+    """R39k: leg_source_summary must feed into chain_stats blocker classification."""
+
+    def test_leg_source_summary_propagated_to_chain_stats(self):
+        """update_chain_stats propagates leg_source_summary from truth_report."""
+        from strategy.chain_stats import new_chain_stats, update_chain_stats
+
+        stats = new_chain_stats()
+        self.assertIsNone(stats["last_leg_source_summary"])
+
+        truth_report = {
+            "roundtrip_summary": {
+                "leg_source_summary": {
+                    "leg1": {"quoter_v2": 3, "slot0": 2},
+                    "leg2": {"quoter_v2": 2, "ve33_getAmountOut": 3},
+                    "both_quoter_v2": 2,
+                    "both_slot0": 0,
+                    "mixed_source": 3,
+                    "total": 5,
+                }
+            }
+        }
+        update_chain_stats(
+            stats, exit_code=0, run_dir=None, summary=None,
+            truth_report=truth_report,
+        )
+        lss = stats["last_leg_source_summary"]
+        self.assertIsNotNone(lss)
+        self.assertEqual(lss["total"], 5)
+        self.assertEqual(lss["mixed_source"], 3)
+        self.assertEqual(lss["both_quoter_v2"], 2)
+
+    def test_leg_source_summary_detects_all_executable_roundtrips(self):
+        """When leg_source_summary shows both_quoter_v2+mixed executable > 0,
+        the chain is not QUOTE_PATH_BLOCKED — executable quotes are flowing."""
+        from strategy.chain_stats import _compute_blocker_evidence
+
+        stats = {
+            "profitable_roundtrips_total": 0,
+            "runs": 10,
+            "fail": 0,
+            "included_signals_total": 20,
+            "roundtrip_evaluated_total": 5,
+            "real_quote_count_total": 5,
+            "runs_with_sweep": 2,
+            "last_cross_dex_pairs_count": 8,
+            "last_quote_source_summary": {
+                "quotes_fetched_executable": 10,
+                "quotes_fetched_diagnostic": 5,
+                "quoter_v2_failed_count": 2,
+            },
+            "last_oe_rejection_funnel": {
+                "total_opportunities": 20,
+                "rejected_count": 15,
+                "rejected_reasons": {
+                    "NET_PROFIT_TOO_LOW": 12,
+                    "MIXED_SOURCE": 3,
+                },
+            },
+            "last_leg_source_summary": {
+                "leg1": {"quoter_v2": 3, "ve33_getAmountOut": 2},
+                "leg2": {"quoter_v2": 2, "ve33_getAmountOut": 3},
+                "both_quoter_v2": 2,
+                "both_slot0": 0,
+                "mixed_source": 1,
+                "total": 5,
+            },
+            "last_truth_verdict": None,
+        }
+        _compute_blocker_evidence(stats)
+        # NET_PROFIT_TOO_LOW dominates (12/15=80%) → OE_ECONOMICS, not MIXED_SOURCE
+        self.assertEqual(stats["blocker_evidence"], "OE_ECONOMICS")

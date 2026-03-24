@@ -227,6 +227,17 @@ def read_slot0_v3(
         return None, None
 
 
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Detect HTTP 429 / rate-limit errors from RPC responses."""
+    msg = str(exc).lower()
+    return "429" in msg or "too many requests" in msg or "rate limit" in msg
+
+
+# Sentinel returned when quoter_v2 fails due to RPC rate limiting.
+# Callers should NOT count this as a genuine quoter failure.
+QUOTER_RATE_LIMITED: Dict[str, Any] = {"_rate_limited": True}
+
+
 def read_quoter_v2(
     quoter_address: str,
     token_in: str,
@@ -289,5 +300,8 @@ def read_quoter_v2(
             "gas_estimate": gas_estimate,
         }
     except Exception as e:
+        if _is_rate_limit_error(e):
+            logger.info("QuoterV2 rate-limited (429): %s", e)
+            return QUOTER_RATE_LIMITED
         logger.debug("QuoterV2 failed: %s", e)
         return None

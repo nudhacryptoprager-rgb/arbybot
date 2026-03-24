@@ -125,6 +125,8 @@ def new_chain_stats() -> dict[str, Any]:
         "last_truth_verdict": None,
         "last_quote_source_summary": None,
         "last_oe_rejection_funnel": None,
+        # R39k: Per-leg source aggregation from roundtrip evaluation
+        "last_leg_source_summary": None,
         # R32: Auto-computed blocker from evidence (overrides config YAML when evidence exists)
         "blocker_evidence": None,
     }
@@ -438,6 +440,11 @@ def update_chain_stats(
         oe_rf = truth_report.get("oe_rejection_funnel")
         if oe_rf:
             stats["last_oe_rejection_funnel"] = oe_rf
+        # R39k: Propagate leg_source_summary for blocker classification
+        rt_sum = truth_report.get("roundtrip_summary") or {}
+        lss = rt_sum.get("leg_source_summary")
+        if lss:
+            stats["last_leg_source_summary"] = lss
     if summary:
         tv = summary.get("truth_verdict")
         if tv:

@@ -149,6 +149,7 @@ from strategy.quote_rpc import (
     get_cached_liquidity,
     get_cached_slot0,
     prefetch_slot0_multicall,
+    QUOTER_RATE_LIMITED,
     read_quoter_v2,
     read_slot0_v3,
 )
@@ -1332,27 +1333,33 @@ def collect_quotes(
             # to slot0 path below. Makes quoter failures visible in reject_histogram.
             # R32: Don't emit QUOTER_V2_FAILED when quoter was intentionally skipped
             if use_quoter_for_dex and not quoter_success and is_v3_dex and not is_algebra and not _quoter_v2_was_skipped:
+                _was_rate_limited = quoter_result is QUOTER_RATE_LIMITED
                 quoter_addr = dex_cfg.get_quoter_address() if dex_cfg else None
                 rejected_quotes.append({
                     "pair": f"{token_in}/{token_out}",
                     "dex_id": dex,
                     "fee": fee_tier,
                     "pool_address": pool_addr,
-                    "reason": "QUOTER_V2_FAILED",
+                    "reason": "QUOTER_V2_RATE_LIMITED" if _was_rate_limited else "QUOTER_V2_FAILED",
                     "gate_passed": False,
-                    "error": f"QuoterV2 failed, falling back to slot0 diagnostic (quoter={quoter_addr[:16] + '...' if quoter_addr else 'NONE'})",
+                    "error": f"QuoterV2 rate-limited (429), falling back to slot0 diagnostic (quoter={quoter_addr[:16] + '...' if quoter_addr else 'NONE'})" if _was_rate_limited else f"QuoterV2 failed, falling back to slot0 diagnostic (quoter={quoter_addr[:16] + '...' if quoter_addr else 'NONE'})",
                     "quoter_configured": bool(quoter_addr),
-                    "quoter_result": quoter_result,
+                    "quoter_result": None if _was_rate_limited else quoter_result,
                     "fallback": "slot0_diagnostic",
                 })
-                counts["quoter_v2_failed"] = counts.get("quoter_v2_failed", 0) + 1
+                if _was_rate_limited:
+                    counts["quoter_v2_rate_limited"] = counts.get("quoter_v2_rate_limited", 0) + 1
+                else:
+                    counts["quoter_v2_failed"] = counts.get("quoter_v2_failed", 0) + 1
                 mx_key = f"{dex}:{fee_tier}"
                 if mx_key in quoter_matrix:
                     quoter_matrix[mx_key]["slot0_fallback"] += 1
-                logger.info("QUOTER_V2_FAILED: %s %s/%s fee=%d pool=%s → slot0 fallback",
+                logger.info("QUOTER_V2_%s: %s %s/%s fee=%d pool=%s → slot0 fallback",
+                           "RATE_LIMITED" if _was_rate_limited else "FAILED",
                            dex, token_in, token_out, fee_tier, pool_addr)
-                # R32: Track failure for skip cache (skip quoter_v2 after repeated failures)
-                _record_quoter_v2_failure(pool_key)
+                # R32: Only count genuine failures toward skip cache, NOT rate limits
+                if not _was_rate_limited:
+                    _record_quoter_v2_failure(pool_key)
                 # Do NOT continue — fall through to slot0 path below
             
             # Path B: slot0 fallback — DIAGNOSTIC CHANNEL only (R28)

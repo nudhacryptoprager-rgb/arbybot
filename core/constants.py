@@ -160,6 +160,21 @@ CURRENT_EXECUTION_BLOCKER = ExecutionBlocker.EXECUTION_DISABLED
 
 
 # =============================================================================
+# EXECUTABLE QUOTE SOURCES (R39k — DO NOT REMOVE)
+# Adapter sources that return real on-chain executable quotes (amount_out
+# inclusive of fees). Only "slot0" is diagnostic (spot price without fees).
+# Used by: opportunity_engine (source gate), spreads (diagnostic classification)
+# =============================================================================
+
+EXECUTABLE_QUOTE_SOURCES: frozenset = frozenset({
+    "quoter_v2",              # Uniswap V3 / Algebra QuoterV2
+    "ve33_getAmountOut",      # Velodrome / Aerodrome / Stratum
+    "syncswap_getAmountOut",  # SyncSwap
+    "iziswap_swapAmount",     # iZiSwap
+})
+
+
+# =============================================================================
 # ANCHOR DEX PRIORITY (DO NOT REMOVE)
 # =============================================================================
 

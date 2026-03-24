@@ -573,9 +573,14 @@ def _build_spread_signal(
     sell_quote_source = best_sell.get("quote_source", "unknown")
     buy_dex = best_buy.get("dex_id", "unknown")
     sell_dex = best_sell.get("dex_id", "unknown")
-    is_mixed_source = buy_quote_source != sell_quote_source
-    is_slot0_only = buy_quote_source == "slot0" or sell_quote_source == "slot0"
-    is_quoter_v2_both = buy_quote_source == "quoter_v2" and sell_quote_source == "quoter_v2"
+    # R39k: Mixed source = one executable, one diagnostic (slot0).
+    # Cross-adapter executable pairs (quoter_v2 + ve33, etc.) are NOT mixed source.
+    from core.constants import EXECUTABLE_QUOTE_SOURCES
+    _buy_exec = buy_quote_source in EXECUTABLE_QUOTE_SOURCES
+    _sell_exec = sell_quote_source in EXECUTABLE_QUOTE_SOURCES
+    is_mixed_source = _buy_exec != _sell_exec
+    is_slot0_only = not _buy_exec or not _sell_exec
+    is_quoter_v2_both = _buy_exec and _sell_exec
     
     # v2.2.0: LP fee tracking for roundtrip estimation
     # Fee tier: 500 = 0.05% = 5 bps, 3000 = 0.30% = 30 bps, 100 = 0.01% = 1 bps

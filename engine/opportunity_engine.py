@@ -420,18 +420,21 @@ class OpportunityEngine:
             reject_reason = None
             is_reprievable = False  # R36: only set for economics-based rejects
             
-            # v2.1.0: No mixed-source opportunities - both legs must be quoter_v2
-            # slot0 is diagnostic only, cannot be used for gated profit calculation
-            is_mixed_source = (buy_source == "quoter_v2") != (sell_source == "quoter_v2")
-            is_slot0_only = buy_source == "slot0" and sell_source == "slot0"
-            is_quoter_both = buy_source == "quoter_v2" and sell_source == "quoter_v2"
+            # R39k: Both legs must be executable (not slot0 diagnostic).
+            # Any adapter returning real on-chain amounts (quoter_v2, ve33, syncswap,
+            # iziswap) is executable. Only slot0 (spot price without fees) is diagnostic.
+            from core.constants import EXECUTABLE_QUOTE_SOURCES
+            buy_executable = buy_source in EXECUTABLE_QUOTE_SOURCES
+            sell_executable = sell_source in EXECUTABLE_QUOTE_SOURCES
+            is_mixed_source = buy_executable != sell_executable
+            is_both_diagnostic = not buy_executable and not sell_executable
             
             if is_mixed_source:
                 gate_passed = False
-                reject_reason = f"MIXED_SOURCE: buy={buy_source}, sell={sell_source} (require both quoter_v2)"
-            elif is_slot0_only:
+                reject_reason = f"MIXED_SOURCE: buy={buy_source}, sell={sell_source} (one executable, one diagnostic)"
+            elif is_both_diagnostic:
                 gate_passed = False
-                reject_reason = "SLOT0_DIAGNOSTIC: both legs slot0 (quoter_v2 required for M4.2)"
+                reject_reason = f"SLOT0_DIAGNOSTIC: buy={buy_source}, sell={sell_source} (executable source required for M4.2)"
             # v2.1.0: SUSPECT_SPREAD_HARD gate (from Thresholds.SUSPECT_SPREAD_BPS_HARD)
             # Absurd spreads (>500bps for major pairs) indicate bad data/price inversion
             elif float(gross_spread_bps) > self.max_gross_spread_bps:

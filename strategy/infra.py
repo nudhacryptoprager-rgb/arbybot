@@ -709,10 +709,14 @@ class DirtySetTracker:
     def status(self) -> dict[str, Any]:
         """Return a snapshot of dirty-set state for observability."""
         with self._lock:
+            ws_connected = sum(1 for v in self._connected.values() if v)
+            chains_watched = len(self._dirty)
             return {
-                "chains_watched": len(self._dirty),
+                "chains_watched": chains_watched,
                 "chains_dirty": sum(1 for v in self._dirty.values() if v),
-                "chains_ws_connected": sum(1 for v in self._connected.values() if v),
+                "chains_ws_connected": ws_connected,
+                # R39k: Explicit mode declaration — polling-only when no WS connected
+                "block_mode": "ws_streaming" if ws_connected > 0 else "polling_only",
                 "event_driven": True,  # R38: orchestrator uses wait_for_dirty()
                 "per_chain": {
                     c: {

@@ -2017,6 +2017,9 @@ class TestHotLoopAndDirtySet(unittest.TestCase):
         status = ds.status()
         self.assertEqual(status["chains_watched"], 2)
         self.assertEqual(status["chains_dirty"], 2)
+        # R39k: Verify polling-only mode when no WS connected
+        self.assertEqual(status["block_mode"], "polling_only")
+        self.assertEqual(status["chains_ws_connected"], 0)
         ds.stop()
 
     def test_pair_config_from_dict_roundtrip(self):

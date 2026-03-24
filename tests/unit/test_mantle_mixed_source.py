@@ -62,10 +62,10 @@ class TestMixedSourceDetection:
     """Test MIXED_SOURCE detection logic."""
 
     def test_mixed_source_when_different_quote_sources(self):
-        """MIXED_SOURCE should be true when buy/sell have different sources."""
+        """R39k: Cross-adapter executable pairs (ve33 + quoter_v2) are NOT mixed source."""
         from strategy.spreads import compute_spread_signals
         
-        # Simulate quotes with different sources
+        # Simulate quotes with different EXECUTABLE sources
         quotes = [
             {
                 "pair": "TEST/USDC",
@@ -95,21 +95,24 @@ class TestMixedSourceDetection:
             "gas_usd_estimate": 0.02,
             "paper_slippage_bps": 5,
             "truth_mode_m42": True,
-            "require_cross_dex": False,  # Allow single-dex, but test cross-dex
+            "require_cross_dex": False,
         }
         
         rejected_quotes = []
         signals = compute_spread_signals(quotes, config, current_block=12345678, rejected_quotes=rejected_quotes)
         
-        # Should produce signals but with MIXED_SOURCE_DIAGNOSTIC
         assert len(signals) > 0, "Should produce at least one signal"
         
-        # Find cross-dex signal
+        # Find cross-dex signal — should NOT have MIXED_SOURCE_DIAGNOSTIC
+        # because both ve33_getAmountOut and quoter_v2 are executable sources
         cross_dex = [s for s in signals if s["route"] == "stratum->agni_v3"]
         if cross_dex:
             sig = cross_dex[0]
-            assert "MIXED_SOURCE_DIAGNOSTIC" in sig["confidence_reasons"], (
-                "Cross-dex stratum->agni_v3 should have MIXED_SOURCE_DIAGNOSTIC"
+            assert "MIXED_SOURCE_DIAGNOSTIC" not in sig["confidence_reasons"], (
+                "R39k: Cross-adapter executable pair (ve33+quoter_v2) should NOT have MIXED_SOURCE_DIAGNOSTIC"
+            )
+            assert sig.get("is_diagnostic_only") is not True, (
+                "R39k: Cross-adapter executable pair should not be diagnostic-only"
             )
 
 
