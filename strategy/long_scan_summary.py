@@ -261,12 +261,14 @@ def build_summary(
 
     # R39: Post-aggregation frontier consistency — pnl and reason must agree.
     # If pnl == 0.0, reason MUST be BREAKEVEN_FRONTIER (not BEST_NEG).
+    # R39i: SUSPECT_ZERO_SLIPPAGE is also valid for 0.0 — it signals the
+    # measurement is unreliable, so we must not promote it to BREAKEVEN.
     _sweep_pnl = summary.get("sweep_best_net_pnl_bps")
     _sweep_reason = summary.get("sweep_best_frontier_reason")
     if _sweep_pnl is not None and _sweep_reason:
-        if _sweep_pnl == 0.0 and _sweep_reason != "BREAKEVEN_FRONTIER":
+        if _sweep_pnl == 0.0 and _sweep_reason not in ("BREAKEVEN_FRONTIER", "SUSPECT_ZERO_SLIPPAGE"):
             summary["sweep_best_frontier_reason"] = "BREAKEVEN_FRONTIER"
-        elif _sweep_pnl > 0 and _sweep_reason != "PROFITABLE":
+        elif _sweep_pnl > 0 and _sweep_reason not in ("PROFITABLE", "SUSPECT_ZERO_SLIPPAGE"):
             summary["sweep_best_frontier_reason"] = "PROFITABLE"
         elif _sweep_pnl < 0 and _sweep_reason not in ("BEST_NEG", "EXECUTABLE_BEST_NEG", "ALL_FAILED", "ALL_SUSPECT_OUTLIER"):
             summary["sweep_best_frontier_reason"] = "BEST_NEG"

@@ -303,6 +303,18 @@ class TestFrontierContractConsistency:
         assert summary["sweep_best_net_pnl_bps"] == -5.0
         assert summary["sweep_best_frontier_reason"] == "BEST_NEG"
 
+    def test_suspect_zero_slippage_not_promoted_to_breakeven(self):
+        """R39i: SUSPECT_ZERO_SLIPPAGE at pnl=0.0 must not be overridden
+        to BREAKEVEN_FRONTIER by the post-aggregation fence."""
+        from strategy.long_scan_summary import build_summary
+        per_chain = self._make_per_chain([
+            ("arb", 0.0, "SUSPECT_ZERO_SLIPPAGE"),
+            ("zksync", -10.0, "BEST_NEG"),
+        ])
+        summary = build_summary(per_chain, wall_seconds=10.0, warnings=[])
+        assert summary["sweep_best_net_pnl_bps"] == 0.0
+        assert summary["sweep_best_frontier_reason"] == "SUSPECT_ZERO_SLIPPAGE"
+
 
 # ---------- 8. R39: Sweep size promotion guard ----------
 

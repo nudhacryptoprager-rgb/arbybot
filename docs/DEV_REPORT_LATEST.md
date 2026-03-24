@@ -7,76 +7,80 @@
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled.
-**R39i**: Base QUOTE_PATH_BLOCKED fix (sweep evidence requires rq>0), Status compression (487→128 lines), CI enforcement for 3-tier policy. 2338 tests.
+**R39i++**: Frontier truth fix — degenerate sweep filter + slippage quality gate. Falsy coalescing fix in chain_stats. 2h scan evidence (390 runs/3413 sig/707 RT/0 profitable). 2344 tests.
 
-## SESSION GOAL (R39i: base blocker fix + doc alignment + CI enforcement)
-**Goal**: (1) Fix base misclassification as OE_ECONOMICS (should be QUOTE_PATH_BLOCKED when rq=0), (2) Align docs with rolling timestamps, (3) Compress Status_M5_0.md below 400 lines, (4) Add CI enforcement for 3-tier policy and ≥2/4 metrics rule, (5) Fresh scan + dashboard.
-**Prior (R39h++)**: 2330 tests, WS endpoints for all 6 chains, rt_without_signal field, layered blocker diagnosis.
-**Lead directive (R39i)**: "base lишається quote-path chain, not market chain: rq=0. WS config-complete but runtime-incomplete. Status bloated. 3-tier policy lives in docs not code gates."
+## SESSION GOAL (R39i++: frontier truth fix + 2h evidence framing)
+**Goal**: (1) Fix frontier truth lie (0.0 bps BREAKEVEN_FRONTIER from degenerate sweep points), (2) Fix falsy coalescing in chain_stats.py, (3) Add SUSPECT_ZERO_SLIPPAGE frontier_reason, (4) Correctly frame old M4 3.55bps vs current ~55bps gap as incomparable measurements.
+**Prior (R39i)**: 2338 tests, base QUOTE_PATH_BLOCKED fix, Status compression, CI enforcement.
+**Lead directive (R39i++)**: "0.0 bps can only be shown when route-level gas/slippage are really measured and match RCA. The earlier 3.55-4.10 bps frontier and the current 40-50 bps gap are not directly comparable — different pair/semantics."
 
 ## 0) Meta
-timestamp_utc: 2026-03-24T09:56:41Z
-run_dir_name: ci_m5_gate_arbitrum_one_20260324_105605_267594
+timestamp_utc: 2026-03-24T13:03:54Z
+run_dir_name: (rolling 200-run window)
 long_scan_summary: long_scan_latest.json
-mode: R39i_BASE_BLOCKER_FIX_CI_ENFORCEMENT
-test_count: 2338 passed, 5 skipped
+mode: R39i_FRONTIER_TRUTH_FIX
+test_count: 2344 passed, 5 skipped
 schema_version: m4:run_summary:v2.0, start:long_scan_summary:v1.15
 code_identity:
-  primary: ts:2026-03-24T09:56:41Z
-  dirty: true (R39i code changes uncommitted)
-  desc: base_quote_path_blocked_ci_enforcement
+  primary: ts:2026-03-24T13:03:54Z
+  dirty: true (R39i++ code changes uncommitted)
+  desc: frontier_truth_degenerate_guard_slippage_gate
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R39i: base blocker fix + doc alignment + CI enforcement |
+| session_goal | R39i++: frontier truth fix + 2h evidence framing |
 | goal_status | **IN_PROGRESS** |
-| close_allowed | false (pending fresh scan + CI green) |
-| remaining_blockers | profitable_rt=0 (economics); base QUOTE_PATH_BLOCKED; scroll/mantle MIXED_SOURCE; WS runtime-unproven |
-| fresh_evidence_run | run_summary_latest: ci_m5_gate_arbitrum_one_20260324_105605_267594 (ts:2026-03-24T09:56:41Z) |
-| evidence_session_run_dirs | pair_level_rca: base/mantle/scroll (2026-03-24T10:56-10:57) |
-| primary_blocker_of_session | base misclassified as OE_ECONOMICS (now QUOTE_PATH_BLOCKED); Status bloat; no CI enforcement |
-| blocker_status_before | ACTIVE: base=OE_ECONOMICS (wrong); Status=487 lines; 3-tier in docs only |
-| blocker_status_after | **IMPROVED**: base=QUOTE_PATH_BLOCKED (correct); Status=128 lines; CI enforcement added |
-| start_metric | 2330 tests, base=OE_ECONOMICS, Status=487 lines |
-| end_metric | 2338 tests, base=QUOTE_PATH_BLOCKED, Status=128 lines |
-| delta | +8 tests, base blocker fix, Status -359 lines, CI enforcement |
+| close_allowed | false (pending CI green + fresh online scan post-fix) |
+| remaining_blockers | profitable_rt=0 (economics); base QUOTE_PATH_BLOCKED; frontier truth was lying (now fixed) |
+| fresh_evidence_run | rolling 200-run window (ts:2026-03-24T13:03:54Z), pair_level_rca all 6 chains |
+| evidence_session_run_dirs | arb_20260324_140321, base_140355, zksync_140355, mantle_140414, linea_140445, scroll_140457 |
+| primary_blocker_of_session | Frontier truth lie: 0.0 bps BREAKEVEN_FRONTIER from degenerate sweep at $7500+ |
+| blocker_status_before | ACTIVE: sweep_best=0.0, BREAKEVEN_FRONTIER (false), falsy coalescing in chain_stats |
+| blocker_status_after | **FIXED**: degenerate guard + slippage quality gate + falsy coalescing fixed |
+| start_metric | 2338 tests, sweep_best=0.0 (broken), BREAKEVEN_FRONTIER (false) |
+| end_metric | 2344 tests, degenerate filter active, SUSPECT_ZERO_SLIPPAGE for unmeasured |
+| delta | +6 tests, 3 bugfixes (roundtrip + chain_stats + long_scan_summary) |
 | docs_reread_confirmed | true |
 
-## 0.3) Fresh 11-Minute Scan Evidence (R39h++ final)
+## 0.3) Fresh 2-Hour Scan Evidence (R39i++ — 200-run rolling window)
 
 ```
-Wall time:      655s (~11 min)
-Total runs:     36 (PASS=22, NO_DATA=10, FAIL=4, INFRA_FAIL=0)
-Signals total:  300
-Net USDC total: $401.06
-Profitable RTs: 0 (evaluated: 69, best: +0.00 bps)
-Sweep best:     +0.00 bps @ $5000 (BREAKEVEN_FRONTIER)
+Wall time:      ~2h (rolling)
+Total runs:     390 (200 in window)
+Signals total:  3413
+Net USDC total: $11,118.78
+Profitable RTs: 0 (evaluated: 1102)
+Sweep best:     0.0 bps (was BREAKEVEN_FRONTIER — now DEGENERATE_ZERO after fix)
 ```
 
-| Chain | Runs | PASS | Signals | Net USDC | RT Eval | rt_wo_sig | Status |
-|-------|-----:|-----:|--------:|---------:|--------:|----------:|--------|
-| arbitrum_one | 6 | 6 | 226 | $314.54 | 30 | 0 | SIGNAL_PRODUCING |
-| zksync | 6 | 6 | 24 | $13.79 | 6 | 0 | PASS |
-| base | 6 | 2 | 6 | $4.41 | 3 | 1 | NO_DATA (SLOT0) |
-| scroll | 6 | 6 | 24 | $28.83 | 12 | 0 | PASS |
-| linea | 6 | 2 | 20 | $39.48 | 6 | 0 | FAIL (4 fail) |
-| mantle | 6 | 0 | 0 | $0.00 | 12 | **12** | PROBE_ONLY |
+### Per-Chain RCA (fresh run dirs 2026-03-24)
+| Chain | Pairs | Exec% | RT | Best PnL bps | #1 OE Reject | Key Insight |
+|-------|------:|------:|---:|---------:|----------|-------------|
+| arb | 11 | 92.2% | 5 | **-54.76** | (clean) | Best=USDC/DAI; slippage dominant |
+| base | 9 | 7.4% | 0 | — | SLOT0_DIAGNOSTIC 71.7% | Infra blocker; 7 executable quotes only |
+| zksync | 6 | 92.3% | 1 | -718.17 | NET_PROFIT_TOO_LOW 71.4% | Clean but thin |
+| mantle | 4 | 100% | 1 | -694.17 | MIXED_SOURCE 61.5% | 81 RT / 0 signals = semantic split |
+| linea | 5 | 100% | 1 | -631.40 | NET_PROFIT_TOO_LOW 62.5% | Economics, not coverage |
+| scroll | 5 | 86.7% | 2 | -339.69 | MIXED_SOURCE 37.5% | USDC/DAI best candidate |
 
-**Key funnel observation**: 42→41→40 (near-zero attrition at universe level). mantle: 0 sig / 12 RT → **rt_without_signal=12** now exposed — semantic split captured in operator-facing artifact.
+### Frontier Truth Bug (fixed)
+WETH/USDC sweep at $7500-$10000 produced **degenerate all-zero points** (net=0.0, gross=0.0, slip=0.0, gas=0.0). These were selected as "best" → false BREAKEVEN_FRONTIER. Real best sweep point: USDC/DAI at -27.38 bps (BEST_NEG with measured slippage=10.29, gas=17.25).
+
+### Old vs Current Frontier (incomparable)
+M4 frontier 3.55-4.10 bps was on WETH/USDT at $25 scale with older truth semantics. Current ~55 bps is on USDC/DAI with stricter executable truth. These are **not comparable**. The gap widened because the measurement became more honest, not because the pipeline regressed.
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 -- R39i: base blocker fix + doc alignment + CI enforcement
+goal (Roadmap): M5_0/M4 -- R39i++: frontier truth fix + 2h evidence framing
 change_summary:
-  - **strategy/chain_stats.py** — Fixed `_compute_blocker_evidence()`: `has_sweep_evidence` now requires `rq_total > 0` in addition to `runs_with_sweep > 0`. Base (rq=0) now correctly gets QUOTE_PATH_BLOCKED instead of OE_ECONOMICS.
-  - **tests/unit/test_blocker_evidence.py** — +2 tests: `test_slot0_with_diagnostic_sweep_still_quote_path_blocked` and `test_slot0_with_real_quotes_falls_through`. 15/15 blocker tests pass.
-  - **scripts/check_repo_safety.py** — v1.15.0: +`check_intent_tier_limits()` (3-tier enforcement: calibration baseline 42 pairs) + `check_expansion_metrics_rule()` (>=2/4 metrics WARN). 
-  - **tests/unit/test_check_repo_safety.py** — +6 tests for new CI enforcement functions (3 tier limits + 3 expansion metrics).
-  - **tests/unit/test_r34_stream_reprieve.py** — Updated 2 tests to add `real_quote_count_total` per new sweep evidence contract.
-  - **docs/status/Status_M5_0.md** — Compressed 487→128 lines. Folded R39g+ through R36 into compact historical summary table.
-  - **docs/DEV_REPORT_LATEST.md** — Aligned timestamp_utc + run_dir_name with rolling artifacts. Updated for R39i session.
-  - Prior R39h++ changes (uncommitted): config/chains.yaml (WS endpoints), strategy/long_scan_summary.py (rt_without_signal), tests/unit/test_signal_funnel.py (+2), tests/unit/test_config.py (+1).
+  - **engine/roundtrip.py** — R39i: Degenerate sweep point guard (gross=0 AND slip=0 → DEGENERATE_ZERO error, excluded from best selection). Slippage quality gate: net_pnl≥0 with slip=0.0 → SUSPECT_ZERO_SLIPPAGE instead of PROFITABLE/BREAKEVEN_FRONTIER.
+  - **strategy/chain_stats.py** — R39i: Fixed falsy coalescing (sweep_pnl `or` → `is None`). Fixed `best_size_usd`/`best_pair`/`best_frontier_reason` same pattern. Added SUSPECT_ZERO_SLIPPAGE comment for upgrade bypass.
+  - **strategy/long_scan_summary.py** — R39i: Post-aggregation fence: SUSPECT_ZERO_SLIPPAGE accepted for pnl=0.0 and pnl>0 (not auto-promoted to BREAKEVEN/PROFITABLE).
+  - **tests/unit/test_roundtrip.py** — +5 tests: degenerate_zero_excluded, all_degenerate_all_failed, suspect_zero_slippage_on_positive, real_slippage_allows_profitable, negative_pnl_unaffected. Updated test_sweep_frontier_profitable to use ticks_crossed=1.
+  - **tests/unit/test_r38_changes.py** — +1 test: SUSPECT_ZERO_SLIPPAGE not promoted to BREAKEVEN by post-aggregation fence.
+  - **docs/DEV_REPORT_LATEST.md** — 2h evidence, frontier truth fix, old-vs-new frontier framing.
+  - Prior R39i changes: base QUOTE_PATH_BLOCKED fix, Status compression, CI enforcement.
 
 ## 2) Root Cause Analysis
 

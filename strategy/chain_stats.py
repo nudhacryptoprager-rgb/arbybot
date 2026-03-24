@@ -274,7 +274,10 @@ def update_chain_stats(
             prev_gap = stats.get("best_measured_spread_gap_bps")
             stats["best_measured_spread_gap_bps"] = run_gap if prev_gap is None else max(prev_gap, run_gap)
         sweep = rt.get("dynamic_sweep", {})
-        sweep_pnl = sweep.get("best_net_pnl_bps") or sweep.get("sweep_best_net_pnl_bps")
+        # R39i: Use `is None` instead of falsy `or` — 0.0 is a valid value.
+        sweep_pnl = sweep.get("best_net_pnl_bps")
+        if sweep_pnl is None:
+            sweep_pnl = sweep.get("sweep_best_net_pnl_bps")
         if sweep_pnl is not None:
             # R12: collect gap for median computation
             gap = sweep.get("gap_to_zero_bps")
@@ -284,8 +287,10 @@ def update_chain_stats(
             prev_sweep = stats.get("sweep_best_net_pnl_bps")
             if prev_sweep is None or sweep_pnl > prev_sweep:
                 stats["sweep_best_net_pnl_bps"] = sweep_pnl
-                stats["sweep_best_size_usd"] = sweep.get("best_size_usd") or sweep.get("sweep_best_size_usd")
-                stats["sweep_best_pair"] = sweep.get("best_pair") or sweep.get("frontier_pair")
+                _size = sweep.get("best_size_usd")
+                stats["sweep_best_size_usd"] = _size if _size is not None else sweep.get("sweep_best_size_usd")
+                _pair = sweep.get("best_pair")
+                stats["sweep_best_pair"] = _pair if _pair is not None else sweep.get("frontier_pair")
                 stats["sweep_gap_to_zero_bps"] = gap
                 _gas = sweep.get("measured_gas_bps")
                 stats["sweep_measured_gas_bps"] = _gas if _gas is not None else sweep.get("best_gas_bps")
@@ -297,10 +302,9 @@ def update_chain_stats(
                 stats["sweep_measured_total_cost_bps"] = _tcost if _tcost is not None else sweep.get("best_total_cost_bps")
                 # R36: Track frontier_reason to distinguish ALL_FAILED (no quotes) from
                 # BEST_NEG (genuine zero/negative) in downstream summary aggregation.
-                _raw_reason = (
-                    sweep.get("best_frontier_reason")
-                    or sweep.get("sweep_best_frontier_reason")
-                )
+                _raw_reason = sweep.get("best_frontier_reason")
+                if _raw_reason is None:
+                    _raw_reason = sweep.get("sweep_best_frontier_reason")
                 # R39b: Upgrade BEST_NEG → EXECUTABLE_BEST_NEG when measured costs
                 # are populated (proven by real quotes, not just paper boundary).
                 if (
@@ -309,6 +313,8 @@ def update_chain_stats(
                     and stats.get("sweep_measured_gas_bps") is not None
                 ):
                     _raw_reason = "EXECUTABLE_BEST_NEG"
+                # R39i: SUSPECT_ZERO_SLIPPAGE must NOT be upgraded — slippage
+                # was not measured so the frontier claim is unreliable.
                 stats["sweep_best_frontier_reason"] = _raw_reason
         ctx = summary.get("run_context", {})
         stats["last_run_timestamp"] = ctx.get("run_timestamp", stats["last_run_timestamp"])

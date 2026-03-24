@@ -1089,17 +1089,18 @@ class TestSizeSweep:
         assert d["points"][0]["net_pnl_bps"] == 5.12
 
     def test_sweep_frontier_profitable(self):
-        """PROFITABLE frontier when best pnl > 0."""
+        """PROFITABLE frontier when best pnl > 0 and slippage measured."""
         from engine.roundtrip import sweep_roundtrip_sizes
 
         buy_q, sell_q = self._make_base_quotes()
 
         # Leg2 returns more than started with = profitable roundtrip
+        # ticks_crossed > 0 so slippage is non-zero (quality gate passes)
         def requote_leg1(amount_in_wei):
-            return {"amount_out_wei": int(amount_in_wei * 0.999), "gas_estimate": 100_000, "ticks_crossed": 0}
+            return {"amount_out_wei": int(amount_in_wei * 0.999), "gas_estimate": 100_000, "ticks_crossed": 1}
 
         def requote_leg2(amount_in_wei):
-            return {"amount_out_wei": int(amount_in_wei * 1.01), "gas_estimate": 100_000, "ticks_crossed": 0}
+            return {"amount_out_wei": int(amount_in_wei * 1.01), "gas_estimate": 100_000, "ticks_crossed": 1}
 
         result = sweep_roundtrip_sizes(
             buy_quote_base=buy_q,
@@ -1345,3 +1346,150 @@ class TestCanonicalSweep:
         assert d["best_fee_bps"] is not None
         assert d["best_slippage_bps"] is not None
         assert d["best_total_cost_bps"] is not None
+
+
+# ---------------------------------------------------------------------------
+# R39i: Frontier truth — degenerate guard and slippage quality gate
+# ---------------------------------------------------------------------------
+
+class TestFrontierTruthGuards:
+    """Tests for R39i degenerate sweep point filtering and slippage quality gate."""
+
+    def _make_base_quotes(self):
+        buy_q = {
+            "dex_id": "uniswap_v3", "token_in": "WETH", "token_out": "USDC",
+            "fee": 3000, "amount_in_wei": 1_000_000_000_000_000_000,
+            "amount_out_wei": 2000_000_000, "gas_estimate": 150_000,
+            "ticks_crossed": 2, "sqrt_price_x96": 100,
+        }
+        sell_q = {
+            "dex_id": "sushiswap_v3", "token_in": "USDC", "token_out": "WETH",
+            "fee": 3000, "amount_in_wei": 2000_000_000,
+            "amount_out_wei": 1_010_000_000_000_000_000,
+            "gas_estimate": 150_000, "ticks_crossed": 2, "sqrt_price_x96": 100,
+        }
+        return buy_q, sell_q
+
+    def test_degenerate_zero_point_excluded_from_best(self):
+        """Sweep points with all-zero values (broken re-quote) must not be
+        selected as best — they should receive DEGENERATE_ZERO error."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+        leg1_calls = []
+
+        # First size ($100): real data.  Second size ($500): degenerate zeros.
+        def requote_leg1(amount_in_wei):
+            leg1_calls.append(amount_in_wei)
+            if len(leg1_calls) > 1:
+                return {"amount_out_wei": amount_in_wei, "gas_estimate": 0, "ticks_crossed": 0}
+            return {"amount_out_wei": int(amount_in_wei * 0.999), "gas_estimate": 150_000, "ticks_crossed": 1}
+
+        def requote_leg2(amount_in_wei):
+            if len(leg1_calls) > 1:
+                return {"amount_out_wei": amount_in_wei, "gas_estimate": 0, "ticks_crossed": 0}
+            return {"amount_out_wei": int(amount_in_wei * 0.999), "gas_estimate": 150_000, "ticks_crossed": 1}
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q, sell_quote_base=sell_q,
+            requote_leg1=requote_leg1, requote_leg2=requote_leg2,
+            sizes_usd=[100, 500],
+            token_in_usd_price=2000.0, gas_price_wei=100_000_000, l1_cost_wei=0,
+        )
+
+        # The $500 degenerate point should get DEGENERATE_ZERO error
+        degen_points = [p for p in result.points if p.error == "DEGENERATE_ZERO"]
+        assert len(degen_points) >= 1, "Expected at least one degenerate point"
+
+        # Best should come from the $100 real point, not the degenerate one
+        assert result.best_size_usd == 100
+        assert result.best_net_pnl_bps is not None
+        assert result.best_net_pnl_bps < 0  # Real data is negative
+        assert result.frontier_reason == "BEST_NEG"
+
+    def test_all_degenerate_yields_all_failed(self):
+        """When all points are degenerate, frontier_reason = ALL_FAILED."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        def requote_degenerate(amount_in_wei):
+            return {"amount_out_wei": amount_in_wei, "gas_estimate": 0, "ticks_crossed": 0}
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q, sell_quote_base=sell_q,
+            requote_leg1=requote_degenerate, requote_leg2=requote_degenerate,
+            sizes_usd=[100, 500],
+            token_in_usd_price=2000.0, gas_price_wei=100_000_000, l1_cost_wei=0,
+        )
+
+        assert result.frontier_reason == "ALL_FAILED"
+        assert result.sizes_evaluated == 0
+        assert result.best_net_pnl_bps is None
+
+    def test_suspect_zero_slippage_on_positive_pnl(self):
+        """Positive net_pnl with zero slippage gets SUSPECT_ZERO_SLIPPAGE,
+        not PROFITABLE — real routes always incur some slippage."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        # Very profitable but ticks_crossed=0 and no sqrtPriceAfter → slippage=0
+        def requote_leg1(amount_in_wei):
+            return {"amount_out_wei": int(amount_in_wei * 0.999), "gas_estimate": 100_000, "ticks_crossed": 0}
+
+        def requote_leg2(amount_in_wei):
+            return {"amount_out_wei": int(amount_in_wei * 1.02), "gas_estimate": 100_000, "ticks_crossed": 0}
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q, sell_quote_base=sell_q,
+            requote_leg1=requote_leg1, requote_leg2=requote_leg2,
+            sizes_usd=[100, 500],
+            token_in_usd_price=2000.0, gas_price_wei=100_000_000, l1_cost_wei=0,
+        )
+
+        assert result.best_net_pnl_bps > 0
+        assert result.best_slippage_bps == 0.0
+        assert result.frontier_reason == "SUSPECT_ZERO_SLIPPAGE"
+
+    def test_real_slippage_allows_profitable(self):
+        """When slippage is measurable (ticks_crossed > 0), PROFITABLE is allowed."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        def requote_leg1(amount_in_wei):
+            return {"amount_out_wei": int(amount_in_wei * 0.999), "gas_estimate": 100_000, "ticks_crossed": 2}
+
+        def requote_leg2(amount_in_wei):
+            return {"amount_out_wei": int(amount_in_wei * 1.02), "gas_estimate": 100_000, "ticks_crossed": 2}
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q, sell_quote_base=sell_q,
+            requote_leg1=requote_leg1, requote_leg2=requote_leg2,
+            sizes_usd=[100, 500],
+            token_in_usd_price=2000.0, gas_price_wei=100_000_000, l1_cost_wei=0,
+        )
+
+        assert result.best_net_pnl_bps > 0
+        assert result.best_slippage_bps > 0
+        assert result.frontier_reason == "PROFITABLE"
+
+    def test_negative_pnl_unaffected_by_slippage_gate(self):
+        """Negative best_net_pnl_bps stays BEST_NEG regardless of slippage source."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        def requote_ok(amount_in_wei):
+            return {"amount_out_wei": int(amount_in_wei * 0.999), "gas_estimate": 150_000, "ticks_crossed": 0}
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q, sell_quote_base=sell_q,
+            requote_leg1=requote_ok, requote_leg2=requote_ok,
+            sizes_usd=[100],
+            token_in_usd_price=2000.0,
+        )
+
+        assert result.best_net_pnl_bps < 0
+        assert result.frontier_reason == "BEST_NEG"

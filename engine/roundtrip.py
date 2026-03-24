@@ -963,6 +963,20 @@ def sweep_roundtrip_sizes(
         # LP fee as bps (fee tier is in ppm: 3000 = 30 bps)
         fee_bps_val = (rt.leg1_fee + rt.leg2_fee) / 100.0
 
+        # R39i: Degenerate result guard — gross PnL exactly zero AND slippage
+        # exactly zero signals a broken re-quote (output == input, no price
+        # impact measured).  Real routes always have non-zero spread or slippage.
+        is_degenerate = (
+            rt.gross_pnl_bps == 0.0
+            and rt.estimated_slippage_bps == 0.0
+        )
+
+        if is_degenerate:
+            result.points.append(
+                SizeSweepPoint(size_usd=size_usd, error="DEGENERATE_ZERO")
+            )
+            continue
+
         point = SizeSweepPoint(
             size_usd=size_usd,
             net_pnl_bps=rt.net_pnl_bps,
@@ -985,12 +999,28 @@ def sweep_roundtrip_sizes(
 
     result.sizes_evaluated = len([p for p in result.points if p.error is None])
 
+    # R39i: Slippage quality gate — if the best point has unmeasured slippage
+    # (ticks_heuristic fallback with ticks=0 → 0.0 bps), do not promote to
+    # BREAKEVEN/PROFITABLE.  Real routes always incur some slippage.
+    slippage_unmeasured = (
+        result.best_slippage_bps is not None
+        and result.best_slippage_bps == 0.0
+    )
+
     if result.best_net_pnl_bps is not None and result.best_net_pnl_bps > 0:
-        result.frontier_reason = "PROFITABLE"
-        result.gap_to_zero_bps = 0.0
+        if slippage_unmeasured:
+            result.frontier_reason = "SUSPECT_ZERO_SLIPPAGE"
+            result.gap_to_zero_bps = 0.0
+        else:
+            result.frontier_reason = "PROFITABLE"
+            result.gap_to_zero_bps = 0.0
     elif result.best_net_pnl_bps is not None and result.best_net_pnl_bps == 0.0:
-        result.frontier_reason = "BREAKEVEN_FRONTIER"
-        result.gap_to_zero_bps = 0.0
+        if slippage_unmeasured:
+            result.frontier_reason = "SUSPECT_ZERO_SLIPPAGE"
+            result.gap_to_zero_bps = 0.0
+        else:
+            result.frontier_reason = "BREAKEVEN_FRONTIER"
+            result.gap_to_zero_bps = 0.0
     elif result.best_net_pnl_bps is not None:
         result.frontier_reason = "BEST_NEG"
         result.gap_to_zero_bps = abs(result.best_net_pnl_bps)
