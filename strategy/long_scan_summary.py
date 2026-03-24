@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from strategy.chain_stats import SANE_ROUNDTRIP_PNL_BPS_MAX, SANE_ROUNDTRIP_PNL_BPS_MIN
+from core.constants import CHAIN_ROLES, LANE_ASSIGNMENTS, STRUCTURAL_ADVANTAGE_REQUIRED
 
 # Imported constant for hot_loop section in summary
 FULL_SWEEP_INTERVAL = 5
@@ -254,6 +255,8 @@ def build_summary(
         "truth_path_alignment": None,  # filled below
         # R28.14: Benchmark chain — strongest ALIGNED chain by merit
         "benchmark_chain": None,  # filled below
+        # R39m: 2-lane analysis + MEV-informed chain roles
+        "lane_summary": _compute_lane_summary(per_chain),
     }
     _tpa, _bench = _compute_truth_path_alignment(per_chain)
     summary["truth_path_alignment"] = _tpa
@@ -449,6 +452,48 @@ def _compute_profit_truth_summary(per_chain: dict[str, dict[str, Any]]) -> dict[
     }
 
 
+def _compute_lane_summary(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """R39m: Compute 2-lane analysis summary from per-chain stats.
+
+    Lane A: Base quantity-profit (primary profit research)
+    Lane B: zkSync/other exploratory (inefficiency probe)
+    Benchmark: Arbitrum control
+    """
+    lanes: dict[str, dict[str, Any]] = {}
+    for chain, s in per_chain.items():
+        lane = LANE_ASSIGNMENTS.get(chain, "unclassified")
+        role = CHAIN_ROLES.get(chain, "unclassified")
+        structural_req = STRUCTURAL_ADVANTAGE_REQUIRED.get(chain)
+
+        if lane not in lanes:
+            lanes[lane] = {
+                "chains": [],
+                "total_runs": 0,
+                "total_pass": 0,
+                "total_signals": 0,
+                "profitable_rt_total": 0,
+                "best_gap_to_zero_bps": None,
+                "structural_advantage_met": True,
+            }
+
+        entry = lanes[lane]
+        entry["chains"].append(chain)
+        entry["total_runs"] += s.get("runs", 0)
+        entry["total_pass"] += s.get("pass", 0)
+        entry["total_signals"] += s.get("included_signals_total", 0)
+        entry["profitable_rt_total"] += s.get("profitable_roundtrips_total", 0)
+
+        gap = s.get("sweep_gap_to_zero_bps")
+        if gap is not None:
+            if entry["best_gap_to_zero_bps"] is None or gap < entry["best_gap_to_zero_bps"]:
+                entry["best_gap_to_zero_bps"] = round(gap, 4)
+
+        if structural_req is not None:
+            entry["structural_advantage_met"] = False
+
+    return lanes
+
+
 # R33: Map auto-computed blocker_evidence to human-readable reason strings.
 _BLOCKER_EVIDENCE_REASONS: dict[str | None, str | None] = {
     "ROUNDTRIP_PROFITABLE": None,  # not a blocker
@@ -537,6 +582,10 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             "real_quote_count": s.get("real_quote_count_total", 0),
             "profitable_roundtrips": s.get("profitable_roundtrips_total", 0),
             "best_net_pnl_bps": s.get("best_roundtrip_net_bps"),
+            # R39m: MEV-informed lane and chain role
+            "chain_role": CHAIN_ROLES.get(chain, "unclassified"),
+            "lane": LANE_ASSIGNMENTS.get(chain, "unclassified"),
+            "structural_advantage_required": STRUCTURAL_ADVANTAGE_REQUIRED.get(chain),
         })
     ranked.sort(key=lambda x: (
         x.get("accepted_fail", False),

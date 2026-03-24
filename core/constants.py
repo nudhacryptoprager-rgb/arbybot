@@ -307,6 +307,102 @@ DEFAULT_QUOTE_AMOUNT_WEI = {
 
 
 # =============================================================================
+# CHAIN ROLES (R39m — MEV-informed chain priority)
+# Roles:
+#   primary_profit   — main execution/profit research chain (requires structural advantage)
+#   exploratory       — inefficiency probe lane (lower competition, smaller volume)
+#   benchmark         — control/health chain only (high MEV competition, not for alpha)
+# =============================================================================
+
+CHAIN_ROLES: Dict[str, str] = {
+    "base": "primary_profit",
+    "zksync": "exploratory",
+    "arbitrum_one": "benchmark",
+    # Below chains retain coverage role from M5 onboarding
+    "linea": "exploratory",
+    "scroll": "exploratory",
+    "mantle": "exploratory",
+}
+
+# Chains that require a structural advantage (Flashblocks, preconf, private mempool)
+# before they should be treated as primary profit chains.
+# If the advantage is not integrated, the chain is downgraded to benchmark in reports.
+STRUCTURAL_ADVANTAGE_REQUIRED: Dict[str, str] = {
+    "base": "flashblocks_preconf",
+}
+
+
+# =============================================================================
+# PAIR ROLES (R39m — MEV-informed pair classification)
+# Roles:
+#   alpha       — primary profit contour (less crowded, exploitable inefficiency)
+#   benchmark   — execution/quoting health check only (too crowded for alpha)
+#   calibration — stable/stable for gas/slippage measurement only
+# =============================================================================
+
+PAIR_ROLES: Dict[str, str] = {
+    # Alpha pairs — Base quantity-profit candidates (less MEV crowding)
+    "base:cbBTC/USDC": "alpha",
+    "base:cbBTC/WETH": "alpha",
+    "base:AERO/USDC": "alpha",
+    # Benchmark pairs — too crowded for primary alpha
+    "base:WETH/USDC": "benchmark",
+    "arbitrum_one:WETH/USDC": "benchmark",
+    "arbitrum_one:WETH/USDT": "benchmark",
+    # Calibration pairs — stable/stable for measurement only
+    "*:USDC/USDT": "calibration",
+    "*:USDC/DAI": "calibration",
+}
+
+
+def get_pair_role(chain: str, pair: str) -> str:
+    """Get the role classification for a chain:pair combination.
+
+    Lookup order: exact chain:pair → wildcard *:pair → default.
+    Returns: 'alpha', 'benchmark', 'calibration', or 'unclassified'.
+    """
+    key = f"{chain}:{pair}"
+    if key in PAIR_ROLES:
+        return PAIR_ROLES[key]
+    wildcard = f"*:{pair}"
+    if wildcard in PAIR_ROLES:
+        return PAIR_ROLES[wildcard]
+    return "unclassified"
+
+
+# =============================================================================
+# MEV CROWDING RISK (R39m — penalty for high-competition pair classes)
+# Heuristic: blue-chip WETH/USDC and stable/stable pairs are the most crowded
+# MEV surfaces on fast L2s. These pairs should NOT be primary alpha contour.
+# Penalty is additive BPS applied to gap_to_zero for ranking purposes only.
+# =============================================================================
+
+MEV_CROWDING_PENALTY_BPS: Dict[str, float] = {
+    "benchmark": 50.0,    # WETH/USDC-class: heavily competed, +50 bps penalty
+    "calibration": 100.0, # stable/stable: worst crowding, +100 bps penalty
+    "alpha": 0.0,         # uncrowded candidates: no penalty
+    "unclassified": 25.0, # unknown: mild penalty
+}
+
+
+# =============================================================================
+# ANALYSIS LANES (R39m — 2-lane scan categorization)
+# Lane A: Base quantity-profit (primary profit research)
+# Lane B: zkSync inefficiency probe (exploratory lower-competition)
+# Benchmark: Arbitrum control (not an active profit lane)
+# =============================================================================
+
+LANE_ASSIGNMENTS: Dict[str, str] = {
+    "base": "A_quantity_profit",
+    "zksync": "B_inefficiency_probe",
+    "arbitrum_one": "benchmark_control",
+    "linea": "B_inefficiency_probe",
+    "scroll": "B_inefficiency_probe",
+    "mantle": "B_inefficiency_probe",
+}
+
+
+# =============================================================================
 # __all__ - EXPORT ALL PUBLIC SYMBOLS
 # =============================================================================
 
@@ -339,4 +435,12 @@ __all__ = [
     "DEX_IDS",
     "DEFAULT_QUOTE_AMOUNT_WEI",
     "FAKE_BLOCK_SENTINELS",
+    
+    # R39m: MEV-informed classification
+    "CHAIN_ROLES",
+    "STRUCTURAL_ADVANTAGE_REQUIRED",
+    "PAIR_ROLES",
+    "get_pair_role",
+    "MEV_CROWDING_PENALTY_BPS",
+    "LANE_ASSIGNMENTS",
 ]
