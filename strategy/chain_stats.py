@@ -180,7 +180,11 @@ def _compute_blocker_evidence(stats: dict[str, Any]) -> None:
     # R35: If sweep evidence is strong (routes swept, sweep PnL observed),
     # the quote path is working for active pairs — skip QUOTE_PATH_BLOCKED
     # and fall through to economics/rejection classification.
-    has_sweep_evidence = stats.get("runs_with_sweep", 0) > 0
+    # R39i: Sweep evidence only overrides when real_quote_count > 0.
+    # If rq=0, sweeps came from diagnostic-only routes — doesn't prove
+    # the executable quote path works.
+    rq_total = stats.get("real_quote_count_total", 0)
+    has_sweep_evidence = stats.get("runs_with_sweep", 0) > 0 and rq_total > 0
 
     # Check quote-path: high quoter_v2 failure rate
     exec_q = qss.get("quotes_fetched_executable", 0)

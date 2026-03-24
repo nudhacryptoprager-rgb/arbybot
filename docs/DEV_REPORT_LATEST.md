@@ -7,41 +7,41 @@
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled.
-**R39h++**: Full system audit: blockers are layered (base quote-path, mixed-source, HTTP-only freshness, post-signal economics). +rt_without_signal_count, WS endpoints all 6 chains. 2330 tests.
+**R39i**: Base QUOTE_PATH_BLOCKED fix (sweep evidence requires rq>0), Status compression (487→128 lines), CI enforcement for 3-tier policy. 2338 tests.
 
-## SESSION GOAL (R39h++: system audit + WS freshness + funnel diagnostics)
-**Goal**: (1) Full system audit across all modules, (2) Add rt_without_signal_count field, (3) Add WS endpoints for 4 HTTP-only chains, (4) Update Status_M5_0 with audit findings, (5) Fresh scan with new fields.
-**Prior (R39h+)**: 2327 tests, funnel attrition zero (42→41→40), sweep_reprieve_rt added, 3-tier policy formalized.
-**Lead directive (R39h++)**: "Pair-universe width is no longer the main blocker. Current blockers are layered: base quote-path debt, mixed-source truth loss on scroll/mantle, HTTP-only freshness on 4 chains, and post-signal economics on healthy chains."
+## SESSION GOAL (R39i: base blocker fix + doc alignment + CI enforcement)
+**Goal**: (1) Fix base misclassification as OE_ECONOMICS (should be QUOTE_PATH_BLOCKED when rq=0), (2) Align docs with rolling timestamps, (3) Compress Status_M5_0.md below 400 lines, (4) Add CI enforcement for 3-tier policy and ≥2/4 metrics rule, (5) Fresh scan + dashboard.
+**Prior (R39h++)**: 2330 tests, WS endpoints for all 6 chains, rt_without_signal field, layered blocker diagnosis.
+**Lead directive (R39i)**: "base lишається quote-path chain, not market chain: rq=0. WS config-complete but runtime-incomplete. Status bloated. 3-tier policy lives in docs not code gates."
 
 ## 0) Meta
-timestamp_utc: 2026-03-24T10:13:01Z
-run_dir_name: long_scan_latest.json (36 runs, 655s, 6 chains)
+timestamp_utc: 2026-03-24T09:56:41Z
+run_dir_name: ci_m5_gate_arbitrum_one_20260324_105605_267594
 long_scan_summary: long_scan_latest.json
-mode: R39h_PP_SYSTEM_AUDIT_WS_FUNNEL
-test_count: 2330 passed, 5 skipped
+mode: R39i_BASE_BLOCKER_FIX_CI_ENFORCEMENT
+test_count: 2338 passed, 5 skipped
 schema_version: m4:run_summary:v2.0, start:long_scan_summary:v1.15
 code_identity:
-  primary: ts:2026-03-24T10:13:01Z
-  dirty: true (R39h++ code changes uncommitted)
-  desc: system_audit_ws_rt_without_signal
+  primary: ts:2026-03-24T09:56:41Z
+  dirty: true (R39i code changes uncommitted)
+  desc: base_quote_path_blocked_ci_enforcement
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R39h++: system audit + WS freshness + funnel diagnostics |
-| goal_status | **REACHED** |
-| close_allowed | true |
-| remaining_blockers | profitable_rt=0 (economics); base quote-path (SLOT0); scroll/mantle MIXED_SOURCE |
-| fresh_evidence_run | long_scan_latest.json: 36 runs, 655s, 300 signals, $401 net, 69 RT, 0 profitable, rt_wo_sig=13 |
-| evidence_session_run_dirs | fresh RCA run dirs: arb/zksync/base/mantle/linea/scroll (2026-03-24T10:12-10:13) |
-| primary_blocker_of_session | layered: base quote-path, mixed-source truth loss, HTTP-only freshness, post-signal econ |
-| blocker_status_before | ACTIVE: 4 chains HTTP-only; no rt_without_signal; summary semantics confuse operators |
-| blocker_status_after | **IMPROVED**: WS endpoints all 6 chains; rt_without_signal exposes semantic splits |
-| start_metric | 2327 tests, 42 pairs, WS: 2/6 chains, no rt_without_signal |
-| end_metric | 2330 tests, 42 pairs, WS: 6/6 chains, rt_without_signal in funnel |
-| delta | +3 tests, +4 WS endpoints, rt_without_signal field, layered blocker doc |
+| session_goal | R39i: base blocker fix + doc alignment + CI enforcement |
+| goal_status | **IN_PROGRESS** |
+| close_allowed | false (pending fresh scan + CI green) |
+| remaining_blockers | profitable_rt=0 (economics); base QUOTE_PATH_BLOCKED; scroll/mantle MIXED_SOURCE; WS runtime-unproven |
+| fresh_evidence_run | run_summary_latest: ci_m5_gate_arbitrum_one_20260324_105605_267594 (ts:2026-03-24T09:56:41Z) |
+| evidence_session_run_dirs | pair_level_rca: base/mantle/scroll (2026-03-24T10:56-10:57) |
+| primary_blocker_of_session | base misclassified as OE_ECONOMICS (now QUOTE_PATH_BLOCKED); Status bloat; no CI enforcement |
+| blocker_status_before | ACTIVE: base=OE_ECONOMICS (wrong); Status=487 lines; 3-tier in docs only |
+| blocker_status_after | **IMPROVED**: base=QUOTE_PATH_BLOCKED (correct); Status=128 lines; CI enforcement added |
+| start_metric | 2330 tests, base=OE_ECONOMICS, Status=487 lines |
+| end_metric | 2338 tests, base=QUOTE_PATH_BLOCKED, Status=128 lines |
+| delta | +8 tests, base blocker fix, Status -359 lines, CI enforcement |
 | docs_reread_confirmed | true |
 
 ## 0.3) Fresh 11-Minute Scan Evidence (R39h++ final)
@@ -67,15 +67,16 @@ Sweep best:     +0.00 bps @ $5000 (BREAKEVEN_FRONTIER)
 **Key funnel observation**: 42→41→40 (near-zero attrition at universe level). mantle: 0 sig / 12 RT → **rt_without_signal=12** now exposed — semantic split captured in operator-facing artifact.
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 -- R39h++: system audit + WS freshness + funnel diagnostics
+goal (Roadmap): M5_0/M4 -- R39i: base blocker fix + doc alignment + CI enforcement
 change_summary:
-  - **config/chains.yaml** — Added `ws_endpoints` for linea, mantle, scroll, zksync (BlastAPI public WS). All 6 chains now have WS configured.
-  - **strategy/chain_stats.py** — Added `rt_without_signal_total`: counts RT evaluated on runs where signals=0. Also `sweep_reprieve_rt_total` from prior session.
-  - **strategy/long_scan_summary.py** — Added `rt_without_signal` to per-chain signal_funnel and `rt_without_signal_total` to aggregate.
-  - **tests/unit/test_signal_funnel.py** — +2 tests for rt_without_signal (accumulation + funnel output).
-  - **tests/unit/test_config.py** — +1 test: all 6 active chains must have wss:// endpoints.
-  - **docs/status/Status_M5_0.md** — R39h++ section: system audit findings, layered blocker priority.
-  - No intent.txt or engine changes — audit-only session with observability + freshness improvements.
+  - **strategy/chain_stats.py** — Fixed `_compute_blocker_evidence()`: `has_sweep_evidence` now requires `rq_total > 0` in addition to `runs_with_sweep > 0`. Base (rq=0) now correctly gets QUOTE_PATH_BLOCKED instead of OE_ECONOMICS.
+  - **tests/unit/test_blocker_evidence.py** — +2 tests: `test_slot0_with_diagnostic_sweep_still_quote_path_blocked` and `test_slot0_with_real_quotes_falls_through`. 15/15 blocker tests pass.
+  - **scripts/check_repo_safety.py** — v1.15.0: +`check_intent_tier_limits()` (3-tier enforcement: calibration baseline 42 pairs) + `check_expansion_metrics_rule()` (>=2/4 metrics WARN). 
+  - **tests/unit/test_check_repo_safety.py** — +6 tests for new CI enforcement functions (3 tier limits + 3 expansion metrics).
+  - **tests/unit/test_r34_stream_reprieve.py** — Updated 2 tests to add `real_quote_count_total` per new sweep evidence contract.
+  - **docs/status/Status_M5_0.md** — Compressed 487→128 lines. Folded R39g+ through R36 into compact historical summary table.
+  - **docs/DEV_REPORT_LATEST.md** — Aligned timestamp_utc + run_dir_name with rolling artifacts. Updated for R39i session.
+  - Prior R39h++ changes (uncommitted): config/chains.yaml (WS endpoints), strategy/long_scan_summary.py (rt_without_signal), tests/unit/test_signal_funnel.py (+2), tests/unit/test_config.py (+1).
 
 ## 2) Root Cause Analysis
 

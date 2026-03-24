@@ -101,3 +101,32 @@ class TestComputeBlockerEvidence:
         s = _base_stats(last_oe_rejection_funnel=oe_rf)
         _compute_blocker_evidence(s)
         assert s["blocker_evidence"] == "OE_ECONOMICS"
+
+    def test_slot0_with_diagnostic_sweep_still_quote_path_blocked(self):
+        """R39i: base scenario — SLOT0 dominant + runs_with_sweep > 0 but rq=0.
+        Sweep evidence from diagnostic-only routes should NOT override QUOTE_PATH_BLOCKED
+        when real_quote_count is zero (proves executable quote path broken)."""
+        oe_rf = {"rejected_count": 120,
+                 "rejected_reasons": {"SLOT0_DIAGNOSTIC": 93, "MIXED_SOURCE": 15,
+                                      "NET_PROFIT_TOO_LOW": 12}}
+        s = _base_stats(
+            last_oe_rejection_funnel=oe_rf,
+            runs_with_sweep=2,           # some sweeps from diagnostic routes
+            real_quote_count_total=0,    # but zero real quotes
+        )
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "QUOTE_PATH_BLOCKED"
+
+    def test_slot0_with_real_quotes_falls_through(self):
+        """When SLOT0 dominant but rq > 0, sweep evidence legitimately overrides —
+        some real quotes do work, so economics classification is appropriate."""
+        oe_rf = {"rejected_count": 120,
+                 "rejected_reasons": {"SLOT0_DIAGNOSTIC": 60, "NET_PROFIT_TOO_LOW": 50,
+                                      "MIXED_SOURCE": 10}}
+        s = _base_stats(
+            last_oe_rejection_funnel=oe_rf,
+            runs_with_sweep=3,
+            real_quote_count_total=5,
+        )
+        _compute_blocker_evidence(s)
+        assert s["blocker_evidence"] == "OE_ECONOMICS"

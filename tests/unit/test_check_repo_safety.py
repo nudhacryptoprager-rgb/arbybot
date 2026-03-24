@@ -1613,5 +1613,145 @@ class TestDevReportPlaceholderCells(unittest.TestCase):
             f"Expected cross-dex placeholder flag, got: {issues}")
 
 
+class TestCheckIntentTierLimits(unittest.TestCase):
+    """Tests for check_intent_tier_limits function (v1.15.0)."""
+
+    def test_within_limits_passes(self):
+        """Intent file with 42 pairs (calibration baseline) should pass."""
+        from scripts.check_repo_safety import check_intent_tier_limits
+        import tempfile
+
+        # Create intent.txt with exactly 42 pairs
+        pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(42)]
+        content = "# intent.txt v3.3.0\n" + "\n".join(pairs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config"
+            config.mkdir()
+            (config / "intent.txt").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", Path(tmp)):
+                issues = check_intent_tier_limits(allow_edit=False)
+
+        self.assertEqual(len(issues), 0, f"Expected no issues at baseline, got: {issues}")
+
+    def test_exceeds_limits_fails(self):
+        """Intent file with 50 pairs (>42) should fail without --allow-intent-edit."""
+        from scripts.check_repo_safety import check_intent_tier_limits
+        import tempfile
+
+        # Create intent.txt with 50 pairs (exceeds baseline)
+        pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(50)]
+        content = "# intent.txt v3.3.0\n" + "\n".join(pairs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config"
+            config.mkdir()
+            (config / "intent.txt").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", Path(tmp)):
+                issues = check_intent_tier_limits(allow_edit=False)
+
+        tier_issues = [i for i in issues if "INTENT_TIER_LIMIT" in i]
+        self.assertEqual(len(tier_issues), 1, f"Expected tier limit issue, got: {issues}")
+        self.assertIn("50 pairs", tier_issues[0])
+        self.assertIn("baseline: 42", tier_issues[0])
+
+    def test_exceeds_limits_allowed_with_flag(self):
+        """Intent file with >42 pairs should pass with --allow-intent-edit."""
+        from scripts.check_repo_safety import check_intent_tier_limits
+        import tempfile
+
+        pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(50)]
+        content = "# intent.txt v3.3.0\n" + "\n".join(pairs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config"
+            config.mkdir()
+            (config / "intent.txt").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", Path(tmp)):
+                issues = check_intent_tier_limits(allow_edit=True)
+
+        self.assertEqual(len(issues), 0, f"Expected no issues with allow_edit=True, got: {issues}")
+
+
+class TestCheckExpansionMetricsRule(unittest.TestCase):
+    """Tests for check_expansion_metrics_rule function (v1.15.0)."""
+
+    def test_no_expansion_claim_passes(self):
+        """DEV_REPORT without expansion claims should pass."""
+        from scripts.check_repo_safety import check_expansion_metrics_rule
+        import tempfile
+
+        content = "\n".join([
+            "# DEV REPORT",
+            "## 0) Meta",
+            "timestamp_utc: 2026-03-24T10:00:00Z",
+            "## 1) Scope",
+            "change_summary: Fixed blocker classification",
+            "delta | +2 tests, base fix",
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = Path(tmp) / "docs"
+            docs.mkdir()
+            (docs / "DEV_REPORT_LATEST.md").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", Path(tmp)):
+                issues = check_expansion_metrics_rule()
+
+        self.assertEqual(len(issues), 0, f"Expected no issues without expansion, got: {issues}")
+
+    def test_expansion_without_metrics_warns(self):
+        """DEV_REPORT with expansion claim but <2 metrics should warn."""
+        from scripts.check_repo_safety import check_expansion_metrics_rule
+        import tempfile
+
+        content = "\n".join([
+            "# DEV REPORT",
+            "## 0) Meta",
+            "timestamp_utc: 2026-03-24T10:00:00Z",
+            "## 1) Scope",
+            "change_summary: Added pairs via calibration",
+            "delta | +13 pairs, universe expanded",
+            # Only rq mentioned (1 metric)
+            "rq=50",
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = Path(tmp) / "docs"
+            docs.mkdir()
+            (docs / "DEV_REPORT_LATEST.md").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", Path(tmp)):
+                issues = check_expansion_metrics_rule()
+
+        expansion_issues = [i for i in issues if "EXPANSION_METRICS" in i]
+        self.assertEqual(len(expansion_issues), 1, f"Expected expansion metrics warning, got: {issues}")
+        self.assertIn("1/4 metrics", expansion_issues[0])
+
+    def test_expansion_with_sufficient_metrics_passes(self):
+        """DEV_REPORT with expansion claim and >=2 metrics should pass."""
+        from scripts.check_repo_safety import check_expansion_metrics_rule
+        import tempfile
+
+        content = "\n".join([
+            "# DEV REPORT",
+            "## 0) Meta",
+            "timestamp_utc: 2026-03-24T10:00:00Z",
+            "## 1) Scope",
+            "change_summary: Added pairs via calibration",
+            "delta | +13 pairs, universe expanded",
+            # 2+ metrics: rq and RT
+            "rq=50, RT: 30",
+            "roundtrip_evaluated: 30",
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            docs = Path(tmp) / "docs"
+            docs.mkdir()
+            (docs / "DEV_REPORT_LATEST.md").write_text(content, encoding="utf-8")
+            with patch("scripts.check_repo_safety.PROJECT_ROOT", Path(tmp)):
+                issues = check_expansion_metrics_rule()
+
+        self.assertEqual(len(issues), 0, f"Expected no issues with 2+ metrics, got: {issues}")
+
+
 if __name__ == "__main__":
     unittest.main()

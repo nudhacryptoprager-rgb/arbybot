@@ -28,7 +28,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-__version__ = "1.14.0"
+__version__ = "1.15.0"
 
 # Files that should never be tracked in git
 FORBIDDEN_TRACKED_FILES = [
@@ -787,6 +787,63 @@ def check_intent_protection(allow_edit: bool = False) -> List[str]:
     return issues
 
 
+def check_intent_tier_limits(allow_edit: bool = False) -> List[str]:
+    """Check that intent.txt pair count doesn't exceed calibration tier baseline (v1.15.0).
+    
+    Per 3-tier policy (WORKFLOW.md):
+    - Productive tier: proven volatile pairs (base)
+    - Calibration tier: stable pairs added for coverage (+USDC/DAI, +USDC/USDT)
+    - Probe tier: experimental pairs (requires explicit --allow-intent-edit)
+    
+    The calibration tier baseline is 42 pairs. Any expansion beyond this
+    requires explicit permission to prevent accidental contour inflation.
+    
+    Args:
+        allow_edit: If True, skip this check (explicit permission granted)
+    
+    Returns:
+        List of error messages if tier limits exceeded
+    """
+    # Calibration tier baseline (R39h)
+    CALIBRATION_TIER_BASELINE = 42
+    
+    if allow_edit:
+        return []  # Explicit permission granted
+    
+    issues = []
+    intent_path = PROJECT_ROOT / "config" / "intent.txt"
+    
+    if not intent_path.exists():
+        return []  # No intent.txt = skip
+    
+    try:
+        content = intent_path.read_text(encoding='utf-8')
+        lines = content.splitlines()
+        
+        # Count actual pair lines (format: chain_key:BASE/QUOTE)
+        pair_count = 0
+        for line in lines:
+            line = line.strip()
+            # Skip empty lines and comments
+            if not line or line.startswith('#'):
+                continue
+            # Match chain:PAIR format
+            if ':' in line and '/' in line:
+                pair_count += 1
+        
+        if pair_count > CALIBRATION_TIER_BASELINE:
+            issues.append(
+                f"INTENT_TIER_LIMIT: intent.txt has {pair_count} pairs (baseline: {CALIBRATION_TIER_BASELINE}). "
+                f"Expanding beyond calibration tier requires --allow-intent-edit flag. "
+                f"Per 3-tier policy: productive → calibration → probe requires explicit permission."
+            )
+    
+    except Exception as e:
+        issues.append(f"ERROR: Could not check intent tier limits: {e}")
+    
+    return issues
+
+
 def check_session_completion_gate() -> List[str]:
     """Check that DEV_REPORT_LATEST.md doesn't claim completion without goal_status=REACHED (v1.9.0).
     
@@ -917,6 +974,83 @@ def check_session_completion_gate() -> List[str]:
                     break
     except Exception as e:
         issues.append(f"ERROR: Could not check session completion gate: {e}")
+    
+    return issues
+
+
+def check_expansion_metrics_rule() -> List[str]:
+    """Check that pair/universe expansion claims have >=2/4 metrics evidence (v1.15.0).
+    
+    Per WORKFLOW.md expansion policy, before claiming pair/source expansion as REACHED,
+    must verify at least 2 of 4 metrics moved in the right direction:
+    1. rq grows (real_quote_count increased)
+    2. RT-evaluated grows (roundtrip_evaluated increased)
+    3. best gap decreases (best spread improved)
+    4. near-zero candidates appear (more spreads approach zero)
+    
+    This is a WARN-level check (soft policy). Detects expansion language in delta/change_summary
+    and verifies quantified evidence is present.
+    
+    Returns:
+        List of warning messages (WARN_EXPANSION_METRICS)
+    """
+    import re
+    issues = []
+    dev_report = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
+    
+    if not dev_report.exists():
+        return []
+    
+    try:
+        content = dev_report.read_text(encoding='utf-8')
+        
+        # Detect expansion language in delta or change_summary
+        expansion_patterns = [
+            r"\+\d+\s*pairs?",           # "+2 pairs", "+13 pairs"
+            r"pairs?\s*(added|increased|expanded)",
+            r"universe\s*(expanded|grew|increased)",
+            r"contour\s*(expanded|grew|increased)",
+            r"scope\s*(expanded|increased)",
+        ]
+        
+        has_expansion_claim = False
+        expansion_match = None
+        for pattern in expansion_patterns:
+            match = re.search(pattern, content, re.IGNORECASE)
+            if match:
+                has_expansion_claim = True
+                expansion_match = match.group(0)
+                break
+        
+        if has_expansion_claim:
+            # Check for >=2 of 4 quantified metrics
+            metrics_found = 0
+            
+            # 1. rq grows: "rq=N", "real_quote_count: N", "rq +N", "rq: N"
+            if re.search(r"rq[\s=:]+\d+", content) or re.search(r"real_quote.*\d+", content, re.IGNORECASE):
+                metrics_found += 1
+            
+            # 2. RT-evaluated grows: "RT: N", "roundtrip.*N", "RT eval.*N"
+            if re.search(r"RT[\s:]+\d+", content) or re.search(r"roundtrip.*\d+", content, re.IGNORECASE):
+                metrics_found += 1
+            
+            # 3. best gap decreases: "best.*-?\d+.*bps", "gap.*-?\d+", "spread.*-?\d+"
+            if re.search(r"best[^|]*-?\d+\s*bps", content, re.IGNORECASE):
+                metrics_found += 1
+            
+            # 4. near-zero candidates: "near-zero", "breakeven", "profitable.*0"
+            if re.search(r"near-zero|breakeven|profitable\s*RT.*0", content, re.IGNORECASE):
+                metrics_found += 1
+            
+            if metrics_found < 2:
+                issues.append(
+                    f"WARN_EXPANSION_METRICS: DEV_REPORT claims expansion ('{expansion_match}') but only "
+                    f"{metrics_found}/4 metrics quantified. Per >=2/4 rule: need at least 2 of: "
+                    "rq grows, RT-evaluated grows, best gap decreases, near-zero candidates appear."
+                )
+    
+    except Exception as e:
+        issues.append(f"ERROR: Could not check expansion metrics rule: {e}")
     
     return issues
 
@@ -1511,6 +1645,14 @@ def main():
     if not issues:
         print("  OK: config/intent.txt not modified without explicit permission")
     
+    print("\n[12b] Checking intent.txt tier limits...")
+    issues = check_intent_tier_limits(args.allow_intent_edit)
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: intent.txt within calibration tier limits (42 pairs)")
+    
     print("\n[13] Checking session completion gate...")
     issues = check_session_completion_gate()
     all_issues.extend(issues)
@@ -1518,6 +1660,19 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: Session completion gate compliant")
+    
+    print("\n[13b] Checking expansion metrics rule...")
+    issues = check_expansion_metrics_rule()
+    # Expansion metrics issues are WARN-level, not hard failure
+    # Prefix with WARN: so they're counted as warnings not errors
+    for issue in issues:
+        if not issue.startswith("WARN"):
+            all_issues.append(f"WARN: {issue}")
+        else:
+            all_issues.append(issue)
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: No expansion claims require metrics verification")
     
     print("\n[14] Checking DEV_REPORT claim consistency...")
     issues = check_dev_report_claim_consistency()

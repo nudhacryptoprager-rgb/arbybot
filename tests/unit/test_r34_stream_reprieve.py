@@ -509,9 +509,14 @@ class TestSerializeLiveStreamPerChainFallback(TestCase):
 
 
 class TestQuotePathBlockedSweepOverride(TestCase):
-    """R35: QUOTE_PATH_BLOCKED should not apply when sweep evidence is strong."""
+    """R35: QUOTE_PATH_BLOCKED should not apply when sweep evidence is strong.
+    
+    R39i update: Sweep evidence requires real_quote_count_total > 0.
+    A chain with only diagnostic sweeps but no real quotes still gets QUOTE_PATH_BLOCKED.
+    """
 
     def test_sweep_evidence_overrides_quoter_failure(self):
+        """Sweep evidence with real quotes should override quoter failure."""
         from strategy.chain_stats import _compute_blocker_evidence
 
         stats = {
@@ -520,6 +525,7 @@ class TestQuotePathBlockedSweepOverride(TestCase):
             "fail": 0,
             "included_signals_total": 50,
             "runs_with_sweep": 3,
+            "real_quote_count_total": 10,  # R39i: Must have real quotes for sweep evidence
             "last_quote_source_summary": {
                 "quotes_fetched_executable": 5,
                 "quotes_fetched_diagnostic": 5,
@@ -532,11 +538,12 @@ class TestQuotePathBlockedSweepOverride(TestCase):
             "last_truth_verdict": None,
         }
         _compute_blocker_evidence(stats)
-        # Should NOT be QUOTE_PATH_BLOCKED because sweep is active
+        # Should NOT be QUOTE_PATH_BLOCKED because sweep is active + rq > 0
         self.assertNotEqual(stats["blocker_evidence"], "QUOTE_PATH_BLOCKED")
         self.assertEqual(stats["blocker_evidence"], "OE_ECONOMICS")
 
     def test_sweep_evidence_overrides_slot0_diagnostic(self):
+        """Sweep evidence with real quotes should override SLOT0_DIAGNOSTIC."""
         from strategy.chain_stats import _compute_blocker_evidence
 
         stats = {
@@ -545,6 +552,7 @@ class TestQuotePathBlockedSweepOverride(TestCase):
             "fail": 0,
             "included_signals_total": 50,
             "runs_with_sweep": 2,
+            "real_quote_count_total": 5,  # R39i: Must have real quotes for sweep evidence
             "last_quote_source_summary": {},
             "last_oe_rejection_funnel": {
                 "rejected_count": 20,
@@ -553,7 +561,7 @@ class TestQuotePathBlockedSweepOverride(TestCase):
             "last_truth_verdict": None,
         }
         _compute_blocker_evidence(stats)
-        # With sweep evidence, SLOT0_DIAGNOSTIC should not trigger QUOTE_PATH_BLOCKED
+        # With sweep evidence + rq > 0, SLOT0_DIAGNOSTIC should not trigger QUOTE_PATH_BLOCKED
         # Instead falls through to OE_ECONOMICS (NET_PROFIT_TOO_LOW is 50% > 40%)
         self.assertNotEqual(stats["blocker_evidence"], "QUOTE_PATH_BLOCKED")
         self.assertEqual(stats["blocker_evidence"], "OE_ECONOMICS")
