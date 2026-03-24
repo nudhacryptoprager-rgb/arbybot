@@ -124,12 +124,16 @@ def build_summary(
         _cdp = s.get("last_cross_dex_pairs_count")
         _sig = s.get("included_signals_total", 0)
         _rte = s.get("roundtrip_evaluated_total", 0)
+        _srrt = s.get("sweep_reprieve_rt_total", 0)
+        _rwos = s.get("rt_without_signal_total", 0)
         s["signal_funnel"] = {
             "intent_pairs": _ipc,
             "pairs_after_excludes": _pae,
             "cross_dex_pairs": _cdp,
             "spread_signals": _sig,
             "rt_evaluated": _rte,
+            "sweep_reprieve_rt": _srrt,
+            "rt_without_signal": _rwos,
         }
 
     summary = {
@@ -158,6 +162,8 @@ def build_summary(
             "cross_dex_pairs_total": sum(s.get("signal_funnel", {}).get("cross_dex_pairs") or 0 for s in per_chain.values()),
             "spread_signals_total": sum(s.get("signal_funnel", {}).get("spread_signals") or 0 for s in per_chain.values()),
             "rt_evaluated_total": sum(s.get("signal_funnel", {}).get("rt_evaluated") or 0 for s in per_chain.values()),
+            "sweep_reprieve_rt_total": sum(s.get("signal_funnel", {}).get("sweep_reprieve_rt") or 0 for s in per_chain.values()),
+            "rt_without_signal_total": sum(s.get("signal_funnel", {}).get("rt_without_signal") or 0 for s in per_chain.values()),
         },
         "best_roundtrip_net_bps": max(
             (s["best_roundtrip_net_bps"] for s in per_chain.values() if s.get("best_roundtrip_net_bps") is not None),

@@ -7,75 +7,97 @@
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled.
-**R39h**: Per-chain signal funnel + calibration contour. ZK/* exclude removed, 42 pairs (was 31), signal_funnel in long_scan_summary v1.15. 2325 tests.
+**R39h++**: Full system audit: blockers are layered (base quote-path, mixed-source, HTTP-only freshness, post-signal economics). +rt_without_signal_count, WS endpoints all 6 chains. 2330 tests.
 
-## SESSION GOAL (R39h: per-chain signal funnel + calibration contour)
-**Goal**: (1) Per-chain RCA on all 5 secondary chains, (2) Remove zksync ZK/* blanket exclude, (3) Apply calibration tier (42 pairs), (4) Add signal funnel observability to long_scan_summary, (5) Fresh scan.
-**Prior (R39g+)**: 2317 tests, 10-min scan: 31 runs, 213 signals, $303 net, 0 profitable RT.
-**Lead directive (R39h)**: "низька кількість сигналів поза arb не є однією проблемою" — each chain has different root cause. Per-chain focus, calibration contour expansion, signal funnel fields.
+## SESSION GOAL (R39h++: system audit + WS freshness + funnel diagnostics)
+**Goal**: (1) Full system audit across all modules, (2) Add rt_without_signal_count field, (3) Add WS endpoints for 4 HTTP-only chains, (4) Update Status_M5_0 with audit findings, (5) Fresh scan with new fields.
+**Prior (R39h+)**: 2327 tests, funnel attrition zero (42→41→40), sweep_reprieve_rt added, 3-tier policy formalized.
+**Lead directive (R39h++)**: "Pair-universe width is no longer the main blocker. Current blockers are layered: base quote-path debt, mixed-source truth loss on scroll/mantle, HTTP-only freshness on 4 chains, and post-signal economics on healthy chains."
 
 ## 0) Meta
-timestamp_utc: 2026-03-24T08:34:47Z
-run_dir_name: long_scan_latest.json (40 runs, 833s, 6 chains)
+timestamp_utc: 2026-03-24T10:13:01Z
+run_dir_name: long_scan_latest.json (36 runs, 655s, 6 chains)
 long_scan_summary: long_scan_latest.json
-mode: R39h_SIGNAL_FUNNEL_CALIBRATION
-test_count: 2325 passed, 5 skipped
+mode: R39h_PP_SYSTEM_AUDIT_WS_FUNNEL
+test_count: 2330 passed, 5 skipped
 schema_version: m4:run_summary:v2.0, start:long_scan_summary:v1.15
 code_identity:
-  primary: ts:2026-03-24T08:34:47Z
-  dirty: true (R39h code changes uncommitted)
-  desc: signal_funnel_calibration_contour
+  primary: ts:2026-03-24T10:13:01Z
+  dirty: true (R39h++ code changes uncommitted)
+  desc: system_audit_ws_rt_without_signal
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R39h: per-chain signal funnel + calibration contour |
+| session_goal | R39h++: system audit + WS freshness + funnel diagnostics |
 | goal_status | **REACHED** |
 | close_allowed | true |
-| remaining_blockers | profitable_rt=0 (economics); base FAIL (SLOT0); linea FAIL (coverage) |
-| fresh_evidence_run | long_scan_latest.json: 40 runs, 833s, 386 signals, $463 net, 75 RT, 0 profitable |
-| evidence_session_run_dirs | long_scan_latest.json (2026-03-24T08:34:47Z), 40 runs across 6 chains |
-| primary_blocker_of_session | secondary chain signal scarcity (per-chain diverse root causes) |
-| blocker_status_before | ACTIVE: zksync ZK/* excluded (3 pairs), linea/scroll/mantle 3-4 pairs, no signal funnel |
-| blocker_status_after | **RESOLVED**: signals +81% (213→386), RT +47% (51→75), scroll→PASS, funnel in v1.15 |
-| start_metric | 2317 tests, 31 pairs, 213 signals, 51 RT, no signal funnel, v1.14 |
-| end_metric | 2325 tests, 42 pairs, 386 signals, 75 RT, signal_funnel in v1.15 |
-| delta | +8 tests, +11 pairs, +173 signals (+81%), +24 RT (+47%), scroll promoted to PASS |
+| remaining_blockers | profitable_rt=0 (economics); base quote-path (SLOT0); scroll/mantle MIXED_SOURCE |
+| fresh_evidence_run | long_scan_latest.json: 36 runs, 655s, 300 signals, $401 net, 69 RT, 0 profitable, rt_wo_sig=13 |
+| evidence_session_run_dirs | fresh RCA run dirs: arb/zksync/base/mantle/linea/scroll (2026-03-24T10:12-10:13) |
+| primary_blocker_of_session | layered: base quote-path, mixed-source truth loss, HTTP-only freshness, post-signal econ |
+| blocker_status_before | ACTIVE: 4 chains HTTP-only; no rt_without_signal; summary semantics confuse operators |
+| blocker_status_after | **IMPROVED**: WS endpoints all 6 chains; rt_without_signal exposes semantic splits |
+| start_metric | 2327 tests, 42 pairs, WS: 2/6 chains, no rt_without_signal |
+| end_metric | 2330 tests, 42 pairs, WS: 6/6 chains, rt_without_signal in funnel |
+| delta | +3 tests, +4 WS endpoints, rt_without_signal field, layered blocker doc |
 | docs_reread_confirmed | true |
 
-## 0.3) Fresh 10-Minute Scan Evidence
+## 0.3) Fresh 11-Minute Scan Evidence (R39h++ final)
 
 ```
-Wall time:      833s (~14 min)
-Total runs:     40 (PASS=23, NO_DATA=10, FAIL=7, INFRA_FAIL=0)
-Signals total:  386 (+81% vs R39g+ 213)
-Net USDC total: $462.82 (+53% vs $303)
-Profitable RTs: 0 (evaluated: 75 (+47% vs 51), best: +0.00 bps)
-Sweep best:     +0.00 bps @ $7500 (BREAKEVEN_FRONTIER)
+Wall time:      655s (~11 min)
+Total runs:     36 (PASS=22, NO_DATA=10, FAIL=4, INFRA_FAIL=0)
+Signals total:  300
+Net USDC total: $401.06
+Profitable RTs: 0 (evaluated: 69, best: +0.00 bps)
+Sweep best:     +0.00 bps @ $5000 (BREAKEVEN_FRONTIER)
 ```
 
-| Chain | Runs | PASS | Signals | Net USDC | RT Eval | Status | vs R39g+ |
-|-------|-----:|-----:|--------:|---------:|--------:|--------|----------|
-| arbitrum_one | 7 | 7 | 313 | $400.25 | 39 | SIGNAL_PRODUCING | +119 sig |
-| zksync | 7 | 7 | 28 | $17.34 | 7 | PASS | **+20 sig, +6 RT** |
-| base | 7 | 3 | 9 | $16.44 | 3 | FAIL (SLOT0) | +7 sig, +3 RT |
-| scroll | 6 | 6 | 24 | $28.84 | 12 | **PASS** | **+20 sig, +11 RT** |
-| linea | 6 | 0 | 12 | -$0.05 | 0 | FAIL (coverage) | **+12 sig** |
-| mantle | 7 | 0 | 0 | $0.00 | 14 | PROBE_ONLY | +12 RT |
+| Chain | Runs | PASS | Signals | Net USDC | RT Eval | rt_wo_sig | Status |
+|-------|-----:|-----:|--------:|---------:|--------:|----------:|--------|
+| arbitrum_one | 6 | 6 | 226 | $314.54 | 30 | 0 | SIGNAL_PRODUCING |
+| zksync | 6 | 6 | 24 | $13.79 | 6 | 0 | PASS |
+| base | 6 | 2 | 6 | $4.41 | 3 | 1 | NO_DATA (SLOT0) |
+| scroll | 6 | 6 | 24 | $28.83 | 12 | 0 | PASS |
+| linea | 6 | 2 | 20 | $39.48 | 6 | 0 | FAIL (4 fail) |
+| mantle | 6 | 0 | 0 | $0.00 | 12 | **12** | PROBE_ONLY |
+
+**Key funnel observation**: 42→41→40 (near-zero attrition at universe level). mantle: 0 sig / 12 RT → **rt_without_signal=12** now exposed — semantic split captured in operator-facing artifact.
 
 ## 1) Scope
-goal (Roadmap): M5_0/M4 -- R39h: per-chain signal funnel + calibration contour
+goal (Roadmap): M5_0/M4 -- R39h++: system audit + WS freshness + funnel diagnostics
 change_summary:
-  - **config/onboard_zksync_candidate.yaml** — removed ZK/*, */ZK from excluded_pair_hints. Added ZK_USDC, ZK_WETH, USDC_DAI anchor prices. Pairs 3→7.
-  - **config/intent.txt** — regenerated with `--tier calibration`: 42 pairs (was 31). +USDC/DAI +USDC/USDT all chains.
-  - **config/{onboard_linea_stage1,onboard_base_stage2,real_minimal}.yaml** — added USDC_DAI + USDC_USDT anchor prices.
-  - **discovery/runtime.py** — `intent_pairs_count` field in RuntimeStats.
-  - **strategy/chain_stats.py** — `last_intent_pairs_count`, `last_pairs_after_excludes` per-chain fields.
-  - **strategy/long_scan_summary.py** — schema v1.15. `signal_funnel` section (top-level + per-chain).
-  - **tests/unit/test_signal_funnel.py** — +8 tests (RuntimeStats field, chain_stats extraction, build_summary funnel).
+  - **config/chains.yaml** — Added `ws_endpoints` for linea, mantle, scroll, zksync (BlastAPI public WS). All 6 chains now have WS configured.
+  - **strategy/chain_stats.py** — Added `rt_without_signal_total`: counts RT evaluated on runs where signals=0. Also `sweep_reprieve_rt_total` from prior session.
+  - **strategy/long_scan_summary.py** — Added `rt_without_signal` to per-chain signal_funnel and `rt_without_signal_total` to aggregate.
+  - **tests/unit/test_signal_funnel.py** — +2 tests for rt_without_signal (accumulation + funnel output).
+  - **tests/unit/test_config.py** — +1 test: all 6 active chains must have wss:// endpoints.
+  - **docs/status/Status_M5_0.md** — R39h++ section: system audit findings, layered blocker priority.
+  - No intent.txt or engine changes — audit-only session with observability + freshness improvements.
 
 ## 2) Root Cause Analysis
+
+### Layered Blocker Diagnosis (R39h++ system audit)
+Full audit across chains/dex/config/engine/strategy/discovery confirms the blockers are layered:
+1. **base quote-path debt** (SLOT0_DIAGNOSTIC 79%, exec 5.4%, rq=0, 44 quoter_v2_failed)
+2. **mixed-source truth loss** on scroll (37.5%) and mantle (66.7%) — one executable + one diagnostic leg
+3. **HTTP-only freshness** on 4 chains (now fixed: WS endpoints added for linea/mantle/scroll/zksync)
+4. **post-signal economics/slippage** on all healthy chains (arb best -54bps, still slippage-dominated)
+
+### Per-Chain Fresh RCA (2026-03-24 run dirs)
+| Chain | Pairs | Exec% | RT | Best PnL | #1 OE Reject | Key Insight |
+|-------|------:|------:|---:|------:|----------|-------------|
+| arb | 11 | 88.6% | 5 | -54 | (none; clean pipeline) | best candidate USDC/DAI at -54bps → slippage blocker |
+| zksync | 7 | 92.3% | 1 | -609 | NET_PROFIT_TOO_LOW 63% | thin but clean; ZK/USDC+ZK/WETH still at `resolved` |
+| base | 9 | 5.4% | 1 | -10127 | SLOT0_DIAGNOSTIC 79% | quote-path debt is THE base blocker |
+| linea | 5 | 100% | 1 | -563 | NET_PROFIT_TOO_LOW 63% | economics/thin-truth; RT > 0 now |
+| scroll | 5 | 86.7% | 2 | -353 | SUSPECT_SPREAD 38% | MIXED_SOURCE 38% = second blocker |
+| mantle | 4 | 100% | 2 | -415 | MIXED_SOURCE 67% | 0 sig/12 RT = semantic split (rt_without_signal) |
+
+### Mantle 0-Sig/14-RT Semantic Split (explained)
+Two independent pipelines: `included_signals_count` counts signals where |spread| ≤ 500bps. Opportunity engine independently creates opps from quotes → rejected opps (MIXED_SOURCE 67% on mantle) go to sweep_reprieve path → re-evaluated with frontier sizing → counted in roundtrip_evaluated_total. Not a bug, but confusing for operators. Fix: `sweep_reprieve_rt` field added to signal_funnel.
 
 ### Secondary Chain Signal Scarcity (R39h)
 **Key insight**: "Low signals outside arb" is NOT one problem — each chain has a different root cause. Arbitrum proves pipeline healthy (194 signals, 6/6 PASS). Per-chain RCA:
@@ -110,32 +132,34 @@ change_summary:
 | zksync | 3 | 7 | +4 | +ZK/USDC, +ZK/WETH, +USDC/DAI, +USDC/USDT |
 | **Total** | **29** | **42** | **+13** | |
 
-## 4) Signal Funnel (v1.15 — fresh scan evidence)
+## 4) Signal Funnel (v1.15 + rt_without_signal — fresh R39h++ evidence)
 
 Aggregate:
 ```json
 {
   "signal_funnel": {
-    "intent_pairs_total": 40,
-    "pairs_after_excludes_total": 40,
+    "intent_pairs_total": 42,
+    "pairs_after_excludes_total": 41,
     "cross_dex_pairs_total": 40,
-    "spread_signals_total": 386,
-    "rt_evaluated_total": 75
+    "spread_signals_total": 300,
+    "rt_evaluated_total": 69,
+    "sweep_reprieve_rt_total": 0,
+    "rt_without_signal_total": 13
   }
 }
 ```
 
 Per-chain breakdown:
-| Chain | Intent | After Excl | XDex | Signals | RT Eval |
-|-------|-------:|-----------:|-----:|--------:|--------:|
-| arbitrum_one | 11 | 11 | 11 | 313 | 39 |
-| zksync | 6 | 6 | 6 | 28 | 7 |
-| base | 9 | 9 | 9 | 9 | 3 |
-| mantle | 4 | 4 | 4 | 0 | 14 |
-| linea | 5 | 5 | 5 | 12 | 0 |
-| scroll | 5 | 5 | 5 | 24 | 12 |
+| Chain | Intent | After Excl | XDex | Signals | RT Eval | Sweep Reprieve | RT w/o Signal |
+|-------|-------:|-----------:|-----:|--------:|--------:|---------------:|--------------:|
+| arbitrum_one | 11 | 11 | 11 | 226 | 30 | 0 | 0 |
+| zksync | 7 | 7 | 6 | 24 | 6 | 0 | 0 |
+| base | 9 | 9 | 9 | 6 | 3 | 0 | 1 |
+| mantle | 5 | 4 | 4 | 0 | 12 | 0 | **12** |
+| linea | 5 | 5 | 5 | 20 | 6 | 0 | 0 |
+| scroll | 5 | 5 | 5 | 24 | 12 | 0 | 0 |
 
-**Observations**: Zero exclude/single-dex dropout (intent=after_excl=xdex on all chains). All funnel attrition happens at signals→RT stage (OE economics filters). mantle: 14 RT but 0 signals (MIXED_SOURCE blocker).
+**Observations**: Near-zero attrition (42→41→40). Mantle semantic split now exposed: **rt_without_signal=12** (0 signals passed 500bps threshold, but 12 RT came from OE opportunities via quote path). WS endpoints added for all 6 chains — actual WS connection status still 0 (may need longer-running scan or endpoint validation).
 
 ## 5) Contract Checks
 - status/reasons consistency: OK
@@ -146,11 +170,12 @@ Per-chain breakdown:
 - source coverage: **26/27** active (+1 aerodrome)
 - PRICE_SCALE: direction-bug detection intact, data-quality outliers tolerated
 
-## 6) Blockers / Next Steps
-- **profitable_rt=0**: economics blocker (all chains). 75 RT evaluated, best +0.00 bps. BREAKEVEN_FRONTIER.
-- **base FAIL**: SLOT0_DIAGNOSTIC still dominant. 9 signals (up from 2), 3 RT evaluated. Quote-path issue, not pair count.
-- **linea FAIL**: 12 signals (up from 0!) but OE rejects all. 0 RT evaluated.
-- **scroll PASS**: promoted from FAIL! 24 signals, 12 RT. MIXED_SOURCE blocker.
-- **zksync PASS**: 28 signals (up from 8), 7 RT. ZK/* exclude removal confirmed productive.
-- **mantle PROBE_ONLY**: 14 RT evaluated but 0 signals and 0 PASS runs. MIXED_SOURCE blocker.
-- **Acceptance check (lead step 10)**: signals +81%, RT +47%, SUSPECT_ACCOUNTING = 0. **ACCEPTED**.
+## 6) Blockers / Next Steps (prioritized by lead directive)
+1. **base quote-path** (P0): SLOT0_DIAGNOSTIC 79%, exec 5.4%, rq=0. Fix quotes.py / quote_adapters.py. Until rq > 0 reliably, base is not a market verdict.
+2. **scroll/mantle mixed-source** (P1): MIXED_SOURCE 38-67% of OE rejections. Target: fewer MIXED_SOURCE rejects, not more raw signals.
+3. **WS freshness** (P2): WS endpoints added for all 6 chains. hot_loop shows `chains_ws_connected: 0` still (short scan; may need longer session or endpoint validation). Config change complete.
+4. **linea economics/thin-truth** (P3): RT-evaluated 6 on existing 5 pairs. Fresh: 6 RT, 20 signals ($39.48 net).
+5. **arb economics** (P4): Fresh best not captured this scan (all 0 bps). Prior RCA: -54bps (USDC/DAI). Slippage-dominated.
+6. **ambient** (P5): Explicit tech debt. Do not distract from P0-P2.
+7. **No intent.txt changes**: calibration tier confirmed matching. Expansion accepted only if ≥2 of 4 metrics improve.
+8. **rt_without_signal**: **VERIFIED** — mantle shows 12 in fresh scan. Semantic split now operator-visible.

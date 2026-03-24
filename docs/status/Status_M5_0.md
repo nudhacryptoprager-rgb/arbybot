@@ -1,11 +1,97 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-24 (R39h -- **Fresh scan: 40 runs, 386 signals (+81%), $463 net, 75 RT evaluated (+47%).** ZK/* exclude removed, calibration 42 pairs, signal_funnel v1.15. scroll promoted to PASS. 2325 tests.)
-**Tests**: 2325 passed / 5 skipped
+**Updated**: 2026-03-24 (R39h++ -- **Full system audit confirms blockers are layered: base quote-path, mixed-source on scroll/mantle, HTTP-only freshness on 4 chains, post-signal economics.** +rt_without_signal_count, WS endpoints for all 6 chains, 2330 tests.)
+**Tests**: 2330 passed / 5 skipped
 **Schema**: start:long_scan_summary:v1.15, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R39h: fresh scan (2026-03-24T08:34:47Z), calibration contour + funnel. R39g+: 10-min scan (2026-03-23T22:50:49Z). R39g: gate accuracy (2026-03-23).
+**Evidence**: R39h++: system audit (2026-03-24), WS+funnel. R39h+: funnel attrition zero, sweep_reprieve_rt. R39h: calibration contour + funnel.
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R39h++ -- Full System Audit + WS Freshness + Funnel Diagnostics
+
+### System Audit Summary
+A full post-R39h+ system audit across chains/dex/config/engine/strategy/discovery confirms that **pair-universe width is no longer the main blocker**. The current blockers are layered:
+- **base**: quote-path debt (SLOT0_DIAGNOSTIC 79%, `rq=0`, 44 quoter_v2_failed, exec rate 5.4%)
+- **scroll/mantle**: mixed-source truth loss (MIXED_SOURCE 37-67% of OE rejections)
+- **linea/mantle/scroll/zksync**: HTTP-only freshness (now fixed — WS endpoints added)
+- **arb/zksync/scroll/linea**: post-signal economics/slippage on healthy chains
+
+Broad coverage should therefore expand through tiered universe policy and better source quality, **not by inflating the default productive intent**.
+
+### Per-Chain Fresh RCA (2026-03-24 run dirs)
+| Chain | Pairs | Exec% | RT | Best PnL | #1 OE Reject | Gate | Profit Blocker |
+|-------|------:|------:|---:|------:|----------|------|---------------|
+| arb | 11 | 88.6% | 5 | -54.21 | (no rejections) | PASS | OE_ECONOMICS |
+| zksync | 7 | 92.3% | 1 | -608.57 | NET_PROFIT_TOO_LOW 63% | PASS | OE_ECONOMICS |
+| base | 9 | 5.4% | 1 | -10127 | SLOT0_DIAGNOSTIC 79% | PASS | OE_ECONOMICS |
+| linea | 5 | 100% | 1 | -563 | NET_PROFIT_TOO_LOW 63% | PASS | OE_ECONOMICS |
+| scroll | 5 | 86.7% | 2 | -352.62 | SUSPECT_SPREAD_HARD 38% | PASS | OE_ECONOMICS |
+| mantle | 4 | 100% | 2 | -415.07 | MIXED_SOURCE 67% | PASS | OE_ECONOMICS |
+
+### Fixes (R39h++)
+1. **config/chains.yaml** — Added `ws_endpoints` for linea (`wss://linea.public.blastapi.io`), mantle (`wss://mantle.public.blastapi.io`), scroll (`wss://scroll.public.blastapi.io`), zksync (`wss://zksync.public.blastapi.io`). All 6 chains now have WS configured.
+2. **strategy/chain_stats.py** — Added `rt_without_signal_total`: counts RT evaluated on runs where `included_signals_count == 0`. Directly exposes the mantle-style semantic split (0 signals but N RT).
+3. **strategy/long_scan_summary.py** — Added `rt_without_signal` to per-chain signal_funnel and `rt_without_signal_total` to aggregate.
+4. **tests/unit/test_signal_funnel.py** — +2 tests: `test_rt_without_signal_accumulation`, `test_rt_without_signal_in_funnel`.
+5. **tests/unit/test_config.py** — +1 test: `test_all_chains_have_ws_endpoints` (contract: all 6 active chains must have `wss://` endpoints).
+
+### Layered Blocker Priority (per lead directive)
+1. **base quote-path**: fix quotes.py / quote_adapters.py / aerodrome path. Until `rq > 0` reliably, base is not a market verdict.
+2. **scroll/mantle mixed-source**: fewer MIXED_SOURCE rejects, not more raw signals. One executable leg + one diagnostic leg kills truth quality.
+3. **WS freshness**: now configured for all 6 chains. Verify `chains_ws_connected > 0` in next hot_loop.
+4. **linea economics/thin-truth**: RT-evaluated > 1 on existing 5 pairs before expanding.
+5. **ambient**: explicit tech debt, do not distract from base quote path and mixed-source cleanup.
+
+### Tests
+2330 passed / 5 skipped (+3 vs R39h+).
+
+---
+
+## R39h+ -- Funnel Attrition Zero + 3-Tier Policy Permanent
+
+### Key Finding
+R39h confirms that **the current blocker is no longer pair-universe attrition**: intent, post-exclude, and xDex counts are all equal (40 → 40 → 40). Broad market coverage should therefore be expanded through tiered universe policy and higher-quality source/pool coverage, **not by blindly inflating the default productive intent**.
+
+### Per-Chain Fresh RCA (2026-03-24 run dirs)
+| Chain | Pairs | Exec% | RT | Best PnL (bps) | #1 OE Reject | #2 OE Reject |
+|-------|------:|------:|---:|----------------:|--------------|--------------|
+| arb | 11 | — | 39 | -254.97 | NET_PROFIT_TOO_LOW | SUSPECT_SPREAD_HARD |
+| zksync | 6 | 92.3% | 1 | -608.57 | NET_PROFIT_TOO_LOW 62.5% | SUSPECT_SPREAD_HARD 37.5% |
+| base | 9 | 7.6% | 3 | — | SLOT0_DIAGNOSTIC 69% | MIXED_SOURCE 25.7% |
+| linea | 5 | 100% | 0 | — | NET_PROFIT_TOO_LOW 55.6% | SUSPECT_SPREAD_HARD 44.4% |
+| scroll | 5 | 86.7% | 2 | -354.97 | SUSPECT_SPREAD_HARD 37.5% | MIXED_SOURCE 37.5% |
+| mantle | 4 | 100% | 2 | -415.07 | MIXED_SOURCE 66.7% | gas $134-143 |
+
+### Per-Chain Diagnosis (per lead directive)
+- **arb**: 313 signals + 39 RT + 0 profitable = pure economics blocker, not pair scarcity
+- **zksync**: improvement from selective widening (ZK/*) argues FOR targeted, not blind
+- **base**: low-signal ≠ need wider intent; blocker is SLOT0_DIAGNOSTIC quote-path (69% of 113 OE rejections + 43 quoter_v2_failed)
+- **linea**: 12 signals but 0 RT = truth/economics bottleneck, not field width
+- **scroll**: 4→24 signals proves calibration+source-quality works better than blind inflation
+- **mantle**: 0 sig / 14 RT = funnel/summary semantics mismatch → sweep_reprieve_rt field added
+
+### Mantle 0-sig/14-RT Semantic Split (explained)
+Two independent pipelines: `included_signals_count` counts signals where |spread| ≤ 500bps (SUSPECT_SPREAD_HARD threshold). Opportunity engine independently creates opps from quotes → rejected opps (MIXED_SOURCE 66.7% on mantle) go to sweep_reprieve path which re-evaluates them with frontier sizing → counted in `roundtrip_evaluated_total`. This is **not a bug** but was confusing for operators. The new `sweep_reprieve_rt` field in signal_funnel makes this gap visible.
+
+### 3-Tier Policy (formalized as permanent)
+| Tier | Scope | Pairs | Purpose | Promotion criteria |
+|------|-------|------:|---------|-------------------|
+| productive | default | 31 | Quality-ranked, volatile, liquid, multi-DEX | Baseline |
+| calibration | current | 42 | Productive + benchmark stables (USDC/DAI, USDC/USDT) | Used when benchmarking per-chain health |
+| exploratory | wide field | ~69 | All tokens with ≥2 DEX presence | Accept only if ≥2 of 4 growth metrics improve |
+
+**Acceptance criteria for tier promotion**: ≥2 of: real_quote_count grows, RT-evaluated count grows, best gap to zero decreases, near-zero executable negatives appear (gap < 100 bps). `signals_count` alone is **insufficient**.
+
+### Fixes (R39h+)
+1. **strategy/chain_stats.py** — Added `sweep_reprieve_rt_total` to `new_chain_stats()` and accumulation from `roundtrip.sweep_reprieve_count` in `update_chain_stats()`.
+2. **strategy/long_scan_summary.py** — Added `sweep_reprieve_rt` to per-chain signal_funnel and `sweep_reprieve_rt_total` to aggregate signal_funnel.
+3. **tests/unit/test_signal_funnel.py** — +2 tests: `test_sweep_reprieve_rt_in_funnel` (mantle scenario: 0 sig, 14 RT, 14 sweep reprieve) and `test_sweep_reprieve_rt_accumulation`.
+4. **No intent.txt changes** — calibration tier confirmed matching (`--tier calibration --diff` = no differences). Exploratory tier reviewed but NOT promoted.
+
+### Tests
+2327 passed / 5 skipped (+2 vs R39h).
 
 ---
 

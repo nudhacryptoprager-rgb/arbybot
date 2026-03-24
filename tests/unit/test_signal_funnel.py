@@ -165,3 +165,118 @@ class TestLongScanSummaryFunnel:
         per_chain = self._make_per_chain()
         summary = build_summary(per_chain, wall_seconds=10.0, warnings=[])
         assert "v1.15" in summary["schema"]
+
+    def test_sweep_reprieve_rt_in_funnel(self):
+        """R39h: mantle scenario — 0 signals but 14 RT from sweep reprieve."""
+        from strategy.chain_stats import new_chain_stats
+        from strategy.long_scan_summary import build_summary
+
+        mantle = new_chain_stats()
+        mantle["config"] = "onboard_mantle_stage2.yaml"
+        mantle["runs"] = 7
+        mantle["no_data"] = 7
+        mantle["included_signals_total"] = 0
+        mantle["roundtrip_evaluated_total"] = 14
+        mantle["sweep_reprieve_rt_total"] = 14
+        mantle["last_intent_pairs_count"] = 4
+        mantle["last_pairs_after_excludes"] = 4
+        mantle["last_cross_dex_pairs_count"] = 4
+
+        per_chain = {"mantle": mantle}
+        summary = build_summary(per_chain, wall_seconds=30.0, warnings=[])
+
+        sf = summary["per_chain"]["mantle"]["signal_funnel"]
+        assert sf["spread_signals"] == 0
+        assert sf["rt_evaluated"] == 14
+        assert sf["sweep_reprieve_rt"] == 14  # explains the gap
+
+        agg = summary["signal_funnel"]
+        assert agg["sweep_reprieve_rt_total"] == 14
+
+    def test_sweep_reprieve_rt_accumulation(self):
+        """sweep_reprieve_rt_total accumulates in update_chain_stats."""
+        from strategy.chain_stats import new_chain_stats, update_chain_stats
+
+        cs = new_chain_stats()
+        assert cs["sweep_reprieve_rt_total"] == 0
+
+        summary = {
+            "status": "PASS",
+            "metrics": {
+                "roundtrip": {
+                    "evaluated_count": 5,
+                    "sweep_reprieve_count": 3,
+                    "profitable_count": 0,
+                    "real_quote_count": 2,
+                },
+            },
+        }
+        update_chain_stats(cs, exit_code=0, run_dir=None, summary=summary)
+        assert cs["sweep_reprieve_rt_total"] == 3
+        assert cs["roundtrip_evaluated_total"] == 5
+
+    def test_rt_without_signal_accumulation(self):
+        """rt_without_signal_total counts RT on runs where signals=0."""
+        from strategy.chain_stats import new_chain_stats, update_chain_stats
+
+        cs = new_chain_stats()
+        assert cs["rt_without_signal_total"] == 0
+
+        # Run 1: 0 signals, 4 RT -> should accumulate
+        summary_zero_sig = {
+            "status": "NO_DATA",
+            "metrics": {
+                "included_signals_count": 0,
+                "roundtrip": {
+                    "evaluated_count": 4,
+                    "profitable_count": 0,
+                    "real_quote_count": 2,
+                },
+            },
+        }
+        update_chain_stats(cs, exit_code=0, run_dir=None, summary=summary_zero_sig)
+        assert cs["rt_without_signal_total"] == 4
+
+        # Run 2: 5 signals, 3 RT -> should NOT accumulate
+        summary_has_sig = {
+            "status": "PASS",
+            "metrics": {
+                "included_signals_count": 5,
+                "roundtrip": {
+                    "evaluated_count": 3,
+                    "profitable_count": 0,
+                    "real_quote_count": 1,
+                },
+            },
+        }
+        update_chain_stats(cs, exit_code=0, run_dir=None, summary=summary_has_sig)
+        assert cs["rt_without_signal_total"] == 4  # unchanged
+
+        # Run 3: 0 signals, 2 RT -> should accumulate again
+        update_chain_stats(cs, exit_code=0, run_dir=None, summary=summary_zero_sig)
+        assert cs["rt_without_signal_total"] == 8  # 4 + 4
+
+    def test_rt_without_signal_in_funnel(self):
+        """rt_without_signal appears in per-chain and aggregate signal_funnel."""
+        from strategy.chain_stats import new_chain_stats
+        from strategy.long_scan_summary import build_summary
+
+        mantle = new_chain_stats()
+        mantle["config"] = "onboard_mantle_stage2.yaml"
+        mantle["runs"] = 6
+        mantle["no_data"] = 6
+        mantle["included_signals_total"] = 0
+        mantle["roundtrip_evaluated_total"] = 12
+        mantle["rt_without_signal_total"] = 12
+        mantle["last_intent_pairs_count"] = 4
+        mantle["last_pairs_after_excludes"] = 4
+        mantle["last_cross_dex_pairs_count"] = 4
+
+        per_chain = {"mantle": mantle}
+        summary = build_summary(per_chain, wall_seconds=30.0, warnings=[])
+
+        sf = summary["per_chain"]["mantle"]["signal_funnel"]
+        assert sf["rt_without_signal"] == 12
+
+        agg = summary["signal_funnel"]
+        assert agg["rt_without_signal_total"] == 12

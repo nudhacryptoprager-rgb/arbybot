@@ -39,7 +39,8 @@ linea:
   rpc_endpoints:
     - "https://rpc.linea.build"
     - "https://linea.public.blastapi.io"
-  ws_endpoints: []
+  ws_endpoints:
+    - "wss://linea.public.blastapi.io"
   block_time_ms: 2000
   confirmations: 1
 
@@ -52,7 +53,8 @@ mantle:
   rpc_endpoints:
     - "https://rpc.mantle.xyz"
     - "https://mantle.public.blastapi.io"
-  ws_endpoints: []
+  ws_endpoints:
+    - "wss://mantle.public.blastapi.io"
   block_time_ms: 2000
   confirmations: 1
 
@@ -66,7 +68,8 @@ scroll:
   rpc_endpoints:
     - "https://rpc.scroll.io"
     - "https://scroll.public.blastapi.io"
-  ws_endpoints: []
+  ws_endpoints:
+    - "wss://scroll.public.blastapi.io"
   block_time_ms: 3000
   confirmations: 1
 
@@ -80,6 +83,7 @@ zksync:
   rpc_endpoints:
     - "https://mainnet.era.zksync.io"
     - "https://zksync.public.blastapi.io"
-  ws_endpoints: []
+  ws_endpoints:
+    - "wss://zksync.public.blastapi.io"
   block_time_ms: 1000
   confirmations: 1

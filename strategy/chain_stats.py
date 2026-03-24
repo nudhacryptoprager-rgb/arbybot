@@ -68,6 +68,8 @@ def new_chain_stats() -> dict[str, Any]:
         "last_cross_dex_pairs_count": None,
         "last_intent_pairs_count": None,  # R39h: signal funnel — total from intent.txt
         "last_pairs_after_excludes": None,  # R39h: signal funnel — after exclude filter
+        "sweep_reprieve_rt_total": 0,  # R39h: RT from sweep reprieve (explains sig=0 + rt>0 gap)
+        "rt_without_signal_total": 0,  # R39h+: RT evaluated on runs where included_signals_count=0
         "last_quality_reasons": [],
         "accepted_fail": False,
         # R19: Blocker classification from config
@@ -239,6 +241,13 @@ def update_chain_stats(
         rt = metrics.get("roundtrip", {}) or summary.get("roundtrip_summary", {})
         stats["profitable_roundtrips_total"] += int(rt.get("profitable_count", 0) or 0)
         stats["roundtrip_evaluated_total"] = stats.get("roundtrip_evaluated_total", 0) + int(rt.get("evaluated_count", 0) or 0)
+        # R39h: Track sweep reprieve RT separately (explains 0-signal + N-RT gap)
+        stats["sweep_reprieve_rt_total"] = stats.get("sweep_reprieve_rt_total", 0) + int(rt.get("sweep_reprieve_count", 0) or 0)
+        # R39h+: RT evaluated on runs with zero included signals (semantic split diagnostic)
+        run_signals = int(metrics.get("included_signals_count", 0) or 0)
+        run_rt = int(rt.get("evaluated_count", 0) or 0)
+        if run_signals == 0 and run_rt > 0:
+            stats["rt_without_signal_total"] = stats.get("rt_without_signal_total", 0) + run_rt
         # R28.10: Accumulate real_quote_count and snapshot profit_realism_status
         stats["real_quote_count_total"] += int(rt.get("real_quote_count", 0) or 0)
         prs = metrics.get("profit_realism_status")
