@@ -115,5 +115,7 @@ tokens_anchor_price:
   WETH_USDC: 2050.0
   WETH_USDbC: 2050.0
   WBTC_WETH: 33.0
+  USDC_USDT: 1.0
+  USDC_DAI: 1.0
   cbETH_WETH: 1.07
   wstETH_WETH: 1.22

@@ -66,6 +66,8 @@ def new_chain_stats() -> dict[str, Any]:
         "last_profit_truth_available": None,
         "run_kind": None,
         "last_cross_dex_pairs_count": None,
+        "last_intent_pairs_count": None,  # R39h: signal funnel — total from intent.txt
+        "last_pairs_after_excludes": None,  # R39h: signal funnel — after exclude filter
         "last_quality_reasons": [],
         "accepted_fail": False,
         # R19: Blocker classification from config
@@ -341,7 +343,14 @@ def update_chain_stats(
                 "pairs_skipped_no_pool": dr.get("pairs_skipped_no_pool", 0),
                 "pairs_skipped_single_dex": dr.get("pairs_skipped_single_dex", 0),
                 "pairs_skipped_excluded": dr.get("pairs_skipped_excluded", 0),
+                "intent_pairs_count": dr.get("intent_pairs_count", 0),
             }
+            # R39h: Signal funnel top-level fields for easy access
+            _ipc = dr.get("intent_pairs_count", 0)
+            _pe = dr.get("pairs_evaluated", 0)
+            _pse = dr.get("pairs_skipped_excluded", 0)
+            stats["last_intent_pairs_count"] = _ipc if _ipc > 0 else _pe
+            stats["last_pairs_after_excludes"] = _pe - _pse if _pe > 0 else None
             # R28.11: Cache freshness from discovery_runtime
             stats["last_pools_from_cache"] = dr.get("pools_from_cache")
             stats["last_pools_from_rpc"] = dr.get("pools_from_rpc")

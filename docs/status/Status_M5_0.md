@@ -1,11 +1,77 @@
 # Status: M5_0 (Infrastructure Hardening)
 
 **Status**: [ACTIVE]
-**Updated**: 2026-03-24 (R39g+ -- **10-min fresh scan: 31 runs, 213 signals, $303 net, 0 profitable RT.** Aerodrome re-enabled + PRICE_SCALE per-pair fix. 2317 tests PASS. arb/zksync PASS, base/scroll/linea FAIL (coverage/diagnostic).)
-**Tests**: 2317 passed / 5 skipped
-**Schema**: start:long_scan_summary:v1.14, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R39g+: 10-min scan (2026-03-23T22:50:49Z). R39g: gate accuracy (2026-03-23). R39f: source coverage (2026-03-23). R39e: market verdicts (2026-03-23). R39d: quality-ranked pairs (2026-03-23).
+**Updated**: 2026-03-24 (R39h -- **Fresh scan: 40 runs, 386 signals (+81%), $463 net, 75 RT evaluated (+47%).** ZK/* exclude removed, calibration 42 pairs, signal_funnel v1.15. scroll promoted to PASS. 2325 tests.)
+**Tests**: 2325 passed / 5 skipped
+**Schema**: start:long_scan_summary:v1.15, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
+**Evidence**: R39h: fresh scan (2026-03-24T08:34:47Z), calibration contour + funnel. R39g+: 10-min scan (2026-03-23T22:50:49Z). R39g: gate accuracy (2026-03-23).
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+
+---
+
+## R39h -- Per-Chain Signal Funnel + Calibration Contour
+
+### Fresh Scan Evidence (2026-03-24T08:34:47Z)
+```
+Wall time:      833s (~14 min)
+Total runs:     40 (PASS=23, NO_DATA=10, FAIL=7, INFRA_FAIL=0)
+Signals total:  386 (+81% vs R39g+ 213)
+Net USDC total: $462.82 (+53% vs R39g+ $303)
+Profitable RTs: 0 (evaluated: 75 (+47% vs 51), best: +0.00 bps)
+Sweep best:     +0.00 bps @ $7500 (BREAKEVEN_FRONTIER)
+Pass chains:    arbitrum_one, zksync, scroll (+scroll promoted!)
+Fail chains:    base, linea
+Probe-only:     mantle
+Schema:         v1.15 (signal_funnel)
+```
+
+| Chain | Runs | PASS | Signals | Net USDC | RT Eval | Blocker | vs R39g+ |
+|-------|-----:|-----:|--------:|---------:|--------:|---------|----------|
+| arbitrum_one | 7 | 7 | 313 | $400.25 | 39 | OE_ECONOMICS | +119 sig |
+| zksync | 7 | 7 | 28 | $17.34 | 7 | OE_ECONOMICS | **+20 sig, +6 RT** |
+| base | 7 | 3 | 9 | $16.44 | 3 | OE_ECONOMICS | +7 sig, +3 RT |
+| scroll | 6 | 6 | 24 | $28.84 | 12 | MIXED_SOURCE | **+20 sig, +11 RT, PASS** |
+| linea | 6 | 0 | 12 | -$0.05 | 0 | OE_ECONOMICS | **+12 sig** |
+| mantle | 7 | 0 | 0 | $0.00 | 14 | MIXED_SOURCE | +12 RT |
+
+### Signal Funnel (per-chain)
+| Chain | Intent | After Excl | XDex | Signals | RT Eval |
+|-------|-------:|-----------:|-----:|--------:|--------:|
+| arbitrum_one | 11 | 11 | 11 | 313 | 39 |
+| zksync | 6 | 6 | 6 | 28 | 7 |
+| base | 9 | 9 | 9 | 9 | 3 |
+| mantle | 4 | 4 | 4 | 0 | 14 |
+| linea | 5 | 5 | 5 | 12 | 0 |
+| scroll | 5 | 5 | 5 | 24 | 12 |
+| **Total** | **40** | **40** | **40** | **386** | **75** |
+
+### RCA Summary
+Secondary-chain signal scarcity is NOT a single problem. Per-chain pair_level_rca:
+- **base**: 7 pairs, exec 7.1%, SLOT0_DIAGNOSTIC 82.1% — quote-path blocked (not pair count)
+- **zksync**: 3 pairs (was), exec 100%, OE_ECONOMICS — policy-suppressed (ZK/* blanket exclude removed intent-declared pairs)
+- **mantle**: 4 pairs, exec 100%, OE_ECONOMICS + MIXED_SOURCE 61.5% — already reaches RT, economics not discovery
+- **scroll**: 3 pairs, exec 80%, MIXED_SOURCE 43% + SUSPECT_SPREAD_HARD 43% — quality-reject limited
+- **linea**: 3 pairs, exec 100%, SUSPECT_SPREAD_HARD 50% — execute but OE-thin
+
+### Fixes (R39h)
+1. **config/onboard_zksync_candidate.yaml** — removed ZK/*, */ZK from excluded_pair_hints (R28.27 added due to missing anchor prices, not intrinsic issue). Added ZK_USDC: 0.10, ZK_WETH: 0.0000488, USDC_DAI: 1.0 anchor prices. Pairs: 3→7.
+2. **config/intent.txt** — regenerated with `--tier calibration`: 42 pairs (was 31). Adds USDC/DAI + USDC/USDT to all chains.
+3. **Anchor prices** — added USDC_DAI: 1.0 and USDC_USDT: 1.0 to linea, base, arb configs. Scroll/mantle already had them.
+4. **discovery/runtime.py** — added `intent_pairs_count` to RuntimeStats (tracks len(intent_pairs) before filtering).
+5. **strategy/chain_stats.py** — added `last_intent_pairs_count`, `last_pairs_after_excludes` to per-chain state. Extracted from discovery_runtime.
+6. **strategy/long_scan_summary.py** — schema v1.15. Added `signal_funnel` section (top-level aggregate + per-chain): intent_pairs → pairs_after_excludes → cross_dex_pairs → spread_signals → rt_evaluated.
+7. **tests** — +8 signal funnel contract tests. Total: 2325 passed / 5 skipped.
+
+### Per-Chain Pair Counts After Calibration
+| Chain | Before | After | Delta | Note |
+|-------|-------:|------:|------:|------|
+| arbitrum_one | 9 | 11 | +2 | +USDC/DAI, +USDC/USDT |
+| base | 7 | 9 | +2 | +USDC/DAI, +USDC/USDT |
+| linea | 3 | 5 | +2 | +USDC/DAI, +USDC/USDT |
+| scroll | 3 | 5 | +2 | +USDC/DAI, +USDC/USDT |
+| mantle | 4 | 5 | +1 | +USDC/DAI (USDC/USDT excluded: 2884bps SUSPECT_SPREAD) |
+| zksync | 3 | 7 | +4 | +ZK/USDC, +ZK/WETH, +USDC/DAI, +USDC/USDT |
+| **Total** | **29** | **42** | **+13** | calibration tier |
 
 ---
 

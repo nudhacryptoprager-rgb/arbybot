@@ -410,6 +410,8 @@ tokens_anchor_price:
   WBTC_USDT: 68000    # v2.9.3: same as WBTC_USDC (stablecoin)
   ARB_USDT: 0.11      # v2.9.3: same as ARB_USDC (stablecoin)
   LINK_USDC: 9.0      # on-chain valid ~8.79; sushi fee=3000 (~19.9) is bad pool
+  USDC_DAI: 1.0       # R39h: calibration benchmark (stableswap)
+  USDC_USDT: 1.0      # R39h: calibration benchmark (stableswap)
   # PENDLE_WETH: 0.0006  # v2.3.4: DISABLED (quoter returning 0)
   # RDNT_WETH: 0.000003  # v2.3.4: DISABLED (quoter returning 0)
 

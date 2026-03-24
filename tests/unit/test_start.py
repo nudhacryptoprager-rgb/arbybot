@@ -469,7 +469,7 @@ class TestBuildSummary(unittest.TestCase):
     def test_summary_schema(self):
         per_chain = {"arb": self._make_per_chain()}
         summary = start.build_summary(per_chain, 120.5, ["WARN_TEST"])
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.14")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.15")
         self.assertEqual(summary["total_runs"], 2)
         self.assertEqual(summary["total_pass"], 1)
         self.assertEqual(summary["total_no_data"], 1)
@@ -1135,7 +1135,7 @@ class TestFrontierRanking(unittest.TestCase):
         per_chain["base"]["included_signals_total"] = 3
         summary = start.build_summary(per_chain, 120.0, ["WARN_TEST"])
         # Schema version check
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.14")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.15")
         # Required top-level fields
         self.assertIn("generated_at", summary)
         self.assertIn("wall_seconds", summary)
@@ -1971,7 +1971,7 @@ class TestChainProfitState(unittest.TestCase):
         self.assertEqual(summary["per_chain"]["base"]["last_pools_from_rpc"], 2)
         self.assertEqual(summary["per_chain"]["base"]["last_suppression"]["single_dex"], 3)
         self.assertEqual(len(summary["per_chain"]["base"]["_pair_history"]), 1)
-        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.14")
+        self.assertEqual(summary["schema"], "start:long_scan_summary:v1.15")
 
 
 class TestHotLoopAndDirtySet(unittest.TestCase):

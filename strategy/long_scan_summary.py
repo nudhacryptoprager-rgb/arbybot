@@ -118,9 +118,22 @@ def build_summary(
         s["pass_runs"] = s.get("pass", 0)
         s["signals_count"] = s.get("included_signals_total", 0)
         s["real_quote_count"] = s.get("real_quote_count_total", 0)
+        # R39h: Per-chain signal funnel — intent → excludes → cross_dex → signals → RT
+        _ipc = s.get("last_intent_pairs_count")
+        _pae = s.get("last_pairs_after_excludes")
+        _cdp = s.get("last_cross_dex_pairs_count")
+        _sig = s.get("included_signals_total", 0)
+        _rte = s.get("roundtrip_evaluated_total", 0)
+        s["signal_funnel"] = {
+            "intent_pairs": _ipc,
+            "pairs_after_excludes": _pae,
+            "cross_dex_pairs": _cdp,
+            "spread_signals": _sig,
+            "rt_evaluated": _rte,
+        }
 
     summary = {
-        "schema": "start:long_scan_summary:v1.14",  # R28.21: cache freshness observability
+        "schema": "start:long_scan_summary:v1.15",  # R39h: signal funnel observability
         "generated_at": run_ts,
         "run_context": {
             "run_timestamp": run_ts,
@@ -138,6 +151,14 @@ def build_summary(
         "total_net_usdc": round(sum(s["net_usdc_total"] for s in per_chain.values()), 4),
         "total_profitable_roundtrips": sum(s["profitable_roundtrips_total"] for s in per_chain.values()),
         "total_roundtrip_evaluated": sum(s.get("roundtrip_evaluated_total", 0) for s in per_chain.values()),
+        # R39h: Aggregate signal funnel
+        "signal_funnel": {
+            "intent_pairs_total": sum(s.get("signal_funnel", {}).get("intent_pairs") or 0 for s in per_chain.values()),
+            "pairs_after_excludes_total": sum(s.get("signal_funnel", {}).get("pairs_after_excludes") or 0 for s in per_chain.values()),
+            "cross_dex_pairs_total": sum(s.get("signal_funnel", {}).get("cross_dex_pairs") or 0 for s in per_chain.values()),
+            "spread_signals_total": sum(s.get("signal_funnel", {}).get("spread_signals") or 0 for s in per_chain.values()),
+            "rt_evaluated_total": sum(s.get("signal_funnel", {}).get("rt_evaluated") or 0 for s in per_chain.values()),
+        },
         "best_roundtrip_net_bps": max(
             (s["best_roundtrip_net_bps"] for s in per_chain.values() if s.get("best_roundtrip_net_bps") is not None),
             default=None,

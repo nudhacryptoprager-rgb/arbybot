@@ -93,6 +93,7 @@ class RuntimeStats:
     pairs_skipped_max_cap: int = 0
     pairs_skipped_single_dex: int = 0  # Added for cross-dex filtering
     pairs_skipped_excluded: int = 0  # R24: excluded_pair_hints enforcement
+    intent_pairs_count: int = 0  # R39h: Total intent pairs for this chain (before any filtering)
     pools_from_cache: int = 0
     pools_from_rpc: int = 0
     rpc_calls: int = 0
@@ -113,6 +114,7 @@ class RuntimeStats:
             "pairs_skipped_max_cap": self.pairs_skipped_max_cap,
             "pairs_skipped_single_dex": self.pairs_skipped_single_dex,
             "pairs_skipped_excluded": self.pairs_skipped_excluded,
+            "intent_pairs_count": self.intent_pairs_count,
             "pools_from_cache": self.pools_from_cache,
             "pools_from_rpc": self.pools_from_rpc,
             "rpc_calls": self.rpc_calls,
@@ -232,6 +234,7 @@ def resolve_runtime_pairs(
     
     # Sort pairs deterministically for consistent ordering
     sorted_pairs = sorted(intent_pairs, key=lambda p: p.canonical_key)
+    stats.intent_pairs_count = len(sorted_pairs)  # R39h: Before any filtering
     
     resolved: List[RuntimePair] = []
     seen_pairs: Set[str] = set()  # Dedupe by canonical pair key (without dex/fee)

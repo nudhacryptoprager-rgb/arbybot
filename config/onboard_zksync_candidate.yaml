@@ -44,11 +44,12 @@ dexes:
 discovery_runtime_max_pairs: 30
 require_cross_dex: true
 
-# R28.27: Exclude consistently-failing ZK pairs (PRICE_SANITY_FAILED + LIQUIDITY_ZERO)
-# ZK/* pairs always fail sanity — no reliable anchor, thin liquidity
+# R28.27: Exclude known-bad pairs
+# HOLD/* consistently LIQUIDITY_ZERO, no anchor
+# R39h: ZK/* blanket exclude removed — intent.txt declares ZK/USDC and ZK/WETH,
+# and tokens_usd_price + tokens_anchor_price now cover ZK. Original R28.27 failure
+# was PRICE_SANITY_FAILED due to missing anchor, not intrinsic lack of liquidity.
 excluded_pair_hints:
-  - "ZK/*"
-  - "*/ZK"
   - "HOLD/*"
   - "*/HOLD"
 
@@ -99,4 +100,7 @@ tokens_anchor_price:
   WETH_USDT: 2050.0
   WBTC_USDC: 68000.0
   USDC_USDT: 1.0
+  USDC_DAI: 1.0
+  ZK_USDC: 0.10
+  ZK_WETH: 0.0000488
   wstETH_WETH: 1.22
