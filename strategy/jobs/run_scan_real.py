@@ -497,7 +497,7 @@ def run_scan(
         
         # v2.1.0: Create GasConfig with live gas price and L1 params from config
         l1_data_gas_units = config.get("l1_data_gas_units", 2000)
-        l1_gas_price_gwei = config.get("l1_gas_price_gwei", 30.0)
+        l1_gas_price_gwei = config.get("l1_gas_price_gwei", 3.0)
         gas_config = GasConfig(
             gas_price_gwei=live_gas_price_wei / 1e9,
             eth_usd_price=eth_usd,

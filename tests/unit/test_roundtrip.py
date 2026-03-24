@@ -1577,3 +1577,127 @@ class TestLegSourceTracking:
 
         assert result.leg1_source == "unknown"
         assert result.leg2_source == "unknown"
+
+
+class TestRouteKill:
+    """R39l: Tests for sweep early route-kill on deeply negative gross PnL."""
+
+    def _make_pair_quotes(self):
+        """Quotes for a stablecoin pair."""
+        buy_q = {
+            "dex_id": "uniswap_v3", "token_in": "USDC", "token_out": "DAI",
+            "fee": 100, "amount_in_wei": 1_000_000,
+            "amount_out_wei": 1_000_000_000_000_000_000,
+            "gas_estimate": 110_000, "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+        sell_q = {
+            "dex_id": "pancakeswap_v3", "token_in": "DAI", "token_out": "USDC",
+            "fee": 100, "amount_in_wei": 1_000_000_000_000_000_000,
+            "amount_out_wei": 999_000,
+            "gas_estimate": 110_000, "ticks_crossed": 0, "sqrt_price_x96": 100,
+        }
+        return buy_q, sell_q
+
+    def test_route_kill_triggers_on_deeply_negative_gross(self):
+        """Sweep aborts when gross PnL worsens past -100 bps after 3+ points."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_pair_quotes()
+
+        def bad_requote(amount_in_wei):
+            """Simulate deeply negative route: output shrinks drastically with size."""
+            # USDC has 6 decimals: $1 = 1e6 wei.  Scale degradation to 6-decimal range.
+            usd_equiv = amount_in_wei / 1_000_000
+            # Rapid degradation: at $5+, return only 50% of input → -5000 bps gross
+            ratio = max(0.01, 1.0 - usd_equiv * 0.10)
+            return {
+                "amount_out_wei": int(amount_in_wei * ratio),
+                "gas_estimate": 110_000,
+                "ticks_crossed": 0,
+            }
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=bad_requote,
+            requote_leg2=bad_requote,
+            sizes_usd=[1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000],
+            token_in_usd_price=1.0,
+            token_in_decimals=6,
+            gas_price_wei=20_000_000,
+            l1_cost_wei=18_000_000_000,
+        )
+
+        # Route-kill should have triggered, saving RPC calls
+        errors = [p.error for p in result.points if p.error]
+        assert "ROUTE_KILL_GROSS_NEGATIVE" in errors, f"Expected route-kill, got errors: {errors}"
+        # Should have fewer than 10 points evaluated (some killed)
+        valid_count = sum(1 for p in result.points if p.error is None)
+        assert valid_count < 10, f"Expected early abort, but {valid_count} valid points evaluated"
+
+    def test_route_kill_does_not_trigger_on_mild_negative(self):
+        """Sweep continues when gross PnL is only mildly negative (> -100 bps)."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_pair_quotes()
+
+        def mild_requote(amount_in_wei):
+            """Simulate mild negative: only 0.5% loss on roundtrip."""
+            return {
+                "amount_out_wei": int(amount_in_wei * 0.995),
+                "gas_estimate": 110_000,
+                "ticks_crossed": 0,
+            }
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=mild_requote,
+            requote_leg2=mild_requote,
+            sizes_usd=[1, 2.5, 5, 10, 25],
+            token_in_usd_price=1.0,
+            token_in_decimals=6,
+            gas_price_wei=20_000_000,
+            l1_cost_wei=18_000_000_000,
+        )
+
+        errors = [p.error for p in result.points if p.error]
+        assert "ROUTE_KILL_GROSS_NEGATIVE" not in errors
+        valid_count = sum(1 for p in result.points if p.error is None)
+        assert valid_count == 5  # All sizes evaluated
+
+
+class TestL1GasPriceDefault:
+    """R39l: Verify GasConfig L1 defaults are post-EIP-4844 (3.0 gwei, not 30.0)."""
+
+    def test_gas_config_default_l1_is_post_eip4844(self):
+        """GasConfig default l1_gas_price_gwei should be 3.0 (post-EIP-4844)."""
+        from engine.opportunity_engine import GasConfig
+
+        config = GasConfig()
+        assert config.l1_gas_price_gwei == 3.0, (
+            f"Expected 3.0 (post-EIP-4844), got {config.l1_gas_price_gwei}"
+        )
+
+    def test_gas_config_from_live_l1_is_post_eip4844(self):
+        """GasConfig.from_live fallback l1_gas_price should be 3.0."""
+        from unittest.mock import MagicMock
+        from engine.opportunity_engine import GasConfig
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.gas_price = 20_000_000  # 0.02 gwei
+
+        config = GasConfig.from_live(mock_w3, eth_price_usd=2000.0)
+        assert config.l1_gas_price_gwei == 3.0, (
+            f"Expected 3.0 (post-EIP-4844), got {config.l1_gas_price_gwei}"
+        )
+        assert config._live_mode is True
+
+    def test_gas_config_l1_cost_reasonable(self):
+        """L1 cost at default should be < $0.02 (not $0.12 as with stale 30.0)."""
+        from engine.opportunity_engine import GasConfig
+
+        config = GasConfig()
+        l1_wei = int(config.l1_data_gas_units * config.l1_gas_price_gwei * 1e9)
+        l1_usd = l1_wei / 1e18 * config.eth_usd_price
+        assert l1_usd < 0.02, f"L1 cost ${l1_usd:.4f} too high (stale l1_gas_price?)"

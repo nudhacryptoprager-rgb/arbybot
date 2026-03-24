@@ -75,8 +75,8 @@ class GasConfig:
             gas_price_gwei = gas_price_wei / 1e9
             
             # For Arbitrum, also try to estimate L1 calldata cost
-            # This is harder, so we keep L1 estimate static for now
-            l1_gas_price_gwei = 30.0  # TODO: Could query L1 gas oracle
+            # Post-EIP-4844 (blob era, Mar 2024+): ~1-5 gwei on L1
+            l1_gas_price_gwei = 3.0
             
             config = cls(
                 gas_price_gwei=gas_price_gwei,

@@ -1036,6 +1036,29 @@ def sweep_roundtrip_sizes(
             result.best_slippage_bps = rt.estimated_slippage_bps
             result.best_total_cost_bps = gas_bps_val + fee_bps_val + rt.estimated_slippage_bps
 
+        # R39l: Early route-kill — if gross PnL is already deeply negative at
+        # small sizes, larger sizes will only be worse (slippage grows with size).
+        # Saves RPC budget by skipping remaining sizes on hopeless routes.
+        # Threshold: gross < -100 bps after ≥3 valid points AND curve is worsening.
+        _ROUTE_KILL_MIN_POINTS = 3
+        _ROUTE_KILL_GROSS_BPS = -100.0
+        valid_points = [p for p in result.points if p.error is None]
+        if len(valid_points) >= _ROUTE_KILL_MIN_POINTS:
+            last_gross = valid_points[-1].gross_pnl_bps
+            prev_gross = valid_points[-2].gross_pnl_bps
+            if (last_gross is not None and prev_gross is not None
+                    and last_gross < _ROUTE_KILL_GROSS_BPS
+                    and last_gross < prev_gross):
+                # Curve worsening and deeply negative — abort remaining sizes
+                result.points.append(
+                    SizeSweepPoint(size_usd=size_usd, error="ROUTE_KILL_GROSS_NEGATIVE")
+                )
+                logger.info(
+                    "Route-kill %s: gross=%.1f bps at $%s, aborting sweep",
+                    pair, last_gross, size_usd,
+                )
+                break
+
     result.sizes_evaluated = len([p for p in result.points if p.error is None])
 
     # R39i: Slippage quality gate — if the best point has unmeasured slippage
