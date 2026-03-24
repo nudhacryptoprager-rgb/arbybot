@@ -392,6 +392,8 @@ def _build_roundtrip_summary(stats: Dict[str, Any]) -> Dict[str, Any]:
         "error": rt.get("error"),
         "sweep_reprieve_count": rt.get("sweep_reprieve_count", 0),
         "sweep_reprieve_stats": rt.get("sweep_reprieve_stats"),
+        # R39i++: Per-leg quote source aggregation for RCA/blocker visibility
+        "leg_source_summary": rt.get("leg_source_summary"),
     }
     # v3.3.0: Canonical dynamic sweep sub-block
     if ds.get("enabled"):

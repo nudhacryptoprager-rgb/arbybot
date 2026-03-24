@@ -487,5 +487,199 @@ class TestUpdateChainStatsSaneGuard(unittest.TestCase):
         self.assertEqual(state, "SUSPECT_ACCOUNTING")
 
 
+class TestLegSourceSummaryInTruthReport(unittest.TestCase):
+    """R39i++: leg_source_summary must propagate through roundtrip_summary."""
+
+    def test_leg_source_summary_in_roundtrip_summary(self):
+        """leg_source_summary flows from stats through roundtrip_summary."""
+        from strategy.artifacts import build_truth_data
+
+        config = {}
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 3,
+                "profitable_count": 0,
+                "real_quote_count": 1,
+                "best_net_pnl_bps": -15.0,
+                "leg_source_summary": {
+                    "leg1": {"quoter_v2": 2, "slot0": 1},
+                    "leg2": {"quoter_v2": 1, "slot0": 2},
+                    "both_quoter_v2": 1,
+                    "both_slot0": 1,
+                    "mixed_source": 1,
+                    "total": 3,
+                },
+            }
+        )
+
+        result = build_truth_data(
+            config=config,
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+
+        rs = result["roundtrip_summary"]
+        self.assertIn("leg_source_summary", rs)
+        lss = rs["leg_source_summary"]
+        self.assertEqual(lss["both_quoter_v2"], 1)
+        self.assertEqual(lss["mixed_source"], 1)
+        self.assertEqual(lss["total"], 3)
+
+    def test_leg_source_summary_absent_when_not_provided(self):
+        """leg_source_summary is None when roundtrip stats don't provide it."""
+        from strategy.artifacts import build_truth_data
+
+        config = {}
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 0,
+                "profitable_count": 0,
+            }
+        )
+
+        result = build_truth_data(
+            config=config,
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+
+        rs = result["roundtrip_summary"]
+        self.assertIn("leg_source_summary", rs)
+        self.assertIsNone(rs["leg_source_summary"])
+
+
+class TestAggregateLegSources(unittest.TestCase):
+    """R39i++: Tests for aggregate_leg_sources helper."""
+
+    def test_all_quoter_v2(self):
+        from engine.roundtrip import aggregate_leg_sources
+        from engine.roundtrip import RoundTripResult
+
+        results = [
+            RoundTripResult(
+                pair="WETH/USDC", buy_dex="uni", sell_dex="sushi",
+                amount_in_wei=1, token_in="W", token_out="U",
+                leg1_amount_out=1, leg1_source="quoter_v2", leg2_source="quoter_v2",
+            ),
+            RoundTripResult(
+                pair="WETH/USDC", buy_dex="uni", sell_dex="sushi",
+                amount_in_wei=1, token_in="W", token_out="U",
+                leg1_amount_out=1, leg1_source="quoter_v2", leg2_source="quoter_v2",
+            ),
+        ]
+        agg = aggregate_leg_sources(results)
+        self.assertEqual(agg["both_quoter_v2"], 2)
+        self.assertEqual(agg["mixed_source"], 0)
+        self.assertEqual(agg["total"], 2)
+
+    def test_mixed_source_counted(self):
+        from engine.roundtrip import aggregate_leg_sources
+        from engine.roundtrip import RoundTripResult
+
+        results = [
+            RoundTripResult(
+                pair="WETH/USDC", buy_dex="uni", sell_dex="sushi",
+                amount_in_wei=1, token_in="W", token_out="U",
+                leg1_amount_out=1, leg1_source="quoter_v2", leg2_source="slot0",
+            ),
+        ]
+        agg = aggregate_leg_sources(results)
+        self.assertEqual(agg["mixed_source"], 1)
+        self.assertEqual(agg["both_quoter_v2"], 0)
+
+    def test_empty_results(self):
+        from engine.roundtrip import aggregate_leg_sources
+
+        agg = aggregate_leg_sources([])
+        self.assertEqual(agg["total"], 0)
+
+
+class TestBlockerEvidenceRqZeroNotEconomics(unittest.TestCase):
+    """R39i++: Chain with real_quote_count_total=0 cannot be OE_ECONOMICS.
+
+    CONTRACT: If no real quotes were obtained (rq=0), the chain is either
+    QUOTE_PATH_BLOCKED (quoter failures) or NO_SIGNAL, never OE_ECONOMICS.
+    A diagnostic sweep with rq=0 does NOT prove the executable path works.
+    """
+
+    def test_rq_zero_with_oe_reject_is_quote_path_blocked(self):
+        """rq=0 + OE mixed/slot0 rejects → QUOTE_PATH_BLOCKED, not OE_ECONOMICS."""
+        from strategy.chain_stats import _compute_blocker_evidence
+
+        stats = {
+            "profitable_roundtrips_total": 0,
+            "runs": 10,
+            "fail": 0,
+            "included_signals_total": 50,
+            "roundtrip_evaluated_total": 5,
+            "real_quote_count_total": 0,
+            "runs_with_sweep": 2,
+            "last_cross_dex_pairs_count": 9,
+            "last_quote_source_summary": {
+                "quotes_fetched_executable": 0,
+                "quotes_fetched_diagnostic": 80,
+                "quoter_v2_failed_count": 50,
+            },
+            "last_oe_rejection_funnel": {
+                "total_opportunities": 30,
+                "rejected_count": 25,
+                "rejected_reasons": {
+                    "SLOT0_DIAGNOSTIC": 15,
+                    "MIXED_SOURCE": 5,
+                    "NET_PROFIT_TOO_LOW": 5,
+                },
+            },
+            "last_truth_verdict": None,
+        }
+        _compute_blocker_evidence(stats)
+        # With rq=0 and >50% quoter failure → QUOTE_PATH_BLOCKED
+        self.assertEqual(stats["blocker_evidence"], "QUOTE_PATH_BLOCKED")
+
+    def test_rq_positive_with_economics_is_oe_economics(self):
+        """rq>0 + OE economics rejects → OE_ECONOMICS (quote path works)."""
+        from strategy.chain_stats import _compute_blocker_evidence
+
+        stats = {
+            "profitable_roundtrips_total": 0,
+            "runs": 10,
+            "fail": 0,
+            "included_signals_total": 50,
+            "roundtrip_evaluated_total": 5,
+            "real_quote_count_total": 3,
+            "runs_with_sweep": 2,
+            "last_cross_dex_pairs_count": 9,
+            "last_quote_source_summary": {
+                "quotes_fetched_executable": 20,
+                "quotes_fetched_diagnostic": 40,
+                "quoter_v2_failed_count": 10,
+            },
+            "last_oe_rejection_funnel": {
+                "total_opportunities": 30,
+                "rejected_count": 25,
+                "rejected_reasons": {
+                    "NET_PROFIT_TOO_LOW": 20,
+                    "MIXED_SOURCE": 3,
+                    "SLOT0_DIAGNOSTIC": 2,
+                },
+            },
+            "last_truth_verdict": None,
+            "_sweep_gap_values": [],
+        }
+        _compute_blocker_evidence(stats)
+        self.assertEqual(stats["blocker_evidence"], "OE_ECONOMICS")
+
+
 if __name__ == "__main__":
     unittest.main()

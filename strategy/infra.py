@@ -746,8 +746,20 @@ class DirtySetTracker:
                     "params": ["newHeads"],
                 })
                 ws.send(subscribe_msg)
-                # Read subscription confirmation
-                ws.recv()
+                # Read subscription confirmation and validate
+                _sub_resp = ws.recv()
+                try:
+                    _sub_data = json.loads(_sub_resp)
+                    if "error" in _sub_data:
+                        _err_msg = _sub_data["error"].get("message", "unknown")
+                        logger.warning(
+                            "DirtySet: WSS eth_subscribe rejected for %s: %s",
+                            chain, _err_msg,
+                        )
+                        ws.close()
+                        continue  # skip to reconnect backoff
+                except (json.JSONDecodeError, ValueError):
+                    pass  # non-JSON response, try to proceed
 
                 logger.info("DirtySet: WSS connected for %s", chain)
 

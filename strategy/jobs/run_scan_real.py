@@ -658,7 +658,7 @@ def run_scan(
     
     # v2.1.0: Round-trip evaluation for CANONICAL profit (after one-leg diagnostic)
     try:
-        from engine.roundtrip import simulate_roundtrip, evaluate_roundtrip_candidates
+        from engine.roundtrip import simulate_roundtrip, evaluate_roundtrip_candidates, aggregate_leg_sources
         from strategy.quotes import read_quoter_v2
         from config import get_token_address
         from dex.registry import get_dex_config
@@ -880,6 +880,8 @@ def run_scan(
             "l1_cost_wei": l1_cost_wei_used,  # v2.1.0: L1 cost tracking
             "l1_cost_source": l1_cost_source_used,  # v2.1.0: "onchain" | "config" | "default"
             "results": [r.to_dict() for r in roundtrip_results[:3]],
+            # R39i++: Per-leg quote source aggregation for RCA visibility
+            "leg_source_summary": aggregate_leg_sources(roundtrip_results),
             # v3.0.0: Aggregation stats for visibility
             "candidates_total": roundtrip_stats.candidates_total,
             "gated_by_economics": roundtrip_stats.gated_by_economics,

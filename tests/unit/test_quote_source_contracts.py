@@ -289,3 +289,86 @@ class TestBlockerEvidenceQuotePathContract(TestCase):
         }
         _compute_blocker_evidence(stats)
         self.assertEqual(stats["blocker_evidence"], "OE_ECONOMICS")
+
+
+class TestQuoterV2SkipMechanism(TestCase):
+    """R39i++: Document the quoter_v2 skip/fallback mechanism in quotes.py."""
+
+    def test_skip_threshold_and_ttl_constants(self):
+        """Verify skip threshold=3 and TTL=600s are defined."""
+        from strategy.quotes import QUOTER_V2_SKIP_THRESHOLD, QUOTER_V2_SKIP_TTL_SECONDS
+        self.assertEqual(QUOTER_V2_SKIP_THRESHOLD, 3)
+        self.assertEqual(QUOTER_V2_SKIP_TTL_SECONDS, 600)
+
+    def test_should_skip_false_initially(self):
+        """Fresh pool_key should NOT be skipped."""
+        from strategy.quotes import _should_skip_quoter_v2
+        # Use a unique key that was never recorded as failed
+        result = _should_skip_quoter_v2("test_never_seen_pool_key_unique_abcdef")
+        self.assertFalse(result)
+
+    def test_record_failure_and_skip(self):
+        """After THRESHOLD failures, pool should be skipped."""
+        from strategy.quotes import (
+            _record_quoter_v2_failure,
+            _record_quoter_v2_success,
+            _should_skip_quoter_v2,
+            QUOTER_V2_SKIP_THRESHOLD,
+        )
+        pool_key = "test_pool_key_skip_mechanism_xyz123"
+        # Clear any prior state by recording a success
+        _record_quoter_v2_success(pool_key)
+        self.assertFalse(_should_skip_quoter_v2(pool_key))
+
+        # Record failures up to threshold
+        for _ in range(QUOTER_V2_SKIP_THRESHOLD):
+            _record_quoter_v2_failure(pool_key)
+
+        self.assertTrue(_should_skip_quoter_v2(pool_key))
+
+        # Success resets
+        _record_quoter_v2_success(pool_key)
+        self.assertFalse(_should_skip_quoter_v2(pool_key))
+
+    def test_base_quote_path_failure_chain(self):
+        """Document the base failure chain: quoter_v2 fail → slot0 fallback → SLOT0_DIAGNOSTIC.
+
+        This is the exact sequence that causes base to be QUOTE_PATH_BLOCKED:
+        1. quoter_v2 reverts on base pools (8453) → QUOTER_V2_FAILED
+        2. After 3 consecutive failures, pool is skip-listed for 600s
+        3. Skip-listed pools go to slot0 read → quote_source="slot0"
+        4. OE rejects slot0-only as SLOT0_DIAGNOSTIC
+        5. Chain stats sees >40% SLOT0_DIAGNOSTIC → QUOTE_PATH_BLOCKED
+        """
+        from strategy.chain_stats import _compute_blocker_evidence
+
+        # Simulate base fresh evidence snapshot
+        stats = {
+            "profitable_roundtrips_total": 0,
+            "runs": 36,
+            "fail": 0,
+            "included_signals_total": 50,
+            "roundtrip_evaluated_total": 10,
+            "real_quote_count_total": 0,
+            "runs_with_sweep": 3,
+            "last_cross_dex_pairs_count": 9,
+            "last_quote_source_summary": {
+                "quotes_fetched_executable": 0,
+                "quotes_fetched_diagnostic": 104,
+                "quoter_v2_failed_count": 48,
+            },
+            # OE funnel: SLOT0_DIAGNOSTIC dominates
+            "last_oe_rejection_funnel": {
+                "total_opportunities": 60,
+                "rejected_count": 55,
+                "rejected_reasons": {
+                    "SLOT0_DIAGNOSTIC": 42,  # 76% of rejects
+                    "MIXED_SOURCE": 8,
+                    "NET_PROFIT_TOO_LOW": 5,
+                },
+            },
+            "last_truth_verdict": None,
+        }
+        _compute_blocker_evidence(stats)
+        # With rq=0 and SLOT0_DIAGNOSTIC > 40% → QUOTE_PATH_BLOCKED
+        self.assertEqual(stats["blocker_evidence"], "QUOTE_PATH_BLOCKED")

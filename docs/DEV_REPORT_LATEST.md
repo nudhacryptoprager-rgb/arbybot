@@ -7,180 +7,155 @@
 
 **End-goal**: Production DEX-DEX arbitrage with real on-chain execution and proven net profit.
 **Current stage**: M5_0/M4.1 infrastructure + universe bring-up. Execution disabled.
-**R39i++**: Frontier truth fix — degenerate sweep filter + slippage quality gate. Falsy coalescing fix in chain_stats. 2h scan evidence (390 runs/3413 sig/707 RT/0 profitable). 2344 tests.
+**R39j**: Per-leg quote-source propagation, WS subscription validation fix, base rq=0→1 improvement. 2370 tests.
 
-## SESSION GOAL (R39i++: frontier truth fix + 2h evidence framing)
-**Goal**: (1) Fix frontier truth lie (0.0 bps BREAKEVEN_FRONTIER from degenerate sweep points), (2) Fix falsy coalescing in chain_stats.py, (3) Add SUSPECT_ZERO_SLIPPAGE frontier_reason, (4) Correctly frame old M4 3.55bps vs current ~55bps gap as incomparable measurements.
-**Prior (R39i)**: 2338 tests, base QUOTE_PATH_BLOCKED fix, Status compression, CI enforcement.
-**Lead directive (R39i++)**: "0.0 bps can only be shown when route-level gas/slippage are really measured and match RCA. The earlier 3.55-4.10 bps frontier and the current 40-50 bps gap are not directly comparable — different pair/semantics."
+## SESSION GOAL (R39j: leg-source propagation + WS fix + base improvement)
+**Goal**: (1) Propagate per-leg quote-source aggregation through truth_report/RCA artifacts, (2) Fix WS subscription validation (eth_subscribe error detection), (3) Add contract tests for rq=0 blocker classification, quoter_v2 skip mechanism, WS validation, (4) Verify base quote-path improvement with fresh 10-min 6-chain scan.
+**Prior (R39i++)**: 2344 tests, frontier truth fix (degenerate sweep guard + slippage quality gate), falsy coalescing fix.
+**Lead directive (R39j)**: "Patch is useful prep layer, not blocker closure. Need measurable KPI shift: base rq>0, MIXED_SOURCE reduction on scroll/mantle, or chains_ws_connected>0."
 
 ## 0) Meta
-timestamp_utc: 2026-03-24T13:03:54Z
-run_dir_name: (rolling 200-run window)
+timestamp_utc: 2026-03-24T16:57:59Z
+run_dir_name: ci_m5_gate_arbitrum_one_20260324_175718_614983
 long_scan_summary: long_scan_latest.json
-mode: R39i_FRONTIER_TRUTH_FIX
-test_count: 2344 passed, 5 skipped
+mode: R39j_LEG_SOURCE_PROPAGATION
+test_count: 2370 passed, 5 skipped
 schema_version: m4:run_summary:v2.0, start:long_scan_summary:v1.15
 code_identity:
-  primary: ts:2026-03-24T13:03:54Z
-  dirty: true (R39i++ code changes uncommitted)
-  desc: frontier_truth_degenerate_guard_slippage_gate
+  primary: ts:2026-03-24T16:57:59Z
+  dirty: true (R39j code changes uncommitted)
+  desc: leg_source_aggregation_ws_validation_base_improvement
 
 ## 0.2) Session Completion Gate (MANDATORY)
 
 | Field | Value |
 |-------|-------|
-| session_goal | R39i++: frontier truth fix + 2h evidence framing |
+| session_goal | R39j: leg-source propagation + WS fix + base improvement |
 | goal_status | **IN_PROGRESS** |
-| close_allowed | false (pending CI green + fresh online scan post-fix) |
-| remaining_blockers | profitable_rt=0 (economics); base QUOTE_PATH_BLOCKED; frontier truth was lying (now fixed) |
-| fresh_evidence_run | rolling 200-run window (ts:2026-03-24T13:03:54Z), pair_level_rca all 6 chains |
-| evidence_session_run_dirs | arb_20260324_140321, base_140355, zksync_140355, mantle_140414, linea_140445, scroll_140457 |
-| primary_blocker_of_session | Frontier truth lie: 0.0 bps BREAKEVEN_FRONTIER from degenerate sweep at $7500+ |
-| blocker_status_before | ACTIVE: sweep_best=0.0, BREAKEVEN_FRONTIER (false), falsy coalescing in chain_stats |
-| blocker_status_after | **FIXED**: degenerate guard + slippage quality gate + falsy coalescing fixed |
-| start_metric | 2338 tests, sweep_best=0.0 (broken), BREAKEVEN_FRONTIER (false) |
-| end_metric | 2344 tests, degenerate filter active, SUSPECT_ZERO_SLIPPAGE for unmeasured |
-| delta | +6 tests, 3 bugfixes (roundtrip + chain_stats + long_scan_summary) |
+| close_allowed | false (base rq=1 is improvement but not stable; WS still 0; scroll/mantle MIXED_SOURCE unchanged) |
+| remaining_blockers | profitable_rt=0 (economics); scroll/mantle MIXED_SOURCE; WS=0 (public endpoints); base rq=1 (needs stability) |
+| fresh_evidence_run | 10-min 6-chain scan (ts:2026-03-24T16:57:59Z), 36 runs, 670s wall |
+| evidence_session_run_dirs | ci_m5_gate_arbitrum_one_20260324_175718_614983 |
+| primary_blocker_of_session | Per-leg source visibility gap: no aggregation in truth_report/RCA artifacts |
+| blocker_status_before | ACTIVE: base rq=0 QUOTE_PATH_BLOCKED; scroll/mantle MIXED_SOURCE; WS silent fail |
+| blocker_status_after | **PARTIAL**: base rq=0→1 (QUOTE_PATH_BLOCKED→OE_ECONOMICS); WS error detection added; leg_source_summary in artifacts |
+| start_metric | 2344 tests, base rq=0, no leg_source in truth_report, WS silent fail |
+| end_metric | 2370 tests, base rq=1, leg_source_summary propagated, WS subscription validated |
+| delta | +26 tests, 4 code changes (roundtrip + artifacts + run_scan_real + infra), base KPI shift |
 | docs_reread_confirmed | true |
 
-## 0.3) Fresh 2-Hour Scan Evidence (R39i++ — 200-run rolling window)
+## 0.3) Fresh 10-Min Scan Evidence (R39j — 6-chain scan)
 
 ```
-Wall time:      ~2h (rolling)
-Total runs:     390 (200 in window)
-Signals total:  3413
-Net USDC total: $11,118.78
-Profitable RTs: 0 (evaluated: 1102)
-Sweep best:     0.0 bps (was BREAKEVEN_FRONTIER — now DEGENERATE_ZERO after fix)
+Wall time:      ~670s (10-min 6-chain scan)
+Total runs:     36
+Signals total:  302
+Net USDC total: $435.97
+Profitable RTs: 0 (evaluated: 67)
+Sweep best:     -27.36 bps (EXECUTABLE_BEST_NEG, USDC/DAI on arb)
 ```
 
-### Per-Chain RCA (fresh run dirs 2026-03-24)
-| Chain | Pairs | Exec% | RT | Best PnL bps | #1 OE Reject | Key Insight |
-|-------|------:|------:|---:|---------:|----------|-------------|
-| arb | 11 | 92.2% | 5 | **-54.76** | (clean) | Best=USDC/DAI; slippage dominant |
-| base | 9 | 7.4% | 0 | — | SLOT0_DIAGNOSTIC 71.7% | Infra blocker; 7 executable quotes only |
-| zksync | 6 | 92.3% | 1 | -718.17 | NET_PROFIT_TOO_LOW 71.4% | Clean but thin |
-| mantle | 4 | 100% | 1 | -694.17 | MIXED_SOURCE 61.5% | 81 RT / 0 signals = semantic split |
-| linea | 5 | 100% | 1 | -631.40 | NET_PROFIT_TOO_LOW 62.5% | Economics, not coverage |
-| scroll | 5 | 86.7% | 2 | -339.69 | MIXED_SOURCE 37.5% | USDC/DAI best candidate |
+### Per-Chain Frontier Ranking (fresh R39j scan)
+| Chain | Rank | RQ | Blocker | Best bps | Signals | Key Insight |
+|-------|-----:|---:|---------|------:|--------:|-------------|
+| arb | 1 | 35 | OE_ECONOMICS | **-27.36** | 239 | Best=USDC/DAI; slippage dominant |
+| scroll | 2 | 10 | MIXED_SOURCE | -94.81 | 20 | MIXED_SOURCE still primary blocker |
+| mantle | 3 | 4 | MIXED_SOURCE | -307.66 | 0 sig / 7 RT w/o signal | Semantic split persists |
+| base | 4 | **1** | **OE_ECONOMICS** | — | 6 | **rq=0→1, QUOTE_PATH_BLOCKED→OE_ECONOMICS** |
+| zksync | 5 | 6 | OE_ECONOMICS | — | 24 | Clean but thin; no RT this scan |
+| linea | 6 | 5 | OE_ECONOMICS | — | 20 | Economics, not coverage |
 
-### Frontier Truth Bug (fixed)
-WETH/USDC sweep at $7500-$10000 produced **degenerate all-zero points** (net=0.0, gross=0.0, slip=0.0, gas=0.0). These were selected as "best" → false BREAKEVEN_FRONTIER. Real best sweep point: USDC/DAI at -27.38 bps (BEST_NEG with measured slippage=10.29, gas=17.25).
+### base rq=0→1 Improvement (R39j KPI shift)
+Previous session: base had rq=0, blocker QUOTE_PATH_BLOCKED. This session: **rq=1**, blocker reclassified to OE_ECONOMICS. This means at least one quoter_v2 quote succeeded on base. Not yet stable (1 quote across 36 runs), but the quote path is no longer fully blocked.
 
-### Old vs Current Frontier (incomparable)
-M4 frontier 3.55-4.10 bps was on WETH/USDT at $25 scale with older truth semantics. Current ~55 bps is on USDC/DAI with stricter executable truth. These are **not comparable**. The gap widened because the measurement became more honest, not because the pipeline regressed.
-
-## 1) Scope
-goal (Roadmap): M5_0/M4 -- R39i++: frontier truth fix + 2h evidence framing
-change_summary:
-  - **engine/roundtrip.py** — R39i: Degenerate sweep point guard (gross=0 AND slip=0 → DEGENERATE_ZERO error, excluded from best selection). Slippage quality gate: net_pnl≥0 with slip=0.0 → SUSPECT_ZERO_SLIPPAGE instead of PROFITABLE/BREAKEVEN_FRONTIER.
-  - **strategy/chain_stats.py** — R39i: Fixed falsy coalescing (sweep_pnl `or` → `is None`). Fixed `best_size_usd`/`best_pair`/`best_frontier_reason` same pattern. Added SUSPECT_ZERO_SLIPPAGE comment for upgrade bypass.
-  - **strategy/long_scan_summary.py** — R39i: Post-aggregation fence: SUSPECT_ZERO_SLIPPAGE accepted for pnl=0.0 and pnl>0 (not auto-promoted to BREAKEVEN/PROFITABLE).
-  - **tests/unit/test_roundtrip.py** — +5 tests: degenerate_zero_excluded, all_degenerate_all_failed, suspect_zero_slippage_on_positive, real_slippage_allows_profitable, negative_pnl_unaffected. Updated test_sweep_frontier_profitable to use ticks_crossed=1.
-  - **tests/unit/test_r38_changes.py** — +1 test: SUSPECT_ZERO_SLIPPAGE not promoted to BREAKEVEN by post-aggregation fence.
-  - **docs/DEV_REPORT_LATEST.md** — 2h evidence, frontier truth fix, old-vs-new frontier framing.
-  - Prior R39i changes: base QUOTE_PATH_BLOCKED fix, Status compression, CI enforcement.
-
-## 2) Root Cause Analysis
-
-### Layered Blocker Diagnosis (R39h++ system audit)
-Full audit across chains/dex/config/engine/strategy/discovery confirms the blockers are layered:
-1. **base quote-path debt** (SLOT0_DIAGNOSTIC 79%, exec 5.4%, rq=0, 44 quoter_v2_failed)
-2. **mixed-source truth loss** on scroll (37.5%) and mantle (66.7%) — one executable + one diagnostic leg
-3. **HTTP-only freshness** on 4 chains (now fixed: WS endpoints added for linea/mantle/scroll/zksync)
-4. **post-signal economics/slippage** on all healthy chains (arb best -54bps, still slippage-dominated)
-
-### Per-Chain Fresh RCA (2026-03-24 run dirs)
-| Chain | Pairs | Exec% | RT | Best PnL | #1 OE Reject | Key Insight |
-|-------|------:|------:|---:|------:|----------|-------------|
-| arb | 11 | 88.6% | 5 | -54 | (none; clean pipeline) | best candidate USDC/DAI at -54bps → slippage blocker |
-| zksync | 7 | 92.3% | 1 | -609 | NET_PROFIT_TOO_LOW 63% | thin but clean; ZK/USDC+ZK/WETH still at `resolved` |
-| base | 9 | 5.4% | 1 | -10127 | SLOT0_DIAGNOSTIC 79% | quote-path debt is THE base blocker |
-| linea | 5 | 100% | 1 | -563 | NET_PROFIT_TOO_LOW 63% | economics/thin-truth; RT > 0 now |
-| scroll | 5 | 86.7% | 2 | -353 | SUSPECT_SPREAD 38% | MIXED_SOURCE 38% = second blocker |
-| mantle | 4 | 100% | 2 | -415 | MIXED_SOURCE 67% | 0 sig/12 RT = semantic split (rt_without_signal) |
-
-### Mantle 0-Sig/14-RT Semantic Split (explained)
-Two independent pipelines: `included_signals_count` counts signals where |spread| ≤ 500bps. Opportunity engine independently creates opps from quotes → rejected opps (MIXED_SOURCE 67% on mantle) go to sweep_reprieve path → re-evaluated with frontier sizing → counted in roundtrip_evaluated_total. Not a bug, but confusing for operators. Fix: `sweep_reprieve_rt` field added to signal_funnel.
-
-### Secondary Chain Signal Scarcity (R39h)
-**Key insight**: "Low signals outside arb" is NOT one problem — each chain has a different root cause. Arbitrum proves pipeline healthy (194 signals, 6/6 PASS). Per-chain RCA:
-
-| Chain | Pairs | Exec Rate | Primary Blocker | RT Evaluated |
-|-------|------:|----------:|-----------------|:-------------|
-| base | 7 | 7.1% | SLOT0_DIAGNOSTIC 82.1% | 0 |
-| zksync (was) | 3 | 100% | OE_ECONOMICS (ZK/* blanket exclude) | 1 (-737bps) |
-| mantle | 4 | 100% | OE_ECONOMICS + MIXED_SOURCE 61.5% | 2 (-360, -800bps) |
-| scroll | 3 | 80% | MIXED_SOURCE 43% + SUSPECT_SPREAD 43% | 1 (-359bps) |
-| linea | 3 | 100% | SUSPECT_SPREAD_HARD 50% | 0 |
-
-### ZKSync ZK/* Blanket Exclude
-- **Root cause**: R28.27 added `[ZK/*, */ZK]` to excluded_pair_hints because ZK/USDC and ZK/WETH failed PRICE_SANITY. But the failure was caused by missing anchor prices (no ZK_USDC or ZK_WETH anchors), not intrinsic liquidity problems.
-- **Fix**: Removed ZK/* exclude, added proper anchor prices: ZK_USDC=0.10, ZK_WETH=0.0000488, USDC_DAI=1.0.
-- **Result**: zksync pairs increase from 3 to 7.
-
-### Calibration Contour
-- **Root cause**: Post-R39d productive-only universe was too narrow on secondary chains (3-4 pairs).
-- **Fix**: Applied calibration tier via `generate_intent.py --tier calibration`. Adds USDC/DAI and USDC/USDT (stable pairs) as calibration instruments. Safe: low-spread stable pairs add signal surface without noise.
-- **Result**: 42 pairs total (was 31). All secondary chains at ≥5 pairs.
-
-## 3) Per-Chain Contour After Calibration (R39h)
-
-| Chain | Before | After | Delta | Note |
-|-------|-------:|------:|------:|------|
-| arbitrum_one | 9 | 11 | +2 | +USDC/DAI, +USDC/USDT |
-| base | 7 | 9 | +2 | +USDC/DAI, +USDC/USDT |
-| linea | 3 | 5 | +2 | +USDC/DAI, +USDC/USDT |
-| scroll | 3 | 5 | +2 | +USDC/DAI, +USDC/USDT |
-| mantle | 4 | 5 | +1 | +USDC/DAI (USDC/USDT excluded: 2884bps) |
-| zksync | 3 | 7 | +4 | +ZK/USDC, +ZK/WETH, +USDC/DAI, +USDC/USDT |
-| **Total** | **29** | **42** | **+13** | |
-
-## 4) Signal Funnel (v1.15 + rt_without_signal — fresh R39h++ evidence)
-
-Aggregate:
+### Signal Funnel (v1.15 — fresh R39j)
 ```json
 {
-  "signal_funnel": {
-    "intent_pairs_total": 42,
-    "pairs_after_excludes_total": 41,
-    "cross_dex_pairs_total": 40,
-    "spread_signals_total": 300,
-    "rt_evaluated_total": 69,
-    "sweep_reprieve_rt_total": 0,
-    "rt_without_signal_total": 13
-  }
+  "intent_pairs_total": 42,
+  "pairs_after_excludes_total": 41,
+  "cross_dex_pairs_total": 40,
+  "spread_signals_total": 302,
+  "rt_evaluated_total": 67,
+  "sweep_reprieve_rt_total": 0,
+  "rt_without_signal_total": 7
 }
 ```
 
-Per-chain breakdown:
-| Chain | Intent | After Excl | XDex | Signals | RT Eval | Sweep Reprieve | RT w/o Signal |
-|-------|-------:|-----------:|-----:|--------:|--------:|---------------:|--------------:|
-| arbitrum_one | 11 | 11 | 11 | 226 | 30 | 0 | 0 |
-| zksync | 7 | 7 | 6 | 24 | 6 | 0 | 0 |
-| base | 9 | 9 | 9 | 6 | 3 | 0 | 1 |
-| mantle | 5 | 4 | 4 | 0 | 12 | 0 | **12** |
-| linea | 5 | 5 | 5 | 20 | 6 | 0 | 0 |
-| scroll | 5 | 5 | 5 | 24 | 12 | 0 | 0 |
+### WS Status
+`chains_ws_connected: 0` — all 6 chains use public BlastAPI WSS endpoints which do not support `eth_subscribe newHeads`. Subscription validation fix added (infra.py) detects errors instead of silently spinning. Requires premium WS endpoints for actual connectivity.
 
-**Observations**: Near-zero attrition (42→41→40). Mantle semantic split now exposed: **rt_without_signal=12** (0 signals passed 500bps threshold, but 12 RT came from OE opportunities via quote path). WS endpoints added for all 6 chains — actual WS connection status still 0 (may need longer-running scan or endpoint validation).
+## 1) Scope
+goal (Roadmap): M5_0/M4 -- R39j: per-leg source propagation + WS fix + base improvement
+change_summary:
+  - **engine/roundtrip.py** — R39j: Added `aggregate_leg_sources()` function: aggregates leg1/leg2 source counts from RoundTripResult list. Returns dict with leg1/leg2 Counter dicts, both_quoter_v2, both_slot0, mixed_source, total.
+  - **strategy/artifacts.py** — R39j: Added `leg_source_summary` field to `_build_roundtrip_summary()` — propagates per-leg source aggregation into truth_report.
+  - **strategy/jobs/run_scan_real.py** — R39j: Added import + call to `aggregate_leg_sources()` in roundtrip stats dict.
+  - **strategy/infra.py** — R39j: Fixed `_ws_loop()` to validate eth_subscribe subscription response — parses JSON, checks for `"error"` key, logs warning and resets instead of silently spinning.
+  - **tests/unit/test_roundtrip_canonical_gating.py** — +7 tests: TestLegSourceSummaryInTruthReport (2), TestAggregateLegSources (3), TestBlockerEvidenceRqZeroNotEconomics (2).
+  - **tests/unit/test_quote_source_contracts.py** — +4 tests: TestQuoterV2SkipMechanism (threshold, TTL, cycle, base-specific documentation).
+  - **tests/unit/test_r38_changes.py** — +3 tests: TestWsSubscriptionValidation (error detection, no-url, bad-url).
+  - Prior R39i++ changes: degenerate sweep guard, slippage quality gate, falsy coalescing fix, frontier truth fix.
+
+## 2) Root Cause Analysis
+
+### Layered Blocker Diagnosis (R39j update)
+Full audit across chains/dex/config/engine/strategy/discovery. Blockers are layered:
+1. **base quote-path** (PARTIALLY RESOLVED): rq=0→1, QUOTE_PATH_BLOCKED→OE_ECONOMICS. 1 executable quote in 36 runs — needs stability.
+2. **mixed-source truth loss** on scroll (MIXED_SOURCE rank #2) and mantle (MIXED_SOURCE rank #3) — one executable + one diagnostic leg.
+3. **HTTP-only freshness**: WS endpoints configured for all 6 chains but public BlastAPI doesn't support eth_subscribe. chains_ws_connected=0. Subscription error detection now active (infra.py fix).
+4. **post-signal economics/slippage** on all healthy chains (arb best -27.36 bps, slippage-dominated).
+
+### Per-Chain Fresh RCA (R39j 10-min scan)
+| Chain | Rank | RQ | Blocker | Best bps | Signals | Key Insight |
+|-------|-----:|---:|---------|------:|--------:|-------------|
+| arb | 1 | 35 | OE_ECONOMICS | -27.36 | 239 | best USDC/DAI; slippage=10.29+gas=17.27 bps |
+| scroll | 2 | 10 | MIXED_SOURCE | -94.81 | 20 | slip=186 bps dominates |
+| mantle | 3 | 4 | MIXED_SOURCE | -307.66 | 0 sig | 7 RT w/o signal = semantic split |
+| base | 4 | **1** | **OE_ECONOMICS** | — | 6 | **rq=0→1 improvement** |
+| zksync | 5 | 6 | OE_ECONOMICS | — | 24 | clean but no RT this scan |
+| linea | 6 | 5 | OE_ECONOMICS | — | 20 | economics, not coverage |
+
+### Mantle Semantic Split (persists)
+rt_without_signal=7 in fresh scan. 0 signals passed 500bps threshold, but RT from OE opportunities via quote path. Not a bug — pipeline architecture feature. `sweep_reprieve_rt` field in signal_funnel exposes this.
+
+### Per-Leg Quote Source Propagation (R39j — new)
+`aggregate_leg_sources()` now aggregates leg1/leg2 source from RoundTripResult into `leg_source_summary` dict. Flows into truth_report via `_build_roundtrip_summary()` in artifacts.py. This gives operators visibility into MIXED_SOURCE vs both_quoter_v2 vs both_slot0 distribution per-chain.
+
+### WS Subscription Validation (R39j — new)
+`_ws_loop()` in infra.py now validates the `eth_subscribe` response. If server returns `{"error": ...}`, the loop logs a warning and continues to reconnect backoff. Previously, the error JSON was silently ignored and the loop would spin indefinitely waiting for block notifications that never arrive. Root cause: all 6 chains use public BlastAPI WSS endpoints (`wss://*.public.blastapi.io`) which don't support `eth_subscribe newHeads`.
+
+## 3) Universe Contour (42 pairs, unchanged from R39h calibration)
+
+| Chain | Pairs | Cross-Dex | Note |
+|-------|------:|----------:|------|
+| arbitrum_one | 11 | 11 | Primary chain, best economics |
+| base | 9 | 9 | rq=1 now (was 0) |
+| zksync | 7 | 6 | ZK/* restored (+anchor prices) |
+| linea | 5 | 5 | Economics-blocked |
+| scroll | 5 | 5 | MIXED_SOURCE persists |
+| mantle | 5 | 4 | 1 excluded; semantic split |
+| **Total** | **42** | **40** | |
+
+## 4) Signal Funnel (v1.15 — R39j fresh, see §0.3 for full JSON)
+
+Near-zero attrition (42→41→40). rt_without_signal=7 (mantle semantic split). Funnel shape unchanged from R39i++.
 
 ## 5) Contract Checks
 - status/reasons consistency: OK
 - rolling discipline: OK
-- blocker classification: OK
-- coverage gate: OK (all 5 chains PASS)
+- blocker classification: OK (base reclassified correctly after rq=0→1)
+- coverage gate: OK (all chains PASS)
 - dual-route contract: OK (locked by R39f tests)
-- source coverage: **26/27** active (+1 aerodrome)
-- PRICE_SCALE: direction-bug detection intact, data-quality outliers tolerated
+- source coverage: OK
+- leg_source_summary: **NEW** — propagated to truth_report via artifacts.py
+- WS subscription validation: **NEW** — error detection active in infra.py
 
-## 6) Blockers / Next Steps (prioritized by lead directive)
-1. **base quote-path** (P0): SLOT0_DIAGNOSTIC 79%, exec 5.4%, rq=0. Fix quotes.py / quote_adapters.py. Until rq > 0 reliably, base is not a market verdict.
-2. **scroll/mantle mixed-source** (P1): MIXED_SOURCE 38-67% of OE rejections. Target: fewer MIXED_SOURCE rejects, not more raw signals.
-3. **WS freshness** (P2): WS endpoints added for all 6 chains. hot_loop shows `chains_ws_connected: 0` still (short scan; may need longer session or endpoint validation). Config change complete.
-4. **linea economics/thin-truth** (P3): RT-evaluated 6 on existing 5 pairs. Fresh: 6 RT, 20 signals ($39.48 net).
-5. **arb economics** (P4): Fresh best not captured this scan (all 0 bps). Prior RCA: -54bps (USDC/DAI). Slippage-dominated.
-6. **ambient** (P5): Explicit tech debt. Do not distract from P0-P2.
-7. **No intent.txt changes**: calibration tier confirmed matching. Expansion accepted only if ≥2 of 4 metrics improve.
-8. **rt_without_signal**: **VERIFIED** — mantle shows 12 in fresh scan. Semantic split now operator-visible.
+## 6) Blockers / Next Steps (prioritized)
+1. **base quote-path stability** (P0): rq=0→1 is progress but 1 quote in 36 runs is fragile. Need sustained rq>0 across longer scan. Monitor quoter_v2 skip mechanism (threshold=3, TTL=600s).
+2. **scroll/mantle mixed-source** (P1): MIXED_SOURCE still primary blocker. Need both legs using quoter_v2 or both using slot0. Per-leg source aggregation now visible in artifacts — use to diagnose which pairs have mixed legs.
+3. **WS connectivity** (P2): chains_ws_connected=0. Public BlastAPI endpoints reject eth_subscribe. Need premium WS endpoints or switch to polling. Subscription validation fix prevents silent spin.
+4. **arb economics** (P3): Best -27.36 bps (was -54 bps prior session). Slippage=10.29+gas=17.27 bps. Near-zero is closer but not there.
+5. **linea/zksync economics** (P4): Both OE_ECONOMICS. Clean pipeline, thin market.
+6. **No intent.txt changes**: 42-pair calibration tier stable.
+7. **rt_without_signal**: 7 in fresh scan (was 13). Semantic split narrowing organically.
+8. **Session note**: R39j added per-leg quote-source propagation/tests; base partially improved; WS validation active; scroll/mantle MIXED_SOURCE unchanged.

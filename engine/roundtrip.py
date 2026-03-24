@@ -159,6 +159,35 @@ class RoundTripResult:
         }
 
 
+def aggregate_leg_sources(roundtrip_results: List["RoundTripResult"]) -> Dict[str, Any]:
+    """R39i++: Aggregate per-leg quote source counts from roundtrip results."""
+    from collections import Counter
+    leg1_counts: Counter[str] = Counter()
+    leg2_counts: Counter[str] = Counter()
+    mixed = 0
+    both_quoter = 0
+    both_slot0 = 0
+    for r in roundtrip_results:
+        s1 = getattr(r, "leg1_source", "unknown")
+        s2 = getattr(r, "leg2_source", "unknown")
+        leg1_counts[s1] += 1
+        leg2_counts[s2] += 1
+        if s1 == "quoter_v2" and s2 == "quoter_v2":
+            both_quoter += 1
+        elif s1 == "slot0" and s2 == "slot0":
+            both_slot0 += 1
+        elif s1 != s2:
+            mixed += 1
+    return {
+        "leg1": dict(leg1_counts),
+        "leg2": dict(leg2_counts),
+        "both_quoter_v2": both_quoter,
+        "both_slot0": both_slot0,
+        "mixed_source": mixed,
+        "total": len(roundtrip_results),
+    }
+
+
 @dataclass
 class RoundtripEvaluationStats:
     """
