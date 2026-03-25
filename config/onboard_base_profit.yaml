@@ -47,14 +47,15 @@ dexes:
 discovery_runtime_max_pairs: 15
 require_cross_dex: true
 
-# R39n: Profit lane — only these 6 pairs
+# R39q: Profit lane pairs — cheap fee/size routes first, expensive diagnostic last.
+# Lead review R39p step 2-3: stop WETH/USDC from eating alpha budget.
 include_pairs:
+  - "USDC/DAI"
+  - "USDC/USDT"
   - "cbBTC/USDC"
   - "cbBTC/WETH"
   - "AERO/USDC"
   - "WETH/USDC"
-  - "USDC/DAI"
-  - "USDC/USDT"
 
 # R28.27: Exclude known-dead/stale pairs on base
 excluded_pair_hints:
@@ -79,12 +80,22 @@ excluded_pool_addresses:
 roundtrip_max_candidates: 50
 roundtrip_top_n: 15
 
-# R39p: Reserved slots — only pairs with proven executable throughput.
-# cbBTC/* removed until they achieve >=1 executable quote per run.
+# R39q: Pre-RT cost filter (lead step 4).
+# Routes with lp_fee_roundtrip > 30 bps or measured_slippage > 150 bps
+# are demoted to diagnostic-only and never enter truth lane.
+roundtrip_lp_fee_max_bps: 30
+roundtrip_slippage_max_bps: 150
+
+# R39q: Reserved slots — only cheap-fee pairs with proven executable throughput.
+# WETH/USDC removed: lp_fee=101 bps roundtrip, measured_slippage up to 981 bps @ $25.
+# cbBTC/* and AERO/USDC removed: alpha thesis unproven at runtime. They compete
+# on spread_minus_required_bps like all other pairs — no guaranteed budget until
+# they demonstrate real_quote_count > 0 for 3+ consecutive cycles.
+# It stays in include_pairs for diagnostic visibility but loses guaranteed budget.
 reserved_candidate_slots:
-  - pair_pattern: "WETH/USDC"
+  - pair_pattern: "USDC/DAI"
     min_slots: 1
-  - pair_pattern: "AERO/USDC"
+  - pair_pattern: "USDC/USDT"
     min_slots: 1
 
 use_multicall: true

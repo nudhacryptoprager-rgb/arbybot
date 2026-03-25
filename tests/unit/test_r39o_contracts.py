@@ -334,3 +334,126 @@ class TestMatchPairPattern:
         assert _match_pair_pattern("", "WETH/USDC") is False
         assert _match_pair_pattern("WETH/USDC", "") is False
         assert _match_pair_pattern("", "") is False
+
+
+# ============================================================================
+# 7. R39q: Pre-RT cost filter
+# ============================================================================
+
+class TestCostFilterViable:
+    """R39q: cost_filter_viable rejects routes with excessive LP fees."""
+
+    def test_cheap_route_passes(self):
+        from strategy.roundtrip_selection import cost_filter_viable
+        opp = {"buy_fee": 500, "sell_fee": 500}  # 5+5=10 bps roundtrip
+        assert cost_filter_viable(opp, lp_fee_max_bps=30) is True
+
+    def test_expensive_route_blocked(self):
+        from strategy.roundtrip_selection import cost_filter_viable
+        # WETH/USDC on Base: fee_tier 3000+3000 -> 30+30=60 bps roundtrip -> > 30 bps
+        opp = {"buy_fee": 3000, "sell_fee": 3000}  # 30+30=60 bps roundtrip
+        assert cost_filter_viable(opp, lp_fee_max_bps=30) is False
+
+    def test_100bps_fee_tier_blocked(self):
+        from strategy.roundtrip_selection import cost_filter_viable
+        # fee_tier 10000 + 500 -> 100+5=105 bps roundtrip
+        opp = {"buy_fee": 10000, "sell_fee": 500}
+        assert cost_filter_viable(opp, lp_fee_max_bps=30) is False
+
+    def test_default_uncapped_allows_all(self):
+        from strategy.roundtrip_selection import cost_filter_viable
+        opp = {"buy_fee": 10000, "sell_fee": 10000}  # 200 bps roundtrip
+        # Default lp_fee_max_bps=9999 -> passes
+        assert cost_filter_viable(opp) is True
+
+    def test_exact_boundary_passes(self):
+        from strategy.roundtrip_selection import cost_filter_viable
+        # 15+15=30 bps roundtrip, threshold=30: NOT > 30, so it passes
+        opp = {"buy_fee": 1500, "sell_fee": 1500}
+        assert cost_filter_viable(opp, lp_fee_max_bps=30) is True
+
+    def test_just_over_boundary_blocked(self):
+        from strategy.roundtrip_selection import cost_filter_viable
+        # 15.01+15=30.01 bps > 30 -> blocked
+        opp = {"buy_fee": 1501, "sell_fee": 1500}
+        assert cost_filter_viable(opp, lp_fee_max_bps=30) is False
+
+    def test_just_under_boundary(self):
+        from strategy.roundtrip_selection import cost_filter_viable
+        opp = {"buy_fee": 1400, "sell_fee": 1500}  # 14+15=29 bps
+        assert cost_filter_viable(opp, lp_fee_max_bps=30) is True
+
+
+class TestSelectCandidatesWithCostFilter:
+    """R39q: select_roundtrip_candidates with lp_fee_max_bps parameter."""
+
+    def test_cost_filter_demotes_expensive_routes(self):
+        from strategy.roundtrip_selection import select_roundtrip_candidates
+
+        opps = [
+            {
+                "pair": "WETH/USDC",
+                "buy_dex": "uniswap_v3", "sell_dex": "sushiswap_v3",
+                "buy_fee": 3000, "sell_fee": 3000,  # 60 bps roundtrip
+                "gross_spread_bps": 80.0, "spread_minus_required_bps": 15.0,
+            },
+            {
+                "pair": "USDC/DAI",
+                "buy_dex": "uniswap_v3", "sell_dex": "pancakeswap_v3",
+                "buy_fee": 100, "sell_fee": 100,  # 2 bps roundtrip
+                "gross_spread_bps": 10.0, "spread_minus_required_bps": 5.0,
+            },
+        ]
+        eligible, stats = select_roundtrip_candidates(
+            opps, rt_top_n=10, lp_fee_max_bps=30,
+        )
+        pairs = [e["pair"] for e in eligible]
+        # WETH/USDC (60 bps > 30) should be rejected by cost filter
+        assert "WETH/USDC" not in pairs
+        assert "USDC/DAI" in pairs
+        assert stats["cost_filter_rejected"] == 1
+
+    def test_cost_filter_default_allows_all(self):
+        from strategy.roundtrip_selection import select_roundtrip_candidates
+
+        opps = [
+            {
+                "pair": "WETH/USDC",
+                "buy_dex": "uniswap_v3", "sell_dex": "sushiswap_v3",
+                "buy_fee": 3000, "sell_fee": 3000,
+                "gross_spread_bps": 80.0, "spread_minus_required_bps": 15.0,
+            },
+        ]
+        eligible, stats = select_roundtrip_candidates(opps, rt_top_n=10)
+        assert len(eligible) == 1
+        assert stats["cost_filter_rejected"] == 0
+
+    def test_margin_ordering_descending(self):
+        """R39q step 5: Candidates ranked by spread_minus_required_bps descending."""
+        from strategy.roundtrip_selection import select_roundtrip_candidates
+
+        opps = [
+            {
+                "pair": "USDC/DAI",
+                "buy_dex": "uniswap_v3", "sell_dex": "pancakeswap_v3",
+                "buy_fee": 100, "sell_fee": 100,
+                "gross_spread_bps": 10.0, "spread_minus_required_bps": 2.0,
+            },
+            {
+                "pair": "USDC/USDT",
+                "buy_dex": "uniswap_v3", "sell_dex": "sushiswap_v3",
+                "buy_fee": 100, "sell_fee": 100,
+                "gross_spread_bps": 15.0, "spread_minus_required_bps": 8.0,
+            },
+            {
+                "pair": "AERO/USDC",
+                "buy_dex": "aerodrome", "sell_dex": "uniswap_v3",
+                "buy_fee": 500, "sell_fee": 500,
+                "gross_spread_bps": 25.0, "spread_minus_required_bps": 5.0,
+            },
+        ]
+        # No chain — pure margin ordering
+        eligible, _ = select_roundtrip_candidates(opps, rt_top_n=10)
+        margins = [e["spread_minus_required_bps"] for e in eligible]
+        assert margins == sorted(margins, reverse=True), \
+            f"Expected descending margin order, got {margins}"

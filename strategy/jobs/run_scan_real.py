@@ -848,6 +848,8 @@ def run_scan(
                 min_margin_bps=_min_margin_bps,
                 chain=chain_key,
                 reserved_slots=config.get("reserved_candidate_slots"),
+                lp_fee_max_bps=config.get("roundtrip_lp_fee_max_bps", 9999.0),
+                slippage_max_bps=config.get("roundtrip_slippage_max_bps", 9999.0),
             )
             stats["roundtrip_lp_filter"] = _rt_filter_stats
             

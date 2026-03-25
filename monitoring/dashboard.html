@@ -42,6 +42,7 @@ tr:hover{background:#1c2128}
 .refresh-btn{background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:.75rem}
 .refresh-btn:hover{background:#30363d}
 #error-msg{color:#f85149;font-size:.85rem;margin:8px 0}
+.src-badge{font-size:.65rem;color:#6e7681;font-weight:400}
 </style>
 </head>
 <body>
@@ -53,42 +54,50 @@ tr:hover{background:#1c2128}
 </h1>
 <div class="meta" id="meta-line">Loading...</div>
 <div id="stale-banner" style="display:none;background:#5d3a00;color:#f0c040;border:1px solid #f0c040;border-radius:6px;padding:6px 12px;margin:6px 0;font-size:.78rem"></div>
+<!-- R39q: Focal chain selector — switches panels 3/4/5/9 to selected chain from long_scan_latest -->
+<div id="chain-selector-bar" style="display:none;margin:8px 0;padding:6px 12px;background:#161b22;border:1px solid #30363d;border-radius:6px;font-size:.8rem">
+  <label style="color:#8b949e;margin-right:8px">Focal chain:</label>
+  <select id="focal-chain-select" onchange="onFocalChainChange()" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:3px 8px;border-radius:4px;font-size:.8rem">
+    <option value="">PRIMARY (run_summary_latest)</option>
+  </select>
+  <span id="focal-chain-info" style="margin-left:10px;color:#6e7681;font-size:.72rem"></span>
+</div>
 <div id="error-msg"></div>
 
 <div class="grid">
   <!-- Panel 0: Hot Loop Live (R28.13 — primary fast-refresh panel) -->
   <div class="panel" id="p-hotloop" style="grid-column:1/-1">
-    <h2>&#9889; Hot Loop Live <span style="font-size:.65rem;color:#6e7681">(fast-refresh from hot_loop_latest.json, 3s poll)</span></h2>
+    <h2>&#9889; Hot Loop Live <span class="src-badge">(HOT hot_loop_latest.json, 1s poll)</span></h2>
     <div id="hotloop-body"></div>
   </div>
 
   <!-- Panel 1: Chain Status -->
   <div class="panel" id="p-chain">
-    <h2>1. Chain Status</h2>
+    <h2>1. Chain Status <span class="src-badge">(MULTI-CHAIN long_scan_latest)</span></h2>
     <div id="chain-body"></div>
   </div>
 
   <!-- Panel 2: Frontier Ranking -->
   <div class="panel" id="p-frontier">
-    <h2>2. Frontier Ranking</h2>
+    <h2>2. Frontier Ranking <span class="src-badge">(MULTI-CHAIN long_scan_latest)</span></h2>
     <div id="frontier-body"></div>
   </div>
 
   <!-- Panel 3: Measured Economics -->
   <div class="panel" id="p-econ">
-    <h2>3. Measured Economics <span style="font-size:.65rem;color:#6e7681">(PRIMARY NORM-ONLY)</span></h2>
+    <h2>3. Measured Economics <span id="econ-source" class="src-badge"></span></h2>
     <div id="econ-body"></div>
   </div>
 
   <!-- Panel 4: Top Routes -->
   <div class="panel" id="p-routes">
-    <h2>4. Top Routes <span style="font-size:.65rem;color:#6e7681">(PRIMARY NORM-ONLY)</span></h2>
+    <h2>4. Top Routes <span id="routes-source" class="src-badge"></span></h2>
     <div id="routes-body"></div>
   </div>
 
   <!-- Panel 5: Fee-Tier Comparison -->
   <div class="panel" id="p-fees">
-    <h2>5. Fee-Tier Comparison <span style="font-size:.65rem;color:#6e7681">(PRIMARY NORM-ONLY)</span></h2>
+    <h2>5. Fee-Tier Comparison <span id="fees-source" class="src-badge"></span></h2>
     <div id="fees-body"></div>
   </div>
 
@@ -112,7 +121,7 @@ tr:hover{background:#1c2128}
 
   <!-- Panel 9: Quality Rejects -->
   <div class="panel" id="p-rejects">
-    <h2>9. Quality Rejects <span style="font-size:.65rem;color:#6e7681">(PRIMARY NORM-ONLY)</span></h2>
+    <h2>9. Quality Rejects <span id="rejects-source" class="src-badge"></span></h2>
     <div id="rejects-body"></div>
   </div>
 
@@ -132,6 +141,7 @@ const badge = (text, c) => `<span class="badge ${c}">${text}</span>`;
 
 let latestRolling = null;
 let latestHot = null;
+let focalChain = '';  // R39q: '' = PRIMARY, else chain key from long_scan
 
 function loadData() {
   loadRollingData();
@@ -168,6 +178,48 @@ function renderRolling(data) {
   const ls = data.long_scan;
   const qs = agg?.quick_stats || {};
 
+  // R39q: Populate focal chain selector from long_scan per_chain keys
+  const selBar = $('chain-selector-bar');
+  const sel = $('focal-chain-select');
+  if (ls?.per_chain && Object.keys(ls.per_chain).length > 0) {
+    selBar.style.display = 'block';
+    const chains = Object.keys(ls.per_chain);
+    const prevVal = sel.value;
+    // Only rebuild options if chain list changed
+    const existingChains = Array.from(sel.options).map(o => o.value).filter(v => v);
+    if (JSON.stringify(chains) !== JSON.stringify(existingChains)) {
+      sel.innerHTML = '<option value="">PRIMARY (run_summary_latest)</option>';
+      for (const c of chains) {
+        sel.innerHTML += `<option value="${c}">${c}</option>`;
+      }
+      sel.value = prevVal || '';
+    }
+    // Update info text
+    const info = $('focal-chain-info');
+    if (focalChain && ls.per_chain[focalChain]) {
+      const cd = ls.per_chain[focalChain];
+      info.textContent = `runs: ${cd.runs||0} | quality: ${cd.last_chain_quality_level||'?'} | updated: ${(cd.last_run_timestamp||'?').slice(0,19)}Z`;
+    } else {
+      info.textContent = '';
+    }
+  } else {
+    selBar.style.display = 'none';
+  }
+
+  // R39q: Resolve focal chain data — PRIMARY vs selected chain
+  const isFocal = focalChain && ls?.per_chain?.[focalChain];
+  const focalRs = isFocal ? ls.per_chain[focalChain].last_run_summary : rs;
+  const focalQs = isFocal ? {} : qs;
+  const focalLabel = isFocal ? `FOCAL: ${focalChain} (long_scan_latest)` : 'PRIMARY (run_summary_latest)';
+  const focalTs = isFocal ? (ls.per_chain[focalChain].last_run_timestamp || '?').slice(0,19)+'Z' : (rs?.timestamp||'?').slice(0,19)+'Z';
+  const srcBadgeHtml = `(${focalLabel} @ ${focalTs})`;
+
+  // Update source badges on focal-sensitive panels
+  $('econ-source').textContent = srcBadgeHtml;
+  $('routes-source').textContent = srcBadgeHtml;
+  $('fees-source').textContent = srcBadgeHtml;
+  $('rejects-source').textContent = srcBadgeHtml;
+
   // Header
   const aggSt = agg?.agg_status || 'N/A';
   const el = $('agg-status');
@@ -200,15 +252,23 @@ function renderRolling(data) {
 
   renderChainStatus(ls);
   renderFrontier(ls);
-  renderEconomics(rs, qs);
-  renderRoutes(rs);
-  renderFees(rs);
+  renderEconomics(focalRs, focalQs, isFocal ? ls.per_chain[focalChain] : null);
+  renderRoutes(focalRs, isFocal ? ls.per_chain[focalChain] : null);
+  renderFees(focalRs, isFocal ? ls.per_chain[focalChain] : null);
   renderAlerts(rs, ls, qs);
   renderDrift(rs, qs, ls);
   renderBlockers(ls);
-  renderRejects(rs);
+  renderRejects(focalRs, isFocal ? ls.per_chain[focalChain] : null);
   renderProbeTargets(ls);
 }
+
+  // R39q: Focal chain change handler
+  function onFocalChainChange() {
+    focalChain = $('focal-chain-select').value;
+    if (latestRolling) renderRolling(latestRolling);
+  }
+  // Make it accessible from inline onchange
+  window.onFocalChainChange = onFocalChainChange;
 
   // Panel 0: Hot Loop Live (R28.13)
   function renderHotLoop(hl) {
@@ -564,12 +624,13 @@ function renderFrontier(ls) {
 }
 
 // Panel 3: Measured Economics
-function renderEconomics(rs, qs) {
-  const sweep = rs?.metrics?.roundtrip?.dynamic_sweep || {};
+function renderEconomics(rs, qs, focalPc) {
+  // R39q: When focal chain selected, use per_chain sweep data from long_scan
+  const sweep = focalPc?.last_sweep || rs?.metrics?.roundtrip?.dynamic_sweep || {};
   const html = `
     <div class="kpi">
       <div class="kpi-item"><div class="kpi-val ${cls(-1*(sweep.gap_to_zero_bps||99))}">${fmt(sweep.gap_to_zero_bps,2)} bps</div><div class="kpi-lbl">Gap to Zero (latest)</div></div>
-      <div class="kpi-item"><div class="kpi-val">${fmt(qs.sweep_gap_to_zero_min,2)} bps</div><div class="kpi-lbl">Gap to Zero (best ever)</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(qs.sweep_gap_to_zero_min ?? sweep.gap_to_zero_bps,2)} bps</div><div class="kpi-lbl">Gap to Zero (best)</div></div>
       <div class="kpi-item"><div class="kpi-val">${fmt(qs.sweep_median_gap_to_zero_bps,2)} bps</div><div class="kpi-lbl">Gap to Zero (median)</div></div>
     </div>
     <table style="margin-top:10px">
@@ -591,20 +652,23 @@ function econRow(label, val, color) {
 }
 
 // Panel 4: Top Routes
-function renderRoutes(rs) {
-  const routes = rs?.inputs?.included_routes || rs?.inputs?.routes || [];
-  const pairs = rs?.inputs?.included_pairs || rs?.inputs?.pairs || [];
+function renderRoutes(rs, focalPc) {
+  // R39q: When focal chain selected, show routes from per_chain data
+  const routes = focalPc?.last_included_routes || rs?.inputs?.included_routes || rs?.inputs?.routes || [];
+  const pairs = focalPc?.last_included_pairs || rs?.inputs?.included_pairs || rs?.inputs?.pairs || [];
+  const chainKey = focalPc?.chain || rs?.inputs?.chain_key || '?';
+  const block = focalPc?.last_current_block || rs?.inputs?.pinned_block || '?';
   let html = '<table><tr><th>Routes</th></tr>';
   for (const r of routes) html += `<tr><td>${r}</td></tr>`;
   html += '</table>';
   html += `<div style="margin-top:8px;font-size:.8rem"><strong>Pairs:</strong> ${pairs.join(', ') || '—'}</div>`;
-  html += `<div style="font-size:.75rem;color:#8b949e;margin-top:4px">Chain: ${rs?.inputs?.chain_key||'?'} | Block: ${rs?.inputs?.pinned_block||'?'}</div>`;
+  html += `<div style="font-size:.75rem;color:#8b949e;margin-top:4px">Chain: ${chainKey} | Block: ${block}</div>`;
   $('routes-body').innerHTML = html;
 }
 
 // Panel 5: Fee-Tier Comparison
-function renderFees(rs) {
-  const opStats = rs?.opportunity_engine_stats || {};
+function renderFees(rs, focalPc) {
+  const opStats = focalPc?.last_opportunity_engine_stats || rs?.opportunity_engine_stats || {};
   const perRoute = opStats.compared_fee_tiers_per_route || {};
   const flat = opStats.compared_fee_tiers || [];
 
@@ -825,10 +889,10 @@ function renderBlockers(ls) {
 }
 
 // Panel 9: Quality Rejects
-function renderRejects(rs) {
-  const reasons = rs?.quality_reasons || [];
-  const warnings = rs?.quality_warnings || [];
-  const metrics = rs?.metrics || {};
+function renderRejects(rs, focalPc) {
+  const reasons = focalPc?.last_quality_reasons || rs?.quality_reasons || [];
+  const warnings = focalPc?.last_quality_warnings || rs?.quality_warnings || [];
+  const metrics = focalPc?.last_metrics || rs?.metrics || {};
   const excluded = metrics.excluded_signals_count || 0;
   const suspect = metrics.suspect_signals_count || 0;
   const fragRate = metrics.fragile_rate;

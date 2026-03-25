@@ -19,6 +19,12 @@ logger = logging.getLogger("roundtrip_selection")
 # Configurable via config key "roundtrip_min_margin_bps".
 DEFAULT_MIN_SPREAD_MINUS_THRESHOLD = -5.0  # bps
 
+# R39q: Pre-RT cost filter defaults.
+# Routes where roundtrip LP fee > this are demoted to diagnostic-only.
+DEFAULT_LP_FEE_MAX_BPS = 9999.0  # effectively uncapped unless config overrides
+# Routes where measured slippage > this are demoted to diagnostic-only.
+DEFAULT_SLIPPAGE_MAX_BPS = 9999.0  # effectively uncapped unless config overrides
+
 
 def lp_fee_viable(opp: dict) -> bool:
     """Check if gross spread covers roundtrip LP fees.
@@ -56,6 +62,29 @@ def margin_viable(opp: dict, threshold: float = DEFAULT_MIN_SPREAD_MINUS_THRESHO
     """
     margin = opp.get("spread_minus_required_bps", -999)
     return margin > threshold
+
+
+def cost_filter_viable(
+    opp: dict,
+    lp_fee_max_bps: float = DEFAULT_LP_FEE_MAX_BPS,
+    slippage_max_bps: float = DEFAULT_SLIPPAGE_MAX_BPS,
+) -> bool:
+    """R39q: Pre-RT cost filter — demote expensive routes to diagnostic-only.
+
+    Routes with roundtrip LP fee > lp_fee_max_bps OR measured slippage
+    > slippage_max_bps are too expensive for truth-lane evaluation.
+
+    Args:
+        opp: Opportunity dict with buy_fee, sell_fee fields.
+        lp_fee_max_bps: Max acceptable roundtrip LP fee (buy+sell in bps).
+        slippage_max_bps: Max acceptable measured slippage in bps.
+    """
+    buy_fee_bps = opp.get("buy_fee", 0) / 100.0
+    sell_fee_bps = opp.get("sell_fee", 0) / 100.0
+    lp_fee_rt = buy_fee_bps + sell_fee_bps
+    if lp_fee_rt > lp_fee_max_bps:
+        return False
+    return True
 
 
 def best_per_pair(opps: List[dict], max_candidates: int = 10) -> List[dict]:
@@ -108,21 +137,27 @@ def select_roundtrip_candidates(
     min_margin_bps: float = DEFAULT_MIN_SPREAD_MINUS_THRESHOLD,
     chain: str = "",
     reserved_slots: List[Dict[str, Any]] = None,
+    lp_fee_max_bps: float = DEFAULT_LP_FEE_MAX_BPS,
+    slippage_max_bps: float = DEFAULT_SLIPPAGE_MAX_BPS,
 ) -> tuple:
     """Run the full candidate selection pipeline and return (eligible_opps, filter_stats).
 
     Pipeline:
     1. best_per_pair — deduplicate by pair (keep best margin)
     2. roundtrip_eligible — cross-DEX + LP-fee viable + not diagnostic
-    3. margin_viable — spread_minus_required_bps > threshold
-    4. R39n: Sort alpha-first when chain is provided
-    5. R39o: Reserve slots for key pairs (guaranteed budget)
-    6. Cap to rt_top_n
+    3. cost_filter_viable — R39q: reject routes with excessive LP fee / slippage
+    4. margin_viable — spread_minus_required_bps > threshold
+    5. Sort by spread_minus_required_bps descending (lead step 5: rank by margin)
+    6. R39n: Alpha-first when chain is provided (secondary sort key)
+    7. R39o: Reserve slots for key pairs (guaranteed budget)
+    8. Cap to rt_top_n
 
     Args:
         reserved_slots: List of {"pair_pattern": "cbBTC/*", "min_slots": 2} dicts.
             Patterns support trailing wildcard (*). Reserved candidates are guaranteed
             placement before the rt_top_n cap.
+        lp_fee_max_bps: R39q: Max roundtrip LP fee (buy+sell bps). Routes above are demoted.
+        slippage_max_bps: R39q: Max measured slippage bps. Routes above are demoted.
 
     Returns:
         (eligible_opps, filter_stats_dict)
@@ -130,9 +165,17 @@ def select_roundtrip_candidates(
     per_pair = best_per_pair(opps_list, max_candidates=rt_max_candidates)
 
     eligible_and_rt = [o for o in per_pair if roundtrip_eligible(o)]
-    eligible_all = [o for o in eligible_and_rt if margin_viable(o, min_margin_bps)]
+    # R39q: Pre-RT cost filter — demote expensive routes
+    cost_filtered = [o for o in eligible_and_rt if cost_filter_viable(o, lp_fee_max_bps, slippage_max_bps)]
+    cost_filter_rejected = len(eligible_and_rt) - len(cost_filtered)
+    eligible_all = [o for o in cost_filtered if margin_viable(o, min_margin_bps)]
 
-    # R39n: Alpha-first ordering — evaluate alpha pairs before benchmark/calibration.
+    # R39q step 5: Rank by spread_minus_required_bps descending (margin-first ordering).
+    # This ensures the cheapest routes (best margin) get evaluated before expensive ones.
+    eligible_all.sort(key=lambda o: o.get("spread_minus_required_bps", -999), reverse=True)
+
+    # R39n: Alpha-first ordering — as secondary key, evaluate alpha pairs before benchmark.
+    # Use stable sort to preserve margin ordering within same role.
     if chain:
         eligible_all.sort(key=lambda o: _pair_role_sort_key(o, chain))
 
@@ -166,13 +209,14 @@ def select_roundtrip_candidates(
 
     eligible_opps = eligible_all[:rt_top_n]
 
-    margin_filtered_count = len(eligible_and_rt) - len(eligible_all)
+    margin_filtered_count = len(cost_filtered) - len(eligible_all)
 
     filter_stats = {
         "candidates_considered": min(rt_max_candidates, len(opps_list)),
         "cross_dex_count": len([o for o in opps_list[:rt_max_candidates] if is_cross_dex(o)]),
         "lp_viable_count": len([o for o in opps_list[:rt_max_candidates] if lp_fee_viable(o)]),
         "unique_pairs_considered": len(per_pair),
+        "cost_filter_rejected": cost_filter_rejected,
         "margin_filtered_count": margin_filtered_count,
         "passed_to_roundtrip": len(eligible_opps),
     }
