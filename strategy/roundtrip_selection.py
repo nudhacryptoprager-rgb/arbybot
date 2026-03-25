@@ -79,6 +79,21 @@ def best_per_pair(opps: List[dict], max_candidates: int = 10) -> List[dict]:
 _ROLE_PRIORITY = {"alpha": 0, "unclassified": 1, "benchmark": 2, "calibration": 3}
 
 
+def _match_pair_pattern(pattern: str, pair: str) -> bool:
+    """Match a pair against a pattern. Supports trailing wildcard: 'cbBTC/*' matches 'cbBTC/USDC'."""
+    if not pattern or not pair:
+        return False
+    if pattern == pair:
+        return True
+    if pattern.endswith("/*"):
+        prefix = pattern[:-2]
+        return pair.startswith(prefix + "/")
+    if pattern.startswith("*/"):
+        suffix = pattern[2:]
+        return pair.endswith("/" + suffix)
+    return False
+
+
 def _pair_role_sort_key(opp: dict, chain: str) -> int:
     """Return numeric priority for alpha-first ordering (0=alpha, 3=calibration)."""
     pair = opp.get("pair", "")
@@ -92,6 +107,7 @@ def select_roundtrip_candidates(
     rt_top_n: int = 10,
     min_margin_bps: float = DEFAULT_MIN_SPREAD_MINUS_THRESHOLD,
     chain: str = "",
+    reserved_slots: List[Dict[str, Any]] = None,
 ) -> tuple:
     """Run the full candidate selection pipeline and return (eligible_opps, filter_stats).
 
@@ -100,7 +116,13 @@ def select_roundtrip_candidates(
     2. roundtrip_eligible — cross-DEX + LP-fee viable + not diagnostic
     3. margin_viable — spread_minus_required_bps > threshold
     4. R39n: Sort alpha-first when chain is provided
-    5. Cap to rt_top_n
+    5. R39o: Reserve slots for key pairs (guaranteed budget)
+    6. Cap to rt_top_n
+
+    Args:
+        reserved_slots: List of {"pair_pattern": "cbBTC/*", "min_slots": 2} dicts.
+            Patterns support trailing wildcard (*). Reserved candidates are guaranteed
+            placement before the rt_top_n cap.
 
     Returns:
         (eligible_opps, filter_stats_dict)
@@ -113,6 +135,34 @@ def select_roundtrip_candidates(
     # R39n: Alpha-first ordering — evaluate alpha pairs before benchmark/calibration.
     if chain:
         eligible_all.sort(key=lambda o: _pair_role_sort_key(o, chain))
+
+    # R39o: Reserved candidate budget — guarantee key pairs get evaluation slots
+    if reserved_slots and eligible_all:
+        reserved: List[dict] = []
+        remaining: List[dict] = []
+        _slot_counts: Dict[str, int] = {}  # pattern -> count reserved
+
+        for opp in eligible_all:
+            pair = opp.get("pair", "")
+            matched_pattern = None
+            for rs in reserved_slots:
+                pat = rs.get("pair_pattern", "")
+                if _match_pair_pattern(pat, pair):
+                    matched_pattern = pat
+                    break
+            if matched_pattern is not None:
+                min_slots = next((rs["min_slots"] for rs in reserved_slots if rs["pair_pattern"] == matched_pattern), 1)
+                current = _slot_counts.get(matched_pattern, 0)
+                if current < min_slots:
+                    reserved.append(opp)
+                    _slot_counts[matched_pattern] = current + 1
+                else:
+                    remaining.append(opp)
+            else:
+                remaining.append(opp)
+
+        # Merge: reserved first, then remaining to fill budget
+        eligible_all = reserved + remaining
 
     eligible_opps = eligible_all[:rt_top_n]
 

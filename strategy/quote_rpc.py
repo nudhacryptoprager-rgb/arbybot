@@ -50,6 +50,35 @@ _QUOTE_CONCURRENCY = 8
 
 
 # =============================================================================
+# R39o: PER-CYCLE 429 QUARANTINE
+# =============================================================================
+# After a (rpc_url, quoter_address) pair receives a 429, quarantine it for the
+# rest of the cycle so subsequent calls go straight to fallback RPCs.
+
+_cycle_quarantine: set = set()  # Set[Tuple[str, str]]
+
+# R39p: Cycle-level primary rotation counter.
+# Each reset_cycle_quarantine() bumps this so the next cycle uses a
+# different endpoint as primary, spreading rate-limit surface evenly.
+_cycle_rotation_counter: int = 0
+
+
+def reset_cycle_quarantine() -> int:
+    """Reset the per-cycle 429 quarantine. Call at the start of each scan cycle.
+    Returns the number of entries cleared."""
+    global _cycle_rotation_counter
+    n = len(_cycle_quarantine)
+    _cycle_quarantine.clear()
+    _cycle_rotation_counter += 1
+    return n
+
+
+def get_cycle_rotation_counter() -> int:
+    """Return current rotation counter for RPC primary rotation."""
+    return _cycle_rotation_counter
+
+
+# =============================================================================
 # QUOTE EXECUTOR + MULTICALL CACHES
 # =============================================================================
 
@@ -266,11 +295,19 @@ def read_quoter_v2(
         return None
 
     # Build ordered list of RPCs to try: primary first, then fallbacks
-    urls_to_try = [rpc_url]
-    if fallback_rpc_urls:
-        for fb in fallback_rpc_urls:
-            if fb and fb != rpc_url and fb not in urls_to_try:
-                urls_to_try.append(fb)
+    # R39o: skip URLs already quarantined this cycle for this quoter
+    urls_to_try = []
+    for _u in [rpc_url] + (fallback_rpc_urls or []):
+        if _u and _u not in urls_to_try:
+            if (_u, quoter_address) in _cycle_quarantine:
+                logger.debug("QuoterV2 skip quarantined RPC %s for quoter %s", _u[:40], quoter_address[:10])
+                continue
+            urls_to_try.append(_u)
+
+    # R39o: All RPCs quarantined for this quoter → immediate rate-limited sentinel
+    if not urls_to_try:
+        logger.debug("QuoterV2 all RPCs quarantined for quoter %s", quoter_address[:10])
+        return QUOTER_RATE_LIMITED
 
     from dex.adapters.uniswap_v3 import (
         decode_quote_response,
@@ -317,6 +354,7 @@ def read_quoter_v2(
         except Exception as e:
             if _is_rate_limit_error(e):
                 logger.info("QuoterV2 rate-limited (429) on %s: %s", url[:40], e)
+                _cycle_quarantine.add((url, quoter_address))  # R39o: quarantine this pair
                 last_error = e
                 continue  # R39n: try next RPC
             logger.debug("QuoterV2 failed on %s: %s", url[:40], e)

@@ -242,6 +242,27 @@ def resolve_universe(
         stats_updates["strategy_mode"] = "UNKNOWN"
     stats_updates["same_dex_only"] = not config.get("require_cross_dex", True)
 
+    # R39o: Hard clamp — restrict pairs to include_pairs whitelist when configured
+    _include_pairs = config.get("include_pairs")
+    if _include_pairs and pairs_list:
+        _allowed = set(_include_pairs)
+        _before = len(pairs_list)
+        pairs_list = [p for p in pairs_list if p.display_name in _allowed]
+        _after = len(pairs_list)
+        if _after < _before:
+            logger.info(
+                "INCLUDE_PAIRS_CLAMP: %d -> %d pairs (whitelist: %s)",
+                _before, _after, sorted(_allowed),
+            )
+        stats_updates["include_pairs_clamp"] = {"before": _before, "after": _after}
+        # R39p: Recalculate downstream counters after clamp so artifacts are consistent
+        stats_updates["discovery_runtime_pairs_count"] = _after
+        _disc = stats_updates.get("discovery_runtime") or {}
+        if _disc:
+            _disc["cross_dex_pairs_count"] = _after
+            _disc["pairs_resolved"] = _after
+            stats_updates["discovery_runtime"] = _disc
+
     # R28.11: Save hot pairs cache after full discovery
     if pairs_list and _us != "hot_requote":
         _write_hot_pairs_cache(chain_key, _us, pairs_list, stats_updates=stats_updates)

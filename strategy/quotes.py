@@ -407,11 +407,23 @@ def collect_quotes(
     # RPC URL for slot0 reads
     # v3.2.32: Config rpc_endpoints take priority over env (multi-chain safety)
     _all_rpc_endpoints = config.get("rpc_endpoints") or []
-    rpc_url = (_all_rpc_endpoints[0] if _all_rpc_endpoints else None) or os.environ.get("ARBY_RPC_HTTP_PRIMARY")
+    # R39p: Rotate primary RPC each cycle to spread rate-limit surface
+    if len(_all_rpc_endpoints) > 1:
+        from strategy.quote_rpc import get_cycle_rotation_counter
+        _rot = get_cycle_rotation_counter() % len(_all_rpc_endpoints)
+        _rotated = _all_rpc_endpoints[_rot:] + _all_rpc_endpoints[:_rot]
+    else:
+        _rotated = list(_all_rpc_endpoints)
+    rpc_url = (_rotated[0] if _rotated else None) or os.environ.get("ARBY_RPC_HTTP_PRIMARY")
     # R39n: Remaining endpoints used as 429 failover for quoter calls
-    _fallback_rpc_urls = _all_rpc_endpoints[1:] if len(_all_rpc_endpoints) > 1 else []
+    _fallback_rpc_urls = _rotated[1:] if len(_rotated) > 1 else []
     skip_rpc = os.environ.get("ARBY_SKIP_RPC") == "1"
     tokens_anchor_price = config.get("tokens_anchor_price") or {}
+
+    # R39o: Load excluded pool addresses (quarantined Aerodrome pools etc.)
+    _excluded_pool_addresses = set(
+        a.lower() for a in (config.get("excluded_pool_addresses") or [])
+    )
     
     # v2.2.0: Multicall prefetch for slot0 batching (Roadmap M5_0 requirement)
     use_multicall = config.get("use_multicall", True)  # Default ON for v2.2.0
@@ -524,6 +536,11 @@ def collect_quotes(
                 pi_dex = pi["dex"]
                 pi_fee = pi["fee"]
                 pi_addr = pi["address"]
+                # R39o: Skip excluded pool addresses
+                if _excluded_pool_addresses and pi_addr and pi_addr.lower() in _excluded_pool_addresses:
+                    counts["excluded_pool_address"] = counts.get("excluded_pool_address", 0) + 1
+                    logger.info("EXCLUDED_POOL_ADDR: %s %s/%s fee=%d addr=%s", pi_dex, token_in, token_out, pi_fee, pi_addr)
+                    continue
                 pi_dex_cfg = get_dex_config(chain_name, pi_dex)
                 pi_adapter = pi_dex_cfg.adapter_type if pi_dex_cfg else None
                 pool_key = make_pool_key(pi_dex, token_pair_tag, pi_fee)
@@ -559,6 +576,11 @@ def collect_quotes(
                         continue
                     pool_addr = get_pool_address(config, dex, token_pair_tag, fee_tier=fee_tier)
                     if pool_addr:
+                        # R39o: Skip excluded pool addresses
+                        if _excluded_pool_addresses and pool_addr.lower() in _excluded_pool_addresses:
+                            counts["excluded_pool_address"] = counts.get("excluded_pool_address", 0) + 1
+                            logger.info("EXCLUDED_POOL_ADDR: %s %s/%s fee=%d addr=%s", dex, token_in, token_out, fee_tier, pool_addr)
+                            continue
                         pool_work_items.append((dex, fee_tier, pool_addr, dex_cfg, adapter_type, pool_key))
                     else:
                         counts["pool_missing"] += 1
@@ -1364,11 +1386,22 @@ def collect_quotes(
                 # R32: Only count genuine failures toward skip cache, NOT rate limits
                 if not _was_rate_limited:
                     _record_quoter_v2_failure(pool_key)
-                # R39n: Alpha pairs must not contaminate truth with slot0 on 429.
-                # If rate-limited on an alpha pair, skip slot0 entirely (unavailable this cycle).
+                # R39o: Full profit contour — when include_pairs is configured AND
+                # rate-limited, skip slot0 for ALL pairs in the whitelist (not just alpha).
+                # If executable quote not obtained, route = unavailable_this_cycle.
                 if _was_rate_limited:
+                    _include_pairs = config.get("include_pairs")
+                    _pair_display = f"{token_in}/{token_out}"
+                    if _include_pairs and _pair_display in _include_pairs:
+                        counts["contour_429_skipped"] = counts.get("contour_429_skipped", 0) + 1
+                        logger.info(
+                            "CONTOUR_429_SKIP: %s %s/%s fee=%d — no slot0 fallback (profit contour)",
+                            dex, token_in, token_out, fee_tier,
+                        )
+                        continue  # Skip slot0 path — unavailable this cycle
+                    # Legacy: alpha check for chains without include_pairs
                     from core.constants import get_pair_role
-                    _pair_role = get_pair_role(f"{token_in}/{token_out}", chain_key)
+                    _pair_role = get_pair_role(_pair_display, chain_key)
                     if _pair_role == "alpha":
                         counts["alpha_429_skipped"] = counts.get("alpha_429_skipped", 0) + 1
                         logger.info(
@@ -1376,7 +1409,7 @@ def collect_quotes(
                             dex, token_in, token_out, fee_tier,
                         )
                         continue  # Skip slot0 path — unavailable this cycle
-                # Non-alpha or non-rate-limited: fall through to slot0 path below
+                # Non-contour or non-rate-limited: fall through to slot0 path below
             
             # Path B: slot0 fallback — DIAGNOSTIC CHANNEL only (R28)
             # slot0 reads are NOT executable quotes; they provide price reference

@@ -23,7 +23,11 @@ chain_id: 8453
 
 run_kind: COVERAGE
 
+# R39p: More RPCs to spread rate-limit surface. First two have better
+# quoter throughput than mainnet.base.org (which 429s aggressively).
 rpc_endpoints:
+  - "https://base.drpc.org"
+  - "https://base.publicnode.com"
   - "https://mainnet.base.org"
   - "https://base.public.blastapi.io"
 
@@ -61,25 +65,44 @@ excluded_pair_hints:
   - "*/DEGEN"
   - "*/TOSHI"
 
+# R39p: Quarantine all failing Aerodrome ve33 pools (VE33_QUOTE_FAILED).
+# Original 3 from R39o + 4 more from fresh reject_histogram (WETH/USDC, USDC/DAI).
+excluded_pool_addresses:
+  - "0x7f670f78b17dec44d5ef68a48740b6f8849cc2e6"
+  - "0x80abe24a3ef1fc593ac5da960f232ca23b2069d0"
+  - "0x2578365b3dfa7ffe60108e181efb79feddec2319"
+  - "0x4f5f4b7381b2445937dab831fc1952ecbb834e53"
+  - "0x67b00b46fa4f4f24c03855c5c8013c0b938b3eec"
+  - "0xcdac0d6c6c59727a65f871236188350531885c43"
+  - "0x3548029694fbb241d45fb24ba0cd9c9d4e745f16"
+
 roundtrip_max_candidates: 50
 roundtrip_top_n: 15
+
+# R39p: Reserved slots — only pairs with proven executable throughput.
+# cbBTC/* removed until they achieve >=1 executable quote per run.
+reserved_candidate_slots:
+  - pair_pattern: "WETH/USDC"
+    min_slots: 1
+  - pair_pattern: "AERO/USDC"
+    min_slots: 1
 
 use_multicall: true
 use_quoter_v2: true
 
 use_usd_notional: true
 discovery_probe_size_usd: 10
-target_usd_notional: 150.0
+target_usd_notional: 50.0
 
 min_spread_bps: 5
-paper_size_usd: 150
+paper_size_usd: 50
 paper_slippage_bps: 5
 gas_usd_estimate: 0.05
 
-# R39n: Narrow sweep corridor for profit convergence — no RPC budget on 500..10000
+# R39o: Tight sweep corridor aligned to $50 frontier — no RPC budget above $100
 dynamic_probe:
   enabled: true
-  sizes_usd: [25, 50, 75, 100, 150, 250]
+  sizes_usd: [25, 50, 75, 100]
   top_routes: 15
 
 truth_mode_m42: true

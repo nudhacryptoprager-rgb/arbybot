@@ -312,6 +312,12 @@ def run_scan(
     
     # Collect quotes with resolved pairs
     _phase_quote_start = _time.monotonic()
+
+    # R39o: Reset per-cycle 429 quarantine before quotes
+    from strategy.quote_rpc import reset_cycle_quarantine
+    _quarantine_cleared = reset_cycle_quarantine()
+    if _quarantine_cleared:
+        logger.info("CYCLE_QUARANTINE_RESET: cleared %d entries", _quarantine_cleared)
     
     _emit_phase("quote_started", chain=chain_key, pairs=len(pairs_list) if pairs_list else 0)
     quotes_sample, rejected_quotes, counts = collect_quotes(config, current_block, rpc_latency, pairs_list=pairs_list)
@@ -374,6 +380,26 @@ def run_scan(
         stats["rpc_success_rate"] = 0.0 if stats.get("rpc_errors", 0) > 0 else 1.0
     
     logger.info("Quotes: %d valid, %d rejected", len(quotes_sample), len(rejected_quotes))
+
+    # R39p: Prune hot-pairs cache — only keep pairs that produced executable quotes.
+    # This prevents dead pairs from being re-quoted in hot loop cycles.
+    if pairs_list and stats.get("scan_mode") != "hot":
+        _executable_pairs = set()
+        for _q in quotes_sample:
+            if not _q.get("is_diagnostic_only"):
+                _tin = _q.get("token_in", "")
+                _tout = _q.get("token_out", "")
+                if _tin and _tout:
+                    _executable_pairs.add(f"{_tin}/{_tout}")
+        if _executable_pairs:
+            _pruned = [p for p in pairs_list if p.display_name in _executable_pairs]
+            if len(_pruned) < len(pairs_list):
+                logger.info(
+                    "HOT_CACHE_PRUNE: %d -> %d pairs (executable: %s)",
+                    len(pairs_list), len(_pruned), sorted(_executable_pairs),
+                )
+                from strategy.scan_universe import _write_hot_pairs_cache
+                _write_hot_pairs_cache(chain_key, stats.get("universe_source", "config"), _pruned, stats_updates=stats)
     
     _phase_quote_end = _time.monotonic()
     
@@ -821,6 +847,7 @@ def run_scan(
                 rt_top_n=_rt_top_n,
                 min_margin_bps=_min_margin_bps,
                 chain=chain_key,
+                reserved_slots=config.get("reserved_candidate_slots"),
             )
             stats["roundtrip_lp_filter"] = _rt_filter_stats
             
