@@ -418,7 +418,7 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
     # R39r: Flashblocks sub-block watcher for Base structural advantage
     flashblocks_watcher: Any = None
     try:
-        from chains.flashblocks import FlashblocksWatcher
+        from chains.flashblocks import FlashblocksWatcher, get_flashblocks_ws_url
         # Only start if "base" is in our chain set
         if "base" in per_chain:
             _fb_ws = None
@@ -431,6 +431,8 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             base_cfg = per_chain.get("base", {}).get("config") or {}
             if isinstance(base_cfg, dict):
                 _fb_ws = base_cfg.get("flashblocks_ws_endpoint") or _fb_ws
+            # R39r+: Env var ARBY_FLASHBLOCKS_WS overrides config (private provider)
+            _fb_ws = get_flashblocks_ws_url(_fb_ws)
             if _fb_ws:
                 flashblocks_watcher = FlashblocksWatcher(ws_url=_fb_ws)
                 flashblocks_watcher.start()

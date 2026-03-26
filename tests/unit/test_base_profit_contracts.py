@@ -276,16 +276,22 @@ class TestBaseProfitConfig:
         assert max(sizes) <= 100, "Max size must not exceed 100 for profit lane"
 
     def test_include_pairs_contour(self):
+        """R39r+: Active contour = 4 pairs (2 PRIMARY + 1 BENCHMARK + 1 DIAGNOSTIC).
+        cbBTC/* removed — never materialized in runtime truth path."""
         config_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "config", "onboard_base_profit.yaml"
         )
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
         pairs = cfg.get("include_pairs", [])
-        assert len(pairs) == 6
-        assert "cbBTC/USDC" in pairs
-        assert "cbBTC/WETH" in pairs
+        assert len(pairs) == 4, f"Expected 4 active pairs, got {len(pairs)}: {pairs}"
+        assert "USDC/DAI" in pairs
+        assert "USDC/USDT" in pairs
+        assert "WETH/USDC" in pairs
         assert "AERO/USDC" in pairs
+        # cbBTC/* must NOT be in active include_pairs (INACTIVE)
+        assert "cbBTC/USDC" not in pairs
+        assert "cbBTC/WETH" not in pairs
 
     def test_no_duplicate_yaml_keys(self):
         """Ensure tokens_anchor_price appears exactly once in the raw YAML."""

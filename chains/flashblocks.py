@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time as _time
 from dataclasses import dataclass, field
@@ -38,6 +39,20 @@ DEFAULT_FLASHBLOCKS_HTTP = "https://base.flashblocks.base.org"
 
 # Sub-block interval on Base with Flashblocks (~200ms)
 FLASHBLOCKS_SUB_BLOCK_MS = 200
+
+
+def get_flashblocks_ws_url(config_url: str | None = None) -> str:
+    """Resolve Flashblocks WS URL: env var > config > default.
+
+    Env var ARBY_FLASHBLOCKS_WS allows operators to plug in private
+    providers (e.g., bloXroute Base Fast RPC) without config changes.
+    """
+    return os.environ.get("ARBY_FLASHBLOCKS_WS") or config_url or DEFAULT_FLASHBLOCKS_WS
+
+
+def get_flashblocks_http_url(config_url: str | None = None) -> str:
+    """Resolve Flashblocks HTTP URL: env var > config > default."""
+    return os.environ.get("ARBY_FLASHBLOCKS_HTTP") or config_url or DEFAULT_FLASHBLOCKS_HTTP
 
 
 @dataclass
@@ -260,5 +275,141 @@ def check_flashblocks_health(
         return {
             "reachable": False,
             "block_number": None,
+            "error": str(e),
+        }
+
+
+# ── Execution proof stubs (R39r+ steps 3-4) ─────────────────────────
+#
+# These stubs implement the two key RPC methods for Base execution proof:
+#   1. eth_simulateV1 — dry-run TX against pending Flashblocks state
+#   2. base_transactionStatus — poll TX confirmation post-submit
+#
+# Current state: stubs that return structured error/result dicts.
+# Next step: wire into execution/preflight.py once private Flashblocks
+# provider is configured (ARBY_FLASHBLOCKS_HTTP env var).
+
+
+def eth_simulate_v1(
+    tx: dict[str, Any],
+    http_url: str | None = None,
+    timeout_s: float = 5.0,
+) -> dict[str, Any]:
+    """Call eth_simulateV1 via Flashblocks-aware RPC.
+
+    Simulates a transaction against the latest Flashblocks pending state.
+    Returns simulation result or structured error.
+
+    Args:
+        tx: Transaction dict (from, to, data, value, gas).
+        http_url: Flashblocks HTTP endpoint. Falls back to env/config/default.
+        timeout_s: HTTP timeout.
+
+    Returns:
+        {"success": bool, "result": ..., "error": ..., "gas_used": ...}
+    """
+    url = get_flashblocks_http_url(http_url)
+    import httpx
+
+    try:
+        response = httpx.post(
+            url,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_simulateV1",
+                "params": [
+                    {
+                        "blockStateCalls": [
+                            {"calls": [tx]},
+                        ],
+                    },
+                    "pending",
+                ],
+            },
+            timeout=timeout_s,
+        )
+        data = response.json()
+        if "error" in data:
+            return {
+                "success": False,
+                "result": None,
+                "error": data["error"].get("message", "unknown"),
+                "gas_used": None,
+            }
+        sim_result = data.get("result", [{}])
+        # Extract first call result
+        call_results = []
+        if isinstance(sim_result, list):
+            for block_result in sim_result:
+                for cr in (block_result.get("calls") or []):
+                    call_results.append(cr)
+        first = call_results[0] if call_results else {}
+        return {
+            "success": first.get("status") == "0x1",
+            "result": first.get("returnData"),
+            "error": first.get("error"),
+            "gas_used": int(first["gasUsed"], 16) if first.get("gasUsed") else None,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "result": None,
+            "error": str(e),
+            "gas_used": None,
+        }
+
+
+def base_transaction_status(
+    tx_hash: str,
+    http_url: str | None = None,
+    timeout_s: float = 5.0,
+) -> dict[str, Any]:
+    """Poll base_transactionStatus for transaction confirmation.
+
+    Uses Base-specific RPC method that provides faster finality signals
+    than eth_getTransactionReceipt when using Flashblocks-aware endpoints.
+
+    Args:
+        tx_hash: Transaction hash (0x-prefixed).
+        http_url: Flashblocks HTTP endpoint. Falls back to env/config/default.
+        timeout_s: HTTP timeout.
+
+    Returns:
+        {"status": str, "confirmed": bool, "error": ...}
+        status values: "pending", "included", "finalized", "unknown", "error"
+    """
+    url = get_flashblocks_http_url(http_url)
+    import httpx
+
+    try:
+        response = httpx.post(
+            url,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "base_transactionStatus",
+                "params": [tx_hash],
+            },
+            timeout=timeout_s,
+        )
+        data = response.json()
+        if "error" in data:
+            return {
+                "status": "error",
+                "confirmed": False,
+                "error": data["error"].get("message", "unknown"),
+            }
+        result = data.get("result", {})
+        tx_status = result.get("status", "unknown") if isinstance(result, dict) else str(result)
+        return {
+            "status": tx_status,
+            "confirmed": tx_status in ("included", "finalized"),
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "confirmed": False,
             "error": str(e),
         }

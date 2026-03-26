@@ -305,5 +305,175 @@ class TestHotLoopSnapshotFlashblocks(unittest.TestCase):
             self.assertNotIn("flashblocks", data)
 
 
+class TestFlashblocksEnvVarOverride(unittest.TestCase):
+    """R39r+: Env var override for Flashblocks endpoints."""
+
+    def test_get_ws_url_default(self):
+        import os
+        from chains.flashblocks import get_flashblocks_ws_url, DEFAULT_FLASHBLOCKS_WS
+        os.environ.pop("ARBY_FLASHBLOCKS_WS", None)
+        self.assertEqual(get_flashblocks_ws_url(), DEFAULT_FLASHBLOCKS_WS)
+
+    def test_get_ws_url_config_override(self):
+        import os
+        from chains.flashblocks import get_flashblocks_ws_url
+        os.environ.pop("ARBY_FLASHBLOCKS_WS", None)
+        self.assertEqual(
+            get_flashblocks_ws_url("wss://custom.example.com/ws"),
+            "wss://custom.example.com/ws",
+        )
+
+    def test_get_ws_url_env_override(self):
+        import os
+        from chains.flashblocks import get_flashblocks_ws_url
+        os.environ["ARBY_FLASHBLOCKS_WS"] = "wss://private.bloxroute.com/ws"
+        try:
+            self.assertEqual(
+                get_flashblocks_ws_url("wss://config.example.com/ws"),
+                "wss://private.bloxroute.com/ws",
+            )
+        finally:
+            os.environ.pop("ARBY_FLASHBLOCKS_WS", None)
+
+    def test_get_http_url_default(self):
+        import os
+        from chains.flashblocks import get_flashblocks_http_url, DEFAULT_FLASHBLOCKS_HTTP
+        os.environ.pop("ARBY_FLASHBLOCKS_HTTP", None)
+        self.assertEqual(get_flashblocks_http_url(), DEFAULT_FLASHBLOCKS_HTTP)
+
+    def test_get_http_url_env_override(self):
+        import os
+        from chains.flashblocks import get_flashblocks_http_url
+        os.environ["ARBY_FLASHBLOCKS_HTTP"] = "https://private.bloxroute.com"
+        try:
+            self.assertEqual(
+                get_flashblocks_http_url("https://config.example.com"),
+                "https://private.bloxroute.com",
+            )
+        finally:
+            os.environ.pop("ARBY_FLASHBLOCKS_HTTP", None)
+
+
+class TestEthSimulateV1Stub(unittest.TestCase):
+    """R39r+: eth_simulateV1 stub returns structured result."""
+
+    def test_importable(self):
+        from chains.flashblocks import eth_simulate_v1
+        self.assertTrue(callable(eth_simulate_v1))
+
+    def test_returns_error_on_unreachable(self):
+        """Calling against a non-existent endpoint returns error dict."""
+        from chains.flashblocks import eth_simulate_v1
+        result = eth_simulate_v1(
+            tx={"from": "0x0", "to": "0x0", "data": "0x"},
+            http_url="https://127.0.0.1:1/nonexistent",
+            timeout_s=0.5,
+        )
+        self.assertFalse(result["success"])
+        self.assertIsNotNone(result["error"])
+        self.assertIn("gas_used", result)
+
+    def test_result_keys(self):
+        """eth_simulate_v1 always returns expected keys."""
+        from chains.flashblocks import eth_simulate_v1
+        result = eth_simulate_v1(
+            tx={"from": "0x0", "to": "0x0", "data": "0x"},
+            http_url="https://127.0.0.1:1/nonexistent",
+            timeout_s=0.5,
+        )
+        for key in ("success", "result", "error", "gas_used"):
+            self.assertIn(key, result)
+
+
+class TestBaseTransactionStatusStub(unittest.TestCase):
+    """R39r+: base_transactionStatus stub returns structured result."""
+
+    def test_importable(self):
+        from chains.flashblocks import base_transaction_status
+        self.assertTrue(callable(base_transaction_status))
+
+    def test_returns_error_on_unreachable(self):
+        from chains.flashblocks import base_transaction_status
+        result = base_transaction_status(
+            tx_hash="0xdead",
+            http_url="https://127.0.0.1:1/nonexistent",
+            timeout_s=0.5,
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertFalse(result["confirmed"])
+        self.assertIsNotNone(result["error"])
+
+    def test_result_keys(self):
+        from chains.flashblocks import base_transaction_status
+        result = base_transaction_status(
+            tx_hash="0xdead",
+            http_url="https://127.0.0.1:1/nonexistent",
+            timeout_s=0.5,
+        )
+        for key in ("status", "confirmed", "error"):
+            self.assertIn(key, result)
+
+
+class TestPoolUsageReportInTruthData(unittest.TestCase):
+    """R39r+: pool_usage_report propagated to truth data."""
+
+    def test_pool_usage_propagated(self):
+        from strategy.artifacts import build_truth_data
+        stats = {
+            "quotes_total": 5,
+            "quotes_fetched": 3,
+            "dexes_active": 2,
+            "price_sanity_passed": 3,
+            "price_sanity_failed": 0,
+            "pool_usage_report": [
+                {
+                    "pool_address": "0xabc",
+                    "pair": "USDC/DAI",
+                    "dex_id": "uniswap_v3",
+                    "fee": 100,
+                    "quotes_fetched": 2,
+                    "quotes_rejected": 0,
+                    "spread_signals": 1,
+                    "opp_count": 0,
+                    "rt_evaluated": 0,
+                },
+            ],
+        }
+        truth = build_truth_data(
+            config={"chain_id": 8453, "chain": "base"},
+            stats=stats,
+            current_block=100,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertIn("pool_usage_report", truth)
+        self.assertEqual(len(truth["pool_usage_report"]), 1)
+        self.assertEqual(truth["pool_usage_report"][0]["pool_address"], "0xabc")
+
+    def test_no_pool_usage_when_absent(self):
+        from strategy.artifacts import build_truth_data
+        stats = {
+            "quotes_total": 0,
+            "quotes_fetched": 0,
+            "dexes_active": 0,
+            "price_sanity_passed": 0,
+            "price_sanity_failed": 0,
+        }
+        truth = build_truth_data(
+            config={"chain_id": 8453, "chain": "base"},
+            stats=stats,
+            current_block=100,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertNotIn("pool_usage_report", truth)
+
+
 if __name__ == "__main__":
     unittest.main()

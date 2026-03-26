@@ -1406,6 +1406,59 @@ def run_scan(
         sweep_candidates=sweep_candidates,
         sweep_results=_sweep_results_for_trace,
     )
+
+    # R39r+: Per-pool usage report — pool-level visibility for operator RCA.
+    # Shows which pools are productive vs dead weight in the active contour.
+    _pool_usage: Dict[str, Dict[str, Any]] = {}
+    for q in quotes_sample:
+        _pa = q.get("pool_address", "")
+        if not _pa:
+            continue
+        if _pa not in _pool_usage:
+            _pool_usage[_pa] = {
+                "pool_address": _pa,
+                "pair": q.get("token_in", "") + "/" + q.get("token_out", ""),
+                "dex_id": q.get("dex_id", ""),
+                "fee": q.get("fee"),
+                "quotes_fetched": 0,
+                "quotes_rejected": 0,
+                "spread_signals": 0,
+                "opp_count": 0,
+                "rt_evaluated": 0,
+            }
+        _pool_usage[_pa]["quotes_fetched"] += 1
+    for rq in rejected_quotes:
+        _pa = rq.get("pool_address", "")
+        if not _pa:
+            continue
+        if _pa not in _pool_usage:
+            _pool_usage[_pa] = {
+                "pool_address": _pa,
+                "pair": rq.get("pair", ""),
+                "dex_id": rq.get("dex_id", ""),
+                "fee": rq.get("fee"),
+                "quotes_fetched": 0,
+                "quotes_rejected": 0,
+                "spread_signals": 0,
+                "opp_count": 0,
+                "rt_evaluated": 0,
+            }
+        _pool_usage[_pa]["quotes_rejected"] += 1
+    for ss in spread_signals:
+        for side in ("buy", "sell"):
+            _pa = ss.get(f"{side}_pool_address", "")
+            if _pa in _pool_usage:
+                _pool_usage[_pa]["spread_signals"] += 1
+    for rt_r in roundtrip_results:
+        for attr in ("leg1_pool", "leg2_pool"):
+            _pa = getattr(rt_r, attr, "") or ""
+            if _pa in _pool_usage:
+                _pool_usage[_pa]["rt_evaluated"] += 1
+    stats["pool_usage_report"] = sorted(
+        _pool_usage.values(),
+        key=lambda x: x["quotes_fetched"],
+        reverse=True,
+    )
     
     # R28.24: Roundtrip truth status — separate from diagnostic profit_status.
     # When roundtrip.profitable_count=0 but one-leg total_net_usdc>0,

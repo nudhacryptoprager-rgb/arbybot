@@ -63,13 +63,22 @@ require_cross_dex: true
 
 # R39q: Profit lane pairs — cheap fee/size routes first, expensive diagnostic last.
 # Lead review R39p step 2-3: stop WETH/USDC from eating alpha budget.
+#
+# R39r+ CONTOUR LOCK (runtime-verified 2026-03-26 fresh scan):
+#   PRIMARY:    USDC/DAI, USDC/USDT — closest to zero gap, productive quotes
+#   BENCHMARK:  WETH/USDC — cost-filtered at 60bps > 30 max, diagnostic only
+#   DIAGNOSTIC: AERO/USDC — quotes_fetched=2, spread_signals=0, tail diagnostic
+#   INACTIVE:   cbBTC/USDC, cbBTC/WETH — never materialized in runtime truth path
+#
+# DO NOT re-add INACTIVE pairs until they demonstrate real_quote_count > 0
+# for 3+ consecutive cycles in a live scan.
 include_pairs:
-  - "USDC/DAI"
-  - "USDC/USDT"
-  - "cbBTC/USDC"
-  - "cbBTC/WETH"
-  - "AERO/USDC"
-  - "WETH/USDC"
+  - "USDC/DAI"       # PRIMARY — gap ~2 bps, reserved slot
+  - "USDC/USDT"      # PRIMARY — gap ~3 bps, reserved slot
+  - "WETH/USDC"      # BENCHMARK — lp_fee=101 bps roundtrip, diagnostic only
+  - "AERO/USDC"      # DIAGNOSTIC — quotes_fetched=2, spread_signals=0
+  # cbBTC/USDC      # INACTIVE — never materialized (0 quotes, 0 signals)
+  # cbBTC/WETH      # INACTIVE — never materialized (0 quotes, 0 signals)
 
 # R28.27: Exclude known-dead/stale pairs on base
 excluded_pair_hints:
@@ -106,6 +115,10 @@ roundtrip_slippage_max_bps: 150
 # on spread_minus_required_bps like all other pairs — no guaranteed budget until
 # they demonstrate real_quote_count > 0 for 3+ consecutive cycles.
 # It stays in include_pairs for diagnostic visibility but loses guaranteed budget.
+#
+# R39r+ EXPANSION POLICY: Do NOT add new pairs or pools until executable truth
+# is proven (real_quote_count > 0, roundtrip_evaluated > 0) on existing contour.
+# New pool only if it strengthens USDC/USDT or USDC/DAI throughput.
 reserved_candidate_slots:
   - pair_pattern: "USDC/DAI"
     min_slots: 1

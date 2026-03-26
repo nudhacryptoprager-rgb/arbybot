@@ -39,10 +39,14 @@ chain_id: 42161
 run_kind: NORMAL
 
 # RPC endpoints with fallback
+# R39r+: Strengthened to 5 endpoints (was 3). blastapi had 429s degrading
+# benchmark quality. publicnode + drpc added for rate-limit surface.
 rpc_endpoints:
   - "https://arb1.arbitrum.io/rpc"
   - "https://arbitrum-one.public.blastapi.io"
   - "https://rpc.ankr.com/arbitrum"
+  - "https://arbitrum.publicnode.com"
+  - "https://arbitrum.drpc.org"
 
 # RPC settings
 rpc_timeout_seconds: 10

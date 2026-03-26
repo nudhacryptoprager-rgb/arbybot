@@ -736,6 +736,10 @@ def build_truth_data(
     # R29: Pair-level funnel trace — propagated from stats for truth-report self-containment
     if stats.get("pair_funnel_trace"):
         truth_data["pair_funnel_trace"] = stats["pair_funnel_trace"]
+
+    # R39r+: Per-pool usage report — pool-level operational visibility
+    if stats.get("pool_usage_report"):
+        truth_data["pool_usage_report"] = stats["pool_usage_report"]
     
     return truth_data
 

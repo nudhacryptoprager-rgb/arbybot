@@ -11,6 +11,8 @@ arbitrum_one:
   rpc_endpoints:
     - "https://arb1.arbitrum.io/rpc"
     - "https://arbitrum-one.public.blastapi.io"
+    - "https://arbitrum.publicnode.com"
+    - "https://arbitrum.drpc.org"
   ws_endpoints:
     - "wss://arb1.arbitrum.io/ws"
   block_time_ms: 250
@@ -34,60 +36,63 @@ base:
   block_time_ms: 2000
   confirmations: 1
 
-linea:
-  chain_id: 59144
-  name: "Linea"
-  native_symbol: "ETH"
-  wrapped_native: "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f"  # WETH
-  explorer: "https://lineascan.build"
-  rpc_endpoints:
-    - "https://rpc.linea.build"
-    - "https://linea.public.blastapi.io"
-  ws_endpoints:
-    - "wss://linea.public.blastapi.io"
-  block_time_ms: 2000
-  confirmations: 1
-
-mantle:
-  chain_id: 5000
-  name: "Mantle"
-  native_symbol: "MNT"
-  wrapped_native: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8"  # WMNT
-  explorer: "https://explorer.mantle.xyz"
-  rpc_endpoints:
-    - "https://rpc.mantle.xyz"
-    - "https://mantle.public.blastapi.io"
-  ws_endpoints:
-    - "wss://mantle.public.blastapi.io"
-  block_time_ms: 2000
-  confirmations: 1
-
-# v3.2.20: Scroll (L2 on Ethereum)
-scroll:
-  chain_id: 534352
-  name: "Scroll"
-  native_symbol: "ETH"
-  wrapped_native: "0x5300000000000000000000000000000000000004"  # WETH
-  explorer: "https://scrollscan.com"
-  rpc_endpoints:
-    - "https://rpc.scroll.io"
-    - "https://scroll.public.blastapi.io"
-  ws_endpoints:
-    - "wss://scroll.public.blastapi.io"
-  block_time_ms: 3000
-  confirmations: 1
-
-# v3.2.20: zkSync Era (ZK-rollup on Ethereum)
-zksync:
-  chain_id: 324
-  name: "zkSync Era"
-  native_symbol: "ETH"
-  wrapped_native: "0x5AEa5775959fBC2557Cc8789bC1bf90A239D9a91"  # WETH
-  explorer: "https://explorer.zksync.io"
-  rpc_endpoints:
-    - "https://mainnet.era.zksync.io"
-    - "https://zksync.public.blastapi.io"
-  ws_endpoints:
-    - "wss://zksync.public.blastapi.io"
-  block_time_ms: 1000
-  confirmations: 1
+# R39r+: DORMANT CHAINS — 0 valid quotes, 0 dexes_active in fresh 10-min scan (2026-03-26).
+# Blocked by infra (QUOTER_V2_FAILED, V3_SLOT0_FAILED), not market.
+# Return to active only after demonstrating quotes_fetched > 0 in a live scan.
+# Adapter configs preserved in dexes.yaml for readiness testing.
+#
+# linea:
+#   chain_id: 59144
+#   name: "Linea"
+#   native_symbol: "ETH"
+#   wrapped_native: "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f"
+#   explorer: "https://lineascan.build"
+#   rpc_endpoints:
+#     - "https://rpc.linea.build"
+#     - "https://linea.public.blastapi.io"
+#   ws_endpoints:
+#     - "wss://linea.public.blastapi.io"
+#   block_time_ms: 2000
+#   confirmations: 1
+#
+# mantle:
+#   chain_id: 5000
+#   name: "Mantle"
+#   native_symbol: "MNT"
+#   wrapped_native: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8"
+#   explorer: "https://explorer.mantle.xyz"
+#   rpc_endpoints:
+#     - "https://rpc.mantle.xyz"
+#     - "https://mantle.public.blastapi.io"
+#   ws_endpoints:
+#     - "wss://mantle.public.blastapi.io"
+#   block_time_ms: 2000
+#   confirmations: 1
+#
+# scroll:
+#   chain_id: 534352
+#   name: "Scroll"
+#   native_symbol: "ETH"
+#   wrapped_native: "0x5300000000000000000000000000000000000004"
+#   explorer: "https://scrollscan.com"
+#   rpc_endpoints:
+#     - "https://rpc.scroll.io"
+#     - "https://scroll.public.blastapi.io"
+#   ws_endpoints:
+#     - "wss://scroll.public.blastapi.io"
+#   block_time_ms: 3000
+#   confirmations: 1
+#
+# zksync:
+#   chain_id: 324
+#   name: "zkSync Era"
+#   native_symbol: "ETH"
+#   wrapped_native: "0x5AEa5775959fBC2557Cc8789bC1bf90A239D9a91"
+#   explorer: "https://explorer.zksync.io"
+#   rpc_endpoints:
+#     - "https://mainnet.era.zksync.io"
+#     - "https://zksync.public.blastapi.io"
+#   ws_endpoints:
+#     - "wss://zksync.public.blastapi.io"
+#   block_time_ms: 1000
+#   confirmations: 1

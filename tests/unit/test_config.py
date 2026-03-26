@@ -95,14 +95,14 @@ class TestConfigLoading(unittest.TestCase):
         self.assertTrue(address.startswith("0x"))
 
     def test_all_chains_have_ws_endpoints(self):
-        """R39h+: All 6 active chains must have at least one ws_endpoint configured."""
+        """R39h+: All active chains must have at least one ws_endpoint configured."""
         if not (CONFIG_DIR / "chains.yaml").exists():
             self.skipTest("chains.yaml not found")
 
         from config import load_chains
         chains = load_chains()
-        active = ["arbitrum_one", "base", "linea", "mantle", "scroll", "zksync"]
-        for chain_key in active:
+        # R39r+: Only active chains (linea/mantle/scroll/zksync dormant — 0 valid quotes)
+        for chain_key in chains:
             ws = chains[chain_key].get("ws_endpoints", [])
             self.assertTrue(
                 len(ws) > 0,

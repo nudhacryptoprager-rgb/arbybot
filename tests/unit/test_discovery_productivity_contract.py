@@ -30,9 +30,17 @@ from strategy.scan_universe import resolve_universe
 # ---------------------------------------------------------------------------
 # All active onboarding configs that use discovery_runtime
 # ---------------------------------------------------------------------------
+# R39r+: zksync/mantle/linea/scroll dormant (0 valid quotes, 0 dexes_active).
+# Their onboard configs still exist but reference chains removed from chains.yaml.
+# Validator correctly fails them with "Chain X not in chains.yaml".
+# Only base_stage2 remains as active discovery_runtime config.
 DISCOVERY_RUNTIME_CONFIGS = [
-    "config/onboard_zksync_candidate.yaml",
     "config/onboard_base_stage2.yaml",
+]
+
+# Dormant configs — kept for reference, not validated against chains.yaml
+DORMANT_DISCOVERY_CONFIGS = [
+    "config/onboard_zksync_candidate.yaml",
     "config/onboard_mantle_stage2.yaml",
     "config/onboard_linea_stage1.yaml",
     "config/onboard_scroll_stage1.yaml",
