@@ -740,6 +740,10 @@ def build_truth_data(
     # R39r+: Per-pool usage report — pool-level operational visibility
     if stats.get("pool_usage_report"):
         truth_data["pool_usage_report"] = stats["pool_usage_report"]
+
+    # R39r+ steps 2-4: Flashblocks execution proof — eth_simulateV1 + base_transactionStatus
+    if stats.get("flashblocks_execution_proof"):
+        truth_data["flashblocks_execution_proof"] = stats["flashblocks_execution_proof"]
     
     return truth_data
 

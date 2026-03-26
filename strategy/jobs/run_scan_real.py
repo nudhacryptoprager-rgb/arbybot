@@ -1446,9 +1446,15 @@ def run_scan(
         _pool_usage[_pa]["quotes_rejected"] += 1
     for ss in spread_signals:
         for side in ("buy", "sell"):
-            _pa = ss.get(f"{side}_pool_address", "")
+            _pa = ss.get(f"{side}_pool", "")
             if _pa in _pool_usage:
                 _pool_usage[_pa]["spread_signals"] += 1
+    for opp in opps_list:
+        if isinstance(opp, dict):
+            for side in ("buy_pool", "sell_pool"):
+                _pa = opp.get(side, "")
+                if _pa and _pa in _pool_usage:
+                    _pool_usage[_pa]["opp_count"] += 1
     for rt_r in roundtrip_results:
         for attr in ("leg1_pool", "leg2_pool"):
             _pa = getattr(rt_r, attr, "") or ""
@@ -1459,7 +1465,113 @@ def run_scan(
         key=lambda x: x["quotes_fetched"],
         reverse=True,
     )
-    
+
+    # R39r+ steps 2-4: Flashblocks execution proof probe for Base chain.
+    # Proves eth_simulateV1 and base_transactionStatus participate in runtime,
+    # not just health badge. Uses Flashblocks HTTP for pending-state QuoterV2 call.
+    if chain_key == "base" and spread_signals:
+        try:
+            from chains.flashblocks import (
+                eth_simulate_v1,
+                base_transaction_status,
+                get_flashblocks_http_url,
+            )
+            from dex.adapters.uniswap_v3 import encode_quote_exact_input_single
+
+            _fb_http = get_flashblocks_http_url(config.get("flashblocks_http_endpoint"))
+            _fb_probe_results = []
+
+            # Probe top 3 spread signals with eth_simulateV1
+            for _ss in spread_signals[:3]:
+                _buy_pool = _ss.get("buy_pool", "")
+                _pair = _ss.get("pair", "")
+                _buy_dex = _ss.get("buy_dex", "")
+                _buy_fee = _ss.get("buy_fee", 3000)
+                # Spread signals store tokens as pair string "TOKEN_IN/TOKEN_OUT"
+                _pair_tokens = _pair.split("/") if _pair else []
+                _tin = _pair_tokens[0] if len(_pair_tokens) > 1 else ""
+                _tout = _pair_tokens[1] if len(_pair_tokens) > 1 else ""
+
+                # Resolve token addresses for QuoterV2 encoding
+                _tin_addr = get_token_address(chain_key, _tin) if _tin else None
+                _tout_addr = get_token_address(chain_key, _tout) if _tout else None
+
+                # Resolve quoter address for the buy DEX
+                _dex_cfg = get_dex_config(chain_key, _buy_dex) if _buy_dex else None
+                _quoter_addr = _dex_cfg.get_quoter_address() if _dex_cfg else None
+
+                if not _tin_addr or not _tout_addr or not _quoter_addr:
+                    _fb_probe_results.append({
+                        "pair": _pair,
+                        "dex": _buy_dex,
+                        "sim_success": False,
+                        "sim_error": "missing_addresses",
+                        "sim_gas_used": None,
+                    })
+                    continue
+
+                # Encode QuoterV2 call for eth_simulateV1
+                _probe_amount = int(50e6)  # 50 USDC (6 decimals) as probe
+                # For non-stablecoin inputs, use 1e16 (~0.01 ETH)
+                if _tin not in ("USDC", "USDT", "DAI", "USDbC"):
+                    _probe_amount = int(1e16)
+
+                _calldata = encode_quote_exact_input_single(
+                    token_in=_tin_addr,
+                    token_out=_tout_addr,
+                    amount_in=_probe_amount,
+                    fee=_buy_fee,
+                )
+                _sim_tx = {
+                    "from": "0x0000000000000000000000000000000000000000",
+                    "to": _quoter_addr,
+                    "data": "0x" + _calldata if not _calldata.startswith("0x") else _calldata,
+                }
+                _sim = eth_simulate_v1(_sim_tx, http_url=_fb_http, timeout_s=5.0)
+                _fb_probe_results.append({
+                    "pair": _pair,
+                    "dex": _buy_dex,
+                    "sim_success": _sim["success"],
+                    "sim_error": _sim.get("error"),
+                    "sim_gas_used": _sim.get("gas_used"),
+                })
+
+            # Diagnostic: call base_transactionStatus with a null hash
+            # Proves the RPC method exists and endpoint responds
+            _tx_status = base_transaction_status(
+                tx_hash="0x0000000000000000000000000000000000000000000000000000000000000000",
+                http_url=_fb_http,
+                timeout_s=3.0,
+            )
+
+            _sim_success_count = sum(1 for r in _fb_probe_results if r["sim_success"])
+            stats["flashblocks_execution_proof"] = {
+                "http_endpoint": _fb_http,
+                "probed_count": len(_fb_probe_results),
+                "sim_success_count": _sim_success_count,
+                "sim_results": _fb_probe_results,
+                "tx_status_reachable": _tx_status.get("status") != "error",
+                "tx_status_raw": _tx_status,
+            }
+            if _sim_success_count > 0:
+                logger.info(
+                    "Flashblocks execution proof: %d/%d sim OK via %s",
+                    _sim_success_count, len(_fb_probe_results), _fb_http,
+                )
+            else:
+                logger.info(
+                    "Flashblocks execution proof: 0/%d sim OK (endpoint: %s, error: %s)",
+                    len(_fb_probe_results), _fb_http,
+                    _fb_probe_results[0].get("sim_error") if _fb_probe_results else "none",
+                )
+        except Exception as _fb_err:
+            logger.debug("Flashblocks execution proof skipped: %s", _fb_err)
+            stats["flashblocks_execution_proof"] = {
+                "probed_count": 0,
+                "sim_success_count": 0,
+                "error": str(_fb_err),
+            }
+
     # R28.24: Roundtrip truth status — separate from diagnostic profit_status.
     # When roundtrip.profitable_count=0 but one-leg total_net_usdc>0,
     # operator must see that no real roundtrip profit exists.

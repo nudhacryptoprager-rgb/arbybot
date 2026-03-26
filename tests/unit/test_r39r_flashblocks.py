@@ -8,6 +8,8 @@ Tests:
 4. structural_advantage_met: lane summary respects flashblocks_healthy flag
 5. classify_chain_profit_state: gate blocks ONE_LEG_ONLY_DIAGNOSTIC promotion
 6. write_hot_loop_snapshot: flashblocks_watcher parameter accepted & surfaced
+7. R39r+ steps 2-4: flashblocks_execution_proof propagated to truth data
+8. encode_quote_exact_input_single wiring for Flashblocks probe
 """
 
 from __future__ import annotations
@@ -473,6 +475,179 @@ class TestPoolUsageReportInTruthData(unittest.TestCase):
             spread_threshold_bps=5,
         )
         self.assertNotIn("pool_usage_report", truth)
+
+
+class TestFlashblocksExecutionProofInTruthData(unittest.TestCase):
+    """R39r+ steps 2-4: flashblocks_execution_proof propagated to truth data."""
+
+    def _make_proof(self, **overrides):
+        proof = {
+            "http_endpoint": "https://base.flashblocks.base.org",
+            "probed_count": 3,
+            "sim_success_count": 2,
+            "sim_results": [
+                {"pair": "USDC/DAI", "dex": "uniswap_v3", "sim_success": True,
+                 "sim_error": None, "sim_gas_used": 120000},
+                {"pair": "USDC/USDT", "dex": "aerodrome_v3", "sim_success": True,
+                 "sim_error": None, "sim_gas_used": 115000},
+                {"pair": "WETH/USDC", "dex": "uniswap_v3", "sim_success": False,
+                 "sim_error": "revert", "sim_gas_used": None},
+            ],
+            "tx_status_reachable": True,
+            "tx_status_raw": {"status": "unknown", "confirmed": False, "error": None},
+        }
+        proof.update(overrides)
+        return proof
+
+    def _make_stats(self, proof=None):
+        stats = {
+            "quotes_total": 5,
+            "quotes_fetched": 3,
+            "dexes_active": 2,
+            "price_sanity_passed": 3,
+            "price_sanity_failed": 0,
+        }
+        if proof is not None:
+            stats["flashblocks_execution_proof"] = proof
+        return stats
+
+    def test_proof_propagated_to_truth(self):
+        from strategy.artifacts import build_truth_data
+        proof = self._make_proof()
+        truth = build_truth_data(
+            config={"chain_id": 8453, "chain": "base"},
+            stats=self._make_stats(proof),
+            current_block=100,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertIn("flashblocks_execution_proof", truth)
+        self.assertEqual(truth["flashblocks_execution_proof"]["probed_count"], 3)
+        self.assertEqual(truth["flashblocks_execution_proof"]["sim_success_count"], 2)
+        self.assertTrue(truth["flashblocks_execution_proof"]["tx_status_reachable"])
+
+    def test_proof_absent_when_not_in_stats(self):
+        from strategy.artifacts import build_truth_data
+        truth = build_truth_data(
+            config={"chain_id": 8453, "chain": "base"},
+            stats=self._make_stats(proof=None),
+            current_block=100,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertNotIn("flashblocks_execution_proof", truth)
+
+    def test_proof_structure_keys(self):
+        """Verify the expected keys in the proof dict."""
+        from strategy.artifacts import build_truth_data
+        proof = self._make_proof()
+        truth = build_truth_data(
+            config={"chain_id": 8453, "chain": "base"},
+            stats=self._make_stats(proof),
+            current_block=100,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        fb = truth["flashblocks_execution_proof"]
+        for key in ("http_endpoint", "probed_count", "sim_success_count",
+                     "sim_results", "tx_status_reachable", "tx_status_raw"):
+            self.assertIn(key, fb, f"Missing key: {key}")
+
+    def test_sim_results_per_candidate_keys(self):
+        """Each sim result must have pair, dex, sim_success."""
+        from strategy.artifacts import build_truth_data
+        proof = self._make_proof()
+        truth = build_truth_data(
+            config={"chain_id": 8453, "chain": "base"},
+            stats=self._make_stats(proof),
+            current_block=100,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        for r in truth["flashblocks_execution_proof"]["sim_results"]:
+            self.assertIn("pair", r)
+            self.assertIn("dex", r)
+            self.assertIn("sim_success", r)
+
+    def test_proof_with_zero_successes(self):
+        """Proof with 0 sim successes still propagated (endpoint was unreachable)."""
+        from strategy.artifacts import build_truth_data
+        proof = self._make_proof(
+            sim_success_count=0,
+            tx_status_reachable=False,
+            tx_status_raw={"status": "error", "confirmed": False, "error": "timeout"},
+        )
+        truth = build_truth_data(
+            config={"chain_id": 8453, "chain": "base"},
+            stats=self._make_stats(proof),
+            current_block=100,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertIn("flashblocks_execution_proof", truth)
+        self.assertEqual(truth["flashblocks_execution_proof"]["sim_success_count"], 0)
+        self.assertFalse(truth["flashblocks_execution_proof"]["tx_status_reachable"])
+
+    def test_error_only_proof_propagated(self):
+        """Error-only proof (from except branch) has minimal keys."""
+        from strategy.artifacts import build_truth_data
+        error_proof = {"probed_count": 0, "sim_success_count": 0, "error": "import failed"}
+        truth = build_truth_data(
+            config={"chain_id": 8453, "chain": "base"},
+            stats=self._make_stats(error_proof),
+            current_block=100,
+            spread_signals=[],
+            suspect_examples=[],
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertIn("flashblocks_execution_proof", truth)
+        self.assertEqual(truth["flashblocks_execution_proof"]["probed_count"], 0)
+        self.assertIn("error", truth["flashblocks_execution_proof"])
+
+
+class TestEncodeQuoteExactInputSingleWiring(unittest.TestCase):
+    """R39r+: Verify encode_quote_exact_input_single works for Flashblocks probe."""
+
+    def test_encode_returns_hex_string(self):
+        from dex.adapters.uniswap_v3 import encode_quote_exact_input_single
+        result = encode_quote_exact_input_single(
+            token_in="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
+            token_out="0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",  # DAI on Base
+            amount_in=int(50e6),
+            fee=100,
+        )
+        self.assertIsInstance(result, str)
+        # Should start with the selector (8 hex chars)
+        self.assertTrue(len(result) >= 8)
+
+    def test_encode_probe_amount_stablecoin(self):
+        """50 USDC (6 decimals) = 50_000_000 correctly encoded."""
+        from dex.adapters.uniswap_v3 import encode_quote_exact_input_single
+        result = encode_quote_exact_input_single(
+            token_in="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            token_out="0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",
+            amount_in=int(50e6),
+            fee=100,
+        )
+        # amountIn = 50_000_000 = 0x2faf080 — should appear in encoded data
+        self.assertIn("2faf080", result.lower())
 
 
 if __name__ == "__main__":
