@@ -229,6 +229,7 @@ def write_hot_loop_snapshot(
     active_runs: dict[str, dict[str, Any]] | None = None,
     is_test_session: bool = False,
     output_path: Path | None = None,
+    flashblocks_watcher: Any = None,
 ) -> None:
     """Write lightweight hot_loop_latest.json after each hot re-quote batch."""
     run_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -291,6 +292,18 @@ def write_hot_loop_snapshot(
     if pair_hot_queue:
         try:
             snapshot["pair_hot_queue"] = pair_hot_queue.status()
+        except Exception:
+            pass
+
+    # R39r: Flashblocks watcher status
+    if flashblocks_watcher:
+        try:
+            fb_state = flashblocks_watcher.state
+            snapshot["flashblocks"] = {
+                "connected": fb_state.connected,
+                "last_sub_block_number": fb_state.last_sub_block_number,
+                "is_healthy": fb_state.is_healthy,
+            }
         except Exception:
             pass
 

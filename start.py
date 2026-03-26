@@ -415,6 +415,34 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         print(f"  DirtySet: disabled ({_ds_err})")
         dirty_tracker = None
 
+    # R39r: Flashblocks sub-block watcher for Base structural advantage
+    flashblocks_watcher: Any = None
+    try:
+        from chains.flashblocks import FlashblocksWatcher
+        # Only start if "base" is in our chain set
+        if "base" in per_chain:
+            _fb_ws = None
+            chains_yaml_fb = Path("config") / "chains.yaml"
+            if chains_yaml_fb.exists():
+                with open(chains_yaml_fb, encoding="utf-8") as _fbf:
+                    _fby = yaml.safe_load(_fbf) or {}
+                _fb_ws = _fby.get("base", {}).get("flashblocks_ws_endpoint")
+            # Also check per-chain config override
+            base_cfg = per_chain.get("base", {}).get("config") or {}
+            if isinstance(base_cfg, dict):
+                _fb_ws = base_cfg.get("flashblocks_ws_endpoint") or _fb_ws
+            if _fb_ws:
+                flashblocks_watcher = FlashblocksWatcher(ws_url=_fb_ws)
+                flashblocks_watcher.start()
+                print(f"  FlashblocksWatcher: started for base ({_fb_ws})")
+            else:
+                print("  FlashblocksWatcher: no flashblocks_ws_endpoint for base")
+        else:
+            print("  FlashblocksWatcher: base not in chain set, skipped")
+    except Exception as _fb_err:
+        print(f"  FlashblocksWatcher: disabled ({_fb_err})")
+        flashblocks_watcher = None
+
     # R28.13 Step 7: Per-pair hot queue — load cached pairs for immediate re-quote
     pair_hot_queue: Any = None
     try:
@@ -504,6 +532,7 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
                 live_events=live_events,
                 active_runs=active_runs,
                 is_test_session=_is_test_session,
+                flashblocks_watcher=flashblocks_watcher,
             )
 
     _append_live_event(
@@ -685,6 +714,10 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
 
     # R28.5: Batched round — primary sequential, then coverage parallel
     while time.monotonic() < deadline:
+        # R39r: Inject Flashblocks health into per_chain stats for lane summary
+        if flashblocks_watcher and "base" in per_chain:
+            per_chain["base"]["flashblocks_healthy"] = flashblocks_watcher.state.is_healthy
+
         # Phase 1: Run primary (NORMAL) configs sequentially (isolated, rolling-safe)
         # R28.12: Use pending_chains() for priority ordering (earliest-dirty first)
         if dirty_tracker:
@@ -825,6 +858,10 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
     # R28.11: Stop dirty-set watcher threads
     if dirty_tracker:
         dirty_tracker.stop()
+
+    # R39r: Final Flashblocks health injection before summary
+    if flashblocks_watcher and "base" in per_chain:
+        per_chain["base"]["flashblocks_healthy"] = flashblocks_watcher.state.is_healthy
 
     wall_seconds = time.monotonic() - wall_start
     warnings = check_guardrails(per_chain)

@@ -19,7 +19,7 @@ If deprecated → MUST keep alias for 2 milestones minimum.
 
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 # =============================================================================
 # SCHEMA VERSION
@@ -331,6 +331,14 @@ STRUCTURAL_ADVANTAGE_REQUIRED: Dict[str, str] = {
     "base": "flashblocks_preconf",
 }
 
+# R39r: Promotion gate — Base requires executable truth (not just low gap)
+# These thresholds must ALL be met for a chain to be considered "executable truth ready"
+EXECUTABLE_TRUTH_GATE: Dict[str, Any] = {
+    "min_real_quote_count_total": 1,      # At least 1 roundtrip with real (QuoterV2) quotes
+    "min_roundtrip_evaluated_total": 1,   # At least 1 roundtrip actually evaluated
+    "forbidden_profit_realism": "ONE_LEG_ONLY_DIAGNOSTIC",  # Must escape diagnostic-only
+}
+
 
 # =============================================================================
 # PAIR ROLES (R39m — MEV-informed pair classification)
@@ -439,6 +447,7 @@ __all__ = [
     # R39m: MEV-informed classification
     "CHAIN_ROLES",
     "STRUCTURAL_ADVANTAGE_REQUIRED",
+    "EXECUTABLE_TRUTH_GATE",
     "PAIR_ROLES",
     "get_pair_role",
     "MEV_CROWDING_PENALTY_BPS",

@@ -15,6 +15,13 @@
 # PURPOSE: Base profit-lane convergence. Alpha pairs (cbBTC, AERO) + calibration.
 # RUN_KIND: COVERAGE
 #
+# R39r CONTOUR LOCK: USDC/DAI and USDC/USTT are the primary profit routes.
+# WETH/USDC is benchmark/diagnostic ONLY (cost-filtered at 60 bps > 30 max).
+# DO NOT expand contour until executable truth proven (real_quote_count > 0).
+#
+# BLOCKER: Not generic RPC — missing Flashblocks/preconf execution edge.
+# Next step: integrate Flashblocks read-path, then fast submit-path.
+#
 # WORKFLOW:
 #   py -3.11 start.py --config-list config/real_minimal.yaml,config/onboard_base_profit.yaml --minutes 10 --cycles 1
 
@@ -34,6 +41,13 @@ rpc_endpoints:
 rpc_timeout_seconds: 10
 rpc_retries: 3
 rpc_backoff_base_ms: 500
+
+# R39r: Flashblocks read-path (public, rate-limited — NOT for production submit).
+# Provides pending state, sub-block (~200ms) events, eth_simulateV1.
+# Reference: https://docs.base.org/base-chain/flashblocks/api-reference
+# Lead step 4: Public endpoints rate-limited, not for production traffic.
+flashblocks_ws_endpoint: "wss://base.flashblocks.base.org/ws"
+flashblocks_http_endpoint: "https://base.flashblocks.base.org"
 
 universe_source: discovery_runtime
 
@@ -110,10 +124,11 @@ paper_size_usd: 50
 paper_slippage_bps: 5
 gas_usd_estimate: 0.05
 
-# R39o: Tight sweep corridor aligned to $50 frontier — no RPC budget above $100
+# R39r: Narrow sweep corridor — keep tight until executable proof exists.
+# Lead step 7: $25/$50/$75 only, no budget above $75 before executable edge.
 dynamic_probe:
   enabled: true
-  sizes_usd: [25, 50, 75, 100]
+  sizes_usd: [25, 50, 75]
   top_routes: 15
 
 truth_mode_m42: true

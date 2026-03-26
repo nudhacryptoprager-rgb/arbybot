@@ -272,7 +272,7 @@ class TestBaseProfitConfig:
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
         sizes = cfg["dynamic_probe"]["sizes_usd"]
-        assert sizes == [25, 50, 75, 100], "R39o: Sweep sizes aligned to $50 frontier"
+        assert sizes == [25, 50, 75], "R39r: Sweep sizes narrowed to $25/$50/$75 corridor"
         assert max(sizes) <= 100, "Max size must not exceed 100 for profit lane"
 
     def test_include_pairs_contour(self):

@@ -12,7 +12,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from strategy.chain_stats import SANE_ROUNDTRIP_PNL_BPS_MAX, SANE_ROUNDTRIP_PNL_BPS_MIN
-from core.constants import CHAIN_ROLES, LANE_ASSIGNMENTS, STRUCTURAL_ADVANTAGE_REQUIRED
+from core.constants import (
+    CHAIN_ROLES,
+    EXECUTABLE_TRUTH_GATE,
+    LANE_ASSIGNMENTS,
+    STRUCTURAL_ADVANTAGE_REQUIRED,
+)
 
 # Imported constant for hot_loop section in summary
 FULL_SWEEP_INTERVAL = 5
@@ -55,7 +60,9 @@ def classify_chain_profit_state(stats: dict[str, Any]) -> str:
     if profitable > 0 and not sane:
         return "SUSPECT_ACCOUNTING"
     if profitable > 0 and rq_total >= 2:
-        if last_prs == "ONE_LEG_ONLY_DIAGNOSTIC" or last_qs == "FAIL_QUALITY":
+        # R39r: EXECUTABLE_TRUTH_GATE — block promotion when evidence is
+        # diagnostic-only (ONE_LEG_ONLY_DIAGNOSTIC) or quality check failed.
+        if last_prs == EXECUTABLE_TRUTH_GATE["forbidden_profit_realism"] or last_qs == "FAIL_QUALITY":
             return "THIN_POSITIVE"
         return "CONFIRMED_POSITIVE_CONTROL"
     if profitable > 0:
@@ -489,7 +496,11 @@ def _compute_lane_summary(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any
                 entry["best_gap_to_zero_bps"] = round(gap, 4)
 
         if structural_req is not None:
-            entry["structural_advantage_met"] = False
+            # R39r: Check per-chain health flag injected by orchestrator
+            if structural_req == "flashblocks_preconf" and s.get("flashblocks_healthy"):
+                pass  # structural advantage met via Flashblocks connectivity
+            else:
+                entry["structural_advantage_met"] = False
 
     return lanes
 
