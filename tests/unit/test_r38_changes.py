@@ -454,6 +454,34 @@ class TestChainStatsSweepMeasured:
         slip_result = _slip if _slip is not None else sweep.get("best_slippage_bps")
         assert slip_result is None
 
+    def test_sweep_routes_evaluated_total_accumulates(self):
+        """R39x+2: sweep_routes_evaluated_total accumulates routes_swept from dynamic_sweep."""
+        from strategy.chain_stats import new_chain_stats, update_chain_stats
+
+        stats = new_chain_stats()
+        summary = {
+            "status": "PASS",
+            "metrics": {
+                "included_signals_count": 10,
+                "roundtrip": {
+                    "evaluated_count": 0,
+                    "real_quote_count": 0,
+                    "dynamic_sweep": {
+                        "routes_swept": 3,
+                        "best_net_pnl_bps": -8.7,
+                        "gap_to_zero_bps": 8.7,
+                    },
+                },
+            },
+            "run_context": {"run_timestamp": "2026-03-27T00:00:00Z"},
+        }
+        update_chain_stats(stats, exit_code=0, run_dir=None, summary=summary)
+        assert stats["sweep_routes_evaluated_total"] == 3
+        assert stats["roundtrip_evaluated_total"] == 0  # OE path stays zero
+        # Second run accumulates
+        update_chain_stats(stats, exit_code=0, run_dir=None, summary=summary)
+        assert stats["sweep_routes_evaluated_total"] == 6
+
 
 # ---------- 11. R39: pair_trace gas_bps from reject_reason ----------
 

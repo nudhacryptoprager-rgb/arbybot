@@ -69,6 +69,7 @@ def new_chain_stats() -> dict[str, Any]:
         "last_intent_pairs_count": None,  # R39h: signal funnel — total from intent.txt
         "last_pairs_after_excludes": None,  # R39h: signal funnel — after exclude filter
         "sweep_reprieve_rt_total": 0,  # R39h: RT from sweep reprieve (explains sig=0 + rt>0 gap)
+        "sweep_routes_evaluated_total": 0,  # R39x+2: sweep evaluation work visible to operators
         "rt_without_signal_total": 0,  # R39h+: RT evaluated on runs where included_signals_count=0
         "last_quality_reasons": [],
         "accepted_fail": False,
@@ -278,6 +279,10 @@ def update_chain_stats(
             prev_gap = stats.get("best_measured_spread_gap_bps")
             stats["best_measured_spread_gap_bps"] = run_gap if prev_gap is None else max(prev_gap, run_gap)
         sweep = rt.get("dynamic_sweep", {})
+        # R39x+2: Accumulate sweep routes evaluated for operator visibility
+        _routes_swept = sweep.get("routes_swept", 0)
+        if _routes_swept:
+            stats["sweep_routes_evaluated_total"] = stats.get("sweep_routes_evaluated_total", 0) + int(_routes_swept)
         # R39i: Use `is None` instead of falsy `or` — 0.0 is a valid value.
         sweep_pnl = sweep.get("best_net_pnl_bps")
         if sweep_pnl is None:
