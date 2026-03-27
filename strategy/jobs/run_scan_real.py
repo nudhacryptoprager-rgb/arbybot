@@ -619,10 +619,32 @@ def run_scan(
                 if sf is not None:
                     _fee_tiers_per_route[route_key].add(int(sf))
 
+        # R39v: Truth-lane reranking.
+        # When truth_mode_m42, top_opportunities should reflect measured
+        # economics (from spread_signals with QuoterV2 slippage), not paper
+        # net_profit_usd.  This surfaces stable pairs (USDC/DAI: -17 bps)
+        # above toxic volatile routes (WETH/USDC: -282 bps) that pass the
+        # paper gate but are deeply unviable when measured.
+        _paper_top = opps_list[:5] if opps_list else []
+        if truth_mode_m42 and spread_signals:
+            _actionable_signals = [
+                s for s in spread_signals if not s.get("is_diagnostic_only")
+            ]
+            _truth_lane_top = sorted(
+                _actionable_signals,
+                key=lambda s: s.get("spread_minus_required_bps", -9999),
+                reverse=True,
+            )[:5]
+        else:
+            _truth_lane_top = None
+
         stats["opportunity_engine"] = {
             "enabled": True,
             "summary": opps_summary,
-            "top_opportunities": opps_list[:5] if opps_list else [],
+            # R39v: measured-economics ranked when truth_mode_m42
+            "top_opportunities": _truth_lane_top if _truth_lane_top is not None else _paper_top,
+            # R39v: paper-ranked OE opps preserved for diagnostic layer
+            "_paper_top_opportunities": _paper_top if _truth_lane_top is not None else [],
             "truth_mode_m42": truth_mode_m42,
             "one_leg_profit_is_diagnostic": truth_mode_m42,
             # v3.5.0: Runtime proof of which fee tiers were really compared

@@ -877,5 +877,123 @@ class TestBlockerEvidenceRqZeroNotEconomics(unittest.TestCase):
         self.assertEqual(stats["blocker_evidence"], "OE_ECONOMICS")
 
 
+class TestTruthLaneReranking(unittest.TestCase):
+    """R39v: Truth-lane reranking demotes toxic one-leg routes.
+
+    CONTRACT: When truth_mode_m42=true, top_opportunities must be ranked by
+    measured economics (spread_minus_required_bps from spread_signals), NOT by
+    paper net_profit_usd.  A WETH/USDC route with positive paper PnL but deeply
+    negative measured surplus (-282 bps) must NOT outrank a USDC/DAI route with
+    smaller paper PnL but much better measured surplus (-17 bps).
+    """
+
+    @staticmethod
+    def _rank_truth_lane(spread_signals):
+        """Replicate the truth-lane ranking from run_scan_real.py."""
+        actionable = [s for s in spread_signals if not s.get("is_diagnostic_only")]
+        return sorted(
+            actionable,
+            key=lambda s: s.get("spread_minus_required_bps", -9999),
+            reverse=True,
+        )[:5]
+
+    def test_toxic_weth_demoted_below_stable_pair(self):
+        """WETH/USDC one-leg positive + measured negative → NOT top truth-lane candidate."""
+        signals = [
+            # Toxic: positive paper PnL but deeply negative measured economics
+            {"pair": "WETH/USDC", "route": "pancakeswap_v3->uniswap_v3",
+             "spread_minus_required_bps": -281.94, "net_pnl_usdc_est": 0.877,
+             "effective_slippage_bps": 359.39, "is_diagnostic_only": False},
+            {"pair": "WETH/USDC", "route": "pancakeswap_v3->sushiswap_v3",
+             "spread_minus_required_bps": -291.51, "net_pnl_usdc_est": 0.849,
+             "effective_slippage_bps": 359.33, "is_diagnostic_only": False},
+            # Stable: small paper PnL but much better measured margin
+            {"pair": "USDC/DAI", "route": "uniswap_v3->sushiswap_v3",
+             "spread_minus_required_bps": -17.29, "net_pnl_usdc_est": -0.046,
+             "effective_slippage_bps": 5.0, "is_diagnostic_only": False},
+            {"pair": "USDC/DAI", "route": "uniswap_v3->pancakeswap_v3",
+             "spread_minus_required_bps": -17.31, "net_pnl_usdc_est": -0.047,
+             "effective_slippage_bps": 5.0, "is_diagnostic_only": False},
+        ]
+        ranked = self._rank_truth_lane(signals)
+        # USDC/DAI (-17 bps) must rank above WETH/USDC (-282 bps)
+        self.assertEqual(ranked[0]["pair"], "USDC/DAI")
+        self.assertEqual(ranked[1]["pair"], "USDC/DAI")
+        self.assertEqual(ranked[2]["pair"], "WETH/USDC")
+        self.assertEqual(ranked[3]["pair"], "WETH/USDC")
+
+    def test_stable_pair_survives_truth_lane_ordering(self):
+        """USDC/DAI or USDC/USDT with better measured margin → top truth-lane candidate."""
+        signals = [
+            {"pair": "WETH/USDC", "route": "sushiswap_v3->uniswap_v3",
+             "spread_minus_required_bps": -708.53, "net_pnl_usdc_est": 4.35,
+             "effective_slippage_bps": 1481.28, "is_diagnostic_only": False},
+            {"pair": "USDC/USDT", "route": "pancakeswap_v3->sushiswap_v3",
+             "spread_minus_required_bps": -79.02, "net_pnl_usdc_est": 0.20,
+             "effective_slippage_bps": 20.25, "is_diagnostic_only": False},
+            {"pair": "USDC/DAI", "route": "uniswap_v3->sushiswap_v3",
+             "spread_minus_required_bps": -17.29, "net_pnl_usdc_est": -0.05,
+             "effective_slippage_bps": 5.0, "is_diagnostic_only": False},
+        ]
+        ranked = self._rank_truth_lane(signals)
+        # Stable pair (USDC/DAI) is closest to zero → #1
+        self.assertEqual(ranked[0]["pair"], "USDC/DAI")
+        # USDC/USDT → #2
+        self.assertEqual(ranked[1]["pair"], "USDC/USDT")
+        # Toxic WETH/USDC → #3 (last)
+        self.assertEqual(ranked[2]["pair"], "WETH/USDC")
+
+    def test_diagnostic_only_excluded_from_truth_lane(self):
+        """Diagnostic-only signals must NOT appear in truth-lane ranking."""
+        signals = [
+            {"pair": "WETH/USDC", "route": "slot0_diag",
+             "spread_minus_required_bps": -10.0, "is_diagnostic_only": True},
+            {"pair": "USDC/DAI", "route": "uniswap_v3->sushiswap_v3",
+             "spread_minus_required_bps": -17.29, "is_diagnostic_only": False},
+        ]
+        ranked = self._rank_truth_lane(signals)
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["pair"], "USDC/DAI")
+
+    def test_truth_lane_empty_when_no_actionable_signals(self):
+        """All diagnostic → truth-lane is empty."""
+        signals = [
+            {"pair": "WETH/USDC", "spread_minus_required_bps": -10.0, "is_diagnostic_only": True},
+        ]
+        ranked = self._rank_truth_lane(signals)
+        self.assertEqual(ranked, [])
+
+    def test_paper_top_preserved_separately(self):
+        """Paper-ranked OE opps are preserved as _paper_top_opportunities when truth_mode_m42."""
+        # Simulate what run_scan_real.py does
+        opps_list = [
+            {"pair": "WETH/USDC", "net_profit_usd": 0.17, "gate_passed": True,
+             "measured_spread_minus_required_bps": -282},
+        ]
+        spread_signals = [
+            {"pair": "USDC/DAI", "spread_minus_required_bps": -17.29, "is_diagnostic_only": False},
+        ]
+        truth_mode_m42 = True
+
+        _paper_top = opps_list[:5]
+        if truth_mode_m42 and spread_signals:
+            _actionable = [s for s in spread_signals if not s.get("is_diagnostic_only")]
+            _truth_lane_top = sorted(
+                _actionable,
+                key=lambda s: s.get("spread_minus_required_bps", -9999),
+                reverse=True,
+            )[:5]
+        else:
+            _truth_lane_top = None
+
+        top_opps = _truth_lane_top if _truth_lane_top is not None else _paper_top
+        paper_diag = _paper_top if _truth_lane_top is not None else []
+
+        # top_opportunities should be truth-lane (USDC/DAI)
+        self.assertEqual(top_opps[0]["pair"], "USDC/DAI")
+        # _paper_top_opportunities preserved for diagnostics
+        self.assertEqual(paper_diag[0]["pair"], "WETH/USDC")
+
+
 if __name__ == "__main__":
     unittest.main()
