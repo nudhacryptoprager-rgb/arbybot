@@ -22,6 +22,12 @@ from core.constants import (
 # Imported constant for hot_loop section in summary
 FULL_SWEEP_INTERVAL = 5
 
+# R39w: Repeatability-informed frontier pair promotion
+# Minimum sweep samples for a pair to be considered for promotion
+_REPEAT_MIN_SAMPLES = 3
+# Current sweep_best_pair must have this ratio worse median_gap vs best alternative
+_REPEAT_PROMOTION_GAP_RATIO = 2.0
+
 
 def _roundtrip_accounting_is_sane(stats: dict[str, Any]) -> bool:
     """R28.17: Guard against contaminated roundtrip accounting.
@@ -144,8 +150,11 @@ def build_summary(
             "rt_without_signal": _rwos,
         }
 
+    # R39w: Override sweep_best_pair when repeatability evidence is stronger
+    _apply_repeatability_frontier(per_chain)
+
     summary = {
-        "schema": "start:long_scan_summary:v1.15",  # R39h: signal funnel observability
+        "schema": "start:long_scan_summary:v1.16",  # R39w: repeatability frontier promotion
         "generated_at": run_ts,
         "run_context": {
             "run_timestamp": run_ts,
@@ -554,6 +563,61 @@ def _blocker_evidence_reason(blocker_cls: str | None) -> str | None:
     return _BLOCKER_EVIDENCE_REASONS.get(blocker_cls)
 
 
+def _apply_repeatability_frontier(per_chain: dict[str, dict[str, Any]]) -> None:
+    """R39w: Override sweep_best_pair when per_pair_repeatability evidence
+    shows a more stable pair is significantly better.
+
+    The pair with the single best sweep PnL may be inconsistent if its
+    median gap across runs is much worse than alternatives. When this
+    happens, promote the pair with the best median gap as sweep_best_pair
+    and preserve the original as sweep_benchmark_pair.
+    """
+    for chain, s in per_chain.items():
+        ppr = s.get("_per_pair_repeat", {})
+        if not ppr:
+            continue
+        current_best_pair = s.get("sweep_best_pair")
+        if not current_best_pair:
+            continue
+
+        # Build median gaps for pairs with sufficient samples
+        pair_medians: dict[str, float] = {}
+        for pair, entry in ppr.items():
+            gap_values = entry.get("_gap_values", [])
+            if len(gap_values) >= _REPEAT_MIN_SAMPLES:
+                median_gap = _compute_median(gap_values)
+                if median_gap is not None:
+                    pair_medians[pair] = median_gap
+        if not pair_medians:
+            continue
+
+        # Find pair with best (lowest) median gap
+        best_repeat_pair = min(pair_medians, key=lambda p: pair_medians[p])
+        best_repeat_gap = pair_medians[best_repeat_pair]
+
+        if best_repeat_pair == current_best_pair:
+            continue
+
+        current_pair_gap = pair_medians.get(current_best_pair)
+
+        # Promote when current pair has no repeatability data or
+        # its median gap is significantly worse than the best alternative
+        should_promote = False
+        if current_pair_gap is None:
+            should_promote = True
+        elif best_repeat_gap <= 0 and current_pair_gap > 0:
+            should_promote = True
+        elif best_repeat_gap > 0 and current_pair_gap / best_repeat_gap >= _REPEAT_PROMOTION_GAP_RATIO:
+            should_promote = True
+
+        if should_promote:
+            s["sweep_benchmark_pair"] = current_best_pair
+            s["sweep_benchmark_median_gap_bps"] = current_pair_gap
+            s["sweep_best_pair"] = best_repeat_pair
+            s["sweep_best_pair_source"] = "repeatability"
+            s["frontier_median_gap_bps"] = best_repeat_gap
+
+
 def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """Rank chains by composite frontier score (R12→R22: robust multi-metric selection)."""
     ranked = []
@@ -591,6 +655,8 @@ def _compute_frontier_ranking(per_chain: dict[str, dict[str, Any]]) -> list[dict
             "sweep_best_net_pnl_bps": pnl,
             "sweep_best_size_usd": s.get("sweep_best_size_usd"),
             "frontier_pair": s.get("sweep_best_pair"),
+            "frontier_pair_source": s.get("sweep_best_pair_source", "sweep_pnl"),
+            "sweep_benchmark_pair": s.get("sweep_benchmark_pair"),
             "measured_gas_bps": s.get("sweep_measured_gas_bps"),
             "measured_fee_bps": s.get("sweep_measured_fee_bps"),
             "measured_slippage_bps": s.get("sweep_measured_slippage_bps"),

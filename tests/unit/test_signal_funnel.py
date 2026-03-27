@@ -164,7 +164,7 @@ class TestLongScanSummaryFunnel:
 
         per_chain = self._make_per_chain()
         summary = build_summary(per_chain, wall_seconds=10.0, warnings=[])
-        assert "v1.15" in summary["schema"]
+        assert "v1.16" in summary["schema"]
 
     def test_sweep_reprieve_rt_in_funnel(self):
         """R39h: mantle scenario — 0 signals but 14 RT from sweep reprieve."""

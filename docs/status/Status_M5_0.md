@@ -3,7 +3,7 @@
 **Status**: [ACTIVE]
 **Updated**: 2026-03-24 (R39i++ — frontier truth fix: degenerate sweep guard + slippage quality gate. 2h scan evidence 390 runs/3413 sig/707 RT/0 profitable. R39i base QUOTE_PATH_BLOCKED fix.)
 **Tests**: 2344 passed / 5 skipped
-**Schema**: start:long_scan_summary:v1.15, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
+**Schema**: start:long_scan_summary:v1.16, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
 **Evidence**: R39i++: frontier truth fix + 2h evidence. R39i: base blocker fix + CI enforcement. R39h++: system audit, WS+funnel. R39h+: funnel attrition zero. R39h: calibration contour + funnel.
 **Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
 
@@ -70,7 +70,7 @@ R39h++ partially complete: rt_without_signal implemented/verified, WS endpoints 
 | P4 | arb | Economics/slippage (best -54bps USDC/DAI) | Sweep sizing + slippage model |
 | P5 | — | ambient adapter (tech debt) | Do not distract from P0-P2 |
 
-### Signal Funnel (v1.15 + rt_without_signal, fresh evidence)
+### Signal Funnel (rt_without_signal, fresh evidence)
 
 | Chain | Intent | Excl | XDex | Signals | RT Eval | RT w/o Sig |
 |-------|-------:|-----:|-----:|--------:|--------:|-----------:|
@@ -121,7 +121,7 @@ Two independent pipelines: `included_signals_count` uses 500bps threshold; oppor
 ## R39h — Per-Chain Signal Funnel + Calibration Contour
 
 ### Key Changes
-1. Schema v1.15: `signal_funnel` section (intent→excludes→xdex→signals→RT per-chain + aggregate).
+1. Schema update: `signal_funnel` section (intent→excludes→xdex→signals→RT per-chain + aggregate).
 2. ZK/* blanket exclude removed; anchor prices added (ZK_USDC=0.10, ZK_WETH=0.0000488). zksync: 3→7 pairs.
 3. `config/intent.txt` regenerated with `--tier calibration`: 42 pairs (was 31).
 
