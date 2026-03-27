@@ -459,6 +459,12 @@ def collect_quotes(
             logger.info("Multicall prefetch: %d unique pools", len(unique_pools))
             clear_multicall_cache()  # Clear cache before prefetch
             prefetch_slot0_multicall(unique_pools, rpc_url, current_block)
+            # R39x+1: If primary multicall got zero slot0 hits, retry on fallback RPC
+            _mc_hit = sum(1 for a in unique_pools if get_cached_slot0(a.lower()) is not None)
+            if _mc_hit == 0 and _fallback_rpc_urls:
+                logger.info("Multicall primary zero hits, retrying on fallback RPC")
+                clear_multicall_cache()
+                prefetch_slot0_multicall(unique_pools, _fallback_rpc_urls[0], current_block)
             # R28.5: Expose multicall stats for performance observability
             try:
                 from core.multicall import get_multicall_batcher
@@ -631,10 +637,12 @@ def collect_quotes(
                     _qa = _dc.get_quoter_address()
                     if _qa:
                         if _at == "uniswap_v3":
+                            # R39x+1: Pass fallback RPCs so prefetch survives 429 on primary
                             _global_prefetch_futures[_pk] = _pf_exec.submit(
                                 read_quoter_v2,
                                 _qa, _pf_tin, _pf_tout,
                                 _pf_amt, _f, rpc_url, current_block,
+                                _fallback_rpc_urls,
                             )
                         elif _at == "algebra":
                             _global_prefetch_futures[_pk] = _pf_exec.submit(
