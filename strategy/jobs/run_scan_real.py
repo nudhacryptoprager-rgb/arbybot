@@ -193,6 +193,103 @@ def _extract_suspect_from_rejects(
     return suspect_examples, raw_bps_max
 
 
+# ---------------------------------------------------------------------------
+# R39x: Sweep-frontier truth-probe reranking
+# ---------------------------------------------------------------------------
+
+_CATASTROPHIC_SLIPPAGE_BPS = 10_000
+
+
+def _rerank_top_opportunities_by_sweep_frontier(
+    stats: Dict[str, Any],
+    logger: Any,
+) -> None:
+    """Post-sweep reranking of top_opportunities by frontier curves.
+
+    When truth_mode_m42 and frontier curves exist, operator-facing
+    top_opportunities should reflect measured multi-size sweep economics
+    (gap_to_zero_bps), not seed-size spread_minus_required_bps.
+
+    Also applies curve-quality guard: pairs with catastrophic slippage
+    (>= 10000 bps) or ROUTE_KILL at any sweep size are penalised so they
+    don't auto-beat pairs with stable curves.
+    """
+    oe = stats.get("opportunity_engine")
+    if not oe:
+        return
+
+    ds = stats.get("roundtrip", {}).get("dynamic_sweep", {})
+    results = ds.get("results") or []
+    if not results:
+        return
+
+    # Preserve seed-signal ranked list for diagnostics
+    _seed_top = oe.get("top_opportunities") or []
+    oe["_seed_signal_top_opportunities"] = list(_seed_top)
+
+    ranked_pairs: List[Dict[str, Any]] = []
+    for r in results:
+        pair = r.get("pair", "UNKNOWN")
+        gap = r.get("gap_to_zero_bps")
+        has_data = gap is not None
+
+        # Curve-quality guard: check all sweep points for degradation
+        curve_degraded = False
+        degradation_reason = None
+        for p in r.get("points") or []:
+            slip = p.get("measured_slippage_bps")
+            error = p.get("error")
+            if slip is not None and slip >= _CATASTROPHIC_SLIPPAGE_BPS:
+                curve_degraded = True
+                degradation_reason = f"slippage={slip} at ${p.get('size_usd')}"
+                break
+            if error and "ROUTE_KILL" in str(error):
+                curve_degraded = True
+                degradation_reason = f"{error} at ${p.get('size_usd')}"
+                break
+
+        # Adjusted ranking score:
+        # - No data (gap=None): 99_999 — worst; no executable evidence at all
+        # - Degraded curve: gap + 10_000 — has data but unstable at larger sizes
+        # - Clean curve: gap — best; stable across sweep sizes
+        if not has_data:
+            adjusted_gap = 99_999.0
+        elif curve_degraded:
+            adjusted_gap = gap + 10_000.0
+        else:
+            adjusted_gap = gap
+
+        ranked_pairs.append({
+            "pair": pair,
+            "buy_dex": r.get("buy_dex"),
+            "sell_dex": r.get("sell_dex"),
+            "gap_to_zero_bps": gap,
+            "best_net_pnl_bps": r.get("best_net_pnl_bps"),
+            "best_slippage_bps": r.get("best_slippage_bps"),
+            "frontier_reason": r.get("frontier_reason"),
+            "curve_degraded": curve_degraded,
+            "degradation_reason": degradation_reason,
+            "has_data": has_data,
+            "_adjusted_gap_bps": adjusted_gap,
+            "ranking_source": "sweep_frontier",
+        })
+
+    # Sort by adjusted gap (ascending = closest to breakeven first)
+    ranked_pairs.sort(key=lambda x: x["_adjusted_gap_bps"])
+
+    oe["top_opportunities"] = ranked_pairs[:5]
+    oe["_sweep_frontier_reranked"] = True
+
+    logger.info(
+        "SWEEP_FRONTIER_RERANK: top_pair=%s gap=%.2f (was seed-signal: %s), degraded=%d/%d",
+        ranked_pairs[0]["pair"] if ranked_pairs else "NONE",
+        ranked_pairs[0]["gap_to_zero_bps"] if ranked_pairs else 0,
+        _seed_top[0].get("pair", "?") if _seed_top else "NONE",
+        sum(1 for r in ranked_pairs if r["curve_degraded"]),
+        len(ranked_pairs),
+    )
+
+
 def run_scan(
     config: Dict[str, Any],
     output_dir: Path,
@@ -1049,6 +1146,15 @@ def run_scan(
                         sweep_ds.get("best_size_usd"),
                         sweep_ds.get("best_pair"),
                     )
+
+        # R39x: Sweep-frontier truth-probe reranking.
+        # When truth_mode_m42 and frontier curves exist, rebuild
+        # top_opportunities from sweep frontier (gap_to_zero_bps ascending)
+        # instead of seed-size spread_minus_required_bps.  This ensures
+        # operator-facing truth reflects measured multi-size economics:
+        # USDC/DAI (gap=8.67) ranks above WETH/USDC (gap=71.36).
+        if truth_mode_m42:
+            _rerank_top_opportunities_by_sweep_frontier(stats, logger)
 
         # R38+R39: Promote sweep best_size_usd as default for live candidates,
         # but only when the frontier is executable (real measured costs, not paper-only).
