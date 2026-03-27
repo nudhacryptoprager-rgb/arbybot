@@ -1262,7 +1262,21 @@ def run_scan(
         
         stats["discovery_runtime"] = get_runtime_observability(_discovery_runtime_stats)
         stats["discovery_runtime"]["universe_active"] = True  # Actually affected quoting
-        stats["discovery_runtime"]["cross_dex_pairs_count"] = _discovery_runtime_stats.cross_dex_pairs_count
+        # R39s: Use post-clamp pair list when include_pairs clamp was applied.
+        # _discovery_runtime_resolved has per-pool detail (dex, fee, pool_address);
+        # pairs_list has PairConfig objects with different attributes.
+        # Filter _discovery_runtime_resolved to match post-clamp whitelist.
+        _clamp_info = stats.get("include_pairs_clamp")
+        if _clamp_info:
+            _allowed = set(config.get("include_pairs", []))
+            _display_pairs = [
+                p for p in _discovery_runtime_resolved
+                if p.display_name in _allowed
+            ]
+        else:
+            _display_pairs = _discovery_runtime_resolved
+        _display_count = len(_display_pairs) if _display_pairs else _discovery_runtime_stats.cross_dex_pairs_count
+        stats["discovery_runtime"]["cross_dex_pairs_count"] = _display_count
         stats["discovery_runtime"]["resolved_pairs"] = [
             {
                 "pair": p.display_name,
@@ -1270,11 +1284,14 @@ def run_scan(
                 "fee": p.fee,
                 "pool": p.pool_address,
             }
-            for p in _discovery_runtime_resolved
+            for p in (_display_pairs or [])
         ]
+        if _clamp_info:
+            stats["discovery_runtime"]["pre_clamp_resolved"] = _discovery_runtime_stats.cross_dex_pairs_count
         logger.info(
-            "Discovery runtime (universe active): %d pairs resolved, %d rpc_calls",
-            _discovery_runtime_stats.pairs_resolved,
+            "Discovery runtime (universe active): %d pairs resolved%s, %d rpc_calls",
+            _display_count,
+            f" (pre-clamp: {_discovery_runtime_stats.cross_dex_pairs_count})" if _clamp_info else "",
             _discovery_runtime_stats.rpc_calls,
         )
     elif discovery_runtime:
@@ -1451,8 +1468,9 @@ def run_scan(
                 _pool_usage[_pa]["spread_signals"] += 1
     for opp in opps_list:
         if isinstance(opp, dict):
+            _diag = opp.get("diagnostics") or {}
             for side in ("buy_pool", "sell_pool"):
-                _pa = opp.get(side, "")
+                _pa = _diag.get(side, "")
                 if _pa and _pa in _pool_usage:
                     _pool_usage[_pa]["opp_count"] += 1
     for rt_r in roundtrip_results:

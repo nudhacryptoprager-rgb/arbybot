@@ -383,6 +383,44 @@ class TestCostFilterViable:
         opp = {"buy_fee": 1400, "sell_fee": 1500}  # 14+15=29 bps
         assert cost_filter_viable(opp, lp_fee_max_bps=30) is True
 
+    # R39s: slippage_max_bps enforcement tests
+    def test_high_slippage_low_lp_fee_blocked(self):
+        """WETH/USDC-style route: LP fee is low but measured slippage is high."""
+        from strategy.roundtrip_selection import cost_filter_viable
+        opp = {"buy_fee": 500, "sell_fee": 500, "effective_slippage_bps": 200.0}
+        # LP fee = 10 bps -> passes lp_fee check
+        # But effective_slippage 200 > 150 -> BLOCKED by slippage check
+        assert cost_filter_viable(opp, lp_fee_max_bps=30, slippage_max_bps=150) is False
+
+    def test_low_slippage_passes(self):
+        """Stable pair with low measured slippage passes both gates."""
+        from strategy.roundtrip_selection import cost_filter_viable
+        opp = {"buy_fee": 100, "sell_fee": 100, "effective_slippage_bps": 20.0}
+        assert cost_filter_viable(opp, lp_fee_max_bps=30, slippage_max_bps=150) is True
+
+    def test_slippage_none_passes(self):
+        """Opp without effective_slippage_bps (smoke mode or no signal link) passes."""
+        from strategy.roundtrip_selection import cost_filter_viable
+        opp = {"buy_fee": 500, "sell_fee": 500}  # no effective_slippage_bps
+        assert cost_filter_viable(opp, lp_fee_max_bps=30, slippage_max_bps=150) is True
+
+    def test_slippage_exactly_at_boundary_passes(self):
+        """Slippage exactly at limit is not > limit, so it passes."""
+        from strategy.roundtrip_selection import cost_filter_viable
+        opp = {"buy_fee": 500, "sell_fee": 500, "effective_slippage_bps": 150.0}
+        assert cost_filter_viable(opp, lp_fee_max_bps=30, slippage_max_bps=150) is True
+
+    def test_slippage_just_over_boundary_blocked(self):
+        from strategy.roundtrip_selection import cost_filter_viable
+        opp = {"buy_fee": 500, "sell_fee": 500, "effective_slippage_bps": 150.1}
+        assert cost_filter_viable(opp, lp_fee_max_bps=30, slippage_max_bps=150) is False
+
+    def test_default_slippage_uncapped(self):
+        """Default slippage_max=9999 allows any slippage."""
+        from strategy.roundtrip_selection import cost_filter_viable
+        opp = {"buy_fee": 500, "sell_fee": 500, "effective_slippage_bps": 5000.0}
+        assert cost_filter_viable(opp) is True
+
 
 class TestSelectCandidatesWithCostFilter:
     """R39q: select_roundtrip_candidates with lp_fee_max_bps parameter."""
@@ -427,6 +465,35 @@ class TestSelectCandidatesWithCostFilter:
         eligible, stats = select_roundtrip_candidates(opps, rt_top_n=10)
         assert len(eligible) == 1
         assert stats["cost_filter_rejected"] == 0
+
+    def test_slippage_filter_demotes_weth_usdc_low_fee(self):
+        """R39s: WETH/USDC at fee_tier 500 (low LP fee) but high slippage gets filtered."""
+        from strategy.roundtrip_selection import select_roundtrip_candidates
+
+        opps = [
+            {
+                "pair": "WETH/USDC",
+                "buy_dex": "uniswap_v3", "sell_dex": "sushiswap_v3",
+                "buy_fee": 500, "sell_fee": 500,  # 10 bps roundtrip — LOW LP fee
+                "gross_spread_bps": 80.0, "spread_minus_required_bps": 15.0,
+                "effective_slippage_bps": 200.0,  # measured slippage HIGH
+            },
+            {
+                "pair": "USDC/DAI",
+                "buy_dex": "uniswap_v3", "sell_dex": "pancakeswap_v3",
+                "buy_fee": 100, "sell_fee": 100,  # 2 bps roundtrip
+                "gross_spread_bps": 10.0, "spread_minus_required_bps": 5.0,
+                "effective_slippage_bps": 15.0,  # low slippage
+            },
+        ]
+        eligible, stats = select_roundtrip_candidates(
+            opps, rt_top_n=10, lp_fee_max_bps=30, slippage_max_bps=150,
+        )
+        pairs = [e["pair"] for e in eligible]
+        # WETH/USDC LP fee 10 bps passes, but slippage 200 > 150 -> blocked
+        assert "WETH/USDC" not in pairs
+        assert "USDC/DAI" in pairs
+        assert stats["cost_filter_rejected"] == 1
 
     def test_margin_ordering_descending(self):
         """R39q step 5: Candidates ranked by spread_minus_required_bps descending."""

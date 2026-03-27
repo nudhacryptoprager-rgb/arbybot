@@ -84,6 +84,11 @@ def cost_filter_viable(
     lp_fee_rt = buy_fee_bps + sell_fee_bps
     if lp_fee_rt > lp_fee_max_bps:
         return False
+    # R39s: Enforce slippage gate — routes with measured slippage above cap
+    # are demoted to diagnostic-only and never enter truth lane.
+    eff_slip = opp.get("effective_slippage_bps")
+    if eff_slip is not None and eff_slip > slippage_max_bps:
+        return False
     return True
 
 
