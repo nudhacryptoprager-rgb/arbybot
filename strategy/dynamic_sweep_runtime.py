@@ -185,6 +185,7 @@ def run_sweep(
             l1_cost_wei=l1_cost_wei,
             l1_cost_source=l1_cost_source,
             eth_usd_price=eth_usd,
+            requote_block_tag=str(sweep_block),
         )
         # Preserve opportunity route identity for downstream live-stream matching.
         # sweep_roundtrip_sizes receives leg quotes in simulation order, which can
@@ -243,6 +244,7 @@ def _build_sweep_stats(
             "best_fee_bps": best_sweep.best_fee_bps,
             "best_slippage_bps": best_sweep.best_slippage_bps,
             "best_total_cost_bps": best_sweep.best_total_cost_bps,
+            "requote_block_tag": best_sweep.requote_block_tag,
             "results": [s.to_dict() for s in sweep_results],
         }
     elif sweep_results:

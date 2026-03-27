@@ -743,3 +743,216 @@ class TestWsSubscriptionValidation:
             assert err == "skipped"
         finally:
             os.environ.pop("ARBY_SKIP_RPC", None)
+
+
+# ---------- R39x+3: Leg-level slippage decomposition ----------
+
+class TestLegLevelSlippage:
+    """Verify per-leg slippage is captured in RoundTripResult and SizeSweepPoint."""
+
+    def test_roundtrip_result_has_leg_slippage_fields(self):
+        from engine.roundtrip import RoundTripResult
+        rt = RoundTripResult(
+            pair="USDC/DAI", buy_dex="uni", sell_dex="pancake",
+            amount_in_wei=1000000, token_in="USDC", token_out="DAI",
+            leg1_amount_out=999000,
+        )
+        assert hasattr(rt, "leg1_slippage_bps")
+        assert hasattr(rt, "leg2_slippage_bps")
+        assert rt.leg1_slippage_bps == 0.0
+        assert rt.leg2_slippage_bps == 0.0
+
+    def test_roundtrip_result_to_dict_includes_leg_slippage(self):
+        from engine.roundtrip import RoundTripResult
+        rt = RoundTripResult(
+            pair="USDC/DAI", buy_dex="uni", sell_dex="pancake",
+            amount_in_wei=1000000, token_in="USDC", token_out="DAI",
+            leg1_amount_out=999000,
+            leg1_slippage_bps=2.5, leg2_slippage_bps=1.5,
+        )
+        d = rt.to_dict()
+        assert d["leg1_slippage_bps"] == 2.5
+        assert d["leg2_slippage_bps"] == 1.5
+
+    def test_sweep_point_has_leg_fields(self):
+        from engine.roundtrip import SizeSweepPoint
+        p = SizeSweepPoint(
+            size_usd=75, net_pnl_bps=-8.5, gross_pnl_bps=3.5,
+            measured_slippage_bps=4.15,
+            leg1_slippage_bps=2.0, leg2_slippage_bps=2.15,
+            gas_bps=2.0, fee_bps=6.0,
+            leg1_fee_bps=1.0, leg2_fee_bps=5.0,
+        )
+        assert p.leg1_slippage_bps == 2.0
+        assert p.leg2_slippage_bps == 2.15
+        assert p.leg1_fee_bps == 1.0
+        assert p.leg2_fee_bps == 5.0
+
+    def test_sweep_result_to_dict_includes_leg_fields(self):
+        from engine.roundtrip import SizeSweepResult, SizeSweepPoint
+        pt = SizeSweepPoint(
+            size_usd=75, net_pnl_bps=-8.5,
+            measured_slippage_bps=4.15,
+            leg1_slippage_bps=2.0, leg2_slippage_bps=2.15,
+            gas_bps=2.0, fee_bps=6.0,
+            leg1_fee_bps=1.0, leg2_fee_bps=5.0,
+        )
+        sr = SizeSweepResult(
+            pair="USDC/DAI", buy_dex="uni", sell_dex="pancake",
+            best_net_pnl_bps=-8.5, best_slippage_bps=4.15,
+            best_leg1_slippage_bps=2.0, best_leg2_slippage_bps=2.15,
+            best_leg1_fee_bps=1.0, best_leg2_fee_bps=5.0,
+            requote_block_tag="latest",
+            points=[pt],
+        )
+        d = sr.to_dict()
+        assert d["best_leg1_slippage_bps"] == 2.0
+        assert d["best_leg2_slippage_bps"] == 2.15
+        assert d["best_leg1_fee_bps"] == 1.0
+        assert d["best_leg2_fee_bps"] == 5.0
+        assert d["requote_block_tag"] == "latest"
+        p0 = d["points"][0]
+        assert p0["leg1_slippage_bps"] == 2.0
+        assert p0["leg2_slippage_bps"] == 2.15
+        assert p0["leg1_fee_bps"] == 1.0
+        assert p0["leg2_fee_bps"] == 5.0
+
+
+# ---------- R39x+3: Near-breakeven report ----------
+
+class TestNearBreakevenReport:
+    """Verify _build_near_breakeven_report produces correct decomposition."""
+
+    def _make_stats(self, results):
+        return {
+            "roundtrip": {
+                "dynamic_sweep": {
+                    "enabled": True,
+                    "results": results,
+                },
+            },
+        }
+
+    def test_empty_when_disabled(self):
+        from strategy.artifacts import _build_near_breakeven_report
+        stats = {"roundtrip": {"dynamic_sweep": {"enabled": False}}}
+        r = _build_near_breakeven_report(stats)
+        assert r["available"] is False
+
+    def test_routes_sorted_by_gap(self):
+        from strategy.artifacts import _build_near_breakeven_report
+        results = [
+            {"pair": "A", "buy_dex": "x", "sell_dex": "y",
+             "gap_to_zero_bps": 20.0, "best_net_pnl_bps": -20.0},
+            {"pair": "B", "buy_dex": "x", "sell_dex": "z",
+             "gap_to_zero_bps": 5.0, "best_net_pnl_bps": -5.0},
+        ]
+        r = _build_near_breakeven_report(self._make_stats(results))
+        assert r["available"] is True
+        assert r["count"] == 2
+        assert r["routes"][0]["pair"] == "B"  # smaller gap first
+        assert r["routes"][1]["pair"] == "A"
+
+    def test_leg_level_fields_propagated(self):
+        from strategy.artifacts import _build_near_breakeven_report
+        results = [{
+            "pair": "USDC/DAI", "buy_dex": "uni", "sell_dex": "pancake",
+            "gap_to_zero_bps": 8.55, "best_net_pnl_bps": -8.55,
+            "best_gross_pnl_bps": 3.56, "best_size_usd": 75,
+            "best_gas_bps": 1.97, "best_fee_bps": 6.0,
+            "best_leg1_fee_bps": 1.0, "best_leg2_fee_bps": 5.0,
+            "best_slippage_bps": 4.15,
+            "best_leg1_slippage_bps": 2.0, "best_leg2_slippage_bps": 2.15,
+            "best_total_cost_bps": 12.12, "frontier_reason": "BEST_NEG",
+            "requote_block_tag": "latest",
+        }]
+        r = _build_near_breakeven_report(self._make_stats(results))
+        route = r["routes"][0]
+        assert route["fee_leg1_bps"] == 1.0
+        assert route["fee_leg2_bps"] == 5.0
+        assert route["slippage_leg1_bps"] == 2.0
+        assert route["slippage_leg2_bps"] == 2.15
+        assert route["requote_block_tag"] == "latest"
+        assert route["gas_bps"] == 1.97
+
+    def test_filters_by_threshold(self):
+        from strategy.artifacts import _build_near_breakeven_report
+        results = [
+            {"pair": "A", "gap_to_zero_bps": 5.0},
+            {"pair": "B", "gap_to_zero_bps": 100.0},  # beyond threshold
+        ]
+        r = _build_near_breakeven_report(self._make_stats(results))
+        assert r["count"] == 1
+        assert r["routes"][0]["pair"] == "A"
+
+    def test_size_curve_populated(self):
+        from strategy.artifacts import _build_near_breakeven_report
+        results = [{
+            "pair": "USDC/DAI", "buy_dex": "uni", "sell_dex": "pancake",
+            "gap_to_zero_bps": 8.55, "best_net_pnl_bps": -8.55,
+            "sizes_evaluated": 3,
+            "points": [
+                {"size_usd": 25, "net_pnl_bps": -12.0, "gross_pnl_bps": 3.0,
+                 "gas_bps": 5.0, "fee_bps": 6.0, "leg1_fee_bps": 1.0,
+                 "leg2_fee_bps": 5.0, "measured_slippage_bps": 4.0,
+                 "leg1_slippage_bps": 2.0, "leg2_slippage_bps": 2.0, "error": None},
+                {"size_usd": 50, "net_pnl_bps": -8.55, "gross_pnl_bps": 3.56,
+                 "gas_bps": 1.97, "fee_bps": 6.0, "leg1_fee_bps": 1.0,
+                 "leg2_fee_bps": 5.0, "measured_slippage_bps": 4.15,
+                 "leg1_slippage_bps": 2.0, "leg2_slippage_bps": 2.15, "error": None},
+                {"size_usd": 75, "net_pnl_bps": None, "error": "route_kill"},
+            ],
+        }]
+        r = _build_near_breakeven_report(self._make_stats(results))
+        route = r["routes"][0]
+        assert route["sizes_evaluated"] == 3
+        # Error points are excluded from size_curve
+        assert len(route["size_curve"]) == 2
+        assert route["size_curve"][0]["size_usd"] == 25
+        assert route["size_curve"][0]["leg1_fee_bps"] == 1.0
+        assert route["size_curve"][1]["size_usd"] == 50
+        assert route["size_curve"][1]["slippage_bps"] == 4.15
+
+
+# ---------- R39x+3: Fee-tier alternatives ----------
+
+class TestFeeTierAlternatives:
+    """Verify _build_fee_tier_alternatives groups by pair."""
+
+    def _make_stats(self, results):
+        return {
+            "roundtrip": {
+                "dynamic_sweep": {
+                    "enabled": True,
+                    "results": results,
+                },
+            },
+        }
+
+    def test_groups_same_pair_routes(self):
+        from strategy.artifacts import _build_fee_tier_alternatives
+        results = [
+            {"pair": "USDC/DAI", "buy_dex": "uni", "sell_dex": "pancake",
+             "gap_to_zero_bps": 8.55, "best_fee_bps": 6.0},
+            {"pair": "USDC/DAI", "buy_dex": "sushi", "sell_dex": "uni",
+             "gap_to_zero_bps": 12.0, "best_fee_bps": 2.0},
+            {"pair": "WETH/USDC", "buy_dex": "uni", "sell_dex": "sushi",
+             "gap_to_zero_bps": 50.0, "best_fee_bps": 6.0},
+        ]
+        r = _build_fee_tier_alternatives(self._make_stats(results))
+        assert r["available"] is True
+        assert r["pairs_with_alternatives"] == 1  # only USDC/DAI has 2+ routes
+        assert "USDC/DAI" in r["comparisons"]
+        assert len(r["comparisons"]["USDC/DAI"]) == 2
+        # Sorted by gap_to_zero ascending
+        assert r["comparisons"]["USDC/DAI"][0]["buy_dex"] == "uni"
+
+    def test_single_route_pair_excluded(self):
+        from strategy.artifacts import _build_fee_tier_alternatives
+        results = [
+            {"pair": "USDC/DAI", "buy_dex": "uni", "sell_dex": "pancake",
+             "gap_to_zero_bps": 8.55},
+        ]
+        r = _build_fee_tier_alternatives(self._make_stats(results))
+        assert r["available"] is False
+        assert r["pairs_with_alternatives"] == 0

@@ -97,6 +97,8 @@ class RoundTripResult:
     # v2.1.0: Slippage — prefers measured from sqrtPriceAfter (see calculate_roundtrip_pnl),
     # falls back to ticks heuristic (~0.5 bps per tick in V3)
     estimated_slippage_bps: float = 0.0
+    leg1_slippage_bps: float = 0.0
+    leg2_slippage_bps: float = 0.0
     slippage_source: str = "ticks_heuristic"  # "ticks_heuristic" | "sqrtPriceAfter" | "probe"
     # v2.1.0: L1 cost source for traceability
     l1_cost_source: str = "default"  # "config" | "onchain" | "default"
@@ -142,6 +144,8 @@ class RoundTripResult:
             "total_ticks": self.total_ticks,
             "total_gas": self.total_gas,
             "estimated_slippage_bps": round(self.estimated_slippage_bps, 2),
+            "leg1_slippage_bps": round(self.leg1_slippage_bps, 2),
+            "leg2_slippage_bps": round(self.leg2_slippage_bps, 2),
             "slippage_source": self.slippage_source,
             "l1_cost_source": self.l1_cost_source,
             "gas_source": self.gas_source,
@@ -413,24 +417,34 @@ def simulate_roundtrip(
     
     # Try measured slippage first
     total_measured_slippage = 0.0
+    _leg1_slip = 0.0
+    _leg2_slip = 0.0
     slippage_source = "ticks_heuristic"  # default
     
     if buy_sqrt_before and buy_sqrt_after:
         leg1_slippage, _ = calculate_slippage_from_sqrt_prices(buy_sqrt_before, buy_sqrt_after, is_buy=True)
-        total_measured_slippage += abs(leg1_slippage)
+        _leg1_slip = abs(leg1_slippage)
+        total_measured_slippage += _leg1_slip
         slippage_source = "sqrtPriceAfter"
     
     if sell_sqrt_before and sell_sqrt_after:
         leg2_slippage, _ = calculate_slippage_from_sqrt_prices(sell_sqrt_before, sell_sqrt_after, is_buy=False)
-        total_measured_slippage += abs(leg2_slippage)
+        _leg2_slip = abs(leg2_slippage)
+        total_measured_slippage += _leg2_slip
         slippage_source = "sqrtPriceAfter"
     
     if slippage_source == "sqrtPriceAfter" and total_measured_slippage > 0:
         result.estimated_slippage_bps = total_measured_slippage
+        result.leg1_slippage_bps = _leg1_slip
+        result.leg2_slippage_bps = _leg2_slip
         result.slippage_source = "sqrtPriceAfter"
     else:
         # Fallback: Heuristic ~0.5 bps per tick crossed
+        _leg1_ticks = result.leg1_ticks_crossed or 0
+        _leg2_ticks = result.leg2_ticks_crossed or 0
         result.estimated_slippage_bps = float(result.total_ticks) * 0.5
+        result.leg1_slippage_bps = float(_leg1_ticks) * 0.5
+        result.leg2_slippage_bps = float(_leg2_ticks) * 0.5
         result.slippage_source = "ticks_heuristic"
     
     # v2.8.0: Use USD-based profitability when token_in != WETH (gas units mismatch)
@@ -826,8 +840,12 @@ class SizeSweepPoint:
     net_pnl_bps: Optional[float] = None
     gross_pnl_bps: Optional[float] = None
     measured_slippage_bps: Optional[float] = None
+    leg1_slippage_bps: Optional[float] = None
+    leg2_slippage_bps: Optional[float] = None
     gas_bps: Optional[float] = None
     fee_bps: Optional[float] = None
+    leg1_fee_bps: Optional[float] = None
+    leg2_fee_bps: Optional[float] = None
     error: Optional[str] = None
 
 
@@ -848,6 +866,11 @@ class SizeSweepResult:
     best_fee_bps: Optional[float] = None
     best_slippage_bps: Optional[float] = None
     best_total_cost_bps: Optional[float] = None
+    best_leg1_slippage_bps: Optional[float] = None
+    best_leg2_slippage_bps: Optional[float] = None
+    best_leg1_fee_bps: Optional[float] = None
+    best_leg2_fee_bps: Optional[float] = None
+    requote_block_tag: Optional[str] = None
     points: Optional[List[SizeSweepPoint]] = None
 
     def __post_init__(self):
@@ -869,14 +892,23 @@ class SizeSweepResult:
             "best_fee_bps": round(self.best_fee_bps, 2) if self.best_fee_bps is not None else None,
             "best_slippage_bps": round(self.best_slippage_bps, 2) if self.best_slippage_bps is not None else None,
             "best_total_cost_bps": round(self.best_total_cost_bps, 2) if self.best_total_cost_bps is not None else None,
+            "best_leg1_slippage_bps": round(self.best_leg1_slippage_bps, 2) if self.best_leg1_slippage_bps is not None else None,
+            "best_leg2_slippage_bps": round(self.best_leg2_slippage_bps, 2) if self.best_leg2_slippage_bps is not None else None,
+            "best_leg1_fee_bps": round(self.best_leg1_fee_bps, 2) if self.best_leg1_fee_bps is not None else None,
+            "best_leg2_fee_bps": round(self.best_leg2_fee_bps, 2) if self.best_leg2_fee_bps is not None else None,
+            "requote_block_tag": self.requote_block_tag,
             "points": [
                 {
                     "size_usd": p.size_usd,
                     "net_pnl_bps": round(p.net_pnl_bps, 2) if p.net_pnl_bps is not None else None,
                     "gross_pnl_bps": round(p.gross_pnl_bps, 2) if p.gross_pnl_bps is not None else None,
                     "measured_slippage_bps": round(p.measured_slippage_bps, 2) if p.measured_slippage_bps is not None else None,
+                    "leg1_slippage_bps": round(p.leg1_slippage_bps, 2) if p.leg1_slippage_bps is not None else None,
+                    "leg2_slippage_bps": round(p.leg2_slippage_bps, 2) if p.leg2_slippage_bps is not None else None,
                     "gas_bps": round(p.gas_bps, 2) if p.gas_bps is not None else None,
                     "fee_bps": round(p.fee_bps, 2) if p.fee_bps is not None else None,
+                    "leg1_fee_bps": round(p.leg1_fee_bps, 2) if p.leg1_fee_bps is not None else None,
+                    "leg2_fee_bps": round(p.leg2_fee_bps, 2) if p.leg2_fee_bps is not None else None,
                     "error": p.error,
                 }
                 for p in (self.points or [])
@@ -896,6 +928,7 @@ def sweep_roundtrip_sizes(
     l1_cost_wei: int = 6_000_000_000_000,  # R36: Post-EIP-4844 default
     l1_cost_source: str = "default",
     eth_usd_price: float = 2000.0,
+    requote_block_tag: Optional[str] = None,
 ) -> SizeSweepResult:
     """Sweep multiple notional sizes for a single opportunity route.
 
@@ -914,6 +947,7 @@ def sweep_roundtrip_sizes(
         pair=pair,
         buy_dex=buy_quote_base.get("dex_id", ""),
         sell_dex=sell_quote_base.get("dex_id", ""),
+        requote_block_tag=requote_block_tag,
     )
 
     if token_in_usd_price <= 0:
@@ -1021,8 +1055,12 @@ def sweep_roundtrip_sizes(
             net_pnl_bps=rt.net_pnl_bps,
             gross_pnl_bps=rt.gross_pnl_bps,
             measured_slippage_bps=rt.estimated_slippage_bps,
+            leg1_slippage_bps=rt.leg1_slippage_bps,
+            leg2_slippage_bps=rt.leg2_slippage_bps,
             gas_bps=gas_bps_val,
             fee_bps=fee_bps_val,
+            leg1_fee_bps=rt.leg1_fee / 100.0,
+            leg2_fee_bps=rt.leg2_fee / 100.0,
         )
         result.points.append(point)
 
@@ -1035,6 +1073,10 @@ def sweep_roundtrip_sizes(
             result.best_fee_bps = fee_bps_val
             result.best_slippage_bps = rt.estimated_slippage_bps
             result.best_total_cost_bps = gas_bps_val + fee_bps_val + rt.estimated_slippage_bps
+            result.best_leg1_slippage_bps = rt.leg1_slippage_bps
+            result.best_leg2_slippage_bps = rt.leg2_slippage_bps
+            result.best_leg1_fee_bps = rt.leg1_fee / 100.0
+            result.best_leg2_fee_bps = rt.leg2_fee / 100.0
 
         # R39l: Early route-kill — if gross PnL is already deeply negative at
         # small sizes, larger sizes will only be worse (slippage grows with size).

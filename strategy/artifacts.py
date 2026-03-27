@@ -271,6 +271,132 @@ def _compute_execution_pnl(
     }
 
 
+# Max routes to include in breakeven report
+_NEAR_BREAKEVEN_TOP_N = 20
+# Threshold: include routes where |gap_to_zero| <= this value
+_NEAR_BREAKEVEN_THRESHOLD_BPS = 50.0
+
+
+def _build_near_breakeven_report(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Build near-breakeven decomposition: top-N closest-to-zero routes with
+    leg-level cost breakdown (gas, fee per leg, slippage per leg).
+
+    Consumes dynamic_sweep results which contain per-route SizeSweepResult dicts.
+    """
+    ds = stats.get("roundtrip", {}).get("dynamic_sweep", {})
+    if not ds.get("enabled") or not ds.get("results"):
+        return {"available": False}
+
+    raw_results = ds.get("results", [])
+    candidates = []
+    for r in raw_results:
+        if not isinstance(r, dict):
+            continue
+        gap = r.get("gap_to_zero_bps")
+        if gap is None:
+            continue
+        if abs(gap) > _NEAR_BREAKEVEN_THRESHOLD_BPS:
+            continue
+        entry = {
+            "pair": r.get("pair"),
+            "buy_dex": r.get("buy_dex"),
+            "sell_dex": r.get("sell_dex"),
+            "best_size_usd": r.get("best_size_usd"),
+            "gross_bps": r.get("best_gross_pnl_bps"),
+            "net_pnl_bps": r.get("best_net_pnl_bps"),
+            "gap_to_zero_bps": round(gap, 2),
+            "gas_bps": r.get("best_gas_bps"),
+            "fee_bps": r.get("best_fee_bps"),
+            "fee_leg1_bps": r.get("best_leg1_fee_bps"),
+            "fee_leg2_bps": r.get("best_leg2_fee_bps"),
+            "slippage_bps": r.get("best_slippage_bps"),
+            "slippage_leg1_bps": r.get("best_leg1_slippage_bps"),
+            "slippage_leg2_bps": r.get("best_leg2_slippage_bps"),
+            "total_cost_bps": r.get("best_total_cost_bps"),
+            "frontier_reason": r.get("frontier_reason"),
+            "requote_block_tag": r.get("requote_block_tag"),
+            "sizes_evaluated": r.get("sizes_evaluated", 0),
+            "size_curve": [
+                {
+                    "size_usd": p.get("size_usd"),
+                    "net_pnl_bps": p.get("net_pnl_bps"),
+                    "gross_pnl_bps": p.get("gross_pnl_bps"),
+                    "gas_bps": p.get("gas_bps"),
+                    "fee_bps": p.get("fee_bps"),
+                    "leg1_fee_bps": p.get("leg1_fee_bps"),
+                    "leg2_fee_bps": p.get("leg2_fee_bps"),
+                    "slippage_bps": p.get("measured_slippage_bps"),
+                    "leg1_slippage_bps": p.get("leg1_slippage_bps"),
+                    "leg2_slippage_bps": p.get("leg2_slippage_bps"),
+                }
+                for p in (r.get("points") or [])
+                if isinstance(p, dict) and p.get("error") is None
+            ],
+        }
+        candidates.append(entry)
+
+    candidates.sort(key=lambda c: abs(c.get("gap_to_zero_bps", 9999)))
+    candidates = candidates[:_NEAR_BREAKEVEN_TOP_N]
+
+    return {
+        "available": len(candidates) > 0,
+        "threshold_bps": _NEAR_BREAKEVEN_THRESHOLD_BPS,
+        "count": len(candidates),
+        "routes": candidates,
+    }
+
+
+def _build_fee_tier_alternatives(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Build machine-readable fee-tier alternative comparison for same-pair routes.
+
+    Groups sweep results by pair and shows spread/fee/slippage/gas/net for each
+    route alternative, enabling direct comparison of fee-tier impact.
+    """
+    ds = stats.get("roundtrip", {}).get("dynamic_sweep", {})
+    if not ds.get("enabled") or not ds.get("results"):
+        return {"available": False}
+
+    raw_results = ds.get("results", [])
+    by_pair: Dict[str, list] = {}
+    for r in raw_results:
+        if not isinstance(r, dict):
+            continue
+        pair = r.get("pair")
+        if not pair:
+            continue
+        if pair not in by_pair:
+            by_pair[pair] = []
+        by_pair[pair].append({
+            "buy_dex": r.get("buy_dex"),
+            "sell_dex": r.get("sell_dex"),
+            "best_size_usd": r.get("best_size_usd"),
+            "gross_bps": r.get("best_gross_pnl_bps"),
+            "net_pnl_bps": r.get("best_net_pnl_bps"),
+            "gap_to_zero_bps": r.get("gap_to_zero_bps"),
+            "fee_bps": r.get("best_fee_bps"),
+            "fee_leg1_bps": r.get("best_leg1_fee_bps"),
+            "fee_leg2_bps": r.get("best_leg2_fee_bps"),
+            "slippage_bps": r.get("best_slippage_bps"),
+            "slippage_leg1_bps": r.get("best_leg1_slippage_bps"),
+            "slippage_leg2_bps": r.get("best_leg2_slippage_bps"),
+            "gas_bps": r.get("best_gas_bps"),
+            "total_cost_bps": r.get("best_total_cost_bps"),
+            "frontier_reason": r.get("frontier_reason"),
+            "requote_block_tag": r.get("requote_block_tag"),
+        })
+
+    # Only include pairs with >1 route alternative
+    multi_route_pairs = {p: routes for p, routes in by_pair.items() if len(routes) > 1}
+    for routes in multi_route_pairs.values():
+        routes.sort(key=lambda x: abs(x.get("gap_to_zero_bps") or 9999))
+
+    return {
+        "available": len(multi_route_pairs) > 0,
+        "pairs_with_alternatives": len(multi_route_pairs),
+        "comparisons": multi_route_pairs,
+    }
+
+
 def _build_measured_economics(stats: Dict[str, Any]) -> Dict[str, Any]:
     """Build top-level measured economics block from dynamic sweep results.
 
@@ -669,6 +795,12 @@ def build_truth_data(
         # Populated from dynamic_sweep (post-roundtrip, QuoterV2-based).
         # Paper/baseline economics are NOT included here — see execution_pnl for those.
         "measured_economics": _build_measured_economics(stats),
+        # R39x+3: Near-breakeven component decomposition — top routes closest to zero
+        # with leg-level fee and slippage breakdown for final go/no-go evidence.
+        "near_breakeven_report": _build_near_breakeven_report(stats),
+        # R39x+3: Fee-tier alternative comparison — same pair, different routes,
+        # machine-readable comparison of fee/slippage/gas/net impact.
+        "fee_tier_alternatives": _build_fee_tier_alternatives(stats),
         # R21: operational_truth designation — measured_economics is the SOLE
         # source of truth for viability assessment. Paper PnL is diagnostic only.
         "operational_truth_source": "measured_economics",
