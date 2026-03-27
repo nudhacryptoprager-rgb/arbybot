@@ -208,6 +208,202 @@ class TestRoundtripCanonicalGating(unittest.TestCase):
         self.assertAlmostEqual(rs["best_measured_spread_gap_bps"], -42.3)
 
 
+class TestSweepTruthPromotion(unittest.TestCase):
+    """R39u: Dynamic sweep with measured_economics promotes profit_realism_status.
+
+    CONTRACT: When measured_economics.available=true AND executable_evidence
+    is SWEEP_GAP_TO_ZERO or SWEEP_PROFITABLE, profit_realism_status must NOT
+    be ONE_LEG_ONLY_DIAGNOSTIC — even when evaluated_count=0.
+    """
+
+    def test_sweep_gap_to_zero_promotes_to_not_profitable(self):
+        """Base-like case: sweep available, negative truth, eval=0 → ROUNDTRIP_NOT_PROFITABLE."""
+        from strategy.artifacts import build_truth_data
+
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 0,
+                "profitable_count": 0,
+                "real_quote_count": 0,
+                "executable_evidence": "SWEEP_GAP_TO_ZERO",
+                "dynamic_sweep": {
+                    "enabled": True,
+                    "best_pair": "USDC/DAI",
+                    "best_net_pnl_bps": -8.64,
+                    "best_size_usd": 75,
+                    "gap_to_zero_bps": 8.64,
+                    "best_gas_bps": 1.97,
+                    "best_fee_bps": 6.0,
+                    "best_slippage_bps": 4.15,
+                    "best_total_cost_bps": 12.12,
+                    "routes_swept": 3,
+                },
+            }
+        )
+        result = build_truth_data(
+            config={"truth_mode_m42": True},
+            current_block=43911218,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertEqual(result["profit_realism_status"], "ROUNDTRIP_NOT_PROFITABLE")
+        self.assertFalse(result["profit_is_diagnostic"])
+        self.assertEqual(result["profit_truth_source"], "ROUNDTRIP_CANONICAL")
+
+    def test_sweep_profitable_promotes_to_profitable(self):
+        """Sweep profitable → ROUNDTRIP_PROFITABLE even with evaluated_count=0."""
+        from strategy.artifacts import build_truth_data
+
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 0,
+                "profitable_count": 0,
+                "real_quote_count": 0,
+                "executable_evidence": "SWEEP_PROFITABLE",
+                "dynamic_sweep": {
+                    "enabled": True,
+                    "best_pair": "USDC/DAI",
+                    "best_net_pnl_bps": 2.5,
+                    "best_size_usd": 100,
+                    "gap_to_zero_bps": -2.5,
+                    "best_gas_bps": 1.5,
+                    "best_fee_bps": 3.0,
+                    "best_slippage_bps": 1.0,
+                    "best_total_cost_bps": 5.5,
+                    "routes_swept": 2,
+                },
+            }
+        )
+        result = build_truth_data(
+            config={"truth_mode_m42": True},
+            current_block=43911218,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertEqual(result["profit_realism_status"], "ROUNDTRIP_PROFITABLE")
+        self.assertFalse(result["profit_is_diagnostic"])
+        self.assertEqual(result["profit_truth_source"], "ROUNDTRIP_CANONICAL")
+
+    def test_no_sweep_data_stays_diagnostic(self):
+        """No sweep + no evaluated → still ONE_LEG_ONLY_DIAGNOSTIC."""
+        from strategy.artifacts import build_truth_data
+
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 0,
+                "profitable_count": 0,
+                "executable_evidence": "NO_SWEEP_DATA",
+                "dynamic_sweep": {
+                    "enabled": False,
+                },
+            }
+        )
+        result = build_truth_data(
+            config={"truth_mode_m42": True},
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertEqual(result["profit_realism_status"], "ONE_LEG_ONLY_DIAGNOSTIC")
+        self.assertTrue(result["profit_is_diagnostic"])
+        self.assertEqual(result["profit_truth_source"], "ONE_LEG_DIAGNOSTIC")
+
+    def test_sweep_enabled_but_no_results_stays_diagnostic(self):
+        """Sweep enabled but best_net_pnl_bps=None → ONE_LEG_ONLY_DIAGNOSTIC."""
+        from strategy.artifacts import build_truth_data
+
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 0,
+                "profitable_count": 0,
+                "executable_evidence": "NO_SWEEP_DATA",
+                "dynamic_sweep": {
+                    "enabled": True,
+                    "best_net_pnl_bps": None,
+                },
+            }
+        )
+        result = build_truth_data(
+            config={"truth_mode_m42": True},
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertEqual(result["profit_realism_status"], "ONE_LEG_ONLY_DIAGNOSTIC")
+
+    def test_legacy_profitable_still_works(self):
+        """Legacy path (profitable_count>0 + real_quote_count>0) still promotes correctly."""
+        from strategy.artifacts import build_truth_data
+
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 5,
+                "profitable_count": 2,
+                "real_quote_count": 3,
+            }
+        )
+        result = build_truth_data(
+            config={"truth_mode_m42": True},
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertEqual(result["profit_realism_status"], "ROUNDTRIP_PROFITABLE")
+        self.assertFalse(result["profit_is_diagnostic"])
+        self.assertEqual(result["profit_truth_source"], "ROUNDTRIP_CANONICAL")
+
+    def test_suspect_contamination_guard_intact(self):
+        """profitable_count>0 but real_quote_count=0 must NOT promote (suspect guard)."""
+        from strategy.artifacts import build_truth_data
+
+        stats = build_minimal_stats(
+            roundtrip={
+                "enabled": True,
+                "evaluated_count": 5,
+                "profitable_count": 3,
+                "real_quote_count": 0,
+            }
+        )
+        result = build_truth_data(
+            config={"truth_mode_m42": True},
+            current_block=12345678,
+            spread_signals=[],
+            suspect_examples=[],
+            stats=stats,
+            infra_payload={},
+            raw_bps=0,
+            spread_threshold_bps=5,
+        )
+        self.assertNotEqual(result["profit_realism_status"], "ROUNDTRIP_PROFITABLE")
+        self.assertTrue(result["profit_is_diagnostic"])
+        self.assertNotEqual(result["profit_truth_source"], "ROUNDTRIP_CANONICAL")
+
+
 class TestRoundtripResultSlippageSource(unittest.TestCase):
     """Tests for slippage source tracking in RoundTripResult."""
     

@@ -562,6 +562,22 @@ def build_truth_data(
     """
     now = run_timestamp or datetime.now(timezone.utc).isoformat()
     
+    # R39u: Pre-compute sweep truth promotion helpers.
+    # Dynamic sweep with measured economics IS two-legged truth — gas, LP fees,
+    # and slippage are all measured via QuoterV2, not paper estimates.
+    _rt = stats.get("roundtrip", {})
+    _ds = _rt.get("dynamic_sweep", {})
+    _exec_evidence = _rt.get("executable_evidence", "NO_DATA")
+    _has_sweep_truth = (
+        _ds.get("enabled")
+        and _ds.get("best_net_pnl_bps") is not None
+        and _exec_evidence in ("SWEEP_GAP_TO_ZERO", "SWEEP_PROFITABLE")
+    )
+    _has_legacy_profitable = (
+        _rt.get("profitable_count", 0) > 0
+        and _rt.get("real_quote_count", 0) > 0
+    )
+
     truth_data = {
         "schema_version": SCHEMA_VERSION,
         "timestamp": now,
@@ -666,24 +682,29 @@ def build_truth_data(
         # profit_is_diagnostic=True means total_net_usdc is NOT canonical/realized profit
         # v2.3.2 FIX: profitable_count > 0 AND real_quote_count > 0 required for CANONICAL.
         # real_quote_count guards against suspect contamination (profitable_count from paper estimates).
+        # R39u: Dynamic sweep with measured_economics IS two-legged truth (gas, fees,
+        # slippage all measured via QuoterV2). When executable_evidence indicates sweep
+        # results exist, profit classification must reflect measured truth, not fall
+        # through to ONE_LEG_ONLY_DIAGNOSTIC.
         "profit_is_diagnostic": not (
-            stats.get("roundtrip", {}).get("profitable_count", 0) > 0
-            and stats.get("roundtrip", {}).get("real_quote_count", 0) > 0
+            _has_legacy_profitable or _has_sweep_truth
         ),
         "profit_truth_source": (
             "ROUNDTRIP_CANONICAL" if (
-                stats.get("roundtrip", {}).get("profitable_count", 0) > 0
-                and stats.get("roundtrip", {}).get("real_quote_count", 0) > 0
+                _has_legacy_profitable or _has_sweep_truth
             )
             else "ONE_LEG_DIAGNOSTIC" if config.get("truth_mode_m42", False)
             else "ONE_LEG_UNVERIFIED"
         ),
         "profit_realism_status": (
             "ROUNDTRIP_PROFITABLE" if (
-                stats.get("roundtrip", {}).get("profitable_count", 0) > 0
-                and stats.get("roundtrip", {}).get("real_quote_count", 0) > 0
+                _has_legacy_profitable
+                or _exec_evidence == "SWEEP_PROFITABLE"
             )
-            else "ROUNDTRIP_NOT_PROFITABLE" if stats.get("roundtrip", {}).get("evaluated_count", 0) > 0
+            else "ROUNDTRIP_NOT_PROFITABLE" if (
+                stats.get("roundtrip", {}).get("evaluated_count", 0) > 0
+                or (_has_sweep_truth and _exec_evidence == "SWEEP_GAP_TO_ZERO")
+            )
             else "ONE_LEG_ONLY_DIAGNOSTIC"
         ),
     }

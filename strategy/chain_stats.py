@@ -129,6 +129,8 @@ def new_chain_stats() -> dict[str, Any]:
         "last_leg_source_summary": None,
         # R32: Auto-computed blocker from evidence (overrides config YAML when evidence exists)
         "blocker_evidence": None,
+        # R39u: Per-pair repeatability tracking across runs
+        "_per_pair_repeat": {},  # {pair: {runs_with_signals, runs_with_sweep_truth, _gap_values: []}}
     }
 
 
@@ -449,6 +451,31 @@ def update_chain_stats(
         tv = summary.get("truth_verdict")
         if tv:
             stats["last_truth_verdict"] = tv
+
+    # R39u: Per-pair repeatability accumulation from truth_report
+    if truth_report:
+        ppr = stats.setdefault("_per_pair_repeat", {})
+        # Signal presence per pair
+        seen_pairs_signals: set[str] = set()
+        for sig in truth_report.get("spread_signals") or []:
+            pair = sig.get("pair")
+            if pair:
+                seen_pairs_signals.add(pair)
+        for pair in seen_pairs_signals:
+            entry = ppr.setdefault(pair, {"runs_with_signals": 0, "runs_with_sweep_truth": 0, "_gap_values": []})
+            entry["runs_with_signals"] += 1
+        # Sweep truth per pair (from measured_economics.per_route_breakdown)
+        me = truth_report.get("measured_economics") or {}
+        if me.get("available"):
+            for route in me.get("per_route_breakdown") or []:
+                pair = route.get("pair")
+                if not pair:
+                    continue
+                entry = ppr.setdefault(pair, {"runs_with_signals": 0, "runs_with_sweep_truth": 0, "_gap_values": []})
+                entry["runs_with_sweep_truth"] += 1
+                gap = route.get("gap_to_zero_bps")
+                if gap is not None:
+                    entry["_gap_values"].append(gap)
 
     # R32: Auto-compute blocker_evidence from fresh data
     _compute_blocker_evidence(stats)

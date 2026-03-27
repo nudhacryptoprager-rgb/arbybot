@@ -223,6 +223,8 @@ def build_summary(
         "frontier_ranking": _compute_frontier_ranking(per_chain),
         # R21: Top-level per-chain drift summary (extracted from per_chain stats)
         "per_chain_drift_summary": _compute_per_chain_drift_summary(per_chain),
+        # R39u: Per-pair repeatability — operator visibility into pair-level stability
+        "per_pair_repeatability": _compute_per_pair_repeatability(per_chain),
         # R21: Explicit discovery vs truth-probe universe split
         "universe_split": _compute_universe_split(per_chain, pass_chains, fail_chains),
         # R28.10: Strict KPI separation — signals vs executable vs profitable vs truth
@@ -386,6 +388,35 @@ def _compute_per_chain_drift_summary(per_chain: dict[str, dict[str, Any]]) -> di
             "drift_worst_pair": s.get("drift_worst_pair"),
             "drift_worst_pair_bps": s.get("drift_worst_pair_bps"),
         }
+    return result
+
+
+def _compute_per_pair_repeatability(per_chain: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """R39u: Build per-pair repeatability block from accumulated chain stats.
+
+    For each chain, surfaces per-pair stability metrics:
+    - runs_with_signals: how many runs produced spread signals for this pair
+    - runs_with_sweep_truth: how many runs had dynamic sweep data for this pair
+    - median_gap_to_zero_bps: median gap across sweep runs for this pair
+    """
+    result: dict[str, Any] = {}
+    for chain, s in per_chain.items():
+        ppr = s.get("_per_pair_repeat", {})
+        if not ppr:
+            continue
+        pairs_out = []
+        for pair, entry in sorted(ppr.items()):
+            gap_values = entry.get("_gap_values", [])
+            median_gap = _compute_median(gap_values)
+            pairs_out.append({
+                "pair": pair,
+                "runs_with_signals": entry.get("runs_with_signals", 0),
+                "runs_with_sweep_truth": entry.get("runs_with_sweep_truth", 0),
+                "median_gap_to_zero_bps": round(median_gap, 4) if median_gap is not None else None,
+                "sweep_samples": len(gap_values),
+            })
+        if pairs_out:
+            result[chain] = pairs_out
     return result
 
 
