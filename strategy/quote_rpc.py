@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger("strategy.quotes")
 
@@ -274,7 +274,7 @@ def read_quoter_v2(
     amount_in: int,
     fee: int,
     rpc_url: Optional[str],
-    block_num: int,
+    block_num: Union[int, str],  # int block number or "latest"/"pending"
     fallback_rpc_urls: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Get executable quote from QuoterV2 contract.

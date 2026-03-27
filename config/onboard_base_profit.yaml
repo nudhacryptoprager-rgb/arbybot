@@ -32,7 +32,10 @@ run_kind: COVERAGE
 
 # R39p: More RPCs to spread rate-limit surface. First two have better
 # quoter throughput than mainnet.base.org (which 429s aggressively).
+# R39r++ step 2: Alchemy Base as primary RPC for generic quality uplift.
+# Uses ${ALCHEMY_API_KEY} from .env; silently skipped if key missing.
 rpc_endpoints:
+  - "https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
   - "https://base.drpc.org"
   - "https://base.publicnode.com"
   - "https://mainnet.base.org"

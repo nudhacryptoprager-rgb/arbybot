@@ -8,7 +8,7 @@ and stats/evidence assembly.
 """
 
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger("dynamic_sweep_runtime")
 
@@ -19,17 +19,19 @@ SUSPECT_ROUNDTRIP_OUTLIER_BPS = 500
 def make_requote_factory(
     chain_key: str,
     rpc_url: str,
-    current_block: int,
+    block_num: Union[int, str],  # int or "latest"
     read_quoter_v2_fn: Callable,
     get_dex_config_fn: Callable,
     get_token_address_fn: Callable,
     reverse: bool = False,
+    fallback_rpc_urls: Optional[List[str]] = None,
 ) -> Callable:
     """Create a requote callback factory for sweep legs.
 
     Args:
         reverse: If False, creates leg1 factory (token_in → token_out, same direction).
                  If True, creates leg2 factory (token_out → token_in, REVERSE).
+        fallback_rpc_urls: Additional RPC URLs to try on 429 rate-limit.
     """
     def _factory(quote: Dict) -> Optional[Callable]:
         _dex_id = quote.get("dex_id", "")
@@ -57,9 +59,10 @@ def make_requote_factory(
                 amount_in=amount_in_wei,
                 fee=_fee,
                 rpc_url=rpc_url,
-                block_num=current_block,
+                block_num=block_num,
+                fallback_rpc_urls=fallback_rpc_urls or [],
             )
-            if r:
+            if r and r.get("amount_out"):
                 result = {
                     "amount_out_wei": r["amount_out"],
                     "gas_estimate": r.get("gas_estimate", 150000),
@@ -68,6 +71,13 @@ def make_requote_factory(
                 if "sqrt_price_after" in r:
                     result["sqrt_price_after"] = r["sqrt_price_after"]
                 return result
+            logger.debug(
+                "Sweep requote returned no data: quoter=%s fee=%s in=%s out=%s amt=%s r=%s",
+                _quoter[:10] if _quoter else None, _fee,
+                _in_addr[:10] if _in_addr else None,
+                _out_addr[:10] if _out_addr else None,
+                amount_in_wei, repr(r)[:120],
+            )
             return None
         return _requote
     return _factory
@@ -95,18 +105,40 @@ def run_sweep(
     from strategy.quotes import read_quoter_v2
     from config import get_token_address
     from dex.registry import get_dex_config
+    import os
 
     dynamic_probe_cfg = config.get("dynamic_probe", {})
     sweep_sizes = dynamic_probe_cfg.get("sizes_usd", None) or list(CANONICAL_SWEEP_SIZES_USD)
     max_routes = dynamic_probe_cfg.get("top_routes", 15)
 
+    # Derive fallback RPC URLs from config so sweep can survive 429 quarantine
+    # R39s: Resolve ${ALCHEMY_API_KEY} placeholder in fallback URLs
+    _all_endpoints = config.get("rpc_endpoints") or []
+    alchemy_key = os.environ.get("ALCHEMY_API_KEY", "")
+    _fallback_urls = []
+    for u in _all_endpoints:
+        if not u or u == rpc_url:
+            continue
+        if "${ALCHEMY_API_KEY}" in u:
+            if alchemy_key:
+                _fallback_urls.append(u.replace("${ALCHEMY_API_KEY}", alchemy_key))
+        else:
+            _fallback_urls.append(u)
+
+    # R39r: Use "latest" block for sweep requotes instead of stale scan-start block.
+    # Alchemy free tier cannot serve historical state queries, causing all sweep
+    # requotes to fail when current_block is even a few blocks behind.
+    sweep_block: Union[int, str] = "latest"
+
     make_leg1 = make_requote_factory(
-        chain_key, rpc_url, current_block,
+        chain_key, rpc_url, sweep_block,
         read_quoter_v2, get_dex_config, get_token_address, reverse=False,
+        fallback_rpc_urls=_fallback_urls,
     )
     make_leg2 = make_requote_factory(
-        chain_key, rpc_url, current_block,
+        chain_key, rpc_url, sweep_block,
         read_quoter_v2, get_dex_config, get_token_address, reverse=True,
+        fallback_rpc_urls=_fallback_urls,
     )
 
     sweep_results = []
@@ -116,8 +148,17 @@ def run_sweep(
         bq = quotes_by_key.get(buy_key)
         sq = quotes_by_key.get(sell_key)
         if not bq or not sq:
+            logger.debug(
+                "Sweep skip: bq=%s sq=%s buy_key=%s sell_key=%s",
+                bool(bq), bool(sq), buy_key[:60], sell_key[:60],
+            )
             continue
 
+        logger.debug(
+            "Sweep route: pair=%s bq_fee=%s sq_fee=%s opp_buy_fee=%s opp_sell_fee=%s",
+            opp.get("pair"), bq.get("fee"), sq.get("fee"),
+            opp.get("buy_fee"), opp.get("sell_fee"),
+        )
         leg1_rq = make_leg1(sq)    # leg1 on sell_dex
         leg2_rq = make_leg2(bq)    # leg2 on buy_dex
         if not leg1_rq or not leg2_rq:

@@ -86,3 +86,64 @@ class TestSweepStats:
         assert stats["best_pair"] == "B"
         assert stats["routes_swept"] == 2
         assert stats["routes_clean"] == 2
+
+
+class TestRequoteFactoryFallback:
+    """Test that make_requote_factory passes fallback_rpc_urls to read_quoter_v2."""
+
+    def test_fallback_urls_passed_to_requote(self):
+        from strategy.dynamic_sweep_runtime import make_requote_factory
+
+        captured = {}
+
+        def mock_read_quoter_v2(**kwargs):
+            captured.update(kwargs)
+            return {"amount_out": 100, "gas_estimate": 100000, "ticks_crossed": 1}
+
+        mock_dex_cfg = MagicMock()
+        mock_dex_cfg.get_quoter_address.return_value = "0xQuoter"
+
+        factory = make_requote_factory(
+            chain_key="base",
+            rpc_url="https://primary.rpc",
+            block_num=100,
+            read_quoter_v2_fn=mock_read_quoter_v2,
+            get_dex_config_fn=lambda _chain, _dex: mock_dex_cfg,
+            get_token_address_fn=lambda _chain, sym: f"0x{sym}",
+            reverse=False,
+            fallback_rpc_urls=["https://fallback1.rpc", "https://fallback2.rpc"],
+        )
+
+        quote = {"dex_id": "uniswap_v3", "fee": 500, "token_in": "WETH", "token_out": "USDC"}
+        requote_fn = factory(quote)
+        assert requote_fn is not None
+
+        result = requote_fn(1000)
+        assert result is not None
+        assert result["amount_out_wei"] == 100
+        assert captured["fallback_rpc_urls"] == ["https://fallback1.rpc", "https://fallback2.rpc"]
+
+    def test_rate_limited_sentinel_returns_none(self):
+        """QUOTER_RATE_LIMITED sentinel must not crash requote, should return None."""
+        from strategy.dynamic_sweep_runtime import make_requote_factory
+
+        def mock_read_rate_limited(**kwargs):
+            return {"_rate_limited": True}
+
+        mock_dex_cfg = MagicMock()
+        mock_dex_cfg.get_quoter_address.return_value = "0xQuoter"
+
+        factory = make_requote_factory(
+            chain_key="base",
+            rpc_url="https://primary.rpc",
+            block_num=100,
+            read_quoter_v2_fn=mock_read_rate_limited,
+            get_dex_config_fn=lambda _chain, _dex: mock_dex_cfg,
+            get_token_address_fn=lambda _chain, sym: f"0x{sym}",
+            reverse=False,
+        )
+
+        quote = {"dex_id": "uniswap_v3", "fee": 500, "token_in": "WETH", "token_out": "USDC"}
+        requote_fn = factory(quote)
+        result = requote_fn(1000)
+        assert result is None

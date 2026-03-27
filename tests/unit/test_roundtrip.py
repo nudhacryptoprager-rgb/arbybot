@@ -1137,6 +1137,28 @@ class TestSizeSweep:
         assert result.sizes_evaluated == 0
         assert result.points[0].error == "LEG1_QUOTE_FAIL"
 
+    def test_sweep_rate_limited_sentinel_returns_fail(self):
+        """QUOTER_RATE_LIMITED sentinel dict must not crash or produce partial result."""
+        from engine.roundtrip import sweep_roundtrip_sizes
+
+        buy_q, sell_q = self._make_base_quotes()
+
+        # Simulate QUOTER_RATE_LIMITED sentinel: dict without amount_out
+        def requote_rate_limited(_):
+            return {"_rate_limited": True}
+
+        result = sweep_roundtrip_sizes(
+            buy_quote_base=buy_q,
+            sell_quote_base=sell_q,
+            requote_leg1=requote_rate_limited,
+            requote_leg2=lambda _: {"amount_out_wei": 100, "gas_estimate": 100000},
+            sizes_usd=[100],
+            token_in_usd_price=2000.0,
+        )
+
+        assert result.sizes_evaluated == 0
+        assert result.points[0].error == "LEG1_QUOTE_FAIL"
+
 
 class TestCanonicalSweep:
     """Contract tests for CANONICAL_SWEEP_SIZES_USD and sweep defaults."""

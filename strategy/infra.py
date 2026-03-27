@@ -126,10 +126,21 @@ def resolve_rpc_endpoints(config: Dict[str, Any]) -> Tuple[Optional[str], Option
     # v3.2.32: Config rpc_endpoints take HIGHEST priority (for multi-chain bring-up)
     # v3.2.33: OVERWRITE env vars to prevent env pollution from prior runs
     # v3.2.54: Continue to resolve WS even when HTTP comes from config (don't return early)
+    # R39s: Resolve ${ALCHEMY_API_KEY} placeholder in config URLs
     config_rpc_endpoints = config.get("rpc_endpoints") or []
     if config_rpc_endpoints:
-        # Use first config endpoint as HTTP
-        resolved_http = config_rpc_endpoints[0]
+        # Use first config endpoint as HTTP, resolving API key placeholder
+        raw_http = config_rpc_endpoints[0]
+        # R39s: Substitute ${ALCHEMY_API_KEY} placeholder with env var
+        alchemy_key = os.environ.get("ALCHEMY_API_KEY", "")
+        if raw_http and "${ALCHEMY_API_KEY}" in raw_http:
+            if alchemy_key:
+                resolved_http = raw_http.replace("${ALCHEMY_API_KEY}", alchemy_key)
+            else:
+                # Skip Alchemy URLs if no key available
+                resolved_http = None
+        else:
+            resolved_http = raw_http
         provider_http = "config"
         if resolved_http:
             from urllib.parse import urlparse
