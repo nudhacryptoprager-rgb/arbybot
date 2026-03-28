@@ -48,7 +48,13 @@ class TestPoolEdge:
     def test_edge_key_deterministic(self):
         e = _edge("WETH", "USDC", pool="0xAbcdef1234")
         assert "WETH->USDC" in e.edge_key
-        assert "0xAbcdef12" in e.edge_key  # first 10 chars of address
+        assert "0xAbcdef1234" in e.edge_key  # full address
+
+    def test_edge_key_no_collision_on_prefix(self):
+        """Two pools sharing a 10-char prefix must produce distinct edge_keys."""
+        e1 = _edge("WETH", "USDC", pool="0xAbcdef1234_pool_alpha")
+        e2 = _edge("WETH", "USDC", pool="0xAbcdef1234_pool_beta")
+        assert e1.edge_key != e2.edge_key
 
     def test_edge_key_v2_fee_none(self):
         e = _edge("WETH", "USDC", fee=None)

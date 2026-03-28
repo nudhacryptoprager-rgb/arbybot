@@ -47,9 +47,13 @@ class PoolEdge:
 
     @property
     def edge_key(self) -> str:
-        """Deterministic identifier for dedup and logging."""
+        """Deterministic identifier for dedup and logging.
+
+        Uses full pool_address to avoid collision between pools
+        that share a common prefix.
+        """
         fee_str = str(self.fee) if self.fee is not None else "v2"
-        return f"{self.chain}:{self.dex}:{self.token_in}->{self.token_out}:{fee_str}:{self.pool_address[:10]}"
+        return f"{self.chain}:{self.dex}:{self.token_in}->{self.token_out}:{fee_str}:{self.pool_address}"
 
     def reverse(self) -> "PoolEdge":
         """Return the reverse-direction edge for the same pool."""
@@ -279,3 +283,57 @@ def build_graph_from_pool_dicts(
         chain, graph.node_count, graph.edge_count,
     )
     return graph
+
+
+# ---------------------------------------------------------------------------
+# M7.A narrow starter universe
+# ---------------------------------------------------------------------------
+
+# Core liquid tokens for arbitrum_one triangular exploration.
+# Restricted to trust anchors with productive_default or high cross-dex
+# presence, excluding accounting_sensitive tokens (wstETH peg drift).
+M7A_TOKENS_ARBITRUM_ONE: FrozenSet[str] = frozenset({
+    "WETH", "USDC", "USDT", "WBTC", "ARB", "LINK", "PENDLE",
+})
+
+# Adapter types already stable in the repo.
+M7A_STABLE_ADAPTERS: FrozenSet[str] = frozenset({
+    "uniswap_v3",
+    "uniswap_v2",
+    "algebra",
+})
+
+# DEXes restricted for M7.A (only those with stable adapter + proven quoting).
+M7A_DEXES_ARBITRUM_ONE: FrozenSet[str] = frozenset({
+    "uniswap_v3",
+    "sushiswap_v3",
+    "pancakeswap_v3",
+    "camelot_v3",
+    "sushiswap_v2",
+})
+
+
+def filter_graph_to_m7a_universe(graph: PoolGraph) -> PoolGraph:
+    """Return a new PoolGraph containing only M7.A-eligible edges.
+
+    Filters:
+    - Both token_in and token_out must be in M7A_TOKENS_ARBITRUM_ONE
+    - adapter_type must be in M7A_STABLE_ADAPTERS
+    - dex must be in M7A_DEXES_ARBITRUM_ONE
+    """
+    filtered = PoolGraph(chain=graph.chain)
+    for edges in graph.adjacency.values():
+        for e in edges:
+            if (
+                e.token_in in M7A_TOKENS_ARBITRUM_ONE
+                and e.token_out in M7A_TOKENS_ARBITRUM_ONE
+                and e.adapter_type in M7A_STABLE_ADAPTERS
+                and e.dex in M7A_DEXES_ARBITRUM_ONE
+            ):
+                filtered.add_edge(e)
+    logger.info(
+        "Filtered to M7.A universe: %d -> %d edges, %d -> %d nodes",
+        graph.edge_count, filtered.edge_count,
+        graph.node_count, filtered.node_count,
+    )
+    return filtered

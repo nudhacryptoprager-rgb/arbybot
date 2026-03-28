@@ -304,15 +304,15 @@ def score_cycle_fees_only(
     gas_cost_usd: float = 0.50,
     notional_usd: float = 100.0,
 ) -> CycleScore:
-    """Score a cycle using fee structure alone (no live quotes).
+    """DIAGNOSTIC PREFILTER — score a cycle by fee structure alone (no RPC).
 
-    This is a conservative lower-bound: it computes the fee drag
-    without any spread information. Useful for filtering structurally
-    unviable cycles before calling RPC for live quotes.
+    NOT a canonical truth scorer. This function computes the minimum fee+gas
+    cost that any gross spread must overcome, using only pool metadata.
+    It is intended for filtering structurally unviable cycles before
+    committing RPC calls for live quotes.
 
-    The resulting final_net_bps is the fee+gas cost in bps that any
-    gross spread must overcome. A cycle with high fee_total is unlikely
-    to be profitable.
+    Canonical truth scoring (with live quotes, slippage, same-state proof)
+    belongs in a future per-leg scorer that reuses engine/roundtrip.py.
 
     Args:
         cycle: The triangular cycle to score.
@@ -320,7 +320,8 @@ def score_cycle_fees_only(
         notional_usd: Assumed notional for gas-to-bps conversion.
 
     Returns:
-        CycleScore with fee and gas decomposition, gross_bps=0 (no quote).
+        CycleScore with fee and gas decomposition, gross_bps=0 (no quote),
+        same_state_class=AMBIGUOUS, reject_reason='FEE_ONLY_SCORE'.
     """
     f1 = _fee_tier_to_bps(cycle.leg1.fee)
     f2 = _fee_tier_to_bps(cycle.leg2.fee)
