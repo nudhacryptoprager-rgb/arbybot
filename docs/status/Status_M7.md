@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A — machine-readable verdict produced: `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. All 6 structural blockers stable across 4 independent blocks, 0 flapping. Net bps range -23.52 to -9.56, never beats two-leg baseline -3.51 bps. Gross sometimes positive but multi-cost structure always pushes net negative. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A + M7.A.2 — both `narrow_7` and `expanded_10` universe profiles produce no-graduate verdicts. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. All 6 structural blockers stable, 0 flapping. Expanded universe (DAI added, 8 tokens in graph) did not produce a second token triple or beat two-leg baseline. M7.B remains closed.)  
 **Updated**: 2026-03-28  
-**Scope**: M7.A only — runtime graph sourcing, live measured scoring with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback, bounded size sweep over canonical size ladder (19 notionals, $1–$10K), machine-readable blocker summary with 6 canonical blocker tags, temporal blocker repeatability aggregation, **bounded-scope verdict summary** (`build_verdict_summary()` with `--verdict` CLI). For the current bounded M7.A scope on arbitrum_one narrow-universe, temporal repeatability, size sweep, and blocker repeatability jointly support a no-graduate verdict: M7.B remains closed, and the current M7.A scope should be frozen unless a new explicit hypothesis changes the search surface.
+**Scope**: M7.A only — runtime graph sourcing, live measured scoring with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback, bounded size sweep over canonical size ladder (19 notionals, $1–$10K), machine-readable blocker summary with 6 canonical blocker tags, temporal blocker repeatability aggregation, **bounded-scope verdict summary** (`build_verdict_summary()` with `--verdict` CLI), **universe-profile infrastructure** (`--universe narrow_7|expanded_10`). Both universe profiles on arbitrum_one independently support a no-graduate verdict. M7.B remains closed. The current M7.A scope should be frozen unless a new explicit hypothesis changes the search surface.
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Goal** (per `docs/step_M7.md`): build verified pool graph, enumerate 3-hop simple cycles, score with measured-cost discipline, apply provenance and same-state classification, rank by measured final net, and decide whether M7 stops or graduates to M7.B.
 
-**Current sub-step**: steps 1-8 done. Step 8 verdict now formalized as machine-readable `verdict_summary` artifact (`data/tmp/m7a_verdict.json`). Five evidence tiers inform the verdict: (a) temporal repeatability across 5 blocks, (b) bounded size sweep across 19 notionals on top 10 cycles, (c) machine-readable blocker RCA with 6 canonical tags, (d) temporal blocker repeatability across 4 fresh blocks proving all 6 tags stable with 0 flapping, (e) **formal verdict summary** with `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`.
+**Current sub-step**: steps 1-8 done. Step 8 verdict now formalized as machine-readable `verdict_summary` artifact (`data/tmp/m7a_verdict.json`). Five evidence tiers inform the verdict: (a) temporal repeatability across 5 blocks, (b) bounded size sweep across 19 notionals on top 10 cycles, (c) machine-readable blocker RCA with 6 canonical tags, (d) temporal blocker repeatability across 4 fresh blocks proving all 6 tags stable with 0 flapping, (e) **formal verdict summary** with `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. Additionally, **M7.A.2** tested an expanded 10-token universe (`--universe expanded_10`) and produced an independent no-graduate verdict (`data/tmp/m7a_expanded_verdict.json`).
 
 ### Current Evidence — Temporal Repeatability (5 runtime+measured runs)
 
@@ -192,11 +192,46 @@ Input: 4 independent measured+sweep artifacts (blocks 446652757–446661451).
 
 **Verdict reasoning**: Net bps never beats two-leg baseline across all runs. Gross is sometimes positive but gas+fees always push net negative. 6 stable blockers, 0 flapping. Multi-cost structure (gas + fees + concentration) is the binding constraint, not a single blocker.
 
+### Current Evidence — M7.A.2 Expanded Universe (3 runs)
+
+**Hypothesis**: Does a moderately expanded arbitrum_one token universe (narrow_7 + DAI, GMX, UNI → 10 tokens) produce a second token-triple or better net than the frozen narrow_7 scope?
+
+Evidence source: 3 independent `--universe expanded_10 --score measured --sweep-top 10` runs.  
+Generated: 2026-03-28  
+Artifact: `data/tmp/m7a_expanded_run1.json`, `m7a_expanded_run2.json`, `m7a_expanded_run3.json`, `m7a_expanded_verdict.json`  
+Provenance tier: **local/session** — temporal diversity across 3 blocks.
+
+**Graph expansion result**: Of the 3 extra tokens (DAI, GMX, UNI), only **DAI** had runtime pools (GMX and UNI have no intent.txt pairs). Graph expanded from 7 to **8 nodes**. Edge count unchanged (248 → 248) because all existing edges involve narrow_7 tokens. DAI added 0 new edges to top cycles.
+
+| Run | Block | Scored | Failed | Best Net (bps) | Gross (best) | Conc. | SS Proven |
+|-----|-------|--------|--------|----------------|-------------|-------|----------|
+| expanded_1 | 446672946 | 67 | 33 | **-15.44** | -4.77 | 1.0 | 67 |
+| expanded_2 | 446674182 | 67 | 33 | **-20.91** | — | 1.0 | 67 |
+| expanded_3 | 446675281 | 67 | 33 | **-11.00** | +0.19 | 1.0 | 67 |
+
+**Expanded verdict** (from `data/tmp/m7a_expanded_verdict.json`):
+
+| Field | Value |
+|-------|-------|
+| `beats_two_leg_baseline` | **false** |
+| `all_sizes_negative` | **true** |
+| `gross_sometimes_positive` | **true** |
+| `stable_blockers_count` | **6** |
+| `flapping_blockers_count` | **0** |
+| `best_net_bps_range` | -20.91 to -11.00 (mean -15.78) |
+| `two_leg_baseline_net_bps` | -3.5062 |
+| `dominant_triple` | **true** (ARB/USDC/WETH) |
+| `route_failure_rate` | 0.33 (stable) |
+| `recommend_open_m7b` | **false** |
+| `recommend_freeze_current_m7a_scope` | **true** |
+
+**M7.A.2 conclusion**: Expanding the universe from 7 to 10 tokens (with only DAI actually joining the graph) did NOT produce a second token triple. All top cycles remain ARB→USDC→WETH→ARB. Token triple concentration remains 1.0. Net bps range (-20.91 to -11.00) is comparable to the narrow scope range (-23.52 to -9.56). The expanded universe independently confirms the no-graduate verdict. DAI liquidity exists on arbitrum_one but does not create competitive triangular routes.
+
 ### What this evidence does NOT yet cover
 
 - **L1 gas is a static estimate** — `l1_cost_wei` uses a fixed 6 Gwei heuristic, not live L1 calldata cost from the chain.
 - **Artifact is `data/tmp/` provenance** — not in `data/runs/<runDir>/` or rolling artifacts; not operational-grade.
-- **Narrow universe only** — 7 tokens on arbitrum_one; other tokens or chains may have different economics.
+- **Narrow universe only** — 7 tokens on arbitrum_one baseline; expanded_10 added DAI but GMX/UNI had no runtime pools. Other chains may have different economics.
 - **Single-block sweep** — all 190 quotes at block 446635245; no temporal diversity within this sweep (but 5-block temporal diversity from prior runs).
 
 ### Remaining M7.A work (per step_M7.md implementation order)
@@ -212,10 +247,10 @@ Input: 4 independent measured+sweep artifacts (blocks 446652757–446661451).
 
 ### Modules
 
-- `engine/triangular_graph.py` — PoolEdge, PoolGraph, M7A constants, graph builders (cache + RuntimePair)
+- `engine/triangular_graph.py` — PoolEdge, PoolGraph, M7A constants, M7A2 expanded universe constants, graph builders (cache + RuntimePair), `filter_graph_to_m7a_universe`, `filter_graph_to_m7a2_universe`
 - `engine/triangular_cycles.py` — TriangularCycle, CycleScore (with `scored_size_usd`, slippage `_heuristic` fields), find_3hop_cycles, `score_cycle_fees_only` (diagnostic), `score_cycle_measured` (live per-leg), `classify_same_state`, LegQuote, `leg_quote_from_rpc_result`, SizeSweepResult, SizeSweepPoint
-- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`, `--sweep-top N`, `--repeatability`, `--verdict`. Measured mode: measured-only ranking. Blocker analysis: `_build_blocker_summary()` + `classify_blocker_tags()` (6 canonical tags). Count semantics: `per_cycle_blocker_counts` + `global_blockers_present`. Repeatability: `build_blocker_repeatability()`. Verdict: `build_verdict_summary()` produces bounded-scope no-graduate decision artifact from repeatability evidence.
-- Tests: 115 M7 contract tests in `test_triangular_contracts.py` (2704 total, 0 failures)
+- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`, `--sweep-top N`, `--universe narrow_7|expanded_10`, `--repeatability`, `--verdict`. Measured mode: measured-only ranking. Blocker analysis: `_build_blocker_summary()` + `classify_blocker_tags()` (6 canonical tags). Count semantics: `per_cycle_blocker_counts` + `global_blockers_present`. Repeatability: `build_blocker_repeatability()`. Verdict: `build_verdict_summary()` produces bounded-scope no-graduate decision artifact from repeatability evidence.
+- Tests: 124 M7 contract tests in `test_triangular_contracts.py` (2713 total, 0 failures)
 
 ---
 

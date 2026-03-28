@@ -546,15 +546,12 @@ Done Criteria:
 - `dex/adapters/*` — quoting/adapter support
 
 **TODO (заплановані модулі, ще не реалізовані):**
-- `discovery/intent_loader.py` — TODO: парсить `intent.txt`, дає canonical pair-universe
-- `discovery/verify.py` — TODO: on-chain verify токенів/пулів
-- `discovery/index_factories.py` — TODO: factory-based enumeration пулів
 - `discovery/dexscreener.py` — TODO: fallback discovery (hint/source)
 
 ## A2) Як ми запускаємо “всі токени + всі мережі” з intent.txt
 
 ### Крок 1 — Парсинг intent.txt → canonical universe
-**Виконує:** `discovery/intent_loader.py` (TODO: ще не реалізовано)
+**Виконує:** `discovery/intent_loader.py` (реалізовано)
 
 Правила:
 1) Рядок формату `chain:AAA/BBB` додає пару (unordered) в universe для chain.
@@ -569,7 +566,7 @@ Done Criteria:
 > Пара у intent — це мінімум. Далі ми розширюємо пул-лист, але не розширюємо список пар без явного рішення.
 
 ### Крок 2 — Token resolution: symbol → verified token address (per chain)
-**Виконує:** `discovery/verify.py` (TODO: ще не реалізовано; тимчасово `scripts/verify_anchors.py`)
+**Виконує:** `discovery/verify.py` (реалізовано; `scripts/verify_anchors.py` лишається допоміжним anchor-check tool)
 
 Порядок (жорсткий):
 1) Якщо символ входить у `config/core_tokens.yaml` для цієї мережі → беремо address+decimals як trust anchor.
@@ -584,7 +581,7 @@ Done Criteria:
 > Якщо виявлено 2 різні адреси з одним символом — обидві зберігаються, але лише одна може бути “canonical” після ручного рішення (`status='candidate'`).
 
 ### Крок 3 — “All possible pools”: factory-based enumeration (основний метод)
-**Виконує:** `discovery/index_factories.py` (TODO: ще не реалізовано; тимчасово `scripts/find_sushi_pools.py`)
+**Виконує:** `discovery/index_factories.py` (реалізовано; `scripts/find_sushi_pools.py` лишається допоміжним debug/discovery script)
 
 Ціль: для кожної `intent pair` на кожному chain, пройти по **всіх DEX-ах**, які ми реально підтримуємо адаптерами, і знайти всі пули.
 

@@ -345,3 +345,43 @@ def filter_graph_to_m7a_universe(graph: PoolGraph) -> PoolGraph:
         graph.node_count, filtered.node_count,
     )
     return filtered
+
+
+# ---------------------------------------------------------------------------
+# M7.A.2 expanded universe (additive — narrow_7_token + 3 extra tokens)
+# ---------------------------------------------------------------------------
+
+# Hypothesis: does adding DAI, GMX, UNI to the narrow universe produce a
+# second viable token-triple or better net than the frozen narrow_7_token scope?
+# Selection criteria: cross_dex_expected >= 2, not accounting_sensitive,
+# liquidity_tier >= medium, not a bridged duplicate (excludes USDC_E).
+M7A2_EXTRA_TOKENS_ARBITRUM_ONE: FrozenSet[str] = frozenset({
+    "DAI", "GMX", "UNI",
+})
+
+M7A2_TOKENS_ARBITRUM_ONE: FrozenSet[str] = (
+    M7A_TOKENS_ARBITRUM_ONE | M7A2_EXTRA_TOKENS_ARBITRUM_ONE
+)
+
+
+def filter_graph_to_m7a2_universe(graph: PoolGraph) -> PoolGraph:
+    """Return a new PoolGraph containing only M7.A.2-eligible edges.
+
+    Same adapter/DEX filter as M7.A, but with an expanded token set.
+    """
+    filtered = PoolGraph(chain=graph.chain)
+    for edges in graph.adjacency.values():
+        for e in edges:
+            if (
+                e.token_in in M7A2_TOKENS_ARBITRUM_ONE
+                and e.token_out in M7A2_TOKENS_ARBITRUM_ONE
+                and e.adapter_type in M7A_STABLE_ADAPTERS
+                and e.dex in M7A_DEXES_ARBITRUM_ONE
+            ):
+                filtered.add_edge(e)
+    logger.info(
+        "Filtered to M7.A.2 universe: %d -> %d edges, %d -> %d nodes",
+        graph.edge_count, filtered.edge_count,
+        graph.node_count, filtered.node_count,
+    )
+    return filtered

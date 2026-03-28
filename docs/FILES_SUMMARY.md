@@ -3,16 +3,16 @@
 
 ## Snapshot
 
-Current repo snapshot excluding `venv/` and `.venv/`:
+Current repo snapshot excluding `.venv/`, `venv/`, `archive/`, and runtime/data folders under `data/`:
 
-- Python files: `297`
-- Markdown files: `69`
+- Python files: `303`
+- Markdown files: `36`
 - JSON files: `26`
 
 Top-level distribution of Python files:
 
-- `tests/`: `157`
-- `scripts/`: `34`
+- `tests/`: `160`
+- `scripts/`: `35`
 - `strategy/`: `31`
 - `core/`: `20`
 - `dex/`: `12`
@@ -20,9 +20,10 @@ Top-level distribution of Python files:
 - `discovery/`: `8`
 - `execution/`: `7`
 - `chains/`: `5`
+- `engine/`: `5`
 - `monitoring/`: `4`
-- `engine/`: `3`
 - `config/`: `3`
+- `cex/`: `2`
 
 ## Root
 
@@ -154,6 +155,8 @@ Economics and opportunity truth layer.
 - `engine/__init__.py`
 - `engine/opportunity_engine.py`: seed/paper opportunity model
 - `engine/roundtrip.py`: canonical measured roundtrip/sweep truth engine
+- `engine/triangular_graph.py`: verified pool graph builder for M7.A
+- `engine/triangular_cycles.py`: 3-hop triangular cycle discovery, measured scoring, size sweep, blocker and verdict support
 
 ## execution/
 

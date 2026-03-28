@@ -8,6 +8,7 @@
 - `docs/status/Status_M4.md`
 - `docs/status/Status_M5.md`
 - `docs/status/Status_M5_0.md`
+- `docs/status/Status_M7.md`
 - `docs/status/INDEX.md`
 
 ## Archive Locations (outside docs/)

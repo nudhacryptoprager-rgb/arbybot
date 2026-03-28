@@ -1489,7 +1489,11 @@ class TestVerdictSummary:
             },
             "per_cycle_tag_ranges": {},
             "global_blocker_stability": {},
-            "snapshots": [],
+            "snapshots": [
+                {"universe_profile": "narrow_7", "block": 446652757},
+                {"universe_profile": "narrow_7", "block": 446653838},
+                {"universe_profile": "narrow_7", "block": 446654943},
+            ] if runs == 3 else [],
         }
 
     def test_verdict_schema_keys(self):
@@ -1599,7 +1603,7 @@ class TestVerdictSummary:
 
         scope = result["verdict_scope"]
         assert scope["chain"] == "arbitrum_one"
-        assert scope["universe"] == "narrow_7_token"
+        assert scope["universe"] == "narrow_7"
         assert scope["phase"] == "M7.A"
         assert scope["runs_count"] == 3
 
@@ -1630,3 +1634,138 @@ class TestVerdictSummary:
         assert result["all_sizes_negative"] is False
         assert result["recommend_open_m7b"] is True
         assert result["recommend_freeze_current_m7a_scope"] is False
+
+
+class TestUniverseProfile:
+    """Contract tests for M7.A.2 universe-profile expansion."""
+
+    def test_m7a2_tokens_superset_of_m7a(self):
+        """Expanded universe must be a strict superset of narrow universe."""
+        from engine.triangular_graph import (
+            M7A_TOKENS_ARBITRUM_ONE,
+            M7A2_TOKENS_ARBITRUM_ONE,
+            M7A2_EXTRA_TOKENS_ARBITRUM_ONE,
+        )
+        assert M7A_TOKENS_ARBITRUM_ONE < M7A2_TOKENS_ARBITRUM_ONE  # strict subset
+        assert M7A2_EXTRA_TOKENS_ARBITRUM_ONE - M7A_TOKENS_ARBITRUM_ONE == M7A2_EXTRA_TOKENS_ARBITRUM_ONE
+        assert len(M7A2_TOKENS_ARBITRUM_ONE) == len(M7A_TOKENS_ARBITRUM_ONE) + len(M7A2_EXTRA_TOKENS_ARBITRUM_ONE)
+
+    def test_m7a2_extra_tokens_are_known(self):
+        """Extra tokens must be DAI, GMX, UNI exactly."""
+        from engine.triangular_graph import M7A2_EXTRA_TOKENS_ARBITRUM_ONE
+        assert M7A2_EXTRA_TOKENS_ARBITRUM_ONE == frozenset({"DAI", "GMX", "UNI"})
+
+    def test_m7a2_token_count(self):
+        """Expanded universe must have exactly 10 tokens."""
+        from engine.triangular_graph import M7A2_TOKENS_ARBITRUM_ONE
+        assert len(M7A2_TOKENS_ARBITRUM_ONE) == 10
+
+    def test_filter_m7a2_produces_superset_graph(self):
+        """filter_graph_to_m7a2_universe must include all edges from m7a filter plus extras."""
+        from engine.triangular_graph import (
+            PoolEdge, PoolGraph,
+            filter_graph_to_m7a_universe,
+            filter_graph_to_m7a2_universe,
+        )
+        g = PoolGraph(chain="arbitrum_one")
+        # Edge in narrow universe
+        g.add_pool(PoolEdge(
+            token_in="WETH", token_out="USDC", pool_address="0x01",
+            dex="uniswap_v3", adapter_type="uniswap_v3", fee=500,
+            chain="arbitrum_one",
+        ))
+        # Edge only in expanded universe (DAI)
+        g.add_pool(PoolEdge(
+            token_in="WETH", token_out="DAI", pool_address="0x02",
+            dex="uniswap_v3", adapter_type="uniswap_v3", fee=500,
+            chain="arbitrum_one",
+        ))
+        narrow = filter_graph_to_m7a_universe(g)
+        expanded = filter_graph_to_m7a2_universe(g)
+        assert narrow.edge_count <= expanded.edge_count
+        assert "DAI" not in narrow.all_tokens()
+        assert "DAI" in expanded.all_tokens()
+        assert "WETH" in narrow.all_tokens()
+        assert "WETH" in expanded.all_tokens()
+
+    def test_m7a2_filter_rejects_non_stable_adapter(self):
+        """Expanded universe still rejects edges with non-stable adapters."""
+        from engine.triangular_graph import (
+            PoolEdge, PoolGraph, filter_graph_to_m7a2_universe,
+        )
+        g = PoolGraph(chain="arbitrum_one")
+        g.add_pool(PoolEdge(
+            token_in="DAI", token_out="USDC", pool_address="0x03",
+            dex="ramses_v2", adapter_type="ve33", fee=100,
+            chain="arbitrum_one",
+        ))
+        expanded = filter_graph_to_m7a2_universe(g)
+        assert expanded.edge_count == 0
+
+    def test_m7a2_filter_rejects_excluded_tokens(self):
+        """Expanded universe still rejects tokens not in expanded set."""
+        from engine.triangular_graph import (
+            PoolEdge, PoolGraph, filter_graph_to_m7a2_universe,
+        )
+        g = PoolGraph(chain="arbitrum_one")
+        g.add_pool(PoolEdge(
+            token_in="WETH", token_out="wstETH", pool_address="0x04",
+            dex="uniswap_v3", adapter_type="uniswap_v3", fee=500,
+            chain="arbitrum_one",
+        ))
+        expanded = filter_graph_to_m7a2_universe(g)
+        assert expanded.edge_count == 0
+
+    def test_artifact_universe_profile_field(self):
+        """Artifact JSON must contain universe_profile at top level."""
+        # Simulates the structure m7a_enumerate_cycles.py produces
+        artifact = {
+            "m7a_enumeration": True,
+            "universe_profile": "expanded_10",
+            "m7a_universe": {
+                "universe_profile": "expanded_10",
+                "token_count": 10,
+            },
+        }
+        assert artifact["universe_profile"] == "expanded_10"
+        assert artifact["m7a_universe"]["token_count"] == 10
+
+    def test_verdict_with_expanded_universe_profile(self):
+        """Verdict from expanded_10 artifacts must carry universe='expanded_10'."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = {
+            "blocker_repeatability": True,
+            "timestamp": "2026-03-28T22:00:00Z",
+            "runs_count": 2,
+            "universe_profile": "expanded_10",
+            "block_range": {"min": 100, "max": 200},
+            "metric_ranges": {
+                "best_route_gross_bps": {"min": -14.0, "max": -5.0, "mean": -9.5},
+                "best_route_gas_bps": {"min": 9.0, "max": 11.0, "mean": 10.0},
+                "best_route_total_fee_bps": {"min": 1.0, "max": 5.0, "mean": 3.0},
+                "best_route_net_bps": {"min": -20.0, "max": -8.0, "mean": -14.0},
+                "best_route_best_size_usd": {"min": 100, "max": 150, "mean": 125},
+                "route_failure_rate": {"min": 0.2, "max": 0.3, "mean": 0.25},
+                "token_triple_concentration": {"min": 0.7, "max": 0.9, "mean": 0.8},
+            },
+            "blocker_class_stability": {
+                "stable_blockers": ["GAS_DOMINANT_SMALL", "GROSS_NEGATIVE_CORE"],
+                "flapping_blockers": [],
+                "all_observed": ["GAS_DOMINANT_SMALL", "GROSS_NEGATIVE_CORE"],
+            },
+            "snapshots": [
+                {"universe_profile": "expanded_10", "block": 100},
+                {"universe_profile": "expanded_10", "block": 200},
+            ],
+        }
+        result = build_verdict_summary(rep, chain="arbitrum_one")
+        assert result["verdict_scope"]["universe"] == "expanded_10"
+
+    def test_narrow_universe_keys_unchanged(self):
+        """M7.A narrow universe constant must remain frozen (byte-compatible)."""
+        from engine.triangular_graph import M7A_TOKENS_ARBITRUM_ONE
+        expected = frozenset({"WETH", "USDC", "USDT", "WBTC", "ARB", "LINK", "PENDLE"})
+        assert M7A_TOKENS_ARBITRUM_ONE == expected

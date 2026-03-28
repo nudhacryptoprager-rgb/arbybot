@@ -38,10 +38,12 @@ from engine.triangular_graph import (
     M7A_DEXES_ARBITRUM_ONE,
     M7A_STABLE_ADAPTERS,
     M7A_TOKENS_ARBITRUM_ONE,
+    M7A2_TOKENS_ARBITRUM_ONE,
     PoolEdge,
     PoolGraph,
     build_graph_from_runtime_pairs,
     filter_graph_to_m7a_universe,
+    filter_graph_to_m7a2_universe,
 )
 from engine.triangular_cycles import (
     CycleScore,
@@ -566,6 +568,7 @@ def build_blocker_repeatability(
         snapshots.append({
             "artifact": path.name,
             "block": block,
+            "universe_profile": data.get("universe_profile", "narrow_7"),
             "best_route_gross_bps": bs["best_route_gross_bps"],
             "best_route_gas_bps": bs["best_route_gas_bps"],
             "best_route_total_fee_bps": bs["best_route_total_fee_bps"],
@@ -633,6 +636,7 @@ def build_blocker_repeatability(
         "blocker_repeatability": True,
         "timestamp": ts,
         "runs_count": n_runs,
+        "universe_profile": snapshots[0].get("universe_profile", "narrow_7") if snapshots else "narrow_7",
         "block_range": {
             "min": min(s["block"] for s in snapshots if s["block"]),
             "max": max(s["block"] for s in snapshots if s["block"]),
@@ -728,12 +732,18 @@ def build_verdict_summary(
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # Extract universe_profile from snapshots (all should match; take first)
+    snapshots_list = repeatability.get("snapshots", [])
+    universe_from_evidence = "narrow_7"
+    if snapshots_list:
+        universe_from_evidence = snapshots_list[0].get("universe_profile", "narrow_7")
+
     return {
         "m7a_verdict": True,
         "timestamp": ts,
         "verdict_scope": {
             "chain": chain,
-            "universe": "narrow_7_token",
+            "universe": universe_from_evidence,
             "phase": "M7.A",
             "evidence_tier": "local_session",
             "runs_count": runs_count,
@@ -789,6 +799,9 @@ def main() -> int:
                         help="Max total fee bps for viable filter")
     parser.add_argument("--sweep-top", type=int, default=0,
                         help="Sweep canonical size ladder on top N measured cycles (0=disabled)")
+    parser.add_argument("--universe", choices=["narrow_7", "expanded_10"], default="narrow_7",
+                        help="Universe profile: narrow_7 (frozen M7.A baseline) or "
+                             "expanded_10 (M7.A.2: +DAI,GMX,UNI)")
     parser.add_argument("--repeatability", nargs="+", default=None,
                         help="Aggregate blocker summaries from multiple artifact JSONs. "
                              "Outputs repeatability report instead of running enumeration.")
@@ -855,8 +868,14 @@ def main() -> int:
         logger.error("No edges in graph — check %s source for %s", graph_source, chain)
         return 1
 
-    # 2. Apply M7.A universe filter
-    m7a_graph = filter_graph_to_m7a_universe(full_graph)
+    # 2. Apply universe filter based on profile
+    universe_profile = args.universe
+    if universe_profile == "expanded_10":
+        m7a_graph = filter_graph_to_m7a2_universe(full_graph)
+        universe_tokens = M7A2_TOKENS_ARBITRUM_ONE
+    else:
+        m7a_graph = filter_graph_to_m7a_universe(full_graph)
+        universe_tokens = M7A_TOKENS_ARBITRUM_ONE
 
     # 3. Enumerate cycles
     cycles = find_3hop_cycles(m7a_graph, max_cycles=args.max_cycles)
@@ -917,10 +936,13 @@ def main() -> int:
         "chain": chain,
         "graph_source": graph_source,
         "score_mode": score_mode,
+        "universe_profile": universe_profile,
         "full_graph": full_graph.to_summary(),
         "m7a_graph": m7a_graph.to_summary(),
         "m7a_universe": {
-            "tokens": sorted(M7A_TOKENS_ARBITRUM_ONE),
+            "universe_profile": universe_profile,
+            "token_count": len(universe_tokens),
+            "tokens": sorted(universe_tokens),
             "dexes": sorted(M7A_DEXES_ARBITRUM_ONE),
             "stable_adapters": sorted(M7A_STABLE_ADAPTERS),
         },
@@ -982,9 +1004,9 @@ def main() -> int:
         logger.info("Written to %s", out_path)
     else:
         # Print human-readable summary to stdout
-        print(f"\n=== M7.A Triangular Cycle Enumeration ({chain}, source={graph_source}, score={score_mode}) ===")
+        print(f"\n=== M7.A Triangular Cycle Enumeration ({chain}, source={graph_source}, score={score_mode}, universe={universe_profile}) ===")
         print(f"Full graph: {full_graph.node_count} tokens, {full_graph.edge_count} edges")
-        print(f"M7.A graph: {m7a_graph.node_count} tokens, {m7a_graph.edge_count} edges")
+        print(f"M7.A graph ({universe_profile}): {m7a_graph.node_count} tokens, {m7a_graph.edge_count} edges")
         cap_note = f" (CAP HIT — lower bound, not full count)" if max_cycles_hit else ""
         print(f"Cycles found: {len(cycles)} total{cap_note}, {len(viable)} viable (fee <= {args.max_fee_bps} bps)")
         if measured_stats:

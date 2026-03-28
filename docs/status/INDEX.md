@@ -19,7 +19,7 @@
 
 **M4 - DEX<->DEX Atomic Execution**: current public-infrastructure branch is frozen by economics evidence; milestone remains open only because online profitable core truth was not reached. See [Status_M4.md](Status_M4.md).
 
-**M7 - Triangular Feasibility (M7.A)**: active R&D phase — early static cache-based enumeration complete, live measured scoring pending. See [Status_M7.md](Status_M7.md).
+**M7 - Triangular Feasibility (M7.A)**: bounded R&D branch with verdict-ready no-graduate result for the current `arbitrum_one` narrow-universe scope. Live measured scoring, size sweep, blocker RCA, and bounded verdict are complete; `M7.B` remains closed. See [Status_M7.md](Status_M7.md).
 
 ## Related
 
