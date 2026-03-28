@@ -351,6 +351,179 @@ def _calculate_starting_amount(token: str, decimals: int, target_usd: float = 10
     return int(amount_tokens * (10 ** decimals))
 
 
+# ---------------------------------------------------------------------------
+# Blocker analysis — machine-readable RCA for M7.A feasibility verdict
+# ---------------------------------------------------------------------------
+
+# Blocker tag constants
+BLOCKER_GROSS_NEGATIVE_CORE = "GROSS_NEGATIVE_CORE"
+BLOCKER_GAS_DOMINANT_SMALL = "GAS_DOMINANT_SMALL"
+BLOCKER_SLIPPAGE_DOMINANT_LARGE = "SLIPPAGE_DOMINANT_LARGE"
+BLOCKER_THIRD_LEG_FEE_BINDING = "THIRD_LEG_FEE_BINDING"
+BLOCKER_SINGLE_TRIPLE_CONCENTRATION = "SINGLE_TRIPLE_CONCENTRATION"
+BLOCKER_QUOTE_FAILURE_BREADTH_LIMIT = "QUOTE_FAILURE_BREADTH_LIMIT"
+
+
+def classify_blocker_tags(
+    score: CycleScore,
+    sweep: Optional[SizeSweepResult] = None,
+) -> List[str]:
+    """Classify a single cycle's dominant blockers.
+
+    Returns a list of blocker tag strings from the canonical set.
+    """
+    tags: List[str] = []
+
+    # GROSS_NEGATIVE_CORE: gross_bps < 0 before any costs
+    if score.gross_bps < 0:
+        tags.append(BLOCKER_GROSS_NEGATIVE_CORE)
+
+    # THIRD_LEG_FEE_BINDING: third leg adds >= 5 bps fee overhead
+    if score.fee_leg3_bps >= 5.0:
+        tags.append(BLOCKER_THIRD_LEG_FEE_BINDING)
+
+    # Size-dependent tags require sweep data
+    if sweep is not None and sweep.size_curve:
+        quoted_points = [p for p in sweep.size_curve if p.quoted]
+        if len(quoted_points) >= 2:
+            smallest = quoted_points[0]
+            largest = quoted_points[-1]
+            best_pt = min(quoted_points, key=lambda p: abs(p.final_net_bps - sweep.best_net_bps))
+
+            # GAS_DOMINANT_SMALL: smallest size net is >5x worse than best
+            if best_pt.final_net_bps != 0 and smallest.final_net_bps != 0:
+                if smallest.final_net_bps < best_pt.final_net_bps * 5:
+                    tags.append(BLOCKER_GAS_DOMINANT_SMALL)
+
+            # SLIPPAGE_DOMINANT_LARGE: largest size net is >3x worse than best
+            if best_pt.final_net_bps != 0 and largest.final_net_bps != 0:
+                if largest.final_net_bps < best_pt.final_net_bps * 3:
+                    tags.append(BLOCKER_SLIPPAGE_DOMINANT_LARGE)
+
+    return tags
+
+
+def _build_blocker_summary(
+    measured_ranked: List[CycleScore],
+    measured_stats: Dict[str, Any],
+    sweep_results: List[SizeSweepResult],
+) -> Dict[str, Any]:
+    """Build machine-readable blocker summary for M7.A feasibility report.
+
+    Required metrics (per reviewer spec):
+     - best_route_gross_bps, best_route_gas_bps, best_route_total_fee_bps
+     - best_route_best_size_usd
+     - small_size_gas_domination, large_size_slippage_domination
+     - same_state_proven_rate, route_failure_rate
+     - token_triple_concentration
+     - top_blockers (dominant blocker tags)
+    """
+    if not measured_ranked:
+        return {"error": "no_measured_routes"}
+
+    best = measured_ranked[0]
+
+    # Core decomposition of best route
+    best_route_gross_bps = round(best.gross_bps, 4)
+    best_route_gas_bps = round(best.gas_bps, 4)
+    best_route_total_fee_bps = round(best.total_fee_bps, 4)
+    best_route_net_bps = round(best.final_net_bps, 4)
+
+    # Best size from sweep (if available), else from scored_size_usd
+    best_route_best_size_usd = best.scored_size_usd
+    best_sweep: Optional[SizeSweepResult] = None
+    if sweep_results:
+        best_sweep = sweep_results[0]
+        best_route_best_size_usd = best_sweep.best_size_usd
+
+    # Size-dependent domination metrics (from sweep of best route)
+    small_size_gas_domination = False
+    large_size_slippage_domination = False
+    small_size_worst_bps: Optional[float] = None
+    large_size_worst_bps: Optional[float] = None
+
+    if best_sweep and best_sweep.size_curve:
+        quoted = [p for p in best_sweep.size_curve if p.quoted]
+        if len(quoted) >= 3:
+            smallest = quoted[0]
+            largest = quoted[-1]
+            small_size_worst_bps = round(smallest.final_net_bps, 4)
+            large_size_worst_bps = round(largest.final_net_bps, 4)
+            # Gas dominates small sizes: smallest >5x worse than best
+            if best_sweep.best_net_bps != 0:
+                small_size_gas_domination = (
+                    smallest.final_net_bps < best_sweep.best_net_bps * 5
+                )
+                large_size_slippage_domination = (
+                    largest.final_net_bps < best_sweep.best_net_bps * 3
+                )
+
+    # Same-state proven rate
+    same_dist = measured_stats.get("same_state_distribution", {})
+    total_scored = measured_stats.get("scored", 0)
+    proven_count = same_dist.get("same_state_proven", 0)
+    same_state_proven_rate = round(proven_count / total_scored, 4) if total_scored > 0 else 0.0
+
+    # Route failure rate (quote failures / attempted)
+    attempted = measured_stats.get("attempted", 0)
+    failed = measured_stats.get("failed", 0)
+    route_failure_rate = round(failed / attempted, 4) if attempted > 0 else 0.0
+
+    # Token triple concentration
+    token_triples: Counter = Counter()
+    for s in measured_ranked:
+        triple = tuple(sorted(s.cycle.tokens))
+        token_triples[triple] += 1
+    total_routes = len(measured_ranked)
+    most_common_triple, most_common_count = token_triples.most_common(1)[0]
+    token_triple_concentration = round(most_common_count / total_routes, 4)
+    dominant_triple = list(most_common_triple)
+
+    # Classify blocker tags across all top routes
+    all_tags: Counter = Counter()
+    # Single-triple concentration tag
+    if token_triple_concentration >= 0.9:
+        all_tags[BLOCKER_SINGLE_TRIPLE_CONCENTRATION] += 1
+
+    # Quote failure breadth limit
+    if route_failure_rate >= 0.25:
+        all_tags[BLOCKER_QUOTE_FAILURE_BREADTH_LIMIT] += 1
+
+    # Per-cycle tags (from top 10 or all measured)
+    cycles_for_tags = measured_ranked[:10]
+    sweep_lookup: Dict[str, SizeSweepResult] = {}
+    for sr in sweep_results:
+        sweep_lookup[sr.cycle.cycle_key] = sr
+
+    for s in cycles_for_tags:
+        sw = sweep_lookup.get(s.cycle.cycle_key)
+        tags = classify_blocker_tags(s, sw)
+        for t in tags:
+            all_tags[t] += 1
+
+    # top_blockers: ordered by frequency, only tags that appeared
+    top_blockers = [tag for tag, _ in all_tags.most_common()]
+
+    return {
+        "best_route_gross_bps": best_route_gross_bps,
+        "best_route_gas_bps": best_route_gas_bps,
+        "best_route_total_fee_bps": best_route_total_fee_bps,
+        "best_route_net_bps": best_route_net_bps,
+        "best_route_best_size_usd": best_route_best_size_usd,
+        "small_size_gas_domination": small_size_gas_domination,
+        "small_size_worst_bps": small_size_worst_bps,
+        "large_size_slippage_domination": large_size_slippage_domination,
+        "large_size_worst_bps": large_size_worst_bps,
+        "same_state_proven_rate": same_state_proven_rate,
+        "route_failure_rate": route_failure_rate,
+        "token_triple_concentration": token_triple_concentration,
+        "dominant_triple": dominant_triple,
+        "top_blockers": top_blockers,
+        "blocker_tag_counts": dict(all_tags.most_common()),
+        "cycles_analyzed": len(cycles_for_tags),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="M7.A: Enumerate triangular cycles from verified pool cache",
@@ -494,6 +667,11 @@ def main() -> int:
                 "cycles_swept": len(sweep_results),
                 "results": [r.to_dict() for r in sweep_results],
             }
+        # Blocker summary: machine-readable RCA for feasibility verdict
+        if measured_ranked and measured_stats:
+            summary["blocker_summary"] = _build_blocker_summary(
+                measured_ranked, measured_stats, sweep_results,
+            )
     else:
         # Fee-only mode: use fee-cost naming for clarity
         summary["top_10_by_lowest_cost"] = [s.to_dict() for s in ranked[:10]]

@@ -202,3 +202,32 @@ The project now has three strong properties:
 3. **The negative verdict on the current public-infra simple DEX-DEX branch is credible.**
 
 That is the right summary for the current stage of system development: a reusable scanning and truth platform has been built, but a profitable online DEX-DEX engine on the current public-infrastructure path has not.
+
+## 6) M7.A Triangular Feasibility (R&D addendum, 2026-03-28)
+
+### Session
+session_goal: produce first runtime+measured+size-sweep artifact for M7.A on arbitrum_one
+goal_status: REACHED
+docs_reread_confirmed: true
+evidence_artifact: data/tmp/m7a_runtime_measured_sweep.json
+
+### Evidence Summary
+
+Bounded size sweep executed: **10 top measured cycles × 19 canonical sizes** ($1–$10K) at block 446635245.
+
+| Metric | Value |
+|--------|-------|
+| Cycles swept | 10/10 |
+| Sizes per cycle | 19 (CANONICAL_SWEEP_SIZES_USD) |
+| Quote success | 190/190 (100%) |
+| Same-state | 100% proven |
+| Best sweep net | **-20.96 bps** (ARB→USDC→WETH→ARB, $100 notional) |
+| Optimal notional range | $100–$250 |
+| Two-leg baseline | -3.5062 bps |
+| Promoted at any size | **0** |
+
+All size curves are U-shaped: gas-dominated at small sizes, slippage-dominated at large sizes, no break-even crossing at any notional.
+
+### Verdict Input
+
+M7.A size sweep confirms and strengthens the negative verdict from temporal repeatability (5 prior runs, -13.42 to -31.19 bps). The triangular thesis is 6× worse than two-leg baseline even at optimized notional. No evidence supports graduating to M7.B.

@@ -912,3 +912,240 @@ class TestSizeSweepResult:
 
         amt = _calculate_starting_amount("USDC", 6)
         assert amt == 100 * 10**6  # $100 at $1/USDC, 6 decimals
+
+
+# ---------------------------------------------------------------------------
+# Blocker analysis contract tests
+# ---------------------------------------------------------------------------
+
+class TestBlockerSummary:
+    """Contract tests for the M7.A blocker summary (machine-readable RCA)."""
+
+    def _make_score(self, gross=-10.0, gas=12.0, fee1=0.0, fee2=1.0, fee3=5.0,
+                    net=-28.0, size_usd=100.0, tokens=("ARB", "USDC", "WETH")):
+        e1 = _edge(tokens[0], tokens[1], dex="camelot_v3", fee=0, pool="0x111", adapter_type="algebra")
+        e2 = _edge(tokens[1], tokens[2], dex="uniswap_v3", fee=100, pool="0x222")
+        e3 = _edge(tokens[2], tokens[0], dex="pancakeswap_v3", fee=500, pool="0x333")
+        cycle = TriangularCycle(leg1=e1, leg2=e2, leg3=e3)
+        return CycleScore(
+            cycle=cycle, gross_bps=gross, gas_bps=gas,
+            fee_leg1_bps=fee1, fee_leg2_bps=fee2, fee_leg3_bps=fee3,
+            total_fee_bps=fee1 + fee2 + fee3,
+            final_net_bps=net, scored_size_usd=size_usd,
+            block_tag="123456", provenance_summary="measured",
+            same_state_class=SAME_STATE_PROVEN, route_viable=True,
+            reject_reason="NET_NEGATIVE",
+        )
+
+    def _make_stats(self, scored=67, failed=33, attempted=100):
+        return {
+            "block_number": 446635245,
+            "attempted": attempted,
+            "scored": scored,
+            "failed": failed,
+            "measured_ranked_count": scored,
+            "diagnostic_fallback_count": failed,
+            "promoted_count": 0,
+            "best_measured_net_bps": -20.96,
+            "same_state_distribution": {"same_state_proven": scored},
+        }
+
+    def test_blocker_summary_schema_keys(self):
+        """blocker_summary must contain all required keys."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary
+
+        ranked = [self._make_score()]
+        stats = self._make_stats(scored=1, failed=0, attempted=1)
+        result = _build_blocker_summary(ranked, stats, [])
+
+        required_keys = {
+            "best_route_gross_bps", "best_route_gas_bps", "best_route_total_fee_bps",
+            "best_route_net_bps", "best_route_best_size_usd",
+            "small_size_gas_domination", "large_size_slippage_domination",
+            "same_state_proven_rate", "route_failure_rate",
+            "token_triple_concentration", "top_blockers",
+        }
+        for key in required_keys:
+            assert key in result, f"Missing key: {key}"
+
+    def test_blocker_summary_gross_negative(self):
+        """If best route gross is negative, GROSS_NEGATIVE_CORE must be in top_blockers."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary, BLOCKER_GROSS_NEGATIVE_CORE
+
+        ranked = [self._make_score(gross=-9.3)]
+        stats = self._make_stats(scored=1, failed=0, attempted=1)
+        result = _build_blocker_summary(ranked, stats, [])
+        assert BLOCKER_GROSS_NEGATIVE_CORE in result["top_blockers"]
+
+    def test_blocker_summary_third_leg_fee(self):
+        """If leg3 fee >= 5 bps, THIRD_LEG_FEE_BINDING must appear."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary, BLOCKER_THIRD_LEG_FEE_BINDING
+
+        ranked = [self._make_score(fee3=5.0)]
+        stats = self._make_stats(scored=1, failed=0, attempted=1)
+        result = _build_blocker_summary(ranked, stats, [])
+        assert BLOCKER_THIRD_LEG_FEE_BINDING in result["top_blockers"]
+
+    def test_blocker_summary_single_triple_concentration(self):
+        """100% same token triple must trigger SINGLE_TRIPLE_CONCENTRATION."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import (
+            _build_blocker_summary, BLOCKER_SINGLE_TRIPLE_CONCENTRATION,
+        )
+
+        # All routes use same triple
+        ranked = [self._make_score() for _ in range(5)]
+        stats = self._make_stats(scored=5, failed=0, attempted=5)
+        result = _build_blocker_summary(ranked, stats, [])
+        assert result["token_triple_concentration"] == 1.0
+        assert BLOCKER_SINGLE_TRIPLE_CONCENTRATION in result["top_blockers"]
+
+    def test_blocker_summary_quote_failure_breadth(self):
+        """High failure rate (>=25%) triggers QUOTE_FAILURE_BREADTH_LIMIT."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import (
+            _build_blocker_summary, BLOCKER_QUOTE_FAILURE_BREADTH_LIMIT,
+        )
+
+        ranked = [self._make_score()]
+        stats = self._make_stats(scored=50, failed=50, attempted=100)
+        result = _build_blocker_summary(ranked, stats, [])
+        assert result["route_failure_rate"] == 0.5
+        assert BLOCKER_QUOTE_FAILURE_BREADTH_LIMIT in result["top_blockers"]
+
+    def test_blocker_summary_same_state_rate(self):
+        """same_state_proven_rate must match distribution."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary
+
+        ranked = [self._make_score()]
+        stats = self._make_stats(scored=67, failed=33, attempted=100)
+        result = _build_blocker_summary(ranked, stats, [])
+        assert result["same_state_proven_rate"] == 1.0  # 67/67 proven
+
+    def test_blocker_summary_no_measured_routes(self):
+        """Empty measured list produces error sentinel."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary
+
+        result = _build_blocker_summary([], {}, [])
+        assert result.get("error") == "no_measured_routes"
+
+    def test_blocker_summary_dominant_triple_field(self):
+        """dominant_triple must be a sorted list of 3 tokens."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary
+
+        ranked = [self._make_score()]
+        stats = self._make_stats(scored=1, failed=0, attempted=1)
+        result = _build_blocker_summary(ranked, stats, [])
+        assert isinstance(result["dominant_triple"], list)
+        assert len(result["dominant_triple"]) == 3
+        assert result["dominant_triple"] == sorted(result["dominant_triple"])
+
+
+class TestClassifyBlockerTags:
+    """Contract tests for classify_blocker_tags()."""
+
+    def _make_score(self, gross=-10.0, gas=12.0, fee3=5.0, net=-28.0):
+        e1 = _edge("ARB", "USDC", dex="camelot_v3", fee=0, pool="0x111", adapter_type="algebra")
+        e2 = _edge("USDC", "WETH", dex="uniswap_v3", fee=100, pool="0x222")
+        e3 = _edge("WETH", "ARB", dex="pancakeswap_v3", fee=500, pool="0x333")
+        cycle = TriangularCycle(leg1=e1, leg2=e2, leg3=e3)
+        return CycleScore(
+            cycle=cycle, gross_bps=gross, gas_bps=gas,
+            fee_leg1_bps=0.0, fee_leg2_bps=1.0, fee_leg3_bps=fee3,
+            total_fee_bps=1.0 + fee3,
+            final_net_bps=net, scored_size_usd=100.0,
+            block_tag="123456", provenance_summary="measured",
+            same_state_class=SAME_STATE_PROVEN, route_viable=True,
+        )
+
+    def test_gross_negative_tag(self):
+        """Negative gross triggers GROSS_NEGATIVE_CORE."""
+        from scripts.m7a_enumerate_cycles import classify_blocker_tags, BLOCKER_GROSS_NEGATIVE_CORE
+        s = self._make_score(gross=-5.0)
+        tags = classify_blocker_tags(s)
+        assert BLOCKER_GROSS_NEGATIVE_CORE in tags
+
+    def test_positive_gross_no_tag(self):
+        """Positive gross does NOT trigger GROSS_NEGATIVE_CORE."""
+        from scripts.m7a_enumerate_cycles import classify_blocker_tags, BLOCKER_GROSS_NEGATIVE_CORE
+        s = self._make_score(gross=2.0)
+        tags = classify_blocker_tags(s)
+        assert BLOCKER_GROSS_NEGATIVE_CORE not in tags
+
+    def test_third_leg_fee_tag(self):
+        """fee_leg3 >= 5 bps triggers THIRD_LEG_FEE_BINDING."""
+        from scripts.m7a_enumerate_cycles import classify_blocker_tags, BLOCKER_THIRD_LEG_FEE_BINDING
+        s = self._make_score(fee3=5.0)
+        tags = classify_blocker_tags(s)
+        assert BLOCKER_THIRD_LEG_FEE_BINDING in tags
+
+    def test_low_third_leg_fee_no_tag(self):
+        """fee_leg3 < 5 bps does NOT trigger THIRD_LEG_FEE_BINDING."""
+        from scripts.m7a_enumerate_cycles import classify_blocker_tags, BLOCKER_THIRD_LEG_FEE_BINDING
+        s = self._make_score(fee3=1.0)
+        tags = classify_blocker_tags(s)
+        assert BLOCKER_THIRD_LEG_FEE_BINDING not in tags
+
+    def test_gas_dominant_small_with_sweep(self):
+        """Gas domination at small sizes detected from sweep curve."""
+        from scripts.m7a_enumerate_cycles import classify_blocker_tags, BLOCKER_GAS_DOMINANT_SMALL
+        from engine.triangular_cycles import SizeSweepPoint, SizeSweepResult
+
+        s = self._make_score(gross=-10.0, net=-21.0)
+        curve = [
+            SizeSweepPoint(size_usd=1.0, final_net_bps=-1100.0, quoted=True),
+            SizeSweepPoint(size_usd=100.0, final_net_bps=-21.0, quoted=True),
+            SizeSweepPoint(size_usd=10000.0, final_net_bps=-400.0, quoted=True),
+        ]
+        sweep = SizeSweepResult(
+            cycle=s.cycle, best_size_usd=100.0, best_net_bps=-21.0,
+            best_score=s, size_curve=curve,
+            sizes_attempted=3, sizes_quoted=3,
+        )
+        tags = classify_blocker_tags(s, sweep)
+        assert BLOCKER_GAS_DOMINANT_SMALL in tags
+
+    def test_slippage_dominant_large_with_sweep(self):
+        """Slippage domination at large sizes detected from sweep curve."""
+        from scripts.m7a_enumerate_cycles import classify_blocker_tags, BLOCKER_SLIPPAGE_DOMINANT_LARGE
+        from engine.triangular_cycles import SizeSweepPoint, SizeSweepResult
+
+        s = self._make_score(gross=-10.0, net=-21.0)
+        curve = [
+            SizeSweepPoint(size_usd=1.0, final_net_bps=-1100.0, quoted=True),
+            SizeSweepPoint(size_usd=100.0, final_net_bps=-21.0, quoted=True),
+            SizeSweepPoint(size_usd=10000.0, final_net_bps=-400.0, quoted=True),
+        ]
+        sweep = SizeSweepResult(
+            cycle=s.cycle, best_size_usd=100.0, best_net_bps=-21.0,
+            best_score=s, size_curve=curve,
+            sizes_attempted=3, sizes_quoted=3,
+        )
+        tags = classify_blocker_tags(s, sweep)
+        assert BLOCKER_SLIPPAGE_DOMINANT_LARGE in tags
+
+    def test_no_sweep_no_size_tags(self):
+        """Without sweep data, no size-dependent tags should be produced."""
+        from scripts.m7a_enumerate_cycles import (
+            classify_blocker_tags,
+            BLOCKER_GAS_DOMINANT_SMALL,
+            BLOCKER_SLIPPAGE_DOMINANT_LARGE,
+        )
+        s = self._make_score()
+        tags = classify_blocker_tags(s, sweep=None)
+        assert BLOCKER_GAS_DOMINANT_SMALL not in tags
+        assert BLOCKER_SLIPPAGE_DOMINANT_LARGE not in tags
