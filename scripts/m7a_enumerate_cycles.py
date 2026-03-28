@@ -479,15 +479,19 @@ def _build_blocker_summary(
     token_triple_concentration = round(most_common_count / total_routes, 4)
     dominant_triple = list(most_common_triple)
 
-    # Classify blocker tags across all top routes
-    all_tags: Counter = Counter()
-    # Single-triple concentration tag
-    if token_triple_concentration >= 0.9:
-        all_tags[BLOCKER_SINGLE_TRIPLE_CONCENTRATION] += 1
+    # Classify blocker tags with separated semantics:
+    # per_cycle_blocker_counts: tags counted per-cycle (out of cycles_analyzed)
+    # global_blockers_present: tags that are global observations (present/absent)
+    per_cycle_tags: Counter = Counter()
+    global_blockers: List[str] = []
 
-    # Quote failure breadth limit
+    # Global blocker: single-triple concentration
+    if token_triple_concentration >= 0.9:
+        global_blockers.append(BLOCKER_SINGLE_TRIPLE_CONCENTRATION)
+
+    # Global blocker: quote failure breadth limit
     if route_failure_rate >= 0.25:
-        all_tags[BLOCKER_QUOTE_FAILURE_BREADTH_LIMIT] += 1
+        global_blockers.append(BLOCKER_QUOTE_FAILURE_BREADTH_LIMIT)
 
     # Per-cycle tags (from top 10 or all measured)
     cycles_for_tags = measured_ranked[:10]
@@ -499,10 +503,13 @@ def _build_blocker_summary(
         sw = sweep_lookup.get(s.cycle.cycle_key)
         tags = classify_blocker_tags(s, sw)
         for t in tags:
-            all_tags[t] += 1
+            per_cycle_tags[t] += 1
 
-    # top_blockers: ordered by frequency, only tags that appeared
-    top_blockers = [tag for tag, _ in all_tags.most_common()]
+    # top_blockers: unified ordered list (per-cycle by frequency, then globals)
+    top_blockers = [tag for tag, _ in per_cycle_tags.most_common()]
+    for g in global_blockers:
+        if g not in top_blockers:
+            top_blockers.append(g)
 
     return {
         "best_route_gross_bps": best_route_gross_bps,
@@ -519,8 +526,134 @@ def _build_blocker_summary(
         "token_triple_concentration": token_triple_concentration,
         "dominant_triple": dominant_triple,
         "top_blockers": top_blockers,
-        "blocker_tag_counts": dict(all_tags.most_common()),
+        "per_cycle_blocker_counts": dict(per_cycle_tags.most_common()),
+        "global_blockers_present": global_blockers,
         "cycles_analyzed": len(cycles_for_tags),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Blocker repeatability — temporal stability of blocker classes across blocks
+# ---------------------------------------------------------------------------
+
+def build_blocker_repeatability(
+    artifact_paths: List[str],
+) -> Dict[str, Any]:
+    """Aggregate multiple blocker summaries into a temporal repeatability report.
+
+    Each artifact must be a JSON file produced by m7a_enumerate_cycles.py
+    with a blocker_summary block.
+
+    Returns a machine-readable repeatability summary with:
+    - per-run blocker snapshots (block, key metrics, blocker tags)
+    - blocker class stability across runs (which tags are stable vs flapping)
+    - metric ranges (min/max/mean for key bps values)
+    """
+    snapshots: List[Dict[str, Any]] = []
+
+    for path_str in artifact_paths:
+        path = Path(path_str)
+        if not path.exists():
+            logger.warning("Artifact not found: %s", path)
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        bs = data.get("blocker_summary")
+        if not bs or "error" in bs:
+            logger.warning("No valid blocker_summary in %s", path)
+            continue
+        block = data.get("measured", {}).get("block_number")
+        snapshots.append({
+            "artifact": path.name,
+            "block": block,
+            "best_route_gross_bps": bs["best_route_gross_bps"],
+            "best_route_gas_bps": bs["best_route_gas_bps"],
+            "best_route_total_fee_bps": bs["best_route_total_fee_bps"],
+            "best_route_net_bps": bs["best_route_net_bps"],
+            "best_route_best_size_usd": bs["best_route_best_size_usd"],
+            "route_failure_rate": bs["route_failure_rate"],
+            "token_triple_concentration": bs["token_triple_concentration"],
+            "top_blockers": bs["top_blockers"],
+            "per_cycle_blocker_counts": bs.get("per_cycle_blocker_counts", {}),
+            "global_blockers_present": bs.get("global_blockers_present", []),
+        })
+
+    if not snapshots:
+        return {"error": "no_valid_artifacts", "artifacts_checked": len(artifact_paths)}
+
+    # Metric ranges
+    def _range(key: str) -> Dict[str, float]:
+        vals = [s[key] for s in snapshots if s[key] is not None]
+        if not vals:
+            return {"min": 0.0, "max": 0.0, "mean": 0.0}
+        return {
+            "min": round(min(vals), 4),
+            "max": round(max(vals), 4),
+            "mean": round(sum(vals) / len(vals), 4),
+        }
+
+    # Blocker tag stability: a tag is "stable" if present in ALL runs
+    all_tags_seen: Counter = Counter()
+    for s in snapshots:
+        for tag in s["top_blockers"]:
+            all_tags_seen[tag] += 1
+
+    n_runs = len(snapshots)
+    stable_blockers = [tag for tag, count in all_tags_seen.items() if count == n_runs]
+    flapping_blockers = [tag for tag, count in all_tags_seen.items() if 0 < count < n_runs]
+
+    # Per-cycle tag stability (using per_cycle_blocker_counts)
+    per_cycle_tag_ranges: Dict[str, Dict[str, Any]] = {}
+    all_per_cycle_tags = set()
+    for s in snapshots:
+        for tag in s.get("per_cycle_blocker_counts", {}):
+            all_per_cycle_tags.add(tag)
+    for tag in sorted(all_per_cycle_tags):
+        counts = [s.get("per_cycle_blocker_counts", {}).get(tag, 0) for s in snapshots]
+        per_cycle_tag_ranges[tag] = {
+            "min": min(counts),
+            "max": max(counts),
+            "present_in_runs": sum(1 for c in counts if c > 0),
+        }
+
+    # Global blocker stability
+    all_global_tags = set()
+    for s in snapshots:
+        for tag in s.get("global_blockers_present", []):
+            all_global_tags.add(tag)
+    global_tag_stability: Dict[str, int] = {}
+    for tag in sorted(all_global_tags):
+        global_tag_stability[tag] = sum(
+            1 for s in snapshots if tag in s.get("global_blockers_present", [])
+        )
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return {
+        "blocker_repeatability": True,
+        "timestamp": ts,
+        "runs_count": n_runs,
+        "block_range": {
+            "min": min(s["block"] for s in snapshots if s["block"]),
+            "max": max(s["block"] for s in snapshots if s["block"]),
+        },
+        "metric_ranges": {
+            "best_route_gross_bps": _range("best_route_gross_bps"),
+            "best_route_gas_bps": _range("best_route_gas_bps"),
+            "best_route_total_fee_bps": _range("best_route_total_fee_bps"),
+            "best_route_net_bps": _range("best_route_net_bps"),
+            "best_route_best_size_usd": _range("best_route_best_size_usd"),
+            "route_failure_rate": _range("route_failure_rate"),
+            "token_triple_concentration": _range("token_triple_concentration"),
+        },
+        "blocker_class_stability": {
+            "stable_blockers": sorted(stable_blockers),
+            "flapping_blockers": sorted(flapping_blockers),
+            "all_observed": sorted(all_tags_seen.keys()),
+        },
+        "per_cycle_tag_ranges": per_cycle_tag_ranges,
+        "global_blocker_stability": global_tag_stability,
+        "snapshots": snapshots,
     }
 
 
@@ -541,6 +674,9 @@ def main() -> int:
                         help="Max total fee bps for viable filter")
     parser.add_argument("--sweep-top", type=int, default=0,
                         help="Sweep canonical size ladder on top N measured cycles (0=disabled)")
+    parser.add_argument("--repeatability", nargs="+", default=None,
+                        help="Aggregate blocker summaries from multiple artifact JSONs. "
+                             "Outputs repeatability report instead of running enumeration.")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     args = parser.parse_args()
 
@@ -548,6 +684,19 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+
+    # Repeatability mode: aggregate existing artifacts
+    if args.repeatability:
+        result = build_blocker_repeatability(args.repeatability)
+        if args.output:
+            out_path = Path(args.output)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2)
+            logger.info("Repeatability report written to %s", out_path)
+        else:
+            print(json.dumps(result, indent=2))
+        return 0 if "error" not in result else 1
 
     chain = args.chain
     score_mode = args.score

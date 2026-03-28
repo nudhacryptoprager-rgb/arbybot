@@ -231,3 +231,23 @@ All size curves are U-shaped: gas-dominated at small sizes, slippage-dominated a
 ### Verdict Input
 
 M7.A size sweep confirms and strengthens the negative verdict from temporal repeatability (5 prior runs, -13.42 to -31.19 bps). The triangular thesis is 6× worse than two-leg baseline even at optimized notional. No evidence supports graduating to M7.B.
+
+### Blocker Repeatability (session 16, 2026-03-28)
+
+Temporal blocker repeatability proven across **3 independent runs** (blocks 446652757–446654943):
+
+| Metric | Min | Max | Mean |
+|--------|-----|-----|------|
+| best_route_net_bps | -23.52 | -9.56 | -16.30 |
+| best_route_gross_bps | -14.29 | +2.25 | -6.21 |
+| best_route_gas_bps | 9.23 | 11.81 | 10.09 |
+
+Blocker class stability: **6/6 stable, 0/6 flapping**. All blocker tags (GROSS_NEGATIVE_CORE, GAS_DOMINANT_SMALL, SLIPPAGE_DOMINANT_LARGE, THIRD_LEG_FEE_BINDING, SINGLE_TRIPLE_CONCENTRATION, QUOTE_FAILURE_BREADTH_LIMIT) reproduced in all 3 runs.
+
+Code changes:
+- Normalized blocker count semantics: `per_cycle_blocker_counts` (int counts per-cycle) + `global_blockers_present` (global flag list)
+- Added `build_blocker_repeatability()` aggregator with `--repeatability` CLI arg
+- Added 14 new contract tests: 5 for count semantics, 9 for repeatability schema/stability
+- Test suite: **2694 passed**, all CI gates green
+
+Artifact: `data/tmp/m7a_blocker_repeatability.json`

@@ -966,6 +966,7 @@ class TestBlockerSummary:
             "small_size_gas_domination", "large_size_slippage_domination",
             "same_state_proven_rate", "route_failure_rate",
             "token_triple_concentration", "top_blockers",
+            "per_cycle_blocker_counts", "global_blockers_present",
         }
         for key in required_keys:
             assert key in result, f"Missing key: {key}"
@@ -1149,3 +1150,296 @@ class TestClassifyBlockerTags:
         tags = classify_blocker_tags(s, sweep=None)
         assert BLOCKER_GAS_DOMINANT_SMALL not in tags
         assert BLOCKER_SLIPPAGE_DOMINANT_LARGE not in tags
+
+
+# ---------------------------------------------------------------------------
+# Blocker count semantics contract tests
+# ---------------------------------------------------------------------------
+
+class TestBlockerCountSemantics:
+    """Contract tests for separated per_cycle vs global blocker counts."""
+
+    def _make_score(self, gross=-10.0, gas=12.0, fee3=5.0, net=-28.0):
+        e1 = _edge("ARB", "USDC", dex="camelot_v3", fee=0, pool="0x111", adapter_type="algebra")
+        e2 = _edge("USDC", "WETH", dex="uniswap_v3", fee=100, pool="0x222")
+        e3 = _edge("WETH", "ARB", dex="pancakeswap_v3", fee=500, pool="0x333")
+        cycle = TriangularCycle(leg1=e1, leg2=e2, leg3=e3)
+        return CycleScore(
+            cycle=cycle, gross_bps=gross, gas_bps=gas,
+            fee_leg1_bps=0.0, fee_leg2_bps=1.0, fee_leg3_bps=fee3,
+            total_fee_bps=1.0 + fee3,
+            final_net_bps=net, scored_size_usd=100.0,
+            block_tag="123456", provenance_summary="measured",
+            same_state_class=SAME_STATE_PROVEN, route_viable=True,
+            reject_reason="NET_NEGATIVE",
+        )
+
+    def _make_stats(self, scored=67, failed=33, attempted=100):
+        return {
+            "block_number": 446635245,
+            "attempted": attempted,
+            "scored": scored,
+            "failed": failed,
+            "measured_ranked_count": scored,
+            "diagnostic_fallback_count": failed,
+            "promoted_count": 0,
+            "best_measured_net_bps": -20.96,
+            "same_state_distribution": {"same_state_proven": scored},
+        }
+
+    def test_per_cycle_and_global_are_separate_keys(self):
+        """blocker_summary must have per_cycle_blocker_counts and global_blockers_present."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary
+
+        ranked = [self._make_score() for _ in range(3)]
+        stats = self._make_stats(scored=3, failed=30, attempted=33)
+        result = _build_blocker_summary(ranked, stats, [])
+        assert "per_cycle_blocker_counts" in result
+        assert "global_blockers_present" in result
+        assert isinstance(result["per_cycle_blocker_counts"], dict)
+        assert isinstance(result["global_blockers_present"], list)
+
+    def test_per_cycle_counts_are_integers(self):
+        """per_cycle_blocker_counts values must be integers (cycle counts)."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary
+
+        ranked = [self._make_score() for _ in range(5)]
+        stats = self._make_stats(scored=5, failed=0, attempted=5)
+        result = _build_blocker_summary(ranked, stats, [])
+        for tag, count in result["per_cycle_blocker_counts"].items():
+            assert isinstance(count, int), f"{tag} count is not int: {count}"
+
+    def test_global_blockers_do_not_appear_in_per_cycle(self):
+        """SINGLE_TRIPLE_CONCENTRATION and QUOTE_FAILURE_BREADTH_LIMIT are global only."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import (
+            _build_blocker_summary,
+            BLOCKER_SINGLE_TRIPLE_CONCENTRATION,
+            BLOCKER_QUOTE_FAILURE_BREADTH_LIMIT,
+        )
+
+        ranked = [self._make_score() for _ in range(5)]
+        stats = self._make_stats(scored=5, failed=50, attempted=55)
+        result = _build_blocker_summary(ranked, stats, [])
+        # These should be in global, not in per_cycle
+        assert BLOCKER_SINGLE_TRIPLE_CONCENTRATION not in result["per_cycle_blocker_counts"]
+        assert BLOCKER_QUOTE_FAILURE_BREADTH_LIMIT not in result["per_cycle_blocker_counts"]
+        assert BLOCKER_SINGLE_TRIPLE_CONCENTRATION in result["global_blockers_present"]
+        assert BLOCKER_QUOTE_FAILURE_BREADTH_LIMIT in result["global_blockers_present"]
+
+    def test_per_cycle_gross_negative_count_matches_cycles(self):
+        """GROSS_NEGATIVE_CORE count should match number of cycles with negative gross."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary, BLOCKER_GROSS_NEGATIVE_CORE
+
+        ranked = [self._make_score(gross=-5.0) for _ in range(7)]
+        stats = self._make_stats(scored=7, failed=0, attempted=7)
+        result = _build_blocker_summary(ranked, stats, [])
+        assert result["per_cycle_blocker_counts"][BLOCKER_GROSS_NEGATIVE_CORE] == 7
+
+    def test_old_blocker_tag_counts_key_removed(self):
+        """blocker_tag_counts (mixed semantics) must no longer appear."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _build_blocker_summary
+
+        ranked = [self._make_score()]
+        stats = self._make_stats(scored=1, failed=0, attempted=1)
+        result = _build_blocker_summary(ranked, stats, [])
+        assert "blocker_tag_counts" not in result
+
+
+# ---------------------------------------------------------------------------
+# Blocker repeatability contract tests
+# ---------------------------------------------------------------------------
+
+class TestBlockerRepeatability:
+    """Contract tests for build_blocker_repeatability() temporal aggregation."""
+
+    def _write_artifact(self, tmp_path, name, block, gross=-9.3, gas=11.6,
+                        fee=6.0, net=-21.0, size=100.0, failure_rate=0.33,
+                        triple_conc=1.0):
+        """Write a minimal artifact JSON with blocker_summary."""
+        data = {
+            "m7a_enumeration": True,
+            "chain": "arbitrum_one",
+            "measured": {"block_number": block, "scored": 67, "failed": 33, "attempted": 100},
+            "blocker_summary": {
+                "best_route_gross_bps": gross,
+                "best_route_gas_bps": gas,
+                "best_route_total_fee_bps": fee,
+                "best_route_net_bps": net,
+                "best_route_best_size_usd": size,
+                "small_size_gas_domination": True,
+                "small_size_worst_bps": -1100.0,
+                "large_size_slippage_domination": True,
+                "large_size_worst_bps": -400.0,
+                "same_state_proven_rate": 1.0,
+                "route_failure_rate": failure_rate,
+                "token_triple_concentration": triple_conc,
+                "dominant_triple": ["ARB", "USDC", "WETH"],
+                "top_blockers": [
+                    "GROSS_NEGATIVE_CORE", "GAS_DOMINANT_SMALL",
+                    "SLIPPAGE_DOMINANT_LARGE", "THIRD_LEG_FEE_BINDING",
+                    "SINGLE_TRIPLE_CONCENTRATION", "QUOTE_FAILURE_BREADTH_LIMIT",
+                ],
+                "per_cycle_blocker_counts": {
+                    "GROSS_NEGATIVE_CORE": 10,
+                    "GAS_DOMINANT_SMALL": 10,
+                    "SLIPPAGE_DOMINANT_LARGE": 10,
+                    "THIRD_LEG_FEE_BINDING": 6,
+                },
+                "global_blockers_present": [
+                    "SINGLE_TRIPLE_CONCENTRATION",
+                    "QUOTE_FAILURE_BREADTH_LIMIT",
+                ],
+                "cycles_analyzed": 10,
+            },
+        }
+        import json
+        path = tmp_path / name
+        with open(path, "w") as f:
+            json.dump(data, f)
+        return str(path)
+
+    def test_repeatability_schema_keys(self, tmp_path):
+        """Repeatability report must have all required keys."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_blocker_repeatability
+
+        p1 = self._write_artifact(tmp_path, "r1.json", 100001)
+        p2 = self._write_artifact(tmp_path, "r2.json", 100002)
+        p3 = self._write_artifact(tmp_path, "r3.json", 100003)
+
+        result = build_blocker_repeatability([p1, p2, p3])
+
+        required_keys = {
+            "blocker_repeatability", "timestamp", "runs_count",
+            "block_range", "metric_ranges", "blocker_class_stability",
+            "per_cycle_tag_ranges", "global_blocker_stability", "snapshots",
+        }
+        for key in required_keys:
+            assert key in result, f"Missing key: {key}"
+
+    def test_repeatability_runs_count(self, tmp_path):
+        """runs_count must match number of valid artifacts."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_blocker_repeatability
+
+        p1 = self._write_artifact(tmp_path, "r1.json", 100001)
+        p2 = self._write_artifact(tmp_path, "r2.json", 100002)
+        p3 = self._write_artifact(tmp_path, "r3.json", 100003)
+
+        result = build_blocker_repeatability([p1, p2, p3])
+        assert result["runs_count"] == 3
+
+    def test_repeatability_block_range(self, tmp_path):
+        """block_range must span min/max of input blocks."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_blocker_repeatability
+
+        p1 = self._write_artifact(tmp_path, "r1.json", 100001)
+        p2 = self._write_artifact(tmp_path, "r2.json", 100005)
+        p3 = self._write_artifact(tmp_path, "r3.json", 100010)
+
+        result = build_blocker_repeatability([p1, p2, p3])
+        assert result["block_range"]["min"] == 100001
+        assert result["block_range"]["max"] == 100010
+
+    def test_repeatability_stable_blockers(self, tmp_path):
+        """Tags present in all runs are stable_blockers."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_blocker_repeatability
+
+        p1 = self._write_artifact(tmp_path, "r1.json", 100001)
+        p2 = self._write_artifact(tmp_path, "r2.json", 100002)
+        p3 = self._write_artifact(tmp_path, "r3.json", 100003)
+
+        result = build_blocker_repeatability([p1, p2, p3])
+        stability = result["blocker_class_stability"]
+        assert "GROSS_NEGATIVE_CORE" in stability["stable_blockers"]
+        assert len(stability["flapping_blockers"]) == 0
+
+    def test_repeatability_metric_ranges_have_min_max_mean(self, tmp_path):
+        """Each metric range must have min, max, mean."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_blocker_repeatability
+
+        p1 = self._write_artifact(tmp_path, "r1.json", 100001, gross=-9.0)
+        p2 = self._write_artifact(tmp_path, "r2.json", 100002, gross=-6.0)
+        p3 = self._write_artifact(tmp_path, "r3.json", 100003, gross=-12.0)
+
+        result = build_blocker_repeatability([p1, p2, p3])
+        gross_range = result["metric_ranges"]["best_route_gross_bps"]
+        assert "min" in gross_range
+        assert "max" in gross_range
+        assert "mean" in gross_range
+        assert gross_range["min"] == -12.0
+        assert gross_range["max"] == -6.0
+
+    def test_repeatability_per_cycle_tag_ranges(self, tmp_path):
+        """per_cycle_tag_ranges must show min/max across runs."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_blocker_repeatability
+
+        p1 = self._write_artifact(tmp_path, "r1.json", 100001)
+        p2 = self._write_artifact(tmp_path, "r2.json", 100002)
+        p3 = self._write_artifact(tmp_path, "r3.json", 100003)
+
+        result = build_blocker_repeatability([p1, p2, p3])
+        assert "GROSS_NEGATIVE_CORE" in result["per_cycle_tag_ranges"]
+        tag_range = result["per_cycle_tag_ranges"]["GROSS_NEGATIVE_CORE"]
+        assert tag_range["present_in_runs"] == 3
+
+    def test_repeatability_global_blocker_stability(self, tmp_path):
+        """global_blocker_stability shows per-tag run presence count."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_blocker_repeatability
+
+        p1 = self._write_artifact(tmp_path, "r1.json", 100001)
+        p2 = self._write_artifact(tmp_path, "r2.json", 100002)
+        p3 = self._write_artifact(tmp_path, "r3.json", 100003)
+
+        result = build_blocker_repeatability([p1, p2, p3])
+        assert result["global_blocker_stability"]["SINGLE_TRIPLE_CONCENTRATION"] == 3
+        assert result["global_blocker_stability"]["QUOTE_FAILURE_BREADTH_LIMIT"] == 3
+
+    def test_repeatability_empty_artifacts(self):
+        """No valid artifacts returns error."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_blocker_repeatability
+
+        result = build_blocker_repeatability(["nonexistent1.json", "nonexistent2.json"])
+        assert "error" in result
+
+    def test_repeatability_snapshots_contain_block_and_metrics(self, tmp_path):
+        """Each snapshot must contain block and key metric fields."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_blocker_repeatability
+
+        p1 = self._write_artifact(tmp_path, "r1.json", 100001)
+        p2 = self._write_artifact(tmp_path, "r2.json", 100002)
+
+        result = build_blocker_repeatability([p1, p2])
+        for snap in result["snapshots"]:
+            assert "block" in snap
+            assert "best_route_gross_bps" in snap
+            assert "best_route_net_bps" in snap
+            assert "top_blockers" in snap
+            assert "per_cycle_blocker_counts" in snap
+            assert "global_blockers_present" in snap
