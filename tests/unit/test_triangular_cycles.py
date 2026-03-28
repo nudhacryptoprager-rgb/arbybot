@@ -349,8 +349,8 @@ class TestCycleScoreSerialization:
         # Required by step_M7.md
         required = [
             "gross_bps", "fee_leg1_bps", "fee_leg2_bps", "fee_leg3_bps",
-            "slippage_leg1_bps", "slippage_leg2_bps", "slippage_leg3_bps",
-            "gas_bps", "final_net_bps", "best_size_usd", "block_tag",
+            "slippage_leg1_bps_heuristic", "slippage_leg2_bps_heuristic", "slippage_leg3_bps_heuristic",
+            "gas_bps", "final_net_bps", "scored_size_usd", "block_tag",
             "provenance_summary",
         ]
         for key in required:

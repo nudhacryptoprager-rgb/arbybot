@@ -327,11 +327,23 @@ def _get_current_block(rpc_url: str) -> Optional[int]:
 
 
 def _calculate_starting_amount(token: str, decimals: int) -> int:
-    """Calculate starting amount for triangular cycle (100 USD notional)."""
-    # Rough USD sizing matching strategy/quotes.py DEFAULT_TOKEN_USD_PRICES
-    usd_prices = {"WETH": 2000.0, "USDC": 1.0, "USDT": 1.0, "DAI": 1.0,
-                  "WBTC": 60000.0, "ARB": 0.5, "LINK": 15.0, "PENDLE": 3.0}
-    price = usd_prices.get(token, 1.0)
+    """Calculate starting amount for triangular cycle (100 USD notional).
+
+    Reuses canonical DEFAULT_TOKEN_USD_PRICES from strategy.quotes
+    as single source of truth to avoid drift.
+    """
+    from strategy.quotes import DEFAULT_TOKEN_USD_PRICES
+    # Lookup with case-insensitive fallback
+    price = DEFAULT_TOKEN_USD_PRICES.get(token)
+    if price is None:
+        price = DEFAULT_TOKEN_USD_PRICES.get(token.upper())
+    if price is None:
+        for k, v in DEFAULT_TOKEN_USD_PRICES.items():
+            if k.upper() == token.upper():
+                price = v
+                break
+    if price is None:
+        price = 1.0
     target_usd = 100.0
     amount_tokens = target_usd / price
     return int(amount_tokens * (10 ** decimals))
@@ -387,13 +399,17 @@ def main() -> int:
 
     # 5. Score
     if score_mode == "measured":
-        scores, ranked, measured_stats = _score_measured(
+        measured_scores, fallback_scores, measured_ranked, measured_stats = _score_measured(
             viable, chain, args.max_scored,
         )
+        # In measured mode, the canonical ranking is measured-only
+        ranked = measured_ranked
     else:
         scores = [score_cycle_fees_only(c) for c in viable]
         ranked = rank_cycles_by_net(scores)
         measured_stats = None
+        measured_scores = []
+        fallback_scores = []
 
     # 6. Build summary
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -421,18 +437,32 @@ def main() -> int:
         "fee_distribution": _fee_distribution(viable),
         "dex_distribution": _dex_distribution(viable),
         "multi_dex_breakdown": _multi_dex_breakdown(viable),
-        "top_10_by_lowest_cost": [s.to_dict() for s in ranked[:10]],
     }
 
-    if measured_stats:
+    if score_mode == "measured":
+        # Measured mode: ranked list is measured-only; fallbacks are separate
+        summary["top_10_by_net"] = [s.to_dict() for s in measured_ranked[:10]]
+        if measured_ranked:
+            summary["best_net_bps"] = round(measured_ranked[0].final_net_bps, 4)
+            summary["worst_net_bps"] = round(measured_ranked[-1].final_net_bps, 4)
+            summary["median_net_bps"] = round(
+                measured_ranked[len(measured_ranked) // 2].final_net_bps, 4
+            )
         summary["measured"] = measured_stats
-
-    if ranked:
-        summary["best_fee_cost_bps"] = round(ranked[0].final_net_bps, 4)
-        summary["worst_fee_cost_bps"] = round(ranked[-1].final_net_bps, 4)
-        summary["median_fee_cost_bps"] = round(
-            ranked[len(ranked) // 2].final_net_bps, 4
-        )
+        if fallback_scores:
+            fallback_ranked = rank_cycles_by_net(fallback_scores)
+            summary["diagnostic_fee_only_fallbacks"] = [
+                s.to_dict() for s in fallback_ranked[:10]
+            ]
+    else:
+        # Fee-only mode: use fee-cost naming for clarity
+        summary["top_10_by_lowest_cost"] = [s.to_dict() for s in ranked[:10]]
+        if ranked:
+            summary["best_fee_cost_bps"] = round(ranked[0].final_net_bps, 4)
+            summary["worst_fee_cost_bps"] = round(ranked[-1].final_net_bps, 4)
+            summary["median_fee_cost_bps"] = round(
+                ranked[len(ranked) // 2].final_net_bps, 4
+            )
 
     # 7. Output
     if args.output:
@@ -451,13 +481,16 @@ def main() -> int:
         if measured_stats:
             print(f"Measured: {measured_stats['scored']}/{measured_stats['attempted']} quoted, "
                   f"block={measured_stats.get('block_number', 'N/A')}")
+            print(f"Measured-only ranked: {measured_stats['measured_ranked_count']}, "
+                  f"fallback (diagnostic): {measured_stats['diagnostic_fallback_count']}")
             same_state = measured_stats.get("same_state_distribution", {})
             if same_state:
                 print(f"Same-state: {same_state}")
         if ranked:
-            print(f"Best net: {ranked[0].final_net_bps:.1f} bps [{ranked[0].provenance_summary}]")
-            print(f"Median net: {ranked[len(ranked)//2].final_net_bps:.1f} bps")
-            print(f"\nTop 5 cycles:")
+            label = "measured" if score_mode == "measured" else "fee-only"
+            print(f"Best net ({label}): {ranked[0].final_net_bps:.1f} bps [{ranked[0].provenance_summary}]")
+            print(f"Median net ({label}): {ranked[len(ranked)//2].final_net_bps:.1f} bps")
+            print(f"\nTop 5 cycles ({label}):")
             for i, s in enumerate(ranked[:5], 1):
                 print(f"  {i}. {s.cycle.route_display} "
                       f"[gross={s.gross_bps:.1f}, gas={s.gas_bps:.1f}, net={s.final_net_bps:.1f}bps] "
@@ -474,10 +507,11 @@ def _score_measured(
     viable: List[TriangularCycle],
     chain: str,
     max_scored: int,
-) -> Tuple[list, list, Dict[str, Any]]:
+) -> Tuple[list, list, list, Dict[str, Any]]:
     """Score viable cycles with live RPC quotes.
 
-    Returns (all_scores, ranked_scores, measured_stats_dict).
+    Measured scores and fee-only fallback scores are kept separate.
+    Returns (measured_scores, fallback_scores, measured_ranked, measured_stats_dict).
     """
     from collections import Counter as _Counter
     from core.rpc_urls import get_rpc_url
@@ -487,13 +521,13 @@ def _score_measured(
     if not rpc_url:
         logger.error("No RPC URL for %s — cannot do measured scoring", chain)
         scores = [score_cycle_fees_only(c) for c in viable]
-        return scores, rank_cycles_by_net(scores), {"error": "no_rpc_url"}
+        return [], scores, [], {"error": "no_rpc_url"}
 
     block_number = _get_current_block(rpc_url)
     if block_number is None:
         logger.error("Cannot get block number — falling back to fee-only scoring")
         scores = [score_cycle_fees_only(c) for c in viable]
-        return scores, rank_cycles_by_net(scores), {"error": "no_block"}
+        return [], scores, [], {"error": "no_block"}
 
     dex_configs = load_dex_configs(chain)
     token_addresses = get_all_token_addresses(chain)
@@ -506,7 +540,8 @@ def _score_measured(
     logger.info("Measured scoring: %d cycles, block=%d, rpc=%s",
                 len(to_quote), block_number, rpc_url[:50])
 
-    scores = []
+    measured_scores = []
+    fallback_scores = []
     quote_attempted = 0
     quote_success = 0
     quote_failed = 0
@@ -523,32 +558,28 @@ def _score_measured(
         )
         if q1 is None or q2 is None or q3 is None:
             quote_failed += 1
-            # Still score what we can — use fee-only as fallback for failed quotes
-            scores.append(score_cycle_fees_only(cycle))
+            fallback_scores.append(score_cycle_fees_only(cycle))
             continue
 
         quote_success += 1
         s = score_cycle_measured(cycle, q1, q2, q3)
-        scores.append(s)
+        measured_scores.append(s)
         same_state_counter[s.same_state_class] += 1
 
-    ranked = rank_cycles_by_net(scores)
+    measured_ranked = rank_cycles_by_net(measured_scores)
 
-    # Compute measured-specific stats
-    measured_count = sum(1 for s in scores if s.provenance_summary == "measured")
-    promoted_count = sum(1 for s in scores if s.is_promoted())
+    promoted_count = sum(1 for s in measured_scores if s.is_promoted())
     best_measured = None
-    for s in ranked:
-        if s.provenance_summary == "measured":
-            best_measured = round(s.final_net_bps, 4)
-            break
+    if measured_ranked:
+        best_measured = round(measured_ranked[0].final_net_bps, 4)
 
     stats: Dict[str, Any] = {
         "block_number": block_number,
         "attempted": quote_attempted,
         "scored": quote_success,
         "failed": quote_failed,
-        "measured_count": measured_count,
+        "measured_ranked_count": len(measured_ranked),
+        "diagnostic_fallback_count": len(fallback_scores),
         "promoted_count": promoted_count,
         "best_measured_net_bps": best_measured,
         "same_state_distribution": dict(same_state_counter),
@@ -561,7 +592,7 @@ def _score_measured(
         dict(same_state_counter),
     )
 
-    return scores, ranked, stats
+    return measured_scores, fallback_scores, measured_ranked, stats
 
 
 if __name__ == "__main__":

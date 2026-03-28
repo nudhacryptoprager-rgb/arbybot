@@ -269,9 +269,9 @@ class TestArtifactSchemaCompliance:
         "route", "tokens", "cycle_key",
         "gross_bps", "fee_leg1_bps", "fee_leg2_bps", "fee_leg3_bps",
         "total_fee_bps",
-        "slippage_leg1_bps", "slippage_leg2_bps", "slippage_leg3_bps",
-        "total_slippage_bps",
-        "gas_bps", "final_net_bps", "best_size_usd",
+        "slippage_leg1_bps_heuristic", "slippage_leg2_bps_heuristic", "slippage_leg3_bps_heuristic",
+        "total_slippage_bps_heuristic",
+        "gas_bps", "final_net_bps", "scored_size_usd",
         "block_tag", "provenance_summary",
         "same_state_class", "is_promoted", "reject_reason", "route_viable",
         "leg1", "leg2", "leg3",
@@ -302,7 +302,7 @@ class TestArtifactSchemaCompliance:
     def test_numeric_fields_are_floats(self):
         d = self._make_score().to_dict()
         for f in ("gross_bps", "fee_leg1_bps", "final_net_bps",
-                   "gas_bps", "best_size_usd"):
+                   "gas_bps", "scored_size_usd"):
             assert isinstance(d[f], (int, float)), f"{f} must be numeric"
 
     def test_tokens_is_tuple_or_list(self):
@@ -569,9 +569,9 @@ class TestScoreCycleMeasured:
             "route", "tokens", "cycle_key",
             "gross_bps", "fee_leg1_bps", "fee_leg2_bps", "fee_leg3_bps",
             "total_fee_bps",
-            "slippage_leg1_bps", "slippage_leg2_bps", "slippage_leg3_bps",
-            "total_slippage_bps",
-            "gas_bps", "final_net_bps", "best_size_usd",
+            "slippage_leg1_bps_heuristic", "slippage_leg2_bps_heuristic", "slippage_leg3_bps_heuristic",
+            "total_slippage_bps_heuristic",
+            "gas_bps", "final_net_bps", "scored_size_usd",
             "block_tag", "provenance_summary",
             "same_state_class", "is_promoted", "reject_reason", "route_viable",
             "leg1", "leg2", "leg3",

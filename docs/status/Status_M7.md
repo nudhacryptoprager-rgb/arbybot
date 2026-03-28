@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **IN PROGRESS** (M7.A — first live measured evidence produced, verdict pending)  
-**Updated**: 2026-03-28  
-**Scope**: M7.A only — cache-based static enumeration, live measured scorer with per-leg RPC quotes, same-state provenance classification. First measured truth produced; verdict requires wider sampling.
+**Status**: **IN PROGRESS** (M7.A — measured scoring infrastructure operational, measured-only ranking implemented, verdict pending)  
+**Updated**: 2026-03-29  
+**Scope**: M7.A only — cache-based static enumeration, live measured scorer with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback. First measured truth produced; verdict requires wider sampling.
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Goal** (per `docs/step_M7.md`): build verified pool graph, enumerate 3-hop simple cycles, score with measured-cost discipline, apply provenance and same-state classification, rank by measured final net, and decide whether M7 stops or graduates to M7.B.
 
-**Current sub-step**: steps 1-6 done (static cache + live measured). Step 7 (ranking by measured net) operational. Step 8 (verdict) requires broader universe sampling before decision.
+**Current sub-step**: steps 1-6 done (static cache + live measured). Step 7 (measured-only ranking, separated from fee-only fallback) implemented and tested. Step 8 (verdict) requires broader universe sampling and fresh measured evidence before decision.
 
 ### Current Evidence — Measured (live RPC)
 
@@ -61,7 +61,7 @@ Generated: 2026-03-28T13:53:22Z
 - **Single block snapshot** — no temporal diversity; prices at block 446581074 may not be representative.
 - **$100 notional only** — higher/lower notional may change gas_bps ratio.
 - **Cache-based graph** — graph built from `pool_resolver_cache`, not from live `RuntimePair` discovery.
-- **No L1 gas component** — gas_bps uses quoter-estimated gas at fixed gas price, not L1 calldata cost.
+- **L1 gas is a static estimate** — `l1_cost_wei` uses a fixed 6 Gwei heuristic, not live L1 calldata cost from the chain.
 
 ### Remaining M7.A work (per step_M7.md implementation order)
 
@@ -71,14 +71,14 @@ Generated: 2026-03-28T13:53:22Z
 4. ~~Score cycles with current measured-cost model~~ — **DONE** (live: `score_cycle_measured()` fed by `leg_quote_from_rpc_result()` from live per-leg RPC quotes via `_quote_single_leg()` → `quote_cycle_3legs()`)
 5. ~~Emit full decomposition artifacts~~ — **DONE** (measured artifacts include provenance, same_state, gross_bps, gas_bps, fee metadata)
 6. ~~Apply provenance and same-state classification~~ — **DONE** (live: 17/17 proven at block 446581074)
-7. ~~Rank only by measured final net~~ — **DONE** (`--score measured` mode ranks by `final_net_bps` mixing measured + fee-only fallback)
+7. ~~Rank only by measured final net~~ — **DONE** (`--score measured` mode ranks measured-only cycles by `final_net_bps`; fee-only fallback rows emitted separately in `diagnostic_fee_only_fallbacks`)
 8. Decide whether M7 stops or graduates to M7.B — **PENDING** (early evidence strongly negative: -372 bps; wider sampling needed before definitive stop-condition)
 
 ### Modules
 
 - `engine/triangular_graph.py` — PoolEdge, PoolGraph, M7A constants, graph builders (cache + RuntimePair)
-- `engine/triangular_cycles.py` — TriangularCycle, CycleScore, find_3hop_cycles, `score_cycle_fees_only` (diagnostic), `score_cycle_measured` (live per-leg), `classify_same_state`, LegQuote, `leg_quote_from_rpc_result`
-- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`. Dispatches to `read_quoter_v2`/`read_algebra_quoter`/`read_ve33_amount_out` per adapter type.
+- `engine/triangular_cycles.py` — TriangularCycle, CycleScore (with `scored_size_usd`, slippage `_heuristic` fields), find_3hop_cycles, `score_cycle_fees_only` (diagnostic), `score_cycle_measured` (live per-leg), `classify_same_state`, LegQuote, `leg_quote_from_rpc_result`
+- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`. Measured mode: measured-only ranking (`top_10_by_net`, `best_net_bps`) with fee-only fallback rows emitted separately in `diagnostic_fee_only_fallbacks`. Token prices imported from `strategy.quotes.DEFAULT_TOKEN_USD_PRICES`.
 - Tests: 125 M7 tests across 3 test files (2651 total, 0 failures)
 
 ---

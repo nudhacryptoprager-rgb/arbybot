@@ -17,8 +17,8 @@ CONTRACTS:
 
 CYCLE ARTIFACT (required fields):
     gross_bps, fee_leg1_bps, fee_leg2_bps, fee_leg3_bps,
-    slippage_leg1_bps, slippage_leg2_bps, slippage_leg3_bps,
-    gas_bps, final_net_bps, best_size_usd, block_tag,
+    slippage_leg1_bps_heuristic, slippage_leg2_bps_heuristic, slippage_leg3_bps_heuristic,
+    gas_bps, final_net_bps, scored_size_usd, block_tag,
     provenance_summary
 """
 
@@ -118,7 +118,7 @@ class CycleScore:
     slippage_leg3_bps: float = 0.0
     gas_bps: float = 0.0
     final_net_bps: float = 0.0
-    best_size_usd: float = 0.0
+    scored_size_usd: float = 0.0
     block_tag: str = ""
     provenance_summary: str = ""
 
@@ -156,13 +156,13 @@ class CycleScore:
             "fee_leg2_bps": round(self.fee_leg2_bps, 4),
             "fee_leg3_bps": round(self.fee_leg3_bps, 4),
             "total_fee_bps": round(self.total_fee_bps, 4),
-            "slippage_leg1_bps": round(self.slippage_leg1_bps, 4),
-            "slippage_leg2_bps": round(self.slippage_leg2_bps, 4),
-            "slippage_leg3_bps": round(self.slippage_leg3_bps, 4),
-            "total_slippage_bps": round(self.total_slippage_bps, 4),
+            "slippage_leg1_bps_heuristic": round(self.slippage_leg1_bps, 4),
+            "slippage_leg2_bps_heuristic": round(self.slippage_leg2_bps, 4),
+            "slippage_leg3_bps_heuristic": round(self.slippage_leg3_bps, 4),
+            "total_slippage_bps_heuristic": round(self.total_slippage_bps, 4),
             "gas_bps": round(self.gas_bps, 4),
             "final_net_bps": round(self.final_net_bps, 4),
-            "best_size_usd": round(self.best_size_usd, 2),
+            "scored_size_usd": round(self.scored_size_usd, 2),
             "block_tag": self.block_tag,
             "provenance_summary": self.provenance_summary,
             # Classification
@@ -343,7 +343,7 @@ def score_cycle_fees_only(
         total_slippage_bps=0.0,
         gas_bps=gas_bps,
         final_net_bps=-total_cost_bps,  # purely cost; needs positive gross to overcome
-        best_size_usd=notional_usd,
+        scored_size_usd=notional_usd,
         block_tag="N/A",
         provenance_summary="fee_structure_only",
         same_state_class=SAME_STATE_AMBIGUOUS,
@@ -570,7 +570,9 @@ def score_cycle_measured(
     f3 = _fee_tier_to_bps(cycle.leg3.fee)
     total_fee = f1 + f2 + f3
 
-    # --- Per-leg slippage (ticks heuristic, ~0.5 bps per tick) ---
+    # --- Per-leg slippage heuristic (ticks_crossed * 0.5 bps per tick) ---
+    # NOTE: This is a diagnostic heuristic, not truly measured slippage.
+    # True measured slippage would require comparing quote to a zero-impact reference.
     slip1 = float(leg1_quote.ticks_crossed) * 0.5
     slip2 = float(leg2_quote.ticks_crossed) * 0.5
     slip3 = float(leg3_quote.ticks_crossed) * 0.5
@@ -608,8 +610,8 @@ def score_cycle_measured(
     known_blocks = [b for b in blocks if b is not None]
     block_tag = str(min(known_blocks)) if known_blocks else "N/A"
 
-    # --- Best size ---
-    best_size_usd = notional_usd
+    # --- Scored size (single tested notional, not an optimized best size) ---
+    scored_size_usd = notional_usd
 
     # --- Route viability ---
     route_viable = (
@@ -640,7 +642,7 @@ def score_cycle_measured(
         total_slippage_bps=total_slippage,
         gas_bps=gas_bps,
         final_net_bps=final_net_bps,
-        best_size_usd=best_size_usd,
+        scored_size_usd=scored_size_usd,
         block_tag=block_tag,
         provenance_summary="measured",
         same_state_class=same_state,
@@ -652,15 +654,19 @@ def score_cycle_measured(
 def _token_usd_estimate(token: str, eth_usd: float) -> float:
     """Rough USD price estimate for gas-to-bps conversion.
 
+    Reuses canonical DEFAULT_TOKEN_USD_PRICES from strategy.quotes
+    as single source of truth. Falls back to $1 for unknowns.
     This is NOT a price oracle — just enough for notional sizing.
-    Live scoring uses this only for gas_bps denominator.
     """
+    from strategy.quotes import DEFAULT_TOKEN_USD_PRICES
     t = token.upper()
-    if t in ("WETH", "ETH"):
-        return eth_usd
-    if t in ("USDC", "USDT", "DAI", "USDE", "LUSD", "FRAX"):
-        return 1.0
-    if t in ("WBTC", "TBTC"):
-        return 60_000.0  # conservative estimate
-    # For other tokens, use a rough $1 default (this affects only gas_bps denom)
+    # Direct lookup (canonical dict is case-sensitive, check both forms)
+    if token in DEFAULT_TOKEN_USD_PRICES:
+        return DEFAULT_TOKEN_USD_PRICES[token]
+    if t in DEFAULT_TOKEN_USD_PRICES:
+        return DEFAULT_TOKEN_USD_PRICES[t]
+    # Case-insensitive fallback
+    for k, v in DEFAULT_TOKEN_USD_PRICES.items():
+        if k.upper() == t:
+            return v
     return 1.0
