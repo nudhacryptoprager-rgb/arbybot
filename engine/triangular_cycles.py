@@ -411,3 +411,211 @@ def filter_viable_fee_structures(
             filtered, len(cycles), max_total_fee_bps,
         )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Same-state provenance classifier (3-leg block consistency)
+# ---------------------------------------------------------------------------
+
+def classify_same_state(
+    leg_block_numbers: List[Optional[int]],
+    max_block_drift: int = 1,
+) -> str:
+    """Classify same-state consistency across 3 legs.
+
+    Per step_M7.md: same-state is a hard acceptance criterion.
+    A cycle must not be promoted unless block provenance shows
+    sufficiently consistent market state across all legs.
+
+    Args:
+        leg_block_numbers: [block_leg1, block_leg2, block_leg3].
+            None means block info unavailable for that leg.
+        max_block_drift: Maximum allowed block difference (inclusive).
+            Default 1 = quotes from same or adjacent blocks.
+
+    Returns:
+        SAME_STATE_PROVEN if all legs have block numbers and
+            max(blocks) - min(blocks) <= max_block_drift.
+        SAME_STATE_VIOLATED if drift exceeds threshold.
+        SAME_STATE_AMBIGUOUS if any leg has None block info.
+    """
+    if any(b is None for b in leg_block_numbers):
+        return SAME_STATE_AMBIGUOUS
+    blocks = [b for b in leg_block_numbers if b is not None]
+    drift = max(blocks) - min(blocks)
+    if drift <= max_block_drift:
+        return SAME_STATE_PROVEN
+    return SAME_STATE_VIOLATED
+
+
+# ---------------------------------------------------------------------------
+# Live measured scorer (reuses roundtrip.py discipline)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LegQuote:
+    """Per-leg quote result for triangular scoring.
+
+    Captures the same information as roundtrip.py quote dicts
+    but structured for 3-leg cycles.
+    """
+    amount_in_wei: int
+    amount_out_wei: int
+    gas_estimate: int = 150_000
+    fee_tier: Optional[int] = None
+    ticks_crossed: int = 0
+    block_number: Optional[int] = None
+    quote_source: str = "unknown"
+    sqrt_price_before: Optional[int] = None
+    sqrt_price_after: Optional[int] = None
+
+
+def score_cycle_measured(
+    cycle: TriangularCycle,
+    leg1_quote: LegQuote,
+    leg2_quote: LegQuote,
+    leg3_quote: LegQuote,
+    gas_price_wei: int = 100_000_000,
+    l1_cost_wei: int = 6_000_000_000_000,
+    eth_usd_price: float = 2000.0,
+    max_block_drift: int = 1,
+) -> CycleScore:
+    """Live measured scorer for a triangular cycle.
+
+    Reuses the measured-cost discipline from engine/roundtrip.py:
+    - gross = amount_out_leg3 / amount_in_leg1 - 1 (the triangular return)
+    - fees are embedded in quotes (LP fees are already deducted from amount_out)
+    - slippage from ticks_crossed heuristic or sqrtPrice measurement
+    - gas from quoter estimates + L1 overhead
+    - same-state from block number comparison across 3 legs
+
+    IMPORTANT: In a standard AMM quote, LP fees are already deducted from
+    amount_out. So gross_bps already includes fee impact. We still report
+    per-leg fee_bps for decomposition visibility (from pool metadata), but
+    fees are NOT subtracted again from final_net.
+
+    Args:
+        cycle: The TriangularCycle to score.
+        leg1_quote: Quote for leg1 (amount_in = starting amount).
+        leg2_quote: Quote for leg2 (amount_in = leg1.amount_out).
+        leg3_quote: Quote for leg3 (amount_in = leg2.amount_out).
+        gas_price_wei: L2 gas price in wei.
+        l1_cost_wei: L1 data posting overhead in wei.
+        eth_usd_price: ETH/USD price for gas-to-bps conversion.
+        max_block_drift: Max block drift for same-state classification.
+
+    Returns:
+        CycleScore with full measured decomposition.
+    """
+    # --- Gross return ---
+    amount_start = leg1_quote.amount_in_wei
+    amount_end = leg3_quote.amount_out_wei
+    if amount_start <= 0:
+        return CycleScore(
+            cycle=cycle,
+            reject_reason="ZERO_AMOUNT_IN",
+            provenance_summary="measured",
+        )
+
+    gross_bps = ((amount_end - amount_start) / amount_start) * 10_000
+
+    # --- Per-leg fee decomposition (metadata, for visibility) ---
+    f1 = _fee_tier_to_bps(cycle.leg1.fee)
+    f2 = _fee_tier_to_bps(cycle.leg2.fee)
+    f3 = _fee_tier_to_bps(cycle.leg3.fee)
+    total_fee = f1 + f2 + f3
+
+    # --- Per-leg slippage (ticks heuristic, ~0.5 bps per tick) ---
+    slip1 = float(leg1_quote.ticks_crossed) * 0.5
+    slip2 = float(leg2_quote.ticks_crossed) * 0.5
+    slip3 = float(leg3_quote.ticks_crossed) * 0.5
+    total_slippage = slip1 + slip2 + slip3
+
+    # --- Gas ---
+    total_gas_units = (
+        leg1_quote.gas_estimate
+        + leg2_quote.gas_estimate
+        + leg3_quote.gas_estimate
+    )
+    l2_gas_cost_wei = total_gas_units * gas_price_wei
+    total_gas_cost_wei = l2_gas_cost_wei + l1_cost_wei
+    gas_cost_usd = (total_gas_cost_wei / 1e18) * eth_usd_price
+
+    # Notional in USD for bps conversion — use leg1 decimals
+    dec_in = cycle.leg1.decimals_in
+    # Token USD price: for WETH we use eth_usd_price, for stablecoins ~1.0
+    # Simplified: use amount_start in token-native + decimals
+    notional_usd = (amount_start / (10 ** dec_in)) * _token_usd_estimate(
+        cycle.leg1.token_in, eth_usd_price
+    )
+    gas_bps = (gas_cost_usd / notional_usd) * 10_000 if notional_usd > 0 else 0.0
+
+    # --- Final net ---
+    # Gross already embeds LP fees (AMM quotes are fee-inclusive).
+    # Subtract only gas (the external cost not captured in quotes).
+    final_net_bps = gross_bps - gas_bps
+
+    # --- Same-state ---
+    blocks = [leg1_quote.block_number, leg2_quote.block_number, leg3_quote.block_number]
+    same_state = classify_same_state(blocks, max_block_drift=max_block_drift)
+
+    # --- Block tag ---
+    known_blocks = [b for b in blocks if b is not None]
+    block_tag = str(min(known_blocks)) if known_blocks else "N/A"
+
+    # --- Best size ---
+    best_size_usd = notional_usd
+
+    # --- Route viability ---
+    route_viable = (
+        leg1_quote.amount_out_wei > 0
+        and leg2_quote.amount_out_wei > 0
+        and leg3_quote.amount_out_wei > 0
+    )
+
+    # --- Reject reason ---
+    reject_reason: Optional[str] = None
+    if not route_viable:
+        reject_reason = "ZERO_AMOUNT_OUT"
+    elif same_state == SAME_STATE_VIOLATED:
+        reject_reason = "SAME_STATE_VIOLATED"
+    elif final_net_bps <= 0:
+        reject_reason = "NET_NEGATIVE"
+
+    return CycleScore(
+        cycle=cycle,
+        gross_bps=gross_bps,
+        fee_leg1_bps=f1,
+        fee_leg2_bps=f2,
+        fee_leg3_bps=f3,
+        total_fee_bps=total_fee,
+        slippage_leg1_bps=slip1,
+        slippage_leg2_bps=slip2,
+        slippage_leg3_bps=slip3,
+        total_slippage_bps=total_slippage,
+        gas_bps=gas_bps,
+        final_net_bps=final_net_bps,
+        best_size_usd=best_size_usd,
+        block_tag=block_tag,
+        provenance_summary="measured",
+        same_state_class=same_state,
+        reject_reason=reject_reason,
+        route_viable=route_viable,
+    )
+
+
+def _token_usd_estimate(token: str, eth_usd: float) -> float:
+    """Rough USD price estimate for gas-to-bps conversion.
+
+    This is NOT a price oracle — just enough for notional sizing.
+    Live scoring uses this only for gas_bps denominator.
+    """
+    t = token.upper()
+    if t in ("WETH", "ETH"):
+        return eth_usd
+    if t in ("USDC", "USDT", "DAI", "USDE", "LUSD", "FRAX"):
+        return 1.0
+    if t in ("WBTC", "TBTC"):
+        return 60_000.0  # conservative estimate
+    # For other tokens, use a rough $1 default (this affects only gas_bps denom)
+    return 1.0

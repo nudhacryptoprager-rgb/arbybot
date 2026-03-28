@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **IN PROGRESS** (M7.A — early static feasibility only)  
+**Status**: **IN PROGRESS** (M7.A — static enumeration + live scorer infrastructure)  
 **Updated**: 2026-03-28  
-**Scope**: M7.A only — early static cache-based enumeration plus diagnostic fee+gas floor analysis. No strategy-level verdict is possible at this stage.
+**Scope**: M7.A only — cache-based static enumeration, live measured scorer with per-leg decomposition, same-state provenance classification. No strategy-level verdict is possible until live measured evidence is produced.
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Goal** (per `docs/step_M7.md`): build verified pool graph, enumerate 3-hop simple cycles, score with measured-cost discipline, apply provenance and same-state classification, rank by measured final net, and decide whether M7 stops or graduates to M7.B.
 
-**Current sub-step**: static cache-based enumeration + diagnostic fee+gas prefilter. Live measured scoring, same-state provenance, and rolling evidence are still pending within M7.A.
+**Current sub-step**: steps 1-3 done (static cache), steps 4-7 infrastructure built (live scorer, same-state classifier, runtime graph source). Awaiting live RPC evidence to produce measured artifacts.
 
 ### Current Evidence
 
@@ -54,21 +54,21 @@ Provenance tier: **local/session** — sufficient for development iteration, not
 
 ### Remaining M7.A work (per step_M7.md implementation order)
 
-1. ~~Build verified pool graph on arbitrum_one~~ — DONE (cache-based)
+1. ~~Build verified pool graph on arbitrum_one~~ — DONE (cache-based + runtime source via `--source runtime`)
 2. ~~Restrict graph to narrow approved universe~~ — DONE
 3. ~~Implement 3-hop simple cycle discovery~~ — DONE
-4. Score cycles with current measured-cost model — **PENDING** (live per-leg scorer reusing `engine/roundtrip.py`)
-5. Emit full decomposition artifacts — **PENDING** (after live scoring)
-6. Apply provenance and same-state classification — **PENDING** (actual same_state_proven/violated, not structural placeholders)
-7. Rank only by measured final net — **PENDING** (after steps 4-6)
-8. Decide whether M7 stops or graduates to M7.B — **PENDING** (after steps 4-7)
+4. ~~Score cycles with current measured-cost model~~ — DONE (infrastructure: `score_cycle_measured()` with full per-leg decomposition, gas from quoter estimates + L1, gross_bps from actual quote chain). Awaiting live quote feeding.
+5. ~~Emit full decomposition artifacts~~ — DONE (infrastructure: `CycleScore.to_dict()` emits all step_M7.md required fields). Awaiting measured data.
+6. ~~Apply provenance and same-state classification~~ — DONE (infrastructure: `classify_same_state()` with block-drift threshold, integrated into `score_cycle_measured()`). Awaiting live block numbers.
+7. Rank only by measured final net — **PENDING** (infrastructure ready; needs live quote data to produce non-placeholder rankings)
+8. Decide whether M7 stops or graduates to M7.B — **PENDING** (after live measured evidence from steps 4-7)
 
 ### Modules
 
-- `engine/triangular_graph.py` — PoolEdge, PoolGraph, M7A constants, graph builders
-- `engine/triangular_cycles.py` — TriangularCycle, CycleScore, find_3hop_cycles, scoring/filtering
-- `scripts/m7a_enumerate_cycles.py` — CLI for static enumeration
-- Tests: 91 M7 tests across 3 test files
+- `engine/triangular_graph.py` — PoolEdge, PoolGraph, M7A constants, graph builders (cache + RuntimePair)
+- `engine/triangular_cycles.py` — TriangularCycle, CycleScore, find_3hop_cycles, `score_cycle_fees_only` (diagnostic), `score_cycle_measured` (live per-leg), `classify_same_state`, LegQuote
+- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime` for static/live graph build
+- Tests: 114 M7 tests across 3 test files (2640 total, 0 failures)
 
 ---
 

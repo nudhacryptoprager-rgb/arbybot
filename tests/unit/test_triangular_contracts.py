@@ -10,6 +10,8 @@ Covers:
 - build_graph_from_discovered_pools provenance
 - CycleScore artifact schema compliance with step_M7.md
 - score_cycle_fees_only is diagnostic prefilter (not canonical truth)
+- classify_same_state provenance classification
+- score_cycle_measured live decomposition
 """
 
 import pytest
@@ -27,11 +29,15 @@ from engine.triangular_graph import (
 )
 from engine.triangular_cycles import (
     CycleScore,
+    LegQuote,
     SAME_STATE_AMBIGUOUS,
     SAME_STATE_PROVEN,
+    SAME_STATE_VIOLATED,
     TriangularCycle,
+    classify_same_state,
     find_3hop_cycles,
     score_cycle_fees_only,
+    score_cycle_measured,
 )
 
 
@@ -377,3 +383,212 @@ class TestEnumerationCapHitFields:
     def test_max_cycles_cap_matches_input(self):
         d = self._run_enumeration(max_cycles=42)
         assert d["max_cycles_cap"] == 42
+
+
+# ---------------------------------------------------------------------------
+# classify_same_state provenance
+# ---------------------------------------------------------------------------
+
+class TestClassifySameState:
+    """Same-state provenance classification for 3-leg cycles."""
+
+    def test_all_same_block_is_proven(self):
+        assert classify_same_state([100, 100, 100]) == SAME_STATE_PROVEN
+
+    def test_adjacent_blocks_proven(self):
+        assert classify_same_state([100, 101, 100]) == SAME_STATE_PROVEN
+
+    def test_drift_2_with_default_max_1_is_violated(self):
+        assert classify_same_state([100, 102, 100]) == SAME_STATE_VIOLATED
+
+    def test_drift_2_with_max_2_is_proven(self):
+        assert classify_same_state([100, 102, 100], max_block_drift=2) == SAME_STATE_PROVEN
+
+    def test_none_block_is_ambiguous(self):
+        assert classify_same_state([100, None, 100]) == SAME_STATE_AMBIGUOUS
+
+    def test_all_none_is_ambiguous(self):
+        assert classify_same_state([None, None, None]) == SAME_STATE_AMBIGUOUS
+
+    def test_large_drift_is_violated(self):
+        assert classify_same_state([100, 200, 150]) == SAME_STATE_VIOLATED
+
+
+# ---------------------------------------------------------------------------
+# score_cycle_measured: live decomposition
+# ---------------------------------------------------------------------------
+
+class TestScoreCycleMeasured:
+    """Live measured triangular scoring."""
+
+    def _make_cycle(self):
+        return TriangularCycle(
+            leg1=_edge("WETH", "USDC", pool="0x1", fee=500),
+            leg2=_edge("USDC", "ARB", pool="0x2", fee=3000),
+            leg3=_edge("ARB", "WETH", pool="0x3", fee=500),
+        )
+
+    def _make_quotes_profitable(self):
+        """Quotes where cycle returns more than started with."""
+        # Start: 1 WETH (1e18 wei)
+        q1 = LegQuote(amount_in_wei=10**18, amount_out_wei=2000 * 10**6,
+                       gas_estimate=150_000, fee_tier=500, block_number=100)
+        # 2000 USDC -> 4000 ARB (1e18 decimals)
+        q2 = LegQuote(amount_in_wei=2000 * 10**6, amount_out_wei=4000 * 10**18,
+                       gas_estimate=150_000, fee_tier=3000, block_number=100)
+        # 4000 ARB -> 1.005 WETH (profitable)
+        q3 = LegQuote(amount_in_wei=4000 * 10**18, amount_out_wei=int(1.005 * 10**18),
+                       gas_estimate=150_000, fee_tier=500, block_number=100)
+        return q1, q2, q3
+
+    def _make_quotes_unprofitable(self):
+        """Quotes where cycle returns less than started with."""
+        q1 = LegQuote(amount_in_wei=10**18, amount_out_wei=2000 * 10**6,
+                       gas_estimate=150_000, fee_tier=500, block_number=100)
+        q2 = LegQuote(amount_in_wei=2000 * 10**6, amount_out_wei=4000 * 10**18,
+                       gas_estimate=150_000, fee_tier=3000, block_number=100)
+        # Returns less than started with
+        q3 = LegQuote(amount_in_wei=4000 * 10**18, amount_out_wei=int(0.99 * 10**18),
+                       gas_estimate=150_000, fee_tier=500, block_number=100)
+        return q1, q2, q3
+
+    def test_provenance_is_measured(self):
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_profitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.provenance_summary == "measured"
+
+    def test_profitable_gross_is_positive(self):
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_profitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.gross_bps > 0
+
+    def test_unprofitable_gross_is_negative(self):
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_unprofitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.gross_bps < 0
+
+    def test_gas_bps_is_positive(self):
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_profitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.gas_bps > 0
+
+    def test_final_net_includes_gas(self):
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_profitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.final_net_bps < s.gross_bps  # gas reduces net
+
+    def test_same_state_proven_when_same_block(self):
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_profitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.same_state_class == SAME_STATE_PROVEN
+
+    def test_same_state_violated_large_drift(self):
+        c = self._make_cycle()
+        q1 = LegQuote(amount_in_wei=10**18, amount_out_wei=2000 * 10**6,
+                       block_number=100)
+        q2 = LegQuote(amount_in_wei=2000 * 10**6, amount_out_wei=4000 * 10**18,
+                       block_number=200)
+        q3 = LegQuote(amount_in_wei=4000 * 10**18, amount_out_wei=10**18,
+                       block_number=100)
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.same_state_class == SAME_STATE_VIOLATED
+
+    def test_same_state_ambiguous_when_none_block(self):
+        c = self._make_cycle()
+        q1 = LegQuote(amount_in_wei=10**18, amount_out_wei=2000 * 10**6,
+                       block_number=None)
+        q2 = LegQuote(amount_in_wei=2000 * 10**6, amount_out_wei=4000 * 10**18,
+                       block_number=100)
+        q3 = LegQuote(amount_in_wei=4000 * 10**18, amount_out_wei=10**18,
+                       block_number=100)
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.same_state_class == SAME_STATE_AMBIGUOUS
+
+    def test_reject_net_negative(self):
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_unprofitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.reject_reason == "NET_NEGATIVE"
+
+    def test_reject_zero_amount_in(self):
+        c = self._make_cycle()
+        q1 = LegQuote(amount_in_wei=0, amount_out_wei=0)
+        q2 = LegQuote(amount_in_wei=0, amount_out_wei=0)
+        q3 = LegQuote(amount_in_wei=0, amount_out_wei=0)
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.reject_reason == "ZERO_AMOUNT_IN"
+
+    def test_fee_decomposition_from_metadata(self):
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_profitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.fee_leg1_bps == 5.0   # 500/100
+        assert s.fee_leg2_bps == 30.0  # 3000/100
+        assert s.fee_leg3_bps == 5.0   # 500/100
+        assert s.total_fee_bps == 40.0
+
+    def test_slippage_from_ticks(self):
+        c = self._make_cycle()
+        q1 = LegQuote(amount_in_wei=10**18, amount_out_wei=2000 * 10**6,
+                       ticks_crossed=4, block_number=100)
+        q2 = LegQuote(amount_in_wei=2000 * 10**6, amount_out_wei=4000 * 10**18,
+                       ticks_crossed=2, block_number=100)
+        q3 = LegQuote(amount_in_wei=4000 * 10**18, amount_out_wei=int(1.005 * 10**18),
+                       ticks_crossed=6, block_number=100)
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.slippage_leg1_bps == 2.0   # 4 * 0.5
+        assert s.slippage_leg2_bps == 1.0   # 2 * 0.5
+        assert s.slippage_leg3_bps == 3.0   # 6 * 0.5
+        assert s.total_slippage_bps == 6.0
+
+    def test_promoted_requires_proven_positive_viable(self):
+        """Promotion requires same_state_proven + positive net + viable."""
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_profitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        # Even if gross is positive, final_net must also be positive after gas
+        if s.final_net_bps > 0 and s.same_state_class == SAME_STATE_PROVEN:
+            assert s.is_promoted() is True
+        else:
+            assert s.is_promoted() is False
+
+    def test_artifact_schema_additive(self):
+        """Measured score produces the same artifact keys as fee-only."""
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_profitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        d = s.to_dict()
+        required = [
+            "route", "tokens", "cycle_key",
+            "gross_bps", "fee_leg1_bps", "fee_leg2_bps", "fee_leg3_bps",
+            "total_fee_bps",
+            "slippage_leg1_bps", "slippage_leg2_bps", "slippage_leg3_bps",
+            "total_slippage_bps",
+            "gas_bps", "final_net_bps", "best_size_usd",
+            "block_tag", "provenance_summary",
+            "same_state_class", "is_promoted", "reject_reason", "route_viable",
+            "leg1", "leg2", "leg3",
+        ]
+        for key in required:
+            assert key in d, f"Missing key in measured score artifact: {key}"
+
+    def test_block_tag_from_quotes(self):
+        c = self._make_cycle()
+        q1, q2, q3 = self._make_quotes_profitable()
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.block_tag == "100"  # all blocks are 100
+
+    def test_route_viable_false_on_zero_output(self):
+        c = self._make_cycle()
+        q1 = LegQuote(amount_in_wei=10**18, amount_out_wei=0, block_number=100)
+        q2 = LegQuote(amount_in_wei=0, amount_out_wei=0, block_number=100)
+        q3 = LegQuote(amount_in_wei=0, amount_out_wei=0, block_number=100)
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.route_viable is False
+        assert s.reject_reason == "ZERO_AMOUNT_OUT"

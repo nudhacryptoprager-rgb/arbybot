@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-M7.A — Static enumeration of triangular cycles from verified pool cache.
+M7.A — Enumeration of triangular cycles from verified pool sources.
 
-Builds a PoolGraph from the pool_resolver_cache (offline, no RPC),
-applies the M7.A narrow universe filter, enumerates 3-hop cycles,
+Supports two graph sources:
+  --source cache    (default) Build from pool_resolver_cache (offline, no RPC)
+  --source runtime  Build from live RuntimePair via discovery.runtime (requires RPC)
+
+Applies the M7.A narrow universe filter, enumerates 3-hop cycles,
 scores by fee structure (diagnostic prefilter), and outputs a summary.
-
-This is the first runtime evidence for M7 triangular feasibility.
 
 Usage:
     python scripts/m7a_enumerate_cycles.py
-    python scripts/m7a_enumerate_cycles.py --output data/tmp/m7a_cycles.json
+    python scripts/m7a_enumerate_cycles.py --source runtime --output data/tmp/m7a_cycles.json
     python scripts/m7a_enumerate_cycles.py --chain arbitrum_one --max-cycles 5000
 """
 
@@ -38,6 +39,7 @@ from engine.triangular_graph import (
     M7A_TOKENS_ARBITRUM_ONE,
     PoolEdge,
     PoolGraph,
+    build_graph_from_runtime_pairs,
     filter_graph_to_m7a_universe,
 )
 from engine.triangular_cycles import (
@@ -163,11 +165,38 @@ def _multi_dex_breakdown(cycles: list) -> Dict[str, int]:
     return dict(counter.most_common())
 
 
+def build_graph_from_live_runtime(chain: str) -> PoolGraph:
+    """Build a PoolGraph from live RuntimePair via discovery.runtime.
+
+    This is the end-to-end verified runtime path: intent.txt -> pool_resolver
+    -> factory.getPool() -> RuntimePair -> PoolGraph.
+
+    Uses all M7.A-eligible DEXes and the full intent universe.
+    """
+    from discovery.runtime import resolve_runtime_pairs
+
+    dexes = sorted(M7A_DEXES_ARBITRUM_ONE)
+    pairs, stats = resolve_runtime_pairs(
+        chain=chain,
+        dexes=dexes,
+        max_pairs=100,
+        require_cross_dex=False,
+    )
+    logger.info(
+        "Runtime discovery: %d pairs, %d pools (rpc_calls=%d, cache=%d)",
+        stats.pairs_resolved, stats.pools_resolved,
+        stats.rpc_calls, stats.pools_from_cache,
+    )
+    return build_graph_from_runtime_pairs(chain, pairs)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="M7.A: Enumerate triangular cycles from verified pool cache",
     )
     parser.add_argument("--chain", default="arbitrum_one", help="Chain key")
+    parser.add_argument("--source", choices=["cache", "runtime"], default="cache",
+                        help="Graph source: cache (offline) or runtime (live RPC)")
     parser.add_argument("--max-cycles", type=int, default=10_000, help="Max cycles to enumerate")
     parser.add_argument("--output", default=None, help="Output JSON path (default: stdout summary)")
     parser.add_argument("--max-fee-bps", type=float, default=100.0,
@@ -182,10 +211,16 @@ def main() -> int:
 
     chain = args.chain
 
-    # 1. Build full graph from resolver cache
-    full_graph = build_graph_from_resolver_cache(chain)
+    # 1. Build full graph from chosen source
+    if args.source == "runtime":
+        full_graph = build_graph_from_live_runtime(chain)
+        graph_source = "runtime"
+    else:
+        full_graph = build_graph_from_resolver_cache(chain)
+        graph_source = "cache"
+
     if full_graph.edge_count == 0:
-        logger.error("No edges in graph — check pool_resolver_cache_%s.json", chain)
+        logger.error("No edges in graph — check %s source for %s", graph_source, chain)
         return 1
 
     # 2. Apply M7.A universe filter
@@ -208,6 +243,7 @@ def main() -> int:
         "m7a_enumeration": True,
         "timestamp": ts,
         "chain": chain,
+        "graph_source": graph_source,
         "full_graph": full_graph.to_summary(),
         "m7a_graph": m7a_graph.to_summary(),
         "m7a_universe": {
@@ -245,7 +281,7 @@ def main() -> int:
         logger.info("Written to %s", out_path)
     else:
         # Print human-readable summary to stdout
-        print(f"\n=== M7.A Triangular Cycle Enumeration ({chain}) ===")
+        print(f"\n=== M7.A Triangular Cycle Enumeration ({chain}, source={graph_source}) ===")
         print(f"Full graph: {full_graph.node_count} tokens, {full_graph.edge_count} edges")
         print(f"M7.A graph: {m7a_graph.node_count} tokens, {m7a_graph.edge_count} edges")
         cap_note = f" (CAP HIT — lower bound, not full count)" if max_cycles_hit else ""
