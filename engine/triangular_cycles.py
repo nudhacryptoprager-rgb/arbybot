@@ -414,6 +414,51 @@ def filter_viable_fee_structures(
 
 
 # ---------------------------------------------------------------------------
+# RPC result -> LegQuote adapter (pure conversion, no RPC imports)
+# ---------------------------------------------------------------------------
+
+def leg_quote_from_rpc_result(
+    rpc_result: Optional[Dict[str, Any]],
+    amount_in_wei: int,
+    fee_tier: Optional[int] = None,
+    block_number: Optional[int] = None,
+    quote_source: str = "unknown",
+) -> Optional["LegQuote"]:
+    """Convert a raw RPC quote result dict to a LegQuote.
+
+    Accepts the canonical dict shape returned by read_quoter_v2,
+    read_algebra_quoter, or a ve33-style dict.
+
+    Args:
+        rpc_result: Dict with at minimum "amount_out" (int).
+            Optional: "gas_estimate", "ticks_crossed", "sqrt_price_after".
+            None means the quote failed.
+        amount_in_wei: The amount fed into this leg.
+        fee_tier: Pool fee tier (from PoolEdge.fee).
+        block_number: Block at which the quote was taken.
+        quote_source: Adapter/quote source label.
+
+    Returns:
+        LegQuote on success, None if rpc_result is None or amount_out <= 0.
+    """
+    if rpc_result is None:
+        return None
+    amount_out = rpc_result.get("amount_out", 0)
+    if amount_out <= 0:
+        return None
+    return LegQuote(
+        amount_in_wei=amount_in_wei,
+        amount_out_wei=amount_out,
+        gas_estimate=rpc_result.get("gas_estimate") or 150_000,
+        fee_tier=fee_tier,
+        ticks_crossed=rpc_result.get("ticks_crossed") or 0,
+        block_number=block_number,
+        quote_source=quote_source,
+        sqrt_price_after=rpc_result.get("sqrt_price_after"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Same-state provenance classifier (3-leg block consistency)
 # ---------------------------------------------------------------------------
 

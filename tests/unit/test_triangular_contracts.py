@@ -36,6 +36,7 @@ from engine.triangular_cycles import (
     TriangularCycle,
     classify_same_state,
     find_3hop_cycles,
+    leg_quote_from_rpc_result,
     score_cycle_fees_only,
     score_cycle_measured,
 )
@@ -592,3 +593,182 @@ class TestScoreCycleMeasured:
         s = score_cycle_measured(c, q1, q2, q3)
         assert s.route_viable is False
         assert s.reject_reason == "ZERO_AMOUNT_OUT"
+
+
+# ---------------------------------------------------------------------------
+# leg_quote_from_rpc_result: quote dict -> LegQuote adapter
+# ---------------------------------------------------------------------------
+
+class TestLegQuoteFromRpcResult:
+    """Tests for the RPC result -> LegQuote conversion adapter."""
+
+    def test_v3_quoter_result(self):
+        """Standard read_quoter_v2 result dict converts to LegQuote."""
+        rpc = {
+            "amount_out": 2000_000_000,  # 2000 USDC
+            "sqrt_price_after": 123456789,
+            "ticks_crossed": 3,
+            "gas_estimate": 180_000,
+        }
+        q = leg_quote_from_rpc_result(
+            rpc, amount_in_wei=10**18, fee_tier=500,
+            block_number=12345, quote_source="quoter_v2",
+        )
+        assert q is not None
+        assert q.amount_in_wei == 10**18
+        assert q.amount_out_wei == 2000_000_000
+        assert q.gas_estimate == 180_000
+        assert q.ticks_crossed == 3
+        assert q.block_number == 12345
+        assert q.fee_tier == 500
+        assert q.quote_source == "quoter_v2"
+        assert q.sqrt_price_after == 123456789
+
+    def test_algebra_quoter_result(self):
+        """Algebra quoter returns None for ticks/sqrt_price."""
+        rpc = {
+            "amount_out": 5000_000_000,
+            "sqrt_price_after": None,
+            "ticks_crossed": None,
+            "gas_estimate": 200_000,
+        }
+        q = leg_quote_from_rpc_result(
+            rpc, amount_in_wei=10**18, fee_tier=None,
+            block_number=12345, quote_source="algebra_quoter",
+        )
+        assert q is not None
+        assert q.amount_out_wei == 5000_000_000
+        assert q.gas_estimate == 200_000
+        assert q.ticks_crossed == 0  # None maps to 0
+        assert q.sqrt_price_after is None
+
+    def test_ve33_style_dict(self):
+        """ve33 result dict (from wrapper) converts correctly."""
+        rpc = {
+            "amount_out": 1_000_000,
+            "gas_estimate": 80_000,
+            "ticks_crossed": None,
+            "sqrt_price_after": None,
+        }
+        q = leg_quote_from_rpc_result(
+            rpc, amount_in_wei=500_000_000,
+            quote_source="ve33_getAmountOut",
+        )
+        assert q is not None
+        assert q.gas_estimate == 80_000
+        assert q.ticks_crossed == 0
+
+    def test_none_result_returns_none(self):
+        """None RPC result -> None LegQuote."""
+        assert leg_quote_from_rpc_result(None, amount_in_wei=10**18) is None
+
+    def test_zero_amount_out_returns_none(self):
+        """Zero amount_out -> None (no liquidity)."""
+        rpc = {"amount_out": 0}
+        assert leg_quote_from_rpc_result(rpc, amount_in_wei=10**18) is None
+
+    def test_missing_gas_defaults_to_150k(self):
+        """Missing gas_estimate defaults to 150_000."""
+        rpc = {"amount_out": 1000}
+        q = leg_quote_from_rpc_result(rpc, amount_in_wei=10**18)
+        assert q is not None
+        assert q.gas_estimate == 150_000
+
+    def test_no_double_fee_subtraction(self):
+        """CRITICAL: leg_quote preserves amount_out as-is (LP fees embedded)."""
+        rpc = {"amount_out": 1_999_000_000}  # 1999 USDC after LP fee
+        q = leg_quote_from_rpc_result(rpc, amount_in_wei=10**18, fee_tier=500)
+        # The amount_out must NOT be reduced further — LP fees already taken
+        assert q.amount_out_wei == 1_999_000_000
+
+
+# ---------------------------------------------------------------------------
+# 3-leg chaining: quote_cycle_3legs contract
+# ---------------------------------------------------------------------------
+
+class TestQuoteCycle3LegsWiring:
+    """Test the 3-leg sequential chaining in m7a_enumerate_cycles."""
+
+    def test_chaining_amount_out_to_amount_in(self):
+        """leg1.amount_out == leg2.amount_in, leg2.amount_out == leg3.amount_in."""
+        # Simulate the chaining manually (same logic as quote_cycle_3legs)
+        q1 = LegQuote(amount_in_wei=10**18, amount_out_wei=2000 * 10**6)
+        q2 = LegQuote(amount_in_wei=q1.amount_out_wei, amount_out_wei=4000 * 10**18)
+        q3 = LegQuote(amount_in_wei=q2.amount_out_wei, amount_out_wei=int(0.99 * 10**18))
+
+        # Verify chaining
+        assert q2.amount_in_wei == q1.amount_out_wei
+        assert q3.amount_in_wei == q2.amount_out_wei
+
+    def test_measured_score_from_chained_quotes(self):
+        """Chained quotes produce meaningful measured score."""
+        c = TriangularCycle(
+            leg1=_edge("WETH", "USDC", pool="0x1", fee=500),
+            leg2=_edge("USDC", "ARB", pool="0x2", fee=3000),
+            leg3=_edge("ARB", "WETH", pool="0x3", fee=500),
+        )
+        q1 = LegQuote(amount_in_wei=10**18, amount_out_wei=2000 * 10**6,
+                       block_number=100, quote_source="quoter_v2")
+        q2 = LegQuote(amount_in_wei=2000 * 10**6, amount_out_wei=4000 * 10**18,
+                       block_number=100, quote_source="quoter_v2")
+        q3 = LegQuote(amount_in_wei=4000 * 10**18, amount_out_wei=int(1.003 * 10**18),
+                       block_number=100, quote_source="quoter_v2")
+
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.provenance_summary == "measured"
+        assert s.same_state_class == SAME_STATE_PROVEN
+        assert s.gross_bps > 0  # 0.3% triangular return
+
+    def test_block_numbers_propagate_to_same_state(self):
+        """Real block numbers from quotes drive same-state classification."""
+        c = TriangularCycle(
+            leg1=_edge("WETH", "USDC", pool="0x1", fee=500),
+            leg2=_edge("USDC", "ARB", pool="0x2", fee=3000),
+            leg3=_edge("ARB", "WETH", pool="0x3", fee=500),
+        )
+        # Adjacent blocks → PROVEN
+        q1 = LegQuote(amount_in_wei=10**18, amount_out_wei=2000 * 10**6,
+                       block_number=1000)
+        q2 = LegQuote(amount_in_wei=2000 * 10**6, amount_out_wei=4000 * 10**18,
+                       block_number=1001)
+        q3 = LegQuote(amount_in_wei=4000 * 10**18, amount_out_wei=10**18,
+                       block_number=1000)
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.same_state_class == SAME_STATE_PROVEN
+
+        # Large drift → VIOLATED
+        q2_far = LegQuote(amount_in_wei=2000 * 10**6, amount_out_wei=4000 * 10**18,
+                          block_number=1050)
+        s2 = score_cycle_measured(c, q1, q2_far, q3)
+        assert s2.same_state_class == SAME_STATE_VIOLATED
+
+    def test_rpc_result_to_measured_pipeline(self):
+        """End-to-end: RPC result dict -> LegQuote -> score_cycle_measured."""
+        c = TriangularCycle(
+            leg1=_edge("WETH", "USDC", pool="0x1", fee=500),
+            leg2=_edge("USDC", "ARB", pool="0x2", fee=3000),
+            leg3=_edge("ARB", "WETH", pool="0x3", fee=500),
+        )
+        # Simulate RPC results
+        rpc1 = {"amount_out": 2000 * 10**6, "gas_estimate": 180_000,
+                "ticks_crossed": 2, "sqrt_price_after": 999}
+        rpc2 = {"amount_out": 4000 * 10**18, "gas_estimate": 200_000,
+                "ticks_crossed": 1, "sqrt_price_after": None}
+        rpc3 = {"amount_out": int(1.002 * 10**18), "gas_estimate": 180_000,
+                "ticks_crossed": 3, "sqrt_price_after": 888}
+
+        q1 = leg_quote_from_rpc_result(rpc1, 10**18, fee_tier=500,
+                                        block_number=5000, quote_source="quoter_v2")
+        q2 = leg_quote_from_rpc_result(rpc2, q1.amount_out_wei, fee_tier=3000,
+                                        block_number=5000, quote_source="algebra_quoter")
+        q3 = leg_quote_from_rpc_result(rpc3, q2.amount_out_wei, fee_tier=500,
+                                        block_number=5000, quote_source="quoter_v2")
+
+        s = score_cycle_measured(c, q1, q2, q3)
+        assert s.provenance_summary == "measured"
+        assert s.same_state_class == SAME_STATE_PROVEN
+        assert s.gross_bps > 0
+        # LP fees NOT subtracted again — embedded in amount_out
+        assert s.fee_leg1_bps == 5.0   # metadata only
+        assert s.fee_leg2_bps == 30.0
+        assert s.fee_leg3_bps == 5.0

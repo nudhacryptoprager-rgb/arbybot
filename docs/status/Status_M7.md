@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **IN PROGRESS** (M7.A — static enumeration + live scorer infrastructure)  
+**Status**: **IN PROGRESS** (M7.A — first live measured evidence produced, verdict pending)  
 **Updated**: 2026-03-28  
-**Scope**: M7.A only — cache-based static enumeration, live measured scorer with per-leg decomposition, same-state provenance classification. No strategy-level verdict is possible until live measured evidence is produced.
+**Scope**: M7.A only — cache-based static enumeration, live measured scorer with per-leg RPC quotes, same-state provenance classification. First measured truth produced; verdict requires wider sampling.
 
 ---
 
@@ -10,65 +10,76 @@
 
 **Goal** (per `docs/step_M7.md`): build verified pool graph, enumerate 3-hop simple cycles, score with measured-cost discipline, apply provenance and same-state classification, rank by measured final net, and decide whether M7 stops or graduates to M7.B.
 
-**Current sub-step**: steps 1-3 done (static cache), steps 4-7 infrastructure built (live scorer, same-state classifier, runtime graph source). Awaiting live RPC evidence to produce measured artifacts.
+**Current sub-step**: steps 1-6 done (static cache + live measured). Step 7 (ranking by measured net) operational. Step 8 (verdict) requires broader universe sampling before decision.
 
-### Current Evidence
+### Current Evidence — Measured (live RPC)
 
-Evidence source: **local file-backed artifact** `data/tmp/m7a_arbitrum_one_static.json` (not canonical runDir or rolling artifact).  
-Generated: 2026-03-28T13:53:22Z  
-Provenance tier: **local/session** — sufficient for development iteration, not for strong status claims.
+Evidence source: **local file-backed artifact** `data/tmp/m7a_measured_test.json` (not canonical runDir or rolling artifact).  
+Generated: 2026-03-28 (during session)  
+Provenance tier: **local/session** — first live measured evidence; not yet production-grade.
 
 | Metric | Value | Note |
 |--------|-------|------|
 | Chain | arbitrum_one | — |
-| Full graph nodes | 22 | from `pool_resolver_cache` (not live RuntimePair) |
+| Score mode | **measured** | live RPC per-leg quotes |
+| Block number | 446581074 | single block for all quotes |
+| Cycles attempted (measured) | 20 | top-20 by fee-only prerank |
+| Cycles successfully quoted | **17** | 3 failed (adapter dispatch or no liquidity) |
+| Same-state PROVEN | **17** | 100% of quoted — all quotes from same block |
+| Same-state VIOLATED | 0 | — |
+| Promoted | **0** | no profitable cycle found |
+| Best measured net (bps) | **-372.70** | live gross + gas from quoter |
+| Best fee-only prefilter (bps) | -50.0 | diagnostic (unchanged from static pass) |
+| Two-leg baseline (bps) | -3.5062 | from M4 roundtrip evidence |
+
+### Current Evidence — Static (cache-based)
+
+Evidence source: **local file-backed artifact** `data/tmp/m7a_arbitrum_one_static.json`.  
+Generated: 2026-03-28T13:53:22Z  
+
+| Metric | Value | Note |
+|--------|-------|------|
+| Full graph nodes | 22 | from `pool_resolver_cache` |
 | Full graph edges | 808 | bidirectional |
 | M7.A universe nodes | 7 | WETH, USDC, USDT, WBTC, ARB, LINK, PENDLE |
 | M7.A universe edges | 278 | filtered by token + adapter + dex |
 | Cycles found | >=10000 | **CAP HIT — lower bound, not full count** |
-| `max_cycles_cap` | 10000 | enumeration limit |
-| `max_cycles_hit` | true | cap was reached |
-| `cycles_lower_bound` | true | real count >= 10000 |
 | Viable (fee <= 100 bps) | 4838 | 48.4% of capped sample |
-| Best diagnostic fee+gas floor (bps) | -50.0 | `total_fee_bps=0.0` + `gas_bps=50.0` |
 | Median diagnostic fee+gas cost (bps) | -86.0 | — |
-| Worst diagnostic fee+gas cost (bps) | -150.0 | — |
-| Two-leg baseline (bps) | -3.5062 | from M4 roundtrip evidence |
 
-**Best cycle decomposition**: 3× Camelot V3 (algebra adapter, dynamic fee=0) → `total_fee_bps=0.0`, `gas_bps=50.0` (placeholder: $0.50 gas on $100 notional), `final_net_bps=-50.0`.
+### What the measured evidence shows
 
-### What this evidence shows
+- **Same-state provenance works**: 17/17 quoted cycles classified as `same_state_proven` (all quotes returned within same block).
+- **No profitable triangular path found in top-20**: best measured net is -372.7 bps, far worse than the two-leg baseline (-3.5 bps) and the diagnostic fee-only floor (-50.0 bps).
+- **Fee-only was overly optimistic**: the fee-only prefilter estimated -50 bps floor, but real measured quotes (with actual reserve-based pricing) yield -372 bps. This means the "Camelot dynamic-fee=0" cycles have poor reserves — the zero-fee advantage is swamped by adverse reserve ratios.
+- **Quote success rate is high**: 85% (17/20) of attempted cycles returned valid quotes.
+- **End-to-end wiring confirmed**: RPC quote → `leg_quote_from_rpc_result` → `score_cycle_measured` pipeline operational.
 
-- The M7.A universe (7 tokens × 5 DEXes × 3 adapters) produces at least 10,000 distinct 3-hop cycles on arbitrum_one (capped sample, real count is higher).
-- The best diagnostic fee+gas floor (-50.0 bps) is **worse** than the two-leg baseline (-3.5 bps). This is a strong warning but not yet a final stop-condition verdict — live measured scoring may reveal reserve imbalances that overcome this floor.
-- This is early static feasibility only. No strategy-level conclusion is allowed until live measured M7.A evidence exists.
+### What this evidence does NOT yet cover
 
-### What this evidence does NOT cover
-
-- **No live reserve quotes** — `gross_bps=0.0`, all scores are `same_state_class: AMBIGUOUS`.
-- **Placeholder gas model** — `gas_bps=50.0` computed as $0.50 / $100 notional, not measured gas estimation.
-- **No slippage modeling** — `total_slippage_bps: 0.0` placeholder.
-- **Diagnostic prefilter only** — `score_cycle_fees_only` is not a canonical truth scorer; `provenance_summary: fee_structure_only`.
-- **Capped sample** — 10,000 is an enumeration cap, not the full cycle count.
-- **Cache-based graph** — built from `pool_resolver_cache`, not from live `RuntimePair` / discovery end-to-end path.
+- **Only top-20 cycles measured** — wider sampling (200+) may surface cycles missed in the prerank.
+- **Single block snapshot** — no temporal diversity; prices at block 446581074 may not be representative.
+- **$100 notional only** — higher/lower notional may change gas_bps ratio.
+- **Cache-based graph** — graph built from `pool_resolver_cache`, not from live `RuntimePair` discovery.
+- **No L1 gas component** — gas_bps uses quoter-estimated gas at fixed gas price, not L1 calldata cost.
 
 ### Remaining M7.A work (per step_M7.md implementation order)
 
 1. ~~Build verified pool graph on arbitrum_one~~ — DONE (cache-based + runtime source via `--source runtime`)
 2. ~~Restrict graph to narrow approved universe~~ — DONE
 3. ~~Implement 3-hop simple cycle discovery~~ — DONE
-4. ~~Score cycles with current measured-cost model~~ — DONE (infrastructure: `score_cycle_measured()` with full per-leg decomposition, gas from quoter estimates + L1, gross_bps from actual quote chain). Awaiting live quote feeding.
-5. ~~Emit full decomposition artifacts~~ — DONE (infrastructure: `CycleScore.to_dict()` emits all step_M7.md required fields). Awaiting measured data.
-6. ~~Apply provenance and same-state classification~~ — DONE (infrastructure: `classify_same_state()` with block-drift threshold, integrated into `score_cycle_measured()`). Awaiting live block numbers.
-7. Rank only by measured final net — **PENDING** (infrastructure ready; needs live quote data to produce non-placeholder rankings)
-8. Decide whether M7 stops or graduates to M7.B — **PENDING** (after live measured evidence from steps 4-7)
+4. ~~Score cycles with current measured-cost model~~ — **DONE** (live: `score_cycle_measured()` fed by `leg_quote_from_rpc_result()` from live per-leg RPC quotes via `_quote_single_leg()` → `quote_cycle_3legs()`)
+5. ~~Emit full decomposition artifacts~~ — **DONE** (measured artifacts include provenance, same_state, gross_bps, gas_bps, fee metadata)
+6. ~~Apply provenance and same-state classification~~ — **DONE** (live: 17/17 proven at block 446581074)
+7. ~~Rank only by measured final net~~ — **DONE** (`--score measured` mode ranks by `final_net_bps` mixing measured + fee-only fallback)
+8. Decide whether M7 stops or graduates to M7.B — **PENDING** (early evidence strongly negative: -372 bps; wider sampling needed before definitive stop-condition)
 
 ### Modules
 
 - `engine/triangular_graph.py` — PoolEdge, PoolGraph, M7A constants, graph builders (cache + RuntimePair)
-- `engine/triangular_cycles.py` — TriangularCycle, CycleScore, find_3hop_cycles, `score_cycle_fees_only` (diagnostic), `score_cycle_measured` (live per-leg), `classify_same_state`, LegQuote
-- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime` for static/live graph build
-- Tests: 114 M7 tests across 3 test files (2640 total, 0 failures)
+- `engine/triangular_cycles.py` — TriangularCycle, CycleScore, find_3hop_cycles, `score_cycle_fees_only` (diagnostic), `score_cycle_measured` (live per-leg), `classify_same_state`, LegQuote, `leg_quote_from_rpc_result`
+- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`. Dispatches to `read_quoter_v2`/`read_algebra_quoter`/`read_ve33_amount_out` per adapter type.
+- Tests: 125 M7 tests across 3 test files (2651 total, 0 failures)
 
 ---
 
