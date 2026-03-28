@@ -453,6 +453,12 @@ Done Criteria:
 - Авто-зниження size при рості impact/ticksCrossed
 - Health score для RPC/DEX/CEX
 
+#### Transition Override: M5 → M7
+
+Допускається перехід до `Milestone 7` **без формального досягнення всіх цілей M4/M5**, якщо поточна public-infra simple `DEX↔DEX` thesis чесно доведена як economics-blocked і це зафіксовано в актуальних Status/DEV_REPORT документах.  
+На момент такого переходу мають бути виконані три передумови: rolling artifacts стабільні й узгоджені, поточна гілка `DEX↔DEX` формально заморожена як no-go для public infrastructure, а документація синхронізована з останнім verified evidence.  
+Ми робимо це тому, що на поточному етапі вже досягли зрілої data/truth infrastructure, довели відсутність online profitable result для поточного public two-leg path і можемо використовувати наявну систему як базу для нового R&D-напряму без удавання, що core thesis все ще потребує лише локального тюнінгу.
+
 ---
 
 ### Milestone 6 (Optional) — CEX↔DEX inventory-based
@@ -464,6 +470,7 @@ Done Criteria:
 
 ### Milestone 7 (R&D) — Triangular
 - Graph builder + cycle finder + atomic multi-hop execution
+- Розгорнуте керівництво для цього кроку: [docs/step_M7.md](docs/step_M7.md)
 
 ### Milestone 8 (R&D) — Cross-chain
 - Bridge adapters + time-risk model + settlement tracker

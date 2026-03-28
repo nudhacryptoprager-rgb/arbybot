@@ -12,11 +12,11 @@
 | M2 - Registry-driven scanning + Truth Report | [DONE] | [Status_M2.md](Status_M2.md) |
 | M3 - Opportunity Engine + Quality & Contracts | [DONE] | [Status_M3.md](Status_M3.md) |
 | M4 - DEX-DEX Atomic Execution | [IN PROGRESS] | [Status_M4.md](Status_M4.md) |
-| M5_0 - Infrastructure Hardening | [ACTIVE] | [Status_M5_0.md](Status_M5_0.md) |
+| M5_0 - Infrastructure Hardening | [DONE] | [Status_M5_0.md](Status_M5_0.md) |
 
 ## Current Focus
 
-**M4 - DEX<->DEX Atomic Execution**: See [Status_M4.md](Status_M4.md) for latest evidence.
+**M4 - DEX<->DEX Atomic Execution**: current public-infrastructure branch is frozen by economics evidence; milestone remains open only because online profitable core truth was not reached. See [Status_M4.md](Status_M4.md).
 
 ## Related
 

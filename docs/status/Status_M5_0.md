@@ -1,189 +1,151 @@
 # Status: M5_0 (Infrastructure Hardening)
 
-**Status**: [ACTIVE]
-**Updated**: 2026-03-24 (R39i++ — frontier truth fix: degenerate sweep guard + slippage quality gate. 2h scan evidence 390 runs/3413 sig/707 RT/0 profitable. R39i base QUOTE_PATH_BLOCKED fix.)
-**Tests**: 2344 passed / 5 skipped
-**Schema**: start:long_scan_summary:v1.16, m4:run_summary:v2.0, start:hot_loop_snapshot:v1.3
-**Evidence**: R39i++: frontier truth fix + 2h evidence. R39i: base blocker fix + CI enforcement. R39h++: system audit, WS+funnel. R39h+: funnel attrition zero. R39h: calibration contour + funnel.
-**Rolling**: `data/runs/_rolling/{_latest.json,run_summary_latest.json,m4_stability_agg.json,long_scan_latest.json,hot_loop_latest.json}`
+**Status**: **DONE**  
+**Updated**: 2026-03-27  
+**Tests**: `2527 passed / 5 skipped`  
+**Schema family in active rolling**:
+- `m4:latest:v2.0`
+- `m4:run_summary:v2.0`
+- `start:long_scan_summary:v1.16`
+
+**Canonical evidence**:
+- `data/runs/_rolling/_latest.json`
+- `data/runs/_rolling/run_summary_latest.json`
+- `data/runs/_rolling/m4_stability_agg.json`
+- `data/runs/_rolling/long_scan_latest.json`
+- `data/runs/_rolling/hot_loop_latest.json`
+
+**Fresh provenance**:
+- `run_summary_latest.json.run_context.run_timestamp = 2026-03-27T21:30:14.342304Z`
+- `long_scan_latest.json.generated_at = 2026-03-27T21:30:49.463920Z`
+- run_id: `data/runs/ci_m5_gate_arbitrum_one_20260327_222948_123275`
+- run_mode: `REGISTRY_REAL` / `ONLINE`
 
 ---
 
-## R39i++ — Frontier Truth Fix + 2h Evidence Framing
+## Canonical Commands
 
-### Summary
-2h rolling scan (390 runs, 200 in window) exposed **frontier truth lie**: sweep at $7500-$10000 produced degenerate all-zero points (net=0, gross=0, slip=0, gas=0) which were selected as "best" → false `BREAKEVEN_FRONTIER @ 0.0 bps`. Real best (after fix): USDC/DAI -27.38 bps (BEST_NEG with measured slip=10.29, gas=17.25).
-
-### Fixes (R39i++)
-1. **engine/roundtrip.py** — Degenerate sweep guard: points with `gross_pnl_bps==0.0 AND estimated_slippage_bps==0.0` get `DEGENERATE_ZERO` error and are excluded from best selection. Slippage quality gate: if best point has `slippage_bps==0.0` and `net_pnl_bps≥0`, frontier_reason demoted to `SUSPECT_ZERO_SLIPPAGE`.
-2. **strategy/chain_stats.py** — Fixed falsy coalescing: `sweep_pnl = sweep.get("best_net_pnl_bps") or ...` → `if ... is None` pattern. Same fix for `best_size_usd`, `best_pair`, `best_frontier_reason`.
-3. **strategy/long_scan_summary.py** — Post-aggregation fence: `SUSPECT_ZERO_SLIPPAGE` accepted for pnl=0.0 (not auto-promoted to BREAKEVEN).
-4. **tests** — +5 frontier truth tests (test_roundtrip.py), +1 SUSPECT fence test (test_r38_changes.py). Updated test_sweep_frontier_profitable to use ticks_crossed=1. 2344 tests.
-
-### Old vs Current Frontier (incomparable)
-M4 frontier 3.55-4.10 bps was on WETH/USDT at $25 scale with older truth semantics. Current ~55 bps is on USDC/DAI with stricter executable truth (route-level slippage, gas, LP fees measured). The gap widened because measurement became more honest, not because the pipeline regressed.
-
-### Fresh 2h Evidence (200-run window)
-| Chain | Pairs | Exec% | RT | Best bps | Key Insight |
-|-------|------:|------:|---:|---------:|-------------|
-| arb | 11 | 92.2% | 5 | **-54.76** | USDC/DAI best; slippage dominant |
-| base | 9 | 7.4% | 0 | — | SLOT0 71.7%; infra blocker |
-| zksync | 6 | 92.3% | 1 | -718 | Clean but thin |
-| mantle | 4 | 100% | 1 | -694 | MIXED_SOURCE 61.5% |
-| linea | 5 | 100% | 1 | -631 | Economics, not coverage |
-| scroll | 5 | 86.7% | 2 | -340 | MIXED_SOURCE + no Ambient |
+```powershell
+py -3.11 -m pytest -q
+py -3.11 scripts/check_repo_safety.py
+py -3.11 scripts/ci_full_pipeline.py --mode ci
+py -3.11 scripts/inspect_rolling.py
+py -3.11 scripts/ci_m5_0_gate.py --offline
+```
 
 ---
 
-## R39i — Base QUOTE_PATH_BLOCKED Fix + Status Compression + CI Enforcement
+## Summary
 
-### Summary
-R39h++ partially complete: rt_without_signal implemented/verified, WS endpoints configured on all 6 chains, but runtime WS connectivity still unproven, base still quote-path blocked in practice, and docs bundle was not repo-safety clean. R39i fixes these gaps.
+M5_0 was about infrastructure hardening, not proving profitable execution. On that narrower goal, the current project state is strong enough to mark M5_0 as done for the current public-infrastructure thesis.
 
-### Fixes (R39i)
-1. **strategy/chain_stats.py** — `_compute_blocker_evidence()`: sweep evidence override now requires `rq > 0` (not just `runs_with_sweep > 0`). When SLOT0 dominates (>40%) and `real_quote_count_total=0`, chain is `QUOTE_PATH_BLOCKED` even with diagnostic-only sweep evidence. Directly fixes base misclassification as `OE_ECONOMICS`.
-2. **tests/unit/test_blocker_evidence.py** — +2 tests: `test_slot0_with_diagnostic_sweep_still_quote_path_blocked` (base scenario: SLOT0 77.5%, rq=0, sweep=2 → QUOTE_PATH_BLOCKED), `test_slot0_with_real_quotes_falls_through` (SLOT0 50%, rq=5, sweep=3 → OE_ECONOMICS).
-3. **docs/status/Status_M5_0.md** — Compressed from 487 → <400 lines. Historical R39c–R38 sections folded into compact table.
-4. **docs/DEV_REPORT_LATEST.md** — Aligned with current rolling timestamp/runDir from `run_summary_latest.json`.
-5. **WS connectivity**: acknowledged as config-complete but runtime-incomplete. `hot_loop_latest.json` still shows `chains_ws_connected: 0`. Not claiming WS step as finished until verified.
-6. **linea framing**: corrected from "coverage fail" to "thin-truth/economics" — fresh rolling shows `signals=20, rt=6, rq=6`.
-
-### Per-Chain Fresh RCA (2026-03-24 run dirs, pair_level_rca evidence)
-
-| Chain | Pairs | Exec% | RT | Best PnL | #1 OE Reject | Blocker (R39i) |
-|-------|------:|------:|---:|------:|----------|---------------|
-| arb | 11 | 88.6% | 5 | -54.21 | NET_PROFIT_TOO_LOW | OE_ECONOMICS |
-| zksync | 7 | 92.3% | 1 | -608.57 | NET_PROFIT_TOO_LOW 63% | OE_ECONOMICS |
-| base | 9 | 6.3% | 0 | — | SLOT0_DIAGNOSTIC 77.5% | **QUOTE_PATH_BLOCKED** (R39i fix) |
-| linea | 5 | 100% | 1 | -563 | NET_PROFIT_TOO_LOW 63% | OE_ECONOMICS (thin-truth) |
-| scroll | 5 | 86.7% | 2 | -369.94 | SUSPECT_SPREAD 37.5% + MIXED_SOURCE 37.5% | MIXED_SOURCE |
-| mantle | 4 | 100% | 2 | -415.07 | MIXED_SOURCE 66.7% | MIXED_SOURCE |
-
-### Layered Blocker Priority (formalized)
-
-| Priority | Chain(s) | Blocker | Status |
-|----------|----------|---------|--------|
-| P0 | base | QUOTE_PATH_BLOCKED (SLOT0 77%, rq=0) | Fix in quotes.py/quote_adapters.py |
-| P1 | scroll, mantle | MIXED_SOURCE (38-67% of OE rejections) | Clean quote/truth path |
-| P2 | all 6 | WS freshness | Config-complete, runtime-unproven |
-| P3 | linea | Thin-truth/economics (signals=20, rt=6, all negative) | Economics investigation |
-| P4 | arb | Economics/slippage (best -54bps USDC/DAI) | Sweep sizing + slippage model |
-| P5 | — | ambient adapter (tech debt) | Do not distract from P0-P2 |
-
-### Signal Funnel (rt_without_signal, fresh evidence)
-
-| Chain | Intent | Excl | XDex | Signals | RT Eval | RT w/o Sig |
-|-------|-------:|-----:|-----:|--------:|--------:|-----------:|
-| arb | 11 | 11 | 11 | 226 | 30 | 0 |
-| zksync | 7 | 7 | 6 | 24 | 6 | 0 |
-| base | 9 | 9 | 9 | 6 | 3 | 1 |
-| mantle | 5 | 4 | 4 | 0 | 12 | **12** |
-| linea | 5 | 5 | 5 | 20 | 6 | 0 |
-| scroll | 5 | 5 | 5 | 24 | 12 | 0 |
-| **Total** | **42** | **41** | **40** | **300** | **69** | **13** |
-
-Near-zero universe attrition (42→41→40). Mantle semantic split exposed: rt_without_signal=12.
+The current data plane is stable, observable, reproducible, and rich enough to support hard negative conclusions. That is an achievement of M5_0, not a failure of it.
 
 ---
 
-## R39h++ — Full System Audit + WS Freshness + Funnel Diagnostics
+## Fresh Evidence Snapshot
 
-### Summary
-Full post-R39h+ audit confirms **pair-universe width is no longer the main blocker**. Blockers are layered: base quote-path debt, mixed-source on scroll/mantle, HTTP-only freshness, post-signal economics.
+### Aggregate
 
-### Fixes (R39h++)
-1. **config/chains.yaml** — WS endpoints for linea/mantle/scroll/zksync (BlastAPI public WSS). All 6 chains now have WS configured.
-2. **strategy/chain_stats.py** — `rt_without_signal_total`: RT evaluated on runs where `included_signals_count=0`.
-3. **strategy/long_scan_summary.py** — `rt_without_signal` in per-chain + aggregate signal_funnel.
-4. **tests** — +3 tests (rt_without_signal accumulation/funnel, all-chains-have-ws-endpoints). 2330 passed.
+| Metric | Value |
+|--------|-------|
+| total_runs | `58` |
+| total_pass | `58` |
+| total_fail | `0` |
+| total_infra_fail | `0` |
+| total_included_signals | `1196` |
+| total_roundtrip_evaluated | `169` |
+| total_profitable_roundtrips | `0` |
+| best_roundtrip_net_bps | `-3.5062` |
 
----
+### Per Chain
 
-## R39h+ — Funnel Attrition Zero + 3-Tier Policy Permanent
+| Chain | Runs | Signals | RT Evaluated | Real Quotes | Frontier Pair | Gap | Blocker |
+|-------|------|---------|--------------|-------------|---------------|-----|---------|
+| `arbitrum_one` | `29/29 PASS` | `906` | `169` | `169` | `WBTC/USDC` | `3.5062 bps` | `OE_ECONOMICS` |
+| `base` | `29/29 PASS` | `290` | `0` | `0` | `USDC/USDT` | `8.6729 bps` | `OE_ECONOMICS` |
 
-### Key Finding
-Current blocker is no longer pair-universe attrition: intent, post-exclude, and xDex counts are equal (40→40→40). Expansion should come through tiered universe policy and source quality, not inflating default productive intent.
+### Rolling Quality
 
-### 3-Tier Policy (permanent)
-| Tier | Pairs | Purpose | Promotion criteria |
-|------|------:|---------|-------------------|
-| productive | 31 | Quality-ranked volatile/liquid/multi-DEX | Baseline |
-| calibration | 42 | + benchmark stables (USDC/DAI, USDC/USDT) | Benchmarking per-chain health |
-| exploratory | ~69 | All tokens ≥2 DEX presence | ≥2 of 4 metrics improve |
-
-**Expansion acceptance**: ≥2 of: rq grows, RT-evaluated grows, best gap decreases, near-zero candidates appear (<100bps). signals_count alone insufficient.
-
-### Mantle 0-sig/14-RT Semantic Split
-Two independent pipelines: `included_signals_count` uses 500bps threshold; opportunity engine creates opps independently → rejected opps go to sweep_reprieve → counted in `roundtrip_evaluated_total`. Not a bug; `sweep_reprieve_rt` + `rt_without_signal` fields make this visible. 2327 tests.
-
----
-
-## R39h — Per-Chain Signal Funnel + Calibration Contour
-
-### Key Changes
-1. Schema update: `signal_funnel` section (intent→excludes→xdex→signals→RT per-chain + aggregate).
-2. ZK/* blanket exclude removed; anchor prices added (ZK_USDC=0.10, ZK_WETH=0.0000488). zksync: 3→7 pairs.
-3. `config/intent.txt` regenerated with `--tier calibration`: 42 pairs (was 31).
-
-### Per-Chain Pair Counts After Calibration
-| Chain | Before | After | Delta |
-|-------|-------:|------:|------:|
-| arb | 9 | 11 | +2 |
-| base | 7 | 9 | +2 |
-| linea | 3 | 5 | +2 |
-| scroll | 3 | 5 | +2 |
-| mantle | 4 | 5 | +1 |
-| zksync | 3 | 7 | +4 |
-| **Total** | **29** | **42** | **+13** |
-
-2325 passed / 5 skipped (+8 signal funnel tests).
+| Artifact | State |
+|----------|-------|
+| `_latest.json` | present and current |
+| `run_summary_latest.json` | present and current |
+| `m4_stability_agg.json` | present and current |
+| `long_scan_latest.json` | present and current |
+| `hot_loop_latest.json` | present and current |
 
 ---
 
-## Historical Summary (R39g+ through R36)
+## What M5_0 Achieved
 
-Condensed from full session notes. For detailed per-session evidence, see git log.
+The current repo now has all of the following on the public-infrastructure path:
 
-| Session | Key Changes | Tests | Total |
-|---------|-------------|------:|------:|
-| **R39g+** | Aerodrome re-enabled on base (4 DEXes). PRICE_SCALE per-pair majority logic. Base source: 3/4→4/4. | +11 | 2317 |
-| **R39g** | Coverage gate relaxed (min_pairs=1). Blocker INFRA_FAIL bypass when chain has real data. pair_level_rca gate vs profit blocker. | +10 | 2306 |
-| **R39f** | Source audit: 26/27 active (arb.sushiswap_v2 out-of-scope, ambient=tech debt). Dual-route contract. Same-DEX diagnostic-only. | +3 | 2296 |
-| **R39e** | Per-chain verdicts. Calibration tier. Acceptance: ≥2 of 4 metrics. | +3 | 2293 |
-| **R39d** | Quality-ranked pairs: 116→31 (productive contour). core_tokens.yaml tiers. generate_intent.py tiered selector. | +31 | 2290 |
-| **R39c** | EXECUTABLE_BEST_NEG. Route-level economics in pair_level_rca. | +8 | 2259 |
-| **R39** | Frontier 0.0 truthiness fix. Sweep size promotion fix. Chain stats gas/fee 0.0 fix. | +13 | 2251 |
-| **R38** | Sweep size promotion. LST-aware SUSPECT_ACCOUNTING (50bps). Event-driven loop (DirtySetTracker). Coverage expansion paused. | +20 | 2238 |
-| **R37** | BREAKEVEN_FRONTIER reason. roundtrip_summary top-level. QUOTE_PATH_CONSTRAINED. Stale claims cleanup. | +2 | 2218 |
-| **R36** | SyncSwap+iZiSwap in all configs. Sweep frontier promotion. ZERO_QUOTE_FRONTIER. | — | 2216 |
+1. Stable rolling artifacts with overwrite discipline.
+2. Multi-chain frontier ranking with chain roles and blocker classification.
+3. Measured sweep truth rather than paper-only frontier claims.
+4. Canonical profit semantics (`ROUNDTRIP_CANONICAL` vs diagnostic-only).
+5. Per-pair repeatability and near-breakeven decomposition.
+6. Dashboard and operator-facing hot-loop artifacts.
+7. Strong CI, docs consistency, and repo-safety enforcement.
+8. Enough observability to distinguish infra failure from economics failure.
 
-### Per-Chain Blocker Evolution (R36→R39i)
+This is precisely why current negative conclusions are credible.
 
-| Chain | R36 | R38 | R39g | R39h++ | R39i |
-|-------|-----|-----|------|--------|------|
-| arb | OE_ECONOMICS | OE_ECONOMICS | OE_ECONOMICS | OE_ECONOMICS | OE_ECONOMICS |
-| zksync | OE_ECONOMICS | OE_ECONOMICS | OE_ECONOMICS | OE_ECONOMICS | OE_ECONOMICS |
-| base | QUOTE_PATH_CONSTRAINED | QUOTE_PATH_CONSTRAINED | OE_ECONOMICS | OE_ECONOMICS | **QUOTE_PATH_BLOCKED** |
-| linea | OE_ECONOMICS | OE_ECONOMICS | QUOTE_PATH_CONSTRAINED | OE_ECONOMICS | OE_ECONOMICS |
-| scroll | MIXED_SOURCE | MIXED_SOURCE | MIXED_SOURCE | MIXED_SOURCE | MIXED_SOURCE |
-| mantle | OE_ECONOMICS | OE_ECONOMICS | MIXED_SOURCE | MIXED_SOURCE | MIXED_SOURCE |
+---
 
-### Source Coverage (cumulative)
-| Chain | Declared | Active | Missing | Note |
-|-------|----------|--------|---------|------|
-| arb | 6 | 5/6 | sushiswap_v2 | V2, out-of-scope |
-| base | 4 | 4/4 | — | aerodrome re-enabled R39g+ |
-| linea | 4 | 4/4 | — | full |
-| mantle | 4 | 4/4 | — | full |
-| scroll | 5 | 5/5 | — | full |
-| zksync | 4 | 4/4 | — | full |
-| **Total** | **27** | **26/27** | **1** | ambient=tech debt |
+## What M5_0 Did Not Prove
 
-### Policies (permanent, from R38-R39h+)
-1. **3-tier universe**: productive/calibration/exploratory. Default=calibration (42 pairs).
-2. **Expansion acceptance**: ≥2 of 4 metrics must improve before promotion.
-3. **Coverage expansion paused**: until healthy chains show RT net_pnl_bps > 0.
-4. **Quality-ranked pairs**: ≥2 DEXes with real quotes before promotion to core.
-5. **Same-DEX**: diagnostic-only, not truth-path.
-6. **LST suppression**: 50bps threshold for LST/derivative pairs.
-7. **emit_dual_routes=true**: mandatory contract.
+M5_0 does **not** prove:
+
+1. profitable DEX-DEX execution,
+2. profitable online M4 closure,
+3. usefulness of private/orderflow branches,
+4. viability of triangular or cross-chain strategies.
+
+M5_0 solved the question "can we trust our current public-infrastructure evidence?"  
+The current answer is: **yes**.
+
+---
+
+## Infrastructure Verdict
+
+The hardened system now supports the following conclusions with high confidence:
+
+- infra instability is no longer the main reason for missing profit,
+- stale truth semantics are no longer the main reason,
+- public-infra execution-edge tweaks did not materially rescue the thesis,
+- the current public simple DEX-DEX branch reached an economics ceiling before profitable execution.
+
+## Known Blockers
+
+The remaining blockers after M5_0 are no longer infrastructure blockers for this milestone. They belong to strategy viability:
+
+1. public-infra two-leg DEX-DEX economics remain negative,
+2. online profitable M4 truth is still missing,
+3. any further progress requires a new strategy branch or a higher-cost execution tier.
+
+That is a milestone-level closure condition for M5_0.
+
+---
+
+## Boundary With M4
+
+M5_0 being done does **not** close M4.
+
+The boundary is now clean:
+
+- **M5_0**: public-infra scan/evidence platform hardened and trustworthy -> **DONE**
+- **M4**: online profitable DEX-DEX core truth -> **NOT DONE**
+
+This distinction is important. The repo should not keep using infra work to imply strategy success.
+
+---
+
+## Status Conclusion
+
+M5_0 should now be read as a completed hardening milestone for the present public-infrastructure thesis. The repo has enough stability, observability, and artifact discipline to stop blaming missing profit on hidden infra noise.
+
+## Stage Clarification
+
+M5_0 is complete as an infrastructure milestone. It should not be reopened merely to continue tuning a strategy branch that current evidence already classifies as economics-blocked.
