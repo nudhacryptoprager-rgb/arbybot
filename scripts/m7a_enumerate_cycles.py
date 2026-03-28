@@ -44,7 +44,10 @@ from engine.triangular_graph import (
     filter_graph_to_m7a_universe,
 )
 from engine.triangular_cycles import (
+    CycleScore,
     LegQuote,
+    SizeSweepPoint,
+    SizeSweepResult,
     TriangularCycle,
     filter_viable_fee_structures,
     find_3hop_cycles,
@@ -326,8 +329,8 @@ def _get_current_block(rpc_url: str) -> Optional[int]:
         return None
 
 
-def _calculate_starting_amount(token: str, decimals: int) -> int:
-    """Calculate starting amount for triangular cycle (100 USD notional).
+def _calculate_starting_amount(token: str, decimals: int, target_usd: float = 100.0) -> int:
+    """Calculate starting amount for triangular cycle.
 
     Reuses canonical DEFAULT_TOKEN_USD_PRICES from strategy.quotes
     as single source of truth to avoid drift.
@@ -344,7 +347,6 @@ def _calculate_starting_amount(token: str, decimals: int) -> int:
                 break
     if price is None:
         price = 1.0
-    target_usd = 100.0
     amount_tokens = target_usd / price
     return int(amount_tokens * (10 ** decimals))
 
@@ -364,6 +366,8 @@ def main() -> int:
     parser.add_argument("--output", default=None, help="Output JSON path (default: stdout summary)")
     parser.add_argument("--max-fee-bps", type=float, default=100.0,
                         help="Max total fee bps for viable filter")
+    parser.add_argument("--sweep-top", type=int, default=0,
+                        help="Sweep canonical size ladder on top N measured cycles (0=disabled)")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     args = parser.parse_args()
 
@@ -404,12 +408,42 @@ def main() -> int:
         )
         # In measured mode, the canonical ranking is measured-only
         ranked = measured_ranked
+
+        # 5b. Optional bounded size sweep on top measured candidates
+        sweep_results: List[SizeSweepResult] = []
+        if args.sweep_top > 0 and measured_ranked:
+            from engine.roundtrip import CANONICAL_SWEEP_SIZES_USD
+            from core.rpc_urls import get_rpc_url
+            from dex.registry import load_dex_configs
+
+            sweep_n = min(args.sweep_top, len(measured_ranked))
+            rpc_url = get_rpc_url(chain)
+            block_number = measured_stats.get("block_number") if measured_stats else None
+            if rpc_url and block_number:
+                dex_configs = load_dex_configs(chain)
+                token_addresses = get_all_token_addresses(chain)
+                logger.info(
+                    "Size sweep: %d cycles x %d sizes, block=%d",
+                    sweep_n, len(CANONICAL_SWEEP_SIZES_USD), block_number,
+                )
+                for s in measured_ranked[:sweep_n]:
+                    result = _sweep_cycle_sizes(
+                        s.cycle, CANONICAL_SWEEP_SIZES_USD,
+                        rpc_url, block_number, dex_configs, token_addresses,
+                    )
+                    if result is not None:
+                        sweep_results.append(result)
+                logger.info(
+                    "Size sweep complete: %d/%d swept",
+                    len(sweep_results), sweep_n,
+                )
     else:
         scores = [score_cycle_fees_only(c) for c in viable]
         ranked = rank_cycles_by_net(scores)
         measured_stats = None
         measured_scores = []
         fallback_scores = []
+        sweep_results = []
 
     # 6. Build summary
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -454,6 +488,12 @@ def main() -> int:
             summary["diagnostic_fee_only_fallbacks"] = [
                 s.to_dict() for s in fallback_ranked[:10]
             ]
+        if sweep_results:
+            summary["size_sweep"] = {
+                "sweep_top": args.sweep_top,
+                "cycles_swept": len(sweep_results),
+                "results": [r.to_dict() for r in sweep_results],
+            }
     else:
         # Fee-only mode: use fee-cost naming for clarity
         summary["top_10_by_lowest_cost"] = [s.to_dict() for s in ranked[:10]]
@@ -501,6 +541,68 @@ def main() -> int:
         print(f"Multi-DEX breakdown: {summary['multi_dex_breakdown']}")
 
     return 0
+
+
+def _sweep_cycle_sizes(
+    cycle: TriangularCycle,
+    sizes_usd: List[float],
+    rpc_url: str,
+    block_number: int,
+    dex_configs: Dict[str, Any],
+    token_addresses: Dict[str, str],
+) -> Optional[SizeSweepResult]:
+    """Sweep a single cycle over the canonical size ladder.
+
+    Quotes all 3 legs at each notional in sizes_usd, scores each,
+    and returns the size curve with the best notional identified.
+    Returns None if no size point could be quoted.
+    """
+    curve: List[SizeSweepPoint] = []
+    best_score: Optional[CycleScore] = None
+    best_net: float = float("-inf")
+    best_size: float = 0.0
+    quoted_count = 0
+
+    for size_usd in sizes_usd:
+        amt_wei = _calculate_starting_amount(
+            cycle.leg1.token_in, cycle.leg1.decimals_in, target_usd=size_usd,
+        )
+        if amt_wei <= 0:
+            curve.append(SizeSweepPoint(size_usd=size_usd, final_net_bps=0.0, quoted=False))
+            continue
+
+        q1, q2, q3 = quote_cycle_3legs(
+            cycle, amt_wei, rpc_url, block_number, dex_configs, token_addresses,
+        )
+        if q1 is None or q2 is None or q3 is None:
+            curve.append(SizeSweepPoint(size_usd=size_usd, final_net_bps=0.0, quoted=False))
+            continue
+
+        s = score_cycle_measured(cycle, q1, q2, q3)
+        quoted_count += 1
+        curve.append(SizeSweepPoint(
+            size_usd=s.scored_size_usd,
+            final_net_bps=s.final_net_bps,
+            quoted=True,
+        ))
+
+        if s.final_net_bps > best_net:
+            best_net = s.final_net_bps
+            best_size = s.scored_size_usd
+            best_score = s
+
+    if best_score is None:
+        return None
+
+    return SizeSweepResult(
+        cycle=cycle,
+        best_size_usd=best_size,
+        best_net_bps=best_net,
+        best_score=best_score,
+        size_curve=curve,
+        sizes_attempted=len(sizes_usd),
+        sizes_quoted=quoted_count,
+    )
 
 
 def _score_measured(

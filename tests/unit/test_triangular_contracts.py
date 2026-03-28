@@ -772,3 +772,143 @@ class TestQuoteCycle3LegsWiring:
         assert s.fee_leg1_bps == 5.0   # metadata only
         assert s.fee_leg2_bps == 30.0
         assert s.fee_leg3_bps == 5.0
+
+
+# ---------------------------------------------------------------------------
+# SizeSweepResult / SizeSweepPoint contract tests
+# ---------------------------------------------------------------------------
+
+from engine.triangular_cycles import SizeSweepPoint, SizeSweepResult
+
+
+class TestSizeSweepResult:
+    """Contract tests for the bounded size sweep dataclasses."""
+
+    def _make_cycle(self):
+        return TriangularCycle(
+            leg1=_edge("WETH", "USDC", pool="0x1", fee=500),
+            leg2=_edge("USDC", "ARB", pool="0x2", fee=3000),
+            leg3=_edge("ARB", "WETH", pool="0x3", fee=500),
+        )
+
+    def _make_score(self, net_bps: float, size_usd: float = 100.0) -> CycleScore:
+        return CycleScore(
+            cycle=self._make_cycle(),
+            final_net_bps=net_bps,
+            scored_size_usd=size_usd,
+            provenance_summary="measured",
+        )
+
+    def test_sweep_point_fields(self):
+        p = SizeSweepPoint(size_usd=100.0, final_net_bps=-5.2, quoted=True)
+        assert p.size_usd == 100.0
+        assert p.final_net_bps == -5.2
+        assert p.quoted is True
+
+    def test_sweep_point_unquoted(self):
+        p = SizeSweepPoint(size_usd=50.0, final_net_bps=0.0, quoted=False)
+        assert p.quoted is False
+
+    def test_sweep_result_fields(self):
+        c = self._make_cycle()
+        best = self._make_score(-3.5, 250.0)
+        curve = [
+            SizeSweepPoint(100.0, -5.2, True),
+            SizeSweepPoint(250.0, -3.5, True),
+            SizeSweepPoint(500.0, -8.1, True),
+        ]
+        r = SizeSweepResult(
+            cycle=c, best_size_usd=250.0, best_net_bps=-3.5,
+            best_score=best, size_curve=curve,
+            sizes_attempted=3, sizes_quoted=3,
+        )
+        assert r.best_size_usd == 250.0
+        assert r.best_net_bps == -3.5
+        assert r.sizes_attempted == 3
+        assert r.sizes_quoted == 3
+
+    def test_sweep_result_to_dict_schema(self):
+        """to_dict() must produce all required keys."""
+        c = self._make_cycle()
+        best = self._make_score(-3.5, 250.0)
+        curve = [
+            SizeSweepPoint(100.0, -5.2, True),
+            SizeSweepPoint(250.0, -3.5, True),
+        ]
+        r = SizeSweepResult(
+            cycle=c, best_size_usd=250.0, best_net_bps=-3.5,
+            best_score=best, size_curve=curve,
+            sizes_attempted=2, sizes_quoted=2,
+        )
+        d = r.to_dict()
+        required_keys = [
+            "cycle_key", "route", "best_size_usd", "best_net_bps",
+            "sizes_attempted", "sizes_quoted", "size_curve", "best_decomposition",
+        ]
+        for key in required_keys:
+            assert key in d, f"Missing key: {key}"
+
+    def test_sweep_result_to_dict_curve_entries(self):
+        """Each size_curve entry has size_usd, final_net_bps, quoted."""
+        c = self._make_cycle()
+        best = self._make_score(-3.5, 250.0)
+        curve = [
+            SizeSweepPoint(100.0, -5.2, True),
+            SizeSweepPoint(50.0, 0.0, False),
+        ]
+        r = SizeSweepResult(
+            cycle=c, best_size_usd=100.0, best_net_bps=-5.2,
+            best_score=best, size_curve=curve,
+            sizes_attempted=2, sizes_quoted=1,
+        )
+        d = r.to_dict()
+        assert len(d["size_curve"]) == 2
+        for entry in d["size_curve"]:
+            assert "size_usd" in entry
+            assert "final_net_bps" in entry
+            assert "quoted" in entry
+
+    def test_sweep_result_best_decomposition_is_cycle_score(self):
+        """best_decomposition should match CycleScore.to_dict() keys."""
+        c = self._make_cycle()
+        best = self._make_score(-3.5, 250.0)
+        r = SizeSweepResult(
+            cycle=c, best_size_usd=250.0, best_net_bps=-3.5,
+            best_score=best, size_curve=[],
+            sizes_attempted=0, sizes_quoted=0,
+        )
+        d = r.to_dict()
+        decomp = d["best_decomposition"]
+        # Must have standard CycleScore artifact keys
+        assert "final_net_bps" in decomp
+        assert "scored_size_usd" in decomp
+        assert "route" in decomp
+
+    def test_canonical_sweep_sizes_reusable(self):
+        """CANONICAL_SWEEP_SIZES_USD from roundtrip.py must be importable."""
+        from engine.roundtrip import CANONICAL_SWEEP_SIZES_USD
+        assert isinstance(CANONICAL_SWEEP_SIZES_USD, list)
+        assert len(CANONICAL_SWEEP_SIZES_USD) >= 10
+        assert all(s > 0 for s in CANONICAL_SWEEP_SIZES_USD)
+        # Must be sorted ascending
+        assert CANONICAL_SWEEP_SIZES_USD == sorted(CANONICAL_SWEEP_SIZES_USD)
+
+    def test_calculate_starting_amount_accepts_target_usd(self):
+        """_calculate_starting_amount must accept target_usd parameter."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _calculate_starting_amount
+
+        amt_100 = _calculate_starting_amount("USDC", 6, target_usd=100.0)
+        amt_500 = _calculate_starting_amount("USDC", 6, target_usd=500.0)
+        # Stablecoin: $500 should be 5x $100
+        assert amt_500 == 5 * amt_100
+
+    def test_calculate_starting_amount_default_backward_compat(self):
+        """Default target_usd=100 preserves existing behavior."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import _calculate_starting_amount
+
+        amt = _calculate_starting_amount("USDC", 6)
+        assert amt == 100 * 10**6  # $100 at $1/USDC, 6 decimals

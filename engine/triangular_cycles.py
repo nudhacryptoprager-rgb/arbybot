@@ -651,6 +651,52 @@ def score_cycle_measured(
     )
 
 
+# ---------------------------------------------------------------------------
+# Size sweep result (bounded size ladder over top candidates)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SizeSweepPoint:
+    """Single point on a size sweep curve."""
+    size_usd: float
+    final_net_bps: float
+    quoted: bool  # False if quoting failed at this size
+
+
+@dataclass
+class SizeSweepResult:
+    """Size sweep result for a single cycle.
+
+    Captures the full size curve and identifies the best notional.
+    """
+    cycle: TriangularCycle
+    best_size_usd: float
+    best_net_bps: float
+    best_score: CycleScore
+    size_curve: List[SizeSweepPoint]
+    sizes_attempted: int
+    sizes_quoted: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "cycle_key": self.cycle.cycle_key,
+            "route": self.cycle.route_display,
+            "best_size_usd": round(self.best_size_usd, 2),
+            "best_net_bps": round(self.best_net_bps, 4),
+            "sizes_attempted": self.sizes_attempted,
+            "sizes_quoted": self.sizes_quoted,
+            "size_curve": [
+                {
+                    "size_usd": round(p.size_usd, 2),
+                    "final_net_bps": round(p.final_net_bps, 4),
+                    "quoted": p.quoted,
+                }
+                for p in self.size_curve
+            ],
+            "best_decomposition": self.best_score.to_dict(),
+        }
+
+
 def _token_usd_estimate(token: str, eth_usd: float) -> float:
     """Rough USD price estimate for gas-to-bps conversion.
 
