@@ -213,11 +213,19 @@ def build_graph_from_discovered_pools(
         if not token_in or not token_out:
             continue
 
-        # Get decimals from registry
+        # Get decimals from registry — skip if unresolved rather than
+        # silently defaulting to 18 (verified-graph discipline).
         t0_info = registry.get_token(chain, token_in)
         t1_info = registry.get_token(chain, token_out)
-        dec_in = t0_info.decimals if t0_info else 18
-        dec_out = t1_info.decimals if t1_info else 18
+        if not t0_info or not t1_info:
+            logger.debug(
+                "Skipping pool %s: unresolved decimals for %s",
+                pool.address,
+                token_in if not t0_info else token_out,
+            )
+            continue
+        dec_in = t0_info.decimals
+        dec_out = t1_info.decimals
 
         adapter_type = get_dex_adapter_type(chain, pool.dex) or pool.dex
         edge = PoolEdge(

@@ -25,6 +25,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Ensure repository root is on sys.path so `python scripts/m7a_enumerate_cycles.py` works
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
 # Project imports
 from config import get_all_token_addresses, load_core_tokens, load_dexes
 from discovery.index_factories import get_dex_adapter_type
