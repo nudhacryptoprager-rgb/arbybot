@@ -13,6 +13,7 @@
 | M3 - Opportunity Engine + Quality & Contracts | [DONE] | [Status_M3.md](Status_M3.md) |
 | M4 - DEX-DEX Atomic Execution | [IN PROGRESS] | [Status_M4.md](Status_M4.md) |
 | M5_0 - Infrastructure Hardening | [DONE] | [Status_M5_0.md](Status_M5_0.md) |
+| M7 - Triangular Feasibility (M7.A) | [IN PROGRESS] | [Status_M7.md](Status_M7.md) |
 
 ## Current Focus
 

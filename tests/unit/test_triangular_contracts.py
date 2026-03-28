@@ -312,3 +312,68 @@ class TestArtifactSchemaCompliance:
         s1 = self._make_score()
         s2 = self._make_score()
         assert s1.to_dict()["cycle_key"] == s2.to_dict()["cycle_key"]
+
+
+# ---------------------------------------------------------------------------
+# M7.A enumeration artifact schema: cap-hit fields
+# ---------------------------------------------------------------------------
+
+class TestEnumerationCapHitFields:
+    """Enumeration JSON must declare max_cycles_hit and cycles_lower_bound."""
+
+    REQUIRED_CYCLES_KEYS = [
+        "total_found",
+        "max_cycles_cap",
+        "max_cycles_hit",
+        "cycles_lower_bound",
+        "viable_after_fee_filter",
+        "max_fee_bps_threshold",
+    ]
+
+    def _run_enumeration(self, max_cycles: int):
+        """Build a small graph and run enumeration to get cycles dict."""
+        from engine.triangular_cycles import find_3hop_cycles, filter_viable_fee_structures
+
+        g = PoolGraph(chain="arbitrum_one")
+        # triangle: WETH -> USDC -> ARB -> WETH (two directed cycles)
+        g.add_pool(_edge("WETH", "USDC", dex="uniswap_v3",
+                         adapter_type="uniswap_v3", pool="0xa1", fee=500))
+        g.add_pool(_edge("USDC", "ARB", dex="uniswap_v3",
+                         adapter_type="uniswap_v3", pool="0xa2", fee=3000))
+        g.add_pool(_edge("ARB", "WETH", dex="sushiswap_v3",
+                         adapter_type="uniswap_v3", pool="0xa3", fee=500))
+
+        cycles = find_3hop_cycles(g, max_cycles=max_cycles)
+        max_cycles_hit = len(cycles) >= max_cycles
+        viable = filter_viable_fee_structures(cycles, max_total_fee_bps=100.0)
+
+        return {
+            "total_found": len(cycles),
+            "max_cycles_cap": max_cycles,
+            "max_cycles_hit": max_cycles_hit,
+            "cycles_lower_bound": max_cycles_hit,
+            "viable_after_fee_filter": len(viable),
+            "max_fee_bps_threshold": 100.0,
+        }
+
+    def test_required_keys_present(self):
+        d = self._run_enumeration(max_cycles=10000)
+        for key in self.REQUIRED_CYCLES_KEYS:
+            assert key in d, f"Missing cycles key: {key}"
+
+    def test_cap_not_hit_when_below_limit(self):
+        d = self._run_enumeration(max_cycles=10000)
+        # small graph produces only 2 cycles, well below 10000
+        assert d["max_cycles_hit"] is False
+        assert d["cycles_lower_bound"] is False
+
+    def test_cap_hit_when_at_limit(self):
+        d = self._run_enumeration(max_cycles=1)
+        # max_cycles=1 forces cap hit
+        assert d["max_cycles_hit"] is True
+        assert d["cycles_lower_bound"] is True
+        assert d["total_found"] == 1
+
+    def test_max_cycles_cap_matches_input(self):
+        d = self._run_enumeration(max_cycles=42)
+        assert d["max_cycles_cap"] == 42

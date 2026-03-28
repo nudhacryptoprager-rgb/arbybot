@@ -193,6 +193,7 @@ def main() -> int:
 
     # 3. Enumerate cycles
     cycles = find_3hop_cycles(m7a_graph, max_cycles=args.max_cycles)
+    max_cycles_hit = len(cycles) >= args.max_cycles
 
     # 4. Filter by fee viability
     viable = filter_viable_fee_structures(cycles, max_total_fee_bps=args.max_fee_bps)
@@ -216,6 +217,9 @@ def main() -> int:
         },
         "cycles": {
             "total_found": len(cycles),
+            "max_cycles_cap": args.max_cycles,
+            "max_cycles_hit": max_cycles_hit,
+            "cycles_lower_bound": max_cycles_hit,
             "viable_after_fee_filter": len(viable),
             "max_fee_bps_threshold": args.max_fee_bps,
         },
@@ -244,7 +248,8 @@ def main() -> int:
         print(f"\n=== M7.A Triangular Cycle Enumeration ({chain}) ===")
         print(f"Full graph: {full_graph.node_count} tokens, {full_graph.edge_count} edges")
         print(f"M7.A graph: {m7a_graph.node_count} tokens, {m7a_graph.edge_count} edges")
-        print(f"Cycles found: {len(cycles)} total, {len(viable)} viable (fee <= {args.max_fee_bps} bps)")
+        cap_note = f" (CAP HIT — lower bound, not full count)" if max_cycles_hit else ""
+        print(f"Cycles found: {len(cycles)} total{cap_note}, {len(viable)} viable (fee <= {args.max_fee_bps} bps)")
         if ranked:
             print(f"Best fee cost: {ranked[0].final_net_bps:.1f} bps")
             print(f"Median fee cost: {ranked[len(ranked)//2].final_net_bps:.1f} bps")
