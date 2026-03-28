@@ -1,253 +1,139 @@
-# DEV_REPORT_LATEST.md
+﻿# DEV_REPORT_LATEST.md
 
 ## 0) Meta
 timestamp_utc: 2026-03-27T21:30:14.342304Z
-run_id: rolling audit snapshot
+run_id: ci_m5_gate_arbitrum_one_20260327_222948_123275
 mode: ONLINE
-artifact_mode: rolling
-config: rolling evidence from `real_minimal.yaml` + `onboard_base_profit.yaml`
+artifact_mode: local_session (data/tmp) + rolling
+config: arbitrum_one narrow universe, runtime source, measured scoring
 code_identity:
   primary: ts:2026-03-27T21:30:14.342304Z
   dirty: false
-  desc: full project audit and documentation sync after M5/M5_0 public-infra hardening phase
+  desc: M7.A bounded-scope verdict formalization
 
 ## Session Completion
-session_goal: full repo audit + current-stage documentation sync
+session_goal: formalize bounded-scope no-graduate verdict for M7.A on arbitrum_one narrow universe
 goal_status: REACHED
 close_allowed: true
-remaining_blockers: no code/infrastructure blocker for the audit itself; public-infra simple DEX-DEX remains economics-blocked
+remaining_blockers: none
 evidence_session_run_dirs:
-  - ci_m5_gate_arbitrum_one_20260327_222948_123275
-  - ci_m5_gate_base_20260327_223015_126754
-primary_blocker_of_session: documentation drift versus current rolling truth
+  - data/tmp/m7a_blockers_run4.json (fresh, block 446661451)
+  - data/tmp/m7a_verdict.json (formal verdict artifact)
+rolling_run_dir: ci_m5_gate_arbitrum_one_20260327_222948_123275
+primary_blocker_of_session: M7.A verdict not yet formalized as machine-readable artifact
 blocker_status_before: ACTIVE
 blocker_status_after: RESOLVED
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-This report is a current-state project summary after the full M5/M5_0 hardening cycle.
+goal (Roadmap): M7.A step 8 - decide whether M7 stops or graduates to M7.B
+change_summary:
+  - Added build_verdict_summary() to scripts/m7a_enumerate_cycles.py
+  - Added --verdict CLI arg (builds repeatability internally, then produces verdict)
+  - Verdict fields: verdict_scope, beats_two_leg_baseline, all_sizes_negative, gross_sometimes_positive, stable/flapping_blockers_count, recommend_open_m7b, recommend_freeze_current_m7a_scope, best_net_bps_range, dominant_triple, route_failure_rate
+  - TWO_LEG_BASELINE_NET_BPS = -3.5062 from rolling long_scan_latest.json
+  - Fixed docs wording: gross can be transiently positive; binding blocker is multi-cost, not reserve-only
+  - Added 10 verdict contract tests (TestVerdictSummary)
+  - Total test count: 2704 passed, 0 failures
+touched_files:
+  - scripts/m7a_enumerate_cycles.py
+  - tests/unit/test_triangular_contracts.py
+  - docs/status/Status_M7.md
+  - docs/DEV_REPORT_LATEST.md
 
-Audited:
+## 2) Commands Executed
 
-- repository structure and active code surface,
-- source-of-truth docs and status files,
-- active rolling artifacts,
-- latest arb/base truth bundles,
-- current architecture boundaries,
-- current strategic state of the public-infrastructure DEX-DEX thesis.
+py -3.11 -m pytest -q: PASS (2704 passed, 17 skipped, 51.75s)
+py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit: PASS (1 warning: docs line count)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (all gates OK)
+py -3.11 scripts/m7a_enumerate_cycles.py --verdict (4 artifacts): PASS
 
-Refreshed docs: `docs/DEV_REPORT_LATEST.md`, `docs/FILES_SUMMARY.md`, `docs/status/Status_M4.md`, `docs/status/Status_M5_0.md`, `docs/status/INDEX.md`, `docs/TECH_DEBT.md`.
+## 3) Artifacts Attached
 
-## 2) Verification
+local_session (R&D evidence, data/tmp):
+  - data/tmp/m7a_blockers_run1.json (block 446652757)
+  - data/tmp/m7a_blockers_run2.json (block 446653838)
+  - data/tmp/m7a_blockers_run3.json (block 446654943)
+  - data/tmp/m7a_blockers_run4.json (block 446661451, fresh this session)
+  - data/tmp/m7a_blocker_repeatability.json (3-block aggregation)
+  - data/tmp/m7a_verdict.json (4-block formal verdict)
 
-Fresh evidence used for this audit:
+rolling (unchanged from prior session):
+  - data/runs/_rolling/_latest.json
+  - data/runs/_rolling/run_summary_latest.json
+  - data/runs/_rolling/long_scan_latest.json (two-leg baseline: -3.5062 bps)
 
-- `data/runs/_rolling/_latest.json`
-- `data/runs/_rolling/run_summary_latest.json`
-- `data/runs/_rolling/m4_stability_agg.json`
-- `data/runs/_rolling/long_scan_latest.json`
-- `data/runs/_rolling/hot_loop_latest.json`
-- `data/runs/ci_m5_gate_arbitrum_one_20260327_222948_123275/reports/truth_report_20260327_223000.json`
-- `data/runs/ci_m5_gate_base_20260327_223015_126754/reports/truth_report_20260327_223042.json`
+## 4) Key Results - M7.A Verdict
 
-## 3) Current System Snapshot
+### Verdict Summary (from m7a_verdict.json)
 
-### 3.1 Repository Shape
+| Field | Value |
+|-------|-------|
+| beats_two_leg_baseline | **false** |
+| all_sizes_negative | **true** |
+| gross_sometimes_positive | **true** |
+| stable_blockers_count | **6** |
+| flapping_blockers_count | **0** |
+| best_net_bps_range | -23.52 to -9.56 (mean -16.60) |
+| two_leg_baseline_net_bps | -3.5062 |
+| dominant_triple | **true** (ARB/USDC/WETH, concentration 1.0) |
+| route_failure_rate | 0.33 (stable across all runs) |
+| recommend_open_m7b | **false** |
+| recommend_freeze_current_m7a_scope | **true** |
 
-Current repo snapshot excluding local virtual environments:
+### Multi-cost Blocker Structure
 
-- Python files: `297`
-- Markdown files: `69`
-- JSON files: `26`
+The binding constraint is NOT a single factor. Temporal evidence across 4 independent blocks:
 
-Largest code surfaces are concentrated in a few expected orchestration and gate files:
+- **Gross bps** ranges -14.29 to +2.25 (mean -6.21) - sometimes positive
+- **Gas bps** ranges 9.23 to 11.81 (mean 10.09) - always dominant cost
+- **Fee bps** ranges 1.00 to 6.00 (mean 4.33) - third-leg fee compounds loss
+- **Net bps** ranges -23.52 to -9.56 (mean -16.60) - always negative
 
-- `strategy/jobs/run_scan_real.py`
-- `strategy/quotes.py`
-- `scripts/ci_m5_0_gate.py`
-- `scripts/check_repo_safety.py`
-- `engine/roundtrip.py`
-- `strategy/artifacts.py`
+Even when gross is transiently positive, gas + fees push net below zero.
 
-### 3.2 Folder-Level Reading
+### Blocker Class Stability (6/6 stable, 0/6 flapping)
 
-Current repo roles are now clear:
+| Tag | Status | Interpretation |
+|-----|--------|----------------|
+| GROSS_NEGATIVE_CORE | STABLE | Gross negative in majority of cycles (can be transiently positive) |
+| GAS_DOMINANT_SMALL | STABLE | Gas dominates at small notionals |
+| SLIPPAGE_DOMINANT_LARGE | STABLE | Slippage dominates at large notionals |
+| THIRD_LEG_FEE_BINDING | STABLE | Third leg protocol fee >= 5 bps |
+| SINGLE_TRIPLE_CONCENTRATION | STABLE | Zero token-path diversity |
+| QUOTE_FAILURE_BREADTH_LIMIT | STABLE | VE33 adapter failures limit route breadth |
 
-- `core/`: low-level contracts, math, invariants, models, env, validation
-- `chains/`: chain services, provider failover, L1 cost, Flashblocks read-path
-- `dex/`: adapter registry and ABI assets
-- `discovery/`: intent-driven pair/pool universe construction
-- `engine/`: seed opportunity model plus canonical roundtrip truth
-- `execution/`: substantial but dormant execution stack
-- `m4/`: gate/evidence/policy/rolling storage for milestone truth
-- `monitoring/`: dashboard and operator-facing reporting
-- `strategy/`: active runtime orchestration, scan assembly, artifacts, chain stats
-- `scripts/`: CI gates, repo safety, rolling inspection, RCA, maintenance
-- `docs/`: source-of-truth human layer
-- `tests/`: heavy regression and contract protection surface
-
-### 3.3 Test Surface
-
-The test suite is now a major product asset:
-
-- `2527` tests passing
-- milestone regressions are encoded directly in unit tests
-- many recent R39/R39x contracts are permanently locked by tests
-
-## 4) Current Runtime Truth
-
-### 4.1 Rolling Aggregate
-
-Fresh rolling state:
-
-| Metric | Value |
-|--------|-------|
-| total_runs | `58` |
-| total_pass | `58` |
-| total_fail | `0` |
-| total_infra_fail | `0` |
-| total_included_signals | `1196` |
-| total_roundtrip_evaluated | `169` |
-| total_profitable_roundtrips | `0` |
-| best_roundtrip_net_bps | `-3.5062` |
-
-Core truth: the system is producing data and canonical profit semantics, but not profitable roundtrips.
-
-### 4.2 Chain Summary
-
-| Chain | Runs | Signals | RT Eval | Real Quotes | Frontier Pair | Gap To Zero | Profit State | Blocker |
-|-------|------|---------|---------|-------------|---------------|-------------|--------------|---------|
-| `arbitrum_one` | `29/29 PASS` | `906` | `169` | `169` | `WBTC/USDC` | `3.5062 bps` | `ROUNDTRIP_NOT_PROFITABLE` | `OE_ECONOMICS` |
-| `base` | `29/29 PASS` | `290` | `0` | `0` | `USDC/USDT` | `8.6729 bps` | `ROUNDTRIP_NOT_PROFITABLE` | `OE_ECONOMICS` |
-
-Reading:
-
-- `arbitrum_one` remains the best single-point near-miss chain in current rolling
-- `base` remains the cleanest stable-pair family, but still negative
-- neither chain currently supports a claim of online profitable DEX-DEX truth
-
-### 4.3 Hot Loop / Reactivity
-
-`hot_loop_latest.json` shows:
-
-- `total_full_sweeps = 12`
-- `total_hot_requotes = 46`
-- `total_micro_requotes = 0`
-
-The repo already contains hot-loop scaffolding, but reactive execution edge is not the current reason profit is missing.
-
-## 5) Strategic Reading of the System
-
-### 5.1 What the Project Already Is
-
-At the current stage, the project is already a serious research/execution-prep platform:
-
-1. It can build a dynamic universe from intent and discovery.
-2. It can quote across multiple DEX families.
-3. It can reject poor-quality or policy-invalid routes with reason codes.
-4. It can compute measured roundtrip economics with sweep-based truth.
-5. It can aggregate rolling multi-chain frontier evidence.
-6. It can expose operator-facing artifacts and dashboard data.
-
-### 5.2 What the Project Is Not Yet
-
-It is not yet:
-
-1. a proven profitable online DEX-DEX execution system,
-2. a production trade engine operating with real execution enabled,
-3. a validated private-orderflow/searcher stack,
-4. a graph-based multi-hop engine.
-
-### 5.3 Current Strategic Verdict
-
-The strongest current conclusion is now narrow but firm:
-
-**the current public-infrastructure simple two-leg DEX-DEX thesis has reached an economics ceiling before reaching profitable online execution.**
-
-This conclusion is supported by stable rolling evidence, canonical truth semantics, per-pair repeatability, near-breakeven decomposition, execution-edge feasibility research, and the absence of dominant hidden infra failure.
-
-## 6) Milestone Reading
-
-### M0-M3
-
-Completed foundation.
-
-### M4
-
-Still open at roadmap level.
-
-Current internal interpretation:
-
-- `M4.1 simulate-only`: closed historically
-- `M4.2 online roundtrip profitable`: not reached
-- `M4.3 real execution`: not started operationally
-
-The current public-infrastructure branch of M4 should be treated as frozen, not actively improvable by small local fixes.
-
-### M5_0
-
-Reached for the current thesis because rolling artifacts are stable, zero infra failures dominate the window, repo safety and CI are strong, and evidence is detailed enough to support strategy closure decisions.
-
-### M5
-
-Reporting layer exists and remains secondary to M4 truth. It does not override the missing profitable online core result.
-
-## 7) Final Summary
-
-The project now has three strong properties:
-
-1. **The data is credible.**
-2. **The profit truth is credible.**
-3. **The negative verdict on the current public-infra simple DEX-DEX branch is credible.**
-
-That is the right summary for the current stage of system development: a reusable scanning and truth platform has been built, but a profitable online DEX-DEX engine on the current public-infrastructure path has not.
-
-## 6) M7.A Triangular Feasibility (R&D addendum, 2026-03-28)
-
-### Session
-session_goal: produce first runtime+measured+size-sweep artifact for M7.A on arbitrum_one
-goal_status: REACHED
-docs_reread_confirmed: true
-evidence_artifact: data/tmp/m7a_runtime_measured_sweep.json
-
-### Evidence Summary
-
-Bounded size sweep executed: **10 top measured cycles × 19 canonical sizes** ($1–$10K) at block 446635245.
+### Rolling Two-Leg Baseline (unchanged)
 
 | Metric | Value |
 |--------|-------|
-| Cycles swept | 10/10 |
-| Sizes per cycle | 19 (CANONICAL_SWEEP_SIZES_USD) |
-| Quote success | 190/190 (100%) |
-| Same-state | 100% proven |
-| Best sweep net | **-20.96 bps** (ARB→USDC→WETH→ARB, $100 notional) |
-| Optimal notional range | $100–$250 |
-| Two-leg baseline | -3.5062 bps |
-| Promoted at any size | **0** |
+| best_roundtrip_net_bps | -3.5062 |
+| total_profitable_roundtrips | 0 |
 
-All size curves are U-shaped: gas-dominated at small sizes, slippage-dominated at large sizes, no break-even crossing at any notional.
+### Evidence Tiers Supporting Verdict
 
-### Verdict Input
+1. **Temporal repeatability** - 5 runs across blocks 446589515-446622133, all negative
+2. **Size sweep** - 10 cycles x 19 sizes at block 446635245, all negative, U-shaped curves
+3. **Blocker RCA** - 6 canonical tags with normalized count semantics
+4. **Blocker repeatability** - 4 blocks (446652757-446661451), all 6 tags stable, 0 flapping
+5. **Formal verdict** - machine-readable recommend_open_m7b: false
 
-M7.A size sweep confirms and strengthens the negative verdict from temporal repeatability (5 prior runs, -13.42 to -31.19 bps). The triangular thesis is 6× worse than two-leg baseline even at optimized notional. No evidence supports graduating to M7.B.
+## 5) Strategic Reading
 
-### Blocker Repeatability (session 16, 2026-03-28)
+For the current bounded M7.A scope on arbitrum_one narrow-universe (7 tokens, 4 DEX families), temporal repeatability, size sweep, and blocker repeatability jointly support a **no-graduate verdict**.
 
-Temporal blocker repeatability proven across **3 independent runs** (blocks 446652757–446654943):
+M7.B remains closed. The current M7.A scope should be frozen unless a new explicit hypothesis changes the search surface (different chain, expanded universe, new adapter types).
 
-| Metric | Min | Max | Mean |
-|--------|-----|-----|------|
-| best_route_net_bps | -23.52 | -9.56 | -16.30 |
-| best_route_gross_bps | -14.29 | +2.25 | -6.21 |
-| best_route_gas_bps | 9.23 | 11.81 | 10.09 |
+This is a **valid negative outcome** per docs/step_M7.md stop condition:
+> If bounded read-only triangular work does not produce repeatable, provenance-aware, measured economics that clearly outperform the closed public two-leg thesis, then M7.A is considered a valid negative outcome, M7.B does not open, M7 is frozen as an R&D branch.
 
-Blocker class stability: **6/6 stable, 0/6 flapping**. All blocker tags (GROSS_NEGATIVE_CORE, GAS_DOMINANT_SMALL, SLIPPAGE_DOMINANT_LARGE, THIRD_LEG_FEE_BINDING, SINGLE_TRIPLE_CONCENTRATION, QUOTE_FAILURE_BREADTH_LIMIT) reproduced in all 3 runs.
+## 6) Milestone Summary
 
-Code changes:
-- Normalized blocker count semantics: `per_cycle_blocker_counts` (int counts per-cycle) + `global_blockers_present` (global flag list)
-- Added `build_blocker_repeatability()` aggregator with `--repeatability` CLI arg
-- Added 14 new contract tests: 5 for count semantics, 9 for repeatability schema/stability
-- Test suite: **2694 passed**, all CI gates green
-
-Artifact: `data/tmp/m7a_blocker_repeatability.json`
+| Milestone | Status |
+|-----------|--------|
+| M0-M3 | Completed foundation |
+| M4 | Frozen (public-infra economics ceiling) |
+| M5_0 | Reached (stable rolling artifacts) |
+| M7.A | **VERDICT READY - NO-GRADUATE** |
+| M7.B | NOT STARTED (closed by M7.A verdict) |

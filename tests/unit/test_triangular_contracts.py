@@ -1443,3 +1443,190 @@ class TestBlockerRepeatability:
             assert "top_blockers" in snap
             assert "per_cycle_blocker_counts" in snap
             assert "global_blockers_present" in snap
+
+
+# ---------------------------------------------------------------------------
+# Verdict summary contract tests
+# ---------------------------------------------------------------------------
+
+class TestVerdictSummary:
+    """Contract tests for build_verdict_summary() bounded-scope M7.A verdict."""
+
+    def _make_repeatability(
+        self,
+        net_min=-23.5, net_max=-9.5, net_mean=-16.3,
+        gross_min=-14.3, gross_max=2.25, gross_mean=-6.2,
+        stable=None, flapping=None, runs=3,
+        conc_max=1.0, fail_min=0.33, fail_max=0.33,
+    ):
+        """Build a minimal repeatability report dict for verdict testing."""
+        if stable is None:
+            stable = [
+                "GAS_DOMINANT_SMALL", "GROSS_NEGATIVE_CORE",
+                "QUOTE_FAILURE_BREADTH_LIMIT", "SINGLE_TRIPLE_CONCENTRATION",
+                "SLIPPAGE_DOMINANT_LARGE", "THIRD_LEG_FEE_BINDING",
+            ]
+        if flapping is None:
+            flapping = []
+        return {
+            "blocker_repeatability": True,
+            "timestamp": "2026-03-28T20:00:00Z",
+            "runs_count": runs,
+            "block_range": {"min": 446652757, "max": 446654943},
+            "metric_ranges": {
+                "best_route_gross_bps": {"min": gross_min, "max": gross_max, "mean": gross_mean},
+                "best_route_gas_bps": {"min": 9.23, "max": 11.81, "mean": 10.09},
+                "best_route_total_fee_bps": {"min": 1.0, "max": 6.0, "mean": 4.33},
+                "best_route_net_bps": {"min": net_min, "max": net_max, "mean": net_mean},
+                "best_route_best_size_usd": {"min": 150.0, "max": 150.0, "mean": 150.0},
+                "route_failure_rate": {"min": fail_min, "max": fail_max, "mean": (fail_min + fail_max) / 2},
+                "token_triple_concentration": {"min": 1.0, "max": conc_max, "mean": 1.0},
+            },
+            "blocker_class_stability": {
+                "stable_blockers": stable,
+                "flapping_blockers": flapping,
+                "all_observed": stable + flapping,
+            },
+            "per_cycle_tag_ranges": {},
+            "global_blocker_stability": {},
+            "snapshots": [],
+        }
+
+    def test_verdict_schema_keys(self):
+        """Verdict must contain all required keys from step 4 spec."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = self._make_repeatability()
+        result = build_verdict_summary(rep)
+
+        required_keys = {
+            "m7a_verdict", "timestamp", "verdict_scope",
+            "two_leg_baseline_net_bps", "best_net_bps_range",
+            "beats_two_leg_baseline", "all_sizes_negative",
+            "gross_sometimes_positive",
+            "stable_blockers_count", "flapping_blockers_count",
+            "stable_blockers", "flapping_blockers",
+            "dominant_triple", "route_failure_rate",
+            "recommend_open_m7b", "recommend_freeze_current_m7a_scope",
+            "verdict_reasoning",
+        }
+        for key in required_keys:
+            assert key in result, f"Missing key: {key}"
+
+    def test_verdict_no_graduate_for_current_evidence(self):
+        """Current evidence class (all negative, 6 stable blockers) must NOT recommend M7.B."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = self._make_repeatability()
+        result = build_verdict_summary(rep)
+
+        assert result["recommend_open_m7b"] is False
+        assert result["recommend_freeze_current_m7a_scope"] is True
+
+    def test_verdict_beats_baseline_false(self):
+        """When best net is worse than two-leg baseline, beats_two_leg_baseline must be False."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = self._make_repeatability(net_max=-9.5)  # -9.5 < -3.5 baseline
+        result = build_verdict_summary(rep, two_leg_baseline_bps=-3.5)
+
+        assert result["beats_two_leg_baseline"] is False
+
+    def test_verdict_all_sizes_negative(self):
+        """When best net max < 0, all_sizes_negative must be True."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = self._make_repeatability(net_max=-5.0)
+        result = build_verdict_summary(rep)
+
+        assert result["all_sizes_negative"] is True
+
+    def test_verdict_gross_sometimes_positive(self):
+        """When gross_max > 0, gross_sometimes_positive must be True (multi-cost blocker)."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = self._make_repeatability(gross_max=2.25)
+        result = build_verdict_summary(rep)
+
+        assert result["gross_sometimes_positive"] is True
+
+    def test_verdict_gross_always_negative(self):
+        """When gross_max < 0, gross_sometimes_positive must be False."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = self._make_repeatability(gross_max=-1.0)
+        result = build_verdict_summary(rep)
+
+        assert result["gross_sometimes_positive"] is False
+
+    def test_verdict_stable_flapping_counts(self):
+        """Blocker counts must match the input repeatability data."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = self._make_repeatability(
+            stable=["A", "B", "C"],
+            flapping=["D"],
+        )
+        result = build_verdict_summary(rep)
+
+        assert result["stable_blockers_count"] == 3
+        assert result["flapping_blockers_count"] == 1
+        assert result["stable_blockers"] == ["A", "B", "C"]
+        assert result["flapping_blockers"] == ["D"]
+
+    def test_verdict_scope_fields(self):
+        """verdict_scope must contain chain, universe, phase."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = self._make_repeatability()
+        result = build_verdict_summary(rep, chain="arbitrum_one")
+
+        scope = result["verdict_scope"]
+        assert scope["chain"] == "arbitrum_one"
+        assert scope["universe"] == "narrow_7_token"
+        assert scope["phase"] == "M7.A"
+        assert scope["runs_count"] == 3
+
+    def test_verdict_error_on_bad_repeatability(self):
+        """Verdict with error repeatability returns error."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        result = build_verdict_summary({"error": "no_valid_artifacts"})
+        assert result["verdict"] == "INSUFFICIENT_EVIDENCE"
+
+    def test_verdict_hypothetical_positive_would_not_freeze(self):
+        """If net beats baseline and few blockers, verdict should recommend M7.B."""
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+        from scripts.m7a_enumerate_cycles import build_verdict_summary
+
+        rep = self._make_repeatability(
+            net_min=1.0, net_max=5.0, net_mean=3.0,
+            gross_min=10.0, gross_max=15.0, gross_mean=12.0,
+            stable=["GAS_DOMINANT_SMALL"],
+            flapping=[],
+        )
+        result = build_verdict_summary(rep, two_leg_baseline_bps=-3.5)
+
+        assert result["beats_two_leg_baseline"] is True
+        assert result["all_sizes_negative"] is False
+        assert result["recommend_open_m7b"] is True
+        assert result["recommend_freeze_current_m7a_scope"] is False

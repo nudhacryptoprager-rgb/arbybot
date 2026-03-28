@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **IN PROGRESS** (M7.A — runtime+measured size-sweep evidence produced; blocker decomposition confirms all 6 structural blockers active; **temporal blocker repeatability proven** across 3 independent blocks with 0 flapping tags. Verdict pending formal review.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A — machine-readable verdict produced: `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. All 6 structural blockers stable across 4 independent blocks, 0 flapping. Net bps range -23.52 to -9.56, never beats two-leg baseline -3.51 bps. Gross sometimes positive but multi-cost structure always pushes net negative. M7.B remains closed.)  
 **Updated**: 2026-03-28  
-**Scope**: M7.A only — runtime graph sourcing, live measured scoring with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback, bounded size sweep over canonical size ladder (19 notionals, $1–$10K), machine-readable blocker summary with 6 canonical blocker tags, temporal blocker repeatability aggregation across multiple blocks. Size sweep executed: 10 top cycles × 19 sizes = 190 RPC quote sets. All cycles negative at all sizes. Blocker RCA: GROSS_NEGATIVE_CORE + GAS_DOMINANT_SMALL + SLIPPAGE_DOMINANT_LARGE dominate. Triangular consistently 6× worse than two-leg baseline. **Blocker repeatability: all 6 tags stable across 3 blocks (blocks 446652757–446654943), 0 flapping.**
+**Scope**: M7.A only — runtime graph sourcing, live measured scoring with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback, bounded size sweep over canonical size ladder (19 notionals, $1–$10K), machine-readable blocker summary with 6 canonical blocker tags, temporal blocker repeatability aggregation, **bounded-scope verdict summary** (`build_verdict_summary()` with `--verdict` CLI). For the current bounded M7.A scope on arbitrum_one narrow-universe, temporal repeatability, size sweep, and blocker repeatability jointly support a no-graduate verdict: M7.B remains closed, and the current M7.A scope should be frozen unless a new explicit hypothesis changes the search surface.
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Goal** (per `docs/step_M7.md`): build verified pool graph, enumerate 3-hop simple cycles, score with measured-cost discipline, apply provenance and same-state classification, rank by measured final net, and decide whether M7 stops or graduates to M7.B.
 
-**Current sub-step**: steps 1-7 done (runtime graph + live measured + measured-only ranking). Step 8 (verdict) now informed by four evidence tiers: (a) temporal repeatability across 5 blocks, (b) bounded size sweep across 19 notionals on top 10 cycles, (c) machine-readable blocker RCA with 6 canonical tags, (d) **temporal blocker repeatability** across 3 fresh blocks proving all 6 tags are stable with 0 flapping. All tiers confirm negative sign at all sizes with structural blockers identified and proven stable. Formal verdict pending review discussion.
+**Current sub-step**: steps 1-8 done. Step 8 verdict now formalized as machine-readable `verdict_summary` artifact (`data/tmp/m7a_verdict.json`). Five evidence tiers inform the verdict: (a) temporal repeatability across 5 blocks, (b) bounded size sweep across 19 notionals on top 10 cycles, (c) machine-readable blocker RCA with 6 canonical tags, (d) temporal blocker repeatability across 4 fresh blocks proving all 6 tags stable with 0 flapping, (e) **formal verdict summary** with `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`.
 
 ### Current Evidence — Temporal Repeatability (5 runtime+measured runs)
 
@@ -122,14 +122,14 @@ Computed against: block **446635245**, 10 top cycles × 19 sizes, 67 measured ro
 
 | Tag | Count | Meaning |
 |-----|-------|---------|
-| `GROSS_NEGATIVE_CORE` | 10/10 | Reserve economics negative before costs |
+| `GROSS_NEGATIVE_CORE` | 10/10 | Gross negative in majority of cycles (gross can be transiently positive; net always negative) |
 | `GAS_DOMINANT_SMALL` | 10/10 | Gas dominates at small notionals |
 | `SLIPPAGE_DOMINANT_LARGE` | 10/10 | Slippage dominates at large notionals |
 | `THIRD_LEG_FEE_BINDING` | 6/10 | Third leg fee adds ≥5 bps |
 | `SINGLE_TRIPLE_CONCENTRATION` | all | Zero token-path diversity |
 | `QUOTE_FAILURE_BREADTH_LIMIT` | all | VE33 failures limit route breadth |
 
-**Key diagnostic insight**: The problem is NOT only gas. The top route has `gross_bps = -9.305` — the reserve economics themselves are negative. Gas (-11.66 bps) and fees (-6.0 bps) compound the loss. The third leg adds cost without creating enough value to offset the inherent negative gross of the triangular path through current on-chain reserves.
+**Key diagnostic insight**: The problem is a **multi-cost blocker**, not a single factor. At block 446635245 the top route had `gross_bps = -9.305`, but temporal evidence shows gross can occasionally be positive (+2.25 bps in one run). However, gas (~10 bps) and protocol fees (~4 bps mean) always push net negative. The binding constraint is the combined cost structure (gas + fees + token-path concentration), not reserve economics alone.
 
 ### Current Evidence — Temporal Blocker Repeatability (3 independent runs)
 
@@ -154,7 +154,7 @@ Provenance tier: **local/session** — temporal stability proof across 3 blocks.
 
 | Tag | Status | Per-cycle count range | Interpretation |
 |-----|--------|-----------------------|----------------|
-| `GROSS_NEGATIVE_CORE` | **STABLE** | 5–10/10 | Reserve economics negative in all runs |
+| `GROSS_NEGATIVE_CORE` | **STABLE** | 5–10/10 | Gross negative in majority of cycles per run (can be transiently positive; net always negative) |
 | `GAS_DOMINANT_SMALL` | **STABLE** | 10/10 | Gas dominates small sizes in all runs |
 | `SLIPPAGE_DOMINANT_LARGE` | **STABLE** | 10/10 | Slippage dominates large sizes in all runs |
 | `THIRD_LEG_FEE_BINDING` | **STABLE** | 3/10 | Third leg fee ≥5 bps in all runs |
@@ -168,6 +168,29 @@ Key observations:
 - **Gross bps in run 2 was +2.25**: one snapshot briefly had positive gross, but gas+fees still pushed net to -9.56 bps — confirming the multi-cost structure overwhelms any transient gross advantage.
 - **Route failure rate perfectly stable at 33%**: VE33 (Ramses) adapter failures are deterministic, not transient.
 - **Token concentration locked at 1.0**: zero diversity across all runs; no alternative token-path emerged.
+
+### Current Evidence — Formal Verdict Summary (machine-readable)
+
+Evidence source: `build_verdict_summary()` from `scripts/m7a_enumerate_cycles.py --verdict`.  
+Generated: 2026-03-28  
+Artifact: `data/tmp/m7a_verdict.json`  
+Input: 4 independent measured+sweep artifacts (blocks 446652757–446661451).
+
+| Field | Value |
+|-------|-------|
+| `beats_two_leg_baseline` | **false** |
+| `all_sizes_negative` | **true** |
+| `gross_sometimes_positive` | **true** |
+| `stable_blockers_count` | **6** |
+| `flapping_blockers_count` | **0** |
+| `best_net_bps_range` | -23.52 to -9.56 (mean -16.60) |
+| `two_leg_baseline_net_bps` | -3.5062 |
+| `dominant_triple` | **true** (ARB/USDC/WETH) |
+| `route_failure_rate` | 0.33 (stable) |
+| `recommend_open_m7b` | **false** |
+| `recommend_freeze_current_m7a_scope` | **true** |
+
+**Verdict reasoning**: Net bps never beats two-leg baseline across all runs. Gross is sometimes positive but gas+fees always push net negative. 6 stable blockers, 0 flapping. Multi-cost structure (gas + fees + concentration) is the binding constraint, not a single blocker.
 
 ### What this evidence does NOT yet cover
 
@@ -185,14 +208,14 @@ Key observations:
 5. ~~Emit full decomposition artifacts~~ — **DONE** (measured artifacts include provenance, same_state, gross_bps, gas_bps, fee metadata)
 6. ~~Apply provenance and same-state classification~~ — **DONE** (100% same_state_proven across all 5 temporal runs)
 7. ~~Rank only by measured final net~~ — **DONE** (`--score measured` mode ranks measured-only cycles by `final_net_bps`; fee-only fallback rows emitted separately in `diagnostic_fee_only_fallbacks`)
-8. Decide whether M7 stops or graduates to M7.B — **PENDING** (evidence strongly negative: 5 temporal runs + 1 size sweep + blocker RCA + **3-block blocker repeatability (6/6 stable, 0 flapping)**, 0 promoted at any size, best -20.96 bps at optimal $100 notional vs two-leg baseline -3.5 bps; all 6 blocker tags active and temporally stable (GROSS_NEGATIVE_CORE 5-10/10, GAS_DOMINANT_SMALL 10/10, SLIPPAGE_DOMINANT_LARGE 10/10, THIRD_LEG_FEE_BINDING 3/10, SINGLE_TRIPLE_CONCENTRATION global, QUOTE_FAILURE_BREADTH_LIMIT global); all evidence tiers confirm M7.A should not graduate to M7.B; formal verdict requires review discussion)
+8. ~~Decide whether M7 stops or graduates to M7.B~~ — **DONE (NO-GRADUATE)** Machine-readable verdict: `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. Evidence: 4-block blocker repeatability (6/6 stable, 0 flapping), net bps range -23.52 to -9.56 (never beats two-leg baseline -3.51), gross sometimes positive (+2.25 in one run) but multi-cost structure always negative. Artifact: `data/tmp/m7a_verdict.json`.
 
 ### Modules
 
 - `engine/triangular_graph.py` — PoolEdge, PoolGraph, M7A constants, graph builders (cache + RuntimePair)
 - `engine/triangular_cycles.py` — TriangularCycle, CycleScore (with `scored_size_usd`, slippage `_heuristic` fields), find_3hop_cycles, `score_cycle_fees_only` (diagnostic), `score_cycle_measured` (live per-leg), `classify_same_state`, LegQuote, `leg_quote_from_rpc_result`, SizeSweepResult, SizeSweepPoint
-- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`, `--sweep-top N`, `--repeatability`. Measured mode: measured-only ranking (`top_10_by_net`, `best_net_bps`) with fee-only fallback rows emitted separately in `diagnostic_fee_only_fallbacks`. Size sweep reuses `CANONICAL_SWEEP_SIZES_USD` from `engine/roundtrip.py`. Token prices imported from `strategy.quotes.DEFAULT_TOKEN_USD_PRICES`. Blocker analysis: `_build_blocker_summary()` and `classify_blocker_tags()` produce machine-readable RCA with 6 canonical blocker tags (`GROSS_NEGATIVE_CORE`, `GAS_DOMINANT_SMALL`, `SLIPPAGE_DOMINANT_LARGE`, `THIRD_LEG_FEE_BINDING`, `SINGLE_TRIPLE_CONCENTRATION`, `QUOTE_FAILURE_BREADTH_LIMIT`). Count semantics: `per_cycle_blocker_counts` (per-cycle tags, int counts) + `global_blockers_present` (global flag tags, list). Repeatability: `build_blocker_repeatability()` aggregates multiple artifact files into temporal stability report.
-- Tests: 105 M7 contract tests in `test_triangular_contracts.py` (2689+ total, 0 failures)
+- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`, `--sweep-top N`, `--repeatability`, `--verdict`. Measured mode: measured-only ranking. Blocker analysis: `_build_blocker_summary()` + `classify_blocker_tags()` (6 canonical tags). Count semantics: `per_cycle_blocker_counts` + `global_blockers_present`. Repeatability: `build_blocker_repeatability()`. Verdict: `build_verdict_summary()` produces bounded-scope no-graduate decision artifact from repeatability evidence.
+- Tests: 115 M7 contract tests in `test_triangular_contracts.py` (2704 total, 0 failures)
 
 ---
 
