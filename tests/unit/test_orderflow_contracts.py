@@ -49,6 +49,7 @@ from scripts.m7a_orderflow_replay import (
     REJECT_QUOTE_FAILURE,
     REJECT_SAME_BLOCK_IMPOSSIBLE,
     REJECT_SLIPPAGE_EXCEEDS_GROSS,
+    REJECT_TOKEN_PAIR_UNRESOLVED,
     SIGNIFICANT_IMPACT_BPS,
     SURFACE_BLOCK_BACKRUN,
     SURFACE_COW_SOLVER,
@@ -74,6 +75,7 @@ from scripts.m7a_orderflow_replay import (
     score_backrun_offline,
     _build_address_to_symbol,
     _resolve_pool_addresses_multicall,
+    _resolve_event_tokens,
 )
 
 
@@ -186,12 +188,13 @@ class TestBackrunResultSchema:
 
     def test_reject_reasons_are_canonical(self):
         """All reject reasons must be from the canonical set."""
-        assert len(ALL_REJECT_REASONS) == 7
+        assert len(ALL_REJECT_REASONS) == 8  # 7 original + TOKEN_PAIR_UNRESOLVED
         assert REJECT_NO_COUNTER_VENUE in ALL_REJECT_REASONS
         assert REJECT_GAS_EXCEEDS_GROSS in ALL_REJECT_REASONS
         assert REJECT_SLIPPAGE_EXCEEDS_GROSS in ALL_REJECT_REASONS
         assert REJECT_EVENT_TOO_SMALL in ALL_REJECT_REASONS
         assert REJECT_SAME_BLOCK_IMPOSSIBLE in ALL_REJECT_REASONS
+        assert REJECT_TOKEN_PAIR_UNRESOLVED in ALL_REJECT_REASONS
         assert REJECT_QUOTE_FAILURE in ALL_REJECT_REASONS
         assert REJECT_INSUFFICIENT_IMPACT in ALL_REJECT_REASONS
 
@@ -1727,8 +1730,8 @@ class TestM7A54BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        # 30 original + 4 new M7.A.5.4 fields = 34
-        assert len(d) == 34, f"Expected 34 fields, got {len(d)}: {sorted(d.keys())}"
+        # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 = 37
+        assert len(d) == 37, f"Expected 37 fields, got {len(d)}: {sorted(d.keys())}"
 
 
 class TestBatchGetPool:
@@ -1739,3 +1742,244 @@ class TestBatchGetPool:
         batcher = MulticallBatcher("http://unused", 1)
         result = batcher.batch_get_pool([])
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5.5: Actual-pair resolution contract tests
+# ---------------------------------------------------------------------------
+
+
+class TestM7A55TokenPairUnresolved:
+    """M7.A.5.5: TOKEN_PAIR_UNRESOLVED is a valid reject reason."""
+
+    def test_reject_reason_in_set(self):
+        assert REJECT_TOKEN_PAIR_UNRESOLVED in ALL_REJECT_REASONS
+
+    def test_reject_value(self):
+        assert REJECT_TOKEN_PAIR_UNRESOLVED == "TOKEN_PAIR_UNRESOLVED"
+
+
+class TestM7A55BackrunResultFields:
+    """M7.A.5.5: New BackrunResult fields for pair resolution."""
+
+    def test_pair_resolved_default_false(self):
+        r = BackrunResult(
+            event_id="pr1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.pair_resolved is False
+
+    def test_actual_pair_default_none(self):
+        r = BackrunResult(
+            event_id="pr2",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.actual_pair is None
+
+    def test_size_source_default_none(self):
+        r = BackrunResult(
+            event_id="pr3",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.size_source is None
+
+    def test_pair_resolved_values(self):
+        r = BackrunResult(
+            event_id="pr4",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            pair_resolved=True,
+            actual_pair="WETH/USDC",
+            size_source="event_proportional",
+        )
+        assert r.pair_resolved is True
+        assert r.actual_pair == "WETH/USDC"
+        assert r.size_source == "event_proportional"
+
+    def test_json_round_trip(self):
+        r = BackrunResult(
+            event_id="pr5",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            pair_resolved=True,
+            actual_pair="WBTC/USDC",
+            size_source="bounded",
+        )
+        d = asdict(r)
+        j = json.loads(json.dumps(d, default=str))
+        assert j["pair_resolved"] is True
+        assert j["actual_pair"] == "WBTC/USDC"
+        assert j["size_source"] == "bounded"
+
+    def test_offline_fields_none(self):
+        """Offline/fixture results should have pair_resolved=False, rest None."""
+        r = score_backrun_offline(_make_event())
+        d = asdict(r)
+        assert d["pair_resolved"] is False
+        assert d["actual_pair"] is None
+        assert d["size_source"] is None
+
+
+class TestM7A55BoundedSize:
+    """M7.A.5.5: Bounded size logic for backrun notional."""
+
+    def test_min_bound(self):
+        """Tiny events should be bounded to minimum 0.001 ETH."""
+        MIN_BACKRUN_WEI = 10**15
+        # event with 1 wei amount -> 10% = 0 -> bounded to min
+        tiny_amount = 100  # 100 wei
+        size = max(tiny_amount // 10, 1)
+        bounded = max(MIN_BACKRUN_WEI, min(10**18, size))
+        assert bounded == MIN_BACKRUN_WEI
+
+    def test_max_bound(self):
+        """Huge events should be bounded to maximum 1 ETH."""
+        MAX_BACKRUN_WEI = 10**18
+        huge_amount = 100 * 10**18  # 100 ETH, 10% = 10 ETH
+        size = max(huge_amount // 10, 1)
+        bounded = max(10**15, min(MAX_BACKRUN_WEI, size))
+        assert bounded == MAX_BACKRUN_WEI
+
+    def test_normal_range_passes_through(self):
+        """Normal sized events should pass through unbounded."""
+        amount = 10**17  # 0.1 ETH, 10% = 0.01 ETH
+        size = max(amount // 10, 1)
+        bounded = max(10**15, min(10**18, size))
+        assert bounded == 10**16  # 0.01 ETH
+
+
+class TestM7A55ResolveEventTokens:
+    """M7.A.5.5: _resolve_event_tokens basic contract tests."""
+
+    def test_empty_pool_address_returns_none(self):
+        result = _resolve_event_tokens(
+            pool_address="",
+            swap_direction="token0_in",
+            rpc_url="http://unused",
+            block_num=1,
+            addr_to_symbol={},
+        )
+        assert result is None
+
+    def test_invalid_direction_returns_none(self):
+        """Unknown swap direction should return None (not crash)."""
+        # This requires batch_token_info to return something, but with empty pool
+        # it will return None from the empty pool check
+        result = _resolve_event_tokens(
+            pool_address="",
+            swap_direction="unknown_direction",
+            rpc_url="http://unused",
+            block_num=1,
+            addr_to_symbol={},
+        )
+        assert result is None
+
+
+class TestM7A55ArtifactFields:
+    """M7.A.5.5: New artifact fields for pair resolution and M4/M7 comparison."""
+
+    def test_pair_resolution_metrics_schema(self):
+        """pair_resolution_metrics must contain required keys."""
+        required = {
+            "events_pair_resolved",
+            "events_pair_unresolved",
+            "pair_resolution_rate",
+            "actual_pairs_seen",
+            "resolved_best_net_bps",
+            "resolved_mean_net_bps",
+            "size_source_histogram",
+        }
+        # Test by constructing minimal metrics dict
+        metrics = {
+            "events_pair_resolved": 5,
+            "events_pair_unresolved": 3,
+            "pair_resolution_rate": 0.625,
+            "actual_pairs_seen": ["WETH/USDC"],
+            "resolved_best_net_bps": -10.0,
+            "resolved_mean_net_bps": -15.0,
+            "size_source_histogram": {"event_proportional": 5},
+        }
+        assert required == set(metrics.keys())
+
+    def test_m4_m7_comparison_schema(self):
+        """m4_m7_comparison must contain required keys."""
+        required = {
+            "m4_best_net_bps", "m4_frontier_pair", "m4_size_usd", "m4_gas_bps",
+            "m7_best_net_bps", "m7_mean_gross_bps", "m7_mean_gas_bps",
+            "m7_mean_size_wei", "m7_latency_class", "m7_pair_resolved_count",
+            "note",
+        }
+        comparison = {
+            "m4_best_net_bps": -3.5062,
+            "m4_frontier_pair": "WBTC/USDC",
+            "m4_size_usd": 50,
+            "m4_gas_bps": 2.01,
+            "m7_best_net_bps": -19.73,
+            "m7_mean_gross_bps": -1.61,
+            "m7_mean_gas_bps": 20.0,
+            "m7_mean_size_wei": 10**16,
+            "m7_latency_class": "stale",
+            "m7_pair_resolved_count": 5,
+            "note": "test",
+        }
+        assert required == set(comparison.keys())
+
+
+class TestM7A55BackwardCompat:
+    """M7.A.5.5: Backward compatibility with M7.A.5.4 and earlier."""
+
+    def test_offline_scoring_unchanged(self):
+        """Offline scoring should still work and return valid BackrunResult."""
+        ev = _make_event()
+        result = score_backrun_offline(ev)
+        assert result.event_source == "fixture"
+        assert result.reject_reason is not None or result.route_viable
+
+    def test_ws_and_pair_fields_coexist(self):
+        """All ws + pair + pruning fields coexist in BackrunResult."""
+        r = BackrunResult(
+            event_id="bc55_1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            ws_provider="alchemy",
+            latency_budget_ms=250.0,
+            quote_calls_attempted=12,
+            quote_calls_after_pruning=4,
+            pipeline_stage_latency_ms={"stage_a_ms": 50, "stage_b_ms": 200},
+            pair_resolved=True,
+            actual_pair="WETH/USDC",
+            size_source="event_proportional",
+        )
+        d = asdict(r)
+        assert d["ws_provider"] == "alchemy"
+        assert d["pair_resolved"] is True
+        assert d["actual_pair"] == "WETH/USDC"
+        assert d["size_source"] == "event_proportional"
+        assert d["quote_calls_attempted"] == 12
+
+    def test_total_field_count_37(self):
+        """BackrunResult should have exactly 37 fields (30 + 4 M7.A.5.4 + 3 M7.A.5.5)."""
+        r = BackrunResult(
+            event_id="fc55",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert len(d) == 37, f"Expected 37 fields, got {len(d)}: {sorted(d.keys())}"

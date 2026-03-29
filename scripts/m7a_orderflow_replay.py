@@ -68,6 +68,7 @@ REJECT_EVENT_TOO_SMALL = "EVENT_TOO_SMALL"
 REJECT_SAME_BLOCK_IMPOSSIBLE = "SAME_BLOCK_IMPOSSIBLE"
 REJECT_QUOTE_FAILURE = "QUOTE_FAILURE"
 REJECT_INSUFFICIENT_IMPACT = "INSUFFICIENT_IMPACT"
+REJECT_TOKEN_PAIR_UNRESOLVED = "TOKEN_PAIR_UNRESOLVED"
 
 ALL_REJECT_REASONS = frozenset({
     REJECT_NO_COUNTER_VENUE,
@@ -77,6 +78,7 @@ ALL_REJECT_REASONS = frozenset({
     REJECT_SAME_BLOCK_IMPOSSIBLE,
     REJECT_QUOTE_FAILURE,
     REJECT_INSUFFICIENT_IMPACT,
+    REJECT_TOKEN_PAIR_UNRESOLVED,
 })
 
 # Intent/auction surface types
@@ -179,6 +181,10 @@ class BackrunResult:
     quote_calls_after_pruning: Optional[int] = None
     prune_reason_histogram: Optional[Dict[str, int]] = None
     pipeline_stage_latency_ms: Optional[Dict[str, float]] = None
+    # M7.A.5.5 actual-pair resolution fields
+    pair_resolved: bool = False  # True if token0/token1 resolved from pool contract
+    actual_pair: Optional[str] = None  # e.g. "WETH/USDC" — None if unresolved
+    size_source: Optional[str] = None  # "event_proportional" | "fixed_fallback"
 
 
 @dataclass
@@ -838,6 +844,68 @@ def score_backrun_live(
 
 
 # ---------------------------------------------------------------------------
+# M7.A.5.5: Actual-pair token resolution from pool contracts
+# ---------------------------------------------------------------------------
+
+
+def _resolve_event_tokens(
+    pool_address: str,
+    swap_direction: str,
+    rpc_url: str,
+    block_num: int,
+    addr_to_symbol: Dict[str, str],
+) -> Optional[Dict[str, Any]]:
+    """Resolve actual token0/token1 from a V3 pool contract via multicall.
+
+    Args:
+        pool_address: The pool contract address from the Swap log.
+        swap_direction: "token0_in" or "token1_in" from normalize_swap_log().
+        rpc_url: HTTP RPC URL.
+        block_num: Block number for the multicall.
+        addr_to_symbol: Reverse lookup {address_lower: symbol}.
+
+    Returns:
+        Dict with keys: token_in_symbol, token_out_symbol, token_in_addr,
+        token_out_addr, fee, pool_address. Or None if resolution fails.
+    """
+    from core.multicall import get_multicall_batcher
+
+    if not pool_address:
+        return None
+
+    batcher = get_multicall_batcher(rpc_url, block_num)
+    info = batcher.batch_token_info([pool_address])
+    pool_info = info.get(pool_address)
+    if pool_info is None:
+        return None
+
+    token0_addr, token1_addr, fee = pool_info
+
+    # Map direction to actual addresses
+    if swap_direction == "token0_in":
+        token_in_addr = token0_addr
+        token_out_addr = token1_addr
+    elif swap_direction == "token1_in":
+        token_in_addr = token1_addr
+        token_out_addr = token0_addr
+    else:
+        return None
+
+    # Map addresses to symbols (best-effort)
+    token_in_sym = addr_to_symbol.get(token_in_addr.lower(), token_in_addr[:10])
+    token_out_sym = addr_to_symbol.get(token_out_addr.lower(), token_out_addr[:10])
+
+    return {
+        "token_in_symbol": token_in_sym,
+        "token_out_symbol": token_out_sym,
+        "token_in_addr": token_in_addr,
+        "token_out_addr": token_out_addr,
+        "fee": fee,
+        "pool_address": pool_address,
+    }
+
+
+# ---------------------------------------------------------------------------
 # M7.A.5.3: Parallel live scoring with multicall-assisted venue pruning
 # ---------------------------------------------------------------------------
 
@@ -921,14 +989,16 @@ def score_backrun_live_parallel(
     event_detected_at_block: Optional[int] = None,
     fallback_rpc_urls: Optional[List[str]] = None,
     block_time_ms: Optional[float] = None,
+    addr_to_symbol: Optional[Dict[str, str]] = None,
 ) -> BackrunResult:
     """Score a backrun using 2-stage pipeline: multicall pruning + confirmatory quotes.
 
-    M7.A.5.4: Two-stage scoring to reduce per-event RPC calls from ~12 to ≤4.
+    M7.A.5.5: Actual-pair resolution via pool contract token0/token1 query.
+    If pair cannot be resolved, returns TOKEN_PAIR_UNRESOLVED (no proxy fallback).
 
-    Stage A (cheap): Batch factory.getPool() + liquidity() via multicall (2 RPC calls).
+    Stage A (cheap): Resolve pool tokens + batch factory.getPool() + liquidity() via multicall.
         Prune venues with no pool or zero liquidity.
-    Stage B (confirmatory): read_quoter_v2() only for shortlisted venues (1-2 RPC calls).
+    Stage B (confirmatory): read_quoter_v2() only for shortlisted venues.
     """
     import time
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -937,14 +1007,66 @@ def score_backrun_live_parallel(
     pipeline_start = time.monotonic()
     backrun_dir = classify_event_backrun_type(event)
 
-    # Backrun size: ~10% of the original event
-    backrun_size_wei = max(event.amount_in_wei // 10, 1)
+    quote_started_block = current_block
+
+    # ── M7.A.5.5: Actual-pair token resolution ─────────────────────────
+    # Try to resolve token0/token1 from the pool contract via multicall.
+    # If event.token_in is already a known symbol (fixture/resolved), use it.
+    # Otherwise, query the pool contract.
+    pair_resolved = False
+    actual_pair: Optional[str] = None
+    size_source = "event_proportional"
 
     token_in_addr = token_addresses.get(event.token_out, "")
     token_out_addr = token_addresses.get(event.token_in, "")
     use_common_pairs = not token_in_addr or not token_out_addr
 
-    quote_started_block = current_block
+    if use_common_pairs and event.pool_address and addr_to_symbol is not None:
+        # Try actual pair resolution from pool contract
+        resolved = _resolve_event_tokens(
+            pool_address=event.pool_address,
+            swap_direction=event.token_in,  # direction tag like "token0_in"
+            rpc_url=rpc_url,
+            block_num=current_block,
+            addr_to_symbol=addr_to_symbol,
+        )
+        if resolved:
+            token_in_addr = resolved["token_in_addr"]
+            token_out_addr = resolved["token_out_addr"]
+            pair_resolved = True
+            actual_pair = f"{resolved['token_in_symbol']}/{resolved['token_out_symbol']}"
+            use_common_pairs = False
+
+    if use_common_pairs:
+        # M7.A.5.5: No WETH/USDC fallback. Mark as TOKEN_PAIR_UNRESOLVED.
+        return BackrunResult(
+            event_id=event.event_id,
+            event_source="live",
+            event_type=event.event_type,
+            post_trade_state_used="live",
+            backrun_direction=backrun_dir,
+            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            event_block=event.block_number,
+            quote_block=current_block,
+            block_lag=current_block - event.block_number,
+            ws_provider=ws_provider,
+            event_detected_at_block=event_detected_at_block,
+            quote_started_block=quote_started_block,
+            quote_finished_block=current_block,
+            quote_pipeline_latency_ms=round((time.monotonic() - pipeline_start) * 1000, 2),
+            latency_budget_ms=block_time_ms,
+            pair_resolved=False,
+            size_source=None,
+        )
+
+    # M7.A.5.5: Bounded size logic — use event-proportional notional
+    # ~10% of the original event, but bounded to [0.001 ETH, 1 ETH] range
+    MIN_BACKRUN_WEI = 10**15   # 0.001 ETH
+    MAX_BACKRUN_WEI = 10**18   # 1.0 ETH
+    backrun_size_wei = max(event.amount_in_wei // 10, 1)
+    backrun_size_wei = max(MIN_BACKRUN_WEI, min(MAX_BACKRUN_WEI, backrun_size_wei))
+    if backrun_size_wei != max(event.amount_in_wei // 10, 1):
+        size_source = "bounded"
 
     # DEXes that have quoter_v2
     quotable_dexes = []
@@ -952,31 +1074,6 @@ def score_backrun_live_parallel(
         quoter = cfg.get("quoter_v2") or cfg.get("quoter")
         if quoter:
             quotable_dexes.append((dex_name, cfg, quoter))
-
-    if use_common_pairs:
-        weth_addr = token_addresses.get("WETH", "")
-        usdc_addr = token_addresses.get("USDC", "")
-        if not weth_addr or not usdc_addr:
-            return BackrunResult(
-                event_id=event.event_id,
-                event_source="live",
-                event_type=event.event_type,
-                post_trade_state_used="live",
-                backrun_direction=backrun_dir,
-                reject_reason=REJECT_QUOTE_FAILURE,
-                event_block=event.block_number,
-                quote_block=current_block,
-                block_lag=current_block - event.block_number,
-                ws_provider=ws_provider,
-                event_detected_at_block=event_detected_at_block,
-                quote_started_block=quote_started_block,
-                quote_finished_block=current_block,
-                quote_pipeline_latency_ms=round((time.monotonic() - pipeline_start) * 1000, 2),
-                latency_budget_ms=block_time_ms,
-            )
-        token_in_addr = weth_addr
-        token_out_addr = usdc_addr
-        backrun_size_wei = 10**16  # 0.01 ETH
 
     # Total quote calls that would be attempted without pruning
     total_quote_calls = 0
@@ -1153,6 +1250,13 @@ def score_backrun_live_parallel(
         route_viable = net_bps > 0
         reject_reason = None if route_viable else REJECT_GAS_EXCEEDS_GROSS
 
+        # Build candidate_path with actual symbols if pair resolved
+        if pair_resolved and actual_pair:
+            parts = actual_pair.split("/")
+            cand_path = [parts[1], parts[0], parts[1]] if len(parts) == 2 else [event.token_out, event.token_in, event.token_out]
+        else:
+            cand_path = [event.token_out, event.token_in, event.token_out]
+
         return BackrunResult(
             event_id=event.event_id,
             event_source="live",
@@ -1161,7 +1265,7 @@ def score_backrun_live_parallel(
             backrun_direction=backrun_dir,
             best_buy_venue=best_buy_venue,
             best_sell_venue=best_sell_venue,
-            candidate_path=[event.token_out, event.token_in, event.token_out],
+            candidate_path=cand_path,
             amount_in_wei=backrun_size_wei,
             gross_pnl_wei=gross_wei,
             gas_cost_wei=gas_cost_wei,
@@ -1188,6 +1292,9 @@ def score_backrun_live_parallel(
             quote_calls_after_pruning=quote_calls_after,
             prune_reason_histogram=prune_reasons if prune_reasons else None,
             pipeline_stage_latency_ms=stage_latency,
+            pair_resolved=pair_resolved,
+            actual_pair=actual_pair,
+            size_source=size_source,
         )
 
     return BackrunResult(
@@ -1213,6 +1320,9 @@ def score_backrun_live_parallel(
         quote_calls_after_pruning=quote_calls_after,
         prune_reason_histogram=prune_reasons if prune_reasons else None,
         pipeline_stage_latency_ms=stage_latency,
+        pair_resolved=pair_resolved,
+        actual_pair=actual_pair,
+        size_source=size_source,
     )
 
 
@@ -1911,6 +2021,7 @@ def main():
                         event_detected_at_block=detected_block,
                         fallback_rpc_urls=None,
                         block_time_ms=block_time_ms,
+                        addr_to_symbol=addr_to_symbol,
                     )
                     all_results.append(r)
                     all_events.append(ev)
@@ -1939,10 +2050,10 @@ def main():
 
         # Build artifact
         artifact = build_replay_summary(all_events, all_results, mode="ws_live")
-        artifact["m7a54_hypothesis"] = (
-            "block_event_backrun on arbitrum_one may become fairly testable only if "
-            "per-event live quote count is collapsed from ~12 calls to a multicall/"
-            "local-state prefilter plus 1-2 confirmatory quotes"
+        artifact["m7a55_hypothesis"] = (
+            "event-driven backrun looks worse than M4 partly because live replay is "
+            "still proxy-priced; resolving actual pool token0/token1 and event-specific "
+            "pairs may materially change measured gross"
         )
         artifact["ws_live_config"] = {
             "ws_blocks_requested": args.ws_blocks,
@@ -2116,6 +2227,67 @@ def main():
                     ) if stale else None
                 ),
                 "viable_count": sum(1 for r in stale if r.route_viable),
+            }
+
+            # M7.A.5.5: Pair resolution metrics
+            resolved_results = [r for r in live_results if r.pair_resolved]
+            unresolved_results = [r for r in live_results if not r.pair_resolved]
+            resolved_net = [r.best_live_net_bps for r in resolved_results if r.best_live_net_bps is not None]
+            unresolved_net = [r.best_live_net_bps for r in unresolved_results if r.best_live_net_bps is not None]
+            actual_pairs_seen = list(set(r.actual_pair for r in resolved_results if r.actual_pair))
+            size_sources = {}
+            for r in live_results:
+                src = r.size_source or "unknown"
+                size_sources[src] = size_sources.get(src, 0) + 1
+            artifact["pair_resolution_metrics"] = {
+                "events_pair_resolved": len(resolved_results),
+                "events_pair_unresolved": len(unresolved_results),
+                "pair_resolution_rate": round(
+                    len(resolved_results) / len(live_results), 4
+                ) if live_results else 0.0,
+                "actual_pairs_seen": actual_pairs_seen,
+                "resolved_best_net_bps": round(max(resolved_net), 4) if resolved_net else None,
+                "resolved_mean_net_bps": (
+                    round(sum(resolved_net) / len(resolved_net), 4)
+                    if resolved_net else None
+                ),
+                "size_source_histogram": size_sources,
+            }
+
+            # M7.A.5.5: M4 vs M7 economics comparison block
+            # Use amounts from resolved events to compute decomposed costs
+            resolved_with_amounts = [r for r in resolved_results if r.amount_in_wei > 0]
+            if resolved_with_amounts:
+                mean_amount_wei = sum(r.amount_in_wei for r in resolved_with_amounts) // len(resolved_with_amounts)
+                mean_gross_bps = round(
+                    sum(
+                        (r.gross_pnl_wei / r.amount_in_wei * 10000) if r.amount_in_wei > 0 else 0
+                        for r in resolved_with_amounts
+                    ) / len(resolved_with_amounts), 4
+                )
+                mean_gas_bps = round(
+                    sum(
+                        (r.gas_cost_wei / r.amount_in_wei * 10000) if r.amount_in_wei > 0 else 0
+                        for r in resolved_with_amounts
+                    ) / len(resolved_with_amounts), 4
+                )
+            else:
+                mean_amount_wei = 0
+                mean_gross_bps = None
+                mean_gas_bps = None
+
+            artifact["m4_m7_comparison"] = {
+                "m4_best_net_bps": -3.5062,
+                "m4_frontier_pair": "WBTC/USDC",
+                "m4_size_usd": 50,
+                "m4_gas_bps": 2.01,
+                "m7_best_net_bps": round(max(resolved_net), 4) if resolved_net else None,
+                "m7_mean_gross_bps": mean_gross_bps,
+                "m7_mean_gas_bps": mean_gas_bps,
+                "m7_mean_size_wei": mean_amount_wei,
+                "m7_latency_class": "stale" if not low_lag else "low_lag",
+                "m7_pair_resolved_count": len(resolved_results),
+                "note": "M4 uses pair-specific dynamic sweep; M7 uses event-driven replay with actual-pair resolution",
             }
     else:
         parser_err = "No mode specified"

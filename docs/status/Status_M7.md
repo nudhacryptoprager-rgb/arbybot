@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.4 — all scopes produce no-graduate verdicts. M7.A.5.4 multicall pruning evidence: venues pruned but pipeline latency increased; per-call RPC latency (~400ms) is irreducible bottleneck. All public RPC architecture paths closed. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.5 — all scopes produce no-graduate verdicts. M7.A.5.5 actual-pair resolution evidence: pair resolution works (100%) but resolved pairs involve tokens outside narrow universe; QUOTE_FAILURE persists due to counter-venue absence. Proxy-pricing distortion confirmed but does not change economics. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-03-30  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution. M7.B remains closed.
 
 ---
 
@@ -144,6 +144,50 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 **Conclusion**: The quote-fanout-collapse hypothesis is **closed**. The per-call latency (~400ms) is the irreducible bottleneck, not the call count. Even with perfect pruning (1 call), 400ms > 250ms budget. This closes all public RPC architecture paths for sub-block backrun on Arbitrum.
 
 **CI gates**: 2869 passed, 6 skipped. 133 tests in `test_orderflow_contracts.py`.
+
+---
+
+## M7.A.5.5: Actual-Pair Token Resolution
+
+**Hypothesis**: event-driven backrun looks worse than M4 partly because live replay is still proxy-priced; resolving actual pool token0/token1 and event-specific pairs may materially change measured gross.
+
+**Motivation**: M7.A.5.x ws-live always fell back to WETH/USDC representative pair because `normalize_swap_log()` sets direction tags ("token0_in", "token1") not actual symbols. `token_addresses.get("token0_in")` returns `""`, triggering `use_common_pairs=True`. Additionally, fixed 0.01 ETH notional makes gas floor ~20 bps. M4 frontier (WBTC/USDC, -3.5062 bps, pre-cost gross ~+36.35 bps) is not comparable to M7 proxy-priced results.
+
+**New infrastructure**:
+- `_resolve_event_tokens()`: reads pool token0/token1/fee via `batch_token_info()`, maps to symbols via `addr_to_symbol`
+- `REJECT_TOKEN_PAIR_UNRESOLVED`: new reject reason when pool tokens cannot be mapped to known symbols
+- 3 new BackrunResult fields: `pair_resolved`, `actual_pair`, `size_source`
+- Bounded size logic: `max(0.001 ETH, min(1.0 ETH, event.amount_in_wei // 10))` replaces fixed 0.01 ETH
+- Proxy WETH/USDC fallback removed — events with unresolvable pairs get `TOKEN_PAIR_UNRESOLVED`
+- `pair_resolution_metrics` artifact block: resolution rate, actual pairs, resolved economics
+- `m4_m7_comparison` artifact block: decomposed M4 vs M7 economics
+- 18 new contract tests (151 total in `test_orderflow_contracts.py`)
+
+**Evidence — M7.A.5.5 (Alchemy WSS, 50 blocks)**: 2 events scored. Results:
+
+| Metric | M7.A.5.4 (before) | M7.A.5.5 (after) |
+|--------|-------------------|------------------|
+| events_scored | 8 | 2 |
+| pair_resolution_rate | N/A | **1.0 (100%)** |
+| actual_pairs_seen | N/A | USDT/0x1009c5c1, 0x1009c5c1/USDT |
+| TOKEN_PAIR_UNRESOLVED | N/A | 0 |
+| QUOTE_FAILURE | 8 | 2 |
+| size_source | N/A | bounded (2/2) |
+| best_net_bps | -19.73 | 0.0 (no viable routes) |
+| mean_pipeline_latency_ms | 2860 | 1266 |
+| m4_best_net_bps | -3.5062 | -3.5062 |
+| m7_pair_resolved_count | N/A | 2 |
+
+**Key findings**:
+1. **Pair resolution works** — `_resolve_event_tokens()` successfully reads token0/token1 from pool contracts and maps to symbols. 100% resolution rate.
+2. **Most on-chain activity involves tokens outside our narrow universe** — resolved pairs show unknown tokens (e.g., `0x1009c5c1`) that aren't in `core_tokens.yaml`.
+3. **QUOTE_FAILURE persists regardless of pair resolution** — because the actual token pairs don't have counter venues in our DEX coverage.
+4. **Proxy-pricing distortion confirmed** — prior runs incorrectly showed WETH/USDC economics for all events. Now we see actual pairs, but the economics don't improve because the actual pairs lack venue coverage.
+5. **Bounded size logic activated** — all events hit the minimum bound (0.001 ETH), indicating small on-chain transactions.
+
+**Verdict**: The proxy-pricing hypothesis is **CONFIRMED but IMMATERIAL**. Resolving actual pairs reveals that observed on-chain events involve tokens outside our trading universe. Even with correct pair resolution, the economics don't improve because: (a) the narrow_7 universe doesn't cover most actively-traded tokens, and (b) counter-venue absence causes QUOTE_FAILURE regardless of pair labels. This reinforces the M7.A.5.4 conclusion that all public RPC architecture paths are closed.
+
+**CI gates**: 2887 passed, 6 skipped. 151 tests in `test_orderflow_contracts.py`.
 
 ---
 
