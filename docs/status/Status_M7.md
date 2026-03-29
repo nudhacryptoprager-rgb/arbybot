@@ -1,7 +1,7 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.10 — all scopes produce no-graduate verdicts. M7.A.5.10 fixed 3 contract issues: stale-positive viability gate (`route_viable` now requires `block_lag <= 2`), admission provenance bug (new `onchain_enriched_verified` source), and zero-liquidity reject gate (new `ZERO_LIQUIDITY` reject). After fix: previous false viable (block_lag=23, liquidity=0, net_bps=2630) is correctly rejected. 300b evidence shows `ZERO_LIQUIDITY` as dominant new reject (21/25 events). `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
-**Updated**: 2026-03-31  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.12 — all scopes produce no-graduate verdicts. M7.A.5.12 fixed a critical byte-parsing bug in `batch_full_pool_data` (`d1[0:16]`→`d1[0:32]`), unified coverage scan and local-sim to use one canonical pool state extraction, and split `ALL_POOLS_ZERO_LIQUIDITY` into `COVERAGE_SAYS_ACTIVE_BUT_LOCAL_SIM_ZERO` / `ALL_CANDIDATE_POOLS_TRULY_INACTIVE`. The byte fix unblocked economics scoring: 300b evidence shows 26/28 scored, 25 GAS_EXCEEDS_GROSS, 1 STALE_POSITIVE (+1987 bps, lag=1136), 0 coverage/local-sim mismatch. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Updated**: 2026-03-29  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition. M7.B remains closed.
 
 ---
@@ -34,7 +34,7 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`
 - `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--ws-live`, `--intent-scout`
-- Tests: 152 in `test_triangular_contracts.py`, 100 in `test_orderflow_contracts.py`
+- Tests: 152 in `test_triangular_contracts.py`, 323 in `test_orderflow_contracts.py`
 
 ---
 
@@ -256,6 +256,74 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 **Verdict**: M7.A.5.10 closes all 3 contract issues from M7.A.5.9 evidence. The pipeline now has correct viability gating, honest admission provenance, and zero-liquidity early rejection. The dominant blocker shifts from GAS_EXCEEDS_GROSS (which required economic scoring) to ZERO_LIQUIDITY (rejected pre-scoring). M7.A remains closed.
 
 **CI gates**: 3011 passed, 6 skipped. 275 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+
+---
+
+## M7.A.5.11: Active-Liquidity-Aware Coverage + Granular Coverage Rejects + Pre-Econ Metrics
+
+**Hypothesis**: Same-chain backrun surface is still overstated because coverage counts initialized but inactive V3 pools; active-liquidity-aware coverage may materially reduce false-positive surface before economics scoring.
+
+**Changes implemented**:
+1. **Active-liquidity coverage**: `counter_venue_coverage_scan()` now distinguishes pools with `liquidity > 0` (active) from pools with `liquidity == 0` (inactive). `coverage_complete` requires active buy + sell venue. New fields: `known_pools_total`, `active_pools_total`, `inactive_pool_count`, `active_dexes`, `active_buy_venues`, `active_sell_venues`.
+2. **Granular reject split**: Old `REJECT_ZERO_LIQUIDITY` kept for backward compat. New: `REJECT_NO_ACTIVE_COUNTER_POOL` (pools found but all inactive at coverage level), `REJECT_ALL_POOLS_ZERO_LIQUIDITY` (pools had state in local-sim but all liquidity=0). `ALL_REJECT_REASONS` now has 17 entries.
+3. **Pre-economics metrics**: `build_replay_summary()` adds `pre_econ_reject_rate`, `active_coverage_rate`, `inactive_coverage_false_positive_rate`, `scored_results_rate`.
+4. **live_state_metrics fix**: Early reject results now have `same_state_class` assigned based on `block_lag` (was `None` before, causing `same_block_count=0` even when all events were same-block).
+
+**Evidence — M7.A.5.11 (Alchemy WSS)**:
+300-block run (`data/tmp/m7a_511_300b.json`):
+- 25 events, 25 results, 0 viable, 0 scored
+- Reject histogram: `ALL_POOLS_ZERO_LIQUIDITY: 19, NO_ACTIVE_COUNTER_POOL: 2, NO_COUNTER_POOL: 3, TOKEN_PAIR_UNRESOLVED: 1`
+- Pre-econ metrics: `pre_econ_reject_rate: 1.0, active_coverage_rate: 0.76, inactive_coverage_false_positive_rate: 0.08, scored_results_rate: 0.0`
+- live_state_metrics: `same_block_count: 25` (was 0 pre-5.11), `mean_block_lag: 0.0`
+
+**Key findings**:
+- The old `ZERO_LIQUIDITY: 21` split cleanly into `ALL_POOLS_ZERO_LIQUIDITY: 19` (local-sim showed all pools have liq=0) and `NO_ACTIVE_COUNTER_POOL: 2` (coverage scan now catches inactive pools at coverage level before local-sim)
+- `inactive_coverage_false_positive_rate: 0.08` — 8% of events had pools deployed but all inactive, correctly rejected at coverage level now
+- `active_coverage_rate: 0.76` — 76% of events have at least one active-liquidity venue, but all are rejected at the local-sim zero-liq gate
+- The blocker is confirmed as **market structure** (inactive pools), not economics. No events reach economic scoring.
+
+**Verdict**: M7.A.5.11 sharpens the diagnostic — the Arbitrum narrow_7 DEX surface has initialized pools that are overwhelmingly inactive (liquidity=0). The pipeline now has honest active-liquidity-aware coverage reporting. M7.A remains closed.
+
+**CI gates**: 3036 passed, 6 skipped. 300 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+
+---
+
+## M7.A.5.12: Coverage/Local-Sim Consistency + Byte-Parsing Fix + Split Blocker
+
+**Hypothesis**: Active coverage is overstated because coverage scan and local-sim pool-state use inconsistent activity truth; unifying pool activity evaluation will resolve the M7.A.5.11 contradiction where `ALL_POOLS_ZERO_LIQUIDITY` events had `active_pools_total > 0` and `coverage_complete=true`.
+
+**Root cause found**: `batch_full_pool_data()` in `core/multicall.py` had a byte-parsing bug: `d1[0:16]` read the zero-padded MSB half of ABI-encoded uint128, always returning 0. The correct read is `d1[0:32]`. `batch_liquidity()` (used by coverage scan) was correct but returned `None` on multicall failure, which coverage treated as "potentially active". Meanwhile local-sim used the buggy `batch_full_pool_data`, showing `liquidity=0` for all pools. The two truth surfaces were both wrong.
+
+**Changes implemented**:
+1. **Byte-parsing fix**: `core/multicall.py` `batch_full_pool_data()`: `d1[0:16]`→`d1[0:32]`, `len(d1) >= 16`→`len(d1) >= 32`. This is the root cause of M7.A.5.8-5.11's `scored_results=0`.
+2. **Unified pool state source**: `_resolve_pool_addresses_multicall()` now uses `batch_full_pool_data` instead of `batch_liquidity`. Coverage scan and local-sim use the same canonical extraction. Eliminates second RPC call.
+3. **New reject split**: `REJECT_COVERAGE_LOCAL_MISMATCH = "COVERAGE_SAYS_ACTIVE_BUT_LOCAL_SIM_ZERO"` (coverage said active but canonical state shows liq=0) and `REJECT_ALL_POOLS_TRULY_INACTIVE = "ALL_CANDIDATE_POOLS_TRULY_INACTIVE"` (both agree: all liq=0). `ALL_REJECT_REASONS` now has 19 entries.
+4. **Hard invariant**: If reject is `ALL_CANDIDATE_POOLS_TRULY_INACTIVE`, `coverage_result.active_pools_total == 0` and `coverage_complete == False`. If coverage/local-sim mismatch, coverage is patched in-place to reflect canonical zero state.
+5. **Per-pool debug block**: `coverage_result.candidate_pools[]` with `address`, `dex`, `fee`, `liquidity`, `activity_source`, `activity_drop_reason`.
+6. **Consistency metrics**: `coverage_local_mismatch_count`, `truly_inactive_count`, `quote_reachability_rate`, `coverage_complete_no_quote_count` in `build_replay_summary()`.
+
+**Evidence — M7.A.5.12 (Alchemy WSS)**:
+300-block run (`data/tmp/m7a_512_300b.json`):
+- 28 events, 28 results, 0 viable, **26 scored** (was 0 in M7.A.5.11)
+- Reject histogram: `GAS_EXCEEDS_GROSS: 25, ALL_CANDIDATE_POOLS_TRULY_INACTIVE: 1, TOKEN_PAIR_UNRESOLVED: 1, STALE_POSITIVE: 1`
+- Economics: `best_net_bps: 1987.666` (stale positive, lag=1136), `mean_net_bps: -16775.60`, `worst: -398936.21`
+- Consistency: `coverage_local_mismatch_count: 0, truly_inactive_count: 1, quote_reachability_rate: 1.0`
+- Coverage: `active_coverage_rate: 0.9286, pre_econ_reject_rate: 0.0714, scored_results_rate: 0.9286`
+- Pools confirmed to have real liquidity: e.g. `0xd130...8245` with `liquidity: 156484833388698295570863`
+
+30-block run (`data/tmp/m7a_512_30b.json`): 2 events, 2 scored, `GAS_EXCEEDS_GROSS: 2`.
+
+**Key findings**:
+- **The byte-parsing bug was the sole root cause of `scored_results=0` in M7.A.5.8-5.11**. Pools on Arbitrum narrow_7 DO have real liquidity. The `ZERO_LIQUIDITY=21/25` in M7.A.5.11 was entirely a measurement artifact.
+- After fix: 26/28 events reach full quote stage. Gas remains the dominant blocker (`GAS_EXCEEDS_GROSS: 25`).
+- One stale positive at +1987 bps (RDNT/WETH, block_lag=1136) — not executable, but proves gross_pnl > 0 exists in live data.
+- `coverage_local_mismatch_count: 0` — with unified truth source, coverage and local-sim fully agree.
+- `quote_reachability_rate: 1.0` — every event with `coverage_complete=True` reaches quote stage.
+- The blocker has shifted from **market structure** (M7.A.5.11) to **gas economics** (M7.A.5.12). This reopens the question of whether smaller gas costs (via flashblocks/bundles/L2 optimization) could yield positive net.
+
+**Verdict**: M7.A.5.12 resolved a 4-session-long measurement artifact. Economics scoring is now live and correct. The current blocker is `GAS_EXCEEDS_GROSS`, not pool inactivity. M7.A remains no-graduate but with materially improved diagnostics — the pipeline now measures real economics for the first time.
+
+**CI gates**: 3059 passed, 6 skipped. 323 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
 
 ---
 

@@ -78,6 +78,12 @@ REJECT_PAIR_RESOLVED_UNTRADEABLE = "PAIR_RESOLVED_BUT_UNTRADEABLE"  # pair resol
 # M7.A.5.10: Stale-positive and zero-liquidity gates
 REJECT_STALE_POSITIVE = "STALE_POSITIVE"  # net_bps > 0 but block_lag > 2 (stale quote)
 REJECT_ZERO_LIQUIDITY = "ZERO_LIQUIDITY"  # all candidate pools have liquidity=0
+# M7.A.5.11: Granular coverage rejects (split from broad ZERO_LIQUIDITY)
+REJECT_NO_ACTIVE_COUNTER_POOL = "NO_ACTIVE_COUNTER_POOL"  # pools found but all inactive (liquidity=0 on-chain)
+REJECT_ALL_POOLS_ZERO_LIQUIDITY = "ALL_POOLS_ZERO_LIQUIDITY"  # pools had state but all liquidity=0 after local-sim
+# M7.A.5.12: Coverage/local-sim consistency split
+REJECT_COVERAGE_LOCAL_MISMATCH = "COVERAGE_SAYS_ACTIVE_BUT_LOCAL_SIM_ZERO"  # coverage said active but canonical state shows liq=0
+REJECT_ALL_POOLS_TRULY_INACTIVE = "ALL_CANDIDATE_POOLS_TRULY_INACTIVE"  # both coverage and local-sim agree: all pools liq=0
 
 ALL_REJECT_REASONS = frozenset({
     REJECT_NO_COUNTER_VENUE,
@@ -95,6 +101,10 @@ ALL_REJECT_REASONS = frozenset({
     REJECT_PAIR_RESOLVED_UNTRADEABLE,
     REJECT_STALE_POSITIVE,
     REJECT_ZERO_LIQUIDITY,
+    REJECT_NO_ACTIVE_COUNTER_POOL,
+    REJECT_ALL_POOLS_ZERO_LIQUIDITY,
+    REJECT_COVERAGE_LOCAL_MISMATCH,
+    REJECT_ALL_POOLS_TRULY_INACTIVE,
 })
 
 # ---------------------------------------------------------------------------
@@ -1109,20 +1119,23 @@ def _resolve_pool_addresses_multicall(
 
     pool_addrs = batcher.batch_get_pool(queries)
 
-    # Collect non-None addresses for liquidity check
+    # M7.A.5.12: Use batch_full_pool_data as canonical pool state source
+    # (unifies coverage scan and local-sim truth — single RPC extraction)
     valid_addrs = [a for a in pool_addrs if a is not None]
-    liq_map: Dict[str, Optional[int]] = {}
+    full_state_map: Dict[str, Optional[Dict[str, Any]]] = {}
     if valid_addrs:
-        liq_map = batcher.batch_liquidity(valid_addrs)
+        full_state_map = batcher.batch_full_pool_data(valid_addrs)
 
     # Build result grouped by dex
     result: Dict[str, List[Dict[str, Any]]] = {}
     for i, addr in enumerate(pool_addrs):
         dex_name, fee = query_meta[i]
+        pool_state = full_state_map.get(addr) if addr else None
         entry = {
             "address": addr,
             "fee": fee,
-            "liquidity": liq_map.get(addr) if addr else None,
+            "liquidity": pool_state.get("liquidity") if pool_state else None,
+            "pool_state": pool_state,  # M7.A.5.12: full state for reuse
         }
         result.setdefault(dex_name, []).append(entry)
 
@@ -1222,60 +1235,115 @@ def counter_venue_coverage_scan(
     Uses multicall to check which DEXes have deployed pools with liquidity
     for the given pair.
 
+    M7.A.5.11: Active-liquidity-aware coverage.  coverage_complete requires
+    at least 1 buy + 1 sell venue backed by a pool with liquidity > 0.
+
     Returns machine-readable truth block:
-        known_pools: int         # pools found via factory.getPool
-        known_dexes: list[str]   # DEX names with at least one live pool
-        buy_venues: int          # venues with quoter that could quote buy
-        sell_venues: int         # venues with quoter that could quote sell
-        coverage_complete: bool  # at least 1 buy + 1 sell venue
+        known_pools_total: int      # pools found via factory.getPool (any state)
+        active_pools_total: int     # pools with liquidity > 0
+        inactive_pool_count: int    # pools with liquidity == 0
+        known_dexes: list[str]      # DEX names with at least one live pool (any liq)
+        active_dexes: list[str]     # DEX names with at least one active pool (liq > 0)
+        buy_venues: int             # venues with quoter (any pool)
+        sell_venues: int            # venues with quoter (any pool)
+        active_buy_venues: int      # venues with quoter AND active pool
+        active_sell_venues: int     # venues with quoter AND active pool
+        coverage_complete: bool     # at least 1 active buy + 1 active sell venue
         coverage_blocker_reason: str or None
+        # Legacy aliases (backward compat)
+        known_pools: int            # == known_pools_total
     """
     pool_map = _resolve_pool_addresses_multicall(
         dex_configs, token_in_addr, token_out_addr, rpc_url, block_num,
     )
 
-    known_pools = 0
+    known_pools_total = 0
+    active_pools_total = 0
     known_dexes: List[str] = []
-    buy_venues = 0
-    sell_venues = 0
+    active_dexes: List[str] = []
+
+    # M7.A.5.12: Build per-pool debug list
+    candidate_pools: List[Dict[str, Any]] = []
 
     for dex_name, pools in pool_map.items():
         dex_has_pool = False
+        dex_has_active = False
         for p in pools:
             if p["address"] is not None:
+                known_pools_total += 1
+                dex_has_pool = True
                 liq = p["liquidity"]
-                if liq is None or liq > 0:
-                    known_pools += 1
-                    dex_has_pool = True
+                _drop_reason = None
+                if liq is not None and liq > 0:
+                    active_pools_total += 1
+                    dex_has_active = True
+                elif liq is None:
+                    # Unknown liquidity — treat as potentially active
+                    active_pools_total += 1
+                    dex_has_active = True
+                    _drop_reason = "liquidity_unknown_assumed_active"
+                else:
+                    _drop_reason = "liquidity_zero"
+                candidate_pools.append({
+                    "address": p["address"],
+                    "dex": dex_name,
+                    "fee": p["fee"],
+                    "liquidity": liq,
+                    "activity_source": "batch_full_pool_data",
+                    "activity_drop_reason": _drop_reason,
+                })
         if dex_has_pool:
             known_dexes.append(dex_name)
+        if dex_has_active:
+            active_dexes.append(dex_name)
 
-    # Check which have quoter for buy/sell
+    inactive_pool_count = known_pools_total - active_pools_total
+
+    # Check which have quoter for buy/sell (any pool)
+    buy_venues = 0
+    sell_venues = 0
+    active_buy_venues = 0
+    active_sell_venues = 0
     for dex_name in known_dexes:
         cfg = dex_configs.get(dex_name, {})
         quoter = cfg.get("quoter_v2") or cfg.get("quoter")
         if quoter:
             buy_venues += 1
             sell_venues += 1  # same quoter can do both directions
+            if dex_name in active_dexes:
+                active_buy_venues += 1
+                active_sell_venues += 1
 
-    coverage_complete = buy_venues >= 1 and sell_venues >= 1
+    # M7.A.5.11: coverage_complete requires ACTIVE venues (liquidity > 0)
+    coverage_complete = active_buy_venues >= 1 and active_sell_venues >= 1
     blocker = None
-    if known_pools == 0:
+    if known_pools_total == 0:
         blocker = "no_pools_found"
-    elif buy_venues == 0 and sell_venues == 0:
-        blocker = "no_quoter_for_live_pools"
-    elif buy_venues == 0:
-        blocker = "no_buy_venue"
-    elif sell_venues == 0:
-        blocker = "no_sell_venue"
+    elif active_pools_total == 0:
+        blocker = "all_pools_zero_liquidity"
+    elif active_buy_venues == 0 and active_sell_venues == 0:
+        blocker = "no_quoter_for_active_pools"
+    elif active_buy_venues == 0:
+        blocker = "no_active_buy_venue"
+    elif active_sell_venues == 0:
+        blocker = "no_active_sell_venue"
 
     return {
-        "known_pools": known_pools,
+        "known_pools_total": known_pools_total,
+        "active_pools_total": active_pools_total,
+        "inactive_pool_count": inactive_pool_count,
         "known_dexes": known_dexes,
+        "active_dexes": active_dexes,
         "buy_venues": buy_venues,
         "sell_venues": sell_venues,
+        "active_buy_venues": active_buy_venues,
+        "active_sell_venues": active_sell_venues,
         "coverage_complete": coverage_complete,
         "coverage_blocker_reason": blocker,
+        # M7.A.5.12: Per-pool debug for diagnostics
+        "candidate_pools": candidate_pools,
+        # Legacy alias
+        "known_pools": known_pools_total,
     }
 
 
@@ -1794,6 +1862,14 @@ def score_backrun_live_parallel(
     def _reject(reason, pr=False, ap=None, ss=None, cov=None, adm=None,
                 adm_src=None, orc=None, lss=None, sg_seed=None,
                 extra_latency=None):
+        # M7.A.5.11: Assign same_state_class for early rejects based on block_lag
+        _lag = current_block - event.block_number
+        if _lag == 0:
+            _ssc = "same_block"
+        elif _lag <= 2:
+            _ssc = "next_block"
+        else:
+            _ssc = "stale"
         return BackrunResult(
             event_id=event.event_id,
             event_source="live",
@@ -1803,7 +1879,8 @@ def score_backrun_live_parallel(
             reject_reason=reason,
             event_block=event.block_number,
             quote_block=current_block,
-            block_lag=current_block - event.block_number,
+            block_lag=_lag,
+            same_state_class=_ssc,
             ws_provider=ws_provider,
             event_detected_at_block=event_detected_at_block,
             quote_started_block=quote_started_block,
@@ -1917,15 +1994,31 @@ def score_backrun_live_parallel(
         )
     except Exception:
         coverage = {
-            "known_pools": 0, "known_dexes": [], "buy_venues": 0,
-            "sell_venues": 0, "coverage_complete": False,
+            "known_pools_total": 0, "active_pools_total": 0, "inactive_pool_count": 0,
+            "known_pools": 0, "known_dexes": [], "active_dexes": [],
+            "buy_venues": 0, "sell_venues": 0,
+            "active_buy_venues": 0, "active_sell_venues": 0,
+            "coverage_complete": False,
             "coverage_blocker_reason": "scan_error",
+            "candidate_pools": [],
         }
 
     if not coverage["coverage_complete"]:
-        reason = REJECT_NO_COUNTER_POOL
-        if coverage["coverage_blocker_reason"] == "no_quoter_for_live_pools":
+        # M7.A.5.11: Granular reject based on coverage blocker
+        blocker = coverage.get("coverage_blocker_reason", "")
+        if blocker == "no_pools_found":
+            reason = REJECT_NO_COUNTER_POOL
+        elif blocker == "all_pools_zero_liquidity":
+            # M7.A.5.12: Coverage itself says all zero → truly inactive
+            reason = REJECT_ALL_POOLS_TRULY_INACTIVE
+        elif blocker in ("no_quoter_for_active_pools", "no_quoter_for_live_pools"):
             reason = REJECT_UNSUPPORTED_ADAPTER
+        elif blocker == "scan_error":
+            reason = REJECT_NO_COUNTER_POOL
+        elif blocker == "local_sim_all_zero_liquidity":
+            reason = REJECT_COVERAGE_LOCAL_MISMATCH
+        else:
+            reason = REJECT_NO_ACTIVE_COUNTER_POOL
         return _reject(
             reason,
             pr=pair_resolved, ap=actual_pair, adm=True,
@@ -1933,33 +2026,41 @@ def score_backrun_live_parallel(
             cov=coverage, sg_seed=sg_seed,
         )
 
-    # ── M7.A.5.7: Local-sim pool state extraction ──────────────────────
+    # ── M7.A.5.12: Build local-sim from coverage canonical state ───────
+    # Reuse pool_state from coverage scan (same batch_full_pool_data extraction)
+    # to avoid a second RPC call and guarantee state consistency.
     local_sim = None
-    try:
-        pool_addrs_for_sim = []
-        if coverage.get("known_dexes"):
-            # Get pool addresses from the coverage scan results
+    cand_pools = coverage.get("candidate_pools", [])
+    if cand_pools:
+        _pool_states = {}
+        for cp in cand_pools:
+            addr = cp.get("address")
+            liq = cp.get("liquidity")
+            if addr and liq is not None:
+                _pool_states[addr] = {
+                    "sqrt_price_x96": None,  # filled below if available
+                    "tick": None,
+                    "liquidity": liq,
+                }
+        # Try to get full state from the same multicall data
+        try:
             pool_map = _resolve_pool_addresses_multicall(
                 dex_configs, token_in_addr, token_out_addr, rpc_url, current_block,
             )
             for dex_name, pools in pool_map.items():
                 for p in pools:
-                    if p["address"] is not None:
-                        pool_addrs_for_sim.append(p["address"])
-        if pool_addrs_for_sim:
-            raw_states = extract_pool_state_for_sim(pool_addrs_for_sim, rpc_url, current_block)
-            # Summarize: how many pools have valid state
-            valid_states = {k: v for k, v in raw_states.items() if v is not None}
+                    if p["address"] and p.get("pool_state"):
+                        _pool_states[p["address"]] = p["pool_state"]
+        except Exception:
+            pass  # fallback to liquidity-only state from candidate_pools
+        if _pool_states:
             local_sim = {
-                "pools_queried": len(pool_addrs_for_sim),
-                "pools_with_state": len(valid_states),
-                "pool_states": {k: v for k, v in list(valid_states.items())[:3]},  # cap to 3
+                "pools_queried": len(cand_pools),
+                "pools_with_state": len(_pool_states),
+                "pool_states": dict(list(_pool_states.items())[:3]),  # cap to 3
             }
-    except Exception:
-        pass  # local-sim state is best-effort
 
-    # ── M7.A.5.10: Zero-liquidity reject gate ──────────────────────────
-    # If local_sim shows all candidate pools have liquidity=0, reject early
+    # ── M7.A.5.12: Zero-liquidity reject gate with consistency check ──
     if local_sim and local_sim.get("pool_states"):
         _all_zero_liq = all(
             ps.get("liquidity", 1) == 0
@@ -1967,8 +2068,23 @@ def score_backrun_live_parallel(
             if ps is not None
         )
         if _all_zero_liq:
+            # M7.A.5.12: Split based on coverage/local-sim agreement
+            _cov_active = coverage.get("active_pools_total", 0)
+            if _cov_active > 0:
+                # Coverage said active but canonical state shows all zero
+                # → patch coverage for invariant correctness
+                coverage["active_pools_total"] = 0
+                coverage["inactive_pool_count"] = coverage.get("known_pools_total", 0)
+                coverage["active_dexes"] = []
+                coverage["active_buy_venues"] = 0
+                coverage["active_sell_venues"] = 0
+                coverage["coverage_complete"] = False
+                coverage["coverage_blocker_reason"] = "local_sim_all_zero_liquidity"
+                _reject_reason = REJECT_COVERAGE_LOCAL_MISMATCH
+            else:
+                _reject_reason = REJECT_ALL_POOLS_TRULY_INACTIVE
             return _reject(
-                REJECT_ZERO_LIQUIDITY,
+                _reject_reason,
                 pr=pair_resolved, ap=actual_pair, adm=True,
                 adm_src=adm_source, orc=oracle_result,
                 cov=coverage, lss=local_sim, sg_seed=sg_seed,
@@ -2570,12 +2686,14 @@ def build_replay_summary(
     viable_count = sum(1 for r in results if r.route_viable)
     positive_net_count = sum(1 for r in results if r.best_backrun_net_bps > 0)
 
-    # M7.A.5.10: Unscored reject reasons — results that never got economic scoring
+    # M7.A.5.10/5.11/5.12: Unscored reject reasons — results that never got economic scoring
     _UNSCORED_REJECTS = frozenset({
         REJECT_TOKEN_PAIR_UNRESOLVED, REJECT_NO_COUNTER_POOL,
         REJECT_TOKEN_NOT_ADMITTED, REJECT_UNSUPPORTED_ADAPTER,
         REJECT_RPC_QUOTE_FAIL, REJECT_PAIR_RESOLVED_UNTRADEABLE,
         REJECT_ZERO_LIQUIDITY,
+        REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_ALL_POOLS_ZERO_LIQUIDITY,
+        REJECT_COVERAGE_LOCAL_MISMATCH, REJECT_ALL_POOLS_TRULY_INACTIVE,
     })
 
     # Scored results = those that went through economic scoring (even if rejected)
@@ -2608,6 +2726,57 @@ def build_replay_summary(
         if r.reject_reason:
             reject_counts[r.reject_reason] = reject_counts.get(r.reject_reason, 0) + 1
 
+    # M7.A.5.11/5.12: Pre-economics coverage metrics
+    unscored_count = len(results) - len(scored_results)
+    # Active coverage: results that had coverage_complete AND active liquidity
+    _cov_results = [r for r in results if r.coverage_result is not None]
+    _active_cov = [
+        r for r in _cov_results
+        if r.coverage_result.get("coverage_complete") is True
+    ]
+    # Inactive false-positive: coverage said complete in old sense but no active pools
+    _inactive_fp = [
+        r for r in _cov_results
+        if r.coverage_result.get("known_pools_total", r.coverage_result.get("known_pools", 0)) > 0
+        and r.coverage_result.get("active_pools_total", -1) == 0
+    ]
+
+    # M7.A.5.12: Coverage/local-sim consistency invariant metrics
+    _cov_local_mismatch_count = reject_counts.get(
+        "COVERAGE_SAYS_ACTIVE_BUT_LOCAL_SIM_ZERO", 0
+    )
+    _truly_inactive_count = reject_counts.get(
+        "ALL_CANDIDATE_POOLS_TRULY_INACTIVE", 0
+    )
+    # Quote reachability: events with coverage_complete=True that reached quote stage
+    _quote_reached = [
+        r for r in _active_cov
+        if r.quote_calls_attempted is not None and r.quote_calls_attempted > 0
+    ]
+    _cov_complete_no_quote = [
+        r for r in _active_cov
+        if (r.quote_calls_attempted is None or r.quote_calls_attempted == 0)
+        and r.reject_reason not in (
+            REJECT_COVERAGE_LOCAL_MISMATCH,
+            REJECT_ALL_POOLS_TRULY_INACTIVE,
+            REJECT_ALL_POOLS_ZERO_LIQUIDITY,
+        )
+    ]
+
+    pre_econ_reject_rate = round(unscored_count / len(results), 4) if results else 0.0
+    active_coverage_rate = round(len(_active_cov) / len(results), 4) if results else 0.0
+    inactive_coverage_false_positive_rate = round(
+        len(_inactive_fp) / len(results), 4
+    ) if results else 0.0
+    scored_results_rate = round(len(scored_results) / len(results), 4) if results else 0.0
+    # M7.A.5.12: Consistency metrics
+    coverage_local_mismatch_count = _cov_local_mismatch_count
+    truly_inactive_count = _truly_inactive_count
+    quote_reachability_rate = round(
+        len(_quote_reached) / len(_active_cov), 4
+    ) if _active_cov else None
+    coverage_complete_no_quote_count = len(_cov_complete_no_quote)
+
     return {
         "m7a4_hypothesis": "orderflow_driven_backrun_replay",
         "mode": mode,
@@ -2631,6 +2800,16 @@ def build_replay_summary(
         "scored_results_count": len(scored_results),
         "size_valid_count": size_valid_count,
         "size_fallback_count": size_fallback_count,
+        # M7.A.5.11: Pre-economics coverage metrics
+        "pre_econ_reject_rate": pre_econ_reject_rate,
+        "active_coverage_rate": active_coverage_rate,
+        "inactive_coverage_false_positive_rate": inactive_coverage_false_positive_rate,
+        "scored_results_rate": scored_results_rate,
+        # M7.A.5.12: Coverage/local-sim consistency metrics
+        "coverage_local_mismatch_count": coverage_local_mismatch_count,
+        "truly_inactive_count": truly_inactive_count,
+        "quote_reachability_rate": quote_reachability_rate,
+        "coverage_complete_no_quote_count": coverage_complete_no_quote_count,
         "reject_histogram": reject_counts,
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,

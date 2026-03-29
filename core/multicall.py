@@ -512,9 +512,9 @@ class MulticallBatcher:
                     output[addr] = None
                     continue
                 
-                # liquidity
+                # liquidity — uint128 is ABI-encoded as 32-byte word (left-padded)
                 s1, d1 = results[base_idx + 1]
-                liquidity = int.from_bytes(d1[0:16], "big") if s1 and len(d1) >= 16 else 0
+                liquidity = int.from_bytes(d1[0:32], "big") if s1 and len(d1) >= 32 else 0
                 
                 output[addr] = {
                     "sqrt_price_x96": sqrt_price,
