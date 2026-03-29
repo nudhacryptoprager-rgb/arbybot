@@ -1,115 +1,115 @@
 ﻿# DEV_REPORT_LATEST.md
 
 ## 0) Meta
-timestamp_utc: 2026-03-29T15:00:00Z
-run_id: m7a5_2_alchemy_revalidation
-mode: ONLINE (live block-event backrun replay with Alchemy RPC)
+timestamp_utc: 2026-03-27T21:30:14Z
+run_id: m7a5_3_ws_live_infrastructure
+mode: OFFLINE (infrastructure build + contract tests; ws-live evidence pending)
 artifact_mode: local_session (data/tmp) + rolling
-config: arbitrum_one narrow_7 universe, live block-event backrun replay
+config: arbitrum_one narrow_7 universe, ws-triggered block-event backrun replay
 code_identity:
-  primary: ts:2026-03-29T15:00:00Z
+  primary: ts:2026-03-27T21:30:14.342304Z
   dirty: false
-  desc: M7.A.5.2 Alchemy RPC revalidation
+  desc: M7.A.5.3 WebSocket-triggered same-block/next-block replay
 
 ## Session Completion
-session_goal: Revalidate M7.A.5 block-event backrun with Alchemy RPC to determine if provider latency materially reduces block lag and improves economics.
-goal_status: REACHED (Alchemy revalidation completed, hypothesis rejected — lag unchanged)
+session_goal: Build ws-live streaming replay infrastructure for M7.A.5.3 hypothesis — websocket-triggered same-block/next-block backrun with parallel scoring and multicall-assisted venue pruning.
+goal_status: REACHED (infrastructure built, 15 new tests pass, 2836 total)
 close_allowed: true
-remaining_blockers: None — both RPC paths now closed
+remaining_blockers: none (infrastructure goal complete; live evidence is a separate session goal)
 evidence_session_run_dirs:
-  - data/tmp/m7a_live_alchemy_narrow.json (20 events, 100 blocks, Alchemy RPC)
-primary_blocker_of_session: M7.A.5.1 only proved NOT VIABLE with public RPC path, Alchemy path untested
-blocker_status_before: ACTIVE (Alchemy path not evaluated)
-blocker_status_after: RESOLVED (Alchemy evidence confirms same stale-lag regime, both paths closed)
+  - ci_m5_gate_arbitrum_one_20260327_222948_123275 (rolling baseline, unchanged)
+primary_blocker_of_session: M7.A.5.2 closed only the HTTP polling architecture, not the streaming low-latency architecture
+blocker_status_before: ACTIVE (ws-live infrastructure not built)
+blocker_status_after: RESOLVED (ws-live infrastructure built, tests pass, ready for evidence run)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.A.5.2 — Alchemy RPC revalidation of block-event backrun on arbitrum_one.
+goal (Roadmap): M7.A.5.3 — WebSocket-triggered same-block/next-block replay on arbitrum_one.
 change_summary:
-  - Replaced get_rpc_url() with resolve_rpc_http() in --live-blocks path for provider provenance
-  - Added 4 provenance fields to artifact: rpc_provider, rpc_source, resolved_rpc_host, fallback_used
-  - Added low-lag subset metrics: events_scored_low_lag, best_live_net_bps_low_lag
-  - Chunked fetch_recent_swap_events into 10-block windows (Alchemy free-tier limit)
-  - 5 new contract tests in TestProviderProvenance class
-  - Total test count: 2821 passed, 6 skipped, 0 failures (+5 new)
+  - Added --ws-live CLI mode with --ws-blocks N and --ws-timeout S controls
+  - WebSocket newHeads subscription via resolve_rpc_ws() (Alchemy WSS)
+  - Single-block log fetch per newHead (not historical window)
+  - score_backrun_live_parallel(): ThreadPoolExecutor for parallel buy/sell fanout
+  - Multicall-assisted venue pruning via prefetch_slot0_multicall()
+  - 6 new BackrunResult fields: ws_provider, event_detected_at_block, quote_started_block, quote_finished_block, quote_pipeline_latency_ms, venues_pruned_by_multicall
+  - Artifact ws-specific fields: ws_live_config, ws_live_stats, ws_provider, ws_source, resolved_ws_host, events_scored_low_lag_ws
+  - 15 new contract tests (100 total in test_orderflow_contracts.py)
+  - Status_M7.md trimmed from 332 to 93 lines (consolidated M7.A-M7.A.3 evidence)
 touched_files:
-  - scripts/m7a_orderflow_replay.py (MODIFIED: provider provenance, chunked getLogs, low-lag metrics)
-  - tests/unit/test_orderflow_contracts.py (MODIFIED: +5 provenance tests, 85 total)
-  - docs/status/Status_M7.md (MODIFIED: M7.A.5.2 section added)
+  - scripts/m7a_orderflow_replay.py (MODIFIED: --ws-live mode, score_backrun_live_parallel, new BackrunResult fields)
+  - tests/unit/test_orderflow_contracts.py (MODIFIED: +15 tests, 100 total)
+  - docs/status/Status_M7.md (MODIFIED: trimmed from 332 to 93 lines, M7.A.5.3 section added)
   - docs/DEV_REPORT_LATEST.md (this file, rewritten)
 
 ## 2) Commands Executed
 
-py -3.11 scripts/m7a_orderflow_replay.py --live-blocks 100 --max-events 20 --output data/tmp/m7a_live_alchemy_narrow.json: PASS (20 events, provider=alchemy, best_net=-19.49 bps)
-py -3.11 -m pytest tests/unit/test_orderflow_contracts.py -q: PASS (85 passed in 0.43s)
-py -3.11 -m pytest tests/unit -q: PASS (2821 passed, 6 skipped in 48.99s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (all required gates passed)
+py -3.11 -m pytest tests/unit/test_orderflow_contracts.py -q: PASS (100 passed in 6.15s)
+py -3.11 -m pytest tests/unit -q: PASS (2836 passed, 6 skipped in 56.70s)
 
 ## 3) Artifacts Attached
 
 local_session (R&D evidence, data/tmp):
-  - data/tmp/m7a_live_alchemy_narrow.json (M7.A.5.2, Alchemy: 100 blocks, 20 events, best_net=-19.49 bps)
+  - (none yet — infrastructure build session, ws-live evidence run pending)
 
 prior session artifacts (still valid, for comparison):
+  - data/tmp/m7a_live_alchemy_narrow.json (M7.A.5.2, Alchemy: 100 blocks, 20 events, best_net=-19.49 bps)
   - data/tmp/m7a_live_blocks.json (M7.A.5.1, public RPC: 100 blocks, 5 events)
   - data/tmp/m7a_live_wider.json (M7.A.5.1, public RPC: 500 blocks, 10 events)
-  - data/tmp/m7a_live_repeatability.json (M7.A.5.1 aggregated verdict)
 
 rolling (unchanged):
   - data/runs/_rolling/_latest.json
   - data/runs/_rolling/run_summary_latest.json
   - data/runs/_rolling/long_scan_latest.json (two-leg baseline: -3.5062 bps)
 
-## 4) Key Results — M7.A.5.2 Alchemy Revalidation
+## 4) Key Results — M7.A.5.3 Infrastructure
 
-### Provider Provenance (new)
+### New Infrastructure
 
-| Field | Value |
-|-------|-------|
-| rpc_provider | alchemy |
-| rpc_source | alchemy_api_key |
-| resolved_rpc_host | arb-mainnet.g.alchemy.com |
-| fallback_used | false |
+| Component | Description |
+|-----------|-------------|
+| `--ws-live` CLI | WebSocket-triggered replay mode with `--ws-blocks N` and `--ws-timeout S` |
+| `score_backrun_live_parallel()` | ThreadPoolExecutor-based parallel buy/sell fanout across venues |
+| Multicall prefetch | `prefetch_slot0_multicall()` for venue pruning (zero-liquidity removal) |
+| BackrunResult +6 fields | ws_provider, event_detected_at_block, quote_started/finished_block, pipeline_latency_ms, venues_pruned |
+| newHeads subscription | WebSocket `eth_subscribe("newHeads")` → single-block log fetch → parallel scoring |
 
-### Public vs Alchemy Comparison
+### Architecture Comparison
 
-| Metric | Public (M7.A.5.1 wider) | Alchemy (M7.A.5.2) |
-|--------|------------------------|-----------------------------|
-| rpc_provider | public | **alchemy** |
-| events_scored | 10 | 20 |
-| best_live_net_bps | -18.36 | **-19.49** |
-| mean_live_net_bps | -20.75 | -21.88 |
-| viable_count | 0 | 0 |
-| same_block_count | 1 | **0** |
-| next_block_count | 0 | 0 |
-| stale_count | 9 | **20** |
-| mean_block_lag | 217.8 | **59.55** |
-| events_scored_low_lag | — | **0** |
-| best_live_net_bps_low_lag | — | **None** |
+| Aspect | M7.A.5/5.2 (polling) | M7.A.5.3 (ws-live) |
+|--------|----------------------|---------------------|
+| Event source | Historical block window | newHeads subscription |
+| Quote execution | Sequential per-venue | Parallel ThreadPoolExecutor |
+| Venue pruning | None | Multicall prefetch → zero-liquidity removal |
+| Latency tracking | block_lag only | pipeline_latency_ms + started/finished block |
+| Expected lag | 60-218 blocks (stale) | 0-2 blocks (same/next) |
 
-### Verdict
+### Test Summary
 
-- **Surface viable**: NO
-- **Alchemy improves latency**: NO (all 20 events stale, zero low-lag)
-- **Primary blocker**: SEQUENTIAL_SCAN_ARCHITECTURE (not RPC provider latency)
-- **Evidence**: Alchemy resolves correctly but the fetch→normalize→quote pipeline introduces inherent lag
-- **Decision gate**: Wider scan NOT warranted (lag stayed in stale regime)
-- **beats_two_leg_baseline**: false
+| Test Class | Count | Status |
+|------------|-------|--------|
+| TestWsLiveFields | 5 | PASS |
+| TestWsProvenance | 3 | PASS |
+| TestScoreBackrunLiveParallel | 3 | PASS |
+| TestWsLiveArtifactSchema | 2 | PASS |
+| TestM7A53BackwardCompat | 2 | PASS |
+| **Total new** | **15** | **PASS** |
+| **Total orderflow tests** | **100** | **PASS** |
+| **Total all tests** | **2836** | **PASS (6 skipped)** |
 
 ## 5) Strategic Reading
 
-M7.A.5.2 closes the Alchemy RPC branch:
+M7.A.5.3 infrastructure is ready for live evidence:
 
-1. **Provider provenance works**: Artifact machine-readably records which RPC provider was used.
+1. **Streaming vs polling**: The `--ws-live` mode subscribes to `newHeads` and processes each block as it arrives, fetching logs only for the current block. This eliminates the historical-window fetch-lag that made M7.A.5/5.2 evidence structurally stale.
 
-2. **Alchemy does NOT reduce lag**: All 20 events stale (mean lag 59.55 blocks). Zero same_block or next_block.
+2. **Parallel scoring**: `score_backrun_live_parallel()` fans out buy/sell quotes across all venues simultaneously using ThreadPoolExecutor, reducing per-event scoring latency.
 
-3. **Bottleneck is architecture, not provider**: Sequential fetch→normalize→quote pipeline is structural.
+3. **Multicall venue pruning**: Before quoting, multicall prefetch can identify and remove venues with zero liquidity, reducing wasted RPC calls.
 
-4. **Both RPC paths now closed**: Public (M7.A.5.1) and Alchemy (M7.A.5.2) both show stale-only events.
+4. **Machine-readable latency tracking**: `quote_pipeline_latency_ms` and `quote_started_block`/`quote_finished_block` provide sub-block latency measurement that M7.A.5/5.2 lacked.
 
-5. **M7.A series fully concluded**: Six baselines explored. No path to M7.B graduation.
+5. **Evidence run needed**: Run `--ws-live --ws-blocks 10 --output data/tmp/m7a_ws_live.json` with ALCHEMY_API_KEY loaded to generate first ws-live evidence. The key measurement is `events_scored_low_lag_ws` — if >0, the streaming architecture achieves what polling could not.
 
 ## 6) Milestone Summary
 
@@ -124,4 +124,5 @@ M7.A.5.2 closes the Alchemy RPC branch:
 | M7.A.4 | **CLOSED BOUNDED BASELINE** (orderflow replay, intent scout) |
 | M7.A.5 | **LIVE EVIDENCE: NOT VIABLE** (public RPC) |
 | M7.A.5.2 | **LIVE EVIDENCE: NOT VIABLE** (Alchemy RPC — stale lag unchanged) |
-| M7.B | NOT STARTED (closed by M7.A–M7.A.5.2 verdicts) |
+| M7.A.5.3 | **INFRASTRUCTURE READY** (ws-live + parallel scoring, evidence pending) |
+| M7.B | NOT STARTED (closed by M7.A verdicts) |

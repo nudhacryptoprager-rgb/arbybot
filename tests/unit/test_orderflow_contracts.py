@@ -70,6 +70,7 @@ from scripts.m7a_orderflow_replay import (
     estimate_fee_cost_bps,
     estimate_gas_cost_bps,
     normalize_swap_log,
+    score_backrun_live_parallel,
     score_backrun_offline,
     _build_address_to_symbol,
 )
@@ -974,3 +975,294 @@ class TestScoreBackrunLiveRoundtrip:
         # Net bps should be reasonable (not billions)
         assert r.best_backrun_net_bps is not None
         assert abs(r.best_backrun_net_bps) < 10000  # sanity: within ±100%
+
+
+# ===========================================================================
+# M7.A.5.3: WebSocket provenance and parallel scoring tests
+# ===========================================================================
+
+
+class TestWsLiveFields:
+    """M7.A.5.3: BackrunResult must carry ws-live specific fields."""
+
+    WS_FIELDS = {
+        "ws_provider",
+        "event_detected_at_block",
+        "quote_started_block",
+        "quote_finished_block",
+        "quote_pipeline_latency_ms",
+        "venues_pruned_by_multicall",
+    }
+
+    def test_ws_fields_present_in_dataclass(self):
+        """BackrunResult has all M7.A.5.3 fields."""
+        r = BackrunResult(
+            event_id="t",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        for field_name in self.WS_FIELDS:
+            assert field_name in d, f"Missing ws field: {field_name}"
+
+    def test_ws_fields_default_none_for_offline(self):
+        """Offline results have ws fields as None/0."""
+        ev = _make_event()
+        r = score_backrun_offline(ev)
+        assert r.ws_provider is None
+        assert r.event_detected_at_block is None
+        assert r.quote_started_block is None
+        assert r.quote_finished_block is None
+        assert r.quote_pipeline_latency_ms is None
+        assert r.venues_pruned_by_multicall == 0
+
+    def test_ws_provider_values(self):
+        """ws_provider accepts valid string values."""
+        for prov in ("alchemy", "public", "unknown", None):
+            r = BackrunResult(
+                event_id="t",
+                event_source="live",
+                event_type=EVENT_TYPE_SWAP,
+                post_trade_state_used="live",
+                backrun_direction=BACKRUN_BUY_DEPRESSED,
+                ws_provider=prov,
+            )
+            assert r.ws_provider == prov
+
+    def test_pipeline_latency_numeric(self):
+        """quote_pipeline_latency_ms is a numeric type when set."""
+        r = BackrunResult(
+            event_id="t",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            quote_pipeline_latency_ms=42.5,
+        )
+        assert isinstance(r.quote_pipeline_latency_ms, float)
+        assert r.quote_pipeline_latency_ms > 0
+
+    def test_serialization_includes_ws_fields(self):
+        """JSON serialization includes all M7.A.5.3 fields."""
+        r = BackrunResult(
+            event_id="t",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            ws_provider="alchemy",
+            event_detected_at_block=500,
+            quote_started_block=500,
+            quote_finished_block=501,
+            quote_pipeline_latency_ms=123.4,
+            venues_pruned_by_multicall=2,
+        )
+        d = asdict(r)
+        json_str = json.dumps(d, default=str)
+        parsed = json.loads(json_str)
+        assert parsed["ws_provider"] == "alchemy"
+        assert parsed["event_detected_at_block"] == 500
+        assert parsed["quote_started_block"] == 500
+        assert parsed["quote_finished_block"] == 501
+        assert parsed["quote_pipeline_latency_ms"] == 123.4
+        assert parsed["venues_pruned_by_multicall"] == 2
+
+
+class TestWsProvenance:
+    """M7.A.5.3: resolve_rpc_ws returns provenance for WS connections."""
+
+    def test_resolve_rpc_ws_returns_triple(self):
+        """resolve_rpc_ws() returns (url, provider, diagnostics) tuple."""
+        from core.rpc_urls import resolve_rpc_ws
+
+        url, provider, diag = resolve_rpc_ws(
+            chain_id=42161,
+            network="arbitrum_one",
+            env={},  # No keys → no WS
+        )
+        assert isinstance(provider, str)
+        assert isinstance(diag, dict)
+        assert "source" in diag
+
+    def test_alchemy_ws_detected(self):
+        """When ALCHEMY_API_KEY is set, ws provider is alchemy."""
+        from core.rpc_urls import resolve_rpc_ws
+
+        url, provider, diag = resolve_rpc_ws(
+            chain_id=42161,
+            network="arbitrum_one",
+            env={"ALCHEMY_API_KEY": "test_key_fake"},
+        )
+        assert provider == "alchemy"
+        assert "alchemy" in (url or "")
+
+    def test_no_key_returns_none_url(self):
+        """Without API key, ws URL is None."""
+        from core.rpc_urls import resolve_rpc_ws
+
+        url, provider, diag = resolve_rpc_ws(
+            chain_id=42161,
+            network="arbitrum_one",
+            env={},
+        )
+        assert url is None
+        assert diag.get("source") == "none"
+
+
+class TestScoreBackrunLiveParallel:
+    """M7.A.5.3: Parallel scoring function contract tests."""
+
+    def test_parallel_scoring_with_mock_quoter(self):
+        """score_backrun_live_parallel produces valid BackrunResult."""
+        from unittest.mock import patch
+
+        ev = OrderflowEvent(
+            event_id="test_ws_001",
+            event_type="swap",
+            chain="arbitrum_one",
+            pool_address="0xabc",
+            token_in="WETH",
+            token_out="USDC",
+            amount_in_wei=10**18,
+            amount_out_wei=0,
+            dex="uniswap_v3",
+            fee_tier=500,
+            estimated_size_usd=2000.0,
+            estimated_impact_bps=10.0,
+            block_number=100,
+            tx_hash="0xdef",
+            timestamp="2026-01-01T00:00:00Z",
+        )
+
+        USDC_ADDR = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+        WETH_ADDR = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+
+        def mock_quoter(**kwargs):
+            return {"amount_out": 9_970_000_000_000_000}
+
+        token_addresses = {"WETH": WETH_ADDR, "USDC": USDC_ADDR}
+        dex_configs = {"uniswap_v3": {
+            "quoter_v2": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+            "fee_tiers": [500],
+        }}
+
+        with patch("strategy.quote_rpc.read_quoter_v2", side_effect=mock_quoter):
+            with patch("strategy.quote_rpc.QUOTER_RATE_LIMITED", new=object()):
+                r = score_backrun_live_parallel(
+                    event=ev, rpc_url="http://fake", dex_configs=dex_configs,
+                    token_addresses=token_addresses, current_block=100,
+                    ws_provider="alchemy", event_detected_at_block=100,
+                )
+
+        assert r.event_source == "live"
+        assert r.ws_provider == "alchemy"
+        assert r.event_detected_at_block == 100
+        assert r.quote_pipeline_latency_ms is not None
+        assert r.quote_pipeline_latency_ms >= 0
+        assert r.venues_pruned_by_multicall == 0
+
+    def test_parallel_scoring_populates_block_lag(self):
+        """Parallel scoring computes block_lag from event to quote."""
+        from unittest.mock import patch
+
+        ev = _make_event(block_number=100)
+
+        def mock_quoter(**kwargs):
+            return {"amount_out": 5_000_000}
+
+        token_addresses = {"WETH": "0xWETH", "USDC": "0xUSDC"}
+        dex_configs = {"test_dex": {
+            "quoter_v2": "0xQuoter",
+            "fee_tiers": [500],
+        }}
+
+        with patch("strategy.quote_rpc.read_quoter_v2", side_effect=mock_quoter):
+            with patch("strategy.quote_rpc.QUOTER_RATE_LIMITED", new=object()):
+                with patch("web3.Web3") as mock_w3_cls:
+                    mock_w3_cls.return_value.eth.block_number = 102
+                    mock_w3_cls.HTTPProvider = lambda url: None
+                    r = score_backrun_live_parallel(
+                        event=ev, rpc_url="http://fake", dex_configs=dex_configs,
+                        token_addresses=token_addresses, current_block=100,
+                        ws_provider="alchemy", event_detected_at_block=100,
+                    )
+
+        assert r.block_lag is not None
+        assert r.quote_started_block == 100
+
+    def test_parallel_scoring_no_venues_returns_reject(self):
+        """No quotable venues → REJECT_QUOTE_FAILURE."""
+        ev = _make_event()
+
+        r = score_backrun_live_parallel(
+            event=ev, rpc_url="http://fake", dex_configs={},
+            token_addresses={"WETH": "0xW", "USDC": "0xU"},
+            current_block=100,
+            ws_provider="alchemy",
+        )
+        assert r.reject_reason == REJECT_QUOTE_FAILURE
+        assert r.ws_provider == "alchemy"
+        assert r.quote_pipeline_latency_ms is not None
+
+
+class TestWsLiveArtifactSchema:
+    """M7.A.5.3: ws_live artifact must contain ws-specific fields."""
+
+    def test_ws_live_mode_in_replay_summary(self):
+        """build_replay_summary accepts ws_live mode."""
+        events = build_fixture_events()[:1]
+        results = [score_backrun_offline(events[0])]
+        artifact = build_replay_summary(events, results, mode="ws_live")
+        assert artifact["mode"] == "ws_live"
+
+    def test_ws_live_artifact_keys(self):
+        """ws_live artifact should contain standard replay fields."""
+        events = build_fixture_events()[:1]
+        results = [score_backrun_offline(events[0])]
+        artifact = build_replay_summary(events, results, mode="ws_live")
+        required_keys = {
+            "m7a4_hypothesis", "mode", "timestamp", "chain",
+            "events_count", "results_count", "viable_count",
+            "best_net_bps", "reject_histogram", "results",
+        }
+        assert required_keys.issubset(set(artifact.keys()))
+
+
+class TestM7A53BackwardCompat:
+    """M7.A.5.3 additions must not break existing M7.A.5 flows."""
+
+    def test_offline_results_have_none_ws_fields(self):
+        """Offline scoring: ws fields are None/0."""
+        ev = _make_event()
+        r = score_backrun_offline(ev)
+        d = asdict(r)
+        assert d["ws_provider"] is None
+        assert d["event_detected_at_block"] is None
+        assert d["quote_started_block"] is None
+        assert d["quote_finished_block"] is None
+        assert d["quote_pipeline_latency_ms"] is None
+        assert d["venues_pruned_by_multicall"] == 0
+
+    def test_json_roundtrip_with_ws_fields(self):
+        """Full result with ws fields round-trips through JSON."""
+        r = BackrunResult(
+            event_id="t",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            ws_provider="alchemy",
+            event_detected_at_block=500,
+            quote_started_block=500,
+            quote_finished_block=501,
+            quote_pipeline_latency_ms=42.5,
+            venues_pruned_by_multicall=3,
+        )
+        d = asdict(r)
+        json_str = json.dumps(d, default=str)
+        parsed = json.loads(json_str)
+        assert parsed["ws_provider"] == "alchemy"
+        assert parsed["venues_pruned_by_multicall"] == 3
+        assert parsed["quote_pipeline_latency_ms"] == 42.5
