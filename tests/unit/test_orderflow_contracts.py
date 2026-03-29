@@ -71,6 +71,8 @@ from scripts.m7a_orderflow_replay import (
     # M7.A.5.12 reject reasons
     REJECT_COVERAGE_LOCAL_MISMATCH,
     REJECT_ALL_POOLS_TRULY_INACTIVE,
+    # M7.A.5.13: Module-level unscored rejects set
+    UNSCORED_REJECTS,
     SIGNIFICANT_IMPACT_BPS,
     SURFACE_BLOCK_BACKRUN,
     SURFACE_COW_SOLVER,
@@ -4019,3 +4021,282 @@ class TestM7A512BackwardCompat:
             "quote_reachability_rate", "coverage_complete_no_quote_count",
         ]:
             assert key in art
+
+
+# ===========================================================================
+# M7.A.5.13 — Stale vs low-lag scored split
+# ===========================================================================
+
+
+class TestM7A513StaleLowLagSplitFields:
+    """M7.A.5.13 summary must include stale/low-lag scored split fields."""
+
+    def test_split_fields_present_in_empty_summary(self):
+        art = build_replay_summary([], [], mode="test")
+        for key in [
+            "events_detected_low_lag", "events_scored_low_lag",
+            "best_net_bps_stale", "best_net_bps_low_lag_scored",
+            "mean_net_bps_stale", "mean_net_bps_low_lag_scored",
+        ]:
+            assert key in art, f"Missing key: {key}"
+
+    def test_split_fields_none_when_no_results(self):
+        art = build_replay_summary([], [], mode="test")
+        assert art["events_detected_low_lag"] == 0
+        assert art["events_scored_low_lag"] == 0
+        assert art["best_net_bps_stale"] is None
+        assert art["best_net_bps_low_lag_scored"] is None
+        assert art["mean_net_bps_stale"] is None
+        assert art["mean_net_bps_low_lag_scored"] is None
+
+    def test_stale_result_goes_to_stale_metrics(self):
+        """A scored result with block_lag > 2 should appear in stale metrics only."""
+        e = _make_event()
+        r = BackrunResult(
+            event_id="stale_1", event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=-50.0,
+            block_lag=100,
+            same_state_class="stale",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            route_viable=False,
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        assert art["events_detected_low_lag"] == 0
+        assert art["events_scored_low_lag"] == 0
+        assert art["best_net_bps_stale"] == -50.0
+        assert art["best_net_bps_low_lag_scored"] is None
+
+    def test_low_lag_scored_result_goes_to_low_lag_metrics(self):
+        """A scored result with block_lag=0 should appear in low-lag metrics."""
+        e = _make_event()
+        r = BackrunResult(
+            event_id="ll_1", event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=-20.0,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            route_viable=False,
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        assert art["events_detected_low_lag"] == 1
+        assert art["events_scored_low_lag"] == 1
+        assert art["best_net_bps_low_lag_scored"] == -20.0
+        assert art["best_net_bps_stale"] is None
+
+    def test_unscored_low_lag_detected_not_scored(self):
+        """An unscored reject with block_lag=0: detected but not scored."""
+        e = _make_event()
+        r = BackrunResult(
+            event_id="unscore_ll", event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=0.0,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            route_viable=False,
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        assert art["events_detected_low_lag"] == 1
+        assert art["events_scored_low_lag"] == 0
+
+
+class TestM7A513ComparisonBlock:
+    """M7.A.5.13 must include machine-readable stale_low_lag_comparison."""
+
+    def test_comparison_block_present(self):
+        art = build_replay_summary([], [], mode="test")
+        assert "stale_low_lag_comparison" in art
+        comp = art["stale_low_lag_comparison"]
+        for key in [
+            "stale_scored_count", "stale_positive_count",
+            "low_lag_scored_count", "low_lag_positive_count",
+            "beats_m4_baseline_stale", "beats_m4_baseline_low_lag",
+        ]:
+            assert key in comp, f"Missing comparison key: {key}"
+
+    def test_comparison_empty_has_zeros_and_false(self):
+        art = build_replay_summary([], [], mode="test")
+        comp = art["stale_low_lag_comparison"]
+        assert comp["stale_scored_count"] == 0
+        assert comp["low_lag_scored_count"] == 0
+        assert comp["beats_m4_baseline_stale"] is False
+        assert comp["beats_m4_baseline_low_lag"] is False
+
+    def test_comparison_with_stale_positive(self):
+        """Stale positive → stale_positive_count=1, beats_m4_baseline_stale=True."""
+        e = _make_event()
+        r = BackrunResult(
+            event_id="sp_1", event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=100.0,
+            block_lag=500,
+            same_state_class="stale",
+            reject_reason=REJECT_STALE_POSITIVE,
+            route_viable=False,
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        comp = art["stale_low_lag_comparison"]
+        assert comp["stale_scored_count"] == 1
+        assert comp["stale_positive_count"] == 1
+        assert comp["beats_m4_baseline_stale"] is True
+        assert comp["low_lag_scored_count"] == 0
+        assert comp["beats_m4_baseline_low_lag"] is False
+
+    def test_comparison_with_low_lag_positive(self):
+        """Low-lag viable → low_lag_positive_count=1, beats_m4_baseline_low_lag=True."""
+        e = _make_event()
+        r = BackrunResult(
+            event_id="llv_1", event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=50.0,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=None,
+            route_viable=True,
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        comp = art["stale_low_lag_comparison"]
+        assert comp["low_lag_scored_count"] == 1
+        assert comp["low_lag_positive_count"] == 1
+        assert comp["beats_m4_baseline_low_lag"] is True
+
+
+class TestM7A513EventsScoredLowLagContract:
+    """M7.A.5.13: events_scored_low_lag_ws must count only scored results."""
+
+    def test_events_scored_low_lag_excludes_unscored(self):
+        """If low-lag event has an unscored reject, it's detected but not scored."""
+        e = _make_event()
+        r_unscored = BackrunResult(
+            event_id="unscore_ll", event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=0.0,
+            block_lag=1,
+            same_state_class="next_block",
+            reject_reason=REJECT_NO_COUNTER_POOL,
+            route_viable=False,
+        )
+        r_scored = BackrunResult(
+            event_id="scored_ll", event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=-10.0,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            route_viable=False,
+        )
+        art = build_replay_summary([e, e], [r_unscored, r_scored], mode="test")
+        assert art["events_detected_low_lag"] == 2
+        assert art["events_scored_low_lag"] == 1  # only the scored one
+
+    def test_best_net_bps_executable_only_viable(self):
+        """best_net_bps_executable only considers route_viable=True results."""
+        e = _make_event()
+        r_stale_pos = BackrunResult(
+            event_id="sp", event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=200.0,
+            block_lag=100,
+            same_state_class="stale",
+            reject_reason=REJECT_STALE_POSITIVE,
+            route_viable=False,
+        )
+        r_viable = BackrunResult(
+            event_id="v", event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=5.0,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=None,
+            route_viable=True,
+        )
+        art = build_replay_summary([e, e], [r_stale_pos, r_viable], mode="test")
+        # best_net_bps_executable = only from viable subset = 5.0
+        assert art["best_net_bps_executable"] == 5.0
+        # best_net_bps_any = includes stale positive = 200.0
+        assert art["best_net_bps_any"] == 200.0
+
+
+class TestM7A513UnscoredRejectsModuleLevel:
+    """M7.A.5.13: UNSCORED_REJECTS should be available at module level."""
+
+    def test_unscored_rejects_is_frozenset(self):
+        assert isinstance(UNSCORED_REJECTS, frozenset)
+
+    def test_unscored_rejects_has_expected_members(self):
+        expected = {
+            REJECT_TOKEN_PAIR_UNRESOLVED, REJECT_NO_COUNTER_POOL,
+            REJECT_TOKEN_NOT_ADMITTED, REJECT_UNSUPPORTED_ADAPTER,
+            REJECT_RPC_QUOTE_FAIL, REJECT_PAIR_RESOLVED_UNTRADEABLE,
+            REJECT_ZERO_LIQUIDITY,
+            REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_ALL_POOLS_ZERO_LIQUIDITY,
+            REJECT_COVERAGE_LOCAL_MISMATCH, REJECT_ALL_POOLS_TRULY_INACTIVE,
+        }
+        assert UNSCORED_REJECTS == expected
+
+    def test_scored_rejects_not_in_unscored(self):
+        """GAS_EXCEEDS_GROSS and STALE_POSITIVE are scored rejects."""
+        assert REJECT_GAS_EXCEEDS_GROSS not in UNSCORED_REJECTS
+        assert REJECT_STALE_POSITIVE not in UNSCORED_REJECTS
+
+
+class TestM7A513BackwardCompat:
+    """M7.A.5.13 must not break existing BackrunResult (still 53 fields)."""
+
+    def test_backrun_result_field_count_still_53(self):
+        r = BackrunResult(
+            event_id="compat_513",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert len(d) == 53
+
+    def test_all_reject_reasons_count_still_19(self):
+        """M7.A.5.13 adds no new reject reasons."""
+        assert len(ALL_REJECT_REASONS) == 19
+
+    def test_old_summary_fields_still_present(self):
+        art = build_replay_summary([], [], mode="test")
+        # Verify pre-5.13 fields still exist
+        for key in [
+            "events_count", "results_count", "viable_count",
+            "best_net_bps_any", "best_net_bps_executable",
+            "positive_net_count_any", "positive_net_count_low_lag",
+            "stale_positive_count", "scored_results_count",
+            "reject_histogram", "two_leg_baseline_net_bps",
+            "coverage_local_mismatch_count", "truly_inactive_count",
+        ]:
+            assert key in art, f"Missing backward-compat key: {key}"
+
+    def test_new_513_fields_additive(self):
+        art = build_replay_summary([], [], mode="test")
+        for key in [
+            "events_detected_low_lag", "events_scored_low_lag",
+            "best_net_bps_stale", "best_net_bps_low_lag_scored",
+            "mean_net_bps_stale", "mean_net_bps_low_lag_scored",
+            "stale_low_lag_comparison",
+        ]:
+            assert key in art, f"Missing 5.13 key: {key}"

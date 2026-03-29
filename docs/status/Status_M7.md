@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.12 — all scopes produce no-graduate verdicts. M7.A.5.12 fixed a critical byte-parsing bug in `batch_full_pool_data` (`d1[0:16]`→`d1[0:32]`), unified coverage scan and local-sim to use one canonical pool state extraction, and split `ALL_POOLS_ZERO_LIQUIDITY` into `COVERAGE_SAYS_ACTIVE_BUT_LOCAL_SIM_ZERO` / `ALL_CANDIDATE_POOLS_TRULY_INACTIVE`. The byte fix unblocked economics scoring: 300b evidence shows 26/28 scored, 25 GAS_EXCEEDS_GROSS, 1 STALE_POSITIVE (+1987 bps, lag=1136), 0 coverage/local-sim mismatch. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.13 — all scopes produce no-graduate verdicts. M7.A.5.13 added stale/low-lag scored split metrics, fixed block_lag=0 falsy trap and events_scored_low_lag_ws contract mismatch. Stale subset beats M4 baseline (best_net_bps_stale: -2.20 > -3.51) but NO low-lag scored events exist yet. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-03-29  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split. M7.B remains closed.
 
 ---
 
@@ -34,7 +34,7 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`
 - `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--ws-live`, `--intent-scout`
-- Tests: 152 in `test_triangular_contracts.py`, 323 in `test_orderflow_contracts.py`
+- Tests: 152 in `test_triangular_contracts.py`, 341 in `test_orderflow_contracts.py`
 
 ---
 
@@ -76,254 +76,72 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 
 ---
 
-## M7.A.5.6: Coverage Decomposition and Bounded Size Sweep
+## M7.A.5.6–5.7: Coverage Decomposition + Enrichment Infrastructure (CLOSED)
 
-**Hypothesis**: same-chain backrun on arbitrum_one may become measurable only after pair-resolved counter-venue coverage is expanded for actual live-event tokens; no expansion outside current DEX domain.
+**M7.A.5.6**: Decomposed coverage gap — 80% events rejected at `TOKEN_NOT_ADMITTED`, confirming narrow_7 universe doesn't cover most live-traded tokens. 5 new reject reasons (13 total), 5 new BackrunResult fields (42 total), `_run_size_sweep()` 5-point ladder. When tokens ARE admitted, full pipeline works. CI: 2923 passed, 187 orderflow tests.
 
-**Motivation**: M7.A.5.5 confirmed pair resolution works (100%) but events involve tokens outside the narrow_7 universe, causing QUOTE_FAILURE. The monolithic QUOTE_FAILURE reason hid whether the blocker was: (a) event tokens unknown, (b) no DEX pool for the pair, (c) no adapter/quoter, or (d) RPC call failure. Additionally, single-shot size (0.001 ETH minimum) doesn't explore the size dimension where M4's best was at $50.
-
-**New infrastructure**:
-- `admit_event_tokens()`: checks whether event tokens map to known symbols in canonical universe or addr_to_symbol lookup. Returns machine-readable truth block with `admitted`, `token_in_known`, `token_out_known`, `blocker_reason`.
-- `counter_venue_coverage_scan()`: multicall-based pool/venue scan that returns `known_pools`, `known_dexes`, `buy_venues`, `sell_venues`, `coverage_complete`, `coverage_blocker_reason`.
-- `_run_size_sweep()`: 5-point bounded size ladder (0.2x, 0.5x, 1x, 2x, 5x of base_size_wei), bounded [10^15, 10^18]. Returns per-point economics: `size_wei`, `gross_pnl_wei`, `gas_cost_wei`, `net_pnl_wei`, `net_bps`.
-- 5 new REJECT reasons: `NO_COUNTER_POOL`, `TOKEN_NOT_ADMITTED`, `UNSUPPORTED_ADAPTER`, `RPC_QUOTE_FAIL`, `PAIR_RESOLVED_BUT_UNTRADEABLE` (ALL_REJECT_REASONS now 13 members).
-- 5 new BackrunResult fields: `coverage_result`, `size_sweep_results`, `best_sweep_net_bps`, `best_sweep_size_wei`, `token_admitted` (42 total fields).
-- `score_backrun_live_parallel()` rewritten as 3-stage pipeline: Stage A (pair resolve + admission + coverage scan), Stage B (multicall pruning), Stage C (quotes + size sweep).
-- 4 new artifact blocks: `coverage_scan_metrics`, `size_sweep_metrics`, `m4_m7_comparison_v2`, `reject_histogram_v2`.
-- 36 new contract tests (187 total in `test_orderflow_contracts.py`).
-
-**Evidence — M7.A.5.6 (Alchemy WSS, 30 blocks, 10 events)**:
-
-| Metric | M7.A.5.5 (before) | M7.A.5.6 (after) |
-|--------|-------------------|------------------|
-| events_scored | 2 | 10 |
-| admission_rate | N/A | **10% (1/10)** |
-| TOKEN_NOT_ADMITTED | N/A | **8 (80%)** |
-| TOKEN_PAIR_UNRESOLVED | 0 | 1 |
-| GAS_EXCEEDS_GROSS | 0 | **1** |
-| QUOTE_FAILURE (monolithic) | 2 | 0 (split into granular) |
-| events_coverage_complete | N/A | **1** |
-| reject_histogram_v2 | N/A | {TOKEN_NOT_ADMITTED:8, TOKEN_PAIR_UNRESOLVED:1, GAS_EXCEEDS_GROSS:1} |
-
-**Key findings**:
-1. **Coverage gap is now decomposed** — 80% of events rejected at `TOKEN_NOT_ADMITTED` stage, confirming the narrow_7 universe doesn't cover most actively-traded tokens on arbitrum_one.
-2. **Pipeline works end-to-end when tokens are admitted** — 1 event passed admission, passed coverage scan, and progressed to economic evaluation (rejected at `GAS_EXCEEDS_GROSS`, not at coverage).
-3. **Monolithic QUOTE_FAILURE eliminated** — all rejects now have granular reasons. Zero events hit the old catch-all.
-4. **The blocker is universe coverage, not infrastructure** — when tokens are in the universe, the infrastructure (resolve → admit → coverage scan → quote → sweep) works correctly.
-5. **Size sweep infrastructure ready but untested at scale** — with 1 admitted event and GAS_EXCEEDS_GROSS reject, the sweep path wasn't triggered. Needs higher event volume or expanded universe.
-
-**Verdict**: The coverage decomposition hypothesis is **CONFIRMED**. The dominant blocker (80%) is `TOKEN_NOT_ADMITTED` — on-chain events overwhelmingly involve tokens outside our narrow_7 universe. When tokens ARE admitted, the full pipeline (admission → coverage scan → quoting → sweep) executes correctly. This is a **coverage gap**, not an infrastructure failure. The M7.A.5.1–5.4 latency conclusions remain valid; M7.A.5.5–5.6 now confirm the coverage gap is the second independent blocker.
-
-**CI gates**: 2923 passed, 6 skipped. 187 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+**M7.A.5.7**: Built enrichment infrastructure — on-chain ERC-20 enrichment (`symbol()`+`decimals()`), Chainlink oracle sanity rails, V3 pool-state extraction for local-sim. Admission source tracking (4 sources). 3 new BackrunResult fields (45 total). CI: 2950 passed, 214 orderflow tests.
 
 ---
 
-## M7.A.5.7: Bounded Coverage Enrichment + Oracle Sanity + Local-Sim Preparation
+## M7.A.5.8: Subgraph Seed + Gas Decomposition (CLOSED)
 
-**Hypothesis**: same-chain backrun on arbitrum_one may become measurable once pair-resolved live-event tokens are admitted through bounded discovery coverage (on-chain ERC-20 enrichment + oracle sanity rails), without leaving the current DEX domain.
-
-**Motivation**: M7.A.5.6 decomposed the coverage gap: 80% events rejected at TOKEN_NOT_ADMITTED. External research (Flashbots/hindsight, The Graph, Chainlink, Arbitrum Nitro) confirms: the next justified step is building bounded coverage enrichment, not expanding to new strategies. Three additions:
-1. On-chain ERC-20 enrichment of unknown tokens via multicall `symbol()` + `decimals()`
-2. Chainlink oracle sanity rails as guardrail (not execution truth)
-3. V3 pool-state extraction for future local-sim pricing path
-
-**New infrastructure**:
-- `enrich_unknown_token()` / `enrich_tokens_batch()`: read ERC-20 symbol/decimals on-chain via MulticallBatcher.batch_symbol() + batch_decimals(). Enrichment injected into addr_to_symbol before admission check.
-- `MulticallBatcher.batch_symbol()`: new method reading ABI-encoded symbol() responses.
-- `check_oracle_sanity()`: Chainlink AggregatorV3 latestRoundData() via multicall. Returns oracle_price_available, oracle_deviation_bps, oracle_guard_triggered, oracle_staleness_seconds. Covers 10 tokens: WETH, WBTC, USDT, USDC, ARB, LINK, DAI, UNI, GMX, PENDLE.
-- `extract_pool_state_for_sim()`: reads slot0 (sqrtPriceX96, tick) + liquidity from V3 pools via batch_full_pool_data(). State-preparation for future local pricing.
-- Admission source tracking: `admission_source` field with 4 values: `canonical_core`, `addr_to_symbol`, `subgraph_seeded_verified`, `rejected_unverified`. Constants: ADMISSION_CANONICAL, ADMISSION_ADDR_TO_SYMBOL, ADMISSION_SUBGRAPH_VERIFIED, ADMISSION_REJECTED, ALL_ADMISSION_SOURCES (frozenset).
-- 3 new BackrunResult fields: `admission_source`, `oracle_guard`, `local_sim_state` (45 total fields).
-- `score_backrun_live_parallel()` updated: enrichment → admission → oracle guard → coverage scan → local-sim state → quoting.
-- 3 new artifact blocks: `enrichment_metrics` (admission_source_histogram, events_enriched_onchain), `oracle_guard_metrics` (events_with_oracle_price, guard_triggered_count), `local_sim_readiness` (events_with_pool_state, total_pools_with_state).
-- 27 new contract tests (214 total in `test_orderflow_contracts.py`).
-
-**CI gates**: 2950 passed, 6 skipped. 214 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+Subgraph pathway BLOCKED (The Graph 403). Admission 10%→100% came from M7.A.5.7 on-chain enrichment. Gas decomposition: L1 data ~80% (120 bps), L2 exec ~20% (30 bps). GAS_EXCEEDS_GROSS now 100% dominant. 4 new BackrunResult fields (49 total). Evidence: 100b, 16 events, all GAS_EXCEEDS_GROSS. CI: 2961 passed, 225 orderflow tests.
 
 ---
 
-## M7.A.5.8: Bounded Coverage Enrichment via Subgraph Seed + Gas Decomposition
+## M7.A.5.9: Token-Decimal-Aware Size & Gas Fix (CORRECTIVE)
 
-**Hypothesis**: bounded coverage enrichment (The Graph subgraph seed) materially raises live admission and counter-venue coverage for pair-resolved Arbitrum event tokens within the same-chain DEX domain.
-
-**Motivation**: M7.A.5.6 showed 80% TOKEN_NOT_ADMITTED; M7.A.5.7 built on-chain ERC-20 enrichment infrastructure but didn't produce live evidence. This step tests whether adding The Graph subgraph-backed token seed expands the admission surface further, and adds Arbitrum L2/L1 gas decomposition metrics to understand gas cost structure.
-
-**New infrastructure**:
-- `seed_tokens_from_subgraph()`: queries The Graph for top tokens by txCount on uniswap_v3 and sushiswap_v3 subgraphs, verifies on-chain via `enrich_tokens_batch()`, mutates `addr_to_symbol`. Returns stats dict.
-- `estimate_gas_decomposition_bps()`: decomposes gas cost into L2 execution (~20%) and L1 data posting (~80%) using Arbitrum Nitro model.
-- `SUBGRAPH_ENDPOINTS_ARBITRUM`: 2 subgraph endpoints (uniswap_v3, sushiswap_v3).
-- 4 new BackrunResult fields: `l2_gas_bps`, `l1_data_bps`, `total_gas_bps`, `subgraph_seed_used` (49 total fields).
-- 3 new artifact blocks: `oracle_summary_extended`, `gas_decomposition_metrics`, `subgraph_seed_stats`.
-- `m7a58_hypothesis` artifact block.
-- 11 new contract tests (225 total in `test_orderflow_contracts.py`).
-
-**Evidence — M7.A.5.8 (Alchemy WSS)**:
-
-| Metric | M7.A.5.6 (before) | 30b run | 100b run |
-|--------|-------------------|---------|----------|
-| events_scored | 10 | 5 | 16 |
-| admission_rate | 0.1 (10%) | **0.8 (80%)** | **1.0 (100%)** |
-| TOKEN_NOT_ADMITTED | 8 (80%) | **0** | **0** |
-| coverage_complete | 1 | 3 | **16** |
-| GAS_EXCEEDS_GROSS | 1 | **3** | **16 (100%)** |
-| mean_total_gas_bps | N/A | 44.22 | **150.86** |
-| mean_l2_gas_bps | N/A | 8.84 | 30.17 |
-| mean_l1_data_bps | N/A | 35.38 | 120.69 |
-| oracle_price_available_rate | N/A | 0.8 | 1.0 |
-| oracle_guard_triggered_rate | N/A | 0.2 | **0.69** |
-| subgraph_seed_tokens_new | N/A | **0** | **0** |
-| subgraph_seed_errors | N/A | **403 Forbidden (×2)** | **403 Forbidden (×2)** |
-| best_net_bps | N/A | 0.0 | -0.03 |
-
-**Key findings**:
-1. **Subgraph seed pathway BLOCKED** — The Graph free gateway (gateway.thegraph.com) returns HTTP 403 Forbidden for both uniswap_v3 and sushiswap_v3 subgraphs. Zero tokens seeded via subgraph.
-2. **Admission improvement is from M7.A.5.7 enrichment, NOT subgraph seed** — admission jumped from 10% → 100% entirely through on-chain ERC-20 enrichment (`enrich_unknown_token`). The M7.A.5.7 infrastructure was already sufficient.
-3. **New dominant blocker: GAS_EXCEEDS_GROSS (100%)** — with coverage gap resolved, all events now fail at gas economics. Gas cost (mean 150.86 bps in 100b run) far exceeds any gross spread.
-4. **Gas decomposition confirms L1 data posting dominates** — L1 data ≈80% (120.69 bps), L2 execution ≈20% (30.17 bps). Consistent with Arbitrum Nitro model.
-5. **Oracle coverage high** — 100% of events have Chainlink oracle prices in 100b run. Guard triggered 69% (staleness > threshold), but oracle doesn't block events.
-6. **Coverage is now complete** — 16/16 events have counter-venue coverage in 100b run, up from 1/10 in M7.A.5.6.
-
-**Verdict**: The M7.A.5.8 subgraph seed hypothesis is **BLOCKED** (403 Forbidden). However, the session reveals that M7.A.5.7 on-chain enrichment already resolved the coverage gap (admission 10% → 100%). The blocker stack has shifted: **GAS_EXCEEDS_GROSS is now the sole dominant blocker** (100% of events). This confirms that Arbitrum same-chain backrun faces irreducible gas costs (~150 bps), primarily from L1 data posting. M7.A is now fully closed: latency (M7.A.5.1–5.4), coverage (M7.A.5.5–5.7), and gas economics (M7.A.5.8) are all independently confirmed as blockers.
-
-**CI gates**: 2961 passed, 6 skipped. 225 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+Fixed 2 measurement bugs: (1) size bounds not decimal-aware (USDC `10^15` raw = $1B), (2) gas subtracted in ETH wei from token-native gross. Added `_normalized_bounds()` + `_gas_cost_in_token_wei()`. 4 new BackrunResult fields (53 total). Evidence: 100b, bps range [-4475, 0] (was [-200B, 0]). GAS_EXCEEDS_GROSS confirmed with correct denomination. CI: 2988 passed, 252 orderflow tests.
 
 ---
 
-## M7.A.5.9: Token-Decimal-Aware Size & Gas Denomination Fix
+## M7.A.5.10: Stale-Gate + Zero-Liq + Provenance Fix (CORRECTIVE)
 
-**Hypothesis**: M7.A.5.8 evidence contained a **token-decimal-blind size bug** — `backrun_size_wei` was clamped to `10^15..10^18` for ALL tokens, but USDC/USDT are 6-decimal (so `10^15` raw = $1 billion USDC, absurd). A second deeper bug was exposed: gas cost (always in ETH wei) was subtracted from gross (in token-native units) and used as bps denominator, producing -200 billion bps for 6-decimal tokens.
-
-**Fix — Size normalization** (`_normalized_bounds()`):
-- Scales size bounds by `10^(18 - token_decimals)` ratio
-- USDC/USDT (6-dec): bounds become `10^3..10^6` (0.001..1.0 USDC)
-- WBTC (8-dec): bounds become `10^5..10^8` (0.001..1.0 WBTC)
-- WETH (18-dec): unchanged `10^15..10^18`
-
-**Fix — Gas denomination conversion** (`_gas_cost_in_token_wei()`):
-- Converts ETH gas to the backrun token's native units using oracle prices
-- Formula: `gas_token = gas_eth_wei * eth_usd / tok_usd * 10^dec / 10^18`
-- Uses Chainlink oracle for both ETH and token_in USD prices
-- Falls back to `$3500 ETH / $1 stablecoin` heuristic when no oracle
-
-**New BackrunResult fields** (53 total, 4 added):
-- `token_in_decimals`, `size_normalization_source`, `size_usd_estimate`, `size_valid_for_token`
-
-**New helpers**: `_normalized_bounds()`, `_gas_cost_in_token_wei()`, `_FALLBACK_ETH_PRICE_USD`
-
-**Evidence — M7.A.5.9 corrective (Alchemy WSS)**:
-
-30-block run (`data/tmp/m7a_ws_live_gasfix_30b.json`):
-- 2 events, 2 results, 0 viable
-- USDC event: `net_bps=-400.47`, `gas_cost_wei=39842 USDC-raw`, `tgas_bps=398.42` (**was -200,000,000,008 bps**)
-- Gas decomp: mean_total=398 bps (L2=80 bps, L1=319 bps)
-
-100-block run (`data/tmp/m7a_ws_live_gasfix_100b.json`):
-- 10 events, 10 results, 0 viable, best_net_bps=0.0, worst_net_bps=-4475, mean_net_bps=-963
-- USDC (6-dec): `net_bps=-400`, `gas=39842`, `tgas_bps=398` — correct
-- WETH (18-dec): `net_bps=-0.19`, `gas=20T`, `tgas_bps=0.2` — identity, correct
-- PENDLE (18-dec, ~$0.16): `gas=4.49*10^17 PENDLE-raw`, `tgas_bps=4488` — correct ($0.07 gas / $0.16 token = 44.9%)
-- All bps values: [-4475, 0] — human-readable range (**was [-200 billion, 0]**)
-
-**Key evidence finding**: GAS_EXCEEDS_GROSS remains 100% dominant, but now with **trustworthy denomination-correct economics**. For stablecoins, gas overhead is ~400 bps (4%) per $1 backrun on Arbitrum at 0.1 gwei. For WETH, it's 0.2 bps. Larger backruns or cheaper gas could shift the economics, but the fundamental GAS_EXCEEDS_GROSS verdict is confirmed with correct accounting.
-
-**Verdict**: M7.A.5.9 corrects two critical measurement bugs from M7.A.5.8 that inflated gas economics by 10^8x for non-18-decimal tokens. The verdict is **unchanged** (GAS_EXCEEDS_GROSS dominates), but the evidence is now **denomination-correct and trustworthy** across the full token surface. M7.A remains closed.
-
-**CI gates**: 2988 passed, 6 skipped. 252 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+Fixed 3 issues: (1) stale-positive false viability → `REJECT_STALE_POSITIVE` (viable requires block_lag≤2), (2) zero-liq pools producing results → `REJECT_ZERO_LIQUIDITY`, (3) admission provenance misattribution. Added split summary fields (best_net_bps_any/executable). Evidence: 300b, 25 events, 0 scored, ZERO_LIQUIDITY=21 (84%) now dominant. CI: 3011 passed, 275 orderflow tests.
 
 ---
 
-## M7.A.5.10: Stale-Gate Viability + Zero-Liquidity Reject + Admission Provenance Fix
+## M7.A.5.11: Active-Liquidity-Aware Coverage + Granular Rejects (CLOSED)
 
-**Hypothesis**: M7.A.5.9's 300b corrective evidence exposed 3 contract issues: (1) stale-positive false viability (block_lag=23, net_bps=2630 reported as viable), (2) admission provenance misattribution (`subgraph_seeded_verified` when `subgraph_seed_used=false`), (3) zero-liquidity contradiction (pools with liquidity=0 still producing viable results). These must be fixed before evidence is treated as decisive.
+Coverage scan now distinguishes active (liquidity>0) from inactive pools. Added `REJECT_NO_ACTIVE_COUNTER_POOL` + `REJECT_ALL_POOLS_ZERO_LIQUIDITY` (17 rejects total). Pre-econ metrics: `active_coverage_rate`, `inactive_coverage_false_positive_rate`. live_state_metrics fix: early-reject results now get `same_state_class`.
 
-**Changes implemented**:
-1. **Stale-gate**: `route_viable = (net_bps > 0 and block_lag <= 2)` in both scorers. New `REJECT_STALE_POSITIVE` reject reason.
-2. **Zero-liquidity gate**: New `REJECT_ZERO_LIQUIDITY` reject — if all candidate pools have `liquidity=0` in `local_sim_state`, reject early before economic scoring.
-3. **Admission provenance**: New `ADMISSION_ONCHAIN_ENRICHED = "onchain_enriched_verified"` source. `subgraph_seeded_verified` only when `subgraph_seed_used=true`.
-4. **Split summary fields**: `best_net_bps_any`, `best_net_bps_executable`, `positive_net_count_any`, `positive_net_count_low_lag`, `stale_positive_count`, `scored_results_count`, `size_valid_count`, `size_fallback_count`.
-5. **Summary scoring filter**: `best_net_bps` computed from scored results only (excludes 0.0 from TOKEN_PAIR_UNRESOLVED/NO_COUNTER_POOL/ZERO_LIQUIDITY).
-
-**Evidence — M7.A.5.10 corrective (Alchemy WSS)**:
-300-block run (`data/tmp/m7a_510_300b.json`):
-- 25 events, 25 results, 0 viable, 0 positive_net, best_net_bps=null (no scored results)
-- Reject histogram: `ZERO_LIQUIDITY: 21, TOKEN_PAIR_UNRESOLVED: 2, NO_COUNTER_POOL: 2`
-- previous false viable (block_lag=23, liquidity=0, net_bps=2630) — now correctly rejected by ZERO_LIQUIDITY gate
-- Admission: `onchain_enriched_verified: 5, addr_to_symbol: 11, canonical_core: 7` — no more misattributed `subgraph_seeded_verified`
-- All split summary fields present and internally consistent
-
-**Key evidence finding**: **ZERO_LIQUIDITY is the new dominant reject** (21/25 events = 84%). Events pass pair resolution and coverage scan, but the candidate V3 pools report `liquidity=0` on-chain. This indicates the pools are initialized but have no active LP positions. The stale-gate and provenance fixes are clean — zero false viables.
-
-**Verdict**: M7.A.5.10 closes all 3 contract issues from M7.A.5.9 evidence. The pipeline now has correct viability gating, honest admission provenance, and zero-liquidity early rejection. The dominant blocker shifts from GAS_EXCEEDS_GROSS (which required economic scoring) to ZERO_LIQUIDITY (rejected pre-scoring). M7.A remains closed.
-
-**CI gates**: 3011 passed, 6 skipped. 275 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+Evidence: 300b, 25 events, 0 scored. `ALL_POOLS_ZERO_LIQUIDITY: 19, NO_ACTIVE_COUNTER_POOL: 2`. `active_coverage_rate: 0.76` but all rejected at local-sim zero-liq gate. Blocker confirmed as market structure (inactive pools). CI: 3036 passed, 300 orderflow tests.
 
 ---
 
-## M7.A.5.11: Active-Liquidity-Aware Coverage + Granular Coverage Rejects + Pre-Econ Metrics
+## M7.A.5.12: Byte-Parsing Fix + Unified Coverage/Local-Sim Truth (BREAKTHROUGH)
 
-**Hypothesis**: Same-chain backrun surface is still overstated because coverage counts initialized but inactive V3 pools; active-liquidity-aware coverage may materially reduce false-positive surface before economics scoring.
+**Root cause**: `batch_full_pool_data()` in `core/multicall.py` had byte-parsing bug: `d1[0:16]` read zero-padded MSB half of ABI uint128, always returning 0. Fix: `d1[0:32]`. This was the sole cause of `scored_results=0` in M7.A.5.8-5.11.
 
-**Changes implemented**:
-1. **Active-liquidity coverage**: `counter_venue_coverage_scan()` now distinguishes pools with `liquidity > 0` (active) from pools with `liquidity == 0` (inactive). `coverage_complete` requires active buy + sell venue. New fields: `known_pools_total`, `active_pools_total`, `inactive_pool_count`, `active_dexes`, `active_buy_venues`, `active_sell_venues`.
-2. **Granular reject split**: Old `REJECT_ZERO_LIQUIDITY` kept for backward compat. New: `REJECT_NO_ACTIVE_COUNTER_POOL` (pools found but all inactive at coverage level), `REJECT_ALL_POOLS_ZERO_LIQUIDITY` (pools had state in local-sim but all liquidity=0). `ALL_REJECT_REASONS` now has 17 entries.
-3. **Pre-economics metrics**: `build_replay_summary()` adds `pre_econ_reject_rate`, `active_coverage_rate`, `inactive_coverage_false_positive_rate`, `scored_results_rate`.
-4. **live_state_metrics fix**: Early reject results now have `same_state_class` assigned based on `block_lag` (was `None` before, causing `same_block_count=0` even when all events were same-block).
+**Changes**: Unified pool state source (coverage + local-sim use one `batch_full_pool_data` call). 2 new rejects: `COVERAGE_SAYS_ACTIVE_BUT_LOCAL_SIM_ZERO`, `ALL_CANDIDATE_POOLS_TRULY_INACTIVE` (19 total). Per-pool debug block. Consistency metrics.
 
-**Evidence — M7.A.5.11 (Alchemy WSS)**:
-300-block run (`data/tmp/m7a_511_300b.json`):
-- 25 events, 25 results, 0 viable, 0 scored
-- Reject histogram: `ALL_POOLS_ZERO_LIQUIDITY: 19, NO_ACTIVE_COUNTER_POOL: 2, NO_COUNTER_POOL: 3, TOKEN_PAIR_UNRESOLVED: 1`
-- Pre-econ metrics: `pre_econ_reject_rate: 1.0, active_coverage_rate: 0.76, inactive_coverage_false_positive_rate: 0.08, scored_results_rate: 0.0`
-- live_state_metrics: `same_block_count: 25` (was 0 pre-5.11), `mean_block_lag: 0.0`
-
-**Key findings**:
-- The old `ZERO_LIQUIDITY: 21` split cleanly into `ALL_POOLS_ZERO_LIQUIDITY: 19` (local-sim showed all pools have liq=0) and `NO_ACTIVE_COUNTER_POOL: 2` (coverage scan now catches inactive pools at coverage level before local-sim)
-- `inactive_coverage_false_positive_rate: 0.08` — 8% of events had pools deployed but all inactive, correctly rejected at coverage level now
-- `active_coverage_rate: 0.76` — 76% of events have at least one active-liquidity venue, but all are rejected at the local-sim zero-liq gate
-- The blocker is confirmed as **market structure** (inactive pools), not economics. No events reach economic scoring.
-
-**Verdict**: M7.A.5.11 sharpens the diagnostic — the Arbitrum narrow_7 DEX surface has initialized pools that are overwhelmingly inactive (liquidity=0). The pipeline now has honest active-liquidity-aware coverage reporting. M7.A remains closed.
-
-**CI gates**: 3036 passed, 6 skipped. 300 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+**Evidence**: 300b, 28 events, **26 scored** (was 0). `GAS_EXCEEDS_GROSS: 25`, `STALE_POSITIVE: 1` (+1987 bps, lag=1136), `coverage_local_mismatch_count: 0`, `quote_reachability_rate: 1.0`. However: **all 26 scored are stale** (block_lag >> 2). No low-lag scored evidence yet. CI: 3059 passed, 323 orderflow tests.
 
 ---
 
-## M7.A.5.12: Coverage/Local-Sim Consistency + Byte-Parsing Fix + Split Blocker
+## M7.A.5.13: Stale vs Low-Lag Scored Split + Contract Fixes
 
-**Hypothesis**: Active coverage is overstated because coverage scan and local-sim pool-state use inconsistent activity truth; unifying pool activity evaluation will resolve the M7.A.5.11 contradiction where `ALL_POOLS_ZERO_LIQUIDITY` events had `active_pools_total > 0` and `coverage_complete=true`.
+**Hypothesis**: M7.A.5.12's 26/28 scored results are ALL stale — the project lacks truthful low-lag scored evidence. `events_scored_low_lag_ws` had a contract mismatch (counted all low-lag events, not just scored). Need explicit stale/low-lag split metrics.
 
-**Root cause found**: `batch_full_pool_data()` in `core/multicall.py` had a byte-parsing bug: `d1[0:16]` read the zero-padded MSB half of ABI-encoded uint128, always returning 0. The correct read is `d1[0:32]`. `batch_liquidity()` (used by coverage scan) was correct but returned `None` on multicall failure, which coverage treated as "potentially active". Meanwhile local-sim used the buggy `batch_full_pool_data`, showing `liquidity=0` for all pools. The two truth surfaces were both wrong.
+**Bugs fixed**:
+1. **block_lag=0 falsy trap**: `(r.block_lag or 999)` treats 0 as unknown (Python `0 or 999 == 999`). Fixed with `_lag(r)` helper using `is not None`.
+2. **events_scored_low_lag_ws contract**: counted all low-lag events including unscored (TOKEN_PAIR_UNRESOLVED etc). Now filters through `UNSCORED_REJECTS` before counting.
+3. **UNSCORED_REJECTS**: promoted to module-level frozenset (11 members) for reuse across ws-live and live-blocks paths.
 
-**Changes implemented**:
-1. **Byte-parsing fix**: `core/multicall.py` `batch_full_pool_data()`: `d1[0:16]`→`d1[0:32]`, `len(d1) >= 16`→`len(d1) >= 32`. This is the root cause of M7.A.5.8-5.11's `scored_results=0`.
-2. **Unified pool state source**: `_resolve_pool_addresses_multicall()` now uses `batch_full_pool_data` instead of `batch_liquidity`. Coverage scan and local-sim use the same canonical extraction. Eliminates second RPC call.
-3. **New reject split**: `REJECT_COVERAGE_LOCAL_MISMATCH = "COVERAGE_SAYS_ACTIVE_BUT_LOCAL_SIM_ZERO"` (coverage said active but canonical state shows liq=0) and `REJECT_ALL_POOLS_TRULY_INACTIVE = "ALL_CANDIDATE_POOLS_TRULY_INACTIVE"` (both agree: all liq=0). `ALL_REJECT_REASONS` now has 19 entries.
-4. **Hard invariant**: If reject is `ALL_CANDIDATE_POOLS_TRULY_INACTIVE`, `coverage_result.active_pools_total == 0` and `coverage_complete == False`. If coverage/local-sim mismatch, coverage is patched in-place to reflect canonical zero state.
-5. **Per-pool debug block**: `coverage_result.candidate_pools[]` with `address`, `dex`, `fee`, `liquidity`, `activity_source`, `activity_drop_reason`.
-6. **Consistency metrics**: `coverage_local_mismatch_count`, `truly_inactive_count`, `quote_reachability_rate`, `coverage_complete_no_quote_count` in `build_replay_summary()`.
+**New metrics** in `build_replay_summary()`:
+- `events_detected_low_lag` / `events_scored_low_lag`: detection vs scoring split
+- `best_net_bps_stale` / `best_net_bps_low_lag_scored` / `mean_net_bps_stale` / `mean_net_bps_low_lag_scored`: per-class economics
+- `stale_low_lag_comparison`: machine-readable block with `stale_scored_count`, `low_lag_scored_count`, `beats_m4_baseline_stale/low_lag` (baseline: -3.5062 bps)
 
-**Evidence — M7.A.5.12 (Alchemy WSS)**:
-300-block run (`data/tmp/m7a_512_300b.json`):
-- 28 events, 28 results, 0 viable, **26 scored** (was 0 in M7.A.5.11)
-- Reject histogram: `GAS_EXCEEDS_GROSS: 25, ALL_CANDIDATE_POOLS_TRULY_INACTIVE: 1, TOKEN_PAIR_UNRESOLVED: 1, STALE_POSITIVE: 1`
-- Economics: `best_net_bps: 1987.666` (stale positive, lag=1136), `mean_net_bps: -16775.60`, `worst: -398936.21`
-- Consistency: `coverage_local_mismatch_count: 0, truly_inactive_count: 1, quote_reachability_rate: 1.0`
-- Coverage: `active_coverage_rate: 0.9286, pre_econ_reject_rate: 0.0714, scored_results_rate: 0.9286`
-- Pools confirmed to have real liquidity: e.g. `0xd130...8245` with `liquidity: 156484833388698295570863`
+**Evidence**:
+- 300b: 23 events, 16 scored. `events_detected_low_lag: 7, events_scored_low_lag: 0` (all 7 low-lag had unscored rejects). `stale_scored_count: 16`, `best_net_bps_stale: -2.2002` (RAIN/WETH), `beats_m4_baseline_stale: true`, `beats_m4_baseline_low_lag: false`.
+- 1000b: 12 events, 12 scored. `stale_scored_count: 12`, `best_net_bps_stale: -2.2002`, `beats_m4_baseline_stale: true`.
+- `events_scored_low_lag_ws: 0` in both runs (contract fix verified — was counting 7 before fix).
 
-30-block run (`data/tmp/m7a_512_30b.json`): 2 events, 2 scored, `GAS_EXCEEDS_GROSS: 2`.
+**Key finding**: Stale subset beats M4 baseline (-2.20 > -3.51 bps) but NO low-lag scored events exist yet. Low-lag events are detected but all fail at pre-econ rejects (TOKEN_PAIR_UNRESOLVED, NO_COUNTER_POOL). Low-lag scored truth remains the gap.
 
-**Key findings**:
-- **The byte-parsing bug was the sole root cause of `scored_results=0` in M7.A.5.8-5.11**. Pools on Arbitrum narrow_7 DO have real liquidity. The `ZERO_LIQUIDITY=21/25` in M7.A.5.11 was entirely a measurement artifact.
-- After fix: 26/28 events reach full quote stage. Gas remains the dominant blocker (`GAS_EXCEEDS_GROSS: 25`).
-- One stale positive at +1987 bps (RDNT/WETH, block_lag=1136) — not executable, but proves gross_pnl > 0 exists in live data.
-- `coverage_local_mismatch_count: 0` — with unified truth source, coverage and local-sim fully agree.
-- `quote_reachability_rate: 1.0` — every event with `coverage_complete=True` reaches quote stage.
-- The blocker has shifted from **market structure** (M7.A.5.11) to **gas economics** (M7.A.5.12). This reopens the question of whether smaller gas costs (via flashblocks/bundles/L2 optimization) could yield positive net.
-
-**Verdict**: M7.A.5.12 resolved a 4-session-long measurement artifact. Economics scoring is now live and correct. The current blocker is `GAS_EXCEEDS_GROSS`, not pool inactivity. M7.A remains no-graduate but with materially improved diagnostics — the pipeline now measures real economics for the first time.
-
-**CI gates**: 3059 passed, 6 skipped. 323 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+CI: 3077 passed, 341 orderflow tests.
 
 ---
 

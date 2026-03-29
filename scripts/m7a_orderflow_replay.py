@@ -107,6 +107,16 @@ ALL_REJECT_REASONS = frozenset({
     REJECT_ALL_POOLS_TRULY_INACTIVE,
 })
 
+# M7.A.5.13: Module-level unscored rejects set (used in build_replay_summary + ws-live)
+UNSCORED_REJECTS = frozenset({
+    REJECT_TOKEN_PAIR_UNRESOLVED, REJECT_NO_COUNTER_POOL,
+    REJECT_TOKEN_NOT_ADMITTED, REJECT_UNSUPPORTED_ADAPTER,
+    REJECT_RPC_QUOTE_FAIL, REJECT_PAIR_RESOLVED_UNTRADEABLE,
+    REJECT_ZERO_LIQUIDITY,
+    REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_ALL_POOLS_ZERO_LIQUIDITY,
+    REJECT_COVERAGE_LOCAL_MISMATCH, REJECT_ALL_POOLS_TRULY_INACTIVE,
+})
+
 # ---------------------------------------------------------------------------
 # M7.A.5.7: Admission source tracking
 # ---------------------------------------------------------------------------
@@ -2687,14 +2697,7 @@ def build_replay_summary(
     positive_net_count = sum(1 for r in results if r.best_backrun_net_bps > 0)
 
     # M7.A.5.10/5.11/5.12: Unscored reject reasons — results that never got economic scoring
-    _UNSCORED_REJECTS = frozenset({
-        REJECT_TOKEN_PAIR_UNRESOLVED, REJECT_NO_COUNTER_POOL,
-        REJECT_TOKEN_NOT_ADMITTED, REJECT_UNSUPPORTED_ADAPTER,
-        REJECT_RPC_QUOTE_FAIL, REJECT_PAIR_RESOLVED_UNTRADEABLE,
-        REJECT_ZERO_LIQUIDITY,
-        REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_ALL_POOLS_ZERO_LIQUIDITY,
-        REJECT_COVERAGE_LOCAL_MISMATCH, REJECT_ALL_POOLS_TRULY_INACTIVE,
-    })
+    _UNSCORED_REJECTS = UNSCORED_REJECTS  # alias for local readability
 
     # Scored results = those that went through economic scoring (even if rejected)
     scored_results = [r for r in results if r.reject_reason not in _UNSCORED_REJECTS]
@@ -2704,17 +2707,53 @@ def build_replay_summary(
 
     # M7.A.5.10: Split summary fields
     # "any" = includes stale-positive results; "executable" = only viable (fresh + positive)
+    # M7.A.5.13: Fix block_lag=0 falsy trap — use explicit None check
+    def _lag(r): return r.block_lag if r.block_lag is not None else 999
     positive_net_count_any = sum(1 for r in results if r.best_backrun_net_bps > 0)
     positive_net_count_low_lag = sum(
         1 for r in results
-        if r.best_backrun_net_bps > 0 and (r.block_lag or 999) <= 2
+        if r.best_backrun_net_bps > 0 and _lag(r) <= 2
     )
     stale_positive_count = sum(
         1 for r in results
-        if r.best_backrun_net_bps > 0 and (r.block_lag or 999) > 2
+        if r.best_backrun_net_bps > 0 and _lag(r) > 2
     )
     best_net_bps_any = round(max(scored_net_bps), 4) if scored_net_bps else None
     best_net_bps_executable = round(max(viable_net_bps), 4) if viable_net_bps else None
+
+    # M7.A.5.13: Stale vs low-lag scored split
+    # "detected" = all events with block metadata; "scored" = only economically evaluated
+    _scored_set = frozenset(id(r) for r in scored_results)
+    _low_lag_all = [r for r in results if _lag(r) <= 2]
+    _low_lag_scored = [r for r in _low_lag_all if id(r) in _scored_set]
+    _stale_all = [r for r in results if _lag(r) > 2]
+    _stale_scored = [r for r in _stale_all if id(r) in _scored_set]
+    _low_lag_scored_net = [r.best_backrun_net_bps for r in _low_lag_scored]
+    _stale_scored_net = [r.best_backrun_net_bps for r in _stale_scored]
+    events_detected_low_lag = len(_low_lag_all)
+    events_scored_low_lag = len(_low_lag_scored)
+    best_net_bps_stale = round(max(_stale_scored_net), 4) if _stale_scored_net else None
+    best_net_bps_low_lag_scored = round(max(_low_lag_scored_net), 4) if _low_lag_scored_net else None
+    mean_net_bps_stale = (
+        round(sum(_stale_scored_net) / len(_stale_scored_net), 4)
+        if _stale_scored_net else None
+    )
+    mean_net_bps_low_lag_scored = (
+        round(sum(_low_lag_scored_net) / len(_low_lag_scored_net), 4)
+        if _low_lag_scored_net else None
+    )
+    # M7.A.5.13: Machine-readable stale/low-lag comparison block
+    _TWO_LEG_BASELINE = -3.5062
+    stale_scored_count = len(_stale_scored)
+    low_lag_scored_count = len(_low_lag_scored)
+    low_lag_positive_count = sum(1 for v in _low_lag_scored_net if v > 0)
+    stale_positive_count_scored = sum(1 for v in _stale_scored_net if v > 0)
+    beats_m4_baseline_stale = (
+        max(_stale_scored_net) > _TWO_LEG_BASELINE if _stale_scored_net else False
+    )
+    beats_m4_baseline_low_lag = (
+        max(_low_lag_scored_net) > _TWO_LEG_BASELINE if _low_lag_scored_net else False
+    )
 
     # M7.A.5.10: Size-validity subset
     size_valid_count = sum(1 for r in results if r.size_valid_for_token)
@@ -2810,6 +2849,22 @@ def build_replay_summary(
         "truly_inactive_count": truly_inactive_count,
         "quote_reachability_rate": quote_reachability_rate,
         "coverage_complete_no_quote_count": coverage_complete_no_quote_count,
+        # M7.A.5.13: Stale vs low-lag scored split
+        "events_detected_low_lag": events_detected_low_lag,
+        "events_scored_low_lag": events_scored_low_lag,
+        "best_net_bps_stale": best_net_bps_stale,
+        "best_net_bps_low_lag_scored": best_net_bps_low_lag_scored,
+        "mean_net_bps_stale": mean_net_bps_stale,
+        "mean_net_bps_low_lag_scored": mean_net_bps_low_lag_scored,
+        # M7.A.5.13: Machine-readable stale/low-lag comparison
+        "stale_low_lag_comparison": {
+            "stale_scored_count": stale_scored_count,
+            "stale_positive_count": stale_positive_count_scored,
+            "low_lag_scored_count": low_lag_scored_count,
+            "low_lag_positive_count": low_lag_positive_count,
+            "beats_m4_baseline_stale": beats_m4_baseline_stale,
+            "beats_m4_baseline_low_lag": beats_m4_baseline_low_lag,
+        },
         "reject_histogram": reject_counts,
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
@@ -3072,9 +3127,19 @@ def main():
                 r.best_live_net_bps for r in low_lag
                 if r.best_live_net_bps is not None
             ]
-            artifact["live_state_metrics"]["events_scored_low_lag"] = len(low_lag)
+            # M7.A.5.13: Fix live-blocks low-lag to match scored-only contract
+            _ll_scored_lb = [
+                r for r in low_lag
+                if r.reject_reason not in UNSCORED_REJECTS
+            ]
+            _ll_scored_lb_net = [
+                r.best_live_net_bps for r in _ll_scored_lb
+                if r.best_live_net_bps is not None
+            ]
+            artifact["live_state_metrics"]["events_detected_low_lag"] = len(low_lag)
+            artifact["live_state_metrics"]["events_scored_low_lag"] = len(_ll_scored_lb)
             artifact["live_state_metrics"]["best_live_net_bps_low_lag"] = (
-                round(max(low_lag_net), 4) if low_lag_net else None
+                round(max(_ll_scored_lb_net), 4) if _ll_scored_lb_net else None
             )
     elif args.ws_live:
         # M7.A.5.3: WebSocket-triggered same-block/next-block replay
@@ -3422,13 +3487,25 @@ def main():
                 r.best_live_net_bps for r in low_lag
                 if r.best_live_net_bps is not None
             ]
-            artifact["live_state_metrics"]["events_scored_low_lag_ws"] = len(low_lag)
+            # M7.A.5.13: Fix contract — events_scored_low_lag_ws counts only
+            # economically scored low-lag results, not all low-lag events
+            _ll_scored = [
+                r for r in low_lag
+                if r.reject_reason not in UNSCORED_REJECTS
+            ]
+            _ll_scored_net = [
+                r.best_live_net_bps for r in _ll_scored
+                if r.best_live_net_bps is not None
+            ]
+            artifact["live_state_metrics"]["events_detected_low_lag_ws"] = len(low_lag)
+            artifact["live_state_metrics"]["events_scored_low_lag_ws"] = len(_ll_scored)
             artifact["live_state_metrics"]["best_live_net_bps_low_lag_ws"] = (
-                round(max(low_lag_net), 4) if low_lag_net else None
+                round(max(_ll_scored_net), 4) if _ll_scored_net else None
             )
-            artifact["live_state_metrics"]["events_scored_low_lag"] = len(low_lag)
+            artifact["live_state_metrics"]["events_detected_low_lag"] = len(low_lag)
+            artifact["live_state_metrics"]["events_scored_low_lag"] = len(_ll_scored)
             artifact["live_state_metrics"]["best_live_net_bps_low_lag"] = (
-                round(max(low_lag_net), 4) if low_lag_net else None
+                round(max(_ll_scored_net), 4) if _ll_scored_net else None
             )
 
             # M7.A.5.3.1 — Latency budget metrics (relative to chain block_time_ms)
@@ -3840,6 +3917,11 @@ def main():
                 "decimal-aware size normalization eliminates inflated economics "
                 "for non-18-decimal tokens (USDC/USDT 6-dec), producing trustworthy "
                 "gas_bps and gross_bps across the full token surface"
+            )
+            artifact["m7a513_hypothesis"] = (
+                "orderflow backrun on arbitrum_one may be economically near-breakeven "
+                "on the stale subset, but the project still lacks a truthful executable "
+                "low-lag scored subset; this split isolates and measures that explicitly"
             )
     else:
         parser_err = "No mode specified"
