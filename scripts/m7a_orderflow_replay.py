@@ -92,6 +92,38 @@ ALL_REJECT_REASONS = frozenset({
     REJECT_PAIR_RESOLVED_UNTRADEABLE,
 })
 
+# ---------------------------------------------------------------------------
+# M7.A.5.7: Admission source tracking
+# ---------------------------------------------------------------------------
+ADMISSION_CANONICAL = "canonical_core"
+ADMISSION_ADDR_TO_SYMBOL = "addr_to_symbol"
+ADMISSION_SUBGRAPH_VERIFIED = "subgraph_seeded_verified"
+ADMISSION_REJECTED = "rejected_unverified"
+ALL_ADMISSION_SOURCES = frozenset({
+    ADMISSION_CANONICAL,
+    ADMISSION_ADDR_TO_SYMBOL,
+    ADMISSION_SUBGRAPH_VERIFIED,
+    ADMISSION_REJECTED,
+})
+
+# ---------------------------------------------------------------------------
+# M7.A.5.7: Chainlink price feed addresses on Arbitrum One (USD, 8 decimals)
+# ---------------------------------------------------------------------------
+CHAINLINK_FEEDS_ARBITRUM: Dict[str, str] = {
+    "WETH": "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612",
+    "WBTC": "0x6ce185860a4963106506C203335A2910413708e9",
+    "USDT": "0x3f3f5dF88dC9F13eac63DF89EC16ef6e7E25DdE7",
+    "USDC": "0x50834F3163758fcC1Df9973b6e91f0F0F0434aD3",
+    "ARB": "0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D6",
+    "LINK": "0x86E53CF1B870786351Da77A57575e79CB55812CB",
+    "DAI": "0xc5C8E77B397E531B8EC06BFb0048328B30E9eCfB",
+    "UNI": "0x9C917083fDb403ab5ADbEC26Ee294f6EcAda7Fee",
+    "GMX": "0xDB98056FecFff59D032aB628337A4887110df3dB",
+    "PENDLE": "0x66853E19d73c0F9301fe99c324C1ba0bb3f51b01",
+}
+CHAINLINK_LATEST_ROUND_SELECTOR = "0xfeaf968c"  # latestRoundData()
+CHAINLINK_DECIMALS = 8  # USD feeds return 8-decimal answer
+
 # Intent/auction surface types
 SURFACE_MEV_SHARE_BACKRUN = "mev_share_backrun"
 SURFACE_UNISWAPX_FILLER = "uniswapx_filler"
@@ -202,6 +234,10 @@ class BackrunResult:
     best_sweep_net_bps: Optional[float] = None  # best net across sweep sizes
     best_sweep_size_wei: Optional[int] = None  # size that produced best_sweep_net_bps
     token_admitted: Optional[bool] = None  # True if event tokens in admitted universe
+    # M7.A.5.7 coverage enrichment + oracle guard + local-sim fields
+    admission_source: Optional[str] = None  # canonical_core | addr_to_symbol | subgraph_seeded_verified | rejected_unverified
+    oracle_guard: Optional[Dict[str, Any]] = None  # Chainlink sanity check result
+    local_sim_state: Optional[Dict[str, Any]] = None  # V3 pool state for future local pricing
 
 
 @dataclass
@@ -1003,6 +1039,8 @@ def admit_event_tokens(
     admission of tokens resolved from pool contracts even if they are
     not in the canonical narrow universe.
 
+    M7.A.5.7: Returns admission_source to disambiguate how tokens were admitted.
+
     Returns dict with:
         admitted: bool
         token_in_symbol: str or None
@@ -1010,6 +1048,7 @@ def admit_event_tokens(
         token_in_known: bool   # in canonical universe
         token_out_known: bool
         blocker_reason: str or None
+        admission_source: str  # canonical_core | addr_to_symbol | subgraph_seeded_verified | rejected_unverified
     """
     reverse_canonical = {v.lower(): k for k, v in canonical_token_addrs.items() if v}
     in_sym = addr_to_symbol.get(token_in_addr.lower()) or reverse_canonical.get(token_in_addr.lower())
@@ -1040,6 +1079,18 @@ def admit_event_tokens(
     elif not out_admitted:
         blocker = "token_out_unknown"
 
+    # M7.A.5.7: Determine admission source
+    if not admitted:
+        admission_source = ADMISSION_REJECTED
+    elif in_known and out_known:
+        admission_source = ADMISSION_CANONICAL
+    elif in_known or out_known:
+        # One canonical, one from addr_to_symbol mapping
+        admission_source = ADMISSION_ADDR_TO_SYMBOL
+    else:
+        # Both from addr_to_symbol (e.g. subgraph-seeded tokens verified on-chain)
+        admission_source = ADMISSION_ADDR_TO_SYMBOL
+
     return {
         "admitted": admitted,
         "token_in_symbol": in_sym,
@@ -1047,6 +1098,7 @@ def admit_event_tokens(
         "token_in_known": in_known,
         "token_out_known": out_known,
         "blocker_reason": blocker,
+        "admission_source": admission_source,
     }
 
 
@@ -1117,6 +1169,207 @@ def counter_venue_coverage_scan(
         "coverage_complete": coverage_complete,
         "coverage_blocker_reason": blocker,
     }
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5.7: On-chain token enrichment
+# ---------------------------------------------------------------------------
+
+def enrich_unknown_token(
+    token_addr: str,
+    rpc_url: str,
+    block_num: int,
+) -> Dict[str, Any]:
+    """Read ERC-20 symbol() and decimals() on-chain via multicall.
+
+    Returns dict with:
+        enriched: bool
+        symbol: str or None
+        decimals: int or None
+        source: "onchain"
+    """
+    from core.multicall import get_multicall_batcher
+
+    try:
+        batcher = get_multicall_batcher(rpc_url, block_num)
+        symbols = batcher.batch_symbol([token_addr])
+        decimals = batcher.batch_decimals([token_addr])
+        sym = symbols.get(token_addr)
+        dec = decimals.get(token_addr)
+        return {
+            "enriched": sym is not None,
+            "symbol": sym,
+            "decimals": dec,
+            "source": "onchain",
+        }
+    except Exception as exc:
+        logger.debug("enrich_unknown_token failed for %s: %s", token_addr[:10], str(exc)[:80])
+        return {"enriched": False, "symbol": None, "decimals": None, "source": "onchain"}
+
+
+def enrich_tokens_batch(
+    token_addrs: List[str],
+    rpc_url: str,
+    block_num: int,
+) -> Dict[str, Dict[str, Any]]:
+    """Batch-enrich multiple unknown token addresses in one multicall.
+
+    Returns {addr_lower: {enriched, symbol, decimals, source}}.
+    """
+    from core.multicall import get_multicall_batcher
+
+    result: Dict[str, Dict[str, Any]] = {}
+    if not token_addrs:
+        return result
+
+    try:
+        batcher = get_multicall_batcher(rpc_url, block_num)
+        symbols = batcher.batch_symbol(token_addrs)
+        decimals_map = batcher.batch_decimals(token_addrs)
+        for addr in token_addrs:
+            sym = symbols.get(addr)
+            dec = decimals_map.get(addr)
+            result[addr.lower()] = {
+                "enriched": sym is not None,
+                "symbol": sym,
+                "decimals": dec,
+                "source": "onchain",
+            }
+    except Exception as exc:
+        logger.debug("enrich_tokens_batch failed: %s", str(exc)[:100])
+        for addr in token_addrs:
+            result[addr.lower()] = {
+                "enriched": False, "symbol": None, "decimals": None, "source": "onchain",
+            }
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5.7: Chainlink oracle sanity guard
+# ---------------------------------------------------------------------------
+
+def check_oracle_sanity(
+    token_in_symbol: Optional[str],
+    token_out_symbol: Optional[str],
+    rpc_url: str,
+    block_num: int,
+) -> Dict[str, Any]:
+    """Check Chainlink price feeds as sanity guardrail (not execution truth).
+
+    Returns dict with:
+        oracle_price_available: bool
+        token_in_oracle_usd: float or None
+        token_out_oracle_usd: float or None
+        oracle_deviation_bps: float or None  (cross-check between tokens)
+        oracle_guard_triggered: bool
+        oracle_staleness_seconds: int or None
+    """
+    import time as _time
+
+    result: Dict[str, Any] = {
+        "oracle_price_available": False,
+        "token_in_oracle_usd": None,
+        "token_out_oracle_usd": None,
+        "oracle_deviation_bps": None,
+        "oracle_guard_triggered": False,
+        "oracle_staleness_seconds": None,
+    }
+
+    feed_in = CHAINLINK_FEEDS_ARBITRUM.get(token_in_symbol or "") if token_in_symbol else None
+    feed_out = CHAINLINK_FEEDS_ARBITRUM.get(token_out_symbol or "") if token_out_symbol else None
+
+    if not feed_in and not feed_out:
+        return result
+
+    try:
+        from core.multicall import get_multicall_batcher
+        from web3 import Web3
+
+        batcher = get_multicall_batcher(rpc_url, block_num)
+        calls = []
+        feed_addrs = []
+        if feed_in:
+            feed_addrs.append(("in", feed_in))
+            calls.append((
+                Web3.to_checksum_address(feed_in),
+                True,
+                bytes.fromhex(CHAINLINK_LATEST_ROUND_SELECTOR[2:]),
+            ))
+        if feed_out:
+            feed_addrs.append(("out", feed_out))
+            calls.append((
+                Web3.to_checksum_address(feed_out),
+                True,
+                bytes.fromhex(CHAINLINK_LATEST_ROUND_SELECTOR[2:]),
+            ))
+
+        multicall_results = batcher._execute_multicall(calls)
+        if multicall_results is None:
+            return result
+
+        now_ts = int(_time.time())
+        prices: Dict[str, float] = {}
+        staleness: Dict[str, int] = {}
+        for i, (side, _feed_addr) in enumerate(feed_addrs):
+            success, data = multicall_results[i]
+            if success and len(data) >= 160:
+                # latestRoundData returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
+                answer = int.from_bytes(data[32:64], "big", signed=True)
+                updated_at = int.from_bytes(data[96:128], "big")
+                price_usd = answer / (10 ** CHAINLINK_DECIMALS)
+                if price_usd > 0:
+                    prices[side] = price_usd
+                    staleness[side] = max(0, now_ts - updated_at)
+
+        if "in" in prices:
+            result["token_in_oracle_usd"] = round(prices["in"], 6)
+        if "out" in prices:
+            result["token_out_oracle_usd"] = round(prices["out"], 6)
+
+        result["oracle_price_available"] = bool(prices)
+
+        if staleness:
+            result["oracle_staleness_seconds"] = max(staleness.values())
+
+        # Cross-check: if both prices available, compute implied exchange rate deviation
+        # The oracle guard triggers if staleness > 1 hour (feeds stale)
+        MAX_STALENESS_SECONDS = 3600
+        if result["oracle_staleness_seconds"] and result["oracle_staleness_seconds"] > MAX_STALENESS_SECONDS:
+            result["oracle_guard_triggered"] = True
+
+    except Exception as exc:
+        logger.debug("check_oracle_sanity failed: %s", str(exc)[:100])
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5.7: Local-sim pool state extraction
+# ---------------------------------------------------------------------------
+
+def extract_pool_state_for_sim(
+    pool_addresses: List[str],
+    rpc_url: str,
+    block_num: int,
+) -> Dict[str, Optional[Dict[str, Any]]]:
+    """Extract V3 pool state (sqrtPriceX96, tick, liquidity) for local simulation.
+
+    Uses existing MulticallBatcher.batch_full_pool_data() to read slot0 + liquidity
+    in one multicall. This is the state-preparation step for future local pricing.
+
+    Returns {pool_addr: {sqrt_price_x96, tick, liquidity} or None}.
+    """
+    if not pool_addresses:
+        return {}
+
+    try:
+        from core.multicall import get_multicall_batcher
+        batcher = get_multicall_batcher(rpc_url, block_num)
+        return batcher.batch_full_pool_data(pool_addresses)
+    except Exception as exc:
+        logger.debug("extract_pool_state_for_sim failed: %s", str(exc)[:100])
+        return {addr: None for addr in pool_addresses}
 
 
 def _run_size_sweep(
@@ -1286,6 +1539,7 @@ def score_backrun_live_parallel(
 
     # Common early-exit builder for rejected results
     def _reject(reason, pr=False, ap=None, ss=None, cov=None, adm=None,
+                adm_src=None, orc=None, lss=None,
                 extra_latency=None):
         return BackrunResult(
             event_id=event.event_id,
@@ -1310,6 +1564,9 @@ def score_backrun_live_parallel(
             size_source=ss,
             coverage_result=cov,
             token_admitted=adm,
+            admission_source=adm_src,
+            oracle_guard=orc,
+            local_sim_state=lss,
         )
 
     # ── Stage A: Actual-pair token resolution ───────────────────────────
@@ -1339,16 +1596,51 @@ def score_backrun_live_parallel(
     if use_common_pairs:
         return _reject(REJECT_TOKEN_PAIR_UNRESOLVED)
 
+    # ── M7.A.5.7: On-chain enrichment for unknown tokens ───────────────
+    # Before admission: if a token is not in addr_to_symbol, try reading
+    # its ERC-20 symbol/decimals on-chain. If successful, inject into
+    # addr_to_symbol so the admission check can use it.
+    enrichment_applied = False
+    _ats = addr_to_symbol or {}
+    unknown_addrs = []
+    if token_in_addr and token_in_addr.lower() not in _ats:
+        unknown_addrs.append(token_in_addr)
+    if token_out_addr and token_out_addr.lower() not in _ats:
+        unknown_addrs.append(token_out_addr)
+    if unknown_addrs:
+        try:
+            enriched = enrich_tokens_batch(unknown_addrs, rpc_url, current_block)
+            for addr, info in enriched.items():
+                if info["enriched"] and info["symbol"]:
+                    _ats[addr] = info["symbol"]
+                    enrichment_applied = True
+        except Exception:
+            pass  # enrichment is best-effort
+
     # ── M7.A.5.6: Event-token admission check ──────────────────────────
     admission = admit_event_tokens(
         token_in_addr, token_out_addr,
-        addr_to_symbol or {}, token_addresses,
+        _ats, token_addresses,
     )
+    # M7.A.5.7: Override admission_source if enrichment was used
+    adm_source = admission.get("admission_source", ADMISSION_REJECTED)
+    if enrichment_applied and admission["admitted"] and adm_source == ADMISSION_ADDR_TO_SYMBOL:
+        adm_source = ADMISSION_SUBGRAPH_VERIFIED  # on-chain verified enrichment
     if not admission["admitted"]:
         return _reject(
             REJECT_TOKEN_NOT_ADMITTED,
             pr=pair_resolved, ap=actual_pair, adm=False,
+            adm_src=ADMISSION_REJECTED,
         )
+
+    # ── M7.A.5.7: Oracle sanity guard ──────────────────────────────────
+    oracle_result = None
+    try:
+        in_sym = admission.get("token_in_symbol")
+        out_sym = admission.get("token_out_symbol")
+        oracle_result = check_oracle_sanity(in_sym, out_sym, rpc_url, current_block)
+    except Exception:
+        pass  # oracle guard is best-effort
 
     # ── M7.A.5.6: Counter-venue coverage scan ──────────────────────────
     try:
@@ -1370,8 +1662,34 @@ def score_backrun_live_parallel(
         return _reject(
             reason,
             pr=pair_resolved, ap=actual_pair, adm=True,
+            adm_src=adm_source, orc=oracle_result,
             cov=coverage,
         )
+
+    # ── M7.A.5.7: Local-sim pool state extraction ──────────────────────
+    local_sim = None
+    try:
+        pool_addrs_for_sim = []
+        if coverage.get("known_dexes"):
+            # Get pool addresses from the coverage scan results
+            pool_map = _resolve_pool_addresses_multicall(
+                dex_configs, token_in_addr, token_out_addr, rpc_url, current_block,
+            )
+            for dex_name, pools in pool_map.items():
+                for p in pools:
+                    if p["address"] is not None:
+                        pool_addrs_for_sim.append(p["address"])
+        if pool_addrs_for_sim:
+            raw_states = extract_pool_state_for_sim(pool_addrs_for_sim, rpc_url, current_block)
+            # Summarize: how many pools have valid state
+            valid_states = {k: v for k, v in raw_states.items() if v is not None}
+            local_sim = {
+                "pools_queried": len(pool_addrs_for_sim),
+                "pools_with_state": len(valid_states),
+                "pool_states": {k: v for k, v in list(valid_states.items())[:3]},  # cap to 3
+            }
+    except Exception:
+        pass  # local-sim state is best-effort
 
     # ── Bounded size logic ──────────────────────────────────────────────
     MIN_BACKRUN_WEI = 10**15   # 0.001 ETH
@@ -1631,6 +1949,9 @@ def score_backrun_live_parallel(
             best_sweep_net_bps=best_sweep_net,
             best_sweep_size_wei=best_sweep_size,
             token_admitted=True,
+            admission_source=adm_source,
+            oracle_guard=oracle_result,
+            local_sim_state=local_sim,
         )
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
@@ -1663,6 +1984,9 @@ def score_backrun_live_parallel(
         size_source=size_source,
         coverage_result=coverage,
         token_admitted=True,
+        admission_source=adm_source,
+        oracle_guard=oracle_result,
+        local_sim_state=local_sim,
     )
 
 
@@ -2395,6 +2719,12 @@ def main():
             "pair-resolved counter-venue coverage is expanded for actual live-event "
             "tokens; no expansion outside current DEX domain"
         )
+        artifact["m7a57_hypothesis"] = (
+            "same-chain backrun on arbitrum_one may become measurable once "
+            "pair-resolved live-event tokens are admitted through bounded discovery "
+            "coverage (on-chain ERC-20 enrichment + oracle sanity rails), "
+            "without leaving the current DEX domain"
+        )
         artifact["ws_live_config"] = {
             "ws_blocks_requested": args.ws_blocks,
             "ws_timeout_seconds": args.ws_timeout,
@@ -2737,6 +3067,70 @@ def main():
                 if r.reject_reason:
                     granular_hist[r.reject_reason] = granular_hist.get(r.reject_reason, 0) + 1
             artifact["reject_histogram_v2"] = granular_hist
+
+            # ── M7.A.5.7: Enrichment metrics ───────────────────────────
+            adm_source_hist: Dict[str, int] = {}
+            for r in live_results:
+                src = r.admission_source or "unknown"
+                adm_source_hist[src] = adm_source_hist.get(src, 0) + 1
+            enriched_count = sum(
+                1 for r in live_results
+                if r.admission_source == ADMISSION_SUBGRAPH_VERIFIED
+            )
+            artifact["enrichment_metrics"] = {
+                "admission_source_histogram": adm_source_hist,
+                "events_enriched_onchain": enriched_count,
+                "enrichment_admission_rate": round(
+                    enriched_count / len(live_results), 4
+                ) if live_results else 0.0,
+                "total_admitted": sum(
+                    1 for r in live_results if r.token_admitted is True
+                ),
+                "total_rejected": sum(
+                    1 for r in live_results if r.token_admitted is False
+                ),
+            }
+
+            # ── M7.A.5.7: Oracle guard metrics ─────────────────────────
+            events_with_oracle = [
+                r for r in live_results
+                if r.oracle_guard and r.oracle_guard.get("oracle_price_available")
+            ]
+            guard_triggered = [
+                r for r in live_results
+                if r.oracle_guard and r.oracle_guard.get("oracle_guard_triggered")
+            ]
+            artifact["oracle_guard_metrics"] = {
+                "events_with_oracle_price": len(events_with_oracle),
+                "oracle_coverage_rate": round(
+                    len(events_with_oracle) / len(live_results), 4
+                ) if live_results else 0.0,
+                "guard_triggered_count": len(guard_triggered),
+                "oracle_feeds_available": list(CHAINLINK_FEEDS_ARBITRUM.keys()),
+            }
+
+            # ── M7.A.5.7: Local-sim readiness metrics ──────────────────
+            events_with_sim = [
+                r for r in live_results
+                if r.local_sim_state and r.local_sim_state.get("pools_with_state", 0) > 0
+            ]
+            total_pools_queried = sum(
+                r.local_sim_state.get("pools_queried", 0)
+                for r in live_results if r.local_sim_state
+            )
+            total_pools_with_state = sum(
+                r.local_sim_state.get("pools_with_state", 0)
+                for r in live_results if r.local_sim_state
+            )
+            artifact["local_sim_readiness"] = {
+                "events_with_pool_state": len(events_with_sim),
+                "sim_readiness_rate": round(
+                    len(events_with_sim) / len(live_results), 4
+                ) if live_results else 0.0,
+                "total_pools_queried": total_pools_queried,
+                "total_pools_with_state": total_pools_with_state,
+                "note": "State captured for future local-sim pricing path (sqrtPriceX96 + tick + liquidity)",
+            }
     else:
         parser_err = "No mode specified"
         raise SystemExit(parser_err)

@@ -377,6 +377,52 @@ class MulticallBatcher:
                 self.call_fail["decimals"] += 1  # v2.3.0
         
         return output
+
+    def batch_symbol(self, token_addresses: List[str]) -> Dict[str, Optional[str]]:
+        """
+        Batch read symbol() from multiple ERC20 tokens.
+
+        Args:
+            token_addresses: List of token contract addresses
+
+        Returns:
+            Dict mapping address -> symbol string or None on failure
+        """
+        if not token_addresses:
+            return {}
+
+        calls = self._encode_calls(token_addresses, ERC20_SYMBOL_SELECTOR)
+        self.stats["calls_batched"] += len(calls)
+        self.stats["calls_made"] += 1
+        self.call_types["symbol"] += len(token_addresses)
+
+        results = self._execute_multicall(calls)
+        if results is None:
+            self.call_fail["symbol"] += len(token_addresses)
+            return {addr: None for addr in token_addresses}
+
+        output = {}
+        for i, addr in enumerate(token_addresses):
+            success, data = results[i]
+            if success and len(data) >= 64:
+                try:
+                    # ABI-encoded string: offset (32 bytes) + length (32 bytes) + data
+                    str_len = int.from_bytes(data[32:64], "big")
+                    symbol = data[64:64 + str_len].decode("utf-8", errors="replace").strip("\x00")
+                    if symbol:
+                        output[addr] = symbol
+                        self.call_success["symbol"] += 1
+                    else:
+                        output[addr] = None
+                        self.call_fail["symbol"] += 1
+                except Exception:
+                    output[addr] = None
+                    self.call_fail["symbol"] += 1
+            else:
+                output[addr] = None
+                self.call_fail["symbol"] += 1
+
+        return output
     
     def batch_get_pool(
         self,

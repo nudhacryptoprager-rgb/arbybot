@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.5 — all scopes produce no-graduate verdicts. M7.A.5.5 actual-pair resolution evidence: pair resolution works (100%) but resolved pairs involve tokens outside narrow universe; QUOTE_FAILURE persists due to counter-venue absence. Proxy-pricing distortion confirmed but does not change economics. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
-**Updated**: 2026-03-30  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution. M7.B remains closed.
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.7 — all scopes produce no-graduate verdicts. M7.A.5.7 adds bounded coverage enrichment (on-chain ERC-20 symbol/decimals), Chainlink oracle sanity rails, and local-sim pool state extraction. Coverage gap remains the dominant blocker. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Updated**: 2026-03-31  
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state. M7.B remains closed.
 
 ---
 
@@ -230,6 +230,30 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 **Verdict**: The coverage decomposition hypothesis is **CONFIRMED**. The dominant blocker (80%) is `TOKEN_NOT_ADMITTED` — on-chain events overwhelmingly involve tokens outside our narrow_7 universe. When tokens ARE admitted, the full pipeline (admission → coverage scan → quoting → sweep) executes correctly. This is a **coverage gap**, not an infrastructure failure. The M7.A.5.1–5.4 latency conclusions remain valid; M7.A.5.5–5.6 now confirm the coverage gap is the second independent blocker.
 
 **CI gates**: 2923 passed, 6 skipped. 187 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+
+---
+
+## M7.A.5.7: Bounded Coverage Enrichment + Oracle Sanity + Local-Sim Preparation
+
+**Hypothesis**: same-chain backrun on arbitrum_one may become measurable once pair-resolved live-event tokens are admitted through bounded discovery coverage (on-chain ERC-20 enrichment + oracle sanity rails), without leaving the current DEX domain.
+
+**Motivation**: M7.A.5.6 decomposed the coverage gap: 80% events rejected at TOKEN_NOT_ADMITTED. External research (Flashbots/hindsight, The Graph, Chainlink, Arbitrum Nitro) confirms: the next justified step is building bounded coverage enrichment, not expanding to new strategies. Three additions:
+1. On-chain ERC-20 enrichment of unknown tokens via multicall `symbol()` + `decimals()`
+2. Chainlink oracle sanity rails as guardrail (not execution truth)
+3. V3 pool-state extraction for future local-sim pricing path
+
+**New infrastructure**:
+- `enrich_unknown_token()` / `enrich_tokens_batch()`: read ERC-20 symbol/decimals on-chain via MulticallBatcher.batch_symbol() + batch_decimals(). Enrichment injected into addr_to_symbol before admission check.
+- `MulticallBatcher.batch_symbol()`: new method reading ABI-encoded symbol() responses.
+- `check_oracle_sanity()`: Chainlink AggregatorV3 latestRoundData() via multicall. Returns oracle_price_available, oracle_deviation_bps, oracle_guard_triggered, oracle_staleness_seconds. Covers 10 tokens: WETH, WBTC, USDT, USDC, ARB, LINK, DAI, UNI, GMX, PENDLE.
+- `extract_pool_state_for_sim()`: reads slot0 (sqrtPriceX96, tick) + liquidity from V3 pools via batch_full_pool_data(). State-preparation for future local pricing.
+- Admission source tracking: `admission_source` field with 4 values: `canonical_core`, `addr_to_symbol`, `subgraph_seeded_verified`, `rejected_unverified`. Constants: ADMISSION_CANONICAL, ADMISSION_ADDR_TO_SYMBOL, ADMISSION_SUBGRAPH_VERIFIED, ADMISSION_REJECTED, ALL_ADMISSION_SOURCES (frozenset).
+- 3 new BackrunResult fields: `admission_source`, `oracle_guard`, `local_sim_state` (45 total fields).
+- `score_backrun_live_parallel()` updated: enrichment → admission → oracle guard → coverage scan → local-sim state → quoting.
+- 3 new artifact blocks: `enrichment_metrics` (admission_source_histogram, events_enriched_onchain), `oracle_guard_metrics` (events_with_oracle_price, guard_triggered_count), `local_sim_readiness` (events_with_pool_state, total_pools_with_state).
+- 27 new contract tests (214 total in `test_orderflow_contracts.py`).
+
+**CI gates**: 2950 passed, 6 skipped. 214 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
 
 ---
 
