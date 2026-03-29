@@ -288,6 +288,45 @@ RPC: public Arbitrum gateway. Chain: arbitrum_one.
 
 ---
 
+## M7.A.5.2: Alchemy RPC Revalidation
+
+**Hypothesis**: `block_event_backrun` on arbitrum_one may be materially better under Alchemy-backed low-latency RPC than under public RPC.
+
+**Motivation**: M7.A.5.1 evidence closes only the public-RPC path. `.env` has `ALCHEMY_API_KEY` but it was not loaded during M7.A.5.1 runs, so all prior evidence used public `arb1.arbitrum.io/rpc`.
+
+**Changes**:
+- `fetch_recent_swap_events` now chunks `eth_getLogs` into 10-block windows (Alchemy free-tier limit)
+- Artifact now includes provider provenance: `rpc_provider`, `rpc_source`, `resolved_rpc_host`, `fallback_used`
+- Low-lag subset metrics: `events_scored_low_lag`, `best_live_net_bps_low_lag`
+- 5 new contract tests in `TestProviderProvenance` (85 total in `test_orderflow_contracts.py`)
+
+**Evidence — M7.A.5.2 Narrow Alchemy Scan**
+
+Artifact: `data/tmp/m7a_live_alchemy_narrow.json`. RPC: `alchemy` via `alchemy_api_key`, host `arb-mainnet.g.alchemy.com`.
+
+| Metric | Public (M7.A.5.1 wider) | Alchemy (M7.A.5.2 narrow) |
+|--------|------------------------|-----------------------------|
+| rpc_provider | public | **alchemy** |
+| live_blocks_scanned | 500 | 100 |
+| events_scored | 10 | 20 |
+| best_live_net_bps | -18.36 | **-19.49** |
+| mean_live_net_bps | -20.75 | -21.88 |
+| viable_count | 0 | 0 |
+| same_block / next / stale | 1/0/9 | **0/0/20** |
+| mean_block_lag | 217.8 | **59.55** |
+| events_scored_low_lag | — | **0** |
+| best_live_net_bps_low_lag | — | **None** |
+
+**Decision gate**: Wider scan NOT warranted — lag did not improve to same_block/next_block regime.
+
+**M7.A.5.2 verdict**: Alchemy RPC does NOT materially improve latency. All 20 events remain stale (mean lag 59.55 blocks). Zero low-lag events. The bottleneck is the sequential block-scanning approach (fetch blocks → normalize → quote), not RPC provider latency. Best net -19.49 bps, still ~16 bps worse than two-leg baseline (-3.51 bps).
+
+**M7.A.5 combined verdict**: Surface `block_event_backrun` is NOT VIABLE on arbitrum_one via either public or Alchemy RPC. Closing both paths. Sub-block latency requires streaming infrastructure (websocket subscriptions, mempool), not faster point queries.
+
+**CI gates**: 2821 passed, 6 skipped, 0 failures. 85 tests in `test_orderflow_contracts.py`.
+
+---
+
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
 Per `docs/step_M7.md`: M7.B is the execution phase, closed by default. Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.

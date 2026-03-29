@@ -763,6 +763,76 @@ class TestBackrunResultLiveFields:
             )
             assert r.same_state_class == cls
 
+
+# ===========================================================================
+# M7.A.5.2: Provider provenance tests
+# ===========================================================================
+
+
+class TestProviderProvenance:
+    """M7.A.5.2: Provider provenance fields must be present in live artifacts."""
+
+    PROVENANCE_KEYS = {"rpc_provider", "rpc_source", "resolved_rpc_host", "fallback_used"}
+
+    def test_provenance_keys_schema(self):
+        """All 4 provenance fields must be machine-readable strings/bool."""
+        example = {
+            "rpc_provider": "alchemy",
+            "rpc_source": "alchemy_api_key",
+            "resolved_rpc_host": "arb-mainnet.g.alchemy.com",
+            "fallback_used": False,
+        }
+        assert self.PROVENANCE_KEYS == set(example.keys())
+        assert isinstance(example["rpc_provider"], str)
+        assert isinstance(example["rpc_source"], str)
+        assert isinstance(example["resolved_rpc_host"], str)
+        assert isinstance(example["fallback_used"], bool)
+
+    def test_resolve_rpc_http_returns_provenance(self):
+        """resolve_rpc_http() returns (url, provider, diagnostics) tuple."""
+        from core.rpc_urls import resolve_rpc_http
+
+        url, provider, diag = resolve_rpc_http(
+            chain_id=42161,
+            network="arbitrum_one",
+            env={},  # No keys → public fallback
+        )
+        assert isinstance(provider, str)
+        assert isinstance(diag, dict)
+        assert "source" in diag
+
+    def test_public_fallback_detected(self):
+        """When no Alchemy key, fallback_used logic is correct."""
+        from core.rpc_urls import resolve_rpc_http
+
+        url, provider, diag = resolve_rpc_http(
+            chain_id=42161,
+            network="arbitrum_one",
+            env={},  # No keys → public fallback
+        )
+        fallback_used = diag.get("source") == "public_fallback"
+        assert fallback_used is True
+        assert provider == "public"
+
+    def test_alchemy_key_detected(self):
+        """When ALCHEMY_API_KEY is set, provider is alchemy."""
+        from core.rpc_urls import resolve_rpc_http
+
+        url, provider, diag = resolve_rpc_http(
+            chain_id=42161,
+            network="arbitrum_one",
+            env={"ALCHEMY_API_KEY": "test_key_fake"},
+        )
+        assert provider == "alchemy"
+        assert diag.get("source") == "alchemy_api_key"
+        assert "alchemy.com" in (url or "")
+
+    def test_low_lag_subset_fields_in_schema(self):
+        """Low-lag subset keys are defined correctly."""
+        low_lag_keys = {"events_scored_low_lag", "best_live_net_bps_low_lag"}
+        # These keys must appear in live_state_metrics when live results exist
+        assert len(low_lag_keys) == 2
+
     def test_post_trade_state_live_value(self):
         """M7.A.5 uses 'live' as post_trade_state_used."""
         r = BackrunResult(

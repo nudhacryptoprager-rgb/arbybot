@@ -467,11 +467,13 @@ def _get_v3_factory_addresses(dex_configs: Dict[str, Any]) -> Dict[str, str]:
 def fetch_recent_swap_events(
     rpc_url: str,
     blocks_back: int = DEFAULT_LIVE_BLOCKS,
+    chunk_size: int = 10,
 ) -> list:
     """Fetch raw Swap event logs from recent blocks on-chain.
 
     Returns raw Web3 LogEntry objects. Caller normalizes them.
-    Uses a single eth_getLogs call with the Uniswap V3 Swap topic.
+    Chunks requests into chunk_size-block windows to respect RPC tier limits
+    (e.g. Alchemy free tier allows max 10 blocks per eth_getLogs).
     """
     from web3 import Web3
 
@@ -480,25 +482,32 @@ def fetch_recent_swap_events(
     from_block = max(current_block - blocks_back, 0)
 
     logger.info(
-        "Fetching Swap events from block %d to %d (%d blocks)",
+        "Fetching Swap events from block %d to %d (%d blocks, chunk_size=%d)",
         from_block,
         current_block,
         blocks_back,
-        extra={"context": {"from_block": from_block, "to_block": current_block}},
+        chunk_size,
+        extra={"context": {"from_block": from_block, "to_block": current_block, "chunk_size": chunk_size}},
     )
 
-    logs = w3.eth.get_logs({
-        "fromBlock": from_block,
-        "toBlock": current_block,
-        "topics": [SWAP_EVENT_TOPIC],
-    })
+    all_logs = []
+    chunk_start = from_block
+    while chunk_start <= current_block:
+        chunk_end = min(chunk_start + chunk_size - 1, current_block)
+        logs = w3.eth.get_logs({
+            "fromBlock": chunk_start,
+            "toBlock": chunk_end,
+            "topics": [SWAP_EVENT_TOPIC],
+        })
+        all_logs.extend(logs)
+        chunk_start = chunk_end + 1
 
     logger.info(
         "Fetched %d raw Swap logs",
-        len(logs),
-        extra={"context": {"count": len(logs), "blocks": blocks_back}},
+        len(all_logs),
+        extra={"context": {"count": len(all_logs), "blocks": blocks_back}},
     )
-    return list(logs), current_block
+    return list(all_logs), current_block
 
 
 def normalize_swap_log(
@@ -1182,12 +1191,28 @@ def main():
             "Running M7.A.5 live block-event replay (%d blocks)",
             args.live_blocks,
         )
-        from config import load_dexes, get_all_token_addresses
-        from core.rpc_urls import get_rpc_url
+        import os
+        from urllib.parse import urlparse
 
-        rpc_url = get_rpc_url(args.chain)
+        from config import load_dexes, get_all_token_addresses
+        from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
+
+        chain_id = _CHAIN_KEY_TO_ID.get(args.chain.lower())
+        rpc_url, rpc_provider, rpc_diag = resolve_rpc_http(
+            chain_id=chain_id,
+            network=args.chain,
+            env=dict(os.environ),
+        )
         if not rpc_url:
             raise SystemExit(f"No RPC URL found for chain: {args.chain}")
+        rpc_host = urlparse(rpc_url).netloc
+        logger.info(
+            "RPC resolved: provider=%s source=%s host=%s",
+            rpc_provider,
+            rpc_diag.get("source", "unknown"),
+            rpc_host,
+            extra={"context": {"rpc_provider": rpc_provider, "rpc_host": rpc_host}},
+        )
 
         all_dexes = load_dexes()
         dex_configs = all_dexes.get(args.chain, {})
@@ -1249,6 +1274,11 @@ def main():
         artifact["raw_logs_count"] = len(raw_logs)
         artifact["normalized_events_count"] = len(events)
         artifact["current_block"] = current_block
+        # M7.A.5.2: Provider provenance (machine-readable)
+        artifact["rpc_provider"] = rpc_provider
+        artifact["rpc_source"] = rpc_diag.get("source", "unknown")
+        artifact["resolved_rpc_host"] = rpc_host
+        artifact["fallback_used"] = rpc_diag.get("source") == "public_fallback"
         # Live replay state metrics
         live_results = [r for r in results if r.event_block is not None]
         if live_results:
@@ -1278,6 +1308,19 @@ def main():
                 artifact["live_state_metrics"]["mean_live_net_bps"] = round(
                     sum(live_net) / len(live_net), 4
                 )
+            # M7.A.5.2: Low-lag subset metrics (same_block + next_block only)
+            low_lag = [
+                r for r in live_results
+                if r.same_state_class in ("same_block", "next_block")
+            ]
+            low_lag_net = [
+                r.best_live_net_bps for r in low_lag
+                if r.best_live_net_bps is not None
+            ]
+            artifact["live_state_metrics"]["events_scored_low_lag"] = len(low_lag)
+            artifact["live_state_metrics"]["best_live_net_bps_low_lag"] = (
+                round(max(low_lag_net), 4) if low_lag_net else None
+            )
     else:
         parser_err = "No mode specified"
         raise SystemExit(parser_err)
