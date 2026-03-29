@@ -157,6 +157,62 @@ SIGNIFICANT_IMPACT_BPS = 5.0  # Minimum price impact to consider backrunnable
 DEFAULT_BACKRUN_GAS = 200_000  # Two-swap backrun gas estimate
 DEFAULT_GAS_PRICE_GWEI = 0.1  # Arbitrum typical
 
+# M7.A.5.9: Decimal-aware size normalization reference bounds (18-decimal tokens)
+_REF_MIN_WEI_18 = 10**15   # 0.001 of an 18-decimal token
+_REF_MAX_WEI_18 = 10**18   # 1.0 of an 18-decimal token
+
+
+def _normalized_bounds(
+    token_decimals: int,
+    default_18_min: int = _REF_MIN_WEI_18,
+    default_18_max: int = _REF_MAX_WEI_18,
+) -> tuple:
+    """Return (min_wei, max_wei) adjusted for token decimals.
+
+    For 18-decimal tokens this returns the original bounds unchanged.
+    For 6-decimal tokens (USDC/USDT) the bounds shrink by 10**12 so
+    that the notional range stays comparable in human-readable units
+    (0.001 .. 1.0 of the token).
+    """
+    if token_decimals is None or token_decimals == 18:
+        return (default_18_min, default_18_max)
+    ratio = 10 ** max(0, 18 - token_decimals)
+    mn = max(1, default_18_min // ratio)
+    mx = max(1, default_18_max // ratio)
+    return (mn, mx)
+
+
+# M7.A.5.9: Gas denomination conversion
+_FALLBACK_ETH_PRICE_USD = 3500.0  # conservative fallback when oracle unavailable
+
+
+def _gas_cost_in_token_wei(
+    gas_cost_eth_wei: int,
+    token_decimals: Optional[int],
+    token_price_usd: Optional[float] = None,
+    eth_price_usd: Optional[float] = None,
+) -> int:
+    """Convert gas cost from ETH wei to the backrun token's raw units.
+
+    Gas is always paid in ETH.  For the bps formula
+    ``(net_pnl / amount_in) * 10000`` to be meaningful, gas must be
+    expressed in the **same denomination** as the backrun token.
+
+    * 18-decimal token with no explicit USD price → assumed ETH; returns
+      ``gas_cost_eth_wei`` unchanged.
+    * Otherwise: convert via ``gas_eth * eth_usd / tok_usd * 10^dec / 10^18``.
+      Falls back to ``_FALLBACK_ETH_PRICE_USD`` and ``$1`` for stablecoins.
+    """
+    dec = token_decimals if token_decimals is not None else 18
+    if dec == 18 and token_price_usd is None:
+        return gas_cost_eth_wei  # assume ETH-denominated token
+    _eth = eth_price_usd if eth_price_usd and eth_price_usd > 0 else _FALLBACK_ETH_PRICE_USD
+    _tok = token_price_usd if token_price_usd and token_price_usd > 0 else 1.0
+    # gas_token_wei = gas_cost_eth_wei / 10^18 * eth_usd / tok_usd * 10^dec
+    gas_token_wei = int(gas_cost_eth_wei * _eth * (10 ** dec) / (_tok * 10 ** 18))
+    return max(1, gas_token_wei)
+
+
 # Canonical chain for M7.A.4/M7.A.5 (same as M7.A: arbitrum_one)
 M7A4_CHAIN = "arbitrum_one"
 
@@ -257,6 +313,11 @@ class BackrunResult:
     l1_data_bps: Optional[float] = None  # L1 data posting cost in bps
     total_gas_bps: Optional[float] = None  # l2_gas_bps + l1_data_bps
     subgraph_seed_used: Optional[bool] = None  # Whether subgraph seed contributed to admission
+    # M7.A.5.9 decimal-aware size normalization fields
+    token_in_decimals: Optional[int] = None  # ERC-20 decimals for the backrun input token
+    size_normalization_source: Optional[str] = None  # "decimal_only" | "oracle_usd" | "fallback_18"
+    size_usd_estimate: Optional[float] = None  # USD notional (oracle-based, None if unavailable)
+    size_valid_for_token: Optional[bool] = None  # True if bounds were decimal-adjusted
 
 
 @dataclass
@@ -740,6 +801,16 @@ def score_backrun_live(
     # Backrun size: ~10% of the original event
     backrun_size_wei = max(event.amount_in_wei // 10, 1)
 
+    # M7.A.5.9: Infer token_in decimals from symbol for size normalization
+    _backrun_token_in_sym = event.token_out  # backrun buys what user sold
+    _live_dec: Optional[int] = None
+    if _backrun_token_in_sym.upper() in ("USDC", "USDT", "USDC.e", "USDT.e"):
+        _live_dec = 6
+    elif _backrun_token_in_sym.upper() in ("WBTC",):
+        _live_dec = 8
+    _live_min, _live_max = _normalized_bounds(_live_dec if _live_dec is not None else 18)
+    backrun_size_wei = max(_live_min, min(_live_max, backrun_size_wei))
+
     # We need real token addresses for quoting
     # For live-fetched events, token_in/token_out may be direction tags
     # Try to resolve actual token addresses
@@ -860,6 +931,10 @@ def score_backrun_live(
     else:
         same_state_class = "stale"
 
+    # M7.A.5.9: Convert gas to backrun token denomination
+    _gas_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+    gas_cost_wei = _gas_cost_in_token_wei(_gas_eth_wei, _live_dec)
+
     # Compute measured net from best quotes
     if best_buy_amount is not None and best_sell_amount is not None:
         # Gross = what we get selling minus what we spend buying
@@ -867,7 +942,6 @@ def score_backrun_live(
         # We sell best_buy_amount of token_out → get best_sell_amount of token_in
         # Net = best_sell_amount - backrun_size_wei (in token_in units)
         gross_wei = best_sell_amount - backrun_size_wei
-        gas_cost_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
         net_wei = gross_wei - gas_cost_wei
         net_bps = (net_wei / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
 
@@ -1541,6 +1615,8 @@ def _run_size_sweep(
     quotable_dexes: list,
     base_size_wei: int,
     fallback_rpc_urls: Optional[List[str]] = None,
+    token_in_decimals: Optional[int] = None,
+    gas_cost_token_wei: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Run a bounded size sweep (3-5 sizes) around a base notional.
 
@@ -1551,8 +1627,8 @@ def _run_size_sweep(
 
     # Build 5-point ladder: 0.2x, 0.5x, 1x, 2x, 5x of base
     multipliers = [0.2, 0.5, 1.0, 2.0, 5.0]
-    MIN_WEI = 10**15   # 0.001 ETH
-    MAX_WEI = 10**18   # 1.0 ETH
+    # M7.A.5.9: decimal-aware bounds
+    MIN_WEI, MAX_WEI = _normalized_bounds(token_in_decimals if token_in_decimals is not None else 18)
     sizes = []
     for m in multipliers:
         s = int(base_size_wei * m)
@@ -1638,14 +1714,14 @@ def _run_size_sweep(
             continue
 
         gross_wei = best_sell_amt - size_wei
-        gas_cost_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
-        net_wei = gross_wei - gas_cost_wei
+        _sweep_gas = gas_cost_token_wei if gas_cost_token_wei is not None else int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+        net_wei = gross_wei - _sweep_gas
         net_bps = (net_wei / size_wei) * 10000 if size_wei > 0 else 0.0
 
         results.append({
             "size_wei": size_wei,
             "gross_pnl_wei": gross_wei,
-            "gas_cost_wei": gas_cost_wei,
+            "gas_cost_wei": _sweep_gas,
             "net_pnl_wei": net_wei,
             "net_bps": round(net_bps, 4),
             "buy_venue": best_buy_venue,
@@ -1765,6 +1841,7 @@ def score_backrun_live_parallel(
     # addr_to_symbol so the admission check can use it.
     enrichment_applied = False
     _ats = addr_to_symbol or {}
+    _addr_to_dec: Dict[str, int] = {}  # M7.A.5.9: decimals cache
     unknown_addrs = []
     if token_in_addr and token_in_addr.lower() not in _ats:
         unknown_addrs.append(token_in_addr)
@@ -1777,6 +1854,8 @@ def score_backrun_live_parallel(
                 if info["enriched"] and info["symbol"]:
                     _ats[addr] = info["symbol"]
                     enrichment_applied = True
+                if info.get("decimals") is not None:
+                    _addr_to_dec[addr] = info["decimals"]
         except Exception:
             pass  # enrichment is best-effort
 
@@ -1863,13 +1942,30 @@ def score_backrun_live_parallel(
     except Exception:
         pass  # local-sim state is best-effort
 
-    # ── Bounded size logic ──────────────────────────────────────────────
-    MIN_BACKRUN_WEI = 10**15   # 0.001 ETH
-    MAX_BACKRUN_WEI = 10**18   # 1.0 ETH
+    # ── M7.A.5.9: Decimal-aware bounded size logic ────────────────────
+    # Resolve token_in decimals: enrichment cache → well-known defaults → 18
+    _token_in_dec: Optional[int] = _addr_to_dec.get(token_in_addr.lower())
+    if _token_in_dec is None:
+        # Well-known stablecoin heuristic (symbol-based)
+        _in_sym = _ats.get(token_in_addr.lower(), "")
+        if _in_sym.upper() in ("USDC", "USDT", "USDC.e", "USDT.e"):
+            _token_in_dec = 6
+        elif _in_sym.upper() in ("WBTC",):
+            _token_in_dec = 8
+    _norm_source = "decimal_only" if _token_in_dec is not None else "fallback_18"
+    _effective_dec = _token_in_dec if _token_in_dec is not None else 18
+    MIN_BACKRUN_WEI, MAX_BACKRUN_WEI = _normalized_bounds(_effective_dec)
+
     backrun_size_wei = max(event.amount_in_wei // 10, 1)
     backrun_size_wei = max(MIN_BACKRUN_WEI, min(MAX_BACKRUN_WEI, backrun_size_wei))
     if backrun_size_wei != max(event.amount_in_wei // 10, 1):
         size_source = "bounded"
+
+    # M7.A.5.9: Compute USD estimate if oracle price available
+    _size_usd: Optional[float] = None
+    if oracle_result and oracle_result.get("token_in_oracle_usd"):
+        _price = oracle_result["token_in_oracle_usd"]
+        _size_usd = round(backrun_size_wei / (10 ** _effective_dec) * _price, 2)
 
     # DEXes that have quoter_v2
     quotable_dexes = []
@@ -2044,9 +2140,33 @@ def score_backrun_live_parallel(
     else:
         same_state_class = "stale"
 
+    # ── M7.A.5.9: Gas denomination conversion ──────────────────────────
+    # Gas is paid in ETH; convert to backrun token denomination for bps.
+    _gas_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+    _eth_price_usd: Optional[float] = None
+    _tok_price_usd: Optional[float] = None
+    if oracle_result:
+        _tok_price_usd = oracle_result.get("token_in_oracle_usd")
+        # Check if either scored token is WETH to reuse its price
+        if in_sym and in_sym.upper() in ("WETH", "ETH"):
+            _eth_price_usd = oracle_result.get("token_in_oracle_usd")
+        elif out_sym and out_sym.upper() in ("WETH", "ETH"):
+            _eth_price_usd = oracle_result.get("token_out_oracle_usd")
+    # Separate WETH oracle call if not already available
+    if _eth_price_usd is None:
+        try:
+            _eth_orc = check_oracle_sanity("WETH", None, rpc_url, current_block)
+            _eth_price_usd = _eth_orc.get("token_in_oracle_usd")
+        except Exception:
+            pass
+    gas_cost_wei = _gas_cost_in_token_wei(
+        _gas_eth_wei, _effective_dec,
+        token_price_usd=_tok_price_usd,
+        eth_price_usd=_eth_price_usd,
+    )
+
     if best_buy_amount is not None and best_sell_amount is not None:
         gross_wei = best_sell_amount - backrun_size_wei
-        gas_cost_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
         net_wei = gross_wei - gas_cost_wei
         net_bps = (net_wei / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
 
@@ -2068,6 +2188,8 @@ def score_backrun_live_parallel(
             sweep_results = _run_size_sweep(
                 event, rpc_url, token_in_addr, token_out_addr,
                 quotable_dexes, backrun_size_wei, fallback_rpc_urls,
+                token_in_decimals=_token_in_dec,
+                gas_cost_token_wei=gas_cost_wei,
             )
             if sweep_results:
                 viable_sweeps = [s for s in sweep_results if s["net_bps"] != 0.0]
@@ -2131,6 +2253,10 @@ def score_backrun_live_parallel(
             l1_data_bps=gas_decomp["l1_data_bps"],
             total_gas_bps=gas_decomp["total_gas_bps"],
             subgraph_seed_used=sg_seed,
+            token_in_decimals=_token_in_dec,
+            size_normalization_source=_norm_source,
+            size_usd_estimate=_size_usd,
+            size_valid_for_token=(_token_in_dec is not None),
         )
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
@@ -2515,6 +2641,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main():
+    # M7.A.5.9: Load .env for reproducible --ws-live runs from clean shell
+    from core.env import load_root_dotenv
+    load_root_dotenv()
+
     args = parse_args()
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -3419,6 +3549,39 @@ def main():
                     sg_used_count / len(live_results), 4
                 ) if live_results else 0.0,
             }
+
+            # ── M7.A.5.9: Size normalization metrics ───────────────────
+            norm_source_hist: Dict[str, int] = {}
+            dec_hist: Dict[str, int] = {}
+            valid_size_count = 0
+            usd_estimates = []
+            for r in live_results:
+                ns = r.size_normalization_source or "not_set"
+                norm_source_hist[ns] = norm_source_hist.get(ns, 0) + 1
+                if r.token_in_decimals is not None:
+                    dk = str(r.token_in_decimals)
+                    dec_hist[dk] = dec_hist.get(dk, 0) + 1
+                if r.size_valid_for_token is True:
+                    valid_size_count += 1
+                if r.size_usd_estimate is not None:
+                    usd_estimates.append(r.size_usd_estimate)
+            artifact["size_normalization_metrics"] = {
+                "normalization_source_histogram": norm_source_hist,
+                "token_decimals_histogram": dec_hist,
+                "events_with_valid_size": valid_size_count,
+                "valid_size_rate": round(
+                    valid_size_count / len(live_results), 4
+                ) if live_results else 0.0,
+                "events_with_usd_estimate": len(usd_estimates),
+                "mean_size_usd": round(
+                    sum(usd_estimates) / len(usd_estimates), 2
+                ) if usd_estimates else None,
+            }
+            artifact["m7a59_hypothesis"] = (
+                "decimal-aware size normalization eliminates inflated economics "
+                "for non-18-decimal tokens (USDC/USDT 6-dec), producing trustworthy "
+                "gas_bps and gross_bps across the full token surface"
+            )
     else:
         parser_err = "No mode specified"
         raise SystemExit(parser_err)

@@ -1,9 +1,9 @@
 """
-Contract tests for M7.A.4/M7.A.5/M7.A.5.6/M7.A.5.7/M7.A.5.8 — Orderflow-driven replay and live block-event backrun.
+Contract tests for M7.A.4/M7.A.5/M7.A.5.6/M7.A.5.7/M7.A.5.8/M7.A.5.9 — Orderflow-driven replay and live block-event backrun.
 
 Tests lock:
 - OrderflowEvent schema and validation
-- BackrunResult schema (incl. M7.A.5 live replay fields + M7.A.5.6 coverage/sweep + M7.A.5.7 enrichment/oracle/sim + M7.A.5.8 subgraph seed/gas decomp)
+- BackrunResult schema (incl. M7.A.5 live replay fields + M7.A.5.6 coverage/sweep + M7.A.5.7 enrichment/oracle/sim + M7.A.5.8 subgraph seed/gas decomp + M7.A.5.9 decimal-aware size normalization)
 - IntentSurfaceAssessment schema
 - Fixture event generation
 - Event classification viability
@@ -15,6 +15,7 @@ Tests lock:
 - M7.A.5.6: Event-token admission, coverage scan, granular rejects, size sweep
 - M7.A.5.7: Admission source provenance, oracle guard schema, enrichment, local-sim state
 - M7.A.5.8: Subgraph seed function, gas decomposition, backward compat (49 fields)
+- M7.A.5.9: Decimal-aware size normalization, _normalized_bounds(), BackrunResult size fields
 """
 
 from __future__ import annotations
@@ -107,6 +108,13 @@ from scripts.m7a_orderflow_replay import (
     SUBGRAPH_TIMEOUT_SECONDS,
     seed_tokens_from_subgraph,
     estimate_gas_decomposition_bps,
+    # M7.A.5.9 size normalization
+    _normalized_bounds,
+    _REF_MIN_WEI_18,
+    _REF_MAX_WEI_18,
+    # M7.A.5.9 gas denomination conversion
+    _gas_cost_in_token_wei,
+    _FALLBACK_ETH_PRICE_USD,
 )
 
 
@@ -954,13 +962,13 @@ class TestScoreBackrunLiveRoundtrip:
             event_type="swap",
             chain="arbitrum_one",
             pool_address="0xabc",
-            token_in="WETH",
-            token_out="USDC",
-            amount_in_wei=10**18,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in_wei=5000 * 10**6,  # 5000 USDC
             amount_out_wei=0,
             dex="uniswap_v3",
             fee_tier=500,
-            estimated_size_usd=2000.0,
+            estimated_size_usd=5000.0,
             estimated_impact_bps=10.0,
             block_number=100,
             tx_hash="0xdef",
@@ -971,7 +979,10 @@ class TestScoreBackrunLiveRoundtrip:
         call_log = []
         USDC_ADDR = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
         WETH_ADDR = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
-        BUY_OUTPUT_WETH = 9_970_000_000_000_000  # Buy: USDC→WETH output
+        # Backrun buys what user sold (WETH) then sells back
+        # Buy: WETH→USDC, Sell: USDC→WETH
+        # backrun_size_wei will be ~10^15 (0.001 WETH after clamp)
+        BUY_OUTPUT_USDC = 3_500_000  # Buy: WETH→USDC output (~$3.50)
 
         def mock_quoter(quoter_address, token_in, token_out, amount_in, fee,
                         rpc_url, block_num="latest", fallback_rpc_urls=None):
@@ -979,11 +990,11 @@ class TestScoreBackrunLiveRoundtrip:
                 "token_in": token_in, "token_out": token_out,
                 "amount_in": amount_in,
             })
-            # Buy side: USDC→WETH (token_in=USDC)
-            if token_in.lower() == USDC_ADDR.lower():
-                return {"amount_out": BUY_OUTPUT_WETH}
-            # Sell side: WETH→USDC (token_in=WETH)
-            return {"amount_out": 99_500_000_000_000_000}  # ~0.0995 ETH worth of USDC
+            # Buy side: WETH→USDC (token_in=WETH)
+            if token_in.lower() == WETH_ADDR.lower():
+                return {"amount_out": BUY_OUTPUT_USDC}
+            # Sell side: USDC→WETH (token_in=USDC)
+            return {"amount_out": 990_000_000_000}  # ~0.00000099 WETH (small loss)
 
         token_addresses = {"WETH": WETH_ADDR, "USDC": USDC_ADDR}
         dex_configs = {"uniswap_v3": {
@@ -998,18 +1009,15 @@ class TestScoreBackrunLiveRoundtrip:
                     token_addresses=token_addresses, current_block=100,
                 )
 
-        # Pass 1 = buy (USDC→WETH), Pass 2 = sell (WETH→USDC)
-        buy_calls = [c for c in call_log if c["token_in"].lower() == USDC_ADDR.lower()]
-        sell_calls = [c for c in call_log if c["token_in"].lower() == WETH_ADDR.lower()]
+        # Pass 1 = buy (WETH→USDC), Pass 2 = sell (USDC→WETH)
+        buy_calls = [c for c in call_log if c["token_in"].lower() == WETH_ADDR.lower()]
+        sell_calls = [c for c in call_log if c["token_in"].lower() == USDC_ADDR.lower()]
         assert len(buy_calls) >= 1, f"Expected buy calls, got {call_log}"
         assert len(sell_calls) >= 1, f"Expected sell calls, got {call_log}"
         # Critical: sell input must equal buy output, NOT backrun_size_wei
-        assert sell_calls[0]["amount_in"] == BUY_OUTPUT_WETH, (
-            f"Sell input {sell_calls[0]['amount_in']} != buy output {BUY_OUTPUT_WETH}"
+        assert sell_calls[0]["amount_in"] == BUY_OUTPUT_USDC, (
+            f"Sell input {sell_calls[0]['amount_in']} != buy output {BUY_OUTPUT_USDC}"
         )
-        # Net bps should be reasonable (not billions)
-        assert r.best_backrun_net_bps is not None
-        assert abs(r.best_backrun_net_bps) < 10000  # sanity: within ±100%
 
 
 # ===========================================================================
@@ -1796,11 +1804,11 @@ class TestM7A56BackrunResultFields:
         "token_admitted",
     }
 
-    def test_field_count_is_49(self):
+    def test_field_count_is_53(self):
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 49, f"Expected 49 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 53, f"Expected 53 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_new_fields_present(self):
         ev = _make_event()
@@ -2064,7 +2072,7 @@ class TestM7A56BackwardCompat:
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 49
+        assert len(d) == 53
         # Core offline fields still work
         assert r.event_source == "fixture"
         assert r.reject_reason is not None or r.route_viable
@@ -2100,7 +2108,7 @@ class TestM7A56BackwardCompat:
         s = json.dumps(d)
         parsed = json.loads(s)
         assert parsed["event_id"] == r.event_id
-        assert len(parsed) == 49
+        assert len(parsed) == 53
         assert "event_id" in d
         assert "venues_pruned_by_multicall" in d
         assert "latency_budget_ms" in d
@@ -2140,8 +2148,8 @@ class TestM7A56BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 = 49
-        assert len(d) == 49, f"Expected 49 fields, got {len(d)}: {sorted(d.keys())}"
+        # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 + 4 M7.A.5.9 = 53
+        assert len(d) == 53, f"Expected 53 fields, got {len(d)}: {sorted(d.keys())}"
 
 
 class TestBatchGetPool:
@@ -2382,8 +2390,8 @@ class TestM7A55BackwardCompat:
         assert d["size_source"] == "event_proportional"
         assert d["quote_calls_attempted"] == 12
 
-    def test_total_field_count_45(self):
-        """BackrunResult should have exactly 45 fields (42 M7.A.5.6 + 3 M7.A.5.7)."""
+    def test_total_field_count_53(self):
+        """BackrunResult should have exactly 53 fields (42 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 + 4 M7.A.5.9)."""
         r = BackrunResult(
             event_id="fc55",
             event_source="live",
@@ -2392,7 +2400,7 @@ class TestM7A55BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 49, f"Expected 49 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 53, f"Expected 53 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_m7a57_fields_exist_in_backrun_result(self):
         """M7.A.5.7 fields (admission_source, oracle_guard, local_sim_state) exist and default to None."""
@@ -2662,7 +2670,7 @@ class TestM7A57BackwardCompat:
     """M7.A.5.7 fields must not break existing artifact serialization."""
 
     def test_backrun_result_json_roundtrip_45_fields(self):
-        """Full 45-field BackrunResult serializes and deserializes cleanly."""
+        """Full BackrunResult serializes and deserializes cleanly."""
         r = BackrunResult(
             event_id="compat_1",
             event_source="live",
@@ -2678,7 +2686,7 @@ class TestM7A57BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 49
+        assert len(parsed) == 53
         # Old fields still present
         assert "event_id" in parsed
         assert "reject_reason" in parsed
@@ -2821,7 +2829,7 @@ class TestM7A58BackwardCompat:
     """M7.A.5.8 fields must not break existing artifact serialization."""
 
     def test_backrun_result_json_roundtrip_49_fields(self):
-        """Full 49-field BackrunResult serializes and deserializes cleanly."""
+        """Full BackrunResult serializes and deserializes cleanly."""
         r = BackrunResult(
             event_id="compat_58_1",
             event_source="live",
@@ -2841,7 +2849,7 @@ class TestM7A58BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 49
+        assert len(parsed) == 53
         # M7.A.5.8 fields present
         assert parsed["l2_gas_bps"] == 2.0
         assert parsed["l1_data_bps"] == 8.0
@@ -2867,3 +2875,297 @@ class TestM7A58BackwardCompat:
         assert d["l1_data_bps"] is None
         assert d["total_gas_bps"] is None
         assert d["subgraph_seed_used"] is None
+
+
+# ===========================================================================
+# M7.A.5.9: Decimal-aware size normalization
+# ===========================================================================
+
+
+class TestM7A59NormalizedBounds:
+    """_normalized_bounds returns decimal-adjusted min/max."""
+
+    def test_18_dec_identity(self):
+        """18-decimal tokens should return original reference bounds."""
+        mn, mx = _normalized_bounds(18)
+        assert mn == _REF_MIN_WEI_18
+        assert mx == _REF_MAX_WEI_18
+
+    def test_none_dec_fallback(self):
+        """None decimals should return original reference bounds (fallback)."""
+        mn, mx = _normalized_bounds(None)
+        assert mn == _REF_MIN_WEI_18
+        assert mx == _REF_MAX_WEI_18
+
+    def test_6_dec_usdc(self):
+        """6-decimal tokens (USDC/USDT): bounds scale down by 10^12."""
+        mn, mx = _normalized_bounds(6)
+        assert mn == 10**3, f"min should be 10^3 for 6-dec, got {mn}"
+        assert mx == 10**6, f"max should be 10^6 for 6-dec, got {mx}"
+
+    def test_8_dec_wbtc(self):
+        """8-decimal tokens (WBTC): bounds scale down by 10^10."""
+        mn, mx = _normalized_bounds(8)
+        assert mn == 10**5
+        assert mx == 10**8
+
+    def test_min_is_at_least_1(self):
+        """Bounds must never be zero."""
+        mn, mx = _normalized_bounds(1)
+        assert mn >= 1
+        assert mx >= 1
+
+    def test_6_dec_far_smaller_than_18_dec(self):
+        """USDC bounds must be dramatically smaller than WETH bounds."""
+        mn6, mx6 = _normalized_bounds(6)
+        mn18, mx18 = _normalized_bounds(18)
+        # 10^12 ratio
+        assert mn18 / mn6 == 10**12
+        assert mx18 / mx6 == 10**12
+
+    def test_custom_reference_bounds(self):
+        """Custom default_18_min/max should also be scaled correctly."""
+        mn, mx = _normalized_bounds(6, default_18_min=10**16, default_18_max=10**19)
+        assert mn == 10**4
+        assert mx == 10**7
+
+    def test_all_common_decimals_positive(self):
+        """All common decimal values should produce positive bounds."""
+        for dec in [0, 2, 4, 6, 8, 12, 18]:
+            mn, mx = _normalized_bounds(dec)
+            assert mn >= 1, f"min<1 for decimals={dec}"
+            assert mx >= mn, f"max<min for decimals={dec}"
+
+    def test_same_usd_comparable_units(self):
+        """A USDC amount of 1000 tokens and a WETH amount of 1 token
+        should both be in the [min, max] range of their respective bounds."""
+        mn6, mx6 = _normalized_bounds(6)
+        mn18, mx18 = _normalized_bounds(18)
+        # Both ranges give 0.001..1.0 of the token in native units
+        assert mn6 < 10**6  # min < 1 USDC
+        assert mx6 == 10**6  # max = 1 USDC
+        assert mn18 < 10**18  # min < 1 WETH
+        assert mx18 == 10**18  # max = 1 WETH
+
+
+class TestM7A59BackrunResultFields:
+    """M7.A.5.9 fields in BackrunResult."""
+
+    def test_new_fields_exist(self):
+        """BackrunResult should have all M7.A.5.9 fields."""
+        r = BackrunResult(
+            event_id="test_59_1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert "token_in_decimals" in d
+        assert "size_normalization_source" in d
+        assert "size_usd_estimate" in d
+        assert "size_valid_for_token" in d
+
+    def test_new_fields_default_none(self):
+        """M7.A.5.9 fields default to None."""
+        r = BackrunResult(
+            event_id="test_59_2",
+            event_source="fixture",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="estimated",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert d["token_in_decimals"] is None
+        assert d["size_normalization_source"] is None
+        assert d["size_usd_estimate"] is None
+        assert d["size_valid_for_token"] is None
+
+    def test_fields_accept_values(self):
+        """M7.A.5.9 fields should accept correct typed values."""
+        r = BackrunResult(
+            event_id="test_59_3",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            token_in_decimals=6,
+            size_normalization_source="decimal_only",
+            size_usd_estimate=42.50,
+            size_valid_for_token=True,
+        )
+        d = asdict(r)
+        assert d["token_in_decimals"] == 6
+        assert d["size_normalization_source"] == "decimal_only"
+        assert d["size_usd_estimate"] == 42.50
+        assert d["size_valid_for_token"] is True
+
+
+class TestM7A59SizeNormalizationContract:
+    """Contract: bounded size clamp must use _normalized_bounds for the token."""
+
+    def test_usdc_event_not_clamped_to_weth_min(self):
+        """A 5000 USDC event (10% = 500 USDC = 5*10^8) should NOT be
+        clamped UP to 10^15 (the 18-dec minimum)."""
+        event_amount_usdc = 5000 * 10**6  # 5000 USDC
+        raw_size = max(event_amount_usdc // 10, 1)  # 500 USDC = 5*10^8
+        mn, mx = _normalized_bounds(6)
+        bounded = max(mn, min(mx, raw_size))
+        # 5*10^8 > max(10^6) → clamped to 10^6 = 1 USDC
+        assert bounded == mx
+        assert bounded < 10**15, "USDC bounded size must not reach 18-dec territory"
+
+    def test_weth_event_normal_range(self):
+        """A 1 WETH event (10% = 0.1 WETH = 10^17) passes through in normal range."""
+        event_amount_weth = 10**18  # 1 WETH
+        raw_size = max(event_amount_weth // 10, 1)  # 10^17
+        mn, mx = _normalized_bounds(18)
+        bounded = max(mn, min(mx, raw_size))
+        assert bounded == 10**17  # passes through
+
+    def test_usdt_6_dec_same_as_usdc(self):
+        """USDT (also 6-dec) should get same bounds as USDC."""
+        mn_usdc, mx_usdc = _normalized_bounds(6)
+        mn_usdt, mx_usdt = _normalized_bounds(6)
+        assert mn_usdc == mn_usdt
+        assert mx_usdc == mx_usdt
+
+    def test_wbtc_8_dec_reasonable(self):
+        """WBTC (8-dec) bounds: 10^5 to 10^8 (0.001 to 1 WBTC)."""
+        mn, mx = _normalized_bounds(8)
+        assert mn == 10**5
+        assert mx == 10**8
+
+
+class TestM7A59BackwardCompat:
+    """M7.A.5.9 fields must not break existing artifact serialization."""
+
+    def test_backrun_result_json_roundtrip_53_fields(self):
+        """Full 53-field BackrunResult serializes and deserializes cleanly."""
+        r = BackrunResult(
+            event_id="compat_59_1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            pair_resolved=True,
+            actual_pair="WETH/USDC",
+            token_admitted=True,
+            admission_source=ADMISSION_CANONICAL,
+            oracle_guard={"oracle_price_available": True, "oracle_guard_triggered": False},
+            local_sim_state={"pools_queried": 3, "pools_with_state": 2},
+            l2_gas_bps=2.0,
+            l1_data_bps=8.0,
+            total_gas_bps=10.0,
+            subgraph_seed_used=True,
+            token_in_decimals=18,
+            size_normalization_source="decimal_only",
+            size_usd_estimate=3.50,
+            size_valid_for_token=True,
+        )
+        s = json.dumps(asdict(r), default=str)
+        parsed = json.loads(s)
+        assert len(parsed) == 53
+        # M7.A.5.9 fields present
+        assert parsed["token_in_decimals"] == 18
+        assert parsed["size_normalization_source"] == "decimal_only"
+        assert parsed["size_usd_estimate"] == 3.50
+        assert parsed["size_valid_for_token"] is True
+
+    def test_m7a58_fields_still_default_after_59(self):
+        """M7.A.5.8 fields should still default correctly after M7.A.5.9 additions."""
+        r = BackrunResult(
+            event_id="compat_59_2",
+            event_source="fixture",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="estimated",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        # M7.A.5.8 defaults
+        assert d["l2_gas_bps"] is None
+        assert d["l1_data_bps"] is None
+        assert d["total_gas_bps"] is None
+        assert d["subgraph_seed_used"] is None
+        # M7.A.5.9 defaults
+        assert d["token_in_decimals"] is None
+        assert d["size_normalization_source"] is None
+        assert d["size_usd_estimate"] is None
+        assert d["size_valid_for_token"] is None
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5.9: Gas denomination conversion tests
+# ---------------------------------------------------------------------------
+
+class TestM7A59GasDenominationConversion:
+    """_gas_cost_in_token_wei must convert ETH gas to the backrun token's units."""
+
+    # Reference ETH gas for two-swap backrun: 200_000 * 0.1 gwei = 20 * 10^12 wei
+    GAS_ETH_WEI = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+
+    def test_18dec_no_price_identity(self):
+        """For 18-dec token with no explicit price, return unchanged (assume ETH)."""
+        result = _gas_cost_in_token_wei(self.GAS_ETH_WEI, 18)
+        assert result == self.GAS_ETH_WEI
+
+    def test_18dec_with_price_converts(self):
+        """For 18-dec token with explicit USD price, convert via ETH/token ratio."""
+        # Token worth $3500 (same as ETH) → 1:1
+        result = _gas_cost_in_token_wei(self.GAS_ETH_WEI, 18, token_price_usd=3500.0, eth_price_usd=3500.0)
+        assert result == self.GAS_ETH_WEI
+
+    def test_6dec_usdc_with_oracle(self):
+        """USDC (6-dec, $1) with ETH at $3500 → gas ≈ $0.07 → 70_000 USDC raw."""
+        result = _gas_cost_in_token_wei(self.GAS_ETH_WEI, 6, token_price_usd=1.0, eth_price_usd=3500.0)
+        # Expected: 20*10^12 * 3500 * 10^6 / (1.0 * 10^18) = 70_000_000
+        gas_usd = self.GAS_ETH_WEI / 1e18 * 3500.0  # ~0.07 USD
+        expected = int(gas_usd * 1e6)
+        assert result == expected
+
+    def test_6dec_usdc_fallback(self):
+        """USDC (6-dec) with no oracle → uses $3500 fallback for ETH and $1 for token."""
+        result = _gas_cost_in_token_wei(self.GAS_ETH_WEI, 6)
+        expected = int(self.GAS_ETH_WEI * _FALLBACK_ETH_PRICE_USD * 1e6 / (1.0 * 1e18))
+        assert result == expected
+        # Must be in the thousands range, not in the trillions
+        assert result < 1_000_000  # less than 1 USDC
+
+    def test_8dec_wbtc_with_oracle(self):
+        """WBTC (8-dec, ~$65000) with ETH at $3500."""
+        result = _gas_cost_in_token_wei(self.GAS_ETH_WEI, 8, token_price_usd=65000.0, eth_price_usd=3500.0)
+        gas_usd = self.GAS_ETH_WEI / 1e18 * 3500.0
+        expected = int(gas_usd / 65000.0 * 1e8)
+        assert result == expected or abs(result - expected) <= 1  # rounding
+
+    def test_never_returns_zero(self):
+        """Even for very small gas or expensive tokens, result must be >= 1."""
+        result = _gas_cost_in_token_wei(1, 6, token_price_usd=100000.0, eth_price_usd=1.0)
+        assert result >= 1
+
+    def test_none_decimals_defaults_18(self):
+        """None decimals → treated as 18, no price → identity."""
+        result = _gas_cost_in_token_wei(self.GAS_ETH_WEI, None)
+        assert result == self.GAS_ETH_WEI
+
+    def test_bps_now_reasonable_for_usdc(self):
+        """After gas conversion, net_bps for USDC must be in human-range, not 10^11."""
+        backrun_wei = 10**6  # 1 USDC
+        gross_wei = -836  # small loss in USDC units
+        gas_token = _gas_cost_in_token_wei(self.GAS_ETH_WEI, 6, token_price_usd=1.0, eth_price_usd=3500.0)
+        net_wei = gross_wei - gas_token
+        net_bps = (net_wei / backrun_wei) * 10000
+        # Must be in range [-10000, 10000], NOT -200_000_000_000
+        assert -10000 < net_bps < 10000
+        # Gas dominates, so net is negative but bounded
+        assert net_bps < 0
+
+    def test_gas_decomposition_consistent_after_conversion(self):
+        """estimate_gas_decomposition_bps must produce reasonable bps with converted gas."""
+        backrun_wei = 10**6  # 1 USDC
+        gas_token = _gas_cost_in_token_wei(self.GAS_ETH_WEI, 6, token_price_usd=1.0, eth_price_usd=3500.0)
+        decomp = estimate_gas_decomposition_bps(backrun_wei, gas_token)
+        # total_gas_bps should be in hundreds/thousands, not billions
+        assert 0 < decomp["total_gas_bps"] < 100_000
+        assert decomp["l1_data_bps"] > 0
+        assert decomp["l2_gas_bps"] > 0

@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.8 — all scopes produce no-graduate verdicts. M7.A.5.8 tests The Graph subgraph-backed bounded coverage seed — The Graph free gateway returns 403 Forbidden, subgraph seed non-functional. However, M7.A.5.7 on-chain enrichment already raised admission from 10% → 100%. New dominant blocker: GAS_EXCEEDS_GROSS (100% of events). Gas decomposition confirms L1 data posting ≈80% of total gas. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.9 — all scopes produce no-graduate verdicts. M7.A.5.9 fixed a critical token-decimal-blind bug in size normalization AND a cross-denomination gas/bps unit mismatch. After fix: USDC events produce -400 bps (was -200 billion bps), WETH events produce -0.19 bps. GAS_EXCEEDS_GROSS remains the sole dominant blocker (100% of events). Gas decomposition now denomination-correct: stablecoins show ~398 bps, WETH shows ~0.2 bps. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-03-31  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition. M7.B remains closed.
 
@@ -66,105 +66,13 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 
 ---
 
-## M7.A.5.3: WebSocket-Triggered Same-Block/Next-Block Replay
+## M7.A.5.3–5.5: WebSocket Streaming, Multicall Pruning, Actual-Pair Resolution (CLOSED)
 
-**Hypothesis**: `block_event_backrun` on arbitrum_one may only be fairly testable with websocket-triggered same-block/next-block replay, not historical block polling.
+**M7.A.5.3** (WebSocket-Triggered Same-Block Replay): ws-live streaming architecture NOT VIABLE. Quote pipeline ~2.3s per event, 9x over 250ms block budget. All events stale. CI: 2849 passed, 113 orderflow tests.
 
-**Motivation**: M7.A.5.2 closes only the HTTP polling architecture. The repo has `resolve_rpc_ws()`, `check_ws_connection()`, `MulticallBatcher`, and `prefetch_slot0_multicall()` — all unused by the polling path. Streaming `newHeads` + parallel scoring is the correct architecture for low-lag replay.
+**M7.A.5.4** (Two-Stage Multicall Pruning): Hypothesis NOT VIABLE. Multicall pruning works (20% call reduction) but per-call RPC latency ~400ms is irreducible; even 1 call > 250ms budget. Closes all public RPC architecture paths. CI: 2869 passed, 133 orderflow tests.
 
-**New infrastructure**:
-- `--ws-live` CLI mode with `--ws-blocks N` and `--ws-timeout S` controls
-- WebSocket `newHeads` subscription via `resolve_rpc_ws()` (Alchemy WSS)
-- `score_backrun_live_parallel()`: ThreadPoolExecutor for parallel buy/sell fanout
-- Multicall-assisted venue pruning, latency budget metrics (`latency_budget_ms`, `latency_budget_hit_rate`, `sub_block_capable`)
-- `ws_low_lag_summary` / `ws_stale_summary` machine-readable artifact sections
-- 7 new BackrunResult fields (incl. `latency_budget_ms`)
-- 28 new contract tests (113 total in `test_orderflow_contracts.py`)
-
-**Evidence — M7.A.5.3.1 (Alchemy WSS, narrow)**: 10 blocks, 6 events scored. Results:
-
-| Metric | Value |
-|--------|-------|
-| events_scored_low_lag_ws | **0** |
-| same_block_count | 0 |
-| next_block_count | 0 |
-| stale_count | 6 |
-| mean_block_lag | 43.33 |
-| mean_pipeline_latency_ms | **2258.17** |
-| latency_budget_ms | 250 |
-| latency_budget_hit_rate | **0.0** |
-| sub_block_capable | **false** |
-| best_net_bps | -20.49 |
-| all reject | GAS_EXCEEDS_GROSS (6/6) |
-
-**Verdict**: ws-live streaming architecture **NOT VIABLE**. WebSocket newHeads delivers blocks correctly but quote pipeline (~2.3s per event, 6 venues × 2 passes) is 9× over the 250ms block budget. All events stale regardless of delivery mechanism. This closes the streaming architecture path alongside the polling path.
-
-**CI gates**: 2849 passed, 6 skipped. 113 tests in `test_orderflow_contracts.py`.
-
----
-
-## M7.A.5.4: Two-Stage Multicall Pruning Pipeline
-
-**Hypothesis**: block_event_backrun on arbitrum_one may become fairly testable only if per-event live quote count is collapsed from ~12 calls to a multicall/local-state prefilter plus 1-2 confirmatory quotes.
-
-**Motivation**: M7.A.5.3.1 audit shows event ingestion is fine (`event_detected_at_block == quote_started_block`) but quote fanout is the bottleneck. `venues_pruned_by_multicall=0` proves multicall was a no-op. This step implements real multicall-based venue pruning.
-
-**New infrastructure**:
-- `_resolve_pool_addresses_multicall()`: batched `factory.getPool()` + `batch_liquidity()` via `MulticallBatcher.batch_get_pool()` (new method)
-- 2-stage scoring in `score_backrun_live_parallel()`: Stage A (multicall pruning) → Stage B (confirmatory QuoterV2)
-- 4 new BackrunResult fields: `quote_calls_attempted`, `quote_calls_after_pruning`, `prune_reason_histogram`, `pipeline_stage_latency_ms`
-- Artifact: `mean_quote_calls_attempted`, `mean_quote_calls_after_pruning`, `prune_reason_histogram`, `mean_stage_a_ms`, `mean_stage_b_ms`
-- 20 new contract tests (133 total in `test_orderflow_contracts.py`)
-
-**Evidence — M7.A.5.4 (Alchemy WSS, 50 blocks)**: 8 events, 0 low-lag. Multicall pruning works (venues_pruned=8, calls 20→16, 20% reduction). But pipeline latency increased (2860ms vs 2258ms due to Stage A overhead). Per-call RPC latency (~400ms) is the irreducible bottleneck.
-
-**Verdict**: Hypothesis **NOT VIABLE**. Even with perfect pruning (1 call), 400ms > 250ms budget. Closes all public RPC architecture paths for sub-block backrun on Arbitrum.
-
-**CI gates**: 2869 passed, 6 skipped. 133 tests in `test_orderflow_contracts.py`.
-
----
-
-## M7.A.5.5: Actual-Pair Token Resolution
-
-**Hypothesis**: event-driven backrun looks worse than M4 partly because live replay is still proxy-priced; resolving actual pool token0/token1 and event-specific pairs may materially change measured gross.
-
-**Motivation**: M7.A.5.x ws-live always fell back to WETH/USDC representative pair because `normalize_swap_log()` sets direction tags ("token0_in", "token1") not actual symbols. `token_addresses.get("token0_in")` returns `""`, triggering `use_common_pairs=True`. Additionally, fixed 0.01 ETH notional makes gas floor ~20 bps. M4 frontier (WBTC/USDC, -3.5062 bps, pre-cost gross ~+36.35 bps) is not comparable to M7 proxy-priced results.
-
-**New infrastructure**:
-- `_resolve_event_tokens()`: reads pool token0/token1/fee via `batch_token_info()`, maps to symbols via `addr_to_symbol`
-- `REJECT_TOKEN_PAIR_UNRESOLVED`: new reject reason when pool tokens cannot be mapped to known symbols
-- 3 new BackrunResult fields: `pair_resolved`, `actual_pair`, `size_source`
-- Bounded size logic: `max(0.001 ETH, min(1.0 ETH, event.amount_in_wei // 10))` replaces fixed 0.01 ETH
-- Proxy WETH/USDC fallback removed — events with unresolvable pairs get `TOKEN_PAIR_UNRESOLVED`
-- `pair_resolution_metrics` artifact block: resolution rate, actual pairs, resolved economics
-- `m4_m7_comparison` artifact block: decomposed M4 vs M7 economics
-- 18 new contract tests (151 total in `test_orderflow_contracts.py`)
-
-**Evidence — M7.A.5.5 (Alchemy WSS, 50 blocks)**: 2 events scored. Results:
-
-| Metric | M7.A.5.4 (before) | M7.A.5.5 (after) |
-|--------|-------------------|------------------|
-| events_scored | 8 | 2 |
-| pair_resolution_rate | N/A | **1.0 (100%)** |
-| actual_pairs_seen | N/A | USDT/0x1009c5c1, 0x1009c5c1/USDT |
-| TOKEN_PAIR_UNRESOLVED | N/A | 0 |
-| QUOTE_FAILURE | 8 | 2 |
-| size_source | N/A | bounded (2/2) |
-| best_net_bps | -19.73 | 0.0 (no viable routes) |
-| mean_pipeline_latency_ms | 2860 | 1266 |
-| m4_best_net_bps | -3.5062 | -3.5062 |
-| m7_pair_resolved_count | N/A | 2 |
-
-**Key findings**:
-1. **Pair resolution works** — `_resolve_event_tokens()` successfully reads token0/token1 from pool contracts and maps to symbols. 100% resolution rate.
-2. **Most on-chain activity involves tokens outside our narrow universe** — resolved pairs show unknown tokens (e.g., `0x1009c5c1`) that aren't in `core_tokens.yaml`.
-3. **QUOTE_FAILURE persists regardless of pair resolution** — because the actual token pairs don't have counter venues in our DEX coverage.
-4. **Proxy-pricing distortion confirmed** — prior runs incorrectly showed WETH/USDC economics for all events. Now we see actual pairs, but the economics don't improve because the actual pairs lack venue coverage.
-5. **Bounded size logic activated** — all events hit the minimum bound (0.001 ETH), indicating small on-chain transactions.
-
-**Verdict**: The proxy-pricing hypothesis is **CONFIRMED but IMMATERIAL**. Resolving actual pairs reveals that observed on-chain events involve tokens outside our trading universe. Even with correct pair resolution, the economics don't improve because: (a) the narrow_7 universe doesn't cover most actively-traded tokens, and (b) counter-venue absence causes QUOTE_FAILURE regardless of pair labels. This reinforces the M7.A.5.4 conclusion that all public RPC architecture paths are closed.
-
-**CI gates**: 2887 passed, 6 skipped. 151 tests in `test_orderflow_contracts.py`.
+**M7.A.5.5** (Actual-Pair Token Resolution): Proxy-pricing hypothesis CONFIRMED but IMMATERIAL. Resolved 100% of pairs, but most on-chain tokens are outside narrow_7 universe. Counter-venue absence causes QUOTE_FAILURE regardless. CI: 2887 passed, 151 orderflow tests.
 
 ---
 
@@ -278,6 +186,49 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 **Verdict**: The M7.A.5.8 subgraph seed hypothesis is **BLOCKED** (403 Forbidden). However, the session reveals that M7.A.5.7 on-chain enrichment already resolved the coverage gap (admission 10% → 100%). The blocker stack has shifted: **GAS_EXCEEDS_GROSS is now the sole dominant blocker** (100% of events). This confirms that Arbitrum same-chain backrun faces irreducible gas costs (~150 bps), primarily from L1 data posting. M7.A is now fully closed: latency (M7.A.5.1–5.4), coverage (M7.A.5.5–5.7), and gas economics (M7.A.5.8) are all independently confirmed as blockers.
 
 **CI gates**: 2961 passed, 6 skipped. 225 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+
+---
+
+## M7.A.5.9: Token-Decimal-Aware Size & Gas Denomination Fix
+
+**Hypothesis**: M7.A.5.8 evidence contained a **token-decimal-blind size bug** — `backrun_size_wei` was clamped to `10^15..10^18` for ALL tokens, but USDC/USDT are 6-decimal (so `10^15` raw = $1 billion USDC, absurd). A second deeper bug was exposed: gas cost (always in ETH wei) was subtracted from gross (in token-native units) and used as bps denominator, producing -200 billion bps for 6-decimal tokens.
+
+**Fix — Size normalization** (`_normalized_bounds()`):
+- Scales size bounds by `10^(18 - token_decimals)` ratio
+- USDC/USDT (6-dec): bounds become `10^3..10^6` (0.001..1.0 USDC)
+- WBTC (8-dec): bounds become `10^5..10^8` (0.001..1.0 WBTC)
+- WETH (18-dec): unchanged `10^15..10^18`
+
+**Fix — Gas denomination conversion** (`_gas_cost_in_token_wei()`):
+- Converts ETH gas to the backrun token's native units using oracle prices
+- Formula: `gas_token = gas_eth_wei * eth_usd / tok_usd * 10^dec / 10^18`
+- Uses Chainlink oracle for both ETH and token_in USD prices
+- Falls back to `$3500 ETH / $1 stablecoin` heuristic when no oracle
+
+**New BackrunResult fields** (53 total, 4 added):
+- `token_in_decimals`, `size_normalization_source`, `size_usd_estimate`, `size_valid_for_token`
+
+**New helpers**: `_normalized_bounds()`, `_gas_cost_in_token_wei()`, `_FALLBACK_ETH_PRICE_USD`
+
+**Evidence — M7.A.5.9 corrective (Alchemy WSS)**:
+
+30-block run (`data/tmp/m7a_ws_live_gasfix_30b.json`):
+- 2 events, 2 results, 0 viable
+- USDC event: `net_bps=-400.47`, `gas_cost_wei=39842 USDC-raw`, `tgas_bps=398.42` (**was -200,000,000,008 bps**)
+- Gas decomp: mean_total=398 bps (L2=80 bps, L1=319 bps)
+
+100-block run (`data/tmp/m7a_ws_live_gasfix_100b.json`):
+- 10 events, 10 results, 0 viable, best_net_bps=0.0, worst_net_bps=-4475, mean_net_bps=-963
+- USDC (6-dec): `net_bps=-400`, `gas=39842`, `tgas_bps=398` — correct
+- WETH (18-dec): `net_bps=-0.19`, `gas=20T`, `tgas_bps=0.2` — identity, correct
+- PENDLE (18-dec, ~$0.16): `gas=4.49*10^17 PENDLE-raw`, `tgas_bps=4488` — correct ($0.07 gas / $0.16 token = 44.9%)
+- All bps values: [-4475, 0] — human-readable range (**was [-200 billion, 0]**)
+
+**Key evidence finding**: GAS_EXCEEDS_GROSS remains 100% dominant, but now with **trustworthy denomination-correct economics**. For stablecoins, gas overhead is ~400 bps (4%) per $1 backrun on Arbitrum at 0.1 gwei. For WETH, it's 0.2 bps. Larger backruns or cheaper gas could shift the economics, but the fundamental GAS_EXCEEDS_GROSS verdict is confirmed with correct accounting.
+
+**Verdict**: M7.A.5.9 corrects two critical measurement bugs from M7.A.5.8 that inflated gas economics by 10^8x for non-18-decimal tokens. The verdict is **unchanged** (GAS_EXCEEDS_GROSS dominates), but the evidence is now **denomination-correct and trustworthy** across the full token surface. M7.A remains closed.
+
+**CI gates**: 2988 passed, 6 skipped. 252 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
 
 ---
 
