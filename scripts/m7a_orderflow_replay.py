@@ -66,9 +66,15 @@ REJECT_GAS_EXCEEDS_GROSS = "GAS_EXCEEDS_GROSS"
 REJECT_SLIPPAGE_EXCEEDS_GROSS = "SLIPPAGE_EXCEEDS_GROSS"
 REJECT_EVENT_TOO_SMALL = "EVENT_TOO_SMALL"
 REJECT_SAME_BLOCK_IMPOSSIBLE = "SAME_BLOCK_IMPOSSIBLE"
-REJECT_QUOTE_FAILURE = "QUOTE_FAILURE"
+REJECT_QUOTE_FAILURE = "QUOTE_FAILURE"  # legacy — kept for backward compat
 REJECT_INSUFFICIENT_IMPACT = "INSUFFICIENT_IMPACT"
 REJECT_TOKEN_PAIR_UNRESOLVED = "TOKEN_PAIR_UNRESOLVED"
+# M7.A.5.6: Split QUOTE_FAILURE into granular sub-reasons
+REJECT_NO_COUNTER_POOL = "NO_COUNTER_POOL"  # resolved pair has no counter-venue pool
+REJECT_TOKEN_NOT_ADMITTED = "TOKEN_NOT_ADMITTED"  # event token outside any known universe
+REJECT_UNSUPPORTED_ADAPTER = "UNSUPPORTED_ADAPTER"  # no adapter can quote this pair
+REJECT_RPC_QUOTE_FAIL = "RPC_QUOTE_FAIL"  # quoter call failed (RPC/timeout)
+REJECT_PAIR_RESOLVED_UNTRADEABLE = "PAIR_RESOLVED_BUT_UNTRADEABLE"  # pair resolved, coverage checked, no viable route
 
 ALL_REJECT_REASONS = frozenset({
     REJECT_NO_COUNTER_VENUE,
@@ -79,6 +85,11 @@ ALL_REJECT_REASONS = frozenset({
     REJECT_QUOTE_FAILURE,
     REJECT_INSUFFICIENT_IMPACT,
     REJECT_TOKEN_PAIR_UNRESOLVED,
+    REJECT_NO_COUNTER_POOL,
+    REJECT_TOKEN_NOT_ADMITTED,
+    REJECT_UNSUPPORTED_ADAPTER,
+    REJECT_RPC_QUOTE_FAIL,
+    REJECT_PAIR_RESOLVED_UNTRADEABLE,
 })
 
 # Intent/auction surface types
@@ -185,6 +196,12 @@ class BackrunResult:
     pair_resolved: bool = False  # True if token0/token1 resolved from pool contract
     actual_pair: Optional[str] = None  # e.g. "WETH/USDC" — None if unresolved
     size_source: Optional[str] = None  # "event_proportional" | "fixed_fallback"
+    # M7.A.5.6 coverage scan + size sweep fields
+    coverage_result: Optional[Dict[str, Any]] = None  # counter_venue_coverage_scan() output
+    size_sweep_results: Optional[List[Dict[str, Any]]] = None  # bounded size sweep ladder
+    best_sweep_net_bps: Optional[float] = None  # best net across sweep sizes
+    best_sweep_size_wei: Optional[int] = None  # size that produced best_sweep_net_bps
+    token_admitted: Optional[bool] = None  # True if event tokens in admitted universe
 
 
 @dataclass
@@ -968,6 +985,262 @@ def _resolve_pool_addresses_multicall(
     return result
 
 
+# ---------------------------------------------------------------------------
+# M7.A.5.6: Event-token admission + coverage scan + size sweep
+# ---------------------------------------------------------------------------
+
+
+def admit_event_tokens(
+    token_in_addr: str,
+    token_out_addr: str,
+    addr_to_symbol: Dict[str, str],
+    canonical_token_addrs: Dict[str, str],
+) -> Dict[str, Any]:
+    """Check whether event tokens are admissible for quoting.
+
+    A token is 'admitted' if its address maps to a known symbol in
+    canonical_token_addrs OR in addr_to_symbol.  This allows temporary
+    admission of tokens resolved from pool contracts even if they are
+    not in the canonical narrow universe.
+
+    Returns dict with:
+        admitted: bool
+        token_in_symbol: str or None
+        token_out_symbol: str or None
+        token_in_known: bool   # in canonical universe
+        token_out_known: bool
+        blocker_reason: str or None
+    """
+    reverse_canonical = {v.lower(): k for k, v in canonical_token_addrs.items() if v}
+    in_sym = addr_to_symbol.get(token_in_addr.lower()) or reverse_canonical.get(token_in_addr.lower())
+    out_sym = addr_to_symbol.get(token_out_addr.lower()) or reverse_canonical.get(token_out_addr.lower())
+    in_known = token_in_addr.lower() in reverse_canonical
+    out_known = token_out_addr.lower() in reverse_canonical
+
+    # Admitted if we have ANY symbol mapping (even truncated addr fallback is NOT admitted)
+    in_admitted = in_sym is not None and len(in_sym) > 10  # truncated addrs are <=10
+    out_admitted = out_sym is not None and len(out_sym) > 10
+    # But canonical tokens are always admitted regardless of symbol length
+    if in_known:
+        in_admitted = True
+    if out_known:
+        out_admitted = True
+    # Also admit if addr_to_symbol returned a real symbol (not a truncated address)
+    if in_sym and not in_sym.startswith("0x"):
+        in_admitted = True
+    if out_sym and not out_sym.startswith("0x"):
+        out_admitted = True
+
+    admitted = in_admitted and out_admitted
+    blocker = None
+    if not in_admitted and not out_admitted:
+        blocker = "both_tokens_unknown"
+    elif not in_admitted:
+        blocker = "token_in_unknown"
+    elif not out_admitted:
+        blocker = "token_out_unknown"
+
+    return {
+        "admitted": admitted,
+        "token_in_symbol": in_sym,
+        "token_out_symbol": out_sym,
+        "token_in_known": in_known,
+        "token_out_known": out_known,
+        "blocker_reason": blocker,
+    }
+
+
+def counter_venue_coverage_scan(
+    token_in_addr: str,
+    token_out_addr: str,
+    dex_configs: Dict[str, Any],
+    rpc_url: str,
+    block_num: int,
+) -> Dict[str, Any]:
+    """Scan counter-venue coverage for a resolved token pair.
+
+    Uses multicall to check which DEXes have deployed pools with liquidity
+    for the given pair.
+
+    Returns machine-readable truth block:
+        known_pools: int         # pools found via factory.getPool
+        known_dexes: list[str]   # DEX names with at least one live pool
+        buy_venues: int          # venues with quoter that could quote buy
+        sell_venues: int         # venues with quoter that could quote sell
+        coverage_complete: bool  # at least 1 buy + 1 sell venue
+        coverage_blocker_reason: str or None
+    """
+    pool_map = _resolve_pool_addresses_multicall(
+        dex_configs, token_in_addr, token_out_addr, rpc_url, block_num,
+    )
+
+    known_pools = 0
+    known_dexes: List[str] = []
+    buy_venues = 0
+    sell_venues = 0
+
+    for dex_name, pools in pool_map.items():
+        dex_has_pool = False
+        for p in pools:
+            if p["address"] is not None:
+                liq = p["liquidity"]
+                if liq is None or liq > 0:
+                    known_pools += 1
+                    dex_has_pool = True
+        if dex_has_pool:
+            known_dexes.append(dex_name)
+
+    # Check which have quoter for buy/sell
+    for dex_name in known_dexes:
+        cfg = dex_configs.get(dex_name, {})
+        quoter = cfg.get("quoter_v2") or cfg.get("quoter")
+        if quoter:
+            buy_venues += 1
+            sell_venues += 1  # same quoter can do both directions
+
+    coverage_complete = buy_venues >= 1 and sell_venues >= 1
+    blocker = None
+    if known_pools == 0:
+        blocker = "no_pools_found"
+    elif buy_venues == 0 and sell_venues == 0:
+        blocker = "no_quoter_for_live_pools"
+    elif buy_venues == 0:
+        blocker = "no_buy_venue"
+    elif sell_venues == 0:
+        blocker = "no_sell_venue"
+
+    return {
+        "known_pools": known_pools,
+        "known_dexes": known_dexes,
+        "buy_venues": buy_venues,
+        "sell_venues": sell_venues,
+        "coverage_complete": coverage_complete,
+        "coverage_blocker_reason": blocker,
+    }
+
+
+def _run_size_sweep(
+    event: OrderflowEvent,
+    rpc_url: str,
+    token_in_addr: str,
+    token_out_addr: str,
+    quotable_dexes: list,
+    base_size_wei: int,
+    fallback_rpc_urls: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Run a bounded size sweep (3-5 sizes) around a base notional.
+
+    Returns list of dicts with: size_wei, gross_pnl_wei, gas_cost_wei,
+    net_pnl_wei, net_bps, buy_venue, sell_venue.
+    """
+    from strategy.quote_rpc import read_quoter_v2, QUOTER_RATE_LIMITED
+
+    # Build 5-point ladder: 0.2x, 0.5x, 1x, 2x, 5x of base
+    multipliers = [0.2, 0.5, 1.0, 2.0, 5.0]
+    MIN_WEI = 10**15   # 0.001 ETH
+    MAX_WEI = 10**18   # 1.0 ETH
+    sizes = []
+    for m in multipliers:
+        s = int(base_size_wei * m)
+        s = max(MIN_WEI, min(MAX_WEI, s))
+        sizes.append(s)
+    # Deduplicate (e.g. if clamped to same min/max)
+    sizes = sorted(set(sizes))
+
+    results: List[Dict[str, Any]] = []
+
+    for size_wei in sizes:
+        # Quick single-pass: best buy then best sell
+        best_buy_amt = None
+        best_buy_venue = None
+        for dex_name, cfg, quoter_addr in quotable_dexes:
+            fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+            for fee in fee_tiers[:2]:
+                try:
+                    res = read_quoter_v2(
+                        quoter_address=quoter_addr,
+                        token_in=token_in_addr,
+                        token_out=token_out_addr,
+                        amount_in=size_wei,
+                        fee=fee,
+                        rpc_url=rpc_url,
+                        block_num="latest",
+                        fallback_rpc_urls=fallback_rpc_urls,
+                    )
+                    if res and res is not QUOTER_RATE_LIMITED:
+                        amt = res.get("amount_out", 0)
+                        if amt > 0 and (best_buy_amt is None or amt > best_buy_amt):
+                            best_buy_amt = amt
+                            best_buy_venue = dex_name
+                except Exception:
+                    pass
+
+        if best_buy_amt is None:
+            results.append({
+                "size_wei": size_wei,
+                "gross_pnl_wei": 0,
+                "gas_cost_wei": 0,
+                "net_pnl_wei": 0,
+                "net_bps": 0.0,
+                "buy_venue": None,
+                "sell_venue": None,
+            })
+            continue
+
+        best_sell_amt = None
+        best_sell_venue = None
+        for dex_name, cfg, quoter_addr in quotable_dexes:
+            fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+            for fee in fee_tiers[:2]:
+                try:
+                    res = read_quoter_v2(
+                        quoter_address=quoter_addr,
+                        token_in=token_out_addr,
+                        token_out=token_in_addr,
+                        amount_in=best_buy_amt,
+                        fee=fee,
+                        rpc_url=rpc_url,
+                        block_num="latest",
+                        fallback_rpc_urls=fallback_rpc_urls,
+                    )
+                    if res and res is not QUOTER_RATE_LIMITED:
+                        amt = res.get("amount_out", 0)
+                        if amt > 0 and (best_sell_amt is None or amt > best_sell_amt):
+                            best_sell_amt = amt
+                            best_sell_venue = dex_name
+                except Exception:
+                    pass
+
+        if best_sell_amt is None:
+            results.append({
+                "size_wei": size_wei,
+                "gross_pnl_wei": 0,
+                "gas_cost_wei": 0,
+                "net_pnl_wei": 0,
+                "net_bps": 0.0,
+                "buy_venue": best_buy_venue,
+                "sell_venue": None,
+            })
+            continue
+
+        gross_wei = best_sell_amt - size_wei
+        gas_cost_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+        net_wei = gross_wei - gas_cost_wei
+        net_bps = (net_wei / size_wei) * 10000 if size_wei > 0 else 0.0
+
+        results.append({
+            "size_wei": size_wei,
+            "gross_pnl_wei": gross_wei,
+            "gas_cost_wei": gas_cost_wei,
+            "net_pnl_wei": net_wei,
+            "net_bps": round(net_bps, 4),
+            "buy_venue": best_buy_venue,
+            "sell_venue": best_sell_venue,
+        })
+
+    return results
+
+
 def _get_pool_addresses_for_dexes(
     dex_configs: Dict[str, Any],
     token_in_addr: str,
@@ -991,14 +1264,16 @@ def score_backrun_live_parallel(
     block_time_ms: Optional[float] = None,
     addr_to_symbol: Optional[Dict[str, str]] = None,
 ) -> BackrunResult:
-    """Score a backrun using 2-stage pipeline: multicall pruning + confirmatory quotes.
+    """Score a backrun using 3-stage pipeline: pair resolve + coverage scan + quote.
 
-    M7.A.5.5: Actual-pair resolution via pool contract token0/token1 query.
-    If pair cannot be resolved, returns TOKEN_PAIR_UNRESOLVED (no proxy fallback).
+    M7.A.5.6: Adds event-token admission, counter-venue coverage scan,
+    bounded size sweep, and split reject reasons.
 
-    Stage A (cheap): Resolve pool tokens + batch factory.getPool() + liquidity() via multicall.
+    Stage A (cheap): Resolve pool tokens + admission check + coverage scan.
+    Stage B (multicall): batch factory.getPool() + liquidity() via multicall.
         Prune venues with no pool or zero liquidity.
-    Stage B (confirmatory): read_quoter_v2() only for shortlisted venues.
+    Stage C (confirmatory): read_quoter_v2() only for shortlisted venues,
+        with bounded size sweep (3-5 sizes).
     """
     import time
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1009,10 +1284,35 @@ def score_backrun_live_parallel(
 
     quote_started_block = current_block
 
-    # ── M7.A.5.5: Actual-pair token resolution ─────────────────────────
-    # Try to resolve token0/token1 from the pool contract via multicall.
-    # If event.token_in is already a known symbol (fixture/resolved), use it.
-    # Otherwise, query the pool contract.
+    # Common early-exit builder for rejected results
+    def _reject(reason, pr=False, ap=None, ss=None, cov=None, adm=None,
+                extra_latency=None):
+        return BackrunResult(
+            event_id=event.event_id,
+            event_source="live",
+            event_type=event.event_type,
+            post_trade_state_used="live",
+            backrun_direction=backrun_dir,
+            reject_reason=reason,
+            event_block=event.block_number,
+            quote_block=current_block,
+            block_lag=current_block - event.block_number,
+            ws_provider=ws_provider,
+            event_detected_at_block=event_detected_at_block,
+            quote_started_block=quote_started_block,
+            quote_finished_block=current_block,
+            quote_pipeline_latency_ms=round(
+                (time.monotonic() - pipeline_start) * 1000, 2
+            ),
+            latency_budget_ms=block_time_ms,
+            pair_resolved=pr,
+            actual_pair=ap,
+            size_source=ss,
+            coverage_result=cov,
+            token_admitted=adm,
+        )
+
+    # ── Stage A: Actual-pair token resolution ───────────────────────────
     pair_resolved = False
     actual_pair: Optional[str] = None
     size_source = "event_proportional"
@@ -1022,10 +1322,9 @@ def score_backrun_live_parallel(
     use_common_pairs = not token_in_addr or not token_out_addr
 
     if use_common_pairs and event.pool_address and addr_to_symbol is not None:
-        # Try actual pair resolution from pool contract
         resolved = _resolve_event_tokens(
             pool_address=event.pool_address,
-            swap_direction=event.token_in,  # direction tag like "token0_in"
+            swap_direction=event.token_in,
             rpc_url=rpc_url,
             block_num=current_block,
             addr_to_symbol=addr_to_symbol,
@@ -1038,29 +1337,43 @@ def score_backrun_live_parallel(
             use_common_pairs = False
 
     if use_common_pairs:
-        # M7.A.5.5: No WETH/USDC fallback. Mark as TOKEN_PAIR_UNRESOLVED.
-        return BackrunResult(
-            event_id=event.event_id,
-            event_source="live",
-            event_type=event.event_type,
-            post_trade_state_used="live",
-            backrun_direction=backrun_dir,
-            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
-            event_block=event.block_number,
-            quote_block=current_block,
-            block_lag=current_block - event.block_number,
-            ws_provider=ws_provider,
-            event_detected_at_block=event_detected_at_block,
-            quote_started_block=quote_started_block,
-            quote_finished_block=current_block,
-            quote_pipeline_latency_ms=round((time.monotonic() - pipeline_start) * 1000, 2),
-            latency_budget_ms=block_time_ms,
-            pair_resolved=False,
-            size_source=None,
+        return _reject(REJECT_TOKEN_PAIR_UNRESOLVED)
+
+    # ── M7.A.5.6: Event-token admission check ──────────────────────────
+    admission = admit_event_tokens(
+        token_in_addr, token_out_addr,
+        addr_to_symbol or {}, token_addresses,
+    )
+    if not admission["admitted"]:
+        return _reject(
+            REJECT_TOKEN_NOT_ADMITTED,
+            pr=pair_resolved, ap=actual_pair, adm=False,
         )
 
-    # M7.A.5.5: Bounded size logic — use event-proportional notional
-    # ~10% of the original event, but bounded to [0.001 ETH, 1 ETH] range
+    # ── M7.A.5.6: Counter-venue coverage scan ──────────────────────────
+    try:
+        coverage = counter_venue_coverage_scan(
+            token_in_addr, token_out_addr,
+            dex_configs, rpc_url, current_block,
+        )
+    except Exception:
+        coverage = {
+            "known_pools": 0, "known_dexes": [], "buy_venues": 0,
+            "sell_venues": 0, "coverage_complete": False,
+            "coverage_blocker_reason": "scan_error",
+        }
+
+    if not coverage["coverage_complete"]:
+        reason = REJECT_NO_COUNTER_POOL
+        if coverage["coverage_blocker_reason"] == "no_quoter_for_live_pools":
+            reason = REJECT_UNSUPPORTED_ADAPTER
+        return _reject(
+            reason,
+            pr=pair_resolved, ap=actual_pair, adm=True,
+            cov=coverage,
+        )
+
+    # ── Bounded size logic ──────────────────────────────────────────────
     MIN_BACKRUN_WEI = 10**15   # 0.001 ETH
     MAX_BACKRUN_WEI = 10**18   # 1.0 ETH
     backrun_size_wei = max(event.amount_in_wei // 10, 1)
@@ -1257,6 +1570,24 @@ def score_backrun_live_parallel(
         else:
             cand_path = [event.token_out, event.token_in, event.token_out]
 
+        # ── M7.A.5.6: Bounded size sweep ───────────────────────────────
+        sweep_results = None
+        best_sweep_net = None
+        best_sweep_size = None
+        try:
+            sweep_results = _run_size_sweep(
+                event, rpc_url, token_in_addr, token_out_addr,
+                quotable_dexes, backrun_size_wei, fallback_rpc_urls,
+            )
+            if sweep_results:
+                viable_sweeps = [s for s in sweep_results if s["net_bps"] != 0.0]
+                if viable_sweeps:
+                    best_s = max(viable_sweeps, key=lambda s: s["net_bps"])
+                    best_sweep_net = best_s["net_bps"]
+                    best_sweep_size = best_s["size_wei"]
+        except Exception:
+            pass  # sweep is best-effort, don't block scoring
+
         return BackrunResult(
             event_id=event.event_id,
             event_source="live",
@@ -1295,15 +1626,22 @@ def score_backrun_live_parallel(
             pair_resolved=pair_resolved,
             actual_pair=actual_pair,
             size_source=size_source,
+            coverage_result=coverage,
+            size_sweep_results=sweep_results,
+            best_sweep_net_bps=best_sweep_net,
+            best_sweep_size_wei=best_sweep_size,
+            token_admitted=True,
         )
 
+    # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
+    fail_reason = REJECT_RPC_QUOTE_FAIL if venues_quoted == 0 else REJECT_PAIR_RESOLVED_UNTRADEABLE
     return BackrunResult(
         event_id=event.event_id,
         event_source="live",
         event_type=event.event_type,
         post_trade_state_used="live",
         backrun_direction=backrun_dir,
-        reject_reason=REJECT_QUOTE_FAILURE,
+        reject_reason=fail_reason,
         event_block=event.block_number,
         quote_block=quote_finished_block,
         block_lag=block_lag,
@@ -1323,6 +1661,8 @@ def score_backrun_live_parallel(
         pair_resolved=pair_resolved,
         actual_pair=actual_pair,
         size_source=size_source,
+        coverage_result=coverage,
+        token_admitted=True,
     )
 
 
@@ -2050,10 +2390,10 @@ def main():
 
         # Build artifact
         artifact = build_replay_summary(all_events, all_results, mode="ws_live")
-        artifact["m7a55_hypothesis"] = (
-            "event-driven backrun looks worse than M4 partly because live replay is "
-            "still proxy-priced; resolving actual pool token0/token1 and event-specific "
-            "pairs may materially change measured gross"
+        artifact["m7a56_hypothesis"] = (
+            "same-chain backrun on arbitrum_one may become measurable only after "
+            "pair-resolved counter-venue coverage is expanded for actual live-event "
+            "tokens; no expansion outside current DEX domain"
         )
         artifact["ws_live_config"] = {
             "ws_blocks_requested": args.ws_blocks,
@@ -2289,6 +2629,114 @@ def main():
                 "m7_pair_resolved_count": len(resolved_results),
                 "note": "M4 uses pair-specific dynamic sweep; M7 uses event-driven replay with actual-pair resolution",
             }
+
+            # ── M7.A.5.6: Coverage scan metrics ────────────────────────
+            admitted_results = [r for r in live_results if r.token_admitted is True]
+            not_admitted = [r for r in live_results if r.token_admitted is False]
+            coverage_complete_results = [
+                r for r in live_results
+                if r.coverage_result and r.coverage_result.get("coverage_complete")
+            ]
+            coverage_blocker_hist: Dict[str, int] = {}
+            for r in live_results:
+                if r.coverage_result and r.coverage_result.get("coverage_blocker_reason"):
+                    reason = r.coverage_result["coverage_blocker_reason"]
+                    coverage_blocker_hist[reason] = coverage_blocker_hist.get(reason, 0) + 1
+
+            artifact["coverage_scan_metrics"] = {
+                "events_admitted": len(admitted_results),
+                "events_not_admitted": len(not_admitted),
+                "events_coverage_complete": len(coverage_complete_results),
+                "coverage_blocker_histogram": coverage_blocker_hist,
+                "admission_rate": round(
+                    len(admitted_results) / len(live_results), 4
+                ) if live_results else 0.0,
+            }
+
+            # ── M7.A.5.6: Size sweep metrics ───────────────────────────
+            sweep_events = [r for r in live_results if r.size_sweep_results]
+            all_sweep_nets = []
+            for r in sweep_events:
+                for s in (r.size_sweep_results or []):
+                    if s.get("net_bps", 0) != 0.0:
+                        all_sweep_nets.append(s["net_bps"])
+            events_with_sweep_best = [r for r in live_results if r.best_sweep_net_bps is not None]
+
+            artifact["size_sweep_metrics"] = {
+                "events_with_sweep": len(sweep_events),
+                "sweep_net_bps_all": all_sweep_nets,
+                "best_sweep_net_bps": round(max(all_sweep_nets), 4) if all_sweep_nets else None,
+                "mean_sweep_net_bps": (
+                    round(sum(all_sweep_nets) / len(all_sweep_nets), 4)
+                    if all_sweep_nets else None
+                ),
+                "events_with_positive_sweep": sum(1 for n in all_sweep_nets if n > 0),
+            }
+
+            # ── M7.A.5.6: m4_m7_comparison_v2 block ────────────────────
+            # Decomposed economics comparison with coverage truth
+            v2_resolved_with_amounts = [r for r in resolved_results if r.amount_in_wei > 0]
+            v2_gross_bps = None
+            v2_gas_bps = None
+            v2_fee_bps = None
+            v2_size_usd = None
+            if v2_resolved_with_amounts:
+                v2_gross_bps = round(
+                    sum(
+                        (r.gross_pnl_wei / r.amount_in_wei * 10000) if r.amount_in_wei > 0 else 0
+                        for r in v2_resolved_with_amounts
+                    ) / len(v2_resolved_with_amounts), 4
+                )
+                v2_gas_bps = round(
+                    sum(
+                        (r.gas_cost_wei / r.amount_in_wei * 10000) if r.amount_in_wei > 0 else 0
+                        for r in v2_resolved_with_amounts
+                    ) / len(v2_resolved_with_amounts), 4
+                )
+                v2_fee_bps = round(
+                    sum(
+                        (r.fee_cost_wei / r.amount_in_wei * 10000) if r.amount_in_wei > 0 else 0
+                        for r in v2_resolved_with_amounts
+                    ) / len(v2_resolved_with_amounts), 4
+                )
+                # Rough USD estimate: assume 1 ETH ≈ $3000
+                v2_size_usd = round(
+                    sum(r.amount_in_wei for r in v2_resolved_with_amounts)
+                    / len(v2_resolved_with_amounts) / 10**18 * 3000, 2
+                )
+
+            artifact["m4_m7_comparison_v2"] = {
+                "m4_best_net_bps": -3.5062,
+                "m4_gross_pre_cost_bps": 36.35,
+                "m4_gas_bps": 2.01,
+                "m4_fee_bps": 31.0,
+                "m4_slippage_bps": 6.85,
+                "m4_size_usd": 50,
+                "m4_pair": "WBTC/USDC",
+                "m7_best_net_bps": round(max(resolved_net), 4) if resolved_net else None,
+                "m7_gross_pre_cost_bps": v2_gross_bps,
+                "m7_gas_bps": v2_gas_bps,
+                "m7_fee_bps": v2_fee_bps,
+                "m7_slippage_bps": None,  # not decomposed yet
+                "m7_size_usd": v2_size_usd,
+                "m7_pair_resolved": True,
+                "m7_coverage_complete_count": len(coverage_complete_results),
+                "m7_latency_class": "stale" if not low_lag else "low_lag",
+                "m7_best_sweep_net_bps": (
+                    round(max(all_sweep_nets), 4) if all_sweep_nets else None
+                ),
+                "note": (
+                    "M4 has mature pair-specific dynamic sweep; "
+                    "M7 now has pair-resolved coverage + bounded event-size evaluation"
+                ),
+            }
+
+            # ── M7.A.5.6: Granular reject histogram ────────────────────
+            granular_hist: Dict[str, int] = {}
+            for r in live_results:
+                if r.reject_reason:
+                    granular_hist[r.reject_reason] = granular_hist.get(r.reject_reason, 0) + 1
+            artifact["reject_histogram_v2"] = granular_hist
     else:
         parser_err = "No mode specified"
         raise SystemExit(parser_err)
