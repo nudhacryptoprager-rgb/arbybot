@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A + M7.A.2 + M7.A.3 — all scopes produce no-graduate verdicts. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. All 6 structural blockers stable, 0 flapping. M7.A.3 temporal-regime hypothesis tested: 3 fresh runs at blocks 446834785–446837081 all classify as `medium_activity` regime. No regime produced a positive edge or beat two-leg baseline. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A + M7.A.2 + M7.A.3 + M7.A.4 — all scopes produce no-graduate verdicts. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.A.4 orderflow-driven backrun/replay hypothesis: offline estimates (-1.55 bps) beat triangular (-14.16 bps) but not two-leg baseline (-3.51 bps). Intent scout: `block_event_backrun` = highest-feasibility next surface. M7.B remains closed.)  
 **Updated**: 2026-03-29  
 **Scope**: M7.A only — runtime graph sourcing, live measured scoring with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback, bounded size sweep over canonical size ladder (19 notionals, $1–$10K), machine-readable blocker summary with 6 canonical blocker tags, temporal blocker repeatability aggregation, **bounded-scope verdict summary** (`build_verdict_summary()` with `--verdict` CLI), **universe-profile infrastructure** (`--universe narrow_7|expanded_10`). Both universe profiles on arbitrum_one independently support a no-graduate verdict. M7.A `narrow_7` and M7.A.2 `expanded_10` are now **closed bounded baselines** with no-graduate verdicts. This verdict is scoped to the tested observation regime only: a non-static DEX market may behave differently under other chains, liquidity surfaces, volatility windows, size distributions, participant intensity, or source combinations. Any further M7.A work must proceed only as a newly named hypothesis branch (M7.A.3+), not as continued tuning of the already rejected arbitrum_one token-expansion surface. M7.B remains closed.
 
@@ -43,61 +43,16 @@ Block: **446635245** — all 190 quote sets at same block (same_state_proven=100
 | 1 | ARB→USDC→WETH→ARB (cam/pcs/pcs) | **100** | **-20.96** | 19/19 | U-shape, min at $100 |
 | 2 | ARB→USDC→WETH→ARB (cam/uni/pcs) | **100** | **-20.99** | 19/19 | U-shape, min at $100 |
 | 3 | ARB→USDC→WETH→ARB (cam/cam/pcs) | **150** | **-22.97** | 19/19 | U-shape, min at $150 |
-| 4 | ARB→USDC→WETH→ARB (cam/pcs/cam) | **250** | **-22.31** | 19/19 | U-shape, min at $250 |
-| 5 | ARB→USDC→WETH→ARB (cam/uni/cam) | **150** | **-23.42** | 19/19 | U-shape, min at $150 |
-| 6 | ARB→USDC→WETH→ARB (cam/pcs/uni) | **250** | **-24.36** | 19/19 | U-shape, min at $250 |
-| 7 | ARB→USDC→WETH→ARB (cam/uni/uni) | **150** | **-25.31** | 19/19 | U-shape, min at $150 |
-| 8 | ARB→USDC→WETH→ARB (cam/cam/cam) | **250** | **-24.24** | 19/19 | U-shape, min at $250 |
-| 9 | ARB→USDC→WETH→ARB (pcs/pcs/cam) | **150** | **-25.51** | 19/19 | U-shape, min at $150 |
-| 10 | ARB→USDC→WETH→ARB (cam/cam/uni) | **250** | **-26.29** | 19/19 | U-shape, min at $250 |
+| 4-10 | ARB→USDC→WETH→ARB (various) | 150–250 | -22.31 to -26.29 | 19/19 | U-shape |
 
-Key observations:
-- **All cycles negative at all 19 sizes** — no profitable notional exists in $1–$10K range.
-- **Size curve universally U-shaped**: small sizes ($1–$10) dominated by gas (~-1000 bps); optimal at $100–$250; large sizes ($5K+) dominated by slippage.
-- **Best overall: -20.96 bps at $100** — even the optimal size+route is 6× worse than two-leg baseline (-3.5 bps).
-- **100% quote success**: 190/190 size×cycle combinations quoted at block 446635245.
-- **All routes are ARB→USDC→WETH→ARB**: identical token triple, only differing by DEX combination.
-
-### Previous Evidence — Cache+Measured (historical)
-
-Evidence source: **local file-backed artifact** `data/tmp/m7a_measured_test.json`.  
-Generated: 2026-03-28 (earlier in session)  
-Provenance tier: **local/session** — superseded by runtime+measured above.
-
-| Metric | Value | Note |
-|--------|-------|------|
-| Graph source | **cache** | `pool_resolver_cache` |
-| Score mode | **measured** | live RPC per-leg quotes |
-| Block number | 446581074 | — |
-| Cycles quoted | **17**/20 | — |
-| Same-state PROVEN | **17** | — |
-| Best measured net (bps) | **-372.70** | much worse than runtime path |
-
-### Current Evidence — Static (cache-based)
-
-Evidence source: **local file-backed artifact** `data/tmp/m7a_arbitrum_one_static.json`.  
-Generated: 2026-03-28T13:53:22Z  
-
-| Metric | Value | Note |
-|--------|-------|------|
-| Full graph nodes | 22 | from `pool_resolver_cache` |
-| Full graph edges | 808 | bidirectional |
-| M7.A universe nodes | 7 | WETH, USDC, USDT, WBTC, ARB, LINK, PENDLE |
-| M7.A universe edges | 278 | filtered by token + adapter + dex |
-| Cycles found | >=10000 | **CAP HIT — lower bound, not full count** |
-| Viable (fee <= 100 bps) | 4838 | 48.4% of capped sample |
-| Median diagnostic fee+gas cost (bps) | -86.0 | — |
+All cycles negative at all 19 sizes ($1-$10K). U-shaped curves: gas dominates small, slippage dominates large. Best: -20.96 bps at $100 (6× worse than two-leg -3.5 bps). 190/190 quotes at block 446635245. All routes ARB→USDC→WETH→ARB.
 
 ### What the measured evidence shows
 
-- **Temporal repeatability established**: negative sign reproduced across 5 independent runs at different blocks (446589515 → 446622133). Best net ranges from -13.42 to -31.19 bps. No run produced a promoted cycle.
-- **End-to-end runtime+measured pipeline operational**: graph from live RuntimePair discovery → fee-only prerank → RPC per-leg quotes → `score_cycle_measured` → measured-only ranking, all in one command.
-- **Same-state provenance works**: 100% of quoted cycles across all 5 runs classified as `same_state_proven`.
-- **Wider sampling confirms negative**: wide run (67 scored cycles) best is -22.11 bps; no hidden profitable cycles in the wider set.
-- **All top cycles are ARB→USDC→WETH→ARB variants**: same token triple across all camelot_v3, pancakeswap_v3, uniswap_v3, sushiswap_v3 DEX combinations. No diverse token-path surfaced.
-- **Triangular consistently worse than two-leg**: best measured -13.42 bps (single-shot) / -20.96 bps (sweep-optimized) vs two-leg baseline -3.5 bps — triangular adds 10-17 bps extra cost for the third leg.
-- **Size sweep confirms no profitable notional**: U-shaped size curves across all 10 top cycles; gas dominates at small sizes, slippage dominates at large sizes; optimal range $100–$250 is still deeply negative.
-- **VE33 adapters have high failure rate**: ~33-40% of attempted cycles fail with VE33 (Ramses) reverts on-chain.
+- **Temporal repeatability**: negative sign reproduced across 5 runs (best net -13.42 to -31.19 bps), 0 promoted cycles, 100% same_state_proven.
+- **Triangular consistently worse than two-leg**: best -13.42 bps (single-shot) / -20.96 bps (sweep) vs two-leg -3.5 bps; third leg adds 10-17 bps extra cost.
+- **Size sweep: no profitable notional in $1-$10K**: U-shaped curves across all 10 top cycles; 190/190 quotes successful.
+- **All top cycles are ARB→USDC→WETH→ARB variants**: zero token-path diversity; VE33 (Ramses) ~33% failure rate.
 - **Temporal blocker repeatability proven**: 3 independent runs (blocks 446652757–446654943) confirm all 6 blocker classes are stable with 0 flapping. Blocker decomposition is structural, not transient noise.
 
 ### Current Evidence — Blocker Decomposition (machine-readable RCA)
@@ -266,35 +221,80 @@ Provenance tier: **local/session** — temporal diversity across 3 blocks.
 
 **M7.A.3 finding**: All 3 runs fall in the same `medium_activity` regime (67/100 = 67% quote success rate, route_failure_rate = 0.33, net bps between -30 and -10). The hypothesis that a different temporal regime might produce a positive edge is **not falsified** (only one regime observed so far), but the tested regime conclusively shows no edge. The blocker structure (6/6 stable, 0 flapping) is identical to M7.A/M7.A.2 evidence. Net bps range (-26.5 to -14.2) is comparable to prior narrow_7 evidence (-23.5 to -9.6), never approaching the two-leg baseline of -3.51 bps. M7.A.3 is now a **closed bounded baseline**: within the `medium_activity` regime on arbitrum_one `narrow_7`, no triangular edge exists.
 
-### What this evidence does NOT yet cover
+### Caveats
 
-- **L1 gas is a static estimate** — `l1_cost_wei` uses a fixed 6 Gwei heuristic, not live L1 calldata cost from the chain.
-- **Artifact is `data/tmp/` provenance** — not in `data/runs/<runDir>/` or rolling artifacts; not operational-grade.
-- **Narrow universe only** — 7 tokens on arbitrum_one baseline; expanded_10 added DAI but GMX/UNI had no runtime pools. Other chains may have different economics.
-- **Single-block sweep** — all 190 quotes at block 446635245; no temporal diversity within this sweep (but 5-block temporal diversity from prior runs).
-- **Market is not static** — these artifacts measure bounded market regimes, not the full moving DEX environment. A negative result on one tested surface does not prove the absence of edge on all other chains, volatility regimes, depth conditions, or participant-intensity states. Repeated bounded scans reduce randomness but are still not a full representation of intraday, multi-regime market behavior.
-- **Project goal remains cross-surface inconsistency discovery** — the broader objective is to detect mispricings across markets, sizes, participant load, and source surfaces, not to assume one bounded verdict closes all DEX opportunities.
+- L1 gas is static estimate (6 Gwei heuristic); artifacts are `data/tmp/` provenance (not rolling); narrow universe only (arbitrum_one, 7-10 tokens).
+- Market is not static — bounded-scope verdicts do not prove absence of edge on all surfaces, chains, or regimes.
 
-### Remaining M7.A work (per step_M7.md implementation order)
+### Remaining M7.A triangular work — ALL DONE (NO-GRADUATE)
 
-1. ~~Build verified pool graph on arbitrum_one~~ — DONE (cache-based + runtime source via `--source runtime`)
-2. ~~Restrict graph to narrow approved universe~~ — DONE
-3. ~~Implement 3-hop simple cycle discovery~~ — DONE
-4. ~~Score cycles with current measured-cost model~~ — **DONE** (live: `score_cycle_measured()` fed by `leg_quote_from_rpc_result()` from live per-leg RPC quotes via `_quote_single_leg()` → `quote_cycle_3legs()`)
-5. ~~Emit full decomposition artifacts~~ — **DONE** (measured artifacts include provenance, same_state, gross_bps, gas_bps, fee metadata)
-6. ~~Apply provenance and same-state classification~~ — **DONE** (100% same_state_proven across all 5 temporal runs)
-7. ~~Rank only by measured final net~~ — **DONE** (`--score measured` mode ranks measured-only cycles by `final_net_bps`; fee-only fallback rows emitted separately in `diagnostic_fee_only_fallbacks`)
-8. ~~Decide whether M7 stops or graduates to M7.B~~ — **DONE (NO-GRADUATE FOR CURRENT TESTED SCOPES)** Machine-readable verdict: `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. Evidence: 4-block blocker repeatability (6/6 stable, 0 flapping), net bps range -23.52 to -9.56 (never beats two-leg baseline -3.51), gross sometimes positive (+2.25 in one run) but multi-cost structure always negative. Artifacts: `data/tmp/m7a_verdict.json` (narrow_7), `data/tmp/m7a_expanded_verdict.json` (expanded_10). Both baselines closed. This is a bounded-scope verdict, not a claim that all triangular DEX surfaces are globally exhausted.
+Steps 1-8 complete. Verdict: `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. Evidence: 4-block blocker repeatability (6/6 stable, 0 flapping), net never beats two-leg baseline (-3.51 bps). Artifacts: `m7a_verdict.json` (narrow_7), `m7a_expanded_verdict.json` (expanded_10).
 
 ### Modules
 
-- `engine/triangular_graph.py` — PoolEdge, PoolGraph, M7A constants, M7A2 expanded universe constants, graph builders (cache + RuntimePair), `filter_graph_to_m7a_universe`, `filter_graph_to_m7a2_universe`
-- `engine/triangular_cycles.py` — TriangularCycle, CycleScore (with `scored_size_usd`, slippage `_heuristic` fields), find_3hop_cycles, `score_cycle_fees_only` (diagnostic), `score_cycle_measured` (live per-leg), `classify_same_state`, LegQuote, `leg_quote_from_rpc_result`, SizeSweepResult, SizeSweepPoint
-- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`, `--sweep-top N`, `--universe narrow_7|expanded_10`, `--repeatability`, `--verdict`, `--regime-repeatability`. Measured mode: measured-only ranking. Blocker analysis: `_build_blocker_summary()` + `classify_blocker_tags()` (6 canonical tags). Count semantics: `per_cycle_blocker_counts` + `global_blockers_present`. Repeatability: `build_blocker_repeatability()`. Verdict: `build_verdict_summary()` produces bounded-scope no-graduate decision artifact from repeatability evidence. Regime: `classify_regime_bucket()` (7 canonical regime tags across 3 dimensions) + `build_regime_repeatability_summary()` for temporal-regime aggregation. Artifact includes `regime_bucket` field.
-- Tests: 152 M7 contract tests in `test_triangular_contracts.py` (2736 total, 0 failures)
+- `engine/triangular_graph.py` — PoolEdge, PoolGraph, graph builders (cache + RuntimePair), universe filters
+- `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, LegQuote, SizeSweepResult
+- `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`. Blocker analysis (6 tags), verdict builder, regime classifier (7 tags)
+- `scripts/m7a_orderflow_replay.py` — M7.A.4 event-driven replay pipeline: `--offline`, `--replay`, `--online`, `--intent-scout`. OrderflowEvent, BackrunResult, IntentSurfaceAssessment, fixture events, backrun scoring, intent/auction surface scout
+- Tests: 152 M7.A triangular tests in `test_triangular_contracts.py`, 58 M7.A.4 orderflow tests in `test_orderflow_contracts.py` (2794 total, 0 failures)
+
+---
+
+## M7.A.4: Orderflow-Driven Backrun/Replay Hypothesis
+
+**Hypothesis**: Edge may emerge from event-driven orderflow replay (backrun after user trades) and auction/intent surfaces (MEV-Share, UniswapX, CoW) rather than from static AMM triangular state alone.
+
+**Approach**: Shift from passive pool-state scanning to event-driven replay:  
+event → classify → post-trade state → best buy/sell venue → measured net.
+
+**New infrastructure**: `scripts/m7a_orderflow_replay.py` (~600 lines):
+- `OrderflowEvent` (15 fields), `BackrunResult` (17 fields), `IntentSurfaceAssessment` (16 fields)
+- 5 canonical fixture events (USDC→WETH, WETH→USDC, ARB→USDC, WBTC→USDC, USDT→USDC)
+- Event classification: `classify_event_backrun_type()` (impact-based), `classify_event_viability()` (size/impact gates)
+- Offline scoring: `estimate_backrun_gross_bps()` (capture_rate × competition_decay), gas/fee estimation
+- Online scoring: live RPC quotes across known DEXes using existing adapter infrastructure
+- Intent scout: 4 surface assessments (MEV-Share, UniswapX, CoW, block event backrun)
+- CLI: `--offline`, `--replay <file>`, `--online`, `--intent-scout` (mutually exclusive)
+
+### Evidence — Offline Replay (5 fixture events)
+
+Artifact: `data/tmp/m7a_orderflow_offline.json`  
+Generated: 2026-03-29T09:50:37Z
+
+| Metric | Value |
+|--------|-------|
+| Events scored | 5 |
+| Viable count | 0 |
+| Best net (bps) | **-1.5537** |
+| Worst net (bps) | -7.55 |
+| Mean net (bps) | -4.37 |
+| Reject: SLIPPAGE_EXCEEDS_GROSS | 4 |
+| Reject: GAS_EXCEEDS_GROSS | 1 |
+| beats_triangular_baseline (-14.16 bps) | **true** |
+| beats_two_leg_baseline (-3.5062 bps) | **false** |
+
+### Evidence — Intent/Auction Surface Scout
+
+Artifact: `data/tmp/m7a_intent_scout.json`  
+Generated: 2026-03-29T09:54:03Z
+
+| Surface | Feasibility | Key advantage | Key risk |
+|---------|-------------|---------------|----------|
+| MEV-Share backrun | medium | Structured API, proven economics | High competition, requires Flashbots integration |
+| UniswapX filler | medium | Intent-based, Dutch auction pricing | Requires private inventory or flash loans |
+| CoW solver | low | Batch optimization, CoW matching | Complex solver competition, capital requirements |
+| Block event backrun | **high** | Reuses existing adapter infrastructure | Requires block event parsing + post-event quoting |
+
+**Best near-term surface**: `block_event_backrun` — highest feasibility, reuses existing arbitrum_one adapters, requires only block event parsing and post-event quoting. No new chain, capital, or protocol integration needed.
+
+### M7.A.4 Finding
+
+Offline backrun estimates (-1.55 to -7.55 bps) are significantly better than triangular (-14.16 bps) but still do not beat two-leg baseline (-3.51 bps). This is expected for theoretical offline estimates with default capture_rate (0.3) and competition_decay (0.5). Real backrun profitability depends on live event stream timing, MEV competition, and same-block execution — none of which are testable offline.
+
+**M7.A.4 is a closed bounded baseline** for offline-estimated backrun replay on arbitrum_one. The intent scout identifies `block_event_backrun` as the highest-feasibility next surface for live testing.
 
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
-Per `docs/step_M7.md`: M7.B is the execution phase. It is closed by default and may only open if M7.A proves a repeatable measured edge materially better than the closed public two-leg thesis. Covers atomic multi-hop execution, private submission, and execution state machine for 3-swap trades.
+Per `docs/step_M7.md`: M7.B is the execution phase, closed by default. Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.
