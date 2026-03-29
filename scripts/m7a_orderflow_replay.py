@@ -75,6 +75,9 @@ REJECT_TOKEN_NOT_ADMITTED = "TOKEN_NOT_ADMITTED"  # event token outside any know
 REJECT_UNSUPPORTED_ADAPTER = "UNSUPPORTED_ADAPTER"  # no adapter can quote this pair
 REJECT_RPC_QUOTE_FAIL = "RPC_QUOTE_FAIL"  # quoter call failed (RPC/timeout)
 REJECT_PAIR_RESOLVED_UNTRADEABLE = "PAIR_RESOLVED_BUT_UNTRADEABLE"  # pair resolved, coverage checked, no viable route
+# M7.A.5.10: Stale-positive and zero-liquidity gates
+REJECT_STALE_POSITIVE = "STALE_POSITIVE"  # net_bps > 0 but block_lag > 2 (stale quote)
+REJECT_ZERO_LIQUIDITY = "ZERO_LIQUIDITY"  # all candidate pools have liquidity=0
 
 ALL_REJECT_REASONS = frozenset({
     REJECT_NO_COUNTER_VENUE,
@@ -90,6 +93,8 @@ ALL_REJECT_REASONS = frozenset({
     REJECT_UNSUPPORTED_ADAPTER,
     REJECT_RPC_QUOTE_FAIL,
     REJECT_PAIR_RESOLVED_UNTRADEABLE,
+    REJECT_STALE_POSITIVE,
+    REJECT_ZERO_LIQUIDITY,
 })
 
 # ---------------------------------------------------------------------------
@@ -98,11 +103,13 @@ ALL_REJECT_REASONS = frozenset({
 ADMISSION_CANONICAL = "canonical_core"
 ADMISSION_ADDR_TO_SYMBOL = "addr_to_symbol"
 ADMISSION_SUBGRAPH_VERIFIED = "subgraph_seeded_verified"
+ADMISSION_ONCHAIN_ENRICHED = "onchain_enriched_verified"  # M7.A.5.10: on-chain enrichment (not subgraph)
 ADMISSION_REJECTED = "rejected_unverified"
 ALL_ADMISSION_SOURCES = frozenset({
     ADMISSION_CANONICAL,
     ADMISSION_ADDR_TO_SYMBOL,
     ADMISSION_SUBGRAPH_VERIFIED,
+    ADMISSION_ONCHAIN_ENRICHED,
     ADMISSION_REJECTED,
 })
 
@@ -945,8 +952,16 @@ def score_backrun_live(
         net_wei = gross_wei - gas_cost_wei
         net_bps = (net_wei / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
 
-        route_viable = net_bps > 0
-        reject_reason = None if route_viable else REJECT_GAS_EXCEEDS_GROSS
+        # M7.A.5.10: Stale-gate — positive but stale quotes are not executable
+        if net_bps > 0 and block_lag <= 2:
+            route_viable = True
+            reject_reason = None
+        elif net_bps > 0:
+            route_viable = False
+            reject_reason = REJECT_STALE_POSITIVE
+        else:
+            route_viable = False
+            reject_reason = REJECT_GAS_EXCEEDS_GROSS
 
         return BackrunResult(
             event_id=event.event_id,
@@ -1864,18 +1879,19 @@ def score_backrun_live_parallel(
         token_in_addr, token_out_addr,
         _ats, token_addresses,
     )
-    # M7.A.5.7: Override admission_source if enrichment was used
+    # M7.A.5.10: Fix admission provenance — compute sg_seed first, then decide source
     adm_source = admission.get("admission_source", ADMISSION_REJECTED)
-    if enrichment_applied and admission["admitted"] and adm_source == ADMISSION_ADDR_TO_SYMBOL:
-        adm_source = ADMISSION_SUBGRAPH_VERIFIED  # on-chain verified enrichment
-
-    # M7.A.5.8: Track whether subgraph seed contributed to admission
     _sg_addrs = subgraph_seeded_addrs or set()
     sg_seed = bool(
         _sg_addrs
         and (token_in_addr.lower() in _sg_addrs or token_out_addr.lower() in _sg_addrs)
         and admission["admitted"]
     )
+    if enrichment_applied and admission["admitted"] and adm_source == ADMISSION_ADDR_TO_SYMBOL:
+        if sg_seed:
+            adm_source = ADMISSION_SUBGRAPH_VERIFIED
+        else:
+            adm_source = ADMISSION_ONCHAIN_ENRICHED
 
     if not admission["admitted"]:
         return _reject(
@@ -1941,6 +1957,22 @@ def score_backrun_live_parallel(
             }
     except Exception:
         pass  # local-sim state is best-effort
+
+    # ── M7.A.5.10: Zero-liquidity reject gate ──────────────────────────
+    # If local_sim shows all candidate pools have liquidity=0, reject early
+    if local_sim and local_sim.get("pool_states"):
+        _all_zero_liq = all(
+            ps.get("liquidity", 1) == 0
+            for ps in local_sim["pool_states"].values()
+            if ps is not None
+        )
+        if _all_zero_liq:
+            return _reject(
+                REJECT_ZERO_LIQUIDITY,
+                pr=pair_resolved, ap=actual_pair, adm=True,
+                adm_src=adm_source, orc=oracle_result,
+                cov=coverage, lss=local_sim, sg_seed=sg_seed,
+            )
 
     # ── M7.A.5.9: Decimal-aware bounded size logic ────────────────────
     # Resolve token_in decimals: enrichment cache → well-known defaults → 18
@@ -2170,8 +2202,16 @@ def score_backrun_live_parallel(
         net_wei = gross_wei - gas_cost_wei
         net_bps = (net_wei / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
 
-        route_viable = net_bps > 0
-        reject_reason = None if route_viable else REJECT_GAS_EXCEEDS_GROSS
+        # M7.A.5.10: Stale-gate — positive but stale quotes are not executable
+        if net_bps > 0 and block_lag <= 2:
+            route_viable = True
+            reject_reason = None
+        elif net_bps > 0:
+            route_viable = False
+            reject_reason = REJECT_STALE_POSITIVE
+        else:
+            route_viable = False
+            reject_reason = REJECT_GAS_EXCEEDS_GROSS
 
         # Build candidate_path with actual symbols if pair resolved
         if pair_resolved and actual_pair:
@@ -2529,8 +2569,38 @@ def build_replay_summary(
 
     viable_count = sum(1 for r in results if r.route_viable)
     positive_net_count = sum(1 for r in results if r.best_backrun_net_bps > 0)
+
+    # M7.A.5.10: Unscored reject reasons — results that never got economic scoring
+    _UNSCORED_REJECTS = frozenset({
+        REJECT_TOKEN_PAIR_UNRESOLVED, REJECT_NO_COUNTER_POOL,
+        REJECT_TOKEN_NOT_ADMITTED, REJECT_UNSUPPORTED_ADAPTER,
+        REJECT_RPC_QUOTE_FAIL, REJECT_PAIR_RESOLVED_UNTRADEABLE,
+        REJECT_ZERO_LIQUIDITY,
+    })
+
+    # Scored results = those that went through economic scoring (even if rejected)
+    scored_results = [r for r in results if r.reject_reason not in _UNSCORED_REJECTS]
+    scored_net_bps = [r.best_backrun_net_bps for r in scored_results]
     all_net_bps = [r.best_backrun_net_bps for r in results]
     viable_net_bps = [r.best_backrun_net_bps for r in results if r.route_viable]
+
+    # M7.A.5.10: Split summary fields
+    # "any" = includes stale-positive results; "executable" = only viable (fresh + positive)
+    positive_net_count_any = sum(1 for r in results if r.best_backrun_net_bps > 0)
+    positive_net_count_low_lag = sum(
+        1 for r in results
+        if r.best_backrun_net_bps > 0 and (r.block_lag or 999) <= 2
+    )
+    stale_positive_count = sum(
+        1 for r in results
+        if r.best_backrun_net_bps > 0 and (r.block_lag or 999) > 2
+    )
+    best_net_bps_any = round(max(scored_net_bps), 4) if scored_net_bps else None
+    best_net_bps_executable = round(max(viable_net_bps), 4) if viable_net_bps else None
+
+    # M7.A.5.10: Size-validity subset
+    size_valid_count = sum(1 for r in results if r.size_valid_for_token)
+    size_fallback_count = sum(1 for r in results if r.size_valid_for_token is False)
 
     # Reject reason histogram
     reject_counts: Dict[str, int] = {}
@@ -2547,17 +2617,27 @@ def build_replay_summary(
         "results_count": len(results),
         "viable_count": viable_count,
         "positive_net_count": positive_net_count,
-        "best_net_bps": round(max(all_net_bps), 4) if all_net_bps else None,
-        "worst_net_bps": round(min(all_net_bps), 4) if all_net_bps else None,
-        "mean_net_bps": round(sum(all_net_bps) / len(all_net_bps), 4) if all_net_bps else None,
+        # M7.A.5.10: best_net_bps from scored results only (excludes unscored rejects)
+        "best_net_bps": round(max(scored_net_bps), 4) if scored_net_bps else None,
+        "worst_net_bps": round(min(scored_net_bps), 4) if scored_net_bps else None,
+        "mean_net_bps": round(sum(scored_net_bps) / len(scored_net_bps), 4) if scored_net_bps else None,
         "viable_best_net_bps": round(max(viable_net_bps), 4) if viable_net_bps else None,
+        # M7.A.5.10: Split fields
+        "best_net_bps_any": best_net_bps_any,
+        "best_net_bps_executable": best_net_bps_executable,
+        "positive_net_count_any": positive_net_count_any,
+        "positive_net_count_low_lag": positive_net_count_low_lag,
+        "stale_positive_count": stale_positive_count,
+        "scored_results_count": len(scored_results),
+        "size_valid_count": size_valid_count,
+        "size_fallback_count": size_fallback_count,
         "reject_histogram": reject_counts,
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
         "m7a_triangular_best_net_bps": -14.16,
         "beats_two_leg_baseline": positive_net_count > 0,
         "beats_triangular_baseline": (
-            max(all_net_bps) > -14.16 if all_net_bps else False
+            max(scored_net_bps) > -14.16 if scored_net_bps else False
         ),
     }
 
@@ -3422,7 +3502,7 @@ def main():
                 adm_source_hist[src] = adm_source_hist.get(src, 0) + 1
             enriched_count = sum(
                 1 for r in live_results
-                if r.admission_source == ADMISSION_SUBGRAPH_VERIFIED
+                if r.admission_source in (ADMISSION_SUBGRAPH_VERIFIED, ADMISSION_ONCHAIN_ENRICHED)
             )
             artifact["enrichment_metrics"] = {
                 "admission_source_histogram": adm_source_hist,

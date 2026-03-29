@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.9 — all scopes produce no-graduate verdicts. M7.A.5.9 fixed a critical token-decimal-blind bug in size normalization AND a cross-denomination gas/bps unit mismatch. After fix: USDC events produce -400 bps (was -200 billion bps), WETH events produce -0.19 bps. GAS_EXCEEDS_GROSS remains the sole dominant blocker (100% of events). Gas decomposition now denomination-correct: stablecoins show ~398 bps, WETH shows ~0.2 bps. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.10 — all scopes produce no-graduate verdicts. M7.A.5.10 fixed 3 contract issues: stale-positive viability gate (`route_viable` now requires `block_lag <= 2`), admission provenance bug (new `onchain_enriched_verified` source), and zero-liquidity reject gate (new `ZERO_LIQUIDITY` reject). After fix: previous false viable (block_lag=23, liquidity=0, net_bps=2630) is correctly rejected. 300b evidence shows `ZERO_LIQUIDITY` as dominant new reject (21/25 events). `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-03-31  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition. M7.B remains closed.
 
@@ -229,6 +229,33 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 **Verdict**: M7.A.5.9 corrects two critical measurement bugs from M7.A.5.8 that inflated gas economics by 10^8x for non-18-decimal tokens. The verdict is **unchanged** (GAS_EXCEEDS_GROSS dominates), but the evidence is now **denomination-correct and trustworthy** across the full token surface. M7.A remains closed.
 
 **CI gates**: 2988 passed, 6 skipped. 252 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
+
+---
+
+## M7.A.5.10: Stale-Gate Viability + Zero-Liquidity Reject + Admission Provenance Fix
+
+**Hypothesis**: M7.A.5.9's 300b corrective evidence exposed 3 contract issues: (1) stale-positive false viability (block_lag=23, net_bps=2630 reported as viable), (2) admission provenance misattribution (`subgraph_seeded_verified` when `subgraph_seed_used=false`), (3) zero-liquidity contradiction (pools with liquidity=0 still producing viable results). These must be fixed before evidence is treated as decisive.
+
+**Changes implemented**:
+1. **Stale-gate**: `route_viable = (net_bps > 0 and block_lag <= 2)` in both scorers. New `REJECT_STALE_POSITIVE` reject reason.
+2. **Zero-liquidity gate**: New `REJECT_ZERO_LIQUIDITY` reject — if all candidate pools have `liquidity=0` in `local_sim_state`, reject early before economic scoring.
+3. **Admission provenance**: New `ADMISSION_ONCHAIN_ENRICHED = "onchain_enriched_verified"` source. `subgraph_seeded_verified` only when `subgraph_seed_used=true`.
+4. **Split summary fields**: `best_net_bps_any`, `best_net_bps_executable`, `positive_net_count_any`, `positive_net_count_low_lag`, `stale_positive_count`, `scored_results_count`, `size_valid_count`, `size_fallback_count`.
+5. **Summary scoring filter**: `best_net_bps` computed from scored results only (excludes 0.0 from TOKEN_PAIR_UNRESOLVED/NO_COUNTER_POOL/ZERO_LIQUIDITY).
+
+**Evidence — M7.A.5.10 corrective (Alchemy WSS)**:
+300-block run (`data/tmp/m7a_510_300b.json`):
+- 25 events, 25 results, 0 viable, 0 positive_net, best_net_bps=null (no scored results)
+- Reject histogram: `ZERO_LIQUIDITY: 21, TOKEN_PAIR_UNRESOLVED: 2, NO_COUNTER_POOL: 2`
+- previous false viable (block_lag=23, liquidity=0, net_bps=2630) — now correctly rejected by ZERO_LIQUIDITY gate
+- Admission: `onchain_enriched_verified: 5, addr_to_symbol: 11, canonical_core: 7` — no more misattributed `subgraph_seeded_verified`
+- All split summary fields present and internally consistent
+
+**Key evidence finding**: **ZERO_LIQUIDITY is the new dominant reject** (21/25 events = 84%). Events pass pair resolution and coverage scan, but the candidate V3 pools report `liquidity=0` on-chain. This indicates the pools are initialized but have no active LP positions. The stale-gate and provenance fixes are clean — zero false viables.
+
+**Verdict**: M7.A.5.10 closes all 3 contract issues from M7.A.5.9 evidence. The pipeline now has correct viability gating, honest admission provenance, and zero-liquidity early rejection. The dominant blocker shifts from GAS_EXCEEDS_GROSS (which required economic scoring) to ZERO_LIQUIDITY (rejected pre-scoring). M7.A remains closed.
+
+**CI gates**: 3011 passed, 6 skipped. 275 tests in `test_orderflow_contracts.py`. All CI pipeline gates PASS.
 
 ---
 

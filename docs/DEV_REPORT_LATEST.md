@@ -2,132 +2,123 @@
 
 ## 0) Meta
 timestamp_utc: 2026-03-27T21:30:14Z
-run_id: m7a_ws_live_gasfix_100b (ws-live corrective evidence session)
+run_id: m7a_510_300b (ws-live corrective evidence session)
 mode: ONLINE (ws-live evidence runs + unit tests + CI gates)
-artifact_mode: local evidence (data/tmp/m7a_ws_live_gasfix_30b.json, data/tmp/m7a_ws_live_gasfix_100b.json)
+artifact_mode: local evidence (data/tmp/m7a_510_30b.json, data/tmp/m7a_510_300b.json)
 config: arbitrum_one narrow_7 universe, same-chain DEX backrun domain
 code_identity:
-  primary: ts:2026-03-27T21:30:14Z
+  primary: ts:2026-03-29T18:50:57Z
   dirty: true
-  desc: M7.A.5.9 token-decimal size normalization + gas denomination conversion
+  desc: M7.A.5.10 stale-gate + zero-liq reject + admission provenance fix
 
 ## Session Completion
-session_goal: M7.A.5.9 -- fix token-decimal-blind size bug (backrun_size_wei clamped to 10^15..10^18 for all tokens, but USDC/USDT are 6-decimal) AND fix cross-denomination gas/bps unit mismatch (gas in ETH wei divided by backrun in USDC raw units produced -200 billion bps)
-goal_status: REACHED (both bugs fixed; corrective evidence confirms denomination-correct economics; GAS_EXCEEDS_GROSS verdict unchanged but measurements now trustworthy)
+session_goal: M7.A.5.10 -- fix 3 contract issues from M7.A.5.9 300b evidence: (1) stale-positive false viability, (2) admission provenance misattribution, (3) zero-liquidity contradiction
+goal_status: REACHED (all 3 bugs fixed; corrective evidence confirms zero false viables; ZERO_LIQUIDITY is now dominant reject)
 close_allowed: true
-remaining_blockers: none (M7.A blocker stack fully characterized with denomination-correct evidence)
-evidence_session_run_dirs: [data/tmp/m7a_ws_live_gasfix_30b.json, data/tmp/m7a_ws_live_gasfix_100b.json]
-primary_blocker_of_session: M7.A.5.8 evidence contained two measurement bugs: (1) decimal-blind size normalization, (2) cross-denomination gas/bps calculation
-blocker_status_before: ACTIVE (M7.A.5.8 gas economics for non-18-dec tokens were off by 10^8x)
-blocker_status_after: RESOLVED -- denomination-correct evidence confirms GAS_EXCEEDS_GROSS remains sole dominant blocker; USDC net_bps=-400 (was -200B), WETH net_bps=-0.19 (unchanged)
+remaining_blockers: none (M7.A blocker stack fully characterized with contract-correct evidence)
+evidence_session_run_dirs: [data/tmp/m7a_510_30b.json, data/tmp/m7a_510_300b.json]
+primary_blocker_of_session: M7.A.5.9 evidence had 3 contract issues: stale-positive viability, admission provenance bug, zero-liquidity false viables
+blocker_status_before: ACTIVE (viable_count=1 was false positive with block_lag=23 + liquidity=0)
+blocker_status_after: RESOLVED -- zero false viables; ZERO_LIQUIDITY dominant reject (21/25); admission provenance correctly split
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.A.5.9 -- fix decimal-blind size bug and gas denomination mismatch discovered in M7.A.5.8 evidence; produce corrective evidence with trustworthy economics
+goal (Roadmap): M7.A.5.10 -- fix stale-positive viability, zero-liquidity contradiction, and admission provenance before evidence is treated as decisive
 change_summary:
-  - Added _normalized_bounds() -- scales size bounds by 10^(18-decimals) ratio (USDC 10^3..10^6, WBTC 10^5..10^8)
-  - Added _gas_cost_in_token_wei() -- converts ETH gas to backrun token denomination via oracle prices
-  - Added _FALLBACK_ETH_PRICE_USD ($3500 fallback), _REF_MIN_WEI_18, _REF_MAX_WEI_18 constants
-  - Added 4 new BackrunResult fields: token_in_decimals, size_normalization_source, size_usd_estimate, size_valid_for_token (49->53 fields)
-  - Fixed score_backrun_live_parallel(): decimal-aware size clamping + gas denomination conversion via Chainlink oracle
-  - Fixed score_backrun_live(): decimal detection from symbol heuristic + gas denomination conversion
-  - Fixed _run_size_sweep(): accepts gas_cost_token_wei parameter for denomination-correct sweep economics
-  - Added .env loading in main() via load_root_dotenv()
-  - Added size_normalization_metrics and m7a59_hypothesis artifact blocks
-  - Added 27 new contract tests (252 total orderflow, 2988 total suite)
+  - Added stale-gate: route_viable = (net_bps > 0 AND block_lag <= 2) in both scorers
+  - Added REJECT_STALE_POSITIVE and REJECT_ZERO_LIQUIDITY reject constants (15 total, was 13)
+  - Added ADMISSION_ONCHAIN_ENRICHED = "onchain_enriched_verified" (5 admission sources, was 4)
+  - Added zero-liquidity reject gate: if all candidate pools have liquidity=0 in local_sim_state, reject early
+  - Fixed admission provenance: subgraph_seeded_verified only when subgraph_seed_used=true; else onchain_enriched_verified
+  - Rewrote build_replay_summary(): best_net_bps from scored results only; 8 new split fields
+  - Updated enrichment_metrics to count ADMISSION_ONCHAIN_ENRICHED
+  - Added 23 new contract tests (275 total orderflow, 3011 total suite)
 touched_files:
-  - scripts/m7a_orderflow_replay.py (MODIFIED: size normalization, gas denomination, 4 new fields, 2 artifact blocks)
-  - tests/unit/test_orderflow_contracts.py (MODIFIED: +27 tests, 252 total; 5 new test classes)
-  - docs/status/Status_M7.md (MODIFIED: M7.A.5.9 section added, header updated)
+  - scripts/m7a_orderflow_replay.py (MODIFIED: 2 new rejects, 1 new admission source, stale-gate, zero-liq gate, provenance fix, summary rewrite)
+  - tests/unit/test_orderflow_contracts.py (MODIFIED: +23 tests, 275 total; 6 new test classes)
+  - docs/status/Status_M7.md (MODIFIED: M7.A.5.10 section added, header updated)
   - docs/DEV_REPORT_LATEST.md (this file, rewritten)
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit/test_orderflow_contracts.py -q: PASS (252 passed in ~2s)
-py -3.11 -m pytest tests/unit -q: PASS (2988 passed, 6 skipped in ~52s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (52.9s, ALL REQUIRED GATES PASSED)
-py -3.11 scripts/m7a_orderflow_replay.py --ws-live --ws-blocks 30 --output data/tmp/m7a_ws_live_gasfix_30b.json: PASS (2 events)
-py -3.11 scripts/m7a_orderflow_replay.py --ws-live --ws-blocks 100 --output data/tmp/m7a_ws_live_gasfix_100b.json: PASS (10 events)
+py -3.11 -m pytest tests/unit/test_orderflow_contracts.py -q: PASS (275 passed in ~2s)
+py -3.11 -m pytest tests/unit -q: PASS (3011 passed, 6 skipped in ~55s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (54.0s, ALL REQUIRED GATES PASSED)
+py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit: PASS (1 warning)
+py -3.11 scripts/m7a_orderflow_replay.py --ws-live --ws-blocks 30 --output data/tmp/m7a_510_30b.json: PASS (2 events)
+py -3.11 scripts/m7a_orderflow_replay.py --ws-live --ws-blocks 300 --output data/tmp/m7a_510_300b.json: PASS (25 events)
 
 ## 3) Artifacts Attached
 
 live evidence (this session):
-  - data/tmp/m7a_ws_live_gasfix_30b.json (30-block ws-live, 2 events)
-  - data/tmp/m7a_ws_live_gasfix_100b.json (100-block ws-live, 10 events)
+  - data/tmp/m7a_510_30b.json (30-block ws-live, 2 events)
+  - data/tmp/m7a_510_300b.json (300-block ws-live, 25 events)
 
-## 4) Key Results -- M7.A.5.9 Corrective Evidence
+## 4) Key Results -- M7.A.5.10 Contract Fixes
 
-### Bug #1: Decimal-Blind Size Normalization (FIXED)
+### Fix #1: Stale-Gate Viability
 
-| Token | decimals | OLD bounds | NEW bounds | OLD backrun_size | NEW backrun_size |
-|-------|----------|------------|------------|------------------|------------------|
-| WETH | 18 | 10^15..10^18 | 10^15..10^18 | ~10^15 (0.001 ETH) | ~10^15 (unchanged) |
-| USDC | 6 | 10^15..10^18 | 10^3..10^6 | 10^15 ($1B!) | 10^6 ($1) |
-| WBTC | 8 | 10^15..10^18 | 10^5..10^8 | 10^15 ($10^7 BTC!) | 10^8 (1.0 WBTC) |
+| Condition | route_viable | reject_reason |
+|-----------|-------------|---------------|
+| net_bps > 0, block_lag <= 2 | True | None |
+| net_bps > 0, block_lag > 2 | **False** | **STALE_POSITIVE** |
+| net_bps <= 0 | False | GAS_EXCEEDS_GROSS |
 
-### Bug #2: Gas Denomination Mismatch (FIXED)
+### Fix #2: Zero-Liquidity Reject Gate
 
-| Token | OLD gas_cost_wei | NEW gas_cost_wei | OLD net_bps | NEW net_bps |
-|-------|------------------|------------------|-------------|-------------|
-| USDC (6-dec) | 20,000,000,000,000 (ETH!) | 39,842 (USDC) | **-200,000,000,008** | **-400** |
-| WETH (18-dec) | 20,000,000,000,000 | 20,000,000,000,000 | -0.19 | -0.19 |
-| PENDLE (~$0.16) | 20,000,000,000,000 (ETH!) | 448,835,748,027,946,816 (PENDLE) | N/A | -4475 |
+All candidate pools with liquidity=0 in local_sim_state → **REJECT_ZERO_LIQUIDITY** (early reject, no economic scoring).
+Previous behavior: these events would proceed to quoting, get inflated results from stale pricing.
 
-### 100-Block Evidence Summary
+### Fix #3: Admission Provenance Split
 
-| Metric | Value |
-|--------|-------|
-| events_count | 10 |
-| results_count | 10 |
-| viable_count | 0 |
-| best_net_bps | 0.0 |
-| worst_net_bps | -4475 |
-| mean_net_bps | -963 |
-| GAS_EXCEEDS_GROSS rate | 100% (9/9 scored) |
-| bps range | [-4475, -0.19] (human-readable) |
+| Condition | admission_source |
+|-----------|-----------------|
+| enrichment_applied, subgraph_seed_used=true | subgraph_seeded_verified |
+| enrichment_applied, subgraph_seed_used=false | **onchain_enriched_verified** (NEW) |
+| no enrichment, canonical | canonical_core |
+| no enrichment, addr_to_symbol | addr_to_symbol |
 
-### Gas Decomposition (Denomination-Correct)
+### 300-Block Evidence Summary
 
-| Metric | 30b run | 100b run |
-|--------|---------|----------|
-| events_with_gas_decomp | 1 | 8 |
-| mean_total_gas_bps | 398.42 | varies by token price |
-| USDC tgas_bps | 398.42 | 398.42 |
-| WETH tgas_bps | N/A | 0.2 |
-| PENDLE tgas_bps | N/A | 4488 |
-
-### BackrunResult Evolution
-
-| Version | Fields | New Fields |
-|---------|--------|-----------|
-| M7.A.5.8 | 49 | l2_gas_bps, l1_data_bps, total_gas_bps, subgraph_seed_used |
-| M7.A.5.9 | **53** | token_in_decimals, size_normalization_source, size_usd_estimate, size_valid_for_token |
+| Metric | M7.A.5.9 (before) | M7.A.5.10 (after) |
+|--------|-------------------|-------------------|
+| events_count | 22 | 25 |
+| viable_count | **1 (false positive!)** | **0** |
+| positive_net_count | 1 | 0 |
+| ZERO_LIQUIDITY | N/A | **21** |
+| GAS_EXCEEDS_GROSS | 16 | 0 |
+| TOKEN_PAIR_UNRESOLVED | 1 | 2 |
+| NO_COUNTER_POOL | 4 | 2 |
+| admission: subgraph_seeded_verified | 18 (misattributed) | 0 |
+| admission: onchain_enriched_verified | N/A | 5 |
+| stale_positive_count | N/A | 0 |
 
 ### Test Summary
 
 | Test Class | Count | Status |
 |------------|-------|--------|
-| TestM7A59NormalizedBounds | 11 | PASS |
-| TestM7A59BackrunResultFields | 3 | PASS |
-| TestM7A59SizeNormalizationContract | 4 | PASS |
-| TestM7A59BackwardCompat | 2 | PASS |
-| TestM7A59GasDenominationConversion | 9 | PASS (NEW this sub-session) |
-| **Total new (M7.A.5.9)** | **29** | **PASS** |
-| **Total orderflow tests** | **252** | **PASS** |
-| **Total all tests** | **2988** | **PASS (6 skipped)** |
+| TestM7A510StaleGateConstants | 4 | PASS |
+| TestM7A510AdmissionOnchainEnriched | 4 | PASS |
+| TestM7A510StaleGateViability | 3 | PASS |
+| TestM7A510ZeroLiquidityReject | 1 | PASS |
+| TestM7A510SplitSummaryFields | 7 | PASS |
+| TestM7A510BackwardCompat | 4 | PASS |
+| **Total new (M7.A.5.10)** | **23** | **PASS** |
+| **Total orderflow tests** | **275** | **PASS** |
+| **Total all tests** | **3011** | **PASS (6 skipped)** |
 
 ## 5) Strategic Reading
 
-1. **M7.A.5.8 gas economics were wrong by 10^8x for non-18-decimal tokens**: The decimal-blind size bug inflated USDC backrun_size from $1 to $1B, and the gas denomination mismatch divided ETH-denominated gas by USDC-denominated amount, producing -200 billion bps instead of -400 bps. Both bugs are now fixed with denomination-correct evidence.
+1. **ZERO_LIQUIDITY is the new dominant reject**: 21/25 events (84%) have candidate pools with liquidity=0. These are initialized V3 pools with no active LP positions. Previously these passed through to economic scoring and could produce false-positive viables from stale pricing.
 
-2. **GAS_EXCEEDS_GROSS verdict is CONFIRMED with correct accounting**: After fixing both bugs, gas still exceeds gross for 100% of events. For USDC: gas is 398 bps (~$0.04 on a $1 backrun). For WETH: gas is 0.2 bps (~$0.07 on a $3500 backrun). The verdict is unchanged but the measurements are now trustworthy.
+2. **Stale-positive false viables eliminated**: The M7.A.5.9 300b run had viable_count=1 with block_lag=23 — a stale quote that would never be executable. Now route_viable requires block_lag <= 2. No false viables in corrective evidence.
 
-3. **Gas denomination conversion uses oracle prices from Chainlink**: The _gas_cost_in_token_wei() helper converts ETH gas via: `gas_token = gas_eth * eth_usd / tok_usd * 10^dec / 10^18`. Uses live Chainlink oracle for ETH and token_in prices, falls back to $3500/$1 heuristic.
+3. **Admission provenance is now honest**: 5 events correctly labeled `onchain_enriched_verified` (was all `subgraph_seeded_verified` even when subgraph was unused). Admission source histogram matches actual enrichment path.
 
-4. **Cheap tokens show highest gas overhead, as expected**: PENDLE (~$0.16) shows 4488 bps gas overhead — $0.07 gas on a $0.16 backrun is 44.9%. WETH shows 0.2 bps. This confirms gas economics are token-price-dependent but always structurally unviable at small sizes.
+4. **Summary scoring is clean**: best_net_bps excludes 0.0 from TOKEN_PAIR_UNRESOLVED/NO_COUNTER_POOL/ZERO_LIQUIDITY. Split fields separate executable vs stale-positive economics.
 
-5. **M7.A is now fully closed with denomination-correct evidence**: All three independent blockers confirmed: (1) latency 400ms (M7.A.5.4), (2) coverage resolved (M7.A.5.7), (3) gas economics — now with correct denomination — still block 100% of events.
+5. **M7.A is fully closed with contract-correct evidence**: Previous M7.A.5.9 evidence had 3 measurement/contract issues. All fixed. The blocker has shifted: it's not just that gas exceeds gross — most pools have zero liquidity to begin with.
 
 ## 6) Milestone Summary
 
@@ -145,5 +136,6 @@ live evidence (this session):
 | M7.A.5.6 | **COVERAGE DECOMPOSED** (80% TOKEN_NOT_ADMITTED) |
 | M7.A.5.7 | **INFRASTRUCTURE BUILT** (enrichment + oracle + local-sim) |
 | M7.A.5.8 | **LIVE EVIDENCE: BLOCKER SHIFTED** (admission 100%, GAS_EXCEEDS_GROSS 100%) |
-| M7.A.5.9 | **CORRECTIVE: DENOMINATION-CORRECT** (size + gas bugs fixed, verdict confirmed) |
+| M7.A.5.9 | **CORRECTIVE: DENOMINATION-CORRECT** (size + gas bugs fixed) |
+| M7.A.5.10 | **CORRECTIVE: CONTRACT-CORRECT** (stale-gate + zero-liq + provenance fixed) |
 | M7.B | NOT STARTED (closed by M7.A verdicts) |

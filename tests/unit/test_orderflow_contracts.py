@@ -1,5 +1,5 @@
 """
-Contract tests for M7.A.4/M7.A.5/M7.A.5.6/M7.A.5.7/M7.A.5.8/M7.A.5.9 — Orderflow-driven replay and live block-event backrun.
+Contract tests for M7.A.4/M7.A.5/M7.A.5.6/M7.A.5.7/M7.A.5.8/M7.A.5.9/M7.A.5.10 — Orderflow-driven replay and live block-event backrun.
 
 Tests lock:
 - OrderflowEvent schema and validation
@@ -16,6 +16,7 @@ Tests lock:
 - M7.A.5.7: Admission source provenance, oracle guard schema, enrichment, local-sim state
 - M7.A.5.8: Subgraph seed function, gas decomposition, backward compat (49 fields)
 - M7.A.5.9: Decimal-aware size normalization, _normalized_bounds(), BackrunResult size fields
+- M7.A.5.10: Stale-gate viability, zero-liquidity reject, admission provenance fix, split summary
 """
 
 from __future__ import annotations
@@ -60,6 +61,9 @@ from scripts.m7a_orderflow_replay import (
     REJECT_UNSUPPORTED_ADAPTER,
     REJECT_RPC_QUOTE_FAIL,
     REJECT_PAIR_RESOLVED_UNTRADEABLE,
+    # M7.A.5.10 reject reasons
+    REJECT_STALE_POSITIVE,
+    REJECT_ZERO_LIQUIDITY,
     SIGNIFICANT_IMPACT_BPS,
     SURFACE_BLOCK_BACKRUN,
     SURFACE_COW_SOLVER,
@@ -94,6 +98,8 @@ from scripts.m7a_orderflow_replay import (
     ADMISSION_ADDR_TO_SYMBOL,
     ADMISSION_SUBGRAPH_VERIFIED,
     ADMISSION_REJECTED,
+    # M7.A.5.10 admission sources
+    ADMISSION_ONCHAIN_ENRICHED,
     ALL_ADMISSION_SOURCES,
     CHAINLINK_FEEDS_ARBITRUM,
     CHAINLINK_LATEST_ROUND_SELECTOR,
@@ -227,7 +233,7 @@ class TestBackrunResultSchema:
 
     def test_reject_reasons_are_canonical(self):
         """All reject reasons must be from the canonical set."""
-        assert len(ALL_REJECT_REASONS) == 13  # 8 original + 5 M7.A.5.6 granular
+        assert len(ALL_REJECT_REASONS) == 15  # 8 original + 5 M7.A.5.6 + 2 M7.A.5.10
         assert REJECT_NO_COUNTER_VENUE in ALL_REJECT_REASONS
         assert REJECT_GAS_EXCEEDS_GROSS in ALL_REJECT_REASONS
         assert REJECT_SLIPPAGE_EXCEEDS_GROSS in ALL_REJECT_REASONS
@@ -1746,8 +1752,8 @@ class TestM7A56RejectConstants:
     """M7.A.5.6: 5 new granular reject reasons and expanded ALL_REJECT_REASONS."""
 
     def test_all_reject_reasons_count(self):
-        """ALL_REJECT_REASONS must contain exactly 13 members (8 original + 5 new)."""
-        assert len(ALL_REJECT_REASONS) == 13
+        """ALL_REJECT_REASONS must contain exactly 15 members (8 original + 5 M7.A.5.6 + 2 M7.A.5.10)."""
+        assert len(ALL_REJECT_REASONS) == 15
 
     def test_new_reject_constants_in_frozen_set(self):
         new_reasons = {
@@ -2451,9 +2457,9 @@ class TestM7A57AdmissionSource:
         assert ADMISSION_REJECTED == "rejected_unverified"
 
     def test_all_admission_sources_frozenset(self):
-        """ALL_ADMISSION_SOURCES should be a frozenset with 4 members."""
+        """ALL_ADMISSION_SOURCES should be a frozenset with 5 members (4 old + 1 M7.A.5.10)."""
         assert isinstance(ALL_ADMISSION_SOURCES, frozenset)
-        assert len(ALL_ADMISSION_SOURCES) == 4
+        assert len(ALL_ADMISSION_SOURCES) == 5
 
     def test_admit_canonical_both_known(self):
         """Both tokens in canonical universe → admission_source = canonical_core."""
@@ -3169,3 +3175,255 @@ class TestM7A59GasDenominationConversion:
         assert 0 < decomp["total_gas_bps"] < 100_000
         assert decomp["l1_data_bps"] > 0
         assert decomp["l2_gas_bps"] > 0
+
+# ===========================================================================
+# M7.A.5.10: Stale-gate, zero-liquidity, admission provenance, split summary
+# ===========================================================================
+
+class TestM7A510StaleGateConstants:
+    """M7.A.5.10: REJECT_STALE_POSITIVE and REJECT_ZERO_LIQUIDITY in ALL_REJECT_REASONS."""
+
+    def test_stale_positive_in_all_reject_reasons(self):
+        assert REJECT_STALE_POSITIVE in ALL_REJECT_REASONS
+
+    def test_zero_liquidity_in_all_reject_reasons(self):
+        assert REJECT_ZERO_LIQUIDITY in ALL_REJECT_REASONS
+
+    def test_stale_positive_value(self):
+        assert REJECT_STALE_POSITIVE == "STALE_POSITIVE"
+
+    def test_zero_liquidity_value(self):
+        assert REJECT_ZERO_LIQUIDITY == "ZERO_LIQUIDITY"
+
+
+class TestM7A510AdmissionOnchainEnriched:
+    """M7.A.5.10: ADMISSION_ONCHAIN_ENRICHED in ALL_ADMISSION_SOURCES."""
+
+    def test_onchain_enriched_in_all_admission_sources(self):
+        assert ADMISSION_ONCHAIN_ENRICHED in ALL_ADMISSION_SOURCES
+
+    def test_onchain_enriched_value(self):
+        assert ADMISSION_ONCHAIN_ENRICHED == "onchain_enriched_verified"
+
+    def test_subgraph_verified_still_present(self):
+        assert ADMISSION_SUBGRAPH_VERIFIED in ALL_ADMISSION_SOURCES
+
+    def test_all_admission_sources_count(self):
+        assert len(ALL_ADMISSION_SOURCES) == 5
+
+
+class TestM7A510StaleGateViability:
+    """M7.A.5.10: route_viable requires net_bps > 0 AND block_lag <= 2."""
+
+    def test_viable_result_positive_low_lag(self):
+        """net_bps > 0 + block_lag <= 2 → viable."""
+        r = BackrunResult(
+            event_id="stale_1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=50.0,
+            block_lag=1,
+            same_state_class="next_block",
+            route_viable=True,
+            reject_reason=None,
+        )
+        assert r.route_viable is True
+        assert r.reject_reason is None
+
+    def test_stale_positive_not_viable(self):
+        """net_bps > 0 + block_lag > 2 → NOT viable, reject=STALE_POSITIVE."""
+        r = BackrunResult(
+            event_id="stale_2",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=2630.0,
+            block_lag=23,
+            same_state_class="stale",
+            route_viable=False,
+            reject_reason=REJECT_STALE_POSITIVE,
+        )
+        assert r.route_viable is False
+        assert r.reject_reason == REJECT_STALE_POSITIVE
+
+    def test_negative_net_not_viable(self):
+        """net_bps < 0 → NOT viable, reject=GAS_EXCEEDS_GROSS."""
+        r = BackrunResult(
+            event_id="stale_3",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=-400.0,
+            block_lag=1,
+            same_state_class="next_block",
+            route_viable=False,
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+        )
+        assert r.route_viable is False
+        assert r.reject_reason == REJECT_GAS_EXCEEDS_GROSS
+
+
+class TestM7A510ZeroLiquidityReject:
+    """M7.A.5.10: Zero-liquidity pools produce REJECT_ZERO_LIQUIDITY."""
+
+    def test_zero_liq_result(self):
+        r = BackrunResult(
+            event_id="zeroliq_1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            reject_reason=REJECT_ZERO_LIQUIDITY,
+            route_viable=False,
+            local_sim_state={
+                "pools_queried": 2,
+                "pools_with_state": 2,
+                "pool_states": {
+                    "0xaaa": {"liquidity": 0},
+                    "0xbbb": {"liquidity": 0},
+                },
+            },
+        )
+        assert r.reject_reason == REJECT_ZERO_LIQUIDITY
+        assert r.route_viable is False
+
+
+class TestM7A510SplitSummaryFields:
+    """M7.A.5.10: build_replay_summary produces split viability fields."""
+
+    def _make_results(self):
+        """Build a mix of results for summary testing."""
+        results = []
+        # Result 1: viable (low lag, positive)
+        results.append(BackrunResult(
+            event_id="sum_1", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=50.0, block_lag=1, same_state_class="next_block",
+            route_viable=True, reject_reason=None, size_valid_for_token=True,
+        ))
+        # Result 2: stale-positive (high lag, positive, NOT viable)
+        results.append(BackrunResult(
+            event_id="sum_2", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=2630.0, block_lag=23, same_state_class="stale",
+            route_viable=False, reject_reason=REJECT_STALE_POSITIVE, size_valid_for_token=True,
+        ))
+        # Result 3: gas-rejected (low lag, negative)
+        results.append(BackrunResult(
+            event_id="sum_3", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=-400.0, block_lag=1, same_state_class="next_block",
+            route_viable=False, reject_reason=REJECT_GAS_EXCEEDS_GROSS, size_valid_for_token=False,
+        ))
+        # Result 4: unscored reject (NO_COUNTER_POOL)
+        results.append(BackrunResult(
+            event_id="sum_4", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=0.0, block_lag=5, same_state_class="stale",
+            route_viable=False, reject_reason=REJECT_NO_COUNTER_POOL,
+        ))
+        return results
+
+    def test_split_fields_present(self):
+        events = [_make_event(event_id=f"sum_{i}") for i in range(1, 5)]
+        results = self._make_results()
+        art = build_replay_summary(events, results, mode="test")
+        for key in [
+            "best_net_bps_any", "best_net_bps_executable",
+            "positive_net_count_any", "positive_net_count_low_lag",
+            "stale_positive_count", "scored_results_count",
+            "size_valid_count", "size_fallback_count",
+        ]:
+            assert key in art, f"Missing split field: {key}"
+
+    def test_best_net_bps_excludes_unscored(self):
+        """best_net_bps must come from scored results only, not 0.0 from NO_COUNTER_POOL."""
+        events = [_make_event(event_id=f"sum_{i}") for i in range(1, 5)]
+        results = self._make_results()
+        art = build_replay_summary(events, results, mode="test")
+        # Scored results: sum_1 (50), sum_2 (2630), sum_3 (-400). Unscored: sum_4 (0)
+        assert art["scored_results_count"] == 3
+        assert art["best_net_bps"] == 2630.0
+
+    def test_best_net_bps_executable_vs_any(self):
+        events = [_make_event(event_id=f"sum_{i}") for i in range(1, 5)]
+        results = self._make_results()
+        art = build_replay_summary(events, results, mode="test")
+        # best_any includes stale-positive (2630), best_executable only viable (50)
+        assert art["best_net_bps_any"] == 2630.0
+        assert art["best_net_bps_executable"] == 50.0
+
+    def test_positive_net_count_split(self):
+        events = [_make_event(event_id=f"sum_{i}") for i in range(1, 5)]
+        results = self._make_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["positive_net_count_any"] == 2  # sum_1 + sum_2
+        assert art["positive_net_count_low_lag"] == 1  # only sum_1
+        assert art["stale_positive_count"] == 1  # only sum_2
+
+    def test_size_validity_counts(self):
+        events = [_make_event(event_id=f"sum_{i}") for i in range(1, 5)]
+        results = self._make_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["size_valid_count"] == 2  # sum_1 + sum_2
+        assert art["size_fallback_count"] == 1  # sum_3
+
+    def test_viable_count_excludes_stale(self):
+        events = [_make_event(event_id=f"sum_{i}") for i in range(1, 5)]
+        results = self._make_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["viable_count"] == 1  # only sum_1
+
+    def test_reject_histogram_includes_stale_and_zero_liq(self):
+        results = [
+            BackrunResult(
+                event_id="h_1", event_source="live", event_type=EVENT_TYPE_SWAP,
+                post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+                best_backrun_net_bps=100.0, block_lag=10, route_viable=False,
+                reject_reason=REJECT_STALE_POSITIVE,
+            ),
+            BackrunResult(
+                event_id="h_2", event_source="live", event_type=EVENT_TYPE_SWAP,
+                post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+                best_backrun_net_bps=0.0, block_lag=5, route_viable=False,
+                reject_reason=REJECT_ZERO_LIQUIDITY,
+            ),
+        ]
+        events = [_make_event(event_id=f"h_{i}") for i in range(1, 3)]
+        art = build_replay_summary(events, results, mode="test")
+        assert art["reject_histogram"]["STALE_POSITIVE"] == 1
+        assert art["reject_histogram"]["ZERO_LIQUIDITY"] == 1
+
+
+class TestM7A510BackwardCompat:
+    """M7.A.5.10 must not break existing BackrunResult serialization (53 fields)."""
+
+    def test_backrun_result_field_count_still_53(self):
+        r = BackrunResult(
+            event_id="compat_510",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert len(d) == 53
+
+    def test_all_reject_reasons_count(self):
+        """ALL_REJECT_REASONS must have 15 entries (13 old + 2 new)."""
+        assert len(ALL_REJECT_REASONS) == 15
+
+    def test_all_admission_sources_count(self):
+        """ALL_ADMISSION_SOURCES must have 5 entries (4 old + 1 new)."""
+        assert len(ALL_ADMISSION_SOURCES) == 5
+
+    def test_old_reject_reasons_still_present(self):
+        for reason in [
+            REJECT_GAS_EXCEEDS_GROSS, REJECT_NO_COUNTER_VENUE,
+            REJECT_NO_COUNTER_POOL, REJECT_TOKEN_PAIR_UNRESOLVED,
+        ]:
+            assert reason in ALL_REJECT_REASONS
