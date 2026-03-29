@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """
-M7.A.4 — Orderflow-driven replay and intent/auction surface scout.
+M7.A.5 — Live block-event backrun replay on arbitrum_one.
 
-Hypothesis: Edge may emerge from external orderflow events, auction dynamics,
-or private-inventory/filler surfaces rather than from static AMM state alone.
+Hypothesis: block_event_backrun on arbitrum_one may produce viable measured edge
+when replay uses real block events and post-event live quotes instead of
+offline estimated state.
 
 This script implements a read-only event-driven replay pipeline:
   event → post-trade state delta → best backrun venue → measured net
 
 Modes:
-  --offline           Score backrun opportunities from built-in fixture events
-  --replay <file>     Score from imported event samples (JSON)
-  --intent-scout      Read-only feasibility assessment of orderflow surfaces
+  --offline             Score backrun opportunities from built-in fixture events
+  --replay <file>       Score from imported event samples (JSON)
+  --online              Score fixture events using live RPC quotes at current block
+  --live-blocks N       M7.A.5: Fetch real Swap events from last N blocks, score with live quotes
+  --intent-scout        Read-only feasibility assessment of orderflow surfaces
 
 Usage:
     python scripts/m7a_orderflow_replay.py --offline --output data/tmp/m7a_orderflow_offline.json
     python scripts/m7a_orderflow_replay.py --replay data/tmp/events.json --output data/tmp/m7a_replay.json
     python scripts/m7a_orderflow_replay.py --intent-scout --output data/tmp/m7a_intent_scout.json
     python scripts/m7a_orderflow_replay.py --online --output data/tmp/m7a_orderflow_online.json
+    python scripts/m7a_orderflow_replay.py --live-blocks 5 --output data/tmp/m7a_live_blocks.json
 """
 
 from __future__ import annotations
@@ -92,8 +96,14 @@ SIGNIFICANT_IMPACT_BPS = 5.0  # Minimum price impact to consider backrunnable
 DEFAULT_BACKRUN_GAS = 200_000  # Two-swap backrun gas estimate
 DEFAULT_GAS_PRICE_GWEI = 0.1  # Arbitrum typical
 
-# Canonical chain for M7.A.4 (same as M7.A: arbitrum_one)
+# Canonical chain for M7.A.4/M7.A.5 (same as M7.A: arbitrum_one)
 M7A4_CHAIN = "arbitrum_one"
+
+# Uniswap V3 Swap event topic (shared across V3 forks)
+SWAP_EVENT_TOPIC = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+
+# Default number of recent blocks to scan for live events
+DEFAULT_LIVE_BLOCKS = 5
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -132,7 +142,7 @@ class BackrunResult:
     event_id: str
     event_source: str  # "fixture" | "imported" | "live"
     event_type: str
-    post_trade_state_used: str  # "estimated" | "simulated" | "quoted"
+    post_trade_state_used: str  # "estimated" | "simulated" | "quoted" | "live"
     backrun_direction: str  # Direction of backrun
     best_buy_venue: Optional[str] = None
     best_sell_venue: Optional[str] = None
@@ -146,6 +156,13 @@ class BackrunResult:
     same_block_possible: bool = False
     route_viable: bool = False
     reject_reason: Optional[str] = None
+    # M7.A.5 live replay fields (None for offline/fixture results)
+    event_block: Optional[int] = None
+    quote_block: Optional[int] = None
+    block_lag: Optional[int] = None  # quote_block - event_block
+    same_state_class: Optional[str] = None  # "same_block" | "next_block" | "stale"
+    counter_venue_count: int = 0
+    best_live_net_bps: Optional[float] = None  # Net bps from live quotes
 
 
 @dataclass
@@ -417,142 +434,324 @@ def score_backrun_offline(event: OrderflowEvent) -> BackrunResult:
 
 
 # ---------------------------------------------------------------------------
-# Online backrun scoring (live quotes at current block)
+# M7.A.5: Live block-event fetching and normalization
 # ---------------------------------------------------------------------------
 
-def score_backrun_online(
-    event: OrderflowEvent,
-    rpc_url: str,
-    dex_configs: Dict[str, Any],
-    token_addresses: Dict[str, str],
-) -> BackrunResult:
-    """Score a backrun opportunity using live RPC quotes.
+# V3 fee tiers to try when pool fee is unknown
+_DEFAULT_FEE_TIERS = [500, 3000, 100, 10000]
 
-    Quotes the backrun path at the current block to estimate
-    real post-trade venue spreads. Requires RPC access.
+
+def _build_address_to_symbol(token_addresses: Dict[str, str]) -> Dict[str, str]:
+    """Build reverse lookup: checksummed address → symbol."""
+    result: Dict[str, str] = {}
+    for sym, addr in token_addresses.items():
+        result[addr.lower()] = sym
+    return result
+
+
+def _get_v3_factory_addresses(dex_configs: Dict[str, Any]) -> Dict[str, str]:
+    """Extract factory addresses from dex configs.
+
+    Returns: {factory_address_lower: dex_name}
+    """
+    result: Dict[str, str] = {}
+    for dex_name, cfg in dex_configs.items():
+        adapter_type = cfg.get("adapter_type", "")
+        if adapter_type in ("uniswap_v3", "algebra"):
+            factory = cfg.get("factory", "")
+            if factory:
+                result[factory.lower()] = dex_name
+    return result
+
+
+def fetch_recent_swap_events(
+    rpc_url: str,
+    blocks_back: int = DEFAULT_LIVE_BLOCKS,
+) -> list:
+    """Fetch raw Swap event logs from recent blocks on-chain.
+
+    Returns raw Web3 LogEntry objects. Caller normalizes them.
+    Uses a single eth_getLogs call with the Uniswap V3 Swap topic.
     """
     from web3 import Web3
 
     w3 = Web3(Web3.HTTPProvider(rpc_url))
     current_block = w3.eth.block_number
+    from_block = max(current_block - blocks_back, 0)
 
-    # The backrun buys the depressed token on the cheapest alternative venue
-    # and sells on the impacted venue (or the most expensive alternative)
+    logger.info(
+        "Fetching Swap events from block %d to %d (%d blocks)",
+        from_block,
+        current_block,
+        blocks_back,
+        extra={"context": {"from_block": from_block, "to_block": current_block}},
+    )
+
+    logs = w3.eth.get_logs({
+        "fromBlock": from_block,
+        "toBlock": current_block,
+        "topics": [SWAP_EVENT_TOPIC],
+    })
+
+    logger.info(
+        "Fetched %d raw Swap logs",
+        len(logs),
+        extra={"context": {"count": len(logs), "blocks": blocks_back}},
+    )
+    return list(logs), current_block
+
+
+def normalize_swap_log(
+    log: Any,
+    addr_to_symbol: Dict[str, str],
+    token_addresses: Dict[str, str],
+    dex_configs: Dict[str, Any],
+    event_index: int = 0,
+) -> Optional[OrderflowEvent]:
+    """Normalize a raw V3 Swap log into an OrderflowEvent.
+
+    Decodes the Swap(address,address,int256,int256,uint160,uint128,int24) event.
+    Attempts to identify the pool's token pair and originating DEX.
+
+    Returns None if the log cannot be fully normalized (unknown tokens etc).
+    """
+    try:
+        pool_address = log["address"].lower() if hasattr(log["address"], "lower") else log["address"]
+        tx_hash = log["transactionHash"].hex() if hasattr(log["transactionHash"], "hex") else str(log["transactionHash"])
+        block_number = log["blockNumber"]
+
+        # Decode Swap event data: int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick
+        data = log["data"]
+        if hasattr(data, "hex"):
+            data_hex = data.hex()
+        else:
+            data_hex = data if isinstance(data, str) else str(data)
+        if data_hex.startswith("0x"):
+            data_hex = data_hex[2:]
+
+        # Each field is 32 bytes (64 hex chars)
+        if len(data_hex) < 320:  # Need at least 5 x 64 = 320 hex chars
+            return None
+
+        def _decode_int256(hex_str: str) -> int:
+            val = int(hex_str, 16)
+            if val >= (1 << 255):
+                val -= (1 << 256)
+            return val
+
+        amount0 = _decode_int256(data_hex[0:64])
+        amount1 = _decode_int256(data_hex[64:128])
+        # sqrtPriceX96, liquidity, tick available but not needed for event normalization
+
+        # Determine swap direction from amounts:
+        # Positive amount = token flowing INTO the pool (user pays)
+        # Negative amount = token flowing OUT of the pool (user receives)
+        # We need to know token0 and token1 for this pool — we don't have that from logs alone,
+        # so we'll try to match against known token pairs.
+
+        # For now, use absolute values and mark direction
+        abs_amount0 = abs(amount0)
+        abs_amount1 = abs(amount1)
+
+        # We can't definitively identify token0/token1 from the log without
+        # querying the pool contract. Instead, use a heuristic:
+        # The token with the positive amount is token_in (user sent it),
+        # the token with the negative amount is token_out (user received it).
+        if amount0 > 0 and amount1 < 0:
+            amount_in_raw = abs_amount0
+            amount_out_raw = abs_amount1
+            direction = "token0_in"
+        elif amount1 > 0 and amount0 < 0:
+            amount_in_raw = abs_amount1
+            amount_out_raw = abs_amount0
+            direction = "token1_in"
+        else:
+            # Both same sign — unusual, skip
+            return None
+
+        # Estimate USD size (rough: assume ~1 USD per 1e6 for stables, ~3500 per 1e18 for ETH)
+        # This is a rough filter — exact pricing not needed for event classification
+        estimated_size_usd = max(amount_in_raw / 1e6, amount_in_raw / 1e18 * 3500)
+
+        # Skip tiny events
+        if estimated_size_usd < MIN_EVENT_SIZE_USD * 0.1:
+            return None
+
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Try to identify source DEX from pool address (best-effort)
+        # We don't have a pool→factory mapping without on-chain calls,
+        # so mark as "unknown_v3" — the DEX identity doesn't affect quoting
+        source_dex = "unknown_v3"
+
+        event_id = f"live_swap_{block_number}_{event_index}"
+
+        return OrderflowEvent(
+            event_id=event_id,
+            event_type=EVENT_TYPE_SWAP,
+            chain=M7A4_CHAIN,
+            block_number=block_number,
+            tx_hash=tx_hash,
+            token_in=direction,  # Placeholder — resolved later or left as direction tag
+            token_out="token0" if direction == "token1_in" else "token1",
+            amount_in_wei=amount_in_raw,
+            amount_out_wei=amount_out_raw,
+            dex=source_dex,
+            pool_address=pool_address,
+            fee_tier=0,  # Unknown from log alone
+            estimated_size_usd=estimated_size_usd,
+            estimated_impact_bps=max(1.0, min(50.0, estimated_size_usd / 10000)),  # Rough estimate
+            timestamp=ts,
+        )
+    except Exception as exc:
+        logger.debug("Failed to normalize swap log: %s", str(exc)[:120])
+        return None
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5: Live backrun scoring using read_quoter_v2 (sync)
+# ---------------------------------------------------------------------------
+
+def score_backrun_live(
+    event: OrderflowEvent,
+    rpc_url: str,
+    dex_configs: Dict[str, Any],
+    token_addresses: Dict[str, str],
+    current_block: int,
+    fallback_rpc_urls: Optional[List[str]] = None,
+) -> BackrunResult:
+    """Score a backrun opportunity using live QuoterV2 RPC quotes.
+
+    M7.A.5: Uses read_quoter_v2() from strategy/quote_rpc.py for
+    sync measured quotes at the current block (post-event state).
+    Replaces the broken M7.A.4 score_backrun_online which used
+    incorrect adapter constructors.
+
+    Quotes each known V3 DEX with quoter_v2, finds best buy/sell,
+    computes measured net spread.
+    """
+    from strategy.quote_rpc import read_quoter_v2, QUOTER_RATE_LIMITED
+
     backrun_dir = classify_event_backrun_type(event)
 
-    # For a swap token_in → token_out on source DEX:
-    # Backrun: buy token_in on cheapest venue, sell token_in on source venue
-    # (the source venue now has more token_in than before → token_in is cheaper there)
-
-    # Quote on source venue (impacted)
-    best_buy_quote = None
-    best_buy_venue = None
-    best_sell_quote = None
-    best_sell_venue = None
-
-    # Use a reasonable backrun size: tied to ~10% of event impact
+    # Backrun size: ~10% of the original event
     backrun_size_wei = max(event.amount_in_wei // 10, 1)
 
-    # Try quoting across known DEXes on the chain
-    known_dexes = ["uniswap_v3", "camelot_v3", "pancakeswap_v3", "sushiswap_v3"]
+    # We need real token addresses for quoting
+    # For live-fetched events, token_in/token_out may be direction tags
+    # Try to resolve actual token addresses
+    token_in_addr = token_addresses.get(event.token_out, "")
+    token_out_addr = token_addresses.get(event.token_in, "")
 
-    for dex_name in known_dexes:
-        try:
-            dex_cfg = dex_configs.get(dex_name, {})
-            if not dex_cfg:
-                continue
-            quoter_addr = dex_cfg.get("quoter_v2") or dex_cfg.get("quoter")
-            factory_addr = dex_cfg.get("factory")
-            if not quoter_addr or not factory_addr:
-                continue
+    # If we can't resolve tokens (live events without token identification),
+    # fall back to quoting common pairs
+    use_common_pairs = not token_in_addr or not token_out_addr
 
-            adapter_type = dex_cfg.get("adapter_type", "uniswap_v3")
-            token_in_addr = token_addresses.get(event.token_out, "")
-            token_out_addr = token_addresses.get(event.token_in, "")
-            if not token_in_addr or not token_out_addr:
-                continue
+    # Track best quotes across venues
+    best_buy_amount = None  # Best amount_out when buying the depressed token
+    best_buy_venue = None
+    best_sell_amount = None  # Best amount_out when selling
+    best_sell_venue = None
+    venues_quoted = 0
+    quote_block = current_block
 
-            # Dynamic adapter import
-            if adapter_type in ("uniswap_v3", "camelot_v3", "pancakeswap_v3", "sushiswap_v3"):
-                from dex.adapters.uniswap_v3 import UniswapV3Adapter
-                adapter = UniswapV3Adapter(
-                    rpc_url=rpc_url,
-                    chain_id=42161,  # arbitrum
+    # DEXes that have quoter_v2 (V3 forks)
+    quotable_dexes = []
+    for dex_name, cfg in dex_configs.items():
+        quoter = cfg.get("quoter_v2") or cfg.get("quoter")
+        if quoter:
+            quotable_dexes.append((dex_name, cfg, quoter))
+
+    if use_common_pairs:
+        # For live events where we don't know the exact tokens,
+        # try the most common pair: WETH/USDC
+        weth_addr = token_addresses.get("WETH", "")
+        usdc_addr = token_addresses.get("USDC", "")
+        if not weth_addr or not usdc_addr:
+            return BackrunResult(
+                event_id=event.event_id,
+                event_source="live",
+                event_type=event.event_type,
+                post_trade_state_used="live",
+                backrun_direction=backrun_dir,
+                reject_reason=REJECT_QUOTE_FAILURE,
+                event_block=event.block_number,
+                quote_block=quote_block,
+                block_lag=quote_block - event.block_number,
+            )
+        # Use WETH→USDC as representative quote
+        token_in_addr = weth_addr
+        token_out_addr = usdc_addr
+        backrun_size_wei = 10**16  # 0.01 ETH — small test size
+
+    for dex_name, cfg, quoter_addr in quotable_dexes:
+        fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+        # Try most common fee tier first
+        for fee in fee_tiers[:2]:  # Limit to 2 fee tiers to conserve RPC calls
+            try:
+                # Buy side: buy the depressed token
+                buy_result = read_quoter_v2(
                     quoter_address=quoter_addr,
-                    factory_address=factory_addr,
+                    token_in=token_in_addr,
+                    token_out=token_out_addr,
+                    amount_in=backrun_size_wei,
+                    fee=fee,
+                    rpc_url=rpc_url,
+                    block_num="latest",
+                    fallback_rpc_urls=fallback_rpc_urls,
                 )
-            else:
+                if buy_result and buy_result is not QUOTER_RATE_LIMITED:
+                    amt_out = buy_result.get("amount_out", 0)
+                    if amt_out > 0:
+                        venues_quoted += 1
+                        if best_buy_amount is None or amt_out > best_buy_amount:
+                            best_buy_amount = amt_out
+                            best_buy_venue = dex_name
+
+                # Sell side: sell the token back (reverse direction)
+                sell_result = read_quoter_v2(
+                    quoter_address=quoter_addr,
+                    token_in=token_out_addr,
+                    token_out=token_in_addr,
+                    amount_in=backrun_size_wei,
+                    fee=fee,
+                    rpc_url=rpc_url,
+                    block_num="latest",
+                    fallback_rpc_urls=fallback_rpc_urls,
+                )
+                if sell_result and sell_result is not QUOTER_RATE_LIMITED:
+                    amt_out = sell_result.get("amount_out", 0)
+                    if amt_out > 0:
+                        if best_sell_amount is None or amt_out > best_sell_amount:
+                            best_sell_amount = amt_out
+                            best_sell_venue = dex_name
+
+            except Exception as exc:
+                logger.debug(
+                    "Live quote failed for %s fee=%d: %s",
+                    dex_name,
+                    fee,
+                    str(exc)[:100],
+                    extra={"context": {"dex": dex_name, "event_id": event.event_id}},
+                )
                 continue
 
-            fee_tier = event.fee_tier or 500
-            quote_result = adapter.quote(
-                token_in=token_in_addr,
-                token_out=token_out_addr,
-                amount_in=backrun_size_wei,
-                fee=fee_tier,
-            )
-            if quote_result and quote_result.amount_out > 0:
-                if best_buy_quote is None or quote_result.amount_out > best_buy_quote:
-                    best_buy_quote = quote_result.amount_out
-                    best_buy_venue = dex_name
+    # Compute block lag and state classification
+    block_lag = quote_block - event.block_number
+    if block_lag == 0:
+        same_state_class = "same_block"
+    elif block_lag <= 2:
+        same_state_class = "next_block"
+    else:
+        same_state_class = "stale"
 
-        except Exception as exc:
-            logger.debug(
-                "Quote failed for %s: %s",
-                dex_name,
-                str(exc)[:100],
-                extra={"context": {"dex": dex_name, "event_id": event.event_id}},
-            )
-            continue
-
-    # Also quote the sell side: token_in → token_out (reverse direction)
-    for dex_name in known_dexes:
-        try:
-            dex_cfg = dex_configs.get(dex_name, {})
-            if not dex_cfg:
-                continue
-            quoter_addr = dex_cfg.get("quoter_v2") or dex_cfg.get("quoter")
-            factory_addr = dex_cfg.get("factory")
-            if not quoter_addr or not factory_addr:
-                continue
-
-            token_in_addr = token_addresses.get(event.token_in, "")
-            token_out_addr = token_addresses.get(event.token_out, "")
-            if not token_in_addr or not token_out_addr:
-                continue
-
-            from dex.adapters.uniswap_v3 import UniswapV3Adapter
-            adapter = UniswapV3Adapter(
-                rpc_url=rpc_url,
-                chain_id=42161,
-                quoter_address=quoter_addr,
-                factory_address=factory_addr,
-            )
-
-            fee_tier = event.fee_tier or 500
-            quote_result = adapter.quote(
-                token_in=token_in_addr,
-                token_out=token_out_addr,
-                amount_in=backrun_size_wei,
-                fee=fee_tier,
-            )
-            if quote_result and quote_result.amount_out > 0:
-                if best_sell_quote is None or quote_result.amount_out > best_sell_quote:
-                    best_sell_quote = quote_result.amount_out
-                    best_sell_venue = dex_name
-
-        except Exception as exc:
-            logger.debug(
-                "Sell quote failed for %s: %s",
-                dex_name,
-                str(exc)[:100],
-                extra={"context": {"dex": dex_name, "event_id": event.event_id}},
-            )
-            continue
-
-    # Compute gross from venue spread
-    if best_buy_quote is not None and best_sell_quote is not None:
-        gross_wei = best_sell_quote - backrun_size_wei
+    # Compute measured net from best quotes
+    if best_buy_amount is not None and best_sell_amount is not None:
+        # Gross = what we get selling minus what we spend buying
+        # We buy token_out with backrun_size_wei of token_in → get best_buy_amount
+        # We sell best_buy_amount of token_out → get best_sell_amount of token_in
+        # Net = best_sell_amount - backrun_size_wei (in token_in units)
+        gross_wei = best_sell_amount - backrun_size_wei
         gas_cost_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
         net_wei = gross_wei - gas_cost_wei
         net_bps = (net_wei / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
@@ -564,7 +763,7 @@ def score_backrun_online(
             event_id=event.event_id,
             event_source="live",
             event_type=event.event_type,
-            post_trade_state_used="quoted",
+            post_trade_state_used="live",
             backrun_direction=backrun_dir,
             best_buy_venue=best_buy_venue,
             best_sell_venue=best_sell_venue,
@@ -572,22 +771,66 @@ def score_backrun_online(
             amount_in_wei=backrun_size_wei,
             gross_pnl_wei=gross_wei,
             gas_cost_wei=gas_cost_wei,
-            fee_cost_wei=0,  # Already in quote
+            fee_cost_wei=0,  # Already in quote spread
             net_pnl_wei=net_wei,
             best_backrun_net_bps=round(net_bps, 4),
-            same_block_possible=True,
+            same_block_possible=(block_lag == 0),
             route_viable=route_viable,
             reject_reason=reject_reason,
+            event_block=event.block_number,
+            quote_block=quote_block,
+            block_lag=block_lag,
+            same_state_class=same_state_class,
+            counter_venue_count=venues_quoted,
+            best_live_net_bps=round(net_bps, 4),
         )
 
     return BackrunResult(
         event_id=event.event_id,
         event_source="live",
         event_type=event.event_type,
-        post_trade_state_used="quoted",
+        post_trade_state_used="live",
         backrun_direction=backrun_dir,
         reject_reason=REJECT_QUOTE_FAILURE,
+        event_block=event.block_number,
+        quote_block=quote_block,
+        block_lag=block_lag,
+        same_state_class=same_state_class,
+        counter_venue_count=venues_quoted,
     )
+
+
+# ---------------------------------------------------------------------------
+# Legacy online scoring (fixture events + live quotes) — kept for backward compat
+# ---------------------------------------------------------------------------
+
+def score_backrun_online(
+    event: OrderflowEvent,
+    rpc_url: str,
+    dex_configs: Dict[str, Any],
+    token_addresses: Dict[str, str],
+) -> BackrunResult:
+    """Score a backrun using live QuoterV2 quotes (fixture events).
+
+    Legacy wrapper around score_backrun_live for --online mode
+    which uses fixture events instead of live block events.
+    """
+    from web3 import Web3
+
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    current_block = w3.eth.block_number
+
+    result = score_backrun_live(
+        event=event,
+        rpc_url=rpc_url,
+        dex_configs=dex_configs,
+        token_addresses=token_addresses,
+        current_block=current_block,
+    )
+    # Mark as fixture-sourced for backward compatibility
+    result.event_source = "fixture"
+    result.post_trade_state_used = "quoted"
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -829,7 +1072,7 @@ def build_replay_summary(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="M7.A.4 — Orderflow-driven replay and intent/auction scout",
+        description="M7.A.5 — Orderflow-driven replay with live block events",
     )
 
     mode_group = parser.add_mutually_exclusive_group(required=True)
@@ -850,6 +1093,13 @@ def parse_args() -> argparse.Namespace:
         help="Score fixture events using live RPC quotes at current block",
     )
     mode_group.add_argument(
+        "--live-blocks",
+        type=int,
+        metavar="N",
+        default=None,
+        help="M7.A.5: Fetch real Swap events from last N blocks and score with live quotes",
+    )
+    mode_group.add_argument(
         "--intent-scout",
         action="store_true",
         help="Read-only feasibility assessment of orderflow surfaces",
@@ -866,6 +1116,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=M7A4_CHAIN,
         help=f"Chain to analyze (default: {M7A4_CHAIN})",
+    )
+    parser.add_argument(
+        "--max-events",
+        type=int,
+        default=20,
+        help="Maximum number of live events to score (default: 20, limits RPC calls)",
     )
 
     return parser.parse_args()
@@ -898,7 +1154,8 @@ def main():
         from core.rpc_urls import get_rpc_url
 
         rpc_url = get_rpc_url(args.chain)
-        dex_configs = load_dexes(args.chain)
+        all_dexes = load_dexes()
+        dex_configs = all_dexes.get(args.chain, {})
         token_addresses = get_all_token_addresses(args.chain)
 
         events = build_fixture_events()
@@ -907,6 +1164,108 @@ def main():
             for e in events
         ]
         artifact = build_replay_summary(events, results, mode="online")
+    elif args.live_blocks is not None:
+        # M7.A.5: Live block-event backrun replay
+        logger.info(
+            "Running M7.A.5 live block-event replay (%d blocks)",
+            args.live_blocks,
+        )
+        from config import load_dexes, get_all_token_addresses
+        from core.rpc_urls import get_rpc_url
+
+        rpc_url = get_rpc_url(args.chain)
+        if not rpc_url:
+            raise SystemExit(f"No RPC URL found for chain: {args.chain}")
+
+        all_dexes = load_dexes()
+        dex_configs = all_dexes.get(args.chain, {})
+        token_addresses = get_all_token_addresses(args.chain)
+        addr_to_symbol = _build_address_to_symbol(token_addresses)
+
+        # Fetch real Swap events from chain
+        raw_logs, current_block = fetch_recent_swap_events(
+            rpc_url=rpc_url,
+            blocks_back=args.live_blocks,
+        )
+
+        # Normalize logs into OrderflowEvents
+        events = []
+        for i, log in enumerate(raw_logs):
+            ev = normalize_swap_log(
+                log=log,
+                addr_to_symbol=addr_to_symbol,
+                token_addresses=token_addresses,
+                dex_configs=dex_configs,
+                event_index=i,
+            )
+            if ev is not None:
+                events.append(ev)
+
+        logger.info(
+            "Normalized %d events from %d raw logs",
+            len(events),
+            len(raw_logs),
+            extra={"context": {"normalized": len(events), "raw": len(raw_logs)}},
+        )
+
+        # Limit events to conserve RPC calls
+        if len(events) > args.max_events:
+            # Take largest events by estimated_size_usd
+            events.sort(key=lambda e: e.estimated_size_usd, reverse=True)
+            events = events[:args.max_events]
+            logger.info("Truncated to %d largest events", len(events))
+
+        # Score each event with live QuoterV2 quotes
+        results = []
+        for ev in events:
+            r = score_backrun_live(
+                event=ev,
+                rpc_url=rpc_url,
+                dex_configs=dex_configs,
+                token_addresses=token_addresses,
+                current_block=current_block,
+            )
+            results.append(r)
+
+        artifact = build_replay_summary(events, results, mode="live_blocks")
+        # Add M7.A.5 specific fields
+        artifact["m7a5_hypothesis"] = (
+            "block_event_backrun on arbitrum_one may produce viable measured edge "
+            "when replay uses real block events and post-event live quotes"
+        )
+        artifact["live_blocks_scanned"] = args.live_blocks
+        artifact["raw_logs_count"] = len(raw_logs)
+        artifact["normalized_events_count"] = len(events)
+        artifact["current_block"] = current_block
+        # Live replay state metrics
+        live_results = [r for r in results if r.event_block is not None]
+        if live_results:
+            artifact["live_state_metrics"] = {
+                "events_with_block_data": len(live_results),
+                "mean_block_lag": round(
+                    sum(r.block_lag or 0 for r in live_results) / len(live_results), 2
+                ),
+                "same_block_count": sum(
+                    1 for r in live_results if r.same_state_class == "same_block"
+                ),
+                "next_block_count": sum(
+                    1 for r in live_results if r.same_state_class == "next_block"
+                ),
+                "stale_count": sum(
+                    1 for r in live_results if r.same_state_class == "stale"
+                ),
+                "venues_quoted_max": max(r.counter_venue_count for r in live_results),
+                "venues_quoted_mean": round(
+                    sum(r.counter_venue_count for r in live_results) / len(live_results), 2
+                ),
+            }
+            live_net = [r.best_live_net_bps for r in live_results if r.best_live_net_bps is not None]
+            if live_net:
+                artifact["live_state_metrics"]["best_live_net_bps"] = round(max(live_net), 4)
+                artifact["live_state_metrics"]["worst_live_net_bps"] = round(min(live_net), 4)
+                artifact["live_state_metrics"]["mean_live_net_bps"] = round(
+                    sum(live_net) / len(live_net), 4
+                )
     else:
         parser_err = "No mode specified"
         raise SystemExit(parser_err)

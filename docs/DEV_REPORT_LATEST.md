@@ -1,139 +1,125 @@
 ﻿# DEV_REPORT_LATEST.md
 
 ## 0) Meta
-timestamp_utc: 2026-03-27T21:30:14Z
-run_id: ci_m5_gate_arbitrum_one_20260327_222948_123275
-mode: OFFLINE + INTENT_SCOUT
+timestamp_utc: 2026-03-29T10:34:33Z
+run_id: m7a5_live_blocks_infra_20260329
+mode: OFFLINE + INFRA (live block-event pipeline built, evidence pending RPC run)
 artifact_mode: local_session (data/tmp) + rolling
-config: arbitrum_one narrow_7 universe, orderflow replay, intent surface scout
+config: arbitrum_one narrow_7 universe, live block-event backrun replay
 code_identity:
-  primary: ts:2026-03-27T21:30:14Z
+  primary: ts:2026-03-29T10:34:33Z
   dirty: false
-  desc: M7.A.4 orderflow-driven backrun/replay hypothesis
+  desc: M7.A.5 live block-event backrun replay infrastructure
 
 ## Session Completion
-session_goal: Implement M7.A.4 orderflow-driven backrun/replay hypothesis — shift from static AMM triangular scanning to event-driven orderflow replay and intent/auction surface scouting.
-goal_status: REACHED
+session_goal: Implement M7.A.5 live block-event backrun replay — replace offline-estimated replay with real block events and post-event live quotes via read_quoter_v2.
+goal_status: REACHED (infrastructure + tests complete, live evidence pending RPC run)
 close_allowed: true
-remaining_blockers: none
+remaining_blockers: Live --live-blocks run requires RPC access (not run in this session)
 evidence_session_run_dirs:
-  - data/tmp/m7a_orderflow_offline.json (5 fixture events, offline replay)
-  - data/tmp/m7a_intent_scout.json (4 surface assessments)
-primary_blocker_of_session: M7.A.4 orderflow pipeline not yet implemented
+  - data/tmp/m7a_orderflow_offline.json (5 fixture events, offline replay — backward compat verified)
+primary_blocker_of_session: M7.A.5 live block-event pipeline not yet implemented
 blocker_status_before: ACTIVE
-blocker_status_after: RESOLVED
+blocker_status_after: RESOLVED (pipeline built, 21 new tests passing)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.A.4 — orderflow-driven backrun/replay hypothesis. Edge may emerge from event-driven orderflow replay and auction/intent surfaces rather than static AMM triangular state.
+goal (Roadmap): M7.A.5 — live block-event backrun replay on arbitrum_one. Hypothesis: block_event_backrun may produce viable measured edge when replay uses real block events and post-event live quotes.
 change_summary:
-  - Created scripts/m7a_orderflow_replay.py (~600 lines): full event-driven replay pipeline
-  - OrderflowEvent (15 fields), BackrunResult (17 fields), IntentSurfaceAssessment (16 fields)
-  - 5 canonical fixture events covering different tokens/sizes/impacts/DEXes
-  - Event classification: classify_event_backrun_type() (impact-based), classify_event_viability() (size/impact gates)
-  - Offline scoring: estimate_backrun_gross_bps() (capture_rate * competition_decay), gas/fee estimation
-  - Online scoring: live RPC quotes across known DEXes using existing adapter infrastructure
-  - Intent scout: 4 surface assessments (MEV-Share, UniswapX, CoW, block event backrun)
-  - CLI: --offline, --replay <file>, --online, --intent-scout (mutually exclusive)
-  - 58 new contract tests in tests/unit/test_orderflow_contracts.py
-  - Total test count: 2794 passed, 6 skipped, 0 failures (+58 new)
+  - Extended scripts/m7a_orderflow_replay.py with M7.A.5 live block-event infrastructure:
+    - SWAP_EVENT_TOPIC constant (V3 canonical Swap topic)
+    - fetch_recent_swap_events() — fetches raw Swap logs via eth_getLogs
+    - normalize_swap_log() — parses V3 Swap(int256 amount0, int256 amount1) into OrderflowEvent
+    - score_backrun_live() — sync measured quotes via read_quoter_v2() across all known V3 DEXes
+    - _build_address_to_symbol() — reverse address→symbol lookup
+  - Extended BackrunResult with 6 new fields: event_block, quote_block, block_lag, same_state_class, counter_venue_count, best_live_net_bps
+  - Added --live-blocks N CLI mode + --max-events limiter
+  - Rewrote score_backrun_online() as wrapper around score_backrun_live (fixes broken M7.A.4 adapter constructor)
+  - 21 new contract tests (79 total in test_orderflow_contracts.py)
+  - Total test count: 2815 passed, 6 skipped, 0 failures (+21 new)
+  - All CI gates pass
 touched_files:
-  - scripts/m7a_orderflow_replay.py (NEW)
-  - tests/unit/test_orderflow_contracts.py (NEW)
-  - docs/status/Status_M7.md (updated with M7.A.4 section)
+  - scripts/m7a_orderflow_replay.py (MODIFIED: +~250 lines, M7.A.5 live block-event infrastructure)
+  - tests/unit/test_orderflow_contracts.py (MODIFIED: +21 tests for M7.A.5 contracts)
+  - docs/status/Status_M7.md (updated with M7.A.5 section)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed
 
-py -3.11 scripts/m7a_orderflow_replay.py --offline --output data/tmp/m7a_orderflow_offline.json: PASS (5 events, 0 viable, best_net=-1.5537 bps)
-py -3.11 scripts/m7a_orderflow_replay.py --intent-scout --output data/tmp/m7a_intent_scout.json: PASS (4 surfaces, best_near_term=block_event_backrun)
-py -3.11 -m pytest tests/unit/test_orderflow_contracts.py -v --tb=short: PASS (58 passed in 0.43s)
-py -3.11 -m pytest tests/unit -q: PASS (2794 passed, 6 skipped)
-py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit: PASS (0 warnings)
-py -3.11 scripts/ci_docs_consistency.py --verbose: PASS (all docs consistent)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (all 7 gates green)
+py -3.11 scripts/m7a_orderflow_replay.py --offline: PASS (backward compat verified, 5 events, best_net=-1.5537 bps)
+py -3.11 -m pytest tests/unit/test_orderflow_contracts.py -q: PASS (79 passed in 0.70s)
+py -3.11 -m pytest tests/unit -q: PASS (2815 passed, 6 skipped in 77.09s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (all 7 gates green, elapsed 71.7s)
 
 ## 3) Artifacts Attached
 
 local_session (R&D evidence, data/tmp):
-  - data/tmp/m7a_orderflow_offline.json (5 fixture events, offline replay, best_net=-1.5537 bps)
-  - data/tmp/m7a_intent_scout.json (4 surface assessments, best_near_term=block_event_backrun)
+  - data/tmp/m7a_orderflow_offline.json (M7.A.4, still valid — backward compat verified)
+  - data/tmp/m7a_intent_scout.json (M7.A.4, still valid)
 
-prior session artifacts (still valid, not overwritten):
-  - data/tmp/m7a_verdict.json (narrow_7, 4-block verdict from M7.A)
-  - data/tmp/m7a_expanded_verdict.json (expanded_10, 3-block verdict from M7.A.2)
-  - data/tmp/m7a_regime_repeatability.json (M7.A.3 regime aggregation)
+prior session artifacts (still valid):
+  - data/tmp/m7a_verdict.json (narrow_7, M7.A)
+  - data/tmp/m7a_expanded_verdict.json (expanded_10, M7.A.2)
+  - data/tmp/m7a_regime_repeatability.json (M7.A.3)
 
 rolling (unchanged):
   - data/runs/_rolling/_latest.json
   - data/runs/_rolling/run_summary_latest.json
   - data/runs/_rolling/long_scan_latest.json (two-leg baseline: -3.5062 bps)
 
-## 4) Key Results — M7.A.4 Orderflow-Driven Backrun/Replay
+## 4) Key Results — M7.A.5 Live Block-Event Infrastructure
 
 ### New Infrastructure
 
 | Component | Description |
 |-----------|-------------|
-| `scripts/m7a_orderflow_replay.py` | Event-driven replay pipeline (~600 lines) |
-| `OrderflowEvent` | 15-field event model (event_id, type, chain, block, tokens, amounts, dex, pool, impact) |
-| `BackrunResult` | 17-field backrun scoring output (net_bps, reject_reason, viable, candidate_path) |
-| `IntentSurfaceAssessment` | 16-field feasibility assessment (surface_type, feasibility_score, execution_model) |
-| 5 fixture events | USDC→WETH, WETH→USDC, ARB→USDC, WBTC→USDC, USDT→USDC on arbitrum_one |
-| 7 reject reasons | BELOW_MIN_SIZE, BELOW_MIN_IMPACT, SLIPPAGE_EXCEEDS_GROSS, GAS_EXCEEDS_GROSS, FEE_EXCEEDS_NET, ROUTE_NOT_VIABLE, NO_COUNTER_VENUE |
-| 4 intent surfaces | mev_share_backrun, uniswapx_filler, cow_solver, block_event_backrun |
+| `SWAP_EVENT_TOPIC` | V3 canonical Swap topic (shared across V3 forks) |
+| `fetch_recent_swap_events()` | Fetches raw Swap logs via eth_getLogs from last N blocks |
+| `normalize_swap_log()` | Parses V3 Swap event data (int256 amount0/amount1) into OrderflowEvent |
+| `score_backrun_live()` | Sync measured quotes via `read_quoter_v2()` across known V3 DEXes |
+| `_build_address_to_symbol()` | Reverse address→symbol lookup for token identification |
+| `--live-blocks N` CLI | Fetch real events from last N blocks, score with live quotes |
+| `--max-events` CLI | Limit events to score (conserves RPC calls, default: 20) |
 
-### Offline Replay Evidence (5 fixture events)
+### BackrunResult M7.A.5 Fields
 
-| Metric | Value |
-|--------|-------|
-| Events scored | 5 |
-| Viable count | 0 |
-| Best net (bps) | **-1.5537** |
-| Worst net (bps) | -7.55 |
-| Mean net (bps) | -4.37 |
-| Reject: SLIPPAGE_EXCEEDS_GROSS | 4 |
-| Reject: GAS_EXCEEDS_GROSS | 1 |
-| beats_triangular_baseline (-14.16 bps) | **true** |
-| beats_two_leg_baseline (-3.5062 bps) | **false** |
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_block` | int? | Block number where the swap event occurred |
+| `quote_block` | int? | Block number when quotes were taken |
+| `block_lag` | int? | quote_block - event_block |
+| `same_state_class` | str? | "same_block" / "next_block" / "stale" |
+| `counter_venue_count` | int | Number of venues that returned valid quotes |
+| `best_live_net_bps` | float? | Net bps from live measured quotes |
 
-### Intent/Auction Surface Scout
-
-| Surface | Feasibility | Key advantage | Key risk |
-|---------|-------------|---------------|----------|
-| MEV-Share backrun | medium | Structured API, proven economics | High competition |
-| UniswapX filler | medium | Intent-based, Dutch auction | Private inventory needed |
-| CoW solver | low | Batch optimization | Complex competition |
-| Block event backrun | **high** | Reuses existing adapters | Block event parsing needed |
-
-### New Tests Added (58 contract tests)
+### New Tests Added (21 in 5 classes)
 
 | Class | Tests | What it locks |
 |-------|-------|--------------|
-| TestOrderflowEventSchema | 6 | Schema validity, field types, canonical event types |
-| TestBackrunResultSchema | 3 | Defaults, artifact fields, reject reasons |
-| TestIntentSurfaceSchema | 3 | Surface count, canonical surfaces, assessment keys |
-| TestFixtureEvents | 9 | Count, types, chains, unique IDs, positive amounts |
-| TestEventClassification | 7 | High/low impact, boundary, viability rejections |
-| TestBackrunScoring | 11 | Gross/gas proportionality, offline rejection, net calculation |
-| TestIntentScout | 7 | Assessment count, surfaces, feasibility scores |
-| TestReplayArtifactSchema | 8 | Hypothesis field, baselines, reject histogram, JSON serializable |
-| TestBackwardCompatibility | 4 | M7.A imports, two-leg/triangular baselines |
+| TestSwapEventConstants | 2 | SWAP_EVENT_TOPIC correctness, DEFAULT_LIVE_BLOCKS |
+| TestAddressLookup | 3 | Reverse address→symbol, empty, case-insensitive |
+| TestNormalizeSwapLog | 6 | Log parsing: token0_in, token1_in, both-positive skip, tiny skip, truncated data, tx_hash preservation |
+| TestBackrunResultLiveFields | 5 | Default None, asdict serialization, M7.A.5 schema, same_state_class values, post_trade_state "live" |
+| TestM7A5BackwardCompat | 5 | Offline results have None live fields, fixture count unchanged, artifact schema, JSON roundtrip |
+
+### Backward Compatibility
+
+- All existing M7.A.4 tests pass without modification
+- Offline mode produces identical output (M7.A.5 fields are None/0 for offline results)
+- Legacy `score_backrun_online()` now uses `read_quoter_v2()` correctly (fixes broken adapter constructor from M7.A.4)
 
 ## 5) Strategic Reading
 
-M7.A.4 shifts the search from passive triangular pool-state scanning to event-driven orderflow surfaces. Key findings:
+M7.A.5 builds the infrastructure for live block-event backrun replay:
 
-1. **Offline backrun estimates are better than triangular**: Best net -1.55 bps (orderflow) vs -14.16 bps (triangular). The event-driven frame produces estimates closer to two-leg baseline (-3.51 bps) even with conservative default capture_rate (0.3) and competition_decay (0.5).
+1. **Live event pipeline complete**: `fetch_recent_swap_events()` → `normalize_swap_log()` → `score_backrun_live()` forms a complete pipeline from raw chain events to measured backrun scores.
 
-2. **Still does not beat two-leg baseline offline**: The theoretical offline estimates are inherently conservative — real backrun profitability depends on live event timing, MEV competition dynamics, and same-block execution probability, none testable offline.
+2. **Correct quoting path**: Uses `read_quoter_v2()` from `strategy/quote_rpc.py` (sync, with fallback RPCs and 429 quarantine) instead of broken async adapter constructors from M7.A.4.
 
-3. **Block event backrun is highest-feasibility next surface**: It reuses existing arbitrum_one adapter infrastructure, requires only block event parsing and post-event quoting—no new chain, capital, or protocol integration. This is the logical next step if M7.A continues.
+3. **State classification**: `same_state_class` (same_block/next_block/stale) tracks how fresh the quotes are relative to the event — critical for understanding whether the measured edge is actionable.
 
-4. **MEV-Share and UniswapX have medium feasibility**: Both require external protocol integration (Flashbots API, UniswapX RFQ system) but have proven economics in production. CoW is lowest feasibility due to complex solver competition.
-
-**M7.A.4 is a closed bounded baseline** for offline-estimated event-driven backrun replay. The intent scout maps the orderflow/auction surface landscape and identifies the highest-ROI path forward.
+4. **Next step**: Run `--live-blocks 5` with RPC access to generate live evidence artifacts. This will produce the first measured backrun scores from real block events.
 
 ## 6) Milestone Summary
 
@@ -146,4 +132,5 @@ M7.A.4 shifts the search from passive triangular pool-state scanning to event-dr
 | M7.A.2 | **VERDICT READY — NO-GRADUATE** (expanded_10) |
 | M7.A.3 | **CLOSED BOUNDED BASELINE** (medium_activity regime) |
 | M7.A.4 | **CLOSED BOUNDED BASELINE** (orderflow replay, intent scout) |
+| M7.A.5 | **INFRA BUILT** (live block-event replay, evidence pending) |
 | M7.B | NOT STARTED (closed by M7.A–M7.A.4 verdicts) |

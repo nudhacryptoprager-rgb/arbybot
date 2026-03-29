@@ -1,9 +1,9 @@
 """
-Contract tests for M7.A.4 — Orderflow-driven replay and intent/auction scout.
+Contract tests for M7.A.4/M7.A.5 — Orderflow-driven replay and live block-event backrun.
 
 Tests lock:
 - OrderflowEvent schema and validation
-- BackrunResult schema
+- BackrunResult schema (incl. M7.A.5 live replay fields)
 - IntentSurfaceAssessment schema
 - Fixture event generation
 - Event classification viability
@@ -11,6 +11,7 @@ Tests lock:
 - Intent surface scout
 - Artifact schema
 - Backward compatibility with M7.A constants
+- M7.A.5: Live event normalization, block propagation, live replay schema
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from scripts.m7a_orderflow_replay import (
     BACKRUN_SELL_APPRECIATED,
     DEFAULT_BACKRUN_GAS,
     DEFAULT_GAS_PRICE_GWEI,
+    DEFAULT_LIVE_BLOCKS,
     EVENT_TYPE_LARGE_TRANSFER,
     EVENT_TYPE_POOL_REBALANCE,
     EVENT_TYPE_SWAP,
@@ -52,6 +54,7 @@ from scripts.m7a_orderflow_replay import (
     SURFACE_COW_SOLVER,
     SURFACE_MEV_SHARE_BACKRUN,
     SURFACE_UNISWAPX_FILLER,
+    SWAP_EVENT_TOPIC,
     # Data structures
     BackrunResult,
     IntentSurfaceAssessment,
@@ -66,7 +69,9 @@ from scripts.m7a_orderflow_replay import (
     estimate_backrun_gross_bps,
     estimate_fee_cost_bps,
     estimate_gas_cost_bps,
+    normalize_swap_log,
     score_backrun_offline,
+    _build_address_to_symbol,
 )
 
 
@@ -552,3 +557,279 @@ class TestBackwardCompatibility:
         results = [score_backrun_offline(e) for e in events]
         artifact = build_replay_summary(events, results, mode="offline")
         assert artifact["m7a_triangular_best_net_bps"] == -14.16
+
+
+# ===========================================================================
+# M7.A.5: Live event normalization tests
+# ===========================================================================
+
+class TestSwapEventConstants:
+    """Lock M7.A.5 constants."""
+
+    def test_swap_event_topic_is_v3(self):
+        """Swap topic matches Uniswap V3 canonical topic."""
+        assert SWAP_EVENT_TOPIC == "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+
+    def test_default_live_blocks(self):
+        assert DEFAULT_LIVE_BLOCKS == 5
+
+
+class TestAddressLookup:
+    """Test reverse address→symbol lookup helper."""
+
+    def test_build_address_to_symbol_basic(self):
+        addrs = {"WETH": "0xABCD", "USDC": "0x1234"}
+        result = _build_address_to_symbol(addrs)
+        assert result["0xabcd"] == "WETH"
+        assert result["0x1234"] == "USDC"
+
+    def test_build_address_to_symbol_empty(self):
+        assert _build_address_to_symbol({}) == {}
+
+    def test_build_address_to_symbol_case_insensitive(self):
+        addrs = {"ARB": "0xAbCdEf"}
+        result = _build_address_to_symbol(addrs)
+        assert "0xabcdef" in result
+        assert result["0xabcdef"] == "ARB"
+
+
+class TestNormalizeSwapLog:
+    """Test raw V3 Swap log → OrderflowEvent normalization."""
+
+    @staticmethod
+    def _make_swap_log(amount0: int, amount1: int, pool_addr: str = "0x" + "aa" * 20,
+                       block_number: int = 500000000, tx_hash_bytes: bytes = b"\xde" * 32):
+        """Build a fake Web3-like log entry for Swap events."""
+        # Encode amount0, amount1, sqrtPriceX96, liquidity, tick as 5 x 32-byte words
+        def _encode_int256(val: int) -> str:
+            if val < 0:
+                val = val + (1 << 256)
+            return format(val, "064x")
+
+        data_hex = (
+            "0x"
+            + _encode_int256(amount0)
+            + _encode_int256(amount1)
+            + "0" * 64  # sqrtPriceX96 placeholder
+            + "0" * 64  # liquidity placeholder
+            + "0" * 64  # tick placeholder
+        )
+
+        class HexBytes:
+            def __init__(self, val):
+                self._val = val
+            def hex(self):
+                return self._val.hex() if isinstance(self._val, bytes) else self._val
+
+        return {
+            "address": pool_addr,
+            "transactionHash": HexBytes(tx_hash_bytes),
+            "blockNumber": block_number,
+            "data": data_hex,
+            "topics": [SWAP_EVENT_TOPIC],
+        }
+
+    def test_normalize_basic_token0_in(self):
+        """Positive amount0, negative amount1 → token0 in."""
+        log = self._make_swap_log(amount0=5000 * 10**6, amount1=-(10**18))
+        ev = normalize_swap_log(
+            log=log,
+            addr_to_symbol={},
+            token_addresses={},
+            dex_configs={},
+            event_index=0,
+        )
+        assert ev is not None
+        assert ev.event_type == EVENT_TYPE_SWAP
+        assert ev.chain == M7A4_CHAIN
+        assert ev.amount_in_wei == 5000 * 10**6
+        assert ev.amount_out_wei == 10**18
+        assert ev.block_number == 500000000
+
+    def test_normalize_basic_token1_in(self):
+        """Positive amount1, negative amount0 → token1 in."""
+        log = self._make_swap_log(amount0=-(10**18), amount1=5000 * 10**6)
+        ev = normalize_swap_log(
+            log=log,
+            addr_to_symbol={},
+            token_addresses={},
+            dex_configs={},
+            event_index=7,
+        )
+        assert ev is not None
+        assert ev.token_in == "token1_in"
+        assert ev.event_id == "live_swap_500000000_7"
+
+    def test_normalize_skips_both_positive(self):
+        """Both amounts same sign → None."""
+        log = self._make_swap_log(amount0=100, amount1=200)
+        ev = normalize_swap_log(log, {}, {}, {}, 0)
+        assert ev is None
+
+    def test_normalize_skips_tiny_events(self):
+        """Events below MIN_EVENT_SIZE_USD * 0.1 threshold are skipped."""
+        log = self._make_swap_log(amount0=1, amount1=-1)
+        ev = normalize_swap_log(log, {}, {}, {}, 0)
+        assert ev is None
+
+    def test_normalize_truncated_data(self):
+        """Short data hex → None."""
+        log = self._make_swap_log(amount0=1, amount1=-1)
+        log["data"] = "0x" + "00" * 10  # Too short
+        ev = normalize_swap_log(log, {}, {}, {}, 0)
+        assert ev is None
+
+    def test_normalize_preserves_tx_hash(self):
+        """Transaction hash is preserved in event."""
+        tx_bytes = b"\xab" * 32
+        log = self._make_swap_log(amount0=10**18, amount1=-(5000 * 10**6), tx_hash_bytes=tx_bytes)
+        ev = normalize_swap_log(log, {}, {}, {}, 0)
+        assert ev is not None
+        assert ev.tx_hash == tx_bytes.hex()
+
+
+# ===========================================================================
+# M7.A.5: BackrunResult live fields
+# ===========================================================================
+
+class TestBackrunResultLiveFields:
+    """Lock M7.A.5 live replay fields on BackrunResult."""
+
+    def test_live_fields_default_none(self):
+        """New M7.A.5 fields default to None/0 for offline results."""
+        r = BackrunResult(
+            event_id="test",
+            event_source="fixture",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="estimated",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.event_block is None
+        assert r.quote_block is None
+        assert r.block_lag is None
+        assert r.same_state_class is None
+        assert r.counter_venue_count == 0
+        assert r.best_live_net_bps is None
+
+    def test_live_fields_in_asdict(self):
+        """M7.A.5 fields must appear in serialized form."""
+        r = BackrunResult(
+            event_id="test",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            event_block=500000000,
+            quote_block=500000002,
+            block_lag=2,
+            same_state_class="next_block",
+            counter_venue_count=3,
+            best_live_net_bps=-2.5,
+        )
+        d = asdict(r)
+        assert d["event_block"] == 500000000
+        assert d["quote_block"] == 500000002
+        assert d["block_lag"] == 2
+        assert d["same_state_class"] == "next_block"
+        assert d["counter_venue_count"] == 3
+        assert d["best_live_net_bps"] == -2.5
+
+    def test_live_fields_all_present_in_schema(self):
+        """All M7.A.5 fields exist in BackrunResult."""
+        r = BackrunResult(
+            event_id="t",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        m7a5_fields = {
+            "event_block", "quote_block", "block_lag",
+            "same_state_class", "counter_venue_count", "best_live_net_bps",
+        }
+        assert m7a5_fields.issubset(set(d.keys()))
+
+    def test_same_state_class_values(self):
+        """Same-state classifications are valid."""
+        for cls in ("same_block", "next_block", "stale"):
+            r = BackrunResult(
+                event_id="t",
+                event_source="live",
+                event_type=EVENT_TYPE_SWAP,
+                post_trade_state_used="live",
+                backrun_direction=BACKRUN_BUY_DEPRESSED,
+                same_state_class=cls,
+            )
+            assert r.same_state_class == cls
+
+    def test_post_trade_state_live_value(self):
+        """M7.A.5 uses 'live' as post_trade_state_used."""
+        r = BackrunResult(
+            event_id="t",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.post_trade_state_used == "live"
+        # Check that "live" is distinct from "estimated", "simulated", "quoted"
+        assert r.post_trade_state_used not in ("estimated", "simulated", "quoted")
+
+
+# ===========================================================================
+# M7.A.5: Offline backward compatibility
+# ===========================================================================
+
+class TestM7A5BackwardCompat:
+    """M7.A.5 additions must not break offline/fixture flows."""
+
+    def test_offline_results_have_none_live_fields(self):
+        """Offline scoring must not populate M7.A.5 fields."""
+        ev = _make_event()
+        r = score_backrun_offline(ev)
+        assert r.event_block is None
+        assert r.quote_block is None
+        assert r.block_lag is None
+        assert r.same_state_class is None
+        assert r.best_live_net_bps is None
+
+    def test_fixture_events_still_5(self):
+        """Fixture event count must not change."""
+        events = build_fixture_events()
+        assert len(events) == 5
+
+    def test_offline_artifact_schema_unchanged(self):
+        """Offline artifact still has all expected fields."""
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        required_keys = {
+            "m7a4_hypothesis", "mode", "timestamp", "chain",
+            "events_count", "results_count", "viable_count",
+            "positive_net_count", "best_net_bps", "worst_net_bps",
+            "mean_net_bps", "reject_histogram", "results",
+            "two_leg_baseline_net_bps", "m7a_triangular_best_net_bps",
+        }
+        assert required_keys.issubset(set(artifact.keys()))
+
+    def test_offline_results_serialize_with_new_fields(self):
+        """Serialized offline results include M7.A.5 fields as None/0."""
+        ev = _make_event()
+        r = score_backrun_offline(ev)
+        d = asdict(r)
+        # M7.A.5 fields present but None/0
+        assert "event_block" in d
+        assert "best_live_net_bps" in d
+        assert d["event_block"] is None
+        assert d["counter_venue_count"] == 0
+
+    def test_offline_json_roundtrip(self):
+        """Full offline artifact round-trips through JSON."""
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        json_str = json.dumps(artifact, default=str)
+        parsed = json.loads(json_str)
+        assert parsed["events_count"] == 5
+        assert parsed["mode"] == "offline"

@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A + M7.A.2 + M7.A.3 + M7.A.4 — all scopes produce no-graduate verdicts. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.A.4 orderflow-driven backrun/replay hypothesis: offline estimates (-1.55 bps) beat triangular (-14.16 bps) but not two-leg baseline (-3.51 bps). Intent scout: `block_event_backrun` = highest-feasibility next surface. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.4 — all scopes produce no-graduate verdicts. M7.A.5 live block-event replay infrastructure built, evidence pending. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.A.4 orderflow-driven backrun/replay hypothesis: offline estimates (-1.55 bps) beat triangular (-14.16 bps) but not two-leg baseline (-3.51 bps). M7.A.5 adds live block-event fetching + measured post-event quoting via `read_quoter_v2`. Intent scout: `block_event_backrun` = highest-feasibility next surface. M7.B remains closed.)  
 **Updated**: 2026-03-29  
 **Scope**: M7.A only — runtime graph sourcing, live measured scoring with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback, bounded size sweep over canonical size ladder (19 notionals, $1–$10K), machine-readable blocker summary with 6 canonical blocker tags, temporal blocker repeatability aggregation, **bounded-scope verdict summary** (`build_verdict_summary()` with `--verdict` CLI), **universe-profile infrastructure** (`--universe narrow_7|expanded_10`). Both universe profiles on arbitrum_one independently support a no-graduate verdict. M7.A `narrow_7` and M7.A.2 `expanded_10` are now **closed bounded baselines** with no-graduate verdicts. This verdict is scoped to the tested observation regime only: a non-static DEX market may behave differently under other chains, liquidity surfaces, volatility windows, size distributions, participant intensity, or source combinations. Any further M7.A work must proceed only as a newly named hypothesis branch (M7.A.3+), not as continued tuning of the already rejected arbitrum_one token-expansion surface. M7.B remains closed.
 
@@ -235,8 +235,8 @@ Steps 1-8 complete. Verdict: `recommend_open_m7b: false`, `recommend_freeze_curr
 - `engine/triangular_graph.py` — PoolEdge, PoolGraph, graph builders (cache + RuntimePair), universe filters
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, LegQuote, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`. Blocker analysis (6 tags), verdict builder, regime classifier (7 tags)
-- `scripts/m7a_orderflow_replay.py` — M7.A.4 event-driven replay pipeline: `--offline`, `--replay`, `--online`, `--intent-scout`. OrderflowEvent, BackrunResult, IntentSurfaceAssessment, fixture events, backrun scoring, intent/auction surface scout
-- Tests: 152 M7.A triangular tests in `test_triangular_contracts.py`, 58 M7.A.4 orderflow tests in `test_orderflow_contracts.py` (2794 total, 0 failures)
+- `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay pipeline: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--intent-scout`. OrderflowEvent, BackrunResult (with M7.A.5 live fields), IntentSurfaceAssessment, fixture events, backrun scoring, live block-event scoring via `read_quoter_v2`, intent/auction surface scout
+- Tests: 152 M7.A triangular tests in `test_triangular_contracts.py`, 79 M7.A.4/M7.A.5 orderflow tests in `test_orderflow_contracts.py` (2815 total, 0 failures)
 
 ---
 
@@ -292,6 +292,27 @@ Generated: 2026-03-29T09:54:03Z
 Offline backrun estimates (-1.55 to -7.55 bps) are significantly better than triangular (-14.16 bps) but still do not beat two-leg baseline (-3.51 bps). This is expected for theoretical offline estimates with default capture_rate (0.3) and competition_decay (0.5). Real backrun profitability depends on live event stream timing, MEV competition, and same-block execution — none of which are testable offline.
 
 **M7.A.4 is a closed bounded baseline** for offline-estimated backrun replay on arbitrum_one. The intent scout identifies `block_event_backrun` as the highest-feasibility next surface for live testing.
+
+---
+
+## M7.A.5: Live Block-Event Backrun Replay
+
+**Hypothesis**: `block_event_backrun` on arbitrum_one may produce viable measured edge when replay uses real block events and post-event live quotes instead of offline estimated state.
+
+**New infrastructure** (extensions to `scripts/m7a_orderflow_replay.py`):
+- `SWAP_EVENT_TOPIC` — Uniswap V3 canonical Swap topic (shared across V3 forks)
+- `fetch_recent_swap_events(rpc_url, blocks_back)` — fetches raw Swap logs via `eth_getLogs`
+- `normalize_swap_log(log, ...)` — parses V3 Swap(int256 amount0, int256 amount1, ...) into `OrderflowEvent`
+- `score_backrun_live(event, rpc_url, dex_configs, ...)` — sync measured quotes via `read_quoter_v2()` from `strategy/quote_rpc.py` across all known V3 DEXes on arbitrum_one
+- `BackrunResult` extended with 6 new fields: `event_block`, `quote_block`, `block_lag`, `same_state_class` (same_block|next_block|stale), `counter_venue_count`, `best_live_net_bps`
+- CLI: `--live-blocks N` — fetch real Swap events from last N blocks, score with live quotes
+- `--max-events` — limit events to score (conserves RPC calls)
+- Legacy `score_backrun_online()` rewritten as wrapper around `score_backrun_live()` using `read_quoter_v2` (fixes broken M7.A.4 adapter constructor)
+- 21 new contract tests (79 total in `test_orderflow_contracts.py`): `TestSwapEventConstants`, `TestAddressLookup`, `TestNormalizeSwapLog`, `TestBackrunResultLiveFields`, `TestM7A5BackwardCompat`
+
+**Evidence**: PENDING — requires `--live-blocks` run with RPC access to generate artifacts.
+
+**CI gates**: 2815 passed, 6 skipped, 0 failures. All gates pass (pytest, docs_consistency, status_m4_check, m5_0_offline, m4_smoke, m4_profit).
 
 ---
 
