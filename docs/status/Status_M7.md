@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.3 — all scopes produce no-graduate verdicts. M7.A.5.3 ws-live evidence: 0 low-lag events, pipeline latency 9× over budget. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
-**Updated**: 2026-03-29  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay. M7.B remains closed.
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.4 — all scopes produce no-graduate verdicts. M7.A.5.4 multicall pruning evidence: venues pruned but pipeline latency increased; per-call RPC latency (~400ms) is irreducible bottleneck. All public RPC architecture paths closed. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Updated**: 2026-03-30  
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning. M7.B remains closed.
 
 ---
 
@@ -100,6 +100,50 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 **Verdict**: ws-live streaming architecture **NOT VIABLE**. WebSocket newHeads delivers blocks correctly but quote pipeline (~2.3s per event, 6 venues × 2 passes) is 9× over the 250ms block budget. All events stale regardless of delivery mechanism. This closes the streaming architecture path alongside the polling path.
 
 **CI gates**: 2849 passed, 6 skipped. 113 tests in `test_orderflow_contracts.py`.
+
+---
+
+## M7.A.5.4: Two-Stage Multicall Pruning Pipeline
+
+**Hypothesis**: block_event_backrun on arbitrum_one may become fairly testable only if per-event live quote count is collapsed from ~12 calls to a multicall/local-state prefilter plus 1-2 confirmatory quotes.
+
+**Motivation**: M7.A.5.3.1 audit shows event ingestion is fine (`event_detected_at_block == quote_started_block`) but quote fanout is the bottleneck. `venues_pruned_by_multicall=0` proves multicall was a no-op. This step implements real multicall-based venue pruning.
+
+**New infrastructure**:
+- `_resolve_pool_addresses_multicall()`: batched `factory.getPool()` + `batch_liquidity()` via `MulticallBatcher.batch_get_pool()` (new method)
+- 2-stage scoring in `score_backrun_live_parallel()`: Stage A (multicall pruning) → Stage B (confirmatory QuoterV2)
+- 4 new BackrunResult fields: `quote_calls_attempted`, `quote_calls_after_pruning`, `prune_reason_histogram`, `pipeline_stage_latency_ms`
+- Artifact: `mean_quote_calls_attempted`, `mean_quote_calls_after_pruning`, `prune_reason_histogram`, `mean_stage_a_ms`, `mean_stage_b_ms`
+- 20 new contract tests (133 total in `test_orderflow_contracts.py`)
+
+**Evidence — M7.A.5.4 (Alchemy WSS, 50 blocks)**: 8 events scored. Results:
+
+| Metric | M7.A.5.3.1 (before) | M7.A.5.4 (after) |
+|--------|---------------------|-------------------|
+| events_scored | 6 | 8 |
+| events_scored_low_lag_ws | 0 | 0 |
+| venues_pruned_by_multicall | **0** | **8** |
+| mean_quote_calls_attempted | N/A | 20.0 |
+| mean_quote_calls_after_pruning | N/A | 16.0 (20% reduction) |
+| prune_reason_histogram | N/A | NO_POOL: 16 |
+| mean_stage_a_ms | N/A | 656 |
+| mean_stage_b_ms | N/A | 2204 |
+| mean_pipeline_latency_ms | 2258 | 2860 |
+| latency_budget_ms | 250 | 250 |
+| latency_budget_hit_rate | 0.0 | 0.0 |
+| sub_block_capable | false | false |
+| best_net_bps | -20.49 | -19.73 |
+
+**Verdict**: Multicall pruning now **measurably works** (venues_pruned=8, was 0). But the hypothesis is **NOT VIABLE**:
+1. Stage A (multicall) adds ~656ms overhead (2 RPC calls for factory.getPool + liquidity)
+2. Stage B (QuoterV2) still takes ~2204ms (parallel but each call ~400ms)
+3. Net pipeline latency **increased** (2860ms vs 2258ms) due to Stage A overhead
+4. 20% call reduction (20→16) is insufficient — would need ~95% to hit 250ms budget
+5. Fundamental constraint: each read_quoter_v2 call requires ~400ms round-trip; even 1 call exceeds the budget
+
+**Conclusion**: The quote-fanout-collapse hypothesis is **closed**. The per-call latency (~400ms) is the irreducible bottleneck, not the call count. Even with perfect pruning (1 call), 400ms > 250ms budget. This closes all public RPC architecture paths for sub-block backrun on Arbitrum.
+
+**CI gates**: 2869 passed, 6 skipped. 133 tests in `test_orderflow_contracts.py`.
 
 ---
 

@@ -174,6 +174,11 @@ class BackrunResult:
     venues_pruned_by_multicall: int = 0
     # M7.A.5.3.1 latency budget fields (None for non-ws modes)
     latency_budget_ms: Optional[float] = None  # chain block_time_ms budget
+    # M7.A.5.4 two-stage pruning fields (None for non-ws and offline modes)
+    quote_calls_attempted: Optional[int] = None
+    quote_calls_after_pruning: Optional[int] = None
+    prune_reason_histogram: Optional[Dict[str, int]] = None
+    pipeline_stage_latency_ms: Optional[Dict[str, float]] = None
 
 
 @dataclass
@@ -836,18 +841,73 @@ def score_backrun_live(
 # M7.A.5.3: Parallel live scoring with multicall-assisted venue pruning
 # ---------------------------------------------------------------------------
 
+_DEFAULT_FEE_TIERS = [500, 3000, 10000]
+
+
+def _resolve_pool_addresses_multicall(
+    dex_configs: Dict[str, Any],
+    token_a: str,
+    token_b: str,
+    rpc_url: str,
+    block_num: int,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Resolve V3 pool addresses via batched factory.getPool() multicall.
+
+    Returns {dex_name: [{"address": addr, "fee": fee, "liquidity": int|None}, ...]}.
+    One multicall for getPool + one for liquidity.
+    """
+    from core.multicall import get_multicall_batcher
+
+    batcher = get_multicall_batcher(rpc_url, block_num)
+
+    # Build getPool queries for all V3 factories × fee tiers
+    queries: List[tuple] = []  # (factory, tokenA, tokenB, fee)
+    query_meta: List[tuple] = []  # (dex_name, fee)
+    for dex_name, cfg in dex_configs.items():
+        adapter_type = cfg.get("adapter_type", "")
+        factory = cfg.get("factory", "")
+        if not factory:
+            continue
+        if adapter_type not in ("uniswap_v3", "algebra"):
+            continue
+        fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+        for fee in fee_tiers[:2]:  # Top 2 fee tiers only
+            queries.append((factory, token_a, token_b, fee))
+            query_meta.append((dex_name, fee))
+
+    if not queries:
+        return {}
+
+    pool_addrs = batcher.batch_get_pool(queries)
+
+    # Collect non-None addresses for liquidity check
+    valid_addrs = [a for a in pool_addrs if a is not None]
+    liq_map: Dict[str, Optional[int]] = {}
+    if valid_addrs:
+        liq_map = batcher.batch_liquidity(valid_addrs)
+
+    # Build result grouped by dex
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for i, addr in enumerate(pool_addrs):
+        dex_name, fee = query_meta[i]
+        entry = {
+            "address": addr,
+            "fee": fee,
+            "liquidity": liq_map.get(addr) if addr else None,
+        }
+        result.setdefault(dex_name, []).append(entry)
+
+    return result
+
+
 def _get_pool_addresses_for_dexes(
     dex_configs: Dict[str, Any],
     token_in_addr: str,
     token_out_addr: str,
 ) -> List[str]:
-    """Collect known pool addresses from dex configs for multicall prefetch.
-
-    Best-effort: returns addresses that might exist based on V3 factory patterns.
-    For proper prefetch, callers should use the pool registry or discovery module.
+    """Legacy shim — returns empty. Actual resolution now uses
+    _resolve_pool_addresses_multicall() in the 2-stage pipeline.
     """
-    # For now return empty — multicall prefetch will use addresses from factory resolution
-    # This is intentionally minimal; the prefetch adds value when pool addresses are known
     return []
 
 
@@ -862,15 +922,13 @@ def score_backrun_live_parallel(
     fallback_rpc_urls: Optional[List[str]] = None,
     block_time_ms: Optional[float] = None,
 ) -> BackrunResult:
-    """Score a backrun using parallel QuoterV2 RPC quotes with multicall prefetch.
+    """Score a backrun using 2-stage pipeline: multicall pruning + confirmatory quotes.
 
-    M7.A.5.3: Uses ThreadPoolExecutor for parallel buy/sell fanout and
-    multicall-assisted venue pruning to reduce pipeline latency.
+    M7.A.5.4: Two-stage scoring to reduce per-event RPC calls from ~12 to ≤4.
 
-    Key differences from score_backrun_live:
-    - Parallel buy quotes across venues (ThreadPoolExecutor)
-    - Multicall prefetch for venue prefiltering (prune dead liquidity)
-    - Latency tracking fields (pipeline_ms, detected_at_block, etc.)
+    Stage A (cheap): Batch factory.getPool() + liquidity() via multicall (2 RPC calls).
+        Prune venues with no pool or zero liquidity.
+    Stage B (confirmatory): read_quoter_v2() only for shortlisted venues (1-2 RPC calls).
     """
     import time
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -920,36 +978,58 @@ def score_backrun_live_parallel(
         token_out_addr = usdc_addr
         backrun_size_wei = 10**16  # 0.01 ETH
 
-    # Multicall-assisted venue pruning (best-effort)
+    # Total quote calls that would be attempted without pruning
+    total_quote_calls = 0
+    for _dn, cfg, _q in quotable_dexes:
+        fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+        total_quote_calls += len(fee_tiers[:2]) * 2  # buy + sell pass
+
+    # ── Stage A: Multicall-based venue pruning ──────────────────────────
+    stage_a_start = time.monotonic()
     venues_pruned = 0
+    prune_reasons: Dict[str, int] = {}
+
     try:
-        from strategy.quote_rpc import (
-            prefetch_slot0_multicall,
-            get_cached_liquidity,
+        pool_map = _resolve_pool_addresses_multicall(
+            dex_configs, token_in_addr, token_out_addr, rpc_url, current_block,
         )
-        # Collect pool addresses if any are known
-        pool_addrs = _get_pool_addresses_for_dexes(dex_configs, token_in_addr, token_out_addr)
-        if pool_addrs:
-            prefetch_slot0_multicall(pool_addrs, rpc_url, current_block)
-            # Prune venues with zero liquidity
-            orig_count = len(quotable_dexes)
+        if pool_map:
             active_dexes = []
             for dex_name, cfg, quoter in quotable_dexes:
-                # Check if any known pool for this dex has liquidity
-                pools_for_dex = [a for a in pool_addrs if a in cfg.get("_known_pools", [])]
-                if pools_for_dex:
-                    has_liq = any(
-                        (get_cached_liquidity(p) or 0) > 0 for p in pools_for_dex
-                    )
-                    if not has_liq:
-                        venues_pruned += 1
+                pools_for_dex = pool_map.get(dex_name, [])
+                if not pools_for_dex:
+                    # No factory entry — keep (may be algebra/non-standard)
+                    active_dexes.append((dex_name, cfg, quoter))
+                    continue
+                # Check if any pool exists and has liquidity
+                has_live_pool = False
+                for p in pools_for_dex:
+                    if p["address"] is None:
+                        prune_reasons["NO_POOL"] = prune_reasons.get("NO_POOL", 0) + 1
                         continue
-                active_dexes.append((dex_name, cfg, quoter))
+                    liq = p["liquidity"]
+                    if liq is not None and liq == 0:
+                        prune_reasons["ZERO_LIQUIDITY"] = prune_reasons.get("ZERO_LIQUIDITY", 0) + 1
+                        continue
+                    has_live_pool = True
+                if has_live_pool:
+                    active_dexes.append((dex_name, cfg, quoter))
+                else:
+                    venues_pruned += 1
             quotable_dexes = active_dexes
     except Exception as exc:
-        logger.debug("Multicall prefetch skipped: %s", str(exc)[:100])
+        logger.debug("Stage A multicall pruning skipped: %s", str(exc)[:100])
 
-    # Parallel buy pass: fan out across all venues × fee tiers
+    stage_a_ms = round((time.monotonic() - stage_a_start) * 1000, 2)
+
+    # Compute post-pruning quote calls
+    quote_calls_after = 0
+    for _dn, cfg, _q in quotable_dexes:
+        fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+        quote_calls_after += len(fee_tiers[:2]) * 2  # buy + sell
+
+    # ── Stage B: Confirmatory QuoterV2 quotes ───────────────────────────
+    stage_b_start = time.monotonic()
     best_buy_amount = None
     best_buy_venue = None
     venues_quoted = 0
@@ -1041,8 +1121,11 @@ def score_backrun_live_parallel(
                             best_sell_amount = amt
                             best_sell_venue = dex_name
 
+    stage_b_ms = round((time.monotonic() - stage_b_start) * 1000, 2)
     pipeline_end = time.monotonic()
     pipeline_ms = round((pipeline_end - pipeline_start) * 1000, 2)
+
+    stage_latency = {"stage_a_ms": stage_a_ms, "stage_b_ms": stage_b_ms}
 
     # Get current block after quoting for lag measurement
     try:
@@ -1101,6 +1184,10 @@ def score_backrun_live_parallel(
             quote_pipeline_latency_ms=pipeline_ms,
             venues_pruned_by_multicall=venues_pruned,
             latency_budget_ms=block_time_ms,
+            quote_calls_attempted=total_quote_calls,
+            quote_calls_after_pruning=quote_calls_after,
+            prune_reason_histogram=prune_reasons if prune_reasons else None,
+            pipeline_stage_latency_ms=stage_latency,
         )
 
     return BackrunResult(
@@ -1122,6 +1209,10 @@ def score_backrun_live_parallel(
         quote_pipeline_latency_ms=pipeline_ms,
         venues_pruned_by_multicall=venues_pruned,
         latency_budget_ms=block_time_ms,
+        quote_calls_attempted=total_quote_calls,
+        quote_calls_after_pruning=quote_calls_after,
+        prune_reason_histogram=prune_reasons if prune_reasons else None,
+        pipeline_stage_latency_ms=stage_latency,
     )
 
 
@@ -1848,9 +1939,10 @@ def main():
 
         # Build artifact
         artifact = build_replay_summary(all_events, all_results, mode="ws_live")
-        artifact["m7a53_hypothesis"] = (
-            "block_event_backrun on arbitrum_one may only be fairly testable "
-            "with websocket-triggered same-block/next-block replay"
+        artifact["m7a54_hypothesis"] = (
+            "block_event_backrun on arbitrum_one may become fairly testable only if "
+            "per-event live quote count is collapsed from ~12 calls to a multicall/"
+            "local-state prefilter plus 1-2 confirmatory quotes"
         )
         artifact["ws_live_config"] = {
             "ws_blocks_requested": args.ws_blocks,
@@ -1901,6 +1993,32 @@ def main():
                     r.venues_pruned_by_multicall for r in live_results
                 ),
             }
+            # M7.A.5.4: Two-stage pruning metrics
+            calls_attempted = [r.quote_calls_attempted for r in live_results if r.quote_calls_attempted is not None]
+            calls_after = [r.quote_calls_after_pruning for r in live_results if r.quote_calls_after_pruning is not None]
+            if calls_attempted:
+                artifact["live_state_metrics"]["mean_quote_calls_attempted"] = round(
+                    sum(calls_attempted) / len(calls_attempted), 2
+                )
+            if calls_after:
+                artifact["live_state_metrics"]["mean_quote_calls_after_pruning"] = round(
+                    sum(calls_after) / len(calls_after), 2
+                )
+            # Aggregate prune_reason_histogram across all events
+            agg_prune: Dict[str, int] = {}
+            for r in live_results:
+                if r.prune_reason_histogram:
+                    for reason, cnt in r.prune_reason_histogram.items():
+                        agg_prune[reason] = agg_prune.get(reason, 0) + cnt
+            if agg_prune:
+                artifact["live_state_metrics"]["prune_reason_histogram"] = agg_prune
+            # Aggregate stage latency
+            stage_a_times = [r.pipeline_stage_latency_ms["stage_a_ms"] for r in live_results if r.pipeline_stage_latency_ms]
+            stage_b_times = [r.pipeline_stage_latency_ms["stage_b_ms"] for r in live_results if r.pipeline_stage_latency_ms]
+            if stage_a_times:
+                artifact["live_state_metrics"]["mean_stage_a_ms"] = round(sum(stage_a_times) / len(stage_a_times), 2)
+            if stage_b_times:
+                artifact["live_state_metrics"]["mean_stage_b_ms"] = round(sum(stage_b_times) / len(stage_b_times), 2)
             live_net = [r.best_live_net_bps for r in live_results if r.best_live_net_bps is not None]
             if live_net:
                 artifact["live_state_metrics"]["best_live_net_bps"] = round(max(live_net), 4)
@@ -1971,6 +2089,12 @@ def main():
                     ) if low_lag else None
                 ),
                 "viable_count": sum(1 for r in low_lag if r.route_viable),
+                "mean_quote_calls_after_pruning": (
+                    round(
+                        sum(r.quote_calls_after_pruning or 0 for r in low_lag)
+                        / len(low_lag), 2
+                    ) if low_lag else None
+                ),
             }
             artifact["ws_stale_summary"] = {
                 "count": len(stale),

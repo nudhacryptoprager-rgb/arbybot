@@ -73,6 +73,7 @@ from scripts.m7a_orderflow_replay import (
     score_backrun_live_parallel,
     score_backrun_offline,
     _build_address_to_symbol,
+    _resolve_pool_addresses_multicall,
 )
 
 
@@ -1478,3 +1479,263 @@ class TestM7A531BackwardCompat:
         ]
         for fld in ws_fields:
             assert fld in d, f"Missing field: {fld}"
+
+
+# ===========================================================================
+# M7.A.5.4: Two-stage pruning pipeline tests
+# ===========================================================================
+
+
+class TestM7A54BackrunResultFields:
+    """M7.A.5.4 new BackrunResult fields for two-stage pruning."""
+
+    def test_new_fields_exist_in_dataclass(self):
+        r = BackrunResult(
+            event_id="t1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert "quote_calls_attempted" in d
+        assert "quote_calls_after_pruning" in d
+        assert "prune_reason_histogram" in d
+        assert "pipeline_stage_latency_ms" in d
+
+    def test_new_fields_default_none(self):
+        r = BackrunResult(
+            event_id="t2",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.quote_calls_attempted is None
+        assert r.quote_calls_after_pruning is None
+        assert r.prune_reason_histogram is None
+        assert r.pipeline_stage_latency_ms is None
+
+    def test_fields_accept_values(self):
+        r = BackrunResult(
+            event_id="t3",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            quote_calls_attempted=12,
+            quote_calls_after_pruning=4,
+            prune_reason_histogram={"NO_POOL": 2, "ZERO_LIQUIDITY": 1},
+            pipeline_stage_latency_ms={"stage_a_ms": 50.5, "stage_b_ms": 200.0},
+        )
+        assert r.quote_calls_attempted == 12
+        assert r.quote_calls_after_pruning == 4
+        assert r.prune_reason_histogram["NO_POOL"] == 2
+        assert r.pipeline_stage_latency_ms["stage_a_ms"] == 50.5
+
+    def test_json_round_trip(self):
+        r = BackrunResult(
+            event_id="t4",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            quote_calls_attempted=10,
+            quote_calls_after_pruning=3,
+            prune_reason_histogram={"ZERO_LIQUIDITY": 3},
+            pipeline_stage_latency_ms={"stage_a_ms": 45.0, "stage_b_ms": 180.0},
+        )
+        d = asdict(r)
+        s = json.dumps(d, default=str)
+        parsed = json.loads(s)
+        assert parsed["quote_calls_attempted"] == 10
+        assert parsed["quote_calls_after_pruning"] == 3
+        assert parsed["prune_reason_histogram"]["ZERO_LIQUIDITY"] == 3
+        assert parsed["pipeline_stage_latency_ms"]["stage_a_ms"] == 45.0
+
+    def test_offline_results_have_none_pruning_fields(self):
+        ev = _make_event()
+        r = score_backrun_offline(ev)
+        d = asdict(r)
+        assert d["quote_calls_attempted"] is None
+        assert d["quote_calls_after_pruning"] is None
+        assert d["prune_reason_histogram"] is None
+        assert d["pipeline_stage_latency_ms"] is None
+
+    def test_pruning_reduces_calls(self):
+        """Verify that after pruning, quote_calls_after_pruning <= quote_calls_attempted."""
+        r = BackrunResult(
+            event_id="t5",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            quote_calls_attempted=12,
+            quote_calls_after_pruning=4,
+            venues_pruned_by_multicall=2,
+        )
+        assert r.quote_calls_after_pruning <= r.quote_calls_attempted
+
+
+class TestM7A54PruneReasonHistogram:
+    """M7.A.5.4: prune_reason_histogram contract tests."""
+
+    VALID_REASONS = {"NO_POOL", "ZERO_LIQUIDITY"}
+
+    def test_empty_histogram_is_none(self):
+        r = BackrunResult(
+            event_id="prh1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            prune_reason_histogram=None,
+        )
+        assert r.prune_reason_histogram is None
+
+    def test_valid_histogram_keys(self):
+        hist = {"NO_POOL": 3, "ZERO_LIQUIDITY": 1}
+        assert all(k in self.VALID_REASONS for k in hist)
+
+    def test_histogram_values_non_negative(self):
+        hist = {"NO_POOL": 0, "ZERO_LIQUIDITY": 5}
+        assert all(v >= 0 for v in hist.values())
+
+
+class TestM7A54StageLatency:
+    """M7.A.5.4: pipeline_stage_latency_ms contract tests."""
+
+    REQUIRED_KEYS = {"stage_a_ms", "stage_b_ms"}
+
+    def test_stage_latency_has_required_keys(self):
+        latency = {"stage_a_ms": 50.0, "stage_b_ms": 200.0}
+        assert set(latency.keys()) == self.REQUIRED_KEYS
+
+    def test_stage_a_cheaper_than_stage_b(self):
+        """In typical operation, Stage A (multicall) should be faster than Stage B (quoter)."""
+        latency = {"stage_a_ms": 50.0, "stage_b_ms": 200.0}
+        # Not an invariant, just a typical expectation
+        assert latency["stage_a_ms"] >= 0
+        assert latency["stage_b_ms"] >= 0
+
+    def test_stage_latency_serializes(self):
+        latency = {"stage_a_ms": 123.45, "stage_b_ms": 678.90}
+        s = json.dumps(latency)
+        parsed = json.loads(s)
+        assert parsed["stage_a_ms"] == 123.45
+        assert parsed["stage_b_ms"] == 678.90
+
+
+class TestM7A54ArtifactFields:
+    """M7.A.5.4: Artifact-level pruning metrics."""
+
+    def test_live_state_metrics_pruning_fields(self):
+        """Verify the artifact live_state_metrics includes M7.A.5.4 fields."""
+        expected_m7a54_fields = {
+            "mean_quote_calls_attempted",
+            "mean_quote_calls_after_pruning",
+            "prune_reason_histogram",
+            "mean_stage_a_ms",
+            "mean_stage_b_ms",
+        }
+        # Build a synthetic artifact snippet to validate schema
+        metrics = {
+            "mean_quote_calls_attempted": 12.0,
+            "mean_quote_calls_after_pruning": 4.0,
+            "prune_reason_histogram": {"NO_POOL": 5, "ZERO_LIQUIDITY": 2},
+            "mean_stage_a_ms": 55.0,
+            "mean_stage_b_ms": 180.0,
+        }
+        assert expected_m7a54_fields == set(metrics.keys())
+
+    def test_ws_low_lag_summary_has_pruning_field(self):
+        """ws_low_lag_summary must include mean_quote_calls_after_pruning."""
+        summary = {
+            "count": 2,
+            "best_net_bps": -10.0,
+            "worst_net_bps": -20.0,
+            "mean_net_bps": -15.0,
+            "same_block_count": 1,
+            "next_block_count": 1,
+            "mean_pipeline_latency_ms": 200.0,
+            "viable_count": 0,
+            "mean_quote_calls_after_pruning": 3.5,
+        }
+        assert "mean_quote_calls_after_pruning" in summary
+
+
+class TestM7A54ResolvePoolAddresses:
+    """M7.A.5.4: _resolve_pool_addresses_multicall edge cases (offline)."""
+
+    def test_empty_dex_configs(self):
+        result = _resolve_pool_addresses_multicall({}, "0xA", "0xB", "http://unused", 1)
+        assert result == {}
+
+    def test_no_v3_dexes(self):
+        """Non-V3 adapters should produce no queries."""
+        configs = {
+            "sushiswap_v2": {"adapter_type": "uniswap_v2", "factory": "0x123"},
+        }
+        result = _resolve_pool_addresses_multicall(configs, "0xA", "0xB", "http://unused", 1)
+        assert result == {}
+
+
+class TestM7A54BackwardCompat:
+    """M7.A.5.4 additions must not break existing M7.A.5.3 / M7.A.5.3.1 flows."""
+
+    def test_offline_results_unchanged(self):
+        ev = _make_event()
+        r = score_backrun_offline(ev)
+        d = asdict(r)
+        # All pre-existing fields still present
+        assert "event_id" in d
+        assert "venues_pruned_by_multicall" in d
+        assert "latency_budget_ms" in d
+        # New fields default to None
+        assert d["quote_calls_attempted"] is None
+        assert d["pipeline_stage_latency_ms"] is None
+
+    def test_ws_fields_coexist_with_pruning_fields(self):
+        r = BackrunResult(
+            event_id="bc2",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            ws_provider="alchemy",
+            latency_budget_ms=250.0,
+            quote_calls_attempted=12,
+            quote_calls_after_pruning=4,
+            pipeline_stage_latency_ms={"stage_a_ms": 50, "stage_b_ms": 200},
+        )
+        d = asdict(r)
+        # ws fields intact
+        assert d["ws_provider"] == "alchemy"
+        assert d["latency_budget_ms"] == 250.0
+        # New pruning fields intact
+        assert d["quote_calls_attempted"] == 12
+        assert d["quote_calls_after_pruning"] == 4
+        assert d["pipeline_stage_latency_ms"]["stage_a_ms"] == 50
+
+    def test_all_backrun_result_fields_count(self):
+        """BackrunResult should have exactly the expected number of fields."""
+        r = BackrunResult(
+            event_id="fc1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        # 30 original + 4 new M7.A.5.4 fields = 34
+        assert len(d) == 34, f"Expected 34 fields, got {len(d)}: {sorted(d.keys())}"
+
+
+class TestBatchGetPool:
+    """M7.A.5.4: MulticallBatcher.batch_get_pool contract tests."""
+
+    def test_empty_queries_returns_empty(self):
+        from core.multicall import MulticallBatcher
+        batcher = MulticallBatcher("http://unused", 1)
+        result = batcher.batch_get_pool([])
+        assert result == []

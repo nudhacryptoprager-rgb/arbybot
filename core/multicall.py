@@ -378,6 +378,51 @@ class MulticallBatcher:
         
         return output
     
+    def batch_get_pool(
+        self,
+        queries: List[Tuple[str, str, str, int]],
+    ) -> List[Optional[str]]:
+        """Batch factory.getPool(tokenA, tokenB, fee) across multiple factories.
+
+        Each query is (factory_address, tokenA, tokenB, fee).
+        Returns list of pool addresses (or None if pool doesn't exist / call failed).
+        Uses Uniswap V3 factory getPool(address,address,uint24) selector 0x1698ee82.
+        """
+        if not queries:
+            return []
+
+        GET_POOL_SELECTOR = "0x1698ee82"
+        from web3 import Web3
+
+        calls = []
+        for factory, token_a, token_b, fee in queries:
+            # abi.encode(address, address, uint24)
+            calldata = bytes.fromhex(GET_POOL_SELECTOR[2:])
+            calldata += Web3.to_bytes(hexstr=token_a).rjust(32, b"\x00")
+            calldata += Web3.to_bytes(hexstr=token_b).rjust(32, b"\x00")
+            calldata += fee.to_bytes(32, "big")
+            calls.append((Web3.to_checksum_address(factory), True, calldata))
+
+        self.stats["calls_batched"] += len(calls)
+        self.stats["calls_made"] += 1
+
+        results = self._execute_multicall(calls)
+        if results is None:
+            return [None] * len(queries)
+
+        ZERO_ADDR = "0x" + "0" * 40
+        output: List[Optional[str]] = []
+        for success, data in results:
+            if success and len(data) >= 32:
+                addr = "0x" + data[-20:].hex()
+                if addr == ZERO_ADDR:
+                    output.append(None)
+                else:
+                    output.append(Web3.to_checksum_address(addr))
+            else:
+                output.append(None)
+        return output
+
     def batch_full_pool_data(
         self, pool_addresses: List[str]
     ) -> Dict[str, Optional[Dict[str, Any]]]:
