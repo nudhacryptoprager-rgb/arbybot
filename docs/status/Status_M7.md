@@ -1,7 +1,7 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.3 — all scopes produce no-graduate verdicts. M7.A.5.3 tests ws-triggered same-block/next-block replay with parallel scoring. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
-**Updated**: 2026-03-30  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.3 — all scopes produce no-graduate verdicts. M7.A.5.3 ws-live evidence: 0 low-lag events, pipeline latency 9× over budget. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Updated**: 2026-03-29  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay. M7.B remains closed.
 
 ---
@@ -75,16 +75,31 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 **New infrastructure**:
 - `--ws-live` CLI mode with `--ws-blocks N` and `--ws-timeout S` controls
 - WebSocket `newHeads` subscription via `resolve_rpc_ws()` (Alchemy WSS)
-- Single-block log fetch per newHead (not historical window)
 - `score_backrun_live_parallel()`: ThreadPoolExecutor for parallel buy/sell fanout
-- Multicall-assisted venue pruning via `prefetch_slot0_multicall()`
-- 6 new BackrunResult fields: `ws_provider`, `event_detected_at_block`, `quote_started_block`, `quote_finished_block`, `quote_pipeline_latency_ms`, `venues_pruned_by_multicall`
-- Artifact ws-specific: `ws_live_config`, `ws_live_stats`, `ws_provider`, `ws_source`, `resolved_ws_host`, `events_scored_low_lag_ws`
-- 15 new contract tests (100 total in `test_orderflow_contracts.py`)
+- Multicall-assisted venue pruning, latency budget metrics (`latency_budget_ms`, `latency_budget_hit_rate`, `sub_block_capable`)
+- `ws_low_lag_summary` / `ws_stale_summary` machine-readable artifact sections
+- 7 new BackrunResult fields (incl. `latency_budget_ms`)
+- 28 new contract tests (113 total in `test_orderflow_contracts.py`)
 
-**Evidence**: Pending first ws-live run.
+**Evidence — M7.A.5.3.1 (Alchemy WSS, narrow)**: 10 blocks, 6 events scored. Results:
 
-**CI gates**: 2836 passed, 6 skipped, 0 failures. 100 tests in `test_orderflow_contracts.py`.
+| Metric | Value |
+|--------|-------|
+| events_scored_low_lag_ws | **0** |
+| same_block_count | 0 |
+| next_block_count | 0 |
+| stale_count | 6 |
+| mean_block_lag | 43.33 |
+| mean_pipeline_latency_ms | **2258.17** |
+| latency_budget_ms | 250 |
+| latency_budget_hit_rate | **0.0** |
+| sub_block_capable | **false** |
+| best_net_bps | -20.49 |
+| all reject | GAS_EXCEEDS_GROSS (6/6) |
+
+**Verdict**: ws-live streaming architecture **NOT VIABLE**. WebSocket newHeads delivers blocks correctly but quote pipeline (~2.3s per event, 6 venues × 2 passes) is 9× over the 250ms block budget. All events stale regardless of delivery mechanism. This closes the streaming architecture path alongside the polling path.
+
+**CI gates**: 2849 passed, 6 skipped. 113 tests in `test_orderflow_contracts.py`.
 
 ---
 

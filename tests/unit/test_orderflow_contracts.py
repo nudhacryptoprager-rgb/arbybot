@@ -1266,3 +1266,215 @@ class TestM7A53BackwardCompat:
         assert parsed["ws_provider"] == "alchemy"
         assert parsed["venues_pruned_by_multicall"] == 3
         assert parsed["quote_pipeline_latency_ms"] == 42.5
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5.3.1 — Latency budget + low-lag/stale summary tests
+# ---------------------------------------------------------------------------
+
+
+class TestLatencyBudgetField:
+    """latency_budget_ms field on BackrunResult."""
+
+    def test_latency_budget_exists_in_dataclass(self):
+        r = BackrunResult(
+            event_id="lb1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert "latency_budget_ms" in d
+
+    def test_latency_budget_default_none(self):
+        r = BackrunResult(
+            event_id="lb2",
+            event_source="fixture",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="estimated",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.latency_budget_ms is None
+
+    def test_latency_budget_set_value(self):
+        r = BackrunResult(
+            event_id="lb3",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            latency_budget_ms=250.0,
+            quote_pipeline_latency_ms=180.5,
+        )
+        assert r.latency_budget_ms == 250.0
+        assert r.quote_pipeline_latency_ms < r.latency_budget_ms
+
+    def test_latency_budget_json_roundtrip(self):
+        r = BackrunResult(
+            event_id="lb4",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            latency_budget_ms=250.0,
+        )
+        d = asdict(r)
+        parsed = json.loads(json.dumps(d, default=str))
+        assert parsed["latency_budget_ms"] == 250.0
+
+    def test_offline_result_latency_budget_none(self):
+        """Offline scoring never sets latency_budget_ms."""
+        ev = _make_event()
+        r = score_backrun_offline(ev)
+        assert r.latency_budget_ms is None
+
+
+class TestScoreBackrunLiveParallelLatencyBudget:
+    """score_backrun_live_parallel passes block_time_ms to result."""
+
+    def test_parallel_scoring_receives_latency_budget(self):
+        ev = _make_event(block_number=100)
+        import unittest.mock as mock
+
+        mock_result = {"amount_out": 10**18, "sqrtPriceX96After": 0, "ticksCrossed": 1}
+        with mock.patch(
+            "strategy.quote_rpc.read_quoter_v2",
+            return_value=mock_result,
+        ):
+            r = score_backrun_live_parallel(
+                event=ev,
+                rpc_url="http://localhost:8545",
+                dex_configs={
+                    "uniswap_v3": {
+                        "quoter_v2": "0x" + "11" * 20,
+                        "fee_tiers": [500],
+                    }
+                },
+                token_addresses={"WETH": "0x" + "aa" * 20, "USDC": "0x" + "bb" * 20},
+                current_block=100,
+                ws_provider="alchemy",
+                block_time_ms=250.0,
+            )
+        assert r.latency_budget_ms == 250.0
+
+    def test_parallel_scoring_no_budget_defaults_none(self):
+        ev = _make_event(block_number=100)
+        import unittest.mock as mock
+
+        with mock.patch(
+            "strategy.quote_rpc.read_quoter_v2",
+            return_value=None,
+        ):
+            r = score_backrun_live_parallel(
+                event=ev,
+                rpc_url="http://localhost:8545",
+                dex_configs={},
+                token_addresses={"WETH": "0x" + "aa" * 20, "USDC": "0x" + "bb" * 20},
+                current_block=100,
+            )
+        assert r.latency_budget_ms is None
+
+
+class TestWsLowLagStaleSummary:
+    """ws_low_lag_summary and ws_stale_summary artifact schema tests."""
+
+    def test_summary_keys_present_in_artifact(self):
+        r = BackrunResult(
+            event_id="s1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        artifact = build_replay_summary([_make_event()], [r], mode="ws_live")
+        artifact["ws_low_lag_summary"] = {
+            "count": 3,
+            "best_net_bps": -5.0,
+            "worst_net_bps": -20.0,
+            "mean_net_bps": -12.0,
+            "same_block_count": 1,
+            "next_block_count": 2,
+            "mean_pipeline_latency_ms": 180.0,
+            "viable_count": 0,
+        }
+        artifact["ws_stale_summary"] = {
+            "count": 5,
+            "best_net_bps": -18.0,
+            "worst_net_bps": -25.0,
+            "mean_net_bps": -21.0,
+            "mean_block_lag": 12.5,
+            "mean_pipeline_latency_ms": 350.0,
+            "viable_count": 0,
+        }
+        s = json.dumps(artifact, default=str)
+        parsed = json.loads(s)
+        assert "ws_low_lag_summary" in parsed
+        assert "ws_stale_summary" in parsed
+
+    def test_low_lag_summary_required_keys(self):
+        expected = {
+            "count", "best_net_bps", "worst_net_bps", "mean_net_bps",
+            "same_block_count", "next_block_count", "mean_pipeline_latency_ms",
+            "viable_count",
+        }
+        summary = {
+            "count": 0, "best_net_bps": None, "worst_net_bps": None,
+            "mean_net_bps": None, "same_block_count": 0, "next_block_count": 0,
+            "mean_pipeline_latency_ms": None, "viable_count": 0,
+        }
+        assert set(summary.keys()) == expected
+
+    def test_stale_summary_required_keys(self):
+        expected = {
+            "count", "best_net_bps", "worst_net_bps", "mean_net_bps",
+            "mean_block_lag", "mean_pipeline_latency_ms", "viable_count",
+        }
+        summary = {
+            "count": 0, "best_net_bps": None, "worst_net_bps": None,
+            "mean_net_bps": None, "mean_block_lag": None,
+            "mean_pipeline_latency_ms": None, "viable_count": 0,
+        }
+        assert set(summary.keys()) == expected
+
+    def test_latency_budget_in_live_state_metrics(self):
+        metrics = {
+            "latency_budget_ms": 250,
+            "latency_budget_hit_rate": 0.75,
+            "sub_block_capable": True,
+        }
+        assert metrics["latency_budget_ms"] == 250
+        assert 0.0 <= metrics["latency_budget_hit_rate"] <= 1.0
+        assert isinstance(metrics["sub_block_capable"], bool)
+
+
+class TestM7A531BackwardCompat:
+    """M7.A.5.3.1 additions must not break existing M7.A.5.3 flows."""
+
+    def test_offline_results_no_latency_budget(self):
+        ev = _make_event()
+        r = score_backrun_offline(ev)
+        d = asdict(r)
+        assert d["latency_budget_ms"] is None
+        assert d["ws_provider"] is None
+        assert d["quote_pipeline_latency_ms"] is None
+
+    def test_existing_ws_fields_still_present(self):
+        r = BackrunResult(
+            event_id="bc1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            ws_provider="alchemy",
+            quote_pipeline_latency_ms=200.0,
+            latency_budget_ms=250.0,
+        )
+        d = asdict(r)
+        ws_fields = [
+            "ws_provider", "event_detected_at_block", "quote_started_block",
+            "quote_finished_block", "quote_pipeline_latency_ms",
+            "venues_pruned_by_multicall", "latency_budget_ms",
+        ]
+        for fld in ws_fields:
+            assert fld in d, f"Missing field: {fld}"

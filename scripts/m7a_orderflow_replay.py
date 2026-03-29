@@ -172,6 +172,8 @@ class BackrunResult:
     quote_finished_block: Optional[int] = None
     quote_pipeline_latency_ms: Optional[float] = None
     venues_pruned_by_multicall: int = 0
+    # M7.A.5.3.1 latency budget fields (None for non-ws modes)
+    latency_budget_ms: Optional[float] = None  # chain block_time_ms budget
 
 
 @dataclass
@@ -858,6 +860,7 @@ def score_backrun_live_parallel(
     ws_provider: Optional[str] = None,
     event_detected_at_block: Optional[int] = None,
     fallback_rpc_urls: Optional[List[str]] = None,
+    block_time_ms: Optional[float] = None,
 ) -> BackrunResult:
     """Score a backrun using parallel QuoterV2 RPC quotes with multicall prefetch.
 
@@ -911,6 +914,7 @@ def score_backrun_live_parallel(
                 quote_started_block=quote_started_block,
                 quote_finished_block=current_block,
                 quote_pipeline_latency_ms=round((time.monotonic() - pipeline_start) * 1000, 2),
+                latency_budget_ms=block_time_ms,
             )
         token_in_addr = weth_addr
         token_out_addr = usdc_addr
@@ -1096,6 +1100,7 @@ def score_backrun_live_parallel(
             quote_finished_block=quote_finished_block,
             quote_pipeline_latency_ms=pipeline_ms,
             venues_pruned_by_multicall=venues_pruned,
+            latency_budget_ms=block_time_ms,
         )
 
     return BackrunResult(
@@ -1116,6 +1121,7 @@ def score_backrun_live_parallel(
         quote_finished_block=quote_finished_block,
         quote_pipeline_latency_ms=pipeline_ms,
         venues_pruned_by_multicall=venues_pruned,
+        latency_budget_ms=block_time_ms,
     )
 
 
@@ -1693,6 +1699,11 @@ def main():
         token_addresses = get_all_token_addresses(args.chain)
         addr_to_symbol = _build_address_to_symbol(token_addresses)
 
+        # Load block_time_ms from chains.yaml for latency budget
+        from config import load_chains
+        chain_cfg = load_chains().get(args.chain, {})
+        block_time_ms = chain_cfg.get("block_time_ms", 250)
+
         # Subscribe to newHeads via WebSocket and process blocks
         import websocket as ws_mod
 
@@ -1808,6 +1819,7 @@ def main():
                         ws_provider=ws_provider,
                         event_detected_at_block=detected_block,
                         fallback_rpc_urls=None,
+                        block_time_ms=block_time_ms,
                     )
                     all_results.append(r)
                     all_events.append(ev)
@@ -1913,6 +1925,74 @@ def main():
             artifact["live_state_metrics"]["best_live_net_bps_low_lag"] = (
                 round(max(low_lag_net), 4) if low_lag_net else None
             )
+
+            # M7.A.5.3.1 — Latency budget metrics (relative to chain block_time_ms)
+            pipeline_latencies = [
+                r.quote_pipeline_latency_ms for r in live_results
+                if r.quote_pipeline_latency_ms is not None
+            ]
+            budget_hits = [
+                lat for lat in pipeline_latencies if lat < block_time_ms
+            ]
+            artifact["live_state_metrics"]["latency_budget_ms"] = block_time_ms
+            artifact["live_state_metrics"]["latency_budget_hit_rate"] = (
+                round(len(budget_hits) / len(pipeline_latencies), 4)
+                if pipeline_latencies else 0.0
+            )
+            artifact["live_state_metrics"]["sub_block_capable"] = len(budget_hits) > 0
+
+            # M7.A.5.3.1 — Separate low-lag vs stale summaries
+            stale = [
+                r for r in live_results
+                if r.same_state_class == "stale"
+            ]
+            stale_net = [
+                r.best_live_net_bps for r in stale
+                if r.best_live_net_bps is not None
+            ]
+            artifact["ws_low_lag_summary"] = {
+                "count": len(low_lag),
+                "best_net_bps": round(max(low_lag_net), 4) if low_lag_net else None,
+                "worst_net_bps": round(min(low_lag_net), 4) if low_lag_net else None,
+                "mean_net_bps": (
+                    round(sum(low_lag_net) / len(low_lag_net), 4)
+                    if low_lag_net else None
+                ),
+                "same_block_count": sum(
+                    1 for r in low_lag if r.same_state_class == "same_block"
+                ),
+                "next_block_count": sum(
+                    1 for r in low_lag if r.same_state_class == "next_block"
+                ),
+                "mean_pipeline_latency_ms": (
+                    round(
+                        sum(r.quote_pipeline_latency_ms or 0 for r in low_lag)
+                        / len(low_lag), 2
+                    ) if low_lag else None
+                ),
+                "viable_count": sum(1 for r in low_lag if r.route_viable),
+            }
+            artifact["ws_stale_summary"] = {
+                "count": len(stale),
+                "best_net_bps": round(max(stale_net), 4) if stale_net else None,
+                "worst_net_bps": round(min(stale_net), 4) if stale_net else None,
+                "mean_net_bps": (
+                    round(sum(stale_net) / len(stale_net), 4)
+                    if stale_net else None
+                ),
+                "mean_block_lag": (
+                    round(
+                        sum(r.block_lag or 0 for r in stale) / len(stale), 2
+                    ) if stale else None
+                ),
+                "mean_pipeline_latency_ms": (
+                    round(
+                        sum(r.quote_pipeline_latency_ms or 0 for r in stale)
+                        / len(stale), 2
+                    ) if stale else None
+                ),
+                "viable_count": sum(1 for r in stale if r.route_viable),
+            }
     else:
         parser_err = "No mode specified"
         raise SystemExit(parser_err)
