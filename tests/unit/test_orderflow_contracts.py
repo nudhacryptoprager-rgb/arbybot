@@ -1,9 +1,9 @@
 """
-Contract tests for M7.A.4/M7.A.5/M7.A.5.6/M7.A.5.7 — Orderflow-driven replay and live block-event backrun.
+Contract tests for M7.A.4/M7.A.5/M7.A.5.6/M7.A.5.7/M7.A.5.8 — Orderflow-driven replay and live block-event backrun.
 
 Tests lock:
 - OrderflowEvent schema and validation
-- BackrunResult schema (incl. M7.A.5 live replay fields + M7.A.5.6 coverage/sweep + M7.A.5.7 enrichment/oracle/sim)
+- BackrunResult schema (incl. M7.A.5 live replay fields + M7.A.5.6 coverage/sweep + M7.A.5.7 enrichment/oracle/sim + M7.A.5.8 subgraph seed/gas decomp)
 - IntentSurfaceAssessment schema
 - Fixture event generation
 - Event classification viability
@@ -14,6 +14,7 @@ Tests lock:
 - M7.A.5: Live event normalization, block propagation, live replay schema
 - M7.A.5.6: Event-token admission, coverage scan, granular rejects, size sweep
 - M7.A.5.7: Admission source provenance, oracle guard schema, enrichment, local-sim state
+- M7.A.5.8: Subgraph seed function, gas decomposition, backward compat (49 fields)
 """
 
 from __future__ import annotations
@@ -100,6 +101,12 @@ from scripts.m7a_orderflow_replay import (
     enrich_tokens_batch,
     check_oracle_sanity,
     extract_pool_state_for_sim,
+    # M7.A.5.8 constants and functions
+    SUBGRAPH_ENDPOINTS_ARBITRUM,
+    SUBGRAPH_SEED_TOKEN_CAP,
+    SUBGRAPH_TIMEOUT_SECONDS,
+    seed_tokens_from_subgraph,
+    estimate_gas_decomposition_bps,
 )
 
 
@@ -1789,11 +1796,11 @@ class TestM7A56BackrunResultFields:
         "token_admitted",
     }
 
-    def test_field_count_is_45(self):
+    def test_field_count_is_49(self):
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 45, f"Expected 45 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 49, f"Expected 49 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_new_fields_present(self):
         ev = _make_event()
@@ -2057,7 +2064,7 @@ class TestM7A56BackwardCompat:
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 45
+        assert len(d) == 49
         # Core offline fields still work
         assert r.event_source == "fixture"
         assert r.reject_reason is not None or r.route_viable
@@ -2093,7 +2100,7 @@ class TestM7A56BackwardCompat:
         s = json.dumps(d)
         parsed = json.loads(s)
         assert parsed["event_id"] == r.event_id
-        assert len(parsed) == 45
+        assert len(parsed) == 49
         assert "event_id" in d
         assert "venues_pruned_by_multicall" in d
         assert "latency_budget_ms" in d
@@ -2133,8 +2140,8 @@ class TestM7A56BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 = 45
-        assert len(d) == 45, f"Expected 45 fields, got {len(d)}: {sorted(d.keys())}"
+        # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 = 49
+        assert len(d) == 49, f"Expected 49 fields, got {len(d)}: {sorted(d.keys())}"
 
 
 class TestBatchGetPool:
@@ -2385,7 +2392,7 @@ class TestM7A55BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 45, f"Expected 45 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 49, f"Expected 49 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_m7a57_fields_exist_in_backrun_result(self):
         """M7.A.5.7 fields (admission_source, oracle_guard, local_sim_state) exist and default to None."""
@@ -2671,15 +2678,20 @@ class TestM7A57BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 45
+        assert len(parsed) == 49
         # Old fields still present
         assert "event_id" in parsed
         assert "reject_reason" in parsed
         assert "coverage_result" in parsed
-        # New fields present
+        # M7.A.5.7 fields present
         assert "admission_source" in parsed
         assert "oracle_guard" in parsed
         assert "local_sim_state" in parsed
+        # M7.A.5.8 fields present
+        assert "l2_gas_bps" in parsed
+        assert "l1_data_bps" in parsed
+        assert "total_gas_bps" in parsed
+        assert "subgraph_seed_used" in parsed
 
     def test_m7a56_fields_still_default(self):
         """M7.A.5.6 fields should still default correctly after M7.A.5.7 additions."""
@@ -2699,3 +2711,159 @@ class TestM7A57BackwardCompat:
         assert d["admission_source"] is None
         assert d["oracle_guard"] is None
         assert d["local_sim_state"] is None
+        # M7.A.5.8 defaults
+        assert d["l2_gas_bps"] is None
+        assert d["l1_data_bps"] is None
+        assert d["total_gas_bps"] is None
+        assert d["subgraph_seed_used"] is None
+
+
+# ===========================================================================
+# TestM7A58SubgraphSeedConstants
+# ===========================================================================
+
+class TestM7A58SubgraphSeedConstants:
+    """M7.A.5.8 subgraph-backed seed constants and function contracts."""
+
+    def test_subgraph_endpoints_shape(self):
+        """SUBGRAPH_ENDPOINTS_ARBITRUM must be a non-empty dict of str->str."""
+        assert isinstance(SUBGRAPH_ENDPOINTS_ARBITRUM, dict)
+        assert len(SUBGRAPH_ENDPOINTS_ARBITRUM) >= 1
+        for k, v in SUBGRAPH_ENDPOINTS_ARBITRUM.items():
+            assert isinstance(k, str)
+            assert isinstance(v, str)
+            assert v.startswith("https://")
+
+    def test_seed_token_cap_bounds(self):
+        """SUBGRAPH_SEED_TOKEN_CAP must be a positive integer <= 200."""
+        assert isinstance(SUBGRAPH_SEED_TOKEN_CAP, int)
+        assert 1 <= SUBGRAPH_SEED_TOKEN_CAP <= 200
+
+    def test_timeout_seconds_bounds(self):
+        """SUBGRAPH_TIMEOUT_SECONDS must be positive and <= 60."""
+        assert isinstance(SUBGRAPH_TIMEOUT_SECONDS, (int, float))
+        assert 1 <= SUBGRAPH_TIMEOUT_SECONDS <= 60
+
+    def test_seed_tokens_from_subgraph_returns_dict_on_empty(self):
+        """seed_tokens_from_subgraph returns stats dict even with empty input."""
+        addr_to_sym: Dict[str, str] = {}
+        result = seed_tokens_from_subgraph(addr_to_sym, "http://fake", 100, chain="arbitrum_one")
+        assert isinstance(result, dict)
+        assert "tokens_discovered" in result
+        assert "tokens_new" in result
+        assert "tokens_verified" in result
+        assert "sources_queried" in result
+        assert "errors" in result
+
+
+# ===========================================================================
+# TestM7A58GasDecomposition
+# ===========================================================================
+
+class TestM7A58GasDecomposition:
+    """M7.A.5.8 gas decomposition estimator contract."""
+
+    def test_basic_decomposition(self):
+        """estimate_gas_decomposition_bps returns expected fields."""
+        result = estimate_gas_decomposition_bps(
+            amount_in_wei=10**18,  # 1 ETH
+            gas_cost_wei=10**15,   # 0.001 ETH = 10 bps
+        )
+        assert isinstance(result, dict)
+        assert "l2_gas_bps" in result
+        assert "l1_data_bps" in result
+        assert "total_gas_bps" in result
+
+    def test_total_equals_sum(self):
+        """total_gas_bps must equal l2_gas_bps + l1_data_bps."""
+        result = estimate_gas_decomposition_bps(
+            amount_in_wei=10**18,
+            gas_cost_wei=5 * 10**14,
+        )
+        expected_total = round(result["l2_gas_bps"] + result["l1_data_bps"], 4)
+        assert abs(result["total_gas_bps"] - expected_total) < 0.001
+
+    def test_zero_amount_returns_zero(self):
+        """Zero amount_in_wei should return all zeros gracefully."""
+        result = estimate_gas_decomposition_bps(
+            amount_in_wei=0,
+            gas_cost_wei=10**15,
+        )
+        assert isinstance(result, dict)
+        assert result["total_gas_bps"] == 0.0
+        assert result["l2_gas_bps"] == 0.0
+        assert result["l1_data_bps"] == 0.0
+
+    def test_zero_gas_returns_zero(self):
+        """Zero gas cost should produce zero bps."""
+        result = estimate_gas_decomposition_bps(
+            amount_in_wei=10**18,
+            gas_cost_wei=0,
+        )
+        assert result["l2_gas_bps"] == 0.0
+        assert result["l1_data_bps"] == 0.0
+        assert result["total_gas_bps"] == 0.0
+
+    def test_l1_dominates(self):
+        """L1 data cost should be >= L2 execution cost (Arbitrum Nitro model)."""
+        result = estimate_gas_decomposition_bps(
+            amount_in_wei=10**18,
+            gas_cost_wei=10**15,
+        )
+        assert result["l1_data_bps"] >= result["l2_gas_bps"]
+
+
+# ===========================================================================
+# TestM7A58BackwardCompat
+# ===========================================================================
+
+class TestM7A58BackwardCompat:
+    """M7.A.5.8 fields must not break existing artifact serialization."""
+
+    def test_backrun_result_json_roundtrip_49_fields(self):
+        """Full 49-field BackrunResult serializes and deserializes cleanly."""
+        r = BackrunResult(
+            event_id="compat_58_1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            pair_resolved=True,
+            actual_pair="WETH/USDC",
+            token_admitted=True,
+            admission_source=ADMISSION_CANONICAL,
+            oracle_guard={"oracle_price_available": True, "oracle_guard_triggered": False},
+            local_sim_state={"pools_queried": 3, "pools_with_state": 2},
+            l2_gas_bps=2.0,
+            l1_data_bps=8.0,
+            total_gas_bps=10.0,
+            subgraph_seed_used=True,
+        )
+        s = json.dumps(asdict(r), default=str)
+        parsed = json.loads(s)
+        assert len(parsed) == 49
+        # M7.A.5.8 fields present
+        assert parsed["l2_gas_bps"] == 2.0
+        assert parsed["l1_data_bps"] == 8.0
+        assert parsed["total_gas_bps"] == 10.0
+        assert parsed["subgraph_seed_used"] is True
+
+    def test_m7a57_fields_still_default_after_58(self):
+        """M7.A.5.7 fields should still default correctly after M7.A.5.8 additions."""
+        r = BackrunResult(
+            event_id="compat_58_2",
+            event_source="fixture",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="estimated",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        # M7.A.5.7 defaults
+        assert d["admission_source"] is None
+        assert d["oracle_guard"] is None
+        assert d["local_sim_state"] is None
+        # M7.A.5.8 defaults
+        assert d["l2_gas_bps"] is None
+        assert d["l1_data_bps"] is None
+        assert d["total_gas_bps"] is None
+        assert d["subgraph_seed_used"] is None
