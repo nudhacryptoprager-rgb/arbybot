@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.4 — all scopes produce no-graduate verdicts. M7.A.5 live block-event replay infrastructure built, evidence pending. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.A.4 orderflow-driven backrun/replay hypothesis: offline estimates (-1.55 bps) beat triangular (-14.16 bps) but not two-leg baseline (-3.51 bps). M7.A.5 adds live block-event fetching + measured post-event quoting via `read_quoter_v2`. Intent scout: `block_event_backrun` = highest-feasibility next surface. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5 — all scopes produce no-graduate verdicts. M7.A.5.1 live block-event evidence: surface NOT VIABLE with public RPC (best_net = -18.36 bps, all stale). `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-03-29  
 **Scope**: M7.A only — runtime graph sourcing, live measured scoring with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback, bounded size sweep over canonical size ladder (19 notionals, $1–$10K), machine-readable blocker summary with 6 canonical blocker tags, temporal blocker repeatability aggregation, **bounded-scope verdict summary** (`build_verdict_summary()` with `--verdict` CLI), **universe-profile infrastructure** (`--universe narrow_7|expanded_10`). Both universe profiles on arbitrum_one independently support a no-graduate verdict. M7.A `narrow_7` and M7.A.2 `expanded_10` are now **closed bounded baselines** with no-graduate verdicts. This verdict is scoped to the tested observation regime only: a non-static DEX market may behave differently under other chains, liquidity surfaces, volatility windows, size distributions, participant intensity, or source combinations. Any further M7.A work must proceed only as a newly named hypothesis branch (M7.A.3+), not as continued tuning of the already rejected arbitrum_one token-expansion surface. M7.B remains closed.
 
@@ -57,72 +57,22 @@ All cycles negative at all 19 sizes ($1-$10K). U-shaped curves: gas dominates sm
 
 ### Current Evidence — Blocker Decomposition (machine-readable RCA)
 
-Evidence source: `blocker_summary` block from `scripts/m7a_enumerate_cycles.py` with `--score measured --sweep-top N`.  
-Computed against: block **446635245**, 10 top cycles × 19 sizes, 67 measured routes.
+Evidence: `blocker_summary` from `scripts/m7a_enumerate_cycles.py --score measured --sweep-top 10`, block 446635245, 10 cycles × 19 sizes.
 
-| Metric | Value | Interpretation |
-|--------|-------|----------------|
-| `best_route_gross_bps` | **-9.305** | Best route loses money before any costs |
-| `best_route_gas_bps` | **11.6555** | Gas adds 11.66 bps on top of negative gross |
-| `best_route_total_fee_bps` | **6.0** | Protocol fees add another 6 bps |
-| `best_route_net_bps` | **-20.9605** | Final net at optimal $100 |
-| `best_route_best_size_usd` | **100** | Optimal notional (from sweep) |
-| `small_size_gas_domination` | **true** | At $1: -1052 bps (gas crushes small sizes) |
-| `large_size_slippage_domination` | **true** | At $10K: -802 bps (slippage crushes large) |
-| `same_state_proven_rate` | **1.0** | 100% same-state proven |
-| `route_failure_rate` | **0.33** | 33% VE33 adapter quote failures |
-| `token_triple_concentration` | **1.0** | 100% ARB/USDC/WETH — zero diversity |
+Key numbers: `best_route_net_bps = -20.96`, `best_route_gross_bps = -9.31`, `gas_bps = 11.66`, `fee_bps = 6.0`, `same_state = 100%`, `route_failure = 33%`, `token_concentration = 1.0`.
 
-**Blocker tags** (ordered by frequency, 10 cycles analyzed):
+**Blocker tags** (10 cycles): `GROSS_NEGATIVE_CORE` (10/10), `GAS_DOMINANT_SMALL` (10/10), `SLIPPAGE_DOMINANT_LARGE` (10/10), `THIRD_LEG_FEE_BINDING` (6/10), `SINGLE_TRIPLE_CONCENTRATION` (all), `QUOTE_FAILURE_BREADTH_LIMIT` (all).
 
-| Tag | Count | Meaning |
-|-----|-------|---------|
-| `GROSS_NEGATIVE_CORE` | 10/10 | Gross negative in majority of cycles (gross can be transiently positive; net always negative) |
-| `GAS_DOMINANT_SMALL` | 10/10 | Gas dominates at small notionals |
-| `SLIPPAGE_DOMINANT_LARGE` | 10/10 | Slippage dominates at large notionals |
-| `THIRD_LEG_FEE_BINDING` | 6/10 | Third leg fee adds ≥5 bps |
-| `SINGLE_TRIPLE_CONCENTRATION` | all | Zero token-path diversity |
-| `QUOTE_FAILURE_BREADTH_LIMIT` | all | VE33 failures limit route breadth |
+**Key insight**: Multi-cost blocker (gas + fees + concentration), not single factor. Gross can be transiently positive (+2.25 bps), but gas+fees always push net negative.
 
-**Key diagnostic insight**: The problem is a **multi-cost blocker**, not a single factor. At block 446635245 the top route had `gross_bps = -9.305`, but temporal evidence shows gross can occasionally be positive (+2.25 bps in one run). However, gas (~10 bps) and protocol fees (~4 bps mean) always push net negative. The binding constraint is the combined cost structure (gas + fees + token-path concentration), not reserve economics alone.
+### Current Evidence — Temporal Blocker Repeatability (3 runs)
 
-### Current Evidence — Temporal Blocker Repeatability (3 independent runs)
+Evidence: 3 `--score measured --sweep-top 10` runs across blocks 446652757–446654943.
+Artifact: `data/tmp/m7a_blocker_repeatability.json`.
 
-Evidence source: `build_blocker_repeatability()` aggregation of 3 fresh `--score measured --sweep-top 10` runs.  
-Generated: 2026-03-28  
-Artifact: `data/tmp/m7a_blocker_repeatability.json`  
-Provenance tier: **local/session** — temporal stability proof across 3 blocks.
+Net range: **-23.52 to -9.56** (mean -16.30). Gross range: -14.29 to +2.25 (transiently positive but never enough). Gas: 9.23–11.81 bps. Fees: 1.00–6.00 bps.
 
-**Block range**: 446652757 → 446654943 (~2186 blocks apart)
-
-| Metric | Min | Max | Mean |
-|--------|-----|-----|------|
-| `best_route_gross_bps` | -14.29 | 2.25 | -6.21 |
-| `best_route_gas_bps` | 9.23 | 11.81 | 10.09 |
-| `best_route_total_fee_bps` | 1.00 | 6.00 | 4.33 |
-| `best_route_net_bps` | **-23.52** | **-9.56** | **-16.30** |
-| `best_route_best_size_usd` | 150 | 150 | 150 |
-| `route_failure_rate` | 0.33 | 0.33 | 0.33 |
-| `token_triple_concentration` | 1.0 | 1.0 | 1.0 |
-
-**Blocker class stability** (stable = present in ALL 3 runs, flapping = present in some):
-
-| Tag | Status | Per-cycle count range | Interpretation |
-|-----|--------|-----------------------|----------------|
-| `GROSS_NEGATIVE_CORE` | **STABLE** | 5–10/10 | Gross negative in majority of cycles per run (can be transiently positive; net always negative) |
-| `GAS_DOMINANT_SMALL` | **STABLE** | 10/10 | Gas dominates small sizes in all runs |
-| `SLIPPAGE_DOMINANT_LARGE` | **STABLE** | 10/10 | Slippage dominates large sizes in all runs |
-| `THIRD_LEG_FEE_BINDING` | **STABLE** | 3/10 | Third leg fee ≥5 bps in all runs |
-| `SINGLE_TRIPLE_CONCENTRATION` | **STABLE** | global | Zero token-path diversity in all runs |
-| `QUOTE_FAILURE_BREADTH_LIMIT` | **STABLE** | global | VE33 failures limit breadth in all runs |
-
-**Result: 6/6 stable, 0/6 flapping.** All blocker classes are structurally reproducible, not noise artifacts.
-
-Key observations:
-- **Net bps range -23.52 to -9.56**: sign is consistently negative, magnitude varies with market microstructure, but never approaches break-even.
-- **Gross bps in run 2 was +2.25**: one snapshot briefly had positive gross, but gas+fees still pushed net to -9.56 bps — confirming the multi-cost structure overwhelms any transient gross advantage.
-- **Route failure rate perfectly stable at 33%**: VE33 (Ramses) adapter failures are deterministic, not transient.
-- **Token concentration locked at 1.0**: zero diversity across all runs; no alternative token-path emerged.
+**Blocker stability**: 6/6 STABLE, 0/6 flapping. All blocker classes structurally reproducible across 3 blocks. Route failure rate locked at 33% (VE33/Ramses deterministic). Token concentration locked at 1.0.
 
 ### Current Evidence — Formal Verdict Summary (machine-readable)
 
@@ -236,7 +186,7 @@ Steps 1-8 complete. Verdict: `recommend_open_m7b: false`, `recommend_freeze_curr
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, LegQuote, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`. Blocker analysis (6 tags), verdict builder, regime classifier (7 tags)
 - `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay pipeline: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--intent-scout`. OrderflowEvent, BackrunResult (with M7.A.5 live fields), IntentSurfaceAssessment, fixture events, backrun scoring, live block-event scoring via `read_quoter_v2`, intent/auction surface scout
-- Tests: 152 M7.A triangular tests in `test_triangular_contracts.py`, 79 M7.A.4/M7.A.5 orderflow tests in `test_orderflow_contracts.py` (2815 total, 0 failures)
+- Tests: 152 M7.A triangular tests in `test_triangular_contracts.py`, 80 M7.A.4/M7.A.5 orderflow tests in `test_orderflow_contracts.py` (2816 total, 0 failures)
 
 ---
 
@@ -310,9 +260,31 @@ Offline backrun estimates (-1.55 to -7.55 bps) are significantly better than tri
 - Legacy `score_backrun_online()` rewritten as wrapper around `score_backrun_live()` using `read_quoter_v2` (fixes broken M7.A.4 adapter constructor)
 - 21 new contract tests (79 total in `test_orderflow_contracts.py`): `TestSwapEventConstants`, `TestAddressLookup`, `TestNormalizeSwapLog`, `TestBackrunResultLiveFields`, `TestM7A5BackwardCompat`
 
-**Evidence**: PENDING — requires `--live-blocks` run with RPC access to generate artifacts.
+**Evidence — M7.A.5.1 Live Block-Event Backrun (2 runs)**
 
-**CI gates**: 2815 passed, 6 skipped, 0 failures. All gates pass (pytest, docs_consistency, status_m4_check, m5_0_offline, m4_smoke, m4_profit).
+Artifacts: `data/tmp/m7a_live_blocks.json` (narrow), `data/tmp/m7a_live_wider.json` (wider), `data/tmp/m7a_live_repeatability.json` (aggregated verdict).
+Generated: 2026-03-29T10:58Z (narrow), 2026-03-29T11:00Z (wider).
+RPC: public Arbitrum gateway. Chain: arbitrum_one.
+
+| Metric | Narrow (100 blk/5 ev) | Wider (500 blk/10 ev) |
+|--------|----------------------|----------------------|
+| raw_logs_count | 11 | 97 |
+| events_scored | 5 | 10 |
+| best_live_net_bps | **-19.07** | **-18.36** |
+| worst_live_net_bps | -21.31 | -22.12 |
+| mean_live_net_bps | -20.41 | -20.75 |
+| viable_count | 0 | 0 |
+| same_block / next / stale | 0 / 0 / 5 | 1 / 0 / 9 |
+| mean_block_lag | 64.4 | 217.8 |
+| venues_quoted_mean | 6.0 | 6.0 |
+| reject: GAS_EXCEEDS_GROSS | 5/5 | 10/10 |
+| beats_two_leg_baseline | **false** | **false** |
+
+**Bug fixed**: `score_backrun_live()` sell pass was using `backrun_size_wei` instead of buy output as input (caused ~19B bps false positives). Fixed to two-pass: Pass 1 finds best buy, Pass 2 uses buy output as sell input. Locked by `TestScoreBackrunLiveRoundtrip` (1 test).
+
+**M7.A.5 verdict**: Surface NOT VIABLE with public RPC. Primary blocker: PUBLIC_RPC_LATENCY (mean block lag 64-218, all events stale). Gas exceeds gross on 15/15 events. Best net -18.36 bps, worse than two-leg baseline (-3.51 bps). Block-event backrun requires sub-block latency infrastructure (private RPC/mempool).
+
+**CI gates**: 2816 passed, 6 skipped, 0 failures. 80 tests in `test_orderflow_contracts.py`.
 
 ---
 

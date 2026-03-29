@@ -833,3 +833,74 @@ class TestM7A5BackwardCompat:
         parsed = json.loads(json_str)
         assert parsed["events_count"] == 5
         assert parsed["mode"] == "offline"
+
+
+class TestScoreBackrunLiveRoundtrip:
+    """M7.A.5: Verify two-pass roundtrip logic chains buy output into sell input."""
+
+    def test_sell_uses_buy_output_as_input(self):
+        """The sell pass must use best_buy_amount, not backrun_size_wei."""
+        from unittest.mock import patch, MagicMock
+        from scripts.m7a_orderflow_replay import score_backrun_live
+
+        ev = OrderflowEvent(
+            event_id="test_rt_001",
+            event_type="swap",
+            chain="arbitrum_one",
+            pool_address="0xabc",
+            token_in="WETH",
+            token_out="USDC",
+            amount_in_wei=10**18,
+            amount_out_wei=0,
+            dex="uniswap_v3",
+            fee_tier=500,
+            estimated_size_usd=2000.0,
+            estimated_impact_bps=10.0,
+            block_number=100,
+            tx_hash="0xdef",
+            timestamp="2026-01-01T00:00:00Z",
+        )
+
+        # Track call args to verify sell input matches buy output
+        call_log = []
+        USDC_ADDR = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+        WETH_ADDR = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+        BUY_OUTPUT_WETH = 9_970_000_000_000_000  # Buy: USDC→WETH output
+
+        def mock_quoter(quoter_address, token_in, token_out, amount_in, fee,
+                        rpc_url, block_num="latest", fallback_rpc_urls=None):
+            call_log.append({
+                "token_in": token_in, "token_out": token_out,
+                "amount_in": amount_in,
+            })
+            # Buy side: USDC→WETH (token_in=USDC)
+            if token_in.lower() == USDC_ADDR.lower():
+                return {"amount_out": BUY_OUTPUT_WETH}
+            # Sell side: WETH→USDC (token_in=WETH)
+            return {"amount_out": 99_500_000_000_000_000}  # ~0.0995 ETH worth of USDC
+
+        token_addresses = {"WETH": WETH_ADDR, "USDC": USDC_ADDR}
+        dex_configs = {"uniswap_v3": {
+            "quoter_v2": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+            "fee_tiers": [500],
+        }}
+
+        with patch("strategy.quote_rpc.read_quoter_v2", side_effect=mock_quoter):
+            with patch("strategy.quote_rpc.QUOTER_RATE_LIMITED", new=object()):
+                r = score_backrun_live(
+                    event=ev, rpc_url="http://fake", dex_configs=dex_configs,
+                    token_addresses=token_addresses, current_block=100,
+                )
+
+        # Pass 1 = buy (USDC→WETH), Pass 2 = sell (WETH→USDC)
+        buy_calls = [c for c in call_log if c["token_in"].lower() == USDC_ADDR.lower()]
+        sell_calls = [c for c in call_log if c["token_in"].lower() == WETH_ADDR.lower()]
+        assert len(buy_calls) >= 1, f"Expected buy calls, got {call_log}"
+        assert len(sell_calls) >= 1, f"Expected sell calls, got {call_log}"
+        # Critical: sell input must equal buy output, NOT backrun_size_wei
+        assert sell_calls[0]["amount_in"] == BUY_OUTPUT_WETH, (
+            f"Sell input {sell_calls[0]['amount_in']} != buy output {BUY_OUTPUT_WETH}"
+        )
+        # Net bps should be reasonable (not billions)
+        assert r.best_backrun_net_bps is not None
+        assert abs(r.best_backrun_net_bps) < 10000  # sanity: within ±100%

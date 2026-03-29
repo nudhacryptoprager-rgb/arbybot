@@ -684,12 +684,11 @@ def score_backrun_live(
         token_out_addr = usdc_addr
         backrun_size_wei = 10**16  # 0.01 ETH — small test size
 
+    # Pass 1: Find best buy across all venues/fees
     for dex_name, cfg, quoter_addr in quotable_dexes:
         fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
-        # Try most common fee tier first
         for fee in fee_tiers[:2]:  # Limit to 2 fee tiers to conserve RPC calls
             try:
-                # Buy side: buy the depressed token
                 buy_result = read_quoter_v2(
                     quoter_address=quoter_addr,
                     token_in=token_in_addr,
@@ -707,34 +706,47 @@ def score_backrun_live(
                         if best_buy_amount is None or amt_out > best_buy_amount:
                             best_buy_amount = amt_out
                             best_buy_venue = dex_name
-
-                # Sell side: sell the token back (reverse direction)
-                sell_result = read_quoter_v2(
-                    quoter_address=quoter_addr,
-                    token_in=token_out_addr,
-                    token_out=token_in_addr,
-                    amount_in=backrun_size_wei,
-                    fee=fee,
-                    rpc_url=rpc_url,
-                    block_num="latest",
-                    fallback_rpc_urls=fallback_rpc_urls,
-                )
-                if sell_result and sell_result is not QUOTER_RATE_LIMITED:
-                    amt_out = sell_result.get("amount_out", 0)
-                    if amt_out > 0:
-                        if best_sell_amount is None or amt_out > best_sell_amount:
-                            best_sell_amount = amt_out
-                            best_sell_venue = dex_name
-
             except Exception as exc:
                 logger.debug(
-                    "Live quote failed for %s fee=%d: %s",
+                    "Live buy quote failed for %s fee=%d: %s",
                     dex_name,
                     fee,
                     str(exc)[:100],
                     extra={"context": {"dex": dex_name, "event_id": event.event_id}},
                 )
                 continue
+
+    # Pass 2: Sell the buy output back — use best_buy_amount as input
+    if best_buy_amount is not None:
+        for dex_name, cfg, quoter_addr in quotable_dexes:
+            fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+            for fee in fee_tiers[:2]:
+                try:
+                    sell_result = read_quoter_v2(
+                        quoter_address=quoter_addr,
+                        token_in=token_out_addr,
+                        token_out=token_in_addr,
+                        amount_in=best_buy_amount,
+                        fee=fee,
+                        rpc_url=rpc_url,
+                        block_num="latest",
+                        fallback_rpc_urls=fallback_rpc_urls,
+                    )
+                    if sell_result and sell_result is not QUOTER_RATE_LIMITED:
+                        amt_out = sell_result.get("amount_out", 0)
+                        if amt_out > 0:
+                            if best_sell_amount is None or amt_out > best_sell_amount:
+                                best_sell_amount = amt_out
+                                best_sell_venue = dex_name
+                except Exception as exc:
+                    logger.debug(
+                        "Live sell quote failed for %s fee=%d: %s",
+                        dex_name,
+                        fee,
+                        str(exc)[:100],
+                        extra={"context": {"dex": dex_name, "event_id": event.event_id}},
+                    )
+                    continue
 
     # Compute block lag and state classification
     block_lag = quote_block - event.block_number
