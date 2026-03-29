@@ -48,6 +48,8 @@ The only thing that matters is **measured executable net-after-cost**.
 
 Triangular work is justified only if it shows repeatable cycle economics that are stronger than the current public-infrastructure two-leg ceiling. If it does not, M7 must stop at M7.A and remain a frozen R&D branch.
 
+Because DEX markets are structurally non-static, every M7 verdict is scoped to the tested market surface and observation regime. A negative result on one bounded regime may justify freezing that regime, but it does not automatically close untested chains, liquidity surfaces, volatility windows, size distributions, participant-intensity states, or source combinations.
+
 ---
 
 ## Scope Boundary
@@ -227,6 +229,8 @@ If bounded read-only triangular work does not produce repeatable, provenance-awa
 - the team does not expand hops, chains, or adapters just to keep the branch alive
 
 This stop-condition is part of the milestone contract, not a fallback opinion.
+
+The stop-condition always applies to the currently tested bounded scope. If the team wants to continue after a negative M7.A result, it must open a newly named hypothesis branch with a materially different search surface, not continue tuning the already rejected baseline as if the market were static.
 
 ---
 

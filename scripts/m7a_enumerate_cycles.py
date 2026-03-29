@@ -354,6 +354,80 @@ def _calculate_starting_amount(token: str, decimals: int, target_usd: float = 10
 
 
 # ---------------------------------------------------------------------------
+# Regime classification — M7.A.3 temporal market regime tagging
+# ---------------------------------------------------------------------------
+
+# Regime tag constants
+REGIME_HIGH_ACTIVITY = "high_activity"
+REGIME_MEDIUM_ACTIVITY = "medium_activity"
+REGIME_LOW_ACTIVITY = "low_activity"
+REGIME_HIGH_FAILURE = "high_failure"
+REGIME_LOW_FAILURE = "low_failure"
+REGIME_WIDE_SPREAD = "wide_spread"
+REGIME_TIGHT_SPREAD = "tight_spread"
+
+ALL_REGIME_TAGS = frozenset({
+    REGIME_HIGH_ACTIVITY, REGIME_MEDIUM_ACTIVITY, REGIME_LOW_ACTIVITY,
+    REGIME_HIGH_FAILURE, REGIME_LOW_FAILURE,
+    REGIME_WIDE_SPREAD, REGIME_TIGHT_SPREAD,
+})
+
+# Thresholds for regime classification
+REGIME_HIGH_ACTIVITY_THRESHOLD = 0.8    # scored/attempted > 0.8
+REGIME_LOW_ACTIVITY_THRESHOLD = 0.5     # scored/attempted < 0.5
+REGIME_HIGH_FAILURE_THRESHOLD = 0.4     # route_failure_rate > 0.4
+REGIME_LOW_FAILURE_THRESHOLD = 0.2      # route_failure_rate < 0.2
+REGIME_WIDE_SPREAD_THRESHOLD = -30.0    # best_net_bps < -30
+REGIME_TIGHT_SPREAD_THRESHOLD = -10.0   # best_net_bps > -10
+
+
+def classify_regime_bucket(
+    measured_stats: Dict[str, Any],
+    blocker_summary: Dict[str, Any],
+) -> List[str]:
+    """Classify the temporal market regime of a measured run.
+
+    Uses already-computed metrics from measured_stats and blocker_summary
+    to assign one or more regime tags describing market conditions.
+    Tags are NOT mutually exclusive within a dimension — a run can be both
+    high_activity and low_failure.
+
+    Returns a sorted list of regime tag strings.
+    """
+    tags: List[str] = []
+
+    # Activity dimension: quote success rate
+    attempted = measured_stats.get("attempted", 0)
+    scored = measured_stats.get("scored", 0)
+    if attempted > 0:
+        success_rate = scored / attempted
+        if success_rate > REGIME_HIGH_ACTIVITY_THRESHOLD:
+            tags.append(REGIME_HIGH_ACTIVITY)
+        elif success_rate < REGIME_LOW_ACTIVITY_THRESHOLD:
+            tags.append(REGIME_LOW_ACTIVITY)
+        else:
+            tags.append(REGIME_MEDIUM_ACTIVITY)
+
+    # Failure dimension: route_failure_rate from blocker_summary
+    if "route_failure_rate" in blocker_summary:
+        route_failure_rate = blocker_summary["route_failure_rate"]
+        if route_failure_rate > REGIME_HIGH_FAILURE_THRESHOLD:
+            tags.append(REGIME_HIGH_FAILURE)
+        elif route_failure_rate < REGIME_LOW_FAILURE_THRESHOLD:
+            tags.append(REGIME_LOW_FAILURE)
+
+    # Spread dimension: best_net_bps from blocker_summary
+    best_net_bps = blocker_summary.get("best_route_net_bps")
+    if best_net_bps is not None:
+        if best_net_bps < REGIME_WIDE_SPREAD_THRESHOLD:
+            tags.append(REGIME_WIDE_SPREAD)
+        elif best_net_bps > REGIME_TIGHT_SPREAD_THRESHOLD:
+            tags.append(REGIME_TIGHT_SPREAD)
+
+    return sorted(tags)
+
+
+# ---------------------------------------------------------------------------
 # Blocker analysis — machine-readable RCA for M7.A feasibility verdict
 # ---------------------------------------------------------------------------
 
@@ -662,6 +736,116 @@ def build_blocker_repeatability(
 
 
 # ---------------------------------------------------------------------------
+# Regime repeatability — M7.A.3 temporal regime aggregation across runs
+# ---------------------------------------------------------------------------
+
+
+def build_regime_repeatability_summary(
+    artifact_paths: List[str],
+) -> Dict[str, Any]:
+    """Aggregate regime classifications across multiple measured runs.
+
+    Each artifact must be a JSON file produced by m7a_enumerate_cycles.py
+    with both regime_bucket and blocker_summary fields.
+
+    For backward compatibility, artifacts without regime_bucket are
+    re-classified from their measured stats and blocker_summary.
+
+    Returns a machine-readable regime repeatability summary with:
+    - runs_by_regime: count of runs per regime tag
+    - best_net_bps_by_regime: best net bps observed per regime
+    - mean_best_net_bps_by_regime: mean of best_net_bps across runs per regime
+    - blocker_stability_by_regime: stable vs flapping blockers grouped by regime
+    - beats_two_leg_baseline_by_regime: whether any run in regime beats baseline
+    """
+    run_entries: List[Dict[str, Any]] = []
+
+    for path_str in artifact_paths:
+        path = Path(path_str)
+        if not path.exists():
+            logger.warning("Artifact not found: %s", path)
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        bs = data.get("blocker_summary")
+        ms = data.get("measured", {})
+        if not bs or "error" in bs:
+            logger.warning("No valid blocker_summary in %s", path)
+            continue
+
+        # Get or re-classify regime_bucket
+        regime = data.get("regime_bucket")
+        if regime is None:
+            regime = classify_regime_bucket(ms, bs)
+
+        block = ms.get("block_number")
+        run_entries.append({
+            "artifact": path.name,
+            "block": block,
+            "regime_bucket": regime,
+            "best_route_net_bps": bs["best_route_net_bps"],
+            "best_route_gross_bps": bs["best_route_gross_bps"],
+            "route_failure_rate": bs["route_failure_rate"],
+            "top_blockers": bs["top_blockers"],
+        })
+
+    if not run_entries:
+        return {"error": "no_valid_artifacts", "artifacts_checked": len(artifact_paths)}
+
+    # Group by regime tags
+    from collections import defaultdict
+    regime_runs: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for entry in run_entries:
+        for tag in entry["regime_bucket"]:
+            regime_runs[tag].append(entry)
+
+    # Compute per-regime metrics
+    runs_by_regime: Dict[str, int] = {}
+    best_net_bps_by_regime: Dict[str, float] = {}
+    mean_best_net_bps_by_regime: Dict[str, float] = {}
+    blocker_stability_by_regime: Dict[str, Dict[str, Any]] = {}
+    beats_two_leg_baseline_by_regime: Dict[str, bool] = {}
+
+    for tag in sorted(regime_runs.keys()):
+        entries = regime_runs[tag]
+        runs_by_regime[tag] = len(entries)
+
+        nets = [e["best_route_net_bps"] for e in entries]
+        best_net_bps_by_regime[tag] = round(max(nets), 4)
+        mean_best_net_bps_by_regime[tag] = round(sum(nets) / len(nets), 4)
+        beats_two_leg_baseline_by_regime[tag] = max(nets) > TWO_LEG_BASELINE_NET_BPS
+
+        # Blocker stability within regime
+        all_tags_in_regime: Counter = Counter()
+        for e in entries:
+            for bt in e["top_blockers"]:
+                all_tags_in_regime[bt] += 1
+        n_runs_in_regime = len(entries)
+        stable = [bt for bt, c in all_tags_in_regime.items() if c == n_runs_in_regime]
+        flapping = [bt for bt, c in all_tags_in_regime.items() if 0 < c < n_runs_in_regime]
+        blocker_stability_by_regime[tag] = {
+            "stable_blockers": sorted(stable),
+            "flapping_blockers": sorted(flapping),
+        }
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return {
+        "regime_repeatability": True,
+        "timestamp": ts,
+        "runs_count": len(run_entries),
+        "regimes_observed": sorted(regime_runs.keys()),
+        "runs_by_regime": runs_by_regime,
+        "best_net_bps_by_regime": best_net_bps_by_regime,
+        "mean_best_net_bps_by_regime": mean_best_net_bps_by_regime,
+        "beats_two_leg_baseline_by_regime": beats_two_leg_baseline_by_regime,
+        "blocker_stability_by_regime": blocker_stability_by_regime,
+        "two_leg_baseline_net_bps": round(TWO_LEG_BASELINE_NET_BPS, 4),
+        "run_entries": run_entries,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Verdict summary — bounded-scope M7.A no-graduate decision artifact
 # ---------------------------------------------------------------------------
 
@@ -808,6 +992,9 @@ def main() -> int:
     parser.add_argument("--verdict", nargs="+", default=None,
                         help="Build bounded-scope verdict from multiple artifact JSONs. "
                              "Runs repeatability internally then produces verdict summary.")
+    parser.add_argument("--regime-repeatability", nargs="+", default=None,
+                        help="Aggregate regime classifications from multiple artifact JSONs. "
+                             "Outputs regime repeatability report (M7.A.3).")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     args = parser.parse_args()
 
@@ -849,6 +1036,19 @@ def main() -> int:
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(result, f, indent=2)
             logger.info("Verdict summary written to %s", out_path)
+        else:
+            print(json.dumps(result, indent=2))
+        return 0 if "error" not in result else 1
+
+    # Regime repeatability mode: M7.A.3 temporal regime aggregation
+    if args.regime_repeatability:
+        result = build_regime_repeatability_summary(args.regime_repeatability)
+        if args.output:
+            out_path = Path(args.output)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2)
+            logger.info("Regime repeatability report written to %s", out_path)
         else:
             print(json.dumps(result, indent=2))
         return 0 if "error" not in result else 1
@@ -984,6 +1184,10 @@ def main() -> int:
         if measured_ranked and measured_stats:
             summary["blocker_summary"] = _build_blocker_summary(
                 measured_ranked, measured_stats, sweep_results,
+            )
+            # Regime classification: M7.A.3 temporal market regime tagging
+            summary["regime_bucket"] = classify_regime_bucket(
+                measured_stats, summary["blocker_summary"],
             )
     else:
         # Fee-only mode: use fee-cost naming for clarity

@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A + M7.A.2 — both `narrow_7` and `expanded_10` universe profiles produce no-graduate verdicts. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. All 6 structural blockers stable, 0 flapping. Expanded universe (DAI added, 8 tokens in graph) did not produce a second token triple or beat two-leg baseline. M7.B remains closed.)  
-**Updated**: 2026-03-28  
-**Scope**: M7.A only — runtime graph sourcing, live measured scoring with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback, bounded size sweep over canonical size ladder (19 notionals, $1–$10K), machine-readable blocker summary with 6 canonical blocker tags, temporal blocker repeatability aggregation, **bounded-scope verdict summary** (`build_verdict_summary()` with `--verdict` CLI), **universe-profile infrastructure** (`--universe narrow_7|expanded_10`). Both universe profiles on arbitrum_one independently support a no-graduate verdict. M7.B remains closed. The current M7.A scope should be frozen unless a new explicit hypothesis changes the search surface.
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A + M7.A.2 + M7.A.3 — all scopes produce no-graduate verdicts. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. All 6 structural blockers stable, 0 flapping. M7.A.3 temporal-regime hypothesis tested: 3 fresh runs at blocks 446834785–446837081 all classify as `medium_activity` regime. No regime produced a positive edge or beat two-leg baseline. M7.B remains closed.)  
+**Updated**: 2026-03-29  
+**Scope**: M7.A only — runtime graph sourcing, live measured scoring with per-leg RPC quotes, same-state provenance classification, measured-only ranking separated from fee-only fallback, bounded size sweep over canonical size ladder (19 notionals, $1–$10K), machine-readable blocker summary with 6 canonical blocker tags, temporal blocker repeatability aggregation, **bounded-scope verdict summary** (`build_verdict_summary()` with `--verdict` CLI), **universe-profile infrastructure** (`--universe narrow_7|expanded_10`). Both universe profiles on arbitrum_one independently support a no-graduate verdict. M7.A `narrow_7` and M7.A.2 `expanded_10` are now **closed bounded baselines** with no-graduate verdicts. This verdict is scoped to the tested observation regime only: a non-static DEX market may behave differently under other chains, liquidity surfaces, volatility windows, size distributions, participant intensity, or source combinations. Any further M7.A work must proceed only as a newly named hypothesis branch (M7.A.3+), not as continued tuning of the already rejected arbitrum_one token-expansion surface. M7.B remains closed.
 
 ---
 
@@ -227,12 +227,53 @@ Provenance tier: **local/session** — temporal diversity across 3 blocks.
 
 **M7.A.2 conclusion**: Expanding the universe from 7 to 10 tokens (with only DAI actually joining the graph) did NOT produce a second token triple. All top cycles remain ARB→USDC→WETH→ARB. Token triple concentration remains 1.0. Net bps range (-20.91 to -11.00) is comparable to the narrow scope range (-23.52 to -9.56). The expanded universe independently confirms the no-graduate verdict. DAI liquidity exists on arbitrum_one but does not create competitive triangular routes.
 
+### Current Evidence — M7.A.3 Temporal Regime Hypothesis (3 runs)
+
+**Hypothesis**: On arbitrum_one `narrow_7`, measured triangular edge may appear only in specific temporal market regimes (defined by activity level, failure rate, and spread width) rather than in generic short windows.
+
+**New infrastructure**:
+- `classify_regime_bucket()`: per-run regime classification using 3 dimensions:
+  - Activity: `high_activity` (>80% quote success), `medium_activity` (50-80%), `low_activity` (<50%)
+  - Failure: `high_failure` (route_failure_rate > 0.4), `low_failure` (< 0.2)
+  - Spread: `wide_spread` (best_net < -30 bps), `tight_spread` (best_net > -10 bps)
+- `build_regime_repeatability_summary()`: aggregates regime classifications across multiple runs
+- `--regime-repeatability` CLI for regime aggregation
+- `regime_bucket` field added to measured artifacts
+- 28 new contract tests (2736 total, 152 in test_triangular_contracts.py)
+
+Evidence source: 3 independent `--source runtime --score measured --sweep-top 10` runs with regime tagging.
+Generated: 2026-03-29
+Artifacts: `data/tmp/m7a_regime_run1.json`, `m7a_regime_run2.json`, `m7a_regime_run3.json`, `m7a_regime_repeatability.json`
+Provenance tier: **local/session** — temporal diversity across 3 blocks.
+
+| Run | Block | Scored | Failed | Best Net (bps) | Regime Bucket |
+|-----|-------|--------|--------|----------------|---------------|
+| regime_1 | 446834785 | 67 | 33 | **-21.70** | `medium_activity` |
+| regime_2 | 446835947 | 67 | 33 | **-26.46** | `medium_activity` |
+| regime_3 | 446837081 | 67 | 33 | **-14.16** | `medium_activity` |
+
+**Regime repeatability summary** (from `data/tmp/m7a_regime_repeatability.json`):
+
+| Field | Value |
+|-------|-------|
+| `regimes_observed` | `["medium_activity"]` |
+| `runs_by_regime.medium_activity` | 3 |
+| `best_net_bps_by_regime.medium_activity` | -14.16 |
+| `mean_best_net_bps_by_regime.medium_activity` | -20.77 |
+| `beats_two_leg_baseline_by_regime.medium_activity` | **false** |
+| `blocker_stability_by_regime.medium_activity.stable` | 6/6 (all stable) |
+| `blocker_stability_by_regime.medium_activity.flapping` | 0 |
+
+**M7.A.3 finding**: All 3 runs fall in the same `medium_activity` regime (67/100 = 67% quote success rate, route_failure_rate = 0.33, net bps between -30 and -10). The hypothesis that a different temporal regime might produce a positive edge is **not falsified** (only one regime observed so far), but the tested regime conclusively shows no edge. The blocker structure (6/6 stable, 0 flapping) is identical to M7.A/M7.A.2 evidence. Net bps range (-26.5 to -14.2) is comparable to prior narrow_7 evidence (-23.5 to -9.6), never approaching the two-leg baseline of -3.51 bps. M7.A.3 is now a **closed bounded baseline**: within the `medium_activity` regime on arbitrum_one `narrow_7`, no triangular edge exists.
+
 ### What this evidence does NOT yet cover
 
 - **L1 gas is a static estimate** — `l1_cost_wei` uses a fixed 6 Gwei heuristic, not live L1 calldata cost from the chain.
 - **Artifact is `data/tmp/` provenance** — not in `data/runs/<runDir>/` or rolling artifacts; not operational-grade.
 - **Narrow universe only** — 7 tokens on arbitrum_one baseline; expanded_10 added DAI but GMX/UNI had no runtime pools. Other chains may have different economics.
 - **Single-block sweep** — all 190 quotes at block 446635245; no temporal diversity within this sweep (but 5-block temporal diversity from prior runs).
+- **Market is not static** — these artifacts measure bounded market regimes, not the full moving DEX environment. A negative result on one tested surface does not prove the absence of edge on all other chains, volatility regimes, depth conditions, or participant-intensity states. Repeated bounded scans reduce randomness but are still not a full representation of intraday, multi-regime market behavior.
+- **Project goal remains cross-surface inconsistency discovery** — the broader objective is to detect mispricings across markets, sizes, participant load, and source surfaces, not to assume one bounded verdict closes all DEX opportunities.
 
 ### Remaining M7.A work (per step_M7.md implementation order)
 
@@ -243,14 +284,14 @@ Provenance tier: **local/session** — temporal diversity across 3 blocks.
 5. ~~Emit full decomposition artifacts~~ — **DONE** (measured artifacts include provenance, same_state, gross_bps, gas_bps, fee metadata)
 6. ~~Apply provenance and same-state classification~~ — **DONE** (100% same_state_proven across all 5 temporal runs)
 7. ~~Rank only by measured final net~~ — **DONE** (`--score measured` mode ranks measured-only cycles by `final_net_bps`; fee-only fallback rows emitted separately in `diagnostic_fee_only_fallbacks`)
-8. ~~Decide whether M7 stops or graduates to M7.B~~ — **DONE (NO-GRADUATE)** Machine-readable verdict: `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. Evidence: 4-block blocker repeatability (6/6 stable, 0 flapping), net bps range -23.52 to -9.56 (never beats two-leg baseline -3.51), gross sometimes positive (+2.25 in one run) but multi-cost structure always negative. Artifact: `data/tmp/m7a_verdict.json`.
+8. ~~Decide whether M7 stops or graduates to M7.B~~ — **DONE (NO-GRADUATE FOR CURRENT TESTED SCOPES)** Machine-readable verdict: `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. Evidence: 4-block blocker repeatability (6/6 stable, 0 flapping), net bps range -23.52 to -9.56 (never beats two-leg baseline -3.51), gross sometimes positive (+2.25 in one run) but multi-cost structure always negative. Artifacts: `data/tmp/m7a_verdict.json` (narrow_7), `data/tmp/m7a_expanded_verdict.json` (expanded_10). Both baselines closed. This is a bounded-scope verdict, not a claim that all triangular DEX surfaces are globally exhausted.
 
 ### Modules
 
 - `engine/triangular_graph.py` — PoolEdge, PoolGraph, M7A constants, M7A2 expanded universe constants, graph builders (cache + RuntimePair), `filter_graph_to_m7a_universe`, `filter_graph_to_m7a2_universe`
 - `engine/triangular_cycles.py` — TriangularCycle, CycleScore (with `scored_size_usd`, slippage `_heuristic` fields), find_3hop_cycles, `score_cycle_fees_only` (diagnostic), `score_cycle_measured` (live per-leg), `classify_same_state`, LegQuote, `leg_quote_from_rpc_result`, SizeSweepResult, SizeSweepPoint
-- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`, `--sweep-top N`, `--universe narrow_7|expanded_10`, `--repeatability`, `--verdict`. Measured mode: measured-only ranking. Blocker analysis: `_build_blocker_summary()` + `classify_blocker_tags()` (6 canonical tags). Count semantics: `per_cycle_blocker_counts` + `global_blockers_present`. Repeatability: `build_blocker_repeatability()`. Verdict: `build_verdict_summary()` produces bounded-scope no-graduate decision artifact from repeatability evidence.
-- Tests: 124 M7 contract tests in `test_triangular_contracts.py` (2713 total, 0 failures)
+- `scripts/m7a_enumerate_cycles.py` — CLI with `--source cache|runtime`, `--score fees|measured`, `--max-scored N`, `--sweep-top N`, `--universe narrow_7|expanded_10`, `--repeatability`, `--verdict`, `--regime-repeatability`. Measured mode: measured-only ranking. Blocker analysis: `_build_blocker_summary()` + `classify_blocker_tags()` (6 canonical tags). Count semantics: `per_cycle_blocker_counts` + `global_blockers_present`. Repeatability: `build_blocker_repeatability()`. Verdict: `build_verdict_summary()` produces bounded-scope no-graduate decision artifact from repeatability evidence. Regime: `classify_regime_bucket()` (7 canonical regime tags across 3 dimensions) + `build_regime_repeatability_summary()` for temporal-regime aggregation. Artifact includes `regime_bucket` field.
+- Tests: 152 M7 contract tests in `test_triangular_contracts.py` (2736 total, 0 failures)
 
 ---
 
