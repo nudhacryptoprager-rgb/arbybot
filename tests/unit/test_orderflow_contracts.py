@@ -18,6 +18,7 @@ Tests lock:
 - M7.A.5.9: Decimal-aware size normalization, _normalized_bounds(), BackrunResult size fields
 - M7.A.5.10: Stale-gate viability, zero-liquidity reject, admission provenance fix, split summary
 - M7.A.5.11: Active-liquidity-aware coverage, granular coverage rejects, pre-econ metrics, live_state_metrics fix
+- M7.A.5.15: Low-lag debug rows, pair_unresolved_detail, coverage truth metrics, backward compat (54 fields)
 """
 
 from __future__ import annotations
@@ -1819,11 +1820,11 @@ class TestM7A56BackrunResultFields:
         "token_admitted",
     }
 
-    def test_field_count_is_53(self):
+    def test_field_count_is_54(self):
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 53, f"Expected 53 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 54, f"Expected 54 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_new_fields_present(self):
         ev = _make_event()
@@ -2102,7 +2103,7 @@ class TestM7A56BackwardCompat:
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 53
+        assert len(d) == 54
         # Core offline fields still work
         assert r.event_source == "fixture"
         assert r.reject_reason is not None or r.route_viable
@@ -2138,7 +2139,7 @@ class TestM7A56BackwardCompat:
         s = json.dumps(d)
         parsed = json.loads(s)
         assert parsed["event_id"] == r.event_id
-        assert len(parsed) == 53
+        assert len(parsed) == 54
         assert "event_id" in d
         assert "venues_pruned_by_multicall" in d
         assert "latency_budget_ms" in d
@@ -2178,8 +2179,8 @@ class TestM7A56BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 + 4 M7.A.5.9 = 53
-        assert len(d) == 53, f"Expected 53 fields, got {len(d)}: {sorted(d.keys())}"
+        # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 + 4 M7.A.5.9 + 1 M7.A.5.15 = 54
+        assert len(d) == 54, f"Expected 54 fields, got {len(d)}: {sorted(d.keys())}"
 
 
 class TestBatchGetPool:
@@ -2430,7 +2431,7 @@ class TestM7A55BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 53, f"Expected 53 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 54, f"Expected 54 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_m7a57_fields_exist_in_backrun_result(self):
         """M7.A.5.7 fields (admission_source, oracle_guard, local_sim_state) exist and default to None."""
@@ -2716,7 +2717,7 @@ class TestM7A57BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 53
+        assert len(parsed) == 54
         # Old fields still present
         assert "event_id" in parsed
         assert "reject_reason" in parsed
@@ -2879,7 +2880,7 @@ class TestM7A58BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 53
+        assert len(parsed) == 54
         # M7.A.5.8 fields present
         assert parsed["l2_gas_bps"] == 2.0
         assert parsed["l1_data_bps"] == 8.0
@@ -3095,7 +3096,7 @@ class TestM7A59BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 53
+        assert len(parsed) == 54
         # M7.A.5.9 fields present
         assert parsed["token_in_decimals"] == 18
         assert parsed["size_normalization_source"] == "decimal_only"
@@ -3435,7 +3436,7 @@ class TestM7A510BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 53
+        assert len(d) == 54
 
     def test_all_reject_reasons_count(self):
         """ALL_REJECT_REASONS must have 19 entries (15 old + 2 M7.A.5.11 + 2 M7.A.5.12)."""
@@ -3735,7 +3736,7 @@ class TestM7A511BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 53
+        assert len(d) == 54
 
     def test_all_reject_reasons_count_19(self):
         assert len(ALL_REJECT_REASONS) == 19
@@ -3992,7 +3993,7 @@ class TestM7A512BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 53
+        assert len(d) == 54
 
     def test_all_reject_reasons_count_19(self):
         assert len(ALL_REJECT_REASONS) == 19
@@ -4272,7 +4273,7 @@ class TestM7A513BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 53
+        assert len(d) == 54
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.13 adds no new reject reasons."""
@@ -4300,3 +4301,521 @@ class TestM7A513BackwardCompat:
             "stale_low_lag_comparison",
         ]:
             assert key in art, f"Missing 5.13 key: {key}"
+
+
+class TestM7A514LowLagRejectDecomposition:
+    """M7.A.5.14: Low-lag reject histogram and pipeline stage rates."""
+
+    def _make_mixed_lag_results(self):
+        """Build results with mix of low-lag (block_lag<=2) and stale, scored and unscored."""
+        results = []
+        # Low-lag, scored, viable
+        results.append(BackrunResult(
+            event_id="ll_1", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=50.0, block_lag=1, same_state_class="next_block",
+            route_viable=True, reject_reason=None,
+        ))
+        # Low-lag, scored, gas-rejected
+        results.append(BackrunResult(
+            event_id="ll_2", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=-100.0, block_lag=0, same_state_class="same_block",
+            route_viable=False, reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+        ))
+        # Low-lag, unscored: TOKEN_PAIR_UNRESOLVED
+        results.append(BackrunResult(
+            event_id="ll_3", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=0.0, block_lag=2, same_state_class="next_block",
+            route_viable=False, reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+        ))
+        # Low-lag, unscored: NO_COUNTER_POOL
+        results.append(BackrunResult(
+            event_id="ll_4", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=0.0, block_lag=1, same_state_class="next_block",
+            route_viable=False, reject_reason=REJECT_NO_COUNTER_POOL,
+        ))
+        # Stale, scored, positive
+        results.append(BackrunResult(
+            event_id="st_1", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=200.0, block_lag=10, same_state_class="stale",
+            route_viable=False, reject_reason=REJECT_STALE_POSITIVE,
+        ))
+        # Stale, unscored: TOKEN_NOT_ADMITTED
+        results.append(BackrunResult(
+            event_id="st_2", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=0.0, block_lag=15, same_state_class="stale",
+            route_viable=False, reject_reason=REJECT_TOKEN_NOT_ADMITTED,
+        ))
+        return results
+
+    def test_low_lag_reject_histogram_present(self):
+        events = [_make_event(event_id=f"ev_{i}") for i in range(6)]
+        results = self._make_mixed_lag_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert "low_lag_reject_histogram" in art
+
+    def test_low_lag_reject_histogram_only_low_lag(self):
+        """low_lag_reject_histogram must only contain rejects from block_lag <= 2."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(6)]
+        results = self._make_mixed_lag_results()
+        art = build_replay_summary(events, results, mode="test")
+        ll_hist = art["low_lag_reject_histogram"]
+        # Low-lag rejects: GAS_EXCEEDS_GROSS(1), TOKEN_PAIR_UNRESOLVED(1), NO_COUNTER_POOL(1)
+        assert ll_hist.get(REJECT_GAS_EXCEEDS_GROSS) == 1
+        assert ll_hist.get(REJECT_TOKEN_PAIR_UNRESOLVED) == 1
+        assert ll_hist.get(REJECT_NO_COUNTER_POOL) == 1
+        # Stale rejects must NOT appear
+        assert REJECT_STALE_POSITIVE not in ll_hist
+        assert REJECT_TOKEN_NOT_ADMITTED not in ll_hist
+
+    def test_low_lag_reject_histogram_subset_of_full(self):
+        """Every reason in low_lag_reject_histogram must also be in reject_histogram."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(6)]
+        results = self._make_mixed_lag_results()
+        art = build_replay_summary(events, results, mode="test")
+        for reason, count in art["low_lag_reject_histogram"].items():
+            assert reason in art["reject_histogram"], (
+                f"{reason} in low_lag but not in full histogram"
+            )
+            assert count <= art["reject_histogram"][reason]
+
+    def test_low_lag_pipeline_stage_rates_present(self):
+        events = [_make_event(event_id=f"ev_{i}") for i in range(6)]
+        results = self._make_mixed_lag_results()
+        art = build_replay_summary(events, results, mode="test")
+        for key in [
+            "low_lag_pair_resolution_rate",
+            "low_lag_counter_coverage_rate",
+            "low_lag_scored_results_rate",
+            "low_lag_pre_econ_reject_rate",
+        ]:
+            assert key in art, f"Missing M7.A.5.14 field: {key}"
+
+    def test_low_lag_pair_resolution_rate(self):
+        """4 low-lag results, 1 has TOKEN_PAIR_UNRESOLVED → 3/4 = 0.75."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(6)]
+        results = self._make_mixed_lag_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["low_lag_pair_resolution_rate"] == 0.75
+
+    def test_low_lag_counter_coverage_rate(self):
+        """4 low-lag, 1 TOKEN_PAIR_UNRESOLVED + 1 NO_COUNTER_POOL → 2/4 = 0.5."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(6)]
+        results = self._make_mixed_lag_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["low_lag_counter_coverage_rate"] == 0.5
+
+    def test_low_lag_scored_results_rate(self):
+        """4 low-lag total, 2 scored (viable + gas-rejected) → 0.5."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(6)]
+        results = self._make_mixed_lag_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["low_lag_scored_results_rate"] == 0.5
+
+    def test_low_lag_pre_econ_reject_rate(self):
+        """4 low-lag, 2 unscored → 0.5."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(6)]
+        results = self._make_mixed_lag_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["low_lag_pre_econ_reject_rate"] == 0.5
+
+    def test_low_lag_rates_none_when_no_low_lag(self):
+        """When all results are stale, low-lag rates should be None."""
+        results = [BackrunResult(
+            event_id="stale_only", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=100.0, block_lag=10, same_state_class="stale",
+            route_viable=False, reject_reason=REJECT_STALE_POSITIVE,
+        )]
+        events = [_make_event(event_id="stale_only")]
+        art = build_replay_summary(events, results, mode="test")
+        assert art["low_lag_pair_resolution_rate"] is None
+        assert art["low_lag_counter_coverage_rate"] is None
+        assert art["low_lag_scored_results_rate"] is None
+        assert art["low_lag_pre_econ_reject_rate"] is None
+        assert art["low_lag_reject_histogram"] == {}
+
+    def test_detected_low_lag_gte_scored_low_lag(self):
+        """Invariant: events_detected_low_lag >= events_scored_low_lag."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(6)]
+        results = self._make_mixed_lag_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["events_detected_low_lag"] >= art["events_scored_low_lag"]
+
+    def test_block_lag_zero_counted_as_low_lag(self):
+        """block_lag=0 must be treated as low-lag (same_block), not filtered out."""
+        results = [BackrunResult(
+            event_id="lag0", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            best_backrun_net_bps=10.0, block_lag=0, same_state_class="same_block",
+            route_viable=True, reject_reason=None,
+        )]
+        events = [_make_event(event_id="lag0")]
+        art = build_replay_summary(events, results, mode="test")
+        assert art["events_detected_low_lag"] == 1
+        assert art["events_scored_low_lag"] == 1
+        assert art["low_lag_scored_results_rate"] == 1.0
+        assert art["low_lag_pre_econ_reject_rate"] == 0.0
+
+
+class TestM7A514BackwardCompat:
+    """M7.A.5.14 compat — field count updated to 54 by M7.A.5.15."""
+
+    def test_backrun_result_field_count_now_54(self):
+        r = BackrunResult(
+            event_id="compat_514",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert len(d) == 54
+
+    def test_all_reject_reasons_count_still_19(self):
+        """M7.A.5.14 adds no new reject reasons."""
+        assert len(ALL_REJECT_REASONS) == 19
+
+    def test_old_summary_fields_still_present(self):
+        art = build_replay_summary([], [], mode="test")
+        for key in [
+            "events_count", "results_count", "viable_count",
+            "best_net_bps_any", "best_net_bps_executable",
+            "positive_net_count_any", "positive_net_count_low_lag",
+            "stale_positive_count", "scored_results_count",
+            "reject_histogram", "two_leg_baseline_net_bps",
+            "coverage_local_mismatch_count", "truly_inactive_count",
+            "events_detected_low_lag", "events_scored_low_lag",
+            "stale_low_lag_comparison",
+        ]:
+            assert key in art, f"Missing backward-compat key: {key}"
+
+    def test_new_514_fields_additive(self):
+        art = build_replay_summary([], [], mode="test")
+        for key in [
+            "low_lag_reject_histogram",
+            "low_lag_pair_resolution_rate",
+            "low_lag_counter_coverage_rate",
+            "low_lag_scored_results_rate",
+            "low_lag_pre_econ_reject_rate",
+        ]:
+            assert key in art, f"Missing 5.14 key: {key}"
+
+
+# ────────────────────────────────────────────────────────────
+# M7.A.5.15: Low-lag debug rows, pair_unresolved_detail, coverage truth, backward compat
+# ────────────────────────────────────────────────────────────
+
+
+class TestM7A515PairUnresolvedDetail:
+    """M7.A.5.15: BackrunResult gains pair_unresolved_detail field."""
+
+    def test_pair_unresolved_detail_default_none(self):
+        r = BackrunResult(
+            event_id="pud_default",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.pair_unresolved_detail is None
+
+    def test_pair_unresolved_detail_stored(self):
+        r = BackrunResult(
+            event_id="pud_stored",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            pair_unresolved_detail="pool_read_failed",
+        )
+        assert r.pair_unresolved_detail == "pool_read_failed"
+
+    def test_pair_unresolved_detail_no_pool_address(self):
+        r = BackrunResult(
+            event_id="pud_no_pool",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            pair_unresolved_detail="no_pool_address",
+        )
+        assert r.pair_unresolved_detail == "no_pool_address"
+        d = asdict(r)
+        assert "pair_unresolved_detail" in d
+
+    def test_pair_unresolved_detail_valid_values(self):
+        valid = {"no_pool_address", "pool_read_failed", "no_symbol_map",
+                 "token0_unknown", "token1_unknown"}
+        for v in valid:
+            r = BackrunResult(
+                event_id=f"pud_{v}",
+                event_source="live",
+                event_type=EVENT_TYPE_SWAP,
+                post_trade_state_used="live",
+                backrun_direction=BACKRUN_BUY_DEPRESSED,
+                pair_unresolved_detail=v,
+            )
+            assert r.pair_unresolved_detail == v
+
+
+class TestM7A515LowLagDebugRows:
+    """M7.A.5.15: build_replay_summary emits low_lag_debug_rows."""
+
+    def test_low_lag_debug_rows_present_empty(self):
+        art = build_replay_summary([], [], mode="test")
+        assert "low_lag_debug_rows" in art
+        assert art["low_lag_debug_rows"] == []
+
+    def test_low_lag_debug_rows_present_with_results(self):
+        r = BackrunResult(
+            event_id="debug_row_1",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=1,
+            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            pair_resolved=False,
+            pair_unresolved_detail="pool_read_failed",
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        rows = art["low_lag_debug_rows"]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["event_id"] == "debug_row_1"
+        assert row["block_lag"] == 1
+        assert row["reject_reason"] == REJECT_TOKEN_PAIR_UNRESOLVED
+        assert row["pair_resolved"] is False
+        assert row["pair_unresolved_detail"] == "pool_read_failed"
+
+    def test_low_lag_debug_rows_only_low_lag(self):
+        """Stale results (block_lag > 2) are excluded from debug_rows."""
+        low = BackrunResult(
+            event_id="low_lag",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0,
+            reject_reason=REJECT_NO_COUNTER_POOL,
+            pair_resolved=True,
+            actual_pair="LINK/UNI",
+        )
+        stale = BackrunResult(
+            event_id="stale",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=10,
+            reject_reason=REJECT_NO_COUNTER_POOL,
+            pair_resolved=True,
+            actual_pair="LINK/UNI",
+        )
+        art = build_replay_summary([], [low, stale], mode="ws_live")
+        rows = art["low_lag_debug_rows"]
+        assert len(rows) == 1
+        assert rows[0]["event_id"] == "low_lag"
+
+    def test_low_lag_debug_row_keys(self):
+        r = BackrunResult(
+            event_id="key_check",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=2,
+            reject_reason=REJECT_ALL_POOLS_TRULY_INACTIVE,
+            pair_resolved=True,
+            actual_pair="X/Y",
+            token_admitted=True,
+            admission_source=ADMISSION_CANONICAL,
+            counter_venue_count=3,
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        row = art["low_lag_debug_rows"][0]
+        expected_keys = {
+            "event_id", "block_lag", "reject_reason", "pair_resolved",
+            "actual_pair", "pair_unresolved_detail", "token_admitted",
+            "admission_source", "known_pools", "active_pools",
+            "counter_venue_count",
+        }
+        assert set(row.keys()) == expected_keys
+
+
+class TestM7A515LowLagCoverageTruth:
+    """M7.A.5.15: Coverage truth metrics for low-lag subset."""
+
+    def test_coverage_truth_present_empty(self):
+        art = build_replay_summary([], [], mode="test")
+        assert "low_lag_coverage_truth" in art
+        ct = art["low_lag_coverage_truth"]
+        assert ct["known_pools_total"] == 0
+        assert ct["active_pools_total"] == 0
+        assert ct["active_buy_venues"] == 0
+        assert ct["active_sell_venues"] == 0
+        assert ct["no_counter_pool_rate"] is None
+        assert ct["inactive_pool_rate"] is None
+
+    def test_coverage_truth_rates_with_results(self):
+        results = []
+        # 1 NO_COUNTER_POOL, 1 ALL_POOLS_TRULY_INACTIVE, 1 scored
+        results.append(BackrunResult(
+            event_id="cov_1", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0, reject_reason=REJECT_NO_COUNTER_POOL, pair_resolved=True,
+        ))
+        results.append(BackrunResult(
+            event_id="cov_2", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=1, reject_reason=REJECT_ALL_POOLS_TRULY_INACTIVE, pair_resolved=True,
+            coverage_result={"known_pools_total": 3, "active_pools_total": 0,
+                             "active_buy_venues": 0, "active_sell_venues": 0},
+        ))
+        results.append(BackrunResult(
+            event_id="cov_3", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=2,  # low-lag, scored
+            best_backrun_net_bps=-1.5, route_viable=False, pair_resolved=True,
+            coverage_result={"known_pools_total": 5, "active_pools_total": 2,
+                             "active_buy_venues": 1, "active_sell_venues": 1},
+        ))
+        art = build_replay_summary([], results, mode="ws_live")
+        ct = art["low_lag_coverage_truth"]
+        # Only 2 results have coverage_result, so sums are from those 2
+        assert ct["known_pools_total"] == 8
+        assert ct["active_pools_total"] == 2
+        assert ct["active_buy_venues"] == 1
+        assert ct["active_sell_venues"] == 1
+        assert ct["no_counter_pool_rate"] == round(1 / 3, 4)
+        assert ct["inactive_pool_rate"] == round(1 / 3, 4)
+
+
+class TestM7A515FourLowLagPaths:
+    """M7.A.5.15: 4 synthetic low-lag paths: unresolved, no-counter, inactive, scored."""
+
+    def test_path_unresolved_pair(self):
+        """Low-lag event fails at TOKEN_PAIR_UNRESOLVED."""
+        r = BackrunResult(
+            event_id="path_unresolved", event_source="live",
+            event_type=EVENT_TYPE_SWAP, post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0, reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            pair_resolved=False, pair_unresolved_detail="pool_read_failed",
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        assert art["events_detected_low_lag"] == 1
+        assert art["events_scored_low_lag"] == 0
+        assert art["low_lag_pair_resolution_rate"] == 0.0
+        assert art["low_lag_pre_econ_reject_rate"] == 1.0
+        rows = art["low_lag_debug_rows"]
+        assert len(rows) == 1
+        assert rows[0]["pair_unresolved_detail"] == "pool_read_failed"
+
+    def test_path_no_counter_pool(self):
+        """Low-lag event resolves pair but hits NO_COUNTER_POOL."""
+        r = BackrunResult(
+            event_id="path_no_counter", event_source="live",
+            event_type=EVENT_TYPE_SWAP, post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=1, reject_reason=REJECT_NO_COUNTER_POOL,
+            pair_resolved=True, actual_pair="0x3212dc0f/WETH",
+            token_admitted=True, admission_source=ADMISSION_ONCHAIN_ENRICHED,
+            counter_venue_count=0,
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        assert art["events_detected_low_lag"] == 1
+        assert art["events_scored_low_lag"] == 0
+        assert art["low_lag_pair_resolution_rate"] == 1.0
+        assert art["low_lag_counter_coverage_rate"] == 0.0
+        ct = art["low_lag_coverage_truth"]
+        assert ct["no_counter_pool_rate"] == 1.0
+
+    def test_path_inactive_counter_pool(self):
+        """Low-lag event resolves pair, has pools, but all inactive."""
+        r = BackrunResult(
+            event_id="path_inactive", event_source="live",
+            event_type=EVENT_TYPE_SWAP, post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0, reject_reason=REJECT_ALL_POOLS_TRULY_INACTIVE,
+            pair_resolved=True, actual_pair="LINK/UNI",
+            token_admitted=True, admission_source=ADMISSION_CANONICAL,
+            coverage_result={"known_pools_total": 2, "active_pools_total": 0,
+                             "active_buy_venues": 0, "active_sell_venues": 0},
+            counter_venue_count=2,
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        assert art["events_detected_low_lag"] == 1
+        assert art["events_scored_low_lag"] == 0
+        assert art["low_lag_pair_resolution_rate"] == 1.0
+        ct = art["low_lag_coverage_truth"]
+        assert ct["known_pools_total"] == 2
+        assert ct["active_pools_total"] == 0
+        assert ct["inactive_pool_rate"] == 1.0
+
+    def test_path_active_reaches_scoring(self):
+        """Low-lag event resolves pair, has active pool, reaches econ scoring."""
+        r = BackrunResult(
+            event_id="path_scored", event_source="live",
+            event_type=EVENT_TYPE_SWAP, post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0, pair_resolved=True, actual_pair="WETH/USDC",
+            token_admitted=True, admission_source=ADMISSION_CANONICAL,
+            coverage_result={"known_pools_total": 4, "active_pools_total": 2,
+                             "active_buy_venues": 1, "active_sell_venues": 1},
+            counter_venue_count=4,
+            best_backrun_net_bps=-1.5, route_viable=False,
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        assert art["events_detected_low_lag"] == 1
+        assert art["events_scored_low_lag"] == 1
+        assert art["low_lag_scored_results_rate"] == 1.0
+        assert art["low_lag_pre_econ_reject_rate"] == 0.0
+        ct = art["low_lag_coverage_truth"]
+        assert ct["known_pools_total"] == 4
+        assert ct["active_pools_total"] == 2
+
+
+class TestM7A515BackwardCompat:
+    """M7.A.5.15 must update BackrunResult to 54 fields, keep reject count at 19."""
+
+    def test_backrun_result_field_count_now_54(self):
+        r = BackrunResult(
+            event_id="compat_515",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert len(d) == 54
+
+    def test_all_reject_reasons_count_still_19(self):
+        assert len(ALL_REJECT_REASONS) == 19
+
+    def test_new_515_fields_present(self):
+        art = build_replay_summary([], [], mode="test")
+        for key in [
+            "low_lag_debug_rows",
+            "low_lag_coverage_truth",
+        ]:
+            assert key in art, f"Missing 5.15 key: {key}"
+
+    def test_old_514_fields_still_present(self):
+        art = build_replay_summary([], [], mode="test")
+        for key in [
+            "low_lag_reject_histogram",
+            "low_lag_pair_resolution_rate",
+            "low_lag_counter_coverage_rate",
+            "low_lag_scored_results_rate",
+            "low_lag_pre_econ_reject_rate",
+        ]:
+            assert key in art, f"Missing backward-compat 5.14 key: {key}"

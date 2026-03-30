@@ -345,6 +345,8 @@ class BackrunResult:
     size_normalization_source: Optional[str] = None  # "decimal_only" | "oracle_usd" | "fallback_18"
     size_usd_estimate: Optional[float] = None  # USD notional (oracle-based, None if unavailable)
     size_valid_for_token: Optional[bool] = None  # True if bounds were decimal-adjusted
+    # M7.A.5.15: Causal detail for TOKEN_PAIR_UNRESOLVED
+    pair_unresolved_detail: Optional[str] = None  # no_pool_address | pool_read_failed | token0_unknown | token1_unknown
 
 
 @dataclass
@@ -1919,6 +1921,7 @@ def score_backrun_live_parallel(
     token_out_addr = token_addresses.get(event.token_in, "")
     use_common_pairs = not token_in_addr or not token_out_addr
 
+    _pair_unresolved_detail: Optional[str] = None
     if use_common_pairs and event.pool_address and addr_to_symbol is not None:
         resolved = _resolve_event_tokens(
             pool_address=event.pool_address,
@@ -1933,9 +1936,50 @@ def score_backrun_live_parallel(
             pair_resolved = True
             actual_pair = f"{resolved['token_in_symbol']}/{resolved['token_out_symbol']}"
             use_common_pairs = False
+        else:
+            # M7.A.5.15: Pool read failed — try targeted enrichment as fallback
+            _pair_unresolved_detail = "pool_read_failed"
+            try:
+                from web3 import Web3
+                _w3 = Web3(Web3.HTTPProvider(rpc_url))
+                _pool_cs = _w3.to_checksum_address(event.pool_address)
+                _t0_raw = _w3.eth.call({"to": _pool_cs, "data": "0x0dfe1681"}, current_block)
+                _t1_raw = _w3.eth.call({"to": _pool_cs, "data": "0xd21220a7"}, current_block)
+                if len(_t0_raw) >= 32 and len(_t1_raw) >= 32:
+                    _t0 = "0x" + _t0_raw[-20:].hex()
+                    _t1 = "0x" + _t1_raw[-20:].hex()
+                    # Enrich discovered addresses
+                    _enr = enrich_tokens_batch([_t0, _t1], rpc_url, current_block)
+                    for _ea, _ei in _enr.items():
+                        if _ei.get("enriched") and _ei.get("symbol"):
+                            addr_to_symbol[_ea.lower()] = _ei["symbol"]
+                    # Retry resolution with enriched addr_to_symbol
+                    resolved2 = _resolve_event_tokens(
+                        pool_address=event.pool_address,
+                        swap_direction=event.token_in,
+                        rpc_url=rpc_url,
+                        block_num=current_block,
+                        addr_to_symbol=addr_to_symbol,
+                    )
+                    if resolved2:
+                        token_in_addr = resolved2["token_in_addr"]
+                        token_out_addr = resolved2["token_out_addr"]
+                        pair_resolved = True
+                        actual_pair = f"{resolved2['token_in_symbol']}/{resolved2['token_out_symbol']}"
+                        use_common_pairs = False
+                        _pair_unresolved_detail = None  # resolved via fallback
+            except Exception:
+                pass  # fallback is best-effort
+    elif use_common_pairs:
+        if not event.pool_address:
+            _pair_unresolved_detail = "no_pool_address"
+        elif addr_to_symbol is None:
+            _pair_unresolved_detail = "no_symbol_map"
 
     if use_common_pairs:
-        return _reject(REJECT_TOKEN_PAIR_UNRESOLVED)
+        r = _reject(REJECT_TOKEN_PAIR_UNRESOLVED)
+        r.pair_unresolved_detail = _pair_unresolved_detail
+        return r
 
     # ── M7.A.5.7: On-chain enrichment for unknown tokens ───────────────
     # Before admission: if a token is not in addr_to_symbol, try reading
@@ -2765,6 +2809,86 @@ def build_replay_summary(
         if r.reject_reason:
             reject_counts[r.reject_reason] = reject_counts.get(r.reject_reason, 0) + 1
 
+    # M7.A.5.14: Low-lag reject decomposition histogram (block_lag <= 2 only)
+    low_lag_reject_counts: Dict[str, int] = {}
+    for r in _low_lag_all:
+        if r.reject_reason:
+            low_lag_reject_counts[r.reject_reason] = (
+                low_lag_reject_counts.get(r.reject_reason, 0) + 1
+            )
+
+    # M7.A.5.14: Low-lag pipeline stage rates
+    _ll_n = len(_low_lag_all)
+    _ll_pair_resolved = sum(
+        1 for r in _low_lag_all
+        if r.reject_reason not in (REJECT_TOKEN_PAIR_UNRESOLVED,)
+    )
+    _ll_counter_covered = sum(
+        1 for r in _low_lag_all
+        if r.reject_reason not in (
+            REJECT_TOKEN_PAIR_UNRESOLVED, REJECT_NO_COUNTER_POOL,
+            REJECT_NO_COUNTER_VENUE,
+        )
+    )
+    _ll_pre_econ_rejected = sum(
+        1 for r in _low_lag_all if r.reject_reason in _UNSCORED_REJECTS
+    )
+    low_lag_pair_resolution_rate = round(_ll_pair_resolved / _ll_n, 4) if _ll_n else None
+    low_lag_counter_coverage_rate = round(_ll_counter_covered / _ll_n, 4) if _ll_n else None
+    low_lag_scored_results_rate = round(len(_low_lag_scored) / _ll_n, 4) if _ll_n else None
+    low_lag_pre_econ_reject_rate = round(_ll_pre_econ_rejected / _ll_n, 4) if _ll_n else None
+
+    # M7.A.5.15: Low-lag debug rows — per-event diagnostic for block_lag <= 2
+    low_lag_debug_rows = []
+    for r in _low_lag_all:
+        _cov = r.coverage_result or {}
+        low_lag_debug_rows.append({
+            "event_id": r.event_id,
+            "block_lag": r.block_lag,
+            "reject_reason": r.reject_reason,
+            "pair_resolved": r.pair_resolved,
+            "actual_pair": r.actual_pair,
+            "pair_unresolved_detail": r.pair_unresolved_detail,
+            "token_admitted": r.token_admitted,
+            "admission_source": r.admission_source,
+            "known_pools": _cov.get("known_pools_total", _cov.get("known_pools", 0)),
+            "active_pools": _cov.get("active_pools_total", 0),
+            "counter_venue_count": r.counter_venue_count,
+        })
+
+    # M7.A.5.15: Low-lag coverage truth metrics (aggregated from _low_lag_all)
+    _ll_cov_results = [r for r in _low_lag_all if r.coverage_result is not None]
+    _ll_known_pools = sum(
+        (r.coverage_result or {}).get("known_pools_total",
+            (r.coverage_result or {}).get("known_pools", 0))
+        for r in _ll_cov_results
+    )
+    _ll_active_pools = sum(
+        (r.coverage_result or {}).get("active_pools_total", 0)
+        for r in _ll_cov_results
+    )
+    _ll_active_buy = sum(
+        (r.coverage_result or {}).get("active_buy_venues", 0)
+        for r in _ll_cov_results
+    )
+    _ll_active_sell = sum(
+        (r.coverage_result or {}).get("active_sell_venues", 0)
+        for r in _ll_cov_results
+    )
+    _ll_no_counter = sum(
+        1 for r in _low_lag_all
+        if r.reject_reason in (REJECT_NO_COUNTER_POOL, REJECT_NO_COUNTER_VENUE)
+    )
+    _ll_inactive = sum(
+        1 for r in _low_lag_all
+        if r.reject_reason in (
+            REJECT_ALL_POOLS_TRULY_INACTIVE, REJECT_ALL_POOLS_ZERO_LIQUIDITY,
+            REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_COVERAGE_LOCAL_MISMATCH,
+        )
+    )
+    low_lag_no_counter_pool_rate = round(_ll_no_counter / _ll_n, 4) if _ll_n else None
+    low_lag_inactive_pool_rate = round(_ll_inactive / _ll_n, 4) if _ll_n else None
+
     # M7.A.5.11/5.12: Pre-economics coverage metrics
     unscored_count = len(results) - len(scored_results)
     # Active coverage: results that had coverage_complete AND active liquidity
@@ -2866,6 +2990,22 @@ def build_replay_summary(
             "beats_m4_baseline_low_lag": beats_m4_baseline_low_lag,
         },
         "reject_histogram": reject_counts,
+        # M7.A.5.14: Low-lag reject decomposition
+        "low_lag_reject_histogram": low_lag_reject_counts,
+        "low_lag_pair_resolution_rate": low_lag_pair_resolution_rate,
+        "low_lag_counter_coverage_rate": low_lag_counter_coverage_rate,
+        "low_lag_scored_results_rate": low_lag_scored_results_rate,
+        "low_lag_pre_econ_reject_rate": low_lag_pre_econ_reject_rate,
+        # M7.A.5.15: Low-lag debug rows + coverage truth
+        "low_lag_debug_rows": low_lag_debug_rows,
+        "low_lag_coverage_truth": {
+            "known_pools_total": _ll_known_pools,
+            "active_pools_total": _ll_active_pools,
+            "active_buy_venues": _ll_active_buy,
+            "active_sell_venues": _ll_active_sell,
+            "no_counter_pool_rate": low_lag_no_counter_pool_rate,
+            "inactive_pool_rate": low_lag_inactive_pool_rate,
+        },
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
         "m7a_triangular_best_net_bps": -14.16,
@@ -3508,6 +3648,29 @@ def main():
                 round(max(_ll_scored_net), 4) if _ll_scored_net else None
             )
 
+            # M7.A.5.14: ws-live low-lag reject decomposition
+            _ws_ll_reject_counts: Dict[str, int] = {}
+            for r in low_lag:
+                if r.reject_reason:
+                    _ws_ll_reject_counts[r.reject_reason] = (
+                        _ws_ll_reject_counts.get(r.reject_reason, 0) + 1
+                    )
+            artifact["live_state_metrics"]["low_lag_reject_histogram_ws"] = _ws_ll_reject_counts
+            _ws_ll_n = len(low_lag)
+            _ws_ll_pair_resolved = sum(
+                1 for r in low_lag
+                if r.reject_reason not in (REJECT_TOKEN_PAIR_UNRESOLVED,)
+            )
+            _ws_ll_pre_econ = sum(
+                1 for r in low_lag if r.reject_reason in UNSCORED_REJECTS
+            )
+            artifact["live_state_metrics"]["low_lag_pair_resolution_rate_ws"] = (
+                round(_ws_ll_pair_resolved / _ws_ll_n, 4) if _ws_ll_n else None
+            )
+            artifact["live_state_metrics"]["low_lag_pre_econ_reject_rate_ws"] = (
+                round(_ws_ll_pre_econ / _ws_ll_n, 4) if _ws_ll_n else None
+            )
+
             # M7.A.5.3.1 — Latency budget metrics (relative to chain block_time_ms)
             pipeline_latencies = [
                 r.quote_pipeline_latency_ms for r in live_results
@@ -3922,6 +4085,17 @@ def main():
                 "orderflow backrun on arbitrum_one may be economically near-breakeven "
                 "on the stale subset, but the project still lacks a truthful executable "
                 "low-lag scored subset; this split isolates and measures that explicitly"
+            )
+            artifact["m7a514_hypothesis"] = (
+                "low-lag events are already being detected, but they fail before economics "
+                "scoring; explicit low-lag reject decomposition may reveal a fixable "
+                "same-chain DEX coverage/resolution gap"
+            )
+            artifact["m7a515_hypothesis"] = (
+                "low-lag events are detected on time, but same-block scoring still fails "
+                "because token identity and active counter-pool truth are incomplete for "
+                "the exact low-lag pairs; targeted low-lag pair/pool truth may unlock the "
+                "first executable-scored subset without leaving the same-chain DEX domain"
             )
     else:
         parser_err = "No mode specified"

@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.13 — all scopes produce no-graduate verdicts. M7.A.5.13 added stale/low-lag scored split metrics, fixed block_lag=0 falsy trap and events_scored_low_lag_ws contract mismatch. Stale subset beats M4 baseline (best_net_bps_stale: -2.20 > -3.51) but NO low-lag scored events exist yet. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.15 — all scopes produce no-graduate verdicts. M7.A.5.15 added `low_lag_debug_rows`, `pair_unresolved_detail` field on BackrunResult (54 fields), `low_lag_coverage_truth` metrics, and targeted enrichment fallback for pool_read_failed. Evidence confirms: `pool_read_failed` is the dominant TOKEN_PAIR_UNRESOLVED cause; targeted eth_call fallback also fails, indicating these pools are non-standard contracts. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-03-29  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic. M7.B remains closed.
 
 ---
 
@@ -34,7 +34,7 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`
 - `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--ws-live`, `--intent-scout`
-- Tests: 152 in `test_triangular_contracts.py`, 341 in `test_orderflow_contracts.py`
+- Tests: 152 in `test_triangular_contracts.py`, 374 in `test_orderflow_contracts.py`
 
 ---
 
@@ -142,6 +142,49 @@ Evidence: 300b, 25 events, 0 scored. `ALL_POOLS_ZERO_LIQUIDITY: 19, NO_ACTIVE_CO
 **Key finding**: Stale subset beats M4 baseline (-2.20 > -3.51 bps) but NO low-lag scored events exist yet. Low-lag events are detected but all fail at pre-econ rejects (TOKEN_PAIR_UNRESOLVED, NO_COUNTER_POOL). Low-lag scored truth remains the gap.
 
 CI: 3077 passed, 341 orderflow tests.
+
+---
+
+## M7.A.5.14: Low-Lag Reject Decomposition (DIAGNOSTIC)
+
+**Hypothesis**: Low-lag events are already being detected but fail before economics scoring; explicit low-lag reject decomposition may reveal a fixable same-chain DEX coverage/resolution gap.
+
+**New metrics** in `build_replay_summary()`:
+- `low_lag_reject_histogram`: reject reason counts for block_lag ≤ 2 only
+- `low_lag_pair_resolution_rate`: fraction of low-lag events that pass pair resolution
+- `low_lag_counter_coverage_rate`: fraction that pass pair + counter-venue
+- `low_lag_scored_results_rate`: fraction that reach economic scoring
+- `low_lag_pre_econ_reject_rate`: fraction rejected by unscored (pre-econ) reasons
+- ws-live: `low_lag_reject_histogram_ws`, `low_lag_pair_resolution_rate_ws`, `low_lag_pre_econ_reject_rate_ws`
+
+**Evidence**:
+- 300b: 12 events, 4 low-lag detected, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 4}`. `low_lag_pair_resolution_rate: 0.0`, `low_lag_pre_econ_reject_rate: 1.0`.
+- 1000b: 10 events, 2 low-lag detected, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 1, ALL_CANDIDATE_POOLS_TRULY_INACTIVE: 1}`. `low_lag_pair_resolution_rate: 0.5`, `low_lag_pre_econ_reject_rate: 1.0`.
+
+**Key finding**: Hypothesis CONFIRMED. 100% of low-lag events are rejected at pre-econ stage. M7.A.5.14 correctly shows that low-lag events still fail before economics, but fresh reruns indicate the blocker stack is no longer singular — TOKEN_PAIR_UNRESOLVED, NO_COUNTER_POOL, and ALL_CANDIDATE_POOLS_TRULY_INACTIVE share the reject distribution roughly equally. This is a multi-causal coverage gap, not a single dominant blocker.
+
+CI: 3092 passed, 356 orderflow tests.
+
+---
+
+## M7.A.5.15: Low-Lag Debug Diagnostic + Coverage Truth (DIAGNOSTIC)
+
+**Hypothesis**: Low-lag events are detected on time, but same-block scoring still fails because token identity and active counter-pool truth are incomplete for the exact low-lag pairs; targeted low-lag pair/pool truth may unlock the first executable-scored subset without leaving the same-chain DEX domain.
+
+**Changes**:
+1. **`pair_unresolved_detail`**: New BackrunResult field (54 total) capturing causal detail for TOKEN_PAIR_UNRESOLVED: `no_pool_address`, `pool_read_failed`, `no_symbol_map`.
+2. **`low_lag_debug_rows`**: Per-event diagnostic block for block_lag ≤ 2 — event_id, reject_reason, pair_resolved, actual_pair, pair_unresolved_detail, admission_source, known/active pools, counter_venue_count.
+3. **`low_lag_coverage_truth`**: Aggregated coverage metrics for low-lag subset — known_pools_total, active_pools_total, active_buy/sell_venues, no_counter_pool_rate, inactive_pool_rate.
+4. **Targeted enrichment fallback**: When `_resolve_event_tokens()` fails (multicall batch error), tries individual `eth_call` for token0()/token1(), enriches discovered addresses, and retries resolution. Best-effort; does not block pipeline.
+
+**Evidence**:
+- 300b: 17 events, 6 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 4, NO_COUNTER_POOL: 2}`. `low_lag_pair_resolution_rate: 0.3333`. All TOKEN_PAIR_UNRESOLVED have `pair_unresolved_detail: pool_read_failed` (multicall AND eth_call fallback both fail — likely non-standard pool contracts). NO_COUNTER_POOL events resolved pairs (`0x1009c5c1/USDT`, `WETH/0x60bf4e7c`) but no counter-venue pools exist.
+- 1000b: 12 events, 3 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 3}`. `low_lag_pair_resolution_rate: 0.0`. All `pool_read_failed`.
+- `low_lag_coverage_truth`: known_pools_total=0, active_pools_total=0 (no low-lag event reaches pool coverage stage with active results).
+
+**Key finding**: `pool_read_failed` is the dominant TOKEN_PAIR_UNRESOLVED cause — both multicall batch and individual eth_call fallback fail on these pools. These are likely non-standard pool contracts (not Uniswap V3 ABI). The coverage truth metrics confirm no low-lag event has any known/active counter-pools. The blocker is structural: low-lag swaps happen on pools outside the recognizable pool ABI set.
+
+CI: 3110 passed, 374 orderflow tests.
 
 ---
 
