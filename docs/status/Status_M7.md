@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.15 — all scopes produce no-graduate verdicts. M7.A.5.15 added `low_lag_debug_rows`, `pair_unresolved_detail` field on BackrunResult (54 fields), `low_lag_coverage_truth` metrics, and targeted enrichment fallback for pool_read_failed. Evidence confirms: `pool_read_failed` is the dominant TOKEN_PAIR_UNRESOLVED cause; targeted eth_call fallback also fails, indicating these pools are non-standard contracts. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.16 — all scopes produce no-graduate verdicts. M7.A.5.16 added `pool_contract_truth` field on BackrunResult (55 fields), finer pool failure causes (POOL_CODE_EMPTY / POOL_TOKEN0_REVERT / POOL_TOKEN1_REVERT / POOL_SLOT0_REVERT / POOL_LIQUIDITY_REVERT), `low_lag_pool_class_truth` aggregated block, `dex_family_guess` histogram. Evidence confirms: 100% of unsupported pools are `uniswap_v2_like` (token0/token1 readable, slot0 reverts) — these are V2-family pools on a V3-only scoring pipeline. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-03-29  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth. M7.B remains closed.
 
 ---
 
@@ -34,7 +34,7 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`
 - `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--ws-live`, `--intent-scout`
-- Tests: 152 in `test_triangular_contracts.py`, 374 in `test_orderflow_contracts.py`
+- Tests: 152 in `test_triangular_contracts.py`, 396 in `test_orderflow_contracts.py`
 
 ---
 
@@ -182,9 +182,32 @@ CI: 3092 passed, 356 orderflow tests.
 - 1000b: 12 events, 3 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 3}`. `low_lag_pair_resolution_rate: 0.0`. All `pool_read_failed`.
 - `low_lag_coverage_truth`: known_pools_total=0, active_pools_total=0 (no low-lag event reaches pool coverage stage with active results).
 
-**Key finding**: `pool_read_failed` is the dominant TOKEN_PAIR_UNRESOLVED cause — both multicall batch and individual eth_call fallback fail on these pools. These are likely non-standard pool contracts (not Uniswap V3 ABI). The coverage truth metrics confirm no low-lag event has any known/active counter-pools. The blocker is structural: low-lag swaps happen on pools outside the recognizable pool ABI set.
+**Key finding**: M7.A.5.15 confirms that low-lag events are still blocked before economics, but fresh reruns show the blocker stack is broader than `pool_read_failed` alone. On the low-lag subset, unsupported-pool reads, no-counter-pool cases, and known-but-inactive pools now coexist, so the next justified branch is explicit low-lag pool-class truth rather than a longer scan or strategy expansion.
 
 CI: 3110 passed, 374 orderflow tests.
+
+---
+
+## M7.A.5.16: Low-Lag Pool-Class Truth (DIAGNOSTIC)
+
+**Hypothesis**: Low-lag events are timely detected, but same-chain scoring still fails because low-lag pools split into three structural classes: unsupported pool ABI (token0/token1/slot0 reverts), no counter-pool, and known-but-inactive pool. Explicit pool-class truth reveals which class dominates and whether any class is fixable within the same-chain DEX domain.
+
+**Changes**:
+1. **`pool_contract_truth`**: New BackrunResult field (55 total). Per-event dict with `pool_address`, `code_present`, `token0_ok`, `token1_ok`, `slot0_ok`, `liquidity_ok`, `dex_family_guess`. Populated for TOKEN_PAIR_UNRESOLVED events with pool_address.
+2. **Finer `pair_unresolved_detail`**: Split `pool_read_failed` into 5 fine-grained causes: `POOL_CODE_EMPTY`, `POOL_TOKEN0_REVERT`, `POOL_TOKEN1_REVERT`, `POOL_SLOT0_REVERT`, `POOL_LIQUIDITY_REVERT`. Each probed via individual eth_call selectors.
+3. **`dex_family_guess`**: Algorithm: if token0+token1+slot0 work → `uniswap_v3_like`; if token0+token1 work but not slot0 → `uniswap_v2_like`; if only partial → `partial_erc20_pool`; else `unknown`; if no code → `no_code`.
+4. **`low_lag_pool_class_truth`**: Aggregated block: `unsupported_pool_rate`, `no_counter_pool_rate`, `inactive_known_pool_rate`, `known_but_untradeable_rate`, `dex_family_histogram`, `pool_truth_count`.
+5. **`low_lag_debug_rows`**: Now includes `pool_contract_truth` per event (12 keys, was 11).
+
+**Evidence**:
+- 300b: 11 events, 3 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 3}`. All 3 are `POOL_SLOT0_REVERT` + `dex_family_guess: "uniswap_v2_like"`. `unsupported_pool_rate: 1.0`, `pool_truth_count: 3`.
+- 1000b: 18 events, 6 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 4, NO_COUNTER_POOL: 2}`. All 4 TOKEN_PAIR_UNRESOLVED are `POOL_SLOT0_REVERT` + `uniswap_v2_like`. 2 NO_COUNTER_POOL resolved pairs (0x1c43d05b/WETH, ZTX/WETH) but no counter-venue exists. `unsupported_pool_rate: 0.6667`, `no_counter_pool_rate: 0.3333`, `known_but_untradeable_rate: 0.3333`.
+
+**Key finding**: Hypothesis CONFIRMED. 100% of unsupported pools are V2-family (Uniswap V2 / SushiSwap / Camelot), not V3. The scoring pipeline uses V3-only ABI (`slot0()` + multicall) which structurally cannot read V2 pools. This is the ROOT CAUSE of TOKEN_PAIR_UNRESOLVED for low-lag events. The remaining ~33% are NO_COUNTER_POOL (pair resolved but no counter-venue). Zero POOL_CODE_EMPTY, zero ALL_CANDIDATE_POOLS_TRULY_INACTIVE in low-lag subset.
+
+**Implication**: To unlock low-lag scoring, the pipeline needs a V2 pool adapter path (using `getReserves()` instead of `slot0()`/`liquidity()`). This is a bounded same-domain fix, not a new strategy or architecture change.
+
+CI: 3132 passed, 396 orderflow tests.
 
 ---
 

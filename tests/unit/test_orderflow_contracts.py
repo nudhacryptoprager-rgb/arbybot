@@ -19,6 +19,7 @@ Tests lock:
 - M7.A.5.10: Stale-gate viability, zero-liquidity reject, admission provenance fix, split summary
 - M7.A.5.11: Active-liquidity-aware coverage, granular coverage rejects, pre-econ metrics, live_state_metrics fix
 - M7.A.5.15: Low-lag debug rows, pair_unresolved_detail, coverage truth metrics, backward compat (54 fields)
+- M7.A.5.16: Pool-class truth, finer pool failure causes, aggregated class metrics, backward compat (55 fields)
 """
 
 from __future__ import annotations
@@ -1824,7 +1825,7 @@ class TestM7A56BackrunResultFields:
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 54, f"Expected 54 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 55, f"Expected 55 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_new_fields_present(self):
         ev = _make_event()
@@ -2103,7 +2104,7 @@ class TestM7A56BackwardCompat:
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 54
+        assert len(d) == 55
         # Core offline fields still work
         assert r.event_source == "fixture"
         assert r.reject_reason is not None or r.route_viable
@@ -2139,7 +2140,7 @@ class TestM7A56BackwardCompat:
         s = json.dumps(d)
         parsed = json.loads(s)
         assert parsed["event_id"] == r.event_id
-        assert len(parsed) == 54
+        assert len(parsed) == 55
         assert "event_id" in d
         assert "venues_pruned_by_multicall" in d
         assert "latency_budget_ms" in d
@@ -2180,7 +2181,7 @@ class TestM7A56BackwardCompat:
         )
         d = asdict(r)
         # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 + 4 M7.A.5.9 + 1 M7.A.5.15 = 54
-        assert len(d) == 54, f"Expected 54 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 55, f"Expected 55 fields, got {len(d)}: {sorted(d.keys())}"
 
 
 class TestBatchGetPool:
@@ -2431,7 +2432,7 @@ class TestM7A55BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 54, f"Expected 54 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 55, f"Expected 55 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_m7a57_fields_exist_in_backrun_result(self):
         """M7.A.5.7 fields (admission_source, oracle_guard, local_sim_state) exist and default to None."""
@@ -2717,7 +2718,7 @@ class TestM7A57BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 54
+        assert len(parsed) == 55
         # Old fields still present
         assert "event_id" in parsed
         assert "reject_reason" in parsed
@@ -2880,7 +2881,7 @@ class TestM7A58BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 54
+        assert len(parsed) == 55
         # M7.A.5.8 fields present
         assert parsed["l2_gas_bps"] == 2.0
         assert parsed["l1_data_bps"] == 8.0
@@ -3096,7 +3097,7 @@ class TestM7A59BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 54
+        assert len(parsed) == 55
         # M7.A.5.9 fields present
         assert parsed["token_in_decimals"] == 18
         assert parsed["size_normalization_source"] == "decimal_only"
@@ -3436,7 +3437,7 @@ class TestM7A510BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 54
+        assert len(d) == 55
 
     def test_all_reject_reasons_count(self):
         """ALL_REJECT_REASONS must have 19 entries (15 old + 2 M7.A.5.11 + 2 M7.A.5.12)."""
@@ -3736,7 +3737,7 @@ class TestM7A511BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 54
+        assert len(d) == 55
 
     def test_all_reject_reasons_count_19(self):
         assert len(ALL_REJECT_REASONS) == 19
@@ -3993,7 +3994,7 @@ class TestM7A512BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 54
+        assert len(d) == 55
 
     def test_all_reject_reasons_count_19(self):
         assert len(ALL_REJECT_REASONS) == 19
@@ -4273,7 +4274,7 @@ class TestM7A513BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 54
+        assert len(d) == 55
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.13 adds no new reject reasons."""
@@ -4475,7 +4476,7 @@ class TestM7A514BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 54
+        assert len(d) == 55
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.14 adds no new reject reasons."""
@@ -4646,7 +4647,7 @@ class TestM7A515LowLagDebugRows:
             "event_id", "block_lag", "reject_reason", "pair_resolved",
             "actual_pair", "pair_unresolved_detail", "token_admitted",
             "admission_source", "known_pools", "active_pools",
-            "counter_venue_count",
+            "counter_venue_count", "pool_contract_truth",
         }
         assert set(row.keys()) == expected_keys
 
@@ -4796,7 +4797,7 @@ class TestM7A515BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 54
+        assert len(d) == 55
 
     def test_all_reject_reasons_count_still_19(self):
         assert len(ALL_REJECT_REASONS) == 19
@@ -4819,3 +4820,445 @@ class TestM7A515BackwardCompat:
             "low_lag_pre_econ_reject_rate",
         ]:
             assert key in art, f"Missing backward-compat 5.14 key: {key}"
+
+
+# ────────────────────────────────────────────────────────────
+# M7.A.5.16: Pool-class truth, finer failure causes, aggregated class metrics
+# ────────────────────────────────────────────────────────────
+
+
+class TestM7A516PoolContractTruthField:
+    """M7.A.5.16: BackrunResult gains pool_contract_truth field (55 fields)."""
+
+    def test_pool_contract_truth_default_none(self):
+        r = BackrunResult(
+            event_id="pct_default",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.pool_contract_truth is None
+
+    def test_pool_contract_truth_stored(self):
+        truth = {
+            "pool_address": "0xabc",
+            "code_present": True,
+            "token0_ok": True,
+            "token1_ok": True,
+            "slot0_ok": False,
+            "liquidity_ok": False,
+            "dex_family_guess": "uniswap_v2_like",
+        }
+        r = BackrunResult(
+            event_id="pct_stored",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            pair_unresolved_detail="POOL_SLOT0_REVERT",
+            pool_contract_truth=truth,
+        )
+        assert r.pool_contract_truth == truth
+        d = asdict(r)
+        assert "pool_contract_truth" in d
+        assert d["pool_contract_truth"]["dex_family_guess"] == "uniswap_v2_like"
+
+    def test_pool_contract_truth_schema_keys(self):
+        """Pool contract truth dict must have exactly 7 keys."""
+        truth = {
+            "pool_address": "0x123",
+            "code_present": True,
+            "token0_ok": False,
+            "token1_ok": False,
+            "slot0_ok": False,
+            "liquidity_ok": False,
+            "dex_family_guess": "unknown",
+        }
+        expected_keys = {
+            "pool_address", "code_present", "token0_ok", "token1_ok",
+            "slot0_ok", "liquidity_ok", "dex_family_guess",
+        }
+        assert set(truth.keys()) == expected_keys
+
+
+class TestM7A516FinerUnresolvedDetails:
+    """M7.A.5.16: pair_unresolved_detail now accepts finer values."""
+
+    def test_finer_detail_values_valid(self):
+        finer_values = [
+            "POOL_CODE_EMPTY",
+            "POOL_TOKEN0_REVERT",
+            "POOL_TOKEN1_REVERT",
+            "POOL_SLOT0_REVERT",
+            "POOL_LIQUIDITY_REVERT",
+        ]
+        for v in finer_values:
+            r = BackrunResult(
+                event_id=f"fine_{v}",
+                event_source="live",
+                event_type=EVENT_TYPE_SWAP,
+                post_trade_state_used="live",
+                backrun_direction=BACKRUN_BUY_DEPRESSED,
+                reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+                pair_unresolved_detail=v,
+            )
+            assert r.pair_unresolved_detail == v
+
+    def test_legacy_detail_values_still_valid(self):
+        legacy_values = [
+            "no_pool_address", "pool_read_failed", "no_symbol_map",
+            "token0_unknown", "token1_unknown",
+        ]
+        for v in legacy_values:
+            r = BackrunResult(
+                event_id=f"legacy_{v}",
+                event_source="live",
+                event_type=EVENT_TYPE_SWAP,
+                post_trade_state_used="live",
+                backrun_direction=BACKRUN_BUY_DEPRESSED,
+                pair_unresolved_detail=v,
+            )
+            assert r.pair_unresolved_detail == v
+
+
+class TestM7A516DebugRowPoolTruth:
+    """M7.A.5.16: low_lag_debug_rows includes pool_contract_truth per event."""
+
+    def test_debug_row_has_pool_contract_truth_key(self):
+        r = BackrunResult(
+            event_id="row_pct",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0,
+            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            pair_resolved=False,
+            pair_unresolved_detail="POOL_TOKEN0_REVERT",
+            pool_contract_truth={
+                "pool_address": "0xabc",
+                "code_present": True,
+                "token0_ok": False,
+                "token1_ok": False,
+                "slot0_ok": False,
+                "liquidity_ok": False,
+                "dex_family_guess": "unknown",
+            },
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        rows = art["low_lag_debug_rows"]
+        assert len(rows) == 1
+        assert "pool_contract_truth" in rows[0]
+        assert rows[0]["pool_contract_truth"]["code_present"] is True
+        assert rows[0]["pool_contract_truth"]["token0_ok"] is False
+
+    def test_debug_row_pool_truth_none_when_resolved(self):
+        """Events that resolve pairs have pool_contract_truth=None."""
+        r = BackrunResult(
+            event_id="row_resolved",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=1,
+            reject_reason=REJECT_NO_COUNTER_POOL,
+            pair_resolved=True,
+            actual_pair="WETH/USDC",
+            pool_contract_truth=None,
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        assert art["low_lag_debug_rows"][0]["pool_contract_truth"] is None
+
+    def test_debug_row_keys_updated_with_pool_truth(self):
+        """Low-lag debug rows now have 12 keys (was 11)."""
+        r = BackrunResult(
+            event_id="key_check_516",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0,
+            reject_reason=REJECT_ALL_POOLS_TRULY_INACTIVE,
+            pair_resolved=True,
+            actual_pair="X/Y",
+            token_admitted=True,
+            admission_source=ADMISSION_CANONICAL,
+            counter_venue_count=3,
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        row = art["low_lag_debug_rows"][0]
+        expected_keys = {
+            "event_id", "block_lag", "reject_reason", "pair_resolved",
+            "actual_pair", "pair_unresolved_detail", "token_admitted",
+            "admission_source", "known_pools", "active_pools",
+            "counter_venue_count", "pool_contract_truth",
+        }
+        assert set(row.keys()) == expected_keys
+
+
+class TestM7A516ThreeLowLagClasses:
+    """M7.A.5.16: Three structural low-lag blocker classes in pool_class_truth."""
+
+    def _make_class_results(self):
+        """Build results covering all three low-lag blocker classes + one scored."""
+        results = []
+        # Class 1: Unsupported pool ABI (TOKEN_PAIR_UNRESOLVED + POOL_TOKEN0_REVERT)
+        results.append(BackrunResult(
+            event_id="c1_unsupported", event_source="live",
+            event_type=EVENT_TYPE_SWAP, post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0, reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            pair_resolved=False,
+            pair_unresolved_detail="POOL_TOKEN0_REVERT",
+            pool_contract_truth={
+                "pool_address": "0xaaa", "code_present": True,
+                "token0_ok": False, "token1_ok": False,
+                "slot0_ok": False, "liquidity_ok": False,
+                "dex_family_guess": "unknown",
+            },
+        ))
+        # Class 2: No counter pool
+        results.append(BackrunResult(
+            event_id="c2_no_counter", event_source="live",
+            event_type=EVENT_TYPE_SWAP, post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=1, reject_reason=REJECT_NO_COUNTER_POOL,
+            pair_resolved=True, actual_pair="0xabc/WETH",
+            counter_venue_count=0,
+        ))
+        # Class 3: Known but inactive pool
+        results.append(BackrunResult(
+            event_id="c3_inactive", event_source="live",
+            event_type=EVENT_TYPE_SWAP, post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0, reject_reason=REJECT_ALL_POOLS_TRULY_INACTIVE,
+            pair_resolved=True, actual_pair="LINK/UNI",
+            counter_venue_count=2,
+            coverage_result={"known_pools_total": 2, "active_pools_total": 0,
+                             "active_buy_venues": 0, "active_sell_venues": 0},
+        ))
+        # Class 4: Active, scored (reaches economics)
+        results.append(BackrunResult(
+            event_id="c4_scored", event_source="live",
+            event_type=EVENT_TYPE_SWAP, post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0, pair_resolved=True, actual_pair="WETH/USDC",
+            best_backrun_net_bps=-1.5, route_viable=False,
+            coverage_result={"known_pools_total": 4, "active_pools_total": 2,
+                             "active_buy_venues": 1, "active_sell_venues": 1},
+        ))
+        return results
+
+    def test_pool_class_truth_present(self):
+        events = [_make_event(event_id=f"ev_{i}") for i in range(4)]
+        results = self._make_class_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert "low_lag_pool_class_truth" in art
+
+    def test_unsupported_pool_rate(self):
+        """1 out of 4 low-lag events has unsupported pool ABI."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(4)]
+        results = self._make_class_results()
+        art = build_replay_summary(events, results, mode="test")
+        pct = art["low_lag_pool_class_truth"]
+        assert pct["unsupported_pool_rate"] == 0.25
+
+    def test_no_counter_pool_rate(self):
+        """1 out of 4 low-lag events has no counter pool."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(4)]
+        results = self._make_class_results()
+        art = build_replay_summary(events, results, mode="test")
+        pct = art["low_lag_pool_class_truth"]
+        assert pct["no_counter_pool_rate"] == 0.25
+
+    def test_inactive_known_pool_rate(self):
+        """1 out of 4 low-lag events has inactive known pool."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(4)]
+        results = self._make_class_results()
+        art = build_replay_summary(events, results, mode="test")
+        pct = art["low_lag_pool_class_truth"]
+        assert pct["inactive_known_pool_rate"] == 0.25
+
+    def test_known_but_untradeable_rate(self):
+        """2 out of 4 low-lag events resolved pair but still rejected pre-econ."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(4)]
+        results = self._make_class_results()
+        art = build_replay_summary(events, results, mode="test")
+        pct = art["low_lag_pool_class_truth"]
+        # NO_COUNTER_POOL + ALL_CANDIDATE_POOLS_TRULY_INACTIVE both resolved pair + in UNSCORED_REJECTS
+        assert pct["known_but_untradeable_rate"] == 0.5
+
+    def test_dex_family_histogram(self):
+        """Only 1 event has pool_contract_truth, with dex_family_guess=unknown."""
+        events = [_make_event(event_id=f"ev_{i}") for i in range(4)]
+        results = self._make_class_results()
+        art = build_replay_summary(events, results, mode="test")
+        pct = art["low_lag_pool_class_truth"]
+        assert pct["dex_family_histogram"] == {"unknown": 1}
+        assert pct["pool_truth_count"] == 1
+
+    def test_pool_class_truth_all_none_when_no_low_lag(self):
+        """When no low-lag results exist, all class rates are None."""
+        results = [BackrunResult(
+            event_id="stale_only", event_source="live", event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live", backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=10, reject_reason=REJECT_STALE_POSITIVE,
+        )]
+        art = build_replay_summary([_make_event()], results, mode="test")
+        pct = art["low_lag_pool_class_truth"]
+        assert pct["unsupported_pool_rate"] is None
+        assert pct["no_counter_pool_rate"] is None
+        assert pct["inactive_known_pool_rate"] is None
+        assert pct["known_but_untradeable_rate"] is None
+        assert pct["dex_family_histogram"] == {}
+        assert pct["pool_truth_count"] == 0
+
+
+class TestM7A516PoolCodeEmpty:
+    """M7.A.5.16: POOL_CODE_EMPTY path — pool has no bytecode."""
+
+    def test_pool_code_empty_detail(self):
+        r = BackrunResult(
+            event_id="code_empty",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0,
+            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            pair_resolved=False,
+            pair_unresolved_detail="POOL_CODE_EMPTY",
+            pool_contract_truth={
+                "pool_address": "0xdead",
+                "code_present": False,
+                "token0_ok": False,
+                "token1_ok": False,
+                "slot0_ok": False,
+                "liquidity_ok": False,
+                "dex_family_guess": "no_code",
+            },
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        pct = art["low_lag_pool_class_truth"]
+        assert pct["unsupported_pool_rate"] == 1.0
+        assert pct["dex_family_histogram"] == {"no_code": 1}
+        row = art["low_lag_debug_rows"][0]
+        assert row["pair_unresolved_detail"] == "POOL_CODE_EMPTY"
+        assert row["pool_contract_truth"]["code_present"] is False
+
+
+class TestM7A516DexFamilyGuessValues:
+    """M7.A.5.16: dex_family_guess covers all expected categories."""
+
+    def test_all_family_guesses(self):
+        families = [
+            "uniswap_v3_like", "uniswap_v2_like",
+            "partial_erc20_pool", "unknown", "no_code",
+        ]
+        for fam in families:
+            truth = {
+                "pool_address": "0x123", "code_present": fam != "no_code",
+                "token0_ok": fam in ("uniswap_v3_like", "uniswap_v2_like", "partial_erc20_pool"),
+                "token1_ok": fam in ("uniswap_v3_like", "uniswap_v2_like"),
+                "slot0_ok": fam == "uniswap_v3_like",
+                "liquidity_ok": fam == "uniswap_v3_like",
+                "dex_family_guess": fam,
+            }
+            r = BackrunResult(
+                event_id=f"fam_{fam}",
+                event_source="live",
+                event_type=EVENT_TYPE_SWAP,
+                post_trade_state_used="live",
+                backrun_direction=BACKRUN_BUY_DEPRESSED,
+                block_lag=0,
+                reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+                pool_contract_truth=truth,
+            )
+            art = build_replay_summary([], [r], mode="ws_live")
+            assert art["low_lag_pool_class_truth"]["dex_family_histogram"] == {fam: 1}
+
+
+class TestM7A516BackwardCompat:
+    """M7.A.5.16 must update BackrunResult to 55 fields, keep reject count at 19."""
+
+    def test_backrun_result_field_count_now_55(self):
+        r = BackrunResult(
+            event_id="compat_516",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert len(d) == 55
+
+    def test_all_reject_reasons_count_still_19(self):
+        """M7.A.5.16 adds no new reject reasons."""
+        assert len(ALL_REJECT_REASONS) == 19
+
+    def test_new_516_fields_present(self):
+        art = build_replay_summary([], [], mode="test")
+        assert "low_lag_pool_class_truth" in art
+        pct = art["low_lag_pool_class_truth"]
+        for key in [
+            "unsupported_pool_rate",
+            "no_counter_pool_rate",
+            "inactive_known_pool_rate",
+            "known_but_untradeable_rate",
+            "dex_family_histogram",
+            "pool_truth_count",
+        ]:
+            assert key in pct, f"Missing 5.16 key: {key}"
+
+    def test_old_515_fields_still_present(self):
+        art = build_replay_summary([], [], mode="test")
+        for key in [
+            "low_lag_debug_rows",
+            "low_lag_coverage_truth",
+            "low_lag_reject_histogram",
+            "low_lag_pair_resolution_rate",
+            "low_lag_counter_coverage_rate",
+            "low_lag_scored_results_rate",
+            "low_lag_pre_econ_reject_rate",
+        ]:
+            assert key in art, f"Missing backward-compat key: {key}"
+
+    def test_old_backrun_result_fields_unchanged(self):
+        """All 54 pre-5.16 fields must still be present."""
+        r = BackrunResult(
+            event_id="bc_fields",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        pre_516_fields = [
+            "event_id", "event_source", "event_type", "post_trade_state_used",
+            "backrun_direction", "best_buy_venue", "best_sell_venue",
+            "candidate_path", "amount_in_wei", "gross_pnl_wei",
+            "gas_cost_wei", "fee_cost_wei", "net_pnl_wei",
+            "best_backrun_net_bps", "same_block_possible", "route_viable",
+            "reject_reason", "event_block", "quote_block", "block_lag",
+            "same_state_class", "counter_venue_count", "best_live_net_bps",
+            "ws_provider", "event_detected_at_block", "quote_started_block",
+            "quote_finished_block", "quote_pipeline_latency_ms",
+            "venues_pruned_by_multicall", "latency_budget_ms",
+            "quote_calls_attempted", "quote_calls_after_pruning",
+            "prune_reason_histogram", "pipeline_stage_latency_ms",
+            "pair_resolved", "actual_pair", "size_source",
+            "coverage_result", "size_sweep_results",
+            "best_sweep_net_bps", "best_sweep_size_wei",
+            "token_admitted", "admission_source", "oracle_guard",
+            "local_sim_state", "l2_gas_bps", "l1_data_bps",
+            "total_gas_bps", "subgraph_seed_used",
+            "token_in_decimals", "size_normalization_source",
+            "size_usd_estimate", "size_valid_for_token",
+            "pair_unresolved_detail",
+        ]
+        for f in pre_516_fields:
+            assert f in d, f"Missing pre-5.16 field: {f}"
+        # New field
+        assert "pool_contract_truth" in d

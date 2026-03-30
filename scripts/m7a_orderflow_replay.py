@@ -346,7 +346,9 @@ class BackrunResult:
     size_usd_estimate: Optional[float] = None  # USD notional (oracle-based, None if unavailable)
     size_valid_for_token: Optional[bool] = None  # True if bounds were decimal-adjusted
     # M7.A.5.15: Causal detail for TOKEN_PAIR_UNRESOLVED
-    pair_unresolved_detail: Optional[str] = None  # no_pool_address | pool_read_failed | token0_unknown | token1_unknown
+    pair_unresolved_detail: Optional[str] = None  # no_pool_address | pool_read_failed | POOL_CODE_EMPTY | POOL_TOKEN0_REVERT | POOL_TOKEN1_REVERT | POOL_SLOT0_REVERT | POOL_LIQUIDITY_REVERT | token0_unknown | token1_unknown
+    # M7.A.5.16: Per-event pool contract truth (populated for low-lag TOKEN_PAIR_UNRESOLVED when pool_address exists)
+    pool_contract_truth: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -1922,6 +1924,7 @@ def score_backrun_live_parallel(
     use_common_pairs = not token_in_addr or not token_out_addr
 
     _pair_unresolved_detail: Optional[str] = None
+    _pool_truth: Optional[Dict[str, Any]] = None
     if use_common_pairs and event.pool_address and addr_to_symbol is not None:
         resolved = _resolve_event_tokens(
             pool_address=event.pool_address,
@@ -1937,37 +1940,106 @@ def score_backrun_live_parallel(
             actual_pair = f"{resolved['token_in_symbol']}/{resolved['token_out_symbol']}"
             use_common_pairs = False
         else:
-            # M7.A.5.15: Pool read failed — try targeted enrichment as fallback
+            # M7.A.5.16: Probe individual pool selectors for fine-grained failure truth
             _pair_unresolved_detail = "pool_read_failed"
             try:
                 from web3 import Web3
                 _w3 = Web3(Web3.HTTPProvider(rpc_url))
                 _pool_cs = _w3.to_checksum_address(event.pool_address)
-                _t0_raw = _w3.eth.call({"to": _pool_cs, "data": "0x0dfe1681"}, current_block)
-                _t1_raw = _w3.eth.call({"to": _pool_cs, "data": "0xd21220a7"}, current_block)
-                if len(_t0_raw) >= 32 and len(_t1_raw) >= 32:
-                    _t0 = "0x" + _t0_raw[-20:].hex()
-                    _t1 = "0x" + _t1_raw[-20:].hex()
-                    # Enrich discovered addresses
-                    _enr = enrich_tokens_batch([_t0, _t1], rpc_url, current_block)
-                    for _ea, _ei in _enr.items():
-                        if _ei.get("enriched") and _ei.get("symbol"):
-                            addr_to_symbol[_ea.lower()] = _ei["symbol"]
-                    # Retry resolution with enriched addr_to_symbol
-                    resolved2 = _resolve_event_tokens(
-                        pool_address=event.pool_address,
-                        swap_direction=event.token_in,
-                        rpc_url=rpc_url,
-                        block_num=current_block,
-                        addr_to_symbol=addr_to_symbol,
-                    )
-                    if resolved2:
-                        token_in_addr = resolved2["token_in_addr"]
-                        token_out_addr = resolved2["token_out_addr"]
-                        pair_resolved = True
-                        actual_pair = f"{resolved2['token_in_symbol']}/{resolved2['token_out_symbol']}"
-                        use_common_pairs = False
-                        _pair_unresolved_detail = None  # resolved via fallback
+                # Check if pool has code
+                _code = _w3.eth.get_code(_pool_cs, current_block)
+                _code_present = len(_code) > 0
+                if not _code_present:
+                    _pair_unresolved_detail = "POOL_CODE_EMPTY"
+                    _pool_truth = {
+                        "pool_address": event.pool_address,
+                        "code_present": False,
+                        "token0_ok": False,
+                        "token1_ok": False,
+                        "slot0_ok": False,
+                        "liquidity_ok": False,
+                        "dex_family_guess": "no_code",
+                    }
+                else:
+                    # Probe individual selectors
+                    _t0_ok, _t1_ok, _s0_ok, _liq_ok = False, False, False, False
+                    _t0_raw, _t1_raw = b"", b""
+                    try:
+                        _t0_raw = _w3.eth.call({"to": _pool_cs, "data": "0x0dfe1681"}, current_block)
+                        _t0_ok = len(_t0_raw) >= 32
+                    except Exception:
+                        pass
+                    try:
+                        _t1_raw = _w3.eth.call({"to": _pool_cs, "data": "0xd21220a7"}, current_block)
+                        _t1_ok = len(_t1_raw) >= 32
+                    except Exception:
+                        pass
+                    try:
+                        _s0_raw = _w3.eth.call({"to": _pool_cs, "data": "0x3850c7bd"}, current_block)
+                        _s0_ok = len(_s0_raw) >= 32
+                    except Exception:
+                        pass
+                    try:
+                        _liq_raw = _w3.eth.call({"to": _pool_cs, "data": "0x1a686502"}, current_block)
+                        _liq_ok = len(_liq_raw) >= 32
+                    except Exception:
+                        pass
+
+                    # Determine dex_family_guess
+                    if _t0_ok and _t1_ok and _s0_ok:
+                        _dex_guess = "uniswap_v3_like"
+                    elif _t0_ok and _t1_ok and not _s0_ok:
+                        _dex_guess = "uniswap_v2_like"
+                    elif _t0_ok or _t1_ok:
+                        _dex_guess = "partial_erc20_pool"
+                    else:
+                        _dex_guess = "unknown"
+
+                    _pool_truth = {
+                        "pool_address": event.pool_address,
+                        "code_present": True,
+                        "token0_ok": _t0_ok,
+                        "token1_ok": _t1_ok,
+                        "slot0_ok": _s0_ok,
+                        "liquidity_ok": _liq_ok,
+                        "dex_family_guess": _dex_guess,
+                    }
+
+                    # Determine fine-grained failure cause
+                    if not _t0_ok:
+                        _pair_unresolved_detail = "POOL_TOKEN0_REVERT"
+                    elif not _t1_ok:
+                        _pair_unresolved_detail = "POOL_TOKEN1_REVERT"
+                    elif not _s0_ok:
+                        _pair_unresolved_detail = "POOL_SLOT0_REVERT"
+                    elif not _liq_ok:
+                        _pair_unresolved_detail = "POOL_LIQUIDITY_REVERT"
+                    # else: all selectors worked but multicall batch still failed —
+                    # keep "pool_read_failed" (batch assembly issue)
+
+                    # If token0 + token1 readable, try enrichment + retry
+                    if _t0_ok and _t1_ok:
+                        _t0 = "0x" + _t0_raw[-20:].hex()
+                        _t1 = "0x" + _t1_raw[-20:].hex()
+                        _enr = enrich_tokens_batch([_t0, _t1], rpc_url, current_block)
+                        for _ea, _ei in _enr.items():
+                            if _ei.get("enriched") and _ei.get("symbol"):
+                                addr_to_symbol[_ea.lower()] = _ei["symbol"]
+                        resolved2 = _resolve_event_tokens(
+                            pool_address=event.pool_address,
+                            swap_direction=event.token_in,
+                            rpc_url=rpc_url,
+                            block_num=current_block,
+                            addr_to_symbol=addr_to_symbol,
+                        )
+                        if resolved2:
+                            token_in_addr = resolved2["token_in_addr"]
+                            token_out_addr = resolved2["token_out_addr"]
+                            pair_resolved = True
+                            actual_pair = f"{resolved2['token_in_symbol']}/{resolved2['token_out_symbol']}"
+                            use_common_pairs = False
+                            _pair_unresolved_detail = None
+                            _pool_truth = None  # resolved; truth no longer needed
             except Exception:
                 pass  # fallback is best-effort
     elif use_common_pairs:
@@ -1979,6 +2051,7 @@ def score_backrun_live_parallel(
     if use_common_pairs:
         r = _reject(REJECT_TOKEN_PAIR_UNRESOLVED)
         r.pair_unresolved_detail = _pair_unresolved_detail
+        r.pool_contract_truth = _pool_truth
         return r
 
     # ── M7.A.5.7: On-chain enrichment for unknown tokens ───────────────
@@ -2854,6 +2927,8 @@ def build_replay_summary(
             "known_pools": _cov.get("known_pools_total", _cov.get("known_pools", 0)),
             "active_pools": _cov.get("active_pools_total", 0),
             "counter_venue_count": r.counter_venue_count,
+            # M7.A.5.16: pool contract truth (None unless TOKEN_PAIR_UNRESOLVED with pool_address)
+            "pool_contract_truth": r.pool_contract_truth,
         })
 
     # M7.A.5.15: Low-lag coverage truth metrics (aggregated from _low_lag_all)
@@ -2888,6 +2963,32 @@ def build_replay_summary(
     )
     low_lag_no_counter_pool_rate = round(_ll_no_counter / _ll_n, 4) if _ll_n else None
     low_lag_inactive_pool_rate = round(_ll_inactive / _ll_n, 4) if _ll_n else None
+
+    # M7.A.5.16: Low-lag pool-class truth aggregated metrics
+    _ll_unsupported_pool = sum(
+        1 for r in _low_lag_all
+        if r.pair_unresolved_detail in (
+            "POOL_CODE_EMPTY", "POOL_TOKEN0_REVERT", "POOL_TOKEN1_REVERT",
+            "POOL_SLOT0_REVERT", "POOL_LIQUIDITY_REVERT", "pool_read_failed",
+        )
+    )
+    _ll_known_untradeable = sum(
+        1 for r in _low_lag_all
+        if r.pair_resolved and r.reject_reason in _UNSCORED_REJECTS
+    )
+    low_lag_unsupported_pool_rate = round(_ll_unsupported_pool / _ll_n, 4) if _ll_n else None
+    low_lag_no_counter_pool_rate_v2 = low_lag_no_counter_pool_rate  # alias for clarity
+    low_lag_inactive_known_pool_rate = round(_ll_inactive / _ll_n, 4) if _ll_n else None
+    low_lag_known_but_untradeable_rate = round(_ll_known_untradeable / _ll_n, 4) if _ll_n else None
+    # M7.A.5.16: Pool contract truth summary (aggregate dex_family_guess histogram)
+    _ll_pool_truth_list = [
+        r.pool_contract_truth for r in _low_lag_all
+        if r.pool_contract_truth is not None
+    ]
+    _ll_dex_family_hist: Dict[str, int] = {}
+    for _pt in _ll_pool_truth_list:
+        _fg = _pt.get("dex_family_guess", "unknown")
+        _ll_dex_family_hist[_fg] = _ll_dex_family_hist.get(_fg, 0) + 1
 
     # M7.A.5.11/5.12: Pre-economics coverage metrics
     unscored_count = len(results) - len(scored_results)
@@ -3005,6 +3106,15 @@ def build_replay_summary(
             "active_sell_venues": _ll_active_sell,
             "no_counter_pool_rate": low_lag_no_counter_pool_rate,
             "inactive_pool_rate": low_lag_inactive_pool_rate,
+        },
+        # M7.A.5.16: Low-lag pool-class truth + aggregated class metrics
+        "low_lag_pool_class_truth": {
+            "unsupported_pool_rate": low_lag_unsupported_pool_rate,
+            "no_counter_pool_rate": low_lag_no_counter_pool_rate_v2,
+            "inactive_known_pool_rate": low_lag_inactive_known_pool_rate,
+            "known_but_untradeable_rate": low_lag_known_but_untradeable_rate,
+            "dex_family_histogram": _ll_dex_family_hist,
+            "pool_truth_count": len(_ll_pool_truth_list),
         },
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
@@ -4096,6 +4206,13 @@ def main():
                 "because token identity and active counter-pool truth are incomplete for "
                 "the exact low-lag pairs; targeted low-lag pair/pool truth may unlock the "
                 "first executable-scored subset without leaving the same-chain DEX domain"
+            )
+            artifact["m7a516_hypothesis"] = (
+                "low-lag events are timely detected, but same-chain scoring still fails "
+                "because low-lag pools split into three structural classes: unsupported "
+                "pool ABI (token0/token1/slot0 reverts), no counter-pool, and known-but-"
+                "inactive pool; explicit pool-class truth reveals which class dominates "
+                "and whether any class is fixable within the same-chain DEX domain"
             )
     else:
         parser_err = "No mode specified"
