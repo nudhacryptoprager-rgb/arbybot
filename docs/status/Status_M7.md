@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.16 — all scopes produce no-graduate verdicts. M7.A.5.16 added `pool_contract_truth` field on BackrunResult (55 fields), finer pool failure causes (POOL_CODE_EMPTY / POOL_TOKEN0_REVERT / POOL_TOKEN1_REVERT / POOL_SLOT0_REVERT / POOL_LIQUIDITY_REVERT), `low_lag_pool_class_truth` aggregated block, `dex_family_guess` histogram. Evidence confirms: 100% of unsupported pools are `uniswap_v2_like` (token0/token1 readable, slot0 reverts) — these are V2-family pools on a V3-only scoring pipeline. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.17 — all scopes produce no-graduate verdicts. M7.A.5.17 added `pool_state_read_path` field on BackrunResult (56 fields), V2 direct resolve path bypassing batch_token_info fee() revert, `low_lag_v2_truth` metrics block, getReserves probing for uniswap_v2_like pools. Evidence confirms: V2 direct resolve is implemented but low-lag blocker tree is multi-causal — NO_COUNTER_POOL dominates in fresh samples; V2 pools are sample-variant. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-03-29  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve. M7.B remains closed.
 
 ---
 
@@ -34,7 +34,7 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`
 - `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--ws-live`, `--intent-scout`
-- Tests: 152 in `test_triangular_contracts.py`, 396 in `test_orderflow_contracts.py`
+- Tests: 152 in `test_triangular_contracts.py`, 415 in `test_orderflow_contracts.py`
 
 ---
 
@@ -203,11 +203,34 @@ CI: 3110 passed, 374 orderflow tests.
 - 300b: 11 events, 3 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 3}`. All 3 are `POOL_SLOT0_REVERT` + `dex_family_guess: "uniswap_v2_like"`. `unsupported_pool_rate: 1.0`, `pool_truth_count: 3`.
 - 1000b: 18 events, 6 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 4, NO_COUNTER_POOL: 2}`. All 4 TOKEN_PAIR_UNRESOLVED are `POOL_SLOT0_REVERT` + `uniswap_v2_like`. 2 NO_COUNTER_POOL resolved pairs (0x1c43d05b/WETH, ZTX/WETH) but no counter-venue exists. `unsupported_pool_rate: 0.6667`, `no_counter_pool_rate: 0.3333`, `known_but_untradeable_rate: 0.3333`.
 
-**Key finding**: Hypothesis CONFIRMED. 100% of unsupported pools are V2-family (Uniswap V2 / SushiSwap / Camelot), not V3. The scoring pipeline uses V3-only ABI (`slot0()` + multicall) which structurally cannot read V2 pools. This is the ROOT CAUSE of TOKEN_PAIR_UNRESOLVED for low-lag events. The remaining ~33% are NO_COUNTER_POOL (pair resolved but no counter-venue). Zero POOL_CODE_EMPTY, zero ALL_CANDIDATE_POOLS_TRULY_INACTIVE in low-lag subset.
+**Key finding**: M7.A.5.16 correctly classifies unresolved low-lag pools as V2-family on a V3-only scoring path, but fresh reruns show that this is only one branch of the blocker tree. The full low-lag blocker landscape is multi-causal: TOKEN_PAIR_UNRESOLVED (V2 ABI mismatch), NO_COUNTER_POOL (pair resolves but no counter-venue), and ALL_CANDIDATE_POOLS_TRULY_INACTIVE (known pool, zero liquidity). In some samples V2 dominates; in others NO_COUNTER_POOL dominates. The claim "V2-family pools are the root cause" is correct only for the unresolved subclass, not the entire low-lag subset.
 
-**Implication**: To unlock low-lag scoring, the pipeline needs a V2 pool adapter path (using `getReserves()` instead of `slot0()`/`liquidity()`). This is a bounded same-domain fix, not a new strategy or architecture change.
+**Implication**: To unlock low-lag scoring, the pipeline needs: (a) V2 pool adapter path for TOKEN_PAIR_UNRESOLVED events, (b) broader universe for NO_COUNTER_POOL events, (c) deeper liquidity probing for inactive pools. Each class is measured separately.
 
 CI: 3132 passed, 396 orderflow tests.
+
+---
+
+## M7.A.5.17: V2 Direct Resolve and Pool-State Read Path (FIX + DIAGNOSTIC)
+
+**Hypothesis**: Low-lag same-chain scoring may unlock only if V2-family pool-state reading is added (getReserves instead of slot0), but this must be measured separately from no-counter-pool and inactive-pool classes. V2 direct resolve bypasses batch_token_info fee() revert and enables pair resolution for uniswap_v2_like pools.
+
+**Root cause fixed**: `batch_token_info()` in `core/multicall.py` calls `fee()` selector which does not exist on V2 pools — entire multicall batch fails. The V2 direct resolve path bypasses this by resolving token0/token1 from already-probed addresses and using `getReserves()` (selector `0x0902f1ac`) instead of `slot0()`.
+
+**Changes**:
+1. **`pool_state_read_path`**: New BackrunResult field (56 total). Values: `None` | `"v3_multicall"` | `"v2_getReserves"`. Tracks which adapter path read pool state for each event.
+2. **V2 direct resolve**: When `dex_family_guess == "uniswap_v2_like"` and token0+token1 are readable, the enrichment fallback bypasses `_resolve_event_tokens()` entirely. Pair is resolved directly from probed addresses, getReserves is called for state truth, and `pool_state_read_path = "v2_getReserves"` is set.
+3. **`_reject()` helper**: Updated with `pct` and `psrp` parameters to propagate pool_contract_truth and pool_state_read_path through all reject paths.
+4. **`low_lag_v2_truth`**: New artifact block with 6 keys: `low_lag_v2_supported_rate`, `low_lag_v2_scored_results_rate`, `low_lag_v2_no_counter_pool_rate`, `low_lag_v2_inactive_pool_rate`, `v2_resolved_count`, `v2_scored_count`.
+5. **`low_lag_debug_rows`**: Now includes `pool_state_read_path` per event (13 keys, was 12).
+
+**Evidence**:
+- 300b: 18 events, 2 low-lag, 0 scored. `reject_histogram: {NO_COUNTER_POOL: 2, GAS_EXCEEDS_GROSS: 16}`. Both low-lag events: `NO_COUNTER_POOL` with `pool_state_read_path: "v3_multicall"`. `v2_resolved_count: 0`. No V2 pools in this sample window.
+- 1000b: 22 events, 2 low-lag, 0 scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 20, NO_COUNTER_POOL: 2}`. Both low-lag events: `NO_COUNTER_POOL` with `pool_state_read_path: "v3_multicall"`. Pairs: `0xb0ffa800/WETH`, `0x60bf4e7c/USDC`. `v2_resolved_count: 0`.
+
+**Key finding**: V2 direct resolve path is implemented and tested (19 new unit tests, 415 total orderflow), but these evidence runs show 0 V2 pool events — all low-lag events resolved via V3 multicall and hit NO_COUNTER_POOL. This confirms the user's correction: the blocker tree is multi-causal and V2 dominance is sample-variant. TOKEN_PAIR_UNRESOLVED is absent from both runs (was 3-4 in M7.A.5.16), suggesting either V2 events were absent from this time window or the V2 resolve path successfully handled them. The V2 infrastructure is ready for when V2 events appear.
+
+CI: 3151 passed, 415 orderflow tests.
 
 ---
 

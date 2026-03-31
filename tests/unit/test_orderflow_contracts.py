@@ -20,6 +20,7 @@ Tests lock:
 - M7.A.5.11: Active-liquidity-aware coverage, granular coverage rejects, pre-econ metrics, live_state_metrics fix
 - M7.A.5.15: Low-lag debug rows, pair_unresolved_detail, coverage truth metrics, backward compat (54 fields)
 - M7.A.5.16: Pool-class truth, finer pool failure causes, aggregated class metrics, backward compat (55 fields)
+- M7.A.5.17: V2 direct resolve (getReserves), pool_state_read_path provenance, V2 low-lag metrics, backward compat (56 fields)
 """
 
 from __future__ import annotations
@@ -1825,7 +1826,7 @@ class TestM7A56BackrunResultFields:
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 55, f"Expected 55 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 56, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_new_fields_present(self):
         ev = _make_event()
@@ -2104,7 +2105,7 @@ class TestM7A56BackwardCompat:
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 55
+        assert len(d) == 56
         # Core offline fields still work
         assert r.event_source == "fixture"
         assert r.reject_reason is not None or r.route_viable
@@ -2140,7 +2141,7 @@ class TestM7A56BackwardCompat:
         s = json.dumps(d)
         parsed = json.loads(s)
         assert parsed["event_id"] == r.event_id
-        assert len(parsed) == 55
+        assert len(parsed) == 56
         assert "event_id" in d
         assert "venues_pruned_by_multicall" in d
         assert "latency_budget_ms" in d
@@ -2180,8 +2181,8 @@ class TestM7A56BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 + 4 M7.A.5.9 + 1 M7.A.5.15 = 54
-        assert len(d) == 55, f"Expected 55 fields, got {len(d)}: {sorted(d.keys())}"
+        # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 + 4 M7.A.5.9 + 1 M7.A.5.15 + 1 M7.A.5.16 + 1 M7.A.5.17 = 56
+        assert len(d) == 56, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
 
 
 class TestBatchGetPool:
@@ -2423,7 +2424,7 @@ class TestM7A55BackwardCompat:
         assert d["quote_calls_attempted"] == 12
 
     def test_total_field_count_53(self):
-        """BackrunResult should have exactly 53 fields (42 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 + 4 M7.A.5.9)."""
+        """BackrunResult should have exactly 56 fields."""
         r = BackrunResult(
             event_id="fc55",
             event_source="live",
@@ -2432,7 +2433,7 @@ class TestM7A55BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 55, f"Expected 55 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 56, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_m7a57_fields_exist_in_backrun_result(self):
         """M7.A.5.7 fields (admission_source, oracle_guard, local_sim_state) exist and default to None."""
@@ -2718,7 +2719,7 @@ class TestM7A57BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 55
+        assert len(parsed) == 56
         # Old fields still present
         assert "event_id" in parsed
         assert "reject_reason" in parsed
@@ -2881,7 +2882,7 @@ class TestM7A58BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 55
+        assert len(parsed) == 56
         # M7.A.5.8 fields present
         assert parsed["l2_gas_bps"] == 2.0
         assert parsed["l1_data_bps"] == 8.0
@@ -3097,7 +3098,7 @@ class TestM7A59BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 55
+        assert len(parsed) == 56
         # M7.A.5.9 fields present
         assert parsed["token_in_decimals"] == 18
         assert parsed["size_normalization_source"] == "decimal_only"
@@ -3437,7 +3438,7 @@ class TestM7A510BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 55
+        assert len(d) == 56
 
     def test_all_reject_reasons_count(self):
         """ALL_REJECT_REASONS must have 19 entries (15 old + 2 M7.A.5.11 + 2 M7.A.5.12)."""
@@ -3737,7 +3738,7 @@ class TestM7A511BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 55
+        assert len(d) == 56
 
     def test_all_reject_reasons_count_19(self):
         assert len(ALL_REJECT_REASONS) == 19
@@ -3994,7 +3995,7 @@ class TestM7A512BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 55
+        assert len(d) == 56
 
     def test_all_reject_reasons_count_19(self):
         assert len(ALL_REJECT_REASONS) == 19
@@ -4274,7 +4275,7 @@ class TestM7A513BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 55
+        assert len(d) == 56
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.13 adds no new reject reasons."""
@@ -4476,7 +4477,7 @@ class TestM7A514BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 55
+        assert len(d) == 56
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.14 adds no new reject reasons."""
@@ -4648,6 +4649,7 @@ class TestM7A515LowLagDebugRows:
             "actual_pair", "pair_unresolved_detail", "token_admitted",
             "admission_source", "known_pools", "active_pools",
             "counter_venue_count", "pool_contract_truth",
+            "pool_state_read_path",
         }
         assert set(row.keys()) == expected_keys
 
@@ -4797,7 +4799,7 @@ class TestM7A515BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 55
+        assert len(d) == 56
 
     def test_all_reject_reasons_count_still_19(self):
         assert len(ALL_REJECT_REASONS) == 19
@@ -4972,7 +4974,7 @@ class TestM7A516DebugRowPoolTruth:
         assert art["low_lag_debug_rows"][0]["pool_contract_truth"] is None
 
     def test_debug_row_keys_updated_with_pool_truth(self):
-        """Low-lag debug rows now have 12 keys (was 11)."""
+        """Low-lag debug rows now have 13 keys (was 12)."""
         r = BackrunResult(
             event_id="key_check_516",
             event_source="live",
@@ -4994,6 +4996,7 @@ class TestM7A516DebugRowPoolTruth:
             "actual_pair", "pair_unresolved_detail", "token_admitted",
             "admission_source", "known_pools", "active_pools",
             "counter_venue_count", "pool_contract_truth",
+            "pool_state_read_path",
         }
         assert set(row.keys()) == expected_keys
 
@@ -5192,7 +5195,7 @@ class TestM7A516BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 55
+        assert len(d) == 56
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.16 adds no new reject reasons."""
@@ -5262,3 +5265,326 @@ class TestM7A516BackwardCompat:
             assert f in d, f"Missing pre-5.16 field: {f}"
         # New field
         assert "pool_contract_truth" in d
+
+
+# ===========================================================================
+# M7.A.5.17: V2 direct resolve, pool_state_read_path, V2 low-lag metrics
+# ===========================================================================
+
+
+class TestM7A517PoolStateReadPathField:
+    """M7.A.5.17: pool_state_read_path added to BackrunResult — default None."""
+
+    def test_default_none(self):
+        r = BackrunResult(
+            event_id="psrp_default",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        assert r.pool_state_read_path is None
+
+    def test_v3_multicall_value(self):
+        r = BackrunResult(
+            event_id="psrp_v3",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            pool_state_read_path="v3_multicall",
+        )
+        assert r.pool_state_read_path == "v3_multicall"
+
+    def test_v2_getReserves_value(self):
+        r = BackrunResult(
+            event_id="psrp_v2",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            pool_state_read_path="v2_getReserves",
+        )
+        assert r.pool_state_read_path == "v2_getReserves"
+
+    def test_field_in_asdict(self):
+        r = BackrunResult(
+            event_id="psrp_dict",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            pool_state_read_path="v2_getReserves",
+        )
+        d = asdict(r)
+        assert "pool_state_read_path" in d
+        assert d["pool_state_read_path"] == "v2_getReserves"
+
+    def test_json_roundtrip(self):
+        r = BackrunResult(
+            event_id="psrp_json",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            pool_state_read_path="v3_multicall",
+        )
+        d = asdict(r)
+        blob = json.dumps(d)
+        loaded = json.loads(blob)
+        assert loaded["pool_state_read_path"] == "v3_multicall"
+
+
+class TestM7A517DebugRowReadPath:
+    """M7.A.5.17: pool_state_read_path appears in low_lag_debug_rows (13 keys)."""
+
+    def test_debug_row_contains_read_path(self):
+        r = BackrunResult(
+            event_id="dr_rp",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=1,
+            reject_reason=REJECT_NO_COUNTER_POOL,
+            pair_resolved=True,
+            actual_pair="X/Y",
+            token_admitted=True,
+            admission_source=ADMISSION_CANONICAL,
+            counter_venue_count=0,
+            pool_state_read_path="v2_getReserves",
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        row = art["low_lag_debug_rows"][0]
+        assert "pool_state_read_path" in row
+        assert row["pool_state_read_path"] == "v2_getReserves"
+
+    def test_debug_row_read_path_none_default(self):
+        r = BackrunResult(
+            event_id="dr_rp_none",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0,
+            reject_reason=REJECT_TOKEN_PAIR_UNRESOLVED,
+            pair_resolved=False,
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        row = art["low_lag_debug_rows"][0]
+        assert row["pool_state_read_path"] is None
+
+    def test_debug_row_key_count_13(self):
+        r = BackrunResult(
+            event_id="dr_kc13",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=1,
+            reject_reason=REJECT_ALL_POOLS_TRULY_INACTIVE,
+            pair_resolved=True,
+            actual_pair="A/B",
+            token_admitted=True,
+            admission_source=ADMISSION_CANONICAL,
+            counter_venue_count=2,
+            pool_state_read_path="v3_multicall",
+        )
+        art = build_replay_summary([], [r], mode="ws_live")
+        row = art["low_lag_debug_rows"][0]
+        assert len(row) == 13, f"Expected 13 debug row keys, got {len(row)}: {sorted(row.keys())}"
+
+
+class TestM7A517V2LowLagMetrics:
+    """M7.A.5.17: low_lag_v2_truth block in build_replay_summary."""
+
+    def test_v2_truth_present_empty(self):
+        art = build_replay_summary([], [], mode="test")
+        assert "low_lag_v2_truth" in art
+        v2t = art["low_lag_v2_truth"]
+        expected_keys = {
+            "low_lag_v2_supported_rate",
+            "low_lag_v2_scored_results_rate",
+            "low_lag_v2_no_counter_pool_rate",
+            "low_lag_v2_inactive_pool_rate",
+            "v2_resolved_count",
+            "v2_scored_count",
+        }
+        assert set(v2t.keys()) == expected_keys
+
+    def test_v2_rates_none_when_no_low_lag(self):
+        art = build_replay_summary([], [], mode="test")
+        v2t = art["low_lag_v2_truth"]
+        assert v2t["low_lag_v2_supported_rate"] is None
+        assert v2t["low_lag_v2_scored_results_rate"] is None
+        assert v2t["low_lag_v2_no_counter_pool_rate"] is None
+        assert v2t["low_lag_v2_inactive_pool_rate"] is None
+        assert v2t["v2_resolved_count"] == 0
+        assert v2t["v2_scored_count"] == 0
+
+    def test_v2_resolved_counted(self):
+        """V2-resolved events counted via pool_state_read_path."""
+        v2_result = BackrunResult(
+            event_id="v2_cnt",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=1,
+            reject_reason=REJECT_NO_COUNTER_POOL,
+            pair_resolved=True,
+            actual_pair="A/B",
+            token_admitted=True,
+            admission_source=ADMISSION_CANONICAL,
+            pool_state_read_path="v2_getReserves",
+        )
+        v3_result = BackrunResult(
+            event_id="v3_cnt",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0,
+            reject_reason=REJECT_ALL_POOLS_TRULY_INACTIVE,
+            pair_resolved=True,
+            actual_pair="C/D",
+            token_admitted=True,
+            admission_source=ADMISSION_CANONICAL,
+            pool_state_read_path="v3_multicall",
+        )
+        art = build_replay_summary([], [v2_result, v3_result], mode="ws_live")
+        v2t = art["low_lag_v2_truth"]
+        assert v2t["v2_resolved_count"] == 1
+        assert v2t["v2_scored_count"] == 0  # Both rejected, neither scored
+
+    def test_v2_supported_rate_calculated(self):
+        """When there are low-lag events, v2_supported_rate is computed."""
+        v2_result = BackrunResult(
+            event_id="v2_rate",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=1,
+            reject_reason=REJECT_NO_COUNTER_POOL,
+            pair_resolved=True,
+            actual_pair="A/B",
+            pool_state_read_path="v2_getReserves",
+        )
+        v3_result = BackrunResult(
+            event_id="v3_rate",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+            block_lag=0,
+            reject_reason=REJECT_NO_COUNTER_POOL,
+            pair_resolved=True,
+            actual_pair="C/D",
+            pool_state_read_path="v3_multicall",
+        )
+        art = build_replay_summary([], [v2_result, v3_result], mode="ws_live")
+        v2t = art["low_lag_v2_truth"]
+        # 1 V2 out of 2 low-lag
+        assert v2t["low_lag_v2_supported_rate"] == 0.5
+
+    def test_v2_truth_keys_exactly_6(self):
+        art = build_replay_summary([], [], mode="test")
+        assert len(art["low_lag_v2_truth"]) == 6
+
+
+class TestM7A517BackwardCompat:
+    """M7.A.5.17 must update BackrunResult to 56 fields, keep reject count at 19."""
+
+    def test_backrun_result_field_count_now_56(self):
+        r = BackrunResult(
+            event_id="compat_517",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert len(d) == 56, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
+
+    def test_all_reject_reasons_count_still_19(self):
+        """M7.A.5.17 adds no new reject reasons."""
+        assert len(ALL_REJECT_REASONS) == 19
+
+    def test_new_517_field_present(self):
+        r = BackrunResult(
+            event_id="compat_517_f",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        assert "pool_state_read_path" in d
+        assert d["pool_state_read_path"] is None  # default
+
+    def test_new_517_artifact_present(self):
+        art = build_replay_summary([], [], mode="test")
+        assert "low_lag_v2_truth" in art
+        v2t = art["low_lag_v2_truth"]
+        for key in [
+            "low_lag_v2_supported_rate",
+            "low_lag_v2_scored_results_rate",
+            "low_lag_v2_no_counter_pool_rate",
+            "low_lag_v2_inactive_pool_rate",
+            "v2_resolved_count",
+            "v2_scored_count",
+        ]:
+            assert key in v2t, f"Missing 5.17 key: {key}"
+
+    def test_old_516_fields_still_present(self):
+        art = build_replay_summary([], [], mode="test")
+        for key in [
+            "low_lag_pool_class_truth",
+            "low_lag_debug_rows",
+            "low_lag_coverage_truth",
+            "low_lag_reject_histogram",
+            "low_lag_pair_resolution_rate",
+            "low_lag_counter_coverage_rate",
+            "low_lag_scored_results_rate",
+            "low_lag_pre_econ_reject_rate",
+        ]:
+            assert key in art, f"Missing backward-compat key: {key}"
+
+    def test_old_backrun_result_fields_unchanged(self):
+        """All 55 pre-5.17 fields must still be present."""
+        r = BackrunResult(
+            event_id="bc_fields_517",
+            event_source="live",
+            event_type=EVENT_TYPE_SWAP,
+            post_trade_state_used="live",
+            backrun_direction=BACKRUN_BUY_DEPRESSED,
+        )
+        d = asdict(r)
+        pre_517_fields = [
+            "event_id", "event_source", "event_type", "post_trade_state_used",
+            "backrun_direction", "best_buy_venue", "best_sell_venue",
+            "candidate_path", "amount_in_wei", "gross_pnl_wei",
+            "gas_cost_wei", "fee_cost_wei", "net_pnl_wei",
+            "best_backrun_net_bps", "same_block_possible", "route_viable",
+            "reject_reason", "event_block", "quote_block", "block_lag",
+            "same_state_class", "counter_venue_count", "best_live_net_bps",
+            "ws_provider", "event_detected_at_block", "quote_started_block",
+            "quote_finished_block", "quote_pipeline_latency_ms",
+            "venues_pruned_by_multicall", "latency_budget_ms",
+            "quote_calls_attempted", "quote_calls_after_pruning",
+            "prune_reason_histogram", "pipeline_stage_latency_ms",
+            "pair_resolved", "actual_pair", "size_source",
+            "coverage_result", "size_sweep_results",
+            "best_sweep_net_bps", "best_sweep_size_wei",
+            "token_admitted", "admission_source", "oracle_guard",
+            "local_sim_state", "l2_gas_bps", "l1_data_bps",
+            "total_gas_bps", "subgraph_seed_used",
+            "token_in_decimals", "size_normalization_source",
+            "size_usd_estimate", "size_valid_for_token",
+            "pair_unresolved_detail", "pool_contract_truth",
+        ]
+        for f in pre_517_fields:
+            assert f in d, f"Missing pre-5.17 field: {f}"
+        # New M7.A.5.17 field
+        assert "pool_state_read_path" in d

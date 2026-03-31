@@ -349,6 +349,8 @@ class BackrunResult:
     pair_unresolved_detail: Optional[str] = None  # no_pool_address | pool_read_failed | POOL_CODE_EMPTY | POOL_TOKEN0_REVERT | POOL_TOKEN1_REVERT | POOL_SLOT0_REVERT | POOL_LIQUIDITY_REVERT | token0_unknown | token1_unknown
     # M7.A.5.16: Per-event pool contract truth (populated for low-lag TOKEN_PAIR_UNRESOLVED when pool_address exists)
     pool_contract_truth: Optional[Dict[str, Any]] = None
+    # M7.A.5.17: Which adapter path read pool state (None | "v3_multicall" | "v2_getReserves")
+    pool_state_read_path: Optional[str] = None
 
 
 @dataclass
@@ -1875,7 +1877,7 @@ def score_backrun_live_parallel(
     # Common early-exit builder for rejected results
     def _reject(reason, pr=False, ap=None, ss=None, cov=None, adm=None,
                 adm_src=None, orc=None, lss=None, sg_seed=None,
-                extra_latency=None):
+                extra_latency=None, pct=None, psrp=None):
         # M7.A.5.11: Assign same_state_class for early rejects based on block_lag
         _lag = current_block - event.block_number
         if _lag == 0:
@@ -1912,6 +1914,8 @@ def score_backrun_live_parallel(
             oracle_guard=orc,
             local_sim_state=lss,
             subgraph_seed_used=sg_seed,
+            pool_contract_truth=pct,
+            pool_state_read_path=psrp,
         )
 
     # ── Stage A: Actual-pair token resolution ───────────────────────────
@@ -1925,6 +1929,7 @@ def score_backrun_live_parallel(
 
     _pair_unresolved_detail: Optional[str] = None
     _pool_truth: Optional[Dict[str, Any]] = None
+    _pool_read_path: Optional[str] = None
     if use_common_pairs and event.pool_address and addr_to_symbol is not None:
         resolved = _resolve_event_tokens(
             pool_address=event.pool_address,
@@ -1939,6 +1944,7 @@ def score_backrun_live_parallel(
             pair_resolved = True
             actual_pair = f"{resolved['token_in_symbol']}/{resolved['token_out_symbol']}"
             use_common_pairs = False
+            _pool_read_path = "v3_multicall"
         else:
             # M7.A.5.16: Probe individual pool selectors for fine-grained failure truth
             _pair_unresolved_detail = "pool_read_failed"
@@ -2017,7 +2023,7 @@ def score_backrun_live_parallel(
                     # else: all selectors worked but multicall batch still failed —
                     # keep "pool_read_failed" (batch assembly issue)
 
-                    # If token0 + token1 readable, try enrichment + retry
+                    # If token0 + token1 readable, try enrichment + resolve
                     if _t0_ok and _t1_ok:
                         _t0 = "0x" + _t0_raw[-20:].hex()
                         _t1 = "0x" + _t1_raw[-20:].hex()
@@ -2025,21 +2031,59 @@ def score_backrun_live_parallel(
                         for _ea, _ei in _enr.items():
                             if _ei.get("enriched") and _ei.get("symbol"):
                                 addr_to_symbol[_ea.lower()] = _ei["symbol"]
-                        resolved2 = _resolve_event_tokens(
-                            pool_address=event.pool_address,
-                            swap_direction=event.token_in,
-                            rpc_url=rpc_url,
-                            block_num=current_block,
-                            addr_to_symbol=addr_to_symbol,
-                        )
-                        if resolved2:
-                            token_in_addr = resolved2["token_in_addr"]
-                            token_out_addr = resolved2["token_out_addr"]
+
+                        # M7.A.5.17: V2 direct resolve — bypass batch_token_info (fee() reverts)
+                        if _dex_guess == "uniswap_v2_like":
+                            _t0_sym = addr_to_symbol.get(_t0.lower(), _t0[:10])
+                            _t1_sym = addr_to_symbol.get(_t1.lower(), _t1[:10])
+                            if event.token_in == "token0_in":
+                                token_in_addr = _t0
+                                token_out_addr = _t1
+                                _tin_sym, _tout_sym = _t0_sym, _t1_sym
+                            else:
+                                token_in_addr = _t1
+                                token_out_addr = _t0
+                                _tin_sym, _tout_sym = _t1_sym, _t0_sym
                             pair_resolved = True
-                            actual_pair = f"{resolved2['token_in_symbol']}/{resolved2['token_out_symbol']}"
+                            actual_pair = f"{_tin_sym}/{_tout_sym}"
                             use_common_pairs = False
                             _pair_unresolved_detail = None
-                            _pool_truth = None  # resolved; truth no longer needed
+                            _pool_read_path = "v2_getReserves"
+                            # Probe getReserves for pool state truth
+                            _reserves_ok = False
+                            _r0, _r1 = 0, 0
+                            try:
+                                _res_raw = _w3.eth.call(
+                                    {"to": _pool_cs, "data": "0x0902f1ac"}, current_block
+                                )
+                                if len(_res_raw) >= 64:
+                                    _r0 = int.from_bytes(_res_raw[0:32], "big")
+                                    _r1 = int.from_bytes(_res_raw[32:64], "big")
+                                    _reserves_ok = _r0 > 0 or _r1 > 0
+                            except Exception:
+                                pass
+                            _pool_truth["reserve0"] = _r0
+                            _pool_truth["reserve1"] = _r1
+                            _pool_truth["reserves_ok"] = _reserves_ok
+                            _pool_truth["v2_resolved"] = True
+                        else:
+                            # V3-like or partial: retry via multicall
+                            resolved2 = _resolve_event_tokens(
+                                pool_address=event.pool_address,
+                                swap_direction=event.token_in,
+                                rpc_url=rpc_url,
+                                block_num=current_block,
+                                addr_to_symbol=addr_to_symbol,
+                            )
+                            if resolved2:
+                                token_in_addr = resolved2["token_in_addr"]
+                                token_out_addr = resolved2["token_out_addr"]
+                                pair_resolved = True
+                                actual_pair = f"{resolved2['token_in_symbol']}/{resolved2['token_out_symbol']}"
+                                use_common_pairs = False
+                                _pair_unresolved_detail = None
+                                _pool_truth = None  # resolved; truth no longer needed
+                                _pool_read_path = "v3_multicall"
             except Exception:
                 pass  # fallback is best-effort
     elif use_common_pairs:
@@ -2049,9 +2093,8 @@ def score_backrun_live_parallel(
             _pair_unresolved_detail = "no_symbol_map"
 
     if use_common_pairs:
-        r = _reject(REJECT_TOKEN_PAIR_UNRESOLVED)
+        r = _reject(REJECT_TOKEN_PAIR_UNRESOLVED, pct=_pool_truth, psrp=_pool_read_path)
         r.pair_unresolved_detail = _pair_unresolved_detail
-        r.pool_contract_truth = _pool_truth
         return r
 
     # ── M7.A.5.7: On-chain enrichment for unknown tokens ───────────────
@@ -2102,6 +2145,7 @@ def score_backrun_live_parallel(
             REJECT_TOKEN_NOT_ADMITTED,
             pr=pair_resolved, ap=actual_pair, adm=False,
             adm_src=ADMISSION_REJECTED, sg_seed=False,
+            pct=_pool_truth, psrp=_pool_read_path,
         )
 
     # ── M7.A.5.7: Oracle sanity guard ──────────────────────────────────
@@ -2151,6 +2195,7 @@ def score_backrun_live_parallel(
             pr=pair_resolved, ap=actual_pair, adm=True,
             adm_src=adm_source, orc=oracle_result,
             cov=coverage, sg_seed=sg_seed,
+            pct=_pool_truth, psrp=_pool_read_path,
         )
 
     # ── M7.A.5.12: Build local-sim from coverage canonical state ───────
@@ -2215,6 +2260,7 @@ def score_backrun_live_parallel(
                 pr=pair_resolved, ap=actual_pair, adm=True,
                 adm_src=adm_source, orc=oracle_result,
                 cov=coverage, lss=local_sim, sg_seed=sg_seed,
+                pct=_pool_truth, psrp=_pool_read_path,
             )
 
     # ── M7.A.5.9: Decimal-aware bounded size logic ────────────────────
@@ -2540,6 +2586,8 @@ def score_backrun_live_parallel(
             size_normalization_source=_norm_source,
             size_usd_estimate=_size_usd,
             size_valid_for_token=(_token_in_dec is not None),
+            pool_contract_truth=_pool_truth,
+            pool_state_read_path=_pool_read_path,
         )
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
@@ -2576,6 +2624,8 @@ def score_backrun_live_parallel(
         oracle_guard=oracle_result,
         local_sim_state=local_sim,
         subgraph_seed_used=sg_seed,
+        pool_contract_truth=_pool_truth,
+        pool_state_read_path=_pool_read_path,
     )
 
 
@@ -2929,6 +2979,8 @@ def build_replay_summary(
             "counter_venue_count": r.counter_venue_count,
             # M7.A.5.16: pool contract truth (None unless TOKEN_PAIR_UNRESOLVED with pool_address)
             "pool_contract_truth": r.pool_contract_truth,
+            # M7.A.5.17: which adapter path read pool state
+            "pool_state_read_path": r.pool_state_read_path,
         })
 
     # M7.A.5.15: Low-lag coverage truth metrics (aggregated from _low_lag_all)
@@ -2989,6 +3041,26 @@ def build_replay_summary(
     for _pt in _ll_pool_truth_list:
         _fg = _pt.get("dex_family_guess", "unknown")
         _ll_dex_family_hist[_fg] = _ll_dex_family_hist.get(_fg, 0) + 1
+
+    # M7.A.5.17: V2-specific low-lag metrics
+    _ll_v2_resolved = [r for r in _low_lag_all if r.pool_state_read_path == "v2_getReserves"]
+    _ll_v2_scored = [r for r in _ll_v2_resolved if id(r) in _scored_set]
+    _ll_v2_n = len(_ll_v2_resolved)
+    _ll_v2_no_counter = sum(
+        1 for r in _ll_v2_resolved
+        if r.reject_reason in (REJECT_NO_COUNTER_POOL, REJECT_NO_COUNTER_VENUE)
+    )
+    _ll_v2_inactive = sum(
+        1 for r in _ll_v2_resolved
+        if r.reject_reason in (
+            REJECT_ALL_POOLS_TRULY_INACTIVE, REJECT_ALL_POOLS_ZERO_LIQUIDITY,
+            REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_COVERAGE_LOCAL_MISMATCH,
+        )
+    )
+    low_lag_v2_supported_rate = round(_ll_v2_n / _ll_n, 4) if _ll_n else None
+    low_lag_v2_scored_results_rate = round(len(_ll_v2_scored) / _ll_v2_n, 4) if _ll_v2_n else None
+    low_lag_v2_no_counter_pool_rate = round(_ll_v2_no_counter / _ll_v2_n, 4) if _ll_v2_n else None
+    low_lag_v2_inactive_pool_rate = round(_ll_v2_inactive / _ll_v2_n, 4) if _ll_v2_n else None
 
     # M7.A.5.11/5.12: Pre-economics coverage metrics
     unscored_count = len(results) - len(scored_results)
@@ -3115,6 +3187,15 @@ def build_replay_summary(
             "known_but_untradeable_rate": low_lag_known_but_untradeable_rate,
             "dex_family_histogram": _ll_dex_family_hist,
             "pool_truth_count": len(_ll_pool_truth_list),
+        },
+        # M7.A.5.17: V2-specific low-lag metrics
+        "low_lag_v2_truth": {
+            "low_lag_v2_supported_rate": low_lag_v2_supported_rate,
+            "low_lag_v2_scored_results_rate": low_lag_v2_scored_results_rate,
+            "low_lag_v2_no_counter_pool_rate": low_lag_v2_no_counter_pool_rate,
+            "low_lag_v2_inactive_pool_rate": low_lag_v2_inactive_pool_rate,
+            "v2_resolved_count": _ll_v2_n,
+            "v2_scored_count": len(_ll_v2_scored),
         },
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
@@ -4213,6 +4294,13 @@ def main():
                 "pool ABI (token0/token1/slot0 reverts), no counter-pool, and known-but-"
                 "inactive pool; explicit pool-class truth reveals which class dominates "
                 "and whether any class is fixable within the same-chain DEX domain"
+            )
+            artifact["m7a517_hypothesis"] = (
+                "low-lag same-chain scoring may unlock only if V2-family pool-state "
+                "reading is added (getReserves instead of slot0), but this must be "
+                "measured separately from no-counter-pool and inactive-pool classes; "
+                "V2 direct resolve bypasses batch_token_info fee() revert and enables "
+                "pair resolution for uniswap_v2_like pools"
             )
     else:
         parser_err = "No mode specified"
