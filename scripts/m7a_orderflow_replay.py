@@ -165,6 +165,27 @@ SUBGRAPH_SEED_TOKEN_CAP = 50
 # Timeout for subgraph HTTP requests
 SUBGRAPH_TIMEOUT_SECONDS = 10
 
+# ---------------------------------------------------------------------------
+# M7.A.5.18: Canonical blocker tags (top-level summary of structural stoppers)
+# ---------------------------------------------------------------------------
+BLOCKER_LOW_LAG_NONE_THIS_WINDOW = "LOW_LAG_NONE_THIS_WINDOW"
+BLOCKER_LOW_LAG_NO_COUNTER_POOL = "LOW_LAG_NO_COUNTER_POOL"
+BLOCKER_LOW_LAG_V2_UNSUPPORTED = "LOW_LAG_V2_UNSUPPORTED"
+BLOCKER_LOW_LAG_INACTIVE_POOL = "LOW_LAG_INACTIVE_POOL"
+BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY = "LOW_LAG_REMOTE_QUOTER_LATENCY"
+BLOCKER_GAS_L1_DATA_DOMINANT = "GAS_L1_DATA_DOMINANT"
+BLOCKER_SUBGRAPH_API_KEY_REQUIRED = "SUBGRAPH_API_KEY_REQUIRED"
+
+ALL_BLOCKER_TAGS = frozenset({
+    BLOCKER_LOW_LAG_NONE_THIS_WINDOW,
+    BLOCKER_LOW_LAG_NO_COUNTER_POOL,
+    BLOCKER_LOW_LAG_V2_UNSUPPORTED,
+    BLOCKER_LOW_LAG_INACTIVE_POOL,
+    BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY,
+    BLOCKER_GAS_L1_DATA_DOMINANT,
+    BLOCKER_SUBGRAPH_API_KEY_REQUIRED,
+})
+
 # Intent/auction surface types
 SURFACE_MEV_SHARE_BACKRUN = "mev_share_backrun"
 SURFACE_UNISWAPX_FILLER = "uniswapx_filler"
@@ -3113,6 +3134,77 @@ def build_replay_summary(
     ) if _active_cov else None
     coverage_complete_no_quote_count = len(_cov_complete_no_quote)
 
+    # M7.A.5.18: Low-lag watchlist — accumulated per-pair/pool truth across windows
+    _ll_watchlist_map: Dict[str, Dict[str, Any]] = {}  # keyed by pool_address
+    for r in _low_lag_all:
+        _pool_addr = None
+        # Try to get pool_address from event, coverage, or debug row
+        _cov_r = r.coverage_result or {}
+        _cand = _cov_r.get("candidate_pools", [])
+        if _cand:
+            _pool_addr = _cand[0].get("address")
+        if _pool_addr is None:
+            # Try to extract from pool_contract_truth
+            _pct = r.pool_contract_truth or {}
+            _pool_addr = _pct.get("pool_address")
+        if _pool_addr is None:
+            continue  # no pool to track
+        _pool_addr = _pool_addr.lower()
+        _eb = r.event_block or 0
+        if _pool_addr in _ll_watchlist_map:
+            _entry = _ll_watchlist_map[_pool_addr]
+            _entry["last_seen_block"] = max(_entry["last_seen_block"], _eb)
+            _entry["first_seen_block"] = min(_entry["first_seen_block"], _eb)
+            _entry["seen_count"] += 1
+        else:
+            _ll_watchlist_map[_pool_addr] = {
+                "pair": r.actual_pair,
+                "pool_address": _pool_addr,
+                "first_seen_block": _eb,
+                "last_seen_block": _eb,
+                "seen_count": 1,
+                "reject_reason": r.reject_reason,
+                "pair_unresolved_detail": r.pair_unresolved_detail,
+                "pool_state_read_path": r.pool_state_read_path,
+                "known_pools": _cov_r.get(
+                    "known_pools_total", _cov_r.get("known_pools", 0)
+                ),
+                "active_pools": _cov_r.get("active_pools_total", 0),
+            }
+    low_lag_watchlist = list(_ll_watchlist_map.values())
+
+    # M7.A.5.18: Blocker tags — top-level structural-stopper summary
+    _active_tags: List[str] = []
+    if events_detected_low_lag == 0:
+        _active_tags.append(BLOCKER_LOW_LAG_NONE_THIS_WINDOW)
+    if _ll_no_counter > 0:
+        _active_tags.append(BLOCKER_LOW_LAG_NO_COUNTER_POOL)
+    if _ll_unsupported_pool > 0:
+        _active_tags.append(BLOCKER_LOW_LAG_V2_UNSUPPORTED)
+    if _ll_inactive > 0:
+        _active_tags.append(BLOCKER_LOW_LAG_INACTIVE_POOL)
+    # Latency: check if any scored low-lag result had pipeline latency > budget
+    _ll_over_budget = sum(
+        1 for r in _low_lag_scored
+        if r.quote_pipeline_latency_ms is not None
+        and r.latency_budget_ms is not None
+        and r.quote_pipeline_latency_ms > r.latency_budget_ms
+    )
+    if _ll_over_budget > 0 or (events_detected_low_lag > 0 and events_scored_low_lag == 0):
+        _active_tags.append(BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY)
+    # Gas: check if GAS_EXCEEDS_GROSS is dominant reject
+    _gas_dom = reject_counts.get(REJECT_GAS_EXCEEDS_GROSS, 0)
+    if _gas_dom > 0 and (not scored_net_bps or max(scored_net_bps) < 0):
+        _active_tags.append(BLOCKER_GAS_L1_DATA_DOMINANT)
+    # Subgraph: always tag if endpoints are configured but no API key mechanism
+    _active_tags.append(BLOCKER_SUBGRAPH_API_KEY_REQUIRED)
+
+    blocker_tags = {
+        "active_tags": _active_tags,
+        "active_count": len(_active_tags),
+        "all_canonical_tags": sorted(ALL_BLOCKER_TAGS),
+    }
+
     return {
         "m7a4_hypothesis": "orderflow_driven_backrun_replay",
         "mode": mode,
@@ -3197,6 +3289,10 @@ def build_replay_summary(
             "v2_resolved_count": _ll_v2_n,
             "v2_scored_count": len(_ll_v2_scored),
         },
+        # M7.A.5.18: Low-lag watchlist (per-pair/pool truth accumulated across windows)
+        "low_lag_watchlist": low_lag_watchlist,
+        # M7.A.5.18: Blocker tags (top-level structural-stopper summary)
+        "blocker_tags": blocker_tags,
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
         "m7a_triangular_best_net_bps": -14.16,
@@ -3726,6 +3822,11 @@ def main():
             "bounded coverage enrichment (The Graph subgraph seed) materially raises "
             "live admission and counter-venue coverage for pair-resolved Arbitrum "
             "event tokens within the same-chain DEX domain"
+        )
+        artifact["m7a518_hypothesis"] = (
+            "same-chain low-lag scoring may unlock only if low-lag pair/pool truth "
+            "is accumulated across windows and priced from local pool state, without "
+            "expanding outside the current DEX domain"
         )
         artifact["ws_live_config"] = {
             "ws_blocks_requested": args.ws_blocks,

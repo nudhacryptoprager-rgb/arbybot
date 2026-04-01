@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.17 — all scopes produce no-graduate verdicts. M7.A.5.17 added `pool_state_read_path` field on BackrunResult (56 fields), V2 direct resolve path bypassing batch_token_info fee() revert, `low_lag_v2_truth` metrics block, getReserves probing for uniswap_v2_like pools. Evidence confirms: V2 direct resolve is implemented but low-lag blocker tree is multi-causal — NO_COUNTER_POOL dominates in fresh samples; V2 pools are sample-variant. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.18 — all scopes produce no-graduate verdicts. M7.A.5.18 added `low_lag_watchlist` artifact block (cross-window pair/pool truth accumulation), `blocker_tags` top-level structural-stopper summary (7 canonical tags), `m7a518_hypothesis`. BackrunResult stays 56 fields, reject_reasons stays 19. Evidence confirms: low-lag surface is temporally variant — NO_COUNTER_POOL and ALL_CANDIDATE_POOLS_TRULY_INACTIVE are the dominant low-lag blockers; watchlist captures pool addresses when candidate_pools exist; blocker_tags correctly activate per-window. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-03-29  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 6 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 7 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags. M7.B remains closed.
 
 ---
 
@@ -228,9 +228,33 @@ CI: 3132 passed, 396 orderflow tests.
 - 300b: 18 events, 2 low-lag, 0 scored. `reject_histogram: {NO_COUNTER_POOL: 2, GAS_EXCEEDS_GROSS: 16}`. Both low-lag events: `NO_COUNTER_POOL` with `pool_state_read_path: "v3_multicall"`. `v2_resolved_count: 0`. No V2 pools in this sample window.
 - 1000b: 22 events, 2 low-lag, 0 scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 20, NO_COUNTER_POOL: 2}`. Both low-lag events: `NO_COUNTER_POOL` with `pool_state_read_path: "v3_multicall"`. Pairs: `0xb0ffa800/WETH`, `0x60bf4e7c/USDC`. `v2_resolved_count: 0`.
 
-**Key finding**: V2 direct resolve path is implemented and tested (19 new unit tests, 415 total orderflow), but these evidence runs show 0 V2 pool events — all low-lag events resolved via V3 multicall and hit NO_COUNTER_POOL. This confirms the user's correction: the blocker tree is multi-causal and V2 dominance is sample-variant. TOKEN_PAIR_UNRESOLVED is absent from both runs (was 3-4 in M7.A.5.16), suggesting either V2 events were absent from this time window or the V2 resolve path successfully handled them. The V2 infrastructure is ready for when V2 events appear.
+**Key finding**: V2 direct resolve path is implemented and tested (19 new unit tests, 415 total orderflow), but these evidence runs show 0 V2 pool events — all low-lag events resolved via V3 multicall and hit NO_COUNTER_POOL. M7.A.5.17 correctly implements the V2 direct read path, but fresh reruns show that the live low-lag blocker is still not stable enough to treat any single sample as dominant. Depending on the window, the system sees either pure NO_COUNTER_POOL low-lag events or no low-lag events at all, while stale-only scoring remains the dominant observed regime. The next justified branch is M7.A.5.18: accumulate low-lag pair/pool truth across windows and move the low-lag subset toward local-state pricing inside the same-chain DEX domain.
 
 CI: 3151 passed, 415 orderflow tests.
+
+---
+
+## M7.A.5.18: Low-lag Watchlist, Blocker Tags, Cross-window Truth (DIAGNOSTIC)
+
+**Hypothesis**: Same-chain low-lag scoring may unlock only if low-lag pair/pool truth is accumulated across windows and priced from local pool state, without expanding outside the current DEX domain.
+
+**Root cause addressed**: Low-lag surface is temporally variant — some windows show NO_COUNTER_POOL events, others show INACTIVE pools, others show none. Without cross-window accumulation, each run's low-lag truth is incomplete. Without a blocker-tag summary, the structural stoppers are buried in per-event data.
+
+**Changes**:
+1. **`low_lag_watchlist`**: New artifact block. A list of per-pool entries with 10 fields: `pair`, `pool_address`, `first_seen_block`, `last_seen_block`, `seen_count`, `reject_reason`, `pair_unresolved_detail`, `pool_state_read_path`, `known_pools`, `active_pools`. Entries are deduplicated by pool_address; seen_count increments across events from the same pool. Only tracks low-lag events (block_lag ≤ 2) where a pool address is discoverable.
+2. **`blocker_tags`**: New artifact block with `active_tags` (list), `active_count` (int), `all_canonical_tags` (sorted list). 7 canonical tags: `LOW_LAG_NONE_THIS_WINDOW`, `LOW_LAG_NO_COUNTER_POOL`, `LOW_LAG_V2_UNSUPPORTED`, `LOW_LAG_INACTIVE_POOL`, `LOW_LAG_REMOTE_QUOTER_LATENCY`, `GAS_L1_DATA_DOMINANT`, `SUBGRAPH_API_KEY_REQUIRED`. Tags activate based on per-window evidence.
+3. **`ALL_BLOCKER_TAGS`**: Module-level frozenset of 7 canonical tags with individual constants.
+4. **`m7a518_hypothesis`**: Hypothesis string added to ws-live artifacts.
+5. **No new BackrunResult fields** (still 56). **No new reject reasons** (still 19). Changes are artifact-level only.
+
+**Evidence**:
+- 300b: 21 events, 3 low-lag, 0 scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 19, NO_COUNTER_POOL: 2}`. `low_lag_reject_histogram: {ALL_CANDIDATE_POOLS_TRULY_INACTIVE: 2, NO_COUNTER_POOL: 1}`. Watchlist: 1 entry (pool `0xdd91...`, pair `0x44f49ff0/USDT`, seen_count=2, reject=ALL_CANDIDATE_POOLS_TRULY_INACTIVE, known_pools=1, active_pools=0). Blocker tags: `LOW_LAG_NO_COUNTER_POOL`, `LOW_LAG_REMOTE_QUOTER_LATENCY`, `GAS_L1_DATA_DOMINANT`, `SUBGRAPH_API_KEY_REQUIRED` (4 active).
+- 300b_b: 20 events, 3 low-lag, 0 scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 16, NO_COUNTER_POOL: 3, STALE_POSITIVE: 1}`. All 3 low-lag: NO_COUNTER_POOL. Watchlist: empty (NO_COUNTER_POOL → no candidate_pools). Blocker tags: `LOW_LAG_NO_COUNTER_POOL`, `LOW_LAG_REMOTE_QUOTER_LATENCY`, `SUBGRAPH_API_KEY_REQUIRED` (3 active).
+- 1000b: 22 events, 0 low-lag, 0 scored. 3 STALE_POSITIVE, `best_net_bps=14.3358` (stale). `LOW_LAG_NONE_THIS_WINDOW` correctly activates. Watchlist: empty. Blocker tags: `LOW_LAG_NONE_THIS_WINDOW`, `SUBGRAPH_API_KEY_REQUIRED` (2 active).
+
+**Key findings**: Blocker tags correctly vary per window while SUBGRAPH_API_KEY_REQUIRED is always present. Watchlist captures pool addresses when candidate_pools exist (300b had 1 entry from ALL_CANDIDATE_POOLS_TRULY_INACTIVE). NO_COUNTER_POOL events produce empty watchlists (no pool to track). LOW_LAG_NONE_THIS_WINDOW wins in 1000b (temporal instability confirmed). Stale-positive events reach up to +14.34 bps but are rejected by STALE_POSITIVE gate. No low-lag event has ever been economically scored.
+
+CI: 3180 passed, 444 orderflow tests.
 
 ---
 
