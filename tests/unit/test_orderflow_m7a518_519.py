@@ -584,7 +584,7 @@ class TestM7A518BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 65, f"Expected 59 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 66, f"Expected 59 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.18 adds no new reject reasons."""

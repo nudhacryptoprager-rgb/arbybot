@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.22 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted M7 logic into `m7/` package. M7.A.5.22 activated PoolRegistry in ws-live mode (was dormant in M7.A.5.21) — 74 pools discovered per window, NO_COUNTER_POOL eliminated. Gas-floor operational filter structural (same-block detection = preliminary_lag~0). 65 fields, 8 blocker tags, reject_reasons 20. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.23 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted M7 logic into `m7/` package. M7.A.5.23 implemented low-lag registry-direct scoring fast path: 99-100% events scored via registry_direct + local pricing (was 0% scored-low-lag in M7.A.5.22). 9/100 positive net_bps (all STALE_POSITIVE). 66 fields, 8 blocker tags, reject_reasons 20. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-02  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge. M7.B remains closed.
 
 ---
 
@@ -116,95 +116,19 @@ Subgraph BLOCKED (403). Gas decomposition: L1 data ~80%, L2 exec ~20%. GAS_EXCEE
 
 ---
 
-## M7.A.5.16: Low-Lag Pool-Class Truth (DIAGNOSTIC)
+## M7.A.5.16–5.17: Pool-Class Truth + V2 Direct Resolve (DIAGNOSTIC + FIX, CLOSED)
 
-**Hypothesis**: Low-lag events are timely detected, but same-chain scoring still fails because low-lag pools split into three structural classes: unsupported pool ABI (token0/token1/slot0 reverts), no counter-pool, and known-but-inactive pool. Explicit pool-class truth reveals which class dominates and whether any class is fixable within the same-chain DEX domain.
+**M7.A.5.16** (Pool-Class Truth): Classified low-lag pools into 3 structural classes: unsupported ABI (V2-like on V3 path), no counter-pool, inactive. Added `pool_contract_truth` field (55 total), `dex_family_guess`, 5 fine-grained `pair_unresolved_detail` causes. Evidence: multi-causal blockers (V2 ABI mismatch + NO_COUNTER_POOL + INACTIVE). CI: 3132 passed.
 
-**Changes**:
-1. **`pool_contract_truth`**: New BackrunResult field (55 total). Per-event dict with `pool_address`, `code_present`, `token0_ok`, `token1_ok`, `slot0_ok`, `liquidity_ok`, `dex_family_guess`. Populated for TOKEN_PAIR_UNRESOLVED events with pool_address.
-2. **Finer `pair_unresolved_detail`**: Split `pool_read_failed` into 5 fine-grained causes: `POOL_CODE_EMPTY`, `POOL_TOKEN0_REVERT`, `POOL_TOKEN1_REVERT`, `POOL_SLOT0_REVERT`, `POOL_LIQUIDITY_REVERT`. Each probed via individual eth_call selectors.
-3. **`dex_family_guess`**: Algorithm: if token0+token1+slot0 work → `uniswap_v3_like`; if token0+token1 work but not slot0 → `uniswap_v2_like`; if only partial → `partial_erc20_pool`; else `unknown`; if no code → `no_code`.
-4. **`low_lag_pool_class_truth`**: Aggregated block: `unsupported_pool_rate`, `no_counter_pool_rate`, `inactive_known_pool_rate`, `known_but_untradeable_rate`, `dex_family_histogram`, `pool_truth_count`.
-5. **`low_lag_debug_rows`**: Now includes `pool_contract_truth` per event (12 keys, was 11).
-
-**Evidence**:
-- 300b: 11 events, 3 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 3}`. All 3 are `POOL_SLOT0_REVERT` + `dex_family_guess: "uniswap_v2_like"`. `unsupported_pool_rate: 1.0`, `pool_truth_count: 3`.
-- 1000b: 18 events, 6 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 4, NO_COUNTER_POOL: 2}`. All 4 TOKEN_PAIR_UNRESOLVED are `POOL_SLOT0_REVERT` + `uniswap_v2_like`. 2 NO_COUNTER_POOL resolved pairs (0x1c43d05b/WETH, ZTX/WETH) but no counter-venue exists. `unsupported_pool_rate: 0.6667`, `no_counter_pool_rate: 0.3333`, `known_but_untradeable_rate: 0.3333`.
-
-**Key finding**: M7.A.5.16 correctly classifies unresolved low-lag pools as V2-family on a V3-only scoring path, but fresh reruns show that this is only one branch of the blocker tree. The full low-lag blocker landscape is multi-causal: TOKEN_PAIR_UNRESOLVED (V2 ABI mismatch), NO_COUNTER_POOL (pair resolves but no counter-venue), and ALL_CANDIDATE_POOLS_TRULY_INACTIVE (known pool, zero liquidity). In some samples V2 dominates; in others NO_COUNTER_POOL dominates. The claim "V2-family pools are the root cause" is correct only for the unresolved subclass, not the entire low-lag subset.
-
-**Implication**: To unlock low-lag scoring, the pipeline needs: (a) V2 pool adapter path for TOKEN_PAIR_UNRESOLVED events, (b) broader universe for NO_COUNTER_POOL events, (c) deeper liquidity probing for inactive pools. Each class is measured separately.
-
-CI: 3132 passed, 396 orderflow tests.
+**M7.A.5.17** (V2 Direct Resolve): Added `pool_state_read_path` field (56 total), V2 `getReserves()` fallback bypassing `batch_token_info()` fee() revert. Evidence: V2 path implemented but 0 V2 pool events in sample windows — all low-lag hit NO_COUNTER_POOL via V3. Low-lag blocker unstable across windows. CI: 3151 passed.
 
 ---
 
-## M7.A.5.17: V2 Direct Resolve and Pool-State Read Path (FIX + DIAGNOSTIC)
+## M7.A.5.18–5.19: Low-lag Watchlist + Blocker Tags + Quote-Fail Provenance + File Splits (DIAGNOSTIC + STRUCTURAL, CLOSED)
 
-**Hypothesis**: Low-lag same-chain scoring may unlock only if V2-family pool-state reading is added (getReserves instead of slot0), but this must be measured separately from no-counter-pool and inactive-pool classes. V2 direct resolve bypasses batch_token_info fee() revert and enables pair resolution for uniswap_v2_like pools.
+**M7.A.5.18** (Cross-Window Truth): Session-persistent `low_lag_watchlist` (per-pool entries across events), `blocker_tags` artifact block with 8 canonical tags. Evidence: blocker tags correctly vary per window (LOW_LAG_NONE_THIS_WINDOW in empty windows, NO_COUNTER_POOL/INACTIVE_POOL in others). 0 low-lag events scored. Still 56 fields, 19 rejects. CI: 3180 passed.
 
-**Root cause fixed**: `batch_token_info()` in `core/multicall.py` calls `fee()` selector which does not exist on V2 pools — entire multicall batch fails. The V2 direct resolve path bypasses this by resolving token0/token1 from already-probed addresses and using `getReserves()` (selector `0x0902f1ac`) instead of `slot0()`.
-
-**Changes**:
-1. **`pool_state_read_path`**: New BackrunResult field (56 total). Values: `None` | `"v3_multicall"` | `"v2_getReserves"`. Tracks which adapter path read pool state for each event.
-2. **V2 direct resolve**: When `dex_family_guess == "uniswap_v2_like"` and token0+token1 are readable, the enrichment fallback bypasses `_resolve_event_tokens()` entirely. Pair is resolved directly from probed addresses, getReserves is called for state truth, and `pool_state_read_path = "v2_getReserves"` is set.
-3. **`_reject()` helper**: Updated with `pct` and `psrp` parameters to propagate pool_contract_truth and pool_state_read_path through all reject paths.
-4. **`low_lag_v2_truth`**: New artifact block with 6 keys: `low_lag_v2_supported_rate`, `low_lag_v2_scored_results_rate`, `low_lag_v2_no_counter_pool_rate`, `low_lag_v2_inactive_pool_rate`, `v2_resolved_count`, `v2_scored_count`.
-5. **`low_lag_debug_rows`**: Now includes `pool_state_read_path` per event (13 keys, was 12).
-
-**Evidence**:
-- 300b: 18 events, 2 low-lag, 0 scored. `reject_histogram: {NO_COUNTER_POOL: 2, GAS_EXCEEDS_GROSS: 16}`. Both low-lag events: `NO_COUNTER_POOL` with `pool_state_read_path: "v3_multicall"`. `v2_resolved_count: 0`. No V2 pools in this sample window.
-- 1000b: 22 events, 2 low-lag, 0 scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 20, NO_COUNTER_POOL: 2}`. Both low-lag events: `NO_COUNTER_POOL` with `pool_state_read_path: "v3_multicall"`. Pairs: `0xb0ffa800/WETH`, `0x60bf4e7c/USDC`. `v2_resolved_count: 0`.
-
-**Key finding**: V2 direct resolve path is implemented and tested (19 new unit tests, 415 total orderflow), but these evidence runs show 0 V2 pool events — all low-lag events resolved via V3 multicall and hit NO_COUNTER_POOL. M7.A.5.17 correctly implements the V2 direct read path, but fresh reruns show that the live low-lag blocker is still not stable enough to treat any single sample as dominant. Depending on the window, the system sees either pure NO_COUNTER_POOL low-lag events or no low-lag events at all, while stale-only scoring remains the dominant observed regime. The next justified branch is M7.A.5.18: accumulate low-lag pair/pool truth across windows and move the low-lag subset toward local-state pricing inside the same-chain DEX domain.
-
-CI: 3151 passed, 415 orderflow tests.
-
----
-
-## M7.A.5.18: Low-lag Watchlist, Blocker Tags, Cross-window Truth (DIAGNOSTIC)
-
-**Hypothesis**: Same-chain low-lag scoring may unlock only if low-lag pair/pool truth is accumulated across windows and priced from local pool state, without expanding outside the current DEX domain.
-
-**Root cause addressed**: Low-lag surface is temporally variant — some windows show NO_COUNTER_POOL events, others show INACTIVE pools, others show none. Without cross-window accumulation, each run's low-lag truth is incomplete. Without a blocker-tag summary, the structural stoppers are buried in per-event data.
-
-**Changes**:
-1. **`low_lag_watchlist`**: New artifact block. A list of per-pool entries with 10 fields: `pair`, `pool_address`, `first_seen_block`, `last_seen_block`, `seen_count`, `reject_reason`, `pair_unresolved_detail`, `pool_state_read_path`, `known_pools`, `active_pools`. Entries are deduplicated by pool_address; seen_count increments across events from the same pool. Only tracks low-lag events (block_lag ≤ 2) where a pool address is discoverable.
-2. **`blocker_tags`**: New artifact block with `active_tags` (list), `active_count` (int), `all_canonical_tags` (sorted list). 7 canonical tags: `LOW_LAG_NONE_THIS_WINDOW`, `LOW_LAG_NO_COUNTER_POOL`, `LOW_LAG_V2_UNSUPPORTED`, `LOW_LAG_INACTIVE_POOL`, `LOW_LAG_REMOTE_QUOTER_LATENCY`, `GAS_L1_DATA_DOMINANT`, `SUBGRAPH_API_KEY_REQUIRED`. Tags activate based on per-window evidence.
-3. **`ALL_BLOCKER_TAGS`**: Module-level frozenset of 7 canonical tags with individual constants.
-4. **`m7a518_hypothesis`**: Hypothesis string added to ws-live artifacts.
-5. **No new BackrunResult fields** (still 56). **No new reject reasons** (still 19). Changes are artifact-level only.
-
-**Evidence**:
-- 300b: 21 events, 3 low-lag, 0 scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 19, NO_COUNTER_POOL: 2}`. `low_lag_reject_histogram: {ALL_CANDIDATE_POOLS_TRULY_INACTIVE: 2, NO_COUNTER_POOL: 1}`. Watchlist: 1 entry (pool `0xdd91...`, pair `0x44f49ff0/USDT`, seen_count=2, reject=ALL_CANDIDATE_POOLS_TRULY_INACTIVE, known_pools=1, active_pools=0). Blocker tags: `LOW_LAG_NO_COUNTER_POOL`, `LOW_LAG_REMOTE_QUOTER_LATENCY`, `GAS_L1_DATA_DOMINANT`, `SUBGRAPH_API_KEY_REQUIRED` (4 active).
-- 300b_b: 20 events, 3 low-lag, 0 scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 16, NO_COUNTER_POOL: 3, STALE_POSITIVE: 1}`. All 3 low-lag: NO_COUNTER_POOL. Watchlist: empty (NO_COUNTER_POOL → no candidate_pools). Blocker tags: `LOW_LAG_NO_COUNTER_POOL`, `LOW_LAG_REMOTE_QUOTER_LATENCY`, `SUBGRAPH_API_KEY_REQUIRED` (3 active).
-- 1000b: 22 events, 0 low-lag, 0 scored. 3 STALE_POSITIVE, `best_net_bps=14.3358` (stale). `LOW_LAG_NONE_THIS_WINDOW` correctly activates. Watchlist: empty. Blocker tags: `LOW_LAG_NONE_THIS_WINDOW`, `SUBGRAPH_API_KEY_REQUIRED` (2 active).
-
-**Key findings**: Blocker tags correctly vary per window while SUBGRAPH_API_KEY_REQUIRED is always present. Watchlist captures pool addresses when candidate_pools exist (300b had 1 entry from ALL_CANDIDATE_POOLS_TRULY_INACTIVE). NO_COUNTER_POOL events produce empty watchlists (no pool to track). LOW_LAG_NONE_THIS_WINDOW wins in 1000b (temporal instability confirmed). Stale-positive events reach up to +14.34 bps but are rejected by STALE_POSITIVE gate. No low-lag event has ever been economically scored.
-
-CI: 3180 passed, 444 orderflow tests.
-
----
-
-## M7.A.5.19: Quote-Fail Provenance + File Splits (DIAGNOSTIC + STRUCTURAL)
-
-**Hypothesis**: Post-refactor low-lag scoring may unlock only after blocker-tag stabilization and local-state pricing are applied to the low-lag watchlist inside the same-chain DEX domain. Prerequisite: diagnostic infrastructure improvements.
-
-**Changes**:
-1. **Quote-fail provenance in `scoring_parallel.py`**: Added `_buy_fail_info` list to capture (dex_name, exception_class) tuples when buy quotes fail. When `venues_quoted == 0`, injects `quote_fail_stage`, `quote_fail_venue`, `quote_fail_exception_short` into `stage_latency` dict. `artifacts.py` reads these into `low_lag_debug_rows`. 3 new tests (TestM7A519QuoteFailProvenance).
-2. **CLI split**: Extracted ws_live mode from `cli.py` into `mode_ws_live.py` (cli.py 340 lines, mode_ws_live.py 854 lines).
-3. **Test file split**: `test_orderflow_contracts.py` (6086 lines, 107 classes) → 9 files (max 995 lines). `test_triangular_contracts.py` (2247 lines, 21 classes) → 3 files (max 932 lines). All 3183 tests pass with 0 regressions.
-4. **No new BackrunResult fields** (still 56). **No new reject reasons** (still 19). **ALL_BLOCKER_TAGS still 8**.
-
-**Evidence**:
-- 300b: 30 events, 27 scored, 3 low-lag, 0 low-lag scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 27, ALL_CANDIDATE_POOLS_TRULY_INACTIVE: 2, NO_COUNTER_POOL: 1}`. `best_net_bps: -0.54`. Blocker tags: 4 active.
-- 300b_b: 30 events, 29 scored, 1 low-lag, 0 low-lag scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 29, NO_COUNTER_POOL: 1}`. `best_net_bps: -2.41`. Blocker tags: 3 active.
-- 1000b: 38 events, 35 scored, 3 low-lag, 0 low-lag scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 35, NO_COUNTER_POOL: 2, ALL_CANDIDATE_POOLS_TRULY_INACTIVE: 1}`. `best_net_bps: -2.20`. Blocker tags: 4 active.
-- Triangular: 67/100 measured, best_net=-22.74 bps, regime_bucket=medium_activity.
-
-**Key finding**: Quote-fail provenance is correctly null for all low-lag events (rejected at NO_COUNTER_POOL/INACTIVE_POOL before reaching quoting stage). The provenance will activate when events pass structural checks and reach the buy-quote stage but all venues fail. Stale subset continues to beat M4 baseline (best_net = -0.54 to -2.20 > -3.51 bps).
-
-CI: 3183 passed, 447 orderflow + 152 triangular tests across 12 files (max 995 lines each).
+**M7.A.5.19** (Provenance + Splits): Quote-fail provenance (`quote_fail_stage/venue/exception_short` in `stage_latency`). CLI split: `cli.py` (340 lines) + `mode_ws_live.py` (854 lines). Test file split: `test_orderflow_contracts.py` → 9 files (≤995 lines), `test_triangular_contracts.py` → 3 files (≤932 lines). Still 56 fields, 19 rejects, 8 blocker tags. CI: 3183 passed.
 
 ---
 
@@ -268,6 +192,31 @@ CI: 3245 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 **Key findings**: (1) Registry ACTIVATED: 65-77 pools discovered per session (was 0 in M7.A.5.21). Cache hit ratio 3-4x of preload calls — session persistence working. (2) **NO_COUNTER_POOL eliminated**: 0 across all 3 runs (was 2 in M7.A.5.21). Factory discovery fills the counter-venue gap. (3) Gas-floor operational filter structurally present but **does not fire in ws-live mode**: `current_block == event.block_number` (same-block detection), so `_preliminary_lag ≈ 0`, never exceeds stale threshold. This is by-design: ws-live events are fresh at detection, become stale only DURING scoring. The filter will activate in batch/replay modes with lagged `current_block`. (4) Low-lag: 0-1 per window; LOW_LAG_V2_UNSUPPORTED blocker present when 1 detected. (5) Stale-only economics: GAS_EXCEEDS_GROSS remains dominant reject (21-25 per run); best_net ranges from -2.20 to +1.53 bps.
 
 CI: 3267 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.23: Low-Lag Registry-Direct Scoring Bridge (SCORING BRIDGE)
+
+**Hypothesis**: Low-lag same-chain scoring may unlock only if low-lag events are routed into adapter-specific local scoring via registry-direct path before any coverage-scan rejection.
+
+**Root cause addressed**: M7.A.5.22 activated the registry (65-77 pools discovered), but low-lag events still died at the coverage scan because `coverage_complete` requires `quoter_v2` which V2 DEXes lack. Meanwhile, `attempt_local_pricing()` already supports V2 math directly — it doesn't need `quoter_v2`. The fix bypasses the RPC-heavy coverage scan for events where the registry already has active pools.
+
+**Changes**:
+1. **`m7/orderflow/scoring_parallel.py`** (MODIFIED): Low-lag fast path inserted between registry preload and coverage scan. If `preliminary_lag <= 2 AND registry_pools_active > 0`, builds synthetic coverage and local_sim from `PoolRegistryEntry.to_candidate_pool()` / `.to_pool_state()`, skips coverage scan entirely, goes directly to local pricing. Non-low-lag events (stale) continue through normal coverage path unchanged.
+2. **`m7/orderflow/contracts.py`** (MODIFIED): New field `low_lag_scoring_path: Optional[str]` (values: None | "registry_direct"). BackrunResult now 66 fields.
+3. **`m7/orderflow/mode_ws_live.py`** (MODIFIED): Session-persistent low-lag pair tracking (`_session_low_lag_pairs` dict) accumulates per-pair scoring outcomes across blocks using detection-time lag. `session_low_lag_pairs` list + `m7a523_hypothesis` string added to artifact.
+4. **`m7/orderflow/artifacts.py`** (MODIFIED): New `m7a523_low_lag_fast_path` section with `low_lag_registry_direct_count` and `low_lag_registry_direct_scored_count`.
+5. **`tests/unit/test_orderflow_m7a523.py`** (NEW, 19 tests): 5 test classes covering BackrunResult field contract, registry-direct fast path, artifact metrics, non-low-lag unchanged, session pair tracking.
+6. **No new reject reasons** (still 20). **UNSCORED_REJECTS still 12**. **ALL_BLOCKER_TAGS still 8**.
+
+**Evidence** (3 runs, all Arbitrum One ws-live):
+- 300b: 30 events, **30/30 scored (100%)**, best_net=+43.24 bps. **All registry_direct, all local_pricing_used**. Registry: 116 discovered, 81 active. Rejects: GAS_EXCEEDS_GROSS:27, STALE_POSITIVE:3. 3 positive net events. Session pairs: 0 (detection tracking not yet active in run 1).
+- 300b_b: 30 events, **30/30 scored (100%)**, best_net=+37.96 bps. **All registry_direct, all local_pricing_used**. 5 positive net events. Session pairs: 12 unique pairs, RAIN/WETH seen 5x.
+- 1000b: 100 events, **99/100 scored via registry_direct**, 1 via coverage (ALL_POOLS_TRULY_INACTIVE). best_net=+32.01 bps. 9 positive net events (all STALE_POSITIVE). Registry: 168 discovered, 123 active, 37 cache hits. Session pairs: 39 unique, WETH/USDC seen 26x. Adapter: v3_local:29, v2_local:1.
+
+**Key findings**: (1) **100% scoring rate via registry-direct path** — up from 0% events_scored_low_lag in M7.A.5.22. The coverage-scan bottleneck is completely bypassed. (2) **Local pricing via registry entries works across V3 and V2 adapters** — `attempt_local_pricing()` receives synthetic candidate_pools and pool_states from registry, dispatches to adapter-specific math. (3) **Positive net events detected (9/100 at +18-43 bps)** but all are STALE_POSITIVE (block_lag > 2 at scoring completion). The preliminary lag is ≈0 at scoring entry, but scoring itself takes 34+ blocks. (4) **Session pair tracking operational**: 39 unique pairs across 1000 blocks, WETH/USDC most frequent (26x). (5) **viable_count still 0**: positive_net + block_lag <= 2 required for viability. Scoring latency prevents any event from being "fresh" at completion. (6) **Next bottleneck** is scoring latency itself — events are fresh at detection but stale by scoring completion.
+
+CI: 3286 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

@@ -118,6 +118,8 @@ class BackrunResult:
     gas_floor_exceeded: Optional[bool] = None
     gas_floor_bps: Optional[float] = None
     pricing_path: Optional[str] = None
+    # M7.A.5.23: Low-lag registry-direct scoring path
+    low_lag_scoring_path: Optional[str] = None
 
 
 @dataclass

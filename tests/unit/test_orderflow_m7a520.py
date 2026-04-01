@@ -319,7 +319,7 @@ class TestBackrunResultM7A520Fields:
     """M7.A.5.20: BackrunResult gains 3 new fields → 59 total."""
 
     def test_field_count_is_65(self):
-        assert len(fields(BackrunResult)) == 65
+        assert len(fields(BackrunResult)) == 66
 
     def test_local_pricing_fields_exist(self):
         r = BackrunResult(

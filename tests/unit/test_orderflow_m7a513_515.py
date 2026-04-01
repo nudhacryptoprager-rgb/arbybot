@@ -429,7 +429,7 @@ class TestM7A513BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 65
+        assert len(d) == 66
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.13 adds no new reject reasons."""
@@ -633,7 +633,7 @@ class TestM7A514BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 65
+        assert len(d) == 66
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.14 adds no new reject reasons."""
@@ -962,7 +962,7 @@ class TestM7A515BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 65
+        assert len(d) == 66
 
     def test_all_reject_reasons_count_still_19(self):
         assert len(ALL_REJECT_REASONS) == 20

@@ -401,112 +401,158 @@ def score_backrun_live_parallel(
         except Exception as _reg_exc:
             logger.debug("Registry preload failed: %s", str(_reg_exc)[:80])
 
-    # ── M7.A.5.6: Counter-venue coverage scan ──────────────────────────
-    try:
-        coverage = counter_venue_coverage_scan(
-            token_in_addr, token_out_addr,
-            dex_configs, rpc_url, current_block,
-            pool_registry=pool_registry,
-        )
-    except Exception:
-        coverage = {
-            "known_pools_total": 0, "active_pools_total": 0, "inactive_pool_count": 0,
-            "known_pools": 0, "known_dexes": [], "active_dexes": [],
-            "buy_venues": 0, "sell_venues": 0,
-            "active_buy_venues": 0, "active_sell_venues": 0,
-            "coverage_complete": False,
-            "coverage_blocker_reason": "scan_error",
-            "candidate_pools": [],
-        }
-
-    if not coverage["coverage_complete"]:
-        # M7.A.5.11: Granular reject based on coverage blocker
-        blocker = coverage.get("coverage_blocker_reason", "")
-        if blocker == "no_pools_found":
-            reason = REJECT_NO_COUNTER_POOL
-        elif blocker == "all_pools_zero_liquidity":
-            # M7.A.5.12: Coverage itself says all zero → truly inactive
-            reason = REJECT_ALL_POOLS_TRULY_INACTIVE
-        elif blocker in ("no_quoter_for_active_pools", "no_quoter_for_live_pools"):
-            reason = REJECT_UNSUPPORTED_ADAPTER
-        elif blocker == "scan_error":
-            reason = REJECT_NO_COUNTER_POOL
-        elif blocker == "local_sim_all_zero_liquidity":
-            reason = REJECT_COVERAGE_LOCAL_MISMATCH
-        else:
-            reason = REJECT_NO_ACTIVE_COUNTER_POOL
-        return _reject(
-            reason,
-            pr=pair_resolved, ap=actual_pair, adm=True,
-            adm_src=adm_source, orc=oracle_result,
-            cov=coverage, sg_seed=sg_seed,
-            pct=_pool_truth, psrp=_pool_read_path,
-        )
-
-    # ── M7.A.5.12: Build local-sim from coverage canonical state ───────
-    # Reuse pool_state from coverage scan (same batch_full_pool_data extraction)
-    # to avoid a second RPC call and guarantee state consistency.
-    local_sim = None
-    cand_pools = coverage.get("candidate_pools", [])
-    if cand_pools:
-        _pool_states = {}
-        for cp in cand_pools:
-            addr = cp.get("address")
-            liq = cp.get("liquidity")
-            if addr and liq is not None:
-                _pool_states[addr] = {
-                    "sqrt_price_x96": None,  # filled below if available
-                    "tick": None,
-                    "liquidity": liq,
-                }
-        # Try to get full state from the same multicall data
-        try:
-            pool_map = _resolve_pool_addresses_multicall(
-                dex_configs, token_in_addr, token_out_addr, rpc_url, current_block,
-            )
-            for dex_name, pools in pool_map.items():
-                for p in pools:
-                    if p["address"] and p.get("pool_state"):
-                        _pool_states[p["address"]] = p["pool_state"]
-        except Exception:
-            pass  # fallback to liquidity-only state from candidate_pools
-        if _pool_states:
+    # ── M7.A.5.23: Low-lag registry-direct scoring fast path ────────────
+    # For low-lag events (preliminary_lag <= 2) with active registry pools,
+    # build synthetic coverage and local_sim directly from registry entries.
+    # This bypasses the RPC-heavy coverage scan and allows V2 pools (which
+    # lack quoter_v2) to be priced via adapter-specific local math.
+    _low_lag_scoring_path = None
+    _preliminary_lag = current_block - event.block_number
+    if _preliminary_lag <= 2 and _registry_pools_active and _registry_pools_active > 0:
+        _active_entries = [e for e in _registry_entries if e.is_active()]
+        _reg_pool_states: Dict[str, Any] = {}
+        for _re in _active_entries:
+            _ps = _re.to_pool_state()
+            if _ps is not None:
+                _reg_pool_states[_re.address] = _ps
+        if _reg_pool_states:
+            _reg_cand_pools = [e.to_candidate_pool() for e in _active_entries]
+            _reg_dexes = list(set(e.dex for e in _active_entries))
+            coverage = {
+                "known_pools_total": _registry_pools_found,
+                "active_pools_total": _registry_pools_active,
+                "inactive_pool_count": (_registry_pools_found or 0) - (_registry_pools_active or 0),
+                "known_pools": _registry_pools_found,
+                "known_dexes": _reg_dexes,
+                "active_dexes": _reg_dexes,
+                "buy_venues": len(_active_entries),
+                "sell_venues": len(_active_entries),
+                "active_buy_venues": len(_reg_dexes),
+                "active_sell_venues": len(_reg_dexes),
+                "coverage_complete": True,
+                "coverage_blocker_reason": None,
+                "candidate_pools": _reg_cand_pools,
+            }
+            cand_pools = _reg_cand_pools
             local_sim = {
-                "pools_queried": len(cand_pools),
-                "pools_with_state": len(_pool_states),
-                "pool_states": dict(list(_pool_states.items())[:3]),  # cap to 3
+                "pools_queried": len(_reg_cand_pools),
+                "pools_with_state": len(_reg_pool_states),
+                "pool_states": dict(list(_reg_pool_states.items())[:3]),
+            }
+            _low_lag_scoring_path = "registry_direct"
+            logger.debug(
+                "M7.A.5.23 low-lag fast path: registry_direct "
+                "(lag=%d, active_pools=%d, pool_states=%d)",
+                _preliminary_lag, _registry_pools_active, len(_reg_pool_states),
+            )
+
+    if _low_lag_scoring_path is None:
+        # ── M7.A.5.6: Counter-venue coverage scan ──────────────────────────
+        try:
+            coverage = counter_venue_coverage_scan(
+                token_in_addr, token_out_addr,
+                dex_configs, rpc_url, current_block,
+                pool_registry=pool_registry,
+            )
+        except Exception:
+            coverage = {
+                "known_pools_total": 0, "active_pools_total": 0, "inactive_pool_count": 0,
+                "known_pools": 0, "known_dexes": [], "active_dexes": [],
+                "buy_venues": 0, "sell_venues": 0,
+                "active_buy_venues": 0, "active_sell_venues": 0,
+                "coverage_complete": False,
+                "coverage_blocker_reason": "scan_error",
+                "candidate_pools": [],
             }
 
-    # ── M7.A.5.12: Zero-liquidity reject gate with consistency check ──
-    if local_sim and local_sim.get("pool_states"):
-        _all_zero_liq = all(
-            ps.get("liquidity", 1) == 0
-            for ps in local_sim["pool_states"].values()
-            if ps is not None
-        )
-        if _all_zero_liq:
-            # M7.A.5.12: Split based on coverage/local-sim agreement
-            _cov_active = coverage.get("active_pools_total", 0)
-            if _cov_active > 0:
-                # Coverage said active but canonical state shows all zero
-                # → patch coverage for invariant correctness
-                coverage["active_pools_total"] = 0
-                coverage["inactive_pool_count"] = coverage.get("known_pools_total", 0)
-                coverage["active_dexes"] = []
-                coverage["active_buy_venues"] = 0
-                coverage["active_sell_venues"] = 0
-                coverage["coverage_complete"] = False
-                coverage["coverage_blocker_reason"] = "local_sim_all_zero_liquidity"
-                _reject_reason = REJECT_COVERAGE_LOCAL_MISMATCH
+        if not coverage["coverage_complete"]:
+            # M7.A.5.11: Granular reject based on coverage blocker
+            blocker = coverage.get("coverage_blocker_reason", "")
+            if blocker == "no_pools_found":
+                reason = REJECT_NO_COUNTER_POOL
+            elif blocker == "all_pools_zero_liquidity":
+                # M7.A.5.12: Coverage itself says all zero → truly inactive
+                reason = REJECT_ALL_POOLS_TRULY_INACTIVE
+            elif blocker in ("no_quoter_for_active_pools", "no_quoter_for_live_pools"):
+                reason = REJECT_UNSUPPORTED_ADAPTER
+            elif blocker == "scan_error":
+                reason = REJECT_NO_COUNTER_POOL
+            elif blocker == "local_sim_all_zero_liquidity":
+                reason = REJECT_COVERAGE_LOCAL_MISMATCH
             else:
-                _reject_reason = REJECT_ALL_POOLS_TRULY_INACTIVE
+                reason = REJECT_NO_ACTIVE_COUNTER_POOL
             return _reject(
-                _reject_reason,
+                reason,
                 pr=pair_resolved, ap=actual_pair, adm=True,
                 adm_src=adm_source, orc=oracle_result,
-                cov=coverage, lss=local_sim, sg_seed=sg_seed,
+                cov=coverage, sg_seed=sg_seed,
                 pct=_pool_truth, psrp=_pool_read_path,
             )
+
+        # ── M7.A.5.12: Build local-sim from coverage canonical state ───────
+        # Reuse pool_state from coverage scan (same batch_full_pool_data extraction)
+        # to avoid a second RPC call and guarantee state consistency.
+        local_sim = None
+        cand_pools = coverage.get("candidate_pools", [])
+        if cand_pools:
+            _pool_states = {}
+            for cp in cand_pools:
+                addr = cp.get("address")
+                liq = cp.get("liquidity")
+                if addr and liq is not None:
+                    _pool_states[addr] = {
+                        "sqrt_price_x96": None,  # filled below if available
+                        "tick": None,
+                        "liquidity": liq,
+                    }
+            # Try to get full state from the same multicall data
+            try:
+                pool_map = _resolve_pool_addresses_multicall(
+                    dex_configs, token_in_addr, token_out_addr, rpc_url, current_block,
+                )
+                for dex_name, pools in pool_map.items():
+                    for p in pools:
+                        if p["address"] and p.get("pool_state"):
+                            _pool_states[p["address"]] = p["pool_state"]
+            except Exception:
+                pass  # fallback to liquidity-only state from candidate_pools
+            if _pool_states:
+                local_sim = {
+                    "pools_queried": len(cand_pools),
+                    "pools_with_state": len(_pool_states),
+                    "pool_states": dict(list(_pool_states.items())[:3]),  # cap to 3
+                }
+
+        # ── M7.A.5.12: Zero-liquidity reject gate with consistency check ──
+        if local_sim and local_sim.get("pool_states"):
+            _all_zero_liq = all(
+                ps.get("liquidity", 1) == 0
+                for ps in local_sim["pool_states"].values()
+                if ps is not None
+            )
+            if _all_zero_liq:
+                # M7.A.5.12: Split based on coverage/local-sim agreement
+                _cov_active = coverage.get("active_pools_total", 0)
+                if _cov_active > 0:
+                    # Coverage said active but canonical state shows all zero
+                    # → patch coverage for invariant correctness
+                    coverage["active_pools_total"] = 0
+                    coverage["inactive_pool_count"] = coverage.get("known_pools_total", 0)
+                    coverage["active_dexes"] = []
+                    coverage["active_buy_venues"] = 0
+                    coverage["active_sell_venues"] = 0
+                    coverage["coverage_complete"] = False
+                    coverage["coverage_blocker_reason"] = "local_sim_all_zero_liquidity"
+                    _reject_reason = REJECT_COVERAGE_LOCAL_MISMATCH
+                else:
+                    _reject_reason = REJECT_ALL_POOLS_TRULY_INACTIVE
+                return _reject(
+                    _reject_reason,
+                    pr=pair_resolved, ap=actual_pair, adm=True,
+                    adm_src=adm_source, orc=oracle_result,
+                    cov=coverage, lss=local_sim, sg_seed=sg_seed,
+                    pct=_pool_truth, psrp=_pool_read_path,
+                )
 
     # ── M7.A.5.9: Decimal-aware bounded size logic ────────────────────
     # Resolve token_in decimals: enrichment cache → well-known defaults → 18
@@ -571,6 +617,7 @@ def score_backrun_live_parallel(
         r.registry_pools_active = _registry_pools_active
         r.gas_floor_exceeded = True
         r.gas_floor_bps = _gas_floor_bps
+        r.low_lag_scoring_path = _low_lag_scoring_path
         return r
 
     # DEXes that have quoter_v2
@@ -933,6 +980,7 @@ def score_backrun_live_parallel(
             gas_floor_exceeded=_gas_floor_exceeded,
             gas_floor_bps=_gas_floor_bps,
             pricing_path=_local_result.get("pricing_path") if _local_result else None,
+            low_lag_scoring_path=_low_lag_scoring_path,
         )
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
@@ -978,5 +1026,6 @@ def score_backrun_live_parallel(
         registry_pools_active=_registry_pools_active,
         gas_floor_exceeded=_gas_floor_exceeded,
         gas_floor_bps=_gas_floor_bps,
+        low_lag_scoring_path=_low_lag_scoring_path,
     )
 

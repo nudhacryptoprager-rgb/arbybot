@@ -127,6 +127,9 @@ def run_ws_live(args) -> dict:
     raw_logs_total = 0
     ws_start_time = time.monotonic()
 
+    # M7.A.5.23: Session-persistent low-lag tracking across blocks
+    _session_low_lag_pairs: Dict[str, Dict] = {}  # pair -> tracking info
+
     try:
         ws_conn = ws_mod.create_connection(ws_url, timeout=10)
         sub_msg = json.dumps({
@@ -240,6 +243,37 @@ def run_ws_live(args) -> dict:
                 all_results.append(r)
                 all_events.append(ev)
 
+                # M7.A.5.23: Accumulate low-lag scoring path data
+                # Use detection-time lag (current_block - event.block_number)
+                # not final block_lag (which includes scoring latency)
+                _ev_lag = current_block - ev.block_number
+                if _ev_lag <= 2:
+                    _pair_key = r.actual_pair or f"{ev.token_in}/{ev.token_out}"
+                    if _pair_key in _session_low_lag_pairs:
+                        _slp = _session_low_lag_pairs[_pair_key]
+                        _slp["seen_count"] += 1
+                        _slp["last_block"] = max(_slp["last_block"], ev.block_number)
+                        if r.reject_reason is None or r.reject_reason not in UNSCORED_REJECTS:
+                            _slp["scored_count"] += 1
+                        if getattr(r, "low_lag_scoring_path", None) == "registry_direct":
+                            _slp["registry_direct_count"] += 1
+                    else:
+                        _session_low_lag_pairs[_pair_key] = {
+                            "pair": _pair_key,
+                            "first_block": ev.block_number,
+                            "last_block": ev.block_number,
+                            "seen_count": 1,
+                            "scored_count": (
+                                1 if r.reject_reason is None
+                                or r.reject_reason not in UNSCORED_REJECTS
+                                else 0
+                            ),
+                            "registry_direct_count": (
+                                1 if getattr(r, "low_lag_scoring_path", None)
+                                == "registry_direct" else 0
+                            ),
+                        }
+
                 if len(all_results) >= args.max_events:
                     break
 
@@ -310,6 +344,13 @@ def run_ws_live(args) -> dict:
         "pools_active": session_registry.pools_active,
         "unique_pairs_queried": len(session_registry._queried),
     }
+    # M7.A.5.23: Session-persistent low-lag pair tracking
+    artifact["session_low_lag_pairs"] = list(_session_low_lag_pairs.values())
+    artifact["m7a523_hypothesis"] = (
+        "low-lag same-chain scoring may unlock only if low-lag events are "
+        "routed into adapter-specific local scoring via registry-direct path "
+        "before any coverage-scan rejection"
+    )
     # Provider provenance
     artifact["rpc_provider"] = rpc_provider
     artifact["rpc_source"] = rpc_diag.get("source", "unknown")

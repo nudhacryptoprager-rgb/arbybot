@@ -461,7 +461,7 @@ class TestM7A511BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 65
+        assert len(d) == 66
 
     def test_all_reject_reasons_count_19(self):
         assert len(ALL_REJECT_REASONS) == 20
@@ -725,7 +725,7 @@ class TestM7A512BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 65
+        assert len(d) == 66
 
     def test_all_reject_reasons_count_19(self):
         assert len(ALL_REJECT_REASONS) == 20

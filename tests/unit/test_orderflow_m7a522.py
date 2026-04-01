@@ -271,7 +271,7 @@ class TestContractInvariantsM7A522:
             event_id="t", event_source="live", event_type="swap",
             post_trade_state_used="live", backrun_direction="buy_depressed",
         )
-        assert len(asdict(r)) == 65
+        assert len(asdict(r)) == 66
 
     def test_all_reject_reasons_count(self):
         assert len(ALL_REJECT_REASONS) == 20

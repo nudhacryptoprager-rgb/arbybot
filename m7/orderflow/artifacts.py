@@ -627,6 +627,18 @@ def build_replay_summary(
             }
     low_lag_watchlist = list(_ll_watchlist_map.values())
 
+    # M7.A.5.23: Registry-direct scoring path metrics
+    _ll_registry_direct = [
+        r for r in _low_lag_all
+        if getattr(r, "low_lag_scoring_path", None) == "registry_direct"
+    ]
+    _ll_registry_direct_scored = [
+        r for r in _ll_registry_direct
+        if id(r) in _scored_set
+    ]
+    low_lag_registry_direct_count = len(_ll_registry_direct)
+    low_lag_registry_direct_scored_count = len(_ll_registry_direct_scored)
+
     # M7.A.5.20: Local-pricing metrics (scored via local state vs remote quoter)
     _ll_local_attempted = sum(
         1 for r in _low_lag_all if r.local_pricing_attempted
@@ -784,6 +796,11 @@ def build_replay_summary(
             "low_lag_scored_remote_quoter_count": low_lag_scored_remote_quoter_count,
             "low_lag_scored_watchlist_count": low_lag_scored_watchlist_count,
             "best_net_bps_local": best_net_bps_local,
+        },
+        # M7.A.5.23: Registry-direct scoring path metrics
+        "m7a523_low_lag_fast_path": {
+            "low_lag_registry_direct_count": low_lag_registry_direct_count,
+            "low_lag_registry_direct_scored_count": low_lag_registry_direct_scored_count,
         },
         # M7.A.5.21: Factory registry + adapter-complete + gas-floor metrics
         "m7a521_registry_metrics": {
