@@ -111,6 +111,13 @@ class BackrunResult:
     local_pricing_attempted: Optional[bool] = None
     local_pricing_used: Optional[bool] = None
     local_pricing_failure_reason: Optional[str] = None
+    # M7.A.5.21: Factory registry + adapter-complete + gas-floor fields
+    registry_pools_found: Optional[int] = None
+    registry_pools_active: Optional[int] = None
+    adapter_type_used: Optional[str] = None
+    gas_floor_exceeded: Optional[bool] = None
+    gas_floor_bps: Optional[float] = None
+    pricing_path: Optional[str] = None
 
 
 @dataclass

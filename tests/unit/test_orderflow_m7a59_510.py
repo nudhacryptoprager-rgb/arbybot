@@ -364,7 +364,7 @@ class TestM7A59BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 59
+        assert len(parsed) == 65
         # M7.A.5.9 fields present
         assert parsed["token_in_decimals"] == 18
         assert parsed["size_normalization_source"] == "decimal_only"
@@ -711,11 +711,11 @@ class TestM7A510BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 59
+        assert len(d) == 65
 
     def test_all_reject_reasons_count(self):
         """ALL_REJECT_REASONS must have 19 entries (15 old + 2 M7.A.5.11 + 2 M7.A.5.12)."""
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
     def test_all_admission_sources_count(self):
         """ALL_ADMISSION_SOURCES must have 5 entries (4 old + 1 new)."""

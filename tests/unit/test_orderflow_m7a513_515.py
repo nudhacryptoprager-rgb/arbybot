@@ -75,6 +75,8 @@ from scripts.m7a_orderflow_replay import (
     # M7.A.5.12 reject reasons
     REJECT_COVERAGE_LOCAL_MISMATCH,
     REJECT_ALL_POOLS_TRULY_INACTIVE,
+    # M7.A.5.21 reject reasons
+    REJECT_GAS_FLOOR_EXCEEDED,
     # M7.A.5.13: Module-level unscored rejects set
     UNSCORED_REJECTS,
     SIGNIFICANT_IMPACT_BPS,
@@ -404,6 +406,7 @@ class TestM7A513UnscoredRejectsModuleLevel:
             REJECT_ZERO_LIQUIDITY,
             REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_ALL_POOLS_ZERO_LIQUIDITY,
             REJECT_COVERAGE_LOCAL_MISMATCH, REJECT_ALL_POOLS_TRULY_INACTIVE,
+            REJECT_GAS_FLOOR_EXCEEDED,
         }
         assert UNSCORED_REJECTS == expected
 
@@ -426,11 +429,11 @@ class TestM7A513BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 59
+        assert len(d) == 65
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.13 adds no new reject reasons."""
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
     def test_old_summary_fields_still_present(self):
         art = build_replay_summary([], [], mode="test")
@@ -630,11 +633,11 @@ class TestM7A514BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 59
+        assert len(d) == 65
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.14 adds no new reject reasons."""
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
     def test_old_summary_fields_still_present(self):
         art = build_replay_summary([], [], mode="test")
@@ -959,10 +962,10 @@ class TestM7A515BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 59
+        assert len(d) == 65
 
     def test_all_reject_reasons_count_still_19(self):
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
     def test_new_515_fields_present(self):
         art = build_replay_summary([], [], mode="test")

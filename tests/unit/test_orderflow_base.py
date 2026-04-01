@@ -257,7 +257,7 @@ class TestBackrunResultSchema:
 
     def test_reject_reasons_are_canonical(self):
         """All reject reasons must be from the canonical set."""
-        assert len(ALL_REJECT_REASONS) == 19  # 8 original + 5 M7.A.5.6 + 2 M7.A.5.10 + 2 M7.A.5.11 + 2 M7.A.5.12
+        assert len(ALL_REJECT_REASONS) == 20  # 8 original + 5 M7.A.5.6 + 2 M7.A.5.10 + 2 M7.A.5.11 + 2 M7.A.5.12 + 1 M7.A.5.21
         assert REJECT_NO_COUNTER_VENUE in ALL_REJECT_REASONS
         assert REJECT_GAS_EXCEEDS_GROSS in ALL_REJECT_REASONS
         assert REJECT_SLIPPAGE_EXCEEDS_GROSS in ALL_REJECT_REASONS

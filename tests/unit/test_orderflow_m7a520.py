@@ -318,8 +318,8 @@ class TestAttemptLocalPricing:
 class TestBackrunResultM7A520Fields:
     """M7.A.5.20: BackrunResult gains 3 new fields → 59 total."""
 
-    def test_field_count_is_59(self):
-        assert len(fields(BackrunResult)) == 59
+    def test_field_count_is_65(self):
+        assert len(fields(BackrunResult)) == 65
 
     def test_local_pricing_fields_exist(self):
         r = BackrunResult(
@@ -344,12 +344,12 @@ class TestBackrunResultM7A520Fields:
         assert r.local_pricing_used is None
         assert r.local_pricing_failure_reason is None
 
-    def test_all_reject_reasons_count_19(self):
-        """No new reject reasons added in M7.A.5.20."""
-        assert len(ALL_REJECT_REASONS) == 19
+    def test_all_reject_reasons_count_20(self):
+        """One new reject reason added in M7.A.5.21."""
+        assert len(ALL_REJECT_REASONS) == 20
 
-    def test_unscored_rejects_count_11(self):
-        assert len(UNSCORED_REJECTS) == 11
+    def test_unscored_rejects_count_12(self):
+        assert len(UNSCORED_REJECTS) == 12
 
     def test_all_blocker_tags_count_8(self):
         assert len(ALL_BLOCKER_TAGS) == 8

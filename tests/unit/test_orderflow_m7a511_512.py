@@ -195,7 +195,7 @@ class TestM7A511RejectConstants:
         assert REJECT_ZERO_LIQUIDITY in ALL_REJECT_REASONS
 
     def test_all_reject_reasons_count_19(self):
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
 
 
@@ -461,10 +461,10 @@ class TestM7A511BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 59
+        assert len(d) == 65
 
     def test_all_reject_reasons_count_19(self):
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
     def test_old_constants_still_present(self):
         for reason in [
@@ -518,7 +518,7 @@ class TestM7A512RejectConstants:
         assert REJECT_ALL_POOLS_TRULY_INACTIVE in ALL_REJECT_REASONS
 
     def test_all_reject_reasons_count_19(self):
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
 
 
@@ -725,10 +725,10 @@ class TestM7A512BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 59
+        assert len(d) == 65
 
     def test_all_reject_reasons_count_19(self):
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
     def test_old_511_constants_still_present(self):
         for reason in [

@@ -115,6 +115,7 @@ def counter_venue_coverage_scan(
     dex_configs: Dict[str, Any],
     rpc_url: str,
     block_num: int,
+    pool_registry: Any = None,
 ) -> Dict[str, Any]:
     """Scan counter-venue coverage for a resolved token pair.
 
@@ -185,6 +186,31 @@ def counter_venue_coverage_scan(
 
     inactive_pool_count = known_pools_total - active_pools_total
 
+    # ── M7.A.5.21: Merge registry pools ────────────────────────────────
+    # Registry pools supplement the multicall-discovered pools.  Dedup by address.
+    _seen_addrs = {cp["address"] for cp in candidate_pools if cp.get("address")}
+    _registry_merged = 0
+    if pool_registry is not None:
+        try:
+            reg_entries = pool_registry.lookup_pair(token_in_addr, token_out_addr)
+            for re in reg_entries:
+                if re.address not in _seen_addrs:
+                    cp_dict = re.to_candidate_pool()
+                    candidate_pools.append(cp_dict)
+                    _seen_addrs.add(re.address)
+                    _registry_merged += 1
+                    known_pools_total += 1
+                    if re.is_active():
+                        active_pools_total += 1
+                        # Add dex to active lists if not already there
+                        if re.dex not in active_dexes:
+                            active_dexes.append(re.dex)
+                    if re.dex not in known_dexes:
+                        known_dexes.append(re.dex)
+            inactive_pool_count = known_pools_total - active_pools_total
+        except Exception as exc:
+            logger.debug("Registry merge failed: %s", str(exc)[:80])
+
     # Check which have quoter for buy/sell (any pool)
     buy_venues = 0
     sell_venues = 0
@@ -228,6 +254,8 @@ def counter_venue_coverage_scan(
         "coverage_blocker_reason": blocker,
         # M7.A.5.12: Per-pool debug for diagnostics
         "candidate_pools": candidate_pools,
+        # M7.A.5.21: Registry merge stats
+        "registry_pools_merged": _registry_merged,
         # Legacy alias
         "known_pools": known_pools_total,
     }

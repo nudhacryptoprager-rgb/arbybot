@@ -49,6 +49,8 @@ REJECT_ALL_POOLS_ZERO_LIQUIDITY = "ALL_POOLS_ZERO_LIQUIDITY"
 # M7.A.5.12: Coverage/local-sim consistency split
 REJECT_COVERAGE_LOCAL_MISMATCH = "COVERAGE_SAYS_ACTIVE_BUT_LOCAL_SIM_ZERO"
 REJECT_ALL_POOLS_TRULY_INACTIVE = "ALL_CANDIDATE_POOLS_TRULY_INACTIVE"
+# M7.A.5.21: Gas-floor prefilter
+REJECT_GAS_FLOOR_EXCEEDED = "GAS_FLOOR_EXCEEDED"
 
 ALL_REJECT_REASONS = frozenset({
     REJECT_NO_COUNTER_VENUE,
@@ -70,6 +72,7 @@ ALL_REJECT_REASONS = frozenset({
     REJECT_ALL_POOLS_ZERO_LIQUIDITY,
     REJECT_COVERAGE_LOCAL_MISMATCH,
     REJECT_ALL_POOLS_TRULY_INACTIVE,
+    REJECT_GAS_FLOOR_EXCEEDED,
 })
 
 # M7.A.5.13: Module-level unscored rejects set
@@ -80,6 +83,7 @@ UNSCORED_REJECTS = frozenset({
     REJECT_ZERO_LIQUIDITY,
     REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_ALL_POOLS_ZERO_LIQUIDITY,
     REJECT_COVERAGE_LOCAL_MISMATCH, REJECT_ALL_POOLS_TRULY_INACTIVE,
+    REJECT_GAS_FLOOR_EXCEEDED,
 })
 
 # ---------------------------------------------------------------------------
@@ -190,3 +194,10 @@ _FALLBACK_ETH_PRICE_USD = 3500.0
 
 # V3 fee tiers to try when pool fee is unknown
 _DEFAULT_FEE_TIERS = [500, 3000, 100, 10000]
+
+# ---------------------------------------------------------------------------
+# M7.A.5.21: Gas-floor prefilter threshold (Arbitrum)
+# ---------------------------------------------------------------------------
+# Minimum gross bps needed to cover Arbitrum gas (L2 exec + L1 data poster).
+# Events whose estimated gross < this floor are rejected without quoting.
+GAS_FLOOR_BPS_ARBITRUM = 2.0  # ~2 bps baseline gas cost on Arbitrum

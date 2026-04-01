@@ -142,6 +142,46 @@ def _swap_one_for_zero(
     return amount_out if amount_out > 0 else None
 
 
+def compute_algebra_swap_amount_out(
+    sqrt_price_x96: int,
+    liquidity: int,
+    amount_in: int,
+    fee_zto: int,
+    fee_otz: int,
+    zero_for_one: bool,
+) -> Optional[int]:
+    """Compute Algebra/Camelot V3 swap output using globalState.
+
+    Algebra pools (Camelot V3, Chronos, Ramses) use ``globalState``
+    instead of ``slot0`` and have **dynamic** per-direction fees stored
+    in the pool state rather than immutable fee tiers.
+
+    The math is identical to Uniswap V3 single-tick pricing — only the
+    fee source differs.  ``fee_zto`` is the fee for zero→one; ``fee_otz``
+    for one→zero (both in hundredths of a bip, i.e. same 1e6 scale as V3
+    fee_pips).
+
+    Args:
+        sqrt_price_x96: Q64.96 price from globalState.
+        liquidity: Active liquidity.
+        amount_in: Raw input amount in wei.
+        fee_zto: Fee (hundredths of a bip) for token0→token1.
+        fee_otz: Fee (hundredths of a bip) for token1→token0.
+        zero_for_one: Swap direction.
+
+    Returns:
+        Positive output amount, or None if swap can't be computed.
+    """
+    fee_pips = fee_zto if zero_for_one else fee_otz
+    return compute_v3_swap_amount_out(
+        sqrt_price_x96=sqrt_price_x96,
+        liquidity=liquidity,
+        amount_in=amount_in,
+        fee_pips=fee_pips,
+        zero_for_one=zero_for_one,
+    )
+
+
 def compute_v2_swap_amount_out(
     reserve_in: int,
     reserve_out: int,
@@ -186,12 +226,17 @@ def attempt_local_pricing(
     token_in_addr: str,
     token_out_addr: str,
     backrun_size_wei: int,
+    registry_entries: Optional[list] = None,
 ) -> Optional[dict]:
     """Attempt local-state pricing across candidate pools.
 
     For each pool with full state (sqrtPriceX96 + liquidity > 0), compute
     local buy quote.  Then for best buy, compute sell quote.  Returns the
     best roundtrip result or None if no pool could be priced locally.
+
+    M7.A.5.21: Supports V3, Algebra, and V2 adapter types when
+    ``registry_entries`` are provided (from PoolRegistry).  V2 entries
+    store reserve0/reserve1 in sqrt_price_x96/tick fields.
 
     Returns dict with:
         buy_amount: int
@@ -200,12 +245,18 @@ def attempt_local_pricing(
         sell_venue: str  (pool address)
         buy_fee: int
         sell_fee: int
-        pricing_path: "v3_local" | "v2_local"
+        pricing_path: "v3_local" | "v2_local" | "algebra_local"
         pools_attempted: int
         pools_succeeded: int
     """
     if not candidate_pools or not local_sim_states:
         return None
+
+    # Build adapter_type lookup from registry entries if available
+    _adapter_map: dict = {}  # addr_lower -> adapter_type
+    if registry_entries:
+        for re in registry_entries:
+            _adapter_map[re.address.lower()] = re.adapter_type
 
     # Determine token ordering for zero_for_one
     zero_for_one = token_in_addr.lower() < token_out_addr.lower()
@@ -226,24 +277,62 @@ def attempt_local_pricing(
         if state is None:
             continue
 
+        adapter = _adapter_map.get(addr.lower() if addr else "", "uniswap_v3")
         sqrt_price = state.get("sqrt_price_x96", 0)
         liq = state.get("liquidity", 0)
 
-        if sqrt_price > 0 and liq > 0:
-            pools_attempted += 1
-            out = compute_v3_swap_amount_out(
-                sqrt_price_x96=sqrt_price,
-                liquidity=liq,
-                amount_in=backrun_size_wei,
-                fee_pips=fee,
-                zero_for_one=zero_for_one,
-            )
-            if out is not None and out > best_buy_amount:
-                best_buy_amount = out
-                best_buy_pool = addr
-                best_buy_fee = fee
-                best_buy_path = "v3_local"
-                pools_succeeded += 1
+        if adapter == "uniswap_v2":
+            # V2: sqrt_price_x96 = reserve0, tick = reserve1
+            reserve0 = sqrt_price
+            reserve1 = state.get("tick", 0)
+            if reserve0 > 0 and reserve1 > 0:
+                pools_attempted += 1
+                # Determine which reserve is "in" vs "out"
+                r_in = reserve0 if zero_for_one else reserve1
+                r_out = reserve1 if zero_for_one else reserve0
+                out = compute_v2_swap_amount_out(r_in, r_out, backrun_size_wei)
+                if out is not None and out > best_buy_amount:
+                    best_buy_amount = out
+                    best_buy_pool = addr
+                    best_buy_fee = fee
+                    best_buy_path = "v2_local"
+                    pools_succeeded += 1
+        elif adapter == "algebra":
+            # Algebra: same math as V3 but fee may be dynamic
+            if sqrt_price > 0 and liq > 0:
+                pools_attempted += 1
+                # Algebra stores dynamic fee; use cp["fee"] if available, else 3000
+                algebra_fee = fee if fee > 0 else 3000
+                out = compute_v3_swap_amount_out(
+                    sqrt_price_x96=sqrt_price,
+                    liquidity=liq,
+                    amount_in=backrun_size_wei,
+                    fee_pips=algebra_fee,
+                    zero_for_one=zero_for_one,
+                )
+                if out is not None and out > best_buy_amount:
+                    best_buy_amount = out
+                    best_buy_pool = addr
+                    best_buy_fee = algebra_fee
+                    best_buy_path = "algebra_local"
+                    pools_succeeded += 1
+        else:
+            # V3 (default)
+            if sqrt_price > 0 and liq > 0:
+                pools_attempted += 1
+                out = compute_v3_swap_amount_out(
+                    sqrt_price_x96=sqrt_price,
+                    liquidity=liq,
+                    amount_in=backrun_size_wei,
+                    fee_pips=fee,
+                    zero_for_one=zero_for_one,
+                )
+                if out is not None and out > best_buy_amount:
+                    best_buy_amount = out
+                    best_buy_pool = addr
+                    best_buy_fee = fee
+                    best_buy_path = "v3_local"
+                    pools_succeeded += 1
 
     if best_buy_amount <= 0 or best_buy_pool is None:
         return None
@@ -262,22 +351,49 @@ def attempt_local_pricing(
         if state is None:
             continue
 
+        adapter = _adapter_map.get(addr.lower() if addr else "", "uniswap_v3")
         sqrt_price = state.get("sqrt_price_x96", 0)
         liq = state.get("liquidity", 0)
 
-        if sqrt_price > 0 and liq > 0:
-            # Sell is the reverse direction
-            out = compute_v3_swap_amount_out(
-                sqrt_price_x96=sqrt_price,
-                liquidity=liq,
-                amount_in=best_buy_amount,
-                fee_pips=fee,
-                zero_for_one=not zero_for_one,
-            )
-            if out is not None and out > best_sell_amount:
-                best_sell_amount = out
-                best_sell_pool = addr
-                best_sell_fee = fee
+        if adapter == "uniswap_v2":
+            reserve0 = sqrt_price
+            reserve1 = state.get("tick", 0)
+            if reserve0 > 0 and reserve1 > 0:
+                # Reverse direction for sell
+                r_in = reserve1 if zero_for_one else reserve0
+                r_out = reserve0 if zero_for_one else reserve1
+                out = compute_v2_swap_amount_out(r_in, r_out, best_buy_amount)
+                if out is not None and out > best_sell_amount:
+                    best_sell_amount = out
+                    best_sell_pool = addr
+                    best_sell_fee = fee
+        elif adapter == "algebra":
+            if sqrt_price > 0 and liq > 0:
+                algebra_fee = fee if fee > 0 else 3000
+                out = compute_v3_swap_amount_out(
+                    sqrt_price_x96=sqrt_price,
+                    liquidity=liq,
+                    amount_in=best_buy_amount,
+                    fee_pips=algebra_fee,
+                    zero_for_one=not zero_for_one,
+                )
+                if out is not None and out > best_sell_amount:
+                    best_sell_amount = out
+                    best_sell_pool = addr
+                    best_sell_fee = algebra_fee
+        else:
+            if sqrt_price > 0 and liq > 0:
+                out = compute_v3_swap_amount_out(
+                    sqrt_price_x96=sqrt_price,
+                    liquidity=liq,
+                    amount_in=best_buy_amount,
+                    fee_pips=fee,
+                    zero_for_one=not zero_for_one,
+                )
+                if out is not None and out > best_sell_amount:
+                    best_sell_amount = out
+                    best_sell_pool = addr
+                    best_sell_fee = fee
 
     if best_sell_amount <= 0:
         return None

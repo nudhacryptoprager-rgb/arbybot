@@ -429,7 +429,7 @@ class TestM7A57BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 59
+        assert len(parsed) == 65
         # Old fields still present
         assert "event_id" in parsed
         assert "reject_reason" in parsed
@@ -595,7 +595,7 @@ class TestM7A58BackwardCompat:
         )
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 59
+        assert len(parsed) == 65
         # M7.A.5.8 fields present
         assert parsed["l2_gas_bps"] == 2.0
         assert parsed["l1_data_bps"] == 8.0

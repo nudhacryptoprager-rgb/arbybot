@@ -552,11 +552,11 @@ class TestM7A516BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 59
+        assert len(d) == 65
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.16 adds no new reject reasons."""
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
     def test_new_516_fields_present(self):
         art = build_replay_summary([], [], mode="test")
@@ -866,11 +866,11 @@ class TestM7A517BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 59, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 65, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.17 adds no new reject reasons."""
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
     def test_new_517_field_present(self):
         r = BackrunResult(

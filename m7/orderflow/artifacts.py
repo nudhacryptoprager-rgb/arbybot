@@ -22,11 +22,13 @@ from m7.shared.constants import (
     BLOCKER_SUBGRAPH_API_KEY_REQUIRED,
     DEFAULT_BACKRUN_GAS,
     DEFAULT_GAS_PRICE_GWEI,
+    GAS_FLOOR_BPS_ARBITRUM,
     M7A4_CHAIN,
     REJECT_ALL_POOLS_TRULY_INACTIVE,
     REJECT_ALL_POOLS_ZERO_LIQUIDITY,
     REJECT_COVERAGE_LOCAL_MISMATCH,
     REJECT_GAS_EXCEEDS_GROSS,
+    REJECT_GAS_FLOOR_EXCEEDED,
     REJECT_NO_ACTIVE_COUNTER_POOL,
     REJECT_NO_COUNTER_POOL,
     REJECT_NO_COUNTER_VENUE,
@@ -287,6 +289,24 @@ def build_intent_scout_summary(
         "assessments": [asdict(a) for a in assessments],
     }
 
+
+
+def _build_adapter_histogram(results: List[BackrunResult]) -> Dict[str, int]:
+    """Build histogram of adapter_type_used across results."""
+    hist: Dict[str, int] = {}
+    for r in results:
+        at = r.adapter_type_used or "none"
+        hist[at] = hist.get(at, 0) + 1
+    return hist
+
+
+def _build_pricing_path_histogram(results: List[BackrunResult]) -> Dict[str, int]:
+    """Build histogram of pricing_path across results."""
+    hist: Dict[str, int] = {}
+    for r in results:
+        pp = r.pricing_path or "none"
+        hist[pp] = hist.get(pp, 0) + 1
+    return hist
 
 
 def build_replay_summary(
@@ -764,6 +784,23 @@ def build_replay_summary(
             "low_lag_scored_remote_quoter_count": low_lag_scored_remote_quoter_count,
             "low_lag_scored_watchlist_count": low_lag_scored_watchlist_count,
             "best_net_bps_local": best_net_bps_local,
+        },
+        # M7.A.5.21: Factory registry + adapter-complete + gas-floor metrics
+        "m7a521_registry_metrics": {
+            "events_with_registry": sum(
+                1 for r in results if r.registry_pools_found is not None
+            ),
+            "total_registry_pools_found": sum(
+                r.registry_pools_found or 0 for r in results
+            ),
+            "total_registry_pools_active": sum(
+                r.registry_pools_active or 0 for r in results
+            ),
+            "gas_floor_exceeded_count": sum(
+                1 for r in results if r.gas_floor_exceeded
+            ),
+            "adapter_type_histogram": _build_adapter_histogram(results),
+            "pricing_path_histogram": _build_pricing_path_histogram(results),
         },
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,

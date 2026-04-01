@@ -33,6 +33,7 @@ from m7.shared.constants import (
     REJECT_ALL_POOLS_ZERO_LIQUIDITY,
     REJECT_COVERAGE_LOCAL_MISMATCH,
     REJECT_ALL_POOLS_TRULY_INACTIVE,
+    REJECT_GAS_FLOOR_EXCEEDED,
     ALL_REJECT_REASONS,
     UNSCORED_REJECTS,
     ADMISSION_CANONICAL,
@@ -41,6 +42,7 @@ from m7.shared.constants import (
     ADMISSION_REJECTED,
     ADMISSION_SUBGRAPH_VERIFIED,
     CHAINLINK_FEEDS_ARBITRUM,
+    GAS_FLOOR_BPS_ARBITRUM,
     _DEFAULT_FEE_TIERS,
     _FALLBACK_ETH_PRICE_USD,
     M7A4_CHAIN,
@@ -78,6 +80,7 @@ def score_backrun_live_parallel(
     block_time_ms: Optional[float] = None,
     addr_to_symbol: Optional[Dict[str, str]] = None,
     subgraph_seeded_addrs: Optional[set] = None,
+    pool_registry: Any = None,
 ) -> BackrunResult:
     """Score a backrun using 3-stage pipeline: pair resolve + coverage scan + quote.
 
@@ -382,11 +385,28 @@ def score_backrun_live_parallel(
     except Exception:
         pass  # oracle guard is best-effort
 
+    # ── M7.A.5.21: Registry preload for this pair ────────────────────────
+    _registry_entries: list = []
+    _registry_pools_found: Optional[int] = None
+    _registry_pools_active: Optional[int] = None
+    if pool_registry is not None:
+        try:
+            _reg_results = pool_registry.preload_pair(
+                token_in_addr, token_out_addr,
+                dex_configs, rpc_url, current_block,
+            )
+            _registry_entries = _reg_results
+            _registry_pools_found = len(_reg_results)
+            _registry_pools_active = sum(1 for e in _reg_results if e.is_active())
+        except Exception as _reg_exc:
+            logger.debug("Registry preload failed: %s", str(_reg_exc)[:80])
+
     # ── M7.A.5.6: Counter-venue coverage scan ──────────────────────────
     try:
         coverage = counter_venue_coverage_scan(
             token_in_addr, token_out_addr,
             dex_configs, rpc_url, current_block,
+            pool_registry=pool_registry,
         )
     except Exception:
         coverage = {
@@ -513,6 +533,27 @@ def score_backrun_live_parallel(
         _price = oracle_result["token_in_oracle_usd"]
         _size_usd = round(backrun_size_wei / (10 ** _effective_dec) * _price, 2)
 
+    # ── M7.A.5.21: Gas-floor prefilter ──────────────────────────────────
+    _gas_floor_exceeded = False
+    _gas_floor_bps: Optional[float] = None
+    if _size_usd is not None and _size_usd > 0:
+        # Estimate gas cost in USD: gas_eth_wei * eth_price / 1e18
+        _gas_eth_wei_est = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+        _est_eth_price: Optional[float] = None
+        if oracle_result:
+            _in_sym = _ats.get(token_in_addr.lower(), "")
+            _out_sym = _ats.get(token_out_addr.lower(), "")
+            if _in_sym.upper() in ("WETH", "ETH"):
+                _est_eth_price = oracle_result.get("token_in_oracle_usd")
+            elif _out_sym.upper() in ("WETH", "ETH"):
+                _est_eth_price = oracle_result.get("token_out_oracle_usd")
+        if _est_eth_price is None:
+            _est_eth_price = _FALLBACK_ETH_PRICE_USD
+        _gas_usd = _gas_eth_wei_est * _est_eth_price / 1e18
+        _gas_floor_bps = round(_gas_usd / _size_usd * 10000, 2) if _size_usd > 0 else None
+        if _gas_floor_bps is not None and _gas_floor_bps > GAS_FLOOR_BPS_ARBITRUM:
+            _gas_floor_exceeded = True
+
     # DEXes that have quoter_v2
     quotable_dexes = []
     for dex_name, cfg in dex_configs.items():
@@ -587,6 +628,7 @@ def score_backrun_live_parallel(
                 token_in_addr=token_in_addr,
                 token_out_addr=token_out_addr,
                 backrun_size_wei=backrun_size_wei,
+                registry_entries=_registry_entries if _registry_entries else None,
             )
             if _local_result is None:
                 local_pricing_failure_reason = "no_pools_priced"
@@ -866,6 +908,12 @@ def score_backrun_live_parallel(
             local_pricing_attempted=local_pricing_attempted,
             local_pricing_used=local_pricing_used,
             local_pricing_failure_reason=local_pricing_failure_reason,
+            registry_pools_found=_registry_pools_found,
+            registry_pools_active=_registry_pools_active,
+            adapter_type_used=_local_result.get("pricing_path") if _local_result else None,
+            gas_floor_exceeded=_gas_floor_exceeded,
+            gas_floor_bps=_gas_floor_bps,
+            pricing_path=_local_result.get("pricing_path") if _local_result else None,
         )
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
@@ -907,5 +955,9 @@ def score_backrun_live_parallel(
         local_pricing_attempted=local_pricing_attempted,
         local_pricing_used=local_pricing_used,
         local_pricing_failure_reason=local_pricing_failure_reason,
+        registry_pools_found=_registry_pools_found,
+        registry_pools_active=_registry_pools_active,
+        gas_floor_exceeded=_gas_floor_exceeded,
+        gas_floor_bps=_gas_floor_bps,
     )
 

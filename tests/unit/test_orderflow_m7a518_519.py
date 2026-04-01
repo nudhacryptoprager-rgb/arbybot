@@ -584,15 +584,15 @@ class TestM7A518BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 59, f"Expected 59 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 65, f"Expected 59 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.18 adds no new reject reasons."""
-        assert len(ALL_REJECT_REASONS) == 19
+        assert len(ALL_REJECT_REASONS) == 20
 
     def test_unscored_rejects_count_still_11(self):
         """M7.A.5.18 does not change unscored rejects set."""
-        assert len(UNSCORED_REJECTS) == 11
+        assert len(UNSCORED_REJECTS) == 12
 
     def test_all_blocker_tags_count_is_8(self):
         """M7.R1 defines exactly 8 canonical blocker tags (was 7 in M7.A.5.18)."""
