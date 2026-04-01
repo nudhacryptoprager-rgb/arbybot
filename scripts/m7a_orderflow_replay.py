@@ -154,6 +154,13 @@ from m7.orderflow.scoring_parallel import (  # noqa: F401
     score_backrun_live_parallel,
 )
 
+# --- Re-exports from m7.orderflow.v3_math ---
+from m7.orderflow.v3_math import (  # noqa: F401
+    attempt_local_pricing,
+    compute_v2_swap_amount_out,
+    compute_v3_swap_amount_out,
+)
+
 # --- Re-exports from m7.orderflow.artifacts ---
 from m7.orderflow.artifacts import (  # noqa: F401
     build_intent_scout_summary,

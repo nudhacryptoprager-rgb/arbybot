@@ -245,7 +245,7 @@ class TestM7A56BackrunResultFields:
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 56, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 59, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_new_fields_present(self):
         ev = _make_event()
@@ -529,7 +529,7 @@ class TestM7A56BackwardCompat:
         ev = _make_event()
         r = score_backrun_offline(ev)
         d = asdict(r)
-        assert len(d) == 56
+        assert len(d) == 59
         # Core offline fields still work
         assert r.event_source == "fixture"
         assert r.reject_reason is not None or r.route_viable
@@ -565,7 +565,7 @@ class TestM7A56BackwardCompat:
         s = json.dumps(d)
         parsed = json.loads(s)
         assert parsed["event_id"] == r.event_id
-        assert len(parsed) == 56
+        assert len(parsed) == 59
         assert "event_id" in d
         assert "venues_pruned_by_multicall" in d
         assert "latency_budget_ms" in d
@@ -606,7 +606,7 @@ class TestM7A56BackwardCompat:
         )
         d = asdict(r)
         # 30 original + 4 M7.A.5.4 + 3 M7.A.5.5 + 5 M7.A.5.6 + 3 M7.A.5.7 + 4 M7.A.5.8 + 4 M7.A.5.9 + 1 M7.A.5.15 + 1 M7.A.5.16 + 1 M7.A.5.17 = 56
-        assert len(d) == 56, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 59, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
 
 
 
@@ -864,7 +864,7 @@ class TestM7A55BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 56, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 59, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_m7a57_fields_exist_in_backrun_result(self):
         """M7.A.5.7 fields (admission_source, oracle_guard, local_sim_state) exist and default to None."""

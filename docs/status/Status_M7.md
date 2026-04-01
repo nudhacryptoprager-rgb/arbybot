@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.19 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted all M7 logic into a dedicated `m7/` package (orderflow, triangular, shared) while preserving CLI flags, artifact schemas, reject codes, and milestone semantics. M7.A.5.19 added quote-fail provenance injection, split cli.py (1181→312+799 lines), split test files (6086→9 files, 2247→3 files). Blocker tags: 8 canonical tags (+`LOW_LAG_RPC_QUOTE_FAIL`). BackrunResult stays 56 fields, reject_reasons stays 19. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.20 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted M7 logic into `m7/` package. M7.A.5.20 added local-state-first V3/V2 swap math, 3 new fields (59 total). 8 blocker tags, reject_reasons 19. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-01  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing. M7.B remains closed.
 
 ---
 
@@ -122,26 +122,7 @@ Evidence: 300b, 25 events, 0 scored. `ALL_POOLS_ZERO_LIQUIDITY: 19, NO_ACTIVE_CO
 
 ## M7.A.5.13: Stale vs Low-Lag Scored Split + Contract Fixes
 
-**Hypothesis**: M7.A.5.12's 26/28 scored results are ALL stale — the project lacks truthful low-lag scored evidence. `events_scored_low_lag_ws` had a contract mismatch (counted all low-lag events, not just scored). Need explicit stale/low-lag split metrics.
-
-**Bugs fixed**:
-1. **block_lag=0 falsy trap**: `(r.block_lag or 999)` treats 0 as unknown (Python `0 or 999 == 999`). Fixed with `_lag(r)` helper using `is not None`.
-2. **events_scored_low_lag_ws contract**: counted all low-lag events including unscored (TOKEN_PAIR_UNRESOLVED etc). Now filters through `UNSCORED_REJECTS` before counting.
-3. **UNSCORED_REJECTS**: promoted to module-level frozenset (11 members) for reuse across ws-live and live-blocks paths.
-
-**New metrics** in `build_replay_summary()`:
-- `events_detected_low_lag` / `events_scored_low_lag`: detection vs scoring split
-- `best_net_bps_stale` / `best_net_bps_low_lag_scored` / `mean_net_bps_stale` / `mean_net_bps_low_lag_scored`: per-class economics
-- `stale_low_lag_comparison`: machine-readable block with `stale_scored_count`, `low_lag_scored_count`, `beats_m4_baseline_stale/low_lag` (baseline: -3.5062 bps)
-
-**Evidence**:
-- 300b: 23 events, 16 scored. `events_detected_low_lag: 7, events_scored_low_lag: 0` (all 7 low-lag had unscored rejects). `stale_scored_count: 16`, `best_net_bps_stale: -2.2002` (RAIN/WETH), `beats_m4_baseline_stale: true`, `beats_m4_baseline_low_lag: false`.
-- 1000b: 12 events, 12 scored. `stale_scored_count: 12`, `best_net_bps_stale: -2.2002`, `beats_m4_baseline_stale: true`.
-- `events_scored_low_lag_ws: 0` in both runs (contract fix verified — was counting 7 before fix).
-
-**Key finding**: Stale subset beats M4 baseline (-2.20 > -3.51 bps) but NO low-lag scored events exist yet. Low-lag events are detected but all fail at pre-econ rejects (TOKEN_PAIR_UNRESOLVED, NO_COUNTER_POOL). Low-lag scored truth remains the gap.
-
-CI: 3077 passed, 341 orderflow tests.
+Fixed 3 bugs: block_lag=0 falsy trap, events_scored_low_lag_ws counting unscored, UNSCORED_REJECTS scope. Added stale/low-lag split metrics (`events_detected_low_lag`, `events_scored_low_lag`, per-class economics, `stale_low_lag_comparison`). Evidence: 300b 23 events 16 scored, `best_net_bps_stale: -2.2002`, `beats_m4_baseline_stale: true`; 1000b 12/12 scored. **0 low-lag scored** in both runs — all low-lag fail at pre-econ rejects. CI: 3077 passed, 341 orderflow tests.
 
 ---
 
@@ -177,14 +158,7 @@ CI: 3092 passed, 356 orderflow tests.
 3. **`low_lag_coverage_truth`**: Aggregated coverage metrics for low-lag subset — known_pools_total, active_pools_total, active_buy/sell_venues, no_counter_pool_rate, inactive_pool_rate.
 4. **Targeted enrichment fallback**: When `_resolve_event_tokens()` fails (multicall batch error), tries individual `eth_call` for token0()/token1(), enriches discovered addresses, and retries resolution. Best-effort; does not block pipeline.
 
-**Evidence**:
-- 300b: 17 events, 6 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 4, NO_COUNTER_POOL: 2}`. `low_lag_pair_resolution_rate: 0.3333`. All TOKEN_PAIR_UNRESOLVED have `pair_unresolved_detail: pool_read_failed` (multicall AND eth_call fallback both fail — likely non-standard pool contracts). NO_COUNTER_POOL events resolved pairs (`0x1009c5c1/USDT`, `WETH/0x60bf4e7c`) but no counter-venue pools exist.
-- 1000b: 12 events, 3 low-lag, 0 scored. `low_lag_reject_histogram: {TOKEN_PAIR_UNRESOLVED: 3}`. `low_lag_pair_resolution_rate: 0.0`. All `pool_read_failed`.
-- `low_lag_coverage_truth`: known_pools_total=0, active_pools_total=0 (no low-lag event reaches pool coverage stage with active results).
-
-**Key finding**: M7.A.5.15 confirms that low-lag events are still blocked before economics, but fresh reruns show the blocker stack is broader than `pool_read_failed` alone. On the low-lag subset, unsupported-pool reads, no-counter-pool cases, and known-but-inactive pools now coexist, so the next justified branch is explicit low-lag pool-class truth rather than a longer scan or strategy expansion.
-
-CI: 3110 passed, 374 orderflow tests.
+**Evidence**: 300b: 6 low-lag, 0 scored (TOKEN_PAIR_UNRESOLVED: 4, NO_COUNTER_POOL: 2). 1000b: 3 low-lag, 0 scored (TOKEN_PAIR_UNRESOLVED: 3). All `pool_read_failed`. Low-lag blocker stack multi-causal: unsupported-pool reads, no-counter-pool, known-but-inactive coexist. CI: 3110 passed, 374 orderflow tests.
 
 ---
 
@@ -264,7 +238,7 @@ CI: 3180 passed, 444 orderflow tests.
 
 **Changes**:
 1. **Quote-fail provenance in `scoring_parallel.py`**: Added `_buy_fail_info` list to capture (dex_name, exception_class) tuples when buy quotes fail. When `venues_quoted == 0`, injects `quote_fail_stage`, `quote_fail_venue`, `quote_fail_exception_short` into `stage_latency` dict. `artifacts.py` reads these into `low_lag_debug_rows`. 3 new tests (TestM7A519QuoteFailProvenance).
-2. **CLI split**: Extracted ws_live mode from `cli.py` into `mode_ws_live.py` (1181 → 312 + 799 lines).
+2. **CLI split**: Extracted ws_live mode from `cli.py` into `mode_ws_live.py` (cli.py 340 lines, mode_ws_live.py 854 lines).
 3. **Test file split**: `test_orderflow_contracts.py` (6086 lines, 107 classes) → 9 files (max 995 lines). `test_triangular_contracts.py` (2247 lines, 21 classes) → 3 files (max 932 lines). All 3183 tests pass with 0 regressions.
 4. **No new BackrunResult fields** (still 56). **No new reject reasons** (still 19). **ALL_BLOCKER_TAGS still 8**.
 
@@ -280,16 +254,29 @@ CI: 3183 passed, 447 orderflow + 152 triangular tests across 12 files (max 995 l
 
 ---
 
+## M7.A.5.20: Local-State-First Pricing (INFRASTRUCTURE)
+
+**Hypothesis**: Local V3/V2 swap math applied to captured pool state may bypass remote quoter entirely, halving pipeline latency and enabling first positive-net scoring.
+
+**Changes**: `m7/orderflow/v3_math.py` (NEW, ~260 lines): `compute_v3_swap_amount_out()` (single-tick V3), `compute_v2_swap_amount_out()` (V2 constant-product), `attempt_local_pricing()` orchestrator. 3 new BackrunResult fields (59 total): `local_pricing_attempted/used/failure_reason`. `scoring_parallel.py`: local pricing between Stage A and Stage B; Stage B skipped when local succeeds. `artifacts.py`: `low_lag_local_pricing` block (6 metrics).
+
+**Evidence**: 300b: 30 events, 29/30 local pricing used (stale), best_net=+18.20 bps, mean_latency=1402ms (was ~3500ms), 1 low-lag 0 scored. 300b_b: 30 events, best_net=+13.45 bps. 1000b: 82 events, best_net=+7.77 bps, 6 low-lag 0 scored. Triangular: 67/100 measured, best_net=-16.22 bps.
+
+**Key finding**: Local pricing works for stale events (first positive net bps observed: +18.20), pipeline latency halved. Low-lag events still blocked at coverage BEFORE reaching local pricing — `low_lag_local_pricing` correctly reports all zeros. Infrastructure progress, NOT profit progress: viable_count=0, best_net_bps_executable=null.
+
+CI: 3212 passed, 476 orderflow + 152 triangular tests.
+
+---
+
 ## M7.R1: Structural Refactor — Extract m7/ Package (COMPLETED)
 
 **Goal**: Extract all M7 logic from monolithic scripts into a dedicated lowercase `m7/` package, preserving CLI flags, artifact schemas, reject codes, and milestone semantics.
 
 **Changes**:
-1. **`m7/shared/constants.py`** (171 lines): All M7 constants, reject reasons, blocker tags, event types, surfaces, thresholds. Added `BLOCKER_LOW_LAG_RPC_QUOTE_FAIL` as 8th canonical tag.
-2. **`m7/orderflow/`** (7 modules, 2929 lines total): contracts, events, resolve, coverage, pricing, scoring_parallel, artifacts.
-3. **`m7/orderflow/cli.py`** (1105 lines): Argument parsing + mode orchestration.
-4. **`m7/triangular/`** (5 modules, 1828 lines total): graph, scoring, verdicts, repeatability, cli.
-5. **Shims**: `scripts/m7a_orderflow_replay.py` (154 lines), `scripts/m7a_enumerate_cycles.py` (94 lines), `engine/triangular_cycles.py` (23 lines), `engine/triangular_graph.py` (19 lines) — all thin re-export wrappers.
+1. **`m7/shared/constants.py`** (171 lines): All M7 constants, reject reasons, blocker tags, event types, surfaces, thresholds. Added 8th canonical blocker tag.
+2. **`m7/orderflow/`** (8 modules): contracts, events, resolve, coverage, pricing, scoring_parallel, artifacts, cli (340 lines) + mode_ws_live (854 lines).
+3. **`m7/triangular/`** (5 modules, 1828 lines total): graph, scoring, verdicts, repeatability, cli.
+4. **Shims**: `scripts/m7a_orderflow_replay.py` (154), `scripts/m7a_enumerate_cycles.py` (94), `engine/triangular_*.py` (19-23) — thin re-export wrappers.
 
 **Blocker tag addition**: `BLOCKER_LOW_LAG_RPC_QUOTE_FAIL` added as 8th canonical tag. Separately tracked from `LOW_LAG_REMOTE_QUOTER_LATENCY`.
 

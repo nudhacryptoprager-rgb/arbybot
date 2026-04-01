@@ -572,10 +572,10 @@ class TestM7A518LowLagWatchlist:
 
 
 class TestM7A518BackwardCompat:
-    """M7.A.5.18 must keep BackrunResult at 56 fields, reject count at 19."""
+    """M7.A.5.18 must keep BackrunResult at 59 fields (56 + 3 M7.A.5.20), reject count at 19."""
 
-    def test_backrun_result_field_count_still_56(self):
-        """M7.A.5.18 adds no new BackrunResult fields (watchlist + blocker_tags are artifact-level)."""
+    def test_backrun_result_field_count_still_59(self):
+        """M7.A.5.20 adds 3 local_pricing fields → 59 total."""
         r = BackrunResult(
             event_id="compat_518",
             event_source="live",
@@ -584,7 +584,7 @@ class TestM7A518BackwardCompat:
             backrun_direction=BACKRUN_BUY_DEPRESSED,
         )
         d = asdict(r)
-        assert len(d) == 56, f"Expected 56 fields, got {len(d)}: {sorted(d.keys())}"
+        assert len(d) == 59, f"Expected 59 fields, got {len(d)}: {sorted(d.keys())}"
 
     def test_all_reject_reasons_count_still_19(self):
         """M7.A.5.18 adds no new reject reasons."""

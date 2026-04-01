@@ -607,6 +607,32 @@ def build_replay_summary(
             }
     low_lag_watchlist = list(_ll_watchlist_map.values())
 
+    # M7.A.5.20: Local-pricing metrics (scored via local state vs remote quoter)
+    _ll_local_attempted = sum(
+        1 for r in _low_lag_all if r.local_pricing_attempted
+    )
+    _ll_local_used = sum(
+        1 for r in _low_lag_all if r.local_pricing_used
+    )
+    _ll_local_scored = [r for r in _low_lag_scored if r.local_pricing_used]
+    _ll_remote_scored = [r for r in _low_lag_scored if not r.local_pricing_used]
+    _ll_local_scored_net = [r.best_backrun_net_bps for r in _ll_local_scored]
+    low_lag_scored_local_state_count = len(_ll_local_scored)
+    low_lag_scored_remote_quoter_count = len(_ll_remote_scored)
+    # Watchlist: how many scored low-lag events had pool in watchlist
+    _ll_watchlist_addrs = set(_ll_watchlist_map.keys())
+    _ll_scored_watchlist = [
+        r for r in _low_lag_scored
+        if any(
+            (cp.get("address") or "").lower() in _ll_watchlist_addrs
+            for cp in (r.coverage_result or {}).get("candidate_pools", [])
+        )
+    ]
+    low_lag_scored_watchlist_count = len(_ll_scored_watchlist)
+    best_net_bps_local = (
+        round(max(_ll_local_scored_net), 4) if _ll_local_scored_net else None
+    )
+
     # M7.A.5.18: Blocker tags — top-level structural-stopper summary
     _active_tags: List[str] = []
     if events_detected_low_lag == 0:
@@ -730,6 +756,15 @@ def build_replay_summary(
         "low_lag_watchlist": low_lag_watchlist,
         # M7.A.5.18: Blocker tags (top-level structural-stopper summary)
         "blocker_tags": blocker_tags,
+        # M7.A.5.20: Local-pricing metrics
+        "low_lag_local_pricing": {
+            "local_attempted_count": _ll_local_attempted,
+            "local_used_count": _ll_local_used,
+            "low_lag_scored_local_state_count": low_lag_scored_local_state_count,
+            "low_lag_scored_remote_quoter_count": low_lag_scored_remote_quoter_count,
+            "low_lag_scored_watchlist_count": low_lag_scored_watchlist_count,
+            "best_net_bps_local": best_net_bps_local,
+        },
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
         "m7a_triangular_best_net_bps": -14.16,

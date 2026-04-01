@@ -62,6 +62,7 @@ from m7.orderflow.coverage import (
     counter_venue_coverage_scan,
 )
 from m7.orderflow.pricing import check_oracle_sanity
+from m7.orderflow.v3_math import attempt_local_pricing
 
 logger = logging.getLogger("m7.orderflow.scoring_parallel")
 
@@ -569,69 +570,57 @@ def score_backrun_live_parallel(
         fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
         quote_calls_after += len(fee_tiers[:2]) * 2  # buy + sell
 
+    # ── M7.A.5.20: Local-state-first pricing attempt ───────────────────
+    local_pricing_attempted = False
+    local_pricing_used = False
+    local_pricing_failure_reason = None
+    local_pricing_ms = None
+    _local_result = None
+
+    if local_sim and local_sim.get("pool_states"):
+        _lp_start = time.monotonic()
+        local_pricing_attempted = True
+        try:
+            _local_result = attempt_local_pricing(
+                candidate_pools=cand_pools,
+                local_sim_states=local_sim["pool_states"],
+                token_in_addr=token_in_addr,
+                token_out_addr=token_out_addr,
+                backrun_size_wei=backrun_size_wei,
+            )
+            if _local_result is None:
+                local_pricing_failure_reason = "no_pools_priced"
+        except Exception as _lp_exc:
+            local_pricing_failure_reason = f"error:{type(_lp_exc).__name__}"
+        local_pricing_ms = round((time.monotonic() - _lp_start) * 1000, 2)
+
     # ── Stage B: Confirmatory QuoterV2 quotes ───────────────────────────
+    # M7.A.5.20: Skip remote quoter if local pricing succeeded (fast path)
     stage_b_start = time.monotonic()
     best_buy_amount = None
     best_buy_venue = None
+    best_sell_amount = None
+    best_sell_venue = None
     venues_quoted = 0
     _buy_fail_info: list = []  # M7.A.5.19: capture quote failure provenance
 
-    def _try_buy(dex_name: str, quoter_addr: str, fee: int):
-        try:
-            result = read_quoter_v2(
-                quoter_address=quoter_addr,
-                token_in=token_in_addr,
-                token_out=token_out_addr,
-                amount_in=backrun_size_wei,
-                fee=fee,
-                rpc_url=rpc_url,
-                block_num="latest",
-                fallback_rpc_urls=fallback_rpc_urls,
-            )
-            if result and result is not QUOTER_RATE_LIMITED:
-                amt = result.get("amount_out", 0)
-                if amt > 0:
-                    return ("ok", dex_name, amt)
-            return ("fail", dex_name, "zero_or_rate_limited")
-        except Exception as exc:
-            return ("fail", dex_name, type(exc).__name__)
-
-    buy_jobs = []
-    for dex_name, cfg, quoter_addr in quotable_dexes:
-        fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
-        for fee in fee_tiers[:2]:
-            buy_jobs.append((dex_name, quoter_addr, fee))
-
-    # Use ThreadPoolExecutor for parallel buy quotes
-    if buy_jobs:
-        with ThreadPoolExecutor(max_workers=min(len(buy_jobs), 6)) as executor:
-            futures = {
-                executor.submit(_try_buy, dn, qa, f): (dn, f)
-                for dn, qa, f in buy_jobs
-            }
-            for future in as_completed(futures):
-                result = future.result()
-                if result is not None and result[0] == "ok":
-                    _, dex_name, amt = result
-                    venues_quoted += 1
-                    if best_buy_amount is None or amt > best_buy_amount:
-                        best_buy_amount = amt
-                        best_buy_venue = dex_name
-                elif result is not None and result[0] == "fail":
-                    _buy_fail_info.append((result[1], result[2]))
-
-    # Parallel sell pass: sell best_buy_amount back
-    best_sell_amount = None
-    best_sell_venue = None
-
-    if best_buy_amount is not None:
-        def _try_sell(dex_name: str, quoter_addr: str, fee: int):
+    if _local_result is not None:
+        # Local pricing produced a result — use it, skip remote quoter
+        local_pricing_used = True
+        best_buy_amount = _local_result["buy_amount"]
+        best_sell_amount = _local_result["sell_amount"]
+        best_buy_venue = _local_result["buy_venue"]
+        best_sell_venue = _local_result["sell_venue"]
+        venues_quoted = _local_result["pools_succeeded"]
+    else:
+        # Remote quoter path (slow, confirmatory)
+        def _try_buy(dex_name: str, quoter_addr: str, fee: int):
             try:
                 result = read_quoter_v2(
                     quoter_address=quoter_addr,
-                    token_in=token_out_addr,
-                    token_out=token_in_addr,
-                    amount_in=best_buy_amount,
+                    token_in=token_in_addr,
+                    token_out=token_out_addr,
+                    amount_in=backrun_size_wei,
                     fee=fee,
                     rpc_url=rpc_url,
                     block_num="latest",
@@ -640,36 +629,87 @@ def score_backrun_live_parallel(
                 if result and result is not QUOTER_RATE_LIMITED:
                     amt = result.get("amount_out", 0)
                     if amt > 0:
-                        return (dex_name, amt)
-            except Exception:
-                pass
-            return None
+                        return ("ok", dex_name, amt)
+                return ("fail", dex_name, "zero_or_rate_limited")
+            except Exception as exc:
+                return ("fail", dex_name, type(exc).__name__)
 
-        sell_jobs = []
+        buy_jobs = []
         for dex_name, cfg, quoter_addr in quotable_dexes:
             fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
             for fee in fee_tiers[:2]:
-                sell_jobs.append((dex_name, quoter_addr, fee))
+                buy_jobs.append((dex_name, quoter_addr, fee))
 
-        if sell_jobs:
-            with ThreadPoolExecutor(max_workers=min(len(sell_jobs), 6)) as executor:
+        # Use ThreadPoolExecutor for parallel buy quotes
+        if buy_jobs:
+            with ThreadPoolExecutor(max_workers=min(len(buy_jobs), 6)) as executor:
                 futures = {
-                    executor.submit(_try_sell, dn, qa, f): (dn, f)
-                    for dn, qa, f in sell_jobs
+                    executor.submit(_try_buy, dn, qa, f): (dn, f)
+                    for dn, qa, f in buy_jobs
                 }
                 for future in as_completed(futures):
                     result = future.result()
-                    if result is not None:
-                        dex_name, amt = result
-                        if best_sell_amount is None or amt > best_sell_amount:
-                            best_sell_amount = amt
-                            best_sell_venue = dex_name
+                    if result is not None and result[0] == "ok":
+                        _, dex_name, amt = result
+                        venues_quoted += 1
+                        if best_buy_amount is None or amt > best_buy_amount:
+                            best_buy_amount = amt
+                            best_buy_venue = dex_name
+                    elif result is not None and result[0] == "fail":
+                        _buy_fail_info.append((result[1], result[2]))
+
+        # Parallel sell pass: sell best_buy_amount back
+        if best_buy_amount is not None:
+            def _try_sell(dex_name: str, quoter_addr: str, fee: int):
+                try:
+                    result = read_quoter_v2(
+                        quoter_address=quoter_addr,
+                        token_in=token_out_addr,
+                        token_out=token_in_addr,
+                        amount_in=best_buy_amount,
+                        fee=fee,
+                        rpc_url=rpc_url,
+                        block_num="latest",
+                        fallback_rpc_urls=fallback_rpc_urls,
+                    )
+                    if result and result is not QUOTER_RATE_LIMITED:
+                        amt = result.get("amount_out", 0)
+                        if amt > 0:
+                            return (dex_name, amt)
+                except Exception:
+                    pass
+                return None
+
+            sell_jobs = []
+            for dex_name, cfg, quoter_addr in quotable_dexes:
+                fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+                for fee in fee_tiers[:2]:
+                    sell_jobs.append((dex_name, quoter_addr, fee))
+
+            if sell_jobs:
+                with ThreadPoolExecutor(max_workers=min(len(sell_jobs), 6)) as executor:
+                    futures = {
+                        executor.submit(_try_sell, dn, qa, f): (dn, f)
+                        for dn, qa, f in sell_jobs
+                    }
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result is not None:
+                            dex_name, amt = result
+                            if best_sell_amount is None or amt > best_sell_amount:
+                                best_sell_amount = amt
+                                best_sell_venue = dex_name
 
     stage_b_ms = round((time.monotonic() - stage_b_start) * 1000, 2)
     pipeline_end = time.monotonic()
     pipeline_ms = round((pipeline_end - pipeline_start) * 1000, 2)
 
     stage_latency = {"stage_a_ms": stage_a_ms, "stage_b_ms": stage_b_ms}
+
+    # M7.A.5.20: Inject local pricing latency
+    if local_pricing_ms is not None:
+        stage_latency["local_pricing_ms"] = local_pricing_ms
+        stage_latency["local_pricing_used"] = local_pricing_used
 
     # M7.A.5.19: Inject quote_fail provenance when all buy quotes failed
     if venues_quoted == 0 and _buy_fail_info:
@@ -823,6 +863,9 @@ def score_backrun_live_parallel(
             size_valid_for_token=(_token_in_dec is not None),
             pool_contract_truth=_pool_truth,
             pool_state_read_path=_pool_read_path,
+            local_pricing_attempted=local_pricing_attempted,
+            local_pricing_used=local_pricing_used,
+            local_pricing_failure_reason=local_pricing_failure_reason,
         )
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
@@ -861,5 +904,8 @@ def score_backrun_live_parallel(
         subgraph_seed_used=sg_seed,
         pool_contract_truth=_pool_truth,
         pool_state_read_path=_pool_read_path,
+        local_pricing_attempted=local_pricing_attempted,
+        local_pricing_used=local_pricing_used,
+        local_pricing_failure_reason=local_pricing_failure_reason,
     )
 

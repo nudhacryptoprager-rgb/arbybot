@@ -107,6 +107,10 @@ class BackrunResult:
     pool_contract_truth: Optional[Dict[str, Any]] = None
     # M7.A.5.17: Which adapter path read pool state
     pool_state_read_path: Optional[str] = None
+    # M7.A.5.20: Local-state-first pricing fields
+    local_pricing_attempted: Optional[bool] = None
+    local_pricing_used: Optional[bool] = None
+    local_pricing_failure_reason: Optional[str] = None
 
 
 @dataclass
