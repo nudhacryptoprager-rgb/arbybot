@@ -574,6 +574,7 @@ def score_backrun_live_parallel(
     best_buy_amount = None
     best_buy_venue = None
     venues_quoted = 0
+    _buy_fail_info: list = []  # M7.A.5.19: capture quote failure provenance
 
     def _try_buy(dex_name: str, quoter_addr: str, fee: int):
         try:
@@ -590,10 +591,10 @@ def score_backrun_live_parallel(
             if result and result is not QUOTER_RATE_LIMITED:
                 amt = result.get("amount_out", 0)
                 if amt > 0:
-                    return (dex_name, amt)
-        except Exception:
-            pass
-        return None
+                    return ("ok", dex_name, amt)
+            return ("fail", dex_name, "zero_or_rate_limited")
+        except Exception as exc:
+            return ("fail", dex_name, type(exc).__name__)
 
     buy_jobs = []
     for dex_name, cfg, quoter_addr in quotable_dexes:
@@ -610,12 +611,14 @@ def score_backrun_live_parallel(
             }
             for future in as_completed(futures):
                 result = future.result()
-                if result is not None:
-                    dex_name, amt = result
+                if result is not None and result[0] == "ok":
+                    _, dex_name, amt = result
                     venues_quoted += 1
                     if best_buy_amount is None or amt > best_buy_amount:
                         best_buy_amount = amt
                         best_buy_venue = dex_name
+                elif result is not None and result[0] == "fail":
+                    _buy_fail_info.append((result[1], result[2]))
 
     # Parallel sell pass: sell best_buy_amount back
     best_sell_amount = None
@@ -667,6 +670,14 @@ def score_backrun_live_parallel(
     pipeline_ms = round((pipeline_end - pipeline_start) * 1000, 2)
 
     stage_latency = {"stage_a_ms": stage_a_ms, "stage_b_ms": stage_b_ms}
+
+    # M7.A.5.19: Inject quote_fail provenance when all buy quotes failed
+    if venues_quoted == 0 and _buy_fail_info:
+        _fail_venues = sorted(set(v for v, _ in _buy_fail_info))
+        _fail_excs = sorted(set(e for _, e in _buy_fail_info))
+        stage_latency["quote_fail_stage"] = "buy"
+        stage_latency["quote_fail_venue"] = ",".join(_fail_venues)
+        stage_latency["quote_fail_exception_short"] = ",".join(_fail_excs)
 
     # Get current block after quoting for lag measurement
     try:

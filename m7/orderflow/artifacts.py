@@ -402,6 +402,15 @@ def build_replay_summary(
     low_lag_debug_rows = []
     for r in _low_lag_all:
         _cov = r.coverage_result or {}
+        # M7.A.5.19: Extract quote_fail provenance from pipeline_stage_latency_ms
+        _psl = r.pipeline_stage_latency_ms or {}
+        _qf_stage = None
+        _qf_venue = None
+        _qf_exc = None
+        if r.reject_reason == REJECT_RPC_QUOTE_FAIL:
+            _qf_stage = _psl.get("quote_fail_stage")
+            _qf_venue = _psl.get("quote_fail_venue")
+            _qf_exc = _psl.get("quote_fail_exception_short")
         low_lag_debug_rows.append({
             "event_id": r.event_id,
             "block_lag": r.block_lag,
@@ -418,6 +427,10 @@ def build_replay_summary(
             "pool_contract_truth": r.pool_contract_truth,
             # M7.A.5.17: which adapter path read pool state
             "pool_state_read_path": r.pool_state_read_path,
+            # M7.A.5.19: RPC_QUOTE_FAIL provenance
+            "quote_fail_stage": _qf_stage,
+            "quote_fail_venue": _qf_venue,
+            "quote_fail_exception_short": _qf_exc,
         })
 
     # M7.A.5.15: Low-lag coverage truth metrics (aggregated from _low_lag_all)
@@ -449,6 +462,11 @@ def build_replay_summary(
             REJECT_ALL_POOLS_TRULY_INACTIVE, REJECT_ALL_POOLS_ZERO_LIQUIDITY,
             REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_COVERAGE_LOCAL_MISMATCH,
         )
+    )
+    # M7.A.5.19: Count low-lag RPC_QUOTE_FAIL separately
+    _ll_rpc_quote_fail = sum(
+        1 for r in _low_lag_all
+        if r.reject_reason == REJECT_RPC_QUOTE_FAIL
     )
     low_lag_no_counter_pool_rate = round(_ll_no_counter / _ll_n, 4) if _ll_n else None
     low_lag_inactive_pool_rate = round(_ll_inactive / _ll_n, 4) if _ll_n else None
@@ -599,14 +617,17 @@ def build_replay_summary(
         _active_tags.append(BLOCKER_LOW_LAG_V2_UNSUPPORTED)
     if _ll_inactive > 0:
         _active_tags.append(BLOCKER_LOW_LAG_INACTIVE_POOL)
-    # Latency: check if any scored low-lag result had pipeline latency > budget
+    # M7.A.5.19: RPC_QUOTE_FAIL — fire when low-lag reject histogram contains it
+    if _ll_rpc_quote_fail > 0:
+        _active_tags.append(BLOCKER_LOW_LAG_RPC_QUOTE_FAIL)
+    # Latency: ONLY fire for scored low-lag paths where pipeline > budget
     _ll_over_budget = sum(
         1 for r in _low_lag_scored
         if r.quote_pipeline_latency_ms is not None
         and r.latency_budget_ms is not None
         and r.quote_pipeline_latency_ms > r.latency_budget_ms
     )
-    if _ll_over_budget > 0 or (events_detected_low_lag > 0 and events_scored_low_lag == 0):
+    if _ll_over_budget > 0:
         _active_tags.append(BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY)
     # Gas: check if GAS_EXCEEDS_GROSS is dominant reject
     _gas_dom = reject_counts.get(REJECT_GAS_EXCEEDS_GROSS, 0)

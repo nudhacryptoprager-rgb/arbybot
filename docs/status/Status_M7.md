@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.18 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted all M7 logic into a dedicated `m7/` package (orderflow, triangular, shared) while preserving CLI flags, artifact schemas, reject codes, and milestone semantics. Blocker tags expanded to 8 canonical tags (+`LOW_LAG_RPC_QUOTE_FAIL`). Scripts are now thin re-export wrappers. BackrunResult stays 56 fields, reject_reasons stays 19. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.19 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted all M7 logic into a dedicated `m7/` package (orderflow, triangular, shared) while preserving CLI flags, artifact schemas, reject codes, and milestone semantics. M7.A.5.19 added quote-fail provenance injection, split cli.py (1181→312+799 lines), split test files (6086→9 files, 2247→3 files). Blocker tags: 8 canonical tags (+`LOW_LAG_RPC_QUOTE_FAIL`). BackrunResult stays 56 fields, reject_reasons stays 19. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
 **Updated**: 2026-04-01  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags. M7.B remains closed.
 
@@ -34,7 +34,7 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`
 - `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--ws-live`, `--intent-scout`
-- Tests: 152 in `test_triangular_contracts.py`, 415 in `test_orderflow_contracts.py`
+- Tests: 152 in `test_triangular_*.py` (3 files), 447 in `test_orderflow_*.py` (9 files)
 
 ---
 
@@ -255,6 +255,28 @@ CI: 3151 passed, 415 orderflow tests.
 **Key findings**: Blocker tags correctly vary per window while SUBGRAPH_API_KEY_REQUIRED is always present. Watchlist captures pool addresses when candidate_pools exist (300b had 1 entry from ALL_CANDIDATE_POOLS_TRULY_INACTIVE). NO_COUNTER_POOL events produce empty watchlists (no pool to track). LOW_LAG_NONE_THIS_WINDOW wins in 1000b (temporal instability confirmed). Stale-positive events reach up to +14.34 bps but are rejected by STALE_POSITIVE gate. No low-lag event has ever been economically scored.
 
 CI: 3180 passed, 444 orderflow tests.
+
+---
+
+## M7.A.5.19: Quote-Fail Provenance + File Splits (DIAGNOSTIC + STRUCTURAL)
+
+**Hypothesis**: Post-refactor low-lag scoring may unlock only after blocker-tag stabilization and local-state pricing are applied to the low-lag watchlist inside the same-chain DEX domain. Prerequisite: diagnostic infrastructure improvements.
+
+**Changes**:
+1. **Quote-fail provenance in `scoring_parallel.py`**: Added `_buy_fail_info` list to capture (dex_name, exception_class) tuples when buy quotes fail. When `venues_quoted == 0`, injects `quote_fail_stage`, `quote_fail_venue`, `quote_fail_exception_short` into `stage_latency` dict. `artifacts.py` reads these into `low_lag_debug_rows`. 3 new tests (TestM7A519QuoteFailProvenance).
+2. **CLI split**: Extracted ws_live mode from `cli.py` into `mode_ws_live.py` (1181 → 312 + 799 lines).
+3. **Test file split**: `test_orderflow_contracts.py` (6086 lines, 107 classes) → 9 files (max 995 lines). `test_triangular_contracts.py` (2247 lines, 21 classes) → 3 files (max 932 lines). All 3183 tests pass with 0 regressions.
+4. **No new BackrunResult fields** (still 56). **No new reject reasons** (still 19). **ALL_BLOCKER_TAGS still 8**.
+
+**Evidence**:
+- 300b: 30 events, 27 scored, 3 low-lag, 0 low-lag scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 27, ALL_CANDIDATE_POOLS_TRULY_INACTIVE: 2, NO_COUNTER_POOL: 1}`. `best_net_bps: -0.54`. Blocker tags: 4 active.
+- 300b_b: 30 events, 29 scored, 1 low-lag, 0 low-lag scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 29, NO_COUNTER_POOL: 1}`. `best_net_bps: -2.41`. Blocker tags: 3 active.
+- 1000b: 38 events, 35 scored, 3 low-lag, 0 low-lag scored. `reject_histogram: {GAS_EXCEEDS_GROSS: 35, NO_COUNTER_POOL: 2, ALL_CANDIDATE_POOLS_TRULY_INACTIVE: 1}`. `best_net_bps: -2.20`. Blocker tags: 4 active.
+- Triangular: 67/100 measured, best_net=-22.74 bps, regime_bucket=medium_activity.
+
+**Key finding**: Quote-fail provenance is correctly null for all low-lag events (rejected at NO_COUNTER_POOL/INACTIVE_POOL before reaching quoting stage). The provenance will activate when events pass structural checks and reach the buy-quote stage but all venues fail. Stale subset continues to beat M4 baseline (best_net = -0.54 to -2.20 > -3.51 bps).
+
+CI: 3183 passed, 447 orderflow + 152 triangular tests across 12 files (max 995 lines each).
 
 ---
 
