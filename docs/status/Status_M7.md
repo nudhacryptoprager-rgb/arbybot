@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.18 — all scopes produce no-graduate verdicts. M7.A.5.18 added `low_lag_watchlist` artifact block (cross-window pair/pool truth accumulation), `blocker_tags` top-level structural-stopper summary (7 canonical tags), `m7a518_hypothesis`. BackrunResult stays 56 fields, reject_reasons stays 19. Evidence confirms: low-lag surface is temporally variant — NO_COUNTER_POOL and ALL_CANDIDATE_POOLS_TRULY_INACTIVE are the dominant low-lag blockers; watchlist captures pool addresses when candidate_pools exist; blocker_tags correctly activate per-window. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
-**Updated**: 2026-03-29  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 7 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags. M7.B remains closed.
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.18 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted all M7 logic into a dedicated `m7/` package (orderflow, triangular, shared) while preserving CLI flags, artifact schemas, reject codes, and milestone semantics. Blocker tags expanded to 8 canonical tags (+`LOW_LAG_RPC_QUOTE_FAIL`). Scripts are now thin re-export wrappers. BackrunResult stays 56 fields, reject_reasons stays 19. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B remains closed.)  
+**Updated**: 2026-04-01  
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags. M7.B remains closed.
 
 ---
 
@@ -255,6 +255,25 @@ CI: 3151 passed, 415 orderflow tests.
 **Key findings**: Blocker tags correctly vary per window while SUBGRAPH_API_KEY_REQUIRED is always present. Watchlist captures pool addresses when candidate_pools exist (300b had 1 entry from ALL_CANDIDATE_POOLS_TRULY_INACTIVE). NO_COUNTER_POOL events produce empty watchlists (no pool to track). LOW_LAG_NONE_THIS_WINDOW wins in 1000b (temporal instability confirmed). Stale-positive events reach up to +14.34 bps but are rejected by STALE_POSITIVE gate. No low-lag event has ever been economically scored.
 
 CI: 3180 passed, 444 orderflow tests.
+
+---
+
+## M7.R1: Structural Refactor — Extract m7/ Package (COMPLETED)
+
+**Goal**: Extract all M7 logic from monolithic scripts into a dedicated lowercase `m7/` package, preserving CLI flags, artifact schemas, reject codes, and milestone semantics.
+
+**Changes**:
+1. **`m7/shared/constants.py`** (171 lines): All M7 constants, reject reasons, blocker tags, event types, surfaces, thresholds. Added `BLOCKER_LOW_LAG_RPC_QUOTE_FAIL` as 8th canonical tag.
+2. **`m7/orderflow/`** (7 modules, 2929 lines total): contracts, events, resolve, coverage, pricing, scoring_parallel, artifacts.
+3. **`m7/orderflow/cli.py`** (1105 lines): Argument parsing + mode orchestration.
+4. **`m7/triangular/`** (5 modules, 1828 lines total): graph, scoring, verdicts, repeatability, cli.
+5. **Shims**: `scripts/m7a_orderflow_replay.py` (154 lines), `scripts/m7a_enumerate_cycles.py` (94 lines), `engine/triangular_cycles.py` (23 lines), `engine/triangular_graph.py` (19 lines) — all thin re-export wrappers.
+
+**Blocker tag addition**: `BLOCKER_LOW_LAG_RPC_QUOTE_FAIL` added as 8th canonical tag. Separately tracked from `LOW_LAG_REMOTE_QUOTER_LATENCY`.
+
+**Evidence**: Both CLIs produce identical artifact schemas. Orderflow 300b verify: 30 events, 1 low-lag, 4 blocker tags active. Triangular verify: 500 cycles, 67/100 measured, best_net=-20.18 bps.
+
+CI: 3180 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

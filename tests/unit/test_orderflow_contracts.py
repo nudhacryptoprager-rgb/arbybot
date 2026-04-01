@@ -141,6 +141,7 @@ from scripts.m7a_orderflow_replay import (
     BLOCKER_LOW_LAG_V2_UNSUPPORTED,
     BLOCKER_LOW_LAG_INACTIVE_POOL,
     BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY,
+    BLOCKER_LOW_LAG_RPC_QUOTE_FAIL,
     BLOCKER_GAS_L1_DATA_DOMINANT,
     BLOCKER_SUBGRAPH_API_KEY_REQUIRED,
 )
@@ -5608,8 +5609,8 @@ class TestM7A517BackwardCompat:
 class TestM7A518BlockerTagConstants:
     """M7.A.5.18: Canonical blocker tag constants are module-level and frozen."""
 
-    def test_all_blocker_tags_count_is_7(self):
-        assert len(ALL_BLOCKER_TAGS) == 7
+    def test_all_blocker_tags_count_is_8(self):
+        assert len(ALL_BLOCKER_TAGS) == 8
 
     def test_all_blocker_tags_is_frozenset(self):
         assert isinstance(ALL_BLOCKER_TAGS, frozenset)
@@ -5621,6 +5622,7 @@ class TestM7A518BlockerTagConstants:
             "LOW_LAG_V2_UNSUPPORTED",
             "LOW_LAG_INACTIVE_POOL",
             "LOW_LAG_REMOTE_QUOTER_LATENCY",
+            "LOW_LAG_RPC_QUOTE_FAIL",
             "GAS_L1_DATA_DOMINANT",
             "SUBGRAPH_API_KEY_REQUIRED",
         }
@@ -5632,6 +5634,7 @@ class TestM7A518BlockerTagConstants:
         assert BLOCKER_LOW_LAG_V2_UNSUPPORTED == "LOW_LAG_V2_UNSUPPORTED"
         assert BLOCKER_LOW_LAG_INACTIVE_POOL == "LOW_LAG_INACTIVE_POOL"
         assert BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY == "LOW_LAG_REMOTE_QUOTER_LATENCY"
+        assert BLOCKER_LOW_LAG_RPC_QUOTE_FAIL == "LOW_LAG_RPC_QUOTE_FAIL"
         assert BLOCKER_GAS_L1_DATA_DOMINANT == "GAS_L1_DATA_DOMINANT"
         assert BLOCKER_SUBGRAPH_API_KEY_REQUIRED == "SUBGRAPH_API_KEY_REQUIRED"
 
@@ -5942,9 +5945,9 @@ class TestM7A518BackwardCompat:
         """M7.A.5.18 does not change unscored rejects set."""
         assert len(UNSCORED_REJECTS) == 11
 
-    def test_all_blocker_tags_count_is_7(self):
-        """M7.A.5.18 defines exactly 7 canonical blocker tags."""
-        assert len(ALL_BLOCKER_TAGS) == 7
+    def test_all_blocker_tags_count_is_8(self):
+        """M7.R1 defines exactly 8 canonical blocker tags (was 7 in M7.A.5.18)."""
+        assert len(ALL_BLOCKER_TAGS) == 8
 
     def test_new_518_artifact_keys(self):
         art = build_replay_summary([], [], mode="test")
