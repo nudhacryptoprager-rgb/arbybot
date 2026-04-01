@@ -554,6 +554,25 @@ def score_backrun_live_parallel(
         if _gas_floor_bps is not None and _gas_floor_bps > GAS_FLOOR_BPS_ARBITRUM:
             _gas_floor_exceeded = True
 
+    # ── M7.A.5.22: Gas-floor operational filter for stale events ────────
+    # If event is already stale (block_lag > 2) AND gas floor exceeded,
+    # skip further scoring — this event cannot be executable and gas will
+    # dominate any theoretical net. Saves RPC budget for low-lag events.
+    _preliminary_lag = current_block - event.block_number
+    if _gas_floor_exceeded and _preliminary_lag > 2:
+        r = _reject(
+            REJECT_GAS_FLOOR_EXCEEDED,
+            pr=pair_resolved, ap=actual_pair, adm=True,
+            adm_src=adm_source, orc=oracle_result,
+            cov=coverage, sg_seed=sg_seed,
+            pct=_pool_truth, psrp=_pool_read_path,
+        )
+        r.registry_pools_found = _registry_pools_found
+        r.registry_pools_active = _registry_pools_active
+        r.gas_floor_exceeded = True
+        r.gas_floor_bps = _gas_floor_bps
+        return r
+
     # DEXes that have quoter_v2
     quotable_dexes = []
     for dex_name, cfg in dex_configs.items():

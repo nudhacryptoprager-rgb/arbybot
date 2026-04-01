@@ -164,6 +164,12 @@ from m7.orderflow.v3_math import (  # noqa: F401
     compute_v3_swap_amount_out,
 )
 
+# --- Re-exports from m7.orderflow.pool_registry ---
+from m7.orderflow.pool_registry import (  # noqa: F401
+    PoolRegistry,
+    PoolRegistryEntry,
+)
+
 # --- Re-exports from m7.orderflow.artifacts ---
 from m7.orderflow.artifacts import (  # noqa: F401
     build_intent_scout_summary,

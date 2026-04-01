@@ -26,6 +26,7 @@ from m7.shared.constants import (
 from m7.orderflow.artifacts import build_replay_summary
 from m7.orderflow.coverage import seed_tokens_from_subgraph
 from m7.orderflow.events import normalize_swap_log
+from m7.orderflow.pool_registry import PoolRegistry
 from m7.orderflow.resolve import _build_address_to_symbol
 from m7.orderflow.scoring_parallel import score_backrun_live_parallel
 
@@ -82,6 +83,9 @@ def run_ws_live(args) -> dict:
     dex_configs = all_dexes.get(args.chain, {})
     token_addresses = get_all_token_addresses(args.chain)
     addr_to_symbol = _build_address_to_symbol(token_addresses)
+
+    # M7.A.5.22: Session-scoped pool registry for factory-driven discovery
+    session_registry = PoolRegistry()
 
     # M7.A.5.8: Subgraph-backed bounded coverage seed
     pre_seed_count = len(addr_to_symbol)
@@ -231,6 +235,7 @@ def run_ws_live(args) -> dict:
                     block_time_ms=block_time_ms,
                     addr_to_symbol=addr_to_symbol,
                     subgraph_seeded_addrs=subgraph_seeded_addrs,
+                    pool_registry=session_registry,
                 )
                 all_results.append(r)
                 all_events.append(ev)
@@ -280,6 +285,11 @@ def run_ws_live(args) -> dict:
         "is accumulated across windows and priced from local pool state, without "
         "expanding outside the current DEX domain"
     )
+    artifact["m7a522_hypothesis"] = (
+        "low-lag same-chain scoring may unlock only after PoolRegistry is actually "
+        "instantiated in ws-live mode and used as the primary counter-venue "
+        "discovery source before NO_COUNTER_POOL rejection"
+    )
     artifact["ws_live_config"] = {
         "ws_blocks_requested": args.ws_blocks,
         "ws_timeout_seconds": args.ws_timeout,
@@ -291,6 +301,14 @@ def run_ws_live(args) -> dict:
         "normalized_events": len(all_events),
         "events_scored": len(all_results),
         "ws_elapsed_seconds": round(ws_elapsed, 2),
+    }
+    # M7.A.5.22: Registry session stats
+    artifact["registry_session_stats"] = {
+        "preload_calls": session_registry.preload_calls,
+        "cache_hits": session_registry.cache_hits,
+        "pools_discovered": session_registry.pools_discovered,
+        "pools_active": session_registry.pools_active,
+        "unique_pairs_queried": len(session_registry._queried),
     }
     # Provider provenance
     artifact["rpc_provider"] = rpc_provider

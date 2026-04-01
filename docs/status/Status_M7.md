@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.21 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted M7 logic into `m7/` package. M7.A.5.21 added factory-driven pool registry, adapter-complete local pricing (V3/V2/Algebra), gas-floor prefilter measurement, 6 new fields (65 total). 8 blocker tags, reject_reasons 20. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.22 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted M7 logic into `m7/` package. M7.A.5.22 activated PoolRegistry in ws-live mode (was dormant in M7.A.5.21) — 74 pools discovered per window, NO_COUNTER_POOL eliminated. Gas-floor operational filter structural (same-block detection = preliminary_lag~0). 65 fields, 8 blocker tags, reject_reasons 20. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-02  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live. M7.B remains closed.
 
 ---
 
@@ -90,21 +90,13 @@ Subgraph BLOCKED (403). Gas decomposition: L1 data ~80%, L2 exec ~20%. GAS_EXCEE
 
 ---
 
-## M7.A.5.9: Token-Decimal-Aware Size & Gas Fix (CORRECTIVE)
+## M7.A.5.9–5.11: Decimal Fix + Stale Gate + Active-Liquidity Coverage (CORRECTIVE, CLOSED)
 
-Fixed 2 bugs: decimal-aware size bounds + gas denomination. 4 new fields (53 total). CI: 2988 passed.
+**M7.A.5.9** (Token-Decimal-Aware Size & Gas Fix): Fixed 2 bugs: decimal-aware size bounds + gas denomination. 4 new fields (53 total). CI: 2988 passed.
 
----
+**M7.A.5.10** (Stale-Gate + Zero-Liq + Provenance Fix): Fixed stale-positive false viability, zero-liq pools, provenance misattribution. Added REJECT_STALE_POSITIVE, REJECT_ZERO_LIQUIDITY. CI: 3011 passed.
 
-## M7.A.5.10: Stale-Gate + Zero-Liq + Provenance Fix (CORRECTIVE)
-
-Fixed stale-positive false viability, zero-liq pools, provenance misattribution. Added REJECT_STALE_POSITIVE, REJECT_ZERO_LIQUIDITY. Evidence: 300b, 25 events, 0 scored, ZERO_LIQUIDITY=21 (84%). CI: 3011 passed.
-
----
-
-## M7.A.5.11: Active-Liquidity-Aware Coverage + Granular Rejects (CLOSED)
-
-Active vs inactive pool distinction. Added REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_ALL_POOLS_ZERO_LIQUIDITY (17 rejects). Evidence: 300b, 25 events, 0 scored, active_coverage_rate=0.76 but all zero-liq. CI: 3036 passed.
+**M7.A.5.11** (Active-Liquidity-Aware Coverage): Active vs inactive pool distinction. Added REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_ALL_POOLS_ZERO_LIQUIDITY (17 rejects). CI: 3036 passed.
 
 ---
 
@@ -114,21 +106,13 @@ Active vs inactive pool distinction. Added REJECT_NO_ACTIVE_COUNTER_POOL, REJECT
 
 ---
 
-## M7.A.5.13: Stale vs Low-Lag Scored Split + Contract Fixes
+## M7.A.5.13–5.15: Stale/Low-Lag Split + Reject Decomposition + Debug Diagnostic (DIAGNOSTIC, CLOSED)
 
-Fixed block_lag=0 falsy trap, low-lag counting, UNSCORED_REJECTS scope. Added stale/low-lag split metrics. Evidence: 300b 16 scored, best_net_bps_stale=-2.20 (beats M4). 0 low-lag scored. CI: 3077 passed.
+**M7.A.5.13** (Stale vs Low-Lag Split): Fixed block_lag=0 falsy trap, low-lag counting, UNSCORED_REJECTS scope. Evidence: 300b 16 scored, best_net_bps_stale=-2.20 (beats M4). 0 low-lag scored. CI: 3077 passed.
 
----
+**M7.A.5.14** (Low-Lag Reject Decomposition): 100% low-lag rejected at pre-econ stage. Multi-causal: TOKEN_PAIR_UNRESOLVED + NO_COUNTER_POOL + ALL_CANDIDATE_POOLS_TRULY_INACTIVE. CI: 3092 passed.
 
-## M7.A.5.14: Low-Lag Reject Decomposition (DIAGNOSTIC)
-
-Added `low_lag_reject_histogram`, `low_lag_pair_resolution_rate`, `low_lag_pre_econ_reject_rate` metrics. Evidence: 100% low-lag rejected at pre-econ stage. Multi-causal: TOKEN_PAIR_UNRESOLVED + NO_COUNTER_POOL + ALL_CANDIDATE_POOLS_TRULY_INACTIVE. CI: 3092 passed.
-
----
-
-## M7.A.5.15: Low-Lag Debug Diagnostic + Coverage Truth (DIAGNOSTIC)
-
-Added `pair_unresolved_detail`, `low_lag_debug_rows`, `low_lag_coverage_truth`, targeted enrichment fallback. Evidence: 300b 6 low-lag 0 scored (UNRESOLVED:4, NO_COUNTER:2). All `pool_read_failed`. Multi-causal blocker stack confirmed. CI: 3110 passed.
+**M7.A.5.15** (Low-Lag Debug Diagnostic): Added `pair_unresolved_detail`, `low_lag_debug_rows`, `low_lag_coverage_truth`. Evidence: 300b 6 low-lag 0 scored. All `pool_read_failed`. Multi-causal blocker stack confirmed. CI: 3110 passed.
 
 ---
 
@@ -260,6 +244,30 @@ CI: 3212 passed, 476 orderflow + 152 triangular tests.
 **Key findings**: (1) Gas-floor measurement active: 53-83% of events exceed 2.0 bps gas floor — confirms gas remains dominant structural cost. (2) Adapter histogram: 100% v3_local on Arbitrum (expected — mostly UniswapV3 pools). (3) Registry pools=0 across all runs: registry is opt-in parameter, not yet instantiated in replay script; validates graceful degradation. (4) Local pricing continues to produce positive stale net bps (+3.68 to +23.59). (5) Low-lag events still blocked at coverage before reaching pricing — NO_COUNTER_POOL remains dominant low-lag blocker. (6) SUBGRAPH_API_KEY_REQUIRED persists as blocker tag.
 
 CI: 3245 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.22: PoolRegistry Activation in ws-live + Gas-Floor Operational Filter (ACTIVATION)
+
+**Hypothesis**: Low-lag same-chain scoring may unlock only after PoolRegistry is actually instantiated in ws-live mode and used as the primary counter-venue discovery source before NO_COUNTER_POOL rejection.
+
+**Root cause addressed**: M7.A.5.21 built the registry infrastructure but never instantiated it in the ws-live pipeline — `events_with_registry=0` in all M7.A.5.21 evidence. M7.A.5.22 creates a session-scoped `PoolRegistry()` in `mode_ws_live.py` and passes it to every `score_backrun_live_parallel()` call.
+
+**Changes**:
+1. **`m7/orderflow/mode_ws_live.py`** (MODIFIED): `session_registry = PoolRegistry()` created after dex_configs loaded. Passed as `pool_registry=session_registry` to every scoring call. `registry_session_stats` (5 keys: preload_calls, cache_hits, pools_discovered, pools_active, unique_pairs_queried) added to artifact. `m7a522_hypothesis` string added.
+2. **`m7/orderflow/scoring_parallel.py`** (MODIFIED): Gas-floor operational filter: after gas-floor measurement, if `_gas_floor_exceeded AND _preliminary_lag > 2`, early-reject with `REJECT_GAS_FLOOR_EXCEEDED`. Saves RPC budget for stale+uneconomic events.
+3. **`scripts/m7a_orderflow_replay.py`** (MODIFIED): `PoolRegistry` re-export.
+4. **`tests/unit/test_orderflow_m7a522.py`** (NEW, 22 tests): 5 test classes covering registry integration, gas-floor filter, re-export, field counts, artifact stats.
+5. **No new BackrunResult fields** (still 65). **No new reject reasons** (still 20). **ALL_BLOCKER_TAGS still 8**.
+
+**Evidence** (3 runs, all Arbitrum One ws-live):
+- 300b: 27 events, 24 scored, best_net=-0.887 bps. **Registry: preload=12, cache_hits=36, pools_discovered=74, pools_active=62**. events_with_registry=26/27 (96%). NO_COUNTER_POOL=0 (was 2 in M7.A.5.21). Adapter: v3_local:14, none:13. Low-lag: 1 detected, 0 scored. Blocker: `LOW_LAG_V2_UNSUPPORTED`.
+- 300b_b: 28 events, 27 scored, best_net=+1.53 bps. **Registry: preload=9, cache_hits=41, pools_discovered=77, pools_active=61**. events_with_registry=28/28 (100%). NO_COUNTER_POOL=0. Adapter: v3_local:22, none:6. Low-lag: 0.
+- 1000b: 21 events, 21 scored, best_net=-2.20 bps. **Registry: preload=8, cache_hits=29, pools_discovered=65, pools_active=55**. events_with_registry=21/21 (100%). NO_COUNTER_POOL=0. Adapter: v3_local:15, none:6. Gas floor: 18/21. Low-lag: 0.
+
+**Key findings**: (1) Registry ACTIVATED: 65-77 pools discovered per session (was 0 in M7.A.5.21). Cache hit ratio 3-4x of preload calls — session persistence working. (2) **NO_COUNTER_POOL eliminated**: 0 across all 3 runs (was 2 in M7.A.5.21). Factory discovery fills the counter-venue gap. (3) Gas-floor operational filter structurally present but **does not fire in ws-live mode**: `current_block == event.block_number` (same-block detection), so `_preliminary_lag ≈ 0`, never exceeds stale threshold. This is by-design: ws-live events are fresh at detection, become stale only DURING scoring. The filter will activate in batch/replay modes with lagged `current_block`. (4) Low-lag: 0-1 per window; LOW_LAG_V2_UNSUPPORTED blocker present when 1 detected. (5) Stale-only economics: GAS_EXCEEDS_GROSS remains dominant reject (21-25 per run); best_net ranges from -2.20 to +1.53 bps.
+
+CI: 3267 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 
