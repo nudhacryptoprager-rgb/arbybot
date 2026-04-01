@@ -406,9 +406,10 @@ def score_backrun_live_parallel(
     # build synthetic coverage and local_sim directly from registry entries.
     # This bypasses the RPC-heavy coverage scan and allows V2 pools (which
     # lack quoter_v2) to be priced via adapter-specific local math.
-    _low_lag_scoring_path = None
+    _scoring_path = None
     _preliminary_lag = current_block - event.block_number
-    if _preliminary_lag <= 2 and _registry_pools_active and _registry_pools_active > 0:
+    _is_low_lag = _preliminary_lag <= 2
+    if _is_low_lag and _registry_pools_active and _registry_pools_active > 0:
         _active_entries = [e for e in _registry_entries if e.is_active()]
         _reg_pool_states: Dict[str, Any] = {}
         for _re in _active_entries:
@@ -439,14 +440,24 @@ def score_backrun_live_parallel(
                 "pools_with_state": len(_reg_pool_states),
                 "pool_states": dict(list(_reg_pool_states.items())[:3]),
             }
-            _low_lag_scoring_path = "registry_direct"
+            _scoring_path = "registry_direct"
             logger.debug(
                 "M7.A.5.23 low-lag fast path: registry_direct "
                 "(lag=%d, active_pools=%d, pool_states=%d)",
                 _preliminary_lag, _registry_pools_active, len(_reg_pool_states),
             )
 
-    if _low_lag_scoring_path is None:
+    # M7.A.5.24: Instant reject for low-lag events with zero active pools
+    if _is_low_lag and _registry_pools_active is not None and _registry_pools_active == 0:
+        return _reject(
+            REJECT_ALL_POOLS_TRULY_INACTIVE,
+            pr=pair_resolved, ap=actual_pair, adm=True,
+            adm_src=adm_source, orc=oracle_result,
+            cov=coverage, sg_seed=sg_seed,
+            pct=_pool_truth, psrp=_pool_read_path,
+        )
+
+    if _scoring_path is None:
         # ── M7.A.5.6: Counter-venue coverage scan ──────────────────────────
         try:
             coverage = counter_venue_coverage_scan(
@@ -617,7 +628,7 @@ def score_backrun_live_parallel(
         r.registry_pools_active = _registry_pools_active
         r.gas_floor_exceeded = True
         r.gas_floor_bps = _gas_floor_bps
-        r.low_lag_scoring_path = _low_lag_scoring_path
+        r.scoring_path = _scoring_path
         return r
 
     # DEXes that have quoter_v2
@@ -633,23 +644,30 @@ def score_backrun_live_parallel(
         fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
         total_quote_calls += len(fee_tiers[:2]) * 2  # buy + sell pass
 
-    # ── Stage A: Multicall-based venue pruning ──────────────────────────
+    # ── M7.A.5.24: Skip Stage A multicall for registry_direct fast path ─
+    # Registry already discovered pools; multicall pruning is redundant.
     stage_a_start = time.monotonic()
     venues_pruned = 0
     prune_reasons: Dict[str, int] = {}
+    quote_calls_after = 0
 
-    try:
-        pool_map = _resolve_pool_addresses_multicall(
-            dex_configs, token_in_addr, token_out_addr, rpc_url, current_block,
-        )
-        if pool_map:
-            active_dexes = []
-            for dex_name, cfg, quoter in quotable_dexes:
-                pools_for_dex = pool_map.get(dex_name, [])
-                if not pools_for_dex:
-                    # No factory entry — keep (may be algebra/non-standard)
-                    active_dexes.append((dex_name, cfg, quoter))
-                    continue
+    if _scoring_path == "registry_direct":
+        # Skip Stage A entirely — registry pools are the truth
+        stage_a_ms = 0.0
+        quote_calls_after = 0
+    else:
+        try:
+            pool_map = _resolve_pool_addresses_multicall(
+                dex_configs, token_in_addr, token_out_addr, rpc_url, current_block,
+            )
+            if pool_map:
+                active_dexes = []
+                for dex_name, cfg, quoter in quotable_dexes:
+                    pools_for_dex = pool_map.get(dex_name, [])
+                    if not pools_for_dex:
+                        # No factory entry — keep (may be algebra/non-standard)
+                        active_dexes.append((dex_name, cfg, quoter))
+                        continue
                 # Check if any pool exists and has liquidity
                 has_live_pool = False
                 for p in pools_for_dex:
@@ -666,16 +684,15 @@ def score_backrun_live_parallel(
                 else:
                     venues_pruned += 1
             quotable_dexes = active_dexes
-    except Exception as exc:
-        logger.debug("Stage A multicall pruning skipped: %s", str(exc)[:100])
+        except Exception as exc:
+            logger.debug("Stage A multicall pruning skipped: %s", str(exc)[:100])
 
-    stage_a_ms = round((time.monotonic() - stage_a_start) * 1000, 2)
+        stage_a_ms = round((time.monotonic() - stage_a_start) * 1000, 2)
 
-    # Compute post-pruning quote calls
-    quote_calls_after = 0
-    for _dn, cfg, _q in quotable_dexes:
-        fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
-        quote_calls_after += len(fee_tiers[:2]) * 2  # buy + sell
+        # Compute post-pruning quote calls
+        for _dn, cfg, _q in quotable_dexes:
+            fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+            quote_calls_after += len(fee_tiers[:2]) * 2  # buy + sell
 
     # ── M7.A.5.20: Local-state-first pricing attempt ───────────────────
     local_pricing_attempted = False
@@ -701,6 +718,117 @@ def score_backrun_live_parallel(
         except Exception as _lp_exc:
             local_pricing_failure_reason = f"error:{type(_lp_exc).__name__}"
         local_pricing_ms = round((time.monotonic() - _lp_start) * 1000, 2)
+
+    # ── M7.A.5.24: Mid-pipeline lag abort for low-lag events ────────────
+    # If event was low-lag at detection but became stale during scoring,
+    # abort remaining work (Stage B remote quoter, size sweep) to avoid
+    # wasting RPC budget on events that already lost executable class.
+    _mid_pipeline_aborted = False
+    if _is_low_lag and _scoring_path == "registry_direct":
+        try:
+            from web3 import Web3 as _W3_mid
+            _w3_mid = _W3_mid(_W3_mid.HTTPProvider(rpc_url))
+            _mid_block = _w3_mid.eth.block_number
+            _mid_lag = _mid_block - event.block_number
+            if _mid_lag > 2:
+                _mid_pipeline_aborted = True
+                # We have local pricing results — compute economics with what we have
+                _mid_pipeline_ms = round((time.monotonic() - pipeline_start) * 1000, 2)
+                _mid_stage_latency = {
+                    "stage_a_ms": stage_a_ms if isinstance(stage_a_ms, float) else 0.0,
+                    "stage_b_ms": 0.0,
+                    "mid_pipeline_abort": True,
+                    "mid_pipeline_lag": _mid_lag,
+                }
+                if local_pricing_ms is not None:
+                    _mid_stage_latency["local_pricing_ms"] = local_pricing_ms
+                    _mid_stage_latency["local_pricing_used"] = _local_result is not None
+                # If local pricing produced amounts, compute net for diagnostic
+                if _local_result is not None:
+                    _mid_buy = _local_result["buy_amount"]
+                    _mid_sell = _local_result["sell_amount"]
+                    _mid_gross = _mid_sell - backrun_size_wei
+                    _mid_gas_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+                    _mid_gas_cost = _gas_cost_in_token_wei(
+                        _mid_gas_eth_wei, _effective_dec,
+                        token_price_usd=_tok_price_usd if '_tok_price_usd' in dir() else None,
+                        eth_price_usd=_eth_price_usd if '_eth_price_usd' in dir() else None,
+                    )
+                    _mid_net = _mid_gross - _mid_gas_cost
+                    _mid_net_bps = (_mid_net / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
+                    _mid_gas_decomp = estimate_gas_decomposition_bps(backrun_size_wei, _mid_gas_cost)
+                    return BackrunResult(
+                        event_id=event.event_id,
+                        event_source="live",
+                        event_type=event.event_type,
+                        post_trade_state_used="live",
+                        backrun_direction=backrun_dir,
+                        best_buy_venue=_local_result["buy_venue"],
+                        best_sell_venue=_local_result["sell_venue"],
+                        amount_in_wei=backrun_size_wei,
+                        gross_pnl_wei=_mid_gross,
+                        gas_cost_wei=_mid_gas_cost,
+                        fee_cost_wei=0,
+                        net_pnl_wei=_mid_net,
+                        best_backrun_net_bps=round(_mid_net_bps, 4),
+                        same_block_possible=False,
+                        route_viable=False,
+                        reject_reason=REJECT_STALE_POSITIVE if _mid_net_bps > 0 else REJECT_GAS_EXCEEDS_GROSS,
+                        event_block=event.block_number,
+                        quote_block=_mid_block,
+                        block_lag=_mid_lag,
+                        same_state_class="stale",
+                        counter_venue_count=_local_result["pools_succeeded"],
+                        best_live_net_bps=round(_mid_net_bps, 4),
+                        ws_provider=ws_provider,
+                        event_detected_at_block=event_detected_at_block,
+                        quote_started_block=quote_started_block,
+                        quote_finished_block=_mid_block,
+                        quote_pipeline_latency_ms=_mid_pipeline_ms,
+                        venues_pruned_by_multicall=0,
+                        latency_budget_ms=block_time_ms,
+                        quote_calls_attempted=0,
+                        quote_calls_after_pruning=0,
+                        pipeline_stage_latency_ms=_mid_stage_latency,
+                        pair_resolved=pair_resolved,
+                        actual_pair=actual_pair,
+                        size_source=size_source,
+                        coverage_result=coverage,
+                        token_admitted=True,
+                        admission_source=adm_source,
+                        oracle_guard=oracle_result,
+                        local_sim_state=local_sim,
+                        l2_gas_bps=_mid_gas_decomp["l2_gas_bps"],
+                        l1_data_bps=_mid_gas_decomp["l1_data_bps"],
+                        total_gas_bps=_mid_gas_decomp["total_gas_bps"],
+                        subgraph_seed_used=sg_seed,
+                        token_in_decimals=_token_in_dec,
+                        size_normalization_source=_norm_source,
+                        size_usd_estimate=_size_usd,
+                        size_valid_for_token=(_token_in_dec is not None),
+                        pool_contract_truth=_pool_truth,
+                        pool_state_read_path=_pool_read_path,
+                        local_pricing_attempted=local_pricing_attempted,
+                        local_pricing_used=True,
+                        local_pricing_failure_reason=None,
+                        registry_pools_found=_registry_pools_found,
+                        registry_pools_active=_registry_pools_active,
+                        adapter_type_used=_local_result.get("pricing_path"),
+                        gas_floor_exceeded=_gas_floor_exceeded,
+                        gas_floor_bps=_gas_floor_bps,
+                        pricing_path=_local_result.get("pricing_path"),
+                        scoring_path=_scoring_path,
+                    )
+                # No local result — just reject
+                return _reject(
+                    REJECT_GAS_EXCEEDS_GROSS,
+                    pr=pair_resolved, ap=actual_pair, adm=True,
+                    adm_src=adm_source, orc=oracle_result,
+                    cov=coverage, lss=local_sim, sg_seed=sg_seed,
+                    pct=_pool_truth, psrp=_pool_read_path,
+                )
+        except Exception:
+            pass  # If block check fails, continue normal pipeline
 
     # ── Stage B: Confirmatory QuoterV2 quotes ───────────────────────────
     # M7.A.5.20: Skip remote quoter if local pricing succeeded (fast path)
@@ -893,24 +1021,27 @@ def score_backrun_live_parallel(
             cand_path = [event.token_out, event.token_in, event.token_out]
 
         # ── M7.A.5.6: Bounded size sweep ───────────────────────────────
+        # M7.A.5.24: Skip size sweep for registry_direct fast path
+        # (minimal scoring: registry → local pricing → economics → done)
         sweep_results = None
         best_sweep_net = None
         best_sweep_size = None
-        try:
-            sweep_results = _run_size_sweep(
-                event, rpc_url, token_in_addr, token_out_addr,
-                quotable_dexes, backrun_size_wei, fallback_rpc_urls,
-                token_in_decimals=_token_in_dec,
-                gas_cost_token_wei=gas_cost_wei,
-            )
-            if sweep_results:
-                viable_sweeps = [s for s in sweep_results if s["net_bps"] != 0.0]
-                if viable_sweeps:
-                    best_s = max(viable_sweeps, key=lambda s: s["net_bps"])
-                    best_sweep_net = best_s["net_bps"]
-                    best_sweep_size = best_s["size_wei"]
-        except Exception:
-            pass  # sweep is best-effort, don't block scoring
+        if _scoring_path != "registry_direct":
+            try:
+                sweep_results = _run_size_sweep(
+                    event, rpc_url, token_in_addr, token_out_addr,
+                    quotable_dexes, backrun_size_wei, fallback_rpc_urls,
+                    token_in_decimals=_token_in_dec,
+                    gas_cost_token_wei=gas_cost_wei,
+                )
+                if sweep_results:
+                    viable_sweeps = [s for s in sweep_results if s["net_bps"] != 0.0]
+                    if viable_sweeps:
+                        best_s = max(viable_sweeps, key=lambda s: s["net_bps"])
+                        best_sweep_net = best_s["net_bps"]
+                        best_sweep_size = best_s["size_wei"]
+            except Exception:
+                pass  # sweep is best-effort, don't block scoring
 
         # M7.A.5.8: Gas decomposition
         gas_decomp = estimate_gas_decomposition_bps(backrun_size_wei, gas_cost_wei)
@@ -980,7 +1111,7 @@ def score_backrun_live_parallel(
             gas_floor_exceeded=_gas_floor_exceeded,
             gas_floor_bps=_gas_floor_bps,
             pricing_path=_local_result.get("pricing_path") if _local_result else None,
-            low_lag_scoring_path=_low_lag_scoring_path,
+            scoring_path=_scoring_path,
         )
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
@@ -1026,6 +1157,6 @@ def score_backrun_live_parallel(
         registry_pools_active=_registry_pools_active,
         gas_floor_exceeded=_gas_floor_exceeded,
         gas_floor_bps=_gas_floor_bps,
-        low_lag_scoring_path=_low_lag_scoring_path,
+        scoring_path=_scoring_path,
     )
 

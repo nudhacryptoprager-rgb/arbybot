@@ -627,10 +627,10 @@ def build_replay_summary(
             }
     low_lag_watchlist = list(_ll_watchlist_map.values())
 
-    # M7.A.5.23: Registry-direct scoring path metrics
+    # M7.A.5.23→5.24: Registry-direct scoring path metrics
     _ll_registry_direct = [
         r for r in _low_lag_all
-        if getattr(r, "low_lag_scoring_path", None) == "registry_direct"
+        if getattr(r, "scoring_path", None) == "registry_direct"
     ]
     _ll_registry_direct_scored = [
         r for r in _ll_registry_direct
@@ -797,10 +797,30 @@ def build_replay_summary(
             "low_lag_scored_watchlist_count": low_lag_scored_watchlist_count,
             "best_net_bps_local": best_net_bps_local,
         },
-        # M7.A.5.23: Registry-direct scoring path metrics
+        # M7.A.5.23→5.24: Registry-direct scoring path metrics
         "m7a523_low_lag_fast_path": {
             "low_lag_registry_direct_count": low_lag_registry_direct_count,
             "low_lag_registry_direct_scored_count": low_lag_registry_direct_scored_count,
+        },
+        # M7.A.5.24: Pipeline optimization metrics
+        "m7a524_pipeline_optimization": {
+            "mid_pipeline_abort_count": sum(
+                1 for r in results
+                if r.pipeline_stage_latency_ms
+                and isinstance(r.pipeline_stage_latency_ms, dict)
+                and r.pipeline_stage_latency_ms.get("mid_pipeline_abort") is True
+            ),
+            "scoring_path_histogram": dict(
+                sorted(
+                    {
+                        k: v for k, v in (
+                            (sp, sum(1 for r2 in results if getattr(r2, "scoring_path", None) == sp))
+                            for sp in set(getattr(r, "scoring_path", None) for r in results)
+                        )
+                    }.items(),
+                    key=lambda x: -x[1],
+                )
+            ),
         },
         # M7.A.5.21: Factory registry + adapter-complete + gas-floor metrics
         "m7a521_registry_metrics": {

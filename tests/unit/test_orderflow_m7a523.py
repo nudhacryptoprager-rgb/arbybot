@@ -1,7 +1,7 @@
 """
 M7.A.5.23 contract tests:
   - Low-lag registry-direct scoring fast path
-  - BackrunResult.low_lag_scoring_path field
+  - BackrunResult.scoring_path field (renamed from low_lag_scoring_path in M7.A.5.24)
   - Artifact metrics for registry-direct path
   - Session-persistent low-lag pair tracking in ws-live
 """
@@ -26,40 +26,40 @@ from m7.shared.constants import (
 
 
 class TestBackrunResultM7A523:
-    """Verify low_lag_scoring_path field exists and BackrunResult field count."""
+    """Verify scoring_path field exists and BackrunResult field count."""
 
-    def test_low_lag_scoring_path_field_exists(self):
+    def test_scoring_path_field_exists(self):
         r = BackrunResult(
             event_id="e1", event_source="live",
             event_type="uniswap_v3_swap", post_trade_state_used="live",
             backrun_direction="buy_depressed",
         )
-        assert hasattr(r, "low_lag_scoring_path")
-        assert r.low_lag_scoring_path is None
+        assert hasattr(r, "scoring_path")
+        assert r.scoring_path is None
 
-    def test_low_lag_scoring_path_settable(self):
+    def test_scoring_path_settable(self):
         r = BackrunResult(
             event_id="e1", event_source="live",
             event_type="uniswap_v3_swap", post_trade_state_used="live",
             backrun_direction="buy_depressed",
-            low_lag_scoring_path="registry_direct",
+            scoring_path="registry_direct",
         )
-        assert r.low_lag_scoring_path == "registry_direct"
+        assert r.scoring_path == "registry_direct"
 
     def test_field_count_is_66(self):
-        """M7.A.5.23 adds low_lag_scoring_path → 66 fields total."""
+        """M7.A.5.23 adds scoring_path (was low_lag_scoring_path) → 66 fields total."""
         assert len(fields(BackrunResult)) == 66
 
-    def test_low_lag_scoring_path_in_asdict(self):
+    def test_scoring_path_in_asdict(self):
         r = BackrunResult(
             event_id="e1", event_source="live",
             event_type="uniswap_v3_swap", post_trade_state_used="live",
             backrun_direction="buy_depressed",
-            low_lag_scoring_path="registry_direct",
+            scoring_path="registry_direct",
         )
         d = asdict(r)
-        assert "low_lag_scoring_path" in d
-        assert d["low_lag_scoring_path"] == "registry_direct"
+        assert "scoring_path" in d
+        assert d["scoring_path"] == "registry_direct"
 
 
 # ── Registry-direct fast path contract ──────────────────────────────
@@ -195,7 +195,7 @@ class TestArtifactM7A523:
             same_state_class="same_block",
             best_backrun_net_bps=-5.0,
             reject_reason=REJECT_GAS_EXCEEDS_GROSS,
-            low_lag_scoring_path="registry_direct",
+            scoring_path="registry_direct",
             local_pricing_attempted=True,
             local_pricing_used=True,
             registry_pools_found=3,
@@ -276,7 +276,7 @@ class TestNonLowLagUnchanged:
             event_block=100, quote_block=110, block_lag=10,
             same_state_class="stale",
         )
-        assert r.low_lag_scoring_path is None
+        assert r.scoring_path is None
 
     def test_reject_reasons_unchanged(self):
         """ALL_REJECT_REASONS count must remain 20."""

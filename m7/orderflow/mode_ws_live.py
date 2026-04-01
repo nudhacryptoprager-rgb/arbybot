@@ -87,6 +87,32 @@ def run_ws_live(args) -> dict:
     # M7.A.5.22: Session-scoped pool registry for factory-driven discovery
     session_registry = PoolRegistry()
 
+    # M7.A.5.24: Session prewarm — preload high-frequency pairs from known addresses
+    # Core pairs that appear frequently in Arbitrum orderflow
+    _prewarm_pairs = [
+        ("WETH", "USDC"), ("WETH", "USDT"), ("WETH", "ARB"),
+        ("USDC", "USDT"), ("WETH", "WBTC"), ("ARB", "USDC"),
+    ]
+    _prewarm_count = 0
+    try:
+        from web3 import Web3 as _W3pw
+        _w3pw = _W3pw(_W3pw.HTTPProvider(rpc_url))
+        _pw_block = _w3pw.eth.block_number
+        for _sym_a, _sym_b in _prewarm_pairs:
+            _addr_a = token_addresses.get(_sym_a, "")
+            _addr_b = token_addresses.get(_sym_b, "")
+            if _addr_a and _addr_b:
+                try:
+                    session_registry.preload_pair(
+                        _addr_a, _addr_b, dex_configs, rpc_url, _pw_block,
+                    )
+                    _prewarm_count += 1
+                except Exception:
+                    pass
+        logger.info("Session prewarm: %d/%d pairs loaded", _prewarm_count, len(_prewarm_pairs))
+    except Exception as _pw_exc:
+        logger.debug("Session prewarm skipped: %s", str(_pw_exc)[:80])
+
     # M7.A.5.8: Subgraph-backed bounded coverage seed
     pre_seed_count = len(addr_to_symbol)
     subgraph_seed_stats = {"tokens_discovered": 0, "tokens_new": 0,
@@ -223,6 +249,13 @@ def run_ws_live(args) -> dict:
             block_events.sort(key=lambda e: e.estimated_size_usd, reverse=True)
             events_to_score = block_events[:max(1, args.max_events // args.ws_blocks)]
 
+            # M7.A.5.24: Two-queue priority — low-lag events first
+            # Events with detection_lag <= 2 get scored before stale events
+            # so they don't compete for the same scoring budget.
+            _low_lag_queue = [e for e in events_to_score if (detected_block - e.block_number) <= 2]
+            _stale_queue = [e for e in events_to_score if (detected_block - e.block_number) > 2]
+            events_to_score = _low_lag_queue + _stale_queue
+
             # Score with parallel pipeline
             current_block = detected_block
             for ev in events_to_score:
@@ -255,7 +288,7 @@ def run_ws_live(args) -> dict:
                         _slp["last_block"] = max(_slp["last_block"], ev.block_number)
                         if r.reject_reason is None or r.reject_reason not in UNSCORED_REJECTS:
                             _slp["scored_count"] += 1
-                        if getattr(r, "low_lag_scoring_path", None) == "registry_direct":
+                        if getattr(r, "scoring_path", None) == "registry_direct":
                             _slp["registry_direct_count"] += 1
                     else:
                         _session_low_lag_pairs[_pair_key] = {
@@ -269,7 +302,7 @@ def run_ws_live(args) -> dict:
                                 else 0
                             ),
                             "registry_direct_count": (
-                                1 if getattr(r, "low_lag_scoring_path", None)
+                                1 if getattr(r, "scoring_path", None)
                                 == "registry_direct" else 0
                             ),
                         }
@@ -350,6 +383,12 @@ def run_ws_live(args) -> dict:
         "low-lag same-chain scoring may unlock only if low-lag events are "
         "routed into adapter-specific local scoring via registry-direct path "
         "before any coverage-scan rejection"
+    )
+    artifact["m7a524_hypothesis"] = (
+        "the next meaningful target is not better stale scoring, but the first "
+        "genuinely low-lag scored event through the registry_direct local-pricing "
+        "path; requires minimal pipeline (no size sweep, no remote quoter, "
+        "mid-pipeline lag abort) and two-queue priority (low-lag first)"
     )
     # Provider provenance
     artifact["rpc_provider"] = rpc_provider

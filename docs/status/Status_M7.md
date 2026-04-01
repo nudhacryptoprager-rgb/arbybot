@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.23 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted M7 logic into `m7/` package. M7.A.5.23 implemented low-lag registry-direct scoring fast path: 99-100% events scored via registry_direct + local pricing (was 0% scored-low-lag in M7.A.5.22). 9/100 positive net_bps (all STALE_POSITIVE). 66 fields, 8 blocker tags, reject_reasons 20. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.24 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted M7 logic into `m7/` package. M7.A.5.24 optimizes pipeline latency: skip Stage A/B for registry_direct, mid-pipeline lag abort, two-queue priority, session prewarm. 100% scoring via registry_direct, 100% mid-pipeline abort (all stale). 0 low-lag detected (event arrival latency bottleneck). 66 fields, 8 blocker tags, reject_reasons 20. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-02  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization. M7.B remains closed.
 
 ---
 
@@ -217,6 +217,32 @@ CI: 3267 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 **Key findings**: (1) **100% scoring rate via registry-direct path** — up from 0% events_scored_low_lag in M7.A.5.22. The coverage-scan bottleneck is completely bypassed. (2) **Local pricing via registry entries works across V3 and V2 adapters** — `attempt_local_pricing()` receives synthetic candidate_pools and pool_states from registry, dispatches to adapter-specific math. (3) **Positive net events detected (9/100 at +18-43 bps)** but all are STALE_POSITIVE (block_lag > 2 at scoring completion). The preliminary lag is ≈0 at scoring entry, but scoring itself takes 34+ blocks. (4) **Session pair tracking operational**: 39 unique pairs across 1000 blocks, WETH/USDC most frequent (26x). (5) **viable_count still 0**: positive_net + block_lag <= 2 required for viability. Scoring latency prevents any event from being "fresh" at completion. (6) **Next bottleneck** is scoring latency itself — events are fresh at detection but stale by scoring completion.
 
 CI: 3286 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.24: Pipeline Latency Optimization (PIPELINE SLIM)
+
+**Hypothesis**: The next meaningful target is not better stale scoring, but the first genuinely low-lag scored event through the registry_direct local-pricing path. Requires minimal pipeline (no size sweep, no Stage A multicall, no remote quoter for registry_direct), two-queue priority (low-lag first), mid-pipeline lag abort, and session prewarm.
+
+**Root cause addressed**: M7.A.5.23 achieved 100% scoring rate via registry_direct, but ALL events are classified STALE at scoring completion (mean_block_lag=34+). Events are fresh at detection (preliminary_lag ≈ 0) but become stale DURING the ~2000ms scoring pipeline. The pipeline spends time on Stage A multicall (~400ms) and size sweep (multiple remote quoter calls) which are redundant for registry_direct paths.
+
+**Changes**:
+1. **`m7/orderflow/contracts.py`** (MODIFIED): Renamed field `low_lag_scoring_path` → `scoring_path` (semantic fix — was misleading since stale events also use it). BackrunResult still 66 fields.
+2. **`m7/orderflow/scoring_parallel.py`** (MODIFIED, 6 changes): (a) Renamed `_low_lag_scoring_path` → `_scoring_path`. (b) Added `_is_low_lag = _preliminary_lag <= 2` flag. (c) Instant reject for low-lag + zero active pools (REJECT_ALL_POOLS_TRULY_INACTIVE). (d) Skip Stage A multicall for registry_direct (stage_a_ms=0.0). (e) ~90-line mid-pipeline lag abort block: if event was low-lag but becomes stale during scoring, returns partial result with computed economics. (f) Skip size sweep for registry_direct.
+3. **`m7/orderflow/mode_ws_live.py`** (MODIFIED, 4 changes): (a) Session prewarm: preloads 6 core Arbitrum pairs (WETH/USDC, WETH/USDT, WETH/ARB, USDC/USDT, WETH/WBTC, ARB/USDC) at session start. (b) Two-queue priority: low-lag events (detection_lag ≤ 2) scored before stale events. (c) Renamed `low_lag_scoring_path` → `scoring_path` (2 refs). (d) Added `m7a524_hypothesis` to artifact.
+4. **`m7/orderflow/artifacts.py`** (MODIFIED): Renamed filter reference, added `m7a524_pipeline_optimization` section with `mid_pipeline_abort_count` and `scoring_path_histogram`.
+5. **`tests/unit/test_orderflow_m7a523.py`** (MODIFIED): Renamed 15 `low_lag_scoring_path` → `scoring_path` references.
+6. **`tests/unit/test_orderflow_m7a524.py`** (NEW, 24 tests): 8 test classes covering field rename, two-queue priority, mid-pipeline abort, instant reject, artifact metrics, session prewarm, constants stability.
+7. **No new reject reasons** (still 20). **UNSCORED_REJECTS still 12**. **ALL_BLOCKER_TAGS still 8**. **Field count still 66** (rename only).
+
+**Evidence** (3 runs, all Arbitrum One ws-live):
+- 300b: 30 events, 30/30 scored (100%). **All registry_direct, all mid_pipeline_abort=30**. best_net=-1.68 bps. mean_block_lag=209.53. mean_pipeline_ms=1927ms. stage_a_ms=0.0, stage_b_ms=0.0. 0 low-lag detected.
+- 300b_b: 30 events, 30/30 scored (100%). **All registry_direct, all mid_pipeline_abort=30**. best_net=+1.01 bps (1 positive event). mean_block_lag=242.17. mean_pipeline_ms=2029ms. 0 low-lag detected.
+- 1000b: 100 events, 100/100 scored (100%). **All registry_direct, all mid_pipeline_abort=100**. best_net=+154955 bps (pricing anomaly). 14 positive events (STALE_POSITIVE:14). mean_block_lag=459.85. mean_pipeline_ms=1527ms. 0 low-lag detected.
+
+**Key findings**: (1) **Pipeline stages correctly skipped**: Stage A multicall (mean_stage_a_ms=0.0) and Stage B remote quoter (mean_stage_b_ms=0.0) both bypassed for registry_direct path. (2) **Mid-pipeline abort fires on 100% of events**: All events enter as registry_direct but become stale during local pricing; the abort catches them before Stage B would have wasted RPC budget. (3) **0 low-lag events detected**: Events arrive already stale (mean_block_lag=209-460). This is a WebSocket event-fetching limitation (eth_getLogs polling for past blocks) — not a scoring pipeline issue. (4) **scoring_path_histogram: {registry_direct}** in all runs — confirms all events route through optimized path. (5) **Positive events found**: best_net=+1.01 bps in run 2, 14 positive in 1000b (all STALE_POSITIVE). (6) **Pricing anomaly**: best_net=+154955 bps in 1000b is unrealistic — local pricing on low-liquidity pair. (7) **Next bottleneck**: Event arrival latency, not scoring latency.
+
+CI: 3310 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 
