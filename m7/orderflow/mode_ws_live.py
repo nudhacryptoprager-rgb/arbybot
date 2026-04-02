@@ -960,4 +960,36 @@ def run_ws_live(args) -> dict:
             "pair resolution for uniswap_v2_like pools"
         )
 
+    # M7.A.5.28: Write canonical rolling M7 artifact (dashboard-facing, no bulky results)
+    _write_rolling_m7(artifact)
+
     return artifact
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5.28: Rolling artifact writer
+# ---------------------------------------------------------------------------
+
+_ROLLING_M7_PATH = os.path.join("data", "runs", "_rolling", "m7_orderflow_latest.json")
+
+# Keys to extract from the full artifact for the rolling dashboard artifact.
+# Excludes bulky debugging arrays (results, low_lag_debug_rows, low_lag_watchlist,
+# session_low_lag_pairs) to keep the rolling file small and dashboard-friendly.
+_ROLLING_EXCLUDE_KEYS = frozenset({
+    "results",
+    "low_lag_debug_rows",
+    "low_lag_watchlist",
+    "session_low_lag_pairs",
+})
+
+
+def _write_rolling_m7(artifact: dict) -> None:
+    """Overwrite the canonical rolling M7 artifact for dashboard consumption."""
+    try:
+        rolling = {k: v for k, v in artifact.items() if k not in _ROLLING_EXCLUDE_KEYS}
+        os.makedirs(os.path.dirname(_ROLLING_M7_PATH), exist_ok=True)
+        with open(_ROLLING_M7_PATH, "w", encoding="utf-8") as f:
+            json.dump(rolling, f, indent=2, default=str)
+        logger.info("Rolling M7 artifact written to %s", _ROLLING_M7_PATH)
+    except Exception as exc:
+        logger.warning("Failed to write rolling M7 artifact: %s", str(exc)[:120])

@@ -841,3 +841,113 @@ class TestM7A527AnomalyCleanHeadlines:
         art = build_replay_summary(events, results, mode="test")
         assert art["best_net_bps"] is None
         assert art["best_net_bps_clean"] is None
+
+
+# ===========================================================================
+# M7.A.5.28: Stale KPI contract fix + rolling artifact schema
+# ===========================================================================
+
+
+class TestM7A528StaleKPIContract:
+    """M7.A.5.28: stale_positive_count must agree with reject_histogram[STALE_POSITIVE].
+
+    Root cause fixed: mid-pipeline wall-clock abort sets same_state_class="stale"
+    and reject_reason=STALE_POSITIVE, but block_lag can still be <= 2. The old code
+    only checked block_lag > 2 for stale classification, causing zero stale_positive_count
+    even when reject_histogram showed STALE_POSITIVE entries.
+    """
+
+    def _make_mid_pipeline_abort_results(self):
+        """Simulate mid-pipeline abort: same_state_class=stale, block_lag=1."""
+        return [
+            # Mid-pipeline aborted: detected low-lag (block_lag=1) but wall-clock
+            # exceeded budget → same_state_class="stale", reject=STALE_POSITIVE
+            _make_result(
+                event_id="mp1", best_backrun_net_bps=5.0, block_lag=1,
+                same_state_class="stale", route_viable=False,
+                reject_reason=REJECT_STALE_POSITIVE, size_valid_for_token=True,
+                event_block=100, event_detected_at_block=101,
+            ),
+            _make_result(
+                event_id="mp2", best_backrun_net_bps=3.0, block_lag=2,
+                same_state_class="stale", route_viable=False,
+                reject_reason=REJECT_STALE_POSITIVE, size_valid_for_token=True,
+                event_block=100, event_detected_at_block=101,
+            ),
+            # Normal stale (block_lag > 2, old path)
+            _make_result(
+                event_id="mp3", best_backrun_net_bps=8.0, block_lag=5,
+                same_state_class="stale", route_viable=False,
+                reject_reason=REJECT_STALE_POSITIVE, size_valid_for_token=True,
+            ),
+            # Fresh negative (not stale, not positive)
+            _make_result(
+                event_id="mp4", best_backrun_net_bps=-10.0, block_lag=0,
+                same_state_class="same_block", route_viable=False,
+                reject_reason=REJECT_GAS_EXCEEDS_GROSS, size_valid_for_token=True,
+                event_block=100, event_detected_at_block=100,
+            ),
+        ]
+
+    def test_stale_positive_count_matches_reject_histogram(self):
+        events = [_make_event(eid=f"mp{i}") for i in range(1, 5)]
+        results = self._make_mid_pipeline_abort_results()
+        art = build_replay_summary(events, results, mode="test")
+        hist_stale = art["reject_histogram"].get("STALE_POSITIVE", 0)
+        # All 3 STALE_POSITIVE results have positive net_bps → must agree
+        assert art["stale_positive_count"] == 3
+        assert art["stale_positive_count"] == hist_stale
+
+    def test_stale_scored_count_includes_mid_pipeline_abort(self):
+        events = [_make_event(eid=f"mp{i}") for i in range(1, 5)]
+        results = self._make_mid_pipeline_abort_results()
+        art = build_replay_summary(events, results, mode="test")
+        # All 3 stale results should appear in stale_low_lag_comparison.stale_scored_count
+        assert art["stale_low_lag_comparison"]["stale_scored_count"] >= 3
+
+    def test_best_net_bps_stale_clean_populated(self):
+        events = [_make_event(eid=f"mp{i}") for i in range(1, 5)]
+        results = self._make_mid_pipeline_abort_results()
+        art = build_replay_summary(events, results, mode="test")
+        # Stale clean should be 8.0 (the highest stale positive with size_valid)
+        assert art["best_net_bps_stale_clean"] == 8.0
+
+    def test_mid_pipeline_abort_low_lag_stale_classified(self):
+        """block_lag=1 + same_state_class=stale → result is stale, not low-lag fresh."""
+        events = [_make_event(eid="mp1")]
+        results = [_make_result(
+            event_id="mp1", best_backrun_net_bps=5.0, block_lag=1,
+            same_state_class="stale", route_viable=False,
+            reject_reason=REJECT_STALE_POSITIVE, size_valid_for_token=True,
+            event_block=100, event_detected_at_block=101,
+        )]
+        art = build_replay_summary(events, results, mode="test")
+        assert art["stale_positive_count"] == 1
+
+
+class TestM7A528RollingArtifactSchema:
+    """M7.A.5.28: Rolling M7 artifact excludes bulky keys."""
+
+    def test_rolling_exclude_keys_defined(self):
+        from m7.orderflow.mode_ws_live import _ROLLING_EXCLUDE_KEYS
+        assert "results" in _ROLLING_EXCLUDE_KEYS
+        assert "low_lag_debug_rows" in _ROLLING_EXCLUDE_KEYS
+        assert "low_lag_watchlist" in _ROLLING_EXCLUDE_KEYS
+
+    def test_rolling_path_canonical(self):
+        import os
+        from m7.orderflow.mode_ws_live import _ROLLING_M7_PATH
+        assert _ROLLING_M7_PATH.endswith(
+            os.path.join("_rolling", "m7_orderflow_latest.json")
+        )
+
+
+class TestM7A528DashboardM7Artifact:
+    """M7.A.5.28: Dashboard server includes m7_orderflow in ARTIFACT_FILES."""
+
+    def test_m7_orderflow_in_artifact_files(self):
+        from monitoring.dashboard_server import ARTIFACT_FILES
+        assert "m7_orderflow" in ARTIFACT_FILES
+        assert str(ARTIFACT_FILES["m7_orderflow"]).endswith(
+            "m7_orderflow_latest.json"
+        )

@@ -35,6 +35,7 @@ from m7.shared.constants import (
     REJECT_NO_COUNTER_VENUE,
     REJECT_RPC_QUOTE_FAIL,
     REJECT_SLIPPAGE_EXCEEDS_GROSS,
+    REJECT_STALE_POSITIVE,
     REJECT_TOKEN_PAIR_UNRESOLVED,
     SURFACE_BLOCK_BACKRUN,
     SURFACE_COW_SOLVER,
@@ -351,16 +352,32 @@ def build_replay_summary(
             return r.event_detected_at_block - r.event_block
         return 999
 
+    # M7.A.5.28: Unified stale classifier — a result is stale if EITHER:
+    #   (a) final block_lag > 2, OR
+    #   (b) same_state_class == "stale" (set by mid-pipeline wall-clock abort even
+    #       when block_lag may still be ≤ 2 at abort time), OR
+    #   (c) reject_reason == REJECT_STALE_POSITIVE
+    # This fixes the contract bug where reject_histogram["STALE_POSITIVE"] > 0
+    # but stale_positive_count == 0 because mid-pipeline abort events had low block_lag.
+    def _is_stale(r):
+        if _lag(r) > 2:
+            return True
+        if getattr(r, "same_state_class", None) == "stale":
+            return True
+        if getattr(r, "reject_reason", None) == REJECT_STALE_POSITIVE:
+            return True
+        return False
+
     positive_net_count_any = sum(1 for r in results if r.best_backrun_net_bps > 0)
     # M7.A.5.25: Use detection-time lag for "low_lag" classification
     positive_net_count_low_lag = sum(
         1 for r in results
         if r.best_backrun_net_bps > 0 and _detection_lag(r) <= 2
     )
-    # stale_positive_count uses FINAL lag — stale at scoring completion
+    # M7.A.5.28: stale_positive_count uses unified stale classifier
     stale_positive_count = sum(
         1 for r in results
-        if r.best_backrun_net_bps > 0 and _lag(r) > 2
+        if r.best_backrun_net_bps > 0 and _is_stale(r)
     )
     best_net_bps_any = round(max(scored_net_bps), 4) if scored_net_bps else None
     best_net_bps_executable = round(max(viable_net_bps), 4) if viable_net_bps else None
@@ -383,7 +400,8 @@ def build_replay_summary(
     _scored_set = frozenset(id(r) for r in scored_results)
     _low_lag_all = [r for r in results if _detection_lag(r) <= 2]
     _low_lag_scored = [r for r in _low_lag_all if id(r) in _scored_set]
-    _stale_all = [r for r in results if _lag(r) > 2]  # final-lag stale
+    # M7.A.5.28: Use unified stale classifier (block_lag OR same_state_class OR reject_reason)
+    _stale_all = [r for r in results if _is_stale(r)]
     _stale_scored = [r for r in _stale_all if id(r) in _scored_set]
     _low_lag_scored_net = [r.best_backrun_net_bps for r in _low_lag_scored]
     _stale_scored_net = [r.best_backrun_net_bps for r in _stale_scored]

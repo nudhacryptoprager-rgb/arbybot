@@ -1,7 +1,7 @@
 # Status: M7 (Triangular Feasibility)
 
 **Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.27 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.27 adds anomaly-clean headlines, wall-clock budget abort, stale-clean KPI split, Timeboost constants. 300b/1000b evidence: 100% registry_direct, 15/100 positive clean (best 416.7 bps), viable_count=0, 100% mid_pipeline_abort. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
-**Updated**: 2026-04-28  
+**Updated**: 2026-04-02  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility. M7.B remains closed.
 
 ---

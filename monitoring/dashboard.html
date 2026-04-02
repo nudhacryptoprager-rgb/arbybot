@@ -130,6 +130,12 @@ tr:hover{background:#1c2128}
     <h2>10. Truth-Probe Targets</h2>
     <div id="probes-body"></div>
   </div>
+
+  <!-- Panel 11: M7 Orderflow (ws-live replay diagnostics) -->
+  <div class="panel" id="p-m7" style="grid-column:1/-1">
+    <h2>11. M7 Orderflow <span class="src-badge">(m7_orderflow_latest.json)</span></h2>
+    <div id="m7-body"></div>
+  </div>
 </div>
 
 <script>
@@ -260,6 +266,7 @@ function renderRolling(data) {
   renderBlockers(ls);
   renderRejects(focalRs, isFocal ? ls.per_chain[focalChain] : null);
   renderProbeTargets(ls);
+  renderM7Orderflow(data.m7_orderflow);
 }
 
   // R39q: Focal chain change handler
@@ -917,7 +924,117 @@ function renderRejects(rs, focalPc) {
   $('rejects-body').innerHTML = html;
 }
 
-// Panel 10: Truth-Probe Targets
+// Panel 11: M7 Orderflow (M7.A.5.28)
+function renderM7Orderflow(m7) {
+  if (!m7) { $('m7-body').innerHTML = '<em class="na">No M7 data (m7_orderflow_latest.json not found — run ws-live mode to populate)</em>'; return; }
+
+  const ts = m7.timestamp || '?';
+  const chain = m7.chain || '?';
+  const evts = m7.events_count || 0;
+  const results = m7.results_count || 0;
+  const viable = m7.viable_count || 0;
+  const scored = m7.scored_results_count || 0;
+
+  // Primary KPIs — honest labels per user requirement
+  const bestExec = m7.best_net_bps_executable;
+  const bestClean = m7.best_net_bps_clean;
+  const bestStaleClean = m7.best_net_bps_stale_clean;
+  const posClean = m7.positive_net_count_clean || 0;
+  const posLowLagClean = m7.positive_net_count_low_lag_clean || 0;
+  const stalePosCount = m7.stale_positive_count || 0;
+  const detectedLL = m7.events_detected_low_lag || 0;
+  const scoredLL = m7.events_scored_low_lag || 0;
+
+  // Pipeline optimization KPIs
+  const pipeOpt = m7.m7a524_pipeline_optimization || {};
+  const midAbortCount = pipeOpt.mid_pipeline_abort_count || 0;
+  const midAbortRate = results > 0 ? (midAbortCount / results * 100).toFixed(1) : '—';
+  const scoringHist = pipeOpt.scoring_path_histogram || {};
+
+  // Latency budget
+  const lsm = m7.live_state_metrics || {};
+  const budgetHitRate = lsm.latency_budget_hit_rate;
+
+  // Blocker tags
+  const bt = m7.blocker_tags || {};
+  const activeTags = bt.active_tags || [];
+
+  // Reject histogram — top 5
+  const rejectHist = m7.reject_histogram || {};
+  const topRejects = Object.entries(rejectHist).sort((a,b) => b[1] - a[1]).slice(0, 5);
+
+  // Pricing anomaly count
+  const anomalyCount = rejectHist['PRICING_ANOMALY'] || 0;
+
+  // Registry metrics
+  const regMetrics = m7.m7a523_low_lag_fast_path || {};
+  const regDirectCount = regMetrics.low_lag_registry_direct_count || 0;
+  const regDirectScored = regMetrics.low_lag_registry_direct_scored_count || 0;
+  const regDirectRate = detectedLL > 0 ? (regDirectCount / detectedLL * 100).toFixed(1) + '%' : '—';
+
+  let html = '';
+
+  // M4 vs M7 side-by-side comparison header
+  html += '<h3 style="font-size:.85rem;color:#58a6ff;margin-bottom:8px">M4 vs M7 Signal Comparison</h3>';
+  html += '<table><tr><th>Metric</th><th class="num">M4 (pair sweep)</th><th class="num">M7 (orderflow replay)</th></tr>';
+  html += `<tr><td>Best executable net (bps)</td><td class="num na">—</td><td class="num ${cls(bestExec)}">${fmt(bestExec, 2)}</td></tr>`;
+  html += `<tr><td>Diagnostic best clean (bps)</td><td class="num na">—</td><td class="num ${cls(bestClean)}">${fmt(bestClean, 2)}</td></tr>`;
+  html += `<tr><td>Diagnostic stale positive (bps)</td><td class="num na">—</td><td class="num ${cls(bestStaleClean)}">${fmt(bestStaleClean, 2)}</td></tr>`;
+  html += `<tr><td>Viable (executable) count</td><td class="num na">—</td><td class="num">${viable}</td></tr>`;
+  html += `<tr><td>Positive clean / stale positive</td><td class="num na">—</td><td class="num">${posClean} / ${stalePosCount}</td></tr>`;
+  html += '</table>';
+
+  // Primary M7 KPI grid
+  html += '<h3 style="font-size:.85rem;color:#58a6ff;margin:14px 0 8px">M7 Signal Quality</h3>';
+  html += `<div class="kpi">
+    <div class="kpi-item"><div class="kpi-val ${cls(bestExec)}">${fmt(bestExec, 2)}</div><div class="kpi-lbl">Executable best (bps)</div></div>
+    <div class="kpi-item"><div class="kpi-val">${viable}</div><div class="kpi-lbl">Viable count</div></div>
+    <div class="kpi-item"><div class="kpi-val">${detectedLL}</div><div class="kpi-lbl">Detected low-lag</div></div>
+    <div class="kpi-item"><div class="kpi-val">${scoredLL}</div><div class="kpi-lbl">Scored low-lag</div></div>
+    <div class="kpi-item"><div class="kpi-val">${midAbortRate}%</div><div class="kpi-lbl">Mid-pipeline abort rate</div></div>
+    <div class="kpi-item"><div class="kpi-val">${budgetHitRate != null ? (budgetHitRate * 100).toFixed(1) + '%' : '—'}</div><div class="kpi-lbl">Latency budget hit rate</div></div>
+    <div class="kpi-item"><div class="kpi-val">${anomalyCount}</div><div class="kpi-lbl">Pricing anomalies</div></div>
+    <div class="kpi-item"><div class="kpi-val">${posLowLagClean}</div><div class="kpi-lbl">Positive low-lag clean</div></div>
+  </div>`;
+
+  // Reject histogram (top 5)
+  if (topRejects.length > 0) {
+    html += '<h3 style="font-size:.85rem;color:#58a6ff;margin:14px 0 8px">Top Reject Reasons</h3>';
+    html += '<table><tr><th>Reject Reason</th><th class="num">Count</th><th class="num">Rate</th><th>Bar</th></tr>';
+    for (const [reason, count] of topRejects) {
+      const rate = results > 0 ? (count / results * 100).toFixed(1) + '%' : '—';
+      const w = results > 0 ? Math.min(count / results * 100, 100) : 0;
+      html += `<tr><td style="font-size:.75rem">${reason}</td><td class="num">${count}</td><td class="num">${rate}</td><td><div class="bar-bg" style="width:100px"><div class="bar-fill" style="width:${w}%;background:#da3633"></div></div></td></tr>`;
+    }
+    html += '</table>';
+  }
+
+  // Scoring path + registry metrics (secondary ops panel)
+  html += '<h3 style="font-size:.85rem;color:#7c8593;margin:14px 0 8px">Ops: Scoring Paths &amp; Registry</h3>';
+  html += '<table><tr><th>Scoring Path</th><th class="num">Count</th></tr>';
+  for (const [path, count] of Object.entries(scoringHist)) {
+    html += `<tr><td>${path || 'null'}</td><td class="num">${count}</td></tr>`;
+  }
+  html += '</table>';
+  html += `<div style="margin-top:6px;font-size:.75rem;color:#8b949e">Registry direct: ${regDirectCount} detected, ${regDirectScored} scored (${regDirectRate} of low-lag)</div>`;
+
+  // Blocker tags
+  if (activeTags.length > 0) {
+    html += '<h3 style="font-size:.85rem;color:#7c8593;margin:14px 0 8px">Active Blocker Tags</h3>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+    for (const tag of activeTags) {
+      html += badge(tag, tag.includes('LATENCY') || tag.includes('NONE') ? 'fail' : 'warn') + ' ';
+    }
+    html += '</div>';
+  }
+
+  // Footer meta
+  html += `<div style="margin-top:12px;font-size:.7rem;color:#6e7681">Chain: ${chain} | Events: ${evts} | Scored: ${scored} | Updated: ${ts.slice(0,19)}Z</div>`;
+
+  $('m7-body').innerHTML = html;
+}
+
+// Panel 10 (renumbered display, same code): Truth-Probe Targets
 function renderProbeTargets(ls) {
   if (!ls?.frontier_ranking) { $('probes-body').innerHTML = '<em class="na">No frontier data</em>'; return; }
   const probes = ls.frontier_ranking.filter(r => r.target_for_truth_probe);
