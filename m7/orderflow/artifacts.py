@@ -333,11 +333,21 @@ def build_replay_summary(
     # "any" = includes stale-positive results; "executable" = only viable (fresh + positive)
     # M7.A.5.13: Fix block_lag=0 falsy trap — use explicit None check
     def _lag(r): return r.block_lag if r.block_lag is not None else 999
+
+    # M7.A.5.25: Detection-time lag — how many blocks between event and detection.
+    # This is the TRUE low-lag signal; _lag(r) includes scoring latency.
+    def _detection_lag(r):
+        if r.event_detected_at_block is not None and r.event_block is not None:
+            return r.event_detected_at_block - r.event_block
+        return 999
+
     positive_net_count_any = sum(1 for r in results if r.best_backrun_net_bps > 0)
+    # M7.A.5.25: Use detection-time lag for "low_lag" classification
     positive_net_count_low_lag = sum(
         1 for r in results
-        if r.best_backrun_net_bps > 0 and _lag(r) <= 2
+        if r.best_backrun_net_bps > 0 and _detection_lag(r) <= 2
     )
+    # stale_positive_count uses FINAL lag — stale at scoring completion
     stale_positive_count = sum(
         1 for r in results
         if r.best_backrun_net_bps > 0 and _lag(r) > 2
@@ -346,11 +356,12 @@ def build_replay_summary(
     best_net_bps_executable = round(max(viable_net_bps), 4) if viable_net_bps else None
 
     # M7.A.5.13: Stale vs low-lag scored split
-    # "detected" = all events with block metadata; "scored" = only economically evaluated
+    # M7.A.5.25: "detected" uses detection-time lag; "scored" = economically evaluated
+    #            from the detection-low-lag set
     _scored_set = frozenset(id(r) for r in scored_results)
-    _low_lag_all = [r for r in results if _lag(r) <= 2]
+    _low_lag_all = [r for r in results if _detection_lag(r) <= 2]
     _low_lag_scored = [r for r in _low_lag_all if id(r) in _scored_set]
-    _stale_all = [r for r in results if _lag(r) > 2]
+    _stale_all = [r for r in results if _lag(r) > 2]  # final-lag stale
     _stale_scored = [r for r in _stale_all if id(r) in _scored_set]
     _low_lag_scored_net = [r.best_backrun_net_bps for r in _low_lag_scored]
     _stale_scored_net = [r.best_backrun_net_bps for r in _stale_scored]

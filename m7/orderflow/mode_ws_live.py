@@ -401,20 +401,28 @@ def run_ws_live(args) -> dict:
 
     # Live state metrics
     live_results = [r for r in all_results if r.event_block is not None]
+
+    # M7.A.5.25: Detection-time lag helper for ws-live metrics
+    def _det_lag(r):
+        if r.event_detected_at_block is not None and r.event_block is not None:
+            return r.event_detected_at_block - r.event_block
+        return 999
+
     if live_results:
         artifact["live_state_metrics"] = {
             "events_with_block_data": len(live_results),
             "mean_block_lag": round(
                 sum(r.block_lag or 0 for r in live_results) / len(live_results), 2
             ),
+            # M7.A.5.25: same_block_count uses detection-time lag (not final same_state_class)
             "same_block_count": sum(
-                1 for r in live_results if r.same_state_class == "same_block"
+                1 for r in live_results if _det_lag(r) == 0
             ),
             "next_block_count": sum(
-                1 for r in live_results if r.same_state_class == "next_block"
+                1 for r in live_results if _det_lag(r) in (1, 2)
             ),
             "stale_count": sum(
-                1 for r in live_results if r.same_state_class == "stale"
+                1 for r in live_results if _det_lag(r) > 2
             ),
             "venues_quoted_max": max(r.counter_venue_count for r in live_results) if live_results else 0,
             "venues_quoted_mean": round(
@@ -461,9 +469,10 @@ def run_ws_live(args) -> dict:
                 sum(live_net) / len(live_net), 4
             )
         # Low-lag subset metrics (ws-specific: should have more than polling)
+        # M7.A.5.25: Use detection-time lag, not final same_state_class
         low_lag = [
             r for r in live_results
-            if r.same_state_class in ("same_block", "next_block")
+            if _det_lag(r) <= 2
         ]
         low_lag_net = [
             r.best_live_net_bps for r in low_lag
@@ -527,9 +536,10 @@ def run_ws_live(args) -> dict:
         artifact["live_state_metrics"]["sub_block_capable"] = len(budget_hits) > 0
 
         # M7.A.5.3.1 — Separate low-lag vs stale summaries
+        # M7.A.5.25: Use detection-time lag for stale classification
         stale = [
             r for r in live_results
-            if r.same_state_class == "stale"
+            if _det_lag(r) > 2
         ]
         stale_net = [
             r.best_live_net_bps for r in stale
@@ -543,11 +553,12 @@ def run_ws_live(args) -> dict:
                 round(sum(low_lag_net) / len(low_lag_net), 4)
                 if low_lag_net else None
             ),
+            # M7.A.5.25: same/next block counts use detection-time lag
             "same_block_count": sum(
-                1 for r in low_lag if r.same_state_class == "same_block"
+                1 for r in low_lag if _det_lag(r) == 0
             ),
             "next_block_count": sum(
-                1 for r in low_lag if r.same_state_class == "next_block"
+                1 for r in low_lag if _det_lag(r) in (1, 2)
             ),
             "mean_pipeline_latency_ms": (
                 round(

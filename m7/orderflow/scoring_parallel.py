@@ -34,6 +34,7 @@ from m7.shared.constants import (
     REJECT_COVERAGE_LOCAL_MISMATCH,
     REJECT_ALL_POOLS_TRULY_INACTIVE,
     REJECT_GAS_FLOOR_EXCEEDED,
+    REJECT_PRICING_ANOMALY,
     ALL_REJECT_REASONS,
     UNSCORED_REJECTS,
     ADMISSION_CANONICAL,
@@ -350,11 +351,13 @@ def score_backrun_live_parallel(
             pass  # enrichment is best-effort
 
     # ── M7.A.5.6: Event-token admission check ──────────────────────────
+    _admission_start = time.monotonic()
     admission = admit_event_tokens(
         token_in_addr, token_out_addr,
         _ats, token_addresses,
     )
     # M7.A.5.10: Fix admission provenance — compute sg_seed first, then decide source
+    _admission_ms = round((time.monotonic() - _admission_start) * 1000, 2)
     adm_source = admission.get("admission_source", ADMISSION_REJECTED)
     _sg_addrs = subgraph_seeded_addrs or set()
     sg_seed = bool(
@@ -377,6 +380,7 @@ def score_backrun_live_parallel(
         )
 
     # ── M7.A.5.7: Oracle sanity guard ──────────────────────────────────
+    _oracle_start = time.monotonic()
     oracle_result = None
     try:
         in_sym = admission.get("token_in_symbol")
@@ -384,8 +388,10 @@ def score_backrun_live_parallel(
         oracle_result = check_oracle_sanity(in_sym, out_sym, rpc_url, current_block)
     except Exception:
         pass  # oracle guard is best-effort
+    _oracle_ms = round((time.monotonic() - _oracle_start) * 1000, 2)
 
     # ── M7.A.5.21: Registry preload for this pair ────────────────────────
+    _registry_start = time.monotonic()
     _registry_entries: list = []
     _registry_pools_found: Optional[int] = None
     _registry_pools_active: Optional[int] = None
@@ -400,6 +406,7 @@ def score_backrun_live_parallel(
             _registry_pools_active = sum(1 for e in _reg_results if e.is_active())
         except Exception as _reg_exc:
             logger.debug("Registry preload failed: %s", str(_reg_exc)[:80])
+    _registry_preload_ms = round((time.monotonic() - _registry_start) * 1000, 2)
 
     # ── M7.A.5.23: Low-lag registry-direct scoring fast path ────────────
     # For low-lag events (preliminary_lag <= 2) with active registry pools,
@@ -739,6 +746,9 @@ def score_backrun_live_parallel(
                     "stage_b_ms": 0.0,
                     "mid_pipeline_abort": True,
                     "mid_pipeline_lag": _mid_lag,
+                    "admission_ms": _admission_ms,
+                    "oracle_ms": _oracle_ms,
+                    "registry_preload_ms": _registry_preload_ms,
                 }
                 if local_pricing_ms is not None:
                     _mid_stage_latency["local_pricing_ms"] = local_pricing_ms
@@ -757,6 +767,14 @@ def score_backrun_live_parallel(
                     _mid_net = _mid_gross - _mid_gas_cost
                     _mid_net_bps = (_mid_net / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
                     _mid_gas_decomp = estimate_gas_decomposition_bps(backrun_size_wei, _mid_gas_cost)
+                    # M7.A.5.25: Pricing anomaly gate for mid-pipeline abort
+                    _PRICING_ANOMALY_BPS_MID = 10000
+                    if abs(_mid_net_bps) > _PRICING_ANOMALY_BPS_MID:
+                        _mid_reject = REJECT_PRICING_ANOMALY
+                    elif _mid_net_bps > 0:
+                        _mid_reject = REJECT_STALE_POSITIVE
+                    else:
+                        _mid_reject = REJECT_GAS_EXCEEDS_GROSS
                     return BackrunResult(
                         event_id=event.event_id,
                         event_source="live",
@@ -773,7 +791,7 @@ def score_backrun_live_parallel(
                         best_backrun_net_bps=round(_mid_net_bps, 4),
                         same_block_possible=False,
                         route_viable=False,
-                        reject_reason=REJECT_STALE_POSITIVE if _mid_net_bps > 0 else REJECT_GAS_EXCEEDS_GROSS,
+                        reject_reason=_mid_reject,
                         event_block=event.block_number,
                         quote_block=_mid_block,
                         block_lag=_mid_lag,
@@ -942,6 +960,11 @@ def score_backrun_live_parallel(
 
     stage_latency = {"stage_a_ms": stage_a_ms, "stage_b_ms": stage_b_ms}
 
+    # M7.A.5.25: Hidden latency telemetry — measure each pipeline stage
+    stage_latency["admission_ms"] = _admission_ms
+    stage_latency["oracle_ms"] = _oracle_ms
+    stage_latency["registry_preload_ms"] = _registry_preload_ms
+
     # M7.A.5.20: Inject local pricing latency
     if local_pricing_ms is not None:
         stage_latency["local_pricing_ms"] = local_pricing_ms
@@ -1002,8 +1025,14 @@ def score_backrun_live_parallel(
         net_wei = gross_wei - gas_cost_wei
         net_bps = (net_wei / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
 
+        # M7.A.5.25: Pricing anomaly gate — absurd net_bps from thin-liquidity local pricing
+        # 10000 bps = 100% return, anything above is almost certainly a pricing artifact
+        _PRICING_ANOMALY_BPS = 10000
+        if abs(net_bps) > _PRICING_ANOMALY_BPS:
+            route_viable = False
+            reject_reason = REJECT_PRICING_ANOMALY
         # M7.A.5.10: Stale-gate — positive but stale quotes are not executable
-        if net_bps > 0 and block_lag <= 2:
+        elif net_bps > 0 and block_lag <= 2:
             route_viable = True
             reject_reason = None
         elif net_bps > 0:
