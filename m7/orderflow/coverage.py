@@ -290,6 +290,7 @@ def seed_tokens_from_subgraph(
         sources_queried: list[str]
         errors: list[str]
     """
+    import json
     import urllib.request
     import urllib.error
 

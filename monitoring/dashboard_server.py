@@ -83,16 +83,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         Much smaller payload than /api/rolling; suitable for fast 3s polling
         when only live stream data is needed.
         """
-        hot_path = ARTIFACT_FILES["hot_loop"]
-        if not hot_path.is_file():
-            payload = b'{"hot_loop": null}'
-        else:
+        result = {"hot_loop": None, "m7_hot": None}
+        for key in ("hot_loop", "m7_hot"):
+            path = ARTIFACT_FILES[key]
+            if not path.is_file():
+                continue
             try:
-                with open(hot_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                payload = json.dumps({"hot_loop": data}, default=str).encode("utf-8")
+                with open(path, encoding="utf-8") as f:
+                    result[key] = json.load(f)
             except (json.JSONDecodeError, OSError):
-                payload = b'{"hot_loop": null}'
+                result[key] = None
+        payload = json.dumps(result, default=str).encode("utf-8")
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")

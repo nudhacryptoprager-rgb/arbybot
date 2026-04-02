@@ -33,8 +33,16 @@ from m7.orderflow.scoring_parallel import score_backrun_live_parallel
 logger = logging.getLogger("m7.orderflow.cli")
 
 
-def run_ws_live(args) -> dict:
-    """Execute the ws-live WebSocket replay mode and return the artifact dict."""
+def run_ws_live(args, *, external_registry=None) -> dict:
+    """Execute the ws-live WebSocket replay mode and return the artifact dict.
+
+    Parameters
+    ----------
+    args : namespace with ws_blocks, ws_timeout, max_events, chain.
+    external_registry : optional pre-warmed PoolRegistry.  When provided,
+        session prewarm is skipped and this registry is used directly.
+        The caller retains ownership and can accumulate state across calls.
+    """
     logger.info(
         "Running M7.A.5.3 ws-live replay (ws_blocks=%d, ws_timeout=%ds)",
         args.ws_blocks,
@@ -85,7 +93,12 @@ def run_ws_live(args) -> dict:
     addr_to_symbol = _build_address_to_symbol(token_addresses)
 
     # M7.A.5.22: Session-scoped pool registry for factory-driven discovery
-    session_registry = PoolRegistry()
+    # M7.A.5.31: Accept external registry; skip prewarm if caller provided one
+    if external_registry is not None:
+        session_registry = external_registry
+        _prewarm_count = -1  # signal: prewarm handled by caller
+    else:
+        session_registry = PoolRegistry()
 
     # M7.A.5.24: Session prewarm — preload high-frequency pairs from known addresses
     # Core pairs that appear frequently in Arbitrum orderflow
@@ -93,25 +106,28 @@ def run_ws_live(args) -> dict:
         ("WETH", "USDC"), ("WETH", "USDT"), ("WETH", "ARB"),
         ("USDC", "USDT"), ("WETH", "WBTC"), ("ARB", "USDC"),
     ]
-    _prewarm_count = 0
-    try:
-        from web3 import Web3 as _W3pw
-        _w3pw = _W3pw(_W3pw.HTTPProvider(rpc_url))
-        _pw_block = _w3pw.eth.block_number
-        for _sym_a, _sym_b in _prewarm_pairs:
-            _addr_a = token_addresses.get(_sym_a, "")
-            _addr_b = token_addresses.get(_sym_b, "")
-            if _addr_a and _addr_b:
-                try:
-                    session_registry.preload_pair(
-                        _addr_a, _addr_b, dex_configs, rpc_url, _pw_block,
-                    )
-                    _prewarm_count += 1
-                except Exception:
-                    pass
-        logger.info("Session prewarm: %d/%d pairs loaded", _prewarm_count, len(_prewarm_pairs))
-    except Exception as _pw_exc:
-        logger.debug("Session prewarm skipped: %s", str(_pw_exc)[:80])
+    if _prewarm_count != -1:
+        _prewarm_count = 0
+        try:
+            from web3 import Web3 as _W3pw
+            _w3pw = _W3pw(_W3pw.HTTPProvider(rpc_url))
+            _pw_block = _w3pw.eth.block_number
+            for _sym_a, _sym_b in _prewarm_pairs:
+                _addr_a = token_addresses.get(_sym_a, "")
+                _addr_b = token_addresses.get(_sym_b, "")
+                if _addr_a and _addr_b:
+                    try:
+                        session_registry.preload_pair(
+                            _addr_a, _addr_b, dex_configs, rpc_url, _pw_block,
+                        )
+                        _prewarm_count += 1
+                    except Exception:
+                        pass
+            logger.info("Session prewarm: %d/%d pairs loaded", _prewarm_count, len(_prewarm_pairs))
+        except Exception as _pw_exc:
+            logger.debug("Session prewarm skipped: %s", str(_pw_exc)[:80])
+    else:
+        logger.info("Session prewarm skipped: external registry provided")
 
     # M7.A.5.8: Subgraph-backed bounded coverage seed
     pre_seed_count = len(addr_to_symbol)

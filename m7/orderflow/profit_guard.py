@@ -20,6 +20,7 @@ Future: eth_call simulation against actual router/executor contract.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -27,6 +28,7 @@ from m7.shared.constants import (
     DEFAULT_BACKRUN_GAS,
     DEFAULT_GAS_PRICE_GWEI,
     GAS_FLOOR_BPS_ARBITRUM,
+    TIMEBOOST_ELIGIBLE_BUDGET_MS,
 )
 
 logger = logging.getLogger("m7.orderflow.profit_guard")
@@ -43,6 +45,8 @@ class ProfitGuardResult:
     gas_bps: float = 0.0
     guard_mode: str = "local_sim"  # local_sim | eth_call | onchain
     reject_reason: Optional[str] = None
+    guard_latency_ms: float = 0.0
+    timeboost_eligible: bool = False
     details: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -55,6 +59,7 @@ def check_profit_guard(
     gas_price_gwei: float = DEFAULT_GAS_PRICE_GWEI,
     token_decimals: int = 18,
     min_net_bps: float = 0.0,
+    pipeline_latency_ms: Optional[float] = None,
 ) -> ProfitGuardResult:
     """Check whether the ending balance exceeds starting balance after gas.
 
@@ -71,11 +76,14 @@ def check_profit_guard(
     gas_price_gwei : Gas price in gwei.
     token_decimals : Decimals of the profit token.
     min_net_bps : Minimum net bps threshold (default: 0 = any profit).
+    pipeline_latency_ms : Total scoring pipeline latency; used for
+        Timeboost eligibility (express lane budget = 50ms).
 
     Returns
     -------
     ProfitGuardResult with passed=True if ending > starting after gas.
     """
+    _guard_start = time.monotonic()
     gross_pnl_wei = sell_amount_wei - backrun_size_wei
     gas_cost_eth_wei = int(gas_estimate * gas_price_gwei * 1e9)
 
@@ -102,6 +110,13 @@ def check_profit_guard(
         elif net_bps <= min_net_bps:
             reject_reason = "BELOW_MIN_NET_BPS"
 
+    _guard_ms = round((time.monotonic() - _guard_start) * 1000, 2)
+
+    # M7.A.5.31: Timeboost eligibility — can this fit in the express lane budget?
+    _tb_eligible = False
+    if pipeline_latency_ms is not None:
+        _tb_eligible = pipeline_latency_ms <= TIMEBOOST_ELIGIBLE_BUDGET_MS
+
     return ProfitGuardResult(
         passed=passed,
         net_pnl_wei=net_pnl_wei,
@@ -110,6 +125,8 @@ def check_profit_guard(
         gas_bps=round(gas_bps, 4),
         guard_mode="local_sim",
         reject_reason=reject_reason,
+        guard_latency_ms=_guard_ms,
+        timeboost_eligible=_tb_eligible,
         details={
             "gross_pnl_wei": gross_pnl_wei,
             "gross_bps": round(gross_bps, 4),

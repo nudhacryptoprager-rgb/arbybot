@@ -1079,6 +1079,163 @@ class TestM7A529CompletionLatencyBlocker:
         assert BLOCKER_LOW_LAG_COMPLETION_LATENCY not in active_tags
 
 
+# ── M7.A.5.31 Tests ─────────────────────────────────────────────────
+
+class TestM7A531SubgraphJsonImport:
+    """M7.A.5.31: seed_tokens_from_subgraph has working json import."""
+
+    def test_seed_function_importable_and_returns_stats(self):
+        from m7.orderflow.coverage import seed_tokens_from_subgraph
+        # Calling with unsupported chain returns error stats (no network needed)
+        result = seed_tokens_from_subgraph({}, "http://fake", 100, chain="unknown_chain")
+        assert isinstance(result, dict)
+        assert "errors" in result
+        assert result["tokens_discovered"] == 0
+
+    def test_json_module_available_inside_seed(self):
+        """Verify that json is importable in the function scope."""
+        from m7.orderflow.coverage import seed_tokens_from_subgraph
+        import inspect
+        src = inspect.getsource(seed_tokens_from_subgraph)
+        assert "import json" in src
+
+
+class TestM7A531HotLanePrewarm:
+    """M7.A.5.31: Hot lane prewarms registry from accumulated pairs."""
+
+    def test_prewarm_registry_from_pairs_resolves_known(self):
+        from scripts.m7a_orderflow_loop import _prewarm_registry_from_pairs
+
+        class MockRegistry:
+            def __init__(self):
+                self.preloaded = []
+            def preload_pair(self, a, b, dex, rpc, block):
+                self.preloaded.append((a, b))
+
+        reg = MockRegistry()
+        pairs = {"WETH/USDC": {"pair": "WETH/USDC", "seen_count": 5}}
+        token_addresses = {
+            "WETH": "0xWETH",
+            "USDC": "0xUSDC",
+        }
+        count = _prewarm_registry_from_pairs(
+            reg, pairs, token_addresses, {}, "http://fake", 100,
+        )
+        assert count == 1
+        assert reg.preloaded == [("0xWETH", "0xUSDC")]
+
+    def test_prewarm_skips_unknown_symbols(self):
+        from scripts.m7a_orderflow_loop import _prewarm_registry_from_pairs
+
+        class MockRegistry:
+            def __init__(self):
+                self.preloaded = []
+            def preload_pair(self, a, b, dex, rpc, block):
+                self.preloaded.append((a, b))
+
+        reg = MockRegistry()
+        pairs = {"FOO/BAR": {"pair": "FOO/BAR", "seen_count": 1}}
+        count = _prewarm_registry_from_pairs(reg, pairs, {}, {}, "http://fake", 100)
+        assert count == 0
+
+
+class TestM7A531ProfitGuardTimeboost:
+    """M7.A.5.31: Profit guard includes Timeboost eligibility + timing."""
+
+    def test_timeboost_eligible_when_fast(self):
+        from m7.orderflow.profit_guard import check_profit_guard
+        guard = check_profit_guard(
+            buy_amount_wei=10**18,
+            sell_amount_wei=10**18 + 10**15,
+            backrun_size_wei=10**18,
+            pipeline_latency_ms=30.0,  # well under 50ms budget
+        )
+        assert guard.passed
+        assert guard.timeboost_eligible is True
+        assert guard.guard_latency_ms >= 0
+
+    def test_timeboost_not_eligible_when_slow(self):
+        from m7.orderflow.profit_guard import check_profit_guard
+        guard = check_profit_guard(
+            buy_amount_wei=10**18,
+            sell_amount_wei=10**18 + 10**15,
+            backrun_size_wei=10**18,
+            pipeline_latency_ms=1500.0,  # way over 50ms budget
+        )
+        assert guard.passed
+        assert guard.timeboost_eligible is False
+
+    def test_timeboost_false_when_no_latency(self):
+        from m7.orderflow.profit_guard import check_profit_guard
+        guard = check_profit_guard(
+            buy_amount_wei=10**18,
+            sell_amount_wei=10**18 + 10**15,
+            backrun_size_wei=10**18,
+        )
+        # No pipeline_latency_ms → not eligible
+        assert guard.timeboost_eligible is False
+
+    def test_guard_latency_ms_field_present(self):
+        from m7.orderflow.profit_guard import check_profit_guard
+        guard = check_profit_guard(
+            buy_amount_wei=10**18,
+            sell_amount_wei=10**18 - 10**16,
+            backrun_size_wei=10**18,  # unprofitable
+        )
+        assert hasattr(guard, "guard_latency_ms")
+        assert isinstance(guard.guard_latency_ms, float)
+
+
+class TestM7A531SizeValidFiltering:
+    """M7.A.5.31: size_valid=false excluded from hot-lane profit guard."""
+
+    def test_run_profit_guard_skips_size_invalid(self):
+        from scripts.m7a_orderflow_loop import _run_profit_guard_on_results
+        results = [
+            {
+                "best_backrun_net_bps": 5.0,
+                "best_buy_amount_wei": 10**18,
+                "best_sell_amount_wei": 10**18 + 10**15,
+                "amount_in_wei": 10**18,
+                "size_valid_for_token": False,  # should be skipped
+                "quote_pipeline_latency_ms": 100.0,
+            },
+        ]
+        passed = _run_profit_guard_on_results(results)
+        assert len(passed) == 0
+
+    def test_run_profit_guard_includes_size_valid(self):
+        from scripts.m7a_orderflow_loop import _run_profit_guard_on_results
+        results = [
+            {
+                "best_backrun_net_bps": 5.0,
+                "best_buy_amount_wei": 10**18,
+                "best_sell_amount_wei": 10**18 + 10**15,
+                "amount_in_wei": 10**18,
+                "size_valid_for_token": True,
+                "quote_pipeline_latency_ms": 100.0,
+            },
+        ]
+        passed = _run_profit_guard_on_results(results)
+        assert len(passed) == 1
+
+
+class TestM7A531ExternalRegistry:
+    """M7.A.5.31: run_ws_live accepts external_registry parameter."""
+
+    def test_run_ws_live_signature_accepts_external_registry(self):
+        import inspect
+        from m7.orderflow.mode_ws_live import run_ws_live
+        sig = inspect.signature(run_ws_live)
+        assert "external_registry" in sig.parameters
+
+    def test_lane_defaults_unchanged(self):
+        from scripts.m7a_orderflow_loop import _LANE_DEFAULTS
+        assert _LANE_DEFAULTS["cold"]["ws_blocks"] == 300
+        assert _LANE_DEFAULTS["hot"]["ws_blocks"] == 20
+        assert _LANE_DEFAULTS["hot"]["pause"] == 1
+
+
 # ===========================================================================
 # M7.A.5.30: Correctness fixes + hot/cold + profit guard + latency breakdown
 # ===========================================================================
@@ -1254,3 +1411,51 @@ class TestM7A530DashboardM7Hot:
         from monitoring.dashboard_server import ARTIFACT_FILES
         assert "m7_hot" in ARTIFACT_FILES
         assert str(ARTIFACT_FILES["m7_hot"]).endswith("m7_hot_latest.json")
+
+    def test_hot_endpoint_includes_m7_hot_payload(self):
+        import io
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from monitoring.dashboard_server import DashboardHandler
+
+        with tempfile.TemporaryDirectory() as td:
+            hot_loop = Path(td) / "hot_loop_latest.json"
+            m7_hot = Path(td) / "m7_hot_latest.json"
+            hot_loop.write_text(json.dumps({"schema": "hot:v1"}), encoding="utf-8")
+            m7_hot.write_text(json.dumps({"lane": "hot", "events_count": 3}), encoding="utf-8")
+
+            class _DummyHandler:
+                def __init__(self):
+                    self.wfile = io.BytesIO()
+                    self.status = None
+                    self.headers = []
+
+                def send_response(self, code):
+                    self.status = code
+
+                def send_header(self, key, value):
+                    self.headers.append((key, value))
+
+                def end_headers(self):
+                    return None
+
+            handler = _DummyHandler()
+            with patch.dict(
+                "monitoring.dashboard_server.ARTIFACT_FILES",
+                {"hot_loop": hot_loop, "m7_hot": m7_hot},
+                clear=False,
+            ):
+                DashboardHandler._serve_hot_data(handler)
+
+            payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+            assert handler.status == 200
+            assert payload["hot_loop"]["schema"] == "hot:v1"
+            assert payload["m7_hot"]["lane"] == "hot"
+
+    def test_dashboard_html_mentions_m7_hot_snapshot(self):
+        from pathlib import Path
+
+        html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "m7_hot_latest.json" in html

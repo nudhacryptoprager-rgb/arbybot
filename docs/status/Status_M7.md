@@ -184,6 +184,23 @@ CI: 3245 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 4. **`tests/unit/test_orderflow_m7a522.py`** (NEW, 22 tests): 5 test classes covering registry integration, gas-floor filter, re-export, field counts, artifact stats.
 5. **No new BackrunResult fields** (still 65). **No new reject reasons** (still 20). **ALL_BLOCKER_TAGS still 8**.
 
+---
+
+## M7.A.5.31: Hot Lane to Decision + Profit Guard + Timeboost Eligibility
+
+**Post-review verdict on M7.A.5.30**: Dashboard now live (Panel 11 reads both cold + m7_hot). Fresh 300b confirmed: discovery solved (registry_direct=30/30), but viable_count=0 because completion latency ~1544ms vs 250ms budget. `last_nonempty_timestamp` and `REMOTE_QUOTER_LATENCY` correctness bugs fixed. Latency breakdown now visible: resolve_ms≈935, registry_preload_ms≈449, oracle_ms≈117.
+
+**Hypothesis**: M7.A.5.31 = profit requires a true hot lane to tx-build decision, not richer replay diagnostics.
+
+**Changes**:
+1. **`m7/orderflow/coverage.py`** (BUGFIX): Added `import json` inside `seed_tokens_from_subgraph()`. Was causing `name 'json' is not defined` in subgraph_seed_stats.errors.
+2. **`m7/orderflow/mode_ws_live.py`** (MODIFIED): `run_ws_live()` accepts optional `external_registry` parameter. When provided, skips session prewarm (caller owns registry). Hot lane can pass pre-warmed registry across iterations.
+3. **`scripts/m7a_orderflow_loop.py`** (REWRITTEN): Hot lane: maintains `_accumulated_pairs` across iterations, prewarms registry from `session_low_lag_pairs` before each window. Integrates `check_profit_guard()` on all positive results (skipping `size_valid=false`). `_write_hot_artifact()` includes `profit_guard_passed_count`, `best_guard_passed` with `timeboost_eligible`, `execution_readiness` timing (mean/max guard_latency_ms, timeboost_eligible_count). Cold lane unchanged.
+4. **`m7/orderflow/profit_guard.py`** (MODIFIED): Added `guard_latency_ms` timing, `timeboost_eligible` field (pipeline_latency_ms ≤ 50ms budget), `pipeline_latency_ms` parameter.
+5. **`tests/unit/test_orderflow_artifacts.py`** (+12 tests): 6 new test classes: SubgraphJsonImport (2), HotLanePrewarm (2), ProfitGuardTimeboost (4), SizeValidFiltering (2), ExternalRegistry (2).
+
+CI: 3149 passed, 6 skipped. ALL REQUIRED GATES PASSED.
+
 **Evidence** (3 runs, all Arbitrum One ws-live):
 - 300b: 27 events, 24 scored, best_net=-0.887 bps. **Registry: preload=12, cache_hits=36, pools_discovered=74, pools_active=62**. events_with_registry=26/27 (96%). NO_COUNTER_POOL=0 (was 2 in M7.A.5.21). Adapter: v3_local:14, none:13. Low-lag: 1 detected, 0 scored. Blocker: `LOW_LAG_V2_UNSUPPORTED`.
 - 300b_b: 28 events, 27 scored, best_net=+1.53 bps. **Registry: preload=9, cache_hits=41, pools_discovered=77, pools_active=61**. events_with_registry=28/28 (100%). NO_COUNTER_POOL=0. Adapter: v3_local:22, none:6. Low-lag: 0.

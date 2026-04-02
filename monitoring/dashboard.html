@@ -131,9 +131,9 @@ tr:hover{background:#1c2128}
     <div id="probes-body"></div>
   </div>
 
-  <!-- Panel 11: M7 Orderflow (ws-live replay diagnostics) -->
+  <!-- Panel 11: M7 Orderflow (cold snapshot + hot lane) -->
   <div class="panel" id="p-m7" style="grid-column:1/-1">
-    <h2>11. M7 Orderflow <span class="src-badge">(m7_orderflow_latest.json)</span></h2>
+    <h2>11. M7 Orderflow <span class="src-badge">(m7_orderflow_latest.json + m7_hot_latest.json)</span></h2>
     <div id="m7-body"></div>
   </div>
 </div>
@@ -147,6 +147,7 @@ const badge = (text, c) => `<span class="badge ${c}">${text}</span>`;
 
 let latestRolling = null;
 let latestHot = null;
+let latestM7Hot = null;
 let focalChain = '';  // R39q: '' = PRIMARY, else chain key from long_scan
 
 function loadData() {
@@ -161,6 +162,8 @@ function loadRollingData() {
     .then(data => {
       latestRolling = data;
       renderRolling(data);
+      if (!latestM7Hot && data?.m7_hot) latestM7Hot = data.m7_hot;
+      renderM7Orderflow(data.m7_orderflow, latestM7Hot || data?.m7_hot || null);
       if (!latestHot && data?.hot_loop) renderHotLoop(data.hot_loop);
     })
     .catch(e => { $('error-msg').textContent = 'Failed to load rolling data: ' + e.message; });
@@ -171,7 +174,9 @@ function loadHotData() {
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(data => {
       latestHot = data?.hot_loop || null;
+      latestM7Hot = data?.m7_hot || latestM7Hot || null;
       renderHotLoop(latestHot || latestRolling?.hot_loop || null);
+      renderM7Orderflow(latestRolling?.m7_orderflow || null, latestM7Hot);
     })
     .catch(e => {
       if (!latestRolling) $('error-msg').textContent = 'Failed to load hot stream: ' + e.message;
@@ -266,7 +271,6 @@ function renderRolling(data) {
   renderBlockers(ls);
   renderRejects(focalRs, isFocal ? ls.per_chain[focalChain] : null);
   renderProbeTargets(ls);
-  renderM7Orderflow(data.m7_orderflow);
 }
 
   // R39q: Focal chain change handler
@@ -924,8 +928,8 @@ function renderRejects(rs, focalPc) {
   $('rejects-body').innerHTML = html;
 }
 
-// Panel 11: M7 Orderflow (M7.A.5.28)
-function renderM7Orderflow(m7) {
+// Panel 11: M7 Orderflow (cold snapshot + hot lane)
+function renderM7Orderflow(m7, m7Hot) {
   if (!m7) { $('m7-body').innerHTML = '<em class="na">No M7 data (m7_orderflow_latest.json not found — run ws-live mode to populate)</em>'; return; }
 
   const ts = m7.timestamp || '?';
@@ -973,6 +977,22 @@ function renderM7Orderflow(m7) {
   const regDirectRate = detectedLL > 0 ? (regDirectCount / detectedLL * 100).toFixed(1) + '%' : '—';
 
   let html = '';
+
+  if (m7Hot) {
+    const hotBest = m7Hot.best_net_bps_clean;
+    const hotCandidate = m7Hot.best_candidate || {};
+    html += '<h3 style="font-size:.85rem;color:#58a6ff;margin-bottom:8px">M7 Hot Lane (1s poll)</h3>';
+    html += `<div class="kpi">
+      <div class="kpi-item"><div class="kpi-val">${m7Hot.loop_iteration ?? 'вЂ”'}</div><div class="kpi-lbl">Loop iteration</div></div>
+      <div class="kpi-item"><div class="kpi-val">${m7Hot.events_count ?? 0}</div><div class="kpi-lbl">Hot events</div></div>
+      <div class="kpi-item"><div class="kpi-val ${cls(hotBest)}">${fmt(hotBest, 2)}</div><div class="kpi-lbl">Hot best clean (bps)</div></div>
+      <div class="kpi-item"><div class="kpi-val">${m7Hot.viable_count ?? 0}</div><div class="kpi-lbl">Hot viable</div></div>
+      <div class="kpi-item"><div class="kpi-val">${m7Hot.has_positive ? 'YES' : 'NO'}</div><div class="kpi-lbl">Hot positive present</div></div>
+    </div>`;
+    html += `<div style="margin:8px 0 12px;font-size:.75rem;color:#8b949e">Lane: ${m7Hot.lane || 'вЂ”'} | Updated: ${(m7Hot.timestamp || '?').slice(0,19)}Z | Best candidate: ${hotCandidate.actual_pair || 'вЂ”'} (${fmt(hotCandidate.net_bps, 2)} bps via ${hotCandidate.scoring_path || 'вЂ”'})</div>`;
+  } else {
+    html += '<div style="margin:0 0 12px;font-size:.75rem;color:#8b949e">Hot lane snapshot not available yet. Run scripts/m7a_orderflow_loop.py --lane hot to populate m7_hot_latest.json.</div>';
+  }
 
   // M4 vs M7 side-by-side comparison header
   html += '<h3 style="font-size:.85rem;color:#58a6ff;margin-bottom:8px">M4 vs M7 Signal Comparison</h3>';
