@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.33 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.33 fixes profit_guard dead-code bug, adds hot-mode fast path in mode_ws_live, per-stage timing, integrated profit_guard in score_backrun_fast. 3172 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.34 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.34 removes parallel fallback from hot lane, adds PRICING_ANOMALY exclusion, 3 execution-readiness stage timings (calldata, sign_or_bundle_prep, tx_build). Hot lane cleanly separated from cold: ~0ms skip vs ~1330ms pipeline. 3179 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-02  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing. M7.B remains closed.
 
 ---
 
@@ -219,6 +219,20 @@ CI: 3163 passed, 6 skipped. Safety: PASS. ALL REQUIRED GATES PASSED.
 **Changes**: (1) Fixed profit_guard field derivation in `m7a_orderflow_loop.py`. (2) `mode_ws_live.py`: hot-mode fast path — when `external_registry` provided, scores events via `score_backrun_fast()` first (zero-RPC), falls back to full pipeline only if pair not in registry. (3) `score_backrun_fast()`: added per-stage timing (`registry_lookup_ms`, `pool_state_ms`, `local_math_ms`, `profit_guard_ms`, `tx_build_ms`) in `pipeline_stage_latency_ms`. Integrated profit_guard directly — `profit_guard_passed` field on BackrunResult (67 total). (4) Hot artifact now reports `stage_timings` aggregate + `profit_guard_passed` count. (5) +9 tests in 4 classes. (6) DEV_REPORT provenance fixed (timestamp_utc aligned with rolling truth). (7) Status_M7.md compressed from 346→215 lines, sections reordered chronologically.
 
 CI: 3172 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.34: Hot Lane No-Fallback + PRICING_ANOMALY Exclusion + Execution Timing
+
+**Hypothesis**: M7.A.5.34 = first profit_guard-passed hot candidate on a tiny prewarmed watchlist under the 250ms budget. Discovery is not the primary blocker; completion latency and zero profit_guard passes are.
+
+**Architectural change**: Hot mode in `mode_ws_live.py` no longer falls back to `score_backrun_live_parallel()` when `score_backrun_fast()` returns None. Events not in the prewarmed registry get a lightweight `hot_skip` result (~0ms) instead of the ~1330ms parallel pipeline. This cleanly separates hot lane (fast, O(1) only) from cold lane (full diagnostic).
+
+**Changes**: (1) `mode_ws_live.py`: hot mode creates `BackrunResult(scoring_path="hot_skip", reject_reason="REJECT_NOT_IN_HOT_REGISTRY")` when fast path misses — no parallel fallback. Stores `_raw_results` in artifact for downstream. (2) `scoring_parallel.py`: PRICING_ANOMALY hard-exclude (|net_bps|>10000) in fast path. Stage 5 split into `tx_build_ms`, `calldata_ms`, `sign_or_bundle_prep_ms` (7 total stage timing keys). (3) `m7a_orderflow_loop.py`: profit guard + hot headline skip PRICING_ANOMALY. Removed redundant second fast-path re-scoring — extracts fast results from `_raw_results` directly. (4) `constants.py`: added `HOT_BUDGET_CALLDATA_MS=20`, `HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS=30`. (5) DEV_REPORT blocker-tag count 8→9. (6) +7 tests in 4 classes.
+
+**Online evidence**: Hot loop 30 iterations (events_count=2-4, profit_guard_passed=0, viable=0) — events not in watchlist correctly skipped via hot_skip. Cold loop 3 iterations (events=22, scored=21, positive_clean=2, viable=0, best_clean=46.20 bps, latency_mean=1331ms). Cold confirms resolve_ms=643, registry_preload_ms=484 — exactly the bottleneck hot lane now bypasses entirely.
+
+CI: 3179 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

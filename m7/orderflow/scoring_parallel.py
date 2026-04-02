@@ -1314,10 +1314,18 @@ def score_backrun_fast(
     else:
         return None
 
+    # M7.A.5.34: PRICING_ANOMALY hard-exclude in fast path
+    _PRICING_ANOMALY_BPS_FAST = 10000
+    _reject_reason = None
+    _route_viable = (net_bps > 0 and net_wei > 0)
+    if abs(net_bps) > _PRICING_ANOMALY_BPS_FAST:
+        _reject_reason = REJECT_PRICING_ANOMALY
+        _route_viable = False
+
     # ── Stage 4: Profit guard (local sim) ──────────────────────────────
     _guard_start = time.monotonic()
     _profit_guard_passed = None
-    if net_bps > 0 and net_wei > 0:
+    if _route_viable and net_bps > 0 and net_wei > 0:
         from m7.orderflow.profit_guard import check_profit_guard
         _guard = check_profit_guard(
             buy_amount_wei=backrun_size_wei,
@@ -1328,11 +1336,19 @@ def score_backrun_fast(
         _profit_guard_passed = _guard.passed
     _profit_guard_ms = round((time.monotonic() - _guard_start) * 1000, 2)
 
-    # ── Stage 5: Tx-build decision timing (placeholder — no actual build) ─
+    # ── Stage 5: Execution-readiness timing (3 sub-stages) ────────────
+    # M7.A.5.34: Split into tx_build / calldata / sign_or_bundle_prep
     _tx_build_start = time.monotonic()
-    # In future: encode calldata, sign/bundle prep
-    # For now: measure the decision overhead
+    # Sub-stage 5a: Transaction build decision
     _tx_build_ms = round((time.monotonic() - _tx_build_start) * 1000, 2)
+
+    _calldata_start = time.monotonic()
+    # Sub-stage 5b: Calldata encoding (placeholder — future ABI encode)
+    _calldata_ms = round((time.monotonic() - _calldata_start) * 1000, 2)
+
+    _sign_start = time.monotonic()
+    # Sub-stage 5c: Sign or bundle preparation (placeholder — future signing)
+    _sign_or_bundle_prep_ms = round((time.monotonic() - _sign_start) * 1000, 2)
 
     pipeline_ms = round((time.monotonic() - pipeline_start) * 1000, 2)
 
@@ -1366,8 +1382,8 @@ def score_backrun_fast(
         gas_cost_wei=gas_cost_wei,
         net_pnl_wei=net_wei,
         best_backrun_net_bps=round(net_bps, 4),
-        route_viable=(net_bps > 0 and net_wei > 0),
-        reject_reason=None if (net_bps > 0 and net_wei > 0) else REJECT_GAS_EXCEEDS_GROSS,
+        route_viable=_route_viable,
+        reject_reason=_reject_reason if _reject_reason else (None if _route_viable else REJECT_GAS_EXCEEDS_GROSS),
         event_block=event.block_number,
         quote_block=current_block,
         block_lag=block_lag,
@@ -1383,6 +1399,8 @@ def score_backrun_fast(
             "local_math_ms": _local_math_ms,
             "profit_guard_ms": _profit_guard_ms,
             "tx_build_ms": _tx_build_ms,
+            "calldata_ms": _calldata_ms,
+            "sign_or_bundle_prep_ms": _sign_or_bundle_prep_ms,
         },
         pair_resolved=True,
         actual_pair=actual_pair,

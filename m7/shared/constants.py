@@ -230,6 +230,8 @@ HOT_BUDGET_POOL_STATE_READ_MS = 50    # Single RPC: getReserves / slot0
 HOT_BUDGET_LOCAL_MATH_MS = 10         # V3/V2 swap math
 HOT_BUDGET_PROFIT_GUARD_MS = 10       # Guard check
 HOT_BUDGET_TX_BUILD_MS = 50           # Transaction build/sign prep (future)
+HOT_BUDGET_CALLDATA_MS = 20           # ABI calldata encoding (future)
+HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS = 30  # Signing or bundle preparation (future)
 HOT_BUDGET_TOTAL_MS = 250             # Hard abort if exceeded
 
 # Default watchlist pairs for hot lane fast-path (high-frequency Arbitrum pairs)

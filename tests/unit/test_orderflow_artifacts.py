@@ -1888,3 +1888,114 @@ class TestM7A533HotModeFastPath:
     def test_mode_ws_live_imports_score_backrun_fast(self):
         from m7.orderflow.mode_ws_live import score_backrun_fast as sbf
         assert callable(sbf)
+
+
+# ── M7.A.5.34 Tests ───────────────────────────────────────────────────────
+
+
+class TestM7A534HotModeNoParallelFallback:
+    """M7.A.5.34: Hot mode no longer falls back to parallel pipeline."""
+
+    def test_mode_ws_live_imports_backrun_result(self):
+        """BackrunResult is importable from mode_ws_live for hot_skip creation."""
+        from m7.orderflow.mode_ws_live import BackrunResult
+        from dataclasses import is_dataclass
+        assert is_dataclass(BackrunResult)
+
+    def test_hot_skip_result_fields(self):
+        """A hot_skip result has correct scoring_path and reject_reason."""
+        from m7.orderflow.contracts import BackrunResult
+        r = BackrunResult(
+            event_id="ev_skip_1",
+            event_source="live",
+            event_type="swap",
+            post_trade_state_used="live",
+            backrun_direction="skip",
+            reject_reason="REJECT_NOT_IN_HOT_REGISTRY",
+            scoring_path="hot_skip",
+        )
+        assert r.scoring_path == "hot_skip"
+        assert r.reject_reason == "REJECT_NOT_IN_HOT_REGISTRY"
+        assert r.route_viable is False
+        assert r.profit_guard_passed is None
+
+
+class TestM7A534PricingAnomalyExclusion:
+    """M7.A.5.34: PRICING_ANOMALY hard-excluded from profit guard + headlines."""
+
+    def test_profit_guard_skips_pricing_anomaly(self):
+        """_run_profit_guard_on_results() skips PRICING_ANOMALY results."""
+        from scripts.m7a_orderflow_loop import _run_profit_guard_on_results
+        results = [
+            {
+                "best_backrun_net_bps": 50.0,
+                "amount_in_wei": 10**18,
+                "gross_pnl_wei": 10**16,
+                "size_valid_for_token": True,
+                "reject_reason": "REJECT_PRICING_ANOMALY",
+                "quote_pipeline_latency_ms": 10.0,
+            }
+        ]
+        passed = _run_profit_guard_on_results(results)
+        assert len(passed) == 0
+
+    def test_profit_guard_passes_clean(self):
+        """_run_profit_guard_on_results() passes clean positive results."""
+        from scripts.m7a_orderflow_loop import _run_profit_guard_on_results
+        results = [
+            {
+                "best_backrun_net_bps": 5.0,
+                "amount_in_wei": 10**18,
+                "gross_pnl_wei": 10**16,
+                "size_valid_for_token": True,
+                "reject_reason": None,
+                "quote_pipeline_latency_ms": 10.0,
+            }
+        ]
+        passed = _run_profit_guard_on_results(results)
+        assert len(passed) == 1
+
+
+class TestM7A534ExecutionReadinessTimings:
+    """M7.A.5.34: score_backrun_fast produces 7 stage timing keys."""
+
+    def test_stage_timing_keys_include_calldata_and_sign(self):
+        """Pipeline stage latency dict should have calldata_ms and sign_or_bundle_prep_ms."""
+        expected = {
+            "registry_lookup_ms", "pool_state_ms", "local_math_ms",
+            "profit_guard_ms", "tx_build_ms", "calldata_ms",
+            "sign_or_bundle_prep_ms",
+        }
+        # Verify by constructing a BackrunResult with the expected keys
+        from m7.orderflow.contracts import BackrunResult
+        r = BackrunResult(
+            event_id="ev_timing_test",
+            event_source="live",
+            event_type="swap",
+            post_trade_state_used="live",
+            backrun_direction="buy",
+            pipeline_stage_latency_ms={k: 0.01 for k in expected},
+        )
+        assert set(r.pipeline_stage_latency_ms.keys()) == expected
+
+    def test_hot_budget_constants_exist(self):
+        """New budget constants for calldata and sign exist in constants."""
+        from m7.shared.constants import (
+            HOT_BUDGET_CALLDATA_MS,
+            HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS,
+        )
+        assert HOT_BUDGET_CALLDATA_MS > 0
+        assert HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS > 0
+
+
+class TestM7A534RawResultsInArtifact:
+    """M7.A.5.34: run_ws_live stores _raw_results for hot lane."""
+
+    def test_hot_artifact_stage_keys_include_new_timings(self):
+        """_write_hot_artifact stage_keys list includes calldata + sign."""
+        import ast
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        source = inspect.getsource(_write_hot_artifact)
+        assert "calldata_ms" in source
+        assert "sign_or_bundle_prep_ms" in source

@@ -155,9 +155,14 @@ def _run_profit_guard_on_results(results: list) -> list:
         buy = size  # backrun input IS the buy amount
         sell = size + gross  # sell = input + gross PnL
         sv = r.get("size_valid_for_token") if isinstance(r, dict) else getattr(r, "size_valid_for_token", None)
+        rr = r.get("reject_reason") if isinstance(r, dict) else getattr(r, "reject_reason", None)
 
         # M7.A.5.31: Skip size_valid=false from profit guard (Step 5)
         if sv is False:
+            continue
+
+        # M7.A.5.34: Hard-exclude PRICING_ANOMALY from profit guard
+        if rr == "REJECT_PRICING_ANOMALY":
             continue
 
         if not buy or not sell or not size:
@@ -183,8 +188,12 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     for r in results:
         net = r.get("best_backrun_net_bps") if isinstance(r, dict) else getattr(r, "best_backrun_net_bps", None)
         sv = r.get("size_valid_for_token") if isinstance(r, dict) else getattr(r, "size_valid_for_token", None)
+        rr = r.get("reject_reason") if isinstance(r, dict) else getattr(r, "reject_reason", None)
         # M7.A.5.31: Skip size_valid=false from hot headline
         if sv is False:
+            continue
+        # M7.A.5.34: Hard-exclude PRICING_ANOMALY from hot headline
+        if rr == "REJECT_PRICING_ANOMALY":
             continue
         if net is not None and net > 0:
             if best is None or net > (best.get("best_backrun_net_bps") if isinstance(best, dict) else getattr(best, "best_backrun_net_bps", 0)):
@@ -207,9 +216,10 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         fast_positive = [r for r in fast_results if (r.best_backrun_net_bps or 0) > 0]
         fast_guard_passed = [r for r in fast_results if r.profit_guard_passed]
         fast_latencies = [r.quote_pipeline_latency_ms for r in fast_results if r.quote_pipeline_latency_ms]
-        # M7.A.5.33: Aggregate stage-level timing
+        # M7.A.5.33/5.34: Aggregate stage-level timing (includes calldata + sign)
         _stage_keys = ["registry_lookup_ms", "pool_state_ms", "local_math_ms",
-                       "profit_guard_ms", "tx_build_ms"]
+                       "profit_guard_ms", "tx_build_ms", "calldata_ms",
+                       "sign_or_bundle_prep_ms"]
         _stage_agg = {}
         for sk in _stage_keys:
             vals = [
@@ -384,54 +394,24 @@ def run_loop(cli_args) -> None:
             if lane == "hot":
                 guard_results = _run_profit_guard_on_results(artifact.get("results", []))
 
-                # M7.A.5.32: Fast-path scoring — re-score events through preloaded registry
-                if _hot_registry and _hot_registry.preload_calls > 0:
-                    try:
-                        from config import get_all_token_addresses
-                        from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
-                        from m7.orderflow.resolve import _build_address_to_symbol
-                        _chain_id = _CHAIN_KEY_TO_ID.get(cli_args.chain.lower())
-                        _rpc, _, _ = resolve_rpc_http(
-                            chain_id=_chain_id, network=cli_args.chain,
-                            env=dict(os.environ),
-                        )
-                        _token_addr = get_all_token_addresses(cli_args.chain)
-                        _addr_sym = _build_address_to_symbol(_token_addr)
-                        _chain_cfg = {}
-                        try:
-                            from config import load_chains
-                            _chain_cfg = load_chains().get(cli_args.chain, {})
-                        except Exception:
-                            pass
-                        _btm = _chain_cfg.get("block_time_ms", 250)
-
-                        # Get events from artifact results (BackrunResult objects)
-                        fast_results = []
-                        for r in artifact.get("results", []):
-                            ev = getattr(r, "_source_event", None)
-                            if ev is None:
-                                # Reconstruct minimal event from result fields
-                                continue
-                            fr = score_backrun_fast(
-                                event=ev,
-                                pool_registry=_hot_registry,
-                                token_addresses=_token_addr,
-                                current_block=getattr(r, "quote_block", 0) or 0,
-                                event_detected_at_block=getattr(r, "event_detected_at_block", None),
-                                block_time_ms=_btm,
-                                addr_to_symbol=_addr_sym,
-                            )
-                            if fr is not None:
-                                fast_results.append(fr)
-                        if fast_results:
-                            logger.info(
-                                "Fast-path: %d/%d events scored, %d positive",
-                                len(fast_results),
-                                events_count,
-                                sum(1 for r in fast_results if (r.best_backrun_net_bps or 0) > 0),
-                            )
-                    except Exception as _fp_exc:
-                        logger.debug("Fast-path scoring failed: %s", str(_fp_exc)[:120])
+                # M7.A.5.34: Extract fast-path results directly from artifact.
+                # In hot mode, run_ws_live() scores events via score_backrun_fast()
+                # inline (no fallback to parallel). Results with scoring_path=
+                # "registry_fast" are already first-class — no re-scoring needed.
+                # Use _raw_results (BackrunResult objects) for attribute access.
+                _raw_results = artifact.get("_raw_results", [])
+                fast_results = [
+                    r for r in _raw_results
+                    if getattr(r, "scoring_path", None) == "registry_fast"
+                ]
+                if fast_results:
+                    logger.info(
+                        "Hot fast-path: %d/%d events scored, %d positive",
+                        len(fast_results),
+                        events_count,
+                        sum(1 for r in fast_results
+                            if (getattr(r, "best_backrun_net_bps", 0) or 0) > 0),
+                    )
 
             if lane == "cold":
                 # Cold lane: full diagnostic rolling artifact

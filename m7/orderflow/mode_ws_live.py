@@ -29,6 +29,7 @@ from m7.orderflow.events import normalize_swap_log
 from m7.orderflow.pool_registry import PoolRegistry
 from m7.orderflow.resolve import _build_address_to_symbol
 from m7.orderflow.scoring_parallel import score_backrun_live_parallel, score_backrun_fast
+from m7.orderflow.contracts import BackrunResult
 
 logger = logging.getLogger("m7.orderflow.cli")
 
@@ -289,8 +290,28 @@ def run_ws_live(args, *, external_registry=None) -> dict:
                         block_time_ms=block_time_ms,
                         addr_to_symbol=addr_to_symbol,
                     )
-                if r is None:
-                    # Full pipeline fallback (cold lane, or pair not in registry)
+                    # M7.A.5.34: Hot mode — no parallel fallback. If fast path
+                    # returns None (pair not in registry / no state), create a
+                    # lightweight skip result. This eliminates ~1940ms parallel
+                    # pipeline latency from the hot lane entirely.
+                    if r is None:
+                        _pair = f"{ev.token_in}/{ev.token_out}"
+                        r = BackrunResult(
+                            event_id=ev.event_id,
+                            event_source="live",
+                            event_type=ev.event_type,
+                            post_trade_state_used="live",
+                            backrun_direction="skip",
+                            reject_reason="REJECT_NOT_IN_HOT_REGISTRY",
+                            event_block=ev.block_number,
+                            quote_block=current_block,
+                            block_lag=current_block - ev.block_number,
+                            event_detected_at_block=detected_block,
+                            actual_pair=_pair,
+                            scoring_path="hot_skip",
+                        )
+                else:
+                    # Cold lane: full pipeline
                     r = score_backrun_live_parallel(
                         event=ev,
                         rpc_url=rpc_url,
@@ -365,6 +386,10 @@ def run_ws_live(args, *, external_registry=None) -> dict:
 
     # Build artifact
     artifact = build_replay_summary(all_events, all_results, mode="ws_live")
+    # M7.A.5.34: Preserve raw BackrunResult objects for hot lane downstream.
+    # build_replay_summary serialises results to dicts; the outer loop needs
+    # the original objects for _write_hot_artifact() attribute access.
+    artifact["_raw_results"] = all_results
     artifact["m7a56_hypothesis"] = (
         "same-chain backrun on arbitrum_one may become measurable only after "
         "pair-resolved counter-venue coverage is expanded for actual live-event "
