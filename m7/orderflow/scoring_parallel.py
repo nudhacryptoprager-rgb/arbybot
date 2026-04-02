@@ -726,127 +726,119 @@ def score_backrun_live_parallel(
             local_pricing_failure_reason = f"error:{type(_lp_exc).__name__}"
         local_pricing_ms = round((time.monotonic() - _lp_start) * 1000, 2)
 
-    # ── M7.A.5.24: Mid-pipeline lag abort for low-lag events ────────────
-    # If event was low-lag at detection but became stale during scoring,
-    # abort remaining work (Stage B remote quoter, size sweep) to avoid
-    # wasting RPC budget on events that already lost executable class.
+    # ── M7.A.5.27: Wall-clock mid-pipeline abort for executable lane ────
+    # Replace expensive RPC block check with deterministic wall-clock budget.
+    # If elapsed time exceeds block_time_ms, the event has almost certainly
+    # become stale — abort remaining heavy work (Stage B, sweep) to save budget.
     _mid_pipeline_aborted = False
-    if _is_low_lag and _scoring_path == "registry_direct":
-        try:
-            from web3 import Web3 as _W3_mid
-            _w3_mid = _W3_mid(_W3_mid.HTTPProvider(rpc_url))
-            _mid_block = _w3_mid.eth.block_number
-            _mid_lag = _mid_block - event.block_number
-            if _mid_lag > 2:
-                _mid_pipeline_aborted = True
-                # We have local pricing results — compute economics with what we have
-                _mid_pipeline_ms = round((time.monotonic() - pipeline_start) * 1000, 2)
-                _mid_stage_latency = {
-                    "stage_a_ms": stage_a_ms if isinstance(stage_a_ms, float) else 0.0,
-                    "stage_b_ms": 0.0,
-                    "mid_pipeline_abort": True,
-                    "mid_pipeline_lag": _mid_lag,
-                    "admission_ms": _admission_ms,
-                    "oracle_ms": _oracle_ms,
-                    "registry_preload_ms": _registry_preload_ms,
-                }
-                if local_pricing_ms is not None:
-                    _mid_stage_latency["local_pricing_ms"] = local_pricing_ms
-                    _mid_stage_latency["local_pricing_used"] = _local_result is not None
-                # If local pricing produced amounts, compute net for diagnostic
-                if _local_result is not None:
-                    _mid_buy = _local_result["buy_amount"]
-                    _mid_sell = _local_result["sell_amount"]
-                    _mid_gross = _mid_sell - backrun_size_wei
-                    _mid_gas_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
-                    _mid_gas_cost = _gas_cost_in_token_wei(
-                        _mid_gas_eth_wei, _effective_dec,
-                        token_price_usd=_tok_price_usd if '_tok_price_usd' in dir() else None,
-                        eth_price_usd=_eth_price_usd if '_eth_price_usd' in dir() else None,
-                    )
-                    _mid_net = _mid_gross - _mid_gas_cost
-                    _mid_net_bps = (_mid_net / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
-                    _mid_gas_decomp = estimate_gas_decomposition_bps(backrun_size_wei, _mid_gas_cost)
-                    # M7.A.5.25: Pricing anomaly gate for mid-pipeline abort
-                    _PRICING_ANOMALY_BPS_MID = 10000
-                    if abs(_mid_net_bps) > _PRICING_ANOMALY_BPS_MID:
-                        _mid_reject = REJECT_PRICING_ANOMALY
-                    elif _mid_net_bps > 0:
-                        _mid_reject = REJECT_STALE_POSITIVE
-                    else:
-                        _mid_reject = REJECT_GAS_EXCEEDS_GROSS
-                    return BackrunResult(
-                        event_id=event.event_id,
-                        event_source="live",
-                        event_type=event.event_type,
-                        post_trade_state_used="live",
-                        backrun_direction=backrun_dir,
-                        best_buy_venue=_local_result["buy_venue"],
-                        best_sell_venue=_local_result["sell_venue"],
-                        amount_in_wei=backrun_size_wei,
-                        gross_pnl_wei=_mid_gross,
-                        gas_cost_wei=_mid_gas_cost,
-                        fee_cost_wei=0,
-                        net_pnl_wei=_mid_net,
-                        best_backrun_net_bps=round(_mid_net_bps, 4),
-                        same_block_possible=False,
-                        route_viable=False,
-                        reject_reason=_mid_reject,
-                        event_block=event.block_number,
-                        quote_block=_mid_block,
-                        block_lag=_mid_lag,
-                        same_state_class="stale",
-                        counter_venue_count=_local_result["pools_succeeded"],
-                        best_live_net_bps=round(_mid_net_bps, 4),
-                        ws_provider=ws_provider,
-                        event_detected_at_block=event_detected_at_block,
-                        quote_started_block=quote_started_block,
-                        quote_finished_block=_mid_block,
-                        quote_pipeline_latency_ms=_mid_pipeline_ms,
-                        venues_pruned_by_multicall=0,
-                        latency_budget_ms=block_time_ms,
-                        quote_calls_attempted=0,
-                        quote_calls_after_pruning=0,
-                        pipeline_stage_latency_ms=_mid_stage_latency,
-                        pair_resolved=pair_resolved,
-                        actual_pair=actual_pair,
-                        size_source=size_source,
-                        coverage_result=coverage,
-                        token_admitted=True,
-                        admission_source=adm_source,
-                        oracle_guard=oracle_result,
-                        local_sim_state=local_sim,
-                        l2_gas_bps=_mid_gas_decomp["l2_gas_bps"],
-                        l1_data_bps=_mid_gas_decomp["l1_data_bps"],
-                        total_gas_bps=_mid_gas_decomp["total_gas_bps"],
-                        subgraph_seed_used=sg_seed,
-                        token_in_decimals=_token_in_dec,
-                        size_normalization_source=_norm_source,
-                        size_usd_estimate=_size_usd,
-                        size_valid_for_token=(_token_in_dec is not None),
-                        pool_contract_truth=_pool_truth,
-                        pool_state_read_path=_pool_read_path,
-                        local_pricing_attempted=local_pricing_attempted,
-                        local_pricing_used=True,
-                        local_pricing_failure_reason=None,
-                        registry_pools_found=_registry_pools_found,
-                        registry_pools_active=_registry_pools_active,
-                        adapter_type_used=_local_result.get("pricing_path"),
-                        gas_floor_exceeded=_gas_floor_exceeded,
-                        gas_floor_bps=_gas_floor_bps,
-                        pricing_path=_local_result.get("pricing_path"),
-                        scoring_path=_scoring_path,
-                    )
-                # No local result — just reject
-                return _reject(
-                    REJECT_GAS_EXCEEDS_GROSS,
-                    pr=pair_resolved, ap=actual_pair, adm=True,
-                    adm_src=adm_source, orc=oracle_result,
-                    cov=coverage, lss=local_sim, sg_seed=sg_seed,
-                    pct=_pool_truth, psrp=_pool_read_path,
-                )
-        except Exception:
-            pass  # If block check fails, continue normal pipeline
+    _budget_ms = block_time_ms or 250.0
+    _elapsed_ms = (time.monotonic() - pipeline_start) * 1000
+    if _is_low_lag and _elapsed_ms > _budget_ms:
+        _mid_pipeline_aborted = True
+        _mid_pipeline_ms = round(_elapsed_ms, 2)
+        _mid_stage_latency = {
+            "stage_a_ms": stage_a_ms if isinstance(stage_a_ms, float) else 0.0,
+            "stage_b_ms": 0.0,
+            "mid_pipeline_abort": True,
+            "mid_pipeline_budget_exceeded_ms": round(_elapsed_ms, 2),
+            "admission_ms": _admission_ms,
+            "oracle_ms": _oracle_ms,
+            "registry_preload_ms": _registry_preload_ms,
+        }
+        if local_pricing_ms is not None:
+            _mid_stage_latency["local_pricing_ms"] = local_pricing_ms
+            _mid_stage_latency["local_pricing_used"] = _local_result is not None
+        # If local pricing produced amounts, compute net for diagnostic
+        if _local_result is not None:
+            _mid_buy = _local_result["buy_amount"]
+            _mid_sell = _local_result["sell_amount"]
+            _mid_gross = _mid_sell - backrun_size_wei
+            _mid_gas_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+            _mid_gas_cost = _gas_cost_in_token_wei(
+                _mid_gas_eth_wei, _effective_dec,
+                token_price_usd=_tok_price_usd if '_tok_price_usd' in dir() else None,
+                eth_price_usd=_eth_price_usd if '_eth_price_usd' in dir() else None,
+            )
+            _mid_net = _mid_gross - _mid_gas_cost
+            _mid_net_bps = (_mid_net / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
+            _mid_gas_decomp = estimate_gas_decomposition_bps(backrun_size_wei, _mid_gas_cost)
+            _PRICING_ANOMALY_BPS_MID = 10000
+            if abs(_mid_net_bps) > _PRICING_ANOMALY_BPS_MID:
+                _mid_reject = REJECT_PRICING_ANOMALY
+            elif _mid_net_bps > 0:
+                _mid_reject = REJECT_STALE_POSITIVE
+            else:
+                _mid_reject = REJECT_GAS_EXCEEDS_GROSS
+            return BackrunResult(
+                event_id=event.event_id,
+                event_source="live",
+                event_type=event.event_type,
+                post_trade_state_used="live",
+                backrun_direction=backrun_dir,
+                best_buy_venue=_local_result["buy_venue"],
+                best_sell_venue=_local_result["sell_venue"],
+                amount_in_wei=backrun_size_wei,
+                gross_pnl_wei=_mid_gross,
+                gas_cost_wei=_mid_gas_cost,
+                fee_cost_wei=0,
+                net_pnl_wei=_mid_net,
+                best_backrun_net_bps=round(_mid_net_bps, 4),
+                same_block_possible=False,
+                route_viable=False,
+                reject_reason=_mid_reject,
+                event_block=event.block_number,
+                quote_block=current_block,
+                block_lag=current_block - event.block_number,
+                same_state_class="stale",
+                counter_venue_count=_local_result["pools_succeeded"],
+                best_live_net_bps=round(_mid_net_bps, 4),
+                ws_provider=ws_provider,
+                event_detected_at_block=event_detected_at_block,
+                quote_started_block=quote_started_block,
+                quote_finished_block=current_block,
+                quote_pipeline_latency_ms=_mid_pipeline_ms,
+                venues_pruned_by_multicall=0,
+                latency_budget_ms=block_time_ms,
+                quote_calls_attempted=0,
+                quote_calls_after_pruning=0,
+                pipeline_stage_latency_ms=_mid_stage_latency,
+                pair_resolved=pair_resolved,
+                actual_pair=actual_pair,
+                size_source=size_source,
+                coverage_result=coverage,
+                token_admitted=True,
+                admission_source=adm_source,
+                oracle_guard=oracle_result,
+                local_sim_state=local_sim,
+                l2_gas_bps=_mid_gas_decomp["l2_gas_bps"],
+                l1_data_bps=_mid_gas_decomp["l1_data_bps"],
+                total_gas_bps=_mid_gas_decomp["total_gas_bps"],
+                subgraph_seed_used=sg_seed,
+                token_in_decimals=_token_in_dec,
+                size_normalization_source=_norm_source,
+                size_usd_estimate=_size_usd,
+                size_valid_for_token=(_token_in_dec is not None),
+                pool_contract_truth=_pool_truth,
+                pool_state_read_path=_pool_read_path,
+                local_pricing_attempted=local_pricing_attempted,
+                local_pricing_used=True,
+                local_pricing_failure_reason=None,
+                registry_pools_found=_registry_pools_found,
+                registry_pools_active=_registry_pools_active,
+                adapter_type_used=_local_result.get("pricing_path"),
+                gas_floor_exceeded=_gas_floor_exceeded,
+                gas_floor_bps=_gas_floor_bps,
+                pricing_path=_local_result.get("pricing_path"),
+                scoring_path=_scoring_path,
+            )
+        # No local result — just reject as budget exceeded
+        return _reject(
+            REJECT_GAS_EXCEEDS_GROSS,
+            pr=pair_resolved, ap=actual_pair, adm=True,
+            adm_src=adm_source, orc=oracle_result,
+            cov=coverage, lss=local_sim, sg_seed=sg_seed,
+            pct=_pool_truth, psrp=_pool_read_path,
+        )
 
     # ── Stage B: Confirmatory QuoterV2 quotes ───────────────────────────
     # M7.A.5.20: Skip remote quoter if local pricing succeeded (fast path)

@@ -28,6 +28,7 @@ from m7.shared.constants import (
     REJECT_ALL_POOLS_ZERO_LIQUIDITY,
     REJECT_COVERAGE_LOCAL_MISMATCH,
     REJECT_GAS_EXCEEDS_GROSS,
+    REJECT_PRICING_ANOMALY,
     REJECT_GAS_FLOOR_EXCEEDED,
     REJECT_NO_ACTIVE_COUNTER_POOL,
     REJECT_NO_COUNTER_POOL,
@@ -329,6 +330,15 @@ def build_replay_summary(
     all_net_bps = [r.best_backrun_net_bps for r in results]
     viable_net_bps = [r.best_backrun_net_bps for r in results if r.route_viable]
 
+    # M7.A.5.27: Anomaly-clean scored results — exclude PRICING_ANOMALY from headlines
+    # PRICING_ANOMALY (|net_bps| > 10000) is an artifact of thin-liquidity local pricing,
+    # not a real signal. Headlines must not be inflated by these values.
+    _ANOMALY_REJECTS = frozenset({REJECT_PRICING_ANOMALY})
+    scored_results_clean = [
+        r for r in scored_results if r.reject_reason not in _ANOMALY_REJECTS
+    ]
+    scored_net_bps_clean = [r.best_backrun_net_bps for r in scored_results_clean]
+
     # M7.A.5.10: Split summary fields
     # "any" = includes stale-positive results; "executable" = only viable (fresh + positive)
     # M7.A.5.13: Fix block_lag=0 falsy trap — use explicit None check
@@ -355,6 +365,18 @@ def build_replay_summary(
     best_net_bps_any = round(max(scored_net_bps), 4) if scored_net_bps else None
     best_net_bps_executable = round(max(viable_net_bps), 4) if viable_net_bps else None
 
+    # M7.A.5.27: Anomaly-clean positive counts (exclude PRICING_ANOMALY)
+    positive_net_count_clean = sum(
+        1 for r in scored_results_clean if r.best_backrun_net_bps > 0
+    )
+    positive_net_count_low_lag_clean = sum(
+        1 for r in scored_results_clean
+        if r.best_backrun_net_bps > 0 and _detection_lag(r) <= 2
+    )
+    best_net_bps_clean = (
+        round(max(scored_net_bps_clean), 4) if scored_net_bps_clean else None
+    )
+
     # M7.A.5.13: Stale vs low-lag scored split
     # M7.A.5.25: "detected" uses detection-time lag; "scored" = economically evaluated
     #            from the detection-low-lag set
@@ -376,6 +398,20 @@ def build_replay_summary(
     mean_net_bps_low_lag_scored = (
         round(sum(_low_lag_scored_net) / len(_low_lag_scored_net), 4)
         if _low_lag_scored_net else None
+    )
+
+    # M7.A.5.27: Anomaly-clean stale scored — exclude PRICING_ANOMALY from stale KPIs
+    _clean_set = frozenset(id(r) for r in scored_results_clean)
+    _stale_scored_clean = [r for r in _stale_scored if id(r) in _clean_set]
+    _stale_scored_clean_net = [r.best_backrun_net_bps for r in _stale_scored_clean]
+    # Also require size_valid for stale_clean to be meaningful
+    _stale_scored_clean_valid = [
+        r for r in _stale_scored_clean if r.size_valid_for_token
+    ]
+    _stale_scored_clean_valid_net = [r.best_backrun_net_bps for r in _stale_scored_clean_valid]
+    best_net_bps_stale_clean = (
+        round(max(_stale_scored_clean_valid_net), 4)
+        if _stale_scored_clean_valid_net else None
     )
     # M7.A.5.13: Machine-readable stale/low-lag comparison block
     _TWO_LEG_BASELINE = -3.5062
@@ -700,7 +736,7 @@ def build_replay_summary(
         _active_tags.append(BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY)
     # Gas: check if GAS_EXCEEDS_GROSS is dominant reject
     _gas_dom = reject_counts.get(REJECT_GAS_EXCEEDS_GROSS, 0)
-    if _gas_dom > 0 and (not scored_net_bps or max(scored_net_bps) < 0):
+    if _gas_dom > 0 and (not scored_net_bps_clean or max(scored_net_bps_clean) < 0):
         _active_tags.append(BLOCKER_GAS_L1_DATA_DOMINANT)
     # Subgraph: always tag if endpoints are configured but no API key mechanism
     _active_tags.append(BLOCKER_SUBGRAPH_API_KEY_REQUIRED)
@@ -720,14 +756,24 @@ def build_replay_summary(
         "results_count": len(results),
         "viable_count": viable_count,
         "positive_net_count": positive_net_count,
-        # M7.A.5.10: best_net_bps from scored results only (excludes unscored rejects)
-        "best_net_bps": round(max(scored_net_bps), 4) if scored_net_bps else None,
-        "worst_net_bps": round(min(scored_net_bps), 4) if scored_net_bps else None,
-        "mean_net_bps": round(sum(scored_net_bps) / len(scored_net_bps), 4) if scored_net_bps else None,
+        # M7.A.5.27: best_net_bps is anomaly-clean (excludes PRICING_ANOMALY)
+        "best_net_bps": best_net_bps_clean,
+        "worst_net_bps": (
+            round(min(scored_net_bps_clean), 4) if scored_net_bps_clean else None
+        ),
+        "mean_net_bps": (
+            round(sum(scored_net_bps_clean) / len(scored_net_bps_clean), 4)
+            if scored_net_bps_clean else None
+        ),
         "viable_best_net_bps": round(max(viable_net_bps), 4) if viable_net_bps else None,
         # M7.A.5.10: Split fields
         "best_net_bps_any": best_net_bps_any,
         "best_net_bps_executable": best_net_bps_executable,
+        # M7.A.5.27: Anomaly-clean KPIs
+        "best_net_bps_clean": best_net_bps_clean,
+        "best_net_bps_stale_clean": best_net_bps_stale_clean,
+        "positive_net_count_clean": positive_net_count_clean,
+        "positive_net_count_low_lag_clean": positive_net_count_low_lag_clean,
         "positive_net_count_any": positive_net_count_any,
         "positive_net_count_low_lag": positive_net_count_low_lag,
         "stale_positive_count": stale_positive_count,
@@ -853,9 +899,9 @@ def build_replay_summary(
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
         "m7a_triangular_best_net_bps": -14.16,
-        "beats_two_leg_baseline": positive_net_count > 0,
+        "beats_two_leg_baseline": positive_net_count_clean > 0,
         "beats_triangular_baseline": (
-            max(scored_net_bps) > -14.16 if scored_net_bps else False
+            max(scored_net_bps_clean) > -14.16 if scored_net_bps_clean else False
         ),
     }
 

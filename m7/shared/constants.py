@@ -204,3 +204,17 @@ _DEFAULT_FEE_TIERS = [500, 3000, 100, 10000]
 # Minimum gross bps needed to cover Arbitrum gas (L2 exec + L1 data poster).
 # Events whose estimated gross < this floor are rejected without quoting.
 GAS_FLOOR_BPS_ARBITRUM = 2.0  # ~2 bps baseline gas cost on Arbitrum
+
+# ---------------------------------------------------------------------------
+# M7.A.5.27: Timeboost ordering — Arbitrum express lane constants
+# ---------------------------------------------------------------------------
+# Arbitrum Timeboost allows bidding for express lane priority (200ms advantage).
+# For backrun execution, this gives ordering advantage over vanilla mempool.
+# These constants are placeholder for a future execution path; scoring uses them
+# only for feasibility assessment.
+TIMEBOOST_BLOCK_TIME_MS = 250  # Arbitrum block time
+TIMEBOOST_EXPRESS_ADVANTAGE_MS = 200  # Express lane head start
+TIMEBOOST_MIN_PIPELINE_MS = 50  # Minimum scoring time for executable decision
+# Maximum pipeline latency to be Timeboost-eligible (budget = block - advantage)
+TIMEBOOST_ELIGIBLE_BUDGET_MS = TIMEBOOST_BLOCK_TIME_MS - TIMEBOOST_EXPRESS_ADVANTAGE_MS
+

@@ -737,3 +737,107 @@ class TestPipelineOptimizationArtifact:
         ]
         art = build_replay_summary(events, results, mode="ws_live")
         assert art["m7a524_pipeline_optimization"]["mid_pipeline_abort_count"] == 1
+
+
+# ===========================================================================
+# M7.A.5.27: Anomaly-Clean Headlines + Stale-Clean KPI Split
+# ===========================================================================
+
+
+class TestM7A527AnomalyCleanHeadlines:
+    """M7.A.5.27: best_net_bps excludes PRICING_ANOMALY; stale_clean KPI exists."""
+
+    def _make_mixed_results(self):
+        from m7.shared.constants import REJECT_PRICING_ANOMALY
+        return [
+            # Anomaly: huge net_bps but PRICING_ANOMALY reject
+            _make_result(
+                event_id="a1", best_backrun_net_bps=47322.0, block_lag=5,
+                same_state_class="stale", route_viable=False,
+                reject_reason=REJECT_PRICING_ANOMALY, size_valid_for_token=True,
+            ),
+            # Stale positive: good net_bps but stale
+            _make_result(
+                event_id="a2", best_backrun_net_bps=12.0, block_lag=8,
+                same_state_class="stale", route_viable=False,
+                reject_reason=REJECT_STALE_POSITIVE, size_valid_for_token=True,
+            ),
+            # Executable: low-lag and viable
+            _make_result(
+                event_id="a3", best_backrun_net_bps=3.5, block_lag=1,
+                same_state_class="next_block", route_viable=True,
+                reject_reason=None, size_valid_for_token=True,
+                event_block=100, event_detected_at_block=101,
+            ),
+            # Gas reject: negative
+            _make_result(
+                event_id="a4", best_backrun_net_bps=-50.0, block_lag=0,
+                same_state_class="same_block", route_viable=False,
+                reject_reason=REJECT_GAS_EXCEEDS_GROSS, size_valid_for_token=True,
+                event_block=100, event_detected_at_block=100,
+            ),
+        ]
+
+    def test_best_net_bps_excludes_anomaly(self):
+        events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
+        results = self._make_mixed_results()
+        art = build_replay_summary(events, results, mode="test")
+        # best_net_bps should be 12.0 (stale positive), NOT 47322.0 (anomaly)
+        assert art["best_net_bps"] == 12.0
+
+    def test_best_net_bps_any_includes_anomaly(self):
+        events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
+        results = self._make_mixed_results()
+        art = build_replay_summary(events, results, mode="test")
+        # best_net_bps_any is the unfiltered diagnostic — includes anomaly
+        assert art["best_net_bps_any"] == 47322.0
+
+    def test_best_net_bps_executable_unchanged(self):
+        events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
+        results = self._make_mixed_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["best_net_bps_executable"] == 3.5
+
+    def test_best_net_bps_clean_field(self):
+        events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
+        results = self._make_mixed_results()
+        art = build_replay_summary(events, results, mode="test")
+        assert art["best_net_bps_clean"] == 12.0
+
+    def test_best_net_bps_stale_clean(self):
+        events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
+        results = self._make_mixed_results()
+        art = build_replay_summary(events, results, mode="test")
+        # Stale-clean = stale + anomaly-free + size-valid → best is 12.0
+        assert art["best_net_bps_stale_clean"] == 12.0
+
+    def test_positive_net_count_clean_excludes_anomaly(self):
+        events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
+        results = self._make_mixed_results()
+        art = build_replay_summary(events, results, mode="test")
+        # Anomaly (47322) excluded; stale positive (12) + executable (3.5) = 2
+        assert art["positive_net_count_clean"] == 2
+
+    def test_beats_two_leg_baseline_uses_clean(self):
+        events = [_make_event(eid="a1")]
+        # Only an anomaly result → clean is empty → should not beat baseline
+        from m7.shared.constants import REJECT_PRICING_ANOMALY
+        results = [_make_result(
+            event_id="a1", best_backrun_net_bps=50000.0, block_lag=5,
+            same_state_class="stale", route_viable=False,
+            reject_reason=REJECT_PRICING_ANOMALY,
+        )]
+        art = build_replay_summary(events, results, mode="test")
+        assert art["beats_two_leg_baseline"] is False
+
+    def test_all_anomaly_results_give_none_headline(self):
+        from m7.shared.constants import REJECT_PRICING_ANOMALY
+        events = [_make_event(eid="a1")]
+        results = [_make_result(
+            event_id="a1", best_backrun_net_bps=99999.0, block_lag=3,
+            same_state_class="stale", route_viable=False,
+            reject_reason=REJECT_PRICING_ANOMALY,
+        )]
+        art = build_replay_summary(events, results, mode="test")
+        assert art["best_net_bps"] is None
+        assert art["best_net_bps_clean"] is None

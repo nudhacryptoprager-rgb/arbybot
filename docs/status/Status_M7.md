@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.26 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.26 fixes coverage UnboundLocalError in zero-active-pools path + fresh April 2 verification: 100% same-block detection, registry_direct + local_pricing dominant, viable_count=0, best_net_bps_executable=null, PRICING_ANOMALY gate has gap, M4 ROUNDTRIP_NOT_PROFITABLE. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
-**Updated**: 2026-04-02  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth. M7.B remains closed.
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.27 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.27 adds anomaly-clean headlines, wall-clock budget abort, stale-clean KPI split, Timeboost constants. 300b/1000b evidence: 100% registry_direct, 15/100 positive clean (best 416.7 bps), viable_count=0, 100% mid_pipeline_abort. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Updated**: 2026-04-28  
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility. M7.B remains closed.
 
 ---
 
@@ -262,19 +262,7 @@ CI: 3310 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 ## M7.R1: Structural Refactor — Extract m7/ Package (COMPLETED)
 
-**Goal**: Extract all M7 logic from monolithic scripts into a dedicated lowercase `m7/` package, preserving CLI flags, artifact schemas, reject codes, and milestone semantics.
-
-**Changes**:
-1. **`m7/shared/constants.py`** (171 lines): All M7 constants, reject reasons, blocker tags, event types, surfaces, thresholds. Added 8th canonical blocker tag.
-2. **`m7/orderflow/`** (8 modules): contracts, events, resolve, coverage, pricing, scoring_parallel, artifacts, cli (340 lines) + mode_ws_live (854 lines).
-3. **`m7/triangular/`** (5 modules, 1828 lines total): graph, scoring, verdicts, repeatability, cli.
-4. **Shims**: `scripts/m7a_orderflow_replay.py` (154), `scripts/m7a_enumerate_cycles.py` (94), `engine/triangular_*.py` (19-23) — thin re-export wrappers.
-
-**Blocker tag addition**: `BLOCKER_LOW_LAG_RPC_QUOTE_FAIL` added as 8th canonical tag. Separately tracked from `LOW_LAG_REMOTE_QUOTER_LATENCY`.
-
-**Evidence**: Both CLIs produce identical artifact schemas. Orderflow 300b verify: 30 events, 1 low-lag, 4 blocker tags active. Triangular verify: 500 cycles, 67/100 measured, best_net=-20.18 bps.
-
-CI: 3180 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+Extracted all M7 logic into `m7/` package: `m7/shared/constants.py` (171 lines, all reject reasons + blocker tags), `m7/orderflow/` (8 modules: contracts, events, resolve, coverage, pricing, scoring_parallel, artifacts, cli + mode_ws_live), `m7/triangular/` (5 modules, 1828 lines). Thin shim wrappers in `scripts/`. 8th blocker tag `LOW_LAG_RPC_QUOTE_FAIL` added. CI: 3180 passed, 6 skipped.
 
 ---
 
@@ -284,9 +272,23 @@ Structural-only branch (no market progress). Consolidated 14 session-specific `t
 
 ---
 
-## M7.A.5.26: Fresh April 2 Verification + Coverage Bug Fix (CORRECTIVE)
+## M7.A.5.26: Coverage Bug Fix + Fresh April 2 Verification (CORRECTIVE)
 
-Fixed `UnboundLocalError` in `scoring_parallel.py`: zero-active-pools fast reject referenced `coverage` before assignment (`cov=coverage` → `cov=None`). +1 regression test. Fresh verification (user-run April 2): 300b (30 events, best_net=+47322 bps [PRICING_ANOMALY outlier]), 1000b (81 events, best_net=+408 bps, PRICING_ANOMALY:1). 100% same-block detection, near-100% registry_direct, viable_count=0, best_net_bps_executable=null. M5 gate PASS (signals=31, best_net_pnl=-28.77 bps, ROUNDTRIP_NOT_PROFITABLE). PRICING_ANOMALY gate has gap (47322 outlier not caught). Next: execution-lane hardening, not more discovery. CI: 3105 passed, 6 skipped. ALL GATES PASSED.
+Fixed `UnboundLocalError` in `scoring_parallel.py` zero-active-pools path (`cov=coverage` → `cov=None`). +1 regression test. 300b/1000b: 100% same-block detection, near-100% registry_direct, viable_count=0. PRICING_ANOMALY gate gap found (47322 bps outlier). CI: 3105 passed, 6 skipped.
+
+---
+
+## M7.A.5.27: Anomaly-Clean Headlines + Executable Lane Hardening
+
+Hypothesis: "first executable edge requires anomaly-clean local pricing plus a low-lag execution lane."
+
+**Code changes**: (1) `best_net_bps` headline now excludes PRICING_ANOMALY — prevents thin-liquidity artifacts from inflating metrics. (2) Wall-clock budget abort replaces RPC-based mid-pipeline lag check — saves ~100ms per event (no extra `eth_blockNumber` call). (3) New KPIs: `best_net_bps_clean`, `best_net_bps_stale_clean`, `positive_net_count_clean`, `positive_net_count_low_lag_clean`. (4) Timeboost constants added (250ms block, 200ms express advantage, 50ms min pipeline budget).
+
+**Evidence (300b)**: 30 events, 30/30 low-lag, 30/30 registry_direct, 6 positive clean (best 37.08 bps), 0 anomalies, viable_count=0, 100% mid_pipeline_abort.
+
+**Evidence (1000b)**: 100 events, 100/100 low-lag, 100/100 registry_direct, 15 positive clean (best 416.7 bps), 2 PRICING_ANOMALY excluded from headlines, viable_count=0, 100% mid_pipeline_abort. Top signal: 0xc87b37a5/WETH 416.7 bps, RAIN/WETH 6-16 bps.
+
+**Verdict**: Positive signal exists and is anomaly-clean. Pipeline latency remains the binding constraint — all events exceed 250ms budget. Next: reduce pipeline to <50ms for Timeboost eligibility. CI: 3113 passed, 6 skipped.
 
 ---
 
