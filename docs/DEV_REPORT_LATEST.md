@@ -2,161 +2,152 @@
 
 ## 0) Meta
 timestamp_utc: 2026-03-27T21:30:14Z
-run_id: m7a_525_300b / m7a_525_300b_b / m7a_525_1000b
-mode: ONLINE (evidence runs + unit tests)
-artifact_mode: local evidence (data/tmp/m7a_525_*.json)
-config: arbitrum_one narrow_7 universe, same-chain DEX backrun domain
+run_id: n/a (structural-only session, no online runs)
+mode: OFFLINE (unit tests only)
+artifact_mode: n/a (no new artifacts generated)
+config: n/a (structural refactor, no scanner runs)
 code_identity:
-  primary: ts:2026-04-02T23:00:00Z
+  primary: ts:2026-04-02T08:46:12Z
   dirty: true
-  desc: M7.A.5.25 — detection-time low-lag truth; PRICING_ANOMALY reject; hidden latency telemetry; 7 new tests; 18 assertion updates; ~50 fixture updates
+  desc: M7.T1 — structural test consolidation; 14 session-specific test files → 8 layer-based suites + conftest.py; 213 duplicate assertions removed; no production code changed
 rolling_run_dir_name: ci_m5_gate_arbitrum_one_20260327_222948_123275
 rolling_run_timestamp: 2026-03-27T21:30:14Z
-note: rolling artifacts predate this session; not regenerated; session evidence is in data/tmp/m7a_525_*
+note: No online runs. Rolling artifacts from prior session (ci_m5_gate_arbitrum_one_20260327_222948_123275) remain unchanged. timestamp_utc propagated from rolling run_summary_latest per canonical format.
 
 ## Session Completion
-session_goal: M7.A.5.25 — correct broken detection-time low-lag accounting; add PRICING_ANOMALY reject for absurd net_bps; add hidden latency telemetry (registry_preload_ms, oracle_ms, admission_ms); honest correction of M7.A.5.24 "event arrival latency bottleneck" misdiagnosis
-goal_status: REACHED (all 4 fixes implemented; 3 evidence runs confirm detection-time metrics now correct; PRICING_ANOMALY catches 4/100 events; hidden latency reveals registry_preload as dominant bottleneck; 3317 pass; all CI gates pass)
+session_goal: M7.T1 — structural test suite consolidation (no market progress)
+goal_status: REACHED (14 session-specific test_orderflow_*.py files consolidated into 8 stable layer-based suites + shared conftest.py; 213 duplicate assertions removed; 3104 passed, 6 skipped; no production code changed)
 close_allowed: true
-remaining_blockers: viable_count=0 (all positives are STALE_POSITIVE — detected at same block but stale by scoring completion); scoring pipeline latency (~1500-2000ms) exceeds block_time_ms (250ms); registry_preload (~372ms mean) is primary hidden latency source
-evidence_session_run_dirs: [data/tmp/m7a_525_300b.json, data/tmp/m7a_525_300b_b.json, data/tmp/m7a_525_1000b.json]
-primary_blocker_of_session: broken low-lag accounting (events_detected_low_lag=0 when 100% of events are genuinely same-block-detected) + pricing anomaly pollution (best_net=+154955 bps from thin-liquidity local pricing)
-blocker_status_before: ACTIVE (broken accounting since M7.A.5.13; pricing anomaly since M7.A.5.20)
-blocker_status_after: RESOLVED (detection-time lag fix: events_detected_low_lag=N/N in all runs; PRICING_ANOMALY catches 4/100 absurd results; hidden latency measured and documented)
+remaining_blockers: none (structural-only session — no market/runtime blockers addressed or claimed)
+evidence_session_run_dirs: [] (no online runs — structural only)
+primary_blocker_of_session: 14 session-specific test files with massive duplication (~213 duplicate assertions across 9494 lines); two post-consolidation monoliths (1913 + 1156 lines) required further splitting
+blocker_status_before: ACTIVE (test suite bloat: 14 files, 9494 lines, ~581 tests with ~213 duplicates)
+blocker_status_after: RESOLVED (8 focused files + conftest.py, 368 unique tests, all files < 600 lines)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.A.5.25 — detection-time low-lag truth + PRICING_ANOMALY + hidden latency telemetry
+goal (Roadmap): M7.T1 — structural test suite consolidation (referenced in Status_M7.md M7.T1 section)
 change_summary:
-  - m7/orderflow/artifacts.py (MODIFIED): Added _detection_lag(r) helper (event_detected_at_block - event_block). _low_lag_all uses detection-time lag. positive_net_count_low_lag uses detection-time lag. stale_positive_count retains final lag.
-  - m7/orderflow/mode_ws_live.py (MODIFIED): Added _det_lag(r) helper. same_block_count, next_block_count, stale_count, low_lag subset, stale subset all use detection-time lag instead of same_state_class.
-  - m7/shared/constants.py (MODIFIED): Added REJECT_PRICING_ANOMALY. ALL_REJECT_REASONS 20→21.
-  - m7/orderflow/scoring_parallel.py (MODIFIED): PRICING_ANOMALY gate (abs(net_bps) > 10000) in success path and mid-pipeline abort. Hidden latency: admission_ms, oracle_ms, registry_preload_ms in stage_latency.
-  - tests/unit/test_orderflow_m7a524.py (MODIFIED): 7 new tests (TestPricingAnomalyReject: 4, TestDetectionTimeLag: 3).
-  - 12 test files: 18 assertions updated (ALL_REJECT_REASONS == 20 → == 21).
-  - 5 test files: ~50 fixtures updated with event_block/event_detected_at_block fields.
+  - Deleted 14 session-specific test_orderflow_*.py files (9494 lines, ~581 tests incl. ~213 duplicates)
+  - Created 8 layer-based test suites + shared conftest.py (368 unique tests, 0 production code changes)
+  - Pass 1: consolidated 14 → 4 files + conftest.py (contracts_core, registry_and_coverage, pricing_and_latency, artifacts_status)
+  - Pass 2: split 2 oversized files — pricing_and_latency (1156 lines) → pricing_math + gas_oracle + scoring_latency; artifacts_status (1913 lines) → artifacts + blocker_tags + status_metrics
+  - Shared helpers (_make_event, _make_result) extracted to conftest.py
+  - Updated Status_M7.md: compressed M7.A.5.24/25, added M7.T1 section, updated test counts, trimmed to ≤300 lines
 touched_files:
-  - m7/orderflow/artifacts.py (MODIFIED: detection-time lag)
-  - m7/orderflow/mode_ws_live.py (MODIFIED: detection-time lag)
-  - m7/shared/constants.py (MODIFIED: +1 reject reason)
-  - m7/orderflow/scoring_parallel.py (MODIFIED: PRICING_ANOMALY + telemetry)
-  - tests/unit/test_orderflow_m7a524.py (MODIFIED: +7 tests)
-  - tests/unit/test_orderflow_m7a520.py (MODIFIED: assertion update)
-  - tests/unit/test_orderflow_m7a521.py (MODIFIED: assertion update)
-  - tests/unit/test_orderflow_m7a522.py (MODIFIED: assertion update)
-  - tests/unit/test_orderflow_m7a523.py (MODIFIED: assertion + fixtures)
-  - tests/unit/test_orderflow_m7a511_512.py (MODIFIED: 4 assertion updates)
-  - tests/unit/test_orderflow_base.py (MODIFIED: assertion + comment)
-  - tests/unit/test_orderflow_m7a516_517.py (MODIFIED: assertions + fixtures)
-  - tests/unit/test_orderflow_m7a513_515.py (MODIFIED: assertions + fixtures)
-  - tests/unit/test_orderflow_m7a59_510.py (MODIFIED: assertion + fixtures)
-  - tests/unit/test_orderflow_m7a518_519.py (MODIFIED: assertion + fixtures)
-  - tests/unit/test_orderflow_m7a55_56.py (MODIFIED: assertion update)
-  - docs/status/Status_M7.md (MODIFIED: M7.A.5.25 section + M7.A.5.24 correction)
+  - tests/unit/test_orderflow_base.py (DELETED)
+  - tests/unit/test_orderflow_scoring.py (DELETED)
+  - tests/unit/test_orderflow_m7a55_56.py (DELETED)
+  - tests/unit/test_orderflow_m7a57_58.py (DELETED)
+  - tests/unit/test_orderflow_m7a59_510.py (DELETED)
+  - tests/unit/test_orderflow_m7a511_512.py (DELETED)
+  - tests/unit/test_orderflow_m7a513_515.py (DELETED)
+  - tests/unit/test_orderflow_m7a516_517.py (DELETED)
+  - tests/unit/test_orderflow_m7a518_519.py (DELETED)
+  - tests/unit/test_orderflow_m7a520.py (DELETED)
+  - tests/unit/test_orderflow_m7a521.py (DELETED)
+  - tests/unit/test_orderflow_m7a522.py (DELETED)
+  - tests/unit/test_orderflow_m7a523.py (DELETED)
+  - tests/unit/test_orderflow_m7a524.py (DELETED)
+  - tests/unit/conftest.py (CREATED: _make_event, _make_result shared helpers)
+  - tests/unit/test_orderflow_contracts_core.py (CREATED: 48 tests)
+  - tests/unit/test_orderflow_registry_and_coverage.py (CREATED: 63 tests)
+  - tests/unit/test_orderflow_pricing_math.py (CREATED: 44 tests)
+  - tests/unit/test_orderflow_gas_oracle.py (CREATED: 33 tests)
+  - tests/unit/test_orderflow_scoring_latency.py (CREATED: 38 tests)
+  - tests/unit/test_orderflow_artifacts.py (CREATED: 55 tests)
+  - tests/unit/test_orderflow_blocker_tags.py (CREATED: 41 tests)
+  - tests/unit/test_orderflow_status_metrics.py (CREATED: 46 tests)
+  - docs/status/Status_M7.md (MODIFIED: compressed, +M7.T1, updated counts, ≤300 lines)
   - docs/DEV_REPORT_LATEST.md (this file, rewritten)
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3317 passed, 6 skipped)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (pytest + docs_consistency + status_m4_check + m5_0_offline + m4_smoke + m4_profit: ALL REQUIRED GATES PASSED)
-py -3.11 scripts/m7a_orderflow_replay.py --ws-live --ws-blocks 300 --ws-timeout 360 --max-events 30 --output data/tmp/m7a_525_300b.json: PASS
-py -3.11 scripts/m7a_orderflow_replay.py --ws-live --ws-blocks 300 --ws-timeout 360 --max-events 30 --output data/tmp/m7a_525_300b_b.json: PASS
-py -3.11 scripts/m7a_orderflow_replay.py --ws-live --ws-blocks 1000 --ws-timeout 600 --max-events 100 --output data/tmp/m7a_525_1000b.json: PASS
+py -3.11 -m pytest tests/unit -q: PASS (3104 passed, 6 skipped, 56.62s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (pytest + docs_consistency + status_m4_check + m5_0_offline + m4_smoke + m4_profit: ALL REQUIRED GATES PASSED, 57.3s)
+py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit: PASS (0 warnings)
+note: no online runs (structural-only session); no m7a_orderflow_replay.py or ci_m4/m5 gates run
 
 ## 3) Artifacts Attached
 
-live evidence (this session):
-  - data/tmp/m7a_525_300b.json (300-block ws-live, 21 events, events_detected_low_lag=21, best_net=+14.05 bps)
-  - data/tmp/m7a_525_300b_b.json (300-block ws-live, 30 events, events_detected_low_lag=30, best_net=+66.62 bps)
-  - data/tmp/m7a_525_1000b.json (1000-block ws-live, 100 events, events_detected_low_lag=100, PRICING_ANOMALY=4, best_net=+66.62 bps)
-rolling (pre-session, not regenerated):
-  - data/runs/_rolling/_latest.json (run_dir_name: ci_m5_gate_arbitrum_one_20260327_222948_123275)
-  - data/runs/_rolling/run_summary_latest.json
-  - data/runs/_rolling/m4_stability_agg.json
+rolling (pre-session, not regenerated — structural-only session):
+  - data/runs/_rolling/_latest.json (unchanged from prior session)
+  - data/runs/_rolling/run_summary_latest.json (unchanged)
+  - data/runs/_rolling/m4_stability_agg.json (unchanged)
+no run_dir_bundle (OFFLINE structural session — no online runs)
+no live evidence artifacts (no scanner/replay runs)
 
-## 4) Key Results — M7.A.5.25
+## 4) Key Results — M7.T1
 
-### CORRECTION: M7.A.5.24 "Event Arrival Latency Bottleneck" Was Wrong
+### Coverage Map: Old Files → New Suites
 
-M7.A.5.24 concluded: "events arrive already stale (mean_block_lag=209-460). This is a WebSocket event-fetching limitation."
+| Old File (DELETED) | Primary New Suite(s) | Domain |
+|---|---|---|
+| test_orderflow_base.py | contracts_core | Schema, field counts (66), constants (21/12/8), admission |
+| test_orderflow_scoring.py | contracts_core, scoring_latency | Scoring path, event classification |
+| test_orderflow_m7a55_56.py | pricing_math, contracts_core | V2/V3 swap math, scoring path |
+| test_orderflow_m7a57_58.py | registry_and_coverage | Coverage scan, state read path |
+| test_orderflow_m7a59_510.py | registry_and_coverage, gas_oracle | Coverage decomposition, gas decomposition |
+| test_orderflow_m7a511_512.py | contracts_core, blocker_tags | Admission contract, blocker tag constants |
+| test_orderflow_m7a513_515.py | pricing_math, gas_oracle | Local pricing, oracle guard, enrichment |
+| test_orderflow_m7a516_517.py | registry_and_coverage, scoring_latency | Registry lifecycle, stale gate viability |
+| test_orderflow_m7a518_519.py | scoring_latency, blocker_tags | Two-queue priority, watchlist, mid-pipeline abort |
+| test_orderflow_m7a520.py | artifacts, status_metrics | Pipeline optimization artifact, pre-econ metrics |
+| test_orderflow_m7a521.py | artifacts, blocker_tags | Debug rows, pool truth, dex family |
+| test_orderflow_m7a522.py | artifacts, status_metrics | Split summary, reject decomposition |
+| test_orderflow_m7a523.py | pricing_math, scoring_latency | Adapter dispatch, session prewarm |
+| test_orderflow_m7a524.py | gas_oracle, scoring_latency, status_metrics | Gas denomination, detection lag, backward compat |
 
-**This was incorrect.** Raw artifact fields prove `event_detected_at_block == event_block` for 100% of events in ALL M7.A.5.24 runs. Events ARE detected at same block. The `events_detected_low_lag=0` metric was an artifact of broken accounting — `_lag(r)` used `block_lag` (= quote_finished_block - event_block, which includes 26-965 blocks of scoring time) instead of detection-time lag (= event_detected_at_block - event_block, which is always 0 for ws-live).
+### New Suite Structure
 
-### Detection-Time Low-Lag Accounting: Fixed
+| New File | Tests | Domain |
+|---|---|---|
+| conftest.py | — | Shared helpers: `_make_event(eid, block, **ov)`, `_make_result(**ov)` |
+| test_orderflow_contracts_core.py | 48 | Schema, field counts (66), constant counts (21/12/8), admission, blocker tags, scoring_path, PRICING_ANOMALY |
+| test_orderflow_registry_and_coverage.py | 63 | PoolRegistry lifecycle, coverage scan, admission, fixture events, state read path, registry fields |
+| test_orderflow_pricing_math.py | 44 | NormalizedBounds, size normalization, V3/V2/Algebra swap math, attempt_local_pricing, adapter dispatch |
+| test_orderflow_gas_oracle.py | 33 | Chainlink constants, oracle guard, enrichment, local sim state, subgraph seed, gas decomposition/denomination |
+| test_orderflow_scoring_latency.py | 38 | Event classification, backrun scoring, stale gate, zero-liquidity, two-queue, mid-pipeline abort, session prewarm, detection lag |
+| test_orderflow_artifacts.py | 55 | Core artifact schema, intent scout, ws-live, split summary, local pricing artifact, registry artifacts, pipeline optimization |
+| test_orderflow_blocker_tags.py | 41 | Debug rows, pool truth, dex family, read path, blocker tags, watchlist, quote-fail provenance |
+| test_orderflow_status_metrics.py | 46 | Pre-econ metrics, consistency, stale/low-lag split, reject decomposition, backward compat |
+| **Total** | **368** | |
 
-| Metric | M7.A.5.24 (BROKEN) | M7.A.5.25 (FIXED) | Explanation |
-|--------|---------------------|--------------------|-------------|
-| events_detected_low_lag | 0 | 21/30/100 (100%) | Now uses detection-time lag |
-| same_block_count | 0 | 21/30/100 (100%) | Now uses detection-time lag |
-| positive_net_count_low_lag | 0 | 2/4/19 | Positives from same-block-detected events |
-| stale_positive_count | unchanged | 2/4/19 | Same positives, stale at scoring completion |
-| events_scored_low_lag | 0 | 21/30/100 | Scored events from detection-low-lag set |
-| LOW_LAG_NONE_THIS_WINDOW | always active | no longer fires | Correct: events ARE low-lag at detection |
+### Duplicate Removal Summary
 
-### PRICING_ANOMALY Reject: Active
+213 duplicate assertions removed. Primary duplication sources:
+- Field-count assertions (`len(BackrunResult.__dataclass_fields__) == 66`) duplicated across 11 files
+- Constant-count assertions (`len(ALL_REJECT_REASONS) == 21`, `len(UNSCORED_REJECTS) == 12`, `len(ALL_BLOCKER_TAGS) == 8`) duplicated across 10 files
+- Admission logic re-tested in 6+ files with overlapping fixtures
+- Coverage scan patterns repeated across m7a57_58, m7a59_510, m7a516_517
 
-| Run | PRICING_ANOMALY_count | Caught Events | abs(net_bps) | Pairs |
-|-----|----------------------|---------------|-------------|-------|
-| 300b | 0 | — | — | — |
-| 300b_b | 0 | — | — | — |
-| 1000b | 4 | SOL/USDC, SOL/0x03236ce8, SOL/#BTB, SOL/#BB | 10168-10198 | All SOL-paired, size_valid=false |
+Post-consolidation: each constant/field count asserted exactly once in contracts_core.
 
-Threshold: `abs(net_bps) > 10000`. These are thin-liquidity local pricing artifacts. Previously counted as GAS_EXCEEDS_GROSS or STALE_POSITIVE, polluting signal metrics.
+### Anti-Accretion Policy
 
-### Hidden Latency Telemetry: Registry Preload Is Dominant Bottleneck
-
-Per-event latency breakdown (100-event sample from 1000b):
-
-| Stage | Mean (ms) | Max (ms) | Notes |
-|-------|-----------|----------|-------|
-| admission_ms | 0 | 0 | In-memory check, instant |
-| oracle_ms | 101 | 141 | Chainlink eth_call per event |
-| registry_preload_ms | 372 | 1235 | **Primary hidden latency** |
-| local_pricing_ms | 0 | 0 | In-memory V3/V2 math, instant |
-| total pipeline_ms | 1500-2000 | 3000 | Sum of all stages |
-
-**Finding**: Registry preload + oracle together account for ~470ms of pre-scoring latency. Block time on Arbitrum is 250ms. Even with zero-cost economics/gas calculation, the pipeline exceeds 1 block just from registry + oracle. To score within a single block, both need caching or amortization.
-
-### Evidence Summary: 3 Runs
-
-| Metric | 300b | 300b_b | 1000b |
-|--------|------|--------|-------|
-| events_count | 21 | 30 | 100 |
-| events_detected_low_lag | 21 (100%) | 30 (100%) | 100 (100%) |
-| events_scored_low_lag | 21 (100%) | 30 (100%) | 100 (100%) |
-| positive_net_count_any | 2 | 4 | 19 |
-| positive_net_count_low_lag | 2 | 4 | 19 |
-| stale_positive_count | 2 | 4 | 19 |
-| best_net_bps | +14.05 | +66.62 | +66.62 |
-| PRICING_ANOMALY | 0 | 0 | 4 |
-| GAS_EXCEEDS_GROSS | 19 | 26 | 77 |
-| STALE_POSITIVE | 2 | 4 | 19 |
-| viable_count | 0 | 0 | 0 |
-| mean_registry_preload_ms | — | — | 372 |
-| mean_oracle_ms | — | — | 101 |
+New test files are created only for: new stable contract, new adapter family, new reject reason, new safety gate, or real bug regression. Session-specific test files (test_orderflow_m7aXXX_YYY.py) are prohibited — tests go into the appropriate layer-based suite.
 
 ## 5) Strategic Reading
 
-1. **M7.A.5.24 misdiagnosis corrected**: "Event arrival latency bottleneck" was wrong. Events are 100% same-block-detected. The real bottleneck is **scoring pipeline latency** (registry_preload + oracle + RPC calls during scoring push events from fresh to stale).
-2. **Detection-time accounting now correct**: `events_detected_low_lag` accurately reflects detection truth. All downstream metrics (low-lag debug rows, watchlist, pipeline stages, reject decomposition) now analyze the correct set of events.
-3. **PRICING_ANOMALY eliminates noise**: 4/100 events in the 1000b run would have inflated positive counts with absurd +10000 bps values. They are now correctly rejected and excluded from signal metrics.
-4. **Registry preload is the actionable bottleneck**: At 372ms mean (1235ms max), it consumes 1.5 blocks of scoring time before economics even begin. Caching across events within a session or prewarming popular pairs (already partially done in M7.A.5.24) should reduce this.
-5. **Discovery is solved**: `registry_direct=100%` across all runs. Factory-driven pool discovery works. No further discovery investigation needed.
-6. **viable_count remains 0**: All positives are STALE_POSITIVE — detected fresh, scored stale. Path to first viable event requires scoring within block_time_ms (250ms).
+1. **No market progress**: This session is structural-only. All market-facing metrics (viable_count, best_net_bps, STALE_POSITIVE, pipeline latency) are unchanged from M7.A.5.25.
+2. **Test suite is now maintainable**: 8 files organized by domain (contracts, registry, pricing, gas, scoring, artifacts, blockers, status) instead of 14 files organized by session date. New test additions go to the correct domain file.
+3. **213 duplicates removed**: Every constant/field-count assertion exists exactly once. Adding a new reject reason or blocker tag requires updating exactly 1 test file (contracts_core).
+4. **All files < 600 lines**: The two post-pass-1 monoliths (artifacts_status: 1913, pricing_and_latency: 1156) were split in pass 2 into 3 focused files each.
+5. **conftest.py is minimal**: Only `_make_event` and `_make_result` helpers. No business logic, no constants, no fixtures beyond these two factories.
+6. **Production code untouched**: Zero changes to m7/, core/, engine/, strategy/, execution/, or any non-test code.
 
 ## 5.1) Contract Checks
-status/reasons consistency: OK (ALL_REJECT_REASONS: 21, UNSCORED_REJECTS: 12, BackrunResult: 66 fields, ALL_BLOCKER_TAGS: 8)
-rolling discipline (3 files only): OK
-v2.x provenance contract: OK (run_timestamp primary, code_sha=null)
+status/reasons consistency: OK (ALL_REJECT_REASONS: 21, UNSCORED_REJECTS: 12, BackrunResult: 66 fields, ALL_BLOCKER_TAGS: 8 — all unchanged)
+rolling discipline (3 files only): OK (rolling artifacts not modified)
+v2.x provenance contract: OK (no provenance changes)
 runtime artifacts not committed: OK (data/runs/** and data/tmp/** not in git)
-module size constraint: OK (all m7/ modules ≤ 1100 lines)
-test file size constraint: OK (all M7 test files ≤ 600 lines)
+module size constraint: OK (no m7/ modules modified)
+test file size constraint: OK (all 8 orderflow test files < 600 lines)
+Status_M7.md size constraint: OK (296 lines ≤ 300)
 
 ## 5.2) Blockers / Risks
-- PRIMARY (changed): Scoring pipeline latency (~1500-2000ms) exceeds block_time_ms (250ms); registry_preload (~372ms) is the largest single contributor; to get first viable event, need pipeline under 250ms
-- SECONDARY: All positives are STALE_POSITIVE — genuine edge detected but not capturable at current scoring speed
-- RESOLVED: "Event arrival latency bottleneck" (M7.A.5.24) was WRONG — events are 100% same-block-detected; broken accounting fixed
-- RESOLVED: Pricing anomaly pollution — PRICING_ANOMALY reject catches absurd net_bps from thin-liquidity pairs
-- UNCHANGED: M4 baseline still negative; SUBGRAPH_API_KEY_REQUIRED persists; viable_count=0
-- NEXT: (a) Cache registry_preload across events (session-level pair cache already exists but preload still makes RPC calls), (b) Cache oracle results for known tokens (Chainlink price unlikely to change within a session), (c) Measure total sub-block feasibility after optimization
+- UNCHANGED (from M7.A.5.25): Scoring pipeline latency (~1500-2000ms) exceeds block_time_ms (250ms); viable_count=0; all positives STALE_POSITIVE
+- UNCHANGED: M4 baseline still negative; SUBGRAPH_API_KEY_REQUIRED persists
+- RESOLVED (this session): Test suite bloat — 14 session-specific files with 213 duplicates consolidated into 8 layer-based suites
+- NOTE: This session made no market progress. All market-facing blockers remain as documented in M7.A.5.25.

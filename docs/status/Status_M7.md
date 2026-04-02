@@ -34,7 +34,7 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`
 - `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--ws-live`, `--intent-scout`
-- Tests: 152 in `test_triangular_*.py` (3 files), 447 in `test_orderflow_*.py` (9 files)
+- Tests: 152 in `test_triangular_*.py` (3 files), 368 in `test_orderflow_*.py` (8 files + conftest.py)
 
 ---
 
@@ -240,7 +240,7 @@ CI: 3286 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 - 300b_b: 30 events, 30/30 scored (100%). **All registry_direct, all mid_pipeline_abort=30**. best_net=+1.01 bps (1 positive event). mean_block_lag=242.17. mean_pipeline_ms=2029ms. 0 low-lag detected.
 - 1000b: 100 events, 100/100 scored (100%). **All registry_direct, all mid_pipeline_abort=100**. best_net=+154955 bps (pricing anomaly). 14 positive events (STALE_POSITIVE:14). mean_block_lag=459.85. mean_pipeline_ms=1527ms. 0 low-lag detected.
 
-**Key findings**: (1) **Pipeline stages correctly skipped**: Stage A multicall (mean_stage_a_ms=0.0) and Stage B remote quoter (mean_stage_b_ms=0.0) both bypassed for registry_direct path. (2) **Mid-pipeline abort fires on 100% of events**: All events enter as registry_direct but become stale during local pricing; the abort catches them before Stage B would have wasted RPC budget. (3) **0 low-lag events detected** (artifact metric): This metric was subsequently found to be BROKEN — using final `block_lag` instead of detection-time lag (fixed in M7.A.5.25). Raw data shows `event_detected_at_block == event_block` for 100% of events (true same-block detection). (4) **scoring_path_histogram: {registry_direct}** in all runs — confirms all events route through optimized path. (5) **Positive events found**: best_net=+1.01 bps in run 2, 14 positive in 1000b (all STALE_POSITIVE). (6) **Pricing anomaly**: best_net=+154955 bps in 1000b is unrealistic — local pricing on low-liquidity pair (fixed in M7.A.5.25 with PRICING_ANOMALY reject). (7) **Next bottleneck**: Scoring pipeline latency (events are fresh at detection but stale by scoring completion), not event arrival latency.
+**Key findings**: Stage A+B correctly skipped for registry_direct; mid-pipeline abort fires on 100% of events (all become stale during scoring). `events_detected_low_lag=0` metric was BROKEN (fixed in M7.A.5.25) — raw data shows 100% same-block detection. Positive net found (+1.01 bps stale). Pricing anomaly +154955 bps (fixed in M7.A.5.25). Next bottleneck: scoring pipeline latency, not event arrival.
 
 CI: 3310 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
@@ -250,38 +250,18 @@ CI: 3310 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 **Hypothesis**: Executable progress requires correct detection-time low-lag accounting plus anomaly-safe local pricing. Without these, profit evidence remains diagnostically polluted — low-lag metrics report 0 when all events are genuinely detected at same-block, and absurd net_bps from thin-liquidity pairs mask real signal.
 
-**Root causes addressed**:
-1. **Broken low-lag accounting**: `events_detected_low_lag`, `same_block_count`, and all `_low_lag_all` metrics used FINAL `block_lag` (= `quote_finished_block - event_block`, includes 26-965 blocks of scoring time) instead of DETECTION-TIME lag (= `event_detected_at_block - event_block`, always 0 for ws-live). This made `events_detected_low_lag=0` when 100% of events are genuinely same-block-detected. Meanwhile, `session_low_lag_pairs_count` (which correctly used detection-time lag) reported 11/15/33, creating an irreconcilable contradiction.
-2. **Pricing anomaly pollution**: `best_net_bps=+154955` in M7.A.5.24 1000b run came from local pricing on thin-liquidity pair with `size_valid_for_token=false`. No reject mechanism existed for absurd returns.
-3. **Hidden pipeline latency**: No per-stage timing for admission, oracle, and registry preload — the dominant scoring bottlenecks were invisible.
+**Root causes addressed**: (1) Broken low-lag accounting: all `_low_lag` metrics used final `block_lag` instead of detection-time lag (`event_detected_at_block - event_block`), making `events_detected_low_lag=0` when 100% of events are same-block-detected. (2) Pricing anomaly pollution: `best_net=+154955` from thin-liquidity local pricing with no reject gate. (3) No per-stage timing for admission, oracle, registry preload.
 
-**Changes**:
-1. **`m7/orderflow/artifacts.py`** (MODIFIED): Added `_detection_lag(r)` helper (uses `event_detected_at_block - event_block`, returns 999 if either field is None). `_low_lag_all` now uses `_detection_lag(r) <= 2` (was `_lag(r) <= 2`). `positive_net_count_low_lag` uses detection-time lag. `stale_positive_count` retains final `_lag(r)` (correct for scoring-completion staleness).
-2. **`m7/orderflow/mode_ws_live.py`** (MODIFIED): Added `_det_lag(r)` helper. `same_block_count`, `next_block_count`, `stale_count` in `live_state_metrics` now use detection-time lag (was `same_state_class`). `low_lag` subset uses `_det_lag(r) <= 2` (was `same_state_class in ("same_block", "next_block")`). `stale` subset uses `_det_lag(r) > 2`. `ws_low_lag_summary.same_block_count/next_block_count` use detection-time lag.
-3. **`m7/shared/constants.py`** (MODIFIED): Added `REJECT_PRICING_ANOMALY = "PRICING_ANOMALY"`. ALL_REJECT_REASONS: 20→21. UNSCORED_REJECTS unchanged (12) — PRICING_ANOMALY is a scored reject.
-4. **`m7/orderflow/scoring_parallel.py`** (MODIFIED): (a) PRICING_ANOMALY gate: `if abs(net_bps) > 10000` → reject with PRICING_ANOMALY (in both success path and mid-pipeline abort path). (b) Hidden latency telemetry: `admission_ms`, `oracle_ms`, `registry_preload_ms` injected into `stage_latency` dict (both normal and mid-pipeline abort paths).
-5. **`tests/unit/test_orderflow_m7a524.py`** (MODIFIED): Added 7 tests: `TestPricingAnomalyReject` (4 tests: in ALL_REJECT_REASONS, not in UNSCORED, value, result), `TestDetectionTimeLag` (3 tests: same-block, different-from-final, artifact detection-time).
-6. **12 existing test files updated**: All `len(ALL_REJECT_REASONS) == 20` → `== 21` (18 assertions). Test fixtures updated with `event_block`/`event_detected_at_block` fields to match detection-time lag semantics (~50 fixtures across 5 files).
-7. **No new BackrunResult fields** (still 66). **ALL_BLOCKER_TAGS still 8**. **UNSCORED_REJECTS still 12**.
+**Changes**: `artifacts.py` + `mode_ws_live.py`: `_detection_lag(r)` helper, all low-lag metrics use detection-time lag. `constants.py`: +REJECT_PRICING_ANOMALY (21 total). `scoring_parallel.py`: PRICING_ANOMALY gate (`abs(net_bps) > 10000`) + hidden latency telemetry (`admission_ms`, `oracle_ms`, `registry_preload_ms`). Still 66 fields, 8 blocker tags, 12 unscored.
 
 **Evidence** (3 runs, all Arbitrum One ws-live):
 - 300b: 21 events, 21/21 scored, **events_detected_low_lag=21 (was 0)**, **same_block_count=21 (was 0)**. best_net=+14.05 bps. Rejects: GAS_EXCEEDS_GROSS:19, STALE_POSITIVE:2. PRICING_ANOMALY:0. Blocker tags: LOW_LAG_REMOTE_QUOTER_LATENCY + SUBGRAPH_API_KEY_REQUIRED (LOW_LAG_NONE_THIS_WINDOW no longer fires).
 - 300b_b: 30 events, 30/30 scored, **events_detected_low_lag=30 (was 0)**. best_net=+66.62 bps. positive_low_lag=4. PRICING_ANOMALY:0.
 - 1000b: 100 events, 100/100 scored, **events_detected_low_lag=100 (was 0)**. best_net=+66.62 bps. positive_low_lag=19. **PRICING_ANOMALY:4** (all SOL-paired, abs(net_bps)>10000, size_valid=false). Rejects: GAS_EXCEEDS_GROSS:77, STALE_POSITIVE:19, PRICING_ANOMALY:4.
 
-**Hidden latency telemetry** (100-event sample):
-- `registry_preload_ms`: mean=372ms, max=1235ms — **dominant hidden latency**
-- `oracle_ms`: mean=101ms, max=141ms — significant fixed cost per event
-- `admission_ms`: 0ms — instant (in-memory check)
-- Combined pre-scoring latency: ~470ms before economics even begins
+**Hidden latency** (100-event): registry_preload mean=372ms (dominant), oracle mean=101ms, admission=0ms. Combined ~470ms pre-scoring.
 
-**Key findings**:
-1. **M7.A.5.24 "event arrival latency bottleneck" diagnosis was WRONG**: Raw artifact fields prove `event_detected_at_block == event_block` for 100% of events. Events ARE detected at same block. The `events_detected_low_lag=0` metric was an artifact of broken accounting (using final lag, not detection-time lag).
-2. **With detection-time fix, 100% of events are same-block-detected**: `same_block_count` jumps from 0 to N/N in all runs. `LOW_LAG_NONE_THIS_WINDOW` blocker tag correctly no longer fires.
-3. **PRICING_ANOMALY gate catches 4/100 events** in 1000b run. All are SOL-paired thin-liquidity local pricing artifacts with `abs(net_bps) > 10000` and `size_valid_for_token=false`. Previously these inflated `best_net_bps` and positive counts.
-4. **Registry preload is the primary hidden latency bottleneck** at ~372ms mean (max 1235ms). Oracle adds ~101ms. Combined ~470ms of pre-scoring latency pushes events from fresh to stale DURING scoring — but detection IS fresh.
-5. **viable_count remains 0**: All positives are STALE_POSITIVE (stale at scoring completion, even though detected at same block). The path to viability requires reducing scoring pipeline time to < block_time_ms (250ms on Arbitrum).
-6. **Discovery is solved**: `registry_direct=100%` confirms factory-driven pool discovery works. Stop investigating discovery.
+**Key findings**: M7.A.5.24 "event arrival latency" diagnosis was WRONG — 100% of events are same-block-detected (detection-time fix: `same_block_count` N/N). PRICING_ANOMALY catches 4/100 (SOL thin-liquidity). Registry preload ~372ms mean is dominant hidden latency; combined pre-scoring ~470ms pushes events stale DURING scoring. viable_count=0 (all positives STALE_POSITIVE). Discovery is solved (`registry_direct=100%`).
 
 CI: 3317 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
@@ -302,6 +282,12 @@ CI: 3317 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 **Evidence**: Both CLIs produce identical artifact schemas. Orderflow 300b verify: 30 events, 1 low-lag, 4 blocker tags active. Triangular verify: 500 cycles, 67/100 measured, best_net=-20.18 bps.
 
 CI: 3180 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.T1: Test Suite Consolidation (COMPLETED)
+
+Structural-only branch (no market progress). Consolidated 14 session-specific `test_orderflow_*.py` files (9494 lines, ~581 tests) into 8 stable layer-based suites + shared `conftest.py`. Removed 213 duplicate assertions (field-count, constant-count). Post-consolidation: 368 unique orderflow tests in 8 files. Total suite: 3104 passed, 6 skipped. Policy: new test files only for new stable contract, adapter, reject, safety gate, or bug regression.
 
 ---
 

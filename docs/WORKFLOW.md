@@ -371,3 +371,38 @@ If `scripts/ci_no_runtime_artifacts.py` exists, it will FAIL if:
 | Any `_latest.json` | Changes every run |
 
 ---
+
+## Test File Policy (M7 Orderflow)
+
+### Anti-Accretion Rule
+
+Session-specific test files (`test_orderflow_m7aXXX_YYY.py`) are **prohibited**. All M7 orderflow tests live in 8 layer-based suites organized by domain:
+
+| File | Domain |
+|------|--------|
+| `conftest.py` | Shared helpers (`_make_event`, `_make_result`) |
+| `test_orderflow_contracts_core.py` | Schema, field counts, constant counts, admission |
+| `test_orderflow_registry_and_coverage.py` | PoolRegistry lifecycle, coverage scan |
+| `test_orderflow_pricing_math.py` | V3/V2/Algebra swap math, local pricing |
+| `test_orderflow_gas_oracle.py` | Chainlink, oracle guard, gas decomposition |
+| `test_orderflow_scoring_latency.py` | Scoring, stale gate, pipeline latency |
+| `test_orderflow_artifacts.py` | Artifact schema, ws-live, split summary |
+| `test_orderflow_blocker_tags.py` | Debug rows, blocker tags, watchlist |
+| `test_orderflow_status_metrics.py` | Pre-econ, consistency, reject decomposition |
+
+### When to add a new test file
+
+A new `test_orderflow_*.py` file is justified **only** for:
+- A new stable contract (e.g., new dataclass in `m7/orderflow/contracts.py`)
+- A new adapter family (e.g., CurveSwapMath)
+- A new reject reason added to `ALL_REJECT_REASONS`
+- A new safety gate (e.g., new blocker tag)
+- A real bug regression requiring isolated reproduction
+
+Otherwise, add tests to the appropriate existing suite.
+
+### Constants are asserted once
+
+Field/constant counts (`len(BackrunResult.__dataclass_fields__)`, `len(ALL_REJECT_REASONS)`, etc.) are asserted **exactly once** in `test_orderflow_contracts_core.py`. Do not duplicate these assertions in other files.
+
+---
