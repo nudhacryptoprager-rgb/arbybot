@@ -951,3 +951,129 @@ class TestM7A528DashboardM7Artifact:
         assert str(ARTIFACT_FILES["m7_orderflow"]).endswith(
             "m7_orderflow_latest.json"
         )
+
+
+# ===========================================================================
+# M7.A.5.29: Continuous Loop — Anti-Bad-Overwrite + Blocker Rename
+# ===========================================================================
+
+
+class TestM7A529AntiOverwriteAndLoop:
+    """M7.A.5.29: Rolling M7 anti-bad-overwrite and loop runtime fields."""
+
+    def test_empty_window_preserves_previous_snapshot(self, tmp_path):
+        """events_count==0 must NOT destroy a previous useful rolling artifact."""
+        import json
+        from unittest.mock import patch
+
+        from m7.orderflow.mode_ws_live import _write_rolling_m7
+
+        rolling_path = str(tmp_path / "m7_orderflow_latest.json")
+        previous = {"events_count": 10, "run_timestamp": "2026-01-01T00:00:00Z", "viable_count": 2}
+        with open(rolling_path, "w") as f:
+            json.dump(previous, f)
+
+        # Empty window artifact with loop context
+        empty_artifact = {
+            "events_count": 0,
+            "run_timestamp": "2026-01-01T01:00:00Z",
+            "m7_loop_context": {
+                "loop_iteration": 2,
+                "window_started_at": "2026-01-01T01:00:00Z",
+                "window_ended_at": "2026-01-01T01:00:05Z",
+                "window_empty": False,  # will be set to True by writer
+            },
+        }
+
+        with patch("m7.orderflow.mode_ws_live._ROLLING_M7_PATH", rolling_path):
+            _write_rolling_m7(empty_artifact)
+
+        with open(rolling_path) as f:
+            result = json.load(f)
+
+        # Previous data preserved
+        assert result["events_count"] == 10
+        assert result["viable_count"] == 2
+        # Loop context updated
+        assert result["m7_loop_context"]["loop_iteration"] == 2
+        assert result["m7_loop_context"]["window_empty"] is True
+
+    def test_nonempty_window_overwrites_with_last_nonempty_timestamp(self, tmp_path):
+        """Non-empty window writes last_nonempty_timestamp into rolling artifact."""
+        import json
+        from unittest.mock import patch
+
+        from m7.orderflow.mode_ws_live import _write_rolling_m7
+
+        rolling_path = str(tmp_path / "m7_orderflow_latest.json")
+        artifact = {
+            "events_count": 5,
+            "run_timestamp": "2026-01-01T02:00:00Z",
+            "results": [{"x": 1}],  # should be excluded
+            "low_lag_debug_rows": [1, 2],  # should be excluded
+        }
+
+        with patch("m7.orderflow.mode_ws_live._ROLLING_M7_PATH", rolling_path):
+            _write_rolling_m7(artifact)
+
+        with open(rolling_path) as f:
+            result = json.load(f)
+
+        assert result["events_count"] == 5
+        assert result["last_nonempty_timestamp"] == "2026-01-01T02:00:00Z"
+        assert "results" not in result
+        assert "low_lag_debug_rows" not in result
+
+
+class TestM7A529CompletionLatencyBlocker:
+    """M7.A.5.29: BLOCKER_LOW_LAG_COMPLETION_LATENCY fires for mid-pipeline abort dominant."""
+
+    def test_completion_latency_fires_when_majority_abort_registry_direct(self):
+        """When >50% of results are mid_pipeline_abort with registry_direct path,
+        fire COMPLETION_LATENCY blocker."""
+        from m7.shared.constants import BLOCKER_LOW_LAG_COMPLETION_LATENCY
+
+        events = [_make_event(eid=f"e{i}") for i in range(4)]
+        # 3/4 results abort mid-pipeline with registry_direct
+        results = [
+            _make_result(
+                event_id=f"e{i}",
+                scoring_path="registry_direct",
+                pipeline_stage_latency_ms={"mid_pipeline_abort": True, "resolve_ms": 30.0},
+            )
+            for i in range(3)
+        ]
+        # 1 result completes normally
+        results.append(_make_result(
+            event_id="e3",
+            scoring_path="registry_direct",
+            pipeline_stage_latency_ms={"resolve_ms": 10.0, "score_ms": 5.0},
+        ))
+
+        summary = build_replay_summary(events, results, "test")
+        active_tags = summary["blocker_tags"]["active_tags"]
+        assert BLOCKER_LOW_LAG_COMPLETION_LATENCY in active_tags
+
+    def test_completion_latency_does_not_fire_when_minority_abort(self):
+        """When <50% abort, COMPLETION_LATENCY should NOT fire."""
+        from m7.shared.constants import BLOCKER_LOW_LAG_COMPLETION_LATENCY
+
+        events = [_make_event(eid=f"e{i}") for i in range(4)]
+        # Only 1/4 aborts
+        results = [
+            _make_result(
+                event_id="e0",
+                scoring_path="registry_direct",
+                pipeline_stage_latency_ms={"mid_pipeline_abort": True, "resolve_ms": 30.0},
+            ),
+        ]
+        for i in range(1, 4):
+            results.append(_make_result(
+                event_id=f"e{i}",
+                scoring_path="registry_direct",
+                pipeline_stage_latency_ms={"resolve_ms": 10.0, "score_ms": 5.0},
+            ))
+
+        summary = build_replay_summary(events, results, "test")
+        active_tags = summary["blocker_tags"]["active_tags"]
+        assert BLOCKER_LOW_LAG_COMPLETION_LATENCY not in active_tags

@@ -984,9 +984,51 @@ _ROLLING_EXCLUDE_KEYS = frozenset({
 
 
 def _write_rolling_m7(artifact: dict) -> None:
-    """Overwrite the canonical rolling M7 artifact for dashboard consumption."""
+    """Overwrite the canonical rolling M7 artifact for dashboard consumption.
+
+    M7.A.5.29: Anti-bad-overwrite — if the window is empty (events_count == 0),
+    do NOT overwrite a previous useful snapshot. Instead, only update the
+    m7_loop_context metadata in the existing file (if any).
+    """
     try:
+        events_count = artifact.get("events_count", 0)
         rolling = {k: v for k, v in artifact.items() if k not in _ROLLING_EXCLUDE_KEYS}
+
+        # M7.A.5.29: Anti-bad-overwrite rule
+        if events_count == 0 and os.path.exists(_ROLLING_M7_PATH):
+            # Preserve previous snapshot, only update loop context if present
+            loop_ctx = artifact.get("m7_loop_context")
+            if loop_ctx:
+                try:
+                    with open(_ROLLING_M7_PATH, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                    loop_ctx["window_empty"] = True
+                    existing["m7_loop_context"] = loop_ctx
+                    existing.setdefault("last_nonempty_timestamp",
+                                        existing.get("run_timestamp"))
+                    with open(_ROLLING_M7_PATH, "w", encoding="utf-8") as f:
+                        json.dump(existing, f, indent=2, default=str)
+                    logger.info(
+                        "Rolling M7: empty window — preserved previous snapshot, "
+                        "updated loop_context only"
+                    )
+                except Exception as exc2:
+                    logger.warning(
+                        "Rolling M7: empty window — failed to update loop_context: %s",
+                        str(exc2)[:120],
+                    )
+            else:
+                logger.info(
+                    "Rolling M7: empty window (events=0) — skipping overwrite "
+                    "to preserve previous useful snapshot"
+                )
+            return
+
+        # Non-empty window: track last_nonempty_timestamp
+        rolling["last_nonempty_timestamp"] = artifact.get(
+            "run_timestamp", rolling.get("run_timestamp")
+        )
+
         os.makedirs(os.path.dirname(_ROLLING_M7_PATH), exist_ok=True)
         with open(_ROLLING_M7_PATH, "w", encoding="utf-8") as f:
             json.dump(rolling, f, indent=2, default=str)

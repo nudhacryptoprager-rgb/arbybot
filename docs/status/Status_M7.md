@@ -292,6 +292,22 @@ Hypothesis: "first executable edge requires anomaly-clean local pricing plus a l
 
 ---
 
+## M7.A.5.28: KPI Contract Fix + Rolling Artifact + Dashboard Panel 11
+
+Fixed stale_positive_count vs reject_histogram inconsistency via unified `_is_stale()` classifier. Created canonical rolling M7 artifact (`data/runs/_rolling/m7_orderflow_latest.json`). Added M7 dashboard Panel 11 to `monitoring/dashboard_server.py` + `dashboard.html`. +7 tests. CI: 3120 passed, 6 skipped.
+
+---
+
+## M7.A.5.29: Continuous M7 ws-live Loop + Anti-Bad-Overwrite + Blocker Rename
+
+**Objective**: M7 dashboard is a rolling snapshot panel, but lacks a true continuous live loop. This session adds the continuous ws-live loop runner as a standalone runtime service.
+
+**Code changes**: (1) Created `scripts/m7a_orderflow_loop.py` — endless/restartable loop around `run_ws_live()` with CLI args for window config (--ws-blocks, --ws-timeout, --max-events, --iterations, --pause). Separate from start.py M5/M4 scanner. (2) Anti-bad-overwrite rule in `_write_rolling_m7`: empty window (events_count=0) no longer destroys previous useful snapshot — preserves existing data and updates only `m7_loop_context`. (3) Runtime fields added to rolling artifact: `m7_loop_context` (loop_iteration, window_started_at, window_ended_at, window_empty) and `last_nonempty_timestamp`. (4) New blocker tag `BLOCKER_LOW_LAG_COMPLETION_LATENCY` fires when >50% of results abort mid-pipeline with registry_direct scoring path — separates "pipeline completion too slow" from "remote quoter too slow". (5) +4 tests: anti-overwrite semantics, last_nonempty_timestamp, completion latency fires/does-not-fire.
+
+**Operational criterion**: M7 loop must run 30-60 minutes without crash/schema drift before start.py integration.
+
+---
+
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
 Per `docs/step_M7.md`: M7.B is the execution phase, closed by default. Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.

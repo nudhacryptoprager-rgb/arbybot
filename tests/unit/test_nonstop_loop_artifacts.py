@@ -46,6 +46,7 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "_latest_offline.json",
             "run_summary_latest_offline.json",
             "hot_loop_latest.json",
+            "m7_orderflow_latest.json",
         }
         
         # Archive files are allowed (created on reset)

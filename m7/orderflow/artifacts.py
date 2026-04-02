@@ -17,6 +17,7 @@ from m7.shared.constants import (
     BLOCKER_LOW_LAG_NONE_THIS_WINDOW,
     BLOCKER_LOW_LAG_NO_COUNTER_POOL,
     BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY,
+    BLOCKER_LOW_LAG_COMPLETION_LATENCY,
     BLOCKER_LOW_LAG_RPC_QUOTE_FAIL,
     BLOCKER_LOW_LAG_V2_UNSUPPORTED,
     BLOCKER_SUBGRAPH_API_KEY_REQUIRED,
@@ -752,6 +753,25 @@ def build_replay_summary(
     )
     if _ll_over_budget > 0:
         _active_tags.append(BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY)
+    # M7.A.5.29: Mid-pipeline abort dominant → completion latency blocker
+    # Fire when scoring_path is registry_direct (no remote quoter) but
+    # majority of events abort mid-pipeline (latency-to-completion issue).
+    _mid_abort_count = sum(
+        1 for r in results
+        if r.pipeline_stage_latency_ms
+        and isinstance(r.pipeline_stage_latency_ms, dict)
+        and r.pipeline_stage_latency_ms.get("mid_pipeline_abort") is True
+    )
+    _registry_direct_count = sum(
+        1 for r in results if getattr(r, "scoring_path", None) == "registry_direct"
+    )
+    if (
+        _mid_abort_count > 0
+        and len(results) > 0
+        and _mid_abort_count / len(results) > 0.5
+        and _registry_direct_count > _mid_abort_count * 0.5
+    ):
+        _active_tags.append(BLOCKER_LOW_LAG_COMPLETION_LATENCY)
     # Gas: check if GAS_EXCEEDS_GROSS is dominant reject
     _gas_dom = reject_counts.get(REJECT_GAS_EXCEEDS_GROSS, 0)
     if _gas_dom > 0 and (not scored_net_bps_clean or max(scored_net_bps_clean) < 0):

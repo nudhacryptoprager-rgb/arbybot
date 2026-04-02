@@ -559,8 +559,8 @@ class TestM7A518BackwardCompat:
         d = asdict(r)
         assert len(d) == 66
 
-    def test_all_blocker_tags_count_is_8(self):
-        assert len(ALL_BLOCKER_TAGS) == 8
+    def test_all_blocker_tags_count_is_9(self):
+        assert len(ALL_BLOCKER_TAGS) == 9
 
     def test_new_518_artifact_keys(self):
         art = build_replay_summary([], [], mode="test")

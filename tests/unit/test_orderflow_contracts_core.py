@@ -43,6 +43,7 @@ from m7.shared.constants import (
     BLOCKER_LOW_LAG_NONE_THIS_WINDOW,
     BLOCKER_LOW_LAG_NO_COUNTER_POOL,
     BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY,
+    BLOCKER_LOW_LAG_COMPLETION_LATENCY,
     BLOCKER_LOW_LAG_RPC_QUOTE_FAIL,
     BLOCKER_LOW_LAG_V2_UNSUPPORTED,
     BLOCKER_SUBGRAPH_API_KEY_REQUIRED,
@@ -99,8 +100,8 @@ class TestContractCoreInvariants:
     def test_unscored_rejects_count_is_12(self):
         assert len(UNSCORED_REJECTS) == 12
 
-    def test_all_blocker_tags_count_is_8(self):
-        assert len(ALL_BLOCKER_TAGS) == 8
+    def test_all_blocker_tags_count_is_9(self):
+        assert len(ALL_BLOCKER_TAGS) == 9
 
     def test_all_event_types_count_is_3(self):
         assert len(ALL_EVENT_TYPES) == 3
@@ -298,6 +299,7 @@ class TestBlockerTagConstants:
             BLOCKER_LOW_LAG_V2_UNSUPPORTED,
             BLOCKER_LOW_LAG_INACTIVE_POOL,
             BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY,
+            BLOCKER_LOW_LAG_COMPLETION_LATENCY,
             BLOCKER_LOW_LAG_RPC_QUOTE_FAIL,
             BLOCKER_GAS_L1_DATA_DOMINANT,
             BLOCKER_SUBGRAPH_API_KEY_REQUIRED,
@@ -310,6 +312,7 @@ class TestBlockerTagConstants:
         assert BLOCKER_LOW_LAG_V2_UNSUPPORTED == "LOW_LAG_V2_UNSUPPORTED"
         assert BLOCKER_LOW_LAG_INACTIVE_POOL == "LOW_LAG_INACTIVE_POOL"
         assert BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY == "LOW_LAG_REMOTE_QUOTER_LATENCY"
+        assert BLOCKER_LOW_LAG_COMPLETION_LATENCY == "LOW_LAG_COMPLETION_LATENCY"
         assert BLOCKER_LOW_LAG_RPC_QUOTE_FAIL == "LOW_LAG_RPC_QUOTE_FAIL"
         assert BLOCKER_GAS_L1_DATA_DOMINANT == "GAS_L1_DATA_DOMINANT"
         assert BLOCKER_SUBGRAPH_API_KEY_REQUIRED == "SUBGRAPH_API_KEY_REQUIRED"
