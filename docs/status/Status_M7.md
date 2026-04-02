@@ -306,6 +306,16 @@ Fixed stale_positive_count vs reject_histogram inconsistency via unified `_is_st
 
 **Operational criterion**: M7 loop must run 30-60 minutes without crash/schema drift before start.py integration.
 
+**Post-review verdict**: M7.A.5.29 establishes a real continuous M7 loop and dashboard-fed rolling artifact, but fresh reruns still show zero viable routes and a 100% mid-pipeline abort rate on the registry_direct path. Discovery is no longer the primary blocker; the system now needs M7.A.5.30 focused on a true hot execution lane, completion-latency reduction, and an execution-adjacent profit guard, optionally paired with a tiny Timeboost watchlist.
+
+---
+
+## M7.A.5.30: Hot Execution Lane + Latency Telemetry + Profit Guard
+
+**Hypothesis**: executable profit requires a true hot execution lane, not a richer diagnostic loop.
+
+**Code changes**: (1) Fixed `last_nonempty_timestamp` bug — was referencing `run_timestamp` (always null) instead of `timestamp`. (2) Fixed `BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY` semantic error — now only fires for non-registry_direct paths; registry_direct over-budget events fire `BLOCKER_LOW_LAG_COMPLETION_LATENCY` instead. (3) Added granular latency telemetry: `resolve_ms` and `enrichment_ms` timers close the 750ms unaccounted gap in the pipeline. New `m7a530_latency_breakdown` section in artifact with mean/max/count per stage and `unaccounted` residual. (4) Hot/cold lane split in `m7a_orderflow_loop.py`: `--lane cold` (default, full diagnostic, writes m7_orderflow_latest.json) vs `--lane hot` (tight window, writes m7_hot_latest.json, doesn't overwrite cold rolling). Lane-specific defaults for ws_blocks/timeout/max_events/pause. (5) Created `m7/orderflow/profit_guard.py` — execution-adjacent profit guard following Flashbots simple-blind-arbitrage pattern (ending_balance > starting_balance or revert). ProfitGuardResult dataclass with passed/reject_reason/guard_mode. (6) Dashboard server now serves `m7_hot` artifact. (7) +11 tests: blocker tag semantics on registry_direct, latency breakdown, last_nonempty_timestamp fix, hot/cold lane defaults, profit guard pass/reject/fields, dashboard m7_hot entry.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)

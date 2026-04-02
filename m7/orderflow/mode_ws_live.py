@@ -1005,7 +1005,7 @@ def _write_rolling_m7(artifact: dict) -> None:
                     loop_ctx["window_empty"] = True
                     existing["m7_loop_context"] = loop_ctx
                     existing.setdefault("last_nonempty_timestamp",
-                                        existing.get("run_timestamp"))
+                                        existing.get("timestamp"))
                     with open(_ROLLING_M7_PATH, "w", encoding="utf-8") as f:
                         json.dump(existing, f, indent=2, default=str)
                     logger.info(
@@ -1026,7 +1026,7 @@ def _write_rolling_m7(artifact: dict) -> None:
 
         # Non-empty window: track last_nonempty_timestamp
         rolling["last_nonempty_timestamp"] = artifact.get(
-            "run_timestamp", rolling.get("run_timestamp")
+            "timestamp", rolling.get("timestamp")
         )
 
         os.makedirs(os.path.dirname(_ROLLING_M7_PATH), exist_ok=True)

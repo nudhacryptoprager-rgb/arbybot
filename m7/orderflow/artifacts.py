@@ -312,6 +312,53 @@ def _build_pricing_path_histogram(results: List[BackrunResult]) -> Dict[str, int
     return hist
 
 
+def _build_latency_breakdown(results: List[BackrunResult]) -> Dict[str, Any]:
+    """M7.A.5.30: Aggregate per-stage latency across all results with timing data."""
+    _STAGE_KEYS = (
+        "resolve_ms", "enrichment_ms", "admission_ms",
+        "oracle_ms", "registry_preload_ms", "local_pricing_ms",
+    )
+    accum: Dict[str, list] = {k: [] for k in _STAGE_KEYS}
+    total_pipeline: list = []
+
+    for r in results:
+        psl = r.pipeline_stage_latency_ms
+        if not isinstance(psl, dict):
+            continue
+        for k in _STAGE_KEYS:
+            v = psl.get(k)
+            if isinstance(v, (int, float)):
+                accum[k].append(v)
+        qpl = r.quote_pipeline_latency_ms
+        if isinstance(qpl, (int, float)):
+            total_pipeline.append(qpl)
+
+    def _stats(vals):
+        if not vals:
+            return None
+        return {
+            "mean": round(sum(vals) / len(vals), 2),
+            "max": round(max(vals), 2),
+            "count": len(vals),
+        }
+
+    breakdown = {k: _stats(v) for k, v in accum.items()}
+    breakdown["total_pipeline"] = _stats(total_pipeline)
+    # Compute unaccounted = total_pipeline - sum(stages) per result
+    unaccounted = []
+    for r in results:
+        psl = r.pipeline_stage_latency_ms
+        if not isinstance(psl, dict):
+            continue
+        qpl = r.quote_pipeline_latency_ms
+        if not isinstance(qpl, (int, float)):
+            continue
+        staged = sum(psl.get(k, 0) for k in _STAGE_KEYS if isinstance(psl.get(k), (int, float)))
+        unaccounted.append(round(qpl - staged, 2))
+    breakdown["unaccounted"] = _stats(unaccounted)
+    return breakdown
+
+
 def build_replay_summary(
     events: List[OrderflowEvent],
     results: List[BackrunResult],
@@ -745,13 +792,15 @@ def build_replay_summary(
     if _ll_rpc_quote_fail > 0:
         _active_tags.append(BLOCKER_LOW_LAG_RPC_QUOTE_FAIL)
     # Latency: ONLY fire for scored low-lag paths where pipeline > budget
-    _ll_over_budget = sum(
+    # M7.A.5.30: Split by scoring_path — REMOTE_QUOTER only for non-registry_direct
+    _ll_over_budget_remote = sum(
         1 for r in _low_lag_scored
         if r.quote_pipeline_latency_ms is not None
         and r.latency_budget_ms is not None
         and r.quote_pipeline_latency_ms > r.latency_budget_ms
+        and getattr(r, "scoring_path", None) != "registry_direct"
     )
-    if _ll_over_budget > 0:
+    if _ll_over_budget_remote > 0:
         _active_tags.append(BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY)
     # M7.A.5.29: Mid-pipeline abort dominant → completion latency blocker
     # Fire when scoring_path is registry_direct (no remote quoter) but
@@ -917,6 +966,8 @@ def build_replay_summary(
                 )
             ),
         },
+        # M7.A.5.30: Per-stage latency breakdown (mean/max across scored results)
+        "m7a530_latency_breakdown": _build_latency_breakdown(results),
         # M7.A.5.21: Factory registry + adapter-complete + gas-floor metrics
         "m7a521_registry_metrics": {
             "events_with_registry": sum(

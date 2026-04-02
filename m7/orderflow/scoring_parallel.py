@@ -159,6 +159,8 @@ def score_backrun_live_parallel(
     _pair_unresolved_detail: Optional[str] = None
     _pool_truth: Optional[Dict[str, Any]] = None
     _pool_read_path: Optional[str] = None
+    # M7.A.5.30: Time the token-resolve phase (previously unaccounted)
+    _resolve_start = time.monotonic()
     if use_common_pairs and event.pool_address and addr_to_symbol is not None:
         resolved = _resolve_event_tokens(
             pool_address=event.pool_address,
@@ -325,11 +327,13 @@ def score_backrun_live_parallel(
         r = _reject(REJECT_TOKEN_PAIR_UNRESOLVED, pct=_pool_truth, psrp=_pool_read_path)
         r.pair_unresolved_detail = _pair_unresolved_detail
         return r
+    _resolve_ms = round((time.monotonic() - _resolve_start) * 1000, 2)
 
     # ── M7.A.5.7: On-chain enrichment for unknown tokens ───────────────
     # Before admission: if a token is not in addr_to_symbol, try reading
     # its ERC-20 symbol/decimals on-chain. If successful, inject into
     # addr_to_symbol so the admission check can use it.
+    _enrichment_start = time.monotonic()
     enrichment_applied = False
     _ats = addr_to_symbol or {}
     _addr_to_dec: Dict[str, int] = {}  # M7.A.5.9: decimals cache
@@ -349,6 +353,7 @@ def score_backrun_live_parallel(
                     _addr_to_dec[addr] = info["decimals"]
         except Exception:
             pass  # enrichment is best-effort
+    _enrichment_ms = round((time.monotonic() - _enrichment_start) * 1000, 2)
 
     # ── M7.A.5.6: Event-token admission check ──────────────────────────
     _admission_start = time.monotonic()
@@ -741,6 +746,8 @@ def score_backrun_live_parallel(
             "stage_b_ms": 0.0,
             "mid_pipeline_abort": True,
             "mid_pipeline_budget_exceeded_ms": round(_elapsed_ms, 2),
+            "resolve_ms": _resolve_ms,
+            "enrichment_ms": _enrichment_ms,
             "admission_ms": _admission_ms,
             "oracle_ms": _oracle_ms,
             "registry_preload_ms": _registry_preload_ms,
@@ -952,7 +959,9 @@ def score_backrun_live_parallel(
 
     stage_latency = {"stage_a_ms": stage_a_ms, "stage_b_ms": stage_b_ms}
 
-    # M7.A.5.25: Hidden latency telemetry — measure each pipeline stage
+    # M7.A.5.30: Full pipeline stage breakdown
+    stage_latency["resolve_ms"] = _resolve_ms
+    stage_latency["enrichment_ms"] = _enrichment_ms
     stage_latency["admission_ms"] = _admission_ms
     stage_latency["oracle_ms"] = _oracle_ms
     stage_latency["registry_preload_ms"] = _registry_preload_ms

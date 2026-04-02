@@ -26,6 +26,7 @@ ARTIFACT_FILES = {
     "long_scan": ROLLING_DIR / "long_scan_latest.json",
     "hot_loop": ROLLING_DIR / "hot_loop_latest.json",
     "m7_orderflow": ROLLING_DIR / "m7_orderflow_latest.json",
+    "m7_hot": ROLLING_DIR / "m7_hot_latest.json",
 }
 
 DASHBOARD_HTML = Path(__file__).parent / "dashboard.html"

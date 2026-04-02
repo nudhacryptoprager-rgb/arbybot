@@ -1008,7 +1008,7 @@ class TestM7A529AntiOverwriteAndLoop:
         rolling_path = str(tmp_path / "m7_orderflow_latest.json")
         artifact = {
             "events_count": 5,
-            "run_timestamp": "2026-01-01T02:00:00Z",
+            "timestamp": "2026-01-01T02:00:00Z",
             "results": [{"x": 1}],  # should be excluded
             "low_lag_debug_rows": [1, 2],  # should be excluded
         }
@@ -1077,3 +1077,180 @@ class TestM7A529CompletionLatencyBlocker:
         summary = build_replay_summary(events, results, "test")
         active_tags = summary["blocker_tags"]["active_tags"]
         assert BLOCKER_LOW_LAG_COMPLETION_LATENCY not in active_tags
+
+
+# ===========================================================================
+# M7.A.5.30: Correctness fixes + hot/cold + profit guard + latency breakdown
+# ===========================================================================
+
+
+class TestM7A530RemoteQuoterTagSemantics:
+    """M7.A.5.30: REMOTE_QUOTER_LATENCY must NOT fire for registry_direct path."""
+
+    def test_remote_quoter_tag_does_not_fire_on_registry_direct(self):
+        """When all over-budget results use registry_direct, only
+        COMPLETION_LATENCY should fire, not REMOTE_QUOTER_LATENCY."""
+        from m7.shared.constants import (
+            BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY,
+            BLOCKER_LOW_LAG_COMPLETION_LATENCY,
+        )
+
+        events = [_make_event(eid=f"e{i}") for i in range(4)]
+        results = [
+            _make_result(
+                event_id=f"e{i}",
+                scoring_path="registry_direct",
+                quote_pipeline_latency_ms=1500.0,
+                latency_budget_ms=250.0,
+                pipeline_stage_latency_ms={"mid_pipeline_abort": True},
+            )
+            for i in range(4)
+        ]
+        summary = build_replay_summary(events, results, "test")
+        active_tags = summary["blocker_tags"]["active_tags"]
+        assert BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY not in active_tags
+        assert BLOCKER_LOW_LAG_COMPLETION_LATENCY in active_tags
+
+    def test_remote_quoter_tag_fires_on_non_registry_direct(self):
+        """When over-budget results use remote quoter path, tag should fire."""
+        from m7.shared.constants import BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY
+
+        events = [_make_event(eid="e0")]
+        # Result must be low-lag (detection lag <= 2) and scored (not unscored reject)
+        results = [
+            _make_result(
+                event_id="e0",
+                scoring_path="remote_quoter",
+                quote_pipeline_latency_ms=500.0,
+                latency_budget_ms=250.0,
+                event_block=100,
+                event_detected_at_block=100,
+                quote_block=100,
+                block_lag=0,
+                same_state_class="same_block",
+                best_backrun_net_bps=-5.0,
+                reject_reason="GAS_EXCEEDS_GROSS",
+            ),
+        ]
+        summary = build_replay_summary(events, results, "test")
+        active_tags = summary["blocker_tags"]["active_tags"]
+        assert BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY in active_tags
+
+
+class TestM7A530LatencyBreakdown:
+    """M7.A.5.30: Artifact includes per-stage latency breakdown."""
+
+    def test_latency_breakdown_present(self):
+        events = [_make_event()]
+        results = [_make_result(
+            pipeline_stage_latency_ms={
+                "resolve_ms": 100.0, "enrichment_ms": 50.0,
+                "admission_ms": 1.0, "oracle_ms": 150.0,
+                "registry_preload_ms": 600.0, "local_pricing_ms": 10.0,
+            },
+            quote_pipeline_latency_ms=1200.0,
+        )]
+        summary = build_replay_summary(events, results, "test")
+        bd = summary["m7a530_latency_breakdown"]
+        assert bd["resolve_ms"] is not None
+        assert bd["resolve_ms"]["mean"] == 100.0
+        assert bd["oracle_ms"]["mean"] == 150.0
+        assert bd["registry_preload_ms"]["max"] == 600.0
+        assert bd["total_pipeline"]["mean"] == 1200.0
+        # Unaccounted = 1200 - (100+50+1+150+600+10) = 289
+        assert bd["unaccounted"]["mean"] == 289.0
+
+
+class TestM7A530LastNonemptyTimestamp:
+    """M7.A.5.30: Rolling writer uses 'timestamp' key, not 'run_timestamp'."""
+
+    def test_last_nonempty_timestamp_from_timestamp_key(self, tmp_path):
+        """Non-empty window must write last_nonempty_timestamp from 'timestamp'."""
+        import json
+        from unittest.mock import patch
+
+        from m7.orderflow.mode_ws_live import _write_rolling_m7
+
+        rolling_path = str(tmp_path / "m7_orderflow_latest.json")
+        artifact = {
+            "events_count": 5,
+            "timestamp": "2026-04-02T15:00:00Z",
+        }
+
+        with patch("m7.orderflow.mode_ws_live._ROLLING_M7_PATH", rolling_path):
+            _write_rolling_m7(artifact)
+
+        with open(rolling_path) as f:
+            result = json.load(f)
+
+        assert result["last_nonempty_timestamp"] == "2026-04-02T15:00:00Z"
+
+
+class TestM7A530HotLaneDefaults:
+    """M7.A.5.30: Hot/cold lane default config values."""
+
+    def test_cold_lane_defaults(self):
+        from scripts.m7a_orderflow_loop import _LANE_DEFAULTS
+        cold = _LANE_DEFAULTS["cold"]
+        assert cold["ws_blocks"] == 300
+        assert cold["max_events"] == 30
+        assert cold["pause"] == 5
+
+    def test_hot_lane_defaults(self):
+        from scripts.m7a_orderflow_loop import _LANE_DEFAULTS
+        hot = _LANE_DEFAULTS["hot"]
+        assert hot["ws_blocks"] == 20
+        assert hot["max_events"] == 5
+        assert hot["pause"] == 1
+
+    def test_hot_artifact_path(self):
+        from scripts.m7a_orderflow_loop import _HOT_ARTIFACT_PATH
+        assert _HOT_ARTIFACT_PATH.endswith("m7_hot_latest.json")
+
+
+class TestM7A530ProfitGuard:
+    """M7.A.5.30: Profit guard local simulation."""
+
+    def test_profit_guard_passes_when_profitable(self):
+        from m7.orderflow.profit_guard import check_profit_guard
+
+        result = check_profit_guard(
+            buy_amount_wei=10**18,
+            sell_amount_wei=10**18 + 10**16,  # +1% gross
+            backrun_size_wei=10**18,
+            gas_estimate=200_000,
+            gas_price_gwei=0.01,
+        )
+        assert result.passed is True
+        assert result.net_pnl_wei > 0
+        assert result.reject_reason is None
+
+    def test_profit_guard_rejects_when_unprofitable(self):
+        from m7.orderflow.profit_guard import check_profit_guard
+
+        result = check_profit_guard(
+            buy_amount_wei=10**18,
+            sell_amount_wei=10**18 - 10**15,  # -0.1% gross (loss)
+            backrun_size_wei=10**18,
+            gas_estimate=200_000,
+            gas_price_gwei=0.01,
+        )
+        assert result.passed is False
+        assert result.reject_reason == "ENDING_BALANCE_NOT_GT_STARTING"
+
+    def test_profit_guard_result_fields(self):
+        from m7.orderflow.profit_guard import ProfitGuardResult
+
+        r = ProfitGuardResult()
+        assert r.guard_mode == "local_sim"
+        assert r.passed is False
+        assert r.details == {}
+
+
+class TestM7A530DashboardM7Hot:
+    """M7.A.5.30: Dashboard server includes m7_hot in ARTIFACT_FILES."""
+
+    def test_m7_hot_in_artifact_files(self):
+        from monitoring.dashboard_server import ARTIFACT_FILES
+        assert "m7_hot" in ARTIFACT_FILES
+        assert str(ARTIFACT_FILES["m7_hot"]).endswith("m7_hot_latest.json")
