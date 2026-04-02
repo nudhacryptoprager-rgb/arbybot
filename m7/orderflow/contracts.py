@@ -120,6 +120,8 @@ class BackrunResult:
     pricing_path: Optional[str] = None
     # M7.A.5.23→5.24: Scoring path used (renamed from low_lag_scoring_path)
     scoring_path: Optional[str] = None
+    # M7.A.5.33: Profit guard result in fast path
+    profit_guard_passed: Optional[bool] = None
 
 
 @dataclass

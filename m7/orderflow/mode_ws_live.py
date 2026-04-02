@@ -28,7 +28,7 @@ from m7.orderflow.coverage import seed_tokens_from_subgraph
 from m7.orderflow.events import normalize_swap_log
 from m7.orderflow.pool_registry import PoolRegistry
 from m7.orderflow.resolve import _build_address_to_symbol
-from m7.orderflow.scoring_parallel import score_backrun_live_parallel
+from m7.orderflow.scoring_parallel import score_backrun_live_parallel, score_backrun_fast
 
 logger = logging.getLogger("m7.orderflow.cli")
 
@@ -275,21 +275,38 @@ def run_ws_live(args, *, external_registry=None) -> dict:
 
             # Score with parallel pipeline
             current_block = detected_block
+            _hot_mode = external_registry is not None
             for ev in events_to_score:
-                r = score_backrun_live_parallel(
-                    event=ev,
-                    rpc_url=rpc_url,
-                    dex_configs=dex_configs,
-                    token_addresses=token_addresses,
-                    current_block=current_block,
-                    ws_provider=ws_provider,
-                    event_detected_at_block=detected_block,
-                    fallback_rpc_urls=None,
-                    block_time_ms=block_time_ms,
-                    addr_to_symbol=addr_to_symbol,
-                    subgraph_seeded_addrs=subgraph_seeded_addrs,
-                    pool_registry=session_registry,
-                )
+                r = None
+                # M7.A.5.33: Hot-mode fast path — zero-RPC scoring via prewarmed registry
+                if _hot_mode:
+                    r = score_backrun_fast(
+                        event=ev,
+                        pool_registry=session_registry,
+                        token_addresses=token_addresses,
+                        current_block=current_block,
+                        event_detected_at_block=detected_block,
+                        block_time_ms=block_time_ms,
+                        addr_to_symbol=addr_to_symbol,
+                    )
+                if r is None:
+                    # Full pipeline fallback (cold lane, or pair not in registry)
+                    r = score_backrun_live_parallel(
+                        event=ev,
+                        rpc_url=rpc_url,
+                        dex_configs=dex_configs,
+                        token_addresses=token_addresses,
+                        current_block=current_block,
+                        ws_provider=ws_provider,
+                        event_detected_at_block=detected_block,
+                        fallback_rpc_urls=None,
+                        block_time_ms=block_time_ms,
+                        addr_to_symbol=addr_to_symbol,
+                        subgraph_seeded_addrs=subgraph_seeded_addrs,
+                        pool_registry=session_registry,
+                    )
+                # Attach source event for downstream fast-path re-scoring
+                r._source_event = ev
                 all_results.append(r)
                 all_events.append(ev)
 

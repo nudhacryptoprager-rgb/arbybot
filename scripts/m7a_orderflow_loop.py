@@ -146,9 +146,14 @@ def _run_profit_guard_on_results(results: list) -> list:
         net = r.get("best_backrun_net_bps") if isinstance(r, dict) else getattr(r, "best_backrun_net_bps", None)
         if net is None or net <= 0:
             continue
-        buy = r.get("best_buy_amount_wei") if isinstance(r, dict) else getattr(r, "best_buy_amount_wei", 0)
-        sell = r.get("best_sell_amount_wei") if isinstance(r, dict) else getattr(r, "best_sell_amount_wei", 0)
+        # M7.A.5.33: Derive buy/sell from existing fields.
+        # best_buy_amount_wei / best_sell_amount_wei don't exist on BackrunResult.
+        # Use amount_in_wei (backrun input) and gross_pnl_wei to reconstruct:
+        #   sell_amount = amount_in_wei + gross_pnl_wei  (since gross = sell - input)
         size = r.get("amount_in_wei") if isinstance(r, dict) else getattr(r, "amount_in_wei", 0)
+        gross = r.get("gross_pnl_wei") if isinstance(r, dict) else getattr(r, "gross_pnl_wei", 0)
+        buy = size  # backrun input IS the buy amount
+        sell = size + gross  # sell = input + gross PnL
         sv = r.get("size_valid_for_token") if isinstance(r, dict) else getattr(r, "size_valid_for_token", None)
 
         # M7.A.5.31: Skip size_valid=false from profit guard (Step 5)
@@ -196,19 +201,35 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "profit_guard_passed_count": len(guard_results) if guard_results else 0,
     }
 
-    # M7.A.5.32: Fast-path results
+    # M7.A.5.32/5.33: Fast-path results with stage timing + profit guard
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
         fast_positive = [r for r in fast_results if (r.best_backrun_net_bps or 0) > 0]
+        fast_guard_passed = [r for r in fast_results if r.profit_guard_passed]
         fast_latencies = [r.quote_pipeline_latency_ms for r in fast_results if r.quote_pipeline_latency_ms]
+        # M7.A.5.33: Aggregate stage-level timing
+        _stage_keys = ["registry_lookup_ms", "pool_state_ms", "local_math_ms",
+                       "profit_guard_ms", "tx_build_ms"]
+        _stage_agg = {}
+        for sk in _stage_keys:
+            vals = [
+                r.pipeline_stage_latency_ms.get(sk, 0)
+                for r in fast_results
+                if r.pipeline_stage_latency_ms
+            ]
+            if vals:
+                _stage_agg[f"mean_{sk}"] = round(sum(vals) / len(vals), 2)
+                _stage_agg[f"max_{sk}"] = round(max(vals), 2)
         hot["fast_path"] = {
             "scored": len(fast_results),
             "positive": len(fast_positive),
             "viable": len(fast_viable),
+            "profit_guard_passed": len(fast_guard_passed),
             "mean_latency_ms": round(sum(fast_latencies) / len(fast_latencies), 2) if fast_latencies else None,
             "max_latency_ms": round(max(fast_latencies), 2) if fast_latencies else None,
             "best_net_bps": round(max((r.best_backrun_net_bps or 0) for r in fast_results), 4) if fast_results else None,
             "scoring_paths": list(set(r.scoring_path for r in fast_results if r.scoring_path)),
+            "stage_timings": _stage_agg if _stage_agg else None,
         }
         # Check if fast path found a better candidate
         for r in fast_positive:

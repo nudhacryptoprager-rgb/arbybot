@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.27 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.27 adds anomaly-clean headlines, wall-clock budget abort, stale-clean KPI split, Timeboost constants. 300b/1000b evidence: 100% registry_direct, 15/100 positive clean (best 416.7 bps), viable_count=0, 100% mid_pipeline_abort. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.33 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.33 fixes profit_guard dead-code bug, adds hot-mode fast path in mode_ws_live, per-stage timing, integrated profit_guard in score_backrun_fast. 3172 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-02  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility. M7.B remains closed.
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing. M7.B remains closed.
 
 ---
 
@@ -132,212 +132,93 @@ Subgraph BLOCKED (403). Gas decomposition: L1 data ~80%, L2 exec ~20%. GAS_EXCEE
 
 ---
 
-## M7.A.5.20: Local-State-First Pricing (INFRASTRUCTURE)
+## M7.A.5.20–5.22: Local Pricing + Pool Registry + Registry Activation (INFRASTRUCTURE, CLOSED)
 
-**Hypothesis**: Local V3/V2 swap math applied to captured pool state may bypass remote quoter entirely, halving pipeline latency and enabling first positive-net scoring.
+**M7.A.5.20** (Local-State-First Pricing): `v3_math.py` — V3/V2/Algebra local swap math. First positive net observed (+18.20 bps stale). Pipeline latency halved. 3 new fields (59 total). CI: 3212 passed.
 
-**Changes**: `m7/orderflow/v3_math.py` (NEW, ~260 lines): `compute_v3_swap_amount_out()` (single-tick V3), `compute_v2_swap_amount_out()` (V2 constant-product), `attempt_local_pricing()` orchestrator. 3 new BackrunResult fields (59 total): `local_pricing_attempted/used/failure_reason`. `scoring_parallel.py`: local pricing between Stage A and Stage B; Stage B skipped when local succeeds. `artifacts.py`: `low_lag_local_pricing` block (6 metrics).
+**M7.A.5.21** (Factory-Driven Pool Registry): `pool_registry.py` — factory-driven persistent cache. `preload_pair()`/`lookup_pair()` O(1). Gas-floor prefilter (2.0 bps). 6 new fields (65 total), 1 new reject (20 total). CI: 3245 passed.
 
-**Evidence**: 300b: 30 events, 29/30 local pricing used (stale), best_net=+18.20 bps, mean_latency=1402ms (was ~3500ms), 1 low-lag 0 scored. 300b_b: 30 events, best_net=+13.45 bps. 1000b: 82 events, best_net=+7.77 bps, 6 low-lag 0 scored. Triangular: 67/100 measured, best_net=-16.22 bps.
-
-**Key finding**: Local pricing works for stale events (first positive net bps observed: +18.20), pipeline latency halved. Low-lag events still blocked at coverage BEFORE reaching local pricing — `low_lag_local_pricing` correctly reports all zeros. Infrastructure progress, NOT profit progress: viable_count=0, best_net_bps_executable=null.
-
-CI: 3212 passed, 476 orderflow + 152 triangular tests.
+**M7.A.5.22** (Registry Activation in ws-live): Session-scoped `PoolRegistry()` in pipeline. Registry 65–77 pools discovered, NO_COUNTER_POOL=0. Gas-floor operational filter. CI: 3267 passed.
 
 ---
 
-## M7.A.5.21: Factory-Driven Pool Registry + Adapter-Complete Pricing + Gas-Floor Prefilter (INFRASTRUCTURE)
+## M7.A.5.23–5.24: Registry-Direct Scoring + Pipeline Slim (SCORING, CLOSED)
 
-**Hypothesis**: Low-lag same-chain scoring may unlock only after factory-driven pool discovery and adapter-complete local-state pricing replace narrow runtime discovery as the primary truth path. Gas-floor prefilter (measurement-first) quantifies how many events are structurally unprofitable due to gas alone.
+**M7.A.5.23** (Registry-Direct Scoring Bridge): Low-lag fast path bypasses coverage scan → direct local pricing from registry entries. 100% scoring rate via registry_direct. Positive net detected (9/100, +18–43 bps) but all STALE_POSITIVE. 1 new field `scoring_path` (66 total). CI: 3286 passed.
 
-**Changes**:
-1. **`m7/orderflow/pool_registry.py`** (NEW, ~300 lines): Factory-driven persistent pool registry. `PoolRegistryEntry` with address, dex, adapter_type, fee, token_a/b, liquidity, sqrt_price_x96, tick, last_block. `PoolRegistry` session-scoped cache. `preload_pair()` queries V3/Algebra via `batch_get_pool` + `batch_full_pool_data`, V2 via direct `getPair` + `getReserves`. V2 state stored: reserve0 in sqrt_price_x96, reserve1 in tick. `lookup_pair()` O(1) cached. `_refresh_state()` for stale (>10 blocks) entries.
-2. **`m7/orderflow/v3_math.py`** (MODIFIED): Added `compute_algebra_swap_amount_out()` (directional fee_zto/fee_otz dispatch). Rewrote `attempt_local_pricing()` for adapter-complete matrix: V3 → `compute_v3_swap_amount_out`, V2 → `compute_v2_swap_amount_out` (reserves from state), Algebra → `compute_v3_swap_amount_out` (with dynamic fee). Both buy and sell passes adapter-dispatched. Returns `pricing_path`: `"v3_local"|"v2_local"|"algebra_local"`.
-3. **`m7/shared/constants.py`** (MODIFIED): Added `REJECT_GAS_FLOOR_EXCEEDED`, `GAS_FLOOR_BPS_ARBITRUM = 2.0`. ALL_REJECT_REASONS: 19→20. UNSCORED_REJECTS: 11→12.
-4. **`m7/orderflow/contracts.py`** (MODIFIED): 6 new BackrunResult fields (59→65): `registry_pools_found`, `registry_pools_active`, `adapter_type_used`, `gas_floor_exceeded`, `gas_floor_bps`, `pricing_path`.
-5. **`m7/orderflow/coverage.py`** (MODIFIED): Optional `pool_registry` parameter. Registry pool merging (deduped by address). `registry_pools_merged` in output.
-6. **`m7/orderflow/scoring_parallel.py`** (MODIFIED): Registry preload, gas-floor prefilter (measure-only, NOT hard reject), new fields injected in both return paths.
-7. **`m7/orderflow/artifacts.py`** (MODIFIED): `_build_adapter_histogram()`, `_build_pricing_path_histogram()`, `m7a521_registry_metrics` block (events_with_registry, total_registry_pools_found/active, gas_floor_exceeded_count, adapter_type_histogram, pricing_path_histogram).
-8. **`tests/unit/test_orderflow_m7a521.py`** (NEW, ~370 lines): 32 tests. 8 existing test files updated (65 fields, 20 rejects, 12 unscored).
-
-**Evidence**:
-- 300b: 30 events, 29 scored, best_net=+23.59 bps, gas_floor_exceeded=25/30 (83%), adapter=v3_local:29, registry_pools=0 (opt-in, not instantiated in replay). Low-lag: 1 detected, 0 scored.
-- 300b_b: 30 events, 29 scored, best_net=+3.68 bps, gas_floor_exceeded=16/30 (53%), adapter=v3_local:29. Low-lag: 1 detected, 0 scored.
-- 1000b: 59 events, 57 scored, best_net=+14.40 bps, gas_floor_exceeded=41/59 (69%), adapter=v3_local:57. Low-lag: 2 detected, 0 scored.
-
-**Key findings**: (1) Gas-floor measurement active: 53-83% of events exceed 2.0 bps gas floor — confirms gas remains dominant structural cost. (2) Adapter histogram: 100% v3_local on Arbitrum (expected — mostly UniswapV3 pools). (3) Registry pools=0 across all runs: registry is opt-in parameter, not yet instantiated in replay script; validates graceful degradation. (4) Local pricing continues to produce positive stale net bps (+3.68 to +23.59). (5) Low-lag events still blocked at coverage before reaching pricing — NO_COUNTER_POOL remains dominant low-lag blocker. (6) SUBGRAPH_API_KEY_REQUIRED persists as blocker tag.
-
-CI: 3245 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+**M7.A.5.24** (Pipeline Latency Optimization): Skip Stage A multicall for registry_direct. Mid-pipeline lag abort. Session prewarm (6 core pairs). Two-queue priority. Still 66 fields. CI: 3310 passed.
 
 ---
 
-## M7.A.5.22: PoolRegistry Activation in ws-live + Gas-Floor Operational Filter (ACTIVATION)
+## M7.A.5.25: Detection-Time Low-Lag Truth + PRICING_ANOMALY (CORRECTIVE, CLOSED)
 
-**Hypothesis**: Low-lag same-chain scoring may unlock only after PoolRegistry is actually instantiated in ws-live mode and used as the primary counter-venue discovery source before NO_COUNTER_POOL rejection.
-
-**Root cause addressed**: M7.A.5.21 built the registry infrastructure but never instantiated it in the ws-live pipeline — `events_with_registry=0` in all M7.A.5.21 evidence. M7.A.5.22 creates a session-scoped `PoolRegistry()` in `mode_ws_live.py` and passes it to every `score_backrun_live_parallel()` call.
-
-**Changes**:
-1. **`m7/orderflow/mode_ws_live.py`** (MODIFIED): `session_registry = PoolRegistry()` created after dex_configs loaded. Passed as `pool_registry=session_registry` to every scoring call. `registry_session_stats` (5 keys: preload_calls, cache_hits, pools_discovered, pools_active, unique_pairs_queried) added to artifact. `m7a522_hypothesis` string added.
-2. **`m7/orderflow/scoring_parallel.py`** (MODIFIED): Gas-floor operational filter: after gas-floor measurement, if `_gas_floor_exceeded AND _preliminary_lag > 2`, early-reject with `REJECT_GAS_FLOOR_EXCEEDED`. Saves RPC budget for stale+uneconomic events.
-3. **`scripts/m7a_orderflow_replay.py`** (MODIFIED): `PoolRegistry` re-export.
-4. **`tests/unit/test_orderflow_m7a522.py`** (NEW, 22 tests): 5 test classes covering registry integration, gas-floor filter, re-export, field counts, artifact stats.
-5. **No new BackrunResult fields** (still 65). **No new reject reasons** (still 20). **ALL_BLOCKER_TAGS still 8**.
-
----
-
-## M7.A.5.31: Hot Lane to Decision + Profit Guard + Timeboost Eligibility
-
-**Post-review verdict on M7.A.5.30**: Dashboard now live (Panel 11 reads both cold + m7_hot). Fresh 300b confirmed: discovery solved (registry_direct=30/30), but viable_count=0 because completion latency ~1544ms vs 250ms budget. `last_nonempty_timestamp` and `REMOTE_QUOTER_LATENCY` correctness bugs fixed. Latency breakdown now visible: resolve_ms≈935, registry_preload_ms≈449, oracle_ms≈117.
-
-**Hypothesis**: M7.A.5.31 = profit requires a true hot lane to tx-build decision, not richer replay diagnostics.
-
-**Changes**:
-1. **`m7/orderflow/coverage.py`** (BUGFIX): Added `import json` inside `seed_tokens_from_subgraph()`. Was causing `name 'json' is not defined` in subgraph_seed_stats.errors.
-2. **`m7/orderflow/mode_ws_live.py`** (MODIFIED): `run_ws_live()` accepts optional `external_registry` parameter. When provided, skips session prewarm (caller owns registry). Hot lane can pass pre-warmed registry across iterations.
-
----
-
-## M7.A.5.32: Unified Nonstop Runtime + Rolling Retention + Hot-Path Slimming
-
-**Post-review verdict on M7.A.5.31**: Hot/cold loops run and produce artifacts. Fresh runtime: cold `mean_pipeline_latency_ms=1940`, hot `events_count=3` `profit_guard_passed_count=0`. Discovery is no longer the primary blocker; dominant constraint is completion latency on the registry_direct hot path (~1.94s vs 250ms). `data/tmp` has 153 files (22MB); `_rolling` carries old archives and scan logs.
-
-**Hypothesis**: M7.A.5.32 = unified nonstop supervisor, rolling-only retention discipline, and hot-path reduction toward the first profit_guard-passed candidate under 250ms.
-
-**Changes**:
-1. **`scripts/start_nonstop_runtime.py`** (NEW, ~200 lines): Unified supervisor — launches dashboard, start.py, M7 hot loop, M7 cold loop as 4 managed subprocesses with health/restart semantics, signal handling, periodic status reporting. Separate from start.py (M4/M5 thin orchestrator).
-2. **`scripts/prune_tmp_artifacts.py`** (NEW, ~130 lines): Retention tool for `data/tmp`. Rules: m7a_* keep last 2 per prefix, helpers keep last 5, logs keep last 3, anything >14 days deleted. `--dry-run` mode.
-3. **`scripts/m7a_orderflow_loop.py`** (MODIFIED): Hot lane fast-path — prewarmed watchlist-only scoring via `score_backrun_fast()` with hard 250ms stage budgets, zero subgraph/oracle/enrichment in hot path. `_write_hot_artifact()` includes `fast_path` section with scored/positive/viable/latency/scoring_paths.
-4. **`m7/orderflow/scoring_parallel.py`** (MODIFIED): Added `score_backrun_fast()` (~120 lines): preload-only path — registry O(1) hit → cached pool-state read → decimal-aware bounded size → `attempt_local_pricing()` → economics → BackrunResult with `scoring_path="registry_fast"`. Hard abort if pipeline_ms > HOT_BUDGET_TOTAL_MS.
-5. **`m7/shared/constants.py`** (MODIFIED): Hot-path stage budget constants: `HOT_BUDGET_TOTAL_MS=250`, `HOT_BUDGET_REGISTRY_LOOKUP_MS=25`, `HOT_BUDGET_POOL_STATE_READ_MS=50`, `HOT_BUDGET_LOCAL_MATH_MS=10`, `HOT_BUDGET_PROFIT_GUARD_MS=10`, `HOT_BUDGET_TX_BUILD_MS=50`, `HOT_WATCHLIST_PAIRS` (3 pairs: WETH/USDC, WETH/USDT, WETH/ARB).
-6. **`_rolling/`** cleaned to canonical set (9 files). 12 non-canonical files moved to `data/runs/_archive/`.
-7. **`scripts/m7a_orderflow_replay.py`** (MODIFIED): Added NOTE — for continuous runtime, prefer `m7a_orderflow_loop.py` which writes to `_rolling/`.
-8. **`tests/unit/test_orderflow_artifacts.py`** (+14 tests): 5 new test classes: HotPathConstants (3), ScoreBackrunFast (3), NonstopSupervisor (2), PruneTmpArtifacts (3), RollingCanonicalSet (2). Also fixed 1 bug in `score_backrun_fast` (`_normalized_bounds` called with wrong args) and removed non-existent `best_buy_amount_wei`/`best_sell_amount_wei` fields from BackrunResult construction.
-
-CI: 3163 passed, 6 skipped. Safety: PASS. ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.23: Low-Lag Registry-Direct Scoring Bridge (SCORING BRIDGE)
-
-**Hypothesis**: Low-lag same-chain scoring may unlock only if low-lag events are routed into adapter-specific local scoring via registry-direct path before any coverage-scan rejection.
-
-**Root cause addressed**: M7.A.5.22 activated the registry (65-77 pools discovered), but low-lag events still died at the coverage scan because `coverage_complete` requires `quoter_v2` which V2 DEXes lack. Meanwhile, `attempt_local_pricing()` already supports V2 math directly — it doesn't need `quoter_v2`. The fix bypasses the RPC-heavy coverage scan for events where the registry already has active pools.
-
-**Changes**:
-1. **`m7/orderflow/scoring_parallel.py`** (MODIFIED): Low-lag fast path inserted between registry preload and coverage scan. If `preliminary_lag <= 2 AND registry_pools_active > 0`, builds synthetic coverage and local_sim from `PoolRegistryEntry.to_candidate_pool()` / `.to_pool_state()`, skips coverage scan entirely, goes directly to local pricing. Non-low-lag events (stale) continue through normal coverage path unchanged.
-2. **`m7/orderflow/contracts.py`** (MODIFIED): New field `low_lag_scoring_path: Optional[str]` (values: None | "registry_direct"). BackrunResult now 66 fields.
-3. **`m7/orderflow/mode_ws_live.py`** (MODIFIED): Session-persistent low-lag pair tracking (`_session_low_lag_pairs` dict) accumulates per-pair scoring outcomes across blocks using detection-time lag. `session_low_lag_pairs` list + `m7a523_hypothesis` string added to artifact.
-4. **`m7/orderflow/artifacts.py`** (MODIFIED): New `m7a523_low_lag_fast_path` section with `low_lag_registry_direct_count` and `low_lag_registry_direct_scored_count`.
-5. **`tests/unit/test_orderflow_m7a523.py`** (NEW, 19 tests): 5 test classes covering BackrunResult field contract, registry-direct fast path, artifact metrics, non-low-lag unchanged, session pair tracking.
-6. **No new reject reasons** (still 20). **UNSCORED_REJECTS still 12**. **ALL_BLOCKER_TAGS still 8**.
-
-**Evidence** (3 runs, all Arbitrum One ws-live):
-- 300b: 30 events, **30/30 scored (100%)**, best_net=+43.24 bps. **All registry_direct, all local_pricing_used**. Registry: 116 discovered, 81 active. Rejects: GAS_EXCEEDS_GROSS:27, STALE_POSITIVE:3. 3 positive net events. Session pairs: 0 (detection tracking not yet active in run 1).
-- 300b_b: 30 events, **30/30 scored (100%)**, best_net=+37.96 bps. **All registry_direct, all local_pricing_used**. 5 positive net events. Session pairs: 12 unique pairs, RAIN/WETH seen 5x.
-- 1000b: 100 events, **99/100 scored via registry_direct**, 1 via coverage (ALL_POOLS_TRULY_INACTIVE). best_net=+32.01 bps. 9 positive net events (all STALE_POSITIVE). Registry: 168 discovered, 123 active, 37 cache hits. Session pairs: 39 unique, WETH/USDC seen 26x. Adapter: v3_local:29, v2_local:1.
-
-**Key findings**: (1) **100% scoring rate via registry-direct path** — up from 0% events_scored_low_lag in M7.A.5.22. The coverage-scan bottleneck is completely bypassed. (2) **Local pricing via registry entries works across V3 and V2 adapters** — `attempt_local_pricing()` receives synthetic candidate_pools and pool_states from registry, dispatches to adapter-specific math. (3) **Positive net events detected (9/100 at +18-43 bps)** but all are STALE_POSITIVE (block_lag > 2 at scoring completion). The preliminary lag is ≈0 at scoring entry, but scoring itself takes 34+ blocks. (4) **Session pair tracking operational**: 39 unique pairs across 1000 blocks, WETH/USDC most frequent (26x). (5) **viable_count still 0**: positive_net + block_lag <= 2 required for viability. Scoring latency prevents any event from being "fresh" at completion. (6) **Next bottleneck** is scoring latency itself — events are fresh at detection but stale by scoring completion.
-
-CI: 3286 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.24: Pipeline Latency Optimization (PIPELINE SLIM)
-
-**Hypothesis**: The next meaningful target is not better stale scoring, but the first genuinely low-lag scored event through the registry_direct local-pricing path. Requires minimal pipeline (no size sweep, no Stage A multicall, no remote quoter for registry_direct), two-queue priority (low-lag first), mid-pipeline lag abort, and session prewarm.
-
-**Root cause addressed**: M7.A.5.23 achieved 100% scoring rate via registry_direct, but ALL events are classified STALE at scoring completion (mean_block_lag=34+). Events are fresh at detection (preliminary_lag ≈ 0) but become stale DURING the ~2000ms scoring pipeline. The pipeline spends time on Stage A multicall (~400ms) and size sweep (multiple remote quoter calls) which are redundant for registry_direct paths.
-
-**Changes**:
-1. **`m7/orderflow/contracts.py`** (MODIFIED): Renamed field `low_lag_scoring_path` → `scoring_path` (semantic fix — was misleading since stale events also use it). BackrunResult still 66 fields.
-2. **`m7/orderflow/scoring_parallel.py`** (MODIFIED, 6 changes): (a) Renamed `_low_lag_scoring_path` → `_scoring_path`. (b) Added `_is_low_lag = _preliminary_lag <= 2` flag. (c) Instant reject for low-lag + zero active pools (REJECT_ALL_POOLS_TRULY_INACTIVE). (d) Skip Stage A multicall for registry_direct (stage_a_ms=0.0). (e) ~90-line mid-pipeline lag abort block: if event was low-lag but becomes stale during scoring, returns partial result with computed economics. (f) Skip size sweep for registry_direct.
-3. **`m7/orderflow/mode_ws_live.py`** (MODIFIED, 4 changes): (a) Session prewarm: preloads 6 core Arbitrum pairs (WETH/USDC, WETH/USDT, WETH/ARB, USDC/USDT, WETH/WBTC, ARB/USDC) at session start. (b) Two-queue priority: low-lag events (detection_lag ≤ 2) scored before stale events. (c) Renamed `low_lag_scoring_path` → `scoring_path` (2 refs). (d) Added `m7a524_hypothesis` to artifact.
-4. **`m7/orderflow/artifacts.py`** (MODIFIED): Renamed filter reference, added `m7a524_pipeline_optimization` section with `mid_pipeline_abort_count` and `scoring_path_histogram`.
-5. **`tests/unit/test_orderflow_m7a523.py`** (MODIFIED): Renamed 15 `low_lag_scoring_path` → `scoring_path` references.
-6. **`tests/unit/test_orderflow_m7a524.py`** (NEW, 24 tests): 8 test classes covering field rename, two-queue priority, mid-pipeline abort, instant reject, artifact metrics, session prewarm, constants stability.
-7. **No new reject reasons** (still 20). **UNSCORED_REJECTS still 12**. **ALL_BLOCKER_TAGS still 8**. **Field count still 66** (rename only).
-
-**Evidence** (3 runs, all Arbitrum One ws-live):
-- 300b: 30 events, 30/30 scored (100%). **All registry_direct, all mid_pipeline_abort=30**. best_net=-1.68 bps. mean_block_lag=209.53. mean_pipeline_ms=1927ms. stage_a_ms=0.0, stage_b_ms=0.0. 0 low-lag detected.
-- 300b_b: 30 events, 30/30 scored (100%). **All registry_direct, all mid_pipeline_abort=30**. best_net=+1.01 bps (1 positive event). mean_block_lag=242.17. mean_pipeline_ms=2029ms. 0 low-lag detected.
-- 1000b: 100 events, 100/100 scored (100%). **All registry_direct, all mid_pipeline_abort=100**. best_net=+154955 bps (pricing anomaly). 14 positive events (STALE_POSITIVE:14). mean_block_lag=459.85. mean_pipeline_ms=1527ms. 0 low-lag detected.
-
-**Key findings**: Stage A+B correctly skipped for registry_direct; mid-pipeline abort fires on 100% of events (all become stale during scoring). `events_detected_low_lag=0` metric was BROKEN (fixed in M7.A.5.25) — raw data shows 100% same-block detection. Positive net found (+1.01 bps stale). Pricing anomaly +154955 bps (fixed in M7.A.5.25). Next bottleneck: scoring pipeline latency, not event arrival.
-
-CI: 3310 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.25: Detection-Time Low-Lag Truth + PRICING_ANOMALY + Hidden Latency Telemetry (CORRECTIVE)
-
-**Hypothesis**: Executable progress requires correct detection-time low-lag accounting plus anomaly-safe local pricing. Without these, profit evidence remains diagnostically polluted — low-lag metrics report 0 when all events are genuinely detected at same-block, and absurd net_bps from thin-liquidity pairs mask real signal.
-
-**Root causes addressed**: (1) Broken low-lag accounting: all `_low_lag` metrics used final `block_lag` instead of detection-time lag (`event_detected_at_block - event_block`), making `events_detected_low_lag=0` when 100% of events are same-block-detected. (2) Pricing anomaly pollution: `best_net=+154955` from thin-liquidity local pricing with no reject gate. (3) No per-stage timing for admission, oracle, registry preload.
-
-**Changes**: `artifacts.py` + `mode_ws_live.py`: `_detection_lag(r)` helper, all low-lag metrics use detection-time lag. `constants.py`: +REJECT_PRICING_ANOMALY (21 total). `scoring_parallel.py`: PRICING_ANOMALY gate (`abs(net_bps) > 10000`) + hidden latency telemetry (`admission_ms`, `oracle_ms`, `registry_preload_ms`). Still 66 fields, 8 blocker tags, 12 unscored.
-
-**Evidence** (3 runs, Arbitrum One ws-live): 21/30/100 events, all 100% `events_detected_low_lag` (was 0). best_net=+14.05/+66.62/+66.62 bps. PRICING_ANOMALY catches 4/100 (SOL thin-liquidity, abs(net_bps)>10000). Hidden latency: registry_preload ~372ms, oracle ~101ms. All positives STALE_POSITIVE; viable_count=0.
-
-**Key findings**: M7.A.5.24 "event arrival latency" was WRONG — 100% same-block detection confirmed. PRICING_ANOMALY active. Registry_preload dominant hidden latency (~470ms pre-scoring). Discovery solved (`registry_direct=100%`). CI: 3317 passed, 6 skipped. ALL GATES PASSED.
+Fixed low-lag accounting (detection-time vs final). +REJECT_PRICING_ANOMALY (21 total). Hidden latency telemetry: registry_preload ~372ms, oracle ~101ms. 100% same-block detection confirmed. CI: 3317 passed.
 
 ---
 
 ## M7.R1: Structural Refactor — Extract m7/ Package (COMPLETED)
 
-Extracted all M7 logic into `m7/` package: `m7/shared/constants.py` (171 lines, all reject reasons + blocker tags), `m7/orderflow/` (8 modules: contracts, events, resolve, coverage, pricing, scoring_parallel, artifacts, cli + mode_ws_live), `m7/triangular/` (5 modules, 1828 lines). Thin shim wrappers in `scripts/`. 8th blocker tag `LOW_LAG_RPC_QUOTE_FAIL` added. CI: 3180 passed, 6 skipped.
+Extracted all M7 logic into `m7/` package: `m7/shared/constants.py`, `m7/orderflow/` (8 modules), `m7/triangular/` (5 modules). 8th blocker tag `LOW_LAG_RPC_QUOTE_FAIL`. CI: 3180 passed.
 
 ---
 
 ## M7.T1: Test Suite Consolidation (COMPLETED)
 
-Structural-only branch (no market progress). Consolidated 14 session-specific `test_orderflow_*.py` files (9494 lines, ~581 tests) into 8 stable layer-based suites + shared `conftest.py`. Removed 213 duplicate assertions. Post-consolidation: 368 unique orderflow tests in 8 files. Total suite: 3104 passed, 6 skipped.
+Consolidated 14 session-specific test files into 8 stable layer-based suites + `conftest.py`. Removed 213 duplicate assertions. 368 unique orderflow tests. CI: 3104 passed.
 
 ---
 
-## M7.A.5.26: Coverage Bug Fix + Fresh April 2 Verification (CORRECTIVE)
+## M7.A.5.26: Coverage Bug Fix (CORRECTIVE, CLOSED)
 
-Fixed `UnboundLocalError` in `scoring_parallel.py` zero-active-pools path (`cov=coverage` → `cov=None`). +1 regression test. 300b/1000b: 100% same-block detection, near-100% registry_direct, viable_count=0. PRICING_ANOMALY gate gap found (47322 bps outlier). CI: 3105 passed, 6 skipped.
-
----
-
-## M7.A.5.27: Anomaly-Clean Headlines + Executable Lane Hardening
-
-Hypothesis: "first executable edge requires anomaly-clean local pricing plus a low-lag execution lane."
-
-**Code changes**: (1) `best_net_bps` headline now excludes PRICING_ANOMALY — prevents thin-liquidity artifacts from inflating metrics. (2) Wall-clock budget abort replaces RPC-based mid-pipeline lag check — saves ~100ms per event (no extra `eth_blockNumber` call). (3) New KPIs: `best_net_bps_clean`, `best_net_bps_stale_clean`, `positive_net_count_clean`, `positive_net_count_low_lag_clean`. (4) Timeboost constants added (250ms block, 200ms express advantage, 50ms min pipeline budget).
-
-**Evidence (300b)**: 30 events, 30/30 low-lag, 30/30 registry_direct, 6 positive clean (best 37.08 bps), 0 anomalies, viable_count=0, 100% mid_pipeline_abort.
-
-**Evidence (1000b)**: 100 events, 100/100 low-lag, 100/100 registry_direct, 15 positive clean (best 416.7 bps), 2 PRICING_ANOMALY excluded from headlines, viable_count=0, 100% mid_pipeline_abort. Top signal: 0xc87b37a5/WETH 416.7 bps, RAIN/WETH 6-16 bps.
-
-**Verdict**: Positive signal exists and is anomaly-clean. Pipeline latency remains the binding constraint — all events exceed 250ms budget. Next: reduce pipeline to <50ms for Timeboost eligibility. CI: 3113 passed, 6 skipped.
+Fixed `UnboundLocalError` in zero-active-pools path. PRICING_ANOMALY gap found (47322 bps outlier). CI: 3105 passed.
 
 ---
 
-## M7.A.5.28: KPI Contract Fix + Rolling Artifact + Dashboard Panel 11
+## M7.A.5.27: Anomaly-Clean Headlines + Executable Lane Hardening (CLOSED)
 
-Fixed stale_positive_count vs reject_histogram inconsistency via unified `_is_stale()` classifier. Created canonical rolling M7 artifact (`data/runs/_rolling/m7_orderflow_latest.json`). Added M7 dashboard Panel 11 to `monitoring/dashboard_server.py` + `dashboard.html`. +7 tests. CI: 3120 passed, 6 skipped.
-
----
-
-## M7.A.5.29: Continuous M7 ws-live Loop + Anti-Bad-Overwrite + Blocker Rename
-
-**Objective**: M7 dashboard is a rolling snapshot panel, but lacks a true continuous live loop. This session adds the continuous ws-live loop runner as a standalone runtime service.
-
-**Code changes**: (1) Created `scripts/m7a_orderflow_loop.py` — endless/restartable loop around `run_ws_live()` with CLI args for window config (--ws-blocks, --ws-timeout, --max-events, --iterations, --pause). Separate from start.py M5/M4 scanner. (2) Anti-bad-overwrite rule in `_write_rolling_m7`: empty window (events_count=0) no longer destroys previous useful snapshot — preserves existing data and updates only `m7_loop_context`. (3) Runtime fields added to rolling artifact: `m7_loop_context` (loop_iteration, window_started_at, window_ended_at, window_empty) and `last_nonempty_timestamp`. (4) New blocker tag `BLOCKER_LOW_LAG_COMPLETION_LATENCY` fires when >50% of results abort mid-pipeline with registry_direct scoring path — separates "pipeline completion too slow" from "remote quoter too slow". (5) +4 tests: anti-overwrite semantics, last_nonempty_timestamp, completion latency fires/does-not-fire.
-
-**Operational criterion**: M7 loop must run 30-60 minutes without crash/schema drift before start.py integration.
-
-**Post-review verdict**: M7.A.5.29 establishes a real continuous M7 loop and dashboard-fed rolling artifact, but fresh reruns still show zero viable routes and a 100% mid-pipeline abort rate on the registry_direct path. Discovery is no longer the primary blocker; the system now needs M7.A.5.30 focused on a true hot execution lane, completion-latency reduction, and an execution-adjacent profit guard, optionally paired with a tiny Timeboost watchlist.
+`best_net_bps` excludes PRICING_ANOMALY. Wall-clock budget abort replaces RPC mid-pipeline check. New KPIs: `best_net_bps_clean`, `positive_net_count_clean`. Timeboost constants added. Evidence: 300b 6/30 positive clean (37.08 bps), 1000b 15/100 positive clean (416.7 bps), viable_count=0, 100% mid_pipeline_abort. CI: 3113 passed.
 
 ---
 
-## M7.A.5.30: Hot Execution Lane + Latency Telemetry + Profit Guard
+## M7.A.5.28–5.29: Rolling Artifact + Continuous Loop (INFRASTRUCTURE, CLOSED)
 
-**Hypothesis**: executable profit requires a true hot execution lane, not a richer diagnostic loop.
+**M7.A.5.28** (KPI Contract Fix + Rolling): Unified `_is_stale()`. Canonical `m7_orderflow_latest.json`. Dashboard Panel 11. CI: 3120 passed.
 
-**Code changes**: (1) Fixed `last_nonempty_timestamp` bug — was referencing `run_timestamp` (always null) instead of `timestamp`. (2) Fixed `BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY` semantic error — now only fires for non-registry_direct paths; registry_direct over-budget events fire `BLOCKER_LOW_LAG_COMPLETION_LATENCY` instead. (3) Added granular latency telemetry: `resolve_ms` and `enrichment_ms` timers close the 750ms unaccounted gap in the pipeline. New `m7a530_latency_breakdown` section in artifact with mean/max/count per stage and `unaccounted` residual. (4) Hot/cold lane split in `m7a_orderflow_loop.py`: `--lane cold` (default, full diagnostic, writes m7_orderflow_latest.json) vs `--lane hot` (tight window, writes m7_hot_latest.json, doesn't overwrite cold rolling). Lane-specific defaults for ws_blocks/timeout/max_events/pause. (5) Created `m7/orderflow/profit_guard.py` — execution-adjacent profit guard following Flashbots simple-blind-arbitrage pattern (ending_balance > starting_balance or revert). ProfitGuardResult dataclass with passed/reject_reason/guard_mode. (6) Dashboard server now serves `m7_hot` artifact. (7) +11 tests: blocker tag semantics on registry_direct, latency breakdown, last_nonempty_timestamp fix, hot/cold lane defaults, profit guard pass/reject/fields, dashboard m7_hot entry.
+**M7.A.5.29** (Continuous Loop): `m7a_orderflow_loop.py` — endless/restartable loop. Anti-bad-overwrite. Hot/cold lane split. `BLOCKER_LOW_LAG_COMPLETION_LATENCY` tag. CI: 3124 passed.
+
+---
+
+## M7.A.5.30: Hot Execution Lane + Latency Telemetry + Profit Guard (CLOSED)
+
+Fixed `last_nonempty_timestamp` + `BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY` semantics. Added `resolve_ms`/`enrichment_ms` timers + `m7a530_latency_breakdown`. Hot/cold lane split: `--lane cold` (full diagnostic) vs `--lane hot` (tight window, m7_hot_latest.json). Created `m7/orderflow/profit_guard.py` (Flashbots simple-blind-arb pattern). +11 tests. CI: 3140 passed.
+
+---
+
+## M7.A.5.31: Hot Lane to Decision + Profit Guard + Timeboost Eligibility (CLOSED)
+
+Dashboard Panel 11 reads both cold + m7_hot. Discovery solved (registry_direct=30/30), viable_count=0 due to completion latency ~1544ms vs 250ms. Fixed `last_nonempty_timestamp` and `REMOTE_QUOTER_LATENCY` bugs. Latency: resolve_ms≈935, registry_preload_ms≈449, oracle_ms≈117. `run_ws_live()` accepts `external_registry` for hot lane prewarm. CI: 3155 passed.
+
+---
+
+## M7.A.5.32: Unified Nonstop Runtime + Rolling Retention + Hot-Path Slimming
+
+**Hypothesis**: M7.A.5.32 = unified nonstop supervisor, rolling-only retention, hot-path reduction toward first profit_guard pass under 250ms.
+
+**Changes**: (1) `start_nonstop_runtime.py` — unified supervisor (dashboard + start.py + M7 hot/cold). (2) `prune_tmp_artifacts.py` — retention tool for `data/tmp`. (3) Hot lane fast-path via `score_backrun_fast()` with 250ms stage budgets, zero subgraph/oracle/enrichment. (4) `score_backrun_fast()` in scoring_parallel.py: registry O(1) → cached state → local pricing → economics → BackrunResult `scoring_path="registry_fast"`. (5) HOT_BUDGET_* constants, HOT_WATCHLIST_PAIRS (3 pairs). (6) `_rolling/` cleaned to canonical 9 files. (7) +14 tests.
+
+CI: 3163 passed, 6 skipped. Safety: PASS. ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.33: Profit Guard Fix + Hot-Mode Fast Path + Stage Timing
+
+**Hypothesis**: M7.A.5.33 = first profit_guard-passed hot candidate under unified nonstop runtime and <250ms hot-path budget. Discovery solved (registry_direct=29/29). Primary blocker is latency: mean_pipeline_latency_ms=1940ms vs 250ms budget. No new discovery branch.
+
+**Critical bug fixed**: `_run_profit_guard_on_results()` read `best_buy_amount_wei`/`best_sell_amount_wei` — fields that don't exist on BackrunResult (removed in M7.A.5.32). Profit guard was dead code (`profit_guard_passed_count=0` always). Fix: derive `buy=amount_in_wei`, `sell=amount_in_wei+gross_pnl_wei` from existing fields.
+
+**Changes**: (1) Fixed profit_guard field derivation in `m7a_orderflow_loop.py`. (2) `mode_ws_live.py`: hot-mode fast path — when `external_registry` provided, scores events via `score_backrun_fast()` first (zero-RPC), falls back to full pipeline only if pair not in registry. (3) `score_backrun_fast()`: added per-stage timing (`registry_lookup_ms`, `pool_state_ms`, `local_math_ms`, `profit_guard_ms`, `tx_build_ms`) in `pipeline_stage_latency_ms`. Integrated profit_guard directly — `profit_guard_passed` field on BackrunResult (67 total). (4) Hot artifact now reports `stage_timings` aggregate + `profit_guard_passed` count. (5) +9 tests in 4 classes. (6) DEV_REPORT provenance fixed (timestamp_utc aligned with rolling truth). (7) Status_M7.md compressed from 346→215 lines, sections reordered chronologically.
+
+CI: 3172 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

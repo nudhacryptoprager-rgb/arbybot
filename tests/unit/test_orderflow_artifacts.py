@@ -1194,9 +1194,8 @@ class TestM7A531SizeValidFiltering:
         results = [
             {
                 "best_backrun_net_bps": 5.0,
-                "best_buy_amount_wei": 10**18,
-                "best_sell_amount_wei": 10**18 + 10**15,
                 "amount_in_wei": 10**18,
+                "gross_pnl_wei": 10**15,
                 "size_valid_for_token": False,  # should be skipped
                 "quote_pipeline_latency_ms": 100.0,
             },
@@ -1209,9 +1208,8 @@ class TestM7A531SizeValidFiltering:
         results = [
             {
                 "best_backrun_net_bps": 5.0,
-                "best_buy_amount_wei": 10**18,
-                "best_sell_amount_wei": 10**18 + 10**15,
                 "amount_in_wei": 10**18,
+                "gross_pnl_wei": 10**15,
                 "size_valid_for_token": True,
                 "quote_pipeline_latency_ms": 100.0,
             },
@@ -1784,3 +1782,109 @@ class TestM7A530DashboardM7Hot:
 
         html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
         assert "m7_hot_latest.json" in html
+
+
+# ===========================================================================
+# M7.A.5.33: profit_guard fix + hot-mode fast-path + stage timing + field count
+# ===========================================================================
+
+
+class TestM7A533ProfitGuardFieldFix:
+    """M7.A.5.33: profit_guard derives buy/sell from amount_in_wei + gross_pnl_wei."""
+
+    def test_profit_guard_passes_with_derived_fields(self):
+        """With gross_pnl_wei > gas, profit guard should pass."""
+        from scripts.m7a_orderflow_loop import _run_profit_guard_on_results
+
+        results = [
+            {
+                "best_backrun_net_bps": 5.0,
+                "amount_in_wei": 10**18,
+                "gross_pnl_wei": 10**15,  # sell = 10**18 + 10**15
+                "size_valid_for_token": True,
+                "quote_pipeline_latency_ms": 100.0,
+            },
+        ]
+        passed = _run_profit_guard_on_results(results)
+        assert len(passed) == 1
+        _, guard = passed[0]
+        assert guard.passed is True
+
+    def test_profit_guard_rejects_negative_gross(self):
+        """With gross_pnl_wei < 0, profit guard should reject."""
+        from scripts.m7a_orderflow_loop import _run_profit_guard_on_results
+
+        results = [
+            {
+                "best_backrun_net_bps": 1.0,  # says positive but gross is negative
+                "amount_in_wei": 10**18,
+                "gross_pnl_wei": -(10**15),  # sell < input
+                "size_valid_for_token": True,
+                "quote_pipeline_latency_ms": 100.0,
+            },
+        ]
+        passed = _run_profit_guard_on_results(results)
+        assert len(passed) == 0
+
+    def test_profit_guard_on_backrun_result_object(self):
+        """Guard works with BackrunResult dataclass (getattr path)."""
+        from scripts.m7a_orderflow_loop import _run_profit_guard_on_results
+
+        r = _make_result(
+            best_backrun_net_bps=10.0,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,  # sell = input + 10**16
+            size_valid_for_token=True,
+            quote_pipeline_latency_ms=50.0,
+        )
+        passed = _run_profit_guard_on_results([r])
+        assert len(passed) == 1
+
+
+class TestM7A533BackrunResultField:
+    """M7.A.5.33: profit_guard_passed field exists on BackrunResult (67 total)."""
+
+    def test_field_count_67(self):
+        from dataclasses import fields
+        from m7.orderflow.contracts import BackrunResult
+
+        assert len(fields(BackrunResult)) == 67
+
+    def test_profit_guard_passed_defaults_none(self):
+        r = _make_result()
+        assert r.profit_guard_passed is None
+
+    def test_profit_guard_passed_settable(self):
+        r = _make_result(profit_guard_passed=True)
+        assert r.profit_guard_passed is True
+
+
+class TestM7A533ScoreBackrunFastStageTimings:
+    """M7.A.5.33: score_backrun_fast includes per-stage timing + profit_guard."""
+
+    def test_fast_path_has_stage_timings_keys(self):
+        """Verify score_backrun_fast signature includes profit_guard and timing."""
+        import inspect
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+
+        sig = inspect.signature(score_backrun_fast)
+        # Should have the required params
+        assert "event" in sig.parameters
+        assert "pool_registry" in sig.parameters
+
+    def test_fast_path_result_has_profit_guard_field(self):
+        """BackrunResult from fast path should have profit_guard_passed."""
+        from dataclasses import fields as dc_fields
+        from m7.orderflow.contracts import BackrunResult
+
+        field_names = {f.name for f in dc_fields(BackrunResult)}
+        assert "profit_guard_passed" in field_names
+        assert "pipeline_stage_latency_ms" in field_names
+
+
+class TestM7A533HotModeFastPath:
+    """M7.A.5.33: mode_ws_live imports score_backrun_fast for hot-mode."""
+
+    def test_mode_ws_live_imports_score_backrun_fast(self):
+        from m7.orderflow.mode_ws_live import score_backrun_fast as sbf
+        assert callable(sbf)

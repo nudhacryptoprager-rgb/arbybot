@@ -332,10 +332,10 @@ class TestM7A513EventsScoredLowLagContract:
 class TestM7A513BackwardCompat:
     """M7.A.5.13: field count and key presence checks."""
 
-    def test_backrun_result_field_count_still_66(self):
+    def test_backrun_result_field_count_still_67(self):
         r = _make_result()
         d = asdict(r)
-        assert len(d) == 66
+        assert len(d) == 67
 
     def test_old_summary_fields_still_present(self):
         art = build_replay_summary([], [], mode="test")
@@ -462,7 +462,7 @@ class TestM7A514BackwardCompat:
     def test_backrun_result_field_count_66(self):
         r = _make_result()
         d = asdict(r)
-        assert len(d) == 66
+        assert len(d) == 67
 
     def test_new_514_fields_additive(self):
         art = build_replay_summary([], [], mode="test")
@@ -487,7 +487,7 @@ class TestM7A515BackwardCompat:
     def test_backrun_result_field_count_66(self):
         r = _make_result()
         d = asdict(r)
-        assert len(d) == 66
+        assert len(d) == 67
 
     def test_new_515_fields_present(self):
         art = build_replay_summary([], [], mode="test")
@@ -506,7 +506,7 @@ class TestM7A516BackwardCompat:
     def test_backrun_result_field_count_66(self):
         r = _make_result()
         d = asdict(r)
-        assert len(d) == 66
+        assert len(d) == 67
 
     def test_new_516_fields_present(self):
         art = build_replay_summary([], [], mode="test")
@@ -531,7 +531,7 @@ class TestM7A517BackwardCompat:
     def test_backrun_result_field_count_66(self):
         r = _make_result()
         d = asdict(r)
-        assert len(d) == 66
+        assert len(d) == 67
 
     def test_new_517_artifact_present(self):
         art = build_replay_summary([], [], mode="test")
@@ -557,7 +557,7 @@ class TestM7A518BackwardCompat:
     def test_backrun_result_field_count_66(self):
         r = _make_result()
         d = asdict(r)
-        assert len(d) == 66
+        assert len(d) == 67
 
     def test_all_blocker_tags_count_is_9(self):
         assert len(ALL_BLOCKER_TAGS) == 9

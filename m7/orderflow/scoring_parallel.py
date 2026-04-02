@@ -1217,6 +1217,9 @@ def score_backrun_fast(
 
     Returns BackrunResult or None if pair not in registry / no state.
     Total budget: HOT_BUDGET_TOTAL_MS (250ms hard abort).
+
+    M7.A.5.33: Adds per-stage timing (registry_lookup_ms, pool_state_ms,
+    local_math_ms, profit_guard_ms, tx_build_ms) and integrated profit_guard.
     """
     import time
 
@@ -1234,7 +1237,8 @@ def score_backrun_fast(
     if not token_in_addr or not token_out_addr:
         return None
 
-    # Registry lookup (O(1) cache hit)
+    # ── Stage 1: Registry lookup (O(1) cache hit) ──────────────────────
+    _reg_start = time.monotonic()
     entries = pool_registry.lookup_pair(token_in_addr, token_out_addr)
     if not entries:
         return None
@@ -1242,8 +1246,10 @@ def score_backrun_fast(
     active_entries = [e for e in entries if e.is_active()]
     if not active_entries:
         return None
+    _registry_lookup_ms = round((time.monotonic() - _reg_start) * 1000, 2)
 
-    # Build candidate pools + state from cached registry entries
+    # ── Stage 2: Build candidate pools + state from cached entries ─────
+    _state_start = time.monotonic()
     candidate_pools = []
     local_sim_states = {}
     for entry in active_entries:
@@ -1255,6 +1261,7 @@ def score_backrun_fast(
 
     if not local_sim_states:
         return None
+    _pool_state_ms = round((time.monotonic() - _state_start) * 1000, 2)
 
     # Backrun size from event — decimal-aware bounded size
     _in_sym = event.token_in.upper() if event.token_in else ""
@@ -1271,7 +1278,8 @@ def score_backrun_fast(
     if backrun_size_wei <= 0:
         return None
 
-    # Local pricing — the actual computation (should be <10ms)
+    # ── Stage 3: Local pricing — the actual computation ────────────────
+    _math_start = time.monotonic()
     pricing_result = attempt_local_pricing(
         candidate_pools=candidate_pools,
         local_sim_states=local_sim_states,
@@ -1280,6 +1288,7 @@ def score_backrun_fast(
         backrun_size_wei=backrun_size_wei,
         registry_entries=active_entries,
     )
+    _local_math_ms = round((time.monotonic() - _math_start) * 1000, 2)
 
     pipeline_ms = round((time.monotonic() - pipeline_start) * 1000, 2)
 
@@ -1303,6 +1312,32 @@ def score_backrun_fast(
         gas_bps = GAS_FLOOR_BPS_ARBITRUM
         net_bps = gross_bps - gas_bps
     else:
+        return None
+
+    # ── Stage 4: Profit guard (local sim) ──────────────────────────────
+    _guard_start = time.monotonic()
+    _profit_guard_passed = None
+    if net_bps > 0 and net_wei > 0:
+        from m7.orderflow.profit_guard import check_profit_guard
+        _guard = check_profit_guard(
+            buy_amount_wei=backrun_size_wei,
+            sell_amount_wei=sell_amount,
+            backrun_size_wei=backrun_size_wei,
+            pipeline_latency_ms=pipeline_ms,
+        )
+        _profit_guard_passed = _guard.passed
+    _profit_guard_ms = round((time.monotonic() - _guard_start) * 1000, 2)
+
+    # ── Stage 5: Tx-build decision timing (placeholder — no actual build) ─
+    _tx_build_start = time.monotonic()
+    # In future: encode calldata, sign/bundle prep
+    # For now: measure the decision overhead
+    _tx_build_ms = round((time.monotonic() - _tx_build_start) * 1000, 2)
+
+    pipeline_ms = round((time.monotonic() - pipeline_start) * 1000, 2)
+
+    # Final budget check
+    if pipeline_ms > HOT_BUDGET_TOTAL_MS:
         return None
 
     block_lag = current_block - event.block_number
@@ -1342,6 +1377,13 @@ def score_backrun_fast(
         quote_finished_block=current_block,
         quote_pipeline_latency_ms=pipeline_ms,
         latency_budget_ms=block_time_ms,
+        pipeline_stage_latency_ms={
+            "registry_lookup_ms": _registry_lookup_ms,
+            "pool_state_ms": _pool_state_ms,
+            "local_math_ms": _local_math_ms,
+            "profit_guard_ms": _profit_guard_ms,
+            "tx_build_ms": _tx_build_ms,
+        },
         pair_resolved=True,
         actual_pair=actual_pair,
         size_source="event_proportional",
@@ -1353,5 +1395,6 @@ def score_backrun_fast(
         gas_floor_exceeded=(net_bps <= 0),
         gas_floor_bps=GAS_FLOOR_BPS_ARBITRUM,
         scoring_path="registry_fast",
+        profit_guard_passed=_profit_guard_passed,
     )
 

@@ -92,7 +92,7 @@ class TestContractCoreInvariants:
     """Canonical count assertions for all core contract invariants."""
 
     def test_backrun_result_field_count_is_66(self):
-        assert len(fields(BackrunResult)) == 66
+        assert len(fields(BackrunResult)) == 67
 
     def test_all_reject_reasons_count_is_21(self):
         assert len(ALL_REJECT_REASONS) == 21
@@ -210,7 +210,7 @@ class TestBackrunResultSchema:
         r = _make_result()
         s = json.dumps(asdict(r), default=str)
         parsed = json.loads(s)
-        assert len(parsed) == 66
+        assert len(parsed) == 67
         assert parsed["event_id"] == "e1"
 
 
