@@ -94,6 +94,7 @@ def run_ws_live(args, *, external_registry=None) -> dict:
 
     # M7.A.5.22: Session-scoped pool registry for factory-driven discovery
     # M7.A.5.31: Accept external registry; skip prewarm if caller provided one
+    _prewarm_count = 0
     if external_registry is not None:
         session_registry = external_registry
         _prewarm_count = -1  # signal: prewarm handled by caller

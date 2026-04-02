@@ -220,3 +220,22 @@ TIMEBOOST_MIN_PIPELINE_MS = 50  # Minimum scoring time for executable decision
 # Maximum pipeline latency to be Timeboost-eligible (budget = block - advantage)
 TIMEBOOST_ELIGIBLE_BUDGET_MS = TIMEBOOST_BLOCK_TIME_MS - TIMEBOOST_EXPRESS_ADVANTAGE_MS
 
+# ---------------------------------------------------------------------------
+# M7.A.5.32: Hot-path stage budgets (ms) — target total ≤250ms
+# ---------------------------------------------------------------------------
+# These are hard stage budgets for the fast scoring path.
+# The fast path assumes pre-warmed registry (zero discovery cost).
+HOT_BUDGET_REGISTRY_LOOKUP_MS = 25    # O(1) cache lookup
+HOT_BUDGET_POOL_STATE_READ_MS = 50    # Single RPC: getReserves / slot0
+HOT_BUDGET_LOCAL_MATH_MS = 10         # V3/V2 swap math
+HOT_BUDGET_PROFIT_GUARD_MS = 10       # Guard check
+HOT_BUDGET_TX_BUILD_MS = 50           # Transaction build/sign prep (future)
+HOT_BUDGET_TOTAL_MS = 250             # Hard abort if exceeded
+
+# Default watchlist pairs for hot lane fast-path (high-frequency Arbitrum pairs)
+HOT_WATCHLIST_PAIRS = [
+    ("WETH", "USDC"),
+    ("WETH", "USDT"),
+    ("WETH", "ARB"),
+]
+

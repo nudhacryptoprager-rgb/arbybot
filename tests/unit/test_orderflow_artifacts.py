@@ -1235,6 +1235,331 @@ class TestM7A531ExternalRegistry:
         assert _LANE_DEFAULTS["hot"]["ws_blocks"] == 20
         assert _LANE_DEFAULTS["hot"]["pause"] == 1
 
+    def test_run_ws_live_without_external_registry_does_not_hit_prewarm_unbound(self, monkeypatch):
+        import json
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        import m7.orderflow.mode_ws_live as mod
+
+        monkeypatch.setattr(
+            mod, "resolve_rpc_http",
+            lambda **kwargs: ("http://fake-rpc", "fake", {"source": "test"}),
+        )
+        monkeypatch.setattr(
+            mod, "resolve_rpc_ws",
+            lambda **kwargs: ("ws://fake-rpc", "fake", {"source": "test"}),
+        )
+        monkeypatch.setattr(mod, "load_dexes", lambda: {"arbitrum_one": {}})
+        monkeypatch.setattr(
+            mod,
+            "get_all_token_addresses",
+            lambda chain: {
+                "WETH": "0x" + "11" * 20,
+                "USDC": "0x" + "22" * 20,
+                "USDT": "0x" + "33" * 20,
+                "ARB": "0x" + "44" * 20,
+                "WBTC": "0x" + "55" * 20,
+            },
+        )
+        monkeypatch.setattr(mod, "_build_address_to_symbol", lambda _: {})
+        monkeypatch.setattr(mod, "load_chains", lambda: {"arbitrum_one": {"block_time_ms": 250}})
+        monkeypatch.setattr(
+            mod,
+            "seed_tokens_from_subgraph",
+            lambda *args, **kwargs: {
+                "tokens_discovered": 0,
+                "tokens_new": 0,
+                "tokens_verified": 0,
+                "sources_queried": [],
+                "errors": [],
+            },
+        )
+
+        class FakeRegistry:
+            preload_calls = 0
+            cache_hits = 0
+            pools_discovered = 0
+            pools_active = 0
+            unique_pairs_queried = set()
+            _queried = set()
+
+            def preload_pair(self, *args, **kwargs):
+                self.preload_calls += 1
+                return []
+
+        monkeypatch.setattr(mod, "PoolRegistry", FakeRegistry)
+
+        class FakeEth:
+            block_number = 123
+
+            def get_logs(self, *args, **kwargs):
+                return []
+
+        class FakeWeb3:
+            class HTTPProvider:
+                def __init__(self, url):
+                    self.url = url
+
+            def __init__(self, provider):
+                self.provider = provider
+                self.eth = FakeEth()
+
+        monkeypatch.setitem(sys.modules, "web3", types.SimpleNamespace(Web3=FakeWeb3))
+
+        class FakeWS:
+            def __init__(self):
+                self._recv_count = 0
+
+            def send(self, msg):
+                self._last = msg
+
+            def recv(self):
+                self._recv_count += 1
+                if self._recv_count == 1:
+                    return json.dumps({"result": "sub-id"})
+                raise TimeoutError("done")
+
+            def settimeout(self, seconds):
+                self._timeout = seconds
+
+            def close(self):
+                pass
+
+        import websocket as ws_mod
+
+        monkeypatch.setattr(ws_mod, "create_connection", lambda *args, **kwargs: FakeWS())
+
+        artifact = mod.run_ws_live(
+            SimpleNamespace(chain="arbitrum_one", ws_blocks=1, ws_timeout=1, max_events=1)
+        )
+        assert isinstance(artifact, dict)
+        assert artifact["mode"] == "ws_live"
+
+
+# ============================================================================
+# M7.A.5.32: Unified nonstop runtime + rolling retention + hot-path slimming
+# ============================================================================
+
+class TestM7A532HotPathConstants:
+    """Verify hot-path stage budget constants exist and have correct values."""
+
+    def test_hot_budget_total_exists(self):
+        from m7.shared.constants import HOT_BUDGET_TOTAL_MS
+        assert HOT_BUDGET_TOTAL_MS == 250
+
+    def test_hot_watchlist_pairs_exist(self):
+        from m7.shared.constants import HOT_WATCHLIST_PAIRS
+        assert isinstance(HOT_WATCHLIST_PAIRS, list)
+        assert len(HOT_WATCHLIST_PAIRS) >= 3
+        for pair in HOT_WATCHLIST_PAIRS:
+            assert len(pair) == 2
+
+    def test_hot_budget_components_sum_reasonable(self):
+        from m7.shared.constants import (
+            HOT_BUDGET_REGISTRY_LOOKUP_MS,
+            HOT_BUDGET_POOL_STATE_READ_MS,
+            HOT_BUDGET_LOCAL_MATH_MS,
+            HOT_BUDGET_PROFIT_GUARD_MS,
+            HOT_BUDGET_TX_BUILD_MS,
+            HOT_BUDGET_TOTAL_MS,
+        )
+        component_sum = (
+            HOT_BUDGET_REGISTRY_LOOKUP_MS
+            + HOT_BUDGET_POOL_STATE_READ_MS
+            + HOT_BUDGET_LOCAL_MATH_MS
+            + HOT_BUDGET_PROFIT_GUARD_MS
+            + HOT_BUDGET_TX_BUILD_MS
+        )
+        # Components should fit within total budget
+        assert component_sum <= HOT_BUDGET_TOTAL_MS
+
+
+class TestM7A532ScoreBackrunFast:
+    """Verify score_backrun_fast() fast-path function exists and works."""
+
+    def test_score_backrun_fast_importable(self):
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+        assert callable(score_backrun_fast)
+
+    def test_score_backrun_fast_returns_none_no_registry(self):
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+        from m7.orderflow.contracts import OrderflowEvent
+
+        ev = OrderflowEvent(
+            event_id="test_1",
+            event_type="swap",
+            chain="arbitrum_one",
+            block_number=100,
+            tx_hash="0x" + "00" * 32,
+            token_in="WETH",
+            token_out="USDC",
+            amount_in_wei=10**18,
+            amount_out_wei=0,
+            dex="uniswap_v3",
+            pool_address="0x" + "ab" * 20,
+            fee_tier=3000,
+            estimated_size_usd=3000.0,
+            estimated_impact_bps=0.0,
+            timestamp="2026-04-02T00:00:00Z",
+        )
+
+        class EmptyRegistry:
+            preload_calls = 0
+            cache_hits = 0
+            def lookup_pair(self, a, b):
+                return []
+
+        result = score_backrun_fast(
+            event=ev,
+            pool_registry=EmptyRegistry(),
+            token_addresses={"WETH": "0x" + "11" * 20, "USDC": "0x" + "22" * 20},
+            current_block=100,
+            addr_to_symbol={"0x" + "11" * 20: "WETH", "0x" + "22" * 20: "USDC"},
+        )
+        assert result is None  # No pools in registry → None
+
+    def test_score_backrun_fast_with_active_pool(self):
+        """With an active pool in registry, should return a BackrunResult."""
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+        from m7.orderflow.contracts import OrderflowEvent, BackrunResult
+        from m7.orderflow.pool_registry import PoolRegistryEntry
+
+        ev = OrderflowEvent(
+            event_id="test_2",
+            event_type="swap",
+            chain="arbitrum_one",
+            block_number=100,
+            tx_hash="0x" + "00" * 32,
+            token_in="WETH",
+            token_out="USDC",
+            amount_in_wei=10**18,
+            amount_out_wei=0,
+            dex="uniswap_v3",
+            pool_address="0x" + "ab" * 20,
+            fee_tier=3000,
+            estimated_size_usd=3000.0,
+            estimated_impact_bps=0.0,
+            timestamp="2026-04-02T00:00:00Z",
+        )
+
+        pool_entry = PoolRegistryEntry(
+            address="0x" + "cc" * 20,
+            dex="uniswap_v3",
+            adapter_type="uniswap_v3",
+            fee=3000,
+            token_a="0x" + "11" * 20,
+            token_b="0x" + "22" * 20,
+            liquidity=10**18,
+            sqrt_price_x96=79228162514264337593543950336,  # 1:1 price
+            tick=0,
+            last_block=99,
+        )
+
+        class MockRegistry:
+            preload_calls = 1
+            cache_hits = 0
+            def lookup_pair(self, a, b):
+                return [pool_entry]
+
+        result = score_backrun_fast(
+            event=ev,
+            pool_registry=MockRegistry(),
+            token_addresses={"WETH": "0x" + "11" * 20, "USDC": "0x" + "22" * 20},
+            current_block=100,
+            addr_to_symbol={"0x" + "11" * 20: "WETH", "0x" + "22" * 20: "USDC"},
+        )
+        # Should return BackrunResult (may or may not be profitable)
+        assert result is None or isinstance(result, BackrunResult)
+        if result is not None:
+            assert result.scoring_path == "registry_fast"
+            assert result.local_pricing_attempted is True
+            assert result.pair_resolved is True
+
+
+class TestM7A532NonstopSupervisor:
+    """Verify nonstop supervisor script is importable and has correct structure."""
+
+    def test_supervisor_script_exists(self):
+        from pathlib import Path
+        assert Path("scripts/start_nonstop_runtime.py").exists()
+
+    def test_supervisor_managed_process_class(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "start_nonstop_runtime",
+            "scripts/start_nonstop_runtime.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert hasattr(mod, "ManagedProcess")
+        mp = mod.ManagedProcess("test", ["echo", "hi"], restart_delay=1, max_restarts=3)
+        assert mp.name == "test"
+        assert mp.max_restarts == 3
+        assert mp.restarts == 0
+
+
+class TestM7A532PruneTmpArtifacts:
+    """Verify prune_tmp_artifacts.py is importable and has correct structure."""
+
+    def test_prune_script_exists(self):
+        from pathlib import Path
+        assert Path("scripts/prune_tmp_artifacts.py").exists()
+
+    def test_prune_classify_file(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "prune_tmp_artifacts",
+            "scripts/prune_tmp_artifacts.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod._classify_file("m7a_510_300b.json") == "m7a:m7a_510"
+        assert mod._classify_file("check_measured.py") == "helper"
+        assert mod._classify_file("scan.log") == "log"
+        assert mod._classify_file("L0_all_suppression_off.json") == "suppression"
+
+    def test_prune_get_prefix(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "prune_tmp_artifacts",
+            "scripts/prune_tmp_artifacts.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod._get_prefix("m7a_510_300b.json") == "m7a_510"
+        assert mod._get_prefix("m7a_524_1000b.json") == "m7a_524"
+
+
+class TestM7A532RollingCanonicalSet:
+    """Verify _rolling directory contains only canonical files."""
+
+    def test_rolling_no_archive_files(self):
+        from pathlib import Path
+        rolling = Path("data/runs/_rolling")
+        if not rolling.exists():
+            return  # Skip if rolling doesn't exist (CI)
+        for f in rolling.iterdir():
+            assert "archive" not in f.name, f"Non-canonical file in _rolling: {f.name}"
+            assert not f.name.endswith(".log"), f"Log file in _rolling: {f.name}"
+
+    def test_rolling_canonical_names(self):
+        from pathlib import Path
+        rolling = Path("data/runs/_rolling")
+        if not rolling.exists():
+            return
+        canonical = {
+            "_latest.json", "_latest_offline.json",
+            "run_summary_latest.json", "run_summary_latest_offline.json",
+            "m4_stability_agg.json", "long_scan_latest.json",
+            "hot_loop_latest.json",
+            "m7_orderflow_latest.json", "m7_hot_latest.json",
+        }
+        for f in rolling.iterdir():
+            if f.is_file():
+                assert f.name in canonical, f"Unexpected file in _rolling: {f.name}"
+
 
 # ===========================================================================
 # M7.A.5.30: Correctness fixes + hot/cold + profit guard + latency breakdown

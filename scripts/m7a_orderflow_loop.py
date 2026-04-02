@@ -41,6 +41,8 @@ from core.env import load_root_dotenv
 from core.logging import get_logger
 from m7.orderflow.mode_ws_live import run_ws_live, _write_rolling_m7
 from m7.orderflow.profit_guard import check_profit_guard
+from m7.orderflow.scoring_parallel import score_backrun_fast
+from m7.shared.constants import HOT_WATCHLIST_PAIRS
 
 logger = get_logger("m7.orderflow.loop")
 
@@ -165,8 +167,12 @@ def _run_profit_guard_on_results(results: list) -> list:
     return passed
 
 
-def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = None) -> None:
-    """Write minimal hot-lane artifact: best candidate + profit guard status."""
+def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = None,
+                        fast_results: list = None) -> None:
+    """Write minimal hot-lane artifact: best candidate + profit guard status.
+
+    fast_results: list of BackrunResult from score_backrun_fast() (M7.A.5.32)
+    """
     results = artifact.get("results", [])
     best = None
     for r in results:
@@ -189,6 +195,27 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "has_positive": best is not None,
         "profit_guard_passed_count": len(guard_results) if guard_results else 0,
     }
+
+    # M7.A.5.32: Fast-path results
+    if fast_results:
+        fast_viable = [r for r in fast_results if r.route_viable]
+        fast_positive = [r for r in fast_results if (r.best_backrun_net_bps or 0) > 0]
+        fast_latencies = [r.quote_pipeline_latency_ms for r in fast_results if r.quote_pipeline_latency_ms]
+        hot["fast_path"] = {
+            "scored": len(fast_results),
+            "positive": len(fast_positive),
+            "viable": len(fast_viable),
+            "mean_latency_ms": round(sum(fast_latencies) / len(fast_latencies), 2) if fast_latencies else None,
+            "max_latency_ms": round(max(fast_latencies), 2) if fast_latencies else None,
+            "best_net_bps": round(max((r.best_backrun_net_bps or 0) for r in fast_results), 4) if fast_results else None,
+            "scoring_paths": list(set(r.scoring_path for r in fast_results if r.scoring_path)),
+        }
+        # Check if fast path found a better candidate
+        for r in fast_positive:
+            net = r.best_backrun_net_bps or 0
+            if best is None or net > (best.get("best_backrun_net_bps") if isinstance(best, dict) else getattr(best, "best_backrun_net_bps", 0)):
+                best = r  # fast-path result is a BackrunResult object
+
     if best is not None:
         hot["best_candidate"] = {
             "event_id": best.get("event_id") if isinstance(best, dict) else getattr(best, "event_id", None),
@@ -269,7 +296,16 @@ def run_loop(cli_args) -> None:
                     _hot_registry = PoolRegistry()
                 _ext_registry = _hot_registry
 
-                if _accumulated_pairs and iteration > 1:
+                # M7.A.5.32: On first iteration, prewarm default watchlist pairs
+                # On subsequent iterations, also prewarm accumulated session pairs
+                _pairs_to_prewarm = dict(_accumulated_pairs) if _accumulated_pairs else {}
+                if iteration == 1:
+                    for sym_a, sym_b in HOT_WATCHLIST_PAIRS:
+                        pk = f"{sym_a}/{sym_b}"
+                        if pk not in _pairs_to_prewarm:
+                            _pairs_to_prewarm[pk] = {"pair": pk, "seen_count": 0}
+
+                if _pairs_to_prewarm:
                     try:
                         from config import load_dexes, get_all_token_addresses
                         from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
@@ -285,12 +321,12 @@ def run_loop(cli_args) -> None:
                             _dex_cfg = _all_dexes.get(cli_args.chain, {})
                             _token_addr = get_all_token_addresses(cli_args.chain)
                             _pw = _prewarm_registry_from_pairs(
-                                _hot_registry, _accumulated_pairs,
+                                _hot_registry, _pairs_to_prewarm,
                                 _token_addr, _dex_cfg, _rpc, _block,
                             )
                             logger.info(
-                                "Hot prewarm: %d pairs from %d accumulated",
-                                _pw, len(_accumulated_pairs),
+                                "Hot prewarm: %d pairs from %d candidates (iter %d)",
+                                _pw, len(_pairs_to_prewarm), iteration,
                             )
                     except Exception as _pw_exc:
                         logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
@@ -323,15 +359,65 @@ def run_loop(cli_args) -> None:
 
             # M7.A.5.31: Run profit guard on hot lane results
             guard_results = None
+            fast_results = None
             if lane == "hot":
                 guard_results = _run_profit_guard_on_results(artifact.get("results", []))
+
+                # M7.A.5.32: Fast-path scoring — re-score events through preloaded registry
+                if _hot_registry and _hot_registry.preload_calls > 0:
+                    try:
+                        from config import get_all_token_addresses
+                        from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
+                        from m7.orderflow.resolve import _build_address_to_symbol
+                        _chain_id = _CHAIN_KEY_TO_ID.get(cli_args.chain.lower())
+                        _rpc, _, _ = resolve_rpc_http(
+                            chain_id=_chain_id, network=cli_args.chain,
+                            env=dict(os.environ),
+                        )
+                        _token_addr = get_all_token_addresses(cli_args.chain)
+                        _addr_sym = _build_address_to_symbol(_token_addr)
+                        _chain_cfg = {}
+                        try:
+                            from config import load_chains
+                            _chain_cfg = load_chains().get(cli_args.chain, {})
+                        except Exception:
+                            pass
+                        _btm = _chain_cfg.get("block_time_ms", 250)
+
+                        # Get events from artifact results (BackrunResult objects)
+                        fast_results = []
+                        for r in artifact.get("results", []):
+                            ev = getattr(r, "_source_event", None)
+                            if ev is None:
+                                # Reconstruct minimal event from result fields
+                                continue
+                            fr = score_backrun_fast(
+                                event=ev,
+                                pool_registry=_hot_registry,
+                                token_addresses=_token_addr,
+                                current_block=getattr(r, "quote_block", 0) or 0,
+                                event_detected_at_block=getattr(r, "event_detected_at_block", None),
+                                block_time_ms=_btm,
+                                addr_to_symbol=_addr_sym,
+                            )
+                            if fr is not None:
+                                fast_results.append(fr)
+                        if fast_results:
+                            logger.info(
+                                "Fast-path: %d/%d events scored, %d positive",
+                                len(fast_results),
+                                events_count,
+                                sum(1 for r in fast_results if (r.best_backrun_net_bps or 0) > 0),
+                            )
+                    except Exception as _fp_exc:
+                        logger.debug("Fast-path scoring failed: %s", str(_fp_exc)[:120])
 
             if lane == "cold":
                 # Cold lane: full diagnostic rolling artifact
                 _write_rolling_m7(artifact)
             else:
                 # Hot lane: minimal artifact with profit guard
-                _write_hot_artifact(artifact, iteration, guard_results)
+                _write_hot_artifact(artifact, iteration, guard_results, fast_results=fast_results)
 
             best = artifact.get("best_net_bps_clean")
             viable = artifact.get("viable_count", 0)

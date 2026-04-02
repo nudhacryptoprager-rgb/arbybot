@@ -67,6 +67,8 @@ from m7.orderflow.coverage import (
 from m7.orderflow.pricing import check_oracle_sanity
 from m7.orderflow.v3_math import attempt_local_pricing
 
+from m7.shared.constants import HOT_BUDGET_TOTAL_MS
+
 logger = logging.getLogger("m7.orderflow.scoring_parallel")
 
 def score_backrun_live_parallel(
@@ -1188,5 +1190,168 @@ def score_backrun_live_parallel(
         gas_floor_exceeded=_gas_floor_exceeded,
         gas_floor_bps=_gas_floor_bps,
         scoring_path=_scoring_path,
+    )
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5.32: Fast scoring path — preloaded registry, zero discovery
+# ---------------------------------------------------------------------------
+
+def score_backrun_fast(
+    event: OrderflowEvent,
+    pool_registry: Any,
+    token_addresses: Dict[str, str],
+    current_block: int,
+    *,
+    event_detected_at_block: Optional[int] = None,
+    block_time_ms: Optional[float] = None,
+    addr_to_symbol: Optional[Dict[str, str]] = None,
+) -> Optional[BackrunResult]:
+    """Score a backrun using pre-warmed registry only. Zero RPC in hot path.
+
+    This is the fast path for the hot lane. It assumes:
+    - Pool registry already has preloaded pairs
+    - Pool state is cached in registry entries
+    - No token enrichment, no subgraph, no oracle check
+    - Single-size local math only
+
+    Returns BackrunResult or None if pair not in registry / no state.
+    Total budget: HOT_BUDGET_TOTAL_MS (250ms hard abort).
+    """
+    import time
+
+    pipeline_start = time.monotonic()
+    backrun_dir = classify_event_backrun_type(event)
+
+    # Fast pair resolution from addr_to_symbol (O(1) lookup, no RPC)
+    if not addr_to_symbol or not event.pool_address:
+        return None
+
+    _ats = addr_to_symbol
+    token_in_addr = token_addresses.get(event.token_out, "")
+    token_out_addr = token_addresses.get(event.token_in, "")
+
+    if not token_in_addr or not token_out_addr:
+        return None
+
+    # Registry lookup (O(1) cache hit)
+    entries = pool_registry.lookup_pair(token_in_addr, token_out_addr)
+    if not entries:
+        return None
+
+    active_entries = [e for e in entries if e.is_active()]
+    if not active_entries:
+        return None
+
+    # Build candidate pools + state from cached registry entries
+    candidate_pools = []
+    local_sim_states = {}
+    for entry in active_entries:
+        cp = entry.to_candidate_pool()
+        candidate_pools.append(cp)
+        ps = entry.to_pool_state()
+        if ps:
+            local_sim_states[entry.address] = ps
+
+    if not local_sim_states:
+        return None
+
+    # Backrun size from event — decimal-aware bounded size
+    _in_sym = event.token_in.upper() if event.token_in else ""
+    if _in_sym in ("USDC", "USDT", "USDC.E", "USDT.E"):
+        _effective_dec = 6
+    elif _in_sym in ("WBTC",):
+        _effective_dec = 8
+    else:
+        _effective_dec = 18
+    low, high = _normalized_bounds(_effective_dec)
+    backrun_size_wei = max(event.amount_in_wei // 10, 1)
+    backrun_size_wei = max(low, min(high, backrun_size_wei))
+
+    if backrun_size_wei <= 0:
+        return None
+
+    # Local pricing — the actual computation (should be <10ms)
+    pricing_result = attempt_local_pricing(
+        candidate_pools=candidate_pools,
+        local_sim_states=local_sim_states,
+        token_in_addr=token_in_addr,
+        token_out_addr=token_out_addr,
+        backrun_size_wei=backrun_size_wei,
+        registry_entries=active_entries,
+    )
+
+    pipeline_ms = round((time.monotonic() - pipeline_start) * 1000, 2)
+
+    # Hard abort if over budget
+    if pipeline_ms > HOT_BUDGET_TOTAL_MS:
+        return None
+
+    if pricing_result is None:
+        return None
+
+    buy_amount = pricing_result["buy_amount"]
+    sell_amount = pricing_result["sell_amount"]
+
+    # Economics
+    gross_wei = sell_amount - backrun_size_wei
+    gas_cost_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+    net_wei = gross_wei - gas_cost_wei
+
+    if backrun_size_wei > 0:
+        gross_bps = (gross_wei / backrun_size_wei) * 10000
+        gas_bps = GAS_FLOOR_BPS_ARBITRUM
+        net_bps = gross_bps - gas_bps
+    else:
+        return None
+
+    block_lag = current_block - event.block_number
+    if block_lag == 0:
+        same_state_class = "same_block"
+    elif block_lag <= 2:
+        same_state_class = "next_block"
+    else:
+        same_state_class = "stale"
+
+    actual_pair = None
+    tin_sym = _ats.get(token_in_addr.lower(), event.token_in)
+    tout_sym = _ats.get(token_out_addr.lower(), event.token_out)
+    actual_pair = f"{tin_sym}/{tout_sym}"
+
+    return BackrunResult(
+        event_id=event.event_id,
+        event_source="live",
+        event_type=event.event_type,
+        post_trade_state_used="live",
+        backrun_direction=backrun_dir,
+        best_buy_venue=pricing_result.get("buy_venue"),
+        best_sell_venue=pricing_result.get("sell_venue"),
+        amount_in_wei=backrun_size_wei,
+        gross_pnl_wei=gross_wei,
+        gas_cost_wei=gas_cost_wei,
+        net_pnl_wei=net_wei,
+        best_backrun_net_bps=round(net_bps, 4),
+        route_viable=(net_bps > 0 and net_wei > 0),
+        reject_reason=None if (net_bps > 0 and net_wei > 0) else REJECT_GAS_EXCEEDS_GROSS,
+        event_block=event.block_number,
+        quote_block=current_block,
+        block_lag=block_lag,
+        same_state_class=same_state_class,
+        event_detected_at_block=event_detected_at_block,
+        quote_started_block=current_block,
+        quote_finished_block=current_block,
+        quote_pipeline_latency_ms=pipeline_ms,
+        latency_budget_ms=block_time_ms,
+        pair_resolved=True,
+        actual_pair=actual_pair,
+        size_source="event_proportional",
+        size_valid_for_token=True,
+        local_pricing_attempted=True,
+        local_pricing_used=True,
+        registry_pools_found=len(entries),
+        registry_pools_active=len(active_entries),
+        gas_floor_exceeded=(net_bps <= 0),
+        gas_floor_bps=GAS_FLOOR_BPS_ARBITRUM,
+        scoring_path="registry_fast",
     )
 

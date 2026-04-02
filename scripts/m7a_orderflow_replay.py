@@ -12,6 +12,10 @@ Usage:
     python scripts/m7a_orderflow_replay.py --online --output data/tmp/m7a_orderflow_online.json
     python scripts/m7a_orderflow_replay.py --live-blocks 5 --output data/tmp/m7a_live_blocks.json
     python scripts/m7a_orderflow_replay.py --ws-live --ws-blocks 10 --output data/tmp/m7a_ws_live.json
+
+NOTE: For continuous runtime, prefer m7a_orderflow_loop.py which writes to
+_rolling/ (m7_orderflow_latest.json / m7_hot_latest.json). Use --output
+only for ad hoc one-shot diagnostics.
 """
 
 from __future__ import annotations

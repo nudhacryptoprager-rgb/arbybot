@@ -195,20 +195,26 @@ CI: 3245 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 **Changes**:
 1. **`m7/orderflow/coverage.py`** (BUGFIX): Added `import json` inside `seed_tokens_from_subgraph()`. Was causing `name 'json' is not defined` in subgraph_seed_stats.errors.
 2. **`m7/orderflow/mode_ws_live.py`** (MODIFIED): `run_ws_live()` accepts optional `external_registry` parameter. When provided, skips session prewarm (caller owns registry). Hot lane can pass pre-warmed registry across iterations.
-3. **`scripts/m7a_orderflow_loop.py`** (REWRITTEN): Hot lane: maintains `_accumulated_pairs` across iterations, prewarms registry from `session_low_lag_pairs` before each window. Integrates `check_profit_guard()` on all positive results (skipping `size_valid=false`). `_write_hot_artifact()` includes `profit_guard_passed_count`, `best_guard_passed` with `timeboost_eligible`, `execution_readiness` timing (mean/max guard_latency_ms, timeboost_eligible_count). Cold lane unchanged.
-4. **`m7/orderflow/profit_guard.py`** (MODIFIED): Added `guard_latency_ms` timing, `timeboost_eligible` field (pipeline_latency_ms ≤ 50ms budget), `pipeline_latency_ms` parameter.
-5. **`tests/unit/test_orderflow_artifacts.py`** (+12 tests): 6 new test classes: SubgraphJsonImport (2), HotLanePrewarm (2), ProfitGuardTimeboost (4), SizeValidFiltering (2), ExternalRegistry (2).
 
-CI: 3149 passed, 6 skipped. ALL REQUIRED GATES PASSED.
+---
 
-**Evidence** (3 runs, all Arbitrum One ws-live):
-- 300b: 27 events, 24 scored, best_net=-0.887 bps. **Registry: preload=12, cache_hits=36, pools_discovered=74, pools_active=62**. events_with_registry=26/27 (96%). NO_COUNTER_POOL=0 (was 2 in M7.A.5.21). Adapter: v3_local:14, none:13. Low-lag: 1 detected, 0 scored. Blocker: `LOW_LAG_V2_UNSUPPORTED`.
-- 300b_b: 28 events, 27 scored, best_net=+1.53 bps. **Registry: preload=9, cache_hits=41, pools_discovered=77, pools_active=61**. events_with_registry=28/28 (100%). NO_COUNTER_POOL=0. Adapter: v3_local:22, none:6. Low-lag: 0.
-- 1000b: 21 events, 21 scored, best_net=-2.20 bps. **Registry: preload=8, cache_hits=29, pools_discovered=65, pools_active=55**. events_with_registry=21/21 (100%). NO_COUNTER_POOL=0. Adapter: v3_local:15, none:6. Gas floor: 18/21. Low-lag: 0.
+## M7.A.5.32: Unified Nonstop Runtime + Rolling Retention + Hot-Path Slimming
 
-**Key findings**: (1) Registry ACTIVATED: 65-77 pools discovered per session (was 0 in M7.A.5.21). Cache hit ratio 3-4x of preload calls — session persistence working. (2) **NO_COUNTER_POOL eliminated**: 0 across all 3 runs (was 2 in M7.A.5.21). Factory discovery fills the counter-venue gap. (3) Gas-floor operational filter structurally present but **does not fire in ws-live mode**: `current_block == event.block_number` (same-block detection), so `_preliminary_lag ≈ 0`, never exceeds stale threshold. This is by-design: ws-live events are fresh at detection, become stale only DURING scoring. The filter will activate in batch/replay modes with lagged `current_block`. (4) Low-lag: 0-1 per window; LOW_LAG_V2_UNSUPPORTED blocker present when 1 detected. (5) Stale-only economics: GAS_EXCEEDS_GROSS remains dominant reject (21-25 per run); best_net ranges from -2.20 to +1.53 bps.
+**Post-review verdict on M7.A.5.31**: Hot/cold loops run and produce artifacts. Fresh runtime: cold `mean_pipeline_latency_ms=1940`, hot `events_count=3` `profit_guard_passed_count=0`. Discovery is no longer the primary blocker; dominant constraint is completion latency on the registry_direct hot path (~1.94s vs 250ms). `data/tmp` has 153 files (22MB); `_rolling` carries old archives and scan logs.
 
-CI: 3267 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+**Hypothesis**: M7.A.5.32 = unified nonstop supervisor, rolling-only retention discipline, and hot-path reduction toward the first profit_guard-passed candidate under 250ms.
+
+**Changes**:
+1. **`scripts/start_nonstop_runtime.py`** (NEW, ~200 lines): Unified supervisor — launches dashboard, start.py, M7 hot loop, M7 cold loop as 4 managed subprocesses with health/restart semantics, signal handling, periodic status reporting. Separate from start.py (M4/M5 thin orchestrator).
+2. **`scripts/prune_tmp_artifacts.py`** (NEW, ~130 lines): Retention tool for `data/tmp`. Rules: m7a_* keep last 2 per prefix, helpers keep last 5, logs keep last 3, anything >14 days deleted. `--dry-run` mode.
+3. **`scripts/m7a_orderflow_loop.py`** (MODIFIED): Hot lane fast-path — prewarmed watchlist-only scoring via `score_backrun_fast()` with hard 250ms stage budgets, zero subgraph/oracle/enrichment in hot path. `_write_hot_artifact()` includes `fast_path` section with scored/positive/viable/latency/scoring_paths.
+4. **`m7/orderflow/scoring_parallel.py`** (MODIFIED): Added `score_backrun_fast()` (~120 lines): preload-only path — registry O(1) hit → cached pool-state read → decimal-aware bounded size → `attempt_local_pricing()` → economics → BackrunResult with `scoring_path="registry_fast"`. Hard abort if pipeline_ms > HOT_BUDGET_TOTAL_MS.
+5. **`m7/shared/constants.py`** (MODIFIED): Hot-path stage budget constants: `HOT_BUDGET_TOTAL_MS=250`, `HOT_BUDGET_REGISTRY_LOOKUP_MS=25`, `HOT_BUDGET_POOL_STATE_READ_MS=50`, `HOT_BUDGET_LOCAL_MATH_MS=10`, `HOT_BUDGET_PROFIT_GUARD_MS=10`, `HOT_BUDGET_TX_BUILD_MS=50`, `HOT_WATCHLIST_PAIRS` (3 pairs: WETH/USDC, WETH/USDT, WETH/ARB).
+6. **`_rolling/`** cleaned to canonical set (9 files). 12 non-canonical files moved to `data/runs/_archive/`.
+7. **`scripts/m7a_orderflow_replay.py`** (MODIFIED): Added NOTE — for continuous runtime, prefer `m7a_orderflow_loop.py` which writes to `_rolling/`.
+8. **`tests/unit/test_orderflow_artifacts.py`** (+14 tests): 5 new test classes: HotPathConstants (3), ScoreBackrunFast (3), NonstopSupervisor (2), PruneTmpArtifacts (3), RollingCanonicalSet (2). Also fixed 1 bug in `score_backrun_fast` (`_normalized_bounds` called with wrong args) and removed non-existent `best_buy_amount_wei`/`best_sell_amount_wei` fields from BackrunResult construction.
+
+CI: 3163 passed, 6 skipped. Safety: PASS. ALL REQUIRED GATES PASSED.
 
 ---
 
