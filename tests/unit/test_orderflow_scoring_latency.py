@@ -343,6 +343,16 @@ class TestLowLagZeroActivePoolsReject:
     def test_reject_is_in_unscored_rejects(self):
         assert REJECT_ALL_POOLS_TRULY_INACTIVE in UNSCORED_REJECTS
 
+    def test_zero_active_pools_reject_has_no_coverage(self):
+        """coverage_result must be None when registry reports 0 active pools
+        (coverage scan has not been performed yet at that point)."""
+        r = _make_result(
+            reject_reason=REJECT_ALL_POOLS_TRULY_INACTIVE,
+            event_block=100, quote_block=100, block_lag=0,
+            coverage_result=None,
+        )
+        assert r.coverage_result is None
+
 
 # ---------------------------------------------------------------------------
 # 8. Session prewarm pairs

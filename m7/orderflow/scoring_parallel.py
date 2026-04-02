@@ -460,7 +460,7 @@ def score_backrun_live_parallel(
             REJECT_ALL_POOLS_TRULY_INACTIVE,
             pr=pair_resolved, ap=actual_pair, adm=True,
             adm_src=adm_source, orc=oracle_result,
-            cov=coverage, sg_seed=sg_seed,
+            cov=None, sg_seed=sg_seed,
             pct=_pool_truth, psrp=_pool_read_path,
         )
 

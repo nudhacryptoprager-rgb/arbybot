@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.25 + M7.R1 structural refactor — all scopes produce no-graduate verdicts. M7.R1 extracted M7 logic into `m7/` package. M7.A.5.25 corrects broken low-lag accounting: events_detected_low_lag was 0 due to using final-lag (block_lag) instead of detection-time-lag (event_detected_at_block - event_block). With fix: 100% same-block detection confirmed. Added PRICING_ANOMALY reject (21 reasons). Added hidden latency telemetry: registry_preload ~372ms, oracle ~101ms. Scoring pipeline still produces stale results; viable_count=0. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.26 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.26 fixes coverage UnboundLocalError in zero-active-pools path + fresh April 2 verification: 100% same-block detection, registry_direct + local_pricing dominant, viable_count=0, best_net_bps_executable=null, PRICING_ANOMALY gate has gap, M4 ROUNDTRIP_NOT_PROFITABLE. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-02  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 8 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth. M7.B remains closed.
 
@@ -34,7 +34,7 @@ Market is not static — bounded-scope verdicts do not prove absence of edge on 
 - `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, SizeSweepResult
 - `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`
 - `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--ws-live`, `--intent-scout`
-- Tests: 152 in `test_triangular_*.py` (3 files), 368 in `test_orderflow_*.py` (8 files + conftest.py)
+- Tests: 152 in `test_triangular_*.py` (3 files), 369 in `test_orderflow_*.py` (8 files + conftest.py)
 
 ---
 
@@ -254,16 +254,9 @@ CI: 3310 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 **Changes**: `artifacts.py` + `mode_ws_live.py`: `_detection_lag(r)` helper, all low-lag metrics use detection-time lag. `constants.py`: +REJECT_PRICING_ANOMALY (21 total). `scoring_parallel.py`: PRICING_ANOMALY gate (`abs(net_bps) > 10000`) + hidden latency telemetry (`admission_ms`, `oracle_ms`, `registry_preload_ms`). Still 66 fields, 8 blocker tags, 12 unscored.
 
-**Evidence** (3 runs, all Arbitrum One ws-live):
-- 300b: 21 events, 21/21 scored, **events_detected_low_lag=21 (was 0)**, **same_block_count=21 (was 0)**. best_net=+14.05 bps. Rejects: GAS_EXCEEDS_GROSS:19, STALE_POSITIVE:2. PRICING_ANOMALY:0. Blocker tags: LOW_LAG_REMOTE_QUOTER_LATENCY + SUBGRAPH_API_KEY_REQUIRED (LOW_LAG_NONE_THIS_WINDOW no longer fires).
-- 300b_b: 30 events, 30/30 scored, **events_detected_low_lag=30 (was 0)**. best_net=+66.62 bps. positive_low_lag=4. PRICING_ANOMALY:0.
-- 1000b: 100 events, 100/100 scored, **events_detected_low_lag=100 (was 0)**. best_net=+66.62 bps. positive_low_lag=19. **PRICING_ANOMALY:4** (all SOL-paired, abs(net_bps)>10000, size_valid=false). Rejects: GAS_EXCEEDS_GROSS:77, STALE_POSITIVE:19, PRICING_ANOMALY:4.
+**Evidence** (3 runs, Arbitrum One ws-live): 21/30/100 events, all 100% `events_detected_low_lag` (was 0). best_net=+14.05/+66.62/+66.62 bps. PRICING_ANOMALY catches 4/100 (SOL thin-liquidity, abs(net_bps)>10000). Hidden latency: registry_preload ~372ms, oracle ~101ms. All positives STALE_POSITIVE; viable_count=0.
 
-**Hidden latency** (100-event): registry_preload mean=372ms (dominant), oracle mean=101ms, admission=0ms. Combined ~470ms pre-scoring.
-
-**Key findings**: M7.A.5.24 "event arrival latency" diagnosis was WRONG — 100% of events are same-block-detected (detection-time fix: `same_block_count` N/N). PRICING_ANOMALY catches 4/100 (SOL thin-liquidity). Registry preload ~372ms mean is dominant hidden latency; combined pre-scoring ~470ms pushes events stale DURING scoring. viable_count=0 (all positives STALE_POSITIVE). Discovery is solved (`registry_direct=100%`).
-
-CI: 3317 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+**Key findings**: M7.A.5.24 "event arrival latency" was WRONG — 100% same-block detection confirmed. PRICING_ANOMALY active. Registry_preload dominant hidden latency (~470ms pre-scoring). Discovery solved (`registry_direct=100%`). CI: 3317 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 
@@ -287,7 +280,13 @@ CI: 3180 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 ## M7.T1: Test Suite Consolidation (COMPLETED)
 
-Structural-only branch (no market progress). Consolidated 14 session-specific `test_orderflow_*.py` files (9494 lines, ~581 tests) into 8 stable layer-based suites + shared `conftest.py`. Removed 213 duplicate assertions (field-count, constant-count). Post-consolidation: 368 unique orderflow tests in 8 files. Total suite: 3104 passed, 6 skipped. Policy: new test files only for new stable contract, adapter, reject, safety gate, or bug regression.
+Structural-only branch (no market progress). Consolidated 14 session-specific `test_orderflow_*.py` files (9494 lines, ~581 tests) into 8 stable layer-based suites + shared `conftest.py`. Removed 213 duplicate assertions. Post-consolidation: 368 unique orderflow tests in 8 files. Total suite: 3104 passed, 6 skipped.
+
+---
+
+## M7.A.5.26: Fresh April 2 Verification + Coverage Bug Fix (CORRECTIVE)
+
+Fixed `UnboundLocalError` in `scoring_parallel.py`: zero-active-pools fast reject referenced `coverage` before assignment (`cov=coverage` → `cov=None`). +1 regression test. Fresh verification (user-run April 2): 300b (30 events, best_net=+47322 bps [PRICING_ANOMALY outlier]), 1000b (81 events, best_net=+408 bps, PRICING_ANOMALY:1). 100% same-block detection, near-100% registry_direct, viable_count=0, best_net_bps_executable=null. M5 gate PASS (signals=31, best_net_pnl=-28.77 bps, ROUNDTRIP_NOT_PROFITABLE). PRICING_ANOMALY gate has gap (47322 outlier not caught). Next: execution-lane hardening, not more discovery. CI: 3105 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 
