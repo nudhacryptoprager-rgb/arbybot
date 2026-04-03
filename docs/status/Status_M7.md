@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.34 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.34 removes parallel fallback from hot lane, adds PRICING_ANOMALY exclusion, 3 execution-readiness stage timings (calldata, sign_or_bundle_prep, tx_build). Hot lane cleanly separated from cold: ~0ms skip vs ~1330ms pipeline. 3179 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
-**Updated**: 2026-04-02  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing. M7.B remains closed.
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.36 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.36 adds per-stage hard budget abort in score_backrun_fast (4 individual stage aborts: registry≤25ms, pool_state≤50ms, local_math≤10ms, profit_guard≤40ms), zero-RPC hot path constants (resolve=0, oracle=0, enrichment=0, registry_preload=0), p50/p90 latency tracking in hot artifact, strengthened promoted watchlist (PROMOTED_MIN_COLD_APPEARANCES=2, PROMOTED_MIN_NET_BPS=-50, anomaly hard exclude). 3200 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Updated**: 2026-04-04  
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix. M7.B remains closed.
 
 ---
 
@@ -233,6 +233,20 @@ CI: 3172 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 **Online evidence**: Hot loop 30 iterations (events_count=2-4, profit_guard_passed=0, viable=0) — events not in watchlist correctly skipped via hot_skip. Cold loop 3 iterations (events=22, scored=21, positive_clean=2, viable=0, best_clean=46.20 bps, latency_mean=1331ms). Cold confirms resolve_ms=643, registry_preload_ms=484 — exactly the bottleneck hot lane now bypasses entirely.
 
 CI: 3179 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.35: Cold/Hot Artifact Isolation + Promoted Watchlist + Stale KPI Fix
+
+**Hypothesis**: M7.A.5.35 = first profit_guard-passed hot candidate on a promoted watchlist under 250ms budget during a true 1h nonstop runtime.
+
+**Critical bug fixed**: `run_ws_live()` unconditionally called `_write_rolling_m7()` at function end, so hot lane overwrote `m7_orderflow_latest.json` with `hot_skip` results — cold rolling artifact appeared corrupted (all events `hot_skip`, `lane=None`). Fix: `_write_rolling_m7()` only runs when `external_registry is None` (cold lane). Hot lane writes its own `m7_hot_latest.json` via outer loop.
+
+**Changes**: (1) `mode_ws_live.py`: conditional rolling write — only cold lane writes `m7_orderflow_latest.json` internally; hot lane writes only via `_write_hot_artifact()`. (2) `m7a_orderflow_loop.py`: promoted watchlist system — `_promote_pairs_from_cold()` analyzes cold results for pairs with `size_valid_for_token=true`, `reject_reason != PRICING_ANOMALY`, and `events_with_registry > 0`; promoted pairs prewarm hot registry. (3) `artifacts.py`: added `stale_positive_count_clean` — counts stale positives that are also `size_valid_for_token=true` and not PRICING_ANOMALY; fixes KPI inconsistency (stale_pos=6 but best_stale_clean=-60 was logically incoherent). (4) `constants.py`: `PROMOTED_WATCHLIST_MIN_EVENTS=2`, `PROMOTED_WATCHLIST_MAX_PAIRS=10`. (5) +7 tests in 3 classes.
+
+**Online evidence**: 1h nonstop runtime (3/4 processes alive — m4_scan restarts expected). Fresh cold: 28 events, 28 `registry_direct`, `stale_pos=6`, `stale_pos_clean=0`, `GAS_EXCEEDS_GROSS=22`, `STALE_POSITIVE=6`, `mid_abort=28`. No `hot_skip` contamination. Hot: `events=1`, `viable=0`, `profit_guard_passed=0`, promoted watchlist seed_only (no cold→hot promotion yet in 1st iteration).
+
+CI: 3186 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

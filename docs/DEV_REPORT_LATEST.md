@@ -2,94 +2,102 @@
 
 ## 0) Meta
 timestamp_utc: 2026-04-02T09:03:41Z
-run_id: m7a_534_session
-mode: ONLINE (code changes + unit tests + CI pipeline + online hot/cold runs)
+run_id: m7a_536_session
+mode: OFFLINE (code changes + unit tests + CI pipeline)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, NORMAL)
 code_identity:
   primary: ts:2026-04-02T09:03:41.464858Z
   dirty: true
-  desc: M7.A.5.34 — hot-lane no-fallback, PRICING_ANOMALY exclusion, execution-readiness timing
+  desc: M7.A.5.36 — per-stage hard budget abort, p50/p90 tracking, strengthened promotion
 rolling_run_dir_name: ci_m5_gate_arbitrum_one_20260402_110313_968343
 rolling_run_timestamp: 2026-04-02T09:03:41.464858Z
 
 ## Session Completion
-session_goal: M7.A.5.34 — first profit_guard-passed hot candidate on a tiny prewarmed watchlist under 250ms budget
-goal_status: BLOCKED (hot lane architecture correct — events not in watchlist correctly skipped via hot_skip ~0ms — but no events matched HOT_WATCHLIST_PAIRS during 30-iteration online run, so profit_guard_passed_count remains 0)
+session_goal: M7.A.5.36 — hot path p50 ≤ 250ms on promoted watchlist before seeking first profit_guard pass
+goal_status: PARTIAL (per-stage hard budget abort implemented in score_backrun_fast, p50/p90 tracking added to hot artifact, promoted watchlist gates strengthened — pending 1h nonstop runtime for empirical verification)
 close_allowed: true
-remaining_blockers: (1) HOT_WATCHLIST_PAIRS (3 pairs) did not match any mempool events during 30-iteration hot run — need either longer run window or expanded watchlist; (2) Cold lane resolve_ms=643ms dominates latency — needs caching or parallel resolve
-evidence_session_run_dirs: [tests/unit (3179 passed, 6 skipped), scripts/ci_full_pipeline.py --mode ci (ALL REQUIRED GATES PASSED), scripts/check_repo_safety.py (PASS 0 warnings), online hot 30 iterations, online cold 3 iterations, dashboard /api/hot + /api/rolling verified]
-primary_blocker_of_session: (1) Hot lane fell back to ~1330ms parallel pipeline for non-watchlist events; (2) PRICING_ANOMALY contaminated hot candidates; (3) No execution-readiness timing breakdown; (4) DEV_REPORT blocker-tag count drift (8 vs 9)
-blocker_status_before: ACTIVE (hot lane fell back to slow parallel pipeline; PRICING_ANOMALY not excluded; only 5 stage timing keys; blocker-tag count wrong)
-blocker_status_after: RESOLVED (hot lane creates hot_skip ~0ms for non-registry events; PRICING_ANOMALY hard-excluded; 7 stage timing keys; blocker-tag count fixed to 9; 3179/3179 tests pass; online hot/cold runs completed)
+remaining_blockers: (1) Need 1h nonstop runtime to measure actual p50/p90 on promoted watchlist; (2) profit_guard_passed_count still expected 0 until promoted watchlist populates from cold iterations
+evidence_session_run_dirs: [tests/unit (3200 passed, 6 skipped), scripts/ci_full_pipeline.py --mode ci (ALL REQUIRED GATES PASSED), scripts/check_repo_safety.py (PASS 0 warnings)]
+primary_blocker_of_session: Hot path has no per-stage abort (only total 250ms); promoted watchlist too loose (MIN_COLD_APPEARANCES=1, no net_bps gate); no p50/p90 tracking in hot artifact
+blocker_status_before: ACTIVE (score_backrun_fast had total abort only; promotion rules allowed single-appearance garbage pairs; hot artifact had no percentile latency metrics)
+blocker_status_after: RESOLVED (4 per-stage hard aborts added: registry≤25ms, pool_state≤50ms, local_math≤10ms, profit_guard≤40ms; PROMOTED_MIN_COLD_APPEARANCES=2; PROMOTED_MIN_NET_BPS=-50; anomaly hard exclude; p50/p90 in hot artifact; 3200 tests pass; all CI gates green)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.A.5.34 — hot-lane no-fallback + PRICING_ANOMALY exclusion + execution-readiness timing
+goal (Roadmap): M7.A.5.36 — per-stage hard budget abort + p50/p90 tracking + strengthened promotion rules
 change_summary:
-  - m7/orderflow/mode_ws_live.py (MODIFIED): Hot mode no longer falls back to score_backrun_live_parallel(); creates lightweight BackrunResult(scoring_path="hot_skip", reject_reason="REJECT_NOT_IN_HOT_REGISTRY") for non-registry events (~0ms vs ~1330ms); cold lane moved to else branch; added artifact["_raw_results"] for downstream BackrunResult access
-  - m7/orderflow/scoring_parallel.py (MODIFIED): Added PRICING_ANOMALY hard-exclude (abs(net_bps) > 10000 → REJECT_PRICING_ANOMALY, route_viable=False); profit guard gated by route_viable; Stage 5 split into 3 sub-stages: tx_build_ms, calldata_ms, sign_or_bundle_prep_ms (7 total timing keys)
-  - scripts/m7a_orderflow_loop.py (MODIFIED): PRICING_ANOMALY exclusion in profit guard + hot headline selection; removed redundant second fast-path re-scoring (now extracts from _raw_results); updated stage_keys to 7
-  - m7/shared/constants.py (MODIFIED): Added HOT_BUDGET_CALLDATA_MS=20, HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS=30
-  - tests/unit/test_orderflow_artifacts.py (MODIFIED): Added 7 tests in 4 classes for hot_skip, PRICING_ANOMALY exclusion, 7 timing keys, raw_results pipeline
-  - docs/status/Status_M7.md (MODIFIED): Added M7.A.5.34 section, updated header (3179 tests, 9 blocker tags)
-  - docs/DEV_REPORT_LATEST.md (this file, rewritten for M7.A.5.34)
+  - m7/shared/constants.py (MODIFIED): Added 4 zero-budget constants for excluded stages (HOT_BUDGET_RESOLVE_MS=0, HOT_BUDGET_ORACLE_MS=0, HOT_BUDGET_ENRICHMENT_MS=0, HOT_BUDGET_REGISTRY_PRELOAD_MS=0). Raised HOT_BUDGET_PROFIT_GUARD_MS from 10→40ms. Added PROMOTED_MIN_NET_BPS=-50.0. Raised PROMOTED_MIN_COLD_APPEARANCES from 1→2. Updated section headers to M7.A.5.36.
+  - m7/orderflow/scoring_parallel.py (MODIFIED): Added per-stage hard budget abort after each of 4 measured stages (registry_lookup, pool_state, local_math, profit_guard). Each stage checks against its budget constant and returns None if exceeded. Updated import to bring in per-stage constants.
+  - scripts/m7a_orderflow_loop.py (MODIFIED): Added p50_latency_ms and p90_latency_ms to hot artifact fast_path section. Strengthened _promote_pairs_from_cold: anomaly is now hard exclude (regardless of size_valid); added PROMOTED_MIN_NET_BPS filter; updated docstring for M7.A.5.36 rules.
+  - tests/unit/test_orderflow_artifacts.py (MODIFIED): Fixed 3 existing promotion tests for PROMOTED_MIN_COLD_APPEARANCES=2. Added 4 new test classes (14 tests): TestM7A536PerStageBudgetConstants, TestM7A536PerStageAbort, TestM7A536PromotionRules, TestM7A536P50P90Tracking.
+  - docs/status/Status_M7.md (MODIFIED): Updated header for M7.A.5.36 scope, 3200 tests.
+  - docs/DEV_REPORT_LATEST.md (this file, rewritten for M7.A.5.36)
 touched_files:
-  - m7/orderflow/mode_ws_live.py (MODIFIED)
+  - m7/shared/constants.py (MODIFIED)
   - m7/orderflow/scoring_parallel.py (MODIFIED)
   - scripts/m7a_orderflow_loop.py (MODIFIED)
-  - m7/shared/constants.py (MODIFIED)
   - tests/unit/test_orderflow_artifacts.py (MODIFIED)
   - docs/status/Status_M7.md (MODIFIED)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3179 passed, 6 skipped)
+py -3.11 -m pytest tests/unit -q: PASS (3200 passed, 6 skipped)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (pytest OK, docs_consistency OK, status_m4_check OK, m5_0_offline OK, m4_smoke OK, m4_profit OK — ALL REQUIRED GATES PASSED)
 py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit: PASS (0 errors, 0 warnings)
-python scripts/m7a_orderflow_loop.py --lane hot --iterations 30 --pause 1: COMPLETED (30 iterations, events_count=2, viable=0, profit_guard_passed=0)
-python scripts/m7a_orderflow_loop.py --lane cold --iterations 3 --pause 5: COMPLETED (3 iterations, events=22, scored=21, viable=0, best_clean=46.20bps, positive_clean=2)
-python scripts/m7a_orderflow_loop.py --dashboard --port 8099: RUNNING (/api/hot + /api/rolling verified)
 
 ## 3) Artifacts Attached
 
-Online hot artifact (final iteration 30): events_count=2, viable_count=0, profit_guard_passed_count=0, has_positive=false — events correctly skipped via hot_skip (not in registry)
-Online cold artifact (final iteration 3): events=22, scored=21, viable=0, best_clean_net_bps=46.20, positive_clean=2, stale_positive=2, latency_mean=1381ms
-Cold latency breakdown: resolve_ms_mean=643, registry_preload_ms_mean=484, oracle_ms_mean=111, total_mean=1331
-Rolling truth unchanged: run_timestamp=2026-04-02T09:03:41.464858Z
+No new runtime artifacts — session is OFFLINE code changes only. Rolling truth unchanged: run_timestamp=2026-04-02T09:03:41.464858Z.
 
-## 4) Key Results — M7.A.5.34
+## 4) Key Results — M7.A.5.36
 
-### Architectural Change: Hot Lane No Parallel Fallback
+### Per-Stage Hard Budget Abort in score_backrun_fast
 
-Hot mode in mode_ws_live.py no longer calls score_backrun_live_parallel() when score_backrun_fast() returns None. Instead creates a lightweight BackrunResult with scoring_path="hot_skip" and reject_reason="REJECT_NOT_IN_HOT_REGISTRY" (~0ms). Cold lane handles full pipeline in separate else branch. This eliminates the ~1330ms parallel fallback that defeated hot lane purpose.
+Previously, `score_backrun_fast()` only checked total pipeline time against `HOT_BUDGET_TOTAL_MS` (250ms). Individual stages could silently exceed their nominal budgets without early termination. Now each of the 4 measured stages has a hard abort:
 
-### PRICING_ANOMALY Hard-Exclude
+| Stage | Budget (ms) | Abort behavior |
+|-------|------------|----------------|
+| registry_lookup | 25 | return None |
+| pool_state | 50 | return None |
+| local_math | 10 | return None |
+| profit_guard | 40 | return None |
 
-score_backrun_fast() now checks abs(net_bps) > 10000 → sets REJECT_PRICING_ANOMALY, route_viable=False. Profit guard only runs if route_viable=True. Downstream: m7a_orderflow_loop skips PRICING_ANOMALY results in profit guard evaluation and hot headline selection.
+Total budget unchanged at 250ms. The fast path still has zero RPC calls — these budgets enforce computational time only.
 
-### Execution-Readiness Timing (7 Stage Keys)
+### Zero-Budget Constants for Excluded Stages
 
-Stage 5 split into 3 sub-stages: tx_build_ms, calldata_ms, sign_or_bundle_prep_ms. Total pipeline_stage_latency_ms now has 7 keys (was 5). New budget constants: HOT_BUDGET_CALLDATA_MS=20, HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS=30.
+Added explicit zero-budget constants documenting that resolve, oracle, enrichment, and registry_preload are NEVER part of the hot path:
+- `HOT_BUDGET_RESOLVE_MS = 0`
+- `HOT_BUDGET_ORACLE_MS = 0`
+- `HOT_BUDGET_ENRICHMENT_MS = 0`
+- `HOT_BUDGET_REGISTRY_PRELOAD_MS = 0`
 
-### Redundant Re-Scoring Removed
+These are documentation constants — they enforce the architectural contract that the hot fast path does zero RPC.
 
-m7a_orderflow_loop.py no longer calls score_backrun_fast() a second time for hot artifact writing. Instead extracts fast-path results from artifact["_raw_results"] by filtering scoring_path=="registry_fast".
+### p50/p90 Latency Tracking in Hot Artifact
 
-### Online Evidence
+The hot artifact's `fast_path` section now includes `p50_latency_ms` and `p90_latency_ms` computed from sorted fast-path latencies. This provides the key observability needed to verify the 250ms budget target.
 
-Hot 30 iterations: events not in HOT_WATCHLIST_PAIRS correctly skipped via hot_skip (~0ms per event). No watchlist-matching events observed during window — profit_guard_passed remains 0.
+### Strengthened Promoted Watchlist Rules (M7.A.5.36)
 
-Cold 3 iterations: 21/21 scored via registry_direct. Latency dominated by resolve_ms (643ms, 48%) and registry_preload (484ms, 36%). Best candidate 46.20 bps net but viable=0 (gas/slippage exceeds spread).
+| Rule | Before (M7.A.5.35) | After (M7.A.5.36) |
+|------|--------|--------|
+| Min cold appearances | 1 | 2 |
+| Anomaly handling | Excluded only if `has_anomaly AND NOT size_valid` | Hard exclude always |
+| Min net_bps | None | -50.0 (PROMOTED_MIN_NET_BPS) |
+| Size valid required | Yes | Yes |
+| Active pools required | Yes | Yes |
 
 ## 5) Strategic Reading
 
-1. **Hot/cold lane separation is now clean**: hot lane never touches parallel pipeline; latency for non-registry events is ~0ms (hot_skip). First genuine hot-path measurement requires watchlist-matching mempool events.
-2. **Cold lane bottleneck identified**: resolve_ms (643ms) + registry_preload (484ms) = 84% of 1331ms total. These are the targets for M7.A.5.35 optimization.
-3. **PRICING_ANOMALY exclusion protects metrics**: anomalous spreads (>100x expected) can no longer contaminate profit guard counts or hot headlines.
-4. **Execution-readiness timing framework ready**: 7-stage decomposition enables budget monitoring for tx_build + calldata + sign_or_bundle_prep as these move from placeholder to implementation.
+1. **Hot fast path architecture is correct**: `score_backrun_fast()` has zero RPC calls. Expected latency is ~20-50ms. The cold pipeline numbers (resolve=791ms, oracle=105ms) are irrelevant to the hot path.
+2. **Per-stage enforcement now catches runaway stages**: Any individual stage exceeding its budget aborts immediately instead of accumulating toward the 250ms total. This prevents a slow registry lookup from wasting time on subsequent stages.
+3. **Promotion rules are tighter**: Requiring 2 cold appearances prevents noisy single-observation promotions. The net_bps floor (-50) rejects garbage pairs that would waste hot-lane resources. Anomaly hard-exclude prevents PRICING_ANOMALY pairs from polluting the hot watchlist.
+4. **p50/p90 tracking enables empirical verification**: Once a 1h nonstop runtime produces events matching the promoted watchlist, the p50/p90 values will confirm whether the 250ms target is achievable.
+5. **Next step**: Run 1h nonstop runtime to get fresh hot artifact with p50/p90 measurements. The architectural hypothesis is that hot p50 will be well under 250ms (~20-50ms).
 
 ## 5.1) Contract Checks
 status/reasons consistency: OK (ALL_REJECT_REASONS: 21, UNSCORED_REJECTS: 12, BackrunResult: 67 fields, ALL_BLOCKER_TAGS: 9)
@@ -98,16 +106,15 @@ v2.x provenance contract: OK (run_timestamp primary, code_sha=null)
 runtime artifacts not committed: OK (data/runs/** and data/tmp/** not in git)
 module size constraint: OK (scoring_parallel.py ≤ 1300 lines)
 test file size constraint: OK (test_orderflow_artifacts.py — approaching limit)
-Status_M7.md size constraint: OK (241 lines ≤ 300)
+Status_M7.md size constraint: OK
 
 ## 5.2) Blockers / Risks
-- PRIMARY: HOT_WATCHLIST_PAIRS (3 pairs) did not match any mempool events during 30-iteration hot run — need longer window or expanded watchlist to prove first profit_guard pass
-- PRIMARY: Cold lane resolve_ms=643ms (48% of total) — needs caching/parallel resolve for latency target
+- PRIMARY: Need 1h nonstop runtime for empirical p50/p90 measurement — pending operator execution
+- PRIMARY: profit_guard_passed_count likely still 0 until promoted watchlist populates from 2+ cold iterations
 - SECONDARY: test_orderflow_artifacts.py approaching size limit — may need split
-- RESOLVED (this session): Hot lane parallel fallback removed (~1330ms → ~0ms for non-registry events)
-- RESOLVED (this session): PRICING_ANOMALY contamination (hard-excluded from fast path + profit guard + headlines)
-- RESOLVED (this session): Only 5 stage timing keys (now 7 with calldata_ms + sign_or_bundle_prep_ms)
-- RESOLVED (this session): Redundant second score_backrun_fast() call removed (extracts from _raw_results)
-- RESOLVED (this session): DEV_REPORT blocker-tag count drift (8→9 corrected)
+- RESOLVED (this session): No per-stage hard abort in score_backrun_fast (4 stage aborts added)
+- RESOLVED (this session): Promoted watchlist too loose — single-appearance, no net_bps gate (PROMOTED_MIN_COLD_APPEARANCES=2, PROMOTED_MIN_NET_BPS=-50)
+- RESOLVED (this session): PRICING_ANOMALY pairs could slip through promotion if size_valid=True (anomaly now hard exclude)
+- RESOLVED (this session): No p50/p90 latency tracking in hot artifact (p50_latency_ms, p90_latency_ms added)
 - UNCHANGED: M4 ROUNDTRIP_NOT_PROFITABLE; SUBGRAPH_API_KEY_REQUIRED
-- NEXT: (a) Longer hot run or expand watchlist to catch matching events, (b) Cache/parallel resolve_ms to reduce cold lane latency, (c) First profit_guard_passed_count > 0 is M7.A.5.35 target
+- NEXT: (a) 1h nonstop runtime to measure p50/p90, (b) First profit_guard_passed > 0, (c) Expand seed watchlist if promotion insufficient

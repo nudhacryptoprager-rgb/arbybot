@@ -221,23 +221,45 @@ TIMEBOOST_MIN_PIPELINE_MS = 50  # Minimum scoring time for executable decision
 TIMEBOOST_ELIGIBLE_BUDGET_MS = TIMEBOOST_BLOCK_TIME_MS - TIMEBOOST_EXPRESS_ADVANTAGE_MS
 
 # ---------------------------------------------------------------------------
-# M7.A.5.32: Hot-path stage budgets (ms) — target total ≤250ms
+# M7.A.5.36: Hot-path stage budgets (ms) — target p50 ≤ 250ms
 # ---------------------------------------------------------------------------
-# These are hard stage budgets for the fast scoring path.
+# Hard per-stage budgets for the fast scoring path.
 # The fast path assumes pre-warmed registry (zero discovery cost).
+# Each stage is enforced individually — exceeding ANY stage aborts.
+# resolve_ms, oracle_ms, enrichment_ms, registry_preload_ms are NOT in hot path.
+HOT_BUDGET_RESOLVE_MS = 0             # MUST be 0: pre-resolved in prewarm
+HOT_BUDGET_ORACLE_MS = 0              # MUST be 0: no oracle in hot lane
+HOT_BUDGET_ENRICHMENT_MS = 0          # MUST be 0: no enrichment in hot lane
+HOT_BUDGET_REGISTRY_PRELOAD_MS = 0    # MUST be 0: pre-warmed between iterations
 HOT_BUDGET_REGISTRY_LOOKUP_MS = 25    # O(1) cache lookup
-HOT_BUDGET_POOL_STATE_READ_MS = 50    # Single RPC: getReserves / slot0
+HOT_BUDGET_POOL_STATE_READ_MS = 50    # Cached entry to_pool_state()
 HOT_BUDGET_LOCAL_MATH_MS = 10         # V3/V2 swap math
-HOT_BUDGET_PROFIT_GUARD_MS = 10       # Guard check
+HOT_BUDGET_PROFIT_GUARD_MS = 40       # Guard feasibility check
 HOT_BUDGET_TX_BUILD_MS = 50           # Transaction build/sign prep (future)
 HOT_BUDGET_CALLDATA_MS = 20           # ABI calldata encoding (future)
 HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS = 30  # Signing or bundle preparation (future)
 HOT_BUDGET_TOTAL_MS = 250             # Hard abort if exceeded
 
 # Default watchlist pairs for hot lane fast-path (high-frequency Arbitrum pairs)
+# M7.A.5.35: These serve as SEED pairs for the promoted watchlist.
+# The promoted watchlist is built dynamically from cold lane results.
 HOT_WATCHLIST_PAIRS = [
     ("WETH", "USDC"),
     ("WETH", "USDT"),
     ("WETH", "ARB"),
 ]
+
+# ---------------------------------------------------------------------------
+# M7.A.5.36: Promoted watchlist rules — cold-to-hot pair promotion
+# ---------------------------------------------------------------------------
+# A pair is promoted from cold lane to hot watchlist when it meets ALL rules:
+#   1. size_valid_for_token = True in at least one cold scored result
+#   2. reject_reason != PRICING_ANOMALY
+#   3. registry_pools_active > 0
+#   4. Appeared in at least PROMOTED_MIN_COLD_APPEARANCES cold iterations
+#   5. NOT stale with contradictory KPIs (stale + negative best_net)
+#   6. (M7.A.5.36) best_net_bps > PROMOTED_MIN_NET_BPS
+PROMOTED_MIN_COLD_APPEARANCES = 2  # minimum cold iterations to qualify
+PROMOTED_MAX_PAIRS = 10            # cap promoted watchlist size
+PROMOTED_MIN_NET_BPS = -50.0       # minimum best_net_bps to qualify (not total garbage)
 

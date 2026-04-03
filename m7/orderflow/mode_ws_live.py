@@ -1020,7 +1020,12 @@ def run_ws_live(args, *, external_registry=None) -> dict:
         )
 
     # M7.A.5.28: Write canonical rolling M7 artifact (dashboard-facing, no bulky results)
-    _write_rolling_m7(artifact)
+    # M7.A.5.35: Only cold lane writes rolling artifact here.  When hot mode
+    # is active (external_registry provided), the outer loop writes a separate
+    # hot artifact via _write_hot_artifact() — we must NOT overwrite the cold
+    # rolling artifact with hot_skip results.
+    if external_registry is None:
+        _write_rolling_m7(artifact)
 
     return artifact
 

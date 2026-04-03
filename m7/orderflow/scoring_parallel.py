@@ -67,7 +67,13 @@ from m7.orderflow.coverage import (
 from m7.orderflow.pricing import check_oracle_sanity
 from m7.orderflow.v3_math import attempt_local_pricing
 
-from m7.shared.constants import HOT_BUDGET_TOTAL_MS
+from m7.shared.constants import (
+    HOT_BUDGET_TOTAL_MS,
+    HOT_BUDGET_REGISTRY_LOOKUP_MS,
+    HOT_BUDGET_POOL_STATE_READ_MS,
+    HOT_BUDGET_LOCAL_MATH_MS,
+    HOT_BUDGET_PROFIT_GUARD_MS,
+)
 
 logger = logging.getLogger("m7.orderflow.scoring_parallel")
 
@@ -1194,7 +1200,8 @@ def score_backrun_live_parallel(
 
 
 # ---------------------------------------------------------------------------
-# M7.A.5.32: Fast scoring path — preloaded registry, zero discovery
+# M7.A.5.36: Fast scoring path — preloaded registry, zero discovery
+# Per-stage hard budget abort: any stage exceeding its budget → return None.
 # ---------------------------------------------------------------------------
 
 def score_backrun_fast(
@@ -1248,6 +1255,10 @@ def score_backrun_fast(
         return None
     _registry_lookup_ms = round((time.monotonic() - _reg_start) * 1000, 2)
 
+    # M7.A.5.36: per-stage hard abort
+    if _registry_lookup_ms > HOT_BUDGET_REGISTRY_LOOKUP_MS:
+        return None
+
     # ── Stage 2: Build candidate pools + state from cached entries ─────
     _state_start = time.monotonic()
     candidate_pools = []
@@ -1262,6 +1273,10 @@ def score_backrun_fast(
     if not local_sim_states:
         return None
     _pool_state_ms = round((time.monotonic() - _state_start) * 1000, 2)
+
+    # M7.A.5.36: per-stage hard abort
+    if _pool_state_ms > HOT_BUDGET_POOL_STATE_READ_MS:
+        return None
 
     # Backrun size from event — decimal-aware bounded size
     _in_sym = event.token_in.upper() if event.token_in else ""
@@ -1289,6 +1304,10 @@ def score_backrun_fast(
         registry_entries=active_entries,
     )
     _local_math_ms = round((time.monotonic() - _math_start) * 1000, 2)
+
+    # M7.A.5.36: per-stage hard abort
+    if _local_math_ms > HOT_BUDGET_LOCAL_MATH_MS:
+        return None
 
     pipeline_ms = round((time.monotonic() - pipeline_start) * 1000, 2)
 
@@ -1335,6 +1354,10 @@ def score_backrun_fast(
         )
         _profit_guard_passed = _guard.passed
     _profit_guard_ms = round((time.monotonic() - _guard_start) * 1000, 2)
+
+    # M7.A.5.36: per-stage hard abort
+    if _profit_guard_ms > HOT_BUDGET_PROFIT_GUARD_MS:
+        return None
 
     # ── Stage 5: Execution-readiness timing (3 sub-stages) ────────────
     # M7.A.5.34: Split into tx_build / calldata / sign_or_bundle_prep

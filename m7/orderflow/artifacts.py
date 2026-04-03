@@ -427,6 +427,10 @@ def build_replay_summary(
         1 for r in results
         if r.best_backrun_net_bps > 0 and _is_stale(r)
     )
+    # M7.A.5.35: stale_positive_count_clean uses the same filter as
+    # best_net_bps_stale_clean (clean + size_valid) to avoid the contract
+    # mismatch where stale_positive_count > 0 but stale_clean best is negative.
+    # This is computed later after _stale_scored_clean_valid is available.
     best_net_bps_any = round(max(scored_net_bps), 4) if scored_net_bps else None
     best_net_bps_executable = round(max(viable_net_bps), 4) if viable_net_bps else None
 
@@ -478,6 +482,10 @@ def build_replay_summary(
     best_net_bps_stale_clean = (
         round(max(_stale_scored_clean_valid_net), 4)
         if _stale_scored_clean_valid_net else None
+    )
+    # M7.A.5.35: stale_positive_count_clean — same filter as best_net_bps_stale_clean
+    stale_positive_count_clean = sum(
+        1 for v in _stale_scored_clean_valid_net if v > 0
     )
     # M7.A.5.13: Machine-readable stale/low-lag comparison block
     _TWO_LEG_BASELINE = -3.5062
@@ -864,6 +872,7 @@ def build_replay_summary(
         "positive_net_count_any": positive_net_count_any,
         "positive_net_count_low_lag": positive_net_count_low_lag,
         "stale_positive_count": stale_positive_count,
+        "stale_positive_count_clean": stale_positive_count_clean,
         "scored_results_count": len(scored_results),
         "size_valid_count": size_valid_count,
         "size_fallback_count": size_fallback_count,

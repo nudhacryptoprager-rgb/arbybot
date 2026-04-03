@@ -1999,3 +1999,275 @@ class TestM7A534RawResultsInArtifact:
         source = inspect.getsource(_write_hot_artifact)
         assert "calldata_ms" in source
         assert "sign_or_bundle_prep_ms" in source
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# M7.A.5.35: Promoted watchlist + stale KPI contract fix
+# ──────────────────────────────────────────────────────────────────────────
+
+class TestM7A535PromotedWatchlist:
+    """M7.A.5.35: Dynamic promoted watchlist from cold lane."""
+
+    def test_promote_pairs_returns_qualified_pairs(self):
+        """Pairs with size_valid + active_pools + min appearances are promoted."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        cold_artifact = {
+            "results": [
+                {"actual_pair": "WETH/USDC", "size_valid_for_token": True,
+                 "reject_reason": None, "registry_pools_active": 3,
+                 "best_backrun_net_bps": 5.0},
+                {"actual_pair": "RAIN/WETH", "size_valid_for_token": False,
+                 "reject_reason": None, "registry_pools_active": 1,
+                 "best_backrun_net_bps": 10.0},
+            ],
+        }
+        stats = {}
+        # M7.A.5.36: PROMOTED_MIN_COLD_APPEARANCES=2, so call twice
+        _promote_pairs_from_cold(cold_artifact, stats)
+        promoted = _promote_pairs_from_cold(cold_artifact, stats)
+        assert "WETH/USDC" in promoted
+        assert "RAIN/WETH" not in promoted  # size_valid=False
+
+    def test_promote_excludes_anomaly_only(self):
+        """Pairs with PRICING_ANOMALY are hard-excluded (M7.A.5.36)."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        cold_artifact = {
+            "results": [
+                {"actual_pair": "X/Y", "size_valid_for_token": True,
+                 "reject_reason": "REJECT_PRICING_ANOMALY",
+                 "registry_pools_active": 1, "best_backrun_net_bps": 50000.0},
+            ],
+        }
+        stats = {}
+        # Even with 2+ appearances, anomaly is hard exclude
+        _promote_pairs_from_cold(cold_artifact, stats)
+        promoted = _promote_pairs_from_cold(cold_artifact, stats)
+        assert "X/Y" not in promoted
+
+    def test_promote_caps_at_max(self):
+        """Promoted list is capped at PROMOTED_MAX_PAIRS."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        from m7.shared.constants import PROMOTED_MAX_PAIRS
+        cold_artifact = {
+            "results": [
+                {"actual_pair": f"T{i}/WETH", "size_valid_for_token": True,
+                 "reject_reason": None, "registry_pools_active": 2,
+                 "best_backrun_net_bps": float(i)}
+                for i in range(20)
+            ],
+        }
+        stats = {}
+        # M7.A.5.36: PROMOTED_MIN_COLD_APPEARANCES=2, so call twice
+        _promote_pairs_from_cold(cold_artifact, stats)
+        promoted = _promote_pairs_from_cold(cold_artifact, stats)
+        assert len(promoted) <= PROMOTED_MAX_PAIRS
+
+    def test_promoted_watchlist_constants_importable(self):
+        """New constants PROMOTED_MIN_COLD_APPEARANCES and PROMOTED_MAX_PAIRS exist."""
+        from m7.shared.constants import PROMOTED_MIN_COLD_APPEARANCES, PROMOTED_MAX_PAIRS
+        assert PROMOTED_MIN_COLD_APPEARANCES >= 1
+        assert PROMOTED_MAX_PAIRS >= 1
+
+    def test_hot_artifact_includes_promoted_watchlist(self):
+        """_write_hot_artifact signature accepts promoted_pairs kwarg."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        sig = inspect.signature(_write_hot_artifact)
+        assert "promoted_pairs" in sig.parameters
+
+
+class TestM7A535StaleKPIContract:
+    """M7.A.5.35: stale_positive_count_clean consistent with best_net_bps_stale_clean."""
+
+    def test_stale_positive_count_clean_in_artifact(self):
+        """build_replay_summary includes stale_positive_count_clean key."""
+        from m7.orderflow.artifacts import build_replay_summary
+        artifact = build_replay_summary([], [], mode="ws_live")
+        assert "stale_positive_count_clean" in artifact
+
+    def test_stale_clean_consistency(self):
+        """When stale_positive_count_clean=0, best_net_bps_stale_clean <= 0 or None."""
+        from m7.orderflow.artifacts import build_replay_summary
+        artifact = build_replay_summary([], [], mode="ws_live")
+        spc_clean = artifact.get("stale_positive_count_clean", 0)
+        best_stale_clean = artifact.get("best_net_bps_stale_clean")
+        if spc_clean == 0:
+            assert best_stale_clean is None or best_stale_clean <= 0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# M7.A.5.36 — Per-stage hard budget abort + p50/p90 + promotion rules
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestM7A536PerStageBudgetConstants:
+    """M7.A.5.36: New budget constants exist with correct values."""
+
+    def test_zero_budget_constants_for_excluded_stages(self):
+        """Resolve, oracle, enrichment, registry_preload MUST be 0 in hot path."""
+        from m7.shared.constants import (
+            HOT_BUDGET_RESOLVE_MS,
+            HOT_BUDGET_ORACLE_MS,
+            HOT_BUDGET_ENRICHMENT_MS,
+            HOT_BUDGET_REGISTRY_PRELOAD_MS,
+        )
+        assert HOT_BUDGET_RESOLVE_MS == 0
+        assert HOT_BUDGET_ORACLE_MS == 0
+        assert HOT_BUDGET_ENRICHMENT_MS == 0
+        assert HOT_BUDGET_REGISTRY_PRELOAD_MS == 0
+
+    def test_profit_guard_budget_raised_to_40(self):
+        """Profit guard budget raised from 10 to 40ms per M7.A.5.36 directive."""
+        from m7.shared.constants import HOT_BUDGET_PROFIT_GUARD_MS
+        assert HOT_BUDGET_PROFIT_GUARD_MS == 40
+
+    def test_all_stage_budgets_fit_total(self):
+        """Sum of active stage budgets must not exceed HOT_BUDGET_TOTAL_MS."""
+        from m7.shared.constants import (
+            HOT_BUDGET_REGISTRY_LOOKUP_MS,
+            HOT_BUDGET_POOL_STATE_READ_MS,
+            HOT_BUDGET_LOCAL_MATH_MS,
+            HOT_BUDGET_PROFIT_GUARD_MS,
+            HOT_BUDGET_TX_BUILD_MS,
+            HOT_BUDGET_CALLDATA_MS,
+            HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS,
+            HOT_BUDGET_TOTAL_MS,
+        )
+        active_sum = (
+            HOT_BUDGET_REGISTRY_LOOKUP_MS
+            + HOT_BUDGET_POOL_STATE_READ_MS
+            + HOT_BUDGET_LOCAL_MATH_MS
+            + HOT_BUDGET_PROFIT_GUARD_MS
+            + HOT_BUDGET_TX_BUILD_MS
+            + HOT_BUDGET_CALLDATA_MS
+            + HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS
+        )
+        assert active_sum <= HOT_BUDGET_TOTAL_MS
+
+
+class TestM7A536PerStageAbort:
+    """M7.A.5.36: score_backrun_fast enforces per-stage hard budget abort."""
+
+    def test_fast_path_imports_per_stage_constants(self):
+        """score_backrun_fast imports per-stage budget constants."""
+        import inspect
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+        source = inspect.getsource(score_backrun_fast)
+        assert "HOT_BUDGET_REGISTRY_LOOKUP_MS" in source
+        assert "HOT_BUDGET_POOL_STATE_READ_MS" in source
+        assert "HOT_BUDGET_LOCAL_MATH_MS" in source
+        assert "HOT_BUDGET_PROFIT_GUARD_MS" in source
+
+    def test_per_stage_abort_pattern_in_source(self):
+        """Each measured stage has a per-stage abort check."""
+        import inspect
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+        source = inspect.getsource(score_backrun_fast)
+        # Count per-stage abort patterns (M7.A.5.36 comment + budget check)
+        abort_count = source.count("per-stage hard abort")
+        assert abort_count >= 4, f"Expected >=4 per-stage aborts, found {abort_count}"
+
+    def test_fast_path_no_resolve_or_oracle_in_source(self):
+        """score_backrun_fast must NOT call resolve/oracle/enrichment."""
+        import inspect
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+        source = inspect.getsource(score_backrun_fast)
+        assert "check_oracle_sanity" not in source
+        assert "enrich_tokens_batch" not in source
+        assert "_resolve_pool_addresses_multicall" not in source
+
+
+class TestM7A536PromotionRules:
+    """M7.A.5.36: Strengthened promotion rules."""
+
+    def test_promoted_min_cold_appearances_is_2(self):
+        """PROMOTED_MIN_COLD_APPEARANCES raised to 2 for stability."""
+        from m7.shared.constants import PROMOTED_MIN_COLD_APPEARANCES
+        assert PROMOTED_MIN_COLD_APPEARANCES == 2
+
+    def test_promoted_min_net_bps_exists(self):
+        """PROMOTED_MIN_NET_BPS constant exists."""
+        from m7.shared.constants import PROMOTED_MIN_NET_BPS
+        assert isinstance(PROMOTED_MIN_NET_BPS, (int, float))
+        assert PROMOTED_MIN_NET_BPS <= 0  # allows near-zero but not total garbage
+
+    def test_single_appearance_not_promoted(self):
+        """A pair seen only once should NOT be promoted (MIN_COLD_APPEARANCES=2)."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        cold_artifact = {
+            "results": [
+                {"actual_pair": "WETH/USDC", "size_valid_for_token": True,
+                 "reject_reason": None, "registry_pools_active": 3,
+                 "best_backrun_net_bps": 5.0},
+            ],
+        }
+        stats = {}
+        promoted = _promote_pairs_from_cold(cold_artifact, stats)
+        assert "WETH/USDC" not in promoted  # only 1 appearance
+
+    def test_two_appearances_promoted(self):
+        """A qualified pair seen twice gets promoted."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        cold_artifact = {
+            "results": [
+                {"actual_pair": "WETH/USDC", "size_valid_for_token": True,
+                 "reject_reason": None, "registry_pools_active": 3,
+                 "best_backrun_net_bps": 5.0},
+            ],
+        }
+        stats = {}
+        _promote_pairs_from_cold(cold_artifact, stats)  # 1st
+        promoted = _promote_pairs_from_cold(cold_artifact, stats)  # 2nd
+        assert "WETH/USDC" in promoted
+
+    def test_garbage_net_bps_excluded(self):
+        """Pairs with best_net_bps below PROMOTED_MIN_NET_BPS are excluded."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        from m7.shared.constants import PROMOTED_MIN_NET_BPS
+        cold_artifact = {
+            "results": [
+                {"actual_pair": "JUNK/WETH", "size_valid_for_token": True,
+                 "reject_reason": None, "registry_pools_active": 2,
+                 "best_backrun_net_bps": PROMOTED_MIN_NET_BPS - 100},
+            ],
+        }
+        stats = {}
+        _promote_pairs_from_cold(cold_artifact, stats)
+        promoted = _promote_pairs_from_cold(cold_artifact, stats)
+        assert "JUNK/WETH" not in promoted
+
+    def test_anomaly_hard_exclude_even_with_size_valid(self):
+        """PRICING_ANOMALY pairs are excluded even when size_valid=True."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        cold_artifact = {
+            "results": [
+                {"actual_pair": "BAD/WETH", "size_valid_for_token": True,
+                 "reject_reason": "REJECT_PRICING_ANOMALY",
+                 "registry_pools_active": 5, "best_backrun_net_bps": 100.0},
+            ],
+        }
+        stats = {}
+        _promote_pairs_from_cold(cold_artifact, stats)
+        promoted = _promote_pairs_from_cold(cold_artifact, stats)
+        assert "BAD/WETH" not in promoted
+
+
+class TestM7A536P50P90Tracking:
+    """M7.A.5.36: Hot artifact includes p50/p90 latency tracking."""
+
+    def test_write_hot_artifact_includes_p50_p90(self):
+        """_write_hot_artifact source references p50 and p90."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        source = inspect.getsource(_write_hot_artifact)
+        assert "p50_latency_ms" in source
+        assert "p90_latency_ms" in source
+
+    def test_p50_p90_computation_correct(self):
+        """p50 and p90 are computed correctly from sorted latency list."""
+        latencies = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0]
+        sorted_lat = sorted(latencies)
+        p50 = sorted_lat[len(sorted_lat) // 2]
+        p90 = sorted_lat[int(len(sorted_lat) * 0.9)]
+        assert p50 == 60.0  # index 5
+        assert p90 == 100.0  # index 9

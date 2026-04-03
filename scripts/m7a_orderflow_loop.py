@@ -42,7 +42,12 @@ from core.logging import get_logger
 from m7.orderflow.mode_ws_live import run_ws_live, _write_rolling_m7
 from m7.orderflow.profit_guard import check_profit_guard
 from m7.orderflow.scoring_parallel import score_backrun_fast
-from m7.shared.constants import HOT_WATCHLIST_PAIRS
+from m7.shared.constants import (
+    HOT_WATCHLIST_PAIRS,
+    PROMOTED_MAX_PAIRS,
+    PROMOTED_MIN_COLD_APPEARANCES,
+    PROMOTED_MIN_NET_BPS,
+)
 
 logger = get_logger("m7.orderflow.loop")
 
@@ -135,6 +140,76 @@ def _prewarm_registry_from_pairs(
     return count
 
 
+def _promote_pairs_from_cold(cold_artifact: dict, accumulated_cold_stats: dict) -> list:
+    """Identify pairs to promote from cold lane results to hot watchlist.
+
+    M7.A.5.36: Promotion rules (all must hold):
+      1. size_valid_for_token=True in at least one scored result
+      2. reject_reason != PRICING_ANOMALY (no anomaly flag ever)
+      3. registry_pools_active > 0
+      4. Appeared in >= PROMOTED_MIN_COLD_APPEARANCES cold iterations
+      5. Not stale-only with negative best_net (contradictory KPI)
+      6. best_net_bps > PROMOTED_MIN_NET_BPS (not total garbage)
+
+    Returns list of (sym_a, sym_b) tuples, capped at PROMOTED_MAX_PAIRS.
+    """
+    results = cold_artifact.get("results", [])
+    for r in results:
+        pair = r.get("actual_pair") if isinstance(r, dict) else getattr(r, "actual_pair", None)
+        if not pair or "/" not in pair:
+            continue
+
+        sv = r.get("size_valid_for_token") if isinstance(r, dict) else getattr(r, "size_valid_for_token", None)
+        rr = r.get("reject_reason") if isinstance(r, dict) else getattr(r, "reject_reason", None)
+        rpa = r.get("registry_pools_active") if isinstance(r, dict) else getattr(r, "registry_pools_active", None)
+        net = r.get("best_backrun_net_bps") if isinstance(r, dict) else getattr(r, "best_backrun_net_bps", None)
+
+        if pair not in accumulated_cold_stats:
+            accumulated_cold_stats[pair] = {
+                "appearances": 0,
+                "size_valid_seen": False,
+                "has_active_pools": False,
+                "best_net_bps": None,
+                "has_anomaly": False,
+            }
+
+        stats = accumulated_cold_stats[pair]
+        stats["appearances"] += 1
+        if sv is True:
+            stats["size_valid_seen"] = True
+        if rpa and rpa > 0:
+            stats["has_active_pools"] = True
+        if rr == "REJECT_PRICING_ANOMALY":
+            stats["has_anomaly"] = True
+        if net is not None:
+            if stats["best_net_bps"] is None or net > stats["best_net_bps"]:
+                stats["best_net_bps"] = net
+
+    # Apply promotion rules
+    promoted = []
+    for pair, stats in accumulated_cold_stats.items():
+        if stats["appearances"] < PROMOTED_MIN_COLD_APPEARANCES:
+            continue
+        if not stats["size_valid_seen"]:
+            continue
+        if not stats["has_active_pools"]:
+            continue
+        # M7.A.5.36: hard exclude any pair that has ever shown PRICING_ANOMALY
+        if stats["has_anomaly"]:
+            continue
+        # M7.A.5.36: reject garbage pairs with very negative net
+        if stats["best_net_bps"] is None or stats["best_net_bps"] < PROMOTED_MIN_NET_BPS:
+            continue
+        promoted.append(pair)
+
+    # Sort by best_net descending, cap at max
+    promoted.sort(
+        key=lambda p: accumulated_cold_stats[p].get("best_net_bps") or -999,
+        reverse=True,
+    )
+    return promoted[:PROMOTED_MAX_PAIRS]
+
+
 def _run_profit_guard_on_results(results: list) -> list:
     """Run profit_guard on all scored results with positive net_bps.
 
@@ -178,10 +253,11 @@ def _run_profit_guard_on_results(results: list) -> list:
 
 
 def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = None,
-                        fast_results: list = None) -> None:
+                        fast_results: list = None, promoted_pairs: list = None) -> None:
     """Write minimal hot-lane artifact: best candidate + profit guard status.
 
     fast_results: list of BackrunResult from score_backrun_fast() (M7.A.5.32)
+    promoted_pairs: list of "SYM_A/SYM_B" promoted from cold (M7.A.5.35)
     """
     results = artifact.get("results", [])
     best = None
@@ -210,6 +286,19 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "profit_guard_passed_count": len(guard_results) if guard_results else 0,
     }
 
+    # M7.A.5.35: Promoted watchlist info
+    if promoted_pairs:
+        hot["promoted_watchlist"] = {
+            "count": len(promoted_pairs),
+            "pairs": promoted_pairs,
+        }
+    else:
+        hot["promoted_watchlist"] = {
+            "count": 0,
+            "pairs": [f"{a}/{b}" for a, b in HOT_WATCHLIST_PAIRS],
+            "source": "seed_only",
+        }
+
     # M7.A.5.32/5.33: Fast-path results with stage timing + profit guard
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
@@ -237,6 +326,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             "profit_guard_passed": len(fast_guard_passed),
             "mean_latency_ms": round(sum(fast_latencies) / len(fast_latencies), 2) if fast_latencies else None,
             "max_latency_ms": round(max(fast_latencies), 2) if fast_latencies else None,
+            "p50_latency_ms": round(sorted(fast_latencies)[len(fast_latencies) // 2], 2) if fast_latencies else None,
+            "p90_latency_ms": round(sorted(fast_latencies)[int(len(fast_latencies) * 0.9)], 2) if fast_latencies else None,
             "best_net_bps": round(max((r.best_backrun_net_bps or 0) for r in fast_results), 4) if fast_results else None,
             "scoring_paths": list(set(r.scoring_path for r in fast_results if r.scoring_path)),
             "stage_timings": _stage_agg if _stage_agg else None,
@@ -301,6 +392,10 @@ def run_loop(cli_args) -> None:
     _accumulated_pairs: dict = {}  # pair_key -> session_low_lag_pairs info
     _hot_registry = None  # lazy-init on first hot iteration
 
+    # M7.A.5.35: Cross-iteration cold stats for promoted watchlist
+    _cold_pair_stats: dict = {}   # pair_key -> promotion stats from cold results
+    _promoted_pairs: list = []    # list of "SYM_A/SYM_B" promoted from cold
+
     iteration = 0
     logger.info(
         "M7 %s loop starting: chain=%s ws_blocks=%d timeout=%ds max_events=%d "
@@ -327,9 +422,16 @@ def run_loop(cli_args) -> None:
                     _hot_registry = PoolRegistry()
                 _ext_registry = _hot_registry
 
-                # M7.A.5.32: On first iteration, prewarm default watchlist pairs
-                # On subsequent iterations, also prewarm accumulated session pairs
+                # M7.A.5.35: Prewarm from promoted watchlist (cold→hot promotion)
+                # + accumulated session pairs + seed HOT_WATCHLIST_PAIRS on iter 1
                 _pairs_to_prewarm = dict(_accumulated_pairs) if _accumulated_pairs else {}
+
+                # Add promoted pairs from cold lane analysis
+                for ppair in _promoted_pairs:
+                    if ppair not in _pairs_to_prewarm:
+                        _pairs_to_prewarm[ppair] = {"pair": ppair, "seen_count": 0}
+
+                # Seed defaults on first iteration only
                 if iteration == 1:
                     for sym_a, sym_b in HOT_WATCHLIST_PAIRS:
                         pk = f"{sym_a}/{sym_b}"
@@ -416,9 +518,22 @@ def run_loop(cli_args) -> None:
             if lane == "cold":
                 # Cold lane: full diagnostic rolling artifact
                 _write_rolling_m7(artifact)
+
+                # M7.A.5.35: Promote pairs from cold results to hot watchlist
+                _promoted_pairs = _promote_pairs_from_cold(artifact, _cold_pair_stats)
+                if _promoted_pairs:
+                    logger.info(
+                        "Cold→hot promotion: %d pairs promoted %s",
+                        len(_promoted_pairs),
+                        _promoted_pairs[:5],
+                    )
             else:
                 # Hot lane: minimal artifact with profit guard
-                _write_hot_artifact(artifact, iteration, guard_results, fast_results=fast_results)
+                _write_hot_artifact(
+                    artifact, iteration, guard_results,
+                    fast_results=fast_results,
+                    promoted_pairs=_promoted_pairs,
+                )
 
             best = artifact.get("best_net_bps_clean")
             viable = artifact.get("viable_count", 0)
