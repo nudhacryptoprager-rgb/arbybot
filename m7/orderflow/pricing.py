@@ -571,6 +571,14 @@ def score_backrun_online(
     return result
 
 
+# M7.A.5.37: Module-level cache for oracle sanity results.
+# Oracle is "sanity guardrail, not execution truth" — cached results are
+# acceptable if queried within 50 blocks (~100s on Arbitrum). This drops
+# oracle_ms from ~104ms to 0ms for repeated token pairs.
+_oracle_cache: Dict[str, tuple] = {}  # key → (block_num, result_dict)
+_ORACLE_CACHE_STALE_BLOCKS = 50
+
+
 def check_oracle_sanity(
     token_in_symbol: Optional[str],
     token_out_symbol: Optional[str],
@@ -597,6 +605,14 @@ def check_oracle_sanity(
         "oracle_guard_triggered": False,
         "oracle_staleness_seconds": None,
     }
+
+    # M7.A.5.37: Check cache before RPC
+    _cache_key = f"{token_in_symbol or ''}|{token_out_symbol or ''}"
+    _cached = _oracle_cache.get(_cache_key)
+    if _cached is not None:
+        _cached_block, _cached_result = _cached
+        if abs(block_num - _cached_block) <= _ORACLE_CACHE_STALE_BLOCKS:
+            return dict(_cached_result)  # return copy
 
     feed_in = CHAINLINK_FEEDS_ARBITRUM.get(token_in_symbol or "") if token_in_symbol else None
     feed_out = CHAINLINK_FEEDS_ARBITRUM.get(token_out_symbol or "") if token_out_symbol else None
@@ -659,6 +675,9 @@ def check_oracle_sanity(
 
     except Exception as exc:
         logger.debug("check_oracle_sanity failed: %s", str(exc)[:100])
+
+    # M7.A.5.37: Store in cache
+    _oracle_cache[_cache_key] = (block_num, dict(result))
 
     return result
 

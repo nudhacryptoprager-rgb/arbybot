@@ -2271,3 +2271,309 @@ class TestM7A536P50P90Tracking:
         p90 = sorted_lat[int(len(sorted_lat) * 0.9)]
         assert p50 == 60.0  # index 5
         assert p90 == 100.0  # index 9
+
+
+# ===========================================================================
+# M7.A.5.37: Hot artifact always-emit + resolve caching + oracle caching
+#             + persistent cold registry
+# ===========================================================================
+
+
+class TestM7A537HotArtifactAlwaysEmit:
+    """M7.A.5.37: Hot artifact MUST always emit fast_path + hot_skip_count."""
+
+    def test_write_hot_artifact_emits_fast_path_when_empty(self):
+        """fast_path block present with zeros/nulls when fast_results is None."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+
+        artifact = {"results": [], "events_count": 0, "_raw_results": []}
+        with tempfile.TemporaryDirectory() as td:
+            hot_path = Path(td) / "m7_hot_latest.json"
+            with patch("scripts.m7a_orderflow_loop._HOT_ARTIFACT_PATH", str(hot_path)):
+                _write_hot_artifact(artifact, iteration=1, guard_results=None, fast_results=None)
+            hot = json.loads(hot_path.read_text(encoding="utf-8"))
+
+        assert "fast_path" in hot, "fast_path block MUST always be present"
+        fp = hot["fast_path"]
+        assert fp["scored"] == 0
+        assert fp["positive"] == 0
+        assert fp["viable"] == 0
+        assert fp["profit_guard_passed"] == 0
+        assert fp["p50_latency_ms"] is None
+        assert fp["p90_latency_ms"] is None
+        assert fp["mean_latency_ms"] is None
+        assert fp["max_latency_ms"] is None
+        assert fp["best_net_bps"] is None
+        assert fp["scoring_paths"] == []
+        assert fp["stage_timings"] is None
+
+    def test_write_hot_artifact_emits_hot_skip_count(self):
+        """hot_skip_count MUST always appear even when zero."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+
+        artifact = {"results": [], "events_count": 0, "_raw_results": []}
+        with tempfile.TemporaryDirectory() as td:
+            hot_path = Path(td) / "m7_hot_latest.json"
+            with patch("scripts.m7a_orderflow_loop._HOT_ARTIFACT_PATH", str(hot_path)):
+                _write_hot_artifact(artifact, iteration=1)
+            hot = json.loads(hot_path.read_text(encoding="utf-8"))
+
+        assert "hot_skip_count" in hot
+        assert hot["hot_skip_count"] == 0
+
+    def test_write_hot_artifact_fast_path_with_results(self):
+        """fast_path block is fully populated when fast_results provided."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+
+        fast = [
+            _make_result(
+                best_backrun_net_bps=5.0,
+                route_viable=True,
+                profit_guard_passed=True,
+                quote_pipeline_latency_ms=100.0,
+                scoring_path="hot_fast",
+                pipeline_stage_latency_ms={"registry_lookup_ms": 1.0, "pool_state_ms": 2.0},
+            ),
+        ]
+        artifact = {"results": [], "events_count": 1, "_raw_results": []}
+        with tempfile.TemporaryDirectory() as td:
+            hot_path = Path(td) / "m7_hot_latest.json"
+            with patch("scripts.m7a_orderflow_loop._HOT_ARTIFACT_PATH", str(hot_path)):
+                _write_hot_artifact(artifact, iteration=1, fast_results=fast)
+            hot = json.loads(hot_path.read_text(encoding="utf-8"))
+
+        fp = hot["fast_path"]
+        assert fp["scored"] == 1
+        assert fp["positive"] == 1
+        assert fp["viable"] == 1
+        assert fp["profit_guard_passed"] == 1
+        assert fp["p50_latency_ms"] == 100.0
+        assert fp["p90_latency_ms"] == 100.0
+        assert "hot_fast" in fp["scoring_paths"]
+        assert fp["stage_timings"] is not None
+
+    def test_hot_skip_count_with_skip_results(self):
+        """hot_skip_count counts _raw_results with scoring_path='hot_skip'."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+
+        raw = [
+            _make_result(scoring_path="hot_skip"),
+            _make_result(scoring_path="hot_skip"),
+            _make_result(scoring_path="hot_fast"),
+        ]
+        artifact = {"results": [], "events_count": 3, "_raw_results": raw}
+        with tempfile.TemporaryDirectory() as td:
+            hot_path = Path(td) / "m7_hot_latest.json"
+            with patch("scripts.m7a_orderflow_loop._HOT_ARTIFACT_PATH", str(hot_path)):
+                _write_hot_artifact(artifact, iteration=1)
+            hot = json.loads(hot_path.read_text(encoding="utf-8"))
+
+        assert hot["hot_skip_count"] == 2
+
+    def test_fast_path_required_keys_contract(self):
+        """fast_path MUST contain exactly these keys (contract)."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        source = inspect.getsource(_write_hot_artifact)
+        # Both branches (if/else) must emit these keys
+        required = [
+            "scored", "positive", "viable", "profit_guard_passed",
+            "mean_latency_ms", "max_latency_ms", "p50_latency_ms",
+            "p90_latency_ms", "best_net_bps", "scoring_paths", "stage_timings",
+        ]
+        for key in required:
+            count = source.count(f'"{key}"')
+            assert count >= 2, f"fast_path key '{key}' must appear in both if/else branches (found {count})"
+
+
+class TestM7A537ResolveCaching:
+    """M7.A.5.37: Pool token resolution uses module-level cache."""
+
+    def test_pool_token_cache_exists(self):
+        """Module-level _pool_token_cache dict exists."""
+        from m7.orderflow.resolve import _pool_token_cache
+        assert isinstance(_pool_token_cache, dict)
+
+    def test_resolve_event_tokens_uses_cache(self):
+        """Second call for same pool skips RPC (uses cached result)."""
+        from unittest.mock import patch, MagicMock
+        from m7.orderflow import resolve as resolve_mod
+
+        # Clear cache before test
+        resolve_mod._pool_token_cache.clear()
+
+        pool_addr = "0xABCD1234567890abcdef1234567890abcdef1234"
+        token0 = "0x1111111111111111111111111111111111111111"
+        token1 = "0x2222222222222222222222222222222222222222"
+        fee = 3000
+        addr_to_sym = {token0.lower(): "WETH", token1.lower(): "USDC"}
+
+        mock_batcher = MagicMock()
+        mock_batcher.batch_token_info.return_value = {pool_addr: (token0, token1, fee)}
+
+        with patch("core.multicall.get_multicall_batcher", return_value=mock_batcher):
+            # First call — should hit RPC
+            result1 = resolve_mod._resolve_event_tokens(
+                pool_addr, "token0_in", "http://rpc", 100, addr_to_sym,
+            )
+            assert result1 is not None
+            assert result1["token_in_symbol"] == "WETH"
+            assert result1["fee"] == fee
+            assert mock_batcher.batch_token_info.call_count == 1
+
+            # Second call — should use cache, NOT call RPC again
+            result2 = resolve_mod._resolve_event_tokens(
+                pool_addr, "token1_in", "http://rpc", 200, addr_to_sym,
+            )
+            assert result2 is not None
+            assert result2["token_in_symbol"] == "USDC"
+            assert mock_batcher.batch_token_info.call_count == 1  # still 1 — cache hit
+
+        # Cleanup
+        resolve_mod._pool_token_cache.clear()
+
+    def test_cache_key_is_lowercase(self):
+        """Cache uses lowercased pool address as key."""
+        import inspect
+        from m7.orderflow.resolve import _resolve_event_tokens
+        source = inspect.getsource(_resolve_event_tokens)
+        assert "pool_address.lower()" in source
+
+
+class TestM7A537OracleCaching:
+    """M7.A.5.37: Oracle sanity check uses module-level cache."""
+
+    def test_oracle_cache_exists(self):
+        """Module-level _oracle_cache dict exists."""
+        from m7.orderflow.pricing import _oracle_cache
+        assert isinstance(_oracle_cache, dict)
+
+    def test_oracle_cache_stale_blocks_constant(self):
+        """Stale block threshold is 50."""
+        from m7.orderflow.pricing import _ORACLE_CACHE_STALE_BLOCKS
+        assert _ORACLE_CACHE_STALE_BLOCKS == 50
+
+    def test_oracle_cache_hit_within_blocks(self):
+        """Cached oracle result returned when within stale-block window."""
+        from m7.orderflow import pricing as pricing_mod
+
+        # Seed cache directly
+        pricing_mod._oracle_cache.clear()
+        pricing_mod._oracle_cache["WETH|USDC"] = (
+            100,  # cached at block 100
+            {"oracle_price_available": True, "token_in_oracle_usd": 3500.0,
+             "token_out_oracle_usd": 1.0, "oracle_deviation_bps": None,
+             "oracle_guard_triggered": False, "oracle_staleness_seconds": 10},
+        )
+
+        # Call within 50 blocks — should return cache, no RPC
+        result = pricing_mod.check_oracle_sanity("WETH", "USDC", "http://rpc", 120)
+        assert result["oracle_price_available"] is True
+        assert result["token_in_oracle_usd"] == 3500.0
+
+        # Cleanup
+        pricing_mod._oracle_cache.clear()
+
+    def test_oracle_cache_returns_copy(self):
+        """Cached result must be a copy (mutations don't corrupt cache)."""
+        from m7.orderflow import pricing as pricing_mod
+
+        pricing_mod._oracle_cache.clear()
+        pricing_mod._oracle_cache["A|B"] = (
+            100,
+            {"oracle_price_available": False, "token_in_oracle_usd": None,
+             "token_out_oracle_usd": None, "oracle_deviation_bps": None,
+             "oracle_guard_triggered": False, "oracle_staleness_seconds": None},
+        )
+
+        r1 = pricing_mod.check_oracle_sanity("A", "B", "http://rpc", 110)
+        r1["oracle_price_available"] = True  # mutate the copy
+
+        r2 = pricing_mod.check_oracle_sanity("A", "B", "http://rpc", 110)
+        assert r2["oracle_price_available"] is False  # cache not corrupted
+
+        pricing_mod._oracle_cache.clear()
+
+    def test_oracle_cache_source_has_stale_check(self):
+        """Source code checks block proximity before returning cached result."""
+        import inspect
+        from m7.orderflow.pricing import check_oracle_sanity
+        source = inspect.getsource(check_oracle_sanity)
+        assert "_ORACLE_CACHE_STALE_BLOCKS" in source
+        assert "_oracle_cache" in source
+
+
+class TestM7A537WarmRegistry:
+    """M7.A.5.37: run_ws_live accepts warm_registry for persistent cold mode."""
+
+    def test_run_ws_live_signature_has_warm_registry(self):
+        """run_ws_live accepts warm_registry keyword arg."""
+        import inspect
+        from m7.orderflow.mode_ws_live import run_ws_live
+        sig = inspect.signature(run_ws_live)
+        assert "warm_registry" in sig.parameters
+        param = sig.parameters["warm_registry"]
+        assert param.default is None
+
+    def test_warm_registry_does_not_trigger_hot_mode(self):
+        """warm_registry path does NOT set _hot_mode."""
+        import inspect
+        from m7.orderflow.mode_ws_live import run_ws_live
+        source = inspect.getsource(run_ws_live)
+        # _hot_mode is ONLY set from external_registry, not warm_registry
+        assert "_hot_mode = external_registry is not None" in source
+
+    def test_warm_registry_prewarm_skip(self):
+        """warm_registry sets _prewarm_count = -2, skipping prewarm."""
+        import inspect
+        from m7.orderflow.mode_ws_live import run_ws_live
+        source = inspect.getsource(run_ws_live)
+        assert "_prewarm_count = -2" in source
+        assert "_prewarm_count not in (-1, -2)" in source
+
+
+class TestM7A537ColdRegistryPersistence:
+    """M7.A.5.37: Orderflow loop persists cold registry across iterations."""
+
+    def test_cold_registry_lazy_init_in_loop(self):
+        """run_loop source lazy-inits _cold_registry on cold lane."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        assert "_cold_registry = None" in source
+        assert "_cold_registry = PoolRegistry()" in source
+
+    def test_cold_registry_passed_as_warm(self):
+        """Cold lane passes _cold_registry as warm_registry (not external)."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        assert 'warm_registry=_cold_registry if lane == "cold" else None' in source
+
+    def test_cold_registry_stats_logged(self):
+        """Cold lane logs registry stats after each iteration."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        assert "_cold_registry.preload_calls" in source
+        assert "_cold_registry.cache_hits" in source

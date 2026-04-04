@@ -299,7 +299,15 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             "source": "seed_only",
         }
 
-    # M7.A.5.32/5.33: Fast-path results with stage timing + profit guard
+    # M7.A.5.37: Always emit fast_path block and hot_skip_count even when empty.
+    # This ensures rolling hot artifact always surfaces p50/p90/hot_skip metrics.
+    _raw_results = artifact.get("_raw_results", [])
+    _hot_skip_count = sum(
+        1 for r in _raw_results
+        if getattr(r, "scoring_path", None) == "hot_skip"
+    )
+    hot["hot_skip_count"] = _hot_skip_count
+
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
         fast_positive = [r for r in fast_results if (r.best_backrun_net_bps or 0) > 0]
@@ -337,6 +345,21 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             net = r.best_backrun_net_bps or 0
             if best is None or net > (best.get("best_backrun_net_bps") if isinstance(best, dict) else getattr(best, "best_backrun_net_bps", 0)):
                 best = r  # fast-path result is a BackrunResult object
+    else:
+        # M7.A.5.37: Always emit fast_path block with zeros/nulls
+        hot["fast_path"] = {
+            "scored": 0,
+            "positive": 0,
+            "viable": 0,
+            "profit_guard_passed": 0,
+            "mean_latency_ms": None,
+            "max_latency_ms": None,
+            "p50_latency_ms": None,
+            "p90_latency_ms": None,
+            "best_net_bps": None,
+            "scoring_paths": [],
+            "stage_timings": None,
+        }
 
     if best is not None:
         hot["best_candidate"] = {
@@ -396,6 +419,11 @@ def run_loop(cli_args) -> None:
     _cold_pair_stats: dict = {}   # pair_key -> promotion stats from cold results
     _promoted_pairs: list = []    # list of "SYM_A/SYM_B" promoted from cold
 
+    # M7.A.5.37: Persistent cold registry — survives across cold iterations
+    # Passed via warm_registry to avoid hot-mode trigger. Caches pool data
+    # so registry_preload_ms drops to near-zero for already-queried pairs.
+    _cold_registry = None  # lazy-init on first cold iteration
+
     iteration = 0
     logger.info(
         "M7 %s loop starting: chain=%s ws_blocks=%d timeout=%ds max_events=%d "
@@ -420,6 +448,12 @@ def run_loop(cli_args) -> None:
                 if _hot_registry is None:
                     from m7.orderflow.pool_registry import PoolRegistry
                     _hot_registry = PoolRegistry()
+                _ext_registry = _hot_registry
+            elif lane == "cold":
+                # M7.A.5.37: Lazy-init persistent cold registry
+                if _cold_registry is None:
+                    from m7.orderflow.pool_registry import PoolRegistry
+                    _cold_registry = PoolRegistry()
                 _ext_registry = _hot_registry
 
                 # M7.A.5.35: Prewarm from promoted watchlist (cold→hot promotion)
@@ -464,7 +498,8 @@ def run_loop(cli_args) -> None:
                     except Exception as _pw_exc:
                         logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
 
-            artifact = run_ws_live(ws_args, external_registry=_ext_registry)
+            artifact = run_ws_live(ws_args, external_registry=_ext_registry,
+                                   warm_registry=_cold_registry if lane == "cold" else None)
             window_ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             events_count = artifact.get("events_count", 0)
@@ -526,6 +561,16 @@ def run_loop(cli_args) -> None:
                         "Cold→hot promotion: %d pairs promoted %s",
                         len(_promoted_pairs),
                         _promoted_pairs[:5],
+                    )
+
+                # M7.A.5.37: Log cold registry persistence stats
+                if _cold_registry is not None:
+                    logger.info(
+                        "Cold registry: preload_calls=%d cache_hits=%d pools_active=%d queried=%d",
+                        _cold_registry.preload_calls,
+                        _cold_registry.cache_hits,
+                        _cold_registry.pools_active,
+                        len(getattr(_cold_registry, "_queried", set())),
                     )
             else:
                 # Hot lane: minimal artifact with profit guard

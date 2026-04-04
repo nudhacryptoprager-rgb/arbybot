@@ -34,7 +34,7 @@ from m7.orderflow.contracts import BackrunResult
 logger = logging.getLogger("m7.orderflow.cli")
 
 
-def run_ws_live(args, *, external_registry=None) -> dict:
+def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
     """Execute the ws-live WebSocket replay mode and return the artifact dict.
 
     Parameters
@@ -43,6 +43,12 @@ def run_ws_live(args, *, external_registry=None) -> dict:
     external_registry : optional pre-warmed PoolRegistry.  When provided,
         session prewarm is skipped and this registry is used directly.
         The caller retains ownership and can accumulate state across calls.
+        **Triggers hot mode** (score_backrun_fast for all events).
+    warm_registry : optional pre-warmed PoolRegistry for cold mode.
+        When provided, used as session_registry (skips fresh PoolRegistry
+        creation + prewarm), but does NOT trigger hot mode. Cold lane
+        still uses score_backrun_live_parallel, but registry_preload_ms
+        drops to near-zero for already-cached pairs (M7.A.5.37).
     """
     logger.info(
         "Running M7.A.5.3 ws-live replay (ws_blocks=%d, ws_timeout=%ds)",
@@ -95,10 +101,14 @@ def run_ws_live(args, *, external_registry=None) -> dict:
 
     # M7.A.5.22: Session-scoped pool registry for factory-driven discovery
     # M7.A.5.31: Accept external registry; skip prewarm if caller provided one
+    # M7.A.5.37: Accept warm_registry for cold mode (persistent, no hot trigger)
     _prewarm_count = 0
     if external_registry is not None:
         session_registry = external_registry
         _prewarm_count = -1  # signal: prewarm handled by caller
+    elif warm_registry is not None:
+        session_registry = warm_registry
+        _prewarm_count = -2  # signal: warm registry provided, cold mode
     else:
         session_registry = PoolRegistry()
 
@@ -108,7 +118,7 @@ def run_ws_live(args, *, external_registry=None) -> dict:
         ("WETH", "USDC"), ("WETH", "USDT"), ("WETH", "ARB"),
         ("USDC", "USDT"), ("WETH", "WBTC"), ("ARB", "USDC"),
     ]
-    if _prewarm_count != -1:
+    if _prewarm_count not in (-1, -2):
         _prewarm_count = 0
         try:
             from web3 import Web3 as _W3pw
@@ -129,7 +139,8 @@ def run_ws_live(args, *, external_registry=None) -> dict:
         except Exception as _pw_exc:
             logger.debug("Session prewarm skipped: %s", str(_pw_exc)[:80])
     else:
-        logger.info("Session prewarm skipped: external registry provided")
+        logger.info("Session prewarm skipped: %s registry provided",
+                     "external" if _prewarm_count == -1 else "warm")
 
     # M7.A.5.8: Subgraph-backed bounded coverage seed
     pre_seed_count = len(addr_to_symbol)

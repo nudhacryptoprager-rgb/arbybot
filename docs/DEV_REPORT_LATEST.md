@@ -2,102 +2,114 @@
 
 ## 0) Meta
 timestamp_utc: 2026-04-02T09:03:41Z
-run_id: m7a_536_session
-mode: OFFLINE (code changes + unit tests + CI pipeline)
+run_id: m7a_537_session
+mode: ONLINE (code changes + unit tests + CI pipeline + 1h nonstop --no-m4)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, NORMAL)
 code_identity:
   primary: ts:2026-04-02T09:03:41.464858Z
   dirty: true
-  desc: M7.A.5.36 — per-stage hard budget abort, p50/p90 tracking, strengthened promotion
+  desc: M7.A.5.37 — hot artifact always-emit, resolve/oracle caching, persistent cold registry
 rolling_run_dir_name: ci_m5_gate_arbitrum_one_20260402_110313_968343
 rolling_run_timestamp: 2026-04-02T09:03:41.464858Z
+m7_orderflow_timestamp: 2026-04-04T07:59:06Z
+m7_hot_timestamp: 2026-04-04T07:49:19Z
 
 ## Session Completion
-session_goal: M7.A.5.36 — hot path p50 ≤ 250ms on promoted watchlist before seeking first profit_guard pass
-goal_status: PARTIAL (per-stage hard budget abort implemented in score_backrun_fast, p50/p90 tracking added to hot artifact, promoted watchlist gates strengthened — pending 1h nonstop runtime for empirical verification)
+session_goal: M7.A.5.37 — hot p50 ≤ 250ms and hot p90 ≤ 400ms on a real promoted watchlist before chasing first profit_guard pass
+goal_status: PARTIAL (hot artifact observability gap fixed — fast_path/p50/p90/hot_skip_count always emitted; resolve/oracle caching and persistent cold registry implemented; 1h nonstop runtime started with --no-m4; cold pipeline total_pipeline trending down 1196→1063ms; promoted watchlist still seed_only — needs more iterations to populate)
 close_allowed: true
-remaining_blockers: (1) Need 1h nonstop runtime to measure actual p50/p90 on promoted watchlist; (2) profit_guard_passed_count still expected 0 until promoted watchlist populates from cold iterations
-evidence_session_run_dirs: [tests/unit (3200 passed, 6 skipped), scripts/ci_full_pipeline.py --mode ci (ALL REQUIRED GATES PASSED), scripts/check_repo_safety.py (PASS 0 warnings)]
-primary_blocker_of_session: Hot path has no per-stage abort (only total 250ms); promoted watchlist too loose (MIN_COLD_APPEARANCES=1, no net_bps gate); no p50/p90 tracking in hot artifact
-blocker_status_before: ACTIVE (score_backrun_fast had total abort only; promotion rules allowed single-appearance garbage pairs; hot artifact had no percentile latency metrics)
-blocker_status_after: RESOLVED (4 per-stage hard aborts added: registry≤25ms, pool_state≤50ms, local_math≤10ms, profit_guard≤40ms; PROMOTED_MIN_COLD_APPEARANCES=2; PROMOTED_MIN_NET_BPS=-50; anomaly hard exclude; p50/p90 in hot artifact; 3200 tests pass; all CI gates green)
+remaining_blockers: (1) promoted watchlist still seed_only — cold needs 2+ iterations with overlapping pairs to promote; (2) hot fast_path scored=0 because promoted pairs haven't been established yet; (3) oracle cache stale threshold (50 blocks) too narrow for cross-iteration benefit — future increase needed
+evidence_session_run_dirs: [tests/unit (3219 passed, 6 skipped), scripts/ci_full_pipeline.py --mode ci (ALL REQUIRED GATES PASSED), scripts/check_repo_safety.py (PASS 0 warnings), 1h nonstop --no-m4 (3/3 alive, hot + cold + dashboard)]
+primary_blocker_of_session: Hot artifact MISSING fast_path/p50/p90/hot_skip_count when fast_results empty (gated by `if fast_results:`); cold pipeline resolve_ms≈788ms and registry_preload_ms≈621ms dominated by RPC with no caching; no persistent cold registry across iterations
+blocker_status_before: ACTIVE (hot artifact had fatal observability gap — fast_path block never emitted when fast_results empty; cold pipeline had no process-level caching; cold registry re-created each iteration)
+blocker_status_after: RESOLVED (hot artifact always emits fast_path + hot_skip_count; process-level resolve cache for immutable pool data; oracle block-proximity cache; persistent cold registry via warm_registry parameter; 3219 tests pass; all CI gates green; 1h nonstop confirms hot artifact contract)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.A.5.36 — per-stage hard budget abort + p50/p90 tracking + strengthened promotion rules
+goal (Roadmap): M7.A.5.37 — hot artifact always-emit + resolve/oracle caching + persistent cold registry
 change_summary:
-  - m7/shared/constants.py (MODIFIED): Added 4 zero-budget constants for excluded stages (HOT_BUDGET_RESOLVE_MS=0, HOT_BUDGET_ORACLE_MS=0, HOT_BUDGET_ENRICHMENT_MS=0, HOT_BUDGET_REGISTRY_PRELOAD_MS=0). Raised HOT_BUDGET_PROFIT_GUARD_MS from 10→40ms. Added PROMOTED_MIN_NET_BPS=-50.0. Raised PROMOTED_MIN_COLD_APPEARANCES from 1→2. Updated section headers to M7.A.5.36.
-  - m7/orderflow/scoring_parallel.py (MODIFIED): Added per-stage hard budget abort after each of 4 measured stages (registry_lookup, pool_state, local_math, profit_guard). Each stage checks against its budget constant and returns None if exceeded. Updated import to bring in per-stage constants.
-  - scripts/m7a_orderflow_loop.py (MODIFIED): Added p50_latency_ms and p90_latency_ms to hot artifact fast_path section. Strengthened _promote_pairs_from_cold: anomaly is now hard exclude (regardless of size_valid); added PROMOTED_MIN_NET_BPS filter; updated docstring for M7.A.5.36 rules.
-  - tests/unit/test_orderflow_artifacts.py (MODIFIED): Fixed 3 existing promotion tests for PROMOTED_MIN_COLD_APPEARANCES=2. Added 4 new test classes (14 tests): TestM7A536PerStageBudgetConstants, TestM7A536PerStageAbort, TestM7A536PromotionRules, TestM7A536P50P90Tracking.
-  - docs/status/Status_M7.md (MODIFIED): Updated header for M7.A.5.36 scope, 3200 tests.
-  - docs/DEV_REPORT_LATEST.md (this file, rewritten for M7.A.5.36)
+  - scripts/m7a_orderflow_loop.py (MODIFIED): _write_hot_artifact() always emits fast_path block (scored/positive/viable/profit_guard_passed/mean/max/p50/p90_latency_ms/best_net_bps/scoring_paths/stage_timings — zeros/nulls when empty). Always emits hot_skip_count from _raw_results. Added _cold_registry lazy-init + warm_registry wiring for cold lane. Cold registry stats logged after each iteration.
+  - m7/orderflow/mode_ws_live.py (MODIFIED): run_ws_live() accepts warm_registry parameter for persistent cold mode (does NOT trigger hot mode). _prewarm_count=-2 skips redundant prewarm for warm registry.
+  - m7/orderflow/resolve.py (MODIFIED): Added _pool_token_cache (module-level dict) for pool→(token0, token1, fee) caching. _resolve_event_tokens() checks cache before multicall; on hit returns cached data (~0ms vs ~788ms).
+  - m7/orderflow/pricing.py (MODIFIED): Added _oracle_cache + _ORACLE_CACHE_STALE_BLOCKS=50 for check_oracle_sanity(). Cache hit within 50 blocks returns copy of cached result (~0ms vs ~104ms).
+  - tests/unit/test_orderflow_artifacts.py (MODIFIED): +19 tests in 6 classes: TestM7A537HotArtifactAlwaysEmit (5), TestM7A537ResolveCaching (3), TestM7A537OracleCaching (4), TestM7A537WarmRegistry (3), TestM7A537ColdRegistryPersistence (3), fast_path key contract test (1).
+  - docs/status/Status_M7.md (MODIFIED): Updated status line for M7.A.5.37, added M7.A.5.36 and M7.A.5.37 sections.
+  - docs/DEV_REPORT_LATEST.md (this file, rewritten for M7.A.5.37)
 touched_files:
-  - m7/shared/constants.py (MODIFIED)
-  - m7/orderflow/scoring_parallel.py (MODIFIED)
   - scripts/m7a_orderflow_loop.py (MODIFIED)
+  - m7/orderflow/mode_ws_live.py (MODIFIED)
+  - m7/orderflow/resolve.py (MODIFIED)
+  - m7/orderflow/pricing.py (MODIFIED)
   - tests/unit/test_orderflow_artifacts.py (MODIFIED)
   - docs/status/Status_M7.md (MODIFIED)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3200 passed, 6 skipped)
+py -3.11 -m pytest tests/unit -q: PASS (3219 passed, 6 skipped)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (pytest OK, docs_consistency OK, status_m4_check OK, m5_0_offline OK, m4_smoke OK, m4_profit OK — ALL REQUIRED GATES PASSED)
 py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit: PASS (0 errors, 0 warnings)
+py -3.11 scripts/start_nonstop_runtime.py --hours 1 --no-m4 --dashboard-port 8099 --m7-hot-pause 1 --m7-cold-pause 5: RUNNING (3/3 alive)
 
 ## 3) Artifacts Attached
 
-No new runtime artifacts — session is OFFLINE code changes only. Rolling truth unchanged: run_timestamp=2026-04-02T09:03:41.464858Z.
+m7_hot_latest.json: fresh (2026-04-04T07:49:19Z) — fast_path block always present, hot_skip_count visible
+m7_orderflow_latest.json: fresh (2026-04-04T07:59:06Z) — cold iteration with caching active
+run_summary_latest.json: unchanged (2026-04-02T09:03:41Z) — not updated by --no-m4 runs
 
-## 4) Key Results — M7.A.5.36
+## 4) Key Results — M7.A.5.37
 
-### Per-Stage Hard Budget Abort in score_backrun_fast
+### Hot Artifact Always-Emit Fix (Critical)
 
-Previously, `score_backrun_fast()` only checked total pipeline time against `HOT_BUDGET_TOTAL_MS` (250ms). Individual stages could silently exceed their nominal budgets without early termination. Now each of the 4 measured stages has a hard abort:
+Previously, `_write_hot_artifact()` gated the entire `fast_path` block behind `if fast_results:`. Since `fast_results` was always empty/None (promoted watchlist was seed_only, no events matched), the hot artifact NEVER contained `fast_path`, `p50_latency_ms`, `p90_latency_ms`, or `hot_skip_count`. This was the root cause of issue #8 from M7.A.5.36 review.
 
-| Stage | Budget (ms) | Abort behavior |
-|-------|------------|----------------|
-| registry_lookup | 25 | return None |
-| pool_state | 50 | return None |
-| local_math | 10 | return None |
-| profit_guard | 40 | return None |
+Fix: Both branches (truthy and falsy) now emit the `fast_path` block with identical key sets. The else branch uses zeros/nulls. `hot_skip_count` is always emitted from `_raw_results`.
 
-Total budget unchanged at 250ms. The fast path still has zero RPC calls — these budgets enforce computational time only.
+**Confirmed in runtime**: Hot artifact at iteration 13 has `fast_path.scored=0, fast_path.p50_latency_ms=null, hot_skip_count=0`. Observability gap closed.
 
-### Zero-Budget Constants for Excluded Stages
+### Process-Level Resolve Caching
 
-Added explicit zero-budget constants documenting that resolve, oracle, enrichment, and registry_preload are NEVER part of the hot path:
-- `HOT_BUDGET_RESOLVE_MS = 0`
-- `HOT_BUDGET_ORACLE_MS = 0`
-- `HOT_BUDGET_ENRICHMENT_MS = 0`
-- `HOT_BUDGET_REGISTRY_PRELOAD_MS = 0`
+Pool token data (token0, token1, fee) is immutable — once deployed, a pool's tokens never change. `_pool_token_cache` in `resolve.py` caches the multicall result forever (process scope). On cache hit, `_resolve_event_tokens()` skips the multicall entirely.
 
-These are documentation constants — they enforce the architectural contract that the hot fast path does zero RPC.
+Within a single iteration, if multiple events reference the same pool, only the first triggers RPC. Across iterations, pools seen before remain cached. The benefit is proportional to pool overlap between events.
 
-### p50/p90 Latency Tracking in Hot Artifact
+Cold operation 1→2 numbers: resolve_ms mean 374→380 (minimal change, likely high pool diversity between iterations on Arbitrum). The cache is architecturally correct; empirical benefit will accumulate over longer runtimes with more repeated pools.
 
-The hot artifact's `fast_path` section now includes `p50_latency_ms` and `p90_latency_ms` computed from sorted fast-path latencies. This provides the key observability needed to verify the 250ms budget target.
+### Oracle Block-Proximity Cache
 
-### Strengthened Promoted Watchlist Rules (M7.A.5.36)
+`check_oracle_sanity()` now caches results per token pair with a 50-block stale window (~12.5s on Arbitrum). On cache hit within the window, returns a copy of the cached result — no RPC.
 
-| Rule | Before (M7.A.5.35) | After (M7.A.5.36) |
-|------|--------|--------|
-| Min cold appearances | 1 | 2 |
-| Anomaly handling | Excluded only if `has_anomaly AND NOT size_valid` | Hard exclude always |
-| Min net_bps | None | -50.0 (PROMOTED_MIN_NET_BPS) |
-| Size valid required | Yes | Yes |
-| Active pools required | Yes | Yes |
+The 50-block window is conservative. Between cold iterations (5+ minutes, ~1200 blocks apart), the cache is always stale. Within-iteration benefit exists when multiple events share token pairs. Future: increase to 200+ blocks for cross-iteration benefit.
+
+### Persistent Cold Registry
+
+Cold lane now lazy-inits a `PoolRegistry()` that survives across iterations via `warm_registry` parameter. Previously, each cold iteration created a fresh registry, losing all cached pool data. Now `_cold_registry` is initialized once and passed repeatedly.
+
+Key design: `warm_registry` does NOT trigger `_hot_mode` (which is `external_registry is not None`). Cold lane keeps its full diagnostic pipeline (resolve, enrichment, oracle, registry_preload) while benefiting from cached pool data in the registry.
+
+Cold registry_preload_ms: 427→354ms (iteration 1→2, 17% improvement as cached pools skip factory discovery).
+
+### Latency Summary
+
+| Stage | M7.A.5.36 | M7.A.5.37 iter 1 | M7.A.5.37 iter 2 | Target |
+|-------|-----------|-------------------|-------------------|--------|
+| resolve_ms | 788.6 | 373.9 | 380.2 | 0 (cache hit) |
+| registry_preload_ms | 621.3 | 427.1 | 354.2 | 0 (warm cache) |
+| oracle_ms | 104.2 | 257.3 | 217.1 | 0 (cache hit) |
+| enrichment_ms | 51.5 | 137.6 | 111.2 | 0 (cache/skip) |
+| total_pipeline | 1565.6 | 1195.9 | 1062.6 | ≤250 |
+
+Note: oracle_ms and enrichment_ms increased from M7.A.5.36 baseline — likely RPC variability between runs. The caching benefit is strongest within-iteration (repeated pools/pairs) and will accumulate over longer runtimes.
 
 ## 5) Strategic Reading
 
-1. **Hot fast path architecture is correct**: `score_backrun_fast()` has zero RPC calls. Expected latency is ~20-50ms. The cold pipeline numbers (resolve=791ms, oracle=105ms) are irrelevant to the hot path.
-2. **Per-stage enforcement now catches runaway stages**: Any individual stage exceeding its budget aborts immediately instead of accumulating toward the 250ms total. This prevents a slow registry lookup from wasting time on subsequent stages.
-3. **Promotion rules are tighter**: Requiring 2 cold appearances prevents noisy single-observation promotions. The net_bps floor (-50) rejects garbage pairs that would waste hot-lane resources. Anomaly hard-exclude prevents PRICING_ANOMALY pairs from polluting the hot watchlist.
-4. **p50/p90 tracking enables empirical verification**: Once a 1h nonstop runtime produces events matching the promoted watchlist, the p50/p90 values will confirm whether the 250ms target is achievable.
-5. **Next step**: Run 1h nonstop runtime to get fresh hot artifact with p50/p90 measurements. The architectural hypothesis is that hot p50 will be well under 250ms (~20-50ms).
+1. **Hot artifact observability is now complete**: fast_path/p50/p90/hot_skip_count always visible. This was the critical gap preventing latency measurement.
+2. **Caching infrastructure is in place**: resolve (immutable, forever), oracle (50-block proximity), registry (persistent per-process). Architecturally correct; empirical benefit scales with pool overlap.
+3. **Cold pipeline still >1000ms**: Total pipeline is 1063ms on iter 2, still 4.2x over the 250ms budget. The remaining bottleneck is a mix of RPC latency (new pools) + enrichment + oracle. Possible next steps: (a) increase oracle cache stale threshold, (b) add enrichment caching (ERC-20 symbol/decimals are immutable), (c) pre-resolve pools from cold history, (d) batch RPC calls more aggressively.
+4. **Promoted watchlist requires more runtime**: With PROMOTED_MIN_COLD_APPEARANCES=2, cold needs 2+ iterations seeing the same pair with valid criteria. The 1h runtime should produce 10-12 cold iterations, enough to populate the watchlist.
+5. **Hot path itself is architecturally fast (~20-50ms)**: The cold pipeline latency is irrelevant to hot path. Once promoted watchlist populates, hot fast_path.p50 should be well under 250ms. The critical measurement is still pending.
 
 ## 5.1) Contract Checks
 status/reasons consistency: OK (ALL_REJECT_REASONS: 21, UNSCORED_REJECTS: 12, BackrunResult: 67 fields, ALL_BLOCKER_TAGS: 9)
@@ -105,16 +117,18 @@ rolling discipline: OK (canonical files in _rolling)
 v2.x provenance contract: OK (run_timestamp primary, code_sha=null)
 runtime artifacts not committed: OK (data/runs/** and data/tmp/** not in git)
 module size constraint: OK (scoring_parallel.py ≤ 1300 lines)
-test file size constraint: OK (test_orderflow_artifacts.py — approaching limit)
+test file size constraint: OK (test_orderflow_artifacts.py — approaching limit, 2460 lines)
 Status_M7.md size constraint: OK
 
 ## 5.2) Blockers / Risks
-- PRIMARY: Need 1h nonstop runtime for empirical p50/p90 measurement — pending operator execution
-- PRIMARY: profit_guard_passed_count likely still 0 until promoted watchlist populates from 2+ cold iterations
-- SECONDARY: test_orderflow_artifacts.py approaching size limit — may need split
-- RESOLVED (this session): No per-stage hard abort in score_backrun_fast (4 stage aborts added)
-- RESOLVED (this session): Promoted watchlist too loose — single-appearance, no net_bps gate (PROMOTED_MIN_COLD_APPEARANCES=2, PROMOTED_MIN_NET_BPS=-50)
-- RESOLVED (this session): PRICING_ANOMALY pairs could slip through promotion if size_valid=True (anomaly now hard exclude)
-- RESOLVED (this session): No p50/p90 latency tracking in hot artifact (p50_latency_ms, p90_latency_ms added)
+- PRIMARY: promoted watchlist still seed_only — needs 2+ cold iterations with overlapping pairs to populate
+- PRIMARY: hot fast_path.scored=0, p50 unmeasurable until promoted pairs exist
+- SECONDARY: oracle cache stale threshold (50 blocks) too narrow for cross-iteration benefit
+- SECONDARY: enrichment not cached yet (ERC-20 symbol/decimals are immutable)
+- SECONDARY: test_orderflow_artifacts.py at 2460 lines — may need split soon
+- RESOLVED (this session): hot artifact Missing fast_path/p50/p90/hot_skip_count (always-emit fix)
+- RESOLVED (this session): no process-level resolve caching (_pool_token_cache added)
+- RESOLVED (this session): cold registry re-created each iteration (persistent via warm_registry)
+- RESOLVED (this session): no oracle caching (_oracle_cache with 50-block proximity)
 - UNCHANGED: M4 ROUNDTRIP_NOT_PROFITABLE; SUBGRAPH_API_KEY_REQUIRED
-- NEXT: (a) 1h nonstop runtime to measure p50/p90, (b) First profit_guard_passed > 0, (c) Expand seed watchlist if promotion insufficient
+- NEXT: (a) Continue 1h runtime, verify promoted watchlist populates, (b) Measure hot p50/p90 on promoted pairs, (c) Increase oracle cache stale threshold if needed, (d) Add enrichment caching

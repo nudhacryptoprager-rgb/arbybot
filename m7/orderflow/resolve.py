@@ -11,6 +11,11 @@ from m7.shared.constants import _DEFAULT_FEE_TIERS
 
 logger = logging.getLogger("m7.orderflow.resolve")
 
+# M7.A.5.37: Module-level cache for pool→(token0, token1, fee) resolution.
+# Pool tokens are immutable contract properties — safe to cache forever.
+# Cache is process-scoped: persists across iterations in the same Python process.
+_pool_token_cache: Dict[str, tuple] = {}
+
 def _build_address_to_symbol(token_addresses: Dict[str, str]) -> Dict[str, str]:
     """Build reverse lookup: checksummed address → symbol."""
     result: Dict[str, str] = {}
@@ -61,13 +66,21 @@ def _resolve_event_tokens(
     if not pool_address:
         return None
 
-    batcher = get_multicall_batcher(rpc_url, block_num)
-    info = batcher.batch_token_info([pool_address])
-    pool_info = info.get(pool_address)
-    if pool_info is None:
-        return None
+    # M7.A.5.37: Check module-level cache first (immutable pool data)
+    _cache_key = pool_address.lower()
+    cached = _pool_token_cache.get(_cache_key)
+    if cached is not None:
+        token0_addr, token1_addr, fee = cached
+    else:
+        batcher = get_multicall_batcher(rpc_url, block_num)
+        info = batcher.batch_token_info([pool_address])
+        pool_info = info.get(pool_address)
+        if pool_info is None:
+            return None
 
-    token0_addr, token1_addr, fee = pool_info
+        token0_addr, token1_addr, fee = pool_info
+        # Cache immutable pool data
+        _pool_token_cache[_cache_key] = (token0_addr, token1_addr, fee)
 
     # Map direction to actual addresses
     if swap_direction == "token0_in":
