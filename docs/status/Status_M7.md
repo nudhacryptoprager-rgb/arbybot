@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.37 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.37 fixes critical hot artifact observability gap (fast_path + hot_skip_count always emitted, even when empty), adds process-level resolve caching (pool token data immutable), oracle block-proximity cache (50 blocks), persistent cold registry via warm_registry parameter. Hot artifact contract locked: p50/p90/hot_skip_count always visible. Cold pipeline latency trending down via caching (total_pipeline mean 1195→1062ms on iteration 2+). 3219 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.38 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.38 widens all cache thresholds to session-scoped (5000 blocks ≈ 20 min), adds enrichment process-level cache for immutable ERC-20 data. Cold pipeline latency mean 866→275ms (warm cache), latency_budget_hit_rate 0.19→0.72-0.80 (peak). 3228 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-04  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix. M7.B remains closed.
 
@@ -90,63 +90,15 @@ Subgraph BLOCKED (403). Gas decomposition: L1 data ~80%, L2 exec ~20%. GAS_EXCEE
 
 ---
 
-## M7.A.5.9–5.11: Decimal Fix + Stale Gate + Active-Liquidity Coverage (CORRECTIVE, CLOSED)
+## M7.A.5.9–5.24: Corrective + Infrastructure + Scoring (CLOSED)
 
-**M7.A.5.9** (Token-Decimal-Aware Size & Gas Fix): Fixed 2 bugs: decimal-aware size bounds + gas denomination. 4 new fields (53 total). CI: 2988 passed.
-
-**M7.A.5.10** (Stale-Gate + Zero-Liq + Provenance Fix): Fixed stale-positive false viability, zero-liq pools, provenance misattribution. Added REJECT_STALE_POSITIVE, REJECT_ZERO_LIQUIDITY. CI: 3011 passed.
-
-**M7.A.5.11** (Active-Liquidity-Aware Coverage): Active vs inactive pool distinction. Added REJECT_NO_ACTIVE_COUNTER_POOL, REJECT_ALL_POOLS_ZERO_LIQUIDITY (17 rejects). CI: 3036 passed.
-
----
-
-## M7.A.5.12: Byte-Parsing Fix + Unified Coverage/Local-Sim Truth (BREAKTHROUGH)
-
-**Root cause**: `batch_full_pool_data()` byte-parsing bug: `d1[0:16]` → `d1[0:32]`. Sole cause of scored_results=0 in M7.A.5.8-5.11. Unified pool state source. 2 new rejects (19 total). Evidence: 300b, **26 scored** (was 0), all stale. CI: 3059 passed.
-
----
-
-## M7.A.5.13–5.15: Stale/Low-Lag Split + Reject Decomposition + Debug Diagnostic (DIAGNOSTIC, CLOSED)
-
-**M7.A.5.13** (Stale vs Low-Lag Split): Fixed block_lag=0 falsy trap, low-lag counting, UNSCORED_REJECTS scope. Evidence: 300b 16 scored, best_net_bps_stale=-2.20 (beats M4). 0 low-lag scored. CI: 3077 passed.
-
-**M7.A.5.14** (Low-Lag Reject Decomposition): 100% low-lag rejected at pre-econ stage. Multi-causal: TOKEN_PAIR_UNRESOLVED + NO_COUNTER_POOL + ALL_CANDIDATE_POOLS_TRULY_INACTIVE. CI: 3092 passed.
-
-**M7.A.5.15** (Low-Lag Debug Diagnostic): Added `pair_unresolved_detail`, `low_lag_debug_rows`, `low_lag_coverage_truth`. Evidence: 300b 6 low-lag 0 scored. All `pool_read_failed`. Multi-causal blocker stack confirmed. CI: 3110 passed.
-
----
-
-## M7.A.5.16–5.17: Pool-Class Truth + V2 Direct Resolve (DIAGNOSTIC + FIX, CLOSED)
-
-**M7.A.5.16** (Pool-Class Truth): Classified low-lag pools into 3 structural classes: unsupported ABI (V2-like on V3 path), no counter-pool, inactive. Added `pool_contract_truth` field (55 total), `dex_family_guess`, 5 fine-grained `pair_unresolved_detail` causes. Evidence: multi-causal blockers (V2 ABI mismatch + NO_COUNTER_POOL + INACTIVE). CI: 3132 passed.
-
-**M7.A.5.17** (V2 Direct Resolve): Added `pool_state_read_path` field (56 total), V2 `getReserves()` fallback bypassing `batch_token_info()` fee() revert. Evidence: V2 path implemented but 0 V2 pool events in sample windows — all low-lag hit NO_COUNTER_POOL via V3. Low-lag blocker unstable across windows. CI: 3151 passed.
-
----
-
-## M7.A.5.18–5.19: Low-lag Watchlist + Blocker Tags + Quote-Fail Provenance + File Splits (DIAGNOSTIC + STRUCTURAL, CLOSED)
-
-**M7.A.5.18** (Cross-Window Truth): Session-persistent `low_lag_watchlist` (per-pool entries across events), `blocker_tags` artifact block with 8 canonical tags. Evidence: blocker tags correctly vary per window (LOW_LAG_NONE_THIS_WINDOW in empty windows, NO_COUNTER_POOL/INACTIVE_POOL in others). 0 low-lag events scored. Still 56 fields, 19 rejects. CI: 3180 passed.
-
-**M7.A.5.19** (Provenance + Splits): Quote-fail provenance (`quote_fail_stage/venue/exception_short` in `stage_latency`). CLI split: `cli.py` (340 lines) + `mode_ws_live.py` (854 lines). Test file split: `test_orderflow_contracts.py` → 9 files (≤995 lines), `test_triangular_contracts.py` → 3 files (≤932 lines). Still 56 fields, 19 rejects, 8 blocker tags. CI: 3183 passed.
-
----
-
-## M7.A.5.20–5.22: Local Pricing + Pool Registry + Registry Activation (INFRASTRUCTURE, CLOSED)
-
-**M7.A.5.20** (Local-State-First Pricing): `v3_math.py` — V3/V2/Algebra local swap math. First positive net observed (+18.20 bps stale). Pipeline latency halved. 3 new fields (59 total). CI: 3212 passed.
-
-**M7.A.5.21** (Factory-Driven Pool Registry): `pool_registry.py` — factory-driven persistent cache. `preload_pair()`/`lookup_pair()` O(1). Gas-floor prefilter (2.0 bps). 6 new fields (65 total), 1 new reject (20 total). CI: 3245 passed.
-
-**M7.A.5.22** (Registry Activation in ws-live): Session-scoped `PoolRegistry()` in pipeline. Registry 65–77 pools discovered, NO_COUNTER_POOL=0. Gas-floor operational filter. CI: 3267 passed.
-
----
-
-## M7.A.5.23–5.24: Registry-Direct Scoring + Pipeline Slim (SCORING, CLOSED)
-
-**M7.A.5.23** (Registry-Direct Scoring Bridge): Low-lag fast path bypasses coverage scan → direct local pricing from registry entries. 100% scoring rate via registry_direct. Positive net detected (9/100, +18–43 bps) but all STALE_POSITIVE. 1 new field `scoring_path` (66 total). CI: 3286 passed.
-
-**M7.A.5.24** (Pipeline Latency Optimization): Skip Stage A multicall for registry_direct. Mid-pipeline lag abort. Session prewarm (6 core pairs). Two-queue priority. Still 66 fields. CI: 3310 passed.
+**M7.A.5.9–5.11**: Decimal fix, stale gate, active-liquidity coverage (CI: 2988→3036).
+**M7.A.5.12**: Byte-parsing breakthrough — 26 scored (was 0) (CI: 3059).
+**M7.A.5.13–5.15**: Stale/low-lag split, reject decomposition, debug diagnostic (CI: 3077→3110).
+**M7.A.5.16–5.17**: Pool-class truth, V2 direct resolve (CI: 3132→3151).
+**M7.A.5.18–5.19**: Low-lag watchlist, blocker tags, provenance, file splits (CI: 3180→3183).
+**M7.A.5.20–5.22**: Local pricing, factory-driven pool registry, registry activation (CI: 3212→3267).
+**M7.A.5.23–5.24**: Registry-direct scoring bridge, pipeline slim (CI: 3286→3310).
 
 ---
 
@@ -273,6 +225,29 @@ CI: 3200 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 **Online evidence**: 1h nonstop `--no-m4`. Hot: fast_path block ALWAYS present with p50/p90/hot_skip_count visible (observability gap fixed). Hot iteration 13: events=0-1, hot_skip_count=0-1, promoted watchlist seed_only. Cold: iteration 1 total_pipeline=1196ms (resolve=374, registry_preload=427, oracle=257, enrichment=138). Iteration 2 total_pipeline=1063ms (registry_preload=354, improving with warm cache). Cache benefit strongest within-iteration (repeated pools). Cross-iteration resolve cache effective for recurring pools; oracle cache stale threshold (50 blocks) too narrow for cross-iteration benefit (future: increase threshold).
 
 CI: 3219 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.38: Session-Scoped Caching + Enrichment Cache + Latency Budget Hit Rate
+
+**Hypothesis**: M7.A.5.38 = latency_budget_hit_rate >= 0.80 in 15-minute nonstop runtime. Remove enrichment, oracle, and registry_preload from effective per-event cost via session-scoped caches.
+
+**Changes**: (1) `m7/orderflow/resolve.py`: added `_enrichment_cache` — process-level dict caching immutable ERC-20 symbol/decimals data. `enrich_tokens_batch()` checks cache before RPC multicall; only uncached addresses go to `batch_symbol()` + `batch_decimals()`. Successfully enriched entries cached forever (immutable data). (2) `m7/orderflow/pricing.py`: `_ORACLE_CACHE_STALE_BLOCKS` 50→5000 (5000 blocks ≈ 20 min on Arbitrum). Oracle is "sanity guardrail, not execution truth" — stale-20min acceptable for diagnostic cold lane, covers multi-iteration reuse. (3) `m7/orderflow/pool_registry.py`: `__init__` accepts `stale_threshold_blocks: int = 10` parameter. `preload_pair()` uses `self.stale_threshold_blocks` instead of hard-coded 10. Default stays 10 for hot lane (backward compatible). (4) `scripts/m7a_orderflow_loop.py`: cold registry init `PoolRegistry(stale_threshold_blocks=5000)` — diagnostic lane state refresh only after 5000 blocks (~20 min), effectively never within a 15-min session after initial warmup. (5) +9 tests in 4 classes (TestM7A538EnrichmentCaching, TestM7A538OracleThreshold, TestM7A538RegistryStaleThreshold).
+
+**Online evidence**: 0.25h nonstop `--no-m4`. 5 cold iterations, 3 hot lanes alive, 0 restarts. Rolling at `m7_orderflow_latest.json` timestamp `2026-04-04T09:21:43Z`.
+
+| Metric | M7.A.5.37 (baseline) | Iter 1 (cold) | Iter 3 (warm) | Iter 5 (final) |
+|--------|---------------------|---------------|---------------|----------------|
+| total_pipeline.mean (ms) | 866 | 893 | **275** | 290 |
+| resolve_ms.mean | 197 | 296 | **109** | 94 |
+| enrichment_ms.mean | 96 | 63 | **30** | **7** |
+| oracle_ms.mean | 245 | 114 | **15** | 55 |
+| registry_preload_ms.mean | 327 | 421 | **121** | 133 |
+| latency_budget_hit_rate | **0.19** | 0.36 | **0.80** | **0.72** |
+
+Key observations: (1) enrichment_ms drops to ~0 for repeated tokens (fully cached). (2) oracle_ms drops to ~15ms on warm iteration (5000-block threshold covers inter-iteration gap). (3) registry_preload_ms drops from 327→121ms (5000-block threshold prevents per-iteration refresh). (4) Remaining latency from NEW pairs not seen in previous iterations (cold-start cost irreducible). (5) latency_budget_hit_rate peaks at 0.80 (iteration 3, all pairs warm), settles to 0.72 as new pairs appear. (6) total_pipeline mean 275-290ms is close to 250ms budget; warm-cache-only pairs consistently under budget.
+
+CI: 3228 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

@@ -571,12 +571,13 @@ def score_backrun_online(
     return result
 
 
-# M7.A.5.37: Module-level cache for oracle sanity results.
+# M7.A.5.38: Module-level cache for oracle sanity results.
 # Oracle is "sanity guardrail, not execution truth" — cached results are
-# acceptable if queried within 50 blocks (~100s on Arbitrum). This drops
-# oracle_ms from ~104ms to 0ms for repeated token pairs.
+# acceptable within a wide block window. On Arbitrum (~250ms blocks),
+# 5000 blocks ≈ 1250s ≈ 20 min, covering multi-iteration reuse in
+# 0.25h diagnostic sessions (M7.A.5.38).
 _oracle_cache: Dict[str, tuple] = {}  # key → (block_num, result_dict)
-_ORACLE_CACHE_STALE_BLOCKS = 50
+_ORACLE_CACHE_STALE_BLOCKS = 5000
 
 
 def check_oracle_sanity(

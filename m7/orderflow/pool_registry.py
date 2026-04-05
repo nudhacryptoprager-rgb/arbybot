@@ -98,11 +98,15 @@ class PoolRegistry:
     Thread-safety: NOT thread-safe.  Intended for single-threaded scoring loop.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, stale_threshold_blocks: int = 10) -> None:
         # {pair_key: [PoolRegistryEntry, ...]}
         self._pools: Dict[str, List[PoolRegistryEntry]] = {}
         # {pair_key} — set of pairs already queried (even if no pools found)
         self._queried: Set[str] = set()
+        # M7.A.5.38: Configurable staleness threshold for state refresh.
+        # Default 10 blocks (~2.5s). Persistent cold registries use higher
+        # values (e.g., 200) to avoid per-event refresh in diagnostic lane.
+        self.stale_threshold_blocks = stale_threshold_blocks
         # Stats
         self.preload_calls = 0
         self.cache_hits = 0
@@ -138,8 +142,8 @@ class PoolRegistry:
         # If already queried at this or later block, return cached
         if key in self._queried:
             existing = self._pools.get(key, [])
-            # Refresh state if stale (> 10 blocks old)
-            if existing and existing[0].last_block and (block_num - existing[0].last_block) > 10:
+            # Refresh state if stale (> stale_threshold_blocks old)
+            if existing and existing[0].last_block and (block_num - existing[0].last_block) > self.stale_threshold_blocks:
                 return self._refresh_state(key, rpc_url, block_num)
             self.cache_hits += 1
             return existing

@@ -2469,9 +2469,9 @@ class TestM7A537OracleCaching:
         assert isinstance(_oracle_cache, dict)
 
     def test_oracle_cache_stale_blocks_constant(self):
-        """Stale block threshold is 50."""
+        """Stale block threshold is 5000 (M7.A.5.38)."""
         from m7.orderflow.pricing import _ORACLE_CACHE_STALE_BLOCKS
-        assert _ORACLE_CACHE_STALE_BLOCKS == 50
+        assert _ORACLE_CACHE_STALE_BLOCKS == 5000
 
     def test_oracle_cache_hit_within_blocks(self):
         """Cached oracle result returned when within stale-block window."""
@@ -2561,7 +2561,7 @@ class TestM7A537ColdRegistryPersistence:
         from scripts.m7a_orderflow_loop import run_loop
         source = inspect.getsource(run_loop)
         assert "_cold_registry = None" in source
-        assert "_cold_registry = PoolRegistry()" in source
+        assert "_cold_registry = PoolRegistry(stale_threshold_blocks=5000)" in source
 
     def test_cold_registry_passed_as_warm(self):
         """Cold lane passes _cold_registry as warm_registry (not external)."""
@@ -2577,3 +2577,113 @@ class TestM7A537ColdRegistryPersistence:
         source = inspect.getsource(run_loop)
         assert "_cold_registry.preload_calls" in source
         assert "_cold_registry.cache_hits" in source
+
+
+# ---------------------------------------------------------------------------
+# M7.A.5.38 — Latency contour: enrichment cache, oracle 500-block, registry stale threshold
+# ---------------------------------------------------------------------------
+
+class TestM7A538EnrichmentCaching:
+    """M7.A.5.38: Enrichment uses module-level cache for immutable ERC-20 data."""
+
+    def test_enrichment_cache_exists(self):
+        """Module-level _enrichment_cache dict exists."""
+        from m7.orderflow.resolve import _enrichment_cache
+        assert isinstance(_enrichment_cache, dict)
+
+    def test_enrichment_cache_hit_skips_rpc(self):
+        """Second call for same tokens uses cache, no RPC."""
+        from unittest.mock import patch, MagicMock
+        from m7.orderflow import resolve as resolve_mod
+
+        # Clear cache state
+        resolve_mod._enrichment_cache.clear()
+
+        addr = "0xABCD1234567890abcdef1234567890abcdef1234"
+
+        mock_batcher = MagicMock()
+        mock_batcher.batch_symbol.return_value = {addr: "WETH"}
+        mock_batcher.batch_decimals.return_value = {addr: 18}
+
+        with patch("core.multicall.get_multicall_batcher", return_value=mock_batcher):
+            # First call — RPC
+            r1 = resolve_mod.enrich_tokens_batch([addr], "http://rpc", 100)
+            assert r1[addr.lower()]["enriched"] is True
+            assert r1[addr.lower()]["symbol"] == "WETH"
+            assert mock_batcher.batch_symbol.call_count == 1
+
+            # Second call — cache hit, no RPC
+            r2 = resolve_mod.enrich_tokens_batch([addr], "http://rpc", 200)
+            assert r2[addr.lower()]["enriched"] is True
+            assert r2[addr.lower()]["symbol"] == "WETH"
+            assert mock_batcher.batch_symbol.call_count == 1  # still 1
+
+        resolve_mod._enrichment_cache.clear()
+
+    def test_enrichment_cache_only_stores_enriched(self):
+        """Failed enrichment (symbol=None) is NOT cached."""
+        from unittest.mock import patch, MagicMock
+        from m7.orderflow import resolve as resolve_mod
+
+        resolve_mod._enrichment_cache.clear()
+
+        addr = "0xDEAD000000000000000000000000000000000001"
+
+        mock_batcher = MagicMock()
+        mock_batcher.batch_symbol.return_value = {addr: None}
+        mock_batcher.batch_decimals.return_value = {addr: None}
+
+        with patch("core.multicall.get_multicall_batcher", return_value=mock_batcher):
+            r1 = resolve_mod.enrich_tokens_batch([addr], "http://rpc", 100)
+            assert r1[addr.lower()]["enriched"] is False
+
+        # Cache should NOT contain the failed entry
+        assert addr.lower() not in resolve_mod._enrichment_cache
+
+        resolve_mod._enrichment_cache.clear()
+
+    def test_enrichment_cache_key_is_lowercase(self):
+        """Cache uses lowercased address as key."""
+        import inspect
+        from m7.orderflow.resolve import enrich_tokens_batch
+        source = inspect.getsource(enrich_tokens_batch)
+        assert "addr.lower()" in source
+
+
+class TestM7A538OracleThreshold:
+    """M7.A.5.38: Oracle cache threshold increased to 500 blocks."""
+
+    def test_oracle_threshold_is_5000(self):
+        """_ORACLE_CACHE_STALE_BLOCKS == 5000 (M7.A.5.38)."""
+        from m7.orderflow.pricing import _ORACLE_CACHE_STALE_BLOCKS
+        assert _ORACLE_CACHE_STALE_BLOCKS == 5000
+
+
+class TestM7A538RegistryStaleThreshold:
+    """M7.A.5.38: PoolRegistry accepts configurable stale_threshold_blocks."""
+
+    def test_default_stale_threshold_is_10(self):
+        """Default stale_threshold_blocks is 10 (hot lane backward compat)."""
+        from m7.orderflow.pool_registry import PoolRegistry
+        reg = PoolRegistry()
+        assert reg.stale_threshold_blocks == 10
+
+    def test_custom_stale_threshold(self):
+        """PoolRegistry accepts custom stale_threshold_blocks."""
+        from m7.orderflow.pool_registry import PoolRegistry
+        reg = PoolRegistry(stale_threshold_blocks=200)
+        assert reg.stale_threshold_blocks == 200
+
+    def test_cold_registry_uses_5000(self):
+        """Cold registry in m7a_orderflow_loop uses stale_threshold_blocks=5000."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        assert "PoolRegistry(stale_threshold_blocks=5000)" in source
+
+    def test_preload_pair_uses_instance_threshold(self):
+        """preload_pair() staleness check uses self.stale_threshold_blocks."""
+        import inspect
+        from m7.orderflow.pool_registry import PoolRegistry
+        source = inspect.getsource(PoolRegistry.preload_pair)
+        assert "self.stale_threshold_blocks" in source

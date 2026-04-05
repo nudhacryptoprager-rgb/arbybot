@@ -16,6 +16,10 @@ logger = logging.getLogger("m7.orderflow.resolve")
 # Cache is process-scoped: persists across iterations in the same Python process.
 _pool_token_cache: Dict[str, tuple] = {}
 
+# M7.A.5.38: Module-level cache for ERC-20 enrichment (symbol + decimals).
+# ERC-20 symbol/decimals are immutable contract properties — safe to cache forever.
+_enrichment_cache: Dict[str, dict] = {}  # addr_lower → {enriched, symbol, decimals, source}
+
 def _build_address_to_symbol(token_addresses: Dict[str, str]) -> Dict[str, str]:
     """Build reverse lookup: checksummed address → symbol."""
     result: Dict[str, str] = {}
@@ -216,22 +220,40 @@ def enrich_tokens_batch(
     if not token_addrs:
         return result
 
+    # M7.A.5.38: Check module-level cache first (immutable ERC-20 data)
+    uncached_addrs = []
+    for addr in token_addrs:
+        _ck = addr.lower()
+        cached = _enrichment_cache.get(_ck)
+        if cached is not None:
+            result[_ck] = dict(cached)
+        else:
+            uncached_addrs.append(addr)
+
+    if not uncached_addrs:
+        return result
+
     try:
         batcher = get_multicall_batcher(rpc_url, block_num)
-        symbols = batcher.batch_symbol(token_addrs)
-        decimals_map = batcher.batch_decimals(token_addrs)
-        for addr in token_addrs:
+        symbols = batcher.batch_symbol(uncached_addrs)
+        decimals_map = batcher.batch_decimals(uncached_addrs)
+        for addr in uncached_addrs:
             sym = symbols.get(addr)
             dec = decimals_map.get(addr)
-            result[addr.lower()] = {
+            entry = {
                 "enriched": sym is not None,
                 "symbol": sym,
                 "decimals": dec,
                 "source": "onchain",
             }
+            _ck = addr.lower()
+            result[_ck] = entry
+            # Cache only successfully enriched tokens (immutable data)
+            if sym is not None:
+                _enrichment_cache[_ck] = dict(entry)
     except Exception as exc:
         logger.debug("enrich_tokens_batch failed: %s", str(exc)[:100])
-        for addr in token_addrs:
+        for addr in uncached_addrs:
             result[addr.lower()] = {
                 "enriched": False, "symbol": None, "decimals": None, "source": "onchain",
             }

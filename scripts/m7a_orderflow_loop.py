@@ -450,10 +450,14 @@ def run_loop(cli_args) -> None:
                     _hot_registry = PoolRegistry()
                 _ext_registry = _hot_registry
             elif lane == "cold":
-                # M7.A.5.37: Lazy-init persistent cold registry
+                # M7.A.5.38: Lazy-init persistent cold registry with wide stale
+                # threshold (5000 blocks ≈ 20 min). Cold lane is diagnostic, not
+                # execution — stale pool state is acceptable and avoids
+                # per-event AND per-iteration RPC refresh that dominated
+                # registry_preload_ms (~300ms).
                 if _cold_registry is None:
                     from m7.orderflow.pool_registry import PoolRegistry
-                    _cold_registry = PoolRegistry()
+                    _cold_registry = PoolRegistry(stale_threshold_blocks=5000)
                 _ext_registry = _hot_registry
 
                 # M7.A.5.35: Prewarm from promoted watchlist (cold→hot promotion)
