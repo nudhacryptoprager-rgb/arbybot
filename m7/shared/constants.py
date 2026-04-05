@@ -253,7 +253,16 @@ HOT_WATCHLIST_PAIRS = [
 # M7.A.5.36: Promoted watchlist rules — cold-to-hot pair promotion
 # ---------------------------------------------------------------------------
 # A pair is promoted from cold lane to hot watchlist when it meets ALL rules:
-#   1. size_valid_for_token = True in at least one cold scored result
+# M7.A.5.39: Two-level promotion — candidate (relaxed) + execution (strict)
+#
+# **Candidate promotion** (level 1): pair enters registry prewarm.
+#   Rules: appearances >= threshold, has_active_pools, best_net > min, no anomaly.
+#   Does NOT require size_valid_for_token (enrichment may have failed).
+#
+# **Execution promotion** (level 2): pair eligible for hot-path scoring.
+#   Rules: all candidate rules PLUS size_valid_for_token = True.
+#
+#   1. size_valid_for_token = True in at least one cold scored result  [execution only]
 #   2. reject_reason != PRICING_ANOMALY
 #   3. registry_pools_active > 0
 #   4. Appeared in at least PROMOTED_MIN_COLD_APPEARANCES cold iterations
@@ -262,4 +271,5 @@ HOT_WATCHLIST_PAIRS = [
 PROMOTED_MIN_COLD_APPEARANCES = 2  # minimum cold iterations to qualify
 PROMOTED_MAX_PAIRS = 10            # cap promoted watchlist size
 PROMOTED_MIN_NET_BPS = -50.0       # minimum best_net_bps to qualify (not total garbage)
+PROMOTED_CANDIDATE_MAX_PAIRS = 20  # cap candidate watchlist (wider than execution)
 

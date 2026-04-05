@@ -213,6 +213,8 @@ def main():
             # Health check
             all_ok = True
             for p in processes:
+                # M7.A.5.39: Drain stdout to prevent pipe buffer stalls
+                p.drain_output()
                 if not p.check_and_restart():
                     all_ok = False
 

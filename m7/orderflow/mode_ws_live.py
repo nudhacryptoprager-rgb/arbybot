@@ -207,6 +207,10 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
 
         ws_conn.settimeout(args.ws_timeout)
 
+        # M7.A.5.39: Reuse single Web3 instance for all blocks (was per-block)
+        from web3 import Web3 as _W3_loop
+        _w3_loop = _W3_loop(_W3_loop.HTTPProvider(rpc_url))
+
         while blocks_processed < args.ws_blocks:
             elapsed = time.monotonic() - ws_start_time
             if elapsed > args.ws_timeout:
@@ -238,10 +242,8 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
             )
 
             # Fetch swap logs for THIS block only
-            from web3 import Web3
-            w3 = Web3(Web3.HTTPProvider(rpc_url))
             try:
-                logs = w3.eth.get_logs({
+                logs = _w3_loop.eth.get_logs({
                     "fromBlock": detected_block,
                     "toBlock": detected_block,
                     "topics": [SWAP_EVENT_TOPIC],

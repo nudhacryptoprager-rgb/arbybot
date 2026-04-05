@@ -2025,8 +2025,11 @@ class TestM7A535PromotedWatchlist:
         # M7.A.5.36: PROMOTED_MIN_COLD_APPEARANCES=2, so call twice
         _promote_pairs_from_cold(cold_artifact, stats)
         promoted = _promote_pairs_from_cold(cold_artifact, stats)
-        assert "WETH/USDC" in promoted
-        assert "RAIN/WETH" not in promoted  # size_valid=False
+        # M7.A.5.39: now returns dict with candidate/execution
+        assert "WETH/USDC" in promoted["execution"]
+        # RAIN/WETH has size_valid=False → candidate only, not execution
+        assert "RAIN/WETH" not in promoted["execution"]
+        assert "RAIN/WETH" in promoted["candidate"]
 
     def test_promote_excludes_anomaly_only(self):
         """Pairs with PRICING_ANOMALY are hard-excluded (M7.A.5.36)."""
@@ -2042,7 +2045,8 @@ class TestM7A535PromotedWatchlist:
         # Even with 2+ appearances, anomaly is hard exclude
         _promote_pairs_from_cold(cold_artifact, stats)
         promoted = _promote_pairs_from_cold(cold_artifact, stats)
-        assert "X/Y" not in promoted
+        assert "X/Y" not in promoted["execution"]
+        assert "X/Y" not in promoted["candidate"]
 
     def test_promote_caps_at_max(self):
         """Promoted list is capped at PROMOTED_MAX_PAIRS."""
@@ -2060,7 +2064,7 @@ class TestM7A535PromotedWatchlist:
         # M7.A.5.36: PROMOTED_MIN_COLD_APPEARANCES=2, so call twice
         _promote_pairs_from_cold(cold_artifact, stats)
         promoted = _promote_pairs_from_cold(cold_artifact, stats)
-        assert len(promoted) <= PROMOTED_MAX_PAIRS
+        assert len(promoted["execution"]) <= PROMOTED_MAX_PAIRS
 
     def test_promoted_watchlist_constants_importable(self):
         """New constants PROMOTED_MIN_COLD_APPEARANCES and PROMOTED_MAX_PAIRS exist."""
@@ -2069,11 +2073,12 @@ class TestM7A535PromotedWatchlist:
         assert PROMOTED_MAX_PAIRS >= 1
 
     def test_hot_artifact_includes_promoted_watchlist(self):
-        """_write_hot_artifact signature accepts promoted_pairs kwarg."""
+        """_write_hot_artifact signature accepts promoted_pairs and candidate_pairs kwargs."""
         import inspect
         from scripts.m7a_orderflow_loop import _write_hot_artifact
         sig = inspect.signature(_write_hot_artifact)
         assert "promoted_pairs" in sig.parameters
+        assert "candidate_pairs" in sig.parameters
 
 
 class TestM7A535StaleKPIContract:
@@ -2203,7 +2208,7 @@ class TestM7A536PromotionRules:
         }
         stats = {}
         promoted = _promote_pairs_from_cold(cold_artifact, stats)
-        assert "WETH/USDC" not in promoted  # only 1 appearance
+        assert "WETH/USDC" not in promoted.get("execution", [])  # only 1 appearance
 
     def test_two_appearances_promoted(self):
         """A qualified pair seen twice gets promoted."""
@@ -2218,7 +2223,7 @@ class TestM7A536PromotionRules:
         stats = {}
         _promote_pairs_from_cold(cold_artifact, stats)  # 1st
         promoted = _promote_pairs_from_cold(cold_artifact, stats)  # 2nd
-        assert "WETH/USDC" in promoted
+        assert "WETH/USDC" in promoted["execution"]
 
     def test_garbage_net_bps_excluded(self):
         """Pairs with best_net_bps below PROMOTED_MIN_NET_BPS are excluded."""
@@ -2234,7 +2239,8 @@ class TestM7A536PromotionRules:
         stats = {}
         _promote_pairs_from_cold(cold_artifact, stats)
         promoted = _promote_pairs_from_cold(cold_artifact, stats)
-        assert "JUNK/WETH" not in promoted
+        assert "JUNK/WETH" not in promoted.get("execution", [])
+        assert "JUNK/WETH" not in promoted.get("candidate", [])
 
     def test_anomaly_hard_exclude_even_with_size_valid(self):
         """PRICING_ANOMALY pairs are excluded even when size_valid=True."""
@@ -2249,7 +2255,8 @@ class TestM7A536PromotionRules:
         stats = {}
         _promote_pairs_from_cold(cold_artifact, stats)
         promoted = _promote_pairs_from_cold(cold_artifact, stats)
-        assert "BAD/WETH" not in promoted
+        assert "BAD/WETH" not in promoted.get("execution", [])
+        assert "BAD/WETH" not in promoted.get("candidate", [])
 
 
 class TestM7A536P50P90Tracking:
@@ -2687,3 +2694,218 @@ class TestM7A538RegistryStaleThreshold:
         from m7.orderflow.pool_registry import PoolRegistry
         source = inspect.getsource(PoolRegistry.preload_pair)
         assert "self.stale_threshold_blocks" in source
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# M7.A.5.39 — Two-level promotion + hot prewarm + cold lane registry fix
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestM7A539TwoLevelPromotion:
+    """M7.A.5.39: Two-level promotion system (candidate + execution)."""
+
+    def test_returns_dict_with_candidate_and_execution(self):
+        """_promote_pairs_from_cold returns dict with 'candidate' and 'execution' keys."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        cold_artifact = {"results": []}
+        stats = {}
+        result = _promote_pairs_from_cold(cold_artifact, stats)
+        assert isinstance(result, dict)
+        assert "candidate" in result
+        assert "execution" in result
+        assert isinstance(result["candidate"], list)
+        assert isinstance(result["execution"], list)
+
+    def test_candidate_without_size_valid(self):
+        """Pairs with active pools but size_valid=False get candidate promotion."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        cold_artifact = {
+            "results": [
+                {"actual_pair": "ARB/WETH", "size_valid_for_token": False,
+                 "reject_reason": None, "registry_pools_active": 2,
+                 "best_backrun_net_bps": 16.0},
+            ],
+        }
+        stats = {}
+        _promote_pairs_from_cold(cold_artifact, stats)
+        result = _promote_pairs_from_cold(cold_artifact, stats)
+        assert "ARB/WETH" in result["candidate"]
+        assert "ARB/WETH" not in result["execution"]
+
+    def test_execution_requires_size_valid(self):
+        """Only pairs with size_valid=True get execution promotion."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        cold_artifact = {
+            "results": [
+                {"actual_pair": "WETH/USDC", "size_valid_for_token": True,
+                 "reject_reason": None, "registry_pools_active": 2,
+                 "best_backrun_net_bps": 5.0},
+                {"actual_pair": "SPA/USDC", "size_valid_for_token": False,
+                 "reject_reason": None, "registry_pools_active": 1,
+                 "best_backrun_net_bps": 100.0},
+            ],
+        }
+        stats = {}
+        _promote_pairs_from_cold(cold_artifact, stats)
+        result = _promote_pairs_from_cold(cold_artifact, stats)
+        assert "WETH/USDC" in result["execution"]
+        assert "SPA/USDC" not in result["execution"]
+        assert "SPA/USDC" in result["candidate"]
+
+    def test_candidate_caps_at_candidate_max(self):
+        """Candidate list capped at PROMOTED_CANDIDATE_MAX_PAIRS."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        from m7.shared.constants import PROMOTED_CANDIDATE_MAX_PAIRS
+        cold_artifact = {
+            "results": [
+                {"actual_pair": f"T{i}/WETH", "size_valid_for_token": False,
+                 "reject_reason": None, "registry_pools_active": 2,
+                 "best_backrun_net_bps": float(i)}
+                for i in range(30)
+            ],
+        }
+        stats = {}
+        _promote_pairs_from_cold(cold_artifact, stats)
+        result = _promote_pairs_from_cold(cold_artifact, stats)
+        assert len(result["candidate"]) <= PROMOTED_CANDIDATE_MAX_PAIRS
+
+    def test_anomaly_excluded_from_both_levels(self):
+        """PRICING_ANOMALY pairs excluded from both candidate and execution."""
+        from scripts.m7a_orderflow_loop import _promote_pairs_from_cold
+        cold_artifact = {
+            "results": [
+                {"actual_pair": "BAD/PAIR", "size_valid_for_token": True,
+                 "reject_reason": "REJECT_PRICING_ANOMALY",
+                 "registry_pools_active": 5, "best_backrun_net_bps": 999.0},
+            ],
+        }
+        stats = {}
+        _promote_pairs_from_cold(cold_artifact, stats)
+        result = _promote_pairs_from_cold(cold_artifact, stats)
+        assert "BAD/PAIR" not in result["candidate"]
+        assert "BAD/PAIR" not in result["execution"]
+
+
+class TestM7A539Constants:
+    """M7.A.5.39: New constants for two-level promotion."""
+
+    def test_candidate_max_pairs_exists(self):
+        from m7.shared.constants import PROMOTED_CANDIDATE_MAX_PAIRS, PROMOTED_MAX_PAIRS
+        assert PROMOTED_CANDIDATE_MAX_PAIRS >= PROMOTED_MAX_PAIRS
+
+    def test_promoted_constants_relationship(self):
+        """Candidate max >= execution max (wider funnel)."""
+        from m7.shared.constants import PROMOTED_CANDIDATE_MAX_PAIRS, PROMOTED_MAX_PAIRS
+        assert PROMOTED_CANDIDATE_MAX_PAIRS >= PROMOTED_MAX_PAIRS
+
+
+class TestM7A539ColdLaneRegistryFix:
+    """M7.A.5.39: Cold lane must not trigger hot mode."""
+
+    def test_cold_lane_sets_ext_registry_none(self):
+        """Cold lane sets _ext_registry = None (not _hot_registry)."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        # The cold lane block should set _ext_registry = None
+        # and pass warm_registry for cold-mode scoring
+        assert "_ext_registry = None" in source
+
+    def test_cold_lane_prewarms_cold_registry(self):
+        """Cold lane preloads _cold_registry, not _hot_registry."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        assert "_cold_registry, _pairs_to_prewarm" in source
+
+
+class TestM7A539CrossLanePromoted:
+    """M7.A.5.39: Cross-lane promoted pairs file for hot/cold communication."""
+
+    def test_write_and_read_promoted_pairs(self):
+        """Promoted pairs can be written and read back."""
+        import tempfile
+        import os
+        from scripts.m7a_orderflow_loop import _write_promoted_pairs, _read_promoted_pairs, _PROMOTED_PAIRS_PATH
+
+        # Save original path and use temp
+        original_path = _PROMOTED_PAIRS_PATH
+        import scripts.m7a_orderflow_loop as loop_mod
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = os.path.join(tmpdir, "m7_promoted_pairs.json")
+            loop_mod._PROMOTED_PAIRS_PATH = tmp_path
+            try:
+                promoted = {
+                    "candidate": ["ARB/WETH", "SPA/USDC"],
+                    "execution": ["ARB/WETH"],
+                }
+                _write_promoted_pairs(promoted)
+                result = _read_promoted_pairs()
+                assert result["candidate"] == ["ARB/WETH", "SPA/USDC"]
+                assert result["execution"] == ["ARB/WETH"]
+            finally:
+                loop_mod._PROMOTED_PAIRS_PATH = original_path
+
+    def test_read_returns_empty_when_missing(self):
+        """Reading missing file returns empty dict."""
+        import scripts.m7a_orderflow_loop as loop_mod
+        from scripts.m7a_orderflow_loop import _read_promoted_pairs
+        original_path = loop_mod._PROMOTED_PAIRS_PATH
+        loop_mod._PROMOTED_PAIRS_PATH = "/nonexistent/path/file.json"
+        try:
+            result = _read_promoted_pairs()
+            assert result == {"candidate": [], "execution": []}
+        finally:
+            loop_mod._PROMOTED_PAIRS_PATH = original_path
+
+
+class TestM7A539HotPrewarmFromCross:
+    """M7.A.5.39: Hot lane reads cross-lane promoted pairs for prewarm."""
+
+    def test_hot_lane_reads_promoted_pairs(self):
+        """run_loop source contains _read_promoted_pairs call for hot lane."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        assert "_read_promoted_pairs()" in source
+
+    def test_hot_lane_prewarms_hot_registry(self):
+        """Hot lane prewarms _hot_registry (not _cold_registry)."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        assert "_hot_registry, _hot_pairs_to_prewarm" in source
+
+
+class TestM7A539HotArtifactTwoLevel:
+    """M7.A.5.39: Hot artifact includes two-level watchlist info."""
+
+    def test_write_hot_artifact_accepts_candidate_pairs(self):
+        """_write_hot_artifact accepts candidate_pairs kwarg."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        sig = inspect.signature(_write_hot_artifact)
+        assert "candidate_pairs" in sig.parameters
+
+    def test_web3_reuse_in_mode_ws_live(self):
+        """mode_ws_live creates Web3 once before the block loop, not per-block."""
+        import inspect
+        from m7.orderflow.mode_ws_live import run_ws_live
+        source = inspect.getsource(run_ws_live)
+        # Should have _w3_loop created before the while loop
+        assert "_w3_loop" in source
+        # Should NOT have per-block `w3 = Web3(Web3.HTTPProvider(rpc_url))` in the loop
+        # The old per-block pattern was `w3 = Web3(Web3.HTTPProvider(rpc_url))`
+        # After the fix, the in-loop reference is _w3_loop.eth.get_logs
+        assert "_w3_loop.eth.get_logs" in source
+
+
+class TestM7A539StdoutDrainFix:
+    """M7.A.5.39: start_nonstop_runtime drains stdout in health check loop."""
+
+    def test_drain_output_called_in_health_loop(self):
+        """drain_output() is called in the supervisor health check loop."""
+        import inspect
+        from scripts.start_nonstop_runtime import main
+        source = inspect.getsource(main)
+        assert "drain_output()" in source

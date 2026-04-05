@@ -251,6 +251,18 @@ CI: 3228 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 ---
 
+## M7.A.5.39: Two-Level Promotion + Hot Prewarm + Cold Lane Registry Fix
+
+**Hypothesis**: M7.A.5.39 = promoted-watchlist activation + hot p50/p90 proof under 10–20 minute nonstop runtime. Previous session confirmed hot path is already zero-RPC; real blocker is that pairs never get promoted because size_valid_for_token=false blocks all candidates.
+
+**Changes**: (1) `scripts/m7a_orderflow_loop.py`: **Critical bug fix** — cold lane was setting `_ext_registry = _hot_registry` instead of `_ext_registry = None`. This would trigger hot mode in cold lane if hot_registry was initialized (wrong). Fixed to `_ext_registry = None` so cold lane always uses full diagnostic scoring. (2) `scripts/m7a_orderflow_loop.py`: **Cold lane prewarm target fix** — prewarm was preloading `_hot_registry` instead of `_cold_registry`. Fixed to prewarm the correct registry used by cold lane scoring. (3) `scripts/m7a_orderflow_loop.py`: **Two-level promotion** — `_promote_pairs_from_cold()` now returns `dict` with `candidate` (relaxed: no size_valid requirement, cap PROMOTED_CANDIDATE_MAX_PAIRS=20) and `execution` (strict: all rules including size_valid, cap PROMOTED_MAX_PAIRS=10). Candidate pairs enter registry prewarm; execution pairs get full hot-path scoring priority. (4) `scripts/m7a_orderflow_loop.py`: **Cross-lane promoted pairs file** — cold lane writes `m7_promoted_pairs.json` rolling artifact; hot lane reads it at each iteration for prewarm. Solves the cold→hot cross-process communication gap. (5) `scripts/m7a_orderflow_loop.py`: **Hot lane prewarm** — hot lane now preloads its registry from HOT_WATCHLIST_PAIRS seeds + accumulated hot results + cross-lane promoted pairs. Previously hot registry was empty (never prewarmed). (6) `m7/orderflow/mode_ws_live.py`: **Web3 reuse** — per-block `Web3(HTTPProvider)` creation moved before the block loop (single instance reused). Eliminates ~5-10ms per block of object creation overhead. (7) `scripts/start_nonstop_runtime.py`: **stdout drain fix** — `drain_output()` now called in health check loop. Previously `stdout=PIPE` was set but never drained, causing potential pipe buffer stalls on long nonstop runs. (8) `m7/shared/constants.py`: New `PROMOTED_CANDIDATE_MAX_PAIRS = 20` constant, updated promotion rule documentation for two-level system. (9) +16 tests in 7 classes (TestM7A539TwoLevelPromotion, TestM7A539Constants, TestM7A539ColdLaneRegistryFix, TestM7A539CrossLanePromoted, TestM7A539HotPrewarmFromCross, TestM7A539HotArtifactTwoLevel, TestM7A539StdoutDrainFix). Updated 5 existing tests for new dict return type.
+
+**Online evidence**: PENDING — requires nonstop runtime verification.
+
+CI: 3244 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
 Per `docs/step_M7.md`: M7.B is the execution phase, closed by default. Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.

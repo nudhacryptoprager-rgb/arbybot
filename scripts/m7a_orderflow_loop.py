@@ -44,6 +44,7 @@ from m7.orderflow.profit_guard import check_profit_guard
 from m7.orderflow.scoring_parallel import score_backrun_fast
 from m7.shared.constants import (
     HOT_WATCHLIST_PAIRS,
+    PROMOTED_CANDIDATE_MAX_PAIRS,
     PROMOTED_MAX_PAIRS,
     PROMOTED_MIN_COLD_APPEARANCES,
     PROMOTED_MIN_NET_BPS,
@@ -52,6 +53,38 @@ from m7.shared.constants import (
 logger = get_logger("m7.orderflow.loop")
 
 _HOT_ARTIFACT_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_latest.json")
+# M7.A.5.39: Cross-lane promoted pairs file — cold writes, hot reads.
+_PROMOTED_PAIRS_PATH = os.path.join("data", "runs", "_rolling", "m7_promoted_pairs.json")
+
+
+def _write_promoted_pairs(promoted: dict) -> None:
+    """Write promoted pairs to rolling artifact for cross-lane communication."""
+    try:
+        os.makedirs(os.path.dirname(_PROMOTED_PAIRS_PATH), exist_ok=True)
+        payload = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "candidate": promoted.get("candidate", []),
+            "execution": promoted.get("execution", []),
+        }
+        with open(_PROMOTED_PAIRS_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception as exc:
+        logger.debug("Failed to write promoted pairs: %s", str(exc)[:80])
+
+
+def _read_promoted_pairs() -> dict:
+    """Read promoted pairs written by cold lane. Returns empty dict on error."""
+    try:
+        if os.path.exists(_PROMOTED_PAIRS_PATH):
+            with open(_PROMOTED_PAIRS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {
+                "candidate": data.get("candidate", []),
+                "execution": data.get("execution", []),
+            }
+    except Exception as exc:
+        logger.debug("Failed to read promoted pairs: %s", str(exc)[:80])
+    return {"candidate": [], "execution": []}
 
 
 def parse_args():
@@ -140,18 +173,25 @@ def _prewarm_registry_from_pairs(
     return count
 
 
-def _promote_pairs_from_cold(cold_artifact: dict, accumulated_cold_stats: dict) -> list:
+def _promote_pairs_from_cold(cold_artifact: dict, accumulated_cold_stats: dict) -> dict:
     """Identify pairs to promote from cold lane results to hot watchlist.
 
-    M7.A.5.36: Promotion rules (all must hold):
-      1. size_valid_for_token=True in at least one scored result
-      2. reject_reason != PRICING_ANOMALY (no anomaly flag ever)
-      3. registry_pools_active > 0
-      4. Appeared in >= PROMOTED_MIN_COLD_APPEARANCES cold iterations
-      5. Not stale-only with negative best_net (contradictory KPI)
-      6. best_net_bps > PROMOTED_MIN_NET_BPS (not total garbage)
+    M7.A.5.39: Two-level promotion:
 
-    Returns list of (sym_a, sym_b) tuples, capped at PROMOTED_MAX_PAIRS.
+    **Candidate** (level 1) — relaxed; enters registry prewarm:
+      - Appeared in >= PROMOTED_MIN_COLD_APPEARANCES cold iterations
+      - reject_reason != PRICING_ANOMALY (no anomaly flag ever)
+      - registry_pools_active > 0
+      - best_net_bps > PROMOTED_MIN_NET_BPS (not total garbage)
+      (Does NOT require size_valid_for_token)
+
+    **Execution** (level 2) — strict; eligible for hot-path scoring:
+      - All candidate rules PLUS:
+      - size_valid_for_token=True in at least one scored result
+
+    Returns dict with keys:
+      "candidate": list of pair strings (capped at PROMOTED_CANDIDATE_MAX_PAIRS)
+      "execution": list of pair strings (capped at PROMOTED_MAX_PAIRS)
     """
     results = cold_artifact.get("results", [])
     for r in results:
@@ -185,29 +225,32 @@ def _promote_pairs_from_cold(cold_artifact: dict, accumulated_cold_stats: dict) 
             if stats["best_net_bps"] is None or net > stats["best_net_bps"]:
                 stats["best_net_bps"] = net
 
-    # Apply promotion rules
-    promoted = []
+    # M7.A.5.39: Apply two-level promotion rules
+    candidates = []
+    execution = []
     for pair, stats in accumulated_cold_stats.items():
+        # Common rules (candidate level 1)
         if stats["appearances"] < PROMOTED_MIN_COLD_APPEARANCES:
-            continue
-        if not stats["size_valid_seen"]:
             continue
         if not stats["has_active_pools"]:
             continue
-        # M7.A.5.36: hard exclude any pair that has ever shown PRICING_ANOMALY
         if stats["has_anomaly"]:
             continue
-        # M7.A.5.36: reject garbage pairs with very negative net
         if stats["best_net_bps"] is None or stats["best_net_bps"] < PROMOTED_MIN_NET_BPS:
             continue
-        promoted.append(pair)
+        candidates.append(pair)
+        # Execution level 2: additionally requires size_valid
+        if stats["size_valid_seen"]:
+            execution.append(pair)
 
-    # Sort by best_net descending, cap at max
-    promoted.sort(
-        key=lambda p: accumulated_cold_stats[p].get("best_net_bps") or -999,
-        reverse=True,
-    )
-    return promoted[:PROMOTED_MAX_PAIRS]
+    # Sort by best_net descending, cap at respective limits
+    _sort_key = lambda p: accumulated_cold_stats[p].get("best_net_bps") or -999
+    candidates.sort(key=_sort_key, reverse=True)
+    execution.sort(key=_sort_key, reverse=True)
+    return {
+        "candidate": candidates[:PROMOTED_CANDIDATE_MAX_PAIRS],
+        "execution": execution[:PROMOTED_MAX_PAIRS],
+    }
 
 
 def _run_profit_guard_on_results(results: list) -> list:
@@ -253,11 +296,13 @@ def _run_profit_guard_on_results(results: list) -> list:
 
 
 def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = None,
-                        fast_results: list = None, promoted_pairs: list = None) -> None:
+                        fast_results: list = None, promoted_pairs: list = None,
+                        candidate_pairs: list = None) -> None:
     """Write minimal hot-lane artifact: best candidate + profit guard status.
 
     fast_results: list of BackrunResult from score_backrun_fast() (M7.A.5.32)
-    promoted_pairs: list of "SYM_A/SYM_B" promoted from cold (M7.A.5.35)
+    promoted_pairs: list of "SYM_A/SYM_B" execution-promoted from cold (M7.A.5.39)
+    candidate_pairs: list of "SYM_A/SYM_B" candidate-promoted (wider, M7.A.5.39)
     """
     results = artifact.get("results", [])
     best = None
@@ -286,16 +331,22 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "profit_guard_passed_count": len(guard_results) if guard_results else 0,
     }
 
-    # M7.A.5.35: Promoted watchlist info
-    if promoted_pairs:
+    # M7.A.5.39: Two-level promoted watchlist info
+    _cand = candidate_pairs or []
+    _exec = promoted_pairs or []
+    if _exec or _cand:
         hot["promoted_watchlist"] = {
-            "count": len(promoted_pairs),
-            "pairs": promoted_pairs,
+            "count": len(_exec),
+            "pairs": _exec,
+            "candidate_count": len(_cand),
+            "candidate_pairs": _cand,
         }
     else:
         hot["promoted_watchlist"] = {
             "count": 0,
             "pairs": [f"{a}/{b}" for a, b in HOT_WATCHLIST_PAIRS],
+            "candidate_count": 0,
+            "candidate_pairs": [],
             "source": "seed_only",
         }
 
@@ -415,9 +466,9 @@ def run_loop(cli_args) -> None:
     _accumulated_pairs: dict = {}  # pair_key -> session_low_lag_pairs info
     _hot_registry = None  # lazy-init on first hot iteration
 
-    # M7.A.5.35: Cross-iteration cold stats for promoted watchlist
+    # M7.A.5.35/M7.A.5.39: Cross-iteration cold stats for two-level promotion
     _cold_pair_stats: dict = {}   # pair_key -> promotion stats from cold results
-    _promoted_pairs: list = []    # list of "SYM_A/SYM_B" promoted from cold
+    _promoted_pairs: dict = {"candidate": [], "execution": []}  # two-level promotion
 
     # M7.A.5.37: Persistent cold registry — survives across cold iterations
     # Passed via warm_registry to avoid hot-mode trigger. Caches pool data
@@ -442,13 +493,57 @@ def run_loop(cli_args) -> None:
         )
 
         try:
-            # M7.A.5.31: Hot lane prewarms registry from accumulated pairs
+            # M7.A.5.39: Lane-specific registry init + prewarm
             _ext_registry = None
             if lane == "hot":
                 if _hot_registry is None:
                     from m7.orderflow.pool_registry import PoolRegistry
                     _hot_registry = PoolRegistry()
                 _ext_registry = _hot_registry
+
+                # M7.A.5.39: Prewarm hot registry from seeds + cross-lane promoted pairs
+                _hot_pairs_to_prewarm: dict = {}
+                # 1. Seed defaults on first iteration
+                if iteration == 1:
+                    for sym_a, sym_b in HOT_WATCHLIST_PAIRS:
+                        pk = f"{sym_a}/{sym_b}"
+                        _hot_pairs_to_prewarm[pk] = {"pair": pk, "seen_count": 0}
+                # 2. Add accumulated hot pairs from prior hot iterations
+                for pk, info in _accumulated_pairs.items():
+                    if pk not in _hot_pairs_to_prewarm:
+                        _hot_pairs_to_prewarm[pk] = info
+                # 3. Read candidate-promoted pairs from cold lane (cross-process)
+                _cross_promoted = _read_promoted_pairs()
+                for ppair in _cross_promoted.get("candidate", []):
+                    if ppair not in _hot_pairs_to_prewarm:
+                        _hot_pairs_to_prewarm[ppair] = {"pair": ppair, "seen_count": 0}
+
+                if _hot_pairs_to_prewarm:
+                    try:
+                        from config import load_dexes, get_all_token_addresses
+                        from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
+                        _chain_id = _CHAIN_KEY_TO_ID.get(cli_args.chain.lower())
+                        _rpc, _, _ = resolve_rpc_http(
+                            chain_id=_chain_id, network=cli_args.chain,
+                            env=dict(os.environ),
+                        )
+                        if _rpc:
+                            from web3 import Web3 as _W3
+                            _block = _W3(_W3.HTTPProvider(_rpc)).eth.block_number
+                            _all_dexes = load_dexes()
+                            _dex_cfg = _all_dexes.get(cli_args.chain, {})
+                            _token_addr = get_all_token_addresses(cli_args.chain)
+                            _pw = _prewarm_registry_from_pairs(
+                                _hot_registry, _hot_pairs_to_prewarm,
+                                _token_addr, _dex_cfg, _rpc, _block,
+                            )
+                            logger.info(
+                                "Hot prewarm: %d pairs from %d candidates (iter %d, cross=%d)",
+                                _pw, len(_hot_pairs_to_prewarm), iteration,
+                                len(_cross_promoted.get("candidate", [])),
+                            )
+                    except Exception as _pw_exc:
+                        logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
             elif lane == "cold":
                 # M7.A.5.38: Lazy-init persistent cold registry with wide stale
                 # threshold (5000 blocks ≈ 20 min). Cold lane is diagnostic, not
@@ -458,14 +553,17 @@ def run_loop(cli_args) -> None:
                 if _cold_registry is None:
                     from m7.orderflow.pool_registry import PoolRegistry
                     _cold_registry = PoolRegistry(stale_threshold_blocks=5000)
-                _ext_registry = _hot_registry
+                # M7.A.5.39: Cold lane must NOT trigger hot mode.
+                # external_registry=None → _hot_mode=False in run_ws_live.
+                # Cold lane uses warm_registry param instead.
+                _ext_registry = None
 
                 # M7.A.5.35: Prewarm from promoted watchlist (cold→hot promotion)
                 # + accumulated session pairs + seed HOT_WATCHLIST_PAIRS on iter 1
                 _pairs_to_prewarm = dict(_accumulated_pairs) if _accumulated_pairs else {}
 
-                # Add promoted pairs from cold lane analysis
-                for ppair in _promoted_pairs:
+                # M7.A.5.39: Add candidate-promoted pairs (wider set) for prewarm
+                for ppair in _promoted_pairs.get("candidate", []):
                     if ppair not in _pairs_to_prewarm:
                         _pairs_to_prewarm[ppair] = {"pair": ppair, "seen_count": 0}
 
@@ -492,11 +590,11 @@ def run_loop(cli_args) -> None:
                             _dex_cfg = _all_dexes.get(cli_args.chain, {})
                             _token_addr = get_all_token_addresses(cli_args.chain)
                             _pw = _prewarm_registry_from_pairs(
-                                _hot_registry, _pairs_to_prewarm,
+                                _cold_registry, _pairs_to_prewarm,
                                 _token_addr, _dex_cfg, _rpc, _block,
                             )
                             logger.info(
-                                "Hot prewarm: %d pairs from %d candidates (iter %d)",
+                                "Cold prewarm: %d pairs from %d candidates (iter %d)",
                                 _pw, len(_pairs_to_prewarm), iteration,
                             )
                     except Exception as _pw_exc:
@@ -558,14 +656,18 @@ def run_loop(cli_args) -> None:
                 # Cold lane: full diagnostic rolling artifact
                 _write_rolling_m7(artifact)
 
-                # M7.A.5.35: Promote pairs from cold results to hot watchlist
+                # M7.A.5.39: Two-level promotion from cold results
                 _promoted_pairs = _promote_pairs_from_cold(artifact, _cold_pair_stats)
-                if _promoted_pairs:
+                _n_cand = len(_promoted_pairs.get("candidate", []))
+                _n_exec = len(_promoted_pairs.get("execution", []))
+                if _n_cand > 0 or _n_exec > 0:
                     logger.info(
-                        "Cold→hot promotion: %d pairs promoted %s",
-                        len(_promoted_pairs),
-                        _promoted_pairs[:5],
+                        "Cold→hot promotion: %d candidate, %d execution %s",
+                        _n_cand, _n_exec,
+                        _promoted_pairs.get("candidate", [])[:5],
                     )
+                    # M7.A.5.39: Write to shared file for hot lane cross-read
+                    _write_promoted_pairs(_promoted_pairs)
 
                 # M7.A.5.37: Log cold registry persistence stats
                 if _cold_registry is not None:
@@ -581,7 +683,8 @@ def run_loop(cli_args) -> None:
                 _write_hot_artifact(
                     artifact, iteration, guard_results,
                     fast_results=fast_results,
-                    promoted_pairs=_promoted_pairs,
+                    promoted_pairs=_promoted_pairs.get("execution", []),
+                    candidate_pairs=_promoted_pairs.get("candidate", []),
                 )
 
             best = artifact.get("best_net_bps_clean")
