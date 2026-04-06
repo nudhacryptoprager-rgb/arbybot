@@ -40,6 +40,7 @@ def run_ws_live(
     external_registry=None,
     warm_registry=None,
     bridge_pool_addresses: Optional[Set[str]] = None,
+    bridge_hit_deficit: bool = False,
 ) -> dict:
     """Execute the ws-live WebSocket replay mode and return the artifact dict.
 
@@ -58,6 +59,9 @@ def run_ws_live(
     bridge_pool_addresses : optional set of checksummed/lowered pool addresses
         from cold→hot bridge. When provided in hot mode, eth_getLogs uses a
         targeted address filter so only events from bridge pools are fetched.
+    bridge_hit_deficit : if True, the caller (loop) has detected that events
+        exist but bridge_pool_hit_total == 0. Broad fallback interval is
+        set to 2 (50% broad) to maximize coverage.
         M7.A.5.47: Focused event intake for bridge pools.
     """
     logger.info(
@@ -271,15 +275,17 @@ def run_ws_live(
             #   This catches events the focused filter misses and provides
             #   diagnostics (events_at_non_bridge_pools vs no_events_at_all).
             _hot_mode_active = external_registry is not None
-            # M7.A.5.47c: Adaptive broad fallback — if we've seen events
-            # but no bridge hits, scan broad more often to gather miss data.
-            _has_events_no_bridge = (
+            # M7.A.5.47e: Adaptive broad fallback — controlled by caller's
+            # bridge_hit_deficit flag (from rollup: events>0 but hits=0).
+            # Within-window: also go broad early if we see broad logs but
+            # no focused logs (intra-iteration learning).
+            _intra_window_deficit = (
                 _broad_logs > 0
                 and _hot_mode_active
                 and bridge_pool_addresses
                 and _focused_logs == 0
             )
-            _BROAD_FALLBACK_INTERVAL = 2 if _has_events_no_bridge else 3
+            _BROAD_FALLBACK_INTERVAL = 2 if (bridge_hit_deficit or _intra_window_deficit) else 3
             _is_broad_block = (blocks_processed % _BROAD_FALLBACK_INTERVAL) == 0
             try:
                 _log_filter: dict = {

@@ -28,6 +28,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,17 +64,36 @@ _HOT_INTENTS_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_intents_lat
 _HOT_ROLLUP_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_rollup_latest.json")
 
 
+def _atomic_json_write(path: str, data: dict, **kwargs) -> None:
+    """Write *data* as JSON to *path* atomically (tmp → os.replace).
+
+    M7.A.5.47e: Prevents cross-process readers from seeing truncated JSON.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        dir=os.path.dirname(path), suffix=".tmp", prefix=".arby_"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, **kwargs)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _write_promoted_pairs(promoted: dict) -> None:
     """Write promoted pairs to rolling artifact for cross-lane communication."""
     try:
-        os.makedirs(os.path.dirname(_PROMOTED_PAIRS_PATH), exist_ok=True)
         payload = {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "candidate": promoted.get("candidate", []),
             "execution": promoted.get("execution", []),
         }
-        with open(_PROMOTED_PAIRS_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        _atomic_json_write(_PROMOTED_PAIRS_PATH, payload, indent=2)
     except Exception as exc:
         logger.debug("Failed to write promoted pairs: %s", str(exc)[:80])
 
@@ -196,8 +216,7 @@ def _write_cold_hot_bridge(
         except Exception:
             pass
         payload["hot_seen_unresolved_pools"] = _hot_unresolved
-        with open(_COLD_HOT_BRIDGE_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        _atomic_json_write(_COLD_HOT_BRIDGE_PATH, payload, indent=2)
     except Exception as exc:
         logger.debug("Failed to write cold-hot bridge: %s", str(exc)[:80])
 
@@ -589,17 +608,22 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     hot["hot_skip_count"] = _hot_skip_count
 
     # M7.A.5.42: Hot-gap debug counters — diagnose conversion gap
-    _fast_attempted = sum(
+    # M7.A.5.47e: Disentangle counters. "admitted" = entered scoring pipeline
+    # (total events minus hot_skip). "scored" = got registry_fast result.
+    _fast_scored = sum(
         1 for r in _raw_results
         if getattr(r, "scoring_path", None) == "registry_fast"
     )
+    _admitted_to_scoring = len(_raw_results) - _hot_skip_count
     # M7.A.5.43: 3 hot-miss counters from bridge diagnostics
     _bd = bridge_diagnostics or {}
     hot["hot_gap_debug"] = {
         "total_events": len(_raw_results),
-        "fast_path_attempted_count": _fast_attempted,
+        # M7.A.5.47e: admission = events that passed registry check (not skipped)
+        "admitted_to_scoring": _admitted_to_scoring,
+        "fast_path_scored_count": _fast_scored,
         "not_in_hot_registry_count": _hot_skip_count,
-        "watchlist_match_count": _fast_attempted,  # events that matched promoted watchlist
+        "watchlist_match_count": _bd.get("bridge_pool_address_hit_count", 0),
         # M7.A.5.43: Bridge-driven diagnostics
         "pool_address_match_count": _bd.get("pool_address_match_count", 0),
         "canonical_pair_match_count": _bd.get("canonical_pair_match_count", 0),
@@ -612,8 +636,9 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "bridge_loaded_candidate_count": _bd.get("bridge_loaded_candidate_count", 0),
         # M7.A.5.46: Pair-level fallback counter
         "bridge_pair_fallback_count": _bd.get("bridge_pair_fallback_count", 0),
-        # M7.A.5.47: 6 canonical hot miss counters (per-window)
-        "fast_score_attempted": _fast_attempted,
+        # M7.A.5.47e: Canonical per-window scoring counters
+        "fast_score_attempted": _admitted_to_scoring,
+        "fast_score_scored": _fast_scored,
         "fast_score_rejected_economics": sum(
             1 for r in _raw_results
             if getattr(r, "scoring_path", None) == "registry_fast"
@@ -736,9 +761,7 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         }
 
     try:
-        os.makedirs(os.path.dirname(_HOT_ARTIFACT_PATH), exist_ok=True)
-        with open(_HOT_ARTIFACT_PATH, "w", encoding="utf-8") as f:
-            json.dump(hot, f, indent=2, default=str)
+        _atomic_json_write(_HOT_ARTIFACT_PATH, hot, indent=2, default=str)
         logger.info("Hot lane artifact written to %s", _HOT_ARTIFACT_PATH)
     except Exception as exc:
         logger.warning("Failed to write hot artifact: %s", str(exc)[:120])
@@ -855,9 +878,7 @@ def _write_hot_intents(
     }
 
     try:
-        os.makedirs(os.path.dirname(_HOT_INTENTS_PATH), exist_ok=True)
-        with open(_HOT_INTENTS_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, default=str)
+        _atomic_json_write(_HOT_INTENTS_PATH, payload, indent=2, default=str)
         logger.info(
             "Hot intents written: scored=%d positive=%d guard_passed=%d headline=%s",
             _hot_scored, _hot_positive, _guard_passed, headline_level,
@@ -899,6 +920,8 @@ def _update_hot_rollup(
     _guard = guard_results or []
 
     rollup["last_updated"] = ts
+    # M7.A.5.47e: Track first window timestamp for dashboard
+    rollup.setdefault("first_window_at", ts)
     rollup["windows_seen"] = rollup.get("windows_seen", 0) + 1
     rollup["events_seen_total"] = rollup.get("events_seen_total", 0) + events_count
     rollup["bridge_loaded_candidate_count_total"] = (
@@ -940,8 +963,14 @@ def _update_hot_rollup(
         rollup.get("registry_hit_for_event_pool_total", 0)
         + _bd.get("pool_address_match_count", 0)
     )
+    # M7.A.5.47e: admitted = events that entered pipeline (not hot_skip)
+    _hot_skip_in_window = sum(
+        1 for r in _fast
+        if getattr(r, "scoring_path", None) == "hot_skip"
+    )
+    _admitted_in_window = events_count - _hot_skip_in_window
     rollup["fast_score_attempted_total"] = (
-        rollup.get("fast_score_attempted_total", 0) + len(_fast)
+        rollup.get("fast_score_attempted_total", 0) + _admitted_in_window
     )
     rollup["fast_score_rejected_economics_total"] = (
         rollup.get("fast_score_rejected_economics_total", 0)
@@ -1000,37 +1029,39 @@ def _update_hot_rollup(
         rollup.get("hot_seen_unresolved_pool_count_max", 0), _hu_unresolved
     )
 
-    # Derive dominant hot miss reason from cumulative counters
-    # M7.A.5.47b: Split bridge_pool_not_hit into two sub-reasons:
-    #   no_events_in_filtered_window — windows with 0 events (filter too tight)
-    #   events_seen_but_not_bridge_pool — events exist but none match bridge pools
-    _windows_no_events = max(0,
-        rollup.get("windows_seen", 0)
-        - rollup.get("windows_with_events", 0)
+    # M7.A.5.47e: Per-window classification (mutually exclusive).
+    # Each window falls into exactly ONE miss category. Rollup tracks
+    # per-category window counts, then dominant = max by window count.
+    _window_class = "none"
+    if events_count == 0:
+        _window_class = "no_events_in_window"
+    elif _bd.get("bridge_pool_address_hit_count", 0) == 0:
+        _window_class = "events_but_no_bridge_hit"
+    elif len(_fast) == 0:
+        _window_class = "bridge_hit_but_not_scored"
+    elif sum(1 for r in _fast if (getattr(r, "best_backrun_net_bps", 0) or 0) > 0) == 0:
+        _window_class = "scored_but_rejected_economics"
+    elif len(_guard) == 0:
+        _window_class = "positive_but_no_guard_pass"
+    else:
+        _window_class = "guard_passed"
+
+    # Accumulate per-class window counts
+    rollup.setdefault("window_miss_classes", {})
+    rollup["window_miss_classes"][_window_class] = (
+        rollup["window_miss_classes"].get(_window_class, 0) + 1
     )
-    _windows_events_no_bridge = max(0,
-        rollup.get("windows_with_events", 0)
-        - rollup.get("windows_with_bridge_hits", 0)
-    )
-    _miss_counts = {
-        "no_events_in_window": _windows_no_events,
-        "no_events_in_filtered_window": _windows_no_events,
-        "events_seen_but_not_bridge_pool": _windows_events_no_bridge,
-        "bridge_pool_hit_but_registry_miss": rollup.get("bridge_pool_hit_but_registry_miss_total", 0),
-        "pool_not_in_registry": max(0,
-            rollup.get("bridge_pool_hit_total", 0)
-            - rollup.get("registry_hit_for_event_pool_total", 0)
-        ),
-        "fast_score_rejected": rollup.get("fast_score_rejected_economics_total", 0),
+    # Dominant = class with most windows (excluding guard_passed)
+    _miss_only = {
+        k: v for k, v in rollup["window_miss_classes"].items()
+        if k != "guard_passed"
     }
-    rollup["dominant_hot_miss_reason"] = max(_miss_counts, key=_miss_counts.get) if any(
-        v > 0 for v in _miss_counts.values()
-    ) else "none"
+    rollup["dominant_hot_miss_reason"] = (
+        max(_miss_only, key=_miss_only.get) if _miss_only else "none"
+    )
 
     try:
-        os.makedirs(os.path.dirname(_HOT_ROLLUP_PATH), exist_ok=True)
-        with open(_HOT_ROLLUP_PATH, "w", encoding="utf-8") as f:
-            json.dump(rollup, f, indent=2, default=str)
+        _atomic_json_write(_HOT_ROLLUP_PATH, rollup, indent=2, default=str)
     except Exception as exc:
         logger.debug("Failed to write hot rollup: %s", str(exc)[:80])
 
@@ -1375,9 +1406,13 @@ def run_loop(cli_args) -> None:
                 except NameError:
                     pass  # _bridge not yet available (first iteration, no cold run yet)
 
+            # M7.A.5.47e: Pass bridge-hit deficit flag so ws_live broadens
+            # scan when rollup shows events exist but zero bridge hits.
+            _bhd = lane == "hot" and _rollup_wwe > 0 and _rollup_wwbh == 0
             artifact = run_ws_live(ws_args, external_registry=_ext_registry,
                                    warm_registry=_cold_registry if lane == "cold" else None,
-                                   bridge_pool_addresses=_bridge_pool_addrs)
+                                   bridge_pool_addresses=_bridge_pool_addrs,
+                                   bridge_hit_deficit=_bhd)
             window_ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             events_count = artifact.get("events_count", 0)

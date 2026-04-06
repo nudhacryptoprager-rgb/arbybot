@@ -2,83 +2,88 @@
 
 ## 0) Meta
 timestamp_utc: 2026-04-02T09:03:41Z
-mode: ONLINE (10-min nonstop verified)
+mode: OFFLINE (CI + unit tests verified)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, NORMAL)
 code_identity:
   primary: ts:2026-04-02T09:03:41Z
   dirty: true
-  desc: M7.A.5.47d — cross-process hot-seen backfill, cold priority-resolve, 2-bucket bridge ranking
+  desc: M7.A.5.47e — hot-rollup semantic correctness, atomic writes, disentangled counters
 
 ## Session Completion
-session_goal: M7.A.5.47d — fix structural coverage gap (hot-discovered pools invisible to cold lane) via cross-process bridge, priority resolve, 2-bucket ranking
-goal_status: REACHED (cross-process bridge WORKS: hot_seen_unresolved_pool_count_max=3 was 0 before fix; backfill machinery operational; bridge_pool_hit_total=0 is now pool diversity gap)
+session_goal: M7.A.5.47e — fix hot-rollup counter semantics, dominant_hot_miss_reason reliability, first_window_at, atomic writes, adaptive bridge_hit_deficit logic
+goal_status: REACHED (all 9 code changes landed, 17 new tests pass, 3344 total tests pass, ALL CI GATES PASS)
 close_allowed: true
-remaining_blockers: bridge_pool_hit_total=0 — hot-seen pools now surfaced and partially resolved but not yet matched by focused filter within 10-min window
-evidence_session_run_dirs: [tests/unit (3327 passed, 6 skipped), CI full pipeline PASS, nonstop 10.2min (3/3 alive, 0 restarts)]
-primary_blocker_of_session: hot-discovered pools invisible to cold lane (cross-process memory gap)
-blocker_status_before: ACTIVE (hot_seen_unresolved_pool_count_max=0, cold lane never saw hot-seen pools)
-blocker_status_after: RESOLVED (hot_seen_unresolved_pool_count_max=3, backfill machinery operational, 2/3 pools resolved during run)
+remaining_blockers: bridge_pool_hit_total=0 — unchanged; 47e fixes observability/correctness, not the structural gap
+evidence_session_run_dirs: [tests/unit (3344 passed, 6 skipped), CI full pipeline PASS]
+primary_blocker_of_session: counter semantics broken (watchlist_match_count aliased to fast_scored, fast_score_attempted counted scored not admitted, dominant_hot_miss_reason unreliable, first_window_at missing, non-atomic writes)
+blocker_status_before: ACTIVE (counters lie, dashboard shows ?Z, miss classification duplicated keys)
+blocker_status_after: RESOLVED (counters truthful, first_window_at written, 6-class per-window classification, atomic writes)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.A.5.47d — cross-process hot-seen backfill + 2-bucket bridge ranking
+goal (Roadmap): M7.A.5.47e — hot-rollup semantic correctness + atomic writes
 change_summary:
-  - scripts/m7a_orderflow_loop.py (MODIFIED): (a) Cross-process bridge fix — _write_cold_hot_bridge() reads hot rollup artifact for hot_seen_pool_histogram_top, merges with in-memory _hot_active_pools. (b) Cold priority-resolve — reads unresolved from bridge + direct rollup fallback (eliminates 1-iter delay), calls batch_pre_resolve_pools() for ≤20 addrs. (c) 2-bucket bridge ranking: A=cold_exec, B=hot-seen resolved, fill=PTT ranked by cold_events + hot_events×3. Adaptive cap 50→100 on coverage gap. (d) Rollup: hot_seen_unresolved_pool_count, resolved_from_hot_seen_count, _max. (e) bridge_miss_sample_top surfaced at top level of hot artifact.
-  - m7/orderflow/mode_ws_live.py (MODIFIED): Removed hard [:50] cap on focused filter (adaptive cap in loop.py).
-  - docs/status/Status_M7.md (MODIFIED): Added M7.A.5.47d section, compressed 47b/47c.
-  - docs/DEV_REPORT_LATEST.md (this file, rewritten for M7.A.5.47d)
+  - scripts/m7a_orderflow_loop.py (MODIFIED): (a) _atomic_json_write() helper (tmpfile → os.replace) for all 5 rolling artifact writes. (b) hot_gap_debug counter disentanglement: watchlist_match_count = bridge_pool_address_hit_count (was fast_attempted); new admitted_to_scoring = events − hot_skip; renamed fast_path_attempted → fast_path_scored; new fast_score_scored field. (c) Rollup fast_score_attempted_total = admission count (events − hot_skip), not len(_fast). (d) first_window_at via setdefault(). (e) dominant_hot_miss_reason: per-window 6-class mutually-exclusive classification with window_miss_classes dict. (f) bridge_hit_deficit flag passed to run_ws_live().
+  - m7/orderflow/mode_ws_live.py (MODIFIED): (a) Added bridge_hit_deficit param. (b) Adaptive broad uses bridge_hit_deficit OR intra-window deficit.
+  - monitoring/dashboard_server.py (MODIFIED): Removed dead /api/intents (redundant with /api/hot).
+  - tests/unit/test_hot_rollup_semantics.py (NEW): 17 tests covering first_window_at, counter disentanglement, per-window classification, atomic write contract, hot_gap_debug counters.
+  - tests/unit/test_orderflow_artifacts.py (MODIFIED): Updated test for /api/intents removal.
+  - docs/status/Status_M7.md (MODIFIED): Added M7.A.5.47e section, compressed 47b/47c/47d.
+  - docs/DEV_REPORT_LATEST.md (this file, rewritten for M7.A.5.47e)
 touched_files:
   - scripts/m7a_orderflow_loop.py (MODIFIED)
   - m7/orderflow/mode_ws_live.py (MODIFIED)
+  - monitoring/dashboard_server.py (MODIFIED)
+  - tests/unit/test_hot_rollup_semantics.py (NEW)
+  - tests/unit/test_orderflow_artifacts.py (MODIFIED)
   - docs/status/Status_M7.md (MODIFIED)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3327 passed, 6 skipped)
+py -3.11 -m pytest tests/unit -q: PASS (3344 passed, 6 skipped)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (ALL REQUIRED GATES PASSED)
-py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 8099 --m7-hot-pause 1 --m7-cold-pause 5: PASS (3/3 alive, 0 restarts, 10.2min)
 
 ## 3) Artifacts Attached
 
-rolling (fresh from 10.2-min nonstop):
-  - data/runs/_rolling/m7_hot_rollup_latest.json: windows_seen=100, events_seen_total=16, bridge_pool_hit_total=0, hot_seen_unresolved_pool_count_max=3
-  - data/runs/_rolling/m7_cold_hot_bridge.json: ptt=45, cold_exec=1, near_exec=5, hot_seen_unresolved_pools=1 (0xe516...resolved=false)
-  - data/runs/_rolling/m7_hot_latest.json: bridge_miss_sample_top present (empty in final zero-event window)
+No new rolling artifacts (offline session). Rolling artifacts unchanged from M7.A.5.47d.
 
-## 4) Key Results — M7.A.5.47d
+## 4) Key Results — M7.A.5.47e
 
-### 10-Min Nonstop Evidence
+### Counter Disentanglement
 
-| Metric | M7.A.5.47c | M7.A.5.47d | Delta |
-|--------|-----------|-----------|-------|
-| events_seen_total | 7 | 16 | +2.3x |
-| windows_with_events | 5 | 10 | +2x |
-| bridge_pool_hit_total | 0 | 0 | — |
-| hot_seen_unresolved_pool_count_max | 0 | 3 | NEW (cross-process fix) |
-| hot_seen_unresolved_pool_count | 0 | 1 | 2 resolved during run |
-| bridge_loaded_candidate_count_total | 467 | 565 | +21% |
-| broad_fallback_events_total | 10 | 37 | +3.7x |
-| ptt | 56 | 45 | (market variance) |
+| Field | Before (47d) | After (47e) | Fix |
+|-------|-------------|-------------|-----|
+| watchlist_match_count | = fast_attempted (wrong) | = bridge_pool_address_hit_count | From bridge diagnostics |
+| fast_score_attempted | = len(_fast) (scored) | = events − hot_skip (admitted) | Admission not scored |
+| fast_path_scored_count | missing | = scoring_path=="registry_fast" | New field |
+| fast_score_scored | missing | = scoring_path=="registry_fast" | New field |
+| admitted_to_scoring | missing | = events − hot_skip | New field |
 
-### Root Cause: Cross-Process Memory Gap (FIXED)
+### Per-Window Miss Classification
 
-Prior to M7.A.5.47d, `_hot_active_pools` was accumulated in the hot process but `_write_cold_hot_bridge()` ran only in the cold process (separate PID). Cold lane's `_hot_active_pools` was always empty → `hot_seen_unresolved_pools` always empty → cold never priority-resolved hot-seen pools.
+6 mutually-exclusive classes per window, accumulated in `window_miss_classes` dict:
+1. `no_events_in_window` — zero events received
+2. `events_but_no_bridge_hit` — events but bridge_pool_address_hit_count=0
+3. `bridge_hit_but_not_scored` — bridge hit but no fast results
+4. `scored_but_rejected_economics` — scored but all net_bps ≤ 0
+5. `positive_but_no_guard_pass` — positive but profit_guard failed
+6. `guard_passed` — success (excluded from dominant)
 
-Fix: cold lane now reads hot rollup artifact (`m7_hot_rollup_latest.json`) cross-process. Evidence: `hot_seen_unresolved_pool_count_max=3` (was 0 before fix). 2 of 3 pools resolved during the run.
+`dominant_hot_miss_reason` = max window count excluding `guard_passed`.
 
-### Remaining Gap: bridge_pool_hit_total=0
+### Atomic Writes
 
-Hot-seen pools are now resolved into PTT, but the focused filter still misses live swap events. Cross-reference: 1/10 hot-seen pools remain unresolved. Market timing + pool diversity are the remaining factors — longer runtimes (30min+) may allow convergence as more hot-seen pools get backfilled and enter the focused filter set.
+All 5 rolling artifact writes (`_PROMOTED_PAIRS_PATH`, `_COLD_HOT_BRIDGE_PATH`, `_HOT_ARTIFACT_PATH`, `_HOT_INTENTS_PATH`, `_HOT_ROLLUP_PATH`) now use `_atomic_json_write()` (tmpfile → `os.replace()`). Prevents cross-process readers from seeing truncated JSON.
 
 ## 5) Strategic Reading
 
-1. **Cross-process bridge fix is confirmed**: hot_seen_unresolved_pool_count_max=3 proves hot-discovered pools now flow from hot process → rollup file → cold bridge → cold resolve → PTT.
-2. **Backfill pipeline is operational**: 2/3 hot-seen unresolved pools were resolved during the run, proving cold priority-resolve works.
-3. **bridge_pool_hit_total=0 is now a pool diversity gap**: the focused filter targets PTT pools, but live swap activity may cluster on pools NOT yet discovered by cold scans. The 2-bucket policy gives resolved hot-seen pools priority, but the system needs more iterations to expand coverage.
-4. **Next justified step**: longer runtime (30min+) to allow multiple backfill cycles, OR expand broad fallback ratio further.
+1. **Observability layer is now truthful**: counters disentangled, miss classification auditable, first_window_at written.
+2. **bridge_pool_hit_total=0 root cause is unchanged**: this session fixed the measurement layer, not the structural gap. Next step requires online verification with corrected counters to determine true miss distribution.
+3. **Atomic writes eliminate cross-process truncation risk**: all rolling artifacts now safe for concurrent hot/cold/dashboard reads.
+4. **Next justified step**: 10-min online nonstop with corrected counters → read `window_miss_classes` to determine true dominant miss class and plan targeted fix.
 
 ## 5.1) Contract Checks
 status/reasons consistency: OK

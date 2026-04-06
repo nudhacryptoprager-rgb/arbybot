@@ -4053,12 +4053,14 @@ class TestM7A545DashboardHeadlineLevel:
 
 
 class TestM7A545DashboardIntentsEndpoint:
-    """M7.A.5.45: Dashboard server has /api/intents endpoint."""
+    """M7.A.5.45→47e: Intents served via /api/hot (not standalone /api/intents)."""
 
-    def test_intents_endpoint_in_server(self):
+    def test_intents_served_via_api_hot(self):
         import pathlib
         src = pathlib.Path("monitoring/dashboard_server.py").read_text(encoding="utf-8")
-        assert "/api/intents" in src
+        assert "/api/hot" in src
+        # M7.A.5.47e: /api/intents removed — redundant with /api/hot
+        assert "/api/intents" not in src
 
     def test_intents_artifact_in_files(self):
         import pathlib

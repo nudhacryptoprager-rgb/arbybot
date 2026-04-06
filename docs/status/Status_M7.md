@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.47d. M7.A.5.47d adds cross-process hot-seen backfill via rollup, cold priority-resolve, 2-bucket bridge ranking, adaptive cap. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.47e. M7.A.5.47e fixes hot-rollup semantics: disentangled counters, per-window miss classification, atomic writes, first_window_at, bridge_hit_deficit adaptive logic. 3344 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-06
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -270,25 +270,25 @@ CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 ---
 
-## M7.A.5.47b: Hybrid Intake + Activity Ranking + Temporal Rollup (CLOSED)
+## M7.A.5.47b–47c: Hybrid Intake + Temporal Rollup + Activity-Aware Bridge (CLOSED)
 
-Hybrid intake (focused + broad fallback every 3rd block). Activity-ranked pool selection (`cold_events + hot_events × 3`). 4 temporal rollup counters. Split miss reason. Cold-verified submit-size queue ordering via bridge. CI: 3327 passed.
-
----
-
-## M7.A.5.47c: Activity-Aware Bridge + Adaptive Intake + Hot Pool Diagnostics (CLOSED)
-
-Activity-aware bridge ranking, hot-seen pool injection, adaptive broad fallback (50% when bridge misses), diagnostic histograms. 10.3-min nonstop: events_seen_total=7, bridge_pool_hit_total=0, ptt=56. CI: 3327 passed.
+47b: Hybrid intake (focused + broad fallback), activity-ranked selection, 4 rollup counters, split miss reason. 47c: Activity-aware bridge, hot-seen pool injection, adaptive broad fallback (50%), diagnostic histograms. 10.3-min nonstop: events=7, bridge_hits=0, ptt=56. CI: 3327 passed.
 
 ---
 
-## M7.A.5.47d: Cross-Process Hot-Seen Backfill + 2-Bucket Bridge Ranking
+## M7.A.5.47d: Cross-Process Hot-Seen Backfill + 2-Bucket Bridge Ranking (CLOSED)
 
-**Root cause**: bridge_pool_hit_total=0 persists because hot-discovered pools live in hot process memory, invisible to cold lane. Structural coverage gap, not market-timing.
+Cross-process bridge (hot rollup → cold → unresolved-pools list), cold priority-resolve via `batch_pre_resolve_pools()`, 2-bucket ranking (A=cold_exec, B=hot-seen resolved, fill=activity-ranked), adaptive cap 50→100. 10.2-min nonstop: hot_seen_unresolved_pool_count_max=3, events_seen_total=16, bridge_pool_hit_total=0. CI: 3327 passed.
 
-**Changes**: (1) **Cross-process bridge** — `_write_cold_hot_bridge()` reads hot rollup artifact for `hot_seen_pool_histogram_top`, builds `hot_seen_unresolved_pools` with resolved flag. (2) **Cold priority-resolve** — reads unresolved from bridge + direct rollup fallback, calls `batch_pre_resolve_pools()` (≤20 addrs). (3) **2-bucket ranking** — A=cold_exec (always), B=hot-seen resolved, fill=PTT ranked by `cold_events + hot_events × 3`. Adaptive cap 50→100 on coverage gap. (4) Removed hard `[:50]` cap (now adaptive). (5) Rollup: `hot_seen_unresolved_pool_count`, `resolved_from_hot_seen_count`, `_max`. (6) Hot artifact: `bridge_miss_sample_top` top-level.
+---
 
-**Online evidence**: 10.2-min nonstop (0 restarts). events_seen_total=16, windows_with_events=10, bridge_pool_hit_total=0, hot_seen_unresolved_pool_count_max=3 (was 0 before fix — cross-process bridge WORKS), hot_seen_unresolved_pool_count=1 (2 resolved during run), bridge_loaded_candidate_count_total=565, broad_fallback_events_total=37, ptt=45. CI: 3327 passed, 6 skipped. ALL GATES PASSED.
+## M7.A.5.47e: Hot-Rollup Semantic Correctness + Atomic Writes
+
+**Root cause**: Counter semantics broken — `watchlist_match_count` aliased to fast_scored (wrong), `fast_score_attempted_total` counted already-scored results (not admission), `dominant_hot_miss_reason` used duplicated cumulative keys (unreliable), `first_window_at` missing (dashboard shows `?Z`). Artifact writes non-atomic (cross-process truncation risk).
+
+**Changes**: (1) **Counter disentanglement** — `watchlist_match_count` = `bridge_pool_address_hit_count` from bridge diagnostics; new `admitted_to_scoring` = events − hot_skip; renamed `fast_path_attempted_count` → `fast_path_scored_count`; new `fast_score_scored` field. (2) **Rollup fast_score_attempted_total** = admission count (events − hot_skip), not `len(_fast)`. (3) **first_window_at** via `rollup.setdefault()`. (4) **dominant_hot_miss_reason** rewritten as per-window mutually-exclusive 6-class classification (`no_events_in_window`, `events_but_no_bridge_hit`, `bridge_hit_but_not_scored`, `scored_but_rejected_economics`, `positive_but_no_guard_pass`, `guard_passed`), tracking `window_miss_classes` dict. (5) **Adaptive broad logic** uses rollup-derived `bridge_hit_deficit` flag (OR intra-window deficit). (6) **Atomic writes** — `_atomic_json_write()` (tmpfile → `os.replace()`) for all 5 rolling artifacts. (7) Removed dead `/api/intents` endpoint (redundant with `/api/hot`).
+
+**Tests**: 17 new in `test_hot_rollup_semantics.py` (first_window_at, counter disentanglement, per-window classification exhaustive, atomic write contract, hot_gap_debug counters). CI: 3344 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 
