@@ -363,8 +363,14 @@ def build_replay_summary(
     events: List[OrderflowEvent],
     results: List[BackrunResult],
     mode: str,
+    compact: bool = False,
 ) -> Dict[str, Any]:
-    """Build machine-readable artifact from replay results."""
+    """Build machine-readable artifact from replay results.
+
+    M7.A.5.46: When compact=True (operational path), skips the expensive
+    full results serialization and heavy debug arrays. The rolling/dashboard
+    surface only needs aggregate metrics and compact candidate rows.
+    """
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     viable_count = sum(1 for r in results if r.route_viable)
@@ -1036,7 +1042,6 @@ def build_replay_summary(
     }
 
     return {
-        "m7a4_hypothesis": "orderflow_driven_backrun_replay",
         "mode": mode,
         "timestamp": ts,
         "chain": M7A4_CHAIN,
@@ -1192,7 +1197,11 @@ def build_replay_summary(
         # M7.A.5.44: Execution funnel (5-stage strict subset progression)
         "execution_funnel": execution_funnel,
         "diagnostic_raw": diagnostic_raw,
-        "results": [asdict(r) for r in results],
+        # M7.A.5.46: compact=True skips heavy results/debug serialization.
+        # Callers that need raw results use _raw_results (BackrunResult objects).
+        "results": [] if compact else [asdict(r) for r in results],
+        "low_lag_debug_rows": [] if compact else low_lag_debug_rows,
+        "low_lag_watchlist": [] if compact else low_lag_watchlist,
         "two_leg_baseline_net_bps": -3.5062,
         "m7a_triangular_best_net_bps": -14.16,
         "beats_two_leg_baseline": positive_net_count_clean > 0,

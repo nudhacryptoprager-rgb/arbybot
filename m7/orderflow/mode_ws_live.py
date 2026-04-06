@@ -429,37 +429,10 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
     ws_elapsed = time.monotonic() - ws_start_time
 
     # Build artifact
-    artifact = build_replay_summary(all_events, all_results, mode="ws_live")
-    # M7.A.5.34: Preserve raw BackrunResult objects for hot lane downstream.
-    # build_replay_summary serialises results to dicts; the outer loop needs
-    # the original objects for _write_hot_artifact() attribute access.
+    # M7.A.5.46: compact=True skips full results serialization (operational path).
+    # Raw BackrunResult objects are carried separately for hot lane downstream.
+    artifact = build_replay_summary(all_events, all_results, mode="ws_live", compact=True)
     artifact["_raw_results"] = all_results
-    artifact["m7a56_hypothesis"] = (
-        "same-chain backrun on arbitrum_one may become measurable only after "
-        "pair-resolved counter-venue coverage is expanded for actual live-event "
-        "tokens; no expansion outside current DEX domain"
-    )
-    artifact["m7a57_hypothesis"] = (
-        "same-chain backrun on arbitrum_one may become measurable once "
-        "pair-resolved live-event tokens are admitted through bounded discovery "
-        "coverage (on-chain ERC-20 enrichment + oracle sanity rails), "
-        "without leaving the current DEX domain"
-    )
-    artifact["m7a58_hypothesis"] = (
-        "bounded coverage enrichment (The Graph subgraph seed) materially raises "
-        "live admission and counter-venue coverage for pair-resolved Arbitrum "
-        "event tokens within the same-chain DEX domain"
-    )
-    artifact["m7a518_hypothesis"] = (
-        "same-chain low-lag scoring may unlock only if low-lag pair/pool truth "
-        "is accumulated across windows and priced from local pool state, without "
-        "expanding outside the current DEX domain"
-    )
-    artifact["m7a522_hypothesis"] = (
-        "low-lag same-chain scoring may unlock only after PoolRegistry is actually "
-        "instantiated in ws-live mode and used as the primary counter-venue "
-        "discovery source before NO_COUNTER_POOL rejection"
-    )
     artifact["ws_live_config"] = {
         "ws_blocks_requested": args.ws_blocks,
         "ws_timeout_seconds": args.ws_timeout,
@@ -482,17 +455,6 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
     }
     # M7.A.5.23: Session-persistent low-lag pair tracking
     artifact["session_low_lag_pairs"] = list(_session_low_lag_pairs.values())
-    artifact["m7a523_hypothesis"] = (
-        "low-lag same-chain scoring may unlock only if low-lag events are "
-        "routed into adapter-specific local scoring via registry-direct path "
-        "before any coverage-scan rejection"
-    )
-    artifact["m7a524_hypothesis"] = (
-        "the next meaningful target is not better stale scoring, but the first "
-        "genuinely low-lag scored event through the registry_direct local-pricing "
-        "path; requires minimal pipeline (no size sweep, no remote quoter, "
-        "mid-pipeline lag abort) and two-queue priority (low-lag first)"
-    )
     # Provider provenance
     artifact["rpc_provider"] = rpc_provider
     artifact["rpc_source"] = rpc_diag.get("source", "unknown")
@@ -1027,41 +989,8 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
                 sum(usd_estimates) / len(usd_estimates), 2
             ) if usd_estimates else None,
         }
-        artifact["m7a59_hypothesis"] = (
-            "decimal-aware size normalization eliminates inflated economics "
-            "for non-18-decimal tokens (USDC/USDT 6-dec), producing trustworthy "
-            "gas_bps and gross_bps across the full token surface"
-        )
-        artifact["m7a513_hypothesis"] = (
-            "orderflow backrun on arbitrum_one may be economically near-breakeven "
-            "on the stale subset, but the project still lacks a truthful executable "
-            "low-lag scored subset; this split isolates and measures that explicitly"
-        )
-        artifact["m7a514_hypothesis"] = (
-            "low-lag events are already being detected, but they fail before economics "
-            "scoring; explicit low-lag reject decomposition may reveal a fixable "
-            "same-chain DEX coverage/resolution gap"
-        )
-        artifact["m7a515_hypothesis"] = (
-            "low-lag events are detected on time, but same-block scoring still fails "
-            "because token identity and active counter-pool truth are incomplete for "
-            "the exact low-lag pairs; targeted low-lag pair/pool truth may unlock the "
-            "first executable-scored subset without leaving the same-chain DEX domain"
-        )
-        artifact["m7a516_hypothesis"] = (
-            "low-lag events are timely detected, but same-chain scoring still fails "
-            "because low-lag pools split into three structural classes: unsupported "
-            "pool ABI (token0/token1/slot0 reverts), no counter-pool, and known-but-"
-            "inactive pool; explicit pool-class truth reveals which class dominates "
-            "and whether any class is fixable within the same-chain DEX domain"
-        )
-        artifact["m7a517_hypothesis"] = (
-            "low-lag same-chain scoring may unlock only if V2-family pool-state "
-            "reading is added (getReserves instead of slot0), but this must be "
-            "measured separately from no-counter-pool and inactive-pool classes; "
-            "V2 direct resolve bypasses batch_token_info fee() revert and enables "
-            "pair resolution for uniswap_v2_like pools"
-        )
+        # M7.A.5.46: Legacy hypothesis strings removed from runtime path.
+        # Historical context preserved in docs/status/Status_M7.md only.
 
     # M7.A.5.28: Write canonical rolling M7 artifact (dashboard-facing, no bulky results)
     # M7.A.5.35: Only cold lane writes rolling artifact here.  When hot mode
@@ -1080,32 +1009,15 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
 
 _ROLLING_M7_PATH = os.path.join("data", "runs", "_rolling", "m7_orderflow_latest.json")
 
-# Keys to extract from the full artifact for the rolling dashboard artifact.
-# Excludes bulky debugging arrays (results, low_lag_debug_rows, low_lag_watchlist,
-# session_low_lag_pairs) to keep the rolling file small and dashboard-friendly.
-# M7.A.5.42: Also exclude legacy hypothesis blocks, _raw_results, and heavy
-# debug payloads that clutter the operational surface.
+# Keys to exclude from the rolling dashboard artifact.
+# M7.A.5.46: Legacy hypothesis blocks are no longer created in runtime path.
+# Only _raw_results and heavy debug arrays need exclusion.
 _ROLLING_EXCLUDE_KEYS = frozenset({
     "results",
     "low_lag_debug_rows",
     "low_lag_watchlist",
     "session_low_lag_pairs",
-    # M7.A.5.42: Legacy hypothesis blocks — historical, no operational value
     "_raw_results",
-    "m7a4_hypothesis",
-    "m7a56_hypothesis",
-    "m7a57_hypothesis",
-    "m7a58_hypothesis",
-    "m7a59_hypothesis",
-    "m7a513_hypothesis",
-    "m7a514_hypothesis",
-    "m7a515_hypothesis",
-    "m7a516_hypothesis",
-    "m7a517_hypothesis",
-    "m7a518_hypothesis",
-    "m7a522_hypothesis",
-    "m7a523_hypothesis",
-    "m7a524_hypothesis",
 })
 
 

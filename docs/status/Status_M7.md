@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.45 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.45 adds bridge-driven execution queue (cold_executable priority prewarm), hot execution intents artifact (`m7_hot_intents_latest.json`), funnel headline_level enforcement (prevents claims above confirmed level), dashboard headline badge. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.46 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.46 strips live-path ballast (13 hypothesis blocks removed, compact build_replay_summary, execution_funnel as sole headline truth), fixes hot semantic (cold_executable_positive from bridge, not synthesized), separates M7 from hot_loop, wires /api/intents to Panel 11. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-06  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix, batch pre-resolve + supervisor fix + size_valid cache, top-candidate persistence + hot lane token resolution fix. M7.B remains closed.
 
@@ -146,51 +146,15 @@ CI: 3163 passed, 6 skipped. Safety: PASS. ALL REQUIRED GATES PASSED.
 
 ---
 
-## M7.A.5.36: Per-Stage Hard Budget Abort + Promotion Rules + p50/p90 Tracking
+## M7.A.5.36–5.39: Budget Abort + Caching + Promotion + Hot Prewarm (CLOSED)
 
-**Hypothesis**: M7.A.5.36 = hot p50 ≤ 250ms, p90 ≤ 400ms on a real promoted watchlist. Speed-first: stop diagnostic work, start cutting latency numbers.
+**M7.A.5.36**: Per-stage hard budget abort in `score_backrun_fast()` (4 aborts: registry≤25ms, pool_state≤50ms, local_math≤10ms, profit_guard≤40ms). p50/p90 tracking. Promoted rules (MIN_COLD_APPEARANCES=2, MIN_NET_BPS=-50). Evidence: hot fast_path gated by `if fast_results:` (observability gap). CI: 3200 passed.
 
-**Changes**: (1) `scoring_parallel.py`: per-stage hard budget abort in `score_backrun_fast()` — 4 individual stage aborts (registry≤25ms, pool_state≤50ms, local_math≤10ms, profit_guard≤40ms). Candidate aborted immediately on budget breach. (2) `constants.py`: zero-RPC hot path target constants (HOT_TARGET_RESOLVE_MS=0, HOT_TARGET_ORACLE_MS=0, HOT_TARGET_ENRICHMENT_MS=0, HOT_TARGET_REGISTRY_PRELOAD_MS=0). (3) `m7a_orderflow_loop.py`: p50/p90 latency tracking in hot artifact fast_path block. (4) `m7a_orderflow_loop.py`: strengthened `_promote_pairs_from_cold()` — PROMOTED_MIN_COLD_APPEARANCES=2, PROMOTED_MIN_NET_BPS=-50, anomaly hard exclude. (5) +14 tests.
+**M7.A.5.37**: Critical fix — `_write_hot_artifact()` now always emits `fast_path` block (zeros when empty). Process-level `_pool_token_cache` (resolve.py), block-proximity `_oracle_cache` (pricing.py), persistent `_cold_registry`. Evidence: cache benefit strongest within-iteration; cross-iteration resolve cache effective for recurring pools. CI: 3219 passed.
 
-**Online evidence**: 1h nonstop. Hot: profit_guard_passed=0, viable=0. Cold: mean_latency=1565ms (5.4x over 250ms budget). Breakdown: resolve_ms≈788, registry_preload_ms≈621, oracle_ms≈104, enrichment_ms≈51. Hot artifact MISSING fast_path/p50/p90 entirely (critical observability gap — gated by `if fast_results:` which was always falsy). Promoted watchlist still seed_only.
+**M7.A.5.38**: Session-scoped enrichment cache, oracle stale threshold 50→5000 blocks, registry stale_threshold_blocks. Evidence: latency_budget_hit_rate peaks 0.80, total_pipeline 275-290ms. CI: 3228 passed.
 
-CI: 3200 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.37: Hot Artifact Always-Emit + Resolve/Oracle Caching + Persistent Cold Registry
-
-**Hypothesis**: M7.A.5.37 = hot p50 ≤ 250ms and hot p90 ≤ 400ms on a real promoted watchlist before chasing first profit_guard pass.
-
-**Critical bug fixed**: `_write_hot_artifact()` gated `fast_path` block behind `if fast_results:` — when empty, NO fast_path/p50/p90/hot_skip_count emitted. This was a critical observability gap: hot artifact appeared to lack speed metrics entirely. Fix: always emit `fast_path` block (zeros/nulls when empty) + always emit `hot_skip_count`.
-
-**Changes**: (1) `m7a_orderflow_loop.py`: `_write_hot_artifact()` always emits `fast_path` block with all required keys (scored, positive, viable, profit_guard_passed, mean/max/p50/p90_latency_ms, best_net_bps, scoring_paths, stage_timings) even when fast_results is empty. Always emits `hot_skip_count` from `_raw_results`. (2) `m7a_orderflow_loop.py`: persistent cold registry `_cold_registry` — lazy-init `PoolRegistry()` on first cold iteration, passed as `warm_registry` (not `external_registry`) to avoid triggering hot mode. Registry cache survives across iterations. (3) `m7/orderflow/resolve.py`: process-level `_pool_token_cache` for pool→(token0, token1, fee) resolution. Pool tokens are immutable contract data — safe to cache forever. Cache hit skips multicall entirely (~788ms→0ms for repeated pools). (4) `m7/orderflow/pricing.py`: block-proximity `_oracle_cache` for `check_oracle_sanity()`. Cache key is token pair, stale threshold 50 blocks (~12.5s on Arbitrum). Cache hit returns copy (~104ms→0ms for repeated pairs within window). (5) `mode_ws_live.py`: `run_ws_live()` accepts `warm_registry` parameter (persistent cold mode, does NOT trigger hot mode). `_prewarm_count = -2` skips redundant prewarm. (6) +19 tests in 6 classes covering all changes.
-
-**Online evidence**: 1h nonstop `--no-m4`. Hot: fast_path block ALWAYS present with p50/p90/hot_skip_count visible (observability gap fixed). Hot iteration 13: events=0-1, hot_skip_count=0-1, promoted watchlist seed_only. Cold: iteration 1 total_pipeline=1196ms (resolve=374, registry_preload=427, oracle=257, enrichment=138). Iteration 2 total_pipeline=1063ms (registry_preload=354, improving with warm cache). Cache benefit strongest within-iteration (repeated pools). Cross-iteration resolve cache effective for recurring pools; oracle cache stale threshold (50 blocks) too narrow for cross-iteration benefit (future: increase threshold).
-
-CI: 3219 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.38: Session-Scoped Caching + Enrichment Cache + Latency Budget Hit Rate
-
-**Hypothesis**: latency_budget_hit_rate >= 0.80 via session-scoped caches for enrichment, oracle, and registry_preload.
-
-**Changes**: (1) `m7/orderflow/resolve.py`: `_enrichment_cache` for immutable ERC-20 symbol/decimals. (2) `m7/orderflow/pricing.py`: `_ORACLE_CACHE_STALE_BLOCKS` 50→5000. (3) `m7/orderflow/pool_registry.py`: configurable `stale_threshold_blocks`. (4) `scripts/m7a_orderflow_loop.py`: cold registry `PoolRegistry(stale_threshold_blocks=5000)`. (5) +9 tests in 4 classes.
-
-**Online evidence**: 0.25h nonstop. latency_budget_hit_rate peaks 0.80 (warm), settles 0.72. total_pipeline mean 275-290ms (near 250ms budget). enrichment_ms drops to ~7ms (cached), oracle_ms ~15ms (warm), registry_preload_ms 121ms.
-
-CI: 3228 passed, 6 skipped. ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.39: Two-Level Promotion + Hot Prewarm + Cold Lane Registry Fix
-
-**Hypothesis**: promoted-watchlist activation + hot p50/p90 proof under nonstop runtime.
-
-**Changes**: (1) Cold lane registry fix — was using `_hot_registry` instead of `None` for `_ext_registry`. (2) Cold prewarm target fix — was prewarming `_hot_registry` instead of `_cold_registry`. (3) Two-level promotion — `_promote_pairs_from_cold()` returns `candidate` (relaxed, cap 20) and `execution` (strict+size_valid, cap 10). (4) Cross-lane `m7_promoted_pairs.json` for cold→hot communication. (5) Hot lane prewarm from seeds + accumulated + cross-promoted. (6) Web3 HTTPProvider reuse (single instance). (7) `start_nonstop_runtime.py` stdout drain fix. (8) `PROMOTED_CANDIDATE_MAX_PAIRS = 20`. (9) +16 tests in 7 classes.
-
-CI: 3244 passed, 6 skipped. ALL REQUIRED GATES PASSED.
+**M7.A.5.39**: Cold lane registry fix (was using `_hot_registry` instead of None). Two-level promotion (candidate cap 20, execution cap 10). `m7_promoted_pairs.json` for cross-lane communication. Web3 HTTPProvider reuse. CI: 3244 passed.
 
 ---
 
@@ -290,6 +254,23 @@ CI: 3310 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 - `m7_hot_intents_latest.json`: created with correct schema — `hot_scored_count:0, cold_executable_pool_count:2`
 - Bridge: cold_executable=0 (this window), near_executable=5, pool_token_transport=46
 - 3/3 processes alive, 0 restarts, 10+ minutes continuous
+
+CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.46: Strip Live-Path Ballast + Hot Semantic Fix
+
+**Hypothesis**: M7.A.5.46 = strip live-path ballast and convert bridge candidates into first hot-scored rows. Core insight (from user review): "cold verified positive ≠ hot executable positive" — the remaining gap is operational conversion, not information or latency. Legacy hypothesis blocks in the live path create ballast, build_replay_summary always serializes full results (expensive/wasteful), too many truth surfaces risk drift, hot artifact synthesizes cold_executable_positive from _fast_positive (wrong semantic).
+
+**Changes**: (1) `m7/orderflow/mode_ws_live.py`: **Stripped all 13 legacy hypothesis blocks** (m7a4, m7a56-m7a59, m7a513-m7a518, m7a522-m7a524) from ws-live artifact builder. Cleaned `_ROLLING_EXCLUDE_KEYS` — no longer needs hypothesis entries since they are not created. (2) `m7/orderflow/artifacts.py`: **Compact build_replay_summary** — added `compact: bool = False` parameter. When compact=True: `results→[]`, `low_lag_debug_rows→[]`, `low_lag_watchlist→[]`. Removed `m7a4_hypothesis` from return dict entirely. ws-live path calls with `compact=True`. (3) `scripts/m7a_orderflow_loop.py`: **3 callers updated** to use `_raw_results` instead of serialized `results` dict array. (4) `scripts/m7a_orderflow_loop.py`: **Fixed hot semantic** — `cold_executable_positive` in `_write_hot_artifact()` and `_write_hot_intents()` now reads from bridge's `_bridge_cold_executable` count, NOT synthesized from `_fast_positive`. Added `_bridge_cold_executable` to bridge diagnostics transport. (5) `scripts/m7a_orderflow_loop.py`: **Bridge pair fallback counter** — `bridge_pair_fallback_count` counts hot_skip events whose actual_pair matches a bridge candidate pair (diagnoses pair-level matching potential). Surfaced in `hot_gap_debug`. (6) `monitoring/dashboard_server.py`: **Separated M7 from hot_loop** — `/api/hot` returns `{m7_hot, m7_hot_intents}` only (no `hot_loop`). Panel 0 gets `hot_loop` from `/api/rolling`. Added `m7_cold_hot_bridge` to `ARTIFACT_FILES`. (7) `monitoring/dashboard.html`: **execution_funnel as sole headline truth** — Panel 11 restructured: funnel is primary headline, signal_classification demoted. New "Hot Execution Intents" section shows intents table (pair, net_bps, guard, viable, path, latency). `/api/intents` wired to Panel 11 via hot poll. (8) Updated 5 tests: removed `m7a4_hypothesis` from schema assertions, updated rolling exclude keys test to assert hypothesis keys NOT present, updated hot endpoint test for new `{m7_hot, m7_hot_intents}` response shape.
+
+**Online evidence**: 10-minute nonstop `--no-m4`. Fresh rolling at `2026-04-06T11:31:46Z`:
+- Cold: `m7a4_hypothesis` absent (removed). `results: []` (compact mode active). `execution_funnel: {diagnostic_positive, cold_executable_positive, hot_scored, profit_guard_passed, realized_onchain_profit, headline_level}` — sole truth surface.
+- Hot: `headline_level: "none"`. `hot_gap_debug: {bridge_pair_fallback_count: 0, bridge_loaded_candidate_count, bridge_pool_address_hit_count, ...}` — full diagnostic visibility.
+- Hot intents: `headline_level: "none"`, `intents: []` — schema intact.
+- `/api/hot` returns `{m7_hot, m7_hot_intents}` only (no `hot_loop` — verified via API check).
+- 3/3 processes alive, 0 restarts, 10+ minutes continuous.
 
 CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 

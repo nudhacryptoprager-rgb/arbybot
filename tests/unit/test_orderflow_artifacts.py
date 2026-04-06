@@ -105,11 +105,11 @@ class TestIntentScout:
 class TestReplayArtifactSchema:
     """Lock replay artifact schema."""
 
-    def test_artifact_has_hypothesis_field(self):
+    def test_artifact_has_mode_field(self):
         events = build_fixture_events()
         results = [score_backrun_offline(e) for e in events]
         artifact = build_replay_summary(events, results, mode="offline")
-        assert artifact["m7a4_hypothesis"] == "orderflow_driven_backrun_replay"
+        assert artifact["mode"] == "offline"
 
     def test_artifact_has_baseline_comparisons(self):
         events = build_fixture_events()
@@ -196,7 +196,7 @@ class TestM7A5BackwardCompat:
         results = [score_backrun_offline(e) for e in events]
         artifact = build_replay_summary(events, results, mode="offline")
         required_keys = {
-            "m7a4_hypothesis", "mode", "timestamp", "chain",
+            "mode", "timestamp", "chain",
             "events_count", "results_count", "viable_count",
             "positive_net_count", "best_net_bps", "worst_net_bps",
             "mean_net_bps", "reject_histogram", "results",
@@ -233,7 +233,7 @@ class TestWsLiveArtifactSchema:
         results = [score_backrun_offline(events[0])]
         artifact = build_replay_summary(events, results, mode="ws_live")
         required_keys = {
-            "m7a4_hypothesis", "mode", "timestamp", "chain",
+            "mode", "timestamp", "chain",
             "events_count", "results_count", "viable_count",
             "best_net_bps", "reject_histogram", "results",
         }
@@ -1004,12 +1004,15 @@ class TestM7A528RollingArtifactSchema:
         assert "low_lag_watchlist" in _ROLLING_EXCLUDE_KEYS
 
     def test_rolling_exclude_keys_legacy_hypothesis_stripped(self):
-        """M7.A.5.42: legacy hypothesis blocks and _raw_results must be excluded."""
+        """M7.A.5.46: hypothesis blocks removed from artifact; exclude set cleaned."""
         from m7.orderflow.mode_ws_live import _ROLLING_EXCLUDE_KEYS
         assert "_raw_results" in _ROLLING_EXCLUDE_KEYS
+        # M7.A.5.46: hypothesis keys no longer created, so no longer in exclude set
         for tag in ["m7a4", "m7a56", "m7a57", "m7a58", "m7a59", "m7a513", "m7a514",
                      "m7a515", "m7a516", "m7a517", "m7a518", "m7a522", "m7a523", "m7a524"]:
-            assert f"{tag}_hypothesis" in _ROLLING_EXCLUDE_KEYS, f"Missing: {tag}_hypothesis"
+            assert f"{tag}_hypothesis" not in _ROLLING_EXCLUDE_KEYS, (
+                f"Stale: {tag}_hypothesis should not be in exclude set"
+            )
 
     def test_rolling_path_canonical(self):
         import os
@@ -1816,6 +1819,7 @@ class TestM7A530DashboardM7Hot:
         assert str(ARTIFACT_FILES["m7_hot"]).endswith("m7_hot_latest.json")
 
     def test_hot_endpoint_includes_m7_hot_payload(self):
+        """M7.A.5.46: /api/hot returns m7_hot + m7_hot_intents (no hot_loop)."""
         import io
         import tempfile
         from pathlib import Path
@@ -1824,10 +1828,10 @@ class TestM7A530DashboardM7Hot:
         from monitoring.dashboard_server import DashboardHandler
 
         with tempfile.TemporaryDirectory() as td:
-            hot_loop = Path(td) / "hot_loop_latest.json"
             m7_hot = Path(td) / "m7_hot_latest.json"
-            hot_loop.write_text(json.dumps({"schema": "hot:v1"}), encoding="utf-8")
+            m7_hot_intents = Path(td) / "m7_hot_intents_latest.json"
             m7_hot.write_text(json.dumps({"lane": "hot", "events_count": 3}), encoding="utf-8")
+            m7_hot_intents.write_text(json.dumps({"intents": []}), encoding="utf-8")
 
             class _DummyHandler:
                 def __init__(self):
@@ -1847,15 +1851,16 @@ class TestM7A530DashboardM7Hot:
             handler = _DummyHandler()
             with patch.dict(
                 "monitoring.dashboard_server.ARTIFACT_FILES",
-                {"hot_loop": hot_loop, "m7_hot": m7_hot},
+                {"m7_hot": m7_hot, "m7_hot_intents": m7_hot_intents},
                 clear=False,
             ):
                 DashboardHandler._serve_hot_data(handler)
 
             payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
             assert handler.status == 200
-            assert payload["hot_loop"]["schema"] == "hot:v1"
             assert payload["m7_hot"]["lane"] == "hot"
+            assert payload["m7_hot_intents"]["intents"] == []
+            assert "hot_loop" not in payload
 
     def test_dashboard_html_mentions_m7_hot_snapshot(self):
         from pathlib import Path

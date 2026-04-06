@@ -133,7 +133,7 @@ tr:hover{background:#1c2128}
 
   <!-- Panel 11: M7 Orderflow (cold snapshot + hot lane) -->
   <div class="panel" id="p-m7" style="grid-column:1/-1">
-    <h2>11. M7 Orderflow <span class="src-badge">(m7_orderflow_latest.json + m7_hot_latest.json)</span></h2>
+    <h2>11. M7 Orderflow <span class="src-badge">(m7_orderflow + m7_hot + m7_hot_intents, 1s poll)</span></h2>
     <div id="m7-body"></div>
   </div>
 </div>
@@ -148,6 +148,7 @@ const badge = (text, c) => `<span class="badge ${c}">${text}</span>`;
 let latestRolling = null;
 let latestHot = null;
 let latestM7Hot = null;
+let latestM7Intents = null;
 let focalChain = '';  // R39q: '' = PRIMARY, else chain key from long_scan
 
 function loadData() {
@@ -163,20 +164,20 @@ function loadRollingData() {
       latestRolling = data;
       renderRolling(data);
       if (!latestM7Hot && data?.m7_hot) latestM7Hot = data.m7_hot;
-      renderM7Orderflow(data.m7_orderflow, latestM7Hot || data?.m7_hot || null);
+      renderM7Orderflow(data.m7_orderflow, latestM7Hot || data?.m7_hot || null, latestM7Intents);
       if (!latestHot && data?.hot_loop) renderHotLoop(data.hot_loop);
     })
     .catch(e => { $('error-msg').textContent = 'Failed to load rolling data: ' + e.message; });
 }
 
 function loadHotData() {
+  // M7.A.5.46: /api/hot now returns m7_hot + m7_hot_intents (no hot_loop).
   fetch('/api/hot')
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(data => {
-      latestHot = data?.hot_loop || null;
       latestM7Hot = data?.m7_hot || latestM7Hot || null;
-      renderHotLoop(latestHot || latestRolling?.hot_loop || null);
-      renderM7Orderflow(latestRolling?.m7_orderflow || null, latestM7Hot);
+      latestM7Intents = data?.m7_hot_intents || latestM7Intents || null;
+      renderM7Orderflow(latestRolling?.m7_orderflow || null, latestM7Hot, latestM7Intents);
     })
     .catch(e => {
       if (!latestRolling) $('error-msg').textContent = 'Failed to load hot stream: ' + e.message;
@@ -929,7 +930,8 @@ function renderRejects(rs, focalPc) {
 }
 
 // Panel 11: M7 Orderflow — 3-section split (M7.A.5.42)
-function renderM7Orderflow(m7, m7Hot) {
+// M7.A.5.46: +intents section, execution_funnel is sole headline truth
+function renderM7Orderflow(m7, m7Hot, m7Intents) {
   if (!m7) { $('m7-body').innerHTML = '<em class="na">No M7 data (m7_orderflow_latest.json not found \u2014 run ws-live mode to populate)</em>'; return; }
 
   const ts = m7.timestamp || '?';
@@ -1095,6 +1097,22 @@ function renderM7Orderflow(m7, m7Hot) {
       html += `<tr><td style="font-size:.72rem">${mr.actual_pair || '\u2014'}</td><td class="num ${cls(mr.base_net_bps)}">${fmt(mr.base_net_bps, 2)}</td><td class="num">${mr.sizes_tried}</td><td class="num">${mr.sizes_passed}</td><td class="num ${cls(mr.best_micro_net_bps)}">${fmt(mr.best_micro_net_bps, 2)}</td><td style="font-size:.7rem">${mr.reject_reason || '\u2014'}</td></tr>`;
     }
     html += '</table>';
+  }
+  // M7.A.5.46: Hot Execution Intents section — from /api/hot m7_hot_intents
+  if (m7Intents) {
+    const intRows = m7Intents.intents || [];
+    const intHL = m7Intents.headline_level || 'none';
+    html += '<h3 style="font-size:.85rem;color:#1f6feb;margin:14px 0 4px">Hot Execution Intents</h3>';
+    html += `<div style="font-size:.72rem;color:#8b949e;margin-bottom:4px">scored=${m7Intents.hot_scored_count ?? 0} positive=${m7Intents.hot_positive_count ?? 0} guard_passed=${m7Intents.profit_guard_passed_count ?? 0} headline=${intHL} | Updated: ${(m7Intents.timestamp || '?').slice(0,19)}Z</div>`;
+    if (intRows.length > 0) {
+      html += '<table><tr><th>Pair</th><th class="num">Net bps</th><th>Guard</th><th>Viable</th><th>Path</th><th class="num">Latency ms</th></tr>';
+      for (const ir of intRows) {
+        html += `<tr><td style="font-size:.72rem">${ir.actual_pair || '\u2014'}</td><td class="num ${cls(ir.net_bps)}">${fmt(ir.net_bps, 2)}</td><td>${ir.guard_passed_in_hot ? '<span class="badge pass">Y</span>' : 'N'}</td><td>${ir.route_viable ? 'Y' : 'N'}</td><td style="font-size:.7rem">${ir.scoring_path || '\u2014'}</td><td class="num">${fmt(ir.pipeline_latency_ms, 1)}</td></tr>`;
+      }
+      html += '</table>';
+    } else {
+      html += '<div style="font-size:.75rem;color:#8b949e">No hot-scored intents this window.</div>';
+    }
   }
   html += '<h3 style="font-size:.85rem;color:#7c8593;margin:14px 0 4px">Diagnostic Positive</h3>';
   html += `<div class="kpi">

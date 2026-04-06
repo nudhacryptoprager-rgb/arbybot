@@ -28,6 +28,7 @@ ARTIFACT_FILES = {
     "m7_orderflow": ROLLING_DIR / "m7_orderflow_latest.json",
     "m7_hot": ROLLING_DIR / "m7_hot_latest.json",
     "m7_hot_intents": ROLLING_DIR / "m7_hot_intents_latest.json",
+    "m7_cold_hot_bridge": ROLLING_DIR / "m7_cold_hot_bridge.json",
 }
 
 DASHBOARD_HTML = Path(__file__).parent / "dashboard.html"
@@ -81,13 +82,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _serve_hot_data(self):
-        """R28.16: Lightweight endpoint — serve only hot_loop_latest.json.
+        """M7.A.5.46: Serve M7 hot lane artifacts only.
 
-        Much smaller payload than /api/rolling; suitable for fast 3s polling
-        when only live stream data is needed.
+        Returns m7_hot + m7_hot_intents. Panel 0 (hot_loop) uses /api/rolling.
         """
-        result = {"hot_loop": None, "m7_hot": None}
-        for key in ("hot_loop", "m7_hot"):
+        result = {"m7_hot": None, "m7_hot_intents": None}
+        for key in ("m7_hot", "m7_hot_intents"):
             path = ARTIFACT_FILES[key]
             if not path.is_file():
                 continue

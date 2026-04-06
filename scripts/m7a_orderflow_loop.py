@@ -329,7 +329,9 @@ def _promote_pairs_from_cold(cold_artifact: dict, accumulated_cold_stats: dict) 
       "candidate": list of pair strings (capped at PROMOTED_CANDIDATE_MAX_PAIRS)
       "execution": list of pair strings (capped at PROMOTED_MAX_PAIRS)
     """
-    results = cold_artifact.get("results", [])
+    # M7.A.5.46: Use _raw_results (BackrunResult objects) instead of
+    # serialized results dicts — compact mode no longer serializes results.
+    results = cold_artifact.get("_raw_results", cold_artifact.get("results", []))
     for r in results:
         pair = r.get("actual_pair") if isinstance(r, dict) else getattr(r, "actual_pair", None)
         if not pair or "/" not in pair:
@@ -442,7 +444,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     candidate_pairs: list of "SYM_A/SYM_B" candidate-promoted (wider, M7.A.5.39)
     bridge_diagnostics: dict with bridge prewarm stats (M7.A.5.43)
     """
-    results = artifact.get("results", [])
+    # M7.A.5.46: Use _raw_results for BackrunResult access (compact mode).
+    results = artifact.get("_raw_results", artifact.get("results", []))
     best = None
     for r in results:
         net = r.get("best_backrun_net_bps") if isinstance(r, dict) else getattr(r, "best_backrun_net_bps", None)
@@ -469,13 +472,19 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "profit_guard_passed_count": len(guard_results) if guard_results else 0,
     }
 
-    # M7.A.5.45: Compute headline_level for hot artifact.
+    # M7.A.5.46: Compute headline_level for hot artifact.
+    # Hot lane only knows: hot_scored, profit_guard_passed, realized_onchain_profit.
+    # diagnostic_positive and cold_executable_positive come from bridge (cold lane truth).
     _fast_scored = len(fast_results) if fast_results else 0
     _fast_positive = sum(1 for r in (fast_results or []) if (getattr(r, "best_backrun_net_bps", 0) or 0) > 0)
     _guard_count = len(guard_results) if guard_results else 0
+    # Read cold_executable_positive from bridge, not synthesized from fast_positive.
+    _bridge_cold_exec_count = len(
+        (bridge_diagnostics or {}).get("_bridge_cold_executable", [])
+    ) if bridge_diagnostics else 0
     hot["headline_level"] = _compute_headline_level({
         "diagnostic_positive": _fast_positive,
-        "cold_executable_positive": _fast_positive,
+        "cold_executable_positive": _bridge_cold_exec_count,
         "hot_scored": _fast_scored,
         "profit_guard_passed": _guard_count,
         "realized_onchain_profit": 0,
@@ -531,6 +540,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "bridge_pool_address_hit_count": _bd.get("bridge_pool_address_hit_count", 0),
         "bridge_pair_hit_count": _bd.get("bridge_pair_hit_count", 0),
         "bridge_loaded_candidate_count": _bd.get("bridge_loaded_candidate_count", 0),
+        # M7.A.5.46: Pair-level fallback counter
+        "bridge_pair_fallback_count": _bd.get("bridge_pair_fallback_count", 0),
     }
 
     if fast_results:
@@ -719,9 +730,11 @@ def _write_hot_intents(
     _hot_positive = sum(1 for x in rows if x.get("net_bps", 0) > 0)
     _guard_passed = sum(1 for x in rows if x.get("guard_passed_in_hot"))
 
+    # M7.A.5.46: cold_executable_positive comes from bridge, not synthesized from hot.
+    _bridge_cold_exec_count = len(bridge.get("cold_executable", [])) if bridge else 0
     headline_level = _compute_headline_level({
         "diagnostic_positive": _hot_positive,
-        "cold_executable_positive": _hot_positive,
+        "cold_executable_positive": _bridge_cold_exec_count,
         "hot_scored": _hot_scored,
         "profit_guard_passed": _guard_passed,
         "realized_onchain_profit": 0,
@@ -964,7 +977,10 @@ def run_loop(cli_args) -> None:
             guard_results = None
             fast_results = None
             if lane == "hot":
-                guard_results = _run_profit_guard_on_results(artifact.get("results", []))
+                # M7.A.5.46: Use _raw_results for profit guard (compact mode).
+                guard_results = _run_profit_guard_on_results(
+                    artifact.get("_raw_results", artifact.get("results", []))
+                )
 
                 # M7.A.5.34: Extract fast-path results directly from artifact.
                 # In hot mode, run_ws_live() scores events via score_backrun_fast()
@@ -1027,6 +1043,8 @@ def run_loop(cli_args) -> None:
                     "bridge_pool_address_hit_count": 0,
                     "bridge_pair_hit_count": 0,
                     "bridge_loaded_candidate_count": 0,
+                    # M7.A.5.46: Carry bridge cold_executable for headline_level computation.
+                    "_bridge_cold_executable": _bridge.get("cold_executable", []),
                 }
                 try:
                     from m7.orderflow.resolve import _pool_token_cache as _ptc
@@ -1069,6 +1087,24 @@ def run_loop(cli_args) -> None:
                     _hot_bridge_diag["bridge_loaded_candidate_count"] = len(
                         _bridge.get("cold_executable", [])
                     ) + len(_bridge.get("near_executable", []))
+
+                    # M7.A.5.46: Bridge pair-fallback counter — hot_skip events
+                    # whose actual_pair matches a bridge candidate's pair (even
+                    # though pool_address didn't match). Diagnoses whether pair-
+                    # level matching could improve conversion.
+                    _bridge_pairs: set = set()
+                    for _cand in (_bridge.get("cold_executable", []) + _bridge.get("near_executable", [])):
+                        _cp = _cand.get("actual_pair", "") if isinstance(_cand, dict) else ""
+                        if _cp:
+                            _bridge_pairs.add(_cp)
+                    _pair_fallback = 0
+                    for _r in artifact.get("_raw_results", []):
+                        if getattr(_r, "scoring_path", None) != "hot_skip":
+                            continue
+                        _ap = getattr(_r, "actual_pair", None)
+                        if _ap and _ap in _bridge_pairs:
+                            _pair_fallback += 1
+                    _hot_bridge_diag["bridge_pair_fallback_count"] = _pair_fallback
                 except Exception:
                     pass
 
