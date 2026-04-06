@@ -234,6 +234,14 @@ Counter disentanglement (watchlist_match_count, admitted_to_scoring, fast_path_s
 
 CI: 3385 passed, 6 skipped. ALL GATES PASSED.
 
+### M7.A.5.47h (exact-pool stale-recovery + gas-near-survivor + hot-seen promotion)
+
+**Hypothesis**: M7.A.5.47h = hot-seen pools and cold exec/stale pools are disjoint sets. Force first bridge hit by: (a) tightening C1 to recoverable_stale only (lag ≤ 2, positive, size_valid), (b) filtering C2 to gross-positive families only, (c) auto-promoting resolved hot-seen pools into the focused bridge via TTL pin.
+
+**Fresh 47g evidence** (10-min nonstop): cold viable_count=2, best_net_bps_executable=37.6297 (improvement). Hot: events_seen_total=25, windows_with_events=17, bridge_pool_hit_total=0. Root cause: hot-seen pools (`0x7dfa...`, `0x961e...`, etc.) are completely disjoint from cold exec/stale pools (`0xd130...`, `0x3bf5...`). Both sets are in PTT but events arrive at non-bridge pools.
+
+**Changes**: (1) `m7/orderflow/artifacts.py`: `top_recoverable_stale_candidates` (lag ≤ 2, positive, size_valid) — strict subset of stale positives. (2) `scripts/m7a_orderflow_loop.py`: C1 switched from `cold_stale_positive` to `cold_recoverable_stale`. C2 filters to gross-positive families via micro_refinement check. `_hot_seen_pin` dict with TTL=3: auto-pins resolved hot-seen pools into bucket B for 3 hot windows. TTL decrement alongside stale-pin. Bridge carries `cold_recoverable_stale`. `hot_seen_vs_bridge_overlap_top` diagnostic showing overlap between event pools and bridge set with bucket labels and absence reasons.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -252,13 +260,14 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **cold_executable_count=0** across ALL pair families — gas economics kills major pairs, staleness kills RAIN/WETH.
-2. **bridge_pool_hit_total=0** — hot lane never matches bridge set (events_but_no_bridge_hit dominant miss class). 47g adds stale-pin TTL + gas-near priority to force first hit.
+1. **cold_executable_count=2** (improved from 0) — RAIN/WETH and 0x25118290/WETH at `0xd130...` viable at 37-49 bps. Gas economics kills other families.
+2. **bridge_pool_hit_total=0** — hot lane events arrive at pools DISJOINT from cold exec/stale pools. 47h adds hot-seen-pin promotion (auto-bridge resolved hot-seen pools), recoverable_stale C1 tightening, gross-positive C2 filter.
 3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
+4. **Truth split**: current M7 live mode = `next_block_continuation` (subscribe newHeads → eth_getLogs for mined block). NOT true same-block backrun. If goal is same-block sequencer advantage, separate track needed.
 
 ## Next steps
 
-1. Run 10-min nonstop with 47g changes — verify stale-pin pools appear in bridge, monitor bridge_pool_hit_total.
-2. Check cost_by_pair_family_top / staleness_by_pair_family_top in cold artifact for gas-near family identification.
-3. If first bridge hit achieved, measure conversion rate and latency of stale_recovery vs gas_near buckets.
+1. Run 10-min nonstop with 47h changes — verify hot-seen-pin pools appear in bucket B, monitor bridge_pool_hit_total.
+2. Check `hot_seen_vs_bridge_overlap_top` diagnostic to confirm overlap improves.
+3. If first bridge hit achieved, measure conversion rate of stale_recovery vs hot-seen-pin vs gas_near buckets.
 4. If deficit remains, consider onboarding lower-gas chain (Base) or widening adapter surface (Ve33/SyncSwap).

@@ -131,6 +131,7 @@ def _write_cold_hot_bridge(
     try:
         candidates = artifact.get("top_executable_candidates", [])
         stale_pos = artifact.get("top_stale_positive_candidates", [])
+        recoverable_stale = artifact.get("top_recoverable_stale_candidates", [])
         near_exec = artifact.get("near_executable_candidates", [])
 
         # M7.A.5.43: Transport the full _pool_token_cache for hot lane.
@@ -163,6 +164,7 @@ def _write_cold_hot_bridge(
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "cold_executable": candidates,
             "cold_stale_positive": stale_pos,
+            "cold_recoverable_stale": recoverable_stale,
             "near_executable": near_exec,
             "signal_classification": artifact.get("signal_classification", {}),
             "pool_token_transport": _ptt,
@@ -1113,6 +1115,13 @@ def run_loop(cli_args) -> None:
     _stale_pin_ttl: dict = {}
     _STALE_PIN_TTL_INIT = 4  # pin for 4 hot windows after detection
 
+    # M7.A.5.47h: TTL-pinned hot-seen resolved pools — when a pool that was
+    # seen in hot events gets resolved (added to PTT), it's pinned into the
+    # focused bridge for 3 iterations to maximize its chance of scoring.
+    # {pool_address_lower: {"ttl": int, "last_iter": int}}
+    _hot_seen_pin: dict = {}
+    _HOT_SEEN_PIN_TTL_INIT = 3  # pin for 3 hot windows after resolution
+
     # M7.A.5.37: Persistent cold registry — survives across cold iterations
     # Passed via warm_registry to avoid hot-mode trigger. Caches pool data
     # so registry_preload_ms drops to near-zero for already-queried pairs.
@@ -1334,6 +1343,14 @@ def run_loop(cli_args) -> None:
                                     "Cold hot-seen resolve: %d/%d pools resolved (iter %d)",
                                     _hot_resolved_count, len(_unresolved_addrs), iteration,
                                 )
+                                # M7.A.5.47h: Auto-pin resolved hot-seen pools
+                                # into focused bridge for next 3 iterations.
+                                for _resolved_pa in _pre:
+                                    _rpa_low = _resolved_pa.lower()
+                                    _hot_seen_pin[_rpa_low] = {
+                                        "ttl": _HOT_SEEN_PIN_TTL_INIT,
+                                        "last_iter": iteration,
+                                    }
                 except Exception as _hr_exc:
                     logger.debug("Cold hot-seen resolve failed: %s", str(_hr_exc)[:120])
                 _resolved_from_hot_seen_total += _hot_resolved_count
@@ -1373,6 +1390,12 @@ def run_loop(cli_args) -> None:
                             if _hu_pa and _hu_pa in _ptt:
                                 _bucket_b.add(_hu_pa)
 
+                        # M7.A.5.47h: Include hot-seen-pin pools (auto-promoted
+                        # from resolved hot-seen, TTL > 0) into bucket B.
+                        for _hsp_pa, _hsp_info in _hot_seen_pin.items():
+                            if _hsp_info.get("ttl", 0) > 0 and _hsp_pa in _ptt:
+                                _bucket_b.add(_hsp_pa)
+
                         # Remaining: all PTT pools not yet in A or B
                         _remaining = set()
                         for _ptt_key in _ptt:
@@ -1403,20 +1426,21 @@ def run_loop(cli_args) -> None:
                             _remaining, key=_activity_score, reverse=True,
                         )
 
-                        # M7.A.5.47g: 3-bucket fill policy replaces single activity fill.
-                        # Bucket C1 (stale_recovery): pools from stale positive candidates
-                        #   + pools from TTL-pinned stale recovery set. These are the exact
-                        #   pools where the system saw profit but was too late — pinning them
-                        #   maximises the chance of catching the NEXT event at same-block lag.
-                        # Bucket C2 (gas_near_survivor): pools from near_executable that
-                        #   failed on GAS_EXCEEDS_GROSS — they're closest to passing economics.
-                        # Bucket C3 (activity_fill): remaining PTT pools by activity score.
+                        # M7.A.5.47h: 3-bucket fill with exact-pool pinning.
+                        # C1 (stale_recovery): ONLY recoverable stale (lag ≤ 2,
+                        #   positive, size_valid) — not all stale positives.
+                        #   Uses cold_recoverable_stale (strict subset).
+                        #   + TTL-pinned pools from prior iterations.
+                        # C2 (gas_near_survivor): near_executable with
+                        #   GAS_EXCEEDS_GROSS AND positive gross (can cross zero
+                        #   at larger size). Gross-negative families excluded.
+                        # C3 (activity_fill): remaining PTT by activity score.
                         _bucket_c1_stale: set = set()
-                        for _sp in _bridge.get("cold_stale_positive", []):
+                        for _sp in _bridge.get("cold_recoverable_stale", []):
                             _sp_pa = (_sp.get("pool_address") or "").lower()
                             if _sp_pa and _sp_pa in _ptt and _sp_pa not in _bucket_a and _sp_pa not in _bucket_b:
                                 _bucket_c1_stale.add(_sp_pa)
-                                # Refresh TTL for freshly-seen stale positive pools
+                                # Refresh TTL for freshly-seen recoverable stale pools
                                 _stale_pin_ttl[_sp_pa] = {
                                     "ttl": _STALE_PIN_TTL_INIT,
                                     "pair": _sp.get("actual_pair", ""),
@@ -1427,13 +1451,35 @@ def run_loop(cli_args) -> None:
                                 _bucket_c1_stale.add(_pin_pa)
 
                         _bucket_c2_gas_near: set = set()
+                        # M7.A.5.47h: Only admit near_executable pools whose
+                        # family has positive gross (mean_gas_gap_bps > 0 in
+                        # micro_refinement or positive verified_net via bridge).
+                        # Gross-negative families cannot cross zero at any size.
+                        _gross_positive_families: set = set()
+                        for _mr in _bridge.get("micro_refinement", []):
+                            if (_mr.get("verified_net_bps_after_refinement") or 0) > 0:
+                                _ap = (_mr.get("actual_pair") or "")
+                                _parts = _ap.split("/")
+                                if len(_parts) == 2:
+                                    _gross_positive_families.add(
+                                        tuple(sorted((_parts[0].lower(), _parts[1].lower())))
+                                    )
                         for _ne in _bridge.get("near_executable", []):
                             _ne_pa = (_ne.get("pool_address") or "").lower()
                             _ne_rr = _ne.get("reject_reason", "")
-                            if (_ne_pa and _ne_rr == "GAS_EXCEEDS_GROSS" and
-                                    _ne_pa in _ptt and _ne_pa not in _bucket_a and
-                                    _ne_pa not in _bucket_b and _ne_pa not in _bucket_c1_stale):
-                                _bucket_c2_gas_near.add(_ne_pa)
+                            if not (_ne_pa and _ne_rr == "GAS_EXCEEDS_GROSS"):
+                                continue
+                            if _ne_pa not in _ptt:
+                                continue
+                            if _ne_pa in _bucket_a or _ne_pa in _bucket_b or _ne_pa in _bucket_c1_stale:
+                                continue
+                            # Check gross-positive via pool family
+                            _ne_info = _ptt.get(_ne_pa) or _ptt.get(_ne_pa.lower())
+                            if _ne_info and len(_ne_info) >= 2:
+                                _ne_fam = tuple(sorted((_ne_info[0].lower(), _ne_info[1].lower())))
+                                if _ne_fam not in _gross_positive_families:
+                                    continue  # gross-negative family → skip
+                            _bucket_c2_gas_near.add(_ne_pa)
 
                         # Bucket C3: activity fill from remaining (exclude C1/C2)
                         _committed = _bucket_a | _bucket_b | _bucket_c1_stale | _bucket_c2_gas_near
@@ -1711,6 +1757,16 @@ def run_loop(cli_args) -> None:
                 for _sp_pa in _stale_pin_ttl:
                     _stale_pin_ttl[_sp_pa]["ttl"] -= 1
 
+                # M7.A.5.47h: Decrement hot-seen-pin TTLs after each hot window.
+                _expired_hot_pins = [
+                    pa for pa, info in _hot_seen_pin.items()
+                    if info.get("ttl", 0) <= 1
+                ]
+                for _ehp in _expired_hot_pins:
+                    del _hot_seen_pin[_ehp]
+                for _hsp_pa in _hot_seen_pin:
+                    _hot_seen_pin[_hsp_pa]["ttl"] -= 1
+
                 # M7.A.5.47c: Build bridge_miss_sample_top — pools seen in hot
                 # events but NOT in the bridge pool set. Shows which pools to add.
                 _bridge_miss_sample = []
@@ -1724,6 +1780,44 @@ def run_loop(cli_args) -> None:
                                 "not_in_bridge": True,
                             })
                 _hot_bridge_diag["bridge_miss_sample_top"] = _bridge_miss_sample[:5]
+
+                # M7.A.5.47h: hot_seen_vs_bridge_overlap diagnostic — shows
+                # which hot-seen pools are in the focused bridge and which aren't,
+                # and what bucket they landed in (or why absent).
+                _overlap_diag: list = []
+                if _hot_hist:
+                    for _oh in _hot_hist[:10]:
+                        _oh_addr = (_oh.get("pool") or "").lower()
+                        if not _oh_addr:
+                            continue
+                        _in_bridge = _oh_addr in _bridge_pool_addrs
+                        _bucket_label = "absent"
+                        if _oh_addr in _bucket_a:
+                            _bucket_label = "A_cold_exec"
+                        elif _oh_addr in _bucket_b:
+                            _bucket_label = "B_hot_seen"
+                        elif _oh_addr in _bucket_c1_stale:
+                            _bucket_label = "C1_stale_recovery"
+                        elif _oh_addr in _bucket_c2_gas_near:
+                            _bucket_label = "C2_gas_near"
+                        elif _in_bridge:
+                            _bucket_label = "C3_activity_fill"
+                        _reason = ""
+                        if not _in_bridge:
+                            if _oh_addr not in _ptt:
+                                _reason = "not_in_ptt"
+                            elif _oh_addr in _hot_seen_pin:
+                                _reason = "pinned_but_ttl_expired_or_not_in_ptt"
+                            else:
+                                _reason = "no_bucket_qualified"
+                        _overlap_diag.append({
+                            "event_pool": _oh_addr,
+                            "seen_count": _oh.get("count", 0),
+                            "in_bridge": _in_bridge,
+                            "bucket": _bucket_label,
+                            "reason_if_absent": _reason,
+                        })
+                _hot_bridge_diag["hot_seen_vs_bridge_overlap_top"] = _overlap_diag[:5]
 
                 # M7.A.5.47c: Refined miss counter — bridge pool hit but registry miss
                 _hot_bridge_diag["bridge_pool_hit_but_registry_miss"] = max(0,

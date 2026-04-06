@@ -909,6 +909,23 @@ def build_replay_summary(
     )[:_TOP_N]
     top_stale_positive_candidates = [_compact_candidate(r) for r in _stale_candidates]
 
+    # M7.A.5.47h: Recoverable stale — strict subset of stale positives that
+    # could realistically be caught at same-block lag. Criteria:
+    #   block_lag ≤ 2, best_backrun_net_bps > 0, size_valid_for_token = true.
+    # Only these qualify for C1 stale-recovery bridge pinning.
+    _recoverable_stale_candidates = sorted(
+        [
+            r for r in results
+            if _is_stale(r)
+            and (r.best_backrun_net_bps or 0) > 0
+            and r.size_valid_for_token
+            and (_lag(r) <= 2)
+        ],
+        key=lambda r: r.best_backrun_net_bps or 0,
+        reverse=True,
+    )[:_TOP_N]
+    top_recoverable_stale_candidates = [_compact_candidate(r) for r in _recoverable_stale_candidates]
+
     # M7.A.5.43: Near-executable candidates — size_valid + not anomaly,
     # but rejected by GAS_EXCEEDS_GROSS or staleness (net_bps > -50).
     # These are the closest candidates to executable status.
@@ -1338,6 +1355,8 @@ def build_replay_summary(
         # M7.A.5.41: Compact top-candidate rows (survive _ROLLING_EXCLUDE_KEYS)
         "top_executable_candidates": top_executable_candidates,
         "top_stale_positive_candidates": top_stale_positive_candidates,
+        # M7.A.5.47h: Recoverable stale (lag ≤ 2, positive, size_valid)
+        "top_recoverable_stale_candidates": top_recoverable_stale_candidates,
         # M7.A.5.43: Near-executable candidates (closest to viable)
         "near_executable_candidates": near_executable_candidates,
         # M7.A.5.44: Micro-refinement results (bounded size sweep for top candidates)
