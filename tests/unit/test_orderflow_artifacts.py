@@ -1636,6 +1636,7 @@ class TestM7A532RollingCanonicalSet:
             "m7_promoted_pairs.json",
             "m7_cold_hot_bridge.json",
             "m7_hot_intents_latest.json",
+            "m7_hot_rollup_latest.json",
         }
         for f in rolling.iterdir():
             if f.is_file():

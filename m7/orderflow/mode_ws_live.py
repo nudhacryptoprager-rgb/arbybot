@@ -196,6 +196,11 @@ def run_ws_live(
     all_results = []
     blocks_processed = 0
     raw_logs_total = 0
+    # M7.A.5.47: Hybrid intake diagnostics
+    _broad_blocks = 0       # blocks scanned with broad (no address filter)
+    _focused_blocks = 0     # blocks scanned with focused (address filter)
+    _broad_logs = 0         # raw logs from broad blocks
+    _focused_logs = 0       # raw logs from focused blocks
     ws_start_time = time.monotonic()
 
     # M7.A.5.23: Session-persistent low-lag tracking across blocks
@@ -258,25 +263,25 @@ def run_ws_live(
             )
 
             # Fetch swap logs for THIS block only
-            # M7.A.5.47: In hot mode with bridge pool addresses, use targeted
-            # address filter to only fetch events from bridge-known pools.
-            # This dramatically increases the hit rate vs broad unfiltered scan.
+            # M7.A.5.47: Hybrid hot intake — focused + periodic broad fallback.
+            # Focused: address filter for bridge pools (high hit rate when active).
+            # Broad: every _BROAD_FALLBACK_INTERVAL blocks, scan ALL swaps.
+            #   This catches events the focused filter misses and provides
+            #   diagnostics (events_at_non_bridge_pools vs no_events_at_all).
             _hot_mode_active = external_registry is not None
+            _BROAD_FALLBACK_INTERVAL = 3  # every 3rd block is broad
+            _is_broad_block = (blocks_processed % _BROAD_FALLBACK_INTERVAL) == 0
             try:
                 _log_filter: dict = {
                     "fromBlock": detected_block,
                     "toBlock": detected_block,
                     "topics": [SWAP_EVENT_TOPIC],
                 }
-                if _hot_mode_active and bridge_pool_addresses:
-                    # Web3 address filter accepts a list of checksummed addresses.
-                    # Limit to 50 addresses per call to avoid RPC payload limits.
+                if _hot_mode_active and bridge_pool_addresses and not _is_broad_block:
+                    # Focused: only bridge pool addresses (up to 50)
                     _addr_list = list(bridge_pool_addresses)[:50]
                     _log_filter["address"] = _addr_list
-                    logger.debug(
-                        "Hot focused fetch: block=%d bridge_addrs=%d",
-                        detected_block, len(_addr_list),
-                    )
+                # else: broad scan — no address filter
                 logs = _w3_loop.eth.get_logs(_log_filter)
             except Exception as exc:
                 logger.debug(
@@ -287,6 +292,13 @@ def run_ws_live(
                 continue
 
             raw_logs_total += len(logs)
+            # M7.A.5.47: Track broad vs focused diagnostics
+            if _is_broad_block or not (_hot_mode_active and bridge_pool_addresses):
+                _broad_blocks += 1
+                _broad_logs += len(logs)
+            else:
+                _focused_blocks += 1
+                _focused_logs += len(logs)
             if not logs:
                 continue
 
@@ -474,6 +486,11 @@ def run_ws_live(
         "normalized_events": len(all_events),
         "events_scored": len(all_results),
         "ws_elapsed_seconds": round(ws_elapsed, 2),
+        # M7.A.5.47: Hybrid intake diagnostics
+        "broad_blocks": _broad_blocks,
+        "focused_blocks": _focused_blocks,
+        "broad_logs": _broad_logs,
+        "focused_logs": _focused_logs,
     }
     # M7.A.5.22: Registry session stats
     artifact["registry_session_stats"] = {

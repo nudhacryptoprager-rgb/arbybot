@@ -127,6 +127,8 @@ def _write_cold_hot_bridge(artifact: dict) -> None:
             "near_executable": near_exec,
             "signal_classification": artifact.get("signal_classification", {}),
             "pool_token_transport": _ptt,
+            # M7.A.5.47b: Transport micro_refinement for hot queue ordering
+            "micro_refinement": artifact.get("micro_refinement", []),
         }
         with open(_COLD_HOT_BRIDGE_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
@@ -719,22 +721,43 @@ def _write_hot_intents(
             if eid:
                 _guard_event_ids.add(eid)
 
+    # M7.A.5.47b: Build micro_refinement lookup from bridge for priority ordering.
+    # Keys by actual_pair since hot events score different event_ids than cold.
+    _micro_lookup: dict = {}
+    if bridge:
+        for mr in bridge.get("micro_refinement", []):
+            _mr_pair = mr.get("actual_pair")
+            if _mr_pair:
+                _micro_lookup[_mr_pair] = mr
+
     for r in _fast:
         eid = getattr(r, "event_id", None)
         net = getattr(r, "best_backrun_net_bps", None) or 0
+        _pair = getattr(r, "actual_pair", None)
+        _mr = _micro_lookup.get(_pair, {})
         rows.append({
             "event_id": eid,
-            "actual_pair": getattr(r, "actual_pair", None),
+            "actual_pair": _pair,
             "net_bps": round(net, 4) if net else 0,
             "profit_guard_passed": getattr(r, "profit_guard_passed", False),
             "guard_passed_in_hot": eid in _guard_event_ids,
             "scoring_path": getattr(r, "scoring_path", None),
             "pipeline_latency_ms": getattr(r, "quote_pipeline_latency_ms", None),
             "route_viable": getattr(r, "route_viable", False),
+            # M7.A.5.47b: Submit-size refinement from cold bridge
+            "cold_verified_net_bps": _mr.get("verified_net_bps_after_refinement"),
+            "cold_best_submit_size": _mr.get("best_submit_size"),
+            "cold_gas_floor_gap_bps": _mr.get("gas_floor_gap_bps"),
         })
 
-    # Sort by net_bps descending
-    rows.sort(key=lambda x: x.get("net_bps", 0), reverse=True)
+    # Sort by cold_verified_net_bps (cold-verified first), then net_bps descending
+    rows.sort(
+        key=lambda x: (
+            x.get("cold_verified_net_bps") or -9999,
+            x.get("net_bps", 0),
+        ),
+        reverse=True,
+    )
 
     # Compute funnel counts for hot lane
     _hot_scored = len(_fast)
@@ -779,6 +802,7 @@ def _update_hot_rollup(
     fast_results: list | None,
     guard_results: list | None,
     bridge_diagnostics: dict | None,
+    ws_live_stats: dict | None = None,
 ) -> None:
     """Update cumulative hot rollup artifact — survives across windows.
 
@@ -852,16 +876,42 @@ def _update_hot_rollup(
         rollup.get("fast_score_rejected_economics_total", 0)
         + sum(1 for r in _fast if (getattr(r, "best_backrun_net_bps", 0) or 0) <= 0)
     )
+
+    # M7.A.5.47b: 4 new temporal/diagnostic rollup counters
+    _wls = ws_live_stats or {}
+    if events_count > 0:
+        rollup["windows_with_events"] = rollup.get("windows_with_events", 0) + 1
+    else:
+        rollup.setdefault("windows_with_events", 0)
+    if _bd.get("bridge_pool_address_hit_count", 0) > 0:
+        rollup["windows_with_bridge_hits"] = rollup.get("windows_with_bridge_hits", 0) + 1
+    else:
+        rollup.setdefault("windows_with_bridge_hits", 0)
+    if len(_fast) > 0:
+        rollup["windows_with_fast_scores"] = rollup.get("windows_with_fast_scores", 0) + 1
+    else:
+        rollup.setdefault("windows_with_fast_scores", 0)
+    rollup["broad_fallback_events_total"] = (
+        rollup.get("broad_fallback_events_total", 0)
+        + _wls.get("broad_logs", 0)
+    )
+
     # Derive dominant hot miss reason from cumulative counters
+    # M7.A.5.47b: Split bridge_pool_not_hit into two sub-reasons:
+    #   no_events_in_filtered_window — windows with 0 events (filter too tight)
+    #   events_seen_but_not_bridge_pool — events exist but none match bridge pools
+    _windows_no_events = max(0,
+        rollup.get("windows_seen", 0)
+        - rollup.get("windows_with_events", 0)
+    )
+    _windows_events_no_bridge = max(0,
+        rollup.get("windows_with_events", 0)
+        - rollup.get("windows_with_bridge_hits", 0)
+    )
     _miss_counts = {
-        "no_events_in_window": max(0,
-            rollup.get("windows_seen", 0)
-            - max(1, rollup.get("events_seen_total", 0))
-        ),
-        "bridge_pool_not_hit": max(0,
-            rollup.get("bridge_candidate_loaded_total", 0)
-            - rollup.get("bridge_pool_hit_total", 0)
-        ),
+        "no_events_in_window": _windows_no_events,
+        "no_events_in_filtered_window": _windows_no_events,
+        "events_seen_but_not_bridge_pool": _windows_events_no_bridge,
         "pool_not_in_registry": max(0,
             rollup.get("bridge_pool_hit_total", 0)
             - rollup.get("registry_hit_for_event_pool_total", 0)
@@ -896,6 +946,11 @@ def run_loop(cli_args) -> None:
     # M7.A.5.35/M7.A.5.39: Cross-iteration cold stats for two-level promotion
     _cold_pair_stats: dict = {}   # pair_key -> promotion stats from cold results
     _promoted_pairs: dict = {"candidate": [], "execution": []}  # two-level promotion
+
+    # M7.A.5.47: Track pool addresses seen in cold events — used to rank
+    # bridge pools by actual activity (pools with no recent events are
+    # deprioritized in the hot address filter).
+    _cold_active_pools: dict = {}  # pool_address_lower -> {"event_count": N, "last_iter": M}
 
     # M7.A.5.37: Persistent cold registry — survives across cold iterations
     # Passed via warm_registry to avoid hot-mode trigger. Caches pool data
@@ -1065,18 +1120,37 @@ def run_loop(cli_args) -> None:
 
             # M7.A.5.47: Build focused bridge pool address set for hot lane.
             # Combines cold_executable pool addresses with all pool_token_transport
-            # keys from bridge. Passed to run_ws_live for targeted eth_getLogs.
+            # keys from bridge. Ranked by cold-lane activity (most-active first).
             _bridge_pool_addrs: set | None = None
             if lane == "hot":
                 try:
                     _ptt = _bridge.get("pool_token_transport", {})
                     if _ptt:
-                        _bridge_pool_addrs = set(_cold_exec_pools)  # already lowered
+                        # Gather all candidate pool addresses
+                        _all_candidate_pools = set(_cold_exec_pools)  # already lowered
                         for _ptt_key in _ptt:
-                            _bridge_pool_addrs.add(_ptt_key.lower())
+                            _all_candidate_pools.add(_ptt_key.lower())
+
+                        # Rank by cold-lane event activity (descending), then
+                        # always include cold_exec_pools regardless of activity.
+                        _ranked = sorted(
+                            _all_candidate_pools,
+                            key=lambda pa: _cold_active_pools.get(pa, {}).get("event_count", 0),
+                            reverse=True,
+                        )
+                        _bridge_pool_addrs = set(_ranked[:50])
+                        # Always include cold_exec pools even if not in top 50
+                        _bridge_pool_addrs |= _cold_exec_pools
+
+                        _active_in_filter = sum(
+                            1 for pa in _bridge_pool_addrs
+                            if pa in _cold_active_pools
+                        )
                         logger.info(
-                            "Hot focused intake: %d bridge pool addresses (%d cold_exec)",
+                            "Hot focused intake: %d bridge pool addresses "
+                            "(%d cold_exec, %d activity-ranked, %d with cold events)",
                             len(_bridge_pool_addrs), len(_cold_exec_pools),
+                            len(_all_candidate_pools), _active_in_filter,
                         )
                 except NameError:
                     pass  # _bridge not yet available (first iteration, no cold run yet)
@@ -1156,6 +1230,23 @@ def run_loop(cli_args) -> None:
 
                 # M7.A.5.42: Write cold→hot bridge with per-candidate detail
                 _write_cold_hot_bridge(artifact)
+
+                # M7.A.5.47: Track pool addresses seen in cold events for
+                # activity-based ranking. Hot lane uses this to prioritize
+                # bridge pools that actually receive swap events.
+                for _cr in artifact.get("_raw_results", []):
+                    _cpa = getattr(_cr, "pool_address", None) or (
+                        getattr(getattr(_cr, "_source_event", None), "pool_address", None)
+                    )
+                    if _cpa:
+                        _cpa_low = _cpa.lower()
+                        if _cpa_low in _cold_active_pools:
+                            _cold_active_pools[_cpa_low]["event_count"] += 1
+                            _cold_active_pools[_cpa_low]["last_iter"] = iteration
+                        else:
+                            _cold_active_pools[_cpa_low] = {
+                                "event_count": 1, "last_iter": iteration,
+                            }
 
                 # M7.A.5.37: Log cold registry persistence stats
                 if _cold_registry is not None:
@@ -1266,6 +1357,7 @@ def run_loop(cli_args) -> None:
                     fast_results=fast_results,
                     guard_results=guard_results,
                     bridge_diagnostics=_hot_bridge_diag,
+                    ws_live_stats=artifact.get("ws_live_stats"),
                 )
 
             best = artifact.get("best_net_bps_clean")
