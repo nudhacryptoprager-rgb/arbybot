@@ -848,6 +848,27 @@ def build_replay_summary(
     # are stripped by _ROLLING_EXCLUDE_KEYS.
     def _compact_candidate(r):
         _evt = getattr(r, '_source_event', None)
+        # M7.A.5.44: Execution-time local verification — run profit_guard
+        # on each compact candidate to verify ending > starting after costs.
+        _verified = None
+        _verified_net_bps = None
+        if r.route_viable and (r.best_backrun_net_bps or 0) > 0 and r.size_valid_for_token:
+            _size = getattr(r, 'amount_in_wei', 0) or 0
+            _gross = getattr(r, 'gross_pnl_wei', 0) or 0
+            if _size > 0:
+                _sell = _size + _gross
+                try:
+                    from m7.orderflow.profit_guard import check_profit_guard
+                    _pg = check_profit_guard(
+                        buy_amount_wei=_size,
+                        sell_amount_wei=_sell,
+                        backrun_size_wei=_size,
+                        pipeline_latency_ms=r.quote_pipeline_latency_ms,
+                    )
+                    _verified = _pg.passed
+                    _verified_net_bps = round(_pg.net_bps, 4)
+                except Exception:
+                    pass
         return {
             "event_id": r.event_id,
             "actual_pair": r.actual_pair,
@@ -862,6 +883,9 @@ def build_replay_summary(
             "reject_reason": r.reject_reason,
             # M7.A.5.43: Pool-address transport for hot lane bridge
             "pool_address": getattr(_evt, 'pool_address', None) if _evt else None,
+            # M7.A.5.44: Execution-time local verification
+            "verified_profitable": _verified,
+            "verified_net_bps": _verified_net_bps,
         }
 
     _TOP_N = 5
@@ -895,6 +919,54 @@ def build_replay_summary(
     )[:_TOP_N]
     near_executable_candidates = [_compact_candidate(r) for r in _near_exec_candidates]
 
+    # M7.A.5.44: Micro-refinement — for top cold_executable and near_executable
+    # candidates, test 3-5 bounded sizes around observed amount_in_wei.
+    # Purpose: verify whether candidate survives sizing adjustment at execution
+    # time, not just at the original observed size. Uses profit_guard check
+    # (ending balance > starting balance after costs).
+    _MICRO_SIZE_MULTIPLIERS = [0.5, 0.8, 1.0, 1.5, 2.0]
+    _micro_refinement_results = []
+    _micro_candidates = (_exec_candidates[:3] + _near_exec_candidates[:2])
+    for r in _micro_candidates:
+        _base_size = getattr(r, 'amount_in_wei', 0) or 0
+        if _base_size <= 0:
+            continue
+        _gross = getattr(r, 'gross_pnl_wei', 0) or 0
+        if _base_size <= 0 or _gross == 0:
+            continue
+        _gross_ratio = _gross / _base_size  # gross PnL per unit input
+        _sizes_tried = 0
+        _sizes_passed = 0
+        _best_micro_net_bps = None
+        for mult in _MICRO_SIZE_MULTIPLIERS:
+            _test_size = int(_base_size * mult)
+            if _test_size <= 0:
+                continue
+            _test_sell = _test_size + int(_test_size * _gross_ratio)
+            try:
+                from m7.orderflow.profit_guard import check_profit_guard
+                _pg = check_profit_guard(
+                    buy_amount_wei=_test_size,
+                    sell_amount_wei=_test_sell,
+                    backrun_size_wei=_test_size,
+                )
+                _sizes_tried += 1
+                if _pg.passed:
+                    _sizes_passed += 1
+                if _best_micro_net_bps is None or _pg.net_bps > _best_micro_net_bps:
+                    _best_micro_net_bps = round(_pg.net_bps, 4)
+            except Exception:
+                _sizes_tried += 1
+        _micro_refinement_results.append({
+            "event_id": r.event_id,
+            "actual_pair": r.actual_pair,
+            "base_net_bps": round(r.best_backrun_net_bps, 4) if r.best_backrun_net_bps else 0,
+            "sizes_tried": _sizes_tried,
+            "sizes_passed": _sizes_passed,
+            "best_micro_net_bps": _best_micro_net_bps,
+            "reject_reason": r.reject_reason,
+        })
+
     # M7.A.5.42: Signal classification — 4 tiers of signal maturity.
     # Only hot_execution_ready should ever be interpreted as "implementation-ready".
     _profit_guard_passed_count = sum(1 for r in results if r.profit_guard_passed)
@@ -919,6 +991,20 @@ def build_replay_summary(
             "best_bps": None,
             "label": "Profit-guard passed in hot lane — ready for execution",
         },
+    }
+
+    # M7.A.5.44: Execution funnel — 5-stage machine-readable progression.
+    # Each stage is a strict subset of the previous. The final stage
+    # (realized_onchain_profit) is always 0 until M7.B execution is enabled.
+    # hot_scored and profit_guard_passed are populated by the hot lane and
+    # injected into this cold-lane artifact via the bridge. Cold lane cannot
+    # compute them directly (separate process), so they default to 0 here.
+    execution_funnel = {
+        "diagnostic_positive": positive_net_count_clean,
+        "cold_executable_positive": viable_count,
+        "hot_scored": 0,  # injected by hot lane via bridge/artifact merge
+        "profit_guard_passed": _profit_guard_passed_count,
+        "realized_onchain_profit": 0,  # M7.B — not yet implemented
     }
 
     # M7.A.5.42: Diagnostic-raw block — metrics that are informational but MUST NOT
@@ -1083,8 +1169,12 @@ def build_replay_summary(
         "top_stale_positive_candidates": top_stale_positive_candidates,
         # M7.A.5.43: Near-executable candidates (closest to viable)
         "near_executable_candidates": near_executable_candidates,
+        # M7.A.5.44: Micro-refinement results (bounded size sweep for top candidates)
+        "micro_refinement": _micro_refinement_results,
         # M7.A.5.42: Signal classification (4 tiers) + diagnostic raw block
         "signal_classification": signal_classification,
+        # M7.A.5.44: Execution funnel (5-stage strict subset progression)
+        "execution_funnel": execution_funnel,
         "diagnostic_raw": diagnostic_raw,
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,

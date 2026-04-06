@@ -2690,6 +2690,7 @@ class TestM7A541TopCandidatePersistence:
             "same_state_class", "route_viable", "size_valid_for_token",
             "scoring_path", "profit_guard_passed", "pipeline_latency_ms",
             "reject_reason", "pool_address",
+            "verified_profitable", "verified_net_bps",
         }
         for row in artifact["top_executable_candidates"]:
             assert set(row.keys()) == expected_keys
@@ -3667,3 +3668,204 @@ class TestM7A543HotGapDebugCounters:
         assert "registry_has_pair_but_not_pool_count" in source
         assert "bridge_cache_populated" in source
         assert "bridge_registry_prewarmed" in source
+
+
+# ===========================================================================
+# M7.A.5.44: Execution Funnel
+# ===========================================================================
+
+
+class TestM7A544ExecutionFunnel:
+    """M7.A.5.44: execution_funnel has 5 stages in artifact."""
+
+    def test_execution_funnel_present(self):
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        assert "execution_funnel" in artifact
+
+    def test_execution_funnel_stages(self):
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        funnel = artifact["execution_funnel"]
+        required_keys = {
+            "diagnostic_positive",
+            "cold_executable_positive",
+            "hot_scored",
+            "profit_guard_passed",
+            "realized_onchain_profit",
+        }
+        assert required_keys == set(funnel.keys())
+
+    def test_execution_funnel_types(self):
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        funnel = artifact["execution_funnel"]
+        for key, val in funnel.items():
+            assert isinstance(val, int), f"{key} should be int, got {type(val)}"
+
+    def test_execution_funnel_hot_scored_default_zero(self):
+        """Cold lane cannot compute hot_scored — defaults to 0."""
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        assert artifact["execution_funnel"]["hot_scored"] == 0
+
+    def test_execution_funnel_realized_onchain_default_zero(self):
+        """M7.B not implemented — realized_onchain_profit always 0."""
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        assert artifact["execution_funnel"]["realized_onchain_profit"] == 0
+
+    def test_execution_funnel_monotonic_decrease(self):
+        """Each stage should be <= the previous (strict subset invariant)."""
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        funnel = artifact["execution_funnel"]
+        assert funnel["cold_executable_positive"] <= funnel["diagnostic_positive"]
+        assert funnel["profit_guard_passed"] <= funnel["cold_executable_positive"]
+        assert funnel["realized_onchain_profit"] <= funnel["profit_guard_passed"]
+
+
+# ===========================================================================
+# M7.A.5.44: Compact Candidate Verification
+# ===========================================================================
+
+
+class TestM7A544CompactCandidateVerification:
+    """M7.A.5.44: compact candidate has verified_profitable and verified_net_bps."""
+
+    def test_verified_fields_present(self):
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        for c in artifact["top_executable_candidates"]:
+            assert "verified_profitable" in c
+            assert "verified_net_bps" in c
+
+    def test_verified_profitable_is_bool_or_none(self):
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        for c in artifact["top_executable_candidates"]:
+            assert c["verified_profitable"] is None or isinstance(c["verified_profitable"], bool)
+
+    def test_verified_net_bps_is_numeric_or_none(self):
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        for c in artifact["top_executable_candidates"]:
+            assert c["verified_net_bps"] is None or isinstance(c["verified_net_bps"], (int, float))
+
+
+# ===========================================================================
+# M7.A.5.44: Micro-Refinement
+# ===========================================================================
+
+
+class TestM7A544MicroRefinement:
+    """M7.A.5.44: micro_refinement list in artifact."""
+
+    def test_micro_refinement_present(self):
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        assert "micro_refinement" in artifact
+        assert isinstance(artifact["micro_refinement"], list)
+
+    def test_micro_refinement_entry_schema(self):
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        required_keys = {
+            "event_id", "actual_pair", "base_net_bps",
+            "sizes_tried", "sizes_passed", "best_micro_net_bps",
+            "reject_reason",
+        }
+        for entry in artifact["micro_refinement"]:
+            assert required_keys.issubset(set(entry.keys())), (
+                f"missing keys: {required_keys - set(entry.keys())}"
+            )
+
+    def test_micro_refinement_sizes_tried_bounded(self):
+        """At most 5 multipliers tried per candidate."""
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        for entry in artifact["micro_refinement"]:
+            assert entry["sizes_tried"] <= 5
+
+    def test_micro_refinement_sizes_passed_le_tried(self):
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        artifact = build_replay_summary(events, results, mode="offline")
+        for entry in artifact["micro_refinement"]:
+            assert entry["sizes_passed"] <= entry["sizes_tried"]
+
+
+# ===========================================================================
+# M7.A.5.44: Bridge Hit Counters in Hot Lane
+# ===========================================================================
+
+
+class TestM7A544BridgeHitCounters:
+    """M7.A.5.44: 3 new bridge-hit counters in _hot_bridge_diag."""
+
+    def test_bridge_hit_counter_keys_in_source(self):
+        """m7a_orderflow_loop initializes all 3 new bridge-hit counters."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        assert "bridge_pool_address_hit_count" in source
+        assert "bridge_pair_hit_count" in source
+        assert "bridge_loaded_candidate_count" in source
+
+    def test_bridge_hit_counters_computed(self):
+        """Computation logic exists for bridge_pool_address_hit_count."""
+        import inspect
+        from scripts.m7a_orderflow_loop import run_loop
+        source = inspect.getsource(run_loop)
+        # Verify the counter is incremented (computed, not just initialized)
+        assert 'bridge_pool_address_hit_count"] += 1' in source
+        assert 'bridge_pair_hit_count"] += 1' in source
+        assert 'bridge_loaded_candidate_count"] = len' in source
+
+
+# ===========================================================================
+# M7.A.5.44: Dashboard Execution Gap Section
+# ===========================================================================
+
+
+class TestM7A544DashboardFunnelSection:
+    """M7.A.5.44: dashboard has Execution Gap Funnel section."""
+
+    def test_dashboard_has_funnel_section(self):
+        import pathlib
+        src = pathlib.Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "Execution Gap Funnel" in src
+
+    def test_dashboard_funnel_stages_rendered(self):
+        import pathlib
+        src = pathlib.Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        for stage in [
+            "diagnostic_positive",
+            "cold_executable_positive",
+            "hot_scored",
+            "profit_guard_passed",
+            "realized_onchain_profit",
+        ]:
+            assert stage in src, f"funnel stage {stage} not in dashboard"
+
+    def test_dashboard_micro_refinement_table(self):
+        import pathlib
+        src = pathlib.Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "micro_refinement" in src
+
+    def test_dashboard_verified_column(self):
+        import pathlib
+        src = pathlib.Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "verified_profitable" in src

@@ -1037,14 +1037,52 @@ function renderM7Orderflow(m7, m7Hot) {
 
   // Top executable candidates table (M7.A.5.41)
   if (topExecCandidates.length > 0) {
-    html += '<table style="margin-top:6px"><tr><th>Pair</th><th class="num">Net bps</th><th class="num">Lag</th><th>Viable</th><th>Size OK</th><th>Guard</th><th>Path</th><th>Reject</th></tr>';
+    html += '<table style="margin-top:6px"><tr><th>Pair</th><th class="num">Net bps</th><th class="num">Lag</th><th>Viable</th><th>Size OK</th><th>Guard</th><th>Verified</th><th>Path</th><th>Reject</th></tr>';
     for (const c of topExecCandidates) {
-      html += `<tr><td style="font-size:.72rem">${c.actual_pair || '\u2014'}</td><td class="num ${cls(c.net_bps)}">${fmt(c.net_bps, 2)}</td><td class="num">${c.block_lag ?? '\u2014'}</td><td>${c.route_viable ? 'Y' : 'N'}</td><td>${c.size_valid_for_token ? 'Y' : 'N'}</td><td>${c.profit_guard_passed ? 'Y' : 'N'}</td><td style="font-size:.7rem">${c.scoring_path || '\u2014'}</td><td style="font-size:.7rem">${c.reject_reason || '\u2014'}</td></tr>`;
+      const verBadge = c.verified_profitable === true ? '<span class="badge pass">Y</span>' : c.verified_profitable === false ? '<span class="badge fail">N</span>' : '\u2014';
+      html += `<tr><td style="font-size:.72rem">${c.actual_pair || '\u2014'}</td><td class="num ${cls(c.net_bps)}">${fmt(c.net_bps, 2)}</td><td class="num">${c.block_lag ?? '\u2014'}</td><td>${c.route_viable ? 'Y' : 'N'}</td><td>${c.size_valid_for_token ? 'Y' : 'N'}</td><td>${c.profit_guard_passed ? 'Y' : 'N'}</td><td>${verBadge}</td><td style="font-size:.7rem">${c.scoring_path || '\u2014'}</td><td style="font-size:.7rem">${c.reject_reason || '\u2014'}</td></tr>`;
     }
     html += '</table>';
   }
 
-  // \u2500\u2500 Section 3: Diagnostic Positive \u2500\u2500
+  // \u2500\u2500 Section 3: Execution Gap Funnel (M7.A.5.44) \u2500\u2500
+  const funnel = m7.execution_funnel || {};
+  const nearExec = m7.near_executable_candidates || [];
+  const microRef = m7.micro_refinement || [];
+  const hgdGap = m7Hot?.hot_gap_debug || {};
+
+  html += '<h3 style="font-size:.85rem;color:#d29922;margin:14px 0 4px">Execution Gap Funnel</h3>';
+  html += '<table style="margin-top:4px"><tr><th>Stage</th><th class="num">Count</th><th></th></tr>';
+  const funnelStages = [
+    ['diagnostic_positive', funnel.diagnostic_positive ?? '\u2014'],
+    ['cold_executable_positive', funnel.cold_executable_positive ?? '\u2014'],
+    ['hot_scored', (m7Hot?.fast_path?.scored ?? funnel.hot_scored ?? 0)],
+    ['profit_guard_passed', (m7Hot?.fast_path?.profit_guard_passed ?? funnel.profit_guard_passed ?? 0)],
+    ['realized_onchain_profit', funnel.realized_onchain_profit ?? 0],
+  ];
+  for (let i = 0; i < funnelStages.length; i++) {
+    const [stage, count] = funnelStages[i];
+    const arrow = i < funnelStages.length - 1 ? '\u2192' : '';
+    const stageColor = count > 0 ? 'pos' : 'neg';
+    html += `<tr><td style="font-size:.72rem">${stage}</td><td class="num ${stageColor}">${count}</td><td>${arrow}</td></tr>`;
+  }
+  html += '</table>';
+
+  // Bridge + hot-match counters
+  html += '<div style="margin:6px 0;font-size:.72rem;color:#8b949e">';
+  html += `Bridge: cache=${hgdGap.bridge_cache_populated ?? '\u2014'} registry=${hgdGap.bridge_registry_prewarmed ?? '\u2014'} `;
+  html += `| Pool: addr_hit=${hgdGap.pool_address_match_count ?? '\u2014'} pair_hit=${hgdGap.canonical_pair_match_count ?? '\u2014'} `;
+  html += `| Near-exec: ${nearExec.length}`;
+  html += '</div>';
+
+  // Micro-refinement results (M7.A.5.44)
+  if (microRef.length > 0) {
+    html += '<table style="margin-top:4px"><tr><th>Pair</th><th class="num">Base bps</th><th class="num">Sizes</th><th class="num">Passed</th><th class="num">Best micro</th><th>Reject</th></tr>';
+    for (const mr of microRef) {
+      html += `<tr><td style="font-size:.72rem">${mr.actual_pair || '\u2014'}</td><td class="num ${cls(mr.base_net_bps)}">${fmt(mr.base_net_bps, 2)}</td><td class="num">${mr.sizes_tried}</td><td class="num">${mr.sizes_passed}</td><td class="num ${cls(mr.best_micro_net_bps)}">${fmt(mr.best_micro_net_bps, 2)}</td><td style="font-size:.7rem">${mr.reject_reason || '\u2014'}</td></tr>`;
+    }
+    html += '</table>';
+  }
   html += '<h3 style="font-size:.85rem;color:#7c8593;margin:14px 0 4px">Diagnostic Positive</h3>';
   html += `<div class="kpi">
     <div class="kpi-item"><div class="kpi-val ${cls(bestClean)}">${fmt(bestClean, 2)}</div><div class="kpi-lbl">Clean best (bps)</div></div>

@@ -500,6 +500,10 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "registry_has_pair_but_not_pool_count": _bd.get("registry_has_pair_but_not_pool_count", 0),
         "bridge_cache_populated": _bd.get("bridge_cache_populated", 0),
         "bridge_registry_prewarmed": _bd.get("bridge_registry_prewarmed", 0),
+        # M7.A.5.44: Bridge-hit counters
+        "bridge_pool_address_hit_count": _bd.get("bridge_pool_address_hit_count", 0),
+        "bridge_pair_hit_count": _bd.get("bridge_pair_hit_count", 0),
+        "bridge_loaded_candidate_count": _bd.get("bridge_loaded_candidate_count", 0),
     }
 
     if fast_results:
@@ -880,6 +884,10 @@ def run_loop(cli_args) -> None:
                     "pool_address_match_count": 0,
                     "canonical_pair_match_count": 0,
                     "registry_has_pair_but_not_pool_count": 0,
+                    # M7.A.5.44: Explicit bridge-hit counters
+                    "bridge_pool_address_hit_count": 0,
+                    "bridge_pair_hit_count": 0,
+                    "bridge_loaded_candidate_count": 0,
                 }
                 try:
                     from m7.orderflow.resolve import _pool_token_cache as _ptc
@@ -901,6 +909,27 @@ def run_loop(cli_args) -> None:
                                     _active = [e for e in _entries if e.is_active()]
                                     if not _active:
                                         _hot_bridge_diag["registry_has_pair_but_not_pool_count"] += 1
+
+                    # M7.A.5.44: Bridge-hit counters — across ALL events (not just hot_skip)
+                    _bridge_ptt = _bridge.get("pool_token_transport", {})
+                    _bridge_ptt_lower = {k.lower() for k in _bridge_ptt}
+                    for _r in artifact.get("_raw_results", []):
+                        _evt = getattr(_r, "_source_event", None)
+                        if not _evt or not getattr(_evt, "pool_address", None):
+                            continue
+                        _ck_all = _evt.pool_address.lower()
+                        if _ck_all in _bridge_ptt_lower:
+                            _hot_bridge_diag["bridge_pool_address_hit_count"] += 1
+                            _cached_all = _ptc.get(_ck_all)
+                            if _cached_all and _hot_registry:
+                                _t0a, _t1a, _ = _cached_all
+                                _ent_all = _hot_registry.lookup_pair(_t0a, _t1a)
+                                if _ent_all:
+                                    _hot_bridge_diag["bridge_pair_hit_count"] += 1
+                    # bridge_loaded_candidate_count = entries loaded from bridge
+                    _hot_bridge_diag["bridge_loaded_candidate_count"] = len(
+                        _bridge.get("cold_executable", [])
+                    ) + len(_bridge.get("near_executable", []))
                 except Exception:
                     pass
 
