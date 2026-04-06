@@ -876,6 +876,44 @@ def build_replay_summary(
     )[:_TOP_N]
     top_stale_positive_candidates = [_compact_candidate(r) for r in _stale_candidates]
 
+    # M7.A.5.42: Signal classification — 4 tiers of signal maturity.
+    # Only hot_execution_ready should ever be interpreted as "implementation-ready".
+    _profit_guard_passed_count = sum(1 for r in results if r.profit_guard_passed)
+    signal_classification = {
+        "diagnostic_positive": {
+            "count": positive_net_count_clean,
+            "best_bps": best_net_bps_clean,
+            "label": "Positive after anomaly exclusion (may be stale or size-invalid)",
+        },
+        "stale_positive": {
+            "count": stale_positive_count,
+            "best_bps": best_net_bps_stale_clean,
+            "label": "Positive but stale (block_lag>2 or mid-pipeline abort)",
+        },
+        "cold_executable_positive": {
+            "count": viable_count,
+            "best_bps": best_net_bps_executable,
+            "label": "Route-viable, fresh, size-valid — cold-lane confirmed",
+        },
+        "hot_execution_ready": {
+            "count": _profit_guard_passed_count,
+            "best_bps": None,
+            "label": "Profit-guard passed in hot lane — ready for execution",
+        },
+    }
+
+    # M7.A.5.42: Diagnostic-raw block — metrics that are informational but MUST NOT
+    # be treated as headline or execution-readiness signals.
+    diagnostic_raw = {
+        "best_net_bps_any": best_net_bps_any,
+        "best_net_bps_low_lag_scored": best_net_bps_low_lag_scored,
+        "best_net_bps_stale": best_net_bps_stale,
+        "mean_net_bps_stale": mean_net_bps_stale,
+        "mean_net_bps_low_lag_scored": mean_net_bps_low_lag_scored,
+        "positive_net_count_any": positive_net_count_any,
+        "positive_net_count_low_lag": positive_net_count_low_lag,
+    }
+
     return {
         "m7a4_hypothesis": "orderflow_driven_backrun_replay",
         "mode": mode,
@@ -895,16 +933,13 @@ def build_replay_summary(
             if scored_net_bps_clean else None
         ),
         "viable_best_net_bps": round(max(viable_net_bps), 4) if viable_net_bps else None,
-        # M7.A.5.10: Split fields
-        "best_net_bps_any": best_net_bps_any,
+        # M7.A.5.10: Split fields — best_net_bps_executable is the cold-lane headline
         "best_net_bps_executable": best_net_bps_executable,
         # M7.A.5.27: Anomaly-clean KPIs
         "best_net_bps_clean": best_net_bps_clean,
         "best_net_bps_stale_clean": best_net_bps_stale_clean,
         "positive_net_count_clean": positive_net_count_clean,
         "positive_net_count_low_lag_clean": positive_net_count_low_lag_clean,
-        "positive_net_count_any": positive_net_count_any,
-        "positive_net_count_low_lag": positive_net_count_low_lag,
         "stale_positive_count": stale_positive_count,
         "stale_positive_count_clean": stale_positive_count_clean,
         "scored_results_count": len(scored_results),
@@ -923,10 +958,6 @@ def build_replay_summary(
         # M7.A.5.13: Stale vs low-lag scored split
         "events_detected_low_lag": events_detected_low_lag,
         "events_scored_low_lag": events_scored_low_lag,
-        "best_net_bps_stale": best_net_bps_stale,
-        "best_net_bps_low_lag_scored": best_net_bps_low_lag_scored,
-        "mean_net_bps_stale": mean_net_bps_stale,
-        "mean_net_bps_low_lag_scored": mean_net_bps_low_lag_scored,
         # M7.A.5.13: Machine-readable stale/low-lag comparison
         "stale_low_lag_comparison": {
             "stale_scored_count": stale_scored_count,
@@ -1031,6 +1062,9 @@ def build_replay_summary(
         # M7.A.5.41: Compact top-candidate rows (survive _ROLLING_EXCLUDE_KEYS)
         "top_executable_candidates": top_executable_candidates,
         "top_stale_positive_candidates": top_stale_positive_candidates,
+        # M7.A.5.42: Signal classification (4 tiers) + diagnostic raw block
+        "signal_classification": signal_classification,
+        "diagnostic_raw": diagnostic_raw,
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
         "m7a_triangular_best_net_bps": -14.16,

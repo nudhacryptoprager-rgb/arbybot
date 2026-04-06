@@ -1083,11 +1083,29 @@ _ROLLING_M7_PATH = os.path.join("data", "runs", "_rolling", "m7_orderflow_latest
 # Keys to extract from the full artifact for the rolling dashboard artifact.
 # Excludes bulky debugging arrays (results, low_lag_debug_rows, low_lag_watchlist,
 # session_low_lag_pairs) to keep the rolling file small and dashboard-friendly.
+# M7.A.5.42: Also exclude legacy hypothesis blocks, _raw_results, and heavy
+# debug payloads that clutter the operational surface.
 _ROLLING_EXCLUDE_KEYS = frozenset({
     "results",
     "low_lag_debug_rows",
     "low_lag_watchlist",
     "session_low_lag_pairs",
+    # M7.A.5.42: Legacy hypothesis blocks — historical, no operational value
+    "_raw_results",
+    "m7a4_hypothesis",
+    "m7a56_hypothesis",
+    "m7a57_hypothesis",
+    "m7a58_hypothesis",
+    "m7a59_hypothesis",
+    "m7a513_hypothesis",
+    "m7a514_hypothesis",
+    "m7a515_hypothesis",
+    "m7a516_hypothesis",
+    "m7a517_hypothesis",
+    "m7a518_hypothesis",
+    "m7a522_hypothesis",
+    "m7a523_hypothesis",
+    "m7a524_hypothesis",
 })
 
 

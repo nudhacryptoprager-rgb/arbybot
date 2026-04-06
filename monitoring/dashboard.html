@@ -928,9 +928,9 @@ function renderRejects(rs, focalPc) {
   $('rejects-body').innerHTML = html;
 }
 
-// Panel 11: M7 Orderflow (cold snapshot + hot lane)
+// Panel 11: M7 Orderflow — 3-section split (M7.A.5.42)
 function renderM7Orderflow(m7, m7Hot) {
-  if (!m7) { $('m7-body').innerHTML = '<em class="na">No M7 data (m7_orderflow_latest.json not found — run ws-live mode to populate)</em>'; return; }
+  if (!m7) { $('m7-body').innerHTML = '<em class="na">No M7 data (m7_orderflow_latest.json not found \u2014 run ws-live mode to populate)</em>'; return; }
 
   const ts = m7.timestamp || '?';
   const chain = m7.chain || '?';
@@ -939,7 +939,11 @@ function renderM7Orderflow(m7, m7Hot) {
   const viable = m7.viable_count || 0;
   const scored = m7.scored_results_count || 0;
 
-  // Primary KPIs — honest labels per user requirement
+  // Signal classification (M7.A.5.42)
+  const sc = m7.signal_classification || {};
+  const scHotReady = sc.hot_execution_ready || {};
+
+  // Primary KPIs
   const bestExec = m7.best_net_bps_executable;
   const bestClean = m7.best_net_bps_clean;
   const bestStaleClean = m7.best_net_bps_stale_clean;
@@ -952,7 +956,7 @@ function renderM7Orderflow(m7, m7Hot) {
   // Pipeline optimization KPIs
   const pipeOpt = m7.m7a524_pipeline_optimization || {};
   const midAbortCount = pipeOpt.mid_pipeline_abort_count || 0;
-  const midAbortRate = results > 0 ? (midAbortCount / results * 100).toFixed(1) : '—';
+  const midAbortRate = results > 0 ? (midAbortCount / results * 100).toFixed(1) : '\u2014';
   const scoringHist = pipeOpt.scoring_path_histogram || {};
 
   // Latency budget
@@ -963,84 +967,118 @@ function renderM7Orderflow(m7, m7Hot) {
   const bt = m7.blocker_tags || {};
   const activeTags = bt.active_tags || [];
 
-  // Reject histogram — top 5
+  // Reject histogram \u2014 top 5
   const rejectHist = m7.reject_histogram || {};
   const topRejects = Object.entries(rejectHist).sort((a,b) => b[1] - a[1]).slice(0, 5);
-
-  // Pricing anomaly count
   const anomalyCount = rejectHist['PRICING_ANOMALY'] || 0;
 
   // Registry metrics
   const regMetrics = m7.m7a523_low_lag_fast_path || {};
   const regDirectCount = regMetrics.low_lag_registry_direct_count || 0;
   const regDirectScored = regMetrics.low_lag_registry_direct_scored_count || 0;
-  const regDirectRate = detectedLL > 0 ? (regDirectCount / detectedLL * 100).toFixed(1) + '%' : '—';
+  const regDirectRate = detectedLL > 0 ? (regDirectCount / detectedLL * 100).toFixed(1) + '%' : '\u2014';
+
+  // Top executable candidates (M7.A.5.41)
+  const topExecCandidates = m7.top_executable_candidates || [];
 
   let html = '';
+
+  // \u2500\u2500 Section 1: Hot Execution Ready \u2500\u2500
+  const hotScored = m7Hot?.fast_path?.scored || 0;
+  const hotGuardPassed = m7Hot?.fast_path?.profit_guard_passed || scHotReady.count || 0;
+  const hotNotReady = hotScored === 0 || hotGuardPassed === 0;
+
+  html += '<h3 style="font-size:.85rem;color:#f85149;margin-bottom:4px">Hot Execution Ready</h3>';
+  if (hotNotReady) {
+    html += '<div style="padding:8px 12px;margin:4px 0 12px;border:1px solid #da3633;border-radius:6px;background:#1a0a0a;font-size:.78rem;color:#f85149">';
+    html += '<strong>NOT IMPLEMENTATION-READY:</strong> ';
+    if (hotScored === 0) {
+      html += 'Hot lane fast_path.scored=0 \u2014 no events matched promoted watchlist or token resolution failed. ';
+    }
+    if (hotGuardPassed === 0) {
+      html += 'profit_guard_passed=0 \u2014 no candidate has passed execution economics check.';
+    }
+    html += '</div>';
+  }
 
   if (m7Hot) {
     const hotBest = m7Hot.best_net_bps_clean;
     const hotCandidate = m7Hot.best_candidate || {};
-    html += '<h3 style="font-size:.85rem;color:#58a6ff;margin-bottom:8px">M7 Hot Lane (1s poll)</h3>';
+    const fp = m7Hot.fast_path || {};
+    const hgd = m7Hot.hot_gap_debug || {};
     html += `<div class="kpi">
-      <div class="kpi-item"><div class="kpi-val">${m7Hot.loop_iteration ?? 'вЂ”'}</div><div class="kpi-lbl">Loop iteration</div></div>
-      <div class="kpi-item"><div class="kpi-val">${m7Hot.events_count ?? 0}</div><div class="kpi-lbl">Hot events</div></div>
-      <div class="kpi-item"><div class="kpi-val ${cls(hotBest)}">${fmt(hotBest, 2)}</div><div class="kpi-lbl">Hot best clean (bps)</div></div>
-      <div class="kpi-item"><div class="kpi-val">${m7Hot.viable_count ?? 0}</div><div class="kpi-lbl">Hot viable</div></div>
-      <div class="kpi-item"><div class="kpi-val">${m7Hot.has_positive ? 'YES' : 'NO'}</div><div class="kpi-lbl">Hot positive present</div></div>
+      <div class="kpi-item"><div class="kpi-val">${m7Hot.loop_iteration ?? '\u2014'}</div><div class="kpi-lbl">Loop iter</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fp.scored ?? 0}</div><div class="kpi-lbl">Fast scored</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fp.profit_guard_passed ?? 0}</div><div class="kpi-lbl">Guard passed</div></div>
+      <div class="kpi-item"><div class="kpi-val ${cls(fp.best_net_bps)}">${fmt(fp.best_net_bps, 2)}</div><div class="kpi-lbl">Hot best (bps)</div></div>
+      <div class="kpi-item"><div class="kpi-val">${m7Hot.hot_skip_count ?? 0}</div><div class="kpi-lbl">Hot skipped</div></div>
+      <div class="kpi-item"><div class="kpi-val">${hgd.watchlist_match_count ?? '\u2014'}</div><div class="kpi-lbl">Watchlist matched</div></div>
     </div>`;
-    html += `<div style="margin:8px 0 12px;font-size:.75rem;color:#8b949e">Lane: ${m7Hot.lane || 'вЂ”'} | Updated: ${(m7Hot.timestamp || '?').slice(0,19)}Z | Best candidate: ${hotCandidate.actual_pair || 'вЂ”'} (${fmt(hotCandidate.net_bps, 2)} bps via ${hotCandidate.scoring_path || 'вЂ”'})</div>`;
+    html += `<div style="margin:4px 0 12px;font-size:.72rem;color:#8b949e">Lane: ${m7Hot.lane || '\u2014'} | Updated: ${(m7Hot.timestamp || '?').slice(0,19)}Z | Best: ${hotCandidate.actual_pair || '\u2014'} (${fmt(hotCandidate.net_bps, 2)} bps via ${hotCandidate.scoring_path || '\u2014'})</div>`;
   } else {
     html += '<div style="margin:0 0 12px;font-size:.75rem;color:#8b949e">Hot lane snapshot not available yet. Run scripts/m7a_orderflow_loop.py --lane hot to populate m7_hot_latest.json.</div>';
   }
 
-  // M4 vs M7 side-by-side comparison header
-  html += '<h3 style="font-size:.85rem;color:#58a6ff;margin-bottom:8px">M4 vs M7 Signal Comparison</h3>';
-  html += '<table><tr><th>Metric</th><th class="num">M4 (pair sweep)</th><th class="num">M7 (orderflow replay)</th></tr>';
-  html += `<tr><td>Best executable net (bps)</td><td class="num na">—</td><td class="num ${cls(bestExec)}">${fmt(bestExec, 2)}</td></tr>`;
-  html += `<tr><td>Diagnostic best clean (bps)</td><td class="num na">—</td><td class="num ${cls(bestClean)}">${fmt(bestClean, 2)}</td></tr>`;
-  html += `<tr><td>Diagnostic stale positive (bps)</td><td class="num na">—</td><td class="num ${cls(bestStaleClean)}">${fmt(bestStaleClean, 2)}</td></tr>`;
-  html += `<tr><td>Viable (executable) count</td><td class="num na">—</td><td class="num">${viable}</td></tr>`;
-  html += `<tr><td>Positive clean / stale positive</td><td class="num na">—</td><td class="num">${posClean} / ${stalePosCount}</td></tr>`;
-  html += '</table>';
-
-  // Primary M7 KPI grid
-  html += '<h3 style="font-size:.85rem;color:#58a6ff;margin:14px 0 8px">M7 Signal Quality</h3>';
+  // \u2500\u2500 Section 2: Cold Executable Positive \u2500\u2500
+  html += '<h3 style="font-size:.85rem;color:#58a6ff;margin:14px 0 4px">Cold Executable Positive</h3>';
+  if (viable > 0 && hotNotReady) {
+    html += '<div style="padding:6px 12px;margin:4px 0 10px;border:1px solid #d29922;border-radius:6px;background:#1a1500;font-size:.75rem;color:#d29922">';
+    html += `Cold positive exists (${viable} viable, best ${fmt(bestExec,2)} bps), but <strong>not implementation-ready</strong> \u2014 hot lane conversion pending.`;
+    html += '</div>';
+  }
   html += `<div class="kpi">
     <div class="kpi-item"><div class="kpi-val ${cls(bestExec)}">${fmt(bestExec, 2)}</div><div class="kpi-lbl">Executable best (bps)</div></div>
     <div class="kpi-item"><div class="kpi-val">${viable}</div><div class="kpi-lbl">Viable count</div></div>
     <div class="kpi-item"><div class="kpi-val">${detectedLL}</div><div class="kpi-lbl">Detected low-lag</div></div>
     <div class="kpi-item"><div class="kpi-val">${scoredLL}</div><div class="kpi-lbl">Scored low-lag</div></div>
-    <div class="kpi-item"><div class="kpi-val">${midAbortRate}%</div><div class="kpi-lbl">Mid-pipeline abort rate</div></div>
-    <div class="kpi-item"><div class="kpi-val">${budgetHitRate != null ? (budgetHitRate * 100).toFixed(1) + '%' : '—'}</div><div class="kpi-lbl">Latency budget hit rate</div></div>
-    <div class="kpi-item"><div class="kpi-val">${anomalyCount}</div><div class="kpi-lbl">Pricing anomalies</div></div>
+    <div class="kpi-item"><div class="kpi-val">${budgetHitRate != null ? (budgetHitRate * 100).toFixed(1) + '%' : '\u2014'}</div><div class="kpi-lbl">Latency budget hit</div></div>
     <div class="kpi-item"><div class="kpi-val">${posLowLagClean}</div><div class="kpi-lbl">Positive low-lag clean</div></div>
   </div>`;
 
-  // Reject histogram (top 5)
-  if (topRejects.length > 0) {
-    html += '<h3 style="font-size:.85rem;color:#58a6ff;margin:14px 0 8px">Top Reject Reasons</h3>';
-    html += '<table><tr><th>Reject Reason</th><th class="num">Count</th><th class="num">Rate</th><th>Bar</th></tr>';
-    for (const [reason, count] of topRejects) {
-      const rate = results > 0 ? (count / results * 100).toFixed(1) + '%' : '—';
-      const w = results > 0 ? Math.min(count / results * 100, 100) : 0;
-      html += `<tr><td style="font-size:.75rem">${reason}</td><td class="num">${count}</td><td class="num">${rate}</td><td><div class="bar-bg" style="width:100px"><div class="bar-fill" style="width:${w}%;background:#da3633"></div></div></td></tr>`;
+  // Top executable candidates table (M7.A.5.41)
+  if (topExecCandidates.length > 0) {
+    html += '<table style="margin-top:6px"><tr><th>Pair</th><th class="num">Net bps</th><th class="num">Lag</th><th>Viable</th><th>Size OK</th><th>Guard</th><th>Path</th><th>Reject</th></tr>';
+    for (const c of topExecCandidates) {
+      html += `<tr><td style="font-size:.72rem">${c.actual_pair || '\u2014'}</td><td class="num ${cls(c.net_bps)}">${fmt(c.net_bps, 2)}</td><td class="num">${c.block_lag ?? '\u2014'}</td><td>${c.route_viable ? 'Y' : 'N'}</td><td>${c.size_valid_for_token ? 'Y' : 'N'}</td><td>${c.profit_guard_passed ? 'Y' : 'N'}</td><td style="font-size:.7rem">${c.scoring_path || '\u2014'}</td><td style="font-size:.7rem">${c.reject_reason || '\u2014'}</td></tr>`;
     }
     html += '</table>';
   }
 
-  // Scoring path + registry metrics (secondary ops panel)
-  html += '<h3 style="font-size:.85rem;color:#7c8593;margin:14px 0 8px">Ops: Scoring Paths &amp; Registry</h3>';
+  // \u2500\u2500 Section 3: Diagnostic Positive \u2500\u2500
+  html += '<h3 style="font-size:.85rem;color:#7c8593;margin:14px 0 4px">Diagnostic Positive</h3>';
+  html += `<div class="kpi">
+    <div class="kpi-item"><div class="kpi-val ${cls(bestClean)}">${fmt(bestClean, 2)}</div><div class="kpi-lbl">Clean best (bps)</div></div>
+    <div class="kpi-item"><div class="kpi-val">${posClean}</div><div class="kpi-lbl">Positive clean</div></div>
+    <div class="kpi-item"><div class="kpi-val ${cls(bestStaleClean)}">${fmt(bestStaleClean, 2)}</div><div class="kpi-lbl">Stale clean best (bps)</div></div>
+    <div class="kpi-item"><div class="kpi-val">${stalePosCount}</div><div class="kpi-lbl">Stale positive</div></div>
+    <div class="kpi-item"><div class="kpi-val">${midAbortRate}%</div><div class="kpi-lbl">Mid-abort rate</div></div>
+    <div class="kpi-item"><div class="kpi-val">${anomalyCount}</div><div class="kpi-lbl">Pricing anomalies</div></div>
+  </div>`;
+
+  // Reject histogram (top 5)
+  if (topRejects.length > 0) {
+    html += '<h3 style="font-size:.8rem;color:#7c8593;margin:10px 0 6px">Top Reject Reasons</h3>';
+    html += '<table><tr><th>Reject Reason</th><th class="num">Count</th><th class="num">Rate</th><th>Bar</th></tr>';
+    for (const [reason, count] of topRejects) {
+      const rate = results > 0 ? (count / results * 100).toFixed(1) + '%' : '\u2014';
+      const w = results > 0 ? Math.min(count / results * 100, 100) : 0;
+      html += `<tr><td style="font-size:.72rem">${reason}</td><td class="num">${count}</td><td class="num">${rate}</td><td><div class="bar-bg" style="width:100px"><div class="bar-fill" style="width:${w}%;background:#da3633"></div></div></td></tr>`;
+    }
+    html += '</table>';
+  }
+
+  // Scoring path + registry metrics
+  html += '<h3 style="font-size:.8rem;color:#7c8593;margin:10px 0 6px">Ops: Scoring Paths &amp; Registry</h3>';
   html += '<table><tr><th>Scoring Path</th><th class="num">Count</th></tr>';
   for (const [path, count] of Object.entries(scoringHist)) {
     html += `<tr><td>${path || 'null'}</td><td class="num">${count}</td></tr>`;
   }
   html += '</table>';
-  html += `<div style="margin-top:6px;font-size:.75rem;color:#8b949e">Registry direct: ${regDirectCount} detected, ${regDirectScored} scored (${regDirectRate} of low-lag)</div>`;
+  html += `<div style="margin-top:4px;font-size:.72rem;color:#8b949e">Registry direct: ${regDirectCount} detected, ${regDirectScored} scored (${regDirectRate} of low-lag)</div>`;
 
   // Blocker tags
   if (activeTags.length > 0) {
-    html += '<h3 style="font-size:.85rem;color:#7c8593;margin:14px 0 8px">Active Blocker Tags</h3>';
+    html += '<h3 style="font-size:.8rem;color:#7c8593;margin:10px 0 6px">Active Blocker Tags</h3>';
     html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
     for (const tag of activeTags) {
       html += badge(tag, tag.includes('LATENCY') || tag.includes('NONE') ? 'fail' : 'warn') + ' ';

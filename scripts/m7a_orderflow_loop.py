@@ -55,6 +55,8 @@ logger = get_logger("m7.orderflow.loop")
 _HOT_ARTIFACT_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_latest.json")
 # M7.A.5.39: Cross-lane promoted pairs file — cold writes, hot reads.
 _PROMOTED_PAIRS_PATH = os.path.join("data", "runs", "_rolling", "m7_promoted_pairs.json")
+# M7.A.5.42: Cold→hot bridge queue — top executable candidates with TTL for hot lane consumption.
+_COLD_HOT_BRIDGE_PATH = os.path.join("data", "runs", "_rolling", "m7_cold_hot_bridge.json")
 
 
 def _write_promoted_pairs(promoted: dict) -> None:
@@ -85,6 +87,28 @@ def _read_promoted_pairs() -> dict:
     except Exception as exc:
         logger.debug("Failed to read promoted pairs: %s", str(exc)[:80])
     return {"candidate": [], "execution": []}
+
+
+def _write_cold_hot_bridge(artifact: dict) -> None:
+    """Write top executable candidates as a compact bridge queue for hot lane.
+
+    M7.A.5.42: Includes per-candidate detail so hot lane can match
+    on pair + pool and use cold-confirmed economics as a baseline.
+    """
+    try:
+        candidates = artifact.get("top_executable_candidates", [])
+        stale_pos = artifact.get("top_stale_positive_candidates", [])
+        os.makedirs(os.path.dirname(_COLD_HOT_BRIDGE_PATH), exist_ok=True)
+        payload = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "cold_executable": candidates,
+            "cold_stale_positive": stale_pos,
+            "signal_classification": artifact.get("signal_classification", {}),
+        }
+        with open(_COLD_HOT_BRIDGE_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception as exc:
+        logger.debug("Failed to write cold-hot bridge: %s", str(exc)[:80])
 
 
 def parse_args():
@@ -358,6 +382,18 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         if getattr(r, "scoring_path", None) == "hot_skip"
     )
     hot["hot_skip_count"] = _hot_skip_count
+
+    # M7.A.5.42: Hot-gap debug counters — diagnose conversion gap
+    _fast_attempted = sum(
+        1 for r in _raw_results
+        if getattr(r, "scoring_path", None) == "registry_fast"
+    )
+    hot["hot_gap_debug"] = {
+        "total_events": len(_raw_results),
+        "fast_path_attempted_count": _fast_attempted,
+        "not_in_hot_registry_count": _hot_skip_count,
+        "watchlist_match_count": _fast_attempted,  # events that matched promoted watchlist
+    }
 
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
@@ -695,6 +731,9 @@ def run_loop(cli_args) -> None:
                     )
                     # M7.A.5.39: Write to shared file for hot lane cross-read
                     _write_promoted_pairs(_promoted_pairs)
+
+                # M7.A.5.42: Write cold→hot bridge with per-candidate detail
+                _write_cold_hot_bridge(artifact)
 
                 # M7.A.5.37: Log cold registry persistence stats
                 if _cold_registry is not None:

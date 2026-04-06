@@ -194,19 +194,23 @@ class TestM7A513StaleLowLagSplitFields:
 
     def test_split_fields_present_in_empty_summary(self):
         art = build_replay_summary([], [], mode="test")
+        # Top-level fields that remain
+        for key in ["events_detected_low_lag", "events_scored_low_lag"]:
+            assert key in art, f"Missing key: {key}"
+        # Fields moved to diagnostic_raw in M7.A.5.42
+        diag = art["diagnostic_raw"]
         for key in [
-            "events_detected_low_lag", "events_scored_low_lag",
             "best_net_bps_stale", "best_net_bps_low_lag_scored",
             "mean_net_bps_stale", "mean_net_bps_low_lag_scored",
         ]:
-            assert key in art, f"Missing key: {key}"
+            assert key in diag, f"Missing diagnostic_raw key: {key}"
 
     def test_split_fields_none_when_no_results(self):
         art = build_replay_summary([], [], mode="test")
         assert art["events_detected_low_lag"] == 0
         assert art["events_scored_low_lag"] == 0
-        assert art["best_net_bps_stale"] is None
-        assert art["best_net_bps_low_lag_scored"] is None
+        assert art["diagnostic_raw"]["best_net_bps_stale"] is None
+        assert art["diagnostic_raw"]["best_net_bps_low_lag_scored"] is None
 
     def test_stale_result_goes_to_stale_metrics(self):
         e = _make_event()
@@ -217,8 +221,8 @@ class TestM7A513StaleLowLagSplitFields:
         )
         art = build_replay_summary([e], [r], mode="test")
         assert art["events_detected_low_lag"] == 0
-        assert art["best_net_bps_stale"] == -50.0
-        assert art["best_net_bps_low_lag_scored"] is None
+        assert art["diagnostic_raw"]["best_net_bps_stale"] == -50.0
+        assert art["diagnostic_raw"]["best_net_bps_low_lag_scored"] is None
 
     def test_low_lag_scored_result_goes_to_low_lag_metrics(self):
         e = _make_event()
@@ -230,7 +234,7 @@ class TestM7A513StaleLowLagSplitFields:
         art = build_replay_summary([e], [r], mode="test")
         assert art["events_detected_low_lag"] == 1
         assert art["events_scored_low_lag"] == 1
-        assert art["best_net_bps_low_lag_scored"] == -20.0
+        assert art["diagnostic_raw"]["best_net_bps_low_lag_scored"] == -20.0
 
     def test_unscored_low_lag_detected_not_scored(self):
         e = _make_event()
@@ -326,7 +330,7 @@ class TestM7A513EventsScoredLowLagContract:
         )
         art = build_replay_summary([e, e], [r_stale_pos, r_viable], mode="test")
         assert art["best_net_bps_executable"] == 5.0
-        assert art["best_net_bps_any"] == 200.0
+        assert art["diagnostic_raw"]["best_net_bps_any"] == 200.0
 
 
 class TestM7A513BackwardCompat:
@@ -339,25 +343,35 @@ class TestM7A513BackwardCompat:
 
     def test_old_summary_fields_still_present(self):
         art = build_replay_summary([], [], mode="test")
+        # Top-level fields that remain after M7.A.5.42
         for key in [
             "events_count", "results_count", "viable_count",
-            "best_net_bps_any", "best_net_bps_executable",
-            "positive_net_count_any", "positive_net_count_low_lag",
+            "best_net_bps_executable",
             "stale_positive_count", "scored_results_count",
             "reject_histogram", "two_leg_baseline_net_bps",
             "coverage_local_mismatch_count", "truly_inactive_count",
         ]:
             assert key in art
+        # Fields moved to diagnostic_raw in M7.A.5.42
+        diag = art["diagnostic_raw"]
+        for key in ["best_net_bps_any", "positive_net_count_any", "positive_net_count_low_lag"]:
+            assert key in diag
 
     def test_new_513_fields_additive(self):
         art = build_replay_summary([], [], mode="test")
+        # Top-level fields that remain
         for key in [
             "events_detected_low_lag", "events_scored_low_lag",
-            "best_net_bps_stale", "best_net_bps_low_lag_scored",
-            "mean_net_bps_stale", "mean_net_bps_low_lag_scored",
             "stale_low_lag_comparison",
         ]:
             assert key in art
+        # Fields moved to diagnostic_raw in M7.A.5.42
+        diag = art["diagnostic_raw"]
+        for key in [
+            "best_net_bps_stale", "best_net_bps_low_lag_scored",
+            "mean_net_bps_stale", "mean_net_bps_low_lag_scored",
+        ]:
+            assert key in diag
 
 
 # ===========================================================================

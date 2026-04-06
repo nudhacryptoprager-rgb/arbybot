@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.41 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.41 fixes hot lane token resolution bug (fast_path.scored=0 since M7.A.5.32), adds top_executable_candidates + top_stale_positive_candidates + top_hot_candidates compact persistence. 3272 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.42 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.42 adds 4-tier signal classification (diagnostic/stale/cold_executable/hot_execution_ready), moves raw metrics to diagnostic_raw, splits dashboard Panel 11 into 3 honest sections, adds cold→hot bridge queue, adds hot_gap_debug counters, strips legacy hypothesis blocks from rolling. 3277 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-06  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix, batch pre-resolve + supervisor fix + size_valid cache, top-candidate persistence + hot lane token resolution fix. M7.B remains closed.
 
@@ -278,6 +278,26 @@ CI: 3258 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 **Online evidence**: PENDING — requires nonstop runtime verification with hot lane now able to score events.
 
 CI: 3272 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.42: Signal Classification + Artifact Hygiene + Dashboard Split
+
+**Hypothesis**: M7.A.5.42 = convert cold executable-positive candidates into hot-lane scored candidates. Key insight: M7 has crossed an important threshold — cold rolling now records executable-positive candidates, but these are still not implementation-ready live opportunities. The dominant blocker is no longer discovery or latency; it is the conversion gap between cold-confirmed viability and hot-lane execution readiness.
+
+**Changes**: (1) `m7/orderflow/artifacts.py`: added `signal_classification` dict with 4 tiers — `diagnostic_positive` (positive after anomaly exclusion, may be stale/size-invalid), `stale_positive` (positive but stale), `cold_executable_positive` (route-viable, fresh, size-valid — cold-lane confirmed), `hot_execution_ready` (profit_guard passed in hot lane — ready for execution). Each tier has `count`, `best_bps`, `label`. (2) `m7/orderflow/artifacts.py`: added `diagnostic_raw` dict — relocated 7 raw/unfiltered metrics (`best_net_bps_any`, `best_net_bps_low_lag_scored`, `best_net_bps_stale`, `mean_net_bps_stale`, `mean_net_bps_low_lag_scored`, `positive_net_count_any`, `positive_net_count_low_lag`) from top-level return into nested block. These are informational diagnostics, NOT headline execution metrics. (3) `m7/orderflow/mode_ws_live.py`: expanded `_ROLLING_EXCLUDE_KEYS` from 4 to 19 entries — added `_raw_results`, `m7a4_hypothesis`, and 13 legacy hypothesis blocks (`m7a56` through `m7a524`). Rolling artifact cleaned of debug/legacy debris. (4) `scripts/m7a_orderflow_loop.py`: added `_write_cold_hot_bridge()` — writes `m7_cold_hot_bridge.json` rolling artifact with `cold_executable` (top_executable_candidates), `cold_stale_positive`, and `signal_classification`. Provides machine-readable bridge for future hot-lane scheduling. (5) `scripts/m7a_orderflow_loop.py`: added `hot_gap_debug` block to hot artifact — `total_events`, `fast_path_attempted_count`, `not_in_hot_registry_count`, `watchlist_match_count`. Diagnoses exactly why hot lane fast_path.scored=0. (6) `monitoring/dashboard.html`: replaced `renderM7Orderflow()` with 3-section split — Section 1: "Hot Execution Ready" (red banner when fast_path.scored=0 or profit_guard_passed=0), Section 2: "Cold Executable Positive" (amber banner when cold positive exists but not hot-ready), Section 3: "Diagnostic Positive" (informational metrics). Reads `signal_classification` and `hot_gap_debug` from artifacts. (7) +5 tests in 1 new class (TestM7A542SignalClassification) + updated 11 existing tests for diagnostic_raw migration + 1 rolling exclude test.
+
+**Online evidence**: 10-minute nonstop `--no-m4`. Fresh rolling at `2026-04-06T08:32:35Z`:
+- `signal_classification.diagnostic_positive.count=1, best_bps=101.44`
+- `signal_classification.stale_positive.count=1, best_bps=101.44`
+- `signal_classification.cold_executable_positive.count=0, best_bps=None`
+- `signal_classification.hot_execution_ready.count=0, best_bps=None`
+- `hot_gap_debug: total_events=4, fast_path_attempted=0, not_in_hot_registry=4, watchlist_match=0`
+- No legacy `*_hypothesis` blocks in rolling. No raw metrics at top level. `diagnostic_raw` and `signal_classification` present.
+- Cold→hot bridge: `m7_cold_hot_bridge.json` written with signal_classification.
+- Dashboard: 3-section layout renders correctly, honest "NOT IMPLEMENTATION-READY" banner displayed.
+
+CI: 3277 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

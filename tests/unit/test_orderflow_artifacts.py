@@ -451,13 +451,17 @@ class TestM7A510SplitSummaryFields:
         events = [_make_event(eid=f"sum_{i}") for i in range(1, 5)]
         results = self._make_results()
         art = build_replay_summary(events, results, mode="test")
+        # Top-level fields that remain
         for key in [
-            "best_net_bps_any", "best_net_bps_executable",
-            "positive_net_count_any", "positive_net_count_low_lag",
+            "best_net_bps_executable",
             "stale_positive_count", "scored_results_count",
             "size_valid_count", "size_fallback_count",
         ]:
             assert key in art, f"Missing split field: {key}"
+        # Fields moved to diagnostic_raw in M7.A.5.42
+        diag = art["diagnostic_raw"]
+        for key in ["best_net_bps_any", "positive_net_count_any", "positive_net_count_low_lag"]:
+            assert key in diag, f"Missing diagnostic_raw field: {key}"
 
     def test_best_net_bps_excludes_unscored(self):
         events = [_make_event(eid=f"sum_{i}") for i in range(1, 5)]
@@ -470,15 +474,15 @@ class TestM7A510SplitSummaryFields:
         events = [_make_event(eid=f"sum_{i}") for i in range(1, 5)]
         results = self._make_results()
         art = build_replay_summary(events, results, mode="test")
-        assert art["best_net_bps_any"] == 2630.0
+        assert art["diagnostic_raw"]["best_net_bps_any"] == 2630.0
         assert art["best_net_bps_executable"] == 50.0
 
     def test_positive_net_count_split(self):
         events = [_make_event(eid=f"sum_{i}") for i in range(1, 5)]
         results = self._make_results()
         art = build_replay_summary(events, results, mode="test")
-        assert art["positive_net_count_any"] == 2
-        assert art["positive_net_count_low_lag"] == 1
+        assert art["diagnostic_raw"]["positive_net_count_any"] == 2
+        assert art["diagnostic_raw"]["positive_net_count_low_lag"] == 1
         assert art["stale_positive_count"] == 1
 
     def test_size_validity_counts(self):
@@ -789,8 +793,8 @@ class TestM7A527AnomalyCleanHeadlines:
         events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
         results = self._make_mixed_results()
         art = build_replay_summary(events, results, mode="test")
-        # best_net_bps_any is the unfiltered diagnostic — includes anomaly
-        assert art["best_net_bps_any"] == 47322.0
+        # best_net_bps_any is the unfiltered diagnostic — includes anomaly (moved to diagnostic_raw in M7.A.5.42)
+        assert art["diagnostic_raw"]["best_net_bps_any"] == 47322.0
 
     def test_best_net_bps_executable_unchanged(self):
         events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
@@ -841,6 +845,71 @@ class TestM7A527AnomalyCleanHeadlines:
         art = build_replay_summary(events, results, mode="test")
         assert art["best_net_bps"] is None
         assert art["best_net_bps_clean"] is None
+
+
+# ===========================================================================
+# M7.A.5.42: Signal classification + diagnostic_raw contract
+# ===========================================================================
+
+
+class TestM7A542SignalClassification:
+    """M7.A.5.42: signal_classification with 4 tiers + diagnostic_raw block."""
+
+    def test_signal_classification_present_empty(self):
+        art = build_replay_summary([], [], mode="test")
+        sc = art["signal_classification"]
+        assert set(sc.keys()) == {
+            "diagnostic_positive", "stale_positive",
+            "cold_executable_positive", "hot_execution_ready",
+        }
+        for tier in sc.values():
+            assert "count" in tier
+            assert "best_bps" in tier
+
+    def test_diagnostic_raw_present_empty(self):
+        art = build_replay_summary([], [], mode="test")
+        diag = art["diagnostic_raw"]
+        expected = {
+            "best_net_bps_any", "best_net_bps_low_lag_scored",
+            "best_net_bps_stale", "mean_net_bps_stale",
+            "mean_net_bps_low_lag_scored", "positive_net_count_any",
+            "positive_net_count_low_lag",
+        }
+        assert set(diag.keys()) == expected
+
+    def test_moved_keys_not_at_top_level(self):
+        art = build_replay_summary([], [], mode="test")
+        moved_keys = [
+            "best_net_bps_any", "positive_net_count_any",
+            "positive_net_count_low_lag", "best_net_bps_stale",
+            "best_net_bps_low_lag_scored", "mean_net_bps_stale",
+            "mean_net_bps_low_lag_scored",
+        ]
+        for key in moved_keys:
+            assert key not in art, f"{key} should NOT be at top level (moved to diagnostic_raw)"
+            assert key in art["diagnostic_raw"], f"{key} missing from diagnostic_raw"
+
+    def test_signal_classification_counts_with_results(self):
+        from m7.shared.constants import REJECT_STALE_POSITIVE
+        e = _make_event()
+        r_viable = _make_result(
+            event_id="v1", best_backrun_net_bps=50.0, block_lag=0,
+            same_state_class="same_block", reject_reason=None,
+            route_viable=True, event_block=100, event_detected_at_block=100,
+        )
+        r_stale = _make_result(
+            event_id="s1", best_backrun_net_bps=200.0, block_lag=100,
+            same_state_class="stale", reject_reason=REJECT_STALE_POSITIVE,
+            route_viable=False,
+        )
+        art = build_replay_summary([e, e], [r_viable, r_stale], mode="test")
+        sc = art["signal_classification"]
+        # Cold executable = viable results
+        assert sc["cold_executable_positive"]["count"] >= 1
+        # Stale positive tier
+        assert sc["stale_positive"]["count"] == 1
+        # Hot execution ready = 0 (no profit guard pass in unit test)
+        assert sc["hot_execution_ready"]["count"] == 0
 
 
 # ===========================================================================
@@ -933,6 +1002,14 @@ class TestM7A528RollingArtifactSchema:
         assert "results" in _ROLLING_EXCLUDE_KEYS
         assert "low_lag_debug_rows" in _ROLLING_EXCLUDE_KEYS
         assert "low_lag_watchlist" in _ROLLING_EXCLUDE_KEYS
+
+    def test_rolling_exclude_keys_legacy_hypothesis_stripped(self):
+        """M7.A.5.42: legacy hypothesis blocks and _raw_results must be excluded."""
+        from m7.orderflow.mode_ws_live import _ROLLING_EXCLUDE_KEYS
+        assert "_raw_results" in _ROLLING_EXCLUDE_KEYS
+        for tag in ["m7a4", "m7a56", "m7a57", "m7a58", "m7a59", "m7a513", "m7a514",
+                     "m7a515", "m7a516", "m7a517", "m7a518", "m7a522", "m7a523", "m7a524"]:
+            assert f"{tag}_hypothesis" in _ROLLING_EXCLUDE_KEYS, f"Missing: {tag}_hypothesis"
 
     def test_rolling_path_canonical(self):
         import os
@@ -1554,6 +1631,7 @@ class TestM7A532RollingCanonicalSet:
             "hot_loop_latest.json",
             "m7_orderflow_latest.json", "m7_hot_latest.json",
             "m7_promoted_pairs.json",
+            "m7_cold_hot_bridge.json",
         }
         for f in rolling.iterdir():
             if f.is_file():
