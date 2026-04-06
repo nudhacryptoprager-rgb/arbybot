@@ -1040,14 +1040,74 @@ def build_replay_summary(
 
     # M7.A.5.42: Diagnostic-raw block — metrics that are informational but MUST NOT
     # be treated as headline or execution-readiness signals.
+    # M7.A.5.47f: best_net_bps_any_anomaly flags when raw value exceeds 10000 bps
+    # (thin-liquidity pricing artifact). Operators should ignore flagged values.
+    _raw_anomaly = best_net_bps_any is not None and abs(best_net_bps_any) > 10000
     diagnostic_raw = {
         "best_net_bps_any": best_net_bps_any,
+        "best_net_bps_any_anomaly": _raw_anomaly,
         "best_net_bps_low_lag_scored": best_net_bps_low_lag_scored,
         "best_net_bps_stale": best_net_bps_stale,
         "mean_net_bps_stale": mean_net_bps_stale,
         "mean_net_bps_low_lag_scored": mean_net_bps_low_lag_scored,
         "positive_net_count_any": positive_net_count_any,
         "positive_net_count_low_lag": positive_net_count_low_lag,
+    }
+
+    # M7.A.5.47f: Per-pair funnel breakdown — shows where each pair "dies".
+    # Normalized pair family = sorted(tokenA, tokenB) to merge A/B and B/A.
+    def _pair_family(r):
+        p = getattr(r, "actual_pair", None) or ""
+        parts = p.split("/")
+        if len(parts) == 2:
+            return "/".join(sorted(parts))
+        return p
+
+    _pair_funnel: dict = {}
+    for r in results:
+        pf = _pair_family(r)
+        if not pf:
+            continue
+        if pf not in _pair_funnel:
+            _pair_funnel[pf] = {
+                "seen_count": 0,
+                "positive_count": 0,
+                "stale_positive_count": 0,
+                "cold_executable_count": 0,
+                "gas_exceeds_gross_count": 0,
+            }
+        _pair_funnel[pf]["seen_count"] += 1
+        if (r.best_backrun_net_bps or 0) > 0:
+            _pair_funnel[pf]["positive_count"] += 1
+        if _is_stale(r) and (r.best_backrun_net_bps or 0) > 0:
+            _pair_funnel[pf]["stale_positive_count"] += 1
+        if r.route_viable:
+            _pair_funnel[pf]["cold_executable_count"] += 1
+        if r.reject_reason == REJECT_GAS_EXCEEDS_GROSS:
+            _pair_funnel[pf]["gas_exceeds_gross_count"] += 1
+
+    # Top 10 by seen_count
+    funnel_by_pair_top = sorted(
+        [{"pair_family": pf, **counts} for pf, counts in _pair_funnel.items()],
+        key=lambda x: x["seen_count"],
+        reverse=True,
+    )[:10]
+
+    # M7.A.5.47f: Pair-family concentration — fraction of top-1 family at
+    # each funnel stage. High concentration at deeper stages vs intake
+    # signals filter-induced bias.
+    def _top1_share(counts_key):
+        total = sum(v[counts_key] for v in _pair_funnel.values())
+        if total == 0:
+            return 0.0
+        top1 = max(v[counts_key] for v in _pair_funnel.values())
+        return round(top1 / total, 4)
+
+    pair_family_concentration = {
+        "seen_top1_share": _top1_share("seen_count"),
+        "positive_top1_share": _top1_share("positive_count"),
+        "cold_executable_top1_share": _top1_share("cold_executable_count"),
+        "unique_pair_families": len(_pair_funnel),
     }
 
     return {
@@ -1206,6 +1266,9 @@ def build_replay_summary(
         # M7.A.5.44: Execution funnel (5-stage strict subset progression)
         "execution_funnel": execution_funnel,
         "diagnostic_raw": diagnostic_raw,
+        # M7.A.5.47f: Per-pair funnel + concentration KPI
+        "funnel_by_pair_top": funnel_by_pair_top,
+        "pair_family_concentration": pair_family_concentration,
         # M7.A.5.46: compact=True skips heavy results/debug serialization.
         # Callers that need raw results use _raw_results (BackrunResult objects).
         "results": [] if compact else [asdict(r) for r in results],

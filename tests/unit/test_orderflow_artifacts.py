@@ -873,7 +873,7 @@ class TestM7A542SignalClassification:
             "best_net_bps_any", "best_net_bps_low_lag_scored",
             "best_net_bps_stale", "mean_net_bps_stale",
             "mean_net_bps_low_lag_scored", "positive_net_count_any",
-            "positive_net_count_low_lag",
+            "positive_net_count_low_lag", "best_net_bps_any_anomaly",
         }
         assert set(diag.keys()) == expected
 

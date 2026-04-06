@@ -172,91 +172,19 @@ CI: 3258 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 ---
 
-## M7.A.5.41: Persist Top Candidates + Hot Lane Token Resolution Fix
+## M7.A.5.41–46: Hot-Lane Activation → Execution Funnel (CLOSED, compressed)
 
-**Hypothesis**: M7.A.5.41 = persist top executable candidates per-window and convert cold executable positives into hot-lane fast-path scores. Fresh rolling shows `best_net_bps_executable=2237.28`, `viable_count=5` — but these are summary-only counters; zero per-event detail survives in rolling artifact because `_ROLLING_EXCLUDE_KEYS` strips `results`. Hot lane still `fast_path.scored=0` despite 20 candidate / 10 execution promoted pairs.
+**M7.A.5.41**: Persist top candidates, fix hot fast_path token resolution (_pool_token_cache lookup instead of broken token_addresses.get). +top_executable_candidates, top_stale_positive_candidates, top_hot_candidates. CI: 3272 passed.
 
-**Root cause — hot lane `fast_path.scored=0`**: `score_backrun_fast()` tried `token_addresses.get(event.token_out)` but `event.token_out` contained direction tags ("token0"/"token1") from `normalize_swap_log()`, NOT symbol names. The `token_addresses` dict maps `{symbol: address}`. Lookup ALWAYS returned empty string → function returned None for EVERY event → `fast_path.scored=0` since the feature was created (M7.A.5.32). Cold lane worked because it falls back to `_resolve_event_tokens()` which does on-chain multicall resolution.
+**M7.A.5.42**: Signal classification (4 tiers), diagnostic_raw (7 metrics), _ROLLING_EXCLUDE_KEYS, m7_cold_hot_bridge.json, hot_gap_debug counters, 3-section dashboard. CI: 3277 passed.
 
-**Fix**: `score_backrun_fast()` now resolves tokens from `_pool_token_cache` (populated by cold lane) via `event.pool_address` + direction tag (`event.token_in = "token0_in"/"token1_in"`). Zero-RPC: cache contains immutable pool→(token0, token1, fee) data. Also fixed `_in_sym` decimal detection (was using direction tag, now resolves actual symbol from `addr_to_symbol`).
+**M7.A.5.43**: Bridge-driven hot registry — pool_token_transport (63 entries), pool-address-first matching, near_executable tier, 3 hot-miss counters. Evidence: cold_executable_positive.count=3, best=68.69 bps. CI: 3291 passed.
 
-**Changes**: (1) `m7/orderflow/scoring_parallel.py`: replaced broken `token_addresses.get(event.token_out)` with `_pool_token_cache` lookup using `event.pool_address.lower()` + direction-tag-to-address mapping. Imported `_pool_token_cache` from `resolve.py`. Fixed `_in_sym` decimal detection to use `addr_to_symbol` instead of direction tag. (2) `m7/orderflow/artifacts.py`: added `top_executable_candidates` (top-5 viable results) and `top_stale_positive_candidates` (top-5 stale positive) compact blocks. Each row has: event_id, actual_pair, net_bps, block_lag, same_state_class, route_viable, size_valid_for_token, scoring_path, profit_guard_passed, pipeline_latency_ms, reject_reason. These keys survive `_ROLLING_EXCLUDE_KEYS` (not in the exclude set). (3) `scripts/m7a_orderflow_loop.py`: added `top_hot_candidates` (top-5 fast_results sorted by net_bps) to hot artifact — always emitted (empty list when no fast results). (4) +14 tests in 3 classes (TestM7A541TopCandidatePersistence, TestM7A541HotLaneTokenResolution, TestM7A541TopHotCandidates).
+**M7.A.5.44**: Execution funnel (5 stages), micro_refinement (5 size multipliers), verified_profitable check, bridge-hit counters. Evidence: first verified_profitable candidates (77.65, 73.81 bps). CI: 3310 passed.
 
-**Online evidence**: PENDING — requires nonstop runtime verification with hot lane now able to score events.
+**M7.A.5.45**: Bridge execution queue (priority_pools), hot intents artifact, headline_level enforcement. Evidence: schema intact, cold_executable_pool_count=2. CI: 3327 passed.
 
-CI: 3272 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.42: Signal Classification + Artifact Hygiene + Dashboard Split
-
-Added `signal_classification` (4 tiers: diagnostic_positive, stale_positive, cold_executable_positive, hot_execution_ready), `diagnostic_raw` (7 relocated metrics), `_ROLLING_EXCLUDE_KEYS` (19 entries), `m7_cold_hot_bridge.json`, `hot_gap_debug` counters, 3-section dashboard split. Evidence: diagnostic_positive.count=1 (101.44 bps), cold_executable_positive.count=0, hot_execution_ready.count=0. CI: 3277 passed, 6 skipped.
-
----
-
-## M7.A.5.43: Bridge-Driven Hot Registry Activation
-
-**Hypothesis**: M7.A.5.43 = bridge-driven hot registry activation with exact candidate transport and first hot fast_path score. Root cause: cross-process _pool_token_cache gap — cold lane populates cache via batch_pre_resolve_pools, but hot lane (separate process) starts empty. Pair-name promotion is too lossy; pool-address-first matching needed.
-
-**Changes**: (1) `m7/orderflow/artifacts.py`: _compact_candidate now includes pool_address from _source_event; added near_executable_candidates (size_valid, GAS_EXCEEDS_GROSS/STALE_POSITIVE rejected, net_bps > -50). (2) `scripts/m7a_orderflow_loop.py`: _write_cold_hot_bridge upgraded with pool_token_transport (full _pool_token_cache dump) + near_executable tier; added _read_cold_hot_bridge(), _populate_pool_token_cache_from_bridge(), _prewarm_registry_from_bridge() (pool-address-first using token addresses); hot prewarm rewritten bridge-first; 3 hot-miss counters added (pool_address_match, canonical_pair_match, registry_has_pair_but_not_pool); _write_hot_artifact accepts bridge_diagnostics. (3) +14 tests in 4 new classes.
-
-**Online evidence**: 10-minute nonstop `--no-m4`. Fresh rolling:
-- pool_token_transport: 63 entries, bridge_registry_prewarmed: 46 pairs
-- cold_executable_positive.count=3 (UP from 0), best_bps=68.69
-- near_executable: 5 candidates, pool_address in all candidate rows
-- hot fast_path.scored=0 (single event from unknown pool — market timing, not architecture failure)
-- 3/3 alive, 0 restarts
-
-CI: 3291 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.44: Execution Funnel + Micro-Refinement + Verified Profitable
-
-**Hypothesis**: M7.A.5.44 = first verified_profitable candidate from cold lane, execution funnel visibility, micro-refinement sizing check. Core insight (from user review): "cold_executable_positive != hot_execution_ready != real_profit." The funnel stages need machine visibility to diagnose where the pipeline breaks.
-
-**Changes**: (1) `m7/orderflow/artifacts.py`: added `execution_funnel` dict with 5 stages — `diagnostic_positive` (positive_net_count_clean), `cold_executable_positive` (viable_count), `hot_scored` (0, injected by hot lane), `profit_guard_passed` (_profit_guard_passed_count), `realized_onchain_profit` (0, M7.B). Monotonic decrease invariant enforced. (2) `m7/orderflow/artifacts.py`: `_compact_candidate()` now runs `check_profit_guard()` on viable+positive+size_valid candidates → adds `verified_profitable` (bool) and `verified_net_bps` (float) to compact row. (3) `m7/orderflow/artifacts.py`: added `micro_refinement` — tests 5 size multipliers [0.5, 0.8, 1.0, 1.5, 2.0] around `amount_in_wei` for top 3 exec + top 2 near-exec candidates, each checked with `profit_guard`. Each entry has `event_id`, `actual_pair`, `base_net_bps`, `sizes_tried`, `sizes_passed`, `best_micro_net_bps`, `reject_reason`. (4) `scripts/m7a_orderflow_loop.py`: 3 new bridge-hit counters — `bridge_pool_address_hit_count` (events whose pool_address is in bridge pool_token_transport), `bridge_pair_hit_count` (of those, resolved pair matches registry), `bridge_loaded_candidate_count` (cold_executable + near_executable loaded from bridge). Propagated through `_write_hot_artifact()` to `hot_gap_debug`. (5) `monitoring/dashboard.html`: Section 3 "Execution Gap Funnel" — 5-stage funnel table, bridge counters inline, micro-refinement results table. "Verified" column in top_executable_candidates table.
-
-**Online evidence**: 10-minute nonstop `--no-m4`. Fresh rolling at `2026-04-06T09:52:31Z`:
-- `execution_funnel: {diagnostic_positive:9, cold_executable_positive:2, hot_scored:0, profit_guard_passed:0, realized_onchain_profit:0}`
-- `verified_profitable=True` on top 2 exec candidates (77.65 bps, 73.81 bps) — FIRST verified profitable
-- `micro_refinement: 4 entries; 2/4 survive all 5 sizes (0.5x-2.0x)`
-- Bridge: cold_executable=2, near_executable=5, pool_token_transport=36 entries
-- 3/3 processes alive, 0 restarts
-
-CI: 3310 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.45: Bridge Execution Queue + Hot Intents + Headline Enforcement
-
-**Hypothesis**: M7.A.5.45 = bridge as scheduler input for hot lane, hot execution intents artifact, funnel headline_level enforcement. Core insight (from user review): "cold verified positive ≠ hot executable positive" — the remaining gap is executional. cold_executable pools must get priority prewarm, and the highest confirmed funnel stage must be machine-visible to prevent over-claiming.
-
-**Changes**: (1) `scripts/m7a_orderflow_loop.py`: **Bridge-driven execution queue** — `_prewarm_registry_from_bridge()` now accepts `priority_pools` param (set of lowercase pool addresses from `cold_executable` + `near_executable`). Priority pools are prewarmed first via sorted iteration. Hot lane extracts `cold_executable` and `near_executable` pool addresses from bridge, passes them as `priority_pools`. (2) `scripts/m7a_orderflow_loop.py`: **Hot intents artifact** — new `_write_hot_intents()` function writes `m7_hot_intents_latest.json` with compact rows for hot-scored candidates only. Schema: `timestamp`, `loop_iteration`, `headline_level`, `hot_scored_count`, `hot_positive_count`, `profit_guard_passed_count`, `cold_executable_pool_count`, `intents[]` (capped at 20). New `_HOT_INTENTS_PATH` constant. Called after `_write_hot_artifact()` in hot lane post-scoring. (3) `scripts/m7a_orderflow_loop.py`: **Headline enforcement** — new `_compute_headline_level()` function returns the highest confirmed funnel stage with count > 0. Added to both hot artifact (`headline_level` top-level field) and hot intents artifact. (4) `m7/orderflow/artifacts.py`: Cold-lane `execution_funnel` now includes `headline_level` string field. (5) `monitoring/dashboard.html`: Headline level badge above funnel table — color-coded (red=none, yellow=diagnostic/cold, green=hot_scored+). (6) `monitoring/dashboard_server.py`: New `/api/intents` endpoint serving `m7_hot_intents_latest.json`. Added `m7_hot_intents` to `ARTIFACT_FILES`. (7) +17 tests in 6 new classes (TestM7A545HeadlineLevel, TestM7A545PriorityPrewarm, TestM7A545HotIntentsArtifact, TestM7A545HotIntentsPathConstant, TestM7A545DashboardHeadlineLevel, TestM7A545DashboardIntentsEndpoint). Updated 2 existing M7A544 tests for `headline_level` field.
-
-**Online evidence**: 10-minute nonstop `--no-m4`. Fresh rolling at `2026-04-06T10:37:14Z`:
-- Cold `execution_funnel: {diagnostic_positive:7, cold_executable_positive:0, hot_scored:0, profit_guard_passed:0, realized_onchain_profit:0, headline_level:"diagnostic_positive"}`
-- Hot `headline_level: "none"` (no hot-scored events this window — expected: incoming events at different pools)
-- `m7_hot_intents_latest.json`: created with correct schema — `hot_scored_count:0, cold_executable_pool_count:2`
-- Bridge: cold_executable=0 (this window), near_executable=5, pool_token_transport=46
-- 3/3 processes alive, 0 restarts, 10+ minutes continuous
-
-CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.46: Strip Live-Path Ballast + Hot Semantic Fix
-
-**Hypothesis**: M7.A.5.46 = strip live-path ballast and convert bridge candidates into first hot-scored rows. Core insight (from user review): "cold verified positive ≠ hot executable positive" — the remaining gap is operational conversion, not information or latency. Legacy hypothesis blocks in the live path create ballast, build_replay_summary always serializes full results (expensive/wasteful), too many truth surfaces risk drift, hot artifact synthesizes cold_executable_positive from _fast_positive (wrong semantic).
-
-**Changes**: (1) `m7/orderflow/mode_ws_live.py`: **Stripped all 13 legacy hypothesis blocks** (m7a4, m7a56-m7a59, m7a513-m7a518, m7a522-m7a524) from ws-live artifact builder. Cleaned `_ROLLING_EXCLUDE_KEYS` — no longer needs hypothesis entries since they are not created. (2) `m7/orderflow/artifacts.py`: **Compact build_replay_summary** — added `compact: bool = False` parameter. When compact=True: `results→[]`, `low_lag_debug_rows→[]`, `low_lag_watchlist→[]`. Removed `m7a4_hypothesis` from return dict entirely. ws-live path calls with `compact=True`. (3) `scripts/m7a_orderflow_loop.py`: **3 callers updated** to use `_raw_results` instead of serialized `results` dict array. (4) `scripts/m7a_orderflow_loop.py`: **Fixed hot semantic** — `cold_executable_positive` in `_write_hot_artifact()` and `_write_hot_intents()` now reads from bridge's `_bridge_cold_executable` count, NOT synthesized from `_fast_positive`. Added `_bridge_cold_executable` to bridge diagnostics transport. (5) `scripts/m7a_orderflow_loop.py`: **Bridge pair fallback counter** — `bridge_pair_fallback_count` counts hot_skip events whose actual_pair matches a bridge candidate pair (diagnoses pair-level matching potential). Surfaced in `hot_gap_debug`. (6) `monitoring/dashboard_server.py`: **Separated M7 from hot_loop** — `/api/hot` returns `{m7_hot, m7_hot_intents}` only (no `hot_loop`). Panel 0 gets `hot_loop` from `/api/rolling`. Added `m7_cold_hot_bridge` to `ARTIFACT_FILES`. (7) `monitoring/dashboard.html`: **execution_funnel as sole headline truth** — Panel 11 restructured: funnel is primary headline, signal_classification demoted. New "Hot Execution Intents" section shows intents table (pair, net_bps, guard, viable, path, latency). `/api/intents` wired to Panel 11 via hot poll. (8) Updated 5 tests: removed `m7a4_hypothesis` from schema assertions, updated rolling exclude keys test to assert hypothesis keys NOT present, updated hot endpoint test for new `{m7_hot, m7_hot_intents}` response shape.
-
-**Online evidence**: 10-minute nonstop `--no-m4`. Fresh rolling at `2026-04-06T11:31:46Z`:
-- Cold: `m7a4_hypothesis` absent (removed). `results: []` (compact mode active). `execution_funnel: {diagnostic_positive, cold_executable_positive, hot_scored, profit_guard_passed, realized_onchain_profit, headline_level}` — sole truth surface.
-- Hot: `headline_level: "none"`. `hot_gap_debug: {bridge_pair_fallback_count: 0, bridge_loaded_candidate_count, bridge_pool_address_hit_count, ...}` — full diagnostic visibility.
-- Hot intents: `headline_level: "none"`, `intents: []` — schema intact.
-- `/api/hot` returns `{m7_hot, m7_hot_intents}` only (no `hot_loop` — verified via API check).
-- 3/3 processes alive, 0 restarts, 10+ minutes continuous.
+**M7.A.5.46**: Strip 13 legacy hypothesis blocks from live-path, compact build_replay_summary, fix hot cold_executable_positive semantic (reads from bridge, not synthesized), bridge pair fallback counter, dashboard restructure. CI: 3327 passed.
 
 CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
@@ -282,16 +210,44 @@ Cross-process bridge (hot rollup → cold → unresolved-pools list), cold prior
 
 ---
 
-## M7.A.5.47e: Hot-Rollup Semantic Correctness + Atomic Writes
+## M7.A.5.47e: Hot-Rollup Semantic Correctness + Atomic Writes (CLOSED)
 
-**Root cause**: Counter semantics broken — `watchlist_match_count` aliased to fast_scored (wrong), `fast_score_attempted_total` counted already-scored results (not admission), `dominant_hot_miss_reason` used duplicated cumulative keys (unreliable), `first_window_at` missing (dashboard shows `?Z`). Artifact writes non-atomic (cross-process truncation risk).
+Counter disentanglement (watchlist_match_count, admitted_to_scoring, fast_path_scored_count), per-window 6-class dominant_hot_miss_reason, first_window_at via setdefault, atomic writes (_atomic_json_write), adaptive bridge_hit_deficit. Removed dead /api/intents. 17 new tests in test_hot_rollup_semantics.py. CI: 3344 passed.
 
-**Changes**: (1) **Counter disentanglement** — `watchlist_match_count` = `bridge_pool_address_hit_count` from bridge diagnostics; new `admitted_to_scoring` = events − hot_skip; renamed `fast_path_attempted_count` → `fast_path_scored_count`; new `fast_score_scored` field. (2) **Rollup fast_score_attempted_total** = admission count (events − hot_skip), not `len(_fast)`. (3) **first_window_at** via `rollup.setdefault()`. (4) **dominant_hot_miss_reason** rewritten as per-window mutually-exclusive 6-class classification (`no_events_in_window`, `events_but_no_bridge_hit`, `bridge_hit_but_not_scored`, `scored_but_rejected_economics`, `positive_but_no_guard_pass`, `guard_passed`), tracking `window_miss_classes` dict. (5) **Adaptive broad logic** uses rollup-derived `bridge_hit_deficit` flag (OR intra-window deficit). (6) **Atomic writes** — `_atomic_json_write()` (tmpfile → `os.replace()`) for all 5 rolling artifacts. (7) Removed dead `/api/intents` endpoint (redundant with `/api/hot`).
+---
 
-**Tests**: 17 new in `test_hot_rollup_semantics.py` (first_window_at, counter disentanglement, per-window classification exhaustive, atomic write contract, hot_gap_debug counters). CI: 3344 passed, 6 skipped. ALL GATES PASSED.
+## M7.A.5.47f: Funnel Concentration Diagnostics + Diversity Cap
+
+**Hypothesis**: M7.A.5.47f = system sees 13 pair families at intake but final executable layer has near-zero — determine whether concentration is market-real or filter/ranking-induced.
+
+**Changes**: (1) `m7/orderflow/artifacts.py`: `funnel_by_pair_top` (top 10 pair families × 5 funnel counts: seen, positive, stale_positive, cold_executable, gas_exceeds_gross), `pair_family_concentration` KPI (top-1 share at 3 funnel stages + unique_pair_families), `best_net_bps_any_anomaly` flag (|value| > 10000 bps → thin-liquidity artifact). (2) `scripts/m7a_orderflow_loop.py`: `candidate_source_breakdown` in bridge payload (cold_exec, near_exec, stale_positive, recent_active, hot_seen_backfill, ptt_total), diversity-aware bridge fill with `_FAMILY_CAP=8` per token-pair family. (3) 16 new tests in `test_pair_concentration.py`. (4) Updated `test_orderflow_artifacts.py` schema for `best_net_bps_any_anomaly`.
+
+**Online evidence (10.2-min nonstop)**: 12 unique pair families seen. Intake concentration moderate (seen_top1_share=0.300). Positive concentration extreme (positive_top1_share=0.900, RAIN/WETH 9/9 stale). cold_executable_top1_share=0.0 — ALL results killed by either gas_exceeds_gross (60%+) or staleness. Bridge source: cold_exec=0, near_exec=5, stale_positive=5, hot_seen_backfill=10. **Diagnosis: concentration is FILTER-INDUCED** — gas economics kills all major pairs, RAIN/WETH survives gas but all stale. CI: 3360 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
 Per `docs/step_M7.md`: M7.B is the execution phase, closed by default. Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.
+
+---
+
+## Canonical Commands
+
+```
+py -3.11 -m pytest tests/unit -q
+py -3.11 scripts/ci_full_pipeline.py --mode ci
+py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 8099 --m7-hot-pause 1 --m7-cold-pause 5
+```
+
+## Known Blockers
+
+1. **cold_executable_count=0** across ALL pair families — gas economics kills major pairs, staleness kills RAIN/WETH.
+2. **bridge_pool_hit_total=0** — hot lane never matches bridge set (events_but_no_bridge_hit dominant miss class).
+3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
+
+## Next steps
+
+1. Investigate gas estimation accuracy — are gas costs over-estimated for Arbitrum One? Compare `gas_exceeds_gross` threshold vs actual L2 gas.
+2. Verify block_lag accuracy — is staleness real or infrastructure-induced latency?
+3. If both filters confirmed correct, widen chain/pair surface (onboard lower-gas chains).

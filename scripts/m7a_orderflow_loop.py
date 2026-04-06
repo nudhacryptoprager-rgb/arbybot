@@ -170,6 +170,15 @@ def _write_cold_hot_bridge(
             "micro_refinement": artifact.get("micro_refinement", []),
             # M7.A.5.47c: Pools actually seen in cold events (activity ranking)
             "recent_active_pools_top": _rap_top,
+            # M7.A.5.47f: Source breakdown — how many pools from each category
+            "candidate_source_breakdown": {
+                "cold_exec": len(candidates),
+                "near_exec": len(near_exec),
+                "stale_positive": len(stale_pos),
+                "recent_active": len(_rap_top),
+                "hot_seen_backfill": 0,  # updated below after unresolved computation
+                "ptt_total": len(_ptt),
+            },
         }
         # M7.A.5.47d: Attach hot_seen_unresolved_pools — pools discovered via
         # hot broad fallback that are NOT in _pool_token_cache. Cold lane uses
@@ -216,6 +225,8 @@ def _write_cold_hot_bridge(
         except Exception:
             pass
         payload["hot_seen_unresolved_pools"] = _hot_unresolved
+        # M7.A.5.47f: Update hot_seen_backfill count
+        payload["candidate_source_breakdown"]["hot_seen_backfill"] = len(_hot_unresolved)
         _atomic_json_write(_COLD_HOT_BRIDGE_PATH, payload, indent=2)
     except Exception as exc:
         logger.debug("Failed to write cold-hot bridge: %s", str(exc)[:80])
@@ -1386,10 +1397,36 @@ def run_loop(cli_args) -> None:
                             _remaining, key=_activity_score, reverse=True,
                         )
 
-                        # Assemble: A (always) + B (always) + ranked remainder up to cap
+                        # M7.A.5.47f: Diversity-aware fill — max _FAMILY_CAP pools
+                        # per token-pair family to prevent one family from monopolizing
+                        # the focused filter and cementing concentration.
+                        _FAMILY_CAP = 8
+                        def _pool_family(pa):
+                            """Return normalized pair family for a pool (sorted tokens)."""
+                            _info = _ptt.get(pa) or _ptt.get(pa.lower())
+                            if _info and len(_info) >= 2:
+                                return tuple(sorted((_info[0].lower(), _info[1].lower())))
+                            return (pa,)  # unknown family → unique bucket
+
+                        # Count families already committed (buckets A+B)
+                        _family_counts: dict = {}
+                        for _committed_pa in (_bucket_a | _bucket_b):
+                            _fam = _pool_family(_committed_pa)
+                            _family_counts[_fam] = _family_counts.get(_fam, 0) + 1
+
+                        _diverse_fill: list = []
+                        for _rpa in _remaining_ranked:
+                            if len(_diverse_fill) >= max(0, _pool_cap - len(_bucket_a | _bucket_b)):
+                                break
+                            _fam = _pool_family(_rpa)
+                            if _family_counts.get(_fam, 0) >= _FAMILY_CAP:
+                                continue
+                            _diverse_fill.append(_rpa)
+                            _family_counts[_fam] = _family_counts.get(_fam, 0) + 1
+
+                        # Assemble: A (always) + B (always) + diversity-aware fill
                         _bridge_pool_addrs = _bucket_a | _bucket_b
-                        _slots_left = max(0, _pool_cap - len(_bridge_pool_addrs))
-                        _bridge_pool_addrs |= set(_remaining_ranked[:_slots_left])
+                        _bridge_pool_addrs |= set(_diverse_fill)
 
                         _active_in_filter = sum(
                             1 for pa in _bridge_pool_addrs
@@ -1398,10 +1435,11 @@ def run_loop(cli_args) -> None:
                         logger.info(
                             "Hot focused intake: %d bridge pools "
                             "(A=%d cold_exec, B=%d hot-seen, fill=%d/%d, "
-                            "active=%d, hot-injected=%d)",
+                            "active=%d, hot-injected=%d, families=%d, cap=%d)",
                             len(_bridge_pool_addrs), len(_bucket_a),
-                            len(_bucket_b), min(_slots_left, len(_remaining_ranked)),
+                            len(_bucket_b), len(_diverse_fill),
                             len(_remaining), _active_in_filter, _hot_injected,
+                            len(_family_counts), _FAMILY_CAP,
                         )
                 except NameError:
                     pass  # _bridge not yet available (first iteration, no cold run yet)
