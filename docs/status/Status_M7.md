@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.47c + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.47c adds activity-aware bridge ranking (quality × on-chain activity), hot-seen pool injection, adaptive broad fallback, hot pool diagnostics. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
-**Updated**: 2026-04-06  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix, batch pre-resolve + supervisor fix + size_valid cache, top-candidate persistence + hot lane token resolution fix. M7.B remains closed.
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.47d. M7.A.5.47d adds cross-process hot-seen backfill via rollup, cold priority-resolve, 2-bucket bridge ranking, adaptive cap. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Updated**: 2026-04-06
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
 ---
 
@@ -262,33 +262,33 @@ CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 ---
 
-## M7.A.5.47: Focused Hot Intake + Cumulative Rollup + Submit-Size Refinement
+## M7.A.5.47: Focused Hot Intake + Cumulative Rollup + Submit-Size Refinement (CLOSED)
 
-**Hypothesis**: M7.A.5.47 = first hot-scored candidate from the existing cold-executable set on a 10–20 minute runtime. Core insight (from user review): "M7 is no longer latency-blocked as primary cause. `total_pipeline.mean=145.3ms` already under 250ms budget." The remaining blocker is operational conversion — events arrive at pools NOT in bridge set, economics dominates rejects (GAS_EXCEEDS_GROSS=23/30), and latest-window snapshot masks progress.
+**Changes**: Focused event intake (`bridge_pool_addresses` filter, up to 50 pools). Cumulative hot rollup (`m7_hot_rollup_latest.json`). 6 canonical hot miss counters. Submit-size refinement (multipliers, `gas_floor_gap_bps`, `verified_net_bps_after_refinement`). Dashboard rollup section.
 
-**Changes**: (1) `m7/orderflow/mode_ws_live.py`: **Focused event intake** — added `bridge_pool_addresses: Optional[Set[str]]` parameter. In hot mode with bridge addresses, `eth_getLogs` uses targeted `address` filter (up to 50 pools) so only events from bridge-known pools are fetched. This replaces broad unfiltered scan that produced 0 bridge hits. Subgraph seed skipped in hot mode (currently 403, hot lane uses bridge for token discovery). (2) `scripts/m7a_orderflow_loop.py`: **Bridge pool address set** built from `_cold_exec_pools` + `pool_token_transport` keys, passed to `run_ws_live()`. **Cumulative hot rollup artifact** (`m7_hot_rollup_latest.json`) — survives across windows, accumulates: `windows_seen`, `events_seen_total`, `bridge_loaded_candidate_count_total`, `pool_address_match_count_total`, `fast_path_scored_total`, `fast_path_positive_total`, `profit_guard_passed_total`. Derives `dominant_hot_miss_reason` from 6 canonical hot miss counters. **6 canonical hot miss counters** added per-window to `hot_gap_debug`: `fast_score_attempted`, `fast_score_rejected_economics`. (3) `m7/orderflow/artifacts.py`: **Submit-size refinement** — multipliers updated to `[0.75, 1.0, 1.25, 1.5]`, added `best_submit_size`, `gas_floor_gap_bps`, `verified_net_bps_after_refinement` fields to micro-refinement output. (4) `monitoring/dashboard_server.py`: Added `m7_hot_rollup` to `ARTIFACT_FILES` and `/api/hot` response. (5) `monitoring/dashboard.html`: New "Hot Cumulative Rollup" section in Panel 11 showing cumulative progress (windows, events, scored, positive, guard_passed, dominant_miss). Micro-refinement table updated with gas_gap and verified columns.
-
-**Online evidence**: Pending nonstop verification. Pre-verification CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+**Online evidence**: Pending nonstop verification. CI: 3327 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 
-## M7.A.5.47b: Hybrid Intake + Activity Ranking + Temporal Rollup + Queue Ordering
+## M7.A.5.47b: Hybrid Intake + Activity Ranking + Temporal Rollup (CLOSED)
 
-**Hypothesis**: M7.A.5.47 focused-only intake produced 0 hot events across 33 windows (10 min). Bridge pools simply aren't generating swap events frequently enough. Fix: hybrid intake (focused + broad fallback), activity-ranked pool selection, temporal counters for diagnosis, and cold-verified submit-size for hot queue ordering.
-
-**Changes**: (1) `m7/orderflow/mode_ws_live.py`: **Hybrid intake** — every 3rd block does broad scan (no address filter), rest do focused scan with bridge pool addresses. Added 4 diagnostic counters (`broad_blocks`, `focused_blocks`, `broad_logs`, `focused_logs`) surfaced in `ws_live_stats`. (2) `scripts/m7a_orderflow_loop.py`: **Pool activity ranking** — cross-iteration `_cold_active_pools` dict tracks pool addresses seen in cold events (address → event_count + last_iter). Hot bridge pool set is ranked by cold activity; top 50 by activity + all cold_exec pools. **4 new rollup counters**: `windows_with_events`, `windows_with_bridge_hits`, `windows_with_fast_scores`, `broad_fallback_events_total`. **Split miss reason**: `bridge_pool_not_hit` replaced by `no_events_in_filtered_window` (windows with 0 events) and `events_seen_but_not_bridge_pool` (events exist but none match bridge). **Submit-size queue ordering**: `micro_refinement` transported via cold→hot bridge; hot intents sorted by `cold_verified_net_bps` (descending) then `net_bps`. Each intent row carries `cold_verified_net_bps`, `cold_best_submit_size`, `cold_gas_floor_gap_bps`. (3) Tests: `m7_hot_rollup_latest.json` added to canonical rolling file sets in `test_nonstop_loop_artifacts.py` and `test_orderflow_artifacts.py`.
-
-**Online evidence**: Pending nonstop verification. Pre-verification CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+Hybrid intake (focused + broad fallback every 3rd block). Activity-ranked pool selection (`cold_events + hot_events × 3`). 4 temporal rollup counters. Split miss reason. Cold-verified submit-size queue ordering via bridge. CI: 3327 passed.
 
 ---
 
-## M7.A.5.47c: Activity-Aware Bridge + Adaptive Intake + Hot Pool Diagnostics
+## M7.A.5.47c: Activity-Aware Bridge + Adaptive Intake + Hot Pool Diagnostics (CLOSED)
 
-**Hypothesis**: M7.A.5.47b hybrid intake resolved zero-event problem (events_seen_total=2) but bridge_pool_hit_total remains 0 — events arrive at pools NOT in the 44-pool bridge set. Fix: activity-aware bridge ranking (quality × on-chain activity), hot-seen pool injection, adaptive broad fallback frequency, and diagnostic histograms for bridge miss root-cause.
+Activity-aware bridge ranking, hot-seen pool injection, adaptive broad fallback (50% when bridge misses), diagnostic histograms. 10.3-min nonstop: events_seen_total=7, bridge_pool_hit_total=0, ptt=56. CI: 3327 passed.
 
-**Changes**: (1) `m7/orderflow/mode_ws_live.py`: **Adaptive hybrid intake** — `_BROAD_FALLBACK_INTERVAL` now 2 (50% broad) when events exist but no bridge hits, else 3 (33%). Hot event pool histogram (`_hot_event_pool_counts`) tracks pool addresses from raw logs, top 20 surfaced in `ws_live_stats`. (2) `scripts/m7a_orderflow_loop.py`: **Activity-aware bridge ranking** — combined activity score: `cold_events + hot_events × 3` (hot recency premium). Hot-seen pools from `_hot_active_pools` that exist in `_pool_token_cache` are injected into bridge candidates. `recent_active_pools_top` (top 30) added to bridge payload. **Hot rollup diagnostics** — `hot_seen_pool_histogram_top` (top 10), `bridge_pool_hit_but_registry_miss` counter + total in rollup. **Bridge miss sample** — `bridge_miss_sample_top` shows top 5 pools seen in hot events but NOT in bridge set (event_pool, seen_count, not_in_bridge=True).
+---
 
-**Online evidence**: 10.3-min nonstop (3/3 alive, 0 restarts). Hot rollup: windows_seen=63, events_seen_total=7 (UP from 2), windows_with_events=5, broad_fallback_events_total=10, bridge_pool_hit_total=0, dominant_miss=no_events_in_window. hot_seen_pool_histogram_top=4 pools, 1/4 in bridge PTT. Cold: events=30, cold_executable_positive=2, headline=cold_executable_positive, top_exec=58.96 bps. Bridge: ptt=56 (UP from 44), cold_exec=2, near_exec=5, recent_active=30. CI: 3327 passed, 6 skipped. ALL REQUIRED GATES PASSED.
+## M7.A.5.47d: Cross-Process Hot-Seen Backfill + 2-Bucket Bridge Ranking
+
+**Root cause**: bridge_pool_hit_total=0 persists because hot-discovered pools live in hot process memory, invisible to cold lane. Structural coverage gap, not market-timing.
+
+**Changes**: (1) **Cross-process bridge** — `_write_cold_hot_bridge()` reads hot rollup artifact for `hot_seen_pool_histogram_top`, builds `hot_seen_unresolved_pools` with resolved flag. (2) **Cold priority-resolve** — reads unresolved from bridge + direct rollup fallback, calls `batch_pre_resolve_pools()` (≤20 addrs). (3) **2-bucket ranking** — A=cold_exec (always), B=hot-seen resolved, fill=PTT ranked by `cold_events + hot_events × 3`. Adaptive cap 50→100 on coverage gap. (4) Removed hard `[:50]` cap (now adaptive). (5) Rollup: `hot_seen_unresolved_pool_count`, `resolved_from_hot_seen_count`, `_max`. (6) Hot artifact: `bridge_miss_sample_top` top-level.
+
+**Online evidence**: 10.2-min nonstop (0 restarts). events_seen_total=16, windows_with_events=10, bridge_pool_hit_total=0, hot_seen_unresolved_pool_count_max=3 (was 0 before fix — cross-process bridge WORKS), hot_seen_unresolved_pool_count=1 (2 resolved during run), bridge_loaded_candidate_count_total=565, broad_fallback_events_total=37, ptt=45. CI: 3327 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 

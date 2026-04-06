@@ -93,7 +93,11 @@ def _read_promoted_pairs() -> dict:
     return {"candidate": [], "execution": []}
 
 
-def _write_cold_hot_bridge(artifact: dict, cold_active_pools: dict | None = None) -> None:
+def _write_cold_hot_bridge(
+    artifact: dict,
+    cold_active_pools: dict | None = None,
+    hot_active_pools: dict | None = None,
+) -> None:
     """Write cold→hot bridge with per-candidate preload detail and pool→token transport.
 
     M7.A.5.43: Bridge now carries:
@@ -101,6 +105,8 @@ def _write_cold_hot_bridge(artifact: dict, cold_active_pools: dict | None = None
       - pool_token_transport: full _pool_token_cache dump for hot lane to populate
         its own process-local cache (keys are pool addresses, values are
         [token0_addr, token1_addr, fee] tuples).
+    M7.A.5.47d: Also carries hot_seen_unresolved_pools — pools discovered via
+      hot broad fallback that cold lane should priority-resolve next iteration.
     """
     try:
         candidates = artifact.get("top_executable_candidates", [])
@@ -145,6 +151,51 @@ def _write_cold_hot_bridge(artifact: dict, cold_active_pools: dict | None = None
             # M7.A.5.47c: Pools actually seen in cold events (activity ranking)
             "recent_active_pools_top": _rap_top,
         }
+        # M7.A.5.47d: Attach hot_seen_unresolved_pools — pools discovered via
+        # hot broad fallback that are NOT in _pool_token_cache. Cold lane uses
+        # this as a priority backlog for batch_pre_resolve_pools next iteration.
+        # NOTE: hot_active_pools is process-local and empty in the cold lane
+        # (separate process). Read the hot rollup artifact instead, which the
+        # hot lane persists with hot_seen_pool_histogram_top.
+        _hot_unresolved = []
+        try:
+            from m7.orderflow.resolve import _pool_token_cache as _ptc_bridge
+            # Merge: in-memory hot_active_pools (if same process) + hot rollup file
+            _hap_merged: dict = {}
+            if hot_active_pools:
+                for _hpa, _hinfo in hot_active_pools.items():
+                    _hap_merged[_hpa.lower()] = _hinfo
+            # Also read hot rollup artifact for cross-process data
+            try:
+                if os.path.exists(_HOT_ROLLUP_PATH):
+                    with open(_HOT_ROLLUP_PATH, "r", encoding="utf-8") as _rf:
+                        _rollup_data = json.load(_rf)
+                    for _rh in _rollup_data.get("hot_seen_pool_histogram_top", []):
+                        _rh_pa = (_rh.get("pool") or "").lower()
+                        if _rh_pa and _rh_pa not in _hap_merged:
+                            _hap_merged[_rh_pa] = {
+                                "event_count": _rh.get("count", 0),
+                                "last_iter": _rh.get("last_iter", 0),
+                            }
+            except Exception:
+                pass
+            if _hap_merged:
+                _hu_sorted = sorted(
+                    _hap_merged.items(),
+                    key=lambda x: x[1].get("event_count", 0),
+                    reverse=True,
+                )
+                for _hu_pa, _hu_info in _hu_sorted[:30]:
+                    _resolved = _hu_pa in _ptc_bridge or _hu_pa in _ptt
+                    _hot_unresolved.append({
+                        "pool_address": _hu_pa,
+                        "seen_count": _hu_info.get("event_count", 0),
+                        "last_iter": _hu_info.get("last_iter", 0),
+                        "resolved": _resolved,
+                    })
+        except Exception:
+            pass
+        payload["hot_seen_unresolved_pools"] = _hot_unresolved
         with open(_COLD_HOT_BRIDGE_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
     except Exception as exc:
@@ -572,6 +623,9 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         ),
     }
 
+    # M7.A.5.47d: Surface bridge miss sample at top level for diagnostics
+    hot["bridge_miss_sample_top"] = _bd.get("bridge_miss_sample_top", [])
+
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
         fast_positive = [r for r in fast_results if (r.best_backrun_net_bps or 0) > 0]
@@ -819,6 +873,7 @@ def _update_hot_rollup(
     bridge_diagnostics: dict | None,
     ws_live_stats: dict | None = None,
     hot_active_pools: dict | None = None,
+    bridge: dict | None = None,
 ) -> None:
     """Update cumulative hot rollup artifact — survives across windows.
 
@@ -932,6 +987,19 @@ def _update_hot_rollup(
     else:
         rollup.setdefault("hot_seen_pool_histogram_top", [])
 
+    # M7.A.5.47d: Hot-seen unresolved/resolved tracking from bridge
+    _br = bridge or {}
+    _hu_pools = _br.get("hot_seen_unresolved_pools", [])
+    _hu_unresolved = sum(1 for p in _hu_pools if isinstance(p, dict) and not p.get("resolved", False))
+    _hu_resolved = sum(1 for p in _hu_pools if isinstance(p, dict) and p.get("resolved", False))
+    # These are point-in-time snapshots from the latest bridge write
+    rollup["hot_seen_unresolved_pool_count"] = _hu_unresolved
+    rollup["resolved_from_hot_seen_count"] = _hu_resolved
+    # Also track cumulative max for trending
+    rollup["hot_seen_unresolved_pool_count_max"] = max(
+        rollup.get("hot_seen_unresolved_pool_count_max", 0), _hu_unresolved
+    )
+
     # Derive dominant hot miss reason from cumulative counters
     # M7.A.5.47b: Split bridge_pool_not_hit into two sub-reasons:
     #   no_events_in_filtered_window — windows with 0 events (filter too tight)
@@ -993,6 +1061,9 @@ def run_loop(cli_args) -> None:
     # 1) Build hot_seen_pool_histogram_top for rollup diagnosis
     # 2) Feed back into bridge ranking (hot-seen pools are likely active)
     _hot_active_pools: dict = {}  # pool_address_lower -> {"event_count": N, "last_iter": M}
+
+    # M7.A.5.47d: Track cumulative resolved-from-hot-seen count
+    _resolved_from_hot_seen_total: int = 0
 
     # M7.A.5.37: Persistent cold registry — survives across cold iterations
     # Passed via warm_registry to avoid hot-mode trigger. Caches pool data
@@ -1160,60 +1231,146 @@ def run_loop(cli_args) -> None:
                     except Exception as _pw_exc:
                         logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
 
-            # M7.A.5.47c: Build focused bridge pool address set for hot lane.
-            # Combines cold_executable pool addresses with all pool_token_transport
-            # keys from bridge. Ranked by COMBINED activity from cold AND hot events.
-            # Hot-seen pools are the strongest signal — they're actively trading NOW.
+                # M7.A.5.47d: Priority resolve hot-seen unresolved pools.
+                # Hot lane discovers active pools via broad fallback but can't
+                # score them because they're not in _pool_token_cache. Cold lane
+                # reads that backlog from the bridge and also from the hot rollup
+                # artifact (cross-process file), then resolves them so they
+                # appear in the next bridge write's pool_token_transport.
+                _hot_resolved_count = 0
+                try:
+                    _cold_bridge = _read_cold_hot_bridge()
+                    _hu_pools = _cold_bridge.get("hot_seen_unresolved_pools", [])
+                    _unresolved_addrs = [
+                        p["pool_address"] for p in _hu_pools
+                        if isinstance(p, dict) and not p.get("resolved", False)
+                    ][:20]  # cap at 20 to limit RPC cost
+                    # Also source hot-seen pools directly from hot rollup
+                    # (cross-process) to avoid 1-iteration delay via bridge
+                    if not _unresolved_addrs:
+                        try:
+                            if os.path.exists(_HOT_ROLLUP_PATH):
+                                from m7.orderflow.resolve import _pool_token_cache as _ptc_check
+                                with open(_HOT_ROLLUP_PATH, "r", encoding="utf-8") as _rrf:
+                                    _rollup_check = json.load(_rrf)
+                                for _rp in _rollup_check.get("hot_seen_pool_histogram_top", []):
+                                    _rp_addr = (_rp.get("pool") or "").lower()
+                                    if _rp_addr and _rp_addr not in _ptc_check:
+                                        _unresolved_addrs.append(_rp_addr)
+                                _unresolved_addrs = _unresolved_addrs[:20]
+                        except Exception:
+                            pass
+                    if _unresolved_addrs:
+                        from config import get_all_token_addresses
+                        from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
+                        from m7.orderflow.resolve import (
+                            batch_pre_resolve_pools,
+                            _build_address_to_symbol,
+                        )
+                        _chain_id = _CHAIN_KEY_TO_ID.get(cli_args.chain.lower())
+                        _rpc_hr, _, _ = resolve_rpc_http(
+                            chain_id=_chain_id, network=cli_args.chain,
+                            env=dict(os.environ),
+                        )
+                        if _rpc_hr:
+                            from web3 import Web3 as _W3_hr
+                            _block_hr = _W3_hr(_W3_hr.HTTPProvider(_rpc_hr)).eth.block_number
+                            _ta_hr = get_all_token_addresses(cli_args.chain)
+                            _ats_hr = _build_address_to_symbol(_ta_hr)
+                            _pre = batch_pre_resolve_pools(
+                                _unresolved_addrs, _rpc_hr, _block_hr, _ats_hr,
+                            )
+                            _hot_resolved_count = len(_pre)
+                            if _hot_resolved_count > 0:
+                                logger.info(
+                                    "Cold hot-seen resolve: %d/%d pools resolved (iter %d)",
+                                    _hot_resolved_count, len(_unresolved_addrs), iteration,
+                                )
+                except Exception as _hr_exc:
+                    logger.debug("Cold hot-seen resolve failed: %s", str(_hr_exc)[:120])
+                _resolved_from_hot_seen_total += _hot_resolved_count
+
+            # M7.A.5.47d: Build focused bridge pool address set for hot lane.
+            # 2-bucket policy:
+            #   Bucket A: cold_executable + near_executable (always included)
+            #   Bucket B: hot-seen pools (recently active on-chain) ranked by
+            #             combined activity score, with auto-injection for
+            #             resolved hot-seen pools
+            # Remaining PTT pools fill up to the cap, ranked by activity.
             _bridge_pool_addrs: set | None = None
             if lane == "hot":
                 try:
                     _ptt = _bridge.get("pool_token_transport", {})
                     if _ptt:
-                        # Gather all candidate pool addresses
-                        _all_candidate_pools = set(_cold_exec_pools)  # already lowered
-                        for _ptt_key in _ptt:
-                            _all_candidate_pools.add(_ptt_key.lower())
+                        # Bucket A: cold_exec + near_exec (always included)
+                        _bucket_a = set(_cold_exec_pools)  # already lowered
 
-                        # M7.A.5.47c: Also inject hot-seen pools that are in the
-                        # pool_token_cache — they're active AND resolvable.
-                        # This lets the filter adapt to actual on-chain activity.
+                        # Bucket B: hot-seen pools that are resolved (in PTT or _pool_token_cache)
+                        _bucket_b: set = set()
                         _hot_injected = 0
                         try:
                             from m7.orderflow.resolve import _pool_token_cache as _ptc_inject
                             for _hpa in _hot_active_pools:
-                                if _hpa not in _all_candidate_pools and _hpa in _ptc_inject:
-                                    _all_candidate_pools.add(_hpa)
-                                    _hot_injected += 1
+                                if _hpa in _ptc_inject or _hpa in _ptt:
+                                    _bucket_b.add(_hpa)
+                                    if _hpa not in _ptt:
+                                        _hot_injected += 1
                         except Exception:
                             pass
 
-                        # Rank by combined activity score:
-                        #   cold_events + hot_events × 3 (hot recency premium)
+                        # Also add hot-seen unresolved pools from bridge backlog
+                        # that have since been resolved by cold lane
+                        for _hu in _bridge.get("hot_seen_unresolved_pools", []):
+                            _hu_pa = (_hu.get("pool_address") or "").lower()
+                            if _hu_pa and _hu_pa in _ptt:
+                                _bucket_b.add(_hu_pa)
+
+                        # Remaining: all PTT pools not yet in A or B
+                        _remaining = set()
+                        for _ptt_key in _ptt:
+                            _pk = _ptt_key.lower()
+                            if _pk not in _bucket_a and _pk not in _bucket_b:
+                                _remaining.add(_pk)
+
+                        # Rank remaining by combined activity score
                         def _activity_score(pa):
                             _ca = _cold_active_pools.get(pa, {}).get("event_count", 0)
                             _ha = _hot_active_pools.get(pa, {}).get("event_count", 0)
                             return _ca + _ha * 3
 
-                        _ranked = sorted(
-                            _all_candidate_pools,
-                            key=_activity_score,
-                            reverse=True,
+                        # M7.A.5.47d: Adaptive cap — expand to 100 when we have
+                        # events but zero bridge hits (coverage gap)
+                        _rollup_wwe = 0
+                        _rollup_wwbh = 0
+                        try:
+                            if os.path.exists(_HOT_ROLLUP_PATH):
+                                with open(_HOT_ROLLUP_PATH, "r", encoding="utf-8") as _rf:
+                                    _rl = json.load(_rf)
+                                _rollup_wwe = _rl.get("windows_with_events", 0)
+                                _rollup_wwbh = _rl.get("windows_with_bridge_hits", 0)
+                        except Exception:
+                            pass
+                        _pool_cap = 100 if (_rollup_wwe > 0 and _rollup_wwbh == 0) else 50
+                        _remaining_ranked = sorted(
+                            _remaining, key=_activity_score, reverse=True,
                         )
-                        _bridge_pool_addrs = set(_ranked[:50])
-                        # Always include cold_exec pools even if not in top 50
-                        _bridge_pool_addrs |= _cold_exec_pools
+
+                        # Assemble: A (always) + B (always) + ranked remainder up to cap
+                        _bridge_pool_addrs = _bucket_a | _bucket_b
+                        _slots_left = max(0, _pool_cap - len(_bridge_pool_addrs))
+                        _bridge_pool_addrs |= set(_remaining_ranked[:_slots_left])
 
                         _active_in_filter = sum(
                             1 for pa in _bridge_pool_addrs
                             if pa in _cold_active_pools or pa in _hot_active_pools
                         )
                         logger.info(
-                            "Hot focused intake: %d bridge pool addresses "
-                            "(%d cold_exec, %d candidates, %d with events, "
-                            "%d hot-injected)",
-                            len(_bridge_pool_addrs), len(_cold_exec_pools),
-                            len(_all_candidate_pools), _active_in_filter,
-                            _hot_injected,
+                            "Hot focused intake: %d bridge pools "
+                            "(A=%d cold_exec, B=%d hot-seen, fill=%d/%d, "
+                            "active=%d, hot-injected=%d)",
+                            len(_bridge_pool_addrs), len(_bucket_a),
+                            len(_bucket_b), min(_slots_left, len(_remaining_ranked)),
+                            len(_remaining), _active_in_filter, _hot_injected,
                         )
                 except NameError:
                     pass  # _bridge not yet available (first iteration, no cold run yet)
@@ -1292,7 +1449,11 @@ def run_loop(cli_args) -> None:
                     _write_promoted_pairs(_promoted_pairs)
 
                 # M7.A.5.42: Write cold→hot bridge with per-candidate detail
-                _write_cold_hot_bridge(artifact, cold_active_pools=_cold_active_pools)
+                _write_cold_hot_bridge(
+                    artifact,
+                    cold_active_pools=_cold_active_pools,
+                    hot_active_pools=_hot_active_pools,
+                )
 
                 # M7.A.5.47: Track pool addresses seen in cold events for
                 # activity-based ranking. Hot lane uses this to prioritize
@@ -1457,6 +1618,7 @@ def run_loop(cli_args) -> None:
                     bridge_diagnostics=_hot_bridge_diag,
                     ws_live_stats=artifact.get("ws_live_stats"),
                     hot_active_pools=_hot_active_pools,
+                    bridge=_bridge,
                 )
 
             best = artifact.get("best_net_bps_clean")

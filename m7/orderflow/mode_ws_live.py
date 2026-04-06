@@ -288,8 +288,10 @@ def run_ws_live(
                     "topics": [SWAP_EVENT_TOPIC],
                 }
                 if _hot_mode_active and bridge_pool_addresses and not _is_broad_block:
-                    # Focused: only bridge pool addresses (up to 50)
-                    _addr_list = list(bridge_pool_addresses)[:50]
+                    # Focused: only bridge pool addresses (up to cap)
+                    # M7.A.5.47d: Adaptive cap — use all bridge addresses
+                    # (already capped at 50-100 by bridge ranking in loop.py)
+                    _addr_list = list(bridge_pool_addresses)
                     _log_filter["address"] = _addr_list
                 # else: broad scan — no address filter
                 logs = _w3_loop.eth.get_logs(_log_filter)
