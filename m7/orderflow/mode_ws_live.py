@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
 
 from config import load_dexes, get_all_token_addresses, load_chains
@@ -34,7 +34,13 @@ from m7.orderflow.contracts import BackrunResult
 logger = logging.getLogger("m7.orderflow.cli")
 
 
-def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
+def run_ws_live(
+    args,
+    *,
+    external_registry=None,
+    warm_registry=None,
+    bridge_pool_addresses: Optional[Set[str]] = None,
+) -> dict:
     """Execute the ws-live WebSocket replay mode and return the artifact dict.
 
     Parameters
@@ -49,6 +55,10 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
         creation + prewarm), but does NOT trigger hot mode. Cold lane
         still uses score_backrun_live_parallel, but registry_preload_ms
         drops to near-zero for already-cached pairs (M7.A.5.37).
+    bridge_pool_addresses : optional set of checksummed/lowered pool addresses
+        from cold→hot bridge. When provided in hot mode, eth_getLogs uses a
+        targeted address filter so only events from bridge pools are fetched.
+        M7.A.5.47: Focused event intake for bridge pools.
     """
     logger.info(
         "Running M7.A.5.3 ws-live replay (ws_blocks=%d, ws_timeout=%ds)",
@@ -143,31 +153,37 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
                      "external" if _prewarm_count == -1 else "warm")
 
     # M7.A.5.8: Subgraph-backed bounded coverage seed
+    # M7.A.5.47: Skip in hot mode — subgraph is currently 403 and hot lane
+    # uses bridge pool_token_transport for token discovery, not subgraph.
     pre_seed_count = len(addr_to_symbol)
     subgraph_seed_stats = {"tokens_discovered": 0, "tokens_new": 0,
                            "tokens_verified": 0, "sources_queried": [], "errors": []}
     subgraph_seeded_addrs: set = set()
-    try:
-        from web3 import Web3
-        w3_seed = Web3(Web3.HTTPProvider(rpc_url))
-        seed_block = w3_seed.eth.block_number
-        subgraph_seed_stats = seed_tokens_from_subgraph(
-            addr_to_symbol, rpc_url, seed_block, chain=args.chain,
-        )
-        post_seed_count = len(addr_to_symbol)
-        if post_seed_count > pre_seed_count:
-            canonical_addrs = set(_build_address_to_symbol(token_addresses).keys())
-            subgraph_seeded_addrs = set(addr_to_symbol.keys()) - canonical_addrs
-        logger.info(
-            "Subgraph seed: discovered=%d new=%d verified=%d sources=%s",
-            subgraph_seed_stats["tokens_discovered"],
-            subgraph_seed_stats["tokens_new"],
-            subgraph_seed_stats["tokens_verified"],
-            subgraph_seed_stats["sources_queried"],
-        )
-    except Exception as exc:
-        logger.debug("Subgraph seed failed (best-effort): %s", str(exc)[:100])
-        subgraph_seed_stats["errors"].append(f"seed_init: {str(exc)[:80]}")
+    _hot_mode_skip_subgraph = external_registry is not None
+    if _hot_mode_skip_subgraph:
+        logger.debug("Subgraph seed skipped: hot mode uses bridge for token discovery")
+    else:
+        try:
+            from web3 import Web3
+            w3_seed = Web3(Web3.HTTPProvider(rpc_url))
+            seed_block = w3_seed.eth.block_number
+            subgraph_seed_stats = seed_tokens_from_subgraph(
+                addr_to_symbol, rpc_url, seed_block, chain=args.chain,
+            )
+            post_seed_count = len(addr_to_symbol)
+            if post_seed_count > pre_seed_count:
+                canonical_addrs = set(_build_address_to_symbol(token_addresses).keys())
+                subgraph_seeded_addrs = set(addr_to_symbol.keys()) - canonical_addrs
+            logger.info(
+                "Subgraph seed: discovered=%d new=%d verified=%d sources=%s",
+                subgraph_seed_stats["tokens_discovered"],
+                subgraph_seed_stats["tokens_new"],
+                subgraph_seed_stats["tokens_verified"],
+                subgraph_seed_stats["sources_queried"],
+            )
+        except Exception as exc:
+            logger.debug("Subgraph seed failed (best-effort): %s", str(exc)[:100])
+            subgraph_seed_stats["errors"].append(f"seed_init: {str(exc)[:80]}")
 
     # Load block_time_ms from chains.yaml for latency budget
     chain_cfg = load_chains().get(args.chain, {})
@@ -242,12 +258,26 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
             )
 
             # Fetch swap logs for THIS block only
+            # M7.A.5.47: In hot mode with bridge pool addresses, use targeted
+            # address filter to only fetch events from bridge-known pools.
+            # This dramatically increases the hit rate vs broad unfiltered scan.
+            _hot_mode_active = external_registry is not None
             try:
-                logs = _w3_loop.eth.get_logs({
+                _log_filter: dict = {
                     "fromBlock": detected_block,
                     "toBlock": detected_block,
                     "topics": [SWAP_EVENT_TOPIC],
-                })
+                }
+                if _hot_mode_active and bridge_pool_addresses:
+                    # Web3 address filter accepts a list of checksummed addresses.
+                    # Limit to 50 addresses per call to avoid RPC payload limits.
+                    _addr_list = list(bridge_pool_addresses)[:50]
+                    _log_filter["address"] = _addr_list
+                    logger.debug(
+                        "Hot focused fetch: block=%d bridge_addrs=%d",
+                        detected_block, len(_addr_list),
+                    )
+                logs = _w3_loop.eth.get_logs(_log_filter)
             except Exception as exc:
                 logger.debug(
                     "Failed to fetch logs for block %d: %s",

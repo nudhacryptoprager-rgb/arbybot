@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.46 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.46 strips live-path ballast (13 hypothesis blocks removed, compact build_replay_summary, execution_funnel as sole headline truth), fixes hot semantic (cold_executable_positive from bridge, not synthesized), separates M7 from hot_loop, wires /api/intents to Panel 11. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.47 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.47 adds focused event intake for bridge pools, cumulative hot rollup artifact, submit-size refinement with gas_floor_gap_bps, 6 canonical hot miss counters, subgraph seed disabled in hot mode. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-06  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix, batch pre-resolve + supervisor fix + size_valid cache, top-candidate persistence + hot lane token resolution fix. M7.B remains closed.
 
@@ -273,6 +273,16 @@ CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 - 3/3 processes alive, 0 restarts, 10+ minutes continuous.
 
 CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.47: Focused Hot Intake + Cumulative Rollup + Submit-Size Refinement
+
+**Hypothesis**: M7.A.5.47 = first hot-scored candidate from the existing cold-executable set on a 10–20 minute runtime. Core insight (from user review): "M7 is no longer latency-blocked as primary cause. `total_pipeline.mean=145.3ms` already under 250ms budget." The remaining blocker is operational conversion — events arrive at pools NOT in bridge set, economics dominates rejects (GAS_EXCEEDS_GROSS=23/30), and latest-window snapshot masks progress.
+
+**Changes**: (1) `m7/orderflow/mode_ws_live.py`: **Focused event intake** — added `bridge_pool_addresses: Optional[Set[str]]` parameter. In hot mode with bridge addresses, `eth_getLogs` uses targeted `address` filter (up to 50 pools) so only events from bridge-known pools are fetched. This replaces broad unfiltered scan that produced 0 bridge hits. Subgraph seed skipped in hot mode (currently 403, hot lane uses bridge for token discovery). (2) `scripts/m7a_orderflow_loop.py`: **Bridge pool address set** built from `_cold_exec_pools` + `pool_token_transport` keys, passed to `run_ws_live()`. **Cumulative hot rollup artifact** (`m7_hot_rollup_latest.json`) — survives across windows, accumulates: `windows_seen`, `events_seen_total`, `bridge_loaded_candidate_count_total`, `pool_address_match_count_total`, `fast_path_scored_total`, `fast_path_positive_total`, `profit_guard_passed_total`. Derives `dominant_hot_miss_reason` from 6 canonical hot miss counters. **6 canonical hot miss counters** added per-window to `hot_gap_debug`: `fast_score_attempted`, `fast_score_rejected_economics`. (3) `m7/orderflow/artifacts.py`: **Submit-size refinement** — multipliers updated to `[0.75, 1.0, 1.25, 1.5]`, added `best_submit_size`, `gas_floor_gap_bps`, `verified_net_bps_after_refinement` fields to micro-refinement output. (4) `monitoring/dashboard_server.py`: Added `m7_hot_rollup` to `ARTIFACT_FILES` and `/api/hot` response. (5) `monitoring/dashboard.html`: New "Hot Cumulative Rollup" section in Panel 11 showing cumulative progress (windows, events, scored, positive, guard_passed, dominant_miss). Micro-refinement table updated with gas_gap and verified columns.
+
+**Online evidence**: Pending nonstop verification. Pre-verification CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

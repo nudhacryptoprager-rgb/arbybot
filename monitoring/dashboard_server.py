@@ -29,6 +29,7 @@ ARTIFACT_FILES = {
     "m7_hot": ROLLING_DIR / "m7_hot_latest.json",
     "m7_hot_intents": ROLLING_DIR / "m7_hot_intents_latest.json",
     "m7_cold_hot_bridge": ROLLING_DIR / "m7_cold_hot_bridge.json",
+    "m7_hot_rollup": ROLLING_DIR / "m7_hot_rollup_latest.json",
 }
 
 DASHBOARD_HTML = Path(__file__).parent / "dashboard.html"
@@ -84,10 +85,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _serve_hot_data(self):
         """M7.A.5.46: Serve M7 hot lane artifacts only.
 
-        Returns m7_hot + m7_hot_intents. Panel 0 (hot_loop) uses /api/rolling.
+        Returns m7_hot + m7_hot_intents + m7_hot_rollup. Panel 0 (hot_loop) uses /api/rolling.
         """
-        result = {"m7_hot": None, "m7_hot_intents": None}
-        for key in ("m7_hot", "m7_hot_intents"):
+        result = {"m7_hot": None, "m7_hot_intents": None, "m7_hot_rollup": None}
+        for key in ("m7_hot", "m7_hot_intents", "m7_hot_rollup"):
             path = ARTIFACT_FILES[key]
             if not path.is_file():
                 continue

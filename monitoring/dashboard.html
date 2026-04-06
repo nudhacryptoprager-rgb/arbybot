@@ -149,6 +149,7 @@ let latestRolling = null;
 let latestHot = null;
 let latestM7Hot = null;
 let latestM7Intents = null;
+let latestM7Rollup = null;
 let focalChain = '';  // R39q: '' = PRIMARY, else chain key from long_scan
 
 function loadData() {
@@ -171,12 +172,13 @@ function loadRollingData() {
 }
 
 function loadHotData() {
-  // M7.A.5.46: /api/hot now returns m7_hot + m7_hot_intents (no hot_loop).
+  // M7.A.5.46: /api/hot now returns m7_hot + m7_hot_intents + m7_hot_rollup.
   fetch('/api/hot')
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(data => {
       latestM7Hot = data?.m7_hot || latestM7Hot || null;
       latestM7Intents = data?.m7_hot_intents || latestM7Intents || null;
+      latestM7Rollup = data?.m7_hot_rollup || latestM7Rollup || null;
       renderM7Orderflow(latestRolling?.m7_orderflow || null, latestM7Hot, latestM7Intents);
     })
     .catch(e => {
@@ -1092,9 +1094,9 @@ function renderM7Orderflow(m7, m7Hot, m7Intents) {
 
   // Micro-refinement results (M7.A.5.44)
   if (microRef.length > 0) {
-    html += '<table style="margin-top:4px"><tr><th>Pair</th><th class="num">Base bps</th><th class="num">Sizes</th><th class="num">Passed</th><th class="num">Best micro</th><th>Reject</th></tr>';
+    html += '<table style="margin-top:4px"><tr><th>Pair</th><th class="num">Base bps</th><th class="num">Sizes</th><th class="num">Passed</th><th class="num">Best micro</th><th class="num">Gas gap</th><th class="num">Verified</th><th>Reject</th></tr>';
     for (const mr of microRef) {
-      html += `<tr><td style="font-size:.72rem">${mr.actual_pair || '\u2014'}</td><td class="num ${cls(mr.base_net_bps)}">${fmt(mr.base_net_bps, 2)}</td><td class="num">${mr.sizes_tried}</td><td class="num">${mr.sizes_passed}</td><td class="num ${cls(mr.best_micro_net_bps)}">${fmt(mr.best_micro_net_bps, 2)}</td><td style="font-size:.7rem">${mr.reject_reason || '\u2014'}</td></tr>`;
+      html += `<tr><td style="font-size:.72rem">${mr.actual_pair || '\u2014'}</td><td class="num ${cls(mr.base_net_bps)}">${fmt(mr.base_net_bps, 2)}</td><td class="num">${mr.sizes_tried}</td><td class="num">${mr.sizes_passed}</td><td class="num ${cls(mr.best_micro_net_bps)}">${fmt(mr.best_micro_net_bps, 2)}</td><td class="num">${fmt(mr.gas_floor_gap_bps, 2)}</td><td class="num ${cls(mr.verified_net_bps_after_refinement)}">${fmt(mr.verified_net_bps_after_refinement, 2)}</td><td style="font-size:.7rem">${mr.reject_reason || '\u2014'}</td></tr>`;
     }
     html += '</table>';
   }
@@ -1113,6 +1115,20 @@ function renderM7Orderflow(m7, m7Hot, m7Intents) {
     } else {
       html += '<div style="font-size:.75rem;color:#8b949e">No hot-scored intents this window.</div>';
     }
+  }
+  // M7.A.5.47: Hot Cumulative Rollup section — from /api/hot m7_hot_rollup
+  if (latestM7Rollup) {
+    const ru = latestM7Rollup;
+    html += '<h3 style="font-size:.85rem;color:#bc8cff;margin:14px 0 4px">Hot Cumulative Rollup</h3>';
+    html += `<div class="kpi">
+      <div class="kpi-item"><div class="kpi-val">${ru.windows_seen ?? 0}</div><div class="kpi-lbl">Windows</div></div>
+      <div class="kpi-item"><div class="kpi-val">${ru.events_seen_total ?? 0}</div><div class="kpi-lbl">Events total</div></div>
+      <div class="kpi-item"><div class="kpi-val">${ru.fast_path_scored_total ?? 0}</div><div class="kpi-lbl">Fast scored</div></div>
+      <div class="kpi-item"><div class="kpi-val">${ru.fast_path_positive_total ?? 0}</div><div class="kpi-lbl">Fast positive</div></div>
+      <div class="kpi-item"><div class="kpi-val">${ru.profit_guard_passed_total ?? 0}</div><div class="kpi-lbl">Guard passed</div></div>
+      <div class="kpi-item"><div class="kpi-val" style="color:#bc8cff">${ru.dominant_hot_miss_reason ?? 'none'}</div><div class="kpi-lbl">Dominant miss</div></div>
+    </div>`;
+    html += `<div style="font-size:.72rem;color:#8b949e;margin-bottom:4px">bridge_loaded=${ru.bridge_loaded_candidate_count_total ?? 0} pool_hit=${ru.bridge_pool_address_hit_count_total ?? 0} | Since: ${(ru.first_window_at || '?').slice(0,19)}Z</div>`;
   }
   html += '<h3 style="font-size:.85rem;color:#7c8593;margin:14px 0 4px">Diagnostic Positive</h3>';
   html += `<div class="kpi">

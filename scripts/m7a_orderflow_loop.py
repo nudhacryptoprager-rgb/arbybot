@@ -59,6 +59,8 @@ _PROMOTED_PAIRS_PATH = os.path.join("data", "runs", "_rolling", "m7_promoted_pai
 _COLD_HOT_BRIDGE_PATH = os.path.join("data", "runs", "_rolling", "m7_cold_hot_bridge.json")
 # M7.A.5.45: Hot execution intents — compact rows for hot-scored + profit-guard-checked candidates.
 _HOT_INTENTS_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_intents_latest.json")
+# M7.A.5.47: Cumulative hot rollup — survives across windows so progress is visible.
+_HOT_ROLLUP_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_rollup_latest.json")
 
 
 def _write_promoted_pairs(promoted: dict) -> None:
@@ -542,6 +544,15 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "bridge_loaded_candidate_count": _bd.get("bridge_loaded_candidate_count", 0),
         # M7.A.5.46: Pair-level fallback counter
         "bridge_pair_fallback_count": _bd.get("bridge_pair_fallback_count", 0),
+        # M7.A.5.47: 6 canonical hot miss counters (per-window)
+        "fast_score_attempted": _fast_attempted,
+        "fast_score_rejected_economics": sum(
+            1 for r in _raw_results
+            if getattr(r, "scoring_path", None) == "registry_fast"
+            and getattr(r, "reject_reason", None) in (
+                "REJECT_GAS_EXCEEDS_GROSS", "REJECT_STALE_POSITIVE",
+            )
+        ),
     }
 
     if fast_results:
@@ -763,6 +774,112 @@ def _write_hot_intents(
         logger.warning("Failed to write hot intents: %s", str(exc)[:120])
 
 
+def _update_hot_rollup(
+    events_count: int,
+    fast_results: list | None,
+    guard_results: list | None,
+    bridge_diagnostics: dict | None,
+) -> None:
+    """Update cumulative hot rollup artifact — survives across windows.
+
+    M7.A.5.47: The latest-window hot artifact masks progress because
+    empty windows reset counters to zero. The rollup accumulates totals
+    across ALL hot windows in the session, giving visibility into
+    whether any hot-scored or profit-guard-passed events occurred.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Read existing rollup (or start fresh)
+    rollup: dict = {}
+    try:
+        if os.path.exists(_HOT_ROLLUP_PATH):
+            with open(_HOT_ROLLUP_PATH, "r", encoding="utf-8") as f:
+                rollup = json.load(f)
+    except Exception:
+        rollup = {}
+
+    # Increment counters
+    _bd = bridge_diagnostics or {}
+    _fast = fast_results or []
+    _guard = guard_results or []
+
+    rollup["last_updated"] = ts
+    rollup["windows_seen"] = rollup.get("windows_seen", 0) + 1
+    rollup["events_seen_total"] = rollup.get("events_seen_total", 0) + events_count
+    rollup["bridge_loaded_candidate_count_total"] = (
+        rollup.get("bridge_loaded_candidate_count_total", 0)
+        + _bd.get("bridge_loaded_candidate_count", 0)
+    )
+    rollup["pool_address_match_count_total"] = (
+        rollup.get("pool_address_match_count_total", 0)
+        + _bd.get("pool_address_match_count", 0)
+    )
+    rollup["bridge_pool_address_hit_count_total"] = (
+        rollup.get("bridge_pool_address_hit_count_total", 0)
+        + _bd.get("bridge_pool_address_hit_count", 0)
+    )
+    rollup["fast_path_scored_total"] = (
+        rollup.get("fast_path_scored_total", 0) + len(_fast)
+    )
+    rollup["fast_path_positive_total"] = (
+        rollup.get("fast_path_positive_total", 0)
+        + sum(1 for r in _fast if (getattr(r, "best_backrun_net_bps", 0) or 0) > 0)
+    )
+    rollup["profit_guard_passed_total"] = (
+        rollup.get("profit_guard_passed_total", 0) + len(_guard)
+    )
+    # M7.A.5.47: 6 canonical hot miss counters (cumulative)
+    rollup["bridge_candidate_loaded_total"] = (
+        rollup.get("bridge_candidate_loaded_total", 0)
+        + _bd.get("bridge_loaded_candidate_count", 0)
+    )
+    rollup["bridge_pool_hit_total"] = (
+        rollup.get("bridge_pool_hit_total", 0)
+        + _bd.get("bridge_pool_address_hit_count", 0)
+    )
+    rollup["bridge_pair_hit_total"] = (
+        rollup.get("bridge_pair_hit_total", 0)
+        + _bd.get("bridge_pair_hit_count", 0)
+    )
+    rollup["registry_hit_for_event_pool_total"] = (
+        rollup.get("registry_hit_for_event_pool_total", 0)
+        + _bd.get("pool_address_match_count", 0)
+    )
+    rollup["fast_score_attempted_total"] = (
+        rollup.get("fast_score_attempted_total", 0) + len(_fast)
+    )
+    rollup["fast_score_rejected_economics_total"] = (
+        rollup.get("fast_score_rejected_economics_total", 0)
+        + sum(1 for r in _fast if (getattr(r, "best_backrun_net_bps", 0) or 0) <= 0)
+    )
+    # Derive dominant hot miss reason from cumulative counters
+    _miss_counts = {
+        "no_events_in_window": max(0,
+            rollup.get("windows_seen", 0)
+            - max(1, rollup.get("events_seen_total", 0))
+        ),
+        "bridge_pool_not_hit": max(0,
+            rollup.get("bridge_candidate_loaded_total", 0)
+            - rollup.get("bridge_pool_hit_total", 0)
+        ),
+        "pool_not_in_registry": max(0,
+            rollup.get("bridge_pool_hit_total", 0)
+            - rollup.get("registry_hit_for_event_pool_total", 0)
+        ),
+        "fast_score_rejected": rollup.get("fast_score_rejected_economics_total", 0),
+    }
+    rollup["dominant_hot_miss_reason"] = max(_miss_counts, key=_miss_counts.get) if any(
+        v > 0 for v in _miss_counts.values()
+    ) else "none"
+
+    try:
+        os.makedirs(os.path.dirname(_HOT_ROLLUP_PATH), exist_ok=True)
+        with open(_HOT_ROLLUP_PATH, "w", encoding="utf-8") as f:
+            json.dump(rollup, f, indent=2, default=str)
+    except Exception as exc:
+        logger.debug("Failed to write hot rollup: %s", str(exc)[:80])
+
+
 def run_loop(cli_args) -> None:
     """Run the continuous ws-live loop."""
     _apply_lane_defaults(cli_args)
@@ -946,8 +1063,27 @@ def run_loop(cli_args) -> None:
                     except Exception as _pw_exc:
                         logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
 
+            # M7.A.5.47: Build focused bridge pool address set for hot lane.
+            # Combines cold_executable pool addresses with all pool_token_transport
+            # keys from bridge. Passed to run_ws_live for targeted eth_getLogs.
+            _bridge_pool_addrs: set | None = None
+            if lane == "hot":
+                try:
+                    _ptt = _bridge.get("pool_token_transport", {})
+                    if _ptt:
+                        _bridge_pool_addrs = set(_cold_exec_pools)  # already lowered
+                        for _ptt_key in _ptt:
+                            _bridge_pool_addrs.add(_ptt_key.lower())
+                        logger.info(
+                            "Hot focused intake: %d bridge pool addresses (%d cold_exec)",
+                            len(_bridge_pool_addrs), len(_cold_exec_pools),
+                        )
+                except NameError:
+                    pass  # _bridge not yet available (first iteration, no cold run yet)
+
             artifact = run_ws_live(ws_args, external_registry=_ext_registry,
-                                   warm_registry=_cold_registry if lane == "cold" else None)
+                                   warm_registry=_cold_registry if lane == "cold" else None,
+                                   bridge_pool_addresses=_bridge_pool_addrs)
             window_ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             events_count = artifact.get("events_count", 0)
@@ -1122,6 +1258,14 @@ def run_loop(cli_args) -> None:
                     guard_results=guard_results,
                     iteration=iteration,
                     bridge=_bridge,
+                )
+
+                # M7.A.5.47: Update cumulative hot rollup
+                _update_hot_rollup(
+                    events_count=artifact.get("events_count", 0),
+                    fast_results=fast_results,
+                    guard_results=guard_results,
+                    bridge_diagnostics=_hot_bridge_diag,
                 )
 
             best = artifact.get("best_net_bps_clean")

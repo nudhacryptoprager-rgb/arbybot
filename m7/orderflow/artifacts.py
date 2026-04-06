@@ -925,12 +925,12 @@ def build_replay_summary(
     )[:_TOP_N]
     near_executable_candidates = [_compact_candidate(r) for r in _near_exec_candidates]
 
-    # M7.A.5.44: Micro-refinement — for top cold_executable and near_executable
-    # candidates, test 3-5 bounded sizes around observed amount_in_wei.
+    # M7.A.5.47: Submit-size refinement — for top cold_executable and near_executable
+    # candidates, test bounded sizes around observed amount_in_wei.
     # Purpose: verify whether candidate survives sizing adjustment at execution
     # time, not just at the original observed size. Uses profit_guard check
     # (ending balance > starting balance after costs).
-    _MICRO_SIZE_MULTIPLIERS = [0.5, 0.8, 1.0, 1.5, 2.0]
+    _MICRO_SIZE_MULTIPLIERS = [0.75, 1.0, 1.25, 1.5]
     _micro_refinement_results = []
     _micro_candidates = (_exec_candidates[:3] + _near_exec_candidates[:2])
     for r in _micro_candidates:
@@ -944,6 +944,8 @@ def build_replay_summary(
         _sizes_tried = 0
         _sizes_passed = 0
         _best_micro_net_bps = None
+        _best_submit_size = None
+        _gas_floor_gap_bps = None
         for mult in _MICRO_SIZE_MULTIPLIERS:
             _test_size = int(_base_size * mult)
             if _test_size <= 0:
@@ -961,6 +963,10 @@ def build_replay_summary(
                     _sizes_passed += 1
                 if _best_micro_net_bps is None or _pg.net_bps > _best_micro_net_bps:
                     _best_micro_net_bps = round(_pg.net_bps, 4)
+                    _best_submit_size = _test_size
+                # Track gap to gas floor (how close is net_bps to zero)
+                if _gas_floor_gap_bps is None or abs(_pg.net_bps) < abs(_gas_floor_gap_bps):
+                    _gas_floor_gap_bps = round(_pg.net_bps, 4)
             except Exception:
                 _sizes_tried += 1
         _micro_refinement_results.append({
@@ -970,6 +976,9 @@ def build_replay_summary(
             "sizes_tried": _sizes_tried,
             "sizes_passed": _sizes_passed,
             "best_micro_net_bps": _best_micro_net_bps,
+            "best_submit_size": _best_submit_size,
+            "gas_floor_gap_bps": _gas_floor_gap_bps,
+            "verified_net_bps_after_refinement": _best_micro_net_bps if _sizes_passed > 0 else None,
             "reject_reason": r.reject_reason,
         })
 
