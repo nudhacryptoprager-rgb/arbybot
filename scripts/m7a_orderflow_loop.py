@@ -412,6 +412,30 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             "stage_timings": None,
         }
 
+    # M7.A.5.41: Compact top-hot-candidate rows for auditability
+    _TOP_HOT_N = 5
+    if fast_results:
+        _sorted_hot = sorted(
+            fast_results,
+            key=lambda r: r.best_backrun_net_bps or 0,
+            reverse=True,
+        )[:_TOP_HOT_N]
+        hot["top_hot_candidates"] = [
+            {
+                "event_id": r.event_id,
+                "actual_pair": r.actual_pair,
+                "net_bps": round(r.best_backrun_net_bps, 4) if r.best_backrun_net_bps else 0,
+                "block_lag": r.block_lag,
+                "route_viable": r.route_viable,
+                "scoring_path": r.scoring_path,
+                "profit_guard_passed": r.profit_guard_passed,
+                "pipeline_latency_ms": r.quote_pipeline_latency_ms,
+            }
+            for r in _sorted_hot
+        ]
+    else:
+        hot["top_hot_candidates"] = []
+
     if best is not None:
         hot["best_candidate"] = {
             "event_id": best.get("event_id") if isinstance(best, dict) else getattr(best, "event_id", None),
@@ -517,6 +541,9 @@ def run_loop(cli_args) -> None:
                 for ppair in _cross_promoted.get("candidate", []):
                     if ppair not in _hot_pairs_to_prewarm:
                         _hot_pairs_to_prewarm[ppair] = {"pair": ppair, "seen_count": 0}
+                # M7.A.5.40: Update _promoted_pairs for hot artifact reporting
+                if _cross_promoted.get("candidate") or _cross_promoted.get("execution"):
+                    _promoted_pairs = _cross_promoted
 
                 if _hot_pairs_to_prewarm:
                     try:

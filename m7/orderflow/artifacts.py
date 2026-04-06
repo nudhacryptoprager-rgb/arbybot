@@ -842,6 +842,40 @@ def build_replay_summary(
         "all_canonical_tags": sorted(ALL_BLOCKER_TAGS),
     }
 
+    # M7.A.5.41: Compact top-candidate persistence for rolling artifact.
+    # Extract top-5 executable (route_viable) and top-5 stale-positive candidates
+    # so the rolling artifact retains per-event diagnostic detail after results
+    # are stripped by _ROLLING_EXCLUDE_KEYS.
+    def _compact_candidate(r):
+        return {
+            "event_id": r.event_id,
+            "actual_pair": r.actual_pair,
+            "net_bps": round(r.best_backrun_net_bps, 4) if r.best_backrun_net_bps else 0,
+            "block_lag": r.block_lag,
+            "same_state_class": r.same_state_class,
+            "route_viable": r.route_viable,
+            "size_valid_for_token": r.size_valid_for_token,
+            "scoring_path": r.scoring_path,
+            "profit_guard_passed": r.profit_guard_passed,
+            "pipeline_latency_ms": r.quote_pipeline_latency_ms,
+            "reject_reason": r.reject_reason,
+        }
+
+    _TOP_N = 5
+    _exec_candidates = sorted(
+        [r for r in results if r.route_viable],
+        key=lambda r: r.best_backrun_net_bps or 0,
+        reverse=True,
+    )[:_TOP_N]
+    top_executable_candidates = [_compact_candidate(r) for r in _exec_candidates]
+
+    _stale_candidates = sorted(
+        [r for r in results if _is_stale(r) and r.best_backrun_net_bps > 0],
+        key=lambda r: r.best_backrun_net_bps or 0,
+        reverse=True,
+    )[:_TOP_N]
+    top_stale_positive_candidates = [_compact_candidate(r) for r in _stale_candidates]
+
     return {
         "m7a4_hypothesis": "orderflow_driven_backrun_replay",
         "mode": mode,
@@ -994,6 +1028,9 @@ def build_replay_summary(
             "adapter_type_histogram": _build_adapter_histogram(results),
             "pricing_path_histogram": _build_pricing_path_histogram(results),
         },
+        # M7.A.5.41: Compact top-candidate rows (survive _ROLLING_EXCLUDE_KEYS)
+        "top_executable_candidates": top_executable_candidates,
+        "top_stale_positive_candidates": top_stale_positive_candidates,
         "results": [asdict(r) for r in results],
         "two_leg_baseline_net_bps": -3.5062,
         "m7a_triangular_best_net_bps": -14.16,

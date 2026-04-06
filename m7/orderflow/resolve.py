@@ -297,3 +297,90 @@ def _get_pool_addresses_for_dexes(
     """
     return []
 
+
+def get_cached_decimals(token_addr: str) -> Optional[int]:
+    """Return cached decimals for a token address, or None if not cached.
+
+    Reads from the module-level _enrichment_cache (immutable ERC-20 data).
+    """
+    cached = _enrichment_cache.get(token_addr.lower())
+    if cached is not None:
+        return cached.get("decimals")
+    return None
+
+
+def batch_pre_resolve_pools(
+    pool_addresses: List[str],
+    rpc_url: str,
+    block_num: int,
+    addr_to_symbol: Dict[str, str],
+) -> Dict[str, Dict[str, Any]]:
+    """Batch-resolve pool tokens and enrich in one pass. Fills module caches.
+
+    M7.A.5.40: Moves per-event resolve+enrichment RPC calls into a single
+    batch call before scoring, so that individual scoring calls hit caches.
+
+    For each pool:
+      1. Check _pool_token_cache — skip if already known.
+      2. Batch-resolve token0/token1/fee via multicall for uncached pools.
+      3. Batch-enrich all discovered token addresses (symbol + decimals).
+
+    Returns: {pool_addr_lower: {token0, token1, fee, token_in_sym, token_out_sym}
+              or None if resolution failed}.
+    Populates _pool_token_cache and _enrichment_cache as side effects.
+    """
+    if not pool_addresses:
+        return {}
+
+    result: Dict[str, Dict[str, Any]] = {}
+
+    # 1. Separate cached vs uncached pools
+    uncached_pools: List[str] = []
+    for pa in pool_addresses:
+        key = pa.lower()
+        if key in _pool_token_cache:
+            token0, token1, fee = _pool_token_cache[key]
+            result[key] = {"token0": token0, "token1": token1, "fee": fee}
+        else:
+            uncached_pools.append(pa)
+
+    # 2. Batch-resolve uncached pools via multicall
+    if uncached_pools:
+        try:
+            from core.multicall import get_multicall_batcher
+            batcher = get_multicall_batcher(rpc_url, block_num)
+            batch_info = batcher.batch_token_info(uncached_pools)
+            for pa in uncached_pools:
+                info = batch_info.get(pa)
+                if info is not None:
+                    token0, token1, fee = info
+                    key = pa.lower()
+                    _pool_token_cache[key] = (token0, token1, fee)
+                    result[key] = {"token0": token0, "token1": token1, "fee": fee}
+        except Exception as exc:
+            logger.debug("batch_pre_resolve_pools resolve failed: %s", str(exc)[:100])
+
+    # 3. Collect all unique token addresses for enrichment
+    all_token_addrs: List[str] = []
+    seen: set = set()
+    for info in result.values():
+        for tk in (info["token0"], info["token1"]):
+            tk_lower = tk.lower()
+            if tk_lower not in seen and tk_lower not in _enrichment_cache:
+                # Only enrich tokens not already in addr_to_symbol
+                if tk_lower not in addr_to_symbol:
+                    all_token_addrs.append(tk)
+                    seen.add(tk_lower)
+
+    # 4. Batch-enrich unknown tokens
+    if all_token_addrs:
+        try:
+            enriched = enrich_tokens_batch(all_token_addrs, rpc_url, block_num)
+            for addr_lower, info in enriched.items():
+                if info.get("enriched") and info.get("symbol"):
+                    addr_to_symbol[addr_lower] = info["symbol"]
+        except Exception as exc:
+            logger.debug("batch_pre_resolve_pools enrich failed: %s", str(exc)[:100])
+
+    return result
+

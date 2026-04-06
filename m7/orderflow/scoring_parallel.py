@@ -59,6 +59,8 @@ from m7.orderflow.resolve import (
     _resolve_event_tokens,
     _resolve_pool_addresses_multicall,
     enrich_tokens_batch,
+    get_cached_decimals,
+    _pool_token_cache,
 )
 from m7.orderflow.coverage import (
     admit_event_tokens,
@@ -588,6 +590,11 @@ def score_backrun_live_parallel(
     # ── M7.A.5.9: Decimal-aware bounded size logic ────────────────────
     # Resolve token_in decimals: enrichment cache → well-known defaults → 18
     _token_in_dec: Optional[int] = _addr_to_dec.get(token_in_addr.lower())
+    if _token_in_dec is None:
+        # M7.A.5.40: Check module-level enrichment cache (populated by batch
+        # pre-resolve or prior enrichment calls). This fixes size_valid_for_token
+        # being false when per-event enrichment was skipped due to cache hit.
+        _token_in_dec = get_cached_decimals(token_in_addr)
     if _token_in_dec is None:
         # Well-known stablecoin heuristic (symbol-based)
         _in_sym = _ats.get(token_in_addr.lower(), "")
@@ -1238,8 +1245,27 @@ def score_backrun_fast(
         return None
 
     _ats = addr_to_symbol
-    token_in_addr = token_addresses.get(event.token_out, "")
-    token_out_addr = token_addresses.get(event.token_in, "")
+
+    # M7.A.5.41: Resolve actual token addresses from _pool_token_cache.
+    # event.token_in / event.token_out contain direction tags ("token0_in",
+    # "token1_in", "token0", "token1") — NOT symbol names. The cold lane
+    # populates _pool_token_cache with immutable pool→(token0, token1, fee)
+    # mappings. Use pool_address + direction to resolve actual addresses.
+    _cache_key = event.pool_address.lower()
+    _cached_pool = _pool_token_cache.get(_cache_key)
+    if _cached_pool is None:
+        return None  # Pool not yet seen by cold lane — skip
+
+    _token0_addr, _token1_addr, _pool_fee = _cached_pool
+    _direction = event.token_in  # "token0_in" or "token1_in"
+    if _direction == "token0_in":
+        token_in_addr = _token0_addr   # victim's in (consistent with cold path)
+        token_out_addr = _token1_addr  # victim's out
+    elif _direction == "token1_in":
+        token_in_addr = _token1_addr
+        token_out_addr = _token0_addr
+    else:
+        return None  # Unknown direction tag
 
     if not token_in_addr or not token_out_addr:
         return None
@@ -1279,7 +1305,8 @@ def score_backrun_fast(
         return None
 
     # Backrun size from event — decimal-aware bounded size
-    _in_sym = event.token_in.upper() if event.token_in else ""
+    # M7.A.5.41: Resolve actual symbol from addr_to_symbol for decimal detection
+    _in_sym = _ats.get(token_in_addr.lower(), "").upper()
     if _in_sym in ("USDC", "USDT", "USDC.E", "USDT.E"):
         _effective_dec = 6
     elif _in_sym in ("WBTC",):

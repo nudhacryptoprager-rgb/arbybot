@@ -27,7 +27,7 @@ from m7.orderflow.artifacts import build_replay_summary
 from m7.orderflow.coverage import seed_tokens_from_subgraph
 from m7.orderflow.events import normalize_swap_log
 from m7.orderflow.pool_registry import PoolRegistry
-from m7.orderflow.resolve import _build_address_to_symbol
+from m7.orderflow.resolve import _build_address_to_symbol, batch_pre_resolve_pools
 from m7.orderflow.scoring_parallel import score_backrun_live_parallel, score_backrun_fast
 from m7.orderflow.contracts import BackrunResult
 
@@ -287,9 +287,40 @@ def run_ws_live(args, *, external_registry=None, warm_registry=None) -> dict:
             _stale_queue = [e for e in events_to_score if (detected_block - e.block_number) > 2]
             events_to_score = _low_lag_queue + _stale_queue
 
+            # M7.A.5.40: Cold-lane batch pre-resolve + pre-enrich + pre-registry.
+            # Moves per-event RPC calls (resolve_ms, enrichment_ms, registry_preload_ms)
+            # into a single batch pass before scoring. Individual scoring calls then
+            # hit module-level caches for near-zero latency.
+            _hot_mode = external_registry is not None
+            if not _hot_mode and events_to_score:
+                _pre_pool_addrs = list(set(
+                    ev.pool_address for ev in events_to_score
+                    if ev.pool_address
+                ))
+                if _pre_pool_addrs:
+                    try:
+                        _pre_resolved = batch_pre_resolve_pools(
+                            _pre_pool_addrs, rpc_url, detected_block, addr_to_symbol,
+                        )
+                        # Batch-preload discovered token pairs into registry
+                        _pre_pairs_done: set = set()
+                        for _pa, _pinfo in _pre_resolved.items():
+                            _t0 = _pinfo["token0"]
+                            _t1 = _pinfo["token1"]
+                            _ppk = f"{min(_t0.lower(), _t1.lower())}/{max(_t0.lower(), _t1.lower())}"
+                            if _ppk not in _pre_pairs_done:
+                                _pre_pairs_done.add(_ppk)
+                                try:
+                                    session_registry.preload_pair(
+                                        _t0, _t1, dex_configs, rpc_url, detected_block,
+                                    )
+                                except Exception:
+                                    pass
+                    except Exception as _pre_exc:
+                        logger.debug("Cold pre-resolve batch failed: %s", str(_pre_exc)[:100])
+
             # Score with parallel pipeline
             current_block = detected_block
-            _hot_mode = external_registry is not None
             for ev in events_to_score:
                 r = None
                 # M7.A.5.33: Hot-mode fast path — zero-RPC scoring via prewarmed registry

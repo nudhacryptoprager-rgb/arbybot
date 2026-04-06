@@ -1,8 +1,8 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.38 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.38 widens all cache thresholds to session-scoped (5000 blocks ≈ 20 min), adds enrichment process-level cache for immutable ERC-20 data. Cold pipeline latency mean 866→275ms (warm cache), latency_budget_hit_rate 0.19→0.72-0.80 (peak). 3228 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
-**Updated**: 2026-04-04  
-**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix. M7.B remains closed.
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.41 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.41 fixes hot lane token resolution bug (fast_path.scored=0 since M7.A.5.32), adds top_executable_candidates + top_stale_positive_candidates + top_hot_candidates compact persistence. 3272 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Updated**: 2026-04-06  
+**Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix, batch pre-resolve + supervisor fix + size_valid cache, top-candidate persistence + hot lane token resolution fix. M7.B remains closed.
 
 ---
 
@@ -102,41 +102,15 @@ Subgraph BLOCKED (403). Gas decomposition: L1 data ~80%, L2 exec ~20%. GAS_EXCEE
 
 ---
 
-## M7.A.5.25: Detection-Time Low-Lag Truth + PRICING_ANOMALY (CORRECTIVE, CLOSED)
+## M7.A.5.25–5.29: Detection-Time Truth, Structural Refactors, Rolling+Loop Infra (CLOSED)
 
-Fixed low-lag accounting (detection-time vs final). +REJECT_PRICING_ANOMALY (21 total). Hidden latency telemetry: registry_preload ~372ms, oracle ~101ms. 100% same-block detection confirmed. CI: 3317 passed.
-
----
-
-## M7.R1: Structural Refactor — Extract m7/ Package (COMPLETED)
-
-Extracted all M7 logic into `m7/` package: `m7/shared/constants.py`, `m7/orderflow/` (8 modules), `m7/triangular/` (5 modules). 8th blocker tag `LOW_LAG_RPC_QUOTE_FAIL`. CI: 3180 passed.
-
----
-
-## M7.T1: Test Suite Consolidation (COMPLETED)
-
-Consolidated 14 session-specific test files into 8 stable layer-based suites + `conftest.py`. Removed 213 duplicate assertions. 368 unique orderflow tests. CI: 3104 passed.
-
----
-
-## M7.A.5.26: Coverage Bug Fix (CORRECTIVE, CLOSED)
-
-Fixed `UnboundLocalError` in zero-active-pools path. PRICING_ANOMALY gap found (47322 bps outlier). CI: 3105 passed.
-
----
-
-## M7.A.5.27: Anomaly-Clean Headlines + Executable Lane Hardening (CLOSED)
-
-`best_net_bps` excludes PRICING_ANOMALY. Wall-clock budget abort replaces RPC mid-pipeline check. New KPIs: `best_net_bps_clean`, `positive_net_count_clean`. Timeboost constants added. Evidence: 300b 6/30 positive clean (37.08 bps), 1000b 15/100 positive clean (416.7 bps), viable_count=0, 100% mid_pipeline_abort. CI: 3113 passed.
-
----
-
-## M7.A.5.28–5.29: Rolling Artifact + Continuous Loop (INFRASTRUCTURE, CLOSED)
-
-**M7.A.5.28** (KPI Contract Fix + Rolling): Unified `_is_stale()`. Canonical `m7_orderflow_latest.json`. Dashboard Panel 11. CI: 3120 passed.
-
-**M7.A.5.29** (Continuous Loop): `m7a_orderflow_loop.py` — endless/restartable loop. Anti-bad-overwrite. Hot/cold lane split. `BLOCKER_LOW_LAG_COMPLETION_LATENCY` tag. CI: 3124 passed.
+**M7.A.5.25**: Fixed low-lag accounting (detection-time vs final). +REJECT_PRICING_ANOMALY (21 total). CI: 3317 passed.
+**M7.R1**: Extracted `m7/` package (8 modules). CI: 3180 passed.
+**M7.T1**: Consolidated 14 test files into 8 stable suites. CI: 3104 passed.
+**M7.A.5.26**: Fixed `UnboundLocalError` in zero-active-pools. CI: 3105 passed.
+**M7.A.5.27**: Anomaly-clean headlines, wall-clock budget abort, Timeboost constants. CI: 3113 passed.
+**M7.A.5.28**: Unified `_is_stale()`, canonical `m7_orderflow_latest.json`. CI: 3120 passed.
+**M7.A.5.29**: `m7a_orderflow_loop.py` continuous loop, hot/cold split. CI: 3124 passed.
 
 ---
 
@@ -260,6 +234,50 @@ CI: 3228 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 **Online evidence**: PENDING — requires nonstop runtime verification.
 
 CI: 3244 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.40: Batch Pre-Resolve + Supervisor Fix + Size Valid Cache (CLOSED)
+
+**Hypothesis**: M7.A.5.40 = fresh 10–20 minute runtime proof with resolve_ms, enrichment_ms, registry_preload_ms fully eliminated from per-event scoring path via batch pre-resolve.
+
+**Root cause analysis**: All 4 RPC-heavy stages (resolve ~683ms, enrichment ~105ms, oracle ~125ms, registry_preload ~604ms) executed PER EVENT inside `score_backrun_live_parallel()`. Even with session-scoped caches (M7.A.5.38), first events in each iteration still hit cold cache paths. Solution: batch pre-resolve ALL event pools BEFORE the scoring loop so individual scoring calls hit module-level caches.
+
+**Changes**: (1) `m7/orderflow/resolve.py`: Added `get_cached_decimals(token_addr)` — reads from `_enrichment_cache`, returns cached decimals or None. Added `batch_pre_resolve_pools(pool_addresses, rpc_url, block_num, addr_to_symbol)` — batch-resolves pool tokens via multicall (populates `_pool_token_cache`), batch-enriches unknown tokens (populates `_enrichment_cache`, updates `addr_to_symbol`). Returns `{pool_addr: {token0, token1, fee}}`. (2) `m7/orderflow/mode_ws_live.py`: Added cold-lane pre-pass before scoring loop — collects unique pool addresses from events, calls `batch_pre_resolve_pools()`, batch-preloads each discovered pair into `session_registry.preload_pair()`. All subsequent `score_backrun_live_parallel()` calls hit warm caches. Fixed `_hot_mode` variable ordering (was referenced before assignment). (3) `m7/orderflow/scoring_parallel.py`: Added `get_cached_decimals` import. Added cache fallback for `_token_in_dec` — calls `get_cached_decimals(token_in_addr)` BEFORE the well-known stablecoin heuristic. Fixes `size_valid_for_token=false` for batch-pre-enriched tokens. (4) `scripts/start_nonstop_runtime.py`: Critical blocking I/O fix — changed `stdout=subprocess.PIPE` to `stdout=subprocess.DEVNULL` and made `drain_output()` a no-op. Original blocking `readline()` prevented supervisor from reaching deadline check. (5) `scripts/m7a_orderflow_loop.py`: Hot artifact reporting fix — `_promoted_pairs` updated from `_cross_promoted` for accurate promoted_watchlist display. (6) Rolling canonical files: added `m7_promoted_pairs.json` to allowlists. (7) +14 tests in 4 new M7.A.5.40 classes (TestM7A540BatchPreResolve, TestM7A540GetCachedDecimals, TestM7A540ColdPrePassInModeWsLive, TestM7A540SizeValidCacheFallback).
+
+**Online evidence**: 10.3-minute nonstop runtime (0 restarts, 3/3 processes alive) + 120-block direct replay.
+
+| Metric | M7.A.5.38 baseline | 120-block replay | Nonstop final (warm) | Improvement |
+|--------|-------------------|-----------------|---------------------|-------------|
+| total_pipeline mean (ms) | 1519 (cold) / 275 (warm) | **143.11** | **15.62** | 97% from cold, 94% from warm |
+| resolve_ms mean | 683 | **63.32** (1 outlier) | **0.0** | 100% elimination |
+| enrichment_ms mean | 105 | **0.0** | **0.0** | 100% elimination |
+| registry_preload_ms mean | 604 | **0.0** | **0.0** | 100% elimination |
+| oracle_ms mean | 125 | **79.79** | **15.62** | 87% reduction |
+| latency_budget_hit_rate | 0.19→0.80 | **0.8947** | N/A (all under) | Peak 0.89 |
+| size_valid_count | 6/13 (46%) | **16/19 (84%)** | **8/8 (100%)** | 100% |
+| best_net_bps | 103.63 | **318.13** | **3.55** | 3x (replay) |
+| promoted pairs | seed_only | N/A | **6 candidate, 6 execution** | Active promotion |
+
+Key observations: (1) Batch pre-resolve eliminates resolve_ms, enrichment_ms, registry_preload_ms entirely for pools seen earlier in the same iteration. (2) One outlier in 120-block replay (WETH/USDC resolve=1203ms) — pool appeared in a later block after batch ran (expected). (3) Oracle is the only remaining RPC cost (~16-80ms), cached after first call per pair. (4) size_valid=100% in nonstop (warm cache provides decimals for all tokens). (5) Supervisor DEVNULL fix eliminates blocking I/O — nonstop completes reliably within deadline.
+
+CI: 3258 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.41: Persist Top Candidates + Hot Lane Token Resolution Fix
+
+**Hypothesis**: M7.A.5.41 = persist top executable candidates per-window and convert cold executable positives into hot-lane fast-path scores. Fresh rolling shows `best_net_bps_executable=2237.28`, `viable_count=5` — but these are summary-only counters; zero per-event detail survives in rolling artifact because `_ROLLING_EXCLUDE_KEYS` strips `results`. Hot lane still `fast_path.scored=0` despite 20 candidate / 10 execution promoted pairs.
+
+**Root cause — hot lane `fast_path.scored=0`**: `score_backrun_fast()` tried `token_addresses.get(event.token_out)` but `event.token_out` contained direction tags ("token0"/"token1") from `normalize_swap_log()`, NOT symbol names. The `token_addresses` dict maps `{symbol: address}`. Lookup ALWAYS returned empty string → function returned None for EVERY event → `fast_path.scored=0` since the feature was created (M7.A.5.32). Cold lane worked because it falls back to `_resolve_event_tokens()` which does on-chain multicall resolution.
+
+**Fix**: `score_backrun_fast()` now resolves tokens from `_pool_token_cache` (populated by cold lane) via `event.pool_address` + direction tag (`event.token_in = "token0_in"/"token1_in"`). Zero-RPC: cache contains immutable pool→(token0, token1, fee) data. Also fixed `_in_sym` decimal detection (was using direction tag, now resolves actual symbol from `addr_to_symbol`).
+
+**Changes**: (1) `m7/orderflow/scoring_parallel.py`: replaced broken `token_addresses.get(event.token_out)` with `_pool_token_cache` lookup using `event.pool_address.lower()` + direction-tag-to-address mapping. Imported `_pool_token_cache` from `resolve.py`. Fixed `_in_sym` decimal detection to use `addr_to_symbol` instead of direction tag. (2) `m7/orderflow/artifacts.py`: added `top_executable_candidates` (top-5 viable results) and `top_stale_positive_candidates` (top-5 stale positive) compact blocks. Each row has: event_id, actual_pair, net_bps, block_lag, same_state_class, route_viable, size_valid_for_token, scoring_path, profit_guard_passed, pipeline_latency_ms, reject_reason. These keys survive `_ROLLING_EXCLUDE_KEYS` (not in the exclude set). (3) `scripts/m7a_orderflow_loop.py`: added `top_hot_candidates` (top-5 fast_results sorted by net_bps) to hot artifact — always emitted (empty list when no fast results). (4) +14 tests in 3 classes (TestM7A541TopCandidatePersistence, TestM7A541HotLaneTokenResolution, TestM7A541TopHotCandidates).
+
+**Online evidence**: PENDING — requires nonstop runtime verification with hot lane now able to score events.
+
+CI: 3272 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

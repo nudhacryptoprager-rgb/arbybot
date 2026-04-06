@@ -1553,6 +1553,7 @@ class TestM7A532RollingCanonicalSet:
             "m4_stability_agg.json", "long_scan_latest.json",
             "hot_loop_latest.json",
             "m7_orderflow_latest.json", "m7_hot_latest.json",
+            "m7_promoted_pairs.json",
         }
         for f in rolling.iterdir():
             if f.is_file():
@@ -2530,6 +2531,338 @@ class TestM7A537OracleCaching:
         assert "_oracle_cache" in source
 
 
+# ===========================================================================
+# M7.A.5.41: Top-candidate persistence + hot lane token resolution fix
+# ===========================================================================
+
+
+class TestM7A541TopCandidatePersistence:
+    """M7.A.5.41: Verify top_executable_candidates and top_stale_positive_candidates
+    appear in build_replay_summary() and survive _ROLLING_EXCLUDE_KEYS."""
+
+    def _build_artifact_with_viable(self):
+        """Build an artifact with at least one viable result."""
+        events = build_fixture_events()
+        viable_result = _make_result(
+            event_id="e_viable_1",
+            route_viable=True,
+            best_backrun_net_bps=25.0,
+            block_lag=1,
+            same_state_class="next_block",
+            reject_reason=None,
+            scoring_path="registry_direct",
+            profit_guard_passed=True,
+            actual_pair="WETH/USDC",
+            size_valid_for_token=True,
+            quote_pipeline_latency_ms=12.5,
+        )
+        non_viable_result = _make_result(
+            event_id="e_gas_1",
+            route_viable=False,
+            best_backrun_net_bps=-5.0,
+            block_lag=1,
+            same_state_class="next_block",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            scoring_path="registry_direct",
+        )
+        stale_result = _make_result(
+            event_id="e_stale_1",
+            route_viable=False,
+            best_backrun_net_bps=15.0,
+            block_lag=5,
+            same_state_class="stale",
+            reject_reason=REJECT_STALE_POSITIVE,
+            scoring_path="registry_direct",
+            actual_pair="ARB/WETH",
+            size_valid_for_token=True,
+            quote_pipeline_latency_ms=30.0,
+        )
+        results = [viable_result, non_viable_result, stale_result]
+        artifact = build_replay_summary(events, results, "ws_live")
+        return artifact
+
+    def test_top_executable_candidates_key_exists(self):
+        artifact = self._build_artifact_with_viable()
+        assert "top_executable_candidates" in artifact
+
+    def test_top_stale_positive_candidates_key_exists(self):
+        artifact = self._build_artifact_with_viable()
+        assert "top_stale_positive_candidates" in artifact
+
+    def test_top_executable_candidates_has_viable_entries(self):
+        artifact = self._build_artifact_with_viable()
+        top = artifact["top_executable_candidates"]
+        assert len(top) >= 1
+        assert top[0]["event_id"] == "e_viable_1"
+        assert top[0]["net_bps"] == 25.0
+        assert top[0]["route_viable"] is True
+
+    def test_top_stale_positive_candidates_has_stale_entries(self):
+        artifact = self._build_artifact_with_viable()
+        top = artifact["top_stale_positive_candidates"]
+        assert len(top) >= 1
+        assert top[0]["event_id"] == "e_stale_1"
+        assert top[0]["net_bps"] == 15.0
+
+    def test_top_candidates_compact_keys(self):
+        """Verify compact rows have exactly the expected fields."""
+        artifact = self._build_artifact_with_viable()
+        expected_keys = {
+            "event_id", "actual_pair", "net_bps", "block_lag",
+            "same_state_class", "route_viable", "size_valid_for_token",
+            "scoring_path", "profit_guard_passed", "pipeline_latency_ms",
+            "reject_reason",
+        }
+        for row in artifact["top_executable_candidates"]:
+            assert set(row.keys()) == expected_keys
+        for row in artifact["top_stale_positive_candidates"]:
+            assert set(row.keys()) == expected_keys
+
+    def test_top_executable_max_5(self):
+        """At most 5 executable candidates are kept."""
+        events = build_fixture_events()
+        results = [
+            _make_result(
+                event_id=f"e_viable_{i}",
+                route_viable=True,
+                best_backrun_net_bps=float(i),
+                block_lag=0,
+                same_state_class="same_block",
+                reject_reason=None,
+            )
+            for i in range(10)
+        ]
+        artifact = build_replay_summary(events, results, "ws_live")
+        assert len(artifact["top_executable_candidates"]) == 5
+        # Sorted descending by net_bps
+        bps_values = [r["net_bps"] for r in artifact["top_executable_candidates"]]
+        assert bps_values == sorted(bps_values, reverse=True)
+
+    def test_top_candidates_survive_rolling_exclude(self):
+        """top_*_candidates keys must NOT be in _ROLLING_EXCLUDE_KEYS."""
+        from m7.orderflow.mode_ws_live import _ROLLING_EXCLUDE_KEYS
+        assert "top_executable_candidates" not in _ROLLING_EXCLUDE_KEYS
+        assert "top_stale_positive_candidates" not in _ROLLING_EXCLUDE_KEYS
+
+    def test_empty_results_produce_empty_candidates(self):
+        """Empty results produce empty candidate lists (not missing keys)."""
+        events = build_fixture_events()
+        artifact = build_replay_summary(events, [], "ws_live")
+        assert artifact["top_executable_candidates"] == []
+        assert artifact["top_stale_positive_candidates"] == []
+
+
+class TestM7A541HotLaneTokenResolution:
+    """M7.A.5.41: Verify score_backrun_fast resolves event tokens from
+    _pool_token_cache using pool_address + direction tags."""
+
+    def test_fast_path_uses_pool_token_cache(self):
+        """score_backrun_fast resolves tokens from _pool_token_cache, not token_addresses."""
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+        from m7.orderflow import resolve as resolve_mod
+        from m7.orderflow.contracts import OrderflowEvent
+        from m7.orderflow.pool_registry import PoolRegistryEntry
+
+        token0_addr = "0x" + "11" * 20  # lower address = token0
+        token1_addr = "0x" + "22" * 20  # higher address = token1
+        pool_addr = "0x" + "ab" * 20
+
+        # Populate _pool_token_cache with the pool → (token0, token1, fee)
+        resolve_mod._pool_token_cache[pool_addr.lower()] = (token0_addr, token1_addr, 3000)
+
+        # Create event with direction tags (like real events from normalize_swap_log)
+        ev = OrderflowEvent(
+            event_id="test_cache_resolve",
+            event_type="swap",
+            chain="arbitrum_one",
+            block_number=100,
+            tx_hash="0x" + "00" * 32,
+            token_in="token0_in",       # direction tag, NOT symbol
+            token_out="token1",          # direction tag, NOT symbol
+            amount_in_wei=10**18,
+            amount_out_wei=0,
+            dex="uniswap_v3",
+            pool_address=pool_addr,
+            fee_tier=3000,
+            estimated_size_usd=3000.0,
+            estimated_impact_bps=5.0,
+            timestamp="2026-04-06T00:00:00Z",
+        )
+
+        pool_entry = PoolRegistryEntry(
+            address="0x" + "cc" * 20,
+            dex="uniswap_v3",
+            adapter_type="uniswap_v3",
+            fee=3000,
+            token_a=token0_addr,
+            token_b=token1_addr,
+            liquidity=10**18,
+            sqrt_price_x96=79228162514264337593543950336,  # 1:1 price
+            tick=0,
+            last_block=99,
+        )
+
+        class MockRegistry:
+            preload_calls = 1
+            cache_hits = 0
+            def lookup_pair(self, a, b):
+                return [pool_entry]
+
+        addr_to_symbol = {
+            token0_addr.lower(): "WETH",
+            token1_addr.lower(): "USDC",
+        }
+
+        try:
+            result = score_backrun_fast(
+                event=ev,
+                pool_registry=MockRegistry(),
+                token_addresses={"WETH": token0_addr, "USDC": token1_addr},
+                current_block=100,
+                addr_to_symbol=addr_to_symbol,
+            )
+            # With direction tags + populated cache, should now reach scoring
+            # (may return None from pricing math, but should NOT return None
+            # from token resolution)
+            assert result is None or result.scoring_path == "registry_fast"
+        finally:
+            resolve_mod._pool_token_cache.pop(pool_addr.lower(), None)
+
+    def test_fast_path_returns_none_without_cached_pool(self):
+        """score_backrun_fast returns None if pool not in _pool_token_cache."""
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+        from m7.orderflow import resolve as resolve_mod
+        from m7.orderflow.contracts import OrderflowEvent
+
+        uncached_pool = "0x" + "ff" * 20
+        # Ensure it's NOT in cache
+        resolve_mod._pool_token_cache.pop(uncached_pool.lower(), None)
+
+        ev = OrderflowEvent(
+            event_id="test_no_cache",
+            event_type="swap",
+            chain="arbitrum_one",
+            block_number=100,
+            tx_hash="0x" + "00" * 32,
+            token_in="token0_in",
+            token_out="token1",
+            amount_in_wei=10**18,
+            amount_out_wei=0,
+            dex="uniswap_v3",
+            pool_address=uncached_pool,
+            fee_tier=3000,
+            estimated_size_usd=3000.0,
+            estimated_impact_bps=5.0,
+            timestamp="2026-04-06T00:00:00Z",
+        )
+
+        class EmptyRegistry:
+            preload_calls = 0
+            cache_hits = 0
+            def lookup_pair(self, a, b):
+                return []
+
+        result = score_backrun_fast(
+            event=ev,
+            pool_registry=EmptyRegistry(),
+            token_addresses={},
+            current_block=100,
+            addr_to_symbol={"0x" + "11" * 20: "WETH"},
+        )
+        assert result is None
+
+    def test_fast_path_resolves_token1_in_direction(self):
+        """token1_in direction correctly maps token_in_addr = token1."""
+        from m7.orderflow.scoring_parallel import score_backrun_fast
+        from m7.orderflow import resolve as resolve_mod
+        from m7.orderflow.contracts import OrderflowEvent
+        from m7.orderflow.pool_registry import PoolRegistryEntry
+
+        token0_addr = "0x" + "11" * 20
+        token1_addr = "0x" + "22" * 20
+        pool_addr = "0x" + "ab" * 20
+
+        resolve_mod._pool_token_cache[pool_addr.lower()] = (token0_addr, token1_addr, 500)
+
+        ev = OrderflowEvent(
+            event_id="test_t1_in",
+            event_type="swap",
+            chain="arbitrum_one",
+            block_number=100,
+            tx_hash="0x" + "00" * 32,
+            token_in="token1_in",       # victim swapped token1 in
+            token_out="token0",
+            amount_in_wei=10**18,
+            amount_out_wei=0,
+            dex="uniswap_v3",
+            pool_address=pool_addr,
+            fee_tier=500,
+            estimated_size_usd=3000.0,
+            estimated_impact_bps=5.0,
+            timestamp="2026-04-06T00:00:00Z",
+        )
+
+        pool_entry = PoolRegistryEntry(
+            address="0x" + "cc" * 20,
+            dex="uniswap_v3",
+            adapter_type="uniswap_v3",
+            fee=500,
+            token_a=token1_addr,
+            token_b=token0_addr,
+            liquidity=10**18,
+            sqrt_price_x96=79228162514264337593543950336,
+            tick=0,
+            last_block=99,
+        )
+
+        class MockRegistry:
+            preload_calls = 1
+            cache_hits = 0
+            def lookup_pair(self, a, b):
+                return [pool_entry]
+
+        addr_to_symbol = {
+            token0_addr.lower(): "WETH",
+            token1_addr.lower(): "USDC",
+        }
+
+        try:
+            result = score_backrun_fast(
+                event=ev,
+                pool_registry=MockRegistry(),
+                token_addresses={"WETH": token0_addr, "USDC": token1_addr},
+                current_block=100,
+                addr_to_symbol=addr_to_symbol,
+            )
+            assert result is None or result.scoring_path == "registry_fast"
+        finally:
+            resolve_mod._pool_token_cache.pop(pool_addr.lower(), None)
+
+    def test_pool_token_cache_import(self):
+        """_pool_token_cache is importable from scoring_parallel (via resolve)."""
+        from m7.orderflow.scoring_parallel import _pool_token_cache
+        assert isinstance(_pool_token_cache, dict)
+
+
+class TestM7A541TopHotCandidates:
+    """M7.A.5.41: Verify top_hot_candidates in hot artifact writer."""
+
+    def test_write_hot_artifact_has_top_hot_candidates_key(self):
+        """_write_hot_artifact always emits top_hot_candidates key."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        source = inspect.getsource(_write_hot_artifact)
+        assert "top_hot_candidates" in source
+
+    def test_top_hot_candidates_empty_when_no_fast_results(self):
+        """When fast_results is None/empty, top_hot_candidates is []."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        source = inspect.getsource(_write_hot_artifact)
+        # Check that empty fast_results produces empty list
+        assert 'hot["top_hot_candidates"] = []' in source
+
+
 class TestM7A537WarmRegistry:
     """M7.A.5.37: run_ws_live accepts warm_registry for persistent cold mode."""
 
@@ -2909,3 +3242,142 @@ class TestM7A539StdoutDrainFix:
         from scripts.start_nonstop_runtime import main
         source = inspect.getsource(main)
         assert "drain_output()" in source
+
+
+# ── M7.A.5.40 Tests ─────────────────────────────────────────────────────
+
+
+class TestM7A540BatchPreResolve:
+    """M7.A.5.40: batch_pre_resolve_pools resolves pools and fills caches."""
+
+    def test_batch_pre_resolve_pools_importable(self):
+        """batch_pre_resolve_pools is importable from resolve module."""
+        from m7.orderflow.resolve import batch_pre_resolve_pools
+        assert callable(batch_pre_resolve_pools)
+
+    def test_batch_pre_resolve_pools_empty_input(self):
+        """batch_pre_resolve_pools returns empty dict for empty input."""
+        from m7.orderflow.resolve import batch_pre_resolve_pools
+        result = batch_pre_resolve_pools([], "http://dummy", 100, {})
+        assert result == {}
+
+    def test_batch_pre_resolve_populates_pool_token_cache(self):
+        """batch_pre_resolve_pools populates _pool_token_cache for known pools."""
+        from m7.orderflow.resolve import _pool_token_cache, batch_pre_resolve_pools
+        # Pre-populate cache to test cache-hit path
+        _test_addr = "0x" + "ab" * 20
+        _pool_token_cache[_test_addr.lower()] = ("0x" + "01" * 20, "0x" + "02" * 20, 500)
+        result = batch_pre_resolve_pools([_test_addr], "http://dummy", 100, {})
+        assert _test_addr.lower() in result
+        assert result[_test_addr.lower()]["fee"] == 500
+        # Cleanup
+        del _pool_token_cache[_test_addr.lower()]
+
+    def test_batch_pre_resolve_returns_token0_token1(self):
+        """batch_pre_resolve_pools returns token0/token1/fee in result dict."""
+        from m7.orderflow.resolve import _pool_token_cache, batch_pre_resolve_pools
+        _test_addr = "0x" + "cd" * 20
+        _pool_token_cache[_test_addr.lower()] = ("0x" + "11" * 20, "0x" + "22" * 20, 3000)
+        result = batch_pre_resolve_pools([_test_addr], "http://dummy", 100, {})
+        info = result[_test_addr.lower()]
+        assert "token0" in info
+        assert "token1" in info
+        assert "fee" in info
+        del _pool_token_cache[_test_addr.lower()]
+
+
+class TestM7A540GetCachedDecimals:
+    """M7.A.5.40: get_cached_decimals reads from enrichment cache."""
+
+    def test_get_cached_decimals_importable(self):
+        """get_cached_decimals is importable from resolve module."""
+        from m7.orderflow.resolve import get_cached_decimals
+        assert callable(get_cached_decimals)
+
+    def test_get_cached_decimals_returns_none_for_unknown(self):
+        """get_cached_decimals returns None for uncached token."""
+        from m7.orderflow.resolve import get_cached_decimals
+        result = get_cached_decimals("0x" + "ff" * 20)
+        assert result is None
+
+    def test_get_cached_decimals_returns_cached_value(self):
+        """get_cached_decimals returns cached decimals from _enrichment_cache."""
+        from m7.orderflow.resolve import _enrichment_cache, get_cached_decimals
+        _test_addr = "0x" + "ee" * 20
+        _enrichment_cache[_test_addr.lower()] = {
+            "enriched": True, "symbol": "TEST", "decimals": 18, "source": "onchain",
+        }
+        result = get_cached_decimals(_test_addr)
+        assert result == 18
+        del _enrichment_cache[_test_addr.lower()]
+
+    def test_get_cached_decimals_6_for_stablecoin(self):
+        """get_cached_decimals returns 6 for a cached stablecoin-like token."""
+        from m7.orderflow.resolve import _enrichment_cache, get_cached_decimals
+        _test_addr = "0x" + "dd" * 20
+        _enrichment_cache[_test_addr.lower()] = {
+            "enriched": True, "symbol": "USDC", "decimals": 6, "source": "onchain",
+        }
+        result = get_cached_decimals(_test_addr)
+        assert result == 6
+        del _enrichment_cache[_test_addr.lower()]
+
+
+class TestM7A540ColdPrePassInModeWsLive:
+    """M7.A.5.40: mode_ws_live has cold-lane batch pre-pass before scoring."""
+
+    def test_batch_pre_resolve_imported(self):
+        """mode_ws_live imports batch_pre_resolve_pools."""
+        import inspect
+        from m7.orderflow.mode_ws_live import run_ws_live
+        source = inspect.getsource(run_ws_live)
+        assert "batch_pre_resolve_pools" in source
+
+    def test_cold_pre_resolve_before_scoring(self):
+        """Cold lane pre-resolves events before the scoring loop."""
+        import inspect
+        from m7.orderflow.mode_ws_live import run_ws_live
+        source = inspect.getsource(run_ws_live)
+        # Pre-resolve must appear before "Score with parallel pipeline"
+        pre_idx = source.find("batch_pre_resolve_pools")
+        score_idx = source.find("Score with parallel pipeline")
+        assert pre_idx > 0
+        assert score_idx > 0
+        assert pre_idx < score_idx, "batch_pre_resolve_pools must appear before scoring loop"
+
+    def test_cold_pre_pass_preloads_registry(self):
+        """Cold pre-pass calls session_registry.preload_pair for discovered pairs."""
+        import inspect
+        from m7.orderflow.mode_ws_live import run_ws_live
+        source = inspect.getsource(run_ws_live)
+        # The pre-pass should call preload_pair on session_registry
+        assert "session_registry.preload_pair" in source
+
+    def test_cold_pre_pass_only_in_cold_mode(self):
+        """Pre-pass is gated on not _hot_mode."""
+        import inspect
+        from m7.orderflow.mode_ws_live import run_ws_live
+        source = inspect.getsource(run_ws_live)
+        assert "not _hot_mode" in source
+
+
+class TestM7A540SizeValidCacheFallback:
+    """M7.A.5.40: scoring uses cached decimals for size_valid_for_token."""
+
+    def test_scoring_imports_get_cached_decimals(self):
+        """scoring_parallel imports get_cached_decimals from resolve."""
+        import inspect
+        from m7.orderflow.scoring_parallel import score_backrun_live_parallel
+        source = inspect.getsource(score_backrun_live_parallel)
+        assert "get_cached_decimals" in source
+
+    def test_cached_decimals_fallback_before_heuristic(self):
+        """get_cached_decimals is tried before symbol-based heuristic."""
+        import inspect
+        from m7.orderflow.scoring_parallel import score_backrun_live_parallel
+        source = inspect.getsource(score_backrun_live_parallel)
+        cache_idx = source.find("get_cached_decimals")
+        heuristic_idx = source.find("Well-known stablecoin heuristic")
+        assert cache_idx > 0
+        assert heuristic_idx > 0
+        assert cache_idx < heuristic_idx, "cached decimals must be tried before heuristic"

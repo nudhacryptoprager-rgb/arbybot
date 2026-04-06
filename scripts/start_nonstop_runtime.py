@@ -67,11 +67,14 @@ class ManagedProcess:
     def start(self) -> None:
         if self.stopped:
             return
+        # M7.A.5.40: Redirect stdout/stderr to DEVNULL instead of PIPE.
+        # On Windows, PIPE readline() is blocking — drain_output() would
+        # stall the supervisor's health check loop, preventing deadline
+        # termination. Child processes write to rolling artifacts, not stdout.
         self.proc = subprocess.Popen(
             self.cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         self.started_at = time.monotonic()
         print(f"  [{self.name}] Started (PID {self.proc.pid}): {' '.join(self.cmd[:4])}...")
@@ -108,20 +111,12 @@ class ManagedProcess:
             print(f"  [{self.name}] Terminated")
 
     def drain_output(self) -> list[str]:
-        """Non-blocking read of available stdout lines."""
-        lines = []
-        if self.proc and self.proc.stdout:
-            import select
-            # On Windows, use a simpler approach
-            try:
-                while self.proc.stdout.readable():
-                    line = self.proc.stdout.readline()
-                    if not line:
-                        break
-                    lines.append(line.rstrip())
-            except Exception:
-                pass
-        return lines
+        """No-op: stdout redirected to DEVNULL (M7.A.5.40).
+
+        Previous PIPE-based drain was blocking on Windows, causing the
+        supervisor to miss its deadline and never terminate children.
+        """
+        return []
 
 
 def main():
