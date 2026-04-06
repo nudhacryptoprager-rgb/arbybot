@@ -41,6 +41,7 @@ def run_ws_live(
     warm_registry=None,
     bridge_pool_addresses: Optional[Set[str]] = None,
     bridge_hit_deficit: bool = False,
+    bridge_hit_deficit_severe: bool = False,
 ) -> dict:
     """Execute the ws-live WebSocket replay mode and return the artifact dict.
 
@@ -62,6 +63,9 @@ def run_ws_live(
     bridge_hit_deficit : if True, the caller (loop) has detected that events
         exist but bridge_pool_hit_total == 0. Broad fallback interval is
         set to 2 (50% broad) to maximize coverage.
+    bridge_hit_deficit_severe : if True, deficit is sustained (3+ windows
+        with events but zero hits). Interval drops to 1 (100% broad).
+        M7.A.5.47g: Escalated broad fallback for persistent conversion failure.
         M7.A.5.47: Focused event intake for bridge pools.
     """
     logger.info(
@@ -285,7 +289,11 @@ def run_ws_live(
                 and bridge_pool_addresses
                 and _focused_logs == 0
             )
-            _BROAD_FALLBACK_INTERVAL = 2 if (bridge_hit_deficit or _intra_window_deficit) else 3
+            _BROAD_FALLBACK_INTERVAL = (
+                1 if bridge_hit_deficit_severe
+                else 2 if (bridge_hit_deficit or _intra_window_deficit)
+                else 3
+            )
             _is_broad_block = (blocks_processed % _BROAD_FALLBACK_INTERVAL) == 0
             try:
                 _log_filter: dict = {

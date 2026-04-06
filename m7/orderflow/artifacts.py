@@ -931,6 +931,10 @@ def build_replay_summary(
     # time, not just at the original observed size. Uses profit_guard check
     # (ending balance > starting balance after costs).
     _MICRO_SIZE_MULTIPLIERS = [0.75, 1.0, 1.25, 1.5]
+    # M7.A.5.47g: Extended size range for gas-near families — larger sizes
+    # can push gross PnL above the gas floor for candidates that failed on
+    # GAS_EXCEEDS_GROSS with a small negative gap.
+    _MICRO_SIZE_MULTIPLIERS_GAS_NEAR = [1.0, 1.5, 2.0, 3.0]
     _micro_refinement_results = []
     _micro_candidates = (_exec_candidates[:3] + _near_exec_candidates[:2])
     for r in _micro_candidates:
@@ -941,12 +945,16 @@ def build_replay_summary(
         if _base_size <= 0 or _gross == 0:
             continue
         _gross_ratio = _gross / _base_size  # gross PnL per unit input
+        # Choose multiplier range: extended for gas-near candidates
+        _rr = getattr(r, 'reject_reason', '') or ''
+        _is_gas_near = (_rr == "GAS_EXCEEDS_GROSS")
+        _multipliers = _MICRO_SIZE_MULTIPLIERS_GAS_NEAR if _is_gas_near else _MICRO_SIZE_MULTIPLIERS
         _sizes_tried = 0
         _sizes_passed = 0
         _best_micro_net_bps = None
         _best_submit_size = None
         _gas_floor_gap_bps = None
-        for mult in _MICRO_SIZE_MULTIPLIERS:
+        for mult in _multipliers:
             _test_size = int(_base_size * mult)
             if _test_size <= 0:
                 continue
@@ -980,6 +988,7 @@ def build_replay_summary(
             "gas_floor_gap_bps": _gas_floor_gap_bps,
             "verified_net_bps_after_refinement": _best_micro_net_bps if _sizes_passed > 0 else None,
             "reject_reason": r.reject_reason,
+            "is_gas_near": _is_gas_near,
         })
 
     # M7.A.5.42: Signal classification — 4 tiers of signal maturity.
@@ -1064,6 +1073,9 @@ def build_replay_summary(
         return p
 
     _pair_funnel: dict = {}
+    # M7.A.5.47g: Also accumulate gas/staleness detail per family
+    _pair_gas_detail: dict = {}   # pf → {gross_bps_list, total_gas_bps_list, amount_in_wei_list}
+    _pair_stale_detail: dict = {} # pf → {block_lags, clean_bps_list}
     for r in results:
         pf = _pair_family(r)
         if not pf:
@@ -1076,6 +1088,8 @@ def build_replay_summary(
                 "cold_executable_count": 0,
                 "gas_exceeds_gross_count": 0,
             }
+            _pair_gas_detail[pf] = {"gross_bps": [], "total_gas_bps": [], "amount_in_wei": []}
+            _pair_stale_detail[pf] = {"block_lags": [], "clean_bps": []}
         _pair_funnel[pf]["seen_count"] += 1
         if (r.best_backrun_net_bps or 0) > 0:
             _pair_funnel[pf]["positive_count"] += 1
@@ -1085,6 +1099,22 @@ def build_replay_summary(
             _pair_funnel[pf]["cold_executable_count"] += 1
         if r.reject_reason == REJECT_GAS_EXCEEDS_GROSS:
             _pair_funnel[pf]["gas_exceeds_gross_count"] += 1
+        # M7.A.5.47g: Collect per-result gas/stale metrics
+        _aiw = getattr(r, "amount_in_wei", 0) or 0
+        _gpw = getattr(r, "gross_pnl_wei", 0) or 0
+        _tgb = getattr(r, "total_gas_bps", None)
+        if _aiw > 0 and _gpw != 0:
+            _gross_bps = (_gpw / _aiw) * 10000
+            _pair_gas_detail[pf]["gross_bps"].append(_gross_bps)
+        if _tgb is not None:
+            _pair_gas_detail[pf]["total_gas_bps"].append(_tgb)
+        if _aiw > 0:
+            _pair_gas_detail[pf]["amount_in_wei"].append(_aiw)
+        _bl = _lag(r)
+        if _bl < 999:
+            _pair_stale_detail[pf]["block_lags"].append(_bl)
+        if _is_stale(r) and (r.best_backrun_net_bps or 0) > 0:
+            _pair_stale_detail[pf]["clean_bps"].append(r.best_backrun_net_bps)
 
     # Top 10 by seen_count
     funnel_by_pair_top = sorted(
@@ -1109,6 +1139,57 @@ def build_replay_summary(
         "cold_executable_top1_share": _top1_share("cold_executable_count"),
         "unique_pair_families": len(_pair_funnel),
     }
+
+    # M7.A.5.47g: cost_by_pair_family_top — gas economics per pair family.
+    # Shows which families are closest to surviving gas (small gas_gap_bps).
+    def _safe_mean(lst):
+        return round(sum(lst) / len(lst), 4) if lst else None
+
+    _cost_rows = []
+    for pf, counts in _pair_funnel.items():
+        _gd = _pair_gas_detail.get(pf, {})
+        _gas_list = _gd.get("total_gas_bps", [])
+        _gross_list = _gd.get("gross_bps", [])
+        _mean_gross = _safe_mean(_gross_list)
+        _mean_gas = _safe_mean(_gas_list)
+        _gas_gap = round(_mean_gross - _mean_gas, 4) if _mean_gross is not None and _mean_gas is not None else None
+        _sizes = _gd.get("amount_in_wei", [])
+        _cost_rows.append({
+            "pair_family": pf,
+            "mean_gross_bps": _mean_gross,
+            "mean_total_gas_bps": _mean_gas,
+            "mean_gas_gap_bps": _gas_gap,
+            "best_submit_size": max(_sizes) if _sizes else None,
+            "gas_exceeds_gross_count": counts["gas_exceeds_gross_count"],
+        })
+    # Sort: families closest to surviving gas first (smallest absolute gap)
+    cost_by_pair_family_top = sorted(
+        _cost_rows,
+        key=lambda x: abs(x["mean_gas_gap_bps"]) if x["mean_gas_gap_bps"] is not None else 999999,
+    )[:10]
+
+    # M7.A.5.47g: staleness_by_pair_family_top — temporal quality per family.
+    # Separates recoverable stale winners from hopeless stale noise.
+    _stale_rows = []
+    for pf, counts in _pair_funnel.items():
+        _sd = _pair_stale_detail.get(pf, {})
+        _lags = _sd.get("block_lags", [])
+        _clean = _sd.get("clean_bps", [])
+        _sorted_lags = sorted(_lags) if _lags else []
+        _median_lag = _sorted_lags[len(_sorted_lags) // 2] if _sorted_lags else None
+        _stale_rows.append({
+            "pair_family": pf,
+            "positive_count": counts["positive_count"],
+            "stale_positive_count": counts["stale_positive_count"],
+            "min_block_lag": min(_lags) if _lags else None,
+            "median_block_lag": _median_lag,
+            "best_clean_bps": round(max(_clean), 4) if _clean else None,
+        })
+    # Sort: families with stale positives first, then by best_clean_bps descending
+    staleness_by_pair_family_top = sorted(
+        _stale_rows,
+        key=lambda x: (-(x["stale_positive_count"] or 0), -(x["best_clean_bps"] or -99999)),
+    )[:10]
 
     return {
         "mode": mode,
@@ -1269,6 +1350,9 @@ def build_replay_summary(
         # M7.A.5.47f: Per-pair funnel + concentration KPI
         "funnel_by_pair_top": funnel_by_pair_top,
         "pair_family_concentration": pair_family_concentration,
+        # M7.A.5.47g: Gas economics + staleness decomposition per family
+        "cost_by_pair_family_top": cost_by_pair_family_top,
+        "staleness_by_pair_family_top": staleness_by_pair_family_top,
         # M7.A.5.46: compact=True skips heavy results/debug serialization.
         # Callers that need raw results use _raw_results (BackrunResult objects).
         "results": [] if compact else [asdict(r) for r in results],

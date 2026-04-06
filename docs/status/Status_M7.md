@@ -226,6 +226,16 @@ Counter disentanglement (watchlist_match_count, admitted_to_scoring, fast_path_s
 
 ---
 
+## M7.A.5.47g: 3-Bucket Bridge + Stale-Pin TTL + Gas-Near Sizing + Adaptive Intake
+
+**Hypothesis**: M7.A.5.47g = split the two filter blockers (gas economics and staleness) and force first hot bridge hit by prioritising stale-recovery and gas-near pools.
+
+**Changes**: (1) `m7/orderflow/artifacts.py`: `cost_by_pair_family_top` (top 10 families by smallest |gas_gap_bps|), `staleness_by_pair_family_top` (top 10 by stale_positive_count), gas-near extended micro-refinement (`[1.0, 1.5, 2.0, 3.0]` for GAS_EXCEEDS_GROSS candidates vs standard `[0.75, 1.0, 1.25, 1.5]`), `is_gas_near` field in micro_refinement results. (2) `scripts/m7a_orderflow_loop.py`: 3-bucket bridge ranking (C1=stale_recovery from cold_stale_positive + TTL pins, C2=gas_near_survivor from near_executable GAS_EXCEEDS_GROSS, C3=diversity-aware activity fill), stale-pin TTL lifecycle (init=4, decrement each hot window, refresh on cold stale_positive), severe deficit escalation (wwe>=3 → bridge_hit_deficit_severe). (3) `m7/orderflow/mode_ws_live.py`: 3-tier broad fallback interval (severe=1, deficit=2, normal=3). (4) 25 new tests in `test_47g_bridge_and_sizing.py`. (5) Non-v3 venue check: V2+Algebra already active; Ve33/IziSwap/SyncSwap/Ambient available but not wired to M7 discovery.
+
+CI: 3385 passed, 6 skipped. ALL GATES PASSED.
+
+---
+
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
 Per `docs/step_M7.md`: M7.B is the execution phase, closed by default. Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.
@@ -243,11 +253,12 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 ## Known Blockers
 
 1. **cold_executable_count=0** across ALL pair families — gas economics kills major pairs, staleness kills RAIN/WETH.
-2. **bridge_pool_hit_total=0** — hot lane never matches bridge set (events_but_no_bridge_hit dominant miss class).
+2. **bridge_pool_hit_total=0** — hot lane never matches bridge set (events_but_no_bridge_hit dominant miss class). 47g adds stale-pin TTL + gas-near priority to force first hit.
 3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
 ## Next steps
 
-1. Investigate gas estimation accuracy — are gas costs over-estimated for Arbitrum One? Compare `gas_exceeds_gross` threshold vs actual L2 gas.
-2. Verify block_lag accuracy — is staleness real or infrastructure-induced latency?
-3. If both filters confirmed correct, widen chain/pair surface (onboard lower-gas chains).
+1. Run 10-min nonstop with 47g changes — verify stale-pin pools appear in bridge, monitor bridge_pool_hit_total.
+2. Check cost_by_pair_family_top / staleness_by_pair_family_top in cold artifact for gas-near family identification.
+3. If first bridge hit achieved, measure conversion rate and latency of stale_recovery vs gas_near buckets.
+4. If deficit remains, consider onboarding lower-gas chain (Base) or widening adapter surface (Ve33/SyncSwap).

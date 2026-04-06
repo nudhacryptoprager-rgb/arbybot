@@ -1107,6 +1107,12 @@ def run_loop(cli_args) -> None:
     # M7.A.5.47d: Track cumulative resolved-from-hot-seen count
     _resolved_from_hot_seen_total: int = 0
 
+    # M7.A.5.47g: TTL-pinned stale-positive pools — kept in hot bridge filter
+    # for consecutive windows to maximize chance of catching same-block event.
+    # {pool_address_lower: {"ttl": int, "pair": str}}
+    _stale_pin_ttl: dict = {}
+    _STALE_PIN_TTL_INIT = 4  # pin for 4 hot windows after detection
+
     # M7.A.5.37: Persistent cold registry — survives across cold iterations
     # Passed via warm_registry to avoid hot-mode trigger. Caches pool data
     # so registry_preload_ms drops to near-zero for already-queried pairs.
@@ -1397,6 +1403,45 @@ def run_loop(cli_args) -> None:
                             _remaining, key=_activity_score, reverse=True,
                         )
 
+                        # M7.A.5.47g: 3-bucket fill policy replaces single activity fill.
+                        # Bucket C1 (stale_recovery): pools from stale positive candidates
+                        #   + pools from TTL-pinned stale recovery set. These are the exact
+                        #   pools where the system saw profit but was too late — pinning them
+                        #   maximises the chance of catching the NEXT event at same-block lag.
+                        # Bucket C2 (gas_near_survivor): pools from near_executable that
+                        #   failed on GAS_EXCEEDS_GROSS — they're closest to passing economics.
+                        # Bucket C3 (activity_fill): remaining PTT pools by activity score.
+                        _bucket_c1_stale: set = set()
+                        for _sp in _bridge.get("cold_stale_positive", []):
+                            _sp_pa = (_sp.get("pool_address") or "").lower()
+                            if _sp_pa and _sp_pa in _ptt and _sp_pa not in _bucket_a and _sp_pa not in _bucket_b:
+                                _bucket_c1_stale.add(_sp_pa)
+                                # Refresh TTL for freshly-seen stale positive pools
+                                _stale_pin_ttl[_sp_pa] = {
+                                    "ttl": _STALE_PIN_TTL_INIT,
+                                    "pair": _sp.get("actual_pair", ""),
+                                }
+                        # Also include TTL-pinned stale pools from prior iterations
+                        for _pin_pa, _pin_info in _stale_pin_ttl.items():
+                            if _pin_pa in _ptt and _pin_pa not in _bucket_a and _pin_pa not in _bucket_b:
+                                _bucket_c1_stale.add(_pin_pa)
+
+                        _bucket_c2_gas_near: set = set()
+                        for _ne in _bridge.get("near_executable", []):
+                            _ne_pa = (_ne.get("pool_address") or "").lower()
+                            _ne_rr = _ne.get("reject_reason", "")
+                            if (_ne_pa and _ne_rr == "GAS_EXCEEDS_GROSS" and
+                                    _ne_pa in _ptt and _ne_pa not in _bucket_a and
+                                    _ne_pa not in _bucket_b and _ne_pa not in _bucket_c1_stale):
+                                _bucket_c2_gas_near.add(_ne_pa)
+
+                        # Bucket C3: activity fill from remaining (exclude C1/C2)
+                        _committed = _bucket_a | _bucket_b | _bucket_c1_stale | _bucket_c2_gas_near
+                        _remaining_for_fill = [
+                            pa for pa in _remaining_ranked
+                            if pa not in _committed
+                        ]
+
                         # M7.A.5.47f: Diversity-aware fill — max _FAMILY_CAP pools
                         # per token-pair family to prevent one family from monopolizing
                         # the focused filter and cementing concentration.
@@ -1408,15 +1453,16 @@ def run_loop(cli_args) -> None:
                                 return tuple(sorted((_info[0].lower(), _info[1].lower())))
                             return (pa,)  # unknown family → unique bucket
 
-                        # Count families already committed (buckets A+B)
+                        # Count families already committed (A + B + C1 + C2)
                         _family_counts: dict = {}
-                        for _committed_pa in (_bucket_a | _bucket_b):
+                        for _committed_pa in _committed:
                             _fam = _pool_family(_committed_pa)
                             _family_counts[_fam] = _family_counts.get(_fam, 0) + 1
 
+                        _slots_for_fill = max(0, _pool_cap - len(_committed))
                         _diverse_fill: list = []
-                        for _rpa in _remaining_ranked:
-                            if len(_diverse_fill) >= max(0, _pool_cap - len(_bucket_a | _bucket_b)):
+                        for _rpa in _remaining_for_fill:
+                            if len(_diverse_fill) >= _slots_for_fill:
                                 break
                             _fam = _pool_family(_rpa)
                             if _family_counts.get(_fam, 0) >= _FAMILY_CAP:
@@ -1424,9 +1470,8 @@ def run_loop(cli_args) -> None:
                             _diverse_fill.append(_rpa)
                             _family_counts[_fam] = _family_counts.get(_fam, 0) + 1
 
-                        # Assemble: A (always) + B (always) + diversity-aware fill
-                        _bridge_pool_addrs = _bucket_a | _bucket_b
-                        _bridge_pool_addrs |= set(_diverse_fill)
+                        # Assemble: A + B + C1 + C2 + C3 (diverse fill)
+                        _bridge_pool_addrs = _committed | set(_diverse_fill)
 
                         _active_in_filter = sum(
                             1 for pa in _bridge_pool_addrs
@@ -1434,10 +1479,13 @@ def run_loop(cli_args) -> None:
                         )
                         logger.info(
                             "Hot focused intake: %d bridge pools "
-                            "(A=%d cold_exec, B=%d hot-seen, fill=%d/%d, "
+                            "(A=%d cold_exec, B=%d hot-seen, "
+                            "C1=%d stale_recovery, C2=%d gas_near, "
+                            "C3=%d activity_fill/%d remaining, "
                             "active=%d, hot-injected=%d, families=%d, cap=%d)",
                             len(_bridge_pool_addrs), len(_bucket_a),
-                            len(_bucket_b), len(_diverse_fill),
+                            len(_bucket_b), len(_bucket_c1_stale),
+                            len(_bucket_c2_gas_near), len(_diverse_fill),
                             len(_remaining), _active_in_filter, _hot_injected,
                             len(_family_counts), _FAMILY_CAP,
                         )
@@ -1446,11 +1494,15 @@ def run_loop(cli_args) -> None:
 
             # M7.A.5.47e: Pass bridge-hit deficit flag so ws_live broadens
             # scan when rollup shows events exist but zero bridge hits.
+            # M7.A.5.47g: Escalate severity — sustained deficit (3+ windows
+            # with events but zero hits) goes fully broad (interval=1).
             _bhd = lane == "hot" and _rollup_wwe > 0 and _rollup_wwbh == 0
+            _bhd_severe = _bhd and _rollup_wwe >= 3
             artifact = run_ws_live(ws_args, external_registry=_ext_registry,
                                    warm_registry=_cold_registry if lane == "cold" else None,
                                    bridge_pool_addresses=_bridge_pool_addrs,
-                                   bridge_hit_deficit=_bhd)
+                                   bridge_hit_deficit=_bhd,
+                                   bridge_hit_deficit_severe=_bhd_severe)
             window_ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             events_count = artifact.get("events_count", 0)
@@ -1646,6 +1698,18 @@ def run_loop(cli_args) -> None:
                             _hot_active_pools[_ph_addr] = {
                                 "event_count": _ph_ct, "last_iter": iteration,
                             }
+
+                # M7.A.5.47g: Decrement stale-pin TTLs after each hot window.
+                # Expired entries are removed — they'll be re-pinned if stale
+                # positive reappears in the next cold cycle.
+                _expired_pins = [
+                    pa for pa, info in _stale_pin_ttl.items()
+                    if info.get("ttl", 0) <= 1
+                ]
+                for _ep in _expired_pins:
+                    del _stale_pin_ttl[_ep]
+                for _sp_pa in _stale_pin_ttl:
+                    _stale_pin_ttl[_sp_pa]["ttl"] -= 1
 
                 # M7.A.5.47c: Build bridge_miss_sample_top — pools seen in hot
                 # events but NOT in the bridge pool set. Shows which pools to add.
