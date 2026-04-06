@@ -90,25 +90,122 @@ def _read_promoted_pairs() -> dict:
 
 
 def _write_cold_hot_bridge(artifact: dict) -> None:
-    """Write top executable candidates as a compact bridge queue for hot lane.
+    """Write cold→hot bridge with per-candidate preload detail and pool→token transport.
 
-    M7.A.5.42: Includes per-candidate detail so hot lane can match
-    on pair + pool and use cold-confirmed economics as a baseline.
+    M7.A.5.43: Bridge now carries:
+      - cold_executable / cold_stale_positive / near_executable with pool_address
+      - pool_token_transport: full _pool_token_cache dump for hot lane to populate
+        its own process-local cache (keys are pool addresses, values are
+        [token0_addr, token1_addr, fee] tuples).
     """
     try:
         candidates = artifact.get("top_executable_candidates", [])
         stale_pos = artifact.get("top_stale_positive_candidates", [])
+        near_exec = artifact.get("near_executable_candidates", [])
+
+        # M7.A.5.43: Transport the full _pool_token_cache for hot lane.
+        # This is the canonical solution to the cross-process cache gap:
+        # cold lane populates _pool_token_cache via batch_pre_resolve_pools(),
+        # hot lane process starts with an empty cache and cannot score events.
+        _ptt = {}
+        try:
+            from m7.orderflow.resolve import _pool_token_cache
+            for pa, (t0, t1, fee) in _pool_token_cache.items():
+                _ptt[pa] = [t0, t1, fee]
+        except Exception:
+            pass
+
         os.makedirs(os.path.dirname(_COLD_HOT_BRIDGE_PATH), exist_ok=True)
         payload = {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "cold_executable": candidates,
             "cold_stale_positive": stale_pos,
+            "near_executable": near_exec,
             "signal_classification": artifact.get("signal_classification", {}),
+            "pool_token_transport": _ptt,
         }
         with open(_COLD_HOT_BRIDGE_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
     except Exception as exc:
         logger.debug("Failed to write cold-hot bridge: %s", str(exc)[:80])
+
+
+def _read_cold_hot_bridge() -> dict:
+    """Read cold→hot bridge file written by cold lane.
+
+    M7.A.5.43: Returns bridge dict with pool_token_transport for
+    hot lane to populate its process-local _pool_token_cache.
+    """
+    try:
+        if not os.path.exists(_COLD_HOT_BRIDGE_PATH):
+            return {}
+        with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        logger.debug("Failed to read cold-hot bridge: %s", str(exc)[:80])
+    return {}
+
+
+def _populate_pool_token_cache_from_bridge(bridge: dict) -> int:
+    """Populate hot lane's _pool_token_cache from bridge pool_token_transport.
+
+    M7.A.5.43: This is the critical fix for the cross-process cache gap.
+    Cold lane populates _pool_token_cache via batch_pre_resolve_pools().
+    Hot lane process starts with empty cache. Bridge transports the cache.
+
+    Returns number of entries populated.
+    """
+    ptt = bridge.get("pool_token_transport", {})
+    if not ptt:
+        return 0
+    try:
+        from m7.orderflow.resolve import _pool_token_cache
+        count = 0
+        for pa, triple in ptt.items():
+            if len(triple) == 3:
+                key = pa.lower()
+                if key not in _pool_token_cache:
+                    _pool_token_cache[key] = tuple(triple)
+                    count += 1
+        return count
+    except Exception as exc:
+        logger.debug("Failed to populate pool_token_cache from bridge: %s", str(exc)[:80])
+    return 0
+
+
+def _prewarm_registry_from_bridge(
+    registry, bridge: dict,
+    dex_configs: dict, rpc_url: str, block_num: int,
+) -> int:
+    """Prewarm hot registry from bridge entries using token addresses.
+
+    M7.A.5.43: Pool-address-first matching. Bridge entries carry
+    pool_address + token0_addr + token1_addr. We prewarm the registry
+    using actual token addresses, not symbol-pair strings.
+
+    Returns number of pairs prewarmed.
+    """
+    ptt = bridge.get("pool_token_transport", {})
+    if not ptt:
+        return 0
+    count = 0
+    _seen_pairs: set = set()
+    for pa, triple in ptt.items():
+        if len(triple) != 3:
+            continue
+        t0, t1, _fee = triple
+        if not t0 or not t1:
+            continue
+        pair_key = f"{min(t0.lower(), t1.lower())}/{max(t0.lower(), t1.lower())}"
+        if pair_key in _seen_pairs:
+            continue
+        _seen_pairs.add(pair_key)
+        try:
+            registry.preload_pair(t0, t1, dex_configs, rpc_url, block_num)
+            count += 1
+        except Exception:
+            pass
+    return count
 
 
 def parse_args():
@@ -321,12 +418,14 @@ def _run_profit_guard_on_results(results: list) -> list:
 
 def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = None,
                         fast_results: list = None, promoted_pairs: list = None,
-                        candidate_pairs: list = None) -> None:
+                        candidate_pairs: list = None,
+                        bridge_diagnostics: dict = None) -> None:
     """Write minimal hot-lane artifact: best candidate + profit guard status.
 
     fast_results: list of BackrunResult from score_backrun_fast() (M7.A.5.32)
     promoted_pairs: list of "SYM_A/SYM_B" execution-promoted from cold (M7.A.5.39)
     candidate_pairs: list of "SYM_A/SYM_B" candidate-promoted (wider, M7.A.5.39)
+    bridge_diagnostics: dict with bridge prewarm stats (M7.A.5.43)
     """
     results = artifact.get("results", [])
     best = None
@@ -388,11 +487,19 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         1 for r in _raw_results
         if getattr(r, "scoring_path", None) == "registry_fast"
     )
+    # M7.A.5.43: 3 hot-miss counters from bridge diagnostics
+    _bd = bridge_diagnostics or {}
     hot["hot_gap_debug"] = {
         "total_events": len(_raw_results),
         "fast_path_attempted_count": _fast_attempted,
         "not_in_hot_registry_count": _hot_skip_count,
         "watchlist_match_count": _fast_attempted,  # events that matched promoted watchlist
+        # M7.A.5.43: Bridge-driven diagnostics
+        "pool_address_match_count": _bd.get("pool_address_match_count", 0),
+        "canonical_pair_match_count": _bd.get("canonical_pair_match_count", 0),
+        "registry_has_pair_but_not_pool_count": _bd.get("registry_has_pair_but_not_pool_count", 0),
+        "bridge_cache_populated": _bd.get("bridge_cache_populated", 0),
+        "bridge_registry_prewarmed": _bd.get("bridge_registry_prewarmed", 0),
     }
 
     if fast_results:
@@ -561,7 +668,15 @@ def run_loop(cli_args) -> None:
                     _hot_registry = PoolRegistry()
                 _ext_registry = _hot_registry
 
-                # M7.A.5.39: Prewarm hot registry from seeds + cross-lane promoted pairs
+                # M7.A.5.43: Bridge-first hot prewarm.
+                # 1. Read cold→hot bridge (pool_token_transport + candidates)
+                # 2. Populate _pool_token_cache from bridge (cross-process cache fix)
+                # 3. Prewarm registry from bridge token addresses (pool-address-first)
+                # 4. Fall back to symbol-pair prewarm for seeds / accumulated pairs
+                _bridge = _read_cold_hot_bridge()
+                _bridge_cache_count = _populate_pool_token_cache_from_bridge(_bridge)
+                _bridge_prewarm_count = 0
+
                 _hot_pairs_to_prewarm: dict = {}
                 # 1. Seed defaults on first iteration
                 if iteration == 1:
@@ -581,32 +696,44 @@ def run_loop(cli_args) -> None:
                 if _cross_promoted.get("candidate") or _cross_promoted.get("execution"):
                     _promoted_pairs = _cross_promoted
 
-                if _hot_pairs_to_prewarm:
-                    try:
-                        from config import load_dexes, get_all_token_addresses
-                        from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
-                        _chain_id = _CHAIN_KEY_TO_ID.get(cli_args.chain.lower())
-                        _rpc, _, _ = resolve_rpc_http(
-                            chain_id=_chain_id, network=cli_args.chain,
-                            env=dict(os.environ),
-                        )
-                        if _rpc:
-                            from web3 import Web3 as _W3
-                            _block = _W3(_W3.HTTPProvider(_rpc)).eth.block_number
-                            _all_dexes = load_dexes()
-                            _dex_cfg = _all_dexes.get(cli_args.chain, {})
-                            _token_addr = get_all_token_addresses(cli_args.chain)
+                try:
+                    from config import load_dexes, get_all_token_addresses
+                    from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
+                    _chain_id = _CHAIN_KEY_TO_ID.get(cli_args.chain.lower())
+                    _rpc, _, _ = resolve_rpc_http(
+                        chain_id=_chain_id, network=cli_args.chain,
+                        env=dict(os.environ),
+                    )
+                    if _rpc:
+                        from web3 import Web3 as _W3
+                        _block = _W3(_W3.HTTPProvider(_rpc)).eth.block_number
+                        _all_dexes = load_dexes()
+                        _dex_cfg = _all_dexes.get(cli_args.chain, {})
+                        _token_addr = get_all_token_addresses(cli_args.chain)
+
+                        # M7.A.5.43: Bridge-first prewarm (pool-address → token-address)
+                        if _bridge.get("pool_token_transport"):
+                            _bridge_prewarm_count = _prewarm_registry_from_bridge(
+                                _hot_registry, _bridge, _dex_cfg, _rpc, _block,
+                            )
+
+                        # Legacy symbol-pair prewarm for seeds and accumulated pairs
+                        if _hot_pairs_to_prewarm:
                             _pw = _prewarm_registry_from_pairs(
                                 _hot_registry, _hot_pairs_to_prewarm,
                                 _token_addr, _dex_cfg, _rpc, _block,
                             )
-                            logger.info(
-                                "Hot prewarm: %d pairs from %d candidates (iter %d, cross=%d)",
-                                _pw, len(_hot_pairs_to_prewarm), iteration,
-                                len(_cross_promoted.get("candidate", [])),
-                            )
-                    except Exception as _pw_exc:
-                        logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
+                        else:
+                            _pw = 0
+                        logger.info(
+                            "Hot prewarm: bridge_cache=%d bridge_registry=%d "
+                            "symbol_pairs=%d/%d (iter %d, cross=%d)",
+                            _bridge_cache_count, _bridge_prewarm_count,
+                            _pw, len(_hot_pairs_to_prewarm), iteration,
+                            len(_cross_promoted.get("candidate", [])),
+                        )
+                except Exception as _pw_exc:
+                    logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
             elif lane == "cold":
                 # M7.A.5.38: Lazy-init persistent cold registry with wide stale
                 # threshold (5000 blocks ≈ 20 min). Cold lane is diagnostic, not
@@ -746,11 +873,43 @@ def run_loop(cli_args) -> None:
                     )
             else:
                 # Hot lane: minimal artifact with profit guard
+                # M7.A.5.43: Compute 3 hot-miss counters from raw results
+                _hot_bridge_diag = {
+                    "bridge_cache_populated": _bridge_cache_count,
+                    "bridge_registry_prewarmed": _bridge_prewarm_count,
+                    "pool_address_match_count": 0,
+                    "canonical_pair_match_count": 0,
+                    "registry_has_pair_but_not_pool_count": 0,
+                }
+                try:
+                    from m7.orderflow.resolve import _pool_token_cache as _ptc
+                    for _r in artifact.get("_raw_results", []):
+                        if getattr(_r, "scoring_path", None) != "hot_skip":
+                            continue
+                        _evt = getattr(_r, "_source_event", None)
+                        if not _evt or not getattr(_evt, "pool_address", None):
+                            continue
+                        _ck = _evt.pool_address.lower()
+                        _cached = _ptc.get(_ck)
+                        if _cached:
+                            _hot_bridge_diag["pool_address_match_count"] += 1
+                            _t0, _t1, _ = _cached
+                            if _hot_registry:
+                                _entries = _hot_registry.lookup_pair(_t0, _t1)
+                                if _entries:
+                                    _hot_bridge_diag["canonical_pair_match_count"] += 1
+                                    _active = [e for e in _entries if e.is_active()]
+                                    if not _active:
+                                        _hot_bridge_diag["registry_has_pair_but_not_pool_count"] += 1
+                except Exception:
+                    pass
+
                 _write_hot_artifact(
                     artifact, iteration, guard_results,
                     fast_results=fast_results,
                     promoted_pairs=_promoted_pairs.get("execution", []),
                     candidate_pairs=_promoted_pairs.get("candidate", []),
+                    bridge_diagnostics=_hot_bridge_diag,
                 )
 
             best = artifact.get("best_net_bps_clean")

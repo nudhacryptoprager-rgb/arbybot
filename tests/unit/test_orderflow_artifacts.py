@@ -2689,7 +2689,7 @@ class TestM7A541TopCandidatePersistence:
             "event_id", "actual_pair", "net_bps", "block_lag",
             "same_state_class", "route_viable", "size_valid_for_token",
             "scoring_path", "profit_guard_passed", "pipeline_latency_ms",
-            "reject_reason",
+            "reject_reason", "pool_address",
         }
         for row in artifact["top_executable_candidates"]:
             assert set(row.keys()) == expected_keys
@@ -3459,3 +3459,211 @@ class TestM7A540SizeValidCacheFallback:
         assert cache_idx > 0
         assert heuristic_idx > 0
         assert cache_idx < heuristic_idx, "cached decimals must be tried before heuristic"
+
+
+# ===========================================================================
+# M7.A.5.43: Bridge-driven hot registry + near_executable + pool_address transport
+# ===========================================================================
+
+
+class TestM7A543NearExecutableCandidates:
+    """M7.A.5.43: near_executable_candidates in build_replay_summary."""
+
+    def test_near_executable_key_exists_empty(self):
+        art = build_replay_summary([], [], mode="test")
+        assert "near_executable_candidates" in art
+        assert art["near_executable_candidates"] == []
+
+    def test_near_executable_captures_gas_exceeds_with_size_valid(self):
+        e = _make_event()
+        r = _make_result(
+            event_id="gas1",
+            best_backrun_net_bps=-10.0,
+            block_lag=1,
+            same_state_class="next_block",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            route_viable=False,
+            size_valid_for_token=True,
+            scoring_path="registry_direct",
+            event_block=100,
+            event_detected_at_block=100,
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        near = art["near_executable_candidates"]
+        assert len(near) == 1
+        assert near[0]["event_id"] == "gas1"
+        assert near[0]["reject_reason"] == REJECT_GAS_EXCEEDS_GROSS
+
+    def test_near_executable_excludes_size_invalid(self):
+        e = _make_event()
+        r = _make_result(
+            event_id="gas2",
+            best_backrun_net_bps=-10.0,
+            block_lag=1,
+            same_state_class="next_block",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            route_viable=False,
+            size_valid_for_token=False,
+            scoring_path="registry_direct",
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        near = art["near_executable_candidates"]
+        assert len(near) == 0
+
+    def test_near_executable_captures_stale_positive_with_size_valid(self):
+        e = _make_event()
+        r = _make_result(
+            event_id="s1",
+            best_backrun_net_bps=5.0,
+            block_lag=5,
+            same_state_class="stale",
+            reject_reason=REJECT_STALE_POSITIVE,
+            route_viable=False,
+            size_valid_for_token=True,
+            scoring_path="registry_direct",
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        near = art["near_executable_candidates"]
+        assert len(near) == 1
+
+    def test_near_executable_excludes_below_minus_50(self):
+        e = _make_event()
+        r = _make_result(
+            event_id="bad",
+            best_backrun_net_bps=-60.0,
+            block_lag=1,
+            same_state_class="next_block",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            route_viable=False,
+            size_valid_for_token=True,
+            scoring_path="registry_direct",
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        near = art["near_executable_candidates"]
+        assert len(near) == 0
+
+
+class TestM7A543CompactCandidatePoolAddress:
+    """M7.A.5.43: _compact_candidate includes pool_address from _source_event."""
+
+    def test_pool_address_present_when_source_event_attached(self):
+        e = _make_event(pool_address="0xABCD1234")
+        r = _make_result(
+            event_id="e1",
+            best_backrun_net_bps=50.0,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=None,
+            route_viable=True,
+            size_valid_for_token=True,
+            event_block=100,
+            event_detected_at_block=100,
+        )
+        r._source_event = e
+        art = build_replay_summary([e], [r], mode="test")
+        top = art["top_executable_candidates"]
+        assert len(top) >= 1
+        assert top[0]["pool_address"] == "0xABCD1234"
+
+    def test_pool_address_none_when_no_source_event(self):
+        e = _make_event()
+        r = _make_result(
+            event_id="e1",
+            best_backrun_net_bps=50.0,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=None,
+            route_viable=True,
+            size_valid_for_token=True,
+            event_block=100,
+            event_detected_at_block=100,
+        )
+        art = build_replay_summary([e], [r], mode="test")
+        top = art["top_executable_candidates"]
+        assert len(top) >= 1
+        assert top[0]["pool_address"] is None
+
+
+class TestM7A543BridgeFunctions:
+    """M7.A.5.43: Bridge read/write and pool_token_cache population."""
+
+    def test_read_cold_hot_bridge_returns_empty_when_missing(self):
+        from scripts.m7a_orderflow_loop import _read_cold_hot_bridge
+        # Should not raise, returns empty dict
+        result = _read_cold_hot_bridge()
+        assert isinstance(result, dict)
+
+    def test_populate_pool_token_cache_from_bridge(self):
+        from scripts.m7a_orderflow_loop import _populate_pool_token_cache_from_bridge
+        from m7.orderflow.resolve import _pool_token_cache
+        # Save and restore cache state
+        _saved = dict(_pool_token_cache)
+        try:
+            _test_key = "0xtestpool_543_bridge"
+            _pool_token_cache.pop(_test_key, None)
+            bridge = {
+                "pool_token_transport": {
+                    _test_key: ["0xtoken0", "0xtoken1", 3000],
+                }
+            }
+            count = _populate_pool_token_cache_from_bridge(bridge)
+            assert count == 1
+            assert _test_key in _pool_token_cache
+            assert _pool_token_cache[_test_key] == ("0xtoken0", "0xtoken1", 3000)
+        finally:
+            _pool_token_cache.clear()
+            _pool_token_cache.update(_saved)
+
+    def test_populate_pool_token_cache_skips_existing(self):
+        from scripts.m7a_orderflow_loop import _populate_pool_token_cache_from_bridge
+        from m7.orderflow.resolve import _pool_token_cache
+        _saved = dict(_pool_token_cache)
+        try:
+            _test_key = "0xtestpool_543_exists"
+            _pool_token_cache[_test_key] = ("0xold0", "0xold1", 500)
+            bridge = {
+                "pool_token_transport": {
+                    _test_key: ["0xnew0", "0xnew1", 3000],
+                }
+            }
+            count = _populate_pool_token_cache_from_bridge(bridge)
+            assert count == 0  # should not overwrite
+            assert _pool_token_cache[_test_key] == ("0xold0", "0xold1", 500)
+        finally:
+            _pool_token_cache.clear()
+            _pool_token_cache.update(_saved)
+
+    def test_populate_pool_token_cache_empty_bridge(self):
+        from scripts.m7a_orderflow_loop import _populate_pool_token_cache_from_bridge
+        count = _populate_pool_token_cache_from_bridge({})
+        assert count == 0
+
+    def test_write_cold_hot_bridge_includes_near_executable(self):
+        """_write_cold_hot_bridge should include near_executable key in payload."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_cold_hot_bridge
+        source = inspect.getsource(_write_cold_hot_bridge)
+        assert "near_executable" in source
+        assert "pool_token_transport" in source
+
+    def test_write_hot_artifact_bridge_diagnostics_param(self):
+        """_write_hot_artifact accepts bridge_diagnostics parameter."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        sig = inspect.signature(_write_hot_artifact)
+        assert "bridge_diagnostics" in sig.parameters
+
+
+class TestM7A543HotGapDebugCounters:
+    """M7.A.5.43: hot_gap_debug has 3 bridge-driven counters."""
+
+    def test_hot_gap_debug_keys_in_source(self):
+        """_write_hot_artifact emits all 3 new hot-miss counters."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        source = inspect.getsource(_write_hot_artifact)
+        assert "pool_address_match_count" in source
+        assert "canonical_pair_match_count" in source
+        assert "registry_has_pair_but_not_pool_count" in source
+        assert "bridge_cache_populated" in source
+        assert "bridge_registry_prewarmed" in source

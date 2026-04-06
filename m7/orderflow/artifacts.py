@@ -847,6 +847,7 @@ def build_replay_summary(
     # so the rolling artifact retains per-event diagnostic detail after results
     # are stripped by _ROLLING_EXCLUDE_KEYS.
     def _compact_candidate(r):
+        _evt = getattr(r, '_source_event', None)
         return {
             "event_id": r.event_id,
             "actual_pair": r.actual_pair,
@@ -859,6 +860,8 @@ def build_replay_summary(
             "profit_guard_passed": r.profit_guard_passed,
             "pipeline_latency_ms": r.quote_pipeline_latency_ms,
             "reject_reason": r.reject_reason,
+            # M7.A.5.43: Pool-address transport for hot lane bridge
+            "pool_address": getattr(_evt, 'pool_address', None) if _evt else None,
         }
 
     _TOP_N = 5
@@ -875,6 +878,22 @@ def build_replay_summary(
         reverse=True,
     )[:_TOP_N]
     top_stale_positive_candidates = [_compact_candidate(r) for r in _stale_candidates]
+
+    # M7.A.5.43: Near-executable candidates — size_valid + not anomaly,
+    # but rejected by GAS_EXCEEDS_GROSS or staleness (net_bps > -50).
+    # These are the closest candidates to executable status.
+    _near_exec_candidates = sorted(
+        [
+            r for r in results
+            if r.size_valid_for_token
+            and r.reject_reason in (REJECT_GAS_EXCEEDS_GROSS, REJECT_STALE_POSITIVE)
+            and r.reject_reason not in _ANOMALY_REJECTS
+            and (r.best_backrun_net_bps or 0) > -50
+        ],
+        key=lambda r: r.best_backrun_net_bps or 0,
+        reverse=True,
+    )[:_TOP_N]
+    near_executable_candidates = [_compact_candidate(r) for r in _near_exec_candidates]
 
     # M7.A.5.42: Signal classification — 4 tiers of signal maturity.
     # Only hot_execution_ready should ever be interpreted as "implementation-ready".
@@ -1062,6 +1081,8 @@ def build_replay_summary(
         # M7.A.5.41: Compact top-candidate rows (survive _ROLLING_EXCLUDE_KEYS)
         "top_executable_candidates": top_executable_candidates,
         "top_stale_positive_candidates": top_stale_positive_candidates,
+        # M7.A.5.43: Near-executable candidates (closest to viable)
+        "near_executable_candidates": near_executable_candidates,
         # M7.A.5.42: Signal classification (4 tiers) + diagnostic raw block
         "signal_classification": signal_classification,
         "diagnostic_raw": diagnostic_raw,

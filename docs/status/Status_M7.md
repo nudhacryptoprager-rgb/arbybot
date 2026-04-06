@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.42 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.42 adds 4-tier signal classification (diagnostic/stale/cold_executable/hot_execution_ready), moves raw metrics to diagnostic_raw, splits dashboard Panel 11 into 3 honest sections, adds cold→hot bridge queue, adds hot_gap_debug counters, strips legacy hypothesis blocks from rolling. 3277 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.43 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.43 adds bridge-driven hot registry activation: pool_token_transport (63 entries), bridge-first prewarm (46 pairs), near_executable tier (5 candidates), 3 hot-miss counters, pool_address in candidate rows. cold_executable_positive.count=3 (up from 0). 3291 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-06  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix, batch pre-resolve + supervisor fix + size_valid cache, top-candidate persistence + hot lane token resolution fix. M7.B remains closed.
 
@@ -136,43 +136,13 @@ CI: 3163 passed, 6 skipped. Safety: PASS. ALL REQUIRED GATES PASSED.
 
 ---
 
-## M7.A.5.33: Profit Guard Fix + Hot-Mode Fast Path + Stage Timing
+## M7.A.5.33–5.35: Hot Fast-Path + No-Fallback + Artifact Isolation + Promoted Watchlist (CLOSED)
 
-**Hypothesis**: M7.A.5.33 = first profit_guard-passed hot candidate under unified nonstop runtime and <250ms hot-path budget. Discovery solved (registry_direct=29/29). Primary blocker is latency: mean_pipeline_latency_ms=1940ms vs 250ms budget. No new discovery branch.
+**M7.A.5.33**: Fixed profit_guard dead code (wrong field names). Added `score_backrun_fast()` with per-stage timing. Hot-mode fast path via `external_registry`. CI: 3172 passed.
 
-**Critical bug fixed**: `_run_profit_guard_on_results()` read `best_buy_amount_wei`/`best_sell_amount_wei` — fields that don't exist on BackrunResult (removed in M7.A.5.32). Profit guard was dead code (`profit_guard_passed_count=0` always). Fix: derive `buy=amount_in_wei`, `sell=amount_in_wei+gross_pnl_wei` from existing fields.
+**M7.A.5.34**: Hot mode no-fallback (hot_skip instead of 1330ms parallel). PRICING_ANOMALY hard-exclude. Stage 5 timing split (tx_build/calldata/sign). CI: 3179 passed.
 
-**Changes**: (1) Fixed profit_guard field derivation in `m7a_orderflow_loop.py`. (2) `mode_ws_live.py`: hot-mode fast path — when `external_registry` provided, scores events via `score_backrun_fast()` first (zero-RPC), falls back to full pipeline only if pair not in registry. (3) `score_backrun_fast()`: added per-stage timing (`registry_lookup_ms`, `pool_state_ms`, `local_math_ms`, `profit_guard_ms`, `tx_build_ms`) in `pipeline_stage_latency_ms`. Integrated profit_guard directly — `profit_guard_passed` field on BackrunResult (67 total). (4) Hot artifact now reports `stage_timings` aggregate + `profit_guard_passed` count. (5) +9 tests in 4 classes. (6) DEV_REPORT provenance fixed (timestamp_utc aligned with rolling truth). (7) Status_M7.md compressed from 346→215 lines, sections reordered chronologically.
-
-CI: 3172 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.34: Hot Lane No-Fallback + PRICING_ANOMALY Exclusion + Execution Timing
-
-**Hypothesis**: M7.A.5.34 = first profit_guard-passed hot candidate on a tiny prewarmed watchlist under the 250ms budget. Discovery is not the primary blocker; completion latency and zero profit_guard passes are.
-
-**Architectural change**: Hot mode in `mode_ws_live.py` no longer falls back to `score_backrun_live_parallel()` when `score_backrun_fast()` returns None. Events not in the prewarmed registry get a lightweight `hot_skip` result (~0ms) instead of the ~1330ms parallel pipeline. This cleanly separates hot lane (fast, O(1) only) from cold lane (full diagnostic).
-
-**Changes**: (1) `mode_ws_live.py`: hot mode creates `BackrunResult(scoring_path="hot_skip", reject_reason="REJECT_NOT_IN_HOT_REGISTRY")` when fast path misses — no parallel fallback. Stores `_raw_results` in artifact for downstream. (2) `scoring_parallel.py`: PRICING_ANOMALY hard-exclude (|net_bps|>10000) in fast path. Stage 5 split into `tx_build_ms`, `calldata_ms`, `sign_or_bundle_prep_ms` (7 total stage timing keys). (3) `m7a_orderflow_loop.py`: profit guard + hot headline skip PRICING_ANOMALY. Removed redundant second fast-path re-scoring — extracts fast results from `_raw_results` directly. (4) `constants.py`: added `HOT_BUDGET_CALLDATA_MS=20`, `HOT_BUDGET_SIGN_OR_BUNDLE_PREP_MS=30`. (5) DEV_REPORT blocker-tag count 8→9. (6) +7 tests in 4 classes.
-
-**Online evidence**: Hot loop 30 iterations (events_count=2-4, profit_guard_passed=0, viable=0) — events not in watchlist correctly skipped via hot_skip. Cold loop 3 iterations (events=22, scored=21, positive_clean=2, viable=0, best_clean=46.20 bps, latency_mean=1331ms). Cold confirms resolve_ms=643, registry_preload_ms=484 — exactly the bottleneck hot lane now bypasses entirely.
-
-CI: 3179 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
-
----
-
-## M7.A.5.35: Cold/Hot Artifact Isolation + Promoted Watchlist + Stale KPI Fix
-
-**Hypothesis**: M7.A.5.35 = first profit_guard-passed hot candidate on a promoted watchlist under 250ms budget during a true 1h nonstop runtime.
-
-**Critical bug fixed**: `run_ws_live()` unconditionally called `_write_rolling_m7()` at function end, so hot lane overwrote `m7_orderflow_latest.json` with `hot_skip` results — cold rolling artifact appeared corrupted (all events `hot_skip`, `lane=None`). Fix: `_write_rolling_m7()` only runs when `external_registry is None` (cold lane). Hot lane writes its own `m7_hot_latest.json` via outer loop.
-
-**Changes**: (1) `mode_ws_live.py`: conditional rolling write — only cold lane writes `m7_orderflow_latest.json` internally; hot lane writes only via `_write_hot_artifact()`. (2) `m7a_orderflow_loop.py`: promoted watchlist system — `_promote_pairs_from_cold()` analyzes cold results for pairs with `size_valid_for_token=true`, `reject_reason != PRICING_ANOMALY`, and `events_with_registry > 0`; promoted pairs prewarm hot registry. (3) `artifacts.py`: added `stale_positive_count_clean` — counts stale positives that are also `size_valid_for_token=true` and not PRICING_ANOMALY; fixes KPI inconsistency (stale_pos=6 but best_stale_clean=-60 was logically incoherent). (4) `constants.py`: `PROMOTED_WATCHLIST_MIN_EVENTS=2`, `PROMOTED_WATCHLIST_MAX_PAIRS=10`. (5) +7 tests in 3 classes.
-
-**Online evidence**: 1h nonstop runtime (3/4 processes alive — m4_scan restarts expected). Fresh cold: 28 events, 28 `registry_direct`, `stale_pos=6`, `stale_pos_clean=0`, `GAS_EXCEEDS_GROSS=22`, `STALE_POSITIVE=6`, `mid_abort=28`. No `hot_skip` contamination. Hot: `events=1`, `viable=0`, `profit_guard_passed=0`, promoted watchlist seed_only (no cold→hot promotion yet in 1st iteration).
-
-CI: 3186 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+**M7.A.5.35**: Fixed hot lane overwriting cold rolling artifact. Two-level promoted watchlist (candidate + execution). `stale_positive_count_clean` fix. CI: 3186 passed.
 
 ---
 
@@ -298,6 +268,23 @@ CI: 3272 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 - Dashboard: 3-section layout renders correctly, honest "NOT IMPLEMENTATION-READY" banner displayed.
 
 CI: 3277 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.43: Bridge-Driven Hot Registry Activation
+
+**Hypothesis**: M7.A.5.43 = bridge-driven hot registry activation with exact candidate transport and first hot fast_path score. Root cause: cross-process _pool_token_cache gap — cold lane populates cache via batch_pre_resolve_pools, but hot lane (separate process) starts empty. Pair-name promotion is too lossy; pool-address-first matching needed.
+
+**Changes**: (1) `m7/orderflow/artifacts.py`: _compact_candidate now includes pool_address from _source_event; added near_executable_candidates (size_valid, GAS_EXCEEDS_GROSS/STALE_POSITIVE rejected, net_bps > -50). (2) `scripts/m7a_orderflow_loop.py`: _write_cold_hot_bridge upgraded with pool_token_transport (full _pool_token_cache dump) + near_executable tier; added _read_cold_hot_bridge(), _populate_pool_token_cache_from_bridge(), _prewarm_registry_from_bridge() (pool-address-first using token addresses); hot prewarm rewritten bridge-first; 3 hot-miss counters added (pool_address_match, canonical_pair_match, registry_has_pair_but_not_pool); _write_hot_artifact accepts bridge_diagnostics. (3) +14 tests in 4 new classes.
+
+**Online evidence**: 10-minute nonstop `--no-m4`. Fresh rolling:
+- pool_token_transport: 63 entries, bridge_registry_prewarmed: 46 pairs
+- cold_executable_positive.count=3 (UP from 0), best_bps=68.69
+- near_executable: 5 candidates, pool_address in all candidate rows
+- hot fast_path.scored=0 (single event from unknown pool — market timing, not architecture failure)
+- 3/3 alive, 0 restarts
+
+CI: 3291 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 
