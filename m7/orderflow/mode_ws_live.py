@@ -201,6 +201,8 @@ def run_ws_live(
     _focused_blocks = 0     # blocks scanned with focused (address filter)
     _broad_logs = 0         # raw logs from broad blocks
     _focused_logs = 0       # raw logs from focused blocks
+    # M7.A.5.47c: Track pool addresses seen in hot events (for bridge miss diagnosis)
+    _hot_event_pool_counts: Dict[str, int] = {}  # pool_address_lower -> count
     ws_start_time = time.monotonic()
 
     # M7.A.5.23: Session-persistent low-lag tracking across blocks
@@ -269,7 +271,15 @@ def run_ws_live(
             #   This catches events the focused filter misses and provides
             #   diagnostics (events_at_non_bridge_pools vs no_events_at_all).
             _hot_mode_active = external_registry is not None
-            _BROAD_FALLBACK_INTERVAL = 3  # every 3rd block is broad
+            # M7.A.5.47c: Adaptive broad fallback — if we've seen events
+            # but no bridge hits, scan broad more often to gather miss data.
+            _has_events_no_bridge = (
+                _broad_logs > 0
+                and _hot_mode_active
+                and bridge_pool_addresses
+                and _focused_logs == 0
+            )
+            _BROAD_FALLBACK_INTERVAL = 2 if _has_events_no_bridge else 3
             _is_broad_block = (blocks_processed % _BROAD_FALLBACK_INTERVAL) == 0
             try:
                 _log_filter: dict = {
@@ -301,6 +311,13 @@ def run_ws_live(
                 _focused_logs += len(logs)
             if not logs:
                 continue
+
+            # M7.A.5.47c: Track pool addresses from raw logs (before normalization)
+            if _hot_mode_active:
+                for _lg in logs:
+                    _lg_addr = (_lg.get("address") or "").lower()
+                    if _lg_addr:
+                        _hot_event_pool_counts[_lg_addr] = _hot_event_pool_counts.get(_lg_addr, 0) + 1
 
             # Normalize logs
             block_events = []
@@ -491,6 +508,11 @@ def run_ws_live(
         "focused_blocks": _focused_blocks,
         "broad_logs": _broad_logs,
         "focused_logs": _focused_logs,
+        # M7.A.5.47c: Pool addresses seen in hot events (top 20 by count)
+        "hot_event_pool_histogram": sorted(
+            [{"pool": pa, "count": ct} for pa, ct in _hot_event_pool_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        )[:20],
     }
     # M7.A.5.22: Registry session stats
     artifact["registry_session_stats"] = {

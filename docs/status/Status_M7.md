@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.47b + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.47b adds hybrid hot intake (focused+broad fallback), pool activity ranking, 4 new temporal rollup counters, split miss reasons, submit-size cold→hot queue ordering. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.47c + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.47c adds activity-aware bridge ranking (quality × on-chain activity), hot-seen pool injection, adaptive broad fallback, hot pool diagnostics. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-06  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix, batch pre-resolve + supervisor fix + size_valid cache, top-candidate persistence + hot lane token resolution fix. M7.B remains closed.
 
@@ -166,21 +166,7 @@ CI: 3163 passed, 6 skipped. Safety: PASS. ALL REQUIRED GATES PASSED.
 
 **Changes**: (1) `m7/orderflow/resolve.py`: Added `get_cached_decimals(token_addr)` — reads from `_enrichment_cache`, returns cached decimals or None. Added `batch_pre_resolve_pools(pool_addresses, rpc_url, block_num, addr_to_symbol)` — batch-resolves pool tokens via multicall (populates `_pool_token_cache`), batch-enriches unknown tokens (populates `_enrichment_cache`, updates `addr_to_symbol`). Returns `{pool_addr: {token0, token1, fee}}`. (2) `m7/orderflow/mode_ws_live.py`: Added cold-lane pre-pass before scoring loop — collects unique pool addresses from events, calls `batch_pre_resolve_pools()`, batch-preloads each discovered pair into `session_registry.preload_pair()`. All subsequent `score_backrun_live_parallel()` calls hit warm caches. Fixed `_hot_mode` variable ordering (was referenced before assignment). (3) `m7/orderflow/scoring_parallel.py`: Added `get_cached_decimals` import. Added cache fallback for `_token_in_dec` — calls `get_cached_decimals(token_in_addr)` BEFORE the well-known stablecoin heuristic. Fixes `size_valid_for_token=false` for batch-pre-enriched tokens. (4) `scripts/start_nonstop_runtime.py`: Critical blocking I/O fix — changed `stdout=subprocess.PIPE` to `stdout=subprocess.DEVNULL` and made `drain_output()` a no-op. Original blocking `readline()` prevented supervisor from reaching deadline check. (5) `scripts/m7a_orderflow_loop.py`: Hot artifact reporting fix — `_promoted_pairs` updated from `_cross_promoted` for accurate promoted_watchlist display. (6) Rolling canonical files: added `m7_promoted_pairs.json` to allowlists. (7) +14 tests in 4 new M7.A.5.40 classes (TestM7A540BatchPreResolve, TestM7A540GetCachedDecimals, TestM7A540ColdPrePassInModeWsLive, TestM7A540SizeValidCacheFallback).
 
-**Online evidence**: 10.3-minute nonstop runtime (0 restarts, 3/3 processes alive) + 120-block direct replay.
-
-| Metric | M7.A.5.38 baseline | 120-block replay | Nonstop final (warm) | Improvement |
-|--------|-------------------|-----------------|---------------------|-------------|
-| total_pipeline mean (ms) | 1519 (cold) / 275 (warm) | **143.11** | **15.62** | 97% from cold, 94% from warm |
-| resolve_ms mean | 683 | **63.32** (1 outlier) | **0.0** | 100% elimination |
-| enrichment_ms mean | 105 | **0.0** | **0.0** | 100% elimination |
-| registry_preload_ms mean | 604 | **0.0** | **0.0** | 100% elimination |
-| oracle_ms mean | 125 | **79.79** | **15.62** | 87% reduction |
-| latency_budget_hit_rate | 0.19→0.80 | **0.8947** | N/A (all under) | Peak 0.89 |
-| size_valid_count | 6/13 (46%) | **16/19 (84%)** | **8/8 (100%)** | 100% |
-| best_net_bps | 103.63 | **318.13** | **3.55** | 3x (replay) |
-| promoted pairs | seed_only | N/A | **6 candidate, 6 execution** | Active promotion |
-
-Key observations: (1) Batch pre-resolve eliminates resolve_ms, enrichment_ms, registry_preload_ms entirely for pools seen earlier in the same iteration. (2) One outlier in 120-block replay (WETH/USDC resolve=1203ms) — pool appeared in a later block after batch ran (expected). (3) Oracle is the only remaining RPC cost (~16-80ms), cached after first call per pair. (4) size_valid=100% in nonstop (warm cache provides decimals for all tokens). (5) Supervisor DEVNULL fix eliminates blocking I/O — nonstop completes reliably within deadline.
+**Online evidence**: 10.3-min nonstop (0 restarts) + 120-block replay. total_pipeline: 15.62ms warm (97% reduction from 1519ms cold). resolve_ms/enrichment_ms/registry_preload_ms: 0.0ms (100% elimination). Oracle only remaining RPC cost (~16-80ms). size_valid=100% warm. latency_budget_hit_rate=0.89. Promoted: 6 candidate + 6 execution. Supervisor DEVNULL fix eliminates blocking I/O.
 
 CI: 3258 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
@@ -293,6 +279,16 @@ CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 **Changes**: (1) `m7/orderflow/mode_ws_live.py`: **Hybrid intake** — every 3rd block does broad scan (no address filter), rest do focused scan with bridge pool addresses. Added 4 diagnostic counters (`broad_blocks`, `focused_blocks`, `broad_logs`, `focused_logs`) surfaced in `ws_live_stats`. (2) `scripts/m7a_orderflow_loop.py`: **Pool activity ranking** — cross-iteration `_cold_active_pools` dict tracks pool addresses seen in cold events (address → event_count + last_iter). Hot bridge pool set is ranked by cold activity; top 50 by activity + all cold_exec pools. **4 new rollup counters**: `windows_with_events`, `windows_with_bridge_hits`, `windows_with_fast_scores`, `broad_fallback_events_total`. **Split miss reason**: `bridge_pool_not_hit` replaced by `no_events_in_filtered_window` (windows with 0 events) and `events_seen_but_not_bridge_pool` (events exist but none match bridge). **Submit-size queue ordering**: `micro_refinement` transported via cold→hot bridge; hot intents sorted by `cold_verified_net_bps` (descending) then `net_bps`. Each intent row carries `cold_verified_net_bps`, `cold_best_submit_size`, `cold_gas_floor_gap_bps`. (3) Tests: `m7_hot_rollup_latest.json` added to canonical rolling file sets in `test_nonstop_loop_artifacts.py` and `test_orderflow_artifacts.py`.
 
 **Online evidence**: Pending nonstop verification. Pre-verification CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.47c: Activity-Aware Bridge + Adaptive Intake + Hot Pool Diagnostics
+
+**Hypothesis**: M7.A.5.47b hybrid intake resolved zero-event problem (events_seen_total=2) but bridge_pool_hit_total remains 0 — events arrive at pools NOT in the 44-pool bridge set. Fix: activity-aware bridge ranking (quality × on-chain activity), hot-seen pool injection, adaptive broad fallback frequency, and diagnostic histograms for bridge miss root-cause.
+
+**Changes**: (1) `m7/orderflow/mode_ws_live.py`: **Adaptive hybrid intake** — `_BROAD_FALLBACK_INTERVAL` now 2 (50% broad) when events exist but no bridge hits, else 3 (33%). Hot event pool histogram (`_hot_event_pool_counts`) tracks pool addresses from raw logs, top 20 surfaced in `ws_live_stats`. (2) `scripts/m7a_orderflow_loop.py`: **Activity-aware bridge ranking** — combined activity score: `cold_events + hot_events × 3` (hot recency premium). Hot-seen pools from `_hot_active_pools` that exist in `_pool_token_cache` are injected into bridge candidates. `recent_active_pools_top` (top 30) added to bridge payload. **Hot rollup diagnostics** — `hot_seen_pool_histogram_top` (top 10), `bridge_pool_hit_but_registry_miss` counter + total in rollup. **Bridge miss sample** — `bridge_miss_sample_top` shows top 5 pools seen in hot events but NOT in bridge set (event_pool, seen_count, not_in_bridge=True).
+
+**Online evidence**: 10.3-min nonstop (3/3 alive, 0 restarts). Hot rollup: windows_seen=63, events_seen_total=7 (UP from 2), windows_with_events=5, broad_fallback_events_total=10, bridge_pool_hit_total=0, dominant_miss=no_events_in_window. hot_seen_pool_histogram_top=4 pools, 1/4 in bridge PTT. Cold: events=30, cold_executable_positive=2, headline=cold_executable_positive, top_exec=58.96 bps. Bridge: ptt=56 (UP from 44), cold_exec=2, near_exec=5, recent_active=30. CI: 3327 passed, 6 skipped. ALL REQUIRED GATES PASSED.
 
 ---
 
